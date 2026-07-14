@@ -2,8 +2,9 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
   lola LaunchAgent. Install into ~/Library/LaunchAgents (NOT
-  /Library/LaunchDaemons — lola must run in your user/GUI session so AO can
-  reach your tmux server and keychain), then:
+  /Library/LaunchDaemons — lola must run in your user/GUI session so its
+  tmux-hosted agent sessions have GUI context and the keychain is reachable),
+  then:
 
       launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.user.lola.plist
 
@@ -30,7 +31,7 @@
 	<true/>
 
 	<!-- launchd provides no login-shell environment: inject a PATH that can
-	     find ao/tmux/gh, and HOME so ~/.lola resolves. -->
+	     find tmux/git/gh/claude, and HOME so ~/.lola resolves. -->
 	<key>EnvironmentVariables</key>
 	<dict>
 		<key>PATH</key>

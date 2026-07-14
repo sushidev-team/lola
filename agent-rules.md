@@ -1,12 +1,29 @@
 # Build instructions for `lola`
 
-Implement ONLY what the lola Spec v2 defines. `lola` triggers AO; it must never touch git, worktrees, PRs, or CI. Config is the single source of truth; the TUI edits it then sends `reload`. Language: Go (latest stable), Cobra for CLI, Bubble Tea + Lipgloss for TUI. One binary: `lola run` = daemon, `lola`/`lola tui` = client, other subcommands talk to the socket.
+Implement ONLY what the lola Spec defines. lola spawns and observes its **own**
+native agent sessions — one git worktree + one tmux session running Claude Code
+per matched Linear issue — and tracks the resulting PR/CI via `gh`. Config is
+the single source of truth; the TUI edits it then sends `reload`. Language: Go
+(latest stable), Cobra for CLI, Bubble Tea + Lipgloss for TUI. One binary:
+`lola run` = daemon, `lola`/`lola tui` = client, other subcommands talk to the
+socket.
+
+> **History.** Through P2, lola only *triggered* a separate Agent Orchestrator
+> (AO) via `ao spawn` and touched no git/worktrees/PRs/CI. That bridge was
+> removed; lola is native-only. Rules that changed are marked
+> **[changed from AO bridge]**.
 
 ## Environment / launchd (critical)
 
-- Ship as a LaunchAgent (in ~/Library/LaunchAgents), NOT a LaunchDaemon — AO's tmux runtime needs your user/GUI context.
-- launchd has no login-shell PATH. Resolve `ao`/`tmux`/`gh` via absolute paths or the PATH injected in the plist. `[ao].bin` is absolute.
-- Gate every dispatch on `ao.Reachable(ctx)`. If AO is down: skip tick, record lastError, and DO NOT mutate seen or labels.
+- Ship as a LaunchAgent (in ~/Library/LaunchAgents), NOT a LaunchDaemon — lola's
+  own tmux sessions need your user/GUI context.
+- **[changed from AO bridge]** launchd has no login-shell PATH. Resolve
+  `tmux`/`git`/`gh`/`claude` via absolute paths or the PATH injected in the
+  plist (was: `ao`/`tmux`/`gh`).
+- **[changed from AO bridge]** Gate every dispatch on native runtime health:
+  `tmux` available, `git` and `claude` resolvable, and the poll's `[[project]]`
+  resolves. If unhealthy: skip tick, record lastError, and DO NOT mutate seen,
+  labels, or in-flight. (Was: gate on `ao.Reachable(ctx)`.)
 
 ## Cycle handling
 
@@ -26,50 +43,98 @@ Implement ONLY what the lola Spec v2 defines. `lola` triggers AO; it must never 
 
 ## Dedup (two explicit modes; do not mix)
 
-- label mode: the flipped trigger label is primary dedup. seen is a short-TTL race guard only.
+- label mode: the flipped trigger label is primary dedup. seen is a short-TTL race guard only. `on_sent_remove_label` must be one of `match_labels`, or the flip won't stop the issue matching.
 - seen mode: seen is authoritative AND must be pruned — if a seen ID no longer matches the filter, forget it so reopened tickets re-queue. Unbounded seen is a bug.
 - Cross-poll: maintain a daemon-global in-flight set keyed by issue UUID; never spawn the same issue from two polls in one cycle. `--dry-run` reports overlaps.
 
-## Dispatch ordering (per issue, not batched unless AO returns per-ID results)
+## Dispatch ordering (per issue)
 
 1. Mark in-flight (global set) + write seen FIRST.
-2. Spawn with the IDENTIFIER (FE-231), not the UUID.
+2. **[changed from AO bridge]** Spawn the native session with the IDENTIFIER
+   (FE-231), not the UUID: `git worktree add` → symlinks + `post_create` →
+   write `.lola/{prompt.md,settings.json}` → `tmux new-session` running
+   `claude --settings .lola/settings.json`. Upsert the returned session into
+   the store immediately so the next budget computation counts it. Bound the
+   whole spawn with a deadline (worktree + user `post_create` + tmux). Roll back
+   partial spawns best-effort (kill tmux if it came up; remove the worktree only
+   when clean). (Was: `ao spawn --project <ao_project> --issue <IDENTIFIER>`.)
 3. Only on confirmed success + label mode: re-read current labelIds FRESH (avoid read-modify-write race), compute (current − remove_label) + set_label, then issueUpdate with the UUID.
 4. If label write fails: log, do not re-spawn (seen guards it).
 
 ## Caps
 
-- budget = min(poll.concurrency_cap, global_cap − liveCounted). liveCounted counts ONLY AO sessions whose state ∈ ao.counting_states (excludes review/blocked so held PRs don't stall pickup).
-- liveCounted MUST come from `ao session ls --json`, never a local counter.
+- **[changed from AO bridge]** budget = min(poll.concurrency_cap, global_cap −
+  liveCounted). liveCounted counts ONLY **native** sessions in the store whose
+  derived status occupies a slot: `working`, `needs_input`, `draft`,
+  `ci_failed`, `changes_requested`, `ci_pending`. Parked-for-review (approved,
+  review_pending, no_pr) and terminal (merged, dead, session_ended) don't
+  count, so held PRs don't stall pickup. (Was: AO sessions in
+  `ao.counting_states`.)
+- **[changed from AO bridge]** liveCounted MUST come from the native session
+  store snapshot, never a local counter or `ao session ls --json`.
 - When capped, sort by priority_sort (priority then createdAt) for deterministic selection.
 
 ## Reconciliation
 
-- Periodic pass (~5 min): issues labeled set_label with no counted AO session and no open PR after orphan_timeout (default 15m) → revert label (or set agent-blocked) and clear seen so it re-queues.
+- **[changed from AO bridge]** Periodic pass (~5 min): issues labeled set_label
+  with no counted **native** session (no live pane for that identifier) and no
+  open PR after orphan_timeout (default 15m) → revert label and clear seen +
+  in-flight so it re-queues. Prefer the session record's branch/repo for the
+  open-PR check (`gh pr list --repo <repo> --head <branch>`), falling back to
+  the poll's repo or its project's; a check that cannot answer fails CLOSED
+  (no revert). Keep the dead session's worktree for inspection. (Was: no counted
+  AO session; may set agent-blocked.)
 
 ## Safety / robustness
 
 - config.toml and lola.sock are mode 0600. Config writes are temp-file + rename (atomic).
 - Respect min 30s poll interval; exponential backoff on 429/5xx.
-- Validate on save/enable: ao_project exists in agent-orchestrator.yaml; labels/states/cycle/user IDs resolve; caps &gt; 0; pinned cycle has cycle_id; label mode has set/remove labels.
-- Surface "AO not running" and "Linear auth failed" in `status`; never fail silently.
-- Slack (if enabled) fires only the lola-owned "picked up" event; AO owns PR/CI notifications.
+- **[changed from AO bridge]** Validate on save/enable: the poll's `project`
+  references a defined `[[project]]`; labels/states/cycle/user IDs resolve; caps
+  > 0; pinned cycle has cycle_id; label mode has set/remove labels (and remove ∈
+  match_labels). Path-exists / is-git-repo checks live in the runtime layer, not
+  config load. (Was: `ao_project` exists in agent-orchestrator.yaml.)
+- **[changed from AO bridge]** Surface "runtime unavailable" (missing
+  tmux/git/claude or unknown project) and "Linear auth failed" in `status`;
+  never fail silently (was: "AO not running").
+- **[changed from AO bridge]** The observer tracks PR/CI via `gh` (scm.PRForBranch
+  → DeriveStatus). Acting on that state — CI-fix, review-comment, escalation,
+  Slack/desktop notifications — is P3 (future work), not shipped. (Was: Slack
+  fires only the lola-owned "picked up" event; AO owns PR/CI notifications.)
 
 ## Daemon
 
 - One goroutine per enabled poll with its own ticker; `reload` re-diffs config and starts/stops goroutines without dropping unaffected ones.
-- Unix socket at ~/.lola/lola.sock, newline-delimited JSON per the protocol.
-- `status` reports aoRunning (can we exec `ao`?) and linearOk (last auth ok?).
+- A read-only observer loop (~30s) and a reconcile loop (~5m) run alongside; both are panic-guarded and shielded from the shutdown cancel, with per-exec deadlines so a wedged `gh`/`tmux` can't hang graceful shutdown.
+- On startup, adopt surviving sessions: scan tmux + worktree dirs, re-adopt live ones, flag zombies (worktree without pane, pane without worktree) — Adopt only reports, the daemon decides.
+- Unix socket at ~/.lola/lola.sock, newline-delimited JSON per the protocol; it also serves the hidden `hookEvent` from `lola hook <event>`.
+- **[changed from AO bridge]** `status` reports runtimeOk (are tmux/git/claude
+  resolvable NOW?) and linearOk (last auth ok?) (was: aoRunning).
 - Graceful shutdown on SIGTERM/`stop`: finish in-flight tick, close socket, exit 0.
 
 ## TUI cascading form
 
 - Fetch each level only after the prior selection: team → projects → cycle info → states → labels → members.
-- Populate the ao_project dropdown from agent-orchestrator.yaml ([ao].config_path). Refuse to save/enable a poll whose ao_project is not found.
+- **[changed from AO bridge]** Populate the `project` dropdown from the
+  `[[project]]` entries in config.toml. Refuse to save/enable a poll whose
+  `project` is empty or names no defined `[[project]]`. (Was: populate
+  `ao_project` from agent-orchestrator.yaml.)
 - Cache Linear metadata per team in cache/linear-.json; provide a manual "refresh" key.
-- Show validation errors inline (unresolved label/state/user ID, missing ao_project, cap ≤ 0).
+- **[changed from AO bridge]** Show validation errors inline (unresolved
+  label/state/user ID, undefined project reference, cap ≤ 0).
+- Second tab: session list (status, issue, PR, checks, age) with a live
+  capture-pane preview and `enter` to attach.
 
 ## Testing (definition of done)
 
 - Use the linear.API interface + fake.go fixtures. Unit tests MUST cover: filter construction per mode, pagination, budget math, both dedup modes incl. seen pruning, cross-poll dedup, labelIds delta computation, identifier-vs-UUID usage.
-- Integration: `lola poll <n> --once --dry-run` prints correct matches (incl. assignee=me) against a real team; creating a poll via the cascade writes valid config.toml; the launchd instance survives sleep/wake and a manual `kill` (KeepAlive restarts it); enabling a poll with a bad ao_project is rejected with a clear message.
+- **[changed from AO bridge]** Cover the native runtime: spawn (worktree +
+  prepare + hooks + tmux, with rollback), adopt (re-adopt / dead / orphaned
+  classification), the store-driven liveCounted, and the reconcile orphan
+  revert (fail-closed PR check).
+- **[changed from AO bridge]** Integration: `lola poll <n> --once --dry-run`
+  prints correct matches against a real team; creating a poll via the cascade
+  writes valid config.toml; the launchd instance survives sleep/wake and a
+  manual `kill` (KeepAlive restarts it); enabling a poll whose `project` is
+  undefined is rejected with a clear message. (Was: a bad `ao_project` is
+  rejected.)

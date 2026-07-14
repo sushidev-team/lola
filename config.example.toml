@@ -18,8 +18,8 @@ global_cap = 4
 
 [linear]
 # Keychain SERVICE NAME (tried first):
-#   security add-generic-password -s linear-api-key -w lin_api_XXXXXXXX
-api_key_keychain = "linear-api-key"
+#   security add-generic-password -s lola-linear -w lin_api_XXXXXXXX
+api_key_keychain = "lola-linear"
 # Env var NAME used as fallback when the keychain item is missing.
 api_key_env = "LINEAR_API_KEY"
 # GraphQL endpoint. Omit for the default.
