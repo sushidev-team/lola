@@ -107,20 +107,56 @@ func priorityRank(p float64) float64 {
 	return p
 }
 
-// NewLabelIDs computes the post-spawn label set: (current − removeID) +
-// setID, with duplicates removed. Removing an absent ID is a no-op.
-func NewLabelIDs(current []string, removeID, setID string) []string {
-	out := make([]string, 0, len(current)+1)
-	have := make(map[string]bool, len(current)+1)
+// ApplyLabelDelta returns current with every id in remove dropped and every
+// id in add appended: order-stable, de-duplicated, empty ids skipped. Adding
+// an id already present (and not being removed) is a no-op; removing an absent
+// id is a no-op. Used symmetrically for the post-spawn flip (remove the
+// trigger labels, add the sent label) and the reconcile revert (the reverse).
+func ApplyLabelDelta(current, remove, add []string) []string {
+	removeSet := make(map[string]bool, len(remove))
+	for _, id := range remove {
+		if id != "" {
+			removeSet[id] = true
+		}
+	}
+	out := make([]string, 0, len(current)+len(add))
+	have := make(map[string]bool, len(current)+len(add))
 	for _, id := range current {
-		if id == "" || id == removeID || have[id] {
+		if id == "" || removeSet[id] || have[id] {
 			continue
 		}
 		have[id] = true
 		out = append(out, id)
 	}
-	if setID != "" && !have[setID] {
-		out = append(out, setID)
+	for _, id := range add {
+		if id == "" || have[id] {
+			continue
+		}
+		have[id] = true
+		out = append(out, id)
+	}
+	return out
+}
+
+// intersectLabels returns the ids in want that are present in have,
+// preserving want's order and de-duplicated (empty ids skipped). It names the
+// trigger labels a flip actually strips, so the reconcile revert can restore
+// exactly them rather than every configured match_label.
+func intersectLabels(want, have []string) []string {
+	haveSet := make(map[string]bool, len(have))
+	for _, id := range have {
+		if id != "" {
+			haveSet[id] = true
+		}
+	}
+	out := make([]string, 0, len(want))
+	seen := make(map[string]bool, len(want))
+	for _, id := range want {
+		if id == "" || seen[id] || !haveSet[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
 	}
 	return out
 }
@@ -415,9 +451,26 @@ func (d *Daemon) tick(ctx context.Context, name string, dryRun bool) (protocol.P
 				d.logf(name, "read labels for %s failed (seen guards dedup): %v", is.Identifier, err)
 				continue
 			}
-			newIDs := NewLabelIDs(current, p.OnSentRemoveLabel, p.OnSentSetLabel)
+			// Record which trigger labels the flip actually strips (the subset
+			// of match_labels the issue carries right now). match_mode=any can
+			// match on a strict subset, so the reconcile revert must restore
+			// exactly these — restoring all match_labels would inject phantom
+			// labels the issue never had.
+			removed := intersectLabels(p.MatchLabels, current)
+			newIDs := ApplyLabelDelta(current, p.MatchLabels, []string{p.OnSentSetLabel})
 			if err := api.SetIssueLabels(ctx, is.ID, newIDs); err != nil {
 				d.logf(name, "label flip for %s failed (seen guards dedup): %v", is.Identifier, err)
+				continue
+			}
+			// Persist the stripped set on the session record (atomic RMW so a
+			// concurrent observer update is not clobbered) for the orphan revert.
+			if _, ok := d.sessions.Update(sess.ID, func(s *session.Session) bool {
+				s.RemovedLabels = removed
+				return true
+			}); ok {
+				if serr := d.sessions.Save(); serr != nil {
+					d.logf(name, "persist removed labels for %s: %v", is.Identifier, serr)
+				}
 			}
 		}
 	}

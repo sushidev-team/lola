@@ -40,7 +40,6 @@ const (
 	fCap
 	fDedup
 	fSetLabel
-	fRemoveLabel
 	fSave
 )
 
@@ -113,7 +112,7 @@ func (f *formModel) fields() []fieldID {
 		}
 		fs = append(fs, fNativeProject, fRepo, fCap, fDedup)
 		if f.poll.DedupMode == "label" {
-			fs = append(fs, fSetLabel, fRemoveLabel)
+			fs = append(fs, fSetLabel)
 		}
 	}
 	return append(fs, fSave)
@@ -238,7 +237,7 @@ func (f *formModel) interact(cur fieldID) (tea.Cmd, formEvent) {
 
 var metaFields = map[fieldID]bool{
 	fProject: true, fCycle: true, fStates: true, fLabels: true,
-	fAssigneeUser: true, fSetLabel: true, fRemoveLabel: true,
+	fAssigneeUser: true, fSetLabel: true,
 }
 
 func (f *formModel) openPicker(cur fieldID) tea.Cmd {
@@ -349,14 +348,9 @@ func (f *formModel) openPicker(cur fieldID) tea.Cmd {
 		title = "Dedup mode"
 		opts = []pickOpt{{"label", "label (flip trigger label on spawn)"}, {"seen", "seen (local seen-file)"}}
 		selected = []string{f.poll.DedupMode}
-	case fSetLabel, fRemoveLabel:
-		if cur == fSetLabel {
-			title = "on_sent: set label"
-			selected = []string{f.poll.OnSentSetLabel}
-		} else {
-			title = "on_sent: remove label"
-			selected = []string{f.poll.OnSentRemoveLabel}
-		}
+	case fSetLabel:
+		title = "on_sent: set label"
+		selected = []string{f.poll.OnSentSetLabel}
 		for _, l := range f.meta.Labels {
 			opts = append(opts, pickOpt{l.ID, labelDisplay(l)})
 		}
@@ -438,7 +432,7 @@ func (f *formModel) applyPick(p *picker) tea.Cmd {
 			f.poll.ProjectID, f.poll.CycleID = "", ""
 			f.poll.StateIDs, f.poll.MatchLabels = nil, nil
 			f.poll.AssigneeUserID = ""
-			f.poll.OnSentSetLabel, f.poll.OnSentRemoveLabel = "", ""
+			f.poll.OnSentSetLabel = ""
 			f.meta = nil
 			f.loading = "loading team metadata…"
 			return loadMetaCmd(f.cfg, id, false)
@@ -467,8 +461,6 @@ func (f *formModel) applyPick(p *picker) tea.Cmd {
 		f.poll.DedupMode = id
 	case fSetLabel:
 		f.poll.OnSentSetLabel = id
-	case fRemoveLabel:
-		f.poll.OnSentRemoveLabel = id
 	}
 	return nil
 }
@@ -581,6 +573,9 @@ func (f *formModel) view(height int) string {
 	if f.loadErr != "" {
 		b.WriteString("\n" + badText.Render(f.loadErr) + "\n")
 	}
+	if h := fieldHelp(fields[f.cursor]); h != "" {
+		b.WriteString("\n" + faintText.Render(h) + "\n")
+	}
 	if len(f.errs) > 0 {
 		b.WriteString("\n")
 		for _, e := range f.errs {
@@ -589,6 +584,46 @@ func (f *formModel) view(height int) string {
 	}
 	b.WriteString("\n" + faintText.Render("↑/↓ move · enter select/edit · r refresh linear cache · esc back") + "\n")
 	return b.String()
+}
+
+// fieldHelp returns a one-line description of the focused field, rendered
+// faintly at the bottom of the form. Empty means no help line.
+func fieldHelp(fd fieldID) string {
+	switch fd {
+	case fName:
+		return "Unique name for this poll."
+	case fTeam:
+		return "Linear team the poll queries issues from."
+	case fProject:
+		return "Optional Linear project scope; (none) matches any project."
+	case fCycleMode:
+		return "none = ignore cycles; active = the team's current cycle; pinned = a fixed cycle."
+	case fCycle:
+		return "The specific cycle to match when cycle mode is pinned."
+	case fStates:
+		return "Workflow states an issue must be in to be picked up."
+	case fLabels:
+		return "Trigger labels — issues carrying these (per match mode) are picked up."
+	case fMatchMode:
+		return "any = issue has at least one trigger label; all = has every one."
+	case fAssignee:
+		return "Whose issues to pick up: anyone, you (viewer), or a specific user."
+	case fAssigneeUser:
+		return "The specific Linear user whose issues to pick up."
+	case fNativeProject:
+		return "The [[project]] (repo) whose worktree the agent runs in."
+	case fRepo:
+		return "GitHub owner/name for PR checks; empty falls back to the project's repo."
+	case fCap:
+		return "Max concurrent agent sessions this poll may occupy."
+	case fDedup:
+		return "label = flip a Linear label after spawn (visible, reconcile-driven); seen = local seen-file only."
+	case fSetLabel:
+		return "Label ADDED after a successful spawn to mark the issue as picked up. Lola removes the trigger label(s) automatically. Must not be a trigger label."
+	case fSave:
+		return ""
+	}
+	return ""
 }
 
 func (f *formModel) label(fd fieldID) string {
@@ -623,8 +658,6 @@ func (f *formModel) label(fd fieldID) string {
 		return "Dedup mode"
 	case fSetLabel:
 		return "on_sent set label"
-	case fRemoveLabel:
-		return "on_sent remove label"
 	case fSave:
 		return ""
 	}
@@ -723,11 +756,6 @@ func (f *formModel) display(fd fieldID) string {
 			return sel
 		}
 		return f.labelName(f.poll.OnSentSetLabel)
-	case fRemoveLabel:
-		if f.poll.OnSentRemoveLabel == "" {
-			return sel
-		}
-		return f.labelName(f.poll.OnSentRemoveLabel)
 	case fSave:
 		return "[ Save ]"
 	}

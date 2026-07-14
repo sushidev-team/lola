@@ -11,22 +11,21 @@ import (
 
 func validPoll() Poll {
 	return Poll{
-		Name:              "frontend",
-		Enabled:           true,
-		TeamID:            "team-uuid",
-		ProjectID:         "proj-uuid",
-		CycleMode:         "active",
-		StateIDs:          []string{"state-1", "state-2"},
-		MatchLabels:       []string{"label-1"},
-		MatchMode:         "any",
-		AssigneeMode:      "me",
-		Project:           "nori-app",
-		Repo:              "sushidev-team/nori-app",
-		ConcurrencyCap:    2,
-		PrioritySort:      []string{"priority", "createdAt"},
-		DedupMode:         "label",
-		OnSentSetLabel:    "label-sent",
-		OnSentRemoveLabel: "label-1",
+		Name:           "frontend",
+		Enabled:        true,
+		TeamID:         "team-uuid",
+		ProjectID:      "proj-uuid",
+		CycleMode:      "active",
+		StateIDs:       []string{"state-1", "state-2"},
+		MatchLabels:    []string{"label-1"},
+		MatchMode:      "any",
+		AssigneeMode:   "me",
+		Project:        "nori-app",
+		Repo:           "sushidev-team/nori-app",
+		ConcurrencyCap: 2,
+		PrioritySort:   []string{"priority", "createdAt"},
+		DedupMode:      "label",
+		OnSentSetLabel: "label-sent",
 	}
 }
 
@@ -439,13 +438,14 @@ func TestValidateMatrix(t *testing.T) {
 		{"repo embedded space rejected", func(c *Config) { c.Polls[0].Repo = "owner/na me" }, `repo must be "owner/name"`},
 
 		{"label mode needs set label", func(c *Config) { c.Polls[0].OnSentSetLabel = "" }, "on_sent_set_label"},
-		{"label mode needs remove label", func(c *Config) { c.Polls[0].OnSentRemoveLabel = "" }, "on_sent_remove_label"},
 		{"label mode needs match labels", func(c *Config) { c.Polls[0].MatchLabels = nil }, "requires match_labels"},
-		{"label mode remove must be a match label", func(c *Config) { c.Polls[0].OnSentRemoveLabel = "label-unrelated" }, "on_sent_remove_label must be one of match_labels"},
-		{"label mode any with multiple match labels rejected", func(c *Config) {
+		{"label mode set label must not be a match label", func(c *Config) {
+			c.Polls[0].OnSentSetLabel = "label-1"
+		}, "on_sent_set_label must not be one of match_labels"},
+		{"label mode any with multiple match labels ok", func(c *Config) {
 			c.Polls[0].MatchMode = "any"
 			c.Polls[0].MatchLabels = []string{"label-1", "label-2"}
-		}, "exactly one match label"},
+		}, ""},
 		{"label mode all with multiple match labels ok", func(c *Config) {
 			c.Polls[0].MatchMode = "all"
 			c.Polls[0].MatchLabels = []string{"label-1", "label-2"}
@@ -453,14 +453,12 @@ func TestValidateMatrix(t *testing.T) {
 		{"seen mode multiple any labels ok", func(c *Config) {
 			c.Polls[0].DedupMode = "seen"
 			c.Polls[0].OnSentSetLabel = ""
-			c.Polls[0].OnSentRemoveLabel = ""
 			c.Polls[0].MatchMode = "any"
 			c.Polls[0].MatchLabels = []string{"label-1", "label-2"}
 		}, ""},
 		{"seen mode needs no labels", func(c *Config) {
 			c.Polls[0].DedupMode = "seen"
 			c.Polls[0].OnSentSetLabel = ""
-			c.Polls[0].OnSentRemoveLabel = ""
 		}, ""},
 		{"bad dedup_mode enum", func(c *Config) { c.Polls[0].DedupMode = "both" }, "dedup_mode"},
 		{"empty dedup_mode rejected", func(c *Config) { c.Polls[0].DedupMode = "" }, "dedup_mode"},

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -126,7 +127,7 @@ func TestSpawnHappyPathFullSequence(t *testing.T) {
 		IssueUUID: "uuid-42", Branch: "lola/eng-42", Repo: "owner/nori",
 		TmuxName: id, Status: StatusWorking,
 	}
-	if got != want {
+	if !reflect.DeepEqual(got, want) {
 		t.Errorf("session = %+v\nwant      %+v", got, want)
 	}
 
@@ -424,7 +425,7 @@ LOLA_EOF
 		t.Fatalf("Adopt = %+v\nwant %+v", got, want)
 	}
 	for i := range want {
-		if got[i] != want[i] {
+		if !reflect.DeepEqual(got[i], want[i]) {
 			t.Errorf("adopt[%d] = %+v\nwant       %+v", i, got[i], want[i])
 		}
 	}

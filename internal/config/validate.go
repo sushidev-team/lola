@@ -155,18 +155,19 @@ func (c *Config) Validate() error {
 
 		switch p.DedupMode {
 		case "label":
-			if p.OnSentSetLabel == "" || p.OnSentRemoveLabel == "" {
-				errs = append(errs, fmt.Errorf("%s: dedup_mode=label requires both on_sent_set_label and on_sent_remove_label", id))
+			// Label-mode dedup works by removing ALL trigger labels on the
+			// post-spawn flip (so the issue stops matching, for any match_mode)
+			// and adding on_sent_set_label to mark it picked up.
+			if p.OnSentSetLabel == "" {
+				errs = append(errs, fmt.Errorf("%s: dedup_mode=label requires on_sent_set_label", id))
 			}
-			// Label-mode dedup only works when the post-spawn flip makes the
-			// issue stop matching; enforce that invariant statically.
-			switch {
-			case len(p.MatchLabels) == 0:
-				errs = append(errs, fmt.Errorf("%s: dedup_mode=label requires match_labels (the flipped trigger label is the primary dedup)", id))
-			case p.OnSentRemoveLabel != "" && !slices.Contains(p.MatchLabels, p.OnSentRemoveLabel):
-				errs = append(errs, fmt.Errorf("%s: on_sent_remove_label must be one of match_labels, otherwise the label flip does not stop the issue from matching", id))
-			case p.MatchMode == "any" && len(p.MatchLabels) > 1:
-				errs = append(errs, fmt.Errorf("%s: dedup_mode=label with match_mode=any requires exactly one match label (removing on_sent_remove_label would leave other trigger labels matching)", id))
+			if len(p.MatchLabels) == 0 {
+				errs = append(errs, fmt.Errorf("%s: dedup_mode=label requires match_labels (the removed trigger labels are the primary dedup)", id))
+			}
+			// The sent label must not itself be a trigger label, or the issue
+			// re-matches immediately after the flip and respawns forever.
+			if p.OnSentSetLabel != "" && slices.Contains(p.MatchLabels, p.OnSentSetLabel) {
+				errs = append(errs, fmt.Errorf("%s: on_sent_set_label must not be one of match_labels, otherwise the issue re-matches after the flip and respawns forever", id))
 			}
 		case "seen":
 		default:

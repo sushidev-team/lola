@@ -22,18 +22,17 @@ import (
 // "proj1" [[project]] defined by testConfig.
 func labelPoll(name string) config.Poll {
 	return config.Poll{
-		Name:              name,
-		Enabled:           true,
-		TeamID:            "team-1",
-		CycleMode:         "none",
-		MatchLabels:       []string{"lbl-trigger"},
-		MatchMode:         "any",
-		AssigneeMode:      "anyone",
-		Project:           "proj1",
-		ConcurrencyCap:    10,
-		DedupMode:         "label",
-		OnSentSetLabel:    "lbl-sent",
-		OnSentRemoveLabel: "lbl-trigger",
+		Name:           name,
+		Enabled:        true,
+		TeamID:         "team-1",
+		CycleMode:      "none",
+		MatchLabels:    []string{"lbl-trigger"},
+		MatchMode:      "any",
+		AssigneeMode:   "anyone",
+		Project:        "proj1",
+		ConcurrencyCap: 10,
+		DedupMode:      "label",
+		OnSentSetLabel: "lbl-sent",
 	}
 }
 
@@ -41,7 +40,6 @@ func seenPoll(name string) config.Poll {
 	p := labelPoll(name)
 	p.DedupMode = "seen"
 	p.OnSentSetLabel = ""
-	p.OnSentRemoveLabel = ""
 	return p
 }
 

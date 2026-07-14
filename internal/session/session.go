@@ -31,6 +31,12 @@ type Session struct {
 	Status    string    `json:"status"` // derived
 	FirstSeen time.Time `json:"first_seen"`
 	LastSeen  time.Time `json:"last_seen"`
+	// RemovedLabels are the match-label UUIDs the post-spawn label flip
+	// actually stripped from this issue (the trigger labels it carried at
+	// flip time — a strict subset of match_labels under match_mode=any). An
+	// orphan revert restores EXACTLY these, never the whole match_labels set,
+	// so it never re-adds a label the issue never had.
+	RemovedLabels []string `json:"removed_labels,omitempty"`
 }
 
 // Store is a mutex-guarded in-memory session map keyed by ID, persisted as

@@ -749,3 +749,79 @@ func TestReconcileNativeOnlyClearsStaleInflight(t *testing.T) {
 		t.Error("claim with a counted native session must not be cleared")
 	}
 }
+
+// multiAnyPoll is a label-mode poll that matches on ANY of two trigger labels
+// — the exact shape (match_mode=any + >1 match_labels) whose flip/revert
+// asymmetry the recorded-removed-labels fix addresses.
+func multiAnyPoll(name string) config.Poll {
+	p := labelPoll(name)
+	p.MatchMode = "any"
+	p.MatchLabels = []string{"lbl-a", "lbl-b"}
+	p.OnSentSetLabel = "lbl-sent"
+	return p
+}
+
+// An orphan that matched match_mode=any on a strict SUBSET of match_labels
+// must revert to exactly the trigger labels the flip stripped (recorded on the
+// session) — never every configured match_label. Restoring all would inject
+// "lbl-b", a trigger label the issue never carried, corrupting Linear state and
+// enabling spurious cross-poll spawns.
+func TestReconcileRevertRestoresOnlyStrippedLabels(t *testing.T) {
+	is := testIssue("FE-231", 1, "2024-01-01T00:00:00Z")
+	// Post-flip the issue carries the sent label plus an unrelated label; the
+	// only match_label it ever had was lbl-a.
+	fake := &linear.Fake{
+		Issues:          []linear.Issue{is},
+		LabelIDsByIssue: map[string][]string{is.ID: {"lbl-sent", "lbl-other"}},
+	}
+	d := newReconcileDaemon(t, fake)
+	seedOrphan(t, d, is)
+	d.openPR = func(context.Context, string, string) (bool, error) { return false, nil }
+
+	// The dead session records that only lbl-a was stripped at flip time.
+	dead := nativeSess("FE-231", "dead")
+	dead.RemovedLabels = []string{"lbl-a"}
+	d.sessions.Upsert(dead)
+
+	d.reconcilePoll(context.Background(), fake, multiAnyPoll("p1"), map[string]bool{}, time.Now())
+
+	// lbl-a restored, lbl-sent dropped, lbl-other kept — and crucially NO lbl-b.
+	want := []string{"lbl-other", "lbl-a"}
+	if got := fake.LabelIDsByIssue[is.ID]; !reflect.DeepEqual(got, want) {
+		t.Errorf("labels after revert = %v, want %v (must not re-add the never-carried lbl-b)", got, want)
+	}
+	if slices.Contains(fake.LabelIDsByIssue[is.ID], "lbl-b") {
+		t.Error("revert re-added phantom trigger label lbl-b the issue never carried")
+	}
+}
+
+// The post-spawn flip must record exactly which trigger labels it stripped
+// (the subset the issue actually carried), so a later orphan revert can be its
+// faithful inverse.
+func TestTickFlipRecordsStrippedSubset(t *testing.T) {
+	is := testIssue("FE-231", 1, "2024-01-01T00:00:00Z")
+	// The issue matches match_mode=any via lbl-a only; lbl-b is absent.
+	fake := &linear.Fake{
+		Issues:          []linear.Issue{is},
+		LabelIDsByIssue: map[string][]string{is.ID: {"lbl-a", "lbl-other"}},
+	}
+	nat := &fakeNative{}
+	d := newTestDaemon(t, testConfig(multiAnyPoll("p1")), fake, nat)
+
+	if _, err := d.tick(context.Background(), "p1", false); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+
+	// Flip stripped lbl-a and added lbl-sent (lbl-b was never present).
+	if got, want := fake.LabelIDsByIssue[is.ID], []string{"lbl-other", "lbl-sent"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("labels after flip = %v, want %v", got, want)
+	}
+	// The session must record exactly the stripped subset [lbl-a] — not [lbl-a lbl-b].
+	sess, ok := d.nativeSessionForIssue("FE-231")
+	if !ok {
+		t.Fatal("no native session recorded for FE-231 after spawn")
+	}
+	if want := []string{"lbl-a"}; !reflect.DeepEqual(sess.RemovedLabels, want) {
+		t.Errorf("session RemovedLabels = %v, want %v", sess.RemovedLabels, want)
+	}
+}

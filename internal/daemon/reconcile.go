@@ -46,8 +46,9 @@ func (d *Daemon) safeReconcile(ctx context.Context) {
 
 // reconcile per SPEC "Reconciliation pass": issues still carrying the
 // on_sent_set_label with no counted session and no open PR after
-// orphan_timeout are reverted to their trigger label and cleared from
-// seen + in-flight so they re-queue.
+// orphan_timeout are reverted to their trigger labels (the exact match_labels
+// the flip stripped are restored, sent label removed) and cleared from seen +
+// in-flight so they re-queue.
 //
 // A native session "counts for" an issue while its tmux pane is alive (see
 // nativeSessionPresent) — a dead pane is exactly the native orphan condition.
@@ -207,16 +208,24 @@ func (d *Daemon) reconcilePoll(ctx context.Context, api linear.API, p config.Pol
 			}
 		}
 
-		trigger := ""
-		if len(p.MatchLabels) > 0 {
-			trigger = p.MatchLabels[0] // revert to the poll's trigger label
-		}
 		current, err := api.IssueLabelIDs(ctx, is.ID)
 		if err != nil {
 			d.logf(p.Name, "reconcile: read labels for %s failed: %v", is.Identifier, err)
 			continue
 		}
-		newIDs := NewLabelIDs(current, p.OnSentSetLabel, trigger)
+		// Reverse of the dispatch flip: restore exactly the trigger labels the
+		// flip stripped (recorded on the session), drop the sent label, so the
+		// issue re-matches and re-queues. Restoring the recorded subset — not
+		// every match_label — avoids re-adding labels the issue never carried
+		// when match_mode=any matched on a subset of match_labels. When no
+		// session record survives (e.g. pruned after a daemon restart) fall
+		// back to all match_labels: a best-effort re-queue beats a stranded
+		// orphan, and match_mode=all issues carried them all anyway.
+		restore := p.MatchLabels
+		if natSess != nil && len(natSess.RemovedLabels) > 0 {
+			restore = natSess.RemovedLabels
+		}
+		newIDs := ApplyLabelDelta(current, []string{p.OnSentSetLabel}, restore)
 		if err := api.SetIssueLabels(ctx, is.ID, newIDs); err != nil {
 			d.logf(p.Name, "reconcile: revert labels for %s failed: %v", is.Identifier, err)
 			continue

@@ -42,24 +42,23 @@ type Project struct {
 }
 
 type Poll struct {
-	Name              string   `toml:"name"`
-	Enabled           bool     `toml:"enabled"`
-	TeamID            string   `toml:"team_id"`
-	ProjectID         string   `toml:"project_id"`
-	CycleMode         string   `toml:"cycle_mode"` // none|active|pinned
-	CycleID           string   `toml:"cycle_id"`
-	StateIDs          []string `toml:"state_ids"`
-	MatchLabels       []string `toml:"match_labels"`
-	MatchMode         string   `toml:"match_mode"`    // any|all
-	AssigneeMode      string   `toml:"assignee_mode"` // anyone|me|user
-	AssigneeUserID    string   `toml:"assignee_user_id"`
-	Project           string   `toml:"project"` // [[project]].name; required
-	Repo              string   `toml:"repo"`    // GitHub "owner/name" for PR checks; empty falls back to the project's repo (PollRepo)
-	ConcurrencyCap    int      `toml:"concurrency_cap"`
-	PrioritySort      []string `toml:"priority_sort"`
-	DedupMode         string   `toml:"dedup_mode"` // label|seen
-	OnSentSetLabel    string   `toml:"on_sent_set_label"`
-	OnSentRemoveLabel string   `toml:"on_sent_remove_label"`
+	Name           string   `toml:"name"`
+	Enabled        bool     `toml:"enabled"`
+	TeamID         string   `toml:"team_id"`
+	ProjectID      string   `toml:"project_id"`
+	CycleMode      string   `toml:"cycle_mode"` // none|active|pinned
+	CycleID        string   `toml:"cycle_id"`
+	StateIDs       []string `toml:"state_ids"`
+	MatchLabels    []string `toml:"match_labels"`
+	MatchMode      string   `toml:"match_mode"`    // any|all
+	AssigneeMode   string   `toml:"assignee_mode"` // anyone|me|user
+	AssigneeUserID string   `toml:"assignee_user_id"`
+	Project        string   `toml:"project"` // [[project]].name; required
+	Repo           string   `toml:"repo"`    // GitHub "owner/name" for PR checks; empty falls back to the project's repo (PollRepo)
+	ConcurrencyCap int      `toml:"concurrency_cap"`
+	PrioritySort   []string `toml:"priority_sort"`
+	DedupMode      string   `toml:"dedup_mode"` // label|seen
+	OnSentSetLabel string   `toml:"on_sent_set_label"`
 }
 
 // Defaults is the [defaults] table. PollInterval is a plain time.Duration in
@@ -174,7 +173,9 @@ func DefaultPath() (string, error) {
 // Compatibility note: BurntSushi/toml silently ignores unknown keys, so
 // configs from the AO-bridge era (an [ao] table, per-poll `runtime` /
 // `ao_project` keys) still load — the AO-specific settings are simply
-// dropped. Such polls need a `project` set before they validate.
+// dropped. Such polls need a `project` set before they validate. The
+// retired per-poll `on_sent_remove_label` key is likewise dropped: Lola now
+// removes all of a poll's `match_labels` on the post-spawn flip.
 func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {

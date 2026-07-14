@@ -174,17 +174,17 @@ checks happen in the runtime layer, not on config load.
 | `concurrency_cap` | int | Max counted native sessions this poll may occupy. Falls back to `[defaults].concurrency_cap` when 0/unset; the effective value must be > 0. |
 | `priority_sort` | string array | Sort keys for deterministic selection when the budget caps the match list, e.g. `["priority", "createdAt"]`. |
 | `dedup_mode` | `"label"` \| `"seen"` | See below. |
-| `on_sent_set_label` | string | Label UUID applied after a successful spawn. Required iff `dedup_mode = "label"`. |
-| `on_sent_remove_label` | string | Trigger label UUID removed after a successful spawn. Required iff `dedup_mode = "label"`. |
+| `on_sent_set_label` | string | Label UUID added after a successful spawn to mark the issue as picked up. Required iff `dedup_mode = "label"`; must **not** be one of `match_labels`. |
 
 **Dedup modes** (pick one per poll, they are not mixed):
 
-- `label` — after a successful spawn, lola flips the issue's labels
-  (removes `on_sent_remove_label`, adds `on_sent_set_label`), so the issue
-  simply stops matching the filter. The seen file is only a short-TTL race
-  guard. Visible in Linear; survives daemon restarts. Label mode further
-  requires that `on_sent_remove_label` is one of `match_labels`, otherwise the
-  flip would not stop the issue from matching.
+- `label` — after a successful spawn, lola flips the issue's labels (removes
+  **all** of `match_labels`, adds `on_sent_set_label`), so the issue simply
+  stops matching the filter — under `match_mode = "any"` or `"all"`, with any
+  number of trigger labels. The seen file is only a short-TTL race guard.
+  Visible in Linear; survives daemon restarts. Label mode requires that
+  `on_sent_set_label` is **not** one of `match_labels`, otherwise the issue
+  would re-match immediately after the flip and respawn forever.
 - `seen` — the seen file is authoritative: matched-and-spawned issue IDs are
   remembered and skipped. Entries whose issues no longer match the filter are
   pruned, so a reopened ticket re-queues. No labels are touched.
@@ -277,7 +277,8 @@ For each enabled poll, every `poll_interval`:
    session — a git worktree from the project (`post_create` + symlinks), a tmux
    session running `claude --settings <generated hooks>` with the issue's
    identifier and title as its briefing — then (label mode, on success only)
-   re-read the issue's current labels fresh and flip trigger → sent label.
+   re-read the issue's current labels fresh and flip them: remove all trigger
+   labels, add the sent label.
 
 A read-only observer (~30 s) tracks each session's tmux liveness and PR/CI
 state (`gh`). A periodic reconciliation pass (~5 min) reverts issues that were

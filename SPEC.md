@@ -68,7 +68,7 @@ observation of the resulting PR/CI — not just the trigger.
 6. Mode dedup — label: trigger label already flipped away; seen = short-TTL race guard. seen: drop seen IDs, prune seen entries that no longer match (lets reopened tickets re-queue).
 7. Sort by priority_sort (deterministic when capped).
 8. **[changed from AO bridge]** budget = min(poll.concurrency_cap, global_cap − liveCounted); liveCounted = **native** sessions in the store whose derived status occupies a slot (`working`, `needs_input`, `draft`, `ci_failed`, `changes_requested`, `ci_pending`). Parked-for-review states (approved, review_pending, no_pr) and terminal ones (merged, dead, session_ended) don't count, so held PRs never stall pickup. (Was: AO sessions from `ao session ls --json` in `counting_states`.)
-9. **[changed from AO bridge]** Per issue (up to budget): (a) mark in-flight + write seen FIRST; (b) spawn the native session — `git worktree add` under `~/.lola/worktrees/<project>/<sessionID>` on branch `issue.branchName` (fallback `lola/<identifier>`), run project symlinks + `post_create`, write `.lola/{prompt.md,settings.json}`, then `tmux new-session` running `claude --settings .lola/settings.json` (identifier FE-231, not UUID; the prompt points the agent at `.lola/prompt.md`, which carries identifier + title + a fetch-full-issue-from-Linear instruction so agents don't start blind); the returned session is upserted into the store immediately so the next budget computation counts it; (c) on success + label mode: re-read current labelIds FRESH, new = (current − remove_label) + set_label, issueUpdate with UUID. (Was: `ao spawn --project <ao_project> --issue <IDENTIFIER> --prompt <context>`.)
+9. **[changed from AO bridge]** Per issue (up to budget): (a) mark in-flight + write seen FIRST; (b) spawn the native session — `git worktree add` under `~/.lola/worktrees/<project>/<sessionID>` on branch `issue.branchName` (fallback `lola/<identifier>`), run project symlinks + `post_create`, write `.lola/{prompt.md,settings.json}`, then `tmux new-session` running `claude --settings .lola/settings.json` (identifier FE-231, not UUID; the prompt points the agent at `.lola/prompt.md`, which carries identifier + title + a fetch-full-issue-from-Linear instruction so agents don't start blind); the returned session is upserted into the store immediately so the next budget computation counts it; (c) on success + label mode: re-read current labelIds FRESH, new = (current − all match_labels) + set_label, issueUpdate with UUID. (Was: `ao spawn --project <ao_project> --issue <IDENTIFIER> --prompt <context>`.)
 10. Log matched/spawned/capped-out/errors; update status.
 
 Whole-spawn deadline: worktree + `post_create` + tmux are bounded by
@@ -117,8 +117,8 @@ auto-kills; reacting to CI/review state is P3 (future work).
 
 **[changed from AO bridge]** Issues still carrying set_label with **no counted
 native session** (no live pane for that identifier) and no open PR after
-orphan_timeout (default 15m) → revert to trigger label and clear seen +
-in-flight so they re-queue. The open-PR check runs `gh pr list --repo <repo>
+orphan_timeout (default 15m) → revert labels (remove set_label, restore all
+match_labels) and clear seen + in-flight so they re-queue. The open-PR check runs `gh pr list --repo <repo>
 --head <branch>`, preferring the session record's branch/repo and falling back
 to the poll's `repo` (or its project's, via `PollRepo`); a check that cannot
 answer fails CLOSED (no revert). The dead session's worktree is kept for
@@ -155,7 +155,8 @@ Label transition (no add-label mutation; re-read first, send full array): `issue
   match_labels + match_mode, assignee_mode + assignee_user_id, **project (a
   `[[project]]` name — required)**, repo (optional; falls back to the project's
   repo for PR checks), concurrency_cap, priority_sort, dedup_mode (label|seen),
-  on_sent_set_label / on_sent_remove_label.
+  on_sent_set_label. (History: a per-poll on_sent_remove_label existed in the
+  AO-bridge era; it was retired — Lola now removes all match_labels on the flip.)
 
 ## Go module layout
 
@@ -183,7 +184,7 @@ inflight); internal/protocol (socket request/response types); internal/tui
   fail silently (was: "AO not running").
 - **[changed from AO bridge]** Validate on save/enable: project references a
   defined `[[project]]`; IDs resolve; caps > 0; pinned cycle has cycle_id;
-  label mode has set/remove labels (and remove ∈ match_labels). Path-exists /
+  label mode has a set label and non-empty match_labels (and set ∉ match_labels). Path-exists /
   is-git-repo checks live in the runtime layer, not config load. (Was: validate
   `ao_project` exists in agent-orchestrator.yaml.)
 - config.toml + lola.sock mode 0600; never log API key.

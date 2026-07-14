@@ -59,9 +59,9 @@ symlinks = [".env"]
 # ---------------------------------------------------------------------------
 # Poll 1: label-flip dedup. Issues in the frontend team's active cycle,
 # in a "Ready for agent" state, carrying the "agent-queue" trigger label.
-# After a successful spawn, lola removes the trigger label and sets the
-# "agent-sent" label, so the issue stops matching. The label flip is visible
-# in Linear and survives daemon restarts.
+# After a successful spawn, lola removes all trigger labels (match_labels) and
+# sets the "agent-sent" label, so the issue stops matching. The label flip is
+# visible in Linear and survives daemon restarts.
 # ---------------------------------------------------------------------------
 [[poll]]
 name = "frontend-agent-queue"
@@ -97,10 +97,12 @@ repo = "sushidev-team/nori-app"
 concurrency_cap = 2
 # Deterministic ordering when the budget caps the match list.
 priority_sort = ["priority", "createdAt"]
-# label | seen. label mode requires both on_sent_* labels.
+# label | seen. label mode requires on_sent_set_label + non-empty match_labels.
 dedup_mode = "label"
+# Label ADDED after a successful spawn to mark the issue as picked up. The
+# trigger labels (match_labels) are removed automatically on the flip, so the
+# issue stops matching. Must NOT be one of match_labels.
 on_sent_set_label = "label_sent0000-1111-2222-3333-444455556666"
-on_sent_remove_label = "label_trig0000-1111-2222-3333-444455556666"
 
 # ---------------------------------------------------------------------------
 # Poll 2: seen-file dedup. No labels are touched; spawned issue IDs are
@@ -130,7 +132,6 @@ concurrency_cap = 1
 priority_sort = ["priority", "createdAt"]
 dedup_mode = "seen"
 on_sent_set_label = ""
-on_sent_remove_label = ""
 
 # ---------------------------------------------------------------------------
 # Poll 3: label-flip dedup on the native runtime, like poll 1. lola creates a
@@ -156,5 +157,6 @@ repo = "sushidev-team/nori-app"
 concurrency_cap = 2
 priority_sort = ["priority", "createdAt"]
 dedup_mode = "label"
+# Trigger labels (match_labels) are removed automatically on the flip; this
+# label is added to mark the issue picked up. Must NOT be one of match_labels.
 on_sent_set_label = "label_sent0000-1111-2222-3333-444455556666"
-on_sent_remove_label = "label_trig0000-1111-2222-3333-444455556666"

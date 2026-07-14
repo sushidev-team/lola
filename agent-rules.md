@@ -43,7 +43,7 @@ socket.
 
 ## Dedup (two explicit modes; do not mix)
 
-- label mode: the flipped trigger label is primary dedup. seen is a short-TTL race guard only. `on_sent_remove_label` must be one of `match_labels`, or the flip won't stop the issue matching.
+- label mode: the flip removing all trigger labels is primary dedup. seen is a short-TTL race guard only. `on_sent_set_label` must NOT be one of `match_labels`, or the issue re-matches right after the flip and respawns forever.
 - seen mode: seen is authoritative AND must be pruned — if a seen ID no longer matches the filter, forget it so reopened tickets re-queue. Unbounded seen is a bug.
 - Cross-poll: maintain a daemon-global in-flight set keyed by issue UUID; never spawn the same issue from two polls in one cycle. `--dry-run` reports overlaps.
 
@@ -58,7 +58,7 @@ socket.
    whole spawn with a deadline (worktree + user `post_create` + tmux). Roll back
    partial spawns best-effort (kill tmux if it came up; remove the worktree only
    when clean). (Was: `ao spawn --project <ao_project> --issue <IDENTIFIER>`.)
-3. Only on confirmed success + label mode: re-read current labelIds FRESH (avoid read-modify-write race), compute (current − remove_label) + set_label, then issueUpdate with the UUID.
+3. Only on confirmed success + label mode: re-read current labelIds FRESH (avoid read-modify-write race), compute (current − all match_labels) + set_label, then issueUpdate with the UUID.
 4. If label write fails: log, do not re-spawn (seen guards it).
 
 ## Caps
@@ -91,8 +91,8 @@ socket.
 - Respect min 30s poll interval; exponential backoff on 429/5xx.
 - **[changed from AO bridge]** Validate on save/enable: the poll's `project`
   references a defined `[[project]]`; labels/states/cycle/user IDs resolve; caps
-  > 0; pinned cycle has cycle_id; label mode has set/remove labels (and remove ∈
-  match_labels). Path-exists / is-git-repo checks live in the runtime layer, not
+  > 0; pinned cycle has cycle_id; label mode has a set label and non-empty
+  match_labels (and set ∉ match_labels). Path-exists / is-git-repo checks live in the runtime layer, not
   config load. (Was: `ao_project` exists in agent-orchestrator.yaml.)
 - **[changed from AO bridge]** Surface "runtime unavailable" (missing
   tmux/git/claude or unknown project) and "Linear auth failed" in `status`;

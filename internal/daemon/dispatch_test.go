@@ -85,26 +85,31 @@ func TestSortIssuesUrgentBeforeLowNoneLast(t *testing.T) {
 	}
 }
 
-func TestNewLabelIDs(t *testing.T) {
+func TestApplyLabelDelta(t *testing.T) {
 	cases := []struct {
-		name            string
-		current         []string
-		removeID, setID string
-		want            []string
+		name        string
+		current     []string
+		remove, add []string
+		want        []string
 	}{
-		{"removeAndAppend", []string{"a", "trigger", "b"}, "trigger", "sent", []string{"a", "b", "sent"}},
-		{"setAlreadyPresentNoDup", []string{"a", "sent"}, "trigger", "sent", []string{"a", "sent"}},
-		{"removeAbsentNoop", []string{"a", "b"}, "trigger", "sent", []string{"a", "b", "sent"}},
-		{"orderStable", []string{"z", "m", "a"}, "", "sent", []string{"z", "m", "a", "sent"}},
-		{"emptyCurrent", nil, "trigger", "sent", []string{"sent"}},
-		{"emptySet", []string{"a", "trigger"}, "trigger", "", []string{"a"}},
-		{"dedupsCurrent", []string{"a", "a", "b"}, "", "sent", []string{"a", "b", "sent"}},
+		// Flip: remove ALL trigger labels, add the sent label.
+		{"removeAllTriggersAddSent", []string{"t1", "other", "t2"}, []string{"t1", "t2"}, []string{"sent"}, []string{"other", "sent"}},
+		{"removeSingleTriggerAddSent", []string{"a", "trigger", "b"}, []string{"trigger"}, []string{"sent"}, []string{"a", "b", "sent"}},
+		// Revert: remove sent, restore ALL trigger labels.
+		{"removeSentRestoreTriggers", []string{"sent", "other"}, []string{"sent"}, []string{"t1", "t2"}, []string{"other", "t1", "t2"}},
+		{"addAlreadyPresentNoop", []string{"a", "sent"}, []string{"trigger"}, []string{"sent"}, []string{"a", "sent"}},
+		{"removeAbsentNoop", []string{"a", "b"}, []string{"trigger"}, []string{"sent"}, []string{"a", "b", "sent"}},
+		{"orderStable", []string{"z", "m", "a"}, nil, []string{"sent"}, []string{"z", "m", "a", "sent"}},
+		{"emptyCurrent", nil, []string{"trigger"}, []string{"sent"}, []string{"sent"}},
+		{"emptyAdd", []string{"a", "trigger"}, []string{"trigger"}, nil, []string{"a"}},
+		{"dedupsCurrent", []string{"a", "a", "b"}, nil, []string{"sent"}, []string{"a", "b", "sent"}},
+		{"emptyIdsSkipped", []string{"a", ""}, []string{""}, []string{"", "sent"}, []string{"a", "sent"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := NewLabelIDs(tc.current, tc.removeID, tc.setID)
+			got := ApplyLabelDelta(tc.current, tc.remove, tc.add)
 			if !reflect.DeepEqual(got, tc.want) {
-				t.Errorf("NewLabelIDs(%v, %q, %q) = %v, want %v", tc.current, tc.removeID, tc.setID, got, tc.want)
+				t.Errorf("ApplyLabelDelta(%v, %v, %v) = %v, want %v", tc.current, tc.remove, tc.add, got, tc.want)
 			}
 		})
 	}
