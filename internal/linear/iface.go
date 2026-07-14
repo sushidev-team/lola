@@ -3,7 +3,7 @@ package linear
 import (
 	"context"
 
-	"github.com/you/aop/internal/config"
+	"github.com/sushidev-team/lola/internal/config"
 )
 
 type API interface {

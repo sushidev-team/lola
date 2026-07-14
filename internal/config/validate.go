@@ -3,8 +3,14 @@ package config
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"slices"
 )
+
+// repoRe matches a GitHub "owner/name" reference. Deliberately loose (GitHub's
+// own rules are stricter) — it only has to catch obvious mistakes like URLs,
+// missing owner, or embedded whitespace.
+var repoRe = regexp.MustCompile(`^[\w.-]+/[\w.-]+$`)
 
 // PollByName returns a pointer to the poll with the given name (mutating it
 // mutates the config), or nil if no such poll exists.
@@ -69,6 +75,12 @@ func (c *Config) Validate() error {
 		case "any", "all":
 		default:
 			errs = append(errs, fmt.Errorf("%s: match_mode must be any|all, got %q", id, p.MatchMode))
+		}
+
+		// repo is optional: without it the reconciler's open-PR check is
+		// unavailable and orphan reverts are skipped (fail-closed).
+		if p.Repo != "" && !repoRe.MatchString(p.Repo) {
+			errs = append(errs, fmt.Errorf(`%s: repo must be "owner/name" (e.g. "sushidev-team/nori-app"), got %q`, id, p.Repo))
 		}
 
 		switch p.AssigneeMode {

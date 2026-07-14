@@ -10,15 +10,15 @@ import (
 	"syscall"
 	"testing"
 
-	"github.com/you/aop/internal/linear"
-	"github.com/you/aop/internal/protocol"
+	"github.com/sushidev-team/lola/internal/linear"
+	"github.com/sushidev-team/lola/internal/protocol"
 )
 
 // fakeDaemon serves one connection per accept loop iteration, replying with
 // resp to any request line.
 func fakeDaemon(t *testing.T, home string, resp protocol.Response) {
 	t.Helper()
-	ln, err := net.Listen("unix", filepath.Join(home, "aop.sock"))
+	ln, err := net.Listen("unix", filepath.Join(home, "lola.sock"))
 	if errors.Is(err, syscall.EPERM) {
 		t.Skip("sandbox forbids unix socket bind")
 	}
@@ -46,7 +46,7 @@ func fakeDaemon(t *testing.T, home string, resp protocol.Response) {
 
 func TestSendStatusOK(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("AOP_HOME", home)
+	t.Setenv("LOLA_HOME", home)
 
 	data, _ := json.Marshal(protocol.StatusData{Polls: []protocol.PollStatus{{Name: "fe", Enabled: true}}})
 	fakeDaemon(t, home, protocol.Response{OK: true, Data: data})
@@ -58,7 +58,7 @@ func TestSendStatusOK(t *testing.T) {
 
 func TestSendErrorResponse(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("AOP_HOME", home)
+	t.Setenv("LOLA_HOME", home)
 	fakeDaemon(t, home, protocol.Response{OK: false, Error: "no such poll"})
 
 	err := Send(`{"cmd":"enable","poll":"nope"}`)
@@ -68,7 +68,7 @@ func TestSendErrorResponse(t *testing.T) {
 }
 
 func TestSendDaemonDown(t *testing.T) {
-	t.Setenv("AOP_HOME", t.TempDir())
+	t.Setenv("LOLA_HOME", t.TempDir())
 	if err := Send(`{"cmd":"status"}`); !errors.Is(err, errDaemonDown) {
 		t.Fatalf("Send with no socket = %v, want errDaemonDown", err)
 	}
@@ -76,7 +76,7 @@ func TestSendDaemonDown(t *testing.T) {
 
 func TestLogsFilter(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("AOP_HOME", home)
+	t.Setenv("LOLA_HOME", home)
 	log := "2026-01-01 [fe] matched 2\n2026-01-01 [be] matched 0\n"
 	if err := os.WriteFile(filepath.Join(home, "daemon.log"), []byte(log), 0o600); err != nil {
 		t.Fatal(err)
@@ -91,7 +91,7 @@ func TestLogsFilter(t *testing.T) {
 }
 
 func TestTeamCacheRoundTrip(t *testing.T) {
-	t.Setenv("AOP_HOME", t.TempDir())
+	t.Setenv("LOLA_HOME", t.TempDir())
 	in := &teamMeta{Teams: []linear.Team{{ID: "t1", Key: "FE", Name: "Frontend"}}}
 	if err := saveTeamCache("t1", in); err != nil {
 		t.Fatal(err)

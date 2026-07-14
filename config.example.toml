@@ -1,11 +1,11 @@
-# aop configuration — copy to ~/.aop/config.toml (mode 0600).
+# lola configuration — copy to ~/.lola/config.toml (mode 0600).
 #
 # This file contains NO secrets. The Linear API key lives in the macOS
 # Keychain or an environment variable (see [linear] below).
 #
 # All Linear references (team_id, project_id, cycle_id, state_ids,
 # match_labels, assignee_user_id, on_sent_*_label) are Linear UUIDs, not
-# names. The `aop` TUI resolves names to IDs for you when creating a poll.
+# names. The `lola` TUI resolves names to IDs for you when creating a poll.
 
 [defaults]
 # Go duration string. Minimum is 30s (Linear rate limit); lower values are
@@ -27,19 +27,22 @@ endpoint = "https://api.linear.app/graphql"
 
 [ao]
 # Absolute path to the ao binary — launchd has no login-shell PATH.
-# A leading ~ is expanded on load.
+# A leading ~ is expanded on load. The desktop app bundles the CLI at
+# "/Applications/Agent Orchestrator.app/Contents/Resources/daemon/ao".
 bin = "/opt/homebrew/bin/ao"
 # AO's project registry; used to validate ao_project and to populate the
 # TUI dropdown.
 config_path = "~/.config/agent-orchestrator/agent-orchestrator.yaml"
-# AO session states that count against the caps. Review/blocked states are
-# deliberately excluded so PRs held for review don't stall new pickups.
-counting_states = ["working", "in_progress"]
+# AO session statuses that count against the caps (from `ao session ls`).
+# Parked-for-review statuses (pr_open, review_pending, approved, mergeable)
+# and dead ones (merged, idle, terminated) are deliberately excluded so PRs
+# held for review don't stall new pickups.
+counting_states = ["working", "no_signal", "needs_input", "draft", "ci_failed", "changes_requested"]
 
 # ---------------------------------------------------------------------------
 # Poll 1: label-flip dedup. Issues in the frontend team's active cycle,
 # in a "Ready for agent" state, carrying the "agent-queue" trigger label.
-# After a successful spawn, aop removes the trigger label and sets the
+# After a successful spawn, lola removes the trigger label and sets the
 # "agent-sent" label, so the issue stops matching. The label flip is visible
 # in Linear and survives daemon restarts.
 # ---------------------------------------------------------------------------
@@ -66,6 +69,12 @@ assignee_user_id = ""
 # Must exist as a project in agent-orchestrator.yaml (validated on
 # save/enable).
 ao_project = "frontend"
+# GitHub repository ("owner/name") for this poll's issues. The reconciler
+# passes it to `gh pr list --repo` so its open-PR check works from any
+# working directory (launchd runs the daemon outside a checkout). Optional —
+# but when empty the PR check is unavailable and orphaned issues are NEVER
+# auto-reverted (fail-closed).
+repo = "sushidev-team/nori-app"
 # Max counted AO sessions this poll may occupy. 0/omitted falls back to
 # [defaults].concurrency_cap.
 concurrency_cap = 2
@@ -78,7 +87,7 @@ on_sent_remove_label = "label_trig0000-1111-2222-3333-444455556666"
 
 # ---------------------------------------------------------------------------
 # Poll 2: seen-file dedup. No labels are touched; spawned issue IDs are
-# remembered in ~/.aop/state/backend-bugs.seen. Seen entries whose issues no
+# remembered in ~/.lola/state/backend-bugs.seen. Seen entries whose issues no
 # longer match the filter are pruned, so reopened tickets re-queue.
 # ---------------------------------------------------------------------------
 [[poll]]
@@ -98,6 +107,8 @@ match_mode = "all"
 assignee_mode = "anyone"
 assignee_user_id = ""
 ao_project = "backend"
+# See poll 1; omit/leave empty to disable the reconciler's open-PR check.
+repo = "sushidev-team/nori-app"
 concurrency_cap = 1
 priority_sort = ["priority", "createdAt"]
 dedup_mode = "seen"

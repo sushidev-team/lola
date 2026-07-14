@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/you/aop/internal/protocol"
+	"github.com/sushidev-team/lola/internal/protocol"
 )
 
 // statusTracker holds live per-poll status for the status command.

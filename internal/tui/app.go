@@ -1,4 +1,4 @@
-// Package tui implements the interactive poll manager (aop / aop tui) and
+// Package tui implements the interactive poll manager (lola / lola tui) and
 // the plain socket client used by the other CLI subcommands.
 package tui
 
@@ -9,8 +9,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/you/aop/internal/config"
-	"github.com/you/aop/internal/protocol"
+	"github.com/sushidev-team/lola/internal/config"
+	"github.com/sushidev-team/lola/internal/protocol"
 )
 
 var (

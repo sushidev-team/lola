@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/you/aop/internal/config"
+	"github.com/sushidev-team/lola/internal/config"
 )
 
 // basePoll returns the minimal poll every filter test starts from:

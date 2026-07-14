@@ -1,4 +1,4 @@
-module github.com/you/aop
+module github.com/sushidev-team/lola
 
 go 1.24.0
 

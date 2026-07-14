@@ -1,6 +1,6 @@
 package linear
 
-import "github.com/you/aop/internal/config"
+import "github.com/sushidev-team/lola/internal/config"
 
 // BuildIssueFilter constructs the Linear GraphQL IssueFilter for one poll.
 // Exported so tests can assert filter construction without a live client.

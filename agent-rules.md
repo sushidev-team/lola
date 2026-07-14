@@ -1,6 +1,6 @@
-# Build instructions for `aop`
+# Build instructions for `lola`
 
-Implement ONLY what the aop Spec v2 defines. `aop` triggers AO; it must never touch git, worktrees, PRs, or CI. Config is the single source of truth; the TUI edits it then sends `reload`. Language: Go (latest stable), Cobra for CLI, Bubble Tea + Lipgloss for TUI. One binary: `aop run` = daemon, `aop`/`aop tui` = client, other subcommands talk to the socket.
+Implement ONLY what the lola Spec v2 defines. `lola` triggers AO; it must never touch git, worktrees, PRs, or CI. Config is the single source of truth; the TUI edits it then sends `reload`. Language: Go (latest stable), Cobra for CLI, Bubble Tea + Lipgloss for TUI. One binary: `lola run` = daemon, `lola`/`lola tui` = client, other subcommands talk to the socket.
 
 ## Environment / launchd (critical)
 
@@ -40,7 +40,7 @@ Implement ONLY what the aop Spec v2 defines. `aop` triggers AO; it must never to
 ## Caps
 
 - budget = min(poll.concurrency_cap, global_cap − liveCounted). liveCounted counts ONLY AO sessions whose state ∈ ao.counting_states (excludes review/blocked so held PRs don't stall pickup).
-- liveCounted MUST come from `ao list --json`, never a local counter.
+- liveCounted MUST come from `ao session ls --json`, never a local counter.
 - When capped, sort by priority_sort (priority then createdAt) for deterministic selection.
 
 ## Reconciliation
@@ -49,16 +49,16 @@ Implement ONLY what the aop Spec v2 defines. `aop` triggers AO; it must never to
 
 ## Safety / robustness
 
-- config.toml and aop.sock are mode 0600. Config writes are temp-file + rename (atomic).
+- config.toml and lola.sock are mode 0600. Config writes are temp-file + rename (atomic).
 - Respect min 30s poll interval; exponential backoff on 429/5xx.
 - Validate on save/enable: ao_project exists in agent-orchestrator.yaml; labels/states/cycle/user IDs resolve; caps &gt; 0; pinned cycle has cycle_id; label mode has set/remove labels.
 - Surface "AO not running" and "Linear auth failed" in `status`; never fail silently.
-- Slack (if enabled) fires only the aop-owned "picked up" event; AO owns PR/CI notifications.
+- Slack (if enabled) fires only the lola-owned "picked up" event; AO owns PR/CI notifications.
 
 ## Daemon
 
 - One goroutine per enabled poll with its own ticker; `reload` re-diffs config and starts/stops goroutines without dropping unaffected ones.
-- Unix socket at ~/.aop/aop.sock, newline-delimited JSON per the protocol.
+- Unix socket at ~/.lola/lola.sock, newline-delimited JSON per the protocol.
 - `status` reports aoRunning (can we exec `ao`?) and linearOk (last auth ok?).
 - Graceful shutdown on SIGTERM/`stop`: finish in-flight tick, close socket, exit 0.
 
@@ -72,4 +72,4 @@ Implement ONLY what the aop Spec v2 defines. `aop` triggers AO; it must never to
 ## Testing (definition of done)
 
 - Use the linear.API interface + fake.go fixtures. Unit tests MUST cover: filter construction per mode, pagination, budget math, both dedup modes incl. seen pruning, cross-poll dedup, labelIds delta computation, identifier-vs-UUID usage.
-- Integration: `aop poll <n> --once --dry-run` prints correct matches (incl. assignee=me) against a real team; creating a poll via the cascade writes valid config.toml; the launchd instance survives sleep/wake and a manual `kill` (KeepAlive restarts it); enabling a poll with a bad ao_project is rejected with a clear message.
+- Integration: `lola poll <n> --once --dry-run` prints correct matches (incl. assignee=me) against a real team; creating a poll via the cascade writes valid config.toml; the launchd instance survives sleep/wake and a manual `kill` (KeepAlive restarts it); enabling a poll with a bad ao_project is rejected with a clear message.

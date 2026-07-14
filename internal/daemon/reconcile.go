@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/you/aop/internal/config"
-	"github.com/you/aop/internal/linear"
+	"github.com/sushidev-team/lola/internal/config"
+	"github.com/sushidev-team/lola/internal/linear"
 )
 
 const reconcileInterval = 5 * time.Minute
@@ -47,10 +47,9 @@ func (d *Daemon) safeReconcile(ctx context.Context) {
 // orphan_timeout are reverted to their trigger label and cleared from
 // seen + in-flight so they re-queue.
 //
-// ASSUMPTION: an AO session "counts for" an issue when SessionState.ID
-// equals the Linear identifier we passed to `ao spawn` (e.g. FE-231). If AO
-// uses opaque session IDs, orphan detection degrades to timeout+PR checks
-// only (sessions never match, so every labeled issue looks sessionless).
+// An AO session "counts for" an issue when its IssueID (the --issue value we
+// passed to `ao spawn`) equals the Linear identifier. Session IDs themselves
+// are AO-internal (<sessionPrefix>-<n>) and never match.
 func (d *Daemon) reconcile(ctx context.Context) {
 	d.mu.Lock()
 	polls := slices.Clone(d.cfg.Polls)
@@ -68,19 +67,19 @@ func (d *Daemon) reconcile(ctx context.Context) {
 	}
 	sessions, err := aoc.LiveSessions(ctx)
 	if err != nil {
-		d.logf("", "reconcile: ao list failed: %v", err)
+		d.logf("", "reconcile: ao session ls failed: %v", err)
 		return
 	}
-	counted := map[string]bool{} // session ID (== Linear identifier) -> counted
+	counted := map[string]bool{} // Linear identifier -> has a counted session
 	for _, s := range sessions {
-		if counting[s.Status] {
-			counted[s.ID] = true
+		if counting[s.Status] && s.IssueID != "" {
+			counted[s.IssueID] = true
 		}
 	}
 
 	// Clear in-flight claims whose issue has no counted AO session anymore.
 	// The orphanTimeout grace avoids racing a spawn that hasn't shown up in
-	// `ao list` yet.
+	// `ao session ls` yet.
 	for uuid, e := range d.inflight.Entries() {
 		if !counted[e.Identifier] && now.Sub(e.AddedAt) > orphanTimeout {
 			d.inflight.Remove(uuid)
@@ -155,7 +154,7 @@ func (d *Daemon) reconcilePoll(ctx context.Context, api linear.API, p config.Pol
 			continue
 		}
 		if is.BranchName != "" {
-			open, err := d.openPR(ctx, is.BranchName)
+			open, err := d.openPR(ctx, p.Repo, is.BranchName)
 			if err != nil {
 				// Cannot determine PR state: fail CLOSED. The SPEC only
 				// allows the revert when there is provably no open PR —
@@ -194,13 +193,16 @@ func (d *Daemon) reconcilePoll(ctx context.Context, api linear.API, p config.Pol
 	}
 }
 
-// ghOpenPR checks for an open PR on branch via `gh pr list`. Any failure
-// (gh missing, gh run outside the issue's repo checkout, bad JSON) returns
-// an error so the caller fails closed — the daemon's cwd is usually NOT the
-// issue's repo (launchd sets WorkingDirectory=$HOME), and config carries no
-// per-project repo mapping to pass as --repo, so "could not check" must
+// ghOpenPR checks for an open PR on branch via `gh pr list --repo <repo>`.
+// The per-poll `repo` config ("owner/name") makes the check independent of
+// the daemon's cwd (launchd sets WorkingDirectory=$HOME, which is not a git
+// checkout). Any failure — repo not configured, gh missing, gh error, bad
+// JSON — returns an error so the caller fails closed: "could not check" must
 // never be conflated with "no PR".
-func (d *Daemon) ghOpenPR(ctx context.Context, branch string) (bool, error) {
+func (d *Daemon) ghOpenPR(ctx context.Context, repo, branch string) (bool, error) {
+	if repo == "" {
+		return false, fmt.Errorf(`no repo configured for poll: set repo = "owner/name" in config.toml to enable open-PR checks`)
+	}
 	gh, err := exec.LookPath("gh")
 	if err != nil {
 		d.ghWarn.Do(func() {
@@ -208,13 +210,13 @@ func (d *Daemon) ghOpenPR(ctx context.Context, branch string) (bool, error) {
 		})
 		return false, fmt.Errorf("gh not on PATH: %w", err)
 	}
-	out, err := exec.CommandContext(ctx, gh, "pr", "list", "--head", branch, "--json", "state", "--limit", "1").Output()
+	out, err := exec.CommandContext(ctx, gh, "pr", "list", "--repo", repo, "--head", branch, "--json", "state", "--limit", "1").Output()
 	if err != nil {
-		return false, fmt.Errorf("gh pr list --head %s: %w", branch, err)
+		return false, fmt.Errorf("gh pr list --repo %s --head %s: %w", repo, branch, err)
 	}
 	var prs []struct{ State string }
 	if err := json.Unmarshal(out, &prs); err != nil {
-		return false, fmt.Errorf("gh pr list --head %s: bad output: %w", branch, err)
+		return false, fmt.Errorf("gh pr list --repo %s --head %s: bad output: %w", repo, branch, err)
 	}
 	return len(prs) > 0 && strings.EqualFold(prs[0].State, "open"), nil
 }

@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/you/aop/internal/config"
-	"github.com/you/aop/internal/protocol"
+	"github.com/sushidev-team/lola/internal/config"
+	"github.com/sushidev-team/lola/internal/protocol"
 )
 
 type listModel struct {
@@ -65,14 +65,14 @@ func (l *listModel) teamDisplay(teamID string) string {
 func (m *rootModel) listView() string {
 	l := &m.list
 	var b strings.Builder
-	b.WriteString(titleStyle.Render("aop — polls") + "\n")
+	b.WriteString(titleStyle.Render("lola — polls") + "\n")
 	if l.status != nil {
 		fmt.Fprintf(&b, "daemon: %s   ao: %s   linear: %s\n\n",
 			goodText.Render("running"),
 			yesNoStyled(l.status.AORunning, "reachable", "unreachable"),
 			yesNoStyled(l.status.LinearOK, "ok", "error"))
 	} else {
-		b.WriteString(badText.Render("daemon: not running") + faintText.Render("  (start with: aop run)"))
+		b.WriteString(badText.Render("daemon: not running") + faintText.Render("  (start with: lola run)"))
 		if l.statusErr != "" {
 			b.WriteString("  " + badText.Render(l.statusErr))
 		}

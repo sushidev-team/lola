@@ -1,4 +1,4 @@
-// Package daemon is the heart of aop: it polls Linear on per-poll tickers,
+// Package daemon is the heart of lola: it polls Linear on per-poll tickers,
 // dispatches matching issues into AO, reconciles orphans, and serves the
 // unix-socket protocol for the TUI/CLI.
 package daemon
@@ -17,17 +17,18 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/you/aop/internal/ao"
-	"github.com/you/aop/internal/config"
-	"github.com/you/aop/internal/linear"
-	"github.com/you/aop/internal/secrets"
+	"github.com/sushidev-team/lola/internal/ao"
+	"github.com/sushidev-team/lola/internal/config"
+	"github.com/sushidev-team/lola/internal/linear"
+	"github.com/sushidev-team/lola/internal/secrets"
 )
 
 // AOAPI is the daemon's seam over the AO CLI so ticks are testable with fakes.
 type AOAPI interface {
 	Reachable(context.Context) bool
 	LiveSessions(context.Context) ([]ao.SessionState, error)
-	Spawn(ctx context.Context, project, identifier string) error
+	Spawn(ctx context.Context, project, identifier, prompt string) error
+	Projects(context.Context) ([]string, error)
 }
 
 var _ AOAPI = (*ao.Client)(nil)
@@ -67,10 +68,11 @@ type Daemon struct {
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 
-	// openPR reports whether branch has an open PR; the error means
-	// "could not determine" and callers must fail CLOSED (skip the revert).
-	// Overridable in tests; defaults to the gh-based check.
-	openPR func(ctx context.Context, branch string) (bool, error)
+	// openPR reports whether branch has an open PR in repo ("owner/name",
+	// the poll's `repo` config); the error means "could not determine" and
+	// callers must fail CLOSED (skip the revert). Overridable in tests;
+	// defaults to the gh-based check.
+	openPR func(ctx context.Context, repo, branch string) (bool, error)
 
 	// Socket-initiated tick work (pollOnce) is tracked separately from the
 	// worker/reconcile goroutines so graceful shutdown can drain it too.
@@ -141,7 +143,7 @@ func Run(ctx context.Context) error {
 		logger.Printf("linear API key unavailable: %v", err)
 	}
 
-	sock := filepath.Join(home, "aop.sock")
+	sock := filepath.Join(home, "lola.sock")
 	ln, err := claimSocket(sock)
 	if err != nil {
 		logger.Printf("%v", err)
@@ -194,7 +196,7 @@ func Run(ctx context.Context) error {
 func claimSocket(sock string) (net.Listener, error) {
 	if conn, err := net.DialTimeout("unix", sock, time.Second); err == nil {
 		conn.Close()
-		return nil, fmt.Errorf("another aop daemon is already serving %s (stop it first)", sock)
+		return nil, fmt.Errorf("another lola daemon is already serving %s (stop it first)", sock)
 	}
 	_ = os.Remove(sock) // stale socket from a previous run
 	ln, err := net.Listen("unix", sock)

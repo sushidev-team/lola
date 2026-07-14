@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/you/aop/internal/linear"
+	"github.com/sushidev-team/lola/internal/linear"
 )
 
 func TestBudget(t *testing.T) {

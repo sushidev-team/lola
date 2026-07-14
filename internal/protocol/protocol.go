@@ -1,5 +1,5 @@
 // Package protocol defines the newline-delimited JSON messages exchanged
-// over the unix socket ~/.aop/aop.sock between the daemon (server) and
+// over the unix socket ~/.lola/lola.sock between the daemon (server) and
 // CLI/TUI clients. This file is the contract between internal/daemon and
 // internal/tui — keep it dependency-free.
 package protocol

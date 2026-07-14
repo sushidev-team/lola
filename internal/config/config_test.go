@@ -21,6 +21,7 @@ func validPoll() Poll {
 		MatchMode:         "any",
 		AssigneeMode:      "me",
 		AOProject:         "frontend",
+		Repo:              "sushidev-team/nori-app",
 		ConcurrencyCap:    2,
 		PrioritySort:      []string{"priority", "createdAt"},
 		DedupMode:         "label",
@@ -30,30 +31,30 @@ func validPoll() Poll {
 }
 
 func TestHomeEnvOverride(t *testing.T) {
-	t.Setenv("AOP_HOME", "/tmp/aop-test-home")
+	t.Setenv("LOLA_HOME", "/tmp/lola-test-home")
 	h, err := Home()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if h != "/tmp/aop-test-home" {
-		t.Fatalf("Home() = %q, want AOP_HOME override", h)
+	if h != "/tmp/lola-test-home" {
+		t.Fatalf("Home() = %q, want LOLA_HOME override", h)
 	}
 
 	p, err := DefaultPath()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p != filepath.Join("/tmp/aop-test-home", "config.toml") {
+	if p != filepath.Join("/tmp/lola-test-home", "config.toml") {
 		t.Fatalf("DefaultPath() = %q", p)
 	}
 
-	t.Setenv("AOP_HOME", "")
+	t.Setenv("LOLA_HOME", "")
 	h, err = Home()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasSuffix(h, string(filepath.Separator)+".aop") {
-		t.Fatalf("Home() without AOP_HOME = %q, want ~/.aop", h)
+	if !strings.HasSuffix(h, string(filepath.Separator)+".lola") {
+		t.Fatalf("Home() without LOLA_HOME = %q, want ~/.lola", h)
 	}
 }
 
@@ -73,7 +74,7 @@ func TestLoadMissingFileGivesDefaults(t *testing.T) {
 	}
 }
 
-// Omitted [ao].counting_states must default to working/in_progress —
+// Omitted [ao].counting_states must default to the slot-occupying states —
 // otherwise liveCounted is always 0 and the global cap never binds.
 func TestLoadDefaultsCountingStates(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
@@ -85,8 +86,8 @@ func TestLoadDefaultsCountingStates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(c.AO.CountingStates, []string{"working", "in_progress"}) {
-		t.Errorf("counting_states = %v, want [working in_progress]", c.AO.CountingStates)
+	if !reflect.DeepEqual(c.AO.CountingStates, DefaultCountingStates) {
+		t.Errorf("counting_states = %v, want DefaultCountingStates %v", c.AO.CountingStates, DefaultCountingStates)
 	}
 
 	// An explicit list is kept as-is.
@@ -111,7 +112,7 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	orig.Defaults.PollInterval = 90 * time.Second
 	orig.Defaults.ConcurrencyCap = 3
 	orig.Defaults.GlobalCap = 5
-	orig.Linear = LinearConfig{APIKeyKeychain: "aop-linear", APIKeyEnv: "LINEAR_API_KEY", Endpoint: DefaultEndpoint}
+	orig.Linear = LinearConfig{APIKeyKeychain: "lola-linear", APIKeyEnv: "LINEAR_API_KEY", Endpoint: DefaultEndpoint}
 	orig.AO = AOConfig{Bin: "/opt/homebrew/bin/ao", ConfigPath: "/etc/agent-orchestrator.yaml", CountingStates: []string{"working", "in_progress"}}
 	orig.Polls = []Poll{validPoll()}
 
@@ -382,6 +383,14 @@ func TestValidateMatrix(t *testing.T) {
 		{"assignee user with id ok", func(c *Config) { c.Polls[0].AssigneeMode = "user"; c.Polls[0].AssigneeUserID = "u-1" }, ""},
 		{"bad assignee_mode enum", func(c *Config) { c.Polls[0].AssigneeMode = "nobody" }, "assignee_mode"},
 		{"empty assignee_mode rejected", func(c *Config) { c.Polls[0].AssigneeMode = "" }, "assignee_mode"},
+
+		{"repo empty ok (PR check unavailable)", func(c *Config) { c.Polls[0].Repo = "" }, ""},
+		{"repo owner/name ok", func(c *Config) { c.Polls[0].Repo = "sushidev-team/nori-app" }, ""},
+		{"repo dots underscores dashes ok", func(c *Config) { c.Polls[0].Repo = "My-Org.x/repo_name.js" }, ""},
+		{"repo without owner rejected", func(c *Config) { c.Polls[0].Repo = "nori-app" }, `repo must be "owner/name"`},
+		{"repo url rejected", func(c *Config) { c.Polls[0].Repo = "https://github.com/sushidev-team/nori-app" }, `repo must be "owner/name"`},
+		{"repo extra path segment rejected", func(c *Config) { c.Polls[0].Repo = "a/b/c" }, `repo must be "owner/name"`},
+		{"repo embedded space rejected", func(c *Config) { c.Polls[0].Repo = "owner/na me" }, `repo must be "owner/name"`},
 
 		{"label mode needs set label", func(c *Config) { c.Polls[0].OnSentSetLabel = "" }, "on_sent_set_label"},
 		{"label mode needs remove label", func(c *Config) { c.Polls[0].OnSentRemoveLabel = "" }, "on_sent_remove_label"},

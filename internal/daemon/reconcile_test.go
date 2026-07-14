@@ -3,12 +3,14 @@ package daemon
 import (
 	"context"
 	"errors"
+	"log"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
-	"github.com/you/aop/internal/linear"
+	"github.com/sushidev-team/lola/internal/linear"
 )
 
 // orphanIssue returns a label-poll orphan candidate: it carries the set
@@ -41,7 +43,7 @@ func TestReconcileRevertsOrphanWithNoOpenPR(t *testing.T) {
 	}
 	d := newReconcileDaemon(t, fake)
 	seedOrphan(t, d, is)
-	d.openPR = func(context.Context, string) (bool, error) { return false, nil } // definitively no PR
+	d.openPR = func(context.Context, string, string) (bool, error) { return false, nil } // definitively no PR
 
 	d.reconcilePoll(context.Background(), fake, labelPoll("p1"), map[string]bool{}, time.Now())
 
@@ -70,7 +72,7 @@ func TestReconcileOpenPRBlocksRevert(t *testing.T) {
 	}
 	d := newReconcileDaemon(t, fake)
 	seedOrphan(t, d, is)
-	d.openPR = func(context.Context, string) (bool, error) { return true, nil } // held for review
+	d.openPR = func(context.Context, string, string) (bool, error) { return true, nil } // held for review
 
 	d.reconcilePoll(context.Background(), fake, labelPoll("p1"), map[string]bool{}, time.Now())
 
@@ -97,7 +99,7 @@ func TestReconcilePRCheckErrorFailsClosed(t *testing.T) {
 	}
 	d := newReconcileDaemon(t, fake)
 	seedOrphan(t, d, is)
-	d.openPR = func(context.Context, string) (bool, error) {
+	d.openPR = func(context.Context, string, string) (bool, error) {
 		return false, errors.New("gh: not a git repository")
 	}
 
@@ -118,6 +120,76 @@ func TestReconcilePRCheckErrorFailsClosed(t *testing.T) {
 	}
 }
 
+// The poll's `repo` config must reach the PR check verbatim — it is what
+// makes `gh pr list` work from any cwd (launchd runs the daemon in $HOME).
+func TestReconcileThreadsPollRepoIntoPRCheck(t *testing.T) {
+	is := orphanIssue()
+	fake := &linear.Fake{
+		Issues:          []linear.Issue{is},
+		LabelIDsByIssue: map[string][]string{is.ID: {"lbl-sent"}},
+	}
+	d := newReconcileDaemon(t, fake)
+	seedOrphan(t, d, is)
+	var gotRepo, gotBranch string
+	d.openPR = func(_ context.Context, repo, branch string) (bool, error) {
+		gotRepo, gotBranch = repo, branch
+		return true, nil
+	}
+
+	p := labelPoll("p1")
+	p.Repo = "acme/widgets"
+	d.reconcilePoll(context.Background(), fake, p, map[string]bool{}, time.Now())
+
+	if gotRepo != "acme/widgets" {
+		t.Errorf("openPR repo = %q, want the poll's repo %q", gotRepo, "acme/widgets")
+	}
+	if gotBranch != is.BranchName {
+		t.Errorf("openPR branch = %q, want %q", gotBranch, is.BranchName)
+	}
+}
+
+// A poll without `repo` cannot answer the PR question: the revert must be
+// skipped (fail closed) and the log must name the missing config so the
+// user knows the fix.
+func TestReconcileEmptyRepoSkipsRevertAndLogs(t *testing.T) {
+	is := orphanIssue()
+	fake := &linear.Fake{
+		Issues:          []linear.Issue{is},
+		LabelIDsByIssue: map[string][]string{is.ID: {"lbl-sent"}},
+	}
+	home := t.TempDir()
+	t.Setenv("LOLA_HOME", home)
+	var buf strings.Builder
+	d := newDaemon(testConfig(labelPoll("p1")), fake, &fakeAO{}, log.New(&buf, "", 0), home)
+	seedOrphan(t, d, is)
+	// d.openPR stays the default ghOpenPR: an empty repo must short-circuit
+	// with the "no repo configured" error before gh is ever invoked.
+
+	d.reconcilePoll(context.Background(), fake, labelPoll("p1"), map[string]bool{}, time.Now())
+
+	if slices.Contains(fake.CallNames(), "SetIssueLabels") {
+		t.Error("empty repo must skip the revert (fail closed), labels were mutated")
+	}
+	seen, err := d.seen.load("p1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := seen[is.ID]; !ok {
+		t.Error("seen entry must be kept when the PR state is unknown")
+	}
+	if !strings.Contains(buf.String(), "no repo configured") {
+		t.Errorf("log must tell the user to configure repo, got:\n%s", buf.String())
+	}
+}
+
+func TestGhOpenPREmptyRepoDistinctError(t *testing.T) {
+	d := newReconcileDaemon(t, &linear.Fake{})
+	_, err := d.ghOpenPR(context.Background(), "", "some-branch")
+	if err == nil || !strings.Contains(err.Error(), "no repo configured") {
+		t.Fatalf("ghOpenPR with empty repo: want %q error, got %v", "no repo configured", err)
+	}
+}
+
 func TestReconcileCountedSessionBlocksRevert(t *testing.T) {
 	is := orphanIssue()
 	fake := &linear.Fake{
@@ -126,7 +198,7 @@ func TestReconcileCountedSessionBlocksRevert(t *testing.T) {
 	}
 	d := newReconcileDaemon(t, fake)
 	seedOrphan(t, d, is)
-	d.openPR = func(context.Context, string) (bool, error) { return false, nil }
+	d.openPR = func(context.Context, string, string) (bool, error) { return false, nil }
 
 	counted := map[string]bool{is.Identifier: true} // live AO session
 	d.reconcilePoll(context.Background(), fake, labelPoll("p1"), counted, time.Now())
@@ -146,7 +218,7 @@ func TestReconcilePollWaitsForTickMutex(t *testing.T) {
 	}
 	d := newReconcileDaemon(t, fake)
 	seedOrphan(t, d, is)
-	d.openPR = func(context.Context, string) (bool, error) { return false, nil }
+	d.openPR = func(context.Context, string, string) (bool, error) { return false, nil }
 
 	mu := d.tickMutex("p1")
 	mu.Lock()

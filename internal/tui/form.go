@@ -4,14 +4,17 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/you/aop/internal/config"
-	"github.com/you/aop/internal/linear"
+	"github.com/sushidev-team/lola/internal/ao"
+	"github.com/sushidev-team/lola/internal/config"
+	"github.com/sushidev-team/lola/internal/linear"
 )
 
 type formEvent int
@@ -36,6 +39,7 @@ const (
 	fAssignee
 	fAssigneeUser
 	fAOProject
+	fRepo
 	fCap
 	fDedup
 	fSetLabel
@@ -103,8 +107,17 @@ func newFormModel(cfg *config.Config, existing *config.Poll) (*formModel, tea.Cm
 }
 
 func loadAOProjects(cfg *config.Config) ([]string, string) {
+	// Live registry first (`ao project ls --json`): desktop AO builds keep
+	// projects in SQLite, so a yaml scan alone would come up empty.
+	if cfg.AO.Bin != "" {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if ps, err := (&ao.Client{Bin: cfg.AO.Bin}).Projects(ctx); err == nil && len(ps) > 0 {
+			return ps, ""
+		}
+	}
 	if cfg.AO.ConfigPath == "" {
-		return nil, "[ao].config_path is not set in config.toml"
+		return nil, "AO registry unavailable and [ao].config_path is not set in config.toml"
 	}
 	ps, err := config.AOProjects(cfg.AO.ConfigPath)
 	if err != nil {
@@ -126,7 +139,7 @@ func (f *formModel) fields() []fieldID {
 		if f.poll.AssigneeMode == "user" {
 			fs = append(fs, fAssigneeUser)
 		}
-		fs = append(fs, fAOProject, fCap, fDedup)
+		fs = append(fs, fAOProject, fRepo, fCap, fDedup)
 		if f.poll.DedupMode == "label" {
 			fs = append(fs, fSetLabel, fRemoveLabel)
 		}
@@ -185,18 +198,21 @@ func (f *formModel) key(k tea.KeyMsg) (tea.Cmd, formEvent) {
 		return f.interact(cur)
 	}
 
-	// Text editing on name/cap; on other fields plain 'r' refreshes.
+	// Text editing on name/repo/cap; on other fields plain 'r' refreshes.
 	switch cur {
-	case fName, fCap:
+	case fName, fRepo, fCap:
 		switch k.Type {
 		case tea.KeyRunes, tea.KeySpace:
 			s := string(k.Runes)
 			if k.Type == tea.KeySpace {
 				s = " "
 			}
-			if cur == fName {
+			switch cur {
+			case fName:
 				f.poll.Name += s
-			} else {
+			case fRepo:
+				f.poll.Repo += s
+			default:
 				for _, r := range s {
 					if r >= '0' && r <= '9' {
 						f.capBuf += string(r)
@@ -204,11 +220,14 @@ func (f *formModel) key(k tea.KeyMsg) (tea.Cmd, formEvent) {
 				}
 			}
 		case tea.KeyBackspace:
-			if cur == fName && f.poll.Name != "" {
+			switch {
+			case cur == fName && f.poll.Name != "":
 				rs := []rune(f.poll.Name)
 				f.poll.Name = string(rs[:len(rs)-1])
-			}
-			if cur == fCap && f.capBuf != "" {
+			case cur == fRepo && f.poll.Repo != "":
+				rs := []rune(f.poll.Repo)
+				f.poll.Repo = string(rs[:len(rs)-1])
+			case cur == fCap && f.capBuf != "":
 				f.capBuf = f.capBuf[:len(f.capBuf)-1]
 			}
 		}
@@ -232,7 +251,7 @@ func (f *formModel) refresh() tea.Cmd {
 
 func (f *formModel) interact(cur fieldID) (tea.Cmd, formEvent) {
 	switch cur {
-	case fName, fCap:
+	case fName, fRepo, fCap:
 		// enter advances to the next field
 		if f.cursor < len(f.fields())-1 {
 			f.cursor++
@@ -486,6 +505,7 @@ func (f *formModel) save() (tea.Cmd, formEvent) {
 	f.errs = nil
 	p := f.poll
 	p.Name = strings.TrimSpace(p.Name)
+	p.Repo = strings.TrimSpace(p.Repo) // format checked by nc.Validate below
 	p.ConcurrencyCap = 0
 	if f.capBuf != "" {
 		n, err := strconv.Atoi(f.capBuf)
@@ -627,6 +647,8 @@ func (f *formModel) label(fd fieldID) string {
 		return "Assigned user"
 	case fAOProject:
 		return "AO project"
+	case fRepo:
+		return "GitHub repo"
 	case fCap:
 		return "Concurrency cap"
 	case fDedup:
@@ -714,6 +736,11 @@ func (f *formModel) display(fd fieldID) string {
 			return sel
 		}
 		return f.poll.AOProject
+	case fRepo:
+		if f.poll.Repo == "" {
+			return faintText.Render("(owner/name — empty disables open-PR checks)")
+		}
+		return f.poll.Repo
 	case fCap:
 		if f.capBuf == "" {
 			return faintText.Render(fmt.Sprintf("(default: %d)", f.cfg.Defaults.ConcurrencyCap))

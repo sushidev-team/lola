@@ -18,11 +18,11 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/you/aop/internal/config"
-	"github.com/you/aop/internal/protocol"
+	"github.com/sushidev-team/lola/internal/config"
+	"github.com/sushidev-team/lola/internal/protocol"
 )
 
-var errDaemonDown = errors.New("daemon not running (start with: aop run)")
+var errDaemonDown = errors.New("daemon not running (start with: lola run)")
 
 var (
 	tblHeader = lipgloss.NewStyle().Bold(true)
@@ -37,7 +37,7 @@ func socketPath() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, "aop.sock"), nil
+	return filepath.Join(home, "lola.sock"), nil
 }
 
 // requestRaw writes one raw JSON request line to the daemon socket and

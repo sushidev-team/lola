@@ -8,7 +8,7 @@ export GOFLAGS := -mod=mod -buildvcs=false
 .PHONY: build test vet tidy check clean
 
 build:
-	go build -o aop .
+	go build -o lola .
 
 test:
 	go test ./...
@@ -22,4 +22,4 @@ tidy:
 check: build vet test
 
 clean:
-	rm -rf aop .gocache
+	rm -rf lola .gocache

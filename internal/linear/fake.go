@@ -5,7 +5,7 @@ import (
 	"slices"
 	"sync"
 
-	"github.com/you/aop/internal/config"
+	"github.com/sushidev-team/lola/internal/config"
 )
 
 var _ API = (*Fake)(nil)

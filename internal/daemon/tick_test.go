@@ -14,10 +14,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/you/aop/internal/ao"
-	"github.com/you/aop/internal/config"
-	"github.com/you/aop/internal/linear"
-	"github.com/you/aop/internal/protocol"
+	"github.com/sushidev-team/lola/internal/ao"
+	"github.com/sushidev-team/lola/internal/config"
+	"github.com/sushidev-team/lola/internal/linear"
+	"github.com/sushidev-team/lola/internal/protocol"
 )
 
 // fakeAO is a hermetic AOAPI: no real ao binary is ever executed.
@@ -29,15 +29,35 @@ type fakeAO struct {
 	spawnErr    error
 	spawns      []spawnCall
 	onSpawn     func(project, identifier string) // runs before spawnErr is returned
+	projects    []string                         // nil = registry unavailable (yaml fallback)
+	onProjects  func(ctx context.Context)        // runs first; may block, like a wedged ao binary
 }
 
-type spawnCall struct{ project, identifier string }
+type spawnCall struct{ project, identifier, prompt string }
 
 // Like the real ao.Client (exec.CommandContext), every method fails once
 // its context is cancelled — tests rely on this to prove ticks are shielded
 // from the shutdown cancellation.
 func (f *fakeAO) Reachable(ctx context.Context) bool {
 	return ctx.Err() == nil && !f.unreachable
+}
+
+func (f *fakeAO) Projects(ctx context.Context) ([]string, error) {
+	f.mu.Lock()
+	hook := f.onProjects
+	f.mu.Unlock()
+	if hook != nil {
+		hook(ctx)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.projects == nil {
+		return nil, errors.New("project registry unavailable")
+	}
+	return slices.Clone(f.projects), nil
 }
 
 func (f *fakeAO) LiveSessions(ctx context.Context) ([]ao.SessionState, error) {
@@ -52,12 +72,12 @@ func (f *fakeAO) LiveSessions(ctx context.Context) ([]ao.SessionState, error) {
 	return slices.Clone(f.sessions), nil
 }
 
-func (f *fakeAO) Spawn(ctx context.Context, project, identifier string) error {
+func (f *fakeAO) Spawn(ctx context.Context, project, identifier, prompt string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 	f.mu.Lock()
-	f.spawns = append(f.spawns, spawnCall{project, identifier})
+	f.spawns = append(f.spawns, spawnCall{project, identifier, prompt})
 	hook, err := f.onSpawn, f.spawnErr
 	f.mu.Unlock()
 	if hook != nil {
@@ -109,12 +129,12 @@ func testConfig(polls ...config.Poll) *config.Config {
 	}
 }
 
-// newTestDaemon builds a daemon on an AOP_HOME temp dir with fake Linear and
+// newTestDaemon builds a daemon on an LOLA_HOME temp dir with fake Linear and
 // AO backends. Nothing touches the network, keychain, or a real ao binary.
 func newTestDaemon(t *testing.T, cfg *config.Config, fake *linear.Fake, aoc AOAPI) *Daemon {
 	t.Helper()
 	home := t.TempDir()
-	t.Setenv("AOP_HOME", home)
+	t.Setenv("LOLA_HOME", home)
 	return newDaemon(cfg, fake, aoc, log.New(io.Discard, "", 0), home)
 }
 
@@ -323,8 +343,16 @@ func TestTickDispatchOrdering(t *testing.T) {
 
 	// Spawn got the IDENTIFIER (FE-231) and the poll's ao_project.
 	spawns := aoc.spawnCalls()
-	if len(spawns) != 1 || spawns[0] != (spawnCall{project: "proj", identifier: "FE-231"}) {
-		t.Errorf("spawns = %+v, want [{proj FE-231}]", spawns)
+	if len(spawns) != 1 || spawns[0].project != "proj" || spawns[0].identifier != "FE-231" {
+		t.Errorf("spawns = %+v, want [{proj FE-231 ...}]", spawns)
+	}
+	// The context prompt names the issue (identifier + title) so the agent
+	// doesn't start blind (AO's issue resolution is GitHub-only).
+	if len(spawns) == 1 {
+		prompt := spawns[0].prompt
+		if !strings.Contains(prompt, "FE-231") || !strings.Contains(prompt, is.Title) {
+			t.Errorf("spawn prompt = %q, want it to contain identifier FE-231 and title %q", prompt, is.Title)
+		}
 	}
 
 	// Fresh IssueLabelIDs re-read precedes SetIssueLabels.

@@ -1,6 +1,6 @@
-// Package config owns ~/.aop/config.toml: schema, defaults, atomic
+// Package config owns ~/.lola/config.toml: schema, defaults, atomic
 // persistence, and static validation. All runtime paths derive from Home(),
-// which honors the $AOP_HOME override that tests rely on.
+// which honors the $LOLA_HOME override that tests rely on.
 package config
 
 import (
@@ -25,9 +25,16 @@ const (
 	MinPollInterval = 30 * time.Second
 )
 
-// DefaultCountingStates is used when [ao].counting_states is unset. Without
+// DefaultCountingStates is used when [ao].counting_states is unset. The
+// values are AO's real session display statuses; counted states are the ones
+// occupying an agent slot (incl. no_signal right after spawn and auto-recovery
+// states), while parked-for-review states (pr_open, review_pending, approved,
+// mergeable) and dead states (merged, idle, terminated) stay uncounted so held
+// PRs never stall new pickups. Without
 // it liveCounted would always be 0 and the global cap would never bind.
-var DefaultCountingStates = []string{"working", "in_progress"}
+var DefaultCountingStates = []string{
+	"working", "no_signal", "needs_input", "draft", "ci_failed", "changes_requested",
+}
 
 type Poll struct {
 	Name              string   `toml:"name"`
@@ -42,6 +49,7 @@ type Poll struct {
 	AssigneeMode      string   `toml:"assignee_mode"` // anyone|me|user
 	AssigneeUserID    string   `toml:"assignee_user_id"`
 	AOProject         string   `toml:"ao_project"`
+	Repo              string   `toml:"repo"` // GitHub "owner/name" for the reconciler's open-PR check
 	ConcurrencyCap    int      `toml:"concurrency_cap"`
 	PrioritySort      []string `toml:"priority_sort"`
 	DedupMode         string   `toml:"dedup_mode"` // label|seen
@@ -137,16 +145,16 @@ func (c *Config) file() *fileConfig {
 	}
 }
 
-// Home returns the aop runtime directory: $AOP_HOME if set, else ~/.aop.
+// Home returns the lola runtime directory: $LOLA_HOME if set, else ~/.lola.
 func Home() (string, error) {
-	if h := os.Getenv("AOP_HOME"); h != "" {
+	if h := os.Getenv("LOLA_HOME"); h != "" {
 		return h, nil
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".aop"), nil
+	return filepath.Join(home, ".lola"), nil
 }
 
 // DefaultPath returns Home()/config.toml.

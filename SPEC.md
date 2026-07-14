@@ -1,13 +1,13 @@
-# aop — Agent Orchestrator Poller
+# lola — Linear → Agent Orchestrator poller
 
-Single Go binary that watches Linear for issues matching a filter (team → project → active cycle → workflow state → labels → assignee) and dispatches them into a running Agent Orchestrator (AO) instance via `ao batch-spawn`. Launchd-managed daemon (`aop run`) + TUI (`aop`). `aop` ONLY triggers — it never touches git, worktrees, PRs, or CI (that's AO's job).
+Single Go binary that watches Linear for issues matching a filter (team → project → active cycle → workflow state → labels → assignee) and dispatches them into a running Agent Orchestrator (AO) instance via `ao spawn`. Launchd-managed daemon (`lola run`) + TUI (`lola`). `lola` ONLY triggers — it never touches git, worktrees, PRs, or CI (that's AO's job).
 
 ## Architecture
 
-- One binary, two roles: `aop run` = daemon; `aop` / `aop tui` = TUI client.
-- Config is source of truth (`~/.aop/config.toml`); TUI only edits it, then signals reload.
+- One binary, two roles: `lola run` = daemon; `lola` / `lola tui` = TUI client.
+- Config is source of truth (`~/.lola/config.toml`); TUI only edits it, then signals reload.
 - launchd owns liveness (must be a LaunchAgent for tmux/GUI context); daemon owns scheduling + live pause/resume.
-- Daemon ↔ TUI over unix socket `~/.aop/aop.sock` (newline-delimited JSON).
+- Daemon ↔ TUI over unix socket `~/.lola/lola.sock` (newline-delimited JSON).
 
 ## Filters (per poll)
 
@@ -18,28 +18,28 @@ Single Go binary that watches Linear for issues matching a filter (team → proj
 - Labels (trigger tags) with `match_mode = any | all`
 - Assignee: anyone | me (Linear `viewer`) | specific user
 
-## Runtime layout (`~/.aop/`)
+## Runtime layout (`~/.lola/`)
 
 - `config.toml` (0600, no secrets)
-- `aop.sock` (0600)
+- `lola.sock` (0600)
 - `daemon.log`
 - `state/<poll>.seen`
 - `cache/linear-<team>.json`
 
 ## Commands
 
-- `aop` / `aop tui` — open TUI (list + create/edit/delete/pause)
-- `aop run` — start daemon (launchd calls this)
-- `aop stop` — graceful shutdown
-- `aop status` — table: poll, enabled, last run, last spawn, running, error
-- `aop enable/disable <poll>` — live pause/resume
-- `aop poll <poll> --once [--dry-run]` — one tick now; dry-run prints matches, no side effects
-- `aop reload` — re-read config
-- `aop logs [poll]` — tail log
+- `lola` / `lola tui` — open TUI (list + create/edit/delete/pause)
+- `lola run` — start daemon (launchd calls this)
+- `lola stop` — graceful shutdown
+- `lola status` — table: poll, enabled, last run, last spawn, running, error
+- `lola enable/disable <poll>` — live pause/resume
+- `lola poll <poll> --once [--dry-run]` — one tick now; dry-run prints matches, no side effects
+- `lola reload` — re-read config
+- `lola logs [poll]` — tail log
 
 ## Dispatch flow (per tick, per enabled poll)
 
-1. Precheck AO reachable (`ao list --json`). If down: skip, set lastError, do NOT mutate seen/labels.
+1. Precheck AO reachable (`ao session ls --json`). If down: skip, set lastError, do NOT mutate seen/labels.
 2. Resolve API key (Keychain &gt; env).
 3. If cycle_mode=active: resolve `team.activeCycle.id` NOW (never cache across ticks).
 4. Run issues query, paginated (first:100 + pageInfo until done), filter built dynamically.
@@ -47,7 +47,7 @@ Single Go binary that watches Linear for issues matching a filter (team → proj
 6. Mode dedup — label: trigger label already flipped away; seen = short-TTL race guard. seen: drop seen IDs, prune seen entries that no longer match (lets reopened tickets re-queue).
 7. Sort by priority_sort (deterministic when capped).
 8. budget = min(poll.concurrency_cap, global_cap − liveCounted); liveCounted = AO sessions whose state ∈ counting_states (excludes review/blocked so held PRs don't stall pickup).
-9. Per issue (not batched unless AO returns per-ID results): (a) mark in-flight + write seen FIRST; (b) `ao spawn <ao_project> <IDENTIFIER>` (FE-231, not UUID); (c) on success + label mode: re-read current labelIds FRESH, new = (current − remove_label) + set_label, issueUpdate with UUID; (d) optional Slack "picked up".
+9. Per issue (not batched unless AO returns per-ID results): (a) mark in-flight + write seen FIRST; (b) `ao spawn --project <ao_project> --issue <IDENTIFIER> --prompt <context>` (FE-231, not UUID; current AO rejects positional args; the prompt carries identifier + title + a fetch-full-issue-from-Linear instruction so agents don't start blind); (c) on success + label mode: re-read current labelIds FRESH, new = (current − remove_label) + set_label, issueUpdate with UUID; (d) optional Slack "picked up".
 10. Log matched/spawned/capped-out/errors; update status.
 
 Identifier vs UUID: `ao spawn` uses identifier (`FE-231`); `issueUpdate` uses UUID (`id`). Query fetches both.
@@ -73,16 +73,16 @@ Label transition (no add-label mutation; re-read first, send full array): `issue
 ## launchd (LaunchAgent, not Daemon)
 
 - Inject PATH (include /opt/homebrew/bin), HOME, WorkingDirectory. `ao`/`tmux`/`gh` must be on PATH or absolute.
-- RunAtLoad + KeepAlive true. Logs to ~/.aop/daemon.log.
+- RunAtLoad + KeepAlive true. Logs to ~/.lola/daemon.log.
 
 ## Config key points
 
-- [ao]: bin (absolute), config_path, counting_states = ["working","in_progress"].
+- [ao]: bin (absolute), config_path, counting_states = ["working","no_signal","needs_input","draft","ci_failed","changes_requested"] (AO's real slot-occupying statuses; parked-for-review pr_open/review_pending/approved/mergeable and dead merged/idle/terminated stay uncounted).
 - Per poll: cycle_mode, state_ids, match_labels + match_mode, assignee_mode + assignee_user_id, ao_project (must exist in agent-orchestrator.yaml), concurrency_cap, priority_sort, dedup_mode (label|seen), on_sent.set_label / remove_label.
 
 ## Go module layout
 
-main.go; internal/config (config, validate, atomic writes via temp+rename); internal/linear (client, iface, queries, mutations, types, fake); internal/ao (client: spawn, list --json, Reachable); internal/daemon (daemon, dispatch, reconcile, server, state, inflight); internal/tui (app, list, form, client); internal/secrets (keychain_darwin, env).
+main.go; internal/config (config, validate, atomic writes via temp+rename); internal/linear (client, iface, queries, mutations, types, fake); internal/ao (client: spawn, session ls --json, Reachable); internal/daemon (daemon, dispatch, reconcile, server, state, inflight); internal/tui (app, list, form, client); internal/secrets (keychain_darwin, env).
 
 ## Build rules / gotchas
 
@@ -93,12 +93,12 @@ main.go; internal/config (config, validate, atomic writes via temp+rename); inte
 - seen is a safety belt (label mode) or authoritative+pruned (seen mode) — never unbounded.
 - Surface "AO not running" / "Linear auth failed" in status; never fail silently.
 - Validate on save/enable: ao_project exists, IDs resolve, caps &gt; 0, pinned cycle has cycle_id, label mode has set/remove labels.
-- config.toml + aop.sock mode 0600; never log API key.
-- Slack (optional) fires only aop-owned "picked up" event; AO owns PR/CI notifications.
+- config.toml + lola.sock mode 0600; never log API key.
+- Slack (optional) fires only lola-owned "picked up" event; AO owns PR/CI notifications.
 - Testing seam: linear.API interface + fake.go fixtures; unit test filter construction, pagination, budget math, both dedup modes incl. pruning, cross-poll dedup, labelIds delta, identifier-vs-UUID.
 
 ## Context
 
 - AO = one instance/dashboard, many projects; each project = one repo. No native multi-repo project → decompose into repo-scoped Linear issues (approach A).
-- AO natively handles worktrees, PRs, CI-fix loop, review-comment loop, escalation, hold-for-review, delete-on-merge. Only missing piece = the Linear trigger, which is aop.
+- AO natively handles worktrees, PRs, CI-fix loop, review-comment loop, escalation, hold-for-review, delete-on-merge. Only missing piece = the Linear trigger, which is lola.
 - Subscription note: for unattended runs prefer ANTHROPIC_API_KEY; Max/OAuth outside first-party Claude Code is a ToS gray zone.

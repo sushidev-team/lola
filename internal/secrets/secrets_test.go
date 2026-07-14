@@ -6,7 +6,7 @@ import (
 )
 
 func TestLinearAPIKeyEnvFallback(t *testing.T) {
-	const envVar = "AOP_TEST_LINEAR_KEY"
+	const envVar = "LOLA_TEST_LINEAR_KEY"
 	t.Setenv(envVar, "lin_api_secret")
 
 	key, err := LinearAPIKey("", envVar)
@@ -19,7 +19,7 @@ func TestLinearAPIKeyEnvFallback(t *testing.T) {
 }
 
 func TestLinearAPIKeyMissing(t *testing.T) {
-	const envVar = "AOP_TEST_LINEAR_KEY_UNSET"
+	const envVar = "LOLA_TEST_LINEAR_KEY_UNSET"
 	t.Setenv(envVar, "")
 
 	_, err := LinearAPIKey("", envVar)
@@ -45,11 +45,11 @@ func TestLinearAPIKeyNoSources(t *testing.T) {
 // only the sources tried, never any value present in the environment.
 func TestLinearAPIKeyErrorOmitsSecretValues(t *testing.T) {
 	const secret = "lin_api_supersecret_do_not_leak"
-	t.Setenv("AOP_TEST_PRESENT_KEY", secret)
+	t.Setenv("LOLA_TEST_PRESENT_KEY", secret)
 
 	// Resolution fails (different, unset var) while a secret sits in the
 	// environment; the error must not surface it.
-	_, err := LinearAPIKey("", "AOP_TEST_ABSENT_KEY")
+	_, err := LinearAPIKey("", "LOLA_TEST_ABSENT_KEY")
 	if err == nil {
 		t.Fatal("want error for unset env var")
 	}
@@ -57,13 +57,13 @@ func TestLinearAPIKeyErrorOmitsSecretValues(t *testing.T) {
 	if strings.Contains(msg, secret) {
 		t.Fatal("error text contains a secret value")
 	}
-	if !strings.Contains(msg, "AOP_TEST_ABSENT_KEY") {
+	if !strings.Contains(msg, "LOLA_TEST_ABSENT_KEY") {
 		t.Fatalf("error should name the env var tried: %v", err)
 	}
 }
 
 func TestLinearAPIKeyPrefersNonEmptyEnvValue(t *testing.T) {
-	const envVar = "AOP_TEST_LINEAR_KEY_WS"
+	const envVar = "LOLA_TEST_LINEAR_KEY_WS"
 	// Whitespace-only is still a value: LinearAPIKey does not trim env vars.
 	t.Setenv(envVar, " padded ")
 	key, err := LinearAPIKey("", envVar)

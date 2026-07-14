@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/you/aop/internal/config"
+	"github.com/sushidev-team/lola/internal/config"
 )
 
 func tuiTestPoll(name string) config.Poll {
@@ -26,7 +26,7 @@ func tuiTestPoll(name string) config.Poll {
 // it, the way Run() does.
 func newTestRoot(t *testing.T) *rootModel {
 	t.Helper()
-	t.Setenv("AOP_HOME", t.TempDir())
+	t.Setenv("LOLA_HOME", t.TempDir())
 	path, err := config.DefaultPath()
 	if err != nil {
 		t.Fatal(err)
@@ -46,7 +46,7 @@ func newTestRoot(t *testing.T) *rootModel {
 }
 
 // externallyDisable simulates the daemon persisting an enable-state change
-// (e.g. `aop disable A` over the socket) after the TUI loaded its snapshot.
+// (e.g. `lola disable A` over the socket) after the TUI loaded its snapshot.
 func externallyDisable(t *testing.T, path, name string) {
 	t.Helper()
 	ext, err := config.Load(path)

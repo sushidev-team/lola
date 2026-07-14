@@ -6,7 +6,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/you/aop/internal/config"
+	"github.com/sushidev-team/lola/internal/config"
 )
 
 // The fake must remain a drop-in for the real client everywhere the daemon

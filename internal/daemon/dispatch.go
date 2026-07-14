@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/you/aop/internal/linear"
-	"github.com/you/aop/internal/protocol"
+	"github.com/sushidev-team/lola/internal/linear"
+	"github.com/sushidev-team/lola/internal/protocol"
 )
 
 // SeenTTL is the label-mode race-guard window: a seen entry younger than
@@ -102,6 +102,14 @@ func PruneSeen(seen map[string]time.Time, matched map[string]bool, dedupMode str
 		out[id] = t
 	}
 	return out
+}
+
+// spawnPrompt builds the --prompt text for a spawned agent (PLAN P0.2):
+// identifier + title plus an instruction to fetch the full issue from Linear.
+// Newlines are fine — AO strips them for display only.
+func spawnPrompt(is linear.Issue) string {
+	return fmt.Sprintf("Linear issue %s: %s\nFetch the full issue (description, comments, acceptance criteria) from Linear before starting — e.g. via the linearis CLI or Linear MCP. Work only on this issue.",
+		is.Identifier, is.Title)
 }
 
 // isAuthErr classifies Linear client errors: the client wraps 401/403 as
@@ -258,7 +266,7 @@ func (d *Daemon) tick(ctx context.Context, name string, dryRun bool) (protocol.P
 	// 7. Deterministic order when capped.
 	SortIssues(candidates, p.PrioritySort)
 
-	// 8. Budget from a FRESH `ao list --json`, counting sessions in
+	// 8. Budget from a FRESH `ao session ls --json`, counting sessions in
 	// counting_states across ALL projects (the global cap is global).
 	sessions, err := aoc.LiveSessions(ctx)
 	if err != nil {
@@ -308,8 +316,12 @@ func (d *Daemon) tick(ctx context.Context, name string, dryRun bool) (protocol.P
 			continue
 		}
 
-		// (b) Spawn with the IDENTIFIER (FE-231), never the UUID.
-		if err := aoc.Spawn(ctx, p.AOProject, is.Identifier); err != nil {
+		// (b) Spawn with the IDENTIFIER (FE-231), never the UUID. The prompt
+		// gives the agent issue context: AO's own issue resolution is
+		// GitHub-only, so without it agents spawned for Linear issues start
+		// blind (PLAN P0.2).
+		prompt := spawnPrompt(is)
+		if err := aoc.Spawn(ctx, p.AOProject, is.Identifier, prompt); err != nil {
 			// Drop the in-flight claim. In label mode the seen entry stays
 			// as a short-TTL race guard (the un-flipped label retries after
 			// SeenTTL); in seen mode seen is authoritative and never expires

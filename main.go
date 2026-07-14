@@ -6,19 +6,19 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
-	"github.com/you/aop/internal/daemon"
-	"github.com/you/aop/internal/tui"
+	"github.com/sushidev-team/lola/internal/daemon"
+	"github.com/sushidev-team/lola/internal/tui"
 )
 
 func main() {
 	root := &cobra.Command{
-		Use:   "aop",
-		Short: "Agent Orchestrator Poller",
+		Use:   "lola",
+		Short: "Lola — run, observe, run again: Linear poller and agent dispatcher",
 		// Runtime failures (daemon not running, bad config) are not usage
 		// errors; print them once ourselves below.
 		SilenceUsage:  true,
 		SilenceErrors: true,
-		RunE:          func(c *cobra.Command, _ []string) error { return tui.Run() }, // bare `aop` opens TUI
+		RunE:          func(c *cobra.Command, _ []string) error { return tui.Run() }, // bare `lola` opens TUI
 	}
 
 	root.AddCommand(

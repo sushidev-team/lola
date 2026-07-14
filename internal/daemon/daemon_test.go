@@ -16,7 +16,7 @@ func shortSockDir(t *testing.T) string {
 		return dir
 	}
 	for _, base := range []string{"/tmp", "/tmp/claude"} {
-		if d, err := os.MkdirTemp(base, "aop"); err == nil {
+		if d, err := os.MkdirTemp(base, "lola"); err == nil {
 			t.Cleanup(func() { os.RemoveAll(d) })
 			return d
 		}
@@ -26,7 +26,7 @@ func shortSockDir(t *testing.T) string {
 }
 
 func TestClaimSocketRefusesLiveDaemonAndReclaimsStale(t *testing.T) {
-	sock := filepath.Join(shortSockDir(t), "aop.sock")
+	sock := filepath.Join(shortSockDir(t), "lola.sock")
 
 	// A live listener on the socket: a second daemon must refuse to start
 	// instead of stealing the path (two daemons would double-spawn issues).

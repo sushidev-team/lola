@@ -1,22 +1,24 @@
-# aop — Agent Orchestrator Poller
+# Lola
 
-`aop` is a single Go binary that watches [Linear](https://linear.app) for
+Named after *Lola rennt* — run, observe, run again.
+
+`lola` is a single Go binary that watches [Linear](https://linear.app) for
 issues matching a filter (team → project → cycle → workflow state → labels →
 assignee) and dispatches them into a running Agent Orchestrator (AO) instance
 via `ao spawn`.
 
-**aop only triggers.** It never touches git, worktrees, branches, PRs, or CI —
-all of that is AO's job. aop's entire responsibility is: notice a Linear issue
+**lola only triggers.** It never touches git, worktrees, branches, PRs, or CI —
+all of that is AO's job. lola's entire responsibility is: notice a Linear issue
 that matches a poll filter, hand its identifier (e.g. `FE-231`) to AO, and
 mark the issue as picked up (label flip or seen-file) so it is not dispatched
 twice.
 
 One binary, two roles:
 
-- `aop run` — the daemon (launchd keeps it alive)
-- `aop` / `aop tui` — the TUI client (list, create, edit, pause polls)
+- `lola run` — the daemon (launchd keeps it alive)
+- `lola` / `lola tui` — the TUI client (list, create, edit, pause polls)
 - every other subcommand talks to the daemon over the unix socket
-  `~/.aop/aop.sock` (newline-delimited JSON)
+  `~/.lola/lola.sock` (newline-delimited JSON)
 
 The config file is the single source of truth; the TUI edits it and then
 signals the daemon to reload.
@@ -27,7 +29,7 @@ Requires Go (module deps are vendored/pinned in `go.mod`; no network needed
 beyond the module cache).
 
 ```sh
-make build   # produces ./aop
+make build   # produces ./lola
 make vet
 make test
 ```
@@ -41,7 +43,7 @@ The Makefile sets a repo-local `GOCACHE` so builds work in sandboxed shells.
 
    ```sh
    make build
-   cp aop /usr/local/bin/aop
+   cp lola /usr/local/bin/lola
    ```
 
 2. Store your Linear API key in the macOS Keychain (see
@@ -51,46 +53,46 @@ The Makefile sets a repo-local `GOCACHE` so builds work in sandboxed shells.
    security add-generic-password -s linear-api-key -w lin_api_XXXXXXXX
    ```
 
-3. Create `~/.aop/config.toml` — start from
-   [`config.example.toml`](config.example.toml), or run `aop` and create your
+3. Create `~/.lola/config.toml` — start from
+   [`config.example.toml`](config.example.toml), or run `lola` and create your
    first poll in the TUI (it fetches teams/projects/states/labels from Linear
    as you go).
 
 4. Test a poll without side effects:
 
    ```sh
-   aop poll my-poll --once --dry-run
+   lola poll my-poll --once --dry-run
    ```
 
 5. Install the LaunchAgent (see [launchd install](#launchd-install)) so the
    daemon runs permanently, or just run it in a terminal:
 
    ```sh
-   aop run
+   lola run
    ```
 
 ## Commands
 
 | Command | Description |
 | --- | --- |
-| `aop` / `aop tui` | Open the TUI (list polls, create/edit/delete, pause/resume) |
-| `aop run` | Start the daemon (this is what launchd invokes) |
-| `aop stop` | Graceful shutdown: finish in-flight tick, close socket, exit 0 |
-| `aop status` | Table per poll: enabled, last run, last spawn, running, last error — plus `aoRunning` / `linearOk` health flags |
-| `aop enable <poll>` / `aop disable <poll>` | Live pause/resume of one poll (no restart) |
-| `aop poll <poll> --once [--dry-run]` | Run one tick now; `--dry-run` prints matches (including cross-poll overlaps) with **no** side effects — no spawn, no label flip, no seen write |
-| `aop reload` | Re-read `config.toml`; the daemon diffs polls and starts/stops goroutines without disturbing unaffected ones |
-| `aop logs [poll] [-f]` | Tail `~/.aop/daemon.log`, optionally filtered to one poll; `-f`/`--follow` to stream |
+| `lola` / `lola tui` | Open the TUI (list polls, create/edit/delete, pause/resume) |
+| `lola run` | Start the daemon (this is what launchd invokes) |
+| `lola stop` | Graceful shutdown: finish in-flight tick, close socket, exit 0 |
+| `lola status` | Table per poll: enabled, last run, last spawn, running, last error — plus `aoRunning` / `linearOk` health flags |
+| `lola enable <poll>` / `lola disable <poll>` | Live pause/resume of one poll (no restart) |
+| `lola poll <poll> --once [--dry-run]` | Run one tick now; `--dry-run` prints matches (including cross-poll overlaps) with **no** side effects — no spawn, no label flip, no seen write |
+| `lola reload` | Re-read `config.toml`; the daemon diffs polls and starts/stops goroutines without disturbing unaffected ones |
+| `lola logs [poll] [-f]` | Tail `~/.lola/daemon.log`, optionally filtered to one poll; `-f`/`--follow` to stream |
 
 ## Runtime layout
 
-Everything lives under `~/.aop/` (override the directory with the `AOP_HOME`
+Everything lives under `~/.lola/` (override the directory with the `LOLA_HOME`
 environment variable — tests rely on this):
 
 | Path | Purpose |
 | --- | --- |
 | `config.toml` | Configuration (mode 0600, contains **no** secrets) |
-| `aop.sock` | Daemon ↔ client unix socket (mode 0600) |
+| `lola.sock` | Daemon ↔ client unix socket (mode 0600) |
 | `daemon.log` | Daemon log |
 | `state/<poll>.seen` | Per-poll seen-issue state |
 | `cache/linear-<team>.json` | Cached Linear metadata for the TUI forms |
@@ -118,7 +120,7 @@ Linear **UUIDs**, not names — the TUI form resolves names to IDs for you.
 | `endpoint` | string | GraphQL endpoint. Default `https://api.linear.app/graphql`. |
 
 There is deliberately no `api_key` field — secrets never live in
-`config.toml`, and aop never logs the key.
+`config.toml`, and lola never logs the key.
 
 ### `[ao]`
 
@@ -126,7 +128,7 @@ There is deliberately no `api_key` field — secrets never live in
 | --- | --- | --- |
 | `bin` | string | **Absolute** path to the `ao` binary (launchd has no login-shell `PATH`). A leading `~` is expanded on load. |
 | `config_path` | string | Path to AO's `agent-orchestrator.yaml`. Used to validate `ao_project` and populate the TUI project dropdown. `~` is expanded. |
-| `counting_states` | string array | AO session states that count against `concurrency_cap` / `global_cap`, e.g. `["working", "in_progress"]`. States like review/blocked are excluded so PRs held for review don't stall new pickups. Counting always queries `ao list --json` live, never a local counter. |
+| `counting_states` | string array | AO session statuses that count against `concurrency_cap` / `global_cap`. Default: `["working", "no_signal", "needs_input", "draft", "ci_failed", "changes_requested"]` — the slot-occupying states. Parked-for-review statuses (`pr_open`, `review_pending`, `approved`, `mergeable`) and dead ones (`merged`, `idle`, `terminated`) are excluded so PRs held for review don't stall new pickups. Counting always queries `ao session ls --json` live, never a local counter. |
 
 ### `[[poll]]` (one table per poll)
 
@@ -144,6 +146,7 @@ There is deliberately no `api_key` field — secrets never live in
 | `assignee_mode` | `"anyone"` \| `"me"` \| `"user"` | `anyone` = no assignee filter; `me` = the authenticated user (Linear `viewer`); `user` = the user in `assignee_user_id`. |
 | `assignee_user_id` | string | User UUID; required iff `assignee_mode = "user"`. |
 | `ao_project` | string | AO project name to spawn into. Must exist in `agent-orchestrator.yaml` — validated on save/enable. |
+| `repo` | string | GitHub repository as `owner/name` (e.g. `sushidev-team/nori-app`). The reconciler passes it to `gh pr list --repo` so its open-PR check works regardless of the daemon's working directory. Optional — but when empty the PR check is unavailable and orphaned issues are **never** auto-reverted (fail-closed). |
 | `concurrency_cap` | int | Max counted AO sessions this poll may occupy. Falls back to `[defaults].concurrency_cap` when 0/unset; the effective value must be > 0. |
 | `priority_sort` | string array | Sort keys for deterministic selection when the budget caps the match list, e.g. `["priority", "createdAt"]`. |
 | `dedup_mode` | `"label"` \| `"seen"` | See below. |
@@ -152,7 +155,7 @@ There is deliberately no `api_key` field — secrets never live in
 
 **Dedup modes** (pick one per poll, they are not mixed):
 
-- `label` — after a successful spawn, aop flips the issue's labels
+- `label` — after a successful spawn, lola flips the issue's labels
   (removes `on_sent_remove_label`, adds `on_sent_set_label`), so the issue
   simply stops matching the filter. The seen file is only a short-TTL race
   guard. Visible in Linear; survives daemon restarts.
@@ -177,7 +180,7 @@ environment:
    security add-generic-password -s linear-api-key -w lin_api_XXXXXXXX
    ```
 
-   aop reads it back with `security find-generic-password -s <name> -w`.
+   lola reads it back with `security find-generic-password -s <name> -w`.
    A missing item falls through to the env var; any other keychain error
    (locked keychain, etc.) is surfaced, not masked.
 
@@ -192,7 +195,7 @@ The key is never written to `config.toml` and never logged.
 
 ## launchd install
 
-aop ships as a **LaunchAgent** (per-user, in `~/Library/LaunchAgents`), *not*
+lola ships as a **LaunchAgent** (per-user, in `~/Library/LaunchAgents`), *not*
 a LaunchDaemon. This is deliberate: AO runs sessions inside tmux in your user
 / GUI login context. A LaunchDaemon runs as root outside any user session and
 could not attach to your tmux server, your keychain, or your GUI context.
@@ -206,36 +209,36 @@ therefore injects a `PATH` that includes `/opt/homebrew/bin` and
 Install:
 
 ```sh
-cp contrib/com.user.aop.plist ~/Library/LaunchAgents/
+cp contrib/com.user.lola.plist ~/Library/LaunchAgents/
 
 # Point it at your real binary path and home directory:
 sed -i '' \
-  -e "s|/usr/local/bin/aop|$(command -v aop)|" \
+  -e "s|/usr/local/bin/lola|$(command -v lola)|" \
   -e "s|/Users/YOU|$HOME|g" \
-  ~/Library/LaunchAgents/com.user.aop.plist
+  ~/Library/LaunchAgents/com.user.lola.plist
 
-launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.user.aop.plist
+launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.user.lola.plist
 ```
 
 `RunAtLoad` + `KeepAlive` are both true: the daemon starts at login and is
 restarted if it dies (it also survives sleep/wake). Logs go to
-`~/.aop/daemon.log` — note the plist must contain the *expanded* path
-(`/Users/YOU/.aop/daemon.log`), because launchd does not expand `~`.
+`~/.lola/daemon.log` — note the plist must contain the *expanded* path
+(`/Users/YOU/.lola/daemon.log`), because launchd does not expand `~`.
 
 Useful afterwards:
 
 ```sh
-launchctl kickstart -k gui/$UID/com.user.aop     # (re)start now
-launchctl bootout gui/$UID/com.user.aop          # uninstall
-aop status                                       # is it healthy?
-aop logs -f                                      # watch it work
+launchctl kickstart -k gui/$UID/com.user.lola     # (re)start now
+launchctl bootout gui/$UID/com.user.lola          # uninstall
+lola status                                       # is it healthy?
+lola logs -f                                      # watch it work
 ```
 
 ## How a tick works (short version)
 
 For each enabled poll, every `poll_interval`:
 
-1. Check AO is reachable (`ao list --json`). Down → skip tick, record the
+1. Check AO is reachable (`ao session ls --json`). Down → skip tick, record the
    error in `status`, mutate nothing.
 2. Resolve the API key (keychain → env). If `cycle_mode = "active"`, resolve
    the team's active cycle now.
@@ -245,7 +248,7 @@ For each enabled poll, every `poll_interval`:
 5. Sort by `priority_sort`, take up to
    `min(concurrency_cap, global_cap − live counted sessions)`.
 6. Per issue: record it as in-flight/seen **first**, then
-   `ao spawn <ao_project> <IDENTIFIER>`, then (label mode, on success only)
+   `ao spawn --project <ao_project> --issue <IDENTIFIER>`, then (label mode, on success only)
    re-read the issue's current labels fresh and flip trigger → sent label.
 
 A periodic reconciliation pass (~5 min) reverts issues that were marked as
@@ -253,4 +256,4 @@ sent but have no counted AO session and no open PR after an orphan timeout
 (default 15 min), so lost work re-queues instead of vanishing.
 
 Failures ("AO not running", "Linear auth failed", label write failed) are
-always surfaced in `aop status` and the log — never silently swallowed.
+always surfaced in `lola status` and the log — never silently swallowed.

@@ -10,9 +10,9 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/you/aop/internal/config"
-	"github.com/you/aop/internal/linear"
-	"github.com/you/aop/internal/secrets"
+	"github.com/sushidev-team/lola/internal/config"
+	"github.com/sushidev-team/lola/internal/linear"
+	"github.com/sushidev-team/lola/internal/secrets"
 )
 
 type teamMeta struct {
