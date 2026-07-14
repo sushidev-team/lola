@@ -10,10 +10,8 @@ import (
 	"net"
 	"path/filepath"
 	"reflect"
-	"slices"
 	"time"
 
-	"github.com/sushidev-team/lola/internal/ao"
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/protocol"
 	"github.com/sushidev-team/lola/internal/session"
@@ -258,9 +256,6 @@ func (d *Daemon) handleReload(ctx context.Context) error {
 		d.lin = nil // key source / endpoint changed: re-resolve lazily
 		d.viewerID = ""
 	}
-	if d.realAO && old.AO.Bin != nc.AO.Bin {
-		d.aoc = &ao.Client{Bin: nc.AO.Bin}
-	}
 	if d.realNative && !reflect.DeepEqual(old.Projects, nc.Projects) {
 		// The native runtime holds a config reference for its project
 		// registry: recreate it whenever the [[project]] set changes.
@@ -273,34 +268,11 @@ func (d *Daemon) handleReload(ctx context.Context) error {
 	return nil
 }
 
-// handleEnable flips a poll's Enabled flag, validates (incl. the ao_project
-// existence check on enable), saves the config, and applies it live.
+// handleEnable flips a poll's Enabled flag, validates the whole config
+// (which resolves the poll's [[project]] reference), saves, and applies live.
 func (d *Daemon) handleEnable(ctx context.Context, name string, enable bool) error {
 	if name == "" {
 		return errors.New("poll name required")
-	}
-
-	// The ao_project check execs the ao binary; run it BEFORE taking d.mu for
-	// the flip. Holding the daemon lock across an exec would freeze every
-	// tick, status, reload, and reconcile if the ao binary wedges. Native
-	// polls skip it entirely (AO may not even be installed; mirroring the TUI
-	// form) — their [[project]] reference is covered by cfg.Validate below.
-	var checkedProject, checkedRuntime string
-	if enable {
-		d.mu.Lock()
-		p := d.cfg.PollByName(name)
-		if p == nil {
-			d.mu.Unlock()
-			return fmt.Errorf("unknown poll %q", name)
-		}
-		checkedProject, checkedRuntime = p.AOProject, p.Runtime
-		aoc, aoConfigPath := d.aoc, d.cfg.AO.ConfigPath
-		d.mu.Unlock()
-		if checkedRuntime != config.RuntimeNative {
-			if err := checkAOProject(ctx, aoc, aoConfigPath, name, checkedProject); err != nil {
-				return err
-			}
-		}
 	}
 
 	d.mu.Lock()
@@ -308,12 +280,6 @@ func (d *Daemon) handleEnable(ctx context.Context, name string, enable bool) err
 	if p == nil {
 		d.mu.Unlock()
 		return fmt.Errorf("unknown poll %q", name)
-	}
-	if enable && (p.AOProject != checkedProject || p.Runtime != checkedRuntime) {
-		// A concurrent reload swapped the config between the unlocked AO
-		// check and now; don't enable a poll whose project was never checked.
-		d.mu.Unlock()
-		return fmt.Errorf("poll %q changed while validating ao_project; retry", name)
 	}
 	prev := p.Enabled
 	p.Enabled = enable
@@ -341,42 +307,6 @@ func (d *Daemon) handleEnable(ctx context.Context, name string, enable bool) err
 		verb = "enabled"
 	}
 	d.logf(name, "poll %s", verb)
-	return nil
-}
-
-// aoProjectCheckTimeout bounds the `ao project ls --json` exec during enable,
-// matching the TUI's loadAOProjects. A var so tests can shrink it.
-var aoProjectCheckTimeout = 5 * time.Second
-
-// checkAOProject verifies the poll's ao_project is registered in AO. The
-// authoritative source is the live registry (`ao project ls --json`) —
-// desktop AO builds keep it in SQLite, not a yaml file. When AO is down, the
-// exec times out, or the registry lists nothing (fresh install), it falls
-// back to scanning aoConfigPath; with neither available only the non-empty
-// requirement applies. Must be called WITHOUT d.mu held: it execs the ao
-// binary, which can block.
-func checkAOProject(ctx context.Context, aoc AOAPI, aoConfigPath, pollName, aoProject string) error {
-	if aoProject == "" {
-		return fmt.Errorf("poll %q: ao_project is required to enable", pollName)
-	}
-	cctx, cancel := context.WithTimeout(ctx, aoProjectCheckTimeout)
-	defer cancel()
-	if ids, err := aoc.Projects(cctx); err == nil && len(ids) > 0 {
-		if !slices.Contains(ids, aoProject) {
-			return fmt.Errorf("poll %q: ao_project %q is not registered in AO (see `ao project ls`)", pollName, aoProject)
-		}
-		return nil
-	}
-	if aoConfigPath == "" {
-		return nil
-	}
-	projects, err := config.AOProjects(aoConfigPath)
-	if err != nil {
-		return fmt.Errorf("read ao projects: %w", err)
-	}
-	if !slices.Contains(projects, aoProject) {
-		return fmt.Errorf("poll %q: ao_project %q not found in %s", pollName, aoProject, aoConfigPath)
-	}
 	return nil
 }
 

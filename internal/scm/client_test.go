@@ -10,7 +10,7 @@ import (
 )
 
 // fakeGh installs a shell script standing in for the gh binary (pattern:
-// internal/ao/client_test.go fakeBin). It appends its argv to <dir>/args.log,
+// internal/tmux fake-bin helper). It appends its argv to <dir>/args.log,
 // echoes the canned stdout, and exits with the given code.
 func fakeGh(t *testing.T, stdout string, exitCode int) (bin, argsLog string) {
 	t.Helper()

@@ -25,7 +25,7 @@ type stub struct {
 
 // fakeGit installs a shell script standing in for the git binary: it appends
 // its argv (one line per invocation) to <dir>/args.log, then answers per the
-// stubs. Pattern mirrors internal/ao/client_test.go fakeBin and
+// stubs. Pattern mirrors internal/tmux fake-bin helper and
 // internal/tmux's fakeTmux; no real git is ever run.
 func fakeGit(t *testing.T, stubs ...stub) (bin, argsLog string) {
 	t.Helper()

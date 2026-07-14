@@ -46,11 +46,14 @@ type Response struct {
 	Data  json.RawMessage `json:"data,omitempty"`
 }
 
-// StatusData is Response.Data for cmd=status.
+// StatusData is Response.Data for cmd=status. RuntimeOK reports whether the
+// native runtime's external tools (tmux, git, claude) are all resolvable;
+// RuntimeErr names what is missing ("" when ok).
 type StatusData struct {
-	AORunning bool         `json:"aoRunning"`
-	LinearOK  bool         `json:"linearOk"`
-	Polls     []PollStatus `json:"polls"`
+	RuntimeOK  bool         `json:"runtimeOk"`
+	RuntimeErr string       `json:"runtimeErr,omitempty"`
+	LinearOK   bool         `json:"linearOk"`
+	Polls      []PollStatus `json:"polls"`
 }
 
 type PollStatus struct {
@@ -76,13 +79,13 @@ type SessionInfo struct {
 	Project  string `json:"project"`
 	Issue    string `json:"issue"`  // Linear identifier, e.g. ENG-123
 	Branch   string `json:"branch"` // "" when unknown
-	Status   string `json:"status"` // derived (scm.DeriveStatus / AO attention states)
+	Status   string `json:"status"` // derived (scm.DeriveStatus / hook-driven states)
 	PRURL    string `json:"prUrl"`
 	PRNumber int    `json:"prNumber"` // 0 when no PR observed
 	Checks   string `json:"checks"`   // pass|fail|pending|none, "" when no PR
 	Review   string `json:"review"`   // APPROVED|CHANGES_REQUESTED|REVIEW_REQUIRED, "" otherwise
 	TmuxName string `json:"tmuxName"` // "" when no tmux session correlates
-	Source   string `json:"source"`   // "ao" | "native"; "" reads as ao (pre-P2 records)
+	Source   string `json:"source"`   // always "native"; kept for wire compat with pre-P3 clients
 	Worktree string `json:"worktree"` // native runtime: the session's git worktree dir; "" otherwise
 	Age      string `json:"age"`      // human duration since first observed, e.g. "2h05m"
 }

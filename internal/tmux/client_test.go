@@ -13,7 +13,7 @@ import (
 // fakeTmux installs a shell script standing in for the tmux binary: it
 // appends its argv (one line per invocation) to <dir>/args.log, emits the
 // canned stdout/stderr, and exits with code. Pattern mirrors
-// internal/ao/client_test.go fakeBin; no real tmux is ever run.
+// internal/tmux fake-bin helper; no real tmux is ever run.
 func fakeTmux(t *testing.T, stdout, stderr string, code int) (bin, argsLog string) {
 	t.Helper()
 	dir := t.TempDir()

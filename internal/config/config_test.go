@@ -20,8 +20,7 @@ func validPoll() Poll {
 		MatchLabels:       []string{"label-1"},
 		MatchMode:         "any",
 		AssigneeMode:      "me",
-		Runtime:           RuntimeAO,
-		AOProject:         "frontend",
+		Project:           "nori-app",
 		Repo:              "sushidev-team/nori-app",
 		ConcurrencyCap:    2,
 		PrioritySort:      []string{"priority", "createdAt"},
@@ -43,14 +42,11 @@ func validProject() Project {
 	}
 }
 
-// nativePoll is a valid poll running on the native runtime, referencing
-// validProject().
-func nativePoll() Poll {
+// secondPoll is a second valid poll (distinct name) referencing validProject(),
+// used by the round-trip test.
+func secondPoll() Poll {
 	p := validPoll()
 	p.Name = "native-poll"
-	p.Runtime = RuntimeNative
-	p.Project = "nori-app"
-	p.AOProject = ""
 	return p
 }
 
@@ -93,39 +89,6 @@ func TestLoadMissingFileGivesDefaults(t *testing.T) {
 	if c.Defaults.PollInterval != DefaultPollInterval {
 		t.Errorf("poll interval = %v", c.Defaults.PollInterval)
 	}
-	if !reflect.DeepEqual(c.AO.CountingStates, DefaultCountingStates) {
-		t.Errorf("counting_states = %v, want default %v", c.AO.CountingStates, DefaultCountingStates)
-	}
-}
-
-// Omitted [ao].counting_states must default to the slot-occupying states —
-// otherwise liveCounted is always 0 and the global cap never binds.
-func TestLoadDefaultsCountingStates(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.toml")
-	body := "[defaults]\nglobal_cap = 4\n\n[ao]\nbin = \"/usr/local/bin/ao\"\n"
-	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	c, err := Load(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(c.AO.CountingStates, DefaultCountingStates) {
-		t.Errorf("counting_states = %v, want DefaultCountingStates %v", c.AO.CountingStates, DefaultCountingStates)
-	}
-
-	// An explicit list is kept as-is.
-	body += "counting_states = [\"working\"]\n"
-	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	c, err = Load(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(c.AO.CountingStates, []string{"working"}) {
-		t.Errorf("explicit counting_states = %v, want [working]", c.AO.CountingStates)
-	}
 }
 
 func TestSaveLoadRoundTrip(t *testing.T) {
@@ -137,9 +100,8 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	orig.Defaults.ConcurrencyCap = 3
 	orig.Defaults.GlobalCap = 5
 	orig.Linear = LinearConfig{APIKeyKeychain: "lola-linear", APIKeyEnv: "LINEAR_API_KEY", Endpoint: DefaultEndpoint}
-	orig.AO = AOConfig{Bin: "/opt/homebrew/bin/ao", ConfigPath: "/etc/agent-orchestrator.yaml", CountingStates: []string{"working", "in_progress"}}
 	orig.Projects = []Project{validProject()}
-	orig.Polls = []Poll{validPoll(), nativePoll()}
+	orig.Polls = []Poll{validPoll(), secondPoll()}
 
 	if err := orig.Save(path); err != nil {
 		t.Fatal(err)
@@ -178,21 +140,13 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	}
 }
 
-func TestLoadClampAndTildeExpansion(t *testing.T) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		t.Fatal(err)
-	}
+func TestLoadClampAndEndpointDefault(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
 	body := `
 [defaults]
 poll_interval = "10s"
 concurrency_cap = 1
 global_cap = 4
-
-[ao]
-bin = "~/bin/ao"
-config_path = "~/ao/agent-orchestrator.yaml"
 `
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
@@ -204,20 +158,15 @@ config_path = "~/ao/agent-orchestrator.yaml"
 	if c.Defaults.PollInterval != MinPollInterval {
 		t.Errorf("poll interval = %v, want clamped %v", c.Defaults.PollInterval, MinPollInterval)
 	}
-	if want := filepath.Join(home, "bin", "ao"); c.AO.Bin != want {
-		t.Errorf("ao.bin = %q, want %q", c.AO.Bin, want)
-	}
-	if want := filepath.Join(home, "ao", "agent-orchestrator.yaml"); c.AO.ConfigPath != want {
-		t.Errorf("ao.config_path = %q, want %q", c.AO.ConfigPath, want)
-	}
 	if c.Linear.Endpoint != DefaultEndpoint {
 		t.Errorf("endpoint = %q, want default", c.Linear.Endpoint)
 	}
 }
 
-// Projects get default_branch = "main" and a tilde-expanded path on load;
-// polls get runtime = "ao" when unset, while explicit values are kept.
-func TestLoadProjectAndRuntimeDefaults(t *testing.T) {
+// Projects get default_branch = "main" and a tilde-expanded path on load. Keys
+// from the AO-bridge era (per-poll `runtime` / `ao_project`) are silently
+// ignored so pre-migration configs still load; the `project` reference remains.
+func TestLoadProjectDefaultsAndLegacyKeysIgnored(t *testing.T) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		t.Fatal(err)
@@ -234,7 +183,9 @@ path = "/srv/pinned"
 default_branch = "develop"
 
 [[poll]]
-name = "ao-poll"
+name = "legacy-poll"
+runtime = "ao"
+ao_project = "frontend"
 
 [[poll]]
 name = "native-poll"
@@ -257,12 +208,6 @@ project = "nori-app"
 	}
 	if c.Projects[1].DefaultBranch != "develop" {
 		t.Errorf("explicit default_branch = %q, want develop", c.Projects[1].DefaultBranch)
-	}
-	if c.Polls[0].Runtime != RuntimeAO {
-		t.Errorf("unset runtime = %q, want default %q", c.Polls[0].Runtime, RuntimeAO)
-	}
-	if c.Polls[1].Runtime != RuntimeNative {
-		t.Errorf("explicit runtime = %q, want %q", c.Polls[1].Runtime, RuntimeNative)
 	}
 	if c.Polls[1].Project != "nori-app" {
 		t.Errorf("poll project = %q, want nori-app", c.Polls[1].Project)
@@ -396,6 +341,7 @@ func TestSaveOverwriteKeepsModeAndContent(t *testing.T) {
 func TestValidate(t *testing.T) {
 	c := &Config{}
 	c.Defaults.GlobalCap = 4
+	c.Projects = []Project{validProject()}
 	c.Polls = []Poll{validPoll()}
 	if err := c.Validate(); err != nil {
 		t.Fatalf("valid config rejected: %v", err)
@@ -429,6 +375,7 @@ func TestValidate(t *testing.T) {
 		"cycle_mode=pinned requires cycle_id",
 		"match_mode",
 		"assignee_mode=user requires assignee_user_id",
+		"project is required",
 		"on_sent_set_label",
 		"concurrency_cap",
 		"duplicate name",
@@ -446,6 +393,7 @@ func TestValidateMatrix(t *testing.T) {
 	valid := func() *Config {
 		c := &Config{}
 		c.Defaults.GlobalCap = 4
+		c.Projects = []Project{validProject()}
 		c.Polls = []Poll{validPoll()}
 		return c
 	}
@@ -482,7 +430,7 @@ func TestValidateMatrix(t *testing.T) {
 		{"bad assignee_mode enum", func(c *Config) { c.Polls[0].AssigneeMode = "nobody" }, "assignee_mode"},
 		{"empty assignee_mode rejected", func(c *Config) { c.Polls[0].AssigneeMode = "" }, "assignee_mode"},
 
-		{"repo empty ok (PR check unavailable)", func(c *Config) { c.Polls[0].Repo = "" }, ""},
+		{"repo empty ok (falls back to project repo)", func(c *Config) { c.Polls[0].Repo = "" }, ""},
 		{"repo owner/name ok", func(c *Config) { c.Polls[0].Repo = "sushidev-team/nori-app" }, ""},
 		{"repo dots underscores dashes ok", func(c *Config) { c.Polls[0].Repo = "My-Org.x/repo_name.js" }, ""},
 		{"repo without owner rejected", func(c *Config) { c.Polls[0].Repo = "nori-app" }, `repo must be "owner/name"`},
@@ -552,34 +500,13 @@ func TestValidateMatrix(t *testing.T) {
 			c.Projects = []Project{p}
 		}, "path is required"},
 
-		{"runtime empty treated as ao", func(c *Config) { c.Polls[0].Runtime = "" }, ""},
-		{"runtime ao ok", func(c *Config) { c.Polls[0].Runtime = RuntimeAO }, ""},
-		// ao_project is enforced at enable time / TUI form save, never
-		// statically: pre-P2 configs without it must stay valid, or upgrading
-		// lola would hold EVERY poll of an otherwise-working config.
-		{"runtime ao without ao_project stays valid", func(c *Config) { c.Polls[0].AOProject = "" }, ""},
-		{"empty runtime without ao_project stays valid", func(c *Config) {
-			c.Polls[0].Runtime = ""
-			c.Polls[0].AOProject = ""
-		}, ""},
-		{"runtime native with defined project ok", func(c *Config) {
-			c.Projects = []Project{validProject()}
-			c.Polls[0] = nativePoll()
-		}, ""},
-		{"runtime native requires project", func(c *Config) {
-			c.Projects = []Project{validProject()}
-			c.Polls[0] = nativePoll()
-			c.Polls[0].Project = ""
-		}, "runtime=native requires project"},
-		{"runtime native project must resolve", func(c *Config) {
-			c.Projects = []Project{validProject()}
-			c.Polls[0] = nativePoll()
-			c.Polls[0].Project = "ghost"
-		}, `project "ghost" is not defined`},
-		{"runtime native without any projects rejected", func(c *Config) {
-			c.Polls[0] = nativePoll()
+		// Every poll must reference a defined [[project]].
+		{"poll project required", func(c *Config) { c.Polls[0].Project = "" }, "project is required"},
+		{"poll project must resolve", func(c *Config) { c.Polls[0].Project = "ghost" }, `project "ghost" is not defined`},
+		{"poll project resolves ok", func(c *Config) { c.Polls[0].Project = "nori-app" }, ""},
+		{"poll project without any projects rejected", func(c *Config) {
+			c.Projects = nil
 		}, `project "nori-app" is not defined`},
-		{"bad runtime enum", func(c *Config) { c.Polls[0].Runtime = "docker" }, "runtime must be ao|native"},
 	}
 
 	for _, tc := range cases {
@@ -629,6 +556,31 @@ func TestEffectiveCapFallback(t *testing.T) {
 	}
 }
 
+// PollRepo resolves the PR-check repo: the poll's own repo wins, else the
+// referenced [[project]]'s repo, else empty.
+func TestPollRepo(t *testing.T) {
+	c := &Config{Projects: []Project{{Name: "nori-app", Repo: "sushidev-team/nori-app"}}}
+
+	p := Poll{Project: "nori-app", Repo: "acme/widgets"}
+	if got := c.PollRepo(&p); got != "acme/widgets" {
+		t.Errorf("PollRepo = %q, want the poll's own repo", got)
+	}
+
+	p.Repo = "" // falls back to the project's repo
+	if got := c.PollRepo(&p); got != "sushidev-team/nori-app" {
+		t.Errorf("PollRepo = %q, want the project's repo fallback", got)
+	}
+
+	p.Project = "ghost" // unknown project, no poll repo
+	if got := c.PollRepo(&p); got != "" {
+		t.Errorf("PollRepo = %q, want empty", got)
+	}
+
+	if got := c.PollRepo(nil); got != "" {
+		t.Errorf("PollRepo(nil) = %q, want empty", got)
+	}
+}
+
 func TestPollByName(t *testing.T) {
 	c := &Config{Polls: []Poll{validPoll()}}
 	p := c.PollByName("frontend")
@@ -659,7 +611,8 @@ func TestProjectByName(t *testing.T) {
 	}
 }
 
-// The shipped example config must always load and validate cleanly.
+// The shipped example config must always load and validate cleanly, and every
+// poll references a [[project]] (the native runtime's registry).
 func TestExampleConfigLoadsAndValidates(t *testing.T) {
 	c, err := Load(filepath.Join("..", "..", "config.example.toml"))
 	if err != nil {
@@ -671,45 +624,10 @@ func TestExampleConfigLoadsAndValidates(t *testing.T) {
 	if c.ProjectByName("nori-app") == nil {
 		t.Error("example config should define project nori-app")
 	}
-	hasNative := false
 	for _, p := range c.Polls {
-		if p.Runtime == RuntimeNative {
-			hasNative = true
+		if p.Project == "" {
+			t.Errorf("poll %q must reference a [[project]]", p.Name)
 		}
-	}
-	if !hasNative {
-		t.Error("example config should include a native-runtime poll")
-	}
-}
-
-func TestAOProjects(t *testing.T) {
-	// The fixture has nested keys under each project, a decoy nested
-	// "projects:" key inside another block, comments, and quoted names.
-	got, err := AOProjects(filepath.Join("testdata", "agent-orchestrator.yaml"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := []string{"frontend", "backend", "infra"}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("AOProjects = %v, want %v", got, want)
-	}
-
-	if _, err := AOProjects(filepath.Join(t.TempDir(), "missing.yaml")); err == nil {
-		t.Error("missing ao config must error")
-	}
-}
-
-func TestAOProjectsWithoutProjectsBlock(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "agent-orchestrator.yaml")
-	if err := os.WriteFile(path, []byte("dashboard:\n  port: 8080\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	got, err := AOProjects(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(got) != 0 {
-		t.Errorf("AOProjects = %v, want none", got)
 	}
 }
 

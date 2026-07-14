@@ -5,7 +5,7 @@
 // them again — but only for sessions whose PR merged or which were explicitly
 // killed, and never when the worktree still has uncommitted changes unless
 // forced. All git access shells out (exec seam: GitBin), mirroring
-// internal/ao and internal/tmux.
+// internal/tmux.
 package worktree
 
 import (

@@ -19,7 +19,7 @@ import (
 // scriptBin installs a shell script standing in for a binary (git, tmux): it
 // appends its argv (one line per invocation) to the returned log, then runs
 // the caller-supplied `case "$*" in` bodies; unmatched invocations succeed
-// silently. Pattern mirrors internal/ao/client_test.go fakeBin and the
+// silently. Pattern mirrors internal/tmux fake-bin helper and the
 // worktree/tmux test fakes; no real git/tmux/claude is ever run.
 func scriptBin(t *testing.T, name, cases string) (bin, argsLog string) {
 	t.Helper()

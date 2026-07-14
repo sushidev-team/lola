@@ -117,8 +117,15 @@ func Send(raw string) error {
 
 func renderStatus(d *protocol.StatusData) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "ao: %s   linear: %s\n\n",
-		yesNoStyled(d.AORunning, "running", "unreachable"),
+	runtimeState := "ok"
+	if !d.RuntimeOK {
+		runtimeState = "missing tools"
+		if d.RuntimeErr != "" {
+			runtimeState = d.RuntimeErr
+		}
+	}
+	fmt.Fprintf(&b, "runtime: %s   linear: %s\n\n",
+		yesNoStyled(d.RuntimeOK, runtimeState, runtimeState),
 		yesNoStyled(d.LinearOK, "ok", "error"))
 	rows := make([][]string, 0, len(d.Polls))
 	for _, p := range d.Polls {

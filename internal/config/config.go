@@ -25,29 +25,8 @@ const (
 	MinPollInterval = 30 * time.Second
 )
 
-// Poll runtimes: which backend spawns sessions for a poll's matches.
-const (
-	// RuntimeAO dispatches matched issues to Agent Orchestrator via
-	// `ao spawn` (the default when [[poll]].runtime is unset).
-	RuntimeAO = "ao"
-	// RuntimeNative spawns lola's own runners: git worktree + tmux +
-	// Claude Code. Requires [[poll]].project to reference a [[project]].
-	RuntimeNative = "native"
-)
-
 // DefaultBranchName is used when [[project]].default_branch is unset.
 const DefaultBranchName = "main"
-
-// DefaultCountingStates is used when [ao].counting_states is unset. The
-// values are AO's real session display statuses; counted states are the ones
-// occupying an agent slot (incl. no_signal right after spawn and auto-recovery
-// states), while parked-for-review states (pr_open, review_pending, approved,
-// mergeable) and dead states (merged, idle, terminated) stay uncounted so held
-// PRs never stall new pickups. Without
-// it liveCounted would always be 0 and the global cap would never bind.
-var DefaultCountingStates = []string{
-	"working", "no_signal", "needs_input", "draft", "ci_failed", "changes_requested",
-}
 
 // Project is one [[project]] table: a local repository the native runtime
 // can spawn worktree sessions for. Validation here is purely static —
@@ -74,10 +53,8 @@ type Poll struct {
 	MatchMode         string   `toml:"match_mode"`    // any|all
 	AssigneeMode      string   `toml:"assignee_mode"` // anyone|me|user
 	AssigneeUserID    string   `toml:"assignee_user_id"`
-	Runtime           string   `toml:"runtime"` // ao|native; empty defaults to ao on load
-	Project           string   `toml:"project"` // [[project]].name; required iff runtime=native
-	AOProject         string   `toml:"ao_project"`
-	Repo              string   `toml:"repo"` // GitHub "owner/name" for the reconciler's open-PR check
+	Project           string   `toml:"project"` // [[project]].name; required
+	Repo              string   `toml:"repo"`    // GitHub "owner/name" for PR checks; empty falls back to the project's repo (PollRepo)
 	ConcurrencyCap    int      `toml:"concurrency_cap"`
 	PrioritySort      []string `toml:"priority_sort"`
 	DedupMode         string   `toml:"dedup_mode"` // label|seen
@@ -101,17 +78,9 @@ type LinearConfig struct {
 	Endpoint       string `toml:"endpoint"`
 }
 
-// AOConfig is the [ao] table.
-type AOConfig struct {
-	Bin            string   `toml:"bin"`
-	ConfigPath     string   `toml:"config_path"`
-	CountingStates []string `toml:"counting_states"`
-}
-
 type Config struct {
 	Defaults Defaults     `toml:"defaults"`
 	Linear   LinearConfig `toml:"linear"`
-	AO       AOConfig     `toml:"ao"`
 	Projects []Project    `toml:"project"`
 	Polls    []Poll       `toml:"poll"`
 }
@@ -138,7 +107,6 @@ func (d *Duration) UnmarshalText(text []byte) error {
 type fileConfig struct {
 	Defaults fileDefaults `toml:"defaults"`
 	Linear   LinearConfig `toml:"linear"`
-	AO       AOConfig     `toml:"ao"`
 	Projects []Project    `toml:"project"`
 	Polls    []Poll       `toml:"poll"`
 }
@@ -157,7 +125,6 @@ func (fc *fileConfig) config() *Config {
 			GlobalCap:      fc.Defaults.GlobalCap,
 		},
 		Linear:   fc.Linear,
-		AO:       fc.AO,
 		Projects: fc.Projects,
 		Polls:    fc.Polls,
 	}
@@ -171,7 +138,6 @@ func (c *Config) file() *fileConfig {
 			GlobalCap:      c.Defaults.GlobalCap,
 		},
 		Linear:   c.Linear,
-		AO:       c.AO,
 		Projects: c.Projects,
 		Polls:    c.Polls,
 	}
@@ -200,10 +166,15 @@ func DefaultPath() (string, error) {
 
 // Load reads and parses the TOML config at path. A missing file is not an
 // error: it yields a zero-value config with defaults applied. Leading ~ in
-// [ao].bin, [ao].config_path, and [[project]].path is expanded;
-// [linear].endpoint and [defaults].poll_interval get defaults (the interval
-// clamped to MinPollInterval), [[project]].default_branch defaults to
-// DefaultBranchName, and an empty [[poll]].runtime defaults to RuntimeAO.
+// [[project]].path is expanded; [linear].endpoint and
+// [defaults].poll_interval get defaults (the interval clamped to
+// MinPollInterval), and [[project]].default_branch defaults to
+// DefaultBranchName.
+//
+// Compatibility note: BurntSushi/toml silently ignores unknown keys, so
+// configs from the AO-bridge era (an [ao] table, per-poll `runtime` /
+// `ao_project` keys) still load — the AO-specific settings are simply
+// dropped. Such polls need a `project` set before they validate.
 func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -221,12 +192,6 @@ func Load(path string) (*Config, error) {
 	}
 	c := fc.config()
 
-	if c.AO.Bin, err = expandTilde(c.AO.Bin); err != nil {
-		return nil, fmt.Errorf("expand ao.bin: %w", err)
-	}
-	if c.AO.ConfigPath, err = expandTilde(c.AO.ConfigPath); err != nil {
-		return nil, fmt.Errorf("expand ao.config_path: %w", err)
-	}
 	for i := range c.Projects {
 		if c.Projects[i].Path, err = expandTilde(c.Projects[i].Path); err != nil {
 			return nil, fmt.Errorf("expand project %q path: %w", c.Projects[i].Name, err)
@@ -247,17 +212,9 @@ func (c *Config) applyDefaults() {
 	if c.Defaults.PollInterval < MinPollInterval {
 		c.Defaults.PollInterval = MinPollInterval
 	}
-	if len(c.AO.CountingStates) == 0 {
-		c.AO.CountingStates = append([]string(nil), DefaultCountingStates...)
-	}
 	for i := range c.Projects {
 		if c.Projects[i].DefaultBranch == "" {
 			c.Projects[i].DefaultBranch = DefaultBranchName
-		}
-	}
-	for i := range c.Polls {
-		if c.Polls[i].Runtime == "" {
-			c.Polls[i].Runtime = RuntimeAO
 		}
 	}
 }

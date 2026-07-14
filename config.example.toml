@@ -13,7 +13,7 @@
 poll_interval = "60s"
 # Fallback per-poll cap for polls that don't set concurrency_cap themselves.
 concurrency_cap = 2
-# Hard ceiling on counted AO sessions across ALL polls. Must be > 0.
+# Hard ceiling on counted native sessions across ALL polls. Must be > 0.
 global_cap = 4
 
 [linear]
@@ -25,25 +25,11 @@ api_key_env = "LINEAR_API_KEY"
 # GraphQL endpoint. Omit for the default.
 endpoint = "https://api.linear.app/graphql"
 
-[ao]
-# Absolute path to the ao binary — launchd has no login-shell PATH.
-# A leading ~ is expanded on load. The desktop app bundles the CLI at
-# "/Applications/Agent Orchestrator.app/Contents/Resources/daemon/ao".
-bin = "/opt/homebrew/bin/ao"
-# AO's project registry; used to validate ao_project and to populate the
-# TUI dropdown.
-config_path = "~/.config/agent-orchestrator/agent-orchestrator.yaml"
-# AO session statuses that count against the caps (from `ao session ls`).
-# Parked-for-review statuses (pr_open, review_pending, approved, mergeable)
-# and dead ones (merged, idle, terminated) are deliberately excluded so PRs
-# held for review don't stall new pickups.
-counting_states = ["working", "no_signal", "needs_input", "draft", "ci_failed", "changes_requested"]
-
 # ---------------------------------------------------------------------------
-# [[project]] — repository registry for the NATIVE runtime (one table per
-# repo). Polls with runtime = "native" reference a project by name; lola then
-# creates a git worktree per session under ~/.lola/worktrees/<project>/... and
-# runs Claude Code in tmux inside it. Not needed for runtime = "ao" polls.
+# [[project]] — repository registry for the native runtime (one table per
+# repo). Every poll references a project by name; lola then creates a git
+# worktree per session under ~/.lola/worktrees/<project>/... and runs Claude
+# Code in tmux inside it.
 # ---------------------------------------------------------------------------
 [[project]]
 name = "nori-app"
@@ -97,13 +83,9 @@ match_mode = "any"
 # assignee_user_id.
 assignee_mode = "me"
 assignee_user_id = ""
-# ao | native. ao (the default when omitted) dispatches to Agent Orchestrator
-# and requires ao_project; native spawns lola's own worktree + tmux + Claude
-# Code runner and requires project (see poll 3).
-runtime = "ao"
-# Must exist as a project in agent-orchestrator.yaml (validated on
-# save/enable). Used only when runtime = "ao".
-ao_project = "frontend"
+# References a [[project]].name above; required. lola creates a git worktree
+# from it and runs Claude Code in tmux inside it.
+project = "nori-app"
 # GitHub repository ("owner/name") for this poll's issues. The reconciler
 # passes it to `gh pr list --repo` so its open-PR check works from any
 # working directory (launchd runs the daemon outside a checkout). Optional —
@@ -141,7 +123,7 @@ match_labels = [
 match_mode = "all"
 assignee_mode = "anyone"
 assignee_user_id = ""
-ao_project = "backend"
+project = "nori-app"
 # See poll 1; omit/leave empty to disable the reconciler's open-PR check.
 repo = "sushidev-team/nori-app"
 concurrency_cap = 1
@@ -151,10 +133,10 @@ on_sent_set_label = ""
 on_sent_remove_label = ""
 
 # ---------------------------------------------------------------------------
-# Poll 3: NATIVE runtime. Instead of `ao spawn`, lola creates a git worktree
-# from the referenced [[project]], runs its post_create commands and symlinks,
-# and starts Claude Code in a fresh tmux session with the full Linear issue as
-# the prompt. `project` must match a [[project]].name; ao_project is unused.
+# Poll 3: label-flip dedup on the native runtime, like poll 1. lola creates a
+# git worktree from the referenced [[project]], runs its post_create commands
+# and symlinks, and starts Claude Code in a fresh tmux session with the full
+# Linear issue as the prompt.
 # ---------------------------------------------------------------------------
 [[poll]]
 name = "nori-native"
@@ -168,8 +150,7 @@ match_labels = ["label_trig0000-1111-2222-3333-444455556666"]
 match_mode = "any"
 assignee_mode = "me"
 assignee_user_id = ""
-runtime = "native"
-# References [[project]].name above; required when runtime = "native".
+# References [[project]].name above; required.
 project = "nori-app"
 repo = "sushidev-team/nori-app"
 concurrency_cap = 2

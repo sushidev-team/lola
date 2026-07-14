@@ -10,88 +10,16 @@ import (
 	"reflect"
 	"slices"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
-	"github.com/sushidev-team/lola/internal/ao"
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/linear"
 	"github.com/sushidev-team/lola/internal/protocol"
 )
 
-// fakeAO is a hermetic AOAPI: no real ao binary is ever executed.
-type fakeAO struct {
-	mu          sync.Mutex
-	unreachable bool
-	sessions    []ao.SessionState
-	sessionsErr error
-	spawnErr    error
-	spawns      []spawnCall
-	onSpawn     func(project, identifier string) // runs before spawnErr is returned
-	projects    []string                         // nil = registry unavailable (yaml fallback)
-	onProjects  func(ctx context.Context)        // runs first; may block, like a wedged ao binary
-}
-
-type spawnCall struct{ project, identifier, prompt string }
-
-// Like the real ao.Client (exec.CommandContext), every method fails once
-// its context is cancelled — tests rely on this to prove ticks are shielded
-// from the shutdown cancellation.
-func (f *fakeAO) Reachable(ctx context.Context) bool {
-	return ctx.Err() == nil && !f.unreachable
-}
-
-func (f *fakeAO) Projects(ctx context.Context) ([]string, error) {
-	f.mu.Lock()
-	hook := f.onProjects
-	f.mu.Unlock()
-	if hook != nil {
-		hook(ctx)
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.projects == nil {
-		return nil, errors.New("project registry unavailable")
-	}
-	return slices.Clone(f.projects), nil
-}
-
-func (f *fakeAO) LiveSessions(ctx context.Context) ([]ao.SessionState, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.sessionsErr != nil {
-		return nil, f.sessionsErr
-	}
-	return slices.Clone(f.sessions), nil
-}
-
-func (f *fakeAO) Spawn(ctx context.Context, project, identifier, prompt string) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	f.mu.Lock()
-	f.spawns = append(f.spawns, spawnCall{project, identifier, prompt})
-	hook, err := f.onSpawn, f.spawnErr
-	f.mu.Unlock()
-	if hook != nil {
-		hook(project, identifier)
-	}
-	return err
-}
-
-func (f *fakeAO) spawnCalls() []spawnCall {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return slices.Clone(f.spawns)
-}
-
+// labelPoll is a label-mode poll on the native runtime, referencing the
+// "proj1" [[project]] defined by testConfig.
 func labelPoll(name string) config.Poll {
 	return config.Poll{
 		Name:              name,
@@ -101,7 +29,7 @@ func labelPoll(name string) config.Poll {
 		MatchLabels:       []string{"lbl-trigger"},
 		MatchMode:         "any",
 		AssigneeMode:      "anyone",
-		AOProject:         "proj",
+		Project:           "proj1",
 		ConcurrencyCap:    10,
 		DedupMode:         "label",
 		OnSentSetLabel:    "lbl-sent",
@@ -124,18 +52,29 @@ func testConfig(polls ...config.Poll) *config.Config {
 			ConcurrencyCap: 10,
 			GlobalCap:      10,
 		},
-		AO:    config.AOConfig{CountingStates: []string{"working", "in_progress"}},
+		Projects: []config.Project{{
+			Name:          "proj1",
+			Path:          "/tmp/proj1",
+			Repo:          "acme/widgets",
+			DefaultBranch: "main",
+		}},
 		Polls: polls,
 	}
 }
 
-// newTestDaemon builds a daemon on an LOLA_HOME temp dir with fake Linear and
-// AO backends. Nothing touches the network, keychain, or a real ao binary.
-func newTestDaemon(t *testing.T, cfg *config.Config, fake *linear.Fake, aoc AOAPI) *Daemon {
+// newTestDaemon builds a daemon on an LOLA_HOME temp dir with a fake Linear
+// backend and the given native runtime. Nothing touches the network, keychain,
+// tmux, git, or claude. The runtime health check is stubbed healthy so ticks
+// run regardless of the host's tools; tests that need a failing check override
+// d.runtimeHealth after construction.
+func newTestDaemon(t *testing.T, cfg *config.Config, fake *linear.Fake, nat NativeAPI) *Daemon {
 	t.Helper()
 	home := t.TempDir()
 	t.Setenv("LOLA_HOME", home)
-	return newDaemon(cfg, fake, aoc, log.New(io.Discard, "", 0), home)
+	d := newDaemon(cfg, fake, log.New(io.Discard, "", 0), home)
+	d.native = nat
+	d.runtimeHealth = func() error { return nil }
+	return d
 }
 
 func testIssue(ident string, prio float64, created string) linear.Issue {
@@ -178,8 +117,8 @@ func countCalls(names []string, method string) int {
 func TestTickLabelModeSeenWithinTTLBlocksRespawn(t *testing.T) {
 	is := testIssue("FE-1", 1, "2024-01-01T00:00:00Z")
 	fake := &linear.Fake{Issues: []linear.Issue{is}}
-	aoc := &fakeAO{}
-	d := newTestDaemon(t, testConfig(labelPoll("p1")), fake, aoc)
+	nat := &fakeNative{}
+	d := newTestDaemon(t, testConfig(labelPoll("p1")), fake, nat)
 
 	if err := d.seen.save("p1", map[string]time.Time{is.ID: time.Now().Add(-10 * time.Minute)}); err != nil {
 		t.Fatal(err)
@@ -189,8 +128,8 @@ func TestTickLabelModeSeenWithinTTLBlocksRespawn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("tick: %v", err)
 	}
-	if len(aoc.spawnCalls()) != 0 {
-		t.Errorf("seen entry within TTL must block respawn, got spawns %v", aoc.spawnCalls())
+	if len(nat.spawnCalls()) != 0 {
+		t.Errorf("seen entry within TTL must block respawn, got spawns %v", nat.spawnCalls())
 	}
 	m := findMatch(t, res, "FE-1")
 	if m.Action != "skipped" || m.Reason != "dedup-label" {
@@ -201,8 +140,8 @@ func TestTickLabelModeSeenWithinTTLBlocksRespawn(t *testing.T) {
 func TestTickLabelModeExpiredSeenDoesNotBlock(t *testing.T) {
 	is := testIssue("FE-1", 1, "2024-01-01T00:00:00Z")
 	fake := &linear.Fake{Issues: []linear.Issue{is}}
-	aoc := &fakeAO{}
-	d := newTestDaemon(t, testConfig(labelPoll("p1")), fake, aoc)
+	nat := &fakeNative{}
+	d := newTestDaemon(t, testConfig(labelPoll("p1")), fake, nat)
 
 	if err := d.seen.save("p1", map[string]time.Time{is.ID: time.Now().Add(-2 * SeenTTL)}); err != nil {
 		t.Fatal(err)
@@ -212,7 +151,7 @@ func TestTickLabelModeExpiredSeenDoesNotBlock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("tick: %v", err)
 	}
-	if got := aoc.spawnCalls(); len(got) != 1 {
+	if got := nat.spawnCalls(); len(got) != 1 {
 		t.Fatalf("expired seen entry must not block respawn, got spawns %v", got)
 	}
 	if m := findMatch(t, res, "FE-1"); m.Action != "spawned" {
@@ -225,16 +164,16 @@ func TestTickLabelModeExpiredSeenDoesNotBlock(t *testing.T) {
 func TestTickSeenModeDropsSeenAndPrunesForRequeue(t *testing.T) {
 	is := testIssue("FE-1", 1, "2024-01-01T00:00:00Z")
 	fake := &linear.Fake{Issues: []linear.Issue{is}}
-	aoc := &fakeAO{}
-	d := newTestDaemon(t, testConfig(seenPoll("p1")), fake, aoc)
+	nat := &fakeNative{}
+	d := newTestDaemon(t, testConfig(seenPoll("p1")), fake, nat)
 	ctx := context.Background()
 
 	// Tick 1: fresh issue -> spawned, recorded in seen.
 	if _, err := d.tick(ctx, "p1", false); err != nil {
 		t.Fatalf("tick 1: %v", err)
 	}
-	if len(aoc.spawnCalls()) != 1 {
-		t.Fatalf("tick 1: want 1 spawn, got %v", aoc.spawnCalls())
+	if len(nat.spawnCalls()) != 1 {
+		t.Fatalf("tick 1: want 1 spawn, got %v", nat.spawnCalls())
 	}
 
 	// Tick 2: same issue matches again, seen is authoritative -> dropped.
@@ -245,8 +184,8 @@ func TestTickSeenModeDropsSeenAndPrunesForRequeue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("tick 2: %v", err)
 	}
-	if len(aoc.spawnCalls()) != 1 {
-		t.Fatalf("tick 2: seen ID must be dropped, got spawns %v", aoc.spawnCalls())
+	if len(nat.spawnCalls()) != 1 {
+		t.Fatalf("tick 2: seen ID must be dropped, got spawns %v", nat.spawnCalls())
 	}
 	if m := findMatch(t, res2, "FE-1"); m.Action != "skipped" || m.Reason != "dedup-seen" {
 		t.Errorf("tick 2 match = %+v, want skipped/dedup-seen", m)
@@ -272,8 +211,8 @@ func TestTickSeenModeDropsSeenAndPrunesForRequeue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("tick 4: %v", err)
 	}
-	if len(aoc.spawnCalls()) != 2 {
-		t.Fatalf("reopened ticket must re-queue, got spawns %v", aoc.spawnCalls())
+	if len(nat.spawnCalls()) != 2 {
+		t.Fatalf("reopened ticket must re-queue, got spawns %v", nat.spawnCalls())
 	}
 	if m := findMatch(t, res4, "FE-1"); m.Action != "spawned" {
 		t.Errorf("tick 4 match = %+v, want spawned", m)
@@ -285,9 +224,9 @@ func TestTickSeenModeDropsSeenAndPrunesForRequeue(t *testing.T) {
 func TestTickCrossPollDedupSingleSpawn(t *testing.T) {
 	is := testIssue("FE-1", 1, "2024-01-01T00:00:00Z")
 	fake := &linear.Fake{Issues: []linear.Issue{is}}
-	aoc := &fakeAO{}
+	nat := &fakeNative{}
 	p1, p2 := seenPoll("p1"), seenPoll("p2")
-	d := newTestDaemon(t, testConfig(p1, p2), fake, aoc)
+	d := newTestDaemon(t, testConfig(p1, p2), fake, nat)
 	ctx := context.Background()
 
 	if _, err := d.tick(ctx, "p1", false); err != nil {
@@ -298,7 +237,7 @@ func TestTickCrossPollDedupSingleSpawn(t *testing.T) {
 		t.Fatalf("tick p2: %v", err)
 	}
 
-	if got := aoc.spawnCalls(); len(got) != 1 {
+	if got := nat.spawnCalls(); len(got) != 1 {
 		t.Fatalf("same UUID matched by two polls must spawn exactly once, got %v", got)
 	}
 	if m := findMatch(t, res2, "FE-1"); m.Action != "skipped" || m.Reason != "in-flight" {
@@ -314,12 +253,12 @@ func TestTickDispatchOrdering(t *testing.T) {
 		Issues:          []linear.Issue{is},
 		LabelIDsByIssue: map[string][]string{is.ID: {"lbl-trigger", "lbl-other"}},
 	}
-	aoc := &fakeAO{}
-	d := newTestDaemon(t, testConfig(labelPoll("p1")), fake, aoc)
+	nat := &fakeNative{}
+	d := newTestDaemon(t, testConfig(labelPoll("p1")), fake, nat)
 
 	// The spawn hook observes daemon state at the exact moment of the spawn:
 	// in-flight claimed and seen persisted BEFORE, label reads strictly AFTER.
-	aoc.onSpawn = func(project, identifier string) {
+	nat.onSpawn = func(_ config.Project, _ linear.Issue) {
 		if !d.inflight.Has(is.ID) {
 			t.Error("in-flight must be marked before Spawn")
 		}
@@ -341,18 +280,10 @@ func TestTickDispatchOrdering(t *testing.T) {
 		t.Fatalf("match = %+v, want spawned", m)
 	}
 
-	// Spawn got the IDENTIFIER (FE-231) and the poll's ao_project.
-	spawns := aoc.spawnCalls()
-	if len(spawns) != 1 || spawns[0].project != "proj" || spawns[0].identifier != "FE-231" {
-		t.Errorf("spawns = %+v, want [{proj FE-231 ...}]", spawns)
-	}
-	// The context prompt names the issue (identifier + title) so the agent
-	// doesn't start blind (AO's issue resolution is GitHub-only).
-	if len(spawns) == 1 {
-		prompt := spawns[0].prompt
-		if !strings.Contains(prompt, "FE-231") || !strings.Contains(prompt, is.Title) {
-			t.Errorf("spawn prompt = %q, want it to contain identifier FE-231 and title %q", prompt, is.Title)
-		}
+	// Spawn got the IDENTIFIER (FE-231) and the resolved [[project]].
+	spawns := nat.spawnCalls()
+	if len(spawns) != 1 || spawns[0] != (nativeSpawnCall{"proj1", "FE-231"}) {
+		t.Errorf("spawns = %+v, want [{proj1 FE-231}]", spawns)
 	}
 
 	// Fresh IssueLabelIDs re-read precedes SetIssueLabels.
@@ -395,8 +326,8 @@ func TestTickSpawnFailureNoLabelMutation(t *testing.T) {
 		Issues:          []linear.Issue{is},
 		LabelIDsByIssue: map[string][]string{is.ID: {"lbl-trigger"}},
 	}
-	aoc := &fakeAO{spawnErr: errors.New("boom")}
-	d := newTestDaemon(t, testConfig(labelPoll("p1")), fake, aoc)
+	nat := &fakeNative{spawnErr: errors.New("boom")}
+	d := newTestDaemon(t, testConfig(labelPoll("p1")), fake, nat)
 
 	res, err := d.tick(context.Background(), "p1", false)
 	if err != nil {
@@ -426,59 +357,60 @@ func TestTickSpawnFailureNoLabelMutation(t *testing.T) {
 	}
 }
 
-// --- AO unreachable ------------------------------------------------------
+// --- Runtime unavailable -------------------------------------------------
 
-func TestTickAOUnreachableNoLinearCallsNoStateMutation(t *testing.T) {
+func TestTickRuntimeUnavailableNoLinearCallsNoStateMutation(t *testing.T) {
 	is := testIssue("FE-1", 1, "2024-01-01T00:00:00Z")
 	fake := &linear.Fake{Issues: []linear.Issue{is}}
-	aoc := &fakeAO{unreachable: true}
-	d := newTestDaemon(t, testConfig(labelPoll("p1")), fake, aoc)
+	nat := &fakeNative{}
+	d := newTestDaemon(t, testConfig(labelPoll("p1")), fake, nat)
+	d.runtimeHealth = func() error { return errors.New("missing claude") }
 
 	_, err := d.tick(context.Background(), "p1", false)
 	if err == nil {
-		t.Fatal("tick must fail when AO is unreachable")
+		t.Fatal("tick must fail when the native runtime is unavailable")
 	}
 	if names := fake.CallNames(); len(names) != 0 {
-		t.Errorf("AO down: tick must make NO linear calls, got %v", names)
+		t.Errorf("runtime down: tick must make NO linear calls, got %v", names)
 	}
-	if len(aoc.spawnCalls()) != 0 {
-		t.Errorf("AO down: no spawns, got %v", aoc.spawnCalls())
+	if len(nat.spawnCalls()) != 0 {
+		t.Errorf("runtime down: no spawns, got %v", nat.spawnCalls())
 	}
 	if d.inflight.Has(is.ID) {
-		t.Error("AO down: in-flight must not be mutated")
+		t.Error("runtime down: in-flight must not be mutated")
 	}
 	if _, err := os.Stat(seenPath(d, "p1")); !os.IsNotExist(err) {
-		t.Errorf("AO down: seen state must not be written, stat err = %v", err)
+		t.Errorf("runtime down: seen state must not be written, stat err = %v", err)
 	}
-	if got := d.status.get("p1").LastError; got != "AO not running" {
-		t.Errorf("status lastError = %q, want %q", got, "AO not running")
+	if got := d.status.get("p1").LastError; !strings.Contains(got, "runtime unavailable") {
+		t.Errorf("status lastError = %q, want it to mention runtime unavailable", got)
 	}
 }
 
 // --- Budget / caps -------------------------------------------------------
 
-func TestTickBudgetCountsOnlyCountingStates(t *testing.T) {
+func TestTickBudgetCountsOnlyCountingNativeSessions(t *testing.T) {
 	issues := []linear.Issue{
 		testIssue("FE-LOW", 4, "2024-01-01T00:00:00Z"),
 		testIssue("FE-URGENT", 1, "2024-01-02T00:00:00Z"),
 		testIssue("FE-NONE", 0, "2024-01-01T00:00:00Z"),
 	}
 	fake := &linear.Fake{Issues: issues}
-	aoc := &fakeAO{sessions: []ao.SessionState{
-		{ID: "s1", Status: "working"},
-		{ID: "s2", Status: "working"},
-		{ID: "s3", Status: "review"},  // held PR: must NOT count
-		{ID: "s4", Status: "blocked"}, // must NOT count
-	}}
+	nat := &fakeNative{}
 	cfg := testConfig(seenPoll("p1"))
 	cfg.Defaults.GlobalCap = 3 // budget = min(10, 3-2) = 1
-	d := newTestDaemon(t, cfg, fake, aoc)
+	d := newTestDaemon(t, cfg, fake, nat)
+	// Two slot-occupying native sessions; parked/terminal ones must NOT count.
+	d.sessions.Upsert(nativeSess("FE-A", "working"))
+	d.sessions.Upsert(nativeSess("FE-B", "ci_pending"))
+	d.sessions.Upsert(nativeSess("FE-C", "approved")) // parked: no slot
+	d.sessions.Upsert(nativeSess("FE-D", "merged"))   // done: no slot
 
 	res, err := d.tick(context.Background(), "p1", false)
 	if err != nil {
 		t.Fatalf("tick: %v", err)
 	}
-	spawns := aoc.spawnCalls()
+	spawns := nat.spawnCalls()
 	if len(spawns) != 1 {
 		t.Fatalf("budget 1: want exactly 1 spawn, got %v", spawns)
 	}
@@ -496,20 +428,19 @@ func TestTickBudgetCountsOnlyCountingStates(t *testing.T) {
 func TestTickBudgetZeroNoMutation(t *testing.T) {
 	is := testIssue("FE-1", 1, "2024-01-01T00:00:00Z")
 	fake := &linear.Fake{Issues: []linear.Issue{is}}
-	aoc := &fakeAO{sessions: []ao.SessionState{
-		{ID: "s1", Status: "working"},
-		{ID: "s2", Status: "in_progress"},
-	}}
+	nat := &fakeNative{}
 	cfg := testConfig(seenPoll("p1"))
 	cfg.Defaults.GlobalCap = 2 // liveCounted=2 -> budget 0
-	d := newTestDaemon(t, cfg, fake, aoc)
+	d := newTestDaemon(t, cfg, fake, nat)
+	d.sessions.Upsert(nativeSess("FE-A", "working"))
+	d.sessions.Upsert(nativeSess("FE-B", "draft"))
 
 	res, err := d.tick(context.Background(), "p1", false)
 	if err != nil {
 		t.Fatalf("tick: %v", err)
 	}
-	if len(aoc.spawnCalls()) != 0 {
-		t.Errorf("budget 0: no spawns, got %v", aoc.spawnCalls())
+	if len(nat.spawnCalls()) != 0 {
+		t.Errorf("budget 0: no spawns, got %v", nat.spawnCalls())
 	}
 	if m := findMatch(t, res, "FE-1"); m.Action != "skipped" || m.Reason != "capped" {
 		t.Errorf("match = %+v, want skipped/capped", m)
@@ -534,8 +465,8 @@ func TestTickDryRunNoSideEffects(t *testing.T) {
 		Issues:          []linear.Issue{is},
 		LabelIDsByIssue: map[string][]string{is.ID: {"lbl-trigger"}},
 	}
-	aoc := &fakeAO{}
-	d := newTestDaemon(t, testConfig(labelPoll("p1")), fake, aoc)
+	nat := &fakeNative{}
+	d := newTestDaemon(t, testConfig(labelPoll("p1")), fake, nat)
 
 	res, err := d.tick(context.Background(), "p1", true)
 	if err != nil {
@@ -547,8 +478,8 @@ func TestTickDryRunNoSideEffects(t *testing.T) {
 	if m := findMatch(t, res, "FE-1"); m.Action != "would-spawn" {
 		t.Errorf("match = %+v, want would-spawn", m)
 	}
-	if len(aoc.spawnCalls()) != 0 {
-		t.Errorf("dry run must not spawn, got %v", aoc.spawnCalls())
+	if len(nat.spawnCalls()) != 0 {
+		t.Errorf("dry run must not spawn, got %v", nat.spawnCalls())
 	}
 	if d.inflight.Has(is.ID) {
 		t.Error("dry run must not mark in-flight")
@@ -569,8 +500,8 @@ func TestTickDryRunNoSideEffects(t *testing.T) {
 func TestTickDryRunReportsCrossPollOverlap(t *testing.T) {
 	is := testIssue("FE-1", 1, "2024-01-01T00:00:00Z")
 	fake := &linear.Fake{Issues: []linear.Issue{is}}
-	aoc := &fakeAO{}
-	d := newTestDaemon(t, testConfig(seenPoll("p1"), seenPoll("p2")), fake, aoc)
+	nat := &fakeNative{}
+	d := newTestDaemon(t, testConfig(seenPoll("p1"), seenPoll("p2")), fake, nat)
 	ctx := context.Background()
 
 	// p1 really dispatches the issue; a p2 dry run must surface the overlap.
@@ -584,16 +515,16 @@ func TestTickDryRunReportsCrossPollOverlap(t *testing.T) {
 	if m := findMatch(t, res, "FE-1"); m.Action != "skipped" || m.Reason != "in-flight" {
 		t.Errorf("overlap match = %+v, want skipped/in-flight", m)
 	}
-	if len(aoc.spawnCalls()) != 1 {
-		t.Errorf("dry run must not spawn the overlapping issue, got %v", aoc.spawnCalls())
+	if len(nat.spawnCalls()) != 1 {
+		t.Errorf("dry run must not spawn the overlapping issue, got %v", nat.spawnCalls())
 	}
 }
 
 func TestTickSeenModeSpawnFailureClearsSeen(t *testing.T) {
 	is := testIssue("FE-1", 1, "2024-01-01T00:00:00Z")
 	fake := &linear.Fake{Issues: []linear.Issue{is}}
-	aoc := &fakeAO{spawnErr: errors.New("tmux hiccup")}
-	d := newTestDaemon(t, testConfig(seenPoll("p1")), fake, aoc)
+	nat := &fakeNative{spawnErr: errors.New("tmux hiccup")}
+	d := newTestDaemon(t, testConfig(seenPoll("p1")), fake, nat)
 	ctx := context.Background()
 
 	if _, err := d.tick(ctx, "p1", false); err != nil {
@@ -614,14 +545,14 @@ func TestTickSeenModeSpawnFailureClearsSeen(t *testing.T) {
 	}
 
 	// Next tick retries and succeeds.
-	aoc.mu.Lock()
-	aoc.spawnErr = nil
-	aoc.mu.Unlock()
+	nat.mu.Lock()
+	nat.spawnErr = nil
+	nat.mu.Unlock()
 	res, err := d.tick(ctx, "p1", false)
 	if err != nil {
 		t.Fatalf("tick 2: %v", err)
 	}
-	if got := aoc.spawnCalls(); len(got) != 2 {
+	if got := nat.spawnCalls(); len(got) != 2 {
 		t.Fatalf("issue must be retried after a failed spawn, spawns = %v", got)
 	}
 	if m := findMatch(t, res, "FE-1"); m.Action != "spawned" {
@@ -637,7 +568,7 @@ func TestTickAuthFailureInvalidatesLinearClient(t *testing.T) {
 		Issues: []linear.Issue{is},
 		Errs:   map[string]error{"MatchingIssues": errors.New("linear auth failed: http 401")},
 	}
-	d := newTestDaemon(t, testConfig(seenPoll("p1")), fake, &fakeAO{})
+	d := newTestDaemon(t, testConfig(seenPoll("p1")), fake, &fakeNative{})
 
 	if _, err := d.tick(context.Background(), "p1", false); err == nil {
 		t.Fatal("tick must fail on auth error")
@@ -661,15 +592,17 @@ func TestTickAuthFailureInvalidatesLinearClient(t *testing.T) {
 func TestSafeTickFinishesAfterShutdownCancel(t *testing.T) {
 	is := testIssue("FE-1", 1, "2024-01-01T00:00:00Z")
 	fake := &linear.Fake{Issues: []linear.Issue{is}}
-	aoc := &fakeAO{} // fails all calls on a cancelled ctx, like the real client
-	d := newTestDaemon(t, testConfig(seenPoll("p1")), fake, aoc)
+	nat := &fakeNative{}
+	d := newTestDaemon(t, testConfig(seenPoll("p1")), fake, nat)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // shutdown already requested
 
 	d.safeTick(ctx, "p1")
 
-	if got := aoc.spawnCalls(); len(got) != 1 {
+	// safeTick runs the tick on a cancel-shielded context, so it must finish
+	// (and spawn) despite the shutdown cancellation.
+	if got := nat.spawnCalls(); len(got) != 1 {
 		t.Fatalf("in-flight tick must finish despite shutdown cancellation, spawns = %v", got)
 	}
 	if got := d.status.get("p1").LastError; got != "" {
@@ -679,7 +612,7 @@ func TestSafeTickFinishesAfterShutdownCancel(t *testing.T) {
 
 func TestPollOnceRefusedWhileDraining(t *testing.T) {
 	fake := &linear.Fake{}
-	d := newTestDaemon(t, testConfig(seenPoll("p1")), fake, &fakeAO{})
+	d := newTestDaemon(t, testConfig(seenPoll("p1")), fake, &fakeNative{})
 	d.drainConnWork()
 	if _, err := d.handlePollOnce(context.Background(), "p1", false); err == nil {
 		t.Fatal("pollOnce during shutdown drain must be refused")
@@ -690,7 +623,7 @@ func TestPollOnceRefusedWhileDraining(t *testing.T) {
 
 func TestInvalidConfigHoldsWorkersAndSurfacesInStatus(t *testing.T) {
 	fake := &linear.Fake{}
-	d := newTestDaemon(t, testConfig(labelPoll("p1")), fake, &fakeAO{})
+	d := newTestDaemon(t, testConfig(labelPoll("p1")), fake, &fakeNative{})
 	d.cfgErr = "config invalid: boom"
 
 	ctx := context.Background()
@@ -733,10 +666,10 @@ func TestTickActiveCycleResolvedFreshEveryTick(t *testing.T) {
 		Issues:            []linear.Issue{is},
 		ActiveCycleByTeam: map[string]*linear.Cycle{"team-1": {ID: "cyc-1", Number: 7}},
 	}
-	aoc := &fakeAO{}
+	nat := &fakeNative{}
 	p := seenPoll("p1")
 	p.CycleMode = "active"
-	d := newTestDaemon(t, testConfig(p), fake, aoc)
+	d := newTestDaemon(t, testConfig(p), fake, nat)
 	ctx := context.Background()
 
 	if _, err := d.tick(ctx, "p1", false); err != nil {

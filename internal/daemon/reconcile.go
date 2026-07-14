@@ -47,22 +47,13 @@ func (d *Daemon) safeReconcile(ctx context.Context) {
 // reconcile per SPEC "Reconciliation pass": issues still carrying the
 // on_sent_set_label with no counted session and no open PR after
 // orphan_timeout are reverted to their trigger label and cleared from
-// seen + in-flight so they re-queue. Native-runtime polls use the exact same
-// orphan logic — only the "counts for" source differs per runtime.
+// seen + in-flight so they re-queue.
 //
-// An AO session "counts for" an issue when its IssueID (the --issue value we
-// passed to `ao spawn`) equals the Linear identifier. Session IDs themselves
-// are AO-internal (<sessionPrefix>-<n>) and never match. A native session
-// counts while its tmux pane is alive (see nativeSessionPresent) — a dead
-// pane is exactly the native orphan condition.
+// A native session "counts for" an issue while its tmux pane is alive (see
+// nativeSessionPresent) — a dead pane is exactly the native orphan condition.
 func (d *Daemon) reconcile(ctx context.Context) {
 	d.mu.Lock()
 	polls := slices.Clone(d.cfg.Polls)
-	counting := make(map[string]bool, len(d.cfg.AO.CountingStates))
-	for _, s := range d.cfg.AO.CountingStates {
-		counting[s] = true
-	}
-	aoc := d.aoc // snapshot under d.mu: reload may swap the client concurrently
 	d.mu.Unlock()
 	now := time.Now()
 
@@ -73,49 +64,16 @@ func (d *Daemon) reconcile(ctx context.Context) {
 		}
 	}
 
-	// AO reachability only gates the AO side: native-runtime polls reconcile
-	// even while AO is down or unreadable.
-	aoUp := aoc.Reachable(ctx)
-	if aoUp {
-		sessions, err := aoc.LiveSessions(ctx)
-		if err != nil {
-			d.logf("", "reconcile: ao session ls failed, skipping ao-runtime polls: %v", err)
-			aoUp = false
-		} else {
-			for _, s := range sessions {
-				if counting[s.Status] && s.IssueID != "" {
-					counted[s.IssueID] = true
-				}
-			}
-		}
-	} else {
-		d.logf("", "reconcile: AO not running, skipping ao-runtime polls")
-	}
-
-	// Clear in-flight claims whose issue has no counted session anymore.
-	// The orphanTimeout grace avoids racing a spawn that hasn't shown up in
-	// `ao session ls` yet. Only with the full picture: while any enabled poll
-	// dispatches via AO, an unanswered AO leaves its sessions invisible and
-	// every ao-runtime claim would be cleared spuriously. A pure
-	// runtime=native deployment has no such blind spot — native session facts
-	// are already in counted regardless of AO reachability — and MUST still
-	// clear claims: this is the only path that releases a claim after a
-	// successful spawn, so gating it on an AO that is never up would leave
-	// every dispatched issue claimed for the daemon's lifetime and block any
-	// later re-dispatch (e.g. re-adding the trigger label after a merge).
-	aoRelevant := false
-	for _, p := range polls {
-		if p.Enabled && p.Runtime != config.RuntimeNative {
-			aoRelevant = true
-			break
-		}
-	}
-	if aoUp || !aoRelevant {
-		for uuid, e := range d.inflight.Entries() {
-			if !counted[e.Identifier] && now.Sub(e.AddedAt) > orphanTimeout {
-				d.inflight.Remove(uuid)
-				d.logf("", "reconcile: cleared stale in-flight claim on %s", e.Identifier)
-			}
+	// Clear in-flight claims whose issue has no counted session anymore. The
+	// orphanTimeout grace avoids racing a spawn that hasn't produced a live
+	// session yet. This is the only path that releases a claim after a
+	// successful spawn, so it must always run — otherwise every dispatched
+	// issue stays claimed for the daemon's lifetime and can never re-dispatch
+	// (e.g. after re-adding the trigger label post-merge).
+	for uuid, e := range d.inflight.Entries() {
+		if !counted[e.Identifier] && now.Sub(e.AddedAt) > orphanTimeout {
+			d.inflight.Remove(uuid)
+			d.logf("", "reconcile: cleared stale in-flight claim on %s", e.Identifier)
 		}
 	}
 
@@ -128,9 +86,6 @@ func (d *Daemon) reconcile(ctx context.Context) {
 	for _, p := range polls {
 		if !p.Enabled || p.DedupMode != "label" || p.OnSentSetLabel == "" {
 			continue
-		}
-		if p.Runtime != config.RuntimeNative && !aoUp {
-			continue // counted has no AO facts this pass; fail closed
 		}
 		d.reconcilePoll(ctx, api, p, counted, now)
 	}
@@ -171,6 +126,12 @@ func (d *Daemon) reconcilePoll(ctx context.Context, api linear.API, p config.Pol
 	mu := d.tickMutex(p.Name)
 	mu.Lock()
 	defer mu.Unlock()
+
+	// Repo the PR check runs against when no session record carries one:
+	// the poll's own `repo`, else its [[project]]'s repo (PollRepo).
+	d.mu.Lock()
+	pollRepo := d.cfg.PollRepo(&p)
+	d.mu.Unlock()
 
 	// Find issues currently carrying set_label: a minimal poll copy keeping
 	// only team/project scope. Cycle, states and assignee are cleared so
@@ -216,21 +177,20 @@ func (d *Daemon) reconcilePoll(ctx context.Context, api linear.API, p config.Pol
 		if now.Sub(firstSeen) < orphanTimeout {
 			continue
 		}
-		// Native runtime: prefer the session record's branch/repo for the PR
-		// check — the spawn may have fallen back to "lola/<identifier>" when
-		// Linear provided no branch name, and the PR lives in the project's
-		// repo (config.Project.Repo, recorded on the session at spawn).
-		branch, repo := is.BranchName, p.Repo
+		// Prefer the session record's branch/repo for the PR check — the spawn
+		// may have fallen back to "lola/<identifier>" when Linear provided no
+		// branch name, and the PR lives in the project's repo (recorded on the
+		// session at spawn). Fall back to the poll's repo (or its project's,
+		// via PollRepo) when no session is on record.
+		branch, repo := is.BranchName, pollRepo
 		var natSess *session.Session
-		if p.Runtime == config.RuntimeNative {
-			if s, ok := d.nativeSessionForIssue(is.Identifier); ok {
-				natSess = &s
-				if s.Branch != "" {
-					branch = s.Branch
-				}
-				if s.Repo != "" {
-					repo = s.Repo
-				}
+		if s, ok := d.nativeSessionForIssue(is.Identifier); ok {
+			natSess = &s
+			if s.Branch != "" {
+				branch = s.Branch
+			}
+			if s.Repo != "" {
+				repo = s.Repo
 			}
 		}
 		if branch != "" {

@@ -1,15 +1,18 @@
 // Package daemon is the heart of lola: it polls Linear on per-poll tickers,
-// dispatches matching issues into AO, reconciles orphans, and serves the
-// unix-socket protocol for the TUI/CLI.
+// dispatches matching issues into native runner sessions (git worktree +
+// tmux + Claude Code), reconciles orphans, and serves the unix-socket
+// protocol for the TUI/CLI.
 package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"reflect"
@@ -17,7 +20,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/sushidev-team/lola/internal/ao"
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/linear"
 	"github.com/sushidev-team/lola/internal/runtime"
@@ -27,16 +29,6 @@ import (
 	"github.com/sushidev-team/lola/internal/tmux"
 	"github.com/sushidev-team/lola/internal/worktree"
 )
-
-// AOAPI is the daemon's seam over the AO CLI so ticks are testable with fakes.
-type AOAPI interface {
-	Reachable(context.Context) bool
-	LiveSessions(context.Context) ([]ao.SessionState, error)
-	Spawn(ctx context.Context, project, identifier, prompt string) error
-	Projects(context.Context) ([]string, error)
-}
-
-var _ AOAPI = (*ao.Client)(nil)
 
 // NativeAPI is the daemon's seam over the native runtime (runtime.Native) so
 // dispatch, observation, adoption, and kills are testable with fakes. It
@@ -70,11 +62,8 @@ type Daemon struct {
 	lin      linear.API // nil until the Linear API key resolves
 	linOK    bool
 	viewerID string
-	aoc      AOAPI
-	realAO   bool // aoc is a *ao.Client we own (recreate when [ao].bin changes)
-	// Native runtime (PLAN P2): lola's own worktree+tmux+claude spawner for
-	// runtime=native polls. nil until Run wires the real one; tests inject
-	// fakes directly.
+	// Native runtime (PLAN P2): lola's own worktree+tmux+claude spawner.
+	// nil until Run wires the real one; tests inject fakes directly.
 	native     NativeAPI
 	realNative bool   // native is a *runtime.Native we own (recreate on reload when projects change)
 	lolaBin    string // this executable; Claude Code hooks call back via `<lolaBin> hook <event>`
@@ -87,11 +76,8 @@ type Daemon struct {
 	seen     *seenStore
 	status   *statusTracker
 
-	// Session observability (PLAN P1): the observer loop's snapshot store and
-	// the tick-fed identifier→branch/repo map it resolves branches from.
+	// Session observability (PLAN P1): the observer loop's snapshot store.
 	sessions *session.Store
-	branchMu sync.Mutex
-	branches map[string]branchInfo // Linear identifier -> branch + repo
 
 	ghWarn sync.Once // "gh not on PATH" is logged once per daemon lifetime
 
@@ -115,9 +101,13 @@ type Daemon struct {
 	// scm.Client. Overridable in tests.
 	prForBranch func(ctx context.Context, repo, branch string) (*scm.PR, error)
 
-	// tmuxSessions lists tmux sessions for observer correlation; the seam
-	// over tmux.Client. Overridable in tests.
-	tmuxSessions func(ctx context.Context) ([]tmux.Session, error)
+	// runtimeHealth is the tick precheck seam (SPEC step 1 successor): it
+	// reports whether the native runtime's external tools — tmux, git,
+	// claude — are all resolvable, returning an error naming the first
+	// missing one. Checked once per tick and by cmd=status; a failing check
+	// skips the tick WITHOUT mutating seen/labels (the same discipline as
+	// the old AO-down rule). Overridable in tests.
+	runtimeHealth func() error
 
 	// Socket-initiated tick work (pollOnce) is tracked separately from the
 	// worker/reconcile goroutines so graceful shutdown can drain it too.
@@ -126,30 +116,43 @@ type Daemon struct {
 	connWg   sync.WaitGroup
 }
 
-func newDaemon(cfg *config.Config, lin linear.API, aoc AOAPI, logger *log.Logger, home string) *Daemon {
+func newDaemon(cfg *config.Config, lin linear.API, logger *log.Logger, home string) *Daemon {
 	d := &Daemon{
 		log:      logger,
 		home:     home,
 		cfg:      cfg,
 		lin:      lin,
 		linOK:    lin != nil,
-		aoc:      aoc,
 		workers:  map[string]*worker{},
 		tickMus:  map[string]*sync.Mutex{},
 		inflight: newInflightSet(),
 		seen:     newSeenStore(filepath.Join(home, "state")),
 		status:   newStatusTracker(),
 		sessions: session.NewStore(filepath.Join(home, "state")),
-		branches: map[string]branchInfo{},
 
 		hookWarned: map[string]bool{},
 	}
 	d.openPR = d.ghOpenPR
 	scmc := &scm.Client{}
 	d.prForBranch = scmc.PRForBranch
-	tmc := &tmux.Client{Bin: "tmux"}
-	d.tmuxSessions = tmc.ListSessions
+	d.runtimeHealth = checkRuntimeHealth
 	return d
+}
+
+// checkRuntimeHealth is the production runtimeHealth: the native runtime is
+// healthy when tmux is available, git resolves, and claude is on PATH. Only
+// LookPath probes — nothing is exec'd.
+func checkRuntimeHealth() error {
+	if !(&tmux.Client{Bin: "tmux"}).Available() {
+		return errors.New("missing tmux")
+	}
+	if _, err := exec.LookPath("git"); err != nil {
+		return errors.New("missing git")
+	}
+	if _, err := exec.LookPath("claude"); err != nil {
+		return errors.New("missing claude")
+	}
+	return nil
 }
 
 // Run starts the daemon: loads config, starts per-poll goroutines and the
@@ -179,8 +182,7 @@ func Run(ctx context.Context) error {
 		logger.Printf("config load failed: %v", err)
 		return err
 	}
-	d := newDaemon(cfg, nil, &ao.Client{Bin: cfg.AO.Bin}, logger, home)
-	d.realAO = true
+	d := newDaemon(cfg, nil, logger, home)
 
 	// Native runtime (PLAN P2): lola's own worktree+tmux+claude spawner. The
 	// generated per-session Claude Code settings wire the lifecycle hooks to
@@ -464,7 +466,7 @@ func (d *Daemon) safeTick(ctx context.Context, name string) {
 	defer mu.Unlock()
 	// Shutdown cancels ctx to stop the poll loops, but an in-flight tick
 	// must FINISH, not abort (agent-rules "Daemon"): a cancelled context
-	// would SIGKILL a running `ao spawn` and abort the post-spawn label
+	// would SIGKILL a running native spawn and abort the post-spawn label
 	// flip, corrupting dedup state. Run waits for us via d.wg.
 	_, _ = d.tick(context.WithoutCancel(ctx), name, false) // tick logs and records its own errors
 }

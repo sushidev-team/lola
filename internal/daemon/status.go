@@ -60,13 +60,14 @@ func (t *statusTracker) get(name string) protocol.PollStatus {
 	return *t.ensure(name)
 }
 
-// statusData builds the reply for cmd=status: aoRunning is probed NOW,
-// linearOk is the last known auth state.
+// statusData builds the reply for cmd=status: runtimeOk reflects the native
+// runtime health check NOW (tmux/git/claude resolvable), linearOk is the last
+// known auth state.
 func (d *Daemon) statusData(ctx context.Context) protocol.StatusData {
 	d.mu.Lock()
 	linOK := d.linOK
 	cfgErr := d.cfgErr
-	aoc := d.aoc // snapshot under d.mu: reload may swap the client concurrently
+	health := d.runtimeHealth
 	type pollInfo struct {
 		name    string
 		enabled bool
@@ -77,12 +78,17 @@ func (d *Daemon) statusData(ctx context.Context) protocol.StatusData {
 	}
 	d.mu.Unlock()
 
-	cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
+	runtimeErr := ""
+	if health != nil {
+		if err := health(); err != nil {
+			runtimeErr = err.Error()
+		}
+	}
 	sd := protocol.StatusData{
-		AORunning: aoc.Reachable(cctx),
-		LinearOK:  linOK,
-		Polls:     make([]protocol.PollStatus, 0, len(polls)),
+		RuntimeOK:  runtimeErr == "",
+		RuntimeErr: runtimeErr,
+		LinearOK:   linOK,
+		Polls:      make([]protocol.PollStatus, 0, len(polls)),
 	}
 	for _, p := range polls {
 		ps := d.status.get(p.name)

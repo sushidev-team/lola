@@ -1,8 +1,8 @@
 package daemon
 
-// Tests for the native-runtime wiring (PLAN P2): the per-poll dispatch
-// switch, the cross-runtime cap math, hookEvent state transitions, the
-// observer's native merge, adoption, and the native orphan reconcile.
+// Tests for the native-runtime wiring: the dispatch path, the budget cap math,
+// hookEvent state transitions, the observer's native merge, adoption, and the
+// native orphan reconcile.
 
 import (
 	"bytes"
@@ -19,7 +19,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sushidev-team/lola/internal/ao"
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/linear"
 	"github.com/sushidev-team/lola/internal/protocol"
@@ -99,24 +98,15 @@ func (f *fakeNative) spawnCalls() []nativeSpawnCall {
 	return slices.Clone(f.spawns)
 }
 
-// nativePoll is labelPoll switched to the native runtime.
+// nativePoll is a label-mode native poll referencing the "proj1" [[project]].
 func nativePoll(name string) config.Poll {
-	p := labelPoll(name)
-	p.Runtime = config.RuntimeNative
-	p.Project = "proj1"
-	p.AOProject = ""
-	return p
+	return labelPoll(name)
 }
 
+// nativeTestConfig is the shared test config (it already defines [[project]]
+// "proj1"); kept as a named helper for readability at native call sites.
 func nativeTestConfig(polls ...config.Poll) *config.Config {
-	cfg := testConfig(polls...)
-	cfg.Projects = []config.Project{{
-		Name:          "proj1",
-		Path:          "/tmp/proj1",
-		Repo:          "acme/widgets",
-		DefaultBranch: "main",
-	}}
-	return cfg
+	return testConfig(polls...)
 }
 
 // nativeSess is a store-shaped native session record for seeding tests.
@@ -142,16 +132,11 @@ func TestTickNativePollSpawnsViaNativeRuntime(t *testing.T) {
 		Issues:          []linear.Issue{is},
 		LabelIDsByIssue: map[string][]string{is.ID: {"lbl-trigger"}},
 	}
-	// AO is DOWN: a native poll must dispatch anyway — that independence is
-	// the whole point of the native runtime.
-	aoc := &fakeAO{unreachable: true}
 	nat := &fakeNative{}
-	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), fake, aoc)
-	d.native = nat
+	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), fake, nat)
 
-	// Same ordering discipline as the AO path: in-flight claimed and seen
-	// persisted BEFORE Spawn, labels untouched until after success. The full
-	// resolved [[project]] must reach the runtime.
+	// In-flight claimed and seen persisted BEFORE Spawn, labels untouched until
+	// after success. The full resolved [[project]] must reach the runtime.
 	nat.onSpawn = func(p config.Project, _ linear.Issue) {
 		if !d.inflight.Has(is.ID) {
 			t.Error("in-flight must be marked before native Spawn")
@@ -179,11 +164,8 @@ func TestTickNativePollSpawnsViaNativeRuntime(t *testing.T) {
 	if got := nat.spawnCalls(); len(got) != 1 || got[0] != (nativeSpawnCall{"proj1", "FE-7"}) {
 		t.Errorf("native spawns = %+v, want [{proj1 FE-7}]", got)
 	}
-	if got := aoc.spawnCalls(); len(got) != 0 {
-		t.Errorf("native poll must never call ao spawn, got %v", got)
-	}
 
-	// Same label flip as the AO path after a confirmed spawn.
+	// Label flip after a confirmed spawn.
 	if got, want := fake.LabelIDsByIssue[is.ID], []string{"lbl-sent"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("labels after native spawn = %v, want %v", got, want)
 	}
@@ -210,8 +192,7 @@ func TestTickNativeSpawnFailureRollsBackClaim(t *testing.T) {
 		LabelIDsByIssue: map[string][]string{is.ID: {"lbl-trigger"}},
 	}
 	nat := &fakeNative{spawnErr: errors.New("worktree add failed")}
-	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), fake, &fakeAO{unreachable: true})
-	d.native = nat
+	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), fake, nat)
 
 	res, err := d.tick(context.Background(), "p1", false)
 	if err != nil {
@@ -244,11 +225,10 @@ func TestTickNativeUnknownProjectFailsWithoutStateMutation(t *testing.T) {
 	fake := &linear.Fake{Issues: []linear.Issue{is}}
 	cfg := nativeTestConfig(nativePoll("p1"))
 	cfg.Polls[0].Project = "no-such-project"
-	d := newTestDaemon(t, cfg, fake, &fakeAO{})
-	d.native = &fakeNative{}
+	d := newTestDaemon(t, cfg, fake, &fakeNative{})
 
 	if _, err := d.tick(context.Background(), "p1", false); err == nil {
-		t.Fatal("tick must fail for a native poll whose project is unknown")
+		t.Fatal("tick must fail for a poll whose project is unknown")
 	}
 	if names := fake.CallNames(); len(names) != 0 {
 		t.Errorf("unknown project: no linear calls, got %v", names)
@@ -258,7 +238,7 @@ func TestTickNativeUnknownProjectFailsWithoutStateMutation(t *testing.T) {
 	}
 }
 
-// --- Combined cap across runtimes --------------------------------------------
+// --- Budget: native cap math -------------------------------------------------
 
 func TestNativeLiveCounted(t *testing.T) {
 	sessions := []session.Session{
@@ -273,100 +253,57 @@ func TestNativeLiveCounted(t *testing.T) {
 		nativeSess("FE-8", "merged"),                  // done: no slot
 		nativeSess("FE-9", "dead"),                    // dead: no slot
 		nativeSess("FE-10", "idle"),                   // between turns: no slot
-		{ID: "ao-1", Source: "ao", Status: "working"}, // wrong source: never
+		{ID: "ao-1", Source: "ao", Status: "working"}, // non-native source: never
 	}
 	if got := NativeLiveCounted(sessions); got != 6 {
-		t.Errorf("NativeLiveCounted = %d, want 6 ([ao].counting_states parity incl. draft)", got)
+		t.Errorf("NativeLiveCounted = %d, want 6 (slot-occupying states incl. draft)", got)
 	}
 	if got := NativeLiveCounted(nil); got != 0 {
 		t.Errorf("NativeLiveCounted(nil) = %d, want 0", got)
 	}
 }
 
-// Native sessions in the store must count against an AO-runtime poll's
-// budget: the global cap spans both runtimes.
-func TestTickAOPollBudgetIncludesNativeSessions(t *testing.T) {
+// Native sessions already in the store count against a poll's budget: the
+// global cap is measured against the native session store, the only source.
+func TestTickNativePollBudgetCountsStoreSessions(t *testing.T) {
 	is := testIssue("FE-1", 1, "2024-01-01T00:00:00Z")
 	fake := &linear.Fake{Issues: []linear.Issue{is}}
-	aoc := &fakeAO{sessions: []ao.SessionState{{ID: "s1", Status: "working"}}} // aoCounted = 1
+	nat := &fakeNative{}
 	cfg := nativeTestConfig(seenPoll("p1"))
 	cfg.Defaults.GlobalCap = 3
-	d := newTestDaemon(t, cfg, fake, aoc)
-	// nativeCounted = 2 (approved is parked and must NOT count).
+	d := newTestDaemon(t, cfg, fake, nat)
+	// Three slot-occupying native sessions == globalCap -> budget 0. The parked
+	// "approved" session must NOT count.
 	d.sessions.Upsert(nativeSess("FE-90", "working"))
 	d.sessions.Upsert(nativeSess("FE-91", "ci_pending"))
-	d.sessions.Upsert(nativeSess("FE-92", "approved"))
+	d.sessions.Upsert(nativeSess("FE-92", "draft"))
+	d.sessions.Upsert(nativeSess("FE-93", "approved")) // parked
 
-	// liveCounted = 1 + 2 = 3 = globalCap -> budget 0.
 	res, err := d.tick(context.Background(), "p1", false)
 	if err != nil {
 		t.Fatalf("tick: %v", err)
 	}
-	if len(aoc.spawnCalls()) != 0 {
-		t.Errorf("combined cap must bind, got spawns %v", aoc.spawnCalls())
+	if len(nat.spawnCalls()) != 0 {
+		t.Errorf("combined cap must bind, got spawns %v", nat.spawnCalls())
 	}
 	if m := findMatch(t, res, "FE-1"); m.Action != "skipped" || m.Reason != "capped" {
 		t.Errorf("match = %+v, want skipped/capped", m)
 	}
 }
 
-// AO sessions must count against a native poll's budget, and the counting is
-// best-effort: it must not fail the tick when AO cannot answer.
-func TestTickNativePollBudgetIncludesAOSessions(t *testing.T) {
-	issues := []linear.Issue{
-		testIssue("FE-1", 1, "2024-01-01T00:00:00Z"),
-		testIssue("FE-2", 2, "2024-01-01T00:00:00Z"),
-	}
-	fake := &linear.Fake{
-		Issues: issues,
-		LabelIDsByIssue: map[string][]string{
-			issues[0].ID: {"lbl-trigger"},
-			issues[1].ID: {"lbl-trigger"},
-		},
-	}
-	aoc := &fakeAO{sessions: []ao.SessionState{
-		{ID: "s1", Status: "working"},
-		{ID: "s2", Status: "in_progress"},
-		{ID: "s3", Status: "review"}, // not a counting state
-	}}
-	nat := &fakeNative{}
-	cfg := nativeTestConfig(nativePoll("p1"))
-	cfg.Defaults.GlobalCap = 3
-	d := newTestDaemon(t, cfg, fake, aoc)
-	d.native = nat
-
-	// liveCounted = aoCounted(2) + native(0) -> budget = min(10, 3-2) = 1.
-	res, err := d.tick(context.Background(), "p1", false)
-	if err != nil {
-		t.Fatalf("tick: %v", err)
-	}
-	spawns := nat.spawnCalls()
-	if len(spawns) != 1 || spawns[0].identifier != "FE-1" {
-		t.Fatalf("native spawns = %+v, want exactly [{proj1 FE-1}] (budget 1, priority order)", spawns)
-	}
-	if m := findMatch(t, res, "FE-2"); m.Action != "skipped" || m.Reason != "capped" {
-		t.Errorf("FE-2 match = %+v, want skipped/capped", m)
-	}
-}
-
-// Ticks run cancel-shielded (safeTick) under the poll's tick mutex, so every
-// exec a native tick performs must carve its own deadline: the whole native
-// spawn (it runs arbitrary post_create commands) and the best-effort AO
-// probes for the cross-runtime budget.
-func TestTickNativeSpawnAndAOProbesAreDeadlineBounded(t *testing.T) {
+// The native spawn runs arbitrary post_create commands, so it must carve its
+// own deadline even though the tick itself runs cancel-shielded (safeTick).
+func TestTickNativeSpawnIsDeadlineBounded(t *testing.T) {
 	is := testIssue("FE-7", 1, "2024-01-01T00:00:00Z")
 	fake := &linear.Fake{
 		Issues:          []linear.Issue{is},
 		LabelIDsByIssue: map[string][]string{is.ID: {"lbl-trigger"}},
 	}
-	var reachDL, sessDL bool
-	aoc := deadlineAO{fakeAO: &fakeAO{}, reachableDL: &reachDL, sessionsDL: &sessDL}
 	nat := &fakeNative{}
-	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), fake, aoc)
-	d.native = nat
+	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), fake, nat)
 
-	// context.Background has no deadline; every deadline observed below was
-	// added by the tick itself.
+	// context.Background has no deadline; any deadline observed below was added
+	// by the tick itself.
 	if _, err := d.tick(context.Background(), "p1", false); err != nil {
 		t.Fatalf("tick: %v", err)
 	}
@@ -375,12 +312,6 @@ func TestTickNativeSpawnAndAOProbesAreDeadlineBounded(t *testing.T) {
 	nat.mu.Unlock()
 	if !spawnDL {
 		t.Error("native Spawn must run under a deadline (post_create runs arbitrary user commands)")
-	}
-	if !reachDL {
-		t.Error("budget AO Reachable probe must run under a per-exec deadline")
-	}
-	if !sessDL {
-		t.Error("budget AO LiveSessions probe must run under a per-exec deadline")
 	}
 }
 
@@ -397,7 +328,7 @@ func TestHandleHookEventStatusTransitions(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.event, func(t *testing.T) {
-			d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeAO{})
+			d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})
 			s := nativeSess("FE-1", c.before)
 			d.sessions.Upsert(s)
 
@@ -428,7 +359,7 @@ func TestHandleHookEventToolUseTouchesLastSeenOnly(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(stateDir, "sessions.json"), []byte(blob), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	d := newDaemon(nativeTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeAO{}, log.New(io.Discard, "", 0), home)
+	d := newDaemon(nativeTestConfig(nativePoll("p1")), &linear.Fake{}, log.New(io.Discard, "", 0), home)
 
 	resp := d.handleHookEvent(protocol.Request{Cmd: "hookEvent", Session: "lola-proj1-fe-1", Event: "tool_use"})
 	if !resp.OK {
@@ -450,7 +381,7 @@ func TestHandleHookEventUnknownSessionOKAndLoggedOnce(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("LOLA_HOME", home)
 	var buf bytes.Buffer
-	d := newDaemon(nativeTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeAO{}, log.New(&buf, "", 0), home)
+	d := newDaemon(nativeTestConfig(nativePoll("p1")), &linear.Fake{}, log.New(&buf, "", 0), home)
 
 	for i := 0; i < 3; i++ {
 		resp := d.handle(context.Background(), protocol.Request{Cmd: "hookEvent", Session: "ghost-1", Event: "stop"})
@@ -471,13 +402,11 @@ func TestHandleHookEventUnknownSessionOKAndLoggedOnce(t *testing.T) {
 // --- Observer: native merge ---------------------------------------------------
 
 func TestObserveNativeMergesPRStateAndTmuxName(t *testing.T) {
-	// AO down: the native half of the cycle must still run.
-	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeAO{unreachable: true})
 	s := nativeSess("FE-1", "idle")
 	s.TmuxName = "" // adopted records may lack it; the observer must fill it
-	d.sessions.Upsert(s)
 	nat := &fakeNative{alive: map[string]bool{s.ID: true}}
-	d.native = nat
+	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, nat)
+	d.sessions.Upsert(s)
 	seams := &fakeObsSeams{pr: &scm.PR{Number: 3, URL: "u", State: "OPEN", ChecksState: "fail"}}
 	seams.install(d)
 
@@ -497,16 +426,15 @@ func TestObserveNativeMergesPRStateAndTmuxName(t *testing.T) {
 		t.Errorf("PR lookups = %d, want 1 (session repo + branch)", pr)
 	}
 	if _, err := os.Stat(filepath.Join(d.home, "state", "sessions.json")); err != nil {
-		t.Errorf("native merge must persist the store even with AO down: %v", err)
+		t.Errorf("native merge must persist the store: %v", err)
 	}
 }
 
 func TestObserveNativeDeadPaneBecomesDead(t *testing.T) {
-	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeAO{unreachable: true})
 	s := nativeSess("FE-1", "working")
+	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{alive: map[string]bool{}})
 	d.sessions.Upsert(s)
-	d.native = &fakeNative{alive: map[string]bool{}} // pane gone
-	(&fakeObsSeams{}).install(d)                     // authoritative "no PR"
+	(&fakeObsSeams{}).install(d) // authoritative "no PR"
 
 	d.observe(context.Background())
 
@@ -527,10 +455,9 @@ func TestObserveNativeDeadPaneBecomesDead(t *testing.T) {
 }
 
 func TestObserveNativeDeadPaneWithMergedPRIsMerged(t *testing.T) {
-	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeAO{unreachable: true})
 	s := nativeSess("FE-1", "idle")
+	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{alive: map[string]bool{}})
 	d.sessions.Upsert(s)
-	d.native = &fakeNative{alive: map[string]bool{}}
 	seams := &fakeObsSeams{pr: &scm.PR{Number: 3, State: "MERGED"}}
 	seams.install(d)
 
@@ -542,10 +469,10 @@ func TestObserveNativeDeadPaneWithMergedPRIsMerged(t *testing.T) {
 }
 
 func TestObserveNativeNeedsInputOutranksPRStatus(t *testing.T) {
-	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeAO{unreachable: true})
 	s := nativeSess("FE-1", "needs_input")
+	nat := &fakeNative{alive: map[string]bool{s.ID: true}}
+	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, nat)
 	d.sessions.Upsert(s)
-	d.native = &fakeNative{alive: map[string]bool{s.ID: true}}
 	seams := &fakeObsSeams{pr: &scm.PR{Number: 3, State: "OPEN", ChecksState: "pending"}}
 	seams.install(d)
 
@@ -558,17 +485,15 @@ func TestObserveNativeNeedsInputOutranksPRStatus(t *testing.T) {
 
 // A hook event landing WHILE the observer is mid-cycle (between its snapshot
 // and its write — the PR check alone can take seconds) must never be erased
-// by the observer's write. This matters permanently: an agent blocked on a
-// permission prompt fires no further hooks, so a clobbered needs_input would
-// read "working" forever (and wrongly hold a cap slot in the reverse case).
+// by the observer's write.
 func TestObserveNativePreservesConcurrentHookNeedsInput(t *testing.T) {
-	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeAO{unreachable: true})
 	s := nativeSess("FE-1", "working")
+	nat := &fakeNative{alive: map[string]bool{s.ID: true}}
+	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, nat)
 	d.sessions.Upsert(s)
-	d.native = &fakeNative{alive: map[string]bool{s.ID: true}}
-	// The PR-check seam doubles as the interleave point: the notification
-	// hook fires while the observer is "inside" its gh exec, i.e. after the
-	// cycle's snapshot was taken.
+	// The PR-check seam doubles as the interleave point: the notification hook
+	// fires while the observer is "inside" its gh exec, i.e. after the cycle's
+	// snapshot was taken.
 	d.prForBranch = func(ctx context.Context, repo, branch string) (*scm.PR, error) {
 		resp := d.handleHookEvent(protocol.Request{Cmd: "hookEvent", Session: s.ID, Event: "notification"})
 		if !resp.OK {
@@ -589,11 +514,11 @@ func TestObserveNativePreservesConcurrentHookNeedsInput(t *testing.T) {
 }
 
 func TestObserveNativeRepoFallsBackToProjectRegistry(t *testing.T) {
-	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeAO{unreachable: true})
 	s := nativeSess("FE-1", "working")
 	s.Repo = "" // e.g. adopted before the repo was ever recorded
+	nat := &fakeNative{alive: map[string]bool{s.ID: true}}
+	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, nat)
 	d.sessions.Upsert(s)
-	d.native = &fakeNative{alive: map[string]bool{s.ID: true}}
 	seams := &fakeObsSeams{pr: &scm.PR{Number: 9, State: "OPEN", ChecksState: "pass"}}
 	seams.install(d)
 
@@ -614,11 +539,10 @@ func TestObserveNativeRepoFallsBackToProjectRegistry(t *testing.T) {
 // --- sessions reply: source + worktree ----------------------------------------
 
 // The TUI's source badge and worktree line render straight from the sessions
-// reply — the daemon must actually map Session.Source and derive the native
-// worktree path (<home>/worktrees/<project>/<id>), or every session reads
-// [ao] with no worktree.
+// reply — the daemon must map Session.Source and derive the native worktree
+// path (<home>/worktrees/<project>/<id>).
 func TestSessionsDataIncludesSourceAndWorktree(t *testing.T) {
-	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeAO{})
+	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})
 	native := nativeSess("FE-1", "working")
 	d.sessions.Upsert(native)
 	d.sessions.Upsert(session.Session{ID: "ao-1", Source: "ao", Project: "proj", Issue: "FE-9", Status: "working"})
@@ -640,17 +564,17 @@ func TestSessionsDataIncludesSourceAndWorktree(t *testing.T) {
 	}
 	a, ok := byID["ao-1"]
 	if !ok {
-		t.Fatalf("ao session missing from reply: %+v", data.Sessions)
+		t.Fatalf("non-native session missing from reply: %+v", data.Sessions)
 	}
 	if a.Source != "ao" || a.Worktree != "" {
-		t.Errorf("ao session = source %q worktree %q, want ao / empty", a.Source, a.Worktree)
+		t.Errorf("non-native session = source %q worktree %q, want ao / empty", a.Source, a.Worktree)
 	}
 }
 
 // --- Adoption -------------------------------------------------------------------
 
 func TestAdoptNativeSessionsUpsertsAndPreservesFacts(t *testing.T) {
-	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeAO{})
+	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})
 	// A previous daemon persisted branch/repo facts adopt cannot observe.
 	prev := nativeSess("FE-1", "working")
 	prev.Branch = "feat/fe-1-custom"
@@ -684,7 +608,7 @@ func TestAdoptNativeSessionsLogsAnomaliesAndScanFailure(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("LOLA_HOME", home)
 	var buf bytes.Buffer
-	d := newDaemon(nativeTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeAO{}, log.New(&buf, "", 0), home)
+	d := newDaemon(nativeTestConfig(nativePoll("p1")), &linear.Fake{}, log.New(&buf, "", 0), home)
 	d.native = &fakeNative{adopted: []session.Session{
 		{ID: "lola-proj1-fe-2", Source: "native", Project: "proj1", Issue: "FE-2", Status: "dead"},
 		{ID: "lola-proj1-fe-3", Source: "native", Project: "proj1", Status: "orphaned"},
@@ -698,7 +622,7 @@ func TestAdoptNativeSessionsLogsAnomaliesAndScanFailure(t *testing.T) {
 
 	// A failing scan is logged, never fatal, and upserts nothing.
 	buf.Reset()
-	d2 := newDaemon(nativeTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeAO{}, log.New(&buf, "", 0), t.TempDir())
+	d2 := newDaemon(nativeTestConfig(nativePoll("p1")), &linear.Fake{}, log.New(&buf, "", 0), t.TempDir())
 	d2.native = &fakeNative{adoptErr: errors.New("tmux exploded")}
 	d2.adoptNativeSessions(context.Background())
 	if !strings.Contains(buf.String(), "tmux exploded") {
@@ -714,7 +638,6 @@ func TestAdoptNativeSessionsLogsAnomaliesAndScanFailure(t *testing.T) {
 // A dead native session (pane gone, PR never opened) is the native orphan:
 // after orphan_timeout its labels revert and seen clears via the existing
 // flow, the worktree stays on disk, and its path is logged for inspection.
-// AO being down must not block any of it.
 func TestReconcileNativeDeadSessionRevertsAndKeepsWorktree(t *testing.T) {
 	is := testIssue("FE-231", 1, "2024-01-01T00:00:00Z")
 	fake := &linear.Fake{
@@ -724,7 +647,9 @@ func TestReconcileNativeDeadSessionRevertsAndKeepsWorktree(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("LOLA_HOME", home)
 	var buf bytes.Buffer
-	d := newDaemon(nativeTestConfig(nativePoll("p1")), fake, &fakeAO{unreachable: true}, log.New(&buf, "", 0), home)
+	d := newDaemon(nativeTestConfig(nativePoll("p1")), fake, log.New(&buf, "", 0), home)
+	d.native = &fakeNative{}
+	d.runtimeHealth = func() error { return nil }
 
 	dead := nativeSess("FE-231", "dead")
 	d.sessions.Upsert(dead)
@@ -773,7 +698,7 @@ func TestReconcileNativeAliveSessionBlocksRevert(t *testing.T) {
 			Issues:          []linear.Issue{is},
 			LabelIDsByIssue: map[string][]string{is.ID: {"lbl-sent"}},
 		}
-		d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), fake, &fakeAO{unreachable: true})
+		d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), fake, &fakeNative{})
 		d.sessions.Upsert(nativeSess("FE-231", status))
 		if err := d.seen.save("p1", map[string]time.Time{is.ID: time.Now().Add(-2 * orphanTimeout)}); err != nil {
 			t.Fatal(err)
@@ -788,13 +713,12 @@ func TestReconcileNativeAliveSessionBlocksRevert(t *testing.T) {
 	}
 }
 
-// In a native-only deployment AO is expected to be unreachable forever; the
-// in-flight cleanup must still run off the native session facts, or a
-// successfully spawned issue's claim would survive for the daemon's lifetime
-// and block any later re-dispatch ("in-flight" on every tick).
-func TestReconcileNativeOnlyDeploymentClearsStaleInflightWithAODown(t *testing.T) {
+// The in-flight cleanup runs off the native session facts: a successfully
+// spawned issue's claim must be released once its session is gone (settled
+// dead), or it would block any later re-dispatch for the daemon's lifetime.
+func TestReconcileNativeOnlyClearsStaleInflight(t *testing.T) {
 	is := testIssue("FE-1", 1, "2024-01-01T00:00:00Z")
-	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeAO{unreachable: true})
+	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})
 	// The session finished long ago: only a settled "dead" record remains,
 	// which is not counted. Backdate the claim past the orphan grace.
 	d.sessions.Upsert(nativeSess("FE-1", "dead"))
@@ -806,12 +730,12 @@ func TestReconcileNativeOnlyDeploymentClearsStaleInflightWithAODown(t *testing.T
 	d.reconcile(context.Background())
 
 	if d.inflight.Has(is.ID) {
-		t.Error("native-only deployment: stale in-flight claim must be cleared even with AO down")
+		t.Error("stale in-flight claim must be cleared when no counted session remains")
 	}
 
 	// A claim whose issue still has a counted (present) native session must
 	// survive the same pass.
-	d2 := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeAO{unreachable: true})
+	d2 := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})
 	d2.sessions.Upsert(nativeSess("FE-2", "working"))
 	is2 := testIssue("FE-2", 1, "2024-01-01T00:00:00Z")
 	d2.inflight.Add(is2.ID, is2.Identifier)
@@ -823,34 +747,5 @@ func TestReconcileNativeOnlyDeploymentClearsStaleInflightWithAODown(t *testing.T
 
 	if !d2.inflight.Has(is2.ID) {
 		t.Error("claim with a counted native session must not be cleared")
-	}
-}
-
-// With AO down, ao-runtime polls must be skipped (their counted picture is
-// blind) while in-flight claims stay untouched.
-func TestReconcileAODownSkipsAOPollsButKeepsClaims(t *testing.T) {
-	is := testIssue("FE-1", 1, "2024-01-01T00:00:00Z")
-	fake := &linear.Fake{
-		Issues:          []linear.Issue{is},
-		LabelIDsByIssue: map[string][]string{is.ID: {"lbl-sent"}},
-	}
-	d := newTestDaemon(t, testConfig(labelPoll("p1")), fake, &fakeAO{unreachable: true})
-	if err := d.seen.save("p1", map[string]time.Time{is.ID: time.Now().Add(-2 * orphanTimeout)}); err != nil {
-		t.Fatal(err)
-	}
-	backdated := time.Now().Add(-2 * orphanTimeout)
-	d.inflight.Add(is.ID, is.Identifier)
-	d.inflight.mu.Lock() // backdate so only the AO-down guard protects it
-	d.inflight.m[is.ID] = inflightEntry{Identifier: is.Identifier, AddedAt: backdated}
-	d.inflight.mu.Unlock()
-	d.openPR = func(context.Context, string, string) (bool, error) { return false, nil }
-
-	d.reconcile(context.Background())
-
-	if slices.Contains(fake.CallNames(), "SetIssueLabels") {
-		t.Error("AO down: ao-runtime polls must not revert anything")
-	}
-	if !d.inflight.Has(is.ID) {
-		t.Error("AO down: in-flight claims must not be cleared (AO sessions are invisible)")
 	}
 }

@@ -16,14 +16,14 @@ func tuiTestPoll(name string) config.Poll {
 		MatchLabels:    []string{"lbl-a"},
 		MatchMode:      "any",
 		AssigneeMode:   "anyone",
-		AOProject:      "proj",
+		Project:        "nori-app",
 		ConcurrencyCap: 1,
 		DedupMode:      "seen",
 	}
 }
 
-// newTestRoot writes a config with polls A and B and builds a rootModel on
-// it, the way Run() does.
+// newTestRoot writes a config with polls A and B (both referencing the one
+// defined [[project]]) and builds a rootModel on it, the way Run() does.
 func newTestRoot(t *testing.T) *rootModel {
 	t.Helper()
 	t.Setenv("LOLA_HOME", t.TempDir())
@@ -33,6 +33,7 @@ func newTestRoot(t *testing.T) *rootModel {
 	}
 	cfg := &config.Config{
 		Defaults: config.Defaults{PollInterval: time.Minute, ConcurrencyCap: 1, GlobalCap: 4},
+		Projects: []config.Project{{Name: "nori-app", Path: "/tmp/nori", Repo: "acme/nori"}},
 		Polls:    []config.Poll{tuiTestPoll("A"), tuiTestPoll("B")},
 	}
 	if err := cfg.Save(path); err != nil {
@@ -110,13 +111,12 @@ func TestFormSaveDoesNotClobberExternalChanges(t *testing.T) {
 
 	// Edit poll B on the STALE snapshot (as a form opened earlier would).
 	edited := *m.cfg.PollByName("B")
-	edited.AOProject = "proj2"
+	edited.Repo = "acme/edited"
 	f := &formModel{
-		cfg:        m.cfg,
-		origName:   "B",
-		poll:       edited,
-		capBuf:     "1",
-		aoProjects: []string{"proj", "proj2"},
+		cfg:      m.cfg,
+		origName: "B",
+		poll:     edited,
+		capBuf:   "1",
 	}
 	if _, ev := f.save(); ev != formSaved {
 		t.Fatalf("save failed: %v", f.errs)
@@ -126,7 +126,7 @@ func TestFormSaveDoesNotClobberExternalChanges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if b := got.PollByName("B"); b == nil || b.AOProject != "proj2" {
+	if b := got.PollByName("B"); b == nil || b.Repo != "acme/edited" {
 		t.Errorf("poll B must carry the edit, got %+v", b)
 	}
 	if a := got.PollByName("A"); a == nil || a.Enabled {

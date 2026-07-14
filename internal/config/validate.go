@@ -43,11 +43,27 @@ func (c *Config) EffectiveCap(p *Poll) int {
 	return c.Defaults.ConcurrencyCap
 }
 
+// PollRepo returns the GitHub "owner/name" repo the poll's PR checks run
+// against: the poll's own `repo` when set, else the referenced [[project]]'s
+// repo. Empty when neither is configured (PR checks then fail closed).
+func (c *Config) PollRepo(p *Poll) string {
+	if p == nil {
+		return ""
+	}
+	if p.Repo != "" {
+		return p.Repo
+	}
+	if pr := c.ProjectByName(p.Project); pr != nil {
+		return pr.Repo
+	}
+	return ""
+}
+
 // Validate runs every static check and returns all failures joined via
 // errors.Join (nil when the config is valid). It only checks what can be
-// verified offline and never execs anything: ID resolution against Linear,
-// ao_project existence in AO, and project path-exists / is-git-repo checks
-// are the caller's (runtime layer's) job.
+// verified offline and never execs anything: ID resolution against Linear
+// and project path-exists / is-git-repo checks are the caller's (runtime
+// layer's) job.
 func (c *Config) Validate() error {
 	var errs []error
 
@@ -112,8 +128,9 @@ func (c *Config) Validate() error {
 			errs = append(errs, fmt.Errorf("%s: match_mode must be any|all, got %q", id, p.MatchMode))
 		}
 
-		// repo is optional: without it the reconciler's open-PR check is
-		// unavailable and orphan reverts are skipped (fail-closed).
+		// repo is optional: PR checks fall back to the [[project]] repo
+		// (PollRepo); with neither set they are unavailable and orphan
+		// reverts are skipped (fail-closed).
 		if p.Repo != "" && !repoRe.MatchString(p.Repo) {
 			errs = append(errs, fmt.Errorf(`%s: repo must be "owner/name" (e.g. "sushidev-team/nori-app"), got %q`, id, p.Repo))
 		}
@@ -128,24 +145,12 @@ func (c *Config) Validate() error {
 			errs = append(errs, fmt.Errorf("%s: assignee_mode must be one of anyone|me|user, got %q", id, p.AssigneeMode))
 		}
 
-		// Runtime selects the spawn backend. Empty is tolerated here (Load
-		// defaults it to "ao").
-		switch p.Runtime {
-		case "", RuntimeAO:
-			// ao_project is deliberately NOT required statically: it never
-			// was pre-P2 (existence AND presence are enforced at enable time
-			// — checkAOProject — and on TUI form save), and rejecting it here
-			// would hold EVERY poll of an upgraded config that, say, carries
-			// a disabled draft poll without ao_project. Zero behavior change
-			// for runtime-absent configs.
-		case RuntimeNative:
-			if p.Project == "" {
-				errs = append(errs, fmt.Errorf("%s: runtime=native requires project (a [[project]] name)", id))
-			} else if c.ProjectByName(p.Project) == nil {
-				errs = append(errs, fmt.Errorf("%s: project %q is not defined as a [[project]]", id, p.Project))
-			}
-		default:
-			errs = append(errs, fmt.Errorf("%s: runtime must be ao|native, got %q", id, p.Runtime))
+		// Every poll spawns via the native runtime, so its [[project]]
+		// reference is mandatory and must resolve.
+		if p.Project == "" {
+			errs = append(errs, fmt.Errorf("%s: project is required (a [[project]] name)", id))
+		} else if c.ProjectByName(p.Project) == nil {
+			errs = append(errs, fmt.Errorf("%s: project %q is not defined as a [[project]]", id, p.Project))
 		}
 
 		switch p.DedupMode {

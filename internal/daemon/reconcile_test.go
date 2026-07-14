@@ -23,7 +23,7 @@ func orphanIssue() linear.Issue {
 
 func newReconcileDaemon(t *testing.T, fake *linear.Fake) *Daemon {
 	t.Helper()
-	d := newTestDaemon(t, testConfig(labelPoll("p1")), fake, &fakeAO{})
+	d := newTestDaemon(t, testConfig(labelPoll("p1")), fake, &fakeNative{})
 	return d
 }
 
@@ -160,7 +160,13 @@ func TestReconcileEmptyRepoSkipsRevertAndLogs(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("LOLA_HOME", home)
 	var buf strings.Builder
-	d := newDaemon(testConfig(labelPoll("p1")), fake, &fakeAO{}, log.New(&buf, "", 0), home)
+	// Neither the poll nor its [[project]] carries a repo, so PollRepo is empty
+	// and the PR check is unavailable.
+	cfg := testConfig(labelPoll("p1"))
+	cfg.Projects[0].Repo = ""
+	d := newDaemon(cfg, fake, log.New(&buf, "", 0), home)
+	d.native = &fakeNative{}
+	d.runtimeHealth = func() error { return nil }
 	seedOrphan(t, d, is)
 	// d.openPR stays the default ghOpenPR: an empty repo must short-circuit
 	// with the "no repo configured" error before gh is ever invoked.
@@ -200,11 +206,11 @@ func TestReconcileCountedSessionBlocksRevert(t *testing.T) {
 	seedOrphan(t, d, is)
 	d.openPR = func(context.Context, string, string) (bool, error) { return false, nil }
 
-	counted := map[string]bool{is.Identifier: true} // live AO session
+	counted := map[string]bool{is.Identifier: true} // live native session
 	d.reconcilePoll(context.Background(), fake, labelPoll("p1"), counted, time.Now())
 
 	if slices.Contains(fake.CallNames(), "SetIssueLabels") {
-		t.Error("an issue with a counted AO session must not be reverted")
+		t.Error("an issue with a counted native session must not be reverted")
 	}
 }
 

@@ -67,9 +67,17 @@ func (m *rootModel) listView() string {
 	var b strings.Builder
 	b.WriteString(m.tabBar() + "\n")
 	if l.status != nil {
-		fmt.Fprintf(&b, "daemon: %s   ao: %s   linear: %s\n\n",
+		runtimeState := goodText.Render("ok")
+		if !l.status.RuntimeOK {
+			label := "missing tools"
+			if l.status.RuntimeErr != "" {
+				label = l.status.RuntimeErr
+			}
+			runtimeState = badText.Render(label)
+		}
+		fmt.Fprintf(&b, "daemon: %s   runtime: %s   linear: %s\n\n",
 			goodText.Render("running"),
-			yesNoStyled(l.status.AORunning, "reachable", "unreachable"),
+			runtimeState,
 			yesNoStyled(l.status.LinearOK, "ok", "error"))
 	} else {
 		b.WriteString(badText.Render("daemon: not running") + faintText.Render("  (start with: lola run)"))
@@ -79,7 +87,7 @@ func (m *rootModel) listView() string {
 		b.WriteString("\n\n")
 	}
 
-	headers := []string{" ", "NAME", "ON", "TEAM", "AO PROJECT", "LAST RUN", "LAST SPAWN", "ERROR"}
+	headers := []string{" ", "NAME", "ON", "TEAM", "PROJECT", "LAST RUN", "LAST SPAWN", "ERROR"}
 	rows := make([][]string, len(m.cfg.Polls))
 	for i, p := range m.cfg.Polls {
 		enabled := p.Enabled
@@ -96,7 +104,7 @@ func (m *rootModel) listView() string {
 		if i == l.cursor {
 			marker = "›"
 		}
-		rows[i] = []string{marker, p.Name, yesNo(enabled), l.teamDisplay(p.TeamID), p.AOProject, lastRun, lastSpawn, lastErr}
+		rows[i] = []string{marker, p.Name, yesNo(enabled), l.teamDisplay(p.TeamID), p.Project, lastRun, lastSpawn, lastErr}
 	}
 
 	w := colWidths(headers, rows)
