@@ -69,7 +69,9 @@ func (m *rootModel) listView() string {
 	if l.status != nil {
 		runtimeState := goodText.Render("ok")
 		if !l.status.RuntimeOK {
-			label := "missing tools"
+			// RuntimeErr now always names the missing tool (e.g. "missing
+			// claude"); only when it is somehow empty do we point at doctor.
+			label := "missing tools — press d for doctor"
 			if l.status.RuntimeErr != "" {
 				label = l.status.RuntimeErr
 			}
@@ -131,6 +133,6 @@ func (m *rootModel) listView() string {
 	case l.flash != "":
 		b.WriteString(faintText.Render(l.flash) + "\n")
 	}
-	b.WriteString(faintText.Render("↑/↓ move · n new · enter/e edit · space toggle · d delete · r refresh cache · q quit") + "\n")
+	b.WriteString(faintText.Render("↑/↓ move · n new · enter/e edit · space toggle · x delete · d doctor · r refresh cache · q quit") + "\n")
 	return b.String()
 }

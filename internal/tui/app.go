@@ -3,13 +3,18 @@
 package tui
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"io/fs"
+	"os"
+	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/sushidev-team/lola/internal/config"
+	"github.com/sushidev-team/lola/internal/doctor"
 	"github.com/sushidev-team/lola/internal/protocol"
 )
 
@@ -34,13 +39,31 @@ type rootModel struct {
 	form     *formModel
 	width    int
 	height   int
+
+	// Doctor overlay (P6.27): 'd' in the polls view runs doctor.Check via a
+	// bounded tea.Cmd and shows the report in a scrollable panel; esc closes.
+	doctorLoading bool
+	doctorReport  *doctor.Report
+	doctorScroll  int
 }
 
-// Run opens the interactive TUI (poll list + cascading edit form).
+// Run opens the interactive TUI (poll list + cascading edit form). On first
+// run — when no config.toml exists yet — it enters the setup wizard first and
+// only falls through into the poll list once the wizard has written a config.
 func Run() error {
 	cfgPath, err := config.DefaultPath()
 	if err != nil {
 		return err
+	}
+	if _, err := os.Stat(cfgPath); errors.Is(err, fs.ErrNotExist) {
+		wrote, err := runSetupWizard(newSetupModel())
+		if err != nil {
+			return err
+		}
+		if !wrote {
+			return nil // esc before write: nothing to open
+		}
+		// fall through into the normal TUI with the freshly written config
 	}
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
@@ -61,6 +84,19 @@ type statusMsg struct {
 type statusTickMsg struct{}
 
 type opDoneMsg struct{ err error }
+
+// doctorMsg carries a completed doctor.Check report back to the UI.
+type doctorMsg struct{ report doctor.Report }
+
+// runDoctorCmd runs the health checks off the UI thread under a bounded
+// context (doctor already bounds each subprocess; this caps the whole run).
+func runDoctorCmd(cfg *config.Config) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		return doctorMsg{report: doctor.Check(ctx, cfg)}
+	}
+}
 
 func fetchStatusCmd() tea.Msg {
 	resp, err := request(protocol.Request{Cmd: "status"})
@@ -138,10 +174,26 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.sessions.flash = "attach failed: " + v.err.Error()
 		}
 		return m, fetchSessionsCmd
+	case doctorMsg:
+		// A report arriving after the overlay was closed (esc during the run)
+		// is dropped — doctorLoading is the "still open" signal.
+		if m.doctorLoading {
+			r := v.report
+			m.doctorLoading, m.doctorReport, m.doctorScroll = false, &r, 0
+		}
+		return m, nil
 	case tea.KeyMsg:
 		if v.String() == "ctrl+c" {
 			return m, tea.Quit
 		}
+	}
+
+	// The doctor overlay owns all input while open (loading or showing).
+	if m.doctorLoading || m.doctorReport != nil {
+		if k, ok := msg.(tea.KeyMsg); ok {
+			return m.doctorKey(k)
+		}
+		return m, nil
 	}
 
 	if m.form != nil {
@@ -198,6 +250,9 @@ func (m *rootModel) tabBar() string {
 }
 
 func (m *rootModel) View() string {
+	if m.doctorLoading || m.doctorReport != nil {
+		return m.doctorView()
+	}
 	if m.form != nil {
 		return m.form.view(m.height)
 	}
@@ -267,10 +322,13 @@ func (m *rootModel) listKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.form = f
 			return m, cmd
 		}
-	case "d":
+	case "x":
 		if m.selectedPoll() != nil {
 			l.confirmDelete = true
 		}
+	case "d":
+		m.doctorLoading, m.doctorScroll = true, 0
+		return m, runDoctorCmd(m.cfg)
 	case " ":
 		return m, m.toggleSelected()
 	case "r":
@@ -365,6 +423,93 @@ func (m *rootModel) toggleSelected() tea.Cmd {
 		return nil
 	}
 	return bestEffortReloadCmd
+}
+
+// ---- doctor overlay ----
+
+// doctorKey drives the doctor panel: esc/q close it, the arrows/j/k scroll.
+func (m *rootModel) doctorKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch k.String() {
+	case "esc", "q":
+		m.doctorLoading, m.doctorReport, m.doctorScroll = false, nil, 0
+	case "up", "k":
+		if m.doctorScroll > 0 {
+			m.doctorScroll--
+		}
+	case "down", "j":
+		m.doctorScroll++ // clamped against the window in doctorView
+	}
+	return m, nil
+}
+
+// doctorReportLines renders each Result as an aligned "<glyph> <name> <detail>"
+// row using the shared TUI styles. The Linear key value never reaches a Result,
+// so nothing here can leak it.
+func doctorReportLines(rep doctor.Report) []string {
+	nameW := 0
+	for _, r := range rep.Results {
+		if w := lipgloss.Width(r.Name); w > nameW {
+			nameW = w
+		}
+	}
+	lines := make([]string, 0, len(rep.Results))
+	for _, r := range rep.Results {
+		var glyph string
+		switch {
+		case r.OK:
+			glyph = goodText.Render("✓")
+		case r.Critical:
+			glyph = badText.Render("✗")
+		default:
+			glyph = warnText.Render("⚠")
+		}
+		pad := strings.Repeat(" ", nameW-lipgloss.Width(r.Name))
+		lines = append(lines, glyph+"  "+r.Name+pad+"  "+r.Detail)
+	}
+	return lines
+}
+
+func (m *rootModel) doctorView() string {
+	var b strings.Builder
+	b.WriteString(titleStyle.Render("doctor") + "\n\n")
+	if m.doctorReport == nil {
+		b.WriteString(faintText.Render("running checks…") + "\n")
+		b.WriteString("\n" + faintText.Render("esc close") + "\n")
+		return b.String()
+	}
+
+	rep := *m.doctorReport
+	lines := doctorReportLines(rep)
+
+	// Scroll window sized to the terminal, mirroring the picker overlay.
+	win := m.height - 7
+	if win < 5 {
+		win = 5
+	}
+	if maxScroll := len(lines) - win; m.doctorScroll > maxScroll {
+		if maxScroll < 0 {
+			maxScroll = 0
+		}
+		m.doctorScroll = maxScroll
+	}
+	start := m.doctorScroll
+	end := start + win
+	if end > len(lines) {
+		end = len(lines)
+	}
+	if start > 0 {
+		b.WriteString(faintText.Render("  ↑ more") + "\n")
+	}
+	for i := start; i < end; i++ {
+		b.WriteString(lines[i] + "\n")
+	}
+	if end < len(lines) {
+		b.WriteString(faintText.Render("  ↓ more") + "\n")
+	}
+
+	b.WriteString("\n" + rep.Summary() + "\n")
+	b.WriteString(faintText.Render("↑/↓ scroll · esc close") + "\n")
+	return b.String()
 }
 
 func (m *rootModel) reloadConfig() {

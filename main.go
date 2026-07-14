@@ -6,9 +6,13 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
+	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/daemon"
+	"github.com/sushidev-team/lola/internal/doctor"
 	"github.com/sushidev-team/lola/internal/hook"
 	"github.com/sushidev-team/lola/internal/tui"
 )
@@ -38,6 +42,8 @@ func main() {
 		enableCmd("enable"), enableCmd("disable"),
 		pollCmd(),
 		logsCmd(),
+		doctorCmd(),
+		setupCmd(),
 		hookCmd(),
 	)
 
@@ -117,6 +123,93 @@ func hookDetail(r io.Reader) string {
 		}
 	}
 	return ""
+}
+
+// setupCmd always runs the first-run configuration wizard, even when a config
+// already exists (bare `lola` only enters the wizard when none does).
+func setupCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "setup",
+		Short: "Run the first-run configuration wizard (Linear key, project, defaults)",
+		RunE:  func(c *cobra.Command, _ []string) error { return tui.Setup() },
+	}
+}
+
+// doctorCmd runs the structured health checks and prints an aligned report.
+// It exits 1 when a critical check failed (Report.OK() is false). The Linear
+// API key value is never printed — doctor reports only where a key was found.
+func doctorCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "doctor",
+		Short: "Check lola's runtime health (tools, keychain key, daemon, config)",
+		RunE: func(c *cobra.Command, _ []string) error {
+			if !runDoctor(context.Background(), c.OutOrStdout()) {
+				os.Exit(1)
+			}
+			return nil
+		},
+	}
+}
+
+// runDoctor loads the config best-effort, runs the checks, writes the rendered
+// report to w, and reports whether every critical check passed. Split out from
+// doctorCmd so tests can assert the outcome without os.Exit.
+func runDoctor(ctx context.Context, w io.Writer) bool {
+	rep := doctor.Check(ctx, loadConfigBestEffort())
+	fmt.Fprint(w, renderDoctorReport(rep))
+	return rep.OK()
+}
+
+// loadConfigBestEffort returns the loaded config, or nil when the config is
+// absent or unreadable. A nil config makes doctor skip the config-dependent
+// checks with a single explanatory note rather than hard-failing on defaults.
+func loadConfigBestEffort() *config.Config {
+	path, err := config.DefaultPath()
+	if err != nil {
+		return nil
+	}
+	if _, err := os.Stat(path); err != nil {
+		return nil // no config yet (first run): skip config-dependent checks
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		return nil
+	}
+	return cfg
+}
+
+var (
+	doctorOK   = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
+	doctorWarn = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
+	doctorFail = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
+)
+
+// renderDoctorReport formats the report as aligned "<glyph> <name> <detail>"
+// lines followed by the one-line summary. lipgloss auto-degrades the color to
+// plain text when stdout is not a terminal.
+func renderDoctorReport(rep doctor.Report) string {
+	nameW := 0
+	for _, r := range rep.Results {
+		if w := lipgloss.Width(r.Name); w > nameW {
+			nameW = w
+		}
+	}
+	var b strings.Builder
+	for _, r := range rep.Results {
+		var glyph string
+		switch {
+		case r.OK:
+			glyph = doctorOK.Render("✓")
+		case r.Critical:
+			glyph = doctorFail.Render("✗")
+		default:
+			glyph = doctorWarn.Render("⚠")
+		}
+		pad := strings.Repeat(" ", nameW-lipgloss.Width(r.Name))
+		fmt.Fprintf(&b, "%s  %s%s  %s\n", glyph, r.Name, pad, r.Detail)
+	}
+	b.WriteString("\n" + rep.Summary() + "\n")
+	return b.String()
 }
 
 func logsCmd() *cobra.Command {

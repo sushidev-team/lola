@@ -1,0 +1,372 @@
+package doctor
+
+import (
+	"context"
+	"errors"
+	"net"
+	"os"
+	"path/filepath"
+	"strings"
+	"syscall"
+	"testing"
+
+	"github.com/sushidev-team/lola/internal/config"
+)
+
+// fakeBin writes an executable shell script named tool into dir that prints
+// body to stdout and exits 0.
+func fakeBin(t *testing.T, dir, tool, body string) {
+	t.Helper()
+	script := "#!/bin/sh\n" + body + "\n"
+	if err := os.WriteFile(filepath.Join(dir, tool), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// pathWith builds a temp dir, installs each named tool as a trivial fake, sets
+// PATH to ONLY that dir (so nothing leaks from the host), and returns the dir.
+// claude gets a --version-aware script; the rest just exit 0.
+func pathWith(t *testing.T, tools ...string) string {
+	t.Helper()
+	dir := t.TempDir()
+	for _, tool := range tools {
+		if tool == "claude" {
+			fakeBin(t, dir, "claude", `echo "1.2.3 (Claude Code)"`)
+			continue
+		}
+		fakeBin(t, dir, tool, "exit 0")
+	}
+	t.Setenv("PATH", dir)
+	return dir
+}
+
+// result fetches the named result from a report.
+func result(t *testing.T, r Report, name string) Result {
+	t.Helper()
+	for _, res := range r.Results {
+		if res.Name == name {
+			return res
+		}
+	}
+	t.Fatalf("no result named %q in %+v", name, r.Results)
+	return Result{}
+}
+
+func TestCheckAllToolsMissing(t *testing.T) {
+	pathWith(t) // empty PATH: no tools resolve
+	t.Setenv("LOLA_HOME", t.TempDir())
+
+	r := Check(context.Background(), nil)
+
+	for _, name := range []string{checkTmux, checkGit, checkClaude} {
+		res := result(t, r, name)
+		if res.OK {
+			t.Errorf("%s: OK=true, want false (not on PATH)", name)
+		}
+		if !res.Critical {
+			t.Errorf("%s: Critical=false, want true", name)
+		}
+		if res.Detail != "not found on PATH" {
+			t.Errorf("%s: Detail=%q, want %q", name, res.Detail, "not found on PATH")
+		}
+	}
+
+	gh := result(t, r, checkGh)
+	if gh.OK || gh.Critical {
+		t.Errorf("gh: OK=%v Critical=%v, want false/false", gh.OK, gh.Critical)
+	}
+
+	if r.OK() {
+		t.Error("Report.OK()=true with critical tools missing, want false")
+	}
+}
+
+func TestCheckToolsPresent(t *testing.T) {
+	dir := pathWith(t, "tmux", "git", "claude", "gh")
+	t.Setenv("LOLA_HOME", t.TempDir())
+
+	r := Check(context.Background(), nil)
+
+	for _, name := range []string{checkTmux, checkGit} {
+		res := result(t, r, name)
+		if !res.OK {
+			t.Errorf("%s: OK=false, want true", name)
+		}
+		if res.Detail != filepath.Join(dir, name) {
+			t.Errorf("%s: Detail=%q, want resolved path %q", name, res.Detail, filepath.Join(dir, name))
+		}
+	}
+
+	claude := result(t, r, checkClaude)
+	if !claude.OK {
+		t.Fatalf("claude: OK=false, want true")
+	}
+	if !strings.Contains(claude.Detail, "1.2.3 (Claude Code)") {
+		t.Errorf("claude Detail=%q, want it to include the --version first line", claude.Detail)
+	}
+
+	gh := result(t, r, checkGh)
+	if !gh.OK {
+		t.Errorf("gh: OK=false, want true")
+	}
+}
+
+// nil cfg: config-dependent checks are skipped with one note, and no
+// linear/project results are emitted.
+func TestCheckNilConfig(t *testing.T) {
+	pathWith(t, "tmux", "git", "claude", "gh")
+	t.Setenv("LOLA_HOME", t.TempDir())
+
+	r := Check(context.Background(), nil)
+
+	cfg := result(t, r, checkConfig)
+	if cfg.OK || cfg.Critical {
+		t.Errorf("config note: OK=%v Critical=%v, want false/false (skipped, non-critical)", cfg.OK, cfg.Critical)
+	}
+	if !strings.Contains(cfg.Detail, "config not loaded") {
+		t.Errorf("config note Detail=%q, want it to explain config not loaded", cfg.Detail)
+	}
+	for _, res := range r.Results {
+		if res.Name == checkLinear {
+			t.Error("linear check ran with nil cfg, want it skipped")
+		}
+		if strings.HasPrefix(res.Name, "project ") {
+			t.Error("project check ran with nil cfg, want it skipped")
+		}
+	}
+	// All present tools + skipped-but-non-critical config note ⇒ report OK.
+	if !r.OK() {
+		t.Error("Report.OK()=false with all tools present and cfg nil, want true")
+	}
+}
+
+func TestLinearKeyFoundInEnvNeverPrinted(t *testing.T) {
+	pathWith(t, "tmux", "git", "claude", "gh")
+	t.Setenv("LOLA_HOME", t.TempDir())
+	const secret = "lin_api_SUPERSECRET_should_never_render"
+	t.Setenv("LINEAR_API_KEY", secret)
+
+	cfg := &config.Config{
+		Defaults: config.Defaults{GlobalCap: 1},
+		Linear:   config.LinearConfig{APIKeyEnv: "LINEAR_API_KEY"},
+	}
+	r := Check(context.Background(), cfg)
+
+	lin := result(t, r, checkLinear)
+	if !lin.OK {
+		t.Fatalf("linear: OK=false, want true (key in env)")
+	}
+	if !lin.Critical {
+		t.Error("linear: Critical=false, want true (a key source is configured)")
+	}
+	if lin.Detail != "found in env LINEAR_API_KEY" {
+		t.Errorf("linear Detail=%q, want %q", lin.Detail, "found in env LINEAR_API_KEY")
+	}
+	// The key value must not appear anywhere in the rendered report.
+	assertNoSecret(t, r, secret)
+}
+
+func TestLinearKeyNotFound(t *testing.T) {
+	pathWith(t, "tmux", "git", "claude", "gh")
+	t.Setenv("LOLA_HOME", t.TempDir())
+	// Ensure the configured env var is unset.
+	os.Unsetenv("LINEAR_API_KEY")
+
+	cfg := &config.Config{
+		Defaults: config.Defaults{GlobalCap: 1},
+		Linear:   config.LinearConfig{APIKeyEnv: "LINEAR_API_KEY"},
+	}
+	r := Check(context.Background(), cfg)
+
+	lin := result(t, r, checkLinear)
+	if lin.OK {
+		t.Error("linear: OK=true, want false (no key)")
+	}
+	if !lin.Critical {
+		t.Error("linear: Critical=false, want true (a key source is configured)")
+	}
+	if !strings.Contains(lin.Detail, "not found") {
+		t.Errorf("linear Detail=%q, want it to report not found", lin.Detail)
+	}
+}
+
+// No key source configured at all: not critical (nothing to resolve).
+func TestLinearNoSourceNotCritical(t *testing.T) {
+	pathWith(t, "tmux", "git", "claude", "gh")
+	t.Setenv("LOLA_HOME", t.TempDir())
+
+	cfg := &config.Config{Defaults: config.Defaults{GlobalCap: 1}}
+	r := Check(context.Background(), cfg)
+
+	lin := result(t, r, checkLinear)
+	if lin.OK {
+		t.Error("linear: OK=true, want false (no source)")
+	}
+	if lin.Critical {
+		t.Error("linear: Critical=true, want false (no key source configured)")
+	}
+}
+
+func TestConfigValidAndInvalid(t *testing.T) {
+	pathWith(t, "tmux", "git", "claude", "gh")
+	t.Setenv("LOLA_HOME", t.TempDir())
+
+	valid := &config.Config{Defaults: config.Defaults{GlobalCap: 1}}
+	r := Check(context.Background(), valid)
+	if cfg := result(t, r, checkConfig); !cfg.OK || cfg.Detail != "valid" {
+		t.Errorf("valid config: %+v, want OK/valid", cfg)
+	}
+
+	invalid := &config.Config{} // GlobalCap=0 fails Validate
+	r = Check(context.Background(), invalid)
+	cfg := result(t, r, checkConfig)
+	if cfg.OK {
+		t.Error("invalid config: OK=true, want false")
+	}
+	if !cfg.Critical {
+		t.Error("invalid config: Critical=false, want true")
+	}
+	if cfg.Detail == "" || cfg.Detail == "valid" {
+		t.Errorf("invalid config Detail=%q, want first validation error", cfg.Detail)
+	}
+	if r.OK() {
+		t.Error("Report.OK()=true with invalid config, want false")
+	}
+}
+
+func TestProjectResults(t *testing.T) {
+	pathWith(t, "tmux", "git", "claude", "gh")
+	t.Setenv("LOLA_HOME", t.TempDir())
+
+	// A real git repo (path exists + .git present).
+	good := t.TempDir()
+	if err := os.Mkdir(filepath.Join(good, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A dir without .git.
+	notRepo := t.TempDir()
+
+	cfg := &config.Config{
+		Defaults: config.Defaults{GlobalCap: 1},
+		Projects: []config.Project{
+			{Name: "ok", Path: good},
+			{Name: "norepo", Path: notRepo},
+			{Name: "missing", Path: filepath.Join(good, "nope")},
+		},
+	}
+	r := Check(context.Background(), cfg)
+
+	ok := result(t, r, "project ok")
+	if !ok.OK {
+		t.Errorf("project ok: OK=false (%s), want true", ok.Detail)
+	}
+	if ok.Critical {
+		t.Error("project ok: Critical=true, want false (per-project checks are warnings)")
+	}
+
+	nr := result(t, r, "project norepo")
+	if nr.OK || !strings.Contains(nr.Detail, "not a git repo") {
+		t.Errorf("project norepo: %+v, want failure mentioning git repo", nr)
+	}
+
+	miss := result(t, r, "project missing")
+	if miss.OK || !strings.Contains(miss.Detail, "does not exist") {
+		t.Errorf("project missing: %+v, want path-does-not-exist", miss)
+	}
+
+	// Per-project failures are warnings: with a valid config and tools present,
+	// the report is still OK() (no critical failure).
+	if !r.OK() {
+		t.Error("Report.OK()=false on per-project warnings only, want true")
+	}
+}
+
+func TestDaemonSocketDown(t *testing.T) {
+	pathWith(t, "tmux", "git", "claude", "gh")
+	t.Setenv("LOLA_HOME", t.TempDir())
+
+	r := Check(context.Background(), &config.Config{Defaults: config.Defaults{GlobalCap: 1}})
+	d := result(t, r, checkDaemon)
+	if d.OK {
+		t.Error("daemon: OK=true with no socket, want false")
+	}
+	if d.Critical {
+		t.Error("daemon: Critical=true, want false (doctor must work with daemon down)")
+	}
+	if !strings.Contains(d.Detail, "not running") {
+		t.Errorf("daemon Detail=%q, want 'not running' hint", d.Detail)
+	}
+}
+
+func TestDaemonSocketUp(t *testing.T) {
+	home := t.TempDir()
+	pathWith(t, "tmux", "git", "claude", "gh")
+	t.Setenv("LOLA_HOME", home)
+
+	ln, err := net.Listen("unix", filepath.Join(home, "lola.sock"))
+	if errors.Is(err, syscall.EPERM) {
+		t.Skip("sandbox forbids unix socket bind")
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	r := Check(context.Background(), &config.Config{Defaults: config.Defaults{GlobalCap: 1}})
+	d := result(t, r, checkDaemon)
+	if !d.OK {
+		t.Errorf("daemon: OK=false with socket up (%s), want true", d.Detail)
+	}
+}
+
+func TestSummaryCounts(t *testing.T) {
+	r := Report{Results: []Result{
+		{Name: "a", OK: true},
+		{Name: "b", OK: true},
+		{Name: "c", OK: false, Critical: false}, // warning
+		{Name: "d", OK: false, Critical: true},  // critical
+		{Name: "e", OK: false, Critical: true},  // critical
+	}}
+	if got := r.Summary(); got != "2 ok, 1 warning, 2 critical" {
+		t.Errorf("Summary()=%q, want %q", got, "2 ok, 1 warning, 2 critical")
+	}
+	if r.OK() {
+		t.Error("OK()=true with critical failures, want false")
+	}
+}
+
+func TestRuntimeResultsSubset(t *testing.T) {
+	pathWith(t, "tmux", "git", "claude", "gh")
+	t.Setenv("LOLA_HOME", t.TempDir())
+
+	r := Check(context.Background(), nil)
+	sub := RuntimeResults(r)
+	if len(sub) != 3 {
+		t.Fatalf("RuntimeResults returned %d results, want 3 (tmux/git/claude)", len(sub))
+	}
+	want := map[string]bool{checkTmux: true, checkGit: true, checkClaude: true}
+	for _, res := range sub {
+		if !want[res.Name] {
+			t.Errorf("RuntimeResults included %q, not a runtime tool", res.Name)
+		}
+		if !res.Critical {
+			t.Errorf("%s in RuntimeResults not Critical, want true", res.Name)
+		}
+	}
+}
+
+// assertNoSecret fails if secret appears in any rendered field of the report.
+func assertNoSecret(t *testing.T, r Report, secret string) {
+	t.Helper()
+	for _, res := range r.Results {
+		if strings.Contains(res.Detail, secret) {
+			t.Fatalf("secret leaked into %s Detail: %q", res.Name, res.Detail)
+		}
+		if strings.Contains(res.Name, secret) {
+			t.Fatalf("secret leaked into a Result.Name")
+		}
+	}
+	if strings.Contains(r.Summary(), secret) {
+		t.Fatal("secret leaked into Summary()")
+	}
+}

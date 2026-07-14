@@ -80,7 +80,9 @@ The Makefile sets a repo-local `GOCACHE` so builds work in sandboxed shells.
 
 | Command | Description |
 | --- | --- |
-| `lola` / `lola tui` | Open the TUI (list polls, create/edit/delete, pause/resume; second tab: live session view) |
+| `lola` / `lola tui` | Open the TUI (list polls, create/edit/delete, pause/resume; second tab: live session view). On first run — no `config.toml` yet — this enters the setup wizard first. Press `d` in the polls view for an inline health report. |
+| `lola setup` | Run the first-run configuration wizard (Linear key → Keychain, one `[[project]]`, defaults) and write `config.toml`. Re-runnable any time. |
+| `lola doctor` | Print an aligned health report (tmux/git/claude/gh on PATH, Linear key readable, daemon socket, config validity, per-project repos); exits 1 on a critical failure. Never prints the key value. |
 | `lola run` | Start the daemon (this is what launchd invokes) |
 | `lola stop` | Graceful shutdown: finish in-flight tick, close socket, exit 0 |
 | `lola status` | Table per poll: enabled, last run, last spawn, running, last error — plus `runtimeOk` / `linearOk` health flags |
