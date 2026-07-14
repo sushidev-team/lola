@@ -68,6 +68,8 @@ func (d *Daemon) handle(ctx context.Context, req protocol.Request) protocol.Resp
 		return protocol.Response{OK: true}
 	case "status":
 		return dataResponse(d.statusData(ctx))
+	case "sessions":
+		return dataResponse(d.sessionsData())
 	case "reload":
 		if err := d.handleReload(ctx); err != nil {
 			return protocol.Response{OK: false, Error: err.Error()}
@@ -86,6 +88,52 @@ func (d *Daemon) handle(ctx context.Context, req protocol.Request) protocol.Resp
 		return dataResponse(data)
 	default:
 		return protocol.Response{OK: false, Error: fmt.Sprintf("unknown cmd %q", req.Cmd)}
+	}
+}
+
+// sessionsData builds the reply for cmd=sessions from the observer's cached
+// store snapshot. Nothing is exec'd on the request path — a stale-but-instant
+// answer beats a request that hangs on ao/gh/tmux (observer cadence is 30s).
+func (d *Daemon) sessionsData() protocol.SessionsData {
+	snap := d.sessions.Snapshot()
+	now := time.Now()
+	out := protocol.SessionsData{Sessions: make([]protocol.SessionInfo, 0, len(snap))}
+	for _, s := range snap {
+		si := protocol.SessionInfo{
+			ID:       s.ID,
+			Project:  s.Project,
+			Issue:    s.Issue,
+			Branch:   s.Branch,
+			Status:   s.Status,
+			TmuxName: s.TmuxName,
+			Age:      formatAge(now.Sub(s.FirstSeen)),
+		}
+		if s.PR != nil {
+			si.PRURL = s.PR.URL
+			si.PRNumber = s.PR.Number
+			si.Checks = s.PR.ChecksState
+			si.Review = s.PR.ReviewDecision
+		}
+		out.Sessions = append(out.Sessions, si)
+	}
+	return out
+}
+
+// formatAge renders a duration TUI-compactly: "42s", "12m", "3h05m", "2d14h".
+func formatAge(d time.Duration) string {
+	if d < 0 {
+		d = 0
+	}
+	switch {
+	case d < time.Minute:
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh%02dm", int(d.Hours()), int(d.Minutes())%60)
+	default:
+		days := int(d.Hours()) / 24
+		return fmt.Sprintf("%dd%dh", days, int(d.Hours())%24)
 	}
 }
 

@@ -18,13 +18,22 @@ var (
 	selStyle   = lipgloss.NewStyle().Reverse(true)
 )
 
+// Tabs of the root view (P1.8): the poll manager and the read-only
+// sessions observer.
+const (
+	tabPolls = iota
+	tabSessions
+)
+
 type rootModel struct {
-	cfgPath string
-	cfg     *config.Config
-	list    listModel
-	form    *formModel
-	width   int
-	height  int
+	cfgPath  string
+	cfg      *config.Config
+	tab      int
+	list     listModel
+	sessions sessionsModel
+	form     *formModel
+	width    int
+	height   int
 }
 
 // Run opens the interactive TUI (poll list + cascading edit form).
@@ -111,7 +120,24 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.form != nil {
 			return m, statusTick()
 		}
-		return m, tea.Batch(fetchStatusCmd, statusTick())
+		cmds := []tea.Cmd{fetchStatusCmd, statusTick()}
+		if m.tab == tabSessions {
+			cmds = append(cmds, fetchSessionsCmd)
+			if c := m.previewRefreshCmd(); c != nil {
+				cmds = append(cmds, c)
+			}
+		}
+		return m, tea.Batch(cmds...)
+	case sessionsMsg:
+		return m, m.handleSessionsMsg(v)
+	case previewMsg:
+		m.handlePreviewMsg(v)
+		return m, nil
+	case attachDoneMsg:
+		if v.err != nil {
+			m.sessions.flash = "attach failed: " + v.err.Error()
+		}
+		return m, fetchSessionsCmd
 	case tea.KeyMsg:
 		if v.String() == "ctrl+c" {
 			return m, tea.Quit
@@ -132,12 +158,51 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, cmd
 	}
+	// Tab switching — but never while a delete confirmation awaits y/n.
+	if k, ok := msg.(tea.KeyMsg); ok && !(m.tab == tabPolls && m.list.confirmDelete) {
+		switch k.String() {
+		case "tab":
+			return m.switchTab(1 - m.tab)
+		case "1":
+			return m.switchTab(tabPolls)
+		case "2":
+			return m.switchTab(tabSessions)
+		}
+	}
+	if m.tab == tabSessions {
+		return m.updateSessions(msg)
+	}
 	return m.updateList(msg)
+}
+
+// switchTab activates a tab; entering the sessions tab triggers an immediate
+// fetch (the 5s tick keeps it fresh afterwards).
+func (m *rootModel) switchTab(tab int) (tea.Model, tea.Cmd) {
+	if tab == m.tab {
+		return m, nil
+	}
+	m.tab = tab
+	if tab == tabSessions {
+		return m, fetchSessionsCmd
+	}
+	return m, fetchStatusCmd
+}
+
+// tabBar is the shared header line; the active tab is highlighted.
+func (m *rootModel) tabBar() string {
+	polls, sessions := "1:polls", "2:sessions"
+	if m.tab == tabSessions {
+		return "lola  " + faintText.Render(polls) + "  " + titleStyle.Render(sessions)
+	}
+	return "lola  " + titleStyle.Render(polls) + "  " + faintText.Render(sessions)
 }
 
 func (m *rootModel) View() string {
 	if m.form != nil {
 		return m.form.view(m.height)
+	}
+	if m.tab == tabSessions {
+		return m.sessionsView()
 	}
 	return m.listView()
 }

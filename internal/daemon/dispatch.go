@@ -224,6 +224,15 @@ func (d *Daemon) tick(ctx context.Context, name string, dryRun bool) (protocol.P
 		matched[is.ID] = true
 	}
 
+	// Feed the observer's identifier→branch map from the issue data already
+	// in hand — the cheapest correct source for Linear's branchName (PLAN P1).
+	// Real ticks only: dry runs stay side-effect free.
+	if !dryRun {
+		for _, is := range issues {
+			d.recordBranch(is.Identifier, is.BranchName, p.Repo)
+		}
+	}
+
 	// 5. Cross-poll dedup via the daemon-global in-flight set, then
 	// 6. mode dedup.
 	skip := func(is linear.Issue, reason string) {

@@ -65,7 +65,7 @@ func (l *listModel) teamDisplay(teamID string) string {
 func (m *rootModel) listView() string {
 	l := &m.list
 	var b strings.Builder
-	b.WriteString(titleStyle.Render("lola — polls") + "\n")
+	b.WriteString(m.tabBar() + "\n")
 	if l.status != nil {
 		fmt.Fprintf(&b, "daemon: %s   ao: %s   linear: %s\n\n",
 			goodText.Render("running"),

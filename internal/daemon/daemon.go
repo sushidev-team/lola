@@ -20,7 +20,10 @@ import (
 	"github.com/sushidev-team/lola/internal/ao"
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/linear"
+	"github.com/sushidev-team/lola/internal/scm"
 	"github.com/sushidev-team/lola/internal/secrets"
+	"github.com/sushidev-team/lola/internal/session"
+	"github.com/sushidev-team/lola/internal/tmux"
 )
 
 // AOAPI is the daemon's seam over the AO CLI so ticks are testable with fakes.
@@ -64,6 +67,12 @@ type Daemon struct {
 	seen     *seenStore
 	status   *statusTracker
 
+	// Session observability (PLAN P1): the observer loop's snapshot store and
+	// the tick-fed identifier→branch/repo map it resolves branches from.
+	sessions *session.Store
+	branchMu sync.Mutex
+	branches map[string]branchInfo // Linear identifier -> branch + repo
+
 	ghWarn sync.Once // "gh not on PATH" is logged once per daemon lifetime
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
@@ -73,6 +82,15 @@ type Daemon struct {
 	// callers must fail CLOSED (skip the revert). Overridable in tests;
 	// defaults to the gh-based check.
 	openPR func(ctx context.Context, repo, branch string) (bool, error)
+
+	// prForBranch returns full PR state for branch in repo ("owner/name") or
+	// (nil, nil) when the branch has no PR; the observer's seam over
+	// scm.Client. Overridable in tests.
+	prForBranch func(ctx context.Context, repo, branch string) (*scm.PR, error)
+
+	// tmuxSessions lists tmux sessions for observer correlation; the seam
+	// over tmux.Client. Overridable in tests.
+	tmuxSessions func(ctx context.Context) ([]tmux.Session, error)
 
 	// Socket-initiated tick work (pollOnce) is tracked separately from the
 	// worker/reconcile goroutines so graceful shutdown can drain it too.
@@ -94,8 +112,14 @@ func newDaemon(cfg *config.Config, lin linear.API, aoc AOAPI, logger *log.Logger
 		inflight: newInflightSet(),
 		seen:     newSeenStore(filepath.Join(home, "state")),
 		status:   newStatusTracker(),
+		sessions: session.NewStore(filepath.Join(home, "state")),
+		branches: map[string]branchInfo{},
 	}
 	d.openPR = d.ghOpenPR
+	scmc := &scm.Client{}
+	d.prForBranch = scmc.PRForBranch
+	tmc := &tmux.Client{Bin: "tmux"}
+	d.tmuxSessions = tmc.ListSessions
 	return d
 }
 
@@ -170,6 +194,9 @@ func Run(ctx context.Context) error {
 
 	d.wg.Add(1)
 	go d.reconcileLoop(ctx)
+
+	d.wg.Add(1)
+	go d.observeLoop(ctx)
 
 	go d.serve(ctx, ln)
 
