@@ -104,6 +104,68 @@ func TestUpsertPreservesFirstSeen(t *testing.T) {
 	}
 }
 
+func TestUpdateAppliesAtomically(t *testing.T) {
+	st := NewStore(t.TempDir())
+	st.Upsert(Session{ID: "s", Project: "p", Issue: "ENG-1", Status: "working",
+		PR: &scm.PR{Number: 1, State: "OPEN"}})
+	before := st.Snapshot()[0]
+
+	got, ok := st.Update("s", func(sess *Session) bool {
+		if sess.Status != "working" {
+			t.Errorf("fn sees status %q, want the current record", sess.Status)
+		}
+		sess.Status = "needs_input"
+		sess.PR.State = "MERGED" // fn works on a copy until it commits
+		return true
+	})
+	if !ok || got.Status != "needs_input" {
+		t.Fatalf("Update = (%+v, %v), want the mutated session", got, ok)
+	}
+	after := st.Snapshot()[0]
+	if after.Status != "needs_input" || after.PR.State != "MERGED" {
+		t.Errorf("stored session = %+v, want the mutation applied", after)
+	}
+	if after.LastSeen.Before(before.LastSeen) {
+		t.Errorf("LastSeen went backwards: %v -> %v", before.LastSeen, after.LastSeen)
+	}
+	if !after.FirstSeen.Equal(before.FirstSeen) {
+		t.Errorf("FirstSeen changed on update: %v -> %v", before.FirstSeen, after.FirstSeen)
+	}
+	// The returned session must not alias store state.
+	got.PR.State = "CLOSED"
+	if st.Snapshot()[0].PR.State != "MERGED" {
+		t.Error("mutating the returned PR leaked into the store")
+	}
+}
+
+func TestUpdateDiscardsWhenFnReturnsFalse(t *testing.T) {
+	st := NewStore(t.TempDir())
+	st.Upsert(Session{ID: "s", Project: "p", Issue: "ENG-1", Status: "dead"})
+	before := st.Snapshot()[0]
+
+	if _, ok := st.Update("s", func(sess *Session) bool {
+		sess.Status = "working"
+		return false
+	}); !ok {
+		t.Fatal("Update on a known ID must report ok")
+	}
+	after := st.Snapshot()[0]
+	if after.Status != "dead" {
+		t.Errorf("discarded mutation leaked: status = %q", after.Status)
+	}
+	if !after.LastSeen.Equal(before.LastSeen) {
+		t.Errorf("discarded update must freeze LastSeen: %v -> %v", before.LastSeen, after.LastSeen)
+	}
+}
+
+func TestUpdateUnknownID(t *testing.T) {
+	st := NewStore(t.TempDir())
+	called := false
+	if _, ok := st.Update("ghost", func(*Session) bool { called = true; return true }); ok || called {
+		t.Fatalf("Update on unknown ID: ok=%v called=%v, want false/false", ok, called)
+	}
+}
+
 func TestPruneOlderThan(t *testing.T) {
 	st := NewStore(t.TempDir())
 	st.Upsert(Session{ID: "live", Project: "p", Issue: "ENG-1"})

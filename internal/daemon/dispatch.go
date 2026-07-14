@@ -4,20 +4,34 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"slices"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/sushidev-team/lola/internal/ao"
+	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/linear"
 	"github.com/sushidev-team/lola/internal/protocol"
+	"github.com/sushidev-team/lola/internal/session"
 )
 
 // SeenTTL is the label-mode race-guard window: a seen entry younger than
 // this suppresses a re-match (the label flip may not be visible in Linear
 // yet); older entries are ignored and pruned.
 const SeenTTL = time.Hour
+
+// nativeSpawnTimeout bounds one whole native spawn: worktree add, symlinks,
+// the user-supplied post_create commands, and tmux new-session. Ticks run on
+// a cancel-shielded context (safeTick) while holding the poll's tick mutex,
+// so without a deadline a single wedged post_create (say, `npm ci` against a
+// black-holed registry) would freeze the poll forever, block reconcilePoll on
+// the same mutex, and hang graceful shutdown at d.wg.Wait — the exact bug
+// class the observer bounds with observeExecTimeout. Generous, because
+// post_create legitimately runs package installs.
+const nativeSpawnTimeout = 10 * time.Minute
 
 // Budget returns min(pollCap, globalCap−liveCounted) per the SPEC formula.
 // The result may be <= 0, which means capped out.
@@ -27,6 +41,43 @@ func Budget(pollCap, globalCap, liveCounted int) int {
 		b = pollCap
 	}
 	return b
+}
+
+// nativeCountingStatuses are the derived session-store statuses under which a
+// native session occupies an agent slot. Parked-for-review states (approved,
+// review_pending, no_pr, idle after the PR opened, …) and terminal states
+// (merged, dead, session_ended) hold no slot — mirroring how the AO runtime's
+// [ao].counting_states excludes parked and dead AO sessions, so held PRs never
+// stall new pickups. "draft" counts for the same reason it is in
+// config.DefaultCountingStates: a draft PR means the agent is still iterating
+// and its claude process still occupies a runner.
+var nativeCountingStatuses = map[string]bool{
+	"working":           true,
+	"needs_input":       true,
+	"draft":             true,
+	"ci_failed":         true,
+	"changes_requested": true,
+	"ci_pending":        true,
+}
+
+// NativeLiveCounted returns how many native-runtime sessions in sessions
+// (a session store snapshot) currently occupy an agent slot. Together with
+// the AO-side count it forms a tick's budget — the global cap spans BOTH
+// runtimes, and both counts are always computed together:
+//
+//	liveCounted = aoCounted                       (AO sessions in [ao].counting_states,
+//	                                               from a fresh `ao session ls`)
+//	            + NativeLiveCounted(store)        (native sessions in nativeCountingStatuses)
+//	budget      = Budget(pollCap, globalCap, liveCounted)
+//	            = min(pollCap, globalCap − liveCounted)
+func NativeLiveCounted(sessions []session.Session) int {
+	n := 0
+	for _, s := range sessions {
+		if s.Source == "native" && nativeCountingStatuses[s.Status] {
+			n++
+		}
+	}
+	return n
 }
 
 // SortIssues sorts in place by the given keys ("priority", "createdAt"),
@@ -143,7 +194,18 @@ func (d *Daemon) tick(ctx context.Context, name string, dryRun bool) (protocol.P
 	for _, s := range d.cfg.AO.CountingStates {
 		counting[s] = true
 	}
-	aoc := d.aoc // snapshot under d.mu: reload may swap the client concurrently
+	aoc := d.aoc    // snapshot under d.mu: reload may swap the client concurrently
+	nat := d.native // ditto
+	nativeRt := p.Runtime == config.RuntimeNative
+	var project config.Project // resolved [[project]] for runtime=native
+	if nativeRt {
+		if prj := d.cfg.ProjectByName(p.Project); prj != nil {
+			project = *prj
+			project.PostCreate = slices.Clone(project.PostCreate)
+			project.Symlinks = slices.Clone(project.Symlinks)
+			project.Env = maps.Clone(project.Env)
+		}
+	}
 	d.mu.Unlock()
 
 	now := time.Now()
@@ -173,8 +235,19 @@ func (d *Daemon) tick(ctx context.Context, name string, dryRun bool) (protocol.P
 		return fail(stage, err)
 	}
 
-	// 1. Precheck AO. Down → skip WITHOUT touching seen/labels/in-flight.
-	if !aoc.Reachable(ctx) {
+	// 1. Precheck the spawn backend. runtime=ao: AO down → skip WITHOUT
+	// touching seen/labels/in-flight. runtime=native has no external
+	// orchestrator to probe — worktree/tmux failures surface per spawn — but a
+	// missing project or runtime means misconfiguration, so fail before any
+	// state is touched.
+	if nativeRt {
+		if project.Name == "" {
+			return fail(fmt.Sprintf("unknown project %q (runtime=native)", p.Project), nil)
+		}
+		if nat == nil {
+			return fail("native runtime unavailable", nil)
+		}
+	} else if !aoc.Reachable(ctx) {
 		return fail("AO not running", nil)
 	}
 
@@ -226,10 +299,15 @@ func (d *Daemon) tick(ctx context.Context, name string, dryRun bool) (protocol.P
 
 	// Feed the observer's identifier→branch map from the issue data already
 	// in hand — the cheapest correct source for Linear's branchName (PLAN P1).
-	// Real ticks only: dry runs stay side-effect free.
+	// Real ticks only: dry runs stay side-effect free. Native polls record the
+	// project's repo (config.Project.Repo) — that is where their PRs live.
 	if !dryRun {
+		repoHint := p.Repo
+		if nativeRt && project.Repo != "" {
+			repoHint = project.Repo
+		}
 		for _, is := range issues {
-			d.recordBranch(is.Identifier, is.BranchName, p.Repo)
+			d.recordBranch(is.Identifier, is.BranchName, repoHint)
 		}
 	}
 
@@ -275,22 +353,56 @@ func (d *Daemon) tick(ctx context.Context, name string, dryRun bool) (protocol.P
 	// 7. Deterministic order when capped.
 	SortIssues(candidates, p.PrioritySort)
 
-	// 8. Budget from a FRESH `ao session ls --json`, counting sessions in
-	// counting_states across ALL projects (the global cap is global).
-	sessions, err := aoc.LiveSessions(ctx)
-	if err != nil {
-		return fail("AO not running", err)
-	}
-	liveCounted := 0
-	for _, s := range sessions {
-		if counting[s.Status] {
-			liveCounted++
+	// 8. Budget. The global cap spans BOTH runtimes and both counts are
+	// always computed together (see NativeLiveCounted for the full formula):
+	//
+	//	liveCounted = aoCounted + NativeLiveCounted(session store)
+	//	budget      = min(pollCap, globalCap − liveCounted)
+	//
+	// aoCounted comes from a FRESH `ao session ls --json`, counting sessions
+	// in counting_states across ALL projects. For runtime=ao it is mandatory
+	// (a failure fails the tick, as before); for runtime=native it is
+	// best-effort — an unreachable AO must never block native dispatch and
+	// contributes 0 with a log line.
+	aoCounted := 0
+	countAO := func(sessions []ao.SessionState) {
+		for _, s := range sessions {
+			if counting[s.Status] {
+				aoCounted++
+			}
 		}
 	}
+	if !nativeRt {
+		sessions, err := aoc.LiveSessions(ctx)
+		if err != nil {
+			return fail("AO not running", err)
+		}
+		countAO(sessions)
+	} else {
+		// Best-effort AO probe on the native path, each exec individually
+		// deadline-bounded (same bound as the observer's execs): the tick
+		// runs on a cancel-shielded context under the poll's tick mutex, and
+		// a wedged ao binary must never block native dispatch.
+		cctx, cancel := context.WithTimeout(ctx, observeExecTimeout)
+		reachable := aoc.Reachable(cctx)
+		cancel()
+		if reachable {
+			cctx, cancel := context.WithTimeout(ctx, observeExecTimeout)
+			sessions, err := aoc.LiveSessions(cctx)
+			cancel()
+			if err != nil {
+				d.logf(name, "budget: ao session ls failed, counting native sessions only: %v", err)
+			} else {
+				countAO(sessions)
+			}
+		}
+	}
+	nativeCounted := NativeLiveCounted(d.sessions.Snapshot())
+	liveCounted := aoCounted + nativeCounted
 	budget := Budget(pollCap, globalCap, liveCounted)
 	if budget <= 0 && len(candidates) > 0 {
-		d.logf(name, "capped out: budget=%d (pollCap=%d globalCap=%d liveCounted=%d), %d candidate(s) waiting",
-			budget, pollCap, globalCap, liveCounted, len(candidates))
+		d.logf(name, "capped out: budget=%d (pollCap=%d globalCap=%d aoCounted=%d nativeCounted=%d), %d candidate(s) waiting",
+			budget, pollCap, globalCap, aoCounted, nativeCounted, len(candidates))
 	}
 
 	// 9. Dispatch per issue, up to budget.
@@ -325,12 +437,35 @@ func (d *Daemon) tick(ctx context.Context, name string, dryRun bool) (protocol.P
 			continue
 		}
 
-		// (b) Spawn with the IDENTIFIER (FE-231), never the UUID. The prompt
-		// gives the agent issue context: AO's own issue resolution is
-		// GitHub-only, so without it agents spawned for Linear issues start
-		// blind (PLAN P0.2).
-		prompt := spawnPrompt(is)
-		if err := aoc.Spawn(ctx, p.AOProject, is.Identifier, prompt); err != nil {
+		// (b) Spawn with the IDENTIFIER (FE-231), never the UUID — this is the
+		// per-poll runtime switch. runtime=native: worktree + tmux + claude
+		// via the native runtime; the returned session is upserted into the
+		// store immediately so the very next budget computation counts it.
+		// runtime=ao (default): `ao spawn` with a context prompt (AO's own
+		// issue resolution is GitHub-only, so without it agents spawned for
+		// Linear issues start blind — PLAN P0.2). The in-flight/seen-first
+		// ordering above and the label flip below are identical either way.
+		var spawnErr error
+		spawnTarget := "ao project " + p.AOProject
+		if nativeRt {
+			spawnTarget = "native project " + project.Name
+			// Deadline-bound the whole spawn (worktree + post_create + tmux):
+			// see nativeSpawnTimeout — user-supplied commands run in here and
+			// the shielded tick context alone could never abort them.
+			cctx, cancel := context.WithTimeout(ctx, nativeSpawnTimeout)
+			sess, err := nat.Spawn(cctx, project, is)
+			cancel()
+			if err == nil {
+				d.sessions.Upsert(sess)
+				if serr := d.sessions.Save(); serr != nil {
+					d.logf(name, "persist sessions after native spawn of %s: %v", is.Identifier, serr)
+				}
+			}
+			spawnErr = err
+		} else {
+			spawnErr = aoc.Spawn(ctx, p.AOProject, is.Identifier, spawnPrompt(is))
+		}
+		if spawnErr != nil {
 			// Drop the in-flight claim. In label mode the seen entry stays
 			// as a short-TTL race guard (the un-flipped label retries after
 			// SeenTTL); in seen mode seen is authoritative and never expires
@@ -343,16 +478,16 @@ func (d *Daemon) tick(ctx context.Context, name string, dryRun bool) (protocol.P
 					d.logf(name, "unmark seen for %s after failed spawn: %v", is.Identifier, serr)
 				}
 			}
-			d.logf(name, "spawn %s in %s failed: %v", is.Identifier, p.AOProject, err)
+			d.logf(name, "spawn %s in %s failed: %v", is.Identifier, spawnTarget, spawnErr)
 			errored++
-			lastSpawnErr = fmt.Sprintf("spawn %s failed: %v", is.Identifier, err)
+			lastSpawnErr = fmt.Sprintf("spawn %s failed: %v", is.Identifier, spawnErr)
 			m.Action, m.Reason = "skipped", "error"
 			res.Matches = append(res.Matches, m)
 			continue
 		}
 		spawned++
 		d.status.setLastSpawn(name, time.Now())
-		d.logf(name, "spawned %s into ao project %s", is.Identifier, p.AOProject)
+		d.logf(name, "spawned %s into %s", is.Identifier, spawnTarget)
 		m.Action = "spawned"
 		res.Matches = append(res.Matches, m)
 

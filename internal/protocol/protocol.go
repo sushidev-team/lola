@@ -10,10 +10,33 @@ import (
 )
 
 // Request is one line of JSON sent by a client.
+//
+// Cmd "hookEvent" is the Claude Code → daemon callback path: `lola hook
+// <event>` (see internal/hook) runs inside a Claude Code hook and reports
+// what just happened in the agent session identified by $LOLA_SESSION.
+// Session carries that ID, Event one of the normalized event names below,
+// Detail an optional short reason string (notification_type, stop_reason,
+// end_reason from the hook's stdin payload). The daemon handler lives in
+// internal/daemon: it records the event against the session for state
+// derivation and replies Response{OK:true}; an unknown session yields
+// OK:false with Error. Hook clients treat any reply — or none — as success:
+// a hook must never block or fail an agent's turn.
+//
+// Normalized Event values:
+//
+//	"stop"         Stop hook — the agent finished a turn
+//	"notification" Notification hook — needs input / permission prompt
+//	"session_end"  SessionEnd hook — the session terminated
+//	"tool_use"     PostToolUse hook — liveness heartbeat after a tool call
 type Request struct {
-	Cmd    string `json:"cmd"` // stop|status|reload|enable|disable|pollOnce|sessions
+	Cmd    string `json:"cmd"` // stop|status|reload|enable|disable|pollOnce|sessions|hookEvent
 	Poll   string `json:"poll,omitempty"`
 	DryRun bool   `json:"dryRun,omitempty"`
+
+	// Hook callback fields, set only for cmd=hookEvent.
+	Session string `json:"session,omitempty"` // lola session ID ($LOLA_SESSION in the agent's pane)
+	Event   string `json:"event,omitempty"`   // normalized: stop|notification|session_end|tool_use
+	Detail  string `json:"detail,omitempty"`  // optional: notification_type / stop_reason / end_reason
 }
 
 // Response is one line of JSON sent back by the daemon.
@@ -59,6 +82,8 @@ type SessionInfo struct {
 	Checks   string `json:"checks"`   // pass|fail|pending|none, "" when no PR
 	Review   string `json:"review"`   // APPROVED|CHANGES_REQUESTED|REVIEW_REQUIRED, "" otherwise
 	TmuxName string `json:"tmuxName"` // "" when no tmux session correlates
+	Source   string `json:"source"`   // "ao" | "native"; "" reads as ao (pre-P2 records)
+	Worktree string `json:"worktree"` // native runtime: the session's git worktree dir; "" otherwise
 	Age      string `json:"age"`      // human duration since first observed, e.g. "2h05m"
 }
 

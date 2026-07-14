@@ -184,6 +184,28 @@ func TestNewSessionOmitsEmptyCommand(t *testing.T) {
 	}
 }
 
+func TestKillSessionArgs(t *testing.T) {
+	bin, argsLog := fakeTmux(t, "", "", 0)
+	c := &Client{Bin: bin}
+
+	if err := c.KillSession(context.Background(), "lola-NORI-12-1"); err != nil {
+		t.Fatalf("KillSession: %v", err)
+	}
+	if args := loggedArgs(t, argsLog); args != "kill-session -t =lola-NORI-12-1" {
+		t.Errorf("invoked %q, want exact-match kill-session target", args)
+	}
+}
+
+func TestKillSessionMissingIsError(t *testing.T) {
+	bin, _ := fakeTmux(t, "", "can't find session: =gone", 1)
+	c := &Client{Bin: bin}
+
+	err := c.KillSession(context.Background(), "gone")
+	if err == nil || !strings.Contains(err.Error(), "can't find session") {
+		t.Errorf("want error wrapping stderr for missing session, got %v", err)
+	}
+}
+
 func TestAttachArgs(t *testing.T) {
 	c := &Client{Bin: "tmux"}
 	got := c.AttachArgs("main")

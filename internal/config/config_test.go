@@ -20,6 +20,7 @@ func validPoll() Poll {
 		MatchLabels:       []string{"label-1"},
 		MatchMode:         "any",
 		AssigneeMode:      "me",
+		Runtime:           RuntimeAO,
 		AOProject:         "frontend",
 		Repo:              "sushidev-team/nori-app",
 		ConcurrencyCap:    2,
@@ -28,6 +29,29 @@ func validPoll() Poll {
 		OnSentSetLabel:    "label-sent",
 		OnSentRemoveLabel: "label-1",
 	}
+}
+
+func validProject() Project {
+	return Project{
+		Name:          "nori-app",
+		Path:          "/Volumes/Git/sushi/internal/nori/nori-app",
+		Repo:          "sushidev-team/nori-app",
+		DefaultBranch: "main",
+		PostCreate:    []string{"composer install", "bun install --frozen-lockfile"},
+		Symlinks:      []string{".env"},
+		Env:           map[string]string{"APP_ENV": "local", "CI": "1"},
+	}
+}
+
+// nativePoll is a valid poll running on the native runtime, referencing
+// validProject().
+func nativePoll() Poll {
+	p := validPoll()
+	p.Name = "native-poll"
+	p.Runtime = RuntimeNative
+	p.Project = "nori-app"
+	p.AOProject = ""
+	return p
 }
 
 func TestHomeEnvOverride(t *testing.T) {
@@ -114,7 +138,8 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	orig.Defaults.GlobalCap = 5
 	orig.Linear = LinearConfig{APIKeyKeychain: "lola-linear", APIKeyEnv: "LINEAR_API_KEY", Endpoint: DefaultEndpoint}
 	orig.AO = AOConfig{Bin: "/opt/homebrew/bin/ao", ConfigPath: "/etc/agent-orchestrator.yaml", CountingStates: []string{"working", "in_progress"}}
-	orig.Polls = []Poll{validPoll()}
+	orig.Projects = []Project{validProject()}
+	orig.Polls = []Poll{validPoll(), nativePoll()}
 
 	if err := orig.Save(path); err != nil {
 		t.Fatal(err)
@@ -187,6 +212,79 @@ config_path = "~/ao/agent-orchestrator.yaml"
 	}
 	if c.Linear.Endpoint != DefaultEndpoint {
 		t.Errorf("endpoint = %q, want default", c.Linear.Endpoint)
+	}
+}
+
+// Projects get default_branch = "main" and a tilde-expanded path on load;
+// polls get runtime = "ao" when unset, while explicit values are kept.
+func TestLoadProjectAndRuntimeDefaults(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "config.toml")
+	body := `
+[[project]]
+name = "nori-app"
+path = "~/code/nori-app"
+
+[[project]]
+name = "pinned"
+path = "/srv/pinned"
+default_branch = "develop"
+
+[[poll]]
+name = "ao-poll"
+
+[[poll]]
+name = "native-poll"
+runtime = "native"
+project = "nori-app"
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if want := filepath.Join(home, "code", "nori-app"); c.Projects[0].Path != want {
+		t.Errorf("project path = %q, want expanded %q", c.Projects[0].Path, want)
+	}
+	if c.Projects[0].DefaultBranch != DefaultBranchName {
+		t.Errorf("default_branch = %q, want default %q", c.Projects[0].DefaultBranch, DefaultBranchName)
+	}
+	if c.Projects[1].DefaultBranch != "develop" {
+		t.Errorf("explicit default_branch = %q, want develop", c.Projects[1].DefaultBranch)
+	}
+	if c.Polls[0].Runtime != RuntimeAO {
+		t.Errorf("unset runtime = %q, want default %q", c.Polls[0].Runtime, RuntimeAO)
+	}
+	if c.Polls[1].Runtime != RuntimeNative {
+		t.Errorf("explicit runtime = %q, want %q", c.Polls[1].Runtime, RuntimeNative)
+	}
+	if c.Polls[1].Project != "nori-app" {
+		t.Errorf("poll project = %q, want nori-app", c.Polls[1].Project)
+	}
+}
+
+// The projects table round-trips including post_create, symlinks, and the
+// env map — nested tables under [[project]] must survive Save/Load.
+func TestProjectRoundTripEnvMap(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	orig := &Config{}
+	orig.applyDefaults()
+	orig.Projects = []Project{validProject()}
+	if err := orig.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(orig.Projects, got.Projects) {
+		t.Errorf("projects round trip mismatch:\n save: %+v\n load: %+v", orig.Projects, got.Projects)
 	}
 }
 
@@ -422,6 +520,66 @@ func TestValidateMatrix(t *testing.T) {
 		{"cap zero without default", func(c *Config) { c.Polls[0].ConcurrencyCap = 0 }, "concurrency_cap"},
 		{"cap negative without default", func(c *Config) { c.Polls[0].ConcurrencyCap = -2 }, "concurrency_cap"},
 		{"cap zero with default ok", func(c *Config) { c.Polls[0].ConcurrencyCap = 0; c.Defaults.ConcurrencyCap = 2 }, ""},
+
+		{"project valid ok", func(c *Config) { c.Projects = []Project{validProject()} }, ""},
+		{"project name required", func(c *Config) {
+			p := validProject()
+			p.Name = ""
+			c.Projects = []Project{p}
+		}, "project[0]: name is required"},
+		{"duplicate project names rejected", func(c *Config) {
+			c.Projects = []Project{validProject(), validProject()}
+		}, `project "nori-app": duplicate name`},
+		{"project path required", func(c *Config) {
+			p := validProject()
+			p.Path = ""
+			c.Projects = []Project{p}
+		}, "path is required"},
+		{"project repo empty ok", func(c *Config) {
+			p := validProject()
+			p.Repo = ""
+			c.Projects = []Project{p}
+		}, ""},
+		{"project repo url rejected", func(c *Config) {
+			p := validProject()
+			p.Repo = "https://github.com/sushidev-team/nori-app"
+			c.Projects = []Project{p}
+		}, `project "nori-app": repo must be "owner/name"`},
+		{"project validated even with zero polls", func(c *Config) {
+			c.Polls = nil
+			p := validProject()
+			p.Path = ""
+			c.Projects = []Project{p}
+		}, "path is required"},
+
+		{"runtime empty treated as ao", func(c *Config) { c.Polls[0].Runtime = "" }, ""},
+		{"runtime ao ok", func(c *Config) { c.Polls[0].Runtime = RuntimeAO }, ""},
+		// ao_project is enforced at enable time / TUI form save, never
+		// statically: pre-P2 configs without it must stay valid, or upgrading
+		// lola would hold EVERY poll of an otherwise-working config.
+		{"runtime ao without ao_project stays valid", func(c *Config) { c.Polls[0].AOProject = "" }, ""},
+		{"empty runtime without ao_project stays valid", func(c *Config) {
+			c.Polls[0].Runtime = ""
+			c.Polls[0].AOProject = ""
+		}, ""},
+		{"runtime native with defined project ok", func(c *Config) {
+			c.Projects = []Project{validProject()}
+			c.Polls[0] = nativePoll()
+		}, ""},
+		{"runtime native requires project", func(c *Config) {
+			c.Projects = []Project{validProject()}
+			c.Polls[0] = nativePoll()
+			c.Polls[0].Project = ""
+		}, "runtime=native requires project"},
+		{"runtime native project must resolve", func(c *Config) {
+			c.Projects = []Project{validProject()}
+			c.Polls[0] = nativePoll()
+			c.Polls[0].Project = "ghost"
+		}, `project "ghost" is not defined`},
+		{"runtime native without any projects rejected", func(c *Config) {
+			c.Polls[0] = nativePoll()
+		}, `project "nori-app" is not defined`},
+		{"bad runtime enum", func(c *Config) { c.Polls[0].Runtime = "docker" }, "runtime must be ao|native"},
 	}
 
 	for _, tc := range cases {
@@ -483,6 +641,44 @@ func TestPollByName(t *testing.T) {
 	}
 	if c.PollByName("missing") != nil {
 		t.Error("PollByName must return nil for unknown name")
+	}
+}
+
+func TestProjectByName(t *testing.T) {
+	c := &Config{Projects: []Project{validProject()}}
+	p := c.ProjectByName("nori-app")
+	if p == nil {
+		t.Fatal("ProjectByName returned nil for existing project")
+	}
+	p.DefaultBranch = "develop"
+	if c.Projects[0].DefaultBranch != "develop" {
+		t.Error("ProjectByName must return a pointer into Projects")
+	}
+	if c.ProjectByName("missing") != nil {
+		t.Error("ProjectByName must return nil for unknown name")
+	}
+}
+
+// The shipped example config must always load and validate cleanly.
+func TestExampleConfigLoadsAndValidates(t *testing.T) {
+	c, err := Load(filepath.Join("..", "..", "config.example.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Validate(); err != nil {
+		t.Errorf("config.example.toml does not validate: %v", err)
+	}
+	if c.ProjectByName("nori-app") == nil {
+		t.Error("example config should define project nori-app")
+	}
+	hasNative := false
+	for _, p := range c.Polls {
+		if p.Runtime == RuntimeNative {
+			hasNative = true
+		}
+	}
+	if !hasNative {
+		t.Error("example config should include a native-runtime poll")
 	}
 }
 

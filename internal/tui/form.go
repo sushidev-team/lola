@@ -39,6 +39,8 @@ const (
 	fAssignee
 	fAssigneeUser
 	fAOProject
+	fRuntime
+	fNativeProject
 	fRepo
 	fCap
 	fDedup
@@ -93,6 +95,9 @@ func newFormModel(cfg *config.Config, existing *config.Poll) (*formModel, tea.Cm
 		f.poll = config.Poll{CycleMode: "none", MatchMode: "any", AssigneeMode: "anyone", DedupMode: "seen"}
 		f.capBuf = "1"
 	}
+	if f.poll.Runtime == "" {
+		f.poll.Runtime = config.RuntimeAO // Load defaults it too; keep the picker honest
+	}
 	f.aoProjects, f.aoErr = loadAOProjects(cfg)
 
 	var cmd tea.Cmd
@@ -139,7 +144,11 @@ func (f *formModel) fields() []fieldID {
 		if f.poll.AssigneeMode == "user" {
 			fs = append(fs, fAssigneeUser)
 		}
-		fs = append(fs, fAOProject, fRepo, fCap, fDedup)
+		fs = append(fs, fAOProject, fRuntime)
+		if f.poll.Runtime == config.RuntimeNative {
+			fs = append(fs, fNativeProject)
+		}
+		fs = append(fs, fRepo, fCap, fDedup)
 		if f.poll.DedupMode == "label" {
 			fs = append(fs, fSetLabel, fRemoveLabel)
 		}
@@ -373,6 +382,27 @@ func (f *formModel) openPicker(cur fieldID) tea.Cmd {
 			opts = append(opts, pickOpt{name, name})
 		}
 		selected = []string{f.poll.AOProject}
+	case fRuntime:
+		title = "Runtime"
+		opts = []pickOpt{
+			{config.RuntimeAO, "ao — dispatch to Agent Orchestrator"},
+			{config.RuntimeNative, "native — lola's own worktree + tmux + claude"},
+		}
+		selected = []string{f.poll.Runtime}
+	case fNativeProject:
+		if len(f.cfg.Projects) == 0 {
+			f.loadErr = "no [[project]] entries in config.toml — define one to use runtime=native"
+			return nil
+		}
+		title = "Native project"
+		for _, pr := range f.cfg.Projects {
+			lbl := pr.Name
+			if pr.Repo != "" {
+				lbl += " (" + pr.Repo + ")"
+			}
+			opts = append(opts, pickOpt{pr.Name, lbl})
+		}
+		selected = []string{f.poll.Project}
 	case fDedup:
 		title = "Dedup mode"
 		opts = []pickOpt{{"label", "label (flip trigger label on spawn)"}, {"seen", "seen (local seen-file)"}}
@@ -491,6 +521,12 @@ func (f *formModel) applyPick(p *picker) tea.Cmd {
 		f.poll.AssigneeUserID = id
 	case fAOProject:
 		f.poll.AOProject = id
+	case fRuntime:
+		// Switching runtime keeps both ao_project and project values — only
+		// the active one is validated, and flipping back must not lose state.
+		f.poll.Runtime = id
+	case fNativeProject:
+		f.poll.Project = id
 	case fDedup:
 		f.poll.DedupMode = id
 	case fSetLabel:
@@ -519,14 +555,18 @@ func (f *formModel) save() (tea.Cmd, formEvent) {
 		p.PrioritySort = []string{"priority", "createdAt"}
 	}
 
-	// ao_project must resolve against agent-orchestrator.yaml — refuse otherwise.
-	switch {
-	case f.aoErr != "":
-		f.errs = append(f.errs, "cannot verify ao_project: "+f.aoErr)
-	case p.AOProject == "":
-		f.errs = append(f.errs, "ao_project is required")
-	case !slices.Contains(f.aoProjects, p.AOProject):
-		f.errs = append(f.errs, fmt.Sprintf("ao_project %q not found in %s", p.AOProject, f.cfg.AO.ConfigPath))
+	// ao_project must resolve against agent-orchestrator.yaml — refuse
+	// otherwise. Native polls skip this entirely (AO may not even be
+	// installed); their project reference is checked by nc.Validate below.
+	if p.Runtime != config.RuntimeNative {
+		switch {
+		case f.aoErr != "":
+			f.errs = append(f.errs, "cannot verify ao_project: "+f.aoErr)
+		case p.AOProject == "":
+			f.errs = append(f.errs, "ao_project is required")
+		case !slices.Contains(f.aoProjects, p.AOProject):
+			f.errs = append(f.errs, fmt.Sprintf("ao_project %q not found in %s", p.AOProject, f.cfg.AO.ConfigPath))
+		}
 	}
 
 	// Rebase on the on-disk config: the daemon (enable/disable) or another
@@ -647,6 +687,10 @@ func (f *formModel) label(fd fieldID) string {
 		return "Assigned user"
 	case fAOProject:
 		return "AO project"
+	case fRuntime:
+		return "Runtime"
+	case fNativeProject:
+		return "Native project"
 	case fRepo:
 		return "GitHub repo"
 	case fCap:
@@ -733,11 +777,29 @@ func (f *formModel) display(fd fieldID) string {
 		return shortID(f.poll.AssigneeUserID)
 	case fAOProject:
 		if f.poll.AOProject == "" {
+			if f.poll.Runtime == config.RuntimeNative {
+				return faintText.Render("(unused — runtime is native)")
+			}
 			return sel
 		}
 		return f.poll.AOProject
+	case fRuntime:
+		if f.poll.Runtime == "" {
+			return config.RuntimeAO
+		}
+		return f.poll.Runtime
+	case fNativeProject:
+		if f.poll.Project == "" {
+			return sel
+		}
+		return f.poll.Project
 	case fRepo:
 		if f.poll.Repo == "" {
+			// The daemon owns the fallback: native polls use the [[project]]
+			// repo for PR checks when this is empty (dispatch/observer).
+			if f.poll.Runtime == config.RuntimeNative {
+				return faintText.Render("(owner/name — empty falls back to the [[project]] repo)")
+			}
 			return faintText.Render("(owner/name — empty disables open-PR checks)")
 		}
 		return f.poll.Repo

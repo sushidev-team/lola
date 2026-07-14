@@ -25,11 +25,14 @@ const previewLines = 8
 var (
 	statusBlue   = lipgloss.NewStyle().Foreground(lipgloss.Color("12"))
 	statusOrange = lipgloss.NewStyle().Foreground(lipgloss.Color("208"))
+	statusDeadBg = lipgloss.NewStyle().Foreground(lipgloss.Color("15")).Background(lipgloss.Color("9"))
+	srcNative    = lipgloss.NewStyle().Foreground(lipgloss.Color("14"))
 )
 
 // statusStyle maps a derived session status (scm.DeriveStatus / AO attention
-// states) to its display style: working=blue, failures=red, approved=green,
-// attention=orange, merged=dim; anything else unstyled.
+// states / native runtime states) to its display style: working=blue,
+// failures=red, approved=green, attention=orange, dead=red background,
+// merged/session_ended/idle=dim; anything else unstyled.
 func statusStyle(status string) lipgloss.Style {
 	switch status {
 	case "working":
@@ -40,10 +43,22 @@ func statusStyle(status string) lipgloss.Style {
 		return goodText
 	case "needs_input", "no_signal":
 		return statusOrange
-	case "merged":
+	case "dead":
+		return statusDeadBg
+	case "merged", "session_ended", "idle":
 		return faintText
 	}
 	return lipgloss.NewStyle()
+}
+
+// sourceBadge renders which backend spawned a session: native sessions are
+// lola's own runners (P2); everything else — including pre-P2 records with an
+// empty source — came through the AO bridge.
+func sourceBadge(source string) string {
+	if source == "native" {
+		return srcNative.Render("[native]")
+	}
+	return faintText.Render("[ao]")
 }
 
 type sessionsModel struct {
@@ -288,7 +303,8 @@ func (m *rootModel) sessionsTable() string {
 }
 
 // sessionDetail is the bottom pane: live capture-pane preview for tmux-backed
-// sessions, a static detail card otherwise.
+// sessions, a static detail card otherwise. Both variants lead with a source
+// badge (ao|native); native sessions additionally show their worktree dir.
 func (m *rootModel) sessionDetail() string {
 	s := &m.sessions
 	sel := s.selected()
@@ -297,7 +313,11 @@ func (m *rootModel) sessionDetail() string {
 	}
 	var b strings.Builder
 	if sel.TmuxName != "" {
-		b.WriteString(tblHeader.Render("preview") + faintText.Render(" — tmux "+sel.TmuxName) + "\n")
+		b.WriteString(tblHeader.Render("preview") + " " + sourceBadge(sel.Source) +
+			faintText.Render(" — tmux "+sel.TmuxName) + "\n")
+		if sel.Worktree != "" {
+			b.WriteString(faintText.Render("worktree: "+sel.Worktree) + "\n")
+		}
 		if s.previewFor == sel.ID && s.preview != "" {
 			for _, ln := range lastLines(s.preview, previewLines) {
 				b.WriteString(previewLine(ln, m.width) + "\n")
@@ -307,12 +327,14 @@ func (m *rootModel) sessionDetail() string {
 		}
 		return b.String()
 	}
-	b.WriteString(tblHeader.Render("detail") + faintText.Render(" — no tmux session (AO desktop runtime)") + "\n")
-	fmt.Fprintf(&b, "issue:   %s\n", dash(sel.Issue))
-	fmt.Fprintf(&b, "branch:  %s\n", dash(sel.Branch))
-	fmt.Fprintf(&b, "pr:      %s\n", dash(sel.PRURL))
-	fmt.Fprintf(&b, "status:  %s\n", statusStyle(sel.Status).Render(sel.Status))
-	fmt.Fprintf(&b, "age:     %s\n", dash(sel.Age))
+	b.WriteString(tblHeader.Render("detail") + " " + sourceBadge(sel.Source) +
+		faintText.Render(" — no tmux session (AO desktop runtime)") + "\n")
+	fmt.Fprintf(&b, "issue:    %s\n", dash(sel.Issue))
+	fmt.Fprintf(&b, "branch:   %s\n", dash(sel.Branch))
+	fmt.Fprintf(&b, "worktree: %s\n", dash(sel.Worktree))
+	fmt.Fprintf(&b, "pr:       %s\n", dash(sel.PRURL))
+	fmt.Fprintf(&b, "status:   %s\n", statusStyle(sel.Status).Render(sel.Status))
+	fmt.Fprintf(&b, "age:      %s\n", dash(sel.Age))
 	return b.String()
 }
 

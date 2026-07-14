@@ -131,6 +131,14 @@ func (c *Client) SendKeys(ctx context.Context, name, text string) error {
 	return err
 }
 
+// KillSession terminates the session named exactly name. Killing a session
+// that does not exist is an error (tmux exits non-zero); callers that want
+// idempotence check Has first.
+func (c *Client) KillSession(ctx context.Context, name string) error {
+	_, _, err := c.run(ctx, "kill-session", "-t", "="+name)
+	return err
+}
+
 // AttachArgs returns the argv for attaching to the session; the caller (the
 // TUI via tea.ExecProcess) execs it itself so tmux takes over the terminal.
 func (c *Client) AttachArgs(name string) []string {

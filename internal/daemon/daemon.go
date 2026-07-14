@@ -20,10 +20,12 @@ import (
 	"github.com/sushidev-team/lola/internal/ao"
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/linear"
+	"github.com/sushidev-team/lola/internal/runtime"
 	"github.com/sushidev-team/lola/internal/scm"
 	"github.com/sushidev-team/lola/internal/secrets"
 	"github.com/sushidev-team/lola/internal/session"
 	"github.com/sushidev-team/lola/internal/tmux"
+	"github.com/sushidev-team/lola/internal/worktree"
 )
 
 // AOAPI is the daemon's seam over the AO CLI so ticks are testable with fakes.
@@ -35,6 +37,18 @@ type AOAPI interface {
 }
 
 var _ AOAPI = (*ao.Client)(nil)
+
+// NativeAPI is the daemon's seam over the native runtime (runtime.Native) so
+// dispatch, observation, adoption, and kills are testable with fakes. It
+// mirrors runtime.Native's exported lifecycle surface.
+type NativeAPI interface {
+	Spawn(ctx context.Context, p config.Project, issue linear.Issue) (session.Session, error)
+	Adopt(ctx context.Context) ([]session.Session, error)
+	Kill(ctx context.Context, s session.Session, removeWorktree bool) error
+	Alive(ctx context.Context, s session.Session) bool
+}
+
+var _ NativeAPI = (*runtime.Native)(nil)
 
 // worker is one running poll goroutine. poll/interval are snapshots taken at
 // start time and used only for reload diffing; ticks always read the live
@@ -58,7 +72,13 @@ type Daemon struct {
 	viewerID string
 	aoc      AOAPI
 	realAO   bool // aoc is a *ao.Client we own (recreate when [ao].bin changes)
-	workers  map[string]*worker
+	// Native runtime (PLAN P2): lola's own worktree+tmux+claude spawner for
+	// runtime=native polls. nil until Run wires the real one; tests inject
+	// fakes directly.
+	native     NativeAPI
+	realNative bool   // native is a *runtime.Native we own (recreate on reload when projects change)
+	lolaBin    string // this executable; Claude Code hooks call back via `<lolaBin> hook <event>`
+	workers    map[string]*worker
 
 	tickMuMu sync.Mutex
 	tickMus  map[string]*sync.Mutex // per-poll tick mutual exclusion
@@ -74,6 +94,13 @@ type Daemon struct {
 	branches map[string]branchInfo // Linear identifier -> branch + repo
 
 	ghWarn sync.Once // "gh not on PATH" is logged once per daemon lifetime
+
+	// hookWarned dedupes "unknown session" hookEvent log lines: hooks fire
+	// after every agent turn/tool call, so an untracked session would
+	// otherwise flood the daemon log.
+	hookWarnMu sync.Mutex
+	hookWarned map[string]bool
+
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 
@@ -114,6 +141,8 @@ func newDaemon(cfg *config.Config, lin linear.API, aoc AOAPI, logger *log.Logger
 		status:   newStatusTracker(),
 		sessions: session.NewStore(filepath.Join(home, "state")),
 		branches: map[string]branchInfo{},
+
+		hookWarned: map[string]bool{},
 	}
 	d.openPR = d.ghOpenPR
 	scmc := &scm.Client{}
@@ -152,6 +181,18 @@ func Run(ctx context.Context) error {
 	}
 	d := newDaemon(cfg, nil, &ao.Client{Bin: cfg.AO.Bin}, logger, home)
 	d.realAO = true
+
+	// Native runtime (PLAN P2): lola's own worktree+tmux+claude spawner. The
+	// generated per-session Claude Code settings wire the lifecycle hooks to
+	// `<lolaBin> hook <event>`, so LolaBin must be THIS executable.
+	lolaBin, err := os.Executable()
+	if err != nil {
+		logger.Printf("resolve lola binary (session hooks fall back to PATH lookup): %v", err)
+		lolaBin = "lola"
+	}
+	d.lolaBin = lolaBin
+	d.native = newNativeRuntime(cfg, home, lolaBin)
+	d.realNative = true
 	if err := cfg.Validate(); err != nil {
 		// Not fatal: the daemon stays up so status/reload can surface and
 		// fix it — but polls are HELD (never ticked). Reload rejects the
@@ -190,6 +231,11 @@ func Run(ctx context.Context) error {
 		}
 	}()
 
+	// Session adoption (PLAN P2.15): re-pair surviving tmux sessions and
+	// worktrees from a previous daemon into the store BEFORE the first tick,
+	// so adopted sessions count against the cap right away.
+	d.adoptNativeSessions(ctx)
+
 	d.syncWorkers(ctx)
 
 	d.wg.Add(1)
@@ -207,6 +253,9 @@ func Run(ctx context.Context) error {
 	// reconcile AND socket-initiated pollOnce) to finish, close the socket,
 	// remove the socket file, exit nil. Ticks run on a context shielded from
 	// this cancellation (see safeTick), so they finish rather than abort.
+	// Native tmux sessions are deliberately NOT killed here: the tmux server
+	// owns them and they survive lola restarts by design — the next daemon
+	// re-adopts them (adoptNativeSessions).
 	d.stopAllWorkers()
 	d.wg.Wait()
 	d.drainConnWork()
@@ -431,6 +480,79 @@ func (d *Daemon) tickMutex(name string) *sync.Mutex {
 		d.tickMus[name] = m
 	}
 	return m
+}
+
+// newNativeRuntime assembles the production native runtime for cfg: worktrees
+// under <home>/worktrees, tmux and claude resolved via PATH, and Claude Code
+// lifecycle hooks calling back through lolaBin.
+func newNativeRuntime(cfg *config.Config, home, lolaBin string) *runtime.Native {
+	return &runtime.Native{
+		Cfg:     cfg,
+		WT:      &worktree.Manager{Root: filepath.Join(home, "worktrees")},
+		Tmux:    &tmux.Client{Bin: "tmux"},
+		LolaBin: lolaBin,
+		Home:    home,
+	}
+}
+
+// adoptNativeSessions is the restart-recovery scan (PLAN P2.15): every finding
+// from runtime.Adopt is upserted into the session store — live pairs as
+// "working", worktrees without a pane as "dead", panes without a worktree as
+// "orphaned" — and anomalies are reported to the log. Facts observation cannot
+// recover (branch, repo, issue UUID, PR state) are preserved from a previously
+// persisted record. Adoption never kills sessions or removes worktrees; acting
+// on dead/orphaned candidates is the reconcile pass's decision.
+func (d *Daemon) adoptNativeSessions(ctx context.Context) {
+	d.mu.Lock()
+	nat := d.native
+	d.mu.Unlock()
+	if nat == nil {
+		return
+	}
+	found, err := nat.Adopt(ctx)
+	if err != nil {
+		d.logf("", "adopt: native session scan failed: %v", err)
+		return
+	}
+	for _, s := range found {
+		if prev, ok := d.sessions.Get(s.ID); ok {
+			if s.Branch == "" {
+				s.Branch = prev.Branch
+			}
+			if s.Repo == "" {
+				s.Repo = prev.Repo
+			}
+			if s.Issue == "" {
+				s.Issue = prev.Issue
+			}
+			if s.IssueUUID == "" {
+				s.IssueUUID = prev.IssueUUID
+			}
+			s.PR = prev.PR
+			if s.Status == "dead" && prev.Status == "merged" {
+				// A merged session's pane going away is the expected end of
+				// life, not an anomaly worth resurrecting as "dead".
+				s.Status = "merged"
+			}
+		}
+		if s.TmuxName == "" {
+			s.TmuxName = s.ID // native sessions ARE tmux sessions
+		}
+		switch s.Status {
+		case "dead":
+			d.logf("", "adopt: %s has a worktree but no tmux session (dead; reconcile may revert its issue)", s.ID)
+		case "orphaned":
+			d.logf("", "adopt: %s is a lola tmux session without a worktree (orphaned; kill candidate)", s.ID)
+		}
+		d.sessions.Upsert(s)
+	}
+	if len(found) == 0 {
+		return
+	}
+	d.logf("", "adopt: %d native session(s) recorded", len(found))
+	if err := d.sessions.Save(); err != nil {
+		d.logf("", "adopt: persist sessions: %v", err)
+	}
 }
 
 // logf prefixes log lines with the poll name when applicable.

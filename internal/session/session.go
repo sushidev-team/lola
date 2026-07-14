@@ -143,6 +143,46 @@ func (s *Store) Upsert(sess Session) {
 	s.sessions[sess.ID] = sess
 }
 
+// Update applies fn to the stored session with the given id as ONE atomic
+// read-modify-write under the store lock, returning the resulting session (a
+// copy) and whether the id was known. fn receives a copy of the current
+// record (PR copied, never aliasing store state) and returns whether to keep
+// the mutation: true stores it back (LastSeen stamped now, like Upsert),
+// false discards it and leaves the record — including LastSeen — untouched.
+// fn must not change the ID and must not call back into the store.
+//
+// Callers whose new state DERIVES from the current record (the observer's
+// status merge, hook-event transitions) must use Update instead of
+// Get→mutate→Upsert: the unlocked variant races concurrent writers and a
+// stale snapshot would silently erase their transitions.
+func (s *Store) Update(id string, fn func(sess *Session) bool) (Session, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sess, ok := s.sessions[id]
+	if !ok {
+		return Session{}, false
+	}
+	if sess.PR != nil {
+		pr := *sess.PR
+		sess.PR = &pr
+	}
+	if !fn(&sess) {
+		return sess, true
+	}
+	sess.ID = id // the key is immutable
+	sess.LastSeen = time.Now()
+	if sess.FirstSeen.IsZero() {
+		sess.FirstSeen = sess.LastSeen
+	}
+	stored := sess
+	if stored.PR != nil {
+		pr := *stored.PR
+		stored.PR = &pr // never share a pointer with the caller
+	}
+	s.sessions[id] = stored
+	return sess, true
+}
+
 // PruneOlderThan drops sessions whose LastSeen is older than d and returns
 // how many were removed. Dead sessions age out of the snapshot this way.
 func (s *Store) PruneOlderThan(d time.Duration) int {

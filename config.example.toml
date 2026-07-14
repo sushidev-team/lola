@@ -40,6 +40,37 @@ config_path = "~/.config/agent-orchestrator/agent-orchestrator.yaml"
 counting_states = ["working", "no_signal", "needs_input", "draft", "ci_failed", "changes_requested"]
 
 # ---------------------------------------------------------------------------
+# [[project]] — repository registry for the NATIVE runtime (one table per
+# repo). Polls with runtime = "native" reference a project by name; lola then
+# creates a git worktree per session under ~/.lola/worktrees/<project>/... and
+# runs Claude Code in tmux inside it. Not needed for runtime = "ao" polls.
+# ---------------------------------------------------------------------------
+[[project]]
+name = "nori-app"
+# Absolute path to the main checkout (a leading ~ is expanded on load).
+# Worktrees are created NEXT TO it under ~/.lola/, never inside it.
+path = "/Volumes/Git/sushi/internal/nori/nori-app"
+# GitHub "owner/name"; used for PR/CI observation of native sessions.
+repo = "sushidev-team/nori-app"
+# Branch new session worktrees start from. Default when omitted: "main".
+default_branch = "main"
+# Commands run inside a fresh worktree BEFORE the agent starts; any failure
+# blocks the session (a clear error status, never a half-started agent).
+post_create = [
+  "composer install",
+  "bun install --frozen-lockfile",
+]
+# Files symlinked from the main checkout into each worktree.
+# CAVEAT: symlinking .env means every worktree talks to the SAME database
+# (and caches, queues, ...) as the main checkout — concurrent sessions can
+# step on each other's migrations and seed data. Point sessions at separate
+# databases if that matters for your project.
+symlinks = [".env"]
+# Extra environment variables exported into each session.
+[project.env]
+# APP_ENV = "local"
+
+# ---------------------------------------------------------------------------
 # Poll 1: label-flip dedup. Issues in the frontend team's active cycle,
 # in a "Ready for agent" state, carrying the "agent-queue" trigger label.
 # After a successful spawn, lola removes the trigger label and sets the
@@ -66,8 +97,12 @@ match_mode = "any"
 # assignee_user_id.
 assignee_mode = "me"
 assignee_user_id = ""
+# ao | native. ao (the default when omitted) dispatches to Agent Orchestrator
+# and requires ao_project; native spawns lola's own worktree + tmux + Claude
+# Code runner and requires project (see poll 3).
+runtime = "ao"
 # Must exist as a project in agent-orchestrator.yaml (validated on
-# save/enable).
+# save/enable). Used only when runtime = "ao".
 ao_project = "frontend"
 # GitHub repository ("owner/name") for this poll's issues. The reconciler
 # passes it to `gh pr list --repo` so its open-PR check works from any
@@ -114,3 +149,31 @@ priority_sort = ["priority", "createdAt"]
 dedup_mode = "seen"
 on_sent_set_label = ""
 on_sent_remove_label = ""
+
+# ---------------------------------------------------------------------------
+# Poll 3: NATIVE runtime. Instead of `ao spawn`, lola creates a git worktree
+# from the referenced [[project]], runs its post_create commands and symlinks,
+# and starts Claude Code in a fresh tmux session with the full Linear issue as
+# the prompt. `project` must match a [[project]].name; ao_project is unused.
+# ---------------------------------------------------------------------------
+[[poll]]
+name = "nori-native"
+enabled = false
+team_id = "team_FE00aaaa-1111-2222-3333-444455556666"
+project_id = ""
+cycle_mode = "active"
+cycle_id = ""
+state_ids = ["state_aaaa0000-1111-2222-3333-444455556666"]
+match_labels = ["label_trig0000-1111-2222-3333-444455556666"]
+match_mode = "any"
+assignee_mode = "me"
+assignee_user_id = ""
+runtime = "native"
+# References [[project]].name above; required when runtime = "native".
+project = "nori-app"
+repo = "sushidev-team/nori-app"
+concurrency_cap = 2
+priority_sort = ["priority", "createdAt"]
+dedup_mode = "label"
+on_sent_set_label = "label_sent0000-1111-2222-3333-444455556666"
+on_sent_remove_label = "label_trig0000-1111-2222-3333-444455556666"

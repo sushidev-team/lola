@@ -14,6 +14,7 @@ func cannedSessions() *protocol.SessionsData {
 		{
 			ID: "s1", Project: "web", Issue: "ENG-123", Branch: "lola/eng-123",
 			Status: "working", TmuxName: "lola-eng-123", Age: "2h05m",
+			Source: "native", Worktree: "/tmp/lola/worktrees/web/lola-web-eng-123",
 		},
 		{
 			ID: "s2", Project: "api", Issue: "ENG-456", Branch: "lola/eng-456",
@@ -81,11 +82,42 @@ func TestStatusStyleMapping(t *testing.T) {
 			t.Errorf("statusStyle(%q) foreground = %v, want %v", c.status, got, c.fg)
 		}
 	}
-	if !statusStyle("merged").GetFaint() {
-		t.Error("statusStyle(merged) must be faint")
+	for _, dim := range []string{"merged", "session_ended", "idle"} {
+		if !statusStyle(dim).GetFaint() {
+			t.Errorf("statusStyle(%q) must be faint", dim)
+		}
+	}
+	if bg := statusStyle("dead").GetBackground(); bg != lipgloss.Color("9") {
+		t.Errorf("statusStyle(dead) background = %v, want red (9)", bg)
 	}
 	if fg := statusStyle("review_pending").GetForeground(); fg != (lipgloss.NoColor{}) {
 		t.Errorf("statusStyle(review_pending) foreground = %v, want none", fg)
+	}
+}
+
+// P2: the detail pane shows which backend spawned the session and, for
+// native sessions, the worktree directory.
+func TestSessionDetailSourceBadgeAndWorktree(t *testing.T) {
+	m := newTestRoot(t)
+	m.tab = tabSessions
+	m.sessions.data = cannedSessions()
+
+	m.sessions.cursor = 0 // s1: native, tmux-backed → preview header
+	v := m.View()
+	if !strings.Contains(v, "[native]") {
+		t.Errorf("native session detail must carry a [native] badge:\n%s", v)
+	}
+	if !strings.Contains(v, "/tmp/lola/worktrees/web/lola-web-eng-123") {
+		t.Errorf("native session detail must show the worktree dir:\n%s", v)
+	}
+
+	m.sessions.cursor = 1 // s2: no source (pre-P2 / AO bridge) → [ao]
+	v = m.View()
+	if !strings.Contains(v, "[ao]") {
+		t.Errorf("ao session detail must carry an [ao] badge:\n%s", v)
+	}
+	if strings.Contains(v, "[native]") {
+		t.Errorf("ao session detail must not carry a [native] badge:\n%s", v)
 	}
 }
 

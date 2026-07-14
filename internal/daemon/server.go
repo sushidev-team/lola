@@ -8,12 +8,15 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"path/filepath"
+	"reflect"
 	"slices"
 	"time"
 
 	"github.com/sushidev-team/lola/internal/ao"
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/protocol"
+	"github.com/sushidev-team/lola/internal/session"
 )
 
 // serve runs the accept loop until the listener is closed at shutdown.
@@ -86,9 +89,89 @@ func (d *Daemon) handle(ctx context.Context, req protocol.Request) protocol.Resp
 			return protocol.Response{OK: false, Error: err.Error()}
 		}
 		return dataResponse(data)
+	case "hookEvent":
+		return d.handleHookEvent(req)
 	default:
 		return protocol.Response{OK: false, Error: fmt.Sprintf("unknown cmd %q", req.Cmd)}
 	}
+}
+
+// handleHookEvent maps a Claude Code lifecycle hook (`lola hook <event>`,
+// relayed over the socket by internal/hook.Post) onto the session store:
+//
+//	stop         → status "idle"           turn done; the observer's PR check
+//	                                       may promote it later (ci_*, …)
+//	notification → status "needs_input"    permission prompt / waiting on a human
+//	session_end  → status "session_ended"  the claude process terminated
+//	tool_use     → LastSeen touch only     liveness heartbeat; no status change
+//	                                       unless currently "idle", which a new
+//	                                       tool call promotes back to "working"
+//
+// The reply is ALWAYS OK — a hook runs on the agent's critical path and must
+// never fail or block its turn. An unknown session ID is logged once per ID
+// and acknowledged.
+func (d *Daemon) handleHookEvent(req protocol.Request) protocol.Response {
+	ok := protocol.Response{OK: true}
+	// The transition is applied via Store.Update — ONE atomic
+	// read-modify-write under the store lock. Hook events race both each
+	// other (each hook arrives on its own connection goroutine) and the
+	// observer's native pass; a Get→mutate→Upsert here could base the write
+	// on a stale status and resurrect state another writer just replaced.
+	var (
+		unknownEvent  bool
+		statusChanged bool
+		newStatus     string
+	)
+	_, known := d.sessions.Update(req.Session, func(sess *session.Session) bool {
+		prev := sess.Status
+		switch req.Event {
+		case "stop":
+			sess.Status = "idle"
+		case "notification":
+			sess.Status = "needs_input"
+		case "session_end":
+			sess.Status = "session_ended"
+		case "tool_use":
+			if sess.Status == "idle" {
+				sess.Status = "working"
+			}
+		default:
+			unknownEvent = true
+			return false
+		}
+		statusChanged = sess.Status != prev
+		newStatus = sess.Status
+		return true // always stamps LastSeen — this IS the heartbeat
+	})
+	if req.Session == "" || !known {
+		d.warnUnknownHookSession(req.Session, req.Event)
+		return ok
+	}
+	if unknownEvent {
+		d.logf("", "hookEvent: unknown event %q for session %s (acknowledged)", req.Event, req.Session)
+		return ok
+	}
+	if statusChanged {
+		d.logf("", "hookEvent: %s → %s (event %s%s)", req.Session, newStatus, req.Event,
+			map[bool]string{true: ", detail " + req.Detail, false: ""}[req.Detail != ""])
+		if err := d.sessions.Save(); err != nil {
+			d.logf("", "hookEvent: persist sessions: %v", err)
+		}
+	}
+	return ok
+}
+
+// warnUnknownHookSession logs an unknown hookEvent session once per ID: hooks
+// fire after every turn and tool call, so a session that raced adoption or
+// aged out of the store would otherwise flood the daemon log.
+func (d *Daemon) warnUnknownHookSession(id, event string) {
+	d.hookWarnMu.Lock()
+	defer d.hookWarnMu.Unlock()
+	if d.hookWarned[id] {
+		return
+	}
+	d.hookWarned[id] = true
+	d.logf("", "hookEvent: unknown session %q (event %s) — acknowledged, not tracked", id, event)
 }
 
 // sessionsData builds the reply for cmd=sessions from the observer's cached
@@ -106,7 +189,14 @@ func (d *Daemon) sessionsData() protocol.SessionsData {
 			Branch:   s.Branch,
 			Status:   s.Status,
 			TmuxName: s.TmuxName,
+			Source:   s.Source,
 			Age:      formatAge(now.Sub(s.FirstSeen)),
+		}
+		if s.Source == "native" {
+			// Native sessions live in worktrees the daemon created at
+			// <home>/worktrees/<project>/<id> (see newNativeRuntime); the
+			// store record carries no path, so derive it for the TUI.
+			si.Worktree = filepath.Join(d.home, "worktrees", s.Project, s.ID)
 		}
 		if s.PR != nil {
 			si.PRURL = s.PR.URL
@@ -171,6 +261,11 @@ func (d *Daemon) handleReload(ctx context.Context) error {
 	if d.realAO && old.AO.Bin != nc.AO.Bin {
 		d.aoc = &ao.Client{Bin: nc.AO.Bin}
 	}
+	if d.realNative && !reflect.DeepEqual(old.Projects, nc.Projects) {
+		// The native runtime holds a config reference for its project
+		// registry: recreate it whenever the [[project]] set changes.
+		d.native = newNativeRuntime(nc, d.home, d.lolaBin)
+	}
 	d.mu.Unlock()
 
 	d.syncWorkers(ctx)
@@ -187,8 +282,10 @@ func (d *Daemon) handleEnable(ctx context.Context, name string, enable bool) err
 
 	// The ao_project check execs the ao binary; run it BEFORE taking d.mu for
 	// the flip. Holding the daemon lock across an exec would freeze every
-	// tick, status, reload, and reconcile if the ao binary wedges.
-	var checkedProject string
+	// tick, status, reload, and reconcile if the ao binary wedges. Native
+	// polls skip it entirely (AO may not even be installed; mirroring the TUI
+	// form) — their [[project]] reference is covered by cfg.Validate below.
+	var checkedProject, checkedRuntime string
 	if enable {
 		d.mu.Lock()
 		p := d.cfg.PollByName(name)
@@ -196,11 +293,13 @@ func (d *Daemon) handleEnable(ctx context.Context, name string, enable bool) err
 			d.mu.Unlock()
 			return fmt.Errorf("unknown poll %q", name)
 		}
-		checkedProject = p.AOProject
+		checkedProject, checkedRuntime = p.AOProject, p.Runtime
 		aoc, aoConfigPath := d.aoc, d.cfg.AO.ConfigPath
 		d.mu.Unlock()
-		if err := checkAOProject(ctx, aoc, aoConfigPath, name, checkedProject); err != nil {
-			return err
+		if checkedRuntime != config.RuntimeNative {
+			if err := checkAOProject(ctx, aoc, aoConfigPath, name, checkedProject); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -210,7 +309,7 @@ func (d *Daemon) handleEnable(ctx context.Context, name string, enable bool) err
 		d.mu.Unlock()
 		return fmt.Errorf("unknown poll %q", name)
 	}
-	if enable && p.AOProject != checkedProject {
+	if enable && (p.AOProject != checkedProject || p.Runtime != checkedRuntime) {
 		// A concurrent reload swapped the config between the unlocked AO
 		// check and now; don't enable a poll whose project was never checked.
 		d.mu.Unlock()

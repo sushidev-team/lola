@@ -23,6 +23,17 @@ func (c *Config) PollByName(name string) *Poll {
 	return nil
 }
 
+// ProjectByName returns a pointer to the project with the given name
+// (mutating it mutates the config), or nil if no such project exists.
+func (c *Config) ProjectByName(name string) *Project {
+	for i := range c.Projects {
+		if c.Projects[i].Name == name {
+			return &c.Projects[i]
+		}
+	}
+	return nil
+}
+
 // EffectiveCap returns the poll's concurrency cap, falling back to
 // [defaults].concurrency_cap when the poll does not set one.
 func (c *Config) EffectiveCap(p *Poll) int {
@@ -34,13 +45,37 @@ func (c *Config) EffectiveCap(p *Poll) int {
 
 // Validate runs every static check and returns all failures joined via
 // errors.Join (nil when the config is valid). It only checks what can be
-// verified offline; ID resolution against Linear and ao_project existence
-// are the caller's job.
+// verified offline and never execs anything: ID resolution against Linear,
+// ao_project existence in AO, and project path-exists / is-git-repo checks
+// are the caller's (runtime layer's) job.
 func (c *Config) Validate() error {
 	var errs []error
 
 	if c.Defaults.GlobalCap <= 0 {
 		errs = append(errs, errors.New("defaults.global_cap must be > 0"))
+	}
+
+	// [[project]] registry checks run unconditionally — a broken project
+	// definition is an error even before any poll references it.
+	projectNames := make(map[string]bool, len(c.Projects))
+	for i := range c.Projects {
+		pr := &c.Projects[i]
+
+		id := fmt.Sprintf("project %q", pr.Name)
+		if pr.Name == "" {
+			id = fmt.Sprintf("project[%d]", i)
+			errs = append(errs, fmt.Errorf("%s: name is required", id))
+		} else if projectNames[pr.Name] {
+			errs = append(errs, fmt.Errorf("%s: duplicate name", id))
+		}
+		projectNames[pr.Name] = true
+
+		if pr.Path == "" {
+			errs = append(errs, fmt.Errorf("%s: path is required", id))
+		}
+		if pr.Repo != "" && !repoRe.MatchString(pr.Repo) {
+			errs = append(errs, fmt.Errorf(`%s: repo must be "owner/name" (e.g. "sushidev-team/nori-app"), got %q`, id, pr.Repo))
+		}
 	}
 
 	names := make(map[string]bool, len(c.Polls))
@@ -91,6 +126,26 @@ func (c *Config) Validate() error {
 			}
 		default:
 			errs = append(errs, fmt.Errorf("%s: assignee_mode must be one of anyone|me|user, got %q", id, p.AssigneeMode))
+		}
+
+		// Runtime selects the spawn backend. Empty is tolerated here (Load
+		// defaults it to "ao").
+		switch p.Runtime {
+		case "", RuntimeAO:
+			// ao_project is deliberately NOT required statically: it never
+			// was pre-P2 (existence AND presence are enforced at enable time
+			// — checkAOProject — and on TUI form save), and rejecting it here
+			// would hold EVERY poll of an upgraded config that, say, carries
+			// a disabled draft poll without ao_project. Zero behavior change
+			// for runtime-absent configs.
+		case RuntimeNative:
+			if p.Project == "" {
+				errs = append(errs, fmt.Errorf("%s: runtime=native requires project (a [[project]] name)", id))
+			} else if c.ProjectByName(p.Project) == nil {
+				errs = append(errs, fmt.Errorf("%s: project %q is not defined as a [[project]]", id, p.Project))
+			}
+		default:
+			errs = append(errs, fmt.Errorf("%s: runtime must be ao|native, got %q", id, p.Runtime))
 		}
 
 		switch p.DedupMode {

@@ -2,11 +2,14 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/spf13/cobra"
 	"github.com/sushidev-team/lola/internal/daemon"
+	"github.com/sushidev-team/lola/internal/hook"
 	"github.com/sushidev-team/lola/internal/tui"
 )
 
@@ -35,6 +38,7 @@ func main() {
 		enableCmd("enable"), enableCmd("disable"),
 		pollCmd(),
 		logsCmd(),
+		hookCmd(),
 	)
 
 	if err := root.Execute(); err != nil {
@@ -66,6 +70,53 @@ func pollCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&once, "once", false, "run one tick now")
 	cmd.Flags().BoolVar(&dry, "dry-run", false, "print matches, no side effects")
 	return cmd
+}
+
+// hookCmd is the hidden callback target Claude Code hooks invoke as
+// `lola hook <event>` (wired via hook.SettingsJSON). It drains the hook
+// payload from stdin, best-effort extracts a detail string, and posts the
+// event to the daemon. It ALWAYS succeeds: a broken lola must never break the
+// agent's turn, so failures go to stderr only and the process exits 0.
+// DisableFlagParsing keeps even malformed argv from producing a cobra error.
+func hookCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:                "hook <event>",
+		Short:              "Claude Code hook callback (internal)",
+		Hidden:             true,
+		DisableFlagParsing: true,
+		RunE: func(c *cobra.Command, args []string) error {
+			event := ""
+			if len(args) > 0 {
+				event = args[0]
+			}
+			if err := hook.Post(event, hookDetail(c.InOrStdin())); err != nil {
+				fmt.Fprintln(c.ErrOrStderr(), "lola hook:", err)
+			}
+			return nil
+		},
+	}
+}
+
+// hookDetail drains the hook's stdin (Claude Code writes the event payload
+// there; it must be consumed either way) and best-effort extracts the most
+// specific reason field. Any read or parse failure yields "".
+func hookDetail(r io.Reader) string {
+	raw, err := io.ReadAll(io.LimitReader(r, 1<<20))
+	if err != nil {
+		return ""
+	}
+	var p struct {
+		NotificationType string `json:"notification_type"` // Notification
+		StopReason       string `json:"stop_reason"`       // Stop
+		EndReason        string `json:"end_reason"`        // SessionEnd
+	}
+	_ = json.Unmarshal(raw, &p)
+	for _, s := range []string{p.NotificationType, p.StopReason, p.EndReason} {
+		if s != "" {
+			return s
+		}
+	}
+	return ""
 }
 
 func logsCmd() *cobra.Command {

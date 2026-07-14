@@ -167,6 +167,27 @@ func TestEnableWedgedAOTimesOutAndFallsBack(t *testing.T) {
 	}
 }
 
+func TestEnableNativePollSkipsAOCheck(t *testing.T) {
+	// A runtime=native poll has no ao_project (it is legitimately empty) and
+	// must be enable-able even when AO is entirely absent: the AO-project
+	// check is skipped, its [[project]] reference is covered by Validate.
+	p := nativePoll("p1")
+	p.Enabled = false
+	cfg := nativeTestConfig(p)
+	aoc := &fakeAO{onProjects: func(context.Context) {
+		t.Error("checkAOProject must not run for a native poll")
+	}}
+	d := newTestDaemon(t, cfg, &linear.Fake{}, aoc)
+	t.Cleanup(d.stopAllWorkers)
+
+	if err := d.handleEnable(context.Background(), "p1", true); err != nil {
+		t.Fatalf("handleEnable: %v", err)
+	}
+	if !d.cfg.PollByName("p1").Enabled {
+		t.Error("poll not enabled")
+	}
+}
+
 func TestDisableSkipsAOCheck(t *testing.T) {
 	// Disabling never touches AO: a wedged/absent registry must not block it.
 	aoc := &fakeAO{projects: nil}

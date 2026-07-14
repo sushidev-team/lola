@@ -130,6 +130,24 @@ There is deliberately no `api_key` field — secrets never live in
 | `config_path` | string | Path to AO's `agent-orchestrator.yaml`. Used to validate `ao_project` and populate the TUI project dropdown. `~` is expanded. |
 | `counting_states` | string array | AO session statuses that count against `concurrency_cap` / `global_cap`. Default: `["working", "no_signal", "needs_input", "draft", "ci_failed", "changes_requested"]` — the slot-occupying states. Parked-for-review statuses (`pr_open`, `review_pending`, `approved`, `mergeable`) and dead ones (`merged`, `idle`, `terminated`) are excluded so PRs held for review don't stall new pickups. Counting always queries `ao session ls --json` live, never a local counter. |
 
+### `[[project]]` (one table per repository, native runtime)
+
+The project registry for polls with `runtime = "native"`: lola creates a git
+worktree per session from the project's checkout and runs Claude Code in tmux
+inside it. Polls with `runtime = "ao"` don't need any `[[project]]` entries.
+Validation of these fields is purely static — path-exists / is-a-git-repo
+checks happen in the runtime layer, not on config load.
+
+| Key | Type | Description |
+| --- | --- | --- |
+| `name` | string | Unique project name (required). Referenced by `[[poll]].project`. |
+| `path` | string | Absolute path to the main checkout (required). A leading `~` is expanded on load. Session worktrees live under `~/.lola/worktrees/`, never inside the checkout. |
+| `repo` | string | GitHub repository as `owner/name`. Used for PR/CI observation of native sessions. |
+| `default_branch` | string | Branch new session worktrees start from. Default `main`. |
+| `post_create` | string array | Commands run inside a fresh worktree before the agent starts (e.g. `composer install`). Any failure blocks the session with a clear status. |
+| `symlinks` | string array | Files symlinked from the main checkout into each worktree, e.g. `[".env"]`. Beware: a shared `.env` usually means all worktrees share one database. |
+| `env` | table of strings | Extra environment variables exported into each session (`[project.env]`). |
+
 ### `[[poll]]` (one table per poll)
 
 | Key | Type | Description |
@@ -145,7 +163,9 @@ There is deliberately no `api_key` field — secrets never live in
 | `match_mode` | `"any"` \| `"all"` | `any` = issue has at least one trigger label; `all` = issue has every trigger label. |
 | `assignee_mode` | `"anyone"` \| `"me"` \| `"user"` | `anyone` = no assignee filter; `me` = the authenticated user (Linear `viewer`); `user` = the user in `assignee_user_id`. |
 | `assignee_user_id` | string | User UUID; required iff `assignee_mode = "user"`. |
-| `ao_project` | string | AO project name to spawn into. Must exist in `agent-orchestrator.yaml` — validated on save/enable. |
+| `runtime` | `"ao"` \| `"native"` | Spawn backend. `ao` (the default when unset) dispatches to Agent Orchestrator via `ao spawn` and requires `ao_project`; `native` spawns lola's own runner (git worktree + tmux + Claude Code) and requires `project`. Matching, caps, and dedup behave identically in both modes. |
+| `project` | string | Name of a `[[project]]` entry; required iff `runtime = "native"`. |
+| `ao_project` | string | AO project name to spawn into; required iff `runtime = "ao"`. Must exist in `agent-orchestrator.yaml` — validated on save/enable. |
 | `repo` | string | GitHub repository as `owner/name` (e.g. `sushidev-team/nori-app`). The reconciler passes it to `gh pr list --repo` so its open-PR check works regardless of the daemon's working directory. Optional — but when empty the PR check is unavailable and orphaned issues are **never** auto-reverted (fail-closed). |
 | `concurrency_cap` | int | Max counted AO sessions this poll may occupy. Falls back to `[defaults].concurrency_cap` when 0/unset; the effective value must be > 0. |
 | `priority_sort` | string array | Sort keys for deterministic selection when the budget caps the match list, e.g. `["priority", "createdAt"]`. |

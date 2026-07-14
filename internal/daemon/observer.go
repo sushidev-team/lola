@@ -168,10 +168,18 @@ func isAlnum(b byte) bool {
 	return b >= '0' && b <= '9' || b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z'
 }
 
-// observe runs one observation cycle: AO sessions → branch → PR → tmux →
-// store upsert + prune + save. ctx is unbounded (WithoutCancel); every exec
-// below carves its own observeExecTimeout deadline from it.
+// observe runs one observation cycle over both runtimes: the AO-sourced
+// sessions (PLAN P1) and lola's own native sessions (PLAN P2). ctx is
+// unbounded (WithoutCancel); every exec below carves its own
+// observeExecTimeout deadline from it.
 func (d *Daemon) observe(ctx context.Context) {
+	d.observeAO(ctx)
+	d.observeNative(ctx)
+}
+
+// observeAO is the AO half of a cycle: AO sessions → branch → PR → tmux →
+// store upsert + prune + save.
+func (d *Daemon) observeAO(ctx context.Context) {
 	d.mu.Lock()
 	aoc := d.aoc // snapshot under d.mu: reload may swap the client concurrently
 	d.mu.Unlock()
@@ -288,4 +296,126 @@ func (d *Daemon) observe(ctx context.Context) {
 	if err := d.sessions.Save(); err != nil {
 		d.logf("", "observe: persist sessions: %v", err)
 	}
+}
+
+// observeNative is the native half of a cycle (PLAN P2): it merges every
+// native-runtime session already in the store with fresh facts — liveness
+// via runtime.Alive (native sessions ARE tmux sessions, so TmuxName is the
+// session ID), PR state via the session's repo (recorded at spawn from the
+// poll's project, config.Project.Repo; the project registry is the fallback
+// for adopted records), and status via nativeStatus. A dead pane whose PR is
+// not merged becomes "dead"; a stale needs_input just stays needs_input —
+// P2 never auto-kills, no matter how old. Settled terminal records (dead, or
+// merged with the pane gone) are not re-written, so their LastSeen freezes
+// and sessionRetention ages them out of the store. Each record is written via
+// Store.Update (atomic read-modify-write), never a stale-snapshot Upsert —
+// hook events land concurrently and must not be erased.
+func (d *Daemon) observeNative(ctx context.Context) {
+	d.mu.Lock()
+	nat := d.native
+	repoByProject := make(map[string]string, len(d.cfg.Projects))
+	for _, p := range d.cfg.Projects {
+		repoByProject[p.Name] = p.Repo
+	}
+	d.mu.Unlock()
+	if nat == nil {
+		return
+	}
+
+	touched := false
+	for _, s := range d.sessions.Snapshot() {
+		if s.Source != "native" {
+			continue
+		}
+		cctx, cancel := context.WithTimeout(ctx, observeExecTimeout)
+		alive := nat.Alive(cctx, s)
+		cancel()
+
+		repo := s.Repo
+		if repo == "" {
+			repo = repoByProject[s.Project]
+		}
+
+		// PR state, log-and-continue like the AO half: keep the last known
+		// facts unless this cycle produced an authoritative answer.
+		var pr *scm.PR
+		prKnown := false
+		if s.Branch != "" && repo != "" {
+			cctx, cancel := context.WithTimeout(ctx, observeExecTimeout)
+			p, err := d.prForBranch(cctx, repo, s.Branch)
+			cancel()
+			if err != nil {
+				d.logf("", "observe: PR check for native %s (branch %s in %s) failed: %v", s.ID, s.Branch, repo, err)
+			} else {
+				pr, prKnown = p, true
+			}
+		}
+
+		// Merge this cycle's facts as ONE atomic read-modify-write. The execs
+		// above take seconds, and a hook event (needs_input / idle /
+		// session_ended) can land on the record meanwhile — deriving the
+		// status from this loop's stale snapshot and Upserting it back would
+		// silently erase that transition, and permanently so: an agent
+		// blocked on a permission prompt fires no further hooks. Update
+		// re-reads the CURRENT record under the store lock, so a concurrent
+		// needs_input flows into nativeStatus and is preserved.
+		becameDead, applied := false, false
+		d.sessions.Update(s.ID, func(cur *session.Session) bool {
+			if cur.Repo == "" {
+				cur.Repo = repo
+			}
+			if prKnown {
+				cur.PR = pr
+			}
+			status := nativeStatus(cur.Status, alive, cur.PR)
+			if !alive && status == cur.Status {
+				// Already-settled terminal record: discard so LastSeen
+				// freezes and the store's retention prune eventually drops it.
+				return false
+			}
+			becameDead = status == "dead" && cur.Status != "dead"
+			cur.Status = status
+			if cur.TmuxName == "" {
+				cur.TmuxName = cur.ID
+			}
+			applied = true
+			return true
+		})
+		if becameDead {
+			d.logf("", "observe: native session %s pane is gone without a merged PR → dead", s.ID)
+		}
+		if applied {
+			touched = true
+		}
+	}
+	if !touched {
+		return
+	}
+	d.sessions.PruneOlderThan(sessionRetention)
+	if err := d.sessions.Save(); err != nil {
+		d.logf("", "observe: persist sessions: %v", err)
+	}
+}
+
+// nativeStatus derives a native session's status for this cycle from its
+// hook-driven current status, tmux pane liveness, and the PR facts in hand:
+//
+//   - Known PR facts drive scm.DeriveStatus — the shared status vocabulary.
+//   - A hook-reported needs_input outranks any PR-derived status while the
+//     pane is alive (a human is being waited on), except "merged".
+//   - No PR facts → the hook-driven status stands (working / idle / …).
+//   - A dead tmux pane forces "dead" unless the PR is merged — a merged PR is
+//     the one legitimate way for a native session to end in P2.
+func nativeStatus(current string, alive bool, pr *scm.PR) string {
+	status := current
+	if pr != nil {
+		status = scm.DeriveStatus(alive, pr)
+	}
+	if alive && current == "needs_input" && status != "merged" {
+		status = "needs_input"
+	}
+	if !alive && status != "merged" {
+		return "dead"
+	}
+	return status
 }
