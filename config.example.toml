@@ -1,0 +1,105 @@
+# aop configuration — copy to ~/.aop/config.toml (mode 0600).
+#
+# This file contains NO secrets. The Linear API key lives in the macOS
+# Keychain or an environment variable (see [linear] below).
+#
+# All Linear references (team_id, project_id, cycle_id, state_ids,
+# match_labels, assignee_user_id, on_sent_*_label) are Linear UUIDs, not
+# names. The `aop` TUI resolves names to IDs for you when creating a poll.
+
+[defaults]
+# Go duration string. Minimum is 30s (Linear rate limit); lower values are
+# clamped up, not rejected. Default when omitted: 60s.
+poll_interval = "60s"
+# Fallback per-poll cap for polls that don't set concurrency_cap themselves.
+concurrency_cap = 2
+# Hard ceiling on counted AO sessions across ALL polls. Must be > 0.
+global_cap = 4
+
+[linear]
+# Keychain SERVICE NAME (tried first):
+#   security add-generic-password -s linear-api-key -w lin_api_XXXXXXXX
+api_key_keychain = "linear-api-key"
+# Env var NAME used as fallback when the keychain item is missing.
+api_key_env = "LINEAR_API_KEY"
+# GraphQL endpoint. Omit for the default.
+endpoint = "https://api.linear.app/graphql"
+
+[ao]
+# Absolute path to the ao binary — launchd has no login-shell PATH.
+# A leading ~ is expanded on load.
+bin = "/opt/homebrew/bin/ao"
+# AO's project registry; used to validate ao_project and to populate the
+# TUI dropdown.
+config_path = "~/.config/agent-orchestrator/agent-orchestrator.yaml"
+# AO session states that count against the caps. Review/blocked states are
+# deliberately excluded so PRs held for review don't stall new pickups.
+counting_states = ["working", "in_progress"]
+
+# ---------------------------------------------------------------------------
+# Poll 1: label-flip dedup. Issues in the frontend team's active cycle,
+# in a "Ready for agent" state, carrying the "agent-queue" trigger label.
+# After a successful spawn, aop removes the trigger label and sets the
+# "agent-sent" label, so the issue stops matching. The label flip is visible
+# in Linear and survives daemon restarts.
+# ---------------------------------------------------------------------------
+[[poll]]
+name = "frontend-agent-queue"
+enabled = true
+team_id = "team_FE00aaaa-1111-2222-3333-444455556666"
+# Optional project filter; empty/omitted = whole team.
+project_id = ""
+# none | active | pinned. active re-resolves the team's active cycle every
+# tick (handles cycle rollover); pinned requires cycle_id.
+cycle_mode = "active"
+cycle_id = ""
+# Workflow state UUIDs (matched by ID, never name). Empty = any state.
+state_ids = ["state_aaaa0000-1111-2222-3333-444455556666"]
+# Trigger label UUIDs.
+match_labels = ["label_trig0000-1111-2222-3333-444455556666"]
+# any = at least one trigger label; all = every trigger label.
+match_mode = "any"
+# anyone | me | user. me = the API key's viewer; user requires
+# assignee_user_id.
+assignee_mode = "me"
+assignee_user_id = ""
+# Must exist as a project in agent-orchestrator.yaml (validated on
+# save/enable).
+ao_project = "frontend"
+# Max counted AO sessions this poll may occupy. 0/omitted falls back to
+# [defaults].concurrency_cap.
+concurrency_cap = 2
+# Deterministic ordering when the budget caps the match list.
+priority_sort = ["priority", "createdAt"]
+# label | seen. label mode requires both on_sent_* labels.
+dedup_mode = "label"
+on_sent_set_label = "label_sent0000-1111-2222-3333-444455556666"
+on_sent_remove_label = "label_trig0000-1111-2222-3333-444455556666"
+
+# ---------------------------------------------------------------------------
+# Poll 2: seen-file dedup. No labels are touched; spawned issue IDs are
+# remembered in ~/.aop/state/backend-bugs.seen. Seen entries whose issues no
+# longer match the filter are pruned, so reopened tickets re-queue.
+# ---------------------------------------------------------------------------
+[[poll]]
+name = "backend-bugs"
+enabled = false
+team_id = "team_BE00aaaa-1111-2222-3333-444455556666"
+project_id = "proj_be000000-1111-2222-3333-444455556666"
+cycle_mode = "none"
+cycle_id = ""
+state_ids = ["state_bbbb0000-1111-2222-3333-444455556666"]
+match_labels = [
+  "label_bug00000-1111-2222-3333-444455556666",
+  "label_agent000-1111-2222-3333-444455556666",
+]
+# Require BOTH labels on the issue.
+match_mode = "all"
+assignee_mode = "anyone"
+assignee_user_id = ""
+ao_project = "backend"
+concurrency_cap = 1
+priority_sort = ["priority", "createdAt"]
+dedup_mode = "seen"
+on_sent_set_label = ""
+on_sent_remove_label = ""

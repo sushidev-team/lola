@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  aop LaunchAgent. Install into ~/Library/LaunchAgents (NOT
+  /Library/LaunchDaemons — aop must run in your user/GUI session so AO can
+  reach your tmux server and keychain), then:
+
+      launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.user.aop.plist
+
+  Before loading, replace:
+    - /usr/local/bin/aop  with the absolute path to your aop binary
+    - /Users/YOU          with your real home directory (launchd does NOT
+                          expand ~, so every path below must be absolute)
+-->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.user.aop</string>
+
+	<!-- Adjust the binary path to wherever you installed aop. -->
+	<key>ProgramArguments</key>
+	<array>
+		<string>/usr/local/bin/aop</string>
+		<string>run</string>
+	</array>
+
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+
+	<!-- launchd provides no login-shell environment: inject a PATH that can
+	     find ao/tmux/gh, and HOME so ~/.aop resolves. -->
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>PATH</key>
+		<string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+		<key>HOME</key>
+		<string>/Users/YOU</string>
+	</dict>
+
+	<key>WorkingDirectory</key>
+	<string>/Users/YOU</string>
+
+	<!-- launchd does not expand ~ — use the absolute path. -->
+	<key>StandardOutPath</key>
+	<string>/Users/YOU/.aop/daemon.log</string>
+	<key>StandardErrorPath</key>
+	<string>/Users/YOU/.aop/daemon.log</string>
+</dict>
+</plist>

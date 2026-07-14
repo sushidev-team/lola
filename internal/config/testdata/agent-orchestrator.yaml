@@ -1,0 +1,20 @@
+# Agent Orchestrator config fixture for config.AOProjects tests.
+dashboard:
+  port: 8080
+  projects: # nested "projects:" key must NOT open the projects block
+    decoy: true
+
+projects:
+  # comment inside the block
+  frontend:
+    repo: git@example.com:acme/frontend.git
+    env:
+      NODE_ENV: production
+  "backend":
+    repo: git@example.com:acme/backend.git
+    branch: main
+  'infra':
+    repo: git@example.com:acme/infra.git
+
+notifications:
+  slack: true

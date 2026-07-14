@@ -1,0 +1,361 @@
+package daemon
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"math"
+	"slices"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/you/aop/internal/linear"
+	"github.com/you/aop/internal/protocol"
+)
+
+// SeenTTL is the label-mode race-guard window: a seen entry younger than
+// this suppresses a re-match (the label flip may not be visible in Linear
+// yet); older entries are ignored and pruned.
+const SeenTTL = time.Hour
+
+// Budget returns min(pollCap, globalCap−liveCounted) per the SPEC formula.
+// The result may be <= 0, which means capped out.
+func Budget(pollCap, globalCap, liveCounted int) int {
+	b := globalCap - liveCounted
+	if pollCap < b {
+		b = pollCap
+	}
+	return b
+}
+
+// SortIssues sorts in place by the given keys ("priority", "createdAt"),
+// defaulting to ["priority","createdAt"]. Linear priority 1=urgent..4=low;
+// 0 (none) sorts LAST. createdAt ascends (RFC3339 compares lexically).
+// Ties break deterministically by identifier.
+func SortIssues(issues []linear.Issue, prioritySort []string) {
+	keys := prioritySort
+	if len(keys) == 0 {
+		keys = []string{"priority", "createdAt"}
+	}
+	sort.SliceStable(issues, func(i, j int) bool {
+		a, b := issues[i], issues[j]
+		for _, k := range keys {
+			switch k {
+			case "priority":
+				pa, pb := priorityRank(a.Priority), priorityRank(b.Priority)
+				if pa != pb {
+					return pa < pb
+				}
+			case "createdAt":
+				if a.CreatedAt != b.CreatedAt {
+					return a.CreatedAt < b.CreatedAt
+				}
+			}
+		}
+		return a.Identifier < b.Identifier
+	})
+}
+
+func priorityRank(p float64) float64 {
+	if p == 0 {
+		return math.Inf(1) // priority 0 = none sorts last
+	}
+	return p
+}
+
+// NewLabelIDs computes the post-spawn label set: (current − removeID) +
+// setID, with duplicates removed. Removing an absent ID is a no-op.
+func NewLabelIDs(current []string, removeID, setID string) []string {
+	out := make([]string, 0, len(current)+1)
+	have := make(map[string]bool, len(current)+1)
+	for _, id := range current {
+		if id == "" || id == removeID || have[id] {
+			continue
+		}
+		have[id] = true
+		out = append(out, id)
+	}
+	if setID != "" && !have[setID] {
+		out = append(out, setID)
+	}
+	return out
+}
+
+// PruneSeen returns a pruned copy of seen so it never grows unbounded.
+// label mode: drop entries older than ttl (seen is only a short race guard).
+// seen mode: drop entries whose ID is not in the current match set, so
+// reopened tickets re-queue.
+func PruneSeen(seen map[string]time.Time, matched map[string]bool, dedupMode string, now time.Time, ttl time.Duration) map[string]time.Time {
+	out := make(map[string]time.Time, len(seen))
+	for id, t := range seen {
+		switch dedupMode {
+		case "seen":
+			if !matched[id] {
+				continue
+			}
+		default: // label
+			if now.Sub(t) > ttl {
+				continue
+			}
+		}
+		out[id] = t
+	}
+	return out
+}
+
+// isAuthErr classifies Linear client errors: the client wraps 401/403 as
+// "linear auth failed: http NNN".
+func isAuthErr(err error) bool {
+	return err != nil && strings.Contains(strings.ToLower(err.Error()), "auth failed")
+}
+
+// tick runs one dispatch pass for the named poll, per SPEC "Dispatch flow".
+// dryRun evaluates everything (dedup, budget, cross-poll overlap) with ZERO
+// side effects: no in-flight add, no seen write, no spawn, no label write,
+// no status mutation.
+func (d *Daemon) tick(ctx context.Context, name string, dryRun bool) (protocol.PollOnceData, error) {
+	res := protocol.PollOnceData{Poll: name, DryRun: dryRun}
+
+	// Snapshot poll + relevant defaults under lock; the tick itself runs
+	// without holding d.mu.
+	d.mu.Lock()
+	pp := d.cfg.PollByName(name)
+	if pp == nil {
+		d.mu.Unlock()
+		return res, fmt.Errorf("unknown poll %q", name)
+	}
+	p := *pp
+	p.StateIDs = slices.Clone(p.StateIDs)
+	p.MatchLabels = slices.Clone(p.MatchLabels)
+	p.PrioritySort = slices.Clone(p.PrioritySort)
+	pollCap := d.cfg.EffectiveCap(pp)
+	globalCap := d.cfg.Defaults.GlobalCap
+	counting := make(map[string]bool, len(d.cfg.AO.CountingStates))
+	for _, s := range d.cfg.AO.CountingStates {
+		counting[s] = true
+	}
+	aoc := d.aoc // snapshot under d.mu: reload may swap the client concurrently
+	d.mu.Unlock()
+
+	now := time.Now()
+	if !dryRun {
+		d.status.begin(name)
+		defer d.status.end(name, now)
+	}
+
+	fail := func(msg string, err error) (protocol.PollOnceData, error) {
+		full := msg
+		if err != nil {
+			full = msg + ": " + err.Error()
+		}
+		if !dryRun {
+			d.status.setError(name, full)
+		}
+		d.logf(name, "%s", full)
+		return res, errors.New(full)
+	}
+	linFail := func(stage string, err error) (protocol.PollOnceData, error) {
+		if isAuthErr(err) {
+			// Drop the cached client so the next tick re-resolves the key
+			// (Keychain > env) — recovers from key rotation without restart.
+			d.invalidateLinear()
+			return fail("Linear auth failed", err)
+		}
+		return fail(stage, err)
+	}
+
+	// 1. Precheck AO. Down → skip WITHOUT touching seen/labels/in-flight.
+	if !aoc.Reachable(ctx) {
+		return fail("AO not running", nil)
+	}
+
+	// 2. Linear client (key resolved at startup; retried here if missing).
+	api, err := d.ensureLinear()
+	if err != nil {
+		return fail("Linear auth failed", err)
+	}
+
+	viewerID := ""
+	if p.AssigneeMode == "me" {
+		if viewerID, err = d.viewer(ctx, api); err != nil {
+			return linFail("resolve viewer", err)
+		}
+	}
+
+	// 3. cycle_mode=active: resolve team.activeCycle.id FRESH every tick.
+	cycleID := ""
+	switch p.CycleMode {
+	case "active":
+		active, _, err := api.Cycles(ctx, p.TeamID)
+		if err != nil {
+			return linFail("resolve active cycle", err)
+		}
+		if active == nil {
+			return fail("no active cycle for team", nil)
+		}
+		cycleID = active.ID
+	case "pinned":
+		cycleID = p.CycleID
+	}
+
+	// 4. Matching issues (client paginates internally).
+	issues, err := api.MatchingIssues(ctx, p, cycleID, viewerID)
+	if err != nil {
+		return linFail("query issues", err)
+	}
+	d.setLinearOK(true)
+
+	seen, err := d.seen.load(name)
+	if err != nil {
+		d.logf(name, "seen state unreadable, starting empty: %v", err)
+		seen = map[string]time.Time{}
+	}
+	matched := make(map[string]bool, len(issues))
+	for _, is := range issues {
+		matched[is.ID] = true
+	}
+
+	// 5. Cross-poll dedup via the daemon-global in-flight set, then
+	// 6. mode dedup.
+	skip := func(is linear.Issue, reason string) {
+		res.Matches = append(res.Matches, protocol.Match{
+			Identifier: is.Identifier, Title: is.Title, Action: "skipped", Reason: reason,
+		})
+	}
+	var candidates []linear.Issue
+	for _, is := range issues {
+		if d.inflight.Has(is.ID) {
+			skip(is, "in-flight")
+			continue
+		}
+		switch p.DedupMode {
+		case "seen":
+			// seen is authoritative.
+			if _, ok := seen[is.ID]; ok {
+				skip(is, "dedup-seen")
+				continue
+			}
+		default: // label: query already excludes flipped issues; seen is
+			// only a short-TTL race guard, stale entries are ignored.
+			if t, ok := seen[is.ID]; ok && now.Sub(t) <= SeenTTL {
+				skip(is, "dedup-label")
+				continue
+			}
+		}
+		candidates = append(candidates, is)
+	}
+
+	// Prune seen so it never grows unbounded (persist only on real ticks).
+	origLen := len(seen)
+	seen = PruneSeen(seen, matched, p.DedupMode, now, SeenTTL)
+	if !dryRun && len(seen) != origLen {
+		if err := d.seen.save(name, seen); err != nil {
+			d.logf(name, "persist pruned seen: %v", err)
+		}
+	}
+
+	// 7. Deterministic order when capped.
+	SortIssues(candidates, p.PrioritySort)
+
+	// 8. Budget from a FRESH `ao list --json`, counting sessions in
+	// counting_states across ALL projects (the global cap is global).
+	sessions, err := aoc.LiveSessions(ctx)
+	if err != nil {
+		return fail("AO not running", err)
+	}
+	liveCounted := 0
+	for _, s := range sessions {
+		if counting[s.Status] {
+			liveCounted++
+		}
+	}
+	budget := Budget(pollCap, globalCap, liveCounted)
+	if budget <= 0 && len(candidates) > 0 {
+		d.logf(name, "capped out: budget=%d (pollCap=%d globalCap=%d liveCounted=%d), %d candidate(s) waiting",
+			budget, pollCap, globalCap, liveCounted, len(candidates))
+	}
+
+	// 9. Dispatch per issue, up to budget.
+	spawned, capped, errored := 0, 0, 0
+	lastSpawnErr := ""
+	for _, is := range candidates {
+		m := protocol.Match{Identifier: is.Identifier, Title: is.Title}
+		if spawned >= budget {
+			capped++
+			m.Action, m.Reason = "skipped", "capped"
+			res.Matches = append(res.Matches, m)
+			continue
+		}
+		if dryRun {
+			spawned++
+			m.Action = "would-spawn"
+			res.Matches = append(res.Matches, m)
+			continue
+		}
+
+		// (a) Mark in-flight AND persist seen FIRST.
+		d.inflight.Add(is.ID, is.Identifier)
+		seen[is.ID] = now
+		if err := d.seen.save(name, seen); err != nil {
+			// Without the on-disk guard a crash could double-spawn: skip.
+			d.inflight.Remove(is.ID)
+			delete(seen, is.ID)
+			d.logf(name, "persist seen for %s failed, skipping spawn: %v", is.Identifier, err)
+			errored++
+			m.Action, m.Reason = "skipped", "error"
+			res.Matches = append(res.Matches, m)
+			continue
+		}
+
+		// (b) Spawn with the IDENTIFIER (FE-231), never the UUID.
+		if err := aoc.Spawn(ctx, p.AOProject, is.Identifier); err != nil {
+			// Drop the in-flight claim. In label mode the seen entry stays
+			// as a short-TTL race guard (the un-flipped label retries after
+			// SeenTTL); in seen mode seen is authoritative and never expires
+			// while the issue matches, so keeping the entry would silently
+			// drop the issue forever — remove it so the next tick retries.
+			d.inflight.Remove(is.ID)
+			if p.DedupMode == "seen" {
+				delete(seen, is.ID)
+				if serr := d.seen.save(name, seen); serr != nil {
+					d.logf(name, "unmark seen for %s after failed spawn: %v", is.Identifier, serr)
+				}
+			}
+			d.logf(name, "spawn %s in %s failed: %v", is.Identifier, p.AOProject, err)
+			errored++
+			lastSpawnErr = fmt.Sprintf("spawn %s failed: %v", is.Identifier, err)
+			m.Action, m.Reason = "skipped", "error"
+			res.Matches = append(res.Matches, m)
+			continue
+		}
+		spawned++
+		d.status.setLastSpawn(name, time.Now())
+		d.logf(name, "spawned %s into ao project %s", is.Identifier, p.AOProject)
+		m.Action = "spawned"
+		res.Matches = append(res.Matches, m)
+
+		// (c) Only on confirmed spawn success + label mode: re-read labels
+		// FRESH, flip, write back with the UUID. A label write failure is
+		// logged only — no spawn retry, seen stays as the guard.
+		if p.DedupMode == "label" {
+			current, err := api.IssueLabelIDs(ctx, is.ID)
+			if err != nil {
+				d.logf(name, "read labels for %s failed (seen guards dedup): %v", is.Identifier, err)
+				continue
+			}
+			newIDs := NewLabelIDs(current, p.OnSentRemoveLabel, p.OnSentSetLabel)
+			if err := api.SetIssueLabels(ctx, is.ID, newIDs); err != nil {
+				d.logf(name, "label flip for %s failed (seen guards dedup): %v", is.Identifier, err)
+			}
+		}
+	}
+
+	// 10. Log and update status.
+	d.logf(name, "tick: matched=%d spawned=%d capped=%d errors=%d%s",
+		len(issues), spawned, capped, errored, map[bool]string{true: " (dry-run)", false: ""}[dryRun])
+	if !dryRun {
+		d.status.setError(name, lastSpawnErr) // clears the error on a clean tick
+	}
+	return res, nil
+}
