@@ -88,6 +88,7 @@ The Makefile sets a repo-local `GOCACHE` so builds work in sandboxed shells.
 | `lola status` | Table per poll: enabled, last run, last spawn, running, last error — plus `runtimeOk` / `linearOk` health flags |
 | `lola enable <poll>` / `lola disable <poll>` | Live pause/resume of one poll (no restart) |
 | `lola poll <poll> --once [--dry-run]` | Run one tick now; `--dry-run` prints matches (including cross-poll overlaps) with **no** side effects — no spawn, no label flip, no seen write |
+| `lola kill <session> [--force]` | Terminate a session's agent (tmux) and clean up after it. A **clean** worktree is removed and the issue's slot is freed (so it can re-dispatch if it still matches); a **dirty** one (uncommitted changes) is kept for inspection and the command exits nonzero — rerun with `--force` to remove it anyway. The agent is always stopped first, even when the worktree is kept. |
 | `lola reload` | Re-read `config.toml`; the daemon diffs polls and starts/stops goroutines without disturbing unaffected ones |
 | `lola logs [poll] [-f]` | Tail `~/.lola/daemon.log`, optionally filtered to one poll; `-f`/`--follow` to stream |
 

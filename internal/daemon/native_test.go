@@ -37,10 +37,17 @@ type fakeNative struct {
 	adopted       []session.Session
 	adoptErr      error
 	alive         map[string]bool // session ID -> tmux pane alive
-	kills         []string
+	kills         []nativeKillCall
+	killErr       error // returned from Kill (e.g. worktree.ErrDirty)
 }
 
 type nativeSpawnCall struct{ project, identifier string }
+
+type nativeKillCall struct {
+	id             string
+	removeWorktree bool
+	force          bool
+}
 
 var _ NativeAPI = (*fakeNative)(nil)
 
@@ -79,11 +86,17 @@ func (f *fakeNative) Adopt(ctx context.Context) ([]session.Session, error) {
 	return slices.Clone(f.adopted), nil
 }
 
-func (f *fakeNative) Kill(ctx context.Context, s session.Session, removeWorktree bool) error {
+func (f *fakeNative) Kill(ctx context.Context, s session.Session, removeWorktree, force bool) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.kills = append(f.kills, s.ID)
-	return nil
+	f.kills = append(f.kills, nativeKillCall{id: s.ID, removeWorktree: removeWorktree, force: force})
+	return f.killErr
+}
+
+func (f *fakeNative) killCalls() []nativeKillCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.kills)
 }
 
 func (f *fakeNative) Alive(ctx context.Context, s session.Session) bool {

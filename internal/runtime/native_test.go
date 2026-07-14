@@ -573,7 +573,7 @@ func TestKillRemovesCleanWorktreeAndBranch(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := f.n.Kill(context.Background(), killFixtureSession(), true); err != nil {
+	if err := f.n.Kill(context.Background(), killFixtureSession(), true, false); err != nil {
 		t.Fatalf("Kill: %v", err)
 	}
 	wantTmux := "has-session -t =lola-nori-eng-42\nkill-session -t =lola-nori-eng-42"
@@ -600,7 +600,7 @@ func TestKillDirtyWorktreePropagatesErrDirtyAndKeepsDir(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := f.n.Kill(context.Background(), killFixtureSession(), true)
+	err := f.n.Kill(context.Background(), killFixtureSession(), true, false)
 	if !errors.Is(err, worktree.ErrDirty) {
 		t.Fatalf("Kill dirty: want ErrDirty, got %v", err)
 	}
@@ -610,16 +610,70 @@ func TestKillDirtyWorktreePropagatesErrDirtyAndKeepsDir(t *testing.T) {
 	if _, statErr := os.Stat(dir); statErr != nil {
 		t.Errorf("dirty worktree dir must stay on disk: %v", statErr)
 	}
-	// The tmux session is still killed: only worktree removal refuses.
+	// The tmux session is still killed FIRST: only worktree removal refuses.
 	if !strings.Contains(loggedArgs(t, f.tmuxLog), "kill-session") {
 		t.Errorf("tmux session should be killed even when the worktree is dirty")
+	}
+}
+
+// force=true removes a dirty worktree: the dirty check is skipped and
+// `worktree remove --force` runs. The tmux agent is still terminated first.
+func TestKillForceRemovesDirtyWorktree(t *testing.T) {
+	f := newFixture(t, `*"status --porcelain"*)
+  echo " M main.go"
+  exit 0
+  ;;`, "")
+	dir := filepath.Join(f.root, "nori", "lola-nori-eng-42")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := f.n.Kill(context.Background(), killFixtureSession(), true, true); err != nil {
+		t.Fatalf("Kill force: %v", err)
+	}
+	gitCalls := loggedArgs(t, f.gitLog)
+	// force skips the dirty check entirely and removes with --force.
+	if strings.Contains(gitCalls, "status --porcelain") {
+		t.Errorf("force=true must skip the dirty check; git calls:\n%s", gitCalls)
+	}
+	if !strings.Contains(gitCalls, "worktree remove --force "+dir) {
+		t.Errorf("force=true must remove with --force; git calls:\n%s", gitCalls)
+	}
+	if !strings.Contains(loggedArgs(t, f.tmuxLog), "kill-session") {
+		t.Errorf("tmux session must still be killed on a forced kill")
+	}
+}
+
+// A dead session (its tmux pane already gone) still has its clean worktree
+// removed and the call succeeds — no kill-session runs, but the worktree/branch
+// are cleaned up.
+func TestKillDeadSessionStillRemovesWorktree(t *testing.T) {
+	f := newFixture(t, "", `*"has-session"*) exit 1 ;;`)
+	dir := filepath.Join(f.root, "nori", "lola-nori-eng-42")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := f.n.Kill(context.Background(), killFixtureSession(), true, false); err != nil {
+		t.Fatalf("Kill dead session: %v", err)
+	}
+	if strings.Contains(loggedArgs(t, f.tmuxLog), "kill-session") {
+		t.Error("kill-session must not run for an already-dead session")
+	}
+	wantGit := strings.Join([]string{
+		"-C " + dir + " status --porcelain",
+		"-C " + f.repo + " worktree remove " + dir,
+		"-C " + f.repo + " branch -D lola/eng-42",
+	}, "\n")
+	if got := loggedArgs(t, f.gitLog); got != wantGit {
+		t.Errorf("git calls:\n%s\nwant clean removal:\n%s", got, wantGit)
 	}
 }
 
 func TestKillAbsentTmuxSessionIsNotAnError(t *testing.T) {
 	f := newFixture(t, "", `*"has-session"*) exit 1 ;;`)
 
-	if err := f.n.Kill(context.Background(), killFixtureSession(), false); err != nil {
+	if err := f.n.Kill(context.Background(), killFixtureSession(), false, false); err != nil {
 		t.Fatalf("Kill absent session: %v", err)
 	}
 	if strings.Contains(loggedArgs(t, f.tmuxLog), "kill-session") {
@@ -633,7 +687,7 @@ func TestKillAbsentTmuxSessionIsNotAnError(t *testing.T) {
 func TestKillMissingWorktreeDirIsNoop(t *testing.T) {
 	f := newFixture(t, "", `*"has-session"*) exit 1 ;;`)
 	// removeWorktree=true, but the dir never existed: nothing to remove.
-	if err := f.n.Kill(context.Background(), killFixtureSession(), true); err != nil {
+	if err := f.n.Kill(context.Background(), killFixtureSession(), true, false); err != nil {
 		t.Fatalf("Kill with missing worktree dir: %v", err)
 	}
 	if got := loggedArgs(t, f.gitLog); got != "" {
@@ -645,7 +699,7 @@ func TestKillUnknownProjectErrors(t *testing.T) {
 	f := newFixture(t, "", "")
 	s := killFixtureSession()
 	s.Project = "ghost"
-	if err := f.n.Kill(context.Background(), s, true); err == nil {
+	if err := f.n.Kill(context.Background(), s, true, false); err == nil {
 		t.Fatal("Kill with unknown project: want error, got nil")
 	}
 }

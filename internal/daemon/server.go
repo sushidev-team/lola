@@ -89,6 +89,12 @@ func (d *Daemon) handle(ctx context.Context, req protocol.Request) protocol.Resp
 		return dataResponse(data)
 	case "hookEvent":
 		return d.handleHookEvent(req)
+	case "kill":
+		data, err := d.handleKill(ctx, req.Session, req.Force)
+		if err != nil {
+			return protocol.Response{OK: false, Error: err.Error()}
+		}
+		return dataResponse(data)
 	default:
 		return protocol.Response{OK: false, Error: fmt.Sprintf("unknown cmd %q", req.Cmd)}
 	}

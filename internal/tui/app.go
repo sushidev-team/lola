@@ -157,7 +157,11 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, statusTick()
 		}
 		cmds := []tea.Cmd{fetchStatusCmd, statusTick()}
-		if m.tab == tabSessions {
+		// Freeze the sessions list while a kill confirmation is pending: a
+		// mid-confirm refresh could reorder/prune rows under the cursor (the
+		// kill target is pinned by ID regardless, but the frozen view keeps the
+		// prompt and the highlighted row in agreement).
+		if m.tab == tabSessions && !m.sessions.confirmKill {
 			cmds = append(cmds, fetchSessionsCmd)
 			if c := m.previewRefreshCmd(); c != nil {
 				cmds = append(cmds, c)
@@ -173,6 +177,11 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if v.err != nil {
 			m.sessions.flash = "attach failed: " + v.err.Error()
 		}
+		return m, fetchSessionsCmd
+	case killDoneMsg:
+		// Flash the outcome verbatim (success line or the daemon's dirty-kept
+		// message) and refresh the list so a removed session drops out.
+		m.sessions.flash = v.msg
 		return m, fetchSessionsCmd
 	case doctorMsg:
 		// A report arriving after the overlay was closed (esc during the run)
@@ -210,8 +219,10 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, cmd
 	}
-	// Tab switching — but never while a delete confirmation awaits y/n.
-	if k, ok := msg.(tea.KeyMsg); ok && !(m.tab == tabPolls && m.list.confirmDelete) {
+	// Tab switching — but never while a delete/kill confirmation awaits y/n.
+	if k, ok := msg.(tea.KeyMsg); ok &&
+		!(m.tab == tabPolls && m.list.confirmDelete) &&
+		!(m.tab == tabSessions && m.sessions.confirmKill) {
 		switch k.String() {
 		case "tab":
 			return m.switchTab(1 - m.tab)

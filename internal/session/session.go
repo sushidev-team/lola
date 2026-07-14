@@ -189,6 +189,19 @@ func (s *Store) Update(id string, fn func(sess *Session) bool) (Session, bool) {
 	return sess, true
 }
 
+// Delete removes the session with the given id under the store lock and
+// reports whether it existed. Used by an explicit kill once the session's
+// worktree has been removed; callers Save afterwards to persist the drop.
+func (s *Store) Delete(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.sessions[id]; !ok {
+		return false
+	}
+	delete(s.sessions, id)
+	return true
+}
+
 // PruneOlderThan drops sessions whose LastSeen is older than d and returns
 // how many were removed. Dead sessions age out of the snapshot this way.
 func (s *Store) PruneOlderThan(d time.Duration) int {

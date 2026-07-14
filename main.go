@@ -41,6 +41,7 @@ func main() {
 			RunE: func(c *cobra.Command, _ []string) error { return tui.Send(`{"cmd":"reload"}`) }},
 		enableCmd("enable"), enableCmd("disable"),
 		pollCmd(),
+		killCmd(),
 		logsCmd(),
 		doctorCmd(),
 		setupCmd(),
@@ -75,6 +76,23 @@ func pollCmd() *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&once, "once", false, "run one tick now")
 	cmd.Flags().BoolVar(&dry, "dry-run", false, "print matches, no side effects")
+	return cmd
+}
+
+// killCmd terminates one native session and cleans up after it: `lola kill
+// <session-id>` kills the agent's tmux session and, when the worktree is clean,
+// removes the worktree and frees the issue's slot. A dirty worktree (uncommitted
+// changes) is kept and the command exits nonzero telling you to rerun with
+// --force; --force removes it anyway. The outcome message is printed by Send.
+func killCmd() *cobra.Command {
+	var force bool
+	cmd := &cobra.Command{
+		Use: "kill <session-id>", Short: "Kill a session; remove its clean worktree (--force removes a dirty one)", Args: cobra.ExactArgs(1),
+		RunE: func(c *cobra.Command, a []string) error {
+			return tui.Send(fmt.Sprintf(`{"cmd":"kill","session":%q,"force":%t}`, a[0], force))
+		},
+	}
+	cmd.Flags().BoolVar(&force, "force", false, "remove the worktree even with uncommitted changes")
 	return cmd
 }
 

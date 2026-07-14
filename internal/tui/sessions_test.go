@@ -151,6 +151,110 @@ func TestAttachWithTmuxReturnsExec(t *testing.T) {
 	}
 }
 
+// The sessions tab kills the selected session behind a y/n confirm, mirroring
+// the polls-tab delete. Force is never offered here (CLI-only friction).
+func TestSessionsKillConfirmAndSend(t *testing.T) {
+	m := newTestRoot(t)
+	m.tab = tabSessions
+	m.sessions.data = cannedSessions()
+	m.sessions.cursor = 0 // s1
+
+	// "x" opens the confirm; the footer already advertises the shortcut.
+	m.Update(keyMsg("x"))
+	if !m.sessions.confirmKill {
+		t.Fatal("x must open the kill confirmation")
+	}
+	v := m.View()
+	if !strings.Contains(v, `kill session "s1"? (y/n)`) {
+		t.Errorf("view must prompt to confirm the kill:\n%s", v)
+	}
+	if !strings.Contains(v, "x kill") {
+		t.Errorf("sessions footer must advertise 'x kill':\n%s", v)
+	}
+	if strings.Contains(v, "force") || strings.Contains(v, "--force") {
+		t.Errorf("the TUI must never offer a force path:\n%s", v)
+	}
+
+	// "y" confirms: the confirmation closes and a kill command is dispatched.
+	_, cmd := m.Update(keyMsg("y"))
+	if m.sessions.confirmKill {
+		t.Error("y must close the kill confirmation")
+	}
+	if cmd == nil {
+		t.Fatal("y must dispatch a kill command")
+	}
+
+	// A kill outcome flashes verbatim (here: the daemon's dirty-kept message).
+	dirty := `session s1 terminated; worktree kept (uncommitted changes) at /x — rerun with --force to remove it`
+	m.Update(killDoneMsg{msg: dirty})
+	if m.sessions.flash != dirty {
+		t.Errorf("flash = %q, want the verbatim kill message", m.sessions.flash)
+	}
+	if !strings.Contains(m.View(), "--force") {
+		t.Errorf("the dirty-kept message must render in the view:\n%s", m.View())
+	}
+}
+
+// "n" (or any non-y key) at the confirm cancels without dispatching a kill.
+func TestSessionsKillConfirmCancel(t *testing.T) {
+	m := newTestRoot(t)
+	m.tab = tabSessions
+	m.sessions.data = cannedSessions()
+	m.sessions.cursor = 0
+
+	m.Update(keyMsg("x"))
+	_, cmd := m.Update(keyMsg("n"))
+	if m.sessions.confirmKill {
+		t.Error("n must close the kill confirmation")
+	}
+	if cmd != nil {
+		t.Error("n must not dispatch a kill command")
+	}
+}
+
+// A background refresh between "x" and "y" must NOT retarget the kill: the
+// target is pinned to the session ID captured when "x" was pressed, even if the
+// list is reordered/pruned and the cursor now points at a different session.
+func TestSessionsKillTargetPinnedAcrossRefresh(t *testing.T) {
+	m := newTestRoot(t)
+	m.tab = tabSessions
+	m.sessions.data = cannedSessions()
+	m.sessions.cursor = 0 // s1
+
+	m.Update(keyMsg("x"))
+	if m.sessions.killTarget != "s1" {
+		t.Fatalf("x must pin the kill target to s1, got %q", m.sessions.killTarget)
+	}
+
+	// A refresh arrives mid-confirm with a new session sorted ahead of s1, so
+	// the fixed cursor (0) now selects a DIFFERENT session.
+	reordered := &protocol.SessionsData{Sessions: []protocol.SessionInfo{
+		{ID: "s3", Project: "aaa", Issue: "ENG-1", Status: "working", Source: "native"},
+		m.sessions.data.Sessions[0], // s1, now at index 1
+	}}
+	m.Update(sessionsMsg{data: reordered})
+	if sel := m.sessions.selected(); sel == nil || sel.ID != "s3" {
+		t.Fatalf("cursor should now point at s3 after the reshuffle, got %v", sel)
+	}
+
+	// The pinned target — and the prompt — must still reference s1.
+	if m.sessions.killTarget != "s1" {
+		t.Errorf("kill target must stay pinned to s1, got %q", m.sessions.killTarget)
+	}
+	if v := m.View(); !strings.Contains(v, `kill session "s1"? (y/n)`) {
+		t.Errorf("prompt must still name s1, not the reshuffled cursor:\n%s", v)
+	}
+
+	// "y" confirms against the pinned s1 and resets the target.
+	_, cmd := m.Update(keyMsg("y"))
+	if cmd == nil {
+		t.Fatal("y must dispatch a kill command")
+	}
+	if m.sessions.killTarget != "" {
+		t.Errorf("kill target must reset after confirm, got %q", m.sessions.killTarget)
+	}
+}
+
 func TestSessionsDaemonDownHint(t *testing.T) {
 	m := newTestRoot(t)
 	m.tab = tabSessions

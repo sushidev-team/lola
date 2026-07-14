@@ -109,6 +109,16 @@ func Send(raw string) error {
 			return fmt.Errorf("bad pollOnce data: %w", err)
 		}
 		fmt.Print(renderMatches(&d))
+	case "kill":
+		var d protocol.KillData
+		if err := json.Unmarshal(resp.Data, &d); err != nil {
+			return fmt.Errorf("bad kill data: %w", err)
+		}
+		if d.Message != "" {
+			fmt.Println(d.Message)
+		} else {
+			fmt.Println("ok")
+		}
 	default:
 		fmt.Println("ok")
 	}

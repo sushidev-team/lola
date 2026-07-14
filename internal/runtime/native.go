@@ -395,13 +395,16 @@ func (n *Native) Adopt(ctx context.Context) ([]session.Session, error) {
 	return out, nil
 }
 
-// Kill terminates the session: tmux kill-session (a session that is already
-// gone is not an error), then — only when removeWorktree is set — worktree
-// removal with force=false, so a dirty worktree refuses with
-// worktree.ErrDirty (which propagates for the caller to surface as "worktree
-// dirty, kept at <dir>") and a missing worktree directory is a no-op. Callers
-// invoke Kill only for merged or explicitly killed sessions.
-func (n *Native) Kill(ctx context.Context, s session.Session, removeWorktree bool) error {
+// Kill terminates the session. Ordering is deliberate: the tmux session is
+// killed FIRST (a session that is already gone is not an error), so the agent
+// is always stopped even if the subsequent worktree removal refuses — a dirty
+// worktree then survives with its agent already down. Only when removeWorktree
+// is set does worktree removal follow, with the given force: force=false
+// refuses a dirty worktree with worktree.ErrDirty (which propagates for the
+// caller to surface as "worktree dirty, kept at <dir>"), force=true removes it
+// regardless; a missing worktree directory is a no-op either way. Callers
+// invoke Kill for merged or explicitly killed sessions.
+func (n *Native) Kill(ctx context.Context, s session.Session, removeWorktree, force bool) error {
 	name := s.TmuxName
 	if name == "" {
 		name = s.ID
@@ -422,7 +425,7 @@ func (n *Native) Kill(ctx context.Context, s session.Session, removeWorktree boo
 	if _, err := os.Stat(dir); errors.Is(err, fs.ErrNotExist) {
 		return nil // already gone
 	}
-	if err := n.WT.Remove(ctx, *p, dir, s.Branch, false); err != nil {
+	if err := n.WT.Remove(ctx, *p, dir, s.Branch, force); err != nil {
 		return fmt.Errorf("runtime: kill %s: %w", s.ID, err)
 	}
 	return nil

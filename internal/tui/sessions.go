@@ -62,14 +62,16 @@ func sourceBadge(source string) string {
 }
 
 type sessionsModel struct {
-	cursor     int
-	data       *protocol.SessionsData // nil until the first successful fetch
-	daemonDown bool                   // last fetch failed to dial the socket
-	dataErr    string                 // non-dial fetch failure, if any
-	flash      string
-	preview    string // capture-pane output for the selected tmux session
-	previewFor string // session ID the preview belongs to ("" = none)
-	tmux       *tmux.Client
+	cursor      int
+	data        *protocol.SessionsData // nil until the first successful fetch
+	daemonDown  bool                   // last fetch failed to dial the socket
+	dataErr     string                 // non-dial fetch failure, if any
+	flash       string
+	confirmKill bool   // "x" pressed: awaiting y/n to kill killTarget
+	killTarget  string // session ID captured when "x" was pressed (pinned across refreshes)
+	preview     string // capture-pane output for the selected tmux session
+	previewFor  string // session ID the preview belongs to ("" = none)
+	tmux        *tmux.Client
 }
 
 func (s *sessionsModel) tmuxClient() *tmux.Client {
@@ -100,6 +102,32 @@ type previewMsg struct {
 }
 
 type attachDoneMsg struct{ err error }
+
+// killDoneMsg carries the outcome of a `cmd=kill` request. msg is the message
+// to flash (a success line, or the daemon's verbatim dirty-kept error).
+type killDoneMsg struct{ msg string }
+
+// killSelectedCmd sends a (non-force) kill for id and reports the outcome to
+// flash. Force is deliberately never offered here: removing a dirty worktree is
+// CLI-only friction (`lola kill <id> --force`).
+func killSelectedCmd(id string) tea.Cmd {
+	return func() tea.Msg {
+		resp, err := request(protocol.Request{Cmd: "kill", Session: id})
+		if err != nil {
+			return killDoneMsg{msg: err.Error()}
+		}
+		if !resp.OK {
+			// Dirty worktree (or any refusal): surface the daemon message
+			// verbatim so the user learns to rerun with `lola kill <id> --force`.
+			return killDoneMsg{msg: resp.Error}
+		}
+		var d protocol.KillData
+		if err := json.Unmarshal(resp.Data, &d); err == nil && d.Message != "" {
+			return killDoneMsg{msg: d.Message}
+		}
+		return killDoneMsg{msg: "session killed"}
+	}
+}
 
 func fetchSessionsCmd() tea.Msg {
 	resp, err := request(protocol.Request{Cmd: "sessions"})
@@ -181,6 +209,21 @@ func (m *rootModel) updateSessions(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	s := &m.sessions
+	// A pending kill confirmation owns the next keypress: y/Y kills, anything
+	// else cancels. Force is never offered here (CLI-only friction). The target
+	// is the ID captured when "x" was pressed — NOT s.selected() re-read now: a
+	// background refresh (the 5s tick) can reorder/prune the list and shift the
+	// cursor onto a different session between "x" and "y", which would otherwise
+	// force-kill the wrong session's worktree/branch.
+	if s.confirmKill {
+		s.confirmKill = false
+		target := s.killTarget
+		s.killTarget = ""
+		if target != "" && (k.String() == "y" || k.String() == "Y") {
+			return m, killSelectedCmd(target)
+		}
+		return m, nil
+	}
 	s.flash = ""
 	switch k.String() {
 	case "q":
@@ -199,6 +242,11 @@ func (m *rootModel) updateSessions(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.attachSelected()
 	case "o":
 		return m, m.openSelectedPR()
+	case "x":
+		if sel := s.selected(); sel != nil {
+			s.confirmKill = true
+			s.killTarget = sel.ID
+		}
 	}
 	return m, nil
 }
@@ -260,10 +308,13 @@ func (m *rootModel) sessionsView() string {
 	}
 
 	b.WriteString("\n")
-	if s.flash != "" {
+	switch {
+	case s.confirmKill:
+		b.WriteString(warnText.Render(fmt.Sprintf("kill session %q? (y/n)", s.killTarget)) + "\n")
+	case s.flash != "":
 		b.WriteString(warnText.Render(s.flash) + "\n")
 	}
-	b.WriteString(faintText.Render("↑/↓ move · enter attach · o open PR · tab/1/2 switch view · q quit") + "\n")
+	b.WriteString(faintText.Render("↑/↓ move · enter attach · o open PR · x kill · tab/1/2 switch view · q quit") + "\n")
 	return b.String()
 }
 

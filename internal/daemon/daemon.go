@@ -36,7 +36,7 @@ import (
 type NativeAPI interface {
 	Spawn(ctx context.Context, p config.Project, issue linear.Issue) (session.Session, error)
 	Adopt(ctx context.Context) ([]session.Session, error)
-	Kill(ctx context.Context, s session.Session, removeWorktree bool) error
+	Kill(ctx context.Context, s session.Session, removeWorktree, force bool) error
 	Alive(ctx context.Context, s session.Session) bool
 }
 
