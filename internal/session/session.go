@@ -37,6 +37,44 @@ type Session struct {
 	// orphan revert restores EXACTLY these, never the whole match_labels set,
 	// so it never re-adds a label the issue never had.
 	RemovedLabels []string `json:"removed_labels,omitempty"`
+
+	// Reaction-state fields (PLAN P3): the persisted memory the reaction
+	// engine keeps per session so a reaction fires once per state transition
+	// (not on every 30s observer cycle) and gives up after a bounded number of
+	// automatic retries. All persist in sessions.json.
+
+	// CIRetries counts how many times the ci_failed reaction has already
+	// re-prompted this agent for the CURRENT failing streak. It increments
+	// each time a recovery prompt is sent and resets to 0 once checks pass
+	// again; when it reaches the project's escalate_after it flips Escalated.
+	CIRetries int `json:"ci_retries,omitempty"`
+
+	// LastReactedStatus is the derived Status the engine last actually ACTED
+	// on. The engine reacts only when the current Status differs from this,
+	// then stamps it — so a persistent ci_failed / changes_requested state
+	// re-prompts the agent once per transition into that state, never every
+	// observer tick. Cleared/overwritten as the session moves between states.
+	LastReactedStatus string `json:"last_reacted_status,omitempty"`
+
+	// Escalated is set once the ci_failed retries are exhausted
+	// (CIRetries ≥ escalate_after): the engine stops auto-retrying and hands
+	// off to the notifier/human. Stays true until checks pass and reset it, so
+	// an escalated session is never re-prompted in a loop.
+	Escalated bool `json:"escalated,omitempty"`
+
+	// AtPrompt is the send-keys SAFETY GATE: true only when the agent is idle
+	// at its input prompt (set by the Claude Code Stop hook), cleared the
+	// moment we send it a message or it resumes work (tool_use / notification).
+	// The engine must never type into a pane while the agent is mid-turn, so a
+	// reaction is dispatched only when AtPrompt is true; otherwise it parks in
+	// PendingReaction for the next cycle.
+	AtPrompt bool `json:"at_prompt,omitempty"`
+
+	// PendingReaction holds a reaction (the target Status that triggered it,
+	// e.g. "ci_failed") that was computed while the agent was mid-turn
+	// (AtPrompt false) and therefore deferred. The engine retries delivering
+	// it on the next observer cycle once AtPrompt becomes true, then clears it.
+	PendingReaction string `json:"pending_reaction,omitempty"`
 }
 
 // Store is a mutex-guarded in-memory session map keyed by ID, persisted as

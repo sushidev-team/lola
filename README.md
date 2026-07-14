@@ -195,6 +195,65 @@ spawning the same issue in one cycle, and every dispatch is gated on the native
 runtime being healthy — if `tmux`/`git`/`claude` are not all resolvable the
 tick is skipped and **nothing** (labels, seen, in-flight) is mutated.
 
+### `[reactions]` (optional)
+
+How lola reacts when a live session's derived PR/CI status changes (the P3
+reaction engine). **Entirely optional** — every reaction and the whole table
+default sensibly, so existing configs keep working unchanged. Each reaction is
+its own sub-table (`[reactions.<name>]`) with the same three keys:
+
+| Key | Type | Description |
+| --- | --- | --- |
+| `auto` | bool | React automatically, versus notify-and-park only. |
+| `retries` | int | Automatic recovery attempts before escalating. Meaningful for `ci_failed` only; must be `>= 0`. |
+| `message` | string | Template sent to the live agent. Empty = react but send nothing. |
+
+A `message` may contain the placeholders `{{.Detail}}` (fetched CI logs or
+review comments), `{{.Issue}}` (Linear identifier), and `{{.PR}}` (PR
+number/URL). They are filled by **plain string replacement**, not a template
+engine, so an agent-authored PR body or a failing log can never inject template
+directives.
+
+| Reaction | Default `auto` | Default `retries` | Behavior |
+| --- | --- | --- | --- |
+| `ci_failed` | `true` | `2` | Feed the failing check logs into the session with a recovery prompt; retry N times, then escalate. |
+| `changes_requested` | `true` | — | Relay review comments (incl. inline) into the session; re-request review on the next push. |
+| `merge_conflict` | `true` | — | Tell the agent to rebase and resolve (detected via the observer's `mergeable`). |
+| `approved_and_green` | **`false`** | — | **Never auto-merge.** Notify and park the worktree for a human; the default message is empty. |
+| `merged` | `true` | — | Auto cleanup: remove the worktree + branch, archive the session, free the slot. |
+
+Any unset field takes its default, so you can override just one thing (e.g.
+`retries = 0` to disable CI recovery, or `auto = false` on a single reaction)
+and leave the rest alone. Explicit `false`/`0`/`""` are honored, not treated as
+"unset".
+
+### `[notify]` (optional)
+
+Best-effort desktop + Slack notifications, routed by priority (P3.20). Optional;
+the defaults below apply when the table is absent.
+
+| Key | Type | Description |
+| --- | --- | --- |
+| `desktop` | bool | macOS desktop banners. Default `true` on macOS, `false` elsewhere (no-op off macOS). |
+| `slack_webhook_env` | string | **Name** of an environment variable holding the Slack incoming-webhook URL. Default `SLACK_WEBHOOK_URL`. |
+| `routing` | table of string arrays | Per-priority channel lists under `[notify.routing]`; each channel is `"desktop"` or `"slack"`. |
+
+There is deliberately **no webhook URL field** — the URL is a secret and never
+lives in `config.toml`. lola reads it from the named environment variable at
+notify time and never logs it; when the variable is unset, the Slack channel is
+simply disabled.
+
+Routing priorities and their defaults:
+
+| Priority | Default channels | Used for |
+| --- | --- | --- |
+| `urgent` | `["desktop", "slack"]` | needs-input, escalations |
+| `action` | `["desktop", "slack"]` | changes-requested, CI failed after retries |
+| `info` | `["slack"]` | approved+parked, merged+cleaned |
+
+Priorities you omit under `[notify.routing]` keep their default channels; set a
+priority to `[]` to route it nowhere.
+
 ## Secrets
 
 The Linear API key is resolved at dispatch time, keychain first, then

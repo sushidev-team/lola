@@ -28,6 +28,7 @@ import (
 //	"notification" Notification hook — needs input / permission prompt
 //	"session_end"  SessionEnd hook — the session terminated
 //	"tool_use"     PostToolUse hook — liveness heartbeat after a tool call
+//	"user_prompt"  UserPromptSubmit hook — turn start (clears the AtPrompt gate)
 //
 // Cmd "kill" tears a session down: Session names the target session ID and
 // Force selects whether a dirty worktree (uncommitted changes) is removed
@@ -41,7 +42,7 @@ type Request struct {
 
 	// Hook callback fields, set only for cmd=hookEvent.
 	Session string `json:"session,omitempty"` // lola session ID ($LOLA_SESSION in the agent's pane); also the kill target
-	Event   string `json:"event,omitempty"`   // normalized: stop|notification|session_end|tool_use
+	Event   string `json:"event,omitempty"`   // normalized: stop|notification|session_end|tool_use|user_prompt
 	Detail  string `json:"detail,omitempty"`  // optional: notification_type / stop_reason / end_reason
 
 	// Force is set only for cmd=kill: remove the worktree even when it has
@@ -99,6 +100,16 @@ type SessionInfo struct {
 	Source   string `json:"source"`   // always "native"; kept for wire compat with pre-P3 clients
 	Worktree string `json:"worktree"` // native runtime: the session's git worktree dir; "" otherwise
 	Age      string `json:"age"`      // human duration since first observed, e.g. "2h05m"
+
+	// Reaction-engine posture (PLAN P3), flattened so the TUI renders reaction
+	// state without importing internal/session or re-deriving it.
+	CIRetries int  `json:"ciRetries"` // ci_failed recovery attempts already spent on the current failing streak
+	Escalated bool `json:"escalated"` // ci retries exhausted; the session was handed off to a human
+	// Reacting is a short human label of the current reaction posture, derived
+	// from Status + CIRetries + Escalated: "" (nothing worth surfacing beyond
+	// STATUS) | "ci retry 1/2" | "escalated" | "awaiting review" |
+	// "addressing review" | "rebasing" | "ready to merge".
+	Reacting string `json:"reacting"`
 }
 
 // KillData is Response.Data for cmd=kill. Removed reports whether the worktree

@@ -337,7 +337,9 @@ func TestHandleHookEventStatusTransitions(t *testing.T) {
 		{"stop", "working", "idle"},
 		{"notification", "working", "needs_input"},
 		{"session_end", "working", "session_ended"},
-		{"tool_use", "idle", "working"}, // heartbeat promotes idle back to working
+		{"tool_use", "idle", "working"},           // heartbeat promotes idle back to working
+		{"user_prompt", "idle", "working"},        // turn start on an idle agent
+		{"user_prompt", "needs_input", "working"}, // human answered / nudged
 	}
 	for _, c := range cases {
 		t.Run(c.event, func(t *testing.T) {
@@ -354,6 +356,35 @@ func TestHandleHookEventStatusTransitions(t *testing.T) {
 				t.Errorf("status after %s = %q (ok=%v), want %q", c.event, got.Status, ok, c.after)
 			}
 		})
+	}
+}
+
+// A turn-START user_prompt must CLEAR the AtPrompt send-keys gate that a prior
+// Stop set. Without it a human-initiated attach turn (whose text-only reply
+// fires no PostToolUse) would leave AtPrompt stale-true and the reaction engine
+// could send-keys into the mid-reply pane.
+func TestHandleHookEventUserPromptClearsAtPromptGate(t *testing.T) {
+	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})
+	s := nativeSess("FE-1", "working")
+	d.sessions.Upsert(s)
+
+	// Agent finishes a turn: Stop sets AtPrompt=true (idle at the prompt).
+	d.handleHookEvent(protocol.Request{Cmd: "hookEvent", Session: s.ID, Event: "stop"})
+	if got, _ := d.sessions.Get(s.ID); !got.AtPrompt {
+		t.Fatalf("stop must set AtPrompt=true, got %+v", got)
+	}
+
+	// Operator attaches and submits a nudge: turn starts, gate must close.
+	resp := d.handleHookEvent(protocol.Request{Cmd: "hookEvent", Session: s.ID, Event: "user_prompt"})
+	if !resp.OK {
+		t.Fatalf("user_prompt must be OK, got %+v", resp)
+	}
+	got, _ := d.sessions.Get(s.ID)
+	if got.AtPrompt {
+		t.Error("user_prompt must clear AtPrompt so the reaction engine cannot send-keys mid-turn")
+	}
+	if got.Status != "working" {
+		t.Errorf("user_prompt must promote idle → working, got %q", got.Status)
 	}
 }
 
@@ -581,6 +612,76 @@ func TestSessionsDataIncludesSourceAndWorktree(t *testing.T) {
 	}
 	if a.Source != "ao" || a.Worktree != "" {
 		t.Errorf("non-native session = source %q worktree %q, want ao / empty", a.Source, a.Worktree)
+	}
+}
+
+// reactingLabel is the pure derivation the TUI renders; the retry budget (M in
+// "N/M") comes from the ci_failed reaction config.
+func TestReactingLabel(t *testing.T) {
+	const budget = 2
+	cases := []struct {
+		name      string
+		status    string
+		ciRetries int
+		escalated bool
+		want      string
+	}{
+		{"plain working session", "working", 0, false, ""},
+		{"ci failed, no retry yet", "ci_failed", 0, false, "ci retry 0/2"},
+		{"ci failed, mid retry", "ci_failed", 1, false, "ci retry 1/2"},
+		{"ci pending after a retry send", "ci_pending", 1, false, "ci retry 1/2"},
+		{"ci pending, no retry in flight", "ci_pending", 0, false, ""},
+		{"escalated wins over ci_failed", "ci_failed", 2, true, "escalated"},
+		{"changes requested", "changes_requested", 0, false, "addressing review"},
+		{"merge conflict", "merge_conflict", 0, false, "rebasing"},
+		{"approved and green", "approved", 0, false, "ready to merge"},
+		{"green, awaiting a reviewer", "review_pending", 0, false, "awaiting review"},
+		{"merged is not a posture", "merged", 0, false, ""},
+	}
+	for _, c := range cases {
+		if got := reactingLabel(c.status, c.ciRetries, c.escalated, budget); got != c.want {
+			t.Errorf("%s: reactingLabel(%q, %d, %v) = %q, want %q",
+				c.name, c.status, c.ciRetries, c.escalated, got, c.want)
+		}
+	}
+}
+
+// The sessions reply flattens the persisted reaction state (CIRetries /
+// Escalated) and derives the human posture label from status + those fields +
+// the configured ci_failed retry budget, so the TUI renders it without touching
+// internal/session.
+func TestSessionsDataMapsReactionState(t *testing.T) {
+	cfg := nativeTestConfig(nativePoll("p1"))
+	cfg.Reactions.CIFailed.Retries = 2
+	d := newTestDaemon(t, cfg, &linear.Fake{}, &fakeNative{})
+
+	retrying := nativeSess("FE-1", "ci_failed")
+	retrying.CIRetries = 1
+	d.sessions.Upsert(retrying)
+
+	escalated := nativeSess("FE-2", "ci_failed")
+	escalated.CIRetries = 2
+	escalated.Escalated = true
+	d.sessions.Upsert(escalated)
+
+	ready := nativeSess("FE-3", "approved")
+	d.sessions.Upsert(ready)
+
+	byID := map[string]protocol.SessionInfo{}
+	for _, si := range d.sessionsData().Sessions {
+		byID[si.ID] = si
+	}
+
+	if r := byID[retrying.ID]; r.CIRetries != 1 || r.Escalated || r.Reacting != "ci retry 1/2" {
+		t.Errorf("retrying = {CIRetries %d, Escalated %v, Reacting %q}, want {1, false, %q}",
+			r.CIRetries, r.Escalated, r.Reacting, "ci retry 1/2")
+	}
+	if e := byID[escalated.ID]; e.CIRetries != 2 || !e.Escalated || e.Reacting != "escalated" {
+		t.Errorf("escalated = {CIRetries %d, Escalated %v, Reacting %q}, want {2, true, escalated}",
+			e.CIRetries, e.Escalated, e.Reacting)
+	}
+	if r := byID[ready.ID]; r.Reacting != "ready to merge" {
+		t.Errorf("approved session Reacting = %q, want %q", r.Reacting, "ready to merge")
 	}
 }
 

@@ -22,6 +22,7 @@ import (
 
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/linear"
+	"github.com/sushidev-team/lola/internal/notify"
 	"github.com/sushidev-team/lola/internal/runtime"
 	"github.com/sushidev-team/lola/internal/scm"
 	"github.com/sushidev-team/lola/internal/secrets"
@@ -101,6 +102,17 @@ type Daemon struct {
 	// scm.Client. Overridable in tests.
 	prForBranch func(ctx context.Context, repo, branch string) (*scm.PR, error)
 
+	// Reaction-engine seams (PLAN P3.16–19). notifier is rebuilt from cfg in
+	// Run and on reload (under d.mu); the rest default to the real tmux/gh
+	// clients in newDaemon and are overridden by tests. sendKeys is the ONE way
+	// the engine types into a live agent (asserts AtPrompt at the call site);
+	// failingChecks / reviewComments fetch the size-bounded reaction content the
+	// engine hands the agent.
+	notifier       notify.Notifier
+	sendKeys       func(ctx context.Context, tmuxName, text string) error
+	failingChecks  func(ctx context.Context, repo string, pr int) (string, error)
+	reviewComments func(ctx context.Context, repo string, pr int) (string, error)
+
 	// runtimeHealth is the tick precheck seam (SPEC step 1 successor): it
 	// reports whether the native runtime's external tools — tmux, git,
 	// claude — are all resolvable, returning an error naming the first
@@ -135,6 +147,14 @@ func newDaemon(cfg *config.Config, lin linear.API, logger *log.Logger, home stri
 	d.openPR = d.ghOpenPR
 	scmc := &scm.Client{}
 	d.prForBranch = scmc.PRForBranch
+	d.failingChecks = scmc.FailingChecks
+	d.reviewComments = scmc.ReviewComments
+	d.sendKeys = func(ctx context.Context, tmuxName, text string) error {
+		return (&tmux.Client{Bin: "tmux"}).SendKeys(ctx, tmuxName, text)
+	}
+	// A no-op notifier until Run/reload resolves the [notify] config; keeps the
+	// engine free of nil checks. notify.New always returns a non-nil Notifier.
+	d.notifier = notify.New(notify.NotifyConfig{})
 	d.runtimeHealth = checkRuntimeHealth
 	return d
 }
@@ -195,6 +215,10 @@ func Run(ctx context.Context) error {
 	d.lolaBin = lolaBin
 	d.native = newNativeRuntime(cfg, home, lolaBin, d.linearKey)
 	d.realNative = true
+	// Reaction notifier (PLAN P3.20): resolve the [notify] table into a live
+	// desktop/Slack fan-out. Rebuilt on reload (handleReload). The Slack webhook
+	// URL is resolved from its env-var name here and never logged.
+	d.notifier = notify.New(cfg.ResolveNotify())
 	if err := cfg.Validate(); err != nil {
 		// Not fatal: the daemon stays up so status/reload can surface and
 		// fix it — but polls are HELD (never ticked). Reload rejects the

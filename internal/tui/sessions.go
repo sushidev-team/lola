@@ -51,6 +51,23 @@ func statusStyle(status string) lipgloss.Style {
 	return lipgloss.NewStyle()
 }
 
+// reactingStyle colors the reaction-posture label (protocol.SessionInfo.Reacting):
+// "escalated" (needs a human) red, "ready to merge" green, an active retry or
+// rework ("ci retry N/M", "addressing review", "rebasing") yellow. Everything
+// else — "awaiting review" and the empty label — is unstyled so the urgent and
+// done states stand out.
+func reactingStyle(label string) lipgloss.Style {
+	switch {
+	case label == "escalated":
+		return badText
+	case label == "ready to merge":
+		return goodText
+	case strings.HasPrefix(label, "ci retry"), label == "addressing review", label == "rebasing":
+		return warnText
+	}
+	return lipgloss.NewStyle()
+}
+
 // sourceBadge renders which backend spawned a session: native sessions are
 // lola's own runners (P2); everything else — including pre-P2 records with an
 // empty source — came through the AO bridge.
@@ -323,7 +340,11 @@ func (m *rootModel) sessionsView() string {
 // nesting them inside another style's escape sequences breaks both.
 func (m *rootModel) sessionsTable() string {
 	s := &m.sessions
-	headers := []string{" ", "ISSUE", "PROJECT", "STATUS", "PR", "CHECKS", "REVIEW", "AGE"}
+	// REACTING replaces REVIEW here: the reaction posture already encodes the
+	// actionable review state in human form ("awaiting review", "ready to
+	// merge", …) and keeps the table one wide column instead of two. The raw
+	// review decision still shows in the detail card below.
+	headers := []string{" ", "ISSUE", "PROJECT", "STATUS", "PR", "CHECKS", "REACTING", "AGE"}
 	rows := make([][]string, len(s.data.Sessions))
 	for i, si := range s.data.Sessions {
 		marker := " "
@@ -337,7 +358,9 @@ func (m *rootModel) sessionsTable() string {
 		rows[i] = []string{
 			marker, si.Issue, si.Project,
 			statusStyle(si.Status).Render(si.Status),
-			pr, dash(si.Checks), dash(si.Review), dash(si.Age),
+			pr, dash(si.Checks),
+			reactingStyle(si.Reacting).Render(dash(si.Reacting)),
+			dash(si.Age),
 		}
 	}
 
@@ -369,6 +392,12 @@ func (m *rootModel) sessionDetail() string {
 		if sel.Worktree != "" {
 			b.WriteString(faintText.Render("worktree: "+sel.Worktree) + "\n")
 		}
+		if sel.Review != "" || sel.Reacting != "" {
+			// The table dropped the REVIEW column for REACTING; keep the raw
+			// review decision reachable here for the selected session.
+			b.WriteString(faintText.Render("review: "+dash(sel.Review)) +
+				"   " + reactingStyle(sel.Reacting).Render(dash(sel.Reacting)) + "\n")
+		}
 		if s.previewFor == sel.ID && s.preview != "" {
 			for _, ln := range lastLines(s.preview, previewLines) {
 				b.WriteString(previewLine(ln, m.width) + "\n")
@@ -385,6 +414,10 @@ func (m *rootModel) sessionDetail() string {
 	fmt.Fprintf(&b, "worktree: %s\n", dash(sel.Worktree))
 	fmt.Fprintf(&b, "pr:       %s\n", dash(sel.PRURL))
 	fmt.Fprintf(&b, "status:   %s\n", statusStyle(sel.Status).Render(sel.Status))
+	fmt.Fprintf(&b, "review:   %s\n", dash(sel.Review))
+	if sel.Reacting != "" {
+		fmt.Fprintf(&b, "reacting: %s\n", reactingStyle(sel.Reacting).Render(sel.Reacting))
+	}
 	fmt.Fprintf(&b, "age:      %s\n", dash(sel.Age))
 	return b.String()
 }

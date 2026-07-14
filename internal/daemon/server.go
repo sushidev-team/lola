@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/sushidev-team/lola/internal/config"
+	"github.com/sushidev-team/lola/internal/notify"
 	"github.com/sushidev-team/lola/internal/protocol"
 	"github.com/sushidev-team/lola/internal/session"
 )
@@ -110,6 +111,18 @@ func (d *Daemon) handle(ctx context.Context, req protocol.Request) protocol.Resp
 //	tool_use     → LastSeen touch only     liveness heartbeat; no status change
 //	                                       unless currently "idle", which a new
 //	                                       tool call promotes back to "working"
+//	user_prompt  → status "working"        turn START (a prompt was submitted —
+//	                                       including a human attach nudge), when
+//	                                       currently idle / needs_input
+//
+// AtPrompt (PLAN P3 send-keys safety gate) is maintained alongside status: only
+// "stop" sets it (the agent is idle at its input prompt and safe to send-keys
+// into); every other event — a new tool_use, a notification the human must
+// answer, session end, or a user_prompt that STARTS a turn — CLEARS it, so the
+// reaction engine never types into a busy or human-blocked pane. user_prompt is
+// the turn-START clear: without it a human-initiated attach turn whose reply is
+// text-only (no PostToolUse) would leave AtPrompt stale-true for the whole turn
+// and the observer could send-keys into the mid-reply pane.
 //
 // The reply is ALWAYS OK — a hook runs on the agent's critical path and must
 // never fail or block its turn. An unknown session ID is logged once per ID
@@ -131,12 +144,25 @@ func (d *Daemon) handleHookEvent(req protocol.Request) protocol.Response {
 		switch req.Event {
 		case "stop":
 			sess.Status = "idle"
+			sess.AtPrompt = true // idle at the prompt: safe to send-keys into
 		case "notification":
 			sess.Status = "needs_input"
+			sess.AtPrompt = false // waiting on a human: never send-keys
 		case "session_end":
 			sess.Status = "session_ended"
+			sess.AtPrompt = false
 		case "tool_use":
+			sess.AtPrompt = false // mid-turn (busy): never send-keys
 			if sess.Status == "idle" {
+				sess.Status = "working"
+			}
+		case "user_prompt":
+			// Turn START: a prompt was submitted (an autonomous turn, or a human
+			// attach nudge). Clear the send-keys gate so the reaction engine never
+			// types into the now-busy pane, and promote an idle / needs_input
+			// session to working — the agent is actively processing again.
+			sess.AtPrompt = false
+			if sess.Status == "idle" || sess.Status == "needs_input" {
 				sess.Status = "working"
 			}
 		default:
@@ -184,17 +210,25 @@ func (d *Daemon) warnUnknownHookSession(id, event string) {
 func (d *Daemon) sessionsData() protocol.SessionsData {
 	snap := d.sessions.Snapshot()
 	now := time.Now()
+	// The ci_failed retry budget is the "N/M" denominator of the reacting
+	// label; reactions config is global, read once under the config lock.
+	d.mu.Lock()
+	ciBudget := d.cfg.Reactions.CIFailed.Retries
+	d.mu.Unlock()
 	out := protocol.SessionsData{Sessions: make([]protocol.SessionInfo, 0, len(snap))}
 	for _, s := range snap {
 		si := protocol.SessionInfo{
-			ID:       s.ID,
-			Project:  s.Project,
-			Issue:    s.Issue,
-			Branch:   s.Branch,
-			Status:   s.Status,
-			TmuxName: s.TmuxName,
-			Source:   s.Source,
-			Age:      formatAge(now.Sub(s.FirstSeen)),
+			ID:        s.ID,
+			Project:   s.Project,
+			Issue:     s.Issue,
+			Branch:    s.Branch,
+			Status:    s.Status,
+			TmuxName:  s.TmuxName,
+			Source:    s.Source,
+			Age:       formatAge(now.Sub(s.FirstSeen)),
+			CIRetries: s.CIRetries,
+			Escalated: s.Escalated,
+			Reacting:  reactingLabel(s.Status, s.CIRetries, s.Escalated, ciBudget),
 		}
 		if s.Source == "native" {
 			// Native sessions live in worktrees the daemon created at
@@ -211,6 +245,34 @@ func (d *Daemon) sessionsData() protocol.SessionsData {
 		out.Sessions = append(out.Sessions, si)
 	}
 	return out
+}
+
+// reactingLabel summarizes the reaction engine's current posture for a session
+// into a short human label for the TUI, derived purely from the persisted
+// reaction state (status + CIRetries + Escalated) plus the configured ci_failed
+// retry budget (the "N/M" denominator). "" means there is no reaction posture
+// worth surfacing beyond the STATUS column; the label never re-states the raw
+// status verbatim. Escalated wins over everything: it is set only while CI is
+// still failing and the session has been handed to a human.
+func reactingLabel(status string, ciRetries int, escalated bool, ciBudget int) string {
+	switch {
+	case escalated:
+		return "escalated"
+	case status == "ci_failed":
+		return fmt.Sprintf("ci retry %d/%d", ciRetries, ciBudget)
+	case status == "ci_pending" && ciRetries > 0:
+		// A recovery prompt is in flight and CI is re-running.
+		return fmt.Sprintf("ci retry %d/%d", ciRetries, ciBudget)
+	case status == "changes_requested":
+		return "addressing review"
+	case status == "merge_conflict":
+		return "rebasing"
+	case status == "approved":
+		return "ready to merge"
+	case status == "review_pending":
+		return "awaiting review"
+	}
+	return ""
 }
 
 // formatAge renders a duration TUI-compactly: "42s", "12m", "3h05m", "2d14h".
@@ -262,6 +324,10 @@ func (d *Daemon) handleReload(ctx context.Context) error {
 		d.lin = nil // key source / endpoint changed: re-resolve lazily
 		d.viewerID = ""
 	}
+	// Rebuild the reaction notifier from the new [notify] table (the resolved
+	// [reactions] config lives on d.cfg and is read live by the engine). The
+	// webhook URL is re-resolved from its env-var name and never logged.
+	d.notifier = notify.New(nc.ResolveNotify())
 	if d.realNative && !reflect.DeepEqual(old.Projects, nc.Projects) {
 		// The native runtime holds a config reference for its project
 		// registry: recreate it whenever the [[project]] set changes.

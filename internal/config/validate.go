@@ -6,6 +6,8 @@ import (
 	"maps"
 	"regexp"
 	"slices"
+
+	"github.com/sushidev-team/lola/internal/notify"
 )
 
 // repoRe matches a GitHub "owner/name" reference. Deliberately loose (GitHub's
@@ -198,5 +200,52 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	errs = append(errs, c.validateReactions()...)
+	errs = append(errs, c.validateNotify()...)
+
 	return errors.Join(errs...)
+}
+
+// validateReactions checks the [reactions] table. Auto and Message are
+// free-form (no validation); only retries has a hard rule: it must be >= 0.
+// A config lacking the table validates cleanly (defaults have retries >= 0).
+func (c *Config) validateReactions() []error {
+	var errs []error
+	reactions := []struct {
+		name string
+		r    Reaction
+	}{
+		{"ci_failed", c.Reactions.CIFailed},
+		{"changes_requested", c.Reactions.ChangesRequested},
+		{"merge_conflict", c.Reactions.MergeConflict},
+		{"approved_and_green", c.Reactions.ApprovedAndGreen},
+		{"merged", c.Reactions.Merged},
+	}
+	for _, rc := range reactions {
+		if rc.r.Retries < 0 {
+			errs = append(errs, fmt.Errorf("reactions.%s: retries must be >= 0, got %d", rc.name, rc.r.Retries))
+		}
+	}
+	return errs
+}
+
+// validateNotify checks [notify.routing]: every priority key must be one of
+// urgent|action|info and every channel one of desktop|slack. A config lacking
+// the table (nil routing) validates cleanly. Keys are visited in sorted order
+// for deterministic error output.
+func (c *Config) validateNotify() []error {
+	var errs []error
+	for _, prio := range slices.Sorted(maps.Keys(c.Notify.Routing)) {
+		if _, ok := notifyPriorities[prio]; !ok {
+			errs = append(errs, fmt.Errorf("notify.routing: unknown priority %q (must be one of urgent|action|info)", prio))
+		}
+		for _, ch := range c.Notify.Routing[prio] {
+			switch ch {
+			case notify.ChannelDesktop, notify.ChannelSlack:
+			default:
+				errs = append(errs, fmt.Errorf("notify.routing.%s: unknown channel %q (must be one of desktop|slack)", prio, ch))
+			}
+		}
+	}
+	return errs
 }

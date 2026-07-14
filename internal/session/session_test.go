@@ -62,6 +62,48 @@ func TestRoundTrip(t *testing.T) {
 	}
 }
 
+// The P3 reaction-state fields must survive a save/reload round-trip.
+func TestReactionStateRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+
+	st := NewStore(dir)
+	st.Upsert(Session{
+		ID:                "r-1",
+		Source:            "native",
+		Project:           "nori",
+		Issue:             "ENG-9",
+		CIRetries:         2,
+		LastReactedStatus: "ci_failed",
+		Escalated:         true,
+		AtPrompt:          true,
+		PendingReaction:   "changes_requested",
+	})
+	// A session with all reaction fields at their zero values (omitempty must
+	// not corrupt the reload).
+	st.Upsert(Session{ID: "r-0", Source: "native", Project: "nori", Issue: "ENG-1"})
+	if err := st.Save(); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	got, ok := NewStore(dir).Get("r-1")
+	if !ok {
+		t.Fatal("reloaded store missing r-1")
+	}
+	if got.CIRetries != 2 || got.LastReactedStatus != "ci_failed" || !got.Escalated ||
+		!got.AtPrompt || got.PendingReaction != "changes_requested" {
+		t.Errorf("reaction state not round-tripped: %+v", got)
+	}
+
+	zero, ok := NewStore(dir).Get("r-0")
+	if !ok {
+		t.Fatal("reloaded store missing r-0")
+	}
+	if zero.CIRetries != 0 || zero.LastReactedStatus != "" || zero.Escalated ||
+		zero.AtPrompt || zero.PendingReaction != "" {
+		t.Errorf("zero-value reaction state should stay zero: %+v", zero)
+	}
+}
+
 func TestSnapshotSorted(t *testing.T) {
 	st := NewStore(t.TempDir())
 	st.Upsert(Session{ID: "3", Project: "zeta", Issue: "ENG-1"})

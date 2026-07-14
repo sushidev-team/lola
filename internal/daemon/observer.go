@@ -131,7 +131,7 @@ func (d *Daemon) observeNative(ctx context.Context) {
 		// re-reads the CURRENT record under the store lock, so a concurrent
 		// needs_input flows into nativeStatus and is preserved.
 		becameDead, applied := false, false
-		d.sessions.Update(s.ID, func(cur *session.Session) bool {
+		updated, known := d.sessions.Update(s.ID, func(cur *session.Session) bool {
 			if cur.Repo == "" {
 				cur.Repo = repo
 			}
@@ -157,6 +157,13 @@ func (d *Daemon) observeNative(ctx context.Context) {
 		}
 		if applied {
 			touched = true
+		}
+		// React to the just-updated record (PLAN P3): send-keys / notify /
+		// merged-cleanup, each fired once per transition and gated on AtPrompt.
+		// updated is the current record even when the merge above discarded
+		// (a settled-merged session still needs its cleanup fired once).
+		if known {
+			d.react(ctx, updated)
 		}
 	}
 	if !touched {

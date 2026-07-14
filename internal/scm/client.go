@@ -73,13 +73,9 @@ type rollupEntry struct {
 // created PR first, which is the one Lola cares about. Any gh failure returns
 // an error — callers must never conflate "could not check" with "no PR".
 func (c *Client) PRForBranch(ctx context.Context, repo, branch string) (*PR, error) {
-	bin := c.GhBin
-	if bin == "" {
-		var err error
-		bin, err = exec.LookPath("gh")
-		if err != nil {
-			return nil, fmt.Errorf("gh not on PATH: %w", err)
-		}
+	bin, err := c.resolveBin()
+	if err != nil {
+		return nil, err
 	}
 	out, err := exec.CommandContext(ctx, bin, "pr", "list",
 		"--repo", repo, "--head", branch, "--state", "all", "--limit", "1",
@@ -132,9 +128,10 @@ func checksState(rollup []rollupEntry) string {
 				s = e.Conclusion
 			}
 		}
-		switch strings.ToUpper(s) {
-		case "FAILURE", "ERROR", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE":
+		if isFailingCheckState(s) {
 			return "fail" // fail outranks pending: report the break immediately
+		}
+		switch strings.ToUpper(s) {
 		case "PENDING", "QUEUED", "IN_PROGRESS", "WAITING", "REQUESTED", "EXPECTED", "STALE":
 			pending = true
 		}

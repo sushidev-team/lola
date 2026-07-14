@@ -64,6 +64,18 @@ const settingsGolden = `{
           }
         ]
       }
+    ],
+    "UserPromptSubmit": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/local/bin/lola hook user_prompt",
+            "timeout": 10
+          }
+        ]
+      }
     ]
   }
 }
@@ -100,10 +112,11 @@ func TestSettingsJSONShape(t *testing.T) {
 		cmd   string
 		async bool
 	}{
-		"Stop":         {"/opt/lola hook stop", false},
-		"Notification": {"/opt/lola hook notification", false},
-		"SessionEnd":   {"/opt/lola hook session_end", false},
-		"PostToolUse":  {"/opt/lola hook tool_use", true},
+		"Stop":             {"/opt/lola hook stop", false},
+		"Notification":     {"/opt/lola hook notification", false},
+		"SessionEnd":       {"/opt/lola hook session_end", false},
+		"PostToolUse":      {"/opt/lola hook tool_use", true},
+		"UserPromptSubmit": {"/opt/lola hook user_prompt", false},
 	}
 	if len(parsed.Hooks) != len(want) {
 		t.Errorf("got %d hook events, want %d: %v", len(parsed.Hooks), len(want), parsed.Hooks)

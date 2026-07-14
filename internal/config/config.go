@@ -78,10 +78,12 @@ type LinearConfig struct {
 }
 
 type Config struct {
-	Defaults Defaults     `toml:"defaults"`
-	Linear   LinearConfig `toml:"linear"`
-	Projects []Project    `toml:"project"`
-	Polls    []Poll       `toml:"poll"`
+	Defaults  Defaults        `toml:"defaults"`
+	Linear    LinearConfig    `toml:"linear"`
+	Projects  []Project       `toml:"project"`
+	Polls     []Poll          `toml:"poll"`
+	Reactions ReactionsConfig `toml:"reactions"`
+	Notify    NotifyConfig    `toml:"notify"`
 }
 
 // Duration is a time.Duration that TOML-round-trips as a Go duration string
@@ -104,10 +106,12 @@ func (d *Duration) UnmarshalText(text []byte) error {
 // fileConfig / fileDefaults mirror Config for (de)serialization only, so
 // Config can expose PollInterval as a plain time.Duration.
 type fileConfig struct {
-	Defaults fileDefaults `toml:"defaults"`
-	Linear   LinearConfig `toml:"linear"`
-	Projects []Project    `toml:"project"`
-	Polls    []Poll       `toml:"poll"`
+	Defaults  fileDefaults         `toml:"defaults"`
+	Linear    LinearConfig         `toml:"linear"`
+	Projects  []Project            `toml:"project"`
+	Polls     []Poll               `toml:"poll"`
+	Reactions *fileReactionsConfig `toml:"reactions,omitempty"`
+	Notify    *fileNotifyConfig    `toml:"notify,omitempty"`
 }
 
 type fileDefaults struct {
@@ -123,9 +127,11 @@ func (fc *fileConfig) config() *Config {
 			ConcurrencyCap: fc.Defaults.ConcurrencyCap,
 			GlobalCap:      fc.Defaults.GlobalCap,
 		},
-		Linear:   fc.Linear,
-		Projects: fc.Projects,
-		Polls:    fc.Polls,
+		Linear:    fc.Linear,
+		Projects:  fc.Projects,
+		Polls:     fc.Polls,
+		Reactions: resolveReactions(fc.Reactions),
+		Notify:    resolveNotify(fc.Notify),
 	}
 }
 
@@ -136,9 +142,11 @@ func (c *Config) file() *fileConfig {
 			ConcurrencyCap: c.Defaults.ConcurrencyCap,
 			GlobalCap:      c.Defaults.GlobalCap,
 		},
-		Linear:   c.Linear,
-		Projects: c.Projects,
-		Polls:    c.Polls,
+		Linear:    c.Linear,
+		Projects:  c.Projects,
+		Polls:     c.Polls,
+		Reactions: reactionsFile(c.Reactions),
+		Notify:    notifyFile(c.Notify),
 	}
 }
 
@@ -168,7 +176,9 @@ func DefaultPath() (string, error) {
 // [[project]].path is expanded; [linear].endpoint and
 // [defaults].poll_interval get defaults (the interval clamped to
 // MinPollInterval), and [[project]].default_branch defaults to
-// DefaultBranchName.
+// DefaultBranchName. The optional [reactions] and [notify] tables are
+// materialized to their defaults per unset field (see reactions.go); an absent
+// table yields the full defaults, and existing configs load unchanged.
 //
 // Compatibility note: BurntSushi/toml silently ignores unknown keys, so
 // configs from the AO-bridge era (an [ao] table, per-poll `runtime` /
@@ -179,7 +189,10 @@ func DefaultPath() (string, error) {
 func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
-		c := &Config{}
+		// Route the empty config through config() so the [reactions]/[notify]
+		// defaults (materialized there from all-nil file mirrors) apply exactly
+		// as they would for a file that omits those tables.
+		c := (&fileConfig{}).config()
 		c.applyDefaults()
 		return c, nil
 	}

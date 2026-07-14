@@ -20,6 +20,7 @@ func cannedSessions() *protocol.SessionsData {
 			ID: "s2", Project: "api", Issue: "ENG-456", Branch: "lola/eng-456",
 			Status: "ci_failed", PRURL: "https://github.com/x/y/pull/7",
 			PRNumber: 7, Checks: "fail", Review: "REVIEW_REQUIRED", Age: "3d2h",
+			CIRetries: 1, Reacting: "ci retry 1/2",
 		},
 	}}
 }
@@ -43,7 +44,7 @@ func TestTabSwitchRendersSessionsTable(t *testing.T) {
 	m.Update(sessionsMsg{data: cannedSessions()})
 
 	v := m.View()
-	for _, want := range []string{"ISSUE", "PROJECT", "STATUS", "ENG-123", "ENG-456", "web", "api", "#7", "2h05m"} {
+	for _, want := range []string{"ISSUE", "PROJECT", "STATUS", "REACTING", "ENG-123", "ENG-456", "web", "api", "#7", "2h05m", "ci retry 1/2"} {
 		if !strings.Contains(v, want) {
 			t.Errorf("sessions view missing %q:\n%s", want, v)
 		}
@@ -92,6 +93,58 @@ func TestStatusStyleMapping(t *testing.T) {
 	}
 	if fg := statusStyle("review_pending").GetForeground(); fg != (lipgloss.NoColor{}) {
 		t.Errorf("statusStyle(review_pending) foreground = %v, want none", fg)
+	}
+}
+
+// P3: the reaction posture label is colored — escalated red (needs a human),
+// ready-to-merge green, an active retry/rework yellow, everything else unstyled.
+func TestReactingStyleMapping(t *testing.T) {
+	if fg := reactingStyle("escalated").GetForeground(); fg != lipgloss.Color("9") {
+		t.Errorf("escalated foreground = %v, want red (9)", fg)
+	}
+	if fg := reactingStyle("ready to merge").GetForeground(); fg != lipgloss.Color("10") {
+		t.Errorf("ready to merge foreground = %v, want green (10)", fg)
+	}
+	for _, y := range []string{"ci retry 1/2", "addressing review", "rebasing"} {
+		if fg := reactingStyle(y).GetForeground(); fg != lipgloss.Color("11") {
+			t.Errorf("reactingStyle(%q) foreground = %v, want yellow (11)", y, fg)
+		}
+	}
+	for _, none := range []string{"", "awaiting review"} {
+		if fg := reactingStyle(none).GetForeground(); fg != (lipgloss.NoColor{}) {
+			t.Errorf("reactingStyle(%q) foreground = %v, want none", none, fg)
+		}
+	}
+}
+
+// P3: an escalated session surfaces its posture in the table (a REACTING column
+// entry) and the detail card, colored so it stands out; the raw review decision
+// moves to the detail card.
+func TestSessionsRenderReactingLabel(t *testing.T) {
+	m := newTestRoot(t)
+	m.tab = tabSessions
+	m.sessions.data = &protocol.SessionsData{Sessions: []protocol.SessionInfo{{
+		ID: "s1", Project: "web", Issue: "ENG-9", Status: "ci_failed", Source: "native",
+		CIRetries: 2, Escalated: true, Reacting: "escalated", Review: "REVIEW_REQUIRED",
+	}}}
+	m.sessions.cursor = 0
+
+	v := m.View()
+	if !strings.Contains(v, "REACTING") {
+		t.Errorf("sessions table must carry a REACTING column:\n%s", v)
+	}
+	if !strings.Contains(v, "escalated") {
+		t.Errorf("escalated posture must render in the view:\n%s", v)
+	}
+	// The reacting cell for an escalated session is styled red so it stands out.
+	if fg := reactingStyle(m.sessions.data.Sessions[0].Reacting).GetForeground(); fg != lipgloss.Color("9") {
+		t.Errorf("escalated cell foreground = %v, want red (9)", fg)
+	}
+	// No tmux → detail card; it carries the reacting line and the raw review.
+	for _, want := range []string{"reacting:", "review:", "REVIEW_REQUIRED"} {
+		if !strings.Contains(v, want) {
+			t.Errorf("detail card missing %q:\n%s", want, v)
+		}
 	}
 }
 

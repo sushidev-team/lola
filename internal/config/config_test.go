@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/sushidev-team/lola/internal/notify"
 )
 
 func validPoll() Poll {
@@ -101,6 +103,10 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	orig.Linear = LinearConfig{APIKeyKeychain: "lola-linear", APIKeyEnv: "LINEAR_API_KEY", Endpoint: DefaultEndpoint}
 	orig.Projects = []Project{validProject()}
 	orig.Polls = []Poll{validPoll(), secondPoll()}
+	// Resolved reaction/notify tables round-trip exactly; a load always
+	// materializes them, so a round-tripped config carries the defaults.
+	orig.Reactions = defaultReactions()
+	orig.Notify = defaultNotify()
 
 	if err := orig.Save(path); err != nil {
 		t.Fatal(err)
@@ -655,6 +661,261 @@ func TestExampleConfigLoadsAndValidates(t *testing.T) {
 		if p.Project == "" {
 			t.Errorf("poll %q must reference a [[project]]", p.Name)
 		}
+	}
+}
+
+// When neither [reactions] nor [notify] is present, load materializes the full
+// defaults — existing configs keep working, now with a reaction/notify policy.
+func TestReactionsNotifyDefaultsWhenTablesAbsent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	body := "[defaults]\nglobal_cap = 4\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(c.Reactions, defaultReactions()) {
+		t.Errorf("reactions = %+v, want defaults %+v", c.Reactions, defaultReactions())
+	}
+	if c.Notify.Desktop != defaultDesktop() {
+		t.Errorf("notify.desktop = %v, want default %v", c.Notify.Desktop, defaultDesktop())
+	}
+	if c.Notify.SlackWebhookEnv != DefaultSlackWebhookEnv {
+		t.Errorf("notify.slack_webhook_env = %q, want %q", c.Notify.SlackWebhookEnv, DefaultSlackWebhookEnv)
+	}
+	if !reflect.DeepEqual(c.Notify.Routing, defaultRouting()) {
+		t.Errorf("notify.routing = %v, want default %v", c.Notify.Routing, defaultRouting())
+	}
+	if err := c.Validate(); err != nil {
+		t.Errorf("defaulted reactions/notify must validate: %v", err)
+	}
+}
+
+// Explicitly-set reaction fields — including the disabling zeros auto=false and
+// retries=0 — survive load; unset reactions/priorities still take defaults.
+func TestReactionsNotifyExplicitValuesKept(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	body := `
+[defaults]
+global_cap = 4
+
+[reactions.ci_failed]
+auto = false
+retries = 0
+message = "hand-rolled recovery"
+
+[reactions.merged]
+auto = false
+
+[notify]
+desktop = false
+slack_webhook_env = "MY_HOOK"
+
+[notify.routing]
+urgent = ["slack"]
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// ci_failed: every field explicit — the disabling zeros must NOT revert to
+	// the {auto:true, retries:2} defaults.
+	if got, want := c.Reactions.CIFailed, (Reaction{Auto: false, Retries: 0, Message: "hand-rolled recovery"}); got != want {
+		t.Errorf("ci_failed = %+v, want %+v (explicit zeros kept)", got, want)
+	}
+	// merged: only auto set explicitly to false; the rest stays default.
+	if got, want := c.Reactions.Merged, (Reaction{Auto: false}); got != want {
+		t.Errorf("merged = %+v, want %+v", got, want)
+	}
+	// changes_requested: table absent → full default.
+	if got, want := c.Reactions.ChangesRequested, defaultReactions().ChangesRequested; got != want {
+		t.Errorf("changes_requested = %+v, want default %+v", got, want)
+	}
+
+	if c.Notify.Desktop {
+		t.Error("notify.desktop = true, want explicit false kept (even where default is true)")
+	}
+	if c.Notify.SlackWebhookEnv != "MY_HOOK" {
+		t.Errorf("notify.slack_webhook_env = %q, want MY_HOOK", c.Notify.SlackWebhookEnv)
+	}
+	if got := c.Notify.Routing["urgent"]; !reflect.DeepEqual(got, []string{"slack"}) {
+		t.Errorf("routing.urgent = %v, want overridden [slack]", got)
+	}
+	// Priorities not named keep their defaults.
+	if got := c.Notify.Routing["action"]; !reflect.DeepEqual(got, []string{"desktop", "slack"}) {
+		t.Errorf("routing.action = %v, want default [desktop slack]", got)
+	}
+	if got := c.Notify.Routing["info"]; !reflect.DeepEqual(got, []string{"slack"}) {
+		t.Errorf("routing.info = %v, want default [slack]", got)
+	}
+	if err := c.Validate(); err != nil {
+		t.Errorf("explicit reactions/notify must validate: %v", err)
+	}
+}
+
+// Custom reaction/notify values round-trip through Save/Load unchanged.
+func TestReactionsNotifyCustomRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	orig := &Config{}
+	orig.Defaults.GlobalCap = 4
+	orig.Reactions = defaultReactions()
+	orig.Reactions.CIFailed = Reaction{Auto: false, Retries: 5, Message: "fix it"}
+	orig.Notify = defaultNotify()
+	orig.Notify.Desktop = false
+	orig.Notify.SlackWebhookEnv = "HOOK_ENV"
+	orig.Notify.Routing["info"] = []string{"desktop"}
+
+	if err := orig.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(orig.Reactions, got.Reactions) {
+		t.Errorf("reactions round trip:\n save: %+v\n load: %+v", orig.Reactions, got.Reactions)
+	}
+	if !reflect.DeepEqual(orig.Notify, got.Notify) {
+		t.Errorf("notify round trip:\n save: %+v\n load: %+v", orig.Notify, got.Notify)
+	}
+}
+
+// A fresh &Config{} (the setup wizard's starting point) does NOT persist a
+// disabled reaction/notify policy: the zero tables are omitted from disk and
+// reload to full defaults.
+func TestFreshConfigSaveReloadsDefaults(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := (&Config{}).Save(path); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "[reactions") || strings.Contains(string(data), "[notify") {
+		t.Errorf("fresh config should omit reaction/notify tables, got:\n%s", data)
+	}
+	got, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got.Reactions, defaultReactions()) {
+		t.Errorf("reloaded reactions = %+v, want defaults", got.Reactions)
+	}
+	if !reflect.DeepEqual(got.Notify, defaultNotify()) {
+		t.Errorf("reloaded notify = %+v, want defaults", got.Notify)
+	}
+}
+
+// ResolveNotify reads the webhook URL from the named env var, maps the priority
+// names to notify.Priority, and never surfaces the value in config or errors.
+func TestResolveNotifyWebhookFromEnv(t *testing.T) {
+	const secret = "https://hooks.slack.example/services/T00/B00/verysecretXYZ"
+
+	c := &Config{}
+	c.Notify = defaultNotify()
+	c.Notify.SlackWebhookEnv = "LOLA_TEST_HOOK"
+
+	t.Setenv("LOLA_TEST_HOOK", secret)
+	nc := c.ResolveNotify()
+	if nc.SlackWebhook != secret {
+		t.Errorf("SlackWebhook = %q, want the env value", nc.SlackWebhook)
+	}
+	if nc.Desktop != c.Notify.Desktop {
+		t.Errorf("Desktop = %v, want %v", nc.Desktop, c.Notify.Desktop)
+	}
+	if got := nc.Routing[notify.Urgent]; !reflect.DeepEqual(got, []string{"desktop", "slack"}) {
+		t.Errorf("Routing[Urgent] = %v, want [desktop slack]", got)
+	}
+	if got := nc.Routing[notify.Info]; !reflect.DeepEqual(got, []string{"slack"}) {
+		t.Errorf("Routing[Info] = %v, want [slack]", got)
+	}
+
+	// Unset env var → empty URL, never an error.
+	c.Notify.SlackWebhookEnv = "LOLA_TEST_HOOK_DEFINITELY_UNSET"
+	if got := c.ResolveNotify().SlackWebhook; got != "" {
+		t.Errorf("SlackWebhook = %q, want empty when env unset", got)
+	}
+	// Empty env NAME → empty URL.
+	c.Notify.SlackWebhookEnv = ""
+	if got := c.ResolveNotify().SlackWebhook; got != "" {
+		t.Errorf("SlackWebhook = %q, want empty when env name blank", got)
+	}
+
+	// The secret must never leak into the persisted config or a Validate error.
+	// Only the env NAME is stored; the URL lives solely in the environment.
+	c.Notify.SlackWebhookEnv = "LOLA_TEST_HOOK"
+	c.Notify.Routing["urgent"] = []string{"pager"} // force a validation error
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := c.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), secret) {
+		t.Error("saved config.toml must never contain the resolved webhook URL")
+	}
+	if !strings.Contains(string(data), "LOLA_TEST_HOOK") {
+		t.Error("saved config.toml should store the env var NAME")
+	}
+	if err := c.Validate(); err == nil {
+		t.Error("invalid channel should fail validation")
+	} else if strings.Contains(err.Error(), secret) {
+		t.Error("Validate error must never contain the webhook value")
+	}
+}
+
+// [notify.routing] validation: priority keys ∈ {urgent,action,info};
+// channels ∈ {desktop,slack}. [reactions] retries must be >= 0.
+func TestReactionsNotifyValidation(t *testing.T) {
+	base := func() *Config {
+		c := &Config{}
+		c.Defaults.GlobalCap = 4
+		c.Reactions = defaultReactions()
+		c.Notify = defaultNotify()
+		return c
+	}
+
+	cases := []struct {
+		name    string
+		mutate  func(c *Config)
+		wantErr string // "" = must be valid
+	}{
+		{"defaults valid", func(c *Config) {}, ""},
+		{"retries zero ok", func(c *Config) { c.Reactions.CIFailed.Retries = 0 }, ""},
+		{"retries negative rejected", func(c *Config) { c.Reactions.CIFailed.Retries = -1 }, "reactions.ci_failed: retries must be >= 0"},
+		{"retries negative on any reaction rejected", func(c *Config) { c.Reactions.Merged.Retries = -3 }, "reactions.merged: retries must be >= 0"},
+		{"unknown priority rejected", func(c *Config) { c.Notify.Routing["critical"] = []string{"slack"} }, `unknown priority "critical"`},
+		{"unknown channel rejected", func(c *Config) { c.Notify.Routing["urgent"] = []string{"pager"} }, `unknown channel "pager"`},
+		{"empty channel list ok", func(c *Config) { c.Notify.Routing["info"] = nil }, ""},
+		{"nil routing ok", func(c *Config) { c.Notify.Routing = nil }, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := base()
+			tc.mutate(c)
+			err := c.Validate()
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("want valid, got: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("want error containing %q, got nil", tc.wantErr)
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("error missing %q:\n%v", tc.wantErr, err)
+			}
+		})
 	}
 }
 

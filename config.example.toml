@@ -26,6 +26,56 @@ api_key_env = "LINEAR_API_KEY"
 endpoint = "https://api.linear.app/graphql"
 
 # ---------------------------------------------------------------------------
+# [reactions] — how lola reacts to each PR/CI state of a live session (P3).
+# OPTIONAL: every reaction, and the whole table, defaults sensibly, so you can
+# omit this section entirely. The values shown below ARE the built-in defaults.
+#
+# Each reaction has:
+#   auto    — react automatically (vs. notify-and-park only).
+#   retries — automatic recovery attempts; meaningful for ci_failed only; >= 0.
+#   message — template sent to the live agent (empty = act but say nothing).
+# A message may contain the placeholders {{.Detail}} (fetched CI logs / review
+# comments), {{.Issue}} (Linear identifier) and {{.PR}} (PR number/URL). They
+# are filled by plain string replacement — NOT a template engine — so a PR body
+# or a failing log can never inject template directives.
+# ---------------------------------------------------------------------------
+# [reactions.ci_failed]           # red CI → hand the agent the failing logs, retry N times, then escalate
+# auto = true
+# retries = 2
+# message = "CI is failing on your PR ({{.PR}}) for {{.Issue}}. Failing output:\n\n{{.Detail}}\n\nInvestigate the failure, fix it, and push."
+#
+# [reactions.changes_requested]   # review changes → relay the comments, re-request review on push
+# auto = true
+# message = "Changes were requested on your PR ({{.PR}}) for {{.Issue}}. Reviewer feedback:\n\n{{.Detail}}\n\nAddress each point, push, then re-request review."
+#
+# [reactions.merge_conflict]      # conflicts (observer sees mergeable=CONFLICTING) → tell the agent to rebase
+# auto = true
+# message = "Your PR ({{.PR}}) for {{.Issue}} has merge conflicts. Rebase onto the base branch, resolve the conflicts, and push."
+#
+# [reactions.approved_and_green]  # NEVER auto-merge — notify + park the worktree for a human
+# auto = false
+# message = ""
+#
+# [reactions.merged]              # merged → auto cleanup (remove worktree + branch, free the slot)
+# auto = true
+
+# ---------------------------------------------------------------------------
+# [notify] — best-effort desktop + Slack notifications, routed by priority
+# (P3.20). OPTIONAL; the values below are the defaults.
+#
+# SECURITY: never put a webhook URL in this file. slack_webhook_env is the NAME
+# of an environment variable that holds the URL; lola reads it from the
+# environment at notify time and never logs it.
+# ---------------------------------------------------------------------------
+# [notify]
+# desktop = true                          # macOS desktop banners (no-op off macOS)
+# slack_webhook_env = "SLACK_WEBHOOK_URL" # env var NAME holding the Slack incoming-webhook URL
+# [notify.routing]                        # priority → channels; each channel is "desktop" or "slack"
+# urgent = ["desktop", "slack"]           # needs-input, escalations
+# action = ["desktop", "slack"]           # changes-requested, CI failed after retries
+# info   = ["slack"]                      # approved+parked, merged+cleaned
+
+# ---------------------------------------------------------------------------
 # [[project]] — repository registry for the native runtime (one table per
 # repo). Every poll references a project by name; lola then creates a git
 # worktree per session under ~/.lola/worktrees/<project>/... and runs Claude

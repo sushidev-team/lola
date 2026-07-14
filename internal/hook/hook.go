@@ -31,8 +31,8 @@ import (
 var postTimeout = 2 * time.Second
 
 // Post reports one normalized hook event ("stop", "notification",
-// "session_end", "tool_use") for the session named by $LOLA_SESSION to the
-// daemon socket at config.Home()/lola.sock. It sends a single
+// "session_end", "tool_use", "user_prompt") for the session named by
+// $LOLA_SESSION to the daemon socket at config.Home()/lola.sock. It sends a single
 // protocol.Request line and reads the single response line best-effort — a
 // missing or slow reply is not an error once the request is on the wire.
 func Post(event, detail string) error {
@@ -88,22 +88,29 @@ type matcherEntry struct {
 
 type settingsFile struct {
 	Hooks struct {
-		Stop         []matcherEntry `json:"Stop"`
-		Notification []matcherEntry `json:"Notification"`
-		SessionEnd   []matcherEntry `json:"SessionEnd"`
-		PostToolUse  []matcherEntry `json:"PostToolUse"`
+		Stop             []matcherEntry `json:"Stop"`
+		Notification     []matcherEntry `json:"Notification"`
+		SessionEnd       []matcherEntry `json:"SessionEnd"`
+		PostToolUse      []matcherEntry `json:"PostToolUse"`
+		UserPromptSubmit []matcherEntry `json:"UserPromptSubmit"`
 	} `json:"hooks"`
 }
 
 // SettingsJSON generates the content of the per-session Claude Code settings
 // file (passed as `claude --settings <file>`, so the project's own settings
-// stay untouched) wiring the four lifecycle hooks to lolaBin:
+// stay untouched) wiring the lifecycle hooks to lolaBin:
 //
-//	Stop         → <lolaBin> hook stop
-//	Notification → <lolaBin> hook notification
-//	SessionEnd   → <lolaBin> hook session_end
-//	PostToolUse  → <lolaBin> hook tool_use   (async: the liveness heartbeat
-//	                                          never wakes or blocks the agent)
+//	Stop             → <lolaBin> hook stop
+//	Notification     → <lolaBin> hook notification
+//	SessionEnd       → <lolaBin> hook session_end
+//	PostToolUse      → <lolaBin> hook tool_use     (async: the liveness heartbeat
+//	                                                never wakes or blocks the agent)
+//	UserPromptSubmit → <lolaBin> hook user_prompt  (turn START: clears the
+//	                                                AtPrompt send-keys gate so a
+//	                                                human-initiated attach turn —
+//	                                                which fires no PostToolUse for
+//	                                                a text-only reply — is never
+//	                                                seen as idle mid-turn)
 //
 // Each hook has an explicit 10s timeout. Hook commands run with the pane's
 // environment, so the exported LOLA_SESSION is visible to `lola hook`.
@@ -126,6 +133,9 @@ func SettingsJSON(lolaBin string) []byte {
 	s.Hooks.Notification = entry("notification", false)
 	s.Hooks.SessionEnd = entry("session_end", false)
 	s.Hooks.PostToolUse = entry("tool_use", true)
+	// Synchronous (not async): AtPrompt must be reliably cleared at turn start,
+	// before the agent produces any output the reaction engine might race.
+	s.Hooks.UserPromptSubmit = entry("user_prompt", false)
 
 	out, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {
