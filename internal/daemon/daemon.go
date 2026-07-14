@@ -193,7 +193,7 @@ func Run(ctx context.Context) error {
 		lolaBin = "lola"
 	}
 	d.lolaBin = lolaBin
-	d.native = newNativeRuntime(cfg, home, lolaBin)
+	d.native = newNativeRuntime(cfg, home, lolaBin, d.linearKey)
 	d.realNative = true
 	if err := cfg.Validate(); err != nil {
 		// Not fatal: the daemon stays up so status/reload can surface and
@@ -324,6 +324,23 @@ func (d *Daemon) ensureLinear() (linear.API, error) {
 	d.lin = linear.New(d.cfg.Linear.Endpoint, key)
 	d.linOK = true
 	return d.lin, nil
+}
+
+// linearKey resolves the current Linear API key for forwarding into a native
+// session's 0600 .lola/env file. It re-reads the configured source (Keychain >
+// env) on every call so a rotated key is picked up on the next spawn, and
+// returns "" on any error so spawning is NEVER blocked on secret resolution —
+// the session then simply gets no LINEAR_API_KEY. The key is only ever a return
+// value here; it is never cached on the native runtime as a plain string.
+func (d *Daemon) linearKey() string {
+	d.mu.Lock()
+	kc, env := d.cfg.Linear.APIKeyKeychain, d.cfg.Linear.APIKeyEnv
+	d.mu.Unlock()
+	key, err := secrets.LinearAPIKey(kc, env)
+	if err != nil {
+		return ""
+	}
+	return key
 }
 
 func (d *Daemon) setLinearOK(ok bool) {
@@ -487,13 +504,18 @@ func (d *Daemon) tickMutex(name string) *sync.Mutex {
 // newNativeRuntime assembles the production native runtime for cfg: worktrees
 // under <home>/worktrees, tmux and claude resolved via PATH, and Claude Code
 // lifecycle hooks calling back through lolaBin.
-func newNativeRuntime(cfg *config.Config, home, lolaBin string) *runtime.Native {
+// linearKey is the provider forwarding the daemon's currently-resolved Linear
+// API key into each spawned session's 0600 .lola/env file (never argv). It is
+// re-read per spawn, so a rotated key is picked up next spawn; it returns ""
+// when no key is available so spawning is never blocked on it.
+func newNativeRuntime(cfg *config.Config, home, lolaBin string, linearKey func() string) *runtime.Native {
 	return &runtime.Native{
-		Cfg:     cfg,
-		WT:      &worktree.Manager{Root: filepath.Join(home, "worktrees")},
-		Tmux:    &tmux.Client{Bin: "tmux"},
-		LolaBin: lolaBin,
-		Home:    home,
+		Cfg:       cfg,
+		WT:        &worktree.Manager{Root: filepath.Join(home, "worktrees")},
+		Tmux:      &tmux.Client{Bin: "tmux"},
+		LolaBin:   lolaBin,
+		Home:      home,
+		LinearKey: linearKey,
 	}
 }
 

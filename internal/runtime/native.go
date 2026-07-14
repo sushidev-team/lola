@@ -74,6 +74,14 @@ type Native struct {
 	// ClaudeBin is the claude binary launched inside tmux; empty means
 	// "claude" resolved via the pane's PATH.
 	ClaudeBin string
+	// LinearKey is an optional provider for the current Linear API key,
+	// forwarded into the session via the 0600 <dir>/.lola/env file (never on
+	// argv). It is called once per Spawn so a rotated key is picked up on the
+	// next spawn; it may be nil or return "" when no key is available, in which
+	// case the session simply has no LINEAR_API_KEY and the agent falls back to
+	// whatever Linear tooling it can otherwise authenticate. It MUST never be a
+	// key captured once as a plain string on this struct.
+	LinearKey func() string
 }
 
 // SessionID returns the BASE native session identifier for an issue:
@@ -180,8 +188,15 @@ func (n *Native) Spawn(ctx context.Context, p config.Project, issue linear.Issue
 	if err := os.WriteFile(filepath.Join(dir, lolaDir, "settings.json"), hook.SettingsJSON(n.LolaBin), 0o600); err != nil {
 		return fail("write settings.json", err)
 	}
+	// The env file carries the Linear API key and project env; it is 0600 and
+	// must be in place BEFORE the launch sources it. Written last of the .lola
+	// files so a rollback that keeps a dirty worktree keeps it too (0600, in
+	// the kept dir — same disposition as the other .lola artifacts).
+	if err := os.WriteFile(filepath.Join(dir, lolaDir, "env"), n.envFile(p, id), 0o600); err != nil {
+		return fail("write env", err)
+	}
 
-	if err := n.Tmux.NewSession(ctx, id, dir, n.launchCommand(p, id)); err != nil {
+	if err := n.Tmux.NewSession(ctx, id, dir, n.launchCommand(id)); err != nil {
 		return session.Session{}, n.rollbackTmux(ctx, p, id, dir, branch, "start tmux session", err)
 	}
 
@@ -199,32 +214,70 @@ func (n *Native) Spawn(ctx context.Context, p config.Project, issue linear.Issue
 }
 
 // launchCommand builds the single shell-command argument for `tmux
-// new-session`. tmux passes one trailing argument through the user's shell
-// (`$SHELL -c`), so this is a shell line and every dynamic piece is
-// single-quoted via shQuote (each env assignment as a whole — `env 'NAME=a b'`
-// keeps the assignment intact even when it needs quoting):
+// new-session`. tmux passes one trailing argument through the user's LOGIN
+// shell (`$SHELL -c`), which may be fish/csh/tcsh — not necessarily a POSIX
+// sh. The actual launch logic is POSIX-only (`set -a`, `.`/source, `set +a`),
+// so it is wrapped in an explicit `sh -c '<posix line>'`: the login shell only
+// has to exec `sh` (a plain external command, portable across every shell),
+// and `sh` alone interprets the POSIX builtins. Without this wrapper a fish or
+// csh login shell errors on `set -a`/`.` and no session ever starts.
 //
-//	env LOLA_SESSION='<id>' K='v' ... claude --settings .lola/settings.json '<prompt>'
+// Nothing secret ever appears here: the environment (LOLA_SESSION, the Linear
+// API key, and the project env) is carried by the 0600 <dir>/.lola/env file,
+// which the line sources instead of putting it on argv (ps-visible /
+// tmux-server-visible). The inner POSIX line is:
 //
-// LOLA_SESSION is exported in the pane so hook commands (which inherit the
-// pane environment) can attribute their events; the project's [[project]].env
-// entries follow in sorted order (the same variables Prepare gives
-// post_create commands — the agent session sees them too). The argv prompt is
+//	set -a; . ./.lola/env; set +a; exec <claude> --settings .lola/settings.json '<prompt>'
+//
+// `set -a` auto-exports everything the sourced file defines (so LOLA_SESSION
+// is still exported for hooks, and LINEAR_API_KEY / project env reach the
+// agent); `. ./.lola/env` sources it relative to the session's -c dir (the
+// worktree); `set +a` restores default behavior; `exec` replaces the shell
+// with claude. The claude binary and prompt are shQuote'd, then the whole
+// POSIX line is shQuote'd again for the outer `sh -c`. The argv prompt is
 // deliberately short — it only points the agent at .lola/prompt.md, which
 // carries the real briefing, so huge issue titles never bloat the command
 // line or the tmux server's argv.
-func (n *Native) launchCommand(p config.Project, id string) string {
+func (n *Native) launchCommand(id string) string {
 	claude := n.ClaudeBin
 	if claude == "" {
 		claude = "claude"
 	}
 	prompt := "You are lola session " + id + ". Read " + lolaDir + "/prompt.md in the current directory first; it contains your task briefing."
-	cmd := "env " + shQuote("LOLA_SESSION="+id)
-	for _, k := range slices.Sorted(maps.Keys(p.Env)) { // deterministic order
-		cmd += " " + shQuote(k+"="+p.Env[k])
-	}
-	return cmd + " " + shQuote(claude) +
+	posix := "set -a; . ./" + lolaDir + "/env; set +a; exec " + shQuote(claude) +
 		" --settings " + lolaDir + "/settings.json " + shQuote(prompt)
+	return "exec sh -c " + shQuote(posix)
+}
+
+// envFile renders <dir>/.lola/env: shell-sourceable NAME=value assignments the
+// launch command sources under `set -a`. Each value is single-quoted via
+// shQuote so nothing needs a shell-safe shape, and the file is written 0600 and
+// MUST never be logged — it may hold the Linear API key. It carries, in this
+// order: LOLA_SESSION (not secret); LINEAR_API_KEY, only when a LinearKey
+// provider is set and returns a non-empty key (a rotated key is picked up on
+// the next spawn because the provider is called here, each spawn); and every
+// [[project]].env pair in sorted order (the same variables Prepare gives
+// post_create commands — the agent session sees them too).
+func (n *Native) envFile(p config.Project, id string) []byte {
+	var b strings.Builder
+	fmt.Fprintf(&b, "LOLA_SESSION=%s\n", shQuote(id))
+	if n.LinearKey != nil {
+		if key := n.LinearKey(); key != "" {
+			fmt.Fprintf(&b, "LINEAR_API_KEY=%s\n", shQuote(key))
+		}
+	}
+	for _, k := range slices.Sorted(maps.Keys(p.Env)) { // deterministic order
+		// The NAME is the left-hand side of a shell assignment in a sourced
+		// file, so it is shell-parsed: a name with metacharacters could run a
+		// command with LINEAR_API_KEY already exported. config.Validate rejects
+		// such names, but skip them here too as defense-in-depth so a leaking
+		// name can never reach the launcher even if validation is bypassed.
+		if !envNameRe.MatchString(k) {
+			continue
+		}
+		fmt.Fprintf(&b, "%s=%s\n", k, shQuote(p.Env[k]))
+	}
+	return []byte(b.String())
 }
 
 // promptMD renders <dir>/.lola/prompt.md: the full standing briefing for the
@@ -236,6 +289,7 @@ func promptMD(p config.Project, issue linear.Issue, branch string) []byte {
 	fmt.Fprintf(&b, "You are working on Linear issue **%s** (%q) in project %s.\n\n", issue.Identifier, issue.Title, p.Name)
 	b.WriteString("## First step\n\n")
 	fmt.Fprintf(&b, "Fetch the full issue — description and all comments — from Linear via the tooling available to you (Linear MCP tools or CLI), using the identifier %s. This file intentionally contains only the summary above.\n\n", issue.Identifier)
+	b.WriteString("Your Linear API key is available in the environment as `LINEAR_API_KEY` (if present) — use it to authenticate Linear tooling (linearis, a Linear MCP, or `curl` against the Linear GraphQL API). Never print the key or copy it into files, logs, or commits.\n\n")
 	b.WriteString("## Git and PR expectations\n\n")
 	fmt.Fprintf(&b, "- You are in a dedicated git worktree on branch `%s`; commit your work here and never switch branches.\n", branch)
 	fmt.Fprintf(&b, "- When the work is done, push the branch and open a pull request against `%s`.\n", p.DefaultBranch)
@@ -474,6 +528,12 @@ func excludeLolaDir(dir string) error {
 
 // safeWord matches strings that need no shell quoting.
 var safeWord = regexp.MustCompile(`^[A-Za-z0-9_%+=:,./@-]+$`)
+
+// envNameRe matches a POSIX shell identifier — the only shape a project env
+// key may take, since envFile emits each as the NAME on the left of a
+// shell-sourced NAME=value assignment. config.Validate enforces this at load
+// time; envFile re-checks as defense-in-depth (see envFile).
+var envNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 // shQuote single-quotes s for the shell that runs the tmux command line,
 // unless it is already shell-safe (mirrors internal/hook's quoting so the

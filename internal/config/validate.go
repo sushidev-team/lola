@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"regexp"
 	"slices"
 )
@@ -11,6 +12,16 @@ import (
 // own rules are stricter) — it only has to catch obvious mistakes like URLs,
 // missing owner, or embedded whitespace.
 var repoRe = regexp.MustCompile(`^[\w.-]+/[\w.-]+$`)
+
+// envNameRe matches a POSIX shell identifier — the only shape a [[project]].env
+// key may take. This is a SECURITY check, not a cosmetic one: the native
+// runtime writes each pair into a 0600 <dir>/.lola/env file that the session
+// launch line `source`s under `set -a` AFTER the Linear API key is already
+// exported, so a key carrying shell metacharacters (TOML permits arbitrary
+// quoted bare keys, e.g. `"x; curl … $LINEAR_API_KEY #" = "y"`) would be
+// parsed as shell and could exfiltrate the key. Rejecting non-identifier names
+// here keeps that from ever reaching the launcher.
+var envNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 // PollByName returns a pointer to the poll with the given name (mutating it
 // mutates the config), or nil if no such poll exists.
@@ -91,6 +102,14 @@ func (c *Config) Validate() error {
 		}
 		if pr.Repo != "" && !repoRe.MatchString(pr.Repo) {
 			errs = append(errs, fmt.Errorf(`%s: repo must be "owner/name" (e.g. "sushidev-team/nori-app"), got %q`, id, pr.Repo))
+		}
+		// env keys become NAME= assignments in a shell-sourced file at spawn
+		// time; only POSIX shell identifiers are allowed (see envNameRe) so a
+		// crafted name can never be parsed as a command.
+		for _, k := range slices.Sorted(maps.Keys(pr.Env)) {
+			if !envNameRe.MatchString(k) {
+				errs = append(errs, fmt.Errorf("%s: env key %q is not a valid shell identifier (must match [A-Za-z_][A-Za-z0-9_]*)", id, k))
+			}
 		}
 	}
 

