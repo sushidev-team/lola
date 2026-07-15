@@ -235,43 +235,6 @@ func (m *rootModel) updateFilter(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // ---- rendering ----
 
-// sessionsSummary is the persistent header strip: the active lens plus a
-// glance-level triage count recomputed each tick (attention-first). "N need
-// you" is orange when non-zero so the human's queue depth reads at a glance.
-func (m *rootModel) sessionsSummary() string {
-	s := &m.sessions
-	var sess []protocol.SessionInfo
-	if s.data != nil {
-		sess = s.data.Sessions
-	}
-	need := AttentionCount(sess)
-	work, ready, done := 0, 0, 0
-	for _, x := range sess {
-		switch sortRank(x.Status) {
-		case 2:
-			work++
-		case 3:
-			ready++
-		case 5:
-			done++
-		}
-	}
-	label := "list"
-	if s.view == viewKanban {
-		label = "kanban"
-	}
-	needStr := fmt.Sprintf("%d need you", need)
-	if need > 0 {
-		needStr = statusOrange.Render(needStr)
-	}
-	line := fmt.Sprintf("%s  ·  %s  ·  %d working  ·  %d ready  ·  %d done  ·  %d total",
-		titleStyle.Render(label), needStr, work, ready, done, len(sess))
-	if s.filter.AttentionOnly {
-		line += faintText.Render("  ·  [needs-you only]")
-	}
-	return previewLine(line, m.width)
-}
-
 // filterBar renders the live "/" filter input (k9s-style). While open it shows
 // a trailing caret; once applied it shows the standing filter text.
 func (m *rootModel) filterBar() string {
@@ -281,79 +244,6 @@ func (m *rootModel) filterBar() string {
 		caret = "_"
 	}
 	return previewLine(warnText.Render("/")+s.filter.Text+caret, m.width)
-}
-
-// sessionsFooter shows only the keys relevant to the current lens and the
-// selected session (e.g. "a answer" only when the selection is needs_input),
-// then the standing verbs. A single clipped line — discoverable without clutter.
-func (m *rootModel) sessionsFooter() string {
-	s := &m.sessions
-	if s.filtering {
-		return previewLine(faintText.Render("type to filter · enter apply · esc clear"), m.width)
-	}
-	if s.answering {
-		return previewLine(faintText.Render("enter send · esc cancel"), m.width)
-	}
-	move := "↑/↓ move"
-	if s.view == viewKanban {
-		move = "↑↓←→ move"
-	}
-	keys := []string{move, "enter attach"}
-	if sel := s.selected(); sel != nil {
-		if sel.Status == "needs_input" {
-			keys = append(keys, "a answer")
-		}
-		if hasPR(*sel) {
-			keys = append(keys, "o PR")
-		}
-	}
-	keys = append(keys, "x kill", "V lens", "/ filter", "! needs-you", "n next!", "v pane", "tab switch", "q quit")
-	return previewLine(faintText.Render(strings.Join(keys, " · ")), m.width)
-}
-
-// kanbanBoard renders the Board lens: fixed human-intent columns side by side,
-// each a titled stack of compact cards. Columns shrink to fit the width; below
-// a legibility floor it degrades to a condensed vertical grouping
-// (kanbanNarrow) rather than smearing unreadable slivers.
-func (m *rootModel) kanbanBoard() string {
-	s := &m.sessions
-	cols, groups := s.kanbanLayout()
-	width := m.width
-	if width <= 0 {
-		width = 80
-	}
-	n := len(cols)
-	const gap = 1
-	colW := (width - (n-1)*gap) / n
-	if colW < 14 {
-		return m.kanbanNarrow(cols, groups, width)
-	}
-	if colW > 26 {
-		colW = 26
-	}
-	selID := m.effectiveSelID()
-	rendered := make([][]string, n)
-	maxH := 0
-	for i, c := range cols {
-		rendered[i] = m.kanbanColumnLines(c, groups[c.Key], colW, selID)
-		if len(rendered[i]) > maxH {
-			maxH = len(rendered[i])
-		}
-	}
-	var b strings.Builder
-	sep := strings.Repeat(" ", gap)
-	for row := 0; row < maxH; row++ {
-		cells := make([]string, n)
-		for i := range cols {
-			cell := ""
-			if row < len(rendered[i]) {
-				cell = rendered[i][row]
-			}
-			cells[i] = padTo(cell, colW)
-		}
-		b.WriteString(strings.TrimRight(strings.Join(cells, sep), " ") + "\n")
-	}
-	return b.String()
 }
 
 // kanbanColumnLines builds one column's lines: a bold title with its count,

@@ -262,19 +262,6 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m.updateSessions(msg)
 }
 
-// switchTab activates a tab; entering the sessions tab triggers an immediate
-// fetch (the 5s tick keeps it fresh afterwards).
-func (m *rootModel) switchTab(tab int) (tea.Model, tea.Cmd) {
-	if tab == m.tab {
-		return m, nil
-	}
-	m.tab = tab
-	if tab == tabSessions {
-		return m, fetchSessionsCmd
-	}
-	return m, fetchStatusCmd
-}
-
 // tabBar is the shared header line; the active tab is highlighted.
 func (m *rootModel) tabBar() string {
 	polls, sessions := "1:polls", "2:sessions"
