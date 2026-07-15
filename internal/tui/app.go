@@ -33,7 +33,8 @@ const (
 type rootModel struct {
 	cfgPath  string
 	cfg      *config.Config
-	tab      int
+	tab      int // legacy tab index; superseded by the unified cockpit (focus)
+	focus    int // cockpit: which panel owns navigation/action keys (focusSessions/focusPolls)
 	list     listModel
 	sessions sessionsModel
 	form     *formModel
@@ -157,11 +158,12 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, statusTick()
 		}
 		cmds := []tea.Cmd{fetchStatusCmd, statusTick()}
-		// Freeze the sessions list while a kill confirmation is pending: a
-		// mid-confirm refresh could reorder/prune rows under the cursor (the
-		// kill target is pinned by ID regardless, but the frozen view keeps the
-		// prompt and the highlighted row in agreement).
-		if m.tab == tabSessions && !m.sessions.confirmKill && !m.sessions.answering && !m.sessions.filtering {
+		// Sessions are always on screen in the cockpit, so refresh them every
+		// tick — EXCEPT while a kill confirmation, answer card, or filter bar is
+		// open: a mid-interaction refresh could reorder/prune rows under the
+		// cursor (the kill target is pinned by ID regardless, but the frozen view
+		// keeps the prompt and the highlighted row in agreement).
+		if !m.sessions.confirmKill && !m.sessions.answering && !m.sessions.filtering {
 			cmds = append(cmds, fetchSessionsCmd)
 			if c := m.paneRefreshCmd(); c != nil {
 				cmds = append(cmds, c)
@@ -229,27 +231,28 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, cmd
 	}
-	// Tab switching — but never while a delete/kill confirmation awaits y/n, nor
-	// while an answer card is open (its choices may be keyed "1"/"2", which would
-	// otherwise be swallowed as tab switches).
-	if k, ok := msg.(tea.KeyMsg); ok &&
-		!(m.tab == tabPolls && m.list.confirmDelete) &&
-		!(m.tab == tabSessions && m.sessions.confirmKill) &&
-		!(m.tab == tabSessions && m.sessions.answering) &&
-		!(m.tab == tabSessions && m.sessions.filtering) {
+	// Cockpit key routing. Global keys (focus cycle, doctor) fire unless a modal
+	// gate currently owns keystrokes — a poll delete / session kill confirmation,
+	// the answer card, or the filter bar (whose keys may be "tab"/"d"/digits).
+	gated := m.list.confirmDelete || m.sessions.confirmKill || m.sessions.answering || m.sessions.filtering
+	if k, ok := msg.(tea.KeyMsg); ok && !gated {
 		switch k.String() {
 		case "tab":
-			return m.switchTab(1 - m.tab)
-		case "1":
-			return m.switchTab(tabPolls)
-		case "2":
-			return m.switchTab(tabSessions)
+			if m.focus == focusSessions {
+				m.focus = focusPolls
+			} else {
+				m.focus = focusSessions
+			}
+			return m, nil
+		case "d":
+			m.doctorLoading, m.doctorScroll = true, 0
+			return m, runDoctorCmd(m.cfg)
 		}
 	}
-	if m.tab == tabSessions {
-		return m.updateSessions(msg)
+	if m.focus == focusPolls {
+		return m.updateList(msg)
 	}
-	return m.updateList(msg)
+	return m.updateSessions(msg)
 }
 
 // switchTab activates a tab; entering the sessions tab triggers an immediate
@@ -281,10 +284,7 @@ func (m *rootModel) View() string {
 	if m.form != nil {
 		return m.form.view(m.height)
 	}
-	if m.tab == tabSessions {
-		return m.sessionsView()
-	}
-	return m.listView()
+	return m.cockpitView()
 }
 
 // ---- list behavior ----

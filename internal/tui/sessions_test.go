@@ -38,33 +38,32 @@ func keyMsg(s string) tea.KeyMsg {
 	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)}
 }
 
-func TestTabSwitchRendersSessionsTable(t *testing.T) {
+// The cockpit shows sessions and polls together on one screen; tab cycles which
+// panel owns navigation/action keys (focusSessions ⇄ focusPolls).
+func TestCockpitRendersAndTabCyclesFocus(t *testing.T) {
 	m := newTestRoot(t)
-
-	if _, _ = m.Update(keyMsg("tab")); m.tab != tabSessions {
-		t.Fatalf("tab key: tab = %d, want tabSessions", m.tab)
-	}
 	m.Update(sessionsMsg{data: cannedSessions()})
 
 	v := m.View()
 	for _, want := range []string{"ISSUE", "PROJECT", "STATUS", "REACTING", "ENG-123", "ENG-456", "web", "api", "#7", "2h05m", "ci retry 1/2"} {
 		if !strings.Contains(v, want) {
-			t.Errorf("sessions view missing %q:\n%s", want, v)
+			t.Errorf("cockpit missing sessions content %q:\n%s", want, v)
 		}
 	}
-	if strings.Contains(v, "LAST SPAWN") {
-		t.Error("sessions view must not render the polls table")
+	// Sessions are focused by default: the keybar advertises attach.
+	if !strings.Contains(v, "enter attach") {
+		t.Errorf("default focus keybar must advertise attach:\n%s", v)
 	}
-
-	// "1" returns to polls, "2" goes back to sessions.
-	if _, _ = m.Update(keyMsg("1")); m.tab != tabPolls {
-		t.Fatalf("key 1: tab = %d, want tabPolls", m.tab)
+	// tab moves focus to the Polls panel: its keybar verbs appear.
+	if _, _ = m.Update(keyMsg("tab")); m.focus != focusPolls {
+		t.Fatalf("tab: focus = %d, want focusPolls", m.focus)
 	}
-	if !strings.Contains(m.View(), "LAST SPAWN") {
-		t.Error("polls view must render after switching back")
+	if !strings.Contains(m.View(), "space toggle") {
+		t.Errorf("polls focus keybar must advertise toggle:\n%s", m.View())
 	}
-	if _, _ = m.Update(keyMsg("2")); m.tab != tabSessions {
-		t.Fatalf("key 2: tab = %d, want tabSessions", m.tab)
+	// tab again returns focus to Sessions.
+	if _, _ = m.Update(keyMsg("tab")); m.focus != focusSessions {
+		t.Fatalf("tab: focus = %d, want focusSessions", m.focus)
 	}
 }
 
@@ -392,6 +391,10 @@ func TestSessionsKillConfirmAndSend(t *testing.T) {
 	m.sessions.cursor = 0 // s1
 
 	// "x" opens the confirm; the footer already advertises the shortcut.
+	// Before confirming, the sessions keybar advertises the kill shortcut.
+	if !strings.Contains(m.View(), "x kill") {
+		t.Errorf("sessions footer must advertise 'x kill':\n%s", m.View())
+	}
 	m.Update(keyMsg("x"))
 	if !m.sessions.confirmKill {
 		t.Fatal("x must open the kill confirmation")
@@ -399,9 +402,6 @@ func TestSessionsKillConfirmAndSend(t *testing.T) {
 	v := m.View()
 	if !strings.Contains(v, `kill session "s1"? (y/n)`) {
 		t.Errorf("view must prompt to confirm the kill:\n%s", v)
-	}
-	if !strings.Contains(v, "x kill") {
-		t.Errorf("sessions footer must advertise 'x kill':\n%s", v)
 	}
 	if strings.Contains(v, "force") || strings.Contains(v, "--force") {
 		t.Errorf("the TUI must never offer a force path:\n%s", v)

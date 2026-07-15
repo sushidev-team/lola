@@ -43,7 +43,10 @@ func newTestRoot(t *testing.T) *rootModel {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &rootModel{cfgPath: path, cfg: loaded, list: newListModel(loaded), height: 24}
+	// A realistic terminal size so the cockpit renders a full frame with real
+	// (unclipped) columns; tests that exercise clipping send their own
+	// WindowSizeMsg to override this.
+	return &rootModel{cfgPath: path, cfg: loaded, list: newListModel(loaded), width: 120, height: 40}
 }
 
 // externallyDisable simulates the daemon persisting an enable-state change
