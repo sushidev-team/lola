@@ -53,6 +53,7 @@ type rootModel struct {
 	agentDebounce int    // debounce token; only the latest selection change attaches
 	spin          int    // braille spinner frame, advanced while a terminal is loading
 	spinning      bool   // a spinner tick loop is active
+	tmuxMouseSet  bool   // `mouse on` has been enabled on the lola tmux server
 
 	width  int
 	height int
@@ -270,6 +271,11 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.embedFocused {
 			return m.handleEmbedPaste(v.Content)
 		}
+	case tea.MouseWheelMsg:
+		if m.embedFocused {
+			m.forwardWheel(v.Mouse())
+		}
+		return m, nil
 	}
 
 	// The focused embed owns every keystroke (Ctrl-q unfocuses).
@@ -352,6 +358,11 @@ func (m *rootModel) tabBar() string {
 func (m *rootModel) View() tea.View {
 	v := tea.NewView(m.viewString())
 	v.AltScreen = true
+	// While an embed is focused, capture the mouse so wheel-scroll can be
+	// forwarded to it (the cockpit itself is keyboard-driven).
+	if m.embedFocused {
+		v.MouseMode = tea.MouseModeCellMotion
+	}
 	return v
 }
 

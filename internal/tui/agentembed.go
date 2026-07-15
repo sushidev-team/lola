@@ -12,6 +12,7 @@
 package tui
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"time"
@@ -131,6 +132,7 @@ func (m *rootModel) syncAgentPreview() tea.Cmd {
 		return m.armEmbed()
 	}
 	m.agentTerm = &termView{term: t, sessionID: sel.ID, kind: termAgent, title: "agent · " + dash(sel.Issue), w: cw, h: ch}
+	m.ensureTmuxMouse() // so wheel-scroll reaches the agent once focused
 	cmds := []tea.Cmd{m.armEmbed()}
 	if !m.spinning {
 		m.spinning = true
@@ -249,6 +251,65 @@ func (m *rootModel) handleEmbedKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+// forwardWheel encodes a mouse-wheel event as an SGR mouse sequence and sends it
+// to the focused embed so the inner app (Claude Code's history, tmux copy-mode)
+// scrolls. Coordinates are translated to the embed's own grid. This only takes
+// effect when the agent's tmux has `mouse on` (ensureTmuxMouse enables it) and
+// the inner app handles the wheel.
+func (m *rootModel) forwardWheel(mo tea.Mouse) {
+	e := m.currentEmbed()
+	if e == nil {
+		return
+	}
+	btn := 64 // SGR wheel-up
+	if mo.Button == tea.MouseWheelDown {
+		btn = 65
+	}
+	col, row := m.embedMouseCoord(mo.X, mo.Y)
+	e.term.Write([]byte(fmt.Sprintf("\x1b[<%d;%d;%dM", btn, col, row)))
+}
+
+// embedMouseCoord maps a screen mouse position to the focused embed's 1-based
+// grid, clamped in-bounds (mirrors the focused mainColumn layout offsets).
+func (m *rootModel) embedMouseCoord(x, y int) (int, int) {
+	W := m.width
+	if W <= 0 {
+		W = 100
+	}
+	railW := 32
+	if W < 104 {
+		railW = 28
+	}
+	const panelTop = 6 // vitals(1) + Sessions strip(4) + top border(1)
+	panelLeft := railW + 2
+	w, h := m.agentSize()
+	return clampInt(x-panelLeft+1, 1, w), clampInt(y-panelTop+1, 1, h)
+}
+
+func clampInt(v, lo, hi int) int {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
+}
+
+// ensureTmuxMouse enables `mouse on` on the lola tmux server once, best-effort,
+// so wheel events forwarded to an embedded agent actually reach the inner app.
+func (m *rootModel) ensureTmuxMouse() {
+	if m.tmuxMouseSet {
+		return
+	}
+	m.tmuxMouseSet = true
+	bin := os.Getenv("TMUX_BIN")
+	if bin == "" {
+		bin = "tmux"
+	}
+	_ = exec.Command(bin, "-L", m.cfg.TmuxSocketName(), "set-option", "-g", "mouse", "on").Run()
 }
 
 // handleEmbedPaste forwards pasted text to the focused embed as a BRACKETED
