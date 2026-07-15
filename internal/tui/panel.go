@@ -132,6 +132,25 @@ func fitHeight(lines []string, h int) []string {
 	return lines
 }
 
+// highlightRow paints a full-width selection background (256-color `bg`) behind
+// an already-styled row and pads it to w columns. Inner style resets (from
+// status pills / colored cells) would punch a hole in the background, so the bg
+// SGR is re-applied after every reset. The row is ANSI-clipped to w first so a
+// selected wide row can't wrap and desync the repaint.
+func highlightRow(s string, w int, bg string) string {
+	if w > 0 && lipgloss.Width(s) > w {
+		s = truncateANSI(s, w)
+	}
+	sgr := "\x1b[48;5;" + bg + "m"
+	out := sgr + strings.ReplaceAll(s, "\x1b[0m", "\x1b[0m"+sgr)
+	if w > 0 {
+		if pad := w - lipgloss.Width(s); pad > 0 {
+			out += strings.Repeat(" ", pad)
+		}
+	}
+	return out + "\x1b[0m"
+}
+
 // placeModal centers a modal box (its own bordered block) over a dimmed
 // background frame, returning the composited lines. The background lines are
 // faint-rendered; the modal overwrites the center rows in place. Both inputs

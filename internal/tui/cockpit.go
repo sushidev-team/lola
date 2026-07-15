@@ -23,6 +23,14 @@ const (
 	focusPolls
 )
 
+// selRowBg is the 256-color background painted behind the selected Sessions row
+// — a subtle cool tint that reads as a selection bar without fighting the pills.
+const selRowBg = "236"
+
+// meterTrack is the unfilled portion of a Triage bar: a solid but very dark bar
+// so the fill's proportion is legible without the faint-shade smear.
+var meterTrack = lipgloss.NewStyle().Foreground(lipgloss.Color("237"))
+
 // cockpitView renders the whole single-screen frame. Below a minimum size it
 // degrades to a plain stacked view (narrowCockpit) rather than smearing
 // unreadable slivers, mirroring the kanbanNarrow discipline.
@@ -224,8 +232,22 @@ func (m *rootModel) mainColumn(w, h int) []string {
 	}
 	sessH := h - detailH
 	sess := box(m.sessionsTitle(), m.sessionsBody(w-2, sessH-2), w, sessH, m.focus == focusSessions)
-	det := box("❹ Detail", m.detailBody(w-2, detailH-2), w, detailH, false)
+	det := box(m.detailTitle(), m.detailBody(w-2, detailH-2), w, detailH, false)
 	return stackRows(sess, det)
+}
+
+// detailTitle names the selected session in the Detail panel header (issue +
+// project), or a bare "Detail" when nothing is selected.
+func (m *rootModel) detailTitle() string {
+	sel := m.sessions.selected()
+	if sel == nil {
+		return "❹ Detail"
+	}
+	t := "❹ Detail · " + sel.Issue
+	if sel.Project != "" {
+		t += " · " + sel.Project
+	}
+	return t
 }
 
 // sessionsTitle names the panel plus the active lens and any standing filter
@@ -265,11 +287,13 @@ func (m *rootModel) sessionsBody(w, h int) []string {
 	selRow := -1
 	for i, si := range list {
 		marker := " "
+		issue := si.Issue
 		if si.Status == "needs_input" {
 			marker = warnText.Render("!")
 		}
 		if si.ID == selID {
-			marker = "›"
+			marker = boxTitleHi.Render("›")
+			issue = boxTitleHi.Render(si.Issue) // cyan bold on the selected row
 			selRow = i
 		}
 		pr := prBadge(si)
@@ -277,7 +301,7 @@ func (m *rootModel) sessionsBody(w, h int) []string {
 			pr = "-"
 		}
 		rows[i] = []string{
-			marker, si.Issue, si.Project,
+			marker, issue, si.Project,
 			statusPill(si.Status), pr,
 			reactingStyle(si.Reacting).Render(dash(si.Reacting)), dash(si.Age),
 		}
@@ -304,7 +328,12 @@ func (m *rootModel) sessionsBody(w, h int) []string {
 		end = len(rows)
 	}
 	for i := start; i < end; i++ {
-		out = append(out, previewLine(padCells(rows[i], colw), w))
+		line := padCells(rows[i], colw)
+		if i == selRow {
+			out = append(out, highlightRow(line, w, selRowBg))
+		} else {
+			out = append(out, previewLine(line, w))
+		}
 	}
 	return out
 }
@@ -423,7 +452,17 @@ func (m *rootModel) triageBody(w int) []string {
 	out = append(out, triageMeter("working", work, total, meterW, statusBlue))
 	out = append(out, triageMeter("ready", ready, total, meterW, goodText))
 	out = append(out, triageMeter("fixing", fix, total, meterW, badText))
-	out = append(out, faintText.Render(fmt.Sprintf("%d total", total)))
+	withPR := 0
+	for _, x := range sess {
+		if x.PRNumber > 0 {
+			withPR++
+		}
+	}
+	totalLine := fmt.Sprintf("%d total", total)
+	if withPR > 0 {
+		totalLine += fmt.Sprintf(" · %d with PR", withPR)
+	}
+	out = append(out, faintText.Render(totalLine))
 	return out
 }
 
@@ -442,7 +481,8 @@ func triageMeter(label string, n, total, w int, style lipgloss.Style) string {
 	if n > 0 && filled == 0 {
 		filled = 1
 	}
-	return fmt.Sprintf("%2d %-7s", n, label) + style.Render(strings.Repeat("█", filled))
+	bar := style.Render(strings.Repeat("█", filled)) + meterTrack.Render(strings.Repeat("█", w-filled))
+	return fmt.Sprintf("%2d %-7s", n, label) + bar
 }
 
 // vitalsBar is the always-on top strip: daemon/runtime/linear health, session

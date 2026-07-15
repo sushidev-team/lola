@@ -240,30 +240,43 @@ func statusDisplay(status string) StatusDisplay {
 	return StatusDisplay{Style: statusStyle(status), Badge: statusBadge(status)}
 }
 
-// statusPill renders a status as a compact chip that reads by BOTH shape and
-// hue (never color alone — mono terminals / colorblind users): the badge glyph
-// followed by the status word. The states that put a human on the critical path
-// (needs_input, and the broken-work set) get a FILLED background so the queue
-// leaps out of the table; everything else is colored text on the default
-// ground. Shared so the cockpit table and any future lens stay identical.
+// statusPill renders a status as a colored chip — a filled background is itself
+// a shape (not color alone), so the pills read on mono/colorblind terminals too.
+// The states that put a human on the critical path (needs_input + the
+// broken-work set) get a SOLID, bold fill so the queue leaps out; the active and
+// parked states get a SUBTLE tint; the quiet/terminal states are plain dim text.
+// Shared so the cockpit table and any future lens stay identical.
 func statusPill(status string) string {
-	badge := statusBadge(status)
-	text := badge + " " + status
 	switch status {
 	case "needs_input":
-		return pillFill("208", "16", text) // orange fill, near-black text
+		return pillFill("208", "232", status) // solid orange, near-black text
 	case "ci_failed", "changes_requested", "merge_conflict":
-		return pillFill("9", "15", text) // red fill, white text
+		return pillFill("174", "232", status) // solid soft-red
+	case "working", "ci_pending", "draft":
+		return pillTint("24", "117", status) // muted blue
+	case "approved", "pr_open":
+		return pillTint("22", "114", status) // muted green
+	case "review_pending":
+		return pillTint("238", "251", status) // neutral grey
+	default: // merged / dead / session_ended / idle / unknown: quiet
+		return " " + statusStyle(status).Render(status) + " "
 	}
-	return statusStyle(status).Render(text)
 }
 
-// pillFill renders text as a filled chip (one space of padding each side) in the
-// given background/foreground colors.
+// pillFill renders a SOLID, bold chip (one space of padding each side).
 func pillFill(bg, fg, text string) string {
 	return lipgloss.NewStyle().
 		Background(lipgloss.Color(bg)).
 		Foreground(lipgloss.Color(fg)).
 		Bold(true).
+		Render(" " + text + " ")
+}
+
+// pillTint renders a SUBTLE chip: a dark background tint with a bright-enough
+// foreground to stay legible, no bold — for the non-urgent states.
+func pillTint(bg, fg, text string) string {
+	return lipgloss.NewStyle().
+		Background(lipgloss.Color(bg)).
+		Foreground(lipgloss.Color(fg)).
 		Render(" " + text + " ")
 }

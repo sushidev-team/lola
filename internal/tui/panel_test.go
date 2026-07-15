@@ -116,6 +116,30 @@ func TestFitHeight(t *testing.T) {
 	}
 }
 
+// highlightRow pads to exactly w visible columns, re-applies its background
+// after inner resets (so a pill can't punch a hole), and ends reset.
+func TestHighlightRow(t *testing.T) {
+	// Literal SGR so the inner reset survives the no-TTY test profile.
+	row := "ENG-1  \x1b[31mci_failed\x1b[0m  #7"
+	out := highlightRow(row, 30, "236")
+	if got := lipgloss.Width(out); got != 30 {
+		t.Errorf("width = %d, want 30 (%q)", got, stripANSI(out))
+	}
+	if !strings.Contains(out, "\x1b[48;5;236m") {
+		t.Error("must set the selection background")
+	}
+	// The inner reset from badText.Render is followed by a re-applied background.
+	if !strings.Contains(out, "\x1b[0m\x1b[48;5;236m") {
+		t.Error("must re-apply the background after an inner reset")
+	}
+	if !strings.HasSuffix(out, "\x1b[0m") {
+		t.Error("must end with a reset")
+	}
+	if !strings.Contains(stripANSI(out), "ci_failed") {
+		t.Error("must preserve the row content")
+	}
+}
+
 func TestStripANSI(t *testing.T) {
 	styled := badText.Render("hello") + " " + goodText.Render("world")
 	if got := stripANSI(styled); got != "hello world" {

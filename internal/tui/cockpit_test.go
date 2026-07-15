@@ -8,16 +8,17 @@ import (
 	"github.com/sushidev-team/lola/internal/protocol"
 )
 
-// statusPill reads by both shape (badge glyph) and word for every status, and
-// fills the background only for the states that put a human on the path.
+// Every status pill shows its word as a padded chip (leading/trailing space) so
+// the STATUS column aligns regardless of fill. (Color/fill is a runtime concern:
+// lipgloss renders without SGR under the no-TTY test profile.)
 func TestStatusPill(t *testing.T) {
-	for _, status := range []string{"needs_input", "ci_failed", "changes_requested", "working", "approved", "merged"} {
-		p := statusPill(status)
-		if !strings.Contains(stripANSI(p), status) {
-			t.Errorf("pill for %q missing the status word: %q", status, stripANSI(p))
+	for _, status := range []string{"needs_input", "ci_failed", "changes_requested", "working", "approved", "review_pending", "merged"} {
+		p := stripANSI(statusPill(status))
+		if !strings.Contains(p, status) {
+			t.Errorf("pill for %q missing the status word: %q", status, p)
 		}
-		if !strings.Contains(stripANSI(p), statusBadge(status)) {
-			t.Errorf("pill for %q missing its badge glyph: %q", status, stripANSI(p))
+		if !strings.HasPrefix(p, " ") || !strings.HasSuffix(p, " ") {
+			t.Errorf("pill for %q must be a padded chip: %q", status, p)
 		}
 	}
 }
