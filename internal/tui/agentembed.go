@@ -309,7 +309,13 @@ func (m *rootModel) ensureTmuxMouse() {
 	if bin == "" {
 		bin = "tmux"
 	}
-	_ = exec.Command(bin, "-L", m.cfg.TmuxSocketName(), "set-option", "-g", "mouse", "on").Run()
+	sock := m.cfg.TmuxSocketName()
+	// mouse on: tmux processes wheel events from the client.
+	_ = exec.Command(bin, "-L", sock, "set-option", "-g", "mouse", "on").Run()
+	// alternate-scroll off: do NOT translate the wheel into arrow keys for
+	// alt-screen apps (that recalls input history instead of scrolling) — forward
+	// the real wheel so the inner app (Claude) can scroll its own history.
+	_ = exec.Command(bin, "-L", sock, "set-option", "-g", "alternate-scroll", "off").Run()
 }
 
 // handleEmbedPaste forwards pasted text to the focused embed as a BRACKETED

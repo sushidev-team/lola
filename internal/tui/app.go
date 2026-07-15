@@ -37,8 +37,9 @@ type rootModel struct {
 	focus    int // cockpit: which panel owns navigation/action keys (focusSessions/focusPolls)
 	list     listModel
 	sessions sessionsModel
-	form  *formModel
-	terms map[string]*termView // per-session persistent shells, keyed by session ID
+	form     *formModel
+	projForm *projectForm         // project editor modal ('P'); nil otherwise
+	terms    map[string]*termView // per-session persistent shells, keyed by session ID
 
 	// The embedded terminal shown in the Detail panel for the selected session:
 	// the live AGENT (a tmux attach, re-targeted as the selection moves) by
@@ -286,6 +287,22 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// The project editor owns all input while open.
+	if m.projForm != nil {
+		if k, ok := msg.(tea.KeyPressMsg); ok {
+			switch m.projForm.update(k) {
+			case projFormCancel:
+				m.projForm = nil
+			case projFormSaved:
+				m.projForm = nil
+				m.reloadConfig()
+				m.list.flash = "project saved"
+				return m, tea.Batch(bestEffortReloadCmd, fetchStatusCmd)
+			}
+		}
+		return m, nil
+	}
+
 	// The doctor overlay owns all input while open (loading or showing).
 	if m.doctorLoading || m.doctorReport != nil {
 		if k, ok := msg.(tea.KeyPressMsg); ok {
@@ -324,6 +341,8 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "d":
 			m.doctorLoading, m.doctorScroll = true, 0
 			return m, runDoctorCmd(m.cfg)
+		case "P":
+			return m.openProjectForm()
 		}
 	}
 	if m.focus == focusPolls {
@@ -369,6 +388,9 @@ func (m *rootModel) View() tea.View {
 func (m *rootModel) viewString() string {
 	if m.doctorLoading || m.doctorReport != nil {
 		return m.doctorModal()
+	}
+	if m.projForm != nil {
+		return m.projectFormModal()
 	}
 	if m.form != nil {
 		// The poll edit form floats as a modal over the cockpit. (The first-run

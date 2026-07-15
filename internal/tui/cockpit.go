@@ -637,7 +637,7 @@ func (m *rootModel) keybar(w int) string {
 		}
 		keys = append(keys, "x kill", "/ filter", "! needs-you", "V lens", "n next!", "tab → polls")
 	}
-	keys = append(keys, "d doctor", "q quit")
+	keys = append(keys, "P project", "d doctor", "q quit")
 	return previewLine(faintText.Render(strings.Join(keys, " · ")), w)
 }
 
