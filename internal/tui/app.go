@@ -37,22 +37,22 @@ type rootModel struct {
 	focus    int // cockpit: which panel owns navigation/action keys (focusSessions/focusPolls)
 	list     listModel
 	sessions sessionsModel
-	form     *formModel
-	term     *termView            // a focused full-screen SHELL terminal (from 's'); nil otherwise
-	terms    map[string]*termView // per-session persistent shells, keyed by session ID
+	form  *formModel
+	terms map[string]*termView // per-session persistent shells, keyed by session ID
 
-	// Live embedded AGENT terminal shown in the Detail panel for the selected
-	// session. It re-targets as the selection moves (always-live); 'enter'
-	// focuses+expands it into the main column, Ctrl-q shrinks it back. The tmux
-	// session is the durable thing, so a selection change closes this attach and
-	// opens a new one. spin animates the "attaching…" state until the first frame.
-	agentTerm    *termView
-	agentFor     string // session ID agentTerm is attached to ("" = none)
-	agentFocused bool   // agent embed has keyboard + is expanded
-	agentGen      int  // generation, bumped on re-target so stale frame waiters are ignored
-	agentDebounce int  // debounce token; only the latest selection change attaches
-	spin          int  // braille spinner frame, advanced while a terminal is loading
-	spinning      bool // a spinner tick loop is active
+	// The embedded terminal shown in the Detail panel for the selected session:
+	// the live AGENT (a tmux attach, re-targeted as the selection moves) by
+	// default, or a per-session SHELL when showShell is set. 'enter' focuses +
+	// expands whichever is shown into the main column; Ctrl-q shrinks it back.
+	// currentEmbed() resolves which one; embedGen guards the repaint waiter.
+	agentTerm     *termView
+	agentFor      string // session ID agentTerm is attached to ("" = none)
+	showShell     bool   // Detail shows the session's shell instead of the agent
+	embedFocused  bool   // the shown embed has keyboard + is expanded
+	embedGen      int    // generation, bumped on re-target so stale frame waiters are ignored
+	agentDebounce int    // debounce token; only the latest selection change attaches
+	spin          int    // braille spinner frame, advanced while a terminal is loading
+	spinning      bool   // a spinner tick loop is active
 
 	width  int
 	height int
@@ -159,32 +159,11 @@ func (m *rootModel) Init() tea.Cmd {
 }
 
 func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	// An open embedded terminal owns all keyboard input plus its own resize and
-	// repaint; other messages (status ticks) fall through so the cockpit data is
-	// fresh the moment you exit back.
-	if m.term != nil {
-		switch v := msg.(type) {
-		case tea.KeyPressMsg:
-			return m.handleTermKey(v)
-		case tea.WindowSizeMsg:
-			m.width, m.height = v.Width, v.Height
-			m.resizeTerm()
-			return m, nil
-		case termFrameMsg:
-			if m.term.term.Exited() {
-				m.reapTerm(m.term, "shell exited")
-				return m, nil
-			}
-			return m, waitTermFrame(m.term.term)
-		}
-	}
 	switch v := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = v.Width, v.Height
-		m.resizeAgent()
+		m.resizeEmbed()
 		return m, nil
-	case termFrameMsg:
-		return m, nil // stale frame after the terminal closed
 	case statusMsg:
 		if v.err != nil {
 			m.list.status = nil
@@ -251,21 +230,30 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case tea.KeyPressMsg:
-		// ctrl+c quits — EXCEPT while the embedded agent is focused, where it is
-		// forwarded to the agent (interrupt) via the agent-key routing below.
-		if v.String() == "ctrl+c" && !m.agentFocused {
+		// ctrl+c quits — EXCEPT while the embed is focused, where it is forwarded
+		// to the terminal (interrupt) via the embed-key routing below.
+		if v.String() == "ctrl+c" && !m.embedFocused {
 			m.closeAllTerms()
 			return m, tea.Quit
 		}
-	case agentFrameMsg:
-		if v.gen != m.agentGen || m.agentTerm == nil {
-			return m, nil // stale waiter from a previous target
+	case embedFrameMsg:
+		if v.gen != m.embedGen {
+			return m, nil // stale waiter from a previous embed
 		}
-		if m.agentTerm.term.Exited() {
-			m.closeAgent()
+		e := m.currentEmbed()
+		if e == nil {
 			return m, nil
 		}
-		return m, waitAgentFrame(m.agentTerm.term, m.agentGen)
+		if e.term.Exited() {
+			if e.kind == termAgent {
+				m.closeAgent()
+			} else {
+				m.reapTerm(e, "shell exited")
+				m.showShell = false
+			}
+			return m, m.armEmbed() // fall back to the agent, if any
+		}
+		return m, waitEmbedFrame(e.term, m.embedGen)
 	case spinnerTickMsg:
 		m.spin++
 		if m.agentLoading() {
@@ -278,12 +266,16 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil // superseded by a newer selection change
 		}
 		return m, m.syncAgentPreview()
+	case tea.PasteMsg:
+		if m.embedFocused {
+			return m.handleEmbedPaste(v.Content)
+		}
 	}
 
-	// The focused embedded agent owns every keystroke (Ctrl-q unfocuses).
-	if m.agentFocused {
+	// The focused embed owns every keystroke (Ctrl-q unfocuses).
+	if m.embedFocused {
 		if k, ok := msg.(tea.KeyPressMsg); ok {
-			return m.handleAgentKey(k)
+			return m.handleEmbedKey(k)
 		}
 		return m, nil
 	}
@@ -360,17 +352,10 @@ func (m *rootModel) tabBar() string {
 func (m *rootModel) View() tea.View {
 	v := tea.NewView(m.viewString())
 	v.AltScreen = true
-	if m.term != nil {
-		cx, cy := m.term.term.Cursor()
-		v.Cursor = tea.NewCursor(cx, cy+1) // +1: the terminal renders below the title bar
-	}
 	return v
 }
 
 func (m *rootModel) viewString() string {
-	if m.term != nil {
-		return m.termSurfaceView() // embedded terminal takes the whole screen
-	}
 	if m.doctorLoading || m.doctorReport != nil {
 		return m.doctorModal()
 	}

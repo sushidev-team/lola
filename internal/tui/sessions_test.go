@@ -67,9 +67,9 @@ func TestCockpitRendersAndTabCyclesFocus(t *testing.T) {
 			t.Errorf("cockpit missing sessions content %q:\n%s", want, v)
 		}
 	}
-	// Sessions are focused by default: the keybar advertises the agent embed.
-	if !strings.Contains(v, "enter agent") {
-		t.Errorf("default focus keybar must advertise the agent embed:\n%s", v)
+	// Sessions are focused by default: the keybar advertises focusing the embed.
+	if !strings.Contains(v, "enter focus") {
+		t.Errorf("default focus keybar must advertise focusing the embed:\n%s", v)
 	}
 	// tab moves focus to the Polls panel: its keybar verbs appear.
 	if _, _ = m.Update(keyMsg("tab")); m.focus != focusPolls {

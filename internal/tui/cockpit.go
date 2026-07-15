@@ -224,7 +224,7 @@ func (m *rootModel) railColumn(w, h int) []string {
 // embedded agent is FOCUSED it expands to fill the column (Sessions shrinks to a
 // thin strip); otherwise the Detail panel takes its usual slice at the bottom.
 func (m *rootModel) mainColumn(w, h int) []string {
-	if m.agentFocused && m.agentTerm != nil {
+	if m.embedFocused && m.currentEmbed() != nil {
 		sessH := 4
 		if sessH > h-8 {
 			sessH = h - 8
@@ -232,10 +232,10 @@ func (m *rootModel) mainColumn(w, h int) []string {
 		if sessH < 3 {
 			sessH = 3
 		}
-		agentH := h - sessH
+		embedH := h - sessH
 		sess := box(m.sessionsTitle(), m.sessionsBody(w-2, sessH-2), w, sessH, false)
-		agent := box(m.detailTitle(), m.detailBody(w-2, agentH-2), w, agentH, true) // focused accent
-		return stackRows(sess, agent)
+		embed := box(m.detailTitle(), m.detailBody(w-2, embedH-2), w, embedH, true) // focused accent
+		return stackRows(sess, embed)
 	}
 	detailH := m.sessions.paneLines() + 8 // header + meta + card + pane + borders
 	if maxD := h - 8; detailH > maxD {
@@ -259,8 +259,12 @@ func (m *rootModel) detailTitle() string {
 		return "❹ Detail"
 	}
 	label := "❹ Detail"
-	if m.agentTerm != nil {
-		label = "❹ Agent"
+	if e := m.currentEmbed(); e != nil {
+		if e.kind == termShell {
+			label = "❹ Shell"
+		} else {
+			label = "❹ Agent"
+		}
 	}
 	t := label + " · " + sel.Issue
 	if sel.Project != "" {
@@ -274,9 +278,9 @@ func (m *rootModel) detailTitle() string {
 	} else if sel.Status != "" {
 		t += " · " + sel.Status
 	}
-	if m.agentFocused {
+	if m.embedFocused {
 		t += " · ⛶ focused — Ctrl-q back"
-	} else if m.agentTerm != nil {
+	} else if m.currentEmbed() != nil {
 		t += " · enter to focus"
 	}
 	return t
@@ -374,8 +378,8 @@ func (m *rootModel) sessionsBody(w, h int) []string {
 // of its screen) when one is attached for the selection, otherwise the static
 // detail card / capture preview.
 func (m *rootModel) detailBody(w, h int) []string {
-	if m.agentTerm != nil {
-		return m.agentBody(w, h)
+	if e := m.currentEmbed(); e != nil {
+		return m.embedBody(e, w, h)
 	}
 	raw := m.sessionDetail()
 	if strings.TrimSpace(raw) == "" {
@@ -388,28 +392,6 @@ func (m *rootModel) detailBody(w, h int) []string {
 	}
 	if len(out) > h {
 		out = out[:h]
-	}
-	return out
-}
-
-// agentBody renders the embedded agent: a spinner while attaching, a note if the
-// attach ended, otherwise the BOTTOM h rows of the agent's screen (a viewport
-// into the fixed-size terminal — the small panel shows the tail, the focused
-// expanded panel shows it all).
-func (m *rootModel) agentBody(w, h int) []string {
-	if m.agentLoading() {
-		return []string{"", "  " + faintText.Render(m.spinnerFrame()+" attaching to agent…")}
-	}
-	if m.agentTerm.term.Exited() {
-		return []string{"", "  " + faintText.Render("agent attach ended")}
-	}
-	lines := m.agentTerm.term.Render()
-	if len(lines) > h { // bottom viewport
-		lines = lines[len(lines)-h:]
-	}
-	out := make([]string, len(lines))
-	for i, ln := range lines {
-		out[i] = previewLine(ln, w)
 	}
 	return out
 }
@@ -635,17 +617,19 @@ func (m *rootModel) keybar(w int) string {
 	if m.focus == focusPolls {
 		keys = []string{"↑↓ move", "n new", "enter edit", "space toggle", "x delete", "r cache", "tab → sessions"}
 	} else {
-		keys = []string{"↑↓ move", "enter agent"}
+		keys = []string{"↑↓ move", "enter focus"}
 		if sel := s.selected(); sel != nil {
+			if m.showShell {
+				keys = append(keys, "s agent") // toggle back to the agent view
+			} else if sel.Worktree != "" {
+				shell := "s shell"
+				if m.runningShell(sel.ID) {
+					shell += " " + goodText.Render("●") // a live shell to re-enter
+				}
+				keys = append(keys, shell)
+			}
 			if sel.Status == "needs_input" {
 				keys = append(keys, "a answer")
-			}
-			if sel.Worktree != "" {
-				if m.runningShell(sel.ID) {
-					keys = append(keys, "s shell "+goodText.Render("●")) // a live shell to re-enter
-				} else {
-					keys = append(keys, "s shell")
-				}
 			}
 			if sel.PRURL != "" {
 				keys = append(keys, "o PR")

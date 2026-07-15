@@ -506,9 +506,9 @@ func (m *rootModel) updateSessions(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case "G":
 		return m.sessJumpEdge(false)
 	case "enter":
-		return m.focusAgent()
+		return m.focusEmbed()
 	case "s":
-		return m.openShellForSelected()
+		return m.toggleShell()
 	case "o":
 		return m, m.openSelectedPR()
 	case "x":

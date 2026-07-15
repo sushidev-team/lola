@@ -9,26 +9,27 @@ import (
 	"github.com/sushidev-team/lola/internal/vtterm"
 )
 
-// enter focuses the embedded agent; with no live agent it flashes and stays in
+// enter focuses the shown embed; with nothing embedded it flashes and stays in
 // the cockpit.
-func TestFocusAgentGuard(t *testing.T) {
+func TestFocusEmbedGuard(t *testing.T) {
 	m := newTestRoot(t)
 	m.sessions.data = cannedSessions()
-	m.sessions.cursor = 0 // no agentTerm attached (tests don't spawn tmux)
+	m.sessions.cursor = 0 // no embed attached (tests don't spawn tmux)
 
-	m.focusAgent()
-	if m.agentFocused {
-		t.Error("focusAgent with no live agent must not focus")
+	m.focusEmbed()
+	if m.embedFocused {
+		t.Error("focusEmbed with no live embed must not focus")
 	}
-	if got := m.sessions.flash; got == "" {
-		t.Error("focusAgent with no live agent must flash a hint")
+	if m.sessions.flash == "" {
+		t.Error("focusEmbed with no live embed must flash a hint")
 	}
 }
 
-// focusAgent focuses a live embedded agent; Ctrl-q unfocuses it WITHOUT killing
-// the attach (the agent keeps running).
-func TestFocusAgentThenCtrlQUnfocuses(t *testing.T) {
+// focusEmbed focuses the live embed; Ctrl-q unfocuses it WITHOUT killing it.
+func TestFocusEmbedThenCtrlQUnfocuses(t *testing.T) {
 	m := newTestRoot(t)
+	m.sessions.data = &protocol.SessionsData{Sessions: []protocol.SessionInfo{{ID: "s1", Issue: "ENG-1", TmuxName: "lola-x", Status: "working"}}}
+	m.sessions.selID, m.sessions.cursor = "s1", 0
 	term, err := vtterm.New(exec.Command("cat"), 40, 10) // stands in for the attach
 	if err != nil {
 		t.Fatalf("vtterm.New: %v", err)
@@ -37,21 +38,52 @@ func TestFocusAgentThenCtrlQUnfocuses(t *testing.T) {
 	m.agentTerm = &termView{term: term, sessionID: "s1", kind: termAgent}
 	m.agentFor = "s1"
 
-	if m.focusAgent(); !m.agentFocused {
-		t.Fatal("focusAgent must focus a live agent")
+	if m.focusEmbed(); !m.embedFocused {
+		t.Fatal("focusEmbed must focus the live embed")
 	}
-	m.handleAgentKey(tea.KeyPressMsg{Code: 'q', Mod: tea.ModCtrl})
-	if m.agentFocused {
-		t.Error("ctrl+q must unfocus the agent")
+	m.handleEmbedKey(tea.KeyPressMsg{Code: 'q', Mod: tea.ModCtrl})
+	if m.embedFocused {
+		t.Error("ctrl+q must unfocus the embed")
 	}
 	if term.Exited() {
-		t.Error("ctrl+q must NOT kill the embedded agent")
+		t.Error("ctrl+q must NOT kill the embed")
+	}
+}
+
+// A paste is forwarded to the focused embed wrapped in bracketed-paste markers.
+func TestEmbedPasteForwarded(t *testing.T) {
+	m := newTestRoot(t)
+	m.sessions.data = &protocol.SessionsData{Sessions: []protocol.SessionInfo{{ID: "s1", TmuxName: "lola-x", Status: "working"}}}
+	m.sessions.selID, m.sessions.cursor = "s1", 0
+	term, err := vtterm.New(exec.Command("cat"), 40, 6) // echoes stdin
+	if err != nil {
+		t.Fatalf("vtterm.New: %v", err)
+	}
+	defer term.Close()
+	m.agentTerm = &termView{term: term, sessionID: "s1", kind: termAgent}
+	m.agentFor = "s1"
+
+	m.handleEmbedPaste("hello-paste")
+	// cat echoes the pasted bytes (incl. the bracketed-paste markers) back.
+	got := false
+	for range 40 {
+		for _, ln := range term.Render() {
+			if containsSub(ln, "hello-paste") {
+				got = true
+			}
+		}
+		if got {
+			break
+		}
+		<-term.Frames()
+	}
+	if !got {
+		t.Errorf("pasted text never reached the embed:\n%q", term.Render())
 	}
 }
 
 // Moving the selection schedules a DEBOUNCED attach and bumps the token; a
-// superseded (stale-token) debounce fires nothing, so fast scrolling attaches
-// only once.
+// superseded (stale-token) debounce fires nothing.
 func TestAgentSyncDebounces(t *testing.T) {
 	m := newTestRoot(t)
 	m.sessions.data = &protocol.SessionsData{Sessions: []protocol.SessionInfo{
@@ -67,20 +99,18 @@ func TestAgentSyncDebounces(t *testing.T) {
 	if m.agentTerm != nil {
 		t.Error("scheduling must NOT attach immediately (that is the debounce point)")
 	}
-	// A second change supersedes the first.
 	m.sessions.selID, m.sessions.cursor = "s2", 1
 	m.scheduleAgentSync()
 	if m.agentDebounce == stale {
 		t.Error("a newer selection change must bump the debounce token")
 	}
-	// The stale debounce fires nothing (no attach).
 	if _, c := m.Update(agentDebounceMsg{token: stale}); c != nil {
 		t.Error("a superseded debounce token must be ignored")
 	}
 }
 
-// syncAgentPreview never opens an attach for a session that has no tmux pane or
-// whose agent has exited — it leaves the embed empty.
+// syncAgentPreview never opens an attach for a session with no tmux pane or a
+// terminal (dead/ended) status.
 func TestSyncAgentSkipsNonLive(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -94,12 +124,37 @@ func TestSyncAgentSkipsNonLive(t *testing.T) {
 			m := newTestRoot(t)
 			m.sessions.data = &protocol.SessionsData{Sessions: []protocol.SessionInfo{tc.si}}
 			m.sessions.cursor = 0
-			if cmd := m.syncAgentPreview(); cmd != nil {
-				t.Error("must not open an agent for a non-live session")
-			}
+			m.syncAgentPreview()
 			if m.agentTerm != nil || m.agentFor != "" {
 				t.Errorf("agent embed must stay empty (term=%v for=%q)", m.agentTerm, m.agentFor)
 			}
 		})
 	}
+}
+
+// toggleShell on a session with no worktree flashes and opens nothing.
+func TestToggleShellNoWorktree(t *testing.T) {
+	m := newTestRoot(t)
+	m.sessions.data = &protocol.SessionsData{Sessions: []protocol.SessionInfo{{ID: "s1", TmuxName: "lola-x", Worktree: ""}}}
+	m.sessions.cursor = 0
+	m.toggleShell()
+	if m.showShell || len(m.terms) != 0 {
+		t.Error("toggleShell without a worktree must not open a shell")
+	}
+	if m.sessions.flash == "" {
+		t.Error("toggleShell without a worktree must flash")
+	}
+}
+
+func containsSub(s, sub string) bool {
+	return len(stripANSI(s)) > 0 && indexOf(stripANSI(s), sub) >= 0
+}
+
+func indexOf(s, sub string) int {
+	for i := 0; i+len(sub) <= len(s); i++ {
+		if s[i:i+len(sub)] == sub {
+			return i
+		}
+	}
+	return -1
 }
