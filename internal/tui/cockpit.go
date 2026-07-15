@@ -583,6 +583,9 @@ func (m *rootModel) keybar(w int) string {
 			if sel.Status == "needs_input" {
 				keys = append(keys, "a answer")
 			}
+			if sel.Worktree != "" {
+				keys = append(keys, "s shell")
+			}
 			if sel.PRURL != "" {
 				keys = append(keys, "o PR")
 			}

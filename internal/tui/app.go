@@ -38,6 +38,7 @@ type rootModel struct {
 	list     listModel
 	sessions sessionsModel
 	form     *formModel
+	term     *termView // non-nil while an embedded terminal is open (owns all keys)
 	width    int
 	height   int
 
@@ -143,10 +144,31 @@ func (m *rootModel) Init() tea.Cmd {
 }
 
 func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// An open embedded terminal owns all keyboard input plus its own resize and
+	// repaint; other messages (status ticks) fall through so the cockpit data is
+	// fresh the moment you exit back.
+	if m.term != nil {
+		switch v := msg.(type) {
+		case tea.KeyMsg:
+			return m.handleTermKey(v)
+		case tea.WindowSizeMsg:
+			m.width, m.height = v.Width, v.Height
+			m.resizeTerm()
+			return m, nil
+		case termFrameMsg:
+			if m.term.term.Exited() {
+				m.closeTerm("shell exited")
+				return m, nil
+			}
+			return m, waitTermFrame(m.term.term)
+		}
+	}
 	switch v := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = v.Width, v.Height
 		return m, nil
+	case termFrameMsg:
+		return m, nil // stale frame after the terminal closed
 	case statusMsg:
 		if v.err != nil {
 			m.list.status = nil
@@ -272,6 +294,9 @@ func (m *rootModel) tabBar() string {
 }
 
 func (m *rootModel) View() string {
+	if m.term != nil {
+		return m.termSurfaceView() // embedded terminal takes the whole screen
+	}
 	if m.doctorLoading || m.doctorReport != nil {
 		return m.doctorModal()
 	}

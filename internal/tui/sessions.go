@@ -503,6 +503,8 @@ func (m *rootModel) updateSessions(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.sessJumpEdge(false)
 	case "enter":
 		return m.attachSelected()
+	case "s":
+		return m.openShellForSelected()
 	case "o":
 		return m, m.openSelectedPR()
 	case "x":
