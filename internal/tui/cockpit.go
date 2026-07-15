@@ -154,6 +154,48 @@ func (m *rootModel) doctorModal() string {
 	return m.modalOver("doctor", content)
 }
 
+// formModal floats the poll edit form (or its open picker) as a centered modal
+// over the dimmed cockpit. The form renders itself to the modal's inner height
+// so its own picker scroll-window sizes correctly; its leading title line is
+// lifted into the box title to avoid a doubled heading.
+func (m *rootModel) formModal() string {
+	W, H := m.width, m.height
+	if W <= 0 {
+		W = 100
+	}
+	if H <= 0 {
+		H = 24
+	}
+	mw := W - 8
+	if mw > 72 {
+		mw = 72
+	}
+	if mw < 28 {
+		mw = 28
+	}
+	mh := H - 4
+	if mh > 26 {
+		mh = 26
+	}
+	if mh < 8 {
+		mh = 8
+	}
+	lines := strings.Split(strings.TrimRight(m.form.view(mh-2), "\n"), "\n")
+	title := "poll"
+	if len(lines) > 0 {
+		title = stripANSI(lines[0])
+	}
+	body := lines
+	if len(body) >= 2 {
+		body = body[2:] // drop the form's own title + blank line; it becomes the box title
+	}
+	for i := range body {
+		body[i] = previewLine(body[i], mw-2)
+	}
+	modal := box(title, body, mw, mh, true)
+	return strings.Join(placeModal(m.cockpitLines(), modal, W), "\n")
+}
+
 // railColumn stacks the fixed-height Triage panel over a Polls panel that takes
 // the remaining height.
 func (m *rootModel) railColumn(w, h int) []string {

@@ -289,10 +289,10 @@ func (m *rootModel) View() string {
 		return m.doctorModal()
 	}
 	if m.form != nil {
-		// The cascading edit form and the first-run setup wizard stay full-screen
-		// for now — they are multi-step interactive views whose own layout would
-		// not survive being boxed; modalizing them is a separate pass.
-		return m.form.view(m.height)
+		// The poll edit form floats as a modal over the cockpit. (The first-run
+		// setup wizard runs standalone before the cockpit exists, so it has no
+		// backdrop to float over and stays full-screen in runSetupWizard.)
+		return m.formModal()
 	}
 	return m.cockpitView()
 }
