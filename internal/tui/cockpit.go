@@ -27,9 +27,9 @@ const (
 // — a subtle cool tint that reads as a selection bar without fighting the pills.
 const selRowBg = "236"
 
-// meterTrack is the unfilled portion of a Triage bar: a solid but very dark bar
-// so the fill's proportion is legible without the faint-shade smear.
-var meterTrack = lipgloss.NewStyle().Foreground(lipgloss.Color("237"))
+// meterTrack is the unfilled portion of a Triage bar: a thin, very dark rule so
+// the empty track reads as a subtle line, never a gray block.
+var meterTrack = lipgloss.NewStyle().Foreground(lipgloss.Color("236"))
 
 // cockpitView renders the whole single-screen frame. Below a minimum size it
 // degrades to a plain stacked view (narrowCockpit) rather than smearing
@@ -468,22 +468,23 @@ func (m *rootModel) triageBody(w int) []string {
 	total := len(sess)
 
 	var out []string
+	// Hero: a bold count + "NEED YOU" (orange), or an all-clear note.
 	if need > 0 {
-		out = append(out, statusOrange.Render(fmt.Sprintf("%d", need))+" "+statusOrange.Bold(true).Render("NEED YOU"))
+		out = append(out, statusOrange.Bold(true).Render(fmt.Sprintf("%d", need))+"  "+statusOrange.Render("NEED YOU"))
 	} else {
-		out = append(out, goodText.Render("0")+" "+faintText.Render("all clear"))
+		out = append(out, goodText.Bold(true).Render("0")+"  "+faintText.Render("all clear"))
 	}
-	// Nothing running: don't draw empty bars (a row of faint track reads as a
-	// gray smear) — say so plainly instead.
+	// Nothing running: no bars (they'd read as a gray smear) — say so plainly.
 	if total == 0 {
 		out = append(out, "", faintText.Render("no active sessions"))
 		return out
 	}
-	if spark := sparkline(m.attnHist, w-10); spark != "" {
-		out = append(out, spark+" "+faintText.Render("needs-you"))
+	if spark := sparkline(m.attnHist, w-22); spark != "" {
+		out = append(out, spark+"  "+faintText.Render("needs-you · last hour"))
 	} else {
 		out = append(out, "")
 	}
+	out = append(out, faintText.Render(strings.Repeat("┈", w))) // divider under the sparkline
 	meterW := w - 12
 	if meterW < 4 {
 		meterW = 4
@@ -505,10 +506,9 @@ func (m *rootModel) triageBody(w int) []string {
 	return out
 }
 
-// triageMeter renders "Nlabel ███" — a count+label followed by a proportional
-// bar of just the FILLED cells (no track): an empty track over several rows
-// reads as a gray block, so a zero category shows only its label and a non-zero
-// one shows at least a one-cell sliver.
+// triageMeter renders "N label ━━━━" — a colored+bold count, a muted label, then
+// a thin proportional bar: the filled portion in the category color, the rest a
+// very dark track rule (so an empty bar is a subtle line, never a gray block).
 func triageMeter(label string, n, total, w int, style lipgloss.Style) string {
 	filled := 0
 	if total > 0 {
@@ -520,8 +520,9 @@ func triageMeter(label string, n, total, w int, style lipgloss.Style) string {
 	if n > 0 && filled == 0 {
 		filled = 1
 	}
-	bar := style.Render(strings.Repeat("█", filled)) + meterTrack.Render(strings.Repeat("█", w-filled))
-	return fmt.Sprintf("%2d %-7s", n, label) + bar
+	head := style.Bold(true).Render(fmt.Sprintf("%2d", n)) + faintText.Render(fmt.Sprintf(" %-7s", label))
+	bar := style.Render(strings.Repeat("━", filled)) + meterTrack.Render(strings.Repeat("━", w-filled))
+	return head + " " + bar
 }
 
 // vitalsBar is the always-on top strip: daemon/runtime/linear health, session
