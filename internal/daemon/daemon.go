@@ -16,6 +16,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -355,6 +356,12 @@ func Run(ctx context.Context) error {
 		case <-ctx.Done():
 		}
 	}()
+
+	// Migration guard (one-time): warn about lola sessions still running on the
+	// user's DEFAULT tmux server from before the "-L lola" isolation change —
+	// they are orphaned, invisible to this daemon, and `lola kill` cannot reach
+	// them.
+	d.warnPreMigrationSessions(ctx)
 
 	// Session adoption (PLAN P2.15): re-pair surviving tmux sessions and
 	// worktrees from a previous daemon into the store BEFORE the first tick,
@@ -728,6 +735,23 @@ func (d *Daemon) adoptNativeSessions(ctx context.Context) {
 	if err := d.sessions.Save(); err != nil {
 		d.logf("", "adopt: persist sessions: %v", err)
 	}
+}
+
+// defaultServerSessions is the seam over tmux.DefaultServerSessions so the
+// migration warning is testable without a real default tmux server.
+var defaultServerSessions = tmux.DefaultServerSessions
+
+// warnPreMigrationSessions logs ONE startup warning naming any "lola-*"
+// sessions still running on the user's DEFAULT tmux server (from before the
+// "-L lola" isolation change): they are orphaned, invisible to this daemon, and
+// `lola kill` cannot reach them. Best-effort — a tmux error (no default server,
+// tmux missing) just skips.
+func (d *Daemon) warnPreMigrationSessions(ctx context.Context) {
+	names, err := defaultServerSessions(ctx, "tmux", tmux.OrphanSessionPrefix)
+	if err != nil || len(names) == 0 {
+		return
+	}
+	d.logf("", "migration: %d lola session(s) still running on the DEFAULT tmux server (%s) — these predate the isolated tmux server and are invisible to lola; stop them with: tmux kill-session -t <name>", len(names), strings.Join(names, ", "))
 }
 
 // logf prefixes log lines with the poll name when applicable.

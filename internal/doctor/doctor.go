@@ -24,19 +24,25 @@ import (
 
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/secrets"
+	"github.com/sushidev-team/lola/internal/tmux"
 )
 
 // Check names. Stable strings so renderers (and RuntimeResults) can key off
 // them; per-project checks use projectCheckName.
 const (
-	checkTmux   = "tmux"
-	checkGit    = "git"
-	checkClaude = "claude"
-	checkGh     = "gh"
-	checkLinear = "linear api key"
-	checkDaemon = "daemon"
-	checkConfig = "config"
+	checkTmux      = "tmux"
+	checkGit       = "git"
+	checkClaude    = "claude"
+	checkGh        = "gh"
+	checkLinear    = "linear api key"
+	checkDaemon    = "daemon"
+	checkConfig    = "config"
+	checkMigration = "migration"
 )
+
+// defaultServerSessions is the seam over tmux.DefaultServerSessions so the
+// migration check is testable without a real default tmux server.
+var defaultServerSessions = tmux.DefaultServerSessions
 
 // execTimeout bounds every subprocess a check runs (only `claude --version`
 // today); LookPath probes never exec.
@@ -117,6 +123,7 @@ func Check(ctx context.Context, cfg *config.Config) Report {
 	add(lookPathResult(checkGit, true))
 	add(claudeResult(ctx))
 	add(ghResult())
+	add(migrationResult(ctx))
 
 	if cfg == nil {
 		add(Result{
@@ -179,6 +186,26 @@ func ghResult() Result {
 		res.Detail = "not found on PATH (PR/CI reconcile disabled)"
 	}
 	return res
+}
+
+// migrationResult flags lola sessions still running on the user's DEFAULT tmux
+// server from before the "-L lola" isolation change: they are orphaned,
+// invisible to the daemon, and `lola kill` cannot reach them. A NON-critical
+// warning (lola runs fine; these are just leftovers to clean up manually).
+// Best-effort — a tmux error (no default server, tmux missing) is the common
+// healthy case and reports OK, not a warning.
+func migrationResult(ctx context.Context) Result {
+	names, err := defaultServerSessions(ctx, "tmux", tmux.OrphanSessionPrefix)
+	if err != nil || len(names) == 0 {
+		return Result{Name: checkMigration, OK: true, Critical: false, Detail: "no pre-migration sessions on the default tmux server"}
+	}
+	return Result{
+		Name:     checkMigration,
+		OK:       false,
+		Critical: false,
+		Detail: fmt.Sprintf("%d lola session(s) on the DEFAULT tmux server (invisible to lola): %s — stop with: tmux kill-session -t <name>",
+			len(names), strings.Join(names, ", ")),
+	}
 }
 
 // linearResult reports whether the Linear API key resolves, and from where,

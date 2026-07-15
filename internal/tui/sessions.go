@@ -4,17 +4,24 @@
 package tui
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/sushidev-team/lola/internal/protocol"
 	"github.com/sushidev-team/lola/internal/tmux"
 )
+
+// attachProbeTimeout bounds the pre-attach has-session probe against the lola
+// tmux server so a hung tmux never freezes the UI; a live pane answers in
+// milliseconds.
+const attachProbeTimeout = 2 * time.Second
 
 // previewLines is how many pane rows the COMPACT preview shows (and requests as
 // scrollback via cmd=pane); fullPreviewLines is the "fuller" toggle. Both are
@@ -38,6 +45,7 @@ var (
 	statusOrange = lipgloss.NewStyle().Foreground(lipgloss.Color("208"))
 	statusDeadBg = lipgloss.NewStyle().Foreground(lipgloss.Color("15")).Background(lipgloss.Color("9"))
 	srcNative    = lipgloss.NewStyle().Foreground(lipgloss.Color("14"))
+	prLineStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("13"))
 )
 
 // statusStyle maps a derived session status (scm.DeriveStatus / AO attention
@@ -89,6 +97,92 @@ func sourceBadge(source string) string {
 	return faintText.Render("[ao]")
 }
 
+// hasPR reports whether a session has a PR worth surfacing. PR display is gated
+// ONLY on this (a PR number or URL) — NEVER on Status or review decision — so a
+// PR is unmissable from the moment it is opened, through working/ci_failed/
+// approved/merged alike.
+func hasPR(si protocol.SessionInfo) bool {
+	return si.PRNumber > 0 || si.PRURL != ""
+}
+
+// checksGlyph is the compact CI-state mark for a PR's checks, colored so a
+// passing/failing/pending PR is scannable at a glance: pass ✓ (green), fail ✗ci
+// (red), pending ⧗ (yellow). "none"/"" (no checks yet) renders nothing.
+func checksGlyph(checks string) string {
+	switch checks {
+	case "pass":
+		return goodText.Render("✓")
+	case "fail":
+		return badText.Render("✗ci")
+	case "pending":
+		return warnText.Render("⧗")
+	}
+	return ""
+}
+
+// reviewGlyph is the compact review-decision mark appended to a PR badge: an
+// approval ✓rev (green) or a change request ✗rev (red). The neutral
+// awaiting/required state renders nothing (the REACTING column already carries
+// "awaiting review"), keeping the row badge brief.
+func reviewGlyph(review string) string {
+	switch review {
+	case "APPROVED":
+		return goodText.Render("✓rev")
+	case "CHANGES_REQUESTED":
+		return badText.Render("✗rev")
+	}
+	return ""
+}
+
+// prBadge is the scannable PR summary for ANY session that has a PR: "#229 ✓
+// ✓rev" — the number, the checks glyph, and the brief review mark. Deliberately
+// NOT gated on Status/review state (only on hasPR). Returns "" when there is no
+// PR so callers render a placeholder (list row) or omit it (kanban).
+func prBadge(si protocol.SessionInfo) string {
+	if !hasPR(si) {
+		return ""
+	}
+	out := "PR"
+	if si.PRNumber > 0 {
+		out = fmt.Sprintf("#%d", si.PRNumber)
+	}
+	if g := checksGlyph(si.Checks); g != "" {
+		out += " " + g
+	}
+	if r := reviewGlyph(si.Review); r != "" {
+		out += " " + r
+	}
+	return out
+}
+
+// prDetailBlock is the prominent, always-shown PR panel for the detail card: a
+// bold "PR: #229 · checks: pass · review: approved" summary line plus the URL on
+// its own line. Shown for ANY session with a PR regardless of Status/review
+// state, above the fold in both the tmux-preview and no-tmux detail variants so
+// a PR is never missed. "" when the session has no PR.
+func prDetailBlock(si protocol.SessionInfo) string {
+	if !hasPR(si) {
+		return ""
+	}
+	num := "PR"
+	if si.PRNumber > 0 {
+		num = fmt.Sprintf("#%d", si.PRNumber)
+	}
+	seg := []string{"PR: " + num}
+	if si.Checks != "" {
+		seg = append(seg, "checks: "+si.Checks)
+	}
+	if si.Review != "" {
+		seg = append(seg, "review: "+si.Review)
+	}
+	var b strings.Builder
+	b.WriteString(prLineStyle.Render(strings.Join(seg, " · ")) + "\n")
+	if si.PRURL != "" {
+		b.WriteString(faintText.Render(si.PRURL) + "\n")
+	}
+	return b.String()
+}
+
 type sessionsModel struct {
 	cursor     int
 	data       *protocol.SessionsData // nil until the first successful fetch
@@ -131,6 +225,23 @@ type sessionsModel struct {
 	answerInput  string
 
 	tmux *tmux.Client
+	// hasPane probes whether a session name has a LIVE pane on the lola tmux
+	// server; the attach pre-check refuses when it returns false. A seam so tests
+	// drive the pre-check without a real tmux server — nil falls back to the real
+	// tmux client's bounded Has probe (see paneLive).
+	hasPane func(name string) bool
+}
+
+// paneLive reports whether name has a live pane on the lola tmux server
+// (socket). It runs the seam when installed (tests), else a bounded has-session
+// probe via the real tmux client so a hung tmux cannot freeze the UI.
+func (s *sessionsModel) paneLive(socket, name string) bool {
+	if s.hasPane != nil {
+		return s.hasPane(name)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), attachProbeTimeout)
+	defer cancel()
+	return s.tmuxClient(socket).Has(ctx, name)
 }
 
 // paneLines is how many trailing pane rows the current view mode shows and
@@ -550,6 +661,19 @@ func (m *rootModel) attachSelected() (tea.Model, tea.Cmd) {
 		m.sessions.flash = "no tmux session (AO desktop runtime)"
 		return m, nil
 	}
+	// Pre-attach liveness gate: refuse clearly instead of handing the terminal to
+	// a doomed attach (which would only flash a raw tmux error the user misses).
+	// A dead/ended session has no agent left; and a session whose pane is not on
+	// the lola server — e.g. an orphaned pre-migration session still on the
+	// DEFAULT server — cannot be reached by the "-L lola" attach either.
+	if sel.Status == "dead" || sel.Status == "session_ended" {
+		m.sessions.flash = "session's agent has exited — nothing to attach (it may be an orphaned pre-migration session; see logs)"
+		return m, nil
+	}
+	if !m.sessions.paneLive(m.cfg.TmuxSocketName(), sel.TmuxName) {
+		m.sessions.flash = "no live tmux pane for this session on the lola server"
+		return m, nil
+	}
 	argv := m.sessions.tmuxClient(m.cfg.TmuxSocketName()).AttachArgs(sel.TmuxName)
 	c := exec.Command(argv[0], argv[1:]...)
 	// One-line hint printed just above the handoff so the user knows how to get
@@ -645,8 +769,11 @@ func (m *rootModel) sessionsTable() string {
 	// REACTING replaces REVIEW here: the reaction posture already encodes the
 	// actionable review state in human form ("awaiting review", "ready to
 	// merge", …) and keeps the table one wide column instead of two. The raw
-	// review decision still shows in the detail card below.
-	headers := []string{" ", "ISSUE", "PROJECT", "STATUS", "PR", "CHECKS", "REACTING", "AGE"}
+	// review decision still shows in the detail card below. The PR column folds in
+	// the checks glyph (and a brief review mark) via prBadge, so the standalone
+	// CHECKS column is gone — a passing/failing PR is scannable right next to its
+	// number ("#229 ✓" / "#229 ✗ci").
+	headers := []string{" ", "ISSUE", "PROJECT", "STATUS", "PR", "REACTING", "AGE"}
 	list := s.listRows()
 	selID := m.effectiveSelID()
 	rows := make([][]string, len(list))
@@ -661,14 +788,14 @@ func (m *rootModel) sessionsTable() string {
 		if si.ID == selID {
 			marker = "›"
 		}
-		pr := "-"
-		if si.PRNumber > 0 {
-			pr = fmt.Sprintf("#%d", si.PRNumber)
+		pr := prBadge(si)
+		if pr == "" {
+			pr = "-"
 		}
 		rows[i] = []string{
 			marker, si.Issue, si.Project,
 			statusStyle(si.Status).Render(si.Status),
-			pr, dash(si.Checks),
+			pr,
 			reactingStyle(si.Reacting).Render(dash(si.Reacting)),
 			dash(si.Age),
 		}
@@ -716,6 +843,11 @@ func (m *rootModel) sessionDetail() string {
 		if sel.Worktree != "" {
 			b.WriteString(faintText.Render("worktree: "+sel.Worktree) + "\n")
 		}
+		// PR panel above the fold: unmissable for ANY tmux-backed session that has
+		// a PR, not just AO/detail-card sessions.
+		if blk := prDetailBlock(*sel); blk != "" {
+			b.WriteString(blk)
+		}
 		if sel.Review != "" || sel.Reacting != "" {
 			// The table dropped the REVIEW column for REACTING; keep the raw
 			// review decision reachable here for the selected session.
@@ -742,10 +874,14 @@ func (m *rootModel) sessionDetail() string {
 	}
 	b.WriteString(tblHeader.Render("detail") + " " + sourceBadge(sel.Source) +
 		faintText.Render(" — no tmux session (AO desktop runtime)") + "\n")
+	// PR panel above the fold: the prominent number/checks/review summary + URL
+	// replaces the old plain "pr:" line so a PR is unmissable here too.
+	if blk := prDetailBlock(*sel); blk != "" {
+		b.WriteString(blk)
+	}
 	fmt.Fprintf(&b, "issue:    %s\n", dash(sel.Issue))
 	fmt.Fprintf(&b, "branch:   %s\n", dash(sel.Branch))
 	fmt.Fprintf(&b, "worktree: %s\n", dash(sel.Worktree))
-	fmt.Fprintf(&b, "pr:       %s\n", dash(sel.PRURL))
 	fmt.Fprintf(&b, "status:   %s\n", statusStyle(sel.Status).Render(sel.Status))
 	fmt.Fprintf(&b, "review:   %s\n", dash(sel.Review))
 	if sel.Reacting != "" {

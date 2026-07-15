@@ -118,6 +118,50 @@ func TestHasMissingSession(t *testing.T) {
 	}
 }
 
+func TestDefaultServerSessionsNoLFlagFiltersByPrefix(t *testing.T) {
+	fixture := "main\nlola-NORI-12-1\nwork\nlola-KOMBU-3-1"
+	bin, argsLog := fakeTmux(t, fixture, "", 0)
+
+	got, err := DefaultServerSessions(context.Background(), bin, "lola-")
+	if err != nil {
+		t.Fatalf("DefaultServerSessions: %v", err)
+	}
+	want := []string{"lola-NORI-12-1", "lola-KOMBU-3-1"}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("got %v, want %v", got, want)
+		}
+	}
+	// Crucially NO "-L": this must target the user's DEFAULT tmux server.
+	if args := loggedArgs(t, argsLog); args != "list-sessions -F #{session_name}" {
+		t.Errorf("invoked %q, want a NO-L list-sessions on the default server", args)
+	}
+}
+
+func TestDefaultServerSessionsNoServerIsEmptyNotError(t *testing.T) {
+	bin, _ := fakeTmux(t, "", "no server running on /private/tmp/tmux-501/default", 1)
+
+	got, err := DefaultServerSessions(context.Background(), bin, "lola-")
+	if err != nil {
+		t.Fatalf("no default server: want nil error, got %v", err)
+	}
+	if got == nil || len(got) != 0 {
+		t.Errorf("want empty non-nil slice, got %#v", got)
+	}
+}
+
+func TestDefaultServerSessionsOtherFailureWrapsStderr(t *testing.T) {
+	bin, _ := fakeTmux(t, "", "error connecting to /private/tmp/tmux-501/default (Permission denied)", 1)
+
+	_, err := DefaultServerSessions(context.Background(), bin, "lola-")
+	if err == nil || !strings.Contains(err.Error(), "Permission denied") {
+		t.Errorf("want error wrapping stderr for non-no-server failure, got %v", err)
+	}
+}
+
 func TestCapturePaneArgsAndOutput(t *testing.T) {
 	fixture := "\x1b[32m$ make test\x1b[0m\nok"
 	bin, argsLog := fakeTmux(t, fixture, "", 0)

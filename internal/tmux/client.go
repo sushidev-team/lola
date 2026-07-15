@@ -29,6 +29,12 @@ import (
 // seconds, and attached-client count.
 const listFormat = "#{session_name}\t#{session_created}\t#{session_attached}"
 
+// OrphanSessionPrefix is the tmux session-name prefix lola gives every session
+// it spawns ("lola-<project>-<identifier>"). The migration guards (daemon +
+// doctor) pass it to DefaultServerSessions to find pre-"-L lola" orphans still
+// running on the user's DEFAULT tmux server.
+const OrphanSessionPrefix = "lola-"
+
 // Session is one line of `tmux ls`.
 type Session struct {
 	Name     string
@@ -130,10 +136,52 @@ func (c *Client) ListSessions(ctx context.Context) ([]Session, error) {
 	return sessions, nil
 }
 
-// Has reports whether a session named exactly name exists.
+// Has reports whether a session named exactly name exists. It runs through
+// c.run, so it carries "-L <socket>" and probes lola's isolated server — the
+// TUI's attach pre-check relies on this to confirm a live pane before execing
+// a doomed attach.
 func (c *Client) Has(ctx context.Context, name string) bool {
 	_, _, err := c.run(ctx, "has-session", "-t", "="+name)
 	return err == nil
+}
+
+// DefaultServerSessions lists sessions on the user's DEFAULT tmux server (NO
+// "-L" flag) whose names start with prefix. It is a package function, not a
+// *Client method, precisely so it never inherits the SocketName "lola" default
+// and can reach the default server the migration guard needs to scan.
+//
+// This finds pre-"-L lola" orphans: sessions named e.g. "lola-*" still running
+// on the default server, invisible to the lola-scoped daemon. A default server
+// that is not running (`tmux ls` exits 1 with "no server ..." on stderr) is the
+// common healthy case, not an error: empty slice, nil error. bin is the tmux
+// binary (empty defaults to "tmux").
+func DefaultServerSessions(ctx context.Context, bin, prefix string) ([]string, error) {
+	if bin == "" {
+		bin = "tmux"
+	}
+	// Deliberately NO "-L": this targets the user's default tmux server.
+	cmd := exec.CommandContext(ctx, bin, "list-sessions", "-F", "#{session_name}")
+	var out, errb bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &errb
+	err := cmd.Run()
+	if err != nil {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) && ee.ExitCode() == 1 && strings.Contains(errb.String(), "no server") {
+			return []string{}, nil
+		}
+		if msg := strings.TrimSpace(errb.String()); msg != "" {
+			return nil, fmt.Errorf("tmux list-sessions: %w: %s", err, msg)
+		}
+		return nil, fmt.Errorf("tmux list-sessions: %w", err)
+	}
+	names := []string{}
+	for _, line := range strings.Split(strings.TrimRight(out.String(), "\n"), "\n") {
+		if line != "" && strings.HasPrefix(line, prefix) {
+			names = append(names, line)
+		}
+	}
+	return names, nil
 }
 
 // CapturePane returns the rendered screen of the session's active pane,

@@ -303,7 +303,7 @@ func (m *rootModel) sessionsFooter() string {
 		if sel.Status == "needs_input" {
 			keys = append(keys, "a answer")
 		}
-		if sel.PRURL != "" {
+		if hasPR(*sel) {
 			keys = append(keys, "o PR")
 		}
 	}
@@ -381,11 +381,10 @@ func (m *rootModel) kanbanColumnLines(c KanbanColumn, sess []protocol.SessionInf
 
 		d := statusDisplay(si.Status)
 		meta := d.Style.Render(d.Badge)
-		if si.PRNumber > 0 {
-			meta += fmt.Sprintf(" #%d", si.PRNumber)
-		}
-		if si.Checks != "" {
-			meta += " " + si.Checks
+		// PR badge ("#229 ✓") on any card with a PR — the number plus the checks
+		// glyph, scannable at a glance and never gated on status/review state.
+		if pr := prBadge(si); pr != "" {
+			meta += " " + pr
 		}
 		if si.Reacting != "" {
 			meta += " " + reactingStyle(si.Reacting).Render(si.Reacting)

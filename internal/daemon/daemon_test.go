@@ -1,11 +1,60 @@
 package daemon
 
 import (
+	"bytes"
+	"context"
+	"errors"
+	"log"
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+// warnPreMigrationSessions logs ONE best-effort warning naming lola sessions
+// still on the user's default tmux server (seamed so no real tmux runs), and
+// stays silent when there are none or the scan errors.
+func TestWarnPreMigrationSessions(t *testing.T) {
+	prev := defaultServerSessions
+	t.Cleanup(func() { defaultServerSessions = prev })
+
+	var buf bytes.Buffer
+	d := &Daemon{log: log.New(&buf, "", 0)}
+
+	// Orphans present → one warning naming them + the manual cleanup hint.
+	defaultServerSessions = func(context.Context, string, string) ([]string, error) {
+		return []string{"lola-web-eng-1", "lola-api-eng-2"}, nil
+	}
+	d.warnPreMigrationSessions(context.Background())
+	out := buf.String()
+	for _, want := range []string{"migration", "lola-web-eng-1", "lola-api-eng-2", "tmux kill-session"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("warning = %q, want it to include %q", out, want)
+		}
+	}
+	if n := strings.Count(out, "migration:"); n != 1 {
+		t.Errorf("want exactly one migration warning line, got %d:\n%s", n, out)
+	}
+
+	// No orphans → silent.
+	buf.Reset()
+	defaultServerSessions = func(context.Context, string, string) ([]string, error) { return nil, nil }
+	d.warnPreMigrationSessions(context.Background())
+	if buf.Len() != 0 {
+		t.Errorf("no orphans must log nothing, got %q", buf.String())
+	}
+
+	// Scan error → best-effort silent.
+	buf.Reset()
+	defaultServerSessions = func(context.Context, string, string) ([]string, error) {
+		return nil, errors.New("tmux missing")
+	}
+	d.warnPreMigrationSessions(context.Background())
+	if buf.Len() != 0 {
+		t.Errorf("a scan error must be best-effort silent, got %q", buf.String())
+	}
+}
 
 // shortSockDir returns a directory whose paths stay under the unix socket
 // path limit (~104 bytes on darwin); long TMPDIRs fall back to /tmp.

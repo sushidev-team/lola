@@ -355,6 +355,57 @@ func TestRuntimeResultsSubset(t *testing.T) {
 	}
 }
 
+// The migration check is a NON-critical warning when lola sessions linger on
+// the user's default tmux server, and OK otherwise. The default-server scan is
+// seamed so no real tmux is touched.
+func TestMigrationCheckFlagsOrphans(t *testing.T) {
+	pathWith(t, "tmux", "git", "claude", "gh")
+	t.Setenv("LOLA_HOME", t.TempDir())
+
+	prev := defaultServerSessions
+	t.Cleanup(func() { defaultServerSessions = prev })
+
+	// Orphans present → warning (not critical), naming the sessions + cleanup hint.
+	defaultServerSessions = func(context.Context, string, string) ([]string, error) {
+		return []string{"lola-web-eng-1", "lola-api-eng-2"}, nil
+	}
+	r := Check(context.Background(), nil)
+	mig := result(t, r, checkMigration)
+	if mig.OK {
+		t.Error("migration: OK=true with orphans present, want false (warning)")
+	}
+	if mig.Critical {
+		t.Error("migration: Critical=true, want false (a non-critical warning)")
+	}
+	for _, want := range []string{"lola-web-eng-1", "lola-api-eng-2", "tmux kill-session"} {
+		if !strings.Contains(mig.Detail, want) {
+			t.Errorf("migration Detail=%q, want it to include %q", mig.Detail, want)
+		}
+	}
+	// A warning must not make the whole report fail.
+	if !r.OK() {
+		t.Error("Report.OK()=false on a migration warning only, want true")
+	}
+
+	// No orphans → OK.
+	defaultServerSessions = func(context.Context, string, string) ([]string, error) {
+		return nil, nil
+	}
+	r = Check(context.Background(), nil)
+	if mig := result(t, r, checkMigration); !mig.OK {
+		t.Errorf("migration: OK=false with no orphans, want true (%s)", mig.Detail)
+	}
+
+	// A tmux error (no default server) is the healthy case → OK, best-effort.
+	defaultServerSessions = func(context.Context, string, string) ([]string, error) {
+		return nil, errors.New("tmux list-sessions: exit 1")
+	}
+	r = Check(context.Background(), nil)
+	if mig := result(t, r, checkMigration); !mig.OK {
+		t.Errorf("migration: OK=false on a best-effort tmux error, want true (%s)", mig.Detail)
+	}
+}
+
 // assertNoSecret fails if secret appears in any rendered field of the report.
 func assertNoSecret(t *testing.T, r Report, secret string) {
 	t.Helper()

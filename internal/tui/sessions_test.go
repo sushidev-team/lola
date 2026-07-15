@@ -2,6 +2,7 @@ package tui
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -64,6 +65,76 @@ func TestTabSwitchRendersSessionsTable(t *testing.T) {
 	}
 	if _, _ = m.Update(keyMsg("2")); m.tab != tabSessions {
 		t.Fatalf("key 2: tab = %d, want tabSessions", m.tab)
+	}
+}
+
+// PR display depends ONLY on PR presence (a number/URL), never on Status or
+// review decision: a still-working session that already has a PR shows its PR
+// badge in the list row, the prominent panel in the detail card, and on its
+// kanban card — with the checks glyph so a passing/failing PR is scannable.
+func TestPRShownRegardlessOfStatus(t *testing.T) {
+	m := newTestRoot(t)
+	m.tab = tabSessions
+	// A "working" session (NOT review_pending/approved/etc.) that already has a
+	// passing, approved PR — proves display is not state-gated.
+	m.sessions.data = &protocol.SessionsData{Sessions: []protocol.SessionInfo{{
+		ID: "s1", Project: "web", Issue: "ENG-1", Status: "working", Source: "native",
+		PRNumber: 229, PRURL: "https://github.com/x/y/pull/229",
+		Checks: "pass", Review: "APPROVED",
+	}}}
+	m.sessions.cursor = 0
+
+	// List row: "#229" with the passing-checks glyph.
+	v := m.View()
+	if !strings.Contains(v, "#229") {
+		t.Errorf("list row must show the PR number for a working session:\n%s", v)
+	}
+	if !strings.Contains(v, "✓") {
+		t.Errorf("list row PR badge must carry a checks glyph:\n%s", v)
+	}
+	// Detail card (tmux-backed → preview variant): prominent PR panel + URL.
+	for _, want := range []string{"PR: #229", "checks: pass", "review: APPROVED", "https://github.com/x/y/pull/229"} {
+		if !strings.Contains(v, want) {
+			t.Errorf("detail card missing prominent PR field %q:\n%s", want, v)
+		}
+	}
+	// The footer advertises "o PR" because a PR exists.
+	if !strings.Contains(v, "o PR") {
+		t.Errorf("footer must advertise 'o PR' when a PR exists:\n%s", v)
+	}
+
+	// Kanban lens: the card carries "#229" with the checks glyph too.
+	m.sessions.view = viewKanban
+	kb := m.View()
+	if !strings.Contains(kb, "#229") || !strings.Contains(kb, "✓") {
+		t.Errorf("kanban card must show the PR badge with a checks glyph:\n%s", kb)
+	}
+}
+
+// The checks glyph encodes CI state compactly and the badge is never gated on
+// status/review presence — a failing PR reads "#7 ✗ci", a pending one "#7 ⧗".
+func TestPRBadgeChecksGlyphs(t *testing.T) {
+	cases := []struct {
+		checks string
+		want   string
+	}{
+		{"pass", "✓"},
+		{"fail", "✗ci"},
+		{"pending", "⧗"},
+	}
+	for _, c := range cases {
+		got := prBadge(protocol.SessionInfo{PRNumber: 7, Checks: c.checks})
+		if !strings.Contains(got, "#7") || !strings.Contains(got, c.want) {
+			t.Errorf("prBadge(checks=%q) = %q, want #7 + %q", c.checks, got, c.want)
+		}
+	}
+	// No PR → empty badge (callers render a placeholder / omit it).
+	if got := prBadge(protocol.SessionInfo{}); got != "" {
+		t.Errorf("prBadge(no PR) = %q, want empty", got)
+	}
+	// A PR with only a URL (no number) still renders.
+	if got := prBadge(protocol.SessionInfo{PRURL: "https://x/y/pull/1"}); got == "" {
+		t.Error("prBadge with a URL but no number must still render a badge")
 	}
 }
 
@@ -196,6 +267,9 @@ func TestAttachWithTmuxReturnsExec(t *testing.T) {
 	m.tab = tabSessions
 	m.sessions.data = cannedSessions()
 	m.sessions.cursor = 0 // s1 has a tmux session
+	// Pre-attach probe confirms a live pane on the lola server (seamed so the
+	// test never touches a real tmux server).
+	m.sessions.hasPane = func(string) bool { return true }
 
 	_, cmd := m.Update(keyMsg("enter"))
 	if cmd == nil {
@@ -207,6 +281,77 @@ func TestAttachWithTmuxReturnsExec(t *testing.T) {
 	// The attach client targets the configured isolated server socket.
 	if got := m.sessions.tmuxClient("lola").SocketName; got != "lola" {
 		t.Errorf("attach client socket = %q, want lola", got)
+	}
+}
+
+// The pre-attach liveness gate refuses a dead/ended session clearly and never
+// execs a doomed attach; the has-session probe is not even consulted.
+func TestAttachRefusesDeadSession(t *testing.T) {
+	for _, status := range []string{"dead", "session_ended"} {
+		m := newTestRoot(t)
+		m.tab = tabSessions
+		m.sessions.data = &protocol.SessionsData{Sessions: []protocol.SessionInfo{{
+			ID: "s1", Project: "web", Issue: "ENG-1", Status: status,
+			TmuxName: "lola-eng-1", Source: "native",
+		}}}
+		m.sessions.cursor = 0
+		probed := false
+		m.sessions.hasPane = func(string) bool { probed = true; return true }
+
+		_, cmd := m.Update(keyMsg("enter"))
+		if cmd != nil {
+			t.Errorf("%s: enter must not exec an attach for a dead session", status)
+		}
+		if probed {
+			t.Errorf("%s: a dead session must not even probe has-session", status)
+		}
+		if !strings.Contains(m.sessions.flash, "nothing to attach") {
+			t.Errorf("%s: flash = %q, want a clear 'nothing to attach' hint", status, m.sessions.flash)
+		}
+	}
+}
+
+// The pre-attach gate refuses when the pane is not live on the lola server
+// (e.g. an orphaned pre-migration session on the DEFAULT server) and does not
+// exec the doomed attach.
+func TestAttachRefusesNoLivePane(t *testing.T) {
+	m := newTestRoot(t)
+	m.tab = tabSessions
+	m.sessions.data = cannedSessions()
+	m.sessions.cursor = 0 // s1: working, tmux-backed
+	m.sessions.hasPane = func(string) bool { return false }
+
+	_, cmd := m.Update(keyMsg("enter"))
+	if cmd != nil {
+		t.Error("enter must not exec an attach when no live pane exists on the lola server")
+	}
+	if !strings.Contains(m.sessions.flash, "no live tmux pane") {
+		t.Errorf("flash = %q, want a 'no live tmux pane' hint", m.sessions.flash)
+	}
+}
+
+// The attachDoneMsg error flash is the final backstop and must survive a 5s
+// refresh tick (a fetch that returns fresh sessions) so the user still sees it;
+// only the next keypress clears it.
+func TestAttachErrorFlashPersistsAcrossTick(t *testing.T) {
+	m := newTestRoot(t)
+	m.tab = tabSessions
+	m.sessions.data = cannedSessions()
+	m.sessions.cursor = 0
+
+	m.Update(attachDoneMsg{err: errors.New("boom")})
+	if !strings.Contains(m.sessions.flash, "attach failed") {
+		t.Fatalf("flash = %q, want an attach-failed backstop", m.sessions.flash)
+	}
+	// A refresh delivering fresh sessions (as the 5s tick would) must not clear it.
+	m.Update(sessionsMsg{data: cannedSessions()})
+	if !strings.Contains(m.sessions.flash, "attach failed") {
+		t.Errorf("attach-failed flash was cleared by a refresh tick, want it to persist: %q", m.sessions.flash)
+	}
+	// The next keypress clears it.
+	m.Update(keyMsg("j"))
+	if m.sessions.flash != "" {
+		t.Errorf("flash = %q, want it cleared on the next keypress", m.sessions.flash)
 	}
 }
 
