@@ -99,6 +99,30 @@ endpoint = "https://api.linear.app/graphql"
 # summarize_approved = true      # summarize an approved+green PR before a human merges
 
 # ---------------------------------------------------------------------------
+# [review] — OPTIONAL, OFF BY DEFAULT (P9). The "QA buddy": an EVENT-TRIGGERED
+# CodeRabbit review pass, NOT a persistent second agent. When enabled, the first
+# time a session opens a PR lola execs the CodeRabbit CLI against that branch and
+# hands the findings back to the worker (through the SAME send-keys safety gate
+# as reactions — findings are untrusted diff content, sanitized, never run as a
+# command) and, optionally, to a human via notify + a Linear comment. It runs
+# once per PR and re-triggers on a NEW PR number.
+#
+# COST/DEPS: each pass execs the `coderabbit` CLI (must be installed and
+# authenticated — run `coderabbit auth login`). It spends a CodeRabbit review and
+# can take a while; if coderabbit is missing/unauthed the pass skips gracefully.
+#
+# Omit this whole section to keep the review OFF — zero behavior change.
+# The values shown below are the built-in defaults once enabled.
+# ---------------------------------------------------------------------------
+# [review]
+# enabled = true                 # master switch; false (and an absent table) = off
+# command = ""                   # optional argv override (space-split), e.g. "coderabbit review --plain --type all"; empty = runner default
+# on_pr_open = true              # run automatically when a session first opens a PR
+# send_to_agent = true           # feed findings back to the worker via the send-keys gate
+# comment_on_linear = false      # also post findings as a Linear comment
+# timeout_seconds = 300          # hard cap per review pass; must be >= 0
+
+# ---------------------------------------------------------------------------
 # [[project]] — repository registry for the native runtime (one table per
 # repo). Every poll references a project by name; lola then creates a git
 # worktree per session under ~/.lola/worktrees/<project>/... and runs Claude

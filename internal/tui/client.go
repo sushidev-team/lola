@@ -124,6 +124,16 @@ func Send(raw string) error {
 		} else {
 			fmt.Println("ok")
 		}
+	case "review":
+		var d protocol.ReviewData
+		if err := json.Unmarshal(resp.Data, &d); err != nil {
+			return fmt.Errorf("bad review data: %w", err)
+		}
+		if d.Message != "" {
+			fmt.Println(d.Message)
+		} else {
+			fmt.Println("ok")
+		}
 	default:
 		fmt.Println("ok")
 	}

@@ -104,6 +104,42 @@ func TestReactionStateRoundTrip(t *testing.T) {
 	}
 }
 
+// The P9 per-PR review guard (ReviewedPR) must survive a save/reload round-trip,
+// and a session that never had a review keeps ReviewedPR at its zero value
+// (omitempty must not corrupt the reload).
+func TestReviewedPRRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+
+	st := NewStore(dir)
+	st.Upsert(Session{
+		ID:         "rev-1",
+		Source:     "native",
+		Project:    "nori",
+		Issue:      "ENG-7",
+		ReviewedPR: 42,
+	})
+	st.Upsert(Session{ID: "rev-0", Source: "native", Project: "nori", Issue: "ENG-3"})
+	if err := st.Save(); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	got, ok := NewStore(dir).Get("rev-1")
+	if !ok {
+		t.Fatal("reloaded store missing rev-1")
+	}
+	if got.ReviewedPR != 42 {
+		t.Errorf("ReviewedPR not round-tripped: got %d, want 42", got.ReviewedPR)
+	}
+
+	zero, ok := NewStore(dir).Get("rev-0")
+	if !ok {
+		t.Fatal("reloaded store missing rev-0")
+	}
+	if zero.ReviewedPR != 0 {
+		t.Errorf("zero-value ReviewedPR should stay 0: got %d", zero.ReviewedPR)
+	}
+}
+
 func TestSnapshotSorted(t *testing.T) {
 	st := NewStore(t.TempDir())
 	st.Upsert(Session{ID: "3", Project: "zeta", Issue: "ENG-1"})

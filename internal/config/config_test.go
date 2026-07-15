@@ -1193,6 +1193,220 @@ func TestBrainFreshConfigOmitsTable(t *testing.T) {
 	}
 }
 
+// An absent [review] table means the P9 QA buddy is fully off: Enabled=false,
+// on_pr_open / send_to_agent off, and the config validates — the OPT-IN,
+// zero-behavior-change contract. The default hand-off consts are non-empty.
+func TestReviewDefaultOffWhenAbsent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	body := "[defaults]\nglobal_cap = 4\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Review != (ReviewConfig{}) {
+		t.Errorf("absent [review] should give the zero ReviewConfig, got %+v", c.Review)
+	}
+	if c.Review.Enabled || c.Review.OnPROpen || c.Review.SendToAgent || c.Review.CommentOnLinear {
+		t.Errorf("absent [review] must be fully disabled, got %+v", c.Review)
+	}
+	if err := c.Validate(); err != nil {
+		t.Errorf("config without [review] must validate: %v", err)
+	}
+
+	if ReviewToAgentPreamble == "" || ReviewNotifyTitle == "" {
+		t.Error("review hand-off consts must not be empty")
+	}
+}
+
+// Enabling the review with nothing else set turns on on_pr_open + send_to_agent
+// and defaults the timeout to DefaultReviewTimeoutSeconds; comment_on_linear
+// stays off and command stays empty (runner default). The "enabled = true alone"
+// ergonomic path.
+func TestReviewEnabledDefaults(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	body := "[defaults]\nglobal_cap = 4\n\n[review]\nenabled = true\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := ReviewConfig{
+		Enabled:         true,
+		Command:         "",
+		OnPROpen:        true,
+		SendToAgent:     true,
+		CommentOnLinear: false,
+		TimeoutSeconds:  DefaultReviewTimeoutSeconds,
+	}
+	if c.Review != want {
+		t.Errorf("review = %+v, want %+v", c.Review, want)
+	}
+	if err := c.Validate(); err != nil {
+		t.Errorf("enabled review must validate: %v", err)
+	}
+}
+
+// Explicitly-set review fields survive load, including a disabling
+// send_to_agent=false while enabled (the analog of a reaction's explicit
+// auto=false) and an explicit timeout overriding the default. Unset on_pr_open
+// still follows Enabled; comment_on_linear is honored when set true.
+func TestReviewExplicitValuesKept(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	body := `
+[defaults]
+global_cap = 4
+
+[review]
+enabled = true
+command = "coderabbit review --plain --type all"
+timeout_seconds = 120
+send_to_agent = false
+comment_on_linear = true
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := ReviewConfig{
+		Enabled:         true,
+		Command:         "coderabbit review --plain --type all",
+		OnPROpen:        true,  // unset → follows Enabled
+		SendToAgent:     false, // explicit false kept, not reverted to Enabled
+		CommentOnLinear: true,  // explicit true kept (default is false)
+		TimeoutSeconds:  120,
+	}
+	if c.Review != want {
+		t.Errorf("review = %+v, want %+v", c.Review, want)
+	}
+	if err := c.Validate(); err != nil {
+		t.Errorf("explicit review must validate: %v", err)
+	}
+}
+
+// A fully-specified review (including a disabling zero and a command override)
+// round-trips through Save/Load unchanged.
+func TestReviewRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	orig := &Config{}
+	orig.Defaults.GlobalCap = 4
+	orig.Reactions = defaultReactions()
+	orig.Notify = defaultNotify()
+	orig.Review = ReviewConfig{
+		Enabled:         true,
+		Command:         "coderabbit review --plain --base main --type all",
+		OnPROpen:        false, // disabling zero must survive the round-trip
+		SendToAgent:     true,
+		CommentOnLinear: true,
+		TimeoutSeconds:  240,
+	}
+	if err := orig.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if orig.Review != got.Review {
+		t.Errorf("review round trip:\n save: %+v\n load: %+v", orig.Review, got.Review)
+	}
+}
+
+// A fresh &Config{} does NOT persist a [review] table (the zero review is
+// unconfigured), and reloads to the disabled default.
+func TestReviewFreshConfigOmitsTable(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := (&Config{}).Save(path); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "[review") {
+		t.Errorf("fresh config should omit the [review] table, got:\n%s", data)
+	}
+	got, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Review != (ReviewConfig{}) {
+		t.Errorf("reloaded review = %+v, want zero (disabled)", got.Review)
+	}
+}
+
+// CommandArgs splits the override on whitespace and yields nil for an
+// empty/whitespace-only command (the "use the runner default" signal).
+func TestReviewCommandArgs(t *testing.T) {
+	cases := []struct {
+		name string
+		cmd  string
+		want []string
+	}{
+		{"empty is nil", "", nil},
+		{"whitespace only is nil", "   \t ", nil},
+		{"single token", "coderabbit", []string{"coderabbit"}},
+		{"full argv", "coderabbit review --plain --type all",
+			[]string{"coderabbit", "review", "--plain", "--type", "all"}},
+		{"collapses runs of whitespace", "  coderabbit   review\t--plain ",
+			[]string{"coderabbit", "review", "--plain"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := ReviewConfig{Command: tc.cmd}.CommandArgs()
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("CommandArgs(%q) = %#v, want %#v", tc.cmd, got, tc.want)
+			}
+		})
+	}
+}
+
+// [review] validation: timeout_seconds must be >= 0; nothing else is constrained.
+func TestReviewTimeoutValidation(t *testing.T) {
+	base := func() *Config {
+		c := &Config{}
+		c.Defaults.GlobalCap = 4
+		return c
+	}
+	cases := []struct {
+		name    string
+		mutate  func(c *Config)
+		wantErr string // "" = must be valid
+	}{
+		{"absent review valid", func(c *Config) {}, ""},
+		{"timeout zero ok", func(c *Config) { c.Review = ReviewConfig{Enabled: true, TimeoutSeconds: 0} }, ""},
+		{"timeout positive ok", func(c *Config) { c.Review = ReviewConfig{Enabled: true, TimeoutSeconds: 600} }, ""},
+		{"timeout negative rejected", func(c *Config) { c.Review = ReviewConfig{Enabled: true, TimeoutSeconds: -1} }, "review.timeout_seconds must be >= 0"},
+		{"negative timeout rejected even when disabled", func(c *Config) { c.Review = ReviewConfig{TimeoutSeconds: -5} }, "review.timeout_seconds must be >= 0"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := base()
+			tc.mutate(c)
+			err := c.Validate()
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("want valid, got: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("want error containing %q, got nil", tc.wantErr)
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("error missing %q:\n%v", tc.wantErr, err)
+			}
+		})
+	}
+}
+
 // [brain] validation: timeout_seconds must be >= 0; nothing else is constrained.
 func TestBrainTimeoutValidation(t *testing.T) {
 	base := func() *Config {

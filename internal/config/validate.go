@@ -219,8 +219,21 @@ func (c *Config) Validate() error {
 	errs = append(errs, c.validateReactions()...)
 	errs = append(errs, c.validateNotify()...)
 	errs = append(errs, c.validateBrain()...)
+	errs = append(errs, c.validateReview()...)
 
 	return errors.Join(errs...)
+}
+
+// validateReview checks the [review] table. The only rule is timeout_seconds >= 0;
+// a config lacking the table resolves to the zero ReviewConfig (timeout 0) and so
+// validates cleanly. Enablement, the command override, and the hand-off flags are
+// unconstrained.
+func (c *Config) validateReview() []error {
+	var errs []error
+	if c.Review.TimeoutSeconds < 0 {
+		errs = append(errs, fmt.Errorf("review.timeout_seconds must be >= 0, got %d", c.Review.TimeoutSeconds))
+	}
+	return errs
 }
 
 // validateBrain checks the [brain] table. The only rule is timeout_seconds >= 0;

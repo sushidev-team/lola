@@ -333,6 +333,46 @@ The daemon execs `claude` directly and relies on your existing claude auth
 manage keys here. Each summary **spends Anthropic tokens**, so the feature is
 deliberately opt-in. `lola doctor` reports whether `claude` is on `PATH`.
 
+### `[review]` (optional, off by default)
+
+The P9 **QA buddy**. This is **not a second live agent** — it is an
+**event-triggered CodeRabbit review pass**. When enabled, the first time a
+session opens a PR lola execs the CodeRabbit CLI against that branch and hands
+the findings back: to the worker agent (so it can address them) and, optionally,
+to a human via notify + a Linear comment. **Opt-in and off by default**: omit the
+table (or leave `enabled = false`) and lola never execs coderabbit — zero
+behavior change.
+
+| Key | Type | Description |
+| --- | --- | --- |
+| `enabled` | bool | Master switch. Default `false`; an absent table is also off. |
+| `command` | string | Optional override of the coderabbit argv as a space-split string (e.g. `"coderabbit review --plain --type all"`). Empty uses the runner's built-in default invocation. |
+| `on_pr_open` | bool | Run the pass automatically when a session first opens a PR. Defaults to `true` when `enabled`. |
+| `send_to_agent` | bool | Feed the findings back to the worker through the send-keys gate. Defaults to `true` when `enabled`. |
+| `comment_on_linear` | bool | Also post the findings as a Linear comment. Defaults to `false` regardless of `enabled`. |
+| `timeout_seconds` | int | Hard cap on each review pass. Must be `>= 0`. Default `300`. |
+
+Setting `enabled = true` alone runs the pass on PR open and feeds the worker with
+the default timeout; `on_pr_open` and `send_to_agent` follow `enabled` unless set
+explicitly, while `comment_on_linear` stays off until you opt in. Explicit
+`false`/`0`/`""` are honored, not treated as "unset".
+
+The review **runs once per PR**: a per-session guard records the reviewed PR
+number, so the pass never repeats on the 30s observer cadence. A session that
+opens a **new PR** (a different PR number) re-triggers the pass exactly once for
+that PR.
+
+The findings are **untrusted text** — they embed diff content — so they are
+routed through the **same send-keys safety** as reactions: sanitized (control
+characters stripped), delivered only when the agent is idle at its prompt
+(deferred otherwise), and **never run as a command**. The same findings may also
+reach the notifier and a Linear comment.
+
+The daemon execs the `coderabbit` CLI, which must be **installed and
+authenticated** (`coderabbit auth login`). A pass **spends a CodeRabbit review**
+and can take a while (budget ~300s); if coderabbit is missing, unauthenticated,
+or times out, the pass **skips gracefully** with no effect on the session.
+
 ## Secrets
 
 The Linear API key is resolved at dispatch time, keychain first, then

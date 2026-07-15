@@ -90,6 +90,8 @@ func (d *Daemon) observeNative(ctx context.Context) {
 	}
 	brainOn := d.brainSummarize != nil
 	bc := d.cfg.Brain
+	reviewOn := d.reviewRun != nil
+	rc := d.cfg.Review
 	d.mu.Unlock()
 	if nat == nil {
 		return
@@ -112,6 +114,25 @@ func (d *Daemon) observeNative(ctx context.Context) {
 		defer cancel()
 		d.setBrainCycleCtx(bctx)
 		defer d.setBrainCycleCtx(nil)
+	}
+
+	// Per-cycle review budget (P9): the QA review pass is the one exec on this
+	// loop that can run for the review timeout (~300s). Like the brain, share a
+	// SINGLE timeout across the whole cycle — derived from the shutdown-cancellable
+	// root, not this WithoutCancel ctx — so a slow/hung `coderabbit review` can
+	// neither stall the review of every LATER session in the snapshot (the first
+	// slow call spends the budget; the rest abort fast) nor delay graceful
+	// shutdown (cancellation aborts the read-only review exec). Off by default →
+	// no budget. Only needed when the PR-open auto-trigger can fire (OnPROpen).
+	if reviewOn && rc.OnPROpen {
+		parent := d.shutdownCtx
+		if parent == nil {
+			parent = ctx
+		}
+		rctx, cancel := context.WithTimeout(parent, reviewTimeout(rc))
+		defer cancel()
+		d.setReviewCycleCtx(rctx)
+		defer d.setReviewCycleCtx(nil)
 	}
 
 	touched := false
@@ -196,7 +217,15 @@ func (d *Daemon) observeNative(ctx context.Context) {
 			// session is simply gone here, a no-op.
 			if cur, ok := d.sessions.Get(s.ID); ok {
 				d.writeBackEscalation(ctx, cur)
+				// P9 QA review buddy: fire ONE bounded CodeRabbit pass the first
+				// time this session has an open PR (opt-in), then deliver any
+				// hand-off deferred because the worker was mid-turn. Both no-op
+				// when review is off. Re-read for fresh PR / AtPrompt / guard facts.
+				d.reviewOnPROpen(ctx, cur)
 			}
+			// Flush a deferred review hand-off once the worker is idle at its
+			// prompt again (re-reads the record itself).
+			d.flushPendingReview(ctx, s.ID)
 		}
 	}
 	if !touched {

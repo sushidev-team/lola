@@ -93,6 +93,26 @@ type Session struct {
 	// (AtPrompt false) and therefore deferred. The engine retries delivering
 	// it on the next observer cycle once AtPrompt becomes true, then clears it.
 	PendingReaction string `json:"pending_reaction,omitempty"`
+
+	// ReviewedPR is the PR number the P9 CodeRabbit "QA buddy" review pass last
+	// ran for (0 = never reviewed). It is the per-PR one-shot guard: the pass
+	// runs once when a session first opens a PR, and the daemon skips it while
+	// ReviewedPR already equals the current PR number. A session that opens a
+	// NEW PR (or a reopened PR that comes back under a different number) gets a
+	// different PR number, so the guard no longer matches and the review
+	// re-triggers exactly once for that PR. Persists across restarts so a review
+	// is never repeated on the 30s observer cadence.
+	ReviewedPR int `json:"reviewed_pr,omitempty"`
+
+	// PendingReviewFindings holds the (raw, untrusted) CodeRabbit review findings
+	// that were ready to hand to the worker agent but could not be sent because
+	// the agent was mid-turn (AtPrompt false) at route time. A later observer
+	// cycle delivers it once the agent returns to its prompt (the P3 send-keys
+	// idle-gate), sanitizing it immediately before the send, then clears it. It
+	// is the P9 equivalent of PendingReaction — a one-shot-per-PR deferral — so a
+	// review hand-off is deferred rather than dropped when the agent is busy, and
+	// never sent unsanitized or into a mid-turn pane. Persists across restarts.
+	PendingReviewFindings string `json:"pending_review_findings,omitempty"`
 }
 
 // Store is a mutex-guarded in-memory session map keyed by ID, persisted as

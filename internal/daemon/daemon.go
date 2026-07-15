@@ -24,6 +24,7 @@ import (
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/linear"
 	"github.com/sushidev-team/lola/internal/notify"
+	"github.com/sushidev-team/lola/internal/review"
 	"github.com/sushidev-team/lola/internal/runtime"
 	"github.com/sushidev-team/lola/internal/scm"
 	"github.com/sushidev-team/lola/internal/secrets"
@@ -128,6 +129,30 @@ type Daemon struct {
 	brainSummarize func(ctx context.Context, instruction, contextText string) (string, error)
 	paneTail       func(ctx context.Context, tmuxName string, lines int) (string, error)
 	prDiff         func(ctx context.Context, repo string, pr int) (string, error)
+
+	// QA review buddy (PLAN P9): the OPT-IN, EVENT-TRIGGERED CodeRabbit review
+	// pass wired into the observer's PR-open transition (and the manual `lola
+	// review` command). It adds NO persistent agent and NO new observed
+	// transition — on PR-open it runs one bounded `coderabbit review` and hands
+	// the (UNTRUSTED, diff-derived) findings to the human (notify + optional
+	// Linear comment) and, sanitized-and-idle-gated, to the worker. review is nil
+	// when [review].enabled is false OR coderabbit is unavailable (checked ONCE at
+	// startup); reviewRun is its exec seam and is nil in exactly the same case, so
+	// every call site treats "nil seam" as "review off" — zero behavior change
+	// when the buddy is disabled. Rebuilt on reload (setReviewLocked). Tests
+	// install a fake reviewRun directly.
+	review    *review.Client
+	reviewRun func(ctx context.Context, worktreeDir, baseBranch string) (string, error)
+
+	// reviewCycleCtx is the CURRENT observe cycle's shared review budget: one
+	// review timeout for the WHOLE cycle (not per session), derived from
+	// shutdownCtx so a slow/hung `coderabbit review` is capped for the cycle and
+	// abortable at shutdown (it is read-only and safe to abort). observeNative
+	// sets it at cycle start and clears it at the end; runReviewPass reads it
+	// (falling back to its own ctx when nil, e.g. the manual command). Guarded by
+	// reviewMu.
+	reviewMu       sync.Mutex
+	reviewCycleCtx context.Context
 
 	// escSummaries carries a brain escalation summary from react's Urgent notify
 	// (reactCIFailed) to the P4 blocked Linear comment (writeBackEscalation) in
@@ -274,9 +299,19 @@ func Run(ctx context.Context) error {
 	d.mu.Lock()
 	d.setBrainLocked(cfg.Brain)
 	brainEnabledButMissing := cfg.Brain.Enabled && d.brain == nil
+	// QA review buddy (PLAN P9): build the OPT-IN CodeRabbit review client from
+	// [review]. Disabled by default (nil ⇒ review off). Check availability ONCE at
+	// startup: an operator who enabled the buddy but has no coderabbit on PATH
+	// gets a single log line and the pass simply never fires, never a per-cycle
+	// error.
+	d.setReviewLocked(cfg.Review)
+	reviewEnabledButMissing := cfg.Review.Enabled && d.review == nil
 	d.mu.Unlock()
 	if brainEnabledButMissing {
 		logger.Printf("brain: [brain].enabled is true but claude is not available on PATH — using generic notify/comment templates")
+	}
+	if reviewEnabledButMissing {
+		logger.Printf("review: [review].enabled is true but coderabbit is not available on PATH (run: coderabbit auth login) — QA review pass disabled")
 	}
 	if err := cfg.Validate(); err != nil {
 		// Not fatal: the daemon stays up so status/reload can surface and

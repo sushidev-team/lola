@@ -53,6 +53,7 @@ func main() {
 		pollCmd(),
 		killCmd(),
 		answerCmd(),
+		reviewCmd(),
 		logsCmd(),
 		doctorCmd(),
 		setupCmd(),
@@ -121,6 +122,27 @@ func answerCmd() *cobra.Command {
 		Args:  cobra.MinimumNArgs(2),
 		RunE: func(c *cobra.Command, a []string) error {
 			raw, err := json.Marshal(protocol.Request{Cmd: "answer", Session: a[0], Text: strings.Join(a[1:], " ")})
+			if err != nil {
+				return err
+			}
+			return tui.Send(string(raw))
+		},
+	}
+}
+
+// reviewCmd forces the P9 QA review pass for one session now (`lola review
+// <session>`): it runs a bounded CodeRabbit review of the session's worktree,
+// ignoring the once-per-PR guard, and routes the findings (human notification +
+// optionally the worker agent and a Linear comment, per [review] config). Send
+// prints the outcome — found issues / clean / skipped (review not enabled) — or
+// the daemon's error.
+func reviewCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "review <session>",
+		Short: "Run the CodeRabbit QA review pass for a session now (ignores the once-per-PR guard)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(c *cobra.Command, a []string) error {
+			raw, err := json.Marshal(protocol.Request{Cmd: "review", Session: a[0]})
 			if err != nil {
 				return err
 			}

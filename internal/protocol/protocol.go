@@ -48,8 +48,16 @@ import (
 // Status is "needs_input" — the one moment the agent is provably parked at its
 // prompt, so typing cannot corrupt a mid-turn agent (the send-keys safety gate,
 // PLAN P3/P7). The reply is OK on a delivered answer, an error otherwise.
+// Cmd "review" FORCES the P9 QA review pass (CodeRabbit) for one session now,
+// ignoring the per-PR one-shot guard: Session names the target. The daemon runs
+// one bounded `coderabbit review` against the session's worktree and routes the
+// findings the same way the PR-open auto-trigger does (notify + optional Linear
+// comment + optional sanitized, idle-gated worker hand-off), replying
+// Response.Data = ReviewData with a short outcome. Review disabled / no
+// coderabbit yields a "skipped" ReviewData (not an error); an unknown session or
+// an exec failure is an error.
 type Request struct {
-	Cmd    string `json:"cmd"` // stop|status|reload|enable|disable|pollOnce|sessions|hookEvent|kill|pane|answer
+	Cmd    string `json:"cmd"` // stop|status|reload|enable|disable|pollOnce|sessions|hookEvent|kill|pane|answer|review
 	Poll   string `json:"poll,omitempty"`
 	DryRun bool   `json:"dryRun,omitempty"`
 
@@ -169,6 +177,21 @@ type PaneData struct {
 type PaneChoice struct {
 	Key   string `json:"key"`
 	Label string `json:"label"`
+}
+
+// ReviewData is Response.Data for cmd=review (PLAN P9): the outcome of a forced
+// QA review pass, flattened to render-ready fields for the CLI. Message is the
+// short human-readable line the CLI prints. Ran reports whether the review exec
+// ran; Clean is true only when it ran and found nothing; Skipped names why the
+// pass did not run (review disabled / no project), "" otherwise. Findings is the
+// full trimmed, size-capped findings text (UNTRUSTED, diff-derived) when the run
+// found issues — present so a caller can display it; empty on clean/skipped.
+type ReviewData struct {
+	Ran      bool   `json:"ran"`
+	Clean    bool   `json:"clean"`
+	Skipped  string `json:"skipped,omitempty"`
+	Findings string `json:"findings,omitempty"`
+	Message  string `json:"message,omitempty"`
 }
 
 // PollOnceData is Response.Data for cmd=pollOnce.

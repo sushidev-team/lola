@@ -107,6 +107,12 @@ func (d *Daemon) handle(ctx context.Context, req protocol.Request) protocol.Resp
 			return protocol.Response{OK: false, Error: err.Error()}
 		}
 		return protocol.Response{OK: true}
+	case "review":
+		data, err := d.handleReview(ctx, req.Session)
+		if err != nil {
+			return protocol.Response{OK: false, Error: err.Error()}
+		}
+		return dataResponse(data)
 	default:
 		return protocol.Response{OK: false, Error: fmt.Sprintf("unknown cmd %q", req.Cmd)}
 	}
@@ -343,6 +349,11 @@ func (d *Daemon) handleReload(ctx context.Context) error {
 	// operator can enable/disable it or change model/timeout via reload. A now-
 	// disabled or newly-unavailable brain drops back to generic templates.
 	d.setBrainLocked(nc.Brain)
+	// Rebuild the QA review client from the new [review] table (P9): enabling/
+	// disabling the buddy or changing its command/timeout takes effect live. A
+	// now-disabled or newly-unavailable coderabbit leaves reviewRun nil (review
+	// off). Under d.mu, like the brain.
+	d.setReviewLocked(nc.Review)
 	if d.realNative && !reflect.DeepEqual(old.Projects, nc.Projects) {
 		// The native runtime holds a config reference for its project
 		// registry: recreate it whenever the [[project]] set changes.
