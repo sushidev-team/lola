@@ -19,15 +19,15 @@ func TestDoctorOverlayOpensAndCloses(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("'d' must return the doctor command")
 	}
-	if !strings.Contains(m.View(), "running checks") {
-		t.Errorf("loading overlay should show a running hint:\n%s", m.View())
+	if !strings.Contains(m.viewString(), "running checks") {
+		t.Errorf("loading overlay should show a running hint:\n%s", m.viewString())
 	}
 
 	m.Update(cmd()) // run doctor.Check and feed back the report
 	if m.doctorReport == nil {
 		t.Fatal("report must be stored after the command completes")
 	}
-	v := m.View()
+	v := m.viewString()
 	for _, want := range []string{"doctor", "tmux", "git"} {
 		if !strings.Contains(v, want) {
 			t.Errorf("overlay missing %q:\n%s", want, v)
@@ -38,7 +38,7 @@ func TestDoctorOverlayOpensAndCloses(t *testing.T) {
 	if m.doctorReport != nil || m.doctorLoading {
 		t.Error("esc must close the doctor overlay")
 	}
-	if strings.Contains(m.View(), "running checks") {
+	if strings.Contains(m.viewString(), "running checks") {
 		t.Error("overlay must be gone after esc")
 	}
 }

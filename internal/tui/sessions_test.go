@@ -4,11 +4,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image/color"
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/sushidev-team/lola/internal/protocol"
 )
 
@@ -28,14 +29,31 @@ func cannedSessions() *protocol.SessionsData {
 	}}
 }
 
-func keyMsg(s string) tea.KeyMsg {
+// keyMsg builds a bubbletea v2 key-press for tests: named keys map to their
+// KeyCode; anything else is treated as printable text (Code = first rune, Text
+// = the whole string) so k.String() and k.Text both read correctly.
+func keyMsg(s string) tea.KeyPressMsg {
 	switch s {
 	case "tab":
-		return tea.KeyMsg{Type: tea.KeyTab}
+		return tea.KeyPressMsg{Code: tea.KeyTab}
 	case "enter":
-		return tea.KeyMsg{Type: tea.KeyEnter}
+		return tea.KeyPressMsg{Code: tea.KeyEnter}
+	case "esc":
+		return tea.KeyPressMsg{Code: tea.KeyEscape}
+	case "backspace":
+		return tea.KeyPressMsg{Code: tea.KeyBackspace}
+	case "space":
+		return tea.KeyPressMsg{Code: ' ', Text: " "}
+	case "up":
+		return tea.KeyPressMsg{Code: tea.KeyUp}
+	case "down":
+		return tea.KeyPressMsg{Code: tea.KeyDown}
+	case "left":
+		return tea.KeyPressMsg{Code: tea.KeyLeft}
+	case "right":
+		return tea.KeyPressMsg{Code: tea.KeyRight}
 	}
-	return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)}
+	return tea.KeyPressMsg{Code: []rune(s)[0], Text: s}
 }
 
 // The cockpit shows sessions and polls together on one screen; tab cycles which
@@ -44,7 +62,7 @@ func TestCockpitRendersAndTabCyclesFocus(t *testing.T) {
 	m := newTestRoot(t)
 	m.Update(sessionsMsg{data: cannedSessions()})
 
-	v := m.View()
+	v := m.viewString()
 	for _, want := range []string{"ISSUE", "PROJECT", "STATUS", "REACTING", "ENG-123", "ENG-456", "web", "api", "#7", "2h05m", "ci retry 1/2"} {
 		if !strings.Contains(v, want) {
 			t.Errorf("cockpit missing sessions content %q:\n%s", want, v)
@@ -58,8 +76,8 @@ func TestCockpitRendersAndTabCyclesFocus(t *testing.T) {
 	if _, _ = m.Update(keyMsg("tab")); m.focus != focusPolls {
 		t.Fatalf("tab: focus = %d, want focusPolls", m.focus)
 	}
-	if !strings.Contains(m.View(), "space toggle") {
-		t.Errorf("polls focus keybar must advertise toggle:\n%s", m.View())
+	if !strings.Contains(m.viewString(), "space toggle") {
+		t.Errorf("polls focus keybar must advertise toggle:\n%s", m.viewString())
 	}
 	// tab again returns focus to Sessions.
 	if _, _ = m.Update(keyMsg("tab")); m.focus != focusSessions {
@@ -84,7 +102,7 @@ func TestPRShownRegardlessOfStatus(t *testing.T) {
 	m.sessions.cursor = 0
 
 	// List row: "#229" with the passing-checks glyph.
-	v := m.View()
+	v := m.viewString()
 	if !strings.Contains(v, "#229") {
 		t.Errorf("list row must show the PR number for a working session:\n%s", v)
 	}
@@ -104,7 +122,7 @@ func TestPRShownRegardlessOfStatus(t *testing.T) {
 
 	// Kanban lens: the card carries "#229" with the checks glyph too.
 	m.sessions.view = viewKanban
-	kb := m.View()
+	kb := m.viewString()
 	if !strings.Contains(kb, "#229") || !strings.Contains(kb, "✓") {
 		t.Errorf("kanban card must show the PR badge with a checks glyph:\n%s", kb)
 	}
@@ -140,7 +158,7 @@ func TestPRBadgeChecksGlyphs(t *testing.T) {
 func TestStatusStyleMapping(t *testing.T) {
 	cases := []struct {
 		status string
-		fg     lipgloss.TerminalColor
+		fg     color.Color
 	}{
 		{"working", lipgloss.Color("12")},
 		{"ci_failed", lipgloss.Color("9")},
@@ -201,7 +219,7 @@ func TestSessionsRenderReactingLabel(t *testing.T) {
 	}}}
 	m.sessions.cursor = 0
 
-	v := m.View()
+	v := m.viewString()
 	if !strings.Contains(v, "REACTING") {
 		t.Errorf("sessions table must carry a REACTING column:\n%s", v)
 	}
@@ -228,7 +246,7 @@ func TestSessionDetailSourceBadgeAndWorktree(t *testing.T) {
 	m.sessions.data = cannedSessions()
 
 	m.sessions.cursor = 0 // s1: native, tmux-backed → preview header
-	v := m.View()
+	v := m.viewString()
 	if !strings.Contains(v, "[native]") {
 		t.Errorf("native session detail must carry a [native] badge:\n%s", v)
 	}
@@ -237,7 +255,7 @@ func TestSessionDetailSourceBadgeAndWorktree(t *testing.T) {
 	}
 
 	m.sessions.cursor = 1 // s2: no source (pre-P2 / AO bridge) → [ao]
-	v = m.View()
+	v = m.viewString()
 	if !strings.Contains(v, "[ao]") {
 		t.Errorf("ao session detail must carry an [ao] badge:\n%s", v)
 	}
@@ -392,14 +410,14 @@ func TestSessionsKillConfirmAndSend(t *testing.T) {
 
 	// "x" opens the confirm; the footer already advertises the shortcut.
 	// Before confirming, the sessions keybar advertises the kill shortcut.
-	if !strings.Contains(m.View(), "x kill") {
-		t.Errorf("sessions footer must advertise 'x kill':\n%s", m.View())
+	if !strings.Contains(m.viewString(), "x kill") {
+		t.Errorf("sessions footer must advertise 'x kill':\n%s", m.viewString())
 	}
 	m.Update(keyMsg("x"))
 	if !m.sessions.confirmKill {
 		t.Fatal("x must open the kill confirmation")
 	}
-	v := m.View()
+	v := m.viewString()
 	if !strings.Contains(v, `kill session "s1"? (y/n)`) {
 		t.Errorf("view must prompt to confirm the kill:\n%s", v)
 	}
@@ -422,8 +440,8 @@ func TestSessionsKillConfirmAndSend(t *testing.T) {
 	if m.sessions.flash != dirty {
 		t.Errorf("flash = %q, want the verbatim kill message", m.sessions.flash)
 	}
-	if !strings.Contains(m.View(), "--force") {
-		t.Errorf("the dirty-kept message must render in the view:\n%s", m.View())
+	if !strings.Contains(m.viewString(), "--force") {
+		t.Errorf("the dirty-kept message must render in the view:\n%s", m.viewString())
 	}
 }
 
@@ -473,7 +491,7 @@ func TestSessionsKillTargetPinnedAcrossRefresh(t *testing.T) {
 	if m.sessions.killTarget != "s1" {
 		t.Errorf("kill target must stay pinned to s1, got %q", m.sessions.killTarget)
 	}
-	if v := m.View(); !strings.Contains(v, `kill session "s1"? (y/n)`) {
+	if v := m.viewString(); !strings.Contains(v, `kill session "s1"? (y/n)`) {
 		t.Errorf("prompt must still name s1, not the reshuffled cursor:\n%s", v)
 	}
 
@@ -492,7 +510,7 @@ func TestSessionsDaemonDownHint(t *testing.T) {
 	m.tab = tabSessions
 	m.Update(sessionsMsg{err: errDaemonDown})
 
-	v := m.View()
+	v := m.viewString()
 	if !strings.Contains(v, "daemon: not running") {
 		t.Errorf("view must hint that the daemon is down:\n%s", v)
 	}
@@ -504,7 +522,7 @@ func TestSessionDetailCardWithoutTmux(t *testing.T) {
 	m.sessions.data = cannedSessions()
 	m.sessions.cursor = 1 // no tmux -> detail card
 
-	v := m.View()
+	v := m.viewString()
 	for _, want := range []string{"detail", "lola/eng-456", "https://github.com/x/y/pull/7", "3d2h"} {
 		if !strings.Contains(v, want) {
 			t.Errorf("detail card missing %q:\n%s", want, v)
@@ -518,12 +536,12 @@ func TestSessionPreviewPlaceholderWithTmux(t *testing.T) {
 	m.sessions.data = cannedSessions()
 	m.sessions.cursor = 0 // tmux-backed, no capture yet
 
-	if v := m.View(); !strings.Contains(v, "(no preview yet)") {
+	if v := m.viewString(); !strings.Contains(v, "(no preview yet)") {
 		t.Errorf("preview pane must show placeholder before a capture arrives:\n%s", v)
 	}
 
 	m.Update(paneMsg{id: "s1", data: &protocol.PaneData{Text: "line1\nline2\n"}})
-	v := m.View()
+	v := m.viewString()
 	if !strings.Contains(v, "line1") || !strings.Contains(v, "line2") {
 		t.Errorf("preview pane must show capture output:\n%s", v)
 	}
@@ -531,7 +549,7 @@ func TestSessionPreviewPlaceholderWithTmux(t *testing.T) {
 	// A stale capture for a no-longer-selected session is dropped.
 	m.sessions.cursor = 1
 	m.Update(paneMsg{id: "s1", data: &protocol.PaneData{Text: "stale"}})
-	if strings.Contains(m.View(), "stale") {
+	if strings.Contains(m.viewString(), "stale") {
 		t.Error("stale preview for an unselected session must be ignored")
 	}
 }
@@ -626,7 +644,7 @@ func TestNeedsInputRendersQuestionAndChoices(t *testing.T) {
 	}
 	m := needsInputRoot(t, pd)
 
-	v := m.View()
+	v := m.viewString()
 	for _, want := range []string{"attention", "Overwrite the file?", "1. Yes", "2. No", "a: answer"} {
 		if !strings.Contains(v, want) {
 			t.Errorf("needs_input card missing %q:\n%s", want, v)
@@ -648,8 +666,8 @@ func TestAnswerChoiceSendsKey(t *testing.T) {
 	if !m.sessions.answering {
 		t.Fatal("a must open the answer card on a needs_input session")
 	}
-	if !strings.Contains(m.View(), "enter send") {
-		t.Errorf("open card must advertise send/cancel:\n%s", m.View())
+	if !strings.Contains(m.viewString(), "enter send") {
+		t.Errorf("open card must advertise send/cancel:\n%s", m.viewString())
 	}
 
 	// Arrow down to the second choice, then enter.
@@ -711,8 +729,8 @@ func TestAnswerFreeFormSendsTypedText(t *testing.T) {
 	if m.sessions.answerInput != "fix-9 " {
 		t.Fatalf("answerInput = %q, want %q", m.sessions.answerInput, "fix-9 ")
 	}
-	if !strings.Contains(m.View(), "fix-9") {
-		t.Errorf("free-form card must echo the typed answer:\n%s", m.View())
+	if !strings.Contains(m.viewString(), "fix-9") {
+		t.Errorf("free-form card must echo the typed answer:\n%s", m.viewString())
 	}
 
 	var got []protocol.Request
@@ -745,8 +763,8 @@ func TestAnswerRefusalAndSuccessFlash(t *testing.T) {
 	if m.sessions.flash != refusal || m.sessions.flashGood {
 		t.Fatalf("refusal flash = %q good=%v, want the verbatim error as a warning", m.sessions.flash, m.sessions.flashGood)
 	}
-	if !strings.Contains(m.View(), refusal) {
-		t.Errorf("refusal must render in the view:\n%s", m.View())
+	if !strings.Contains(m.viewString(), refusal) {
+		t.Errorf("refusal must render in the view:\n%s", m.viewString())
 	}
 
 	// Success path.
@@ -790,7 +808,7 @@ func TestNoAnswerAffordanceWhenNotNeedsInput(t *testing.T) {
 	m.sessions.cursor = 0
 	m.sessions.preview, m.sessions.previewFor = "some pane text", "s1"
 
-	v := m.View()
+	v := m.viewString()
 	if strings.Contains(v, "a: answer") || strings.Contains(v, "attention") {
 		t.Errorf("a working session must not show an answer card:\n%s", v)
 	}
@@ -817,14 +835,14 @@ func TestAnswerFreeFormFallbackOnParseMiss(t *testing.T) {
 
 	// No card is shown before arming (nothing parsed to surface), but "a" must
 	// still arm a free-form card rather than flashing a dead-end hint.
-	if strings.Contains(m.View(), "answer>") {
-		t.Errorf("no card should render before arming on a parse miss:\n%s", m.View())
+	if strings.Contains(m.viewString(), "answer>") {
+		t.Errorf("no card should render before arming on a parse miss:\n%s", m.viewString())
 	}
 	m.Update(keyMsg("a"))
 	if !m.sessions.answering {
 		t.Fatal("a must arm a free-form card on a needs_input parse miss")
 	}
-	v := m.View()
+	v := m.viewString()
 	if !strings.Contains(v, "prompt not parsed") || !strings.Contains(v, "enter send") {
 		t.Errorf("armed parse-miss card must offer a free-form field:\n%s", v)
 	}
@@ -893,7 +911,7 @@ func TestCompactToggleChangesLineCount(t *testing.T) {
 	m.sessions.preview, m.sessions.previewFor = strings.Join(lines, "\n"), "s1"
 
 	countRows := func() int {
-		v := m.View()
+		v := m.viewString()
 		n := 0
 		for i := 0; i < 30; i++ {
 			if strings.Contains(v, fmt.Sprintf("row%02d", i)) {
@@ -941,8 +959,8 @@ func TestJumpToNextNeedsInput(t *testing.T) {
 
 	// The needs_input row is flagged with a "!" marker in the list.
 	m.sessions.cursor = 0
-	if !strings.Contains(m.View(), "!") {
-		t.Errorf("needs_input row must carry a '!' flag in the list:\n%s", m.View())
+	if !strings.Contains(m.viewString(), "!") {
+		t.Errorf("needs_input row must carry a '!' flag in the list:\n%s", m.viewString())
 	}
 }
 
@@ -954,10 +972,10 @@ func TestSessionPreviewClippedToTerminalWidth(t *testing.T) {
 	m.sessions.cursor = 0 // s1 is tmux-backed
 
 	m.Update(paneMsg{id: "s1", data: &protocol.PaneData{Text: strings.Repeat("a", 100) + "TAIL\n"}})
-	if strings.Contains(m.View(), "TAIL") {
+	if strings.Contains(m.viewString(), "TAIL") {
 		t.Error("over-width preview line must be clipped to the terminal width")
 	}
-	if !strings.Contains(m.View(), "aaa") {
+	if !strings.Contains(m.viewString(), "aaa") {
 		t.Error("clipped preview line must still render its head")
 	}
 }

@@ -10,7 +10,7 @@ import (
 	"os/exec"
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/sushidev-team/lola/internal/vtterm"
 )
 
@@ -118,8 +118,8 @@ func (m *rootModel) closeTerm(flash string) {
 
 // handleTermKey routes a keystroke while a terminal is open: Ctrl-q exits back
 // to the cockpit; everything else is encoded and forwarded to the child.
-func (m *rootModel) handleTermKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if k.Type == tea.KeyCtrlQ {
+func (m *rootModel) handleTermKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if k.String() == "ctrl+q" {
 		m.closeTerm("")
 		return m, nil
 	}
@@ -129,18 +129,14 @@ func (m *rootModel) handleTermKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// keyToBytes encodes a bubbletea key event as the input bytes a PTY child
-// expects. bubbletea parses stdin into KeyMsgs (losing the raw bytes), so this
-// re-encodes the common set: printable runes, the named keys, arrows/nav, and
-// control keys (whose KeyType value IS the ASCII control byte, KeyCtrlA=1…
-// KeyCtrlZ=26). Alt prefixes an ESC. Exotic sequences are not round-tripped.
-func keyToBytes(k tea.KeyMsg) []byte {
+// keyToBytes encodes a bubbletea v2 key press as the input bytes a PTY child
+// expects. bubbletea parses stdin into key events (losing the raw bytes), so
+// this re-encodes the common set: the named keys, arrows/nav, ctrl combos
+// (ctrl+a → 0x01 … ctrl+z → 0x1a), and printable text (k.Text). Alt prefixes an
+// ESC. Exotic sequences are not round-tripped.
+func keyToBytes(k tea.KeyPressMsg) []byte {
 	var b []byte
-	switch k.Type {
-	case tea.KeyRunes:
-		b = []byte(string(k.Runes))
-	case tea.KeySpace:
-		b = []byte(" ")
+	switch k.Code {
 	case tea.KeyEnter:
 		b = []byte("\r")
 	case tea.KeyTab:
@@ -168,14 +164,14 @@ func keyToBytes(k tea.KeyMsg) []byte {
 	case tea.KeyPgDown:
 		b = []byte("\x1b[6~")
 	default:
-		// Control keys: KeyCtrlA(1)…KeyCtrlZ(26) carry the control byte directly.
-		// The named aliases (Enter=13, Tab=9, Esc=27, Backspace=127) are handled
-		// above, so this only reaches the remaining ctrl combos.
-		if k.Type >= 1 && k.Type <= 26 {
-			b = []byte{byte(k.Type)}
+		switch {
+		case k.Mod.Contains(tea.ModCtrl) && k.Code >= 'a' && k.Code <= 'z':
+			b = []byte{byte(k.Code-'a') + 1} // ctrl+letter → ASCII control byte
+		case k.Text != "":
+			b = []byte(k.Text) // printable runes (and space)
 		}
 	}
-	if k.Alt && len(b) > 0 {
+	if k.Mod.Contains(tea.ModAlt) && len(b) > 0 {
 		b = append([]byte{0x1b}, b...)
 	}
 	return b

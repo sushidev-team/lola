@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/sushidev-team/lola/internal/config"
 )
 
@@ -26,7 +26,7 @@ func newTestSetup(t *testing.T, validateErr, storeErr error) *setupModel {
 
 func typeStr(m *setupModel, s string) {
 	for _, r := range s {
-		m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		m.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
 	}
 }
 
@@ -45,7 +45,7 @@ func TestSetupKeyMaskingShowsOnlyLast4(t *testing.T) {
 	m := newTestSetup(t, nil, nil)
 	typeStr(m, "lin_api_secret_WXYZ")
 
-	v := m.View()
+	v := m.viewString()
 	if !strings.Contains(v, "WXYZ") {
 		t.Errorf("view must reveal the last 4 chars:\n%s", v)
 	}
@@ -77,8 +77,8 @@ func TestSetupInvalidKeyStays(t *testing.T) {
 	if strings.Contains(m.keyErr, key) {
 		t.Errorf("keyErr leaked the key: %q", m.keyErr)
 	}
-	if strings.Contains(m.View(), "401") == false {
-		t.Errorf("view should surface the validation error:\n%s", m.View())
+	if strings.Contains(m.viewString(), "401") == false {
+		t.Errorf("view should surface the validation error:\n%s", m.viewString())
 	}
 }
 

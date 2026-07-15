@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/linear"
 )
@@ -134,13 +134,13 @@ func (f *formModel) update(msg tea.Msg) (tea.Cmd, formEvent) {
 		} else if v.teamID == f.poll.TeamID {
 			f.meta, f.loadErr = v.meta, ""
 		}
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		return f.key(v)
 	}
 	return nil, formNone
 }
 
-func (f *formModel) key(k tea.KeyMsg) (tea.Cmd, formEvent) {
+func (f *formModel) key(k tea.KeyPressMsg) (tea.Cmd, formEvent) {
 	if f.picker != nil {
 		return f.pickerKey(k), formNone
 	}
@@ -172,12 +172,20 @@ func (f *formModel) key(k tea.KeyMsg) (tea.Cmd, formEvent) {
 	// Text editing on name/repo/cap; on other fields plain 'r' refreshes.
 	switch cur {
 	case fName, fRepo, fCap:
-		switch k.Type {
-		case tea.KeyRunes, tea.KeySpace:
-			s := string(k.Runes)
-			if k.Type == tea.KeySpace {
-				s = " "
+		switch {
+		case k.Code == tea.KeyBackspace:
+			switch {
+			case cur == fName && f.poll.Name != "":
+				rs := []rune(f.poll.Name)
+				f.poll.Name = string(rs[:len(rs)-1])
+			case cur == fRepo && f.poll.Repo != "":
+				rs := []rune(f.poll.Repo)
+				f.poll.Repo = string(rs[:len(rs)-1])
+			case cur == fCap && f.capBuf != "":
+				f.capBuf = f.capBuf[:len(f.capBuf)-1]
 			}
+		case k.Text != "": // printable runes, incl. space and paste (bubbletea v2)
+			s := k.Text
 			switch cur {
 			case fName:
 				f.poll.Name += s
@@ -189,17 +197,6 @@ func (f *formModel) key(k tea.KeyMsg) (tea.Cmd, formEvent) {
 						f.capBuf += string(r)
 					}
 				}
-			}
-		case tea.KeyBackspace:
-			switch {
-			case cur == fName && f.poll.Name != "":
-				rs := []rune(f.poll.Name)
-				f.poll.Name = string(rs[:len(rs)-1])
-			case cur == fRepo && f.poll.Repo != "":
-				rs := []rune(f.poll.Repo)
-				f.poll.Repo = string(rs[:len(rs)-1])
-			case cur == fCap && f.capBuf != "":
-				f.capBuf = f.capBuf[:len(f.capBuf)-1]
 			}
 		}
 	default:
@@ -374,7 +371,7 @@ func (f *formModel) openPicker(cur fieldID) tea.Cmd {
 	return nil
 }
 
-func (f *formModel) pickerKey(k tea.KeyMsg) tea.Cmd {
+func (f *formModel) pickerKey(k tea.KeyPressMsg) tea.Cmd {
 	p := f.picker
 	switch k.String() {
 	case "esc":

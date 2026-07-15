@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 	"github.com/sushidev-team/lola/internal/protocol"
 )
 
@@ -51,7 +51,7 @@ func TestViewSwitchChangesRender(t *testing.T) {
 	m.width = 200
 	m.Update(sessionsMsg{data: boardSessions()})
 
-	v := m.View()
+	v := m.viewString()
 	if !strings.Contains(v, "list") {
 		t.Errorf("list lens must label itself in the summary:\n%s", v)
 	}
@@ -63,7 +63,7 @@ func TestViewSwitchChangesRender(t *testing.T) {
 	if m.sessions.view != viewKanban {
 		t.Fatalf("V must switch to the kanban lens, view = %d", m.sessions.view)
 	}
-	v = m.View()
+	v = m.viewString()
 	if !strings.Contains(v, "kanban") {
 		t.Errorf("kanban lens must label itself in the summary:\n%s", v)
 	}
@@ -81,8 +81,8 @@ func TestSummaryReportsAttentionCount(t *testing.T) {
 	m.width = 200
 	m.Update(sessionsMsg{data: boardSessions()})
 	// needs_input(need) + ci_failed(fix) = 2 need you.
-	if !strings.Contains(m.View(), "2 need you") {
-		t.Errorf("summary must show the attention count:\n%s", m.View())
+	if !strings.Contains(m.viewString(), "2 need you") {
+		t.Errorf("summary must show the attention count:\n%s", m.viewString())
 	}
 }
 
@@ -106,7 +106,7 @@ func TestFilterNarrowsList(t *testing.T) {
 		t.Fatalf("filter text = %q, want api", m.sessions.filter.Text)
 	}
 
-	v := m.View()
+	v := m.viewString()
 	for _, want := range []string{"ENG-2", "ENG-3", "ENG-5"} { // project=api
 		if !strings.Contains(v, want) {
 			t.Errorf("filtered view missing %q:\n%s", want, v)
@@ -117,7 +117,9 @@ func TestFilterNarrowsList(t *testing.T) {
 			t.Errorf("filtered view must hide %q:\n%s", hidden, v)
 		}
 	}
-	if !strings.Contains(v, "/api") {
+	// The "/" prefix is styled, so strip ANSI before matching the echoed query
+	// (lipgloss v2 renders color even under the no-TTY test profile).
+	if !strings.Contains(stripANSI(v), "/api") {
 		t.Errorf("filter bar must echo the query:\n%s", v)
 	}
 
@@ -149,7 +151,7 @@ func TestAttentionOnlyToggle(t *testing.T) {
 	if !m.sessions.filter.AttentionOnly {
 		t.Fatal("! must enable attention-only")
 	}
-	v := m.View()
+	v := m.viewString()
 	for _, want := range []string{"ENG-1", "ENG-4"} { // needs_input + ci_failed
 		if !strings.Contains(v, want) {
 			t.Errorf("attention-only view missing %q:\n%s", want, v)
@@ -193,7 +195,7 @@ func TestKanbanPlacesCardsInColumns(t *testing.T) {
 		}
 	}
 
-	v := m.View()
+	v := m.viewString()
 	for _, issue := range []string{"ENG-1", "ENG-2", "ENG-3", "ENG-4", "ENG-5", "ENG-6"} {
 		if !strings.Contains(v, issue) {
 			t.Errorf("kanban board missing card %q:\n%s", issue, v)
@@ -293,12 +295,12 @@ func TestAttentionCardReachableInBothLenses(t *testing.T) {
 	}
 	m := needsInputRoot(t, pd) // list lens by default, single needs_input session
 
-	if v := m.View(); !strings.Contains(v, "Proceed?") || !strings.Contains(v, "a: answer") {
+	if v := m.viewString(); !strings.Contains(v, "Proceed?") || !strings.Contains(v, "a: answer") {
 		t.Errorf("attention card must render in the list lens:\n%s", v)
 	}
 
 	m.Update(keyMsg("V"))
-	v := m.View()
+	v := m.viewString()
 	if !strings.Contains(v, "Proceed?") || !strings.Contains(v, "a: answer") {
 		t.Errorf("attention card must stay reachable in the kanban lens:\n%s", v)
 	}
@@ -317,7 +319,7 @@ func TestKanbanNarrowFallback(t *testing.T) {
 	m.sessions.data = boardSessions()
 	m.sessions.view = viewKanban
 
-	v := m.View()
+	v := m.viewString()
 	if !strings.Contains(v, "board condensed") {
 		t.Errorf("narrow board must show the condensed hint:\n%s", v)
 	}
@@ -388,7 +390,7 @@ func TestAppliedFilterRepinsWhenSelectionLeavesView(t *testing.T) {
 	if sel := m.sessions.selected(); sel != nil {
 		t.Errorf("selected() must be nil when nothing is visible, got %v", sel)
 	}
-	if v := m.View(); !strings.Contains(v, "no sessions match the filter") {
+	if v := m.viewString(); !strings.Contains(v, "no sessions match the filter") {
 		t.Errorf("filtered-empty list must say so and render no detail card:\n%s", v)
 	}
 }

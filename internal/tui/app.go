@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/doctor"
 	"github.com/sushidev-team/lola/internal/protocol"
@@ -77,7 +77,7 @@ func Run() error {
 		return err
 	}
 	m := &rootModel{cfgPath: cfgPath, cfg: cfg, list: newListModel(cfg), height: 24}
-	_, err = tea.NewProgram(m, tea.WithAltScreen()).Run()
+	_, err = tea.NewProgram(m).Run() // alt-screen is set on the View (bubbletea v2)
 	return err
 }
 
@@ -149,7 +149,7 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// fresh the moment you exit back.
 	if m.term != nil {
 		switch v := msg.(type) {
-		case tea.KeyMsg:
+		case tea.KeyPressMsg:
 			return m.handleTermKey(v)
 		case tea.WindowSizeMsg:
 			m.width, m.height = v.Width, v.Height
@@ -232,7 +232,7 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.doctorLoading, m.doctorReport, m.doctorScroll = false, &r, 0
 		}
 		return m, nil
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		if v.String() == "ctrl+c" {
 			return m, tea.Quit
 		}
@@ -240,7 +240,7 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// The doctor overlay owns all input while open (loading or showing).
 	if m.doctorLoading || m.doctorReport != nil {
-		if k, ok := msg.(tea.KeyMsg); ok {
+		if k, ok := msg.(tea.KeyPressMsg); ok {
 			return m.doctorKey(k)
 		}
 		return m, nil
@@ -264,7 +264,7 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// gate currently owns keystrokes — a poll delete / session kill confirmation,
 	// the answer card, or the filter bar (whose keys may be "tab"/"d"/digits).
 	gated := m.list.confirmDelete || m.sessions.confirmKill || m.sessions.answering || m.sessions.filtering
-	if k, ok := msg.(tea.KeyMsg); ok && !gated {
+	if k, ok := msg.(tea.KeyPressMsg); ok && !gated {
 		switch k.String() {
 		case "tab":
 			if m.focus == focusSessions {
@@ -293,7 +293,15 @@ func (m *rootModel) tabBar() string {
 	return "lola  " + titleStyle.Render(polls) + "  " + faintText.Render(sessions)
 }
 
-func (m *rootModel) View() string {
+// View wraps the rendered frame string in a tea.View (bubbletea v2) and enables
+// the alt-screen there (WithAltScreen was removed as a Program option).
+func (m *rootModel) View() tea.View {
+	v := tea.NewView(m.viewString())
+	v.AltScreen = true
+	return v
+}
+
+func (m *rootModel) viewString() string {
 	if m.term != nil {
 		return m.termSurfaceView() // embedded terminal takes the whole screen
 	}
@@ -331,13 +339,13 @@ func (m *rootModel) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// refresh our snapshot so later saves don't clobber those changes.
 		m.reloadConfig()
 		return m, fetchStatusCmd
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		return m.listKey(v)
 	}
 	return m, nil
 }
 
-func (m *rootModel) listKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m *rootModel) listKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	l := &m.list
 	if l.confirmDelete {
 		l.confirmDelete = false
@@ -475,7 +483,7 @@ func (m *rootModel) toggleSelected() tea.Cmd {
 // ---- doctor overlay ----
 
 // doctorKey drives the doctor panel: esc/q close it, the arrows/j/k scroll.
-func (m *rootModel) doctorKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m *rootModel) doctorKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch k.String() {
 	case "esc", "q":
 		m.doctorLoading, m.doctorReport, m.doctorScroll = false, nil, 0

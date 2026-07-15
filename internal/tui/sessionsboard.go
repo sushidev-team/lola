@@ -10,8 +10,8 @@ import (
 	"fmt"
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/sushidev-team/lola/internal/protocol"
 )
 
@@ -209,7 +209,7 @@ func (m *rootModel) reselectVisible() tea.Cmd {
 // updateFilter drives the "/" filter bar: printable runes narrow the list live
 // (Apply re-runs each render), backspace deletes, enter applies and closes, esc
 // clears and closes. Every edit re-pins selection so it stays on a visible row.
-func (m *rootModel) updateFilter(k tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m *rootModel) updateFilter(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	s := &m.sessions
 	switch k.String() {
 	case "esc":
@@ -224,11 +224,8 @@ func (m *rootModel) updateFilter(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.reselectVisible()
 	}
-	switch {
-	case k.Type == tea.KeyRunes:
-		s.filter.Text += string(k.Runes)
-	case k.String() == " ":
-		s.filter.Text += " "
+	if k.Text != "" { // printable runes, including space (bubbletea v2)
+		s.filter.Text += k.Text
 	}
 	return m, m.reselectVisible()
 }

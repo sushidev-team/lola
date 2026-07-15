@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/sushidev-team/lola/internal/protocol"
 	"github.com/sushidev-team/lola/internal/tmux"
 )
@@ -453,7 +453,7 @@ func (m *rootModel) handlePaneMsg(v paneMsg) {
 }
 
 func (m *rootModel) updateSessions(msg tea.Msg) (tea.Model, tea.Cmd) {
-	k, ok := msg.(tea.KeyMsg)
+	k, ok := msg.(tea.KeyPressMsg)
 	if !ok {
 		return m, nil
 	}
@@ -574,7 +574,7 @@ func (m *rootModel) startAnswer() (tea.Model, tea.Cmd) {
 // sends that Key directly); a free-form prompt accumulates typed runes and
 // sends on enter. esc cancels without sending. The daemon still re-checks
 // needs_input, so a stale send is refused there, not here.
-func (m *rootModel) updateAnswer(k tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m *rootModel) updateAnswer(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	s := &m.sessions
 	pd := s.paneData
 	if pd == nil { // defensive: nothing to answer against
@@ -618,11 +618,8 @@ func (m *rootModel) updateAnswer(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
-	switch {
-	case k.Type == tea.KeyRunes:
-		s.answerInput += string(k.Runes)
-	case k.String() == " ":
-		s.answerInput += " "
+	if k.Text != "" { // printable runes, including space (bubbletea v2)
+		s.answerInput += k.Text
 	}
 	return m, nil
 }

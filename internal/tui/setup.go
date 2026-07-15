@@ -17,7 +17,7 @@ import (
 	"strings"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/linear"
 	"github.com/sushidev-team/lola/internal/secrets"
@@ -111,7 +111,7 @@ func Setup() error {
 // runSetupWizard runs the given model to completion and reports whether it
 // wrote a config.
 func runSetupWizard(m *setupModel) (bool, error) {
-	final, err := tea.NewProgram(m, tea.WithAltScreen()).Run()
+	final, err := tea.NewProgram(m).Run() // alt-screen set on the View (bubbletea v2)
 	if err != nil {
 		return false, err
 	}
@@ -143,13 +143,13 @@ func (m *setupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.projectPath = m.gitToplevel()
 		}
 		return m, nil
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		return m.handleKey(v)
 	}
 	return m, nil
 }
 
-func (m *setupModel) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m *setupModel) handleKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// While the key is being validated, ignore edits; esc still cancels.
 	if m.validating {
 		if k.String() == "esc" || k.String() == "ctrl+c" {
@@ -192,18 +192,17 @@ func (m *setupModel) activeBuf() *string {
 	return nil
 }
 
-// editBuf applies one keystroke (rune, paste, space, or backspace) to buf.
-func editBuf(k tea.KeyMsg, buf *string) {
-	switch k.Type {
-	case tea.KeyRunes:
-		*buf += string(k.Runes) // a paste arrives as a multi-rune KeyRunes
-	case tea.KeySpace:
-		*buf += " "
-	case tea.KeyBackspace:
+// editBuf applies one keystroke (printable text — including space and pastes —
+// or backspace) to buf. In bubbletea v2 the produced text is k.Text.
+func editBuf(k tea.KeyPressMsg, buf *string) {
+	switch {
+	case k.Code == tea.KeyBackspace:
 		if *buf != "" {
 			r := []rune(*buf)
 			*buf = string(r[:len(r)-1])
 		}
+	case k.Text != "":
+		*buf += k.Text
 	}
 }
 
@@ -330,7 +329,13 @@ func (m *setupModel) projectName() string {
 
 // ---- view ----
 
-func (m *setupModel) View() string {
+func (m *setupModel) View() tea.View {
+	v := tea.NewView(m.viewString())
+	v.AltScreen = true
+	return v
+}
+
+func (m *setupModel) viewString() string {
 	var b strings.Builder
 	b.WriteString(titleStyle.Render("lola setup — first run") + "\n\n")
 
