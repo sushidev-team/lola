@@ -37,3 +37,6 @@ go.work.sum
 # Repo-local Go caches (see Makefile)
 .gocache/
 .gomodcache/
+
+# goreleaser output
+/dist/

@@ -1,5 +1,7 @@
 # Lola
 
+[![CI](https://github.com/sushidev-team/lola/actions/workflows/ci.yml/badge.svg)](https://github.com/sushidev-team/lola/actions/workflows/ci.yml)
+
 Named after *Lola rennt* — run, observe, run again.
 
 `lola` is a single Go binary that watches [Linear](https://linear.app) for

@@ -17,6 +17,14 @@ import (
 	"github.com/sushidev-team/lola/internal/tui"
 )
 
+// Build metadata, injected by goreleaser ldflags (-X main.version=…). Plain
+// `go build` leaves the dev defaults.
+var (
+	version = "dev"
+	commit  = "none"
+	date    = "unknown"
+)
+
 func main() {
 	root := &cobra.Command{
 		Use:   "lola",
@@ -25,6 +33,7 @@ func main() {
 		// errors; print them once ourselves below.
 		SilenceUsage:  true,
 		SilenceErrors: true,
+		Version:       fmt.Sprintf("%s (commit %s, built %s)", version, commit, date),
 		RunE:          func(c *cobra.Command, _ []string) error { return tui.Run() }, // bare `lola` opens TUI
 	}
 
