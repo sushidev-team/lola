@@ -108,3 +108,26 @@ func TestCtrlQDetaches(t *testing.T) {
 	}
 	m.closeAllTerms()
 }
+
+// On an AGENT terminal, Ctrl-q closes the attach (the tmux session is the
+// durable thing) rather than keeping the PTY around like a shell.
+func TestCtrlQClosesAgent(t *testing.T) {
+	m := newTestRoot(t)
+	term, err := vtterm.New(exec.Command("cat"), 40, 5) // stands in for `tmux attach`
+	if err != nil {
+		t.Fatalf("vtterm.New: %v", err)
+	}
+	tv := &termView{term: term, sessionID: "s4", kind: termAgent, title: "agent"}
+	m.term = tv // agent terminals are intentionally NOT registered
+	m.handleTermKey(tea.KeyPressMsg{Code: 'q', Mod: tea.ModCtrl})
+	if m.term != nil {
+		t.Error("ctrl+q on an agent must return to the cockpit")
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && !term.Exited() {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !term.Exited() {
+		t.Error("ctrl+q on an agent must close the attach process")
+	}
+}

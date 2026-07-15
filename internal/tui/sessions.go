@@ -660,9 +660,10 @@ func (m *rootModel) jumpNeedsInput(dir int) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// attachSelected suspends the TUI and execs `tmux attach-session` for the
-// selected session; sessions without a tmux target (AO desktop runtime)
-// cannot be attached.
+// attachSelected opens the selected session's agent as an EMBEDDED terminal
+// (tmux attach rendered in-panel), not a full-screen takeover: Ctrl-q detaches
+// (the agent keeps running in tmux) and returns straight to the cockpit.
+// Sessions without a live tmux pane cannot be attached.
 func (m *rootModel) attachSelected() (tea.Model, tea.Cmd) {
 	sel := m.sessions.selected()
 	if sel == nil {
@@ -672,10 +673,9 @@ func (m *rootModel) attachSelected() (tea.Model, tea.Cmd) {
 		m.sessions.flash = "no tmux session (AO desktop runtime)"
 		return m, nil
 	}
-	// Pre-attach liveness gate: refuse clearly instead of handing the terminal to
-	// a doomed attach (which would only flash a raw tmux error the user misses).
-	// A dead/ended session has no agent left; and a session whose pane is not on
-	// the lola server — e.g. an orphaned pre-migration session still on the
+	// Pre-attach liveness gate: refuse clearly instead of embedding a doomed
+	// attach. A dead/ended session has no agent left; and a session whose pane is
+	// not on the lola server — e.g. an orphaned pre-migration session still on the
 	// DEFAULT server — cannot be reached by the "-L lola" attach either.
 	if sel.Status == "dead" || sel.Status == "session_ended" {
 		m.sessions.flash = "session's agent has exited — nothing to attach (it may be an orphaned pre-migration session; see logs)"
@@ -686,17 +686,7 @@ func (m *rootModel) attachSelected() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	argv := m.sessions.tmuxClient(m.cfg.TmuxSocketName()).AttachArgs(sel.TmuxName)
-	c := exec.Command(argv[0], argv[1:]...)
-	// One-line hint printed just above the handoff so the user knows how to get
-	// back before tmux takes over the terminal; the detach key is whatever the
-	// resolved [tmux] config actually binds (default Ctrl-b d). tea.Sequence
-	// prints the hint, then execs the attach; on detach the sessions view is
-	// restored by the normal render loop (attachDoneMsg only flashes on error).
-	hint := attachHintLine(sel.Issue, m.cfg.Tmux.DetachHint())
-	return m, tea.Sequence(
-		tea.Printf("%s", hint),
-		tea.ExecProcess(c, func(err error) tea.Msg { return attachDoneMsg{err: err} }),
-	)
+	return m, m.openAgentTerm(sel.ID, "agent · "+dash(sel.Issue), argv)
 }
 
 // attachHintLine is the pre-attach one-liner: "attaching to <issue> — press

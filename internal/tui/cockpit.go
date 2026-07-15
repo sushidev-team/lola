@@ -578,7 +578,7 @@ func (m *rootModel) keybar(w int) string {
 	if m.focus == focusPolls {
 		keys = []string{"↑↓ move", "n new", "enter edit", "space toggle", "x delete", "r cache", "tab → sessions"}
 	} else {
-		keys = []string{"↑↓ move", "enter attach"}
+		keys = []string{"↑↓ move", "enter agent"}
 		if sel := s.selected(); sel != nil {
 			if sel.Status == "needs_input" {
 				keys = append(keys, "a answer")

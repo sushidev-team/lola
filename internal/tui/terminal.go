@@ -23,12 +23,22 @@ import (
 // terminal content.
 const termChromeRows = 2
 
-// termView holds one embedded terminal, tracked per session so it survives a
-// detach and can be re-entered.
+// Terminal kinds differ in what "detach" means. A SHELL owns a durable process
+// (composer dev), so Ctrl-q keeps its PTY running and it lives in the registry
+// to be re-entered. An AGENT terminal is just a `tmux attach` view onto the
+// agent's tmux session — the tmux session is the durable thing, so Ctrl-q simply
+// closes the attach (detaching the client) and it is never registered.
+const (
+	termShell = iota
+	termAgent
+)
+
+// termView holds one embedded terminal.
 type termView struct {
 	term      *vtterm.Term
 	title     string
 	sessionID string
+	kind      int // termShell | termAgent
 	w, h      int // terminal CONTENT size (window minus chrome)
 }
 
@@ -88,12 +98,29 @@ func (m *rootModel) openShellTerm(sessionID, title, dir string) tea.Cmd {
 		m.sessions.flash, m.sessions.flashGood = "shell failed: "+err.Error(), false
 		return nil
 	}
-	tv := &termView{term: t, title: title, sessionID: sessionID, w: cw, h: ch}
+	tv := &termView{term: t, title: title, sessionID: sessionID, kind: termShell, w: cw, h: ch}
 	if m.terms == nil {
 		m.terms = map[string]*termView{}
 	}
 	m.terms[sessionID] = tv
 	m.term = tv
+	return waitTermFrame(t)
+}
+
+// openAgentTerm embeds the agent's tmux session (argv from tmux AttachArgs) as a
+// terminal. It is NOT registered — the tmux session is the durable thing, so
+// Ctrl-q just closes this attach (detaching the client) and re-entering spawns a
+// fresh one.
+func (m *rootModel) openAgentTerm(sessionID, title string, argv []string) tea.Cmd {
+	cmd := exec.Command(argv[0], argv[1:]...)
+	cmd.Env = append(os.Environ(), "TERM=xterm-256color", "LOLA_TERMINAL=1")
+	cw, ch := m.termContentSize()
+	t, err := vtterm.New(cmd, cw, ch)
+	if err != nil {
+		m.sessions.flash, m.sessions.flashGood = "attach failed: "+err.Error(), false
+		return nil
+	}
+	m.term = &termView{term: t, title: title, sessionID: sessionID, kind: termAgent, w: cw, h: ch}
 	return waitTermFrame(t)
 }
 
@@ -189,7 +216,11 @@ func (m *rootModel) runningShell(sessionID string) bool {
 // and forwarded to the child.
 func (m *rootModel) handleTermKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if k.String() == "ctrl+q" {
-		m.detachTerm()
+		if m.term.kind == termAgent {
+			m.reapTerm(m.term, "") // close the attach; the agent lives on in tmux
+		} else {
+			m.detachTerm() // keep the shell (and its composer dev) running
+		}
 		return m, nil
 	}
 	if b := keyToBytes(k); len(b) > 0 {
@@ -262,8 +293,12 @@ func (m *rootModel) termSurfaceView() string {
 	for _, ln := range lines {
 		b.WriteString(previewLine(ln, W) + "\n")
 	}
-	hint := goodText.Render("Ctrl-q") + faintText.Render(" detach (shell keeps running) · ") +
-		faintText.Render("exit/Ctrl-d ends it · other keys → terminal")
+	var hint string
+	if tv.kind == termAgent {
+		hint = goodText.Render("Ctrl-q") + faintText.Render(" detach — the agent keeps running in tmux · other keys → agent")
+	} else {
+		hint = goodText.Render("Ctrl-q") + faintText.Render(" detach (shell keeps running) · exit/Ctrl-d ends it · other keys → terminal")
+	}
 	b.WriteString(previewLine(hint, W))
 	return b.String()
 }
