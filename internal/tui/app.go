@@ -41,6 +41,11 @@ type rootModel struct {
 	width    int
 	height   int
 
+	// attnHist is a bounded ring of recent "need you" counts (one sample per
+	// sessions fetch), rendered as the Triage sparkline so the queue's trend is
+	// visible at a glance.
+	attnHist []int
+
 	// Doctor overlay (P6.27): 'd' in the polls view runs doctor.Check via a
 	// bounded tea.Cmd and shows the report in a scrollable panel; esc closes.
 	doctorLoading bool
@@ -171,7 +176,9 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Batch(cmds...)
 	case sessionsMsg:
-		return m, m.handleSessionsMsg(v)
+		cmd := m.handleSessionsMsg(v)
+		m.recordAttn()
+		return m, cmd
 	case paneMsg:
 		m.handlePaneMsg(v)
 		return m, nil

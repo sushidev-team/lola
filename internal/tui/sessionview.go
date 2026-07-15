@@ -239,3 +239,31 @@ type StatusDisplay struct {
 func statusDisplay(status string) StatusDisplay {
 	return StatusDisplay{Style: statusStyle(status), Badge: statusBadge(status)}
 }
+
+// statusPill renders a status as a compact chip that reads by BOTH shape and
+// hue (never color alone — mono terminals / colorblind users): the badge glyph
+// followed by the status word. The states that put a human on the critical path
+// (needs_input, and the broken-work set) get a FILLED background so the queue
+// leaps out of the table; everything else is colored text on the default
+// ground. Shared so the cockpit table and any future lens stay identical.
+func statusPill(status string) string {
+	badge := statusBadge(status)
+	text := badge + " " + status
+	switch status {
+	case "needs_input":
+		return pillFill("208", "16", text) // orange fill, near-black text
+	case "ci_failed", "changes_requested", "merge_conflict":
+		return pillFill("9", "15", text) // red fill, white text
+	}
+	return statusStyle(status).Render(text)
+}
+
+// pillFill renders text as a filled chip (one space of padding each side) in the
+// given background/foreground colors.
+func pillFill(bg, fg, text string) string {
+	return lipgloss.NewStyle().
+		Background(lipgloss.Color(bg)).
+		Foreground(lipgloss.Color(fg)).
+		Bold(true).
+		Render(" " + text + " ")
+}

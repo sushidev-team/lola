@@ -148,7 +148,7 @@ func (m *rootModel) sessionsBody(w, h int) []string {
 		}
 		rows[i] = []string{
 			marker, si.Issue, si.Project,
-			statusStyle(si.Status).Render(si.Status), pr,
+			statusPill(si.Status), pr,
 			reactingStyle(si.Reacting).Render(dash(si.Reacting)), dash(si.Age),
 		}
 	}
@@ -272,7 +272,11 @@ func (m *rootModel) triageBody(w int) []string {
 	} else {
 		out = append(out, goodText.Render("0")+" "+faintText.Render("all clear"))
 	}
-	out = append(out, "")
+	if spark := sparkline(m.attnHist, w-10); spark != "" {
+		out = append(out, spark+" "+faintText.Render("needs-you"))
+	} else {
+		out = append(out, "")
+	}
 	meterW := w - 12
 	if meterW < 4 {
 		meterW = 4
@@ -470,6 +474,65 @@ func (m *rootModel) kanbanBodyAt(width, height int) []string {
 		lines = lines[:height]
 	}
 	return lines
+}
+
+// attnHistCap bounds the needs-you sparkline ring.
+const attnHistCap = 60
+
+// recordAttn samples the current "need you" count into the bounded history ring
+// that backs the Triage sparkline. Called once per sessions fetch.
+func (m *rootModel) recordAttn() {
+	n := 0
+	if m.sessions.data != nil {
+		n = AttentionCount(m.sessions.data.Sessions)
+	}
+	m.attnHist = append(m.attnHist, n)
+	if len(m.attnHist) > attnHistCap {
+		m.attnHist = m.attnHist[len(m.attnHist)-attnHistCap:]
+	}
+}
+
+// sparkline renders the last `width` samples as colored block glyphs scaled to
+// the window's max (green low → yellow → orange high) so the needs-you trend
+// reads at a glance. A zero sample renders as a faint dot. Empty history (or a
+// non-positive width) renders nothing.
+func sparkline(vals []int, width int) string {
+	if width < 1 || len(vals) == 0 {
+		return ""
+	}
+	if len(vals) > width {
+		vals = vals[len(vals)-width:]
+	}
+	max := 1
+	for _, v := range vals {
+		if v > max {
+			max = v
+		}
+	}
+	blocks := []rune("▁▂▃▄▅▆▇█")
+	var b strings.Builder
+	for _, v := range vals {
+		if v <= 0 {
+			b.WriteString(faintText.Render("·"))
+			continue
+		}
+		lvl := (v*len(blocks) - 1) / max
+		if lvl < 0 {
+			lvl = 0
+		}
+		if lvl >= len(blocks) {
+			lvl = len(blocks) - 1
+		}
+		style := goodText
+		switch {
+		case lvl >= 6:
+			style = statusOrange
+		case lvl >= 3:
+			style = warnText
+		}
+		b.WriteString(style.Render(string(blocks[lvl])))
+	}
+	return b.String()
 }
 
 // viewportStart returns the first visible index of an h-tall window over n rows
