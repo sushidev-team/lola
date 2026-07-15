@@ -297,10 +297,17 @@ func (m *rootModel) tabBar() string {
 }
 
 // View wraps the rendered frame string in a tea.View (bubbletea v2) and enables
-// the alt-screen there (WithAltScreen was removed as a Program option).
+// the alt-screen there (WithAltScreen was removed as a Program option). When an
+// embedded terminal is attached, the real cursor is placed at the child's
+// cursor (offset by the title-bar row); otherwise it stays hidden (the cockpit
+// has no text cursor).
 func (m *rootModel) View() tea.View {
 	v := tea.NewView(m.viewString())
 	v.AltScreen = true
+	if m.term != nil {
+		cx, cy := m.term.term.Cursor()
+		v.Cursor = tea.NewCursor(cx, cy+1) // +1: the terminal renders below the title bar
+	}
 	return v
 }
 
