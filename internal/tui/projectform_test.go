@@ -15,9 +15,9 @@ func TestProjectFormSave(t *testing.T) {
 	if !ok {
 		t.Fatal("newProjectForm: project not found")
 	}
-	f.fields[3].buf = ".env\n storage \n" // symlinks (trims, drops blank)
-	f.fields[4].buf = "composer install\nnpm ci"
-	f.fields[5].buf = "APP_ENV=local\nDEBUG = 1\nnope"
+	f.fields[3].lines = []string{".env", " storage ", ""} // symlinks (trims, drops blank)
+	f.fields[4].lines = []string{"composer install", "npm ci"}
+	f.fields[5].lines = []string{"APP_ENV=local", "DEBUG = 1", "nope"}
 
 	if ev := f.save(); ev != projFormSaved {
 		t.Fatalf("save = %v, err=%q", ev, f.err)
@@ -49,18 +49,48 @@ func TestProjectFormSave(t *testing.T) {
 	}
 }
 
-func TestSplitLinesTrimAndParseEnv(t *testing.T) {
-	if got := splitLinesTrim("  a \n\n b \n"); !reflect.DeepEqual(got, []string{"a", "b"}) {
-		t.Errorf("splitLinesTrim = %v", got)
+func TestTrimDropEmptyAndParseEnv(t *testing.T) {
+	if got := trimDropEmpty([]string{"  a ", "", " b ", "  "}); !reflect.DeepEqual(got, []string{"a", "b"}) {
+		t.Errorf("trimDropEmpty = %v", got)
 	}
-	if got := splitLinesTrim("   \n  "); got != nil {
+	if got := trimDropEmpty([]string{"   ", ""}); got != nil {
 		t.Errorf("all-blank must be nil, got %v", got)
 	}
-	env := parseEnvLines("K=v\n X = y \nbad\n=z")
+	env := parseEnvLines([]string{"K=v", " X = y ", "bad", "=z"})
 	if env["K"] != "v" || env["X"] != "y" {
 		t.Errorf("parseEnvLines = %v", env)
 	}
 	if len(env) != 2 {
 		t.Errorf("bad/keyless lines must be dropped: %v", env)
+	}
+}
+
+// enter opens a list field into line-editing (arrows then move lines); esc
+// closes it back to field navigation.
+func TestProjectFormListEditMode(t *testing.T) {
+	m := newTestRoot(t)
+	f, _ := newProjectForm(m.cfgPath, m.cfg, "nori-app")
+	f.cursor = 4 // Post-create (a list field)
+	// up/down navigate FIELDS while not editing
+	f.update(keyMsg("up"))
+	if f.editing || f.cursor != 3 {
+		t.Fatalf("up in nav mode must move fields (cursor=%d editing=%v)", f.cursor, f.editing)
+	}
+	f.cursor = 4
+	f.update(keyMsg("enter")) // open the list
+	if !f.editing {
+		t.Fatal("enter on a list field must open it for editing")
+	}
+	// now enter adds a line; typing edits it
+	f.update(keyMsg("enter"))
+	for _, r := range "make build" {
+		f.update(keyMsg(string(r)))
+	}
+	if f.fields[4].lines[f.lineCur] != "make build" {
+		t.Errorf("typed line = %q", f.fields[4].lines[f.lineCur])
+	}
+	f.update(keyMsg("esc")) // close
+	if f.editing {
+		t.Error("esc must close the list back to field navigation")
 	}
 }

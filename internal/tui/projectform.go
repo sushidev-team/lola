@@ -38,7 +38,8 @@ type projField struct {
 	label string
 	help  string
 	kind  projFieldKind
-	buf   string // for list/env: entries joined by "\n"
+	text  string   // pfText
+	lines []string // pfList / pfEnv (one entry per line)
 }
 
 type projectForm struct {
@@ -47,7 +48,9 @@ type projectForm struct {
 	idx     int // index into cfg.Projects
 	name    string
 	fields  []projField
-	cursor  int
+	cursor  int  // which field
+	editing bool // a list/env field is OPEN for line editing
+	lineCur int  // which line, while editing
 	err     string
 }
 
@@ -68,27 +71,33 @@ func newProjectForm(cfgPath string, cfg *config.Config, projectName string) (*pr
 	return &projectForm{
 		cfgPath: cfgPath, cfg: cfg, idx: idx, name: p.Name,
 		fields: []projField{
-			{label: "Path", help: "Local repository path.", kind: pfText, buf: p.Path},
-			{label: "GitHub repo", help: "owner/name for PR checks.", kind: pfText, buf: p.Repo},
-			{label: "Default branch", help: "Base branch worktrees fork from.", kind: pfText, buf: p.DefaultBranch},
-			{label: "Symlinks", help: "One relative path per line, linked from main into each worktree (e.g. .env). Do NOT symlink vendor/ — it breaks PHP autoload; use post_create instead.", kind: pfList, buf: strings.Join(p.Symlinks, "\n")},
-			{label: "Post-create", help: "One command per line, run in a fresh worktree before the agent (e.g. composer install).", kind: pfList, buf: strings.Join(p.PostCreate, "\n")},
-			{label: "Env (KEY=value)", help: "One KEY=value per line, exported into the session and post_create commands.", kind: pfEnv, buf: envJoin(p.Env)},
+			{label: "Path", help: "Local repository path.", kind: pfText, text: p.Path},
+			{label: "GitHub repo", help: "owner/name for PR checks.", kind: pfText, text: p.Repo},
+			{label: "Default branch", help: "Base branch worktrees fork from.", kind: pfText, text: p.DefaultBranch},
+			{label: "Symlinks", help: "One relative path per line, linked from main into each worktree (e.g. .env). Do NOT symlink vendor/ — it breaks PHP autoload; use post_create instead.", kind: pfList, lines: p.Symlinks},
+			{label: "Post-create", help: "One command per line, run in a fresh worktree before the agent (e.g. composer install).", kind: pfList, lines: p.PostCreate},
+			{label: "Env (KEY=value)", help: "One KEY=value per line, exported into the session and post_create commands.", kind: pfEnv, lines: envLines(p.Env)},
 		},
 	}, true
 }
 
-func envJoin(env map[string]string) string {
+func envLines(env map[string]string) []string {
 	lines := make([]string, 0, len(env))
 	for k, v := range env {
 		lines = append(lines, k+"="+v)
 	}
 	sort.Strings(lines)
-	return strings.Join(lines, "\n")
+	return lines
 }
 
 func (f *projectForm) update(k tea.KeyPressMsg) projectFormEvent {
 	f.err = ""
+	if f.editing {
+		return f.editList(k)
+	}
+	// Field navigation. Single-line text fields edit inline; list/env fields are
+	// OPENED with enter (so arrows then move lines, not fields).
+	fld := &f.fields[f.cursor]
 	switch k.String() {
 	case "esc":
 		return projFormCancel
@@ -98,39 +107,84 @@ func (f *projectForm) update(k tea.KeyPressMsg) projectFormEvent {
 		if f.cursor > 0 {
 			f.cursor--
 		}
-		return projFormNone
 	case "down", "tab":
 		if f.cursor < len(f.fields)-1 {
 			f.cursor++
 		}
-		return projFormNone
 	case "enter":
-		if fld := &f.fields[f.cursor]; fld.kind != pfText {
-			fld.buf += "\n" // a new entry in a list/env field
+		if fld.kind != pfText { // open the list/env field for line editing
+			if len(fld.lines) == 0 {
+				fld.lines = []string{""}
+			}
+			f.editing, f.lineCur = true, 0
 		}
-		return projFormNone
 	case "backspace":
-		fld := &f.fields[f.cursor]
-		if r := []rune(fld.buf); len(r) > 0 {
-			fld.buf = string(r[:len(r)-1])
+		if fld.kind == pfText {
+			fld.text = dropLastRune(fld.text)
 		}
-		return projFormNone
-	}
-	if k.Text != "" {
-		f.fields[f.cursor].buf += k.Text
+	default:
+		if fld.kind == pfText && k.Text != "" {
+			fld.text += k.Text
+		}
 	}
 	return projFormNone
+}
+
+// editList drives the OPEN list/env field: arrows move between lines, enter adds
+// a line, backspace edits (or removes an empty line), esc closes back to field
+// navigation.
+func (f *projectForm) editList(k tea.KeyPressMsg) projectFormEvent {
+	fld := &f.fields[f.cursor]
+	switch k.String() {
+	case "esc", "ctrl+s":
+		f.editing = false
+		if k.String() == "ctrl+s" {
+			return f.save()
+		}
+	case "up":
+		if f.lineCur > 0 {
+			f.lineCur--
+		}
+	case "down":
+		if f.lineCur < len(fld.lines)-1 {
+			f.lineCur++
+		}
+	case "enter":
+		f.lineCur++
+		fld.lines = append(fld.lines[:f.lineCur], append([]string{""}, fld.lines[f.lineCur:]...)...)
+	case "backspace":
+		if fld.lines[f.lineCur] == "" && len(fld.lines) > 1 {
+			fld.lines = append(fld.lines[:f.lineCur], fld.lines[f.lineCur+1:]...)
+			if f.lineCur > 0 {
+				f.lineCur--
+			}
+		} else {
+			fld.lines[f.lineCur] = dropLastRune(fld.lines[f.lineCur])
+		}
+	default:
+		if k.Text != "" {
+			fld.lines[f.lineCur] += k.Text
+		}
+	}
+	return projFormNone
+}
+
+func dropLastRune(s string) string {
+	if r := []rune(s); len(r) > 0 {
+		return string(r[:len(r)-1])
+	}
+	return s
 }
 
 // save writes the edited fields back into the project and persists config.toml.
 func (f *projectForm) save() projectFormEvent {
 	p := &f.cfg.Projects[f.idx]
-	p.Path = strings.TrimSpace(f.fields[0].buf)
-	p.Repo = strings.TrimSpace(f.fields[1].buf)
-	p.DefaultBranch = strings.TrimSpace(f.fields[2].buf)
-	p.Symlinks = splitLinesTrim(f.fields[3].buf)
-	p.PostCreate = splitLinesTrim(f.fields[4].buf)
-	p.Env = parseEnvLines(f.fields[5].buf)
+	p.Path = strings.TrimSpace(f.fields[0].text)
+	p.Repo = strings.TrimSpace(f.fields[1].text)
+	p.DefaultBranch = strings.TrimSpace(f.fields[2].text)
+	p.Symlinks = trimDropEmpty(f.fields[3].lines)
+	p.PostCreate = trimDropEmpty(f.fields[4].lines)
+	p.Env = parseEnvLines(f.fields[5].lines)
 	if err := f.cfg.Save(f.cfgPath); err != nil {
 		f.err = "save failed: " + err.Error()
 		return projFormNone
@@ -138,25 +192,23 @@ func (f *projectForm) save() projectFormEvent {
 	return projFormSaved
 }
 
-// splitLinesTrim splits on newlines, trims each, and drops empties — nil when
-// nothing remains (so an emptied list clears the field).
-func splitLinesTrim(s string) []string {
+// trimDropEmpty trims each entry and drops blanks — nil when nothing remains.
+func trimDropEmpty(in []string) []string {
 	var out []string
-	for _, ln := range strings.Split(s, "\n") {
-		if t := strings.TrimSpace(ln); t != "" {
+	for _, e := range in {
+		if t := strings.TrimSpace(e); t != "" {
 			out = append(out, t)
 		}
 	}
 	return out
 }
 
-// parseEnvLines turns "KEY=value" lines into a map (later keys win); nil when
-// empty. A line without '=' is ignored.
-func parseEnvLines(s string) map[string]string {
+// parseEnvLines turns "KEY=value" entries into a map (later keys win); nil when
+// empty. An entry without '=' is ignored.
+func parseEnvLines(in []string) map[string]string {
 	var out map[string]string
-	for _, ln := range strings.Split(s, "\n") {
-		ln = strings.TrimSpace(ln)
-		k, v, ok := strings.Cut(ln, "=")
+	for _, ln := range in {
+		k, v, ok := strings.Cut(strings.TrimSpace(ln), "=")
 		if !ok {
 			continue
 		}
@@ -241,35 +293,45 @@ func (f *projectForm) view() string {
 	b.WriteString(titleStyle.Render("edit project: "+f.name) + "\n\n")
 	for i := range f.fields {
 		fld := &f.fields[i]
+		onField := i == f.cursor
+		open := onField && f.editing // this list/env field is being line-edited
 		marker := "  "
 		lab := fmt.Sprintf("%-16s", fld.label)
-		if i == f.cursor {
-			marker = "› "
-			lab = selStyle.Render(lab)
+		switch {
+		case open:
+			marker, lab = boxTitleHi.Render("▸ "), boxTitleHi.Render(lab) // open for editing
+		case onField:
+			marker, lab = "› ", selStyle.Render(lab)
 		}
-		val := fld.buf
 		if fld.kind == pfText {
-			line := marker + lab + val
-			if i == f.cursor {
-				line += "_"
+			line := marker + lab + fld.text
+			if onField {
+				line += "_" // text fields edit inline
 			}
 			b.WriteString(line + "\n")
 			continue
 		}
-		// list/env: label, then one indented entry per line (the last is edited).
+		// list/env: label, then one indented entry per line.
 		b.WriteString(marker + lab + "\n")
-		entries := strings.Split(val, "\n")
-		for j, e := range entries {
+		if len(fld.lines) == 0 {
+			b.WriteString("      " + faintText.Render("(none — enter to add)") + "\n")
+		}
+		for j, e := range fld.lines {
+			bullet := faintText.Render("· ")
 			caret := ""
-			if i == f.cursor && j == len(entries)-1 {
-				caret = "_"
+			if open && j == f.lineCur {
+				bullet, caret = warnText.Render("▸ "), "_"
 			}
-			b.WriteString("      " + faintText.Render("· ") + e + caret + "\n")
+			b.WriteString("      " + bullet + e + caret + "\n")
 		}
 	}
 	if f.err != "" {
 		b.WriteString("\n" + badText.Render("✗ "+f.err) + "\n")
 	}
-	b.WriteString("\n" + faintText.Render("↑/↓ field · enter new line (lists) · ctrl-s save · esc cancel") + "\n")
+	hint := "↑/↓ field · enter edit list · type edits text · ctrl-s save · esc cancel"
+	if f.editing {
+		hint = "editing " + f.fields[f.cursor].label + " — ↑/↓ line · enter new line · esc done"
+	}
+	b.WriteString("\n" + faintText.Render(hint) + "\n")
 	return b.String()
 }
