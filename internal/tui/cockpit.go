@@ -584,7 +584,11 @@ func (m *rootModel) keybar(w int) string {
 				keys = append(keys, "a answer")
 			}
 			if sel.Worktree != "" {
-				keys = append(keys, "s shell")
+				if m.runningShell(sel.ID) {
+					keys = append(keys, "s shell "+goodText.Render("●")) // a live shell to re-enter
+				} else {
+					keys = append(keys, "s shell")
+				}
 			}
 			if sel.PRURL != "" {
 				keys = append(keys, "o PR")

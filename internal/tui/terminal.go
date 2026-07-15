@@ -1,8 +1,13 @@
 // Embedded terminal surface: a live vtterm.Term rendered full-screen over the
 // cockpit. The Ctrl-q leader is the ONLY reserved key — every other keystroke is
 // encoded and forwarded to the child PTY, so shortcuts inside (the shell, vim,
-// the agent) keep working. This is the first surface of the "workspace"; tabs
-// and the agent view build on it.
+// the agent) keep working.
+//
+// Terminals are PERSISTENT: Ctrl-q DETACHES (the shell keeps running in the
+// background so `composer dev` survives), and 's' on the same session RE-ENTERS
+// it. A terminal is reaped only when its process exits on its own (type `exit`
+// or Ctrl-d), when the session is killed, or when lola quits. The per-session
+// registry lives on the rootModel (m.terms).
 package tui
 
 import (
@@ -18,11 +23,13 @@ import (
 // terminal content.
 const termChromeRows = 2
 
-// termView holds one open embedded terminal.
+// termView holds one embedded terminal, tracked per session so it survives a
+// detach and can be re-entered.
 type termView struct {
-	term  *vtterm.Term
-	title string
-	w, h  int // terminal CONTENT size (window minus chrome)
+	term      *vtterm.Term
+	title     string
+	sessionID string
+	w, h      int // terminal CONTENT size (window minus chrome)
 }
 
 // termFrameMsg wakes the update loop when the terminal screen may have changed.
@@ -37,10 +44,32 @@ func waitTermFrame(t *vtterm.Term) tea.Cmd {
 	}
 }
 
-// openShellTerm starts $SHELL (login) in dir (a session's worktree) as an
-// embedded terminal sized to the current window, and returns the first
-// frame-wait command.
-func (m *rootModel) openShellTerm(title, dir string) tea.Cmd {
+// openShellForSelected re-enters the selected session's existing shell if one is
+// still running, otherwise opens a fresh $SHELL in its worktree — the surface
+// for running the app (composer dev, tests, …) next to the agent that built it.
+func (m *rootModel) openShellForSelected() (tea.Model, tea.Cmd) {
+	sel := m.sessions.selected()
+	if sel == nil {
+		return m, nil
+	}
+	if sel.Worktree == "" {
+		m.sessions.flash, m.sessions.flashGood = "no worktree for this session", false
+		return m, nil
+	}
+	if tv := m.terms[sel.ID]; tv != nil {
+		if tv.term.Exited() { // stale shell that has since exited: replace it
+			m.reapTerm(tv, "")
+		} else {
+			return m, m.attachTerm(tv) // re-enter the running shell
+		}
+	}
+	return m, m.openShellTerm(sel.ID, "shell · "+dash(sel.Issue), sel.Worktree)
+}
+
+// openShellTerm starts $SHELL (login) in dir as a new embedded terminal for
+// sessionID, registers it, attaches to it, and returns the first frame-wait
+// command.
+func (m *rootModel) openShellTerm(sessionID, title, dir string) tea.Cmd {
 	shell := os.Getenv("SHELL")
 	if shell == "" {
 		shell = "/bin/sh"
@@ -59,23 +88,21 @@ func (m *rootModel) openShellTerm(title, dir string) tea.Cmd {
 		m.sessions.flash, m.sessions.flashGood = "shell failed: "+err.Error(), false
 		return nil
 	}
-	m.term = &termView{term: t, title: title, w: cw, h: ch}
+	tv := &termView{term: t, title: title, sessionID: sessionID, w: cw, h: ch}
+	if m.terms == nil {
+		m.terms = map[string]*termView{}
+	}
+	m.terms[sessionID] = tv
+	m.term = tv
 	return waitTermFrame(t)
 }
 
-// openShellForSelected opens an embedded shell in the selected session's
-// worktree — the surface for running the app (composer dev, tests, …) next to
-// the agent that built it.
-func (m *rootModel) openShellForSelected() (tea.Model, tea.Cmd) {
-	sel := m.sessions.selected()
-	if sel == nil {
-		return m, nil
-	}
-	if sel.Worktree == "" {
-		m.sessions.flash, m.sessions.flashGood = "no worktree for this session", false
-		return m, nil
-	}
-	return m, m.openShellTerm("shell · "+dash(sel.Issue), sel.Worktree)
+// attachTerm focuses an existing (running) terminal, fits it to the current
+// window, and resumes its repaint loop.
+func (m *rootModel) attachTerm(tv *termView) tea.Cmd {
+	m.term = tv
+	m.resizeTerm()
+	return waitTermFrame(tv.term)
 }
 
 // termContentSize is the terminal grid size for the current window (floored).
@@ -104,11 +131,23 @@ func (m *rootModel) resizeTerm() {
 	m.term.term.Resize(w, h)
 }
 
-// closeTerm tears down the open terminal (killing the child) and optionally
-// flashes a message in the cockpit it returns to.
-func (m *rootModel) closeTerm(flash string) {
-	if m.term != nil {
-		_ = m.term.term.Close()
+// detachTerm returns to the cockpit but leaves the terminal RUNNING in the
+// registry, so a long-lived process (composer dev) survives and can be
+// re-entered later with 's'.
+func (m *rootModel) detachTerm() {
+	m.term = nil
+}
+
+// reapTerm kills + closes a terminal and removes it from the registry — used
+// when its process has exited, its session is killed, or lola quits. If it is
+// the attached terminal, focus returns to the cockpit (with an optional flash).
+func (m *rootModel) reapTerm(tv *termView, flash string) {
+	if tv == nil {
+		return
+	}
+	_ = tv.term.Close()
+	delete(m.terms, tv.sessionID)
+	if m.term == tv {
 		m.term = nil
 	}
 	if flash != "" {
@@ -116,11 +155,41 @@ func (m *rootModel) closeTerm(flash string) {
 	}
 }
 
-// handleTermKey routes a keystroke while a terminal is open: Ctrl-q exits back
-// to the cockpit; everything else is encoded and forwarded to the child.
+// sweepTerms reaps any DETACHED terminal whose process has exited, so a
+// backgrounded shell that ended on its own doesn't linger as a zombie. Called
+// off the status tick; the attached terminal is reaped on its frame instead.
+func (m *rootModel) sweepTerms() {
+	for id, tv := range m.terms {
+		if tv != m.term && tv.term.Exited() {
+			_ = tv.term.Close()
+			delete(m.terms, id)
+		}
+	}
+}
+
+// closeAllTerms tears every terminal down — called on quit so no child process
+// is orphaned.
+func (m *rootModel) closeAllTerms() {
+	for id, tv := range m.terms {
+		_ = tv.term.Close()
+		delete(m.terms, id)
+	}
+	m.term = nil
+}
+
+// runningShell reports whether a session has a live (non-exited) shell to
+// re-enter, so the cockpit can advertise it.
+func (m *rootModel) runningShell(sessionID string) bool {
+	tv := m.terms[sessionID]
+	return tv != nil && !tv.term.Exited()
+}
+
+// handleTermKey routes a keystroke while a terminal is open: Ctrl-q DETACHES
+// back to the cockpit (leaving the shell running); everything else is encoded
+// and forwarded to the child.
 func (m *rootModel) handleTermKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if k.String() == "ctrl+q" {
-		m.closeTerm("")
+		m.detachTerm()
 		return m, nil
 	}
 	if b := keyToBytes(k); len(b) > 0 {
@@ -193,6 +262,8 @@ func (m *rootModel) termSurfaceView() string {
 	for _, ln := range lines {
 		b.WriteString(previewLine(ln, W) + "\n")
 	}
-	b.WriteString(previewLine(faintText.Render("Ctrl-q back to lola")+" · "+faintText.Render("all other keys go to the terminal"), W))
+	hint := goodText.Render("Ctrl-q") + faintText.Render(" detach (shell keeps running) · ") +
+		faintText.Render("exit/Ctrl-d ends it · other keys → terminal")
+	b.WriteString(previewLine(hint, W))
 	return b.String()
 }

@@ -38,7 +38,8 @@ type rootModel struct {
 	list     listModel
 	sessions sessionsModel
 	form     *formModel
-	term     *termView // non-nil while an embedded terminal is open (owns all keys)
+	term     *termView            // the ATTACHED terminal (nil in the cockpit); owns all keys
+	terms    map[string]*termView // per-session persistent terminals, keyed by session ID
 	width    int
 	height   int
 
@@ -157,7 +158,7 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case termFrameMsg:
 			if m.term.term.Exited() {
-				m.closeTerm("shell exited")
+				m.reapTerm(m.term, "shell exited")
 				return m, nil
 			}
 			return m, waitTermFrame(m.term.term)
@@ -181,6 +182,7 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case statusTickMsg:
+		m.sweepTerms() // reap any detached shell whose process has exited
 		if m.form != nil {
 			return m, statusTick()
 		}
@@ -234,6 +236,7 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tea.KeyPressMsg:
 		if v.String() == "ctrl+c" {
+			m.closeAllTerms()
 			return m, tea.Quit
 		}
 	}
@@ -358,6 +361,7 @@ func (m *rootModel) listKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	switch k.String() {
 	case "q":
+		m.closeAllTerms()
 		return m, tea.Quit
 	case "up", "k":
 		if l.cursor > 0 {

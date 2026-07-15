@@ -481,6 +481,10 @@ func (m *rootModel) updateSessions(msg tea.Msg) (tea.Model, tea.Cmd) {
 		target := s.killTarget
 		s.killTarget = ""
 		if target != "" && (k.String() == "y" || k.String() == "Y") {
+			// The kill removes the worktree, so any shell rooted there must go too.
+			if tv := m.terms[target]; tv != nil {
+				m.reapTerm(tv, "")
+			}
 			return m, killSelectedCmd(target)
 		}
 		return m, nil
@@ -488,6 +492,7 @@ func (m *rootModel) updateSessions(msg tea.Msg) (tea.Model, tea.Cmd) {
 	s.flash, s.flashGood = "", false
 	switch k.String() {
 	case "q":
+		m.closeAllTerms()
 		return m, tea.Quit
 	case "up", "k":
 		return m.sessMove(0, -1)
