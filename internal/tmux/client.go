@@ -3,6 +3,15 @@
 // only observes them (P1) and later controls them (P2/P3) through this
 // client. Session targets always use the "=" prefix so tmux matches names
 // exactly instead of by prefix.
+//
+// Isolation: every command runs against a dedicated tmux server addressed by
+// "-L <socket>" (default "lola"), so lola never touches the user's default
+// tmux server — they can keep using tmux themselves, and any per-server tweaks
+// lola makes (custom key bindings via ConfigureSession) stay on the lola
+// socket. One consequence of moving to "-L lola": sessions that predate this
+// change live on the OLD default server and are invisible here — this is a
+// one-time migration, and adoption (ListSessions) only ever scans the lola
+// server.
 package tmux
 
 import (
@@ -29,14 +38,27 @@ type Session struct {
 
 // Client shells out to tmux. Bin is an absolute path or "tmux"; a bare name
 // is resolved via exec.LookPath (launchd contexts should pass an absolute
-// path, see SPEC).
-type Client struct{ Bin string }
+// path, see SPEC). SocketName selects the isolated tmux server via "-L"; an
+// empty value defaults to "lola" so callers get isolation for free.
+type Client struct {
+	Bin        string
+	SocketName string
+}
 
 func (c *Client) bin() string {
 	if c.Bin == "" {
 		return "tmux"
 	}
 	return c.Bin
+}
+
+// socket is the "-L" server name; empty defaults to "lola" so lola always
+// lives on its own tmux server, never the user's default.
+func (c *Client) socket() string {
+	if c.SocketName == "" {
+		return "lola"
+	}
+	return c.SocketName
 }
 
 // Available reports whether the tmux binary can be resolved to an
@@ -50,7 +72,11 @@ func (c *Client) Available() bool {
 // callers can inspect stderr (ListSessions' no-server detection) alongside
 // the error, which already wraps the trimmed stderr text.
 func (c *Client) run(ctx context.Context, args ...string) (stdout, stderr string, err error) {
-	cmd := exec.CommandContext(ctx, c.bin(), args...)
+	// -L keeps every command on lola's isolated tmux server. It is a server
+	// flag, so it must precede the tmux subcommand; args[0] (the subcommand)
+	// stays intact for the error message below.
+	full := append([]string{"-L", c.socket()}, args...)
+	cmd := exec.CommandContext(ctx, c.bin(), full...)
 	var out, errb bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &errb
@@ -141,8 +167,10 @@ func (c *Client) KillSession(ctx context.Context, name string) error {
 
 // AttachArgs returns the argv for attaching to the session; the caller (the
 // TUI via tea.ExecProcess) execs it itself so tmux takes over the terminal.
+// It carries "-L" so the attach targets lola's isolated server, matching every
+// other command.
 func (c *Client) AttachArgs(name string) []string {
-	return []string{c.bin(), "attach-session", "-t", "=" + name}
+	return []string{c.bin(), "-L", c.socket(), "attach-session", "-t", "=" + name}
 }
 
 // NewSession creates a detached session named name running command in dir.
@@ -154,4 +182,81 @@ func (c *Client) NewSession(ctx context.Context, name, dir, command string) erro
 	}
 	_, _, err := c.run(ctx, args...)
 	return err
+}
+
+// SessionChrome describes the status-bar branding applied by ConfigureSession.
+// Brand is the product mark (defaults to "LOLA"); Label identifies the
+// issue/session; StatusRight is free-form text shown on the right (e.g. the
+// derived agent status). DetachKey, when non-empty (e.g. "F12"), binds a
+// single-key detach on the lola server and is surfaced in the status hint;
+// empty leaves the default "C-b d". Mouse toggles the session's mouse mode.
+type SessionChrome struct {
+	Brand       string
+	Label       string
+	StatusRight string
+	DetachKey   string
+	Mouse       bool
+}
+
+// ConfigureSession applies chrome to a single session on the isolated lola
+// server. All set-option calls are PER-SESSION (targeted with -t, never -g),
+// so they never leak to other lola sessions; the optional detach bind-key is a
+// server key table entry, but because it lives on the "-L lola" socket it
+// cannot touch the user's default tmux. Argv is built directly (no shell), so
+// spaces in the chrome text are safe.
+//
+// Best-effort by contract: it attempts every command and joins any failures
+// into the returned error so the caller can log it, but a styling failure must
+// not fail the spawn — the caller treats a non-nil return as advisory.
+func (c *Client) ConfigureSession(ctx context.Context, name string, opts SessionChrome) error {
+	target := "=" + name
+	cmds := [][]string{
+		{"set-option", "-t", target, "status", "on"},
+		// Defaults truncate to 10 chars; widen so the chrome is not cut off.
+		{"set-option", "-t", target, "status-left-length", "80"},
+		{"set-option", "-t", target, "status-right-length", "80"},
+		{"set-option", "-t", target, "status-left", chromeStatusLeft(opts)},
+		{"set-option", "-t", target, "status-right", chromeStatusRight(opts)},
+	}
+	if opts.Mouse {
+		cmds = append(cmds, []string{"set-option", "-t", target, "mouse", "on"})
+	}
+	if opts.DetachKey != "" {
+		// Root-table (-n: no prefix) binding on the lola socket only.
+		cmds = append(cmds, []string{"bind-key", "-n", opts.DetachKey, "detach-client"})
+	}
+	var errs []error
+	for _, a := range cmds {
+		if _, _, err := c.run(ctx, a...); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// chromeStatusLeft renders the brand and, when present, the label, e.g.
+// "LOLA | NORI-12".
+func chromeStatusLeft(opts SessionChrome) string {
+	brand := opts.Brand
+	if brand == "" {
+		brand = "LOLA"
+	}
+	if opts.Label == "" {
+		return brand
+	}
+	return brand + " | " + opts.Label
+}
+
+// chromeStatusRight renders the free-form status text (when present) followed
+// by the detach hint, e.g. "working | detach F12" or just "detach C-b d".
+func chromeStatusRight(opts SessionChrome) string {
+	key := opts.DetachKey
+	if key == "" {
+		key = "C-b d"
+	}
+	hint := "detach " + key
+	if opts.StatusRight == "" {
+		return hint
+	}
+	return opts.StatusRight + " | " + hint
 }

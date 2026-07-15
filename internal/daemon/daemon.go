@@ -215,14 +215,14 @@ func newDaemon(cfg *config.Config, lin linear.API, logger *log.Logger, home stri
 	d.failingChecks = scmc.FailingChecks
 	d.reviewComments = scmc.ReviewComments
 	d.sendKeys = func(ctx context.Context, tmuxName, text string) error {
-		return (&tmux.Client{Bin: "tmux"}).SendKeys(ctx, tmuxName, text)
+		return d.tmuxClient().SendKeys(ctx, tmuxName, text)
 	}
 	// Brain context-gathering seams (P5.25). brain / brainSummarize stay nil
 	// here: the brain is built by Run/handleReload from [brain] and left off in
 	// tests unless they install a fake seam — so newDaemon alone is a no-brain,
 	// generic-template daemon.
 	d.paneTail = func(ctx context.Context, tmuxName string, lines int) (string, error) {
-		return (&tmux.Client{Bin: "tmux"}).CapturePane(ctx, tmuxName, lines)
+		return d.tmuxClient().CapturePane(ctx, tmuxName, lines)
 	}
 	d.prDiff = scmc.PRDiff
 	// A no-op notifier until Run/reload resolves the [notify] config; keeps the
@@ -286,7 +286,7 @@ func Run(ctx context.Context) error {
 		lolaBin = "lola"
 	}
 	d.lolaBin = lolaBin
-	d.native = newNativeRuntime(cfg, home, lolaBin, d.linearKey)
+	d.native = newNativeRuntime(cfg, home, lolaBin, d.linearKey, d.nativeLogf)
 	d.realNative = true
 	// Reaction notifier (PLAN P3.20): resolve the [notify] table into a live
 	// desktop/Slack fan-out. Rebuilt on reload (handleReload). The Slack webhook
@@ -624,21 +624,40 @@ func (d *Daemon) tickMutex(name string) *sync.Mutex {
 	return m
 }
 
+// tmuxClient builds a tmux client on the configured isolated server socket
+// (default "lola"), so every daemon-side tmux op — SendKeys, CapturePane — targets
+// the same server the sessions actually live on. The socket name is read under
+// d.mu because handleReload swaps d.cfg under the same lock; an unlocked read
+// races that write (caught by -race). Reading it live also keeps this client on
+// the SAME server as the native runtime, which handleReload rebuilds whenever the
+// socket name changes — otherwise a socket-only reload would split the observer
+// (native runtime) and send-keys/capture (this client) onto two servers. Never
+// called while d.mu is held (only via the sendKeys / paneTail seams), so the
+// lock cannot deadlock.
+func (d *Daemon) tmuxClient() *tmux.Client {
+	d.mu.Lock()
+	sock := d.cfg.TmuxSocketName()
+	d.mu.Unlock()
+	return &tmux.Client{Bin: "tmux", SocketName: sock}
+}
+
 // newNativeRuntime assembles the production native runtime for cfg: worktrees
-// under <home>/worktrees, tmux and claude resolved via PATH, and Claude Code
-// lifecycle hooks calling back through lolaBin.
+// under <home>/worktrees, tmux (on cfg's isolated socket) and claude resolved
+// via PATH, and Claude Code lifecycle hooks calling back through lolaBin.
 // linearKey is the provider forwarding the daemon's currently-resolved Linear
 // API key into each spawned session's 0600 .lola/env file (never argv). It is
 // re-read per spawn, so a rotated key is picked up next spawn; it returns ""
-// when no key is available so spawning is never blocked on it.
-func newNativeRuntime(cfg *config.Config, home, lolaBin string, linearKey func() string) *runtime.Native {
+// when no key is available so spawning is never blocked on it. logf carries
+// best-effort styling advisories (status-bar chrome) into the daemon log.
+func newNativeRuntime(cfg *config.Config, home, lolaBin string, linearKey func() string, logf func(string, ...any)) *runtime.Native {
 	return &runtime.Native{
 		Cfg:       cfg,
 		WT:        &worktree.Manager{Root: filepath.Join(home, "worktrees")},
-		Tmux:      &tmux.Client{Bin: "tmux"},
+		Tmux:      &tmux.Client{Bin: "tmux", SocketName: cfg.TmuxSocketName()},
 		LolaBin:   lolaBin,
 		Home:      home,
 		LinearKey: linearKey,
+		Logf:      logf,
 	}
 }
 
@@ -717,4 +736,11 @@ func (d *Daemon) logf(poll, format string, args ...any) {
 		format = "[" + poll + "] " + format
 	}
 	d.log.Printf(format, args...)
+}
+
+// nativeLogf adapts logf to the runtime.Native.Logf signature (no poll prefix)
+// so best-effort spawn advisories — tmux status-bar styling failures — land in
+// the daemon log without failing the spawn.
+func (d *Daemon) nativeLogf(format string, args ...any) {
+	d.logf("", format, args...)
 }

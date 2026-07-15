@@ -204,6 +204,38 @@ func TestAttachWithTmuxReturnsExec(t *testing.T) {
 	if m.sessions.flash != "" {
 		t.Errorf("flash = %q, want empty", m.sessions.flash)
 	}
+	// The attach client targets the configured isolated server socket.
+	if got := m.sessions.tmuxClient("lola").SocketName; got != "lola" {
+		t.Errorf("attach client socket = %q, want lola", got)
+	}
+}
+
+// The pre-attach hint names the issue and the resolved detach key so the user
+// knows how to get back before tmux takes over the terminal.
+func TestAttachHintLine(t *testing.T) {
+	if got, want := attachHintLine("ENG-123", "Ctrl-b d"),
+		"attaching to ENG-123 — press Ctrl-b d to return to Lola"; got != want {
+		t.Errorf("attachHintLine = %q, want %q", got, want)
+	}
+	// A bound single-key detach flows through as the hint key verbatim.
+	if got, want := attachHintLine("ENG-9", "F12"),
+		"attaching to ENG-9 — press F12 to return to Lola"; got != want {
+		t.Errorf("attachHintLine custom key = %q, want %q", got, want)
+	}
+	// A blank issue still reads sensibly.
+	if got := attachHintLine("", "Ctrl-b d"); !strings.Contains(got, "attaching to session") {
+		t.Errorf("attachHintLine blank issue = %q, want a 'session' fallback", got)
+	}
+}
+
+// The resolved detach hint comes from the [tmux] config: a custom detach_key
+// becomes the hint key so the pre-attach line matches whatever actually detaches.
+func TestAttachHintUsesResolvedDetachKey(t *testing.T) {
+	m := newTestRoot(t)
+	m.cfg.Tmux.DetachKey = "F12"
+	if got := attachHintLine("ENG-123", m.cfg.Tmux.DetachHint()); !strings.Contains(got, "press F12") {
+		t.Errorf("hint = %q, want the configured F12 detach key", got)
+	}
 }
 
 // The sessions tab kills the selected session behind a y/n confirm, mirroring

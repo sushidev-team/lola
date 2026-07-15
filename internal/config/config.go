@@ -103,6 +103,7 @@ type Config struct {
 	Notify    NotifyConfig    `toml:"notify"`
 	Brain     BrainConfig     `toml:"brain"`
 	Review    ReviewConfig    `toml:"review"`
+	Tmux      TmuxConfig      `toml:"tmux"`
 }
 
 // Duration is a time.Duration that TOML-round-trips as a Go duration string
@@ -133,6 +134,7 @@ type fileConfig struct {
 	Notify    *fileNotifyConfig    `toml:"notify,omitempty"`
 	Brain     *fileBrainConfig     `toml:"brain,omitempty"`
 	Review    *fileReviewConfig    `toml:"review,omitempty"`
+	Tmux      *fileTmuxConfig      `toml:"tmux,omitempty"`
 }
 
 type fileDefaults struct {
@@ -155,6 +157,7 @@ func (fc *fileConfig) config() *Config {
 		Notify:    resolveNotify(fc.Notify),
 		Brain:     resolveBrain(fc.Brain),
 		Review:    resolveReview(fc.Review),
+		Tmux:      resolveTmux(fc.Tmux),
 	}
 }
 
@@ -172,6 +175,7 @@ func (c *Config) file() *fileConfig {
 		Notify:    notifyFile(c.Notify),
 		Brain:     brainFile(c.Brain),
 		Review:    reviewFile(c.Review),
+		Tmux:      tmuxFile(c.Tmux),
 	}
 }
 

@@ -419,6 +419,11 @@ func TestHandleHookEventToolUseTouchesLastSeenOnly(t *testing.T) {
 	if time.Since(s.LastSeen) > time.Minute {
 		t.Errorf("tool_use must touch LastSeen, still %v", s.LastSeen)
 	}
+	// tool_use is POSITIVE evidence of work: it must stamp LastActivityAt (the
+	// anchor for the observer's anti-false-working guard), which the seed left zero.
+	if time.Since(s.LastActivityAt) > time.Minute {
+		t.Errorf("tool_use must stamp LastActivityAt (positive activity), still %v", s.LastActivityAt)
+	}
 }
 
 func TestHandleHookEventUnknownSessionOKAndLoggedOnce(t *testing.T) {

@@ -65,7 +65,7 @@ func TestListSessionsParsesFormatLines(t *testing.T) {
 			t.Errorf("session[%d] = %+v, want %+v", i, got[i], want[i])
 		}
 	}
-	wantArgs := "ls -F #{session_name}\t#{session_created}\t#{session_attached}"
+	wantArgs := "-L lola ls -F #{session_name}\t#{session_created}\t#{session_attached}"
 	if args := loggedArgs(t, argsLog); args != wantArgs {
 		t.Errorf("invoked %q, want %q", args, wantArgs)
 	}
@@ -104,8 +104,8 @@ func TestHasUsesExactMatchTarget(t *testing.T) {
 	if !c.Has(context.Background(), "lola-NORI-12-1") {
 		t.Error("Has: want true on exit 0")
 	}
-	if args := loggedArgs(t, argsLog); args != "has-session -t =lola-NORI-12-1" {
-		t.Errorf("invoked %q, want exact-match target =lola-NORI-12-1", args)
+	if args := loggedArgs(t, argsLog); args != "-L lola has-session -t =lola-NORI-12-1" {
+		t.Errorf("invoked %q, want exact-match target =lola-NORI-12-1 on lola socket", args)
 	}
 }
 
@@ -130,8 +130,8 @@ func TestCapturePaneArgsAndOutput(t *testing.T) {
 	if out != fixture+"\n" {
 		t.Errorf("CapturePane output %q, want rendered screen incl. ANSI %q", out, fixture+"\n")
 	}
-	if args := loggedArgs(t, argsLog); args != "capture-pane -p -e -t =main -S -200" {
-		t.Errorf("invoked %q, want capture-pane -p -e -t =main -S -200", args)
+	if args := loggedArgs(t, argsLog); args != "-L lola capture-pane -p -e -t =main -S -200" {
+		t.Errorf("invoked %q, want -L lola capture-pane -p -e -t =main -S -200", args)
 	}
 }
 
@@ -142,7 +142,7 @@ func TestSendKeysLiteralThenEnter(t *testing.T) {
 	if err := c.SendKeys(context.Background(), "main", "fix the CI failure"); err != nil {
 		t.Fatalf("SendKeys: %v", err)
 	}
-	want := "send-keys -t =main -l fix the CI failure\nsend-keys -t =main Enter"
+	want := "-L lola send-keys -t =main -l fix the CI failure\n-L lola send-keys -t =main Enter"
 	if args := loggedArgs(t, argsLog); args != want {
 		t.Errorf("invoked:\n%s\nwant literal text then Enter:\n%s", args, want)
 	}
@@ -165,7 +165,7 @@ func TestNewSessionArgs(t *testing.T) {
 	if err := c.NewSession(context.Background(), "lola-NORI-12-1", "/work/nori", "claude"); err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
-	want := "new-session -d -s lola-NORI-12-1 -c /work/nori claude"
+	want := "-L lola new-session -d -s lola-NORI-12-1 -c /work/nori claude"
 	if args := loggedArgs(t, argsLog); args != want {
 		t.Errorf("invoked %q, want %q", args, want)
 	}
@@ -178,7 +178,7 @@ func TestNewSessionOmitsEmptyCommand(t *testing.T) {
 	if err := c.NewSession(context.Background(), "s1", "/work", ""); err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
-	want := "new-session -d -s s1 -c /work"
+	want := "-L lola new-session -d -s s1 -c /work"
 	if args := loggedArgs(t, argsLog); args != want {
 		t.Errorf("invoked %q, want default-shell form %q", args, want)
 	}
@@ -191,8 +191,8 @@ func TestKillSessionArgs(t *testing.T) {
 	if err := c.KillSession(context.Background(), "lola-NORI-12-1"); err != nil {
 		t.Fatalf("KillSession: %v", err)
 	}
-	if args := loggedArgs(t, argsLog); args != "kill-session -t =lola-NORI-12-1" {
-		t.Errorf("invoked %q, want exact-match kill-session target", args)
+	if args := loggedArgs(t, argsLog); args != "-L lola kill-session -t =lola-NORI-12-1" {
+		t.Errorf("invoked %q, want exact-match kill-session target on lola socket", args)
 	}
 }
 
@@ -209,7 +209,7 @@ func TestKillSessionMissingIsError(t *testing.T) {
 func TestAttachArgs(t *testing.T) {
 	c := &Client{Bin: "tmux"}
 	got := c.AttachArgs("main")
-	want := []string{"tmux", "attach-session", "-t", "=main"}
+	want := []string{"tmux", "-L", "lola", "attach-session", "-t", "=main"}
 	if len(got) != len(want) {
 		t.Fatalf("AttachArgs = %v, want %v", got, want)
 	}
@@ -222,6 +222,32 @@ func TestAttachArgs(t *testing.T) {
 	abs := &Client{Bin: "/opt/homebrew/bin/tmux"}
 	if args := abs.AttachArgs("main"); args[0] != "/opt/homebrew/bin/tmux" {
 		t.Errorf("AttachArgs[0] = %q, want configured absolute bin", args[0])
+	}
+}
+
+func TestAttachArgsCustomSocket(t *testing.T) {
+	c := &Client{Bin: "tmux", SocketName: "lolatest"}
+	got := c.AttachArgs("main")
+	want := []string{"tmux", "-L", "lolatest", "attach-session", "-t", "=main"}
+	if len(got) != len(want) {
+		t.Fatalf("AttachArgs = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("AttachArgs = %v, want %v", got, want)
+		}
+	}
+}
+
+func TestCustomSocketNameOnEveryCommand(t *testing.T) {
+	bin, argsLog := fakeTmux(t, "", "", 0)
+	c := &Client{Bin: bin, SocketName: "lolatest"}
+
+	if err := c.KillSession(context.Background(), "s1"); err != nil {
+		t.Fatalf("KillSession: %v", err)
+	}
+	if args := loggedArgs(t, argsLog); args != "-L lolatest kill-session -t =s1" {
+		t.Errorf("invoked %q, want configured socket lolatest on the command", args)
 	}
 }
 
@@ -239,5 +265,78 @@ func TestAvailable(t *testing.T) {
 	t.Setenv("PATH", filepath.Dir(bin))
 	if !(&Client{Bin: "tmux"}).Available() {
 		t.Error("Available: want true for bare name resolved via PATH")
+	}
+}
+
+func TestConfigureSessionEmitsChromeArgv(t *testing.T) {
+	bin, argsLog := fakeTmux(t, "", "", 0)
+	c := &Client{Bin: bin}
+
+	err := c.ConfigureSession(context.Background(), "lola-NORI-12-1", SessionChrome{
+		Brand:       "LOLA",
+		Label:       "NORI-12",
+		StatusRight: "working",
+		DetachKey:   "F12",
+		Mouse:       true,
+	})
+	if err != nil {
+		t.Fatalf("ConfigureSession: %v", err)
+	}
+	// Every set-option is per-session (-t, never -g); the bind-key is a
+	// root-table entry confined to the lola socket (leading -L lola).
+	want := strings.Join([]string{
+		"-L lola set-option -t =lola-NORI-12-1 status on",
+		"-L lola set-option -t =lola-NORI-12-1 status-left-length 80",
+		"-L lola set-option -t =lola-NORI-12-1 status-right-length 80",
+		"-L lola set-option -t =lola-NORI-12-1 status-left LOLA | NORI-12",
+		"-L lola set-option -t =lola-NORI-12-1 status-right working | detach F12",
+		"-L lola set-option -t =lola-NORI-12-1 mouse on",
+		"-L lola bind-key -n F12 detach-client",
+	}, "\n")
+	if args := loggedArgs(t, argsLog); args != want {
+		t.Errorf("ConfigureSession argv:\n%s\nwant:\n%s", args, want)
+	}
+}
+
+func TestConfigureSessionDefaultsNoDetachBindingNoMouse(t *testing.T) {
+	bin, argsLog := fakeTmux(t, "", "", 0)
+	c := &Client{Bin: bin}
+
+	err := c.ConfigureSession(context.Background(), "s1", SessionChrome{
+		Label:       "NORI-12",
+		StatusRight: "idle",
+	})
+	if err != nil {
+		t.Fatalf("ConfigureSession: %v", err)
+	}
+	got := loggedArgs(t, argsLog)
+	if strings.Contains(got, "bind-key") {
+		t.Errorf("empty DetachKey must emit no bind-key, got:\n%s", got)
+	}
+	if strings.Contains(got, "mouse") {
+		t.Errorf("Mouse=false must emit no mouse set-option, got:\n%s", got)
+	}
+	// Brand defaults to LOLA; detach hint defaults to C-b d.
+	if !strings.Contains(got, "-L lola set-option -t =s1 status-left LOLA | NORI-12") {
+		t.Errorf("status-left should default brand to LOLA, got:\n%s", got)
+	}
+	if !strings.Contains(got, "-L lola set-option -t =s1 status-right idle | detach C-b d") {
+		t.Errorf("status-right should carry status + default detach hint, got:\n%s", got)
+	}
+}
+
+func TestConfigureSessionBestEffortJoinsErrors(t *testing.T) {
+	bin, argsLog := fakeTmux(t, "", "boom", 1)
+	c := &Client{Bin: bin}
+
+	err := c.ConfigureSession(context.Background(), "s1", SessionChrome{DetachKey: "F12"})
+	if err == nil {
+		t.Fatal("ConfigureSession: want joined error when tmux fails")
+	}
+	// Best-effort: every command is attempted despite earlier failures
+	// (5 per-session set-options + 1 bind-key).
+	lines := strings.Split(loggedArgs(t, argsLog), "\n")
+	if len(lines) != 6 {
+		t.Errorf("want all 6 commands attempted, got %d:\n%s", len(lines), strings.Join(lines, "\n"))
 	}
 }

@@ -373,6 +373,38 @@ authenticated** (`coderabbit auth login`). A pass **spends a CodeRabbit review**
 and can take a while (budget ~300s); if coderabbit is missing, unauthenticated,
 or times out, the pass **skips gracefully** with no effect on the session.
 
+### `[tmux]` (optional)
+
+Tunes the **attach UX** for the isolated tmux server lola runs its sessions on.
+Every field has a safe default, so omitting the table is **zero behavior
+change**. Nothing here is validated (all values are free-form) and a config
+without `[tmux]` always validates.
+
+| Key | Type | Description |
+| --- | --- | --- |
+| `socket_name` | string | The tmux server socket (`tmux -L <name>`) lola runs sessions on. Default `"lola"`. This is its **own** server, isolated from your default tmux. |
+| `detach_key` | string | Opt-in single key bound to detach (e.g. `"F12"`). Empty keeps tmux's default **Ctrl-b d**. The status bar's detach hint follows whatever this resolves to. |
+| `status_right` | string | Raw tmux `status-right` format override. Empty uses lola's built-in branded bar. |
+| `mouse` | bool | Enable tmux mouse mode inside the session. Default `false`. |
+
+## Attaching to a session
+
+Each agent runs inside a **tmux session** — a git worktree with Claude Code
+live in it. Open the TUI's **session view** and press **Enter** on a session to
+attach; the terminal hands over to tmux and you see the agent's pane, dressed
+with a branded status bar (the **LOLA** brand, the session's Linear issue as its
+label, and a detach hint).
+
+To leave without stopping the agent, **detach**: press **Ctrl-b d** (tmux's
+default), or the single key you bound via `[tmux].detach_key` — the status bar's
+hint always names the right one. Detaching just returns you to the TUI; the
+session keeps running.
+
+lola runs these sessions on its **own tmux server** (`tmux -L lola`, or your
+`[tmux].socket_name`), fully separate from your personal default tmux. Attaching
+to or detaching from a lola session never touches your own tmux sessions,
+options, or key bindings.
+
 ## Secrets
 
 The Linear API key is resolved at dispatch time, keychain first, then

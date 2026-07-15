@@ -9,11 +9,29 @@ import (
 	"context"
 	"time"
 
+	"github.com/sushidev-team/lola/internal/attention"
 	"github.com/sushidev-team/lola/internal/scm"
 	"github.com/sushidev-team/lola/internal/session"
 )
 
 const observeInterval = 30 * time.Second
+
+// staleWorkingThreshold is the anti-false-working guard's patience: a session
+// whose stored status is "working" but which has had NO positive activity
+// (session.LastActivityAt — a tool_use/user_prompt hook or an observed
+// ActivityWorking pane) for longer than this, AND whose live pane does not
+// itself show a working cue, stops being trusted as "working". It is comfortably
+// larger than the observeInterval so a briefly-idle-between-hooks agent is not
+// downgraded mid-turn: any hook or working pane within the last ~1.5 observe
+// cycles keeps the session working. It also subsumes the "a very recent hook
+// wins over an Unknown pane" precedence — an Unknown pane never downgrades a
+// working status until this window has fully lapsed.
+const staleWorkingThreshold = 45 * time.Second
+
+// observePaneLines is how many trailing rows the observer captures to classify
+// activity. The classifier only needs the last rendered screen (its status /
+// input-box line), so a small tail keeps the per-cycle capture cheap.
+const observePaneLines = 50
 
 // observeExecTimeout bounds EVERY external exec (gh/tmux) of an observation
 // cycle individually. The cycle runs on a WithoutCancel context (see
@@ -164,6 +182,42 @@ func (d *Daemon) observeNative(ctx context.Context) {
 			}
 		}
 
+		// Live-pane activity corroboration (working-vs-waiting BULLETPROOF):
+		// capture the pane ONCE this cycle for EVERY alive session. Claude Code
+		// hooks do not reliably fire when the agent asks a plain-text question and
+		// waits, so a stuck "working" (pre-PR) or an unsurfaced block (post-PR) is
+		// exactly the reported bug; the live pane is the authority that corrects it.
+		//   - Pre-PR (cur.PR == nil): the hook-driven worklife status (working /
+		//     idle / needs_input) stands unchecked, so the pane is its full
+		//     authority — see paneReconcile.
+		//   - Post-PR: scm.DeriveStatus owns the status, EXCEPT that a definite
+		//     waiting pane showing an answerable question still surfaces
+		//     needs_input — an agent can ask a plain-text follow-up AFTER opening a
+		//     PR (review feedback, "also bump the changelog?") with no reliable
+		//     hook, and must not be masked by the PR-derived status.
+		// A pane we cannot READ is treated as ActivityUnknown (not skipped): a pane
+		// that cannot confirm work must not keep a hook-stuck "working" trusted, so
+		// the anti-false-working staleness guard still runs. Classify/Parse are
+		// pure reads of the (attacker-influenceable) text and are never executed or
+		// trusted; the capture reuses the observer exec budget and aborts on
+		// shutdown via the bounded ctx.
+		paneClassified := false
+		var paneAct attention.Activity
+		var paneQuestion bool
+		if alive {
+			cctx, cancel := context.WithTimeout(ctx, observeExecTimeout)
+			text, err := d.paneTail(cctx, paneTarget(s), observePaneLines)
+			cancel()
+			if err != nil {
+				d.logf("", "observe: pane capture for native %s failed (treating as unknown): %v", s.ID, err)
+				paneAct = attention.ActivityUnknown
+			} else {
+				paneAct = attention.Classify(text)
+				_, paneQuestion = attention.Parse(text)
+			}
+			paneClassified = true
+		}
+
 		// Merge this cycle's facts as ONE atomic read-modify-write. The execs
 		// above take seconds, and a hook event (needs_input / idle /
 		// session_ended) can land on the record meanwhile — deriving the
@@ -172,6 +226,7 @@ func (d *Daemon) observeNative(ctx context.Context) {
 		// blocked on a permission prompt fires no further hooks. Update
 		// re-reads the CURRENT record under the store lock, so a concurrent
 		// needs_input flows into nativeStatus and is preserved.
+		now := time.Now()
 		becameDead, applied := false, false
 		updated, known := d.sessions.Update(s.ID, func(cur *session.Session) bool {
 			if cur.Repo == "" {
@@ -181,6 +236,26 @@ func (d *Daemon) observeNative(ctx context.Context) {
 				cur.PR = pr
 			}
 			status := nativeStatus(cur.Status, alive, cur.PR)
+			// Reconcile the hook-driven worklife status against the live pane.
+			// Only pre-PR (cur.PR == nil) worklife statuses are pane-owned; a
+			// PR-derived status stays authoritative EXCEPT for the post-PR waiting
+			// backstop below. Guarded on a successful classify this cycle.
+			if paneClassified && cur.PR == nil && isWorklife(status) {
+				status = paneReconcile(cur, status, paneAct, paneQuestion, now)
+			} else if paneClassified && cur.PR != nil && alive &&
+				status != "merged" && paneAct == attention.ActivityWaiting && paneQuestion {
+				// Post-PR waiting backstop (BULLETPROOF, part 2): a DEFINITE
+				// waiting pane (input box at rest, no spinner) that ALSO shows an
+				// answerable question is positive evidence the agent is blocked on
+				// a human despite the open PR. Surface needs_input so the human is
+				// told and P7's cmd=answer is permitted; the existing needs_input
+				// rescue in nativeStatus then preserves it across cycles until a
+				// hook or working pane moves it on. A merged PR is terminal and
+				// never overridden; a bare idle prompt (no question) is left on its
+				// PR-derived status so routine post-PR idling is not escalated.
+				cur.AtPrompt = false
+				status = "needs_input"
+			}
 			if !alive && status == cur.Status {
 				// Already-settled terminal record: discard so LastSeen
 				// freezes and the store's retention prune eventually drops it.
@@ -258,4 +333,71 @@ func nativeStatus(current string, alive bool, pr *scm.PR) string {
 		return "dead"
 	}
 	return status
+}
+
+// isWorklife reports whether status is one of the pre-PR "worklife" states the
+// pane classifier is allowed to own — the hook-driven trio that stands unchecked
+// until a PR exists. Terminal / PR-derived / session_ended statuses are left
+// alone so the pane never fights an authoritative signal.
+func isWorklife(status string) bool {
+	return status == "working" || status == "idle" || status == "needs_input"
+}
+
+// paneReconcile is the working-vs-waiting authority: it adjusts a pre-PR
+// worklife status using the live pane classification and upholds the invariant
+// that "working" requires POSITIVE evidence of activity. It returns the
+// reconciled status and may stamp LastActivityAt / clear AtPrompt on cur.
+//
+// Precedence (documented, non-flapping):
+//
+//   - ActivityWorking is positive proof of work: the status becomes "working"
+//     and LastActivityAt is stamped, trusted even over a STALE hook-set
+//     needs_input (the agent has provably resumed). This is the only upgrade
+//     back to working from the pane.
+//   - ActivityWaiting is a definite "human awaited" cue (input box at rest, no
+//     spinner): the status becomes "needs_input". A definite waiting pane wins
+//     over a "working" status (THE BUG FIX — a waiting agent no longer reports
+//     working) and reinforces an existing hook-set needs_input. AtPrompt stays
+//     false: the agent is at a prompt for the HUMAN, not safe for auto
+//     send-keys, and P7's cmd=answer still permits a human reply on needs_input.
+//   - ActivityUnknown does NOT derive working/waiting from the pane — the
+//     hook-driven status stands, so a very recent hook (working from tool_use /
+//     user_prompt, or needs_input from a Notification) always wins over an
+//     ambiguous pane. The one exception is the anti-false-working guard below.
+//
+// Anti-false-working guard (ActivityUnknown only): a "working" status with no
+// positive activity for longer than staleWorkingThreshold, which the pane
+// cannot confirm, must stop asserting work — it downgrades to needs_input when a
+// question/prompt is visible, else to idle. It never fires before the threshold
+// (no flapping), and requires the pane to NOT show a working cue (Unknown). A
+// working status that has never recorded activity (LastActivityAt zero — a
+// freshly adopted/spawned session before its first heartbeat) starts the
+// staleness clock from now instead of downgrading on first sight, so a genuinely
+// starting agent is given the same grace window rather than flickering to idle.
+func paneReconcile(cur *session.Session, status string, act attention.Activity, hasQuestion bool, now time.Time) string {
+	switch act {
+	case attention.ActivityWorking:
+		cur.LastActivityAt = now
+		cur.AtPrompt = false
+		return "working"
+	case attention.ActivityWaiting:
+		cur.AtPrompt = false
+		return "needs_input"
+	default: // ActivityUnknown: keep the hook status, subject to the guard.
+		if status != "working" {
+			return status
+		}
+		if cur.LastActivityAt.IsZero() {
+			cur.LastActivityAt = now // start the clock; grace this cycle
+			return status
+		}
+		if now.Sub(cur.LastActivityAt) <= staleWorkingThreshold {
+			return status // still within the activity window: trust the hook
+		}
+		cur.AtPrompt = false
+		if hasQuestion {
+			return "needs_input"
+		}
+		return "idle"
+	}
 }

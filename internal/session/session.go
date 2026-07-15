@@ -31,6 +31,16 @@ type Session struct {
 	Status    string    `json:"status"` // derived
 	FirstSeen time.Time `json:"first_seen"`
 	LastSeen  time.Time `json:"last_seen"`
+	// LastActivityAt is the last time we had POSITIVE evidence of work on this
+	// session: a tool_use / user_prompt hook heartbeat, or an observed pane the
+	// activity classifier read as ActivityWorking. It is the anchor for the
+	// observer's anti-false-working guard — a session whose stored status is
+	// "working" but whose LastActivityAt has gone stale (and whose pane cannot
+	// confirm work) is no longer trusted as working. Distinct from LastSeen,
+	// which is stamped on EVERY store write (including a mere liveness touch)
+	// and therefore is NOT evidence of activity. Persisted so the guard survives
+	// a daemon restart.
+	LastActivityAt time.Time `json:"last_activity_at,omitempty"`
 	// RemovedLabels are the match-label UUIDs the post-spawn label flip
 	// actually stripped from this issue (the trigger labels it carried at
 	// flip time — a strict subset of match_labels under match_mode=any). An

@@ -142,9 +142,12 @@ func (s *sessionsModel) paneLines() int {
 	return previewLines
 }
 
-func (s *sessionsModel) tmuxClient() *tmux.Client {
+// tmuxClient lazily builds the attach client on the configured isolated server
+// socket (default "lola") so the TUI attaches to the same server the daemon and
+// sessions live on. socketName is the resolved [tmux].socket_name from config.
+func (s *sessionsModel) tmuxClient(socketName string) *tmux.Client {
 	if s.tmux == nil {
-		s.tmux = &tmux.Client{}
+		s.tmux = &tmux.Client{SocketName: socketName}
 	}
 	return s.tmux
 }
@@ -547,9 +550,29 @@ func (m *rootModel) attachSelected() (tea.Model, tea.Cmd) {
 		m.sessions.flash = "no tmux session (AO desktop runtime)"
 		return m, nil
 	}
-	argv := m.sessions.tmuxClient().AttachArgs(sel.TmuxName)
+	argv := m.sessions.tmuxClient(m.cfg.TmuxSocketName()).AttachArgs(sel.TmuxName)
 	c := exec.Command(argv[0], argv[1:]...)
-	return m, tea.ExecProcess(c, func(err error) tea.Msg { return attachDoneMsg{err: err} })
+	// One-line hint printed just above the handoff so the user knows how to get
+	// back before tmux takes over the terminal; the detach key is whatever the
+	// resolved [tmux] config actually binds (default Ctrl-b d). tea.Sequence
+	// prints the hint, then execs the attach; on detach the sessions view is
+	// restored by the normal render loop (attachDoneMsg only flashes on error).
+	hint := attachHintLine(sel.Issue, m.cfg.Tmux.DetachHint())
+	return m, tea.Sequence(
+		tea.Printf("%s", hint),
+		tea.ExecProcess(c, func(err error) tea.Msg { return attachDoneMsg{err: err} }),
+	)
+}
+
+// attachHintLine is the pre-attach one-liner: "attaching to <issue> — press
+// <detachHint> to return to Lola". A blank issue falls back to "session" so the
+// line always reads sensibly; detachHint is the resolved human-facing key
+// (config.TmuxConfig.DetachHint) so it matches whatever actually detaches.
+func attachHintLine(issue, detachHint string) string {
+	if issue == "" {
+		issue = "session"
+	}
+	return fmt.Sprintf("attaching to %s — press %s to return to Lola", issue, detachHint)
 }
 
 // openSelectedPR opens the selected session's PR in the default browser,

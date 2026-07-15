@@ -8,6 +8,7 @@ import (
 
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/linear"
+	"github.com/sushidev-team/lola/internal/runtime"
 )
 
 // newEnableTestDaemon builds a daemon whose config (poll p1 + [[project]]
@@ -99,5 +100,46 @@ func TestReloadRejectsInvalidConfigKeepsPrevious(t *testing.T) {
 	}
 	if d.cfg.Defaults.GlobalCap != 10 {
 		t.Errorf("reload must keep the previous config, global_cap = %d", d.cfg.Defaults.GlobalCap)
+	}
+}
+
+// Finding 4: a reload that changes [tmux].socket_name (but not [[project]]) must
+// rebuild the native runtime so its Alive/Adopt/Kill/Spawn land on the SAME
+// server as d.tmuxClient's live send-keys/capture. Without the rebuild the
+// observer would read the OLD server while keys go to the NEW one.
+func TestReloadRebuildsNativeOnSocketChange(t *testing.T) {
+	d := newEnableTestDaemon(t, labelPoll("p1"))
+	// Stand in a real native runtime on the default "lola" socket and mark it
+	// owned so the realNative-gated rebuild path is exercised.
+	d.native = newNativeRuntime(d.cfg, d.home, d.lolaBin, d.linearKey, d.nativeLogf)
+	d.realNative = true
+	if got := d.native.(*runtime.Native).Tmux.SocketName; got != config.DefaultTmuxSocketName {
+		t.Fatalf("precondition: native socket = %q, want %q", got, config.DefaultTmuxSocketName)
+	}
+
+	// Persist a config identical except for the tmux socket name.
+	path, err := config.DefaultPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	nc := testConfig(labelPoll("p1"))
+	nc.Tmux = config.TmuxConfig{SocketName: "team-lola"}
+	if err := nc.Save(path); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := d.handleReload(context.Background()); err != nil {
+		t.Fatalf("handleReload: %v", err)
+	}
+
+	nat, ok := d.native.(*runtime.Native)
+	if !ok {
+		t.Fatalf("native is %T, want *runtime.Native", d.native)
+	}
+	if got := nat.Tmux.SocketName; got != "team-lola" {
+		t.Fatalf("native tmux socket = %q, want team-lola (runtime must be rebuilt on socket change)", got)
+	}
+	if got := d.tmuxClient().SocketName; got != "team-lola" {
+		t.Fatalf("tmuxClient socket = %q, want team-lola (both must target the same server)", got)
 	}
 }

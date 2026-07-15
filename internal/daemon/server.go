@@ -156,6 +156,7 @@ func (d *Daemon) handleHookEvent(req protocol.Request) protocol.Response {
 		statusChanged bool
 		newStatus     string
 	)
+	now := time.Now()
 	_, known := d.sessions.Update(req.Session, func(sess *session.Session) bool {
 		prev := sess.Status
 		switch req.Event {
@@ -169,7 +170,8 @@ func (d *Daemon) handleHookEvent(req protocol.Request) protocol.Response {
 			sess.Status = "session_ended"
 			sess.AtPrompt = false
 		case "tool_use":
-			sess.AtPrompt = false // mid-turn (busy): never send-keys
+			sess.AtPrompt = false     // mid-turn (busy): never send-keys
+			sess.LastActivityAt = now // POSITIVE evidence of work (heartbeat)
 			if sess.Status == "idle" {
 				sess.Status = "working"
 			}
@@ -179,6 +181,7 @@ func (d *Daemon) handleHookEvent(req protocol.Request) protocol.Response {
 			// types into the now-busy pane, and promote an idle / needs_input
 			// session to working — the agent is actively processing again.
 			sess.AtPrompt = false
+			sess.LastActivityAt = now // POSITIVE evidence of work (turn start)
 			if sess.Status == "idle" || sess.Status == "needs_input" {
 				sess.Status = "working"
 			}
@@ -354,10 +357,16 @@ func (d *Daemon) handleReload(ctx context.Context) error {
 	// now-disabled or newly-unavailable coderabbit leaves reviewRun nil (review
 	// off). Under d.mu, like the brain.
 	d.setReviewLocked(nc.Review)
-	if d.realNative && !reflect.DeepEqual(old.Projects, nc.Projects) {
-		// The native runtime holds a config reference for its project
-		// registry: recreate it whenever the [[project]] set changes.
-		d.native = newNativeRuntime(nc, d.home, d.lolaBin, d.linearKey)
+	if d.realNative && (!reflect.DeepEqual(old.Projects, nc.Projects) ||
+		old.TmuxSocketName() != nc.TmuxSocketName()) {
+		// The native runtime captures both its config reference (for the project
+		// registry) AND its tmux socket at construction, so recreate it whenever
+		// the [[project]] set OR [tmux].socket_name changes. Rebuilding on a
+		// socket change keeps the runtime's Alive/Adopt/Kill/Spawn on the same
+		// server as d.tmuxClient's live send-keys/capture; without it a
+		// socket-only reload would leave the observer reading the OLD server while
+		// keys go to the NEW one.
+		d.native = newNativeRuntime(nc, d.home, d.lolaBin, d.linearKey, d.nativeLogf)
 	}
 	d.mu.Unlock()
 

@@ -123,6 +123,26 @@ endpoint = "https://api.linear.app/graphql"
 # timeout_seconds = 300          # hard cap per review pass; must be >= 0
 
 # ---------------------------------------------------------------------------
+# [tmux] — OPTIONAL attach-UX tuning. Every field has a safe default, so you can
+# omit this whole section for zero behavior change. The values shown below ARE
+# the built-in defaults.
+#
+# ISOLATION: lola runs its agent sessions on its OWN tmux server, addressed as
+# `tmux -L <socket_name>`. That server is SEPARATE from your personal default
+# tmux — attaching to or detaching from a lola session never touches your own
+# tmux sessions or options.
+#
+# DETACH: by default you detach with tmux's built-in Ctrl-b d. Binding a single
+# friendlier key (e.g. "F12") is OPT-IN because remapping keys is a taste
+# choice; when set, lola's status bar shows that key as the detach hint.
+# ---------------------------------------------------------------------------
+# [tmux]
+# socket_name = "lola"   # isolated tmux server socket (tmux -L); its own server, never your default one
+# detach_key = ""        # opt-in single detach key (e.g. "F12"); empty keeps tmux's default Ctrl-b d
+# status_right = ""       # raw tmux status-right override; empty = lola's built-in branded bar
+# mouse = false           # enable tmux mouse mode inside the session
+
+# ---------------------------------------------------------------------------
 # [[project]] — repository registry for the native runtime (one table per
 # repo). Every poll references a project by name; lola then creates a git
 # worktree per session under ~/.lola/worktrees/<project>/... and runs Claude

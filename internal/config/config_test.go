@@ -103,10 +103,11 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	orig.Linear = LinearConfig{APIKeyKeychain: "lola-linear", APIKeyEnv: "LINEAR_API_KEY", Endpoint: DefaultEndpoint}
 	orig.Projects = []Project{validProject()}
 	orig.Polls = []Poll{validPoll(), secondPoll()}
-	// Resolved reaction/notify tables round-trip exactly; a load always
+	// Resolved reaction/notify/tmux tables round-trip exactly; a load always
 	// materializes them, so a round-tripped config carries the defaults.
 	orig.Reactions = defaultReactions()
 	orig.Notify = defaultNotify()
+	orig.Tmux = defaultTmux()
 
 	if err := orig.Save(path); err != nil {
 		t.Fatal(err)

@@ -82,6 +82,11 @@ type Native struct {
 	// whatever Linear tooling it can otherwise authenticate. It MUST never be a
 	// key captured once as a plain string on this struct.
 	LinearKey func() string
+	// Logf, when non-nil, records best-effort advisories that must not fail an
+	// operation — currently the tmux status-bar styling applied after a session
+	// launches. A styling failure only logs; the spawn always succeeds. nil
+	// silences these advisories (tests, or callers that don't care).
+	Logf func(format string, args ...any)
 }
 
 // SessionID returns the BASE native session identifier for an issue:
@@ -198,6 +203,14 @@ func (n *Native) Spawn(ctx context.Context, p config.Project, issue linear.Issue
 
 	if err := n.Tmux.NewSession(ctx, id, dir, n.launchCommand(id)); err != nil {
 		return session.Session{}, n.rollbackTmux(ctx, p, id, dir, branch, "start tmux session", err)
+	}
+
+	// Brand the agent pane's status bar (LOLA · issue · detach hint) and bind the
+	// optional custom detach key, both PER-SESSION on the isolated lola server.
+	// Strictly cosmetic and best-effort: a styling failure is logged and the
+	// spawn still succeeds, so a session is never lost to a chrome hiccup.
+	if err := n.Tmux.ConfigureSession(ctx, id, n.Cfg.SessionChrome(issue.Identifier)); err != nil && n.Logf != nil {
+		n.Logf("session %s: status-bar styling failed (cosmetic, session is up): %v", id, err)
 	}
 
 	return session.Session{

@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -184,9 +185,20 @@ func TestSpawnHappyPathFullSequence(t *testing.T) {
 	// single shell command that sources the 0600 .lola/env (which exports
 	// LOLA_SESSION and any secret) and execs claude with the generated settings
 	// and the short read-the-prompt argv. Nothing secret is on argv.
-	wantTmux := "new-session -d -s " + id + " -c " + dir +
-		" exec sh -c 'set -a; . ./.lola/env; set +a; exec /usr/local/bin/claude --settings .lola/settings.json" +
-		` '\''You are lola session ` + id + `. Read .lola/prompt.md in the current directory first; it contains your task briefing.'\'''`
+	// One detached new-session, then the best-effort per-session status-bar
+	// chrome on the SAME isolated "-L lola" server: status on, widened lengths,
+	// the branded "LOLA | ENG-42" left and the default "detach C-b d" right (no
+	// custom detach key or mouse configured on this fixture).
+	wantTmux := strings.Join([]string{
+		"-L lola new-session -d -s " + id + " -c " + dir +
+			" exec sh -c 'set -a; . ./.lola/env; set +a; exec /usr/local/bin/claude --settings .lola/settings.json" +
+			` '\''You are lola session ` + id + `. Read .lola/prompt.md in the current directory first; it contains your task briefing.'\'''`,
+		"-L lola set-option -t =" + id + " status on",
+		"-L lola set-option -t =" + id + " status-left-length 80",
+		"-L lola set-option -t =" + id + " status-right-length 80",
+		"-L lola set-option -t =" + id + " status-left LOLA | ENG-42",
+		"-L lola set-option -t =" + id + " status-right detach C-b d",
+	}, "\n")
 	if gotTmux := loggedArgs(t, f.tmuxLog); gotTmux != wantTmux {
 		t.Errorf("tmux calls:\n%s\nwant:\n%s", gotTmux, wantTmux)
 	}
@@ -297,6 +309,52 @@ func TestSpawnProjectEnvLandsInEnvFileNotArgv(t *testing.T) {
 	tmuxCalls := loggedArgs(t, f.tmuxLog)
 	if strings.Contains(tmuxCalls, "APP_ENV") || strings.Contains(tmuxCalls, "B_VAR") {
 		t.Errorf("project env must not appear on tmux argv:\n%s", tmuxCalls)
+	}
+}
+
+// TestSpawnAppliesConfiguredChrome: the [tmux] config (custom detach key,
+// mouse, status-right override) is projected into the per-session status bar on
+// the isolated "-L lola" server after launch.
+func TestSpawnAppliesConfiguredChrome(t *testing.T) {
+	f := newFixture(t, "", "")
+	f.n.Cfg.Tmux = config.TmuxConfig{DetachKey: "F12", Mouse: true, StatusRight: "custom"}
+
+	if _, err := f.n.Spawn(context.Background(), f.p, issueENG42()); err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	tmuxCalls := loggedArgs(t, f.tmuxLog)
+	id := "lola-nori-eng-42"
+	for _, want := range []string{
+		"-L lola set-option -t =" + id + " status-left LOLA | ENG-42",
+		"-L lola set-option -t =" + id + " status-right custom | detach F12",
+		"-L lola set-option -t =" + id + " mouse on",
+		"-L lola bind-key -n F12 detach-client",
+	} {
+		if !strings.Contains(tmuxCalls, want) {
+			t.Errorf("tmux calls missing %q:\n%s", want, tmuxCalls)
+		}
+	}
+}
+
+// TestSpawnChromeFailureIsAdvisoryOnly: a tmux styling failure never fails the
+// spawn — the session is returned and the failure is only logged via Logf.
+func TestSpawnChromeFailureIsAdvisoryOnly(t *testing.T) {
+	f := newFixture(t, "", `*"set-option"*)
+  echo boom >&2
+  exit 1
+  ;;`)
+	var logged string
+	f.n.Logf = func(format string, args ...any) { logged = fmt.Sprintf(format, args...) }
+
+	got, err := f.n.Spawn(context.Background(), f.p, issueENG42())
+	if err != nil {
+		t.Fatalf("Spawn must succeed despite chrome failure: %v", err)
+	}
+	if got.Status != StatusWorking {
+		t.Errorf("Status = %q, want %q", got.Status, StatusWorking)
+	}
+	if !strings.Contains(logged, "styling failed") {
+		t.Errorf("chrome failure must be logged via Logf, got %q", logged)
 	}
 }
 
@@ -511,7 +569,7 @@ func TestAdoptPairingMatrix(t *testing.T) {
 LOLA_EOF
   exit 0
   ;;`)
-	tmuxBin, tmuxLog := scriptBin(t, "tmux", `"ls -F"*)
+	tmuxBin, tmuxLog := scriptBin(t, "tmux", `*"ls -F"*)
   cat <<'LOLA_EOF'
 lola-nori-eng-1	1720000000	0
 lola-nori-eng-9	1720000001	0
@@ -546,7 +604,7 @@ LOLA_EOF
 }
 
 func TestAdoptNoServerNoWorktreesIsEmpty(t *testing.T) {
-	f := newFixture(t, "", `"ls -F"*)
+	f := newFixture(t, "", `*"ls -F"*)
   echo "no server running on /tmp/tmux-501/default" >&2
   exit 1
   ;;`)
@@ -576,7 +634,7 @@ func TestKillRemovesCleanWorktreeAndBranch(t *testing.T) {
 	if err := f.n.Kill(context.Background(), killFixtureSession(), true, false); err != nil {
 		t.Fatalf("Kill: %v", err)
 	}
-	wantTmux := "has-session -t =lola-nori-eng-42\nkill-session -t =lola-nori-eng-42"
+	wantTmux := "-L lola has-session -t =lola-nori-eng-42\n-L lola kill-session -t =lola-nori-eng-42"
 	if got := loggedArgs(t, f.tmuxLog); got != wantTmux {
 		t.Errorf("tmux calls:\n%s\nwant:\n%s", got, wantTmux)
 	}
@@ -713,8 +771,8 @@ func TestAlive(t *testing.T) {
 	if f2.n.Alive(context.Background(), killFixtureSession()) {
 		t.Error("Alive: want false when has-session fails")
 	}
-	if got := loggedArgs(t, f.tmuxLog); got != "has-session -t =lola-nori-eng-42" {
-		t.Errorf("tmux calls %q, want exact-match has-session", got)
+	if got := loggedArgs(t, f.tmuxLog); got != "-L lola has-session -t =lola-nori-eng-42" {
+		t.Errorf("tmux calls %q, want exact-match has-session on lola socket", got)
 	}
 }
 
