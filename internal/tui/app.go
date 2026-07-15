@@ -38,10 +38,23 @@ type rootModel struct {
 	list     listModel
 	sessions sessionsModel
 	form     *formModel
-	term     *termView            // the ATTACHED terminal (nil in the cockpit); owns all keys
-	terms    map[string]*termView // per-session persistent terminals, keyed by session ID
-	width    int
-	height   int
+	term     *termView            // a focused full-screen SHELL terminal (from 's'); nil otherwise
+	terms    map[string]*termView // per-session persistent shells, keyed by session ID
+
+	// Live embedded AGENT terminal shown in the Detail panel for the selected
+	// session. It re-targets as the selection moves (always-live); 'enter'
+	// focuses+expands it into the main column, Ctrl-q shrinks it back. The tmux
+	// session is the durable thing, so a selection change closes this attach and
+	// opens a new one. spin animates the "attaching…" state until the first frame.
+	agentTerm    *termView
+	agentFor     string // session ID agentTerm is attached to ("" = none)
+	agentFocused bool   // agent embed has keyboard + is expanded
+	agentGen     int    // generation, bumped on re-target so stale frame waiters are ignored
+	spin         int    // braille spinner frame, advanced while a terminal is loading
+	spinning     bool   // a spinner tick loop is active
+
+	width  int
+	height int
 
 	// attnHist is a bounded ring of recent "need you" counts (one sample per
 	// sessions fetch), rendered as the Triage sparkline so the queue's trend is
@@ -167,6 +180,7 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch v := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = v.Width, v.Height
+		m.resizeAgent()
 		return m, nil
 	case termFrameMsg:
 		return m, nil // stale frame after the terminal closed
@@ -200,8 +214,14 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Batch(cmds...)
 	case sessionsMsg:
+		before := m.effectiveSelID()
 		cmd := m.handleSessionsMsg(v)
 		m.recordAttn()
+		if m.effectiveSelID() != before { // selection (re)pinned → re-target the live agent
+			if c := m.syncAgentPreview(); c != nil {
+				cmd = tea.Batch(cmd, c)
+			}
+		}
 		return m, cmd
 	case paneMsg:
 		m.handlePaneMsg(v)
@@ -216,11 +236,6 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, c)
 		}
 		return m, tea.Batch(cmds...)
-	case attachDoneMsg:
-		if v.err != nil {
-			m.sessions.flash = "attach failed: " + v.err.Error()
-		}
-		return m, fetchSessionsCmd
 	case killDoneMsg:
 		// Flash the outcome verbatim (success line or the daemon's dirty-kept
 		// message) and refresh the list so a removed session drops out.
@@ -235,10 +250,36 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case tea.KeyPressMsg:
-		if v.String() == "ctrl+c" {
+		// ctrl+c quits — EXCEPT while the embedded agent is focused, where it is
+		// forwarded to the agent (interrupt) via the agent-key routing below.
+		if v.String() == "ctrl+c" && !m.agentFocused {
 			m.closeAllTerms()
 			return m, tea.Quit
 		}
+	case agentFrameMsg:
+		if v.gen != m.agentGen || m.agentTerm == nil {
+			return m, nil // stale waiter from a previous target
+		}
+		if m.agentTerm.term.Exited() {
+			m.closeAgent()
+			return m, nil
+		}
+		return m, waitAgentFrame(m.agentTerm.term, m.agentGen)
+	case spinnerTickMsg:
+		m.spin++
+		if m.agentLoading() {
+			return m, spinnerTickCmd()
+		}
+		m.spinning = false
+		return m, nil
+	}
+
+	// The focused embedded agent owns every keystroke (Ctrl-q unfocuses).
+	if m.agentFocused {
+		if k, ok := msg.(tea.KeyPressMsg); ok {
+			return m.handleAgentKey(k)
+		}
+		return m, nil
 	}
 
 	// The doctor overlay owns all input while open (loading or showing).
@@ -284,7 +325,16 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.focus == focusPolls {
 		return m.updateList(msg)
 	}
-	return m.updateSessions(msg)
+	// Route to the sessions view, then re-target the live agent if the selection
+	// moved (arrow keys, jumps, filter changes).
+	before := m.effectiveSelID()
+	model, cmd := m.updateSessions(msg)
+	if m.effectiveSelID() != before {
+		if c := m.syncAgentPreview(); c != nil {
+			cmd = tea.Batch(cmd, c)
+		}
+	}
+	return model, cmd
 }
 
 // tabBar is the shared header line; the active tab is highlighted.

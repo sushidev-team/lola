@@ -294,7 +294,6 @@ type answerDoneMsg struct {
 	msg string
 }
 
-type attachDoneMsg struct{ err error }
 
 // killDoneMsg carries the outcome of a `cmd=kill` request. msg is the message
 // to flash (a success line, or the daemon's verbatim dirty-kept error).
@@ -507,7 +506,7 @@ func (m *rootModel) updateSessions(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case "G":
 		return m.sessJumpEdge(false)
 	case "enter":
-		return m.attachSelected()
+		return m.focusAgent()
 	case "s":
 		return m.openShellForSelected()
 	case "o":
@@ -658,46 +657,6 @@ func (m *rootModel) jumpNeedsInput(dir int) (tea.Model, tea.Cmd) {
 	}
 	s.flash, s.flashGood = "no session is waiting for input", false
 	return m, nil
-}
-
-// attachSelected opens the selected session's agent as an EMBEDDED terminal
-// (tmux attach rendered in-panel), not a full-screen takeover: Ctrl-q detaches
-// (the agent keeps running in tmux) and returns straight to the cockpit.
-// Sessions without a live tmux pane cannot be attached.
-func (m *rootModel) attachSelected() (tea.Model, tea.Cmd) {
-	sel := m.sessions.selected()
-	if sel == nil {
-		return m, nil
-	}
-	if sel.TmuxName == "" {
-		m.sessions.flash = "no tmux session (AO desktop runtime)"
-		return m, nil
-	}
-	// Pre-attach liveness gate: refuse clearly instead of embedding a doomed
-	// attach. A dead/ended session has no agent left; and a session whose pane is
-	// not on the lola server — e.g. an orphaned pre-migration session still on the
-	// DEFAULT server — cannot be reached by the "-L lola" attach either.
-	if sel.Status == "dead" || sel.Status == "session_ended" {
-		m.sessions.flash = "session's agent has exited — nothing to attach (it may be an orphaned pre-migration session; see logs)"
-		return m, nil
-	}
-	if !m.sessions.paneLive(m.cfg.TmuxSocketName(), sel.TmuxName) {
-		m.sessions.flash = "no live tmux pane for this session on the lola server"
-		return m, nil
-	}
-	argv := m.sessions.tmuxClient(m.cfg.TmuxSocketName()).AttachArgs(sel.TmuxName)
-	return m, m.openAgentTerm(sel.ID, "agent · "+dash(sel.Issue), argv)
-}
-
-// attachHintLine is the pre-attach one-liner: "attaching to <issue> — press
-// <detachHint> to return to Lola". A blank issue falls back to "session" so the
-// line always reads sensibly; detachHint is the resolved human-facing key
-// (config.TmuxConfig.DetachHint) so it matches whatever actually detaches.
-func attachHintLine(issue, detachHint string) string {
-	if issue == "" {
-		issue = "session"
-	}
-	return fmt.Sprintf("attaching to %s — press %s to return to Lola", issue, detachHint)
 }
 
 // openSelectedPR opens the selected session's PR in the default browser,

@@ -107,23 +107,6 @@ func (m *rootModel) openShellTerm(sessionID, title, dir string) tea.Cmd {
 	return waitTermFrame(t)
 }
 
-// openAgentTerm embeds the agent's tmux session (argv from tmux AttachArgs) as a
-// terminal. It is NOT registered — the tmux session is the durable thing, so
-// Ctrl-q just closes this attach (detaching the client) and re-entering spawns a
-// fresh one.
-func (m *rootModel) openAgentTerm(sessionID, title string, argv []string) tea.Cmd {
-	cmd := exec.Command(argv[0], argv[1:]...)
-	cmd.Env = append(os.Environ(), "TERM=xterm-256color", "LOLA_TERMINAL=1")
-	cw, ch := m.termContentSize()
-	t, err := vtterm.New(cmd, cw, ch)
-	if err != nil {
-		m.sessions.flash, m.sessions.flashGood = "attach failed: "+err.Error(), false
-		return nil
-	}
-	m.term = &termView{term: t, title: title, sessionID: sessionID, kind: termAgent, w: cw, h: ch}
-	return waitTermFrame(t)
-}
-
 // attachTerm focuses an existing (running) terminal, fits it to the current
 // window, and resumes its repaint loop.
 func (m *rootModel) attachTerm(tv *termView) tea.Cmd {
@@ -195,13 +178,17 @@ func (m *rootModel) sweepTerms() {
 }
 
 // closeAllTerms tears every terminal down — called on quit so no child process
-// is orphaned.
+// is orphaned (shells, a focused shell, and the embedded agent attach).
 func (m *rootModel) closeAllTerms() {
+	if m.term != nil {
+		_ = m.term.term.Close()
+	}
 	for id, tv := range m.terms {
 		_ = tv.term.Close()
 		delete(m.terms, id)
 	}
 	m.term = nil
+	m.closeAgent()
 }
 
 // runningShell reports whether a session has a live (non-exited) shell to

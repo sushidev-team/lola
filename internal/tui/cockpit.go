@@ -220,9 +220,23 @@ func (m *rootModel) railColumn(w, h int) []string {
 	return stackRows(triage, polls)
 }
 
-// mainColumn stacks the Sessions table over a Detail panel sized to the current
-// pane view (compact/full), clamped so Sessions always keeps a usable height.
+// mainColumn stacks the Sessions table over the Detail/Agent panel. When the
+// embedded agent is FOCUSED it expands to fill the column (Sessions shrinks to a
+// thin strip); otherwise the Detail panel takes its usual slice at the bottom.
 func (m *rootModel) mainColumn(w, h int) []string {
+	if m.agentFocused && m.agentTerm != nil {
+		sessH := 4
+		if sessH > h-8 {
+			sessH = h - 8
+		}
+		if sessH < 3 {
+			sessH = 3
+		}
+		agentH := h - sessH
+		sess := box(m.sessionsTitle(), m.sessionsBody(w-2, sessH-2), w, sessH, false)
+		agent := box(m.detailTitle(), m.detailBody(w-2, agentH-2), w, agentH, true) // focused accent
+		return stackRows(sess, agent)
+	}
 	detailH := m.sessions.paneLines() + 8 // header + meta + card + pane + borders
 	if maxD := h - 8; detailH > maxD {
 		detailH = maxD
@@ -236,16 +250,34 @@ func (m *rootModel) mainColumn(w, h int) []string {
 	return stackRows(sess, det)
 }
 
-// detailTitle names the selected session in the Detail panel header (issue +
-// project), or a bare "Detail" when nothing is selected.
+// detailTitle names the panel and folds the selected session's key facts into
+// the header (issue · project · #PR checks), plus the agent focus hint. It reads
+// "Agent" when a live agent is embedded, "Detail" otherwise.
 func (m *rootModel) detailTitle() string {
 	sel := m.sessions.selected()
 	if sel == nil {
 		return "❹ Detail"
 	}
-	t := "❹ Detail · " + sel.Issue
+	label := "❹ Detail"
+	if m.agentTerm != nil {
+		label = "❹ Agent"
+	}
+	t := label + " · " + sel.Issue
 	if sel.Project != "" {
 		t += " · " + sel.Project
+	}
+	if sel.PRNumber > 0 {
+		t += fmt.Sprintf(" · #%d", sel.PRNumber)
+		if sel.Checks != "" {
+			t += " " + sel.Checks
+		}
+	} else if sel.Status != "" {
+		t += " · " + sel.Status
+	}
+	if m.agentFocused {
+		t += " · ⛶ focused — Ctrl-q back"
+	} else if m.agentTerm != nil {
+		t += " · enter to focus"
 	}
 	return t
 }
@@ -338,10 +370,13 @@ func (m *rootModel) sessionsBody(w, h int) []string {
 	return out
 }
 
-// detailBody wraps sessionDetail() into body lines, clipped to width and held
-// to the top of the block (the answer card + meta lead; the live pane tail
-// clips first when space is tight).
+// detailBody renders the panel body: the live embedded AGENT (a bottom viewport
+// of its screen) when one is attached for the selection, otherwise the static
+// detail card / capture preview.
 func (m *rootModel) detailBody(w, h int) []string {
+	if m.agentTerm != nil {
+		return m.agentBody(w, h)
+	}
 	raw := m.sessionDetail()
 	if strings.TrimSpace(raw) == "" {
 		return []string{faintText.Render("no session selected")}
@@ -353,6 +388,28 @@ func (m *rootModel) detailBody(w, h int) []string {
 	}
 	if len(out) > h {
 		out = out[:h]
+	}
+	return out
+}
+
+// agentBody renders the embedded agent: a spinner while attaching, a note if the
+// attach ended, otherwise the BOTTOM h rows of the agent's screen (a viewport
+// into the fixed-size terminal — the small panel shows the tail, the focused
+// expanded panel shows it all).
+func (m *rootModel) agentBody(w, h int) []string {
+	if m.agentLoading() {
+		return []string{"", "  " + faintText.Render(m.spinnerFrame()+" attaching to agent…")}
+	}
+	if m.agentTerm.term.Exited() {
+		return []string{"", "  " + faintText.Render("agent attach ended")}
+	}
+	lines := m.agentTerm.term.Render()
+	if len(lines) > h { // bottom viewport
+		lines = lines[len(lines)-h:]
+	}
+	out := make([]string, len(lines))
+	for i, ln := range lines {
+		out[i] = previewLine(ln, w)
 	}
 	return out
 }
