@@ -361,11 +361,19 @@ func (m *rootModel) kanbanBoard() string {
 // meta line). The selected card gets a "›" + reverse; an unselected needs_input
 // card a warn "!" so the human's queue is visible column-wide.
 func (m *rootModel) kanbanColumnLines(c KanbanColumn, sess []protocol.SessionInfo, w int, selID string) []string {
+	// Header: bold title + count badge, then a faint rule the column's width so
+	// each column reads as a distinct region even when empty.
+	rule := w - 1
+	if rule < 1 {
+		rule = 1
+	}
 	out := []string{
 		tblHeader.Render(c.Title) + faintText.Render(fmt.Sprintf(" %d", len(sess))),
+		faintText.Render(strings.Repeat("─", rule)),
 	}
 	if len(sess) == 0 {
-		return append(out, faintText.Render("—"))
+		// A faint, indented placeholder rather than a lone dash at the margin.
+		return append(out, "  "+faintText.Render("empty"))
 	}
 	for _, si := range sess {
 		marker := "  "
@@ -382,12 +390,11 @@ func (m *rootModel) kanbanColumnLines(c KanbanColumn, sess []protocol.SessionInf
 		d := statusDisplay(si.Status)
 		meta := d.Style.Render(d.Badge)
 		// PR badge ("#229 ✓") on any card with a PR — the number plus the checks
-		// glyph, scannable at a glance and never gated on status/review state.
+		// glyph, scannable at a glance and never gated on status/review state. The
+		// reacting label is deliberately omitted here: at column width it clips
+		// mid-word; it stays legible in the List lens and the Detail panel.
 		if pr := prBadge(si); pr != "" {
 			meta += " " + pr
-		}
-		if si.Reacting != "" {
-			meta += " " + reactingStyle(si.Reacting).Render(si.Reacting)
 		}
 		out = append(out, "  "+meta, "")
 	}

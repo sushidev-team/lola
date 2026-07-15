@@ -181,9 +181,25 @@ func (m *rootModel) mainColumn(w, h int) []string {
 		detailH = 6
 	}
 	sessH := h - detailH
-	sess := box("❷ Sessions", m.sessionsBody(w-2, sessH-2), w, sessH, m.focus == focusSessions)
+	sess := box(m.sessionsTitle(), m.sessionsBody(w-2, sessH-2), w, sessH, m.focus == focusSessions)
 	det := box("❹ Detail", m.detailBody(w-2, detailH-2), w, detailH, false)
 	return stackRows(sess, det)
+}
+
+// sessionsTitle names the panel plus the active lens and any standing filter
+// state (attention-only). The count/triage numbers live in the vitals bar and
+// Triage panel now, so the in-panel summary strip is gone — this title carries
+// the lens context the strip used to.
+func (m *rootModel) sessionsTitle() string {
+	lens := "list"
+	if m.sessions.view == viewKanban {
+		lens = "kanban"
+	}
+	t := "❷ Sessions · " + lens
+	if m.sessions.filter.AttentionOnly {
+		t += " · needs-you only"
+	}
+	return t
 }
 
 // ---- panel bodies (reuse existing helpers, clipped to the box) ----
@@ -196,13 +212,9 @@ func (m *rootModel) sessionsBody(w, h int) []string {
 	if s.data == nil {
 		return []string{faintText.Render("fetching sessions…")}
 	}
-	// Lead with the compact summary strip (lens label · attention count ·
-	// working/ready/done · needs-you-only flag) — the textual k9s-style header
-	// that complements the Triage meters in the rail.
-	summary := previewLine(m.sessionsSummary(), w)
 	// The Board lens (V) swaps the table for kanban columns within the panel.
 	if s.view == viewKanban {
-		return append([]string{summary}, m.kanbanBodyAt(w, h-1)...)
+		return m.kanbanBodyAt(w, h)
 	}
 	headers := []string{" ", "ISSUE", "PROJECT", "STATUS", "PR", "REACTING", "AGE"}
 	list := s.listRows()
@@ -229,7 +241,10 @@ func (m *rootModel) sessionsBody(w, h int) []string {
 		}
 	}
 	colw := colWidths(headers, rows)
-	out := []string{summary, previewLine(tblHeader.Render(padCells(headers, colw)), w)}
+	out := []string{
+		previewLine(tblHeader.Render(padCells(headers, colw)), w),
+		faintText.Render(strings.Repeat("─", w)),
+	}
 	if len(rows) == 0 {
 		empty := "no sessions observed"
 		if len(s.data.Sessions) > 0 {
@@ -237,7 +252,7 @@ func (m *rootModel) sessionsBody(w, h int) []string {
 		}
 		return append(out, faintText.Render(empty))
 	}
-	bodyH := h - 2 // minus the summary + header rows
+	bodyH := h - 2 // minus the header + rule rows
 	if bodyH < 1 {
 		bodyH = 1
 	}
@@ -344,9 +359,15 @@ func (m *rootModel) triageBody(w int) []string {
 
 	var out []string
 	if need > 0 {
-		out = append(out, statusOrange.Render(fmt.Sprintf("%d", need))+" "+statusOrange.Render("NEED YOU"))
+		out = append(out, statusOrange.Render(fmt.Sprintf("%d", need))+" "+statusOrange.Bold(true).Render("NEED YOU"))
 	} else {
 		out = append(out, goodText.Render("0")+" "+faintText.Render("all clear"))
+	}
+	// Nothing running: don't draw empty bars (a row of faint track reads as a
+	// gray smear) — say so plainly instead.
+	if total == 0 {
+		out = append(out, "", faintText.Render("no active sessions"))
+		return out
 	}
 	if spark := sparkline(m.attnHist, w-10); spark != "" {
 		out = append(out, spark+" "+faintText.Render("needs-you"))
@@ -364,10 +385,11 @@ func (m *rootModel) triageBody(w int) []string {
 	return out
 }
 
-// triageMeter renders "Nlabel  ███░░░" — a right-padded count+label followed by
-// a proportional bar (filled cells in the category color, empty faint).
+// triageMeter renders "Nlabel ███" — a count+label followed by a proportional
+// bar of just the FILLED cells (no track): an empty track over several rows
+// reads as a gray block, so a zero category shows only its label and a non-zero
+// one shows at least a one-cell sliver.
 func triageMeter(label string, n, total, w int, style lipgloss.Style) string {
-	head := fmt.Sprintf("%2d %-7s", n, label)
 	filled := 0
 	if total > 0 {
 		filled = n * w / total
@@ -375,8 +397,10 @@ func triageMeter(label string, n, total, w int, style lipgloss.Style) string {
 	if filled > w {
 		filled = w
 	}
-	bar := style.Render(strings.Repeat("█", filled)) + faintText.Render(strings.Repeat("░", w-filled))
-	return head + bar
+	if n > 0 && filled == 0 {
+		filled = 1
+	}
+	return fmt.Sprintf("%2d %-7s", n, label) + style.Render(strings.Repeat("█", filled))
 }
 
 // vitalsBar is the always-on top strip: daemon/runtime/linear health, session
@@ -395,9 +419,14 @@ func (m *rootModel) vitalsBar(w int) string {
 		}
 		parts = append(parts, "runtime "+rt, "linear "+yesNoStyled(st.LinearOK, "✓", "✗"))
 	}
-	nSess := 0
+	nSess, need := 0, 0
 	if m.sessions.data != nil {
 		nSess = len(m.sessions.data.Sessions)
+		need = AttentionCount(m.sessions.data.Sessions)
+	}
+	needStr := fmt.Sprintf("%d need you", need)
+	if need > 0 {
+		needStr = statusOrange.Render(needStr)
 	}
 	en := 0
 	for _, p := range m.cfg.Polls {
@@ -409,7 +438,7 @@ func (m *rootModel) vitalsBar(w int) string {
 			en++
 		}
 	}
-	parts = append(parts, fmt.Sprintf("sessions %d", nSess), fmt.Sprintf("polls %d/%d", en, len(m.cfg.Polls)))
+	parts = append(parts, needStr, fmt.Sprintf("sessions %d", nSess), fmt.Sprintf("polls %d/%d", en, len(m.cfg.Polls)))
 
 	brand := lipgloss.NewStyle().Bold(true).Render("lola")
 	left := brand + "  " + strings.Join(parts, sep)
@@ -521,9 +550,8 @@ func (m *rootModel) kanbanBodyAt(width, height int) []string {
 	if colW < 14 {
 		lines = strings.Split(strings.TrimRight(m.kanbanNarrow(cols, groups, width), "\n"), "\n")
 	} else {
-		if colW > 26 {
-			colW = 26
-		}
+		// Columns fill the panel evenly (no upper cap) so the board reads as a
+		// balanced grid instead of packing left with a wide empty gutter.
 		selID := m.effectiveSelID()
 		rendered := make([][]string, n)
 		maxH := 0
