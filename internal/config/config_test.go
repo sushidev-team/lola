@@ -1041,3 +1041,193 @@ func TestDefaultCommentTemplates(t *testing.T) {
 		})
 	}
 }
+
+// An absent [brain] table means the P5 brain is fully off: Enabled=false, both
+// summarizers off, and the config validates — the OPT-IN, zero-behavior-change
+// contract. The default instruction consts are non-empty and forbid code fences.
+func TestBrainDefaultOffWhenAbsent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	body := "[defaults]\nglobal_cap = 4\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Brain != (BrainConfig{}) {
+		t.Errorf("absent [brain] should give the zero BrainConfig, got %+v", c.Brain)
+	}
+	if c.Brain.Enabled || c.Brain.SummarizeEscalation || c.Brain.SummarizeApproved {
+		t.Errorf("absent [brain] must be fully disabled, got %+v", c.Brain)
+	}
+	if err := c.Validate(); err != nil {
+		t.Errorf("config without [brain] must validate: %v", err)
+	}
+
+	for _, instr := range []string{BrainEscalationInstruction, BrainApprovedInstruction} {
+		if instr == "" {
+			t.Error("brain instruction must not be empty")
+		}
+		// The instructions tell claude not to EMIT code fences; they must not
+		// contain a literal fence themselves.
+		if strings.Contains(instr, "```") {
+			t.Errorf("brain instruction must not contain a code fence: %q", instr)
+		}
+	}
+}
+
+// Enabling the brain with nothing else set turns on both summaries and defaults
+// the timeout to DefaultBrainTimeoutSeconds; the model stays empty (claude
+// default). This is the "enabled = true alone" ergonomic path.
+func TestBrainEnabledDefaults(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	body := "[defaults]\nglobal_cap = 4\n\n[brain]\nenabled = true\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := BrainConfig{
+		Enabled:             true,
+		Model:               "",
+		TimeoutSeconds:      DefaultBrainTimeoutSeconds,
+		SummarizeEscalation: true,
+		SummarizeApproved:   true,
+	}
+	if c.Brain != want {
+		t.Errorf("brain = %+v, want %+v", c.Brain, want)
+	}
+	if err := c.Validate(); err != nil {
+		t.Errorf("enabled brain must validate: %v", err)
+	}
+}
+
+// Explicitly-set brain fields survive load, including a disabling
+// summarize_escalation=false while the brain is enabled (the analog of a
+// reaction's explicit auto=false), and an explicit timeout that overrides the
+// default. Unset summarizers still follow Enabled.
+func TestBrainExplicitValuesKept(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	body := `
+[defaults]
+global_cap = 4
+
+[brain]
+enabled = true
+model = "claude-sonnet-4-5"
+timeout_seconds = 45
+summarize_escalation = false
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := BrainConfig{
+		Enabled:             true,
+		Model:               "claude-sonnet-4-5",
+		TimeoutSeconds:      45,
+		SummarizeEscalation: false, // explicit false kept, not reverted to Enabled
+		SummarizeApproved:   true,  // unset → follows Enabled
+	}
+	if c.Brain != want {
+		t.Errorf("brain = %+v, want %+v", c.Brain, want)
+	}
+	if err := c.Validate(); err != nil {
+		t.Errorf("explicit brain must validate: %v", err)
+	}
+}
+
+// A fully-specified brain (including an explicit disabling zero) round-trips
+// through Save/Load unchanged.
+func TestBrainRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	orig := &Config{}
+	orig.Defaults.GlobalCap = 4
+	orig.Reactions = defaultReactions()
+	orig.Notify = defaultNotify()
+	orig.Brain = BrainConfig{
+		Enabled:             true,
+		Model:               "claude-opus-4-1",
+		TimeoutSeconds:      90,
+		SummarizeEscalation: true,
+		SummarizeApproved:   false, // disabling zero must survive the round-trip
+	}
+	if err := orig.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if orig.Brain != got.Brain {
+		t.Errorf("brain round trip:\n save: %+v\n load: %+v", orig.Brain, got.Brain)
+	}
+}
+
+// A fresh &Config{} does NOT persist a [brain] table (the zero brain is
+// unconfigured), and reloads to the disabled default.
+func TestBrainFreshConfigOmitsTable(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := (&Config{}).Save(path); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "[brain") {
+		t.Errorf("fresh config should omit the [brain] table, got:\n%s", data)
+	}
+	got, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Brain != (BrainConfig{}) {
+		t.Errorf("reloaded brain = %+v, want zero (disabled)", got.Brain)
+	}
+}
+
+// [brain] validation: timeout_seconds must be >= 0; nothing else is constrained.
+func TestBrainTimeoutValidation(t *testing.T) {
+	base := func() *Config {
+		c := &Config{}
+		c.Defaults.GlobalCap = 4
+		return c
+	}
+	cases := []struct {
+		name    string
+		mutate  func(c *Config)
+		wantErr string // "" = must be valid
+	}{
+		{"absent brain valid", func(c *Config) {}, ""},
+		{"timeout zero ok", func(c *Config) { c.Brain = BrainConfig{Enabled: true, TimeoutSeconds: 0} }, ""},
+		{"timeout positive ok", func(c *Config) { c.Brain = BrainConfig{Enabled: true, TimeoutSeconds: 300} }, ""},
+		{"timeout negative rejected", func(c *Config) { c.Brain = BrainConfig{Enabled: true, TimeoutSeconds: -1} }, "brain.timeout_seconds must be >= 0"},
+		{"negative timeout rejected even when disabled", func(c *Config) { c.Brain = BrainConfig{TimeoutSeconds: -5} }, "brain.timeout_seconds must be >= 0"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := base()
+			tc.mutate(c)
+			err := c.Validate()
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("want valid, got: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("want error containing %q, got nil", tc.wantErr)
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("error missing %q:\n%v", tc.wantErr, err)
+			}
+		})
+	}
+}

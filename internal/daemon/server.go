@@ -328,6 +328,10 @@ func (d *Daemon) handleReload(ctx context.Context) error {
 	// [reactions] config lives on d.cfg and is read live by the engine). The
 	// webhook URL is re-resolved from its env-var name and never logged.
 	d.notifier = notify.New(nc.ResolveNotify())
+	// Rebuild the brain summarizer from the new [brain] table (P5.25): an
+	// operator can enable/disable it or change model/timeout via reload. A now-
+	// disabled or newly-unavailable brain drops back to generic templates.
+	d.setBrainLocked(nc.Brain)
 	if d.realNative && !reflect.DeepEqual(old.Projects, nc.Projects) {
 		// The native runtime holds a config reference for its project
 		// registry: recreate it whenever the [[project]] set changes.

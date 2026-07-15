@@ -218,8 +218,20 @@ func (c *Config) Validate() error {
 
 	errs = append(errs, c.validateReactions()...)
 	errs = append(errs, c.validateNotify()...)
+	errs = append(errs, c.validateBrain()...)
 
 	return errors.Join(errs...)
+}
+
+// validateBrain checks the [brain] table. The only rule is timeout_seconds >= 0;
+// a config lacking the table resolves to the zero BrainConfig (timeout 0) and so
+// validates cleanly. Enablement, model, and the summarize flags are unconstrained.
+func (c *Config) validateBrain() []error {
+	var errs []error
+	if c.Brain.TimeoutSeconds < 0 {
+		errs = append(errs, fmt.Errorf("brain.timeout_seconds must be >= 0, got %d", c.Brain.TimeoutSeconds))
+	}
+	return errs
 }
 
 // validateReactions checks the [reactions] table. Auto and Message are

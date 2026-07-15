@@ -259,6 +259,15 @@ func (d *Daemon) writeBackEscalation(ctx context.Context, s session.Session) {
 	if !s.Escalated || s.WBBlockedDone {
 		return
 	}
+	// Reason for the blocked comment. Consume any brain escalation summary stashed
+	// by react (P5.25) UNCONDITIONALLY here — before the config early-return — so
+	// the one-shot stash cannot leak when this poll configures no blocked
+	// write-back to receive it. The summary is untrusted text, fine as a Linear
+	// comment body; an empty stash (brain off / error) keeps the generic reason.
+	reason := "CI is still failing after automatic retries."
+	if summary := d.takeEscalationSummary(s.ID); summary != "" {
+		reason = summary
+	}
 	p := d.pollForSession(s)
 	if p == nil || (p.BlockedLabelID == "" && !p.CommentOnBlocked) {
 		return
@@ -268,7 +277,7 @@ func (d *Daemon) writeBackEscalation(ctx context.Context, s session.Session) {
 		d.logf("", "write-back: linear unavailable for escalation of %s: %v", s.ID, err)
 		return
 	}
-	d.writeBackBlocked(ctx, api, *p, s, "CI is still failing after automatic retries.")
+	d.writeBackBlocked(ctx, api, *p, s, reason)
 }
 
 // writeBackBlocked adds the blocked label and/or posts the blocked comment for a

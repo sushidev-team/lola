@@ -294,6 +294,43 @@ Routing priorities and their defaults:
 Priorities you omit under `[notify.routing]` keep their default channels; set a
 priority to `[]` to route it nowhere.
 
+### `[brain]` (optional, off by default)
+
+The P5 orchestrator brain: when enabled, lola makes a single headless
+`claude -p` call to produce a short **human-facing summary** at two decision
+points — when a session **escalates** (why it's blocked and the next step) and
+when a PR is **approved and green** (what it changes and any risk to check
+before merging). **Opt-in and off by default**: omit the table (or leave
+`enabled = false`) and behavior is unchanged — lola uses its generic notify and
+comment templates.
+
+| Key | Type | Description |
+| --- | --- | --- |
+| `enabled` | bool | Master switch. Default `false`; an absent table is also off. |
+| `model` | string | Passed to claude as `--model` when set; empty uses claude's default model. |
+| `timeout_seconds` | int | Hard cap on each summary call. Must be `>= 0`. Default `120`. |
+| `summarize_escalation` | bool | Summarize why a stuck session is blocked. Defaults to `true` when `enabled`. |
+| `summarize_approved` | bool | Summarize an approved+green PR before a human merges. Defaults to `true` when `enabled`. |
+
+Setting `enabled = true` alone turns on both summaries with the default timeout;
+set either `summarize_*` to `false` to run only the other. The two summarizers
+default to on only while `enabled`, and explicit `false`/`0` are honored, not
+treated as "unset".
+
+The summary is **read-only and strictly one-directional**: it is delivered to
+the notifier and an optional Linear comment **only, and is never fed back into
+the worker agent**. The context the brain summarizes (PR diff, CI logs, tmux
+pane tail) is attacker-influenceable, so its output is treated as untrusted text
+shown to a human — safe for a notification or comment, never an action in the
+control loop. Each call is fired at most **once per transition**, bounded by
+`timeout_seconds`, attempted **once** (no retries), and **skips gracefully** —
+falling back to the generic template — on any error or timeout.
+
+The daemon execs `claude` directly and relies on your existing claude auth
+(`~/.claude`) or `ANTHROPIC_API_KEY` in the daemon's environment; lola does not
+manage keys here. Each summary **spends Anthropic tokens**, so the feature is
+deliberately opt-in. `lola doctor` reports whether `claude` is on `PATH`.
+
 ## Secrets
 
 The Linear API key is resolved at dispatch time, keychain first, then

@@ -213,9 +213,21 @@ func (d *Daemon) reactCIFailed(ctx context.Context, s session.Session, r config.
 			return
 		}
 		d.reactSave()
+		body := fmt.Sprintf("%s: CI is still failing after %d automatic attempt(s); handing off", issueLabel(s), retries)
+		// Brain (PLAN P5.25): replace the generic escalation body with a bounded,
+		// one-shot claude summary of WHY the session is blocked. This fires once
+		// per escalation because it is inside the Escalated one-shot guard above.
+		// The summary is UNTRUSTED (its context — pane tail, CI logs — is
+		// attacker-influenceable): it goes only into this notify body and the P4
+		// blocked Linear comment (stashed for writeBackEscalation), NEVER into
+		// tmux send-keys. On any error/disabled it stays the generic body.
+		if summary := d.escalationSummary(ctx, s); summary != "" {
+			body = summary
+			d.stashEscalationSummary(s.ID, summary)
+		}
 		notifier.Notify(ctx, notify.Note{
 			Title:    "CI still failing — needs a human",
-			Body:     fmt.Sprintf("%s: CI is still failing after %d automatic attempt(s); handing off", issueLabel(s), retries),
+			Body:     body,
 			Priority: notify.Urgent,
 			URL:      prURL(s),
 		})
@@ -248,9 +260,20 @@ func (d *Daemon) reactApproved(ctx context.Context, s session.Session, notifier 
 		return
 	}
 	d.reactSave()
+	body := fmt.Sprintf("%s is approved and green — ready to merge", issueLabel(s))
+	// Brain (PLAN P5.25): replace the generic approved body with a bounded,
+	// one-shot claude risk summary of the PR diff. Fires once per entry into
+	// "approved" (inside the LastReactedStatus guard consumed above). The diff is
+	// attacker-authored, so the summary is UNTRUSTED: it goes into this notify
+	// body only, NEVER into tmux send-keys. On any error/disabled it stays
+	// generic. A Linear comment would be added only if a comment toggle existed
+	// for this transition — none does in P4, so this is notify-only.
+	if summary := d.approvedSummary(ctx, s); summary != "" {
+		body = summary
+	}
 	notifier.Notify(ctx, notify.Note{
 		Title:    "PR approved and green",
-		Body:     fmt.Sprintf("%s is approved and green — ready to merge", issueLabel(s)),
+		Body:     body,
 		Priority: notify.Action,
 		URL:      prURL(s),
 	})

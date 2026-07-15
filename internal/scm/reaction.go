@@ -331,6 +331,27 @@ func (c *Client) inlineComments(ctx context.Context, repo string, pr int) string
 	return strings.TrimSpace(b.String())
 }
 
+// prDiffMaxBytes bounds the unified diff PRDiff returns (~12KB, head-clipped).
+// It is the size-bound at the source for the P5 approved-summary context; the
+// brain caps its stdin again at its own maxContextBytes, so this is defence in
+// depth against a pathologically large PR blowing up the claude context.
+const prDiffMaxBytes = 12 * 1024
+
+// PRDiff returns the PR's unified diff ("gh pr diff <pr> --repo <repo>"),
+// size-bounded to ~prDiffMaxBytes (head-clipped: the file list and first hunks
+// carry the most signal). It is the read-only context the P5 brain summarizes
+// at approved+green. The diff is UNTRUSTED (attacker-authored) — it is only ever
+// fed to the summarizer as input and shown to a human, never executed or typed
+// into an agent. A gh failure is surfaced as an error so the caller falls back
+// to its generic notification.
+func (c *Client) PRDiff(ctx context.Context, repo string, pr int) (string, error) {
+	stdout, stderr, err := c.run(ctx, "pr", "diff", strconv.Itoa(pr), "--repo", repo)
+	if err != nil {
+		return "", ghError(fmt.Sprintf("gh pr diff %d --repo %s", pr, repo), err, stderr)
+	}
+	return boundHead(string(stdout), prDiffMaxBytes), nil
+}
+
 // isFailingCheckState reports whether a CheckRun conclusion / StatusContext
 // state is a terminal-bad outcome. Single source of truth shared by
 // checksState (status derivation) and FailingChecks (reaction content), so a

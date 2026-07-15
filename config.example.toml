@@ -76,6 +76,29 @@ endpoint = "https://api.linear.app/graphql"
 # info   = ["slack"]                      # approved+parked, merged+cleaned
 
 # ---------------------------------------------------------------------------
+# [brain] — OPTIONAL, OFF BY DEFAULT (P5). When enabled, lola makes ONE headless
+# `claude -p` call to produce a short HUMAN-FACING summary at two decision
+# points: when a session escalates (why it's blocked + the next step) and when a
+# PR is approved+green (what it changes + risks to check). The summary rides the
+# notification and an optional Linear comment ONLY — it is NEVER fed back to the
+# worker agent, so an attacker-influenceable PR/log can't steer the control loop.
+#
+# COST: each summary spends Anthropic tokens. It execs `claude` and uses your
+# existing claude auth (~/.claude) or ANTHROPIC_API_KEY in the daemon's env.
+# Every call is one-shot per transition, hard-timeout-bounded, and skips
+# gracefully (falling back to the generic template) on any error or timeout.
+#
+# Omit this whole section to keep the brain OFF — zero behavior change.
+# The values shown below are the built-in defaults once enabled.
+# ---------------------------------------------------------------------------
+# [brain]
+# enabled = true                 # master switch; false (and an absent table) = off
+# model = "claude-sonnet-4-5"    # optional; empty = claude's default model (passed as --model when set)
+# timeout_seconds = 120          # hard cap per summary call; must be >= 0
+# summarize_escalation = true    # summarize why a stuck session is blocked
+# summarize_approved = true      # summarize an approved+green PR before a human merges
+
+# ---------------------------------------------------------------------------
 # [[project]] — repository registry for the native runtime (one table per
 # repo). Every poll references a project by name; lola then creates a git
 # worktree per session under ~/.lola/worktrees/<project>/... and runs Claude

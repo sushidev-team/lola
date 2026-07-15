@@ -88,9 +88,30 @@ func (d *Daemon) observeNative(ctx context.Context) {
 	for _, p := range d.cfg.Projects {
 		repoByProject[p.Name] = p.Repo
 	}
+	brainOn := d.brainSummarize != nil
+	bc := d.cfg.Brain
 	d.mu.Unlock()
 	if nat == nil {
 		return
+	}
+
+	// Per-cycle brain budget (P5.25): the OPT-IN summaries are the one exec on
+	// this otherwise 10s-bounded loop that can run for the brain timeout (~120s).
+	// Sharing a SINGLE brainTimeout across the whole cycle — derived from the
+	// shutdown-cancellable root, not this WithoutCancel ctx — keeps a hung
+	// `claude -p` from (a) delaying reactions to every LATER session in the
+	// snapshot (the first hung call spends the budget; the rest short-circuit to
+	// the generic template) and (b) delaying graceful shutdown (cancellation
+	// aborts the read-only claude exec). Off by default → nil, no budget.
+	if brainOn {
+		parent := d.shutdownCtx
+		if parent == nil {
+			parent = ctx // no root set (tests) → fall back to the observe ctx
+		}
+		bctx, cancel := context.WithTimeout(parent, brainTimeout(bc))
+		defer cancel()
+		d.setBrainCycleCtx(bctx)
+		defer d.setBrainCycleCtx(nil)
 	}
 
 	touched := false

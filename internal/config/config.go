@@ -101,6 +101,7 @@ type Config struct {
 	Polls     []Poll          `toml:"poll"`
 	Reactions ReactionsConfig `toml:"reactions"`
 	Notify    NotifyConfig    `toml:"notify"`
+	Brain     BrainConfig     `toml:"brain"`
 }
 
 // Duration is a time.Duration that TOML-round-trips as a Go duration string
@@ -129,6 +130,7 @@ type fileConfig struct {
 	Polls     []Poll               `toml:"poll"`
 	Reactions *fileReactionsConfig `toml:"reactions,omitempty"`
 	Notify    *fileNotifyConfig    `toml:"notify,omitempty"`
+	Brain     *fileBrainConfig     `toml:"brain,omitempty"`
 }
 
 type fileDefaults struct {
@@ -149,6 +151,7 @@ func (fc *fileConfig) config() *Config {
 		Polls:     fc.Polls,
 		Reactions: resolveReactions(fc.Reactions),
 		Notify:    resolveNotify(fc.Notify),
+		Brain:     resolveBrain(fc.Brain),
 	}
 }
 
@@ -164,6 +167,7 @@ func (c *Config) file() *fileConfig {
 		Polls:     c.Polls,
 		Reactions: reactionsFile(c.Reactions),
 		Notify:    notifyFile(c.Notify),
+		Brain:     brainFile(c.Brain),
 	}
 }
 

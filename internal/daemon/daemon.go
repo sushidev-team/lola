@@ -20,6 +20,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/sushidev-team/lola/internal/brain"
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/linear"
 	"github.com/sushidev-team/lola/internal/notify"
@@ -113,6 +114,45 @@ type Daemon struct {
 	failingChecks  func(ctx context.Context, repo string, pr int) (string, error)
 	reviewComments func(ctx context.Context, repo string, pr int) (string, error)
 
+	// Orchestrator brain (PLAN P5.25): the OPT-IN, bounded, headless-claude
+	// SUMMARIZER wired into the EXISTING escalation notify/comment and approved
+	// notify paths — it adds no transitions and never enters the control loop.
+	// brain is nil when [brain].enabled is false or claude is unavailable;
+	// brainSummarize is its exec seam and is nil in exactly the same case, so
+	// every call site treats "nil seam" as "use the generic template" — zero
+	// behavior change when the brain is off. Rebuilt on reload (setBrainLocked).
+	// Tests install a fake brainSummarize directly. paneTail / prDiff are the
+	// read-only context-gathering seams whose (attacker-influenceable) output is
+	// fed to claude and then shown to a human only — never to send-keys.
+	brain          *brain.Client
+	brainSummarize func(ctx context.Context, instruction, contextText string) (string, error)
+	paneTail       func(ctx context.Context, tmuxName string, lines int) (string, error)
+	prDiff         func(ctx context.Context, repo string, pr int) (string, error)
+
+	// escSummaries carries a brain escalation summary from react's Urgent notify
+	// (reactCIFailed) to the P4 blocked Linear comment (writeBackEscalation) in
+	// the SAME observe cycle, so one claude call feeds both. Guarded by brainMu;
+	// each entry is consumed (deleted) by writeBackEscalation.
+	//
+	// brainCycleCtx is the CURRENT observe cycle's shared brain budget: one
+	// brainTimeout for the WHOLE cycle (not per session), derived from
+	// shutdownCtx so a hung `claude -p` is capped for the cycle and abortable at
+	// shutdown. observeNative sets it at cycle start and clears it at the end;
+	// the summary helpers read it (falling back to their own ctx when nil, e.g.
+	// react called directly in tests). Also guarded by brainMu.
+	brainMu       sync.Mutex
+	escSummaries  map[string]string
+	brainCycleCtx context.Context
+
+	// shutdownCtx is the daemon's root context, cancelled on signal/stop. The
+	// observe/tick cycles run on WithoutCancel derivatives so their read/write
+	// execs FINISH rather than abort; the OPT-IN brain summaries are the one
+	// exception — they are read-only and safe to abort, so they derive their
+	// bounded context from THIS one (via brainCycleCtx) so a hung claude is
+	// killed at shutdown instead of delaying it up to the brain timeout. nil
+	// until Run sets it (and in tests) → brain calls fall back to their own ctx.
+	shutdownCtx context.Context
+
 	// runtimeHealth is the tick precheck seam (SPEC step 1 successor): it
 	// reports whether the native runtime's external tools — tmux, git,
 	// claude — are all resolvable, returning an error naming the first
@@ -152,6 +192,14 @@ func newDaemon(cfg *config.Config, lin linear.API, logger *log.Logger, home stri
 	d.sendKeys = func(ctx context.Context, tmuxName, text string) error {
 		return (&tmux.Client{Bin: "tmux"}).SendKeys(ctx, tmuxName, text)
 	}
+	// Brain context-gathering seams (P5.25). brain / brainSummarize stay nil
+	// here: the brain is built by Run/handleReload from [brain] and left off in
+	// tests unless they install a fake seam — so newDaemon alone is a no-brain,
+	// generic-template daemon.
+	d.paneTail = func(ctx context.Context, tmuxName string, lines int) (string, error) {
+		return (&tmux.Client{Bin: "tmux"}).CapturePane(ctx, tmuxName, lines)
+	}
+	d.prDiff = scmc.PRDiff
 	// A no-op notifier until Run/reload resolves the [notify] config; keeps the
 	// engine free of nil checks. notify.New always returns a non-nil Notifier.
 	d.notifier = notify.New(notify.NotifyConfig{})
@@ -219,6 +267,17 @@ func Run(ctx context.Context) error {
 	// desktop/Slack fan-out. Rebuilt on reload (handleReload). The Slack webhook
 	// URL is resolved from its env-var name here and never logged.
 	d.notifier = notify.New(cfg.ResolveNotify())
+	// Orchestrator brain (PLAN P5.25): build the OPT-IN summarizer from [brain].
+	// Disabled by default (nil ⇒ generic templates). Check availability ONCE at
+	// startup: an operator who enabled the brain but has no claude on PATH gets a
+	// single log line and the generic behavior, never a per-cycle error.
+	d.mu.Lock()
+	d.setBrainLocked(cfg.Brain)
+	brainEnabledButMissing := cfg.Brain.Enabled && d.brain == nil
+	d.mu.Unlock()
+	if brainEnabledButMissing {
+		logger.Printf("brain: [brain].enabled is true but claude is not available on PATH — using generic notify/comment templates")
+	}
 	if err := cfg.Validate(); err != nil {
 		// Not fatal: the daemon stays up so status/reload can surface and
 		// fix it — but polls are HELD (never ticked). Reload rejects the
@@ -243,6 +302,11 @@ func Run(ctx context.Context) error {
 
 	ctx, cancel := context.WithCancel(ctx)
 	d.cancel = cancel
+	// Root context for the OPT-IN brain summaries: unlike the shielded
+	// observe/tick execs, a hung `claude -p` is read-only and safe to abort, so
+	// it hangs off this shutdown-cancellable ctx (see brainCycleCtx). Set before
+	// the observe loop starts so it is always visible to a brain call.
+	d.shutdownCtx = ctx
 	defer cancel()
 
 	sig := make(chan os.Signal, 1)
