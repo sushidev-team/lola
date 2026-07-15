@@ -27,6 +27,12 @@ const (
 // degrades to a plain stacked view (narrowCockpit) rather than smearing
 // unreadable slivers, mirroring the kanbanNarrow discipline.
 func (m *rootModel) cockpitView() string {
+	return strings.Join(m.cockpitLines(), "\n")
+}
+
+// cockpitLines is cockpitView split out so a modal overlay can composite over
+// the exact frame lines (placeModal). It always returns the full-height frame.
+func (m *rootModel) cockpitLines() []string {
 	W, H := m.width, m.height
 	// Before the first WindowSizeMsg (and in unit tests) the size is unknown;
 	// fall back to a sensible default frame rather than rendering nothing.
@@ -37,7 +43,7 @@ func (m *rootModel) cockpitView() string {
 		H = 24
 	}
 	if W < 72 || H < 18 {
-		return m.narrowCockpit()
+		return strings.Split(m.narrowCockpit(), "\n")
 	}
 
 	vitals := m.vitalsBar(W)
@@ -75,7 +81,77 @@ func (m *rootModel) cockpitView() string {
 		lines = append(lines, msg)
 	}
 	lines = append(lines, keys)
-	return strings.Join(lines, "\n")
+	return lines
+}
+
+// modalOver composites a bordered, focused modal box (built from title +
+// content) centered over the dimmed cockpit frame — the lazygit/k9s floating
+// overlay. The cockpit stays visible (faint) behind it for context.
+func (m *rootModel) modalOver(title string, content []string) string {
+	W, H := m.width, m.height
+	if W <= 0 {
+		W = 100
+	}
+	if H <= 0 {
+		H = 24
+	}
+	bg := m.cockpitLines()
+	mw := W - 8
+	if mw > 76 {
+		mw = 76
+	}
+	if mw < 20 {
+		mw = 20
+	}
+	mh := len(content) + 2 // + borders
+	if max := H - 4; mh > max {
+		mh = max
+	}
+	if mh < 3 {
+		mh = 3
+	}
+	modal := box(title, content, mw, mh, true)
+	return strings.Join(placeModal(bg, modal, W), "\n")
+}
+
+// doctorModal renders the health report (or the running placeholder) as a modal
+// floating over the cockpit. It reuses doctorReportLines and the same scroll
+// window the full-screen overlay used, sized to the modal height.
+func (m *rootModel) doctorModal() string {
+	if m.doctorReport == nil {
+		return m.modalOver("doctor", []string{faintText.Render("running checks…"), "", faintText.Render("esc close")})
+	}
+	rep := *m.doctorReport
+	lines := doctorReportLines(rep)
+	H := m.height
+	if H <= 0 {
+		H = 24
+	}
+	win := H - 10 // leave room for borders, summary, hint, and the ↑/↓ markers
+	if win < 4 {
+		win = 4
+	}
+	if maxScroll := len(lines) - win; m.doctorScroll > maxScroll {
+		if maxScroll < 0 {
+			maxScroll = 0
+		}
+		m.doctorScroll = maxScroll
+	}
+	start := m.doctorScroll
+	end := start + win
+	if end > len(lines) {
+		end = len(lines)
+	}
+	var content []string
+	if start > 0 {
+		content = append(content, faintText.Render("  ↑ more"))
+	}
+	content = append(content, lines[start:end]...)
+	if end < len(lines) {
+		content = append(content, faintText.Render("  ↓ more"))
+	}
+	content = append(content, "", rep.Summary(), faintText.Render("↑/↓ scroll · esc close"))
+	return m.modalOver("doctor", content)
 }
 
 // railColumn stacks the fixed-height Triage panel over a Polls panel that takes

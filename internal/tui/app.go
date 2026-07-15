@@ -286,9 +286,12 @@ func (m *rootModel) tabBar() string {
 
 func (m *rootModel) View() string {
 	if m.doctorLoading || m.doctorReport != nil {
-		return m.doctorView()
+		return m.doctorModal()
 	}
 	if m.form != nil {
+		// The cascading edit form and the first-run setup wizard stay full-screen
+		// for now — they are multi-step interactive views whose own layout would
+		// not survive being boxed; modalizing them is a separate pass.
 		return m.form.view(m.height)
 	}
 	return m.cockpitView()
@@ -469,7 +472,7 @@ func (m *rootModel) doctorKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.doctorScroll--
 		}
 	case "down", "j":
-		m.doctorScroll++ // clamped against the window in doctorView
+		m.doctorScroll++ // clamped against the window in doctorModal
 	}
 	return m, nil
 }
@@ -499,49 +502,6 @@ func doctorReportLines(rep doctor.Report) []string {
 		lines = append(lines, glyph+"  "+r.Name+pad+"  "+r.Detail)
 	}
 	return lines
-}
-
-func (m *rootModel) doctorView() string {
-	var b strings.Builder
-	b.WriteString(titleStyle.Render("doctor") + "\n\n")
-	if m.doctorReport == nil {
-		b.WriteString(faintText.Render("running checks…") + "\n")
-		b.WriteString("\n" + faintText.Render("esc close") + "\n")
-		return b.String()
-	}
-
-	rep := *m.doctorReport
-	lines := doctorReportLines(rep)
-
-	// Scroll window sized to the terminal, mirroring the picker overlay.
-	win := m.height - 7
-	if win < 5 {
-		win = 5
-	}
-	if maxScroll := len(lines) - win; m.doctorScroll > maxScroll {
-		if maxScroll < 0 {
-			maxScroll = 0
-		}
-		m.doctorScroll = maxScroll
-	}
-	start := m.doctorScroll
-	end := start + win
-	if end > len(lines) {
-		end = len(lines)
-	}
-	if start > 0 {
-		b.WriteString(faintText.Render("  ↑ more") + "\n")
-	}
-	for i := start; i < end; i++ {
-		b.WriteString(lines[i] + "\n")
-	}
-	if end < len(lines) {
-		b.WriteString(faintText.Render("  ↓ more") + "\n")
-	}
-
-	b.WriteString("\n" + rep.Summary() + "\n")
-	b.WriteString(faintText.Render("↑/↓ scroll · esc close") + "\n")
-	return b.String()
 }
 
 func (m *rootModel) reloadConfig() {
