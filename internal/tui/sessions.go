@@ -207,6 +207,7 @@ type sessionsModel struct {
 	killTarget  string // session ID captured when "x" was pressed (pinned across refreshes)
 	preview     string // rendered pane text (cmd=pane) for the selected session
 	previewFor  string // session ID the preview + paneData belong to ("" = none)
+	previewErr  string // last cmd=pane failure for previewFor, surfaced in the Detail panel
 	// paneData is the daemon's read of the selected session's pane: the rendered
 	// text plus the attention parser's extracted question. It backs both the
 	// compact preview and — when the session is needs_input — the answer card.
@@ -439,10 +440,16 @@ func (m *rootModel) handlePaneMsg(v paneMsg) {
 		return // stale capture for a session no longer selected
 	}
 	if v.err != nil || v.data == nil {
-		s.preview, s.previewFor, s.paneData = "", sel.ID, nil // renders as "(no preview)"
+		// Surface WHY: a capture error (tmux/daemon) reads differently from a
+		// genuinely blank pane, so the Detail panel can explain the empty preview.
+		s.preview, s.previewFor, s.paneData = "", sel.ID, nil
+		s.previewErr = ""
+		if v.err != nil {
+			s.previewErr = v.err.Error()
+		}
 		return
 	}
-	s.preview, s.previewFor, s.paneData = v.data.Text, sel.ID, v.data
+	s.preview, s.previewFor, s.paneData, s.previewErr = v.data.Text, sel.ID, v.data, ""
 }
 
 func (m *rootModel) updateSessions(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -766,8 +773,12 @@ func (m *rootModel) sessionDetail() string {
 			for _, ln := range lastLines(s.preview, s.paneLines()) {
 				b.WriteString(previewLine(ln, m.width) + "\n")
 			}
+		} else if fresh && s.previewErr != "" {
+			b.WriteString(faintText.Render("(preview unavailable: "+s.previewErr+")") + "\n")
+		} else if fresh {
+			b.WriteString(faintText.Render("(pane captured empty)") + "\n")
 		} else {
-			b.WriteString(faintText.Render("(no preview)") + "\n")
+			b.WriteString(faintText.Render("(no preview yet)") + "\n")
 		}
 		return b.String()
 	}

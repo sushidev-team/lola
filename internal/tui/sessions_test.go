@@ -518,7 +518,7 @@ func TestSessionPreviewPlaceholderWithTmux(t *testing.T) {
 	m.sessions.data = cannedSessions()
 	m.sessions.cursor = 0 // tmux-backed, no capture yet
 
-	if v := m.View(); !strings.Contains(v, "(no preview)") {
+	if v := m.View(); !strings.Contains(v, "(no preview yet)") {
 		t.Errorf("preview pane must show placeholder before a capture arrives:\n%s", v)
 	}
 
