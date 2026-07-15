@@ -31,6 +31,32 @@ type agentFrameMsg struct{ gen int }
 // spinnerTickMsg advances the loading spinner.
 type spinnerTickMsg struct{}
 
+// agentDebounceMsg fires after the selection has been still for a moment; only
+// the latest token actually attaches, so fast scrolling doesn't spawn a tmux
+// attach per row.
+type agentDebounceMsg struct{ token int }
+
+// agentDebounceDelay is how long the selection must settle before the live agent
+// attaches.
+const agentDebounceDelay = 180 * time.Millisecond
+
+// scheduleAgentSync drops the stale agent view and debounces a re-attach to the
+// (soon-to-be-settled) selection. A no-op when the right agent is already shown.
+func (m *rootModel) scheduleAgentSync() tea.Cmd {
+	sel := m.sessions.selected()
+	target := ""
+	if sel != nil && sel.TmuxName != "" && sel.Status != "dead" && sel.Status != "session_ended" {
+		target = sel.ID
+	}
+	if target == m.agentFor && (m.agentTerm != nil || target == "") {
+		return nil
+	}
+	m.closeAgent() // clear the previous session's view immediately
+	m.agentDebounce++
+	tok := m.agentDebounce
+	return tea.Tick(agentDebounceDelay, func(time.Time) tea.Msg { return agentDebounceMsg{token: tok} })
+}
+
 func waitAgentFrame(t *vtterm.Term, gen int) tea.Cmd {
 	return func() tea.Msg {
 		<-t.Frames()

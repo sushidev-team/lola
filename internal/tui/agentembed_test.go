@@ -49,6 +49,36 @@ func TestFocusAgentThenCtrlQUnfocuses(t *testing.T) {
 	}
 }
 
+// Moving the selection schedules a DEBOUNCED attach and bumps the token; a
+// superseded (stale-token) debounce fires nothing, so fast scrolling attaches
+// only once.
+func TestAgentSyncDebounces(t *testing.T) {
+	m := newTestRoot(t)
+	m.sessions.data = &protocol.SessionsData{Sessions: []protocol.SessionInfo{
+		{ID: "s1", TmuxName: "lola-x", Status: "working"},
+		{ID: "s2", TmuxName: "lola-y", Status: "working"},
+	}}
+	m.sessions.selID, m.sessions.cursor = "s1", 0
+
+	if cmd := m.scheduleAgentSync(); cmd == nil {
+		t.Fatal("a selection change must schedule a debounced sync")
+	}
+	stale := m.agentDebounce
+	if m.agentTerm != nil {
+		t.Error("scheduling must NOT attach immediately (that is the debounce point)")
+	}
+	// A second change supersedes the first.
+	m.sessions.selID, m.sessions.cursor = "s2", 1
+	m.scheduleAgentSync()
+	if m.agentDebounce == stale {
+		t.Error("a newer selection change must bump the debounce token")
+	}
+	// The stale debounce fires nothing (no attach).
+	if _, c := m.Update(agentDebounceMsg{token: stale}); c != nil {
+		t.Error("a superseded debounce token must be ignored")
+	}
+}
+
 // syncAgentPreview never opens an attach for a session that has no tmux pane or
 // whose agent has exited — it leaves the embed empty.
 func TestSyncAgentSkipsNonLive(t *testing.T) {

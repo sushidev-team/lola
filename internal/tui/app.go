@@ -49,9 +49,10 @@ type rootModel struct {
 	agentTerm    *termView
 	agentFor     string // session ID agentTerm is attached to ("" = none)
 	agentFocused bool   // agent embed has keyboard + is expanded
-	agentGen     int    // generation, bumped on re-target so stale frame waiters are ignored
-	spin         int    // braille spinner frame, advanced while a terminal is loading
-	spinning     bool   // a spinner tick loop is active
+	agentGen      int  // generation, bumped on re-target so stale frame waiters are ignored
+	agentDebounce int  // debounce token; only the latest selection change attaches
+	spin          int  // braille spinner frame, advanced while a terminal is loading
+	spinning      bool // a spinner tick loop is active
 
 	width  int
 	height int
@@ -218,7 +219,7 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmd := m.handleSessionsMsg(v)
 		m.recordAttn()
 		if m.effectiveSelID() != before { // selection (re)pinned → re-target the live agent
-			if c := m.syncAgentPreview(); c != nil {
+			if c := m.scheduleAgentSync(); c != nil {
 				cmd = tea.Batch(cmd, c)
 			}
 		}
@@ -272,6 +273,11 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.spinning = false
 		return m, nil
+	case agentDebounceMsg:
+		if v.token != m.agentDebounce {
+			return m, nil // superseded by a newer selection change
+		}
+		return m, m.syncAgentPreview()
 	}
 
 	// The focused embedded agent owns every keystroke (Ctrl-q unfocuses).
@@ -330,7 +336,7 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	before := m.effectiveSelID()
 	model, cmd := m.updateSessions(msg)
 	if m.effectiveSelID() != before {
-		if c := m.syncAgentPreview(); c != nil {
+		if c := m.scheduleAgentSync(); c != nil {
 			cmd = tea.Batch(cmd, c)
 		}
 	}
