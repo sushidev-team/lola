@@ -57,6 +57,7 @@ func New(cmd *exec.Cmd, w, h int) (*Term, error) {
 		h:      h,
 	}
 	go t.readLoop()
+	go t.responseLoop()
 	return t, nil
 }
 
@@ -71,6 +72,25 @@ func (t *Term) readLoop() {
 		if err != nil {
 			t.exited.Store(true)
 			t.notify()
+			return
+		}
+	}
+}
+
+// responseLoop pumps the emulator's replies to terminal QUERIES (Primary Device
+// Attributes, cursor-position reports, mode reports, …) back to the child. This
+// is the other half of a real terminal: interactive programs — tmux, vim, and
+// the agent — send these queries on startup and BLOCK waiting for the answer, so
+// without this they hang with a blank screen. emu.Close() (in Close) unblocks
+// the read so this goroutine exits cleanly.
+func (t *Term) responseLoop() {
+	buf := make([]byte, 4096)
+	for {
+		n, err := t.emu.Read(buf)
+		if n > 0 {
+			_, _ = t.pty.Write(buf[:n])
+		}
+		if err != nil {
 			return
 		}
 	}
@@ -153,6 +173,7 @@ func (t *Term) Close() error {
 	if t.cmd != nil && t.cmd.Process != nil {
 		_ = t.cmd.Process.Kill()
 	}
+	_ = t.emu.Close() // unblock responseLoop's emu.Read
 	err := t.pty.Close()
 	// A killed child must be reaped so it doesn't linger as a zombie.
 	if t.cmd != nil {
