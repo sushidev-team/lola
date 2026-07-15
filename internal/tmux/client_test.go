@@ -174,8 +174,10 @@ func TestCapturePaneArgsAndOutput(t *testing.T) {
 	if out != fixture+"\n" {
 		t.Errorf("CapturePane output %q, want rendered screen incl. ANSI %q", out, fixture+"\n")
 	}
-	if args := loggedArgs(t, argsLog); args != "-L lola capture-pane -p -e -t =main -S -200" {
-		t.Errorf("invoked %q, want -L lola capture-pane -p -e -t =main -S -200", args)
+	// capture-pane takes a target-PANE: "=main:" (exact session + active pane),
+	// NOT "=main" — a bare "=name" is not a valid pane target ("can't find pane").
+	if args := loggedArgs(t, argsLog); args != "-L lola capture-pane -p -e -t =main: -S -200" {
+		t.Errorf("invoked %q, want -L lola capture-pane -p -e -t =main: -S -200", args)
 	}
 }
 
@@ -186,7 +188,8 @@ func TestSendKeysLiteralThenEnter(t *testing.T) {
 	if err := c.SendKeys(context.Background(), "main", "fix the CI failure"); err != nil {
 		t.Fatalf("SendKeys: %v", err)
 	}
-	want := "-L lola send-keys -t =main -l fix the CI failure\n-L lola send-keys -t =main Enter"
+	// send-keys also takes a target-PANE, so "=main:" (not "=main").
+	want := "-L lola send-keys -t =main: -l fix the CI failure\n-L lola send-keys -t =main: Enter"
 	if args := loggedArgs(t, argsLog); args != want {
 		t.Errorf("invoked:\n%s\nwant literal text then Enter:\n%s", args, want)
 	}

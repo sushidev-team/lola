@@ -184,11 +184,19 @@ func DefaultServerSessions(ctx context.Context, bin, prefix string) ([]string, e
 	return names, nil
 }
 
+// paneTarget builds a target-PANE spec for the session named exactly name: the
+// "=" keeps the exact-match safety (no prefix collision), and the trailing ":"
+// resolves to the session's active window+pane. capture-pane and send-keys take
+// a target-PANE, and a bare "=name" is NOT a valid pane target on tmux (it fails
+// with "can't find pane") — the ":" is required. Session-target commands
+// (has-session, kill-session) use "=name" without the colon.
+func paneTarget(name string) string { return "=" + name + ":" }
+
 // CapturePane returns the rendered screen of the session's active pane,
 // including ANSI escape sequences (-e), covering the last lines rows of
 // scrollback plus the visible screen.
 func (c *Client) CapturePane(ctx context.Context, name string, lines int) (string, error) {
-	out, _, err := c.run(ctx, "capture-pane", "-p", "-e", "-t", "="+name, "-S", fmt.Sprintf("-%d", lines))
+	out, _, err := c.run(ctx, "capture-pane", "-p", "-e", "-t", paneTarget(name), "-S", fmt.Sprintf("-%d", lines))
 	if err != nil {
 		return "", err
 	}
@@ -198,10 +206,10 @@ func (c *Client) CapturePane(ctx context.Context, name string, lines int) (strin
 // SendKeys types text into the session literally (-l: no key-name
 // interpretation) and then presses Enter.
 func (c *Client) SendKeys(ctx context.Context, name, text string) error {
-	if _, _, err := c.run(ctx, "send-keys", "-t", "="+name, "-l", text); err != nil {
+	if _, _, err := c.run(ctx, "send-keys", "-t", paneTarget(name), "-l", text); err != nil {
 		return err
 	}
-	_, _, err := c.run(ctx, "send-keys", "-t", "="+name, "Enter")
+	_, _, err := c.run(ctx, "send-keys", "-t", paneTarget(name), "Enter")
 	return err
 }
 
