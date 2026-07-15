@@ -57,8 +57,25 @@ type Poll struct {
 	Repo           string   `toml:"repo"`    // GitHub "owner/name" for PR checks; empty falls back to the project's repo (PollRepo)
 	ConcurrencyCap int      `toml:"concurrency_cap"`
 	PrioritySort   []string `toml:"priority_sort"`
-	DedupMode      string   `toml:"dedup_mode"` // label|seen
+	DedupMode      string   `toml:"dedup_mode"` // label|seen|state
 	OnSentSetLabel string   `toml:"on_sent_set_label"`
+
+	// --- Linear write-back (P4) --------------------------------------------
+	// Optional lifecycle write-back: Lola advances the issue's workflow state
+	// and/or posts a short comment as the agent progresses. Every field is
+	// optional — "" (no transition / no label) and false (no comment) are the
+	// defaults, so a poll that sets none of them behaves exactly as before.
+	// The IDs are Linear UUIDs; they are validated only for non-emptiness where
+	// a feature requires them (dedup_mode=state needs OnSpawnStateID) and never
+	// resolved against Linear here — resolution is a runtime concern.
+	OnSpawnStateID   string `toml:"on_spawn_state_id"`  // move issue to this state when a session is spawned ("" = no transition)
+	OnPRStateID      string `toml:"on_pr_state_id"`     // state when the agent opens a PR ("" = no transition)
+	OnMergedStateID  string `toml:"on_merged_state_id"` // state when the PR merges ("" = no transition)
+	BlockedLabelID   string `toml:"blocked_label_id"`   // label added on escalation (agent-blocked); "" = none
+	CommentOnSpawn   bool   `toml:"comment_on_spawn"`   // also post a short comment when the session spawns
+	CommentOnPR      bool   `toml:"comment_on_pr"`      // ... when the agent opens a PR
+	CommentOnMerged  bool   `toml:"comment_on_merged"`  // ... when the PR merges
+	CommentOnBlocked bool   `toml:"comment_on_blocked"` // ... on escalation (agent blocked)
 }
 
 // Defaults is the [defaults] table. PollInterval is a plain time.Duration in

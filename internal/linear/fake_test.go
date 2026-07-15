@@ -94,6 +94,77 @@ func TestFakeInjectedErrorStillRecordsCall(t *testing.T) {
 	}
 }
 
+func TestFakeRecordsCommentAndStateCalls(t *testing.T) {
+	ctx := context.Background()
+	f := &Fake{}
+
+	if err := f.CreateComment(ctx, "uuid-1", "working"); err != nil {
+		t.Fatalf("CreateComment: %v", err)
+	}
+	if err := f.SetIssueState(ctx, "uuid-1", "state-progress"); err != nil {
+		t.Fatalf("SetIssueState: %v", err)
+	}
+	if err := f.CreateComment(ctx, "uuid-1", "approved"); err != nil {
+		t.Fatalf("CreateComment: %v", err)
+	}
+
+	log := f.CallLog()
+	if len(log) != 3 {
+		t.Fatalf("CallLog len = %d, want 3", len(log))
+	}
+
+	// CreateComment records method + (uuid, body) in order.
+	if log[0].Method != "CreateComment" ||
+		log[0].Args[0] != "uuid-1" || log[0].Args[1] != "working" {
+		t.Errorf("log[0] = %+v, want CreateComment(uuid-1, working)", log[0])
+	}
+	// SetIssueState records method + (uuid, stateId).
+	if log[1].Method != "SetIssueState" ||
+		log[1].Args[0] != "uuid-1" || log[1].Args[1] != "state-progress" {
+		t.Errorf("log[1] = %+v, want SetIssueState(uuid-1, state-progress)", log[1])
+	}
+	if log[2].Method != "CreateComment" || log[2].Args[1] != "approved" {
+		t.Errorf("log[2] = %+v, want CreateComment(..., approved)", log[2])
+	}
+
+	// Observation stores let tests assert one-comment-per-transition and the
+	// exact stateId without replaying the call log.
+	if got := f.CommentsByIssue["uuid-1"]; !reflect.DeepEqual(got, []string{"working", "approved"}) {
+		t.Errorf("CommentsByIssue = %v, want [working approved]", got)
+	}
+	if got := f.StateByIssue["uuid-1"]; got != "state-progress" {
+		t.Errorf("StateByIssue = %q, want state-progress", got)
+	}
+}
+
+func TestFakeCommentAndStateInjectedErrors(t *testing.T) {
+	ctx := context.Background()
+	boom := errors.New("boom")
+	f := &Fake{Errs: map[string]error{
+		"CreateComment": boom,
+		"SetIssueState": boom,
+	}}
+
+	if err := f.CreateComment(ctx, "uuid-1", "body"); !errors.Is(err, boom) {
+		t.Fatalf("CreateComment err = %v, want injected boom", err)
+	}
+	if err := f.SetIssueState(ctx, "uuid-1", "state-x"); !errors.Is(err, boom) {
+		t.Fatalf("SetIssueState err = %v, want injected boom", err)
+	}
+
+	// Failed calls are still logged...
+	if names := f.CallNames(); !reflect.DeepEqual(names, []string{"CreateComment", "SetIssueState"}) {
+		t.Errorf("CallNames = %v, want both failed calls recorded", names)
+	}
+	// ...but the observation stores must not change on failure.
+	if len(f.CommentsByIssue["uuid-1"]) != 0 {
+		t.Errorf("CommentsByIssue = %v, want empty after failed CreateComment", f.CommentsByIssue["uuid-1"])
+	}
+	if _, ok := f.StateByIssue["uuid-1"]; ok {
+		t.Errorf("StateByIssue mutated on failed SetIssueState: %v", f.StateByIssue)
+	}
+}
+
 func TestFakeMatchingIssuesFixtures(t *testing.T) {
 	ctx := context.Background()
 

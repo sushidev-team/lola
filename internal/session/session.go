@@ -38,6 +38,24 @@ type Session struct {
 	// so it never re-adds a label the issue never had.
 	RemovedLabels []string `json:"removed_labels,omitempty"`
 
+	// PollName is the poll that spawned this session; it selects that poll's
+	// P4 Linear write-back configuration (state transitions + comments) as the
+	// session progresses through its lifecycle. Empty for sessions adopted
+	// without a prior record — write-back is then resolved by project or
+	// skipped (see Daemon.pollForSession).
+	PollName string `json:"poll_name,omitempty"`
+
+	// Write-back one-shot guards (PLAN P4): each lifecycle write-back fires at
+	// most once per session and the guard PERSISTS across restarts, so a
+	// state-change/comment is never repeated on the 30s observer cadence. A
+	// guard is set optimistically once its transition posts (or would post) a
+	// comment, so a retry never double-comments. All-empty write-back config
+	// leaves them untouched. See internal/daemon/writeback.go.
+	WBSpawnDone   bool `json:"wb_spawn_done,omitempty"`
+	WBPRDone      bool `json:"wb_pr_done,omitempty"`
+	WBMergedDone  bool `json:"wb_merged_done,omitempty"`
+	WBBlockedDone bool `json:"wb_blocked_done,omitempty"`
+
 	// Reaction-state fields (PLAN P3): the persisted memory the reaction
 	// engine keeps per session so a reaction fires once per state transition
 	// (not on every 30s observer cycle) and gives up after a bounded number of

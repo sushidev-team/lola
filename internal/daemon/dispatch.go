@@ -163,13 +163,16 @@ func intersectLabels(want, have []string) []string {
 
 // PruneSeen returns a pruned copy of seen so it never grows unbounded.
 // label mode: drop entries older than ttl (seen is only a short race guard).
-// seen mode: drop entries whose ID is not in the current match set, so
-// reopened tickets re-queue.
+// seen / state mode: drop entries whose ID is not in the current match set, so
+// reopened tickets re-queue. state mode only ever stores the fallback entry
+// written when a spawn state move failed, and it must stay authoritative (no
+// TTL) — the issue keeps matching until the state is fixed, so a TTL-pruned
+// entry would let it re-dispatch forever.
 func PruneSeen(seen map[string]time.Time, matched map[string]bool, dedupMode string, now time.Time, ttl time.Duration) map[string]time.Time {
 	out := make(map[string]time.Time, len(seen))
 	for id, t := range seen {
 		switch dedupMode {
-		case "seen":
+		case "seen", "state":
 			if !matched[id] {
 				continue
 			}
@@ -316,6 +319,22 @@ func (d *Daemon) tick(ctx context.Context, name string, dryRun bool) (protocol.P
 			Identifier: is.Identifier, Title: is.Title, Action: "skipped", Reason: reason,
 		})
 	}
+	// State-mode durable double-spawn guard. label/seen persist a seen entry
+	// BEFORE Spawn; state mode's ONLY dedup is the post-spawn state move, so a
+	// crash after the session is saved but before that move lands leaves — on
+	// restart — an empty in-flight set, no seen entry, and an issue still inside
+	// state_ids. Without this the still-matching issue would re-dispatch onto a
+	// SECOND agent. Shield any issue that already has a live native session on
+	// record (adoption repopulates the store but not the in-memory in-flight set).
+	var stateLive map[string]bool
+	if p.DedupMode == "state" {
+		stateLive = map[string]bool{}
+		for _, s := range d.sessions.Snapshot() {
+			if s.Source == "native" && s.Issue != "" && nativeSessionPresent(s.Status) {
+				stateLive[s.Issue] = true
+			}
+		}
+	}
 	var candidates []linear.Issue
 	for _, is := range issues {
 		if d.inflight.Has(is.ID) {
@@ -327,6 +346,21 @@ func (d *Daemon) tick(ctx context.Context, name string, dryRun bool) (protocol.P
 			// seen is authoritative.
 			if _, ok := seen[is.ID]; ok {
 				skip(is, "dedup-seen")
+				continue
+			}
+		case "state":
+			// state mode's dedup is the post-spawn state move (which drops the
+			// issue from the match set). A live native session shields the
+			// crash/restart window; a seen entry exists ONLY as the fallback
+			// written when that state move FAILED (writeBackSpawn -> seenFallback)
+			// and is authoritative — NO TTL. The issue keeps matching until the
+			// state is fixed, so a TTL-expired entry would re-dispatch it forever.
+			if stateLive[is.Identifier] {
+				skip(is, "session-live")
+				continue
+			}
+			if _, ok := seen[is.ID]; ok {
+				skip(is, "dedup-state")
 				continue
 			}
 		default: // label: query already excludes flipped issues; seen is
@@ -379,18 +413,26 @@ func (d *Daemon) tick(ctx context.Context, name string, dryRun bool) (protocol.P
 			continue
 		}
 
-		// (a) Mark in-flight AND persist seen FIRST.
+		// (a) Mark in-flight AND persist seen FIRST — the crash guard against a
+		// double-spawn. dedup_mode=state writes NO seen entry: the post-spawn
+		// SetIssueState(OnSpawnStateID) moves the issue out of state_ids and IS
+		// the dedup (writeBackSpawn falls back to an AUTHORITATIVE seen entry only
+		// if that state write fails). In-flight covers the transient spawn window;
+		// across a crash/restart in that window a state-mode issue is instead
+		// shielded by the live-native-session guard in the candidate loop above.
 		d.inflight.Add(is.ID, is.Identifier)
-		seen[is.ID] = now
-		if err := d.seen.save(name, seen); err != nil {
-			// Without the on-disk guard a crash could double-spawn: skip.
-			d.inflight.Remove(is.ID)
-			delete(seen, is.ID)
-			d.logf(name, "persist seen for %s failed, skipping spawn: %v", is.Identifier, err)
-			errored++
-			m.Action, m.Reason = "skipped", "error"
-			res.Matches = append(res.Matches, m)
-			continue
+		if p.DedupMode != "state" {
+			seen[is.ID] = now
+			if err := d.seen.save(name, seen); err != nil {
+				// Without the on-disk guard a crash could double-spawn: skip.
+				d.inflight.Remove(is.ID)
+				delete(seen, is.ID)
+				d.logf(name, "persist seen for %s failed, skipping spawn: %v", is.Identifier, err)
+				errored++
+				m.Action, m.Reason = "skipped", "error"
+				res.Matches = append(res.Matches, m)
+				continue
+			}
 		}
 
 		// (b) Spawn with the IDENTIFIER (FE-231), never the UUID: worktree +
@@ -411,6 +453,9 @@ func (d *Daemon) tick(ctx context.Context, name string, dryRun bool) (protocol.P
 				// observer looks in the right place.
 				sess.Repo = pollRepo
 			}
+			// Stamp the owning poll so later lifecycle write-back (PR-open,
+			// merged, blocked) can resolve THIS poll's P4 config (PLAN P4).
+			sess.PollName = name
 			d.sessions.Upsert(sess)
 			if serr := d.sessions.Save(); serr != nil {
 				d.logf(name, "persist sessions after native spawn of %s: %v", is.Identifier, serr)
@@ -473,6 +518,12 @@ func (d *Daemon) tick(ctx context.Context, name string, dryRun bool) (protocol.P
 				}
 			}
 		}
+
+		// (d) P4 Linear write-back on spawn (all dedup modes): move the issue to
+		// on_spawn_state_id and/or post the spawn comment, once. In state mode the
+		// state move is ALSO the dedup. A no-op when nothing is configured; never
+		// blocks the running agent on a Linear failure.
+		d.writeBackSpawn(ctx, api, p, is, sess)
 	}
 
 	// 10. Log and update status.

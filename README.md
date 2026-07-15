@@ -174,7 +174,7 @@ checks happen in the runtime layer, not on config load.
 | `repo` | string | GitHub repository as `owner/name` (e.g. `sushidev-team/nori-app`). The reconciler and observer pass it to `gh pr list --repo` so their open-PR check works regardless of the daemon's working directory. **Optional** — when empty it falls back to the referenced project's `repo`; with neither set the PR check is unavailable and orphaned issues are **never** auto-reverted (fail-closed). |
 | `concurrency_cap` | int | Max counted native sessions this poll may occupy. Falls back to `[defaults].concurrency_cap` when 0/unset; the effective value must be > 0. |
 | `priority_sort` | string array | Sort keys for deterministic selection when the budget caps the match list, e.g. `["priority", "createdAt"]`. |
-| `dedup_mode` | `"label"` \| `"seen"` | See below. |
+| `dedup_mode` | `"label"` \| `"seen"` \| `"state"` | See below. |
 | `on_sent_set_label` | string | Label UUID added after a successful spawn to mark the issue as picked up. Required iff `dedup_mode = "label"`; must **not** be one of `match_labels`. |
 
 **Dedup modes** (pick one per poll, they are not mixed):
@@ -189,11 +189,51 @@ checks happen in the runtime layer, not on config load.
 - `seen` — the seen file is authoritative: matched-and-spawned issue IDs are
   remembered and skipped. Entries whose issues no longer match the filter are
   pruned, so a reopened ticket re-queues. No labels are touched.
+- `state` — lola advances the issue's own **workflow state** on spawn (see
+  `on_spawn_state_id` under [Linear write-back](#linear-write-back-optional)),
+  which moves it **out of** `state_ids` so it stops matching — no seen file, no
+  label flip, and the transition is visible in Linear. Requires `state_ids` set
+  and `on_spawn_state_id` set to a state that is **not** one of `state_ids`
+  (otherwise the issue keeps matching after the move and respawns forever).
 
 Regardless of mode, a daemon-global in-flight set prevents two polls from
 spawning the same issue in one cycle, and every dispatch is gated on the native
 runtime being healthy — if `tmux`/`git`/`claude` are not all resolvable the
 tick is skipped and **nothing** (labels, seen, in-flight) is mutated.
+
+### Linear write-back (optional)
+
+Per-poll fields that let lola narrate the agent's progress back onto the Linear
+issue — advancing the issue's **workflow state** and/or posting a short comment
+at each lifecycle point (P4). **Entirely optional**: every field defaults to
+`""` (no transition / no label) or `false` (no comment), so a poll that sets
+none of them behaves exactly as before. All IDs are Linear UUIDs; they are
+validated only for non-emptiness where a feature requires one and are **never**
+resolved against Linear at config time (that is a runtime check).
+
+| Key | Type | Description |
+| --- | --- | --- |
+| `on_spawn_state_id` | string | Workflow state the issue moves to when a session is spawned. `""` = no transition. **Required** when `dedup_mode = "state"`, and then must **not** be one of `state_ids`. |
+| `on_pr_state_id` | string | State when the agent opens a PR (e.g. "In Review"). `""` = no transition. |
+| `on_merged_state_id` | string | State when the PR merges (e.g. "Done"). `""` = no transition. |
+| `blocked_label_id` | string | Label added on escalation (agent blocked, needs a human). `""` = none. |
+| `comment_on_spawn` | bool | Also post a short comment when the session spawns. Default `false`. |
+| `comment_on_pr` | bool | Also post a short comment when the agent opens a PR. Default `false`. |
+| `comment_on_merged` | bool | Also post a short comment when the PR merges. Default `false`. |
+| `comment_on_blocked` | bool | Also post a short comment on escalation, with the block reason. Default `false`. |
+
+The `comment_on_*` toggles use lola's built-in comment templates. Like the
+`[reactions]` messages, they are filled by **plain string replacement**, never a
+template engine, so a PR link or a blocked-reason detail can never inject
+template directives. The placeholders are `{{.Session}}` (spawn comment),
+`{{.PR}}` (PR comment), and `{{.Detail}}` (blocked comment); the merged comment
+is a bare acknowledgement.
+
+State transitions and comments are independent — you can move the issue without
+commenting, comment without moving it, or do both. They also compose with any
+`dedup_mode`: e.g. a `label`-dedup poll can still set `on_pr_state_id` to move
+the issue to "In Review" when a PR opens. Only `dedup_mode = "state"` *depends*
+on `on_spawn_state_id` (that transition is what dedups the issue).
 
 ### `[reactions]` (optional)
 

@@ -469,6 +469,33 @@ func TestValidateMatrix(t *testing.T) {
 		{"bad dedup_mode enum", func(c *Config) { c.Polls[0].DedupMode = "both" }, "dedup_mode"},
 		{"empty dedup_mode rejected", func(c *Config) { c.Polls[0].DedupMode = "" }, "dedup_mode"},
 
+		// dedup_mode=state (P4): dedups by moving the issue OUT of state_ids on
+		// spawn. Requires state_ids set and on_spawn_state_id set to a state that
+		// is NOT one of state_ids.
+		{"state mode valid", func(c *Config) {
+			c.Polls[0].DedupMode = "state"
+			c.Polls[0].OnSpawnStateID = "state-inprogress" // not in validPoll's state_ids
+		}, ""},
+		{"state mode requires spawn state", func(c *Config) {
+			c.Polls[0].DedupMode = "state"
+			c.Polls[0].OnSpawnStateID = ""
+		}, "dedup_mode=state requires on_spawn_state_id"},
+		{"state mode spawn state must not be a match state", func(c *Config) {
+			c.Polls[0].DedupMode = "state"
+			c.Polls[0].OnSpawnStateID = "state-1" // one of validPoll's state_ids
+		}, "on_spawn_state_id must not be one of state_ids"},
+		{"state mode requires state_ids", func(c *Config) {
+			c.Polls[0].DedupMode = "state"
+			c.Polls[0].OnSpawnStateID = "state-inprogress"
+			c.Polls[0].StateIDs = nil
+		}, "dedup_mode=state requires state_ids"},
+		{"write-back fields coexist with label dedup", func(c *Config) {
+			c.Polls[0].OnPRStateID = "state-review"
+			c.Polls[0].OnMergedStateID = "state-done"
+			c.Polls[0].BlockedLabelID = "label-blocked"
+			c.Polls[0].CommentOnPR = true
+		}, ""},
+
 		{"cap zero without default", func(c *Config) { c.Polls[0].ConcurrencyCap = 0 }, "concurrency_cap"},
 		{"cap negative without default", func(c *Config) { c.Polls[0].ConcurrencyCap = -2 }, "concurrency_cap"},
 		{"cap zero with default ok", func(c *Config) { c.Polls[0].ConcurrencyCap = 0; c.Defaults.ConcurrencyCap = 2 }, ""},
@@ -934,5 +961,83 @@ func TestDurationRoundTrip(t *testing.T) {
 	}
 	if err := back.UnmarshalText([]byte("not-a-duration")); err == nil {
 		t.Error("expected parse error")
+	}
+}
+
+// Linear write-back (P4) fields survive Save/Load unchanged, and a state-mode
+// poll that sets them validates. A poll that leaves them at their zero values
+// (like validPoll) already round-trips via TestSaveLoadRoundTrip.
+func TestWriteBackRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+
+	orig := &Config{}
+	orig.Defaults.GlobalCap = 4
+	orig.Projects = []Project{validProject()}
+	orig.Reactions = defaultReactions()
+	orig.Notify = defaultNotify()
+
+	p := validPoll()
+	p.DedupMode = "state"
+	p.StateIDs = []string{"state-ready"}
+	p.OnSpawnStateID = "state-inprogress" // not one of state_ids
+	p.OnPRStateID = "state-review"
+	p.OnMergedStateID = "state-done"
+	p.BlockedLabelID = "label-blocked"
+	p.CommentOnSpawn = true
+	p.CommentOnPR = true
+	p.CommentOnMerged = true
+	p.CommentOnBlocked = true
+	orig.Polls = []Poll{p}
+
+	if err := orig.Validate(); err != nil {
+		t.Fatalf("state-mode write-back poll must validate: %v", err)
+	}
+	if err := orig.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(orig.Polls, got.Polls) {
+		t.Errorf("write-back round trip mismatch:\n save: %+v\n load: %+v", orig.Polls, got.Polls)
+	}
+	if err := got.Validate(); err != nil {
+		t.Errorf("reloaded write-back config must validate: %v", err)
+	}
+}
+
+// The default lifecycle comment templates are non-empty and carry exactly the
+// placeholders their doc contract promises — they are filled by plain string
+// replacement, so a drift here would silently ship a broken comment.
+func TestDefaultCommentTemplates(t *testing.T) {
+	cases := []struct {
+		name        string
+		tmpl        string
+		placeholder string // "" = no placeholder expected
+	}{
+		{"spawn", DefaultSpawnComment, "{{.Session}}"},
+		{"pr", DefaultPRComment, "{{.PR}}"},
+		{"merged", DefaultMergedComment, ""},
+		{"blocked", DefaultBlockedComment, "{{.Detail}}"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.tmpl == "" {
+				t.Fatal("template must not be empty")
+			}
+			if tc.placeholder != "" && !strings.Contains(tc.tmpl, tc.placeholder) {
+				t.Errorf("template %q missing placeholder %q", tc.tmpl, tc.placeholder)
+			}
+			// Rendering is plain strings.ReplaceAll: the intended placeholder is
+			// substituted and no stray "{{" survives afterwards.
+			rendered := strings.ReplaceAll(tc.tmpl, tc.placeholder, "X")
+			if tc.placeholder == "" {
+				rendered = tc.tmpl
+			}
+			if strings.Contains(rendered, "{{") {
+				t.Errorf("template %q has an unrecognized placeholder after render: %q", tc.tmpl, rendered)
+			}
+		})
 	}
 }

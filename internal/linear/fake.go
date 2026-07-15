@@ -45,6 +45,14 @@ type Fake struct {
 	// updated in place by SetIssueLabels, so tests observe the delta.
 	LabelIDsByIssue map[string][]string
 
+	// CommentsByIssue records successful CreateComment bodies per issue UUID
+	// (in order) so tests can assert one-comment-per-transition.
+	CommentsByIssue map[string][]string
+
+	// StateByIssue records the last stateId set via SetIssueState per issue
+	// UUID, so tests can assert the exact transition target.
+	StateByIssue map[string]string
+
 	// Errs injects an error per method name.
 	Errs map[string]error
 
@@ -181,5 +189,31 @@ func (f *Fake) SetIssueLabels(ctx context.Context, issueUUID string, labelIDs []
 		f.LabelIDsByIssue = map[string][]string{}
 	}
 	f.LabelIDsByIssue[issueUUID] = slices.Clone(labelIDs)
+	return nil
+}
+
+func (f *Fake) CreateComment(ctx context.Context, issueUUID, body string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.record("CreateComment", issueUUID, body); err != nil {
+		return err
+	}
+	if f.CommentsByIssue == nil {
+		f.CommentsByIssue = map[string][]string{}
+	}
+	f.CommentsByIssue[issueUUID] = append(f.CommentsByIssue[issueUUID], body)
+	return nil
+}
+
+func (f *Fake) SetIssueState(ctx context.Context, issueUUID, stateID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.record("SetIssueState", issueUUID, stateID); err != nil {
+		return err
+	}
+	if f.StateByIssue == nil {
+		f.StateByIssue = map[string]string{}
+	}
+	f.StateByIssue[issueUUID] = stateID
 	return nil
 }

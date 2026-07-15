@@ -163,7 +163,19 @@ func (d *Daemon) observeNative(ctx context.Context) {
 		// updated is the current record even when the merge above discarded
 		// (a settled-merged session still needs its cleanup fired once).
 		if known {
+			// P4 Linear write-back BEFORE react: the PR-open and merged
+			// transitions (and their one-shot guards) must land before react's
+			// merged-cleanup drops the session, so a failed cleanup retries
+			// without re-commenting.
+			d.writeBack(ctx, updated)
 			d.react(ctx, updated)
+			// Escalation (blocked) write-back AFTER react — react is what sets
+			// Escalated (CI retries exhausted). Re-read the record so the flag
+			// react just wrote is visible this cycle. A dropped (merged-cleaned)
+			// session is simply gone here, a no-op.
+			if cur, ok := d.sessions.Get(s.ID); ok {
+				d.writeBackEscalation(ctx, cur)
+			}
 		}
 	}
 	if !touched {

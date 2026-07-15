@@ -191,8 +191,24 @@ func (c *Config) Validate() error {
 				errs = append(errs, fmt.Errorf("%s: on_sent_set_label must not be one of match_labels, otherwise the issue re-matches after the flip and respawns forever", id))
 			}
 		case "seen":
+		case "state":
+			// State-based dedup (P4): on spawn Lola moves the issue to
+			// OnSpawnStateID, which takes it OUT of state_ids so it stops
+			// matching — no seen file, no label flip. This only works when the
+			// poll actually filters by state (state_ids) AND the target state
+			// lies OUTSIDE that filter; otherwise the issue keeps matching after
+			// the transition and respawns forever. The state IDs are checked for
+			// non-emptiness only; they are never resolved against Linear here.
+			if len(p.StateIDs) == 0 {
+				errs = append(errs, fmt.Errorf("%s: dedup_mode=state requires state_ids (the matching set the issue leaves on spawn)", id))
+			}
+			if p.OnSpawnStateID == "" {
+				errs = append(errs, fmt.Errorf("%s: dedup_mode=state requires on_spawn_state_id (the state the issue moves into, out of state_ids)", id))
+			} else if slices.Contains(p.StateIDs, p.OnSpawnStateID) {
+				errs = append(errs, fmt.Errorf("%s: on_spawn_state_id must not be one of state_ids, otherwise the issue still matches after the transition and respawns forever", id))
+			}
 		default:
-			errs = append(errs, fmt.Errorf("%s: dedup_mode must be label|seen, got %q", id, p.DedupMode))
+			errs = append(errs, fmt.Errorf("%s: dedup_mode must be label|seen|state, got %q", id, p.DedupMode))
 		}
 
 		if c.EffectiveCap(p) <= 0 {

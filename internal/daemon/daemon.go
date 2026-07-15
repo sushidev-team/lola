@@ -576,6 +576,15 @@ func (d *Daemon) adoptNativeSessions(ctx context.Context) {
 			if s.IssueUUID == "" {
 				s.IssueUUID = prev.IssueUUID
 			}
+			if s.PollName == "" {
+				s.PollName = prev.PollName // preserve the P4 write-back owner
+			}
+			// Carry forward the P4 write-back one-shot guards so a restart never
+			// re-comments a transition already narrated to Linear.
+			s.WBSpawnDone = s.WBSpawnDone || prev.WBSpawnDone
+			s.WBPRDone = s.WBPRDone || prev.WBPRDone
+			s.WBMergedDone = s.WBMergedDone || prev.WBMergedDone
+			s.WBBlockedDone = s.WBBlockedDone || prev.WBBlockedDone
 			s.PR = prev.PR
 			if s.Status == "dead" && prev.Status == "merged" {
 				// A merged session's pane going away is the expected end of

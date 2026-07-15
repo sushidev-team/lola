@@ -17,4 +17,6 @@ type API interface {
 	MatchingIssues(ctx context.Context, p config.Poll, activeCycleID, viewerID string) ([]Issue, error)
 	IssueLabelIDs(ctx context.Context, issueUUID string) ([]string, error)
 	SetIssueLabels(ctx context.Context, issueUUID string, labelIDs []string) error
+	CreateComment(ctx context.Context, issueUUID, body string) error
+	SetIssueState(ctx context.Context, issueUUID, stateID string) error
 }

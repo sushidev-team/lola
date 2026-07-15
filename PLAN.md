@@ -133,12 +133,69 @@ Each is optional and independently switchable.
 
 ## P6 — Ops polish
 
-27. **`lola doctor`.** Checks: tmux/gh/claude on PATH + versions, keychain
-    key readable, launchd loaded, socket healthy, project paths valid. *(S)*
+27. **`lola doctor`.** ✅ shipped. Checks tmux/git/claude/gh + versions,
+    keychain key, socket, config validity, project paths.
 28. **CI + release.** GitHub Actions (build/vet/test + `-race`), goreleaser,
     versioned releases; maybe brew tap. *(S/M)*
 29. **TUI polish.** Session history view, log viewer with follow, metrics
     (spawns/day, time-to-PR, retry rates), theming. *(ongoing)*
+
+## P7 — Attention & inline answer (user request)
+
+The most convenient thing when an agent stops for a human: see its question
+*and answer it in place*, without attaching.
+
+30. **Compact pane view.** For any session, a right/bottom panel showing the
+    last N rendered lines of its tmux pane (`capture-pane -e`, ANSI-clipped),
+    refreshed on the observer tick. Toggle full vs compact (small/condensed).
+    *(M)*
+31. **Question extraction + inline answer.** When status is `needs_input`,
+    parse the agent's prompt from the pane tail — detect a question and any
+    enumerated choices / free-text prompt — and render it as an actionable
+    card. The user answers inline (pick a choice or type), Lola `send-keys`
+    the answer back (through the AtPrompt gate). Turns "agent stuck" into a
+    one-keystroke reply. *(M/L — parsing is the hard part; start heuristic:
+    last non-empty block + trailing "?"/numbered list, refine.)* Uses the
+    `Notification` hook's payload (notification_type, prompt text) where
+    available rather than scraping alone.
+
+## P8 — Session views (user request)
+
+One list doesn't fit all. Model on the best of the field and improve:
+k9s (dense filterable tables + `/` filter + resource actions), lazygit
+(multi-panel + context), gh-dash (PR dashboard by column), sesh/zellij
+(session pickers + embedded panes).
+
+32. **Kanban board.** Sessions grouped into columns by lifecycle status
+    (working · needs_input · ci_failed · in_review · approved · merged/dead),
+    card = issue + agent + PR/checks + reacting posture. *(M)*
+33. **Compact list + filters.** Dense one-line-per-session rows; `/` filter
+    by project / status / needs-attention; sort; jump-to-attention. *(M)*
+34. **Embedded terminal preview.** Open a session's pane inline in a small
+    condensed font region (the "glance" view) without a full attach; escape
+    to detach. *(M)*
+35. **View switcher.** Cycle list ↔ kanban ↔ compact; remember per-session
+    selection. *(S)*
+
+## P9 — Buddy / QA coordinator (user request)
+
+A second agent per session (or per project) that is the coding agent's
+counterpart: it owns QA and PR hygiene while the worker owns the change.
+Mirrors AO's "reviewer" idea but Lola-native and Linear-aware.
+
+36. **Buddy session.** Spawn a paired reviewer agent (own worktree or
+    read-only on the worker's branch) that runs local review (e.g. CodeRabbit
+    CLI), triages PR review comments, proposes fixes, and does a risk
+    assessment. Configurable per project (which QA tools, when it spawns —
+    on PR open). *(L)*
+37. **Coordinator role.** The buddy coordinates the QA loop: on `ci_failed`
+    or `changes_requested` it can summarize + hand the worker a focused fix
+    prompt (feeding P3's send-to-agent), and on `approved+green` produce the
+    risk/summary that rides the notify + Linear comment. Counterpart to the
+    worker, not a replacement. *(L)*
+38. **Buddy in the views.** Worker + buddy shown as a linked pair in the
+    session views (P8); the buddy's findings surface in the attention card
+    (P7). *(M)*
 
 ---
 

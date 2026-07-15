@@ -235,6 +235,10 @@ func (d *Daemon) reconcilePoll(ctx context.Context, api linear.API, p config.Pol
 		d.inflight.Remove(is.ID)
 		d.logf(p.Name, "reconcile: reverted orphaned %s (no counted session after %s)", is.Identifier, orphanTimeout)
 		if natSess != nil {
+			// P4 write-back: mark the orphaned issue blocked (label + comment),
+			// once. Only when a session record survives — the WBBlockedDone guard
+			// lives on it, so without one we could re-fire every reconcile pass.
+			d.writeBackBlocked(ctx, api, p, *natSess, "The agent session ended without delivering a PR.")
 			// The dead session's worktree is never removed by reconcile
 			// (destructive-op discipline: removal only for merged or
 			// explicitly killed sessions) — name where it lives.

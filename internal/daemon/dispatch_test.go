@@ -145,3 +145,21 @@ func TestPruneSeenSeenMode(t *testing.T) {
 		t.Error("seen mode: entry no longer matching must be pruned so a reopened ticket re-queues")
 	}
 }
+
+// state mode's seen fallback is authoritative like seen mode: kept while the
+// issue still matches (regardless of age), pruned only when it stops matching.
+func TestPruneSeenStateMode(t *testing.T) {
+	now := time.Now()
+	seen := map[string]time.Time{
+		"still-matching": now.Add(-100 * time.Hour), // age irrelevant: authoritative
+		"gone":           now,
+	}
+	matched := map[string]bool{"still-matching": true}
+	got := PruneSeen(seen, matched, "state", now, time.Hour)
+	if _, ok := got["still-matching"]; !ok {
+		t.Error("state mode: fallback entry still matching must be kept regardless of age")
+	}
+	if _, ok := got["gone"]; ok {
+		t.Error("state mode: entry no longer matching must be pruned")
+	}
+}
