@@ -161,18 +161,28 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// mid-confirm refresh could reorder/prune rows under the cursor (the
 		// kill target is pinned by ID regardless, but the frozen view keeps the
 		// prompt and the highlighted row in agreement).
-		if m.tab == tabSessions && !m.sessions.confirmKill {
+		if m.tab == tabSessions && !m.sessions.confirmKill && !m.sessions.answering {
 			cmds = append(cmds, fetchSessionsCmd)
-			if c := m.previewRefreshCmd(); c != nil {
+			if c := m.paneRefreshCmd(); c != nil {
 				cmds = append(cmds, c)
 			}
 		}
 		return m, tea.Batch(cmds...)
 	case sessionsMsg:
 		return m, m.handleSessionsMsg(v)
-	case previewMsg:
-		m.handlePreviewMsg(v)
+	case paneMsg:
+		m.handlePaneMsg(v)
 		return m, nil
+	case answerDoneMsg:
+		// Surface the daemon's verdict: a green "answer sent", or the verbatim
+		// refusal/dial error. Then refresh the list and pane so the resumed
+		// (or still-stuck) session re-derives.
+		m.sessions.flash, m.sessions.flashGood = v.msg, v.ok
+		cmds := []tea.Cmd{fetchSessionsCmd}
+		if c := m.paneRefreshCmd(); c != nil {
+			cmds = append(cmds, c)
+		}
+		return m, tea.Batch(cmds...)
 	case attachDoneMsg:
 		if v.err != nil {
 			m.sessions.flash = "attach failed: " + v.err.Error()
@@ -219,10 +229,13 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, cmd
 	}
-	// Tab switching — but never while a delete/kill confirmation awaits y/n.
+	// Tab switching — but never while a delete/kill confirmation awaits y/n, nor
+	// while an answer card is open (its choices may be keyed "1"/"2", which would
+	// otherwise be swallowed as tab switches).
 	if k, ok := msg.(tea.KeyMsg); ok &&
 		!(m.tab == tabPolls && m.list.confirmDelete) &&
-		!(m.tab == tabSessions && m.sessions.confirmKill) {
+		!(m.tab == tabSessions && m.sessions.confirmKill) &&
+		!(m.tab == tabSessions && m.sessions.answering) {
 		switch k.String() {
 		case "tab":
 			return m.switchTab(1 - m.tab)

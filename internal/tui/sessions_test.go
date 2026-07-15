@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -343,7 +345,7 @@ func TestSessionPreviewPlaceholderWithTmux(t *testing.T) {
 		t.Errorf("preview pane must show placeholder before a capture arrives:\n%s", v)
 	}
 
-	m.Update(previewMsg{id: "s1", text: "line1\nline2\n"})
+	m.Update(paneMsg{id: "s1", data: &protocol.PaneData{Text: "line1\nline2\n"}})
 	v := m.View()
 	if !strings.Contains(v, "line1") || !strings.Contains(v, "line2") {
 		t.Errorf("preview pane must show capture output:\n%s", v)
@@ -351,7 +353,7 @@ func TestSessionPreviewPlaceholderWithTmux(t *testing.T) {
 
 	// A stale capture for a no-longer-selected session is dropped.
 	m.sessions.cursor = 1
-	m.Update(previewMsg{id: "s1", text: "stale"})
+	m.Update(paneMsg{id: "s1", data: &protocol.PaneData{Text: "stale"}})
 	if strings.Contains(m.View(), "stale") {
 		t.Error("stale preview for an unselected session must be ignored")
 	}
@@ -395,6 +397,378 @@ func TestPreviewLineTruncatesAndResets(t *testing.T) {
 	}
 }
 
+// fakeRequest installs a canned requestFn for the pane/answer round-trips and
+// restores the real one on cleanup. capture, when non-nil, records every
+// request the model issued so a test can assert the exact cmd/text sent.
+func fakeRequest(t *testing.T, capture *[]protocol.Request, resp *protocol.Response, err error) {
+	t.Helper()
+	prev := requestFn
+	requestFn = func(req protocol.Request) (*protocol.Response, error) {
+		if capture != nil {
+			*capture = append(*capture, req)
+		}
+		return resp, err
+	}
+	t.Cleanup(func() { requestFn = prev })
+}
+
+// mustData marshals v into a Response.Data payload for a fake OK response.
+func mustData(t *testing.T, v any) *protocol.Response {
+	t.Helper()
+	raw, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &protocol.Response{OK: true, Data: raw}
+}
+
+// needsInputRoot builds a sessions tab holding one needs_input session (s9,
+// tmux-backed) with the given parsed pane already loaded as if a cmd=pane
+// refresh had returned it.
+func needsInputRoot(t *testing.T, pd *protocol.PaneData) *rootModel {
+	t.Helper()
+	m := newTestRoot(t)
+	m.tab = tabSessions
+	m.sessions.data = &protocol.SessionsData{Sessions: []protocol.SessionInfo{{
+		ID: "s9", Project: "web", Issue: "ENG-9", Status: "needs_input",
+		TmuxName: "lola-eng-9", Source: "native",
+	}}}
+	m.sessions.cursor = 0
+	m.sessions.preview, m.sessions.previewFor, m.sessions.paneData = pd.Text, "s9", pd
+	return m
+}
+
+// A needs_input session renders the parsed question and its choices as an
+// actionable card with the "a: answer" affordance.
+func TestNeedsInputRendersQuestionAndChoices(t *testing.T) {
+	pd := &protocol.PaneData{
+		Text:        "Overwrite the file?\n1. Yes\n2. No\n",
+		HasQuestion: true,
+		Prompt:      "Overwrite the file?",
+		Choices:     []protocol.PaneChoice{{Key: "1", Label: "Yes"}, {Key: "2", Label: "No"}},
+	}
+	m := needsInputRoot(t, pd)
+
+	v := m.View()
+	for _, want := range []string{"attention", "Overwrite the file?", "1. Yes", "2. No", "a: answer"} {
+		if !strings.Contains(v, want) {
+			t.Errorf("needs_input card missing %q:\n%s", want, v)
+		}
+	}
+}
+
+// Selecting a choice (arrow to it, enter) issues a cmd=answer with the chosen
+// Key as Text.
+func TestAnswerChoiceSendsKey(t *testing.T) {
+	pd := &protocol.PaneData{
+		Text: "Pick one\n1. Yes\n2. No\n", HasQuestion: true, Prompt: "Pick one",
+		Choices: []protocol.PaneChoice{{Key: "1", Label: "Yes"}, {Key: "2", Label: "No"}},
+	}
+	m := needsInputRoot(t, pd)
+
+	// "a" arms the card; the affordance flips to send/cancel.
+	m.Update(keyMsg("a"))
+	if !m.sessions.answering {
+		t.Fatal("a must open the answer card on a needs_input session")
+	}
+	if !strings.Contains(m.View(), "enter send") {
+		t.Errorf("open card must advertise send/cancel:\n%s", m.View())
+	}
+
+	// Arrow down to the second choice, then enter.
+	m.Update(keyMsg("down"))
+	if m.sessions.answerChoice != 1 {
+		t.Fatalf("answerChoice = %d, want 1 after down", m.sessions.answerChoice)
+	}
+
+	var got []protocol.Request
+	fakeRequest(t, &got, &protocol.Response{OK: true}, nil)
+	_, cmd := m.Update(keyMsg("enter"))
+	if cmd == nil {
+		t.Fatal("enter must dispatch an answer command")
+	}
+	m.Update(cmd())
+	if len(got) != 1 || got[0].Cmd != "answer" || got[0].Session != "s9" || got[0].Text != "2" {
+		t.Fatalf("issued request = %+v, want cmd=answer session=s9 text=2", got)
+	}
+	if m.sessions.answering {
+		t.Error("answering must close after send")
+	}
+}
+
+// Pressing a digit that directly names a choice key sends that choice without
+// moving the cursor first.
+func TestAnswerChoiceByDigitKey(t *testing.T) {
+	pd := &protocol.PaneData{
+		Text: "Pick\n1. Yes\n2. No\n", HasQuestion: true, Prompt: "Pick",
+		Choices: []protocol.PaneChoice{{Key: "1", Label: "Yes"}, {Key: "2", Label: "No"}},
+	}
+	m := needsInputRoot(t, pd)
+	m.Update(keyMsg("a"))
+
+	var got []protocol.Request
+	fakeRequest(t, &got, &protocol.Response{OK: true}, nil)
+	_, cmd := m.Update(keyMsg("2"))
+	if cmd == nil {
+		t.Fatal("a choice-key digit must dispatch an answer")
+	}
+	m.Update(cmd())
+	if len(got) != 1 || got[0].Text != "2" {
+		t.Fatalf("issued request = %+v, want text=2", got)
+	}
+}
+
+// A free-form prompt takes typed text and sends it verbatim on enter.
+func TestAnswerFreeFormSendsTypedText(t *testing.T) {
+	pd := &protocol.PaneData{
+		Text: "What is the branch name?\n> \n", HasQuestion: true,
+		Prompt: "What is the branch name?", FreeForm: true,
+	}
+	m := needsInputRoot(t, pd)
+	m.Update(keyMsg("a"))
+
+	for _, r := range "fix-9" {
+		m.Update(keyMsg(string(r)))
+	}
+	m.Update(keyMsg(" ")) // space handled outside KeyRunes
+	if m.sessions.answerInput != "fix-9 " {
+		t.Fatalf("answerInput = %q, want %q", m.sessions.answerInput, "fix-9 ")
+	}
+	if !strings.Contains(m.View(), "fix-9") {
+		t.Errorf("free-form card must echo the typed answer:\n%s", m.View())
+	}
+
+	var got []protocol.Request
+	fakeRequest(t, &got, &protocol.Response{OK: true}, nil)
+	_, cmd := m.Update(keyMsg("enter"))
+	if cmd == nil {
+		t.Fatal("enter must dispatch the free-form answer")
+	}
+	m.Update(cmd())
+	if len(got) != 1 || got[0].Cmd != "answer" || got[0].Text != "fix-9 " {
+		t.Fatalf("issued request = %+v, want cmd=answer text=%q", got, "fix-9 ")
+	}
+}
+
+// The daemon's refusal (the agent moved on) is surfaced verbatim as a warning
+// flash; a delivered answer flashes green.
+func TestAnswerRefusalAndSuccessFlash(t *testing.T) {
+	pd := &protocol.PaneData{
+		Text: "go?\n(y/n)\n", HasQuestion: true, Prompt: "go?",
+		Choices: []protocol.PaneChoice{{Key: "y", Label: "Yes"}, {Key: "n", Label: "No"}},
+	}
+
+	// Refusal path.
+	m := needsInputRoot(t, pd)
+	m.Update(keyMsg("a"))
+	refusal := "session s9 is not waiting for input (status working)"
+	fakeRequest(t, nil, &protocol.Response{OK: false, Error: refusal}, nil)
+	_, cmd := m.Update(keyMsg("enter"))
+	m.Update(cmd())
+	if m.sessions.flash != refusal || m.sessions.flashGood {
+		t.Fatalf("refusal flash = %q good=%v, want the verbatim error as a warning", m.sessions.flash, m.sessions.flashGood)
+	}
+	if !strings.Contains(m.View(), refusal) {
+		t.Errorf("refusal must render in the view:\n%s", m.View())
+	}
+
+	// Success path.
+	m2 := needsInputRoot(t, pd)
+	m2.Update(keyMsg("a"))
+	fakeRequest(t, nil, &protocol.Response{OK: true}, nil)
+	_, cmd2 := m2.Update(keyMsg("enter"))
+	m2.Update(cmd2())
+	if !m2.sessions.flashGood || m2.sessions.flash != "answer sent" {
+		t.Fatalf("success flash = %q good=%v, want green 'answer sent'", m2.sessions.flash, m2.sessions.flashGood)
+	}
+}
+
+// esc cancels the card without issuing any request.
+func TestAnswerEscCancels(t *testing.T) {
+	pd := &protocol.PaneData{
+		Text: "q\n1. a\n2. b\n", HasQuestion: true, Prompt: "q",
+		Choices: []protocol.PaneChoice{{Key: "1", Label: "a"}, {Key: "2", Label: "b"}},
+	}
+	m := needsInputRoot(t, pd)
+	m.Update(keyMsg("a"))
+	var got []protocol.Request
+	fakeRequest(t, &got, &protocol.Response{OK: true}, nil)
+	_, cmd := m.Update(keyMsg("esc"))
+	if m.sessions.answering {
+		t.Error("esc must close the answer card")
+	}
+	if cmd != nil {
+		t.Error("esc must not dispatch a command")
+	}
+	if len(got) != 0 {
+		t.Errorf("esc must issue no request, got %+v", got)
+	}
+}
+
+// A non-needs_input session shows no answer card and "a" refuses to arm.
+func TestNoAnswerAffordanceWhenNotNeedsInput(t *testing.T) {
+	m := newTestRoot(t)
+	m.tab = tabSessions
+	m.sessions.data = cannedSessions() // s1 is "working"
+	m.sessions.cursor = 0
+	m.sessions.preview, m.sessions.previewFor = "some pane text", "s1"
+
+	v := m.View()
+	if strings.Contains(v, "a: answer") || strings.Contains(v, "attention") {
+		t.Errorf("a working session must not show an answer card:\n%s", v)
+	}
+
+	_, cmd := m.Update(keyMsg("a"))
+	if m.sessions.answering {
+		t.Error("a must not arm on a non-needs_input session")
+	}
+	if cmd != nil {
+		t.Error("a on a working session must not dispatch a command")
+	}
+	if !strings.Contains(m.sessions.flash, "waits for input") {
+		t.Errorf("flash should explain answer is unavailable, got %q", m.sessions.flash)
+	}
+}
+
+// A needs_input session whose prompt the parser could NOT shape (HasQuestion
+// false) must still be answerable in place: "a" opens a free-form card and the
+// typed reply is delivered as cmd=answer. Otherwise the only recourse is to
+// attach, defeating the answer-in-place goal.
+func TestAnswerFreeFormFallbackOnParseMiss(t *testing.T) {
+	pd := &protocol.PaneData{Text: "some prompt the parser did not recognize\n"} // HasQuestion false
+	m := needsInputRoot(t, pd)
+
+	// No card is shown before arming (nothing parsed to surface), but "a" must
+	// still arm a free-form card rather than flashing a dead-end hint.
+	if strings.Contains(m.View(), "answer>") {
+		t.Errorf("no card should render before arming on a parse miss:\n%s", m.View())
+	}
+	m.Update(keyMsg("a"))
+	if !m.sessions.answering {
+		t.Fatal("a must arm a free-form card on a needs_input parse miss")
+	}
+	v := m.View()
+	if !strings.Contains(v, "prompt not parsed") || !strings.Contains(v, "enter send") {
+		t.Errorf("armed parse-miss card must offer a free-form field:\n%s", v)
+	}
+
+	for _, r := range "retry" {
+		m.Update(keyMsg(string(r)))
+	}
+	var got []protocol.Request
+	fakeRequest(t, &got, &protocol.Response{OK: true}, nil)
+	_, cmd := m.Update(keyMsg("enter"))
+	if cmd == nil {
+		t.Fatal("enter must dispatch the free-form fallback answer")
+	}
+	m.Update(cmd())
+	if len(got) != 1 || got[0].Cmd != "answer" || got[0].Session != "s9" || got[0].Text != "retry" {
+		t.Fatalf("issued request = %+v, want cmd=answer session=s9 text=retry", got)
+	}
+}
+
+// The answer card must clamp every line to the terminal width, exactly like the
+// preview rows below it: an over-wide choice label or a long typed free-form
+// reply that physically wrapped would make bubbletea (alt-screen) miscount
+// rendered lines and smear the frame.
+func TestAnswerCardClampedToTerminalWidth(t *testing.T) {
+	pd := &protocol.PaneData{
+		Text: "q\n", HasQuestion: true, Prompt: strings.Repeat("P", 60),
+		Choices: []protocol.PaneChoice{{Key: "1", Label: strings.Repeat("L", 60)}},
+	}
+	m := needsInputRoot(t, pd)
+	m.width = 20
+
+	for _, ln := range strings.Split(m.attentionCard(), "\n") {
+		if w := lipgloss.Width(ln); w > 20 {
+			t.Errorf("card line width = %d, want <= 20 (no wrap):\n%q", w, ln)
+		}
+	}
+
+	// A long free-form input must clamp too as the human keeps typing.
+	ff := &protocol.PaneData{Text: "q\n", HasQuestion: true, Prompt: "name?", FreeForm: true}
+	m2 := needsInputRoot(t, ff)
+	m2.width = 20
+	m2.Update(keyMsg("a"))
+	m2.sessions.answerInput = strings.Repeat("z", 80)
+	for _, ln := range strings.Split(m2.attentionCard(), "\n") {
+		if w := lipgloss.Width(ln); w > 20 {
+			t.Errorf("free-form card line width = %d, want <= 20:\n%q", w, ln)
+		}
+	}
+}
+
+// The compact/full toggle ("v") changes how many pane rows render.
+func TestCompactToggleChangesLineCount(t *testing.T) {
+	m := newTestRoot(t)
+	m.tab = tabSessions
+	m.sessions.data = &protocol.SessionsData{Sessions: []protocol.SessionInfo{{
+		ID: "s1", Project: "web", Issue: "ENG-1", Status: "working",
+		TmuxName: "lola-eng-1", Source: "native",
+	}}}
+	m.sessions.cursor = 0
+
+	// 30 uniquely-numbered pane lines so we can count how many survive.
+	var lines []string
+	for i := 0; i < 30; i++ {
+		lines = append(lines, fmt.Sprintf("row%02d", i))
+	}
+	m.sessions.preview, m.sessions.previewFor = strings.Join(lines, "\n"), "s1"
+
+	countRows := func() int {
+		v := m.View()
+		n := 0
+		for i := 0; i < 30; i++ {
+			if strings.Contains(v, fmt.Sprintf("row%02d", i)) {
+				n++
+			}
+		}
+		return n
+	}
+
+	// Default is compact.
+	if got := countRows(); got != previewLines {
+		t.Fatalf("compact rendered %d rows, want %d", got, previewLines)
+	}
+	// "v" flips to full — the daemon refetch is stubbed to a no-op so the cached
+	// preview stays put while paneLines() widens.
+	fakeRequest(t, nil, mustData(t, protocol.PaneData{Text: strings.Join(lines, "\n")}), nil)
+	_, cmd := m.Update(keyMsg("v"))
+	if !m.sessions.full {
+		t.Fatal("v must toggle to the full view")
+	}
+	if cmd != nil {
+		m.Update(cmd()) // apply the refetch (same 30 lines)
+	}
+	if got := countRows(); got != fullPreviewLines {
+		t.Fatalf("full rendered %d rows, want %d", got, fullPreviewLines)
+	}
+}
+
+// "n" jumps the cursor to the next needs_input session.
+func TestJumpToNextNeedsInput(t *testing.T) {
+	m := newTestRoot(t)
+	m.tab = tabSessions
+	m.sessions.data = &protocol.SessionsData{Sessions: []protocol.SessionInfo{
+		{ID: "a", Status: "working", Source: "native"},
+		{ID: "b", Status: "working", Source: "native"},
+		{ID: "c", Status: "needs_input", TmuxName: "t-c", Source: "native"},
+	}}
+	m.sessions.cursor = 0
+
+	fakeRequest(t, nil, mustData(t, protocol.PaneData{}), nil)
+	m.Update(keyMsg("n"))
+	if m.sessions.cursor != 2 {
+		t.Fatalf("n must jump to the needs_input session at index 2, got %d", m.sessions.cursor)
+	}
+
+	// The needs_input row is flagged with a "!" marker in the list.
+	m.sessions.cursor = 0
+	if !strings.Contains(m.View(), "!") {
+		t.Errorf("needs_input row must carry a '!' flag in the list:\n%s", m.View())
+	}
+}
+
 func TestSessionPreviewClippedToTerminalWidth(t *testing.T) {
 	m := newTestRoot(t)
 	m.tab = tabSessions
@@ -402,7 +776,7 @@ func TestSessionPreviewClippedToTerminalWidth(t *testing.T) {
 	m.sessions.data = cannedSessions()
 	m.sessions.cursor = 0 // s1 is tmux-backed
 
-	m.Update(previewMsg{id: "s1", text: strings.Repeat("a", 100) + "TAIL\n"})
+	m.Update(paneMsg{id: "s1", data: &protocol.PaneData{Text: strings.Repeat("a", 100) + "TAIL\n"}})
 	if strings.Contains(m.View(), "TAIL") {
 		t.Error("over-width preview line must be clipped to the terminal width")
 	}

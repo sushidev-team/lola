@@ -35,13 +35,26 @@ import (
 // anyway. The daemon always terminates the agent's tmux session first; a clean
 // worktree is then removed and the store entry dropped, while a dirty one is
 // kept unless Force is set (the reply is KillData / an error either way).
+//
+// Cmd "pane" is the read-only compact-pane view (PLAN P7): Session names the
+// target session and Lines optionally bounds how many trailing rows of its tmux
+// pane to capture (0 → the daemon's default, ~40). The daemon captures the pane
+// and runs the attention parser over it, replying Response.Data = PaneData (the
+// rendered text plus any extracted question). An unknown session is an error.
+//
+// Cmd "answer" delivers a HUMAN's inline reply to a session that stopped for
+// input: Session names the target and Text is the answer typed back into the
+// agent's pane (send-keys + Enter). It is REFUSED unless the session's derived
+// Status is "needs_input" — the one moment the agent is provably parked at its
+// prompt, so typing cannot corrupt a mid-turn agent (the send-keys safety gate,
+// PLAN P3/P7). The reply is OK on a delivered answer, an error otherwise.
 type Request struct {
-	Cmd    string `json:"cmd"` // stop|status|reload|enable|disable|pollOnce|sessions|hookEvent|kill
+	Cmd    string `json:"cmd"` // stop|status|reload|enable|disable|pollOnce|sessions|hookEvent|kill|pane|answer
 	Poll   string `json:"poll,omitempty"`
 	DryRun bool   `json:"dryRun,omitempty"`
 
 	// Hook callback fields, set only for cmd=hookEvent.
-	Session string `json:"session,omitempty"` // lola session ID ($LOLA_SESSION in the agent's pane); also the kill target
+	Session string `json:"session,omitempty"` // lola session ID ($LOLA_SESSION in the agent's pane); also the kill/pane/answer target
 	Event   string `json:"event,omitempty"`   // normalized: stop|notification|session_end|tool_use|user_prompt
 	Detail  string `json:"detail,omitempty"`  // optional: notification_type / stop_reason / end_reason
 
@@ -49,6 +62,14 @@ type Request struct {
 	// uncommitted changes. Deliberate CLI-only friction (`lola kill <id>
 	// --force`); the TUI never sets it.
 	Force bool `json:"force,omitempty"`
+
+	// Text is the human's answer for cmd=answer — typed verbatim into the
+	// session's pane (send-keys appends Enter).
+	Text string `json:"text,omitempty"`
+
+	// Lines optionally bounds cmd=pane's capture to the last N rendered rows of
+	// the target pane; 0 means the daemon's default (~40).
+	Lines int `json:"lines,omitempty"`
 }
 
 // Response is one line of JSON sent back by the daemon.
@@ -122,6 +143,32 @@ type KillData struct {
 	Removed  bool   `json:"removed"`
 	Worktree string `json:"worktree,omitempty"`
 	Message  string `json:"message,omitempty"`
+}
+
+// PaneData is Response.Data for cmd=pane (PLAN P7): the captured tmux pane text
+// plus the attention parser's read of it, flattened so the TUI renders an
+// actionable answer card without importing internal/attention (and so protocol
+// stays dependency-free). Text is the rendered pane (ANSI preserved, as
+// capture-pane -e returns it). HasQuestion reports whether a prompt was
+// detected; when true, Prompt is the question line, Choices enumerates any
+// pick-one options the agent offered (empty for a pure free-text prompt),
+// and FreeForm reports whether a typed reply is expected. Both a choice list and
+// FreeForm can be surfaced; the human either picks a Choice.Key or types text,
+// and either is delivered back via cmd=answer.
+type PaneData struct {
+	Text        string       `json:"text"`
+	HasQuestion bool         `json:"hasQuestion"`
+	Prompt      string       `json:"prompt,omitempty"`
+	Choices     []PaneChoice `json:"choices,omitempty"`
+	FreeForm    bool         `json:"freeForm,omitempty"`
+}
+
+// PaneChoice is one enumerated option the agent offered at its prompt. Key is
+// what the human sends to select it (a menu number/letter); Label is the
+// human-readable option text.
+type PaneChoice struct {
+	Key   string `json:"key"`
+	Label string `json:"label"`
 }
 
 // PollOnceData is Response.Data for cmd=pollOnce.

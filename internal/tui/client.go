@@ -78,6 +78,11 @@ func request(req protocol.Request) (*protocol.Response, error) {
 	return requestRaw(string(raw))
 }
 
+// requestFn is the socket round-trip used by the interactive pane/answer
+// commands, indirected so model-level tests can inject canned daemon responses
+// (and assert the request they issued) without a live socket.
+var requestFn = request
+
 // Send writes one JSON request line to the daemon socket and pretty-prints
 // the response. A non-OK response is returned as an error so the CLI exits 1.
 func Send(raw string) error {

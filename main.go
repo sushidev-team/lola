@@ -14,6 +14,7 @@ import (
 	"github.com/sushidev-team/lola/internal/daemon"
 	"github.com/sushidev-team/lola/internal/doctor"
 	"github.com/sushidev-team/lola/internal/hook"
+	"github.com/sushidev-team/lola/internal/protocol"
 	"github.com/sushidev-team/lola/internal/tui"
 )
 
@@ -51,6 +52,7 @@ func main() {
 		enableCmd("enable"), enableCmd("disable"),
 		pollCmd(),
 		killCmd(),
+		answerCmd(),
 		logsCmd(),
 		doctorCmd(),
 		setupCmd(),
@@ -103,6 +105,28 @@ func killCmd() *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&force, "force", false, "remove the worktree even with uncommitted changes")
 	return cmd
+}
+
+// answerCmd delivers a human's inline reply to a session that stopped for input
+// (`lola answer <session> <text...>`): it joins the remaining args into one line
+// and sends cmd=answer, which the daemon types into the agent's pane — but only
+// while that session is needs_input (the send-keys safety gate). The trailing
+// args are the answer, so `lola answer FE-1 2` picks option 2 and `lola answer
+// FE-1 use the smaller migration` types a free-form reply. Send prints ok or the
+// daemon's error (e.g. "not waiting for input").
+func answerCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "answer <session> <text...>",
+		Short: "Answer a session that is waiting for input (only when it is needs_input)",
+		Args:  cobra.MinimumNArgs(2),
+		RunE: func(c *cobra.Command, a []string) error {
+			raw, err := json.Marshal(protocol.Request{Cmd: "answer", Session: a[0], Text: strings.Join(a[1:], " ")})
+			if err != nil {
+				return err
+			}
+			return tui.Send(string(raw))
+		},
+	}
 }
 
 // hookCmd is the hidden callback target Claude Code hooks invoke as
