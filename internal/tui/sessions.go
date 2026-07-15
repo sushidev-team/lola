@@ -24,6 +24,15 @@ const (
 	fullPreviewLines = 20
 )
 
+// Sessions-tab lenses (PLAN P8): the same cmd=sessions data seen through two
+// orderings/layouts. List is the dense sorted+filtered table; Kanban buckets
+// the sessions into human-intent columns. "V" cycles between them; selection
+// (s.selID) is shared so switching lens keeps the same session in focus.
+const (
+	viewList = iota
+	viewKanban
+)
+
 var (
 	statusBlue   = lipgloss.NewStyle().Foreground(lipgloss.Color("12"))
 	statusOrange = lipgloss.NewStyle().Foreground(lipgloss.Color("208"))
@@ -81,10 +90,23 @@ func sourceBadge(source string) string {
 }
 
 type sessionsModel struct {
-	cursor      int
-	data        *protocol.SessionsData // nil until the first successful fetch
-	daemonDown  bool                   // last fetch failed to dial the socket
-	dataErr     string                 // non-dial fetch failure, if any
+	cursor     int
+	data       *protocol.SessionsData // nil until the first successful fetch
+	daemonDown bool                   // last fetch failed to dial the socket
+	dataErr    string                 // non-dial fetch failure, if any
+
+	// Multi-view state (P8). view is the active lens (viewList / viewKanban).
+	// selID is the AUTHORITATIVE selection — a session ID, so a background
+	// refresh (5s tick) that reorders/prunes rows keeps the same session in
+	// focus, and switching lens keeps context. cursor is kept in sync as the raw
+	// index of selID so selected() (and every P7 consumer) is untouched; when
+	// selID is empty (freshly built / legacy paths) selected() falls back to the
+	// raw cursor. filter narrows every lens (Apply); filtering owns keystrokes
+	// while the "/" bar is open.
+	view        int
+	selID       string
+	filter      Filter
+	filtering   bool
 	flash       string
 	flashGood   bool   // flash is a success (green) rather than a warning (yellow)
 	confirmKill bool   // "x" pressed: awaiting y/n to kill killTarget
@@ -266,11 +288,32 @@ func (m *rootModel) handleSessionsMsg(v sessionsMsg) tea.Cmd {
 		return nil
 	}
 	s.data, s.daemonDown, s.dataErr = v.data, false, ""
-	if s.cursor >= len(s.data.Sessions) {
-		s.cursor = len(s.data.Sessions) - 1
-	}
-	if s.cursor < 0 {
-		s.cursor = 0
+	// Re-pin selection by ID so a reorder/prune under the cursor keeps the same
+	// session focused (P8). Visibility is judged against the active lens's
+	// filtered+sorted order (primaryOrder), NOT the raw snapshot: a refresh can
+	// slide the pinned session out of an APPLIED filter (AttentionOnly, or a
+	// Text query) without pruning it, and keeping the cursor on a now-hidden row
+	// would leave the list with no marker while the detail pane and destructive
+	// actions (x/enter/o) still act on the invisible session. When the pin is no
+	// longer visible (filtered out or gone), fall to the top of that same order —
+	// attention-first in the List lens, the Needs-You column first in Kanban.
+	ord := s.primaryOrder()
+	switch {
+	case indexOfID(ord, s.selID) >= 0:
+		// Pin still visible under the active filter: sync the raw cursor to it.
+		// ord is a subset of s.data.Sessions, so this index is always in range.
+		s.cursor = indexOfID(s.data.Sessions, s.selID)
+	case len(ord) > 0:
+		// Pin gone or filtered out, but the lens has visible rows: fall to its top.
+		s.selID = ord[0].ID
+		s.cursor = indexOfID(s.data.Sessions, s.selID)
+	default:
+		// Nothing is visible (empty snapshot, or an applied filter that hides
+		// everything): drop the pin and put the raw cursor out of range so
+		// selected() resolves to nil — the detail pane must render nothing and the
+		// destructive actions (x/enter/o) must have no target rather than acting on
+		// a hidden Sessions[0].
+		s.selID, s.cursor = "", -1
 	}
 	return m.paneRefreshCmd()
 }
@@ -301,6 +344,11 @@ func (m *rootModel) updateSessions(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if s.answering {
 		return m.updateAnswer(k)
 	}
+	// The "/" filter bar owns every keypress while open (like the answer card):
+	// runes narrow the list live via Apply, esc clears, enter applies and closes.
+	if s.filtering {
+		return m.updateFilter(k)
+	}
 	// A pending kill confirmation owns the next keypress: y/Y kills, anything
 	// else cancels. Force is never offered here (CLI-only friction). The target
 	// is the ID captured when "x" was pressed — NOT s.selected() re-read now: a
@@ -321,15 +369,17 @@ func (m *rootModel) updateSessions(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case "q":
 		return m, tea.Quit
 	case "up", "k":
-		if s.cursor > 0 {
-			s.cursor--
-			return m, m.paneRefreshCmd()
-		}
+		return m.sessMove(0, -1)
 	case "down", "j":
-		if s.data != nil && s.cursor < len(s.data.Sessions)-1 {
-			s.cursor++
-			return m, m.paneRefreshCmd()
-		}
+		return m.sessMove(0, +1)
+	case "left", "h":
+		return m.sessMove(-1, 0)
+	case "right", "l":
+		return m.sessMove(+1, 0)
+	case "g":
+		return m.sessJumpEdge(true)
+	case "G":
+		return m.sessJumpEdge(false)
 	case "enter":
 		return m.attachSelected()
 	case "o":
@@ -343,10 +393,28 @@ func (m *rootModel) updateSessions(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Toggle compact/full pane view; refetch so the fuller view fills in.
 		s.full = !s.full
 		return m, m.paneRefreshCmd()
+	case "V":
+		// Cycle the lens (List ⇄ Kanban); selection (selID) carries over.
+		if s.view == viewList {
+			s.view = viewKanban
+		} else {
+			s.view = viewList
+		}
+		return m, nil
+	case "/":
+		s.filtering = true
+		return m, nil
+	case "!":
+		// Toggle "who needs me": AttentionOnly narrows every lens to the
+		// blocked/broken sessions. Re-pin selection if it fell out of view.
+		s.filter.AttentionOnly = !s.filter.AttentionOnly
+		return m, m.reselectVisible()
 	case "a":
 		return m.startAnswer()
 	case "n":
-		return m.jumpNextNeedsInput()
+		return m.jumpNeedsInput(+1)
+	case "N":
+		return m.jumpNeedsInput(-1)
 	}
 	return m, nil
 }
@@ -445,23 +513,22 @@ func (m *rootModel) sendAnswer(text string) (tea.Model, tea.Cmd) {
 	return m, answerCmd(id, text)
 }
 
-// jumpNextNeedsInput moves the cursor to the next session (wrapping) whose
-// status is needs_input, so "who needs me" is one keypress away. Refetches the
-// pane for the new selection.
-func (m *rootModel) jumpNextNeedsInput() (tea.Model, tea.Cmd) {
+// jumpNeedsInput moves the cursor to the next (dir=+1) or previous (dir=-1)
+// session, wrapping, whose status is needs_input — so "who needs me" is one
+// keypress away (n forward, N back). Refetches the pane for the new selection.
+func (m *rootModel) jumpNeedsInput(dir int) (tea.Model, tea.Cmd) {
 	s := &m.sessions
 	if s.data == nil || len(s.data.Sessions) == 0 {
 		return m, nil
 	}
 	n := len(s.data.Sessions)
 	for off := 1; off <= n; off++ {
-		i := (s.cursor + off) % n
+		i := ((s.cursor+dir*off)%n + n) % n
 		if s.data.Sessions[i].Status == "needs_input" {
 			if i == s.cursor {
 				return m, nil // already on the only one
 			}
-			s.cursor = i
-			return m, m.paneRefreshCmd()
+			return m, m.selectID(s.data.Sessions[i].ID)
 		}
 	}
 	s.flash, s.flashGood = "no session is waiting for input", false
@@ -520,7 +587,15 @@ func (m *rootModel) sessionsView() string {
 	}
 
 	if s.data != nil {
-		b.WriteString(m.sessionsTable())
+		b.WriteString(m.sessionsSummary() + "\n")
+		if s.filtering || s.filter.Text != "" {
+			b.WriteString(m.filterBar() + "\n")
+		}
+		if s.view == viewKanban {
+			b.WriteString(m.kanbanBoard())
+		} else {
+			b.WriteString(m.sessionsTable())
+		}
 		b.WriteString("\n" + m.sessionDetail())
 	}
 
@@ -535,11 +610,7 @@ func (m *rootModel) sessionsView() string {
 		}
 		b.WriteString(style.Render(s.flash) + "\n")
 	}
-	if s.answering {
-		b.WriteString(faintText.Render("enter send · esc cancel") + "\n")
-	} else {
-		b.WriteString(faintText.Render("↑/↓ move · enter attach · a answer · o PR · x kill · v view · n next! · tab switch · q quit") + "\n")
-	}
+	b.WriteString(m.sessionsFooter() + "\n")
 	return b.String()
 }
 
@@ -553,16 +624,18 @@ func (m *rootModel) sessionsTable() string {
 	// merge", …) and keeps the table one wide column instead of two. The raw
 	// review decision still shows in the detail card below.
 	headers := []string{" ", "ISSUE", "PROJECT", "STATUS", "PR", "CHECKS", "REACTING", "AGE"}
-	rows := make([][]string, len(s.data.Sessions))
-	for i, si := range s.data.Sessions {
-		// The marker column flags "who needs me": a selected row shows the
+	list := s.listRows()
+	selID := m.effectiveSelID()
+	rows := make([][]string, len(list))
+	for i, si := range list {
+		// The marker column flags "who needs me": the selected row shows the
 		// cursor "›"; an unselected needs_input row shows a warn "!" (a selected
 		// needs_input row is already obvious from the orange STATUS cell).
 		marker := " "
 		if si.Status == "needs_input" {
 			marker = warnText.Render("!")
 		}
-		if i == s.cursor {
+		if si.ID == selID {
 			marker = "›"
 		}
 		pr := "-"
@@ -582,10 +655,14 @@ func (m *rootModel) sessionsTable() string {
 	w := colWidths(headers, rows)
 	b.WriteString(tblHeader.Render(padCells(headers, w)) + "\n")
 	if len(rows) == 0 {
-		b.WriteString(faintText.Render("no sessions observed") + "\n")
+		if len(s.data.Sessions) == 0 {
+			b.WriteString(faintText.Render("no sessions observed") + "\n")
+		} else {
+			b.WriteString(faintText.Render("no sessions match the filter") + "\n")
+		}
 	}
 	for _, r := range rows {
-		b.WriteString(padCells(r, w) + "\n")
+		b.WriteString(previewLine(padCells(r, w), m.width) + "\n")
 	}
 	return b.String()
 }

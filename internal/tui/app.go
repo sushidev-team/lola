@@ -161,7 +161,7 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// mid-confirm refresh could reorder/prune rows under the cursor (the
 		// kill target is pinned by ID regardless, but the frozen view keeps the
 		// prompt and the highlighted row in agreement).
-		if m.tab == tabSessions && !m.sessions.confirmKill && !m.sessions.answering {
+		if m.tab == tabSessions && !m.sessions.confirmKill && !m.sessions.answering && !m.sessions.filtering {
 			cmds = append(cmds, fetchSessionsCmd)
 			if c := m.paneRefreshCmd(); c != nil {
 				cmds = append(cmds, c)
@@ -235,7 +235,8 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if k, ok := msg.(tea.KeyMsg); ok &&
 		!(m.tab == tabPolls && m.list.confirmDelete) &&
 		!(m.tab == tabSessions && m.sessions.confirmKill) &&
-		!(m.tab == tabSessions && m.sessions.answering) {
+		!(m.tab == tabSessions && m.sessions.answering) &&
+		!(m.tab == tabSessions && m.sessions.filtering) {
 		switch k.String() {
 		case "tab":
 			return m.switchTab(1 - m.tab)
