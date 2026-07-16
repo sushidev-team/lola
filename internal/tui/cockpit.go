@@ -369,11 +369,13 @@ func (m *rootModel) sessionsBody(w, h int) []string {
 
 	// Adaptive TITLE column (after ISSUE): so a session is identifiable by what
 	// it's ABOUT, not just its key. It claims whatever width is left after the
-	// dense fixed columns — a wide terminal shows most of the Linear title, a
-	// narrow one falls back to the identifier-only table rather than clipping the
-	// columns that carry state (STATUS/PR/AGE). Two-pass because the budget
-	// depends on the fixed columns' measured widths.
-	const titleColMin, titleColMax = 16, 72
+	// dense fixed columns and truncPlain ellipsizes the title to fit — a wide
+	// terminal shows most of the Linear title, a modest one an ellipsized short
+	// version. Only when the leftover is below titleColMin does the column drop
+	// entirely (an identifier-only table), so the state columns (STATUS/PR/AGE)
+	// are never clipped. Two-pass because the budget depends on the fixed
+	// columns' measured widths.
+	const titleColMin, titleColMax = 10, 72
 	if anyTitle {
 		baseW := 2 * (len(colw) - 1) // padCells joins columns with two spaces
 		for _, cw := range colw {

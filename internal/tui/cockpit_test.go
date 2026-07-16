@@ -37,6 +37,17 @@ func TestSessionsTitleColumn(t *testing.T) {
 		t.Errorf("wide body must carry a TITLE column with the issue title:\n%s", wide)
 	}
 
+	// A modest width still shows the column with an ellipsized short title rather
+	// than dropping it — the state columns keep their width, the title takes only
+	// the leftover.
+	mid := stripANSI(strings.Join(m.sessionsBody(64, 12), "\n"))
+	if !strings.Contains(mid, "TITLE") {
+		t.Errorf("modest-width body must still carry the TITLE column:\n%s", mid)
+	}
+	if !strings.Contains(mid, "…") || strings.Contains(mid, "migration") {
+		t.Errorf("modest-width title must be ellipsized (not the full title):\n%s", mid)
+	}
+
 	narrow := stripANSI(strings.Join(m.sessionsBody(46, 12), "\n"))
 	if strings.Contains(narrow, "TITLE") {
 		t.Errorf("narrow body must drop the TITLE column:\n%s", narrow)
