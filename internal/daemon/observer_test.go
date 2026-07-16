@@ -60,6 +60,61 @@ func findSession(t *testing.T, snap []session.Session, id string) session.Sessio
 	return session.Session{}
 }
 
+// --- Title backfill -----------------------------------------------------------
+
+// Sessions spawned before Session.Title existed carry no title; the observer
+// fetches it from Linear (once) so their list row is identifiable. Covers both
+// the settled-dead record (committed via the Update early-return) and an alive
+// one, and asserts the fetch is not repeated once the title is stored.
+func TestObserveBackfillsMissingTitle(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("LOLA_HOME", home)
+	deadID := runtime.SessionID("proj1", "OLD")
+	liveID := runtime.SessionID("proj1", "LIVE")
+	now := time.Now().Format(time.RFC3339)
+	stateDir := filepath.Join(home, "state")
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	blob := `[
+	  {"id":"` + deadID + `","source":"native","project":"proj1","issue":"OLD","issue_uuid":"uuid-old","status":"dead","first_seen":"` + now + `","last_seen":"` + now + `"},
+	  {"id":"` + liveID + `","source":"native","project":"proj1","issue":"LIVE","issue_uuid":"uuid-live","status":"working","first_seen":"` + now + `","last_seen":"` + now + `"}
+	]`
+	if err := os.WriteFile(filepath.Join(stateDir, "sessions.json"), []byte(blob), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	fake := &linear.Fake{TitleByIssue: map[string]string{
+		"uuid-old":  "Old issue title",
+		"uuid-live": "Live issue title",
+	}}
+	d := newDaemon(nativeTestConfig(nativePoll("p1")), fake, log.New(io.Discard, "", 0), home)
+	d.native = &fakeNative{alive: map[string]bool{liveID: true}}
+	d.paneTail = func(context.Context, string, int) (string, error) { return "", nil }
+	(&fakeObsSeams{}).install(d)
+
+	d.observe(context.Background())
+
+	if got := findSession(t, d.sessions.Snapshot(), deadID).Title; got != "Old issue title" {
+		t.Errorf("dead session title = %q, want backfilled from Linear", got)
+	}
+	if got := findSession(t, d.sessions.Snapshot(), liveID).Title; got != "Live issue title" {
+		t.Errorf("live session title = %q, want backfilled from Linear", got)
+	}
+	// Persisted so a restart keeps it.
+	reloaded := session.NewStore(stateDir)
+	if got := findSession(t, reloaded.Snapshot(), deadID).Title; got != "Old issue title" {
+		t.Errorf("persisted dead title = %q, want backfilled", got)
+	}
+
+	// A second cycle must NOT re-fetch: the title is stored now.
+	before := countCalls(fake.CallNames(), "IssueTitle")
+	d.observe(context.Background())
+	if after := countCalls(fake.CallNames(), "IssueTitle"); after != before {
+		t.Errorf("IssueTitle refetched after backfill: %d → %d", before, after)
+	}
+}
+
 // --- Retention prune ----------------------------------------------------------
 
 func TestObserveNativePrunesSessionsOlderThanRetention(t *testing.T) {

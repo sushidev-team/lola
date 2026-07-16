@@ -5,6 +5,19 @@ import (
 	"fmt"
 )
 
+// IssueTitle fetches a single issue's title by its UUID. Used to backfill the
+// title of sessions spawned before the field was recorded on the session.
+func (c *Client) IssueTitle(ctx context.Context, issueUUID string) (string, error) {
+	const q = `query($id:String!){ issue(id:$id){ title } }`
+	var r struct {
+		Issue struct{ Title string }
+	}
+	if err := c.do(ctx, q, map[string]any{"id": issueUUID}, &r); err != nil {
+		return "", err
+	}
+	return r.Issue.Title, nil
+}
+
 func (c *Client) IssueLabelIDs(ctx context.Context, issueUUID string) ([]string, error) {
 	const q = `query($id:String!){ issue(id:$id){ labels{ nodes{ id } } } }`
 	var r struct {

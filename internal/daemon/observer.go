@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/sushidev-team/lola/internal/attention"
+	"github.com/sushidev-team/lola/internal/linear"
 	"github.com/sushidev-team/lola/internal/scm"
 	"github.com/sushidev-team/lola/internal/session"
 )
@@ -153,10 +154,32 @@ func (d *Daemon) observeNative(ctx context.Context) {
 		defer d.setReviewCycleCtx(nil)
 	}
 
+	// Title backfill (best-effort): sessions spawned before Session.Title
+	// existed carry no title, so their list row can only show the issue key.
+	// Resolve the Linear API once per cycle — nil (key unavailable) simply skips
+	// the backfill this cycle; the key is never logged (secrets discipline).
+	var lin linear.API
+	if a, err := d.ensureLinear(); err == nil {
+		lin = a
+	}
+
 	touched := false
 	for _, s := range d.sessions.Snapshot() {
 		if s.Source != "native" {
 			continue
+		}
+
+		// Fetch a missing title from Linear (bounded, once — the next cycle sees
+		// cur.Title set and skips). Kept OUTSIDE the store-lock Update closure.
+		backfillTitle := ""
+		if lin != nil && s.Title == "" && s.IssueUUID != "" {
+			cctx, cancel := context.WithTimeout(ctx, observeExecTimeout)
+			if t, err := lin.IssueTitle(cctx, s.IssueUUID); err != nil {
+				d.logf("", "observe: title backfill for %s (issue %s) failed: %v", s.ID, s.Issue, err)
+			} else {
+				backfillTitle = t
+			}
+			cancel()
 		}
 		cctx, cancel := context.WithTimeout(ctx, observeExecTimeout)
 		alive := nat.Alive(cctx, s)
@@ -227,8 +250,12 @@ func (d *Daemon) observeNative(ctx context.Context) {
 		// re-reads the CURRENT record under the store lock, so a concurrent
 		// needs_input flows into nativeStatus and is preserved.
 		now := time.Now()
-		becameDead, applied := false, false
+		becameDead, applied, titleBackfilled := false, false, false
 		updated, known := d.sessions.Update(s.ID, func(cur *session.Session) bool {
+			if backfillTitle != "" && cur.Title == "" {
+				cur.Title = backfillTitle
+				titleBackfilled = true
+			}
 			if cur.Repo == "" {
 				cur.Repo = repo
 			}
@@ -257,9 +284,11 @@ func (d *Daemon) observeNative(ctx context.Context) {
 				status = "needs_input"
 			}
 			if !alive && status == cur.Status {
-				// Already-settled terminal record: discard so LastSeen
-				// freezes and the store's retention prune eventually drops it.
-				return false
+				// Already-settled terminal record: discard so LastSeen freezes and
+				// the store's retention prune eventually drops it — UNLESS we just
+				// backfilled its title, which must be committed (Update discards the
+				// mutation on a false return).
+				return titleBackfilled
 			}
 			becameDead = status == "dead" && cur.Status != "dead"
 			cur.Status = status
@@ -272,7 +301,7 @@ func (d *Daemon) observeNative(ctx context.Context) {
 		if becameDead {
 			d.logf("", "observe: native session %s pane is gone without a merged PR → dead", s.ID)
 		}
-		if applied {
+		if applied || titleBackfilled {
 			touched = true
 		}
 		// React to the just-updated record (PLAN P3): send-keys / notify /

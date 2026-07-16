@@ -41,6 +41,9 @@ type Fake struct {
 	Issues     []Issue
 	IssuesFunc func(p config.Poll, activeCycleID, viewerID string) ([]Issue, error)
 
+	// TitleByIssue (keyed by issue UUID) backs IssueTitle for the title backfill.
+	TitleByIssue map[string]string
+
 	// LabelIDsByIssue (keyed by issue UUID) backs IssueLabelIDs and is
 	// updated in place by SetIssueLabels, so tests observe the delta.
 	LabelIDsByIssue map[string][]string
@@ -168,6 +171,15 @@ func (f *Fake) MatchingIssues(ctx context.Context, p config.Poll, activeCycleID,
 		return fn(p, activeCycleID, viewerID)
 	}
 	return static, nil
+}
+
+func (f *Fake) IssueTitle(ctx context.Context, issueUUID string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.record("IssueTitle", issueUUID); err != nil {
+		return "", err
+	}
+	return f.TitleByIssue[issueUUID], nil
 }
 
 func (f *Fake) IssueLabelIDs(ctx context.Context, issueUUID string) ([]string, error) {
