@@ -213,12 +213,18 @@ none of them behaves exactly as before. All IDs are Linear UUIDs; they are
 validated only for non-emptiness where a feature requires one and are **never**
 resolved against Linear at config time (that is a runtime check).
 
+You don't hand-write these UUIDs: the **poll editor** in the TUI (`lola`, edit a
+poll) exposes every write-back field below its trigger fields, picking the state
+and label from the **same Linear pickers** used for `state_ids` / trigger labels,
+and toggling the booleans in place. Editing config.toml by hand still works.
+
 | Key | Type | Description |
 | --- | --- | --- |
 | `on_spawn_state_id` | string | Workflow state the issue moves to when a session is spawned. `""` = no transition. **Required** when `dedup_mode = "state"`, and then must **not** be one of `state_ids`. |
-| `on_pr_state_id` | string | State when the agent opens a PR (e.g. "In Review"). `""` = no transition. |
+| `on_pr_state_id` | string | State when the agent opens a PR (e.g. "In Review"). `""` = no transition. Gated by `pr_requires_checks`. |
 | `on_merged_state_id` | string | State when the PR merges (e.g. "Done"). `""` = no transition. |
 | `blocked_label_id` | string | Label added on escalation (agent blocked, needs a human). `""` = none. |
+| `pr_requires_checks` | bool | Hold the `on_pr_state_id` move **and** `comment_on_pr` until the PR is _valid_ — open, not a draft, and all CI/CodeRabbit checks green (none failing or pending) — instead of firing the instant a PR opens. Default `false` (fire on open). |
 | `comment_on_spawn` | bool | Also post a short comment when the session spawns. Default `false`. |
 | `comment_on_pr` | bool | Also post a short comment when the agent opens a PR. Default `false`. |
 | `comment_on_merged` | bool | Also post a short comment when the PR merges. Default `false`. |
@@ -236,6 +242,14 @@ commenting, comment without moving it, or do both. They also compose with any
 `dedup_mode`: e.g. a `label`-dedup poll can still set `on_pr_state_id` to move
 the issue to "In Review" when a PR opens. Only `dedup_mode = "state"` *depends*
 on `on_spawn_state_id` (that transition is what dedups the issue).
+
+By default the `on_pr_state_id` move fires the moment a PR opens, even while CI
+is still red or running. Set `pr_requires_checks = true` to hold "In Review"
+until the PR is actually **valid** — open, not a draft, and every CI/CodeRabbit
+check green — so the issue advances only once the work has passed its checks.
+The gate uses the same `statusCheckRollup` signal as the rest of lola, so a
+CodeRabbit run counts toward it only if CodeRabbit registers a check (it usually
+does); a review-without-a-check does not hold the transition.
 
 ### `[reactions]` (optional)
 

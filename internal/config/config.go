@@ -76,6 +76,14 @@ type Poll struct {
 	CommentOnPR      bool   `toml:"comment_on_pr"`      // ... when the agent opens a PR
 	CommentOnMerged  bool   `toml:"comment_on_merged"`  // ... when the PR merges
 	CommentOnBlocked bool   `toml:"comment_on_blocked"` // ... on escalation (agent blocked)
+
+	// PRRequiresChecks gates the on_pr_* write-back (state move + comment) on the
+	// PR being VALID rather than merely open: open, not a draft, and every CI /
+	// CodeRabbit check green (ChecksState=="pass" — none failing or pending). With
+	// it false (default) the PR write-back fires the moment a PR opens, preserving
+	// the original P4 semantics. Set it true to hold "In Review" until the PR has
+	// actually passed its checks.
+	PRRequiresChecks bool `toml:"pr_requires_checks"`
 }
 
 // Defaults is the [defaults] table. PollInterval is a plain time.Duration in

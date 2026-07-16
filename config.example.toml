@@ -284,9 +284,10 @@ on_sent_set_label = "label_sent0000-1111-2222-3333-444455556666"
 # as the agent progresses — and that same move is what dedups it. On spawn the
 # issue is moved to on_spawn_state_id ("In Progress"), which is NOT one of
 # state_ids, so it leaves the matching set and never respawns. As the session
-# progresses lola also moves it to "In Review" when a PR opens and "Done" when
-# it merges, and posts a short comment at each point. An escalation (agent
-# blocked) adds blocked_label_id and comments the reason.
+# progresses lola also moves it to "In Review" when a PR opens (or, with
+# pr_requires_checks, once that PR's checks go green) and "Done" when it merges,
+# and posts a short comment at each point. An escalation (agent blocked) adds
+# blocked_label_id and comments the reason.
 #
 # dedup_mode="state" requires on_spawn_state_id set AND that it is NOT one of
 # state_ids (else the issue keeps matching after the move and respawns forever).
@@ -321,6 +322,9 @@ on_sent_set_label = "label_sent0000-1111-2222-3333-444455556666"
 # # When the agent opens a PR, move to "In Review" and comment the PR link.
 # on_pr_state_id = "state_review00-1111-2222-3333-444455556666"
 # comment_on_pr = true
+# # Only flip to "In Review" once the PR is VALID — open, not a draft, and every
+# # CI/CodeRabbit check green — instead of the instant it opens. Default false.
+# pr_requires_checks = true
 # # When the PR merges, move to "Done".
 # on_merged_state_id = "state_done0000-1111-2222-3333-444455556666"
 # # On escalation (agent blocked), add this label so a human can triage.

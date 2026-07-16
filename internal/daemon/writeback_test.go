@@ -249,6 +249,91 @@ func TestWriteBackPROpenOnce(t *testing.T) {
 	}
 }
 
+// --- pr_requires_checks: hold "In Review" until the PR is valid -------------
+
+// With pr_requires_checks the on_pr_* write-back must NOT fire while the PR is
+// open-but-not-green (pending / failing / draft): no state move, no comment, and
+// WBPRDone stays unset so a later green cycle still fires it. Once checks pass the
+// transition fires exactly once, as normal.
+func TestWriteBackPRRequiresChecksDefersUntilGreen(t *testing.T) {
+	p := labelPoll("p1")
+	p.OnPRStateID = "st-review"
+	p.CommentOnPR = true
+	p.PRRequiresChecks = true
+	fake := &linear.Fake{}
+	nat := &fakeNative{}
+	d := newTestDaemon(t, testConfig(p), fake, nat)
+	seams := &fakeObsSeams{pr: openPR(9, "MERGEABLE", "", "pending")} // open, checks running
+	seams.install(d)
+
+	s := wbObserveSess(d, "FE-9", "p1")
+	nat.alive = map[string]bool{s.ID: true}
+
+	// Checks pending: the PR is not valid yet, so nothing is written back.
+	d.observe(context.Background())
+	if got, ok := fake.StateByIssue[s.IssueUUID]; ok {
+		t.Errorf("PR not green yet: state moved to %q, want no transition", got)
+	}
+	if c := fake.CommentsByIssue[s.IssueUUID]; len(c) != 0 {
+		t.Errorf("PR not green yet: %d comment(s), want 0", len(c))
+	}
+	if cur, _ := d.sessions.Get(s.ID); cur.WBPRDone {
+		t.Error("WBPRDone must stay unset while the PR has not passed checks")
+	}
+	if n := countCalls(fake.CallNames(), "SetIssueState"); n != 0 {
+		t.Errorf("SetIssueState fired %d times before green, want 0", n)
+	}
+
+	// Checks go green: the same PR is now valid, so the transition fires once.
+	seams.pr = openPR(9, "MERGEABLE", "", "pass")
+	d.observe(context.Background())
+	if got := fake.StateByIssue[s.IssueUUID]; got != "st-review" {
+		t.Errorf("PR green: state = %q, want st-review", got)
+	}
+	if c := fake.CommentsByIssue[s.IssueUUID]; len(c) != 1 || !strings.Contains(c[0], "pull/9") {
+		t.Fatalf("PR green: comment = %v, want one referencing the PR URL", c)
+	}
+	if cur, _ := d.sessions.Get(s.ID); !cur.WBPRDone {
+		t.Error("WBPRDone must be set after the green PR write-back")
+	}
+
+	// A later cycle (still green) must not repeat the transition.
+	d.observe(context.Background())
+	if c := len(fake.CommentsByIssue[s.IssueUUID]); c != 1 {
+		t.Errorf("PR comments after a repeat cycle = %d, want 1", c)
+	}
+	if n := countCalls(fake.CallNames(), "SetIssueState"); n != 1 {
+		t.Errorf("SetIssueState fired %d times total, want once", n)
+	}
+}
+
+// A draft PR whose checks are green is still NOT valid for "In Review": drafts
+// are excluded regardless of check state.
+func TestWriteBackPRRequiresChecksSkipsDraft(t *testing.T) {
+	p := labelPoll("p1")
+	p.OnPRStateID = "st-review"
+	p.CommentOnPR = true
+	p.PRRequiresChecks = true
+	fake := &linear.Fake{}
+	nat := &fakeNative{}
+	d := newTestDaemon(t, testConfig(p), fake, nat)
+	draft := openPR(9, "MERGEABLE", "", "pass")
+	draft.IsDraft = true
+	seams := &fakeObsSeams{pr: draft}
+	seams.install(d)
+
+	s := wbObserveSess(d, "FE-9", "p1")
+	nat.alive = map[string]bool{s.ID: true}
+
+	d.observe(context.Background())
+	if got, ok := fake.StateByIssue[s.IssueUUID]; ok {
+		t.Errorf("draft PR: state moved to %q, want no transition", got)
+	}
+	if cur, _ := d.sessions.Get(s.ID); cur.WBPRDone {
+		t.Error("WBPRDone must stay unset for a draft PR")
+	}
+}
+
 // --- merged: write-back BEFORE cleanup drops the session --------------------
 
 func TestWriteBackMergedBeforeCleanup(t *testing.T) {

@@ -94,6 +94,18 @@ func renderWriteback(tmpl string, s session.Session, detail string) string {
 	).Replace(tmpl)
 }
 
+// prPassedChecks reports whether a session's PR is VALID — ready for human
+// review — as opposed to merely open: open, not a draft, and every CI/CodeRabbit
+// check green (ChecksState=="pass", i.e. none failing or pending). It is the gate
+// the on_pr_* write-back applies when a poll sets pr_requires_checks, so "In
+// Review" waits until the PR has actually passed its checks. A CodeRabbit run
+// only counts here if it registers a check run in statusCheckRollup (it usually
+// does); a CodeRabbit-review-without-a-check still lets checks read "pass".
+func prPassedChecks(s session.Session) bool {
+	return s.PR != nil && strings.EqualFold(s.PR.State, "OPEN") &&
+		!s.PR.IsDraft && s.PR.ChecksState == "pass"
+}
+
 // wbLinErr logs a write-back Linear failure and, on an auth error, drops the
 // cached client so the next ensureLinear re-resolves the key (rotation).
 func (d *Daemon) wbLinErr(stage string, err error) {
@@ -192,11 +204,14 @@ func (d *Daemon) seenFallback(pollName, issueUUID string) {
 }
 
 // writeBack runs the observer-driven write-back transitions for a session as its
-// PR-derived status advances (PLAN P4.21): PR-open and merged. It resolves the
-// poll and client lazily so a session whose poll configures nothing makes ZERO
-// Linear calls. Called from observeNative BEFORE react, so the merged write-back
-// (and its guard) lands before react's merged-cleanup drops the session — a
-// failed cleanup then retries without re-commenting.
+// PR-derived status advances (PLAN P4.21): PR-open and merged. When the poll sets
+// pr_requires_checks the PR transition is deferred until the PR is VALID (open,
+// not draft, checks green — prPassedChecks) instead of firing on bare open. It
+// resolves the poll and client lazily so a session whose poll configures nothing
+// (or whose PR has not yet passed checks) makes ZERO Linear calls. Called from
+// observeNative BEFORE react, so the merged write-back (and its guard) lands
+// before react's merged-cleanup drops the session — a failed cleanup then retries
+// without re-commenting.
 func (d *Daemon) writeBack(ctx context.Context, s session.Session) {
 	if s.Source != "native" {
 		return
@@ -211,6 +226,12 @@ func (d *Daemon) writeBack(ctx context.Context, s session.Session) {
 		return
 	}
 	needPR := prOpen && !s.WBPRDone && (p.OnPRStateID != "" || p.CommentOnPR)
+	if needPR && p.PRRequiresChecks && !prPassedChecks(s) {
+		// The poll wants "In Review" gated on a valid PR (open, not draft, checks
+		// green), and this PR has not passed yet: defer. WBPRDone stays unset so a
+		// later cycle — once CI/CodeRabbit go green — fires the transition then.
+		needPR = false
+	}
 	needMerged := merged && !s.WBMergedDone && (p.OnMergedStateID != "" || p.CommentOnMerged)
 	if !needPR && !needMerged {
 		return // this poll configures nothing for the pending transition

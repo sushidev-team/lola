@@ -40,6 +40,16 @@ const (
 	fCap
 	fDedup
 	fSetLabel
+	// Linear write-back (P4): optional lifecycle → Linear state/label/comment.
+	fOnSpawnState
+	fCommentOnSpawn
+	fOnPRState
+	fPRRequiresChecks
+	fCommentOnPR
+	fOnMergedState
+	fCommentOnMerged
+	fBlockedLabel
+	fCommentOnBlocked
 	fSave
 )
 
@@ -114,6 +124,15 @@ func (f *formModel) fields() []fieldID {
 		if f.poll.DedupMode == "label" {
 			fs = append(fs, fSetLabel)
 		}
+		// Write-back lifecycle → Linear (all optional). Grouped spawn / PR /
+		// merged / blocked, each state paired with its comment toggle.
+		fs = append(fs, fOnSpawnState, fCommentOnSpawn, fOnPRState)
+		if f.poll.OnPRStateID != "" || f.poll.CommentOnPR {
+			// The "wait for green checks" gate only means anything once the PR
+			// transition (state move or comment) is actually configured.
+			fs = append(fs, fPRRequiresChecks)
+		}
+		fs = append(fs, fCommentOnPR, fOnMergedState, fCommentOnMerged, fBlockedLabel, fCommentOnBlocked)
 	}
 	return append(fs, fSave)
 }
@@ -218,23 +237,50 @@ func (f *formModel) refresh() tea.Cmd {
 }
 
 func (f *formModel) interact(cur fieldID) (tea.Cmd, formEvent) {
-	switch cur {
-	case fName, fRepo, fCap:
+	switch {
+	case cur == fName || cur == fRepo || cur == fCap:
 		// enter advances to the next field
 		if f.cursor < len(f.fields())-1 {
 			f.cursor++
 		}
 		return nil, formNone
-	case fSave:
+	case cur == fSave:
 		return f.save()
+	case boolFields[cur]:
+		f.toggleBool(cur)
+		return nil, formNone
 	default:
 		return f.openPicker(cur), formNone
+	}
+}
+
+// toggleBool flips a write-back boolean toggle in place.
+func (f *formModel) toggleBool(cur fieldID) {
+	switch cur {
+	case fPRRequiresChecks:
+		f.poll.PRRequiresChecks = !f.poll.PRRequiresChecks
+	case fCommentOnSpawn:
+		f.poll.CommentOnSpawn = !f.poll.CommentOnSpawn
+	case fCommentOnPR:
+		f.poll.CommentOnPR = !f.poll.CommentOnPR
+	case fCommentOnMerged:
+		f.poll.CommentOnMerged = !f.poll.CommentOnMerged
+	case fCommentOnBlocked:
+		f.poll.CommentOnBlocked = !f.poll.CommentOnBlocked
 	}
 }
 
 var metaFields = map[fieldID]bool{
 	fProject: true, fCycle: true, fStates: true, fLabels: true,
 	fAssigneeUser: true, fSetLabel: true,
+	fOnSpawnState: true, fOnPRState: true, fOnMergedState: true, fBlockedLabel: true,
+}
+
+// boolFields are the write-back toggles: enter flips them in place rather than
+// opening a picker.
+var boolFields = map[fieldID]bool{
+	fPRRequiresChecks: true, fCommentOnSpawn: true, fCommentOnPR: true,
+	fCommentOnMerged: true, fCommentOnBlocked: true,
 }
 
 func (f *formModel) openPicker(cur fieldID) tea.Cmd {
@@ -351,6 +397,22 @@ func (f *formModel) openPicker(cur fieldID) tea.Cmd {
 		for _, l := range f.meta.Labels {
 			opts = append(opts, pickOpt{l.ID, labelDisplay(l)})
 		}
+	case fOnSpawnState:
+		title = "On agent start → state (e.g. In Progress)"
+		opts, selected = f.stateOpts(), []string{f.poll.OnSpawnStateID}
+	case fOnPRState:
+		title = "On PR → state (e.g. In Review)"
+		opts, selected = f.stateOpts(), []string{f.poll.OnPRStateID}
+	case fOnMergedState:
+		title = "On merged → state (e.g. Done)"
+		opts, selected = f.stateOpts(), []string{f.poll.OnMergedStateID}
+	case fBlockedLabel:
+		title = "On blocked → label (optional)"
+		opts = append(opts, pickOpt{"", "(none)"})
+		for _, l := range f.meta.Labels {
+			opts = append(opts, pickOpt{l.ID, labelDisplay(l)})
+		}
+		selected = []string{f.poll.BlockedLabelID}
 	}
 
 	p := &picker{title: title, field: cur, opts: opts, multi: multi, sel: map[string]bool{}}
@@ -458,8 +520,26 @@ func (f *formModel) applyPick(p *picker) tea.Cmd {
 		f.poll.DedupMode = id
 	case fSetLabel:
 		f.poll.OnSentSetLabel = id
+	case fOnSpawnState:
+		f.poll.OnSpawnStateID = id
+	case fOnPRState:
+		f.poll.OnPRStateID = id
+	case fOnMergedState:
+		f.poll.OnMergedStateID = id
+	case fBlockedLabel:
+		f.poll.BlockedLabelID = id
 	}
 	return nil
+}
+
+// stateOpts builds a single-select workflow-state option list led by "(none)"
+// (clears the transition), shared by the three write-back state pickers.
+func (f *formModel) stateOpts() []pickOpt {
+	opts := []pickOpt{{"", "(none)"}}
+	for _, s := range f.meta.States {
+		opts = append(opts, pickOpt{s.ID, s.Name + " [" + s.Type + "]"})
+	}
+	return opts
 }
 
 func (f *formModel) save() (tea.Cmd, formEvent) {
@@ -551,7 +631,30 @@ func (f *formModel) view(height int) string {
 	if f.cursor >= len(fields) {
 		f.cursor = len(fields) - 1
 	}
-	for i, fd := range fields {
+
+	// Scroll window: the field list (with write-back) can exceed the modal's
+	// inner height, and box() silently truncates any body past it — so keep the
+	// focused field within a window that fits, mirroring the picker's scroller.
+	win := height - 8
+	if win < 6 {
+		win = 6
+	}
+	start, end := 0, len(fields)
+	if len(fields) > win {
+		start = f.cursor - win/2
+		if start < 0 {
+			start = 0
+		}
+		if start > len(fields)-win {
+			start = len(fields) - win
+		}
+		end = start + win
+	}
+	if start > 0 {
+		b.WriteString(faintText.Render("  ↑ more") + "\n")
+	}
+	for i := start; i < end; i++ {
+		fd := fields[i]
 		marker := "  "
 		if i == f.cursor {
 			marker = "› "
@@ -562,7 +665,11 @@ func (f *formModel) view(height int) string {
 		}
 		b.WriteString(line + "\n")
 	}
-	b.WriteString("  " + faintText.Render(fmt.Sprintf("%-22spriority, createdAt (default)", "Priority sort")) + "\n")
+	if end < len(fields) {
+		b.WriteString(faintText.Render("  ↓ more") + "\n")
+	} else {
+		b.WriteString("  " + faintText.Render(fmt.Sprintf("%-22spriority, createdAt (default)", "Priority sort")) + "\n")
+	}
 
 	if f.loading != "" {
 		b.WriteString("\n" + faintText.Render(f.loading) + "\n")
@@ -617,6 +724,24 @@ func fieldHelp(fd fieldID) string {
 		return "label = flip a Linear label after spawn (visible, reconcile-driven); seen = local seen-file only."
 	case fSetLabel:
 		return "Label ADDED after a successful spawn to mark the issue as picked up. Lola removes the trigger label(s) automatically. Must not be a trigger label."
+	case fOnSpawnState:
+		return "Workflow state the issue moves to when the agent starts (e.g. In Progress). (none) = no move."
+	case fCommentOnSpawn:
+		return "enter toggles · also post a short comment on the issue when the agent starts."
+	case fOnPRState:
+		return "Workflow state when the agent's PR is ready (e.g. In Review). (none) = no move."
+	case fPRRequiresChecks:
+		return "enter toggles · on = wait for a valid PR (open, not draft, all CI/CodeRabbit checks green); off = flip the moment the PR opens."
+	case fCommentOnPR:
+		return "enter toggles · also comment the PR link on the issue."
+	case fOnMergedState:
+		return "Workflow state when the PR merges (e.g. Done). (none) = no move."
+	case fCommentOnMerged:
+		return "enter toggles · also comment when the PR merges."
+	case fBlockedLabel:
+		return "Label added when the agent is blocked and needs a human (CI retries exhausted). (none) = no label."
+	case fCommentOnBlocked:
+		return "enter toggles · also comment the block reason when the agent is blocked."
 	case fSave:
 		return ""
 	}
@@ -655,10 +780,45 @@ func (f *formModel) label(fd fieldID) string {
 		return "Dedup mode"
 	case fSetLabel:
 		return "on_sent set label"
+	case fOnSpawnState:
+		return "On start → state"
+	case fCommentOnSpawn:
+		return "  comment on start"
+	case fOnPRState:
+		return "On PR → state"
+	case fPRRequiresChecks:
+		return "  require checks"
+	case fCommentOnPR:
+		return "  comment on PR"
+	case fOnMergedState:
+		return "On merged → state"
+	case fCommentOnMerged:
+		return "  comment on merged"
+	case fBlockedLabel:
+		return "On blocked → label"
+	case fCommentOnBlocked:
+		return "  comment on blocked"
 	case fSave:
 		return ""
 	}
 	return ""
+}
+
+// boolDisplay renders a write-back toggle: "on" bright, "off" faint.
+func boolDisplay(b bool) string {
+	if b {
+		return "on"
+	}
+	return faintText.Render("off")
+}
+
+// stateNameOrNone renders a write-back state cell: the state name, or a faint
+// "(none)" when the transition is unset.
+func (f *formModel) stateNameOrNone(id string) string {
+	if id == "" {
+		return faintText.Render("(none)")
+	}
+	return f.stateName(id)
 }
 
 func (f *formModel) display(fd fieldID) string {
@@ -753,6 +913,27 @@ func (f *formModel) display(fd fieldID) string {
 			return sel
 		}
 		return f.labelName(f.poll.OnSentSetLabel)
+	case fOnSpawnState:
+		return f.stateNameOrNone(f.poll.OnSpawnStateID)
+	case fOnPRState:
+		return f.stateNameOrNone(f.poll.OnPRStateID)
+	case fOnMergedState:
+		return f.stateNameOrNone(f.poll.OnMergedStateID)
+	case fBlockedLabel:
+		if f.poll.BlockedLabelID == "" {
+			return faintText.Render("(none)")
+		}
+		return f.labelName(f.poll.BlockedLabelID)
+	case fPRRequiresChecks:
+		return boolDisplay(f.poll.PRRequiresChecks)
+	case fCommentOnSpawn:
+		return boolDisplay(f.poll.CommentOnSpawn)
+	case fCommentOnPR:
+		return boolDisplay(f.poll.CommentOnPR)
+	case fCommentOnMerged:
+		return boolDisplay(f.poll.CommentOnMerged)
+	case fCommentOnBlocked:
+		return boolDisplay(f.poll.CommentOnBlocked)
 	case fSave:
 		return "[ Save ]"
 	}
