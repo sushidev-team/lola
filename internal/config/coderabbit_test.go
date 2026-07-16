@@ -31,7 +31,7 @@ func TestCodeRabbitDefaultOffWhenAbsent(t *testing.T) {
 	if err := c.Validate(); err != nil {
 		t.Errorf("config without [coderabbit] must validate: %v", err)
 	}
-	if CodeRabbitToAgentPreamble == "" || CodeRabbitNotifyTitle == "" || DefaultCodeRabbitAuthor == "" {
+	if CodeRabbitAgentPointerFmt == "" || CodeRabbitNotifyTitle == "" || DefaultCodeRabbitAuthor == "" {
 		t.Error("coderabbit hand-off consts must not be empty")
 	}
 }

@@ -51,9 +51,9 @@ type rootModel struct {
 	agentFor     string // session ID agentTerm is attached to ("" = none)
 	showShell    bool   // Detail shows the session's shell instead of the agent
 	embedFocused bool   // the shown embed has keyboard + is expanded
-	embedScroll  bool   // scroll-mode (opt-in, Ctrl-g): capture the mouse to forward the
-	//                      wheel to the agent. OFF by default so the outer terminal keeps
-	//                      native drag-select/copy and ⌘-click-to-open in EVERY terminal.
+	embedSelect  bool   // select-mode (opt-in, Ctrl-g): release the mouse to the outer
+	//                      terminal for native drag-select/copy and ⌘-click-to-open. OFF by
+	//                      default so the wheel is captured and forwarded to the agent.
 	embedGen      int  // generation, bumped on re-target so stale frame waiters are ignored
 	agentDebounce int  // debounce token; only the latest selection change attaches
 	spin          int  // braille spinner frame, advanced while a terminal is loading
@@ -404,11 +404,11 @@ func (m *rootModel) View() tea.View {
 	// for this dark background, so an unset (light or theme-dependent) terminal
 	// background is what made the same frame look muddy elsewhere.
 	v.BackgroundColor = canvasColor()
-	// A focused embed leaves the mouse with the OUTER terminal by default, so
-	// native drag-select/copy and ⌘-click-to-open a link work in EVERY terminal
-	// (no per-terminal modifier trick needed). Only scroll-mode (opt-in, Ctrl-g)
-	// captures the mouse, to forward the wheel to the agent's own history.
-	if m.embedFocused && m.embedScroll {
+	// A focused embed captures the mouse by default so the wheel is forwarded to
+	// the agent's own history (the cockpit itself is keyboard-driven). Select-mode
+	// (opt-in, Ctrl-g) releases the mouse to the outer terminal for native
+	// drag-select/copy and ⌘-click-to-open a link.
+	if m.embedFocused && !m.embedSelect {
 		v.MouseMode = tea.MouseModeCellMotion
 	}
 	return v

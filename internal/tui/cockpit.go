@@ -318,10 +318,10 @@ func (m *rootModel) detailTitle() string {
 		extra += " · " + sel.Status
 	}
 	if m.embedFocused {
-		if m.embedScroll {
-			extra += " · ⇕ scroll — wheel→agent · Ctrl-g mouse back · Ctrl-q back"
+		if m.embedSelect {
+			extra += " · ✂ select — ⌘-click/drag · Ctrl-g wheel · Ctrl-q back"
 		} else {
-			extra += " · ⛶ focused — ⌘-click/drag · Ctrl-g wheel · Ctrl-q back"
+			extra += " · ⛶ focused — wheel→agent · Ctrl-g select · Ctrl-q back"
 		}
 	} else if m.currentEmbed() != nil {
 		extra += " · enter to focus"

@@ -91,13 +91,17 @@ func TestCodeRabbitWatchRoutesAndWatermarks(t *testing.T) {
 		t.Errorf("LastCodeRabbitAt = %v, want %v", got.LastCodeRabbitAt, latest)
 	}
 
-	// Handed off to the worker (sanitized), preamble + findings, AtPrompt consumed.
+	// Handed off to the worker as a SINGLE-LINE pointer to the PR (not the raw
+	// comment text), AtPrompt consumed.
 	sends := seams.sendCalls()
 	if len(sends) != 1 {
 		t.Fatalf("want one send-keys hand-off, got %d", len(sends))
 	}
-	if !strings.Contains(sends[0].text, "nil deref") || !strings.Contains(sends[0].text, "CodeRabbit") {
-		t.Errorf("hand-off must carry the preamble + comment, got %q", sends[0].text)
+	if !strings.Contains(sends[0].text, "PR #7") || !strings.Contains(sends[0].text, "gh pr view 7") {
+		t.Errorf("hand-off must be the single-line PR pointer, got %q", sends[0].text)
+	}
+	if strings.Contains(sends[0].text, "nil deref") || strings.Contains(sends[0].text, "\n") {
+		t.Errorf("hand-off must NOT carry the raw multi-line comment, got %q", sends[0].text)
 	}
 	if got.AtPrompt {
 		t.Error("AtPrompt must be consumed after the hand-off")
@@ -187,8 +191,8 @@ func TestCodeRabbitWatchDefersWhenBusyThenFlushes(t *testing.T) {
 	d.flushPendingCodeRabbit(context.Background(), s.ID)
 
 	sends := seams.sendCalls()
-	if len(sends) != 1 || !strings.Contains(sends[0].text, "address the review") {
-		t.Fatalf("flush must deliver the deferred hand-off, got %+v", sends)
+	if len(sends) != 1 || !strings.Contains(sends[0].text, "PR #7") {
+		t.Fatalf("flush must deliver the deferred pointer hand-off, got %+v", sends)
 	}
 	got, _ = d.sessions.Get(s.ID)
 	if got.PendingCodeRabbit != "" {

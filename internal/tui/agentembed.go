@@ -238,9 +238,9 @@ func (m *rootModel) toggleShell() (tea.Model, tea.Cmd) {
 }
 
 // handleEmbedKey routes a keystroke while the embed is FOCUSED: Ctrl-q unfocuses
-// back to the cockpit (the terminal keeps running); Ctrl-g toggles scroll-mode
-// (capture the mouse to forward the wheel to the agent — off by default so the
-// terminal keeps native selection/copy and ⌘-click, see View); everything else
+// back to the cockpit (the terminal keeps running); Ctrl-g toggles select-mode
+// (release the mouse for native selection/copy and ⌘-click — off by default so
+// the wheel is captured and forwarded to the agent, see View); everything else
 // is forwarded to whatever is shown (agent or shell).
 func (m *rootModel) handleEmbedKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if k.String() == "ctrl+q" {
@@ -248,7 +248,7 @@ func (m *rootModel) handleEmbedKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if k.String() == "ctrl+g" {
-		m.embedScroll = !m.embedScroll
+		m.embedSelect = !m.embedSelect
 		return m, nil
 	}
 	if e := m.currentEmbed(); e != nil {

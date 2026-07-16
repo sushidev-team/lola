@@ -29,9 +29,14 @@ const DefaultCodeRabbitAuthor = "coderabbitai"
 // Hand-off / notification strings for the comment watch. Both are plain strings
 // (no template eval) so nothing in a comment body can inject a directive.
 const (
-	// CodeRabbitToAgentPreamble prefixes the (sanitized) comments sent to the
-	// worker agent.
-	CodeRabbitToAgentPreamble = "CodeRabbit left new feedback on your PR. Address the actionable items, commit, and push. Ignore anything already handled or out of scope:\n"
+	// CodeRabbitAgentPointerFmt is the SINGLE-LINE instruction handed to the worker
+	// agent when CodeRabbit leaves new PR comments. It deliberately does NOT embed
+	// the comment text: the fetched body is large, untrusted, and low-signal (a
+	// walkthrough summary, not the actionable inline review), and a multi-line
+	// send-keys payload submits unreliably. A one-line prompt submits cleanly, and
+	// the agent pulls the current, full, actionable review itself. The PR number
+	// fills both %d (the reference and the gh command).
+	CodeRabbitAgentPointerFmt = "CodeRabbit posted new review feedback on PR #%d. Read it (run: gh pr view %d --comments, and check the PR's review comments), address the actionable items, then commit and push."
 	// CodeRabbitNotifyTitle titles the human-facing comment notification/comment.
 	CodeRabbitNotifyTitle = "CodeRabbit commented"
 )

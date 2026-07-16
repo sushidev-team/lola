@@ -173,6 +173,34 @@ func (f *settingsForm) field(key string) *setField {
 	return nil // unreachable: keys are compile-time constants matched in save()
 }
 
+// enableDefaults maps a feature's master "enabled" toggle to the dependent sink
+// fields its config resolution turns ON when the feature is enabled (see
+// resolveCodeRabbit / resolveReview / resolveBrain: `enabled = true` alone
+// defaults these on). The editor mirrors that so enabling a feature in the TUI is
+// not silently inert with every sink left off.
+var enableDefaults = map[string][]string{
+	"cr_enabled":     {"cr_notify", "cr_send"},
+	"review_enabled": {"review_onpropen", "review_send"},
+	"brain_enabled":  {"brain_esc", "brain_appr"},
+}
+
+// toggleBool flips a bool field. When it flips a master "enabled" switch OFF→ON,
+// it also switches that feature's dependent sinks ON, matching what saving
+// `enabled = true` alone would resolve to — so enabling in the editor actually
+// does something. Turning a master OFF leaves the sinks as-is (they are ignored
+// while disabled and preserved if re-enabled by hand).
+func (f *settingsForm) toggleBool(fld *setField) {
+	was := fld.b
+	fld.b = !fld.b
+	if !was && fld.b {
+		for _, dep := range enableDefaults[fld.key] {
+			if d := f.field(dep); d != nil {
+				d.b = true
+			}
+		}
+	}
+}
+
 func (f *settingsForm) update(k tea.KeyPressMsg) settingsFormEvent {
 	f.err = ""
 	fld := &f.fields[f.cursor]
@@ -192,7 +220,7 @@ func (f *settingsForm) update(k tea.KeyPressMsg) settingsFormEvent {
 	case "enter":
 		switch fld.kind {
 		case sfBool:
-			fld.b = !fld.b
+			f.toggleBool(fld)
 		case sfEnum:
 			cycleEnum(fld)
 		}
@@ -201,7 +229,7 @@ func (f *settingsForm) update(k tea.KeyPressMsg) settingsFormEvent {
 		// text field (e.g. the review command argv); an int field ignores it.
 		switch fld.kind {
 		case sfBool:
-			fld.b = !fld.b
+			f.toggleBool(fld)
 		case sfEnum:
 			cycleEnum(fld)
 		case sfText:

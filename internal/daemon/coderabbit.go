@@ -107,12 +107,22 @@ func (d *Daemon) routeCodeRabbit(ctx context.Context, s session.Session, cc conf
 			URL:      prURL(s),
 		})
 	}
-	d.logf("", "coderabbit: %s new PR feedback — surfaced", s.ID)
+	// Log which sinks actually fired — with every sink off (e.g. notify=false,
+	// send_to_agent=false) the watch is inert, and a bare "surfaced" line would
+	// wrongly suggest it reached a human/agent.
+	if !cc.Notify && !cc.SendToAgent && !cc.CommentOnLinear {
+		d.logf("", "coderabbit: %s new PR feedback but ALL sinks are off (notify/send_to_agent/comment_on_linear) — nothing routed", s.ID)
+	} else {
+		d.logf("", "coderabbit: %s new PR feedback routed (notify=%v send_to_agent=%v linear=%v)", s.ID, cc.Notify, cc.SendToAgent, cc.CommentOnLinear)
+	}
 
-	// UNTRUSTED sink #2: the worker agent, ONLY through sanitizeAgentText + the
-	// AtPrompt idle-gate (sendCodeRabbitToAgent).
+	// sink #2: the worker agent. It gets a SHORT, single-line POINTER built from
+	// the PR number — never the raw comment text: a one-line prompt submits
+	// reliably via send-keys (a large multi-line paste can leave the text unsent),
+	// carries no attacker-authored markdown into the pane, and makes the agent
+	// fetch the current, full, actionable review itself. Still idle-gated.
 	if cc.SendToAgent {
-		d.sendCodeRabbitToAgent(ctx, s, text)
+		d.sendCodeRabbitToAgent(ctx, s, coderabbitAgentPointer(s))
 	}
 
 	// UNTRUSTED sink #3: a Linear comment (an API payload shown to a human, so no
@@ -122,32 +132,42 @@ func (d *Daemon) routeCodeRabbit(ctx context.Context, s session.Session, cc conf
 	}
 }
 
-// sendCodeRabbitToAgent is the send-keys path for the comment hand-off. It
-// enforces the SAME send-keys safety gate as the review buddy's
-// sendReviewToAgent, keyed on the session's own PendingCodeRabbit field:
+// coderabbitAgentPointer builds the single-line instruction handed to the worker.
+// It is derived only from the PR number (our own text — no untrusted content), so
+// it submits cleanly and carries nothing attacker-authored into the pane.
+func coderabbitAgentPointer(s session.Session) string {
+	n := 0
+	if s.PR != nil {
+		n = s.PR.Number
+	}
+	return fmt.Sprintf(config.CodeRabbitAgentPointerFmt, n, n)
+}
+
+// sendCodeRabbitToAgent is the send-keys path for the comment hand-off. msg is the
+// SINGLE-LINE pointer (coderabbitAgentPointer) — never the raw comment text. It
+// enforces the SAME send-keys safety gate as the review buddy's sendReviewToAgent,
+// keyed on the session's own PendingCodeRabbit field:
 //
-//   - Agent mid-turn (AtPrompt false) → DEFERRED: the raw text is stashed on
+//   - Agent mid-turn (AtPrompt false) → DEFERRED: the pointer is stashed on
 //     PendingCodeRabbit and flushPendingCodeRabbit delivers it on a later idle
 //     cycle. Nothing is typed.
-//   - Agent idle → the sanitized message is rendered, then AtPrompt is CONSUMED
-//     atomically (clearing PendingCodeRabbit) in one Store.Update. Only if that
-//     consume wins is the text sent, so a hook that flipped AtPrompt false
-//     meanwhile cancels the send (re-stashed for the next cycle).
+//   - Agent idle → AtPrompt is CONSUMED atomically (clearing PendingCodeRabbit)
+//     in one Store.Update. Only if that consume wins is the pointer sent, so a
+//     hook that flipped AtPrompt false meanwhile cancels it (re-stashed).
 //
-// text is the RAW (untrusted) comment text; it is sanitized here, immediately
-// before the send, so the stash and every other sink hold human-readable text
-// while the pane only ever receives sanitized bytes.
-func (d *Daemon) sendCodeRabbitToAgent(ctx context.Context, s session.Session, text string) {
+// The pointer is still passed through sanitizeAgentText (defence in depth; it is
+// single-line and control-char-free, so this is a no-op in practice).
+func (d *Daemon) sendCodeRabbitToAgent(ctx context.Context, s session.Session, msg string) {
 	if s.TmuxName == "" {
 		return
 	}
 	if !s.AtPrompt {
-		d.deferCodeRabbitHandoff(s.ID, text)
+		d.deferCodeRabbitHandoff(s.ID, msg)
 		d.logf("", "coderabbit: %s worker is mid-turn — deferring the comment hand-off", s.ID)
 		return
 	}
 
-	msg := sanitizeAgentText(config.CodeRabbitToAgentPreamble + text)
+	msg = sanitizeAgentText(msg)
 
 	var (
 		sent     bool
@@ -164,7 +184,7 @@ func (d *Daemon) sendCodeRabbitToAgent(ctx context.Context, s session.Session, t
 		return true
 	})
 	if !sent {
-		d.deferCodeRabbitHandoff(s.ID, text)
+		d.deferCodeRabbitHandoff(s.ID, msg)
 		d.logf("", "coderabbit: %s worker no longer idle at prompt — deferring the hand-off", s.ID)
 		return
 	}
@@ -177,19 +197,19 @@ func (d *Daemon) sendCodeRabbitToAgent(ctx context.Context, s session.Session, t
 		return
 	}
 	d.coderabbitSave()
-	d.logf("", "coderabbit: handed CodeRabbit feedback to the worker %s", s.ID)
+	d.logf("", "coderabbit: pointed the worker %s at its PR's new CodeRabbit feedback", s.ID)
 }
 
-// deferCodeRabbitHandoff stashes the raw comment text for a later idle-cycle
-// delivery, idempotently (a repeat stash of the same text is a no-op), and
-// persists.
-func (d *Daemon) deferCodeRabbitHandoff(id, text string) {
+// deferCodeRabbitHandoff stashes the (short, single-line) pointer for a later
+// idle-cycle delivery, idempotently (a repeat stash of the same text is a no-op),
+// and persists.
+func (d *Daemon) deferCodeRabbitHandoff(id, msg string) {
 	changed := false
 	d.sessions.Update(id, func(cur *session.Session) bool {
-		if cur.PendingCodeRabbit == text {
+		if cur.PendingCodeRabbit == msg {
 			return false
 		}
-		cur.PendingCodeRabbit = text
+		cur.PendingCodeRabbit = msg
 		changed = true
 		return true
 	})

@@ -126,13 +126,14 @@ type Session struct {
 	// Persists across restarts so a comment is never re-fired on the 30s cadence.
 	LastCodeRabbitAt time.Time `json:"last_coderabbit_at,omitempty"`
 
-	// PendingCodeRabbit holds the (raw, untrusted) CodeRabbit comment text that was
-	// ready to hand to the worker agent but could not be sent because the agent was
-	// mid-turn (AtPrompt false) at route time. A later observer cycle delivers it
-	// once the agent returns to its prompt, sanitizing it immediately before the
-	// send, then clears it. It is the [coderabbit] equivalent of
-	// PendingReviewFindings — kept a SEPARATE field so a watch hand-off and a
-	// [review] hand-off never clobber each other. Persists across restarts.
+	// PendingCodeRabbit holds the short, single-line CodeRabbit hand-off POINTER
+	// (see config.CodeRabbitAgentPointerFmt — our own text referencing the PR, not
+	// the raw comment) that was ready to hand to the worker agent but could not be
+	// sent because the agent was mid-turn (AtPrompt false) at route time. A later
+	// observer cycle delivers it once the agent returns to its prompt, then clears
+	// it. It is the [coderabbit] equivalent of PendingReviewFindings — kept a
+	// SEPARATE field so a watch hand-off and a [review] hand-off never clobber each
+	// other. Persists across restarts.
 	PendingCodeRabbit string `json:"pending_coderabbit,omitempty"`
 
 	// PendingReviewFindings holds the (raw, untrusted) CodeRabbit review findings

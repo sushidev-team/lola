@@ -306,3 +306,46 @@ func TestSettingsFormScrollsToCursor(t *testing.T) {
 		t.Errorf("scrolled body = %d lines, must fit budget %d (+2 title)", nLines, budget)
 	}
 }
+
+// Toggling a feature's `enabled` master switch ON also flips its dependent sinks
+// ON, mirroring the config resolution (`enabled = true` alone defaults them on).
+// This prevents the silent trap where enabling [coderabbit] in the TUI left
+// send_to_agent = false, so the watch surfaced nothing to the agent.
+func TestSettingsFormEnablingFlipsDependentSinks(t *testing.T) {
+	m := newTestRoot(t) // config has no [coderabbit]/[review]/[brain] → all off
+	cases := []struct {
+		master string
+		deps   []string
+	}{
+		{"cr_enabled", []string{"cr_notify", "cr_send"}},
+		{"review_enabled", []string{"review_onpropen", "review_send"}},
+		{"brain_enabled", []string{"brain_esc", "brain_appr"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.master, func(t *testing.T) {
+			f := newSettingsForm(m.cfgPath, m.cfg)
+			mf := f.field(tc.master)
+			if mf.b {
+				t.Fatalf("%s should start off", tc.master)
+			}
+			for _, d := range tc.deps {
+				if f.field(d).b {
+					t.Fatalf("%s should start off", d)
+				}
+			}
+			f.toggleBool(mf) // OFF → ON
+			for _, d := range tc.deps {
+				if !f.field(d).b {
+					t.Errorf("enabling %s must flip %s ON", tc.master, d)
+				}
+			}
+			// Turning the master back OFF leaves the sinks as-is (not force-reset).
+			f.toggleBool(mf)
+			for _, d := range tc.deps {
+				if !f.field(d).b {
+					t.Errorf("disabling %s must NOT reset %s", tc.master, d)
+				}
+			}
+		})
+	}
+}

@@ -205,9 +205,24 @@ func (c *Client) CapturePane(ctx context.Context, name string, lines int) (strin
 
 // SendKeys types text into the session literally (-l: no key-name
 // interpretation) and then presses Enter.
+// submitSettleDelay is the pause between typing a MULTI-LINE payload and the
+// separate submit Enter. A large multi-line message (relayed CodeRabbit / review
+// findings, a multi-line reaction template) can still be settling in the agent's
+// TUI when a back-to-back Enter arrives, so the Enter is swallowed and the text
+// sits in the input UNSENT. A short window lets the paste finish rendering before
+// the submit. Single-line sends skip it (they submit reliably and stay snappy).
+const submitSettleDelay = 600 * time.Millisecond
+
 func (c *Client) SendKeys(ctx context.Context, name, text string) error {
 	if _, _, err := c.run(ctx, "send-keys", "-t", paneTarget(name), "-l", text); err != nil {
 		return err
+	}
+	if strings.Contains(text, "\n") {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(submitSettleDelay):
+		}
 	}
 	_, _, err := c.run(ctx, "send-keys", "-t", paneTarget(name), "Enter")
 	return err

@@ -50,11 +50,11 @@ func TestFocusEmbedThenCtrlQUnfocuses(t *testing.T) {
 	}
 }
 
-// A focused embed leaves the mouse with the terminal by DEFAULT (native
-// selection/copy + ⌘-click work everywhere); Ctrl-g opts into scroll-mode
-// (capture the mouse to forward the wheel) without unfocusing, and is swallowed
-// rather than forwarded to the child.
-func TestFocusEmbedCtrlGTogglesScrollMode(t *testing.T) {
+// A focused embed captures the mouse by DEFAULT so the wheel forwards to the
+// agent; Ctrl-g opts into select-mode (release the mouse for native
+// selection/copy + ⌘-click) without unfocusing, and is swallowed rather than
+// forwarded to the child.
+func TestFocusEmbedCtrlGTogglesSelectMode(t *testing.T) {
 	m := newTestRoot(t)
 	m.sessions.data = &protocol.SessionsData{Sessions: []protocol.SessionInfo{{ID: "s1", Issue: "ENG-1", TmuxName: "lola-x", Status: "working"}}}
 	m.sessions.selID, m.sessions.cursor = "s1", 0
@@ -69,29 +69,28 @@ func TestFocusEmbedCtrlGTogglesScrollMode(t *testing.T) {
 	if m.focusEmbed(); !m.embedFocused {
 		t.Fatal("focusEmbed must focus the live embed")
 	}
-	// Focused by default: the mouse stays with the terminal (no capture), so
-	// ⌘-click and drag-select keep working.
-	if got := m.View().MouseMode; got != tea.MouseModeNone {
-		t.Fatalf("focused embed must leave the mouse to the terminal, got MouseMode %v", got)
+	// Focused by default: the mouse is captured so the wheel forwards to the agent.
+	if got := m.View().MouseMode; got != tea.MouseModeCellMotion {
+		t.Fatalf("focused embed must capture the mouse, got MouseMode %v", got)
 	}
 	m.handleEmbedKey(tea.KeyPressMsg{Code: 'g', Mod: tea.ModCtrl})
-	if !m.embedScroll {
-		t.Error("ctrl+g must enter scroll-mode")
+	if !m.embedSelect {
+		t.Error("ctrl+g must enter select-mode")
 	}
 	if m.embedFocused == false {
 		t.Error("ctrl+g must NOT unfocus the embed")
 	}
-	// Scroll-mode captures the mouse so the wheel can be forwarded to the agent.
-	if got := m.View().MouseMode; got != tea.MouseModeCellMotion {
-		t.Errorf("scroll-mode must capture the mouse, got MouseMode %v", got)
-	}
-	// Toggling back releases the mouse to the terminal again.
-	m.handleEmbedKey(tea.KeyPressMsg{Code: 'g', Mod: tea.ModCtrl})
-	if m.embedScroll {
-		t.Error("ctrl+g again must leave scroll-mode")
-	}
+	// Select-mode releases the mouse so the terminal owns selection + ⌘-click.
 	if got := m.View().MouseMode; got != tea.MouseModeNone {
-		t.Errorf("leaving scroll-mode must release the mouse, got MouseMode %v", got)
+		t.Errorf("select-mode must release the mouse, got MouseMode %v", got)
+	}
+	// Toggling back re-captures the mouse.
+	m.handleEmbedKey(tea.KeyPressMsg{Code: 'g', Mod: tea.ModCtrl})
+	if m.embedSelect {
+		t.Error("ctrl+g again must leave select-mode")
+	}
+	if got := m.View().MouseMode; got != tea.MouseModeCellMotion {
+		t.Errorf("leaving select-mode must re-capture the mouse, got MouseMode %v", got)
 	}
 }
 

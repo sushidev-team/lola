@@ -738,6 +738,27 @@ func (d *Daemon) adoptNativeSessions(ctx context.Context) {
 			s.WBMergedDone = s.WBMergedDone || prev.WBMergedDone
 			s.WBBlockedDone = s.WBBlockedDone || prev.WBBlockedDone
 			s.PR = prev.PR
+			// Carry forward the hook-driven / one-shot state a tmux scan cannot
+			// recover. Without this a restart resets AtPrompt to false — and since
+			// only a fresh Stop hook re-opens the send-keys gate (which an
+			// already-idle adopted agent never fires), every DEFERRED hand-off
+			// (reaction / review / coderabbit) would wedge un-delivered — and
+			// re-fires the reaction/review/coderabbit one-shots. Preserve the gate,
+			// the reaction guards, the review + coderabbit guards, and any stashed
+			// (deferred) hand-off + watermark.
+			s.AtPrompt = prev.AtPrompt
+			s.LastActivityAt = prev.LastActivityAt
+			s.LastReactedStatus = prev.LastReactedStatus
+			s.CIRetries = prev.CIRetries
+			s.Escalated = prev.Escalated
+			s.PendingReaction = prev.PendingReaction
+			s.ReviewedPR = prev.ReviewedPR
+			s.PendingReviewFindings = prev.PendingReviewFindings
+			s.LastCodeRabbitAt = prev.LastCodeRabbitAt
+			s.PendingCodeRabbit = prev.PendingCodeRabbit
+			if len(s.RemovedLabels) == 0 {
+				s.RemovedLabels = prev.RemovedLabels
+			}
 			if s.Status == "dead" && prev.Status == "merged" {
 				// A merged session's pane going away is the expected end of
 				// life, not an anomaly worth resurrecting as "dead".

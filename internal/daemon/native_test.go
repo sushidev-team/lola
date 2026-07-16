@@ -723,6 +723,47 @@ func TestAdoptNativeSessionsUpsertsAndPreservesFacts(t *testing.T) {
 	}
 }
 
+// Adoption must carry forward the hook-driven / one-shot state a tmux scan cannot
+// observe — above all AtPrompt (the send-keys idle gate): dropping it wedges every
+// DEFERRED hand-off (a restart would leave AtPrompt false, and only a fresh Stop
+// hook reopens it, which an already-idle adopted agent never fires).
+func TestAdoptNativeSessionsPreservesHookAndGuardState(t *testing.T) {
+	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})
+	prev := nativeSess("FE-1", "idle")
+	prev.AtPrompt = true
+	prev.LastReactedStatus = "ci_failed"
+	prev.CIRetries = 2
+	prev.Escalated = true
+	prev.ReviewedPR = 7
+	prev.LastCodeRabbitAt = time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	prev.PendingCodeRabbit = "CodeRabbit posted new review feedback on PR #7. …"
+	prev.RemovedLabels = []string{"lbl-trigger"}
+	d.sessions.Upsert(prev)
+
+	// The tmux scan yields a bare live record with none of that state.
+	d.native = &fakeNative{adopted: []session.Session{
+		{ID: prev.ID, Source: "native", Project: "proj1", Issue: "FE-1", TmuxName: prev.ID, Status: "working"},
+	}}
+	d.adoptNativeSessions(context.Background())
+
+	got := findSession(t, d.sessions.Snapshot(), prev.ID)
+	if !got.AtPrompt {
+		t.Error("adoption must preserve AtPrompt (the send-keys gate) — else deferred hand-offs wedge")
+	}
+	if got.LastReactedStatus != "ci_failed" || got.CIRetries != 2 || !got.Escalated {
+		t.Errorf("reaction guards must survive adoption, got %+v", got)
+	}
+	if got.ReviewedPR != 7 {
+		t.Errorf("review guard must survive adoption, got ReviewedPR=%d", got.ReviewedPR)
+	}
+	if got.PendingCodeRabbit == "" || got.LastCodeRabbitAt.IsZero() {
+		t.Errorf("coderabbit watermark + deferred hand-off must survive adoption, got %+v", got)
+	}
+	if len(got.RemovedLabels) != 1 || got.RemovedLabels[0] != "lbl-trigger" {
+		t.Errorf("removed-labels (orphan revert) must survive adoption, got %v", got.RemovedLabels)
+	}
+}
+
 func TestAdoptNativeSessionsLogsAnomaliesAndScanFailure(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("LOLA_HOME", home)
