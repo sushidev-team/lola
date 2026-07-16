@@ -23,13 +23,30 @@ const (
 	focusPolls
 )
 
-// selRowBg is the 256-color background painted behind the selected Sessions row
-// — a subtle cool tint that reads as a selection bar without fighting the pills.
-const selRowBg = "236"
-
 // meterTrack is the unfilled portion of a Triage bar: a thin, very dark rule so
 // the empty track reads as a subtle line, never a gray block.
-var meterTrack = lipgloss.NewStyle().Foreground(lipgloss.Color("236"))
+var meterTrack = lipgloss.NewStyle().Foreground(lipgloss.Color(colBorder))
+
+// paneBadge renders a pane's ordinal as a small, solid slate chip with a bold
+// near-white digit (` 1 `) — replacing the thin negative-circled ❶ glyph, whose
+// knocked-out digit rendered nearly invisible in most terminal fonts. A neutral
+// chip (rather than accent) keeps the cyan focus border as the sole focus cue.
+var paneBadge = lipgloss.NewStyle().
+	Background(lipgloss.Color(colBorder)).
+	Foreground(lipgloss.Color("#eef2f6")).
+	Bold(true)
+
+// paneTitle composes a cockpit pane heading: the number chip, then the bold
+// name, then optional faint context. It carries its own ANSI so box() places it
+// verbatim (the badge keeps its accent regardless of focus; the border color
+// signals focus).
+func paneTitle(n int, name, extra string) string {
+	t := paneBadge.Render(fmt.Sprintf(" %d ", n)) + " " + boxTitle.Render(name)
+	if extra != "" {
+		t += faintText.Render(" · " + extra)
+	}
+	return t
+}
 
 // cockpitView renders the whole single-screen frame. Below a minimum size it
 // degrades to a plain stacked view (narrowCockpit) rather than smearing
@@ -200,7 +217,7 @@ func (m *rootModel) formModal() string {
 		body = body[2:] // drop the form's own title + blank line; it becomes the box title
 	}
 	for i := range body {
-		body[i] = previewLine(body[i], mw-2)
+		body[i] = previewLine(body[i], mw-4)
 	}
 	modal := box(title, body, mw, mh, true)
 	return strings.Join(placeModal(m.cockpitLines(), modal, W), "\n")
@@ -217,8 +234,8 @@ func (m *rootModel) railColumn(w, h int) []string {
 		triageH = 4
 	}
 	pollsH := h - triageH
-	triage := box("❶ Triage", m.triageBody(w-2), w, triageH, false)
-	polls := box("❸ Polls", m.pollsBody(w-2, pollsH-2), w, pollsH, m.focus == focusPolls)
+	triage := box(paneTitle(1, "Triage", ""), m.triageBody(w-4), w, triageH, false)
+	polls := box(paneTitle(3, "Polls", ""), m.pollsBody(w-4, pollsH-2), w, pollsH, m.focus == focusPolls)
 	return stackRows(triage, polls)
 }
 
@@ -235,8 +252,8 @@ func (m *rootModel) mainColumn(w, h int) []string {
 			sessH = 3
 		}
 		embedH := h - sessH
-		sess := box(m.sessionsTitle(), m.sessionsBody(w-2, sessH-2), w, sessH, false)
-		embed := box(m.detailTitle(), m.detailBody(w-2, embedH-2), w, embedH, true) // focused accent
+		sess := box(m.sessionsTitle(), m.sessionsBody(w-4, sessH-2), w, sessH, false)
+		embed := box(m.detailTitle(), m.detailBody(w-4, embedH-2), w, embedH, true) // focused accent
 		return stackRows(sess, embed)
 	}
 	detailH := m.sessions.paneLines() + 8 // header + meta + card + pane + borders
@@ -247,8 +264,8 @@ func (m *rootModel) mainColumn(w, h int) []string {
 		detailH = 6
 	}
 	sessH := h - detailH
-	sess := box(m.sessionsTitle(), m.sessionsBody(w-2, sessH-2), w, sessH, m.focus == focusSessions)
-	det := box(m.detailTitle(), m.detailBody(w-2, detailH-2), w, detailH, false)
+	sess := box(m.sessionsTitle(), m.sessionsBody(w-4, sessH-2), w, sessH, m.focus == focusSessions)
+	det := box(m.detailTitle(), m.detailBody(w-4, detailH-2), w, detailH, false)
 	return stackRows(sess, det)
 }
 
@@ -258,34 +275,34 @@ func (m *rootModel) mainColumn(w, h int) []string {
 func (m *rootModel) detailTitle() string {
 	sel := m.sessions.selected()
 	if sel == nil {
-		return "❹ Detail"
+		return paneTitle(4, "Detail", "")
 	}
-	label := "❹ Detail"
+	label := "Detail"
 	if e := m.currentEmbed(); e != nil {
 		if e.kind == termShell {
-			label = "❹ Shell"
+			label = "Shell"
 		} else {
-			label = "❹ Agent"
+			label = "Agent"
 		}
 	}
-	t := label + " · " + sel.Issue
+	extra := sel.Issue
 	if sel.Project != "" {
-		t += " · " + sel.Project
+		extra += " · " + sel.Project
 	}
 	if sel.PRNumber > 0 {
-		t += fmt.Sprintf(" · #%d", sel.PRNumber)
+		extra += fmt.Sprintf(" · #%d", sel.PRNumber)
 		if sel.Checks != "" {
-			t += " " + sel.Checks
+			extra += " " + sel.Checks
 		}
 	} else if sel.Status != "" {
-		t += " · " + sel.Status
+		extra += " · " + sel.Status
 	}
 	if m.embedFocused {
-		t += " · ⛶ focused — Ctrl-q back"
+		extra += " · ⛶ focused — Ctrl-q back"
 	} else if m.currentEmbed() != nil {
-		t += " · enter to focus"
+		extra += " · enter to focus"
 	}
-	return t
+	return paneTitle(4, label, extra)
 }
 
 // sessionsTitle names the panel plus the active lens and any standing filter
@@ -297,11 +314,11 @@ func (m *rootModel) sessionsTitle() string {
 	if m.sessions.view == viewKanban {
 		lens = "kanban"
 	}
-	t := "❷ Sessions · " + lens
+	extra := lens
 	if m.sessions.filter.AttentionOnly {
-		t += " · needs-you only"
+		extra += " · needs-you only"
 	}
-	return t
+	return paneTitle(2, "Sessions", extra)
 }
 
 // ---- panel bodies (reuse existing helpers, clipped to the box) ----

@@ -93,8 +93,8 @@ func (m *rootModel) agentSize() (int, int) {
 	if W < 104 {
 		railW = 28
 	}
-	innerW := (W - railW - 1) - 2
-	innerH := (H - 2) - 8 // main column minus the Sessions strip, fields, borders
+	innerW := (W - railW - 1) - 4 // main column width minus the box border AND the one-col gutter each side
+	innerH := (H - 2) - 8         // main column minus the Sessions strip, fields, borders
 	if innerW < 8 {
 		innerW = 8
 	}

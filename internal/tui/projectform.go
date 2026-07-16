@@ -281,7 +281,7 @@ func (m *rootModel) projectFormModal() string {
 		mh = 8
 	}
 	for i := range body {
-		body[i] = previewLine(body[i], mw-2)
+		body[i] = previewLine(body[i], mw-4)
 	}
 	modal := box(title, body, mw, mh, true)
 	return strings.Join(placeModal(m.cockpitLines(), modal, W), "\n")

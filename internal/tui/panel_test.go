@@ -47,13 +47,13 @@ func TestBoxDimensions(t *testing.T) {
 func TestBoxTitleCut(t *testing.T) {
 	lines := box("Sessions", nil, 30, 3, false)
 	top := stripANSI(lines[0])
-	if !strings.HasPrefix(top, "┌─ Sessions ") {
+	if !strings.HasPrefix(top, "╭─ Sessions ") {
 		t.Errorf("top border missing cut title: %q", top)
 	}
-	if !strings.HasSuffix(top, "┐") || !strings.HasPrefix(top, "┌") {
+	if !strings.HasSuffix(top, "╮") || !strings.HasPrefix(top, "╭") {
 		t.Errorf("corners malformed: %q", top)
 	}
-	if !strings.HasPrefix(stripANSI(lines[2]), "└") {
+	if !strings.HasPrefix(stripANSI(lines[2]), "╰") {
 		t.Errorf("bottom border malformed: %q", stripANSI(lines[2]))
 	}
 }

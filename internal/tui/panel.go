@@ -36,6 +36,10 @@ func box(title string, body []string, w, h int, focused bool) []string {
 		h = 2
 	}
 	innerW, innerH := w-2, h-2
+	padW := innerW - 2 // one space of gutter on each side of the content
+	if padW < 0 {
+		padW = 0
+	}
 	bs, ts := boxBorder, boxTitle
 	if focused {
 		bs, ts = boxBorderHi, boxTitleHi
@@ -49,26 +53,33 @@ func box(title string, body []string, w, h int, focused bool) []string {
 		if i < len(body) {
 			content = body[i]
 		}
-		out = append(out, left+padTo(content, innerW)+right)
+		out = append(out, left+" "+padTo(content, padW)+" "+right)
 	}
-	out = append(out, bs.Render("└"+strings.Repeat("─", innerW)+"┘"))
+	out = append(out, bs.Render("╰"+strings.Repeat("─", innerW)+"╯"))
 	return out
 }
 
-// boxTop builds the top border with the title cut into the line, lazygit-style:
+// boxTop builds the top border with the title cut into the line, lazygit-style
+// with rounded corners:
 //
-//	┌─ Title ───────────┐
+//	╭─ Title ───────────╮
 //
 // The span between the corners is exactly innerW columns: "─ " (2) + title +
-// " " (1) + fill dashes. When the title cannot fit it is dropped for a plain
-// rule so the border never overflows its width.
+// " " (1) + fill dashes. A title that already carries its own ANSI styling
+// (e.g. paneTitle's number badge) is placed as-is; a plain title is rendered in
+// the box title style. When the title cannot fit it is dropped for a plain rule
+// so the border never overflows its width.
 func boxTop(title string, innerW int, bs, ts lipgloss.Style) string {
 	tw := lipgloss.Width(title)
 	if title == "" || tw+3 > innerW {
-		return bs.Render("┌" + strings.Repeat("─", innerW) + "┐")
+		return bs.Render("╭" + strings.Repeat("─", innerW) + "╮")
+	}
+	styled := title
+	if !strings.Contains(title, "\x1b") {
+		styled = ts.Render(title)
 	}
 	fill := innerW - tw - 3
-	return bs.Render("┌─ ") + ts.Render(title) + bs.Render(" "+strings.Repeat("─", fill)+"┐")
+	return bs.Render("╭─ ") + styled + bs.Render(" "+strings.Repeat("─", fill)+"╮")
 }
 
 // joinCols places rendered columns side by side with a gap of spaces between
