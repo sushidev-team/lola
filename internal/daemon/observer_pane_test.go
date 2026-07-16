@@ -74,6 +74,27 @@ func TestObservePaneWaitingDowngradesFalseWorking(t *testing.T) {
 	}
 }
 
+// The observer classifies the pane against the SESSION's coding-agent kind
+// (Session.Agent). An explicit "claude" must behave identically to the legacy
+// empty Agent (both resolve to the Claude cue set) — proof the kind is threaded
+// through to attention.Classify/Parse without changing the Claude path.
+func TestObservePaneClassifiesAgainstSessionAgent(t *testing.T) {
+	seed := nativeSess("FE-1", "working")
+	seed.Agent = "claude" // explicit; must match the empty-Agent behavior
+	seed.LastActivityAt = time.Now()
+	d := paneDaemon(t, seed, true, paneWaiting)
+
+	d.observe(context.Background())
+
+	got := getSess(t, d, seed.ID)
+	if got.Status != "needs_input" {
+		t.Fatalf("status = %q, want needs_input (a claude-agent session must classify its waiting pane just like the legacy default)", got.Status)
+	}
+	if got.Agent != "claude" {
+		t.Fatalf("Agent = %q, want it preserved as claude across the observe cycle", got.Agent)
+	}
+}
+
 // A genuinely working pane keeps the session working AND stamps LastActivityAt —
 // positive evidence the anti-false-working guard later relies on.
 func TestObservePaneWorkingStampsActivity(t *testing.T) {

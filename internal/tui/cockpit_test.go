@@ -57,39 +57,72 @@ func TestSessionsTitleColumn(t *testing.T) {
 	}
 }
 
-// sparkline is right-aligned to the last `width` samples, one glyph per sample,
-// and renders nothing for empty history.
-func TestSparkline(t *testing.T) {
-	if got := sparkline(nil, 10); got != "" {
-		t.Errorf("empty history must render nothing, got %q", got)
+// The rail carries a dedicated Activity panel and renders the feed's events
+// inside the full cockpit frame (not just the isolated body helper).
+func TestCockpitRailShowsActivity(t *testing.T) {
+	m := newTestRoot(t)
+	m.sessions.data = &protocol.SessionsData{
+		Sessions: []protocol.SessionInfo{{ID: "1", Issue: "ENG-1", Status: "working"}},
+		Events:   []protocol.Event{{Issue: "ENG-1", From: "working", To: "needs_input", Ago: "1m"}},
 	}
-	if got := sparkline([]int{1, 2, 3}, 0); got != "" {
-		t.Errorf("zero width must render nothing, got %q", got)
+	frame := stripANSI(strings.Join(m.cockpitLines(), "\n"))
+	if !strings.Contains(frame, "Activity") {
+		t.Errorf("cockpit frame must carry the Activity panel:\n%s", frame)
 	}
-	// 6 samples into a width-4 window keeps the last 4 (one visible column each).
-	got := sparkline([]int{0, 1, 2, 3, 4, 5}, 4)
-	if w := lipgloss.Width(got); w != 4 {
-		t.Errorf("sparkline width = %d, want 4 (%q)", w, stripANSI(got))
-	}
-	// A zero sample is a faint dot; positive samples are block glyphs.
-	if !strings.Contains(sparkline([]int{0}, 4), "·") {
-		t.Errorf("zero sample must render a dot")
+	if !strings.Contains(frame, "needs you") {
+		t.Errorf("cockpit frame must render the activity event:\n%s", frame)
 	}
 }
 
-// recordAttn pushes one sample per call and never grows past the ring cap.
-func TestRecordAttnRing(t *testing.T) {
+// eventPhrase reads a spawn as "spawned", a resume out of needs_input as
+// "resumed", maps known statuses to short phrases, and falls back to the raw
+// word for anything unmapped.
+func TestEventPhrase(t *testing.T) {
+	cases := []struct{ from, to, want string }{
+		{"", "working", "spawned"},
+		{"needs_input", "working", "resumed"},
+		{"working", "needs_input", "needs you"},
+		{"working", "ci_failed", "CI failed"},
+		{"ci_failed", "merged", "merged"},
+		{"working", "somethingelse", "somethingelse"},
+	}
+	for _, c := range cases {
+		if got := eventPhrase(c.from, c.to); got != c.want {
+			t.Errorf("eventPhrase(%q,%q) = %q, want %q", c.from, c.to, got, c.want)
+		}
+	}
+}
+
+// activityBody renders one "ISSUE phrase age" line per event, newest first,
+// clipped to width, and says so when the feed is empty.
+func TestActivityBody(t *testing.T) {
 	m := newTestRoot(t)
-	m.sessions.data = &protocol.SessionsData{Sessions: []protocol.SessionInfo{
-		{Status: "needs_input"}, {Status: "working"},
+
+	empty := stripANSI(strings.Join(m.activityBody(24, 6), "\n"))
+	if !strings.Contains(empty, "no activity") {
+		t.Errorf("empty feed must say so, got %q", empty)
+	}
+
+	m.sessions.data = &protocol.SessionsData{Events: []protocol.Event{
+		{Issue: "ENG-9", From: "working", To: "needs_input", Ago: "2m"},
+		{Issue: "ENG-7", From: "", To: "working", Ago: "5m"},
 	}}
-	for i := 0; i < attnHistCap+10; i++ {
-		m.recordAttn()
+	body := m.activityBody(24, 6)
+	flat := stripANSI(strings.Join(body, "\n"))
+	if !strings.Contains(flat, "ENG-9") || !strings.Contains(flat, "needs you") || !strings.Contains(flat, "2m") {
+		t.Errorf("feed must render the newest event line, got %q", flat)
 	}
-	if len(m.attnHist) != attnHistCap {
-		t.Errorf("history len = %d, want cap %d", len(m.attnHist), attnHistCap)
+	if !strings.Contains(flat, "spawned") {
+		t.Errorf("feed must render the spawn event, got %q", flat)
 	}
-	if last := m.attnHist[len(m.attnHist)-1]; last != 1 {
-		t.Errorf("last sample = %d, want 1 (one needs_input)", last)
+	// Height clamps the number of lines shown (freshest win).
+	if got := m.activityBody(24, 1); len(got) != 1 {
+		t.Errorf("height 1 must clamp to a single line, got %d", len(got))
+	}
+	// Every line is width-clipped so a long title can't smear the rail.
+	for _, ln := range body {
+		if w := lipgloss.Width(ln); w > 24 {
+			t.Errorf("line exceeds width 24: %d (%q)", w, stripANSI(ln))
+		}
 	}
 }

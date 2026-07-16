@@ -1446,3 +1446,148 @@ func TestBrainTimeoutValidation(t *testing.T) {
 		})
 	}
 }
+
+// AgentForProject resolves the coding-agent kind with the precedence:
+// project override > [defaults].agent > the hard "claude" fallback. A lookup
+// name that matches no [[project]] falls through to the defaults / claude.
+func TestAgentForProject(t *testing.T) {
+	cases := []struct {
+		name          string
+		defaultsAgent string
+		projectAgent  string
+		lookup        string
+		want          string
+	}{
+		{"hard claude fallback when nothing set", "", "", "nori-app", "claude"},
+		{"inherit from defaults", "codex", "", "nori-app", "codex"},
+		{"project override wins over defaults", "codex", "opencode", "nori-app", "opencode"},
+		{"project override with empty defaults", "", "codex", "nori-app", "codex"},
+		{"unknown project falls back to defaults", "opencode", "codex", "ghost", "opencode"},
+		{"unknown project with empty defaults is claude", "", "codex", "ghost", "claude"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := &Config{}
+			c.Defaults.Agent = tc.defaultsAgent
+			pr := validProject() // name "nori-app"
+			pr.Agent = tc.projectAgent
+			c.Projects = []Project{pr}
+			if got := c.AgentForProject(tc.lookup); got != tc.want {
+				t.Errorf("AgentForProject(%q) = %q, want %q", tc.lookup, got, tc.want)
+			}
+		})
+	}
+}
+
+// [defaults].agent and every [[project]].agent accept empty (inherit) or a
+// known kind (claude|codex|opencode); any other value is rejected with the
+// enum error, matching the cycle_mode/match_mode style.
+func TestAgentValidation(t *testing.T) {
+	base := func() *Config {
+		c := &Config{}
+		c.Defaults.GlobalCap = 4
+		c.Projects = []Project{validProject()}
+		c.Polls = []Poll{validPoll()}
+		return c
+	}
+	cases := []struct {
+		name    string
+		mutate  func(c *Config)
+		wantErr string // "" = must be valid
+	}{
+		{"defaults agent empty ok", func(c *Config) { c.Defaults.Agent = "" }, ""},
+		{"defaults agent claude ok", func(c *Config) { c.Defaults.Agent = "claude" }, ""},
+		{"defaults agent codex ok", func(c *Config) { c.Defaults.Agent = "codex" }, ""},
+		{"defaults agent opencode ok", func(c *Config) { c.Defaults.Agent = "opencode" }, ""},
+		{"defaults agent unknown rejected", func(c *Config) { c.Defaults.Agent = "cursor" }, "defaults.agent must be one of claude|codex|opencode"},
+		{"project agent empty ok", func(c *Config) { c.Projects[0].Agent = "" }, ""},
+		{"project agent claude ok", func(c *Config) { c.Projects[0].Agent = "claude" }, ""},
+		{"project agent codex ok", func(c *Config) { c.Projects[0].Agent = "codex" }, ""},
+		{"project agent opencode ok", func(c *Config) { c.Projects[0].Agent = "opencode" }, ""},
+		{"project agent unknown rejected", func(c *Config) { c.Projects[0].Agent = "aider" }, `project "nori-app": agent must be one of claude|codex|opencode`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := base()
+			tc.mutate(c)
+			err := c.Validate()
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("want valid, got: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("want error containing %q, got nil", tc.wantErr)
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("error missing %q:\n%v", tc.wantErr, err)
+			}
+		})
+	}
+}
+
+// The agent choice — [defaults].agent plus a per-[[project]].agent override —
+// survives Save/Load unchanged and still validates.
+func TestAgentRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	orig := &Config{}
+	orig.Defaults.GlobalCap = 4
+	orig.Defaults.Agent = "codex"
+	orig.Reactions = defaultReactions()
+	orig.Notify = defaultNotify()
+	pr := validProject()
+	pr.Agent = "opencode"
+	orig.Projects = []Project{pr}
+	orig.Polls = []Poll{validPoll()}
+
+	if err := orig.Validate(); err != nil {
+		t.Fatalf("agent config must validate: %v", err)
+	}
+	if err := orig.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Defaults.Agent != "codex" {
+		t.Errorf("defaults.agent = %q, want codex", got.Defaults.Agent)
+	}
+	if got.Projects[0].Agent != "opencode" {
+		t.Errorf("project agent = %q, want opencode", got.Projects[0].Agent)
+	}
+	if !reflect.DeepEqual(orig.Projects, got.Projects) {
+		t.Errorf("project round trip mismatch:\n save: %+v\n load: %+v", orig.Projects, got.Projects)
+	}
+	if err := got.Validate(); err != nil {
+		t.Errorf("reloaded agent config must validate: %v", err)
+	}
+}
+
+// A set [defaults].agent is written to disk verbatim; resolution never
+// force-writes "claude" — an unset agent resolves at read time instead.
+func TestAgentDefaultWrittenWhenSet(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	c := &Config{}
+	c.Defaults.Agent = "codex"
+	if err := c.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `agent = "codex"`) {
+		t.Errorf("set default agent should be written, got:\n%s", data)
+	}
+	// applyDefaults must not inject "claude" for an unset agent.
+	if strings.Contains(string(data), `agent = "claude"`) {
+		t.Errorf("agent must never be force-written to claude, got:\n%s", data)
+	}
+	fresh := &Config{}
+	fresh.applyDefaults()
+	if fresh.Defaults.Agent != "" {
+		t.Errorf("applyDefaults set Defaults.Agent = %q, want empty (resolve at read time)", fresh.Defaults.Agent)
+	}
+}

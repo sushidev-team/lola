@@ -26,6 +26,8 @@ import (
 	"regexp"
 	"strings"
 	"unicode"
+
+	"github.com/sushidev-team/lola/internal/agent"
 )
 
 // Question is the parsed, answerable prompt. Exactly one of Choices / FreeForm
@@ -84,7 +86,16 @@ var promptIndicatorRe = regexp.MustCompile(`^[>❯][ \t]*_?[ \t]*$`)
 // Parse strips ANSI from paneText, isolates the trailing non-empty block, and
 // classifies it. It returns (Question, true) when a menu, yes/no gate, or
 // free-form question is discernible, and (zero, false) otherwise.
-func Parse(paneText string) (Question, bool) {
+//
+// The heuristics below are tuned to claude-code's rendering — the "❯" select
+// cursor, the rounded box, claude's numbered selects and (y/n) gates — so Parse
+// is gated to k==Claude and returns (zero, false) for codex/opencode, which
+// render differently and get no inline-answer parse. A legacy/unknown kind
+// resolves to claude, so pre-existing sessions keep today's behavior.
+func Parse(paneText string, k agent.Kind) (Question, bool) {
+	if !claudeCues(k) {
+		return Question{}, false
+	}
 	if len(paneText) > maxInput {
 		paneText = paneText[len(paneText)-maxInput:]
 	}

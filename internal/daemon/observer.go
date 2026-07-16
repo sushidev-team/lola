@@ -9,6 +9,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/sushidev-team/lola/internal/agent"
 	"github.com/sushidev-team/lola/internal/attention"
 	"github.com/sushidev-team/lola/internal/linear"
 	"github.com/sushidev-team/lola/internal/scm"
@@ -235,8 +236,12 @@ func (d *Daemon) observeNative(ctx context.Context) {
 				d.logf("", "observe: pane capture for native %s failed (treating as unknown): %v", s.ID, err)
 				paneAct = attention.ActivityUnknown
 			} else {
-				paneAct = attention.Classify(text)
-				_, paneQuestion = attention.Parse(text)
+				// Classify against the session's coding-agent cues (claude|codex|
+				// opencode); an empty/legacy Agent parses to Claude, byte-identical
+				// to before.
+				k := agent.Parse(s.Agent)
+				paneAct = attention.Classify(text, k)
+				_, paneQuestion = attention.Parse(text, k)
 			}
 			paneClassified = true
 		}
@@ -326,10 +331,15 @@ func (d *Daemon) observeNative(ctx context.Context) {
 				// hand-off deferred because the worker was mid-turn. Both no-op
 				// when review is off. Re-read for fresh PR / AtPrompt / guard facts.
 				d.reviewOnPROpen(ctx, cur)
+				// [coderabbit] PR-comment WATCH: poll the open PR for new
+				// CodeRabbit (GitHub-app) comments and route them. No-op when the
+				// watch is off. Uses the same fresh cur for PR / AtPrompt facts.
+				d.coderabbitWatch(ctx, cur)
 			}
-			// Flush a deferred review hand-off once the worker is idle at its
-			// prompt again (re-reads the record itself).
+			// Flush a deferred review / comment hand-off once the worker is idle at
+			// its prompt again (each re-reads the record itself).
 			d.flushPendingReview(ctx, s.ID)
+			d.flushPendingCodeRabbit(ctx, s.ID)
 		}
 	}
 	if !touched {

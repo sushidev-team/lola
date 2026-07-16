@@ -56,6 +56,21 @@ func (c *Config) EffectiveCap(p *Poll) int {
 	return c.Defaults.ConcurrencyCap
 }
 
+// AgentForProject resolves the coding-agent kind for the named project:
+// the matching project's Agent when non-empty, else [defaults].agent when
+// non-empty, else the hard "claude" fallback. A name that resolves to no
+// project falls through to the defaults / claude. The returned string is one
+// of claude|codex|opencode (Validate rejects any other configured value).
+func (c *Config) AgentForProject(name string) string {
+	if pr := c.ProjectByName(name); pr != nil && pr.Agent != "" {
+		return pr.Agent
+	}
+	if c.Defaults.Agent != "" {
+		return c.Defaults.Agent
+	}
+	return "claude"
+}
+
 // PollRepo returns the GitHub "owner/name" repo the poll's PR checks run
 // against: the poll's own `repo` when set, else the referenced [[project]]'s
 // repo. Empty when neither is configured (PR checks then fail closed).
@@ -84,6 +99,15 @@ func (c *Config) Validate() error {
 		errs = append(errs, errors.New("defaults.global_cap must be > 0"))
 	}
 
+	// agent picks the coding agent a session spawns. Empty is allowed (a
+	// project may inherit it, and the chain hard-defaults to claude); a set
+	// value must name a known kind.
+	switch c.Defaults.Agent {
+	case "", "claude", "codex", "opencode":
+	default:
+		errs = append(errs, fmt.Errorf("defaults.agent must be one of claude|codex|opencode (empty inherits), got %q", c.Defaults.Agent))
+	}
+
 	// [[project]] registry checks run unconditionally — a broken project
 	// definition is an error even before any poll references it.
 	projectNames := make(map[string]bool, len(c.Projects))
@@ -104,6 +128,13 @@ func (c *Config) Validate() error {
 		}
 		if pr.Repo != "" && !repoRe.MatchString(pr.Repo) {
 			errs = append(errs, fmt.Errorf(`%s: repo must be "owner/name" (e.g. "sushidev-team/nori-app"), got %q`, id, pr.Repo))
+		}
+		// Per-project coding-agent override: empty inherits [defaults].agent
+		// (AgentForProject), a set value must name a known kind.
+		switch pr.Agent {
+		case "", "claude", "codex", "opencode":
+		default:
+			errs = append(errs, fmt.Errorf("%s: agent must be one of claude|codex|opencode (empty inherits), got %q", id, pr.Agent))
 		}
 		// env keys become NAME= assignments in a shell-sourced file at spawn
 		// time; only POSIX shell identifiers are allowed (see envNameRe) so a

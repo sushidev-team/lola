@@ -208,6 +208,15 @@ Mirrors AO's "reviewer" idea but Lola-native and Linear-aware.
   model what to do; agents are consulted for triage/summaries/judgment only.
 - **Claude-Code-only, GitHub-only, Linear-first:** cuts AO's harness/plugin/
   dashboard surface entirely; that's what makes this feasible solo.
+- **Pluggable coding agent (update to "Claude-Code-only").** The per-issue
+  coding agent is now configurable — `claude` (default) | `codex` (OpenAI Codex
+  CLI) | `opencode` (sst/opencode) — via `[defaults].agent` and a per-
+  `[[project]].agent` override (empty inherits; default `claude`), with full
+  lifecycle-callback parity (claude `--settings` hooks, codex `notify`, opencode
+  plugin) and an agent-aware pane-scraping backstop. The `[brain]` / `[review]`
+  / `[coderabbit]` helpers remain **claude-only** and are distinct from the
+  coding agent. codex/opencode end-to-end runs need those binaries installed
+  (not exercised by the Go test suite).
 - **State detection via hooks, not screen-scraping.**
 - **Never auto-merge.** approved+green parks the worktree and notifies.
 

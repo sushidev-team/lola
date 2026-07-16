@@ -768,7 +768,7 @@ func TestReconcileNativeDeadSessionRevertsAndKeepsWorktree(t *testing.T) {
 	var buf bytes.Buffer
 	d := newDaemon(nativeTestConfig(nativePoll("p1")), fake, log.New(&buf, "", 0), home)
 	d.native = &fakeNative{}
-	d.runtimeHealth = func() error { return nil }
+	d.runtimeHealth = func(string) error { return nil }
 
 	dead := nativeSess("FE-231", "dead")
 	d.sessions.Upsert(dead)

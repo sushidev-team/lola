@@ -10,6 +10,7 @@ import (
 
 	"charm.land/lipgloss/v2"
 	"github.com/spf13/cobra"
+	"github.com/sushidev-team/lola/internal/agent"
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/daemon"
 	"github.com/sushidev-team/lola/internal/doctor"
@@ -54,6 +55,7 @@ func main() {
 		killCmd(),
 		answerCmd(),
 		reviewCmd(),
+		coderabbitCmd(),
 		logsCmd(),
 		doctorCmd(),
 		setupCmd(),
@@ -151,22 +153,69 @@ func reviewCmd() *cobra.Command {
 	}
 }
 
-// hookCmd is the hidden callback target Claude Code hooks invoke as
-// `lola hook <event>` (wired via hook.SettingsJSON). It drains the hook
-// payload from stdin, best-effort extracts a detail string, and posts the
-// event to the daemon. It ALWAYS succeeds: a broken lola must never break the
-// agent's turn, so failures go to stderr only and the process exits 0.
-// DisableFlagParsing keeps even malformed argv from producing a cobra error.
+// coderabbitCmd forces the [coderabbit] PR-comment watch for one session now
+// (`lola coderabbit <session>`): it polls the session's open PR for CodeRabbit
+// (GitHub-app) comments, ignoring the watermark, and routes any it finds (human
+// notification + optionally the worker agent and a Linear comment, per
+// [coderabbit] config). Send prints the outcome — routed feedback / none found /
+// skipped (watch not enabled or no open PR) — or the daemon's error.
+func coderabbitCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "coderabbit <session>",
+		Short: "Poll a session's PR for CodeRabbit comments now (ignores the watermark)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(c *cobra.Command, a []string) error {
+			raw, err := json.Marshal(protocol.Request{Cmd: "coderabbit", Session: a[0]})
+			if err != nil {
+				return err
+			}
+			return tui.Send(string(raw))
+		},
+	}
+}
+
+// hookCmd is the hidden callback target every coding agent's lifecycle wiring
+// invokes as `lola hook <event>`. It serves all three agent kinds:
+//   - Claude Code hooks (wired via hook.SettingsJSON) call it directly with a
+//     normalized event and write the payload to stdin.
+//   - The opencode plugin (OpenCodePluginJS) also calls it directly with a
+//     normalized event ("stop"/"notification"/"tool_use") and empty stdin.
+//   - Codex's `notify` (CodexConfigTOML) calls `lola hook codex-notify
+//     '<json>'`, passing its payload as the NEXT argv element, not stdin; we
+//     translate it via agent.ParseCodexNotify and skip unknown notify types.
+//
+// It best-effort extracts a detail string and posts the event to the daemon.
+// It ALWAYS succeeds: a broken lola must never break the agent's turn, so
+// failures go to stderr only and the process exits 0. DisableFlagParsing keeps
+// even malformed argv (e.g. a JSON payload starting with `-`) from producing a
+// cobra error.
 func hookCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:                "hook <event>",
-		Short:              "Claude Code hook callback (internal)",
+		Short:              "Coding-agent lifecycle callback (internal)",
 		Hidden:             true,
 		DisableFlagParsing: true,
 		RunE: func(c *cobra.Command, args []string) error {
 			event := ""
 			if len(args) > 0 {
 				event = args[0]
+			}
+			// Codex delivers its notify payload as the next argv element, not
+			// stdin. Normalize it; an unknown notify type maps to "" — ignore
+			// it and exit 0 without touching the daemon.
+			if event == "codex-notify" {
+				payload := ""
+				if len(args) > 1 {
+					payload = args[1]
+				}
+				normEvent, detail := agent.ParseCodexNotify(payload)
+				if normEvent == "" {
+					return nil
+				}
+				if err := hook.Post(normEvent, detail); err != nil {
+					fmt.Fprintln(c.ErrOrStderr(), "lola hook:", err)
+				}
+				return nil
 			}
 			if err := hook.Post(event, hookDetail(c.InOrStdin())); err != nil {
 				fmt.Fprintln(c.ErrOrStderr(), "lola hook:", err)

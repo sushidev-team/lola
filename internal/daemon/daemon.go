@@ -83,6 +83,11 @@ type Daemon struct {
 	// Session observability (PLAN P1): the observer loop's snapshot store.
 	sessions *session.Store
 
+	// events is the in-memory activity feed (recent notable status
+	// transitions) served to the TUI. Fed via sessions.OnTransition + the
+	// spawn site; see events.go.
+	events *eventLog
+
 	ghWarn sync.Once // "gh not on PATH" is logged once per daemon lifetime
 
 	// hookWarned dedupes "unknown session" hookEvent log lines: hooks fire
@@ -115,6 +120,13 @@ type Daemon struct {
 	sendKeys       func(ctx context.Context, tmuxName, text string) error
 	failingChecks  func(ctx context.Context, repo string, pr int) (string, error)
 	reviewComments func(ctx context.Context, repo string, pr int) (string, error)
+
+	// coderabbitComments is the [coderabbit] PR-comment WATCH fetch seam: it
+	// returns the reviewer-bot feedback on a PR newer than `since` plus the new
+	// watermark (see scm.CodeRabbitComments). Set once in newDaemon (like
+	// prForBranch); overridden by tests. Always non-nil — the watch itself is
+	// gated by [coderabbit].enabled, not by this seam.
+	coderabbitComments func(ctx context.Context, repo string, pr int, since time.Time, author string) (string, time.Time, error)
 
 	// Orchestrator brain (PLAN P5.25): the OPT-IN, bounded, headless-claude
 	// SUMMARIZER wired into the EXISTING escalation notify/comment and approved
@@ -180,12 +192,13 @@ type Daemon struct {
 	shutdownCtx context.Context
 
 	// runtimeHealth is the tick precheck seam (SPEC step 1 successor): it
-	// reports whether the native runtime's external tools — tmux, git,
-	// claude — are all resolvable, returning an error naming the first
-	// missing one. Checked once per tick and by cmd=status; a failing check
-	// skips the tick WITHOUT mutating seen/labels (the same discipline as
-	// the old AO-down rule). Overridable in tests.
-	runtimeHealth func() error
+	// reports whether the native runtime's external tools — tmux, git, and
+	// the dispatching context's coding-agent binary (claude|codex|opencode,
+	// resolved by the caller and passed in) — are all resolvable, returning
+	// an error naming the first missing one. Checked once per tick and by
+	// cmd=status; a failing check skips the tick WITHOUT mutating seen/labels
+	// (the same discipline as the old AO-down rule). Overridable in tests.
+	runtimeHealth func(binary string) error
 
 	// Socket-initiated tick work (pollOnce) is tracked separately from the
 	// worker/reconcile goroutines so graceful shutdown can drain it too.
@@ -207,14 +220,19 @@ func newDaemon(cfg *config.Config, lin linear.API, logger *log.Logger, home stri
 		seen:     newSeenStore(filepath.Join(home, "state")),
 		status:   newStatusTracker(),
 		sessions: session.NewStore(filepath.Join(home, "state")),
+		events:   newEventLog(eventLogCap),
 
 		hookWarned: map[string]bool{},
 	}
+	// Feed the activity ring from every status transition the store commits
+	// (the spawn birth is recorded separately at the dispatch site).
+	d.sessions.OnTransition(d.recordSessionEvent)
 	d.openPR = d.ghOpenPR
 	scmc := &scm.Client{}
 	d.prForBranch = scmc.PRForBranch
 	d.failingChecks = scmc.FailingChecks
 	d.reviewComments = scmc.ReviewComments
+	d.coderabbitComments = scmc.CodeRabbitComments
 	d.sendKeys = func(ctx context.Context, tmuxName, text string) error {
 		return d.tmuxClient().SendKeys(ctx, tmuxName, text)
 	}
@@ -234,17 +252,23 @@ func newDaemon(cfg *config.Config, lin linear.API, logger *log.Logger, home stri
 }
 
 // checkRuntimeHealth is the production runtimeHealth: the native runtime is
-// healthy when tmux is available, git resolves, and claude is on PATH. Only
-// LookPath probes — nothing is exec'd.
-func checkRuntimeHealth() error {
+// healthy when tmux is available, git resolves, and the dispatching context's
+// coding-agent binary is on PATH. The caller resolves that binary from the
+// agent kind (claude|codex|opencode); an empty binary falls back to "claude"
+// so a probe with no resolved agent behaves exactly as before. Only LookPath
+// probes — nothing is exec'd.
+func checkRuntimeHealth(binary string) error {
+	if binary == "" {
+		binary = "claude"
+	}
 	if !(&tmux.Client{Bin: "tmux"}).Available() {
 		return errors.New("missing tmux")
 	}
 	if _, err := exec.LookPath("git"); err != nil {
 		return errors.New("missing git")
 	}
-	if _, err := exec.LookPath("claude"); err != nil {
-		return errors.New("missing claude")
+	if _, err := exec.LookPath(binary); err != nil {
+		return fmt.Errorf("missing %s", binary)
 	}
 	return nil
 }

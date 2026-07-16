@@ -19,7 +19,8 @@ import (
 // Session is one observed agent session, regardless of who spawned it.
 type Session struct {
 	ID        string    `json:"id"`
-	Source    string    `json:"source"` // "ao" | "native"
+	Source    string    `json:"source"`          // "ao" | "native"
+	Agent     string    `json:"agent,omitempty"` // coding-agent kind: claude|codex|opencode; "" = legacy claude
 	Project   string    `json:"project"`
 	Issue     string    `json:"issue"`           // Linear identifier, e.g. ENG-123
 	Title     string    `json:"title,omitempty"` // Linear issue title, so a session is identifiable by what it's about
@@ -115,6 +116,25 @@ type Session struct {
 	// is never repeated on the 30s observer cadence.
 	ReviewedPR int `json:"reviewed_pr,omitempty"`
 
+	// LastCodeRabbitAt is the watermark for the [coderabbit] PR-comment WATCH: the
+	// timestamp of the newest CodeRabbit (or configured bot) comment/review the
+	// observer has already routed for this session. The poll fires only on items
+	// STRICTLY newer than this, so a comment is surfaced once and the watch
+	// survives any daemon downtime (the next cycle reconciles current PR state
+	// rather than replaying a missed webhook). Zero means "never polled" — the
+	// first poll then surfaces the newest existing CodeRabbit comment once.
+	// Persists across restarts so a comment is never re-fired on the 30s cadence.
+	LastCodeRabbitAt time.Time `json:"last_coderabbit_at,omitempty"`
+
+	// PendingCodeRabbit holds the (raw, untrusted) CodeRabbit comment text that was
+	// ready to hand to the worker agent but could not be sent because the agent was
+	// mid-turn (AtPrompt false) at route time. A later observer cycle delivers it
+	// once the agent returns to its prompt, sanitizing it immediately before the
+	// send, then clears it. It is the [coderabbit] equivalent of
+	// PendingReviewFindings — kept a SEPARATE field so a watch hand-off and a
+	// [review] hand-off never clobber each other. Persists across restarts.
+	PendingCodeRabbit string `json:"pending_coderabbit,omitempty"`
+
 	// PendingReviewFindings holds the (raw, untrusted) CodeRabbit review findings
 	// that were ready to hand to the worker agent but could not be sent because
 	// the agent was mid-turn (AtPrompt false) at route time. A later observer
@@ -134,6 +154,23 @@ type Store struct {
 	mu       sync.Mutex
 	path     string
 	sessions map[string]Session
+
+	// onTransition, when set, is invoked by Update AFTER it commits a mutation
+	// that CHANGED Status: from is the prior Status, s is the stored (new)
+	// session copy. It runs UNDER the store lock — the callback MUST NOT call
+	// back into the store (same rule as Update's fn) or it deadlocks. The daemon
+	// registers it to feed its activity-event ring; nil in tests / bare Stores,
+	// where Update behaves exactly as before.
+	onTransition func(from string, s Session)
+}
+
+// OnTransition registers a status-transition callback (see the field doc). Pass
+// nil to clear it. Setting it takes the store lock, so never call this from
+// inside an Update closure.
+func (s *Store) OnTransition(fn func(from string, s Session)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onTransition = fn
 }
 
 // NewStore returns a Store backed by <dir>/sessions.json and loads any
@@ -255,6 +292,7 @@ func (s *Store) Update(id string, fn func(sess *Session) bool) (Session, bool) {
 	if !ok {
 		return Session{}, false
 	}
+	oldStatus := sess.Status // captured before fn mutates the copy
 	if sess.PR != nil {
 		pr := *sess.PR
 		sess.PR = &pr
@@ -273,6 +311,12 @@ func (s *Store) Update(id string, fn func(sess *Session) bool) (Session, bool) {
 		stored.PR = &pr // never share a pointer with the caller
 	}
 	s.sessions[id] = stored
+	// Fire the transition callback only when Status actually changed. It runs
+	// under the store lock (see OnTransition) — the daemon's handler only
+	// touches its own event ring, never the store.
+	if s.onTransition != nil && stored.Status != oldStatus {
+		s.onTransition(oldStatus, stored)
+	}
 	return sess, true
 }
 

@@ -1,6 +1,10 @@
 package attention
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/sushidev-team/lola/internal/agent"
+)
 
 // The inputs are real-ish tmux pane tails: box-drawing, the "❯"/">" carets, the
 // claude-code status line (spinner glyph + gerund… + elapsed timer + token
@@ -169,10 +173,146 @@ func TestClassify(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := Classify(tc.in); got != tc.want {
+			if got := Classify(tc.in, agent.Claude); got != tc.want {
 				t.Errorf("Classify(%q) = %s, want %s", tc.in, got, tc.want)
 			}
 		})
+	}
+}
+
+// Codex renders a different status line — a "Working" verb followed by an
+// elapsed timer ("47s", "4m 07s", or "(1s • esc to interrupt)") — and frames its
+// resting composer in a bordered box like claude's. These cases exercise the
+// codex-only working cue and the SHARED box/esc cues, and confirm the codex
+// pane never trips the claude-only carets/question parse.
+func TestClassifyCodex(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want Activity
+	}{
+		{
+			name: "working: Working verb with a bare elapsed timer",
+			in:   "▌ Working 47s\n",
+			want: ActivityWorking,
+		},
+		{
+			name: "working: Working verb with a minute+second elapsed timer",
+			in:   "Working 4m 07s\n",
+			want: ActivityWorking,
+		},
+		{
+			name: "working: Working verb with the parenthesised esc-to-interrupt timer",
+			in:   "▌ Working (1s • esc to interrupt)\n",
+			want: ActivityWorking,
+		},
+		{
+			name: "working: esc to interrupt alone is the shared live cue",
+			in:   "codex is thinking (12s • esc to interrupt)\n",
+			want: ActivityWorking,
+		},
+		{
+			name: "waiting: resting composer box with no working cue",
+			in: "▌ Applied the patch to main.go.\n" +
+				"╭──────────────────────────────────────────────╮\n" +
+				"│ > \x1b[2mSend a message\x1b[0m                            │\n" +
+				"╰──────────────────────────────────────────────╯\n",
+			want: ActivityWaiting,
+		},
+		{
+			name: "waiting: a completed 'Working 4m 07s' beside a resting composer box does not win",
+			in: "Working 4m 07s\n" +
+				"╭──────────────────────────────────────────────╮\n" +
+				"│ >                                              │\n" +
+				"╰──────────────────────────────────────────────╯\n",
+			want: ActivityWaiting,
+		},
+		{
+			name: "unknown: 'Working on it, took 5s' prose is not the codex status line",
+			in:   "Working on it, took 5s to compile\nAll good.\n",
+			want: ActivityUnknown,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := Classify(tc.in, agent.Codex); got != tc.want {
+				t.Errorf("Classify(%q, codex) = %s, want %s", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+// OpenCode's cues overlap claude's: the braille spinner and "esc to interrupt"
+// while working, a bordered input box while waiting. It has no bespoke working
+// cue, so it relies entirely on the SHARED set, plus its "▣" post-turn metadata
+// line as a waiting corroborator.
+func TestClassifyOpenCode(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want Activity
+	}{
+		{
+			name: "working: braille spinner status line",
+			in:   "\x1b[33m⠹\x1b[0m Working on the request\n",
+			want: ActivityWorking,
+		},
+		{
+			name: "working: esc to interrupt shared cue",
+			in:   "⠋ Editing files… (esc to interrupt)\n",
+			want: ActivityWorking,
+		},
+		{
+			name: "waiting: bordered input box at rest",
+			in: "Made the requested edits.\n" +
+				"╭──────────────────────────────────────────────╮\n" +
+				"│ >                                              │\n" +
+				"╰──────────────────────────────────────────────╯\n",
+			want: ActivityWaiting,
+		},
+		{
+			name: "waiting: post-turn metadata line corroborates a yielded turn",
+			in:   "Done.\n▣ 1.2k tokens · $0.03 · 8s\n",
+			want: ActivityWaiting,
+		},
+		{
+			name: "unknown: plain scrolled output with no cue",
+			in:   "reading src/index.ts\nreading src/app.ts\n",
+			want: ActivityUnknown,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := Classify(tc.in, agent.OpenCode); got != tc.want {
+				t.Errorf("Classify(%q, opencode) = %s, want %s", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+// The claude-only cues must NOT fire for codex/opencode: a "❯" caret, a gerund
+// timer, the arrow token meter and the circle/star spinner are claude-code
+// rendering specifics, so a codex/opencode pane showing only one of them must
+// NOT be read as working (and a "❯" caret alone must not read as waiting).
+func TestClassifyClaudeCuesGatedToClaude(t *testing.T) {
+	cases := []struct {
+		name    string
+		in      string
+		notWant Activity
+	}{
+		{"gerund timer is claude-only", "Deciphering… (2m 6s)\n", ActivityWorking},
+		{"arrow token meter is claude-only", "Thinking\n↓ 512 tokens\n", ActivityWorking},
+		{"circle spinner is claude-only", "◐ Simmering… on the request\n", ActivityWorking},
+		{"bare ❯ caret alone is claude-only", "Anything else?\n❯ my draft answer\n", ActivityWaiting},
+	}
+	for _, k := range []agent.Kind{agent.Codex, agent.OpenCode} {
+		for _, tc := range cases {
+			t.Run(k.String()+": "+tc.name, func(t *testing.T) {
+				if got := Classify(tc.in, k); got == tc.notWant {
+					t.Errorf("Classify(%q, %s) = %s, but that cue is claude-only", tc.in, k, got)
+				}
+			})
+		}
 	}
 }
 
@@ -193,7 +333,7 @@ func TestClassifyNeverWorkingWithoutCue(t *testing.T) {
 		"What should I do next?\n> \n",           // free-form question at rest
 	}
 	for _, in := range noCue {
-		if got := Classify(in); got == ActivityWorking {
+		if got := Classify(in, agent.Claude); got == ActivityWorking {
 			t.Errorf("Classify(%q) = working, but there is no working cue", in)
 		}
 	}
@@ -207,7 +347,7 @@ func TestClassifyWorkingCuesSurviveANSI(t *testing.T) {
 		"\x1b[2m(\x1b[0m\x1b[36m12s\x1b[0m \x1b[2m·\x1b[0m \x1b[33m↓ 2.1k tokens\x1b[0m \x1b[2m· esc to interrupt)\x1b[0m\n",
 	}
 	for _, in := range ansiWorking {
-		if got := Classify(in); got != ActivityWorking {
+		if got := Classify(in, agent.Claude); got != ActivityWorking {
 			t.Errorf("Classify(%q) = %s, want working", in, got)
 		}
 	}

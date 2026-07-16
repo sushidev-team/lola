@@ -10,6 +10,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Claude Code running inside it. It then observes the resulting PR/CI via `gh` and
 can react (re-prompt the agent, notify, clean up).
 
+The coding agent is **pluggable** — `claude` (default) | `codex` | `opencode`,
+set via `[defaults].agent` with a per-`[[project]].agent` override — with full
+lifecycle-callback parity. Beware the **two distinct** uses of "claude": (1) the
+pluggable coding agent spawned per issue (above), versus (2) lola-internal
+helpers that always shell `claude -p` regardless of that setting — the `[brain]`
+summarizer (`internal/brain`), `[review]`, and `[coderabbit]`. Those are NOT the
+coding agent and never change with the `agent` choice.
+
 One binary, two roles:
 - `lola run` — the daemon (launchd `KeepAlive` keeps it alive)
 - `lola` / `lola tui` — the Bubble Tea TUI client
@@ -82,11 +90,19 @@ each of which owns exactly one external tool or concern behind an **exec seam**
 - `internal/session` — pure data: the `Session` model + JSON snapshot `Store`
   (atomic temp+rename). No exec. Holds derived `Status`, PR state, and the
   persisted one-shot guards for reactions (P3) and write-back (P4).
+- `internal/agent` — the pluggable coding-agent leaf (stdlib + regexp only; must
+  NOT import config/session/hook/runtime/attention): the `claude`|`codex`|
+  `opencode` kind enum, per-kind launch argv (`LaunchArgs`), the callback-config
+  bodies (codex `config.toml`, opencode plugin JS), and `ParseCodexNotify`.
+  `internal/runtime` writes the right callback artifact at spawn; the health-gate
+  checks the resolved binary; `config.AgentForProject` resolves
+  project→defaults→`claude`. `internal/attention` imports it for agent-aware
+  pane classification.
 - `internal/secrets` / `internal/notify` / `internal/brain` / `internal/review`
   / `internal/attention` / `internal/doctor` — Linear key resolution
   (keychain→env), best-effort desktop/Slack notify, opt-in headless-claude
   summarizer, opt-in CodeRabbit QA pass, pane→answerable-question heuristic
-  parser, structured health checks.
+  parser (agent-aware), structured health checks.
 - `internal/tui` — the interactive poll manager + sessions view, AND the plain
   socket client (`Send`/`Logs`) reused by the CLI subcommands.
 - `main.go` — cobra wiring only; each subcommand marshals a `protocol.Request`

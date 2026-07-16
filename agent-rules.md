@@ -21,9 +21,11 @@ socket.
   `tmux`/`git`/`gh`/`claude` via absolute paths or the PATH injected in the
   plist (was: `ao`/`tmux`/`gh`).
 - **[changed from AO bridge]** Gate every dispatch on native runtime health:
-  `tmux` available, `git` and `claude` resolvable, and the poll's `[[project]]`
-  resolves. If unhealthy: skip tick, record lastError, and DO NOT mutate seen,
-  labels, or in-flight. (Was: gate on `ao.Reachable(ctx)`.)
+  `tmux` available, `git` and the **configured coding agent's** binary
+  (`claude`|`codex`|`opencode`, resolved per poll; default `claude`) resolvable,
+  and the poll's `[[project]]` resolves. If unhealthy: skip tick, record
+  lastError, and DO NOT mutate seen, labels, or in-flight. (Was: gate on
+  `ao.Reachable(ctx)`.)
 
 ## Cycle handling
 
@@ -60,6 +62,39 @@ socket.
    when clean). (Was: `ao spawn --project <ao_project> --issue <IDENTIFIER>`.)
 3. Only on confirmed success + label mode: re-read current labelIds FRESH (avoid read-modify-write race), compute (current − all match_labels) + set_label, then issueUpdate with the UUID.
 4. If label write fails: log, do not re-spawn (seen guards it).
+
+## Coding agent (pluggable)
+
+- The coding agent spawned per issue is configurable: `claude` (default,
+  behavior unchanged) | `codex` (OpenAI Codex CLI) | `opencode` (sst/opencode).
+  Set globally via `[defaults].agent`, overridable per repo via
+  `[[project]].agent`; empty/unknown resolves to `claude`. Resolution
+  (`AgentForProject`): the project's `agent` if set, else `[defaults].agent`,
+  else `claude` — and it is NEVER written back into config.toml. `internal/agent`
+  is a stdlib-only leaf owning the kind enum, per-kind launch argv, and the
+  callback-config bodies.
+- Full lifecycle-callback parity across all three. claude: generated
+  `.lola/settings.json` hooks → `lola hook`. codex: `notify` key in
+  `$CODEX_HOME/config.toml` (`CODEX_HOME=<worktree>/.lola/codex`, with a
+  best-effort symlink of the user's `~/.codex/auth.json`) →
+  `lola hook codex-notify '<json>'`. opencode: an in-process plugin at
+  `<worktree>/.opencode/plugins/lola-hook.js` shelling `lola hook <event>` on
+  `session.idle`/`permission.asked`/`tool.execute.after`. All three normalize to
+  the same event names (`stop` / `notification` / `session_end` / `tool_use` /
+  `user_prompt`), so dispatch/observer/reaction logic stays agent-agnostic.
+- codex/opencode run UNATTENDED like the claude session (`codex
+  --ask-for-approval never --sandbox workspace-write`; `opencode --auto`).
+  Callback artifacts stay under git-excluded dirs: `.lola/` (claude, codex) and
+  `.opencode/` (opencode). `LOLA_SESSION` in the pane attributes every event.
+- Pane classification (`internal/attention`) is agent-aware — a shared cue set
+  plus per-kind cues — so screen-scraping backstops the callbacks for every
+  agent; `k == Claude` behavior stays byte-identical to today.
+- Provider auth is inherited from the daemon/pane env (`ANTHROPIC_API_KEY` /
+  `OPENAI_API_KEY`) or an existing CLI login (`codex login`, `opencode auth`);
+  never stored in config.toml.
+- `[brain]`, `[review]`, and `[coderabbit]` are lola-INTERNAL helpers that
+  always shell `claude -p` regardless of the coding-agent choice — they are NOT
+  the pluggable coding agent and must not follow the `agent` setting.
 
 ## Caps
 
@@ -132,6 +167,12 @@ socket.
   prepare + hooks + tmux, with rollback), adopt (re-adopt / dead / orphaned
   classification), the store-driven liveCounted, and the reconcile orphan
   revert (fail-closed PR check).
+- **[coding agent]** Unit-test the `internal/agent` leaf (Valid/Parse/Binary/
+  LaunchArgs, the codex `config.toml` + opencode plugin bodies, ParseCodexNotify
+  event mapping), config resolution (`AgentForProject`), and the agent-aware
+  attention cues (claude byte-identical, plus focused codex/opencode cue tests).
+  codex/opencode **end-to-end** run-verification requires those binaries
+  installed and is NOT exercised by the Go test suite.
 - **[changed from AO bridge]** Integration: `lola poll <n> --once --dry-run`
   prints correct matches against a real team; creating a poll via the cascade
   writes valid config.toml; the launchd instance survives sleep/wake and a

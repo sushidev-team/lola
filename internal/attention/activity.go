@@ -23,6 +23,8 @@ package attention
 import (
 	"regexp"
 	"strings"
+
+	"github.com/sushidev-team/lola/internal/agent"
 )
 
 // Activity is a coarse read of what a pane is doing right now, derived purely
@@ -131,6 +133,19 @@ var (
 	// claude-code rendering details.
 	spinnerStatusRe = regexp.MustCompile(`(?m)^\s*[○◐◓◑◒◔◕◖◗◜◝◞◟✢✳✶✷✸✺✻✽]\s*\p{L}[\p{L}\x{2019}'-]*…`)
 
+	// codexWorkingRe — Codex's live status line: the verb "Working" immediately
+	// followed by an elapsed timer ("47s", "4m 07s", or the parenthesised
+	// "(1s • esc to interrupt)"). Codex prints this while a turn streams, the way
+	// claude-code prints its spinner+timer, so it is the codex analogue of the
+	// claude working cues and is gated to k==Codex. The "esc to interrupt" variant
+	// is already caught by the SHARED escInterruptRe above; this cue adds the
+	// bare-elapsed forms. Requiring the timer to sit right after "Working" (only
+	// whitespace / an opening paren between) keeps incidental prose like
+	// "Working on it, took 5s" from matching. Fragility: the verb wording and the
+	// timer shape are codex specifics; a resting composer (a waiting cue) still
+	// wins because hasWorkingCue is consulted only once no resting prompt is found.
+	codexWorkingRe = regexp.MustCompile(`(?i)\bWorking\b\s*\(?\s*(?:\d+h\s*)?(?:\d+m\s*)?\d+s\b`)
+
 	// -----------------------------------------------------------------------
 	// WAITING cues.
 	// -----------------------------------------------------------------------
@@ -154,7 +169,29 @@ var (
 	// claude-code's own input line, so the box-free empty-caret trust below is
 	// withheld (keeps the lone-shell-prompt pane classified Unknown).
 	shellPromptRe = regexp.MustCompile(`(?m)^\s*\$\s`)
+
+	// openCodeMetaRe — opencode's post-turn metadata line, which begins with a
+	// "▣" glyph and summarises the finished turn (tokens, cost). It renders only
+	// AFTER opencode has yielded, so a line that STARTS with it corroborates a
+	// waiting pane. Gated to k==OpenCode and used only on the waiting side, where
+	// a false positive is cheap (it just surfaces needs_input a cycle early). The
+	// leading anchor keeps a "▣" embedded mid-line in ordinary output from tripping
+	// it.
+	openCodeMetaRe = regexp.MustCompile(`(?m)^\s*▣`)
 )
+
+// claudeCues reports whether kind k uses claude-code's caret and question-parse
+// heuristics. Claude does; codex and opencode do not (their carets/questions are
+// covered by the SHARED cues instead). Any unknown or legacy kind ("" resolves
+// to claude) does, so pre-existing sessions keep today's claude behavior.
+func claudeCues(k agent.Kind) bool {
+	switch k {
+	case agent.Codex, agent.OpenCode:
+		return false
+	default:
+		return true
+	}
+}
 
 // Classify strips ANSI from paneText, restricts itself to the last rendered
 // screen, and returns:
@@ -174,7 +211,15 @@ var (
 // that stale-cue-beats-waiting case is the sticky false-"working" bug. Input
 // size is bounded to the tail (maxInput); working scans the last
 // statusTailLines lines, waiting the last maxScreenLines lines.
-func Classify(paneText string) Activity {
+//
+// k selects which agent's cue set applies. SHARED cues (esc-to-interrupt, the
+// braille spinner, the bordered input box) fire for every kind; claude-code's
+// own cues (the "❯" caret, arrow token meter, gerund timer, circle/star spinner,
+// and the question-parse corroborator) fire only for k==Claude; codex adds a
+// "Working"+elapsed-timer cue; opencode leans on the shared set plus a "▣"
+// post-turn waiting corroborator. k==Claude (and any legacy/unknown kind, which
+// resolves to claude) behaves byte-identically to before this parameter existed.
+func Classify(paneText string, k agent.Kind) Activity {
 	if len(paneText) > maxInput {
 		paneText = paneText[len(paneText)-maxInput:]
 	}
@@ -182,8 +227,9 @@ func Classify(paneText string) Activity {
 	screen := lastLines(clean, maxScreenLines)
 	tail := lastLines(clean, statusTailLines)
 
-	// "esc to interrupt" is the ONE unambiguous LIVE cue — claude-code prints it
-	// only while a turn is actively streaming. It always wins.
+	// "esc to interrupt" is the ONE unambiguous LIVE cue and is SHARED by every
+	// agent (claude, codex and opencode all print it while a turn streams). It
+	// always wins.
 	if escInterruptRe.MatchString(tail) {
 		return ActivityWorking
 	}
@@ -194,51 +240,83 @@ func Classify(paneText string) Activity {
 	// live activity is exactly the sticky false-"working" bug. A genuinely
 	// streaming turn shows "esc to interrupt" (handled above) and does not rest an
 	// empty caret, so nothing live is lost here.
-	if hasWaitingCue(paneText, screen) {
+	if hasWaitingCue(paneText, screen, k) {
 		return ActivityWaiting
 	}
 	// No resting prompt: the remaining cues (token counter, elapsed timer, spinner
-	// frame) are trusted as live activity.
-	if hasWorkingCue(tail) {
+	// frame, codex "Working" timer) are trusted as live activity.
+	if hasWorkingCue(tail, k) {
 		return ActivityWorking
 	}
 	return ActivityUnknown
 }
 
 // hasWorkingCue reports whether the (ANSI-stripped) live status tail shows any
-// live activity indicator. Any single cue suffices; see each regexp for its cue
-// and fragility. Callers MUST pass only the status tail (last statusTailLines),
-// not the full screen — scanning deeper reintroduces the scrollback false
-// positive this window exists to prevent.
-func hasWorkingCue(tail string) bool {
-	return escInterruptRe.MatchString(tail) ||
-		tokenCounterRe.MatchString(tail) ||
-		gerundTimerRe.MatchString(tail) ||
-		brailleSpinnerRe.MatchString(tail) ||
-		spinnerStatusRe.MatchString(tail)
+// live activity indicator for agent kind k. Any single cue suffices; see each
+// regexp for its cue and fragility. Callers MUST pass only the status tail (last
+// statusTailLines), not the full screen — scanning deeper reintroduces the
+// scrollback false positive this window exists to prevent.
+//
+// The SHARED cues (esc-to-interrupt, braille spinner) fire for every kind.
+// Beyond them each kind adds its own: claude the token meter / gerund timer /
+// circle-star spinner; codex the "Working"+elapsed-timer status line; opencode
+// nothing (the shared set already covers its braille+esc status line). For
+// k==Claude the union is exactly the historical cue set, so behavior is
+// byte-identical; any legacy/unknown kind resolves to the claude branch.
+func hasWorkingCue(tail string, k agent.Kind) bool {
+	// SHARED across every agent.
+	if escInterruptRe.MatchString(tail) || brailleSpinnerRe.MatchString(tail) {
+		return true
+	}
+	switch k {
+	case agent.Codex:
+		return codexWorkingRe.MatchString(tail)
+	case agent.OpenCode:
+		return false
+	default:
+		// Claude (and legacy/unknown kinds).
+		return tokenCounterRe.MatchString(tail) ||
+			gerundTimerRe.MatchString(tail) ||
+			spinnerStatusRe.MatchString(tail)
+	}
 }
 
-// hasWaitingCue reports whether the pane shows an input prompt at rest. It scans
-// every cleaned line of the last screen (not just the trailing block) so a caret
-// still counts even when a hint line like "? for shortcuts" renders below the
-// box. A "❯" caret is trusted alone; a ">" caret only when a box frame is also
-// present. Parse is reused as a final corroborator: any answerable question at
-// the prompt is, by definition, the agent waiting.
-func hasWaitingCue(paneText, screen string) bool {
+// hasWaitingCue reports whether the pane shows an input prompt at rest for agent
+// kind k. It scans every cleaned line of the last screen (not just the trailing
+// block) so a caret still counts even when a hint line like "? for shortcuts"
+// renders below the box.
+//
+// The SHARED cue is the bordered input box: a ">" caret trusted BECAUSE a box
+// frame is on screen — every agent frames its resting composer this way. The
+// claude-only cues (gated via claudeCues) are the "❯" caret trusted alone, the
+// box-free bare caret, and the Parse question corroborator; codex and opencode
+// do not render these, so extending them would only add false positives.
+// OpenCode additionally treats its "▣" post-turn metadata line as a corroborator.
+// For k==Claude the reachable set is exactly the historical one, so behavior is
+// byte-identical.
+func hasWaitingCue(paneText, screen string, k agent.Kind) bool {
 	boxed := boxBorderRe.MatchString(screen)
 	// A "$ " shell prompt anywhere on screen means a bare ">" is most likely a
 	// subprocess/shell prompt, so the box-free caret trust is withheld (a lone
 	// shell prompt with no box stays Unknown).
 	shell := shellPromptRe.MatchString(screen)
+	claude := claudeCues(k)
 	for _, ln := range strings.Split(screen, "\n") {
 		ln = cleanLine(ln)
 		if ln == "" {
 			continue
 		}
-		if claudeCaretRe.MatchString(ln) {
+		// SHARED: a ">" caret inside a rendered input box. The box frame is what
+		// lets a bare ">" be trusted as a composer rather than a shell prompt or a
+		// quoted line, and claude/codex/opencode all draw one when waiting.
+		if boxed && plainCaretRe.MatchString(ln) {
 			return true
 		}
-		if boxed && plainCaretRe.MatchString(ln) {
+		if !claude {
+			continue
+		}
+		// CLAUDE-ONLY carets below.
+		if claudeCaretRe.MatchString(ln) {
 			return true
 		}
 		// A bare, EMPTY caret ("> " / "❯") with NO box: claude-code resting at its
@@ -250,7 +328,15 @@ func hasWaitingCue(paneText, screen string) bool {
 			return true
 		}
 	}
-	if _, ok := Parse(paneText); ok {
+	// OPENCODE: a post-turn "▣" metadata line means the turn finished and the
+	// agent is back at its composer. Waiting-side corroborator only.
+	if k == agent.OpenCode && openCodeMetaRe.MatchString(screen) {
+		return true
+	}
+	// CLAUDE-ONLY: any answerable question at the prompt is, by definition, the
+	// agent waiting. Parse self-gates to claude (returns false for other kinds),
+	// so this call is a no-op for codex/opencode and byte-identical for claude.
+	if _, ok := Parse(paneText, k); ok {
 		return true
 	}
 	return false

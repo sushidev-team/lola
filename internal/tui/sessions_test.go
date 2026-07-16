@@ -828,6 +828,70 @@ func TestJumpToNextNeedsInput(t *testing.T) {
 	}
 }
 
+// Pressing 'c' on a selected session forces a CodeRabbit poll for it and flashes
+// the outcome. The daemon does the routing; the TUI just fires + reports.
+func TestSessionsCKeyForcesCoderabbit(t *testing.T) {
+	m := newTestRoot(t)
+	m.tab = tabSessions
+	m.focus = focusSessions
+	m.sessions.data = &protocol.SessionsData{Sessions: []protocol.SessionInfo{{
+		ID: "s1", Project: "web", Issue: "ENG-1", Status: "review_pending",
+		Source: "native", PRURL: "https://github.com/x/y/pull/7",
+	}}}
+	m.sessions.cursor = 0
+
+	var reqs []protocol.Request
+	fakeRequest(t, &reqs, mustData(t, protocol.CodeRabbitData{Ran: true, Found: true, Message: "routed"}), nil)
+
+	_, cmd := m.Update(keyMsg("c"))
+	if cmd == nil {
+		t.Fatal("c must return a command to poll CodeRabbit")
+	}
+	done, ok := cmd().(coderabbitDoneMsg)
+	if !ok {
+		t.Fatalf("want coderabbitDoneMsg from the poll cmd")
+	}
+	if len(reqs) != 1 || reqs[0].Cmd != "coderabbit" || reqs[0].Session != "s1" {
+		t.Errorf("must send cmd=coderabbit for the selected session, got %+v", reqs)
+	}
+	if !done.ok || !strings.Contains(done.msg, "routed") {
+		t.Errorf("found → green 'routed' flash, got %+v", done)
+	}
+	// Feeding the outcome back flashes it.
+	m.Update(done)
+	if !m.sessions.flashGood || m.sessions.flash == "" {
+		t.Errorf("outcome must flash green, got flash=%q good=%v", m.sessions.flash, m.sessions.flashGood)
+	}
+}
+
+// The poll cmd maps each daemon outcome to a terse, correctly-colored flash.
+func TestCoderabbitSelectedCmdOutcomes(t *testing.T) {
+	cases := []struct {
+		name    string
+		resp    *protocol.Response
+		err     error
+		wantOK  bool
+		wantSub string
+	}{
+		{"found", mustData(t, protocol.CodeRabbitData{Ran: true, Found: true}), nil, true, "routed"},
+		{"none", mustData(t, protocol.CodeRabbitData{Ran: true}), nil, true, "no comments"},
+		{"skipped", mustData(t, protocol.CodeRabbitData{Skipped: "no open PR"}), nil, false, "no open PR"},
+		{"refused", &protocol.Response{OK: false, Error: "unknown session"}, nil, false, "unknown session"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fakeRequest(t, nil, tc.resp, tc.err)
+			done, ok := coderabbitSelectedCmd("s1")().(coderabbitDoneMsg)
+			if !ok {
+				t.Fatal("want coderabbitDoneMsg")
+			}
+			if done.ok != tc.wantOK || !strings.Contains(done.msg, tc.wantSub) {
+				t.Errorf("%s: got %+v, want ok=%v containing %q", tc.name, done, tc.wantOK, tc.wantSub)
+			}
+		})
+	}
+}
+
 func TestSessionPreviewClippedToTerminalWidth(t *testing.T) {
 	m := newTestRoot(t)
 	m.tab = tabSessions

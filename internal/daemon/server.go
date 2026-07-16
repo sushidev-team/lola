@@ -113,6 +113,12 @@ func (d *Daemon) handle(ctx context.Context, req protocol.Request) protocol.Resp
 			return protocol.Response{OK: false, Error: err.Error()}
 		}
 		return dataResponse(data)
+	case "coderabbit":
+		data, err := d.handleCodeRabbit(ctx, req.Session)
+		if err != nil {
+			return protocol.Response{OK: false, Error: err.Error()}
+		}
+		return dataResponse(data)
 	default:
 		return protocol.Response{OK: false, Error: fmt.Sprintf("unknown cmd %q", req.Cmd)}
 	}
@@ -265,6 +271,7 @@ func (d *Daemon) sessionsData() protocol.SessionsData {
 		}
 		out.Sessions = append(out.Sessions, si)
 	}
+	out.Events = d.eventFeed(now)
 	return out
 }
 

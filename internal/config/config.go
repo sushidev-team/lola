@@ -32,13 +32,18 @@ const DefaultBranchName = "main"
 // can spawn worktree sessions for. Validation here is purely static —
 // path-exists / is-a-git-repo checks live in the runtime layer.
 type Project struct {
-	Name          string            `toml:"name"`
-	Path          string            `toml:"path"`
-	Repo          string            `toml:"repo"`
-	DefaultBranch string            `toml:"default_branch"`
-	PostCreate    []string          `toml:"post_create"`
-	Symlinks      []string          `toml:"symlinks"`
-	Env           map[string]string `toml:"env"`
+	Name          string `toml:"name"`
+	Path          string `toml:"path"`
+	Repo          string `toml:"repo"`
+	DefaultBranch string `toml:"default_branch"`
+	// Agent is the coding-agent kind this project's sessions spawn:
+	// claude|codex|opencode. Empty inherits [defaults].agent (see
+	// AgentForProject); the whole chain defaults to "claude". Project has no
+	// file mirror — the tagged field alone round-trips.
+	Agent      string            `toml:"agent"`
+	PostCreate []string          `toml:"post_create"`
+	Symlinks   []string          `toml:"symlinks"`
+	Env        map[string]string `toml:"env"`
 }
 
 type Poll struct {
@@ -92,6 +97,10 @@ type Defaults struct {
 	PollInterval   time.Duration `toml:"-"`
 	ConcurrencyCap int           `toml:"concurrency_cap"`
 	GlobalCap      int           `toml:"global_cap"`
+	// Agent is the global default coding-agent kind (claude|codex|opencode)
+	// for sessions whose project sets no override. Empty resolves to "claude"
+	// at read time (AgentForProject) — it is never force-written to disk.
+	Agent string `toml:"agent"`
 }
 
 // LinearConfig is the [linear] table. It intentionally has no api_key field:
@@ -103,15 +112,16 @@ type LinearConfig struct {
 }
 
 type Config struct {
-	Defaults  Defaults        `toml:"defaults"`
-	Linear    LinearConfig    `toml:"linear"`
-	Projects  []Project       `toml:"project"`
-	Polls     []Poll          `toml:"poll"`
-	Reactions ReactionsConfig `toml:"reactions"`
-	Notify    NotifyConfig    `toml:"notify"`
-	Brain     BrainConfig     `toml:"brain"`
-	Review    ReviewConfig    `toml:"review"`
-	Tmux      TmuxConfig      `toml:"tmux"`
+	Defaults   Defaults         `toml:"defaults"`
+	Linear     LinearConfig     `toml:"linear"`
+	Projects   []Project        `toml:"project"`
+	Polls      []Poll           `toml:"poll"`
+	Reactions  ReactionsConfig  `toml:"reactions"`
+	Notify     NotifyConfig     `toml:"notify"`
+	Brain      BrainConfig      `toml:"brain"`
+	Review     ReviewConfig     `toml:"review"`
+	CodeRabbit CodeRabbitConfig `toml:"coderabbit"`
+	Tmux       TmuxConfig       `toml:"tmux"`
 }
 
 // Duration is a time.Duration that TOML-round-trips as a Go duration string
@@ -134,21 +144,23 @@ func (d *Duration) UnmarshalText(text []byte) error {
 // fileConfig / fileDefaults mirror Config for (de)serialization only, so
 // Config can expose PollInterval as a plain time.Duration.
 type fileConfig struct {
-	Defaults  fileDefaults         `toml:"defaults"`
-	Linear    LinearConfig         `toml:"linear"`
-	Projects  []Project            `toml:"project"`
-	Polls     []Poll               `toml:"poll"`
-	Reactions *fileReactionsConfig `toml:"reactions,omitempty"`
-	Notify    *fileNotifyConfig    `toml:"notify,omitempty"`
-	Brain     *fileBrainConfig     `toml:"brain,omitempty"`
-	Review    *fileReviewConfig    `toml:"review,omitempty"`
-	Tmux      *fileTmuxConfig      `toml:"tmux,omitempty"`
+	Defaults   fileDefaults          `toml:"defaults"`
+	Linear     LinearConfig          `toml:"linear"`
+	Projects   []Project             `toml:"project"`
+	Polls      []Poll                `toml:"poll"`
+	Reactions  *fileReactionsConfig  `toml:"reactions,omitempty"`
+	Notify     *fileNotifyConfig     `toml:"notify,omitempty"`
+	Brain      *fileBrainConfig      `toml:"brain,omitempty"`
+	Review     *fileReviewConfig     `toml:"review,omitempty"`
+	CodeRabbit *fileCodeRabbitConfig `toml:"coderabbit,omitempty"`
+	Tmux       *fileTmuxConfig       `toml:"tmux,omitempty"`
 }
 
 type fileDefaults struct {
 	PollInterval   Duration `toml:"poll_interval"`
 	ConcurrencyCap int      `toml:"concurrency_cap"`
 	GlobalCap      int      `toml:"global_cap"`
+	Agent          string   `toml:"agent"`
 }
 
 func (fc *fileConfig) config() *Config {
@@ -157,15 +169,17 @@ func (fc *fileConfig) config() *Config {
 			PollInterval:   time.Duration(fc.Defaults.PollInterval),
 			ConcurrencyCap: fc.Defaults.ConcurrencyCap,
 			GlobalCap:      fc.Defaults.GlobalCap,
+			Agent:          fc.Defaults.Agent,
 		},
-		Linear:    fc.Linear,
-		Projects:  fc.Projects,
-		Polls:     fc.Polls,
-		Reactions: resolveReactions(fc.Reactions),
-		Notify:    resolveNotify(fc.Notify),
-		Brain:     resolveBrain(fc.Brain),
-		Review:    resolveReview(fc.Review),
-		Tmux:      resolveTmux(fc.Tmux),
+		Linear:     fc.Linear,
+		Projects:   fc.Projects,
+		Polls:      fc.Polls,
+		Reactions:  resolveReactions(fc.Reactions),
+		Notify:     resolveNotify(fc.Notify),
+		Brain:      resolveBrain(fc.Brain),
+		Review:     resolveReview(fc.Review),
+		CodeRabbit: resolveCodeRabbit(fc.CodeRabbit),
+		Tmux:       resolveTmux(fc.Tmux),
 	}
 }
 
@@ -175,15 +189,17 @@ func (c *Config) file() *fileConfig {
 			PollInterval:   Duration(c.Defaults.PollInterval),
 			ConcurrencyCap: c.Defaults.ConcurrencyCap,
 			GlobalCap:      c.Defaults.GlobalCap,
+			Agent:          c.Defaults.Agent,
 		},
-		Linear:    c.Linear,
-		Projects:  c.Projects,
-		Polls:     c.Polls,
-		Reactions: reactionsFile(c.Reactions),
-		Notify:    notifyFile(c.Notify),
-		Brain:     brainFile(c.Brain),
-		Review:    reviewFile(c.Review),
-		Tmux:      tmuxFile(c.Tmux),
+		Linear:     c.Linear,
+		Projects:   c.Projects,
+		Polls:      c.Polls,
+		Reactions:  reactionsFile(c.Reactions),
+		Notify:     notifyFile(c.Notify),
+		Brain:      brainFile(c.Brain),
+		Review:     reviewFile(c.Review),
+		CodeRabbit: coderabbitFile(c.CodeRabbit),
+		Tmux:       tmuxFile(c.Tmux),
 	}
 }
 

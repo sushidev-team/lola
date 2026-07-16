@@ -16,6 +16,13 @@ the issue as picked up (label flip or seen-file) so it is never dispatched
 twice. A read-only observer then tracks each session's tmux liveness and its
 PR/CI state via `gh`.
 
+**The coding agent is configurable.** By default lola runs **Claude Code**, but
+each session can instead run the **OpenAI Codex CLI** (`codex`) or **opencode**
+(`opencode`) — set globally in `[defaults].agent` and overridable per repository
+with `[[project]].agent` (`claude` | `codex` | `opencode`, default `claude`).
+All three get full lifecycle-callback parity; see
+[The coding agent](#the-coding-agent) for how each one is launched and wired.
+
 One binary, two roles:
 
 - `lola run` — the daemon (launchd keeps it alive)
@@ -50,8 +57,10 @@ The Makefile sets a repo-local `GOCACHE` so builds work in sandboxed shells.
    ```
 
 2. Make sure the native runtime's tools are on your `PATH`: `tmux`, `git`,
-   `gh`, and `claude` (Claude Code). The daemon refuses to spawn while any of
-   them is missing and reports it in `lola status`.
+   `gh`, and the **configured coding agent's binary** — `claude` (the default),
+   or `codex` / `opencode` if you select one (see
+   [The coding agent](#the-coding-agent)). The daemon health-gate refuses to
+   spawn while any of them is missing and reports it in `lola status`.
 
 3. Store your Linear API key in the macOS Keychain (see
    [Secrets](#secrets)):
@@ -82,7 +91,7 @@ The Makefile sets a repo-local `GOCACHE` so builds work in sandboxed shells.
 
 | Command | Description |
 | --- | --- |
-| `lola` / `lola tui` | Open the TUI (list polls, create/edit/delete, pause/resume; second tab: live session view). On first run — no `config.toml` yet — this enters the setup wizard first. Press `d` in the polls view for an inline health report. |
+| `lola` / `lola tui` | Open the TUI (list polls, create/edit/delete, pause/resume; second tab: live session view). On first run — no `config.toml` yet — this enters the setup wizard first. Keys: `d` inline health report, `P` edit the selected project, `S` global settings editor (`[defaults]`/`[notify]`/`[brain]`/`[review]`/`[coderabbit]`). |
 | `lola setup` | Run the first-run configuration wizard (Linear key → Keychain, one `[[project]]`, defaults) and write `config.toml`. Re-runnable any time. |
 | `lola doctor` | Print an aligned health report (tmux/git/claude/gh on PATH, Linear key readable, daemon socket, config validity, per-project repos); exits 1 on a critical failure. Never prints the key value. |
 | `lola run` | Start the daemon (this is what launchd invokes) |
@@ -91,6 +100,9 @@ The Makefile sets a repo-local `GOCACHE` so builds work in sandboxed shells.
 | `lola enable <poll>` / `lola disable <poll>` | Live pause/resume of one poll (no restart) |
 | `lola poll <poll> --once [--dry-run]` | Run one tick now; `--dry-run` prints matches (including cross-poll overlaps) with **no** side effects — no spawn, no label flip, no seen write |
 | `lola kill <session> [--force]` | Terminate a session's agent (tmux) and clean up after it. A **clean** worktree is removed and the issue's slot is freed (so it can re-dispatch if it still matches); a **dirty** one (uncommitted changes) is kept for inspection and the command exits nonzero — rerun with `--force` to remove it anyway. The agent is always stopped first, even when the worktree is kept. |
+| `lola answer <session> <text>` | Deliver a human's inline reply to a session parked for input. Refused unless the session's derived status is `needs_input` (the one moment the agent is provably idle at its prompt), so a reply can never corrupt a mid-turn agent. |
+| `lola review <session>` | Force the `[review]` CodeRabbit **CLI** QA pass now, ignoring the once-per-PR guard. Skipped (not an error) when `[review]` is disabled or coderabbit is unavailable. |
+| `lola coderabbit <session>` | Force the `[coderabbit]` PR-comment **watch** now — poll the session's open PR for CodeRabbit (GitHub-app) comments, ignoring the watermark, and route any found (notify / worker / Linear per config). Skipped (not an error) when the watch is disabled or the session has no open PR. |
 | `lola reload` | Re-read `config.toml`; the daemon diffs polls and starts/stops goroutines without disturbing unaffected ones |
 | `lola logs [poll] [-f]` | Tail `~/.lola/daemon.log`, optionally filtered to one poll; `-f`/`--follow` to stream |
 
@@ -127,6 +139,7 @@ Linear **UUIDs**, not names — the TUI form resolves names to IDs for you.
 | `poll_interval` | duration string, e.g. `"60s"`, `"2m"` | How often each poll ticks. Default `60s`. Values below `30s` are silently clamped up to `30s` (Linear rate-limit floor). |
 | `concurrency_cap` | int | Fallback per-poll cap for polls that don't set their own `concurrency_cap`. |
 | `global_cap` | int | Hard ceiling on counted native sessions across **all** polls. Must be > 0. Per tick, a poll's budget is `min(poll cap, global_cap − live counted sessions)`. |
+| `agent` | `"claude"` \| `"codex"` \| `"opencode"` | Coding agent spawned per session. Default `claude`. Global default; override per repo with `[[project]].agent`. Empty/omitted resolves to `claude`. See [The coding agent](#the-coding-agent). |
 
 ### `[linear]`
 
@@ -156,6 +169,7 @@ checks happen in the runtime layer, not on config load.
 | `post_create` | string array | Commands run inside a fresh worktree before the agent starts (e.g. `composer install`). Any failure blocks the session with a clear status — never a half-started agent. |
 | `symlinks` | string array | Files symlinked from the main checkout into each worktree, e.g. `[".env"]`. Beware: a shared `.env` usually means every worktree talks to the same database. |
 | `env` | table of strings | Extra environment variables exported into each session (`[project.env]`); the agent and the `post_create` commands both see them. |
+| `agent` | `"claude"` \| `"codex"` \| `"opencode"` | Coding agent for sessions spawned into this repo, overriding `[defaults].agent`. Empty/omitted inherits the global default (ultimately `claude`). See [The coding agent](#the-coding-agent). |
 
 ### `[[poll]]` (one table per poll)
 
@@ -387,6 +401,41 @@ authenticated** (`coderabbit auth login`). A pass **spends a CodeRabbit review**
 and can take a while (budget ~300s); if coderabbit is missing, unauthenticated,
 or times out, the pass **skips gracefully** with no effect on the session.
 
+### `[coderabbit]` (optional, off by default)
+
+The **PR-comment watch** — distinct from `[review]`. Where `[review]` execs the
+CodeRabbit **CLI** locally, `[coderabbit]` **polls each session's GitHub PR** (via
+`gh`, on the ~30s observer cadence) for comments and reviews left by the
+CodeRabbit **GitHub app** — or any reviewer bot, via `author` — and routes each
+**new** one to a human (notify), the worker agent (sanitized + idle-gated), and/or
+a Linear comment. **Opt-in and off by default**: omit the table (or leave
+`enabled = false`) for zero behavior change.
+
+**Why poll, not a webhook?** lola is a local socket daemon with no HTTP ingress
+and can be stopped exactly when a webhook would fire — a missed delivery is not
+retried. A per-session **watermark** (`last_coderabbit_at`) makes the poll
+fire-once per comment **and** survive any downtime: the next cycle reconciles the
+PR's current comments rather than replaying a lost event.
+
+| Key | Type | Description |
+| --- | --- | --- |
+| `enabled` | bool | Master switch. Default `false`; an absent table is also off. |
+| `author` | string | Login **substring** matched (case-insensitively) against each comment/review author. The CodeRabbit app posts as `coderabbitai[bot]`, so the default `"coderabbitai"` matches it; set another value to watch a different bot. |
+| `notify` | bool | Surface each new comment to a human. Defaults to `true` when `enabled`. |
+| `send_to_agent` | bool | Relay each new comment to the worker through the send-keys gate. Defaults to `true` when `enabled`. |
+| `comment_on_linear` | bool | Also mirror each new comment onto the Linear issue. Defaults to `false` regardless of `enabled`. |
+
+Setting `enabled = true` alone watches for the CodeRabbit app and both notifies
+and feeds the worker; `notify` and `send_to_agent` follow `enabled` unless set
+explicitly, while `comment_on_linear` stays off until you opt in. Explicit
+`false`/`""` are honored, not treated as "unset".
+
+The comment text is **untrusted** (an attacker can author a PR comment), so the
+worker hand-off uses the **same send-keys safety** as `[review]`: sanitized,
+delivered only when the agent is idle at its prompt (deferred otherwise), and
+**never run as a command**. Cost is `gh` only (already required): one read-only
+`gh pr view` per enabled session per cycle while its PR is open.
+
 ### `[tmux]` (optional)
 
 Tunes the **attach UX** for the isolated tmux server lola runs its sessions on.
@@ -400,6 +449,51 @@ without `[tmux]` always validates.
 | `detach_key` | string | Opt-in single key bound to detach (e.g. `"F12"`). Empty keeps tmux's default **Ctrl-b d**. The status bar's detach hint follows whatever this resolves to. |
 | `status_right` | string | Raw tmux `status-right` format override. Empty uses lola's built-in branded bar. |
 | `mouse` | bool | Enable tmux mouse mode inside the session. Default `false`. |
+
+## The coding agent
+
+Each matched issue gets its own session — a git worktree plus a tmux pane
+running a coding agent. **Which agent lola launches is configurable**, with full
+lifecycle-callback parity across all three:
+
+| Kind | Binary | Launched as | Lifecycle callbacks |
+| --- | --- | --- | --- |
+| `claude` (default) | `claude` | `claude --settings .lola/settings.json <prompt>` | Claude Code hooks: lola writes `.lola/settings.json` wiring Stop / Notification / SessionEnd / PostToolUse / UserPromptSubmit to `lola hook`. |
+| `codex` | `codex` | `codex --ask-for-approval never --sandbox workspace-write <prompt>` (unattended) | Codex `notify`: lola sets `CODEX_HOME=<worktree>/.lola/codex` and writes its `config.toml` with `notify = ["lola", "hook", "codex-notify"]`; codex invokes that with a JSON payload on each turn-complete / approval-request, normalized to `stop` / `notification`. |
+| `opencode` | `opencode` | `opencode --prompt <prompt> --auto` (unattended) | opencode plugin: lola writes `<worktree>/.opencode/plugins/lola-hook.js`, an in-process plugin that shells `lola hook <event>` on `session.idle` (→ `stop`), `permission.asked` (→ `notification`), and `tool.execute.after` (→ `tool_use`). |
+
+Set the agent globally in `[defaults].agent` and override it per repository with
+`[[project]].agent`; an empty or omitted value resolves to `claude`, so existing
+configs are unchanged. The daemon **health-gate checks the configured agent's
+binary** (not always `claude`) before every dispatch, and `lola doctor` reports
+whether it is on `PATH`.
+
+**Callback artifacts are per-session and git-excluded.** claude's
+`.lola/settings.json` and codex's `.lola/codex/` live under the already-excluded
+`.lola/` directory; for opencode sessions lola also excludes `.opencode/` from
+the worktree. `LOLA_SESSION` is exported into the pane so every callback path
+attributes the event to the right session.
+
+**Pane-scraping backstop.** Independently of the callbacks, lola classifies each
+session's tmux pane text (working vs. waiting-for-input, plus question
+extraction) with **agent-aware** cues, so a session stays tracked even if a hook
+is dropped. The daemon's status transitions key off the normalized event names
+(`stop` / `notification` / `session_end` / `tool_use` / `user_prompt`), so they
+are identical across all three agents.
+
+**Provider auth is inherited from the daemon/pane environment**, never stored in
+`config.toml`: `ANTHROPIC_API_KEY` (claude) or `OPENAI_API_KEY` (codex), or an
+existing CLI login — `~/.claude`, `codex login` (whose `auth.json` lola
+best-effort symlinks into the isolated `CODEX_HOME`), or `opencode auth`.
+
+**Distinct from lola's internal helpers.** The `[brain]` summarizer, `[review]`,
+and `[coderabbit]` features always shell out to `claude -p` regardless of this
+setting — they are lola-internal helpers, **not** the coding agent, and never
+change with the agent choice.
+
+**Note:** codex/opencode are exercised end-to-end only with those binaries
+installed; the Go test suite covers the launch-arg and callback-wiring plumbing
+but does not run the real CLIs.
 
 ## Attaching to a session
 
@@ -500,10 +594,12 @@ For each enabled poll, every `poll_interval`:
    `min(concurrency_cap, global_cap − live counted native sessions)`.
 6. Per issue: record it as in-flight/seen **first**, then spawn the native
    session — a git worktree from the project (`post_create` + symlinks), a tmux
-   session running `claude --settings <generated hooks>` with the issue's
-   identifier and title as its briefing — then (label mode, on success only)
-   re-read the issue's current labels fresh and flip them: remove all trigger
-   labels, add the sent label.
+   session running the configured coding agent (by default
+   `claude --settings <generated hooks>`; see
+   [The coding agent](#the-coding-agent)) with the issue's identifier and title
+   as its briefing — then (label mode, on success only) re-read the issue's
+   current labels fresh and flip them: remove all trigger labels, add the sent
+   label.
 
 A read-only observer (~30 s) tracks each session's tmux liveness and PR/CI
 state (`gh`). A periodic reconciliation pass (~5 min) reverts issues that were

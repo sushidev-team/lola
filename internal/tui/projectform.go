@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/sushidev-team/lola/internal/agent"
 	"github.com/sushidev-team/lola/internal/config"
 )
 
@@ -29,17 +30,19 @@ const (
 type projFieldKind int
 
 const (
-	pfText projFieldKind = iota // single-line
-	pfList                      // one value per line
-	pfEnv                       // one KEY=value per line
+	pfText  projFieldKind = iota // single-line
+	pfList                       // one value per line
+	pfEnv                        // one KEY=value per line
+	pfAgent                      // fixed set cycled with space/enter (agent override)
 )
 
 type projField struct {
-	label string
-	help  string
-	kind  projFieldKind
-	text  string   // pfText
-	lines []string // pfList / pfEnv (one entry per line)
+	label   string
+	help    string
+	kind    projFieldKind
+	text    string   // pfText / pfAgent (current selection; "" = inherit for pfAgent)
+	lines   []string // pfList / pfEnv (one entry per line)
+	options []string // pfAgent: the values cycled through, in order
 }
 
 type projectForm struct {
@@ -77,8 +80,49 @@ func newProjectForm(cfgPath string, cfg *config.Config, projectName string) (*pr
 			{label: "Symlinks", help: "One relative path per line, linked from main into each worktree (e.g. .env). Do NOT symlink vendor/ — it breaks PHP autoload; use post_create instead.", kind: pfList, lines: p.Symlinks},
 			{label: "Post-create", help: "One command per line, run in a fresh worktree before the agent (e.g. composer install).", kind: pfList, lines: p.PostCreate},
 			{label: "Env (KEY=value)", help: "One KEY=value per line, exported into the session and post_create commands.", kind: pfEnv, lines: envLines(p.Env)},
+			// Appended last on purpose: save() and the form tests index the fields
+			// above by position, so the override slots in without shifting them.
+			{label: "Agent", help: "Coding agent for this project's sessions; empty inherits the [defaults].agent global. space/enter cycles.", kind: pfAgent, text: p.Agent, options: projAgentOptions()},
 		},
 	}, true
+}
+
+// projAgentOptions is the per-project override picker's cycle order: an empty
+// value (inherit [defaults].agent) followed by each concrete kind, so a project
+// can inherit the global default or pin its own agent.
+func projAgentOptions() []string {
+	out := make([]string, 0, len(agent.Kinds)+1)
+	out = append(out, "") // inherit the global default
+	for _, k := range agent.Kinds {
+		out = append(out, k.String())
+	}
+	return out
+}
+
+// agentField returns the pfAgent field (index-independent, so save() need not
+// know where it sits in the list), or nil if absent.
+func (f *projectForm) agentField() *projField {
+	for i := range f.fields {
+		if f.fields[i].kind == pfAgent {
+			return &f.fields[i]
+		}
+	}
+	return nil
+}
+
+// cycleProjAgent advances a pfAgent field to the next option (wrapping). A value
+// outside the option set resets to the first (inherit).
+func cycleProjAgent(fld *projField) {
+	if len(fld.options) == 0 {
+		return
+	}
+	for i, o := range fld.options {
+		if o == fld.text {
+			fld.text = fld.options[(i+1)%len(fld.options)]
+			return
+		}
+	}
+	fld.text = fld.options[0]
 }
 
 func envLines(env map[string]string) []string {
@@ -112,11 +156,24 @@ func (f *projectForm) update(k tea.KeyPressMsg) projectFormEvent {
 			f.cursor++
 		}
 	case "enter":
-		if fld.kind != pfText { // open the list/env field for line editing
+		switch fld.kind {
+		case pfText:
+			// text edits inline; enter is a no-op
+		case pfAgent:
+			cycleProjAgent(fld)
+		default: // pfList / pfEnv: open the field for line editing
 			if len(fld.lines) == 0 {
 				fld.lines = []string{""}
 			}
 			f.editing, f.lineCur = true, 0
+		}
+	case "space":
+		// Space cycles the agent picker but is a literal character in a text field.
+		switch fld.kind {
+		case pfAgent:
+			cycleProjAgent(fld)
+		case pfText:
+			fld.text += " "
 		}
 	case "backspace":
 		if fld.kind == pfText {
@@ -177,15 +234,28 @@ func dropLastRune(s string) string {
 }
 
 // save writes the edited fields back into the project and persists config.toml.
+// It snapshots the project first so a rejected edit (bad agent value caught by
+// Validate, or a failed write) is rolled back and never leaves the in-memory
+// config dirty — mirroring the global settings editor.
 func (f *projectForm) save() projectFormEvent {
 	p := &f.cfg.Projects[f.idx]
+	old := *p // rollback target if Validate/Save rejects the edit
 	p.Path = strings.TrimSpace(f.fields[0].text)
 	p.Repo = strings.TrimSpace(f.fields[1].text)
 	p.DefaultBranch = strings.TrimSpace(f.fields[2].text)
 	p.Symlinks = trimDropEmpty(f.fields[3].lines)
 	p.PostCreate = trimDropEmpty(f.fields[4].lines)
 	p.Env = parseEnvLines(f.fields[5].lines)
+	if af := f.agentField(); af != nil {
+		p.Agent = strings.TrimSpace(af.text) // "" = inherit [defaults].agent
+	}
+	if err := f.cfg.Validate(); err != nil {
+		*p = old
+		f.err = "invalid: " + err.Error()
+		return projFormNone
+	}
 	if err := f.cfg.Save(f.cfgPath); err != nil {
+		*p = old
 		f.err = "save failed: " + err.Error()
 		return projFormNone
 	}
@@ -309,6 +379,14 @@ func (f *projectForm) view() string {
 				line += "_" // text fields edit inline
 			}
 			b.WriteString(line + "\n")
+			continue
+		}
+		if fld.kind == pfAgent {
+			val := fld.text
+			if val == "" {
+				val = "(inherit default)"
+			}
+			b.WriteString(marker + lab + faintText.Render("‹ ") + val + faintText.Render(" ›") + "\n")
 			continue
 		}
 		// list/env: label, then one indented entry per line.

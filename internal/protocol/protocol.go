@@ -56,8 +56,16 @@ import (
 // Response.Data = ReviewData with a short outcome. Review disabled / no
 // coderabbit yields a "skipped" ReviewData (not an error); an unknown session or
 // an exec failure is an error.
+// Cmd "coderabbit" FORCES the [coderabbit] PR-comment WATCH for one session now,
+// ignoring the LastCodeRabbitAt watermark: Session names the target. The daemon
+// polls the session's open PR (one `gh pr view`) for CodeRabbit-app comments and
+// routes any it finds the same way the observer does (notify + optional Linear
+// comment + optional sanitized, idle-gated worker hand-off), replying
+// Response.Data = CodeRabbitData with a short outcome. Watch disabled / no open
+// PR yields a "skipped" CodeRabbitData (not an error); an unknown session or a gh
+// failure is an error.
 type Request struct {
-	Cmd    string `json:"cmd"` // stop|status|reload|enable|disable|pollOnce|sessions|hookEvent|kill|pane|answer|review
+	Cmd    string `json:"cmd"` // stop|status|reload|enable|disable|pollOnce|sessions|hookEvent|kill|pane|answer|review|coderabbit
 	Poll   string `json:"poll,omitempty"`
 	DryRun bool   `json:"dryRun,omitempty"`
 
@@ -111,6 +119,26 @@ type PollStatus struct {
 // store — a sessions request never execs ao/gh/tmux.
 type SessionsData struct {
 	Sessions []SessionInfo `json:"sessions"`
+	// Events is the daemon's activity feed: recent notable session status
+	// transitions, NEWEST FIRST, so the TUI renders a live "what's happening"
+	// ticker without deriving transitions itself. Empty when nothing notable has
+	// happened since the daemon started (the feed is in-memory, so it starts
+	// fresh on a daemon restart but survives TUI restarts).
+	Events []Event `json:"events,omitempty"`
+}
+
+// Event is one session status transition surfaced in the activity feed,
+// flattened to render-ready strings so the TUI needs no scm/session imports.
+// From is the prior derived status ("" means the session was just spawned); To
+// is the new derived status; Ago is a human duration since the transition
+// (e.g. "2m", formatted daemon-side against the request time).
+type Event struct {
+	ID    string `json:"id"`
+	Issue string `json:"issue"`           // Linear identifier, e.g. ENG-123 ("" when unknown)
+	Title string `json:"title,omitempty"` // Linear issue title, "" when unknown
+	From  string `json:"from"`
+	To    string `json:"to"`
+	Ago   string `json:"ago"`
 }
 
 // SessionInfo is one observed session, flattened to render-ready strings and
@@ -192,6 +220,22 @@ type ReviewData struct {
 	Clean    bool   `json:"clean"`
 	Skipped  string `json:"skipped,omitempty"`
 	Findings string `json:"findings,omitempty"`
+	Message  string `json:"message,omitempty"`
+}
+
+// CodeRabbitData is Response.Data for cmd=coderabbit: the outcome of a forced
+// PR-comment watch poll, flattened to render-ready fields for the CLI. Message is
+// the short human-readable line the CLI prints. Ran reports whether the poll ran
+// (a gh call was made); Found is true when it surfaced at least one comment;
+// Skipped names why the poll did not run (watch disabled / no open PR), ""
+// otherwise. Comments is the full, size-capped comment text (UNTRUSTED,
+// attacker-authorable) when Found — present so a caller can display it; empty on
+// none/skipped.
+type CodeRabbitData struct {
+	Ran      bool   `json:"ran"`
+	Found    bool   `json:"found"`
+	Skipped  string `json:"skipped,omitempty"`
+	Comments string `json:"comments,omitempty"`
 	Message  string `json:"message,omitempty"`
 }
 

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/sushidev-team/lola/internal/agent"
 	"github.com/sushidev-team/lola/internal/attention"
 	"github.com/sushidev-team/lola/internal/protocol"
 	"github.com/sushidev-team/lola/internal/session"
@@ -49,7 +50,8 @@ func (d *Daemon) handlePane(ctx context.Context, sessionID string, lines int) (p
 	pd := protocol.PaneData{Text: text}
 	// The pane text is attacker-influenceable; attention.Parse only CLASSIFIES
 	// it (never executes or trusts it), and the human still authors the answer.
-	if q, has := attention.Parse(text); has {
+	// Parse against the session's coding-agent cues (empty/legacy Agent → Claude).
+	if q, has := attention.Parse(text, agent.Parse(s.Agent)); has {
 		pd.HasQuestion = true
 		pd.Prompt = q.Prompt
 		pd.FreeForm = q.FreeForm

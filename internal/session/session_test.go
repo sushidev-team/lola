@@ -140,6 +140,41 @@ func TestReviewedPRRoundTrip(t *testing.T) {
 	}
 }
 
+// The coding-agent kind must survive a save/reload round-trip, and an empty
+// Agent (legacy claude) must stay empty rather than materialize a value.
+func TestAgentRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+
+	st := NewStore(dir)
+	st.Upsert(Session{
+		ID:      "ag-1",
+		Source:  "native",
+		Agent:   "codex",
+		Project: "nori",
+		Issue:   "ENG-11",
+	})
+	st.Upsert(Session{ID: "ag-0", Source: "native", Project: "nori", Issue: "ENG-3"})
+	if err := st.Save(); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	got, ok := NewStore(dir).Get("ag-1")
+	if !ok {
+		t.Fatal("reloaded store missing ag-1")
+	}
+	if got.Agent != "codex" {
+		t.Errorf("Agent not round-tripped: got %q, want %q", got.Agent, "codex")
+	}
+
+	zero, ok := NewStore(dir).Get("ag-0")
+	if !ok {
+		t.Fatal("reloaded store missing ag-0")
+	}
+	if zero.Agent != "" {
+		t.Errorf("empty Agent should stay empty: got %q", zero.Agent)
+	}
+}
+
 func TestSnapshotSorted(t *testing.T) {
 	st := NewStore(t.TempDir())
 	st.Upsert(Session{ID: "3", Project: "zeta", Issue: "ENG-1"})
@@ -233,6 +268,39 @@ func TestUpdateDiscardsWhenFnReturnsFalse(t *testing.T) {
 	}
 	if !after.LastSeen.Equal(before.LastSeen) {
 		t.Errorf("discarded update must freeze LastSeen: %v -> %v", before.LastSeen, after.LastSeen)
+	}
+}
+
+// OnTransition fires exactly once per Update that CHANGES Status, with the prior
+// status and the stored new record; it stays silent when Status is unchanged or
+// the mutation is discarded.
+func TestUpdateFiresTransitionCallback(t *testing.T) {
+	st := NewStore(t.TempDir())
+	st.Upsert(Session{ID: "s", Project: "p", Issue: "ENG-1", Status: "working"})
+
+	type ev struct{ from, to string }
+	var got []ev
+	st.OnTransition(func(from string, s Session) {
+		got = append(got, ev{from, s.Status})
+	})
+
+	// A real transition fires.
+	st.Update("s", func(sess *Session) bool { sess.Status = "needs_input"; return true })
+	// A same-status write (e.g. a heartbeat) does NOT.
+	st.Update("s", func(sess *Session) bool { sess.AtPrompt = true; return true })
+	// A discarded mutation does NOT.
+	st.Update("s", func(sess *Session) bool { sess.Status = "working"; return false })
+	// Another real transition fires.
+	st.Update("s", func(sess *Session) bool { sess.Status = "merged"; return true })
+
+	want := []ev{{"working", "needs_input"}, {"needs_input", "merged"}}
+	if len(got) != len(want) {
+		t.Fatalf("callback fired %d times, want %d: %+v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("event %d = %+v, want %+v", i, got[i], want[i])
+		}
 	}
 }
 

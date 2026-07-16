@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sushidev-team/lola/internal/agent"
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/linear"
 	"github.com/sushidev-team/lola/internal/protocol"
@@ -222,6 +223,10 @@ func (d *Daemon) tick(ctx context.Context, name string, dryRun bool) (protocol.P
 		project.Symlinks = slices.Clone(project.Symlinks)
 		project.Env = maps.Clone(project.Env)
 	}
+	// The coding-agent binary this poll would spawn (per-project override →
+	// [defaults].agent → "claude"): the health gate must confirm THAT binary
+	// is on PATH, not always "claude". Resolved under the config lock.
+	agentBin := agent.Parse(d.cfg.AgentForProject(p.Project)).Binary()
 	d.mu.Unlock()
 
 	now := time.Now()
@@ -252,11 +257,12 @@ func (d *Daemon) tick(ctx context.Context, name string, dryRun bool) (protocol.P
 	}
 
 	// 1. Precheck the runtime (SPEC step 1 successor). The health check —
-	// tmux available, git resolvable, claude on PATH — runs ONCE per tick;
-	// on failure the tick is skipped WITHOUT touching seen/labels/in-flight,
-	// the same discipline as the old AO-down rule. A missing project means
-	// misconfiguration and equally fails before any state is touched.
-	if err := d.runtimeHealth(); err != nil {
+	// tmux available, git resolvable, the poll's coding-agent binary on PATH —
+	// runs ONCE per tick; on failure the tick is skipped WITHOUT touching
+	// seen/labels/in-flight, the same discipline as the old AO-down rule. A
+	// missing project means misconfiguration and equally fails before any
+	// state is touched.
+	if err := d.runtimeHealth(agentBin); err != nil {
 		return fail("runtime unavailable: "+err.Error(), nil)
 	}
 	if project.Name == "" {
@@ -457,6 +463,9 @@ func (d *Daemon) tick(ctx context.Context, name string, dryRun bool) (protocol.P
 			// merged, blocked) can resolve THIS poll's P4 config (PLAN P4).
 			sess.PollName = name
 			d.sessions.Upsert(sess)
+			// Record the birth in the activity feed. Spawn enters via Upsert,
+			// which has no transition callback, so record it explicitly (from "").
+			d.recordSessionEvent("", sess)
 			if serr := d.sessions.Save(); serr != nil {
 				d.logf(name, "persist sessions after native spawn of %s: %v", is.Identifier, serr)
 			}

@@ -166,7 +166,7 @@ func TestReconcileEmptyRepoSkipsRevertAndLogs(t *testing.T) {
 	cfg.Projects[0].Repo = ""
 	d := newDaemon(cfg, fake, log.New(&buf, "", 0), home)
 	d.native = &fakeNative{}
-	d.runtimeHealth = func() error { return nil }
+	d.runtimeHealth = func(string) error { return nil }
 	seedOrphan(t, d, is)
 	// d.openPR stays the default ghOpenPR: an empty repo must short-circuit
 	// with the "no repo configured" error before gh is ever invoked.

@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/sushidev-team/lola/internal/agent"
 	"github.com/sushidev-team/lola/internal/protocol"
 )
 
@@ -61,13 +62,17 @@ func (t *statusTracker) get(name string) protocol.PollStatus {
 }
 
 // statusData builds the reply for cmd=status: runtimeOk reflects the native
-// runtime health check NOW (tmux/git/claude resolvable), linearOk is the last
-// known auth state.
+// runtime health check NOW (tmux/git resolvable and the default coding-agent
+// binary on PATH), linearOk is the last known auth state.
 func (d *Daemon) statusData(ctx context.Context) protocol.StatusData {
 	d.mu.Lock()
 	linOK := d.linOK
 	cfgErr := d.cfgErr
 	health := d.runtimeHealth
+	// cmd=status is not poll-scoped, so probe the DEFAULT agent's binary
+	// ([defaults].agent → "claude"); a per-poll override is checked at that
+	// poll's own tick.
+	agentBin := agent.Parse(d.cfg.AgentForProject("")).Binary()
 	type pollInfo struct {
 		name    string
 		enabled bool
@@ -80,7 +85,7 @@ func (d *Daemon) statusData(ctx context.Context) protocol.StatusData {
 
 	runtimeErr := ""
 	if health != nil {
-		if err := health(); err != nil {
+		if err := health(agentBin); err != nil {
 			runtimeErr = err.Error()
 		}
 	}

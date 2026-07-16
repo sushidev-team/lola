@@ -28,6 +28,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/sushidev-team/lola/internal/agent"
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/hook"
 	"github.com/sushidev-team/lola/internal/linear"
@@ -54,9 +55,16 @@ const (
 const sessionPrefix = "lola-"
 
 // lolaDir is the runtime scratch directory inside each worktree, holding
-// prompt.md and settings.json. It is excluded via the worktree's git
-// info/exclude, never via the repository's .gitignore.
+// prompt.md, env, and the per-agent callback artifact(s) (Claude's
+// settings.json, or Codex's codex/ home). It is excluded via the worktree's
+// git info/exclude, never via the repository's .gitignore.
 const lolaDir = ".lola"
+
+// openCodeDir is the directory OpenCode auto-loads plugins from
+// (.opencode/plugins/); the lola hook plugin lands there for opencode
+// sessions. Like lolaDir it is kept out of git via the worktree's
+// info/exclude, so a rollback that removes a clean worktree takes it too.
+const openCodeDir = ".opencode"
 
 // Native spawns and manages Lola's own runner sessions (runtime = "native"):
 // one git worktree + one tmux session running Claude Code per Linear issue.
@@ -71,8 +79,10 @@ type Native struct {
 	// diagnostics/state paths; session state itself lives in the caller's
 	// session.Store.
 	Home string
-	// ClaudeBin is the claude binary launched inside tmux; empty means
-	// "claude" resolved via the pane's PATH.
+	// ClaudeBin overrides the claude binary launched inside tmux; empty means
+	// "claude" resolved via the pane's PATH. It applies ONLY when the resolved
+	// agent kind is Claude — codex/opencode sessions always use their own
+	// PATH-resolved binary (agent.Kind.Binary()).
 	ClaudeBin string
 	// LinearKey is an optional provider for the current Linear API key,
 	// forwarded into the session via the 0600 <dir>/.lola/env file (never on
@@ -160,6 +170,12 @@ func (n *Native) Spawn(ctx context.Context, p config.Project, issue linear.Issue
 	if issue.Identifier == "" {
 		return session.Session{}, errors.New("runtime: spawn: issue has no identifier")
 	}
+	// Resolve which coding agent drives this session's pane: the project's
+	// override, else [defaults].agent, else "claude" (AgentForProject). Parse is
+	// total — an unknown/empty value falls back to Claude — so the launch line,
+	// the callback artifact(s), the launch env, and the recorded Session.Agent
+	// are all derived from this one Kind.
+	kind := agent.Parse(n.Cfg.AgentForProject(p.Name))
 	baseID := SessionID(p.Name, issue.Identifier)
 	baseBranch := issue.BranchName
 	if baseBranch == "" {
@@ -184,24 +200,39 @@ func (n *Native) Spawn(ctx context.Context, p config.Project, issue linear.Issue
 	if err := excludeLolaDir(dir); err != nil {
 		return fail("git info/exclude", err)
 	}
+	// OpenCode's plugin lives under .opencode/, not .lola/; exclude it the same
+	// way so a rollback that removes a clean worktree isn't fooled into seeing
+	// the plugin as a dirty untracked file (excluded paths never show in
+	// `git status --porcelain`). Exclude BEFORE writing the plugin below.
+	if kind == agent.OpenCode {
+		if err := excludeGitPattern(dir, openCodeDir+"/"); err != nil {
+			return fail("git info/exclude "+openCodeDir, err)
+		}
+	}
 	if err := os.MkdirAll(filepath.Join(dir, lolaDir), 0o700); err != nil {
 		return fail("create "+lolaDir, err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, lolaDir, "prompt.md"), promptMD(p, issue, branch), 0o600); err != nil {
 		return fail("write prompt.md", err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, lolaDir, "settings.json"), hook.SettingsJSON(n.LolaBin), 0o600); err != nil {
-		return fail("write settings.json", err)
+	// Per-agent lifecycle-callback artifact(s): claude's .lola/settings.json,
+	// codex's .lola/codex/config.toml (+ best-effort auth symlink), or
+	// opencode's .opencode/plugins/lola-hook.js. All land under .lola/ or the
+	// just-excluded .opencode/, so they share the other .lola files' rollback
+	// disposition (a clean worktree is removed wholesale, a dirty one is kept).
+	if err := n.writeAgentArtifacts(dir, kind); err != nil {
+		return fail("write agent artifacts", err)
 	}
-	// The env file carries the Linear API key and project env; it is 0600 and
-	// must be in place BEFORE the launch sources it. Written last of the .lola
-	// files so a rollback that keeps a dirty worktree keeps it too (0600, in
-	// the kept dir — same disposition as the other .lola artifacts).
-	if err := os.WriteFile(filepath.Join(dir, lolaDir, "env"), n.envFile(p, id), 0o600); err != nil {
+	// The env file carries the Linear API key, project env, and (for codex) the
+	// per-session CODEX_HOME; it is 0600 and must be in place BEFORE the launch
+	// sources it. Written last of the .lola files so a rollback that keeps a
+	// dirty worktree keeps it too (0600, in the kept dir — same disposition as
+	// the other .lola artifacts).
+	if err := os.WriteFile(filepath.Join(dir, lolaDir, "env"), n.envFile(p, id, dir, kind), 0o600); err != nil {
 		return fail("write env", err)
 	}
 
-	if err := n.Tmux.NewSession(ctx, id, dir, n.launchCommand(id)); err != nil {
+	if err := n.Tmux.NewSession(ctx, id, dir, n.launchCommand(id, kind)); err != nil {
 		return session.Session{}, n.rollbackTmux(ctx, p, id, dir, branch, "start tmux session", err)
 	}
 
@@ -224,6 +255,7 @@ func (n *Native) Spawn(ctx context.Context, p config.Project, issue linear.Issue
 		Repo:      p.Repo,
 		TmuxName:  id,
 		Status:    StatusWorking,
+		Agent:     string(kind),
 	}, nil
 }
 
@@ -237,44 +269,144 @@ func (n *Native) Spawn(ctx context.Context, p config.Project, issue linear.Issue
 // csh login shell errors on `set -a`/`.` and no session ever starts.
 //
 // Nothing secret ever appears here: the environment (LOLA_SESSION, the Linear
-// API key, and the project env) is carried by the 0600 <dir>/.lola/env file,
-// which the line sources instead of putting it on argv (ps-visible /
-// tmux-server-visible). The inner POSIX line is:
+// API key, the project env, and codex's CODEX_HOME) is carried by the 0600
+// <dir>/.lola/env file, which the line sources instead of putting it on argv
+// (ps-visible / tmux-server-visible). The inner POSIX line is:
 //
-//	set -a; . ./.lola/env; set +a; exec <claude> --settings .lola/settings.json '<prompt>'
+//	set -a; . ./.lola/env; set +a; exec <bin> <agent args...>
 //
 // `set -a` auto-exports everything the sourced file defines (so LOLA_SESSION
-// is still exported for hooks, and LINEAR_API_KEY / project env reach the
-// agent); `. ./.lola/env` sources it relative to the session's -c dir (the
-// worktree); `set +a` restores default behavior; `exec` replaces the shell
-// with claude. The claude binary and prompt are shQuote'd, then the whole
-// POSIX line is shQuote'd again for the outer `sh -c`. The argv prompt is
-// deliberately short — it only points the agent at .lola/prompt.md, which
-// carries the real briefing, so huge issue titles never bloat the command
-// line or the tmux server's argv.
-func (n *Native) launchCommand(id string) string {
-	claude := n.ClaudeBin
-	if claude == "" {
-		claude = "claude"
+// is still exported for hooks, and LINEAR_API_KEY / project env / CODEX_HOME
+// reach the agent); `. ./.lola/env` sources it relative to the session's -c dir
+// (the worktree); `set +a` restores default behavior; `exec` replaces the shell
+// with the agent binary. The binary and every launch arg are shQuote'd
+// individually, then the whole POSIX line is shQuote'd again for the outer
+// `sh -c`.
+//
+// The binary is the resolved agent's own (agent.Kind.Binary()), except that a
+// Claude session honors a non-empty n.ClaudeBin override for back-compat. The
+// args come from agent.LaunchArgs(kind, prompt): claude gets
+// `--settings .lola/settings.json <prompt>`, codex gets its unattended
+// approval/sandbox flags plus the positional prompt, opencode gets
+// `--prompt <prompt> --auto`. The prompt argv string is identical for all three
+// and deliberately short — it only points the agent at .lola/prompt.md, which
+// carries the real briefing, so huge issue titles never bloat the command line
+// or the tmux server's argv.
+func (n *Native) launchCommand(id string, kind agent.Kind) string {
+	bin := kind.Binary()
+	if kind == agent.Claude && n.ClaudeBin != "" {
+		bin = n.ClaudeBin
 	}
 	prompt := "You are lola session " + id + ". Read " + lolaDir + "/prompt.md in the current directory first; it contains your task briefing."
-	posix := "set -a; . ./" + lolaDir + "/env; set +a; exec " + shQuote(claude) +
-		" --settings " + lolaDir + "/settings.json " + shQuote(prompt)
+	posix := "set -a; . ./" + lolaDir + "/env; set +a; exec " + shQuote(bin)
+	for _, arg := range agent.LaunchArgs(kind, prompt) {
+		posix += " " + shQuote(arg)
+	}
 	return "exec sh -c " + shQuote(posix)
+}
+
+// writeAgentArtifacts writes the per-agent lifecycle-callback artifact(s) into
+// the worktree at dir, before launch, for the resolved kind:
+//
+//   - Claude:   .lola/settings.json = hook.SettingsJSON(LolaBin) — the hook
+//     wiring Claude Code reads via `--settings`.
+//   - Codex:    .lola/codex/config.toml = agent.CodexConfigTOML(LolaBin), a
+//     per-session CODEX_HOME whose `notify` key routes codex events to `lola
+//     hook codex-notify`, plus a best-effort auth.json symlink to the user's
+//     real codex login so `codex login` survives (absent source is not an
+//     error — API-key users authenticate via OPENAI_API_KEY from the pane env).
+//   - OpenCode: .opencode/plugins/lola-hook.js = agent.OpenCodePluginJS(LolaBin),
+//     the in-process plugin opencode auto-loads that shells `lola hook` on its
+//     lifecycle events.
+//
+// The caller has already created <dir>/.lola (0700) and, for opencode, excluded
+// .opencode/ from git. Files are 0600; directories 0700 — same discipline as
+// the other .lola artifacts.
+func (n *Native) writeAgentArtifacts(dir string, kind agent.Kind) error {
+	switch kind {
+	case agent.Codex:
+		return n.writeCodexArtifacts(dir)
+	case agent.OpenCode:
+		return os.WriteFile(openCodePluginPath(dir), agent.OpenCodePluginJS(n.LolaBin), 0o600)
+	default: // Claude
+		return os.WriteFile(filepath.Join(dir, lolaDir, "settings.json"), hook.SettingsJSON(n.LolaBin), 0o600)
+	}
+}
+
+// writeCodexArtifacts writes the codex per-session CODEX_HOME under
+// <dir>/.lola/codex: config.toml (with the notify wiring) and a best-effort
+// auth.json symlink to the user's existing codex login. The symlink is
+// advisory — an absent source is skipped silently, so a codex run with no
+// prior `codex login` still launches (it authenticates via OPENAI_API_KEY
+// inherited from the pane env).
+func (n *Native) writeCodexArtifacts(dir string) error {
+	codexHome := filepath.Join(dir, lolaDir, "codex")
+	if err := os.MkdirAll(codexHome, 0o700); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(codexHome, "config.toml"), agent.CodexConfigTOML(n.LolaBin), 0o600); err != nil {
+		return err
+	}
+	linkCodexAuth(codexHome)
+	return nil
+}
+
+// openCodePluginPath returns the plugin file path for an opencode session's
+// worktree and ensures its .opencode/plugins parent exists (best-effort: a
+// mkdir failure surfaces when the subsequent WriteFile fails).
+func openCodePluginPath(dir string) string {
+	pluginsDir := filepath.Join(dir, openCodeDir, "plugins")
+	_ = os.MkdirAll(pluginsDir, 0o700)
+	return filepath.Join(pluginsDir, "lola-hook.js")
+}
+
+// linkCodexAuth best-effort symlinks the user's real codex auth.json into the
+// per-session CODEX_HOME so an existing `codex login` carries over. It never
+// returns an error: a missing source (API-key users) or a symlink failure is
+// silently skipped — a codex session must launch regardless.
+func linkCodexAuth(codexHome string) {
+	src := userCodexAuth()
+	if src == "" {
+		return
+	}
+	if _, err := os.Stat(src); err != nil {
+		return // no existing login to carry over
+	}
+	_ = os.Symlink(src, filepath.Join(codexHome, "auth.json"))
+}
+
+// userCodexAuth resolves the path to the user's real codex auth.json: under
+// $CODEX_HOME when set, else ~/.codex/auth.json. Returns "" when no home can be
+// determined (the caller then skips the symlink).
+func userCodexAuth() string {
+	if h := os.Getenv("CODEX_HOME"); h != "" {
+		return filepath.Join(h, "auth.json")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return ""
+	}
+	return filepath.Join(home, ".codex", "auth.json")
 }
 
 // envFile renders <dir>/.lola/env: shell-sourceable NAME=value assignments the
 // launch command sources under `set -a`. Each value is single-quoted via
 // shQuote so nothing needs a shell-safe shape, and the file is written 0600 and
 // MUST never be logged — it may hold the Linear API key. It carries, in this
-// order: LOLA_SESSION (not secret); LINEAR_API_KEY, only when a LinearKey
-// provider is set and returns a non-empty key (a rotated key is picked up on
-// the next spawn because the provider is called here, each spawn); and every
-// [[project]].env pair in sorted order (the same variables Prepare gives
-// post_create commands — the agent session sees them too).
-func (n *Native) envFile(p config.Project, id string) []byte {
+// order: LOLA_SESSION (not secret); for a codex session, CODEX_HOME pointing at
+// the per-session <dir>/.lola/codex (so codex reads the lola-written config.toml
+// and notify wiring, not the user's real home); LINEAR_API_KEY, only when a
+// LinearKey provider is set and returns a non-empty key (a rotated key is picked
+// up on the next spawn because the provider is called here, each spawn); and
+// every [[project]].env pair in sorted order (the same variables Prepare gives
+// post_create commands — the agent session sees them too). dir is the absolute
+// worktree path, so CODEX_HOME is absolute and resolves regardless of cwd.
+func (n *Native) envFile(p config.Project, id, dir string, kind agent.Kind) []byte {
 	var b strings.Builder
 	fmt.Fprintf(&b, "LOLA_SESSION=%s\n", shQuote(id))
+	if kind == agent.Codex {
+		fmt.Fprintf(&b, "CODEX_HOME=%s\n", shQuote(filepath.Join(dir, lolaDir, "codex")))
+	}
 	if n.LinearKey != nil {
 		if key := n.LinearKey(); key != "" {
 			fmt.Fprintf(&b, "LINEAR_API_KEY=%s\n", shQuote(key))
@@ -483,13 +615,21 @@ func (n *Native) projectForSessionName(name string) string {
 }
 
 // excludeLolaDir appends ".lola/" to the git info/exclude that governs the
+// worktree at dir (see excludeGitPattern). Kept as a named helper because the
+// .lola/ exclusion is unconditional for every session, whereas .opencode/ is
+// added only for opencode sessions.
+func excludeLolaDir(dir string) error {
+	return excludeGitPattern(dir, lolaDir+"/")
+}
+
+// excludeGitPattern appends pattern to the git info/exclude that governs the
 // worktree at dir, keeping runtime files out of git status without touching
 // the repository's tracked .gitignore. In a linked worktree, <dir>/.git is a
 // file ("gitdir: <path>") and info/ is shared, so the pattern lands in the
 // common git dir's info/exclude (resolved via the gitdir's commondir file) —
-// exactly the file git reads. Idempotent: an existing ".lola/" line is left
+// exactly the file git reads. Idempotent: an existing identical line is left
 // alone.
-func excludeLolaDir(dir string) error {
+func excludeGitPattern(dir, pattern string) error {
 	gitPath := filepath.Join(dir, ".git")
 	fi, err := os.Stat(gitPath)
 	if err != nil {
@@ -529,7 +669,6 @@ func excludeLolaDir(dir string) error {
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
-	pattern := lolaDir + "/"
 	for _, line := range strings.Split(string(existing), "\n") {
 		if strings.TrimSpace(line) == pattern {
 			return nil // already excluded

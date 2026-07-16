@@ -15,6 +15,25 @@ poll_interval = "60s"
 concurrency_cap = 2
 # Hard ceiling on counted native sessions across ALL polls. Must be > 0.
 global_cap = 4
+# Coding agent spawned per issue. One of: claude (default) | codex | opencode.
+# This is the GLOBAL default; override it per repo with [[project]].agent below.
+# Omitted or empty resolves to claude, so existing configs are unchanged.
+#   claude   — Claude Code (default). Lifecycle callbacks via a generated
+#              .lola/settings.json hooks file (Stop / Notification / SessionEnd /
+#              PostToolUse / UserPromptSubmit) posted to `lola hook`.
+#   codex    — OpenAI Codex CLI. Runs unattended (--ask-for-approval never,
+#              --sandbox workspace-write). Lifecycle callbacks via its `notify`
+#              config key: lola sets CODEX_HOME=<worktree>/.lola/codex, writes
+#              that config.toml, and best-effort symlinks your existing
+#              ~/.codex/auth.json so a prior `codex login` still works.
+#   opencode — sst/opencode. Runs unattended (--auto). Lifecycle callbacks via an
+#              in-process plugin lola writes to <worktree>/.opencode/plugins/.
+# The configured agent's binary must be on PATH — the daemon health-gate checks
+# it (claude|codex|opencode) instead of always claude, and `lola doctor` reports
+# it. Provider auth is inherited from the daemon/pane environment
+# (ANTHROPIC_API_KEY for claude, OPENAI_API_KEY for codex) or an existing CLI
+# login (`codex login`, `opencode auth`); it is NEVER stored in this file.
+# agent = "claude"
 
 [linear]
 # Keychain SERVICE NAME (tried first):
@@ -123,6 +142,33 @@ endpoint = "https://api.linear.app/graphql"
 # timeout_seconds = 300          # hard cap per review pass; must be >= 0
 
 # ---------------------------------------------------------------------------
+# [coderabbit] — OPTIONAL, OFF BY DEFAULT. The PR-COMMENT WATCH — distinct from
+# [review]. [review] execs the CodeRabbit CLI locally; [coderabbit] instead POLLS
+# each session's GitHub PR (via gh, on the ~30s observer cadence) for comments and
+# reviews left by the CodeRabbit GitHub app (or ANY reviewer bot, via `author`)
+# and routes each NEW one to a human (notify), the worker agent (sanitized +
+# idle-gated, same safety gate as reactions), and/or a Linear comment.
+#
+# WHY POLL, NOT WEBHOOK: lola is a local socket daemon with no HTTP ingress and
+# can be stopped exactly when a webhook would fire. A per-session watermark makes
+# the poll fire-once per comment AND survive any downtime — the next cycle
+# reconciles the PR's current comments instead of replaying a missed delivery.
+#
+# COST/DEPS: gh only (already required). Each enabled session adds ONE read-only
+# `gh pr view` per ~30s cycle while its PR is open. A comment body is UNTRUSTED
+# (attacker-authorable) — sanitized before it can reach a pane, never a command.
+#
+# Omit this whole section to keep the watch OFF — zero behavior change.
+# The values shown below are the built-in defaults once enabled.
+# ---------------------------------------------------------------------------
+# [coderabbit]
+# enabled = true                 # master switch; false (and an absent table) = off
+# author = "coderabbitai"        # login SUBSTRING matched against comment authors (the CodeRabbit app is "coderabbitai[bot]"); set to watch a different bot
+# notify = true                  # surface each new comment to a human
+# send_to_agent = true           # relay each new comment to the worker via the send-keys gate
+# comment_on_linear = false      # also mirror each new comment onto the Linear issue
+
+# ---------------------------------------------------------------------------
 # [tmux] — OPTIONAL attach-UX tuning. Every field has a safe default, so you can
 # omit this whole section for zero behavior change. The values shown below ARE
 # the built-in defaults.
@@ -169,6 +215,11 @@ post_create = [
 # step on each other's migrations and seed data. Point sessions at separate
 # databases if that matters for your project.
 symlinks = [".env"]
+# Coding agent for THIS repo, overriding [defaults].agent. One of
+# claude | codex | opencode. Empty/omitted inherits the global default
+# (which itself defaults to claude). See [defaults].agent above for how each
+# agent's lifecycle callbacks are wired and where provider auth comes from.
+# agent = "claude"
 # Extra environment variables exported into each session.
 [project.env]
 # APP_ENV = "local"

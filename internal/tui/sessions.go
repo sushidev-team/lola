@@ -294,7 +294,6 @@ type answerDoneMsg struct {
 	msg string
 }
 
-
 // killDoneMsg carries the outcome of a `cmd=kill` request. msg is the message
 // to flash (a success line, or the daemon's verbatim dirty-kept error).
 type killDoneMsg struct{ msg string }
@@ -318,6 +317,42 @@ func killSelectedCmd(id string) tea.Cmd {
 			return killDoneMsg{msg: d.Message}
 		}
 		return killDoneMsg{msg: "session killed"}
+	}
+}
+
+// coderabbitDoneMsg carries the outcome of a `cmd=coderabbit` force poll. msg is
+// a terse line to flash; ok is true when the poll ran (found or clean), false on
+// a skip (watch off / no open PR) or error.
+type coderabbitDoneMsg struct {
+	msg string
+	ok  bool
+}
+
+// coderabbitSelectedCmd forces the [coderabbit] PR-comment watch for id now and
+// reports a terse outcome to flash. It mirrors `lola coderabbit <session>`: the
+// daemon polls the PR (ignoring the watermark) and routes any comments to the
+// configured sinks; this only summarizes what happened.
+func coderabbitSelectedCmd(id string) tea.Cmd {
+	return func() tea.Msg {
+		resp, err := requestFn(protocol.Request{Cmd: "coderabbit", Session: id})
+		if err != nil {
+			return coderabbitDoneMsg{msg: err.Error()}
+		}
+		if !resp.OK {
+			return coderabbitDoneMsg{msg: resp.Error}
+		}
+		var d protocol.CodeRabbitData
+		if err := json.Unmarshal(resp.Data, &d); err != nil {
+			return coderabbitDoneMsg{msg: err.Error()}
+		}
+		switch {
+		case d.Skipped != "":
+			return coderabbitDoneMsg{msg: "CodeRabbit: " + d.Skipped}
+		case d.Found:
+			return coderabbitDoneMsg{ok: true, msg: "CodeRabbit: routed feedback to the configured sinks"}
+		default:
+			return coderabbitDoneMsg{ok: true, msg: "CodeRabbit: no comments on the PR"}
+		}
 	}
 }
 
@@ -511,6 +546,13 @@ func (m *rootModel) updateSessions(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.toggleShell()
 	case "o":
 		return m, m.openSelectedPR()
+	case "c":
+		// Force a CodeRabbit PR-comment poll for the selected session now (the
+		// daemon reports "no open PR" for a session without one, so no PR guard here).
+		if sel := s.selected(); sel != nil {
+			s.flash, s.flashGood = "checking CodeRabbit…", true
+			return m, coderabbitSelectedCmd(sel.ID)
+		}
 	case "x":
 		if sel := s.selected(); sel != nil {
 			s.confirmKill = true

@@ -106,6 +106,41 @@ func TestHookCmdNoEventStillExitsClean(t *testing.T) {
 	}
 }
 
+// Codex delivers its notify payload as the next argv element (not stdin). An
+// unknown or malformed payload maps to no event and must still exit 0 without
+// diagnosing a daemon failure; a recognized payload attempts the daemon post
+// and (with no socket here) fails cleanly to stderr.
+func TestHookCmdCodexNotify(t *testing.T) {
+	t.Setenv("LOLA_HOME", t.TempDir()) // no daemon socket
+	t.Setenv("LOLA_SESSION", "")       // not a lola session
+
+	cases := []struct {
+		name       string
+		args       []string
+		wantStderr bool // true => attempted daemon post and reported the failure
+	}{
+		{"turn complete", []string{"codex-notify", `{"type":"agent-turn-complete","last-assistant-message":"done"}`}, true},
+		{"approval", []string{"codex-notify", `{"type":"approval-requested"}`}, true},
+		{"unknown type ignored", []string{"codex-notify", `{"type":"session-started"}`}, false},
+		{"garbage ignored", []string{"codex-notify", `not json`}, false},
+		{"missing payload ignored", []string{"codex-notify"}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd := hookCmd()
+			cmd.SetIn(strings.NewReader(""))
+			var stderr strings.Builder
+			cmd.SetErr(&stderr)
+			if err := cmd.RunE(cmd, tc.args); err != nil {
+				t.Fatalf("hook RunE = %v, want nil (hook must always exit 0)", err)
+			}
+			if got := stderr.Len() > 0; got != tc.wantStderr {
+				t.Errorf("stderr non-empty = %v, want %v (stderr=%q)", got, tc.wantStderr, stderr.String())
+			}
+		})
+	}
+}
+
 func TestHookDetail(t *testing.T) {
 	cases := []struct {
 		name, in, want string

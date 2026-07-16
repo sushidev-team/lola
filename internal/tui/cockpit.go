@@ -223,20 +223,40 @@ func (m *rootModel) formModal() string {
 	return strings.Join(placeModal(m.cockpitLines(), modal, W), "\n")
 }
 
-// railColumn stacks the fixed-height Triage panel over a Polls panel that takes
-// the remaining height.
+// railColumn stacks three panels: a fixed Triage summary, a flexible Activity
+// feed (the live "what's happening" ticker) that soaks up the rail's otherwise
+// wasted middle, and a Polls panel sized to the poll list. The three heights
+// always sum to exactly h so the column matches the frame.
 func (m *rootModel) railColumn(w, h int) []string {
-	triageH := 10
-	if triageH > h-4 {
-		triageH = h - 4
+	// Triage: hero + 3 meters + total = 5 content lines → 7 with the box; +1
+	// slack. Clamp so the other two panels always keep a usable slice.
+	triageH := 8
+	if triageH > h-8 {
+		triageH = h - 8
 	}
-	if triageH < 4 {
-		triageH = 4
+	if triageH < 5 {
+		triageH = 5
 	}
-	pollsH := h - triageH
+	rest := h - triageH
+	// Polls: one row per configured poll + title + 2 borders. Bounded so a long
+	// poll list never starves the Activity feed, and a short one never leaves a
+	// yawning gap.
+	pollsH := len(m.cfg.Polls) + 3
+	if pollsH < 5 {
+		pollsH = 5
+	}
+	if maxPolls := rest - 5; pollsH > maxPolls { // leave ≥5 for Activity
+		pollsH = maxPolls
+	}
+	if pollsH < 3 {
+		pollsH = 3
+	}
+	activityH := rest - pollsH
+
 	triage := box(paneTitle(1, "Triage", ""), m.triageBody(w-4), w, triageH, false)
+	activity := box("Activity", m.activityBody(w-4, activityH-2), w, activityH, false)
 	polls := box(paneTitle(3, "Polls", ""), m.pollsBody(w-4, pollsH-2), w, pollsH, m.focus == focusPolls)
-	return stackRows(triage, polls)
+	return stackRows(triage, activity, polls)
 }
 
 // mainColumn stacks the Sessions table over the Detail/Agent panel. When the
@@ -298,7 +318,11 @@ func (m *rootModel) detailTitle() string {
 		extra += " · " + sel.Status
 	}
 	if m.embedFocused {
-		extra += " · ⛶ focused — Ctrl-q back"
+		if m.embedScroll {
+			extra += " · ⇕ scroll — wheel→agent · Ctrl-g mouse back · Ctrl-q back"
+		} else {
+			extra += " · ⛶ focused — ⌘-click/drag · Ctrl-g wheel · Ctrl-q back"
+		}
 	} else if m.currentEmbed() != nil {
 		extra += " · enter to focus"
 	}
@@ -528,15 +552,6 @@ func (m *rootModel) triageBody(w int) []string {
 		out = append(out, "", faintText.Render("no active sessions"))
 		return out
 	}
-	// Sparkline + a short trailing label, sized so the label always fits the rail
-	// (the old "needs-you · last hour" got clipped to "…last hou" at rail width).
-	trend := "needs-you"
-	if spark := sparkline(m.attnHist, w-lipgloss.Width(trend)-2); spark != "" {
-		out = append(out, spark+"  "+faintText.Render(trend))
-	} else {
-		out = append(out, "")
-	}
-	out = append(out, faintText.Render(strings.Repeat("┈", w))) // divider under the sparkline
 	meterW := w - 12
 	if meterW < 4 {
 		meterW = 4
@@ -685,12 +700,12 @@ func (m *rootModel) keybar(w int) string {
 				keys = append(keys, "a answer")
 			}
 			if sel.PRURL != "" {
-				keys = append(keys, "o PR")
+				keys = append(keys, "o PR", "c coderabbit")
 			}
 		}
 		keys = append(keys, "x kill", "/ filter", "! needs-you", "V lens", "n next!", "tab → polls")
 	}
-	keys = append(keys, "P project", "d doctor", "q quit")
+	keys = append(keys, "P project", "S settings", "d doctor", "q quit")
 	return previewLine(faintText.Render(strings.Join(keys, " · ")), w)
 }
 
@@ -773,63 +788,77 @@ func insAt[T any](s []T, i int, v T) []T {
 	return append(out, s[i:]...)
 }
 
-// attnHistCap bounds the needs-you sparkline ring.
-const attnHistCap = 60
-
-// recordAttn samples the current "need you" count into the bounded history ring
-// that backs the Triage sparkline. Called once per sessions fetch.
-func (m *rootModel) recordAttn() {
-	n := 0
-	if m.sessions.data != nil {
-		n = AttentionCount(m.sessions.data.Sessions)
+// eventPhrase maps a transition's target status to the short human phrase the
+// activity feed shows (a spawn — from "" — reads "spawned"; a resume out of
+// needs_input reads "resumed"). Kept terse so an "ISSUE phrase age" line fits
+// the narrow rail; an unmapped status falls back to its raw word.
+func eventPhrase(from, to string) string {
+	if from == "" {
+		return "spawned"
 	}
-	m.attnHist = append(m.attnHist, n)
-	if len(m.attnHist) > attnHistCap {
-		m.attnHist = m.attnHist[len(m.attnHist)-attnHistCap:]
+	switch to {
+	case "working":
+		return "resumed"
+	case "needs_input":
+		return "needs you"
+	case "draft":
+		return "PR opened"
+	case "review_pending":
+		return "in review"
+	case "ci_pending":
+		return "CI running"
+	case "ci_failed":
+		return "CI failed"
+	case "changes_requested":
+		return "changes req"
+	case "merge_conflict":
+		return "conflict"
+	case "approved":
+		return "approved"
+	case "merged":
+		return "merged"
+	case "closed":
+		return "PR closed"
+	case "session_ended":
+		return "ended"
+	case "dead":
+		return "died"
+	default:
+		return to
 	}
 }
 
-// sparkline renders the last `width` samples as colored block glyphs scaled to
-// the window's max (green low → yellow → orange high) so the needs-you trend
-// reads at a glance. A zero sample renders as a faint dot. Empty history (or a
-// non-positive width) renders nothing.
-func sparkline(vals []int, width int) string {
-	if width < 1 || len(vals) == 0 {
-		return ""
+// activityBody renders the daemon's activity feed (newest first) as one
+// "ISSUE phrase age" line per event, the phrase colored by the target status so
+// a needs-you reads orange, a failure red, a merge green. The issue key leads;
+// the age trails faint. Lines are clipped to width; box() clips the stack to the
+// panel height (so the freshest events always win the visible rows). An empty
+// feed says so plainly.
+func (m *rootModel) activityBody(w, h int) []string {
+	var evs []protocol.Event
+	if m.sessions.data != nil {
+		evs = m.sessions.data.Events
 	}
-	if len(vals) > width {
-		vals = vals[len(vals)-width:]
+	if len(evs) == 0 {
+		return []string{faintText.Render("no activity yet")}
 	}
-	max := 1
-	for _, v := range vals {
-		if v > max {
-			max = v
-		}
+	if h > 0 && len(evs) > h {
+		evs = evs[:h]
 	}
-	blocks := []rune("▁▂▃▄▅▆▇█")
-	var b strings.Builder
-	for _, v := range vals {
-		if v <= 0 {
-			b.WriteString(faintText.Render("·"))
-			continue
+	out := make([]string, 0, len(evs))
+	for _, e := range evs {
+		key := e.Issue
+		if key == "" {
+			key = shortID(e.ID)
 		}
-		lvl := (v*len(blocks) - 1) / max
-		if lvl < 0 {
-			lvl = 0
+		phrase := statusStyle(e.To).Render(eventPhrase(e.From, e.To))
+		line := boxTitle.Render(key) + " " + phrase
+		if e.Ago != "" {
+			line += faintText.Render(" · " + e.Ago)
 		}
-		if lvl >= len(blocks) {
-			lvl = len(blocks) - 1
-		}
-		style := goodText
-		switch {
-		case lvl >= 6:
-			style = statusOrange
-		case lvl >= 3:
-			style = warnText
-		}
-		b.WriteString(style.Render(string(blocks[lvl])))
+		out = append(out, truncateANSI(line, w))
 	}
-	return b.String()
+	return out
 }
 
 // viewportStart returns the first visible index of an h-tall window over n rows

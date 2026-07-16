@@ -113,6 +113,39 @@ status back via an atomic read-modify-write so a concurrently-arriving hook
 event is never clobbered. A dead pane whose PR is not merged → `dead`. P2 never
 auto-kills; reacting to CI/review state is P3 (future work).
 
+## Coding agent (pluggable) **[new section]**
+
+The per-issue coding agent is selectable: `claude` (default, unchanged) |
+`codex` (OpenAI Codex CLI) | `opencode` (sst/opencode), via `[defaults].agent`
+with a per-`[[project]].agent` override (empty inherits: project → defaults →
+`claude`; unknown → `claude`). `internal/agent` is a stdlib-only leaf owning the
+kind enum, per-kind launch argv, and the callback-config bodies; the runtime
+writes the right callback artifact at spawn, and the health-gate checks the
+resolved binary.
+
+- **claude** — `claude --settings .lola/settings.json <prompt>`; callbacks via
+  the generated hooks file (unchanged).
+- **codex** — runs unattended (`--ask-for-approval never --sandbox
+  workspace-write <prompt>`); callbacks via the `notify` key in
+  `$CODEX_HOME/config.toml`, with `CODEX_HOME=<worktree>/.lola/codex` and a
+  best-effort symlink of the user's `~/.codex/auth.json`. codex calls
+  `lola hook codex-notify '<json>'` (JSON as the LAST argv element), normalized
+  to `stop` / `notification`.
+- **opencode** — runs unattended (`--prompt <prompt> --auto`); callbacks via an
+  in-process plugin at `<worktree>/.opencode/plugins/lola-hook.js` shelling
+  `lola hook <event>` on `session.idle` / `permission.asked` /
+  `tool.execute.after`.
+
+All three normalize to the same hook event names, so dispatch/observer/reaction
+logic is agent-agnostic; pane classification (`internal/attention`) is
+agent-aware and backstops the callbacks. Callback artifacts stay under
+git-excluded `.lola/` (claude, codex) and `.opencode/` (opencode). Provider auth
+is inherited from the daemon/pane env (`ANTHROPIC_API_KEY` / `OPENAI_API_KEY`)
+or an existing CLI login. `[brain]` / `[review]` / `[coderabbit]` remain
+claude-only lola-internal helpers, distinct from the coding agent. codex/opencode
+end-to-end verification needs those binaries installed and is not covered by the
+Go test suite.
+
 ## Reconciliation pass (periodic, ~5 min)
 
 **[changed from AO bridge]** Issues still carrying set_label with **no counted
@@ -151,6 +184,12 @@ Label transition (no add-label mutation; re-read first, send full array): `issue
   `ao_project`. `[[project]]` (one per repo) is the runtime registry: name,
   path (absolute), repo (owner/name), default_branch, post_create, symlinks,
   env. `[defaults]`: poll_interval, concurrency_cap, global_cap.
+- **[new]** `[defaults].agent` and per-`[[project]].agent` select the coding
+  agent spawned per issue: `claude` (default) | `codex` | `opencode`. Empty
+  inherits (project → defaults → `claude`). The health-gate binary and pane
+  classification follow the resolved kind; see [Coding agent (pluggable)]. The
+  `[brain]` / `[review]` / `[coderabbit]` helpers stay claude-only, distinct
+  from the coding agent.
 - Per poll: team_id, project_id, cycle_mode (+cycle_id), state_ids,
   match_labels + match_mode, assignee_mode + assignee_user_id, **project (a
   `[[project]]` name — required)**, repo (optional; falls back to the project's

@@ -71,7 +71,7 @@ func newTestDaemon(t *testing.T, cfg *config.Config, fake *linear.Fake, nat Nati
 	t.Setenv("LOLA_HOME", home)
 	d := newDaemon(cfg, fake, log.New(io.Discard, "", 0), home)
 	d.native = nat
-	d.runtimeHealth = func() error { return nil }
+	d.runtimeHealth = func(string) error { return nil }
 	return d
 }
 
@@ -362,7 +362,7 @@ func TestTickRuntimeUnavailableNoLinearCallsNoStateMutation(t *testing.T) {
 	fake := &linear.Fake{Issues: []linear.Issue{is}}
 	nat := &fakeNative{}
 	d := newTestDaemon(t, testConfig(labelPoll("p1")), fake, nat)
-	d.runtimeHealth = func() error { return errors.New("missing claude") }
+	d.runtimeHealth = func(string) error { return errors.New("missing claude") }
 
 	_, err := d.tick(context.Background(), "p1", false)
 	if err == nil {
@@ -383,6 +383,63 @@ func TestTickRuntimeUnavailableNoLinearCallsNoStateMutation(t *testing.T) {
 	if got := d.status.get("p1").LastError; !strings.Contains(got, "runtime unavailable") {
 		t.Errorf("status lastError = %q, want it to mention runtime unavailable", got)
 	}
+}
+
+// --- Agent-aware health gate --------------------------------------------
+
+// The health gate must probe the coding-agent binary the poll would actually
+// spawn — resolved per project (override → [defaults].agent → "claude") — not
+// always "claude". An empty/legacy config resolves to claude, byte-identical to
+// before the agent became configurable.
+func TestTickHealthGateDefaultsToClaudeBinary(t *testing.T) {
+	is := testIssue("FE-1", 1, "2024-01-01T00:00:00Z")
+	d := newTestDaemon(t, testConfig(labelPoll("p1")), &linear.Fake{Issues: []linear.Issue{is}}, &fakeNative{})
+	gotBin := healthGateBinary(t, d, "p1")
+	if gotBin != "claude" {
+		t.Fatalf("health gate probed %q, want the default claude binary", gotBin)
+	}
+}
+
+// [defaults].agent selects the binary for every poll that has no per-project
+// override.
+func TestTickHealthGateProbesDefaultAgentBinary(t *testing.T) {
+	is := testIssue("FE-1", 1, "2024-01-01T00:00:00Z")
+	cfg := testConfig(labelPoll("p1"))
+	cfg.Defaults.Agent = "codex"
+	d := newTestDaemon(t, cfg, &linear.Fake{Issues: []linear.Issue{is}}, &fakeNative{})
+	gotBin := healthGateBinary(t, d, "p1")
+	if gotBin != "codex" {
+		t.Fatalf("health gate probed %q, want the [defaults].agent binary codex", gotBin)
+	}
+}
+
+// A per-[[project]] agent override wins over [defaults].agent at the gate: the
+// binary checked is the one THIS poll's project would spawn.
+func TestTickHealthGateProbesProjectAgentOverride(t *testing.T) {
+	is := testIssue("FE-1", 1, "2024-01-01T00:00:00Z")
+	cfg := testConfig(labelPoll("p1"))
+	cfg.Defaults.Agent = "codex"
+	cfg.Projects[0].Agent = "opencode" // proj1's override beats the default
+	d := newTestDaemon(t, cfg, &linear.Fake{Issues: []linear.Issue{is}}, &fakeNative{})
+	gotBin := healthGateBinary(t, d, "p1")
+	if gotBin != "opencode" {
+		t.Fatalf("health gate probed %q, want the project override binary opencode", gotBin)
+	}
+}
+
+// healthGateBinary captures the binary the tick's health gate probes, then
+// short-circuits the tick so no Linear/spawn work runs.
+func healthGateBinary(t *testing.T, d *Daemon, poll string) string {
+	t.Helper()
+	var gotBin string
+	d.runtimeHealth = func(binary string) error {
+		gotBin = binary
+		return errors.New("stop before dispatch")
+	}
+	if _, err := d.tick(context.Background(), poll, false); err == nil {
+		t.Fatal("tick must fail: the stub health gate returns an error")
+	}
+	return gotBin
 }
 
 // --- Budget / caps -------------------------------------------------------

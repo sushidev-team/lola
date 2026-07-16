@@ -39,6 +39,7 @@ type rootModel struct {
 	sessions sessionsModel
 	form     *formModel
 	projForm *projectForm         // project editor modal ('P'); nil otherwise
+	settings *settingsForm        // global settings editor modal ('S'); nil otherwise
 	terms    map[string]*termView // per-session persistent shells, keyed by session ID
 
 	// The embedded terminal shown in the Detail panel for the selected session:
@@ -46,23 +47,21 @@ type rootModel struct {
 	// default, or a per-session SHELL when showShell is set. 'enter' focuses +
 	// expands whichever is shown into the main column; Ctrl-q shrinks it back.
 	// currentEmbed() resolves which one; embedGen guards the repaint waiter.
-	agentTerm     *termView
-	agentFor      string // session ID agentTerm is attached to ("" = none)
-	showShell     bool   // Detail shows the session's shell instead of the agent
-	embedFocused  bool   // the shown embed has keyboard + is expanded
-	embedGen      int    // generation, bumped on re-target so stale frame waiters are ignored
-	agentDebounce int    // debounce token; only the latest selection change attaches
-	spin          int    // braille spinner frame, advanced while a terminal is loading
-	spinning      bool   // a spinner tick loop is active
-	tmuxMouseSet  bool   // `mouse on` has been enabled on the lola tmux server
+	agentTerm    *termView
+	agentFor     string // session ID agentTerm is attached to ("" = none)
+	showShell    bool   // Detail shows the session's shell instead of the agent
+	embedFocused bool   // the shown embed has keyboard + is expanded
+	embedScroll  bool   // scroll-mode (opt-in, Ctrl-g): capture the mouse to forward the
+	//                      wheel to the agent. OFF by default so the outer terminal keeps
+	//                      native drag-select/copy and ⌘-click-to-open in EVERY terminal.
+	embedGen      int  // generation, bumped on re-target so stale frame waiters are ignored
+	agentDebounce int  // debounce token; only the latest selection change attaches
+	spin          int  // braille spinner frame, advanced while a terminal is loading
+	spinning      bool // a spinner tick loop is active
+	tmuxMouseSet  bool // `mouse on` has been enabled on the lola tmux server
 
 	width  int
 	height int
-
-	// attnHist is a bounded ring of recent "need you" counts (one sample per
-	// sessions fetch), rendered as the Triage sparkline so the queue's trend is
-	// visible at a glance.
-	attnHist []int
 
 	// Doctor overlay (P6.27): 'd' in the polls view runs doctor.Check via a
 	// bounded tea.Cmd and shows the report in a scrollable panel; esc closes.
@@ -198,7 +197,6 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case sessionsMsg:
 		before := m.effectiveSelID()
 		cmd := m.handleSessionsMsg(v)
-		m.recordAttn()
 		if m.effectiveSelID() != before { // selection (re)pinned → re-target the live agent
 			if c := m.scheduleAgentSync(); c != nil {
 				cmd = tea.Batch(cmd, c)
@@ -222,6 +220,11 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Flash the outcome verbatim (success line or the daemon's dirty-kept
 		// message) and refresh the list so a removed session drops out.
 		m.sessions.flash = v.msg
+		return m, fetchSessionsCmd
+	case coderabbitDoneMsg:
+		// Flash the CodeRabbit poll outcome; refresh so any status the routed
+		// feedback nudged (e.g. a hand-off waking the agent) re-derives.
+		m.sessions.flash, m.sessions.flashGood = v.msg, v.ok
 		return m, fetchSessionsCmd
 	case doctorMsg:
 		// A report arriving after the overlay was closed (esc during the run)
@@ -303,6 +306,22 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// The global settings editor owns all input while open.
+	if m.settings != nil {
+		if k, ok := msg.(tea.KeyPressMsg); ok {
+			switch m.settings.update(k) {
+			case settingsFormCancel:
+				m.settings = nil
+			case settingsFormSaved:
+				m.settings = nil
+				m.reloadConfig()
+				m.list.flash = "settings saved"
+				return m, tea.Batch(bestEffortReloadCmd, fetchStatusCmd)
+			}
+		}
+		return m, nil
+	}
+
 	// The doctor overlay owns all input while open (loading or showing).
 	if m.doctorLoading || m.doctorReport != nil {
 		if k, ok := msg.(tea.KeyPressMsg); ok {
@@ -343,6 +362,9 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, runDoctorCmd(m.cfg)
 		case "P":
 			return m.openProjectForm()
+		case "S":
+			m.settings = newSettingsForm(m.cfgPath, m.cfg)
+			return m, nil
 		}
 	}
 	if m.focus == focusPolls {
@@ -382,9 +404,11 @@ func (m *rootModel) View() tea.View {
 	// for this dark background, so an unset (light or theme-dependent) terminal
 	// background is what made the same frame look muddy elsewhere.
 	v.BackgroundColor = canvasColor()
-	// While an embed is focused, capture the mouse so wheel-scroll can be
-	// forwarded to it (the cockpit itself is keyboard-driven).
-	if m.embedFocused {
+	// A focused embed leaves the mouse with the OUTER terminal by default, so
+	// native drag-select/copy and ⌘-click-to-open a link work in EVERY terminal
+	// (no per-terminal modifier trick needed). Only scroll-mode (opt-in, Ctrl-g)
+	// captures the mouse, to forward the wheel to the agent's own history.
+	if m.embedFocused && m.embedScroll {
 		v.MouseMode = tea.MouseModeCellMotion
 	}
 	return v
@@ -393,6 +417,9 @@ func (m *rootModel) View() tea.View {
 func (m *rootModel) viewString() string {
 	if m.doctorLoading || m.doctorReport != nil {
 		return m.doctorModal()
+	}
+	if m.settings != nil {
+		return m.settingsFormModal()
 	}
 	if m.projForm != nil {
 		return m.projectFormModal()
