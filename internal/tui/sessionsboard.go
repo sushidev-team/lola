@@ -273,6 +273,11 @@ func (m *rootModel) kanbanColumnLines(c KanbanColumn, sess []protocol.SessionInf
 			marker = warnText.Render("! ")
 		}
 		out = append(out, marker+issue)
+		// A truncated Linear title under the key so a card says what it's about,
+		// not just which issue it is.
+		if si.Title != "" {
+			out = append(out, "  "+faintText.Render(truncPlain(si.Title, w-2)))
+		}
 
 		d := statusDisplay(si.Status)
 		meta := d.Style.Render(d.Badge)

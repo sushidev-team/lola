@@ -698,6 +698,9 @@ func (d *Daemon) adoptNativeSessions(ctx context.Context) {
 			if s.Issue == "" {
 				s.Issue = prev.Issue
 			}
+			if s.Title == "" {
+				s.Title = prev.Title // adopt scans tmux only; the title lives in the persisted record
+			}
 			if s.IssueUUID == "" {
 				s.IssueUUID = prev.IssueUUID
 			}

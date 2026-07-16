@@ -23,6 +23,29 @@ func TestStatusPill(t *testing.T) {
 	}
 }
 
+// The Linear title rides an adaptive column: visible when the panel is wide,
+// dropped (never clipping the state columns) when it is narrow.
+func TestSessionsTitleColumn(t *testing.T) {
+	m := newTestRoot(t)
+	m.sessions.data = &protocol.SessionsData{Sessions: []protocol.SessionInfo{
+		{ID: "1", Issue: "ENG-1", Title: "Fix the audit table migration", Project: "web", Status: "working"},
+	}}
+	m.sessions.selID = "1"
+
+	wide := stripANSI(strings.Join(m.sessionsBody(120, 12), "\n"))
+	if !strings.Contains(wide, "TITLE") || !strings.Contains(wide, "Fix the audit table") {
+		t.Errorf("wide body must carry a TITLE column with the issue title:\n%s", wide)
+	}
+
+	narrow := stripANSI(strings.Join(m.sessionsBody(46, 12), "\n"))
+	if strings.Contains(narrow, "TITLE") {
+		t.Errorf("narrow body must drop the TITLE column:\n%s", narrow)
+	}
+	if !strings.Contains(narrow, "STATUS") {
+		t.Errorf("narrow body must keep the state columns:\n%s", narrow)
+	}
+}
+
 // sparkline is right-aligned to the last `width` samples, one glyph per sample,
 // and renders nothing for empty history.
 func TestSparkline(t *testing.T) {

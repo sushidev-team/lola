@@ -241,6 +241,7 @@ func (d *Daemon) sessionsData() protocol.SessionsData {
 			ID:        s.ID,
 			Project:   s.Project,
 			Issue:     s.Issue,
+			Title:     s.Title,
 			Branch:    s.Branch,
 			Status:    s.Status,
 			TmuxName:  s.TmuxName,

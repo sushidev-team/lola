@@ -686,6 +686,11 @@ func (m *rootModel) sessionDetail() string {
 		return ""
 	}
 	var b strings.Builder
+	// Lead with the Linear title (bold) so the detail panel names what the
+	// session is about before the mechanical facts; detailBody clips it to width.
+	if sel.Title != "" {
+		b.WriteString(boxTitle.Render(sel.Title) + "\n")
+	}
 	if sel.TmuxName != "" {
 		fresh := s.previewFor == sel.ID
 		needsInput := sel.Status == "needs_input"
@@ -879,6 +884,30 @@ func dash(s string) string {
 		return "-"
 	}
 	return s
+}
+
+// truncPlain shortens an unstyled string to at most n display columns, appending
+// an ellipsis when it had to cut. Width is measured per rune (wide runes count
+// double) so a truncated Linear title never overflows its column and desyncs the
+// table. n <= 0 yields "".
+func truncPlain(s string, n int) string {
+	if n <= 0 {
+		return ""
+	}
+	if lipgloss.Width(s) <= n {
+		return s
+	}
+	var b strings.Builder
+	w := 0
+	for _, c := range s {
+		cw := lipgloss.Width(string(c))
+		if w+cw > n-1 { // reserve one column for the ellipsis
+			break
+		}
+		b.WriteRune(c)
+		w += cw
+	}
+	return b.String() + "…"
 }
 
 // lastLines returns at most n trailing lines of text, with trailing blank

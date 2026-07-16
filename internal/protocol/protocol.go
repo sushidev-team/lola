@@ -119,6 +119,7 @@ type SessionInfo struct {
 	ID       string `json:"id"`
 	Project  string `json:"project"`
 	Issue    string `json:"issue"`  // Linear identifier, e.g. ENG-123
+	Title    string `json:"title"`  // Linear issue title, "" when unknown (older/adopted records)
 	Branch   string `json:"branch"` // "" when unknown
 	Status   string `json:"status"` // derived (scm.DeriveStatus / hook-driven states)
 	PRURL    string `json:"prUrl"`

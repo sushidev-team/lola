@@ -21,7 +21,8 @@ type Session struct {
 	ID        string    `json:"id"`
 	Source    string    `json:"source"` // "ao" | "native"
 	Project   string    `json:"project"`
-	Issue     string    `json:"issue"` // Linear identifier, e.g. ENG-123
+	Issue     string    `json:"issue"`           // Linear identifier, e.g. ENG-123
+	Title     string    `json:"title,omitempty"` // Linear issue title, so a session is identifiable by what it's about
 	IssueUUID string    `json:"issue_uuid"`
 	Branch    string    `json:"branch"`
 	Repo      string    `json:"repo,omitempty"` // "owner/name" the PR lookup runs against

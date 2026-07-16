@@ -218,6 +218,7 @@ func (n *Native) Spawn(ctx context.Context, p config.Project, issue linear.Issue
 		Source:    "native",
 		Project:   p.Name,
 		Issue:     issue.Identifier,
+		Title:     issue.Title,
 		IssueUUID: issue.ID,
 		Branch:    branch,
 		Repo:      p.Repo,

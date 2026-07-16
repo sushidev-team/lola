@@ -126,6 +126,7 @@ func TestSpawnHappyPathFullSequence(t *testing.T) {
 	// Returned session for the store.
 	want := session.Session{
 		ID: id, Source: "native", Project: "nori", Issue: "ENG-42",
+		Title:     "Fix login flow",
 		IssueUUID: "uuid-42", Branch: "lola/eng-42", Repo: "owner/nori",
 		TmuxName: id, Status: StatusWorking,
 	}

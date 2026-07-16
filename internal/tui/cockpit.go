@@ -323,6 +323,7 @@ func (m *rootModel) sessionsBody(w, h int) []string {
 	selID := m.effectiveSelID()
 	rows := make([][]string, len(list))
 	selRow := -1
+	anyTitle := false
 	for i, si := range list {
 		marker := " "
 		issue := si.Issue
@@ -338,6 +339,9 @@ func (m *rootModel) sessionsBody(w, h int) []string {
 		if pr == "" {
 			pr = "-"
 		}
+		if si.Title != "" {
+			anyTitle = true
+		}
 		rows[i] = []string{
 			marker, issue, si.Project,
 			statusPill(si.Status), pr,
@@ -345,6 +349,30 @@ func (m *rootModel) sessionsBody(w, h int) []string {
 		}
 	}
 	colw := colWidths(headers, rows)
+
+	// Adaptive TITLE column (after ISSUE): so a session is identifiable by what
+	// it's ABOUT, not just its key. It claims whatever width is left after the
+	// dense fixed columns — a wide terminal shows most of the Linear title, a
+	// narrow one falls back to the identifier-only table rather than clipping the
+	// columns that carry state (STATUS/PR/AGE). Two-pass because the budget
+	// depends on the fixed columns' measured widths.
+	const titleColMin, titleColMax = 16, 72
+	if anyTitle {
+		baseW := 2 * (len(colw) - 1) // padCells joins columns with two spaces
+		for _, cw := range colw {
+			baseW += cw
+		}
+		if budget := w - baseW - 2; budget >= titleColMin {
+			if budget > titleColMax {
+				budget = titleColMax
+			}
+			headers = insAt(headers, 2, "TITLE")
+			colw = insAt(colw, 2, budget)
+			for i, si := range list {
+				rows[i] = insAt(rows[i], 2, faintText.Render(truncPlain(si.Title, budget)))
+			}
+		}
+	}
 	out := []string{
 		previewLine(tblHeader.Render(padCells(headers, colw)), w),
 		faintText.Render(strings.Repeat("─", w)),
@@ -714,6 +742,16 @@ func (m *rootModel) kanbanBodyAt(width, height int) []string {
 		lines = lines[:height]
 	}
 	return lines
+}
+
+// insAt returns s with v spliced in at index i (0 <= i <= len(s)), leaving the
+// input slice untouched — used to widen the sessions table with an optional
+// TITLE column without mutating the base row slices.
+func insAt[T any](s []T, i int, v T) []T {
+	out := make([]T, 0, len(s)+1)
+	out = append(out, s[:i]...)
+	out = append(out, v)
+	return append(out, s[i:]...)
 }
 
 // attnHistCap bounds the needs-you sparkline ring.
