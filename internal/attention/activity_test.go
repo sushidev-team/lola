@@ -136,6 +136,35 @@ func TestClassify(t *testing.T) {
 				"╰──────────────────────────────────────────────╯\n",
 			want: ActivityWaiting,
 		},
+		{
+			// THE REPORTED BUG: the agent asked a plain-text question and yielded;
+			// its COMPLETED status line still shows a token counter (a weak working
+			// cue) right next to the resting caret. That frozen counter must NOT keep
+			// the pane reading as working — a resting prompt beats the weak cues.
+			name: "waiting: completed status line with a frozen token counter beside a resting caret is waiting",
+			in: "Can you unlock 1Password, then tell me to continue?\n" +
+				"\n" +
+				"Alternatively, say so and I'll pass --no-gpg-sign.\n" +
+				"\n" +
+				"✳ Cooked for 5m 59s · ↑ 12.5k tokens\n" +
+				"✗ Auto-update failed · Run claude doctor\n" +
+				"> \n",
+			want: ActivityWaiting,
+		},
+		{
+			// A box-free bare caret (no input box captured) is still the resting
+			// prompt of a claude pane once no live cue is present.
+			name: "waiting: box-free bare caret after a question is a resting prompt",
+			in:   "Should I proceed with the rename?\n> \n",
+			want: ActivityWaiting,
+		},
+		{
+			// esc-to-interrupt precedence: a genuinely streaming turn wins even if a
+			// caret is somehow on screen — the one unambiguous live cue.
+			name: "working: live 'esc to interrupt' wins over a caret on screen",
+			in:   "✳ Baking… (12s · ↑ 3.2k tokens · esc to interrupt)\n> \n",
+			want: ActivityWorking,
+		},
 	}
 
 	for _, tc := range tests {

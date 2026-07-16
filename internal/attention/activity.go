@@ -148,6 +148,12 @@ var (
 	// plainCaretRe — a ">" input caret. Trusted only when a box frame is ALSO on
 	// screen, because ">" alone is ambiguous (shell prompt, quoted line, blockquote).
 	plainCaretRe = regexp.MustCompile(`^>(\s|$)`)
+
+	// shellPromptRe — a "$ " shell prompt at line start. Its presence on screen
+	// means a bare ">" caret is most likely a subprocess/shell prompt rather than
+	// claude-code's own input line, so the box-free empty-caret trust below is
+	// withheld (keeps the lone-shell-prompt pane classified Unknown).
+	shellPromptRe = regexp.MustCompile(`(?m)^\s*\$\s`)
 )
 
 // Classify strips ANSI from paneText, restricts itself to the last rendered
@@ -176,11 +182,25 @@ func Classify(paneText string) Activity {
 	screen := lastLines(clean, maxScreenLines)
 	tail := lastLines(clean, statusTailLines)
 
-	if hasWorkingCue(tail) {
+	// "esc to interrupt" is the ONE unambiguous LIVE cue — claude-code prints it
+	// only while a turn is actively streaming. It always wins.
+	if escInterruptRe.MatchString(tail) {
 		return ActivityWorking
 	}
+	// A resting input prompt (bordered box, a caret, or an answerable question)
+	// means the agent has yielded. It beats the WEAKER working cues below, because
+	// a COMPLETED status line can leave a frozen token counter / elapsed timer /
+	// spinner frame on screen right next to the resting prompt — reading that as
+	// live activity is exactly the sticky false-"working" bug. A genuinely
+	// streaming turn shows "esc to interrupt" (handled above) and does not rest an
+	// empty caret, so nothing live is lost here.
 	if hasWaitingCue(paneText, screen) {
 		return ActivityWaiting
+	}
+	// No resting prompt: the remaining cues (token counter, elapsed timer, spinner
+	// frame) are trusted as live activity.
+	if hasWorkingCue(tail) {
+		return ActivityWorking
 	}
 	return ActivityUnknown
 }
@@ -206,6 +226,10 @@ func hasWorkingCue(tail string) bool {
 // the prompt is, by definition, the agent waiting.
 func hasWaitingCue(paneText, screen string) bool {
 	boxed := boxBorderRe.MatchString(screen)
+	// A "$ " shell prompt anywhere on screen means a bare ">" is most likely a
+	// subprocess/shell prompt, so the box-free caret trust is withheld (a lone
+	// shell prompt with no box stays Unknown).
+	shell := shellPromptRe.MatchString(screen)
 	for _, ln := range strings.Split(screen, "\n") {
 		ln = cleanLine(ln)
 		if ln == "" {
@@ -215,6 +239,14 @@ func hasWaitingCue(paneText, screen string) bool {
 			return true
 		}
 		if boxed && plainCaretRe.MatchString(ln) {
+			return true
+		}
+		// A bare, EMPTY caret ("> " / "❯") with NO box: claude-code resting at its
+		// input prompt after a turn that scrolled its box off the capture (or that
+		// renders a minimal prompt). promptIndicatorRe matches only an empty caret
+		// line, so a markdown blockquote ("> quoted text") cannot trip it; the
+		// shell guard covers the ambiguous "$"/">" shell case.
+		if !shell && promptIndicatorRe.MatchString(ln) {
 			return true
 		}
 	}
