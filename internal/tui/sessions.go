@@ -41,11 +41,11 @@ const (
 )
 
 var (
-	statusBlue   = lipgloss.NewStyle().Foreground(lipgloss.Color("12"))
-	statusOrange = lipgloss.NewStyle().Foreground(lipgloss.Color("208"))
-	statusDeadBg = lipgloss.NewStyle().Foreground(lipgloss.Color("15")).Background(lipgloss.Color("9"))
-	srcNative    = lipgloss.NewStyle().Foreground(lipgloss.Color("14"))
-	prLineStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("13"))
+	statusBlue   = lipgloss.NewStyle().Foreground(lipgloss.Color(colBlue))
+	statusOrange = lipgloss.NewStyle().Foreground(lipgloss.Color(colOrange))
+	statusDeadBg = lipgloss.NewStyle().Foreground(lipgloss.Color("#f4f4f4")).Background(lipgloss.Color(colBad))
+	srcNative    = lipgloss.NewStyle().Foreground(lipgloss.Color(colAccent))
+	prLineStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(colMagenta))
 )
 
 // statusStyle maps a derived session status (scm.DeriveStatus / AO attention
@@ -736,7 +736,7 @@ func (m *rootModel) sessionDetail() string {
 		return b.String()
 	}
 	b.WriteString(tblHeader.Render("detail") + " " + sourceBadge(sel.Source) +
-		faintText.Render(" — no tmux session (AO desktop runtime)") + "\n")
+		faintText.Render(" — no live pane (session ended or not yet spawned)") + "\n")
 	// PR panel above the fold: the prominent number/checks/review summary + URL
 	// replaces the old plain "pr:" line so a PR is unmissable here too.
 	if blk := prDetailBlock(*sel); blk != "" {

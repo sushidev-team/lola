@@ -121,15 +121,16 @@ func TestFitHeight(t *testing.T) {
 func TestHighlightRow(t *testing.T) {
 	// Literal SGR so the inner reset survives the no-TTY test profile.
 	row := "ENG-1  \x1b[31mci_failed\x1b[0m  #7"
-	out := highlightRow(row, 30, "236")
+	sgr := bgSGR(colSel)
+	out := highlightRow(row, 30, sgr)
 	if got := lipgloss.Width(out); got != 30 {
 		t.Errorf("width = %d, want 30 (%q)", got, stripANSI(out))
 	}
-	if !strings.Contains(out, "\x1b[48;5;236m") {
+	if !strings.Contains(out, sgr) {
 		t.Error("must set the selection background")
 	}
 	// The inner reset from badText.Render is followed by a re-applied background.
-	if !strings.Contains(out, "\x1b[0m\x1b[48;5;236m") {
+	if !strings.Contains(out, "\x1b[0m"+sgr) {
 		t.Error("must re-apply the background after an inner reset")
 	}
 	if !strings.HasSuffix(out, "\x1b[0m") {

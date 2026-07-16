@@ -247,20 +247,43 @@ func statusDisplay(status string) StatusDisplay {
 // parked states get a SUBTLE tint; the quiet/terminal states are plain dim text.
 // Shared so the cockpit table and any future lens stay identical.
 func statusPill(status string) string {
+	label := statusLabel(status)
 	switch status {
 	case "needs_input":
-		return pillFill("208", "232", status) // solid orange, near-black text
+		return pillFill(pillUrgentBg, pillUrgentFg, label) // solid amber, near-black text
 	case "ci_failed", "changes_requested", "merge_conflict":
-		return pillFill("174", "232", status) // solid soft-red
+		return pillFill(pillBrokenBg, pillBrokenFg, label) // solid rose
 	case "working", "ci_pending", "draft":
-		return pillTint("24", "117", status) // muted blue
+		return pillTint(pillWorkBg, pillWorkFg, label) // tinted blue
 	case "approved", "pr_open":
-		return pillTint("22", "114", status) // muted green
+		return pillTint(pillDoneBg, pillDoneFg, label) // tinted green
 	case "review_pending":
-		return pillTint("238", "251", status) // neutral grey
+		return pillTint(pillGreyBg, pillGreyFg, label) // neutral grey
 	default: // merged / dead / session_ended / idle / unknown: quiet
-		return " " + statusStyle(status).Render(status) + " "
+		return " " + statusStyle(status).Render(label) + " "
 	}
+}
+
+// statusLabel shortens the long derived-status words so the STATUS column stays
+// tight — a full "changes_requested" is 17 columns and shoves the table wide.
+// The mapping is display-only; every control-flow comparison still uses the raw
+// status string.
+func statusLabel(status string) string {
+	switch status {
+	case "changes_requested":
+		return "changes"
+	case "review_pending":
+		return "review"
+	case "merge_conflict":
+		return "conflict"
+	case "session_ended":
+		return "ended"
+	case "ci_pending":
+		return "pending"
+	case "needs_input":
+		return "needs you"
+	}
+	return status
 }
 
 // pillFill renders a SOLID, bold chip (one space of padding each side).

@@ -14,8 +14,8 @@ import (
 func TestStatusPill(t *testing.T) {
 	for _, status := range []string{"needs_input", "ci_failed", "changes_requested", "working", "approved", "review_pending", "merged"} {
 		p := stripANSI(statusPill(status))
-		if !strings.Contains(p, status) {
-			t.Errorf("pill for %q missing the status word: %q", status, p)
+		if !strings.Contains(p, statusLabel(status)) {
+			t.Errorf("pill for %q missing the status label: %q", status, p)
 		}
 		if !strings.HasPrefix(p, " ") || !strings.HasSuffix(p, " ") {
 			t.Errorf("pill for %q must be a padded chip: %q", status, p)

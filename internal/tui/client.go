@@ -25,11 +25,11 @@ import (
 var errDaemonDown = errors.New("daemon not running (start with: lola run)")
 
 var (
-	tblHeader = lipgloss.NewStyle().Bold(true)
-	badText   = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
-	goodText  = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
-	warnText  = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
-	faintText = lipgloss.NewStyle().Faint(true)
+	tblHeader = lipgloss.NewStyle().Foreground(lipgloss.Color(colFaint)) // muted uppercase column heads
+	badText   = lipgloss.NewStyle().Foreground(lipgloss.Color(colBad))
+	goodText  = lipgloss.NewStyle().Foreground(lipgloss.Color(colGood))
+	warnText  = lipgloss.NewStyle().Foreground(lipgloss.Color(colWarn))
+	faintText = lipgloss.NewStyle().Foreground(lipgloss.Color(colFaint))
 )
 
 func socketPath() (string, error) {

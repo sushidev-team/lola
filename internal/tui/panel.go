@@ -15,16 +15,17 @@ import (
 )
 
 var (
-	boxBorder   = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-	boxBorderHi = lipgloss.NewStyle().Foreground(lipgloss.Color("39")) // cyan focus
-	boxTitle    = lipgloss.NewStyle().Bold(true)
-	boxTitleHi  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("39"))
+	boxBorder   = lipgloss.NewStyle().Foreground(lipgloss.Color(colBorder))
+	boxBorderHi = lipgloss.NewStyle().Foreground(lipgloss.Color(colAccent)) // cyan focus
+	boxTitle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(colText))
+	boxTitleHi  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(colAccent))
 )
 
 // box renders a titled, rounded-border panel of exact OUTER width w and OUTER
-// height h (both including the border). body lines are each clipped to the
-// inner width; the stack is clipped or blank-padded to the inner height so the
-// returned slice is always exactly h lines, every line exactly w columns.
+// height h (both including the border). Content sits inside a one-column gutter
+// on each side, so text never touches the border; body lines are clipped to that
+// padded inner width and the stack is clipped or blank-padded to the inner height
+// so the returned slice is always exactly h lines, every line exactly w columns.
 // focused draws the cyan border + title. A too-small w/h is floored so the box
 // is always well-formed rather than panicking.
 func box(title string, body []string, w, h int, focused bool) []string {
@@ -132,17 +133,17 @@ func fitHeight(lines []string, h int) []string {
 	return lines
 }
 
-// highlightRow paints a full-width selection background (256-color `bg`) behind
-// an already-styled row and pads it to w columns. Inner style resets (from
-// status pills / colored cells) would punch a hole in the background, so the bg
-// SGR is re-applied after every reset. The row is ANSI-clipped to w first so a
-// selected wide row can't wrap and desync the repaint.
-func highlightRow(s string, w int, bg string) string {
+// highlightRow paints a full-width selection background (the raw set-bg escape
+// `sgrBg`, e.g. from bgSGR) behind an already-styled row and pads it to w
+// columns. Inner style resets (from status pills / colored cells) would punch a
+// hole in the background, so the bg SGR is re-applied after every reset. The row
+// is ANSI-clipped to w first so a selected wide row can't wrap and desync the
+// repaint.
+func highlightRow(s string, w int, sgrBg string) string {
 	if w > 0 && lipgloss.Width(s) > w {
 		s = truncateANSI(s, w)
 	}
-	sgr := "\x1b[48;5;" + bg + "m"
-	out := sgr + strings.ReplaceAll(s, "\x1b[0m", "\x1b[0m"+sgr)
+	out := sgrBg + strings.ReplaceAll(s, "\x1b[0m", "\x1b[0m"+sgrBg)
 	if w > 0 {
 		if pad := w - lipgloss.Width(s); pad > 0 {
 			out += strings.Repeat(" ", pad)

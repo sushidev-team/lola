@@ -159,26 +159,27 @@ func TestStatusStyleMapping(t *testing.T) {
 		status string
 		fg     color.Color
 	}{
-		{"working", lipgloss.Color("12")},
-		{"ci_failed", lipgloss.Color("9")},
-		{"changes_requested", lipgloss.Color("9")},
-		{"merge_conflict", lipgloss.Color("9")},
-		{"approved", lipgloss.Color("10")},
-		{"needs_input", lipgloss.Color("208")},
-		{"no_signal", lipgloss.Color("208")},
+		{"working", lipgloss.Color(colBlue)},
+		{"ci_failed", lipgloss.Color(colBad)},
+		{"changes_requested", lipgloss.Color(colBad)},
+		{"merge_conflict", lipgloss.Color(colBad)},
+		{"approved", lipgloss.Color(colGood)},
+		{"needs_input", lipgloss.Color(colOrange)},
+		{"no_signal", lipgloss.Color(colOrange)},
 	}
 	for _, c := range cases {
 		if got := statusStyle(c.status).GetForeground(); got != c.fg {
 			t.Errorf("statusStyle(%q) foreground = %v, want %v", c.status, got, c.fg)
 		}
 	}
+	// The quiet/terminal states render in the muted palette foreground.
 	for _, dim := range []string{"merged", "session_ended", "idle"} {
-		if !statusStyle(dim).GetFaint() {
-			t.Errorf("statusStyle(%q) must be faint", dim)
+		if got := statusStyle(dim).GetForeground(); got != lipgloss.Color(colFaint) {
+			t.Errorf("statusStyle(%q) foreground = %v, want faint %v", dim, got, colFaint)
 		}
 	}
-	if bg := statusStyle("dead").GetBackground(); bg != lipgloss.Color("9") {
-		t.Errorf("statusStyle(dead) background = %v, want red (9)", bg)
+	if bg := statusStyle("dead").GetBackground(); bg != lipgloss.Color(colBad) {
+		t.Errorf("statusStyle(dead) background = %v, want red (%s)", bg, colBad)
 	}
 	if fg := statusStyle("review_pending").GetForeground(); fg != (lipgloss.NoColor{}) {
 		t.Errorf("statusStyle(review_pending) foreground = %v, want none", fg)
@@ -188,15 +189,15 @@ func TestStatusStyleMapping(t *testing.T) {
 // P3: the reaction posture label is colored — escalated red (needs a human),
 // ready-to-merge green, an active retry/rework yellow, everything else unstyled.
 func TestReactingStyleMapping(t *testing.T) {
-	if fg := reactingStyle("escalated").GetForeground(); fg != lipgloss.Color("9") {
-		t.Errorf("escalated foreground = %v, want red (9)", fg)
+	if fg := reactingStyle("escalated").GetForeground(); fg != lipgloss.Color(colBad) {
+		t.Errorf("escalated foreground = %v, want red (%s)", fg, colBad)
 	}
-	if fg := reactingStyle("ready to merge").GetForeground(); fg != lipgloss.Color("10") {
-		t.Errorf("ready to merge foreground = %v, want green (10)", fg)
+	if fg := reactingStyle("ready to merge").GetForeground(); fg != lipgloss.Color(colGood) {
+		t.Errorf("ready to merge foreground = %v, want green (%s)", fg, colGood)
 	}
 	for _, y := range []string{"ci retry 1/2", "addressing review", "rebasing"} {
-		if fg := reactingStyle(y).GetForeground(); fg != lipgloss.Color("11") {
-			t.Errorf("reactingStyle(%q) foreground = %v, want yellow (11)", y, fg)
+		if fg := reactingStyle(y).GetForeground(); fg != lipgloss.Color(colWarn) {
+			t.Errorf("reactingStyle(%q) foreground = %v, want yellow (%s)", y, fg, colWarn)
 		}
 	}
 	for _, none := range []string{"", "awaiting review"} {
@@ -226,8 +227,8 @@ func TestSessionsRenderReactingLabel(t *testing.T) {
 		t.Errorf("escalated posture must render in the view:\n%s", v)
 	}
 	// The reacting cell for an escalated session is styled red so it stands out.
-	if fg := reactingStyle(m.sessions.data.Sessions[0].Reacting).GetForeground(); fg != lipgloss.Color("9") {
-		t.Errorf("escalated cell foreground = %v, want red (9)", fg)
+	if fg := reactingStyle(m.sessions.data.Sessions[0].Reacting).GetForeground(); fg != lipgloss.Color(colBad) {
+		t.Errorf("escalated cell foreground = %v, want red (%s)", fg, colBad)
 	}
 	// No tmux → detail card; it carries the reacting line and the raw review.
 	for _, want := range []string{"reacting:", "review:", "REVIEW_REQUIRED"} {

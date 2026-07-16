@@ -377,6 +377,11 @@ func (m *rootModel) tabBar() string {
 func (m *rootModel) View() tea.View {
 	v := tea.NewView(m.viewString())
 	v.AltScreen = true
+	// Paint the whole alt-screen with the cockpit canvas so the frame is one
+	// opaque, deliberate surface — the palette's tints and faint text are tuned
+	// for this dark background, so an unset (light or theme-dependent) terminal
+	// background is what made the same frame look muddy elsewhere.
+	v.BackgroundColor = canvasColor()
 	// While an embed is focused, capture the mouse so wheel-scroll can be
 	// forwarded to it (the cockpit itself is keyboard-driven).
 	if m.embedFocused {

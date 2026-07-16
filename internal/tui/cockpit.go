@@ -86,7 +86,9 @@ func (m *rootModel) cockpitLines() []string {
 	lines = append(lines, topExtra...)
 	lines = append(lines, mid...)
 	if msg != "" {
-		lines = append(lines, msg)
+		// Clip to width: flashes carry raw daemon errors (e.g. a git failure on a
+		// dirty-worktree kill) that would otherwise wrap and smear the frame.
+		lines = append(lines, previewLine(msg, W))
 	}
 	lines = append(lines, keys)
 	return lines
@@ -366,7 +368,7 @@ func (m *rootModel) sessionsBody(w, h int) []string {
 	for i := start; i < end; i++ {
 		line := padCells(rows[i], colw)
 		if i == selRow {
-			out = append(out, highlightRow(line, w, selRowBg))
+			out = append(out, highlightRow(line, w, bgSGR(colSel)))
 		} else {
 			out = append(out, previewLine(line, w))
 		}
@@ -479,8 +481,11 @@ func (m *rootModel) triageBody(w int) []string {
 		out = append(out, "", faintText.Render("no active sessions"))
 		return out
 	}
-	if spark := sparkline(m.attnHist, w-22); spark != "" {
-		out = append(out, spark+"  "+faintText.Render("needs-you · last hour"))
+	// Sparkline + a short trailing label, sized so the label always fits the rail
+	// (the old "needs-you · last hour" got clipped to "…last hou" at rail width).
+	trend := "needs-you"
+	if spark := sparkline(m.attnHist, w-lipgloss.Width(trend)-2); spark != "" {
+		out = append(out, spark+"  "+faintText.Render(trend))
 	} else {
 		out = append(out, "")
 	}
