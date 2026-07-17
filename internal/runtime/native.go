@@ -213,7 +213,7 @@ func (n *Native) Spawn(ctx context.Context, p config.Project, issue linear.Issue
 	baseID := SessionID(p.Name, issue.Identifier)
 	baseBranch := issue.BranchName
 	if baseBranch == "" {
-		baseBranch = "lola/" + strings.ToLower(issue.Identifier)
+		baseBranch = n.Cfg.BranchPrefixForProject(p.Name) + strings.ToLower(issue.Identifier)
 	}
 	id, branch, err := n.freeSessionSlot(ctx, p, baseID, baseBranch)
 	if err != nil {

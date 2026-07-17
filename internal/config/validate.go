@@ -71,6 +71,16 @@ func (c *Config) AgentForProject(name string) string {
 	return "claude"
 }
 
+// BranchPrefixForProject resolves the branch-name prefix for the named project:
+// the project's BranchPrefix when set, else DefaultBranchPrefix ("lola/"). A
+// name that resolves to no project falls back to the default.
+func (c *Config) BranchPrefixForProject(name string) string {
+	if pr := c.ProjectByName(name); pr != nil && pr.BranchPrefix != "" {
+		return pr.BranchPrefix
+	}
+	return DefaultBranchPrefix
+}
+
 // PollRepo returns the GitHub "owner/name" repo the poll's PR checks run
 // against: the poll's own `repo` when set, else the referenced [[project]]'s
 // repo. Empty when neither is configured (PR checks then fail closed).
@@ -94,6 +104,10 @@ func (c *Config) PollRepo(p *Poll) string {
 // layer's) job.
 func (c *Config) Validate() error {
 	var errs []error
+
+	// Structural errors from flattening nested [[project.poll]] tables (a nested
+	// poll naming a different project) — recorded at load time, surfaced here.
+	errs = append(errs, c.nestConflicts...)
 
 	if c.Defaults.GlobalCap <= 0 {
 		errs = append(errs, errors.New("defaults.global_cap must be > 0"))

@@ -189,6 +189,164 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	}
 }
 
+// A pre-Kind config with top-level [[poll]] loads, then the first Save migrates
+// it in place to nested [[project.poll]] with no top-level [[poll]] left, and a
+// reload is identical — zero-loss, lazy migration.
+func TestMigrateTopLevelPollsToNested(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	old := `
+[defaults]
+global_cap = 5
+
+[[project]]
+name = "nori"
+path = "/srv/nori"
+
+[[poll]]
+name = "triage"
+project = "nori"
+team_id = "t1"
+match_mode = "any"
+assignee_mode = "anyone"
+cycle_mode = "none"
+dedup_mode = "seen"
+concurrency_cap = 1
+`
+	if err := os.WriteFile(path, []byte(old), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Polls) != 1 || c.Polls[0].Project != "nori" {
+		t.Fatalf("flatten of top-level poll: %+v", c.Polls)
+	}
+
+	if err := c.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(raw)
+	if !strings.Contains(s, "[[project.poll]]") {
+		t.Errorf("Save should re-nest the poll under [[project.poll]]:\n%s", s)
+	}
+	if strings.Contains(s, "[[poll]]") {
+		t.Errorf("Save should drop the migrated top-level [[poll]]:\n%s", s)
+	}
+
+	c2, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(c.Polls, c2.Polls) {
+		t.Errorf("reload after migration mismatch:\n before: %+v\n after:  %+v", c.Polls, c2.Polls)
+	}
+}
+
+// A poll whose project does not resolve is never dropped: it round-trips as a
+// top-level [[poll]] orphan and keeps failing Validate until fixed.
+func TestOrphanPollStaysTopLevelAndFailsValidate(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	c := &Config{}
+	c.Defaults.GlobalCap = 5
+	c.Projects = []Project{{Name: "nori", Path: "/srv/nori", DefaultBranch: "main"}}
+	c.Polls = []Poll{{Name: "ghostpoll", Project: "ghost", TeamID: "t1", CycleMode: "none", MatchMode: "any", AssigneeMode: "anyone", DedupMode: "seen", ConcurrencyCap: 1}}
+
+	if err := c.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "[[poll]]") {
+		t.Errorf("orphan poll (unresolvable project) must stay a top-level [[poll]]:\n%s", raw)
+	}
+
+	reloaded, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reloaded.Validate(); err == nil || !strings.Contains(err.Error(), "ghost") {
+		t.Errorf("orphan poll must fail Validate on its unresolved project, got: %v", err)
+	}
+}
+
+// A nested [[project.poll]] that names a DIFFERENT project is a hand-edit
+// conflict: dropped from the flat set and surfaced by Validate.
+func TestNestedPollProjectConflictErrors(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	body := `
+[defaults]
+global_cap = 5
+
+[[project]]
+name = "nori"
+path = "/srv/nori"
+
+[[project.poll]]
+name = "weird"
+project = "other"
+team_id = "t1"
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range c.Polls {
+		if p.Name == "weird" {
+			t.Errorf("a conflicting nested poll must be dropped from the flat Polls set")
+		}
+	}
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "must not name a different project") {
+		t.Errorf("nested-poll project conflict must fail Validate, got: %v", err)
+	}
+}
+
+// Poll names are global across projects despite the nesting — two same-named
+// polls under different projects share the daemon's seen map, so they are
+// rejected.
+func TestDuplicatePollNameAcrossProjectsRejected(t *testing.T) {
+	c := &Config{}
+	c.Defaults.GlobalCap = 5
+	c.Projects = []Project{
+		{Name: "a", Path: "/a", DefaultBranch: "main"},
+		{Name: "b", Path: "/b", DefaultBranch: "main"},
+	}
+	mk := func(proj string) Poll {
+		return Poll{Name: "nightly", Project: proj, TeamID: "t1", CycleMode: "none", MatchMode: "any", AssigneeMode: "anyone", DedupMode: "seen", ConcurrencyCap: 1}
+	}
+	c.Polls = []Poll{mk("a"), mk("b")}
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "duplicate name") {
+		t.Errorf("a poll name duplicated across projects must be rejected, got: %v", err)
+	}
+}
+
+func TestBranchPrefixForProject(t *testing.T) {
+	c := &Config{Projects: []Project{
+		{Name: "def", Path: "/d"},
+		{Name: "custom", Path: "/c", BranchPrefix: "feat/"},
+	}}
+	if got := c.BranchPrefixForProject("def"); got != DefaultBranchPrefix {
+		t.Errorf("unset prefix = %q, want %q", got, DefaultBranchPrefix)
+	}
+	if got := c.BranchPrefixForProject("custom"); got != "feat/" {
+		t.Errorf("custom prefix = %q, want feat/", got)
+	}
+	if got := c.BranchPrefixForProject("nope"); got != DefaultBranchPrefix {
+		t.Errorf("unknown project prefix = %q, want default %q", got, DefaultBranchPrefix)
+	}
+}
+
 func TestLoadClampAndEndpointDefault(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
 	body := `
