@@ -1220,11 +1220,109 @@ func TestIssueFromSessionID(t *testing.T) {
 		{"lola-nori-eng-42", "other", ""},
 		{"lola-nori-eng-42", "", ""},
 		{"unrelated", "nori", ""},
+		{"lola-nori-open-pr-42", "nori", ""},   // manual session: no Linear issue
+		{"lola-nori-open-feat-foo", "nori", ""}, // manual session: no Linear issue
 	}
 	for _, c := range cases {
 		if got := issueFromSessionID(c.id, c.project); got != c.want {
 			t.Errorf("issueFromSessionID(%q, %q) = %q, want %q", c.id, c.project, got, c.want)
 		}
+	}
+}
+
+func TestManualSessionID(t *testing.T) {
+	cases := []struct{ project, label, want string }{
+		{"nori", "pr-42", "lola-nori-open-pr-42"},
+		{"nori", "feat/foo", "lola-nori-open-feat-foo"},
+		{"my-app", "Feature/Bar Baz", "lola-my-app-open-feature-bar-baz"},
+		{"nori", "///", "lola-nori-open-ref"}, // slugs to empty -> "ref"
+	}
+	for _, c := range cases {
+		if got := ManualSessionID(c.project, c.label); got != c.want {
+			t.Errorf("ManualSessionID(%q, %q) = %q, want %q", c.project, c.label, got, c.want)
+		}
+	}
+}
+
+func TestIsManualSessionID(t *testing.T) {
+	cases := []struct {
+		id, project string
+		want        bool
+	}{
+		{"lola-nori-open-pr-42", "nori", true},
+		{"lola-nori-eng-42", "nori", false},
+		{"lola-my-app-open-x", "my-app", true},
+		{"lola-nori-open-x", "other", false}, // wrong project
+		{"lola-nori-open-x", "", false},      // no project resolved
+	}
+	for _, c := range cases {
+		if got := isManualSessionID(c.id, c.project); got != c.want {
+			t.Errorf("isManualSessionID(%q, %q) = %v, want %v", c.id, c.project, got, c.want)
+		}
+	}
+}
+
+// TestOpenHappyPath: `Open` checks out a PR head in a DETACHED worktree, drops a
+// plain shell (no agent), and returns a Manual/"shell" session. The custom git
+// case handles the detached add (positional args differ from Create's -b form)
+// and resolves FETCH_HEAD to a sha; .git is made a real dir so excludeLolaDir
+// writes into <dir>/.git/info/exclude.
+func TestOpenHappyPath(t *testing.T) {
+	gitCases := `*"worktree add --detach"*)
+  mkdir -p "$6/.git"
+  exit 0
+  ;;
+*"rev-parse --verify --quiet FETCH_HEAD"*)
+  echo deadbeefcafe
+  exit 0
+  ;;`
+	f := newFixture(t, gitCases, "")
+	f.n.Cfg.Projects[0].Env = map[string]string{"DATABASE_URL": "postgres://x"}
+	f.p.Env = f.n.Cfg.Projects[0].Env
+	ctx := context.Background()
+
+	id := "lola-nori-open-pr-42"
+	got, err := f.n.Open(ctx, f.p, id, "pull/42/head", "pr-42")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	dir := filepath.Join(f.root, "nori", id)
+	want := session.Session{
+		ID: id, Source: "native", Manual: true, Project: "nori",
+		Title: "manual: pr-42", Branch: "pr-42", Repo: "owner/nori",
+		TmuxName: id, Status: "shell",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("session = %+v\nwant      %+v", got, want)
+	}
+
+	gitLog := loggedArgs(t, f.gitLog)
+	if !strings.Contains(gitLog, "-C "+f.repo+" fetch --no-tags origin pull/42/head") {
+		t.Errorf("expected a PR-head fetch:\n%s", gitLog)
+	}
+	if !strings.Contains(gitLog, "worktree add --detach "+dir+" deadbeefcafe") {
+		t.Errorf("expected a detached worktree add:\n%s", gitLog)
+	}
+
+	// A plain shell launch that sources .lola/env — never an agent binary.
+	tmuxLog := loggedArgs(t, f.tmuxLog)
+	if !strings.Contains(tmuxLog, "new-session -d -s "+id) {
+		t.Errorf("expected a tmux session for the shell:\n%s", tmuxLog)
+	}
+	if strings.Contains(tmuxLog, "claude") || strings.Contains(tmuxLog, "prompt.md") {
+		t.Errorf("a manual shell must launch no coding agent:\n%s", tmuxLog)
+	}
+
+	// .lola/env carries the project env (for running/tests) but NO secret.
+	env, err := os.ReadFile(filepath.Join(dir, lolaDir, "env"))
+	if err != nil {
+		t.Fatalf("read .lola/env: %v", err)
+	}
+	if !strings.Contains(string(env), "DATABASE_URL=") {
+		t.Errorf(".lola/env missing project env:\n%s", env)
+	}
+	if strings.Contains(string(env), "LINEAR_API_KEY") || strings.Contains(string(env), "LOLA_SESSION") {
+		t.Errorf(".lola/env must not export secrets/session for a manual shell:\n%s", env)
 	}
 }
 

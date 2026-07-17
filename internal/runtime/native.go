@@ -650,9 +650,17 @@ func (n *Native) Adopt(ctx context.Context) ([]session.Session, error) {
 				status = StatusWorking
 				paired[id] = true
 			}
+			// A manually-opened shell has no coding agent: recover it as such from
+			// its ID shape (backstop for a lost store record) so a live one comes
+			// back as "shell" and the daemon keeps it out of the control loop.
+			manual := isManualSessionID(id, p.Name)
+			if manual && status == StatusWorking {
+				status = "shell"
+			}
 			out = append(out, session.Session{
 				ID:       id,
 				Source:   "native",
+				Manual:   manual,
 				Project:  p.Name,
 				Issue:    issueFromSessionID(id, p.Name),
 				Repo:     p.Repo,
@@ -667,9 +675,11 @@ func (n *Native) Adopt(ctx context.Context) ([]session.Session, error) {
 			continue
 		}
 		project := n.projectForSessionName(name)
+		manual := isManualSessionID(name, project)
 		out = append(out, session.Session{
 			ID:       name,
 			Source:   "native",
+			Manual:   manual,
 			Project:  project,
 			Issue:    issueFromSessionID(name, project),
 			TmuxName: name,
@@ -711,7 +721,15 @@ func (n *Native) Kill(ctx context.Context, s session.Session, removeWorktree, fo
 	if _, err := os.Stat(dir); errors.Is(err, fs.ErrNotExist) {
 		return nil // already gone
 	}
-	if err := n.WT.Remove(ctx, *p, dir, s.Branch, force); err != nil {
+	// A manual session's worktree is DETACHED and its recorded Branch is the
+	// UPSTREAM branch/PR label, not a lola-owned branch — pass "" so Remove never
+	// deletes it (deleteBranch no-ops on ""). Only Spawn-created branches, which
+	// lola owns, are safe to delete on teardown.
+	branch := s.Branch
+	if s.Manual {
+		branch = ""
+	}
+	if err := n.WT.Remove(ctx, *p, dir, branch, force); err != nil {
 		return fmt.Errorf("runtime: kill %s: %w", s.ID, err)
 	}
 	return nil
@@ -787,11 +805,26 @@ func issueFromSessionID(id, project string) string {
 	if !ok || project == "" || rest == "" {
 		return ""
 	}
+	if strings.HasPrefix(rest, manualInfix) {
+		return "" // a manual (`lola open`) session has no Linear issue
+	}
 	rest = attemptSuffixRe.ReplaceAllString(rest, "")
 	if rest == "" {
 		return ""
 	}
 	return strings.ToUpper(rest)
+}
+
+// isManualSessionID reports whether id is a manual (`lola open`) session ID for
+// the given project — i.e. "lola-<project>-open-…". project may be "" (a
+// tmux-only session whose project could not be resolved), in which case no ID
+// matches and the session is treated as non-manual.
+func isManualSessionID(id, project string) bool {
+	if project == "" {
+		return false
+	}
+	rest, ok := strings.CutPrefix(id, sessionPrefix+project+"-")
+	return ok && strings.HasPrefix(rest, manualInfix)
 }
 
 // projectForSessionName finds the configured project a tmux-only session name

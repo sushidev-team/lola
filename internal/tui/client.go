@@ -144,6 +144,16 @@ func Send(raw string) error {
 		} else {
 			fmt.Println("ok")
 		}
+	case "open":
+		var d protocol.OpenData
+		if err := json.Unmarshal(resp.Data, &d); err != nil {
+			return fmt.Errorf("bad open data: %w", err)
+		}
+		if d.Message != "" {
+			fmt.Println(d.Message)
+		} else {
+			fmt.Println("ok")
+		}
 	default:
 		fmt.Println("ok")
 	}

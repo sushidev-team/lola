@@ -676,6 +676,13 @@ func (m *rootModel) keybar(w int) string {
 	switch {
 	case s.filtering:
 		return previewLine(faintText.Render("type to filter · enter apply · esc clear"), w)
+	case s.opening:
+		proj := s.openProject
+		if proj == "" {
+			proj = "?"
+		}
+		return previewLine(warnText.Render("open ")+faintText.Render("in "+proj+": ")+s.openInput+"_"+
+			faintText.Render("  · enter open · esc cancel · \"<project> <branch|PR#>\" to pick project"), w)
 	case s.answering:
 		return previewLine(faintText.Render("enter send · esc cancel"), w)
 	case s.confirmKill:
@@ -701,11 +708,14 @@ func (m *rootModel) keybar(w int) string {
 			if sel.Status == "needs_input" {
 				keys = append(keys, "a answer")
 			}
+			if sel.Status == "dead" || sel.Status == "session_ended" {
+				keys = append(keys, "R revive")
+			}
 			if sel.PRURL != "" {
 				keys = append(keys, "o PR", "c coderabbit")
 			}
 		}
-		keys = append(keys, "x kill", "/ filter", "! needs-you", "V lens", "n next!", "tab → polls")
+		keys = append(keys, "x kill", "O open", "/ filter", "! needs-you", "V lens", "n next!", "tab → polls")
 	}
 	keys = append(keys, "P project", "S settings", "d doctor")
 	if m.manageDaemon() {

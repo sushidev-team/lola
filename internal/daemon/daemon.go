@@ -39,6 +39,7 @@ import (
 // mirrors runtime.Native's exported lifecycle surface.
 type NativeAPI interface {
 	Spawn(ctx context.Context, p config.Project, issue linear.Issue) (session.Session, error)
+	Open(ctx context.Context, p config.Project, sessionID, ref, branch string) (session.Session, error)
 	Adopt(ctx context.Context) ([]session.Session, error)
 	Kill(ctx context.Context, s session.Session, removeWorktree, force bool) error
 	Alive(ctx context.Context, s session.Session) bool
@@ -714,6 +715,17 @@ func (d *Daemon) adoptNativeSessions(ctx context.Context) {
 	}
 	for _, s := range found {
 		if prev, ok := d.sessions.Get(s.ID); ok {
+			// A manually-opened shell session (`lola open`) must stay out of the
+			// control loop across a restart: preserve the flag (Adopt also re-detects
+			// it from the ID shape) and its "no Linear issue" identity so the observer
+			// never runs reactions / write-back / review against it.
+			if prev.Manual {
+				s.Manual = true
+				s.Issue = ""
+				if s.Status == "working" {
+					s.Status = "shell"
+				}
+			}
 			if s.Branch == "" {
 				s.Branch = prev.Branch
 			}

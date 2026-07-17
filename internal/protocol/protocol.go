@@ -70,9 +70,16 @@ import (
 // PR yields a "skipped" CodeRabbitData (not an error); an unknown session or a gh
 // failure is an error.
 type Request struct {
-	Cmd    string `json:"cmd"` // stop|status|reload|enable|disable|pollOnce|sessions|hookEvent|kill|revive|pane|answer|review|coderabbit
+	Cmd    string `json:"cmd"` // stop|status|reload|enable|disable|pollOnce|sessions|hookEvent|kill|revive|pane|answer|review|coderabbit|open
 	Poll   string `json:"poll,omitempty"`
 	DryRun bool   `json:"dryRun,omitempty"`
+
+	// Open fields, set only for cmd=open: manually check out a branch/PR of a
+	// project into a throwaway worktree + shell. Project names the [[project]];
+	// Ref is the target — a bare PR number (fetched as refs/pull/<n>/head) or a
+	// branch name.
+	Project string `json:"project,omitempty"`
+	Ref     string `json:"ref,omitempty"`
 
 	// Hook callback fields, set only for cmd=hookEvent.
 	Session string `json:"session,omitempty"` // lola session ID ($LOLA_SESSION in the agent's pane); also the kill/pane/answer target
@@ -195,6 +202,18 @@ type ReviveData struct {
 	Revived  bool   `json:"revived"`
 	TmuxName string `json:"tmuxName,omitempty"`
 	Message  string `json:"message,omitempty"`
+}
+
+// OpenData is Response.Data for cmd=open: a branch/PR manually checked out into
+// a throwaway DETACHED worktree with a plain shell (no coding agent), for running
+// and testing a PR. SessionID is the created session's ID (and its tmux target),
+// Worktree the checkout directory, Branch the human-readable label opened, and
+// Message a short human-readable outcome for the CLI/TUI to print.
+type OpenData struct {
+	SessionID string `json:"sessionId"`
+	Worktree  string `json:"worktree,omitempty"`
+	Branch    string `json:"branch,omitempty"`
+	Message   string `json:"message,omitempty"`
 }
 
 // PaneData is Response.Data for cmd=pane (PLAN P7): the captured tmux pane text

@@ -41,9 +41,13 @@ type fakeNative struct {
 	killErr       error // returned from Kill (e.g. worktree.ErrDirty)
 	revives       []string // session IDs passed to Revive
 	reviveErr     error    // returned from Revive
+	opens         []nativeOpenCall
+	openErr       error // returned from Open
 }
 
 type nativeSpawnCall struct{ project, identifier string }
+
+type nativeOpenCall struct{ project, id, ref, branch string }
 
 type nativeKillCall struct {
 	id             string
@@ -77,6 +81,33 @@ func (f *fakeNative) Spawn(ctx context.Context, p config.Project, is linear.Issu
 		TmuxName:  id,
 		Status:    runtime.StatusWorking,
 	}, nil
+}
+
+func (f *fakeNative) Open(ctx context.Context, p config.Project, id, ref, branch string) (session.Session, error) {
+	f.mu.Lock()
+	f.opens = append(f.opens, nativeOpenCall{p.Name, id, ref, branch})
+	err := f.openErr
+	f.mu.Unlock()
+	if err != nil {
+		return session.Session{}, err
+	}
+	return session.Session{
+		ID:       id,
+		Source:   "native",
+		Manual:   true,
+		Project:  p.Name,
+		Title:    "manual: " + branch,
+		Branch:   branch,
+		Repo:     p.Repo,
+		TmuxName: id,
+		Status:   "shell",
+	}, nil
+}
+
+func (f *fakeNative) openCalls() []nativeOpenCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.opens)
 }
 
 func (f *fakeNative) Adopt(ctx context.Context) ([]session.Session, error) {

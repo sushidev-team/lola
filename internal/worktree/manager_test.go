@@ -233,6 +233,77 @@ func TestBranchExists(t *testing.T) {
 	}
 }
 
+func TestCheckoutRefFetchesPRHeadDetached(t *testing.T) {
+	// Fetch succeeds; FETCH_HEAD resolves to a sha; the worktree is added DETACHED
+	// at that sha — no branch is ever created.
+	bin, argsLog := fakeGit(t, stub{match: "rev-parse --verify --quiet FETCH_HEAD", stdout: "deadbeef"})
+	root, repo := t.TempDir(), t.TempDir()
+	m := &Manager{GitBin: bin, Root: root}
+
+	dir, err := m.CheckoutRef(context.Background(), testProject(repo), "lola-nori-open-pr-42", "pull/42/head")
+	if err != nil {
+		t.Fatalf("CheckoutRef: %v", err)
+	}
+	if want := filepath.Join(root, "nori", "lola-nori-open-pr-42"); dir != want {
+		t.Errorf("dir = %q, want %q", dir, want)
+	}
+	log := loggedArgs(t, argsLog)
+	if !strings.Contains(log, "-C "+repo+" fetch --no-tags origin pull/42/head") {
+		t.Errorf("expected fetch of the PR head; got:\n%s", log)
+	}
+	if !strings.Contains(log, "-C "+repo+" worktree add --detach "+dir+" deadbeef") {
+		t.Errorf("expected detached worktree add at the resolved sha; got:\n%s", log)
+	}
+	if strings.Contains(log, "worktree add -b") {
+		t.Errorf("a manual checkout must NEVER create a branch:\n%s", log)
+	}
+}
+
+func TestCheckoutRefFallsBackToLocalRef(t *testing.T) {
+	// Fetch fails (offline / no such remote ref): resolve the ref locally instead.
+	// The first candidate that verifies (origin/<ref>) wins.
+	bin, argsLog := fakeGit(t,
+		stub{match: "fetch", exit: 1},
+		stub{match: "rev-parse --verify --quiet refs/remotes/origin/feat/x", stdout: "cafe1234"},
+	)
+	root, repo := t.TempDir(), t.TempDir()
+	m := &Manager{GitBin: bin, Root: root}
+
+	dir, err := m.CheckoutRef(context.Background(), testProject(repo), "lola-nori-open-feat-x", "feat/x")
+	if err != nil {
+		t.Fatalf("CheckoutRef: %v", err)
+	}
+	if !strings.Contains(loggedArgs(t, argsLog), "-C "+repo+" worktree add --detach "+dir+" cafe1234") {
+		t.Errorf("expected detached add at the local-resolved sha; got:\n%s", loggedArgs(t, argsLog))
+	}
+}
+
+func TestCheckoutRefUnresolvableRefErrors(t *testing.T) {
+	// Fetch fails and no local candidate verifies: fail without a worktree add.
+	bin, argsLog := fakeGit(t, stub{match: "fetch", exit: 1}, stub{match: "rev-parse", exit: 1})
+	root, repo := t.TempDir(), t.TempDir()
+	m := &Manager{GitBin: bin, Root: root}
+
+	if _, err := m.CheckoutRef(context.Background(), testProject(repo), "lola-nori-open-nope", "no/such/ref"); err == nil {
+		t.Fatal("CheckoutRef on an unresolvable ref: want error, got nil")
+	}
+	if strings.Contains(loggedArgs(t, argsLog), "worktree add") {
+		t.Errorf("must not attempt a worktree add for an unresolvable ref:\n%s", loggedArgs(t, argsLog))
+	}
+}
+
+func TestCheckoutRefRejectsEmptyRefAndBadSegments(t *testing.T) {
+	bin, _ := fakeGit(t)
+	m := &Manager{GitBin: bin, Root: t.TempDir()}
+	p := testProject(t.TempDir())
+	if _, err := m.CheckoutRef(context.Background(), p, "s1", ""); err == nil {
+		t.Error("empty ref: want error")
+	}
+	if _, err := m.CheckoutRef(context.Background(), p, "../escape", "main"); err == nil {
+		t.Error("path-escaping session id: want error")
+	}
+}
+
 func TestCreateRejectsPathEscapingNames(t *testing.T) {
 	bin, argsLog := fakeGit(t)
 	m := &Manager{GitBin: bin, Root: t.TempDir()}

@@ -96,37 +96,7 @@ func (m *Manager) Create(ctx context.Context, p config.Project, sessionID, branc
 		return "", errors.New("worktree: branch must not be empty")
 	}
 	dir := filepath.Join(m.Root, p.Name, sessionID)
-
-	if _, err := os.Stat(dir); err == nil {
-		registered, err := m.registered(ctx, p.Path)
-		if err != nil {
-			return "", err
-		}
-		if registered[filepath.Clean(dir)] {
-			return "", fmt.Errorf("worktree: %s already exists and is a registered worktree of %s", dir, p.Path)
-		}
-		// Unregistered leftover. Only a trivially empty one is cleaned (see
-		// the doc comment): anything with contents may hold real uncommitted
-		// work whose dirtiness cannot be verified anymore — fail closed and
-		// name the dir instead of deleting it.
-		if err := m.guardRemovable(p, dir); err != nil {
-			return "", err
-		}
-		entries, err := os.ReadDir(dir)
-		if err != nil {
-			return "", fmt.Errorf("worktree: inspect stale dir: %w", err)
-		}
-		if len(entries) > 0 {
-			return "", fmt.Errorf("worktree: %s exists but is not a registered worktree of %s and is not empty; refusing to delete it (inspect its contents and remove it manually)", dir, p.Path)
-		}
-		if err := os.Remove(dir); err != nil {
-			return "", fmt.Errorf("worktree: clean stale dir: %w", err)
-		}
-	} else if !errors.Is(err, fs.ErrNotExist) {
-		return "", err
-	}
-
-	if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
+	if err := m.ensureCleanDir(ctx, p, dir); err != nil {
 		return "", err
 	}
 
@@ -135,6 +105,98 @@ func (m *Manager) Create(ctx context.Context, p config.Project, sessionID, branc
 		start = p.DefaultBranch
 	}
 	if _, _, err := m.git(ctx, "-C", p.Path, "worktree", "add", "-b", branch, dir, start); err != nil {
+		return "", err
+	}
+	return dir, nil
+}
+
+// ensureCleanDir readies Root/<project>/<session> for a fresh `git worktree
+// add`: it applies the same idempotence/fail-closed discipline Create documents
+// (a registered worktree is an error; an EMPTY unregistered leftover is cleaned;
+// a NON-EMPTY unregistered one is kept and named) and then creates the parent
+// directory. Shared by Create and CheckoutRef so both honor the discipline.
+func (m *Manager) ensureCleanDir(ctx context.Context, p config.Project, dir string) error {
+	if _, err := os.Stat(dir); err == nil {
+		registered, err := m.registered(ctx, p.Path)
+		if err != nil {
+			return err
+		}
+		if registered[filepath.Clean(dir)] {
+			return fmt.Errorf("worktree: %s already exists and is a registered worktree of %s", dir, p.Path)
+		}
+		// Unregistered leftover. Only a trivially empty one is cleaned (see
+		// Create's doc comment): anything with contents may hold real uncommitted
+		// work whose dirtiness cannot be verified anymore — fail closed and name
+		// the dir instead of deleting it.
+		if err := m.guardRemovable(p, dir); err != nil {
+			return err
+		}
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			return fmt.Errorf("worktree: inspect stale dir: %w", err)
+		}
+		if len(entries) > 0 {
+			return fmt.Errorf("worktree: %s exists but is not a registered worktree of %s and is not empty; refusing to delete it (inspect its contents and remove it manually)", dir, p.Path)
+		}
+		if err := os.Remove(dir); err != nil {
+			return fmt.Errorf("worktree: clean stale dir: %w", err)
+		}
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	return os.MkdirAll(filepath.Dir(dir), 0o755)
+}
+
+// CheckoutRef adds a DETACHED-HEAD worktree at Root/<p.Name>/<sessionID>
+// pointing at an EXISTING ref (a PR head or a branch), for manually opening a
+// PR/branch to run and test — unlike Create it never creates OR deletes a
+// branch. fetchRef is fetched from origin first (so a PR head passed as
+// "pull/<n>/head" or a branch that only lives on the remote is available), then
+// pinned to a concrete commit via FETCH_HEAD; on fetch failure it falls back to
+// resolving fetchRef locally (origin/<ref>, then refs/heads/<ref>, then the raw
+// ref) so an already-present branch still opens offline. Detaching HEAD is what
+// makes teardown safe: there is no lola-owned branch to delete, so removing the
+// worktree can never touch the upstream branch, and the checkout never conflicts
+// with the same branch being live in another worktree. Returns the worktree dir.
+func (m *Manager) CheckoutRef(ctx context.Context, p config.Project, sessionID, fetchRef string) (string, error) {
+	if m.Root == "" {
+		return "", errors.New("worktree: Root not set")
+	}
+	if err := validSegment(p.Name); err != nil {
+		return "", fmt.Errorf("worktree: project name: %w", err)
+	}
+	if err := validSegment(sessionID); err != nil {
+		return "", fmt.Errorf("worktree: session id: %w", err)
+	}
+	if fetchRef == "" {
+		return "", errors.New("worktree: ref must not be empty")
+	}
+	dir := filepath.Join(m.Root, p.Name, sessionID)
+	if err := m.ensureCleanDir(ctx, p, dir); err != nil {
+		return "", err
+	}
+
+	// Resolve the ref to a concrete commit. Fetch from origin, then pin
+	// FETCH_HEAD to a sha (FETCH_HEAD is a mutable global — resolve it now, not
+	// at `worktree add` time). Fall back to a local ref when the fetch fails.
+	commit := ""
+	if _, _, err := m.git(ctx, "-C", p.Path, "fetch", "--no-tags", "origin", fetchRef); err == nil {
+		if sha, _, err := m.git(ctx, "-C", p.Path, "rev-parse", "--verify", "--quiet", "FETCH_HEAD"); err == nil {
+			commit = strings.TrimSpace(sha)
+		}
+	}
+	if commit == "" {
+		for _, cand := range []string{"refs/remotes/origin/" + fetchRef, "refs/heads/" + fetchRef, fetchRef} {
+			if sha, _, err := m.git(ctx, "-C", p.Path, "rev-parse", "--verify", "--quiet", cand); err == nil {
+				commit = strings.TrimSpace(sha)
+				break
+			}
+		}
+	}
+	if commit == "" {
+		return "", fmt.Errorf("worktree: cannot resolve ref %q in %s (not a PR head, a remote branch, or a local ref)", fetchRef, p.Path)
+	}
+	if _, _, err := m.git(ctx, "-C", p.Path, "worktree", "add", "--detach", dir, commit); err != nil {
 		return "", err
 	}
 	return dir, nil
