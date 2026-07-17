@@ -70,7 +70,7 @@ import (
 // PR yields a "skipped" CodeRabbitData (not an error); an unknown session or a gh
 // failure is an error.
 type Request struct {
-	Cmd    string `json:"cmd"` // stop|status|reload|enable|disable|pollOnce|sessions|projects|hookEvent|kill|revive|pane|answer|review|coderabbit|open
+	Cmd    string `json:"cmd"` // stop|status|reload|enable|disable|pollOnce|sessions|projects|prs|hookEvent|kill|revive|pane|answer|review|coderabbit|open
 	Poll   string `json:"poll,omitempty"`
 	DryRun bool   `json:"dryRun,omitempty"`
 
@@ -98,6 +98,11 @@ type Request struct {
 	// Lines optionally bounds cmd=pane's capture to the last N rendered rows of
 	// the target pane; 0 means the daemon's default (~40).
 	Lines int `json:"lines,omitempty"`
+
+	// Args carries the typed argument payload for the project-centric commands
+	// (prs, tickets, openManual, …) whose inputs don't fit the flat fields above.
+	// Each such handler unmarshals it into its own <Cmd>Args type.
+	Args json.RawMessage `json:"args,omitempty"`
 }
 
 // Response is one line of JSON sent back by the daemon.
@@ -231,6 +236,37 @@ type ProjectInfo struct {
 	NeedsYou    int `json:"needsYou"`
 	CIRed       int `json:"ciRed"`
 	OpenPRs     int `json:"openPrs"`
+}
+
+// PrsArgs is the argument payload for cmd=prs: which project's open PRs to list.
+type PrsArgs struct {
+	Project string `json:"project"`
+	Refresh bool   `json:"refresh,omitempty"` // bypass the TTL cache and re-exec gh
+}
+
+// PrsData is Response.Data for cmd=prs: the open pull requests for a project's
+// repo, flattened for the picker. Served from a short-TTL cache (the daemon
+// execs `gh pr list` on a miss); AgeSeconds/Stale let the TUI show freshness.
+type PrsData struct {
+	Repo       string  `json:"repo"`
+	PRs        []PrRow `json:"prs"`
+	AgeSeconds int     `json:"ageSeconds"` // how old the served snapshot is
+	Stale      bool    `json:"stale"`      // served past its TTL (a refresh is running/failed)
+}
+
+// PrRow is one open PR for the picker.
+type PrRow struct {
+	Number      int    `json:"number"`
+	Title       string `json:"title"`
+	Author      string `json:"author"`
+	Branch      string `json:"branch"`
+	IsDraft     bool   `json:"isDraft"`
+	IsFork      bool   `json:"isFork"`
+	Checks      string `json:"checks"` // pass|fail|pending|none
+	Review      string `json:"review"`
+	URL         string `json:"url"`
+	Status      string `json:"status"`      // scm.DeriveStatus vocabulary
+	AlreadyOpen bool   `json:"alreadyOpen"` // a lola session already holds this branch
 }
 
 // KillData is Response.Data for cmd=kill. Removed reports whether the worktree

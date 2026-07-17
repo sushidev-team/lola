@@ -37,15 +37,27 @@ func TestDetailSessionsScopesCockpit(t *testing.T) {
 	}
 }
 
-// A not-yet-shipped action (PR picker) flashes instead of doing nothing.
+// A not-yet-shipped action (ticket picker) flashes instead of doing nothing.
 func TestDetailGatedActionFlashes(t *testing.T) {
 	m := detailRoot(t)
-	m.Update(keyMsg("p")) // PR picker not shipped yet
+	m.Update(keyMsg("t")) // ticket picker not shipped yet
 	if !strings.Contains(m.detail.flash, "not available") {
 		t.Errorf("gated action should flash a note, got %q", m.detail.flash)
 	}
 	if m.view != viewDetail {
 		t.Errorf("a gated action must not navigate away; view=%d", m.view)
+	}
+}
+
+// 'p' opens the PR picker (nori-app has a repo configured).
+func TestDetailPOpensPRPicker(t *testing.T) {
+	m := detailRoot(t)
+	m.Update(keyMsg("p"))
+	if m.view != viewPRPicker {
+		t.Fatalf("view = %d, want viewPRPicker", m.view)
+	}
+	if m.prpick.project != "nori-app" {
+		t.Errorf("picker project = %q, want nori-app", m.prpick.project)
 	}
 }
 

@@ -52,12 +52,13 @@ func (m *rootModel) detailActions() []detailAction {
 	// treated as not-ready so we never advertise a launch we can't gate.
 	agentReady := haveInfo && info.AgentOK
 
-	// prReady / ticketReady / worktreeReady also require the feature to exist;
-	// those land in later phases and flip these to true then.
-	const prShipped, ticketShipped, worktreeShipped = false, false, false
+	// ticket / worktree require the feature to exist; those land in later phases
+	// and flip to true then. The PR picker's enter is a DETACHED shell (git+tmux
+	// only, no agent), so it gates on a configured repo, not agent health.
+	const ticketShipped, worktreeShipped = false, false
 
 	return []detailAction{
-		{key: "p", id: "pr", label: "Open a PR", desc: "pick an open pull request → worktree", enabled: prShipped && agentReady && repoSet},
+		{key: "p", id: "pr", label: "Open a PR", desc: "pick an open pull request → shell", enabled: repoSet},
 		{key: "t", id: "ticket", label: "Start a ticket", desc: "pick a Linear issue → worktree + agent", enabled: ticketShipped && agentReady},
 		{key: "w", id: "worktree", label: "New worktree", desc: "branch off base, agent or shell", enabled: worktreeShipped && agentReady},
 		{key: "P", id: "polls", label: "Polls", desc: "add / edit / toggle this project's polls", enabled: true},
@@ -138,10 +139,16 @@ func (m *rootModel) updateDetail(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *rootModel) runDetailAction(a detailAction) (tea.Model, tea.Cmd) {
 	d := &m.detail
 	if !a.enabled {
-		d.flash, d.flashOK = a.label+" is not available yet", false
+		msg := a.label + " is not available yet"
+		if a.id == "pr" && !m.projectHasRepo() {
+			msg = "set a GitHub repo (e) to list PRs"
+		}
+		d.flash, d.flashOK = msg, false
 		return m, nil
 	}
 	switch a.id {
+	case "pr":
+		return m.enterPRPicker(d.project)
 	case "sessions":
 		return m.openProjectScope(d.project)
 	case "edit":

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"syscall"
 	"testing"
@@ -203,7 +204,7 @@ func TestPostSendsHookEvent(t *testing.T) {
 	select {
 	case req := <-got:
 		want := protocol.Request{Cmd: "hookEvent", Session: "sess-42", Event: "notification", Detail: "permission_request"}
-		if req != want {
+		if !reflect.DeepEqual(req, want) {
 			t.Errorf("daemon received %+v, want %+v", req, want)
 		}
 	case <-time.After(2 * time.Second):

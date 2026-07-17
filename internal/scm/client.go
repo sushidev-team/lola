@@ -108,6 +108,99 @@ func (c *Client) PRForBranch(ctx context.Context, repo, branch string) (*PR, err
 	}, nil
 }
 
+// OpenPR is one open pull request as the PR picker needs it: identity, head
+// branch, CI/review posture (via the shared checksState / DeriveStatus), and a
+// fork flag (the head is a different owner than the base repo) so the caller can
+// refuse push-back tracking on forks.
+type OpenPR struct {
+	Number    int
+	Title     string
+	Author    string
+	Branch    string // headRefName
+	IsDraft   bool
+	IsFork    bool
+	Checks    string // pass | fail | pending | none
+	Review    string // APPROVED | CHANGES_REQUESTED | REVIEW_REQUIRED | ""
+	URL       string
+	UpdatedAt string // RFC3339, gh's updatedAt
+	Status    string // DeriveStatus(true, &pr) — the shared status vocabulary
+}
+
+// openPRRow mirrors the wider gh JSON the picker requests.
+type openPRRow struct {
+	Number            int           `json:"number"`
+	Title             string        `json:"title"`
+	URL               string        `json:"url"`
+	IsDraft           bool          `json:"isDraft"`
+	Mergeable         string        `json:"mergeable"`
+	ReviewDecision    string        `json:"reviewDecision"`
+	StatusCheckRollup []rollupEntry `json:"statusCheckRollup"`
+	HeadRefName       string        `json:"headRefName"`
+	UpdatedAt         string        `json:"updatedAt"`
+	Author            struct {
+		Login string `json:"login"`
+	} `json:"author"`
+	HeadRepositoryOwner struct {
+		Login string `json:"login"`
+	} `json:"headRepositoryOwner"`
+}
+
+// ListOpenPRs returns every open PR in repo ("owner/name") for the picker, newest
+// updates first (gh's default order). Any gh failure returns an error — a caller
+// must never conflate "could not list" with "no open PRs".
+func (c *Client) ListOpenPRs(ctx context.Context, repo string) ([]OpenPR, error) {
+	bin, err := c.resolveBin()
+	if err != nil {
+		return nil, err
+	}
+	out, err := exec.CommandContext(ctx, bin, "pr", "list",
+		"--repo", repo, "--state", "open", "--limit", "50",
+		"--json", "number,title,url,isDraft,mergeable,reviewDecision,statusCheckRollup,headRefName,updatedAt,author,headRepositoryOwner",
+	).Output()
+	if err != nil {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) && len(ee.Stderr) > 0 {
+			return nil, fmt.Errorf("gh pr list --repo %s --state open: %w: %s", repo, err, bytes.TrimSpace(ee.Stderr))
+		}
+		return nil, fmt.Errorf("gh pr list --repo %s --state open: %w", repo, err)
+	}
+	var rows []openPRRow
+	if err := json.Unmarshal(out, &rows); err != nil {
+		return nil, fmt.Errorf("gh pr list --repo %s --state open: bad output: %w", repo, err)
+	}
+	owner := repoOwner(repo)
+	prs := make([]OpenPR, 0, len(rows))
+	for _, r := range rows {
+		pr := &PR{
+			Number: r.Number, URL: r.URL, State: "OPEN", IsDraft: r.IsDraft,
+			Mergeable: r.Mergeable, ReviewDecision: r.ReviewDecision,
+			ChecksState: checksState(r.StatusCheckRollup),
+		}
+		prs = append(prs, OpenPR{
+			Number:    r.Number,
+			Title:     r.Title,
+			Author:    r.Author.Login,
+			Branch:    r.HeadRefName,
+			IsDraft:   r.IsDraft,
+			IsFork:    r.HeadRepositoryOwner.Login != "" && owner != "" && !strings.EqualFold(r.HeadRepositoryOwner.Login, owner),
+			Checks:    pr.ChecksState,
+			Review:    r.ReviewDecision,
+			URL:       r.URL,
+			UpdatedAt: r.UpdatedAt,
+			Status:    DeriveStatus(true, pr),
+		})
+	}
+	return prs, nil
+}
+
+// repoOwner returns the owner segment of an "owner/name" repo, or "" if malformed.
+func repoOwner(repo string) string {
+	if i := strings.IndexByte(repo, '/'); i > 0 {
+		return repo[:i]
+	}
+	return ""
+}
+
 // checksState collapses a statusCheckRollup array to pass|fail|pending|none.
 // Priority: any failure-ish entry → "fail"; else any pending-ish → "pending";
 // else (all success-ish: SUCCESS, NEUTRAL, SKIPPED) → "pass"; empty → "none".

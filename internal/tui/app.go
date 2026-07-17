@@ -39,6 +39,7 @@ const (
 	viewCockpit = iota
 	viewHome
 	viewDetail
+	viewPRPicker
 )
 
 type rootModel struct {
@@ -49,6 +50,7 @@ type rootModel struct {
 	focus    int // cockpit: which panel owns navigation/action keys (focusSessions/focusPolls)
 	home     homeModel
 	detail   detailModel
+	prpick   prPickerModel
 	list     listModel
 	sessions sessionsModel
 	form     *formModel
@@ -221,6 +223,9 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case projectsMsg:
 		m.handleProjectsMsg(v)
+		return m, nil
+	case prsMsg:
+		m.handlePrsMsg(v)
 		return m, nil
 	case statusTickMsg:
 		m.sweepTerms() // reap any detached shell whose process has exited
@@ -433,6 +438,9 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.view == viewDetail {
 		return m.updateDetail(msg)
 	}
+	if m.view == viewPRPicker {
+		return m.updatePRPicker(msg)
+	}
 
 	// Cockpit key routing. Global keys (focus cycle, doctor) fire unless a modal
 	// gate currently owns keystrokes — a poll delete / session kill confirmation,
@@ -545,6 +553,9 @@ func (m *rootModel) viewString() string {
 	if m.view == viewDetail {
 		return m.detailView()
 	}
+	if m.view == viewPRPicker {
+		return m.prPickerView()
+	}
 	return m.cockpitView()
 }
 
@@ -557,6 +568,8 @@ func (m *rootModel) backdropLines() []string {
 		return m.homeLines()
 	case viewDetail:
 		return m.detailLines()
+	case viewPRPicker:
+		return m.prPickerLines()
 	default:
 		return m.cockpitLines()
 	}

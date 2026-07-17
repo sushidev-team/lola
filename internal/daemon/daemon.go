@@ -112,6 +112,15 @@ type Daemon struct {
 	// scm.Client. Overridable in tests.
 	prForBranch func(ctx context.Context, repo, branch string) (*scm.PR, error)
 
+	// listOpenPRs returns every open PR in repo for the cmd=prs picker; the seam
+	// over scm.Client.ListOpenPRs. Overridable in tests. A gh failure is an
+	// error (never conflated with "no open PRs").
+	listOpenPRs func(ctx context.Context, repo string) ([]scm.OpenPR, error)
+
+	// prsCache memoizes cmd=prs results per repo behind a short TTL and a
+	// per-repo lock, so rapid picker opens / two clients don't each exec gh.
+	prsCache *prCache
+
 	// Reaction-engine seams (PLAN P3.16–19). notifier is rebuilt from cfg in
 	// Run and on reload (under d.mu); the rest default to the real tmux/gh
 	// clients in newDaemon and are overridden by tests. sendKeys is the ONE way
@@ -232,6 +241,8 @@ func newDaemon(cfg *config.Config, lin linear.API, logger *log.Logger, home stri
 	d.openPR = d.ghOpenPR
 	scmc := &scm.Client{}
 	d.prForBranch = scmc.PRForBranch
+	d.listOpenPRs = scmc.ListOpenPRs
+	d.prsCache = newPRCache()
 	d.failingChecks = scmc.FailingChecks
 	d.reviewComments = scmc.ReviewComments
 	d.coderabbitComments = scmc.CodeRabbitComments
