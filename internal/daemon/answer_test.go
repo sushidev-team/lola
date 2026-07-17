@@ -189,10 +189,10 @@ func TestHandlePaneHonorsLineCountAndNoQuestion(t *testing.T) {
 // Both read and write paths error on an unknown session.
 func TestPaneAndAnswerUnknownSession(t *testing.T) {
 	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})
-	if _, err := d.handlePane(context.Background(), "lola-proj1-ghost", 0); err == nil || !strings.Contains(err.Error(), "unknown session") {
+	if _, err := d.handlePane(context.Background(), "lola-p1-ghost", 0); err == nil || !strings.Contains(err.Error(), "unknown session") {
 		t.Errorf("handlePane unknown = %v, want an 'unknown session' error", err)
 	}
-	if err := d.handleAnswer(context.Background(), "lola-proj1-ghost", "hi"); err == nil || !strings.Contains(err.Error(), "unknown session") {
+	if err := d.handleAnswer(context.Background(), "lola-p1-ghost", "hi"); err == nil || !strings.Contains(err.Error(), "unknown session") {
 		t.Errorf("handleAnswer unknown = %v, want an 'unknown session' error", err)
 	}
 }

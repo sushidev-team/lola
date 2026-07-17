@@ -85,7 +85,7 @@ func (f *fakeReactSeams) noteCount() int {
 
 // reactTestConfig is a native test config with the default (enabled) reactions
 // wired in — testConfig leaves Reactions at its zero value (all auto=false).
-func reactTestConfig(polls ...config.Poll) *config.Config {
+func reactTestConfig(polls ...config.Project) *config.Config {
 	c := nativeTestConfig(polls...)
 	c.Reactions = config.ReactionsConfig{
 		CIFailed:         config.Reaction{Auto: true, Retries: config.DefaultCIRetries, Message: config.DefaultCIFailedMessage},

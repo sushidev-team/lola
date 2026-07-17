@@ -52,14 +52,16 @@ func (m *rootModel) projectsPanel(w, panelH int) []string {
 	rows := h.rows(m.cfg)
 	info := h.infoByName()
 
-	// Poll counts come from config (authoritative, daemon-up or down); the
-	// daemon only decorates live/error state.
+	// Poll posture comes from config (authoritative, daemon-up or down): a
+	// project has at most one polling config (its own).
 	cfgPolls, cfgEnabled := map[string]int{}, map[string]int{}
-	for i := range m.cfg.Polls {
-		pl := m.cfg.Polls[i]
-		cfgPolls[pl.Project]++
-		if pl.Enabled {
-			cfgEnabled[pl.Project]++
+	for i := range m.cfg.Projects {
+		pr := m.cfg.Projects[i]
+		if pr.Polls() {
+			cfgPolls[pr.Name] = 1
+			if pr.Enabled {
+				cfgEnabled[pr.Name] = 1
+			}
 		}
 	}
 

@@ -17,11 +17,11 @@ func TestHandleOpenPRHappyPath(t *testing.T) {
 	nat := &fakeNative{}
 	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, nat)
 
-	data, err := d.handleOpen(context.Background(), "proj1", "42")
+	data, err := d.handleOpen(context.Background(), "p1", "42")
 	if err != nil {
 		t.Fatalf("handleOpen: %v", err)
 	}
-	wantID := runtime.ManualSessionID("proj1", "pr-42")
+	wantID := runtime.ManualSessionID("p1", "pr-42")
 	if data.SessionID != wantID {
 		t.Errorf("SessionID = %q, want %q", data.SessionID, wantID)
 	}
@@ -33,7 +33,7 @@ func TestHandleOpenPRHappyPath(t *testing.T) {
 	if len(calls) != 1 {
 		t.Fatalf("native Open calls = %d, want 1", len(calls))
 	}
-	if calls[0] != (nativeOpenCall{project: "proj1", id: wantID, ref: "pull/42/head", branch: "pr-42"}) {
+	if calls[0] != (nativeOpenCall{project: "p1", id: wantID, ref: "pull/42/head", branch: "pr-42"}) {
 		t.Errorf("open call = %+v", calls[0])
 	}
 
@@ -55,7 +55,7 @@ func TestHandleOpenBranchTarget(t *testing.T) {
 	nat := &fakeNative{}
 	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, nat)
 
-	if _, err := d.handleOpen(context.Background(), "proj1", "feat/login"); err != nil {
+	if _, err := d.handleOpen(context.Background(), "p1", "feat/login"); err != nil {
 		t.Fatalf("handleOpen: %v", err)
 	}
 	calls := nat.openCalls()
@@ -79,10 +79,10 @@ func TestHandleOpenUnknownProject(t *testing.T) {
 func TestHandleOpenAlreadyOpen(t *testing.T) {
 	nat := &fakeNative{}
 	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, nat)
-	id := runtime.ManualSessionID("proj1", "pr-42")
-	d.sessions.Upsert(session.Session{ID: id, Source: "native", Manual: true, Project: "proj1", Status: "shell"})
+	id := runtime.ManualSessionID("p1", "pr-42")
+	d.sessions.Upsert(session.Session{ID: id, Source: "native", Manual: true, Project: "p1", Status: "shell"})
 
-	if _, err := d.handleOpen(context.Background(), "proj1", "42"); err == nil {
+	if _, err := d.handleOpen(context.Background(), "p1", "42"); err == nil {
 		t.Fatal("want an error when the session is already open")
 	}
 	if len(nat.openCalls()) != 0 {
@@ -95,7 +95,7 @@ func TestHandleOpenHealthGate(t *testing.T) {
 	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, nat)
 	d.runtimeHealth = func(string) error { return errors.New("missing git") }
 
-	if _, err := d.handleOpen(context.Background(), "proj1", "42"); err == nil {
+	if _, err := d.handleOpen(context.Background(), "p1", "42"); err == nil {
 		t.Fatal("want an error when the runtime is unhealthy")
 	}
 	if len(nat.openCalls()) != 0 {
@@ -124,8 +124,8 @@ func TestResolveOpenTarget(t *testing.T) {
 func TestObserveManualShellLiveness(t *testing.T) {
 	nat := &fakeNative{alive: map[string]bool{}}
 	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, nat)
-	id := runtime.ManualSessionID("proj1", "pr-42")
-	d.sessions.Upsert(session.Session{ID: id, Source: "native", Manual: true, Project: "proj1", TmuxName: id, Status: "shell"})
+	id := runtime.ManualSessionID("p1", "pr-42")
+	d.sessions.Upsert(session.Session{ID: id, Source: "native", Manual: true, Project: "p1", TmuxName: id, Status: "shell"})
 
 	nat.alive[id] = true
 	s, _ := d.sessions.Get(id)

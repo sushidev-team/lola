@@ -183,7 +183,7 @@ func TestFakeMatchingIssuesFixtures(t *testing.T) {
 		var gotCycle, gotViewer string
 		f := &Fake{
 			Issues: []Issue{{Identifier: "STATIC-IGNORED"}},
-			IssuesFunc: func(p config.Poll, activeCycleID, viewerID string) ([]Issue, error) {
+			IssuesFunc: func(p config.Project, activeCycleID, viewerID string) ([]Issue, error) {
 				gotCycle, gotViewer = activeCycleID, viewerID
 				return []Issue{{Identifier: "FN-1"}}, nil
 			},

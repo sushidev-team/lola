@@ -241,7 +241,7 @@ func (m *rootModel) railColumn(w, h int) []string {
 	// Polls: one row per configured poll + title + 2 borders. Bounded so a long
 	// poll list never starves the Activity feed, and a short one never leaves a
 	// yawning gap.
-	pollsH := len(m.cfg.Polls) + 3
+	pollsH := len(m.cfg.PollingProjects()) + 3
 	if pollsH < 5 {
 		pollsH = 5
 	}
@@ -474,11 +474,12 @@ func (m *rootModel) detailBody(w, h int) []string {
 // panel is focused.
 func (m *rootModel) pollsBody(w, h int) []string {
 	l := &m.list
-	if len(m.cfg.Polls) == 0 {
-		return []string{faintText.Render("no polls — n to add")}
+	polls := m.cfg.PollingProjects()
+	if len(polls) == 0 {
+		return []string{faintText.Render("no polling projects — configure one from a project (P)")}
 	}
-	rows := make([]string, 0, len(m.cfg.Polls))
-	for i, p := range m.cfg.Polls {
+	rows := make([]string, 0, len(polls))
+	for i, p := range polls {
 		enabled := p.Enabled
 		last, errd := "-", false
 		if ps := l.pollStatus(p.Name); ps != nil {
@@ -617,8 +618,9 @@ func (m *rootModel) vitalsBar(w int) string {
 	if need > 0 {
 		needStr = statusOrange.Render(needStr)
 	}
+	polling := m.cfg.PollingProjects()
 	en := 0
-	for _, p := range m.cfg.Polls {
+	for _, p := range polling {
 		enabled := p.Enabled
 		if ps := m.list.pollStatus(p.Name); ps != nil {
 			enabled = ps.Enabled
@@ -627,7 +629,7 @@ func (m *rootModel) vitalsBar(w int) string {
 			en++
 		}
 	}
-	parts = append(parts, needStr, fmt.Sprintf("sessions %d", nSess), fmt.Sprintf("polls %d/%d", en, len(m.cfg.Polls)))
+	parts = append(parts, needStr, fmt.Sprintf("sessions %d", nSess), fmt.Sprintf("polls %d/%d", en, len(polling)))
 
 	brand := lipgloss.NewStyle().Bold(true).Render("lola")
 	left := brand + "  " + strings.Join(parts, sep)

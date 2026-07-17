@@ -71,7 +71,7 @@ func (c *Client) Members(ctx context.Context, teamID string) ([]User, error) {
 // MatchingIssues runs the per-tick issues query for one poll, paginating
 // until pageInfo.hasNextPage is false. The filter is built via
 // BuildIssueFilter and passed as a variable — never string-interpolated.
-func (c *Client) MatchingIssues(ctx context.Context, p config.Poll, activeCycleID, viewerID string) ([]Issue, error) {
+func (c *Client) MatchingIssues(ctx context.Context, p config.Project, activeCycleID, viewerID string) ([]Issue, error) {
 	const q = `query($filter: IssueFilter, $after: String){
 		issues(filter:$filter, first:100, after:$after){
 			nodes{ id identifier title branchName priority createdAt labels{ nodes{ id } } }

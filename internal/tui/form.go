@@ -68,8 +68,8 @@ type formModel struct {
 	cfg      *config.Config
 	isNew    bool
 	origName string
-	poll     config.Poll // working copy
-	capBuf   string      // text buffer for concurrency_cap
+	poll     config.Project // working copy of the project being polling-configured
+	capBuf   string         // text buffer for concurrency_cap
 
 	teams   []linear.Team // available before a team is picked
 	meta    *teamMeta
@@ -81,7 +81,7 @@ type formModel struct {
 	errs   []string // validation errors shown at the bottom
 }
 
-func newFormModel(cfg *config.Config, existing *config.Poll) (*formModel, tea.Cmd) {
+func newFormModel(cfg *config.Config, existing *config.Project) (*formModel, tea.Cmd) {
 	f := &formModel{cfg: cfg, isNew: existing == nil}
 	if existing != nil {
 		f.origName = existing.Name
@@ -93,7 +93,7 @@ func newFormModel(cfg *config.Config, existing *config.Poll) (*formModel, tea.Cm
 			f.capBuf = strconv.Itoa(existing.ConcurrencyCap)
 		}
 	} else {
-		f.poll = config.Poll{CycleMode: "none", MatchMode: "any", AssigneeMode: "anyone", DedupMode: "seen"}
+		f.poll = config.Project{CycleMode: "none", MatchMode: "any", AssigneeMode: "anyone", DedupMode: "seen"}
 		f.capBuf = "1"
 	}
 	var cmd tea.Cmd
@@ -386,7 +386,7 @@ func (f *formModel) openPicker(cur fieldID) tea.Cmd {
 			}
 			opts = append(opts, pickOpt{pr.Name, lbl})
 		}
-		selected = []string{f.poll.Project}
+		selected = []string{f.poll.Name}
 	case fDedup:
 		title = "Dedup mode"
 		opts = []pickOpt{{"label", "label (flip trigger label on spawn)"}, {"seen", "seen (local seen-file)"}}
@@ -515,7 +515,7 @@ func (f *formModel) applyPick(p *picker) tea.Cmd {
 	case fAssigneeUser:
 		f.poll.AssigneeUserID = id
 	case fNativeProject:
-		f.poll.Project = id
+		f.poll.Name = id
 	case fDedup:
 		f.poll.DedupMode = id
 	case fSetLabel:
@@ -542,6 +542,38 @@ func (f *formModel) stateOpts() []pickOpt {
 	return opts
 }
 
+// applyPolling copies the Linear polling + write-back fields from src onto dst,
+// leaving dst's repository/worktree setup (path, agent, env, post_create) intact.
+// Saving the form always turns polling on. src.Repo overrides only when set.
+func applyPolling(dst *config.Project, src config.Project) {
+	dst.Enabled = true
+	dst.TeamID = src.TeamID
+	dst.ProjectID = src.ProjectID
+	dst.CycleMode = src.CycleMode
+	dst.CycleID = src.CycleID
+	dst.StateIDs = src.StateIDs
+	dst.MatchLabels = src.MatchLabels
+	dst.MatchMode = src.MatchMode
+	dst.AssigneeMode = src.AssigneeMode
+	dst.AssigneeUserID = src.AssigneeUserID
+	dst.ConcurrencyCap = src.ConcurrencyCap
+	dst.PrioritySort = src.PrioritySort
+	dst.DedupMode = src.DedupMode
+	dst.OnSentSetLabel = src.OnSentSetLabel
+	dst.OnSpawnStateID = src.OnSpawnStateID
+	dst.OnPRStateID = src.OnPRStateID
+	dst.OnMergedStateID = src.OnMergedStateID
+	dst.BlockedLabelID = src.BlockedLabelID
+	dst.CommentOnSpawn = src.CommentOnSpawn
+	dst.CommentOnPR = src.CommentOnPR
+	dst.CommentOnMerged = src.CommentOnMerged
+	dst.CommentOnBlocked = src.CommentOnBlocked
+	dst.PRRequiresChecks = src.PRRequiresChecks
+	if src.Repo != "" {
+		dst.Repo = src.Repo
+	}
+}
+
 func (f *formModel) save() (tea.Cmd, formEvent) {
 	f.errs = nil
 	p := f.poll
@@ -560,9 +592,13 @@ func (f *formModel) save() (tea.Cmd, formEvent) {
 		p.PrioritySort = []string{"priority", "createdAt"}
 	}
 
-	// The poll's [[project]] reference is resolved by nc.Validate below
-	// (ProjectByName). Surface an early, friendly error when it is unset.
-	if p.Project == "" {
+	// The polling config attaches to an existing [[project]]: the one being
+	// edited (origName), or the one picked in the Project field for a new config.
+	target := f.origName
+	if f.isNew {
+		target = p.Name
+	}
+	if target == "" {
 		f.errs = append(f.errs, "project is required — pick a [[project]] entry")
 	}
 
@@ -577,20 +613,20 @@ func (f *formModel) save() (tea.Cmd, formEvent) {
 		}
 	}
 	nc := *base
-	nc.Polls = slices.Clone(base.Polls)
+	nc.Projects = slices.Clone(base.Projects)
 	idx := -1
-	if !f.isNew {
-		for i := range nc.Polls {
-			if nc.Polls[i].Name == f.origName {
-				idx = i
-				break
-			}
+	for i := range nc.Projects {
+		if nc.Projects[i].Name == target {
+			idx = i
+			break
 		}
 	}
-	if idx >= 0 {
-		nc.Polls[idx] = p
+	if idx < 0 {
+		if target != "" {
+			f.errs = append(f.errs, fmt.Sprintf("project %q not found", target))
+		}
 	} else {
-		nc.Polls = append(nc.Polls, p)
+		applyPolling(&nc.Projects[idx], p)
 	}
 	// A fresh config has no global cap; default it so the first save works.
 	if nc.Defaults.GlobalCap <= 0 {
@@ -890,10 +926,10 @@ func (f *formModel) display(fd fieldID) string {
 		}
 		return shortID(f.poll.AssigneeUserID)
 	case fNativeProject:
-		if f.poll.Project == "" {
+		if f.poll.Name == "" {
 			return sel
 		}
-		return f.poll.Project
+		return f.poll.Name
 	case fRepo:
 		if f.poll.Repo == "" {
 			// The daemon owns the fallback: PR checks use the [[project]]

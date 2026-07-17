@@ -27,7 +27,7 @@ func newListModel(cfg *config.Config) listModel {
 // metadata caches of the teams referenced by polls.
 func teamNamesFromCache(cfg *config.Config) map[string]string {
 	names := map[string]string{}
-	for _, p := range cfg.Polls {
+	for _, p := range cfg.PollingProjects() {
 		if p.TeamID == "" || names[p.TeamID] != "" {
 			continue
 		}
@@ -90,8 +90,9 @@ func (m *rootModel) listView() string {
 	}
 
 	headers := []string{" ", "NAME", "ON", "TEAM", "PROJECT", "LAST RUN", "LAST SPAWN", "ERROR"}
-	rows := make([][]string, len(m.cfg.Polls))
-	for i, p := range m.cfg.Polls {
+	polls := m.cfg.PollingProjects()
+	rows := make([][]string, len(polls))
+	for i, p := range polls {
 		enabled := p.Enabled
 		lastRun, lastSpawn, lastErr := "-", "-", ""
 		if ps := l.pollStatus(p.Name); ps != nil {
@@ -106,7 +107,7 @@ func (m *rootModel) listView() string {
 		if i == l.cursor {
 			marker = "›"
 		}
-		rows[i] = []string{marker, p.Name, yesNo(enabled), l.teamDisplay(p.TeamID), p.Project, lastRun, lastSpawn, lastErr}
+		rows[i] = []string{marker, p.Name, yesNo(enabled), l.teamDisplay(p.TeamID), p.Name, lastRun, lastSpawn, lastErr}
 	}
 
 	w := colWidths(headers, rows)

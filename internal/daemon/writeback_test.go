@@ -20,7 +20,7 @@ import (
 )
 
 // wbPoll is a label-mode poll wired with every P4 write-back field.
-func wbPoll(name string) config.Poll {
+func wbPoll(name string) config.Project {
 	p := labelPoll(name)
 	p.OnSpawnStateID = "st-doing"
 	p.OnPRStateID = "st-review"
@@ -35,7 +35,7 @@ func wbPoll(name string) config.Poll {
 
 // wbStatePoll is a dedup_mode=state poll: the OnSpawnStateID transition is the
 // dedup, so it carries no on_sent_set_label / match_labels.
-func wbStatePoll(name string) config.Poll {
+func wbStatePoll(name string) config.Project {
 	p := labelPoll(name)
 	p.DedupMode = "state"
 	p.OnSentSetLabel = ""
@@ -99,7 +99,7 @@ func TestWriteBackStateModeDedup(t *testing.T) {
 	is := testIssue("FE-3", 1, "2024-01-01T00:00:00Z")
 	fake := &linear.Fake{}
 	// The issue matches until its workflow state moves out of state_ids.
-	fake.IssuesFunc = func(_ config.Poll, _, _ string) ([]linear.Issue, error) {
+	fake.IssuesFunc = func(_ config.Project, _, _ string) ([]linear.Issue, error) {
 		if fake.StateByIssue[is.ID] == "st-doing" {
 			return nil, nil
 		}
@@ -144,7 +144,7 @@ func TestWriteBackStateModeDedup(t *testing.T) {
 func TestWriteBackStateModeNoDoubleSpawnAfterCrash(t *testing.T) {
 	is := testIssue("FE-3", 1, "2024-01-01T00:00:00Z")
 	fake := &linear.Fake{
-		IssuesFunc: func(_ config.Poll, _, _ string) ([]linear.Issue, error) {
+		IssuesFunc: func(_ config.Project, _, _ string) ([]linear.Issue, error) {
 			return []linear.Issue{is}, nil // still matches: the state move never landed
 		},
 	}
@@ -180,7 +180,7 @@ func TestWriteBackStateModeNoDoubleSpawnAfterCrash(t *testing.T) {
 func TestWriteBackStateModeSeenFallbackAuthoritativeBeyondTTL(t *testing.T) {
 	is := testIssue("FE-3", 1, "2024-01-01T00:00:00Z")
 	fake := &linear.Fake{
-		IssuesFunc: func(_ config.Poll, _, _ string) ([]linear.Issue, error) {
+		IssuesFunc: func(_ config.Project, _, _ string) ([]linear.Issue, error) {
 			return []linear.Issue{is}, nil // never leaves state_ids
 		},
 	}
@@ -448,17 +448,17 @@ func TestWriteBackEscalationBlockedOnce(t *testing.T) {
 func TestPollForSessionSkipsNonLinearKinds(t *testing.T) {
 	d := newTestDaemon(t, testConfig(wbStatePoll("p1")), &linear.Fake{}, &fakeNative{})
 
-	linSess := session.Session{ID: "lola-proj1-eng-9", Source: "native", Kind: session.KindLinear, Project: "proj1", Issue: "ENG-9", IssueUUID: "uuid-9"}
+	linSess := session.Session{ID: "lola-p1-eng-9", Source: "native", Kind: session.KindLinear, Project: "p1", Issue: "ENG-9", IssueUUID: "uuid-9"}
 	if p := d.pollForSession(linSess); p == nil {
 		t.Fatalf("a linear session must resolve its project's poll for write-back")
 	}
 
 	nonLinear := []session.Session{
-		{ID: "lola-proj1-pr-7", Source: "native", Kind: session.KindPR, Agentless: true, Project: "proj1", Branch: "pr-7"},
-		{ID: "lola-proj1-pr-a", Source: "native", Kind: session.KindPR, Project: "proj1", Branch: "feat/x"},
-		{ID: "lola-proj1-open-y", Source: "native", Kind: session.KindManual, Project: "proj1", Branch: "feat/y"},
-		{ID: "lola-legacy-manual", Source: "native", Manual: true, Project: "proj1", Branch: "up"},
-		{ID: "lola-keyless", Source: "native", Project: "proj1"}, // no UUID → fail closed to pr
+		{ID: "lola-p1-pr-7", Source: "native", Kind: session.KindPR, Agentless: true, Project: "p1", Branch: "pr-7"},
+		{ID: "lola-p1-pr-a", Source: "native", Kind: session.KindPR, Project: "p1", Branch: "feat/x"},
+		{ID: "lola-p1-open-y", Source: "native", Kind: session.KindManual, Project: "p1", Branch: "feat/y"},
+		{ID: "lola-legacy-manual", Source: "native", Manual: true, Project: "p1", Branch: "up"},
+		{ID: "lola-keyless", Source: "native", Project: "p1"}, // no UUID → fail closed to pr
 	}
 	for _, s := range nonLinear {
 		if p := d.pollForSession(s); p != nil {
@@ -498,7 +498,7 @@ func TestWriteBackNoConfigNoLinearWrites(t *testing.T) {
 func TestWriteBackSpawnLinearFailureNoDoubleWrite(t *testing.T) {
 	is := testIssue("FE-3", 1, "2024-01-01T00:00:00Z")
 	fake := &linear.Fake{
-		IssuesFunc: func(_ config.Poll, _, _ string) ([]linear.Issue, error) {
+		IssuesFunc: func(_ config.Project, _, _ string) ([]linear.Issue, error) {
 			return []linear.Issue{is}, nil // always matches (state move fails below)
 		},
 		Errs: map[string]error{

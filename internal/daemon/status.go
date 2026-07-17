@@ -77,8 +77,9 @@ func (d *Daemon) statusData(ctx context.Context) protocol.StatusData {
 		name    string
 		enabled bool
 	}
-	polls := make([]pollInfo, 0, len(d.cfg.Polls))
-	for _, p := range d.cfg.Polls {
+	polling := d.cfg.PollingProjects()
+	polls := make([]pollInfo, 0, len(polling))
+	for _, p := range polling {
 		polls = append(polls, pollInfo{p.Name, p.Enabled})
 	}
 	d.mu.Unlock()

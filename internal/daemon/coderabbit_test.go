@@ -50,7 +50,7 @@ func (f *fakeCodeRabbit) callCount() int {
 
 // coderabbitTestConfig is a native test config with the [coderabbit] watch
 // enabled (notify + send_to_agent on, comment off — the enabled defaults).
-func coderabbitTestConfig(polls ...config.Poll) *config.Config {
+func coderabbitTestConfig(polls ...config.Project) *config.Config {
 	c := nativeTestConfig(polls...)
 	c.CodeRabbit = config.CodeRabbitConfig{
 		Enabled:     true,

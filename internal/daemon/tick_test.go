@@ -18,45 +18,43 @@ import (
 	"github.com/sushidev-team/lola/internal/protocol"
 )
 
-// labelPoll is a label-mode poll on the native runtime, referencing the
-// "proj1" [[project]] defined by testConfig.
-func labelPoll(name string) config.Poll {
-	return config.Poll{
+// labelPoll is a label-mode polling PROJECT (a poll is a project's polling
+// config now): the project's name IS the fixture name, and it carries the repo
+// setup the native runtime needs. Historically the project was "p1"; tests
+// that name their poll "p1" now get a project "p1" — the two are one.
+func labelPoll(name string) config.Project {
+	return config.Project{
 		Name:           name,
+		Path:           "/tmp/" + name,
+		Repo:           "acme/widgets",
+		DefaultBranch:  "main",
 		Enabled:        true,
 		TeamID:         "team-1",
 		CycleMode:      "none",
 		MatchLabels:    []string{"lbl-trigger"},
 		MatchMode:      "any",
 		AssigneeMode:   "anyone",
-		Project:        "proj1",
 		ConcurrencyCap: 10,
 		DedupMode:      "label",
 		OnSentSetLabel: "lbl-sent",
 	}
 }
 
-func seenPoll(name string) config.Poll {
+func seenPoll(name string) config.Project {
 	p := labelPoll(name)
 	p.DedupMode = "seen"
 	p.OnSentSetLabel = ""
 	return p
 }
 
-func testConfig(polls ...config.Poll) *config.Config {
+func testConfig(polls ...config.Project) *config.Config {
 	return &config.Config{
 		Defaults: config.Defaults{
 			PollInterval:   time.Minute,
 			ConcurrencyCap: 10,
 			GlobalCap:      10,
 		},
-		Projects: []config.Project{{
-			Name:          "proj1",
-			Path:          "/tmp/proj1",
-			Repo:          "acme/widgets",
-			DefaultBranch: "main",
-		}},
-		Polls: polls,
+		Projects: polls,
 	}
 }
 
@@ -280,8 +278,8 @@ func TestTickDispatchOrdering(t *testing.T) {
 
 	// Spawn got the IDENTIFIER (FE-231) and the resolved [[project]].
 	spawns := nat.spawnCalls()
-	if len(spawns) != 1 || spawns[0] != (nativeSpawnCall{"proj1", "FE-231"}) {
-		t.Errorf("spawns = %+v, want [{proj1 FE-231}]", spawns)
+	if len(spawns) != 1 || spawns[0] != (nativeSpawnCall{"p1", "FE-231"}) {
+		t.Errorf("spawns = %+v, want [{p1 FE-231}]", spawns)
 	}
 
 	// Fresh IssueLabelIDs re-read precedes SetIssueLabels.
@@ -419,7 +417,7 @@ func TestTickHealthGateProbesProjectAgentOverride(t *testing.T) {
 	is := testIssue("FE-1", 1, "2024-01-01T00:00:00Z")
 	cfg := testConfig(labelPoll("p1"))
 	cfg.Defaults.Agent = "codex"
-	cfg.Projects[0].Agent = "opencode" // proj1's override beats the default
+	cfg.Projects[0].Agent = "opencode" // p1's override beats the default
 	d := newTestDaemon(t, cfg, &linear.Fake{Issues: []linear.Issue{is}}, &fakeNative{})
 	gotBin := healthGateBinary(t, d, "p1")
 	if gotBin != "opencode" {

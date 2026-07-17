@@ -635,7 +635,7 @@ func (m *rootModel) listKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			l.cursor--
 		}
 	case "down", "j":
-		if l.cursor < len(m.cfg.Polls)-1 {
+		if l.cursor < len(m.pollingProjectPtrs())-1 {
 			l.cursor++
 		}
 	case "n":
@@ -666,11 +666,26 @@ func (m *rootModel) listKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m *rootModel) selectedPoll() *config.Poll {
-	if m.list.cursor < 0 || m.list.cursor >= len(m.cfg.Polls) {
+// pollingProjectPtrs returns live pointers (into cfg.Projects) to the projects
+// that poll Linear, in config order — so callers can mutate polling state.
+func (m *rootModel) pollingProjectPtrs() []*config.Project {
+	var out []*config.Project
+	for i := range m.cfg.Projects {
+		if m.cfg.Projects[i].Polls() {
+			out = append(out, &m.cfg.Projects[i])
+		}
+	}
+	return out
+}
+
+// selectedPoll returns the polling project the cockpit's poll rail cursor is on
+// (a poll is now a project's polling config). Live pointer, safe to mutate.
+func (m *rootModel) selectedPoll() *config.Project {
+	ptrs := m.pollingProjectPtrs()
+	if m.list.cursor < 0 || m.list.cursor >= len(ptrs) {
 		return nil
 	}
-	return &m.cfg.Polls[m.list.cursor]
+	return ptrs[m.list.cursor]
 }
 
 func (m *rootModel) deleteSelected() tea.Cmd {
@@ -683,27 +698,51 @@ func (m *rootModel) deleteSelected() tea.Cmd {
 	// persisted changes since our snapshot; saving the stale copy would
 	// silently revert them.
 	m.reloadConfig()
-	idx := -1
-	for i := range m.cfg.Polls {
-		if m.cfg.Polls[i].Name == name {
-			idx = i
-			break
-		}
-	}
-	if idx < 0 {
-		m.list.flash = "poll already gone"
+	pr := m.cfg.ProjectByName(name)
+	if pr == nil || !pr.Polls() {
+		m.list.flash = "polling already off"
 		return bestEffortReloadCmd
 	}
-	m.cfg.Polls = append(m.cfg.Polls[:idx], m.cfg.Polls[idx+1:]...)
-	if m.list.cursor >= len(m.cfg.Polls) && m.list.cursor > 0 {
+	// "Delete poll" now means stop this project polling — the project itself
+	// remains (for manual worktrees / PRs). Zero the polling config.
+	clearPolling(pr)
+	if m.list.cursor >= len(m.pollingProjectPtrs()) && m.list.cursor > 0 {
 		m.list.cursor--
 	}
 	if err := m.cfg.Save(m.cfgPath); err != nil {
 		m.list.flash = "save failed: " + err.Error()
 		return nil
 	}
-	m.list.flash = "poll deleted"
+	m.list.flash = "polling removed from " + name
 	return bestEffortReloadCmd
+}
+
+// clearPolling zeroes a project's Linear polling configuration, leaving the
+// repository/worktree setup intact.
+func clearPolling(p *config.Project) {
+	p.Enabled = false
+	p.TeamID = ""
+	p.ProjectID = ""
+	p.CycleMode = ""
+	p.CycleID = ""
+	p.StateIDs = nil
+	p.MatchLabels = nil
+	p.MatchMode = ""
+	p.AssigneeMode = ""
+	p.AssigneeUserID = ""
+	p.ConcurrencyCap = 0
+	p.PrioritySort = nil
+	p.DedupMode = ""
+	p.OnSentSetLabel = ""
+	p.OnSpawnStateID = ""
+	p.OnPRStateID = ""
+	p.OnMergedStateID = ""
+	p.BlockedLabelID = ""
+	p.CommentOnSpawn = false
+	p.CommentOnPR = false
+	p.CommentOnMerged = false
+	p.CommentOnBlocked = false
+	p.PRRequiresChecks = false
 }
 
 // toggleSelected pauses/resumes via the socket when the daemon is up;
@@ -800,7 +839,7 @@ func (m *rootModel) reloadConfig() {
 		m.cfg = cfg
 		m.list.teamNames = teamNamesFromCache(cfg)
 	}
-	if m.list.cursor >= len(m.cfg.Polls) && m.list.cursor > 0 {
-		m.list.cursor = len(m.cfg.Polls) - 1
+	if n := len(m.pollingProjectPtrs()); m.list.cursor >= n && m.list.cursor > 0 {
+		m.list.cursor = n - 1
 	}
 }

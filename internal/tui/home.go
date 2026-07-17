@@ -364,15 +364,8 @@ func (m *rootModel) removeProject(name string) tea.Cmd {
 		}
 	}
 
+	// Removing the project removes its polling config too (they're one struct now).
 	m.cfg.Projects = append(m.cfg.Projects[:idx], m.cfg.Projects[idx+1:]...)
-	// Drop the project's polls too, so no orphan poll is left behind.
-	kept := m.cfg.Polls[:0]
-	for _, p := range m.cfg.Polls {
-		if p.Project != name {
-			kept = append(kept, p)
-		}
-	}
-	m.cfg.Polls = kept
 
 	if err := m.cfg.Save(m.cfgPath); err != nil {
 		m.home.flash, m.home.flashGood = "save failed: "+err.Error(), false
@@ -388,46 +381,35 @@ func (m *rootModel) removeProject(name string) tea.Cmd {
 	return bestEffortReloadCmd
 }
 
-// homeTogglePoll toggles the selected project's poll when it has exactly one; a
-// project with zero or several polls flashes a hint (multi-poll toggling lives
-// in the project detail screen). The flip goes through config + reload, so it
-// works whether or not the daemon is up.
+// homeTogglePoll pauses/resumes the selected project's polling (a project has
+// at most one polling config — its own). A project not configured to poll
+// flashes a hint to set it up in the project view. The flip goes through config
+// + reload, so it works whether or not the daemon is up.
 func (m *rootModel) homeTogglePoll() tea.Cmd {
-	p := m.home.selectedProject(m.cfg)
+	sel := m.home.selectedProject(m.cfg)
+	if sel == nil {
+		return nil
+	}
+	name := sel.Name
+	m.reloadConfig()
+	p := m.cfg.ProjectByName(name)
 	if p == nil {
+		m.home.flash, m.home.flashGood = "project no longer exists", false
 		return nil
 	}
-	var polls []string
-	for i := range m.cfg.Polls {
-		if m.cfg.Polls[i].Project == p.Name {
-			polls = append(polls, m.cfg.Polls[i].Name)
-		}
-	}
-	switch len(polls) {
-	case 0:
-		m.home.flash, m.home.flashGood = "no polls on "+p.Name+" — add one in the project editor", false
-		return nil
-	case 1:
-		name := polls[0]
-		m.reloadConfig()
-		fp := m.cfg.PollByName(name)
-		if fp == nil {
-			m.home.flash, m.home.flashGood = "poll no longer exists", false
-			return nil
-		}
-		fp.Enabled = !fp.Enabled
-		if err := m.cfg.Save(m.cfgPath); err != nil {
-			m.home.flash, m.home.flashGood = "save failed: "+err.Error(), false
-			return nil
-		}
-		verb := "paused"
-		if fp.Enabled {
-			verb = "resumed"
-		}
-		m.home.flash, m.home.flashGood = verb+" poll "+name, true
-		return bestEffortReloadCmd
-	default:
-		m.home.flash, m.home.flashGood = fmt.Sprintf("%s has %d polls — toggle them in the project view", p.Name, len(polls)), false
+	if !p.Polls() {
+		m.home.flash, m.home.flashGood = "no polling on "+name+" — configure it in the project view (enter → P)", false
 		return nil
 	}
+	p.Enabled = !p.Enabled
+	if err := m.cfg.Save(m.cfgPath); err != nil {
+		m.home.flash, m.home.flashGood = "save failed: "+err.Error(), false
+		return nil
+	}
+	verb := "paused"
+	if p.Enabled {
+		verb = "resumed"
+	}
+	m.home.flash, m.home.flashGood = verb+" polling on "+name, true
+	return bestEffortReloadCmd
 }

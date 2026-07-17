@@ -160,10 +160,11 @@ func TestReconcileEmptyRepoSkipsRevertAndLogs(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("LOLA_HOME", home)
 	var buf strings.Builder
-	// Neither the poll nor its [[project]] carries a repo, so PollRepo is empty
-	// and the PR check is unavailable.
-	cfg := testConfig(labelPoll("p1"))
-	cfg.Projects[0].Repo = ""
+	// The polling project carries no repo, so PollRepo is empty and the PR check
+	// is unavailable.
+	noRepo := labelPoll("p1")
+	noRepo.Repo = ""
+	cfg := testConfig(noRepo)
 	d := newDaemon(cfg, fake, log.New(&buf, "", 0), home)
 	d.native = &fakeNative{}
 	d.runtimeHealth = func(string) error { return nil }
@@ -171,7 +172,7 @@ func TestReconcileEmptyRepoSkipsRevertAndLogs(t *testing.T) {
 	// d.openPR stays the default ghOpenPR: an empty repo must short-circuit
 	// with the "no repo configured" error before gh is ever invoked.
 
-	d.reconcilePoll(context.Background(), fake, labelPoll("p1"), map[string]bool{}, time.Now())
+	d.reconcilePoll(context.Background(), fake, noRepo, map[string]bool{}, time.Now())
 
 	if slices.Contains(fake.CallNames(), "SetIssueLabels") {
 		t.Error("empty repo must skip the revert (fail closed), labels were mutated")

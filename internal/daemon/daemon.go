@@ -53,7 +53,7 @@ var _ NativeAPI = (*runtime.Native)(nil)
 // start time and used only for reload diffing; ticks always read the live
 // config.
 type worker struct {
-	poll     config.Poll
+	poll     config.Project // the polling project this worker ticks
 	interval time.Duration
 	stop     chan struct{}
 	done     chan struct{}
@@ -564,9 +564,9 @@ func (d *Daemon) intervalLocked() time.Duration {
 func (d *Daemon) syncWorkers(ctx context.Context) {
 	d.mu.Lock()
 	iv := d.intervalLocked()
-	desired := map[string]config.Poll{}
+	desired := map[string]config.Project{}
 	if d.cfgErr == "" { // invalid config: hold ALL polls (status surfaces why)
-		for _, p := range d.cfg.Polls {
+		for _, p := range d.cfg.PollingProjects() {
 			if p.Enabled {
 				desired[p.Name] = p
 			}
@@ -601,7 +601,7 @@ func (d *Daemon) syncWorkers(ctx context.Context) {
 	d.mu.Unlock()
 }
 
-func (d *Daemon) startWorkerLocked(ctx context.Context, name string, p config.Poll, iv time.Duration) {
+func (d *Daemon) startWorkerLocked(ctx context.Context, name string, p config.Project, iv time.Duration) {
 	w := &worker{poll: p, interval: iv, stop: make(chan struct{}), done: make(chan struct{})}
 	d.workers[name] = w
 	d.wg.Add(1)

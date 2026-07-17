@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"strings"
 	"time"
 
@@ -54,7 +53,7 @@ func (d *Daemon) safeReconcile(ctx context.Context) {
 // nativeSessionPresent) — a dead pane is exactly the native orphan condition.
 func (d *Daemon) reconcile(ctx context.Context) {
 	d.mu.Lock()
-	polls := slices.Clone(d.cfg.Polls)
+	polls := d.cfg.PollingProjects() // returns a fresh slice
 	d.mu.Unlock()
 	now := time.Now()
 
@@ -120,7 +119,7 @@ func (d *Daemon) nativeSessionForIssue(identifier string) (session.Session, bool
 	return session.Session{}, false
 }
 
-func (d *Daemon) reconcilePoll(ctx context.Context, api linear.API, p config.Poll, counted map[string]bool, now time.Time) {
+func (d *Daemon) reconcilePoll(ctx context.Context, api linear.API, p config.Project, counted map[string]bool, now time.Time) {
 	// Serialize with ticks for this poll: both sides do a load-modify-save
 	// of the same seen map, and an unsynchronized interleave loses updates
 	// (a tick's fresh entry erased, or a reverted orphan resurrected).
@@ -137,7 +136,7 @@ func (d *Daemon) reconcilePoll(ctx context.Context, api linear.API, p config.Pol
 	// Find issues currently carrying set_label: a minimal poll copy keeping
 	// only team/project scope. Cycle, states and assignee are cleared so
 	// orphans that moved since dispatch are still found.
-	fp := config.Poll{
+	fp := config.Project{
 		Name:         p.Name,
 		TeamID:       p.TeamID,
 		ProjectID:    p.ProjectID,

@@ -53,8 +53,8 @@ func TestFormProjectPickerFlow(t *testing.T) {
 		t.Fatalf("project picker did not open: %+v", f.picker)
 	}
 	f.pickerKey(keyMsg("enter")) // only option: web
-	if f.poll.Project != "web" {
-		t.Fatalf("poll.Project = %q, want web", f.poll.Project)
+	if f.poll.Name != "web" {
+		t.Fatalf("picked project = %q, want web", f.poll.Name)
 	}
 
 	// Repo hint reflects the daemon-owned [[project]] fallback.
@@ -69,12 +69,12 @@ func TestFormProjectPickerFlow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := got.PollByName("P")
-	if p == nil {
-		t.Fatal("poll P not persisted")
+	p := got.PollByName("web") // the polling config lives on project "web"
+	if p == nil || !p.Polls() {
+		t.Fatalf("project web not configured to poll: %+v", p)
 	}
-	if p.Project != "web" {
-		t.Errorf("persisted poll project = %q, want web", p.Project)
+	if p.TeamID != "team-1" {
+		t.Errorf("persisted team = %q, want team-1", p.TeamID)
 	}
 }
 
@@ -85,7 +85,7 @@ func TestFormWriteBackPickersAndToggles(t *testing.T) {
 	f, path := newNativeTestForm(t, []config.Project{
 		{Name: "web", Path: "/tmp/web", Repo: "acme/web"},
 	})
-	f.poll.Name, f.poll.TeamID, f.poll.Project = "WB", "team-1", "web"
+	f.poll.Name, f.poll.TeamID = "web", "team-1"
 	f.meta = &teamMeta{
 		States: []linear.State{
 			{ID: "st-prog", Name: "In Progress", Type: "started"},
@@ -141,9 +141,9 @@ func TestFormWriteBackPickersAndToggles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := got.PollByName("WB")
+	p := got.PollByName("web")
 	if p == nil {
-		t.Fatal("poll WB not persisted")
+		t.Fatal("polling config on web not persisted")
 	}
 	if p.OnSpawnStateID != "st-prog" || p.OnPRStateID != "st-review" || !p.PRRequiresChecks {
 		t.Errorf("persisted write-back = spawn %q / pr %q / requires-checks %v, want st-prog / st-review / true",
@@ -154,7 +154,7 @@ func TestFormWriteBackPickersAndToggles(t *testing.T) {
 // A "(none)" pick clears a configured write-back state transition.
 func TestFormWriteBackStateClearToNone(t *testing.T) {
 	f, _ := newNativeTestForm(t, []config.Project{{Name: "web", Path: "/tmp/web", Repo: "acme/web"}})
-	f.poll.Name, f.poll.TeamID, f.poll.Project = "WB2", "team-1", "web"
+	f.poll.Name, f.poll.TeamID = "web", "team-1"
 	f.poll.OnMergedStateID = "st-done"
 	f.meta = &teamMeta{States: []linear.State{{ID: "st-done", Name: "Done", Type: "completed"}}}
 
@@ -172,8 +172,8 @@ func TestFormSaveRequiresProject(t *testing.T) {
 	f, _ := newNativeTestForm(t, []config.Project{
 		{Name: "web", Path: "/tmp/web", Repo: "acme/web"},
 	})
-	f.poll.Name, f.poll.TeamID = "Q", "team-1"
-	// Project deliberately left unset.
+	f.poll.TeamID = "team-1"
+	// Project (the form's Name) deliberately left unset.
 
 	if _, ev := f.save(); ev != formNone {
 		t.Fatal("save must fail without a project")

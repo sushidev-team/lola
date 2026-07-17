@@ -74,23 +74,15 @@ func (m *rootModel) detailStatusBox(w, h int) []string {
 	body = append(body, fmt.Sprintf("path %s   repo %s   agent %s   base %s",
 		compactPath(p.Path), repo, agent, base))
 
-	// Polls line.
-	var polls []string
-	for i := range m.cfg.Polls {
-		pl := m.cfg.Polls[i]
-		if pl.Project != p.Name {
-			continue
+	// Polling line: a project polls Linear iff it has a team; at most one config.
+	if p.Polls() {
+		dot := faintText.Render("○ paused")
+		if p.Enabled {
+			dot = goodText.Render("● on")
 		}
-		dot := faintText.Render("○")
-		if pl.Enabled {
-			dot = goodText.Render("●")
-		}
-		polls = append(polls, dot+" "+pl.Name)
-	}
-	if len(polls) == 0 {
-		body = append(body, faintText.Render("polls  (none)"))
+		body = append(body, "polling  "+dot)
 	} else {
-		body = append(body, "polls  "+strings.Join(polls, faintText.Render(" · ")))
+		body = append(body, faintText.Render("polling  (off)"))
 	}
 
 	// Health + rollup line.

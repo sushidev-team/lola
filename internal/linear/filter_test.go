@@ -9,8 +9,8 @@ import (
 
 // basePoll returns the minimal poll every filter test starts from:
 // team only, no project, no cycle, no states, no labels, assignee anyone.
-func basePoll() config.Poll {
-	return config.Poll{
+func basePoll() config.Project {
+	return config.Project{
 		Name:         "p",
 		TeamID:       "team-1",
 		CycleMode:    "none",
@@ -31,17 +31,17 @@ func TestBuildIssueFilterMatrix(t *testing.T) {
 
 	tests := []struct {
 		name string
-		mut  func(*config.Poll)
+		mut  func(*config.Project)
 		want map[string]any
 	}{
 		{
 			name: "team only",
-			mut:  func(p *config.Poll) {},
+			mut:  func(p *config.Project) {},
 			want: map[string]any{"team": idEq("team-1")},
 		},
 		{
 			name: "project set",
-			mut:  func(p *config.Poll) { p.ProjectID = "proj-9" },
+			mut:  func(p *config.Project) { p.ProjectID = "proj-9" },
 			want: map[string]any{
 				"team":    idEq("team-1"),
 				"project": idEq("proj-9"),
@@ -49,7 +49,7 @@ func TestBuildIssueFilterMatrix(t *testing.T) {
 		},
 		{
 			name: "cycle active uses activeCycleID not p.CycleID",
-			mut: func(p *config.Poll) {
+			mut: func(p *config.Project) {
 				p.CycleMode = "active"
 				p.CycleID = "cycle-pinned" // must be ignored in active mode
 			},
@@ -60,7 +60,7 @@ func TestBuildIssueFilterMatrix(t *testing.T) {
 		},
 		{
 			name: "cycle pinned uses p.CycleID",
-			mut: func(p *config.Poll) {
+			mut: func(p *config.Project) {
 				p.CycleMode = "pinned"
 				p.CycleID = "cycle-pinned"
 			},
@@ -71,7 +71,7 @@ func TestBuildIssueFilterMatrix(t *testing.T) {
 		},
 		{
 			name: "states non-empty",
-			mut:  func(p *config.Poll) { p.StateIDs = []string{"st-1", "st-2"} },
+			mut:  func(p *config.Project) { p.StateIDs = []string{"st-1", "st-2"} },
 			want: map[string]any{
 				"team":  idEq("team-1"),
 				"state": map[string]any{"id": map[string]any{"in": []string{"st-1", "st-2"}}},
@@ -79,7 +79,7 @@ func TestBuildIssueFilterMatrix(t *testing.T) {
 		},
 		{
 			name: "labels match_mode any",
-			mut: func(p *config.Poll) {
+			mut: func(p *config.Project) {
 				p.MatchLabels = []string{"lbl-a", "lbl-b"}
 				p.MatchMode = "any"
 			},
@@ -92,7 +92,7 @@ func TestBuildIssueFilterMatrix(t *testing.T) {
 		},
 		{
 			name: "labels match_mode all",
-			mut: func(p *config.Poll) {
+			mut: func(p *config.Project) {
 				p.MatchLabels = []string{"lbl-a", "lbl-b"}
 				p.MatchMode = "all"
 			},
@@ -106,7 +106,7 @@ func TestBuildIssueFilterMatrix(t *testing.T) {
 		},
 		{
 			name: "assignee me uses viewerID",
-			mut:  func(p *config.Poll) { p.AssigneeMode = "me" },
+			mut:  func(p *config.Project) { p.AssigneeMode = "me" },
 			want: map[string]any{
 				"team":     idEq("team-1"),
 				"assignee": idEq(viewerID),
@@ -114,7 +114,7 @@ func TestBuildIssueFilterMatrix(t *testing.T) {
 		},
 		{
 			name: "assignee user uses AssigneeUserID",
-			mut: func(p *config.Poll) {
+			mut: func(p *config.Project) {
 				p.AssigneeMode = "user"
 				p.AssigneeUserID = "user-42"
 			},
@@ -125,7 +125,7 @@ func TestBuildIssueFilterMatrix(t *testing.T) {
 		},
 		{
 			name: "everything combined",
-			mut: func(p *config.Poll) {
+			mut: func(p *config.Project) {
 				p.ProjectID = "proj-9"
 				p.CycleMode = "active"
 				p.StateIDs = []string{"st-1"}

@@ -25,7 +25,7 @@ func homeRoot(t *testing.T) *rootModel {
 func TestHomeRendersProjectsFromConfig(t *testing.T) {
 	m := homeRoot(t)
 	v := stripANSI(m.homeView())
-	for _, want := range []string{"projects", "PROJECT", "nori-app", "2 on"} {
+	for _, want := range []string{"projects", "PROJECT", "nori-app", "1 on"} {
 		if !strings.Contains(v, want) {
 			t.Errorf("home view missing %q:\n%s", want, v)
 		}
@@ -157,15 +157,12 @@ func TestHomeRemoveProject(t *testing.T) {
 		t.Fatal(err)
 	}
 	if reloaded.ProjectByName("nori-app") != nil {
-		t.Error("project not removed from config")
-	}
-	if len(reloaded.Polls) != 0 {
-		t.Errorf("the project's polls should be dropped, got %d", len(reloaded.Polls))
+		t.Error("project not removed from config (its polling goes with it)")
 	}
 }
 
-// space toggles the sole poll of a single-poll project.
-func TestHomeTogglePollSingle(t *testing.T) {
+// space pauses a polling project's polling.
+func TestHomeTogglePolling(t *testing.T) {
 	t.Setenv("LOLA_HOME", t.TempDir())
 	path, err := config.DefaultPath()
 	if err != nil {
@@ -173,8 +170,11 @@ func TestHomeTogglePollSingle(t *testing.T) {
 	}
 	cfg := &config.Config{
 		Defaults: config.Defaults{PollInterval: time.Minute, GlobalCap: 4},
-		Projects: []config.Project{{Name: "solo", Path: "/tmp/solo"}},
-		Polls:    []config.Poll{{Name: "only", Project: "solo", Enabled: true, DedupMode: "seen"}},
+		Projects: []config.Project{{
+			Name: "solo", Path: "/tmp/solo", DefaultBranch: "main",
+			Enabled: true, TeamID: "t1", CycleMode: "none", MatchMode: "any",
+			AssigneeMode: "anyone", DedupMode: "seen", ConcurrencyCap: 1,
+		}},
 	}
 	if err := cfg.Save(path); err != nil {
 		t.Fatal(err)
@@ -192,17 +192,7 @@ func TestHomeTogglePollSingle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p := reloaded.PollByName("only"); p == nil || p.Enabled {
-		t.Errorf("space should pause the single poll, got %+v", p)
-	}
-}
-
-// A multi-poll project can't toggle from home; it flashes a hint pointing at
-// the project view.
-func TestHomeTogglePollMultiHint(t *testing.T) {
-	m := homeRoot(t) // nori-app has polls A and B
-	m.Update(keyMsg("space"))
-	if !strings.Contains(m.home.flash, "2 polls") {
-		t.Errorf("expected a multi-poll hint flash, got %q", m.home.flash)
+	if p := reloaded.ProjectByName("solo"); p == nil || p.Enabled {
+		t.Errorf("space should pause the project's polling, got %+v", p)
 	}
 }

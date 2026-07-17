@@ -136,8 +136,8 @@ func (d *Daemon) clearLabelDispatch(ctx context.Context, s session.Session) {
 	type target struct{ poll, label string }
 	d.mu.Lock()
 	var targets []target
-	for _, p := range d.cfg.Polls {
-		if p.DedupMode == "label" && p.OnSentSetLabel != "" && p.Project == s.Project {
+	for _, p := range d.cfg.PollingProjects() {
+		if p.DedupMode == "label" && p.OnSentSetLabel != "" && p.Name == s.Project {
 			targets = append(targets, target{p.Name, p.OnSentSetLabel})
 		}
 	}

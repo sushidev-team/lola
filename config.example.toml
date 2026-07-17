@@ -225,114 +225,36 @@ symlinks = [".env"]
 # (which itself defaults to claude). See [defaults].agent above for how each
 # agent's lifecycle callbacks are wired and where provider auth comes from.
 # agent = "claude"
+#
+# --- Linear polling (OPTIONAL) ---------------------------------------------
+# Configure this project to auto-spawn agents from Linear. Omit team_id and the
+# project is manual-only (open PRs / worktrees by hand from the TUI). A project
+# has at most ONE polling config — it lives inline here, on the project.
+enabled = true
+team_id = "team_FE00aaaa-1111-2222-3333-444455556666"
+project_id = ""       # optional Linear project filter; empty/omitted = whole team
+cycle_mode = "active" # none | active | pinned (active re-resolves each tick)
+cycle_id = ""
+state_ids = ["state_aaaa0000-1111-2222-3333-444455556666"]
+match_labels = ["label_trig0000-1111-2222-3333-444455556666"]
+match_mode = "any"    # any = one trigger label; all = every trigger label
+assignee_mode = "me"  # anyone | me | user (user requires assignee_user_id)
+assignee_user_id = ""
+concurrency_cap = 2   # 0/omitted falls back to [defaults].concurrency_cap
+priority_sort = ["priority", "createdAt"]
+dedup_mode = "label"  # label | seen | state
+# label mode: after a spawn lola removes match_labels and sets this label, so
+# the issue stops matching. Must NOT be one of match_labels.
+on_sent_set_label = "label_sent0000-1111-2222-3333-444455556666"
+# Optional Linear write-back (P4): advance the issue's state / comment as the
+# agent progresses. All optional; omit and the project just spawns.
+# on_spawn_state_id = "state_inprogress-..."
+# on_pr_state_id = "state_inreview-..."
+# on_merged_state_id = "state_done-..."
+# comment_on_pr = true
 # Extra environment variables exported into each session.
 [project.env]
 # APP_ENV = "local"
-
-# ---------------------------------------------------------------------------
-# Poll 1: label-flip dedup. Issues in the frontend team's active cycle,
-# in a "Ready for agent" state, carrying the "agent-queue" trigger label.
-# After a successful spawn, lola removes all trigger labels (match_labels) and
-# sets the "agent-sent" label, so the issue stops matching. The label flip is
-# visible in Linear and survives daemon restarts.
-# ---------------------------------------------------------------------------
-[[poll]]
-name = "frontend-agent-queue"
-enabled = true
-team_id = "team_FE00aaaa-1111-2222-3333-444455556666"
-# Optional project filter; empty/omitted = whole team.
-project_id = ""
-# none | active | pinned. active re-resolves the team's active cycle every
-# tick (handles cycle rollover); pinned requires cycle_id.
-cycle_mode = "active"
-cycle_id = ""
-# Workflow state UUIDs (matched by ID, never name). Empty = any state.
-state_ids = ["state_aaaa0000-1111-2222-3333-444455556666"]
-# Trigger label UUIDs.
-match_labels = ["label_trig0000-1111-2222-3333-444455556666"]
-# any = at least one trigger label; all = every trigger label.
-match_mode = "any"
-# anyone | me | user. me = the API key's viewer; user requires
-# assignee_user_id.
-assignee_mode = "me"
-assignee_user_id = ""
-# References a [[project]].name above; required. lola creates a git worktree
-# from it and runs Claude Code in tmux inside it.
-project = "nori-app"
-# GitHub repository ("owner/name") for this poll's issues. The reconciler
-# passes it to `gh pr list --repo` so its open-PR check works from any
-# working directory (launchd runs the daemon outside a checkout). Optional —
-# but when empty the PR check is unavailable and orphaned issues are NEVER
-# auto-reverted (fail-closed).
-repo = "sushidev-team/nori-app"
-# Max counted AO sessions this poll may occupy. 0/omitted falls back to
-# [defaults].concurrency_cap.
-concurrency_cap = 2
-# Deterministic ordering when the budget caps the match list.
-priority_sort = ["priority", "createdAt"]
-# label | seen. label mode requires on_sent_set_label + non-empty match_labels.
-dedup_mode = "label"
-# Label ADDED after a successful spawn to mark the issue as picked up. The
-# trigger labels (match_labels) are removed automatically on the flip, so the
-# issue stops matching. Must NOT be one of match_labels.
-on_sent_set_label = "label_sent0000-1111-2222-3333-444455556666"
-
-# ---------------------------------------------------------------------------
-# Poll 2: seen-file dedup. No labels are touched; spawned issue IDs are
-# remembered in ~/.lola/state/backend-bugs.seen. Seen entries whose issues no
-# longer match the filter are pruned, so reopened tickets re-queue.
-# ---------------------------------------------------------------------------
-[[poll]]
-name = "backend-bugs"
-enabled = false
-team_id = "team_BE00aaaa-1111-2222-3333-444455556666"
-project_id = "proj_be000000-1111-2222-3333-444455556666"
-cycle_mode = "none"
-cycle_id = ""
-state_ids = ["state_bbbb0000-1111-2222-3333-444455556666"]
-match_labels = [
-  "label_bug00000-1111-2222-3333-444455556666",
-  "label_agent000-1111-2222-3333-444455556666",
-]
-# Require BOTH labels on the issue.
-match_mode = "all"
-assignee_mode = "anyone"
-assignee_user_id = ""
-project = "nori-app"
-# See poll 1; omit/leave empty to disable the reconciler's open-PR check.
-repo = "sushidev-team/nori-app"
-concurrency_cap = 1
-priority_sort = ["priority", "createdAt"]
-dedup_mode = "seen"
-on_sent_set_label = ""
-
-# ---------------------------------------------------------------------------
-# Poll 3: label-flip dedup on the native runtime, like poll 1. lola creates a
-# git worktree from the referenced [[project]], runs its post_create commands
-# and symlinks, and starts Claude Code in a fresh tmux session with the full
-# Linear issue as the prompt.
-# ---------------------------------------------------------------------------
-[[poll]]
-name = "nori-native"
-enabled = false
-team_id = "team_FE00aaaa-1111-2222-3333-444455556666"
-project_id = ""
-cycle_mode = "active"
-cycle_id = ""
-state_ids = ["state_aaaa0000-1111-2222-3333-444455556666"]
-match_labels = ["label_trig0000-1111-2222-3333-444455556666"]
-match_mode = "any"
-assignee_mode = "me"
-assignee_user_id = ""
-# References [[project]].name above; required.
-project = "nori-app"
-repo = "sushidev-team/nori-app"
-concurrency_cap = 2
-priority_sort = ["priority", "createdAt"]
-dedup_mode = "label"
-# Trigger labels (match_labels) are removed automatically on the flip; this
-# label is added to mark the issue picked up. Must NOT be one of match_labels.
-on_sent_set_label = "label_sent0000-1111-2222-3333-444455556666"
 
 # ---------------------------------------------------------------------------
 # Poll 4: Linear WRITE-BACK with state-based dedup (P4). Instead of flipping

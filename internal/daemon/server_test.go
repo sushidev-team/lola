@@ -14,7 +14,7 @@ import (
 // newEnableTestDaemon builds a daemon whose config (poll p1 + [[project]]
 // proj1) is saved to <home>/config.toml, ready for handleEnable/handleReload
 // tests (both persist via config.DefaultPath under LOLA_HOME).
-func newEnableTestDaemon(t *testing.T, poll config.Poll) *Daemon {
+func newEnableTestDaemon(t *testing.T, poll config.Project) *Daemon {
 	t.Helper()
 	cfg := testConfig(poll)
 	d := newTestDaemon(t, cfg, &linear.Fake{}, &fakeNative{})
@@ -47,20 +47,20 @@ func TestEnableValidatesConfigAndPersists(t *testing.T) {
 	}
 }
 
-// The enable-time validation now just runs Validate: a poll whose [[project]]
-// reference does not resolve is rejected and its flag is rolled back.
-func TestEnableRejectsPollWithUnknownProject(t *testing.T) {
+// The enable-time validation runs Validate: a project with an invalid polling
+// config (here a bad match_mode) is rejected and its enabled flag rolled back.
+func TestEnableRejectsInvalidPollingConfig(t *testing.T) {
 	p := labelPoll("p1")
 	p.Enabled = false
-	p.Project = "no-such-project"
+	p.MatchMode = "bogus" // fails Validate
 	d := newEnableTestDaemon(t, p)
 
 	err := d.handleEnable(context.Background(), "p1", true)
 	if err == nil {
-		t.Fatal("handleEnable must reject a poll whose project is undefined")
+		t.Fatal("handleEnable must reject an invalid polling config")
 	}
 	if d.cfg.PollByName("p1").Enabled {
-		t.Error("poll enabled despite validation failure")
+		t.Error("polling enabled despite validation failure")
 	}
 }
 

@@ -194,24 +194,24 @@ func (f *fakeNative) spawnCalls() []nativeSpawnCall {
 	return slices.Clone(f.spawns)
 }
 
-// nativePoll is a label-mode native poll referencing the "proj1" [[project]].
-func nativePoll(name string) config.Poll {
+// nativePoll is a label-mode native poll referencing the "p1" [[project]].
+func nativePoll(name string) config.Project {
 	return labelPoll(name)
 }
 
 // nativeTestConfig is the shared test config (it already defines [[project]]
-// "proj1"); kept as a named helper for readability at native call sites.
-func nativeTestConfig(polls ...config.Poll) *config.Config {
+// "p1"); kept as a named helper for readability at native call sites.
+func nativeTestConfig(polls ...config.Project) *config.Config {
 	return testConfig(polls...)
 }
 
 // nativeSess is a store-shaped native session record for seeding tests.
 func nativeSess(ident, status string) session.Session {
-	id := runtime.SessionID("proj1", ident)
+	id := runtime.SessionID("p1", ident)
 	return session.Session{
 		ID:       id,
 		Source:   "native",
-		Project:  "proj1",
+		Project:  "p1",
 		Issue:    ident,
 		Branch:   "lola/" + strings.ToLower(ident),
 		Repo:     "acme/widgets",
@@ -245,8 +245,8 @@ func TestTickNativePollSpawnsViaNativeRuntime(t *testing.T) {
 		if slices.Contains(names, "IssueLabelIDs") || slices.Contains(names, "SetIssueLabels") {
 			t.Errorf("label calls must happen only after spawn success, already saw %v", names)
 		}
-		if p.Name != "proj1" || p.Repo != "acme/widgets" || p.Path != "/tmp/proj1" {
-			t.Errorf("resolved project = %+v, want the full [[project]] proj1", p)
+		if p.Name != "p1" || p.Repo != "acme/widgets" || p.Path != "/tmp/p1" {
+			t.Errorf("resolved project = %+v, want the full [[project]] p1", p)
 		}
 	}
 
@@ -257,8 +257,8 @@ func TestTickNativePollSpawnsViaNativeRuntime(t *testing.T) {
 	if m := findMatch(t, res, "FE-7"); m.Action != "spawned" {
 		t.Fatalf("match = %+v, want spawned", m)
 	}
-	if got := nat.spawnCalls(); len(got) != 1 || got[0] != (nativeSpawnCall{"proj1", "FE-7"}) {
-		t.Errorf("native spawns = %+v, want [{proj1 FE-7}]", got)
+	if got := nat.spawnCalls(); len(got) != 1 || got[0] != (nativeSpawnCall{"p1", "FE-7"}) {
+		t.Errorf("native spawns = %+v, want [{p1 FE-7}]", got)
 	}
 
 	// Label flip after a confirmed spawn.
@@ -268,7 +268,7 @@ func TestTickNativePollSpawnsViaNativeRuntime(t *testing.T) {
 
 	// The spawned session is in the store immediately (it must count against
 	// the very next budget) and persisted.
-	id := runtime.SessionID("proj1", "FE-7")
+	id := runtime.SessionID("p1", "FE-7")
 	s, ok := d.sessions.Get(id)
 	if !ok {
 		t.Fatalf("native session %s must be upserted into the store on spawn", id)
@@ -311,7 +311,7 @@ func TestTickNativeSpawnFailureRollsBackClaim(t *testing.T) {
 	if _, ok := seen[is.ID]; !ok {
 		t.Error("seen entry must remain after a failed native spawn (race guard)")
 	}
-	if _, ok := d.sessions.Get(runtime.SessionID("proj1", "FE-7")); ok {
+	if _, ok := d.sessions.Get(runtime.SessionID("p1", "FE-7")); ok {
 		t.Error("failed native spawn must not upsert a session")
 	}
 }
@@ -319,12 +319,12 @@ func TestTickNativeSpawnFailureRollsBackClaim(t *testing.T) {
 func TestTickNativeUnknownProjectFailsWithoutStateMutation(t *testing.T) {
 	is := testIssue("FE-7", 1, "2024-01-01T00:00:00Z")
 	fake := &linear.Fake{Issues: []linear.Issue{is}}
-	cfg := nativeTestConfig(nativePoll("p1"))
-	cfg.Polls[0].Project = "no-such-project"
-	d := newTestDaemon(t, cfg, fake, &fakeNative{})
+	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), fake, &fakeNative{})
 
-	if _, err := d.tick(context.Background(), "p1", false); err == nil {
-		t.Fatal("tick must fail for a poll whose project is unknown")
+	// A poll is a project now, so an unknown target name resolves to nothing and
+	// the tick fails before any state is touched.
+	if _, err := d.tick(context.Background(), "no-such-project", false); err == nil {
+		t.Fatal("tick must fail for an unknown project")
 	}
 	if names := fake.CallNames(); len(names) != 0 {
 		t.Errorf("unknown project: no linear calls, got %v", names)
@@ -481,18 +481,18 @@ func TestHandleHookEventToolUseTouchesLastSeenOnly(t *testing.T) {
 	if err := os.MkdirAll(stateDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	blob := `[{"id":"lola-proj1-fe-1","source":"native","project":"proj1","issue":"FE-1",` +
+	blob := `[{"id":"lola-p1-fe-1","source":"native","project":"p1","issue":"FE-1",` +
 		`"status":"needs_input","first_seen":"` + old + `","last_seen":"` + old + `"}]`
 	if err := os.WriteFile(filepath.Join(stateDir, "sessions.json"), []byte(blob), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	d := newDaemon(nativeTestConfig(nativePoll("p1")), &linear.Fake{}, log.New(io.Discard, "", 0), home)
 
-	resp := d.handleHookEvent(protocol.Request{Cmd: "hookEvent", Session: "lola-proj1-fe-1", Event: "tool_use"})
+	resp := d.handleHookEvent(protocol.Request{Cmd: "hookEvent", Session: "lola-p1-fe-1", Event: "tool_use"})
 	if !resp.OK {
 		t.Fatalf("tool_use must be OK, got %+v", resp)
 	}
-	s, ok := d.sessions.Get("lola-proj1-fe-1")
+	s, ok := d.sessions.Get("lola-p1-fe-1")
 	if !ok {
 		t.Fatal("session vanished")
 	}
@@ -691,7 +691,7 @@ func TestSessionsDataIncludesSourceAndWorktree(t *testing.T) {
 	if n.Source != "native" {
 		t.Errorf("native source = %q, want native", n.Source)
 	}
-	if want := filepath.Join(d.home, "worktrees", "proj1", native.ID); n.Worktree != want {
+	if want := filepath.Join(d.home, "worktrees", "p1", native.ID); n.Worktree != want {
 		t.Errorf("native worktree = %q, want %q", n.Worktree, want)
 	}
 	a, ok := byID["ao-1"]
@@ -783,9 +783,9 @@ func TestAdoptNativeSessionsUpsertsAndPreservesFacts(t *testing.T) {
 	d.sessions.Upsert(prev)
 
 	adopted := []session.Session{
-		{ID: prev.ID, Source: "native", Project: "proj1", Issue: "FE-1", TmuxName: prev.ID, Status: "working"},
-		{ID: "lola-proj1-fe-2", Source: "native", Project: "proj1", Issue: "FE-2", Status: "dead"},
-		{ID: "lola-proj1-fe-3", Source: "native", Project: "proj1", Issue: "FE-3", Status: "orphaned"},
+		{ID: prev.ID, Source: "native", Project: "p1", Issue: "FE-1", TmuxName: prev.ID, Status: "working"},
+		{ID: "lola-p1-fe-2", Source: "native", Project: "p1", Issue: "FE-2", Status: "dead"},
+		{ID: "lola-p1-fe-3", Source: "native", Project: "p1", Issue: "FE-3", Status: "orphaned"},
 	}
 	d.native = &fakeNative{adopted: adopted}
 
@@ -795,10 +795,10 @@ func TestAdoptNativeSessionsUpsertsAndPreservesFacts(t *testing.T) {
 	if s1.Status != "working" || s1.Branch != "feat/fe-1-custom" || s1.Repo != "acme/widgets" {
 		t.Errorf("re-adopted session = %+v, want working with persisted branch/repo preserved", s1)
 	}
-	if s2 := findSession(t, d.sessions.Snapshot(), "lola-proj1-fe-2"); s2.Status != "dead" || s2.TmuxName != s2.ID {
+	if s2 := findSession(t, d.sessions.Snapshot(), "lola-p1-fe-2"); s2.Status != "dead" || s2.TmuxName != s2.ID {
 		t.Errorf("dead candidate = %+v, want status dead and TmuxName = ID", s2)
 	}
-	if s3 := findSession(t, d.sessions.Snapshot(), "lola-proj1-fe-3"); s3.Status != "orphaned" {
+	if s3 := findSession(t, d.sessions.Snapshot(), "lola-p1-fe-3"); s3.Status != "orphaned" {
 		t.Errorf("orphan candidate = %+v, want status orphaned", s3)
 	}
 	if _, err := os.Stat(filepath.Join(d.home, "state", "sessions.json")); err != nil {
@@ -825,7 +825,7 @@ func TestAdoptNativeSessionsPreservesHookAndGuardState(t *testing.T) {
 
 	// The tmux scan yields a bare live record with none of that state.
 	d.native = &fakeNative{adopted: []session.Session{
-		{ID: prev.ID, Source: "native", Project: "proj1", Issue: "FE-1", TmuxName: prev.ID, Status: "working"},
+		{ID: prev.ID, Source: "native", Project: "p1", Issue: "FE-1", TmuxName: prev.ID, Status: "working"},
 	}}
 	d.adoptNativeSessions(context.Background())
 
@@ -853,11 +853,11 @@ func TestAdoptNativeSessionsLogsAnomaliesAndScanFailure(t *testing.T) {
 	var buf bytes.Buffer
 	d := newDaemon(nativeTestConfig(nativePoll("p1")), &linear.Fake{}, log.New(&buf, "", 0), home)
 	d.native = &fakeNative{adopted: []session.Session{
-		{ID: "lola-proj1-fe-2", Source: "native", Project: "proj1", Issue: "FE-2", Status: "dead"},
-		{ID: "lola-proj1-fe-3", Source: "native", Project: "proj1", Status: "orphaned"},
+		{ID: "lola-p1-fe-2", Source: "native", Project: "p1", Issue: "FE-2", Status: "dead"},
+		{ID: "lola-p1-fe-3", Source: "native", Project: "p1", Status: "orphaned"},
 	}}
 	d.adoptNativeSessions(context.Background())
-	for _, want := range []string{"lola-proj1-fe-2", "dead", "lola-proj1-fe-3", "orphaned"} {
+	for _, want := range []string{"lola-p1-fe-2", "dead", "lola-p1-fe-3", "orphaned"} {
 		if !strings.Contains(buf.String(), want) {
 			t.Errorf("adoption anomaly log must mention %q, got:\n%s", want, buf.String())
 		}
@@ -926,7 +926,7 @@ func TestReconcileNativeDeadSessionRevertsAndKeepsWorktree(t *testing.T) {
 	if d.inflight.Has(is.ID) {
 		t.Error("reverted native orphan must be cleared from in-flight")
 	}
-	wantPath := filepath.Join(home, "worktrees", "proj1", dead.ID)
+	wantPath := filepath.Join(home, "worktrees", "p1", dead.ID)
 	if !strings.Contains(buf.String(), wantPath) {
 		t.Errorf("log must name the kept worktree %s, got:\n%s", wantPath, buf.String())
 	}
@@ -996,7 +996,7 @@ func TestReconcileNativeOnlyClearsStaleInflight(t *testing.T) {
 // multiAnyPoll is a label-mode poll that matches on ANY of two trigger labels
 // — the exact shape (match_mode=any + >1 match_labels) whose flip/revert
 // asymmetry the recorded-removed-labels fix addresses.
-func multiAnyPoll(name string) config.Poll {
+func multiAnyPoll(name string) config.Project {
 	p := labelPoll(name)
 	p.MatchMode = "any"
 	p.MatchLabels = []string{"lbl-a", "lbl-b"}

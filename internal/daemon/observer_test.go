@@ -69,16 +69,16 @@ func findSession(t *testing.T, snap []session.Session, id string) session.Sessio
 func TestObserveBackfillsMissingTitle(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("LOLA_HOME", home)
-	deadID := runtime.SessionID("proj1", "OLD")
-	liveID := runtime.SessionID("proj1", "LIVE")
+	deadID := runtime.SessionID("p1", "OLD")
+	liveID := runtime.SessionID("p1", "LIVE")
 	now := time.Now().Format(time.RFC3339)
 	stateDir := filepath.Join(home, "state")
 	if err := os.MkdirAll(stateDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	blob := `[
-	  {"id":"` + deadID + `","source":"native","project":"proj1","issue":"OLD","issue_uuid":"uuid-old","status":"dead","first_seen":"` + now + `","last_seen":"` + now + `"},
-	  {"id":"` + liveID + `","source":"native","project":"proj1","issue":"LIVE","issue_uuid":"uuid-live","status":"working","first_seen":"` + now + `","last_seen":"` + now + `"}
+	  {"id":"` + deadID + `","source":"native","project":"p1","issue":"OLD","issue_uuid":"uuid-old","status":"dead","first_seen":"` + now + `","last_seen":"` + now + `"},
+	  {"id":"` + liveID + `","source":"native","project":"p1","issue":"LIVE","issue_uuid":"uuid-live","status":"working","first_seen":"` + now + `","last_seen":"` + now + `"}
 	]`
 	if err := os.WriteFile(filepath.Join(stateDir, "sessions.json"), []byte(blob), 0o600); err != nil {
 		t.Fatal(err)
@@ -123,8 +123,8 @@ func TestObserveNativePrunesSessionsOlderThanRetention(t *testing.T) {
 	// Pre-seed the on-disk store with one stale (settled dead) and one fresh
 	// (alive, working) native session before the daemon (and its store) is
 	// constructed.
-	staleID := runtime.SessionID("proj1", "STALE")
-	freshID := runtime.SessionID("proj1", "FRESH")
+	staleID := runtime.SessionID("p1", "STALE")
+	freshID := runtime.SessionID("p1", "FRESH")
 	old := time.Now().Add(-25 * time.Hour).Format(time.RFC3339)
 	fresh := time.Now().Add(-time.Minute).Format(time.RFC3339)
 	stateDir := filepath.Join(home, "state")
@@ -132,8 +132,8 @@ func TestObserveNativePrunesSessionsOlderThanRetention(t *testing.T) {
 		t.Fatal(err)
 	}
 	blob := `[
-	  {"id":"` + staleID + `","source":"native","project":"proj1","issue":"STALE","status":"dead","first_seen":"` + old + `","last_seen":"` + old + `"},
-	  {"id":"` + freshID + `","source":"native","project":"proj1","issue":"FRESH","status":"working","first_seen":"` + fresh + `","last_seen":"` + fresh + `"}
+	  {"id":"` + staleID + `","source":"native","project":"p1","issue":"STALE","status":"dead","first_seen":"` + old + `","last_seen":"` + old + `"},
+	  {"id":"` + freshID + `","source":"native","project":"p1","issue":"FRESH","status":"working","first_seen":"` + fresh + `","last_seen":"` + fresh + `"}
 	]`
 	if err := os.WriteFile(filepath.Join(stateDir, "sessions.json"), []byte(blob), 0o600); err != nil {
 		t.Fatal(err)

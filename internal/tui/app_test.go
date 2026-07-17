@@ -7,23 +7,28 @@ import (
 	"github.com/sushidev-team/lola/internal/config"
 )
 
-func tuiTestPoll(name string) config.Poll {
-	return config.Poll{
+// tuiTestPoll is a POLLING project (a poll is a project's polling config now):
+// its name is the fixture name, and it carries the repo setup + polling fields.
+func tuiTestPoll(name string) config.Project {
+	return config.Project{
 		Name:           name,
+		Path:           "/tmp/" + name,
+		Repo:           "acme/" + name,
+		DefaultBranch:  "main",
 		Enabled:        true,
 		TeamID:         "team-1",
 		CycleMode:      "none",
 		MatchLabels:    []string{"lbl-a"},
 		MatchMode:      "any",
 		AssigneeMode:   "anyone",
-		Project:        "nori-app",
 		ConcurrencyCap: 1,
 		DedupMode:      "seen",
 	}
 }
 
-// newTestRoot writes a config with polls A and B (both referencing the one
-// defined [[project]]) and builds a rootModel on it, the way Run() does.
+// newTestRoot writes a config with a non-polling project "nori-app" (used for
+// session/detail tests) plus two polling projects A and B, and builds a
+// rootModel on it the way Run() does.
 func newTestRoot(t *testing.T) *rootModel {
 	t.Helper()
 	t.Setenv("LOLA_HOME", t.TempDir())
@@ -33,8 +38,11 @@ func newTestRoot(t *testing.T) *rootModel {
 	}
 	cfg := &config.Config{
 		Defaults: config.Defaults{PollInterval: time.Minute, ConcurrencyCap: 1, GlobalCap: 4},
-		Projects: []config.Project{{Name: "nori-app", Path: "/tmp/nori", Repo: "acme/nori"}},
-		Polls:    []config.Poll{tuiTestPoll("A"), tuiTestPoll("B")},
+		Projects: []config.Project{
+			{Name: "nori-app", Path: "/tmp/nori", Repo: "acme/nori", DefaultBranch: "main"},
+			tuiTestPoll("A"),
+			tuiTestPoll("B"),
+		},
 	}
 	if err := cfg.Save(path); err != nil {
 		t.Fatal(err)
@@ -76,12 +84,12 @@ func TestDeleteSelectedDoesNotClobberExternalChanges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.PollByName("B") != nil {
-		t.Error("poll B must be deleted")
+	if b := got.PollByName("B"); b == nil || b.Polls() {
+		t.Error("B's polling must be removed (the project itself stays)")
 	}
 	a := got.PollByName("A")
-	if a == nil {
-		t.Fatal("poll A must survive the delete")
+	if a == nil || !a.Polls() {
+		t.Fatal("A's polling must survive the delete")
 	}
 	if a.Enabled {
 		t.Error("delete must not revert A's externally persisted enabled=false")

@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/sushidev-team/lola/internal/agent"
-	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/linear"
 	"github.com/sushidev-team/lola/internal/protocol"
 	"github.com/sushidev-team/lola/internal/session"
@@ -208,25 +207,25 @@ func (d *Daemon) tick(ctx context.Context, name string, dryRun bool) (protocol.P
 		d.mu.Unlock()
 		return res, fmt.Errorf("unknown poll %q", name)
 	}
+	// A poll IS a project's polling config now, so the poll and the [[project]]
+	// it dispatches into are one and the same struct (clone every slice/map so
+	// the tick never aliases the live config after d.mu is dropped).
 	p := *pp
 	p.StateIDs = slices.Clone(p.StateIDs)
 	p.MatchLabels = slices.Clone(p.MatchLabels)
 	p.PrioritySort = slices.Clone(p.PrioritySort)
+	p.PostCreate = slices.Clone(p.PostCreate)
+	p.Symlinks = slices.Clone(p.Symlinks)
+	p.Env = maps.Clone(p.Env)
 	pollCap := d.cfg.EffectiveCap(pp)
 	globalCap := d.cfg.Defaults.GlobalCap
-	pollRepo := d.cfg.PollRepo(pp) // poll repo, falling back to the project's
+	pollRepo := d.cfg.PollRepo(pp) // the project's repo (PR checks)
 	nat := d.native                // snapshot under d.mu: reload may swap it concurrently
-	var project config.Project     // resolved [[project]]
-	if prj := d.cfg.ProjectByName(p.Project); prj != nil {
-		project = *prj
-		project.PostCreate = slices.Clone(project.PostCreate)
-		project.Symlinks = slices.Clone(project.Symlinks)
-		project.Env = maps.Clone(project.Env)
-	}
-	// The coding-agent binary this poll would spawn (per-project override →
+	project := p                   // the poll IS the project
+	// The coding-agent binary this project spawns (per-project override →
 	// [defaults].agent → "claude"): the health gate must confirm THAT binary
 	// is on PATH, not always "claude". Resolved under the config lock.
-	agentBin := agent.Parse(d.cfg.AgentForProject(p.Project)).Binary()
+	agentBin := agent.Parse(d.cfg.AgentForProject(p.Name)).Binary()
 	d.mu.Unlock()
 
 	now := time.Now()
@@ -266,7 +265,7 @@ func (d *Daemon) tick(ctx context.Context, name string, dryRun bool) (protocol.P
 		return fail("runtime unavailable: "+err.Error(), nil)
 	}
 	if project.Name == "" {
-		return fail(fmt.Sprintf("unknown project %q", p.Project), nil)
+		return fail(fmt.Sprintf("unknown project %q", p.Name), nil)
 	}
 	if nat == nil {
 		return fail("native runtime unavailable", nil)

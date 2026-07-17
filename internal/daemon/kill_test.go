@@ -33,7 +33,7 @@ func TestHandleKillHappyPath(t *testing.T) {
 	if !data.Removed {
 		t.Errorf("KillData.Removed = false, want true")
 	}
-	if want := filepath.Join(d.home, "worktrees", "proj1", s.ID); data.Worktree != want {
+	if want := filepath.Join(d.home, "worktrees", "p1", s.ID); data.Worktree != want {
 		t.Errorf("KillData.Worktree = %q, want %q", data.Worktree, want)
 	}
 	if calls := nat.killCalls(); len(calls) != 1 || calls[0] != (nativeKillCall{id: s.ID, removeWorktree: true, force: false}) {
@@ -162,7 +162,7 @@ func TestHandleKillDurableIsBestEffort(t *testing.T) {
 
 func TestHandleKillUnknownSession(t *testing.T) {
 	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})
-	_, err := d.handleKill(context.Background(), "lola-proj1-ghost", false)
+	_, err := d.handleKill(context.Background(), "lola-p1-ghost", false)
 	if err == nil || !strings.Contains(err.Error(), "unknown session") {
 		t.Fatalf("handleKill unknown = %v, want an 'unknown session' error", err)
 	}

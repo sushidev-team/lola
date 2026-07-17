@@ -11,26 +11,6 @@ import (
 	"github.com/sushidev-team/lola/internal/notify"
 )
 
-func validPoll() Poll {
-	return Poll{
-		Name:           "frontend",
-		Enabled:        true,
-		TeamID:         "team-uuid",
-		ProjectID:      "proj-uuid",
-		CycleMode:      "active",
-		StateIDs:       []string{"state-1", "state-2"},
-		MatchLabels:    []string{"label-1"},
-		MatchMode:      "any",
-		AssigneeMode:   "me",
-		Project:        "nori-app",
-		Repo:           "sushidev-team/nori-app",
-		ConcurrencyCap: 2,
-		PrioritySort:   []string{"priority", "createdAt"},
-		DedupMode:      "label",
-		OnSentSetLabel: "label-sent",
-	}
-}
-
 func validProject() Project {
 	return Project{
 		Name:          "nori-app",
@@ -43,11 +23,22 @@ func validProject() Project {
 	}
 }
 
-// secondPoll is a second valid poll (distinct name) referencing validProject(),
-// used by the round-trip test.
-func secondPoll() Poll {
-	p := validPoll()
-	p.Name = "native-poll"
+// validPoll returns a valid POLLING project — the merged model: a project with
+// Linear polling configured on it. Used where tests exercise polling config.
+func validPoll() Project {
+	p := validProject()
+	p.Enabled = true
+	p.TeamID = "team-uuid"
+	p.ProjectID = "proj-uuid"
+	p.CycleMode = "active"
+	p.StateIDs = []string{"state-1", "state-2"}
+	p.MatchLabels = []string{"label-1"}
+	p.MatchMode = "any"
+	p.AssigneeMode = "me"
+	p.ConcurrencyCap = 2
+	p.PrioritySort = []string{"priority", "createdAt"}
+	p.DedupMode = "label"
+	p.OnSentSetLabel = "label-sent"
 	return p
 }
 
@@ -144,8 +135,7 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	orig.Defaults.ConcurrencyCap = 3
 	orig.Defaults.GlobalCap = 5
 	orig.Linear = LinearConfig{APIKeyKeychain: "lola-linear", APIKeyEnv: "LINEAR_API_KEY", Endpoint: DefaultEndpoint}
-	orig.Projects = []Project{validProject()}
-	orig.Polls = []Poll{validPoll(), secondPoll()}
+	orig.Projects = []Project{validPoll()} // one polling project
 	// Resolved reaction/notify/tmux tables round-trip exactly; a load always
 	// materializes them, so a round-tripped config carries the defaults.
 	orig.Reactions = defaultReactions()
@@ -192,7 +182,7 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 // A pre-Kind config with top-level [[poll]] loads, then the first Save migrates
 // it in place to nested [[project.poll]] with no top-level [[poll]] left, and a
 // reload is identical — zero-loss, lazy migration.
-func TestMigrateTopLevelPollsToNested(t *testing.T) {
+func TestMigrateLegacyPollOntoProject(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")
 	old := `
@@ -220,67 +210,64 @@ concurrency_cap = 1
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(c.Polls) != 1 || c.Polls[0].Project != "nori" {
-		t.Fatalf("flatten of top-level poll: %+v", c.Polls)
+	// The legacy [[poll]] folds onto its project: nori now polls.
+	nori := c.ProjectByName("nori")
+	if nori == nil || !nori.Polls() || nori.TeamID != "t1" {
+		t.Fatalf("legacy poll not folded onto project: %+v", nori)
 	}
 
+	// Save migrates in place: inline polling fields, no [[poll]] table.
 	if err := c.Save(path); err != nil {
 		t.Fatal(err)
 	}
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
+	raw, _ := os.ReadFile(path)
 	s := string(raw)
-	if !strings.Contains(s, "[[project.poll]]") {
-		t.Errorf("Save should re-nest the poll under [[project.poll]]:\n%s", s)
+	if strings.Contains(s, "[[poll]]") || strings.Contains(s, "[[project.poll]]") {
+		t.Errorf("Save should drop the legacy poll table:\n%s", s)
 	}
-	if strings.Contains(s, "[[poll]]") {
-		t.Errorf("Save should drop the migrated top-level [[poll]]:\n%s", s)
+	if !strings.Contains(s, `team_id = "t1"`) {
+		t.Errorf("Save should write the polling fields inline on the project:\n%s", s)
 	}
 
 	c2, err := Load(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(c.Polls, c2.Polls) {
-		t.Errorf("reload after migration mismatch:\n before: %+v\n after:  %+v", c.Polls, c2.Polls)
+	if !reflect.DeepEqual(c.Projects, c2.Projects) {
+		t.Errorf("reload after migration mismatch:\n before: %+v\n after:  %+v", c.Projects, c2.Projects)
 	}
 }
 
-// A poll whose project does not resolve is never dropped: it round-trips as a
-// top-level [[poll]] orphan and keeps failing Validate until fixed.
-func TestOrphanPollStaysTopLevelAndFailsValidate(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "config.toml")
-	c := &Config{}
-	c.Defaults.GlobalCap = 5
-	c.Projects = []Project{{Name: "nori", Path: "/srv/nori", DefaultBranch: "main"}}
-	c.Polls = []Poll{{Name: "ghostpoll", Project: "ghost", TeamID: "t1", CycleMode: "none", MatchMode: "any", AssigneeMode: "anyone", DedupMode: "seen", ConcurrencyCap: 1}}
+// A legacy [[poll]] whose project does not resolve is surfaced by Validate.
+func TestLegacyPollUnknownProjectFailsValidate(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	body := `
+[defaults]
+global_cap = 5
 
-	if err := c.Save(path); err != nil {
+[[project]]
+name = "nori"
+path = "/srv/nori"
+
+[[poll]]
+name = "ghostpoll"
+project = "ghost"
+team_id = "t1"
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	raw, err := os.ReadFile(path)
+	c, err := Load(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(raw), "[[poll]]") {
-		t.Errorf("orphan poll (unresolvable project) must stay a top-level [[poll]]:\n%s", raw)
-	}
-
-	reloaded, err := Load(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := reloaded.Validate(); err == nil || !strings.Contains(err.Error(), "ghost") {
-		t.Errorf("orphan poll must fail Validate on its unresolved project, got: %v", err)
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "ghost") {
+		t.Errorf("a legacy poll referencing an undefined project must fail Validate, got: %v", err)
 	}
 }
 
-// A nested [[project.poll]] that names a DIFFERENT project is a hand-edit
-// conflict: dropped from the flat set and surfaced by Validate.
-func TestNestedPollProjectConflictErrors(t *testing.T) {
+// More than one poll for a project is rejected (a project has at most one).
+func TestMultiplePollsForProjectRejected(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
 	body := `
 [defaults]
@@ -291,8 +278,11 @@ name = "nori"
 path = "/srv/nori"
 
 [[project.poll]]
-name = "weird"
-project = "other"
+name = "a"
+team_id = "t1"
+
+[[project.poll]]
+name = "b"
 team_id = "t1"
 `
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
@@ -302,32 +292,8 @@ team_id = "t1"
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, p := range c.Polls {
-		if p.Name == "weird" {
-			t.Errorf("a conflicting nested poll must be dropped from the flat Polls set")
-		}
-	}
-	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "must not name a different project") {
-		t.Errorf("nested-poll project conflict must fail Validate, got: %v", err)
-	}
-}
-
-// Poll names are global across projects despite the nesting — two same-named
-// polls under different projects share the daemon's seen map, so they are
-// rejected.
-func TestDuplicatePollNameAcrossProjectsRejected(t *testing.T) {
-	c := &Config{}
-	c.Defaults.GlobalCap = 5
-	c.Projects = []Project{
-		{Name: "a", Path: "/a", DefaultBranch: "main"},
-		{Name: "b", Path: "/b", DefaultBranch: "main"},
-	}
-	mk := func(proj string) Poll {
-		return Poll{Name: "nightly", Project: proj, TeamID: "t1", CycleMode: "none", MatchMode: "any", AssigneeMode: "anyone", DedupMode: "seen", ConcurrencyCap: 1}
-	}
-	c.Polls = []Poll{mk("a"), mk("b")}
-	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "duplicate name") {
-		t.Errorf("a poll name duplicated across projects must be rejected, got: %v", err)
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "at most one") {
+		t.Errorf("two polls for one project must fail Validate, got: %v", err)
 	}
 }
 
@@ -416,8 +382,9 @@ project = "nori-app"
 	if c.Projects[1].DefaultBranch != "develop" {
 		t.Errorf("explicit default_branch = %q, want develop", c.Projects[1].DefaultBranch)
 	}
-	if c.Polls[1].Project != "nori-app" {
-		t.Errorf("poll project = %q, want nori-app", c.Polls[1].Project)
+	// The native [[poll]] folded onto its project; the AO-era keys are ignored.
+	if c.ProjectByName("nori-app") == nil {
+		t.Error("nori-app project must load")
 	}
 }
 
@@ -548,27 +515,27 @@ func TestSaveOverwriteKeepsModeAndContent(t *testing.T) {
 func TestValidate(t *testing.T) {
 	c := &Config{}
 	c.Defaults.GlobalCap = 4
-	c.Projects = []Project{validProject()}
-	c.Polls = []Poll{validPoll()}
+	c.Projects = []Project{validPoll()} // one polling project
 	if err := c.Validate(); err != nil {
 		t.Fatalf("valid config rejected: %v", err)
 	}
 
 	// Fallback cap from defaults.
-	c.Polls[0].ConcurrencyCap = 0
+	c.Projects[0].ConcurrencyCap = 0
 	c.Defaults.ConcurrencyCap = 2
 	if err := c.Validate(); err != nil {
 		t.Fatalf("defaults.concurrency_cap fallback rejected: %v", err)
 	}
-	if got := c.EffectiveCap(&c.Polls[0]); got != 2 {
+	if got := c.EffectiveCap(&c.Projects[0]); got != 2 {
 		t.Errorf("EffectiveCap = %d, want 2", got)
 	}
 
+	// Invalid polling config on projects (plus a duplicate name and no global cap).
 	bad := &Config{}
-	bad.Polls = []Poll{
-		{Name: "", CycleMode: "pinned", MatchMode: "some", AssigneeMode: "user", DedupMode: "label"},
-		{Name: "dup", TeamID: "t", CycleMode: "none", MatchMode: "all", AssigneeMode: "anyone", DedupMode: "seen", ConcurrencyCap: 1},
-		{Name: "dup", TeamID: "t", CycleMode: "none", MatchMode: "all", AssigneeMode: "anyone", DedupMode: "seen", ConcurrencyCap: 1},
+	bad.Projects = []Project{
+		{Name: "", Path: "/x", TeamID: "t", CycleMode: "pinned", MatchMode: "some", AssigneeMode: "user", DedupMode: "label"},
+		{Name: "dup", Path: "/y", TeamID: "t", CycleMode: "none", MatchMode: "all", AssigneeMode: "anyone", DedupMode: "seen", ConcurrencyCap: 1},
+		{Name: "dup", Path: "/z", TeamID: "t", CycleMode: "none", MatchMode: "all", AssigneeMode: "anyone", DedupMode: "seen", ConcurrencyCap: 1},
 	}
 	err := bad.Validate()
 	if err == nil {
@@ -578,11 +545,9 @@ func TestValidate(t *testing.T) {
 	for _, want := range []string{
 		"global_cap",
 		"name is required",
-		"team_id is required",
 		"cycle_mode=pinned requires cycle_id",
 		"match_mode",
 		"assignee_mode=user requires assignee_user_id",
-		"project is required",
 		"on_sent_set_label",
 		"concurrency_cap",
 		"duplicate name",
@@ -600,8 +565,7 @@ func TestValidateMatrix(t *testing.T) {
 	valid := func() *Config {
 		c := &Config{}
 		c.Defaults.GlobalCap = 4
-		c.Projects = []Project{validProject()}
-		c.Polls = []Poll{validPoll()}
+		c.Projects = []Project{validPoll()} // one polling project
 		return c
 	}
 
@@ -611,96 +575,96 @@ func TestValidateMatrix(t *testing.T) {
 		wantErr string // substring of Validate() error; "" = must be valid
 	}{
 		{"valid config passes", func(c *Config) {}, ""},
-		{"no polls still needs global cap", func(c *Config) { c.Polls = nil; c.Defaults.GlobalCap = 0 }, "global_cap"},
+		{"no polling still needs global cap", func(c *Config) { c.Projects = []Project{validProject()}; c.Defaults.GlobalCap = 0 }, "global_cap"},
 		{"global cap zero", func(c *Config) { c.Defaults.GlobalCap = 0 }, "global_cap"},
 		{"global cap negative", func(c *Config) { c.Defaults.GlobalCap = -1 }, "global_cap"},
 
-		{"name required", func(c *Config) { c.Polls[0].Name = "" }, "name is required"},
-		{"duplicate names rejected", func(c *Config) { c.Polls = append(c.Polls, c.Polls[0]) }, "duplicate name"},
-		{"team required", func(c *Config) { c.Polls[0].TeamID = "" }, "team_id is required"},
+		{"name required", func(c *Config) { c.Projects[0].Name = "" }, "name is required"},
+		{"duplicate names rejected", func(c *Config) { c.Projects = append(c.Projects, c.Projects[0]) }, "duplicate name"},
+		{"no team means no polling (valid)", func(c *Config) { c.Projects[0].TeamID = "" }, ""},
 
-		{"cycle_mode none ok", func(c *Config) { c.Polls[0].CycleMode = "none" }, ""},
-		{"cycle_mode active ok", func(c *Config) { c.Polls[0].CycleMode = "active" }, ""},
-		{"pinned requires cycle_id", func(c *Config) { c.Polls[0].CycleMode = "pinned"; c.Polls[0].CycleID = "" }, "cycle_mode=pinned requires cycle_id"},
-		{"pinned with cycle_id ok", func(c *Config) { c.Polls[0].CycleMode = "pinned"; c.Polls[0].CycleID = "cyc-1" }, ""},
-		{"bad cycle_mode enum", func(c *Config) { c.Polls[0].CycleMode = "weekly" }, "cycle_mode"},
-		{"empty cycle_mode rejected", func(c *Config) { c.Polls[0].CycleMode = "" }, "cycle_mode"},
+		{"cycle_mode none ok", func(c *Config) { c.Projects[0].CycleMode = "none" }, ""},
+		{"cycle_mode active ok", func(c *Config) { c.Projects[0].CycleMode = "active" }, ""},
+		{"pinned requires cycle_id", func(c *Config) { c.Projects[0].CycleMode = "pinned"; c.Projects[0].CycleID = "" }, "cycle_mode=pinned requires cycle_id"},
+		{"pinned with cycle_id ok", func(c *Config) { c.Projects[0].CycleMode = "pinned"; c.Projects[0].CycleID = "cyc-1" }, ""},
+		{"bad cycle_mode enum", func(c *Config) { c.Projects[0].CycleMode = "weekly" }, "cycle_mode"},
+		{"empty cycle_mode rejected", func(c *Config) { c.Projects[0].CycleMode = "" }, "cycle_mode"},
 
-		{"match_mode any ok", func(c *Config) { c.Polls[0].MatchMode = "any" }, ""},
-		{"match_mode all ok", func(c *Config) { c.Polls[0].MatchMode = "all" }, ""},
-		{"bad match_mode enum", func(c *Config) { c.Polls[0].MatchMode = "some" }, "match_mode"},
-		{"empty match_mode rejected", func(c *Config) { c.Polls[0].MatchMode = "" }, "match_mode"},
+		{"match_mode any ok", func(c *Config) { c.Projects[0].MatchMode = "any" }, ""},
+		{"match_mode all ok", func(c *Config) { c.Projects[0].MatchMode = "all" }, ""},
+		{"bad match_mode enum", func(c *Config) { c.Projects[0].MatchMode = "some" }, "match_mode"},
+		{"empty match_mode rejected", func(c *Config) { c.Projects[0].MatchMode = "" }, "match_mode"},
 
-		{"assignee anyone ok", func(c *Config) { c.Polls[0].AssigneeMode = "anyone" }, ""},
-		{"assignee user requires id", func(c *Config) { c.Polls[0].AssigneeMode = "user"; c.Polls[0].AssigneeUserID = "" }, "assignee_mode=user requires assignee_user_id"},
-		{"assignee user with id ok", func(c *Config) { c.Polls[0].AssigneeMode = "user"; c.Polls[0].AssigneeUserID = "u-1" }, ""},
-		{"bad assignee_mode enum", func(c *Config) { c.Polls[0].AssigneeMode = "nobody" }, "assignee_mode"},
-		{"empty assignee_mode rejected", func(c *Config) { c.Polls[0].AssigneeMode = "" }, "assignee_mode"},
+		{"assignee anyone ok", func(c *Config) { c.Projects[0].AssigneeMode = "anyone" }, ""},
+		{"assignee user requires id", func(c *Config) { c.Projects[0].AssigneeMode = "user"; c.Projects[0].AssigneeUserID = "" }, "assignee_mode=user requires assignee_user_id"},
+		{"assignee user with id ok", func(c *Config) { c.Projects[0].AssigneeMode = "user"; c.Projects[0].AssigneeUserID = "u-1" }, ""},
+		{"bad assignee_mode enum", func(c *Config) { c.Projects[0].AssigneeMode = "nobody" }, "assignee_mode"},
+		{"empty assignee_mode rejected", func(c *Config) { c.Projects[0].AssigneeMode = "" }, "assignee_mode"},
 
-		{"repo empty ok (falls back to project repo)", func(c *Config) { c.Polls[0].Repo = "" }, ""},
-		{"repo owner/name ok", func(c *Config) { c.Polls[0].Repo = "sushidev-team/nori-app" }, ""},
-		{"repo dots underscores dashes ok", func(c *Config) { c.Polls[0].Repo = "My-Org.x/repo_name.js" }, ""},
-		{"repo without owner rejected", func(c *Config) { c.Polls[0].Repo = "nori-app" }, `repo must be "owner/name"`},
-		{"repo url rejected", func(c *Config) { c.Polls[0].Repo = "https://github.com/sushidev-team/nori-app" }, `repo must be "owner/name"`},
-		{"repo extra path segment rejected", func(c *Config) { c.Polls[0].Repo = "a/b/c" }, `repo must be "owner/name"`},
-		{"repo embedded space rejected", func(c *Config) { c.Polls[0].Repo = "owner/na me" }, `repo must be "owner/name"`},
+		{"repo empty ok (falls back to project repo)", func(c *Config) { c.Projects[0].Repo = "" }, ""},
+		{"repo owner/name ok", func(c *Config) { c.Projects[0].Repo = "sushidev-team/nori-app" }, ""},
+		{"repo dots underscores dashes ok", func(c *Config) { c.Projects[0].Repo = "My-Org.x/repo_name.js" }, ""},
+		{"repo without owner rejected", func(c *Config) { c.Projects[0].Repo = "nori-app" }, `repo must be "owner/name"`},
+		{"repo url rejected", func(c *Config) { c.Projects[0].Repo = "https://github.com/sushidev-team/nori-app" }, `repo must be "owner/name"`},
+		{"repo extra path segment rejected", func(c *Config) { c.Projects[0].Repo = "a/b/c" }, `repo must be "owner/name"`},
+		{"repo embedded space rejected", func(c *Config) { c.Projects[0].Repo = "owner/na me" }, `repo must be "owner/name"`},
 
-		{"label mode needs set label", func(c *Config) { c.Polls[0].OnSentSetLabel = "" }, "on_sent_set_label"},
-		{"label mode needs match labels", func(c *Config) { c.Polls[0].MatchLabels = nil }, "requires match_labels"},
+		{"label mode needs set label", func(c *Config) { c.Projects[0].OnSentSetLabel = "" }, "on_sent_set_label"},
+		{"label mode needs match labels", func(c *Config) { c.Projects[0].MatchLabels = nil }, "requires match_labels"},
 		{"label mode set label must not be a match label", func(c *Config) {
-			c.Polls[0].OnSentSetLabel = "label-1"
+			c.Projects[0].OnSentSetLabel = "label-1"
 		}, "on_sent_set_label must not be one of match_labels"},
 		{"label mode any with multiple match labels ok", func(c *Config) {
-			c.Polls[0].MatchMode = "any"
-			c.Polls[0].MatchLabels = []string{"label-1", "label-2"}
+			c.Projects[0].MatchMode = "any"
+			c.Projects[0].MatchLabels = []string{"label-1", "label-2"}
 		}, ""},
 		{"label mode all with multiple match labels ok", func(c *Config) {
-			c.Polls[0].MatchMode = "all"
-			c.Polls[0].MatchLabels = []string{"label-1", "label-2"}
+			c.Projects[0].MatchMode = "all"
+			c.Projects[0].MatchLabels = []string{"label-1", "label-2"}
 		}, ""},
 		{"seen mode multiple any labels ok", func(c *Config) {
-			c.Polls[0].DedupMode = "seen"
-			c.Polls[0].OnSentSetLabel = ""
-			c.Polls[0].MatchMode = "any"
-			c.Polls[0].MatchLabels = []string{"label-1", "label-2"}
+			c.Projects[0].DedupMode = "seen"
+			c.Projects[0].OnSentSetLabel = ""
+			c.Projects[0].MatchMode = "any"
+			c.Projects[0].MatchLabels = []string{"label-1", "label-2"}
 		}, ""},
 		{"seen mode needs no labels", func(c *Config) {
-			c.Polls[0].DedupMode = "seen"
-			c.Polls[0].OnSentSetLabel = ""
+			c.Projects[0].DedupMode = "seen"
+			c.Projects[0].OnSentSetLabel = ""
 		}, ""},
-		{"bad dedup_mode enum", func(c *Config) { c.Polls[0].DedupMode = "both" }, "dedup_mode"},
-		{"empty dedup_mode rejected", func(c *Config) { c.Polls[0].DedupMode = "" }, "dedup_mode"},
+		{"bad dedup_mode enum", func(c *Config) { c.Projects[0].DedupMode = "both" }, "dedup_mode"},
+		{"empty dedup_mode rejected", func(c *Config) { c.Projects[0].DedupMode = "" }, "dedup_mode"},
 
 		// dedup_mode=state (P4): dedups by moving the issue OUT of state_ids on
 		// spawn. Requires state_ids set and on_spawn_state_id set to a state that
 		// is NOT one of state_ids.
 		{"state mode valid", func(c *Config) {
-			c.Polls[0].DedupMode = "state"
-			c.Polls[0].OnSpawnStateID = "state-inprogress" // not in validPoll's state_ids
+			c.Projects[0].DedupMode = "state"
+			c.Projects[0].OnSpawnStateID = "state-inprogress" // not in validPoll's state_ids
 		}, ""},
 		{"state mode requires spawn state", func(c *Config) {
-			c.Polls[0].DedupMode = "state"
-			c.Polls[0].OnSpawnStateID = ""
+			c.Projects[0].DedupMode = "state"
+			c.Projects[0].OnSpawnStateID = ""
 		}, "dedup_mode=state requires on_spawn_state_id"},
 		{"state mode spawn state must not be a match state", func(c *Config) {
-			c.Polls[0].DedupMode = "state"
-			c.Polls[0].OnSpawnStateID = "state-1" // one of validPoll's state_ids
+			c.Projects[0].DedupMode = "state"
+			c.Projects[0].OnSpawnStateID = "state-1" // one of validPoll's state_ids
 		}, "on_spawn_state_id must not be one of state_ids"},
 		{"state mode requires state_ids", func(c *Config) {
-			c.Polls[0].DedupMode = "state"
-			c.Polls[0].OnSpawnStateID = "state-inprogress"
-			c.Polls[0].StateIDs = nil
+			c.Projects[0].DedupMode = "state"
+			c.Projects[0].OnSpawnStateID = "state-inprogress"
+			c.Projects[0].StateIDs = nil
 		}, "dedup_mode=state requires state_ids"},
 		{"write-back fields coexist with label dedup", func(c *Config) {
-			c.Polls[0].OnPRStateID = "state-review"
-			c.Polls[0].OnMergedStateID = "state-done"
-			c.Polls[0].BlockedLabelID = "label-blocked"
-			c.Polls[0].CommentOnPR = true
+			c.Projects[0].OnPRStateID = "state-review"
+			c.Projects[0].OnMergedStateID = "state-done"
+			c.Projects[0].BlockedLabelID = "label-blocked"
+			c.Projects[0].CommentOnPR = true
 		}, ""},
 
-		{"cap zero without default", func(c *Config) { c.Polls[0].ConcurrencyCap = 0 }, "concurrency_cap"},
-		{"cap negative without default", func(c *Config) { c.Polls[0].ConcurrencyCap = -2 }, "concurrency_cap"},
-		{"cap zero with default ok", func(c *Config) { c.Polls[0].ConcurrencyCap = 0; c.Defaults.ConcurrencyCap = 2 }, ""},
+		{"cap zero without default", func(c *Config) { c.Projects[0].ConcurrencyCap = 0 }, "concurrency_cap"},
+		{"cap negative without default", func(c *Config) { c.Projects[0].ConcurrencyCap = -2 }, "concurrency_cap"},
+		{"cap zero with default ok", func(c *Config) { c.Projects[0].ConcurrencyCap = 0; c.Defaults.ConcurrencyCap = 2 }, ""},
 
 		{"project valid ok", func(c *Config) { c.Projects = []Project{validProject()} }, ""},
 		{"project name required", func(c *Config) {
@@ -726,9 +690,8 @@ func TestValidateMatrix(t *testing.T) {
 			p.Repo = "https://github.com/sushidev-team/nori-app"
 			c.Projects = []Project{p}
 		}, `project "nori-app": repo must be "owner/name"`},
-		{"project validated even with zero polls", func(c *Config) {
-			c.Polls = nil
-			p := validProject()
+		{"non-polling project still validated", func(c *Config) {
+			p := validProject() // no polling
 			p.Path = ""
 			c.Projects = []Project{p}
 		}, "path is required"},
@@ -761,14 +724,6 @@ func TestValidateMatrix(t *testing.T) {
 			p.Env = map[string]string{"has-dash": "x"}
 			c.Projects = []Project{p}
 		}, "is not a valid shell identifier"},
-
-		// Every poll must reference a defined [[project]].
-		{"poll project required", func(c *Config) { c.Polls[0].Project = "" }, "project is required"},
-		{"poll project must resolve", func(c *Config) { c.Polls[0].Project = "ghost" }, `project "ghost" is not defined`},
-		{"poll project resolves ok", func(c *Config) { c.Polls[0].Project = "nori-app" }, ""},
-		{"poll project without any projects rejected", func(c *Config) {
-			c.Projects = nil
-		}, `project "nori-app" is not defined`},
 	}
 
 	for _, tc := range cases {
@@ -818,40 +773,31 @@ func TestEffectiveCapFallback(t *testing.T) {
 	}
 }
 
-// PollRepo resolves the PR-check repo: the poll's own repo wins, else the
-// referenced [[project]]'s repo, else empty.
+// PollRepo resolves the PR-check repo: the project's own repo, else empty.
 func TestPollRepo(t *testing.T) {
-	c := &Config{Projects: []Project{{Name: "nori-app", Repo: "sushidev-team/nori-app"}}}
-
-	p := Poll{Project: "nori-app", Repo: "acme/widgets"}
-	if got := c.PollRepo(&p); got != "acme/widgets" {
-		t.Errorf("PollRepo = %q, want the poll's own repo", got)
+	c := &Config{}
+	p := &Project{Name: "nori-app", Repo: "sushidev-team/nori-app"}
+	if got := c.PollRepo(p); got != "sushidev-team/nori-app" {
+		t.Errorf("PollRepo = %q, want the project's repo", got)
 	}
-
-	p.Repo = "" // falls back to the project's repo
-	if got := c.PollRepo(&p); got != "sushidev-team/nori-app" {
-		t.Errorf("PollRepo = %q, want the project's repo fallback", got)
-	}
-
-	p.Project = "ghost" // unknown project, no poll repo
-	if got := c.PollRepo(&p); got != "" {
+	p.Repo = ""
+	if got := c.PollRepo(p); got != "" {
 		t.Errorf("PollRepo = %q, want empty", got)
 	}
-
 	if got := c.PollRepo(nil); got != "" {
 		t.Errorf("PollRepo(nil) = %q, want empty", got)
 	}
 }
 
 func TestPollByName(t *testing.T) {
-	c := &Config{Polls: []Poll{validPoll()}}
-	p := c.PollByName("frontend")
+	c := &Config{Projects: []Project{validPoll()}} // named "nori-app"
+	p := c.PollByName("nori-app")
 	if p == nil {
-		t.Fatal("PollByName returned nil for existing poll")
+		t.Fatal("PollByName returned nil for an existing polling project")
 	}
 	p.Enabled = false
-	if c.Polls[0].Enabled {
-		t.Error("PollByName must return a pointer into Polls")
+	if c.Projects[0].Enabled {
+		t.Error("PollByName must return a pointer into Projects")
 	}
 	if c.PollByName("missing") != nil {
 		t.Error("PollByName must return nil for unknown name")
@@ -886,9 +832,9 @@ func TestExampleConfigLoadsAndValidates(t *testing.T) {
 	if c.ProjectByName("nori-app") == nil {
 		t.Error("example config should define project nori-app")
 	}
-	for _, p := range c.Polls {
-		if p.Project == "" {
-			t.Errorf("poll %q must reference a [[project]]", p.Name)
+	for _, p := range c.PollingProjects() {
+		if p.TeamID == "" {
+			t.Errorf("polling project %q must have a team", p.Name)
 		}
 	}
 }
@@ -1174,7 +1120,6 @@ func TestWriteBackRoundTrip(t *testing.T) {
 
 	orig := &Config{}
 	orig.Defaults.GlobalCap = 4
-	orig.Projects = []Project{validProject()}
 	orig.Reactions = defaultReactions()
 	orig.Notify = defaultNotify()
 
@@ -1189,7 +1134,7 @@ func TestWriteBackRoundTrip(t *testing.T) {
 	p.CommentOnPR = true
 	p.CommentOnMerged = true
 	p.CommentOnBlocked = true
-	orig.Polls = []Poll{p}
+	orig.Projects = []Project{p}
 
 	if err := orig.Validate(); err != nil {
 		t.Fatalf("state-mode write-back poll must validate: %v", err)
@@ -1201,8 +1146,8 @@ func TestWriteBackRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(orig.Polls, got.Polls) {
-		t.Errorf("write-back round trip mismatch:\n save: %+v\n load: %+v", orig.Polls, got.Polls)
+	if !reflect.DeepEqual(orig.Projects, got.Projects) {
+		t.Errorf("write-back round trip mismatch:\n save: %+v\n load: %+v", orig.Projects, got.Projects)
 	}
 	if err := got.Validate(); err != nil {
 		t.Errorf("reloaded write-back config must validate: %v", err)
@@ -1687,8 +1632,7 @@ func TestAgentValidation(t *testing.T) {
 	base := func() *Config {
 		c := &Config{}
 		c.Defaults.GlobalCap = 4
-		c.Projects = []Project{validProject()}
-		c.Polls = []Poll{validPoll()}
+		c.Projects = []Project{validPoll()}
 		return c
 	}
 	cases := []struct {
@@ -1737,10 +1681,9 @@ func TestAgentRoundTrip(t *testing.T) {
 	orig.Defaults.Agent = "codex"
 	orig.Reactions = defaultReactions()
 	orig.Notify = defaultNotify()
-	pr := validProject()
+	pr := validPoll()
 	pr.Agent = "opencode"
 	orig.Projects = []Project{pr}
-	orig.Polls = []Poll{validPoll()}
 
 	if err := orig.Validate(); err != nil {
 		t.Fatalf("agent config must validate: %v", err)

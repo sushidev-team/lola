@@ -299,7 +299,7 @@ func (m *rootModel) openProjectForm() (tea.Model, tea.Cmd) {
 	name := ""
 	if m.focus == focusPolls {
 		if p := m.selectedPoll(); p != nil {
-			name = p.Project
+			name = p.Name
 		}
 	} else if sel := m.sessions.selected(); sel != nil {
 		name = sel.Project

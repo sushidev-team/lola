@@ -8,7 +8,7 @@ import "github.com/sushidev-team/lola/internal/config"
 // activeCycleID is the team's active cycle resolved at tick start (used only
 // when cycle_mode=active); viewerID is the authenticated user's UUID (used
 // only when assignee_mode=me).
-func BuildIssueFilter(p config.Poll, activeCycleID, viewerID string) map[string]any {
+func BuildIssueFilter(p config.Project, activeCycleID, viewerID string) map[string]any {
 	idEq := func(id string) map[string]any {
 		return map[string]any{"id": map[string]any{"eq": id}}
 	}

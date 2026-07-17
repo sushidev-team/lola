@@ -39,7 +39,7 @@ type Fake struct {
 	// MatchingIssues fixture: IssuesFunc wins when non-nil, else the
 	// static Issues slice is returned.
 	Issues     []Issue
-	IssuesFunc func(p config.Poll, activeCycleID, viewerID string) ([]Issue, error)
+	IssuesFunc func(p config.Project, activeCycleID, viewerID string) ([]Issue, error)
 
 	// TitleByIssue (keyed by issue UUID) backs IssueTitle for the title backfill.
 	TitleByIssue map[string]string
@@ -156,7 +156,7 @@ func (f *Fake) Members(ctx context.Context, teamID string) ([]User, error) {
 	return slices.Clone(f.MembersByTeam[teamID]), nil
 }
 
-func (f *Fake) MatchingIssues(ctx context.Context, p config.Poll, activeCycleID, viewerID string) ([]Issue, error) {
+func (f *Fake) MatchingIssues(ctx context.Context, p config.Project, activeCycleID, viewerID string) ([]Issue, error) {
 	f.mu.Lock()
 	err := f.record("MatchingIssues", p, activeCycleID, viewerID)
 	fn := f.IssuesFunc

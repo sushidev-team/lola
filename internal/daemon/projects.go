@@ -36,12 +36,13 @@ func (d *Daemon) projectsData(_ context.Context) protocol.ProjectsData {
 	for _, pr := range d.cfg.Projects {
 		kind := d.cfg.AgentForProject(pr.Name)
 		m := projMeta{p: pr, agentKind: kind, agentBin: agent.Parse(kind).Binary()}
-		for i := range d.cfg.Polls {
-			if d.cfg.Polls[i].Project == pr.Name {
-				m.polls = append(m.polls, d.cfg.Polls[i].Name)
-				if d.cfg.Polls[i].Enabled {
-					m.enabled++
-				}
+		// A project has at most one polling config (its own). The status tracker
+		// is keyed by project name, so m.polls holds the project's own name when
+		// it polls.
+		if pr.Polls() {
+			m.polls = []string{pr.Name}
+			if pr.Enabled {
+				m.enabled = 1
 			}
 		}
 		metas = append(metas, m)

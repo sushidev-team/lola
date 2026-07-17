@@ -48,31 +48,27 @@ const (
 	wbBlocked
 )
 
-// pollForSession resolves the poll whose P4 write-back config applies to a
-// session: by the recorded PollName, else (for records adopted without one) the
-// first poll targeting the session's project. Returns nil — write-back then a
-// no-op — when neither resolves. The returned poll is a copy, safe to read after
-// the config lock is dropped.
-func (d *Daemon) pollForSession(s session.Session) *config.Poll {
-	// A pr/manual session is never Linear-bound: it carries no issue UUID, so the
-	// project-fallback below must NOT resolve a poll for it (that would drive a
-	// write-back API call against an empty UUID). Fail closed.
+// pollForSession resolves the project whose write-back config applies to a
+// session: the recorded PollName (which is the project's name), else the
+// session's project. Returns nil — write-back then a no-op — for a non-Linear
+// session or an unknown project. The returned project is a copy, safe to read
+// after the config lock is dropped.
+func (d *Daemon) pollForSession(s session.Session) *config.Project {
+	// A pr/manual session is never Linear-bound: it carries no issue UUID, so it
+	// must NOT resolve a project's write-back config (that would drive an API
+	// call against an empty UUID). Fail closed.
 	if !s.LinearBound() {
 		return nil
 	}
+	name := s.PollName
+	if name == "" {
+		name = s.Project
+	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if s.PollName != "" {
-		if p := d.cfg.PollByName(s.PollName); p != nil {
-			pc := *p
-			return &pc
-		}
-	}
-	for i := range d.cfg.Polls {
-		if d.cfg.Polls[i].Project == s.Project && s.Project != "" {
-			pc := d.cfg.Polls[i]
-			return &pc
-		}
+	if p := d.cfg.ProjectByName(name); p != nil {
+		pc := *p
+		return &pc
 	}
 	return nil
 }
@@ -169,7 +165,7 @@ func (d *Daemon) setWBGuard(id string, g wbGuard) {
 // there is special: fall back to a persisted seen entry, or the issue would be
 // re-dispatched forever. The guard is set optimistically even on comment failure
 // (a retry could double-comment; the dedup already blocks re-dispatch).
-func (d *Daemon) writeBackSpawn(ctx context.Context, api linear.API, p config.Poll, is linear.Issue, sess session.Session) {
+func (d *Daemon) writeBackSpawn(ctx context.Context, api linear.API, p config.Project, is linear.Issue, sess session.Session) {
 	if p.OnSpawnStateID == "" && !p.CommentOnSpawn {
 		return // nothing configured for spawn
 	}
@@ -329,7 +325,7 @@ func (d *Daemon) writeBackEscalation(ctx context.Context, s session.Session) {
 // is preserved. A failed label write returns without the guard (retried next
 // cycle, no comment yet); once past it the guard is stamped even on comment
 // failure. Callers pass their already-resolved client.
-func (d *Daemon) writeBackBlocked(ctx context.Context, api linear.API, p config.Poll, s session.Session, reason string) {
+func (d *Daemon) writeBackBlocked(ctx context.Context, api linear.API, p config.Project, s session.Session, reason string) {
 	if s.WBBlockedDone {
 		return
 	}

@@ -71,7 +71,7 @@ func (f *fakeReview) callCount() int {
 
 // reviewTestConfig is a native test config with the [review] buddy enabled
 // (on_pr_open + send_to_agent on, comment off — the `enabled = true` defaults).
-func reviewTestConfig(polls ...config.Poll) *config.Config {
+func reviewTestConfig(polls ...config.Project) *config.Config {
 	c := nativeTestConfig(polls...)
 	c.Review = config.ReviewConfig{
 		Enabled:        true,
@@ -108,7 +108,7 @@ func TestReviewOnPROpenRunsRoutesToWorkerAndNotifies(t *testing.T) {
 	if len(calls) != 1 {
 		t.Fatalf("want one review exec, got %d", len(calls))
 	}
-	wantDir := filepath.Join(d.home, "worktrees", "proj1", s.ID)
+	wantDir := filepath.Join(d.home, "worktrees", "p1", s.ID)
 	if calls[0].dir != wantDir || calls[0].base != "main" {
 		t.Errorf("review exec = {dir %q, base %q}, want {%q, main}", calls[0].dir, calls[0].base, wantDir)
 	}
@@ -138,7 +138,7 @@ func TestReviewOnPROpenRunsRoutesToWorkerAndNotifies(t *testing.T) {
 	}
 }
 
-// runtime_id resolves the store ID for a proj1 issue, matching nativeSess.
+// runtime_id resolves the store ID for a p1 issue, matching nativeSess.
 func runtime_id(ident string) string { return nativeSess(ident, "").ID }
 
 // --- fire once per PR; a NEW PR number re-runs -------------------------------

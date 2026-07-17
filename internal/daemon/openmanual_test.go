@@ -15,17 +15,17 @@ func TestHandleOpenManualCreatesShell(t *testing.T) {
 	nat := &fakeNative{}
 	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, nat)
 
-	data, err := d.handleOpenManual(context.Background(), protocol.OpenManualArgs{Project: "proj1", Branch: "feat/x", Base: "develop"})
+	data, err := d.handleOpenManual(context.Background(), protocol.OpenManualArgs{Project: "p1", Branch: "feat/x", Base: "develop"})
 	if err != nil {
 		t.Fatalf("handleOpenManual: %v", err)
 	}
-	wantID := runtime.ManualSessionID("proj1", "feat/x")
+	wantID := runtime.ManualSessionID("p1", "feat/x")
 	if data.SessionID != wantID || data.Branch != "feat/x" {
 		t.Errorf("data = %+v, want id=%s branch=feat/x", data, wantID)
 	}
 
 	calls := nat.openManualCalls()
-	if len(calls) != 1 || calls[0] != (nativeOpenManualCall{project: "proj1", id: wantID, branch: "feat/x", base: "develop"}) {
+	if len(calls) != 1 || calls[0] != (nativeOpenManualCall{project: "p1", id: wantID, branch: "feat/x", base: "develop"}) {
 		t.Fatalf("openManual calls = %+v", calls)
 	}
 
@@ -58,7 +58,7 @@ func TestHandleOpenManualUnknownProject(t *testing.T) {
 func TestHandleOpenManualRequiresBranch(t *testing.T) {
 	nat := &fakeNative{}
 	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, nat)
-	if _, err := d.handleOpenManual(context.Background(), protocol.OpenManualArgs{Project: "proj1"}); err == nil {
+	if _, err := d.handleOpenManual(context.Background(), protocol.OpenManualArgs{Project: "p1"}); err == nil {
 		t.Fatal("want an error when branch is empty")
 	}
 }
@@ -66,10 +66,10 @@ func TestHandleOpenManualRequiresBranch(t *testing.T) {
 func TestHandleOpenManualAlreadyOpen(t *testing.T) {
 	nat := &fakeNative{}
 	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, nat)
-	id := runtime.ManualSessionID("proj1", "feat/x")
-	d.sessions.Upsert(session.Session{ID: id, Source: "native", Kind: session.KindManual, Agentless: true, Project: "proj1", Status: "shell"})
+	id := runtime.ManualSessionID("p1", "feat/x")
+	d.sessions.Upsert(session.Session{ID: id, Source: "native", Kind: session.KindManual, Agentless: true, Project: "p1", Status: "shell"})
 
-	if _, err := d.handleOpenManual(context.Background(), protocol.OpenManualArgs{Project: "proj1", Branch: "feat/x"}); err == nil {
+	if _, err := d.handleOpenManual(context.Background(), protocol.OpenManualArgs{Project: "p1", Branch: "feat/x"}); err == nil {
 		t.Fatal("want an error when the branch is already open")
 	}
 	if len(nat.openManualCalls()) != 0 {
@@ -82,7 +82,7 @@ func TestHandleOpenManualHealthGate(t *testing.T) {
 	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, nat)
 	d.runtimeHealth = func(string) error { return errors.New("missing git") }
 
-	if _, err := d.handleOpenManual(context.Background(), protocol.OpenManualArgs{Project: "proj1", Branch: "feat/x"}); err == nil {
+	if _, err := d.handleOpenManual(context.Background(), protocol.OpenManualArgs{Project: "p1", Branch: "feat/x"}); err == nil {
 		t.Fatal("want an error when the runtime is unhealthy")
 	}
 	if len(nat.openManualCalls()) != 0 {

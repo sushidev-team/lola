@@ -28,20 +28,19 @@ func findProject(t *testing.T, data protocol.ProjectsData, name string) protocol
 // per-project session rollups (total / live-counted / needs-you / ci-red /
 // open-PRs), and per-project agent health — all from in-memory snapshots.
 func TestProjectsDataRollup(t *testing.T) {
-	p1 := labelPoll("triage")
-	p1.Project = "alpha"
-	p1.Enabled = true
-	p2 := labelPoll("nightly")
-	p2.Project = "alpha"
-	p2.Enabled = false
+	// alpha polls (enabled); beta has no polling and no repo. A project has at
+	// most one polling config now.
+	alphaP := labelPoll("alpha")
+	alphaP.Repo = "acme/alpha"
+	alphaP.Path = "/tmp/alpha"
+	alphaP.Enabled = true
 
 	cfg := &config.Config{
 		Defaults: config.Defaults{ConcurrencyCap: 10, GlobalCap: 10},
 		Projects: []config.Project{
-			{Name: "alpha", Path: "/tmp/alpha", Repo: "acme/alpha", DefaultBranch: "main"},
+			alphaP,
 			{Name: "beta", Path: "/tmp/beta", DefaultBranch: "main"}, // no repo, no poll
 		},
-		Polls: []config.Poll{p1, p2},
 	}
 	d := newTestDaemon(t, cfg, &linear.Fake{}, &fakeNative{})
 
@@ -60,8 +59,8 @@ func TestProjectsDataRollup(t *testing.T) {
 	data := d.projectsData(context.Background())
 
 	alpha := findProject(t, data, "alpha")
-	if alpha.PollCount != 2 || alpha.PollsEnabled != 1 {
-		t.Errorf("alpha polls: count=%d enabled=%d, want 2/1", alpha.PollCount, alpha.PollsEnabled)
+	if alpha.PollCount != 1 || alpha.PollsEnabled != 1 {
+		t.Errorf("alpha polls: count=%d enabled=%d, want 1/1", alpha.PollCount, alpha.PollsEnabled)
 	}
 	if alpha.Sessions != 5 {
 		t.Errorf("alpha sessions = %d, want 5", alpha.Sessions)
