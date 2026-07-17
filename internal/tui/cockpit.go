@@ -659,8 +659,10 @@ func (m *rootModel) cockpitMessage() string {
 		return warnText.Render(s.flash)
 	case m.list.flash != "":
 		return faintText.Render(m.list.flash)
+	case m.daemonOp != "":
+		return warnText.Render("daemon: " + m.daemonOp + "…")
 	case s.daemonDown:
-		return badText.Render("daemon: not running") + faintText.Render("  (start with: lola run)")
+		return badText.Render("daemon: not running") + faintText.Render(m.daemonDownHint())
 	case s.dataErr != "":
 		return badText.Render("sessions: " + s.dataErr)
 	}
@@ -705,7 +707,15 @@ func (m *rootModel) keybar(w int) string {
 		}
 		keys = append(keys, "x kill", "/ filter", "! needs-you", "V lens", "n next!", "tab → polls")
 	}
-	keys = append(keys, "P project", "S settings", "d doctor", "q quit")
+	keys = append(keys, "P project", "S settings", "d doctor")
+	if m.manageDaemon() {
+		if m.list.status == nil {
+			keys = append(keys, "^r start daemon")
+		} else {
+			keys = append(keys, "^r restart", "^x stop")
+		}
+	}
+	keys = append(keys, "q quit")
 	return previewLine(faintText.Render(strings.Join(keys, " · ")), w)
 }
 

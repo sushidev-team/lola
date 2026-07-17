@@ -68,6 +68,28 @@ type rootModel struct {
 	doctorLoading bool
 	doctorReport  *doctor.Report
 	doctorScroll  int
+
+	// daemonOp is the in-flight lifecycle transition ("starting"/"stopping"/
+	// "restarting"), shown in the message line while a ^r/^x/auto-start op runs;
+	// cleared when its daemonOpMsg arrives. Only set in self-managed mode.
+	daemonOp string
+}
+
+// manageDaemon reports whether the TUI owns the daemon lifecycle (auto-start,
+// ^r restart, ^x stop). Off when [defaults].manage_daemon = false (launchd owns
+// it), so the TUI never fights an external supervisor.
+func (m *rootModel) manageDaemon() bool {
+	return m.cfg == nil || m.cfg.AutoManageDaemon()
+}
+
+// daemonDownHint is the parenthetical shown after the daemon-down banner: in
+// self-managed mode it points at the restart key (auto-start already tried and
+// failed); otherwise at the external supervisor.
+func (m *rootModel) daemonDownHint() string {
+	if m.manageDaemon() {
+		return "  (^r to start)"
+	}
+	return "  (start with: lola run)"
 }
 
 // Run opens the interactive TUI (poll list + cascading edit form). On first
@@ -156,7 +178,14 @@ func bestEffortReloadCmd() tea.Msg {
 // ---- tea.Model ----
 
 func (m *rootModel) Init() tea.Cmd {
-	return tea.Batch(fetchStatusCmd, statusTick())
+	cmds := []tea.Cmd{fetchStatusCmd, statusTick()}
+	// Self-managed lifecycle: if no daemon is answering the socket, silently
+	// bring one up on open. A live (or launchd-managed) daemon is left alone.
+	if m.manageDaemon() {
+		m.daemonOp = "starting"
+		cmds = append(cmds, ensureDaemonCmd)
+	}
+	return tea.Batch(cmds...)
 }
 
 func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -234,6 +263,16 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.doctorLoading, m.doctorReport, m.doctorScroll = false, &r, 0
 		}
 		return m, nil
+	case daemonOpMsg:
+		m.daemonOp = ""
+		if v.err != nil {
+			m.sessions.flash, m.sessions.flashGood = "daemon "+v.op+" failed: "+v.err.Error(), false
+		} else if v.op != "start" {
+			// Stay quiet on a successful auto-start; flash explicit stop/restart.
+			m.sessions.flash, m.sessions.flashGood = daemonOpPast(v.op), true
+		}
+		// Re-read health and sessions now that the daemon changed state.
+		return m, tea.Batch(fetchStatusCmd, fetchSessionsCmd)
 	case tea.KeyPressMsg:
 		// ctrl+c quits — EXCEPT while the embed is focused, where it is forwarded
 		// to the terminal (interrupt) via the embed-key routing below.
@@ -364,6 +403,18 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.openProjectForm()
 		case "S":
 			m.settings = newSettingsForm(m.cfgPath, m.cfg)
+			return m, nil
+		case "ctrl+r":
+			if m.manageDaemon() && m.daemonOp == "" {
+				m.daemonOp = "restarting"
+				return m, restartDaemonCmd
+			}
+			return m, nil
+		case "ctrl+x":
+			if m.manageDaemon() && m.daemonOp == "" {
+				m.daemonOp = "stopping"
+				return m, stopDaemonCmd
+			}
 			return m, nil
 		}
 	}

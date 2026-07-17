@@ -92,6 +92,49 @@ func TestLoadMissingFileGivesDefaults(t *testing.T) {
 	}
 }
 
+func TestAutoManageDaemonDefaultsTrue(t *testing.T) {
+	// Unset (nil pointer) resolves to self-managed.
+	c, err := Load(filepath.Join(t.TempDir(), "config.toml"))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if !c.AutoManageDaemon() {
+		t.Error("unset manage_daemon should default to true (self-managed)")
+	}
+
+	f := false
+	c.Defaults.ManageDaemon = &f
+	if c.AutoManageDaemon() {
+		t.Error("manage_daemon=false should disable self-management")
+	}
+	tr := true
+	c.Defaults.ManageDaemon = &tr
+	if !c.AutoManageDaemon() {
+		t.Error("manage_daemon=true should enable self-management")
+	}
+}
+
+func TestManageDaemonRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	f := false
+	orig := &Config{}
+	orig.Defaults.ManageDaemon = &f
+	if err := orig.Save(path); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	got, err := Load(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if got.Defaults.ManageDaemon == nil || *got.Defaults.ManageDaemon {
+		t.Errorf("manage_daemon did not round-trip false, got %v", got.Defaults.ManageDaemon)
+	}
+	if got.AutoManageDaemon() {
+		t.Error("round-tripped manage_daemon=false should keep self-management off")
+	}
+}
+
 func TestSaveLoadRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "sub", "config.toml")

@@ -19,7 +19,12 @@ summarizer (`internal/brain`), `[review]`, and `[coderabbit]`. Those are NOT the
 coding agent and never change with the `agent` choice.
 
 One binary, two roles:
-- `lola run` — the daemon (launchd `KeepAlive` keeps it alive)
+- `lola run` — the daemon. Lifecycle is **TUI-managed by default**: the TUI
+  silently spawns a detached `lola run` on open if the socket is dead, and
+  `^r`/`^x` restart/stop it (restart re-execs the current binary, so the newest
+  build comes up — the dev loop). `internal/tui/daemonctl.go` owns this. Set
+  `[defaults].manage_daemon = false` to hand the lifecycle to launchd
+  `KeepAlive` instead — the two owners must not both run.
 - `lola` / `lola tui` — the Bubble Tea TUI client
 - every other subcommand is a thin socket client that talks to the daemon over
   the unix socket `~/.lola/lola.sock` (newline-delimited JSON, `internal/protocol`)

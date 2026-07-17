@@ -34,6 +34,11 @@ global_cap = 4
 # (ANTHROPIC_API_KEY for claude, OPENAI_API_KEY for codex) or an existing CLI
 # login (`codex login`, `opencode auth`); it is NEVER stored in this file.
 # agent = "claude"
+# Whether the TUI owns the daemon lifecycle: silently start it on open when the
+# socket is dead, ^r restart (brings up the newest build), ^x stop. Default true.
+# Set false when a launchd KeepAlive job owns the daemon so the TUI never fights
+# the supervisor (it then hides its start/stop/restart keys). Do not run both.
+# manage_daemon = true
 
 [linear]
 # Keychain SERVICE NAME (tried first):

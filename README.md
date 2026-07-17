@@ -25,8 +25,10 @@ All three get full lifecycle-callback parity; see
 
 One binary, two roles:
 
-- `lola run` — the daemon (launchd keeps it alive)
-- `lola` / `lola tui` — the TUI client (list, create, edit, pause polls)
+- `lola run` — the daemon (the TUI starts it on open by default; or launchd
+  keeps it alive — see [Running the daemon](#running-the-daemon-launchd-vs-tui))
+- `lola` / `lola tui` — the TUI client (list, create, edit, pause polls; starts/
+  restarts/stops the daemon)
 - every other subcommand talks to the daemon over the unix socket
   `~/.lola/lola.sock` (newline-delimited JSON)
 
@@ -91,7 +93,7 @@ The Makefile sets a repo-local `GOCACHE` so builds work in sandboxed shells.
 
 | Command | Description |
 | --- | --- |
-| `lola` / `lola tui` | Open the TUI (list polls, create/edit/delete, pause/resume; second tab: live session view). On first run — no `config.toml` yet — this enters the setup wizard first. Keys: `d` inline health report, `P` edit the selected project, `S` global settings editor (`[defaults]`/`[notify]`/`[brain]`/`[review]`/`[coderabbit]`). |
+| `lola` / `lola tui` | Open the TUI (list polls, create/edit/delete, pause/resume; second tab: live session view). On first run — no `config.toml` yet — this enters the setup wizard first. Keys: `d` inline health report, `P` edit the selected project, `S` global settings editor (`[defaults]`/`[notify]`/`[brain]`/`[review]`/`[coderabbit]`), `^r` restart the daemon (brings up the newest build), `^x` stop it (self-managed mode only). |
 | `lola setup` | Run the first-run configuration wizard (Linear key → Keychain, one `[[project]]`, defaults) and write `config.toml`. Re-runnable any time. |
 | `lola doctor` | Print an aligned health report (tmux/git/claude/gh on PATH, Linear key readable, daemon socket, config validity, per-project repos); exits 1 on a critical failure. Never prints the key value. |
 | `lola run` | Start the daemon (this is what launchd invokes) |
@@ -140,6 +142,7 @@ Linear **UUIDs**, not names — the TUI form resolves names to IDs for you.
 | `concurrency_cap` | int | Fallback per-poll cap for polls that don't set their own `concurrency_cap`. |
 | `global_cap` | int | Hard ceiling on counted native sessions across **all** polls. Must be > 0. Per tick, a poll's budget is `min(poll cap, global_cap − live counted sessions)`. |
 | `agent` | `"claude"` \| `"codex"` \| `"opencode"` | Coding agent spawned per session. Default `claude`. Global default; override per repo with `[[project]].agent`. Empty/omitted resolves to `claude`. See [The coding agent](#the-coding-agent). |
+| `manage_daemon` | bool | Whether the TUI owns the daemon lifecycle: silently start the daemon on open when the socket is dead, `^r` restart, `^x` stop. Default `true`. Set `false` when a launchd `KeepAlive` job owns the daemon, so the TUI never fights the supervisor. See [Running the daemon](#running-the-daemon-launchd-vs-tui). |
 
 ### `[linear]`
 
@@ -538,6 +541,27 @@ environment:
 
 The key is never written to `config.toml` and never logged.
 
+## Running the daemon: launchd vs TUI
+
+There are two ways to keep the daemon running — pick **one**:
+
+- **TUI-managed (default).** The TUI owns the daemon lifecycle. Opening `lola`
+  silently starts the daemon if the socket is dead; `^r` restarts it and `^x`
+  stops it, right from the cockpit. A restart re-execs the *current* `lola`
+  binary, so a rebuilt binary (`make build`) always brings up the newest daemon
+  — the intended dev loop. The daemon is detached and survives closing the TUI,
+  but nothing respawns it after a crash or reboot. This is the default; no
+  install step is needed.
+- **launchd-managed.** A `KeepAlive` LaunchAgent starts the daemon at login and
+  restarts it if it dies (survives sleep/wake). Best for a set-and-forget
+  install. See [launchd install](#launchd-install) below.
+
+**Do not run both.** Under launchd `KeepAlive`, stopping the daemon from the TUI
+just makes launchd respawn it in ~1s (and it respawns the *installed* binary,
+not your dev build). If you use launchd, set `[defaults].manage_daemon = false`
+so the TUI leaves the lifecycle to launchd and hides its start/stop/restart
+keys.
+
 ## launchd install
 
 lola ships as a **LaunchAgent** (per-user, in `~/Library/LaunchAgents`), *not*
@@ -568,6 +592,10 @@ launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.user.lola.plist
 restarted if it dies (it also survives sleep/wake). Logs go to
 `~/.lola/daemon.log` — note the plist must contain the *expanded* path
 (`/Users/YOU/.lola/daemon.log`), because launchd does not expand `~`.
+
+Because `KeepAlive` now owns the lifecycle, set `[defaults].manage_daemon =
+false` so the TUI does not fight it (see [Running the
+daemon](#running-the-daemon-launchd-vs-tui)).
 
 Useful afterwards:
 

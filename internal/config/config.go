@@ -101,6 +101,12 @@ type Defaults struct {
 	// for sessions whose project sets no override. Empty resolves to "claude"
 	// at read time (AgentForProject) — it is never force-written to disk.
 	Agent string `toml:"agent"`
+	// ManageDaemon toggles whether the TUI owns the daemon lifecycle: silent
+	// auto-start when the socket is dead on open, plus restart/stop from the
+	// keybar. A pointer so an unset value defaults to true (self-managed). Set
+	// it false when an external supervisor (launchd KeepAlive) owns the daemon,
+	// so the TUI never fights it — see AutoManageDaemon.
+	ManageDaemon *bool `toml:"manage_daemon"`
 }
 
 // LinearConfig is the [linear] table. It intentionally has no api_key field:
@@ -161,6 +167,7 @@ type fileDefaults struct {
 	ConcurrencyCap int      `toml:"concurrency_cap"`
 	GlobalCap      int      `toml:"global_cap"`
 	Agent          string   `toml:"agent"`
+	ManageDaemon   *bool    `toml:"manage_daemon"`
 }
 
 func (fc *fileConfig) config() *Config {
@@ -170,6 +177,7 @@ func (fc *fileConfig) config() *Config {
 			ConcurrencyCap: fc.Defaults.ConcurrencyCap,
 			GlobalCap:      fc.Defaults.GlobalCap,
 			Agent:          fc.Defaults.Agent,
+			ManageDaemon:   fc.Defaults.ManageDaemon,
 		},
 		Linear:     fc.Linear,
 		Projects:   fc.Projects,
@@ -190,6 +198,7 @@ func (c *Config) file() *fileConfig {
 			ConcurrencyCap: c.Defaults.ConcurrencyCap,
 			GlobalCap:      c.Defaults.GlobalCap,
 			Agent:          c.Defaults.Agent,
+			ManageDaemon:   c.Defaults.ManageDaemon,
 		},
 		Linear:     c.Linear,
 		Projects:   c.Projects,
@@ -267,6 +276,14 @@ func Load(path string) (*Config, error) {
 
 	c.applyDefaults()
 	return c, nil
+}
+
+// AutoManageDaemon reports whether the TUI should own the daemon lifecycle
+// (auto-start on open, restart, stop). Unset defaults to true (self-managed);
+// set [defaults].manage_daemon = false when launchd (KeepAlive) owns the
+// daemon so the TUI never fights the supervisor.
+func (c *Config) AutoManageDaemon() bool {
+	return c.Defaults.ManageDaemon == nil || *c.Defaults.ManageDaemon
 }
 
 func (c *Config) applyDefaults() {

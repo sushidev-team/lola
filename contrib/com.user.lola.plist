@@ -12,6 +12,11 @@
     - /usr/local/bin/lola  with the absolute path to your lola binary
     - /Users/YOU          with your real home directory (launchd does NOT
                           expand ~, so every path below must be absolute)
+
+  This job's KeepAlive owns the daemon lifecycle. The TUI self-manages the
+  daemon by default (start on open, ^r restart, ^x stop) and would fight
+  KeepAlive — so when you install this, set [defaults].manage_daemon = false
+  in ~/.lola/config.toml. Do not run both lifecycle owners.
 -->
 <plist version="1.0">
 <dict>
