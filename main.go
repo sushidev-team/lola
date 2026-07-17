@@ -53,6 +53,7 @@ func main() {
 		enableCmd("enable"), enableCmd("disable"),
 		pollCmd(),
 		openCmd(),
+		attachCmd(),
 		killCmd(),
 		reviveCmd(),
 		answerCmd(),
@@ -112,6 +113,28 @@ func openCmd() *cobra.Command {
 				return err
 			}
 			return tui.Send(string(raw))
+		},
+	}
+}
+
+// attachCmd hands the terminal to tmux on lola's isolated server (`lola attach
+// [session]`). With no argument it (re)builds a viewer session with one tab per
+// live agent and attaches to it — "attach once, tab through every agent"; with a
+// session id it attaches straight to that one. It drives tmux directly (no
+// daemon needed) and blocks until you detach (Ctrl-b d). Unlike the other
+// subcommands it does not go over the socket, so it lives outside the tui.Send
+// path.
+func attachCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "attach [session]",
+		Short: "Attach to agents: no arg opens a tab-per-agent viewer; a session id attaches to just that one",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(c *cobra.Command, a []string) error {
+			session := ""
+			if len(a) == 1 {
+				session = a[0]
+			}
+			return tui.RunAttach(session)
 		},
 	}
 }
