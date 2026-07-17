@@ -72,23 +72,24 @@ func TestHomeDaemonDownStillRenders(t *testing.T) {
 	}
 }
 
-// enter on a project scopes the cockpit to that project's sessions.
-func TestHomeEnterScopesCockpit(t *testing.T) {
+// enter on a project opens its detail screen.
+func TestHomeEnterOpensDetail(t *testing.T) {
 	m := homeRoot(t)
 	m.Update(keyMsg("enter"))
-	if m.view != viewCockpit {
-		t.Fatalf("view = %d, want viewCockpit", m.view)
+	if m.view != viewDetail {
+		t.Fatalf("view = %d, want viewDetail", m.view)
 	}
-	if m.sessions.filter.Project != "nori-app" {
-		t.Errorf("sessions scoped to %q, want nori-app", m.sessions.filter.Project)
+	if m.detail.project != "nori-app" {
+		t.Errorf("detail.project = %q, want nori-app", m.detail.project)
 	}
 }
 
 // esc backs out of the cockpit to home, dropping the project scope.
 func TestCockpitEscReturnsHome(t *testing.T) {
 	m := homeRoot(t)
-	m.Update(keyMsg("enter")) // into scoped cockpit
-	m.Update(keyMsg("esc"))   // back to home
+	m.view = viewCockpit
+	m.sessions.filter.Project = "nori-app"
+	m.Update(keyMsg("esc"))
 	if m.view != viewHome {
 		t.Fatalf("view = %d, want viewHome after esc", m.view)
 	}

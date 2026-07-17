@@ -197,7 +197,7 @@ func (m *rootModel) updateHome(msg tea.Msg) (tea.Model, tea.Cmd) {
 		h.syncSel(rows)
 	case "enter", "l", "right":
 		if p := h.selectedProject(m.cfg); p != nil {
-			return m.openProjectScope(p.Name)
+			return m.enterDetail(p.Name)
 		}
 	case "s":
 		return m.openGlobalSessions()

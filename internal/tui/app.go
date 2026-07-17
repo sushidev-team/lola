@@ -38,15 +38,17 @@ const (
 const (
 	viewCockpit = iota
 	viewHome
+	viewDetail
 )
 
 type rootModel struct {
 	cfgPath  string
 	cfg      *config.Config
-	view     int // viewHome | viewCockpit — the active top-level screen
+	view     int // viewCockpit | viewHome | viewDetail — the active top-level screen
 	tab      int // legacy tab index; superseded by the unified cockpit (focus)
 	focus    int // cockpit: which panel owns navigation/action keys (focusSessions/focusPolls)
 	home     homeModel
+	detail   detailModel
 	list     listModel
 	sessions sessionsModel
 	form     *formModel
@@ -428,6 +430,9 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.view == viewHome {
 		return m.updateHome(msg)
 	}
+	if m.view == viewDetail {
+		return m.updateDetail(msg)
+	}
 
 	// Cockpit key routing. Global keys (focus cycle, doctor) fire unless a modal
 	// gate currently owns keystrokes — a poll delete / session kill confirmation,
@@ -537,6 +542,9 @@ func (m *rootModel) viewString() string {
 	if m.view == viewHome {
 		return m.homeView()
 	}
+	if m.view == viewDetail {
+		return m.detailView()
+	}
 	return m.cockpitView()
 }
 
@@ -544,10 +552,14 @@ func (m *rootModel) viewString() string {
 // over: the active top-level screen, so an overlay opened from Home dims the
 // project list rather than an unrelated cockpit.
 func (m *rootModel) backdropLines() []string {
-	if m.view == viewHome {
+	switch m.view {
+	case viewHome:
 		return m.homeLines()
+	case viewDetail:
+		return m.detailLines()
+	default:
+		return m.cockpitLines()
 	}
-	return m.cockpitLines()
 }
 
 // ---- list behavior ----
