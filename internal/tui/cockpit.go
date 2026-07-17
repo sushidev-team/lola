@@ -27,21 +27,21 @@ const (
 // the empty track reads as a subtle line, never a gray block.
 var meterTrack = lipgloss.NewStyle().Foreground(lipgloss.Color(colBorder))
 
-// paneBadge renders a pane's ordinal as a small, solid slate chip with a bold
-// near-white digit (` 1 `) — replacing the thin negative-circled ❶ glyph, whose
-// knocked-out digit rendered nearly invisible in most terminal fonts. A neutral
-// chip (rather than accent) keeps the cyan focus border as the sole focus cue.
+// paneBadge renders a pane's name as a small, solid slate chip with a bold
+// near-white label. It previously held an ordinal digit (` 1 `), but the digit
+// read as a "press N to jump" affordance that nothing honored, so the name now
+// lives in the chip instead. A neutral chip (rather than accent) keeps the cyan
+// focus border as the sole focus cue.
 var paneBadge = lipgloss.NewStyle().
 	Background(lipgloss.Color(colBorder)).
 	Foreground(lipgloss.Color("#eef2f6")).
 	Bold(true)
 
-// paneTitle composes a cockpit pane heading: the number chip, then the bold
-// name, then optional faint context. It carries its own ANSI so box() places it
-// verbatim (the badge keeps its accent regardless of focus; the border color
-// signals focus).
-func paneTitle(n int, name, extra string) string {
-	t := paneBadge.Render(fmt.Sprintf(" %d ", n)) + " " + boxTitle.Render(name)
+// paneTitle composes a cockpit pane heading: the name chip, then optional faint
+// context. It carries its own ANSI so box() places it verbatim (the chip is
+// neutral regardless of focus; the border color signals focus).
+func paneTitle(name, extra string) string {
+	t := paneBadge.Render(" " + name + " ")
 	if extra != "" {
 		t += faintText.Render(" · " + extra)
 	}
@@ -253,9 +253,9 @@ func (m *rootModel) railColumn(w, h int) []string {
 	}
 	activityH := rest - pollsH
 
-	triage := box(paneTitle(1, "Triage", ""), m.triageBody(w-4), w, triageH, false)
+	triage := box(paneTitle("Triage", ""), m.triageBody(w-4), w, triageH, false)
 	activity := box("Activity", m.activityBody(w-4, activityH-2), w, activityH, false)
-	polls := box(paneTitle(3, "Polls", ""), m.pollsBody(w-4, pollsH-2), w, pollsH, m.focus == focusPolls)
+	polls := box(paneTitle("Polls", ""), m.pollsBody(w-4, pollsH-2), w, pollsH, m.focus == focusPolls)
 	return stackRows(triage, activity, polls)
 }
 
@@ -295,7 +295,7 @@ func (m *rootModel) mainColumn(w, h int) []string {
 func (m *rootModel) detailTitle() string {
 	sel := m.sessions.selected()
 	if sel == nil {
-		return paneTitle(4, "Detail", "")
+		return paneTitle("Detail", "")
 	}
 	label := "Detail"
 	if e := m.currentEmbed(); e != nil {
@@ -326,7 +326,7 @@ func (m *rootModel) detailTitle() string {
 	} else if m.currentEmbed() != nil {
 		extra += " · enter to focus"
 	}
-	return paneTitle(4, label, extra)
+	return paneTitle(label, extra)
 }
 
 // sessionsTitle names the panel plus the active lens and any standing filter
@@ -342,7 +342,7 @@ func (m *rootModel) sessionsTitle() string {
 	if m.sessions.filter.AttentionOnly {
 		extra += " · needs-you only"
 	}
-	return paneTitle(2, "Sessions", extra)
+	return paneTitle("Sessions", extra)
 }
 
 // ---- panel bodies (reuse existing helpers, clipped to the box) ----
