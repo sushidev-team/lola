@@ -29,22 +29,26 @@ import (
 
 // fakeNative is a hermetic NativeAPI: no git, tmux, or claude is ever executed.
 type fakeNative struct {
-	mu            sync.Mutex
-	spawnErr      error
-	spawns        []nativeSpawnCall
-	spawnDeadline bool                                    // last Spawn ctx carried a deadline
-	onSpawn       func(p config.Project, is linear.Issue) // runs before spawnErr is returned
-	adopted       []session.Session
-	adoptErr      error
-	alive         map[string]bool // session ID -> tmux pane alive
-	kills         []nativeKillCall
-	killErr       error    // returned from Kill (e.g. worktree.ErrDirty)
-	revives       []string // session IDs passed to Revive
-	reviveErr     error    // returned from Revive
-	opens         []nativeOpenCall
-	openErr       error // returned from Open
-	openManuals   []nativeOpenManualCall
-	openManualErr error // returned from OpenManual
+	mu             sync.Mutex
+	spawnErr       error
+	spawns         []nativeSpawnCall
+	spawnDeadline  bool                                    // last Spawn ctx carried a deadline
+	onSpawn        func(p config.Project, is linear.Issue) // runs before spawnErr is returned
+	adopted        []session.Session
+	adoptErr       error
+	alive          map[string]bool // session ID -> tmux pane alive
+	kills          []nativeKillCall
+	killErr        error    // returned from Kill (e.g. worktree.ErrDirty)
+	revives        []string // session IDs passed to Revive
+	reviveErr      error    // returned from Revive
+	opens          []nativeOpenCall
+	openErr        error // returned from Open
+	openManuals    []nativeOpenManualCall
+	openManualErr  error // returned from OpenManual
+	prAgents       []nativeAgentCall
+	prAgentErr     error // returned from OpenPRAgent
+	manualAgents   []nativeAgentCall
+	manualAgentErr error // returned from OpenManualAgent
 }
 
 type nativeSpawnCall struct{ project, identifier string }
@@ -52,6 +56,8 @@ type nativeSpawnCall struct{ project, identifier string }
 type nativeOpenCall struct{ project, id, ref, branch string }
 
 type nativeOpenManualCall struct{ project, id, branch, base string }
+
+type nativeAgentCall struct{ project, id, branch, base, prompt string }
 
 type nativeKillCall struct {
 	id             string
@@ -140,6 +146,40 @@ func (f *fakeNative) openManualCalls() []nativeOpenManualCall {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return slices.Clone(f.openManuals)
+}
+
+func (f *fakeNative) OpenPRAgent(ctx context.Context, p config.Project, id, branch, prompt string) (session.Session, error) {
+	f.mu.Lock()
+	f.prAgents = append(f.prAgents, nativeAgentCall{p.Name, id, branch, "", prompt})
+	err := f.prAgentErr
+	f.mu.Unlock()
+	if err != nil {
+		return session.Session{}, err
+	}
+	return session.Session{ID: id, Source: "native", Kind: session.KindPR, Project: p.Name, Branch: branch, Repo: p.Repo, TmuxName: id, Status: runtime.StatusWorking, Agent: "claude"}, nil
+}
+
+func (f *fakeNative) OpenManualAgent(ctx context.Context, p config.Project, id, branch, base, prompt string) (session.Session, error) {
+	f.mu.Lock()
+	f.manualAgents = append(f.manualAgents, nativeAgentCall{p.Name, id, branch, base, prompt})
+	err := f.manualAgentErr
+	f.mu.Unlock()
+	if err != nil {
+		return session.Session{}, err
+	}
+	return session.Session{ID: id, Source: "native", Kind: session.KindManual, Project: p.Name, Branch: branch, Repo: p.Repo, TmuxName: id, Status: runtime.StatusWorking, Agent: "claude"}, nil
+}
+
+func (f *fakeNative) prAgentCalls() []nativeAgentCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.prAgents)
+}
+
+func (f *fakeNative) manualAgentCalls() []nativeAgentCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.manualAgents)
 }
 
 func (f *fakeNative) Adopt(ctx context.Context) ([]session.Session, error) {

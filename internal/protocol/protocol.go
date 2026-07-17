@@ -270,12 +270,26 @@ type PrRow struct {
 }
 
 // OpenManualArgs is the argument payload for cmd=openManual: create a NEW branch
-// (off Base, empty → the project's default branch) in a fresh worktree and drop
-// a plain shell into it. The reply is the shared OpenData.
+// (off Base, empty → the project's default branch) in a fresh worktree. With
+// Agent set it launches the coding agent (seeded with Prompt); otherwise a plain
+// shell. The reply is the shared OpenData.
 type OpenManualArgs struct {
 	Project string `json:"project"`
 	Branch  string `json:"branch"`
 	Base    string `json:"base,omitempty"`
+	Agent   bool   `json:"agent,omitempty"`  // launch the coding agent instead of a shell
+	Prompt  string `json:"prompt,omitempty"` // seed prompt when Agent is set
+}
+
+// OpenPrArgs is the argument payload for cmd=openPr: open a PR's head branch as a
+// TRACKING worktree and launch the coding agent on it (so it can push back).
+// IsFork is set by the client for a fork PR — the daemon refuses those (no
+// push-back to a fork). The reply is the shared OpenData.
+type OpenPrArgs struct {
+	Project string `json:"project"`
+	Branch  string `json:"branch"`
+	Number  int    `json:"number,omitempty"`
+	IsFork  bool   `json:"isFork,omitempty"`
 }
 
 // OpenURLArgs is the argument payload for cmd=openURL: open a URL in the user's

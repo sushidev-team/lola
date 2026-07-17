@@ -430,6 +430,121 @@ func (n *Native) OpenManual(ctx context.Context, p config.Project, sessionID, br
 	}, nil
 }
 
+// finishAgentLaunch performs the shared post-worktree steps for an AGENT
+// session (as opposed to a shell): prepare the worktree, write the .lola
+// artifacts (the given prompt, the per-agent lifecycle callbacks, and the 0600
+// env with the Linear key + project env), start the agent in tmux, and brand
+// the pane. dir must be a freshly created worktree. On any step failure it rolls
+// the worktree back (force=false, so a dirty checkout is kept for inspection) —
+// deleting the branch only when ownsBranch — and returns the wrapped error.
+func (n *Native) finishAgentLaunch(ctx context.Context, p config.Project, id, dir, branch string, kind agent.Kind, ownsBranch bool, prompt string) error {
+	rb := func(step string, cause error) error {
+		delBranch := ""
+		if ownsBranch {
+			delBranch = branch
+		}
+		if rmErr := n.WT.Remove(ctx, p, dir, delBranch, false); rmErr != nil {
+			return fmt.Errorf("runtime: launch %s: %s: %w (rollback failed: %v; worktree kept at %s)", id, step, cause, rmErr, dir)
+		}
+		return fmt.Errorf("runtime: launch %s: %s: %w (worktree rolled back)", id, step, cause)
+	}
+	if err := n.WT.Prepare(ctx, p, dir); err != nil {
+		return rb("prepare worktree", err)
+	}
+	if err := excludeLolaDir(dir); err != nil {
+		return rb("git info/exclude", err)
+	}
+	if kind == agent.OpenCode {
+		if err := excludeGitPattern(dir, openCodeDir+"/"); err != nil {
+			return rb("git info/exclude "+openCodeDir, err)
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(dir, lolaDir), 0o700); err != nil {
+		return rb("create "+lolaDir, err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, lolaDir, "prompt.md"), []byte(prompt), 0o600); err != nil {
+		return rb("write prompt.md", err)
+	}
+	if err := n.writeAgentArtifacts(dir, kind); err != nil {
+		return rb("write agent artifacts", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, lolaDir, "env"), n.envFile(p, id, dir, kind), 0o600); err != nil {
+		return rb("write env", err)
+	}
+	if err := n.Tmux.NewSession(ctx, id, dir, n.launchCommand(id, kind, false)); err != nil {
+		if n.Tmux.Has(ctx, id) {
+			_ = n.Tmux.KillSession(ctx, id)
+		}
+		return rb("start tmux session", err)
+	}
+	if err := n.Tmux.ConfigureSession(ctx, id, n.Cfg.SessionChrome(branch)); err != nil && n.Logf != nil {
+		n.Logf("session %s: status-bar styling failed (cosmetic, session is up): %v", id, err)
+	}
+	return nil
+}
+
+// OpenPRAgent opens a PR's branch as a TRACKING worktree and launches the coding
+// agent on it (so it can address review feedback and PUSH BACK) — the "agent on
+// PR" upgrade. The branch must be same-owner (the daemon refuses fork PRs before
+// calling this). Session Kind=pr: the branch is upstream and NEVER deleted on
+// teardown. prompt seeds .lola/prompt.md (the caller passes a PR briefing).
+func (n *Native) OpenPRAgent(ctx context.Context, p config.Project, sessionID, branch, prompt string) (session.Session, error) {
+	if sessionID == "" || branch == "" {
+		return session.Session{}, errors.New("runtime: open pr agent: session id and branch required")
+	}
+	dir, err := n.WT.CheckoutTracking(ctx, p, sessionID, branch)
+	if err != nil {
+		return session.Session{}, fmt.Errorf("runtime: open pr agent %s: %w", sessionID, err)
+	}
+	kind := agent.Parse(n.Cfg.AgentForProject(p.Name))
+	if err := n.finishAgentLaunch(ctx, p, sessionID, dir, branch, kind, false /* pr: upstream branch, not owned */, prompt); err != nil {
+		return session.Session{}, err
+	}
+	return session.Session{
+		ID:       sessionID,
+		Source:   "native",
+		Kind:     session.KindPR,
+		Project:  p.Name,
+		Title:    "PR: " + branch,
+		Branch:   branch,
+		Repo:     p.Repo,
+		Worktree: dir,
+		TmuxName: sessionID,
+		Status:   StatusWorking,
+		Agent:    string(kind),
+	}, nil
+}
+
+// OpenManualAgent creates a NEW branch off base and launches the coding agent on
+// it — the manual-worktree "with agent" variant. Session Kind=manual: lola owns
+// the branch and deletes it on teardown. prompt seeds .lola/prompt.md.
+func (n *Native) OpenManualAgent(ctx context.Context, p config.Project, sessionID, branch, base, prompt string) (session.Session, error) {
+	if sessionID == "" || branch == "" {
+		return session.Session{}, errors.New("runtime: open manual agent: session id and branch required")
+	}
+	dir, err := n.WT.CreateFrom(ctx, p, sessionID, branch, base)
+	if err != nil {
+		return session.Session{}, fmt.Errorf("runtime: open manual agent %s: %w", sessionID, err)
+	}
+	kind := agent.Parse(n.Cfg.AgentForProject(p.Name))
+	if err := n.finishAgentLaunch(ctx, p, sessionID, dir, branch, kind, true /* manual: lola-owned branch */, prompt); err != nil {
+		return session.Session{}, err
+	}
+	return session.Session{
+		ID:       sessionID,
+		Source:   "native",
+		Kind:     session.KindManual,
+		Project:  p.Name,
+		Title:    "manual: " + branch,
+		Branch:   branch,
+		Repo:     p.Repo,
+		Worktree: dir,
+		TmuxName: sessionID,
+		Status:   StatusWorking,
+		Agent:    string(kind),
+	}, nil
+}
+
 // shellCommand builds the tmux command for a manual (`lola open`) session: a
 // plain interactive login shell, with the worktree's 0600 .lola/env sourced
 // first so [[project]].env is available for running/testing (same POSIX wrapper

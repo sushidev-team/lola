@@ -126,6 +126,16 @@ func (d *Daemon) handle(ctx context.Context, req protocol.Request) protocol.Resp
 			return protocol.Response{OK: false, Error: err.Error()}
 		}
 		return dataResponse(data)
+	case "openPr":
+		var a protocol.OpenPrArgs
+		if err := json.Unmarshal(req.Args, &a); err != nil {
+			return protocol.Response{OK: false, Error: "openPr: bad args: " + err.Error()}
+		}
+		data, err := d.handleOpenPr(ctx, a)
+		if err != nil {
+			return protocol.Response{OK: false, Error: err.Error()}
+		}
+		return dataResponse(data)
 	case "openURL":
 		var a protocol.OpenURLArgs
 		if err := json.Unmarshal(req.Args, &a); err != nil {

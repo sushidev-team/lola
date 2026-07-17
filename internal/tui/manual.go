@@ -7,12 +7,12 @@ import (
 	"github.com/sushidev-team/lola/internal/protocol"
 )
 
-// openManualCmd creates a new branch + worktree with a plain shell (cmd=
-// openManual). base "" branches off the project's default branch. It reuses
-// openDoneMsg so the outcome flashes like a manual PR open.
-func openManualCmd(project, branch, base string) tea.Cmd {
+// openManualCmd creates a new branch + worktree (cmd=openManual): with useAgent
+// it launches the coding agent (seeded with prompt), else a plain shell. base ""
+// branches off the project's default branch. Reuses openDoneMsg for the outcome.
+func openManualCmd(project, branch, base string, useAgent bool, prompt string) tea.Cmd {
 	return func() tea.Msg {
-		args, _ := json.Marshal(protocol.OpenManualArgs{Project: project, Branch: branch, Base: base})
+		args, _ := json.Marshal(protocol.OpenManualArgs{Project: project, Branch: branch, Base: base, Agent: useAgent, Prompt: prompt})
 		resp, err := requestFn(protocol.Request{Cmd: "openManual", Args: args})
 		if err != nil {
 			return openDoneMsg{msg: err.Error()}
@@ -25,6 +25,26 @@ func openManualCmd(project, branch, base string) tea.Cmd {
 			return openDoneMsg{msg: d.Message, ok: true}
 		}
 		return openDoneMsg{msg: "created " + branch, ok: true}
+	}
+}
+
+// openPrCmd opens a PR's head branch as a tracking worktree with the coding
+// agent (cmd=openPr, the "agent on PR" upgrade). The daemon refuses a fork.
+func openPrCmd(project, branch string, number int, isFork bool) tea.Cmd {
+	return func() tea.Msg {
+		args, _ := json.Marshal(protocol.OpenPrArgs{Project: project, Branch: branch, Number: number, IsFork: isFork})
+		resp, err := requestFn(protocol.Request{Cmd: "openPr", Args: args})
+		if err != nil {
+			return openDoneMsg{msg: err.Error()}
+		}
+		if !resp.OK {
+			return openDoneMsg{msg: resp.Error}
+		}
+		var d protocol.OpenData
+		if err := json.Unmarshal(resp.Data, &d); err == nil && d.Message != "" {
+			return openDoneMsg{msg: d.Message, ok: true}
+		}
+		return openDoneMsg{msg: "opened PR " + branch, ok: true}
 	}
 }
 

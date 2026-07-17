@@ -8,8 +8,10 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/sushidev-team/lola/internal/agent"
 	"github.com/sushidev-team/lola/internal/protocol"
 	"github.com/sushidev-team/lola/internal/runtime"
+	"github.com/sushidev-team/lola/internal/session"
 )
 
 // handleOpen manually checks out a branch or PR of a project into a throwaway
@@ -96,6 +98,7 @@ func (d *Daemon) handleOpenManual(ctx context.Context, a protocol.OpenManualArgs
 	p := d.cfg.ProjectByName(project)
 	health := d.runtimeHealth
 	home := d.home
+	agentBin := agent.Parse(d.cfg.AgentForProject(project)).Binary()
 	d.mu.Unlock()
 	if p == nil {
 		return protocol.OpenData{}, fmt.Errorf("unknown project %q", project)
@@ -103,8 +106,12 @@ func (d *Daemon) handleOpenManual(ctx context.Context, a protocol.OpenManualArgs
 	if nat == nil {
 		return protocol.OpenData{}, errors.New("native runtime unavailable")
 	}
-	// A manual shell needs git + tmux only (no coding agent) — gate on "git".
-	if err := health("git"); err != nil {
+	// A shell needs git + tmux only; an agent additionally needs its binary.
+	gate := "git"
+	if a.Agent {
+		gate = agentBin
+	}
+	if err := health(gate); err != nil {
 		return protocol.OpenData{}, fmt.Errorf("runtime not ready: %w", err)
 	}
 
@@ -114,7 +121,13 @@ func (d *Daemon) handleOpenManual(ctx context.Context, a protocol.OpenManualArgs
 	}
 
 	cctx, cancel := context.WithTimeout(ctx, nativeSpawnTimeout)
-	sess, err := nat.OpenManual(cctx, *p, id, branch, base)
+	var sess session.Session
+	var err error
+	if a.Agent {
+		sess, err = nat.OpenManualAgent(cctx, *p, id, branch, base, a.Prompt)
+	} else {
+		sess, err = nat.OpenManual(cctx, *p, id, branch, base)
+	}
 	cancel()
 	if err != nil {
 		return protocol.OpenData{}, err
@@ -127,8 +140,70 @@ func (d *Daemon) handleOpenManual(ctx context.Context, a protocol.OpenManualArgs
 	}
 
 	dir := filepath.Join(home, "worktrees", p.Name, id)
-	msg := fmt.Sprintf("created %s (%s) at %s — attach in the TUI, or: tmux -L lola attach -t %s", branch, p.Name, dir, id)
+	kindWord := "shell"
+	if a.Agent {
+		kindWord = "agent"
+	}
+	msg := fmt.Sprintf("created %s (%s) with an %s at %s — attach in the TUI, or: tmux -L lola attach -t %s", branch, p.Name, kindWord, dir, id)
 	d.logf("", "openManual: %s", msg)
+	return protocol.OpenData{SessionID: id, Worktree: dir, Branch: branch, Message: msg}, nil
+}
+
+// handleOpenPr opens a PR's head branch as a TRACKING worktree with the coding
+// agent (cmd=openPr) — the "agent on PR" upgrade that can push back. It refuses
+// a fork PR (no push-back to a fork), full-health-gates the project's agent, and
+// records a pr-kind agent session (which counts toward liveCounted but is never
+// Linear-bound). The upstream branch is never deleted on teardown.
+func (d *Daemon) handleOpenPr(ctx context.Context, a protocol.OpenPrArgs) (protocol.OpenData, error) {
+	project := strings.TrimSpace(a.Project)
+	branch := strings.TrimSpace(a.Branch)
+	if project == "" || branch == "" {
+		return protocol.OpenData{}, errors.New("openPr: project and branch required")
+	}
+	if a.IsFork {
+		return protocol.OpenData{}, errors.New("openPr: fork PR — open it detached (run/test) instead; push-back to a fork is not supported")
+	}
+
+	d.mu.Lock()
+	nat := d.native
+	p := d.cfg.ProjectByName(project)
+	health := d.runtimeHealth
+	home := d.home
+	agentBin := agent.Parse(d.cfg.AgentForProject(project)).Binary()
+	d.mu.Unlock()
+	if p == nil {
+		return protocol.OpenData{}, fmt.Errorf("unknown project %q", project)
+	}
+	if nat == nil {
+		return protocol.OpenData{}, errors.New("native runtime unavailable")
+	}
+	if err := health(agentBin); err != nil {
+		return protocol.OpenData{}, fmt.Errorf("runtime not ready: %w", err)
+	}
+
+	id := runtime.ManualSessionID(p.Name, branch)
+	if _, ok := d.sessions.Get(id); ok {
+		return protocol.OpenData{}, fmt.Errorf("%s is already open in %s (session %s) — kill it first", branch, p.Name, id)
+	}
+
+	prompt := fmt.Sprintf("You are on the branch %q of an existing pull request in %s. Review the current state, address any outstanding review feedback or CI failures, and push your changes back to this branch.", branch, p.Repo)
+
+	cctx, cancel := context.WithTimeout(ctx, nativeSpawnTimeout)
+	sess, err := nat.OpenPRAgent(cctx, *p, id, branch, prompt)
+	cancel()
+	if err != nil {
+		return protocol.OpenData{}, err
+	}
+	sess.Repo = p.Repo
+	d.sessions.Upsert(sess)
+	d.recordSessionEvent("", sess)
+	if serr := d.sessions.Save(); serr != nil {
+		d.logf("", "openPr: persist sessions after PR-agent open of %s: %v", branch, serr)
+	}
+
+	dir := filepath.Join(home, "worktrees", p.Name, id)
+	msg := fmt.Sprintf("opened PR branch %s (%s) with an agent at %s — attach in the TUI, or: tmux -L lola attach -t %s", branch, p.Name, dir, id)
+	d.logf("", "openPr: %s", msg)
 	return protocol.OpenData{SessionID: id, Worktree: dir, Branch: branch, Message: msg}, nil
 }
 

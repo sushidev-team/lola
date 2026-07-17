@@ -213,6 +213,67 @@ func (m *Manager) CheckoutRef(ctx context.Context, p config.Project, sessionID, 
 	return dir, nil
 }
 
+// ErrBranchCheckedOut is returned by CheckoutTracking when the branch is
+// already live in another worktree (git refuses a second checkout). Match with
+// errors.Is.
+var ErrBranchCheckedOut = errors.New("branch is already checked out in another worktree")
+
+// CheckoutTracking adds a worktree at Root/<p.Name>/<sessionID> on a LOCAL
+// branch that tracks origin/<branch> — for opening a PR with an AGENT that will
+// push commits back to it. Unlike CheckoutRef (detached, non-owning) it creates
+// a real local branch so the agent has somewhere to commit; unlike Create it
+// tracks the existing remote branch rather than cutting a fresh one. The remote
+// branch is fetched first. A branch already checked out elsewhere yields
+// ErrBranchCheckedOut; a local branch that merely already exists is reused.
+// Returns the worktree dir.
+func (m *Manager) CheckoutTracking(ctx context.Context, p config.Project, sessionID, branch string) (string, error) {
+	if m.Root == "" {
+		return "", errors.New("worktree: Root not set")
+	}
+	if err := validSegment(p.Name); err != nil {
+		return "", fmt.Errorf("worktree: project name: %w", err)
+	}
+	if err := validSegment(sessionID); err != nil {
+		return "", fmt.Errorf("worktree: session id: %w", err)
+	}
+	if branch == "" {
+		return "", errors.New("worktree: branch must not be empty")
+	}
+	dir := filepath.Join(m.Root, p.Name, sessionID)
+	if err := m.ensureCleanDir(ctx, p, dir); err != nil {
+		return "", err
+	}
+
+	// Fetch so origin/<branch> exists locally (best-effort: an offline clone may
+	// already have it).
+	_, _, _ = m.git(ctx, "-C", p.Path, "fetch", "--no-tags", "origin", branch)
+
+	// Create a worktree on a new local branch tracking origin/<branch>.
+	_, stderr, err := m.git(ctx, "-C", p.Path, "worktree", "add", "--track", "-b", branch, dir, "origin/"+branch)
+	if err == nil {
+		return dir, nil
+	}
+	if isBranchCheckedOut(stderr) {
+		return "", fmt.Errorf("%w: %s", ErrBranchCheckedOut, branch)
+	}
+	// The local branch may already exist (a prior open of this PR) — retry
+	// checking it out into the worktree without re-creating it.
+	if _, stderr2, err2 := m.git(ctx, "-C", p.Path, "worktree", "add", dir, branch); err2 != nil {
+		if isBranchCheckedOut(stderr2) {
+			return "", fmt.Errorf("%w: %s", ErrBranchCheckedOut, branch)
+		}
+		return "", fmt.Errorf("worktree: checkout tracking %s in %s: %w", branch, p.Path, err)
+	}
+	return dir, nil
+}
+
+// isBranchCheckedOut reports whether a `git worktree add` stderr indicates the
+// branch is already live in another worktree.
+func isBranchCheckedOut(stderr string) bool {
+	s := strings.ToLower(stderr)
+	return strings.Contains(s, "already checked out") || strings.Contains(s, "already used by worktree")
+}
+
 // Prepare readies a freshly created worktree for an agent: first the
 // project's symlinks (each a relative path inside the repo, linked from
 // p.Path/<rel> to dir/<rel>), then the post_create commands sequentially via

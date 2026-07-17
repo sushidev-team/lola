@@ -106,6 +106,38 @@ func TestDetailWorktreeCreatesShell(t *testing.T) {
 	}
 }
 
+// 'w' then tab launches an AGENT worktree (cmd=openManual with agent=true).
+func TestDetailWorktreeAgentToggle(t *testing.T) {
+	m := detailRoot(t)
+	m.Update(keyMsg("w"))
+	m.Update(keyMsg("tab")) // toggle shell → agent
+	if !m.detail.wtAgent {
+		t.Fatal("tab should toggle to agent launch")
+	}
+	for _, r := range "feat/y" {
+		m.Update(keyMsg(string(r)))
+	}
+	var got []protocol.Request
+	fakeRequest(t, &got, mustData(t, protocol.OpenData{Message: "created feat/y"}), nil)
+
+	_, cmd := m.Update(keyMsg("enter"))
+	runCmd(t, m, cmd)
+
+	found := false
+	for _, r := range got {
+		if r.Cmd == "openManual" {
+			var a protocol.OpenManualArgs
+			_ = json.Unmarshal(r.Args, &a)
+			if a.Branch == "feat/y" && a.Agent {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Errorf("expected cmd=openManual with agent=true for feat/y, got %+v", got)
+	}
+}
+
 // 'e' from detail opens the project editor.
 func TestDetailEditOpensProjectForm(t *testing.T) {
 	m := detailRoot(t)

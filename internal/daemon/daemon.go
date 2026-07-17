@@ -41,6 +41,8 @@ type NativeAPI interface {
 	Spawn(ctx context.Context, p config.Project, issue linear.Issue) (session.Session, error)
 	Open(ctx context.Context, p config.Project, sessionID, ref, branch string) (session.Session, error)
 	OpenManual(ctx context.Context, p config.Project, sessionID, branch, base string) (session.Session, error)
+	OpenPRAgent(ctx context.Context, p config.Project, sessionID, branch, prompt string) (session.Session, error)
+	OpenManualAgent(ctx context.Context, p config.Project, sessionID, branch, base, prompt string) (session.Session, error)
 	Adopt(ctx context.Context) ([]session.Session, error)
 	Kill(ctx context.Context, s session.Session, removeWorktree, force bool) error
 	Alive(ctx context.Context, s session.Session) bool

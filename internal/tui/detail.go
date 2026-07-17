@@ -28,9 +28,11 @@ type detailModel struct {
 	flashOK bool
 
 	// Inline "new worktree" prompt (action w): collect a branch name, then
-	// create a new-branch shell worktree off the project's default branch.
+	// create a new-branch worktree off the project's default branch — with the
+	// coding agent (wtAgent) or a plain shell (toggled with tab).
 	wtMode   bool
 	wtBranch string
+	wtAgent  bool
 }
 
 // enterDetail opens the project detail screen for the named project.
@@ -155,9 +157,13 @@ func (m *rootModel) updateDetailWorktree(k tea.KeyPressMsg) (tea.Model, tea.Cmd)
 	case "esc":
 		d.wtMode, d.wtBranch = false, ""
 		return m, nil
+	case "tab":
+		d.wtAgent = !d.wtAgent // toggle agent / shell
+		return m, nil
 	case "enter":
 		branch := strings.TrimSpace(d.wtBranch)
-		d.wtMode, d.wtBranch = false, ""
+		useAgent := d.wtAgent
+		d.wtMode, d.wtBranch, d.wtAgent = false, "", false
 		if branch == "" {
 			return m, nil
 		}
@@ -165,7 +171,7 @@ func (m *rootModel) updateDetailWorktree(k tea.KeyPressMsg) (tea.Model, tea.Cmd)
 		m.sessions.selID = ""
 		m.view = viewCockpit
 		m.focus = focusSessions
-		return m, tea.Batch(openManualCmd(d.project, branch, ""), fetchSessionsCmd)
+		return m, tea.Batch(openManualCmd(d.project, branch, "", useAgent, ""), fetchSessionsCmd)
 	case "backspace":
 		if d.wtBranch != "" {
 			d.wtBranch = d.wtBranch[:len(d.wtBranch)-1]

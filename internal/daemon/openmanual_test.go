@@ -90,6 +90,64 @@ func TestHandleOpenManualHealthGate(t *testing.T) {
 	}
 }
 
+func TestHandleOpenManualAgentPath(t *testing.T) {
+	nat := &fakeNative{}
+	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, nat)
+
+	_, err := d.handleOpenManual(context.Background(), protocol.OpenManualArgs{Project: "p1", Branch: "feat/x", Agent: true, Prompt: "do the thing"})
+	if err != nil {
+		t.Fatalf("handleOpenManual(agent): %v", err)
+	}
+	if len(nat.manualAgentCalls()) != 1 || len(nat.openManualCalls()) != 0 {
+		t.Fatalf("agent path must call OpenManualAgent, not OpenManual: agent=%d shell=%d", len(nat.manualAgentCalls()), len(nat.openManualCalls()))
+	}
+	if got := nat.manualAgentCalls()[0]; got.branch != "feat/x" || got.prompt != "do the thing" {
+		t.Errorf("manual agent call = %+v", got)
+	}
+	// A manual AGENT session occupies a slot (unlike a shell).
+	if n := NativeLiveCounted(d.sessions.Snapshot()); n != 1 {
+		t.Errorf("manual agent session must count toward liveCounted, got %d", n)
+	}
+}
+
+func TestHandleOpenPrAgent(t *testing.T) {
+	nat := &fakeNative{}
+	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, nat)
+
+	data, err := d.handleOpenPr(context.Background(), protocol.OpenPrArgs{Project: "p1", Branch: "fix/oauth", Number: 42})
+	if err != nil {
+		t.Fatalf("handleOpenPr: %v", err)
+	}
+	if data.Branch != "fix/oauth" {
+		t.Errorf("data = %+v", data)
+	}
+	calls := nat.prAgentCalls()
+	if len(calls) != 1 || calls[0].branch != "fix/oauth" {
+		t.Fatalf("openPr must call OpenPRAgent for the branch, got %+v", calls)
+	}
+	s, ok := d.sessions.Get(data.SessionID)
+	if !ok || s.Kind != session.KindPR {
+		t.Fatalf("pr-agent session not upserted as pr kind: %+v", s)
+	}
+	if !s.HasAgent() {
+		t.Error("a pr-agent session must have an agent")
+	}
+	if n := NativeLiveCounted(d.sessions.Snapshot()); n != 1 {
+		t.Errorf("pr-agent session must count toward liveCounted, got %d", n)
+	}
+}
+
+func TestHandleOpenPrRefusesFork(t *testing.T) {
+	nat := &fakeNative{}
+	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, nat)
+	if _, err := d.handleOpenPr(context.Background(), protocol.OpenPrArgs{Project: "p1", Branch: "patch-1", IsFork: true}); err == nil {
+		t.Fatal("a fork PR must be refused for agent-on-PR")
+	}
+	if len(nat.prAgentCalls()) != 0 {
+		t.Error("must not launch an agent on a fork PR")
+	}
+}
+
 func TestHandleOpenURLRejectsNonHTTP(t *testing.T) {
 	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})
 	for _, bad := range []string{"", "file:///etc/passwd", "javascript:alert(1)", "; rm -rf /"} {

@@ -128,6 +128,50 @@ func TestPRPickerOOpensURL(t *testing.T) {
 	}
 }
 
+// 'a' opens the PR with an agent (cmd=openPr) and scopes the cockpit.
+func TestPRPickerAgentOnPR(t *testing.T) {
+	m := prPickerRoot(t, []protocol.PrRow{
+		{Number: 229, Title: "fix oauth", Branch: "fix/oauth"},
+	})
+	var got []protocol.Request
+	fakeRequest(t, &got, mustData(t, protocol.OpenData{SessionID: "s", Branch: "fix/oauth", Message: "opened PR"}), nil)
+
+	_, cmd := m.Update(keyMsg("a"))
+	runCmd(t, m, cmd)
+
+	if m.view != viewCockpit || m.sessions.filter.Project != "nori-app" {
+		t.Errorf("after agent-open, want scoped cockpit; view=%d scope=%q", m.view, m.sessions.filter.Project)
+	}
+	found := false
+	for _, r := range got {
+		if r.Cmd == "openPr" && strings.Contains(string(r.Args), "fix/oauth") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected a cmd=openPr, got %+v", got)
+	}
+}
+
+// 'a' on a fork PR is refused with a flash, no cmd=openPr.
+func TestPRPickerAgentRefusesFork(t *testing.T) {
+	m := prPickerRoot(t, []protocol.PrRow{
+		{Number: 240, Title: "contrib", Branch: "patch-1", IsFork: true},
+	})
+	var got []protocol.Request
+	fakeRequest(t, &got, mustData(t, protocol.OpenData{}), nil)
+
+	m.Update(keyMsg("a"))
+	if m.view != viewPRPicker || !strings.Contains(m.prpick.flash, "fork") {
+		t.Errorf("fork agent-open must be refused with a flash; view=%d flash=%q", m.view, m.prpick.flash)
+	}
+	for _, r := range got {
+		if r.Cmd == "openPr" {
+			t.Error("must not issue cmd=openPr for a fork")
+		}
+	}
+}
+
 // esc returns to the project detail screen.
 func TestPRPickerEscReturnsToDetail(t *testing.T) {
 	m := prPickerRoot(t, nil)

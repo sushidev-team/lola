@@ -166,12 +166,36 @@ func (m *rootModel) updatePRPicker(msg tea.Msg) (tea.Model, tea.Cmd) {
 			p.flash = "opening #" + strconv.Itoa(rows[p.cursor].Number) + " in browser…"
 			return m, openURLCmd(rows[p.cursor].URL)
 		}
+	case "a":
+		if p.cursor >= 0 && p.cursor < len(rows) {
+			return m.openPRWithAgent(rows[p.cursor])
+		}
 	case "enter", "l", "right":
 		if p.cursor >= 0 && p.cursor < len(rows) {
 			return m.openPRDetached(rows[p.cursor])
 		}
 	}
 	return m, nil
+}
+
+// openPRWithAgent opens the PR's branch as a tracking worktree + agent (cmd=
+// openPr) and drops into the scoped cockpit. A fork PR is refused up front (the
+// daemon also refuses); an already-open branch is refused.
+func (m *rootModel) openPRWithAgent(pr protocol.PrRow) (tea.Model, tea.Cmd) {
+	p := &m.prpick
+	if pr.IsFork {
+		p.flash = "fork PR — use enter for a detached run/test; push-back isn't supported"
+		return m, nil
+	}
+	if pr.AlreadyOpen {
+		p.flash = pr.Branch + " is already open — see sessions"
+		return m, nil
+	}
+	m.sessions.filter.Project = p.project
+	m.sessions.selID = ""
+	m.view = viewCockpit
+	m.focus = focusSessions
+	return m, tea.Batch(openPrCmd(p.project, pr.Branch, pr.Number, pr.IsFork), fetchSessionsCmd)
 }
 
 // openPRDetached checks out the PR's head branch as a detached shell (the
