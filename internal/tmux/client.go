@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -49,6 +50,18 @@ type Session struct {
 type Client struct {
 	Bin        string
 	SocketName string
+	// Dir is the working directory every tmux command runs from. It matters
+	// only for the command that first starts the tmux server, because that
+	// process's cwd becomes the SERVER's cwd for its whole lifetime — and the
+	// server is long-lived (it outlives daemon restarts). If that cwd is later
+	// deleted (e.g. a project/worktree dir that gets removed), every process
+	// the server spawns inherits the now-dangling cwd; a Bun-based agent like
+	// Claude Code then fails its early-init getcwd() with a bare
+	// "ENOENT: Bun could not find a file" and exits before drawing anything,
+	// so the tmux session dies the instant it is created. Pin Dir to a stable,
+	// always-present directory (lola's Home) so the server can never inherit a
+	// doomed cwd. Empty falls back to the user's home, then "/".
+	Dir string
 }
 
 func (c *Client) bin() string {
@@ -67,6 +80,21 @@ func (c *Client) socket() string {
 	return c.SocketName
 }
 
+// dir is the working directory tmux commands run from (see the Dir field). A
+// deleted cwd is the specific failure this guards against, so the fallbacks are
+// ordered by how certain they are to exist: the configured Dir, then the user's
+// home, then "/". os.UserHomeDir never touches the filesystem (it reads $HOME),
+// so a dangling process cwd cannot make this fail.
+func (c *Client) dir() string {
+	if c.Dir != "" {
+		return c.Dir
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		return home
+	}
+	return "/"
+}
+
 // Available reports whether the tmux binary can be resolved to an
 // executable.
 func (c *Client) Available() bool {
@@ -83,6 +111,9 @@ func (c *Client) run(ctx context.Context, args ...string) (stdout, stderr string
 	// stays intact for the error message below.
 	full := append([]string{"-L", c.socket()}, args...)
 	cmd := exec.CommandContext(ctx, c.bin(), full...)
+	// Pin cwd so the tmux server never inherits (and outlives) a deleted
+	// directory — see the Dir field comment.
+	cmd.Dir = c.dir()
 	var out, errb bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &errb

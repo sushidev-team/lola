@@ -44,6 +44,46 @@ func loggedArgs(t *testing.T, argsLog string) string {
 	return strings.TrimRight(string(b), "\n")
 }
 
+func TestDirPrecedence(t *testing.T) {
+	if got := (&Client{Dir: "/some/where"}).dir(); got != "/some/where" {
+		t.Fatalf("explicit Dir: got %q, want /some/where", got)
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		t.Skip("no home dir to compare fallback against")
+	}
+	if got := (&Client{}).dir(); got != home {
+		t.Fatalf("empty Dir: got %q, want home %q", got, home)
+	}
+}
+
+// TestRunPinsCwd verifies every tmux invocation executes from Client.Dir, so
+// the long-lived tmux server can never inherit (and outlive) a deleted cwd.
+func TestRunPinsCwd(t *testing.T) {
+	dir := t.TempDir()
+	pwdLog := filepath.Join(dir, "pwd.log")
+	bin := filepath.Join(dir, "tmux")
+	script := "#!/bin/sh\npwd -P >> " + pwdLog + "\nexit 0\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A distinct dir the command must run from; resolve symlinks so macOS's
+	// /var -> /private/var does not defeat the comparison.
+	runDir := t.TempDir()
+	want, err := filepath.EvalSymlinks(runDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &Client{Bin: bin, Dir: runDir}
+	if _, _, err := c.run(context.Background(), "kill-session", "-t", "=x"); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	got := strings.TrimSpace(loggedArgs(t, pwdLog))
+	if got != want {
+		t.Fatalf("tmux ran from %q, want %q", got, want)
+	}
+}
+
 func TestListSessionsParsesFormatLines(t *testing.T) {
 	fixture := "main\t1720000000\t1\nlola-NORI-12-1\t1720003600\t0"
 	bin, argsLog := fakeTmux(t, fixture, "", 0)

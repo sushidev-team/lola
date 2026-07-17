@@ -42,6 +42,7 @@ type NativeAPI interface {
 	Adopt(ctx context.Context) ([]session.Session, error)
 	Kill(ctx context.Context, s session.Session, removeWorktree, force bool) error
 	Alive(ctx context.Context, s session.Session) bool
+	Revive(ctx context.Context, s session.Session) (session.Session, error)
 }
 
 var _ NativeAPI = (*runtime.Native)(nil)
@@ -669,7 +670,7 @@ func (d *Daemon) tmuxClient() *tmux.Client {
 	d.mu.Lock()
 	sock := d.cfg.TmuxSocketName()
 	d.mu.Unlock()
-	return &tmux.Client{Bin: "tmux", SocketName: sock}
+	return &tmux.Client{Bin: "tmux", SocketName: sock, Dir: d.home}
 }
 
 // newNativeRuntime assembles the production native runtime for cfg: worktrees
@@ -684,7 +685,7 @@ func newNativeRuntime(cfg *config.Config, home, lolaBin string, linearKey func()
 	return &runtime.Native{
 		Cfg:       cfg,
 		WT:        &worktree.Manager{Root: filepath.Join(home, "worktrees")},
-		Tmux:      &tmux.Client{Bin: "tmux", SocketName: cfg.TmuxSocketName()},
+		Tmux:      &tmux.Client{Bin: "tmux", SocketName: cfg.TmuxSocketName(), Dir: home},
 		LolaBin:   lolaBin,
 		Home:      home,
 		LinearKey: linearKey,
