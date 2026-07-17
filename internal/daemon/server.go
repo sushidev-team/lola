@@ -116,6 +116,25 @@ func (d *Daemon) handle(ctx context.Context, req protocol.Request) protocol.Resp
 			return protocol.Response{OK: false, Error: err.Error()}
 		}
 		return dataResponse(data)
+	case "openManual":
+		var a protocol.OpenManualArgs
+		if err := json.Unmarshal(req.Args, &a); err != nil {
+			return protocol.Response{OK: false, Error: "openManual: bad args: " + err.Error()}
+		}
+		data, err := d.handleOpenManual(ctx, a)
+		if err != nil {
+			return protocol.Response{OK: false, Error: err.Error()}
+		}
+		return dataResponse(data)
+	case "openURL":
+		var a protocol.OpenURLArgs
+		if err := json.Unmarshal(req.Args, &a); err != nil {
+			return protocol.Response{OK: false, Error: "openURL: bad args: " + err.Error()}
+		}
+		if err := d.handleOpenURL(ctx, a); err != nil {
+			return protocol.Response{OK: false, Error: err.Error()}
+		}
+		return protocol.Response{OK: true}
 	case "pane":
 		data, err := d.handlePane(ctx, req.Session, req.Lines)
 		if err != nil {

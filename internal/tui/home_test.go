@@ -84,17 +84,35 @@ func TestHomeEnterOpensDetail(t *testing.T) {
 	}
 }
 
-// esc backs out of the cockpit to home, dropping the project scope.
-func TestCockpitEscReturnsHome(t *testing.T) {
-	m := homeRoot(t)
-	m.view = viewCockpit
+// The main cockpit is the root: 'p' opens the projects pane.
+func TestCockpitPOpensProjects(t *testing.T) {
+	m := newTestRoot(t) // defaults to viewCockpit
+	m.Update(keyMsg("p"))
+	if m.view != viewHome {
+		t.Fatalf("view = %d, want viewHome after 'p'", m.view)
+	}
+}
+
+// esc in a project-scoped cockpit clears the scope back to the global (main)
+// all-sessions view, staying in the cockpit.
+func TestCockpitEscClearsProjectScope(t *testing.T) {
+	m := newTestRoot(t)
 	m.sessions.filter.Project = "nori-app"
 	m.Update(keyMsg("esc"))
-	if m.view != viewHome {
-		t.Fatalf("view = %d, want viewHome after esc", m.view)
+	if m.view != viewCockpit {
+		t.Errorf("esc from a scoped cockpit must stay in the cockpit; view=%d", m.view)
 	}
 	if m.sessions.filter.Project != "" {
-		t.Errorf("project scope should clear on esc, got %q", m.sessions.filter.Project)
+		t.Errorf("esc must clear the project scope, got %q", m.sessions.filter.Project)
+	}
+}
+
+// esc in the projects pane returns to the main cockpit.
+func TestHomeEscReturnsToCockpit(t *testing.T) {
+	m := homeRoot(t)
+	m.Update(keyMsg("esc"))
+	if m.view != viewCockpit {
+		t.Fatalf("view = %d, want viewCockpit after esc", m.view)
 	}
 }
 

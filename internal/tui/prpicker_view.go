@@ -160,7 +160,7 @@ func (m *rootModel) prPickerKeybar(w int) string {
 	if p.filtering {
 		return previewLine(faintText.Render("type to filter · enter apply · esc clear"), w)
 	}
-	keys := []string{"↑↓ move", "enter open (detached shell)", "r refresh", "/ filter", "esc back", "q quit"}
+	keys := []string{"↑↓ move", "enter open (detached shell)", "o browser", "r refresh", "/ filter", "esc back", "q quit"}
 	return previewLine(faintText.Render(strings.Join(keys, " · ")), w)
 }
 

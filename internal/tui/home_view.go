@@ -187,7 +187,7 @@ func (m *rootModel) homeKeybar(w int) string {
 	case h.confirmRemove:
 		return previewLine(warnText.Render("y")+faintText.Render(" remove · ")+warnText.Render("n")+faintText.Render(" cancel"), w)
 	}
-	keys := []string{"↑↓ move", "enter open", "s sessions", "a add", "e edit", "space poll", "x remove", "/ filter"}
+	keys := []string{"↑↓ move", "enter open", "a add", "e edit", "space poll", "x remove", "/ filter", "esc back"}
 	keys = append(keys, "S settings", "d doctor")
 	if m.manageDaemon() {
 		if m.home.data == nil {

@@ -161,6 +161,11 @@ func (m *rootModel) updatePRPicker(msg tea.Msg) (tea.Model, tea.Cmd) {
 		p.loading, p.flash = true, ""
 		p.gen++
 		return m, fetchPrsCmd(p.project, p.gen, true)
+	case "o":
+		if p.cursor >= 0 && p.cursor < len(rows) && rows[p.cursor].URL != "" {
+			p.flash = "opening #" + strconv.Itoa(rows[p.cursor].Number) + " in browser…"
+			return m, openURLCmd(rows[p.cursor].URL)
+		}
 	case "enter", "l", "right":
 		if p.cursor >= 0 && p.cursor < len(rows) {
 			return m.openPRDetached(rows[p.cursor])

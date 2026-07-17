@@ -269,6 +269,21 @@ type PrRow struct {
 	AlreadyOpen bool   `json:"alreadyOpen"` // a lola session already holds this branch
 }
 
+// OpenManualArgs is the argument payload for cmd=openManual: create a NEW branch
+// (off Base, empty → the project's default branch) in a fresh worktree and drop
+// a plain shell into it. The reply is the shared OpenData.
+type OpenManualArgs struct {
+	Project string `json:"project"`
+	Branch  string `json:"branch"`
+	Base    string `json:"base,omitempty"`
+}
+
+// OpenURLArgs is the argument payload for cmd=openURL: open a URL in the user's
+// default browser, on the DAEMON side, so the socket client stays exec-free.
+type OpenURLArgs struct {
+	URL string `json:"url"`
+}
+
 // KillData is Response.Data for cmd=kill. Removed reports whether the worktree
 // was actually removed (false when the project is gone from config so there was
 // nothing safe to target, or on a dirty-refused kill — but a dirty refusal is

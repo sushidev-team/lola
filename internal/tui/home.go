@@ -176,6 +176,10 @@ func (m *rootModel) updateHome(msg tea.Msg) (tea.Model, tea.Cmd) {
 	h.flash = ""
 	rows := h.rows(m.cfg)
 	switch k.String() {
+	case "esc", "h", "left":
+		// Back to the main cockpit (all sessions).
+		m.view = viewCockpit
+		return m, nil
 	case "q":
 		m.closeAllTerms()
 		return m, tea.Quit

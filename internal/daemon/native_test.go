@@ -38,16 +38,20 @@ type fakeNative struct {
 	adoptErr      error
 	alive         map[string]bool // session ID -> tmux pane alive
 	kills         []nativeKillCall
-	killErr       error // returned from Kill (e.g. worktree.ErrDirty)
+	killErr       error    // returned from Kill (e.g. worktree.ErrDirty)
 	revives       []string // session IDs passed to Revive
 	reviveErr     error    // returned from Revive
 	opens         []nativeOpenCall
 	openErr       error // returned from Open
+	openManuals   []nativeOpenManualCall
+	openManualErr error // returned from OpenManual
 }
 
 type nativeSpawnCall struct{ project, identifier string }
 
 type nativeOpenCall struct{ project, id, ref, branch string }
+
+type nativeOpenManualCall struct{ project, id, branch, base string }
 
 type nativeKillCall struct {
 	id             string
@@ -108,6 +112,34 @@ func (f *fakeNative) openCalls() []nativeOpenCall {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return slices.Clone(f.opens)
+}
+
+func (f *fakeNative) OpenManual(ctx context.Context, p config.Project, id, branch, base string) (session.Session, error) {
+	f.mu.Lock()
+	f.openManuals = append(f.openManuals, nativeOpenManualCall{p.Name, id, branch, base})
+	err := f.openManualErr
+	f.mu.Unlock()
+	if err != nil {
+		return session.Session{}, err
+	}
+	return session.Session{
+		ID:        id,
+		Source:    "native",
+		Kind:      session.KindManual,
+		Agentless: true,
+		Project:   p.Name,
+		Title:     "manual: " + branch,
+		Branch:    branch,
+		Repo:      p.Repo,
+		TmuxName:  id,
+		Status:    "shell",
+	}, nil
+}
+
+func (f *fakeNative) openManualCalls() []nativeOpenManualCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.openManuals)
 }
 
 func (f *fakeNative) Adopt(ctx context.Context) ([]session.Session, error) {

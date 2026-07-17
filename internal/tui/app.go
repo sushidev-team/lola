@@ -130,7 +130,10 @@ func Run() error {
 	if err != nil {
 		return err
 	}
-	m := &rootModel{cfgPath: cfgPath, cfg: cfg, view: viewHome, home: newHomeModel(), list: newListModel(cfg), height: 24}
+	// The main screen is the cockpit — all sessions (unscoped) plus the poll/
+	// project rail, exactly as before the project-centric restructure. The
+	// project list (home) and the pickers are drill-ins reached from it (p).
+	m := &rootModel{cfgPath: cfgPath, cfg: cfg, view: viewCockpit, home: newHomeModel(), list: newListModel(cfg), height: 24}
 	_, err = tea.NewProgram(m).Run() // alt-screen is set on the View (bubbletea v2)
 	return err
 }
@@ -449,12 +452,21 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if k, ok := msg.(tea.KeyPressMsg); ok && !gated {
 		switch k.String() {
 		case "esc":
-			// Back out of the cockpit to the project list, dropping any
-			// project scope so Home shows every project again.
-			m.sessions.filter.Project = ""
+			// The main cockpit is the root; esc only backs OUT of a project
+			// scope (entered from the project detail / PR picker) to the global
+			// all-sessions view.
+			if m.sessions.filter.Project != "" {
+				m.sessions.filter.Project = ""
+				m.sessions.selID = ""
+				return m, fetchSessionsCmd
+			}
+			return m, nil
+		case "p":
+			// Open the project list (the "projects pane"): add / edit projects,
+			// toggle polling, and drill into a project's detail + pickers.
 			m.view = viewHome
 			m.home.repin(m.cfg)
-			return m, nil
+			return m, fetchProjectsCmd
 		case "tab":
 			if m.focus == focusSessions {
 				m.focus = focusPolls

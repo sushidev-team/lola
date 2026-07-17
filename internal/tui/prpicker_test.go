@@ -106,6 +106,28 @@ func TestPRPickerEnterRefusesAlreadyOpen(t *testing.T) {
 	}
 }
 
+// 'o' opens the selected PR's URL in the browser (cmd=openURL).
+func TestPRPickerOOpensURL(t *testing.T) {
+	m := prPickerRoot(t, []protocol.PrRow{
+		{Number: 229, Branch: "fix/oauth", URL: "https://github.com/acme/nori/pull/229"},
+	})
+	var got []protocol.Request
+	fakeRequest(t, &got, mustData(t, map[string]any{}), nil)
+
+	_, cmd := m.Update(keyMsg("o"))
+	runCmd(t, m, cmd)
+
+	found := false
+	for _, r := range got {
+		if r.Cmd == "openURL" && strings.Contains(string(r.Args), "pull/229") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected a cmd=openURL for the PR, got %+v", got)
+	}
+}
+
 // esc returns to the project detail screen.
 func TestPRPickerEscReturnsToDetail(t *testing.T) {
 	m := prPickerRoot(t, nil)

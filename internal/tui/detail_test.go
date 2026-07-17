@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -67,6 +68,41 @@ func TestDetailEscReturnsHome(t *testing.T) {
 	m.Update(keyMsg("esc"))
 	if m.view != viewHome {
 		t.Fatalf("view = %d, want viewHome", m.view)
+	}
+}
+
+// 'w' opens the new-worktree prompt; a branch name creates a shell via
+// cmd=openManual and drops into the scoped cockpit.
+func TestDetailWorktreeCreatesShell(t *testing.T) {
+	m := detailRoot(t)
+	m.Update(keyMsg("w"))
+	if !m.detail.wtMode {
+		t.Fatal("'w' should open the new-worktree prompt")
+	}
+	for _, r := range "feat/x" {
+		m.Update(keyMsg(string(r)))
+	}
+	var got []protocol.Request
+	fakeRequest(t, &got, mustData(t, protocol.OpenData{Message: "created feat/x"}), nil)
+
+	_, cmd := m.Update(keyMsg("enter"))
+	runCmd(t, m, cmd)
+
+	if m.view != viewCockpit || m.sessions.filter.Project != "nori-app" {
+		t.Errorf("after create, want scoped cockpit; view=%d scope=%q", m.view, m.sessions.filter.Project)
+	}
+	found := false
+	for _, r := range got {
+		if r.Cmd == "openManual" {
+			var a protocol.OpenManualArgs
+			_ = json.Unmarshal(r.Args, &a)
+			if a.Project == "nori-app" && a.Branch == "feat/x" {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Errorf("expected a cmd=openManual for feat/x, got %+v", got)
 	}
 }
 

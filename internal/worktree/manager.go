@@ -83,6 +83,14 @@ func (m *Manager) git(ctx context.Context, args ...string) (stdout, stderr strin
 // git cannot even answer a dirty check — so deleting it here would bypass
 // Remove's ErrDirty discipline.
 func (m *Manager) Create(ctx context.Context, p config.Project, sessionID, branch string) (string, error) {
+	return m.CreateFrom(ctx, p, sessionID, branch, "")
+}
+
+// CreateFrom is Create with an explicit base: the new branch is cut from
+// origin/<base> (falling back to the local <base> when the origin ref does not
+// exist). An empty base defaults to p.DefaultBranch, so Create delegates here
+// unchanged. Used by the manual-worktree flow to branch off a chosen base.
+func (m *Manager) CreateFrom(ctx context.Context, p config.Project, sessionID, branch, base string) (string, error) {
 	if m.Root == "" {
 		return "", errors.New("worktree: Root not set")
 	}
@@ -95,14 +103,17 @@ func (m *Manager) Create(ctx context.Context, p config.Project, sessionID, branc
 	if branch == "" {
 		return "", errors.New("worktree: branch must not be empty")
 	}
+	if base == "" {
+		base = p.DefaultBranch
+	}
 	dir := filepath.Join(m.Root, p.Name, sessionID)
 	if err := m.ensureCleanDir(ctx, p, dir); err != nil {
 		return "", err
 	}
 
-	start := "origin/" + p.DefaultBranch
-	if _, _, err := m.git(ctx, "-C", p.Path, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/"+p.DefaultBranch); err != nil {
-		start = p.DefaultBranch
+	start := "origin/" + base
+	if _, _, err := m.git(ctx, "-C", p.Path, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/"+base); err != nil {
+		start = base
 	}
 	if _, _, err := m.git(ctx, "-C", p.Path, "worktree", "add", "-b", branch, dir, start); err != nil {
 		return "", err

@@ -7,6 +7,8 @@
 package tui
 
 import (
+	"strings"
+
 	tea "charm.land/bubbletea/v2"
 	"github.com/sushidev-team/lola/internal/protocol"
 )
@@ -24,6 +26,11 @@ type detailModel struct {
 	cursor  int
 	flash   string
 	flashOK bool
+
+	// Inline "new worktree" prompt (action w): collect a branch name, then
+	// create a new-branch shell worktree off the project's default branch.
+	wtMode   bool
+	wtBranch string
 }
 
 // enterDetail opens the project detail screen for the named project.
@@ -52,15 +59,15 @@ func (m *rootModel) detailActions() []detailAction {
 	// treated as not-ready so we never advertise a launch we can't gate.
 	agentReady := haveInfo && info.AgentOK
 
-	// ticket / worktree require the feature to exist; those land in later phases
-	// and flip to true then. The PR picker's enter is a DETACHED shell (git+tmux
-	// only, no agent), so it gates on a configured repo, not agent health.
-	const ticketShipped, worktreeShipped = false, false
+	// ticket requires the picker to exist (Phase 6). The PR picker enter and the
+	// manual worktree are DETACHED / shell (git+tmux only, no agent), so they
+	// gate on a repo / project existing, not agent health.
+	const ticketShipped = false
 
 	return []detailAction{
 		{key: "p", id: "pr", label: "Open a PR", desc: "pick an open pull request → shell", enabled: repoSet},
 		{key: "t", id: "ticket", label: "Start a ticket", desc: "pick a Linear issue → worktree + agent", enabled: ticketShipped && agentReady},
-		{key: "w", id: "worktree", label: "New worktree", desc: "branch off base, agent or shell", enabled: worktreeShipped && agentReady},
+		{key: "w", id: "worktree", label: "New worktree", desc: "new branch → shell", enabled: true},
 		{key: "P", id: "polls", label: "Polls", desc: "add / edit / toggle this project's polls", enabled: true},
 		{key: "s", id: "sessions", label: "Sessions", desc: "this project's live sessions", enabled: true},
 		{key: "e", id: "edit", label: "Edit project", desc: "path / repo / agent / env", enabled: true},
@@ -82,6 +89,9 @@ func (m *rootModel) updateDetail(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	d := &m.detail
+	if d.wtMode {
+		return m.updateDetailWorktree(k)
+	}
 	actions := m.detailActions()
 
 	switch k.String() {
@@ -136,6 +146,38 @@ func (m *rootModel) updateDetail(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// updateDetailWorktree drives the inline "new worktree" branch-name prompt.
+// Submitting creates a new-branch shell worktree (off the project's default
+// branch) and drops into the project-scoped cockpit so the shell is visible.
+func (m *rootModel) updateDetailWorktree(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	d := &m.detail
+	switch k.String() {
+	case "esc":
+		d.wtMode, d.wtBranch = false, ""
+		return m, nil
+	case "enter":
+		branch := strings.TrimSpace(d.wtBranch)
+		d.wtMode, d.wtBranch = false, ""
+		if branch == "" {
+			return m, nil
+		}
+		m.sessions.filter.Project = d.project
+		m.sessions.selID = ""
+		m.view = viewCockpit
+		m.focus = focusSessions
+		return m, tea.Batch(openManualCmd(d.project, branch, ""), fetchSessionsCmd)
+	case "backspace":
+		if d.wtBranch != "" {
+			d.wtBranch = d.wtBranch[:len(d.wtBranch)-1]
+		}
+	default:
+		if k.Text != "" {
+			d.wtBranch += k.Text
+		}
+	}
+	return m, nil
+}
+
 func (m *rootModel) runDetailAction(a detailAction) (tea.Model, tea.Cmd) {
 	d := &m.detail
 	if !a.enabled {
@@ -149,6 +191,9 @@ func (m *rootModel) runDetailAction(a detailAction) (tea.Model, tea.Cmd) {
 	switch a.id {
 	case "pr":
 		return m.enterPRPicker(d.project)
+	case "worktree":
+		d.wtMode, d.wtBranch, d.flash = true, "", ""
+		return m, nil
 	case "sessions":
 		return m.openProjectScope(d.project)
 	case "edit":

@@ -368,6 +368,68 @@ func (n *Native) Open(ctx context.Context, p config.Project, sessionID, fetchRef
 	}, nil
 }
 
+// OpenManual creates a NEW branch off base (empty → the project's default
+// branch) in a fresh worktree and drops a plain interactive shell into it — no
+// coding agent — so a human can start work by hand. Unlike Open (which detaches
+// on an existing ref), the branch is lola-owned, so teardown deletes it
+// (session Kind=manual). The pipeline mirrors Open's otherwise: CreateFrom →
+// Prepare → exclude .lola/ → minimal 0600 .lola/env (project env only, no Linear
+// key) → tmux shell. On any step failure the worktree AND its new branch are
+// rolled back best-effort (force=false keeps a dirty checkout for inspection).
+func (n *Native) OpenManual(ctx context.Context, p config.Project, sessionID, branch, base string) (session.Session, error) {
+	if sessionID == "" || branch == "" {
+		return session.Session{}, errors.New("runtime: open manual: session id and branch required")
+	}
+	dir, err := n.WT.CreateFrom(ctx, p, sessionID, branch, base)
+	if err != nil {
+		return session.Session{}, fmt.Errorf("runtime: open manual %s: %w", sessionID, err)
+	}
+	fail := func(step string, cause error) (session.Session, error) {
+		// lola OWNS this new branch — pass it so a rollback removes it too.
+		if rmErr := n.WT.Remove(ctx, p, dir, branch, false); rmErr != nil {
+			return session.Session{}, fmt.Errorf("runtime: open manual %s: %s: %w (rollback failed: %v; worktree kept at %s)", sessionID, step, cause, rmErr, dir)
+		}
+		return session.Session{}, fmt.Errorf("runtime: open manual %s: %s: %w (worktree rolled back)", sessionID, step, cause)
+	}
+
+	if err := n.WT.Prepare(ctx, p, dir); err != nil {
+		return fail("prepare worktree", err)
+	}
+	if err := excludeLolaDir(dir); err != nil {
+		return fail("git info/exclude", err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, lolaDir), 0o700); err != nil {
+		return fail("create "+lolaDir, err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, lolaDir, "env"), manualEnvFile(p), 0o600); err != nil {
+		return fail("write env", err)
+	}
+
+	if err := n.Tmux.NewSession(ctx, sessionID, dir, n.shellCommand()); err != nil {
+		if n.Tmux.Has(ctx, sessionID) {
+			_ = n.Tmux.KillSession(ctx, sessionID)
+		}
+		return fail("start tmux session", err)
+	}
+	if err := n.Tmux.ConfigureSession(ctx, sessionID, n.Cfg.SessionChrome(branch)); err != nil && n.Logf != nil {
+		n.Logf("session %s: status-bar styling failed (cosmetic, shell is up): %v", sessionID, err)
+	}
+
+	return session.Session{
+		ID:        sessionID,
+		Source:    "native",
+		Kind:      session.KindManual, // lola-owned new branch: owns + deletes it on teardown
+		Agentless: true,               // plain shell, no coding agent
+		Project:   p.Name,
+		Title:     "manual: " + branch,
+		Branch:    branch,
+		Repo:      p.Repo,
+		Worktree:  dir,
+		TmuxName:  sessionID,
+		Status:    "shell",
+	}, nil
+}
+
 // shellCommand builds the tmux command for a manual (`lola open`) session: a
 // plain interactive login shell, with the worktree's 0600 .lola/env sourced
 // first so [[project]].env is available for running/testing (same POSIX wrapper

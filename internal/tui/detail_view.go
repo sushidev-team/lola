@@ -181,6 +181,8 @@ func (m *rootModel) detailStripBox(w, h int) []string {
 func (m *rootModel) detailMessage(w int) string {
 	d := &m.detail
 	switch {
+	case d.wtMode:
+		return previewLine(warnText.Render("new branch: ")+d.wtBranch+"_"+faintText.Render("  · enter create shell · esc cancel"), w)
 	case d.flash != "":
 		if d.flashOK {
 			return previewLine(goodText.Render(d.flash), w)
@@ -193,6 +195,9 @@ func (m *rootModel) detailMessage(w int) string {
 }
 
 func (m *rootModel) detailKeybar(w int) string {
+	if m.detail.wtMode {
+		return previewLine(faintText.Render("type a branch name · enter create shell · esc cancel"), w)
+	}
 	keys := []string{"↑↓ move", "enter run", "p PR", "t ticket", "w worktree", "P polls", "s sessions", "e edit", "esc back"}
 	keys = append(keys, "S settings", "d doctor")
 	if m.manageDaemon() {

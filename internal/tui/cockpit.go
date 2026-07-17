@@ -717,7 +717,7 @@ func (m *rootModel) keybar(w int) string {
 		}
 		keys = append(keys, "x kill", "O open", "/ filter", "! needs-you", "V lens", "n next!", "tab → polls")
 	}
-	keys = append(keys, "esc projects", "P project", "S settings", "d doctor")
+	keys = append(keys, "p projects", "P edit", "S settings", "d doctor")
 	if m.manageDaemon() {
 		if m.list.status == nil {
 			keys = append(keys, "^r start daemon")
