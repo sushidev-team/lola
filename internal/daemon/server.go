@@ -96,6 +96,18 @@ func (d *Daemon) handle(ctx context.Context, req protocol.Request) protocol.Resp
 			return protocol.Response{OK: false, Error: err.Error()}
 		}
 		return dataResponse(data)
+	case "revive":
+		data, err := d.handleRevive(ctx, req.Session)
+		if err != nil {
+			return protocol.Response{OK: false, Error: err.Error()}
+		}
+		return dataResponse(data)
+	case "open":
+		data, err := d.handleOpen(ctx, req.Project, req.Ref)
+		if err != nil {
+			return protocol.Response{OK: false, Error: err.Error()}
+		}
+		return dataResponse(data)
 	case "pane":
 		data, err := d.handlePane(ctx, req.Session, req.Lines)
 		if err != nil {

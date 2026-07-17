@@ -22,7 +22,16 @@ type Session struct {
 	Source    string    `json:"source"`          // "ao" | "native"
 	Agent     string    `json:"agent,omitempty"` // coding-agent kind: claude|codex|opencode; "" = legacy claude
 	Project   string    `json:"project"`
-	Issue     string    `json:"issue"`           // Linear identifier, e.g. ENG-123
+	// Manual marks a session opened by hand via `lola open` (a branch/PR checked
+	// out in a throwaway DETACHED worktree with a plain shell — no coding agent,
+	// no Linear issue) rather than dispatched from a Linear match. It is the
+	// control-loop opt-out: the observer derives such a session's status from tmux
+	// liveness alone ("shell"/"dead") and the reaction / write-back / review /
+	// coderabbit engines all skip it, so lola never send-keys into the human's
+	// interactive shell. Persisted so the flag survives a daemon restart (adoption
+	// re-detects it from the session-ID shape as a backstop).
+	Manual    bool      `json:"manual,omitempty"`
+	Issue     string    `json:"issue"`           // Linear identifier, e.g. ENG-123 ("" for a manual session)
 	Title     string    `json:"title,omitempty"` // Linear issue title, so a session is identifiable by what it's about
 	IssueUUID string    `json:"issue_uuid"`
 	Branch    string    `json:"branch"`

@@ -44,6 +44,46 @@ func loggedArgs(t *testing.T, argsLog string) string {
 	return strings.TrimRight(string(b), "\n")
 }
 
+func TestDirPrecedence(t *testing.T) {
+	if got := (&Client{Dir: "/some/where"}).dir(); got != "/some/where" {
+		t.Fatalf("explicit Dir: got %q, want /some/where", got)
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		t.Skip("no home dir to compare fallback against")
+	}
+	if got := (&Client{}).dir(); got != home {
+		t.Fatalf("empty Dir: got %q, want home %q", got, home)
+	}
+}
+
+// TestRunPinsCwd verifies every tmux invocation executes from Client.Dir, so
+// the long-lived tmux server can never inherit (and outlive) a deleted cwd.
+func TestRunPinsCwd(t *testing.T) {
+	dir := t.TempDir()
+	pwdLog := filepath.Join(dir, "pwd.log")
+	bin := filepath.Join(dir, "tmux")
+	script := "#!/bin/sh\npwd -P >> " + pwdLog + "\nexit 0\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A distinct dir the command must run from; resolve symlinks so macOS's
+	// /var -> /private/var does not defeat the comparison.
+	runDir := t.TempDir()
+	want, err := filepath.EvalSymlinks(runDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &Client{Bin: bin, Dir: runDir}
+	if _, _, err := c.run(context.Background(), "kill-session", "-t", "=x"); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	got := strings.TrimSpace(loggedArgs(t, pwdLog))
+	if got != want {
+		t.Fatalf("tmux ran from %q, want %q", got, want)
+	}
+}
+
 func TestListSessionsParsesFormatLines(t *testing.T) {
 	fixture := "main\t1720000000\t1\nlola-NORI-12-1\t1720003600\t0"
 	bin, argsLog := fakeTmux(t, fixture, "", 0)
@@ -385,5 +425,82 @@ func TestConfigureSessionBestEffortJoinsErrors(t *testing.T) {
 	lines := strings.Split(loggedArgs(t, argsLog), "\n")
 	if len(lines) != 6 {
 		t.Errorf("want all 6 commands attempted, got %d:\n%s", len(lines), strings.Join(lines, "\n"))
+	}
+}
+
+// caseTmux writes a fake tmux that logs argv and exits per a `case "$*"` body,
+// so one invocation can answer has-session (existence) differently from the
+// window commands — which the fixed-code fakeTmux cannot.
+func caseTmux(t *testing.T, caseBody string) (bin, argsLog string) {
+	t.Helper()
+	dir := t.TempDir()
+	bin = filepath.Join(dir, "tmux")
+	argsLog = filepath.Join(dir, "args.log")
+	script := "#!/bin/sh\necho \"$@\" >> " + argsLog + "\ncase \"$*\" in\n" + caseBody + "\n*) exit 0 ;;\nesac\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return bin, argsLog
+}
+
+// TestBuildViewer pins the exact tmux plumbing that assembles the tab-per-agent
+// viewer: a holder session, one link-window per tab at contiguous indices 1..N
+// with a rename, the placeholder window dropped, and the first real tab
+// selected. has-session returns false so no pre-existing viewer is killed.
+func TestBuildViewer(t *testing.T) {
+	bin, argsLog := caseTmux(t, "*has-session*) exit 1 ;;")
+	c := &Client{Bin: bin}
+	tabs := []ViewerTab{{Session: "lola-p-a", Name: "a"}, {Session: "lola-p-b", Name: "b"}}
+	if err := c.BuildViewer(context.Background(), "lola_viewer", "/wd", tabs); err != nil {
+		t.Fatalf("BuildViewer: %v", err)
+	}
+	log := loggedArgs(t, argsLog)
+	for _, w := range []string{
+		"new-session -d -s lola_viewer -c /wd",
+		"link-window -s =lola-p-a:0 -t =lola_viewer:1",
+		"rename-window -t =lola_viewer:1 a",
+		"link-window -s =lola-p-b:0 -t =lola_viewer:2",
+		"rename-window -t =lola_viewer:2 b",
+		"kill-window -t =lola_viewer:0",
+		"select-window -t =lola_viewer:1",
+	} {
+		if !strings.Contains(log, w) {
+			t.Errorf("BuildViewer must issue %q\nfull log:\n%s", w, log)
+		}
+	}
+	// A clean build over a non-existent viewer must never kill a session.
+	if strings.Contains(log, "kill-session") {
+		t.Errorf("clean build must not kill-session:\n%s", log)
+	}
+}
+
+// A viewer name under the "lola-" agent prefix is rejected before any tmux call,
+// so the daemon's Adopt scan can never mistake the viewer for an orphaned agent.
+func TestBuildViewerRejectsAgentPrefix(t *testing.T) {
+	c := &Client{Bin: "/nonexistent/tmux"} // must error before exec
+	err := c.BuildViewer(context.Background(), "lola-oops", "/wd", []ViewerTab{{Session: "lola-x"}})
+	if err == nil {
+		t.Fatal("BuildViewer must reject a viewer name under the lola- agent prefix")
+	}
+}
+
+// When no window links (every agent vanished between listing and linking), the
+// half-built viewer is torn down and an error returned, so the caller never
+// attaches to an empty placeholder shell.
+func TestBuildViewerAllLinksFailTearsDown(t *testing.T) {
+	bin, argsLog := caseTmux(t, "*has-session*) exit 1 ;;\n*link-window*) exit 1 ;;")
+	c := &Client{Bin: bin}
+	err := c.BuildViewer(context.Background(), "lola_viewer", "/wd", []ViewerTab{{Session: "lola-p-a"}, {Session: "lola-p-b"}})
+	if err == nil {
+		t.Fatal("BuildViewer must error when nothing links")
+	}
+	if log := loggedArgs(t, argsLog); !strings.Contains(log, "kill-session -t =lola_viewer") {
+		t.Errorf("a viewer with no linked windows must be torn down:\n%s", log)
+	}
+}
+
+func TestBuildViewerEmptyTabsErrors(t *testing.T) {
+	if err := (&Client{Bin: "/nonexistent/tmux"}).BuildViewer(context.Background(), "lola_viewer", "/wd", nil); err == nil {
+		t.Fatal("BuildViewer must error with no tabs")
 	}
 }

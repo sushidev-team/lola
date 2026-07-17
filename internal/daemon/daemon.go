@@ -39,9 +39,11 @@ import (
 // mirrors runtime.Native's exported lifecycle surface.
 type NativeAPI interface {
 	Spawn(ctx context.Context, p config.Project, issue linear.Issue) (session.Session, error)
+	Open(ctx context.Context, p config.Project, sessionID, ref, branch string) (session.Session, error)
 	Adopt(ctx context.Context) ([]session.Session, error)
 	Kill(ctx context.Context, s session.Session, removeWorktree, force bool) error
 	Alive(ctx context.Context, s session.Session) bool
+	Revive(ctx context.Context, s session.Session) (session.Session, error)
 }
 
 var _ NativeAPI = (*runtime.Native)(nil)
@@ -669,7 +671,7 @@ func (d *Daemon) tmuxClient() *tmux.Client {
 	d.mu.Lock()
 	sock := d.cfg.TmuxSocketName()
 	d.mu.Unlock()
-	return &tmux.Client{Bin: "tmux", SocketName: sock}
+	return &tmux.Client{Bin: "tmux", SocketName: sock, Dir: d.home}
 }
 
 // newNativeRuntime assembles the production native runtime for cfg: worktrees
@@ -684,7 +686,7 @@ func newNativeRuntime(cfg *config.Config, home, lolaBin string, linearKey func()
 	return &runtime.Native{
 		Cfg:       cfg,
 		WT:        &worktree.Manager{Root: filepath.Join(home, "worktrees")},
-		Tmux:      &tmux.Client{Bin: "tmux", SocketName: cfg.TmuxSocketName()},
+		Tmux:      &tmux.Client{Bin: "tmux", SocketName: cfg.TmuxSocketName(), Dir: home},
 		LolaBin:   lolaBin,
 		Home:      home,
 		LinearKey: linearKey,
@@ -713,6 +715,17 @@ func (d *Daemon) adoptNativeSessions(ctx context.Context) {
 	}
 	for _, s := range found {
 		if prev, ok := d.sessions.Get(s.ID); ok {
+			// A manually-opened shell session (`lola open`) must stay out of the
+			// control loop across a restart: preserve the flag (Adopt also re-detects
+			// it from the ID shape) and its "no Linear issue" identity so the observer
+			// never runs reactions / write-back / review against it.
+			if prev.Manual {
+				s.Manual = true
+				s.Issue = ""
+				if s.Status == "working" {
+					s.Status = "shell"
+				}
+			}
 			if s.Branch == "" {
 				s.Branch = prev.Branch
 			}

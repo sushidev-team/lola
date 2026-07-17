@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -49,6 +50,18 @@ type Session struct {
 type Client struct {
 	Bin        string
 	SocketName string
+	// Dir is the working directory every tmux command runs from. It matters
+	// only for the command that first starts the tmux server, because that
+	// process's cwd becomes the SERVER's cwd for its whole lifetime — and the
+	// server is long-lived (it outlives daemon restarts). If that cwd is later
+	// deleted (e.g. a project/worktree dir that gets removed), every process
+	// the server spawns inherits the now-dangling cwd; a Bun-based agent like
+	// Claude Code then fails its early-init getcwd() with a bare
+	// "ENOENT: Bun could not find a file" and exits before drawing anything,
+	// so the tmux session dies the instant it is created. Pin Dir to a stable,
+	// always-present directory (lola's Home) so the server can never inherit a
+	// doomed cwd. Empty falls back to the user's home, then "/".
+	Dir string
 }
 
 func (c *Client) bin() string {
@@ -67,6 +80,21 @@ func (c *Client) socket() string {
 	return c.SocketName
 }
 
+// dir is the working directory tmux commands run from (see the Dir field). A
+// deleted cwd is the specific failure this guards against, so the fallbacks are
+// ordered by how certain they are to exist: the configured Dir, then the user's
+// home, then "/". os.UserHomeDir never touches the filesystem (it reads $HOME),
+// so a dangling process cwd cannot make this fail.
+func (c *Client) dir() string {
+	if c.Dir != "" {
+		return c.Dir
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		return home
+	}
+	return "/"
+}
+
 // Available reports whether the tmux binary can be resolved to an
 // executable.
 func (c *Client) Available() bool {
@@ -83,6 +111,9 @@ func (c *Client) run(ctx context.Context, args ...string) (stdout, stderr string
 	// stays intact for the error message below.
 	full := append([]string{"-L", c.socket()}, args...)
 	cmd := exec.CommandContext(ctx, c.bin(), full...)
+	// Pin cwd so the tmux server never inherits (and outlives) a deleted
+	// directory — see the Dir field comment.
+	cmd.Dir = c.dir()
 	var out, errb bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &errb
@@ -253,6 +284,103 @@ func (c *Client) NewSession(ctx context.Context, name, dir, command string) erro
 	}
 	_, _, err := c.run(ctx, args...)
 	return err
+}
+
+// winTarget is a target-WINDOW spec ("=name:index"): exact session match plus an
+// explicit window index. link-window/rename-window/kill-window/select-window all
+// take a target-window (unlike the target-pane paneTarget builds).
+func winTarget(session string, index int) string {
+	return "=" + session + ":" + strconv.Itoa(index)
+}
+
+// LinkWindow links window 0 of src into dst at window index — the same window
+// object shown in two sessions (not a copy), so dst becomes a live view of src's
+// pane. index must be free in dst; the viewer builder assigns contiguous indices
+// so it always is. Killing dst later only UNLINKS these windows (tmux destroys a
+// window only when its LAST session goes), so tearing the viewer down never
+// touches the agent sessions.
+func (c *Client) LinkWindow(ctx context.Context, src, dst string, index int) error {
+	_, _, err := c.run(ctx, "link-window", "-s", winTarget(src, 0), "-t", winTarget(dst, index))
+	return err
+}
+
+// RenameWindow renames the window at session:index. On a LINKED window this also
+// renames it in the source session (it is one shared object) — a cosmetic effect
+// on the agent's own window name, accepted so the viewer's tabs read as the
+// issue rather than the running command.
+func (c *Client) RenameWindow(ctx context.Context, session string, index int, name string) error {
+	_, _, err := c.run(ctx, "rename-window", "-t", winTarget(session, index), name)
+	return err
+}
+
+// KillWindow removes the window at session:index (used to drop the viewer's
+// placeholder shell once real windows are linked in).
+func (c *Client) KillWindow(ctx context.Context, session string, index int) error {
+	_, _, err := c.run(ctx, "kill-window", "-t", winTarget(session, index))
+	return err
+}
+
+// SelectWindow makes session:index the active window.
+func (c *Client) SelectWindow(ctx context.Context, session string, index int) error {
+	_, _, err := c.run(ctx, "select-window", "-t", winTarget(session, index))
+	return err
+}
+
+// ViewerTab names one window of a viewer session: Session is the agent session
+// whose window is linked in, Name the tab label shown for it.
+type ViewerTab struct {
+	Session string
+	Name    string
+}
+
+// BuildViewer (re)assembles a read-through "viewer" session named viewer: a
+// single attachable session with one window per tab, each a LINK to that agent
+// session's live window. Attaching to the viewer and switching windows tabs
+// through every agent — the "attach once, see all agents" surface — while each
+// agent keeps its own independent session.
+//
+// The viewer is rebuilt fresh each call (an existing one is killed first) so it
+// always reflects the current session set. It starts as a holder with a
+// placeholder shell (window 0); real windows are linked at contiguous indices
+// 1..N and the placeholder is dropped once at least one linked. A tab whose
+// session vanished between listing and linking is skipped, not fatal. With no
+// window linkable the half-built viewer is torn down and an error returned, so a
+// caller never attaches to an empty shell.
+//
+// The viewer name must NOT start with the "lola-" agent prefix (see
+// OrphanSessionPrefix) or the daemon's Adopt scan would class it as an orphaned
+// agent session.
+func (c *Client) BuildViewer(ctx context.Context, viewer, dir string, tabs []ViewerTab) error {
+	if len(tabs) == 0 {
+		return fmt.Errorf("tmux: build viewer: no sessions to view")
+	}
+	if strings.HasPrefix(viewer, OrphanSessionPrefix) {
+		return fmt.Errorf("tmux: build viewer: name %q must not use the %q agent prefix", viewer, OrphanSessionPrefix)
+	}
+	if c.Has(ctx, viewer) {
+		_ = c.KillSession(ctx, viewer)
+	}
+	if err := c.NewSession(ctx, viewer, dir, ""); err != nil {
+		return fmt.Errorf("tmux: build viewer: %w", err)
+	}
+	linked := 0
+	for _, t := range tabs {
+		idx := linked + 1 // contiguous 1..N; a skipped tab does not consume an index
+		if err := c.LinkWindow(ctx, t.Session, viewer, idx); err != nil {
+			continue // the agent session went away between listing and linking
+		}
+		if t.Name != "" {
+			_ = c.RenameWindow(ctx, viewer, idx, t.Name) // cosmetic; never fatal
+		}
+		linked++
+	}
+	if linked == 0 {
+		_ = c.KillSession(ctx, viewer)
+		return fmt.Errorf("tmux: build viewer: no attachable sessions")
+	}
+	_ = c.KillWindow(ctx, viewer, 0)  // drop the placeholder shell
+	_ = c.SelectWindow(ctx, viewer, 1) // open on the first real tab
+	return nil
 }
 
 // SessionChrome describes the status-bar branding applied by ConfigureSession.

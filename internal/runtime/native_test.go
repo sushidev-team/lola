@@ -414,7 +414,7 @@ func TestSpawnPerAgentLaunchAndArtifacts(t *testing.T) {
 			if !strings.Contains(tmuxCalls, c.execFrag) {
 				t.Errorf("launch line missing %q:\n%s", c.execFrag, tmuxCalls)
 			}
-			if !strings.Contains(tmuxCalls, f.n.launchCommand(id, c.kind)) {
+			if !strings.Contains(tmuxCalls, f.n.launchCommand(id, c.kind, false)) {
 				t.Errorf("tmux launch line does not match launchCommand:\n%s", tmuxCalls)
 			}
 
@@ -1051,7 +1051,7 @@ func TestExcludeLolaDirResolvesWorktreePointer(t *testing.T) {
 
 func TestLaunchCommandQuoting(t *testing.T) {
 	n := &Native{} // ClaudeBin empty -> "claude" from PATH
-	got := n.launchCommand("lola-nori-eng-42", agent.Claude)
+	got := n.launchCommand("lola-nori-eng-42", agent.Claude, false)
 	// The POSIX line is wrapped in `sh -c '...'` so the user's login shell
 	// (which may be fish/csh/tcsh, not a POSIX sh) only has to exec `sh`; the
 	// inner single quotes around the prompt are escaped as '\''.
@@ -1068,7 +1068,7 @@ func TestLaunchCommandQuoting(t *testing.T) {
 	}
 
 	n.ClaudeBin = "/odd path/claude's bin"
-	got = n.launchCommand("lola-nori-eng-42", agent.Claude)
+	got = n.launchCommand("lola-nori-eng-42", agent.Claude, false)
 	if !strings.Contains(got, `/odd path/claude`) {
 		t.Errorf("launchCommand must include the binary path:\n%s", got)
 	}
@@ -1089,18 +1089,18 @@ func TestLaunchCommandPerAgent(t *testing.T) {
 	esc := `'\''You are lola session ` + id + `. Read .lola/prompt.md in the current directory first; it contains your task briefing.'\''`
 
 	wantCodex := "exec sh -c 'set -a; . ./.lola/env; set +a; exec codex --ask-for-approval never --sandbox workspace-write " + esc + "'"
-	if got := n.launchCommand(id, agent.Codex); got != wantCodex {
+	if got := n.launchCommand(id, agent.Codex, false); got != wantCodex {
 		t.Errorf("codex launchCommand:\n%s\nwant:\n%s", got, wantCodex)
 	}
 
 	wantOpenCode := "exec sh -c 'set -a; . ./.lola/env; set +a; exec opencode --prompt " + esc + " --auto'"
-	if got := n.launchCommand(id, agent.OpenCode); got != wantOpenCode {
+	if got := n.launchCommand(id, agent.OpenCode, false); got != wantOpenCode {
 		t.Errorf("opencode launchCommand:\n%s\nwant:\n%s", got, wantOpenCode)
 	}
 
 	// Neither non-claude line may leak the ClaudeBin override.
 	for _, k := range []agent.Kind{agent.Codex, agent.OpenCode} {
-		if strings.Contains(n.launchCommand(id, k), "should/not/be/used") {
+		if strings.Contains(n.launchCommand(id, k, false), "should/not/be/used") {
 			t.Errorf("%s launch must not use ClaudeBin", k)
 		}
 	}
@@ -1133,7 +1133,7 @@ func TestLaunchCommandRunsUnderNonPosixLoginShells(t *testing.T) {
 	}
 
 	n := &Native{}
-	line := n.launchCommand("lola-x-eng-1", agent.Claude)
+	line := n.launchCommand("lola-x-eng-1", agent.Claude, false)
 
 	for _, shell := range []string{"/bin/sh", "/bin/bash", "/bin/zsh", "/bin/csh", "/bin/tcsh"} {
 		if _, err := os.Stat(shell); err != nil {
@@ -1220,10 +1220,183 @@ func TestIssueFromSessionID(t *testing.T) {
 		{"lola-nori-eng-42", "other", ""},
 		{"lola-nori-eng-42", "", ""},
 		{"unrelated", "nori", ""},
+		{"lola-nori-open-pr-42", "nori", ""},   // manual session: no Linear issue
+		{"lola-nori-open-feat-foo", "nori", ""}, // manual session: no Linear issue
 	}
 	for _, c := range cases {
 		if got := issueFromSessionID(c.id, c.project); got != c.want {
 			t.Errorf("issueFromSessionID(%q, %q) = %q, want %q", c.id, c.project, got, c.want)
 		}
+	}
+}
+
+func TestManualSessionID(t *testing.T) {
+	cases := []struct{ project, label, want string }{
+		{"nori", "pr-42", "lola-nori-open-pr-42"},
+		{"nori", "feat/foo", "lola-nori-open-feat-foo"},
+		{"my-app", "Feature/Bar Baz", "lola-my-app-open-feature-bar-baz"},
+		{"nori", "///", "lola-nori-open-ref"}, // slugs to empty -> "ref"
+	}
+	for _, c := range cases {
+		if got := ManualSessionID(c.project, c.label); got != c.want {
+			t.Errorf("ManualSessionID(%q, %q) = %q, want %q", c.project, c.label, got, c.want)
+		}
+	}
+}
+
+func TestIsManualSessionID(t *testing.T) {
+	cases := []struct {
+		id, project string
+		want        bool
+	}{
+		{"lola-nori-open-pr-42", "nori", true},
+		{"lola-nori-eng-42", "nori", false},
+		{"lola-my-app-open-x", "my-app", true},
+		{"lola-nori-open-x", "other", false}, // wrong project
+		{"lola-nori-open-x", "", false},      // no project resolved
+	}
+	for _, c := range cases {
+		if got := isManualSessionID(c.id, c.project); got != c.want {
+			t.Errorf("isManualSessionID(%q, %q) = %v, want %v", c.id, c.project, got, c.want)
+		}
+	}
+}
+
+// TestOpenHappyPath: `Open` checks out a PR head in a DETACHED worktree, drops a
+// plain shell (no agent), and returns a Manual/"shell" session. The custom git
+// case handles the detached add (positional args differ from Create's -b form)
+// and resolves FETCH_HEAD to a sha; .git is made a real dir so excludeLolaDir
+// writes into <dir>/.git/info/exclude.
+func TestOpenHappyPath(t *testing.T) {
+	gitCases := `*"worktree add --detach"*)
+  mkdir -p "$6/.git"
+  exit 0
+  ;;
+*"rev-parse --verify --quiet FETCH_HEAD"*)
+  echo deadbeefcafe
+  exit 0
+  ;;`
+	f := newFixture(t, gitCases, "")
+	f.n.Cfg.Projects[0].Env = map[string]string{"DATABASE_URL": "postgres://x"}
+	f.p.Env = f.n.Cfg.Projects[0].Env
+	ctx := context.Background()
+
+	id := "lola-nori-open-pr-42"
+	got, err := f.n.Open(ctx, f.p, id, "pull/42/head", "pr-42")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	dir := filepath.Join(f.root, "nori", id)
+	want := session.Session{
+		ID: id, Source: "native", Manual: true, Project: "nori",
+		Title: "manual: pr-42", Branch: "pr-42", Repo: "owner/nori",
+		TmuxName: id, Status: "shell",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("session = %+v\nwant      %+v", got, want)
+	}
+
+	gitLog := loggedArgs(t, f.gitLog)
+	if !strings.Contains(gitLog, "-C "+f.repo+" fetch --no-tags origin pull/42/head") {
+		t.Errorf("expected a PR-head fetch:\n%s", gitLog)
+	}
+	if !strings.Contains(gitLog, "worktree add --detach "+dir+" deadbeefcafe") {
+		t.Errorf("expected a detached worktree add:\n%s", gitLog)
+	}
+
+	// A plain shell launch that sources .lola/env — never an agent binary.
+	tmuxLog := loggedArgs(t, f.tmuxLog)
+	if !strings.Contains(tmuxLog, "new-session -d -s "+id) {
+		t.Errorf("expected a tmux session for the shell:\n%s", tmuxLog)
+	}
+	if strings.Contains(tmuxLog, "claude") || strings.Contains(tmuxLog, "prompt.md") {
+		t.Errorf("a manual shell must launch no coding agent:\n%s", tmuxLog)
+	}
+
+	// .lola/env carries the project env (for running/tests) but NO secret.
+	env, err := os.ReadFile(filepath.Join(dir, lolaDir, "env"))
+	if err != nil {
+		t.Fatalf("read .lola/env: %v", err)
+	}
+	if !strings.Contains(string(env), "DATABASE_URL=") {
+		t.Errorf(".lola/env missing project env:\n%s", env)
+	}
+	if strings.Contains(string(env), "LINEAR_API_KEY") || strings.Contains(string(env), "LOLA_SESSION") {
+		t.Errorf(".lola/env must not export secrets/session for a manual shell:\n%s", env)
+	}
+}
+
+// TestReviveRelaunchesOnKeptWorktree: a dead session whose worktree survives is
+// brought back by re-running the tmux session in place. With no Claude
+// transcript on disk it launches fresh (not --continue), and returns the
+// session flipped back to working.
+func TestReviveRelaunchesOnKeptWorktree(t *testing.T) {
+	f := newFixture(t, "", "")
+	t.Setenv("HOME", t.TempDir()) // isolate the transcript probe: none present
+	id := "lola-nori-eng-42"
+	if err := os.MkdirAll(filepath.Join(f.root, "nori", id, lolaDir), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	s := session.Session{ID: id, Source: "native", Project: "nori", Issue: "ENG-42", Agent: "claude", Status: "dead"}
+	got, err := f.n.Revive(context.Background(), s)
+	if err != nil {
+		t.Fatalf("Revive: %v", err)
+	}
+	if got.Status != StatusWorking {
+		t.Errorf("revived status = %q, want %q", got.Status, StatusWorking)
+	}
+	if got.TmuxName != id {
+		t.Errorf("revived TmuxName = %q, want %q", got.TmuxName, id)
+	}
+	tmuxCalls := loggedArgs(t, f.tmuxLog)
+	if !strings.Contains(tmuxCalls, "new-session -d -s "+id) {
+		t.Errorf("revive must relaunch the tmux session:\n%s", tmuxCalls)
+	}
+	if strings.Contains(tmuxCalls, "--continue") {
+		t.Errorf("no transcript → must launch fresh, not resume:\n%s", tmuxCalls)
+	}
+}
+
+// TestReviveResumesWhenTranscriptExists: when Claude left a transcript for the
+// worktree, revive relaunches with --continue so the agent resumes its prior
+// conversation instead of starting over.
+func TestReviveResumesWhenTranscriptExists(t *testing.T) {
+	f := newFixture(t, "", "")
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	id := "lola-nori-eng-77"
+	if err := os.MkdirAll(filepath.Join(f.root, "nori", id, lolaDir), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// Claude's project-dir name embeds the escaped worktree path; the session id
+	// (the worktree basename) survives escaping verbatim, so a dir containing it
+	// with a .jsonl transcript is what claudeHasTranscript matches.
+	proj := filepath.Join(home, ".claude", "projects", "-Users-x-worktrees-nori-"+id)
+	if err := os.MkdirAll(proj, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(proj, "conv.jsonl"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := session.Session{ID: id, Source: "native", Project: "nori", Issue: "ENG-77", Agent: "claude", Status: "dead"}
+	if _, err := f.n.Revive(context.Background(), s); err != nil {
+		t.Fatalf("Revive: %v", err)
+	}
+	if tmuxCalls := loggedArgs(t, f.tmuxLog); !strings.Contains(tmuxCalls, "--continue") {
+		t.Errorf("transcript present → revive must resume via --continue:\n%s", tmuxCalls)
+	}
+}
+
+// TestReviveWorktreeGoneErrors: with the worktree removed there is nothing to
+// resume, so Revive errors (and never touches tmux) rather than launching into
+// a missing directory.
+func TestReviveWorktreeGoneErrors(t *testing.T) {
+	f := newFixture(t, "", "")
+	s := session.Session{ID: "lola-nori-eng-99", Project: "nori", Agent: "claude"}
+	if _, err := f.n.Revive(context.Background(), s); err == nil {
+		t.Fatal("Revive must error when the worktree is gone")
+	}
+	if got := loggedArgs(t, f.tmuxLog); strings.Contains(got, "new-session") {
+		t.Errorf("Revive must not start a tmux session when the worktree is gone:\n%s", got)
 	}
 }

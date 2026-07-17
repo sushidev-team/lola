@@ -250,9 +250,19 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// message) and refresh the list so a removed session drops out.
 		m.sessions.flash = v.msg
 		return m, fetchSessionsCmd
+	case reviveDoneMsg:
+		// Flash the outcome (green on a successful relaunch) and refresh so the
+		// revived session re-renders as working.
+		m.sessions.flash, m.sessions.flashGood = v.msg, v.good
+		return m, fetchSessionsCmd
 	case coderabbitDoneMsg:
 		// Flash the CodeRabbit poll outcome; refresh so any status the routed
 		// feedback nudged (e.g. a hand-off waking the agent) re-derives.
+		m.sessions.flash, m.sessions.flashGood = v.msg, v.ok
+		return m, fetchSessionsCmd
+	case openDoneMsg:
+		// Flash the manual-open outcome (green when the branch/PR checked out) and
+		// refresh so the new shell session shows up in the list.
 		m.sessions.flash, m.sessions.flashGood = v.msg, v.ok
 		return m, fetchSessionsCmd
 	case doctorMsg:
@@ -386,7 +396,7 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Cockpit key routing. Global keys (focus cycle, doctor) fire unless a modal
 	// gate currently owns keystrokes — a poll delete / session kill confirmation,
 	// the answer card, or the filter bar (whose keys may be "tab"/"d"/digits).
-	gated := m.list.confirmDelete || m.sessions.confirmKill || m.sessions.answering || m.sessions.filtering
+	gated := m.list.confirmDelete || m.sessions.confirmKill || m.sessions.answering || m.sessions.filtering || m.sessions.opening
 	if k, ok := msg.(tea.KeyPressMsg); ok && !gated {
 		switch k.String() {
 		case "tab":

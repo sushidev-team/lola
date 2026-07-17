@@ -52,7 +52,10 @@ func main() {
 			RunE: func(c *cobra.Command, _ []string) error { return tui.Send(`{"cmd":"reload"}`) }},
 		enableCmd("enable"), enableCmd("disable"),
 		pollCmd(),
+		openCmd(),
+		attachCmd(),
 		killCmd(),
+		reviveCmd(),
 		answerCmd(),
 		reviewCmd(),
 		coderabbitCmd(),
@@ -93,6 +96,49 @@ func pollCmd() *cobra.Command {
 	return cmd
 }
 
+// openCmd manually checks out a branch or PR of a project into a throwaway
+// worktree with a plain shell so it can be run and tested (`lola open <project>
+// <branch|PR#>`): a bare number is a PR (fetched via refs/pull/<n>/head), any
+// other value a branch. No coding agent runs — the worktree is DETACHED, so
+// teardown never touches the upstream branch. Tear it down later with `lola kill
+// <session-id>` (the printed message names it). Send prints the outcome.
+func openCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "open <project> <branch|PR#>",
+		Short: "Open a branch or PR of a project in a throwaway worktree + shell to run and test it",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(c *cobra.Command, a []string) error {
+			raw, err := json.Marshal(protocol.Request{Cmd: "open", Project: a[0], Ref: a[1]})
+			if err != nil {
+				return err
+			}
+			return tui.Send(string(raw))
+		},
+	}
+}
+
+// attachCmd hands the terminal to tmux on lola's isolated server (`lola attach
+// [session]`). With no argument it (re)builds a viewer session with one tab per
+// live agent and attaches to it — "attach once, tab through every agent"; with a
+// session id it attaches straight to that one. It drives tmux directly (no
+// daemon needed) and blocks until you detach (Ctrl-b d). Unlike the other
+// subcommands it does not go over the socket, so it lives outside the tui.Send
+// path.
+func attachCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "attach [session]",
+		Short: "Attach to agents: no arg opens a tab-per-agent viewer; a session id attaches to just that one",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(c *cobra.Command, a []string) error {
+			session := ""
+			if len(a) == 1 {
+				session = a[0]
+			}
+			return tui.RunAttach(session)
+		},
+	}
+}
+
 // killCmd terminates one native session and cleans up after it: `lola kill
 // <session-id>` kills the agent's tmux session and, when the worktree is clean,
 // removes the worktree and frees the issue's slot. A dirty worktree (uncommitted
@@ -108,6 +154,28 @@ func killCmd() *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&force, "force", false, "remove the worktree even with uncommitted changes")
 	return cmd
+}
+
+// reviveCmd relaunches a dead session's coding agent on the worktree that was
+// kept for inspection (`lola revive <session-id>`). It is the inverse of kill:
+// where kill tears a session down, revive brings one back — Claude resumes its
+// prior conversation via --continue when a transcript survived, otherwise the
+// agent restarts fresh on the same worktree. The daemon refuses if the session
+// is already running. Send prints the outcome or the daemon's error (e.g.
+// "unknown session", "worktree is gone").
+func reviveCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "revive <session-id>",
+		Short: "Revive a dead session: relaunch its agent on the kept worktree (Claude resumes via --continue)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(c *cobra.Command, a []string) error {
+			raw, err := json.Marshal(protocol.Request{Cmd: "revive", Session: a[0]})
+			if err != nil {
+				return err
+			}
+			return tui.Send(string(raw))
+		},
+	}
 }
 
 // answerCmd delivers a human's inline reply to a session that stopped for input

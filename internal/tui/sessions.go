@@ -225,6 +225,15 @@ type sessionsModel struct {
 	answerChoice int
 	answerInput  string
 
+	// Manual-open state ("O"). opening owns every keypress until enter (send
+	// cmd=open) or esc (cancel). openInput accumulates the typed target; the
+	// project defaults to the selected session's project (openProject) and is
+	// overridden when the input contains two whitespace-separated tokens
+	// ("<project> <branch|PR#>").
+	opening     bool
+	openInput   string
+	openProject string
+
 	tmux *tmux.Client
 	// hasPane probes whether a session name has a LIVE pane on the lola tmux
 	// server; the attach pre-check refuses when it returns false. A seam so tests
@@ -317,6 +326,63 @@ func killSelectedCmd(id string) tea.Cmd {
 			return killDoneMsg{msg: d.Message}
 		}
 		return killDoneMsg{msg: "session killed"}
+	}
+}
+
+// reviveDoneMsg carries the outcome of a cmd=revive request. good is true on a
+// successful relaunch (green flash); false on the daemon's refusal (already
+// running, or the worktree is gone), whose message is surfaced verbatim.
+type reviveDoneMsg struct {
+	msg  string
+	good bool
+}
+
+// reviveSelectedCmd sends a revive for id and reports the outcome to flash.
+// Unlike kill it needs no y/n confirmation: revive is non-destructive — it only
+// relaunches the agent on the worktree that was kept for inspection (Claude
+// resumes via --continue when it has a transcript).
+func reviveSelectedCmd(id string) tea.Cmd {
+	return func() tea.Msg {
+		resp, err := request(protocol.Request{Cmd: "revive", Session: id})
+		if err != nil {
+			return reviveDoneMsg{msg: err.Error()}
+		}
+		if !resp.OK {
+			return reviveDoneMsg{msg: resp.Error}
+		}
+		var d protocol.ReviveData
+		if err := json.Unmarshal(resp.Data, &d); err == nil && d.Message != "" {
+			return reviveDoneMsg{msg: d.Message, good: true}
+		}
+		return reviveDoneMsg{msg: "session revived", good: true}
+	}
+}
+
+// openDoneMsg carries the outcome of a cmd=open request. ok is true when the
+// branch/PR was checked out (green flash); false surfaces the daemon's error
+// (unknown project, unresolvable ref, already open) verbatim.
+type openDoneMsg struct {
+	msg string
+	ok  bool
+}
+
+// openSessionCmd manually opens a branch/PR of project in a throwaway worktree +
+// shell (cmd=open) and reports the outcome to flash. It mirrors `lola open
+// <project> <target>`.
+func openSessionCmd(project, target string) tea.Cmd {
+	return func() tea.Msg {
+		resp, err := requestFn(protocol.Request{Cmd: "open", Project: project, Ref: target})
+		if err != nil {
+			return openDoneMsg{msg: err.Error()}
+		}
+		if !resp.OK {
+			return openDoneMsg{msg: resp.Error}
+		}
+		var d protocol.OpenData
+		if err := json.Unmarshal(resp.Data, &d); err == nil && d.Message != "" {
+			return openDoneMsg{msg: d.Message, ok: true}
+		}
+		return openDoneMsg{msg: "opened " + target, ok: true}
 	}
 }
 
@@ -504,6 +570,11 @@ func (m *rootModel) updateSessions(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if s.filtering {
 		return m.updateFilter(k)
 	}
+	// The manual-open prompt owns every keypress until enter (open) or esc
+	// (cancel). It types no agent input — it only names a branch/PR to check out.
+	if s.opening {
+		return m.updateOpen(k)
+	}
 	// A pending kill confirmation owns the next keypress: y/Y kills, anything
 	// else cancels. Force is never offered here (CLI-only friction). The target
 	// is the ID captured when "x" was pressed — NOT s.selected() re-read now: a
@@ -558,6 +629,19 @@ func (m *rootModel) updateSessions(msg tea.Msg) (tea.Model, tea.Cmd) {
 			s.confirmKill = true
 			s.killTarget = sel.ID
 		}
+	case "R":
+		// Revive a dead session: relaunch its agent on the kept worktree. Only
+		// meaningful when the pane is gone (dead / session_ended); on any other
+		// status it flashes a hint and stays put (the daemon refuses a live one).
+		// No confirmation — revive is non-destructive, unlike the "x" kill.
+		if sel := s.selected(); sel != nil {
+			if sel.Status != "dead" && sel.Status != "session_ended" {
+				s.flash, s.flashGood = "revive is only available for a dead session", false
+				return m, nil
+			}
+			s.flash, s.flashGood = "reviving…", true
+			return m, reviveSelectedCmd(sel.ID)
+		}
 	case "v":
 		// Toggle compact/full pane view; refetch so the fuller view fills in.
 		s.full = !s.full
@@ -580,10 +664,64 @@ func (m *rootModel) updateSessions(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.reselectVisible()
 	case "a":
 		return m.startAnswer()
+	case "O":
+		return m.startOpen()
 	case "n":
 		return m.jumpNeedsInput(+1)
 	case "N":
 		return m.jumpNeedsInput(-1)
+	}
+	return m, nil
+}
+
+// startOpen opens the manual-open prompt: type a branch or PR number to check
+// out in a throwaway worktree + shell. The project defaults to the selected
+// session's (shown in the keybar); typing "<project> <target>" overrides it.
+func (m *rootModel) startOpen() (tea.Model, tea.Cmd) {
+	s := &m.sessions
+	s.opening = true
+	s.openInput = ""
+	s.openProject = ""
+	if sel := s.selected(); sel != nil {
+		s.openProject = sel.Project
+	}
+	return m, nil
+}
+
+// updateOpen drives the manual-open prompt: printable runes accumulate the
+// target, backspace edits, esc cancels, enter parses and sends cmd=open. Input
+// of one token uses the default project; "<project> <target>" overrides it. An
+// empty or project-less input flashes a hint and stays open.
+func (m *rootModel) updateOpen(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	s := &m.sessions
+	switch k.String() {
+	case "esc":
+		s.opening, s.openInput = false, ""
+		return m, nil
+	case "enter":
+		project, target := s.openProject, strings.TrimSpace(s.openInput)
+		if fields := strings.Fields(s.openInput); len(fields) >= 2 {
+			project, target = fields[0], fields[1]
+		} else if len(fields) == 1 {
+			target = fields[0]
+		} else {
+			target = ""
+		}
+		if project == "" || target == "" {
+			s.flash, s.flashGood = "type: <project> <branch|PR#>", false
+			return m, nil
+		}
+		s.opening, s.openInput = false, ""
+		s.flash, s.flashGood = "opening "+target+"…", true
+		return m, openSessionCmd(project, target)
+	case "backspace":
+		if r := []rune(s.openInput); len(r) > 0 {
+			s.openInput = string(r[:len(r)-1])
+		}
+		return m, nil
+	}
+	if k.Text != "" { // printable runes, including space
+		s.openInput += k.Text
 	}
 	return m, nil
 }

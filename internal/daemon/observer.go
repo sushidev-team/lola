@@ -169,6 +169,16 @@ func (d *Daemon) observeNative(ctx context.Context) {
 		if s.Source != "native" {
 			continue
 		}
+		// A manually-opened shell (`lola open`) has no coding agent: its status is
+		// pure tmux liveness and it must NEVER reach the reaction / write-back /
+		// review / coderabbit engines below (which would send-keys into the human's
+		// interactive shell). Refresh it in isolation and skip the whole agent path.
+		if s.Manual {
+			if d.observeManualShell(ctx, nat, s) {
+				touched = true
+			}
+			continue
+		}
 
 		// Fetch a missing title from Linear (bounded, once — the next cycle sees
 		// cur.Title set and skips). Kept OUTSIDE the store-lock Update closure.
@@ -349,6 +359,37 @@ func (d *Daemon) observeNative(ctx context.Context) {
 	if err := d.sessions.Save(); err != nil {
 		d.logf("", "observe: persist sessions: %v", err)
 	}
+}
+
+// observeManualShell refreshes a manually-opened (`lola open`) session: it has
+// no coding agent, so — unlike observeNative's agent path — it gets NO pane
+// classification, NO PR derivation, and NO reaction/write-back/review. Its
+// status is pure tmux liveness: "shell" while the pane is alive, "dead" once it
+// is gone (a dead shell then ages out of the store via the retention prune). An
+// alive shell is always re-stamped so its LastSeen stays fresh and a long-lived
+// checkout never ages out from under the human. Returns whether it wrote.
+func (d *Daemon) observeManualShell(ctx context.Context, nat NativeAPI, s session.Session) bool {
+	cctx, cancel := context.WithTimeout(ctx, observeExecTimeout)
+	alive := nat.Alive(cctx, s)
+	cancel()
+	wrote := false
+	d.sessions.Update(s.ID, func(cur *session.Session) bool {
+		if cur.TmuxName == "" {
+			cur.TmuxName = cur.ID
+		}
+		if alive {
+			cur.Status = "shell"
+			wrote = true
+			return true // keep LastSeen fresh so an open shell never ages out
+		}
+		if cur.Status == "dead" {
+			return false // already settled: freeze LastSeen so retention drops it
+		}
+		cur.Status = "dead"
+		wrote = true
+		return true
+	})
+	return wrote
 }
 
 // nativeStatus derives a native session's status for this cycle from its
