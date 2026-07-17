@@ -185,6 +185,14 @@ func (m *Manager) Prepare(ctx context.Context, p config.Project, dir string) err
 // ErrDirty. dir must lie strictly inside Root and must not be the project's
 // main checkout; a missing branch is not an error (already deleted). Callers
 // invoke Remove only for merged or explicitly killed sessions.
+//
+// A finished session's directory can outlive git's worktree registration: a
+// deleted or broken `.git` link, a `git worktree prune`, or a project
+// re-clone/gc leave a directory git no longer recognizes. On such a directory
+// both the dirty check (`git -C dir status`) and `git worktree remove` fail
+// with exit 128 — which wedged the merged/kill cleanup into retrying forever
+// and made --force useless too. When a git step fails AND the dir's `.git`
+// link is gone, the leftover is removed directly (removeUnregistered).
 func (m *Manager) Remove(ctx context.Context, p config.Project, dir, branch string, force bool) error {
 	if err := m.guardRemovable(p, dir); err != nil {
 		return err
@@ -192,6 +200,12 @@ func (m *Manager) Remove(ctx context.Context, p config.Project, dir, branch stri
 	if !force {
 		out, _, err := m.git(ctx, "-C", dir, "status", "--porcelain")
 		if err != nil {
+			// git cannot inspect the dir. If its `.git` link is gone it is an
+			// orphaned leftover git can no longer manage; remove it directly.
+			// Otherwise the error is real (transient/permissions) — propagate.
+			if m.orphanedLeftover(dir) {
+				return m.removeUnregistered(ctx, p, dir, branch, false)
+			}
 			return fmt.Errorf("worktree: dirty check: %w", err)
 		}
 		if strings.TrimSpace(out) != "" {
@@ -205,9 +219,54 @@ func (m *Manager) Remove(ctx context.Context, p config.Project, dir, branch stri
 	}
 	args = append(args, dir)
 	if _, _, err := m.git(ctx, args...); err != nil {
+		// The force path skips the dirty check, so a deregistered leftover first
+		// surfaces here: `git worktree remove` also fails exit 128 on it. Same
+		// fallback — a real git failure (locked worktree, permissions) keeps its
+		// `.git` link and propagates.
+		if m.orphanedLeftover(dir) {
+			return m.removeUnregistered(ctx, p, dir, branch, force)
+		}
 		return err
 	}
+	return m.deleteBranch(ctx, p, branch)
+}
 
+// orphanedLeftover reports whether dir is a directory git no longer manages as
+// a worktree — its `.git` link (a file for a linked worktree) is absent. Such
+// a leftover can be neither dirty-checked nor removed through git. A missing
+// dir counts as orphaned too (nothing for git to manage); any other stat error
+// (e.g. permissions) counts as not-orphaned so the original git error wins.
+func (m *Manager) orphanedLeftover(dir string) bool {
+	_, err := os.Lstat(filepath.Join(dir, ".git"))
+	return errors.Is(err, fs.ErrNotExist)
+}
+
+// removeUnregistered deletes a session directory that git no longer tracks as a
+// worktree (see Remove). git cannot verify its cleanliness, so Remove's
+// fail-closed discipline holds: without force only a trivially empty leftover
+// is deleted; one that still holds entries is kept and reported as ErrDirty
+// (matching a dirty registered worktree — the caller keeps it, notifies, and
+// can rerun with --force). With force the whole tree is removed. The session's
+// branch is deleted only when the directory is actually removed.
+func (m *Manager) removeUnregistered(ctx context.Context, p config.Project, dir, branch string, force bool) error {
+	if !force {
+		entries, err := os.ReadDir(dir)
+		if err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("worktree: inspect orphaned dir: %w", err)
+		}
+		if len(entries) > 0 {
+			return fmt.Errorf("worktree %s: %w", dir, ErrDirty)
+		}
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		return fmt.Errorf("worktree: remove orphaned dir: %w", err)
+	}
+	return m.deleteBranch(ctx, p, branch)
+}
+
+// deleteBranch removes the session's local branch; "" and an already-missing
+// branch are both no-ops.
+func (m *Manager) deleteBranch(ctx context.Context, p config.Project, branch string) error {
 	if branch == "" {
 		return nil
 	}

@@ -319,6 +319,135 @@ func TestRemoveIgnoresMissingBranch(t *testing.T) {
 	}
 }
 
+// A finished session's directory can lose its `.git` link (a broken/deleted
+// link, `git worktree prune`, or a project re-clone deregisters it). git then
+// fails the dirty check with exit 128, so the leftover is handled directly. A
+// leftover that still holds files is unverifiable, so it is kept as ErrDirty
+// (never silently deleted) and git worktree remove is never attempted.
+func TestRemoveOrphanedLeftoverNonEmptyKeptAsDirty(t *testing.T) {
+	bin, argsLog := fakeGit(t, stub{
+		match:  "status --porcelain",
+		stderr: "fatal: not a git repository (or any of the parent directories): .git",
+		exit:   128,
+	})
+	root, repo := t.TempDir(), t.TempDir()
+	dir := filepath.Join(root, "nori", "s1")
+	if err := os.MkdirAll(filepath.Join(dir, "storage", "logs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "storage", "logs", "app.log"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m := &Manager{GitBin: bin, Root: root}
+
+	err := m.Remove(context.Background(), testProject(repo), dir, "lola/NORI-12-1", false)
+	if !errors.Is(err, ErrDirty) {
+		t.Fatalf("Remove orphaned non-empty leftover: want ErrDirty, got %v", err)
+	}
+	if _, statErr := os.Stat(dir); statErr != nil {
+		t.Errorf("kept leftover must stay on disk: %v", statErr)
+	}
+	// Only the failed dirty check ran — never `worktree remove` (git cannot) nor
+	// `branch -D` (the dir is kept for inspection).
+	if got := loggedArgs(t, argsLog); got != "-C "+dir+" status --porcelain" {
+		t.Errorf("git calls:\n%s\nwant only the failed dirty check", got)
+	}
+}
+
+// An empty orphaned leftover has nothing to lose, so a non-force Remove deletes
+// it and prunes the branch — closing out the session instead of retrying the
+// impossible git removal forever.
+func TestRemoveOrphanedLeftoverEmptyDeletedWithBranch(t *testing.T) {
+	bin, argsLog := fakeGit(t, stub{
+		match:  "status --porcelain",
+		stderr: "fatal: not a git repository (or any of the parent directories): .git",
+		exit:   128,
+	})
+	root, repo := t.TempDir(), t.TempDir()
+	dir := filepath.Join(root, "nori", "s1")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	m := &Manager{GitBin: bin, Root: root}
+
+	if err := m.Remove(context.Background(), testProject(repo), dir, "lola/NORI-12-1", false); err != nil {
+		t.Fatalf("Remove empty orphaned leftover: %v", err)
+	}
+	if _, statErr := os.Stat(dir); !os.IsNotExist(statErr) {
+		t.Errorf("empty leftover must be deleted; stat err = %v", statErr)
+	}
+	want := strings.Join([]string{
+		"-C " + dir + " status --porcelain",
+		"-C " + repo + " branch -D lola/NORI-12-1",
+	}, "\n")
+	if got := loggedArgs(t, argsLog); got != want {
+		t.Errorf("git calls:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// --force must be able to clear an orphaned leftover git can no longer remove
+// (git worktree remove --force itself fails exit 128 on it): the directory is
+// deleted directly and the branch pruned.
+func TestRemoveOrphanedLeftoverForceDeletes(t *testing.T) {
+	bin, argsLog := fakeGit(t, stub{
+		match:  "worktree remove",
+		stderr: "fatal: '/x/nori/s1' is not a working tree",
+		exit:   128,
+	})
+	root, repo := t.TempDir(), t.TempDir()
+	dir := filepath.Join(root, "nori", "s1")
+	if err := os.MkdirAll(filepath.Join(dir, "storage"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "storage", "app.log"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m := &Manager{GitBin: bin, Root: root}
+
+	if err := m.Remove(context.Background(), testProject(repo), dir, "lola/NORI-12-1", true); err != nil {
+		t.Fatalf("Remove --force orphaned leftover: %v", err)
+	}
+	if _, statErr := os.Stat(dir); !os.IsNotExist(statErr) {
+		t.Errorf("--force must delete the leftover; stat err = %v", statErr)
+	}
+	// force skips the dirty check; git worktree remove --force was attempted
+	// (and failed, since git no longer knows the dir), then branch -D ran.
+	want := strings.Join([]string{
+		"-C " + repo + " worktree remove --force " + dir,
+		"-C " + repo + " branch -D lola/NORI-12-1",
+	}, "\n")
+	if got := loggedArgs(t, argsLog); got != want {
+		t.Errorf("git calls:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// A real (non-orphan) git failure whose `.git` link is intact must propagate
+// unchanged — the fallback must not swallow it and delete a live worktree.
+func TestRemoveRealErrorWithIntactGitLinkPropagates(t *testing.T) {
+	bin, _ := fakeGit(t, stub{
+		match:  "status --porcelain",
+		stderr: "fatal: index file corrupt",
+		exit:   128,
+	})
+	root, repo := t.TempDir(), t.TempDir()
+	dir := filepath.Join(root, "nori", "s1")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".git"), []byte("gitdir: /somewhere\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m := &Manager{GitBin: bin, Root: root}
+
+	err := m.Remove(context.Background(), testProject(repo), dir, "lola/NORI-12-1", false)
+	if err == nil || errors.Is(err, ErrDirty) {
+		t.Fatalf("real git error with intact .git must propagate as-is, got %v", err)
+	}
+	if _, statErr := os.Stat(dir); statErr != nil {
+		t.Errorf("worktree must not be deleted on a real git error: %v", statErr)
+	}
+}
+
 func TestRemoveRefusesDirOutsideRoot(t *testing.T) {
 	bin, argsLog := fakeGit(t)
 	root := t.TempDir()
