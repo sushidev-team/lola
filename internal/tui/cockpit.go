@@ -122,7 +122,7 @@ func (m *rootModel) modalOver(title string, content []string) string {
 	if H <= 0 {
 		H = 24
 	}
-	bg := m.cockpitLines()
+	bg := m.backdropLines()
 	mw := W - 8
 	if mw > 76 {
 		mw = 76
@@ -220,7 +220,7 @@ func (m *rootModel) formModal() string {
 		body[i] = previewLine(body[i], mw-4)
 	}
 	modal := box(title, body, mw, mh, true)
-	return strings.Join(placeModal(m.cockpitLines(), modal, W), "\n")
+	return strings.Join(placeModal(m.backdropLines(), modal, W), "\n")
 }
 
 // railColumn stacks three panels: a fixed Triage summary, a flexible Activity
@@ -717,7 +717,7 @@ func (m *rootModel) keybar(w int) string {
 		}
 		keys = append(keys, "x kill", "O open", "/ filter", "! needs-you", "V lens", "n next!", "tab → polls")
 	}
-	keys = append(keys, "P project", "S settings", "d doctor")
+	keys = append(keys, "esc projects", "P project", "S settings", "d doctor")
 	if m.manageDaemon() {
 		if m.list.status == nil {
 			keys = append(keys, "^r start daemon")

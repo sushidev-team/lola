@@ -354,7 +354,7 @@ func (m *rootModel) projectFormModal() string {
 		body[i] = previewLine(body[i], mw-4)
 	}
 	modal := box(title, body, mw, mh, true)
-	return strings.Join(placeModal(m.cockpitLines(), modal, W), "\n")
+	return strings.Join(placeModal(m.backdropLines(), modal, W), "\n")
 }
 
 // view renders the editor body (the modal frame is added by projectFormModal).

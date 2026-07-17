@@ -30,11 +30,23 @@ const (
 	tabSessions
 )
 
+// Top-level screens in the navigation model: the COCKPIT (global or
+// project-scoped sessions) and the project-list HOME. Overlays (project/
+// settings/poll forms, doctor) float over whichever is active. viewCockpit is
+// the zero value so an unset rootModel (tests) keeps the pre-home behavior;
+// Run() explicitly opens on viewHome.
+const (
+	viewCockpit = iota
+	viewHome
+)
+
 type rootModel struct {
 	cfgPath  string
 	cfg      *config.Config
+	view     int // viewHome | viewCockpit — the active top-level screen
 	tab      int // legacy tab index; superseded by the unified cockpit (focus)
 	focus    int // cockpit: which panel owns navigation/action keys (focusSessions/focusPolls)
+	home     homeModel
 	list     listModel
 	sessions sessionsModel
 	form     *formModel
@@ -114,7 +126,7 @@ func Run() error {
 	if err != nil {
 		return err
 	}
-	m := &rootModel{cfgPath: cfgPath, cfg: cfg, list: newListModel(cfg), height: 24}
+	m := &rootModel{cfgPath: cfgPath, cfg: cfg, view: viewHome, home: newHomeModel(), list: newListModel(cfg), height: 24}
 	_, err = tea.NewProgram(m).Run() // alt-screen is set on the View (bubbletea v2)
 	return err
 }
@@ -178,7 +190,7 @@ func bestEffortReloadCmd() tea.Msg {
 // ---- tea.Model ----
 
 func (m *rootModel) Init() tea.Cmd {
-	cmds := []tea.Cmd{fetchStatusCmd, statusTick()}
+	cmds := []tea.Cmd{fetchStatusCmd, fetchProjectsCmd, statusTick()}
 	// Self-managed lifecycle: if no daemon is answering the socket, silently
 	// bring one up on open. A live (or launchd-managed) daemon is left alone.
 	if m.manageDaemon() {
@@ -205,12 +217,20 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.list.status, m.list.statusErr = v.data, ""
 		}
 		return m, nil
+	case projectsMsg:
+		m.handleProjectsMsg(v)
+		return m, nil
 	case statusTickMsg:
 		m.sweepTerms() // reap any detached shell whose process has exited
 		if m.form != nil {
 			return m, statusTick()
 		}
 		cmds := []tea.Cmd{fetchStatusCmd, statusTick()}
+		// Refresh the project decoration every tick unless the home filter/add
+		// prompt is mid-edit (a reflow would fight the input).
+		if !m.home.filtering && !m.home.adding {
+			cmds = append(cmds, fetchProjectsCmd)
+		}
 		// Sessions are always on screen in the cockpit, so refresh them every
 		// tick — EXCEPT while a kill confirmation, answer card, or filter bar is
 		// open: a mid-interaction refresh could reorder/prune rows under the
@@ -348,8 +368,13 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case projFormSaved:
 				m.projForm = nil
 				m.reloadConfig()
-				m.list.flash = "project saved"
-				return m, tea.Batch(bestEffortReloadCmd, fetchStatusCmd)
+				if m.view == viewHome {
+					m.home.flash, m.home.flashGood = "project saved", true
+					m.home.repin(m.cfg)
+				} else {
+					m.list.flash = "project saved"
+				}
+				return m, tea.Batch(bestEffortReloadCmd, fetchStatusCmd, fetchProjectsCmd)
 			}
 		}
 		return m, nil
@@ -364,8 +389,12 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case settingsFormSaved:
 				m.settings = nil
 				m.reloadConfig()
-				m.list.flash = "settings saved"
-				return m, tea.Batch(bestEffortReloadCmd, fetchStatusCmd)
+				if m.view == viewHome {
+					m.home.flash, m.home.flashGood = "settings saved", true
+				} else {
+					m.list.flash = "settings saved"
+				}
+				return m, tea.Batch(bestEffortReloadCmd, fetchStatusCmd, fetchProjectsCmd)
 			}
 		}
 		return m, nil
@@ -393,12 +422,26 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, cmd
 	}
+
+	// Home (the project-list landing screen) owns input while it is the active
+	// view; overlays above still take precedence (handled before this point).
+	if m.view == viewHome {
+		return m.updateHome(msg)
+	}
+
 	// Cockpit key routing. Global keys (focus cycle, doctor) fire unless a modal
 	// gate currently owns keystrokes — a poll delete / session kill confirmation,
 	// the answer card, or the filter bar (whose keys may be "tab"/"d"/digits).
 	gated := m.list.confirmDelete || m.sessions.confirmKill || m.sessions.answering || m.sessions.filtering || m.sessions.opening
 	if k, ok := msg.(tea.KeyPressMsg); ok && !gated {
 		switch k.String() {
+		case "esc":
+			// Back out of the cockpit to the project list, dropping any
+			// project scope so Home shows every project again.
+			m.sessions.filter.Project = ""
+			m.view = viewHome
+			m.home.repin(m.cfg)
+			return m, nil
 		case "tab":
 			if m.focus == focusSessions {
 				m.focus = focusPolls
@@ -491,7 +534,20 @@ func (m *rootModel) viewString() string {
 		// backdrop to float over and stays full-screen in runSetupWizard.)
 		return m.formModal()
 	}
+	if m.view == viewHome {
+		return m.homeView()
+	}
 	return m.cockpitView()
+}
+
+// backdropLines is the frame an overlay (form/doctor/settings modal) floats
+// over: the active top-level screen, so an overlay opened from Home dims the
+// project list rather than an unrelated cockpit.
+func (m *rootModel) backdropLines() []string {
+	if m.view == viewHome {
+		return m.homeLines()
+	}
+	return m.cockpitLines()
 }
 
 // ---- list behavior ----
