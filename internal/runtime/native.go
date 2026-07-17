@@ -281,12 +281,14 @@ func (n *Native) Spawn(ctx context.Context, p config.Project, issue linear.Issue
 	return session.Session{
 		ID:        id,
 		Source:    "native",
+		Kind:      session.KindLinear,
 		Project:   p.Name,
 		Issue:     issue.Identifier,
 		Title:     issue.Title,
 		IssueUUID: issue.ID,
 		Branch:    branch,
 		Repo:      p.Repo,
+		Worktree:  dir,
 		TmuxName:  id,
 		Status:    StatusWorking,
 		Agent:     string(kind),
@@ -351,15 +353,18 @@ func (n *Native) Open(ctx context.Context, p config.Project, sessionID, fetchRef
 	}
 
 	return session.Session{
-		ID:       sessionID,
-		Source:   "native",
-		Manual:   true,
-		Project:  p.Name,
-		Title:    "manual: " + branch,
-		Branch:   branch,
-		Repo:     p.Repo,
-		TmuxName: sessionID,
-		Status:   "shell",
+		ID:        sessionID,
+		Source:    "native",
+		Kind:      session.KindPR, // detached checkout of an existing upstream ref: non-owning
+		Agentless: true,           // plain shell, no coding agent
+		Manual:    true,           // back-compat alias for old readers
+		Project:   p.Name,
+		Title:     "manual: " + branch,
+		Branch:    branch,
+		Repo:      p.Repo,
+		Worktree:  dir,
+		TmuxName:  sessionID,
+		Status:    "shell",
 	}, nil
 }
 
@@ -658,14 +663,15 @@ func (n *Native) Adopt(ctx context.Context) ([]session.Session, error) {
 				status = "shell"
 			}
 			out = append(out, session.Session{
-				ID:       id,
-				Source:   "native",
-				Manual:   manual,
-				Project:  p.Name,
-				Issue:    issueFromSessionID(id, p.Name),
-				Repo:     p.Repo,
-				TmuxName: id,
-				Status:   status,
+				ID:        id,
+				Source:    "native",
+				Manual:    manual,
+				Agentless: manual, // a manual (`lola open`) shell has no coding agent
+				Project:   p.Name,
+				Issue:     issueFromSessionID(id, p.Name),
+				Repo:      p.Repo,
+				TmuxName:  id,
+				Status:    status,
 			})
 		}
 	}
@@ -677,13 +683,14 @@ func (n *Native) Adopt(ctx context.Context) ([]session.Session, error) {
 		project := n.projectForSessionName(name)
 		manual := isManualSessionID(name, project)
 		out = append(out, session.Session{
-			ID:       name,
-			Source:   "native",
-			Manual:   manual,
-			Project:  project,
-			Issue:    issueFromSessionID(name, project),
-			TmuxName: name,
-			Status:   StatusOrphaned,
+			ID:        name,
+			Source:    "native",
+			Manual:    manual,
+			Agentless: manual, // a manual (`lola open`) shell has no coding agent
+			Project:   project,
+			Issue:     issueFromSessionID(name, project),
+			TmuxName:  name,
+			Status:    StatusOrphaned,
 		})
 	}
 
@@ -721,12 +728,13 @@ func (n *Native) Kill(ctx context.Context, s session.Session, removeWorktree, fo
 	if _, err := os.Stat(dir); errors.Is(err, fs.ErrNotExist) {
 		return nil // already gone
 	}
-	// A manual session's worktree is DETACHED and its recorded Branch is the
-	// UPSTREAM branch/PR label, not a lola-owned branch — pass "" so Remove never
-	// deletes it (deleteBranch no-ops on ""). Only Spawn-created branches, which
-	// lola owns, are safe to delete on teardown.
+	// Only lola-owned branches are deleted on teardown (see Session.OwnsBranch): a
+	// linear dispatch's branch and a manual new-branch worktree's branch. A pr
+	// session (`lola open` / the PR picker) is a DETACHED checkout whose recorded
+	// Branch is the UPSTREAM branch/PR label — pass "" so Remove never deletes it
+	// (deleteBranch no-ops on "").
 	branch := s.Branch
-	if s.Manual {
+	if !s.OwnsBranch() {
 		branch = ""
 	}
 	if err := n.WT.Remove(ctx, *p, dir, branch, force); err != nil {

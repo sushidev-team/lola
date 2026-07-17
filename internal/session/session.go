@@ -16,12 +16,34 @@ import (
 	"github.com/sushidev-team/lola/internal/scm"
 )
 
+// Kind is a session's launch provenance. It governs Linear coupling and
+// teardown branch ownership, and is ONE of two independent discriminator axes —
+// the other is Agentless (whether a coding agent drives the pane). The two are
+// orthogonal: a pr session can run an agent (push-to-PR) OR be a plain shell
+// (`lola open`), so agent-ness must never be inferred from Kind.
+type Kind string
+
+const (
+	// KindLinear is a poll- or ticket-dispatched session bound to a Linear
+	// issue: it owns a lola-created branch and is the ONLY kind that writes back
+	// to Linear (state transitions, labels, comments).
+	KindLinear Kind = "linear"
+	// KindPR is a session opened on an EXISTING upstream branch/PR (`lola open`,
+	// the PR picker): the branch is upstream/detached, never lola's to delete,
+	// and it never touches Linear.
+	KindPR Kind = "pr"
+	// KindManual is a session on a NEW branch lola created off a base without a
+	// Linear issue (the manual-worktree flow): lola owns the branch and deletes
+	// it on teardown, but it never touches Linear.
+	KindManual Kind = "manual"
+)
+
 // Session is one observed agent session, regardless of who spawned it.
 type Session struct {
-	ID        string    `json:"id"`
-	Source    string    `json:"source"`          // "ao" | "native"
-	Agent     string    `json:"agent,omitempty"` // coding-agent kind: claude|codex|opencode; "" = legacy claude
-	Project   string    `json:"project"`
+	ID      string `json:"id"`
+	Source  string `json:"source"`          // "ao" | "native"
+	Agent   string `json:"agent,omitempty"` // coding-agent kind: claude|codex|opencode; "" = legacy claude
+	Project string `json:"project"`
 	// Manual marks a session opened by hand via `lola open` (a branch/PR checked
 	// out in a throwaway DETACHED worktree with a plain shell — no coding agent,
 	// no Linear issue) rather than dispatched from a Linear match. It is the
@@ -30,12 +52,30 @@ type Session struct {
 	// coderabbit engines all skip it, so lola never send-keys into the human's
 	// interactive shell. Persisted so the flag survives a daemon restart (adoption
 	// re-detects it from the session-ID shape as a backstop).
-	Manual    bool      `json:"manual,omitempty"`
-	Issue     string    `json:"issue"`           // Linear identifier, e.g. ENG-123 ("" for a manual session)
-	Title     string    `json:"title,omitempty"` // Linear issue title, so a session is identifiable by what it's about
-	IssueUUID string    `json:"issue_uuid"`
-	Branch    string    `json:"branch"`
-	Repo      string    `json:"repo,omitempty"` // "owner/name" the PR lookup runs against
+	//
+	// Legacy alias, superseded by Kind + Agentless: kept for reading pre-Kind
+	// snapshots and as the observer/teardown fallback signal (see EffectiveKind /
+	// IsAgentless). New sessions set Kind + Agentless instead. A legacy Manual
+	// session is a detached, non-owning shell — pr semantics, agent-less.
+	Manual bool `json:"manual,omitempty"`
+	// Kind is the launch provenance (linear|pr|manual); "" for pre-Kind snapshots
+	// and resolved via EffectiveKind (fail-closed). See the Kind type. Set once,
+	// at launch, by the runtime; never post-stamped by a daemon handler.
+	Kind Kind `json:"kind,omitempty"`
+	// Agentless marks a session with NO coding agent — a plain interactive shell
+	// (`lola open`, the manual-shell flow). Its status is pure tmux liveness and
+	// it is kept out of the reaction / write-back / review / coderabbit engines,
+	// so lola never send-keys into a human's shell. Orthogonal to Kind.
+	Agentless bool   `json:"agentless,omitempty"`
+	Issue     string `json:"issue"`           // Linear identifier, e.g. ENG-123 ("" for a pr/manual session)
+	Title     string `json:"title,omitempty"` // Linear issue title, so a session is identifiable by what it's about
+	IssueUUID string `json:"issue_uuid"`
+	Branch    string `json:"branch"`
+	Repo      string `json:"repo,omitempty"` // "owner/name" the PR lookup runs against
+	// Worktree is the absolute worktree directory for this session. Persisted so
+	// teardown can find it even after the session's [[project]] is removed from
+	// config (when the path can no longer be derived from Root/<project>/<id>).
+	Worktree  string    `json:"worktree,omitempty"`
 	TmuxName  string    `json:"tmux_name"`
 	AOStatus  string    `json:"ao_status"`
 	PR        *scm.PR   `json:"pr,omitempty"`
@@ -156,6 +196,65 @@ type Session struct {
 	PendingReviewFindings string `json:"pending_review_findings,omitempty"`
 }
 
+// EffectiveKind resolves the session's Kind, failing CLOSED so an unstamped,
+// keyless record can never be mistaken for a Linear writer. Precedence:
+//   - an explicit Kind wins;
+//   - a legacy Manual session is a detached, non-owning shell ⇒ pr;
+//   - no Linear issue UUID ⇒ pr (fail closed — never a Linear writer);
+//   - otherwise linear.
+func (s Session) EffectiveKind() Kind {
+	if s.Kind != "" {
+		return s.Kind
+	}
+	if s.Manual {
+		return KindPR
+	}
+	if s.IssueUUID == "" {
+		return KindPR
+	}
+	return KindLinear
+}
+
+// LinearBound reports whether Linear write-back may act on this session: it must
+// be a linear-kind session AND carry an issue UUID. The whole write-back path
+// gates on this so a pr/manual session sharing a project with a poll (whose
+// pollForSession would otherwise resolve) can never fire an API call against an
+// empty issue UUID.
+func (s Session) LinearBound() bool {
+	return s.EffectiveKind() == KindLinear && s.IssueUUID != ""
+}
+
+// IsAgentless reports whether the session has NO coding agent (a plain shell).
+// It reads the Agentless field but also treats a legacy Manual record (Kind
+// unset) as agent-less, so the gate is correct even for an in-memory record
+// that predates the Agentless field and has not been reloaded through load's
+// backfill.
+func (s Session) IsAgentless() bool {
+	return s.Agentless || (s.Kind == "" && s.Manual)
+}
+
+// HasAgent is the inverse of IsAgentless: a coding agent drives the pane, so the
+// reaction / write-back / review / coderabbit engines apply.
+func (s Session) HasAgent() bool { return !s.IsAgentless() }
+
+// OwnsBranch reports whether teardown may delete this session's Branch. Only
+// lola-created branches are owned: a linear dispatch's branch and a manual
+// new-branch worktree's branch. A pr session's branch is upstream/detached and
+// must survive teardown, so its branch is never deleted.
+//
+// Unlike LinearBound this must NOT depend on the issue UUID: a linear session
+// adopted after a store loss recovers its identifier from the ID shape but not
+// its UUID, yet it still owns the lola-created branch. So the only non-owning
+// case is an explicit pr kind; for a legacy record (Kind unset) fall back to the
+// pre-Kind rule — a non-Manual session owns its branch — which is exactly the
+// prior teardown behavior.
+func (s Session) OwnsBranch() bool {
+	if s.Kind != "" {
+		return s.Kind != KindPR
+	}
+	return !s.Manual
+}
+
 // Store is a mutex-guarded in-memory session map keyed by ID, persisted as
 // JSON at <dir>/sessions.json. Loading is best-effort: a missing or corrupt
 // file yields an empty store, never a fatal error — the poller repopulates
@@ -208,6 +307,15 @@ func (s *Store) load() {
 	for _, sess := range sessions {
 		if sess.ID == "" {
 			continue
+		}
+		// Backfill the discriminator for pre-Kind snapshots (fail-closed), so the
+		// in-memory record is authoritative and downstream code reads the fields
+		// directly. A legacy Manual record is a detached, agent-less shell.
+		if sess.Kind == "" {
+			if sess.Manual {
+				sess.Agentless = true
+			}
+			sess.Kind = sess.EffectiveKind()
 		}
 		s.sessions[sess.ID] = sess
 	}

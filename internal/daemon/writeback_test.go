@@ -441,6 +441,32 @@ func TestWriteBackEscalationBlockedOnce(t *testing.T) {
 
 // --- optional: empty write-back config makes zero write-back calls ----------
 
+// TestPollForSessionSkipsNonLinearKinds pins the Phase-0 write-back gate: only a
+// Linear-bound session (linear kind + issue UUID) resolves a poll's P4 config.
+// A pr/manual/keyless session sharing the project with a poll must resolve nil,
+// so the write-back path can never drive a Linear API call against an empty UUID.
+func TestPollForSessionSkipsNonLinearKinds(t *testing.T) {
+	d := newTestDaemon(t, testConfig(wbStatePoll("p1")), &linear.Fake{}, &fakeNative{})
+
+	linSess := session.Session{ID: "lola-proj1-eng-9", Source: "native", Kind: session.KindLinear, Project: "proj1", Issue: "ENG-9", IssueUUID: "uuid-9"}
+	if p := d.pollForSession(linSess); p == nil {
+		t.Fatalf("a linear session must resolve its project's poll for write-back")
+	}
+
+	nonLinear := []session.Session{
+		{ID: "lola-proj1-pr-7", Source: "native", Kind: session.KindPR, Agentless: true, Project: "proj1", Branch: "pr-7"},
+		{ID: "lola-proj1-pr-a", Source: "native", Kind: session.KindPR, Project: "proj1", Branch: "feat/x"},
+		{ID: "lola-proj1-open-y", Source: "native", Kind: session.KindManual, Project: "proj1", Branch: "feat/y"},
+		{ID: "lola-legacy-manual", Source: "native", Manual: true, Project: "proj1", Branch: "up"},
+		{ID: "lola-keyless", Source: "native", Project: "proj1"}, // no UUID → fail closed to pr
+	}
+	for _, s := range nonLinear {
+		if p := d.pollForSession(s); p != nil {
+			t.Errorf("non-linear session %s resolved poll %q; must be nil (would write back against an empty UUID)", s.ID, p.Name)
+		}
+	}
+}
+
 func TestWriteBackNoConfigNoLinearWrites(t *testing.T) {
 	is := testIssue("FE-1", 1, "2024-01-01T00:00:00Z")
 	fake := &linear.Fake{

@@ -169,11 +169,12 @@ func (d *Daemon) observeNative(ctx context.Context) {
 		if s.Source != "native" {
 			continue
 		}
-		// A manually-opened shell (`lola open`) has no coding agent: its status is
-		// pure tmux liveness and it must NEVER reach the reaction / write-back /
-		// review / coderabbit engines below (which would send-keys into the human's
-		// interactive shell). Refresh it in isolation and skip the whole agent path.
-		if s.Manual {
+		// An agent-less shell (`lola open`, the manual-shell flow) has no coding
+		// agent: its status is pure tmux liveness and it must NEVER reach the
+		// reaction / write-back / review / coderabbit engines below (which would
+		// send-keys into the human's interactive shell). Refresh it in isolation
+		// and skip the whole agent path.
+		if s.IsAgentless() {
 			if d.observeManualShell(ctx, nat, s) {
 				touched = true
 			}

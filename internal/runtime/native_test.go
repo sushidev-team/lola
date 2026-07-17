@@ -128,9 +128,10 @@ func TestSpawnHappyPathFullSequence(t *testing.T) {
 	// kind explicitly; with no [defaults].agent or per-project override the
 	// fixture resolves to "claude" (the legacy default).
 	want := session.Session{
-		ID: id, Source: "native", Project: "nori", Issue: "ENG-42",
+		ID: id, Source: "native", Kind: session.KindLinear, Project: "nori", Issue: "ENG-42",
 		Title:     "Fix login flow",
 		IssueUUID: "uuid-42", Branch: "lola/eng-42", Repo: "owner/nori",
+		Worktree: dir,
 		TmuxName: id, Status: StatusWorking, Agent: "claude",
 	}
 	if !reflect.DeepEqual(got, want) {
@@ -1220,7 +1221,7 @@ func TestIssueFromSessionID(t *testing.T) {
 		{"lola-nori-eng-42", "other", ""},
 		{"lola-nori-eng-42", "", ""},
 		{"unrelated", "nori", ""},
-		{"lola-nori-open-pr-42", "nori", ""},   // manual session: no Linear issue
+		{"lola-nori-open-pr-42", "nori", ""},    // manual session: no Linear issue
 		{"lola-nori-open-feat-foo", "nori", ""}, // manual session: no Linear issue
 	}
 	for _, c := range cases {
@@ -1288,8 +1289,9 @@ func TestOpenHappyPath(t *testing.T) {
 	}
 	dir := filepath.Join(f.root, "nori", id)
 	want := session.Session{
-		ID: id, Source: "native", Manual: true, Project: "nori",
+		ID: id, Source: "native", Kind: session.KindPR, Agentless: true, Manual: true, Project: "nori",
 		Title: "manual: pr-42", Branch: "pr-42", Repo: "owner/nori",
+		Worktree: dir,
 		TmuxName: id, Status: "shell",
 	}
 	if !reflect.DeepEqual(got, want) {

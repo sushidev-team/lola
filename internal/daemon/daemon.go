@@ -715,12 +715,18 @@ func (d *Daemon) adoptNativeSessions(ctx context.Context) {
 	}
 	for _, s := range found {
 		if prev, ok := d.sessions.Get(s.ID); ok {
-			// A manually-opened shell session (`lola open`) must stay out of the
-			// control loop across a restart: preserve the flag (Adopt also re-detects
-			// it from the ID shape) and its "no Linear issue" identity so the observer
-			// never runs reactions / write-back / review against it.
-			if prev.Manual {
-				s.Manual = true
+			// The persisted record is authoritative for the launch discriminator
+			// (Kind/Agentless) — Adopt only re-derives it from the ID shape as a
+			// store-loss backstop. Carry it forward. An agent-less session
+			// (`lola open`, the manual-shell flow) must additionally stay out of the
+			// control loop across a restart: keep its "no Linear issue" identity and
+			// coerce a scanned "working" back to "shell".
+			if prev.Kind != "" {
+				s.Kind = prev.Kind
+			}
+			if prev.Agentless || prev.Manual {
+				s.Agentless = true
+				s.Manual = prev.Manual
 				s.Issue = ""
 				if s.Status == "working" {
 					s.Status = "shell"
@@ -728,6 +734,9 @@ func (d *Daemon) adoptNativeSessions(ctx context.Context) {
 			}
 			if s.Branch == "" {
 				s.Branch = prev.Branch
+			}
+			if s.Worktree == "" {
+				s.Worktree = prev.Worktree
 			}
 			if s.Repo == "" {
 				s.Repo = prev.Repo

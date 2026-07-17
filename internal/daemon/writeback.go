@@ -54,6 +54,12 @@ const (
 // no-op — when neither resolves. The returned poll is a copy, safe to read after
 // the config lock is dropped.
 func (d *Daemon) pollForSession(s session.Session) *config.Poll {
+	// A pr/manual session is never Linear-bound: it carries no issue UUID, so the
+	// project-fallback below must NOT resolve a poll for it (that would drive a
+	// write-back API call against an empty UUID). Fail closed.
+	if !s.LinearBound() {
+		return nil
+	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if s.PollName != "" {
@@ -216,6 +222,13 @@ func (d *Daemon) writeBack(ctx context.Context, s session.Session) {
 	if s.Source != "native" {
 		return
 	}
+	// Only a Linear-bound session (linear kind + issue UUID) writes back. A
+	// pr/manual agent session can carry an open PR and share a project with a
+	// poll, so this gate — not just pollForSession — keeps it out of the Linear
+	// path even if a later refactor changes poll resolution.
+	if !s.LinearBound() {
+		return
+	}
 	prOpen := s.PR != nil && strings.EqualFold(s.PR.State, "OPEN")
 	merged := s.Status == "merged"
 	if !((prOpen && !s.WBPRDone) || (merged && !s.WBMergedDone)) {
@@ -258,6 +271,9 @@ func (d *Daemon) writeBack(ctx context.Context, s session.Session) {
 // comment posted yet); once the state move is done the guard is stamped even if
 // the comment fails, so the comment never double-fires.
 func (d *Daemon) writeBackState(ctx context.Context, api linear.API, s session.Session, stateID string, comment bool, tmpl, detail, label string, g wbGuard) {
+	if !s.LinearBound() {
+		return // defense-in-depth: never call the Linear API with an empty issue UUID
+	}
 	if stateID != "" {
 		if err := api.SetIssueState(ctx, s.IssueUUID, stateID); err != nil {
 			d.wbLinErr("set "+label+" state for "+issueLabel(s), err)
@@ -278,6 +294,12 @@ func (d *Daemon) writeBackState(ctx context.Context, api linear.API, s session.S
 // transition in the same cycle. Resolves poll + client itself.
 func (d *Daemon) writeBackEscalation(ctx context.Context, s session.Session) {
 	if !s.Escalated || s.WBBlockedDone {
+		return
+	}
+	// A pr/manual agent session can exhaust CI retries (Escalated) too, but it has
+	// no Linear issue to comment on — gate the whole escalation write-back on
+	// LinearBound so it never adds a blocked label / comment against an empty UUID.
+	if !s.LinearBound() {
 		return
 	}
 	// Reason for the blocked comment. Consume any brain escalation summary stashed

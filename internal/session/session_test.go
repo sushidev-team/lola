@@ -175,6 +175,92 @@ func TestAgentRoundTrip(t *testing.T) {
 	}
 }
 
+// TestKindContractRoundTrip covers the Phase-0 session discriminator: Kind /
+// Agentless / Worktree persist across a save+reload, and the derived gates
+// (LinearBound / HasAgent / OwnsBranch) read consistently for a stamped linear
+// session vs a pr shell.
+func TestKindContractRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	st := NewStore(dir)
+	st.Upsert(Session{ID: "lin", Source: "native", Kind: KindLinear, Issue: "ENG-1", IssueUUID: "u1", Branch: "lola/eng-1", Worktree: "/wt/lin"})
+	st.Upsert(Session{ID: "prsh", Source: "native", Kind: KindPR, Agentless: true, Branch: "pr-9", Worktree: "/wt/pr"})
+	if err := st.Save(); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	re := NewStore(dir)
+	lin, ok := re.Get("lin")
+	if !ok {
+		t.Fatal("reloaded store missing lin")
+	}
+	if lin.Kind != KindLinear || lin.Worktree != "/wt/lin" || lin.Agentless {
+		t.Errorf("linear round-trip wrong: %+v", lin)
+	}
+	if !lin.LinearBound() || !lin.HasAgent() || !lin.OwnsBranch() {
+		t.Errorf("linear gates: LinearBound=%v HasAgent=%v OwnsBranch=%v, want all true", lin.LinearBound(), lin.HasAgent(), lin.OwnsBranch())
+	}
+
+	prsh, ok := re.Get("prsh")
+	if !ok {
+		t.Fatal("reloaded store missing prsh")
+	}
+	if prsh.Kind != KindPR || !prsh.Agentless || prsh.Worktree != "/wt/pr" {
+		t.Errorf("pr round-trip wrong: %+v", prsh)
+	}
+	if prsh.LinearBound() || prsh.HasAgent() || prsh.OwnsBranch() {
+		t.Errorf("pr shell gates: LinearBound=%v HasAgent=%v OwnsBranch=%v, want all false", prsh.LinearBound(), prsh.HasAgent(), prsh.OwnsBranch())
+	}
+}
+
+// TestLegacyManualBackfill loads a pre-Kind snapshot (only manual:true set) and
+// asserts load() backfills it to an agent-less, non-owning pr session that never
+// reaches the Linear path — so an upgrade never mis-routes an existing shell.
+func TestLegacyManualBackfill(t *testing.T) {
+	dir := t.TempDir()
+	raw := `[{"id":"leg","source":"native","manual":true,"issue":"","branch":"up-branch"}]`
+	if err := os.WriteFile(filepath.Join(dir, "sessions.json"), []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, ok := NewStore(dir).Get("leg")
+	if !ok {
+		t.Fatal("reloaded store missing leg")
+	}
+	if s.Kind != KindPR {
+		t.Errorf("legacy manual should backfill Kind=pr, got %q", s.Kind)
+	}
+	if !s.Agentless || !s.IsAgentless() {
+		t.Errorf("legacy manual should be agent-less, got Agentless=%v", s.Agentless)
+	}
+	if s.LinearBound() {
+		t.Errorf("legacy manual must not be LinearBound")
+	}
+	if s.OwnsBranch() {
+		t.Errorf("legacy manual (detached, upstream branch) must NOT own its branch")
+	}
+}
+
+// TestEffectiveKindFailsClosed pins the fail-closed derivation: an unstamped
+// keyless record is pr (never a Linear writer), and a linear-stamped record that
+// lost its UUID (adopted after a store loss) is still not LinearBound yet must
+// keep owning its lola-created branch on teardown.
+func TestEffectiveKindFailsClosed(t *testing.T) {
+	keyless := Session{ID: "x", Source: "native"}
+	if keyless.EffectiveKind() != KindPR {
+		t.Errorf("keyless unstamped must fail closed to pr, got %q", keyless.EffectiveKind())
+	}
+	if keyless.LinearBound() {
+		t.Errorf("keyless must not be LinearBound")
+	}
+
+	adopted := Session{ID: "lola-p-eng-1", Source: "native", Kind: KindLinear, Issue: "ENG-1"}
+	if adopted.LinearBound() {
+		t.Errorf("linear without a UUID must not be LinearBound")
+	}
+	if !adopted.OwnsBranch() {
+		t.Errorf("an adopted linear session still owns its lola branch")
+	}
+}
+
 func TestSnapshotSorted(t *testing.T) {
 	st := NewStore(t.TempDir())
 	st.Upsert(Session{ID: "3", Project: "zeta", Issue: "ENG-1"})
