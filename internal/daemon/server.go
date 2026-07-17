@@ -72,6 +72,8 @@ func (d *Daemon) handle(ctx context.Context, req protocol.Request) protocol.Resp
 		return dataResponse(d.statusData(ctx))
 	case "sessions":
 		return dataResponse(d.sessionsData())
+	case "projects":
+		return dataResponse(d.projectsData(ctx))
 	case "reload":
 		if err := d.handleReload(ctx); err != nil {
 			return protocol.Response{OK: false, Error: err.Error()}

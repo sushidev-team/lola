@@ -70,7 +70,7 @@ import (
 // PR yields a "skipped" CodeRabbitData (not an error); an unknown session or a gh
 // failure is an error.
 type Request struct {
-	Cmd    string `json:"cmd"` // stop|status|reload|enable|disable|pollOnce|sessions|hookEvent|kill|revive|pane|answer|review|coderabbit|open
+	Cmd    string `json:"cmd"` // stop|status|reload|enable|disable|pollOnce|sessions|projects|hookEvent|kill|revive|pane|answer|review|coderabbit|open
 	Poll   string `json:"poll,omitempty"`
 	DryRun bool   `json:"dryRun,omitempty"`
 
@@ -180,6 +180,57 @@ type SessionInfo struct {
 	// STATUS) | "ci retry 1/2" | "escalated" | "awaiting review" |
 	// "addressing review" | "rebasing" | "ready to merge".
 	Reacting string `json:"reacting"`
+}
+
+// ProjectsData is Response.Data for cmd=projects: the daemon's cached view of
+// every configured [[project]] decorated with live status. Like cmd=sessions it
+// is served from in-memory snapshots (config + status tracker + session store)
+// and does not exec gh/tmux/git — the only filesystem touches are cheap
+// LookPath (agent health) and os.Stat (path/.git probe), never a subprocess. The
+// TUI renders the project list from its OWN config and merely decorates rows
+// with these facts, so the home screen stays navigable when the daemon is down.
+type ProjectsData struct {
+	Projects []ProjectInfo `json:"projects"`
+}
+
+// ProjectInfo is one configured project flattened to render-ready fields.
+type ProjectInfo struct {
+	Name          string `json:"name"`
+	Path          string `json:"path"`
+	Repo          string `json:"repo"`
+	DefaultBranch string `json:"defaultBranch"`
+
+	// Per-PROJECT agent health (not the default agent): AgentBin is the resolved
+	// coding-agent binary for this project (its override → [defaults].agent →
+	// claude), AgentOK whether it plus tmux+git all resolve on PATH, AgentErr the
+	// reason when not. The TUI gates this project's spawn verbs on AgentOK.
+	Agent    string `json:"agent"`
+	AgentBin string `json:"agentBin"`
+	AgentOK  bool   `json:"agentOk"`
+	AgentErr string `json:"agentErr,omitempty"`
+
+	// PathOK is whether Path exists and is a git checkout (a .git entry); a
+	// runtime probe, deliberately NOT config's job. RepoConfigured is whether a
+	// GitHub "owner/name" repo is set (needed by the PR picker).
+	PathOK         bool `json:"pathOk"`
+	RepoConfigured bool `json:"repoConfigured"`
+
+	// Poll rollup: how many polls this project drives and how many are enabled,
+	// their names, and the newest LastRun / first LastError across them.
+	PollCount    int       `json:"pollCount"`
+	PollsEnabled int       `json:"pollsEnabled"`
+	Polls        []string  `json:"polls,omitempty"`
+	LastRun      time.Time `json:"lastRun"`
+	LastError    string    `json:"lastError,omitempty"`
+
+	// Session rollup for this project (from the observer's snapshot store):
+	// Sessions total, LiveCounted occupying a slot, NeedsYou parked on a human,
+	// CIRed failing CI, OpenPRs with an open PR.
+	Sessions    int `json:"sessions"`
+	LiveCounted int `json:"liveCounted"`
+	NeedsYou    int `json:"needsYou"`
+	CIRed       int `json:"ciRed"`
+	OpenPRs     int `json:"openPrs"`
 }
 
 // KillData is Response.Data for cmd=kill. Removed reports whether the worktree
