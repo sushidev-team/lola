@@ -111,6 +111,23 @@ func LaunchArgs(k Kind, promptArg string) []string {
 	}
 }
 
+// LaunchArgsResume is LaunchArgs for REVIVING a session whose agent already ran
+// once in this worktree. Claude resumes its most recent conversation via
+// --continue (no positional prompt — the saved transcript already carries the
+// task context), so a revived pane picks up where the dead one left off instead
+// of restarting from scratch. Only Claude has a reliable headless resume, so
+// codex and opencode fall back to a fresh launch identical to LaunchArgs; that
+// still restarts their agent on the kept worktree, just without conversation
+// continuity. The caller decides WHETHER to resume (a Claude session that died
+// before writing any transcript has nothing to continue); this only shapes the
+// argv once that decision is made.
+func LaunchArgsResume(k Kind, promptArg string) []string {
+	if k == Claude {
+		return []string{"--settings", ".lola/settings.json", "--continue"}
+	}
+	return LaunchArgs(k, promptArg)
+}
+
 // CodexConfigTOML returns the body of a Codex `config.toml` (written under a
 // per-session CODEX_HOME) that routes Codex's lifecycle notifications back to
 // the lola daemon. Codex runs the `notify` program with a single JSON payload

@@ -53,6 +53,7 @@ func main() {
 		enableCmd("enable"), enableCmd("disable"),
 		pollCmd(),
 		killCmd(),
+		reviveCmd(),
 		answerCmd(),
 		reviewCmd(),
 		coderabbitCmd(),
@@ -108,6 +109,28 @@ func killCmd() *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&force, "force", false, "remove the worktree even with uncommitted changes")
 	return cmd
+}
+
+// reviveCmd relaunches a dead session's coding agent on the worktree that was
+// kept for inspection (`lola revive <session-id>`). It is the inverse of kill:
+// where kill tears a session down, revive brings one back — Claude resumes its
+// prior conversation via --continue when a transcript survived, otherwise the
+// agent restarts fresh on the same worktree. The daemon refuses if the session
+// is already running. Send prints the outcome or the daemon's error (e.g.
+// "unknown session", "worktree is gone").
+func reviveCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "revive <session-id>",
+		Short: "Revive a dead session: relaunch its agent on the kept worktree (Claude resumes via --continue)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(c *cobra.Command, a []string) error {
+			raw, err := json.Marshal(protocol.Request{Cmd: "revive", Session: a[0]})
+			if err != nil {
+				return err
+			}
+			return tui.Send(string(raw))
+		},
+	}
 }
 
 // answerCmd delivers a human's inline reply to a session that stopped for input

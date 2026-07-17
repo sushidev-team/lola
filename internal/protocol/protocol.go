@@ -36,6 +36,11 @@ import (
 // worktree is then removed and the store entry dropped, while a dirty one is
 // kept unless Force is set (the reply is KillData / an error either way).
 //
+// Cmd "revive" is the inverse of a death: Session names a session whose pane
+// died but whose worktree survives, and the daemon relaunches its agent in
+// place (Claude resumes via --continue when it has a transcript). The session
+// must not already be alive. The reply is ReviveData / an error.
+//
 // Cmd "pane" is the read-only compact-pane view (PLAN P7): Session names the
 // target session and Lines optionally bounds how many trailing rows of its tmux
 // pane to capture (0 → the daemon's default, ~40). The daemon captures the pane
@@ -65,7 +70,7 @@ import (
 // PR yields a "skipped" CodeRabbitData (not an error); an unknown session or a gh
 // failure is an error.
 type Request struct {
-	Cmd    string `json:"cmd"` // stop|status|reload|enable|disable|pollOnce|sessions|hookEvent|kill|pane|answer|review|coderabbit
+	Cmd    string `json:"cmd"` // stop|status|reload|enable|disable|pollOnce|sessions|hookEvent|kill|revive|pane|answer|review|coderabbit
 	Poll   string `json:"poll,omitempty"`
 	DryRun bool   `json:"dryRun,omitempty"`
 
@@ -179,6 +184,16 @@ type SessionInfo struct {
 type KillData struct {
 	Removed  bool   `json:"removed"`
 	Worktree string `json:"worktree,omitempty"`
+	Message  string `json:"message,omitempty"`
+}
+
+// ReviveData is Response.Data for cmd=revive: a dead session relaunched on its
+// kept worktree. Revived is always true on the success path (a failure is
+// returned as an error instead). TmuxName is the revived session's tmux target
+// and Message is a short human-readable outcome for the CLI/TUI to print.
+type ReviveData struct {
+	Revived  bool   `json:"revived"`
+	TmuxName string `json:"tmuxName,omitempty"`
 	Message  string `json:"message,omitempty"`
 }
 

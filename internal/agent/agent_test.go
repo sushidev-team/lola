@@ -123,6 +123,26 @@ func TestLaunchArgs(t *testing.T) {
 	}
 }
 
+func TestLaunchArgsResume(t *testing.T) {
+	// Claude resumes its prior conversation via --continue and drops the
+	// positional prompt (the saved transcript carries the context).
+	got := LaunchArgsResume(Claude, "PROMPT")
+	want := []string{"--settings", ".lola/settings.json", "--continue"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("LaunchArgsResume(claude) = %v, want %v", got, want)
+	}
+	if reflect.DeepEqual(got, LaunchArgs(Claude, "PROMPT")) {
+		t.Error("claude resume must differ from a fresh launch (add --continue)")
+	}
+	// Codex and opencode have no reliable headless resume, so they fall back to a
+	// fresh launch — revival still restarts them, just without continuity.
+	for _, k := range []Kind{Codex, OpenCode} {
+		if got := LaunchArgsResume(k, "PROMPT"); !reflect.DeepEqual(got, LaunchArgs(k, "PROMPT")) {
+			t.Errorf("LaunchArgsResume(%q) = %v, want LaunchArgs fallback %v", k, got, LaunchArgs(k, "PROMPT"))
+		}
+	}
+}
+
 func TestLaunchArgsPromptIsLastForPositionalAgents(t *testing.T) {
 	// Claude and Codex take the prompt positionally: it must be the final argv
 	// element. OpenCode passes it as the value of --prompt (asserted above).

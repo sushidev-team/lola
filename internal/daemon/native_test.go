@@ -39,6 +39,8 @@ type fakeNative struct {
 	alive         map[string]bool // session ID -> tmux pane alive
 	kills         []nativeKillCall
 	killErr       error // returned from Kill (e.g. worktree.ErrDirty)
+	revives       []string // session IDs passed to Revive
+	reviveErr     error    // returned from Revive
 }
 
 type nativeSpawnCall struct{ project, identifier string }
@@ -103,6 +105,24 @@ func (f *fakeNative) Alive(ctx context.Context, s session.Session) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.alive[s.ID]
+}
+
+func (f *fakeNative) Revive(ctx context.Context, s session.Session) (session.Session, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.revives = append(f.revives, s.ID)
+	if f.reviveErr != nil {
+		return session.Session{}, f.reviveErr
+	}
+	s.Status = runtime.StatusWorking
+	s.TmuxName = s.ID
+	return s, nil
+}
+
+func (f *fakeNative) reviveCalls() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.revives)
 }
 
 func (f *fakeNative) spawnCalls() []nativeSpawnCall {

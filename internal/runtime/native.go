@@ -54,6 +54,14 @@ const (
 // names and worktree directory basenames. Adopt scans by this prefix.
 const sessionPrefix = "lola-"
 
+// manualInfix tags a manually-opened (`lola open`) session's ID right after the
+// project segment: "lola-<project>-open-<slug>". It keeps hand-opened shell
+// sessions distinguishable from issue-driven ones (whose segment is a lowercased
+// Linear identifier, which can never start with "open-" followed by a Linear
+// key), so both SessionID-shape parsing (issueFromSessionID) and restart
+// adoption can recognize a manual session from its ID alone.
+const manualInfix = "open-"
+
 // lolaDir is the runtime scratch directory inside each worktree, holding
 // prompt.md, env, and the per-agent callback artifact(s) (Claude's
 // settings.json, or Codex's codex/ home). It is excluded via the worktree's
@@ -107,6 +115,32 @@ type Native struct {
 // "-r<attempt>" suffix so the re-queued issue never collides with it.
 func SessionID(project, identifier string) string {
 	return sessionPrefix + project + "-" + strings.ToLower(identifier)
+}
+
+// ManualSessionID returns the native session identifier for a manually-opened
+// branch/PR: "lola-<project>-open-<slug>", where slug is label lowercased with
+// every run of non [a-z0-9._-] characters collapsed to a single "-" (so a branch
+// like "feat/foo bar" becomes a single valid path segment). It is both the tmux
+// session name and the worktree directory basename, distinct from an
+// issue-driven SessionID via the manualInfix.
+func ManualSessionID(project, label string) string {
+	return sessionPrefix + project + "-" + manualInfix + slugify(label)
+}
+
+// manualSlugRe matches runs of characters not allowed in a session-ID slug; each
+// run collapses to one "-".
+var manualSlugRe = regexp.MustCompile(`[^a-z0-9._-]+`)
+
+// slugify lowercases label and reduces it to a single safe path segment. A label
+// that slugs to empty yields "ref" so ManualSessionID always produces a valid
+// segment.
+func slugify(label string) string {
+	s := manualSlugRe.ReplaceAllString(strings.ToLower(label), "-")
+	s = strings.Trim(s, "-.")
+	if s == "" || s == "." || s == ".." {
+		return "ref"
+	}
+	return s
 }
 
 // maxSpawnAttempts bounds the retry-suffix search in freeSessionSlot; hitting
@@ -232,7 +266,7 @@ func (n *Native) Spawn(ctx context.Context, p config.Project, issue linear.Issue
 		return fail("write env", err)
 	}
 
-	if err := n.Tmux.NewSession(ctx, id, dir, n.launchCommand(id, kind)); err != nil {
+	if err := n.Tmux.NewSession(ctx, id, dir, n.launchCommand(id, kind, false)); err != nil {
 		return session.Session{}, n.rollbackTmux(ctx, p, id, dir, branch, "start tmux session", err)
 	}
 
@@ -257,6 +291,104 @@ func (n *Native) Spawn(ctx context.Context, p config.Project, issue linear.Issue
 		Status:    StatusWorking,
 		Agent:     string(kind),
 	}, nil
+}
+
+// Open checks out an EXISTING branch or PR of project p into a throwaway
+// DETACHED worktree and drops a plain interactive shell into it — no coding
+// agent — so a human can run and test it. fetchRef is what to fetch from origin
+// ("pull/<n>/head" for a PR, a branch name otherwise, resolved by
+// worktree.CheckoutRef); branch is the human-readable label recorded on the
+// session (and shown in the TUI). sessionID must be a ManualSessionID.
+//
+// The pipeline mirrors Spawn's but is deliberately agent-free: CheckoutRef
+// (detached) → Prepare (symlinks + post_create, so the checkout is runnable) →
+// exclude .lola/ → write a minimal 0600 .lola/env (project env only, NO Linear
+// key — the human drives this shell) → tmux new-session running the user's login
+// shell. Detached HEAD means teardown never deletes the upstream branch. On any
+// step failure the worktree is rolled back best-effort (force=false, so a dirty
+// checkout is kept for inspection) and the error says what was left behind.
+func (n *Native) Open(ctx context.Context, p config.Project, sessionID, fetchRef, branch string) (session.Session, error) {
+	if sessionID == "" || fetchRef == "" {
+		return session.Session{}, errors.New("runtime: open: session id and ref required")
+	}
+	dir, err := n.WT.CheckoutRef(ctx, p, sessionID, fetchRef)
+	if err != nil {
+		return session.Session{}, fmt.Errorf("runtime: open %s: %w", sessionID, err)
+	}
+	fail := func(step string, cause error) (session.Session, error) {
+		// The worktree is DETACHED — there is no lola-owned branch to delete, so
+		// pass "" (Remove's deleteBranch no-ops) and never risk the upstream branch.
+		if rmErr := n.WT.Remove(ctx, p, dir, "", false); rmErr != nil {
+			return session.Session{}, fmt.Errorf("runtime: open %s: %s: %w (rollback failed: %v; worktree kept at %s)", sessionID, step, cause, rmErr, dir)
+		}
+		return session.Session{}, fmt.Errorf("runtime: open %s: %s: %w (worktree rolled back)", sessionID, step, cause)
+	}
+
+	if err := n.WT.Prepare(ctx, p, dir); err != nil {
+		return fail("prepare worktree", err)
+	}
+	if err := excludeLolaDir(dir); err != nil {
+		return fail("git info/exclude", err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, lolaDir), 0o700); err != nil {
+		return fail("create "+lolaDir, err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, lolaDir, "env"), manualEnvFile(p), 0o600); err != nil {
+		return fail("write env", err)
+	}
+
+	if err := n.Tmux.NewSession(ctx, sessionID, dir, n.shellCommand()); err != nil {
+		if n.Tmux.Has(ctx, sessionID) {
+			_ = n.Tmux.KillSession(ctx, sessionID)
+		}
+		return fail("start tmux session", err)
+	}
+
+	// Best-effort status-bar chrome, exactly like Spawn — a styling hiccup never
+	// loses the session.
+	if err := n.Tmux.ConfigureSession(ctx, sessionID, n.Cfg.SessionChrome(branch)); err != nil && n.Logf != nil {
+		n.Logf("session %s: status-bar styling failed (cosmetic, shell is up): %v", sessionID, err)
+	}
+
+	return session.Session{
+		ID:       sessionID,
+		Source:   "native",
+		Manual:   true,
+		Project:  p.Name,
+		Title:    "manual: " + branch,
+		Branch:   branch,
+		Repo:     p.Repo,
+		TmuxName: sessionID,
+		Status:   "shell",
+	}, nil
+}
+
+// shellCommand builds the tmux command for a manual (`lola open`) session: a
+// plain interactive login shell, with the worktree's 0600 .lola/env sourced
+// first so [[project]].env is available for running/testing (same POSIX wrapper
+// as launchCommand — the login shell only has to exec `sh`; see that comment).
+// The env file is sourced conditionally so a missing/empty one is not an error,
+// and NO secret is ever placed on argv. "${SHELL:-/bin/sh}" is the human's login
+// shell, exec'd so the pane's process IS the interactive shell.
+func (n *Native) shellCommand() string {
+	posix := `set -a; [ -f ./` + lolaDir + `/env ] && . ./` + lolaDir + `/env; set +a; exec "${SHELL:-/bin/sh}"`
+	return "exec sh -c " + shQuote(posix)
+}
+
+// manualEnvFile renders a manual session's 0600 .lola/env: ONLY the project's
+// [[project]].env pairs (sorted, each shQuote'd), so the interactive shell can
+// run project commands. It deliberately carries NO Linear API key and NO
+// LOLA_SESSION — a manual shell has no lifecycle hooks and the human drives it,
+// so no secret is exported into a shell they may screenshot or share.
+func manualEnvFile(p config.Project) []byte {
+	var b strings.Builder
+	for _, k := range slices.Sorted(maps.Keys(p.Env)) {
+		if !envNameRe.MatchString(k) { // defense-in-depth, mirrors envFile
+			continue
+		}
+		fmt.Fprintf(&b, "%s=%s\n", k, shQuote(p.Env[k]))
+	}
+	return []byte(b.String())
 }
 
 // launchCommand builds the single shell-command argument for `tmux
@@ -292,14 +424,22 @@ func (n *Native) Spawn(ctx context.Context, p config.Project, issue linear.Issue
 // and deliberately short — it only points the agent at .lola/prompt.md, which
 // carries the real briefing, so huge issue titles never bloat the command line
 // or the tmux server's argv.
-func (n *Native) launchCommand(id string, kind agent.Kind) string {
+// resume=true builds the REVIVE launch (agent.LaunchArgsResume): Claude adds
+// --continue to pick up its prior conversation instead of the fresh positional
+// prompt. Spawn always passes false; only Revive passes true, and only after
+// confirming there is a transcript to continue.
+func (n *Native) launchCommand(id string, kind agent.Kind, resume bool) string {
 	bin := kind.Binary()
 	if kind == agent.Claude && n.ClaudeBin != "" {
 		bin = n.ClaudeBin
 	}
 	prompt := "You are lola session " + id + ". Read " + lolaDir + "/prompt.md in the current directory first; it contains your task briefing."
+	args := agent.LaunchArgs(kind, prompt)
+	if resume {
+		args = agent.LaunchArgsResume(kind, prompt)
+	}
 	posix := "set -a; . ./" + lolaDir + "/env; set +a; exec " + shQuote(bin)
-	for _, arg := range agent.LaunchArgs(kind, prompt) {
+	for _, arg := range args {
 		posix += " " + shQuote(arg)
 	}
 	return "exec sh -c " + shQuote(posix)
@@ -584,6 +724,59 @@ func (n *Native) Alive(ctx context.Context, s session.Session) bool {
 		name = s.ID
 	}
 	return n.Tmux.Has(ctx, name)
+}
+
+// Revive re-creates the tmux agent session for a session whose pane died but
+// whose worktree survives (dead sessions keep their worktree for inspection).
+// It reuses the existing worktree and its .lola artifacts (prompt, settings,
+// env) exactly as the original spawn left them and relaunches the agent in
+// place: when the agent is Claude AND it wrote a transcript before dying, the
+// pane comes back with `claude --continue` and resumes the prior conversation
+// (launchCommand resume=true); otherwise it launches fresh on the same worktree
+// — the case for a session that died so fast it never recorded a transcript
+// (an empty --continue would just error and re-kill the pane).
+//
+// The caller (daemon.handleRevive) is responsible for the checks Revive does
+// not do: that the session is not already alive, and re-establishing the
+// dispatch guards so the revived session is not duplicated. Revive itself only
+// needs the worktree to still be there.
+func (n *Native) Revive(ctx context.Context, s session.Session) (session.Session, error) {
+	id := s.ID
+	dir := filepath.Join(n.WT.Root, s.Project, id)
+	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
+		return session.Session{}, fmt.Errorf("runtime: revive %s: worktree %s is gone — let the issue re-dispatch instead", id, dir)
+	}
+	kind := agent.Parse(s.Agent)
+	resume := kind == agent.Claude && claudeHasTranscript(dir)
+	if err := n.Tmux.NewSession(ctx, id, dir, n.launchCommand(id, kind, resume)); err != nil {
+		return session.Session{}, fmt.Errorf("runtime: revive %s: %w", id, err)
+	}
+	// Best-effort chrome, exactly as Spawn: a styling hiccup never loses the
+	// revived session.
+	if err := n.Tmux.ConfigureSession(ctx, id, n.Cfg.SessionChrome(s.Issue)); err != nil && n.Logf != nil {
+		n.Logf("session %s: status-bar styling failed (cosmetic, session is up): %v", id, err)
+	}
+	revived := s
+	revived.Status = StatusWorking
+	revived.TmuxName = id
+	return revived, nil
+}
+
+// claudeHasTranscript reports whether Claude Code has a saved conversation for
+// the worktree at dir — i.e. whether `claude --continue` has anything to resume.
+// Claude stores transcripts under ~/.claude/projects/<escaped-cwd>/<uuid>.jsonl,
+// escaping the worktree path into the project-dir name; rather than reproduce
+// that escaping exactly, we match on the worktree's basename (the session ID),
+// which contains no path separator and so survives escaping verbatim as a
+// stable, near-unique substring of the project-dir name. Best-effort: any error
+// resolving home means "no transcript", so Revive launches fresh.
+func claudeHasTranscript(dir string) bool {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return false
+	}
+	matches, _ := filepath.Glob(filepath.Join(home, ".claude", "projects", "*"+filepath.Base(dir)+"*", "*.jsonl"))
+	return len(matches) > 0
 }
 
 // issueFromSessionID recovers the Linear identifier from a session ID built
