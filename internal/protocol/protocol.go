@@ -298,6 +298,41 @@ type OpenURLArgs struct {
 	URL string `json:"url"`
 }
 
+// TicketsArgs is the argument payload for cmd=tickets: browse a project's Linear
+// team for issues to start. Scope is "mine" (assignee = the API key's viewer,
+// default) or "team" (the whole team).
+type TicketsArgs struct {
+	Project string `json:"project"`
+	Scope   string `json:"scope,omitempty"`
+}
+
+// TicketsData is Response.Data for cmd=tickets: the browsable issues.
+type TicketsData struct {
+	Team   string      `json:"team"`
+	Issues []TicketRow `json:"issues"`
+}
+
+// TicketRow is one Linear issue for the picker.
+type TicketRow struct {
+	Identifier  string  `json:"identifier"`
+	UUID        string  `json:"uuid"`
+	Title       string  `json:"title"`
+	Branch      string  `json:"branch"`
+	Priority    float64 `json:"priority"`
+	AlreadyLive bool    `json:"alreadyLive"` // a lola session already holds this issue
+}
+
+// OpenTicketArgs is the argument payload for cmd=openTicket: start a Linear issue
+// on demand — a worktree + agent, deduped exactly like a poll dispatch so a
+// running poll cannot spawn it twice. The reply is the shared OpenData.
+type OpenTicketArgs struct {
+	Project    string `json:"project"`
+	Identifier string `json:"identifier"`
+	UUID       string `json:"uuid"`
+	Branch     string `json:"branch,omitempty"`
+	Title      string `json:"title,omitempty"`
+}
+
 // KillData is Response.Data for cmd=kill. Removed reports whether the worktree
 // was actually removed (false when the project is gone from config so there was
 // nothing safe to target, or on a dirty-refused kill — but a dirty refusal is

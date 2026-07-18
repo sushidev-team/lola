@@ -136,6 +136,26 @@ func (d *Daemon) handle(ctx context.Context, req protocol.Request) protocol.Resp
 			return protocol.Response{OK: false, Error: err.Error()}
 		}
 		return dataResponse(data)
+	case "tickets":
+		var a protocol.TicketsArgs
+		if err := json.Unmarshal(req.Args, &a); err != nil {
+			return protocol.Response{OK: false, Error: "tickets: bad args: " + err.Error()}
+		}
+		data, err := d.handleTickets(ctx, a)
+		if err != nil {
+			return protocol.Response{OK: false, Error: err.Error()}
+		}
+		return dataResponse(data)
+	case "openTicket":
+		var a protocol.OpenTicketArgs
+		if err := json.Unmarshal(req.Args, &a); err != nil {
+			return protocol.Response{OK: false, Error: "openTicket: bad args: " + err.Error()}
+		}
+		data, err := d.handleOpenTicket(ctx, a)
+		if err != nil {
+			return protocol.Response{OK: false, Error: err.Error()}
+		}
+		return dataResponse(data)
 	case "openURL":
 		var a protocol.OpenURLArgs
 		if err := json.Unmarshal(req.Args, &a); err != nil {

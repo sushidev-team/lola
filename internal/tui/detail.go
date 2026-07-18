@@ -61,14 +61,15 @@ func (m *rootModel) detailActions() []detailAction {
 	// treated as not-ready so we never advertise a launch we can't gate.
 	agentReady := haveInfo && info.AgentOK
 
-	// ticket requires the picker to exist (Phase 6). The PR picker enter and the
-	// manual worktree are DETACHED / shell (git+tmux only, no agent), so they
-	// gate on a repo / project existing, not agent health.
-	const ticketShipped = false
+	// The ticket picker starts an agent, so it needs the project bound to a
+	// Linear team (team_id). The PR picker enter and the manual worktree are
+	// DETACHED / shell (git+tmux only), so they gate on a repo / project only.
+	_ = agentReady
+	hasTeam := m.projectHasTeam()
 
 	return []detailAction{
 		{key: "p", id: "pr", label: "Open a PR", desc: "pick an open pull request → shell", enabled: repoSet},
-		{key: "t", id: "ticket", label: "Start a ticket", desc: "pick a Linear issue → worktree + agent", enabled: ticketShipped && agentReady},
+		{key: "t", id: "ticket", label: "Start a ticket", desc: "pick a Linear issue → worktree + agent", enabled: hasTeam},
 		{key: "w", id: "worktree", label: "New worktree", desc: "new branch → shell", enabled: true},
 		{key: "P", id: "polls", label: "Polls", desc: "add / edit / toggle this project's polls", enabled: true},
 		{key: "s", id: "sessions", label: "Sessions", desc: "this project's live sessions", enabled: true},
@@ -79,6 +80,13 @@ func (m *rootModel) detailActions() []detailAction {
 func (m *rootModel) projectHasRepo() bool {
 	if p := m.cfg.ProjectByName(m.detail.project); p != nil {
 		return p.Repo != ""
+	}
+	return false
+}
+
+func (m *rootModel) projectHasTeam() bool {
+	if p := m.cfg.ProjectByName(m.detail.project); p != nil {
+		return p.TeamID != ""
 	}
 	return false
 }
@@ -191,12 +199,17 @@ func (m *rootModel) runDetailAction(a detailAction) (tea.Model, tea.Cmd) {
 		if a.id == "pr" && !m.projectHasRepo() {
 			msg = "set a GitHub repo (e) to list PRs"
 		}
+		if a.id == "ticket" && !m.projectHasTeam() {
+			msg = "set a Linear team_id (e) to browse tickets"
+		}
 		d.flash, d.flashOK = msg, false
 		return m, nil
 	}
 	switch a.id {
 	case "pr":
 		return m.enterPRPicker(d.project)
+	case "ticket":
+		return m.enterTicketPicker(d.project)
 	case "worktree":
 		d.wtMode, d.wtBranch, d.flash = true, "", ""
 		return m, nil

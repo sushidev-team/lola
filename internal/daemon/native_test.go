@@ -83,6 +83,7 @@ func (f *fakeNative) Spawn(ctx context.Context, p config.Project, is linear.Issu
 	return session.Session{
 		ID:        id,
 		Source:    "native",
+		Kind:      session.KindLinear,
 		Project:   p.Name,
 		Issue:     is.Identifier,
 		IssueUUID: is.ID,

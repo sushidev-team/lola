@@ -40,6 +40,7 @@ const (
 	viewHome
 	viewDetail
 	viewPRPicker
+	viewTicketPicker
 )
 
 type rootModel struct {
@@ -51,6 +52,7 @@ type rootModel struct {
 	home     homeModel
 	detail   detailModel
 	prpick   prPickerModel
+	ticket   ticketPickerModel
 	list     listModel
 	sessions sessionsModel
 	form     *formModel
@@ -229,6 +231,9 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case prsMsg:
 		m.handlePrsMsg(v)
+		return m, nil
+	case ticketsMsg:
+		m.handleTicketsMsg(v)
 		return m, nil
 	case statusTickMsg:
 		m.sweepTerms() // reap any detached shell whose process has exited
@@ -444,6 +449,9 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.view == viewPRPicker {
 		return m.updatePRPicker(msg)
 	}
+	if m.view == viewTicketPicker {
+		return m.updateTicketPicker(msg)
+	}
 
 	// Cockpit key routing. Global keys (focus cycle, doctor) fire unless a modal
 	// gate currently owns keystrokes — a poll delete / session kill confirmation,
@@ -568,6 +576,9 @@ func (m *rootModel) viewString() string {
 	if m.view == viewPRPicker {
 		return m.prPickerView()
 	}
+	if m.view == viewTicketPicker {
+		return m.ticketPickerView()
+	}
 	return m.cockpitView()
 }
 
@@ -582,6 +593,8 @@ func (m *rootModel) backdropLines() []string {
 		return m.detailLines()
 	case viewPRPicker:
 		return m.prPickerLines()
+	case viewTicketPicker:
+		return m.ticketPickerLines()
 	default:
 		return m.cockpitLines()
 	}

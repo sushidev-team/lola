@@ -48,6 +48,26 @@ func openPrCmd(project, branch string, number int, isFork bool) tea.Cmd {
 	}
 }
 
+// openTicketCmd starts a Linear issue on demand (cmd=openTicket): a worktree +
+// agent, deduped like a poll dispatch. Reuses openDoneMsg for the outcome.
+func openTicketCmd(project string, is protocol.TicketRow) tea.Cmd {
+	return func() tea.Msg {
+		args, _ := json.Marshal(protocol.OpenTicketArgs{Project: project, Identifier: is.Identifier, UUID: is.UUID, Branch: is.Branch, Title: is.Title})
+		resp, err := requestFn(protocol.Request{Cmd: "openTicket", Args: args})
+		if err != nil {
+			return openDoneMsg{msg: err.Error()}
+		}
+		if !resp.OK {
+			return openDoneMsg{msg: resp.Error}
+		}
+		var d protocol.OpenData
+		if err := json.Unmarshal(resp.Data, &d); err == nil && d.Message != "" {
+			return openDoneMsg{msg: d.Message, ok: true}
+		}
+		return openDoneMsg{msg: "started " + is.Identifier, ok: true}
+	}
+}
+
 // openURLCmd opens a URL in the browser on the daemon side (cmd=openURL), so the
 // client stays exec-free. Best-effort: the outcome rides openDoneMsg.
 func openURLCmd(url string) tea.Cmd {

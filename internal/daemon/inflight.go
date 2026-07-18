@@ -30,6 +30,19 @@ func (s *inflightSet) Add(uuid, identifier string) {
 	s.m[uuid] = inflightEntry{Identifier: identifier, AddedAt: time.Now()}
 }
 
+// Claim atomically claims uuid only if it is not already in-flight, returning
+// true when it took the claim. Used by cmd=openTicket to dedup against a
+// concurrent dispatch tick without a check-then-Add race.
+func (s *inflightSet) Claim(uuid, identifier string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.m[uuid]; ok {
+		return false
+	}
+	s.m[uuid] = inflightEntry{Identifier: identifier, AddedAt: time.Now()}
+	return true
+}
+
 func (s *inflightSet) Has(uuid string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
