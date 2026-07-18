@@ -238,25 +238,25 @@ func (m *rootModel) railColumn(w, h int) []string {
 		triageH = 5
 	}
 	rest := h - triageH
-	// Polls: one row per configured poll + title + 2 borders. Bounded so a long
-	// poll list never starves the Activity feed, and a short one never leaves a
-	// yawning gap.
-	pollsH := len(m.cfg.PollingProjects()) + 3
-	if pollsH < 5 {
-		pollsH = 5
+	// Projects: one row per configured project + title + 2 borders. Bounded so a
+	// long project list never starves the Activity feed, and a short one never
+	// leaves a yawning gap.
+	railH := len(m.cfg.Projects) + 3
+	if railH < 5 {
+		railH = 5
 	}
-	if maxPolls := rest - 5; pollsH > maxPolls { // leave ≥5 for Activity
-		pollsH = maxPolls
+	if maxRail := rest - 5; railH > maxRail { // leave ≥5 for Activity
+		railH = maxRail
 	}
-	if pollsH < 3 {
-		pollsH = 3
+	if railH < 3 {
+		railH = 3
 	}
-	activityH := rest - pollsH
+	activityH := rest - railH
 
 	triage := box(paneTitle("Triage", ""), m.triageBody(w-4), w, triageH, false)
 	activity := box("Activity", m.activityBody(w-4, activityH-2), w, activityH, false)
-	polls := box(paneTitle("Polls", ""), m.pollsBody(w-4, pollsH-2), w, pollsH, m.focus == focusPolls)
-	return stackRows(triage, activity, polls)
+	projects := box(paneTitle("Projects", fmt.Sprintf("%d", len(m.cfg.Projects))), m.projectRailBody(w-4, railH-2), w, railH, m.focus == focusPolls)
+	return stackRows(triage, activity, projects)
 }
 
 // mainColumn stacks the Sessions table over the Detail/Agent panel. When the
@@ -469,40 +469,47 @@ func (m *rootModel) detailBody(w, h int) []string {
 	return out
 }
 
-// pollsBody lists the configured polls with a health dot (green ok / red error /
-// hollow paused) and last-run age; the cursor marker shows only while the Polls
-// panel is focused.
-func (m *rootModel) pollsBody(w, h int) []string {
+// projectRailBody lists every configured project with a poll-state dot and, for
+// polling projects, the last-run age. The dot is shape-distinct (not colour
+// only): ● green polling+enabled, ● red poll error, ○ paused poll, · not
+// polling. The cursor marker shows only while the rail is focused.
+func (m *rootModel) projectRailBody(w, h int) []string {
 	l := &m.list
-	polls := m.cfg.PollingProjects()
-	if len(polls) == 0 {
-		return []string{faintText.Render("no polling projects — configure one from a project (P)")}
+	if len(m.cfg.Projects) == 0 {
+		return []string{faintText.Render("no projects — press p to add one")}
 	}
-	rows := make([]string, 0, len(polls))
-	for i, p := range polls {
-		enabled := p.Enabled
-		last, errd := "-", false
-		if ps := l.pollStatus(p.Name); ps != nil {
-			enabled = ps.Enabled
-			last = fmtAgo(ps.LastRun)
-			if ps.Running {
-				last = "run…"
+	rows := make([]string, 0, len(m.cfg.Projects))
+	for i, p := range m.cfg.Projects {
+		polls := p.Polls()
+		enabled, last, errd := p.Enabled, "", false
+		if polls {
+			last = "-"
+			if ps := l.pollStatus(p.Name); ps != nil {
+				enabled = ps.Enabled
+				last = fmtAgo(ps.LastRun)
+				if ps.Running {
+					last = "run…"
+				}
+				errd = ps.LastError != ""
 			}
-			errd = ps.LastError != ""
 		}
-		dot := faintText.Render("○")
+		var dot string
 		switch {
+		case !polls:
+			dot = faintText.Render("·")
 		case errd:
 			dot = badText.Render("●")
 		case enabled:
 			dot = goodText.Render("●")
+		default:
+			dot = faintText.Render("○")
 		}
 		marker := " "
 		if m.focus == focusPolls && i == l.cursor {
 			marker = boxTitleHi.Render("›")
 		}
 		name := p.Name
-		if !enabled {
+		if polls && !enabled {
 			name = faintText.Render(name)
 		}
 		left := marker + dot + " " + name
@@ -629,7 +636,10 @@ func (m *rootModel) vitalsBar(w int) string {
 			en++
 		}
 	}
-	parts = append(parts, needStr, fmt.Sprintf("sessions %d", nSess), fmt.Sprintf("polls %d/%d", en, len(polling)))
+	parts = append(parts, needStr, fmt.Sprintf("sessions %d", nSess), fmt.Sprintf("projects %d", len(m.cfg.Projects)))
+	if len(polling) > 0 {
+		parts = append(parts, fmt.Sprintf("polls %d/%d", en, len(polling)))
+	}
 
 	brand := lipgloss.NewStyle().Bold(true).Render("lola")
 	left := brand + "  " + strings.Join(parts, sep)
@@ -650,10 +660,10 @@ func (m *rootModel) cockpitMessage() string {
 		return warnText.Render(fmt.Sprintf("kill session %q? (y/n)", s.killTarget))
 	case m.list.confirmDelete:
 		name := ""
-		if p := m.selectedPoll(); p != nil {
+		if p := m.selectedRailProject(); p != nil {
 			name = p.Name
 		}
-		return warnText.Render(fmt.Sprintf("delete poll %q? (y/n)", name))
+		return warnText.Render(fmt.Sprintf("stop polling %q? (y/n)", name))
 	case s.flash != "":
 		if s.flashGood {
 			return goodText.Render(s.flash)
@@ -690,11 +700,11 @@ func (m *rootModel) keybar(w int) string {
 	case s.confirmKill:
 		return previewLine(warnText.Render("y")+faintText.Render(" kill · ")+warnText.Render("n")+faintText.Render(" cancel"), w)
 	case m.list.confirmDelete:
-		return previewLine(warnText.Render("y")+faintText.Render(" delete poll · ")+warnText.Render("n")+faintText.Render(" cancel"), w)
+		return previewLine(warnText.Render("y")+faintText.Render(" stop polling · ")+warnText.Render("n")+faintText.Render(" cancel"), w)
 	}
 	var keys []string
 	if m.focus == focusPolls {
-		keys = []string{"↑↓ move", "n new", "enter edit", "space toggle", "x delete", "r cache", "tab → sessions"}
+		keys = []string{"↑↓ move", "n new", "enter open", "space toggle", "x stop poll", "r cache", "tab → sessions"}
 	} else {
 		keys = []string{"↑↓ move", "enter focus"}
 		if sel := s.selected(); sel != nil {
@@ -717,9 +727,9 @@ func (m *rootModel) keybar(w int) string {
 				keys = append(keys, "o PR", "c coderabbit")
 			}
 		}
-		keys = append(keys, "x kill", "O open", "/ filter", "! needs-you", "V lens", "n next!", "tab → polls")
+		keys = append(keys, "x kill", "O open", "/ filter", "! needs-you", "V lens", "n next!", "tab → projects")
 	}
-	keys = append(keys, "p projects", "P edit", "S settings", "d doctor")
+	keys = append(keys, "p manage", "P edit", "S settings", "d doctor")
 	if m.manageDaemon() {
 		if m.list.status == nil {
 			keys = append(keys, "^r start daemon")

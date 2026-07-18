@@ -648,22 +648,25 @@ func (m *rootModel) listKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			l.cursor--
 		}
 	case "down", "j":
-		if l.cursor < len(m.pollingProjectPtrs())-1 {
+		if l.cursor < len(m.railProjectPtrs())-1 {
 			l.cursor++
 		}
 	case "n":
 		f, cmd := newFormModel(m.cfg, nil)
 		m.form = f
 		return m, cmd
-	case "enter", "e":
-		if p := m.selectedPoll(); p != nil {
-			f, cmd := newFormModel(m.cfg, p)
-			m.form = f
-			return m, cmd
+	case "enter", "l", "right":
+		// The rail is a switcher: open the selected project's detail hub (where
+		// its polls / pickers / edit live), matching the p-screen's Enter.
+		if p := m.selectedRailProject(); p != nil {
+			return m.enterDetail(p.Name)
 		}
 	case "x":
-		if m.selectedPoll() != nil {
+		// 'x' stops the project polling; it is a no-op on a project that never polls.
+		if p := m.selectedRailProject(); p != nil && p.Polls() {
 			l.confirmDelete = true
+		} else if p != nil {
+			l.flash = p.Name + " does not poll — nothing to stop"
 		}
 	case "d":
 		m.doctorLoading, m.doctorScroll = true, 0
@@ -671,7 +674,7 @@ func (m *rootModel) listKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case " ":
 		return m, m.toggleSelected()
 	case "r":
-		if p := m.selectedPoll(); p != nil && p.TeamID != "" {
+		if p := m.selectedRailProject(); p != nil && p.TeamID != "" {
 			l.flash = "refreshing linear cache…"
 			return m, loadMetaCmd(m.cfg, p.TeamID, true)
 		}
@@ -679,22 +682,21 @@ func (m *rootModel) listKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// pollingProjectPtrs returns live pointers (into cfg.Projects) to the projects
-// that poll Linear, in config order — so callers can mutate polling state.
-func (m *rootModel) pollingProjectPtrs() []*config.Project {
-	var out []*config.Project
+// railProjectPtrs returns live pointers (into cfg.Projects) to ALL projects in
+// config order. The cockpit's left rail is a project switcher, so it lists every
+// project — polling or not — and callers may mutate the returned project.
+func (m *rootModel) railProjectPtrs() []*config.Project {
+	out := make([]*config.Project, 0, len(m.cfg.Projects))
 	for i := range m.cfg.Projects {
-		if m.cfg.Projects[i].Polls() {
-			out = append(out, &m.cfg.Projects[i])
-		}
+		out = append(out, &m.cfg.Projects[i])
 	}
 	return out
 }
 
-// selectedPoll returns the polling project the cockpit's poll rail cursor is on
-// (a poll is now a project's polling config). Live pointer, safe to mutate.
-func (m *rootModel) selectedPoll() *config.Project {
-	ptrs := m.pollingProjectPtrs()
+// selectedRailProject returns the project the cockpit's project rail cursor is
+// on. Live pointer, safe to mutate.
+func (m *rootModel) selectedRailProject() *config.Project {
+	ptrs := m.railProjectPtrs()
 	if m.list.cursor < 0 || m.list.cursor >= len(ptrs) {
 		return nil
 	}
@@ -702,7 +704,7 @@ func (m *rootModel) selectedPoll() *config.Project {
 }
 
 func (m *rootModel) deleteSelected() tea.Cmd {
-	p := m.selectedPoll()
+	p := m.selectedRailProject()
 	if p == nil {
 		return nil
 	}
@@ -719,7 +721,7 @@ func (m *rootModel) deleteSelected() tea.Cmd {
 	// "Delete poll" now means stop this project polling — the project itself
 	// remains (for manual worktrees / PRs). Zero the polling config.
 	clearPolling(pr)
-	if m.list.cursor >= len(m.pollingProjectPtrs()) && m.list.cursor > 0 {
+	if m.list.cursor >= len(m.railProjectPtrs()) && m.list.cursor > 0 {
 		m.list.cursor--
 	}
 	if err := m.cfg.Save(m.cfgPath); err != nil {
@@ -761,8 +763,12 @@ func clearPolling(p *config.Project) {
 // toggleSelected pauses/resumes via the socket when the daemon is up;
 // otherwise it flips enabled in config directly (save + best-effort reload).
 func (m *rootModel) toggleSelected() tea.Cmd {
-	p := m.selectedPoll()
+	p := m.selectedRailProject()
 	if p == nil {
+		return nil
+	}
+	if !p.Polls() {
+		m.list.flash = p.Name + " does not poll — set a team in its detail (enter)"
 		return nil
 	}
 	if m.list.status != nil {
@@ -852,7 +858,7 @@ func (m *rootModel) reloadConfig() {
 		m.cfg = cfg
 		m.list.teamNames = teamNamesFromCache(cfg)
 	}
-	if n := len(m.pollingProjectPtrs()); m.list.cursor >= n && m.list.cursor > 0 {
+	if n := len(m.railProjectPtrs()); m.list.cursor >= n && m.list.cursor > 0 {
 		m.list.cursor = n - 1
 	}
 }

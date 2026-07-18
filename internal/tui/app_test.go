@@ -77,7 +77,7 @@ func TestDeleteSelectedDoesNotClobberExternalChanges(t *testing.T) {
 	m := newTestRoot(t)
 	externallyDisable(t, m.cfgPath, "A")
 
-	m.list.cursor = 1 // select B
+	m.list.cursor = 2 // select B (rail lists all projects: nori-app, A, B)
 	m.deleteSelected()
 
 	got, err := config.Load(m.cfgPath)
@@ -100,7 +100,7 @@ func TestToggleSelectedDaemonDownDoesNotClobberExternalChanges(t *testing.T) {
 	m := newTestRoot(t)
 	externallyDisable(t, m.cfgPath, "A")
 
-	m.list.cursor = 1   // select B
+	m.list.cursor = 2   // select B (rail lists all projects: nori-app, A, B)
 	m.list.status = nil // daemon down -> direct config edit path
 	m.toggleSelected()
 

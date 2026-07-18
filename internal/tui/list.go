@@ -127,7 +127,7 @@ func (m *rootModel) listView() string {
 	switch {
 	case l.confirmDelete:
 		name := ""
-		if p := m.selectedPoll(); p != nil {
+		if p := m.selectedRailProject(); p != nil {
 			name = p.Name
 		}
 		b.WriteString(warnText.Render(fmt.Sprintf("delete poll %q? (y/n)", name)) + "\n")

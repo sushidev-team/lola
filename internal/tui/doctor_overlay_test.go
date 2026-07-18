@@ -58,7 +58,8 @@ func TestDoctorLateReportDropped(t *testing.T) {
 // Delete moved to 'x'; it still guards on a selected poll.
 func TestDeleteKeyRebindToX(t *testing.T) {
 	m := newTestRoot(t)
-	m.focus = focusPolls // delete acts on the focused Polls panel
+	m.focus = focusPolls // delete acts on the focused project rail
+	m.list.cursor = 1    // a polling project (A); 'x' only stops an active poll
 	m.Update(keyMsg("x"))
 	if !m.list.confirmDelete {
 		t.Error("'x' must arm the delete confirmation")

@@ -298,7 +298,7 @@ func parseEnvLines(in []string) map[string]string {
 func (m *rootModel) openProjectForm() (tea.Model, tea.Cmd) {
 	name := ""
 	if m.focus == focusPolls {
-		if p := m.selectedPoll(); p != nil {
+		if p := m.selectedRailProject(); p != nil {
 			name = p.Name
 		}
 	} else if sel := m.sessions.selected(); sel != nil {
