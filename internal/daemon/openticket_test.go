@@ -65,6 +65,30 @@ func TestOpenTicketRefusesWhenInFlight(t *testing.T) {
 	}
 }
 
+// A daemon that has begun draining refuses openTicket cleanly BEFORE mutating
+// any dedup state — no in-flight claim, no seen entry, no spawn. This is the
+// shutdown shield: were the spawn to start on a cancellable context, shutdown
+// would SIGKILL it and abort the label flip, orphaning a seen-suppressed issue.
+func TestOpenTicketRefusedWhileDraining(t *testing.T) {
+	is := testIssue("FE-9", 1, "2024-01-01T00:00:00Z")
+	nat := &fakeNative{}
+	d := newTestDaemon(t, testConfig(labelPoll("p1")), &linear.Fake{}, nat)
+	d.drainConnWork() // begin draining (no in-flight work → returns at once)
+
+	if _, err := d.handleOpenTicket(context.Background(), protocol.OpenTicketArgs{Project: "p1", Identifier: is.Identifier, UUID: is.ID}); err == nil {
+		t.Fatal("must refuse once the daemon is draining")
+	}
+	if len(nat.spawnCalls()) != 0 {
+		t.Error("must not spawn while draining")
+	}
+	if d.inflight.Has(is.ID) {
+		t.Error("must not claim in-flight while draining")
+	}
+	if _, serr := os.Stat(seenPath(d, "p1")); !os.IsNotExist(serr) {
+		t.Errorf("must not write seen while draining (err=%v)", serr)
+	}
+}
+
 // A NON-polling project (no team) starts a ticket with only the in-flight claim
 // as the guard — no seen file, no poll name.
 func TestOpenTicketNonPollingProject(t *testing.T) {

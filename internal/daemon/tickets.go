@@ -143,6 +143,21 @@ func (d *Daemon) handleOpenTicket(ctx context.Context, a protocol.OpenTicketArgs
 	name := proj.Name
 	is := linear.Issue{ID: uuid, Identifier: identifier, Title: a.Title, BranchName: strings.TrimSpace(a.Branch)}
 
+	// Shield the dedup-mutating spawn from shutdown cancellation exactly like a
+	// tick (dispatch runs on context.WithoutCancel via safeTick/handlePollOnce):
+	// register with the drain group so graceful shutdown WAITS for this open, and
+	// run Spawn + label-flip + write-back on a non-cancellable context. Without
+	// this, shutdown — or the TUI's ^r/^x daemon restart — landing mid-open would
+	// SIGKILL the spawn and abort the post-spawn label flip, leaving the pre-spawn
+	// seen entry to orphan the issue for up to SeenTTL with its trigger label never
+	// flipped. Registering before any state mutation lets us refuse cleanly (having
+	// touched nothing) when already shutting down.
+	if !d.beginConnWork() {
+		return protocol.OpenData{}, errors.New("daemon is shutting down")
+	}
+	defer d.connWg.Done()
+	sctx := context.WithoutCancel(ctx)
+
 	// For a polling project, serialize the whole dedup+spawn with that project's
 	// ticks so the seen load-modify-save can't interleave with a tick.
 	if polls {
@@ -172,7 +187,7 @@ func (d *Daemon) handleOpenTicket(ctx context.Context, a protocol.OpenTicketArgs
 	}
 
 	// (3) Spawn (bounded + shutdown behavior identical to dispatch).
-	cctx, cancel := context.WithTimeout(ctx, nativeSpawnTimeout)
+	cctx, cancel := context.WithTimeout(sctx, nativeSpawnTimeout)
 	sess, err := nat.Spawn(cctx, proj, is)
 	cancel()
 	if err != nil {
@@ -202,21 +217,21 @@ func (d *Daemon) handleOpenTicket(ctx context.Context, a protocol.OpenTicketArgs
 	// (4) Label flip + P4 write-back for a label-mode polling project.
 	if polls && proj.DedupMode == "label" {
 		if api, aerr := d.ensureLinear(); aerr == nil {
-			if current, lerr := api.IssueLabelIDs(ctx, uuid); lerr == nil {
+			if current, lerr := api.IssueLabelIDs(sctx, uuid); lerr == nil {
 				removed := intersectLabels(proj.MatchLabels, current)
 				newIDs := ApplyLabelDelta(current, proj.MatchLabels, []string{proj.OnSentSetLabel})
-				if serr := api.SetIssueLabels(ctx, uuid, newIDs); serr == nil {
+				if serr := api.SetIssueLabels(sctx, uuid, newIDs); serr == nil {
 					d.sessions.Update(sess.ID, func(s *session.Session) bool { s.RemovedLabels = removed; return true })
 					_ = d.sessions.Save()
 				} else {
 					d.logf(name, "openTicket: label flip for %s failed (seen guards dedup): %v", identifier, serr)
 				}
 			}
-			d.writeBackSpawn(ctx, api, proj, is, sess)
+			d.writeBackSpawn(sctx, api, proj, is, sess)
 		}
 	} else if polls {
 		if api, aerr := d.ensureLinear(); aerr == nil {
-			d.writeBackSpawn(ctx, api, proj, is, sess)
+			d.writeBackSpawn(sctx, api, proj, is, sess)
 		}
 	}
 
