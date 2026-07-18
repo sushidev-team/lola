@@ -10,7 +10,7 @@ assignee) and spawns its **own** coding-agent session for each one: a dedicated
 git worktree, a tmux session, and Claude Code running inside it.
 
 **lola owns the whole run.** For every matched issue it creates a git worktree
-from the referenced project, runs the project's `post_create` setup, starts
+from the project, runs the project's `post_create` setup, starts
 Claude Code in a fresh tmux session with the issue as its briefing, and marks
 the issue as picked up (label flip or seen-file) so it is never dispatched
 twice. A read-only observer then tracks each session's tmux liveness and its
@@ -27,8 +27,8 @@ One binary, two roles:
 
 - `lola run` — the daemon (the TUI starts it on open by default; or launchd
   keeps it alive — see [Running the daemon](#running-the-daemon-launchd-vs-tui))
-- `lola` / `lola tui` — the TUI client (list, create, edit, pause polls; starts/
-  restarts/stops the daemon)
+- `lola` / `lola tui` — the TUI client (manage projects and their polling, drive
+  per-project actions; starts/restarts/stops the daemon)
 - every other subcommand talks to the daemon over the unix socket
   `~/.lola/lola.sock` (newline-delimited JSON)
 
@@ -71,15 +71,17 @@ The Makefile sets a repo-local `GOCACHE` so builds work in sandboxed shells.
    security add-generic-password -a "$USER" -s lola-linear -U -w
    ```
 
-4. Register at least one repository as a `[[project]]` and create a poll that
-   references it — start from [`config.example.toml`](config.example.toml), or
-   run `lola` and build your first poll in the TUI (it fetches
-   teams/projects/states/labels from Linear as you go).
+4. Register at least one repository as a `[[project]]`, then give it a `team_id`
+   (and the other polling fields) to start it watching Linear — start from
+   [`config.example.toml`](config.example.toml), or run `lola` and build your
+   first project in the TUI (it fetches teams/projects/states/labels from Linear
+   as you go). A project with no `team_id` is still valid — it just doesn't poll,
+   and is used for manual worktrees / opening PRs by hand.
 
-5. Test a poll without side effects:
+5. Test a project's poll without side effects (the name is the project name):
 
    ```sh
-   lola poll my-poll --once --dry-run
+   lola poll nori-app --once --dry-run
    ```
 
 6. Install the LaunchAgent (see [launchd install](#launchd-install)) so the
@@ -93,14 +95,14 @@ The Makefile sets a repo-local `GOCACHE` so builds work in sandboxed shells.
 
 | Command | Description |
 | --- | --- |
-| `lola` / `lola tui` | Open the TUI (list polls, create/edit/delete, pause/resume; second tab: live session view). On first run — no `config.toml` yet — this enters the setup wizard first. Keys: `d` inline health report, `P` edit the selected project, `S` global settings editor (`[defaults]`/`[notify]`/`[brain]`/`[review]`/`[coderabbit]`), `^r` restart the daemon (brings up the newest build), `^x` stop it (self-managed mode only). |
+| `lola` / `lola tui` | Open the TUI. The landing **cockpit** shows a rail of polling projects and the live session view. On first run — no `config.toml` yet — this enters the setup wizard first. Keys: `p` open the **project list**, `d` inline health report, `P` edit the selected project, `S` global settings editor (`[defaults]`/`[notify]`/`[brain]`/`[review]`/`[coderabbit]`), `^r` restart the daemon (brings up the newest build), `^x` stop it (self-managed mode only). Enter on a project opens its **detail hub** — open a PR (picker → shell), start a Linear ticket (picker → worktree + agent), new manual worktree, manage the project's polling, view its sessions, edit the project. These hub actions are TUI-only (socket commands under the hood), not separate CLI subcommands. |
 | `lola setup` | Run the first-run configuration wizard (Linear key → Keychain, one `[[project]]`, defaults) and write `config.toml`. Re-runnable any time. |
 | `lola doctor` | Print an aligned health report (tmux/git/claude/gh on PATH, Linear key readable, daemon socket, config validity, per-project repos); exits 1 on a critical failure. Never prints the key value. |
 | `lola run` | Start the daemon (this is what launchd invokes) |
 | `lola stop` | Graceful shutdown: finish in-flight tick, close socket, exit 0 |
-| `lola status` | Table per poll: enabled, last run, last spawn, running, last error — plus `runtimeOk` / `linearOk` health flags |
-| `lola enable <poll>` / `lola disable <poll>` | Live pause/resume of one poll (no restart) |
-| `lola poll <poll> --once [--dry-run]` | Run one tick now; `--dry-run` prints matches (including cross-poll overlaps) with **no** side effects — no spawn, no label flip, no seen write |
+| `lola status` | Table per polling project (keyed by project name): enabled, last run, last spawn, running, last error — plus `runtimeOk` / `linearOk` health flags |
+| `lola enable <name>` / `lola disable <name>` | Live pause/resume of one polling project's poll, keyed by project name (no restart) |
+| `lola poll <name> --once [--dry-run]` | Run one polling project's tick now (keyed by project name); `--dry-run` prints matches (including cross-project overlaps) with **no** side effects — no spawn, no label flip, no seen write |
 | `lola open <project> <branch\|PR#>` | Manually check out a branch or PR of a project into a **throwaway** worktree with a plain shell — no coding agent — so you can run and test it (e.g. review a PR). A bare number is a PR (fetched via `refs/pull/<n>/head`, works across forks); anything else is a branch. The worktree is **detached HEAD**, so teardown never touches the upstream branch. It shows in the sessions view (status `shell`) and never enters the reaction / write-back / review loop; tear it down with `lola kill <session>` (the printed message names it). In the TUI, press `O`. |
 | `lola attach [session]` | Hand the terminal to tmux on lola's isolated server. With **no argument** it (re)builds an aggregate viewer session with **one tab per live agent** (windows linked from each session, so switching tabs pages through every agent) and attaches to it — "attach once, see all agents". With a **session id** it attaches straight to that one. Talks to tmux directly (works even if the daemon is down); detach with `C-b d`. The viewer is a linked view — detaching or rebuilding it never touches the agent sessions. |
 | `lola kill <session> [--force]` | Terminate a session's agent (tmux) and clean up after it. A **clean** worktree is removed and the issue's slot is freed (so it can re-dispatch if it still matches); a **dirty** one (uncommitted changes) is kept for inspection and the command exits nonzero — rerun with `--force` to remove it anyway. The agent is always stopped first, even when the worktree is kept. |
@@ -108,8 +110,8 @@ The Makefile sets a repo-local `GOCACHE` so builds work in sandboxed shells.
 | `lola answer <session> <text>` | Deliver a human's inline reply to a session parked for input. Refused unless the session's derived status is `needs_input` (the one moment the agent is provably idle at its prompt), so a reply can never corrupt a mid-turn agent. |
 | `lola review <session>` | Force the `[review]` CodeRabbit **CLI** QA pass now, ignoring the once-per-PR guard. Skipped (not an error) when `[review]` is disabled or coderabbit is unavailable. |
 | `lola coderabbit <session>` | Force the `[coderabbit]` PR-comment **watch** now — poll the session's open PR for CodeRabbit (GitHub-app) comments, ignoring the watermark, and route any found (notify / worker / Linear per config). Skipped (not an error) when the watch is disabled or the session has no open PR. |
-| `lola reload` | Re-read `config.toml`; the daemon diffs polls and starts/stops goroutines without disturbing unaffected ones |
-| `lola logs [poll] [-f]` | Tail `~/.lola/daemon.log`, optionally filtered to one poll; `-f`/`--follow` to stream |
+| `lola reload` | Re-read `config.toml`; the daemon diffs projects and starts/stops poll goroutines without disturbing unaffected ones |
+| `lola logs [name] [-f]` | Tail `~/.lola/daemon.log`, optionally filtered to one project (by name); `-f`/`--follow` to stream |
 
 `lola hook <event>` also exists but is **internal and hidden**: the generated
 Claude Code settings wire the agent's lifecycle hooks (Stop / Notification /
@@ -126,7 +128,7 @@ environment variable — tests rely on this):
 | `config.toml` | Configuration (mode 0600, contains **no** secrets) |
 | `lola.sock` | Daemon ↔ client unix socket (mode 0600) |
 | `daemon.log` | Daemon log |
-| `state/<poll>.seen` | Per-poll seen-issue state |
+| `state/<project>.seen` | Per-project seen-issue state |
 | `state/sessions.json` | Native session store (status, PR, worktree, tmux target) |
 | `worktrees/<project>/<session>/` | Per-session git worktree |
 | `cache/linear-<team>.json` | Cached Linear metadata for the TUI forms |
@@ -141,9 +143,9 @@ Linear **UUIDs**, not names — the TUI form resolves names to IDs for you.
 
 | Key | Type | Description |
 | --- | --- | --- |
-| `poll_interval` | duration string, e.g. `"60s"`, `"2m"` | How often each poll ticks. Default `60s`. Values below `30s` are silently clamped up to `30s` (Linear rate-limit floor). |
-| `concurrency_cap` | int | Fallback per-poll cap for polls that don't set their own `concurrency_cap`. |
-| `global_cap` | int | Hard ceiling on counted native sessions across **all** polls. Must be > 0. Per tick, a poll's budget is `min(poll cap, global_cap − live counted sessions)`. |
+| `poll_interval` | duration string, e.g. `"60s"`, `"2m"` | How often each polling project ticks. Default `60s`. Values below `30s` are silently clamped up to `30s` (Linear rate-limit floor). |
+| `concurrency_cap` | int | Fallback cap for polling projects that don't set their own `concurrency_cap`. |
+| `global_cap` | int | Hard ceiling on counted native sessions across **all polling projects**. Must be > 0. Per tick, a project's budget is `min(its cap, global_cap − live counted sessions)`. |
 | `agent` | `"claude"` \| `"codex"` \| `"opencode"` | Coding agent spawned per session. Default `claude`. Global default; override per repo with `[[project]].agent`. Empty/omitted resolves to `claude`. See [The coding agent](#the-coding-agent). |
 | `manage_daemon` | bool | Whether the TUI owns the daemon lifecycle: silently start the daemon on open when the socket is dead, `^r` restart, `^x` stop. Default `true`. Set `false` when a launchd `KeepAlive` job owns the daemon, so the TUI never fights the supervisor. See [Running the daemon](#running-the-daemon-launchd-vs-tui). |
 
@@ -160,30 +162,37 @@ There is deliberately no `api_key` field — secrets never live in
 
 ### `[[project]]` (one table per repository)
 
-The repository registry the native runtime spawns into. Every poll references a
-project by `name`; lola then creates one git worktree per session under
-`~/.lola/worktrees/<project>/` and runs Claude Code in tmux inside it.
-Validation of these fields is purely static — path-exists / is-a-git-repo
-checks happen in the runtime layer, not on config load.
+The repository registry the native runtime spawns into: lola creates one git
+worktree per session under `~/.lola/worktrees/<project>/` and runs the coding
+agent in tmux inside it. A project **polls Linear when — and only when — it has
+a `team_id`** set (see [Polling fields](#project-polling-fields-optional-a-project-polls-when-team_id-is-set)
+below); a project with no `team_id` is a valid, non-polling project, used purely
+for manual worktrees and opening PRs by hand from the TUI. Validation of these
+fields is purely static — path-exists / is-a-git-repo checks happen in the
+runtime layer, not on config load.
 
 | Key | Type | Description |
 | --- | --- | --- |
-| `name` | string | Unique project name (required). Referenced by `[[poll]].project`. |
+| `name` | string | Unique project name (required). It is the project's identity everywhere — `lola status`, `enable`/`disable`/`poll`/`logs`, and the seen-file name (`state/<name>.seen`) all key by it. |
 | `path` | string | Absolute path to the main checkout (required). A leading `~` is expanded on load. Session worktrees live under `~/.lola/worktrees/`, never inside the checkout. |
-| `repo` | string | GitHub repository as `owner/name`. Used for PR/CI observation of the sessions spawned for this project. |
+| `repo` | string | GitHub repository as `owner/name`. Used for PR/CI observation of the sessions spawned for this project: the reconciler and observer pass it to `gh pr list --repo` so the open-PR check works regardless of the daemon's working directory. When empty, that check is unavailable and orphaned issues are **never** auto-reverted (fail-closed). |
 | `default_branch` | string | Branch new session worktrees start from, and the base the agent is told to open its PR against. Default `main`. |
 | `post_create` | string array | Commands run inside a fresh worktree before the agent starts (e.g. `composer install`). Any failure blocks the session with a clear status — never a half-started agent. |
 | `symlinks` | string array | Files symlinked from the main checkout into each worktree, e.g. `[".env"]`. Beware: a shared `.env` usually means every worktree talks to the same database. |
 | `env` | table of strings | Extra environment variables exported into each session (`[project.env]`); the agent and the `post_create` commands both see them. |
 | `agent` | `"claude"` \| `"codex"` \| `"opencode"` | Coding agent for sessions spawned into this repo, overriding `[defaults].agent`. Empty/omitted inherits the global default (ultimately `claude`). See [The coding agent](#the-coding-agent). |
 
-### `[[poll]]` (one table per poll)
+### `[[project]]` polling fields (optional; a project polls when `team_id` is set)
+
+These fields live inline on the `[[project]]` table and configure its Linear
+watch. A project polls **iff** `team_id` is set; without one it never polls and
+these fields are ignored. A project has at most **one** polling config. All
+Linear IDs are UUIDs, matched by ID, never by name.
 
 | Key | Type | Description |
 | --- | --- | --- |
-| `name` | string | Unique poll name (required). Used by `enable`/`disable`/`poll`/`logs` and the seen-file name. |
-| `enabled` | bool | Whether the daemon runs this poll. |
-| `team_id` | string | Linear team UUID (required). |
+| `enabled` | bool | Whether the daemon runs this project's poll (live pause/resume). Only meaningful when `team_id` is set. |
+| `team_id` | string | Linear team UUID. **Setting this is what makes the project poll**; omit it and the project is manual-only. |
 | `project_id` | string | Linear project UUID. Empty = no project filter. |
 | `cycle_mode` | `"none"` \| `"active"` \| `"pinned"` | `none` = no cycle filter; `active` = the team's active cycle, re-resolved at the start of **every** tick (handles rollover); `pinned` = the fixed cycle in `cycle_id`. |
 | `cycle_id` | string | Cycle UUID; required iff `cycle_mode = "pinned"`. |
@@ -192,14 +201,15 @@ checks happen in the runtime layer, not on config load.
 | `match_mode` | `"any"` \| `"all"` | `any` = issue has at least one trigger label; `all` = issue has every trigger label. |
 | `assignee_mode` | `"anyone"` \| `"me"` \| `"user"` | `anyone` = no assignee filter; `me` = the authenticated user (Linear `viewer`); `user` = the user in `assignee_user_id`. |
 | `assignee_user_id` | string | User UUID; required iff `assignee_mode = "user"`. |
-| `project` | string | Name of a `[[project]]` entry (**required**). lola creates a git worktree from it and runs Claude Code in tmux inside it. Must resolve to a defined `[[project]]`. |
-| `repo` | string | GitHub repository as `owner/name` (e.g. `sushidev-team/nori-app`). The reconciler and observer pass it to `gh pr list --repo` so their open-PR check works regardless of the daemon's working directory. **Optional** — when empty it falls back to the referenced project's `repo`; with neither set the PR check is unavailable and orphaned issues are **never** auto-reverted (fail-closed). |
-| `concurrency_cap` | int | Max counted native sessions this poll may occupy. Falls back to `[defaults].concurrency_cap` when 0/unset; the effective value must be > 0. |
+| `concurrency_cap` | int | Max counted native sessions this project may occupy. Falls back to `[defaults].concurrency_cap` when 0/unset; the effective value must be > 0. |
 | `priority_sort` | string array | Sort keys for deterministic selection when the budget caps the match list, e.g. `["priority", "createdAt"]`. |
 | `dedup_mode` | `"label"` \| `"seen"` \| `"state"` | See below. |
 | `on_sent_set_label` | string | Label UUID added after a successful spawn to mark the issue as picked up. Required iff `dedup_mode = "label"`; must **not** be one of `match_labels`. |
 
-**Dedup modes** (pick one per poll, they are not mixed):
+The GitHub repository the poll's open-PR check uses is the project's own `repo`
+(above), not a separate per-poll field.
+
+**Dedup modes** (pick one per polling project, they are not mixed):
 
 - `label` — after a successful spawn, lola flips the issue's labels (removes
   **all** of `match_labels`, adds `on_sent_set_label`), so the issue simply
@@ -218,23 +228,23 @@ checks happen in the runtime layer, not on config load.
   and `on_spawn_state_id` set to a state that is **not** one of `state_ids`
   (otherwise the issue keeps matching after the move and respawns forever).
 
-Regardless of mode, a daemon-global in-flight set prevents two polls from
-spawning the same issue in one cycle, and every dispatch is gated on the native
+Regardless of mode, a daemon-global in-flight set prevents two polling projects
+from spawning the same issue in one cycle, and every dispatch is gated on the native
 runtime being healthy — if `tmux`/`git`/`claude` are not all resolvable the
 tick is skipped and **nothing** (labels, seen, in-flight) is mutated.
 
 ### Linear write-back (optional)
 
-Per-poll fields that let lola narrate the agent's progress back onto the Linear
-issue — advancing the issue's **workflow state** and/or posting a short comment
-at each lifecycle point (P4). **Entirely optional**: every field defaults to
-`""` (no transition / no label) or `false` (no comment), so a poll that sets
-none of them behaves exactly as before. All IDs are Linear UUIDs; they are
+Per-project polling fields that let lola narrate the agent's progress back onto
+the Linear issue — advancing the issue's **workflow state** and/or posting a
+short comment at each lifecycle point (P4). **Entirely optional**: every field
+defaults to `""` (no transition / no label) or `false` (no comment), so a
+polling project that sets none of them behaves exactly as before. All IDs are Linear UUIDs; they are
 validated only for non-emptiness where a feature requires one and are **never**
 resolved against Linear at config time (that is a runtime check).
 
-You don't hand-write these UUIDs: the **poll editor** in the TUI (`lola`, edit a
-poll) exposes every write-back field below its trigger fields, picking the state
+You don't hand-write these UUIDs: the **project editor** in the TUI (`lola`, edit
+a project) exposes every write-back field below its trigger fields, picking the state
 and label from the **same Linear pickers** used for `state_ids` / trigger labels,
 and toggling the booleans in place. Editing config.toml by hand still works.
 
@@ -259,7 +269,7 @@ is a bare acknowledgement.
 
 State transitions and comments are independent — you can move the issue without
 commenting, comment without moving it, or do both. They also compose with any
-`dedup_mode`: e.g. a `label`-dedup poll can still set `on_pr_state_id` to move
+`dedup_mode`: e.g. a `label`-dedup project can still set `on_pr_state_id` to move
 the issue to "In Review" when a PR opens. Only `dedup_mode = "state"` *depends*
 on `on_spawn_state_id` (that transition is what dedups the issue).
 
@@ -611,16 +621,16 @@ lola logs -f                                      # watch it work
 
 ## How a tick works (short version)
 
-For each enabled poll, every `poll_interval`:
+For each polling project (`team_id` set and `enabled`), every `poll_interval`:
 
 1. Check the native runtime is healthy: `tmux` available, `git` and `claude`
-   resolvable, and the poll's `[[project]]` resolves. Unhealthy → skip tick,
+   resolvable, and the project itself resolves. Unhealthy → skip tick,
    record the error in `status`, mutate nothing.
 2. Resolve the API key (keychain → env). If `cycle_mode = "active"`, resolve
    the team's active cycle now.
 3. Query matching issues (paginated, 100 per page, until exhausted).
-4. Drop issues already in-flight in another poll, then apply the poll's dedup
-   mode.
+4. Drop issues already in-flight in another polling project, then apply this
+   project's dedup mode.
 5. Sort by `priority_sort`, take up to
    `min(concurrency_cap, global_cap − live counted native sessions)`.
 6. Per issue: record it as in-flight/seen **first**, then spawn the native
@@ -647,7 +657,8 @@ issues into a separate Agent Orchestrator (AO) instance via an `ao spawn`
 bridge (`internal/ao`, a per-poll `runtime = "ao" | "native"` switch, an `[ao]`
 config table, and an `ao_project` per poll). AO owned git, worktrees, PRs, and
 CI. That bridge has been removed: lola is **native-only** now — it spawns and
-observes its own worktree + tmux + Claude Code sessions, and every poll targets
-a `[[project]]`. See [PLAN.md](PLAN.md) for the roadmap; the reaction engine
+observes its own worktree + tmux + Claude Code sessions, and polling is a
+property of a `[[project]]` (a project with a `team_id`) rather than a separate
+config table as it once was. See [PLAN.md](PLAN.md) for the roadmap; the reaction engine
 that acts on CI/review state (P3) is still future work — today the observer
 tracks PR/CI but does not yet react.
