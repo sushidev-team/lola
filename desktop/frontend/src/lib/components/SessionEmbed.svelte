@@ -24,7 +24,11 @@
 </script>
 
 {#if !session}
-  <div class="flex h-full items-center justify-center text-sm text-faint">select a session</div>
+  <div class="flex h-full flex-col items-center justify-center gap-1 text-faint">
+    <div class="text-2xl opacity-40">⌘</div>
+    <div class="text-sm">select a session</div>
+    <div class="text-[11px] opacity-70">its live agent terminal shows here</div>
+  </div>
 {:else}
   <div class="flex h-full min-h-0 flex-col">
     <!-- header -->

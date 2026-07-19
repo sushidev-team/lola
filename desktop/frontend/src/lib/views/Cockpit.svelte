@@ -10,6 +10,14 @@
 
   const rows = $derived(nav.scoped ? store.sessionsForProject(nav.project) : store.sorted);
   const selected = $derived(store.sessionById(nav.selectedId));
+
+  // Keep a live selection: pick the first row when nothing is selected, and
+  // re-pick if the selected session drops out of the list (killed/filtered).
+  $effect(() => {
+    if (rows.length > 0 && !rows.some((r) => r.id === nav.selectedId)) {
+      nav.select(rows[0].id);
+    }
+  });
   const lensLabel = $derived(nav.lens === "list" ? "list" : nav.lens === "kanban" ? "kanban" : "grid");
 
   const lenses: { id: "list" | "kanban" | "grid"; icon: string; label: string }[] = [
@@ -62,7 +70,7 @@
 
     {#if nav.lens !== "grid"}
       <div class="flex min-h-0 flex-[2]">
-        <Panel title="Session" pad={false}>
+        <Panel pad={false}>
           <SessionEmbed session={selected} />
         </Panel>
       </div>
