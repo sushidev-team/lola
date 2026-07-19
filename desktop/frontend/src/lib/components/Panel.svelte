@@ -20,7 +20,7 @@
 </script>
 
 <section
-  class="flex min-h-0 flex-col overflow-hidden rounded-[10px] border bg-[color-mix(in_srgb,var(--color-panel)_82%,var(--color-canvas))] transition-colors"
+  class="flex min-h-0 w-full min-w-0 flex-col overflow-hidden rounded-[10px] border bg-[color-mix(in_srgb,var(--color-panel)_82%,var(--color-canvas))] transition-colors"
   class:border-accent={focused}
   class:border-edge={!focused}
   style={focused ? "box-shadow:0 0 0 1px color-mix(in srgb,var(--color-accent) 30%,transparent)" : ""}

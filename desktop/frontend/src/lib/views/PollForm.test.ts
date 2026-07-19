@@ -1,23 +1,28 @@
 import { render, screen, fireEvent, waitFor } from "@testing-library/svelte";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-// The service layer is the only external dependency PollForm touches. Mock the
-// generated bindings (never a live daemon) so we can exercise load + save.
-const getPoll = vi.fn();
-const savePoll = vi.fn();
+// Mock the bindings (never a live daemon/Linear). vi.hoisted so the fns exist
+// when the hoisted vi.mock factories run.
+const { getPoll, savePoll, teamsFn, teamMetaFn } = vi.hoisted(() => ({
+  getPoll: vi.fn(),
+  savePoll: vi.fn(),
+  teamsFn: vi.fn(),
+  teamMetaFn: vi.fn(),
+}));
 
 vi.mock("@bindings/desktop", () => ({
-  // ConfigService is used directly by PollForm; DaemonService is pulled in by
-  // the store module at import time but never called in this test.
   ConfigService: {
     GetPoll: (...a: unknown[]) => getPoll(...a),
     SavePoll: (...a: unknown[]) => savePoll(...a),
   },
+  LinearService: {
+    Teams: (...a: unknown[]) => teamsFn(...a),
+    TeamMeta: (...a: unknown[]) => teamMetaFn(...a),
+  },
   DaemonService: {},
 }));
 
-// The store subscribes to Wails push events on start(); stub the runtime so the
-// import graph resolves under jsdom.
+// The store imports the Wails runtime at module load; stub it under jsdom.
 vi.mock("@wailsio/runtime", () => ({
   Events: { On: () => {}, Emit: () => {} },
   Call: {},
@@ -33,17 +38,17 @@ function sampleDto() {
     project: "acme",
     enabled: true,
     teamId: "team-uuid-1",
-    projectId: "proj-uuid-2",
+    projectId: "",
     cycleMode: "active",
     cycleId: "",
-    stateIds: ["state-1", "state-2"],
-    matchLabels: ["bug"],
+    stateIds: ["state-1"],
+    matchLabels: [],
     matchMode: "any",
     assigneeMode: "me",
     assigneeUserId: "",
     concurrencyCap: 3,
     dedupMode: "label",
-    onSentSetLabel: "sent",
+    onSentSetLabel: "",
     onSpawnStateId: "",
     onPrStateId: "",
     onMergedStateId: "",
@@ -56,50 +61,63 @@ function sampleDto() {
   };
 }
 
+const meta = {
+  projects: [{ id: "proj-1", label: "Platform" }],
+  cycles: [],
+  activeCycleId: "",
+  states: [
+    { id: "state-1", label: "Todo" },
+    { id: "state-2", label: "Doing" },
+  ],
+  labels: [{ id: "lab-1", label: "bug" }],
+  members: [],
+};
+
 describe("PollForm", () => {
   beforeEach(() => {
-    getPoll.mockReset();
-    savePoll.mockReset();
+    getPoll.mockReset().mockResolvedValue(sampleDto());
+    savePoll.mockReset().mockResolvedValue(undefined);
+    teamsFn.mockReset().mockResolvedValue([{ id: "team-uuid-1", key: "ENG", name: "Engineering" }]);
+    teamMetaFn.mockReset().mockResolvedValue(meta);
     nav.overlayProject = "acme";
   });
 
-  it("shows the UUID note and titles the modal by project", () => {
-    getPoll.mockResolvedValue(sampleDto());
+  it("titles the modal by project and loads the poll", async () => {
     render(PollForm);
     expect(getPoll).toHaveBeenCalledWith("acme");
-    expect(screen.getByText(/Linear IDs are UUIDs/i)).toBeInTheDocument();
-    expect(screen.getByText("polls: acme")).toBeInTheDocument();
-  });
-
-  it("loads the DTO into the form fields", async () => {
-    getPoll.mockResolvedValue(sampleDto());
-    render(PollForm);
-    await waitFor(() => expect(screen.getByDisplayValue("team-uuid-1")).toBeInTheDocument());
-    expect(screen.getByDisplayValue("proj-uuid-2")).toBeInTheDocument();
-    // Array fields render one UUID per line in a textarea (read .value directly —
-    // getByDisplayValue collapses the newline via whitespace normalization).
-    const statesArea = screen.getByPlaceholderText(
-      "one workflow-state UUID per line",
-    ) as HTMLTextAreaElement;
-    expect(statesArea.value).toBe("state-1\nstate-2");
-    // Both group headers are present.
+    expect(await screen.findByText("polls: acme")).toBeInTheDocument();
     expect(screen.getByText("Filter")).toBeInTheDocument();
-    expect(screen.getByText("Write-back")).toBeInTheDocument();
   });
 
-  it("saves a cleaned DTO via SavePoll", async () => {
-    getPoll.mockResolvedValue(sampleDto());
-    savePoll.mockResolvedValue(undefined);
+  it("loads team metadata and renders workflow states as checkboxes, pre-checked from the DTO", async () => {
     render(PollForm);
-    await waitFor(() => expect(screen.getByDisplayValue("team-uuid-1")).toBeInTheDocument());
+    // Team metadata loads on mount because the DTO already has a teamId.
+    await waitFor(() => expect(teamMetaFn).toHaveBeenCalledWith("team-uuid-1", false));
+    const todo = (await screen.findByRole("checkbox", { name: "Todo" })) as HTMLInputElement;
+    const doing = screen.getByRole("checkbox", { name: "Doing" }) as HTMLInputElement;
+    expect(todo.checked).toBe(true); // state-1 is in dto.stateIds
+    expect(doing.checked).toBe(false);
+  });
+
+  it("toggling a state and saving sends the cleaned DTO via SavePoll", async () => {
+    render(PollForm);
+    const doing = (await screen.findByRole("checkbox", { name: "Doing" })) as HTMLInputElement;
+    await fireEvent.click(doing); // add state-2
 
     await fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
 
     await waitFor(() => expect(savePoll).toHaveBeenCalledTimes(1));
     const arg = savePoll.mock.calls[0][0] as ReturnType<typeof sampleDto>;
-    expect(arg.stateIds).toEqual(["state-1", "state-2"]);
-    expect(arg.matchLabels).toEqual(["bug"]);
+    expect(arg.stateIds.sort()).toEqual(["state-1", "state-2"]);
     expect(arg.concurrencyCap).toBe(3);
     expect(arg.prRequiresChecks).toBe(true);
+  });
+
+  it("falls back to raw inputs when Linear metadata is unavailable", async () => {
+    teamsFn.mockRejectedValueOnce(new Error("no api key"));
+    teamMetaFn.mockRejectedValueOnce(new Error("no api key"));
+    render(PollForm);
+    // With no team list, the team field is a raw text input holding the UUID.
+    await waitFor(() => expect(screen.getByDisplayValue("team-uuid-1")).toBeInTheDocument());
   });
 });

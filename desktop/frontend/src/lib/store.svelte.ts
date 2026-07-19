@@ -4,7 +4,7 @@
 // call `store.kill(id)` — they never touch the bindings directly.
 
 import { Events } from "@wailsio/runtime";
-import { DaemonService } from "@bindings/desktop";
+import { DaemonService, ConfigService } from "@bindings/desktop";
 import type {
   SessionInfo,
   ProjectInfo,
@@ -34,6 +34,8 @@ export function sortSessions(list: SessionInfo[]): SessionInfo[] {
 class Store {
   alive = $state(false);
   connected = $state(false); // have we received a first push yet
+  hasConfig = $state(true); // assume yes until checked, so no setup-screen flash
+  configChecked = $state(false);
   sessions = $state<SessionInfo[]>([]);
   activity = $state<ActivityEvent[]>([]);
   projects = $state<ProjectInfo[]>([]);
@@ -57,7 +59,9 @@ class Store {
   start() {
     if (this.started) return;
     this.started = true;
-    Events.On("daemon:alive", (e: { data: boolean }) => {
+    // Param types are inferred from the registered Wails events; slice fields
+    // arrive as T[] | null (Go nil slices), so every read coalesces to [].
+    Events.On("daemon:alive", (e) => {
       this.alive = e.data;
       this.connected = true;
       if (!e.data) {
@@ -65,19 +69,30 @@ class Store {
         this.activity = [];
       }
     });
-    Events.On("daemon:sessions", (e: { data: { sessions?: SessionInfo[]; events?: ActivityEvent[] } }) => {
+    Events.On("daemon:sessions", (e) => {
       this.sessions = e.data?.sessions ?? [];
       this.activity = e.data?.events ?? [];
       this.connected = true;
     });
-    Events.On("daemon:projects", (e: { data: { projects?: ProjectInfo[] } }) => {
+    Events.On("daemon:projects", (e) => {
       this.projects = e.data?.projects ?? [];
     });
-    Events.On("daemon:status", (e: { data: StatusData }) => {
+    Events.On("daemon:status", (e) => {
       this.status = e.data;
     });
     // Kick an immediate fetch so the first paint isn't empty for 2s.
+    void this.checkConfig();
     void this.refresh();
+  }
+
+  async checkConfig() {
+    try {
+      this.hasConfig = await ConfigService.ConfigExists();
+    } catch {
+      this.hasConfig = true; // on doubt, don't force the setup screen
+    } finally {
+      this.configChecked = true;
+    }
   }
 
   projectByName(name: string): ProjectInfo | undefined {

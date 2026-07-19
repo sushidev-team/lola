@@ -22,6 +22,14 @@ import { Call as $Call, CancellablePromise as $CancellablePromise } from "@wails
 // @ts-ignore: Unused imports
 import * as $models from "./models.js";
 
+/**
+ * ConfigExists reports whether ~/.lola/config.toml is present, so the frontend
+ * can gate a first-run setup screen.
+ */
+export function ConfigExists(): $CancellablePromise<boolean> {
+    return $Call.ByID(1455498937);
+}
+
 export function GetPoll(project: string): $CancellablePromise<$models.PollFormDTO> {
     return $Call.ByID(3340962240, project);
 }
@@ -48,4 +56,21 @@ export function SaveProject(dto: $models.ProjectFormDTO): $CancellablePromise<vo
 
 export function SaveSettings(dto: $models.SettingsDTO): $CancellablePromise<void> {
     return $Call.ByID(298700571, dto);
+}
+
+/**
+ * Setup writes the initial config.toml from the wizard: it stores the Linear key
+ * in the Keychain (falling back to an env var by name if that fails), records one
+ * project, and sets the caps/interval. The key itself is never written to config.
+ */
+export function Setup(dto: $models.SetupDTO): $CancellablePromise<$models.SetupResultDTO> {
+    return $Call.ByID(3057086516, dto);
+}
+
+/**
+ * ValidateLinearKey checks a key against Linear's API (Viewer), so the setup
+ * screen can confirm it before writing config. Bounded to 15s.
+ */
+export function ValidateLinearKey(key: string): $CancellablePromise<void> {
+    return $Call.ByID(2105802151, key);
 }

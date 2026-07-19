@@ -14,6 +14,30 @@ export interface DoctorResultDTO {
     "critical": boolean;
 }
 
+/**
+ * LinearOption is one selectable {id,label} — the id is the Linear UUID stored
+ * in config, the label is what the picker shows.
+ */
+export interface LinearOption {
+    "id": string;
+    "label": string;
+}
+
+export interface LinearTeam {
+    "id": string;
+    "key": string;
+    "name": string;
+}
+
+export interface LinearTeamMeta {
+    "projects": LinearOption[] | null;
+    "cycles": LinearOption[] | null;
+    "activeCycleId": string;
+    "states": LinearOption[] | null;
+    "labels": LinearOption[] | null;
+    "members": LinearOption[] | null;
+}
+
 export interface PollFormDTO {
     "project": string;
     "enabled": boolean;
@@ -95,4 +119,28 @@ export interface SettingsDTO {
     "crNotify": boolean;
     "crSendToAgent": boolean;
     "crCommentOnLinear": boolean;
+}
+
+export interface SetupDTO {
+    "linearKey": string;
+    "projectName": string;
+    "projectPath": string;
+    "repo": string;
+    "defaultBranch": string;
+    "concurrencyCap": number;
+    "globalCap": number;
+    "pollInterval": string;
+}
+
+export interface SetupResultDTO {
+    /**
+     * key in the macOS Keychain
+     */
+    "keychainStored": boolean;
+
+    /**
+     * set when the key must come from an env var instead
+     */
+    "envVar": string;
+    "message": string;
 }

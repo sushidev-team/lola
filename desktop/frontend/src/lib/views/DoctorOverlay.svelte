@@ -29,11 +29,11 @@
     <div class="text-xs text-bad">✗ doctor failed: {error}</div>
   {:else if !report}
     <div class="text-xs text-faint">running checks…</div>
-  {:else if report.results.length === 0}
+  {:else if (report.results?.length ?? 0) === 0}
     <div class="px-1 py-8 text-center text-xs text-faint">No checks reported.</div>
   {:else}
     <div class="flex flex-col gap-0.5 text-xs">
-      {#each report.results as r (r.name)}
+      {#each report.results ?? [] as r (r.name)}
         {@const g = glyph(r)}
         <div class="flex items-start gap-2 rounded px-1 py-1 hover:bg-sel/40">
           <span class="w-4 shrink-0 text-center {g.cls}">{g.char}</span>

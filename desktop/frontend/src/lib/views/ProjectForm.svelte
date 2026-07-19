@@ -70,9 +70,9 @@
       repo = d.repo;
       defaultBranch = d.defaultBranch;
       agent = d.agent;
-      symlinksText = linesToText(d.symlinks);
-      postCreateText = linesToText(d.postCreate);
-      envText = linesToText(d.env);
+      symlinksText = linesToText(d.symlinks ?? []);
+      postCreateText = linesToText(d.postCreate ?? []);
+      envText = linesToText(d.env ?? []);
       loaded = true;
     } catch (err) {
       store.setFlash(String(err), "bad");
@@ -83,7 +83,7 @@
   async function save() {
     if (!canSave) return;
     saving = true;
-    const dto = new ProjectFormDTO({
+    const dto: ProjectFormDTO = {
       name: name.trim(),
       path: path.trim(),
       repo: repo.trim(),
@@ -93,7 +93,7 @@
       postCreate: textToLines(postCreateText),
       env: textToLines(envText),
       isNew,
-    });
+    };
     try {
       await ConfigService.SaveProject(dto);
       store.setFlash(isNew ? `added ${dto.name}` : `saved ${dto.name}`, "good");

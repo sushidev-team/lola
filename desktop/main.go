@@ -37,6 +37,7 @@ func main() {
 			application.NewService(term),
 			application.NewService(&ConfigService{}),
 			application.NewService(&DoctorService{}),
+			application.NewService(NewLinearService()),
 		},
 		Assets: application.AssetOptions{
 			Handler: application.AssetFileServerFS(assets),

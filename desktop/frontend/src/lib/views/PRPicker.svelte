@@ -102,7 +102,7 @@
     </div>
     {#if data}
       <span class="text-[11px] text-faint tabular-nums">
-        {data.prs.length} open · {data.ageSeconds}s ago{data.stale ? " · stale" : ""}
+        {data.prs?.length ?? 0} open · {data.ageSeconds}s ago{data.stale ? " · stale" : ""}
       </span>
     {/if}
     <input
@@ -127,7 +127,7 @@
         <span class="text-bad">couldn't list PRs: {error}</span>
         <button class="rounded bg-accent/20 px-3 py-1 text-xs text-accent hover:bg-accent/30" onclick={() => load(true)}>retry</button>
       </div>
-    {:else if !data || data.prs.length === 0}
+    {:else if !data || (data.prs?.length ?? 0) === 0}
       <div class="px-3 py-8 text-center text-faint">No open PRs — refresh</div>
     {:else}
       <table class="w-full text-xs">

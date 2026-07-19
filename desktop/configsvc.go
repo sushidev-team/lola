@@ -1,13 +1,24 @@
 package main
 
 import (
+	"context"
 	"errors"
+	"os"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/sushidev-team/lola/internal/config"
+	"github.com/sushidev-team/lola/internal/linear"
 	"github.com/sushidev-team/lola/internal/protocol"
+	"github.com/sushidev-team/lola/internal/secrets"
+)
+
+// First-run setup constants, matching the TUI wizard (internal/tui/setup.go) so
+// a config written by either is read identically.
+const (
+	setupKeychainService = "lola-linear"
+	setupEnvVar          = "LINEAR_API_KEY"
 )
 
 // ConfigService lets the settings / project / poll forms read and write
@@ -320,6 +331,113 @@ func (s *ConfigService) SavePoll(dto PollFormDTO) error {
 	p.CommentOnBlocked = dto.CommentOnBlocked
 	p.PRRequiresChecks = dto.PRRequiresChecks
 	return saveConfig(cfg, path)
+}
+
+// --- first-run setup --------------------------------------------------------
+
+// ConfigExists reports whether ~/.lola/config.toml is present, so the frontend
+// can gate a first-run setup screen.
+func (s *ConfigService) ConfigExists() bool {
+	path, err := config.DefaultPath()
+	if err != nil {
+		return false
+	}
+	_, err = os.Stat(path)
+	return err == nil
+}
+
+// ValidateLinearKey checks a key against Linear's API (Viewer), so the setup
+// screen can confirm it before writing config. Bounded to 15s.
+func (s *ConfigService) ValidateLinearKey(key string) error {
+	if strings.TrimSpace(key) == "" {
+		return errors.New("empty key")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	_, err := linear.New(config.DefaultEndpoint, key).Viewer(ctx)
+	return err
+}
+
+type SetupDTO struct {
+	LinearKey      string `json:"linearKey"`
+	ProjectName    string `json:"projectName"`
+	ProjectPath    string `json:"projectPath"`
+	Repo           string `json:"repo"`
+	DefaultBranch  string `json:"defaultBranch"`
+	ConcurrencyCap int    `json:"concurrencyCap"`
+	GlobalCap      int    `json:"globalCap"`
+	PollInterval   string `json:"pollInterval"`
+}
+
+type SetupResultDTO struct {
+	KeychainStored bool   `json:"keychainStored"` // key in the macOS Keychain
+	EnvVar         string `json:"envVar"`         // set when the key must come from an env var instead
+	Message        string `json:"message"`
+}
+
+// Setup writes the initial config.toml from the wizard: it stores the Linear key
+// in the Keychain (falling back to an env var by name if that fails), records one
+// project, and sets the caps/interval. The key itself is never written to config.
+func (s *ConfigService) Setup(dto SetupDTO) (SetupResultDTO, error) {
+	if strings.TrimSpace(dto.ProjectName) == "" {
+		return SetupResultDTO{}, errors.New("project name is required")
+	}
+	path, err := config.DefaultPath()
+	if err != nil {
+		return SetupResultDTO{}, err
+	}
+
+	cfg := &config.Config{}
+	cfg.Linear.Endpoint = config.DefaultEndpoint
+
+	res := SetupResultDTO{}
+	if err := secrets.StoreLinearAPIKey(setupKeychainService, dto.LinearKey); err == nil {
+		cfg.Linear.APIKeyKeychain = setupKeychainService
+		res.KeychainStored = true
+		res.Message = "key stored in the macOS Keychain (service " + setupKeychainService + ")"
+	} else {
+		// Keychain unavailable (or non-darwin): fall back to an env var by name.
+		cfg.Linear.APIKeyEnv = setupEnvVar
+		res.EnvVar = setupEnvVar
+		res.Message = "couldn't use the Keychain — export the key as " + setupEnvVar + " before starting the daemon"
+	}
+
+	cfg.Defaults.ConcurrencyCap = orDefault(dto.ConcurrencyCap, 2)
+	cfg.Defaults.GlobalCap = orDefault(dto.GlobalCap, 4)
+	interval := 60 * time.Second
+	if dto.PollInterval != "" {
+		if d, perr := time.ParseDuration(dto.PollInterval); perr == nil {
+			interval = d
+		}
+	}
+	cfg.Defaults.PollInterval = interval
+
+	branch := dto.DefaultBranch
+	if branch == "" {
+		branch = config.DefaultBranchName
+	}
+	cfg.Projects = []config.Project{{
+		Name:          dto.ProjectName,
+		Path:          dto.ProjectPath,
+		Repo:          dto.Repo,
+		DefaultBranch: branch,
+	}}
+
+	if err := cfg.Validate(); err != nil {
+		return res, err
+	}
+	if err := cfg.Save(path); err != nil {
+		return res, err
+	}
+	_ = call(protocol.Request{Cmd: "reload"}, shortTimeout, nil)
+	return res, nil
+}
+
+func orDefault(v, def int) int {
+	if v <= 0 {
+		return def
+	}
+	return v
 }
 
 // --- helpers ----------------------------------------------------------------

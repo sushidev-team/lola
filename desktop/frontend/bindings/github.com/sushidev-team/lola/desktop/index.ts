@@ -4,18 +4,25 @@
 import * as ConfigService from "./configservice.js";
 import * as DaemonService from "./daemonservice.js";
 import * as DoctorService from "./doctorservice.js";
+import * as LinearService from "./linearservice.js";
 import * as TermService from "./termservice.js";
 export {
     ConfigService,
     DaemonService,
     DoctorService,
+    LinearService,
     TermService
 };
 
 export type {
     DoctorReportDTO,
     DoctorResultDTO,
+    LinearOption,
+    LinearTeam,
+    LinearTeamMeta,
     PollFormDTO,
     ProjectFormDTO,
-    SettingsDTO
+    SettingsDTO,
+    SetupDTO,
+    SetupResultDTO
 } from "./models.js";

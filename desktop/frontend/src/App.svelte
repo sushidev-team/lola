@@ -13,6 +13,7 @@
   import SettingsForm from "$lib/views/SettingsForm.svelte";
   import ProjectForm from "$lib/views/ProjectForm.svelte";
   import PollForm from "$lib/views/PollForm.svelte";
+  import Setup from "$lib/views/Setup.svelte";
 
   onMount(() => store.start());
 
@@ -50,6 +51,12 @@
 
 <svelte:window on:keydown={onKey} />
 
+{#if store.configChecked && !store.hasConfig}
+  <div class="h-full bg-canvas text-ink">
+    <div class="drag h-11 shrink-0"></div>
+    <Setup />
+  </div>
+{:else}
 <div class="flex h-full flex-col bg-canvas text-ink">
   <VitalsBar />
 
@@ -78,4 +85,5 @@
   <ProjectForm />
 {:else if nav.overlay === "poll"}
   <PollForm />
+{/if}
 {/if}
