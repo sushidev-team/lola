@@ -1,0 +1,120 @@
+@import "tailwindcss";
+@import "@xterm/xterm/css/xterm.css";
+
+/* ---------------------------------------------------------------------------
+   lola design tokens — lifted verbatim from internal/tui/theme.go so the app
+   and the TUI render the same cohesive, opaque, dark-navy truecolor palette.
+   Tailwind v4 turns each --color-* into a utility (bg-canvas, text-accent, …).
+---------------------------------------------------------------------------- */
+@theme {
+  --color-canvas: #0e1420; /* app background — deep navy-charcoal */
+  --color-panel: #121a28; /* a hair above canvas for raised surfaces */
+  --color-edge: #2b3646; /* muted slate panel border (unfocused) */
+  --color-accent: #57c7d6; /* cyan — focus, selection, links */
+  --color-ink: #c3cbd6; /* default foreground */
+  --color-faint: #6b7686; /* muted secondary text / rules / labels */
+  --color-sel: #1b2634; /* selected-row band */
+
+  --color-good: #5fd08a; /* ok / approved / pass */
+  --color-bad: #e0716f; /* error / failed */
+  --color-warn: #e0b44a; /* pending / retry */
+  --color-info: #6ea8fe; /* working blue */
+  --color-orange: #eaa04a; /* needs-you hero */
+  --color-magenta: #c99bf0; /* PR detail line */
+
+  /* Status pills. Urgent + broken get a SOLID fill; active/parked a dark tint. */
+  --color-pill-urgent: #e0a54a;
+  --color-pill-urgent-fg: #17110a;
+  --color-pill-broken: #d1707a;
+  --color-pill-broken-fg: #180b0d;
+  --color-pill-work: #22384f;
+  --color-pill-work-fg: #84b6ea;
+  --color-pill-done: #1f3a2e;
+  --color-pill-done-fg: #74cf97;
+  --color-pill-grey: #2a323d;
+  --color-pill-grey-fg: #aab4c0;
+
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Monaco, monospace;
+
+  --radius-panel: 10px;
+}
+
+/* --------------------------------------------------------------------------- */
+:root {
+  color-scheme: dark;
+  --tblheader: var(--color-faint);
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--color-canvas);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow: hidden; /* the app owns its own scroll regions */
+  user-select: none; /* app chrome isn't selectable; terminals opt back in */
+}
+
+/* The frameless title-bar drag strip (traffic lights are inset). Any element
+   with .drag becomes a window-drag handle; interactive children opt out. */
+.drag {
+  -webkit-app-region: drag;
+}
+.no-drag,
+button,
+a,
+input,
+textarea,
+select {
+  -webkit-app-region: no-drag;
+}
+
+/* Thin, theme-matched scrollbars everywhere. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-edge) transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--color-edge);
+  border-radius: 4px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: #3a4658;
+}
+
+/* Terminals may be selected (copy out); snapshots stay inert. */
+.term-live,
+.term-live * {
+  user-select: text;
+}
+
+/* xterm surfaces sit flush on the panel background. */
+.xterm,
+.xterm-viewport {
+  background: transparent !important;
+}
+
+/* Focus ring consistent with the accent. */
+:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--color-accent) 70%, transparent);
+  outline-offset: 1px;
+}
+
+/* Subtle raise for panels; a focused panel gets the accent edge. */
+@utility panel {
+  background: color-mix(in srgb, var(--color-panel) 82%, var(--color-canvas));
+  border: 1px solid var(--color-edge);
+  border-radius: var(--radius-panel);
+}

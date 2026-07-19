@@ -40,3 +40,9 @@ go.work.sum
 
 # goreleaser output
 /dist/
+
+# lola-desktop (Wails 3 app) build artifacts
+desktop/frontend/node_modules/
+desktop/frontend/dist/
+desktop/bin/
+desktop/build/bin/

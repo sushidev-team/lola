@@ -1,0 +1,81 @@
+<script lang="ts">
+  import { onMount } from "svelte";
+  import { store } from "$lib/store.svelte";
+  import { nav } from "$lib/nav.svelte";
+  import VitalsBar from "$lib/components/VitalsBar.svelte";
+  import Footer from "$lib/components/Footer.svelte";
+  import Cockpit from "$lib/views/Cockpit.svelte";
+  import Home from "$lib/views/Home.svelte";
+  import ProjectDetail from "$lib/views/ProjectDetail.svelte";
+  import PRPicker from "$lib/views/PRPicker.svelte";
+  import TicketPicker from "$lib/views/TicketPicker.svelte";
+  import DoctorOverlay from "$lib/views/DoctorOverlay.svelte";
+  import SettingsForm from "$lib/views/SettingsForm.svelte";
+  import ProjectForm from "$lib/views/ProjectForm.svelte";
+  import PollForm from "$lib/views/PollForm.svelte";
+
+  onMount(() => store.start());
+
+  function typing(el: EventTarget | null): boolean {
+    const t = el as HTMLElement | null;
+    return !!t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable);
+  }
+
+  function onKey(e: KeyboardEvent) {
+    if (typing(e.target)) return;
+    if (nav.overlay) {
+      if (e.key === "Escape") nav.closeOverlay();
+      return;
+    }
+    // A focused live terminal swallows shortcuts (handled inside the view).
+    if (nav.focusedTerm) return;
+
+    switch (e.key) {
+      case "p":
+        nav.goHome();
+        break;
+      case "d":
+        nav.openOverlay("doctor");
+        break;
+      case "S":
+        nav.openOverlay("settings");
+        break;
+      case "Escape":
+        if (nav.view !== "cockpit") nav.goCockpit(nav.scoped ? nav.project : "");
+        else if (nav.scoped) nav.goCockpit("");
+        break;
+    }
+  }
+</script>
+
+<svelte:window on:keydown={onKey} />
+
+<div class="flex h-full flex-col bg-canvas text-ink">
+  <VitalsBar />
+
+  <main class="min-h-0 flex-1 overflow-hidden">
+    {#if nav.view === "cockpit"}
+      <Cockpit />
+    {:else if nav.view === "home"}
+      <Home />
+    {:else if nav.view === "detail"}
+      <ProjectDetail />
+    {:else if nav.view === "prpicker"}
+      <PRPicker />
+    {:else if nav.view === "ticketpicker"}
+      <TicketPicker />
+    {/if}
+  </main>
+
+  <Footer />
+</div>
+
+{#if nav.overlay === "doctor"}
+  <DoctorOverlay />
+{:else if nav.overlay === "settings"}
+  <SettingsForm />
+{:else if nav.overlay === "project"}
+  <ProjectForm />
+{:else if nav.overlay === "poll"}
+  <PollForm />
+{/if}

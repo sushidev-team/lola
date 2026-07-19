@@ -1,0 +1,101 @@
+<script lang="ts">
+  import { onMount, onDestroy } from "svelte";
+  import { store, type SessionInfo } from "$lib/store.svelte";
+  import { nav } from "$lib/nav.svelte";
+  import { TermService } from "@bindings/desktop";
+  import SnapshotTile from "$lib/components/SnapshotTile.svelte";
+  import LiveTerminal from "$lib/components/LiveTerminal.svelte";
+  import StatusPill from "$lib/components/StatusPill.svelte";
+
+  let { rows }: { rows: SessionInfo[] } = $props();
+
+  // The tmux-backed sessions we can actually render terminals for.
+  const tiles = $derived(rows.filter((s) => s.tmuxName));
+  const focused = $derived(store.sessionById(nav.focusedTerm));
+
+  // Snapshot cache: session id → last capture-pane text.
+  let snaps = $state<Record<string, string>>({});
+  let timer: ReturnType<typeof setInterval> | undefined;
+  let inflight = false;
+
+  async function poll() {
+    if (inflight || nav.focusedTerm) return; // skip while a live terminal is expanded
+    const names = tiles.map((s) => s.tmuxName).filter(Boolean);
+    if (names.length === 0) return;
+    inflight = true;
+    try {
+      const out = await TermService.CaptureMany(names, 60);
+      // out is keyed by tmux name (== session id).
+      snaps = { ...snaps, ...(out as Record<string, string>) };
+    } catch {
+      /* a transient capture failure just leaves the last frame up */
+    } finally {
+      inflight = false;
+    }
+  }
+
+  onMount(() => {
+    poll();
+    timer = setInterval(poll, 1400);
+  });
+  onDestroy(() => clearInterval(timer));
+</script>
+
+{#if focused}
+  <!-- Expanded: one big interactive terminal, back to the grid. -->
+  <div class="flex h-full min-h-0 flex-col">
+    <div class="flex items-center gap-2 border-b border-edge/70 px-3 py-1.5 text-xs">
+      <button class="text-faint hover:text-accent" onclick={() => (nav.focusedTerm = "")}>← grid</button>
+      <span class="text-edge">·</span>
+      <span class="font-medium text-accent">{focused.issue || focused.id.slice(0, 8)}</span>
+      <span class="text-faint">{focused.title}</span>
+      <span class="ml-auto"><StatusPill status={focused.status} /></span>
+    </div>
+    <div class="min-h-0 flex-1 p-2">
+      {#key focused.id}
+        <LiveTerminal name={focused.tmuxName} webgl interactive />
+      {/key}
+    </div>
+  </div>
+{:else if tiles.length === 0}
+  <div class="flex h-full items-center justify-center text-sm text-faint">
+    no live terminals — start a session to see it here
+  </div>
+{:else}
+  <div
+    class="grid h-full min-h-0 auto-rows-[minmax(150px,1fr)] content-start gap-2 overflow-auto p-2"
+    style="grid-template-columns:repeat(auto-fill,minmax(280px,1fr))"
+  >
+    {#each tiles as s (s.id)}
+      {@const sel = nav.selectedId === s.id}
+      <div
+        class="group flex min-h-0 flex-col overflow-hidden rounded-lg border transition-colors hover:border-accent/60"
+        class:border-accent={sel}
+        class:border-edge={!sel}
+      >
+        <button
+          class="flex items-center gap-1.5 border-b border-edge/50 bg-panel/70 px-2 py-1 text-left text-[11px]"
+          onclick={() => nav.select(s.id)}
+          ondblclick={() => (nav.focusedTerm = s.id)}
+        >
+          <span class="truncate font-medium" class:text-accent={sel}>{s.issue || s.id.slice(0, 8)}</span>
+          <span class="truncate text-faint">{s.project}</span>
+          <span class="ml-auto shrink-0"><StatusPill status={s.status} dim /></span>
+        </button>
+        <button
+          class="min-h-0 flex-1 text-left"
+          title="double-click to expand"
+          onclick={() => nav.select(s.id)}
+          ondblclick={() => (nav.focusedTerm = s.id)}
+        >
+          <SnapshotTile text={snaps[s.tmuxName] ?? ""} />
+        </button>
+        <div
+          class="flex items-center justify-end gap-2 border-t border-edge/40 px-2 py-0.5 text-[10px] opacity-0 transition-opacity group-hover:opacity-100"
+        >
+          <button class="text-faint hover:text-accent" onclick={() => (nav.focusedTerm = s.id)}>⛶ expand</button>
+        </div>
+      </div>
+    {/each}
+  </div>
+{/if}
