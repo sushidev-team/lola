@@ -1,7 +1,7 @@
 [Desktop Entry]
 Version=1.0
-Name=My Product
-Comment=A lola-desktop application
+Name=lola
+Comment=Native cockpit for the lola coding-agent orchestrator
 # The Exec line includes %u to pass the URL to the application
 Exec=/usr/local/bin/lola-desktop %u
 Terminal=false

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { Events } from "@wailsio/runtime";
   import { store } from "$lib/store.svelte";
   import { nav } from "$lib/nav.svelte";
   import VitalsBar from "$lib/components/VitalsBar.svelte";
@@ -14,7 +15,12 @@
   import ProjectForm from "$lib/views/ProjectForm.svelte";
   import Setup from "$lib/views/Setup.svelte";
 
-  onMount(() => store.start());
+  onMount(() => {
+    store.start();
+    // The macOS status-bar menu cannot open the overlay itself — it is nav
+    // state that lives here — so it asks. See newStatusBarMenu in main.go.
+    Events.On("app:open-settings", () => nav.openOverlay("settings"));
+  });
 
   function typing(el: EventTarget | null): boolean {
     const t = el as HTMLElement | null;

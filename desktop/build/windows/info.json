@@ -5,11 +5,11 @@
 	"info": {
 		"0000": {
 			"ProductVersion": "0.1.0",
-			"CompanyName": "My Company",
-			"FileDescription": "A lola-desktop application",
-			"LegalCopyright": "© 2026, My Company",
-			"ProductName": "My Product",
-			"Comments": "This is a comment"
+			"CompanyName": "sushidev",
+			"FileDescription": "Native cockpit for the lola coding-agent orchestrator",
+			"LegalCopyright": "(c) 2026, sushidev",
+			"ProductName": "lola",
+			"Comments": "Watches Linear and runs a coding agent per issue in its own git worktree and tmux session."
 		}
 	}
 }

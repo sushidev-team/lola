@@ -8,14 +8,14 @@
   IgnorableNamespaces="uap3">
   
   <Identity 
-    Name="com.example.loladesktop"
-    Publisher="CN=My Company"
+    Name="dev.sushi.lola.desktop"
+    Publisher="CN=sushidev"
     Version="0.1.0.0" 
     ProcessorArchitecture="arm64" />
   
   <Properties>
-    <DisplayName>My Product</DisplayName>
-    <PublisherDisplayName>My Company</PublisherDisplayName>
+    <DisplayName>lola</DisplayName>
+    <PublisherDisplayName>sushidev</PublisherDisplayName>
     <Description>A lola-desktop application</Description>
     <Logo>Assets\StoreLogo.png</Logo>
   </Properties>
@@ -29,9 +29,9 @@
   </Resources>
   
   <Applications>
-    <Application Id="com.example.loladesktop" Executable="lola-desktop" EntryPoint="Windows.FullTrustApplication">
+    <Application Id="dev.sushi.lola.desktop" Executable="lola-desktop" EntryPoint="Windows.FullTrustApplication">
       <uap:VisualElements
-        DisplayName="My Product"
+        DisplayName="lola"
         Description="A lola-desktop application"
         BackgroundColor="transparent"
         Square150x150Logo="Assets\Square150x150Logo.png"

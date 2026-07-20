@@ -9,9 +9,9 @@ info:
   productName: "lola"
   productIdentifier: "dev.sushi.lola.desktop"
   description: "Native cockpit for the lola coding-agent orchestrator"
-  copyright: "(c) 2025, My Company" # Copyright text
-  comments: "Some Product Comments" # Comments
-  version: "0.0.1" # The application version
+  copyright: "(c) 2026, sushidev" # Copyright text
+  comments: "Watches Linear and runs a coding agent per issue in its own git worktree and tmux session." # Comments
+  version: "0.1.0" # The application version
   # cfBundleIconName: "appicon" # The macOS icon name in Assets.car icon bundles (optional)
   #                               # Should match the name of your .icon file without the extension
   #                               # If not set and Assets.car exists, defaults to "appicon"

@@ -82,6 +82,8 @@ func main() {
 		URL: "/",
 	})
 
+	newStatusBarMenu(app, win)
+
 	// Force the WKWebView to report the screen's real backing scale factor once
 	// the window is up, so Retina renders crisply (see hidpi_darwin.go). Runs on
 	// every focus but is idempotent.
@@ -96,6 +98,34 @@ func main() {
 	if err := app.Run(); err != nil {
 		log.Fatal(err)
 	}
+}
+
+// newStatusBarMenu puts lola in the macOS menu bar, so the cockpit is reachable
+// (and Settings openable) without hunting for the window — the app keeps running
+// with its window closed, and this is the way back to it.
+//
+// Settings is emitted rather than opened directly: the overlay is frontend nav
+// state, and showing the window first means the overlay is not opened behind a
+// hidden window.
+func newStatusBarMenu(app *application.App, win application.Window) {
+	tray := app.SystemTray.New()
+	tray.SetLabel("lola")
+	tray.SetTooltip("lola — coding-agent orchestrator")
+
+	menu := app.Menu.New()
+	menu.Add("Open lola").OnClick(func(*application.Context) {
+		win.Show()
+		win.Focus()
+	})
+	menu.Add("Settings…").OnClick(func(*application.Context) {
+		win.Show()
+		win.Focus()
+		app.Event.Emit(evtOpenSettings, struct{}{})
+	})
+	menu.AddSeparator()
+	menu.Add("Quit lola").OnClick(func(*application.Context) { app.Quit() })
+
+	tray.SetMenu(menu)
 }
 
 // ensurePATH augments the process PATH with the usual Homebrew locations. A
@@ -130,10 +160,15 @@ const (
 	evtSessions = "daemon:sessions" // protocol.SessionsData
 	evtProjects = "daemon:projects" // protocol.ProjectsData
 	evtStatus   = "daemon:status"   // protocol.StatusData
+
+	// evtOpenSettings is fired by the status-bar menu. The overlay lives in the
+	// frontend's nav state, so the menu cannot open it directly — it asks.
+	evtOpenSettings = "app:open-settings" // no payload
 )
 
 func init() {
 	application.RegisterEvent[bool](evtAlive)
+	application.RegisterEvent[struct{}](evtOpenSettings)
 	application.RegisterEvent[protocol.SessionsData](evtSessions)
 	application.RegisterEvent[protocol.ProjectsData](evtProjects)
 	application.RegisterEvent[protocol.StatusData](evtStatus)

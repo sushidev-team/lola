@@ -10,12 +10,12 @@
     <Installer
         Path="lola-desktop"
         Arguments=""
-        InstallLocation="C:\Program Files\My Company\My Product">
+        InstallLocation="C:\Program Files\sushidev\lola">
     </Installer>
     <PackageInformation
-        PackageName="My Product"
-        PackageDisplayName="My Product"
-        PublisherName="CN=My Company"
+        PackageName="lola"
+        PackageDisplayName="lola"
+        PublisherName="CN=sushidev"
         PublisherDisplayName="My Company"
         Version="0.1.0.0"
         PackageDescription="A lola-desktop application">
@@ -25,9 +25,9 @@
         </Capabilities>
         <Applications>
             <Application
-                Id="com.example.loladesktop"
+                Id="dev.sushi.lola.desktop"
                 Description="A lola-desktop application"
-                DisplayName="My Product"
+                DisplayName="lola"
                 ExecutableName="lola-desktop"
                 EntryPoint="Windows.FullTrustApplication">
                 
@@ -41,8 +41,8 @@
         </Dependencies>
         <Properties>
             <Framework>false</Framework>
-            <DisplayName>My Product</DisplayName>
-            <PublisherDisplayName>My Company</PublisherDisplayName>
+            <DisplayName>lola</DisplayName>
+            <PublisherDisplayName>sushidev</PublisherDisplayName>
             <Description>A lola-desktop application</Description>
             <Logo>Assets\AppIcon.png</Logo>
         </Properties>

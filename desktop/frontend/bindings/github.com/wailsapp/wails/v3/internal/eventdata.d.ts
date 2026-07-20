@@ -12,6 +12,7 @@ import type * as protocol$0 from "../../../../sushidev-team/lola/internal/protoc
 declare module "@wailsio/runtime" {
     namespace Events {
         interface CustomEvents {
+            "app:open-settings": {};
             "daemon:alive": boolean;
             "daemon:projects": protocol$0.ProjectsData;
             "daemon:sessions": protocol$0.SessionsData;
