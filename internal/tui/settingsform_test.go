@@ -1083,3 +1083,92 @@ func TestSettingsFormWorkspaceLabelCacheWarmsPicker(t *testing.T) {
 		t.Fatalf("the cache must populate the picker, got %v", f.picker)
 	}
 }
+
+// A configured label renders as its NAME, not the bare UUID that is actually
+// stored — a screen full of "13ad06f0-…" tells the user nothing.
+func TestSettingsFormRendersLabelNames(t *testing.T) {
+	m := newTestRoot(t)
+	m.cfg.Defaults.MatchLabels = []string{"ws-ready"}
+	m.cfg.Defaults.OnSentSetLabel = "ws-blocked"
+	f := newSettingsForm(m.cfgPath, m.cfg)
+	loadFakeLabels(t, f, fakeWorkspace())
+	f.tab = stProjectDefaults
+
+	view := stripANSI(f.view())
+	if !strings.Contains(view, "agent-ready") {
+		t.Errorf("the match label must render as its name:\n%s", view)
+	}
+	if !strings.Contains(view, "blocked") {
+		t.Errorf("the on-sent label must render as its name:\n%s", view)
+	}
+	if strings.Contains(view, "ws-ready") {
+		t.Errorf("the raw UUID must not be shown once the name is known:\n%s", view)
+	}
+}
+
+// An unknown id — a hand-typed UUID, or one whose label was deleted — still
+// shows verbatim rather than vanishing.
+func TestSettingsFormRendersUnknownLabelVerbatim(t *testing.T) {
+	m := newTestRoot(t)
+	m.cfg.Defaults.MatchLabels = []string{"13ad06f0-a662-4ba4-a290-56e93f7d3c5d"}
+	f := newSettingsForm(m.cfgPath, m.cfg)
+	loadFakeLabels(t, f, fakeWorkspace())
+	f.tab = stProjectDefaults
+
+	if view := stripANSI(f.view()); !strings.Contains(view, "13ad06f0-a662-4ba4-a290-56e93f7d3c5d") {
+		t.Errorf("an unresolvable id must still be shown:\n%s", view)
+	}
+}
+
+// While a line is being typed it shows the RAW text: backspace acts on the
+// stored value, so showing a resolved name there would be a lie.
+func TestSettingsFormShowsRawWhileTypingLabel(t *testing.T) {
+	m := newTestRoot(t)
+	m.cfg.Defaults.MatchLabels = []string{"ws-ready"}
+	f := newSettingsForm(m.cfgPath, m.cfg)
+	loadFakeLabels(t, f, fakeWorkspace())
+	focusField(t, f, "def_match_labels")
+	f.openList(f.field("def_match_labels"))
+
+	view := stripANSI(f.view())
+	if !strings.Contains(view, "ws-ready") {
+		t.Errorf("the line being edited must show its raw value:\n%s", view)
+	}
+}
+
+// Landing on the project-defaults tab starts the label load, so stored IDs
+// resolve to names without the user opening a picker first. Opening the FORM
+// still loads nothing.
+func TestSettingsFormLoadsLabelNamesOnTabSwitch(t *testing.T) {
+	m := newTestRoot(t)
+	f := newSettingsForm(m.cfgPath, m.cfg)
+	if f.wsLoading {
+		t.Fatal("opening the form must not start a load")
+	}
+
+	// stDefaults -> stProjectDefaults
+	cmd, _ := f.update(keyMsg("tab"))
+	if f.tab != stProjectDefaults {
+		t.Fatalf("tab = %v, want the project-defaults tab", f.tab)
+	}
+	if cmd == nil || !f.wsLoading {
+		t.Fatalf("landing on the tab must start the label load (cmd=%v loading=%v)", cmd, f.wsLoading)
+	}
+
+	// Names land without popping a picker open — nothing asked for one.
+	f.update(workspaceLabelsMsg{labels: fakeWorkspace().WorkspaceLabelSet})
+	if f.picker != nil {
+		t.Error("a name-only load must not open a picker")
+	}
+	if f.wsNames["ws-ready"] != "agent-ready" {
+		t.Errorf("names must be recorded, got %v", f.wsNames)
+	}
+
+	// And moving away and back does not refetch.
+	if again, _ := f.update(shiftTabKey()); again != nil {
+		t.Error("leaving the tab must not fetch")
+	}
+	if again, _ := f.update(keyMsg("tab")); again != nil {
+		t.Error("returning with labels already loaded must not refetch")
+	}
+}

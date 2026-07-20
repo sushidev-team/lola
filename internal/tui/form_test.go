@@ -689,3 +689,27 @@ func TestFormBranchListLoadsOnPathChange(t *testing.T) {
 		t.Error("a result for a superseded path must be dropped")
 	}
 }
+
+// A label INHERITED from [defaults] is a WORKSPACE label, which never appears
+// in a team's metadata — so the project form must fall back to the
+// workspace-label cache or it shows a bare id for the common shared trigger.
+func TestFormResolvesInheritedWorkspaceLabelName(t *testing.T) {
+	f, _ := newFormOn(t, []config.Project{{Name: "web", Path: "/tmp/web"}}, "web")
+	f.meta = &teamMeta{Labels: []linear.Label{{ID: "team-only", Name: "team-label"}}}
+
+	// Seed the cache the settings picker writes (LOLA_HOME is a temp dir here).
+	if err := saveWorkspaceLabelCache([]linear.Label{{ID: "ws-ready", Name: "agent-ready"}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.labelName("ws-ready"); got != "agent-ready" {
+		t.Errorf("labelName = %q, want the workspace label's name", got)
+	}
+	// A team label still resolves from team metadata, and an unknown id still
+	// degrades to a short id rather than rendering blank.
+	if got := f.labelName("team-only"); got != "team-label" {
+		t.Errorf("team label = %q, want team-label", got)
+	}
+	if got := f.labelName("nope"); got == "" {
+		t.Error("an unknown id must still render something")
+	}
+}

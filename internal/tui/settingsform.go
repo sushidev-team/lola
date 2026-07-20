@@ -117,8 +117,15 @@ type settingsForm struct {
 	// opened when the labels land rather than eating that keystroke.
 	wsLoading    bool
 	wsPendingKey string
-	wsErr        string
-	picker       *setPicker
+
+	// wsNames maps a workspace-label UUID to its display name, for RENDERING
+	// only. It is warmed from the on-disk cache when the form opens — a local
+	// file read, not a Linear call — so a stored label reads as "agent-ready"
+	// rather than a bare UUID before any picker has been opened. Kept separate
+	// from wsLabels so the picker's lazy-load state is unaffected.
+	wsNames map[string]string
+	wsErr   string
+	picker  *setPicker
 }
 
 // setPicker is the workspace-label chooser floated over the field list. It is
@@ -160,7 +167,7 @@ const wsLabelHelp = " enter opens the workspace-label picker; raw UUID entry sta
 func newSettingsForm(cfgPath string, cfg *config.Config) *settingsForm {
 	itoa := strconv.Itoa
 	d, n, br, rv, cr := cfg.Defaults, cfg.Notify, cfg.Brain, cfg.Review, cfg.CodeRabbit
-	return &settingsForm{
+	f := &settingsForm{
 		cfgPath: cfgPath,
 		cfg:     cfg,
 		fields: []setField{
@@ -214,6 +221,13 @@ func newSettingsForm(cfgPath string, cfg *config.Config) *settingsForm {
 			{key: "cr_linear", tab: stCodeRabbit, indent: true, label: "Comment on Linear", help: "Also mirror each new comment onto the Linear issue.", kind: sfBool, b: cr.CommentOnLinear},
 		},
 	}
+	// Warm the label NAMES from the on-disk cache for rendering. This is a local
+	// file read, never a Linear call, and deliberately does not touch wsLabels:
+	// the picker stays lazy (see openLabelPicker).
+	if ls, err := loadWorkspaceLabelCache(); err == nil {
+		f.rememberLabelNames(ls)
+	}
+	return f
 }
 
 // crAuthor pre-fills the author field with the effective default when unset, so
@@ -344,10 +358,28 @@ func (f *settingsForm) cur() *setField {
 // switchTab moves to the next/previous tab (wrapping), resetting the cursor,
 // scroll and any open list editor so nothing carries over from a tab whose
 // field list has a different length.
-func (f *settingsForm) switchTab(delta int) {
+// switchTab moves to the next/previous tab. Landing on the project-defaults tab
+// starts the workspace-label load if it has not run, so the stored label IDs
+// render as NAMES rather than bare UUIDs without the user having to open a
+// picker first. It stays lazy with respect to opening the form itself, and a
+// failure is silent here — the fields degrade to UUID text as they already do.
+func (f *settingsForm) switchTab(delta int) tea.Cmd {
 	n := len(settingsTabs)
 	f.tab = settingsTab((int(f.tab) + delta%n + n) % n)
 	f.cursor, f.scroll, f.editing = 0, 0, false
+	return f.maybeLoadLabelNames()
+}
+
+// maybeLoadLabelNames kicks off a label fetch purely so names can be rendered.
+// Unlike openLabelPicker it sets no pending key, so nothing pops open when the
+// result lands. Returns nil when the labels are already known, a fetch is in
+// flight, or one has already been tried and failed.
+func (f *settingsForm) maybeLoadLabelNames() tea.Cmd {
+	if f.tab != stProjectDefaults || f.wsTried || f.wsLoading || len(f.wsLabels) > 0 {
+		return nil
+	}
+	f.wsLoading = true
+	return loadWorkspaceLabelsCmd(f.cfg)
 }
 
 // enableDefaults maps a feature's master "enabled" toggle to the dependent sink
@@ -413,9 +445,9 @@ func (f *settingsForm) key(k tea.KeyPressMsg) (tea.Cmd, settingsFormEvent) {
 	case "ctrl+s":
 		return nil, f.save()
 	case "tab", "right":
-		f.switchTab(1)
+		return f.switchTab(1), settingsFormNone
 	case "shift+tab", "left":
-		f.switchTab(-1)
+		return f.switchTab(-1), settingsFormNone
 	case "up":
 		if f.cursor > 0 {
 			f.cursor--
@@ -612,11 +644,37 @@ func loadWorkspaceLabelsCmd(cfg *config.Config) tea.Cmd {
 	}
 }
 
+// rememberLabelNames records id -> display name for rendering. Additive: a
+// later, larger fetch never drops names an earlier one supplied.
+func (f *settingsForm) rememberLabelNames(ls []linear.Label) {
+	if len(ls) == 0 {
+		return
+	}
+	if f.wsNames == nil {
+		f.wsNames = make(map[string]string, len(ls))
+	}
+	for _, l := range ls {
+		f.wsNames[l.ID] = labelDisplay(l)
+	}
+}
+
+// labelText renders a stored workspace-label UUID as its name when known,
+// falling back to the raw value. The fallback is what makes this safe on a
+// PARTIALLY TYPED id: as soon as the text stops matching a known label it shows
+// verbatim again, so manual entry still reads correctly as it is typed.
+func (f *settingsForm) labelText(v string) string {
+	if name, ok := f.wsNames[strings.TrimSpace(v)]; ok {
+		return name
+	}
+	return v
+}
+
 // applyWorkspaceLabels folds a completed load into the form. Both failure modes
 // (error, empty workspace) leave wsLabels empty and set a short reason, which
 // the footer shows and which sends the next enter to raw UUID entry.
 func (f *settingsForm) applyWorkspaceLabels(msg workspaceLabelsMsg) {
 	f.wsTried, f.wsLoading = true, false
+	f.rememberLabelNames(msg.labels) // so stored IDs render as names
 	pending := f.wsPendingKey
 	f.wsPendingKey = ""
 	// The instruction leads and the reason trails: the modal truncates this to
@@ -1034,12 +1092,19 @@ func (f *settingsForm) fieldRegion() (lines []string, fieldLine []int) {
 			}
 			for j, e := range fld.lines {
 				bullet, caret := faintText.Render("· "), ""
-				if open && j == f.lineCur {
+				typing := open && j == f.lineCur
+				if typing {
 					// Anchor the scroller on the line being typed, not the label.
 					bullet, caret = warnText.Render("▸ "), "_"
 					fieldLine[vi] = len(lines)
 				}
-				lines = append(lines, indent+"      "+bullet+e+caret)
+				// A stored label reads as its name, not its UUID — except on the
+				// line being typed, where the raw text is what backspace acts on.
+				shown := e
+				if fld.wsPick && !typing {
+					shown = f.labelText(e)
+				}
+				lines = append(lines, indent+"      "+bullet+shown+caret)
 			}
 			continue
 		}
@@ -1051,6 +1116,12 @@ func (f *settingsForm) fieldRegion() (lines []string, fieldLine []int) {
 			val = enumGlyph(fld.text)
 		default:
 			val = fld.text
+			if fld.wsPick {
+				// Resolves to the label's name when the value IS a known label;
+				// a partially typed UUID matches nothing and shows verbatim, so
+				// manual entry still reads correctly as it is typed.
+				val = f.labelText(val)
+			}
 			if onField {
 				val += "_"
 			}

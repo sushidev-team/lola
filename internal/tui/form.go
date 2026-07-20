@@ -1632,6 +1632,16 @@ func (f *formModel) labelName(id string) string {
 			}
 		}
 	}
+	// A label INHERITED from [defaults] is a workspace label, which is not in
+	// this team's metadata — fall back to the workspace-label cache so it reads
+	// as a name here too rather than as a bare id.
+	if ls, err := loadWorkspaceLabelCache(); err == nil {
+		for _, l := range ls {
+			if l.ID == id {
+				return labelDisplay(l)
+			}
+		}
+	}
 	return shortID(id)
 }
 
