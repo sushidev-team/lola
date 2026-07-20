@@ -12,19 +12,28 @@
     onSelect: (id: string) => void;
   } = $props();
 
+  // The button elements, so arrow-key selection can move focus onto the newly
+  // active tab (the roving-tabindex tablist pattern). $state so `bind:this` into
+  // the array is a reactive write (Svelte warns otherwise).
+  let btns: HTMLButtonElement[] = $state([]);
+
   // ←/→ walk the strip, the usual tablist affordance. The handler sits on the
   // buttons (interactive elements) rather than the tablist div.
   function onKey(e: KeyboardEvent, i: number) {
     if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
     e.preventDefault();
     const step = e.key === "ArrowRight" ? 1 : -1;
-    onSelect(tabs[(i + step + tabs.length) % tabs.length].id);
+    const next = (i + step + tabs.length) % tabs.length;
+    onSelect(tabs[next].id);
+    // Keep keyboard focus with the selection so the next arrow keeps walking.
+    btns[next]?.focus();
   }
 </script>
 
 <div role="tablist" class="mb-3 flex flex-wrap items-center gap-1 border-b border-edge/60">
   {#each tabs as t, i (t.id)}
     <button
+      bind:this={btns[i]}
       type="button"
       role="tab"
       aria-selected={active === t.id}

@@ -34,6 +34,16 @@
   let ro: ResizeObserver | undefined;
   let resizeTimer: ReturnType<typeof setTimeout> | undefined;
   let disposed = false;
+  // The Attach round-trip, tracked so teardown can Detach the SAME session
+  // exactly once and never before it was attached (see boot() and onDestroy).
+  let attach: Promise<unknown> | undefined;
+  let detachDone = false;
+
+  function detachOnce() {
+    if (detachDone) return;
+    detachDone = true;
+    TermService.Detach(name).catch(() => {});
+  }
 
   function b64ToBytes(b64: string): Uint8Array {
     const bin = atob(b64);
@@ -151,7 +161,7 @@
       term?.write(b64ToBytes(e.data));
     });
 
-    TermService.Attach(name, cols, rows).catch(() => {
+    attach = TermService.Attach(name, cols, rows).catch(() => {
       term?.writeln("\x1b[31m[ could not attach to session ]\x1b[0m");
     });
 
@@ -214,7 +224,12 @@
     off?.();
     ro?.disconnect();
     clearTimeout(resizeTimer);
-    TermService.Detach(name).catch(() => {});
+    // Detach only a session we actually attached, and only AFTER Attach settles.
+    // Tearing down during the pre-Attach font wait leaves `attach` undefined
+    // (nothing to detach); tearing down while Attach is in flight defers the
+    // Detach until it resolves so it can't overtake the Attach and leak the
+    // pane. detachOnce() guards against a double Detach on the normal path.
+    if (attach) void attach.finally(detachOnce);
     gl?.dispose();
     term?.dispose();
   });

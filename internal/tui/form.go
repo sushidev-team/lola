@@ -1097,9 +1097,9 @@ func applyProject(dst *config.Project, src config.Project) {
 	dst.CommentOnMerged = src.CommentOnMerged
 	dst.CommentOnBlocked = src.CommentOnBlocked
 	dst.PRRequiresChecks = src.PRRequiresChecks
-	if src.Repo != "" {
-		dst.Repo = src.Repo
-	}
+	// Assign unconditionally: an empty src.Repo must be able to CLEAR an existing
+	// value, not silently leave the old one in place.
+	dst.Repo = src.Repo
 }
 
 // renameProject asks the daemon to change a project's ID, migrating the runtime

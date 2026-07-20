@@ -329,7 +329,8 @@ type fileConfig struct {
 // Every [defaults]-inheritable field is a POINTER: nil means the key is absent
 // from the file, i.e. "inherit", which is distinct from a present-but-empty
 // value ("override to nothing"). Project carries the resolved value plus an
-// Overrides bitmap; see projectFromFile / projectToFile for the translation.
+// Inherits bitmap (a SET bit means "inherit this key from [defaults]"); see
+// projectFromFile / projectToFile for the translation.
 type fileProject struct {
 	Name          string             `toml:"name"`
 	Label         string             `toml:"label,omitempty"`
@@ -799,12 +800,12 @@ func (c *Config) applyDefaults() {
 }
 
 // ResolveInheritance fills every project field the project does NOT override
-// (per its Overrides bitmap) from [defaults], falling back to the package
+// (a SET bit in its Inherits bitmap) from [defaults], falling back to the package
 // Default* constants where [defaults] is silent too. After it runs, each
 // Project field holds its effective value — which is what the daemon, runtime,
 // linear filter and every read-only view consume.
 //
-// It is idempotent (the override bitmap, not the stored value, is the source of
+// It is idempotent (the Inherits bitmap, not the stored value, is the source of
 // truth) and cheap. Load calls it via applyDefaults, and Validate calls it up
 // front so a config mutated in memory — the UIs edit [defaults] and projects in
 // the same pass — is never validated against stale resolved values.

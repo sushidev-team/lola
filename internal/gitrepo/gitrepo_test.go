@@ -107,10 +107,13 @@ func TestDetectFailsClosed(t *testing.T) {
 	}
 }
 
-// The real git path: a checkout with no remote yields "" rather than an error.
+// A non-repo path yields "" rather than an error. Uses an injected run so the
+// test never shells out to the real git binary.
 func TestDetectAgainstRealGit(t *testing.T) {
-	dir := t.TempDir()
-	if got := Detect(context.Background(), dir); got != "" {
+	d := Detector{run: func(context.Context, string, string, string) (string, error) {
+		return "", errors.New("fatal: not a git repository")
+	}}
+	if got := d.Detect(context.Background(), t.TempDir()); got != "" {
 		t.Errorf("Detect on a non-repo = %q, want empty", got)
 	}
 }
@@ -195,9 +198,13 @@ func TestBranchesFailsClosed(t *testing.T) {
 	}
 }
 
-// The real git path: an empty dir yields nothing rather than an error.
+// A non-repo path yields nothing rather than an error. Uses an injected run so
+// the test never shells out to the real git binary.
 func TestBranchesAgainstRealGit(t *testing.T) {
-	if got := Branches(context.Background(), t.TempDir()); got != nil {
+	b := BranchLister{run: func(context.Context, string, string, ...string) (string, error) {
+		return "", errors.New("fatal: not a git repository")
+	}}
+	if got := b.Branches(context.Background(), t.TempDir()); got != nil {
 		t.Errorf("Branches on a non-repo = %v, want nil", got)
 	}
 }

@@ -126,6 +126,11 @@ func (m *setupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width, m.height = v.Width, v.Height
 		return m, nil
 	case tea.PasteMsg:
+		if m.validating {
+			// A key check is in flight; the buffer is locked. Dropping the paste
+			// keeps it from mutating the value being validated out from under it.
+			return m, nil
+		}
 		if buf := m.activeBuf(); buf != nil {
 			// Every wizard step is single-line; an API key copied out of a
 			// browser routinely carries a trailing newline.

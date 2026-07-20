@@ -116,11 +116,3 @@ Wails round-trip per keystroke would make the field feel dead). Go stays the
 authority — `SaveProject` re-slugs whatever arrives — so drift can only make the
 preview disagree, never write an unsafe name. `slug.test.ts` mirrors the Go test
 case for case; change both together.
-
-## Known gaps
-
-- The **poll editor** takes raw Linear UUIDs (paste from Linear) rather than the
-  TUI's live cascading team→project→cycle→state→label pickers. Those pickers need
-  a Linear-metadata service and are a follow-up.
-- No **first-run setup wizard** yet: create the config with `lola setup` (or the
-  TUI) first. The app shows a daemon-down banner and empty state until then.

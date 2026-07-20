@@ -83,12 +83,16 @@ function spanStyle(s: SGR, pal: AnsiPalette): string {
 }
 
 function applyCodes(s: SGR, codes: number[], pal: AnsiPalette): SGR {
-  const next = { ...s };
+  let next: SGR = { ...s };
   for (let i = 0; i < codes.length; i++) {
     const c = codes[i];
     switch (true) {
       case c === 0:
-        return {};
+        // Reset all attributes IN PLACE and keep going: a combined sequence
+        // like ESC[0;31m must apply the 31 (red) after the reset, not return
+        // early and drop it.
+        next = {};
+        break;
       case c === 1:
         next.bold = true;
         break;

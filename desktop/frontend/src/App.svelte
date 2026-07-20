@@ -24,7 +24,15 @@
 
   function typing(el: EventTarget | null): boolean {
     const t = el as HTMLElement | null;
-    return !!t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable);
+    // SELECT is included so a picker/select dropdown swallows global shortcuts
+    // the same way a text field does (arrow keys pick options, letters filter).
+    return (
+      !!t &&
+      (t.tagName === "INPUT" ||
+        t.tagName === "TEXTAREA" ||
+        t.tagName === "SELECT" ||
+        t.isContentEditable)
+    );
   }
 
   function onKey(e: KeyboardEvent) {

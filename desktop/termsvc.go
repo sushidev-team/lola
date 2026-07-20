@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"strconv"
@@ -45,7 +46,12 @@ func NewTermService() *TermService {
 // SetApp injects the Wails emitter. Called once from main before Run.
 func (t *TermService) SetApp(app *application.App) { t.app = app }
 
+// tmux returns the resolved tmux binary, resolving it lazily on first use. It is
+// called concurrently (CaptureMany fans out), so t.mu guards the cached path; no
+// caller holds t.mu when calling in, so this can't re-enter.
 func (t *TermService) tmux() (string, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	if t.tmuxBin == "" {
 		if bin, err := exec.LookPath("tmux"); err == nil {
 			t.tmuxBin = bin
@@ -100,15 +106,26 @@ func (t *TermService) Capture(name string, lines int) (string, error) {
 }
 
 // CaptureMany snapshots several panes in one call so the grid refresh is a single
-// round-trip from the frontend. A pane that fails to capture (session gone) is
-// simply omitted from the map rather than failing the whole batch.
+// round-trip from the frontend. Panes are captured concurrently, so the batch is
+// bounded by the slowest capture rather than their sum. A pane that fails to
+// capture (session gone) is simply omitted from the map rather than failing the
+// whole batch.
 func (t *TermService) CaptureMany(names []string, lines int) map[string]string {
 	out := make(map[string]string, len(names))
+	var mu sync.Mutex
+	var wg sync.WaitGroup
 	for _, n := range names {
-		if s, err := t.Capture(n, lines); err == nil {
-			out[n] = s
-		}
+		wg.Add(1)
+		go func(n string) {
+			defer wg.Done()
+			if s, err := t.Capture(n, lines); err == nil {
+				mu.Lock()
+				out[n] = s
+				mu.Unlock()
+			}
+		}(n)
 	}
+	wg.Wait()
 	return out
 }
 
@@ -153,7 +170,7 @@ func (t *TermService) Attach(name string, cols, rows int) (string, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cmd := exec.CommandContext(ctx, bin, "-L", "lola", "attach-session", "-t", "="+name)
 	cmd.Env = childEnv()
-	f, err := pty.StartWithSize(cmd, &pty.Winsize{Cols: uint16(cols), Rows: uint16(rows)})
+	f, err := pty.StartWithSize(cmd, &pty.Winsize{Cols: clampWinDim(cols), Rows: clampWinDim(rows)})
 	if err != nil {
 		cancel()
 		return "", fmt.Errorf("attach %s: %w", name, err)
@@ -234,7 +251,17 @@ func (t *TermService) Resize(name string, cols, rows int) error {
 	if cols <= 0 || rows <= 0 {
 		return nil
 	}
-	return pty.Setsize(s.f, &pty.Winsize{Cols: uint16(cols), Rows: uint16(rows)})
+	return pty.Setsize(s.f, &pty.Winsize{Cols: clampWinDim(cols), Rows: clampWinDim(rows)})
+}
+
+// clampWinDim narrows a positive terminal dimension to the uint16 pty.Winsize
+// uses, capping (not wrapping) anything past the max so a bogus huge cols/rows
+// from the frontend can't fold back to a tiny size. Callers guarantee n > 0.
+func clampWinDim(n int) uint16 {
+	if n > math.MaxUint16 {
+		return math.MaxUint16
+	}
+	return uint16(n)
 }
 
 // Detach closes the PTY: the tmux client detaches (the agent keeps running,

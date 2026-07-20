@@ -45,10 +45,12 @@ class Nav {
   goPRPicker(name: string) {
     this.project = name;
     this.view = "prpicker";
+    this.focusedTerm = "";
   }
   goTicketPicker(name: string) {
     this.project = name;
     this.view = "ticketpicker";
+    this.focusedTerm = "";
   }
 
   openOverlay(o: Overlay, project = "", tab = "") {

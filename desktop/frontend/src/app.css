@@ -169,6 +169,14 @@ select {
   user-select: text;
 }
 
+/* Form fields opt back out of the app-chrome `user-select: none` so their text
+   can be selected and copied — otherwise editing/copying inside inputs and
+   textareas is crippled. Terminals keep their own opt-in above. */
+input,
+textarea {
+  user-select: text;
+}
+
 /* ---------------------------------------------------------------------------
    Terminal stroke weight. `body` sets -webkit-font-smoothing: antialiased,
    which costs ~32% of the glyph ink on DOM text (measured 86.45 -> 58.40 on a

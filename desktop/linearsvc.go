@@ -6,6 +6,8 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/sync/errgroup"
+
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/linear"
 	"github.com/sushidev-team/lola/internal/secrets"
@@ -129,24 +131,25 @@ func (s *LinearService) TeamMeta(teamID string, refresh bool) (LinearTeamMeta, e
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
-	projects, err := c.Projects(ctx, teamID)
-	if err != nil {
-		return LinearTeamMeta{}, err
-	}
-	active, cycles, err := c.Cycles(ctx, teamID)
-	if err != nil {
-		return LinearTeamMeta{}, err
-	}
-	states, err := c.States(ctx, teamID)
-	if err != nil {
-		return LinearTeamMeta{}, err
-	}
-	labels, err := c.Labels(ctx, teamID)
-	if err != nil {
-		return LinearTeamMeta{}, err
-	}
-	members, err := c.Members(ctx, teamID)
-	if err != nil {
+	// The five picker queries are independent, so fan them out on the shared ctx
+	// rather than paying five round-trips in series. errgroup cancels the ctx on
+	// the first failure and returns that error; each result lands in its own
+	// variable, so no lock is needed. Assembly stays sequential below.
+	var (
+		projects []linear.Project
+		active   *linear.Cycle
+		cycles   []linear.Cycle
+		states   []linear.State
+		labels   []linear.Label
+		members  []linear.User
+	)
+	g, gctx := errgroup.WithContext(ctx)
+	g.Go(func() (err error) { projects, err = c.Projects(gctx, teamID); return })
+	g.Go(func() (err error) { active, cycles, err = c.Cycles(gctx, teamID); return })
+	g.Go(func() (err error) { states, err = c.States(gctx, teamID); return })
+	g.Go(func() (err error) { labels, err = c.Labels(gctx, teamID); return })
+	g.Go(func() (err error) { members, err = c.Members(gctx, teamID); return })
+	if err := g.Wait(); err != nil {
 		return LinearTeamMeta{}, err
 	}
 

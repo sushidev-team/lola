@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"sync"
 	"syscall"
 	"time"
 
@@ -19,7 +20,12 @@ import (
 // Read commands (Sessions/Projects/Status) hit the daemon's in-memory caches and
 // are safe to poll frequently; the open* / pollOnce family do real work and use
 // the long timeout.
-type DaemonService struct{}
+//
+// lifecycleMu serializes the check-then-act Start/Stop/Restart sequences so two
+// UI-driven lifecycle calls can't race into a double spawn or a spawn-vs-stop.
+type DaemonService struct {
+	lifecycleMu sync.Mutex
+}
 
 // --- health / lifecycle -----------------------------------------------------
 
@@ -215,6 +221,13 @@ func lolaBinary() (string, error) {
 // daemonctl.spawnDaemon (own session, released, nil stdio). It waits up to 10s
 // for the socket to accept. A live daemon is left untouched.
 func (s *DaemonService) StartDaemon() error {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	return s.startLocked()
+}
+
+// startLocked is StartDaemon's body; the caller must hold lifecycleMu.
+func (s *DaemonService) startLocked() error {
 	if daemonAlive() {
 		return nil
 	}
@@ -234,6 +247,13 @@ func (s *DaemonService) StartDaemon() error {
 // StopDaemon asks a live daemon to shut down via {"cmd":"stop"} and waits for
 // the socket to go quiet. A down daemon is not an error.
 func (s *DaemonService) StopDaemon() error {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	return s.stopLocked()
+}
+
+// stopLocked is StopDaemon's body; the caller must hold lifecycleMu.
+func (s *DaemonService) stopLocked() error {
 	if !daemonAlive() {
 		return nil
 	}
@@ -243,12 +263,16 @@ func (s *DaemonService) StopDaemon() error {
 	return waitDaemon(false, 10*time.Second)
 }
 
-// RestartDaemon stops (if up), waits for the socket to clear, then respawns.
+// RestartDaemon stops (if up), waits for the socket to clear, then respawns. It
+// holds lifecycleMu across the whole sequence and reuses the locked helpers, so
+// it never re-locks recursively.
 func (s *DaemonService) RestartDaemon() error {
-	if err := s.StopDaemon(); err != nil {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	if err := s.stopLocked(); err != nil {
 		return err
 	}
-	return s.StartDaemon()
+	return s.startLocked()
 }
 
 // waitDaemon busy-polls until the socket reaches the wanted liveness or timeout.

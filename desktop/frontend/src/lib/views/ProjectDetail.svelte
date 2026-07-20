@@ -17,10 +17,14 @@
     nav.goCockpit(nav.scoped ? nav.project : "");
   }
 
-  function startWorktree() {
+  async function startWorktree() {
     const b = branch.trim();
     if (!b) return;
-    void store.openManual({ project: nav.project, branch: b, agent: useAgent });
+    // openManual resolves to undefined on failure (store.act swallows the error
+    // into a flash). Only tear the form down and navigate on success — a failed
+    // spawn must keep the prompt and the typed branch so it can be retried.
+    const r = await store.openManual({ project: nav.project, branch: b, agent: useAgent });
+    if (r === undefined) return;
     worktreeOpen = false;
     branch = "";
     nav.goCockpit(nav.project);

@@ -1093,11 +1093,13 @@ func (f *settingsForm) save() settingsFormEvent {
 
 	if err := c.Validate(); err != nil {
 		c.Defaults, c.Notify, c.Brain, c.Review, c.CodeRabbit = oldD, oldN, oldB, oldR, oldC
+		c.ResolveInheritance() // re-resolve projects against the restored defaults
 		f.err = "invalid: " + err.Error()
 		return settingsFormNone
 	}
 	if err := c.Save(f.cfgPath); err != nil {
 		c.Defaults, c.Notify, c.Brain, c.Review, c.CodeRabbit = oldD, oldN, oldB, oldR, oldC
+		c.ResolveInheritance() // re-resolve projects against the restored defaults
 		f.err = "save failed: " + err.Error()
 		return settingsFormNone
 	}

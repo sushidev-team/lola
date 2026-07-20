@@ -105,7 +105,7 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   checks the resolved binary; `config.AgentForProject` resolves
   project→defaults→`claude`. `internal/attention` imports it for agent-aware
   pane classification.
-- `internal/gitremote` — resolves a checkout's GitHub `owner/name` from its git
+- `internal/gitrepo` — resolves a checkout's GitHub `owner/name` from its git
   remotes (upstream, then origin) so the project forms can prefill
   `[[project]].repo`. Local git only — no network, no `gh`. Deliberately NOT in
   `internal/scm` (gh-only) or `internal/config` (never execs). **Fails closed**:

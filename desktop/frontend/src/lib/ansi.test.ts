@@ -22,6 +22,14 @@ describe("ansiToHtml", () => {
     expect(html.endsWith("plain")).toBe(true);
   });
 
+  it("applies codes after a reset in the same sequence (\\x1b[0;31m)", () => {
+    // Code 0 must reset in place and CONTINUE, so the trailing 31 still paints
+    // red. The old early-return dropped everything after the 0.
+    const html = ansiToHtml("\x1b[0;31mred");
+    expect(html).toContain("color:#f38ba8"); // Catppuccin Mocha red
+    expect(html).toContain(">red<");
+  });
+
   it("handles truecolor fg", () => {
     const html = ansiToHtml("\x1b[38;2;18;20;32mx");
     expect(html).toContain("color:#121420");
