@@ -52,7 +52,7 @@
     <div class="min-h-0 flex-1 p-2">
       {#if session.tmuxName}
         {#key session.id + (focused ? ":f" : "")}
-          <LiveTerminal name={session.tmuxName} webgl interactive fontSize={focused ? 13 : 12} />
+          <LiveTerminal name={session.tmuxName} webgl interactive fontSize={focused ? 14 : 12} />
         {/key}
       {:else}
         <div class="flex h-full items-center justify-center text-sm text-faint">no tmux session (dead)</div>

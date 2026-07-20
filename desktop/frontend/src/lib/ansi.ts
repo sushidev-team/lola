@@ -8,23 +8,25 @@
 // All text is HTML-escaped; only style attributes are emitted, so the result is
 // safe to inject with {@html} even though pane content is agent-influenced.
 
+// Catppuccin Mocha — matches the live terminal (LiveTerminal.svelte) so the grid
+// snapshots and the focused terminal share one palette.
 const ANSI_16 = [
-  "#0e1420", // 0 black → canvas
-  "#e0716f", // 1 red
-  "#5fd08a", // 2 green
-  "#e0b44a", // 3 yellow
-  "#6ea8fe", // 4 blue
-  "#c99bf0", // 5 magenta
-  "#57c7d6", // 6 cyan
-  "#c3cbd6", // 7 white → ink
-  "#6b7686", // 8 bright black → faint
-  "#f08f8d",
-  "#7fe0a6",
-  "#eac96a",
-  "#8fbcff",
-  "#d9b6f7",
-  "#84dbe6",
-  "#eef2f6", // 15 bright white
+  "#45475a", // 0 black (surface1)
+  "#f38ba8", // 1 red
+  "#a6e3a1", // 2 green
+  "#f9e2af", // 3 yellow
+  "#89b4fa", // 4 blue
+  "#f5c2e7", // 5 magenta (pink)
+  "#94e2d5", // 6 cyan (teal)
+  "#bac2de", // 7 white (subtext1)
+  "#585b70", // 8 bright black (surface2)
+  "#f38ba8", // 9 bright red
+  "#a6e3a1", // 10 bright green
+  "#f9e2af", // 11 bright yellow
+  "#89b4fa", // 12 bright blue
+  "#f5c2e7", // 13 bright magenta
+  "#94e2d5", // 14 bright cyan
+  "#a6adc8", // 15 bright white (subtext0)
 ];
 
 function esc(s: string): string {

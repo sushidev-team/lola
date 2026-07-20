@@ -9,7 +9,7 @@ describe("ansiToHtml", () => {
 
   it("wraps colored runs in styled spans", () => {
     const html = ansiToHtml("\x1b[31mred\x1b[0m");
-    expect(html).toContain("color:#e0716f");
+    expect(html).toContain("color:#f38ba8"); // Catppuccin Mocha red
     expect(html).toContain(">red<");
   });
 

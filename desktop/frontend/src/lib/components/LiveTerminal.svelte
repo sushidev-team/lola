@@ -43,28 +43,41 @@
       fontWeight: 400,
       fontWeightBold: 700,
       // 1.0 keeps cell heights on whole pixels; letterSpacing 0 keeps columns
-      // pixel-aligned. allowTransparency lets the panel background show through
-      // (a transparent theme background) so the terminal blends into lola rather
-      // than sitting on its own dark fill.
+      // pixel-aligned. Background is lola's panel colour (opaque) rather than
+      // transparent: it still blends into the panel, keeps text crisp (WebGL
+      // renders thin over a transparent bg), and — because agents read the
+      // terminal's background via OSC 11 to theme themselves — makes the agent's
+      // own input box match instead of falling back to black.
       lineHeight: 1.0,
       letterSpacing: 0,
-      allowTransparency: true,
+      allowTransparency: false,
       cursorBlink: interactive,
       disableStdin: !interactive,
+      // Catppuccin Mocha palette for the content colours, but the background is
+      // lola's panel colour (not Mocha's #1e1e2e base) so the terminal blends
+      // into the panel and the agent's OSC-11-read input box matches.
       theme: {
-        background: "rgba(0, 0, 0, 0)",
-        foreground: "#c3cbd6",
-        cursor: "#57c7d6",
-        selectionBackground: "#1b2634",
-        black: "#0e1420",
-        red: "#e0716f",
-        green: "#5fd08a",
-        yellow: "#e0b44a",
-        blue: "#6ea8fe",
-        magenta: "#c99bf0",
-        cyan: "#57c7d6",
-        white: "#c3cbd6",
-        brightBlack: "#6b7686",
+        background: "#111927",
+        foreground: "#cdd6f4",
+        cursor: "#f5e0dc",
+        cursorAccent: "#111927",
+        selectionBackground: "#45475a",
+        black: "#45475a",
+        red: "#f38ba8",
+        green: "#a6e3a1",
+        yellow: "#f9e2af",
+        blue: "#89b4fa",
+        magenta: "#f5c2e7",
+        cyan: "#94e2d5",
+        white: "#bac2de",
+        brightBlack: "#585b70",
+        brightRed: "#f38ba8",
+        brightGreen: "#a6e3a1",
+        brightYellow: "#f9e2af",
+        brightBlue: "#89b4fa",
+        brightMagenta: "#f5c2e7",
+        brightCyan: "#94e2d5",
+        brightWhite: "#a6adc8",
       },
     });
     fit = new FitAddon();
