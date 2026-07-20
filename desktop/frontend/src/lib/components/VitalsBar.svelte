@@ -23,9 +23,9 @@
 </script>
 
 <header
-  class="drag flex h-9 shrink-0 items-center gap-2.5 border-b border-edge/70 bg-canvas pr-5 pl-[100px] text-xs leading-none select-none"
+  class="drag flex h-9 shrink-0 items-center gap-2.5 border-b border-edge/70 bg-canvas pr-5 pl-[82px] text-xs leading-none select-none"
 >
-  <LolaLogo class="h-[18px] w-auto shrink-0" />
+  <LolaLogo class="h-[15px] w-auto shrink-0" />
 
   <span class="text-edge">·</span>
   {#if store.alive}
