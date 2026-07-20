@@ -197,11 +197,16 @@ tasks:
     sources:
       - "appicon.png"
       - "appicon.icon"
+      - "darwin/appicon-rounded.png"
     generates:
       - "darwin/icons.icns"
       - "windows/icon.ico"
     cmds:
       - wails3 generate icons -input appicon.png -macfilename darwin/icons.icns -windowsfilename windows/icon.ico -iconcomposerinput appicon.icon -macassetdir darwin
+      # Overwrite the Wails "Big Sur tray" icns with a full-bleed rounded
+      # squircle so macOS 26 Liquid Glass doesn't nest a square in a square.
+      - cmd: sh darwin/make-icns.sh
+        platforms: [darwin]
 
   dev:frontend:
     summary: Runs the frontend in development mode
