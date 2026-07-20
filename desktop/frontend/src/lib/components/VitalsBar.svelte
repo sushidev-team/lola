@@ -2,6 +2,7 @@
   import { onMount, onDestroy } from "svelte";
   import { store } from "$lib/store.svelte";
   import { nav } from "$lib/nav.svelte";
+  import LolaLogo from "$lib/components/LolaLogo.svelte";
 
   // The top strip. Doubles as the frameless window-drag region; the left pad
   // clears the inset traffic lights.
@@ -24,7 +25,7 @@
 <header
   class="drag flex h-9 shrink-0 items-center gap-2.5 border-b border-edge/70 bg-canvas pr-5 pl-[100px] text-xs leading-none select-none"
 >
-  <span class="font-semibold tracking-wide text-ink">lola</span>
+  <LolaLogo class="h-[18px] w-auto shrink-0" />
 
   <span class="text-edge">·</span>
   {#if store.alive}

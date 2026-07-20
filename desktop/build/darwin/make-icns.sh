@@ -7,10 +7,12 @@
 # square-in-a-square in the Dock. We instead ship a pre-rounded, transparent-
 # corner source so the icon is a single squircle that fills the tile.
 #
-# Regenerating the rounded source after a logo change (needs ImageMagick):
+# Regenerating the rounded source after an icon change (needs ImageMagick).
+# appicon.svg is the canonical master (the full square icon with background):
+#   rsvg-convert -w 1024 -h 1024 appicon.svg -o /tmp/appicon.png
 #   magick -size 1024x1024 xc:none -fill white \
-#     -draw "roundrectangle 0,0,1023,1023,224,224" mask.png
-#   magick appicon.png mask.png -alpha set -compose DstIn -composite \
+#     -draw "roundrectangle 0,0,1023,1023,224,224" /tmp/mask.png
+#   magick /tmp/appicon.png /tmp/mask.png -alpha set -compose DstIn -composite \
 #     darwin/appicon-rounded.png
 #
 # Run from the build/ dir (the generate:icons task sets dir: build).
