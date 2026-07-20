@@ -181,6 +181,46 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   native lifecycle (spawn+rollback, adopt classification, store-driven
   `liveCounted`, fail-closed reconcile revert).
 
+## Desktop app (`desktop/`)
+
+`desktop/` is **lola-desktop**, a native macOS app (Wails 3 + Svelte 5 runes +
+Tailwind v4 + xterm.js) that mirrors the TUI's flight-deck plus a live
+terminal-grid overview. It is a **package inside this Go module** (not a separate
+module) precisely so it can reuse `internal/protocol`, `internal/config`,
+`internal/doctor`, `internal/linear`, `internal/secrets` — Go's `internal/` rule
+forbids that from a sibling module. It is a **client of the same daemon socket**
+the TUI uses; it never embeds the daemon, and it drives `tmux -L lola` directly
+for terminal streaming. Five bound Wails services: `DaemonService` (every
+protocol command + daemon start/stop/restart), `TermService` (capture-pane
+snapshots for the grid + a live `tmux attach` PTY for the focused terminal),
+`ConfigService` (read/write config.toml + first-run setup), `DoctorService`,
+`LinearService` (team metadata for the cascading poll pickers). Requires the
+`wails3` CLI (`go install github.com/wailsapp/wails/v3/cmd/wails3@latest`), a
+distinct binary from the v2 `wails`. See `desktop/README.md`.
+
+**Gotchas (learned the hard way — don't rediscover them):**
+
+- **`wails3 task build` only rebuilds the loose `bin/lola-desktop`. The `.app`
+  bundle is a copy made by `wails3 task package`.** So `open bin/lola-desktop.app`
+  after a `build` launches the *old* bundled binary — every source change looks
+  like a no-op. **Iterate with `wails3 dev`** (live source, Web Inspector);
+  `wails3 task package` when you want the `.app`.
+- **WebKit ≠ Chrome for flex.** The production WKWebView does **not** stretch a
+  `display:flex` child inside a flex **column** (it collapses to content width);
+  Chrome does, so it looks fine in a browser and broken in the app. Use **CSS
+  grid** for fill-the-parent layouts (grid cells stretch reliably), or an
+  explicit width — never rely on `align-items:stretch` for a flex-container child
+  in a column. Verify layout in the actual `.app`, not just Chrome.
+- **The daemon does not hot-reload its own binary.** After `make build`, a
+  still-running `lola run` keeps the old code — a daemon predating a command
+  answers `unknown cmd "<x>"` (e.g. `projects`). Restart it (TUI `^r`, the app's
+  restart button, or stop+respawn) to pick up the new binary. The desktop store
+  therefore uses `Promise.allSettled` so one unknown command can't blank the rest
+  of the UI. (`setsid` is Linux-only; on macOS detach with `nohup … & disown`.)
+- Fonts: the terminals + mono UI use bundled **JetBrains Mono**
+  (`@fontsource/jetbrains-mono`, imported in `main.ts`); xterm re-fits on
+  `document.fonts.ready` so cell metrics match once it loads.
+
 ## Reference docs
 
 - `README.md` — user-facing: full command list, config reference (every

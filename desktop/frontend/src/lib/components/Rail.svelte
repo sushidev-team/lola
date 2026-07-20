@@ -20,8 +20,8 @@
   }
 </script>
 
-<div class="grid h-full min-h-0 gap-2" style="grid-template-rows:auto minmax(0,1fr) auto">
-  <!-- Triage -->
+<div class="flex h-full min-h-0 flex-col gap-2">
+  <!-- Triage — sizes to content -->
   <Panel title="Triage">
     {#if store.needsYou > 0}
       <div class="mb-2 text-sm font-bold text-orange">{store.needsYou}&nbsp; NEED YOU</div>
@@ -40,8 +40,8 @@
     {/if}
   </Panel>
 
-  <!-- Activity -->
-  <Panel title="Activity" note="newest first">
+  <!-- Activity — grows to fill the rail -->
+  <Panel title="Activity" note="newest first" fill>
     {#if store.activity.length === 0}
       <div class="text-xs text-faint">no activity yet</div>
     {:else}

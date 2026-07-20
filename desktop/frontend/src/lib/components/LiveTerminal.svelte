@@ -34,9 +34,9 @@
   onMount(() => {
     term = new Terminal({
       scrollback: 1500,
-      fontFamily: 'ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace',
+      fontFamily: '"JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace',
       fontSize: 12.5,
-      lineHeight: 1.15,
+      lineHeight: 1.2,
       cursorBlink: interactive,
       disableStdin: !interactive,
       theme: {
@@ -93,6 +93,14 @@
       resizeTimer = setTimeout(() => fit?.fit(), 60);
     });
     ro.observe(host);
+
+    // xterm measures the font at open(); if JetBrains Mono is still loading it
+    // uses fallback metrics. Re-fit + repaint once it's ready so cell sizing and
+    // the WebGL glyph atlas match the real font.
+    document.fonts.ready.then(() => {
+      fit?.fit();
+      term?.refresh(0, (term?.rows ?? 1) - 1);
+    });
   });
 
   onDestroy(() => {
