@@ -13,7 +13,7 @@
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
-import { Call as $Call, CancellablePromise as $CancellablePromise } from "@wailsio/runtime";
+import { Call as $Call, CancellablePromise as $CancellablePromise, Create as $Create } from "@wailsio/runtime";
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
@@ -23,12 +23,21 @@ import * as $models from "./models.js";
  * TeamMeta fetches everything the poll form's dependent pickers need for a team.
  */
 export function TeamMeta(teamID: string, refresh: boolean): $CancellablePromise<$models.LinearTeamMeta> {
-    return $Call.ByID(1141327068, teamID, refresh);
+    return $Call.ByID(1141327068, teamID, refresh).then(($result: any) => {
+        return $$createType0($result);
+    });
 }
 
 /**
  * Teams lists the workspace's teams for the top-level picker.
  */
-export function Teams(): $CancellablePromise<$models.LinearTeam[] | null> {
-    return $Call.ByID(1325983846);
+export function Teams(): $CancellablePromise<$models.LinearTeam[]> {
+    return $Call.ByID(1325983846).then(($result: any) => {
+        return $$createType2($result);
+    });
 }
+
+// Private type creation functions
+const $$createType0 = $models.LinearTeamMeta.createFrom;
+const $$createType1 = $models.LinearTeam.createFrom;
+const $$createType2 = $Create.Array($$createType1);

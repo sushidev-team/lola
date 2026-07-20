@@ -56,7 +56,6 @@ type rootModel struct {
 	list     listModel
 	sessions sessionsModel
 	form     *formModel
-	projForm *projectForm         // project editor modal ('P'); nil otherwise
 	settings *settingsForm        // global settings editor modal ('S'); nil otherwise
 	terms    map[string]*termView // per-session persistent shells, keyed by session ID
 
@@ -374,27 +373,6 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// The project editor owns all input while open.
-	if m.projForm != nil {
-		if k, ok := msg.(tea.KeyPressMsg); ok {
-			switch m.projForm.update(k) {
-			case projFormCancel:
-				m.projForm = nil
-			case projFormSaved:
-				m.projForm = nil
-				m.reloadConfig()
-				if m.view == viewHome {
-					m.home.flash, m.home.flashGood = "project saved", true
-					m.home.repin(m.cfg)
-				} else {
-					m.list.flash = "project saved"
-				}
-				return m, tea.Batch(bestEffortReloadCmd, fetchStatusCmd, fetchProjectsCmd)
-			}
-		}
-		return m, nil
-	}
-
 	// The global settings editor owns all input while open.
 	if m.settings != nil {
 		if k, ok := msg.(tea.KeyPressMsg); ok {
@@ -557,9 +535,6 @@ func (m *rootModel) viewString() string {
 	}
 	if m.settings != nil {
 		return m.settingsFormModal()
-	}
-	if m.projForm != nil {
-		return m.projectFormModal()
 	}
 	if m.form != nil {
 		// The poll edit form floats as a modal over the cockpit. (The first-run

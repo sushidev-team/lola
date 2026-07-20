@@ -18,7 +18,7 @@
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
-import { Call as $Call, CancellablePromise as $CancellablePromise } from "@wailsio/runtime";
+import { Call as $Call, CancellablePromise as $CancellablePromise, Create as $Create } from "@wailsio/runtime";
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
@@ -51,8 +51,10 @@ export function Capture(name: string, lines: number): $CancellablePromise<string
  * round-trip from the frontend. A pane that fails to capture (session gone) is
  * simply omitted from the map rather than failing the whole batch.
  */
-export function CaptureMany(names: string[] | null, lines: number): $CancellablePromise<{ [_ in string]?: string } | null> {
-    return $Call.ByID(261382224, names, lines);
+export function CaptureMany(names: string[], lines: number): $CancellablePromise<{ [_ in string]?: string }> {
+    return $Call.ByID(261382224, names, lines).then(($result: any) => {
+        return $$createType0($result);
+    });
 }
 
 /**
@@ -83,3 +85,6 @@ export function SetApp(app: application$0.App | null): $CancellablePromise<void>
 export function Write(name: string, data: string): $CancellablePromise<void> {
     return $Call.ByID(3287491394, name, data);
 }
+
+// Private type creation functions
+const $$createType0 = $Create.Map($Create.Any, $Create.Any);

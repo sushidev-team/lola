@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { render, screen, cleanup } from "@testing-library/svelte";
+import { render, screen, cleanup, fireEvent } from "@testing-library/svelte";
 import ProjectDetail from "./ProjectDetail.svelte";
 import { store, type ProjectInfo } from "$lib/store.svelte";
 import { nav } from "$lib/nav.svelte";
@@ -34,6 +34,7 @@ describe("ProjectDetail", () => {
     store.sessions = [];
     nav.project = "acme";
     nav.scoped = false;
+    nav.closeOverlay();
   });
 
   it("renders the status line, actions and empty live strip for a known project", () => {
@@ -65,6 +66,23 @@ describe("ProjectDetail", () => {
     // Per spec these actions navigate to pickers, so they stay enabled.
     expect(screen.getByText("Start a ticket").closest("button")).not.toBeDisabled();
     expect(screen.getByText("New worktree").closest("button")).not.toBeDisabled();
+  });
+
+  // "Polls" and "Edit project" are two doors into the same overlay now that a
+  // project IS the poll unit — they differ only in the tab they land on.
+  it("opens the one project overlay from both Polls and Edit project", async () => {
+    store.projects = [fakeProject()];
+    render(ProjectDetail);
+
+    await fireEvent.click(screen.getByText("Polls").closest("button")!);
+    expect(nav.overlay).toBe("project");
+    expect(nav.overlayProject).toBe("acme");
+    expect(nav.overlayTab).toBe("filter");
+
+    nav.closeOverlay();
+    await fireEvent.click(screen.getByText("Edit project").closest("button")!);
+    expect(nav.overlay).toBe("project");
+    expect(nav.overlayTab).toBe("repo");
   });
 
   it("falls back gracefully when the project is unknown", () => {

@@ -12,7 +12,6 @@
   import DoctorOverlay from "$lib/views/DoctorOverlay.svelte";
   import SettingsForm from "$lib/views/SettingsForm.svelte";
   import ProjectForm from "$lib/views/ProjectForm.svelte";
-  import PollForm from "$lib/views/PollForm.svelte";
   import Setup from "$lib/views/Setup.svelte";
 
   onMount(() => store.start());
@@ -83,7 +82,5 @@
   <SettingsForm />
 {:else if nav.overlay === "project"}
   <ProjectForm />
-{:else if nav.overlay === "poll"}
-  <PollForm />
 {/if}
 {/if}

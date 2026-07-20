@@ -4,7 +4,9 @@
 // new live-terminal overview.
 
 export type View = "cockpit" | "home" | "detail" | "prpicker" | "ticketpicker";
-export type Overlay = null | "doctor" | "settings" | "project" | "poll" | "setup";
+// There is no separate "poll" overlay any more: a project IS the poll unit, so
+// the project overlay covers repo setup, filter, labels and write-back in tabs.
+export type Overlay = null | "doctor" | "settings" | "project" | "setup";
 export type Lens = "list" | "kanban" | "grid";
 
 class Nav {
@@ -14,8 +16,10 @@ class Nav {
   /** Cockpit is scoped to `project` (vs global) when true. */
   scoped = $state(false);
   overlay = $state<Overlay>(null);
-  /** The project whose form/poll overlay is open. */
+  /** The project whose form overlay is open. */
   overlayProject = $state<string>("");
+  /** Tab the overlay should open on ("" = the overlay's own default). */
+  overlayTab = $state<string>("");
   /** Selected session id (reorder-proof selection). */
   selectedId = $state<string>("");
   /** Sessions-panel lens. */
@@ -47,13 +51,15 @@ class Nav {
     this.view = "ticketpicker";
   }
 
-  openOverlay(o: Overlay, project = "") {
+  openOverlay(o: Overlay, project = "", tab = "") {
     this.overlay = o;
     this.overlayProject = project;
+    this.overlayTab = tab;
   }
   closeOverlay() {
     this.overlay = null;
     this.overlayProject = "";
+    this.overlayTab = "";
   }
 
   select(id: string) {

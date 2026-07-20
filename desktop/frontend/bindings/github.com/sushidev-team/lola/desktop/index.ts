@@ -14,13 +14,13 @@ export {
     TermService
 };
 
-export type {
+export {
     DoctorReportDTO,
     DoctorResultDTO,
+    InheritsDTO,
     LinearOption,
     LinearTeam,
     LinearTeamMeta,
-    PollFormDTO,
     ProjectFormDTO,
     SettingsDTO,
     SetupDTO,

@@ -68,7 +68,9 @@
       label: "Polls",
       desc: "edit the Linear filters that auto-spawn work",
       enabled: true,
-      run: () => nav.openOverlay("poll", nav.project),
+      // Same overlay as "Edit project", deep-linked to its Filter tab — a
+      // project IS the poll unit, so there is only one editor.
+      run: () => nav.openOverlay("project", nav.project, "filter"),
     },
     {
       key: "S",
@@ -80,9 +82,9 @@
     {
       key: "E",
       label: "Edit project",
-      desc: "path, repo, agent and base-branch settings",
+      desc: "repo setup, Linear filter, labels and write-back",
       enabled: true,
-      run: () => nav.openOverlay("project", nav.project),
+      run: () => nav.openOverlay("project", nav.project, "repo"),
     },
   ]);
 </script>

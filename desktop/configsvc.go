@@ -85,6 +85,25 @@ type SettingsDTO struct {
 	CrNotify          bool   `json:"crNotify"`
 	CrSendToAgent     bool   `json:"crSendToAgent"`
 	CrCommentOnLinear bool   `json:"crCommentOnLinear"`
+
+	// Project defaults: the [defaults] counterpart of each inheritable
+	// [[project]] key. A project that does not override the key uses these.
+	BranchPrefix   string   `json:"branchPrefix"`
+	Symlinks       []string `json:"symlinks"`
+	PostCreate     []string `json:"postCreate"`
+	Env            []string `json:"env"` // "KEY=value" lines
+	MatchLabels    []string `json:"matchLabels"`
+	MatchMode      string   `json:"matchMode"`
+	OnSentSetLabel string   `json:"onSentSetLabel"`
+	BlockedLabelID string   `json:"blockedLabelId"`
+	DedupMode      string   `json:"dedupMode"`
+	PrioritySort   []string `json:"prioritySort"`
+
+	// DefaultsTeamID is the team the inheritable Linear label IDs above belong
+	// to, or "" when polling projects span more than one team. Label UUIDs are
+	// team-scoped, so the frontend uses this to decide whether it can offer a
+	// label picker for the [defaults] label keys at all.
+	DefaultsTeamID string `json:"defaultsTeamId"`
 }
 
 func (s *ConfigService) GetSettings() (SettingsDTO, error) {
@@ -115,7 +134,41 @@ func (s *ConfigService) GetSettings() (SettingsDTO, error) {
 		CrNotify:                 cfg.CodeRabbit.Notify,
 		CrSendToAgent:            cfg.CodeRabbit.SendToAgent,
 		CrCommentOnLinear:        cfg.CodeRabbit.CommentOnLinear,
+
+		BranchPrefix:   cfg.Defaults.BranchPrefix,
+		Symlinks:       cfg.Defaults.Symlinks,
+		PostCreate:     cfg.Defaults.PostCreate,
+		Env:            envToLines(cfg.Defaults.Env),
+		MatchLabels:    cfg.Defaults.MatchLabels,
+		MatchMode:      cfg.Defaults.MatchMode,
+		OnSentSetLabel: cfg.Defaults.OnSentSetLabel,
+		BlockedLabelID: cfg.Defaults.BlockedLabelID,
+		DedupMode:      cfg.Defaults.DedupMode,
+		PrioritySort:   cfg.Defaults.PrioritySort,
+		DefaultsTeamID: soleTeamID(cfg),
 	}, nil
+}
+
+// soleTeamID returns the team every polling project shares, or "" when there is
+// no consensus (none polling, or more than one team). The [defaults] Linear
+// label keys only make sense within a single team — see the team guard in
+// config.Validate — so this is what decides whether the settings screen can
+// offer real label pickers rather than raw UUID entry.
+func soleTeamID(cfg *config.Config) string {
+	team := ""
+	for _, p := range cfg.Projects {
+		if !p.Polls() {
+			continue
+		}
+		if team == "" {
+			team = p.TeamID
+			continue
+		}
+		if team != p.TeamID {
+			return ""
+		}
+	}
+	return team
 }
 
 func (s *ConfigService) SaveSettings(dto SettingsDTO) error {
@@ -151,45 +204,170 @@ func (s *ConfigService) SaveSettings(dto SettingsDTO) error {
 	cfg.CodeRabbit.Notify = dto.CrNotify
 	cfg.CodeRabbit.SendToAgent = dto.CrSendToAgent
 	cfg.CodeRabbit.CommentOnLinear = dto.CrCommentOnLinear
+
+	env, err := linesToEnv(dto.Env)
+	if err != nil {
+		return err
+	}
+	cfg.Defaults.BranchPrefix = dto.BranchPrefix
+	cfg.Defaults.Symlinks = nonEmpty(dto.Symlinks)
+	cfg.Defaults.PostCreate = nonEmpty(dto.PostCreate)
+	cfg.Defaults.Env = env
+	cfg.Defaults.MatchLabels = nonEmpty(dto.MatchLabels)
+	cfg.Defaults.MatchMode = dto.MatchMode
+	cfg.Defaults.OnSentSetLabel = dto.OnSentSetLabel
+	cfg.Defaults.BlockedLabelID = dto.BlockedLabelID
+	cfg.Defaults.DedupMode = dto.DedupMode
+	cfg.Defaults.PrioritySort = nonEmpty(dto.PrioritySort)
 	return saveConfig(cfg, path)
 }
 
 // --- project editor ---------------------------------------------------------
 
+// InheritsDTO mirrors config.ProjectInherits: true means the project leaves the
+// key to [defaults], so the form shows the resolved value as a ghost and the
+// key is not written into the project's own table.
+type InheritsDTO struct {
+	Symlinks       bool `json:"symlinks"`
+	PostCreate     bool `json:"postCreate"`
+	Env            bool `json:"env"`
+	MatchLabels    bool `json:"matchLabels"`
+	MatchMode      bool `json:"matchMode"`
+	OnSentSetLabel bool `json:"onSentSetLabel"`
+	BlockedLabelID bool `json:"blockedLabelId"`
+	DedupMode      bool `json:"dedupMode"`
+	PrioritySort   bool `json:"prioritySort"`
+}
+
+// ProjectFormDTO is the whole of one [[project]] — repository setup, Linear
+// polling filter and write-back — because a project IS the poll unit. The
+// values are the RESOLVED ones (see config.ResolveInheritance); Inherits says
+// which of them came from [defaults] rather than the project itself.
 type ProjectFormDTO struct {
+	// Repository / worktree setup.
 	Name          string   `json:"name"`
 	Path          string   `json:"path"`
 	Repo          string   `json:"repo"`
 	DefaultBranch string   `json:"defaultBranch"`
+	BranchPrefix  string   `json:"branchPrefix"`
 	Agent         string   `json:"agent"` // ""=inherit | claude | codex | opencode
 	Symlinks      []string `json:"symlinks"`
 	PostCreate    []string `json:"postCreate"`
 	Env           []string `json:"env"` // "KEY=value" lines
-	IsNew         bool     `json:"isNew"`
+
+	// Linear polling filter.
+	Enabled        bool     `json:"enabled"`
+	TeamID         string   `json:"teamId"`
+	ProjectID      string   `json:"projectId"`
+	CycleMode      string   `json:"cycleMode"`
+	CycleID        string   `json:"cycleId"`
+	StateIDs       []string `json:"stateIds"`
+	MatchLabels    []string `json:"matchLabels"`
+	MatchMode      string   `json:"matchMode"`
+	AssigneeMode   string   `json:"assigneeMode"`
+	AssigneeUserID string   `json:"assigneeUserId"`
+	ConcurrencyCap int      `json:"concurrencyCap"`
+	DedupMode      string   `json:"dedupMode"`
+	OnSentSetLabel string   `json:"onSentSetLabel"`
+
+	// Linear write-back.
+	OnSpawnStateID   string `json:"onSpawnStateId"`
+	OnPRStateID      string `json:"onPrStateId"`
+	OnMergedStateID  string `json:"onMergedStateId"`
+	BlockedLabelID   string `json:"blockedLabelId"`
+	CommentOnSpawn   bool   `json:"commentOnSpawn"`
+	CommentOnPR      bool   `json:"commentOnPr"`
+	CommentOnMerged  bool   `json:"commentOnMerged"`
+	CommentOnBlocked bool   `json:"commentOnBlocked"`
+	PRRequiresChecks bool   `json:"prRequiresChecks"`
+
+	Inherits InheritsDTO `json:"inherits"`
+	IsNew    bool        `json:"isNew"`
 }
 
+// GetProject returns the named project's full form state. An empty name is a
+// new project: it starts inheriting everything it can, so a first project picks
+// up whatever shared setup [defaults] already carries.
 func (s *ConfigService) GetProject(name string) (ProjectFormDTO, error) {
-	if name == "" {
-		return ProjectFormDTO{IsNew: true}, nil
-	}
 	cfg, _, err := loadConfig()
 	if err != nil {
 		return ProjectFormDTO{}, err
+	}
+	if name == "" {
+		blank := config.Project{
+			DefaultBranch: config.DefaultBranchName,
+			CycleMode:     "none",
+			AssigneeMode:  "anyone",
+			Inherits: config.ProjectInherits{
+				Symlinks: true, PostCreate: true, Env: true,
+				MatchLabels: true, MatchMode: true, OnSentSetLabel: true,
+				BlockedLabelID: true, DedupMode: true, PrioritySort: true,
+			},
+		}
+		// Resolve against a scratch config so the new project's ghosts show the
+		// [defaults] values the real project will inherit once saved.
+		scratch := *cfg
+		scratch.Projects = []config.Project{blank}
+		scratch.ResolveInheritance()
+		dto := projectDTO(&scratch.Projects[0])
+		dto.IsNew = true
+		return dto, nil
 	}
 	p := cfg.ProjectByName(name)
 	if p == nil {
 		return ProjectFormDTO{}, errors.New("no such project: " + name)
 	}
+	return projectDTO(p), nil
+}
+
+func projectDTO(p *config.Project) ProjectFormDTO {
 	return ProjectFormDTO{
 		Name:          p.Name,
 		Path:          p.Path,
 		Repo:          p.Repo,
 		DefaultBranch: p.DefaultBranch,
+		BranchPrefix:  p.BranchPrefix,
 		Agent:         p.Agent,
 		Symlinks:      p.Symlinks,
 		PostCreate:    p.PostCreate,
 		Env:           envToLines(p.Env),
-	}, nil
+
+		Enabled:        p.Enabled,
+		TeamID:         p.TeamID,
+		ProjectID:      p.ProjectID,
+		CycleMode:      p.CycleMode,
+		CycleID:        p.CycleID,
+		StateIDs:       p.StateIDs,
+		MatchLabels:    p.MatchLabels,
+		MatchMode:      p.MatchMode,
+		AssigneeMode:   p.AssigneeMode,
+		AssigneeUserID: p.AssigneeUserID,
+		ConcurrencyCap: p.ConcurrencyCap,
+		DedupMode:      p.DedupMode,
+		OnSentSetLabel: p.OnSentSetLabel,
+
+		OnSpawnStateID:   p.OnSpawnStateID,
+		OnPRStateID:      p.OnPRStateID,
+		OnMergedStateID:  p.OnMergedStateID,
+		BlockedLabelID:   p.BlockedLabelID,
+		CommentOnSpawn:   p.CommentOnSpawn,
+		CommentOnPR:      p.CommentOnPR,
+		CommentOnMerged:  p.CommentOnMerged,
+		CommentOnBlocked: p.CommentOnBlocked,
+		PRRequiresChecks: p.PRRequiresChecks,
+
+		Inherits: InheritsDTO{
+			Symlinks:       p.Inherits.Symlinks,
+			PostCreate:     p.Inherits.PostCreate,
+			Env:            p.Inherits.Env,
+			MatchLabels:    p.Inherits.MatchLabels,
+			MatchMode:      p.Inherits.MatchMode,
+			OnSentSetLabel: p.Inherits.OnSentSetLabel,
+			BlockedLabelID: p.Inherits.BlockedLabelID,
+			DedupMode:      p.Inherits.DedupMode,
+			PrioritySort:   p.Inherits.PrioritySort,
+		},
+	}
 }
 
 func (s *ConfigService) SaveProject(dto ProjectFormDTO) error {
@@ -209,13 +387,53 @@ func (s *ConfigService) SaveProject(dto ProjectFormDTO) error {
 		cfg.Projects = append(cfg.Projects, config.Project{Name: dto.Name})
 		p = &cfg.Projects[len(cfg.Projects)-1]
 	}
+	prioritySort := p.PrioritySort // not exposed by the form; preserved as-is
+
 	p.Path = dto.Path
 	p.Repo = dto.Repo
 	p.DefaultBranch = dto.DefaultBranch
+	p.BranchPrefix = dto.BranchPrefix
 	p.Agent = dto.Agent
 	p.Symlinks = nonEmpty(dto.Symlinks)
 	p.PostCreate = nonEmpty(dto.PostCreate)
 	p.Env = env
+
+	p.Enabled = dto.Enabled
+	p.TeamID = dto.TeamID
+	p.ProjectID = dto.ProjectID
+	p.CycleMode = dto.CycleMode
+	p.CycleID = dto.CycleID
+	p.StateIDs = nonEmpty(dto.StateIDs)
+	p.MatchLabels = nonEmpty(dto.MatchLabels)
+	p.MatchMode = dto.MatchMode
+	p.AssigneeMode = dto.AssigneeMode
+	p.AssigneeUserID = dto.AssigneeUserID
+	p.ConcurrencyCap = dto.ConcurrencyCap
+	p.DedupMode = dto.DedupMode
+	p.OnSentSetLabel = dto.OnSentSetLabel
+	p.PrioritySort = prioritySort
+
+	p.OnSpawnStateID = dto.OnSpawnStateID
+	p.OnPRStateID = dto.OnPRStateID
+	p.OnMergedStateID = dto.OnMergedStateID
+	p.BlockedLabelID = dto.BlockedLabelID
+	p.CommentOnSpawn = dto.CommentOnSpawn
+	p.CommentOnPR = dto.CommentOnPR
+	p.CommentOnMerged = dto.CommentOnMerged
+	p.CommentOnBlocked = dto.CommentOnBlocked
+	p.PRRequiresChecks = dto.PRRequiresChecks
+
+	p.Inherits = config.ProjectInherits{
+		Symlinks:       dto.Inherits.Symlinks,
+		PostCreate:     dto.Inherits.PostCreate,
+		Env:            dto.Inherits.Env,
+		MatchLabels:    dto.Inherits.MatchLabels,
+		MatchMode:      dto.Inherits.MatchMode,
+		OnSentSetLabel: dto.Inherits.OnSentSetLabel,
+		BlockedLabelID: dto.Inherits.BlockedLabelID,
+		DedupMode:      dto.Inherits.DedupMode,
+		PrioritySort:   dto.Inherits.PrioritySort,
+	}
 	return saveConfig(cfg, path)
 }
 
@@ -231,105 +449,6 @@ func (s *ConfigService) RemoveProject(name string) error {
 		}
 	}
 	cfg.Projects = out
-	return saveConfig(cfg, path)
-}
-
-// --- poll editor (raw fields; Linear IDs entered directly) ------------------
-
-type PollFormDTO struct {
-	Project        string   `json:"project"`
-	Enabled        bool     `json:"enabled"`
-	TeamID         string   `json:"teamId"`
-	ProjectID      string   `json:"projectId"`
-	CycleMode      string   `json:"cycleMode"`
-	CycleID        string   `json:"cycleId"`
-	StateIDs       []string `json:"stateIds"`
-	MatchLabels    []string `json:"matchLabels"`
-	MatchMode      string   `json:"matchMode"`
-	AssigneeMode   string   `json:"assigneeMode"`
-	AssigneeUserID string   `json:"assigneeUserId"`
-	ConcurrencyCap int      `json:"concurrencyCap"`
-	DedupMode      string   `json:"dedupMode"`
-	OnSentSetLabel string   `json:"onSentSetLabel"`
-
-	OnSpawnStateID   string `json:"onSpawnStateId"`
-	OnPRStateID      string `json:"onPrStateId"`
-	OnMergedStateID  string `json:"onMergedStateId"`
-	BlockedLabelID   string `json:"blockedLabelId"`
-	CommentOnSpawn   bool   `json:"commentOnSpawn"`
-	CommentOnPR      bool   `json:"commentOnPr"`
-	CommentOnMerged  bool   `json:"commentOnMerged"`
-	CommentOnBlocked bool   `json:"commentOnBlocked"`
-	PRRequiresChecks bool   `json:"prRequiresChecks"`
-}
-
-func (s *ConfigService) GetPoll(project string) (PollFormDTO, error) {
-	cfg, _, err := loadConfig()
-	if err != nil {
-		return PollFormDTO{}, err
-	}
-	p := cfg.ProjectByName(project)
-	if p == nil {
-		return PollFormDTO{Project: project}, nil
-	}
-	return PollFormDTO{
-		Project:          p.Name,
-		Enabled:          p.Enabled,
-		TeamID:           p.TeamID,
-		ProjectID:        p.ProjectID,
-		CycleMode:        p.CycleMode,
-		CycleID:          p.CycleID,
-		StateIDs:         p.StateIDs,
-		MatchLabels:      p.MatchLabels,
-		MatchMode:        p.MatchMode,
-		AssigneeMode:     p.AssigneeMode,
-		AssigneeUserID:   p.AssigneeUserID,
-		ConcurrencyCap:   p.ConcurrencyCap,
-		DedupMode:        p.DedupMode,
-		OnSentSetLabel:   p.OnSentSetLabel,
-		OnSpawnStateID:   p.OnSpawnStateID,
-		OnPRStateID:      p.OnPRStateID,
-		OnMergedStateID:  p.OnMergedStateID,
-		BlockedLabelID:   p.BlockedLabelID,
-		CommentOnSpawn:   p.CommentOnSpawn,
-		CommentOnPR:      p.CommentOnPR,
-		CommentOnMerged:  p.CommentOnMerged,
-		CommentOnBlocked: p.CommentOnBlocked,
-		PRRequiresChecks: p.PRRequiresChecks,
-	}, nil
-}
-
-func (s *ConfigService) SavePoll(dto PollFormDTO) error {
-	cfg, path, err := loadConfig()
-	if err != nil {
-		return err
-	}
-	p := cfg.ProjectByName(dto.Project)
-	if p == nil {
-		return errors.New("no such project: " + dto.Project)
-	}
-	p.Enabled = dto.Enabled
-	p.TeamID = dto.TeamID
-	p.ProjectID = dto.ProjectID
-	p.CycleMode = dto.CycleMode
-	p.CycleID = dto.CycleID
-	p.StateIDs = nonEmpty(dto.StateIDs)
-	p.MatchLabels = nonEmpty(dto.MatchLabels)
-	p.MatchMode = dto.MatchMode
-	p.AssigneeMode = dto.AssigneeMode
-	p.AssigneeUserID = dto.AssigneeUserID
-	p.ConcurrencyCap = dto.ConcurrencyCap
-	p.DedupMode = dto.DedupMode
-	p.OnSentSetLabel = dto.OnSentSetLabel
-	p.OnSpawnStateID = dto.OnSpawnStateID
-	p.OnPRStateID = dto.OnPRStateID
-	p.OnMergedStateID = dto.OnMergedStateID
-	p.BlockedLabelID = dto.BlockedLabelID
-	p.CommentOnSpawn = dto.CommentOnSpawn
-	p.CommentOnPR = dto.CommentOnPR
-	p.CommentOnMerged = dto.CommentOnMerged
-	p.CommentOnBlocked = dto.CommentOnBlocked
-	p.PRRequiresChecks = dto.PRRequiresChecks
 	return saveConfig(cfg, path)
 }
 

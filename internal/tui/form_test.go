@@ -34,10 +34,9 @@ func newNativeTestForm(t *testing.T, projects []config.Project) (*formModel, str
 	return f, path
 }
 
-// newProjectPollForm is newNativeTestForm preloaded with one of the saved
-// projects — the only way the form is reached now that a project IS the poll
-// unit (rail 'n' / detail 'polls' both pass the project in).
-func newProjectPollForm(t *testing.T, projects []config.Project, name string) (*formModel, string) {
+// newFormOn is newNativeTestForm preloaded with one of the saved projects —
+// how every edit entry point reaches the form now that a project IS the unit.
+func newFormOn(t *testing.T, projects []config.Project, name string) (*formModel, string) {
 	t.Helper()
 	f, path := newNativeTestForm(t, projects)
 	pr := f.cfg.ProjectByName(name)
@@ -48,10 +47,10 @@ func newProjectPollForm(t *testing.T, projects []config.Project, name string) (*
 	return g, path
 }
 
-// A form opened on an existing project persists its polling config onto that
-// project — there is no project picker to disambiguate.
+// A form opened on an existing project persists onto that project — there is
+// no project picker to disambiguate.
 func TestFormSavesPollingOntoItsProject(t *testing.T) {
-	f, path := newProjectPollForm(t, []config.Project{
+	f, path := newFormOn(t, []config.Project{
 		{Name: "web", Path: "/tmp/web", Repo: "acme/web"},
 	}, "web")
 
@@ -85,10 +84,10 @@ func TestFormSavesPollingOntoItsProject(t *testing.T) {
 // as the trigger fields: On PR → In Review via the state picker, and the
 // pr_requires_checks gate toggled in place — then persisted to config.
 func TestFormWriteBackPickersAndToggles(t *testing.T) {
-	f, path := newNativeTestForm(t, []config.Project{
+	f, path := newFormOn(t, []config.Project{
 		{Name: "web", Path: "/tmp/web", Repo: "acme/web"},
-	})
-	f.poll.Name, f.poll.TeamID = "web", "team-1"
+	}, "web")
+	f.poll.TeamID = "team-1"
 	f.meta = &teamMeta{
 		States: []linear.State{
 			{ID: "st-prog", Name: "In Progress", Type: "started"},
@@ -98,7 +97,8 @@ func TestFormWriteBackPickersAndToggles(t *testing.T) {
 		Labels: []linear.Label{{ID: "lbl-blocked", Name: "blocked"}},
 	}
 
-	// Write-back fields are visible once a team is set.
+	// Write-back lives on its own tab, visible once a team is set.
+	f.tab = tabWriteback
 	for _, fd := range []fieldID{fOnSpawnState, fOnPRState, fCommentOnPR, fOnMergedState, fBlockedLabel} {
 		if !slices.Contains(f.fields(), fd) {
 			t.Fatalf("write-back field %d must be visible", fd)
@@ -156,8 +156,8 @@ func TestFormWriteBackPickersAndToggles(t *testing.T) {
 
 // A "(none)" pick clears a configured write-back state transition.
 func TestFormWriteBackStateClearToNone(t *testing.T) {
-	f, _ := newNativeTestForm(t, []config.Project{{Name: "web", Path: "/tmp/web", Repo: "acme/web"}})
-	f.poll.Name, f.poll.TeamID = "web", "team-1"
+	f, _ := newFormOn(t, []config.Project{{Name: "web", Path: "/tmp/web", Repo: "acme/web"}}, "web")
+	f.poll.TeamID = "team-1"
 	f.poll.OnMergedStateID = "st-done"
 	f.meta = &teamMeta{States: []linear.State{{ID: "st-done", Name: "Done", Type: "completed"}}}
 
@@ -189,7 +189,7 @@ func TestFormSaveRequiresProject(t *testing.T) {
 // An unset repo renders the daemon-owned [[project]] fallback hint rather than
 // reading as a hard requirement.
 func TestFormRepoHintShowsProjectFallback(t *testing.T) {
-	f, _ := newProjectPollForm(t, []config.Project{
+	f, _ := newFormOn(t, []config.Project{
 		{Name: "web", Path: "/tmp/web"}, // no repo
 	}, "web")
 
@@ -201,7 +201,7 @@ func TestFormRepoHintShowsProjectFallback(t *testing.T) {
 // The name is the [[project]] config key: save() targets origName, so typing
 // over it on an existing project must be inert rather than silently no-op.
 func TestFormNameReadOnlyOnExistingProject(t *testing.T) {
-	f, _ := newProjectPollForm(t, []config.Project{
+	f, _ := newFormOn(t, []config.Project{
 		{Name: "web", Path: "/tmp/web", Repo: "acme/web"},
 	}, "web")
 
@@ -212,5 +212,169 @@ func TestFormNameReadOnlyOnExistingProject(t *testing.T) {
 	f.key(keyMsg("x"))
 	if f.poll.Name != "web" {
 		t.Errorf("Name = %q after typing, want web (read-only)", f.poll.Name)
+	}
+}
+
+// The form CREATES a project end to end: on an empty config it takes a name and
+// a path and writes a new [[project]]. This is the case that was impossible
+// before the merge — the form could only attach polling to an entry that
+// already existed, and the only way to create one lived on another screen.
+func TestFormCreatesProjectFromEmptyConfig(t *testing.T) {
+	f, path := newNativeTestForm(t, nil) // no projects at all
+
+	if !f.isNew {
+		t.Fatal("a form opened on nothing must be new")
+	}
+	f.poll.Name = "web"
+	f.poll.Path = "/tmp/web"
+
+	if _, ev := f.save(); ev != formSaved {
+		t.Fatalf("save failed: %v", f.errs)
+	}
+	got, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := got.ProjectByName("web")
+	if p == nil {
+		t.Fatal("project was not created")
+	}
+	if p.Path != "/tmp/web" {
+		t.Errorf("path = %q, want /tmp/web", p.Path)
+	}
+	// Not polling: no team was picked, so it is a plain worktree project.
+	if p.Polls() {
+		t.Error("a project with no team must not be marked as polling")
+	}
+}
+
+// A path is required to create a project — Validate rejects one without it, so
+// the form must say so rather than writing an entry that can never spawn.
+func TestFormCreateRequiresPath(t *testing.T) {
+	f, _ := newNativeTestForm(t, nil)
+	f.poll.Name = "web" // path deliberately left unset
+
+	if _, ev := f.save(); ev != formNone {
+		t.Fatal("save must fail without a path")
+	}
+	if !slices.ContainsFunc(f.errs, func(e string) bool { return strings.Contains(e, "path is required") }) {
+		t.Errorf("errs = %v, want a path requirement", f.errs)
+	}
+}
+
+// A new project starts out inheriting the shared [defaults] setup, so a first
+// project picks up whatever is already configured globally rather than starting
+// blank and silently diverging.
+func TestFormNewProjectInheritsDefaults(t *testing.T) {
+	t.Setenv("LOLA_HOME", t.TempDir())
+	path, err := config.DefaultPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{
+		Defaults: config.Defaults{
+			PollInterval: time.Minute, ConcurrencyCap: 1, GlobalCap: 4,
+			Symlinks:    []string{".env"},
+			PostCreate:  []string{"composer install"},
+			MatchLabels: []string{"label-agent"},
+			MatchMode:   "all",
+		},
+	}
+	if err := cfg.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, _ := newFormModel(loaded, nil)
+
+	if !f.inherits(fSymlinks) || !f.inherits(fLabels) || !f.inherits(fMatchMode) {
+		t.Errorf("a new project must start inheriting, got %+v", f.poll.Inherits)
+	}
+	if !slices.Equal(f.symlinks, []string{".env"}) {
+		t.Errorf("symlinks ghost = %v, want the [defaults] value", f.symlinks)
+	}
+	if !slices.Equal(f.poll.MatchLabels, []string{"label-agent"}) || f.poll.MatchMode != "all" {
+		t.Errorf("label ghosts = %v / %q, want the [defaults] values", f.poll.MatchLabels, f.poll.MatchMode)
+	}
+
+	// Saving keeps them inherited: the keys must not be frozen onto the project.
+	f.poll.Name, f.poll.Path = "web", "/tmp/web"
+	if _, ev := f.save(); ev != formSaved {
+		t.Fatalf("save failed: %v", f.errs)
+	}
+	again, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := again.ProjectByName("web")
+	if p == nil {
+		t.Fatal("project not created")
+	}
+	if !p.Inherits.Symlinks || !p.Inherits.MatchLabels {
+		t.Errorf("inherited keys must stay inherited after save, got %+v", p.Inherits)
+	}
+	// And a later change to [defaults] still reaches it.
+	again.Defaults.Symlinks = []string{".env", ".env.local"}
+	if err := again.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	final, _ := config.Load(path)
+	if got := final.ProjectByName("web").Symlinks; !slices.Equal(got, []string{".env", ".env.local"}) {
+		t.Errorf("symlinks = %v, want to track the changed default", got)
+	}
+}
+
+// ctrl+o promotes an inherited field to a project-level override, and toggling
+// back refills it from [defaults] so the ghost shows what will apply.
+func TestFormInheritToggle(t *testing.T) {
+	t.Setenv("LOLA_HOME", t.TempDir())
+	path, _ := config.DefaultPath()
+	cfg := &config.Config{
+		Defaults: config.Defaults{
+			PollInterval: time.Minute, ConcurrencyCap: 1, GlobalCap: 4,
+			Symlinks: []string{".env"},
+		},
+		Projects: []config.Project{{Name: "web", Path: "/tmp/web"}},
+	}
+	if err := cfg.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	loaded, _ := config.Load(path)
+	f, _ := newFormModel(loaded, loaded.ProjectByName("web"))
+
+	if !f.inherits(fSymlinks) {
+		t.Fatal("symlinks must start inherited (the key is absent from the project)")
+	}
+	f.tab, f.cursor = tabRepo, slices.Index(f.fields(), fSymlinks)
+	f.key(keyMsg("ctrl+o"))
+	if f.inherits(fSymlinks) {
+		t.Error("ctrl+o must promote an inherited field to an override")
+	}
+	f.symlinks = []string{"vendor-cache"}
+	f.key(keyMsg("ctrl+o"))
+	if !f.inherits(fSymlinks) {
+		t.Error("ctrl+o must revert an override back to inherit")
+	}
+	if !slices.Equal(f.symlinks, []string{".env"}) {
+		t.Errorf("reverting must refill from [defaults], got %v", f.symlinks)
+	}
+}
+
+// Opening a list field for editing IS overriding it — an inherited value the
+// user starts typing into is no longer inherited.
+func TestFormEditingListPromotesToOverride(t *testing.T) {
+	f, _ := newFormOn(t, []config.Project{{Name: "web", Path: "/tmp/web"}}, "web")
+	f.tab, f.cursor = tabRepo, slices.Index(f.fields(), fPostCreate)
+	if !f.inherits(fPostCreate) {
+		t.Fatal("post_create must start inherited")
+	}
+	f.interact(fPostCreate)
+	if f.inherits(fPostCreate) {
+		t.Error("opening the field for editing must promote it to an override")
+	}
+	if !f.editing {
+		t.Error("the list field should be open for line editing")
 	}
 }

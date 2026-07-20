@@ -128,15 +128,20 @@ func TestHomeAddProject(t *testing.T) {
 	}
 	m.Update(keyMsg("enter"))
 
+	// Nothing is written yet: a project needs a path to validate, so the name
+	// prompt opens the form rather than persisting an invalid stub.
 	reloaded, err := config.Load(m.cfgPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reloaded.ProjectByName("ponzu") == nil {
-		t.Error("new project not persisted to config")
+	if reloaded.ProjectByName("ponzu") != nil {
+		t.Error("a bare project must not be persisted before the form saves")
 	}
-	if m.projForm == nil {
-		t.Error("project editor should open after add")
+	if m.form == nil {
+		t.Fatal("project form should open after add")
+	}
+	if !m.form.isNew || m.form.poll.Name != "ponzu" {
+		t.Errorf("form must be new and seeded with the typed name, got isNew=%v name=%q", m.form.isNew, m.form.poll.Name)
 	}
 }
 

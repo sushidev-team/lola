@@ -15,7 +15,7 @@
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
-import { Call as $Call, CancellablePromise as $CancellablePromise } from "@wailsio/runtime";
+import { Call as $Call, CancellablePromise as $CancellablePromise, Create as $Create } from "@wailsio/runtime";
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
@@ -40,7 +40,9 @@ export function Answer(session: string, text: string): $CancellablePromise<void>
  * CodeRabbit forces the PR-comment watch for one session now.
  */
 export function CodeRabbit(session: string): $CancellablePromise<protocol$0.CodeRabbitData> {
-    return $Call.ByID(2376086832, session);
+    return $Call.ByID(2376086832, session).then(($result: any) => {
+        return $$createType0($result);
+    });
 }
 
 export function Disable(poll: string): $CancellablePromise<void> {
@@ -58,35 +60,45 @@ export function Enable(poll: string): $CancellablePromise<void> {
  * Kill tears a session down. A dirty worktree is kept unless force is set.
  */
 export function Kill(session: string, force: boolean): $CancellablePromise<protocol$0.KillData> {
-    return $Call.ByID(699745421, session, force);
+    return $Call.ByID(699745421, session, force).then(($result: any) => {
+        return $$createType1($result);
+    });
 }
 
 /**
  * Open checks out a branch or PR of a project into a throwaway shell worktree.
  */
 export function Open(project: string, ref: string): $CancellablePromise<protocol$0.OpenData> {
-    return $Call.ByID(580622853, project, ref);
+    return $Call.ByID(580622853, project, ref).then(($result: any) => {
+        return $$createType2($result);
+    });
 }
 
 /**
  * OpenManual starts a new branch off a base as an agent or a plain shell.
  */
 export function OpenManual(a: protocol$0.OpenManualArgs): $CancellablePromise<protocol$0.OpenData> {
-    return $Call.ByID(1277103427, a);
+    return $Call.ByID(1277103427, a).then(($result: any) => {
+        return $$createType2($result);
+    });
 }
 
 /**
  * OpenPR opens a PR head branch as a tracking worktree + agent (forks refused).
  */
 export function OpenPR(a: protocol$0.OpenPrArgs): $CancellablePromise<protocol$0.OpenData> {
-    return $Call.ByID(4194861095, a);
+    return $Call.ByID(4194861095, a).then(($result: any) => {
+        return $$createType2($result);
+    });
 }
 
 /**
  * OpenTicket starts a Linear issue on demand (deduped like a poll dispatch).
  */
 export function OpenTicket(a: protocol$0.OpenTicketArgs): $CancellablePromise<protocol$0.OpenData> {
-    return $Call.ByID(2410107461, a);
+    return $Call.ByID(2410107461, a).then(($result: any) => {
+        return $$createType2($result);
+    });
 }
 
 /**
@@ -100,7 +112,9 @@ export function OpenURL(url: string): $CancellablePromise<void> {
  * PRs lists a project's open pull requests (short-TTL cache; refresh bypasses it).
  */
 export function PRs(project: string, refresh: boolean): $CancellablePromise<protocol$0.PrsData> {
-    return $Call.ByID(2669759928, project, refresh);
+    return $Call.ByID(2669759928, project, refresh).then(($result: any) => {
+        return $$createType3($result);
+    });
 }
 
 /**
@@ -108,21 +122,27 @@ export function PRs(project: string, refresh: boolean): $CancellablePromise<prot
  * lines bounds the trailing rows captured (0 → the daemon default).
  */
 export function Pane(session: string, lines: number): $CancellablePromise<protocol$0.PaneData> {
-    return $Call.ByID(2291076911, session, lines);
+    return $Call.ByID(2291076911, session, lines).then(($result: any) => {
+        return $$createType4($result);
+    });
 }
 
 /**
  * PollOnce runs one tick synchronously; dryRun performs zero side effects.
  */
 export function PollOnce(poll: string, dryRun: boolean): $CancellablePromise<protocol$0.PollOnceData> {
-    return $Call.ByID(3079472957, poll, dryRun);
+    return $Call.ByID(3079472957, poll, dryRun).then(($result: any) => {
+        return $$createType5($result);
+    });
 }
 
 /**
  * Projects returns the configured projects with live rollups.
  */
 export function Projects(): $CancellablePromise<protocol$0.ProjectsData> {
-    return $Call.ByID(2895050739);
+    return $Call.ByID(2895050739).then(($result: any) => {
+        return $$createType6($result);
+    });
 }
 
 /**
@@ -143,21 +163,27 @@ export function RestartDaemon(): $CancellablePromise<void> {
  * Review forces a CodeRabbit QA pass for one session now.
  */
 export function Review(session: string): $CancellablePromise<protocol$0.ReviewData> {
-    return $Call.ByID(4119390853, session);
+    return $Call.ByID(4119390853, session).then(($result: any) => {
+        return $$createType7($result);
+    });
 }
 
 /**
  * Revive relaunches a dead-pane session on its surviving worktree.
  */
 export function Revive(session: string): $CancellablePromise<protocol$0.ReviveData> {
-    return $Call.ByID(325633556, session);
+    return $Call.ByID(325633556, session).then(($result: any) => {
+        return $$createType8($result);
+    });
 }
 
 /**
  * Sessions returns the observer's session snapshot plus the activity feed.
  */
 export function Sessions(): $CancellablePromise<protocol$0.SessionsData> {
-    return $Call.ByID(545066424);
+    return $Call.ByID(545066424).then(($result: any) => {
+        return $$createType9($result);
+    });
 }
 
 /**
@@ -173,7 +199,9 @@ export function StartDaemon(): $CancellablePromise<void> {
  * Status returns runtime + Linear health and per-poll state.
  */
 export function Status(): $CancellablePromise<protocol$0.StatusData> {
-    return $Call.ByID(960169243);
+    return $Call.ByID(960169243).then(($result: any) => {
+        return $$createType10($result);
+    });
 }
 
 /**
@@ -188,5 +216,21 @@ export function StopDaemon(): $CancellablePromise<void> {
  * Tickets browses a project's Linear issues. scope is "mine" (default) or "team".
  */
 export function Tickets(project: string, scope: string): $CancellablePromise<protocol$0.TicketsData> {
-    return $Call.ByID(790605014, project, scope);
+    return $Call.ByID(790605014, project, scope).then(($result: any) => {
+        return $$createType11($result);
+    });
 }
+
+// Private type creation functions
+const $$createType0 = protocol$0.CodeRabbitData.createFrom;
+const $$createType1 = protocol$0.KillData.createFrom;
+const $$createType2 = protocol$0.OpenData.createFrom;
+const $$createType3 = protocol$0.PrsData.createFrom;
+const $$createType4 = protocol$0.PaneData.createFrom;
+const $$createType5 = protocol$0.PollOnceData.createFrom;
+const $$createType6 = protocol$0.ProjectsData.createFrom;
+const $$createType7 = protocol$0.ReviewData.createFrom;
+const $$createType8 = protocol$0.ReviveData.createFrom;
+const $$createType9 = protocol$0.SessionsData.createFrom;
+const $$createType10 = protocol$0.StatusData.createFrom;
+const $$createType11 = protocol$0.TicketsData.createFrom;

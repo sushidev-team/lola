@@ -16,7 +16,7 @@
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
-import { Call as $Call, CancellablePromise as $CancellablePromise } from "@wailsio/runtime";
+import { Call as $Call, CancellablePromise as $CancellablePromise, Create as $Create } from "@wailsio/runtime";
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
@@ -30,24 +30,25 @@ export function ConfigExists(): $CancellablePromise<boolean> {
     return $Call.ByID(1455498937);
 }
 
-export function GetPoll(project: string): $CancellablePromise<$models.PollFormDTO> {
-    return $Call.ByID(3340962240, project);
-}
-
+/**
+ * GetProject returns the named project's full form state. An empty name is a
+ * new project: it starts inheriting everything it can, so a first project picks
+ * up whatever shared setup [defaults] already carries.
+ */
 export function GetProject(name: string): $CancellablePromise<$models.ProjectFormDTO> {
-    return $Call.ByID(3485741446, name);
+    return $Call.ByID(3485741446, name).then(($result: any) => {
+        return $$createType0($result);
+    });
 }
 
 export function GetSettings(): $CancellablePromise<$models.SettingsDTO> {
-    return $Call.ByID(2761787168);
+    return $Call.ByID(2761787168).then(($result: any) => {
+        return $$createType1($result);
+    });
 }
 
 export function RemoveProject(name: string): $CancellablePromise<void> {
     return $Call.ByID(581203932, name);
-}
-
-export function SavePoll(dto: $models.PollFormDTO): $CancellablePromise<void> {
-    return $Call.ByID(2251699215, dto);
 }
 
 export function SaveProject(dto: $models.ProjectFormDTO): $CancellablePromise<void> {
@@ -64,7 +65,9 @@ export function SaveSettings(dto: $models.SettingsDTO): $CancellablePromise<void
  * project, and sets the caps/interval. The key itself is never written to config.
  */
 export function Setup(dto: $models.SetupDTO): $CancellablePromise<$models.SetupResultDTO> {
-    return $Call.ByID(3057086516, dto);
+    return $Call.ByID(3057086516, dto).then(($result: any) => {
+        return $$createType2($result);
+    });
 }
 
 /**
@@ -74,3 +77,8 @@ export function Setup(dto: $models.SetupDTO): $CancellablePromise<$models.SetupR
 export function ValidateLinearKey(key: string): $CancellablePromise<void> {
     return $Call.ByID(2105802151, key);
 }
+
+// Private type creation functions
+const $$createType0 = $models.ProjectFormDTO.createFrom;
+const $$createType1 = $models.SettingsDTO.createFrom;
+const $$createType2 = $models.SetupResultDTO.createFrom;
