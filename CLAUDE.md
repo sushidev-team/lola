@@ -286,6 +286,20 @@ distinct binary from the v2 `wails`. See `desktop/README.md`.
 - Fonts: the terminals + mono UI use bundled **JetBrains Mono**
   (`@fontsource/jetbrains-mono`, imported in `main.ts`); xterm re-fits on
   `document.fonts.ready` so cell metrics match once it loads.
+- **App icon is icns-only — do NOT re-add `CFBundleIconName` / `Assets.car`.**
+  On macOS 26 (Tahoe) the Dock prefers the Liquid Glass `Assets.car` icon
+  whenever `CFBundleIconName` is set, and Wails' generated `Assets.car` drops
+  the art into Apple's inset icon-grid ([wails#4163](https://github.com/wailsapp/wails/issues/4163)),
+  so the tile floats visibly smaller than neighboring icons. We deliberately
+  ship **only** a full-bleed `icons.icns` (Tahoe masks it to the system radius
+  and it fills the Dock slot): `build/Taskfile.yml`'s `generate:icons` omits
+  `-iconcomposerinput`/`-macassetdir`, `build/darwin/make-icns.sh` rebuilds the
+  icns from `darwin/appicon-rounded.png` with `sips`+`iconutil` (full-bleed
+  squircle, no Wails "Big Sur tray"), and `CFBundleIconName` is stripped from
+  both `Info.plist`s. `build/appicon.svg` is the canonical master (the figure
+  is placed to fill the tile; the viewBox bounds the overflow). The unused
+  `build/appicon.icon/` Icon Composer source is kept only in case Liquid Glass
+  is revisited — re-enabling it reintroduces the float.
 
 ## Reference docs
 
