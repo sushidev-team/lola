@@ -7,7 +7,7 @@
   const html = $derived(ansiToHtml(text));
 </script>
 
-<div class="term-snap h-full w-full overflow-hidden bg-canvas" style="--snap-scale:{scale}">
+<div class="term-snap h-full w-full overflow-hidden" style="--snap-scale:{scale}">
   {#if text}
     <pre
       class="m-0 whitespace-pre leading-[1.2] text-ink antialiased"

@@ -43,15 +43,16 @@
       fontWeight: 400,
       fontWeightBold: 700,
       // 1.0 keeps cell heights on whole pixels; letterSpacing 0 keeps columns
-      // pixel-aligned; allowTransparency:false so glyph edges blend onto the
-      // opaque bg instead of to transparent (which renders text abnormally thin).
+      // pixel-aligned. allowTransparency lets the panel background show through
+      // (a transparent theme background) so the terminal blends into lola rather
+      // than sitting on its own dark fill.
       lineHeight: 1.0,
       letterSpacing: 0,
-      allowTransparency: false,
+      allowTransparency: true,
       cursorBlink: interactive,
       disableStdin: !interactive,
       theme: {
-        background: "#0e1420",
+        background: "rgba(0, 0, 0, 0)",
         foreground: "#c3cbd6",
         cursor: "#57c7d6",
         selectionBackground: "#1b2634",
