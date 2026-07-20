@@ -85,6 +85,18 @@ func (d *Daemon) handle(ctx context.Context, req protocol.Request) protocol.Resp
 			return protocol.Response{OK: false, Error: err.Error()}
 		}
 		return protocol.Response{OK: true}
+	case "renameProject":
+		data, err := d.handleRenameProject(ctx, req.Args)
+		if err != nil {
+			// Blockers ride along with the error so a client can list the live
+			// sessions instead of just repeating the message.
+			resp := protocol.Response{OK: false, Error: err.Error()}
+			if raw, mErr := json.Marshal(data); mErr == nil {
+				resp.Data = raw
+			}
+			return resp
+		}
+		return dataResponse(data)
 	case "enable", "disable":
 		if err := d.handleEnable(ctx, req.Poll, req.Cmd == "enable"); err != nil {
 			return protocol.Response{OK: false, Error: err.Error()}

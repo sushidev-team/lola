@@ -4,14 +4,20 @@
 package tui
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/sushidev-team/lola/internal/config"
+	"github.com/sushidev-team/lola/internal/gitrepo"
 	"github.com/sushidev-team/lola/internal/linear"
+	"github.com/sushidev-team/lola/internal/protocol"
 )
 
 type formEvent int
@@ -25,22 +31,35 @@ const (
 type fieldID int
 
 const (
-	fName fieldID = iota
+	// Repo tab: the [[project]]'s repository / worktree setup. fLabel is the
+	// free-text display name and fName the slug identity derived from it; see
+	// config.Project.Name for why the two are separate.
+	fLabel fieldID = iota
+	fName
+	fPath
+	fRepo
+	fDefaultBranch
+	fBranchPrefix
+	fAgent
+	fSymlinks
+	fPostCreate
+	fEnv
+	// Filter tab: which Linear issues this project picks up.
+	fEnabled
 	fTeam
 	fProject
 	fCycleMode
 	fCycle
 	fStates
-	fLabels
-	fMatchMode
 	fAssignee
 	fAssigneeUser
-	fNativeProject
-	fRepo
 	fCap
+	// Labels tab: trigger labels and how a picked-up issue is marked.
+	fLabels
+	fMatchMode
 	fDedup
 	fSetLabel
-	// Linear write-back (P4): optional lifecycle → Linear state/label/comment.
+	// Write-back tab (P4): optional lifecycle → Linear state/label/comment.
 	fOnSpawnState
 	fCommentOnSpawn
 	fOnPRState
@@ -52,6 +71,54 @@ const (
 	fCommentOnBlocked
 	fSave
 )
+
+// formTab groups the fields above. A project is one config entry covering
+// repository setup, its Linear filter and its write-back, which is more than
+// fits one readable column — the tabs are that entry's sections, not separate
+// forms.
+type formTab int
+
+const (
+	tabRepo formTab = iota
+	tabFilter
+	tabLabels
+	tabWriteback
+)
+
+var formTabs = []struct {
+	tab   formTab
+	title string
+}{
+	{tabRepo, "Repo"},
+	{tabFilter, "Filter"},
+	{tabLabels, "Labels"},
+	{tabWriteback, "Write-back"},
+}
+
+// listFields are edited as one entry per line (an open sub-editor), not inline.
+var listFields = map[fieldID]bool{fSymlinks: true, fPostCreate: true, fEnv: true}
+
+// textFields are edited inline, character by character.
+var textFields = map[fieldID]bool{
+	fLabel: true, fName: true, fPath: true, fRepo: true, fDefaultBranch: true,
+	fBranchPrefix: true, fCap: true,
+}
+
+// inheritable maps a field to its config.ProjectInherits bit, for the fields
+// that have a [defaults] counterpart. Only these render the inherited ghost and
+// respond to ctrl+o.
+var inheritable = map[fieldID]func(*config.ProjectInherits) *bool{
+	fSymlinks:   func(i *config.ProjectInherits) *bool { return &i.Symlinks },
+	fPostCreate: func(i *config.ProjectInherits) *bool { return &i.PostCreate },
+	fEnv:        func(i *config.ProjectInherits) *bool { return &i.Env },
+	fLabels:     func(i *config.ProjectInherits) *bool { return &i.MatchLabels },
+	fMatchMode:  func(i *config.ProjectInherits) *bool { return &i.MatchMode },
+	fDedup:      func(i *config.ProjectInherits) *bool { return &i.DedupMode },
+	fSetLabel:   func(i *config.ProjectInherits) *bool { return &i.OnSentSetLabel },
+	fBlockedLabel: func(i *config.ProjectInherits) *bool {
+		return &i.BlockedLabelID
+	},
+}
 
 type pickOpt struct{ id, label string }
 
@@ -68,17 +135,183 @@ type formModel struct {
 	cfg      *config.Config
 	isNew    bool
 	origName string
-	poll     config.Project // working copy of the project being polling-configured
+	poll     config.Project // working copy of the project being edited
 	capBuf   string         // text buffer for concurrency_cap
+
+	// Line buffers for the list fields; folded back into poll on save.
+	symlinks   []string
+	postCreate []string
+	env        []string // "KEY=value" per line
 
 	teams   []linear.Team // available before a team is picked
 	meta    *teamMeta
 	loading string
 	loadErr string
 
-	cursor int
-	picker *picker
-	errs   []string // validation errors shown at the bottom
+	tab     formTab
+	cursor  int
+	picker  *picker
+	editing bool     // a list field is OPEN for line editing
+	lineCur int      // which line, while editing
+	errs    []string // validation errors shown at the bottom
+
+	// idAuto marks the ID field as still tracking the Label: every label
+	// keystroke re-derives it. Typing in the ID clears this for good, so a
+	// hand-picked identity is never silently rewritten. An existing project
+	// starts false — its ID is load-bearing and must not drift when someone
+	// edits the label.
+	idAuto bool
+
+	// idEdited records that a human actually typed in the ID field. Only then is
+	// the ID canonicalized on save: configs predating Label hold names that are
+	// not slugs ("Okane"), and re-slugging one on an unrelated save would fire a
+	// rename nobody asked for. An untouched ID is saved verbatim.
+	idEdited bool
+
+	// repoDetectedFor is the Path that repo auto-detection last ran against,
+	// so moving the cursor around re-runs it only when the path actually
+	// changed. repoAuto marks the current Repo value as detected rather than
+	// typed, purely so the view can say where it came from.
+	repoDetectedFor string
+	repoAuto        bool
+
+	// branches is the checkout's branch list, loaded lazily for the default
+	// branch picker; branchesFor is the Path it was loaded against.
+	branches    []string
+	branchesFor string
+}
+
+// repoDetectedMsg carries the result of a background repo detection back to the
+// form. Repo is "" when the checkout has no usable GitHub remote.
+type repoDetectedMsg struct {
+	path string
+	repo string
+}
+
+// branchesMsg carries a checkout's branch list back to the form. Branches is
+// nil when the path is not a checkout — the field then stays free-text.
+type branchesMsg struct {
+	path     string
+	branches []string
+}
+
+// loadBranchesCmd lists the checkout's branches off the UI thread, bounded so a
+// stale network mount cannot stall the form.
+func loadBranchesCmd(path string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		return branchesMsg{path: path, branches: gitrepo.Branches(ctx, path)}
+	}
+}
+
+// maybeLoadBranches returns a command to refresh the branch list when the path
+// has changed since it was last loaded.
+func (f *formModel) maybeLoadBranches() tea.Cmd {
+	path := strings.TrimSpace(f.poll.Path)
+	if path == "" || path == f.branchesFor {
+		return nil
+	}
+	f.branchesFor = path
+	return loadBranchesCmd(path)
+}
+
+// detectRepoCmd resolves the GitHub owner/name of a checkout off the UI thread.
+// Bounded: a path on a stale network mount must not wedge the form.
+func detectRepoCmd(path string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		return repoDetectedMsg{path: path, repo: gitrepo.Detect(ctx, path)}
+	}
+}
+
+// maybeDetectRepo returns a detection command when the form would benefit from
+// one: a path is set, the repo is still empty, and this path has not been tried
+// yet. Detection only ever FILLS an empty field — it never overwrites what the
+// user typed, and a checkout with no GitHub remote leaves it empty (which is
+// the safe, fail-closed value: see internal/gitrepo).
+func (f *formModel) maybeDetectRepo() tea.Cmd {
+	path := strings.TrimSpace(f.poll.Path)
+	if path == "" || strings.TrimSpace(f.poll.Repo) != "" || path == f.repoDetectedFor {
+		return nil
+	}
+	f.repoDetectedFor = path
+	return detectRepoCmd(path)
+}
+
+// lineBuf returns the line buffer backing a list field, or nil.
+func (f *formModel) lineBuf(fd fieldID) *[]string {
+	switch fd {
+	case fSymlinks:
+		return &f.symlinks
+	case fPostCreate:
+		return &f.postCreate
+	case fEnv:
+		return &f.env
+	}
+	return nil
+}
+
+// inherits reports whether the focused field currently takes its value from
+// [defaults]. Fields with no [defaults] counterpart always report false.
+func (f *formModel) inherits(fd fieldID) bool {
+	get, ok := inheritable[fd]
+	if !ok {
+		return false
+	}
+	return *get(&f.poll.Inherits)
+}
+
+// setInherit flips a field between inheriting and overriding. Reverting to
+// inherit refills the field from [defaults] so the ghost shows what will apply.
+func (f *formModel) setInherit(fd fieldID, v bool) {
+	get, ok := inheritable[fd]
+	if !ok {
+		return
+	}
+	*get(&f.poll.Inherits) = v
+	if !v {
+		return
+	}
+	d := f.cfg.Defaults
+	switch fd {
+	case fSymlinks:
+		f.symlinks = slices.Clone(d.Symlinks)
+	case fPostCreate:
+		f.postCreate = slices.Clone(d.PostCreate)
+	case fEnv:
+		f.env = envLines(d.Env)
+	case fLabels:
+		f.poll.MatchLabels = slices.Clone(d.MatchLabels)
+	case fMatchMode:
+		f.poll.MatchMode = orDefault(d.MatchMode, config.DefaultMatchMode)
+	case fDedup:
+		f.poll.DedupMode = orDefault(d.DedupMode, config.DefaultDedupMode)
+	case fSetLabel:
+		f.poll.OnSentSetLabel = d.OnSentSetLabel
+	case fBlockedLabel:
+		f.poll.BlockedLabelID = d.BlockedLabelID
+	}
+}
+
+// override promotes the focused field to a project-level value. Called whenever
+// an edit lands on an inheritable field, so editing IS overriding.
+func (f *formModel) override(fd fieldID) { f.setInherit(fd, false) }
+
+func orDefault(v, fallback string) string {
+	if v != "" {
+		return v
+	}
+	return fallback
+}
+
+// plural returns the "y"/"ies" tail for an "entr%s" count.
+func plural(n int) string {
+	if n == 1 {
+		return "y"
+	}
+	return "ies"
 }
 
 func newFormModel(cfg *config.Config, existing *config.Project) (*formModel, tea.Cmd) {
@@ -92,9 +325,43 @@ func newFormModel(cfg *config.Config, existing *config.Project) (*formModel, tea
 		if existing.ConcurrencyCap > 0 {
 			f.capBuf = strconv.Itoa(existing.ConcurrencyCap)
 		}
+		// A project that has never polled carries empty enums, which Validate
+		// rejects. Seed the same defaults a fresh config gets so opening the
+		// form on a non-polling project yields a saveable state.
+		if !existing.Polls() {
+			seedPollDefaults(&f.poll)
+			if f.capBuf == "" {
+				f.capBuf = "1"
+			}
+		}
 	} else {
-		f.poll = config.Project{CycleMode: "none", MatchMode: "any", AssigneeMode: "anyone", DedupMode: "seen"}
+		// A brand-new project inherits everything it can, so it picks up
+		// whatever shared setup [defaults] already carries.
+		f.poll = config.Project{
+			DefaultBranch: config.DefaultBranchName,
+			Inherits: config.ProjectInherits{
+				Symlinks: true, PostCreate: true, Env: true,
+				MatchLabels: true, MatchMode: true, OnSentSetLabel: true,
+				BlockedLabelID: true, DedupMode: true, PrioritySort: true,
+			},
+		}
+		seedPollDefaults(&f.poll)
 		f.capBuf = "1"
+		f.idAuto = true // a new project derives its ID from the label until told otherwise
+	}
+	// Inherited fields show the [defaults] value; overridden ones the project's.
+	f.symlinks = slices.Clone(f.poll.Symlinks)
+	f.postCreate = slices.Clone(f.poll.PostCreate)
+	f.env = envLines(f.poll.Env)
+	if f.isNew {
+		f.symlinks = slices.Clone(cfg.Defaults.Symlinks)
+		f.postCreate = slices.Clone(cfg.Defaults.PostCreate)
+		f.env = envLines(cfg.Defaults.Env)
+		f.poll.MatchLabels = slices.Clone(cfg.Defaults.MatchLabels)
+		f.poll.MatchMode = orDefault(cfg.Defaults.MatchMode, config.DefaultMatchMode)
+		f.poll.DedupMode = orDefault(cfg.Defaults.DedupMode, config.DefaultDedupMode)
+		f.poll.OnSentSetLabel = cfg.Defaults.OnSentSetLabel
+		f.poll.BlockedLabelID = cfg.Defaults.BlockedLabelID
 	}
 	var cmd tea.Cmd
 	if f.poll.TeamID != "" {
@@ -104,37 +371,79 @@ func newFormModel(cfg *config.Config, existing *config.Project) (*formModel, tea
 		f.loading = "loading teams…"
 		cmd = fetchTeamsCmd(cfg)
 	}
+	// An existing project with a path but no repo gets one filled in on open,
+	// and its branch list is ready before the user reaches the field.
+	cmd = tea.Batch(cmd, f.maybeDetectRepo(), f.maybeLoadBranches())
 	return f, cmd
 }
 
-// fields returns the currently visible fields; conditional levels appear
-// only once their gating selection exists.
+// seedPollDefaults fills the polling enums that Validate requires a value for,
+// leaving any already-set field alone. Applied to a project with no polling
+// config yet so the form opens in a saveable state.
+func seedPollDefaults(p *config.Project) {
+	if p.CycleMode == "" {
+		p.CycleMode = "none"
+	}
+	if p.MatchMode == "" {
+		p.MatchMode = "any"
+	}
+	if p.AssigneeMode == "" {
+		p.AssigneeMode = "anyone"
+	}
+	if p.DedupMode == "" {
+		p.DedupMode = "seen"
+	}
+}
+
+// fields returns the visible fields of the ACTIVE tab; conditional levels
+// appear only once their gating selection exists. fSave is appended to every
+// tab so the form can be committed without navigating back to a particular one.
 func (f *formModel) fields() []fieldID {
-	fs := []fieldID{fName, fTeam}
-	if f.poll.TeamID != "" {
-		fs = append(fs, fProject, fCycleMode)
-		if f.poll.CycleMode == "pinned" {
-			fs = append(fs, fCycle)
+	var fs []fieldID
+	switch f.tab {
+	case tabRepo:
+		fs = []fieldID{fLabel, fName, fPath, fRepo, fDefaultBranch, fBranchPrefix, fAgent, fSymlinks, fPostCreate, fEnv}
+	case tabFilter:
+		fs = []fieldID{fEnabled, fTeam}
+		if f.poll.TeamID != "" {
+			fs = append(fs, fProject, fCycleMode)
+			if f.poll.CycleMode == "pinned" {
+				fs = append(fs, fCycle)
+			}
+			fs = append(fs, fStates, fAssignee)
+			if f.poll.AssigneeMode == "user" {
+				fs = append(fs, fAssigneeUser)
+			}
+			fs = append(fs, fCap)
 		}
-		fs = append(fs, fStates, fLabels, fMatchMode, fAssignee)
-		if f.poll.AssigneeMode == "user" {
-			fs = append(fs, fAssigneeUser)
+	case tabLabels:
+		// Team-scoped: label UUIDs only exist within the picked team.
+		if f.poll.TeamID != "" {
+			fs = append(fs, fLabels, fMatchMode, fDedup)
+			if f.poll.DedupMode == "label" {
+				fs = append(fs, fSetLabel)
+			}
 		}
-		fs = append(fs, fNativeProject, fRepo, fCap, fDedup)
-		if f.poll.DedupMode == "label" {
-			fs = append(fs, fSetLabel)
+	case tabWriteback:
+		if f.poll.TeamID != "" {
+			// Grouped spawn / PR / merged / blocked, each state paired with its
+			// comment toggle.
+			fs = append(fs, fOnSpawnState, fCommentOnSpawn, fOnPRState)
+			if f.poll.OnPRStateID != "" || f.poll.CommentOnPR {
+				// The "wait for green checks" gate only means anything once the
+				// PR transition (state move or comment) is actually configured.
+				fs = append(fs, fPRRequiresChecks)
+			}
+			fs = append(fs, fCommentOnPR, fOnMergedState, fCommentOnMerged, fBlockedLabel, fCommentOnBlocked)
 		}
-		// Write-back lifecycle → Linear (all optional). Grouped spawn / PR /
-		// merged / blocked, each state paired with its comment toggle.
-		fs = append(fs, fOnSpawnState, fCommentOnSpawn, fOnPRState)
-		if f.poll.OnPRStateID != "" || f.poll.CommentOnPR {
-			// The "wait for green checks" gate only means anything once the PR
-			// transition (state move or comment) is actually configured.
-			fs = append(fs, fPRRequiresChecks)
-		}
-		fs = append(fs, fCommentOnPR, fOnMergedState, fCommentOnMerged, fBlockedLabel, fCommentOnBlocked)
 	}
 	return append(fs, fSave)
+}
+
+// needsTeam reports whether the active tab is empty for want of a team, so the
+// view can say so instead of showing a bare Save.
+func (f *formModel) needsTeam() bool {
+	return f.poll.TeamID == "" && (f.tab == tabLabels || f.tab == tabWriteback)
 }
 
 func (f *formModel) update(msg tea.Msg) (tea.Cmd, formEvent) {
@@ -145,6 +454,16 @@ func (f *formModel) update(msg tea.Msg) (tea.Cmd, formEvent) {
 			f.loadErr = "linear teams: " + v.err.Error()
 		} else {
 			f.teams, f.loadErr = v.teams, ""
+		}
+	case repoDetectedMsg:
+		// Only fill a still-empty field, and only for the path we asked about —
+		// the user may have typed a repo or changed the path meanwhile.
+		if v.repo != "" && strings.TrimSpace(f.poll.Repo) == "" && v.path == strings.TrimSpace(f.poll.Path) {
+			f.poll.Repo, f.repoAuto = v.repo, true
+		}
+	case branchesMsg:
+		if v.path == strings.TrimSpace(f.poll.Path) {
+			f.branches = v.branches
 		}
 	case metaMsg:
 		f.loading = ""
@@ -163,6 +482,9 @@ func (f *formModel) key(k tea.KeyPressMsg) (tea.Cmd, formEvent) {
 	if f.picker != nil {
 		return f.pickerKey(k), formNone
 	}
+	if f.editing {
+		return nil, f.editList(k)
+	}
 	fields := f.fields()
 	if f.cursor >= len(fields) {
 		f.cursor = len(fields) - 1
@@ -172,58 +494,219 @@ func (f *formModel) key(k tea.KeyPressMsg) (tea.Cmd, formEvent) {
 	switch k.String() {
 	case "esc":
 		return nil, formCancel
-	case "up", "shift+tab":
+	case "tab":
+		f.switchTab(1)
+		return f.leftField(cur), formNone
+	case "shift+tab":
+		f.switchTab(-1)
+		return f.leftField(cur), formNone
+	case "up":
 		if f.cursor > 0 {
 			f.cursor--
 		}
-		return nil, formNone
-	case "down", "tab":
+		return f.leftField(cur), formNone
+	case "down":
 		if f.cursor < len(fields)-1 {
 			f.cursor++
 		}
-		return nil, formNone
+		return f.leftField(cur), formNone
 	case "ctrl+r":
 		return f.refresh(), formNone
+	case "ctrl+o":
+		// Toggle inherit ↔ override on the focused field.
+		if _, ok := inheritable[cur]; ok {
+			f.setInherit(cur, !f.inherits(cur))
+		}
+		return nil, formNone
 	case "enter":
 		return f.interact(cur)
 	}
 
-	// Text editing on name/repo/cap; on other fields plain 'r' refreshes.
-	switch cur {
-	case fName, fRepo, fCap:
-		switch {
-		case k.Code == tea.KeyBackspace:
-			switch {
-			case cur == fName && f.poll.Name != "":
-				rs := []rune(f.poll.Name)
-				f.poll.Name = string(rs[:len(rs)-1])
-			case cur == fRepo && f.poll.Repo != "":
-				rs := []rune(f.poll.Repo)
-				f.poll.Repo = string(rs[:len(rs)-1])
-			case cur == fCap && f.capBuf != "":
-				f.capBuf = f.capBuf[:len(f.capBuf)-1]
-			}
-		case k.Text != "": // printable runes, incl. space and paste (bubbletea v2)
-			s := k.Text
-			switch cur {
-			case fName:
-				f.poll.Name += s
-			case fRepo:
-				f.poll.Repo += s
-			default:
-				for _, r := range s {
-					if r >= '0' && r <= '9' {
-						f.capBuf += string(r)
-					}
-				}
-			}
-		}
-	default:
+	if !textFields[cur] {
 		if k.String() == "r" {
 			return f.refresh(), formNone
 		}
+		return nil, formNone
 	}
+
+	// Inline text editing. fCap keeps its digits-only filter.
+	buf := f.textBuf(cur)
+	if buf == nil {
+		return nil, formNone
+	}
+	if cur == fRepo {
+		f.repoAuto = false // typed over: no longer the detected value
+	}
+	switch {
+	case k.Code == tea.KeyBackspace:
+		if *buf != "" {
+			rs := []rune(*buf)
+			*buf = string(rs[:len(rs)-1])
+		}
+	case k.Text != "": // printable runes, incl. space and paste (bubbletea v2)
+		if cur == fCap {
+			for _, r := range k.Text {
+				if r >= '0' && r <= '9' {
+					*buf += string(r)
+				}
+			}
+		} else {
+			*buf += k.Text
+		}
+	}
+	f.afterTextEdit(cur)
 	return nil, formNone
+}
+
+// afterTextEdit keeps the Label → ID derivation live: while the ID still tracks
+// the label (idAuto), every label keystroke re-slugs it, so a human types one
+// name and gets a valid identity for free. Typing in the ID field itself breaks
+// the link permanently — an ID the human chose is never overwritten.
+//
+// Only the ID is normalized as you type; the label is free text and stays
+// verbatim.
+func (f *formModel) afterTextEdit(fd fieldID) {
+	switch fd {
+	case fLabel:
+		if f.idAuto {
+			f.poll.Name = config.Slug(f.poll.Label)
+		}
+	case fName:
+		f.idAuto, f.idEdited = false, true
+		f.poll.Name = config.SlugTyping(f.poll.Name)
+	}
+}
+
+// paste inserts clipboard text into the focused field. An open list sub-editor
+// takes a MULTI-line paste as multiple entries (pasting several symlinks at once
+// is the point); a single-line field takes the first non-blank line.
+func (f *formModel) paste(s string) {
+	if f.picker != nil || s == "" {
+		return
+	}
+	fields := f.fields()
+	if f.cursor < 0 || f.cursor >= len(fields) {
+		return
+	}
+	cur := fields[f.cursor]
+
+	if f.editing {
+		buf := f.lineBuf(cur)
+		if buf == nil {
+			return
+		}
+		lines := pasteLines(s)
+		if len(lines) == 0 {
+			return
+		}
+		// The first pasted line continues the current entry; the rest become
+		// new entries after it, and the cursor follows to the last one.
+		(*buf)[f.lineCur] += lines[0]
+		if rest := lines[1:]; len(rest) > 0 {
+			tail := append(rest, (*buf)[f.lineCur+1:]...)
+			*buf = append((*buf)[:f.lineCur+1], tail...)
+			f.lineCur += len(rest)
+		}
+		return
+	}
+
+	buf := f.textBuf(cur)
+	if buf == nil {
+		return
+	}
+	if cur == fCap {
+		*buf += pasteDigits(s)
+		return
+	}
+	if cur == fRepo {
+		f.repoAuto = false // pasted over: no longer the detected value
+	}
+	*buf += pasteInline(s)
+	f.afterTextEdit(cur)
+}
+
+// leftField runs whatever should happen when focus leaves a field. Today that
+// is only repo auto-detection, triggered on leaving Path: resolving a checkout
+// mid-typing would fire once per keystroke.
+func (f *formModel) leftField(fd fieldID) tea.Cmd {
+	if fd != fPath {
+		return nil
+	}
+	return tea.Batch(f.maybeDetectRepo(), f.maybeLoadBranches())
+}
+
+// switchTab moves to the next/previous tab, resetting the cursor so it can
+// never point past the new tab's shorter field list.
+func (f *formModel) switchTab(delta int) {
+	n := len(formTabs)
+	f.tab = formTab((int(f.tab) + delta%n + n) % n)
+	f.cursor, f.editing = 0, false
+}
+
+// textBuf returns the string backing an inline-editable field.
+func (f *formModel) textBuf(fd fieldID) *string {
+	switch fd {
+	case fLabel:
+		return &f.poll.Label
+	case fName:
+		return &f.poll.Name
+	case fPath:
+		return &f.poll.Path
+	case fRepo:
+		return &f.poll.Repo
+	case fDefaultBranch:
+		return &f.poll.DefaultBranch
+	case fBranchPrefix:
+		return &f.poll.BranchPrefix
+	case fCap:
+		return &f.capBuf
+	}
+	return nil
+}
+
+// editList drives an OPEN list field: arrows move between lines, enter adds a
+// line, backspace edits (or removes an empty line), esc closes back to field
+// navigation. Mirrors the project editor's list sub-editor.
+func (f *formModel) editList(k tea.KeyPressMsg) formEvent {
+	cur := f.fields()[f.cursor]
+	buf := f.lineBuf(cur)
+	if buf == nil {
+		f.editing = false
+		return formNone
+	}
+	switch k.String() {
+	case "esc":
+		f.editing = false
+	case "ctrl+s":
+		f.editing = false
+		_, ev := f.save()
+		return ev
+	case "up":
+		if f.lineCur > 0 {
+			f.lineCur--
+		}
+	case "down":
+		if f.lineCur < len(*buf)-1 {
+			f.lineCur++
+		}
+	case "enter":
+		f.lineCur++
+		*buf = append((*buf)[:f.lineCur], append([]string{""}, (*buf)[f.lineCur:]...)...)
+	case "backspace":
+		if (*buf)[f.lineCur] == "" && len(*buf) > 1 {
+			*buf = append((*buf)[:f.lineCur], (*buf)[f.lineCur+1:]...)
+			if f.lineCur > 0 {
+				f.lineCur--
+			}
+		} else {
+			(*buf)[f.lineCur] = dropLastRune((*buf)[f.lineCur])
+		}
+	default:
+		if k.Text != "" {
+			(*buf)[f.lineCur] += k.Text
+		}
+	}
+	return formNone
 }
 
 func (f *formModel) refresh() tea.Cmd {
@@ -238,14 +721,30 @@ func (f *formModel) refresh() tea.Cmd {
 
 func (f *formModel) interact(cur fieldID) (tea.Cmd, formEvent) {
 	switch {
-	case cur == fName || cur == fRepo || cur == fCap:
+	case cur == fDefaultBranch:
+		// Typable AND pickable: enter lists the checkout's branches, but the
+		// field stays free text so a path that is not a checkout — or a branch
+		// that does not exist yet — is never a dead end.
+		return f.openPicker(cur), formNone
+	case textFields[cur]:
 		// enter advances to the next field
 		if f.cursor < len(f.fields())-1 {
 			f.cursor++
 		}
-		return nil, formNone
+		return f.leftField(cur), formNone
 	case cur == fSave:
 		return f.save()
+	case listFields[cur]:
+		// Opening a list field for editing IS overriding it.
+		f.override(cur)
+		if buf := f.lineBuf(cur); buf != nil && len(*buf) == 0 {
+			*buf = []string{""}
+		}
+		f.editing, f.lineCur = true, 0
+		return nil, formNone
+	case cur == fAgent:
+		f.cycleAgent()
+		return nil, formNone
 	case boolFields[cur]:
 		f.toggleBool(cur)
 		return nil, formNone
@@ -254,9 +753,24 @@ func (f *formModel) interact(cur fieldID) (tea.Cmd, formEvent) {
 	}
 }
 
-// toggleBool flips a write-back boolean toggle in place.
+// cycleAgent advances the per-project coding-agent override, wrapping through
+// "" (inherit [defaults].agent) and each known kind.
+func (f *formModel) cycleAgent() {
+	opts := projAgentOptions()
+	for i, o := range opts {
+		if o == f.poll.Agent {
+			f.poll.Agent = opts[(i+1)%len(opts)]
+			return
+		}
+	}
+	f.poll.Agent = opts[0]
+}
+
+// toggleBool flips a boolean field in place.
 func (f *formModel) toggleBool(cur fieldID) {
 	switch cur {
+	case fEnabled:
+		f.poll.Enabled = !f.poll.Enabled
 	case fPRRequiresChecks:
 		f.poll.PRRequiresChecks = !f.poll.PRRequiresChecks
 	case fCommentOnSpawn:
@@ -276,9 +790,10 @@ var metaFields = map[fieldID]bool{
 	fOnSpawnState: true, fOnPRState: true, fOnMergedState: true, fBlockedLabel: true,
 }
 
-// boolFields are the write-back toggles: enter flips them in place rather than
-// opening a picker.
+// boolFields are the toggles: enter flips them in place rather than opening a
+// picker.
 var boolFields = map[fieldID]bool{
+	fEnabled:          true,
 	fPRRequiresChecks: true, fCommentOnSpawn: true, fCommentOnPR: true,
 	fCommentOnMerged: true, fCommentOnBlocked: true,
 }
@@ -373,20 +888,18 @@ func (f *formModel) openPicker(cur fieldID) tea.Cmd {
 			return nil
 		}
 		selected = []string{f.poll.AssigneeUserID}
-	case fNativeProject:
-		if len(f.cfg.Projects) == 0 {
-			f.loadErr = "no [[project]] entries in config.toml — define one before creating a poll"
-			return nil
+	case fDefaultBranch:
+		if len(f.branches) == 0 {
+			// Not a checkout, or the path is not set yet. Say so instead of
+			// opening an empty list — the field is still typable.
+			f.loadErr = "no branches found — set Path to a git checkout, or type the branch"
+			return f.maybeLoadBranches()
 		}
-		title = "Project"
-		for _, pr := range f.cfg.Projects {
-			lbl := pr.Name
-			if pr.Repo != "" {
-				lbl += " (" + pr.Repo + ")"
-			}
-			opts = append(opts, pickOpt{pr.Name, lbl})
+		title = "Default branch"
+		for _, b := range f.branches {
+			opts = append(opts, pickOpt{b, b})
 		}
-		selected = []string{f.poll.Name}
+		selected = []string{f.poll.DefaultBranch}
 	case fDedup:
 		title = "Dedup mode"
 		opts = []pickOpt{{"label", "label (flip trigger label on spawn)"}, {"seen", "seen (local seen-file)"}}
@@ -446,7 +959,7 @@ func (f *formModel) pickerKey(k tea.KeyPressMsg) tea.Cmd {
 		if p.cursor < len(p.opts)-1 {
 			p.cursor++
 		}
-	case " ":
+	case "space":
 		if p.multi && len(p.opts) > 0 {
 			id := p.opts[p.cursor].id
 			if p.sel[id] {
@@ -466,6 +979,8 @@ func (f *formModel) applyPick(p *picker) tea.Cmd {
 	if len(p.opts) == 0 {
 		return nil
 	}
+	// Picking a value for an inheritable field promotes it to an override.
+	f.override(p.field)
 	if p.multi {
 		var ids []string
 		for _, o := range p.opts { // keep option order, not toggle order
@@ -505,6 +1020,8 @@ func (f *formModel) applyPick(p *picker) tea.Cmd {
 		}
 	case fCycle:
 		f.poll.CycleID = id
+	case fDefaultBranch:
+		f.poll.DefaultBranch = id
 	case fMatchMode:
 		f.poll.MatchMode = id
 	case fAssignee:
@@ -514,8 +1031,6 @@ func (f *formModel) applyPick(p *picker) tea.Cmd {
 		}
 	case fAssigneeUser:
 		f.poll.AssigneeUserID = id
-	case fNativeProject:
-		f.poll.Name = id
 	case fDedup:
 		f.poll.DedupMode = id
 	case fSetLabel:
@@ -542,11 +1057,24 @@ func (f *formModel) stateOpts() []pickOpt {
 	return opts
 }
 
-// applyPolling copies the Linear polling + write-back fields from src onto dst,
-// leaving dst's repository/worktree setup (path, agent, env, post_create) intact.
-// Saving the form always turns polling on. src.Repo overrides only when set.
-func applyPolling(dst *config.Project, src config.Project) {
-	dst.Enabled = true
+// applyProject copies every edited field from src onto dst — the form now owns
+// the whole [[project]] (repository setup, Linear filter, write-back), so there
+// is nothing on dst to preserve except its identity.
+func applyProject(dst *config.Project, src config.Project) {
+	// Label, unlike Name, is pure display — it carries no runtime identity, so
+	// it saves like any other field. A Name change is a rename, handled before
+	// this by the daemon, so dst.Name is already correct and stays untouched.
+	dst.Label = src.Label
+	dst.Path = src.Path
+	dst.DefaultBranch = src.DefaultBranch
+	dst.BranchPrefix = src.BranchPrefix
+	dst.Agent = src.Agent
+	dst.Symlinks = src.Symlinks
+	dst.PostCreate = src.PostCreate
+	dst.Env = src.Env
+	dst.Inherits = src.Inherits
+
+	dst.Enabled = src.Enabled
 	dst.TeamID = src.TeamID
 	dst.ProjectID = src.ProjectID
 	dst.CycleMode = src.CycleMode
@@ -569,16 +1097,73 @@ func applyPolling(dst *config.Project, src config.Project) {
 	dst.CommentOnMerged = src.CommentOnMerged
 	dst.CommentOnBlocked = src.CommentOnBlocked
 	dst.PRRequiresChecks = src.PRRequiresChecks
-	if src.Repo != "" {
-		dst.Repo = src.Repo
+	// Assign unconditionally: an empty src.Repo must be able to CLEAR an existing
+	// value, not silently leave the old one in place.
+	dst.Repo = src.Repo
+}
+
+// renameProject asks the daemon to change a project's ID, migrating the runtime
+// state keyed by it. It is synchronous — the field save that follows must build
+// on the renamed config, and a rename is a rare, deliberate action, not
+// something worth a message round-trip through the update loop for.
+//
+// It REQUIRES a running daemon. The rest of the TUI works with the daemon down
+// (it renders from its own config), but a rename cannot: only the daemon knows
+// whether a session still holds the old name, and writing sessions.json behind
+// its back would have it overwrite us on the next observer pass.
+func (f *formModel) renameProject(from, to string) error {
+	args, err := json.Marshal(protocol.RenameProjectArgs{From: from, To: to})
+	if err != nil {
+		return err
 	}
+	resp, err := requestFn(protocol.Request{Cmd: "renameProject", Args: args})
+	if err != nil {
+		if errors.Is(err, errDaemonDown) {
+			return fmt.Errorf("cannot rename %q while the daemon is down — start it (^r) and retry", from)
+		}
+		return err
+	}
+	if !resp.OK {
+		msg := resp.Error
+		if msg == "" {
+			msg = "daemon refused the rename"
+		}
+		// The blocker list is the actionable half of a refusal: name the sessions
+		// the human has to finish, not just the count in the error string.
+		var data protocol.RenameProjectData
+		if len(resp.Data) > 0 && json.Unmarshal(resp.Data, &data) == nil && len(data.Blockers) > 0 {
+			msg += "\n  live: " + strings.Join(data.Blockers, ", ")
+		}
+		return errors.New(msg)
+	}
+	return nil
 }
 
 func (f *formModel) save() (tea.Cmd, formEvent) {
 	f.errs = nil
 	p := f.poll
-	p.Name = strings.TrimSpace(p.Name)
+	// Canonicalize the ID here rather than while typing (SlugTyping deliberately
+	// leaves the edges alone so a hyphen can be entered at all) — but only when
+	// this form actually produced it. Slugging an untouched legacy name would
+	// turn an ordinary save into a rename.
+	if f.isNew || f.idEdited {
+		p.Name = config.Slug(p.Name)
+	} else {
+		p.Name = strings.TrimSpace(p.Name)
+	}
+	p.Label = strings.TrimSpace(p.Label)
+	// A label identical to the ID carries no information — drop it so the file
+	// stays free of redundant keys and DisplayName's fallback does the work.
+	if p.Label == p.Name {
+		p.Label = ""
+	}
+	p.Path = strings.TrimSpace(p.Path)
 	p.Repo = strings.TrimSpace(p.Repo) // format checked by nc.Validate below
+	p.DefaultBranch = strings.TrimSpace(p.DefaultBranch)
+	p.BranchPrefix = strings.TrimSpace(p.BranchPrefix)
+	p.Symlinks = trimDropEmpty(f.symlinks)
+	p.PostCreate = trimDropEmpty(f.postCreate)
+	p.Env = parseEnvLines(f.env)
 	p.ConcurrencyCap = 0
 	if f.capBuf != "" {
 		n, err := strconv.Atoi(f.capBuf)
@@ -588,18 +1173,35 @@ func (f *formModel) save() (tea.Cmd, formEvent) {
 			p.ConcurrencyCap = n
 		}
 	}
-	if len(p.PrioritySort) == 0 {
-		p.PrioritySort = []string{"priority", "createdAt"}
-	}
 
-	// The polling config attaches to an existing [[project]]: the one being
-	// edited (origName), or the one picked in the Project field for a new config.
+	// The form edits one [[project]]: the one it opened on (origName), or a new
+	// entry keyed by the typed ID.
 	target := f.origName
 	if f.isNew {
 		target = p.Name
 	}
 	if target == "" {
-		f.errs = append(f.errs, "project is required — pick a [[project]] entry")
+		f.errs = append(f.errs, "id is required — a label like \"Nori App\" becomes the id \"nori-app\"")
+	}
+	if p.Path == "" {
+		f.errs = append(f.errs, "path is required — the local repository this project's worktrees fork from")
+	}
+
+	if len(f.errs) > 0 {
+		return nil, formNone
+	}
+
+	// An ID change is a RENAME, and renaming is the daemon's job: the name keys
+	// worktree dirs, tmux session names and the seen file, so migrating it needs
+	// the authoritative session store. Do it before the field save below, which
+	// then targets the new name like any ordinary edit.
+	if !f.isNew && p.Name != f.origName {
+		if err := f.renameProject(f.origName, p.Name); err != nil {
+			f.errs = append(f.errs, strings.Split(err.Error(), "\n")...)
+			return nil, formNone
+		}
+		f.origName = p.Name
+		target = p.Name
 	}
 
 	// Rebase on the on-disk config: the daemon (enable/disable) or another
@@ -621,12 +1223,18 @@ func (f *formModel) save() (tea.Cmd, formEvent) {
 			break
 		}
 	}
-	if idx < 0 {
-		if target != "" {
-			f.errs = append(f.errs, fmt.Sprintf("project %q not found", target))
-		}
-	} else {
-		applyPolling(&nc.Projects[idx], p)
+	switch {
+	case idx >= 0:
+		applyProject(&nc.Projects[idx], p)
+	case f.isNew && target != "":
+		// The form CREATES the project when it opened on nothing — it carries
+		// every field a [[project]] needs, so there is no prior entry to attach
+		// to. Editing an existing one can still miss (renamed on disk behind us).
+		np := config.Project{Name: target}
+		applyProject(&np, p)
+		nc.Projects = append(nc.Projects, np)
+	case target != "":
+		f.errs = append(f.errs, fmt.Sprintf("project %q not found", target))
 	}
 	// A fresh config has no global cap; default it so the first save works.
 	if nc.Defaults.GlobalCap <= 0 {
@@ -650,22 +1258,71 @@ func (f *formModel) save() (tea.Cmd, formEvent) {
 	return nil, formSaved
 }
 
+// openProjectForm opens the project form for the current selection: the focused
+// rail project, or the selected session's project.
+func (m *rootModel) openProjectForm() (tea.Model, tea.Cmd) {
+	name := ""
+	if m.focus == focusPolls {
+		if p := m.selectedRailProject(); p != nil {
+			name = p.Name
+		}
+	} else if sel := m.sessions.selected(); sel != nil {
+		name = sel.Project
+	}
+	if name == "" {
+		m.sessions.flash, m.sessions.flashGood = "no project to edit here", false
+		return m, nil
+	}
+	pr := m.cfg.ProjectByName(name)
+	if pr == nil {
+		m.sessions.flash, m.sessions.flashGood = "project "+name+" not found in config", false
+		return m, nil
+	}
+	f, cmd := newFormModel(m.cfg, pr)
+	m.form = f
+	return m, cmd
+}
+
 // ---- view ----
+
+// tabStrip renders the tab bar, marking the active tab and flagging any tab
+// carrying a validation error so a problem on a hidden tab is still visible.
+func (f *formModel) tabStrip() string {
+	var parts []string
+	for _, t := range formTabs {
+		label := " " + t.title + " "
+		if t.tab == f.tab {
+			parts = append(parts, selStyle.Render(label))
+		} else {
+			parts = append(parts, faintText.Render(label))
+		}
+	}
+	return "  " + strings.Join(parts, faintText.Render("·"))
+}
 
 func (f *formModel) view(height int) string {
 	if f.picker != nil {
 		return f.picker.view(height)
 	}
-	title := "New poll"
+	title := "New project"
 	if !f.isNew {
-		title = "Edit poll: " + f.origName
+		// Title the form by what the human calls the project, keeping origName —
+		// the identity the save targets — visible when it differs.
+		title = "Project: " + f.poll.DisplayName()
+		if f.poll.DisplayName() != f.origName {
+			title += " (" + f.origName + ")"
+		}
 	}
 	var b strings.Builder
 	b.WriteString(titleStyle.Render(title) + "\n\n")
+	b.WriteString(f.tabStrip() + "\n\n")
 
 	fields := f.fields()
 	if f.cursor >= len(fields) {
 		f.cursor = len(fields) - 1
+	}
+	if f.needsTeam() {
+		b.WriteString("  " + faintText.Render("pick a Linear team on the Filter tab first — labels and states are team-scoped") + "\n\n")
 	}
 
 	// Scroll window: the field list (with write-back) can exceed the modal's
@@ -695,16 +1352,34 @@ func (f *formModel) view(height int) string {
 		if i == f.cursor {
 			marker = "› "
 		}
-		line := marker + fmt.Sprintf("%-22s", f.label(fd)) + f.display(fd)
+		val := f.display(fd)
+		if f.inherits(fd) {
+			// Ghost: the [defaults] value dimmed and tagged, so it reads as
+			// "this is what applies" rather than "this is unset".
+			val = faintText.Render(stripANSI(val)) + faintText.Render("  inherited")
+		}
+		line := marker + fmt.Sprintf("%-22s", f.label(fd)) + val
 		if i == f.cursor {
 			line = selStyle.Render(line)
 		}
 		b.WriteString(line + "\n")
+
+		// The focused list field expands inline while open for line editing.
+		if f.editing && i == f.cursor {
+			if buf := f.lineBuf(fd); buf != nil {
+				for j, e := range *buf {
+					bullet := faintText.Render("· ")
+					caret := ""
+					if j == f.lineCur {
+						bullet, caret = warnText.Render("▸ "), "_"
+					}
+					b.WriteString("      " + bullet + e + caret + "\n")
+				}
+			}
+		}
 	}
 	if end < len(fields) {
 		b.WriteString(faintText.Render("  ↓ more") + "\n")
-	} else {
-		b.WriteString("  " + faintText.Render(fmt.Sprintf("%-22spriority, createdAt (default)", "Priority sort")) + "\n")
 	}
 
 	if f.loading != "" {
@@ -722,7 +1397,11 @@ func (f *formModel) view(height int) string {
 			b.WriteString(badText.Render("✗ "+e) + "\n")
 		}
 	}
-	b.WriteString("\n" + faintText.Render("↑/↓ move · enter select/edit · r refresh linear cache · esc back") + "\n")
+	hint := "↑/↓ move · tab/shift-tab section · enter select/edit · ctrl-o inherit/override · r refresh linear · esc back"
+	if f.editing {
+		hint = "editing " + f.label(fields[f.cursor]) + " — ↑/↓ line · enter new line · esc done"
+	}
+	b.WriteString("\n" + faintText.Render(hint) + "\n")
 	return b.String()
 }
 
@@ -731,7 +1410,23 @@ func (f *formModel) view(height int) string {
 func fieldHelp(fd fieldID) string {
 	switch fd {
 	case fName:
-		return "Unique name for this poll."
+		return "Unique name for this project — its config key, and the prefix of every session it spawns."
+	case fPath:
+		return "Local repository path. Worktrees are forked from it; it is never checked out into itself."
+	case fDefaultBranch:
+		return "Base branch worktrees fork from, and the base the agent opens its PR against. enter lists the checkout's branches; you can also type one."
+	case fBranchPrefix:
+		return "Prefix for a session's branch (e.g. \"lola/\" yields lola/eng-42). Empty inherits [defaults].branch_prefix, then \"lola/\"."
+	case fAgent:
+		return "Coding agent this project's sessions spawn; empty inherits [defaults].agent. enter cycles."
+	case fSymlinks:
+		return "One relative path per line, linked from main into each worktree (e.g. .env). Do NOT symlink vendor/ — it breaks PHP autoload; use post-create instead."
+	case fPostCreate:
+		return "One command per line, run in a fresh worktree before the agent (e.g. composer install)."
+	case fEnv:
+		return "One KEY=value per line, exported into the session and post-create commands."
+	case fEnabled:
+		return "enter toggles · off pauses pickup for this project without discarding its filter."
 	case fTeam:
 		return "Linear team the poll queries issues from."
 	case fProject:
@@ -750,12 +1445,10 @@ func fieldHelp(fd fieldID) string {
 		return "Whose issues to pick up: anyone, you (viewer), or a specific user."
 	case fAssigneeUser:
 		return "The specific Linear user whose issues to pick up."
-	case fNativeProject:
-		return "The [[project]] (repo) whose worktree the agent runs in."
 	case fRepo:
-		return "GitHub owner/name for PR checks; empty falls back to the project's repo."
+		return "GitHub owner/name for PR checks. Auto-detected from the checkout (upstream, else origin) once Path is set — verify it if this is a fork. Empty disables PR checks."
 	case fCap:
-		return "Max concurrent agent sessions this poll may occupy."
+		return "Max concurrent agent sessions this project may occupy."
 	case fDedup:
 		return "label = flip a Linear label after spawn (visible, reconcile-driven); seen = local seen-file only."
 	case fSetLabel:
@@ -786,8 +1479,26 @@ func fieldHelp(fd fieldID) string {
 
 func (f *formModel) label(fd fieldID) string {
 	switch fd {
+	case fLabel:
+		return "Label"
 	case fName:
-		return "Name"
+		return "ID"
+	case fPath:
+		return "Path"
+	case fDefaultBranch:
+		return "Default branch"
+	case fBranchPrefix:
+		return "Branch prefix"
+	case fAgent:
+		return "Agent"
+	case fSymlinks:
+		return "Symlinks"
+	case fPostCreate:
+		return "Post-create"
+	case fEnv:
+		return "Env (KEY=value)"
+	case fEnabled:
+		return "Polling enabled"
 	case fTeam:
 		return "Team"
 	case fProject:
@@ -806,8 +1517,6 @@ func (f *formModel) label(fd fieldID) string {
 		return "Assignee"
 	case fAssigneeUser:
 		return "Assigned user"
-	case fNativeProject:
-		return "Project"
 	case fRepo:
 		return "GitHub repo"
 	case fCap:
@@ -860,11 +1569,57 @@ func (f *formModel) stateNameOrNone(id string) string {
 func (f *formModel) display(fd fieldID) string {
 	sel := "(select)"
 	switch fd {
+	case fLabel:
+		if strings.TrimSpace(f.poll.Label) == "" {
+			// An unset label falls back to the ID everywhere, so show that rather
+			// than an empty cell — it is what the UIs will actually display.
+			if f.poll.Name != "" {
+				return faintText.Render("(" + f.poll.Name + ")")
+			}
+			return faintText.Render("(type a name — e.g. Nori App)")
+		}
+		return f.poll.Label
 	case fName:
 		if f.poll.Name == "" {
-			return faintText.Render("(type a name)")
+			return faintText.Render("(derived from the label)")
+		}
+		// The ID is a path segment and a tmux name prefix, so say what it costs
+		// to change once sessions exist rather than letting the save fail cold.
+		if !f.isNew && f.poll.Name != f.origName {
+			return f.poll.Name + faintText.Render("  (rename — needs no live sessions)")
 		}
 		return f.poll.Name
+	case fPath:
+		if f.poll.Path == "" {
+			return faintText.Render("(required — /path/to/repo)")
+		}
+		return f.poll.Path
+	case fDefaultBranch:
+		if f.poll.DefaultBranch == "" {
+			return faintText.Render("(" + config.DefaultBranchName + ")")
+		}
+		return f.poll.DefaultBranch
+	case fBranchPrefix:
+		if f.poll.BranchPrefix == "" {
+			return faintText.Render("(inherits " + f.cfg.BranchPrefixForProject(f.origName) + ")")
+		}
+		return f.poll.BranchPrefix
+	case fAgent:
+		if f.poll.Agent == "" {
+			return faintText.Render("(inherits " + f.cfg.AgentForProject(f.origName) + ")")
+		}
+		return f.poll.Agent
+	case fSymlinks, fPostCreate, fEnv:
+		if buf := f.lineBuf(fd); buf != nil {
+			n := len(trimDropEmpty(*buf))
+			if n == 0 {
+				return faintText.Render("(none — enter to add)")
+			}
+			return fmt.Sprintf("%d entr%s — enter to edit", n, plural(n))
+		}
+		return ""
+	case fEnabled:
+		return boolDisplay(f.poll.Enabled)
 	case fTeam:
 		if f.poll.TeamID == "" {
 			return sel
@@ -925,16 +1680,16 @@ func (f *formModel) display(fd fieldID) string {
 			}
 		}
 		return shortID(f.poll.AssigneeUserID)
-	case fNativeProject:
-		if f.poll.Name == "" {
-			return sel
-		}
-		return f.poll.Name
 	case fRepo:
 		if f.poll.Repo == "" {
 			// The daemon owns the fallback: PR checks use the [[project]]
 			// repo when this is empty (dispatch/observer/reconcile).
 			return faintText.Render("(owner/name — empty falls back to the [[project]] repo)")
+		}
+		if f.repoAuto {
+			// Say where it came from: in a FORK the detected remote may not be
+			// the repo the PRs land in, and that is worth noticing.
+			return f.poll.Repo + faintText.Render("  detected")
 		}
 		return f.poll.Repo
 	case fCap:
@@ -1001,6 +1756,16 @@ func (f *formModel) stateName(id string) string {
 func (f *formModel) labelName(id string) string {
 	if f.meta != nil {
 		for _, l := range f.meta.Labels {
+			if l.ID == id {
+				return labelDisplay(l)
+			}
+		}
+	}
+	// A label INHERITED from [defaults] is a workspace label, which is not in
+	// this team's metadata — fall back to the workspace-label cache so it reads
+	// as a name here too rather than as a bare id.
+	if ls, err := loadWorkspaceLabelCache(); err == nil {
+		for _, l := range ls {
 			if l.ID == id {
 				return labelDisplay(l)
 			}

@@ -71,9 +71,8 @@ func (m *rootModel) detailActions() []detailAction {
 		{key: "p", id: "pr", label: "Open a PR", desc: "pick an open pull request → shell", enabled: repoSet},
 		{key: "t", id: "ticket", label: "Start a ticket", desc: "pick a Linear issue → worktree + agent", enabled: hasTeam},
 		{key: "w", id: "worktree", label: "New worktree", desc: "new branch → shell", enabled: true},
-		{key: "P", id: "polls", label: "Polls", desc: "add / edit / toggle this project's polls", enabled: true},
 		{key: "s", id: "sessions", label: "Sessions", desc: "this project's live sessions", enabled: true},
-		{key: "e", id: "edit", label: "Edit project", desc: "path / repo / agent / env", enabled: true},
+		{key: "e", id: "edit", label: "Configure project", desc: "repo · filter · labels · write-back", enabled: true},
 	}
 }
 
@@ -216,15 +215,14 @@ func (m *rootModel) runDetailAction(a detailAction) (tea.Model, tea.Cmd) {
 	case "sessions":
 		return m.openProjectScope(d.project)
 	case "edit":
-		if f, ok := newProjectForm(m.cfgPath, m.cfg, d.project); ok {
-			m.projForm = f
-		} else {
+		// One overlay for the whole [[project]] — repository setup, Linear
+		// filter and write-back are its tabs, not separate forms.
+		pr := m.cfg.ProjectByName(d.project)
+		if pr == nil {
 			d.flash, d.flashOK = "project "+d.project+" not found", false
+			return m, nil
 		}
-		return m, nil
-	case "polls":
-		// Open a new-poll form (the form lets the user pick the project).
-		f, cmd := newFormModel(m.cfg, nil)
+		f, cmd := newFormModel(m.cfg, pr)
 		m.form = f
 		return m, cmd
 	}

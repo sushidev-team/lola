@@ -1,9 +1,12 @@
 package tui
 
 import (
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/sushidev-team/lola/internal/config"
 )
 
@@ -142,5 +145,158 @@ func TestFormSaveDoesNotClobberExternalChanges(t *testing.T) {
 	}
 	if a := got.PollByName("A"); a == nil || a.Enabled {
 		t.Error("form save must not revert A's externally persisted enabled=false")
+	}
+}
+
+// 'n' on the project rail opens a NEW project, not the selected one. The form
+// creates outright (it carries every [[project]] field), so 'n' must never
+// preload — 'P' is the edit path.
+func TestRailNewOpensBlankProjectForm(t *testing.T) {
+	m := newTestRoot(t)
+	m.focus = focusPolls
+	m.list.cursor = 0 // a project IS selected, to prove it is not preloaded
+
+	m.Update(keyMsg("n"))
+	if m.form == nil {
+		t.Fatal("'n' should open the project form")
+	}
+	if !m.form.isNew {
+		t.Errorf("'n' must open a NEW project, got a form on %q", m.form.origName)
+	}
+	if m.form.poll.Name != "" {
+		t.Errorf("a new form must start unnamed, got %q", m.form.poll.Name)
+	}
+}
+
+// 'P' is the edit path: it preloads the selected project.
+func TestRailEditPreloadsSelectedProject(t *testing.T) {
+	m := newTestRoot(t)
+	m.focus = focusPolls
+	m.list.cursor = 0
+
+	want := m.selectedRailProject().Name
+	m.Update(keyMsg("P"))
+	if m.form == nil {
+		t.Fatal("'P' should open the project form")
+	}
+	if m.form.isNew || m.form.origName != want {
+		t.Errorf("'P' must preload %q, got isNew=%v origName=%q", want, m.form.isNew, m.form.origName)
+	}
+}
+
+// Paste is routed to whatever owns keyboard input, in the same precedence as
+// keystrokes. Without this dispatch a tea.PasteMsg reaches nothing at all,
+// because bubbletea v2 never turns a bracketed paste into key events.
+func TestRoutePasteReachesTheFocusedOverlay(t *testing.T) {
+	t.Run("project form", func(t *testing.T) {
+		m := newTestRoot(t)
+		f, _ := newFormModel(m.cfg, nil)
+		m.form = f
+		f.tab = tabRepo
+		f.cursor = slices.Index(f.fields(), fPath)
+
+		m.Update(tea.PasteMsg{Content: "/tmp/pasted\n"})
+		if f.poll.Path != "/tmp/pasted" {
+			t.Errorf("path = %q, want the pasted value", f.poll.Path)
+		}
+	})
+
+	t.Run("settings form", func(t *testing.T) {
+		m := newTestRoot(t)
+		s := newSettingsForm(m.cfgPath, m.cfg)
+		m.settings = s
+		focusField(t, s, "def_branch_prefix")
+
+		m.Update(tea.PasteMsg{Content: "feat/"})
+		if got := s.field("def_branch_prefix").text; got != "feat/" {
+			t.Errorf("branch prefix = %q, want feat/", got)
+		}
+	})
+
+	t.Run("home add-project prompt", func(t *testing.T) {
+		m := newTestRoot(t)
+		m.view = viewHome
+		m.home.adding, m.home.addInput = true, ""
+
+		m.Update(tea.PasteMsg{Content: "pasted-name\n"})
+		if m.home.addInput != "pasted-name" {
+			t.Errorf("addInput = %q, want pasted-name", m.home.addInput)
+		}
+	})
+
+	t.Run("detail worktree branch prompt", func(t *testing.T) {
+		m := newTestRoot(t)
+		m.view = viewDetail
+		m.detail = detailModel{project: "nori-app", wtMode: true}
+
+		m.Update(tea.PasteMsg{Content: "feat/from-clipboard"})
+		if m.detail.wtBranch != "feat/from-clipboard" {
+			t.Errorf("wtBranch = %q, want the pasted branch", m.detail.wtBranch)
+		}
+	})
+
+	t.Run("no text field focused is dropped", func(t *testing.T) {
+		m := newTestRoot(t)
+		m.view = viewHome // not adding, not filtering
+		m.Update(tea.PasteMsg{Content: "stray"})
+		if m.home.addInput != "" || m.home.filter != "" {
+			t.Errorf("a stray paste must be dropped, got add=%q filter=%q", m.home.addInput, m.home.filter)
+		}
+	})
+}
+
+// Space enables/disables the selected project on the rail. Like the picker's
+// multi-select, this matched " " — a key string bubbletea v2 never produces.
+func TestRailSpaceTogglesEnabled(t *testing.T) {
+	m := newTestRoot(t)
+	m.focus = focusPolls
+	m.list.cursor = slices.IndexFunc(m.railProjectPtrs(), func(p *config.Project) bool {
+		return p.Polls()
+	})
+	if m.list.cursor < 0 {
+		t.Fatal("fixture has no polling project")
+	}
+	before := m.selectedRailProject().Enabled
+
+	if _, cmd := m.Update(keyMsg("space")); cmd == nil {
+		t.Fatal("space on the rail must issue an enable/disable command")
+	}
+	if got := m.selectedRailProject().Enabled; got == before {
+		t.Errorf("Enabled = %v, want it toggled from %v", got, before)
+	}
+}
+
+// A daemon rejecting a config THIS build just validated means the two disagree
+// about what is valid — and the daemon is the stale one, since it does not
+// hot-reload its own binary. The relayed error has to say so, or the user is
+// left staring at "match_mode must be any|all, got \"\"" for a key their config
+// legitimately inherits and no longer writes.
+func TestExplainReloadRejectionFlagsStaleDaemon(t *testing.T) {
+	stale := `config invalid, keeping previous: project "Okane" polling: match_mode must be any|all, got ""`
+	got := explainReloadRejection(stale)
+	if !strings.Contains(got, "OLDER binary") {
+		t.Errorf("a complaint about an inherited key must name the stale daemon:\n%s", got)
+	}
+	if !strings.Contains(got, stale) {
+		t.Error("the original daemon message must be preserved")
+	}
+}
+
+// A genuine config error — one about a key that is NOT inheritable — is passed
+// through untouched. Blaming the daemon there would send the user the wrong way.
+func TestExplainReloadRejectionLeavesRealErrorsAlone(t *testing.T) {
+	real := `config invalid, keeping previous: project "web": path is required`
+	if got := explainReloadRejection(real); got != real {
+		t.Errorf("a real config error must pass through unchanged, got:\n%s", got)
+	}
+}
+
+// Anything that is not a validation rejection (a down daemon, an unknown
+// command) is left alone too.
+func TestExplainReloadRejectionIgnoresNonValidationErrors(t *testing.T) {
+	for _, msg := range []string{`unknown cmd "reload"`, "dial unix: connect: connection refused"} {
+		if got := explainReloadRejection(msg); got != msg {
+			t.Errorf("non-validation error must pass through, got %q", got)
+		}
 	}
 }

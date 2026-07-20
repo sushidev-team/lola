@@ -70,7 +70,7 @@ import (
 // PR yields a "skipped" CodeRabbitData (not an error); an unknown session or a gh
 // failure is an error.
 type Request struct {
-	Cmd    string `json:"cmd"` // stop|status|reload|enable|disable|pollOnce|sessions|projects|prs|hookEvent|kill|revive|pane|answer|review|coderabbit|open
+	Cmd    string `json:"cmd"` // stop|status|reload|enable|disable|pollOnce|sessions|projects|prs|hookEvent|kill|revive|pane|answer|review|coderabbit|open|renameProject
 	Poll   string `json:"poll,omitempty"`
 	DryRun bool   `json:"dryRun,omitempty"`
 
@@ -200,7 +200,11 @@ type ProjectsData struct {
 
 // ProjectInfo is one configured project flattened to render-ready fields.
 type ProjectInfo struct {
+	// Name is the project's ID — what paths, tmux names and every other
+	// name-keyed protocol field use. Label is its display string, "" when the
+	// project has none (render Name then).
 	Name          string `json:"name"`
+	Label         string `json:"label,omitempty"`
 	Path          string `json:"path"`
 	Repo          string `json:"repo"`
 	DefaultBranch string `json:"defaultBranch"`
@@ -331,6 +335,29 @@ type OpenTicketArgs struct {
 	UUID       string `json:"uuid"`
 	Branch     string `json:"branch,omitempty"`
 	Title      string `json:"title,omitempty"`
+}
+
+// RenameProjectArgs is the argument payload for cmd=renameProject: change a
+// [[project]]'s IDENTITY (its name), not its display Label — a label is free
+// text the client rewrites itself with an ordinary config save.
+//
+// The name is a path segment and part of every session ID, so the daemon owns
+// this: it moves the runtime state that is keyed by the old name and refuses
+// outright when anything live still depends on it (see RenameProjectData).
+type RenameProjectArgs struct {
+	From string `json:"from"`
+	To   string `json:"to"`
+}
+
+// RenameProjectData is Response.Data for cmd=renameProject. Message is a short
+// human-readable outcome; Blockers names the live sessions that made the daemon
+// refuse (empty on success), so the client can tell the human exactly what to
+// finish before renaming.
+type RenameProjectData struct {
+	From     string   `json:"from"`
+	To       string   `json:"to"`
+	Blockers []string `json:"blockers,omitempty"`
+	Message  string   `json:"message,omitempty"`
 }
 
 // KillData is Response.Data for cmd=kill. Removed reports whether the worktree

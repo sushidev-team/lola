@@ -126,12 +126,16 @@ func TestDetailWorktreeAgentToggle(t *testing.T) {
 	}
 }
 
-// 'e' from detail opens the project editor.
+// 'e' from detail opens the project form — one overlay covering the whole
+// [[project]], preloaded with the viewed project rather than opened blank.
 func TestDetailEditOpensProjectForm(t *testing.T) {
 	m := detailRoot(t)
 	m.Update(keyMsg("e"))
-	if m.projForm == nil {
-		t.Error("'e' should open the project editor")
+	if m.form == nil {
+		t.Fatal("'e' should open the project form")
+	}
+	if m.form.isNew || m.form.origName != "nori-app" {
+		t.Errorf("form must preload the viewed project, got isNew=%v origName=%q", m.form.isNew, m.form.origName)
 	}
 }
 

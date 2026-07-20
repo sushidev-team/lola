@@ -1,0 +1,222 @@
+@import "tailwindcss";
+@import "@xterm/xterm/css/xterm.css";
+
+/* Hack — a highly legible terminal typeface (source-foundry/Hack, MIT-ish, see
+   src/fonts/HACK-LICENSE.md). Vendored woff2 so there's no CDN dependency and no
+   Vite ?query issues. Used for the terminals (see --font-term). */
+@font-face {
+  font-family: "Hack";
+  src: url("./fonts/hack-regular.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Hack";
+  src: url("./fonts/hack-bold.woff2") format("woff2");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Hack";
+  src: url("./fonts/hack-italic.woff2") format("woff2");
+  font-weight: 400;
+  font-style: italic;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Hack";
+  src: url("./fonts/hack-bolditalic.woff2") format("woff2");
+  font-weight: 700;
+  font-style: italic;
+  font-display: swap;
+}
+
+/* ---------------------------------------------------------------------------
+   lola design tokens. The NAMES are unchanged from the original dark-navy
+   palette (so no component had to move); the VALUES are now Catppuccin, mapped
+   name-for-name in src/lib/catppuccin.ts — read toTokens() there for why each
+   token picked the Catppuccin color it did.
+
+   What is written below is the *compiled default*: Catppuccin Mocha, which is
+   also config's DefaultUITheme. That matters — a cold start with no JS, or a
+   frame before the bridge answers, already renders the right theme, so a user
+   on the default never sees a flash. src/lib/theme-runtime.svelte.ts overrides
+   these as inline properties on :root when a different flavor is configured;
+   inline styles sit in no cascade layer and so outrank this @layer theme block
+   unconditionally. catppuccin.test.ts asserts these literals still equal
+   toTokens(mocha), so the two cannot drift.
+
+   Tailwind v4 turns each --color-* into a utility (bg-canvas, text-accent-ink, …)
+   that compiles to var(--color-*) — which is what makes the runtime override
+   reach every one of them without a rebuild.
+---------------------------------------------------------------------------- */
+@theme {
+  --color-canvas: #181825; /* app background — Catppuccin `mantle` */
+  --color-panel: #1e1e2e; /* raised surface AND the terminal bg — `base` */
+  --color-edge: #45475a; /* panel border / rule — `surface1` */
+  --color-accent: #89dceb; /* cyan — DECORATIVE: fills, borders, focus — `sky` at 3:1 */
+  --color-accent-ink: #89dceb; /* accent as TEXT — measured, darkens on latte */
+  --color-accent-fill: #2f3f4d; /* primary-button chip — accent tinted into canvas */
+  --color-accent-fill-hover: #293a45; /* same tint, deeper backdrop — see catppuccin.ts */
+  --color-on-accent: #11111b; /* text ON the accent fill — measured, was `canvas` */
+  --color-ink: #cdd6f4; /* default foreground — `text` */
+  --color-faint: #7f849c; /* muted secondary text / labels — `overlay1` */
+  --color-placeholder: #7f849c; /* input placeholders — faint raised to AA on canvas */
+  --color-sel: #313244; /* selected-row band — `surface0` */
+
+  /* The status colors. Each is its Catppuccin name walked to AA against canvas,
+     panel and the selected-row band — the three surfaces theme.ts prints them
+     bare on. Mocha's six already clear it, so the literals below are the plain
+     names; latte's do not (green 2.92, yellow 2.29, peach 2.61 on a panel) and
+     resolve darker at runtime. See toTokens in catppuccin.ts. */
+  --color-good: #a6e3a1; /* ok / approved / pass — `green` */
+  --color-bad: #f38ba8; /* error / failed — `red` */
+  --color-on-bad: #11111b; /* text ON that fill (the `dead` pill) — was a built-in white */
+  --color-warn: #f9e2af; /* pending / retry — `yellow` */
+  --color-info: #89b4fa; /* working blue — `blue` */
+  --color-orange: #fab387; /* needs-you hero — `peach` */
+  --color-magenta: #cba6f7; /* PR detail line — `mauve` */
+
+  /* Status pills. Urgent + broken get a SOLID fill whose text is chosen by
+     measured contrast against that fill (onFill), so the alarm stays legible in
+     a light flavor too; active/parked get the accent tinted into `mantle` with
+     a readable() label — NOT into `surface0`, which steps toward the accent in
+     every flavor and collapsed latte's done pill to 1.75:1. */
+  --color-pill-urgent: #fab387;
+  --color-pill-urgent-fg: #11111b;
+  --color-pill-broken: #f38ba8;
+  --color-pill-broken-fg: #11111b;
+  --color-pill-work: #384461;
+  --color-pill-work-fg: #89b4fa;
+  --color-pill-done: #405148;
+  --color-pill-done-fg: #a6e3a1;
+  --color-pill-grey: #313244;
+  --color-pill-grey-fg: #a6adc8;
+
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Monaco, monospace;
+  --font-term: "Hack", "JetBrains Mono", ui-monospace, Menlo, monospace;
+
+  --radius-panel: 10px;
+}
+
+/* ---------------------------------------------------------------------------
+   Dark is the compiled default because the default flavor (Mocha) is dark. The
+   applier writes documentElement.style.colorScheme per flavor, and that inline
+   value wins — which is how Latte gets light native form controls, <select>
+   popups and UA scrollbars.
+---------------------------------------------------------------------------- */
+:root {
+  color-scheme: dark;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--color-canvas);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow: hidden; /* the app owns its own scroll regions */
+  user-select: none; /* app chrome isn't selectable; terminals opt back in */
+}
+
+/* The frameless title-bar drag strip (traffic lights are inset). Any element
+   with .drag becomes a window-drag handle; interactive children opt out. */
+.drag {
+  -webkit-app-region: drag;
+}
+.no-drag,
+button,
+a,
+input,
+textarea,
+select {
+  -webkit-app-region: no-drag;
+}
+
+/* Thin, theme-matched scrollbars everywhere. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-edge) transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--color-edge);
+  border-radius: 4px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  /* Nudged toward the foreground rather than to a lightened literal: on a dark
+     flavor that brightens the thumb, on a light one it darkens it, so hover
+     reads as "more prominent" in both directions. */
+  background: color-mix(in srgb, var(--color-edge) 70%, var(--color-ink));
+}
+
+/* Terminals may be selected (copy out); snapshots stay inert. */
+.term-live,
+.term-live * {
+  user-select: text;
+}
+
+/* Form fields opt back out of the app-chrome `user-select: none` so their text
+   can be selected and copied — otherwise editing/copying inside inputs and
+   textareas is crippled. Terminals keep their own opt-in above. */
+input,
+textarea {
+  user-select: text;
+}
+
+/* ---------------------------------------------------------------------------
+   Terminal stroke weight. `body` sets -webkit-font-smoothing: antialiased,
+   which costs ~32% of the glyph ink on DOM text (measured 86.45 -> 58.40 on a
+   luminance-weighted sample). It does NOT reach the WebGL glyph atlas — those
+   canvases are created detached and never appended, so they render at the
+   thick CoreText default regardless.
+
+   The consequence is that the snapshot tiles and xterm's DOM-renderer fallback
+   were visibly thinner than the WebGL terminal sitting next to them. Opting the
+   terminal surfaces back out of the thinning makes all three match, and is the
+   closest we can get to Ghostty's font-thicken (which dilates inside CoreText
+   and is not reachable from any xterm.js option). These rules are unlayered, so
+   they also beat Tailwind's `antialiased` utility if a tile still carries it.
+---------------------------------------------------------------------------- */
+.term-live,
+.term-live *,
+.term-snap,
+.term-snap * {
+  -webkit-font-smoothing: auto;
+  -moz-osx-font-smoothing: auto;
+}
+
+/* xterm surfaces sit flush on the panel background. */
+.xterm,
+.xterm-viewport {
+  background: transparent !important;
+}
+
+/* Focus ring consistent with the accent. */
+:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--color-accent) 70%, transparent);
+  outline-offset: 1px;
+}
+
+/* Subtle raise for panels; a focused panel gets the accent edge. The mix pulls
+   panel a little toward canvas — flavor-safe because canvas is always `mantle`
+   and panel always `base`, so the raise keeps its direction even on Latte,
+   where both are light and mantle is the darker of the two. */
+@utility panel {
+  background: color-mix(in srgb, var(--color-panel) 82%, var(--color-canvas));
+  border: 1px solid var(--color-edge);
+  border-radius: var(--radius-panel);
+}

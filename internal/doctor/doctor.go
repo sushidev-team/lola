@@ -37,6 +37,7 @@ const (
 	checkLinear    = "linear api key"
 	checkDaemon    = "daemon"
 	checkConfig    = "config"
+	checkRepaired  = "config repairs"
 	checkMigration = "migration"
 )
 
@@ -139,6 +140,9 @@ func Check(ctx context.Context, cfg *config.Config) Report {
 	add(linearResult(cfg))
 	add(daemonResult())
 	add(configResult(cfg))
+	if res, ok := repairResult(cfg); ok {
+		add(res)
+	}
 	for _, res := range projectResults(cfg) {
 		add(res)
 	}
@@ -261,6 +265,23 @@ func configResult(cfg *config.Config) Result {
 		return Result{Name: checkConfig, OK: false, Critical: true, Detail: firstErr(err)}
 	}
 	return Result{Name: checkConfig, OK: true, Critical: true, Detail: "valid"}
+}
+
+// repairResult reports the non-fatal repairs Load made to config.toml — values
+// that were already inert and would otherwise have hard-blocked the daemon (see
+// Config.Notices). NOT critical: the config works, but the user should know it
+// no longer says what they wrote. Nothing to report on a clean config.
+func repairResult(cfg *config.Config) (Result, bool) {
+	n := cfg.Notices()
+	if len(n) == 0 {
+		return Result{}, false
+	}
+	return Result{
+		Name:     checkRepaired,
+		OK:       false,
+		Critical: false,
+		Detail:   strings.Join(n, "; ") + " — save from the settings editor to write the cleaned value back",
+	}, true
 }
 
 // projectResults checks each [[project]]'s path exists and is a git repo.

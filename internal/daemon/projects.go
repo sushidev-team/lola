@@ -54,6 +54,7 @@ func (d *Daemon) projectsData(_ context.Context) protocol.ProjectsData {
 	for _, m := range metas {
 		info := protocol.ProjectInfo{
 			Name:           m.p.Name,
+			Label:          m.p.Label,
 			Path:           m.p.Path,
 			Repo:           m.p.Repo,
 			DefaultBranch:  m.p.DefaultBranch,

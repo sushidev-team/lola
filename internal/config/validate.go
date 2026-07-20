@@ -42,38 +42,36 @@ func (c *Config) ProjectByName(name string) *Project {
 	return nil
 }
 
-// EffectiveCap returns the project's polling concurrency cap, falling back to
-// [defaults].concurrency_cap when the project does not set one.
+// EffectiveCap returns the project's polling concurrency cap. Project fields
+// normally already hold the value resolved against [defaults]
+// (ResolveInheritance); the zero check keeps this correct on a config that has
+// not been resolved yet, which is how it has always behaved.
 func (c *Config) EffectiveCap(p *Project) int {
-	if p != nil && p.ConcurrencyCap > 0 {
-		return p.ConcurrencyCap
+	if p == nil || p.ConcurrencyCap <= 0 {
+		return c.Defaults.ConcurrencyCap
 	}
-	return c.Defaults.ConcurrencyCap
+	return p.ConcurrencyCap
 }
 
-// AgentForProject resolves the coding-agent kind for the named project:
-// the matching project's Agent when non-empty, else [defaults].agent when
-// non-empty, else the hard "claude" fallback. A name that resolves to no
-// project falls through to the defaults / claude. The returned string is one
-// of claude|codex|opencode (Validate rejects any other configured value).
+// AgentForProject resolves the coding-agent kind for the named project. The
+// project's Agent field already carries the project → [defaults] → "claude"
+// resolution; a name matching no project falls back the same way. The returned
+// string is one of claude|codex|opencode (Validate rejects any other value).
 func (c *Config) AgentForProject(name string) string {
 	if pr := c.ProjectByName(name); pr != nil && pr.Agent != "" {
 		return pr.Agent
 	}
-	if c.Defaults.Agent != "" {
-		return c.Defaults.Agent
-	}
-	return "claude"
+	return orString(c.Defaults.Agent, DefaultAgent)
 }
 
-// BranchPrefixForProject resolves the branch-name prefix for the named project:
-// the project's BranchPrefix when set, else DefaultBranchPrefix ("lola/"). A
-// name that resolves to no project falls back to the default.
+// BranchPrefixForProject resolves the branch-name prefix for the named project.
+// As with AgentForProject the project field is pre-resolved; a name matching no
+// project falls back to [defaults] then DefaultBranchPrefix ("lola/").
 func (c *Config) BranchPrefixForProject(name string) string {
 	if pr := c.ProjectByName(name); pr != nil && pr.BranchPrefix != "" {
 		return pr.BranchPrefix
 	}
-	return DefaultBranchPrefix
+	return orString(c.Defaults.BranchPrefix, DefaultBranchPrefix)
 }
 
 // PollRepo returns the GitHub "owner/name" repo the project's PR checks run
@@ -94,6 +92,11 @@ func (c *Config) PollRepo(p *Project) string {
 func (c *Config) Validate() error {
 	var errs []error
 
+	// A config assembled or edited in memory (the TUI and desktop mutate
+	// [defaults] and [[project]] in one pass) may still hold pre-edit resolved
+	// values. Re-resolve first so every check below sees effective values.
+	c.ResolveInheritance()
+
 	// Structural errors from migrating pre-merge [[poll]] / [[project.poll]]
 	// tables onto their project — recorded at load time, surfaced here.
 	errs = append(errs, c.migrateErrs...)
@@ -101,6 +104,8 @@ func (c *Config) Validate() error {
 	if c.Defaults.GlobalCap <= 0 {
 		errs = append(errs, errors.New("defaults.global_cap must be > 0"))
 	}
+
+	errs = append(errs, c.validateProjectDefaults()...)
 
 	// agent picks the coding agent a session spawns. Empty is allowed (a
 	// project may inherit it, and the chain hard-defaults to claude); a set
@@ -216,6 +221,14 @@ func (c *Config) Validate() error {
 			errs = append(errs, fmt.Errorf("%s: dedup_mode must be label|seen|state, got %q", id, p.DedupMode))
 		}
 
+		// An unknown sort key is silently ignored by SortIssues, so a typo would
+		// quietly change pickup order with no signal. Reject it instead.
+		for _, k := range p.PrioritySort {
+			if !slices.Contains(PrioritySortKeys, k) {
+				errs = append(errs, fmt.Errorf("%s: priority_sort: unknown key %q (must be one of %v)", id, k, PrioritySortKeys))
+			}
+		}
+
 		if c.EffectiveCap(p) <= 0 {
 			errs = append(errs, fmt.Errorf("%s: effective concurrency_cap must be > 0 (set the project's concurrency_cap or defaults.concurrency_cap)", id))
 		}
@@ -225,8 +238,58 @@ func (c *Config) Validate() error {
 	errs = append(errs, c.validateNotify()...)
 	errs = append(errs, c.validateBrain()...)
 	errs = append(errs, c.validateReview()...)
+	errs = append(errs, c.validateUI()...)
 
 	return errors.Join(errs...)
+}
+
+// validateProjectDefaults checks the [defaults] keys that projects inherit.
+//
+// The load-bearing check is the team guard: match_labels, on_sent_set_label and
+// blocked_label_id hold Linear label UUIDs, and a label UUID only exists within
+// one team. A global default is therefore coherent only while every project
+// that INHERITS it polls the same team — a project overriding the key with its
+// own team's label is fine and is not counted. Without this, a second team's
+// project would silently filter on a label that cannot match, and lola would
+// look "up but idle" with nothing to point at.
+func (c *Config) validateProjectDefaults() []error {
+	var errs []error
+
+	if c.Defaults.MatchMode != "" && c.Defaults.MatchMode != "any" && c.Defaults.MatchMode != "all" {
+		errs = append(errs, fmt.Errorf("defaults.match_mode must be any|all (empty inherits), got %q", c.Defaults.MatchMode))
+	}
+	switch c.Defaults.DedupMode {
+	case "", "label", "seen", "state":
+	default:
+		errs = append(errs, fmt.Errorf("defaults.dedup_mode must be label|seen|state (empty inherits), got %q", c.Defaults.DedupMode))
+	}
+	for _, k := range c.Defaults.PrioritySort {
+		if !slices.Contains(PrioritySortKeys, k) {
+			errs = append(errs, fmt.Errorf("defaults.priority_sort: unknown key %q (must be one of %v)", k, PrioritySortKeys))
+		}
+	}
+	// Same shell-identifier rule as [[project]].env — these pairs reach the
+	// same 0600 shell-sourced env file at spawn time. See envNameRe.
+	for _, k := range slices.Sorted(maps.Keys(c.Defaults.Env)) {
+		if !envNameRe.MatchString(k) {
+			errs = append(errs, fmt.Errorf("defaults.env key %q is not a valid shell identifier (must match [A-Za-z_][A-Za-z0-9_]*)", k))
+		}
+	}
+
+	// NOTE: there is deliberately NO cross-team check on the label keys here.
+	//
+	// An earlier version rejected a [defaults] label whenever polling projects
+	// spanned several teams, on the grounds that a Linear label UUID is
+	// team-scoped. That is only true of TEAM labels: Linear also has
+	// workspace-level labels (IssueLabel.team == null) which exist across every
+	// team, and those are exactly what a shared [defaults] label should be — so
+	// the check rejected the correct configuration.
+	//
+	// Whether a given UUID is workspace- or team-scoped cannot be known offline,
+	// and this package never touches the network. The distinction is enforced
+	// where it CAN be: the settings UIs offer only workspace labels for the
+	// [defaults] keys, and per-team labels only on a project.
+	return errs
 }
 
 // validateReview checks the [review] table. The only rule is timeout_seconds >= 0;

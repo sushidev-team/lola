@@ -1,0 +1,14 @@
+.task
+bin
+# Keep the dir (via .gitkeep) so //go:embed all:frontend/dist resolves before
+# the frontend has been built; ignore the built assets themselves.
+frontend/dist/*
+!frontend/dist/.gitkeep
+frontend/node_modules
+build/linux/appimage/build
+build/windows/nsis/MicrosoftEdgeWebview2Setup.exe
+# Mobile generated (per-machine; overlays hold absolute paths)
+build/ios/xcode/overlay.json
+build/ios/xcode/gen/
+build/android/overlay.json
+build/android/gen/

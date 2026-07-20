@@ -508,7 +508,7 @@ func (m *rootModel) projectRailBody(w, h int) []string {
 		if m.focus == focusPolls && i == l.cursor {
 			marker = boxTitleHi.Render("›")
 		}
-		name := p.Name
+		name := p.DisplayName()
 		if polls && !enabled {
 			name = faintText.Render(name)
 		}
@@ -661,7 +661,7 @@ func (m *rootModel) cockpitMessage() string {
 	case m.list.confirmDelete:
 		name := ""
 		if p := m.selectedRailProject(); p != nil {
-			name = p.Name
+			name = p.DisplayName()
 		}
 		return warnText.Render(fmt.Sprintf("stop polling %q? (y/n)", name))
 	case s.flash != "":

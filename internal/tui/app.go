@@ -56,7 +56,6 @@ type rootModel struct {
 	list     listModel
 	sessions sessionsModel
 	form     *formModel
-	projForm *projectForm         // project editor modal ('P'); nil otherwise
 	settings *settingsForm        // global settings editor modal ('S'); nil otherwise
 	terms    map[string]*termView // per-session persistent shells, keyed by session ID
 
@@ -91,6 +90,39 @@ type rootModel struct {
 	// "restarting"), shown in the message line while a ^r/^x/auto-start op runs;
 	// cleared when its daemonOpMsg arrives. Only set in self-managed mode.
 	daemonOp string
+}
+
+// routePaste delivers pasted text to whatever currently owns keyboard input,
+// in the SAME precedence as the keystroke path in Update: the focused embed,
+// then the modal overlays, then the inline prompts of the active screen. A
+// paste with no text field focused is dropped.
+//
+// This exists because bubbletea v2 emits a bracketed paste as tea.PasteMsg
+// rather than as key events, so a field that only reads tea.KeyPressMsg cannot
+// see it. Anything new that accepts typed input needs a case here too.
+func (m *rootModel) routePaste(content string) (tea.Model, tea.Cmd) {
+	if content == "" {
+		return m, nil
+	}
+	if m.embedFocused {
+		return m.handleEmbedPaste(content)
+	}
+	switch {
+	case m.form != nil:
+		m.form.paste(content)
+	case m.settings != nil:
+		m.settings.paste(content)
+	case m.doctorLoading || m.doctorReport != nil:
+		// read-only overlay
+	case m.view == viewDetail && m.detail.wtMode:
+		m.detail.wtBranch += pasteInline(content)
+	case m.view == viewHome && m.home.adding:
+		m.home.addInput += pasteInline(content)
+	case m.view == viewHome && m.home.filtering:
+		m.home.filter += pasteInline(content)
+		m.home.repin(m.cfg)
+	}
+	return m, nil
 }
 
 // manageDaemon reports whether the TUI owns the daemon lifecycle (auto-start,
@@ -191,9 +223,30 @@ func bestEffortReloadCmd() tea.Msg {
 		return opDoneMsg{}
 	}
 	if !resp.OK {
-		return opDoneMsg{err: errors.New("reload: " + resp.Error)}
+		return opDoneMsg{err: errors.New("reload: " + explainReloadRejection(resp.Error))}
 	}
 	return opDoneMsg{}
+}
+
+// explainReloadRejection annotates a daemon reload rejection when it points at
+// a STALE DAEMON rather than a bad config.
+//
+// Everything that reaches reload has already passed this build's Validate — the
+// editors validate before writing — so the daemon rejecting it means the two
+// disagree about what is valid, and the daemon is the one running older code
+// (it does not hot-reload its own binary). The giveaway is a complaint about a
+// key that is now INHERITED from [defaults] and so no longer written into the
+// project's own table: a pre-inheritance daemon sees it as missing.
+func explainReloadRejection(msg string) string {
+	if !strings.Contains(msg, "config invalid") {
+		return msg
+	}
+	for _, key := range []string{"match_mode", "dedup_mode", "on_sent_set_label", "priority_sort", "blocked_label_id", "match_labels"} {
+		if strings.Contains(msg, key) {
+			return msg + "  ← this build accepts that config; the running daemon is an OLDER binary that predates [defaults] inheritance. Restart it with ^r."
+		}
+	}
+	return msg
 }
 
 // ---- tea.Model ----
@@ -356,9 +409,11 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.syncAgentPreview()
 	case tea.PasteMsg:
-		if m.embedFocused {
-			return m.handleEmbedPaste(v.Content)
-		}
+		// bubbletea v2 delivers a bracketed paste as its OWN message, which the
+		// key encoder never sees — so every text field has to be routed here
+		// explicitly or pasting silently does nothing. Mirror the keystroke
+		// precedence below: focused embed, then whichever overlay owns input.
+		return m.routePaste(v.Content)
 	case tea.MouseWheelMsg:
 		if m.embedFocused {
 			m.forwardWheel(v.Mouse())
@@ -374,45 +429,26 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// The project editor owns all input while open.
-	if m.projForm != nil {
-		if k, ok := msg.(tea.KeyPressMsg); ok {
-			switch m.projForm.update(k) {
-			case projFormCancel:
-				m.projForm = nil
-			case projFormSaved:
-				m.projForm = nil
-				m.reloadConfig()
-				if m.view == viewHome {
-					m.home.flash, m.home.flashGood = "project saved", true
-					m.home.repin(m.cfg)
-				} else {
-					m.list.flash = "project saved"
-				}
-				return m, tea.Batch(bestEffortReloadCmd, fetchStatusCmd, fetchProjectsCmd)
-			}
-		}
-		return m, nil
-	}
-
-	// The global settings editor owns all input while open.
+	// The global settings editor owns all input while open. It takes the whole
+	// msg and returns a tea.Cmd, exactly like the project form below: its Linear
+	// label pickers load asynchronously, so it needs both a way to dispatch a
+	// command and a route for the result message to come back on.
 	if m.settings != nil {
-		if k, ok := msg.(tea.KeyPressMsg); ok {
-			switch m.settings.update(k) {
-			case settingsFormCancel:
-				m.settings = nil
-			case settingsFormSaved:
-				m.settings = nil
-				m.reloadConfig()
-				if m.view == viewHome {
-					m.home.flash, m.home.flashGood = "settings saved", true
-				} else {
-					m.list.flash = "settings saved"
-				}
-				return m, tea.Batch(bestEffortReloadCmd, fetchStatusCmd, fetchProjectsCmd)
+		cmd, ev := m.settings.update(msg)
+		switch ev {
+		case settingsFormCancel:
+			m.settings = nil
+		case settingsFormSaved:
+			m.settings = nil
+			m.reloadConfig()
+			if m.view == viewHome {
+				m.home.flash, m.home.flashGood = "settings saved", true
+			} else {
+				m.list.flash = "settings saved"
 			}
+			return m, tea.Batch(bestEffortReloadCmd, fetchStatusCmd, fetchProjectsCmd)
 		}
-		return m, nil
+		return m, cmd
 	}
 
 	// The doctor overlay owns all input while open (loading or showing).
@@ -558,9 +594,6 @@ func (m *rootModel) viewString() string {
 	if m.settings != nil {
 		return m.settingsFormModal()
 	}
-	if m.projForm != nil {
-		return m.projectFormModal()
-	}
 	if m.form != nil {
 		// The poll edit form floats as a modal over the cockpit. (The first-run
 		// setup wizard runs standalone before the cockpit exists, so it has no
@@ -652,6 +685,8 @@ func (m *rootModel) listKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			l.cursor++
 		}
 	case "n":
+		// New project. The form carries every field a [[project]] needs, so it
+		// creates outright — 'P' edits the selected one.
 		f, cmd := newFormModel(m.cfg, nil)
 		m.form = f
 		return m, cmd
@@ -671,7 +706,7 @@ func (m *rootModel) listKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "d":
 		m.doctorLoading, m.doctorScroll = true, 0
 		return m, runDoctorCmd(m.cfg)
-	case " ":
+	case "space":
 		return m, m.toggleSelected()
 	case "r":
 		if p := m.selectedRailProject(); p != nil && p.TeamID != "" {

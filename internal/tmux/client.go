@@ -378,7 +378,7 @@ func (c *Client) BuildViewer(ctx context.Context, viewer, dir string, tabs []Vie
 		_ = c.KillSession(ctx, viewer)
 		return fmt.Errorf("tmux: build viewer: no attachable sessions")
 	}
-	_ = c.KillWindow(ctx, viewer, 0)  // drop the placeholder shell
+	_ = c.KillWindow(ctx, viewer, 0)   // drop the placeholder shell
 	_ = c.SelectWindow(ctx, viewer, 1) // open on the first real tab
 	return nil
 }

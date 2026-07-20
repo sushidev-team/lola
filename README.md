@@ -149,6 +149,76 @@ Linear **UUIDs**, not names — the TUI form resolves names to IDs for you.
 | `agent` | `"claude"` \| `"codex"` \| `"opencode"` | Coding agent spawned per session. Default `claude`. Global default; override per repo with `[[project]].agent`. Empty/omitted resolves to `claude`. See [The coding agent](#the-coding-agent). |
 | `manage_daemon` | bool | Whether the TUI owns the daemon lifecycle: silently start the daemon on open when the socket is dead, `^r` restart, `^x` stop. Default `true`. Set `false` when a launchd `KeepAlive` job owns the daemon, so the TUI never fights the supervisor. See [Running the daemon](#running-the-daemon-launchd-vs-tui). |
 
+`[defaults]` additionally carries a **fallback for each inheritable
+`[[project]]` key**, so shared setup is written once instead of repeated per
+repository — see [Project defaults](#project-defaults-inheritance).
+
+### Project defaults (inheritance)
+
+These `[defaults]` keys are the fallback for the same-named `[[project]]` key.
+A project that **omits** the key inherits this value; a project that sets it
+overrides it.
+
+| Key | Type | Inherited by |
+| --- | --- | --- |
+| `branch_prefix` | string | `[[project]].branch_prefix` — prefix for a session's branch. Ultimate default `"lola/"`. |
+| `symlinks` | string array | `[[project]].symlinks` |
+| `post_create` | string array | `[[project]].post_create` |
+| `env` | table of strings | `[[project]].env` (as `[defaults.env]`) |
+| `match_labels` | string array | `[[project]].match_labels` |
+| `match_mode` | `"any"` \| `"all"` | `[[project]].match_mode`. Ultimate default `"any"`. |
+| `dedup_mode` | `"label"` \| `"seen"` \| `"state"` | `[[project]].dedup_mode`. Ultimate default `"seen"`. |
+| `on_sent_set_label` | string (UUID) | `[[project]].on_sent_set_label` |
+| `blocked_label_id` | string (UUID) | `[[project]].blocked_label_id` |
+| `priority_sort` | string array | `[[project]].priority_sort`. Ultimate default `["priority", "createdAt"]`. See [Priority sort](#priority-sort). |
+
+Inheritance is decided by **key presence, not by value**:
+
+```toml
+# key absent from the project  -> inherit [defaults]
+match_labels = ["x"]           # -> override with ["x"]
+match_labels = []              # -> override with NOTHING (match no labels)
+```
+
+An inherited key is never written into the project's own table, so changing a
+default later still reaches every project that inherits it. `agent`,
+`concurrency_cap` and `branch_prefix` are the exceptions to the presence rule:
+for them an empty/zero value has always meant "fall back", and still does.
+
+> **Use WORKSPACE labels here.** `match_labels`, `on_sent_set_label` and
+> `blocked_label_id` hold Linear label UUIDs, and Linear has two kinds: *team*
+> labels, scoped to a single team, and *workspace* (organisation) labels, which
+> exist across every team. A `[defaults]` label is inherited by projects on any
+> team, so it should be a **workspace** label — which is typically where a
+> shared trigger label like `agent-ready` is defined anyway.
+>
+> Both settings screens offer only workspace labels for these keys; a project's
+> own label pickers offer that project's team labels. Lola cannot tell the two
+> apart offline (config validation never touches the network), so a team label
+> put here by hand is not rejected — it will simply never match issues outside
+> its own team.
+
+#### Priority sort
+
+`priority_sort` is **lola's own tie-break chain** for ranking the issues a tick
+matched — not a Linear concept, and nothing is fetched from the API for it. The
+keys are applied in the order given, and only two are understood:
+
+| Key | Orders by |
+| --- | --- |
+| `priority` | Linear priority, highest first; issues with no priority sort last |
+| `createdAt` | creation time, oldest first |
+
+Order is the value: `["priority", "createdAt"]` takes the highest-priority
+issue and breaks ties by age, while `["createdAt", "priority"]` is
+oldest-first with priority as the tie-break. Anything left after the chain
+falls back to the issue identifier, so the order is always deterministic.
+
+Both settings screens offer these as an ordered picker showing the rank. An
+unknown key used to be silently ignored by the sorter; it is now **rejected by
+validation**, since a typo that quietly changes pickup order is worse than a
+startup error.
+
 ### `[linear]`
 
 | Key | Type | Description |
@@ -173,14 +243,64 @@ runtime layer, not on config load.
 
 | Key | Type | Description |
 | --- | --- | --- |
-| `name` | string | Unique project name (required). It is the project's identity everywhere — `lola status`, `enable`/`disable`/`poll`/`logs`, and the seen-file name (`state/<name>.seen`) all key by it. |
+| `name` | string | Unique project **id** (required), and a path segment: it names the worktree directory (`worktrees/<name>/`) and the seen file (`state/<name>.seen`), prefixes every session/tmux name (`lola-<name>-eng-42`), and is what `lola status`, `enable`/`disable`/`poll`/`logs` key by. Keep it slug-shaped (lowercase letters, digits, `.` `_` `-`) — the forms slugify what you type. Changing it is a **rename**, not an edit; see [Renaming a project](#renaming-a-project). |
+| `label` | string | Free-text display name shown in the TUI and desktop (e.g. `"Nori App"`). Optional — empty falls back to `name`. Purely cosmetic: nothing keys by it, so you can change it at any time, including while sessions are running. |
 | `path` | string | Absolute path to the main checkout (required). A leading `~` is expanded on load. Session worktrees live under `~/.lola/worktrees/`, never inside the checkout. |
-| `repo` | string | GitHub repository as `owner/name`. Used for PR/CI observation of the sessions spawned for this project: the reconciler and observer pass it to `gh pr list --repo` so the open-PR check works regardless of the daemon's working directory. When empty, that check is unavailable and orphaned issues are **never** auto-reverted (fail-closed). |
-| `default_branch` | string | Branch new session worktrees start from, and the base the agent is told to open its PR against. Default `main`. |
-| `post_create` | string array | Commands run inside a fresh worktree before the agent starts (e.g. `composer install`). Any failure blocks the session with a clear status — never a half-started agent. |
-| `symlinks` | string array | Files symlinked from the main checkout into each worktree, e.g. `[".env"]`. Beware: a shared `.env` usually means every worktree talks to the same database. |
-| `env` | table of strings | Extra environment variables exported into each session (`[project.env]`); the agent and the `post_create` commands both see them. |
+| `repo` | string | GitHub repository as `owner/name`. Used for PR/CI observation of the sessions spawned for this project: the reconciler and observer pass it to `gh pr list --repo` so the open-PR check works regardless of the daemon's working directory. When empty, that check is unavailable and orphaned issues are **never** auto-reverted (fail-closed). Both forms **auto-detect** this from the checkout once `path` is set — see [Repo auto-detection](#repo-auto-detection). |
+| `default_branch` | string | Branch new session worktrees start from, and the base the agent is told to open its PR against. Default `main`. Both forms offer the checkout's branches once `path` is set (local plus remote-tracking, the repository's own default first) while staying free text, so a path that is not a checkout is never a dead end. |
+| `branch_prefix` | string | Prefix prepended to a session's derived branch name (e.g. `"feat/"` yields `feat/eng-42`). Empty inherits `[defaults].branch_prefix`, then `"lola/"`. |
+| `post_create` | string array | Commands run inside a fresh worktree before the agent starts (e.g. `composer install`). Any failure blocks the session with a clear status — never a half-started agent. Omit to inherit `[defaults].post_create`. |
+| `symlinks` | string array | Files symlinked from the main checkout into each worktree, e.g. `[".env"]`. Beware: a shared `.env` usually means every worktree talks to the same database. Omit to inherit `[defaults].symlinks`. |
+| `env` | table of strings | Extra environment variables exported into each session (`[project.env]`); the agent and the `post_create` commands both see them. Omit to inherit `[defaults].env`. |
 | `agent` | `"claude"` \| `"codex"` \| `"opencode"` | Coding agent for sessions spawned into this repo, overriding `[defaults].agent`. Empty/omitted inherits the global default (ultimately `claude`). See [The coding agent](#the-coding-agent). |
+
+#### Repo auto-detection
+
+Filling in a project's `path` makes the TUI and desktop forms resolve `repo`
+from the checkout's git remotes, so `owner/name` need not be copied by hand. It
+prefers the **`upstream`** remote over `origin` — in a fork, `origin` is your
+fork but `upstream` is where the pull requests actually land, which is what
+PR/CI observation must watch. A detected value is flagged as such in the form;
+verify it on a fork.
+
+Detection only ever **fills an empty field** and never overwrites a value you
+set. When it cannot determine the repo — not a git checkout, no remotes, a
+non-GitHub host, or a self-hosted GitHub Enterprise on a domain that does not
+name GitHub — it leaves the field **empty rather than guessing**. That is the
+safe direction: an empty `repo` disables the open-PR check (and so the orphan
+revert, fail-closed), whereas a wrong one would have `gh pr list --repo` answer
+confidently about someone else's repository.
+
+It reads local git remotes only — no network, no `gh`, no auth.
+
+#### Renaming a project
+
+A project has two names, and they behave very differently.
+
+**`label` is free.** It is the display string and nothing keys by it, so rename
+it whenever you like — including with sessions running. In the TUI it is the
+first field of the project form's Repo tab; saving is an ordinary config write.
+
+**`name` is the id, and changing it is a migration.** It is baked into the
+worktree directory (`worktrees/<name>/`), the seen file (`state/<name>.seen`)
+and every session id — which is also the tmux session name
+(`lola-<name>-eng-42`). The TUI still lets you edit it: type a new id (it
+slugifies as you go) and save. The save is then routed to the **daemon**, which
+
+- refuses if the project has any session in the store, naming them, because a
+  live session's worktree path and tmux name embed the old id and moving them
+  would mean `git worktree repair` and tmux surgery mid-flight;
+- refuses if `worktrees/<old>/` still holds anything, since that is state
+  nothing would resolve under the new name;
+- otherwise renames the `[[project]]` entry in place, carries `state/<old>.seen`
+  over to `state/<new>.seen` so already-dispatched issues are not re-dispatched,
+  drops the now-empty `worktrees/<old>/`, and reloads.
+
+So: **finish or kill a project's sessions, then rename.** A rename needs a
+running daemon — it is the only thing that knows whether a session is live.
+
+For a new project the id is derived from the label as you type (`Nori App` →
+`nori-app`); typing in the id field yourself breaks that link for good.
 
 ### `[[project]]` polling fields (optional; a project polls when `team_id` is set)
 
@@ -465,6 +585,23 @@ without `[tmux]` always validates.
 | `detach_key` | string | Opt-in single key bound to detach (e.g. `"F12"`). Empty keeps tmux's default **Ctrl-b d**. The status bar's detach hint follows whatever this resolves to. |
 | `status_right` | string | Raw tmux `status-right` format override. Empty uses lola's built-in branded bar. |
 | `mouse` | bool | Enable tmux mouse mode inside the session. Default `false`. |
+
+### `[ui]` (optional)
+
+**Appearance only** — nothing the daemon does reads this table, so omitting it
+is zero behavior change. One identifier drives all of lola-desktop's color: the
+app chrome, the embedded terminals, and the ANSI palette the session grid
+renders pane snapshots with.
+
+| Key | Type | Description |
+| --- | --- | --- |
+| `theme` | string | `catppuccin-latte` \| `catppuccin-frappe` \| `catppuccin-macchiato` \| `catppuccin-mocha`. Empty or absent uses `catppuccin-mocha`. |
+
+Unlike `[tmux]`, the theme **is** validated: an unrecognized name is rejected at
+load with an error listing the accepted values, rather than silently rendering
+the default — a typo you cannot see is worse than a startup error. A config
+that never sets `[ui]` never grows the table on save, so the default stays a
+default instead of being frozen into your file.
 
 ## The coding agent
 

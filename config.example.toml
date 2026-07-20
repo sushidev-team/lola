@@ -39,6 +39,45 @@ global_cap = 4
 # Set false when a launchd KeepAlive job owns the daemon so the TUI never fights
 # the supervisor (it then hides its start/stop/restart keys). Do not run both.
 # manage_daemon = true
+#
+# --- Project defaults -------------------------------------------------------
+# Every key below is the fallback for the same-named [[project]] key. A project
+# that OMITS the key inherits this value; a project that sets it overrides it.
+# The point is that shared setup — which Linear label triggers a pickup, which
+# label marks an issue as taken, the worktree bootstrap — is written ONCE here
+# instead of repeated in every [[project]].
+#
+# Inheritance is by KEY PRESENCE, not by value:
+#   (key absent from the project)   -> inherit whatever is set here
+#   match_labels = ["x"]            -> override with ["x"]
+#   match_labels = []               -> override with NOTHING (match no labels)
+# So an inherited key is never written into the project's own table, and
+# changing a default here still reaches every project that inherits it.
+#
+# CAREFUL: match_labels / on_sent_set_label / blocked_label_id hold Linear label
+# UUIDs, and Linear has TWO kinds — team labels (scoped to one team) and
+# WORKSPACE labels (organisation-wide). A default here is inherited by projects
+# on any team, so use a WORKSPACE label; a team label will simply never match
+# issues outside its own team. The settings screens offer only workspace labels
+# for these keys. Lola cannot tell them apart offline, so this is not validated.
+#
+# branch_prefix = "lola/"
+# symlinks = [".env"]
+# post_create = ["composer install", "bun install --frozen-lockfile"]
+# match_labels = ["label_UUID_of_your_trigger_label"]
+# match_mode = "any"                 # any | all
+# dedup_mode = "label"               # label | seen | state
+# on_sent_set_label = "label_UUID_of_your_taken_label"
+# blocked_label_id = "label_UUID_of_your_blocked_label"
+# priority_sort: lola's OWN tie-break chain for ranking the issues a tick
+# matched — not a Linear concept, nothing is fetched for it. Only two keys are
+# understood, applied in order: "priority" (highest first, none last) and
+# "createdAt" (oldest first). The order IS the value. An unknown key is
+# rejected rather than silently ignored.
+# priority_sort = ["priority", "createdAt"]
+#
+# [defaults.env]
+# APP_ENV = "local"
 
 [linear]
 # Keychain SERVICE NAME (tried first):
@@ -194,22 +233,48 @@ endpoint = "https://api.linear.app/graphql"
 # mouse = false           # enable tmux mouse mode inside the session
 
 # ---------------------------------------------------------------------------
+# [ui] — OPTIONAL appearance. Presentation only: nothing the daemon does reads
+# this, so omitting the whole section is zero behavior change. The theme sets
+# lola-desktop's app chrome, its terminal colors and the ANSI palette used to
+# render pane snapshots, all from one identifier.
+#
+# Only the four values below are accepted — an unknown name is REJECTED at load
+# rather than silently falling back, so a typo tells you instead of quietly
+# rendering the default. Omit the key (or the table) to use "catppuccin-mocha".
+# ---------------------------------------------------------------------------
+# [ui]
+# theme = "catppuccin-mocha"   # catppuccin-latte | catppuccin-frappe | catppuccin-macchiato | catppuccin-mocha
+
+# ---------------------------------------------------------------------------
 # [[project]] — repository registry for the native runtime (one table per
 # repo). Every poll references a project by name; lola then creates a git
 # worktree per session under ~/.lola/worktrees/<project>/... and runs Claude
 # Code in tmux inside it.
 # ---------------------------------------------------------------------------
 [[project]]
+# name is the project's ID: a path segment (worktrees/<name>/,
+# state/<name>.seen) and the prefix of every session + tmux name
+# ("lola-nori-app-eng-42"). Keep it slug-shaped; changing it is a rename that
+# only succeeds while the project has no live sessions.
 name = "nori-app"
+# label is the free-text display name the UIs show. Optional — empty falls back
+# to `name`. Nothing keys by it, so it is safe to change at any time.
+label = "Nori App"
 # Absolute path to the main checkout (a leading ~ is expanded on load).
 # Worktrees are created NEXT TO it under ~/.lola/, never inside it.
 path = "/Volumes/Git/sushi/internal/nori/nori-app"
 # GitHub "owner/name"; used for PR/CI observation of native sessions.
+# The TUI and desktop forms auto-detect this from the checkout's remotes when
+# you set `path` (upstream first, then origin) — verify it on a fork. Left
+# empty, PR checks are unavailable and orphaned issues are never auto-reverted
+# (fail-closed), which is why detection leaves it empty rather than guessing.
 repo = "sushidev-team/nori-app"
 # Branch new session worktrees start from. Default when omitted: "main".
 default_branch = "main"
 # Commands run inside a fresh worktree BEFORE the agent starts; any failure
 # blocks the session (a clear error status, never a half-started agent).
+# Omit the key entirely to inherit [defaults].post_create; set it to [] to run
+# nothing even though a default exists.
 post_create = [
   "composer install",
   "bun install --frozen-lockfile",
@@ -219,6 +284,7 @@ post_create = [
 # (and caches, queues, ...) as the main checkout — concurrent sessions can
 # step on each other's migrations and seed data. Point sessions at separate
 # databases if that matters for your project.
+# Omit to inherit [defaults].symlinks; set to [] to link nothing.
 symlinks = [".env"]
 # Coding agent for THIS repo, overriding [defaults].agent. One of
 # claude | codex | opencode. Empty/omitted inherits the global default
@@ -236,6 +302,7 @@ project_id = ""       # optional Linear project filter; empty/omitted = whole te
 cycle_mode = "active" # none | active | pinned (active re-resolves each tick)
 cycle_id = ""
 state_ids = ["state_aaaa0000-1111-2222-3333-444455556666"]
+# Omit to inherit [defaults].match_labels; set to [] to match on state alone.
 match_labels = ["label_trig0000-1111-2222-3333-444455556666"]
 match_mode = "any"    # any = one trigger label; all = every trigger label
 assignee_mode = "me"  # anyone | me | user (user requires assignee_user_id)
@@ -290,6 +357,11 @@ on_sent_set_label = "label_sent0000-1111-2222-3333-444455556666"
 # project = "nori-app"
 # repo = "sushidev-team/nori-app"
 # concurrency_cap = 2
+# priority_sort: lola's OWN tie-break chain for ranking the issues a tick
+# matched — not a Linear concept, nothing is fetched for it. Only two keys are
+# understood, applied in order: "priority" (highest first, none last) and
+# "createdAt" (oldest first). The order IS the value. An unknown key is
+# rejected rather than silently ignored.
 # priority_sort = ["priority", "createdAt"]
 # # state = dedup by workflow-state transition (no seen file, no label flip).
 # dedup_mode = "state"

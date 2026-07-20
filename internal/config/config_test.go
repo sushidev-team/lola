@@ -169,6 +169,17 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 		t.Errorf("round trip mismatch:\n save: %+v\n load: %+v", orig, got)
 	}
 
+	// [ui] is deliberately NOT in the materialized-defaults club above: it
+	// resolves to the ZERO value and its default lives in UITheme(), which is
+	// what keeps an unconfigured [ui] out of the saved file. Hence no
+	// orig.UI = ... seed is needed for the DeepEqual to hold.
+	if got.UI != (UIConfig{}) {
+		t.Errorf("round-tripped UI = %+v, want the zero UIConfig", got.UI)
+	}
+	if got.UITheme() != DefaultUITheme {
+		t.Errorf("round-tripped UITheme() = %q, want %q", got.UITheme(), DefaultUITheme)
+	}
+
 	// No leftover temp files from the atomic write.
 	entries, err := os.ReadDir(filepath.Dir(path))
 	if err != nil {

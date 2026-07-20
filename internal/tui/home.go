@@ -107,7 +107,12 @@ func (h *homeModel) rows(cfg *config.Config) []config.Project {
 	q := strings.ToLower(h.filter)
 	out := make([]config.Project, 0, len(cfg.Projects))
 	for _, p := range cfg.Projects {
-		if strings.Contains(strings.ToLower(p.Name), q) || strings.Contains(strings.ToLower(p.Path), q) {
+		// Match the id as well as the label: the list shows labels, but the id is
+		// what appears in session names and paths, so a human searching for what
+		// they saw in a terminal should still find the project.
+		if strings.Contains(strings.ToLower(p.DisplayName()), q) ||
+			strings.Contains(strings.ToLower(p.Name), q) ||
+			strings.Contains(strings.ToLower(p.Path), q) {
 			out = append(out, p)
 		}
 	}
@@ -209,18 +214,20 @@ func (m *rootModel) updateHome(msg tea.Msg) (tea.Model, tea.Cmd) {
 		h.adding, h.addInput = true, ""
 	case "e":
 		if p := h.selectedProject(m.cfg); p != nil {
-			f, ok := newProjectForm(m.cfgPath, m.cfg, p.Name)
-			if !ok {
+			pr := m.cfg.ProjectByName(p.Name)
+			if pr == nil {
 				h.flash, h.flashGood = "project "+p.Name+" not found", false
 				return m, nil
 			}
-			m.projForm = f
+			f, cmd := newFormModel(m.cfg, pr)
+			m.form = f
+			return m, cmd
 		}
 	case "x":
 		if p := h.selectedProject(m.cfg); p != nil {
 			h.confirmRemove, h.removeTarget = true, p.Name
 		}
-	case " ", "space":
+	case "space":
 		return m, m.homeTogglePoll()
 	case "/":
 		h.filtering, h.filter = true, ""
@@ -315,28 +322,22 @@ func (m *rootModel) openGlobalSessions() (tea.Model, tea.Cmd) {
 	return m, fetchSessionsCmd
 }
 
-// addProject appends a stub [[project]] with the given name, persists, reloads,
-// and opens the project editor so the path/repo/etc. get filled in. A stub with
-// no path is intentional (it shows as ⚠ missing until edited) — matching the
-// plan's "saves even if path missing".
+// addProject opens the project form on a NEW entry seeded with the given name.
+// Nothing is persisted until the form saves: a project needs a path to validate,
+// so writing a stub first would put an invalid [[project]] on disk and leave it
+// there if the user backs out.
 func (m *rootModel) addProject(name string) tea.Cmd {
 	m.reloadConfig()
 	if m.cfg.ProjectByName(name) != nil {
 		m.home.flash, m.home.flashGood = "project "+name+" already exists", false
 		return nil
 	}
-	m.cfg.Projects = append(m.cfg.Projects, config.Project{Name: name, DefaultBranch: config.DefaultBranchName})
-	if err := m.cfg.Save(m.cfgPath); err != nil {
-		m.home.flash, m.home.flashGood = "save failed: "+err.Error(), false
-		return nil
-	}
+	f, cmd := newFormModel(m.cfg, nil)
+	f.poll.Name = name
+	f.cursor = 1 // past the (already filled) name, onto Path
+	m.form = f
 	m.home.selName = name
-	m.home.repin(m.cfg)
-	// Open the editor so the user fills in path/repo immediately.
-	if f, ok := newProjectForm(m.cfgPath, m.cfg, name); ok {
-		m.projForm = f
-	}
-	return bestEffortReloadCmd
+	return cmd
 }
 
 // removeProject drops a [[project]] and its nested polls from config. A live

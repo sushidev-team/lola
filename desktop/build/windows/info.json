@@ -1,0 +1,15 @@
+{
+	"fixed": {
+		"file_version": "0.1.0"
+	},
+	"info": {
+		"0000": {
+			"ProductVersion": "0.1.0",
+			"CompanyName": "sushidev",
+			"FileDescription": "Native cockpit for the lola coding-agent orchestrator",
+			"LegalCopyright": "(c) 2026, sushidev",
+			"ProductName": "lola",
+			"Comments": "Watches Linear and runs a coding agent per issue in its own git worktree and tmux session."
+		}
+	}
+}

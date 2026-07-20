@@ -69,7 +69,9 @@ each of which owns exactly one external tool or concern behind an **exec seam**
 - `internal/config` — owns `config.toml`: schema, defaults, atomic
   (temp+rename, 0600) persistence, and **static** validation only. `Home()`
   honors `$LOLA_HOME` (every runtime path derives from it; tests set it).
-  Path-exists / is-a-git-repo checks live in the runtime layer, NOT here.
+  Path-exists / is-a-git-repo checks live in the runtime layer, NOT here. Also
+  owns the `[defaults]` → `[[project]]` **inheritance layer** — see the
+  invariant below before touching `Project` or `Defaults`.
 - `internal/linear` — Linear GraphQL client (`API` interface + `fake.go` for
   tests). Paginated queries, exponential backoff on 429/5xx, filter built from
   the poll's mode fields. All IDs are Linear **UUIDs** passed as variables.
@@ -103,6 +105,13 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   checks the resolved binary; `config.AgentForProject` resolves
   project→defaults→`claude`. `internal/attention` imports it for agent-aware
   pane classification.
+- `internal/gitrepo` — resolves a checkout's GitHub `owner/name` from its git
+  remotes (upstream, then origin) so the project forms can prefill
+  `[[project]].repo`. Local git only — no network, no `gh`. Deliberately NOT in
+  `internal/scm` (gh-only) or `internal/config` (never execs). **Fails closed**:
+  every unknown returns `""`, because an empty repo merely disables the open-PR
+  check while a wrong one would make `gh pr list --repo` answer about someone
+  else's repository.
 - `internal/secrets` / `internal/notify` / `internal/brain` / `internal/review`
   / `internal/attention` / `internal/doctor` — Linear key resolution
   (keychain→env), best-effort desktop/Slack notify, opt-in headless-claude
@@ -134,6 +143,59 @@ each of which owns exactly one external tool or concern behind an **exec seam**
 
 ## Non-obvious invariants (read before changing daemon code)
 
+- **A `Project` field holds the RESOLVED value; `Inherits` says where it came
+  from.** `[defaults]` carries a fallback for each inheritable `[[project]]` key
+  (`match_labels`, `match_mode`, `on_sent_set_label`, `blocked_label_id`,
+  `dedup_mode`, `priority_sort`, `symlinks`, `post_create`, `env`). Rather than
+  making those fields pointers — which would have broken ~50 downstream reads in
+  daemon/runtime/linear — `Load` RESOLVES them into the plain field and records
+  the source in a `config.ProjectInherits` bitmap. So daemon code just reads
+  `p.MatchLabels` and gets the effective value; only the config UIs consult
+  `p.Inherits`. Consequences to preserve:
+  - `Save` writes an inheritable key **only** when the project overrides it, so
+    an inherited value is never frozen into the file. Mutating `p.MatchLabels`
+    without clearing `p.Inherits.MatchLabels` **silently discards the write** —
+    that is the trap. Both form layers go through an explicit override step.
+  - The bitmap's **zero value means "fully explicit"**, matching a hand-built
+    `config.Project` literal. Never flip that polarity: every construction site
+    (tests, both UIs) would start silently inheriting.
+  - The on-disk mirror (`fileProject`) uses **pointers** so an absent key
+    ("inherit") stays distinct from `key = []` ("override to nothing"). A nil
+    slice through that pointer is omitted, an empty non-nil slice is written.
+  - `ResolveInheritance` is idempotent and canonicalizing; `Load`, `Validate`
+    and `Save` all call it, which is what makes save/load an identity.
+  - `agent` / `concurrency_cap` / `branch_prefix` are deliberately NOT in the
+    bitmap: zero has always meant "fall back" for them and
+    `AgentForProject` / `EffectiveCap` / `BranchPrefixForProject` already
+    resolve project → `[defaults]` → hard default at read time.
+- **A project has two names: `Name` is identity, `Label` is display.** `Name` is
+  a path segment (`worktrees/<name>/`, `state/<name>.seen`) and the prefix of
+  every session id — which is also the tmux session name — so ~11 call sites
+  re-derive worktree paths from `cfg.ProjectByName(s.Project).Name` rather than
+  reading `session.Worktree`. `Label` is free text nothing keys by. Consequences:
+  - Render `p.DisplayName()` / `cfg.DisplayNameFor(id)` in UIs; use `Name` only
+    for paths, tmux and protocol name fields. Never render a bare `p.Name`.
+  - `config.Slug` is the ONE place a label becomes an id (`SlugTyping` is its
+    non-trimming half, for live typing — trimming mid-keystroke makes a hyphen
+    impossible to enter). `internal/runtime`'s own `slugify` is for git refs and
+    stays independent.
+  - Slug shape is a UI rule, NOT validation — pre-`label` configs hold names like
+    `"Okane"` and must keep loading. The TUI form only canonicalizes a name a
+    human actually typed (`idEdited`), because re-slugging an untouched legacy
+    name would turn an ordinary save into a rename.
+  - A `Name` change is `cmd=renameProject`, daemon-only and **idle-only**
+    (`internal/daemon/renameproject.go`): it refuses while any session or
+    worktree still carries the old name, then renames the config entry, carries
+    the `.seen` file over and reloads. Do not "helpfully" extend it to live
+    sessions without also moving worktrees + `git worktree repair` + tmux renames.
+- **`[defaults]` label keys must be WORKSPACE labels, and that is a UI rule, not
+  a validation one.** Linear has team labels (scoped to one team) and workspace
+  labels (`IssueLabel.team == null`, valid everywhere). A `[defaults]` label is
+  inherited by projects on any team, so only a workspace label is coherent —
+  `linear.WorkspaceLabels` fetches exactly those and both settings screens offer
+  only them. `Validate` does NOT check this: whether a UUID is team- or
+  workspace-scoped is unknowable offline, and an earlier cross-team rejection
+  here blocked the correct configuration. Do not reinstate it.
 - **Health-gate every dispatch.** If `tmux`/`git`/`claude` aren't all resolvable
   or the poll's `[[project]]` doesn't resolve: skip the tick, record `lastError`
   in status, and mutate **nothing** (no seen, no labels, no in-flight).
@@ -180,6 +242,50 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   pruning, cross-poll dedup, labelIds delta, identifier-vs-UUID usage, and the
   native lifecycle (spawn+rollback, adopt classification, store-driven
   `liveCounted`, fail-closed reconcile revert).
+
+## Desktop app (`desktop/`)
+
+`desktop/` is **lola-desktop**, a native macOS app (Wails 3 + Svelte 5 runes +
+Tailwind v4 + xterm.js) that mirrors the TUI's flight-deck plus a live
+terminal-grid overview. It is a **package inside this Go module** (not a separate
+module) precisely so it can reuse `internal/protocol`, `internal/config`,
+`internal/doctor`, `internal/linear`, `internal/secrets` — Go's `internal/` rule
+forbids that from a sibling module. It is a **client of the same daemon socket**
+the TUI uses; it never embeds the daemon, and it drives `tmux -L lola` directly
+for terminal streaming. Five bound Wails services: `DaemonService` (every
+protocol command + daemon start/stop/restart), `TermService` (capture-pane
+snapshots for the grid + a live `tmux attach` PTY for the focused terminal),
+`ConfigService` (read/write config.toml + first-run setup), `DoctorService`,
+`LinearService` (team metadata for the cascading pickers). Note there is ONE
+project form, not a project form plus a poll form: a project IS the poll unit,
+so repository setup / filter / labels / write-back are TABS of a single overlay
+(same in the TUI — `internal/tui/form.go`, which absorbed the old
+`projectform.go`). Requires the
+`wails3` CLI (`go install github.com/wailsapp/wails/v3/cmd/wails3@latest`), a
+distinct binary from the v2 `wails`. See `desktop/README.md`.
+
+**Gotchas (learned the hard way — don't rediscover them):**
+
+- **`wails3 task build` only rebuilds the loose `bin/lola-desktop`. The `.app`
+  bundle is a copy made by `wails3 task package`.** So `open bin/lola-desktop.app`
+  after a `build` launches the *old* bundled binary — every source change looks
+  like a no-op. **Iterate with `wails3 dev`** (live source, Web Inspector);
+  `wails3 task package` when you want the `.app`.
+- **WebKit ≠ Chrome for flex.** The production WKWebView does **not** stretch a
+  `display:flex` child inside a flex **column** (it collapses to content width);
+  Chrome does, so it looks fine in a browser and broken in the app. Use **CSS
+  grid** for fill-the-parent layouts (grid cells stretch reliably), or an
+  explicit width — never rely on `align-items:stretch` for a flex-container child
+  in a column. Verify layout in the actual `.app`, not just Chrome.
+- **The daemon does not hot-reload its own binary.** After `make build`, a
+  still-running `lola run` keeps the old code — a daemon predating a command
+  answers `unknown cmd "<x>"` (e.g. `projects`). Restart it (TUI `^r`, the app's
+  restart button, or stop+respawn) to pick up the new binary. The desktop store
+  therefore uses `Promise.allSettled` so one unknown command can't blank the rest
+  of the UI. (`setsid` is Linux-only; on macOS detach with `nohup … & disown`.)
+- Fonts: the terminals + mono UI use bundled **JetBrains Mono**
+  (`@fontsource/jetbrains-mono`, imported in `main.ts`); xterm re-fits on
+  `document.fonts.ready` so cell metrics match once it loads.
 
 ## Reference docs
 

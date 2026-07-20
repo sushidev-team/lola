@@ -121,7 +121,7 @@ func homeRowCells(p config.Project, info protocol.ProjectInfo, haveData bool, po
 		attn = homeAttention(info)
 		last = shortAgo(info.LastRun)
 	}
-	return []string{p.Name, path, poll, live, attn, last}
+	return []string{p.DisplayName(), path, poll, live, attn, last}
 }
 
 // homePollCell describes the project's polling posture as a shape-distinct glyph

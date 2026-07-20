@@ -59,6 +59,44 @@ func (c *Client) Labels(ctx context.Context, teamID string) ([]Label, error) {
 	return r.Team.Labels.Nodes, err
 }
 
+// WorkspaceLabels returns the ORGANISATION-level labels: those with no team,
+// which therefore exist across every team in the workspace. These are the
+// labels a shared [defaults] setting should use — a team-scoped label cannot
+// match issues in another team.
+//
+// Linear models this as IssueLabel.team being null, so the filter asks for
+// exactly that rather than fetching everything and filtering client-side.
+func (c *Client) WorkspaceLabels(ctx context.Context) ([]Label, error) {
+	const q = `query($after:String){
+		issueLabels(filter:{team:{null:true}}, first:250, after:$after){
+			nodes{ id name color parent{ id name } }
+			pageInfo{ hasNextPage endCursor } } }`
+
+	var (
+		out   []Label
+		after any // nil on first page -> GraphQL null
+	)
+	for {
+		var r struct {
+			IssueLabels struct {
+				Nodes    []Label
+				PageInfo struct {
+					HasNextPage bool
+					EndCursor   string
+				}
+			}
+		}
+		if err := c.do(ctx, q, map[string]any{"after": after}, &r); err != nil {
+			return nil, err
+		}
+		out = append(out, r.IssueLabels.Nodes...)
+		if !r.IssueLabels.PageInfo.HasNextPage {
+			return out, nil
+		}
+		after = r.IssueLabels.PageInfo.EndCursor
+	}
+}
+
 func (c *Client) Members(ctx context.Context, teamID string) ([]User, error) {
 	const q = `query($t:String!){ team(id:$t){ members{ nodes{ id name email active } } } }`
 	var r struct {

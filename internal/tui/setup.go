@@ -125,6 +125,18 @@ func (m *setupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = v.Width, v.Height
 		return m, nil
+	case tea.PasteMsg:
+		if m.validating {
+			// A key check is in flight; the buffer is locked. Dropping the paste
+			// keeps it from mutating the value being validated out from under it.
+			return m, nil
+		}
+		if buf := m.activeBuf(); buf != nil {
+			// Every wizard step is single-line; an API key copied out of a
+			// browser routinely carries a trailing newline.
+			*buf += pasteInline(v.Content)
+		}
+		return m, nil
 	case keyValidatedMsg:
 		m.validating = false
 		if v.err != nil {
@@ -192,8 +204,10 @@ func (m *setupModel) activeBuf() *string {
 	return nil
 }
 
-// editBuf applies one keystroke (printable text — including space and pastes —
-// or backspace) to buf. In bubbletea v2 the produced text is k.Text.
+// editBuf applies one keystroke (printable text including space, or backspace)
+// to buf. In bubbletea v2 the produced text is k.Text; a bracketed PASTE is a
+// separate tea.PasteMsg and never reaches here — see the PasteMsg case in
+// Update, which matters most on the key step (nobody types an API key).
 func editBuf(k tea.KeyPressMsg, buf *string) {
 	switch {
 	case k.Code == tea.KeyBackspace:

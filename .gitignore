@@ -40,3 +40,13 @@ go.work.sum
 
 # goreleaser output
 /dist/
+
+# lola-desktop (Wails 3 app) build artifacts
+desktop/frontend/node_modules/
+# Ignore built assets but keep the dir tracked (via .gitkeep) so the
+# //go:embed all:frontend/dist in desktop/main.go resolves on a clean checkout
+# that hasn't run the frontend build yet — otherwise `go vet ./...` fails.
+desktop/frontend/dist/*
+!desktop/frontend/dist/.gitkeep
+desktop/bin/
+desktop/build/bin/
