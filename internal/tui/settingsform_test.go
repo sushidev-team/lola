@@ -1259,3 +1259,57 @@ func TestSettingsFormPrioritySortSaves(t *testing.T) {
 		t.Errorf("persisted priority_sort = %v, want [createdAt]", got)
 	}
 }
+
+// An EMPTY priority_sort is not "nothing" — SortIssues falls back to the
+// built-in chain — so the field must show that fallback rather than a bare
+// "(none)", which reads as "unsorted".
+func TestSettingsFormEmptyPrioritySortShowsTheDefault(t *testing.T) {
+	m := newTestRoot(t)
+	m.cfg.Defaults.PrioritySort = nil
+	f := newSettingsForm(m.cfgPath, m.cfg)
+	f.tab = stProjectDefaults
+
+	view := stripANSI(f.view())
+	want := strings.Join(config.DefaultPrioritySort, " → ")
+	if !strings.Contains(view, want) {
+		t.Errorf("an empty chain must show the default %q:\n%s", want, view)
+	}
+	if !strings.Contains(view, "(default)") {
+		t.Errorf("the fallback must be marked as the default:\n%s", view)
+	}
+	// Scoped to the sort line: the other empty list fields on this tab (symlinks,
+	// post-create, env) DO open the line editor and correctly say "add".
+	for _, line := range strings.Split(view, "\n") {
+		if strings.Contains(line, "Priority sort") && strings.Contains(line, "enter to add") {
+			t.Errorf("the sort field opens a picker, not the line editor: %q", line)
+		}
+	}
+}
+
+// A configured chain renders in ORDER, since the order is the meaning.
+func TestSettingsFormPrioritySortShowsChainInOrder(t *testing.T) {
+	m := newTestRoot(t)
+	m.cfg.Defaults.PrioritySort = []string{"createdAt", "priority"}
+	f := newSettingsForm(m.cfgPath, m.cfg)
+	f.tab = stProjectDefaults
+
+	view := stripANSI(f.view())
+	if !strings.Contains(view, "createdAt → priority") {
+		t.Errorf("the chain must render in order:\n%s", view)
+	}
+	if strings.Contains(view, "(default)") {
+		t.Errorf("a configured chain is not the default:\n%s", view)
+	}
+}
+
+// An empty label list says "pick", not "add": enter opens the picker.
+func TestSettingsFormEmptyLabelListSaysPick(t *testing.T) {
+	m := newTestRoot(t)
+	m.cfg.Defaults.MatchLabels = nil
+	f := newSettingsForm(m.cfgPath, m.cfg)
+	f.tab = stProjectDefaults
+
+	if view := stripANSI(f.view()); !strings.Contains(view, "enter to pick") {
+		t.Errorf("a label list opens a picker on enter:\n%s", view)
+	}
+}

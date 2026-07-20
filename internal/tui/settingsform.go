@@ -660,6 +660,18 @@ func loadWorkspaceLabelsCmd(cfg *config.Config) tea.Cmd {
 	}
 }
 
+// sortChainText renders a priority_sort field as the ordering it actually
+// produces. An EMPTY chain is not "nothing" — daemon.SortIssues falls back to
+// config.DefaultPrioritySort — so it shows that fallback, marked as the default,
+// rather than a bare "(none)" that reads as "no sorting".
+func (f *settingsForm) sortChainText(fld *setField) string {
+	keys := trimDropEmpty(fld.lines)
+	if len(keys) == 0 {
+		return faintText.Render(strings.Join(config.DefaultPrioritySort, " → ") + "  (default)")
+	}
+	return strings.Join(keys, " → ")
+}
+
 // rememberLabelNames records id -> display name for rendering. Additive: a
 // later, larger fetch never drops names an earlier one supplied.
 func (f *settingsForm) rememberLabelNames(ls []linear.Label) {
@@ -1151,11 +1163,24 @@ func (f *settingsForm) fieldRegion() (lines []string, fieldLine []int) {
 		case onField:
 			marker, lab = "› ", selStyle.Render(lab)
 		}
+		// The sort chain reads as a CHAIN, on one line, because the order is the
+		// whole meaning — and because empty does not mean "nothing": it means
+		// the built-in default applies, which a bare "(none)" hides.
+		if fld.sortPick {
+			fieldLine[vi] = len(lines)
+			lines = append(lines, indent+marker+lab+f.sortChainText(fld))
+			continue
+		}
 		if fld.kind == sfList || fld.kind == sfEnv {
 			fieldLine[vi] = len(lines)
 			lines = append(lines, indent+marker+lab)
 			if len(fld.lines) == 0 {
-				lines = append(lines, indent+"      "+faintText.Render("(none — enter to add)"))
+				// wsPick fields open a picker on enter, not the line editor.
+				empty := "(none — enter to add)"
+				if fld.wsPick {
+					empty = "(none — enter to pick)"
+				}
+				lines = append(lines, indent+"      "+faintText.Render(empty))
 				continue
 			}
 			for j, e := range fld.lines {
