@@ -168,6 +168,26 @@ each of which owns exactly one external tool or concern behind an **exec seam**
     bitmap: zero has always meant "fall back" for them and
     `AgentForProject` / `EffectiveCap` / `BranchPrefixForProject` already
     resolve project → `[defaults]` → hard default at read time.
+- **A project has two names: `Name` is identity, `Label` is display.** `Name` is
+  a path segment (`worktrees/<name>/`, `state/<name>.seen`) and the prefix of
+  every session id — which is also the tmux session name — so ~11 call sites
+  re-derive worktree paths from `cfg.ProjectByName(s.Project).Name` rather than
+  reading `session.Worktree`. `Label` is free text nothing keys by. Consequences:
+  - Render `p.DisplayName()` / `cfg.DisplayNameFor(id)` in UIs; use `Name` only
+    for paths, tmux and protocol name fields. Never render a bare `p.Name`.
+  - `config.Slug` is the ONE place a label becomes an id (`SlugTyping` is its
+    non-trimming half, for live typing — trimming mid-keystroke makes a hyphen
+    impossible to enter). `internal/runtime`'s own `slugify` is for git refs and
+    stays independent.
+  - Slug shape is a UI rule, NOT validation — pre-`label` configs hold names like
+    `"Okane"` and must keep loading. The TUI form only canonicalizes a name a
+    human actually typed (`idEdited`), because re-slugging an untouched legacy
+    name would turn an ordinary save into a rename.
+  - A `Name` change is `cmd=renameProject`, daemon-only and **idle-only**
+    (`internal/daemon/renameproject.go`): it refuses while any session or
+    worktree still carries the old name, then renames the config entry, carries
+    the `.seen` file over and reloads. Do not "helpfully" extend it to live
+    sessions without also moving worktrees + `git worktree repair` + tmux renames.
 - **`[defaults]` label keys must be WORKSPACE labels, and that is a UI rule, not
   a validation one.** Linear has team labels (scoped to one team) and workspace
   labels (`IssueLabel.team == null`, valid everywhere). A `[defaults]` label is

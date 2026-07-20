@@ -107,7 +107,12 @@ func (h *homeModel) rows(cfg *config.Config) []config.Project {
 	q := strings.ToLower(h.filter)
 	out := make([]config.Project, 0, len(cfg.Projects))
 	for _, p := range cfg.Projects {
-		if strings.Contains(strings.ToLower(p.Name), q) || strings.Contains(strings.ToLower(p.Path), q) {
+		// Match the id as well as the label: the list shows labels, but the id is
+		// what appears in session names and paths, so a human searching for what
+		// they saw in a terminal should still find the project.
+		if strings.Contains(strings.ToLower(p.DisplayName()), q) ||
+			strings.Contains(strings.ToLower(p.Name), q) ||
+			strings.Contains(strings.ToLower(p.Path), q) {
 			out = append(out, p)
 		}
 	}

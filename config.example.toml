@@ -239,7 +239,14 @@ endpoint = "https://api.linear.app/graphql"
 # Code in tmux inside it.
 # ---------------------------------------------------------------------------
 [[project]]
+# name is the project's ID: a path segment (worktrees/<name>/,
+# state/<name>.seen) and the prefix of every session + tmux name
+# ("lola-nori-app-eng-42"). Keep it slug-shaped; changing it is a rename that
+# only succeeds while the project has no live sessions.
 name = "nori-app"
+# label is the free-text display name the UIs show. Optional — empty falls back
+# to `name`. Nothing keys by it, so it is safe to change at any time.
+label = "Nori App"
 # Absolute path to the main checkout (a leading ~ is expanded on load).
 # Worktrees are created NEXT TO it under ~/.lola/, never inside it.
 path = "/Volumes/Git/sushi/internal/nori/nori-app"

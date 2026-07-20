@@ -18,6 +18,7 @@ import type {
   OpenTicketArgs,
 } from "@bindings/internal/protocol";
 import { sortRank } from "./theme";
+import { displayName } from "./slug";
 
 type Flash = { text: string; kind: "good" | "warn" | "bad" } | null;
 
@@ -101,6 +102,18 @@ class Store {
 
   projectByName(name: string): ProjectInfo | undefined {
     return this.projects.find((p) => p.name === name);
+  }
+
+  /**
+   * The human-facing string for a project id: its label when set, else the id.
+   *
+   * Falls back to the id for an unknown project too, so a session whose
+   * [[project]] was removed from config — or a view rendered before the first
+   * Projects() response lands — still shows something meaningful.
+   */
+  displayNameFor(name: string): string {
+    const p = this.projectByName(name);
+    return p ? displayName(p) : name;
   }
 
   sessionsForProject(name: string): SessionInfo[] {

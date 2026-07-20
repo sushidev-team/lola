@@ -243,7 +243,8 @@ runtime layer, not on config load.
 
 | Key | Type | Description |
 | --- | --- | --- |
-| `name` | string | Unique project name (required). It is the project's identity everywhere — `lola status`, `enable`/`disable`/`poll`/`logs`, and the seen-file name (`state/<name>.seen`) all key by it. |
+| `name` | string | Unique project **id** (required), and a path segment: it names the worktree directory (`worktrees/<name>/`) and the seen file (`state/<name>.seen`), prefixes every session/tmux name (`lola-<name>-eng-42`), and is what `lola status`, `enable`/`disable`/`poll`/`logs` key by. Keep it slug-shaped (lowercase letters, digits, `.` `_` `-`) — the forms slugify what you type. Changing it is a **rename**, not an edit; see [Renaming a project](#renaming-a-project). |
+| `label` | string | Free-text display name shown in the TUI and desktop (e.g. `"Nori App"`). Optional — empty falls back to `name`. Purely cosmetic: nothing keys by it, so you can change it at any time, including while sessions are running. |
 | `path` | string | Absolute path to the main checkout (required). A leading `~` is expanded on load. Session worktrees live under `~/.lola/worktrees/`, never inside the checkout. |
 | `repo` | string | GitHub repository as `owner/name`. Used for PR/CI observation of the sessions spawned for this project: the reconciler and observer pass it to `gh pr list --repo` so the open-PR check works regardless of the daemon's working directory. When empty, that check is unavailable and orphaned issues are **never** auto-reverted (fail-closed). Both forms **auto-detect** this from the checkout once `path` is set — see [Repo auto-detection](#repo-auto-detection). |
 | `default_branch` | string | Branch new session worktrees start from, and the base the agent is told to open its PR against. Default `main`. Both forms offer the checkout's branches once `path` is set (local plus remote-tracking, the repository's own default first) while staying free text, so a path that is not a checkout is never a dead end. |
@@ -271,6 +272,35 @@ revert, fail-closed), whereas a wrong one would have `gh pr list --repo` answer
 confidently about someone else's repository.
 
 It reads local git remotes only — no network, no `gh`, no auth.
+
+#### Renaming a project
+
+A project has two names, and they behave very differently.
+
+**`label` is free.** It is the display string and nothing keys by it, so rename
+it whenever you like — including with sessions running. In the TUI it is the
+first field of the project form's Repo tab; saving is an ordinary config write.
+
+**`name` is the id, and changing it is a migration.** It is baked into the
+worktree directory (`worktrees/<name>/`), the seen file (`state/<name>.seen`)
+and every session id — which is also the tmux session name
+(`lola-<name>-eng-42`). The TUI still lets you edit it: type a new id (it
+slugifies as you go) and save. The save is then routed to the **daemon**, which
+
+- refuses if the project has any session in the store, naming them, because a
+  live session's worktree path and tmux name embed the old id and moving them
+  would mean `git worktree repair` and tmux surgery mid-flight;
+- refuses if `worktrees/<old>/` still holds anything, since that is state
+  nothing would resolve under the new name;
+- otherwise renames the `[[project]]` entry in place, carries `state/<old>.seen`
+  over to `state/<new>.seen` so already-dispatched issues are not re-dispatched,
+  drops the now-empty `worktrees/<old>/`, and reloads.
+
+So: **finish or kill a project's sessions, then rename.** A rename needs a
+running daemon — it is the only thing that knows whether a session is live.
+
+For a new project the id is derived from the label as you type (`Nori App` →
+`nori-app`); typing in the id field yourself breaks that link for good.
 
 ### `[[project]]` polling fields (optional; a project polls when `team_id` is set)
 

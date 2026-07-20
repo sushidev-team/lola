@@ -5,6 +5,8 @@ package tui
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strconv"
@@ -15,6 +17,7 @@ import (
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/gitrepo"
 	"github.com/sushidev-team/lola/internal/linear"
+	"github.com/sushidev-team/lola/internal/protocol"
 )
 
 type formEvent int
@@ -28,8 +31,11 @@ const (
 type fieldID int
 
 const (
-	// Repo tab: the [[project]]'s repository / worktree setup.
-	fName fieldID = iota
+	// Repo tab: the [[project]]'s repository / worktree setup. fLabel is the
+	// free-text display name and fName the slug identity derived from it; see
+	// config.Project.Name for why the two are separate.
+	fLabel fieldID = iota
+	fName
 	fPath
 	fRepo
 	fDefaultBranch
@@ -94,7 +100,7 @@ var listFields = map[fieldID]bool{fSymlinks: true, fPostCreate: true, fEnv: true
 
 // textFields are edited inline, character by character.
 var textFields = map[fieldID]bool{
-	fName: true, fPath: true, fRepo: true, fDefaultBranch: true,
+	fLabel: true, fName: true, fPath: true, fRepo: true, fDefaultBranch: true,
 	fBranchPrefix: true, fCap: true,
 }
 
@@ -148,6 +154,19 @@ type formModel struct {
 	editing bool     // a list field is OPEN for line editing
 	lineCur int      // which line, while editing
 	errs    []string // validation errors shown at the bottom
+
+	// idAuto marks the ID field as still tracking the Label: every label
+	// keystroke re-derives it. Typing in the ID clears this for good, so a
+	// hand-picked identity is never silently rewritten. An existing project
+	// starts false — its ID is load-bearing and must not drift when someone
+	// edits the label.
+	idAuto bool
+
+	// idEdited records that a human actually typed in the ID field. Only then is
+	// the ID canonicalized on save: configs predating Label hold names that are
+	// not slugs ("Okane"), and re-slugging one on an unrelated save would fire a
+	// rename nobody asked for. An untouched ID is saved verbatim.
+	idEdited bool
 
 	// repoDetectedFor is the Path that repo auto-detection last ran against,
 	// so moving the cursor around re-runs it only when the path actually
@@ -328,6 +347,7 @@ func newFormModel(cfg *config.Config, existing *config.Project) (*formModel, tea
 		}
 		seedPollDefaults(&f.poll)
 		f.capBuf = "1"
+		f.idAuto = true // a new project derives its ID from the label until told otherwise
 	}
 	// Inherited fields show the [defaults] value; overridden ones the project's.
 	f.symlinks = slices.Clone(f.poll.Symlinks)
@@ -382,7 +402,7 @@ func (f *formModel) fields() []fieldID {
 	var fs []fieldID
 	switch f.tab {
 	case tabRepo:
-		fs = []fieldID{fName, fPath, fRepo, fDefaultBranch, fBranchPrefix, fAgent, fSymlinks, fPostCreate, fEnv}
+		fs = []fieldID{fLabel, fName, fPath, fRepo, fDefaultBranch, fBranchPrefix, fAgent, fSymlinks, fPostCreate, fEnv}
 	case tabFilter:
 		fs = []fieldID{fEnabled, fTeam}
 		if f.poll.TeamID != "" {
@@ -502,11 +522,6 @@ func (f *formModel) key(k tea.KeyPressMsg) (tea.Cmd, formEvent) {
 		return f.interact(cur)
 	}
 
-	// The name is the [[project]] key and is read-only once the project exists
-	// — save() targets origName, so typing over it would silently no-op.
-	if cur == fName && !f.isNew {
-		return nil, formNone
-	}
 	if !textFields[cur] {
 		if k.String() == "r" {
 			return f.refresh(), formNone
@@ -539,7 +554,27 @@ func (f *formModel) key(k tea.KeyPressMsg) (tea.Cmd, formEvent) {
 			*buf += k.Text
 		}
 	}
+	f.afterTextEdit(cur)
 	return nil, formNone
+}
+
+// afterTextEdit keeps the Label → ID derivation live: while the ID still tracks
+// the label (idAuto), every label keystroke re-slugs it, so a human types one
+// name and gets a valid identity for free. Typing in the ID field itself breaks
+// the link permanently — an ID the human chose is never overwritten.
+//
+// Only the ID is normalized as you type; the label is free text and stays
+// verbatim.
+func (f *formModel) afterTextEdit(fd fieldID) {
+	switch fd {
+	case fLabel:
+		if f.idAuto {
+			f.poll.Name = config.Slug(f.poll.Label)
+		}
+	case fName:
+		f.idAuto, f.idEdited = false, true
+		f.poll.Name = config.SlugTyping(f.poll.Name)
+	}
 }
 
 // paste inserts clipboard text into the focused field. An open list sub-editor
@@ -575,9 +610,6 @@ func (f *formModel) paste(s string) {
 		return
 	}
 
-	if cur == fName && !f.isNew {
-		return // the config key is read-only on an existing project
-	}
 	buf := f.textBuf(cur)
 	if buf == nil {
 		return
@@ -590,6 +622,7 @@ func (f *formModel) paste(s string) {
 		f.repoAuto = false // pasted over: no longer the detected value
 	}
 	*buf += pasteInline(s)
+	f.afterTextEdit(cur)
 }
 
 // leftField runs whatever should happen when focus leaves a field. Today that
@@ -613,6 +646,8 @@ func (f *formModel) switchTab(delta int) {
 // textBuf returns the string backing an inline-editable field.
 func (f *formModel) textBuf(fd fieldID) *string {
 	switch fd {
+	case fLabel:
+		return &f.poll.Label
 	case fName:
 		return &f.poll.Name
 	case fPath:
@@ -1026,6 +1061,10 @@ func (f *formModel) stateOpts() []pickOpt {
 // the whole [[project]] (repository setup, Linear filter, write-back), so there
 // is nothing on dst to preserve except its identity.
 func applyProject(dst *config.Project, src config.Project) {
+	// Label, unlike Name, is pure display — it carries no runtime identity, so
+	// it saves like any other field. A Name change is a rename, handled before
+	// this by the daemon, so dst.Name is already correct and stays untouched.
+	dst.Label = src.Label
 	dst.Path = src.Path
 	dst.DefaultBranch = src.DefaultBranch
 	dst.BranchPrefix = src.BranchPrefix
@@ -1063,10 +1102,61 @@ func applyProject(dst *config.Project, src config.Project) {
 	}
 }
 
+// renameProject asks the daemon to change a project's ID, migrating the runtime
+// state keyed by it. It is synchronous — the field save that follows must build
+// on the renamed config, and a rename is a rare, deliberate action, not
+// something worth a message round-trip through the update loop for.
+//
+// It REQUIRES a running daemon. The rest of the TUI works with the daemon down
+// (it renders from its own config), but a rename cannot: only the daemon knows
+// whether a session still holds the old name, and writing sessions.json behind
+// its back would have it overwrite us on the next observer pass.
+func (f *formModel) renameProject(from, to string) error {
+	args, err := json.Marshal(protocol.RenameProjectArgs{From: from, To: to})
+	if err != nil {
+		return err
+	}
+	resp, err := requestFn(protocol.Request{Cmd: "renameProject", Args: args})
+	if err != nil {
+		if errors.Is(err, errDaemonDown) {
+			return fmt.Errorf("cannot rename %q while the daemon is down — start it (^r) and retry", from)
+		}
+		return err
+	}
+	if !resp.OK {
+		msg := resp.Error
+		if msg == "" {
+			msg = "daemon refused the rename"
+		}
+		// The blocker list is the actionable half of a refusal: name the sessions
+		// the human has to finish, not just the count in the error string.
+		var data protocol.RenameProjectData
+		if len(resp.Data) > 0 && json.Unmarshal(resp.Data, &data) == nil && len(data.Blockers) > 0 {
+			msg += "\n  live: " + strings.Join(data.Blockers, ", ")
+		}
+		return errors.New(msg)
+	}
+	return nil
+}
+
 func (f *formModel) save() (tea.Cmd, formEvent) {
 	f.errs = nil
 	p := f.poll
-	p.Name = strings.TrimSpace(p.Name)
+	// Canonicalize the ID here rather than while typing (SlugTyping deliberately
+	// leaves the edges alone so a hyphen can be entered at all) — but only when
+	// this form actually produced it. Slugging an untouched legacy name would
+	// turn an ordinary save into a rename.
+	if f.isNew || f.idEdited {
+		p.Name = config.Slug(p.Name)
+	} else {
+		p.Name = strings.TrimSpace(p.Name)
+	}
+	p.Label = strings.TrimSpace(p.Label)
+	// A label identical to the ID carries no information — drop it so the file
+	// stays free of redundant keys and DisplayName's fallback does the work.
+	if p.Label == p.Name {
+		p.Label = ""
+	}
 	p.Path = strings.TrimSpace(p.Path)
 	p.Repo = strings.TrimSpace(p.Repo) // format checked by nc.Validate below
 	p.DefaultBranch = strings.TrimSpace(p.DefaultBranch)
@@ -1085,16 +1175,33 @@ func (f *formModel) save() (tea.Cmd, formEvent) {
 	}
 
 	// The form edits one [[project]]: the one it opened on (origName), or a new
-	// entry keyed by the typed name.
+	// entry keyed by the typed ID.
 	target := f.origName
 	if f.isNew {
 		target = p.Name
 	}
 	if target == "" {
-		f.errs = append(f.errs, "name is required")
+		f.errs = append(f.errs, "id is required — a label like \"Nori App\" becomes the id \"nori-app\"")
 	}
 	if p.Path == "" {
 		f.errs = append(f.errs, "path is required — the local repository this project's worktrees fork from")
+	}
+
+	if len(f.errs) > 0 {
+		return nil, formNone
+	}
+
+	// An ID change is a RENAME, and renaming is the daemon's job: the name keys
+	// worktree dirs, tmux session names and the seen file, so migrating it needs
+	// the authoritative session store. Do it before the field save below, which
+	// then targets the new name like any ordinary edit.
+	if !f.isNew && p.Name != f.origName {
+		if err := f.renameProject(f.origName, p.Name); err != nil {
+			f.errs = append(f.errs, strings.Split(err.Error(), "\n")...)
+			return nil, formNone
+		}
+		f.origName = p.Name
+		target = p.Name
 	}
 
 	// Rebase on the on-disk config: the daemon (enable/disable) or another
@@ -1199,7 +1306,12 @@ func (f *formModel) view(height int) string {
 	}
 	title := "New project"
 	if !f.isNew {
-		title = "Project: " + f.origName
+		// Title the form by what the human calls the project, keeping origName —
+		// the identity the save targets — visible when it differs.
+		title = "Project: " + f.poll.DisplayName()
+		if f.poll.DisplayName() != f.origName {
+			title += " (" + f.origName + ")"
+		}
 	}
 	var b strings.Builder
 	b.WriteString(titleStyle.Render(title) + "\n\n")
@@ -1367,8 +1479,10 @@ func fieldHelp(fd fieldID) string {
 
 func (f *formModel) label(fd fieldID) string {
 	switch fd {
+	case fLabel:
+		return "Label"
 	case fName:
-		return "Name"
+		return "ID"
 	case fPath:
 		return "Path"
 	case fDefaultBranch:
@@ -1455,9 +1569,24 @@ func (f *formModel) stateNameOrNone(id string) string {
 func (f *formModel) display(fd fieldID) string {
 	sel := "(select)"
 	switch fd {
+	case fLabel:
+		if strings.TrimSpace(f.poll.Label) == "" {
+			// An unset label falls back to the ID everywhere, so show that rather
+			// than an empty cell — it is what the UIs will actually display.
+			if f.poll.Name != "" {
+				return faintText.Render("(" + f.poll.Name + ")")
+			}
+			return faintText.Render("(type a name — e.g. Nori App)")
+		}
+		return f.poll.Label
 	case fName:
 		if f.poll.Name == "" {
-			return faintText.Render("(type a name)")
+			return faintText.Render("(derived from the label)")
+		}
+		// The ID is a path segment and a tmux name prefix, so say what it costs
+		// to change once sessions exist rather than letting the save fail cold.
+		if !f.isNew && f.poll.Name != f.origName {
+			return f.poll.Name + faintText.Render("  (rename — needs no live sessions)")
 		}
 		return f.poll.Name
 	case fPath:

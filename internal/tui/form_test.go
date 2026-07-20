@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"encoding/json"
 	"slices"
 	"strings"
 	"testing"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/linear"
+	"github.com/sushidev-team/lola/internal/protocol"
 )
 
 // newNativeTestForm builds a form on a saved config that defines the given
@@ -181,8 +183,8 @@ func TestFormSaveRequiresProject(t *testing.T) {
 	if _, ev := f.save(); ev != formNone {
 		t.Fatal("save must fail without a name")
 	}
-	if !slices.Contains(f.errs, "name is required") {
-		t.Errorf("errs = %v, want name requirement", f.errs)
+	if !slices.ContainsFunc(f.errs, func(e string) bool { return strings.HasPrefix(e, "id is required") }) {
+		t.Errorf("errs = %v, want id requirement", f.errs)
 	}
 }
 
@@ -198,20 +200,21 @@ func TestFormRepoHintShowsProjectFallback(t *testing.T) {
 	}
 }
 
-// The name is the [[project]] config key: save() targets origName, so typing
-// over it on an existing project must be inert rather than silently no-op.
-func TestFormNameReadOnlyOnExistingProject(t *testing.T) {
+// The ID is editable on an existing project (that is what makes rename
+// reachable), and typing in it normalizes to a slug as it goes.
+func TestFormIDEditableAndSluggedOnExistingProject(t *testing.T) {
 	f, _ := newFormOn(t, []config.Project{
 		{Name: "web", Path: "/tmp/web", Repo: "acme/web"},
 	}, "web")
 
-	f.cursor = 0 // fName
-	if f.fields()[f.cursor] != fName {
-		t.Fatalf("cursor 0 = %v, want fName", f.fields()[f.cursor])
+	f.cursor = slices.Index(f.fields(), fName)
+	f.key(keyMsg(" "))
+	f.key(keyMsg("X"))
+	if f.poll.Name != "web-x" {
+		t.Errorf("Name = %q after typing, want web-x (slugged live)", f.poll.Name)
 	}
-	f.key(keyMsg("x"))
-	if f.poll.Name != "web" {
-		t.Errorf("Name = %q after typing, want web (read-only)", f.poll.Name)
+	if !f.idEdited {
+		t.Error("idEdited = false after typing in the ID field")
 	}
 }
 
@@ -441,16 +444,17 @@ func TestFormPasteMultilineIntoList(t *testing.T) {
 	}
 }
 
-// The name is the config key on an existing project; paste must respect that
-// read-only rule exactly as typing does.
-func TestFormPasteRespectsReadOnlyName(t *testing.T) {
+// Pasting into the ID slugs exactly as typing does — a pasted "My Repo" must
+// not land as a name containing a space, which is not a valid path segment.
+func TestFormPasteSlugsID(t *testing.T) {
 	f, _ := newFormOn(t, []config.Project{{Name: "web", Path: "/tmp/web"}}, "web")
 	f.tab = tabRepo
 	f.cursor = slices.Index(f.fields(), fName)
 
-	f.paste("renamed")
-	if f.poll.Name != "web" {
-		t.Errorf("Name = %q, want web (read-only)", f.poll.Name)
+	f.poll.Name = ""
+	f.paste("My Repo")
+	if f.poll.Name != "my-repo" {
+		t.Errorf("Name = %q, want my-repo", f.poll.Name)
 	}
 }
 
@@ -711,5 +715,188 @@ func TestFormResolvesInheritedWorkspaceLabelName(t *testing.T) {
 	}
 	if got := f.labelName("nope"); got == "" {
 		t.Error("an unknown id must still render something")
+	}
+}
+
+// --- Label / ID -----------------------------------------------------------
+
+// A new project derives its id from the label as it is typed, so a human enters
+// one name and gets a path-safe identity for free.
+func TestFormNewProjectDerivesIDFromLabel(t *testing.T) {
+	f, _ := newNativeTestForm(t, nil)
+	f.tab = tabRepo
+	f.cursor = slices.Index(f.fields(), fLabel)
+
+	for _, r := range "Nori App" {
+		f.key(keyMsg(string(r)))
+	}
+	if f.poll.Label != "Nori App" {
+		t.Errorf("Label = %q, want the verbatim typed text", f.poll.Label)
+	}
+	if f.poll.Name != "nori-app" {
+		t.Errorf("Name = %q, want nori-app derived from the label", f.poll.Name)
+	}
+}
+
+// Once the human edits the id themselves, the label stops driving it — an
+// identity someone chose is never silently rewritten.
+func TestFormEditingIDBreaksLabelDerivation(t *testing.T) {
+	f, _ := newNativeTestForm(t, nil)
+	f.tab = tabRepo
+
+	f.cursor = slices.Index(f.fields(), fLabel)
+	for _, r := range "Nori" {
+		f.key(keyMsg(string(r)))
+	}
+	f.cursor = slices.Index(f.fields(), fName)
+	f.key(keyMsg("2")) // now "nori2", chosen by hand
+
+	f.cursor = slices.Index(f.fields(), fLabel)
+	for _, r := range " App" {
+		f.key(keyMsg(string(r)))
+	}
+	if f.poll.Name != "nori2" {
+		t.Errorf("Name = %q, want nori2 (label no longer drives it)", f.poll.Name)
+	}
+}
+
+// Renaming the LABEL of an existing project is an ordinary config save: it must
+// not reach for the daemon, because nothing runtime-keyed changed.
+func TestFormLabelEditDoesNotRename(t *testing.T) {
+	var reqs []protocol.Request
+	fakeRequest(t, &reqs, &protocol.Response{OK: true}, nil)
+
+	f, path := newFormOn(t, []config.Project{
+		{Name: "web", Path: "/tmp/web", Repo: "acme/web"},
+	}, "web")
+	f.poll.TeamID = "team-1"
+	f.poll.Label = "The Web App"
+
+	if _, ev := f.save(); ev != formSaved {
+		t.Fatalf("save failed: %v", f.errs)
+	}
+	for _, r := range reqs {
+		if r.Cmd == "renameProject" {
+			t.Fatal("a label edit issued a renameProject")
+		}
+	}
+	nc, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := nc.ProjectByName("web")
+	if p == nil {
+		t.Fatal("project web is gone after a label edit")
+	}
+	if p.Label != "The Web App" {
+		t.Errorf("Label = %q, want the saved label", p.Label)
+	}
+}
+
+// A label equal to the id carries no information and is dropped, so the file
+// never grows a redundant key.
+func TestFormDropsLabelIdenticalToID(t *testing.T) {
+	f, path := newFormOn(t, []config.Project{
+		{Name: "web", Path: "/tmp/web", Repo: "acme/web"},
+	}, "web")
+	f.poll.TeamID = "team-1"
+	f.poll.Label = "web"
+
+	if _, ev := f.save(); ev != formSaved {
+		t.Fatalf("save failed: %v", f.errs)
+	}
+	nc, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if l := nc.ProjectByName("web").Label; l != "" {
+		t.Errorf("Label = %q, want it dropped as redundant", l)
+	}
+}
+
+// Changing the id sends the rename to the daemon FIRST, then saves the rest of
+// the fields against the new name.
+func TestFormIDChangeSendsRenameToDaemon(t *testing.T) {
+	var reqs []protocol.Request
+	fakeRequest(t, &reqs, &protocol.Response{OK: true}, nil)
+
+	f, _ := newFormOn(t, []config.Project{
+		{Name: "web", Path: "/tmp/web", Repo: "acme/web"},
+	}, "web")
+	f.poll.TeamID = "team-1"
+	f.poll.Name, f.idEdited = "web-two", true
+
+	f.save()
+
+	var got *protocol.Request
+	for i := range reqs {
+		if reqs[i].Cmd == "renameProject" {
+			got = &reqs[i]
+		}
+	}
+	if got == nil {
+		t.Fatalf("no renameProject issued; requests = %+v", reqs)
+	}
+	var args protocol.RenameProjectArgs
+	if err := json.Unmarshal(got.Args, &args); err != nil {
+		t.Fatal(err)
+	}
+	if args.From != "web" || args.To != "web-two" {
+		t.Errorf("args = %+v, want web -> web-two", args)
+	}
+	if f.origName != "web-two" {
+		t.Errorf("origName = %q, want the form retargeted to the new id", f.origName)
+	}
+}
+
+// A daemon that refuses the rename must abort the whole save and surface its
+// blockers — a half-applied edit against the old name would be worse than none.
+func TestFormIDChangeAbortsSaveWhenDaemonRefuses(t *testing.T) {
+	blocked, err := json.Marshal(protocol.RenameProjectData{
+		From: "web", To: "web-two", Blockers: []string{"lola-web-eng-1"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fakeRequest(t, nil, &protocol.Response{
+		OK: false, Error: "renameProject: \"web\" still has 1 session", Data: blocked,
+	}, nil)
+
+	f, path := newFormOn(t, []config.Project{
+		{Name: "web", Path: "/tmp/web", Repo: "acme/web"},
+	}, "web")
+	f.poll.TeamID = "team-1"
+	f.poll.Name, f.idEdited = "web-two", true
+
+	if _, ev := f.save(); ev != formNone {
+		t.Fatal("save reported success despite a refused rename")
+	}
+	joined := strings.Join(f.errs, "\n")
+	if !strings.Contains(joined, "lola-web-eng-1") {
+		t.Errorf("errs = %v, want the blocking session named", f.errs)
+	}
+	nc, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if nc.ProjectByName("web") == nil {
+		t.Error("the refused rename still altered the config on disk")
+	}
+}
+
+// An id that slugs to nothing (an all-non-ASCII label) is refused with a
+// message that explains the label -> id relationship.
+func TestFormRejectsUnsluggableID(t *testing.T) {
+	f, _ := newNativeTestForm(t, nil)
+	f.poll.Label = "日本語"
+	f.poll.Name = config.Slug(f.poll.Label) // "" — what the live derivation produces
+	f.poll.Path = "/tmp/x"
+	f.poll.TeamID = "team-1"
+
+	if _, ev := f.save(); ev != formNone {
+		t.Fatal("save succeeded with no usable id")
+	}
+	if !slices.ContainsFunc(f.errs, func(e string) bool { return strings.HasPrefix(e, "id is required") }) {
+		t.Errorf("errs = %v, want the id requirement", f.errs)
 	}
 }

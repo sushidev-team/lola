@@ -89,6 +89,34 @@ WebGL terminal. The app tiers it:
 Snapshots never attach a tmux client, so they can't resize or disturb a running
 agent; only the focused terminal does.
 
+## Project label vs id
+
+The Repo tab of the project overlay has two name fields, and they behave very
+differently.
+
+- **Label** — free text (`Nori App`), shown everywhere in the app. Nothing keys
+  by it, so renaming it is an ordinary `ConfigService.SaveProject`, safe at any
+  time. `displayName()` in `lib/slug.ts` applies the "label, else id" fallback;
+  `store.displayNameFor(id)` does the same from an id.
+- **ID** — the `[[project]].name`: a path segment (`worktrees/<id>/`,
+  `state/<id>.seen`) and the prefix of every session and tmux name. It is slugged
+  as you type (`slugTyping`, which deliberately does not trim so a hyphen can be
+  entered), and on a NEW project it is derived from the label until you type an
+  id yourself.
+
+Changing the ID is a **rename**, not a field edit. The form calls
+`DaemonService.RenameProject(from, to)` *before* `SaveProject`, because the
+daemon is the only thing that knows whether a session still holds the old id — it
+refuses while any session or leftover worktree does, then migrates the seen file
+and reloads. A refusal aborts the whole save; the fields are never written
+against a stale id.
+
+`lib/slug.ts` is a deliberate duplicate of Go's `config.Slug`/`SlugTyping` (a
+Wails round-trip per keystroke would make the field feel dead). Go stays the
+authority — `SaveProject` re-slugs whatever arrives — so drift can only make the
+preview disagree, never write an unsafe name. `slug.test.ts` mirrors the Go test
+case for case; change both together.
+
 ## Known gaps
 
 - The **poll editor** takes raw Linear UUIDs (paste from Linear) rather than the

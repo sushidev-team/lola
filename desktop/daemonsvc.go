@@ -155,6 +155,34 @@ func (s *DaemonService) Reload() error {
 	return call(protocol.Request{Cmd: "reload"}, shortTimeout, nil)
 }
 
+// RenameProject changes a project's ID (not its display label — that is a plain
+// ConfigService.SaveProject field). The daemon owns this because the name keys
+// worktree dirs, the seen file and every tmux session name; it refuses while any
+// session still carries the old one.
+//
+// It bypasses `call` deliberately: a refusal's payload carries the BLOCKING
+// session ids, and `call` drops Data on a non-OK response. Returning them lets
+// the form tell the human exactly what to finish rather than just "refused".
+func (s *DaemonService) RenameProject(from, to string) (protocol.RenameProjectData, error) {
+	args, _ := json.Marshal(protocol.RenameProjectArgs{From: from, To: to})
+	resp, err := roundTrip(protocol.Request{Cmd: "renameProject", Args: args}, shortTimeout)
+	if err != nil {
+		return protocol.RenameProjectData{}, err
+	}
+	var d protocol.RenameProjectData
+	if len(resp.Data) > 0 {
+		_ = json.Unmarshal(resp.Data, &d)
+	}
+	if !resp.OK {
+		msg := resp.Error
+		if msg == "" {
+			msg = "daemon refused the rename"
+		}
+		return d, errors.New(msg)
+	}
+	return d, nil
+}
+
 // Enable turns a poll on. Disable turns it off.
 func (s *DaemonService) Enable(poll string) error {
 	return call(protocol.Request{Cmd: "enable", Poll: poll}, shortTimeout, nil)

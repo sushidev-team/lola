@@ -3,6 +3,7 @@ package daemon
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -107,6 +108,33 @@ func (s *seenStore) save(poll string, m map[string]time.Time) error {
 		return err
 	}
 	s.cache[poll] = copySeen(m)
+	return nil
+}
+
+// rename carries a poll's seen map over to a new name, file and cache entry
+// together, so a renamed project does not re-dispatch everything it already
+// sent. A missing source file is success: a poll that never ticked has no seen
+// state to carry, which is indistinguishable from a carried-over empty one.
+//
+// It refuses to clobber an existing destination — that would silently discard
+// another project's dedup guard, and the caller has already checked the name is
+// free in config, so a file there means leftover state a human should look at.
+func (s *seenStore) rename(from, to string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, err := os.Stat(s.path(to)); err == nil {
+		return fmt.Errorf("seen state for %q already exists at %s", to, s.path(to))
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	if err := os.Rename(s.path(from), s.path(to)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	if m, ok := s.cache[from]; ok {
+		s.cache[to] = m
+		delete(s.cache, from)
+	}
 	return nil
 }
 

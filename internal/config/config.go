@@ -92,7 +92,14 @@ type ProjectInherits struct {
 // static — path-exists / is-a-git-repo checks live in the runtime layer.
 type Project struct {
 	// --- Repository / worktree setup ---------------------------------------
+	// Name is the project's IDENTITY, not its display string: it is a path
+	// segment (~/.lola/worktrees/<name>/, ~/.lola/state/<name>.seen) and part of
+	// every session ID (and therefore tmux session name), so it must stay
+	// slug-shaped and is expensive to change — see Slug and DisplayName. Label
+	// is the free-text name shown in the UIs; empty falls back to Name, which is
+	// what every pre-Label config does.
 	Name          string `toml:"name"`
+	Label         string `toml:"label,omitempty"`
 	Path          string `toml:"path"`
 	Repo          string `toml:"repo"`
 	DefaultBranch string `toml:"default_branch"`
@@ -323,6 +330,7 @@ type fileConfig struct {
 // Overrides bitmap; see projectFromFile / projectToFile for the translation.
 type fileProject struct {
 	Name          string             `toml:"name"`
+	Label         string             `toml:"label,omitempty"`
 	Path          string             `toml:"path"`
 	Repo          string             `toml:"repo"`
 	DefaultBranch string             `toml:"default_branch"`
@@ -471,6 +479,7 @@ func projectFromFile(fp fileProject) Project {
 
 	return Project{
 		Name:           fp.Name,
+		Label:          fp.Label,
 		Path:           fp.Path,
 		Repo:           fp.Repo,
 		DefaultBranch:  fp.DefaultBranch,
@@ -527,6 +536,7 @@ func projectToFile(p Project) fileProject {
 	o := p.Inherits
 	return fileProject{
 		Name:           p.Name,
+		Label:          p.Label,
 		Path:           p.Path,
 		Repo:           p.Repo,
 		DefaultBranch:  p.DefaultBranch,
