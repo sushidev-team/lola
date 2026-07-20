@@ -43,6 +43,14 @@ type projField struct {
 	text    string   // pfText / pfAgent (current selection; "" = inherit for pfAgent)
 	lines   []string // pfList / pfEnv (one entry per line)
 	options []string // pfAgent: the values cycled through, in order
+
+	// inheritable marks a field backed by a [defaults] counterpart; inherit is
+	// its current state. While inherit is true the field shows the [defaults]
+	// value as a ghost and save() omits the key from config.toml, so a later
+	// change to [defaults] still reaches this project. Editing the field, or
+	// ctrl+o, promotes it to a project-level override.
+	inheritable bool
+	inherit     bool
 }
 
 type projectForm struct {
@@ -77,9 +85,12 @@ func newProjectForm(cfgPath string, cfg *config.Config, projectName string) (*pr
 			{label: "Path", help: "Local repository path.", kind: pfText, text: p.Path},
 			{label: "GitHub repo", help: "owner/name for PR checks.", kind: pfText, text: p.Repo},
 			{label: "Default branch", help: "Base branch worktrees fork from.", kind: pfText, text: p.DefaultBranch},
-			{label: "Symlinks", help: "One relative path per line, linked from main into each worktree (e.g. .env). Do NOT symlink vendor/ — it breaks PHP autoload; use post_create instead.", kind: pfList, lines: p.Symlinks},
-			{label: "Post-create", help: "One command per line, run in a fresh worktree before the agent (e.g. composer install).", kind: pfList, lines: p.PostCreate},
-			{label: "Env (KEY=value)", help: "One KEY=value per line, exported into the session and post_create commands.", kind: pfEnv, lines: envLines(p.Env)},
+			{label: "Symlinks", help: "One relative path per line, linked from main into each worktree (e.g. .env). Do NOT symlink vendor/ — it breaks PHP autoload; use post_create instead.", kind: pfList, lines: p.Symlinks,
+				inheritable: true, inherit: p.Inherits.Symlinks},
+			{label: "Post-create", help: "One command per line, run in a fresh worktree before the agent (e.g. composer install).", kind: pfList, lines: p.PostCreate,
+				inheritable: true, inherit: p.Inherits.PostCreate},
+			{label: "Env (KEY=value)", help: "One KEY=value per line, exported into the session and post_create commands.", kind: pfEnv, lines: envLines(p.Env),
+				inheritable: true, inherit: p.Inherits.Env},
 			// Appended last on purpose: save() and the form tests index the fields
 			// above by position, so the override slots in without shifting them.
 			{label: "Agent", help: "Coding agent for this project's sessions; empty inherits the [defaults].agent global. space/enter cycles.", kind: pfAgent, text: p.Agent, options: projAgentOptions()},
@@ -155,6 +166,15 @@ func (f *projectForm) update(k tea.KeyPressMsg) projectFormEvent {
 		if f.cursor < len(f.fields)-1 {
 			f.cursor++
 		}
+	case "ctrl+o":
+		// Toggle inherit ↔ override on the focused field. Reverting to inherit
+		// restores the [defaults] value so the ghost shows what will apply.
+		if fld.inheritable {
+			fld.inherit = !fld.inherit
+			if fld.inherit {
+				f.resetToDefault(fld)
+			}
+		}
 	case "enter":
 		switch fld.kind {
 		case pfText:
@@ -162,6 +182,7 @@ func (f *projectForm) update(k tea.KeyPressMsg) projectFormEvent {
 		case pfAgent:
 			cycleProjAgent(fld)
 		default: // pfList / pfEnv: open the field for line editing
+			fld.inherit = false // editing an inherited field promotes it
 			if len(fld.lines) == 0 {
 				fld.lines = []string{""}
 			}
@@ -185,6 +206,19 @@ func (f *projectForm) update(k tea.KeyPressMsg) projectFormEvent {
 		}
 	}
 	return projFormNone
+}
+
+// resetToDefault refills a field with the [defaults] value it inherits, so the
+// ghost shown after reverting an override is the value that will actually apply.
+func (f *projectForm) resetToDefault(fld *projField) {
+	switch fld.label {
+	case "Symlinks":
+		fld.lines = append([]string(nil), f.cfg.Defaults.Symlinks...)
+	case "Post-create":
+		fld.lines = append([]string(nil), f.cfg.Defaults.PostCreate...)
+	case "Env (KEY=value)":
+		fld.lines = envLines(f.cfg.Defaults.Env)
+	}
 }
 
 // editList drives the OPEN list/env field: arrows move between lines, enter adds
@@ -243,9 +277,15 @@ func (f *projectForm) save() projectFormEvent {
 	p.Path = strings.TrimSpace(f.fields[0].text)
 	p.Repo = strings.TrimSpace(f.fields[1].text)
 	p.DefaultBranch = strings.TrimSpace(f.fields[2].text)
+	// Inheritable fields: the value is written either way (an inherited field
+	// holds the resolved [defaults] value), but the Inherits bit decides whether
+	// the key is persisted at all — see config.ProjectInherits.
 	p.Symlinks = trimDropEmpty(f.fields[3].lines)
+	p.Inherits.Symlinks = f.fields[3].inherit
 	p.PostCreate = trimDropEmpty(f.fields[4].lines)
+	p.Inherits.PostCreate = f.fields[4].inherit
 	p.Env = parseEnvLines(f.fields[5].lines)
+	p.Inherits.Env = f.fields[5].inherit
 	if af := f.agentField(); af != nil {
 		p.Agent = strings.TrimSpace(af.text) // "" = inherit [defaults].agent
 	}
@@ -389,10 +429,20 @@ func (f *projectForm) view() string {
 			b.WriteString(marker + lab + faintText.Render("‹ ") + val + faintText.Render(" ›") + "\n")
 			continue
 		}
-		// list/env: label, then one indented entry per line.
-		b.WriteString(marker + lab + "\n")
+		// list/env: label, then one indented entry per line. An inherited field
+		// is shown as a ghost — the [defaults] value, dimmed and tagged — so it
+		// reads as "this is what applies" rather than "this is unset".
+		tag := ""
+		if fld.inherit {
+			tag = faintText.Render("  inherited")
+		}
+		b.WriteString(marker + lab + tag + "\n")
 		if len(fld.lines) == 0 {
-			b.WriteString("      " + faintText.Render("(none — enter to add)") + "\n")
+			empty := "(none — enter to add)"
+			if fld.inherit {
+				empty = "(none in [defaults])"
+			}
+			b.WriteString("      " + faintText.Render(empty) + "\n")
 		}
 		for j, e := range fld.lines {
 			bullet := faintText.Render("· ")
@@ -400,13 +450,16 @@ func (f *projectForm) view() string {
 			if open && j == f.lineCur {
 				bullet, caret = warnText.Render("▸ "), "_"
 			}
+			if fld.inherit {
+				e = faintText.Render(e)
+			}
 			b.WriteString("      " + bullet + e + caret + "\n")
 		}
 	}
 	if f.err != "" {
 		b.WriteString("\n" + badText.Render("✗ "+f.err) + "\n")
 	}
-	hint := "↑/↓ field · enter edit list · type edits text · ctrl-s save · esc cancel"
+	hint := "↑/↓ field · enter edit list · ctrl-o inherit/override · ctrl-s save · esc cancel"
 	if f.editing {
 		hint = "editing " + f.fields[f.cursor].label + " — ↑/↓ line · enter new line · esc done"
 	}

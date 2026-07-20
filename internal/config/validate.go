@@ -42,38 +42,36 @@ func (c *Config) ProjectByName(name string) *Project {
 	return nil
 }
 
-// EffectiveCap returns the project's polling concurrency cap, falling back to
-// [defaults].concurrency_cap when the project does not set one.
+// EffectiveCap returns the project's polling concurrency cap. Project fields
+// normally already hold the value resolved against [defaults]
+// (ResolveInheritance); the zero check keeps this correct on a config that has
+// not been resolved yet, which is how it has always behaved.
 func (c *Config) EffectiveCap(p *Project) int {
-	if p != nil && p.ConcurrencyCap > 0 {
-		return p.ConcurrencyCap
+	if p == nil || p.ConcurrencyCap <= 0 {
+		return c.Defaults.ConcurrencyCap
 	}
-	return c.Defaults.ConcurrencyCap
+	return p.ConcurrencyCap
 }
 
-// AgentForProject resolves the coding-agent kind for the named project:
-// the matching project's Agent when non-empty, else [defaults].agent when
-// non-empty, else the hard "claude" fallback. A name that resolves to no
-// project falls through to the defaults / claude. The returned string is one
-// of claude|codex|opencode (Validate rejects any other configured value).
+// AgentForProject resolves the coding-agent kind for the named project. The
+// project's Agent field already carries the project → [defaults] → "claude"
+// resolution; a name matching no project falls back the same way. The returned
+// string is one of claude|codex|opencode (Validate rejects any other value).
 func (c *Config) AgentForProject(name string) string {
 	if pr := c.ProjectByName(name); pr != nil && pr.Agent != "" {
 		return pr.Agent
 	}
-	if c.Defaults.Agent != "" {
-		return c.Defaults.Agent
-	}
-	return "claude"
+	return orString(c.Defaults.Agent, DefaultAgent)
 }
 
-// BranchPrefixForProject resolves the branch-name prefix for the named project:
-// the project's BranchPrefix when set, else DefaultBranchPrefix ("lola/"). A
-// name that resolves to no project falls back to the default.
+// BranchPrefixForProject resolves the branch-name prefix for the named project.
+// As with AgentForProject the project field is pre-resolved; a name matching no
+// project falls back to [defaults] then DefaultBranchPrefix ("lola/").
 func (c *Config) BranchPrefixForProject(name string) string {
 	if pr := c.ProjectByName(name); pr != nil && pr.BranchPrefix != "" {
 		return pr.BranchPrefix
 	}
-	return DefaultBranchPrefix
+	return orString(c.Defaults.BranchPrefix, DefaultBranchPrefix)
 }
 
 // PollRepo returns the GitHub "owner/name" repo the project's PR checks run
@@ -94,6 +92,11 @@ func (c *Config) PollRepo(p *Project) string {
 func (c *Config) Validate() error {
 	var errs []error
 
+	// A config assembled or edited in memory (the TUI and desktop mutate
+	// [defaults] and [[project]] in one pass) may still hold pre-edit resolved
+	// values. Re-resolve first so every check below sees effective values.
+	c.ResolveInheritance()
+
 	// Structural errors from migrating pre-merge [[poll]] / [[project.poll]]
 	// tables onto their project — recorded at load time, surfaced here.
 	errs = append(errs, c.migrateErrs...)
@@ -101,6 +104,8 @@ func (c *Config) Validate() error {
 	if c.Defaults.GlobalCap <= 0 {
 		errs = append(errs, errors.New("defaults.global_cap must be > 0"))
 	}
+
+	errs = append(errs, c.validateProjectDefaults()...)
 
 	// agent picks the coding agent a session spawns. Empty is allowed (a
 	// project may inherit it, and the chain hard-defaults to claude); a set
@@ -227,6 +232,63 @@ func (c *Config) Validate() error {
 	errs = append(errs, c.validateReview()...)
 
 	return errors.Join(errs...)
+}
+
+// validateProjectDefaults checks the [defaults] keys that projects inherit.
+//
+// The load-bearing check is the team guard: match_labels, on_sent_set_label and
+// blocked_label_id hold Linear label UUIDs, and a label UUID only exists within
+// one team. A global default is therefore coherent only while every project
+// that INHERITS it polls the same team — a project overriding the key with its
+// own team's label is fine and is not counted. Without this, a second team's
+// project would silently filter on a label that cannot match, and lola would
+// look "up but idle" with nothing to point at.
+func (c *Config) validateProjectDefaults() []error {
+	var errs []error
+
+	if c.Defaults.MatchMode != "" && c.Defaults.MatchMode != "any" && c.Defaults.MatchMode != "all" {
+		errs = append(errs, fmt.Errorf("defaults.match_mode must be any|all (empty inherits), got %q", c.Defaults.MatchMode))
+	}
+	switch c.Defaults.DedupMode {
+	case "", "label", "seen", "state":
+	default:
+		errs = append(errs, fmt.Errorf("defaults.dedup_mode must be label|seen|state (empty inherits), got %q", c.Defaults.DedupMode))
+	}
+	// Same shell-identifier rule as [[project]].env — these pairs reach the
+	// same 0600 shell-sourced env file at spawn time. See envNameRe.
+	for _, k := range slices.Sorted(maps.Keys(c.Defaults.Env)) {
+		if !envNameRe.MatchString(k) {
+			errs = append(errs, fmt.Errorf("defaults.env key %q is not a valid shell identifier (must match [A-Za-z_][A-Za-z0-9_]*)", k))
+		}
+	}
+
+	labelKeys := []struct {
+		name     string
+		set      bool
+		inherits func(p *Project) bool
+	}{
+		{"match_labels", len(c.Defaults.MatchLabels) > 0, func(p *Project) bool { return p.Inherits.MatchLabels }},
+		{"on_sent_set_label", c.Defaults.OnSentSetLabel != "", func(p *Project) bool { return p.Inherits.OnSentSetLabel }},
+		{"blocked_label_id", c.Defaults.BlockedLabelID != "", func(p *Project) bool { return p.Inherits.BlockedLabelID }},
+	}
+	for _, k := range labelKeys {
+		if !k.set {
+			continue
+		}
+		teams := map[string]bool{}
+		for i := range c.Projects {
+			p := &c.Projects[i]
+			if p.Polls() && k.inherits(p) {
+				teams[p.TeamID] = true
+			}
+		}
+		if len(teams) > 1 {
+			errs = append(errs, fmt.Errorf(
+				"defaults.%s is a team-scoped Linear label but %d polling projects across different teams inherit it; set it per-project instead",
+				k.name, len(teams)))
+		}
+	}
+	return errs
 }
 
 // validateReview checks the [review] table. The only rule is timeout_seconds >= 0;

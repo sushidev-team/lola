@@ -7,8 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -28,10 +30,49 @@ const (
 // DefaultBranchName is used when [[project]].default_branch is unset.
 const DefaultBranchName = "main"
 
-// DefaultBranchPrefix is used when [[project]].branch_prefix is unset: the
-// prefix lola prepends to a session's branch (e.g. "lola/eng-42"). Resolved via
-// BranchPrefixForProject.
+// DefaultBranchPrefix is used when neither [[project]].branch_prefix nor
+// [defaults].branch_prefix is set: the prefix lola prepends to a session's
+// branch (e.g. "lola/eng-42"). Resolved via BranchPrefixForProject.
 const DefaultBranchPrefix = "lola/"
+
+// Hard fallbacks for the inheritable polling enums: used when neither the
+// project nor [defaults] sets one. They are the values the forms have always
+// seeded, so resolution never yields a value Validate would reject.
+const (
+	DefaultMatchMode = "any"
+	DefaultDedupMode = "seen"
+	DefaultAgent     = "claude"
+)
+
+// DefaultPrioritySort is the issue ordering used when neither the project nor
+// [defaults] sets one.
+var DefaultPrioritySort = []string{"priority", "createdAt"}
+
+// ProjectInherits records which [defaults]-inheritable keys a project does NOT
+// set itself. It is derived from key ABSENCE in config.toml on load and decides
+// what Save writes back, so an inherited key never gets frozen into the file.
+//
+// The polarity is deliberate: the ZERO VALUE means "this project sets every key
+// explicitly", which is how a hand-built config.Project literal behaves. That
+// keeps every in-memory construction site (tests, the TUI and desktop forms)
+// working unchanged — nothing silently inherits just because it forgot to opt
+// out. Only Load, which can actually observe key absence, turns bits on.
+//
+// The corresponding Project fields always hold the RESOLVED (effective) value —
+// that is what every consumer outside this package and the config UIs reads.
+// Consult this struct only to render the inherited-vs-overridden distinction or
+// to promote/revert an override.
+type ProjectInherits struct {
+	PostCreate     bool
+	Symlinks       bool
+	Env            bool
+	MatchLabels    bool
+	MatchMode      bool
+	OnSentSetLabel bool
+	BlockedLabelID bool
+	DedupMode      bool
+	PrioritySort   bool
+}
 
 // Project is one [[project]] table: a local repository the native runtime can
 // spawn worktree sessions for, with an OPTIONAL Linear polling configuration
@@ -91,6 +132,12 @@ type Project struct {
 	// PRRequiresChecks gates the on_pr_* write-back on the PR being VALID (open,
 	// not draft, checks green) rather than merely open.
 	PRRequiresChecks bool `toml:"pr_requires_checks,omitempty"`
+
+	// Inherits marks which of the [defaults]-inheritable fields above this
+	// project leaves to [defaults]; the fields themselves always hold the
+	// resolved value. Never serialized — Load derives it from key absence and
+	// Save re-derives the file shape from it. See ProjectInherits.
+	Inherits ProjectInherits `toml:"-"`
 }
 
 // Polls reports whether this project is configured to poll Linear: it needs a
@@ -113,6 +160,27 @@ type Defaults struct {
 	// it false when an external supervisor (launchd KeepAlive) owns the daemon,
 	// so the TUI never fights it — see AutoManageDaemon.
 	ManageDaemon *bool `toml:"manage_daemon"`
+
+	// --- Project defaults --------------------------------------------------
+	// Every key below is the fallback for the same-named [[project]] field: a
+	// project that omits it inherits this value (see resolveInheritance). They
+	// exist so shared setup — which Linear trigger label to match, which label
+	// to flip on spawn, the worktree bootstrap — is written once instead of
+	// repeated per project.
+	//
+	// The label/ID keys hold Linear UUIDs, which are TEAM-SCOPED: a global
+	// default is only meaningful while every polling project targets the same
+	// team. Validate enforces exactly that.
+	BranchPrefix   string            `toml:"branch_prefix"`
+	PostCreate     []string          `toml:"post_create"`
+	Symlinks       []string          `toml:"symlinks"`
+	Env            map[string]string `toml:"env"`
+	MatchLabels    []string          `toml:"match_labels"`
+	MatchMode      string            `toml:"match_mode"`
+	OnSentSetLabel string            `toml:"on_sent_set_label"`
+	BlockedLabelID string            `toml:"blocked_label_id"`
+	DedupMode      string            `toml:"dedup_mode"`
+	PrioritySort   []string          `toml:"priority_sort"`
 }
 
 // LinearConfig is the [linear] table. It intentionally has no api_key field:
@@ -189,41 +257,46 @@ type fileConfig struct {
 // fileProject mirrors Project on disk. Its polling fields are inline; the
 // LegacyPolls slice reads any pre-merge [[project.poll]] tables so they can be
 // folded onto the project (migration) — a Save then drops them.
+//
+// Every [defaults]-inheritable field is a POINTER: nil means the key is absent
+// from the file, i.e. "inherit", which is distinct from a present-but-empty
+// value ("override to nothing"). Project carries the resolved value plus an
+// Overrides bitmap; see projectFromFile / projectToFile for the translation.
 type fileProject struct {
-	Name          string            `toml:"name"`
-	Path          string            `toml:"path"`
-	Repo          string            `toml:"repo"`
-	DefaultBranch string            `toml:"default_branch"`
-	BranchPrefix  string            `toml:"branch_prefix,omitempty"`
-	Agent         string            `toml:"agent,omitempty"`
-	PostCreate    []string          `toml:"post_create,omitempty"`
-	Symlinks      []string          `toml:"symlinks,omitempty"`
-	Env           map[string]string `toml:"env,omitempty"`
+	Name          string             `toml:"name"`
+	Path          string             `toml:"path"`
+	Repo          string             `toml:"repo"`
+	DefaultBranch string             `toml:"default_branch"`
+	BranchPrefix  string             `toml:"branch_prefix,omitempty"`
+	Agent         string             `toml:"agent,omitempty"`
+	PostCreate    *[]string          `toml:"post_create,omitempty"`
+	Symlinks      *[]string          `toml:"symlinks,omitempty"`
+	Env           *map[string]string `toml:"env,omitempty"`
 
-	Enabled        bool     `toml:"enabled,omitempty"`
-	TeamID         string   `toml:"team_id,omitempty"`
-	ProjectID      string   `toml:"project_id,omitempty"`
-	CycleMode      string   `toml:"cycle_mode,omitempty"`
-	CycleID        string   `toml:"cycle_id,omitempty"`
-	StateIDs       []string `toml:"state_ids,omitempty"`
-	MatchLabels    []string `toml:"match_labels,omitempty"`
-	MatchMode      string   `toml:"match_mode,omitempty"`
-	AssigneeMode   string   `toml:"assignee_mode,omitempty"`
-	AssigneeUserID string   `toml:"assignee_user_id,omitempty"`
-	ConcurrencyCap int      `toml:"concurrency_cap,omitempty"`
-	PrioritySort   []string `toml:"priority_sort,omitempty"`
-	DedupMode      string   `toml:"dedup_mode,omitempty"`
-	OnSentSetLabel string   `toml:"on_sent_set_label,omitempty"`
+	Enabled        bool      `toml:"enabled,omitempty"`
+	TeamID         string    `toml:"team_id,omitempty"`
+	ProjectID      string    `toml:"project_id,omitempty"`
+	CycleMode      string    `toml:"cycle_mode,omitempty"`
+	CycleID        string    `toml:"cycle_id,omitempty"`
+	StateIDs       []string  `toml:"state_ids,omitempty"`
+	MatchLabels    *[]string `toml:"match_labels,omitempty"`
+	MatchMode      *string   `toml:"match_mode,omitempty"`
+	AssigneeMode   string    `toml:"assignee_mode,omitempty"`
+	AssigneeUserID string    `toml:"assignee_user_id,omitempty"`
+	ConcurrencyCap int       `toml:"concurrency_cap,omitempty"`
+	PrioritySort   *[]string `toml:"priority_sort,omitempty"`
+	DedupMode      *string   `toml:"dedup_mode,omitempty"`
+	OnSentSetLabel *string   `toml:"on_sent_set_label,omitempty"`
 
-	OnSpawnStateID   string `toml:"on_spawn_state_id,omitempty"`
-	OnPRStateID      string `toml:"on_pr_state_id,omitempty"`
-	OnMergedStateID  string `toml:"on_merged_state_id,omitempty"`
-	BlockedLabelID   string `toml:"blocked_label_id,omitempty"`
-	CommentOnSpawn   bool   `toml:"comment_on_spawn,omitempty"`
-	CommentOnPR      bool   `toml:"comment_on_pr,omitempty"`
-	CommentOnMerged  bool   `toml:"comment_on_merged,omitempty"`
-	CommentOnBlocked bool   `toml:"comment_on_blocked,omitempty"`
-	PRRequiresChecks bool   `toml:"pr_requires_checks,omitempty"`
+	OnSpawnStateID   string  `toml:"on_spawn_state_id,omitempty"`
+	OnPRStateID      string  `toml:"on_pr_state_id,omitempty"`
+	OnMergedStateID  string  `toml:"on_merged_state_id,omitempty"`
+	BlockedLabelID   *string `toml:"blocked_label_id,omitempty"`
+	CommentOnSpawn   bool    `toml:"comment_on_spawn,omitempty"`
+	CommentOnPR      bool    `toml:"comment_on_pr,omitempty"`
+	CommentOnMerged  bool    `toml:"comment_on_merged,omitempty"`
+	CommentOnBlocked bool    `toml:"comment_on_blocked,omitempty"`
+	PRRequiresChecks bool    `toml:"pr_requires_checks,omitempty"`
 
 	LegacyPolls []legacyPoll `toml:"poll,omitempty"` // pre-merge [[project.poll]]; folded onto the project on load, dropped on save
 }
@@ -262,7 +335,19 @@ type legacyPoll struct {
 
 // foldOnto copies a legacy poll's filter/dedup/write-back fields onto p (its
 // repo falls back to the project's own). Used only during migration.
+//
+// The legacy shape has no notion of inheritance, so every non-zero inheritable
+// value it carries is recorded as an explicit project override — that preserves
+// the config's behavior exactly across the migration, at the cost of a project
+// that could have inherited instead. Zero values stay unset and inherit.
 func (lp legacyPoll) foldOnto(p *Project) {
+	p.Inherits.MatchLabels = len(lp.MatchLabels) == 0
+	p.Inherits.MatchMode = lp.MatchMode == ""
+	p.Inherits.PrioritySort = len(lp.PrioritySort) == 0
+	p.Inherits.DedupMode = lp.DedupMode == ""
+	p.Inherits.OnSentSetLabel = lp.OnSentSetLabel == ""
+	p.Inherits.BlockedLabelID = lp.BlockedLabelID == ""
+
 	p.Enabled = lp.Enabled
 	p.TeamID = lp.TeamID
 	p.ProjectID = lp.ProjectID
@@ -291,7 +376,40 @@ func (lp legacyPoll) foldOnto(p *Project) {
 	p.PRRequiresChecks = lp.PRRequiresChecks
 }
 
+// deref returns *p and true when the key was present, or the zero value and
+// false when it was absent (inherit).
+func deref[T any](p *T) (T, bool) {
+	var zero T
+	if p == nil {
+		return zero, false
+	}
+	return *p, true
+}
+
+// ptr returns &v when set is true (the project overrides the key and the value
+// must be written), or nil when it inherits and the key must be omitted.
+func ptr[T any](v T, set bool) *T {
+	if !set {
+		return nil
+	}
+	return &v
+}
+
+// projectFromFile lifts the on-disk shape into a Project. Inheritable keys land
+// as (value, present) pairs: the value goes into the field, the INVERSE of the
+// presence bit into Inherits. The fields still need ResolveInheritance to fill
+// the inherited ones from [defaults] — Load does that via applyDefaults.
 func projectFromFile(fp fileProject) Project {
+	postCreate, hasPostCreate := deref(fp.PostCreate)
+	symlinks, hasSymlinks := deref(fp.Symlinks)
+	env, hasEnv := deref(fp.Env)
+	matchLabels, hasMatchLabels := deref(fp.MatchLabels)
+	matchMode, hasMatchMode := deref(fp.MatchMode)
+	prioritySort, hasPrioritySort := deref(fp.PrioritySort)
+	dedupMode, hasDedupMode := deref(fp.DedupMode)
+	onSentSetLabel, hasOnSentSetLabel := deref(fp.OnSentSetLabel)
+	blockedLabelID, hasBlockedLabelID := deref(fp.BlockedLabelID)
+
 	return Project{
 		Name:           fp.Name,
 		Path:           fp.Path,
@@ -299,28 +417,40 @@ func projectFromFile(fp fileProject) Project {
 		DefaultBranch:  fp.DefaultBranch,
 		BranchPrefix:   fp.BranchPrefix,
 		Agent:          fp.Agent,
-		PostCreate:     fp.PostCreate,
-		Symlinks:       fp.Symlinks,
-		Env:            fp.Env,
+		PostCreate:     postCreate,
+		Symlinks:       symlinks,
+		Env:            env,
 		Enabled:        fp.Enabled,
 		TeamID:         fp.TeamID,
 		ProjectID:      fp.ProjectID,
 		CycleMode:      fp.CycleMode,
 		CycleID:        fp.CycleID,
 		StateIDs:       fp.StateIDs,
-		MatchLabels:    fp.MatchLabels,
-		MatchMode:      fp.MatchMode,
+		MatchLabels:    matchLabels,
+		MatchMode:      matchMode,
 		AssigneeMode:   fp.AssigneeMode,
 		AssigneeUserID: fp.AssigneeUserID,
 		ConcurrencyCap: fp.ConcurrencyCap,
-		PrioritySort:   fp.PrioritySort,
-		DedupMode:      fp.DedupMode,
-		OnSentSetLabel: fp.OnSentSetLabel,
+		PrioritySort:   prioritySort,
+		DedupMode:      dedupMode,
+		OnSentSetLabel: onSentSetLabel,
+
+		Inherits: ProjectInherits{
+			PostCreate:     !hasPostCreate,
+			Symlinks:       !hasSymlinks,
+			Env:            !hasEnv,
+			MatchLabels:    !hasMatchLabels,
+			MatchMode:      !hasMatchMode,
+			OnSentSetLabel: !hasOnSentSetLabel,
+			BlockedLabelID: !hasBlockedLabelID,
+			DedupMode:      !hasDedupMode,
+			PrioritySort:   !hasPrioritySort,
+		},
 
 		OnSpawnStateID:   fp.OnSpawnStateID,
 		OnPRStateID:      fp.OnPRStateID,
 		OnMergedStateID:  fp.OnMergedStateID,
-		BlockedLabelID:   fp.BlockedLabelID,
+		BlockedLabelID:   blockedLabelID,
 		CommentOnSpawn:   fp.CommentOnSpawn,
 		CommentOnPR:      fp.CommentOnPR,
 		CommentOnMerged:  fp.CommentOnMerged,
@@ -329,7 +459,13 @@ func projectFromFile(fp fileProject) Project {
 	}
 }
 
+// projectToFile lowers a Project back to the on-disk shape. An inheritable key
+// is OMITTED when Inherits says the project leaves it to [defaults] — such a
+// field holds the resolved [defaults] value in memory and must not be frozen
+// into the file, or a later change to [defaults] would stop reaching it.
 func projectToFile(p Project) fileProject {
+	set := func(inherits bool) bool { return !inherits }
+	o := p.Inherits
 	return fileProject{
 		Name:           p.Name,
 		Path:           p.Path,
@@ -337,28 +473,28 @@ func projectToFile(p Project) fileProject {
 		DefaultBranch:  p.DefaultBranch,
 		BranchPrefix:   p.BranchPrefix,
 		Agent:          p.Agent,
-		PostCreate:     p.PostCreate,
-		Symlinks:       p.Symlinks,
-		Env:            p.Env,
+		PostCreate:     ptr(p.PostCreate, set(o.PostCreate)),
+		Symlinks:       ptr(p.Symlinks, set(o.Symlinks)),
+		Env:            ptr(p.Env, set(o.Env)),
 		Enabled:        p.Enabled,
 		TeamID:         p.TeamID,
 		ProjectID:      p.ProjectID,
 		CycleMode:      p.CycleMode,
 		CycleID:        p.CycleID,
 		StateIDs:       p.StateIDs,
-		MatchLabels:    p.MatchLabels,
-		MatchMode:      p.MatchMode,
+		MatchLabels:    ptr(p.MatchLabels, set(o.MatchLabels)),
+		MatchMode:      ptr(p.MatchMode, set(o.MatchMode)),
 		AssigneeMode:   p.AssigneeMode,
 		AssigneeUserID: p.AssigneeUserID,
 		ConcurrencyCap: p.ConcurrencyCap,
-		PrioritySort:   p.PrioritySort,
-		DedupMode:      p.DedupMode,
-		OnSentSetLabel: p.OnSentSetLabel,
+		PrioritySort:   ptr(p.PrioritySort, set(o.PrioritySort)),
+		DedupMode:      ptr(p.DedupMode, set(o.DedupMode)),
+		OnSentSetLabel: ptr(p.OnSentSetLabel, set(o.OnSentSetLabel)),
 
 		OnSpawnStateID:   p.OnSpawnStateID,
 		OnPRStateID:      p.OnPRStateID,
 		OnMergedStateID:  p.OnMergedStateID,
-		BlockedLabelID:   p.BlockedLabelID,
+		BlockedLabelID:   ptr(p.BlockedLabelID, set(o.BlockedLabelID)),
 		CommentOnSpawn:   p.CommentOnSpawn,
 		CommentOnPR:      p.CommentOnPR,
 		CommentOnMerged:  p.CommentOnMerged,
@@ -373,6 +509,20 @@ type fileDefaults struct {
 	GlobalCap      int      `toml:"global_cap"`
 	Agent          string   `toml:"agent"`
 	ManageDaemon   *bool    `toml:"manage_daemon"`
+
+	// Project defaults. Plain values, not pointers: an absent key is a zero
+	// value, which already means "no default here" and falls through to the
+	// hard fallback (Default*).
+	BranchPrefix   string            `toml:"branch_prefix,omitempty"`
+	PostCreate     []string          `toml:"post_create,omitempty"`
+	Symlinks       []string          `toml:"symlinks,omitempty"`
+	Env            map[string]string `toml:"env,omitempty"`
+	MatchLabels    []string          `toml:"match_labels,omitempty"`
+	MatchMode      string            `toml:"match_mode,omitempty"`
+	OnSentSetLabel string            `toml:"on_sent_set_label,omitempty"`
+	BlockedLabelID string            `toml:"blocked_label_id,omitempty"`
+	DedupMode      string            `toml:"dedup_mode,omitempty"`
+	PrioritySort   []string          `toml:"priority_sort,omitempty"`
 }
 
 // config flattens the on-disk mirror into the in-memory Config and MIGRATES the
@@ -424,6 +574,16 @@ func (fc *fileConfig) config() *Config {
 			GlobalCap:      fc.Defaults.GlobalCap,
 			Agent:          fc.Defaults.Agent,
 			ManageDaemon:   fc.Defaults.ManageDaemon,
+			BranchPrefix:   fc.Defaults.BranchPrefix,
+			PostCreate:     fc.Defaults.PostCreate,
+			Symlinks:       fc.Defaults.Symlinks,
+			Env:            fc.Defaults.Env,
+			MatchLabels:    fc.Defaults.MatchLabels,
+			MatchMode:      fc.Defaults.MatchMode,
+			OnSentSetLabel: fc.Defaults.OnSentSetLabel,
+			BlockedLabelID: fc.Defaults.BlockedLabelID,
+			DedupMode:      fc.Defaults.DedupMode,
+			PrioritySort:   fc.Defaults.PrioritySort,
 		},
 		Linear:      fc.Linear,
 		Projects:    projects,
@@ -452,6 +612,16 @@ func (c *Config) file() *fileConfig {
 			GlobalCap:      c.Defaults.GlobalCap,
 			Agent:          c.Defaults.Agent,
 			ManageDaemon:   c.Defaults.ManageDaemon,
+			BranchPrefix:   c.Defaults.BranchPrefix,
+			PostCreate:     c.Defaults.PostCreate,
+			Symlinks:       c.Defaults.Symlinks,
+			Env:            c.Defaults.Env,
+			MatchLabels:    c.Defaults.MatchLabels,
+			MatchMode:      c.Defaults.MatchMode,
+			OnSentSetLabel: c.Defaults.OnSentSetLabel,
+			BlockedLabelID: c.Defaults.BlockedLabelID,
+			DedupMode:      c.Defaults.DedupMode,
+			PrioritySort:   c.Defaults.PrioritySort,
 		},
 		Linear:     c.Linear,
 		Projects:   fps,
@@ -549,12 +719,101 @@ func (c *Config) applyDefaults() {
 			c.Projects[i].DefaultBranch = DefaultBranchName
 		}
 	}
+	c.ResolveInheritance()
+}
+
+// ResolveInheritance fills every project field the project does NOT override
+// (per its Overrides bitmap) from [defaults], falling back to the package
+// Default* constants where [defaults] is silent too. After it runs, each
+// Project field holds its effective value — which is what the daemon, runtime,
+// linear filter and every read-only view consume.
+//
+// It is idempotent (the override bitmap, not the stored value, is the source of
+// truth) and cheap. Load calls it via applyDefaults, and Validate calls it up
+// front so a config mutated in memory — the UIs edit [defaults] and projects in
+// the same pass — is never validated against stale resolved values.
+func (c *Config) ResolveInheritance() {
+	d := c.Defaults
+	for i := range c.Projects {
+		p := &c.Projects[i]
+		in := p.Inherits
+
+		// Normalize first, so the bitmap is canonical afterwards and a
+		// save/load round trip is an identity. For the slices and the map a NIL
+		// value means "never set" (inherit) while an empty non-nil value is a
+		// deliberate "override to nothing" — exactly the distinction TOML draws
+		// between an absent key and `key = []`.
+		//
+		// branch_prefix / agent / concurrency_cap are deliberately NOT part of
+		// this bitmap: a zero value has always meant "fall back" for them and
+		// BranchPrefixForProject / AgentForProject / EffectiveCap already
+		// resolve project -> [defaults] -> hard default at read time.
+		in.PostCreate = in.PostCreate || p.PostCreate == nil
+		in.Symlinks = in.Symlinks || p.Symlinks == nil
+		in.Env = in.Env || p.Env == nil
+		in.MatchLabels = in.MatchLabels || p.MatchLabels == nil
+		in.PrioritySort = in.PrioritySort || p.PrioritySort == nil
+		p.Inherits = in
+
+		// The rest resolve on the Inherits bit alone: an empty value there is a
+		// deliberate override ("match no labels", "no blocked label"), and for
+		// the enums an empty value is a config error Validate must still catch
+		// rather than have papered over here.
+		if in.MatchMode {
+			p.MatchMode = orString(d.MatchMode, DefaultMatchMode)
+		}
+		if in.DedupMode {
+			p.DedupMode = orString(d.DedupMode, DefaultDedupMode)
+		}
+		if in.OnSentSetLabel {
+			p.OnSentSetLabel = d.OnSentSetLabel
+		}
+		if in.BlockedLabelID {
+			p.BlockedLabelID = d.BlockedLabelID
+		}
+		// Slices/maps are cloned so a project can never alias — and thereby
+		// mutate — the shared [defaults] value.
+		if in.PostCreate {
+			p.PostCreate = slices.Clone(d.PostCreate)
+		}
+		if in.Symlinks {
+			p.Symlinks = slices.Clone(d.Symlinks)
+		}
+		if in.Env {
+			p.Env = maps.Clone(d.Env)
+		}
+		if in.MatchLabels {
+			p.MatchLabels = slices.Clone(d.MatchLabels)
+		}
+		if in.PrioritySort {
+			if len(d.PrioritySort) > 0 {
+				p.PrioritySort = slices.Clone(d.PrioritySort)
+			} else {
+				p.PrioritySort = slices.Clone(DefaultPrioritySort)
+			}
+		}
+	}
+}
+
+// orString returns v when non-empty, else the fallback.
+func orString(v, fallback string) string {
+	if v != "" {
+		return v
+	}
+	return fallback
 }
 
 // Save writes the config atomically: parents are created 0700, the TOML is
 // written to a temp file in the destination directory (so the rename cannot
 // cross filesystems), then renamed into place with final mode 0600.
+//
+// It first canonicalizes the receiver via ResolveInheritance, so what stays in
+// memory is exactly what a Load of the written file would produce — a caller
+// that mutates [defaults] and saves does not keep stale resolved project
+// values, and save/load is an identity.
 func (c *Config) Save(path string) error {
+	c.ResolveInheritance()
+
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err

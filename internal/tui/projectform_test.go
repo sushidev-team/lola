@@ -7,6 +7,12 @@ import (
 	"github.com/sushidev-team/lola/internal/config"
 )
 
+// setList fills a list/env field the way the key handler does: the value plus
+// the promotion from inherited to a project-level override.
+func setList(fld *projField, lines []string) {
+	fld.lines, fld.inherit = lines, false
+}
+
 // The project editor writes its list/env fields back into the project and
 // persists them, splitting one-entry-per-line.
 func TestProjectFormSave(t *testing.T) {
@@ -15,9 +21,11 @@ func TestProjectFormSave(t *testing.T) {
 	if !ok {
 		t.Fatal("newProjectForm: project not found")
 	}
-	f.fields[3].lines = []string{".env", " storage ", ""} // symlinks (trims, drops blank)
-	f.fields[4].lines = []string{"composer install", "npm ci"}
-	f.fields[5].lines = []string{"APP_ENV=local", "DEBUG = 1", "nope"}
+	// Editing a field promotes it from inherited to a project-level override;
+	// the key handler does that, so a direct poke must clear the bit too.
+	setList(&f.fields[3], []string{".env", " storage ", ""}) // symlinks (trims, drops blank)
+	setList(&f.fields[4], []string{"composer install", "npm ci"})
+	setList(&f.fields[5], []string{"APP_ENV=local", "DEBUG = 1", "nope"})
 
 	if ev := f.save(); ev != projFormSaved {
 		t.Fatalf("save = %v, err=%q", ev, f.err)
