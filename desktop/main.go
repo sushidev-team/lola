@@ -58,14 +58,16 @@ func main() {
 		MinHeight:        560,
 		BackgroundColour: canvas,
 		Mac: application.MacWindow{
-			// Match the vitals bar height (h-9 = 36px) so macOS centers the
-			// traffic lights vertically on the vitals row.
+			// The whole top strip (the vitals bar) is draggable.
 			InvisibleTitleBarHeight: 36,
 			// Opaque, not vibrancy: the TUI theme is deliberately one cohesive
 			// opaque canvas, so we match it rather than letting the desktop bleed
 			// through.
 			Backdrop: application.MacBackdropNormal,
-			TitleBar: application.MacTitleBarHiddenInset,
+			// Hidden (not HiddenInset): HiddenInset adds a toolbar that insets the
+			// traffic lights downward, leaving too much space above them. Hidden
+			// keeps them at the standard top-left position, like Ghostty/Terminal.
+			TitleBar: application.MacTitleBarHidden,
 		},
 		URL: "/",
 	})
