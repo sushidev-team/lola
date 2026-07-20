@@ -23,11 +23,15 @@ type Flash = { text: string; kind: "good" | "warn" | "bad" } | null;
 
 /** Stable session sort: attention first (sortRank), then project, then issue. */
 export function sortSessions(list: SessionInfo[]): SessionInfo[] {
+  // Coalesce every field the comparator touches: an older daemon can omit a
+  // field (→ undefined over the bridge), and a thrown comparator would leave the
+  // whole list unsorted/blank.
   return [...list].sort((a, b) => {
-    const r = sortRank(a.status) - sortRank(b.status);
+    const r = sortRank(a.status ?? "") - sortRank(b.status ?? "");
     if (r !== 0) return r;
-    if (a.project !== b.project) return a.project.localeCompare(b.project);
-    return a.issue.localeCompare(b.issue);
+    const p = (a.project ?? "").localeCompare(b.project ?? "");
+    if (p !== 0) return p;
+    return (a.issue ?? "").localeCompare(b.issue ?? "");
   });
 }
 
@@ -116,23 +120,33 @@ class Store {
   // --- reads ----------------------------------------------------------------
 
   async refresh() {
+    let alive: boolean;
     try {
-      const alive = await DaemonService.Alive();
-      this.alive = alive;
+      alive = await DaemonService.Alive();
+    } catch {
+      this.alive = false;
       this.connected = true;
-      if (!alive) return;
-      const [sd, pd, st] = await Promise.all([
-        DaemonService.Sessions(),
-        DaemonService.Projects(),
-        DaemonService.Status(),
-      ]);
-      this.sessions = sd.sessions ?? [];
-      this.activity = sd.events ?? [];
-      this.projects = pd.projects ?? [];
-      this.status = st;
-    } catch (err) {
-      this.setFlash(String(err), "bad");
+      return;
     }
+    this.alive = alive;
+    this.connected = true;
+    if (!alive) return;
+
+    // Settle independently: a daemon that lacks a newer command (e.g. an older
+    // build without `projects`) must not blank the reads that DID succeed.
+    const [sd, pd, st] = await Promise.allSettled([
+      DaemonService.Sessions(),
+      DaemonService.Projects(),
+      DaemonService.Status(),
+    ]);
+    if (sd.status === "fulfilled") {
+      this.sessions = sd.value.sessions ?? [];
+      this.activity = sd.value.events ?? [];
+    }
+    if (pd.status === "fulfilled") this.projects = pd.value.projects ?? [];
+    if (st.status === "fulfilled") this.status = st.value;
+    const rejected = [sd, pd, st].find((r) => r.status === "rejected");
+    if (rejected) this.setFlash(String((rejected as PromiseRejectedResult).reason), "warn");
   }
 
   pane(session: string, lines = 0): Promise<PaneData> {

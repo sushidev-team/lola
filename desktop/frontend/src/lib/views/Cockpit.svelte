@@ -33,47 +33,47 @@
     <Rail />
   </aside>
 
-  <!-- main column -->
-  <div class="flex min-w-0 flex-1 flex-col gap-2">
-    <div class="flex min-h-0 {nav.lens === 'grid' ? 'flex-1' : 'flex-[3]'}">
-      <Panel
-        title={nav.scoped ? `Sessions · ${nav.project}` : "Sessions"}
-        note={lensLabel}
-        count={rows.length}
-        focused
-        pad={false}
-      >
-        {#snippet actions()}
-          <span class="flex items-center gap-0.5 rounded border border-edge p-0.5">
-            {#each lenses as l (l.id)}
-              <button
-                class="rounded px-1.5 py-[1px] text-[11px] font-normal"
-                class:bg-accent={nav.lens === l.id}
-                class:text-canvas={nav.lens === l.id}
-                class:text-faint={nav.lens !== l.id}
-                title={l.label}
-                onclick={() => (nav.lens = l.id)}>{l.icon}</button
-              >
-            {/each}
-          </span>
-        {/snippet}
+  <!-- main column: a grid so panels stretch to full width in WebKit (a nested
+       flex column does not) -->
+  <div
+    class="grid min-w-0 min-h-0 flex-1 gap-2"
+    style="grid-template-rows:{nav.lens === 'grid' ? 'minmax(0,1fr)' : 'minmax(0,3fr) minmax(0,2fr)'}"
+  >
+    <Panel
+      title={nav.scoped ? `Sessions · ${nav.project}` : "Sessions"}
+      note={lensLabel}
+      count={rows.length}
+      focused
+      pad={false}
+    >
+      {#snippet actions()}
+        <span class="flex items-center gap-0.5 rounded border border-edge p-0.5">
+          {#each lenses as l (l.id)}
+            <button
+              class="rounded px-1.5 py-[1px] text-[11px] font-normal"
+              class:bg-accent={nav.lens === l.id}
+              class:text-canvas={nav.lens === l.id}
+              class:text-faint={nav.lens !== l.id}
+              title={l.label}
+              onclick={() => (nav.lens = l.id)}>{l.icon}</button
+            >
+          {/each}
+        </span>
+      {/snippet}
 
-        {#if nav.lens === "list"}
-          <SessionsTable {rows} />
-        {:else if nav.lens === "kanban"}
-          <SessionsKanban {rows} />
-        {:else}
-          <TerminalGrid {rows} />
-        {/if}
-      </Panel>
-    </div>
+      {#if nav.lens === "list"}
+        <SessionsTable {rows} />
+      {:else if nav.lens === "kanban"}
+        <SessionsKanban {rows} />
+      {:else}
+        <TerminalGrid {rows} />
+      {/if}
+    </Panel>
 
     {#if nav.lens !== "grid"}
-      <div class="flex min-h-0 flex-[2]">
-        <Panel pad={false}>
-          <SessionEmbed session={selected} />
-        </Panel>
-      </div>
+      <Panel pad={false}>
+        <SessionEmbed session={selected} />
+      </Panel>
     {/if}
   </div>
 </div>

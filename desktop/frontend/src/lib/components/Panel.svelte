@@ -19,8 +19,14 @@
   } = $props();
 </script>
 
+<!--
+  h-full + w-full fill the parent GRID cell. The rail and the cockpit's main
+  column are CSS grids, not nested flex columns: WebKit (the production WKWebView)
+  fails to stretch a display:flex child inside a flex column, but stretches grid
+  cells reliably — so panels always span the full available width/height.
+-->
 <section
-  class="flex min-h-0 w-full min-w-0 flex-col overflow-hidden rounded-[10px] border bg-[color-mix(in_srgb,var(--color-panel)_82%,var(--color-canvas))] transition-colors"
+  class="flex h-full w-full min-h-0 min-w-0 flex-col overflow-hidden rounded-[10px] border bg-[color-mix(in_srgb,var(--color-panel)_82%,var(--color-canvas))] transition-colors"
   class:border-accent={focused}
   class:border-edge={!focused}
   style={focused ? "box-shadow:0 0 0 1px color-mix(in srgb,var(--color-accent) 30%,transparent)" : ""}

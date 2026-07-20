@@ -20,9 +20,8 @@
   }
 </script>
 
-<div class="flex h-full min-h-0 flex-col gap-2">
+<div class="grid h-full min-h-0 gap-2" style="grid-template-rows:auto minmax(0,1fr) auto">
   <!-- Triage -->
-  <div class="flex shrink-0">
   <Panel title="Triage">
     {#if store.needsYou > 0}
       <div class="mb-2 text-sm font-bold text-orange">{store.needsYou}&nbsp; NEED YOU</div>
@@ -40,10 +39,8 @@
       <div class="mt-2 text-[11px] text-faint">{total} total · {withPr} with PR</div>
     {/if}
   </Panel>
-  </div>
 
   <!-- Activity -->
-  <div class="flex min-h-0 flex-1">
   <Panel title="Activity" note="newest first">
     {#if store.activity.length === 0}
       <div class="text-xs text-faint">no activity yet</div>
@@ -59,10 +56,8 @@
       </ul>
     {/if}
   </Panel>
-  </div>
 
   <!-- Projects switcher -->
-  <div class="flex min-h-0 flex-none" style="max-height:42%">
   <Panel title="Projects" count={store.projects.length} focused={false}>
     {#if store.projects.length === 0}
       <div class="text-xs text-faint">no projects — press p to add one</div>
@@ -92,5 +87,4 @@
       </ul>
     {/if}
   </Panel>
-  </div>
 </div>
