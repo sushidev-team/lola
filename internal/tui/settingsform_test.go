@@ -13,6 +13,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -1170,5 +1171,91 @@ func TestSettingsFormLoadsLabelNamesOnTabSwitch(t *testing.T) {
 	}
 	if again, _ := f.update(keyMsg("tab")); again != nil {
 		t.Error("returning with labels already loaded must not refetch")
+	}
+}
+
+// priority_sort is a tie-break CHAIN over lola's own sort keys — not Linear
+// priorities, and nothing is fetched. Selection ORDER is the value: "priority
+// then createdAt" and the reverse are different sorts.
+func TestSettingsFormPrioritySortPickerKeepsOrder(t *testing.T) {
+	m := newTestRoot(t)
+	f := newSettingsForm(m.cfgPath, m.cfg)
+	focusField(t, f, "def_priority_sort")
+
+	cmd, _ := f.update(keyMsg("enter"))
+	if cmd != nil {
+		t.Error("the sort picker must not fetch anything — the keys are lola's own")
+	}
+	if f.picker == nil || !f.picker.ordered {
+		t.Fatalf("enter must open an ordered picker, got %+v", f.picker)
+	}
+	if len(f.picker.opts) != len(config.PrioritySortKeys) {
+		t.Fatalf("picker offers %d keys, want %d", len(f.picker.opts), len(config.PrioritySortKeys))
+	}
+
+	// Select createdAt FIRST, then priority — the reverse of the default.
+	f.picker.cursor = slices.Index(config.PrioritySortKeys, "createdAt")
+	f.update(keyMsg("space"))
+	f.picker.cursor = slices.Index(config.PrioritySortKeys, "priority")
+	f.update(keyMsg("space"))
+	f.update(keyMsg("enter"))
+
+	got := f.field("def_priority_sort").lines
+	if !slices.Equal(got, []string{"createdAt", "priority"}) {
+		t.Errorf("lines = %v, want toggle order [createdAt priority]", got)
+	}
+}
+
+// Deselecting removes a key from the chain without disturbing the rest.
+func TestSettingsFormPrioritySortPickerDeselect(t *testing.T) {
+	m := newTestRoot(t)
+	m.cfg.Defaults.PrioritySort = []string{"priority", "createdAt"}
+	f := newSettingsForm(m.cfgPath, m.cfg)
+	focusField(t, f, "def_priority_sort")
+	f.update(keyMsg("enter"))
+
+	f.picker.cursor = slices.Index(config.PrioritySortKeys, "priority")
+	f.update(keyMsg("space")) // drop it
+	f.update(keyMsg("enter"))
+
+	if got := f.field("def_priority_sort").lines; !slices.Equal(got, []string{"createdAt"}) {
+		t.Errorf("lines = %v, want [createdAt]", got)
+	}
+}
+
+// The picker seeds from the configured chain, so confirming without touching
+// anything is a no-op rather than a silent reset.
+func TestSettingsFormPrioritySortPickerSeeds(t *testing.T) {
+	m := newTestRoot(t)
+	m.cfg.Defaults.PrioritySort = []string{"createdAt", "priority"}
+	f := newSettingsForm(m.cfgPath, m.cfg)
+	focusField(t, f, "def_priority_sort")
+	f.update(keyMsg("enter"))
+	f.update(keyMsg("enter"))
+
+	if got := f.field("def_priority_sort").lines; !slices.Equal(got, []string{"createdAt", "priority"}) {
+		t.Errorf("lines = %v, want the configured chain unchanged", got)
+	}
+}
+
+// The chosen chain round-trips to config through save.
+func TestSettingsFormPrioritySortSaves(t *testing.T) {
+	m := newTestRoot(t)
+	f := newSettingsForm(m.cfgPath, m.cfg)
+	focusField(t, f, "def_priority_sort")
+	f.update(keyMsg("enter"))
+	f.picker.cursor = slices.Index(config.PrioritySortKeys, "createdAt")
+	f.update(keyMsg("space"))
+	f.update(keyMsg("enter"))
+
+	if ev := f.save(); ev != settingsFormSaved {
+		t.Fatalf("save = %v, err=%q", ev, f.err)
+	}
+	reloaded, err := config.Load(m.cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := reloaded.Defaults.PrioritySort; !slices.Equal(got, []string{"createdAt"}) {
+		t.Errorf("persisted priority_sort = %v, want [createdAt]", got)
 	}
 }

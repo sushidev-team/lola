@@ -101,6 +101,13 @@ type SettingsDTO struct {
 	PrioritySort   []string `json:"prioritySort"`
 }
 
+// PrioritySortKeys returns the sort keys the daemon understands, so the
+// settings form can offer them instead of taking free text. These are LOLA's
+// own keys, not a Linear concept — there is nothing to fetch from the API.
+func (s *ConfigService) PrioritySortKeys() []string {
+	return append([]string(nil), config.PrioritySortKeys...)
+}
+
 func (s *ConfigService) GetSettings() (SettingsDTO, error) {
 	cfg, _, err := loadConfig()
 	if err != nil {

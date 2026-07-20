@@ -33,6 +33,31 @@
   // to manual entry like a failed call does.
   const wsReady = $derived(!!wsLabels && wsLabels.length > 0);
 
+  // priority_sort is a tie-break CHAIN over lola's own sort keys — not Linear
+  // priorities, and nothing is fetched from the API. Selection ORDER is the
+  // value: "priority then createdAt" and the reverse are different sorts, so
+  // clicking a key appends it and the rank is shown rather than a tick.
+  let sortKeys = $state<string[]>([]);
+
+  const SORT_KEY_HELP: Record<string, string> = {
+    priority: "highest first (no priority last)",
+    createdAt: "oldest first",
+  };
+
+  async function loadSortKeys() {
+    try {
+      sortKeys = (await ConfigService.PrioritySortKeys()) ?? [];
+    } catch {
+      sortKeys = []; // falls back to the textarea below
+    }
+  }
+
+  function toggleSortKey(k: string) {
+    if (!dto) return; // `d` in the markup is a template-local {@const}, not this scope
+    const cur = dto.prioritySort ?? [];
+    dto.prioritySort = cur.includes(k) ? cur.filter((x) => x !== k) : [...cur, k];
+  }
+
   async function loadWorkspaceLabels() {
     if (wsRequested) return;
     wsRequested = true;
@@ -48,7 +73,10 @@
 
   function selectTab(id: string) {
     tab = id;
-    if (id === "project") void loadWorkspaceLabels();
+    if (id === "project") {
+      void loadWorkspaceLabels();
+      void loadSortKeys();
+    }
   }
 
   const TABS = [
@@ -84,7 +112,10 @@
       loading = false;
     }
     // Deep-linked straight to the tab that needs them.
-    if (tab === "project") void loadWorkspaceLabels();
+    if (tab === "project") {
+      void loadWorkspaceLabels();
+      void loadSortKeys();
+    }
   });
 
   async function save() {
@@ -287,13 +318,40 @@
             )}
             {@render labelRow("On-sent set label", d.onSentSetLabel, (v) => { d.onSentSetLabel = v; })}
             {@render labelRow("Blocked label", d.blockedLabelId, (v) => { d.blockedLabelId = v; })}
-            {@render areaRow(
-              "Priority sort",
-              d.prioritySort,
-              (v) => { d.prioritySort = v; },
-              "priority\ncreatedAt",
-              "one key per line — empty means priority, createdAt",
-            )}
+            {#if sortKeys.length}
+              <div class={rowTopCls}>
+                <span class="text-faint">Priority sort</span>
+                <span>
+                  <div class="space-y-1 rounded border border-edge p-2">
+                    {#each sortKeys as k (k)}
+                      {@const rank = (d.prioritySort ?? []).indexOf(k)}
+                      <button
+                        type="button"
+                        class="flex w-full items-center gap-2 rounded px-1 py-0.5 text-left text-xs hover:bg-edge/40"
+                        onclick={() => toggleSortKey(k)}
+                      >
+                        <span
+                          class="w-4 shrink-0 text-center font-mono {rank >= 0 ? 'text-accent' : 'text-faint/40'}"
+                        >{rank >= 0 ? rank + 1 : "·"}</span>
+                        <span class="text-ink">{k}</span>
+                        <span class="text-faint">{SORT_KEY_HELP[k] ?? ""}</span>
+                      </button>
+                    {/each}
+                  </div>
+                  <span class={hintCls}>
+                    the number is the tie-break order — click to add or remove; empty means priority, then createdAt
+                  </span>
+                </span>
+              </div>
+            {:else}
+              {@render areaRow(
+                "Priority sort",
+                d.prioritySort,
+                (v) => { d.prioritySort = v; },
+                "priority\ncreatedAt",
+                "one key per line — empty means priority, createdAt",
+              )}
+            {/if}
           </div>
         </section>
       {:else if tab === "notify"}

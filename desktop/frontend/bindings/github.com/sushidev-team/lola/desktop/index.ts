@@ -14,7 +14,7 @@ export {
     TermService
 };
 
-export type {
+export {
     DoctorReportDTO,
     DoctorResultDTO,
     InheritsDTO,

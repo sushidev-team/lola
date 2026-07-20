@@ -221,6 +221,14 @@ func (c *Config) Validate() error {
 			errs = append(errs, fmt.Errorf("%s: dedup_mode must be label|seen|state, got %q", id, p.DedupMode))
 		}
 
+		// An unknown sort key is silently ignored by SortIssues, so a typo would
+		// quietly change pickup order with no signal. Reject it instead.
+		for _, k := range p.PrioritySort {
+			if !slices.Contains(PrioritySortKeys, k) {
+				errs = append(errs, fmt.Errorf("%s: priority_sort: unknown key %q (must be one of %v)", id, k, PrioritySortKeys))
+			}
+		}
+
 		if c.EffectiveCap(p) <= 0 {
 			errs = append(errs, fmt.Errorf("%s: effective concurrency_cap must be > 0 (set the project's concurrency_cap or defaults.concurrency_cap)", id))
 		}
@@ -253,6 +261,11 @@ func (c *Config) validateProjectDefaults() []error {
 	case "", "label", "seen", "state":
 	default:
 		errs = append(errs, fmt.Errorf("defaults.dedup_mode must be label|seen|state (empty inherits), got %q", c.Defaults.DedupMode))
+	}
+	for _, k := range c.Defaults.PrioritySort {
+		if !slices.Contains(PrioritySortKeys, k) {
+			errs = append(errs, fmt.Errorf("defaults.priority_sort: unknown key %q (must be one of %v)", k, PrioritySortKeys))
+		}
 	}
 	// Same shell-identifier rule as [[project]].env — these pairs reach the
 	// same 0600 shell-sourced env file at spawn time. See envNameRe.

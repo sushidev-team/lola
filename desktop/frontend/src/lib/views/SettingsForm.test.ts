@@ -46,19 +46,22 @@ const fakeDto = {
 
 // vi.mock factories are hoisted; keep their fns in vi.hoisted so they exist when
 // the factories run.
-const { GetSettings, SaveSettings, WorkspaceLabels, TeamMeta, setFlash, closeOverlay } = vi.hoisted(() => ({
-  GetSettings: vi.fn(),
-  SaveSettings: vi.fn(),
-  WorkspaceLabels: vi.fn(),
-  TeamMeta: vi.fn(),
-  setFlash: vi.fn(),
-  closeOverlay: vi.fn(),
-}));
+const { GetSettings, SaveSettings, PrioritySortKeys, WorkspaceLabels, TeamMeta, setFlash, closeOverlay } =
+  vi.hoisted(() => ({
+    GetSettings: vi.fn(),
+    SaveSettings: vi.fn(),
+    PrioritySortKeys: vi.fn(),
+    WorkspaceLabels: vi.fn(),
+    TeamMeta: vi.fn(),
+    setFlash: vi.fn(),
+    closeOverlay: vi.fn(),
+  }));
 
 vi.mock("@bindings/desktop", () => ({
   ConfigService: {
     GetSettings: () => GetSettings(),
     SaveSettings: (dto: unknown) => SaveSettings(dto),
+    PrioritySortKeys: () => PrioritySortKeys(),
   },
   LinearService: {
     WorkspaceLabels: () => WorkspaceLabels(),
@@ -84,6 +87,7 @@ describe("SettingsForm", () => {
     GetSettings.mockReset().mockResolvedValue({ ...fakeDto });
     SaveSettings.mockReset().mockResolvedValue(undefined);
     WorkspaceLabels.mockReset().mockResolvedValue(workspaceLabels);
+    PrioritySortKeys.mockReset().mockResolvedValue(["priority", "createdAt"]);
     TeamMeta.mockReset();
     setFlash.mockReset();
     closeOverlay.mockReset();
@@ -215,5 +219,35 @@ describe("SettingsForm", () => {
 
     await waitFor(() => expect(setFlash).toHaveBeenCalledWith(expect.stringContaining("boom"), "bad"));
     expect(closeOverlay).not.toHaveBeenCalled();
+  });
+
+  // priority_sort is an ORDERED chain over lola's own sort keys — not Linear
+  // priorities, and nothing is fetched from Linear for it.
+  it("picks priority-sort keys in order", async () => {
+    // Start with no chain so the clicks below ADD in order rather than clearing
+    // the fixture's existing selection.
+    GetSettings.mockResolvedValue({ ...fakeDto, prioritySort: [] });
+    render(SettingsForm);
+    await screen.findByDisplayValue("60s"); // the form only renders once loaded
+    await fireEvent.click(screen.getByRole("tab", { name: "Project defaults" }));
+
+    await waitFor(() => expect(PrioritySortKeys).toHaveBeenCalled());
+    // Click createdAt first, then priority — the reverse of the default.
+    await fireEvent.click(await screen.findByRole("button", { name: /createdAt/ }));
+    await fireEvent.click(await screen.findByRole("button", { name: /priority/ }));
+
+    await fireEvent.click(screen.getByRole("button", { name: "save" }));
+    await waitFor(() => expect(SaveSettings).toHaveBeenCalled());
+    expect(SaveSettings.mock.calls.at(-1)?.[0].prioritySort).toEqual(["createdAt", "priority"]);
+  });
+
+  it("falls back to text entry when the sort keys cannot be read", async () => {
+    PrioritySortKeys.mockRejectedValue(new Error("nope"));
+    render(SettingsForm);
+    await screen.findByDisplayValue("60s");
+    await fireEvent.click(screen.getByRole("tab", { name: "Project defaults" }));
+
+    await waitFor(() => expect(PrioritySortKeys).toHaveBeenCalled());
+    expect(await screen.findByLabelText("Priority sort")).toBeInTheDocument();
   });
 });

@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -92,6 +93,10 @@ type setField struct {
 	// underlying storage is unchanged — text for single, lines for multi — so
 	// raw UUID entry remains the fallback when the labels cannot be fetched.
 	wsPick bool
+	// sortPick marks the priority_sort field: enter offers an ORDERED picker
+	// over config.PrioritySortKeys. Unlike wsPick there is nothing to fetch —
+	// the valid keys are lola's own, not Linear's.
+	sortPick bool
 }
 
 type settingsForm struct {
@@ -139,6 +144,13 @@ type setPicker struct {
 	opts   []setPickOpt
 	cursor int
 	sel    map[string]bool
+
+	// ordered makes the SELECTION order meaningful and preserved. Labels are a
+	// set, so their picker writes back in option order; priority_sort is a
+	// tie-break CHAIN, where "priority then createdAt" and the reverse are
+	// different sorts, so it must keep the order the user toggled them in.
+	ordered bool
+	order   []string
 }
 
 type setPickOpt struct{ id, label string }
@@ -189,7 +201,7 @@ func newSettingsForm(cfgPath string, cfg *config.Config) *settingsForm {
 			{key: "def_on_sent_set_label", tab: stProjectDefaults, label: "On-sent set label", help: "Workspace label flipped onto an issue once its session is dispatched (label dedup mode)." + wsLabelHelp, kind: sfText, wsPick: true, text: d.OnSentSetLabel},
 			{key: "def_blocked_label_id", tab: stProjectDefaults, label: "Blocked label", help: "Workspace label applied when a session escalates and needs a human." + wsLabelHelp, kind: sfText, wsPick: true, text: d.BlockedLabelID},
 			{key: "def_dedup_mode", tab: stProjectDefaults, label: "Dedup mode", help: "How an already-dispatched issue is remembered: label (flip a Linear label), seen (local store), state (workflow state). space/enter cycles; unset falls back to \"seen\".", kind: sfEnum, options: dedupModeOptions, text: d.DedupMode},
-			{key: "def_priority_sort", tab: stProjectDefaults, label: "Priority sort", help: "One Linear issue field per line, applied in order when ranking the matched issues (e.g. priority, then createdAt). enter opens the list; unset sorts by priority, createdAt.", kind: sfList, lines: append([]string(nil), d.PrioritySort...)},
+			{key: "def_priority_sort", tab: stProjectDefaults, label: "Priority sort", help: "Tie-break chain for ranking the issues a tick matched, applied in order (priority = highest first, createdAt = oldest first). enter picks the keys; ORDER matters. Unset sorts by priority, then createdAt.", kind: sfList, sortPick: true, lines: append([]string(nil), d.PrioritySort...)},
 
 			// [notify]
 			{key: "notify_desktop", tab: stNotify, section: "[notify]", sectionNote: "desktop / Slack alerts", label: "Desktop banners", help: "Native desktop notifications (macOS only).", kind: sfBool, b: n.Desktop},
@@ -464,6 +476,10 @@ func (f *settingsForm) key(k tea.KeyPressMsg) (tea.Cmd, settingsFormEvent) {
 			return f.refreshWorkspaceLabels(fld), settingsFormNone
 		}
 	case "enter":
+		if fld.sortPick {
+			f.openSortPicker(fld)
+			return nil, settingsFormNone
+		}
 		if fld.wsPick {
 			return f.openLabelPicker(fld), settingsFormNone
 		}
@@ -769,6 +785,41 @@ func (f *settingsForm) refreshWorkspaceLabels(fld *setField) tea.Cmd {
 	return loadWorkspaceLabelsCmd(f.cfg)
 }
 
+// openSortPicker offers the sort keys daemon.SortIssues understands, seeded
+// with the field's current chain so confirming without touching anything is a
+// no-op. Nothing is fetched: the keys are lola's own, not a Linear concept —
+// there is no "list of priorities" to read from the API.
+func (f *settingsForm) openSortPicker(fld *setField) {
+	cur := trimDropEmpty(fld.lines)
+	p := &setPicker{
+		title:   fld.label,
+		key:     fld.key,
+		multi:   true,
+		ordered: true,
+		sel:     map[string]bool{},
+		order:   slices.Clone(cur),
+	}
+	for _, k := range config.PrioritySortKeys {
+		p.opts = append(p.opts, setPickOpt{k, sortKeyLabel(k)})
+	}
+	for _, k := range cur {
+		p.sel[k] = true
+	}
+	f.picker = p
+}
+
+// sortKeyLabel spells out what a sort key actually does — "priority" alone does
+// not say which end sorts first.
+func sortKeyLabel(k string) string {
+	switch k {
+	case "priority":
+		return "priority — highest first (no priority last)"
+	case "createdAt":
+		return "createdAt — oldest first"
+	}
+	return k
+}
+
 // openPickerFor builds the chooser for a field, pre-selecting its current
 // value(s) and starting the cursor there, so confirming without moving is a
 // no-op. A single-value field leads with "(none)" to clear it.
@@ -819,8 +870,10 @@ func (f *settingsForm) pickerKey(k tea.KeyPressMsg) (tea.Cmd, settingsFormEvent)
 			id := p.opts[p.cursor].id
 			if p.sel[id] {
 				delete(p.sel, id)
+				p.order = slices.DeleteFunc(p.order, func(s string) bool { return s == id })
 			} else {
 				p.sel[id] = true
+				p.order = append(p.order, id)
 			}
 		}
 	case "ctrl+r":
@@ -844,6 +897,10 @@ func (f *settingsForm) applyPick(p *setPicker) {
 		return
 	}
 	if p.multi {
+		if p.ordered {
+			fld.lines = slices.Clone(p.order) // toggle order IS the value
+			return
+		}
 		var ids []string
 		for _, o := range p.opts { // option order, not toggle order
 			if o.id != "" && p.sel[o.id] {
@@ -862,7 +919,11 @@ func (f *settingsForm) applyPick(p *setPicker) {
 func (f *settingsForm) pickerView(bodyBudget int) string {
 	p := f.picker
 	hint := "↑/↓ move · enter select · ctrl-r refresh · esc cancel"
-	if p.multi {
+	switch {
+	case p.ordered:
+		// No refresh: the options are lola's own constants, not fetched.
+		hint = "↑/↓ move · space add/remove · enter confirm · esc cancel — the NUMBER is the tie-break order"
+	case p.multi:
 		hint = "↑/↓ move · space toggle · enter confirm · ctrl-r refresh · esc cancel"
 	}
 	footer := []string{"", faintText.Render(hint)}
@@ -879,6 +940,13 @@ func (f *settingsForm) pickerView(bodyBudget int) string {
 		}
 		check := ""
 		switch {
+		case p.ordered:
+			// Show the RANK, not a tick: which key wins is the whole point.
+			if rank := slices.Index(p.order, o.id); rank >= 0 {
+				check = fmt.Sprintf("%d. ", rank+1)
+			} else {
+				check = "   "
+			}
 		case p.multi:
 			check = "[ ] "
 			if p.sel[o.id] {

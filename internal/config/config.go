@@ -48,6 +48,17 @@ const (
 // [defaults] sets one.
 var DefaultPrioritySort = []string{"priority", "createdAt"}
 
+// PrioritySortKeys are the ONLY keys daemon.SortIssues understands. This is not
+// a Linear concept and there is nothing to fetch: it is lola's own tie-break
+// chain for ranking the issues a tick matched, applied in the configured order
+// (e.g. ["priority", "createdAt"] = highest priority first, oldest first within
+// a priority). Unknown keys used to be silently ignored by the sorter, so
+// Validate now rejects them — a typo'd key that quietly does nothing is worse
+// than a startup error.
+//
+// Keep in lockstep with the switch in daemon.SortIssues.
+var PrioritySortKeys = []string{"priority", "createdAt"}
+
 // ProjectInherits records which [defaults]-inheritable keys a project does NOT
 // set itself. It is derived from key ABSENCE in config.toml on load and decides
 // what Save writes back, so an inherited key never gets frozen into the file.

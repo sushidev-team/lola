@@ -16,7 +16,7 @@
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
-import { Call as $Call, CancellablePromise as $CancellablePromise } from "@wailsio/runtime";
+import { Call as $Call, CancellablePromise as $CancellablePromise, Create as $Create } from "@wailsio/runtime";
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
@@ -28,8 +28,10 @@ import * as $models from "./models.js";
  * repository's own default first. Empty when path is not a checkout; the form
  * then leaves the field as free text rather than trapping the user.
  */
-export function Branches(path: string): $CancellablePromise<string[] | null> {
-    return $Call.ByID(3689606875, path);
+export function Branches(path: string): $CancellablePromise<string[]> {
+    return $Call.ByID(3689606875, path).then(($result: any) => {
+        return $$createType0($result);
+    });
 }
 
 /**
@@ -60,11 +62,26 @@ export function DetectRepo(path: string): $CancellablePromise<string> {
  * up whatever shared setup [defaults] already carries.
  */
 export function GetProject(name: string): $CancellablePromise<$models.ProjectFormDTO> {
-    return $Call.ByID(3485741446, name);
+    return $Call.ByID(3485741446, name).then(($result: any) => {
+        return $$createType1($result);
+    });
 }
 
 export function GetSettings(): $CancellablePromise<$models.SettingsDTO> {
-    return $Call.ByID(2761787168);
+    return $Call.ByID(2761787168).then(($result: any) => {
+        return $$createType2($result);
+    });
+}
+
+/**
+ * PrioritySortKeys returns the sort keys the daemon understands, so the
+ * settings form can offer them instead of taking free text. These are LOLA's
+ * own keys, not a Linear concept — there is nothing to fetch from the API.
+ */
+export function PrioritySortKeys(): $CancellablePromise<string[]> {
+    return $Call.ByID(3393829323).then(($result: any) => {
+        return $$createType0($result);
+    });
 }
 
 export function RemoveProject(name: string): $CancellablePromise<void> {
@@ -85,7 +102,9 @@ export function SaveSettings(dto: $models.SettingsDTO): $CancellablePromise<void
  * project, and sets the caps/interval. The key itself is never written to config.
  */
 export function Setup(dto: $models.SetupDTO): $CancellablePromise<$models.SetupResultDTO> {
-    return $Call.ByID(3057086516, dto);
+    return $Call.ByID(3057086516, dto).then(($result: any) => {
+        return $$createType3($result);
+    });
 }
 
 /**
@@ -95,3 +114,9 @@ export function Setup(dto: $models.SetupDTO): $CancellablePromise<$models.SetupR
 export function ValidateLinearKey(key: string): $CancellablePromise<void> {
     return $Call.ByID(2105802151, key);
 }
+
+// Private type creation functions
+const $$createType0 = $Create.Array($Create.Any);
+const $$createType1 = $models.ProjectFormDTO.createFrom;
+const $$createType2 = $models.SettingsDTO.createFrom;
+const $$createType3 = $models.SetupResultDTO.createFrom;

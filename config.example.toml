@@ -69,6 +69,11 @@ global_cap = 4
 # dedup_mode = "label"               # label | seen | state
 # on_sent_set_label = "label_UUID_of_your_taken_label"
 # blocked_label_id = "label_UUID_of_your_blocked_label"
+# priority_sort: lola's OWN tie-break chain for ranking the issues a tick
+# matched — not a Linear concept, nothing is fetched for it. Only two keys are
+# understood, applied in order: "priority" (highest first, none last) and
+# "createdAt" (oldest first). The order IS the value. An unknown key is
+# rejected rather than silently ignored.
 # priority_sort = ["priority", "createdAt"]
 #
 # [defaults.env]
@@ -332,6 +337,11 @@ on_sent_set_label = "label_sent0000-1111-2222-3333-444455556666"
 # project = "nori-app"
 # repo = "sushidev-team/nori-app"
 # concurrency_cap = 2
+# priority_sort: lola's OWN tie-break chain for ranking the issues a tick
+# matched — not a Linear concept, nothing is fetched for it. Only two keys are
+# understood, applied in order: "priority" (highest first, none last) and
+# "createdAt" (oldest first). The order IS the value. An unknown key is
+# rejected rather than silently ignored.
 # priority_sort = ["priority", "createdAt"]
 # # state = dedup by workflow-state transition (no seen file, no label flip).
 # dedup_mode = "state"

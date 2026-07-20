@@ -170,7 +170,7 @@ overrides it.
 | `dedup_mode` | `"label"` \| `"seen"` \| `"state"` | `[[project]].dedup_mode`. Ultimate default `"seen"`. |
 | `on_sent_set_label` | string (UUID) | `[[project]].on_sent_set_label` |
 | `blocked_label_id` | string (UUID) | `[[project]].blocked_label_id` |
-| `priority_sort` | string array | `[[project]].priority_sort`. Ultimate default `["priority", "createdAt"]`. |
+| `priority_sort` | string array | `[[project]].priority_sort`. Ultimate default `["priority", "createdAt"]`. See [Priority sort](#priority-sort). |
 
 Inheritance is decided by **key presence, not by value**:
 
@@ -197,6 +197,27 @@ for them an empty/zero value has always meant "fall back", and still does.
 > apart offline (config validation never touches the network), so a team label
 > put here by hand is not rejected — it will simply never match issues outside
 > its own team.
+
+#### Priority sort
+
+`priority_sort` is **lola's own tie-break chain** for ranking the issues a tick
+matched — not a Linear concept, and nothing is fetched from the API for it. The
+keys are applied in the order given, and only two are understood:
+
+| Key | Orders by |
+| --- | --- |
+| `priority` | Linear priority, highest first; issues with no priority sort last |
+| `createdAt` | creation time, oldest first |
+
+Order is the value: `["priority", "createdAt"]` takes the highest-priority
+issue and breaks ties by age, while `["createdAt", "priority"]` is
+oldest-first with priority as the tie-break. Anything left after the chain
+falls back to the issue identifier, so the order is always deterministic.
+
+Both settings screens offer these as an ordered picker showing the rank. An
+unknown key used to be silently ignored by the sorter; it is now **rejected by
+validation**, since a typo that quietly changes pickup order is worse than a
+startup error.
 
 ### `[linear]`
 

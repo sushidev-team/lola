@@ -6,4 +6,21 @@
 // @ts-ignore: Unused imports
 import { Create as $Create } from "@wailsio/runtime";
 
-Object.freeze($Create.Events);
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
+import * as protocol$0 from "../../../../sushidev-team/lola/internal/protocol/models.js";
+
+function configure() {
+    Object.freeze(Object.assign($Create.Events, {
+        "daemon:projects": $$createType0,
+        "daemon:sessions": $$createType1,
+        "daemon:status": $$createType2,
+    }));
+}
+
+// Private type creation functions
+const $$createType0 = protocol$0.ProjectsData.createFrom;
+const $$createType1 = protocol$0.SessionsData.createFrom;
+const $$createType2 = protocol$0.StatusData.createFrom;
+
+configure();

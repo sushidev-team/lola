@@ -9,7 +9,7 @@
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
-import { Call as $Call, CancellablePromise as $CancellablePromise } from "@wailsio/runtime";
+import { Call as $Call, CancellablePromise as $CancellablePromise, Create as $Create } from "@wailsio/runtime";
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
@@ -20,5 +20,10 @@ import * as $models from "./models.js";
  * not fatal — Check tolerates a nil-ish config and reports it as a failed check.
  */
 export function Run(): $CancellablePromise<$models.DoctorReportDTO> {
-    return $Call.ByID(1595870839);
+    return $Call.ByID(1595870839).then(($result: any) => {
+        return $$createType0($result);
+    });
 }
+
+// Private type creation functions
+const $$createType0 = $models.DoctorReportDTO.createFrom;
