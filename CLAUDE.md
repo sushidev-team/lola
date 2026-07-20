@@ -168,10 +168,14 @@ each of which owns exactly one external tool or concern behind an **exec seam**
     bitmap: zero has always meant "fall back" for them and
     `AgentForProject` / `EffectiveCap` / `BranchPrefixForProject` already
     resolve project → `[defaults]` → hard default at read time.
-- **Team-scoped label UUIDs bound what `[defaults]` may hold.** A Linear label
-  UUID exists only within one team, so `Validate` rejects a `[defaults]` label
-  key inherited by polling projects across different `team_id`s — better a
-  config error than a filter that silently matches nothing.
+- **`[defaults]` label keys must be WORKSPACE labels, and that is a UI rule, not
+  a validation one.** Linear has team labels (scoped to one team) and workspace
+  labels (`IssueLabel.team == null`, valid everywhere). A `[defaults]` label is
+  inherited by projects on any team, so only a workspace label is coherent —
+  `linear.WorkspaceLabels` fetches exactly those and both settings screens offer
+  only them. `Validate` does NOT check this: whether a UUID is team- or
+  workspace-scoped is unknowable offline, and an earlier cross-team rejection
+  here blocked the correct configuration. Do not reinstate it.
 - **Health-gate every dispatch.** If `tmux`/`git`/`claude` aren't all resolvable
   or the poll's `[[project]]` doesn't resolve: skip the tick, record `lastError`
   in status, and mutate **nothing** (no seen, no labels, no in-flight).

@@ -55,9 +55,11 @@ global_cap = 4
 # changing a default here still reaches every project that inherits it.
 #
 # CAREFUL: match_labels / on_sent_set_label / blocked_label_id hold Linear label
-# UUIDs, and a label UUID exists only within ONE team. Setting them here is only
-# coherent while every polling project that inherits them targets the same team
-# — lola rejects the config otherwise rather than silently matching nothing.
+# UUIDs, and Linear has TWO kinds — team labels (scoped to one team) and
+# WORKSPACE labels (organisation-wide). A default here is inherited by projects
+# on any team, so use a WORKSPACE label; a team label will simply never match
+# issues outside its own team. The settings screens offer only workspace labels
+# for these keys. Lola cannot tell them apart offline, so this is not validated.
 #
 # branch_prefix = "lola/"
 # symlinks = [".env"]

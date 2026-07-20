@@ -13,6 +13,7 @@ type API interface {
 	Cycles(ctx context.Context, teamID string) (active *Cycle, all []Cycle, err error)
 	States(ctx context.Context, teamID string) ([]State, error)
 	Labels(ctx context.Context, teamID string) ([]Label, error)
+	WorkspaceLabels(ctx context.Context) ([]Label, error)
 	Members(ctx context.Context, teamID string) ([]User, error)
 	MatchingIssues(ctx context.Context, p config.Project, activeCycleID, viewerID string) ([]Issue, error)
 	IssueTitle(ctx context.Context, issueUUID string) (string, error)

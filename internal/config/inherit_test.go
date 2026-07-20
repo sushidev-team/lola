@@ -221,14 +221,21 @@ team_id = "team-1"
 	}
 }
 
-// Linear label UUIDs are team-scoped, so a [defaults] label inherited by
-// projects on different teams cannot be right for both.
-func TestDefaultLabelAcrossTeamsRejected(t *testing.T) {
+// A [defaults] label shared by projects on DIFFERENT teams is accepted.
+//
+// Lola used to reject this, reasoning that a Linear label UUID is team-scoped.
+// That is only true of team labels: Linear also has workspace-level labels
+// (IssueLabel.team == null) which exist across every team, and those are
+// exactly what a shared [defaults] label should be. The old check therefore
+// rejected the correct configuration. Whether a UUID is workspace- or
+// team-scoped cannot be known offline, so the settings UIs enforce it by
+// offering only workspace labels for the [defaults] keys.
+func TestDefaultLabelAcrossTeamsAccepted(t *testing.T) {
 	c, _ := writeCfg(t, `
 [defaults]
 global_cap = 4
 concurrency_cap = 2
-match_labels = ["label-agent"]
+match_labels = ["label-agent-ready"]
 
 [[project]]
 name = "web"
@@ -244,16 +251,15 @@ team_id = "team-2"
 cycle_mode = "none"
 assignee_mode = "anyone"
 `)
-	err := c.Validate()
-	if err == nil || !strings.Contains(err.Error(), "team-scoped") {
-		t.Fatalf("want a team-scope rejection, got %v", err)
-	}
-
-	// Overriding per project resolves it: neither inherits the global label.
-	c.Projects[0].MatchLabels, c.Projects[0].Inherits.MatchLabels = []string{"l1"}, false
-	c.Projects[1].MatchLabels, c.Projects[1].Inherits.MatchLabels = []string{"l2"}, false
 	if err := c.Validate(); err != nil {
-		t.Fatalf("per-project overrides must be accepted, got %v", err)
+		t.Fatalf("a workspace label shared across teams must validate, got %v", err)
+	}
+	// Both projects inherit it.
+	for _, name := range []string{"web", "api"} {
+		p := c.ProjectByName(name)
+		if !reflect.DeepEqual(p.MatchLabels, []string{"label-agent-ready"}) {
+			t.Errorf("%s match_labels = %v, want the shared default", name, p.MatchLabels)
+		}
 	}
 }
 

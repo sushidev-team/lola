@@ -5,7 +5,7 @@
   import { store } from "$lib/store.svelte";
   import { nav } from "$lib/nav.svelte";
   import { ConfigService, LinearService } from "@bindings/desktop";
-  import type { SettingsDTO, LinearTeamMeta, LinearOption } from "@bindings/desktop/models";
+  import type { SettingsDTO, LinearOption } from "@bindings/desktop/models";
   import { linesToText, splitLines, cleanLines } from "$lib/lines";
 
   // The bindings hand back a class instance, which $state does NOT deep-proxy —
@@ -17,10 +17,39 @@
   let saving = $state(false);
   let tab = $state(nav.overlayTab || "defaults");
 
-  // Only offerable when every polling project shares one team: label UUIDs are
-  // team-scoped, so a [defaults] label has no meaning across several teams.
-  let meta = $state<LinearTeamMeta | null>(null);
-  let metaErr = $state("");
+  // The [defaults] label keys offer WORKSPACE (organisation-level) labels, not
+  // team labels: a shared default is inherited by projects on any team, and a
+  // team-scoped label cannot match issues outside its own team. ProjectForm's
+  // per-project pickers keep using TeamMeta, where a team label is correct.
+  //
+  // Loaded lazily on first visit to the Project-defaults tab so the rest of the
+  // settings form never waits on a Linear round-trip.
+  let wsLabels = $state<LinearOption[] | null>(null);
+  let wsLoading = $state(false);
+  let wsErr = $state("");
+  let wsRequested = false;
+
+  // A picker is only usable with something in it; an empty workspace falls back
+  // to manual entry like a failed call does.
+  const wsReady = $derived(!!wsLabels && wsLabels.length > 0);
+
+  async function loadWorkspaceLabels() {
+    if (wsRequested) return;
+    wsRequested = true;
+    wsLoading = true;
+    try {
+      wsLabels = (await LinearService.WorkspaceLabels()) ?? [];
+    } catch (e) {
+      wsErr = String(e); // no key / offline → raw UUID entry, never a dead end
+    } finally {
+      wsLoading = false;
+    }
+  }
+
+  function selectTab(id: string) {
+    tab = id;
+    if (id === "project") void loadWorkspaceLabels();
+  }
 
   const TABS = [
     { id: "defaults", label: "Defaults" },
@@ -54,13 +83,8 @@
     } finally {
       loading = false;
     }
-    if (dto.defaultsTeamId) {
-      try {
-        meta = await LinearService.TeamMeta(dto.defaultsTeamId, false);
-      } catch (e) {
-        metaErr = String(e); // fall back to raw UUID entry
-      }
-    }
+    // Deep-linked straight to the tab that needs them.
+    if (tab === "project") void loadWorkspaceLabels();
   });
 
   async function save() {
@@ -107,31 +131,37 @@
   </div>
 {/snippet}
 
-{#snippet selectRow(caption: string, current: string, options: LinearOption[], onChange: (v: string) => void, anyLabel = "")}
-  <div class={rowCls}>
+{#snippet selectRow(caption: string, current: string, options: LinearOption[], onChange: (v: string) => void, anyLabel = "", hint = "")}
+  <div class={hint ? rowTopCls : rowCls}>
     <span class="text-faint">{caption}</span>
-    <select class={inputCls} aria-label={caption} value={current} onchange={(e) => onChange(e.currentTarget.value)}>
-      {#if anyLabel}<option value="">{anyLabel}</option>{/if}
-      {#each options as o (o.id)}<option value={o.id}>{o.label}</option>{/each}
-    </select>
+    <span>
+      <select class={inputCls} aria-label={caption} value={current} onchange={(e) => onChange(e.currentTarget.value)}>
+        {#if anyLabel}<option value="">{anyLabel}</option>{/if}
+        {#each options as o (o.id)}<option value={o.id}>{o.label}</option>{/each}
+      </select>
+      {#if hint}<span class={hintCls}>{hint}</span>{/if}
+    </span>
   </div>
 {/snippet}
 
-<!-- A [defaults] label field: a real picker when one team owns every poll,
-     otherwise raw UUID entry (see SettingsDTO.defaultsTeamId). -->
+<!-- One [defaults] label key: a workspace-label picker, or manual UUID entry
+     when the workspace labels couldn't be loaded or there are none. -->
 {#snippet labelRow(caption: string, current: string, onChange: (v: string) => void)}
-  {#if meta}
-    {@render selectRow(caption, current, meta.labels ?? [], onChange, "(none)")}
+  {#if wsReady}
+    {@render selectRow(caption, current, wsLabels ?? [], onChange, "(none)", "workspace label — valid across every team")}
   {:else}
-    <div class={rowCls}>
+    <div class={rowTopCls}>
       <span class="text-faint">{caption}</span>
-      <input
-        class="{inputCls} font-mono"
-        aria-label={caption}
-        value={current}
-        placeholder="label UUID"
-        oninput={(e) => onChange(e.currentTarget.value)}
-      />
+      <span>
+        <input
+          class="{inputCls} font-mono"
+          aria-label={caption}
+          value={current}
+          placeholder="workspace label UUID"
+          oninput={(e) => onChange(e.currentTarget.value)}
+        />
+        <span class={hintCls}>workspace label — valid across every team</span>
+      </span>
     </div>
   {/if}
 {/snippet}
@@ -143,7 +173,7 @@
     <div class="py-10 text-center text-xs text-bad">{loadError}</div>
   {:else if dto}
     {@const d = dto}
-    <Tabs tabs={TABS} active={tab} onSelect={(id) => (tab = id)} />
+    <Tabs tabs={TABS} active={tab} onSelect={selectTab} />
 
     <div class="text-xs">
       {#if tab === "defaults"}
@@ -180,7 +210,9 @@
         <section>
           {@render head("Project defaults")}
           <p class="mb-3 text-[10px] text-faint">
-            Every [[project]] that omits one of these keys inherits it. The project editor shows an inherited value ghosted.
+            Every [[project]] that omits one of these keys inherits it. The project editor shows an inherited value ghosted. The label fields
+            offer <span class="text-ink">workspace</span> labels, which apply across every team — a project's own pickers offer that project's
+            team labels instead.
           </p>
           <div class="space-y-2">
             <label class={rowCls}>
@@ -191,37 +223,47 @@
             {@render areaRow("Post-create", d.postCreate, (v) => { d.postCreate = v; }, "npm install", "one command per line")}
             {@render areaRow("Env", d.env, (v) => { d.env = v; }, "KEY=value", "one KEY=value per line")}
 
-            {#if !d.defaultsTeamId}
-              <p class="rounded border border-edge bg-canvas px-3 py-2 text-[10px] text-faint">
-                Your polling projects span more than one team (or none polls yet). Label UUIDs are team-scoped, so no shared picker can be
-                offered — paste the UUIDs below.
-              </p>
-            {:else if metaErr}
+            {#if wsLoading}
+              <p class="text-[10px] text-faint">loading workspace labels…</p>
+            {:else if wsErr}
               <p class="rounded border border-warn/40 bg-warn/10 px-3 py-2 text-[10px] text-warn">
-                couldn't load team labels ({metaErr}) — using raw UUID entry
+                couldn't load workspace labels ({wsErr}) — enter the UUIDs by hand below
+              </p>
+            {:else if wsLabels && wsLabels.length === 0}
+              <p class="rounded border border-edge bg-canvas px-3 py-2 text-[10px] text-faint">
+                This workspace has no organisation-level labels. A shared default is inherited by projects on any team, so it should be one —
+                create it in Linear, or paste a UUID below.
               </p>
             {/if}
 
-            {#if meta}
+            {#if wsReady}
               <div class={rowTopCls}>
                 <span class="text-faint">Match labels</span>
-                <div class="max-h-36 space-y-1 overflow-auto rounded border border-edge p-2">
-                  {#each meta.labels ?? [] as o (o.id)}
-                    <label class="flex items-center gap-2 text-xs text-ink">
-                      <input
-                        type="checkbox"
-                        class={cbCls}
-                        checked={(d.matchLabels ?? []).includes(o.id)}
-                        onchange={() => { d.matchLabels = toggleId(d.matchLabels, o.id); }}
-                      />
-                      <span class="truncate">{o.label}</span>
-                    </label>
-                  {/each}
-                  {#if (meta.labels ?? []).length === 0}<span class="text-[11px] text-faint">none</span>{/if}
-                </div>
+                <span>
+                  <div class="max-h-36 space-y-1 overflow-auto rounded border border-edge p-2">
+                    {#each wsLabels ?? [] as o (o.id)}
+                      <label class="flex items-center gap-2 text-xs text-ink">
+                        <input
+                          type="checkbox"
+                          class={cbCls}
+                          checked={(d.matchLabels ?? []).includes(o.id)}
+                          onchange={() => { d.matchLabels = toggleId(d.matchLabels, o.id); }}
+                        />
+                        <span class="truncate">{o.label}</span>
+                      </label>
+                    {/each}
+                  </div>
+                  <span class={hintCls}>workspace labels — valid across every team</span>
+                </span>
               </div>
             {:else}
-              {@render areaRow("Match labels", d.matchLabels, (v) => { d.matchLabels = v; }, "one UUID per line")}
+              {@render areaRow(
+                "Match labels",
+                d.matchLabels,
+                (v) => { d.matchLabels = v; },
+                "one UUID per line",
+                "workspace labels — valid across every team",
+              )}
             {/if}
 
             {@render selectRow(

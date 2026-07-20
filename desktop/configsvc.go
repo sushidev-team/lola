@@ -99,12 +99,6 @@ type SettingsDTO struct {
 	BlockedLabelID string   `json:"blockedLabelId"`
 	DedupMode      string   `json:"dedupMode"`
 	PrioritySort   []string `json:"prioritySort"`
-
-	// DefaultsTeamID is the team the inheritable Linear label IDs above belong
-	// to, or "" when polling projects span more than one team. Label UUIDs are
-	// team-scoped, so the frontend uses this to decide whether it can offer a
-	// label picker for the [defaults] label keys at all.
-	DefaultsTeamID string `json:"defaultsTeamId"`
 }
 
 func (s *ConfigService) GetSettings() (SettingsDTO, error) {
@@ -146,30 +140,7 @@ func (s *ConfigService) GetSettings() (SettingsDTO, error) {
 		BlockedLabelID: cfg.Defaults.BlockedLabelID,
 		DedupMode:      cfg.Defaults.DedupMode,
 		PrioritySort:   cfg.Defaults.PrioritySort,
-		DefaultsTeamID: soleTeamID(cfg),
 	}, nil
-}
-
-// soleTeamID returns the team every polling project shares, or "" when there is
-// no consensus (none polling, or more than one team). The [defaults] Linear
-// label keys only make sense within a single team — see the team guard in
-// config.Validate — so this is what decides whether the settings screen can
-// offer real label pickers rather than raw UUID entry.
-func soleTeamID(cfg *config.Config) string {
-	team := ""
-	for _, p := range cfg.Projects {
-		if !p.Polls() {
-			continue
-		}
-		if team == "" {
-			team = p.TeamID
-			continue
-		}
-		if team != p.TeamID {
-			return ""
-		}
-	}
-	return team
 }
 
 func (s *ConfigService) SaveSettings(dto SettingsDTO) error {

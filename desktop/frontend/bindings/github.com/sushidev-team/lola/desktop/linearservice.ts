@@ -37,7 +37,24 @@ export function Teams(): $CancellablePromise<$models.LinearTeam[]> {
     });
 }
 
+/**
+ * WorkspaceLabels lists the ORGANISATION-level labels — those belonging to no
+ * single team, and so valid across every team in the workspace.
+ * 
+ * These are what the GLOBAL settings must offer for the [defaults] label keys:
+ * a shared default is inherited by projects on any team, and a team-scoped
+ * label cannot match issues outside its own team. Per-project label pickers
+ * keep using TeamMeta, where a team label is the right answer.
+ */
+export function WorkspaceLabels(): $CancellablePromise<$models.LinearOption[]> {
+    return $Call.ByID(107212890).then(($result: any) => {
+        return $$createType4($result);
+    });
+}
+
 // Private type creation functions
 const $$createType0 = $models.LinearTeamMeta.createFrom;
 const $$createType1 = $models.LinearTeam.createFrom;
 const $$createType2 = $Create.Array($$createType1);
+const $$createType3 = $models.LinearOption.createFrom;
+const $$createType4 = $Create.Array($$createType3);

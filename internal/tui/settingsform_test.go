@@ -2,18 +2,44 @@ package tui
 
 // Tests for the global settings editor (settingsform.go): the tab strip and the
 // field filtering it drives, field pre-fill, bool toggles + text/int editing,
-// the list/env sub-editor, a persisted save across all five tables, the
-// invalid-input guards (non-numeric, global_cap <= 0) that abort WITHOUT
-// mutating config, and the [defaults] project-fallback keys round-tripping to
-// config.toml.
+// the list/env sub-editor, the workspace-label pickers and their raw-UUID
+// fallback, a persisted save across all five tables, the invalid-input guards
+// (non-numeric, global_cap <= 0) that abort WITHOUT mutating config, and the
+// [defaults] project-fallback keys round-tripping to config.toml.
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/sushidev-team/lola/internal/config"
+	"github.com/sushidev-team/lola/internal/linear"
 )
+
+// loadFakeLabels drives one workspace-label load through the same seam the
+// tea.Cmd feeds — api.WorkspaceLabels then applyWorkspaceLabels — so the tests
+// exercise the real fold-in path rather than assigning f.wsLabels directly.
+func loadFakeLabels(t *testing.T, f *settingsForm, fake *linear.Fake) {
+	t.Helper()
+	labels, err := fake.WorkspaceLabels(context.Background())
+	f.applyWorkspaceLabels(workspaceLabelsMsg{labels: labels, err: err})
+}
+
+// fakeWorkspace is the label fixture: a flat label plus a grouped one, so the
+// "parent / child" rendering is covered too.
+func fakeWorkspace() *linear.Fake {
+	return &linear.Fake{WorkspaceLabelSet: []linear.Label{
+		{ID: "ws-ready", Name: "agent-ready"},
+		{ID: "ws-blocked", Name: "blocked"},
+		{ID: "ws-child", Name: "urgent", Parent: &linear.Label{ID: "ws-parent", Name: "triage"}},
+	}}
+}
 
 // shiftTabKey is the back-tab press. The shared keyMsg helper only knows plain
 // named keys, and shift+tab is a modifier combination.
@@ -109,7 +135,7 @@ func TestSettingsFormTabsFilterFields(t *testing.T) {
 	}
 
 	// tab → Project defaults.
-	f.update(keyMsg("tab"))
+	_, _ = f.update(keyMsg("tab"))
 	if f.tab != stProjectDefaults {
 		t.Fatalf("tab must advance to Project defaults, got %v", f.tab)
 	}
@@ -122,20 +148,20 @@ func TestSettingsFormTabsFilterFields(t *testing.T) {
 	}
 
 	// shift+tab back, then wrap backwards past the first tab onto the last.
-	f.update(shiftTabKey())
+	_, _ = f.update(shiftTabKey())
 	if f.tab != stDefaults {
 		t.Fatalf("shift+tab must go back to Defaults, got %v", f.tab)
 	}
-	f.update(shiftTabKey())
+	_, _ = f.update(shiftTabKey())
 	if f.tab != stCodeRabbit {
 		t.Fatalf("shift+tab must wrap onto the last tab, got %v", f.tab)
 	}
 	// right/left are aliases, and wrap forwards off the last tab.
-	f.update(keyMsg("right"))
+	_, _ = f.update(keyMsg("right"))
 	if f.tab != stDefaults {
 		t.Fatalf("right must wrap onto the first tab, got %v", f.tab)
 	}
-	f.update(keyMsg("left"))
+	_, _ = f.update(keyMsg("left"))
 	if f.tab != stCodeRabbit {
 		t.Fatalf("left must wrap back onto the last tab, got %v", f.tab)
 	}
@@ -143,12 +169,12 @@ func TestSettingsFormTabsFilterFields(t *testing.T) {
 	// Switching tabs resets the cursor, so it can never point past a shorter
 	// field list, and ↓ stops at the end of the ACTIVE tab.
 	f.tab, f.cursor = stCodeRabbit, 9
-	f.update(keyMsg("tab"))
+	_, _ = f.update(keyMsg("tab"))
 	if f.cursor != 0 {
 		t.Errorf("switching tabs must reset the cursor, got %d", f.cursor)
 	}
 	for range 20 {
-		f.update(keyMsg("down"))
+		_, _ = f.update(keyMsg("down"))
 	}
 	if f.cursor != len(f.visible())-1 {
 		t.Errorf("↓ must stop at the last field of the active tab, got %d of %d", f.cursor, len(f.visible()))
@@ -249,13 +275,13 @@ func TestSettingsFormModeFieldsCycle(t *testing.T) {
 			focusField(t, f, tc.key)
 			// space steps through every option and wraps back to unset.
 			for _, want := range append(tc.want[1:], "") {
-				f.update(keyMsg(" "))
+				_, _ = f.update(keyMsg(" "))
 				if fld.text != want {
 					t.Fatalf("%s cycled to %q, want %q", tc.key, fld.text, want)
 				}
 			}
 			// Typing must not corrupt a cycle field.
-			f.update(keyMsg("z"))
+			_, _ = f.update(keyMsg("z"))
 			if fld.text != "" {
 				t.Errorf("typing must not edit %s, got %q", tc.key, fld.text)
 			}
@@ -271,32 +297,32 @@ func TestSettingsFormListSubEditor(t *testing.T) {
 	f := newSettingsForm(m.cfgPath, m.cfg)
 	focusField(t, f, "def_symlinks")
 
-	if ev := f.update(keyMsg("enter")); ev != settingsFormNone || !f.editing {
+	if _, ev := f.update(keyMsg("enter")); ev != settingsFormNone || !f.editing {
 		t.Fatalf("enter must open the list for editing (ev=%v editing=%v)", ev, f.editing)
 	}
 	for _, r := range ".env" {
-		f.update(keyMsg(string(r)))
+		_, _ = f.update(keyMsg(string(r)))
 	}
-	f.update(keyMsg("enter")) // second line
+	_, _ = f.update(keyMsg("enter")) // second line
 	for _, r := range "vendor" {
-		f.update(keyMsg(string(r)))
+		_, _ = f.update(keyMsg(string(r)))
 	}
 	if got := f.field("def_symlinks").lines; len(got) != 2 || got[0] != ".env" || got[1] != "vendor" {
 		t.Fatalf("list lines = %q, want [.env vendor]", got)
 	}
 	// Backspace on an empty line removes it rather than editing the one above.
-	f.update(keyMsg("enter"))
-	f.update(keyMsg("backspace"))
+	_, _ = f.update(keyMsg("enter"))
+	_, _ = f.update(keyMsg("backspace"))
 	if got := f.field("def_symlinks").lines; len(got) != 2 {
 		t.Errorf("backspace on a blank line must drop it, got %q", got)
 	}
 
 	// esc closes the sub-editor; it must NOT cancel the settings form.
-	if ev := f.update(keyMsg("esc")); ev != settingsFormNone || f.editing {
+	if _, ev := f.update(keyMsg("esc")); ev != settingsFormNone || f.editing {
 		t.Fatalf("esc must close the list, not cancel the form (ev=%v editing=%v)", ev, f.editing)
 	}
 	// esc again, now in field navigation, does cancel.
-	if ev := f.update(keyMsg("esc")); ev != settingsFormCancel {
+	if _, ev := f.update(keyMsg("esc")); ev != settingsFormCancel {
 		t.Errorf("esc in field navigation must cancel, got %v", ev)
 	}
 }
@@ -307,7 +333,7 @@ func TestSettingsFormBoolToggleViaKeys(t *testing.T) {
 
 	focusField(t, f, "cr_enabled")
 	before := f.cur().b
-	f.update(keyMsg(" "))
+	_, _ = f.update(keyMsg(" "))
 	if f.cur().b == before {
 		t.Error("space must toggle a bool field")
 	}
@@ -386,9 +412,9 @@ func TestSettingsFormOnlyDigitsInIntField(t *testing.T) {
 	f := newSettingsForm(m.cfgPath, m.cfg)
 	focusField(t, f, "global_cap")
 	f.cur().text = ""
-	f.update(keyMsg("5"))
-	f.update(keyMsg("x")) // non-digit ignored in an int field
-	f.update(keyMsg("2"))
+	_, _ = f.update(keyMsg("5"))
+	_, _ = f.update(keyMsg("x")) // non-digit ignored in an int field
+	_, _ = f.update(keyMsg("2"))
 	if got := f.cur().text; got != "52" {
 		t.Errorf("int field must accept only digits, got %q", got)
 	}
@@ -448,21 +474,21 @@ func TestSettingsFormAgentPickerCyclesAndSaves(t *testing.T) {
 
 	// space cycles claude → codex; enter cycles codex → opencode; space wraps.
 	focusField(t, f, "agent")
-	f.update(keyMsg(" "))
+	_, _ = f.update(keyMsg(" "))
 	if af.text != "codex" {
 		t.Fatalf("space must cycle to codex, got %q", af.text)
 	}
-	f.update(keyMsg("enter"))
+	_, _ = f.update(keyMsg("enter"))
 	if af.text != "opencode" {
 		t.Fatalf("enter must cycle to opencode, got %q", af.text)
 	}
-	f.update(keyMsg(" "))
+	_, _ = f.update(keyMsg(" "))
 	if af.text != "claude" {
 		t.Fatalf("cycle must wrap back to claude, got %q", af.text)
 	}
 	// A stray keystroke must not corrupt the selection.
-	f.update(keyMsg("z"))
-	f.update(keyMsg("backspace"))
+	_, _ = f.update(keyMsg("z"))
+	_, _ = f.update(keyMsg("backspace"))
 	if af.text != "claude" {
 		t.Errorf("typing/backspace must not edit a cycle field, got %q", af.text)
 	}
@@ -643,5 +669,417 @@ func TestSettingsFormPaste(t *testing.T) {
 	f.paste("cap 8")
 	if got := f.field("global_cap").text; got != "8" {
 		t.Errorf("global_cap = %q, want 8", got)
+	}
+}
+
+// The three [defaults] label fields pick from WORKSPACE labels — organisation
+// labels with no team, which exist across every team. A [defaults] value is
+// inherited by projects on any team, so a team label there could never match.
+// The help must say so and must NOT carry the old "rejected on save if projects
+// span teams" claim, which config.Validate no longer enforces.
+func TestSettingsFormLabelFieldsAreWorkspaceScoped(t *testing.T) {
+	m := newTestRoot(t)
+	f := newSettingsForm(m.cfgPath, m.cfg)
+
+	for _, key := range []string{"def_match_labels", "def_on_sent_set_label", "def_blocked_label_id"} {
+		fld := f.field(key)
+		if fld == nil {
+			t.Fatalf("field %q missing", key)
+		}
+		if !fld.wsPick {
+			t.Errorf("%s must offer the workspace-label picker", key)
+		}
+		if !strings.Contains(fld.help, "Workspace label") {
+			t.Errorf("%s help must say these are workspace labels, got %q", key, fld.help)
+		}
+		for _, stale := range []string{"team-scoped", "Rejected on save", "several teams"} {
+			if strings.Contains(fld.help, stale) {
+				t.Errorf("%s help still carries the withdrawn %q claim: %q", key, stale, fld.help)
+			}
+		}
+	}
+}
+
+// Opening the form must never touch Linear: it has to work with no API key and
+// offline. The load is lazy — nothing is fetched until a picker is opened.
+func TestSettingsFormDoesNotLoadLabelsOnOpen(t *testing.T) {
+	m := newTestRoot(t)
+	fake := fakeWorkspace()
+	f := newSettingsForm(m.cfgPath, m.cfg)
+
+	if len(fake.CallLog()) != 0 {
+		t.Errorf("opening the settings form must not call Linear, got %v", fake.CallNames())
+	}
+	if f.wsTried || f.wsLoading || len(f.wsLabels) != 0 {
+		t.Errorf("workspace labels must start unloaded (tried=%v loading=%v n=%d)",
+			f.wsTried, f.wsLoading, len(f.wsLabels))
+	}
+	// Every field is still editable with no labels loaded.
+	focusField(t, f, "def_on_sent_set_label")
+	f.paste("manual-uuid")
+	if got := f.field("def_on_sent_set_label").text; got != "manual-uuid" {
+		t.Errorf("field must be editable offline, got %q", got)
+	}
+}
+
+// A loaded workspace-label set populates the picker: multi-select for
+// def_match_labels, space toggles entries, and confirming writes the chosen IDs
+// back in OPTION order (not toggle order) ready for save.
+func TestSettingsFormWorkspaceLabelPickerMultiSelect(t *testing.T) {
+	m := newTestRoot(t)
+	f := newSettingsForm(m.cfgPath, m.cfg)
+	loadFakeLabels(t, f, fakeWorkspace())
+
+	focusField(t, f, "def_match_labels")
+	if _, ev := f.update(keyMsg("enter")); ev != settingsFormNone || f.picker == nil {
+		t.Fatalf("enter must open the picker (ev=%v picker=%v)", ev, f.picker)
+	}
+	p := f.picker
+	if !p.multi {
+		t.Error("def_match_labels must be a multi-select")
+	}
+	// Options come straight from the fake, grouped labels as "parent / child".
+	if len(p.opts) != 3 {
+		t.Fatalf("picker opts = %d, want 3 workspace labels", len(p.opts))
+	}
+	if p.opts[0].label != "agent-ready" || p.opts[2].label != "triage / urgent" {
+		t.Errorf("picker must render label names, got %q / %q", p.opts[0].label, p.opts[2].label)
+	}
+	if out := f.view(); !strings.Contains(out, "agent-ready") || !strings.Contains(out, "triage / urgent") {
+		t.Errorf("picker view must list the labels:\n%s", out)
+	}
+
+	// Toggle the third then the first, so option order (not toggle order) is
+	// what lands.
+	f.picker.cursor = 2
+	_, _ = f.update(keyMsg(" "))
+	f.picker.cursor = 0
+	_, _ = f.update(keyMsg(" "))
+	if _, ev := f.update(keyMsg("enter")); ev != settingsFormNone || f.picker != nil {
+		t.Fatalf("enter must confirm and close the picker (ev=%v)", ev)
+	}
+	if got := f.field("def_match_labels").lines; len(got) != 2 || got[0] != "ws-ready" || got[1] != "ws-child" {
+		t.Fatalf("picked IDs = %q, want [ws-ready ws-child] in option order", got)
+	}
+
+	// The picked IDs round-trip through save into config.Defaults.
+	if ev := f.save(); ev != settingsFormSaved {
+		t.Fatalf("save = %v, err=%q", ev, f.err)
+	}
+	reloaded, err := config.Load(m.cfgPath)
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if got := strings.Join(reloaded.Defaults.MatchLabels, ","); got != "ws-ready,ws-child" {
+		t.Errorf("defaults.match_labels = %q, want ws-ready,ws-child", got)
+	}
+}
+
+// The two single-value label fields lead with "(none)" so a set label can be
+// cleared, and pre-select whatever the field already holds.
+func TestSettingsFormWorkspaceLabelPickerSingleSelect(t *testing.T) {
+	m := newTestRoot(t)
+	f := newSettingsForm(m.cfgPath, m.cfg)
+	loadFakeLabels(t, f, fakeWorkspace())
+
+	focusField(t, f, "def_blocked_label_id")
+	_, _ = f.update(keyMsg("enter"))
+	p := f.picker
+	if p == nil || p.multi {
+		t.Fatalf("def_blocked_label_id must open a single-select picker, got %v", p)
+	}
+	if p.opts[0].id != "" || p.opts[0].label != "(none)" {
+		t.Errorf("single-select must lead with (none), got %q/%q", p.opts[0].id, p.opts[0].label)
+	}
+	// Choose "blocked" (option index 2: (none), agent-ready, blocked).
+	p.cursor = 2
+	_, _ = f.update(keyMsg("enter"))
+	if got := f.field("def_blocked_label_id").text; got != "ws-blocked" {
+		t.Fatalf("picked label = %q, want ws-blocked", got)
+	}
+
+	// Reopening pre-selects the current value and starts the cursor on it, so
+	// confirming without moving is a no-op.
+	_, _ = f.update(keyMsg("enter"))
+	if f.picker.cursor != 2 {
+		t.Errorf("picker must open on the current value, got cursor %d", f.picker.cursor)
+	}
+	_, _ = f.update(keyMsg("enter"))
+	if got := f.field("def_blocked_label_id").text; got != "ws-blocked" {
+		t.Errorf("confirming without moving must not change the value, got %q", got)
+	}
+
+	// (none) clears it.
+	_, _ = f.update(keyMsg("enter"))
+	f.picker.cursor = 0
+	_, _ = f.update(keyMsg("enter"))
+	if got := f.field("def_blocked_label_id").text; got != "" {
+		t.Errorf("(none) must clear the label, got %q", got)
+	}
+}
+
+// esc abandons the picker without writing anything back.
+func TestSettingsFormWorkspaceLabelPickerEscapes(t *testing.T) {
+	m := newTestRoot(t)
+	f := newSettingsForm(m.cfgPath, m.cfg)
+	loadFakeLabels(t, f, fakeWorkspace())
+	f.field("def_blocked_label_id").text = "keep-me"
+
+	focusField(t, f, "def_blocked_label_id")
+	_, _ = f.update(keyMsg("enter"))
+	f.picker.cursor = 1
+	if _, ev := f.update(keyMsg("esc")); ev != settingsFormNone || f.picker != nil {
+		t.Fatalf("esc must close the picker, not cancel the form (ev=%v)", ev)
+	}
+	if got := f.field("def_blocked_label_id").text; got != "keep-me" {
+		t.Errorf("esc must not write a selection, got %q", got)
+	}
+}
+
+// When the fetch fails the field falls back to raw UUID entry and the footer
+// says why — the user must never be unable to set the field.
+func TestSettingsFormLabelFallbackOnFetchError(t *testing.T) {
+	m := newTestRoot(t)
+	f := newSettingsForm(m.cfgPath, m.cfg)
+
+	fake := fakeWorkspace()
+	fake.Errs = map[string]error{"WorkspaceLabels": errors.New("no linear api key configured")}
+	loadFakeLabels(t, f, fake)
+
+	if len(f.wsLabels) != 0 || !f.wsTried {
+		t.Fatalf("a failed load must leave no labels but mark the attempt (n=%d tried=%v)", len(f.wsLabels), f.wsTried)
+	}
+	if !strings.Contains(f.wsErr, "no linear api key") {
+		t.Errorf("the reason must name the failure, got %q", f.wsErr)
+	}
+
+	// A single-value field edits inline, so it is already usable; the footer
+	// explains why no picker appeared.
+	focusField(t, f, "def_on_sent_set_label")
+	if _, ev := f.update(keyMsg("enter")); ev != settingsFormNone || f.picker != nil {
+		t.Fatalf("a failed load must not open an empty picker (ev=%v)", ev)
+	}
+	foot := strings.Join(f.footerLines(), "\n")
+	if !strings.Contains(foot, "no linear api key") || !strings.Contains(foot, "type UUIDs manually") {
+		t.Errorf("footer must explain the fallback:\n%s", foot)
+	}
+	f.paste("raw-uuid-1")
+	if got := f.field("def_on_sent_set_label").text; got != "raw-uuid-1" {
+		t.Errorf("raw UUID entry must still work, got %q", got)
+	}
+
+	// A multi-value field falls back to its one-UUID-per-line sub-editor.
+	focusField(t, f, "def_match_labels")
+	if _, ev := f.update(keyMsg("enter")); ev != settingsFormNone || !f.editing {
+		t.Fatalf("enter must fall back to the line editor (ev=%v editing=%v)", ev, f.editing)
+	}
+	for _, r := range "raw-uuid-2" {
+		_, _ = f.update(keyMsg(string(r)))
+	}
+	if got := f.field("def_match_labels").lines; len(got) != 1 || got[0] != "raw-uuid-2" {
+		t.Errorf("raw list entry must still work, got %q", got)
+	}
+}
+
+// An organisation with no workspace labels at all is a success with an empty
+// set, not an error — it must still fall back rather than open an empty picker.
+func TestSettingsFormLabelFallbackOnEmptyWorkspace(t *testing.T) {
+	m := newTestRoot(t)
+	f := newSettingsForm(m.cfgPath, m.cfg)
+	loadFakeLabels(t, f, &linear.Fake{}) // no WorkspaceLabelSet
+
+	if !f.wsTried || f.wsErr == "" {
+		t.Fatalf("an empty workspace must be recorded as tried with a reason (tried=%v err=%q)", f.wsTried, f.wsErr)
+	}
+	focusField(t, f, "def_blocked_label_id")
+	if _, ev := f.update(keyMsg("enter")); ev != settingsFormNone || f.picker != nil {
+		t.Fatalf("an empty workspace must not open a picker (ev=%v)", ev)
+	}
+	if !strings.Contains(f.wsErr, "no workspace labels") {
+		t.Errorf("reason must name the empty workspace, got %q", f.wsErr)
+	}
+}
+
+// A cold picker dispatches the async load exactly once and does not block: the
+// first enter returns a tea.Cmd, and a second enter while it is in flight does
+// not dispatch a duplicate.
+func TestSettingsFormLabelLoadIsLazyAndDispatchedOnce(t *testing.T) {
+	m := newTestRoot(t)
+	f := newSettingsForm(m.cfgPath, m.cfg)
+
+	focusField(t, f, "def_match_labels")
+	cmd, ev := f.update(keyMsg("enter"))
+	if ev != settingsFormNone || cmd == nil {
+		t.Fatalf("a cold picker must dispatch the load command (ev=%v cmd=%v)", ev, cmd)
+	}
+	if !f.wsLoading || f.picker != nil {
+		t.Errorf("the load must be in flight with no picker yet (loading=%v)", f.wsLoading)
+	}
+	if again, _ := f.update(keyMsg("enter")); again != nil {
+		t.Error("a second enter while loading must not dispatch a duplicate fetch")
+	}
+
+	// The result arrives as a plain tea.Msg through update, not a key press.
+	if _, ev := f.update(workspaceLabelsMsg{labels: fakeWorkspace().WorkspaceLabelSet}); ev != settingsFormNone {
+		t.Fatalf("the load result must fold in quietly, got ev=%v", ev)
+	}
+	if f.wsLoading || len(f.wsLabels) != 3 {
+		t.Fatalf("labels must land (loading=%v n=%d)", f.wsLoading, len(f.wsLabels))
+	}
+	// The enter that started the load opens the picker itself once the labels
+	// arrive — the user must not have to press it a second time.
+	if f.picker == nil {
+		t.Fatal("the completed load must open the picker the enter asked for")
+	}
+	if f.wsPendingKey != "" {
+		t.Errorf("the pending request must be consumed, got %q", f.wsPendingKey)
+	}
+}
+
+// The auto-open is tied to the field that asked. If focus moved while the load
+// was in flight, the labels still land but no picker steals the new position.
+func TestSettingsFormLabelAutoOpenOnlyForTheAskingField(t *testing.T) {
+	m := newTestRoot(t)
+	f := newSettingsForm(m.cfgPath, m.cfg)
+
+	focusField(t, f, "def_match_labels")
+	if _, _ = f.update(keyMsg("enter")); f.wsPendingKey != "def_match_labels" {
+		t.Fatalf("the asking field must be recorded, got %q", f.wsPendingKey)
+	}
+	// User moves on while the fetch is in flight.
+	focusField(t, f, "def_branch_prefix")
+	_, _ = f.update(workspaceLabelsMsg{labels: fakeWorkspace().WorkspaceLabelSet})
+
+	if f.picker != nil {
+		t.Error("a load that lands after focus moved must not open a picker")
+	}
+	if len(f.wsLabels) != 3 {
+		t.Errorf("the labels must still be kept for the next open, got %d", len(f.wsLabels))
+	}
+	if f.wsPendingKey != "" {
+		t.Errorf("the pending request must be cleared either way, got %q", f.wsPendingKey)
+	}
+	// Going back and pressing enter now opens instantly off the loaded set.
+	focusField(t, f, "def_match_labels")
+	if cmd, _ := f.update(keyMsg("enter")); cmd != nil || f.picker == nil {
+		t.Errorf("the loaded set must open with no refetch (cmd=%v picker=%v)", cmd, f.picker)
+	}
+}
+
+// A failed load that a field is still waiting on routes that field into its raw
+// fallback, rather than leaving the enter with nothing to show for it.
+func TestSettingsFormLabelAutoFallbackOnFailedLoad(t *testing.T) {
+	m := newTestRoot(t)
+	f := newSettingsForm(m.cfgPath, m.cfg)
+
+	focusField(t, f, "def_match_labels")
+	_, _ = f.update(keyMsg("enter")) // dispatches, records the pending field
+	_, _ = f.update(workspaceLabelsMsg{err: errors.New("offline")})
+
+	if f.picker != nil {
+		t.Error("a failed load must not open an empty picker")
+	}
+	if !f.editing {
+		t.Error("an sfList field waiting on a failed load must open its line editor")
+	}
+	for _, r := range "raw-uuid" {
+		_, _ = f.update(keyMsg(string(r)))
+	}
+	if got := f.field("def_match_labels").lines; len(got) != 1 || got[0] != "raw-uuid" {
+		t.Errorf("the fallback editor must accept typing, got %q", got)
+	}
+}
+
+// ctrl+r forces a live fetch past both the in-memory set and the disk cache, so
+// a label added in Linear moments ago can be picked without waiting out the
+// cache max-age.
+func TestSettingsFormLabelRefreshBypassesCache(t *testing.T) {
+	m := newTestRoot(t)
+	if err := saveWorkspaceLabelCache(fakeWorkspace().WorkspaceLabelSet); err != nil {
+		t.Fatalf("save cache: %v", err)
+	}
+	f := newSettingsForm(m.cfgPath, m.cfg)
+
+	// A warm cache opens with no fetch...
+	focusField(t, f, "def_match_labels")
+	if cmd, _ := f.update(keyMsg("enter")); cmd != nil {
+		t.Fatalf("a warm cache must not fetch, got cmd=%v", cmd)
+	}
+	if len(f.picker.opts) != 3 {
+		t.Fatalf("cache must populate the picker, got %d opts", len(f.picker.opts))
+	}
+	// ...but ctrl+r from inside the picker forces one anyway.
+	cmd, ev := f.update(keyMsg("ctrl+r"))
+	if ev != settingsFormNone || cmd == nil {
+		t.Fatalf("ctrl+r must dispatch a live fetch (ev=%v cmd=%v)", ev, cmd)
+	}
+	if f.picker != nil || len(f.wsLabels) != 0 || !f.wsLoading {
+		t.Errorf("a refresh must drop the stale set while it reloads (picker=%v n=%d loading=%v)",
+			f.picker, len(f.wsLabels), f.wsLoading)
+	}
+	// The fresh set reopens the picker on the field that asked.
+	fresh := append(fakeWorkspace().WorkspaceLabelSet, linear.Label{ID: "ws-new", Name: "just-added"})
+	_, _ = f.update(workspaceLabelsMsg{labels: fresh})
+	if f.picker == nil || len(f.picker.opts) != 4 {
+		t.Fatalf("the refreshed set must reopen the picker, got %v", f.picker)
+	}
+	if f.picker.opts[3].label != "just-added" {
+		t.Errorf("the new label must be offered, got %q", f.picker.opts[3].label)
+	}
+}
+
+// A cache older than wsLabelCacheMaxAge is ignored, so a stale file cannot mask
+// a workspace whose labels have changed.
+func TestSettingsFormWorkspaceLabelCacheExpires(t *testing.T) {
+	m := newTestRoot(t)
+	path, err := workspaceLabelCachePath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	stale := wsLabelCache{
+		FetchedAt: time.Now().Add(-wsLabelCacheMaxAge - time.Hour),
+		Labels:    fakeWorkspace().WorkspaceLabelSet,
+	}
+	data, err := json.Marshal(stale)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := loadWorkspaceLabelCache(); err == nil {
+		t.Error("a cache past the max age must be rejected")
+	}
+	// So opening the picker refetches rather than serving the stale set.
+	f := newSettingsForm(m.cfgPath, m.cfg)
+	focusField(t, f, "def_match_labels")
+	if cmd, _ := f.update(keyMsg("enter")); cmd == nil {
+		t.Error("a stale cache must fall through to a live fetch")
+	}
+}
+
+// The disk cache is the synchronous fast path: a warm cache populates the picker
+// with no fetch at all, so reopening the editor never waits on Linear.
+func TestSettingsFormWorkspaceLabelCacheWarmsPicker(t *testing.T) {
+	m := newTestRoot(t) // sets LOLA_HOME to a temp dir, isolating the cache
+	if err := saveWorkspaceLabelCache(fakeWorkspace().WorkspaceLabelSet); err != nil {
+		t.Fatalf("save cache: %v", err)
+	}
+
+	f := newSettingsForm(m.cfgPath, m.cfg)
+	focusField(t, f, "def_match_labels")
+	cmd, ev := f.update(keyMsg("enter"))
+	if ev != settingsFormNone {
+		t.Fatalf("enter = %v", ev)
+	}
+	if cmd != nil {
+		t.Error("a warm cache must not dispatch a fetch")
+	}
+	if f.picker == nil || len(f.picker.opts) != 3 {
+		t.Fatalf("the cache must populate the picker, got %v", f.picker)
 	}
 }

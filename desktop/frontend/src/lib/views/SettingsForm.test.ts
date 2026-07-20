@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/svelte";
+import { render, screen, fireEvent, waitFor, within, cleanup } from "@testing-library/svelte";
 
 // Fake settings returned by the mocked ConfigService.GetSettings().
 const fakeDto = {
@@ -38,14 +38,18 @@ const fakeDto = {
   blockedLabelId: "",
   dedupMode: "label",
   prioritySort: ["priority", "createdAt"],
+  // Still on the Go DTO but no longer read by the UI: the [defaults] label keys
+  // take workspace labels, which are not team-scoped. Left set here so the
+  // tests prove it is ignored rather than merely absent.
   defaultsTeamId: "team-uuid-1",
 };
 
 // vi.mock factories are hoisted; keep their fns in vi.hoisted so they exist when
 // the factories run.
-const { GetSettings, SaveSettings, TeamMeta, setFlash, closeOverlay } = vi.hoisted(() => ({
+const { GetSettings, SaveSettings, WorkspaceLabels, TeamMeta, setFlash, closeOverlay } = vi.hoisted(() => ({
   GetSettings: vi.fn(),
   SaveSettings: vi.fn(),
+  WorkspaceLabels: vi.fn(),
   TeamMeta: vi.fn(),
   setFlash: vi.fn(),
   closeOverlay: vi.fn(),
@@ -57,6 +61,7 @@ vi.mock("@bindings/desktop", () => ({
     SaveSettings: (dto: unknown) => SaveSettings(dto),
   },
   LinearService: {
+    WorkspaceLabels: () => WorkspaceLabels(),
     TeamMeta: (...a: unknown[]) => TeamMeta(...a),
     Teams: vi.fn(),
   },
@@ -66,24 +71,20 @@ vi.mock("$lib/nav.svelte", () => ({ nav: { closeOverlay, overlayTab: "" } }));
 
 import SettingsForm from "./SettingsForm.svelte";
 
-const meta = {
-  projects: [],
-  cycles: [],
-  activeCycleId: "",
-  states: [],
-  labels: [
-    { id: "lab-1", label: "agent" },
-    { id: "lab-2", label: "blocked" },
-  ],
-  members: [],
-};
+// Organisation-level labels: no team, so valid for a [defaults] key that
+// projects on any team inherit.
+const workspaceLabels = [
+  { id: "lab-1", label: "agent" },
+  { id: "lab-2", label: "blocked" },
+];
 
 describe("SettingsForm", () => {
   beforeEach(() => {
     cleanup();
     GetSettings.mockReset().mockResolvedValue({ ...fakeDto });
     SaveSettings.mockReset().mockResolvedValue(undefined);
-    TeamMeta.mockReset().mockResolvedValue(meta);
+    WorkspaceLabels.mockReset().mockResolvedValue(workspaceLabels);
+    TeamMeta.mockReset();
     setFlash.mockReset();
     closeOverlay.mockReset();
   });
@@ -111,31 +112,76 @@ describe("SettingsForm", () => {
     expect(screen.getByText("CodeRabbit watch")).toBeInTheDocument();
   });
 
-  it("offers a real label picker on Project defaults when one team owns every poll", async () => {
+  it("offers workspace-label pickers for all three [defaults] label keys", async () => {
     render(SettingsForm);
     await screen.findByDisplayValue("60s");
-    await waitFor(() => expect(TeamMeta).toHaveBeenCalledWith("team-uuid-1", false));
+    // Lazy: nothing is fetched until the tab that needs it is opened.
+    expect(WorkspaceLabels).not.toHaveBeenCalled();
 
     await fireEvent.click(screen.getByRole("tab", { name: "Project defaults" }));
+    await waitFor(() => expect(WorkspaceLabels).toHaveBeenCalledTimes(1));
+
     expect(screen.getByLabelText("Symlinks")).toHaveValue(".env");
-    // matchLabels is a checkbox list built from the team's labels, not raw UUIDs.
-    const agentLabel = screen.getByRole("checkbox", { name: "agent" }) as HTMLInputElement;
-    expect(agentLabel.checked).toBe(true);
-    expect((screen.getByRole("checkbox", { name: "blocked" }) as HTMLInputElement).checked).toBe(false);
-    // the single-select label keys are selects too
-    expect(screen.getByLabelText("Blocked label").tagName).toBe("SELECT");
+    // matchLabels is a checkbox list built from the workspace labels.
+    expect((await screen.findByRole("checkbox", { name: "agent" })) as HTMLInputElement).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "blocked" })).not.toBeChecked();
+    // …and the two single-select keys are real selects, with a "(none)" option.
+    for (const caption of ["On-sent set label", "Blocked label"]) {
+      const el = screen.getByLabelText(caption);
+      expect(el.tagName).toBe("SELECT");
+      expect(within(el).getByRole("option", { name: "(none)" })).toBeInTheDocument();
+      expect(within(el).getByRole("option", { name: "agent" })).toBeInTheDocument();
+    }
+    // The team-scoped picker is never used for a workspace-wide default.
+    expect(TeamMeta).not.toHaveBeenCalled();
   });
 
-  it("falls back to raw UUID entry when polling projects span several teams", async () => {
-    GetSettings.mockResolvedValueOnce({ ...fakeDto, defaultsTeamId: "" });
+  it("toggling a workspace match label updates the saved list", async () => {
+    render(SettingsForm);
+    await screen.findByDisplayValue("60s");
+    await fireEvent.click(screen.getByRole("tab", { name: "Project defaults" }));
+
+    await fireEvent.click(await screen.findByRole("checkbox", { name: "blocked" })); // add lab-2
+    expect(screen.getByRole("checkbox", { name: "blocked" })).toBeChecked();
+
+    await fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+    await waitFor(() => expect(SaveSettings).toHaveBeenCalledTimes(1));
+    expect(SaveSettings.mock.calls[0][0]).toMatchObject({ matchLabels: ["lab-1", "lab-2"] });
+  });
+
+  it("falls back to manual UUID entry when the workspace labels can't be loaded", async () => {
+    WorkspaceLabels.mockRejectedValueOnce(new Error("no api key"));
     render(SettingsForm);
     await screen.findByDisplayValue("60s");
 
     await fireEvent.click(screen.getByRole("tab", { name: "Project defaults" }));
-    expect(TeamMeta).not.toHaveBeenCalled();
-    expect(screen.getByText(/span more than one team/)).toBeInTheDocument();
+
+    expect(await screen.findByText(/couldn't load workspace labels.*no api key/)).toBeInTheDocument();
     expect(screen.getByLabelText("Blocked label").tagName).toBe("INPUT");
-    expect(screen.getByLabelText("Match labels")).toHaveValue("lab-1");
+    expect(screen.getByLabelText("Match labels")).toHaveValue("lab-1"); // the textarea escape hatch
+  });
+
+  it("falls back to manual entry, and explains why, in a workspace with no organisation labels", async () => {
+    WorkspaceLabels.mockResolvedValueOnce([]);
+    render(SettingsForm);
+    await screen.findByDisplayValue("60s");
+
+    await fireEvent.click(screen.getByRole("tab", { name: "Project defaults" }));
+
+    expect(await screen.findByText(/no organisation-level labels/)).toBeInTheDocument();
+    expect(screen.getByLabelText("On-sent set label").tagName).toBe("INPUT");
+  });
+
+  it("loads the workspace labels once, not on every visit to the tab", async () => {
+    render(SettingsForm);
+    await screen.findByDisplayValue("60s");
+
+    await fireEvent.click(screen.getByRole("tab", { name: "Project defaults" }));
+    await waitFor(() => expect(WorkspaceLabels).toHaveBeenCalledTimes(1));
+    await fireEvent.click(screen.getByRole("tab", { name: "Notify" }));
+    await fireEvent.click(screen.getByRole("tab", { name: "Project defaults" }));
+
+    expect(WorkspaceLabels).toHaveBeenCalledTimes(1);
   });
 
   it("saves the dto with the list fields cleaned, flashes good, and closes the overlay", async () => {

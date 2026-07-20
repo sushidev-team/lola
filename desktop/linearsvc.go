@@ -83,6 +83,31 @@ func (s *LinearService) Teams() ([]LinearTeam, error) {
 	return out, nil
 }
 
+// WorkspaceLabels lists the ORGANISATION-level labels — those belonging to no
+// single team, and so valid across every team in the workspace.
+//
+// These are what the GLOBAL settings must offer for the [defaults] label keys:
+// a shared default is inherited by projects on any team, and a team-scoped
+// label cannot match issues outside its own team. Per-project label pickers
+// keep using TeamMeta, where a team label is the right answer.
+func (s *LinearService) WorkspaceLabels() ([]LinearOption, error) {
+	c, err := linearClient()
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	ls, err := c.WorkspaceLabels(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]LinearOption, 0, len(ls))
+	for _, l := range ls {
+		out = append(out, LinearOption{ID: l.ID, Label: labelDisplay(l)})
+	}
+	return out, nil
+}
+
 // TeamMeta fetches everything the poll form's dependent pickers need for a team.
 func (s *LinearService) TeamMeta(teamID string, refresh bool) (LinearTeamMeta, error) {
 	if teamID == "" {

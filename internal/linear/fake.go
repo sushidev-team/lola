@@ -34,6 +34,7 @@ type Fake struct {
 	CyclesByTeam      map[string][]Cycle
 	StatesByTeam      map[string][]State
 	LabelsByTeam      map[string][]Label
+	WorkspaceLabelSet []Label
 	MembersByTeam     map[string][]User
 
 	// MatchingIssues fixture: IssuesFunc wins when non-nil, else the
@@ -136,6 +137,15 @@ func (f *Fake) States(ctx context.Context, teamID string) ([]State, error) {
 		return nil, err
 	}
 	return slices.Clone(f.StatesByTeam[teamID]), nil
+}
+
+func (f *Fake) WorkspaceLabels(ctx context.Context) ([]Label, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.record("WorkspaceLabels"); err != nil {
+		return nil, err
+	}
+	return slices.Clone(f.WorkspaceLabelSet), nil
 }
 
 func (f *Fake) Labels(ctx context.Context, teamID string) ([]Label, error) {

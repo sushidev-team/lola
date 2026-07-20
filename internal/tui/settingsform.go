@@ -14,7 +14,11 @@
 package tui
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -22,6 +26,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/sushidev-team/lola/internal/agent"
 	"github.com/sushidev-team/lola/internal/config"
+	"github.com/sushidev-team/lola/internal/linear"
 )
 
 type settingsFormEvent int
@@ -82,6 +87,11 @@ type setField struct {
 	text        string   // sfText / sfInt (int held as text, parsed on save) / sfEnum (current selection)
 	options     []string // sfEnum: the values cycled through, in order
 	lines       []string // sfList / sfEnv (one entry per line)
+	// wsPick marks a field whose value is a workspace-label UUID, so enter
+	// offers the label picker instead of (sfList) the raw line editor. The
+	// underlying storage is unchanged — text for single, lines for multi — so
+	// raw UUID entry remains the fallback when the labels cannot be fetched.
+	wsPick bool
 }
 
 type settingsForm struct {
@@ -94,7 +104,37 @@ type settingsForm struct {
 	editing bool // a list/env field is OPEN for line editing
 	lineCur int  // which line, while editing
 	err     string
+
+	// Workspace-label picker state. wsLabels is the organisation-level label
+	// set backing the three [defaults] label fields; wsTried records that a
+	// load has been ATTEMPTED (so a genuinely empty workspace is not retried
+	// forever), and wsErr is the short reason shown when the picker is
+	// unavailable and the field falls back to raw UUID entry.
+	wsLabels []linear.Label
+	wsTried  bool
+	// wsLoading guards against dispatching a duplicate fetch; wsPendingKey is
+	// the field whose enter triggered the in-flight load, so its picker can be
+	// opened when the labels land rather than eating that keystroke.
+	wsLoading    bool
+	wsPendingKey string
+	wsErr        string
+	picker       *setPicker
 }
+
+// setPicker is the workspace-label chooser floated over the field list. It is
+// deliberately separate from form.go's picker: that one is keyed by fieldID and
+// carries team-scoped metadata this form has no notion of. Options are held as
+// id+label pairs so the UUID never has to be shown to pick a label.
+type setPicker struct {
+	title  string
+	key    string // setField.key this writes back to
+	multi  bool
+	opts   []setPickOpt
+	cursor int
+	sel    map[string]bool
+}
+
+type setPickOpt struct{ id, label string }
 
 // matchModeOptions / dedupModeOptions lead with "" — [defaults] may leave the
 // key unset, in which case a project that inherits it falls back to the built-in
@@ -105,12 +145,14 @@ var (
 	dedupModeOptions = []string{"", "label", "seen", "state"}
 )
 
-// labelUUIDHelp is appended to the three [defaults] keys that hold Linear label
-// UUIDs. Those IDs are team-scoped, so a global default only makes sense while
-// every project inheriting it polls one team — config.Validate rejects the rest.
-// Each of those helps says "(team-scoped)" up front as well, because the modal
+// wsLabelHelp closes the three [defaults] label helps. A [defaults] label is
+// inherited by projects on ANY team, so it has to be a workspace (organisation)
+// label — one with no team, which therefore exists across every team. A team
+// label put here could not match issues in the other teams. The per-project
+// pickers offer that project's own team labels; this one offers workspace
+// labels. Each help leads with "Workspace label" too, because the modal
 // truncates a help line to its width and this sentence can fall off the end.
-const labelUUIDHelp = " Rejected on save if polling projects across several teams inherit it — set it per-project instead."
+const wsLabelHelp = " enter opens the workspace-label picker; raw UUID entry stays available if the labels cannot be fetched."
 
 // newSettingsForm builds the editor pre-filled from the live config. The int
 // fields render the resolved values (e.g. review.timeout defaults to 300 once
@@ -135,10 +177,10 @@ func newSettingsForm(cfgPath string, cfg *config.Config) *settingsForm {
 			{key: "def_symlinks", tab: stProjectDefaults, label: "Symlinks", help: "One relative path per line, linked from the main checkout into each worktree (e.g. .env). enter opens the list. Do NOT symlink vendor/ — it breaks PHP autoload; use post_create.", kind: sfList, lines: append([]string(nil), d.Symlinks...)},
 			{key: "def_post_create", tab: stProjectDefaults, label: "Post-create", help: "One command per line, run in a fresh worktree before the agent starts (e.g. composer install). enter opens the list.", kind: sfList, lines: append([]string(nil), d.PostCreate...)},
 			{key: "def_env", tab: stProjectDefaults, label: "Env (KEY=value)", help: "One KEY=value per line, exported into every session and its post_create commands. Keys must be shell identifiers. enter opens the list.", kind: sfEnv, lines: envLines(d.Env)},
-			{key: "def_match_labels", tab: stProjectDefaults, label: "Match labels", help: "Linear label UUIDs (team-scoped), one per line — an issue must carry them (see match mode) to be picked up. enter opens the list." + labelUUIDHelp, kind: sfList, lines: append([]string(nil), d.MatchLabels...)},
+			{key: "def_match_labels", tab: stProjectDefaults, label: "Match labels", help: "Workspace labels an issue must carry (see match mode) to be picked up." + wsLabelHelp, kind: sfList, wsPick: true, lines: append([]string(nil), d.MatchLabels...)},
 			{key: "def_match_mode", tab: stProjectDefaults, label: "Match mode", help: "How match labels combine: any = at least one, all = every one. space/enter cycles; unset falls back to \"any\".", kind: sfEnum, options: matchModeOptions, text: d.MatchMode},
-			{key: "def_on_sent_set_label", tab: stProjectDefaults, label: "On-sent set label", help: "Linear label UUID (team-scoped) flipped onto an issue once its session is dispatched (label dedup mode)." + labelUUIDHelp, kind: sfText, text: d.OnSentSetLabel},
-			{key: "def_blocked_label_id", tab: stProjectDefaults, label: "Blocked label", help: "Linear label UUID (team-scoped) applied when a session escalates and needs a human." + labelUUIDHelp, kind: sfText, text: d.BlockedLabelID},
+			{key: "def_on_sent_set_label", tab: stProjectDefaults, label: "On-sent set label", help: "Workspace label flipped onto an issue once its session is dispatched (label dedup mode)." + wsLabelHelp, kind: sfText, wsPick: true, text: d.OnSentSetLabel},
+			{key: "def_blocked_label_id", tab: stProjectDefaults, label: "Blocked label", help: "Workspace label applied when a session escalates and needs a human." + wsLabelHelp, kind: sfText, wsPick: true, text: d.BlockedLabelID},
 			{key: "def_dedup_mode", tab: stProjectDefaults, label: "Dedup mode", help: "How an already-dispatched issue is remembered: label (flip a Linear label), seen (local store), state (workflow state). space/enter cycles; unset falls back to \"seen\".", kind: sfEnum, options: dedupModeOptions, text: d.DedupMode},
 			{key: "def_priority_sort", tab: stProjectDefaults, label: "Priority sort", help: "One Linear issue field per line, applied in order when ranking the matched issues (e.g. priority, then createdAt). enter opens the list; unset sorts by priority, createdAt.", kind: sfList, lines: append([]string(nil), d.PrioritySort...)},
 
@@ -336,17 +378,40 @@ func (f *settingsForm) toggleBool(fld *setField) {
 	}
 }
 
-func (f *settingsForm) update(k tea.KeyPressMsg) settingsFormEvent {
+// update takes the whole tea.Msg (not just a key) so the form can dispatch and
+// receive async work — see the settings dispatch in app.go. Non-key messages
+// other than the ones handled here are ignored.
+func (f *settingsForm) update(msg tea.Msg) (tea.Cmd, settingsFormEvent) {
+	k, ok := msg.(tea.KeyPressMsg)
+	if !ok {
+		return f.updateNonKey(msg)
+	}
+	return f.key(k)
+}
+
+// updateNonKey handles the async results the form asks for. Left as its own
+// method so the key path stays readable; extend it alongside any new tea.Cmd.
+func (f *settingsForm) updateNonKey(msg tea.Msg) (tea.Cmd, settingsFormEvent) {
+	if v, ok := msg.(workspaceLabelsMsg); ok {
+		f.applyWorkspaceLabels(v)
+	}
+	return nil, settingsFormNone
+}
+
+func (f *settingsForm) key(k tea.KeyPressMsg) (tea.Cmd, settingsFormEvent) {
 	f.err = ""
+	if f.picker != nil {
+		return f.pickerKey(k)
+	}
 	if f.editing {
-		return f.editList(k)
+		return nil, f.editList(k)
 	}
 	fld := f.cur()
 	switch k.String() {
 	case "esc":
-		return settingsFormCancel
+		return nil, settingsFormCancel
 	case "ctrl+s":
-		return f.save()
+		return nil, f.save()
 	case "tab", "right":
 		f.switchTab(1)
 	case "shift+tab", "left":
@@ -359,7 +424,17 @@ func (f *settingsForm) update(k tea.KeyPressMsg) settingsFormEvent {
 		if f.cursor < len(f.visible())-1 {
 			f.cursor++
 		}
+	case "ctrl+r":
+		// Force a live refetch of the workspace labels. Only meaningful on a
+		// label field; ctrl+r is free here because the settings modal owns all
+		// input while open (it never reaches the cockpit's daemon restart).
+		if fld.wsPick {
+			return f.refreshWorkspaceLabels(fld), settingsFormNone
+		}
 	case "enter":
+		if fld.wsPick {
+			return f.openLabelPicker(fld), settingsFormNone
+		}
 		switch fld.kind {
 		case sfBool:
 			f.toggleBool(fld)
@@ -391,7 +466,7 @@ func (f *settingsForm) update(k tea.KeyPressMsg) settingsFormEvent {
 			fld.text += k.Text
 		}
 	}
-	return settingsFormNone
+	return nil, settingsFormNone
 }
 
 // openList opens a list/env field for line editing, seeding an empty field with
@@ -442,6 +517,361 @@ func (f *settingsForm) editList(k tea.KeyPressMsg) settingsFormEvent {
 		}
 	}
 	return settingsFormNone
+}
+
+// ---- workspace labels -----------------------------------------------------
+//
+// The three [defaults] label keys are picked from the WORKSPACE (organisation)
+// labels — those with no team, which exist across every team. A [defaults]
+// value is inherited by projects on any team, so a team-scoped label here could
+// never match issues in the other teams. Loading is lazy (nothing happens until
+// a picker is opened) and asynchronous, and every failure path degrades to raw
+// UUID entry: the form must stay usable with no API key and offline.
+
+type workspaceLabelsMsg struct {
+	labels []linear.Label
+	err    error
+}
+
+// wsLabelCache is the on-disk blob, mirroring meta.go's per-team cache. Reading
+// it is a local file read, so the picker can consult it synchronously without
+// ever waiting on Linear.
+type wsLabelCache struct {
+	FetchedAt time.Time      `json:"fetchedAt"`
+	Labels    []linear.Label `json:"labels"`
+}
+
+func workspaceLabelCachePath() (string, error) {
+	home, err := config.Home()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, "cache", "linear-workspace-labels.json"), nil
+}
+
+// wsLabelCacheMaxAge bounds how long the picker will trust the cache. Labels
+// are edited in Linear, not here, so a cache with no expiry would mask a
+// renamed or newly added label indefinitely; past this it refetches on its own.
+// ctrl+r forces a live fetch when that wait is too long.
+const wsLabelCacheMaxAge = 12 * time.Hour
+
+// loadWorkspaceLabelCache returns the cached labels, or an error if the cache
+// is missing, unreadable, or older than wsLabelCacheMaxAge.
+func loadWorkspaceLabelCache() ([]linear.Label, error) {
+	path, err := workspaceLabelCachePath()
+	if err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var c wsLabelCache
+	if err := json.Unmarshal(data, &c); err != nil {
+		return nil, err
+	}
+	if age := time.Since(c.FetchedAt); age > wsLabelCacheMaxAge {
+		return nil, fmt.Errorf("workspace label cache is %s old", age.Truncate(time.Hour))
+	}
+	return c.Labels, nil
+}
+
+func saveWorkspaceLabelCache(ls []linear.Label) error {
+	path, err := workspaceLabelCachePath()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(wsLabelCache{FetchedAt: time.Now(), Labels: ls}, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0o600)
+}
+
+// loadWorkspaceLabelsCmd fetches the organisation-level labels off the UI
+// goroutine, on a bounded context, and refreshes the cache. Mirrors
+// loadMetaCmd; the cache read is NOT done here because openLabelPicker already
+// consulted it synchronously before deciding to dispatch this.
+func loadWorkspaceLabelsCmd(cfg *config.Config) tea.Cmd {
+	return func() tea.Msg {
+		api, err := newLinearAPI(cfg)
+		if err != nil {
+			return workspaceLabelsMsg{err: err}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		ls, err := api.WorkspaceLabels(ctx)
+		if err != nil {
+			return workspaceLabelsMsg{err: err}
+		}
+		_ = saveWorkspaceLabelCache(ls) // best-effort; a stale cache beats none
+		return workspaceLabelsMsg{labels: ls}
+	}
+}
+
+// applyWorkspaceLabels folds a completed load into the form. Both failure modes
+// (error, empty workspace) leave wsLabels empty and set a short reason, which
+// the footer shows and which sends the next enter to raw UUID entry.
+func (f *settingsForm) applyWorkspaceLabels(msg workspaceLabelsMsg) {
+	f.wsTried, f.wsLoading = true, false
+	pending := f.wsPendingKey
+	f.wsPendingKey = ""
+	// The instruction leads and the reason trails: the modal truncates this to
+	// its width, and losing the cause is survivable where losing "what do I do
+	// now" is not.
+	switch {
+	case msg.err != nil:
+		f.wsErr = "type UUIDs manually — workspace labels unavailable: " + shortErr(msg.err)
+	case len(msg.labels) == 0:
+		f.wsErr = "type UUIDs manually — no workspace labels in this Linear organisation"
+	default:
+		f.wsLabels, f.wsErr = msg.labels, ""
+	}
+	if pending == "" {
+		return
+	}
+	// The enter that triggered the load opens the picker when the labels land,
+	// so that keystroke is not silently swallowed. Only if the asking field is
+	// STILL focused, though — the load is async and the user may have moved on
+	// or switched tabs, and stealing focus back would be worse than doing
+	// nothing. On failure the field keeps its raw-entry fallback (below).
+	fld := f.cur()
+	if fld == nil || fld.key != pending || f.picker != nil || f.editing {
+		return
+	}
+	if len(f.wsLabels) > 0 {
+		f.openPickerFor(fld)
+		return
+	}
+	f.fallbackToRawEntry(fld)
+}
+
+// fallbackToRawEntry makes a label field editable without a picker: a
+// multi-value field opens its one-UUID-per-line editor, a single-value field
+// already edits inline so there is nothing to open.
+func (f *settingsForm) fallbackToRawEntry(fld *setField) {
+	if fld.kind == sfList || fld.kind == sfEnv {
+		f.openList(fld)
+	}
+}
+
+// shortErr keeps a failure readable on the single footer line the modal allows.
+func shortErr(err error) string {
+	r := []rune(err.Error())
+	if len(r) > 40 {
+		return string(r[:40]) + "…"
+	}
+	return string(r)
+}
+
+// openLabelPicker opens the workspace-label chooser for a wsPick field. It never
+// blocks: an in-memory set is used directly, a cold one is filled from the disk
+// cache (a local read), and only a genuine miss dispatches the async fetch. Once
+// a load has been tried and yielded nothing, enter falls back to raw UUID entry
+// so the field is never uneditable.
+func (f *settingsForm) openLabelPicker(fld *setField) tea.Cmd {
+	if len(f.wsLabels) == 0 && !f.wsTried {
+		if ls, err := loadWorkspaceLabelCache(); err == nil && len(ls) > 0 {
+			f.wsLabels, f.wsTried = ls, true
+		}
+	}
+	if len(f.wsLabels) > 0 {
+		f.openPickerFor(fld)
+		return nil
+	}
+	if !f.wsTried {
+		if f.wsLoading {
+			return nil // a fetch is already in flight
+		}
+		// Remember who asked: applyWorkspaceLabels opens this field's picker
+		// when the labels land, so the enter that started the load is not lost.
+		f.wsLoading, f.wsPendingKey = true, fld.key
+		f.wsErr = "loading workspace labels…"
+		return loadWorkspaceLabelsCmd(f.cfg)
+	}
+	f.fallbackToRawEntry(fld)
+	return nil
+}
+
+// refreshWorkspaceLabels (ctrl+r on a label field or in the picker) forces a
+// live fetch past both the in-memory set and the disk cache. The cache has a
+// max age, but a label added in Linear seconds ago still needs a way to appear
+// without waiting it out.
+func (f *settingsForm) refreshWorkspaceLabels(fld *setField) tea.Cmd {
+	if f.wsLoading {
+		return nil
+	}
+	f.wsLabels, f.wsTried = nil, false
+	f.wsLoading, f.wsPendingKey = true, fld.key
+	f.wsErr = "refreshing workspace labels…"
+	f.picker = nil // reopened by applyWorkspaceLabels once the fresh set lands
+	return loadWorkspaceLabelsCmd(f.cfg)
+}
+
+// openPickerFor builds the chooser for a field, pre-selecting its current
+// value(s) and starting the cursor there, so confirming without moving is a
+// no-op. A single-value field leads with "(none)" to clear it.
+func (f *settingsForm) openPickerFor(fld *setField) {
+	p := &setPicker{title: fld.label, key: fld.key, sel: map[string]bool{}}
+	if fld.kind == sfList || fld.kind == sfEnv {
+		p.multi = true
+		for _, id := range trimDropEmpty(fld.lines) {
+			p.sel[id] = true
+		}
+	} else {
+		p.opts = append(p.opts, setPickOpt{"", "(none)"})
+		p.sel[strings.TrimSpace(fld.text)] = true // "" marks (none)
+	}
+	for _, l := range f.wsLabels {
+		p.opts = append(p.opts, setPickOpt{l.ID, labelDisplay(l)})
+	}
+	for i, o := range p.opts {
+		if p.sel[o.id] {
+			p.cursor = i
+			break
+		}
+	}
+	f.picker = p
+}
+
+// pickerKey drives the OPEN chooser: arrows move, space toggles a multi-select,
+// enter commits, esc abandons. Mirrors (*formModel).pickerKey so both pickers
+// feel the same.
+func (f *settingsForm) pickerKey(k tea.KeyPressMsg) (tea.Cmd, settingsFormEvent) {
+	p := f.picker
+	switch k.String() {
+	case "esc":
+		f.picker = nil
+	case "up", "k":
+		if p.cursor > 0 {
+			p.cursor--
+		}
+	case "down", "j":
+		if p.cursor < len(p.opts)-1 {
+			p.cursor++
+		}
+	case "space":
+		// bubbletea v2 reports the space bar as "space"; a test cannot build a
+		// message that says " ", so matching that too would be untestable and
+		// unreachable.
+		if p.multi && len(p.opts) > 0 {
+			id := p.opts[p.cursor].id
+			if p.sel[id] {
+				delete(p.sel, id)
+			} else {
+				p.sel[id] = true
+			}
+		}
+	case "ctrl+r":
+		// Refetch past the cache, keeping the pending selection's field so the
+		// picker reopens on the fresh set.
+		if fld := f.field(p.key); fld != nil {
+			return f.refreshWorkspaceLabels(fld), settingsFormNone
+		}
+	case "enter":
+		f.applyPick(p)
+		f.picker = nil
+	}
+	return nil, settingsFormNone
+}
+
+// applyPick writes the chosen label ID(s) back into the field's own storage —
+// lines for a multi-select, text for a single — so save() needs no special case.
+func (f *settingsForm) applyPick(p *setPicker) {
+	fld := f.field(p.key)
+	if fld == nil || len(p.opts) == 0 {
+		return
+	}
+	if p.multi {
+		var ids []string
+		for _, o := range p.opts { // option order, not toggle order
+			if o.id != "" && p.sel[o.id] {
+				ids = append(ids, o.id)
+			}
+		}
+		fld.lines = ids
+		return
+	}
+	fld.text = p.opts[p.cursor].id
+}
+
+// pickerView renders the chooser in place of the field list, in the same shape
+// as the form body: a liftable title, a blank, the windowed options, and a
+// pinned hint.
+func (f *settingsForm) pickerView(bodyBudget int) string {
+	p := f.picker
+	hint := "↑/↓ move · enter select · ctrl-r refresh · esc cancel"
+	if p.multi {
+		hint = "↑/↓ move · space toggle · enter confirm · ctrl-r refresh · esc cancel"
+	}
+	footer := []string{"", faintText.Render(hint)}
+	avail := bodyBudget - len(footer)
+	if avail < 1 {
+		avail = 1
+	}
+
+	rows := make([]string, 0, len(p.opts))
+	for i, o := range p.opts {
+		marker := "  "
+		if i == p.cursor {
+			marker = "› "
+		}
+		check := ""
+		switch {
+		case p.multi:
+			check = "[ ] "
+			if p.sel[o.id] {
+				check = "[x] "
+			}
+		case p.sel[o.id]:
+			check = "• "
+		}
+		line := marker + check + o.label
+		if i == p.cursor {
+			line = selStyle.Render(line)
+		}
+		rows = append(rows, line)
+	}
+	win := pickerWindow(rows, p.cursor, avail)
+
+	out := make([]string, 0, bodyBudget+2)
+	out = append(out, titleStyle.Render(p.title), "")
+	out = append(out, win...)
+	for i := len(win); i < avail; i++ { // pad so the hint sits at the bottom
+		out = append(out, "")
+	}
+	out = append(out, footer...)
+	return strings.Join(out, "\n") + "\n"
+}
+
+// pickerWindow keeps the cursor row visible in at most avail rows, replacing the
+// clipped edge rows with faint markers (same affordance as the field scroller).
+func pickerWindow(rows []string, cursor, avail int) []string {
+	if avail < 1 {
+		avail = 1
+	}
+	n := len(rows)
+	if n <= avail {
+		return rows
+	}
+	top := cursor - avail/2
+	if top > n-avail {
+		top = n - avail
+	}
+	if top < 0 {
+		top = 0
+	}
+	win := append([]string(nil), rows[top:top+avail]...)
+	if top > 0 {
+		win[0] = faintText.Render("  ↑ more")
+	}
+	if top+avail < n {
+		win[avail-1] = faintText.Render("  ↓ more")
+	}
+	return win
 }
 
 // save parses+validates every field, applies them to the config tables, runs the
@@ -641,9 +1071,17 @@ func (f *settingsForm) footerLines() []string {
 	if f.err != "" {
 		out = append(out, "", badText.Render("✗ "+f.err))
 	}
+	// Why the label picker is unavailable, shown only while a label field is
+	// focused — it explains why enter is typing UUIDs rather than offering a list.
+	if f.cur().wsPick && f.wsErr != "" {
+		out = append(out, "", warnText.Render("! "+f.wsErr))
+	}
 	hint := "tab/⇧tab section · ↑/↓ field · space toggle · ctrl-s save · esc cancel"
-	if f.editing {
+	switch {
+	case f.editing:
 		hint = "editing " + f.cur().label + " — ↑/↓ line · enter new line · esc done"
+	case f.cur().wsPick:
+		hint = "enter labels · ctrl-r refresh · ↑/↓ field · ctrl-s save · esc cancel"
 	}
 	out = append(out, "", faintText.Render(hint))
 	return out
@@ -690,6 +1128,9 @@ func (f *settingsForm) window(region []string, fieldLine []int, avail int) []str
 // view renders the FULL editor body unwindowed (no scrolling). The modal uses
 // the windowed scrolledView; view is the plain full render for tests.
 func (f *settingsForm) view() string {
+	if f.picker != nil {
+		return f.pickerView(len(f.picker.opts) + 2) // +2 for the pinned hint
+	}
 	region, _ := f.fieldRegion()
 	all := append([]string{titleStyle.Render("settings"), "", f.tabStrip(), ""}, region...)
 	all = append(all, f.footerLines()...)
@@ -701,6 +1142,9 @@ func (f *settingsForm) view() string {
 // bottom. The first two returned lines are the (liftable) title + a blank,
 // matching view's shape.
 func (f *settingsForm) scrolledView(bodyBudget int) string {
+	if f.picker != nil {
+		return f.pickerView(bodyBudget)
+	}
 	region, fieldLine := f.fieldRegion()
 	footer := f.footerLines()
 	avail := bodyBudget - len(footer) - 2 // -2 for the tab strip + its blank

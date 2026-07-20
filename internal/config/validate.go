@@ -262,32 +262,19 @@ func (c *Config) validateProjectDefaults() []error {
 		}
 	}
 
-	labelKeys := []struct {
-		name     string
-		set      bool
-		inherits func(p *Project) bool
-	}{
-		{"match_labels", len(c.Defaults.MatchLabels) > 0, func(p *Project) bool { return p.Inherits.MatchLabels }},
-		{"on_sent_set_label", c.Defaults.OnSentSetLabel != "", func(p *Project) bool { return p.Inherits.OnSentSetLabel }},
-		{"blocked_label_id", c.Defaults.BlockedLabelID != "", func(p *Project) bool { return p.Inherits.BlockedLabelID }},
-	}
-	for _, k := range labelKeys {
-		if !k.set {
-			continue
-		}
-		teams := map[string]bool{}
-		for i := range c.Projects {
-			p := &c.Projects[i]
-			if p.Polls() && k.inherits(p) {
-				teams[p.TeamID] = true
-			}
-		}
-		if len(teams) > 1 {
-			errs = append(errs, fmt.Errorf(
-				"defaults.%s is a team-scoped Linear label but %d polling projects across different teams inherit it; set it per-project instead",
-				k.name, len(teams)))
-		}
-	}
+	// NOTE: there is deliberately NO cross-team check on the label keys here.
+	//
+	// An earlier version rejected a [defaults] label whenever polling projects
+	// spanned several teams, on the grounds that a Linear label UUID is
+	// team-scoped. That is only true of TEAM labels: Linear also has
+	// workspace-level labels (IssueLabel.team == null) which exist across every
+	// team, and those are exactly what a shared [defaults] label should be — so
+	// the check rejected the correct configuration.
+	//
+	// Whether a given UUID is workspace- or team-scoped cannot be known offline,
+	// and this package never touches the network. The distinction is enforced
+	// where it CAN be: the settings UIs offer only workspace labels for the
+	// [defaults] keys, and per-team labels only on a project.
 	return errs
 }
 

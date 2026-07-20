@@ -408,24 +408,26 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// The global settings editor owns all input while open.
+	// The global settings editor owns all input while open. It takes the whole
+	// msg and returns a tea.Cmd, exactly like the project form below: its Linear
+	// label pickers load asynchronously, so it needs both a way to dispatch a
+	// command and a route for the result message to come back on.
 	if m.settings != nil {
-		if k, ok := msg.(tea.KeyPressMsg); ok {
-			switch m.settings.update(k) {
-			case settingsFormCancel:
-				m.settings = nil
-			case settingsFormSaved:
-				m.settings = nil
-				m.reloadConfig()
-				if m.view == viewHome {
-					m.home.flash, m.home.flashGood = "settings saved", true
-				} else {
-					m.list.flash = "settings saved"
-				}
-				return m, tea.Batch(bestEffortReloadCmd, fetchStatusCmd, fetchProjectsCmd)
+		cmd, ev := m.settings.update(msg)
+		switch ev {
+		case settingsFormCancel:
+			m.settings = nil
+		case settingsFormSaved:
+			m.settings = nil
+			m.reloadConfig()
+			if m.view == viewHome {
+				m.home.flash, m.home.flashGood = "settings saved", true
+			} else {
+				m.list.flash = "settings saved"
 			}
+			return m, tea.Batch(bestEffortReloadCmd, fetchStatusCmd, fetchProjectsCmd)
 		}
-		return m, nil
+		return m, cmd
 	}
 
 	// The doctor overlay owns all input while open (loading or showing).

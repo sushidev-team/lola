@@ -185,12 +185,18 @@ default later still reaches every project that inherits it. `agent`,
 `concurrency_cap` and `branch_prefix` are the exceptions to the presence rule:
 for them an empty/zero value has always meant "fall back", and still does.
 
-> **Team-scoped label UUIDs.** `match_labels`, `on_sent_set_label` and
-> `blocked_label_id` hold Linear label UUIDs, and a label UUID exists only
-> within one team. Setting them in `[defaults]` is coherent only while every
-> polling project that inherits them targets the same `team_id` — lola
-> **rejects** the config otherwise rather than silently filtering on a label
-> that cannot match. Override them per project when your projects span teams.
+> **Use WORKSPACE labels here.** `match_labels`, `on_sent_set_label` and
+> `blocked_label_id` hold Linear label UUIDs, and Linear has two kinds: *team*
+> labels, scoped to a single team, and *workspace* (organisation) labels, which
+> exist across every team. A `[defaults]` label is inherited by projects on any
+> team, so it should be a **workspace** label — which is typically where a
+> shared trigger label like `agent-ready` is defined anyway.
+>
+> Both settings screens offer only workspace labels for these keys; a project's
+> own label pickers offer that project's team labels. Lola cannot tell the two
+> apart offline (config validation never touches the network), so a team label
+> put here by hand is not rejected — it will simply never match issues outside
+> its own team.
 
 ### `[linear]`
 
