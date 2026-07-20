@@ -68,32 +68,43 @@
   >
     {#each tiles as s (s.id)}
       {@const sel = nav.selectedId === s.id}
+      <!--
+        The whole tile is one click target that opens the live terminal. It must
+        be a single click, not a double: the snapshot refreshes on a timer, and a
+        re-render landing between the two clicks of a dblclick swallows it. Inner
+        content is pointer-events-none so every click hits the stable tile.
+      -->
       <div
-        class="group flex min-h-0 flex-col overflow-hidden rounded-lg border transition-colors hover:border-accent/60"
+        class="group relative flex min-h-0 cursor-pointer flex-col overflow-hidden rounded-lg border transition-colors hover:border-accent/70"
         class:border-accent={sel}
         class:border-edge={!sel}
+        role="button"
+        tabindex="0"
+        title="open the live terminal"
+        onclick={() => {
+          nav.select(s.id);
+          nav.focusedTerm = s.id;
+        }}
+        onkeydown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            nav.select(s.id);
+            nav.focusedTerm = s.id;
+          }
+        }}
       >
-        <button
-          class="flex items-center gap-1.5 border-b border-edge/50 bg-panel/70 px-2 py-1 text-left text-[11px]"
-          onclick={() => nav.select(s.id)}
-          ondblclick={() => (nav.focusedTerm = s.id)}
-        >
+        <div class="flex items-center gap-1.5 border-b border-edge/50 bg-panel/70 px-2 py-1 text-[11px]">
           <span class="truncate font-medium" class:text-accent={sel}>{s.issue || s.id.slice(0, 8)}</span>
           <span class="truncate text-faint">{s.project}</span>
           <span class="ml-auto shrink-0"><StatusPill status={s.status} dim /></span>
-        </button>
-        <button
-          class="min-h-0 flex-1 text-left"
-          title="double-click to expand"
-          onclick={() => nav.select(s.id)}
-          ondblclick={() => (nav.focusedTerm = s.id)}
-        >
+        </div>
+        <div class="pointer-events-none min-h-0 flex-1">
           <SnapshotTile text={snaps[s.tmuxName] ?? ""} />
-        </button>
+        </div>
         <div
-          class="flex items-center justify-end gap-2 border-t border-edge/40 px-2 py-0.5 text-[10px] opacity-0 transition-opacity group-hover:opacity-100"
+          class="pointer-events-none flex items-center justify-end border-t border-edge/40 px-2 py-0.5 text-[10px] text-faint opacity-0 transition-opacity group-hover:opacity-100"
         >
-          <button class="text-faint hover:text-accent" onclick={() => (nav.focusedTerm = s.id)}>⛶ expand</button>
+          ⛶ open
         </div>
       </div>
     {/each}
