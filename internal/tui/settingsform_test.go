@@ -179,7 +179,7 @@ func TestSettingsFormProjectDefaultsRoundTrip(t *testing.T) {
 	}
 
 	f.field("def_branch_prefix").text = "feat/"
-	// Blank entries are dropped on save, exactly like the project editor.
+	// Blank entries are dropped on save (shared trimDropEmpty).
 	f.field("def_symlinks").lines = []string{".env", "  ", "storage/app"}
 	f.field("def_post_create").lines = []string{"composer install"}
 	f.field("def_env").lines = []string{"FOO=bar", "BAZ=qux"}

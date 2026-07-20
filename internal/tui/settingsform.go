@@ -2,13 +2,13 @@
 // poll-scoped — [defaults], [notify], [brain], [review], and [coderabbit] — from
 // the TUI, so the opt-in feature toggles no longer need hand-editing. Reached
 // with 'S' from the cockpit; saved back to config.toml (atomic) and the daemon
-// reloaded, exactly like the poll and project editors.
+// reloaded, exactly like the project form (form.go).
 //
 // The fields are split across a tab strip (tab / shift+tab, or left/right);
 // within a tab they are a flat, navigable list grouped by section header. Five
 // kinds: bool (space/enter toggles), text (type inline), int (digits, validated
 // on save), enum (space/enter cycles a fixed set), and list/env (enter opens a
-// one-entry-per-line sub-editor, reusing the project editor's helpers). The
+// one-entry-per-line sub-editor, over the shared fieldedit.go helpers). The
 // Slack webhook and Linear key are secrets and are NEVER edited here — [notify]
 // exposes only the env-var NAME that holds the webhook, never its value.
 package tui
@@ -186,7 +186,7 @@ func crAuthor(cr config.CodeRabbitConfig) string {
 // agentKindStrings is the [defaults].agent picker's cycle order: the concrete
 // kinds (claude|codex|opencode) from agent.Kinds. The global default is the top
 // of the resolution chain, so it has no "inherit" option — a project-level
-// override carries that (see projectform.go).
+// override carries that (see projAgentOptions in fieldedit.go).
 func agentKindStrings() []string {
 	out := make([]string, len(agent.Kinds))
 	for i, k := range agent.Kinds {
@@ -372,7 +372,9 @@ func (f *settingsForm) openList(fld *setField) {
 
 // editList drives the OPEN list/env field: arrows move between lines, enter adds
 // a line, backspace edits (or removes an empty line), esc closes back to field
-// navigation. Mirrors the project editor's sub-editor, so both feel the same.
+// navigation. Deliberately the same shape as (*formModel).editList in form.go —
+// the two forms are separate types with their own line buffers, but a list field
+// must feel identical in both.
 func (f *settingsForm) editList(k tea.KeyPressMsg) settingsFormEvent {
 	fld := f.cur()
 	switch k.String() {
@@ -704,7 +706,7 @@ func enumGlyph(v string) string {
 }
 
 // settingsFormModal floats the settings editor over the dimmed cockpit, lifting
-// its leading title into the box header (mirrors projectFormModal). The body is
+// its leading title into the box header (mirrors formModal). The body is
 // scrolled to the box's inner height so it is never clipped on a short terminal.
 func (m *rootModel) settingsFormModal() string {
 	W, H := m.width, m.height
