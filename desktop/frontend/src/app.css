@@ -1,6 +1,38 @@
 @import "tailwindcss";
 @import "@xterm/xterm/css/xterm.css";
 
+/* Hack — a highly legible terminal typeface (source-foundry/Hack, MIT-ish, see
+   src/fonts/HACK-LICENSE.md). Vendored woff2 so there's no CDN dependency and no
+   Vite ?query issues. Used for the terminals (see --font-term). */
+@font-face {
+  font-family: "Hack";
+  src: url("./fonts/hack-regular.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Hack";
+  src: url("./fonts/hack-bold.woff2") format("woff2");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Hack";
+  src: url("./fonts/hack-italic.woff2") format("woff2");
+  font-weight: 400;
+  font-style: italic;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Hack";
+  src: url("./fonts/hack-bolditalic.woff2") format("woff2");
+  font-weight: 700;
+  font-style: italic;
+  font-display: swap;
+}
+
 /* ---------------------------------------------------------------------------
    lola design tokens — lifted verbatim from internal/tui/theme.go so the app
    and the TUI render the same cohesive, opaque, dark-navy truecolor palette.
@@ -36,6 +68,7 @@
 
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Monaco, monospace;
+  --font-term: "Hack", "JetBrains Mono", ui-monospace, Menlo, monospace;
 
   --radius-panel: 10px;
 }

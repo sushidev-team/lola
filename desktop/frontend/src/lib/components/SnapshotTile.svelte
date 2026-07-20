@@ -10,8 +10,8 @@
 <div class="term-snap h-full w-full overflow-hidden bg-canvas" style="--snap-scale:{scale}">
   {#if text}
     <pre
-      class="m-0 whitespace-pre font-mono leading-[1.15] text-ink"
-      style="font-size:calc(12px * var(--snap-scale))">{@html html}</pre>
+      class="m-0 whitespace-pre leading-[1.2] text-ink antialiased"
+      style="font-family:var(--font-term);font-size:calc(13px * var(--snap-scale))">{@html html}</pre>
   {:else}
     <div class="flex h-full items-center justify-center text-[11px] text-faint">no pane output</div>
   {/if}

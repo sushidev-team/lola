@@ -34,9 +34,15 @@
   onMount(() => {
     term = new Terminal({
       scrollback: 1500,
-      fontFamily: '"JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace',
-      fontSize: 12.5,
-      lineHeight: 1.2,
+      // Hack — a hinted, highly legible terminal face. An INTEGER font size keeps
+      // cell/glyph dimensions on whole device pixels so WebGL renders crisply
+      // (a fractional size like 12.5 rounds unevenly and looks soft).
+      fontFamily: '"Hack", "JetBrains Mono", ui-monospace, Menlo, monospace',
+      fontSize: 13,
+      fontWeight: 400,
+      fontWeightBold: 700,
+      lineHeight: 1.25,
+      letterSpacing: 0,
       cursorBlink: interactive,
       disableStdin: !interactive,
       theme: {
@@ -94,10 +100,11 @@
     });
     ro.observe(host);
 
-    // xterm measures the font at open(); if JetBrains Mono is still loading it
-    // uses fallback metrics. Re-fit + repaint once it's ready so cell sizing and
-    // the WebGL glyph atlas match the real font.
+    // xterm measures the font and builds the WebGL glyph atlas at open(); if Hack
+    // is still loading it uses fallback metrics/glyphs and the atlas stays stale.
+    // Clear the atlas, re-fit, and repaint once the font is ready.
     document.fonts.ready.then(() => {
+      gl?.clearTextureAtlas();
       fit?.fit();
       term?.refresh(0, (term?.rows ?? 1) - 1);
     });
