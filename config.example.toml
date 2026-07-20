@@ -237,6 +237,10 @@ name = "nori-app"
 # Worktrees are created NEXT TO it under ~/.lola/, never inside it.
 path = "/Volumes/Git/sushi/internal/nori/nori-app"
 # GitHub "owner/name"; used for PR/CI observation of native sessions.
+# The TUI and desktop forms auto-detect this from the checkout's remotes when
+# you set `path` (upstream first, then origin) — verify it on a fork. Left
+# empty, PR checks are unavailable and orphaned issues are never auto-reverted
+# (fail-closed), which is why detection leaves it empty rather than guessing.
 repo = "sushidev-team/nori-app"
 # Branch new session worktrees start from. Default when omitted: "main".
 default_branch = "main"

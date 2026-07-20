@@ -508,3 +508,99 @@ func TestPickerSpaceDeselects(t *testing.T) {
 		t.Errorf("StateIDs = %v, want the selection cleared", f.poll.StateIDs)
 	}
 }
+
+// Repo auto-detection: leaving the Path field asks for the checkout's GitHub
+// remote so the user does not have to copy owner/name by hand.
+func TestFormDetectsRepoOnLeavingPath(t *testing.T) {
+	f, _ := newNativeTestForm(t, nil)
+	f.tab = tabRepo
+	f.cursor = slices.Index(f.fields(), fPath)
+	f.poll.Path = "/tmp/web"
+
+	cmd := f.leftField(fPath)
+	if cmd == nil {
+		t.Fatal("leaving Path with an empty repo must request detection")
+	}
+	// Feed the result back the way the tea loop would.
+	f.update(repoDetectedMsg{path: "/tmp/web", repo: "acme/web"})
+	if f.poll.Repo != "acme/web" {
+		t.Errorf("Repo = %q, want the detected value", f.poll.Repo)
+	}
+	if !f.repoAuto {
+		t.Error("a detected repo must be marked as such for the view")
+	}
+	if !strings.Contains(stripANSI(f.display(fRepo)), "detected") {
+		t.Errorf("display = %q, want it to say the value was detected", stripANSI(f.display(fRepo)))
+	}
+}
+
+// Detection never overwrites what the user set: it only fills an empty field.
+func TestFormDetectionNeverOverwritesTypedRepo(t *testing.T) {
+	f, _ := newNativeTestForm(t, nil)
+	f.poll.Path, f.poll.Repo = "/tmp/web", "mine/web"
+
+	if cmd := f.maybeDetectRepo(); cmd != nil {
+		t.Error("a repo the user already set must not trigger detection")
+	}
+	// Even a stray in-flight result from before must not clobber it.
+	f.update(repoDetectedMsg{path: "/tmp/web", repo: "acme/web"})
+	if f.poll.Repo != "mine/web" {
+		t.Errorf("Repo = %q, want the user's value preserved", f.poll.Repo)
+	}
+}
+
+// A result for a path the user has since changed is dropped, so a slow
+// detection cannot land the wrong repo on a different checkout.
+func TestFormDetectionIgnoresStaleResult(t *testing.T) {
+	f, _ := newNativeTestForm(t, nil)
+	f.poll.Path = "/tmp/second"
+
+	f.update(repoDetectedMsg{path: "/tmp/first", repo: "acme/first"})
+	if f.poll.Repo != "" {
+		t.Errorf("Repo = %q, want a stale result dropped", f.poll.Repo)
+	}
+}
+
+// A checkout with no usable GitHub remote leaves the field empty — the
+// fail-closed value, which disables PR checks rather than guessing.
+func TestFormDetectionFailsClosed(t *testing.T) {
+	f, _ := newNativeTestForm(t, nil)
+	f.poll.Path = "/tmp/web"
+
+	f.update(repoDetectedMsg{path: "/tmp/web", repo: ""})
+	if f.poll.Repo != "" || f.repoAuto {
+		t.Errorf("no remote must leave the field empty, got %q auto=%v", f.poll.Repo, f.repoAuto)
+	}
+}
+
+// The same path is resolved once, however much the cursor moves over it.
+func TestFormDetectionRunsOncePerPath(t *testing.T) {
+	f, _ := newNativeTestForm(t, nil)
+	f.poll.Path = "/tmp/web"
+
+	if f.maybeDetectRepo() == nil {
+		t.Fatal("first detection must run")
+	}
+	if f.maybeDetectRepo() != nil {
+		t.Error("the same path must not be resolved twice")
+	}
+	f.poll.Path = "/tmp/other"
+	if f.maybeDetectRepo() == nil {
+		t.Error("a changed path must be resolved again")
+	}
+}
+
+// Typing over a detected value drops the "detected" marker — it is the user's
+// value now.
+func TestFormTypingClearsDetectedMarker(t *testing.T) {
+	f, _ := newNativeTestForm(t, nil)
+	f.poll.Path = "/tmp/web"
+	f.update(repoDetectedMsg{path: "/tmp/web", repo: "acme/web"})
+
+	f.tab = tabRepo
+	f.cursor = slices.Index(f.fields(), fRepo)
+	f.key(keyMsg("x"))
+	if f.repoAuto {
+		t.Error("typing into Repo must clear the detected marker")
+	}
+}

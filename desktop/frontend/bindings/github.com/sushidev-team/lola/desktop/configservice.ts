@@ -31,6 +31,20 @@ export function ConfigExists(): $CancellablePromise<boolean> {
 }
 
 /**
+ * DetectRepo resolves the GitHub "owner/name" of the checkout at path so the
+ * project form can prefill Repo instead of making the user copy it. Returns ""
+ * when it cannot be determined — not a git repo, no GitHub remote, a
+ * non-GitHub host. That empty value is deliberate and safe: it disables PR
+ * checks (fail-closed) rather than pointing them at the wrong repository.
+ * 
+ * Prefers the "upstream" remote over "origin": in a fork, origin is the fork
+ * but upstream is where the pull requests actually land.
+ */
+export function DetectRepo(path: string): $CancellablePromise<string> {
+    return $Call.ByID(1658393536, path);
+}
+
+/**
  * GetProject returns the named project's full form state. An empty name is a
  * new project: it starts inheriting everything it can, so a first project picks
  * up whatever shared setup [defaults] already carries.

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/sushidev-team/lola/internal/config"
+	"github.com/sushidev-team/lola/internal/gitremote"
 	"github.com/sushidev-team/lola/internal/linear"
 	"github.com/sushidev-team/lola/internal/protocol"
 	"github.com/sushidev-team/lola/internal/secrets"
@@ -435,6 +436,20 @@ func (s *ConfigService) SaveProject(dto ProjectFormDTO) error {
 		PrioritySort:   dto.Inherits.PrioritySort,
 	}
 	return saveConfig(cfg, path)
+}
+
+// DetectRepo resolves the GitHub "owner/name" of the checkout at path so the
+// project form can prefill Repo instead of making the user copy it. Returns ""
+// when it cannot be determined — not a git repo, no GitHub remote, a
+// non-GitHub host. That empty value is deliberate and safe: it disables PR
+// checks (fail-closed) rather than pointing them at the wrong repository.
+//
+// Prefers the "upstream" remote over "origin": in a fork, origin is the fork
+// but upstream is where the pull requests actually land.
+func (s *ConfigService) DetectRepo(path string) string {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	return gitremote.Detect(ctx, path)
 }
 
 func (s *ConfigService) RemoveProject(name string) error {

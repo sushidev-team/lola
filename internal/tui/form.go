@@ -4,13 +4,16 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/sushidev-team/lola/internal/config"
+	"github.com/sushidev-team/lola/internal/gitremote"
 	"github.com/sushidev-team/lola/internal/linear"
 )
 
@@ -145,6 +148,44 @@ type formModel struct {
 	editing bool     // a list field is OPEN for line editing
 	lineCur int      // which line, while editing
 	errs    []string // validation errors shown at the bottom
+
+	// repoDetectedFor is the Path that repo auto-detection last ran against,
+	// so moving the cursor around re-runs it only when the path actually
+	// changed. repoAuto marks the current Repo value as detected rather than
+	// typed, purely so the view can say where it came from.
+	repoDetectedFor string
+	repoAuto        bool
+}
+
+// repoDetectedMsg carries the result of a background repo detection back to the
+// form. Repo is "" when the checkout has no usable GitHub remote.
+type repoDetectedMsg struct {
+	path string
+	repo string
+}
+
+// detectRepoCmd resolves the GitHub owner/name of a checkout off the UI thread.
+// Bounded: a path on a stale network mount must not wedge the form.
+func detectRepoCmd(path string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		return repoDetectedMsg{path: path, repo: gitremote.Detect(ctx, path)}
+	}
+}
+
+// maybeDetectRepo returns a detection command when the form would benefit from
+// one: a path is set, the repo is still empty, and this path has not been tried
+// yet. Detection only ever FILLS an empty field — it never overwrites what the
+// user typed, and a checkout with no GitHub remote leaves it empty (which is
+// the safe, fail-closed value: see internal/gitremote).
+func (f *formModel) maybeDetectRepo() tea.Cmd {
+	path := strings.TrimSpace(f.poll.Path)
+	if path == "" || strings.TrimSpace(f.poll.Repo) != "" || path == f.repoDetectedFor {
+		return nil
+	}
+	f.repoDetectedFor = path
+	return detectRepoCmd(path)
 }
 
 // lineBuf returns the line buffer backing a list field, or nil.
@@ -277,6 +318,10 @@ func newFormModel(cfg *config.Config, existing *config.Project) (*formModel, tea
 		f.loading = "loading teams…"
 		cmd = fetchTeamsCmd(cfg)
 	}
+	// An existing project with a path but no repo gets one filled in on open.
+	if detect := f.maybeDetectRepo(); detect != nil {
+		cmd = tea.Batch(cmd, detect)
+	}
 	return f, cmd
 }
 
@@ -358,6 +403,12 @@ func (f *formModel) update(msg tea.Msg) (tea.Cmd, formEvent) {
 		} else {
 			f.teams, f.loadErr = v.teams, ""
 		}
+	case repoDetectedMsg:
+		// Only fill a still-empty field, and only for the path we asked about —
+		// the user may have typed a repo or changed the path meanwhile.
+		if v.repo != "" && strings.TrimSpace(f.poll.Repo) == "" && v.path == strings.TrimSpace(f.poll.Path) {
+			f.poll.Repo, f.repoAuto = v.repo, true
+		}
 	case metaMsg:
 		f.loading = ""
 		if v.err != nil {
@@ -389,20 +440,20 @@ func (f *formModel) key(k tea.KeyPressMsg) (tea.Cmd, formEvent) {
 		return nil, formCancel
 	case "tab":
 		f.switchTab(1)
-		return nil, formNone
+		return f.leftField(cur), formNone
 	case "shift+tab":
 		f.switchTab(-1)
-		return nil, formNone
+		return f.leftField(cur), formNone
 	case "up":
 		if f.cursor > 0 {
 			f.cursor--
 		}
-		return nil, formNone
+		return f.leftField(cur), formNone
 	case "down":
 		if f.cursor < len(fields)-1 {
 			f.cursor++
 		}
-		return nil, formNone
+		return f.leftField(cur), formNone
 	case "ctrl+r":
 		return f.refresh(), formNone
 	case "ctrl+o":
@@ -431,6 +482,9 @@ func (f *formModel) key(k tea.KeyPressMsg) (tea.Cmd, formEvent) {
 	buf := f.textBuf(cur)
 	if buf == nil {
 		return nil, formNone
+	}
+	if cur == fRepo {
+		f.repoAuto = false // typed over: no longer the detected value
 	}
 	switch {
 	case k.Code == tea.KeyBackspace:
@@ -496,7 +550,20 @@ func (f *formModel) paste(s string) {
 		*buf += pasteDigits(s)
 		return
 	}
+	if cur == fRepo {
+		f.repoAuto = false // pasted over: no longer the detected value
+	}
 	*buf += pasteInline(s)
+}
+
+// leftField runs whatever should happen when focus leaves a field. Today that
+// is only repo auto-detection, triggered on leaving Path: resolving a checkout
+// mid-typing would fire once per keystroke.
+func (f *formModel) leftField(fd fieldID) tea.Cmd {
+	if fd != fPath {
+		return nil
+	}
+	return f.maybeDetectRepo()
 }
 
 // switchTab moves to the next/previous tab, resetting the cursor so it can
@@ -588,7 +655,7 @@ func (f *formModel) interact(cur fieldID) (tea.Cmd, formEvent) {
 		if f.cursor < len(f.fields())-1 {
 			f.cursor++
 		}
-		return nil, formNone
+		return f.leftField(cur), formNone
 	case cur == fSave:
 		return f.save()
 	case listFields[cur]:
@@ -1212,7 +1279,7 @@ func fieldHelp(fd fieldID) string {
 	case fAssigneeUser:
 		return "The specific Linear user whose issues to pick up."
 	case fRepo:
-		return "GitHub owner/name for PR checks; empty falls back to the project's repo."
+		return "GitHub owner/name for PR checks. Auto-detected from the checkout (upstream, else origin) once Path is set — verify it if this is a fork. Empty disables PR checks."
 	case fCap:
 		return "Max concurrent agent sessions this project may occupy."
 	case fDedup:
@@ -1434,6 +1501,11 @@ func (f *formModel) display(fd fieldID) string {
 			// The daemon owns the fallback: PR checks use the [[project]]
 			// repo when this is empty (dispatch/observer/reconcile).
 			return faintText.Render("(owner/name — empty falls back to the [[project]] repo)")
+		}
+		if f.repoAuto {
+			// Say where it came from: in a FORK the detected remote may not be
+			// the repo the PRs land in, and that is worth noticing.
+			return f.poll.Repo + faintText.Render("  detected")
 		}
 		return f.poll.Repo
 	case fCap:

@@ -50,6 +50,33 @@
   let confirmRemove = $state(false);
   let tab = $state(nav.overlayTab || "repo");
 
+  // Repo auto-detection. The checkout's GitHub remote is resolved when Path is
+  // filled in, so owner/name does not have to be copied by hand. It only ever
+  // FILLS an empty field: a detected value must never overwrite what the user
+  // typed, and a checkout with no GitHub remote leaves it empty — the safe,
+  // fail-closed value that disables PR checks rather than pointing them at the
+  // wrong repository. repoAuto only drives the "detected" hint.
+  let repoDetectedFor = $state("");
+  let repoAuto = $state(false);
+
+  async function detectRepo() {
+    if (!f) return;
+    const path = f.path.trim();
+    if (!path || f.repo.trim() || path === repoDetectedFor) return;
+    repoDetectedFor = path;
+    try {
+      const found = await ConfigService.DetectRepo(path);
+      // Re-check on return: the user may have typed a repo or changed the path
+      // while this was in flight.
+      if (found && f && !f.repo.trim() && f.path.trim() === path) {
+        f.repo = found;
+        repoAuto = true;
+      }
+    } catch {
+      // Detection is best-effort; an unresolvable checkout just stays empty.
+    }
+  }
+
   // Linear metadata drives the cascading pickers. When it can't load (no key,
   // API error) the ID fields fall back to raw UUID entry so the form still
   // works — options=null means "render a text input".
@@ -274,6 +301,7 @@
   k: InheritKey | null = null,
   readonly = false,
   hint = "",
+  onBlur: (() => void) | null = null,
 )}
   <div class={rowCls}>
     {@render cap(caption, k)}
@@ -288,6 +316,7 @@
           if (k) promote(k);
           onChange(e.currentTarget.value);
         }}
+        onblur={() => onBlur?.()}
       />
       {#if hint}<span class={hintCls}>{hint}</span>{/if}
     </span>
@@ -425,8 +454,27 @@
           !d.isNew,
           d.isNew ? "" : "the project name is the config key and can't be renamed here",
         )}
-        {@render textRow("Path", d.path, (v) => { d.path = v; }, "/Users/you/code/my-project")}
-        {@render textRow("Repo", d.repo, (v) => { d.repo = v; }, "owner/name")}
+        {@render textRow(
+          "Path",
+          d.path,
+          (v) => { d.path = v; },
+          "/Users/you/code/my-project",
+          null,
+          false,
+          "",
+          detectRepo,
+        )}
+        {@render textRow(
+          "Repo",
+          d.repo,
+          (v) => { d.repo = v; repoAuto = false; },
+          "owner/name",
+          null,
+          false,
+          repoAuto
+            ? "detected from the checkout — verify it if this is a fork"
+            : "for PR checks; empty disables them",
+        )}
         {@render textRow("Default branch", d.defaultBranch, (v) => { d.defaultBranch = v; }, "main")}
         {@render textRow("Branch prefix", d.branchPrefix, (v) => { d.branchPrefix = v; }, "lola/", null, false, "empty inherits the [defaults] prefix")}
 

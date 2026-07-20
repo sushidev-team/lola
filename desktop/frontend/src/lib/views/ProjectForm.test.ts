@@ -3,14 +3,17 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // Mock the bindings (never a live daemon/Linear). vi.hoisted so the fns exist
 // when the hoisted vi.mock factories run.
-const { getProject, saveProject, removeProject, getSettings, teamsFn, teamMetaFn } = vi.hoisted(() => ({
-  getProject: vi.fn(),
-  saveProject: vi.fn(),
-  removeProject: vi.fn(),
-  getSettings: vi.fn(),
-  teamsFn: vi.fn(),
-  teamMetaFn: vi.fn(),
-}));
+const { getProject, saveProject, removeProject, getSettings, detectRepo, teamsFn, teamMetaFn } = vi.hoisted(
+  () => ({
+    getProject: vi.fn(),
+    saveProject: vi.fn(),
+    removeProject: vi.fn(),
+    getSettings: vi.fn(),
+    detectRepo: vi.fn(),
+    teamsFn: vi.fn(),
+    teamMetaFn: vi.fn(),
+  }),
+);
 
 vi.mock("@bindings/desktop", () => ({
   ConfigService: {
@@ -18,6 +21,7 @@ vi.mock("@bindings/desktop", () => ({
     SaveProject: (...a: unknown[]) => saveProject(...a),
     RemoveProject: (...a: unknown[]) => removeProject(...a),
     GetSettings: () => getSettings(),
+    DetectRepo: (...a: unknown[]) => detectRepo(...a),
   },
   LinearService: {
     Teams: (...a: unknown[]) => teamsFn(...a),
@@ -135,6 +139,7 @@ describe("ProjectForm", () => {
     saveProject.mockReset().mockResolvedValue(undefined);
     removeProject.mockReset().mockResolvedValue(undefined);
     getSettings.mockReset().mockResolvedValue(settingsDto());
+    detectRepo.mockReset().mockResolvedValue("");
     teamsFn.mockReset().mockResolvedValue([
       { id: "team-uuid-1", key: "ENG", name: "Engineering" },
       { id: "team-uuid-2", key: "OPS", name: "Operations" },
@@ -295,5 +300,65 @@ describe("ProjectForm", () => {
 
     expect(within(rowOf(postCreate)).getByRole("button", { name: "inherited" })).toBeInTheDocument();
     expect(postCreate).toHaveValue("npm ci");
+  });
+
+  // Repo auto-detection: filling in Path resolves the checkout's GitHub remote
+  // so owner/name does not have to be copied by hand.
+  describe("repo auto-detection", () => {
+    it("fills an empty repo from the checkout when Path is set", async () => {
+      getProject.mockResolvedValue({ ...sampleDto(), repo: "", path: "" });
+      detectRepo.mockResolvedValue("acme/web");
+      render(ProjectForm);
+
+      const path = await screen.findByLabelText("Path");
+      await fireEvent.input(path, { target: { value: "/tmp/web" } });
+      await fireEvent.blur(path);
+
+      await waitFor(() => {
+        expect(detectRepo).toHaveBeenCalledWith("/tmp/web");
+        expect(screen.getByLabelText("Repo")).toHaveValue("acme/web");
+      });
+      expect(screen.getByText(/detected from the checkout/)).toBeInTheDocument();
+    });
+
+    it("never overwrites a repo the user already set", async () => {
+      getProject.mockResolvedValue({ ...sampleDto(), repo: "mine/web", path: "" });
+      detectRepo.mockResolvedValue("acme/web");
+      render(ProjectForm);
+
+      const path = await screen.findByLabelText("Path");
+      await fireEvent.input(path, { target: { value: "/tmp/web" } });
+      await fireEvent.blur(path);
+
+      await waitFor(() => expect(screen.getByLabelText("Repo")).toHaveValue("mine/web"));
+      expect(detectRepo).not.toHaveBeenCalled();
+    });
+
+    it("leaves the field empty when the checkout has no GitHub remote", async () => {
+      getProject.mockResolvedValue({ ...sampleDto(), repo: "", path: "" });
+      detectRepo.mockResolvedValue(""); // fail-closed
+      render(ProjectForm);
+
+      const path = await screen.findByLabelText("Path");
+      await fireEvent.input(path, { target: { value: "/tmp/plain" } });
+      await fireEvent.blur(path);
+
+      await waitFor(() => expect(detectRepo).toHaveBeenCalled());
+      expect(screen.getByLabelText("Repo")).toHaveValue("");
+      expect(screen.queryByText(/detected from the checkout/)).not.toBeInTheDocument();
+    });
+
+    it("resolves a given path only once", async () => {
+      getProject.mockResolvedValue({ ...sampleDto(), repo: "", path: "" });
+      detectRepo.mockResolvedValue("");
+      render(ProjectForm);
+
+      const path = await screen.findByLabelText("Path");
+      await fireEvent.input(path, { target: { value: "/tmp/web" } });
+      await fireEvent.blur(path);
+      await waitFor(() => expect(detectRepo).toHaveBeenCalledTimes(1));
+      await fireEvent.blur(path);
+      expect(detectRepo).toHaveBeenCalledTimes(1);
+    });
   });
 });

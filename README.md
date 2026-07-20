@@ -218,13 +218,32 @@ runtime layer, not on config load.
 | --- | --- | --- |
 | `name` | string | Unique project name (required). It is the project's identity everywhere — `lola status`, `enable`/`disable`/`poll`/`logs`, and the seen-file name (`state/<name>.seen`) all key by it. |
 | `path` | string | Absolute path to the main checkout (required). A leading `~` is expanded on load. Session worktrees live under `~/.lola/worktrees/`, never inside the checkout. |
-| `repo` | string | GitHub repository as `owner/name`. Used for PR/CI observation of the sessions spawned for this project: the reconciler and observer pass it to `gh pr list --repo` so the open-PR check works regardless of the daemon's working directory. When empty, that check is unavailable and orphaned issues are **never** auto-reverted (fail-closed). |
+| `repo` | string | GitHub repository as `owner/name`. Used for PR/CI observation of the sessions spawned for this project: the reconciler and observer pass it to `gh pr list --repo` so the open-PR check works regardless of the daemon's working directory. When empty, that check is unavailable and orphaned issues are **never** auto-reverted (fail-closed). Both forms **auto-detect** this from the checkout once `path` is set — see [Repo auto-detection](#repo-auto-detection). |
 | `default_branch` | string | Branch new session worktrees start from, and the base the agent is told to open its PR against. Default `main`. |
 | `branch_prefix` | string | Prefix prepended to a session's derived branch name (e.g. `"feat/"` yields `feat/eng-42`). Empty inherits `[defaults].branch_prefix`, then `"lola/"`. |
 | `post_create` | string array | Commands run inside a fresh worktree before the agent starts (e.g. `composer install`). Any failure blocks the session with a clear status — never a half-started agent. Omit to inherit `[defaults].post_create`. |
 | `symlinks` | string array | Files symlinked from the main checkout into each worktree, e.g. `[".env"]`. Beware: a shared `.env` usually means every worktree talks to the same database. Omit to inherit `[defaults].symlinks`. |
 | `env` | table of strings | Extra environment variables exported into each session (`[project.env]`); the agent and the `post_create` commands both see them. Omit to inherit `[defaults].env`. |
 | `agent` | `"claude"` \| `"codex"` \| `"opencode"` | Coding agent for sessions spawned into this repo, overriding `[defaults].agent`. Empty/omitted inherits the global default (ultimately `claude`). See [The coding agent](#the-coding-agent). |
+
+#### Repo auto-detection
+
+Filling in a project's `path` makes the TUI and desktop forms resolve `repo`
+from the checkout's git remotes, so `owner/name` need not be copied by hand. It
+prefers the **`upstream`** remote over `origin` — in a fork, `origin` is your
+fork but `upstream` is where the pull requests actually land, which is what
+PR/CI observation must watch. A detected value is flagged as such in the form;
+verify it on a fork.
+
+Detection only ever **fills an empty field** and never overwrites a value you
+set. When it cannot determine the repo — not a git checkout, no remotes, a
+non-GitHub host, or a self-hosted GitHub Enterprise on a domain that does not
+name GitHub — it leaves the field **empty rather than guessing**. That is the
+safe direction: an empty `repo` disables the open-PR check (and so the orphan
+revert, fail-closed), whereas a wrong one would have `gh pr list --repo` answer
+confidently about someone else's repository.
+
+It reads local git remotes only — no network, no `gh`, no auth.
 
 ### `[[project]]` polling fields (optional; a project polls when `team_id` is set)
 
