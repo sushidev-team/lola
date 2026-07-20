@@ -40,10 +40,10 @@ func TestParse(t *testing.T) {
 		{"claude", Claude},
 		{"codex", Codex},
 		{"opencode", OpenCode},
-		{"", Claude},        // empty -> default
-		{"bogus", Claude},   // unknown -> default
-		{"CLAUDE", Claude},  // lenient: case folded
-		{"Codex", Codex},    // lenient: case folded
+		{"", Claude},       // empty -> default
+		{"bogus", Claude},  // unknown -> default
+		{"CLAUDE", Claude}, // lenient: case folded
+		{"Codex", Codex},   // lenient: case folded
 		{"OpenCode", OpenCode},
 		{"  codex  ", Codex}, // lenient: trimmed
 		{"\topencode\n", OpenCode},

@@ -105,6 +105,6 @@ func daemonAlive() bool {
 
 // Timeouts for the two request classes.
 const (
-	shortTimeout = 10 * time.Second       // cached reads + cheap mutations
-	longTimeout  = 5 * time.Minute        // pollOnce + open* (daemon runs them synchronously)
+	shortTimeout = 10 * time.Second // cached reads + cheap mutations
+	longTimeout  = 5 * time.Minute  // pollOnce + open* (daemon runs them synchronously)
 )

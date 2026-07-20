@@ -10,7 +10,7 @@ func TestSlug(t *testing.T) {
 		{"Okane", "okane"},
 		{"my_project.v2", "my_project.v2"},
 		{"Ünïcødé Ãpp", "n-c-d-pp"}, // non-ASCII collapses; never leaks into a path
-		{"日本語", ""},                // ...and an all-non-ASCII label yields no id at all
+		{"日本語", ""},                 // ...and an all-non-ASCII label yields no id at all
 		{"a/b", "a-b"},              // a separator can never survive: it would escape the segment
 		{"../etc", "etc"},
 		{"...", ""},
