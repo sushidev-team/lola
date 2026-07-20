@@ -31,8 +31,9 @@
 </script>
 
 {#if focusedSession}
-  <!-- Focused terminal: the whole cockpit is one big interactive terminal. -->
-  <div class="h-full min-h-0 p-2">
+  <!-- Focused terminal: the whole cockpit is one big interactive terminal. Grid
+       so the panel stretches to fill (a plain block leaves it content-height). -->
+  <div class="grid h-full min-h-0 p-2" style="grid-template-rows:minmax(0,1fr)">
     <Panel focused pad={false}>
       <SessionEmbed session={focusedSession} focused />
     </Panel>
