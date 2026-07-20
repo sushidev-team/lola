@@ -16,7 +16,7 @@
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
-import { Call as $Call, CancellablePromise as $CancellablePromise, Create as $Create } from "@wailsio/runtime";
+import { Call as $Call, CancellablePromise as $CancellablePromise } from "@wailsio/runtime";
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
@@ -28,10 +28,8 @@ import * as $models from "./models.js";
  * repository's own default first. Empty when path is not a checkout; the form
  * then leaves the field as free text rather than trapping the user.
  */
-export function Branches(path: string): $CancellablePromise<string[]> {
-    return $Call.ByID(3689606875, path).then(($result: any) => {
-        return $$createType0($result);
-    });
+export function Branches(path: string): $CancellablePromise<string[] | null> {
+    return $Call.ByID(3689606875, path);
 }
 
 /**
@@ -62,15 +60,11 @@ export function DetectRepo(path: string): $CancellablePromise<string> {
  * up whatever shared setup [defaults] already carries.
  */
 export function GetProject(name: string): $CancellablePromise<$models.ProjectFormDTO> {
-    return $Call.ByID(3485741446, name).then(($result: any) => {
-        return $$createType1($result);
-    });
+    return $Call.ByID(3485741446, name);
 }
 
 export function GetSettings(): $CancellablePromise<$models.SettingsDTO> {
-    return $Call.ByID(2761787168).then(($result: any) => {
-        return $$createType2($result);
-    });
+    return $Call.ByID(2761787168);
 }
 
 export function RemoveProject(name: string): $CancellablePromise<void> {
@@ -91,9 +85,7 @@ export function SaveSettings(dto: $models.SettingsDTO): $CancellablePromise<void
  * project, and sets the caps/interval. The key itself is never written to config.
  */
 export function Setup(dto: $models.SetupDTO): $CancellablePromise<$models.SetupResultDTO> {
-    return $Call.ByID(3057086516, dto).then(($result: any) => {
-        return $$createType3($result);
-    });
+    return $Call.ByID(3057086516, dto);
 }
 
 /**
@@ -103,9 +95,3 @@ export function Setup(dto: $models.SetupDTO): $CancellablePromise<$models.SetupR
 export function ValidateLinearKey(key: string): $CancellablePromise<void> {
     return $Call.ByID(2105802151, key);
 }
-
-// Private type creation functions
-const $$createType0 = $Create.Array($Create.Any);
-const $$createType1 = $models.ProjectFormDTO.createFrom;
-const $$createType2 = $models.SettingsDTO.createFrom;
-const $$createType3 = $models.SetupResultDTO.createFrom;
