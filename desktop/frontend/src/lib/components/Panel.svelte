@@ -40,7 +40,7 @@
   {#if title}
     <header
       class="flex shrink-0 items-center gap-2 border-b border-edge/60 px-3 py-1.5 text-xs font-semibold tracking-wide"
-      class:text-accent={focused}
+      class:text-accent-ink={focused}
       class:text-ink={!focused}
     >
       <span>{title}</span>

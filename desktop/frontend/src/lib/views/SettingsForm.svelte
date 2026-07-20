@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, onDestroy } from "svelte";
   import Modal from "$lib/components/Modal.svelte";
   import Tabs from "$lib/components/Tabs.svelte";
   import { store } from "$lib/store.svelte";
@@ -7,6 +7,7 @@
   import { ConfigService, LinearService } from "@bindings/desktop";
   import type { SettingsDTO, LinearOption } from "@bindings/desktop/models";
   import { linesToText, splitLines, cleanLines } from "$lib/lines";
+  import { appearance, FLAVORS, THEME_IDS, type ThemeId } from "$lib/theme-runtime.svelte";
 
   // The bindings hand back a class instance, which $state does NOT deep-proxy —
   // copy it into a plain object so the segmented controls and pickers below
@@ -71,12 +72,94 @@
     }
   }
 
-  function selectTab(id: string) {
-    tab = id;
+  // --- appearance ([ui].theme) ----------------------------------------------
+  //
+  // The theme is the one setting with a LIVE PREVIEW: clicking a flavor repaints
+  // the whole app — chrome, live terminals and snapshot tiles — so the choice can
+  // be judged before it is committed. The preview is paint-only; nothing reaches
+  // config.toml until `save`, and every way out of this overlay (cancel, ✕,
+  // Escape, backdrop) puts the persisted flavor back.
+  //
+  // It is deliberately NOT a SettingsDTO field: [ui] is presentation, not a
+  // [defaults] key, and ConfigService.SetTheme is its sole writer. `save`
+  // therefore issues a second, single-key write alongside SaveSettings.
+
+  // The flavor that is actually in config.toml. `appearance.id` is the LIVE one,
+  // which the preview moves around; this is the baseline it snaps back to.
+  let savedTheme: ThemeId = appearance.id;
+  let themeId = $state<ThemeId>(appearance.id);
+
+  // Which ids to offer. MEMBERSHIP is the Go side's call — config.Validate
+  // rejects anything outside config.UIThemes, so offering more would just build
+  // a picker that fails on save. ORDER is ours: config.UIThemes runs light→dark
+  // and THEME_IDS runs dark→light, so adopting the bridge's sequence would
+  // reflow the grid the moment the call landed. Hence filter, don't replace.
+  //
+  // Anything the bridge names that we have no palette for is dropped — a swatch
+  // needs colours only the frontend carries. An empty or failed answer keeps the
+  // local list, so an old desktop binary predating Themes() still picks a theme
+  // rather than showing an empty grid.
+  let themeIds = $state<ThemeId[]>(THEME_IDS);
+  let themesRequested = false;
+
+  async function loadThemes() {
+    if (themesRequested) return;
+    themesRequested = true;
+    try {
+      const allowed = new Set((await ConfigService.Themes()) ?? []);
+      const known = THEME_IDS.filter((id) => allowed.has(id));
+      if (known.length) themeIds = known;
+    } catch {
+      // keep THEME_IDS
+    }
+  }
+
+  /**
+   * Paint a flavor without persisting it. Driving `appearance.id` + `paint()` is
+   * the same pair `appearance.init()` uses, and it is what makes the preview
+   * COMPLETE: `applyFlavor()` alone repaints the chrome but leaves
+   * `appearance.term` / `appearance.ansi` on the old flavor, so terminals would
+   * keep their old colors. Nothing is persisted here — `appearance.commit()`
+   * in `save` is the only writer, which is what keeps a preview the user backs
+   * out of from reaching config.toml or the boot cache.
+   */
+  function previewTheme(id: ThemeId) {
+    themeId = id;
+    appearance.id = id;
+    appearance.paint();
+  }
+
+  /** Undo an uncommitted preview. A no-op once save has moved the baseline. */
+  function revertTheme() {
+    if (appearance.id === savedTheme) return;
+    appearance.id = savedTheme;
+    appearance.paint();
+  }
+
+  function cancel() {
+    revertTheme();
+    nav.closeOverlay();
+  }
+
+  // Hung off the lifecycle, not just the cancel button: Escape, the backdrop and
+  // the ✕ all close the overlay too, and so does the overlay being swapped out
+  // from under us. A preview must never outlive the form that started it.
+  onDestroy(revertTheme);
+
+  // Per-tab lazy loads, shared by the tab strip and the deep-link on mount so
+  // the two can't drift.
+  function lazyLoadFor(id: string) {
     if (id === "project") {
       void loadWorkspaceLabels();
       void loadSortKeys();
+    } else if (id === "appearance") {
+      void loadThemes();
     }
+  }
+
+  function selectTab(id: string) {
+    tab = id;
+    lazyLoadFor(id);
   }
 
   const TABS = [
@@ -85,12 +168,13 @@
     { id: "notify", label: "Notify" },
     { id: "brain", label: "Brain" },
     { id: "coderabbit", label: "CodeRabbit" },
+    { id: "appearance", label: "Appearance" },
   ];
 
   const AGENTS = ["claude", "codex", "opencode"];
 
   const inputCls =
-    "w-full rounded border border-edge bg-canvas px-2 py-1 text-xs text-ink outline-none focus:border-accent placeholder:text-faint/50";
+    "w-full rounded border border-edge bg-canvas px-2 py-1 text-xs text-ink outline-none focus:border-accent placeholder:text-placeholder";
   const rowCls = "grid grid-cols-[11rem_1fr] items-center gap-3";
   const rowTopCls = "grid grid-cols-[11rem_1fr] items-start gap-3";
   const cbCls = "h-3.5 w-3.5 accent-[var(--color-accent)]";
@@ -112,10 +196,7 @@
       loading = false;
     }
     // Deep-linked straight to the tab that needs them.
-    if (tab === "project") {
-      void loadWorkspaceLabels();
-      void loadSortKeys();
-    }
+    lazyLoadFor(tab);
   });
 
   async function save() {
@@ -130,6 +211,19 @@
         matchLabels: cleanLines(dto.matchLabels),
         prioritySort: cleanLines(dto.prioritySort),
       });
+      // [ui].theme is a single-key write on its own path, not a DTO field.
+      // Sequenced AFTER the settings write so a payload the daemon rejects can
+      // never leave a theme change behind on disk.
+      //
+      // Through appearance.commit, not ConfigService.SetTheme directly: the
+      // localStorage cache that lets the next launch paint this flavor on the
+      // first frame is written there. Calling the binding straight left the
+      // cache on the OLD flavor, so the very next launch — the one right after
+      // the user changed the theme — flashed the previous colours.
+      if (themeId !== savedTheme) {
+        await appearance.commit(themeId);
+        savedTheme = themeId; // the preview is now the persisted value
+      }
       store.setFlash("settings saved", "good");
       nav.closeOverlay();
     } catch (err) {
@@ -197,7 +291,7 @@
   {/if}
 {/snippet}
 
-<Modal title="settings" onClose={() => nav.closeOverlay()} width="640px">
+<Modal title="settings" onClose={cancel} width="640px">
   {#if loading}
     <div class="py-10 text-center text-xs text-faint">loading settings…</div>
   {:else if loadError}
@@ -229,7 +323,7 @@
                 {#each AGENTS as a (a)}
                   <button
                     type="button"
-                    class="px-3 py-1 {d.agent === a ? 'bg-accent/20 text-accent' : 'text-faint hover:text-ink'}"
+                    class="px-3 py-1 {d.agent === a ? 'bg-accent-fill text-accent-ink' : 'text-faint hover:text-ink'}"
                     onclick={() => { d.agent = a; }}>{a}</button
                   >
                 {/each}
@@ -331,7 +425,7 @@
                         onclick={() => toggleSortKey(k)}
                       >
                         <span
-                          class="w-4 shrink-0 text-center font-mono {rank >= 0 ? 'text-accent' : 'text-faint/40'}"
+                          class="w-4 shrink-0 text-center font-mono {rank >= 0 ? 'text-accent-ink' : 'text-faint/40'}"
                         >{rank >= 0 ? rank + 1 : "·"}</span>
                         <span class="text-ink">{k}</span>
                         <span class="text-faint">{SORT_KEY_HELP[k] ?? ""}</span>
@@ -397,6 +491,49 @@
                 <span>Summarize on approved</span>
               </label>
             </div>
+          </div>
+        </section>
+      {:else if tab === "appearance"}
+        <section>
+          {@render head("Appearance")}
+          <p class="mb-3 text-[10px] text-faint">
+            Sets <span class="font-mono text-ink">[ui].theme</span>, which colours the app chrome and every terminal from one palette.
+            Picking a flavor <span class="text-ink">previews it immediately</span>; save writes it to config.toml, cancel puts the old one
+            back.
+          </p>
+          <!-- Grid, not flex: WKWebView does not stretch a flex child inside a
+               flex column, so a flex layout that fills correctly in Chrome
+               collapses to content width in the packaged .app. -->
+          <div class="grid grid-cols-2 gap-2">
+            {#each themeIds as id (id)}
+              {@const f = FLAVORS[id]}
+              {@const on = themeId === id}
+              <!-- Each option is drawn in its OWN colours, so the choice is
+                   legible before it is applied. Catppuccin guarantees the
+                   base/text pair's contrast, so this stays readable under
+                   whichever flavor is currently live. -->
+              <button
+                type="button"
+                aria-pressed={on}
+                class="grid gap-2 rounded-lg border p-2.5 text-left {on ? 'ring-2 ring-accent' : ''}"
+                style="background:{f.base};border-color:{on ? f.sky : f.surface1}"
+                onclick={() => previewTheme(id)}
+              >
+                <span class="flex items-baseline gap-2">
+                  <span class="text-xs font-semibold" style="color:{f.text}">{f.label}</span>
+                  <span class="ml-auto text-[9px] tracking-wider uppercase" style="color:{on ? f.sky : f.overlay1}">
+                    {on ? "selected" : f.dark ? "dark" : "light"}
+                  </span>
+                </span>
+                <!-- The surface ramp first, then the accents lola maps onto
+                     status — the parts of the palette the UI actually spends. -->
+                <span class="grid auto-cols-max grid-flow-col gap-1">
+                  {#each [f.surface0, f.surface2, f.subtext0, f.sky, f.green, f.yellow, f.peach, f.red, f.mauve] as c, i (i)}
+                    <span class="h-3 w-3 rounded-sm" style="background:{c}"></span>
+                  {/each}
+                </span>
+              </button>
+            {/each}
           </div>
         </section>
       {:else}
@@ -467,9 +604,9 @@
 
   {#snippet footer()}
     <div class="flex items-center justify-end gap-2">
-      <button class="rounded px-3 py-1 text-xs text-faint hover:text-ink" onclick={() => nav.closeOverlay()}>cancel</button>
+      <button class="rounded px-3 py-1 text-xs text-faint hover:text-ink" onclick={cancel}>cancel</button>
       <button
-        class="rounded bg-accent/20 px-3 py-1 text-xs text-accent hover:bg-accent/30 disabled:opacity-40"
+        class="rounded bg-accent-fill px-3 py-1 text-xs text-accent-ink hover:bg-accent-fill-hover disabled:opacity-40"
         onclick={save}
         disabled={saving || loading || !dto}>{saving ? "saving…" : "save"}</button
       >

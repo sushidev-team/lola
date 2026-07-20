@@ -31,12 +31,12 @@
   <div class="mb-3 flex items-center gap-3">
     <div class="text-sm text-faint">lola <span class="text-edge">▸</span> <span class="text-ink">projects</span></div>
     <input
-      class="ml-auto w-56 rounded border border-edge bg-canvas px-2 py-1 text-xs text-ink outline-none focus:border-accent"
+      class="ml-auto w-56 rounded border border-edge bg-canvas px-2 py-1 text-xs text-ink outline-none focus:border-accent placeholder:text-placeholder"
       placeholder="filter projects…"
       bind:value={filter}
     />
     <button
-      class="rounded bg-accent/20 px-3 py-1 text-xs text-accent hover:bg-accent/30"
+      class="rounded bg-accent-fill px-3 py-1 text-xs text-accent-ink hover:bg-accent-fill-hover"
       onclick={() => nav.openOverlay("project", "")}>+ add project</button
     >
   </div>
@@ -72,9 +72,9 @@
             </td>
             <td class="px-3 py-2 text-right text-faint tabular-nums">{p.openPrs > 0 ? `${p.openPrs} PR` : ""}</td>
             <td class="px-3 py-2 text-right whitespace-nowrap opacity-0 group-hover:opacity-100">
-              <button class="px-1.5 text-faint hover:text-accent" onclick={() => nav.goCockpit(p.name)}>sessions</button>
-              <button class="px-1.5 text-faint hover:text-accent" onclick={() => nav.openOverlay("project", p.name)}>edit</button>
-              <button class="px-1.5 text-faint hover:text-accent" onclick={() => nav.goDetail(p.name)}>open ›</button>
+              <button class="px-1.5 text-faint hover:text-accent-ink" onclick={() => nav.goCockpit(p.name)}>sessions</button>
+              <button class="px-1.5 text-faint hover:text-accent-ink" onclick={() => nav.openOverlay("project", p.name)}>edit</button>
+              <button class="px-1.5 text-faint hover:text-accent-ink" onclick={() => nav.goDetail(p.name)}>open ›</button>
             </td>
           </tr>
         {/each}

@@ -77,9 +77,9 @@
         }}
       >
         <div class="flex items-center gap-1.5 border-b border-edge/50 bg-panel/70 px-2 py-1 text-[11px]">
-          <span class="truncate font-medium" class:text-accent={sel}>{s.issue || s.id.slice(0, 8)}</span>
+          <span class="truncate font-medium" class:text-accent-ink={sel}>{s.issue || s.id.slice(0, 8)}</span>
           <span class="truncate text-faint">{s.project}</span>
-          <span class="ml-auto shrink-0"><StatusPill status={s.status} dim /></span>
+          <span class="ml-auto shrink-0"><StatusPill status={s.status} /></span>
         </div>
         <div class="pointer-events-none min-h-0 flex-1">
           <SnapshotTile text={snaps[s.tmuxName] ?? ""} />

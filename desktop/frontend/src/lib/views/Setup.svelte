@@ -73,13 +73,13 @@
         <div class="flex gap-2">
           <input
             type="password"
-            class="min-w-0 flex-1 rounded border border-edge bg-canvas px-2 py-1 text-xs text-ink outline-none focus:border-accent"
+            class="min-w-0 flex-1 rounded border border-edge bg-canvas px-2 py-1 text-xs text-ink outline-none focus:border-accent placeholder:text-placeholder"
             placeholder="lin_api_…"
             bind:value={key}
             oninput={() => (keyState = "idle")}
           />
           <button
-            class="rounded border border-edge px-2.5 py-1 text-xs text-faint hover:border-accent hover:text-accent disabled:opacity-40"
+            class="rounded border border-edge px-2.5 py-1 text-xs text-faint hover:border-accent hover:text-accent-ink disabled:opacity-40"
             disabled={!key.trim() || keyState === "checking"}
             onclick={validateKey}
           >
@@ -95,7 +95,7 @@
       <div class="grid grid-cols-2 gap-3">
         <label class="block">
           <span class="mb-1 block text-[11px] font-semibold tracking-wider text-faint uppercase">Project name</span>
-          <input class="w-full rounded border border-edge bg-canvas px-2 py-1 text-xs text-ink outline-none focus:border-accent" placeholder="my-app" bind:value={projectName} />
+          <input class="w-full rounded border border-edge bg-canvas px-2 py-1 text-xs text-ink outline-none focus:border-accent placeholder:text-placeholder" placeholder="my-app" bind:value={projectName} />
         </label>
         <label class="block">
           <span class="mb-1 block text-[11px] font-semibold tracking-wider text-faint uppercase">Default branch</span>
@@ -104,11 +104,11 @@
       </div>
       <label class="block">
         <span class="mb-1 block text-[11px] font-semibold tracking-wider text-faint uppercase">Project path</span>
-        <input class="w-full rounded border border-edge bg-canvas px-2 py-1 font-mono text-[11px] text-ink outline-none focus:border-accent" placeholder="/path/to/repo" bind:value={projectPath} />
+        <input class="w-full rounded border border-edge bg-canvas px-2 py-1 font-mono text-[11px] text-ink outline-none focus:border-accent placeholder:text-placeholder" placeholder="/path/to/repo" bind:value={projectPath} />
       </label>
       <label class="block">
         <span class="mb-1 block text-[11px] font-semibold tracking-wider text-faint uppercase">GitHub repo</span>
-        <input class="w-full rounded border border-edge bg-canvas px-2 py-1 text-xs text-ink outline-none focus:border-accent" placeholder="owner/name" bind:value={repo} />
+        <input class="w-full rounded border border-edge bg-canvas px-2 py-1 text-xs text-ink outline-none focus:border-accent placeholder:text-placeholder" placeholder="owner/name" bind:value={repo} />
       </label>
 
       <!-- Caps -->
@@ -131,7 +131,7 @@
 
       <div class="flex items-center justify-end gap-2 pt-1">
         <button
-          class="rounded bg-accent/20 px-4 py-1.5 text-xs font-medium text-accent hover:bg-accent/30 disabled:opacity-40"
+          class="rounded bg-accent-fill px-4 py-1.5 text-xs font-medium text-accent-ink hover:bg-accent-fill-hover disabled:opacity-40"
           disabled={!canSubmit}
           onclick={submit}
         >

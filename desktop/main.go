@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/protocol"
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
@@ -29,9 +30,61 @@ func fixHiDPIOnReady(win *application.WebviewWindow) {
 //go:embed all:frontend/dist
 var assets embed.FS
 
-// Canvas colour = theme.go colCanvas (#0e1420), so the native window chrome and
-// the webview share one deep navy surface with no seam at the title bar.
-var canvas = application.NewRGB(0x0e, 0x14, 0x20)
+// canvasByTheme is the native-window twin of the frontend's --color-canvas: for
+// every [ui].theme id, the Catppuccin `mantle` that catppuccin.ts maps that
+// token to. It is a MIRROR of TypeScript data, which is normally the wrong
+// shape — but the window is built here in main(), long before a webview exists
+// to ask, so Go cannot read the palette from its real home. What makes the
+// mirror safe is TestCanvasMatchesFrontendPalette: it parses catppuccin.ts and
+// fails if either side moves. Do not add an id here without adding it to
+// config.UIThemes; the same test pins the two sets equal.
+var canvasByTheme = map[string]application.RGBA{
+	"catppuccin-latte":     application.NewRGB(0xe6, 0xe9, 0xef),
+	"catppuccin-frappe":    application.NewRGB(0x29, 0x2c, 0x3c),
+	"catppuccin-macchiato": application.NewRGB(0x1e, 0x20, 0x30),
+	"catppuccin-mocha":     application.NewRGB(0x18, 0x18, 0x25),
+}
+
+// canvasFor maps a [ui].theme id to its native-window background. An unknown or
+// empty id falls back to config.DefaultUITheme's canvas, never the zero RGBA:
+// zero is transparent-black, the one outcome worse than the wrong flavor. The
+// miss covers both an id that config.Load accepted but Validate would reject and
+// a flavor added on the frontend but not here (TestCanvasMatchesFrontendPalette
+// keeps the two sets in step).
+func canvasFor(themeID string) application.RGBA {
+	if c, ok := canvasByTheme[themeID]; ok {
+		return c
+	}
+	return canvasByTheme[config.DefaultUITheme]
+}
+
+// windowCanvas resolves the NSWindow background from the CONFIGURED flavor at
+// startup, so the native chrome and the page agree in all four — a fixed literal
+// put a near-black rectangle behind Latte's near-white page. It reads the theme
+// through ConfigService.GetTheme, the same accessor the frontend calls, so there
+// is one resolution rule rather than a second copy of the "" → default fallback.
+func windowCanvas() application.RGBA {
+	return canvasFor((&ConfigService{}).GetTheme())
+}
+
+// repaintWindowCanvas tracks a runtime flavor switch on the native window:
+// ConfigService.SetTheme calls it after persisting, because BackgroundColour is
+// set once at window construction and would otherwise show the old canvas — a
+// seam at the title bar and during resize — until the next launch, even though
+// the webview itself repaints immediately via the frontend applier. Best-effort:
+// a no-op before the app or its window exists (unit tests, early startup), where
+// windowCanvas has already painted the correct colour anyway. SetBackgroundColour
+// marshals to the main thread itself (InvokeSync), so this is safe from the
+// bound-service goroutine SetTheme runs on.
+func repaintWindowCanvas(themeID string) {
+	app := application.Get()
+	if app == nil {
+		return
+	}
+	if win := app.Window.Current(); win != nil {
+		win.SetBackgroundColour(canvasFor(themeID))
+	}
+}
 
 func main() {
 	ensurePATH()
@@ -66,7 +119,7 @@ func main() {
 		Height:           832,
 		MinWidth:         920,
 		MinHeight:        560,
-		BackgroundColour: canvas,
+		BackgroundColour: windowCanvas(),
 		Mac: application.MacWindow{
 			// The whole top strip (the vitals bar) is draggable.
 			InvisibleTitleBarHeight: 36,

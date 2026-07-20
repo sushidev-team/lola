@@ -68,6 +68,16 @@ export function GetSettings(): $CancellablePromise<$models.SettingsDTO> {
 }
 
 /**
+ * GetTheme returns the EFFECTIVE theme identifier — never "" — so the frontend
+ * has one unambiguous value to apply. A config that cannot be read falls back
+ * to the default rather than erroring: a broken or missing config must still
+ * paint.
+ */
+export function GetTheme(): $CancellablePromise<string> {
+    return $Call.ByID(243714106);
+}
+
+/**
  * PrioritySortKeys returns the sort keys the daemon understands, so the
  * settings form can offer them instead of taking free text. These are LOLA's
  * own keys, not a Linear concept — there is nothing to fetch from the API.
@@ -89,12 +99,34 @@ export function SaveSettings(dto: $models.SettingsDTO): $CancellablePromise<void
 }
 
 /**
+ * SetTheme persists [ui].theme on its own. It writes through the shared
+ * saveConfig path — Validate, then config.Save's atomic temp+rename, then a
+ * best-effort daemon reload — so an unknown identifier is rejected here by the
+ * same static check the daemon applies, and nothing writes the file directly.
+ * An empty name clears the key, which drops the [ui] table and restores
+ * config.DefaultUITheme.
+ */
+export function SetTheme(name: string): $CancellablePromise<void> {
+    return $Call.ByID(1831643238, name);
+}
+
+/**
  * Setup writes the initial config.toml from the wizard: it stores the Linear key
  * in the Keychain (falling back to an env var by name if that fails), records one
  * project, and sets the caps/interval. The key itself is never written to config.
  */
 export function Setup(dto: $models.SetupDTO): $CancellablePromise<$models.SetupResultDTO> {
     return $Call.ByID(3057086516, dto);
+}
+
+/**
+ * Themes returns the theme identifiers config.Validate accepts, so the settings
+ * form enumerates them instead of carrying its own copy that could drift out of
+ * sync and start writing configs the daemon rejects. Same precedent as
+ * PrioritySortKeys above.
+ */
+export function Themes(): $CancellablePromise<string[] | null> {
+    return $Call.ByID(2762792109);
 }
 
 /**

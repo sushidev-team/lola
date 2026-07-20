@@ -76,7 +76,7 @@
 
 <div class="flex h-full min-h-0 flex-col p-4">
   <div class="mb-3 flex items-center gap-3">
-    <button class="text-faint hover:text-accent" onclick={() => nav.goDetail(nav.project)}>‹ back</button>
+    <button class="text-faint hover:text-accent-ink" onclick={() => nav.goDetail(nav.project)}>‹ back</button>
     <div class="text-sm text-faint">
       lola <span class="text-edge">▸</span>
       <span class="text-ink">{nav.project}</span>
@@ -89,14 +89,14 @@
         <button
           class="rounded px-2 py-[1px] text-[11px]"
           class:bg-accent={scope === s}
-          class:text-canvas={scope === s}
+          class:text-on-accent={scope === s}
           class:text-faint={scope !== s}
           onclick={() => pick(s)}>{s}</button
         >
       {/each}
     </span>
     <button
-      class="rounded bg-accent/20 px-3 py-1 text-xs text-accent hover:bg-accent/30 disabled:opacity-40"
+      class="rounded bg-accent-fill px-3 py-1 text-xs text-accent-ink hover:bg-accent-fill-hover disabled:opacity-40"
       disabled={loading || !store.alive}
       onclick={() => load()}>↻ refresh</button
     >
@@ -141,7 +141,7 @@
               <td class="px-3 py-2 {p.cls}">{p.label}</td>
               <td class="px-3 py-2 text-right whitespace-nowrap opacity-0 group-hover:opacity-100">
                 <button
-                  class="px-1.5 text-faint hover:text-accent disabled:opacity-40"
+                  class="px-1.5 text-faint hover:text-accent-ink disabled:opacity-40"
                   disabled={starting === t.identifier}
                   onclick={() => start(t)}>{t.alreadyLive ? "live" : "start ›"}</button
                 >

@@ -29,7 +29,7 @@
     aria-label={title}
   >
     <header class="flex items-center border-b border-edge/70 px-4 py-2.5">
-      <h2 class="text-sm font-semibold text-accent">{title}</h2>
+      <h2 class="text-sm font-semibold text-accent-ink">{title}</h2>
       <button class="ml-auto text-faint hover:text-ink" onclick={onClose} aria-label="close">✕</button>
     </header>
     <div class="min-h-0 flex-1 overflow-auto p-4">

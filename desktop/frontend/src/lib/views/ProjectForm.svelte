@@ -284,7 +284,7 @@
   const rowTopCls = "grid grid-cols-[170px_1fr] items-start gap-3";
   const labelCls = "flex items-center gap-1.5 text-[11px] tracking-wide text-faint uppercase";
   const inputCls =
-    "w-full rounded border border-edge bg-canvas px-2 py-1 text-xs text-ink outline-none focus:border-accent placeholder:text-faint/50";
+    "w-full rounded border border-edge bg-canvas px-2 py-1 text-xs text-ink outline-none focus:border-accent placeholder:text-placeholder";
   const cbCls = "h-3.5 w-3.5 accent-[var(--color-accent)]";
   const hintCls = "mt-1 block text-[10px] text-faint";
 </script>
@@ -301,8 +301,8 @@
       <button
         type="button"
         class="rounded border px-1 py-px text-[9px] tracking-wide normal-case {on
-          ? 'border-edge text-faint hover:border-accent hover:text-accent'
-          : 'border-accent/40 text-accent/80 hover:border-accent hover:text-accent'}"
+          ? 'border-edge text-faint hover:border-accent hover:text-accent-ink'
+          : 'border-accent/40 text-accent-ink hover:border-accent hover:text-accent-ink'}"
         title={on
           ? "inherited from [defaults] — click to override it for this project"
           : "overridden for this project — click to go back to [defaults]"}
@@ -531,7 +531,7 @@
                 type="button"
                 class="rounded px-2 py-[2px] text-[11px]"
                 class:bg-accent={d.agent === a.id}
-                class:text-canvas={d.agent === a.id}
+                class:text-on-accent={d.agent === a.id}
                 class:text-faint={d.agent !== a.id}
                 onclick={() => { d.agent = a.id; }}>{a.label}</button
               >
@@ -700,7 +700,7 @@
       {/if}
       <button class="ml-auto px-3 py-1 text-xs text-faint hover:text-ink" onclick={() => nav.closeOverlay()}>cancel</button>
       <button
-        class="rounded bg-accent/20 px-3 py-1 text-xs text-accent hover:bg-accent/30 disabled:opacity-40"
+        class="rounded bg-accent-fill px-3 py-1 text-xs text-accent-ink hover:bg-accent-fill-hover disabled:opacity-40"
         disabled={!canSave}
         onclick={save}>{saving ? "saving…" : "save"}</button
       >

@@ -32,7 +32,7 @@
           >
             <div class="flex items-center gap-1.5">
               {#if s.status === "needs_input" && !sel}<span class="text-warn">!</span>{/if}
-              <span class="font-medium" class:text-accent={sel}>{s.issue || s.id.slice(0, 8)}</span>
+              <span class="font-medium" class:text-accent-ink={sel}>{s.issue || s.id.slice(0, 8)}</span>
               <span class="ml-auto font-mono text-[10px] {statusText(s.status)}">{statusBadge(s.status)}</span>
             </div>
             {#if s.title}<div class="truncate text-[11px] text-faint">{s.title}</div>{/if}

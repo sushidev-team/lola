@@ -64,7 +64,7 @@
             <button
               class="rounded px-1.5 py-[1px] text-[11px] font-normal"
               class:bg-accent={nav.lens === l.id}
-              class:text-canvas={nav.lens === l.id}
+              class:text-on-accent={nav.lens === l.id}
               class:text-faint={nav.lens !== l.id}
               title={l.label}
               onclick={() => (nav.lens = l.id)}>{l.icon}</button

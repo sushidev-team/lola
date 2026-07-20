@@ -34,37 +34,66 @@
 }
 
 /* ---------------------------------------------------------------------------
-   lola design tokens — lifted verbatim from internal/tui/theme.go so the app
-   and the TUI render the same cohesive, opaque, dark-navy truecolor palette.
-   Tailwind v4 turns each --color-* into a utility (bg-canvas, text-accent, …).
+   lola design tokens. The NAMES are unchanged from the original dark-navy
+   palette (so no component had to move); the VALUES are now Catppuccin, mapped
+   name-for-name in src/lib/catppuccin.ts — read toTokens() there for why each
+   token picked the Catppuccin color it did.
+
+   What is written below is the *compiled default*: Catppuccin Mocha, which is
+   also config's DefaultUITheme. That matters — a cold start with no JS, or a
+   frame before the bridge answers, already renders the right theme, so a user
+   on the default never sees a flash. src/lib/theme-runtime.svelte.ts overrides
+   these as inline properties on :root when a different flavor is configured;
+   inline styles sit in no cascade layer and so outrank this @layer theme block
+   unconditionally. catppuccin.test.ts asserts these literals still equal
+   toTokens(mocha), so the two cannot drift.
+
+   Tailwind v4 turns each --color-* into a utility (bg-canvas, text-accent-ink, …)
+   that compiles to var(--color-*) — which is what makes the runtime override
+   reach every one of them without a rebuild.
 ---------------------------------------------------------------------------- */
 @theme {
-  --color-canvas: #0e1420; /* app background — deep navy-charcoal */
-  --color-panel: #121a28; /* a hair above canvas for raised surfaces */
-  --color-edge: #2b3646; /* muted slate panel border (unfocused) */
-  --color-accent: #57c7d6; /* cyan — focus, selection, links */
-  --color-ink: #c3cbd6; /* default foreground */
-  --color-faint: #6b7686; /* muted secondary text / rules / labels */
-  --color-sel: #1b2634; /* selected-row band */
+  --color-canvas: #181825; /* app background — Catppuccin `mantle` */
+  --color-panel: #1e1e2e; /* raised surface AND the terminal bg — `base` */
+  --color-edge: #45475a; /* panel border / rule — `surface1` */
+  --color-accent: #89dceb; /* cyan — DECORATIVE: fills, borders, focus — `sky` at 3:1 */
+  --color-accent-ink: #89dceb; /* accent as TEXT — measured, darkens on latte */
+  --color-accent-fill: #2f3f4d; /* primary-button chip — accent tinted into canvas */
+  --color-accent-fill-hover: #293a45; /* same tint, deeper backdrop — see catppuccin.ts */
+  --color-on-accent: #11111b; /* text ON the accent fill — measured, was `canvas` */
+  --color-ink: #cdd6f4; /* default foreground — `text` */
+  --color-faint: #7f849c; /* muted secondary text / labels — `overlay1` */
+  --color-placeholder: #7f849c; /* input placeholders — faint raised to AA on canvas */
+  --color-sel: #313244; /* selected-row band — `surface0` */
 
-  --color-good: #5fd08a; /* ok / approved / pass */
-  --color-bad: #e0716f; /* error / failed */
-  --color-warn: #e0b44a; /* pending / retry */
-  --color-info: #6ea8fe; /* working blue */
-  --color-orange: #eaa04a; /* needs-you hero */
-  --color-magenta: #c99bf0; /* PR detail line */
+  /* The status colors. Each is its Catppuccin name walked to AA against canvas,
+     panel and the selected-row band — the three surfaces theme.ts prints them
+     bare on. Mocha's six already clear it, so the literals below are the plain
+     names; latte's do not (green 2.92, yellow 2.29, peach 2.61 on a panel) and
+     resolve darker at runtime. See toTokens in catppuccin.ts. */
+  --color-good: #a6e3a1; /* ok / approved / pass — `green` */
+  --color-bad: #f38ba8; /* error / failed — `red` */
+  --color-on-bad: #11111b; /* text ON that fill (the `dead` pill) — was a built-in white */
+  --color-warn: #f9e2af; /* pending / retry — `yellow` */
+  --color-info: #89b4fa; /* working blue — `blue` */
+  --color-orange: #fab387; /* needs-you hero — `peach` */
+  --color-magenta: #cba6f7; /* PR detail line — `mauve` */
 
-  /* Status pills. Urgent + broken get a SOLID fill; active/parked a dark tint. */
-  --color-pill-urgent: #e0a54a;
-  --color-pill-urgent-fg: #17110a;
-  --color-pill-broken: #d1707a;
-  --color-pill-broken-fg: #180b0d;
-  --color-pill-work: #22384f;
-  --color-pill-work-fg: #84b6ea;
-  --color-pill-done: #1f3a2e;
-  --color-pill-done-fg: #74cf97;
-  --color-pill-grey: #2a323d;
-  --color-pill-grey-fg: #aab4c0;
+  /* Status pills. Urgent + broken get a SOLID fill whose text is chosen by
+     measured contrast against that fill (onFill), so the alarm stays legible in
+     a light flavor too; active/parked get the accent tinted into `mantle` with
+     a readable() label — NOT into `surface0`, which steps toward the accent in
+     every flavor and collapsed latte's done pill to 1.75:1. */
+  --color-pill-urgent: #fab387;
+  --color-pill-urgent-fg: #11111b;
+  --color-pill-broken: #f38ba8;
+  --color-pill-broken-fg: #11111b;
+  --color-pill-work: #384461;
+  --color-pill-work-fg: #89b4fa;
+  --color-pill-done: #405148;
+  --color-pill-done-fg: #a6e3a1;
+  --color-pill-grey: #313244;
+  --color-pill-grey-fg: #a6adc8;
 
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Monaco, monospace;
@@ -73,10 +102,14 @@
   --radius-panel: 10px;
 }
 
-/* --------------------------------------------------------------------------- */
+/* ---------------------------------------------------------------------------
+   Dark is the compiled default because the default flavor (Mocha) is dark. The
+   applier writes documentElement.style.colorScheme per flavor, and that inline
+   value wins — which is how Latte gets light native form controls, <select>
+   popups and UA scrollbars.
+---------------------------------------------------------------------------- */
 :root {
   color-scheme: dark;
-  --tblheader: var(--color-faint);
 }
 
 html,
@@ -124,13 +157,38 @@ select {
   border-radius: 4px;
 }
 *::-webkit-scrollbar-thumb:hover {
-  background: #3a4658;
+  /* Nudged toward the foreground rather than to a lightened literal: on a dark
+     flavor that brightens the thumb, on a light one it darkens it, so hover
+     reads as "more prominent" in both directions. */
+  background: color-mix(in srgb, var(--color-edge) 70%, var(--color-ink));
 }
 
 /* Terminals may be selected (copy out); snapshots stay inert. */
 .term-live,
 .term-live * {
   user-select: text;
+}
+
+/* ---------------------------------------------------------------------------
+   Terminal stroke weight. `body` sets -webkit-font-smoothing: antialiased,
+   which costs ~32% of the glyph ink on DOM text (measured 86.45 -> 58.40 on a
+   luminance-weighted sample). It does NOT reach the WebGL glyph atlas — those
+   canvases are created detached and never appended, so they render at the
+   thick CoreText default regardless.
+
+   The consequence is that the snapshot tiles and xterm's DOM-renderer fallback
+   were visibly thinner than the WebGL terminal sitting next to them. Opting the
+   terminal surfaces back out of the thinning makes all three match, and is the
+   closest we can get to Ghostty's font-thicken (which dilates inside CoreText
+   and is not reachable from any xterm.js option). These rules are unlayered, so
+   they also beat Tailwind's `antialiased` utility if a tile still carries it.
+---------------------------------------------------------------------------- */
+.term-live,
+.term-live *,
+.term-snap,
+.term-snap * {
+  -webkit-font-smoothing: auto;
+  -moz-osx-font-smoothing: auto;
 }
 
 /* xterm surfaces sit flush on the panel background. */
@@ -145,7 +203,10 @@ select {
   outline-offset: 1px;
 }
 
-/* Subtle raise for panels; a focused panel gets the accent edge. */
+/* Subtle raise for panels; a focused panel gets the accent edge. The mix pulls
+   panel a little toward canvas — flavor-safe because canvas is always `mantle`
+   and panel always `base`, so the raise keeps its direction even on Latte,
+   where both are light and mantle is the darker of the two. */
 @utility panel {
   background: color-mix(in srgb, var(--color-panel) 82%, var(--color-canvas));
   border: 1px solid var(--color-edge);

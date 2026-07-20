@@ -92,9 +92,9 @@
 <div class="flex h-full min-h-0 flex-col p-4">
   <!-- header: back + breadcrumb -->
   <div class="mb-3 flex items-center gap-3">
-    <button class="rounded px-2 py-1 text-xs text-faint hover:text-accent" onclick={back}>← back</button>
+    <button class="rounded px-2 py-1 text-xs text-faint hover:text-accent-ink" onclick={back}>← back</button>
     <div class="text-sm text-faint">
-      <button class="text-faint hover:text-accent" onclick={() => nav.goHome()}>lola</button>
+      <button class="text-faint hover:text-accent-ink" onclick={() => nav.goHome()}>lola</button>
       <span class="text-edge">▸</span>
       <span class="text-ink">{nav.project || "(no project)"}</span>
     </div>
@@ -157,7 +157,7 @@
             >
               <span
                 class="flex h-5 w-5 shrink-0 items-center justify-center rounded border border-edge text-[11px] font-semibold {a.enabled
-                  ? 'text-accent group-hover:border-accent'
+                  ? 'text-accent-ink group-hover:border-accent'
                   : 'text-faint'}">{a.key}</span
               >
               <span class="min-w-0 flex-1">
@@ -172,7 +172,7 @@
             {#if a.key === "W" && worktreeOpen}
               <div class="mt-1.5 ml-8 flex flex-wrap items-center gap-2 rounded-[10px] border border-edge/60 bg-panel/60 p-2">
                 <input
-                  class="w-56 rounded border border-edge bg-canvas px-2 py-1 font-mono text-xs text-ink outline-none focus:border-accent"
+                  class="w-56 rounded border border-edge bg-canvas px-2 py-1 font-mono text-xs text-ink outline-none focus:border-accent placeholder:text-placeholder"
                   placeholder="branch name…"
                   bind:value={branch}
                   onkeydown={(e) => e.key === "Enter" && startWorktree()}
@@ -181,20 +181,20 @@
                   <button
                     class="rounded px-1.5 py-[1px]"
                     class:bg-accent={useAgent}
-                    class:text-canvas={useAgent}
+                    class:text-on-accent={useAgent}
                     class:text-faint={!useAgent}
                     onclick={() => (useAgent = true)}>agent</button
                   >
                   <button
                     class="rounded px-1.5 py-[1px]"
                     class:bg-accent={!useAgent}
-                    class:text-canvas={!useAgent}
+                    class:text-on-accent={!useAgent}
                     class:text-faint={useAgent}
                     onclick={() => (useAgent = false)}>shell</button
                   >
                 </span>
                 <button
-                  class="rounded bg-accent/20 px-3 py-1 text-xs text-accent hover:bg-accent/30 disabled:opacity-40"
+                  class="rounded bg-accent-fill px-3 py-1 text-xs text-accent-ink hover:bg-accent-fill-hover disabled:opacity-40"
                   disabled={!branch.trim()}
                   onclick={startWorktree}>start ›</button
                 >
@@ -229,7 +229,7 @@
             {/each}
             {#if moreCount > 0}
               <button
-                class="w-full px-3 py-1.5 text-left text-[11px] text-faint hover:text-accent"
+                class="w-full px-3 py-1.5 text-left text-[11px] text-faint hover:text-accent-ink"
                 onclick={() => nav.goCockpit(nav.project)}>… {moreCount} more</button
               >
             {/if}

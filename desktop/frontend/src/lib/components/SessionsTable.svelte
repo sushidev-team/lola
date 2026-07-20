@@ -32,10 +32,10 @@
           ondblclick={() => nav.toggleFocusTerm(s.id)}
         >
           <td class="py-1 pl-2 text-center">
-            {#if sel}<span class="font-bold text-accent">›</span>
+            {#if sel}<span class="font-bold text-accent-ink">›</span>
             {:else if isAttention(s.status) && s.status === "needs_input"}<span class="text-warn">!</span>{/if}
           </td>
-          <td class="py-1 pr-2 font-medium whitespace-nowrap" class:text-accent={sel}>{s.issue || s.id.slice(0, 8)}</td>
+          <td class="py-1 pr-2 font-medium whitespace-nowrap" class:text-accent-ink={sel}>{s.issue || s.id.slice(0, 8)}</td>
           {#if !dense}
             <td class="max-w-[22rem] truncate py-1 pr-2 text-faint">{s.title}</td>
           {/if}

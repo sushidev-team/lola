@@ -238,6 +238,7 @@ func (c *Config) Validate() error {
 	errs = append(errs, c.validateNotify()...)
 	errs = append(errs, c.validateBrain()...)
 	errs = append(errs, c.validateReview()...)
+	errs = append(errs, c.validateUI()...)
 
 	return errors.Join(errs...)
 }

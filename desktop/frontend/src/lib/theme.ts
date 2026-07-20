@@ -13,14 +13,18 @@ export function statusText(status: string): string {
     case "ci_failed":
     case "changes_requested":
     case "merge_conflict":
+    // `dead` used to return Tailwind's built-in white here, on the premise that
+    // the caller always paints it on a bad-colored fill. Only pillClasses does —
+    // Rail and SessionsKanban print statusText bare on a panel, where white was
+    // 1.14:1 on latte. It is a bad-family status, so it takes the bad-family
+    // color; the pill supplies its own on-fill foreground.
+    case "dead":
       return "text-bad";
     case "approved":
       return "text-good";
     case "needs_input":
     case "no_signal":
       return "text-orange";
-    case "dead":
-      return "text-white"; // rendered on a bad-colored fill by the caller
     case "merged":
     case "session_ended":
     case "idle":
@@ -67,7 +71,12 @@ export function pillClasses(status: string): string {
     case "grey":
       return "bg-pill-grey text-pill-grey-fg";
     default:
-      return status === "dead" ? "bg-bad text-white" : statusText(status);
+      // `dead` is the one plain status that still gets a solid fill, so it is
+      // the one plain status that needs an on-fill foreground. --color-on-bad
+      // is onFill(f, red), the same measured rule the urgent/broken pills use.
+      // What it replaces was Tailwind's built-in white — the one foreground no
+      // flavor could override, and 2.32:1 on the default Mocha.
+      return status === "dead" ? "bg-bad text-on-bad" : statusText(status);
   }
 }
 

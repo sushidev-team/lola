@@ -233,6 +233,19 @@ endpoint = "https://api.linear.app/graphql"
 # mouse = false           # enable tmux mouse mode inside the session
 
 # ---------------------------------------------------------------------------
+# [ui] — OPTIONAL appearance. Presentation only: nothing the daemon does reads
+# this, so omitting the whole section is zero behavior change. The theme sets
+# lola-desktop's app chrome, its terminal colors and the ANSI palette used to
+# render pane snapshots, all from one identifier.
+#
+# Only the four values below are accepted — an unknown name is REJECTED at load
+# rather than silently falling back, so a typo tells you instead of quietly
+# rendering the default. Omit the key (or the table) to use "catppuccin-mocha".
+# ---------------------------------------------------------------------------
+# [ui]
+# theme = "catppuccin-mocha"   # catppuccin-latte | catppuccin-frappe | catppuccin-macchiato | catppuccin-mocha
+
+# ---------------------------------------------------------------------------
 # [[project]] — repository registry for the native runtime (one table per
 # repo). Every poll references a project by name; lola then creates a git
 # worktree per session under ~/.lola/worktrees/<project>/... and runs Claude

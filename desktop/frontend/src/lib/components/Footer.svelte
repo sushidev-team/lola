@@ -17,7 +17,7 @@
   {:else if !store.alive && store.connected}
     <span class="text-bad">daemon not running</span>
     <button
-      class="rounded border border-edge px-2 py-[1px] text-ink hover:border-accent hover:text-accent"
+      class="rounded border border-edge px-2 py-[1px] text-ink hover:border-accent hover:text-accent-ink"
       onclick={() => store.startDaemon()}>start daemon</button
     >
   {:else if hints}
@@ -27,7 +27,7 @@
   <span class="ml-auto flex items-center gap-2 text-faint">
     {#if store.alive}
       <button
-        class="rounded px-1.5 py-[1px] hover:text-accent"
+        class="rounded px-1.5 py-[1px] hover:text-accent-ink"
         title="restart daemon"
         onclick={() => store.restartDaemon()}>⟳ restart</button
       >

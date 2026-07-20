@@ -586,6 +586,23 @@ without `[tmux]` always validates.
 | `status_right` | string | Raw tmux `status-right` format override. Empty uses lola's built-in branded bar. |
 | `mouse` | bool | Enable tmux mouse mode inside the session. Default `false`. |
 
+### `[ui]` (optional)
+
+**Appearance only** — nothing the daemon does reads this table, so omitting it
+is zero behavior change. One identifier drives all of lola-desktop's color: the
+app chrome, the embedded terminals, and the ANSI palette the session grid
+renders pane snapshots with.
+
+| Key | Type | Description |
+| --- | --- | --- |
+| `theme` | string | `catppuccin-latte` \| `catppuccin-frappe` \| `catppuccin-macchiato` \| `catppuccin-mocha`. Empty or absent uses `catppuccin-mocha`. |
+
+Unlike `[tmux]`, the theme **is** validated: an unrecognized name is rejected at
+load with an error listing the accepted values, rather than silently rendering
+the default — a typo you cannot see is worse than a startup error. A config
+that never sets `[ui]` never grows the table on save, so the default stays a
+default instead of being frozen into your file.
+
 ## The coding agent
 
 Each matched issue gets its own session — a git worktree plus a tmux pane

@@ -7,27 +7,25 @@
 //
 // All text is HTML-escaped; only style attributes are emitted, so the result is
 // safe to inject with {@html} even though pane content is agent-influenced.
+//
+// THE PALETTE IS A PARAMETER, not an import of the live theme. This module has
+// to stay pure — no DOM, no Svelte runes — so it can be unit-tested as a plain
+// function and so a renderer is never coupled to whichever flavor happens to be
+// mounted. It takes an AnsiPalette and defaults to the default flavor's, which
+// keeps every existing call site working. `catppuccin.ts` is safe to import
+// because it is pure data + pure functions itself.
+//
+// Reactivity is therefore the CONSUMER's job: SnapshotTile reads
+// `appearance.ansi` inside a $derived, so reading the rune there is what makes
+// all the grid tiles re-render when the flavor changes. Nothing in here knows
+// that runes exist.
 
-// Catppuccin Mocha — matches the live terminal (LiveTerminal.svelte) so the grid
-// snapshots and the focused terminal share one palette.
-const ANSI_16 = [
-  "#45475a", // 0 black (surface1)
-  "#f38ba8", // 1 red
-  "#a6e3a1", // 2 green
-  "#f9e2af", // 3 yellow
-  "#89b4fa", // 4 blue
-  "#f5c2e7", // 5 magenta (pink)
-  "#94e2d5", // 6 cyan (teal)
-  "#bac2de", // 7 white (subtext1)
-  "#585b70", // 8 bright black (surface2)
-  "#f38ba8", // 9 bright red
-  "#a6e3a1", // 10 bright green
-  "#f9e2af", // 11 bright yellow
-  "#89b4fa", // 12 bright blue
-  "#f5c2e7", // 13 bright magenta
-  "#94e2d5", // 14 bright cyan
-  "#a6adc8", // 15 bright white (subtext0)
-];
+import { DEFAULT_THEME_ID, FLAVORS, toAnsi, type AnsiPalette } from "./catppuccin";
+
+export type { AnsiPalette };
+
+/** The default flavor's palette, so ansiToHtml(text) alone still renders. */
+const DEFAULT_PALETTE: AnsiPalette = toAnsi(FLAVORS[DEFAULT_THEME_ID]);
 
 function esc(s: string): string {
   return s
@@ -36,8 +34,8 @@ function esc(s: string): string {
     .replace(/>/g, "&gt;");
 }
 
-function xterm256(n: number): string {
-  if (n < 16) return ANSI_16[n];
+function xterm256(n: number, pal: AnsiPalette): string {
+  if (n < 16) return pal.ansi16[n];
   if (n >= 232) {
     const v = 8 + (n - 232) * 10;
     return rgb(v, v, v);
@@ -64,10 +62,16 @@ interface SGR {
   inverse?: boolean;
 }
 
-function spanStyle(s: SGR): string {
+function spanStyle(s: SGR, pal: AnsiPalette): string {
   let fg = s.fg;
   let bg = s.bg;
-  if (s.inverse) [fg, bg] = [bg ?? "#0e1420", fg ?? "#c3cbd6"];
+  // Inverse video (SGR 7) swaps fg and bg; where either is still "default" it
+  // has to be materialised, and the defaults come from the flavor — pal.bg is
+  // the terminal background and pal.fg the default foreground, the same two
+  // colours the live terminal uses. These used to be lola's navy literals,
+  // which inverted to the wrong pair on any other palette (and to a dark-on-
+  // dark smudge on Latte).
+  if (s.inverse) [fg, bg] = [bg ?? pal.bg, fg ?? pal.fg];
   const css: string[] = [];
   if (fg) css.push(`color:${fg}`);
   if (bg) css.push(`background:${bg}`);
@@ -78,7 +82,7 @@ function spanStyle(s: SGR): string {
   return css.join(";");
 }
 
-function applyCodes(s: SGR, codes: number[]): SGR {
+function applyCodes(s: SGR, codes: number[], pal: AnsiPalette): SGR {
   const next = { ...s };
   for (let i = 0; i < codes.length; i++) {
     const c = codes[i];
@@ -114,11 +118,11 @@ function applyCodes(s: SGR, codes: number[]): SGR {
         next.inverse = false;
         break;
       case c >= 30 && c <= 37:
-        next.fg = ANSI_16[c - 30];
+        next.fg = pal.ansi16[c - 30];
         break;
       case c === 38:
         if (codes[i + 1] === 5) {
-          next.fg = xterm256(codes[i + 2]);
+          next.fg = xterm256(codes[i + 2], pal);
           i += 2;
         } else if (codes[i + 1] === 2) {
           next.fg = rgb(codes[i + 2], codes[i + 3], codes[i + 4]);
@@ -129,11 +133,11 @@ function applyCodes(s: SGR, codes: number[]): SGR {
         next.fg = undefined;
         break;
       case c >= 40 && c <= 47:
-        next.bg = ANSI_16[c - 40];
+        next.bg = pal.ansi16[c - 40];
         break;
       case c === 48:
         if (codes[i + 1] === 5) {
-          next.bg = xterm256(codes[i + 2]);
+          next.bg = xterm256(codes[i + 2], pal);
           i += 2;
         } else if (codes[i + 1] === 2) {
           next.bg = rgb(codes[i + 2], codes[i + 3], codes[i + 4]);
@@ -144,10 +148,10 @@ function applyCodes(s: SGR, codes: number[]): SGR {
         next.bg = undefined;
         break;
       case c >= 90 && c <= 97:
-        next.fg = ANSI_16[c - 90 + 8];
+        next.fg = pal.ansi16[c - 90 + 8];
         break;
       case c >= 100 && c <= 107:
-        next.bg = ANSI_16[c - 100 + 8];
+        next.bg = pal.ansi16[c - 100 + 8];
         break;
     }
   }
@@ -157,14 +161,20 @@ function applyCodes(s: SGR, codes: number[]): SGR {
 // eslint-disable-next-line no-control-regex
 const CSI = /\x1b\[([0-9;]*)([A-Za-z])/g;
 
-/** Render an ANSI (SGR-only) snapshot into safe styled HTML. */
-export function ansiToHtml(input: string): string {
+/**
+ * Render an ANSI (SGR-only) snapshot into safe styled HTML.
+ *
+ * @param pal the flavor's terminal palette — pass `appearance.ansi` from a
+ *   component to make the output follow the live theme. Defaults to the default
+ *   flavor so this stays callable as a pure one-argument function.
+ */
+export function ansiToHtml(input: string, pal: AnsiPalette = DEFAULT_PALETTE): string {
   let out = "";
   let state: SGR = {};
   let last = 0;
   const emit = (text: string) => {
     if (!text) return;
-    const style = spanStyle(state);
+    const style = spanStyle(state, pal);
     out += style ? `<span style="${style}">${esc(text)}</span>` : esc(text);
   };
   CSI.lastIndex = 0;
@@ -174,7 +184,7 @@ export function ansiToHtml(input: string): string {
     last = CSI.lastIndex;
     if (m[2] === "m") {
       const codes = m[1] === "" ? [0] : m[1].split(";").map((n) => parseInt(n, 10) || 0);
-      state = applyCodes(state, codes);
+      state = applyCodes(state, codes, pal);
     }
     // non-'m' CSI (cursor moves etc.) are dropped — capture-pane rarely emits them.
   }

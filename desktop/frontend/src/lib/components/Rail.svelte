@@ -78,7 +78,7 @@
               {#if p.ciRed > 0}<span class="text-bad">{p.ciRed}✕</span>{/if}
             </button>
             <button
-              class="px-1.5 text-faint opacity-0 group-hover:opacity-100 hover:text-accent"
+              class="px-1.5 text-faint opacity-0 group-hover:opacity-100 hover:text-accent-ink"
               title="open project hub"
               onclick={() => nav.goDetail(p.name)}>›</button
             >

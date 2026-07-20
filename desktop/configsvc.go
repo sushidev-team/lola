@@ -201,6 +201,68 @@ func (s *ConfigService) SaveSettings(dto SettingsDTO) error {
 	return saveConfig(cfg, path)
 }
 
+// --- appearance ([ui]) ------------------------------------------------------
+
+// The theme is deliberately NOT a SettingsDTO field, and these three methods
+// are the whole of its surface:
+//
+//   - Instant apply is the right UX for a theme, and SaveSettings cannot give
+//     it: that is a whole-form commit the overlay closes on, so a picker routed
+//     through it would only take effect after save+close — you could never see
+//     what you were picking.
+//   - Blast radius. SaveSettings writes ~30 fields across [defaults]/[notify]/
+//     [brain]/[review]/[coderabbit]; a cosmetic click must not be able to
+//     commit half-edited form state or fail on an unrelated field's validation.
+//   - The reader is not the settings form. The app shell and terminals need the
+//     theme at startup, long before any overlay exists — loading and marshaling
+//     the entire config to learn one string would make the paint depend on
+//     every unrelated settings field being readable.
+//   - Single writer. A DTO field that is read but ignored on write is a trap;
+//     keeping Theme off the DTO makes SetTheme the sole writer by construction.
+
+// Themes returns the theme identifiers config.Validate accepts, so the settings
+// form enumerates them instead of carrying its own copy that could drift out of
+// sync and start writing configs the daemon rejects. Same precedent as
+// PrioritySortKeys above.
+func (s *ConfigService) Themes() []string {
+	return append([]string(nil), config.UIThemes...)
+}
+
+// GetTheme returns the EFFECTIVE theme identifier — never "" — so the frontend
+// has one unambiguous value to apply. A config that cannot be read falls back
+// to the default rather than erroring: a broken or missing config must still
+// paint.
+func (s *ConfigService) GetTheme() string {
+	cfg, _, err := loadConfig()
+	if err != nil {
+		return config.DefaultUITheme
+	}
+	return cfg.UITheme()
+}
+
+// SetTheme persists [ui].theme on its own. It writes through the shared
+// saveConfig path — Validate, then config.Save's atomic temp+rename, then a
+// best-effort daemon reload — so an unknown identifier is rejected here by the
+// same static check the daemon applies, and nothing writes the file directly.
+// An empty name clears the key, which drops the [ui] table and restores
+// config.DefaultUITheme.
+func (s *ConfigService) SetTheme(name string) error {
+	cfg, path, err := loadConfig()
+	if err != nil {
+		return err
+	}
+	cfg.UI.Theme = strings.TrimSpace(name)
+	if err := saveConfig(cfg, path); err != nil {
+		return err
+	}
+	// Follow the switch on the native NSWindow too. The webview repaints itself
+	// via the frontend applier, but the window background is native chrome and
+	// would otherwise lag until restart. cfg.UITheme() resolves ""→default so an
+	// empty (cleared) theme repaints to the default flavor's canvas.
+	repaintWindowCanvas(cfg.UITheme())
+	return nil
+}
+
 // --- project editor ---------------------------------------------------------
 
 // InheritsDTO mirrors config.ProjectInherits: true means the project leaves the

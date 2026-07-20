@@ -219,6 +219,7 @@ type Config struct {
 	Review     ReviewConfig     `toml:"review"`
 	CodeRabbit CodeRabbitConfig `toml:"coderabbit"`
 	Tmux       TmuxConfig       `toml:"tmux"`
+	UI         UIConfig         `toml:"ui"`
 
 	// notices are NON-FATAL repairs Load made to the file: things that were
 	// already inert but would otherwise be rejected, so a config nobody could
@@ -318,6 +319,7 @@ type fileConfig struct {
 	Review     *fileReviewConfig     `toml:"review,omitempty"`
 	CodeRabbit *fileCodeRabbitConfig `toml:"coderabbit,omitempty"`
 	Tmux       *fileTmuxConfig       `toml:"tmux,omitempty"`
+	UI         *fileUIConfig         `toml:"ui,omitempty"`
 }
 
 // fileProject mirrors Project on disk. Its polling fields are inline; the
@@ -663,6 +665,7 @@ func (fc *fileConfig) config() *Config {
 		Review:      resolveReview(fc.Review),
 		CodeRabbit:  resolveCodeRabbit(fc.CodeRabbit),
 		Tmux:        resolveTmux(fc.Tmux),
+		UI:          resolveUI(fc.UI),
 	}
 }
 
@@ -700,6 +703,7 @@ func (c *Config) file() *fileConfig {
 		Review:     reviewFile(c.Review),
 		CodeRabbit: coderabbitFile(c.CodeRabbit),
 		Tmux:       tmuxFile(c.Tmux),
+		UI:         uiFile(c.UI),
 	}
 }
 
