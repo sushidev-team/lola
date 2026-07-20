@@ -223,9 +223,30 @@ func bestEffortReloadCmd() tea.Msg {
 		return opDoneMsg{}
 	}
 	if !resp.OK {
-		return opDoneMsg{err: errors.New("reload: " + resp.Error)}
+		return opDoneMsg{err: errors.New("reload: " + explainReloadRejection(resp.Error))}
 	}
 	return opDoneMsg{}
+}
+
+// explainReloadRejection annotates a daemon reload rejection when it points at
+// a STALE DAEMON rather than a bad config.
+//
+// Everything that reaches reload has already passed this build's Validate — the
+// editors validate before writing — so the daemon rejecting it means the two
+// disagree about what is valid, and the daemon is the one running older code
+// (it does not hot-reload its own binary). The giveaway is a complaint about a
+// key that is now INHERITED from [defaults] and so no longer written into the
+// project's own table: a pre-inheritance daemon sees it as missing.
+func explainReloadRejection(msg string) string {
+	if !strings.Contains(msg, "config invalid") {
+		return msg
+	}
+	for _, key := range []string{"match_mode", "dedup_mode", "on_sent_set_label", "priority_sort", "blocked_label_id", "match_labels"} {
+		if strings.Contains(msg, key) {
+			return msg + "  ← this build accepts that config; the running daemon is an OLDER binary that predates [defaults] inheritance. Restart it with ^r."
+		}
+	}
+	return msg
 }
 
 // ---- tea.Model ----

@@ -2,6 +2,7 @@ package tui
 
 import (
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -262,5 +263,40 @@ func TestRailSpaceTogglesEnabled(t *testing.T) {
 	}
 	if got := m.selectedRailProject().Enabled; got == before {
 		t.Errorf("Enabled = %v, want it toggled from %v", got, before)
+	}
+}
+
+// A daemon rejecting a config THIS build just validated means the two disagree
+// about what is valid — and the daemon is the stale one, since it does not
+// hot-reload its own binary. The relayed error has to say so, or the user is
+// left staring at "match_mode must be any|all, got \"\"" for a key their config
+// legitimately inherits and no longer writes.
+func TestExplainReloadRejectionFlagsStaleDaemon(t *testing.T) {
+	stale := `config invalid, keeping previous: project "Okane" polling: match_mode must be any|all, got ""`
+	got := explainReloadRejection(stale)
+	if !strings.Contains(got, "OLDER binary") {
+		t.Errorf("a complaint about an inherited key must name the stale daemon:\n%s", got)
+	}
+	if !strings.Contains(got, stale) {
+		t.Error("the original daemon message must be preserved")
+	}
+}
+
+// A genuine config error — one about a key that is NOT inheritable — is passed
+// through untouched. Blaming the daemon there would send the user the wrong way.
+func TestExplainReloadRejectionLeavesRealErrorsAlone(t *testing.T) {
+	real := `config invalid, keeping previous: project "web": path is required`
+	if got := explainReloadRejection(real); got != real {
+		t.Errorf("a real config error must pass through unchanged, got:\n%s", got)
+	}
+}
+
+// Anything that is not a validation rejection (a down daemon, an unknown
+// command) is left alone too.
+func TestExplainReloadRejectionIgnoresNonValidationErrors(t *testing.T) {
+	for _, msg := range []string{`unknown cmd "reload"`, "dial unix: connect: connection refused"} {
+		if got := explainReloadRejection(msg); got != msg {
+			t.Errorf("non-validation error must pass through, got %q", got)
+		}
 	}
 }
