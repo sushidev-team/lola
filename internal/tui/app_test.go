@@ -144,3 +144,39 @@ func TestFormSaveDoesNotClobberExternalChanges(t *testing.T) {
 		t.Error("form save must not revert A's externally persisted enabled=false")
 	}
 }
+
+// 'n' on the project rail opens a NEW project, not the selected one. The form
+// creates outright (it carries every [[project]] field), so 'n' must never
+// preload — 'P' is the edit path.
+func TestRailNewOpensBlankProjectForm(t *testing.T) {
+	m := newTestRoot(t)
+	m.focus = focusPolls
+	m.list.cursor = 0 // a project IS selected, to prove it is not preloaded
+
+	m.Update(keyMsg("n"))
+	if m.form == nil {
+		t.Fatal("'n' should open the project form")
+	}
+	if !m.form.isNew {
+		t.Errorf("'n' must open a NEW project, got a form on %q", m.form.origName)
+	}
+	if m.form.poll.Name != "" {
+		t.Errorf("a new form must start unnamed, got %q", m.form.poll.Name)
+	}
+}
+
+// 'P' is the edit path: it preloads the selected project.
+func TestRailEditPreloadsSelectedProject(t *testing.T) {
+	m := newTestRoot(t)
+	m.focus = focusPolls
+	m.list.cursor = 0
+
+	want := m.selectedRailProject().Name
+	m.Update(keyMsg("P"))
+	if m.form == nil {
+		t.Fatal("'P' should open the project form")
+	}
+	if m.form.isNew || m.form.origName != want {
+		t.Errorf("'P' must preload %q, got isNew=%v origName=%q", want, m.form.isNew, m.form.origName)
+	}
+}

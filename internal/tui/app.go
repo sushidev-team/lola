@@ -627,14 +627,9 @@ func (m *rootModel) listKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			l.cursor++
 		}
 	case "n":
-		// Polling config belongs to a project (a project IS the poll unit), so
-		// this configures the selected one rather than creating anything.
-		p := m.selectedRailProject()
-		if p == nil {
-			l.flash = "no projects yet — press P to add one"
-			return m, nil
-		}
-		f, cmd := newFormModel(m.cfg, p)
+		// New project. The form carries every field a [[project]] needs, so it
+		// creates outright — 'P' edits the selected one.
+		f, cmd := newFormModel(m.cfg, nil)
 		m.form = f
 		return m, cmd
 	case "enter", "l", "right":
