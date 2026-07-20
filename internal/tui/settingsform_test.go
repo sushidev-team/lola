@@ -614,3 +614,34 @@ func TestSettingsFormEnablingFlipsDependentSinks(t *testing.T) {
 		})
 	}
 }
+
+// Paste arrives as its own tea.PasteMsg in bubbletea v2, so the settings editor
+// has to be routed it explicitly or pasting silently does nothing.
+func TestSettingsFormPaste(t *testing.T) {
+	m := newTestRoot(t)
+	f := newSettingsForm(m.cfgPath, m.cfg)
+
+	// Single-line field: first non-blank line, trailing newline dropped.
+	focusField(t, f, "def_branch_prefix")
+	f.paste("feat/\n")
+	if got := f.field("def_branch_prefix").text; got != "feat/" {
+		t.Errorf("branch prefix = %q, want feat/", got)
+	}
+
+	// Open list editor: a multi-line paste becomes multiple entries.
+	focusField(t, f, "def_symlinks")
+	f.openList(f.cur())
+	f.paste(".env\nstorage/app\n")
+	if got := f.field("def_symlinks").lines; len(got) != 2 || got[0] != ".env" || got[1] != "storage/app" {
+		t.Errorf("symlinks = %v, want [.env storage/app]", got)
+	}
+	f.editing = false
+
+	// Int field: digits only.
+	focusField(t, f, "global_cap")
+	f.field("global_cap").text = ""
+	f.paste("cap 8")
+	if got := f.field("global_cap").text; got != "8" {
+		t.Errorf("global_cap = %q, want 8", got)
+	}
+}

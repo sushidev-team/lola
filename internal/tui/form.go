@@ -142,8 +142,8 @@ type formModel struct {
 	tab     formTab
 	cursor  int
 	picker  *picker
-	editing bool // a list field is OPEN for line editing
-	lineCur int  // which line, while editing
+	editing bool     // a list field is OPEN for line editing
+	lineCur int      // which line, while editing
 	errs    []string // validation errors shown at the bottom
 }
 
@@ -452,6 +452,53 @@ func (f *formModel) key(k tea.KeyPressMsg) (tea.Cmd, formEvent) {
 	return nil, formNone
 }
 
+// paste inserts clipboard text into the focused field. An open list sub-editor
+// takes a MULTI-line paste as multiple entries (pasting several symlinks at once
+// is the point); a single-line field takes the first non-blank line.
+func (f *formModel) paste(s string) {
+	if f.picker != nil || s == "" {
+		return
+	}
+	fields := f.fields()
+	if f.cursor < 0 || f.cursor >= len(fields) {
+		return
+	}
+	cur := fields[f.cursor]
+
+	if f.editing {
+		buf := f.lineBuf(cur)
+		if buf == nil {
+			return
+		}
+		lines := pasteLines(s)
+		if len(lines) == 0 {
+			return
+		}
+		// The first pasted line continues the current entry; the rest become
+		// new entries after it, and the cursor follows to the last one.
+		(*buf)[f.lineCur] += lines[0]
+		if rest := lines[1:]; len(rest) > 0 {
+			tail := append(rest, (*buf)[f.lineCur+1:]...)
+			*buf = append((*buf)[:f.lineCur+1], tail...)
+			f.lineCur += len(rest)
+		}
+		return
+	}
+
+	if cur == fName && !f.isNew {
+		return // the config key is read-only on an existing project
+	}
+	buf := f.textBuf(cur)
+	if buf == nil {
+		return
+	}
+	if cur == fCap {
+		*buf += pasteDigits(s)
+		return
+	}
+	*buf += pasteInline(s)
+}
+
 // switchTab moves to the next/previous tab, resetting the cursor so it can
 // never point past the new tab's shorter field list.
 func (f *formModel) switchTab(delta int) {
@@ -603,7 +650,7 @@ var metaFields = map[fieldID]bool{
 // boolFields are the toggles: enter flips them in place rather than opening a
 // picker.
 var boolFields = map[fieldID]bool{
-	fEnabled: true,
+	fEnabled:          true,
 	fPRRequiresChecks: true, fCommentOnSpawn: true, fCommentOnPR: true,
 	fCommentOnMerged: true, fCommentOnBlocked: true,
 }

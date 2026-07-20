@@ -1,9 +1,11 @@
 package tui
 
 import (
+	"slices"
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/sushidev-team/lola/internal/config"
 )
 
@@ -179,4 +181,65 @@ func TestRailEditPreloadsSelectedProject(t *testing.T) {
 	if m.form.isNew || m.form.origName != want {
 		t.Errorf("'P' must preload %q, got isNew=%v origName=%q", want, m.form.isNew, m.form.origName)
 	}
+}
+
+// Paste is routed to whatever owns keyboard input, in the same precedence as
+// keystrokes. Without this dispatch a tea.PasteMsg reaches nothing at all,
+// because bubbletea v2 never turns a bracketed paste into key events.
+func TestRoutePasteReachesTheFocusedOverlay(t *testing.T) {
+	t.Run("project form", func(t *testing.T) {
+		m := newTestRoot(t)
+		f, _ := newFormModel(m.cfg, nil)
+		m.form = f
+		f.tab = tabRepo
+		f.cursor = slices.Index(f.fields(), fPath)
+
+		m.Update(tea.PasteMsg{Content: "/tmp/pasted\n"})
+		if f.poll.Path != "/tmp/pasted" {
+			t.Errorf("path = %q, want the pasted value", f.poll.Path)
+		}
+	})
+
+	t.Run("settings form", func(t *testing.T) {
+		m := newTestRoot(t)
+		s := newSettingsForm(m.cfgPath, m.cfg)
+		m.settings = s
+		focusField(t, s, "def_branch_prefix")
+
+		m.Update(tea.PasteMsg{Content: "feat/"})
+		if got := s.field("def_branch_prefix").text; got != "feat/" {
+			t.Errorf("branch prefix = %q, want feat/", got)
+		}
+	})
+
+	t.Run("home add-project prompt", func(t *testing.T) {
+		m := newTestRoot(t)
+		m.view = viewHome
+		m.home.adding, m.home.addInput = true, ""
+
+		m.Update(tea.PasteMsg{Content: "pasted-name\n"})
+		if m.home.addInput != "pasted-name" {
+			t.Errorf("addInput = %q, want pasted-name", m.home.addInput)
+		}
+	})
+
+	t.Run("detail worktree branch prompt", func(t *testing.T) {
+		m := newTestRoot(t)
+		m.view = viewDetail
+		m.detail = detailModel{project: "nori-app", wtMode: true}
+
+		m.Update(tea.PasteMsg{Content: "feat/from-clipboard"})
+		if m.detail.wtBranch != "feat/from-clipboard" {
+			t.Errorf("wtBranch = %q, want the pasted branch", m.detail.wtBranch)
+		}
+	})
+
+	t.Run("no text field focused is dropped", func(t *testing.T) {
+		m := newTestRoot(t)
+		m.view = viewHome // not adding, not filtering
+		m.Update(tea.PasteMsg{Content: "stray"})
+		if m.home.addInput != "" || m.home.filter != "" {
+			t.Errorf("a stray paste must be dropped, got add=%q filter=%q", m.home.addInput, m.home.filter)
+		}
+	})
 }

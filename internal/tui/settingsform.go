@@ -253,6 +253,39 @@ func (f *settingsForm) visible() []int {
 	return out
 }
 
+// paste inserts clipboard text into the focused field. An open list/env
+// sub-editor takes a MULTI-line paste as multiple entries; a single-line field
+// takes the first non-blank line. Bool and enum fields ignore paste — they are
+// cycled, not typed. See the paste helpers in fieldedit.go.
+func (f *settingsForm) paste(s string) {
+	if s == "" {
+		return
+	}
+	fld := f.cur()
+	if fld == nil {
+		return
+	}
+	if f.editing {
+		lines := pasteLines(s)
+		if len(lines) == 0 {
+			return
+		}
+		fld.lines[f.lineCur] += lines[0]
+		if rest := lines[1:]; len(rest) > 0 {
+			tail := append(rest, fld.lines[f.lineCur+1:]...)
+			fld.lines = append(fld.lines[:f.lineCur+1], tail...)
+			f.lineCur += len(rest)
+		}
+		return
+	}
+	switch fld.kind {
+	case sfText:
+		fld.text += pasteInline(s)
+	case sfInt:
+		fld.text += pasteDigits(s)
+	}
+}
+
 // cur returns the focused field, clamping a cursor left past the end of a
 // shorter tab. Every tab has at least one field by construction.
 func (f *settingsForm) cur() *setField {

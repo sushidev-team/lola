@@ -70,3 +70,64 @@ func dropLastRune(s string) string {
 	}
 	return s
 }
+
+// ---- paste ----------------------------------------------------------------
+//
+// bubbletea v2 delivers a bracketed paste as a separate tea.PasteMsg that the
+// key encoder never sees, so a form that only handles tea.KeyPressMsg silently
+// ignores pasting. Every text field routes its PasteMsg through the helpers
+// below; see rootModel.Update for the dispatch.
+
+// sanitizePasteLine strips control characters from one pasted line. Pasted text
+// is arbitrary clipboard content and these fields end up in config.toml (and,
+// for env, in a shell-sourced file), so a stray escape sequence or NUL must
+// never reach them. Tabs become spaces; everything else below 0x20 and DEL goes.
+func sanitizePasteLine(s string) string {
+	return strings.Map(func(r rune) rune {
+		switch {
+		case r == '\t':
+			return ' '
+		case r < 0x20 || r == 0x7f:
+			return -1
+		}
+		return r
+	}, s)
+}
+
+// pasteLines splits pasted text into sanitized lines, dropping trailing blanks.
+// Used by the one-entry-per-line sub-editors, where a multi-line paste is the
+// whole point (several symlinks or env vars at once).
+func pasteLines(s string) []string {
+	raw := strings.Split(strings.ReplaceAll(s, "\r\n", "\n"), "\n")
+	out := make([]string, 0, len(raw))
+	for _, l := range raw {
+		out = append(out, sanitizePasteLine(l))
+	}
+	for len(out) > 0 && strings.TrimSpace(out[len(out)-1]) == "" {
+		out = out[:len(out)-1]
+	}
+	return out
+}
+
+// pasteInline reduces pasted text to what a single-line field can hold: the
+// first non-blank line, sanitized and trimmed. Copying a path out of a terminal
+// usually carries a trailing newline, which this drops.
+func pasteInline(s string) string {
+	for _, l := range pasteLines(s) {
+		if t := strings.TrimSpace(sanitizePasteLine(l)); t != "" {
+			return t
+		}
+	}
+	return ""
+}
+
+// pasteDigits keeps only the digits of a paste, for the integer fields.
+func pasteDigits(s string) string {
+	var b strings.Builder
+	for _, r := range pasteInline(s) {
+		if r >= '0' && r <= '9' {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}

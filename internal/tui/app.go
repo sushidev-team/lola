@@ -92,6 +92,39 @@ type rootModel struct {
 	daemonOp string
 }
 
+// routePaste delivers pasted text to whatever currently owns keyboard input,
+// in the SAME precedence as the keystroke path in Update: the focused embed,
+// then the modal overlays, then the inline prompts of the active screen. A
+// paste with no text field focused is dropped.
+//
+// This exists because bubbletea v2 emits a bracketed paste as tea.PasteMsg
+// rather than as key events, so a field that only reads tea.KeyPressMsg cannot
+// see it. Anything new that accepts typed input needs a case here too.
+func (m *rootModel) routePaste(content string) (tea.Model, tea.Cmd) {
+	if content == "" {
+		return m, nil
+	}
+	if m.embedFocused {
+		return m.handleEmbedPaste(content)
+	}
+	switch {
+	case m.form != nil:
+		m.form.paste(content)
+	case m.settings != nil:
+		m.settings.paste(content)
+	case m.doctorLoading || m.doctorReport != nil:
+		// read-only overlay
+	case m.view == viewDetail && m.detail.wtMode:
+		m.detail.wtBranch += pasteInline(content)
+	case m.view == viewHome && m.home.adding:
+		m.home.addInput += pasteInline(content)
+	case m.view == viewHome && m.home.filtering:
+		m.home.filter += pasteInline(content)
+		m.home.repin(m.cfg)
+	}
+	return m, nil
+}
+
 // manageDaemon reports whether the TUI owns the daemon lifecycle (auto-start,
 // ^r restart, ^x stop). Off when [defaults].manage_daemon = false (launchd owns
 // it), so the TUI never fights an external supervisor.
@@ -355,9 +388,11 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.syncAgentPreview()
 	case tea.PasteMsg:
-		if m.embedFocused {
-			return m.handleEmbedPaste(v.Content)
-		}
+		// bubbletea v2 delivers a bracketed paste as its OWN message, which the
+		// key encoder never sees — so every text field has to be routed here
+		// explicitly or pasting silently does nothing. Mirror the keystroke
+		// precedence below: focused embed, then whichever overlay owns input.
+		return m.routePaste(v.Content)
 	case tea.MouseWheelMsg:
 		if m.embedFocused {
 			m.forwardWheel(v.Mouse())

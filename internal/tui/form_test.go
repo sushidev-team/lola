@@ -347,7 +347,8 @@ func TestFormInheritToggle(t *testing.T) {
 	if !f.inherits(fSymlinks) {
 		t.Fatal("symlinks must start inherited (the key is absent from the project)")
 	}
-	f.tab, f.cursor = tabRepo, slices.Index(f.fields(), fSymlinks)
+	f.tab = tabRepo
+	f.cursor = slices.Index(f.fields(), fSymlinks)
 	f.key(keyMsg("ctrl+o"))
 	if f.inherits(fSymlinks) {
 		t.Error("ctrl+o must promote an inherited field to an override")
@@ -366,7 +367,8 @@ func TestFormInheritToggle(t *testing.T) {
 // user starts typing into is no longer inherited.
 func TestFormEditingListPromotesToOverride(t *testing.T) {
 	f, _ := newFormOn(t, []config.Project{{Name: "web", Path: "/tmp/web"}}, "web")
-	f.tab, f.cursor = tabRepo, slices.Index(f.fields(), fPostCreate)
+	f.tab = tabRepo
+	f.cursor = slices.Index(f.fields(), fPostCreate)
 	if !f.inherits(fPostCreate) {
 		t.Fatal("post_create must start inherited")
 	}
@@ -376,5 +378,91 @@ func TestFormEditingListPromotesToOverride(t *testing.T) {
 	}
 	if !f.editing {
 		t.Error("the list field should be open for line editing")
+	}
+}
+
+// bubbletea v2 delivers a bracketed paste as its OWN tea.PasteMsg, which the
+// key encoder never sees — so pasting a project path silently did nothing until
+// the forms were routed it explicitly.
+func TestFormPasteIntoTextField(t *testing.T) {
+	f, _ := newNativeTestForm(t, nil)
+	f.tab = tabRepo
+	f.cursor = slices.Index(f.fields(), fPath)
+
+	// Copying a path out of a terminal carries a trailing newline.
+	f.paste("/Volumes/Git/acme/web\n")
+	if f.poll.Path != "/Volumes/Git/acme/web" {
+		t.Errorf("path = %q, want the pasted path without the trailing newline", f.poll.Path)
+	}
+}
+
+// Control characters never reach a field: the value ends up in config.toml and,
+// for env, in a shell-sourced file.
+func TestFormPasteStripsControlChars(t *testing.T) {
+	f, _ := newNativeTestForm(t, nil)
+	f.tab = tabRepo
+	f.cursor = slices.Index(f.fields(), fPath)
+
+	f.paste("/tmp/\x1b[31mweb\x00")
+	if strings.ContainsAny(f.poll.Path, "\x1b\x00") {
+		t.Errorf("path = %q, want control characters stripped", f.poll.Path)
+	}
+}
+
+// The concurrency cap is digits-only, on paste as well as on typing.
+func TestFormPasteDigitsOnlyIntoCap(t *testing.T) {
+	f, _ := newFormOn(t, []config.Project{{Name: "web", Path: "/tmp/web"}}, "web")
+	f.poll.TeamID = "team-1"
+	f.capBuf = ""
+	f.tab = tabFilter // set the tab BEFORE fields(), which is tab-scoped
+	f.cursor = slices.Index(f.fields(), fCap)
+
+	f.paste("cap 12\n")
+	if f.capBuf != "12" {
+		t.Errorf("capBuf = %q, want 12", f.capBuf)
+	}
+}
+
+// A MULTI-line paste into an open list editor becomes multiple entries —
+// pasting several symlinks at once is the point of the sub-editor.
+func TestFormPasteMultilineIntoList(t *testing.T) {
+	f, _ := newFormOn(t, []config.Project{{Name: "web", Path: "/tmp/web"}}, "web")
+	f.tab = tabRepo
+	f.cursor = slices.Index(f.fields(), fSymlinks)
+	f.interact(fSymlinks) // opens the sub-editor (and promotes to an override)
+
+	f.paste(".env\nstorage/app\nnode_modules\n")
+	want := []string{".env", "storage/app", "node_modules"}
+	if !slices.Equal(f.symlinks, want) {
+		t.Errorf("symlinks = %v, want %v", f.symlinks, want)
+	}
+	if f.lineCur != len(want)-1 {
+		t.Errorf("lineCur = %d, want the cursor on the last pasted entry (%d)", f.lineCur, len(want)-1)
+	}
+}
+
+// The name is the config key on an existing project; paste must respect that
+// read-only rule exactly as typing does.
+func TestFormPasteRespectsReadOnlyName(t *testing.T) {
+	f, _ := newFormOn(t, []config.Project{{Name: "web", Path: "/tmp/web"}}, "web")
+	f.tab = tabRepo
+	f.cursor = slices.Index(f.fields(), fName)
+
+	f.paste("renamed")
+	if f.poll.Name != "web" {
+		t.Errorf("Name = %q, want web (read-only)", f.poll.Name)
+	}
+}
+
+// A paste while a picker overlay is open must not leak into the field behind it.
+func TestFormPasteIgnoredWhilePickerOpen(t *testing.T) {
+	f, _ := newFormOn(t, []config.Project{{Name: "web", Path: "/tmp/web"}}, "web")
+	f.tab = tabRepo
+	f.cursor = slices.Index(f.fields(), fPath)
+	f.picker = &picker{title: "Team", field: fTeam}
+
+	f.paste("/etc/passwd")
+	if f.poll.Path != "/tmp/web" {
+		t.Errorf("path = %q, want unchanged while a picker is open", f.poll.Path)
 	}
 }
