@@ -683,7 +683,7 @@ func (m *rootModel) listKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "d":
 		m.doctorLoading, m.doctorScroll = true, 0
 		return m, runDoctorCmd(m.cfg)
-	case " ":
+	case "space":
 		return m, m.toggleSelected()
 	case "r":
 		if p := m.selectedRailProject(); p != nil && p.TeamID != "" {

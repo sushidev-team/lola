@@ -804,7 +804,7 @@ func (f *formModel) pickerKey(k tea.KeyPressMsg) tea.Cmd {
 		if p.cursor < len(p.opts)-1 {
 			p.cursor++
 		}
-	case " ":
+	case "space":
 		if p.multi && len(p.opts) > 0 {
 			id := p.opts[p.cursor].id
 			if p.sel[id] {

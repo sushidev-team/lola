@@ -243,3 +243,24 @@ func TestRoutePasteReachesTheFocusedOverlay(t *testing.T) {
 		}
 	})
 }
+
+// Space enables/disables the selected project on the rail. Like the picker's
+// multi-select, this matched " " — a key string bubbletea v2 never produces.
+func TestRailSpaceTogglesEnabled(t *testing.T) {
+	m := newTestRoot(t)
+	m.focus = focusPolls
+	m.list.cursor = slices.IndexFunc(m.railProjectPtrs(), func(p *config.Project) bool {
+		return p.Polls()
+	})
+	if m.list.cursor < 0 {
+		t.Fatal("fixture has no polling project")
+	}
+	before := m.selectedRailProject().Enabled
+
+	if _, cmd := m.Update(keyMsg("space")); cmd == nil {
+		t.Fatal("space on the rail must issue an enable/disable command")
+	}
+	if got := m.selectedRailProject().Enabled; got == before {
+		t.Errorf("Enabled = %v, want it toggled from %v", got, before)
+	}
+}

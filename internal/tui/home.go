@@ -222,7 +222,7 @@ func (m *rootModel) updateHome(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if p := h.selectedProject(m.cfg); p != nil {
 			h.confirmRemove, h.removeTarget = true, p.Name
 		}
-	case " ", "space":
+	case "space":
 		return m, m.homeTogglePoll()
 	case "/":
 		h.filtering, h.filter = true, ""

@@ -466,3 +466,45 @@ func TestFormPasteIgnoredWhilePickerOpen(t *testing.T) {
 		t.Errorf("path = %q, want unchanged while a picker is open", f.poll.Path)
 	}
 }
+
+// Space toggles an option in a MULTI-select picker (workflow states, trigger
+// labels). bubbletea v2 renders the space key as "space", never " ", so the
+// original `case " "` never fired and these lists could not be built at all.
+func TestPickerSpaceTogglesMultiSelect(t *testing.T) {
+	f, _ := newFormOn(t, []config.Project{{Name: "web", Path: "/tmp/web"}}, "web")
+	f.poll.TeamID = "team-1"
+	f.meta = &teamMeta{States: []linear.State{
+		{ID: "st-todo", Name: "Todo", Type: "unstarted"},
+		{ID: "st-prog", Name: "In Progress", Type: "started"},
+	}}
+	f.tab = tabFilter
+	f.openPicker(fStates)
+	if f.picker == nil || !f.picker.multi {
+		t.Fatal("states picker must open as multi-select")
+	}
+
+	f.pickerKey(keyMsg("space")) // select Todo (cursor 0)
+	f.pickerKey(keyMsg("down"))
+	f.pickerKey(keyMsg("space")) // select In Progress
+	f.pickerKey(keyMsg("enter"))
+
+	if !slices.Equal(f.poll.StateIDs, []string{"st-todo", "st-prog"}) {
+		t.Errorf("StateIDs = %v, want both states selected", f.poll.StateIDs)
+	}
+}
+
+// Space is also a DEselect — toggling an already-selected option removes it.
+func TestPickerSpaceDeselects(t *testing.T) {
+	f, _ := newFormOn(t, []config.Project{{Name: "web", Path: "/tmp/web"}}, "web")
+	f.poll.TeamID = "team-1"
+	f.poll.StateIDs = []string{"st-todo"}
+	f.meta = &teamMeta{States: []linear.State{{ID: "st-todo", Name: "Todo", Type: "unstarted"}}}
+	f.tab = tabFilter
+	f.openPicker(fStates)
+
+	f.pickerKey(keyMsg("space")) // cursor is on the pre-selected Todo
+	f.pickerKey(keyMsg("enter"))
+	if len(f.poll.StateIDs) != 0 {
+		t.Errorf("StateIDs = %v, want the selection cleared", f.poll.StateIDs)
+	}
+}
