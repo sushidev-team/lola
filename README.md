@@ -149,6 +149,49 @@ Linear **UUIDs**, not names — the TUI form resolves names to IDs for you.
 | `agent` | `"claude"` \| `"codex"` \| `"opencode"` | Coding agent spawned per session. Default `claude`. Global default; override per repo with `[[project]].agent`. Empty/omitted resolves to `claude`. See [The coding agent](#the-coding-agent). |
 | `manage_daemon` | bool | Whether the TUI owns the daemon lifecycle: silently start the daemon on open when the socket is dead, `^r` restart, `^x` stop. Default `true`. Set `false` when a launchd `KeepAlive` job owns the daemon, so the TUI never fights the supervisor. See [Running the daemon](#running-the-daemon-launchd-vs-tui). |
 
+`[defaults]` additionally carries a **fallback for each inheritable
+`[[project]]` key**, so shared setup is written once instead of repeated per
+repository — see [Project defaults](#project-defaults-inheritance).
+
+### Project defaults (inheritance)
+
+These `[defaults]` keys are the fallback for the same-named `[[project]]` key.
+A project that **omits** the key inherits this value; a project that sets it
+overrides it.
+
+| Key | Type | Inherited by |
+| --- | --- | --- |
+| `branch_prefix` | string | `[[project]].branch_prefix` — prefix for a session's branch. Ultimate default `"lola/"`. |
+| `symlinks` | string array | `[[project]].symlinks` |
+| `post_create` | string array | `[[project]].post_create` |
+| `env` | table of strings | `[[project]].env` (as `[defaults.env]`) |
+| `match_labels` | string array | `[[project]].match_labels` |
+| `match_mode` | `"any"` \| `"all"` | `[[project]].match_mode`. Ultimate default `"any"`. |
+| `dedup_mode` | `"label"` \| `"seen"` \| `"state"` | `[[project]].dedup_mode`. Ultimate default `"seen"`. |
+| `on_sent_set_label` | string (UUID) | `[[project]].on_sent_set_label` |
+| `blocked_label_id` | string (UUID) | `[[project]].blocked_label_id` |
+| `priority_sort` | string array | `[[project]].priority_sort`. Ultimate default `["priority", "createdAt"]`. |
+
+Inheritance is decided by **key presence, not by value**:
+
+```toml
+# key absent from the project  -> inherit [defaults]
+match_labels = ["x"]           # -> override with ["x"]
+match_labels = []              # -> override with NOTHING (match no labels)
+```
+
+An inherited key is never written into the project's own table, so changing a
+default later still reaches every project that inherits it. `agent`,
+`concurrency_cap` and `branch_prefix` are the exceptions to the presence rule:
+for them an empty/zero value has always meant "fall back", and still does.
+
+> **Team-scoped label UUIDs.** `match_labels`, `on_sent_set_label` and
+> `blocked_label_id` hold Linear label UUIDs, and a label UUID exists only
+> within one team. Setting them in `[defaults]` is coherent only while every
+> polling project that inherits them targets the same `team_id` — lola
+> **rejects** the config otherwise rather than silently filtering on a label
+> that cannot match. Override them per project when your projects span teams.
+
 ### `[linear]`
 
 | Key | Type | Description |
@@ -177,9 +220,10 @@ runtime layer, not on config load.
 | `path` | string | Absolute path to the main checkout (required). A leading `~` is expanded on load. Session worktrees live under `~/.lola/worktrees/`, never inside the checkout. |
 | `repo` | string | GitHub repository as `owner/name`. Used for PR/CI observation of the sessions spawned for this project: the reconciler and observer pass it to `gh pr list --repo` so the open-PR check works regardless of the daemon's working directory. When empty, that check is unavailable and orphaned issues are **never** auto-reverted (fail-closed). |
 | `default_branch` | string | Branch new session worktrees start from, and the base the agent is told to open its PR against. Default `main`. |
-| `post_create` | string array | Commands run inside a fresh worktree before the agent starts (e.g. `composer install`). Any failure blocks the session with a clear status — never a half-started agent. |
-| `symlinks` | string array | Files symlinked from the main checkout into each worktree, e.g. `[".env"]`. Beware: a shared `.env` usually means every worktree talks to the same database. |
-| `env` | table of strings | Extra environment variables exported into each session (`[project.env]`); the agent and the `post_create` commands both see them. |
+| `branch_prefix` | string | Prefix prepended to a session's derived branch name (e.g. `"feat/"` yields `feat/eng-42`). Empty inherits `[defaults].branch_prefix`, then `"lola/"`. |
+| `post_create` | string array | Commands run inside a fresh worktree before the agent starts (e.g. `composer install`). Any failure blocks the session with a clear status — never a half-started agent. Omit to inherit `[defaults].post_create`. |
+| `symlinks` | string array | Files symlinked from the main checkout into each worktree, e.g. `[".env"]`. Beware: a shared `.env` usually means every worktree talks to the same database. Omit to inherit `[defaults].symlinks`. |
+| `env` | table of strings | Extra environment variables exported into each session (`[project.env]`); the agent and the `post_create` commands both see them. Omit to inherit `[defaults].env`. |
 | `agent` | `"claude"` \| `"codex"` \| `"opencode"` | Coding agent for sessions spawned into this repo, overriding `[defaults].agent`. Empty/omitted inherits the global default (ultimately `claude`). See [The coding agent](#the-coding-agent). |
 
 ### `[[project]]` polling fields (optional; a project polls when `team_id` is set)

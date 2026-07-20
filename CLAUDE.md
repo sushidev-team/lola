@@ -69,7 +69,9 @@ each of which owns exactly one external tool or concern behind an **exec seam**
 - `internal/config` — owns `config.toml`: schema, defaults, atomic
   (temp+rename, 0600) persistence, and **static** validation only. `Home()`
   honors `$LOLA_HOME` (every runtime path derives from it; tests set it).
-  Path-exists / is-a-git-repo checks live in the runtime layer, NOT here.
+  Path-exists / is-a-git-repo checks live in the runtime layer, NOT here. Also
+  owns the `[defaults]` → `[[project]]` **inheritance layer** — see the
+  invariant below before touching `Project` or `Defaults`.
 - `internal/linear` — Linear GraphQL client (`API` interface + `fake.go` for
   tests). Paginated queries, exponential backoff on 429/5xx, filter built from
   the poll's mode fields. All IDs are Linear **UUIDs** passed as variables.
@@ -134,6 +136,35 @@ each of which owns exactly one external tool or concern behind an **exec seam**
 
 ## Non-obvious invariants (read before changing daemon code)
 
+- **A `Project` field holds the RESOLVED value; `Inherits` says where it came
+  from.** `[defaults]` carries a fallback for each inheritable `[[project]]` key
+  (`match_labels`, `match_mode`, `on_sent_set_label`, `blocked_label_id`,
+  `dedup_mode`, `priority_sort`, `symlinks`, `post_create`, `env`). Rather than
+  making those fields pointers — which would have broken ~50 downstream reads in
+  daemon/runtime/linear — `Load` RESOLVES them into the plain field and records
+  the source in a `config.ProjectInherits` bitmap. So daemon code just reads
+  `p.MatchLabels` and gets the effective value; only the config UIs consult
+  `p.Inherits`. Consequences to preserve:
+  - `Save` writes an inheritable key **only** when the project overrides it, so
+    an inherited value is never frozen into the file. Mutating `p.MatchLabels`
+    without clearing `p.Inherits.MatchLabels` **silently discards the write** —
+    that is the trap. Both form layers go through an explicit override step.
+  - The bitmap's **zero value means "fully explicit"**, matching a hand-built
+    `config.Project` literal. Never flip that polarity: every construction site
+    (tests, both UIs) would start silently inheriting.
+  - The on-disk mirror (`fileProject`) uses **pointers** so an absent key
+    ("inherit") stays distinct from `key = []` ("override to nothing"). A nil
+    slice through that pointer is omitted, an empty non-nil slice is written.
+  - `ResolveInheritance` is idempotent and canonicalizing; `Load`, `Validate`
+    and `Save` all call it, which is what makes save/load an identity.
+  - `agent` / `concurrency_cap` / `branch_prefix` are deliberately NOT in the
+    bitmap: zero has always meant "fall back" for them and
+    `AgentForProject` / `EffectiveCap` / `BranchPrefixForProject` already
+    resolve project → `[defaults]` → hard default at read time.
+- **Team-scoped label UUIDs bound what `[defaults]` may hold.** A Linear label
+  UUID exists only within one team, so `Validate` rejects a `[defaults]` label
+  key inherited by polling projects across different `team_id`s — better a
+  config error than a filter that silently matches nothing.
 - **Health-gate every dispatch.** If `tmux`/`git`/`claude` aren't all resolvable
   or the poll's `[[project]]` doesn't resolve: skip the tick, record `lastError`
   in status, and mutate **nothing** (no seen, no labels, no in-flight).
@@ -194,7 +225,11 @@ for terminal streaming. Five bound Wails services: `DaemonService` (every
 protocol command + daemon start/stop/restart), `TermService` (capture-pane
 snapshots for the grid + a live `tmux attach` PTY for the focused terminal),
 `ConfigService` (read/write config.toml + first-run setup), `DoctorService`,
-`LinearService` (team metadata for the cascading poll pickers). Requires the
+`LinearService` (team metadata for the cascading pickers). Note there is ONE
+project form, not a project form plus a poll form: a project IS the poll unit,
+so repository setup / filter / labels / write-back are TABS of a single overlay
+(same in the TUI — `internal/tui/form.go`, which absorbed the old
+`projectform.go`). Requires the
 `wails3` CLI (`go install github.com/wailsapp/wails/v3/cmd/wails3@latest`), a
 distinct binary from the v2 `wails`. See `desktop/README.md`.
 
