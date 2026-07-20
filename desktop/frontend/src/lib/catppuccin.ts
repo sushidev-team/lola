@@ -429,6 +429,20 @@ export function readable(color: string, ...on: string[]): string {
 }
 
 /**
+ * The legibility floor for DE-EMPHASIZED text — the `faint` token: secondary
+ * labels, hints, rules, breadcrumb tails. Deliberately below AA. `faint` exists
+ * to sit UNDER `ink` in the hierarchy, so holding it to 4.5:1 defeats it —
+ * readable(faint) brightens mocha's #7f849c to #999db0, a secondary label loud
+ * enough to compete with the primary text it is meant to recede behind. 3:1
+ * (WCAG's large-text / non-text threshold) keeps it a clear step down from
+ * `ink` (~2× the ratio, in every flavor) while guaranteeing it is never the
+ * illegible smudge it was on frappé's and latte's selected rows (2.80 / 2.56).
+ * Essential information never rides on `faint`; the status colors do, and those
+ * take the full AA of readable().
+ */
+export const MUTED = 3;
+
+/**
  * `color` as a BORDER or focus ring on every surface in `on`: walked until it
  * clears AA_UI. Separate from readable() only in the floor — a border that had
  * to reach 4.5:1 would be a much darker accent than the design wants, and
@@ -436,6 +450,12 @@ export function readable(color: string, ...on: string[]): string {
  */
 export function visible(color: string, ...on: string[]): string {
   return walk(color, on, AA_UI);
+}
+
+/** `color` as DE-EMPHASIZED text on every surface in `on`: walked until it
+ *  clears MUTED. The `faint` token's floor — see MUTED for why it is not AA. */
+export function muted(color: string, ...on: string[]): string {
+  return walk(color, on, MUTED);
 }
 
 /**
@@ -486,7 +506,8 @@ export const ACCENT_FILL = 0.2;
  *   sel     → surface0   selected-row band, one step above panel
  *   edge    → surface1   panel border / rule
  *   ink     → text       default foreground
- *   faint   → overlay1   muted secondary text (overlay2 on latte, see faintKey)
+ *   faint   → overlay1   muted secondary text (overlay2 on latte, see faintKey),
+ *                        walked to the MUTED (3:1) floor rather than AA — see muted()
  *
  *   accent  → sky        the old accent #57c7d6 is hue ~187°; sky ~190°,
  *                        teal ~170°, sapphire ~199° — sky is the closest match
@@ -578,7 +599,10 @@ export function toTokens(f: Flavor): Record<string, string> {
   // else, and the ink walks on from wherever the border ended up.
   const accent = visible(f.sky, ...bare);
   const bad = readable(f.red, ...bare);
-  const faint = f[f.faintKey];
+  // faint is de-emphasized text, so it takes MUTED (3:1), not readable's AA:
+  // mocha and macchiato clear it raw and come back verbatim, frappé and latte
+  // get the smallest nudge that lifts their selected-row 2.80/2.56 to 3:1.
+  const faint = muted(f[f.faintKey], ...bare);
   const fill = mix(accent, f.mantle, ACCENT_FILL);
   const fillHover = mix(accent, backdrop(f), ACCENT_FILL);
   const work = mix(f.blue, f.mantle, PILL_TINT);

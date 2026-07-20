@@ -82,12 +82,13 @@ describe("statusText", () => {
       "idle", "draft", "pr_open", "review_pending", "ci_pending", "unknown",
     ];
     const REACTING = ["escalated", "ready to merge", "ci retry 1", "addressing review", "rebasing", ""];
-    // text-faint is deliberately outside this floor and is NOT a carve-out
-    // hiding one of the colors above: --color-faint is the app-wide muted-text
-    // token, not a status color, and it misses AA on a panel in every flavor
-    // (4.495 / 4.201 / 3.705 / 3.457) — a pre-existing shortfall shared with
-    // every secondary label in the app, not something statusText introduced.
-    // Raising it is a hierarchy-wide decision; make it there, not here.
+    // text-faint is outside THIS (AA) floor by design, and NOT a carve-out
+    // hiding one of the colors above: --color-faint is the app-wide DE-EMPHASIZED
+    // text token, not a status color. It carries no essential information — the
+    // status colors above do — so it is deliberately held to the lower MUTED
+    // (3:1) floor instead, which keeps it a step below `ink` in the hierarchy.
+    // That floor is enforced in catppuccin.test.ts; holding faint to AA here
+    // would only re-raise the hierarchy question this token exists to settle.
     const EXCLUDED = "text-faint";
     for (const id of THEME_IDS) {
       const f = FLAVORS[id];

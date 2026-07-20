@@ -10,6 +10,7 @@ declare const process: { cwd(): string };
 import {
   AA,
   AA_UI,
+  MUTED,
   DEFAULT_THEME_ID,
   FLAVORS,
   THEME_IDS,
@@ -18,6 +19,7 @@ import {
   flavorFor,
   luminance,
   mix,
+  muted,
   onFill,
   panelBg,
   readable,
@@ -249,6 +251,52 @@ describe("visible", () => {
       for (const bg of bgs)
         expect(contrast(got, bg), `${f.id} on ${bg}`).toBeGreaterThanOrEqual(AA_UI);
     }
+  });
+});
+
+describe("muted / faint", () => {
+  // The bug this guards: --color-faint was the raw overlay1/overlay2 with no
+  // contrast check, so on frappé and latte it fell to 2.80:1 / 2.56:1 on a
+  // selected row — an unreadable smudge exactly where a row is highlighted.
+  it("holds --color-faint to the 3:1 MUTED floor on every surface, every flavor", () => {
+    for (const f of flavors) {
+      const t = toTokens(f);
+      const surfaces = [t["--color-canvas"], panelBg(f), t["--color-sel"]];
+      for (const bg of surfaces)
+        expect(contrast(t["--color-faint"], bg), `${f.id} faint on ${bg}`).toBeGreaterThanOrEqual(MUTED);
+    }
+  });
+
+  // The point of a 3:1 floor rather than AA: faint must stay DE-EMPHASIZED, a
+  // clear step under ink, or it stops being faint. This is the property the
+  // hierarchy depends on — enforced, not just asserted in a comment.
+  it("keeps faint well below ink so the hierarchy survives", () => {
+    for (const f of flavors) {
+      const t = toTokens(f);
+      const panel = panelBg(f);
+      expect(contrast(t["--color-faint"], panel), f.id).toBeLessThan(
+        contrast(t["--color-ink"], panel) * 0.75,
+      );
+    }
+  });
+
+  // A muted fix, not a redesign: the default flavor (and macchiato) already
+  // clear 3:1 raw, so faint must come back byte-identical to the raw palette
+  // name there. Only frappé and latte are allowed to move.
+  it("leaves the flavors that already clear 3:1 untouched", () => {
+    for (const id of ["catppuccin-mocha", "catppuccin-macchiato"] as const) {
+      const f = FLAVORS[id];
+      expect(toTokens(f)["--color-faint"], id).toBe(f[f.faintKey]);
+    }
+  });
+
+  it("muted() spends no more than readable() — a floor below AA", () => {
+    const l = FLAVORS["catppuccin-latte"];
+    const bgs = [l.mantle, panelBg(l), l.surface0] as const;
+    const m = muted(l.overlay2, ...bgs);
+    const r = readable(l.overlay2, ...bgs);
+    // On the surface where readable has to spend, muted's contrast is no higher.
+    expect(contrast(m, panelBg(l))).toBeLessThanOrEqual(contrast(r, panelBg(l)));
   });
 });
 
@@ -555,12 +603,17 @@ describe("toTokens", () => {
     expect(t["--color-warn"]).toBe("#f9e2af"); // yellow
   });
 
-  it("uses overlay2 for latte's faint so labels stay legible on a light base", () => {
+  it("backs faint with overlay2 on latte and overlay1 on mocha, then walks to MUTED", () => {
+    // faintKey selects the raw name (overlay2 keeps latte's label legible on a
+    // light base); --color-faint is that name run through muted(). Mocha already
+    // clears 3:1, so it stays the raw overlay1; latte's overlay2 gets nudged.
     const l = FLAVORS["catppuccin-latte"];
-    expect(toTokens(l)["--color-faint"]).toBe(l.overlay2);
-    expect(toTokens(FLAVORS["catppuccin-mocha"])["--color-faint"]).toBe(
-      FLAVORS["catppuccin-mocha"].overlay1,
-    );
+    expect(l.faintKey).toBe("overlay2");
+    expect(toTokens(l)["--color-faint"]).toBe(muted(l.overlay2, l.mantle, panelBg(l), l.surface0));
+
+    const m = FLAVORS["catppuccin-mocha"];
+    expect(m.faintKey).toBe("overlay1");
+    expect(toTokens(m)["--color-faint"]).toBe(m.overlay1); // unchanged: already ≥3:1
   });
 
   it("keeps the terminal background identical to --color-panel", () => {
