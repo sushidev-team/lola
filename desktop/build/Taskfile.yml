@@ -202,9 +202,16 @@ tasks:
       - "darwin/icons.icns"
       - "windows/icon.ico"
     cmds:
-      - wails3 generate icons -input appicon.png -macfilename darwin/icons.icns -windowsfilename windows/icon.ico -iconcomposerinput appicon.icon -macassetdir darwin
+      # No -iconcomposerinput/-macassetdir on purpose: we do NOT ship an
+      # Assets.car (Liquid Glass) icon. On macOS 26 the Dock renders the
+      # Assets.car when CFBundleIconName is set, and that path lands the icon
+      # in Apple's inset icon-grid (see wails#4163) so it floats smaller than
+      # neighboring icons. Shipping only a full-bleed icns makes Tahoe mask it
+      # to the system radius and fill the Dock slot. CFBundleIconName is also
+      # removed from the Info.plists so the icns is what's used.
+      - wails3 generate icons -input appicon.png -macfilename darwin/icons.icns -windowsfilename windows/icon.ico
       # Overwrite the Wails "Big Sur tray" icns with a full-bleed rounded
-      # squircle so macOS 26 Liquid Glass doesn't nest a square in a square.
+      # squircle (single shape, edge-to-edge).
       - cmd: sh darwin/make-icns.sh
         platforms: [darwin]
 
