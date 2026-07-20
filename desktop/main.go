@@ -58,7 +58,9 @@ func main() {
 		MinHeight:        560,
 		BackgroundColour: canvas,
 		Mac: application.MacWindow{
-			InvisibleTitleBarHeight: 44, // frameless drag strip under the traffic lights
+			// Match the vitals bar height (h-9 = 36px) so macOS centers the
+			// traffic lights vertically on the vitals row.
+			InvisibleTitleBarHeight: 36,
 			// Opaque, not vibrancy: the TUI theme is deliberately one cohesive
 			// opaque canvas, so we match it rather than letting the desktop bleed
 			// through.

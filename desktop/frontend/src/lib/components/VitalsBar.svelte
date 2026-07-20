@@ -21,7 +21,7 @@
 </script>
 
 <header
-  class="drag flex h-11 shrink-0 items-center gap-2.5 border-b border-edge/70 bg-canvas pr-5 pl-[100px] text-xs leading-none select-none"
+  class="drag flex h-9 shrink-0 items-center gap-2.5 border-b border-edge/70 bg-canvas pr-5 pl-[100px] text-xs leading-none select-none"
 >
   <span class="font-semibold tracking-wide text-ink">lola</span>
 
