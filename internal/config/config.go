@@ -213,11 +213,59 @@ type Config struct {
 	CodeRabbit CodeRabbitConfig `toml:"coderabbit"`
 	Tmux       TmuxConfig       `toml:"tmux"`
 
+	// notices are NON-FATAL repairs Load made to the file: things that were
+	// already inert but would otherwise be rejected, so a config nobody could
+	// have meant is fixed rather than turned into a hard block. Surfaced by
+	// `lola doctor` and the settings editor; never serialized.
+	notices []string
+
 	// migrateErrs carries structural errors detected while migrating legacy
 	// [[poll]] / [[project.poll]] tables onto their project (an unresolvable
 	// project reference, or more than one poll for a project) from config() to
 	// Validate. Unexported: never serialized, nil in the common case.
 	migrateErrs []error
+}
+
+// Notices returns the non-fatal repairs Load made to the on-disk config, in
+// file order. Empty for a clean config.
+func (c *Config) Notices() []string { return slices.Clone(c.notices) }
+
+// sanitizePrioritySort drops sort keys daemon.SortIssues does not understand,
+// recording a notice for each. Those keys were ALREADY inert — the sorter's
+// switch ignores anything it does not match — so dropping them cannot break a
+// working setup, while rejecting them outright would hard-block a daemon on a
+// value that never did anything. Validate still rejects an unknown key set in
+// memory (a UI writing one now), which is where the check earns its keep.
+//
+// Note the effective order does change: a chain of only-unknown keys used to
+// fall through to the issue identifier, and an empty chain sorts by the
+// DefaultPrioritySort instead. The notice says so.
+func (c *Config) sanitizePrioritySort() {
+	clean := func(in []string, where string) []string {
+		var out, dropped []string
+		for _, k := range in {
+			if slices.Contains(PrioritySortKeys, k) {
+				out = append(out, k)
+				continue
+			}
+			dropped = append(dropped, k)
+		}
+		if len(dropped) > 0 {
+			eff := out
+			if len(eff) == 0 {
+				eff = DefaultPrioritySort
+			}
+			c.notices = append(c.notices, fmt.Sprintf(
+				"%s.priority_sort: dropped unknown key(s) %v — only %v are understood (they are lola sort keys, not Linear priorities); now ordering by %v",
+				where, dropped, PrioritySortKeys, eff))
+		}
+		return out
+	}
+	c.Defaults.PrioritySort = clean(c.Defaults.PrioritySort, "defaults")
+	for i := range c.Projects {
+		p := &c.Projects[i]
+		p.PrioritySort = clean(p.PrioritySort, fmt.Sprintf("project %q", p.Name))
+	}
 }
 
 // PollingProjects returns the projects configured to poll Linear (TeamID set),
@@ -730,6 +778,9 @@ func (c *Config) applyDefaults() {
 			c.Projects[i].DefaultBranch = DefaultBranchName
 		}
 	}
+	// Repair before resolving, so an inherited chain never carries a key the
+	// sorter would ignore.
+	c.sanitizePrioritySort()
 	c.ResolveInheritance()
 }
 

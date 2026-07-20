@@ -335,3 +335,94 @@ assignee_mode = "anyone"
 		t.Errorf("resolved fallbacks must validate, got %v", err)
 	}
 }
+
+// A priority_sort key the sorter never understood must NOT hard-block the
+// daemon. Those keys were already inert — SortIssues ignores anything its
+// switch does not match — so Load drops them and records a notice, rather than
+// Validate rejecting a config that was working (however unintentionally).
+//
+// This is the "urgent"/"high" case: read as Linear priority levels, which
+// priority_sort has never been.
+func TestPrioritySortJunkIsRepairedNotRejected(t *testing.T) {
+	c, path := writeCfg(t, `
+[defaults]
+global_cap = 4
+concurrency_cap = 2
+priority_sort = ["urgent", "high"]
+
+[[project]]
+name = "okane"
+path = "/tmp/okane"
+team_id = "team-1"
+cycle_mode = "none"
+assignee_mode = "anyone"
+priority_sort = ["urgent", "priority"]
+`)
+	if err := c.Validate(); err != nil {
+		t.Fatalf("legacy junk must not block the daemon, got %v", err)
+	}
+
+	// Known keys survive; unknown ones are gone.
+	if got := c.ProjectByName("okane").PrioritySort; !reflect.DeepEqual(got, []string{"priority"}) {
+		t.Errorf("project priority_sort = %v, want the known key kept", got)
+	}
+	if got := c.Defaults.PrioritySort; len(got) != 0 {
+		t.Errorf("defaults priority_sort = %v, want emptied", got)
+	}
+
+	// The repair is REPORTED, not silent: the effective order really did change.
+	notices := c.Notices()
+	if len(notices) != 2 {
+		t.Fatalf("want a notice per repaired scope, got %v", notices)
+	}
+	joined := strings.Join(notices, "\n")
+	for _, want := range []string{"urgent", "high", "defaults", "okane", "not Linear priorities"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("notice must mention %q:\n%s", want, joined)
+		}
+	}
+
+	// And it round-trips clean: the next load has nothing left to repair.
+	if err := c.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	again, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := again.Notices(); len(n) != 0 {
+		t.Errorf("a saved config must be clean, got %v", n)
+	}
+}
+
+// A value written in memory NOW is still rejected — that is where the check
+// earns its keep, since Load has already repaired anything from disk.
+func TestPrioritySortJunkFromMemoryStillRejected(t *testing.T) {
+	c, _ := writeCfg(t, `
+[defaults]
+global_cap = 4
+concurrency_cap = 2
+
+[[project]]
+name = "web"
+path = "/tmp/web"
+`)
+	c.Defaults.PrioritySort = []string{"urgent"}
+	err := c.Validate()
+	if err == nil || !strings.Contains(err.Error(), `unknown key "urgent"`) {
+		t.Fatalf("want a rejection for a freshly written bad key, got %v", err)
+	}
+}
+
+// A clean config reports nothing.
+func TestNoNoticesOnCleanConfig(t *testing.T) {
+	c, _ := writeCfg(t, `
+[defaults]
+global_cap = 4
+concurrency_cap = 2
+priority_sort = ["priority", "createdAt"]
+`)
+	if n := c.Notices(); len(n) != 0 {
+		t.Errorf("clean config must report no repairs, got %v", n)
+	}
+}

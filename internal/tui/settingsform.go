@@ -1210,6 +1210,17 @@ func (f *settingsForm) footerLines() []string {
 	if f.err != "" {
 		out = append(out, "", badText.Render("✗ "+f.err))
 	}
+	// Repairs Load made to config.toml (see config.Notices): shown while the
+	// affected field is focused, so the value on screen not matching the file is
+	// explained rather than mysterious. A warning, never blocking — the dropped
+	// keys were already inert.
+	if f.cur().sortPick {
+		for _, n := range f.cfg.Notices() {
+			if strings.Contains(n, "priority_sort") {
+				out = append(out, "", warnText.Render("! "+n))
+			}
+		}
+	}
 	// Why the label picker is unavailable, shown only while a label field is
 	// focused — it explains why enter is typing UUIDs rather than offering a list.
 	if f.cur().wsPick && f.wsErr != "" {

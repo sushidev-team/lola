@@ -421,3 +421,52 @@ func assertNoSecret(t *testing.T, r Report, secret string) {
 		t.Fatal("secret leaked into Summary()")
 	}
 }
+
+// A repaired config is reported as a WARNING, not a critical failure: it works,
+// but it no longer says what the user wrote.
+func TestRepairsReportedAsWarning(t *testing.T) {
+	t.Setenv("LOLA_HOME", t.TempDir())
+	path, err := config.DefaultPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	body := "[defaults]\nglobal_cap = 4\nconcurrency_cap = 2\npriority_sort = [\"urgent\"]\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rep := Check(context.Background(), cfg)
+	var found *Result
+	for i := range rep.Results {
+		if rep.Results[i].Name == checkRepaired {
+			found = &rep.Results[i]
+		}
+	}
+	if found == nil {
+		t.Fatal("a repaired config must be reported")
+	}
+	if found.Critical {
+		t.Error("a repair is a warning, not critical — the config works")
+	}
+	if !strings.Contains(found.Detail, "urgent") {
+		t.Errorf("the detail must name what was dropped, got %q", found.Detail)
+	}
+}
+
+// A clean config adds no repair result at all.
+func TestNoRepairResultWhenClean(t *testing.T) {
+	t.Setenv("LOLA_HOME", t.TempDir())
+	cfg := &config.Config{Defaults: config.Defaults{GlobalCap: 4, ConcurrencyCap: 1}}
+	for _, res := range Check(context.Background(), cfg).Results {
+		if res.Name == checkRepaired {
+			t.Fatalf("clean config must add no repair result, got %+v", res)
+		}
+	}
+}
