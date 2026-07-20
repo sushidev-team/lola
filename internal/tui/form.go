@@ -35,7 +35,6 @@ const (
 	fMatchMode
 	fAssignee
 	fAssigneeUser
-	fNativeProject
 	fRepo
 	fCap
 	fDedup
@@ -92,8 +91,18 @@ func newFormModel(cfg *config.Config, existing *config.Project) (*formModel, tea
 		if existing.ConcurrencyCap > 0 {
 			f.capBuf = strconv.Itoa(existing.ConcurrencyCap)
 		}
+		// A project that has never polled carries empty enums, which Validate
+		// rejects. Seed the same defaults a fresh config gets so opening the
+		// form on a non-polling project yields a saveable state.
+		if !existing.Polls() {
+			seedPollDefaults(&f.poll)
+			if f.capBuf == "" {
+				f.capBuf = "1"
+			}
+		}
 	} else {
-		f.poll = config.Project{CycleMode: "none", MatchMode: "any", AssigneeMode: "anyone", DedupMode: "seen"}
+		f.poll = config.Project{}
+		seedPollDefaults(&f.poll)
 		f.capBuf = "1"
 	}
 	var cmd tea.Cmd
@@ -105,6 +114,24 @@ func newFormModel(cfg *config.Config, existing *config.Project) (*formModel, tea
 		cmd = fetchTeamsCmd(cfg)
 	}
 	return f, cmd
+}
+
+// seedPollDefaults fills the polling enums that Validate requires a value for,
+// leaving any already-set field alone. Applied to a project with no polling
+// config yet so the form opens in a saveable state.
+func seedPollDefaults(p *config.Project) {
+	if p.CycleMode == "" {
+		p.CycleMode = "none"
+	}
+	if p.MatchMode == "" {
+		p.MatchMode = "any"
+	}
+	if p.AssigneeMode == "" {
+		p.AssigneeMode = "anyone"
+	}
+	if p.DedupMode == "" {
+		p.DedupMode = "seen"
+	}
 }
 
 // fields returns the currently visible fields; conditional levels appear
@@ -120,7 +147,7 @@ func (f *formModel) fields() []fieldID {
 		if f.poll.AssigneeMode == "user" {
 			fs = append(fs, fAssigneeUser)
 		}
-		fs = append(fs, fNativeProject, fRepo, fCap, fDedup)
+		fs = append(fs, fRepo, fCap, fDedup)
 		if f.poll.DedupMode == "label" {
 			fs = append(fs, fSetLabel)
 		}
@@ -188,7 +215,12 @@ func (f *formModel) key(k tea.KeyPressMsg) (tea.Cmd, formEvent) {
 		return f.interact(cur)
 	}
 
-	// Text editing on name/repo/cap; on other fields plain 'r' refreshes.
+	// Text editing on name/repo/cap; on other fields plain 'r' refreshes. The
+	// name is the [[project]] key and is read-only once the project exists —
+	// save() targets origName, so letting it be typed over would silently no-op.
+	if cur == fName && !f.isNew {
+		return nil, formNone
+	}
 	switch cur {
 	case fName, fRepo, fCap:
 		switch {
@@ -373,20 +405,6 @@ func (f *formModel) openPicker(cur fieldID) tea.Cmd {
 			return nil
 		}
 		selected = []string{f.poll.AssigneeUserID}
-	case fNativeProject:
-		if len(f.cfg.Projects) == 0 {
-			f.loadErr = "no [[project]] entries in config.toml — define one before creating a poll"
-			return nil
-		}
-		title = "Project"
-		for _, pr := range f.cfg.Projects {
-			lbl := pr.Name
-			if pr.Repo != "" {
-				lbl += " (" + pr.Repo + ")"
-			}
-			opts = append(opts, pickOpt{pr.Name, lbl})
-		}
-		selected = []string{f.poll.Name}
 	case fDedup:
 		title = "Dedup mode"
 		opts = []pickOpt{{"label", "label (flip trigger label on spawn)"}, {"seen", "seen (local seen-file)"}}
@@ -514,8 +532,6 @@ func (f *formModel) applyPick(p *picker) tea.Cmd {
 		}
 	case fAssigneeUser:
 		f.poll.AssigneeUserID = id
-	case fNativeProject:
-		f.poll.Name = id
 	case fDedup:
 		f.poll.DedupMode = id
 	case fSetLabel:
@@ -599,7 +615,7 @@ func (f *formModel) save() (tea.Cmd, formEvent) {
 		target = p.Name
 	}
 	if target == "" {
-		f.errs = append(f.errs, "project is required — pick a [[project]] entry")
+		f.errs = append(f.errs, "name is required")
 	}
 
 	// Rebase on the on-disk config: the daemon (enable/disable) or another
@@ -656,9 +672,9 @@ func (f *formModel) view(height int) string {
 	if f.picker != nil {
 		return f.picker.view(height)
 	}
-	title := "New poll"
+	title := "Linear polling"
 	if !f.isNew {
-		title = "Edit poll: " + f.origName
+		title = "Linear polling: " + f.origName
 	}
 	var b strings.Builder
 	b.WriteString(titleStyle.Render(title) + "\n\n")
@@ -731,7 +747,7 @@ func (f *formModel) view(height int) string {
 func fieldHelp(fd fieldID) string {
 	switch fd {
 	case fName:
-		return "Unique name for this poll."
+		return "The [[project]] this polling config belongs to (its config key)."
 	case fTeam:
 		return "Linear team the poll queries issues from."
 	case fProject:
@@ -750,12 +766,10 @@ func fieldHelp(fd fieldID) string {
 		return "Whose issues to pick up: anyone, you (viewer), or a specific user."
 	case fAssigneeUser:
 		return "The specific Linear user whose issues to pick up."
-	case fNativeProject:
-		return "The [[project]] (repo) whose worktree the agent runs in."
 	case fRepo:
 		return "GitHub owner/name for PR checks; empty falls back to the project's repo."
 	case fCap:
-		return "Max concurrent agent sessions this poll may occupy."
+		return "Max concurrent agent sessions this project may occupy."
 	case fDedup:
 		return "label = flip a Linear label after spawn (visible, reconcile-driven); seen = local seen-file only."
 	case fSetLabel:
@@ -806,8 +820,6 @@ func (f *formModel) label(fd fieldID) string {
 		return "Assignee"
 	case fAssigneeUser:
 		return "Assigned user"
-	case fNativeProject:
-		return "Project"
 	case fRepo:
 		return "GitHub repo"
 	case fCap:
@@ -925,11 +937,6 @@ func (f *formModel) display(fd fieldID) string {
 			}
 		}
 		return shortID(f.poll.AssigneeUserID)
-	case fNativeProject:
-		if f.poll.Name == "" {
-			return sel
-		}
-		return f.poll.Name
 	case fRepo:
 		if f.poll.Repo == "" {
 			// The daemon owns the fallback: PR checks use the [[project]]

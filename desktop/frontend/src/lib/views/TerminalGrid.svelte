@@ -4,14 +4,13 @@
   import { nav } from "$lib/nav.svelte";
   import { TermService } from "@bindings/desktop";
   import SnapshotTile from "$lib/components/SnapshotTile.svelte";
-  import LiveTerminal from "$lib/components/LiveTerminal.svelte";
   import StatusPill from "$lib/components/StatusPill.svelte";
 
   let { rows }: { rows: SessionInfo[] } = $props();
 
-  // The tmux-backed sessions we can actually render terminals for.
+  // The tmux-backed sessions we can actually render terminals for. Clicking a
+  // tile sets nav.focusedTerm; the Cockpit then takes over with the big terminal.
   const tiles = $derived(rows.filter((s) => s.tmuxName));
-  const focused = $derived(store.sessionById(nav.focusedTerm));
 
   // Snapshot cache: session id → last capture-pane text.
   let snaps = $state<Record<string, string>>({});
@@ -41,23 +40,7 @@
   onDestroy(() => clearInterval(timer));
 </script>
 
-{#if focused}
-  <!-- Expanded: one big interactive terminal, back to the grid. -->
-  <div class="flex h-full min-h-0 flex-col">
-    <div class="flex items-center gap-2 border-b border-edge/70 px-3 py-1.5 text-xs">
-      <button class="text-faint hover:text-accent" onclick={() => (nav.focusedTerm = "")}>← grid</button>
-      <span class="text-edge">·</span>
-      <span class="font-medium text-accent">{focused.issue || focused.id.slice(0, 8)}</span>
-      <span class="text-faint">{focused.title}</span>
-      <span class="ml-auto"><StatusPill status={focused.status} /></span>
-    </div>
-    <div class="min-h-0 flex-1 p-2">
-      {#key focused.id}
-        <LiveTerminal name={focused.tmuxName} webgl interactive />
-      {/key}
-    </div>
-  </div>
-{:else if tiles.length === 0}
+{#if tiles.length === 0}
   <div class="flex h-full items-center justify-center text-sm text-faint">
     no live terminals — start a session to see it here
   </div>

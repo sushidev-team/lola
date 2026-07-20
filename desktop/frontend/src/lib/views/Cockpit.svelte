@@ -10,6 +10,9 @@
 
   const rows = $derived(nav.scoped ? store.sessionsForProject(nav.project) : store.sorted);
   const selected = $derived(store.sessionById(nav.selectedId));
+  // When a terminal is focused (the ⛶ focus button or a grid-tile click), it
+  // takes over the whole cockpit as one big interactive terminal.
+  const focusedSession = $derived(store.sessionById(nav.focusedTerm));
 
   // Keep a live selection: pick the first row when nothing is selected, and
   // re-pick if the selected session drops out of the list (killed/filtered).
@@ -27,6 +30,14 @@
   ];
 </script>
 
+{#if focusedSession}
+  <!-- Focused terminal: the whole cockpit is one big interactive terminal. -->
+  <div class="h-full min-h-0 p-2">
+    <Panel focused pad={false}>
+      <SessionEmbed session={focusedSession} focused />
+    </Panel>
+  </div>
+{:else}
 <div class="flex h-full min-h-0 gap-2 p-2">
   <!-- left rail -->
   <aside class="w-[300px] shrink-0 overflow-hidden">
@@ -77,3 +88,4 @@
     {/if}
   </div>
 </div>
+{/if}

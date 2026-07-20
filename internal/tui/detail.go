@@ -223,8 +223,14 @@ func (m *rootModel) runDetailAction(a detailAction) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "polls":
-		// Open a new-poll form (the form lets the user pick the project).
-		f, cmd := newFormModel(m.cfg, nil)
+		// Edit THIS project's polling config — a project is the poll unit, so
+		// there is nothing to pick and an existing config must preload.
+		pr := m.cfg.ProjectByName(d.project)
+		if pr == nil {
+			d.flash, d.flashOK = "project "+d.project+" not found", false
+			return m, nil
+		}
+		f, cmd := newFormModel(m.cfg, pr)
 		m.form = f
 		return m, cmd
 	}

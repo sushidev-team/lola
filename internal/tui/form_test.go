@@ -34,32 +34,35 @@ func newNativeTestForm(t *testing.T, projects []config.Project) (*formModel, str
 	return f, path
 }
 
-// The project picker writes Poll.Project (from cfg.Projects) and the form
-// persists the poll.
-func TestFormProjectPickerFlow(t *testing.T) {
-	f, path := newNativeTestForm(t, []config.Project{
+// newProjectPollForm is newNativeTestForm preloaded with one of the saved
+// projects — the only way the form is reached now that a project IS the poll
+// unit (rail 'n' / detail 'polls' both pass the project in).
+func newProjectPollForm(t *testing.T, projects []config.Project, name string) (*formModel, string) {
+	t.Helper()
+	f, path := newNativeTestForm(t, projects)
+	pr := f.cfg.ProjectByName(name)
+	if pr == nil {
+		t.Fatalf("project %q not in test config", name)
+	}
+	g, _ := newFormModel(f.cfg, pr)
+	return g, path
+}
+
+// A form opened on an existing project persists its polling config onto that
+// project — there is no project picker to disambiguate.
+func TestFormSavesPollingOntoItsProject(t *testing.T) {
+	f, path := newProjectPollForm(t, []config.Project{
 		{Name: "web", Path: "/tmp/web", Repo: "acme/web"},
-	})
+	}, "web")
 
-	// Linear-backed fields are set directly; this test drives only the
-	// project picker.
-	f.poll.Name, f.poll.TeamID = "P", "team-1"
+	// Linear-backed fields are set directly; the form only persists them.
+	f.poll.TeamID = "team-1"
 
-	if !slices.Contains(f.fields(), fNativeProject) {
-		t.Fatal("project field must be visible once a team is set")
+	if f.isNew {
+		t.Fatal("form on an existing project must not be isNew")
 	}
-	f.openPicker(fNativeProject)
-	if f.picker == nil || f.picker.field != fNativeProject {
-		t.Fatalf("project picker did not open: %+v", f.picker)
-	}
-	f.pickerKey(keyMsg("enter")) // only option: web
-	if f.poll.Name != "web" {
-		t.Fatalf("picked project = %q, want web", f.poll.Name)
-	}
-
-	// Repo hint reflects the daemon-owned [[project]] fallback.
-	if hint := f.display(fRepo); !strings.Contains(hint, "[[project]] repo") {
-		t.Errorf("repo hint = %q, want [[project]] fallback wording", hint)
+	if f.origName != "web" {
+		t.Fatalf("origName = %q, want web", f.origName)
 	}
 
 	if _, ev := f.save(); ev != formSaved {
@@ -173,27 +176,41 @@ func TestFormSaveRequiresProject(t *testing.T) {
 		{Name: "web", Path: "/tmp/web", Repo: "acme/web"},
 	})
 	f.poll.TeamID = "team-1"
-	// Project (the form's Name) deliberately left unset.
+	// Name deliberately left unset.
 
 	if _, ev := f.save(); ev != formNone {
-		t.Fatal("save must fail without a project")
+		t.Fatal("save must fail without a name")
 	}
-	if !slices.Contains(f.errs, "project is required — pick a [[project]] entry") {
-		t.Errorf("errs = %v, want project requirement", f.errs)
+	if !slices.Contains(f.errs, "name is required") {
+		t.Errorf("errs = %v, want name requirement", f.errs)
 	}
 }
 
-// The project picker refuses to open when no [[project]] is defined and points
-// the user at the fix.
-func TestFormProjectPickerRefusesWithoutProjects(t *testing.T) {
-	f, _ := newNativeTestForm(t, nil) // no projects defined
-	f.poll.Name, f.poll.TeamID = "R", "team-1"
+// An unset repo renders the daemon-owned [[project]] fallback hint rather than
+// reading as a hard requirement.
+func TestFormRepoHintShowsProjectFallback(t *testing.T) {
+	f, _ := newProjectPollForm(t, []config.Project{
+		{Name: "web", Path: "/tmp/web"}, // no repo
+	}, "web")
 
-	f.openPicker(fNativeProject)
-	if f.picker != nil {
-		t.Fatal("project picker must not open without [[project]] entries")
+	if hint := f.display(fRepo); !strings.Contains(hint, "[[project]] repo") {
+		t.Errorf("repo hint = %q, want [[project]] fallback wording", hint)
 	}
-	if !strings.Contains(f.loadErr, "no [[project]] entries") {
-		t.Errorf("loadErr = %q, want missing-projects hint", f.loadErr)
+}
+
+// The name is the [[project]] config key: save() targets origName, so typing
+// over it on an existing project must be inert rather than silently no-op.
+func TestFormNameReadOnlyOnExistingProject(t *testing.T) {
+	f, _ := newProjectPollForm(t, []config.Project{
+		{Name: "web", Path: "/tmp/web", Repo: "acme/web"},
+	}, "web")
+
+	f.cursor = 0 // fName
+	if f.fields()[f.cursor] != fName {
+		t.Fatalf("cursor 0 = %v, want fName", f.fields()[f.cursor])
+	}
+	f.key(keyMsg("x"))
+	if f.poll.Name != "web" {
+		t.Errorf("Name = %q after typing, want web (read-only)", f.poll.Name)
 	}
 }

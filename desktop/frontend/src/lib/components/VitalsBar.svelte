@@ -6,6 +6,7 @@
   // clears the inset traffic lights.
   let clock = $state("");
   let timer: ReturnType<typeof setInterval>;
+  let dpr = $state(typeof window !== "undefined" ? window.devicePixelRatio : 1);
   function tick() {
     const d = new Date();
     clock = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
@@ -13,6 +14,10 @@
   onMount(() => {
     tick();
     timer = setInterval(tick, 30_000);
+    // TEMP diagnostic: poll devicePixelRatio so we see it settle after the
+    // native scale-factor override applies.
+    const d = setInterval(() => (dpr = window.devicePixelRatio), 400);
+    setTimeout(() => clearInterval(d), 6000);
   });
   onDestroy(() => clearInterval(timer));
 
@@ -49,6 +54,7 @@
   {/if}
 
   <span class="ml-auto flex items-center gap-3 text-faint">
+    <span class="text-warn">dpr {dpr}</span>
     <span>sessions {store.sessions.length}</span>
     <span>projects {store.projects.length}</span>
     <span>polls {pollsEnabled}/{pollsTotal}</span>

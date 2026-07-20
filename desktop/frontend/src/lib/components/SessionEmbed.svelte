@@ -4,7 +4,9 @@
   import StatusPill from "./StatusPill.svelte";
   import LiveTerminal from "./LiveTerminal.svelte";
 
-  let { session }: { session: SessionInfo | undefined } = $props();
+  // `focused` = the expanded full-cockpit view (bigger font, "minimize" toggle);
+  // otherwise the compact detail panel (smaller font, padded terminal).
+  let { session, focused = false }: { session: SessionInfo | undefined; focused?: boolean } = $props();
 
   let answer = $state("");
   let confirmKill = $state(false);
@@ -40,15 +42,17 @@
       <StatusPill status={session.status} />
       {#if session.branch}<span class="font-mono text-[11px] text-faint">{session.branch}</span>{/if}
       <span class="ml-auto flex items-center gap-1.5">
-        <button class="rounded border border-edge px-2 py-[1px] hover:border-accent hover:text-accent" onclick={() => nav.toggleFocusTerm(session.id)}>⛶ focus</button>
+        <button class="rounded border border-edge px-2 py-[1px] hover:border-accent hover:text-accent" onclick={() => nav.toggleFocusTerm(session.id)}>
+          {focused ? "⤢ minimize" : "⛶ focus"}
+        </button>
       </span>
     </div>
 
     <!-- live agent terminal -->
-    <div class="min-h-0 flex-1">
+    <div class="min-h-0 flex-1 p-2">
       {#if session.tmuxName}
-        {#key session.id}
-          <LiveTerminal name={session.tmuxName} webgl interactive />
+        {#key session.id + (focused ? ":f" : "")}
+          <LiveTerminal name={session.tmuxName} webgl interactive fontSize={focused ? 13 : 12} />
         {/key}
       {:else}
         <div class="flex h-full items-center justify-center text-sm text-faint">no tmux session (dead)</div>

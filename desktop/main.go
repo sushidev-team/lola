@@ -14,7 +14,17 @@ import (
 
 	"github.com/sushidev-team/lola/internal/protocol"
 	"github.com/wailsapp/wails/v3/pkg/application"
+	"github.com/wailsapp/wails/v3/pkg/events"
 )
+
+// fixHiDPIOnReady re-applies the WKWebView device-scale override each time the
+// window becomes main (idempotent), so Retina text stays crisp. The platform
+// work is in fixHiDPI (darwin: hidpi_darwin.go; no-op elsewhere).
+func fixHiDPIOnReady(win *application.WebviewWindow) {
+	win.OnWindowEvent(events.Mac.WindowDidBecomeMain, func(*application.WindowEvent) {
+		fixHiDPI(win.NativeWindow())
+	})
+}
 
 //go:embed all:frontend/dist
 var assets embed.FS
@@ -50,7 +60,7 @@ func main() {
 	// Give the terminal service the emitter it streams PTY bytes over.
 	term.SetApp(app)
 
-	app.Window.NewWithOptions(application.WebviewWindowOptions{
+	win := app.Window.NewWithOptions(application.WebviewWindowOptions{
 		Title:            "lola",
 		Width:            1280,
 		Height:           832,
@@ -71,6 +81,11 @@ func main() {
 		},
 		URL: "/",
 	})
+
+	// Force the WKWebView to report the screen's real backing scale factor once
+	// the window is up, so Retina renders crisply (see hidpi_darwin.go). Runs on
+	// every focus but is idempotent.
+	fixHiDPIOnReady(win)
 
 	// Live push loop: the daemon has no push channel, so the desktop backend
 	// polls its cheap in-memory caches and emits typed events the frontend

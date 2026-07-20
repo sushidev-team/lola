@@ -14,7 +14,8 @@
     name,
     webgl = true,
     interactive = true,
-  }: { name: string; webgl?: boolean; interactive?: boolean } = $props();
+    fontSize = 13,
+  }: { name: string; webgl?: boolean; interactive?: boolean; fontSize?: number } = $props();
 
   let host: HTMLDivElement;
   let term: Terminal | undefined;
@@ -38,11 +39,15 @@
       // cell/glyph dimensions on whole device pixels so WebGL renders crisply
       // (a fractional size like 12.5 rounds unevenly and looks soft).
       fontFamily: '"Hack", "JetBrains Mono", ui-monospace, Menlo, monospace',
-      fontSize: 13,
+      fontSize,
       fontWeight: 400,
       fontWeightBold: 700,
-      lineHeight: 1.25,
+      // 1.0 keeps cell heights on whole pixels; letterSpacing 0 keeps columns
+      // pixel-aligned; allowTransparency:false so glyph edges blend onto the
+      // opaque bg instead of to transparent (which renders text abnormally thin).
+      lineHeight: 1.0,
       letterSpacing: 0,
+      allowTransparency: false,
       cursorBlink: interactive,
       disableStdin: !interactive,
       theme: {
