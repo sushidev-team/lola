@@ -18,6 +18,7 @@ export type {
     ProjectInfo,
     ProjectsData,
     PrsData,
+    RenameProjectData,
     ReviewData,
     ReviveData,
     SessionInfo,

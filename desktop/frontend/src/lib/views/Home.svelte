@@ -1,6 +1,7 @@
 <script lang="ts">
   import { store, type ProjectInfo } from "$lib/store.svelte";
   import { nav } from "$lib/nav.svelte";
+  import { displayName } from "$lib/slug";
 
   let filter = $state("");
   const rows = $derived(
@@ -59,7 +60,7 @@
           {@const poll = pollCell(p)}
           <tr class="group border-t border-edge/30 hover:bg-sel/50">
             <td class="cursor-pointer px-3 py-2 font-medium" onclick={() => nav.goDetail(p.name)}>
-              {p.name}
+              {displayName(p)}
               {#if !p.agentOk}<span class="ml-1 text-bad" title={p.agentErr}>✗</span>{/if}
             </td>
             <td class="px-3 py-2 font-mono text-[11px] text-faint">{compactPath(p.path)}</td>

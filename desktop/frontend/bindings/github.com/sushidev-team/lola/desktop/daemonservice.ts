@@ -133,6 +133,20 @@ export function Reload(): $CancellablePromise<void> {
 }
 
 /**
+ * RenameProject changes a project's ID (not its display label — that is a plain
+ * ConfigService.SaveProject field). The daemon owns this because the name keys
+ * worktree dirs, the seen file and every tmux session name; it refuses while any
+ * session still carries the old one.
+ * 
+ * It bypasses `call` deliberately: a refusal's payload carries the BLOCKING
+ * session ids, and `call` drops Data on a non-OK response. Returning them lets
+ * the form tell the human exactly what to finish rather than just "refused".
+ */
+export function RenameProject($from: string, to: string): $CancellablePromise<protocol$0.RenameProjectData> {
+    return $Call.ByID(3384477348, $from, to);
+}
+
+/**
  * RestartDaemon stops (if up), waits for the socket to clear, then respawns.
  */
 export function RestartDaemon(): $CancellablePromise<void> {

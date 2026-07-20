@@ -202,3 +202,122 @@ func TestGetProjectNewIsBlank(t *testing.T) {
 		t.Fatal("expected IsNew for empty name")
 	}
 }
+
+// A daemon rejecting a config this build just validated means version skew, not
+// a bad config — and the desktop used to DISCARD that entirely, so a live
+// daemon could sit on stale config while the UI reported a clean save.
+func TestReloadRejectionHint(t *testing.T) {
+	stale := `config invalid, keeping previous: project "Okane" polling: dedup_mode=label requires on_sent_set_label`
+	got := reloadRejectionHint(stale)
+	if !strings.Contains(got, "OLDER binary") {
+		t.Errorf("an inherited-key complaint must name the stale daemon:\n%s", got)
+	}
+
+	// A real config problem is reported as-is, not blamed on the daemon.
+	real := `config invalid, keeping previous: project "web": path is required`
+	if got := reloadRejectionHint(real); got != real {
+		t.Errorf("a real error must pass through, got:\n%s", got)
+	}
+
+	// A daemon that is simply down, or too old to know the command, is not a
+	// failure worth interrupting a successful save for.
+	for _, msg := range []string{"connection refused", `unknown cmd "reload"`} {
+		if got := reloadRejectionHint(msg); got != "" {
+			t.Errorf("a non-rejection must be silent, got %q", got)
+		}
+	}
+}
+
+// A project has two names: `label` is display-only, `name` is the id baked into
+// worktree paths and tmux session names. SaveProject owns the id's final shape.
+func TestSaveProjectSlugsIDAndKeepsLabel(t *testing.T) {
+	writeTestConfig(t, minimalConfig)
+	s := &ConfigService{}
+
+	dto, err := s.GetProject("")
+	if err != nil {
+		t.Fatalf("GetProject(\"\"): %v", err)
+	}
+	dto.Name = "Nori App" // a client that skipped the frontend slug
+	dto.Label = "Nori App"
+	dto.Path = t.TempDir()
+	dto.CycleMode = "none"
+	dto.AssigneeMode = "anyone"
+	if err := s.SaveProject(dto); err != nil {
+		t.Fatalf("SaveProject: %v", err)
+	}
+
+	cfg, _, err := loadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := cfg.ProjectByName("nori-app")
+	if p == nil {
+		t.Fatalf("project not saved under the slugged id; got %+v", cfg.Projects)
+	}
+	if p.Label != "Nori App" {
+		t.Errorf("Label = %q, want the verbatim label", p.Label)
+	}
+}
+
+// A label identical to the id carries nothing and is dropped, so the file never
+// grows a redundant key.
+func TestSaveProjectDropsRedundantLabel(t *testing.T) {
+	writeTestConfig(t, minimalConfig)
+	s := &ConfigService{}
+
+	dto, _ := s.GetProject("")
+	dto.Name, dto.Label, dto.Path = "web", "web", t.TempDir()
+	dto.CycleMode, dto.AssigneeMode = "none", "anyone"
+	if err := s.SaveProject(dto); err != nil {
+		t.Fatalf("SaveProject: %v", err)
+	}
+	cfg, _, err := loadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if l := cfg.ProjectByName("web").Label; l != "" {
+		t.Errorf("Label = %q, want it dropped as redundant", l)
+	}
+}
+
+// An id that slugs to nothing is refused with a message explaining the
+// label -> id relationship, rather than writing an unusable project.
+func TestSaveProjectRejectsUnsluggableID(t *testing.T) {
+	writeTestConfig(t, minimalConfig)
+	s := &ConfigService{}
+
+	dto, _ := s.GetProject("")
+	dto.Name, dto.Path = "日本語", t.TempDir()
+	err := s.SaveProject(dto)
+	if err == nil {
+		t.Fatal("SaveProject accepted a name with no usable id")
+	}
+	if !strings.Contains(err.Error(), "project id is required") {
+		t.Errorf("err = %v, want the id requirement", err)
+	}
+}
+
+// An EXISTING project whose id is not on disk means the rename that should have
+// preceded the save did not happen. Appending would fork the project in two, so
+// the save must refuse.
+func TestSaveProjectRefusesToForkOnUnknownID(t *testing.T) {
+	writeTestConfig(t, minimalConfig+"\n[[project]]\nname = \"web\"\npath = \"/tmp/web\"\n")
+	s := &ConfigService{}
+
+	dto, err := s.GetProject("web")
+	if err != nil {
+		t.Fatalf("GetProject: %v", err)
+	}
+	dto.Name = "web-two" // renamed in the form, but no daemon rename ran
+	if err := s.SaveProject(dto); err == nil {
+		t.Fatal("SaveProject silently created a second project instead of refusing")
+	}
+	cfg, _, err := loadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Projects) != 1 {
+		t.Errorf("projects = %d, want the original one untouched", len(cfg.Projects))
+	}
+}

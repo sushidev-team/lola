@@ -52,7 +52,7 @@
     style="grid-template-rows:{nav.lens === 'grid' ? 'minmax(0,1fr)' : 'minmax(0,3fr) minmax(0,2fr)'}"
   >
     <Panel
-      title={nav.scoped ? `Sessions · ${nav.project}` : "Sessions"}
+      title={nav.scoped ? `Sessions · ${store.displayNameFor(nav.project)}` : "Sessions"}
       note={lensLabel}
       count={rows.length}
       focused

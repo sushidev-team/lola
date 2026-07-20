@@ -2,6 +2,7 @@
   import { store } from "$lib/store.svelte";
   import { nav } from "$lib/nav.svelte";
   import { sortRank, eventPhrase, statusText } from "$lib/theme";
+  import { displayName } from "$lib/slug";
   import Panel from "./Panel.svelte";
   import Meter from "./Meter.svelte";
 
@@ -73,7 +74,7 @@
               onclick={() => nav.goCockpit(p.name)}
             >
               <span class={d.cls}>{d.glyph}</span>
-              <span class="truncate" class:text-faint={d.faint}>{p.name}</span>
+              <span class="truncate" class:text-faint={d.faint}>{displayName(p)}</span>
               {#if p.needsYou > 0}<span class="text-orange">{p.needsYou}!</span>{/if}
               {#if p.ciRed > 0}<span class="text-bad">{p.ciRed}✕</span>{/if}
             </button>

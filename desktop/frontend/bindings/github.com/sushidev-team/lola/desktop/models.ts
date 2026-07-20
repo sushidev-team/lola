@@ -63,9 +63,15 @@ export interface LinearTeamMeta {
  */
 export interface ProjectFormDTO {
     /**
-     * Repository / worktree setup.
+     * Repository / worktree setup. Name is the project's ID — a path segment and
+     * the prefix of every session/tmux name — while Label is the free-text
+     * display string ("" falls back to Name). Changing Label here is an ordinary
+     * save; changing Name is a RENAME and must go through
+     * DaemonService.RenameProject FIRST, so that by the time SaveProject runs the
+     * project on disk already answers to the new id.
      */
     "name": string;
+    "label": string;
     "path": string;
     "repo": string;
     "defaultBranch": string;

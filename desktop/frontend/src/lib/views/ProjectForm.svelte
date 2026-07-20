@@ -5,7 +5,8 @@
   import { nav } from "$lib/nav.svelte";
   import Modal from "$lib/components/Modal.svelte";
   import Tabs from "$lib/components/Tabs.svelte";
-  import { ConfigService, LinearService } from "@bindings/desktop";
+  import { ConfigService, DaemonService, LinearService } from "@bindings/desktop";
+  import { slug, slugTyping, displayName } from "$lib/slug";
   import type {
     ProjectFormDTO,
     InheritsDTO,
@@ -58,6 +59,16 @@
   // wrong repository. repoAuto only drives the "detected" hint.
   let repoDetectedFor = $state("");
   let repoAuto = $state(false);
+
+  // Label vs ID. The label is free text; the id is a path segment and the prefix
+  // of every session/tmux name, so it is slugged as it is typed and changing it
+  // on an existing project is a RENAME the daemon has to perform.
+  //
+  // origName is the id the form opened on — what a rename renames FROM, and what
+  // SaveProject must find on disk. idAuto keeps the id tracking the label until
+  // the human types an id of their own, after which it is never rewritten.
+  let origName = $state("");
+  let idAuto = $state(false);
 
   // The checkout's branches, offered as suggestions on Default branch. A
   // datalist keeps the input free text, so a path that is not a checkout — or a
@@ -113,9 +124,12 @@
   ];
 
   const title = $derived(
-    f ? (f.isNew ? "add project" : `project: ${f.name}`) : nav.overlayProject === "" ? "add project" : `project: ${nav.overlayProject}`,
+    f ? (f.isNew ? "add project" : `project: ${displayName(f)}`) : nav.overlayProject === "" ? "add project" : `project: ${nav.overlayProject}`,
   );
-  const canSave = $derived(!!f && !saving && f.name.trim().length > 0);
+  // Saving needs a usable ID, not merely non-empty text: an all-non-ASCII label
+  // slugs to "" and there is no id to write.
+  const canSave = $derived(!!f && !saving && slug(f.name) !== "");
+  const renaming = $derived(!!f && !f.isNew && slug(f.name) !== origName);
 
   function toggleId(arr: string[] | null, id: string): string[] {
     const a = arr ?? [];
@@ -199,7 +213,13 @@
   onMount(async () => {
     try {
       const d = await ConfigService.GetProject(nav.overlayProject);
-      f = { ...d, inherits: inheritsOf(d.inherits) };
+      // label is normalized like inherits: a DTO from an older backend must not
+      // leave it undefined and make every .trim() on it throw.
+      f = { ...d, label: d.label ?? "", inherits: inheritsOf(d.inherits) };
+      origName = d.name;
+      // Only a NEW project derives its id from the label. An existing id is
+      // load-bearing and must not drift when someone edits the label.
+      idAuto = d.isNew;
     } catch (e) {
       loadErr = String(e);
       store.setFlash(String(e), "bad");
@@ -240,12 +260,41 @@
     void loadMeta(v);
   }
 
+  /**
+   * Ask the daemon to change the project's id, migrating the runtime state keyed
+   * by it (worktree dir, seen file, tmux/session names). Returns true when the
+   * save may proceed.
+   *
+   * A refusal aborts the whole save: the fields below are about to be written
+   * against the NEW id, and writing them against the old one instead would be a
+   * silently half-applied edit.
+   */
+  async function renameFirst(to: string): Promise<boolean> {
+    try {
+      await DaemonService.RenameProject(origName, to);
+      origName = to;
+      return true;
+    } catch (e) {
+      // The daemon names the live sessions in its message; surface it verbatim
+      // so the human knows what to finish rather than just that it failed.
+      store.setFlash(String(e), "bad");
+      saving = false;
+      return false;
+    }
+  }
+
   async function save() {
     if (!f || !canSave) return;
     saving = true;
+    const id = slug(f.name);
+    if (!f.isNew && id !== origName && !(await renameFirst(id))) return;
+    const label = f.label.trim();
     const dto: ProjectFormDTO = {
       ...f,
-      name: f.name.trim(),
+      name: id,
+      // A label identical to the id carries nothing; Go drops it too, but doing
+      // it here keeps the flash message and the saved file in agreement.
+      label: label === id ? "" : label,
       path: f.path.trim(),
       repo: f.repo.trim(),
       defaultBranch: f.defaultBranch.trim(),
@@ -260,7 +309,10 @@
     };
     try {
       await ConfigService.SaveProject(dto);
-      store.setFlash(f.isNew ? `added ${dto.name}` : `saved ${dto.name}`, "good");
+      store.setFlash(
+        f.isNew ? `added ${displayName(dto)}` : `saved ${displayName(dto)}`,
+        "good",
+      );
       nav.closeOverlay();
     } catch (e) {
       store.setFlash(String(e), "bad");
@@ -271,8 +323,10 @@
   async function remove() {
     if (!f) return;
     try {
-      await ConfigService.RemoveProject(f.name);
-      store.setFlash(`removed ${f.name}`, "warn");
+      // Remove targets the id on disk (origName), not whatever the id field
+      // currently holds — a half-typed rename must not delete the wrong project.
+      await ConfigService.RemoveProject(origName);
+      store.setFlash(`removed ${displayName(f)}`, "warn");
       nav.closeOverlay();
     } catch (e) {
       store.setFlash(String(e), "bad");
@@ -465,13 +519,34 @@
     {#if tab === "repo"}
       <div class="space-y-2">
         {@render textRow(
-          "Name",
-          d.name,
-          (v) => { d.name = v; },
-          "my-project",
+          "Label",
+          d.label,
+          (v) => {
+            d.label = v;
+            // While the id still tracks the label, every keystroke re-derives it,
+            // so one typed name yields a valid identity for free.
+            if (idAuto) d.name = slug(v);
+          },
+          "Nori App",
           null,
-          !d.isNew,
-          d.isNew ? "" : "the project name is the config key and can't be renamed here",
+          false,
+          "shown everywhere in the app; rename it any time",
+        )}
+        {@render textRow(
+          "ID",
+          d.name,
+          (v) => {
+            // slugTyping, not slug: trimming mid-typing would eat the hyphen the
+            // moment it is typed, making "nori-app" impossible to enter.
+            d.name = slugTyping(v);
+            idAuto = false;
+          },
+          "nori-app",
+          null,
+          false,
+          renaming
+            ? `rename ${origName} → ${slug(d.name)} · needs no live sessions`
+            : "path segment + tmux name prefix; changing it is a rename",
         )}
         {@render textRow(
           "Path",

@@ -52,9 +52,37 @@ func saveConfig(cfg *config.Config, path string) error {
 	if err := cfg.Save(path); err != nil {
 		return err
 	}
-	// Best-effort: a live daemon picks the change up; a down daemon is fine.
-	_ = call(protocol.Request{Cmd: "reload"}, shortTimeout, nil)
+	// The write SUCCEEDED; the reload is advisory. A down daemon is fine (it
+	// reads the file on next start), but a daemon that is up and REJECTS the
+	// config is worth surfacing — it used to be discarded, so a live daemon
+	// could sit on stale config indefinitely with the UI reporting success.
+	if err := call(protocol.Request{Cmd: "reload"}, shortTimeout, nil); err != nil {
+		if hint := reloadRejectionHint(err.Error()); hint != "" {
+			return errors.New("saved, but the running daemon rejected it: " + hint)
+		}
+	}
 	return nil
+}
+
+// reloadRejectionHint returns a user-facing explanation for a daemon reload
+// rejection, or "" when the reload merely failed to reach a daemon (down, or a
+// command an older daemon does not know) — neither of which is a problem worth
+// interrupting a successful save for.
+//
+// A rejection means the daemon disagrees with the Validate this build just ran,
+// and the daemon is the one running older code: it does not hot-reload its own
+// binary. The tell is a complaint about a key now INHERITED from [defaults] and
+// therefore no longer written into the project's own table.
+func reloadRejectionHint(msg string) string {
+	if !strings.Contains(msg, "config invalid") {
+		return ""
+	}
+	for _, key := range []string{"match_mode", "dedup_mode", "on_sent_set_label", "priority_sort", "blocked_label_id", "match_labels"} {
+		if strings.Contains(msg, key) {
+			return msg + "  — this build accepts that config; the daemon is an OLDER binary predating [defaults] inheritance. Restart it from the daemon controls."
+		}
+	}
+	return msg
 }
 
 // --- settings ([defaults]/[notify]/[brain]/[review]/[coderabbit]) -----------
@@ -285,8 +313,14 @@ type InheritsDTO struct {
 // values are the RESOLVED ones (see config.ResolveInheritance); Inherits says
 // which of them came from [defaults] rather than the project itself.
 type ProjectFormDTO struct {
-	// Repository / worktree setup.
+	// Repository / worktree setup. Name is the project's ID — a path segment and
+	// the prefix of every session/tmux name — while Label is the free-text
+	// display string ("" falls back to Name). Changing Label here is an ordinary
+	// save; changing Name is a RENAME and must go through
+	// DaemonService.RenameProject FIRST, so that by the time SaveProject runs the
+	// project on disk already answers to the new id.
 	Name          string   `json:"name"`
+	Label         string   `json:"label"`
 	Path          string   `json:"path"`
 	Repo          string   `json:"repo"`
 	DefaultBranch string   `json:"defaultBranch"`
@@ -364,6 +398,7 @@ func (s *ConfigService) GetProject(name string) (ProjectFormDTO, error) {
 func projectDTO(p *config.Project) ProjectFormDTO {
 	return ProjectFormDTO{
 		Name:          p.Name,
+		Label:         p.Label,
 		Path:          p.Path,
 		Repo:          p.Repo,
 		DefaultBranch: p.DefaultBranch,
@@ -412,8 +447,12 @@ func projectDTO(p *config.Project) ProjectFormDTO {
 }
 
 func (s *ConfigService) SaveProject(dto ProjectFormDTO) error {
-	if strings.TrimSpace(dto.Name) == "" {
-		return errors.New("project name is required")
+	// The id is canonicalized here as well as in the form: this is the last gate
+	// before it becomes a directory name, and a client that skipped the frontend
+	// slug must not be able to write a name with a "/" in it.
+	name := config.Slug(dto.Name)
+	if name == "" {
+		return errors.New("project id is required — a label like \"Nori App\" becomes the id \"nori-app\"")
 	}
 	cfg, path, err := loadConfig()
 	if err != nil {
@@ -423,13 +462,25 @@ func (s *ConfigService) SaveProject(dto ProjectFormDTO) error {
 	if err != nil {
 		return err
 	}
-	p := cfg.ProjectByName(dto.Name)
+	p := cfg.ProjectByName(name)
 	if p == nil {
-		cfg.Projects = append(cfg.Projects, config.Project{Name: dto.Name})
+		if !dto.IsNew {
+			// An existing project that no longer answers to this id means the
+			// rename that should have preceded this save did not happen. Appending
+			// would silently fork the project in two, so refuse.
+			return errors.New("no such project: " + name + " (rename it via the daemon before saving)")
+		}
+		cfg.Projects = append(cfg.Projects, config.Project{Name: name})
 		p = &cfg.Projects[len(cfg.Projects)-1]
 	}
 	prioritySort := p.PrioritySort // not exposed by the form; preserved as-is
 
+	// A label identical to the id carries nothing; drop it so DisplayName's
+	// fallback does the work and the file stays free of redundant keys.
+	p.Label = strings.TrimSpace(dto.Label)
+	if p.Label == name {
+		p.Label = ""
+	}
 	p.Path = dto.Path
 	p.Repo = dto.Repo
 	p.DefaultBranch = dto.DefaultBranch

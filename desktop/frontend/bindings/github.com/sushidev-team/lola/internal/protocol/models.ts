@@ -222,7 +222,13 @@ export interface PrRow {
  * ProjectInfo is one configured project flattened to render-ready fields.
  */
 export interface ProjectInfo {
+    /**
+     * Name is the project's ID — what paths, tmux names and every other
+     * name-keyed protocol field use. Label is its display string, "" when the
+     * project has none (render Name then).
+     */
     "name": string;
+    "label"?: string;
     "path": string;
     "repo": string;
     "defaultBranch": string;
@@ -299,6 +305,19 @@ export interface PrsData {
      * served past its TTL (a refresh is running/failed)
      */
     "stale": boolean;
+}
+
+/**
+ * RenameProjectData is Response.Data for cmd=renameProject. Message is a short
+ * human-readable outcome; Blockers names the live sessions that made the daemon
+ * refuse (empty on success), so the client can tell the human exactly what to
+ * finish before renaming.
+ */
+export interface RenameProjectData {
+    "from": string;
+    "to": string;
+    "blockers"?: string[] | null;
+    "message"?: string;
 }
 
 /**

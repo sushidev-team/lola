@@ -96,7 +96,7 @@
     <div class="text-sm text-faint">
       <button class="text-faint hover:text-accent-ink" onclick={() => nav.goHome()}>lola</button>
       <span class="text-edge">▸</span>
-      <span class="text-ink">{nav.project || "(no project)"}</span>
+      <span class="text-ink">{nav.project ? store.displayNameFor(nav.project) : "(no project)"}</span>
     </div>
   </div>
 

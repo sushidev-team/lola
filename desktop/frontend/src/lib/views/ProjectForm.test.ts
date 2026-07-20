@@ -3,10 +3,11 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // Mock the bindings (never a live daemon/Linear). vi.hoisted so the fns exist
 // when the hoisted vi.mock factories run.
-const { getProject, saveProject, removeProject, getSettings, detectRepo, branchesFn, teamsFn, teamMetaFn } = vi.hoisted(
+const { getProject, saveProject, removeProject, getSettings, detectRepo, branchesFn, teamsFn, teamMetaFn, renameProject } = vi.hoisted(
   () => ({
     getProject: vi.fn(),
     saveProject: vi.fn(),
+    renameProject: vi.fn(),
     removeProject: vi.fn(),
     getSettings: vi.fn(),
     detectRepo: vi.fn(),
@@ -29,7 +30,9 @@ vi.mock("@bindings/desktop", () => ({
     Teams: (...a: unknown[]) => teamsFn(...a),
     TeamMeta: (...a: unknown[]) => teamMetaFn(...a),
   },
-  DaemonService: {},
+  DaemonService: {
+    RenameProject: (...a: unknown[]) => renameProject(...a),
+  },
 }));
 
 // The store imports the Wails runtime at module load; stub it under jsdom.
@@ -49,6 +52,7 @@ import { nav } from "$lib/nav.svelte";
 function sampleDto() {
   return {
     name: "acme",
+    label: "",
     path: "/Users/me/code/acme",
     repo: "acme/acme",
     defaultBranch: "main",
@@ -139,6 +143,7 @@ describe("ProjectForm", () => {
     cleanup();
     getProject.mockReset().mockResolvedValue(sampleDto());
     saveProject.mockReset().mockResolvedValue(undefined);
+    renameProject.mockReset().mockResolvedValue({ from: "", to: "", blockers: [] });
     removeProject.mockReset().mockResolvedValue(undefined);
     getSettings.mockReset().mockResolvedValue(settingsDto());
     detectRepo.mockReset().mockResolvedValue("");
@@ -392,6 +397,120 @@ describe("ProjectForm", () => {
       await fireEvent.focus(branch);
       await fireEvent.input(branch, { target: { value: "trunk" } });
       expect(branch).toHaveValue("trunk");
+    });
+  });
+
+  // A project has two names: `label` is free text nothing keys by, `name` is the
+  // id baked into worktree paths and tmux session names. Editing the label is an
+  // ordinary save; editing the id is a rename only the daemon may perform.
+  describe("label and id", () => {
+    it("derives the id from the label on a NEW project", async () => {
+      getProject.mockResolvedValue({ ...sampleDto(), name: "", label: "", isNew: true });
+      render(ProjectForm);
+
+      const label = await screen.findByLabelText("Label");
+      await fireEvent.input(label, { target: { value: "Nori App" } });
+
+      expect(screen.getByLabelText("ID")).toHaveValue("nori-app");
+    });
+
+    it("stops deriving once the id is typed by hand", async () => {
+      getProject.mockResolvedValue({ ...sampleDto(), name: "", label: "", isNew: true });
+      render(ProjectForm);
+
+      const label = await screen.findByLabelText("Label");
+      await fireEvent.input(label, { target: { value: "Nori" } });
+      const id = screen.getByLabelText("ID");
+      await fireEvent.input(id, { target: { value: "nori2" } });
+      await fireEvent.input(label, { target: { value: "Nori App" } });
+
+      expect(screen.getByLabelText("ID")).toHaveValue("nori2");
+    });
+
+    it("slugs the id as it is typed, keeping a trailing hyphen typable", async () => {
+      getProject.mockResolvedValue({ ...sampleDto(), isNew: true });
+      render(ProjectForm);
+
+      const id = await screen.findByLabelText("ID");
+      await fireEvent.input(id, { target: { value: "My Repo" } });
+      expect(id).toHaveValue("my-repo");
+      // A trailing separator must survive, or a hyphenated id cannot be entered.
+      await fireEvent.input(id, { target: { value: "my-repo-" } });
+      expect(id).toHaveValue("my-repo-");
+    });
+
+    it("does NOT rename when only the label changes", async () => {
+      getProject.mockResolvedValue({ ...sampleDto(), label: "Acme" });
+      render(ProjectForm);
+
+      const label = await screen.findByLabelText("Label");
+      await fireEvent.input(label, { target: { value: "Acme Web" } });
+      await fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+
+      await waitFor(() => expect(saveProject).toHaveBeenCalledTimes(1));
+      expect(renameProject).not.toHaveBeenCalled();
+      const arg = saveProject.mock.calls[0][0] as ReturnType<typeof sampleDto>;
+      expect(arg.label).toBe("Acme Web");
+      expect(arg.name).toBe("acme");
+    });
+
+    it("drops a label identical to the id", async () => {
+      getProject.mockResolvedValue({ ...sampleDto(), label: "" });
+      render(ProjectForm);
+
+      const label = await screen.findByLabelText("Label");
+      await fireEvent.input(label, { target: { value: "acme" } });
+      await fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+
+      await waitFor(() => expect(saveProject).toHaveBeenCalledTimes(1));
+      expect((saveProject.mock.calls[0][0] as ReturnType<typeof sampleDto>).label).toBe("");
+    });
+
+    it("renames via the daemon BEFORE saving when the id changes", async () => {
+      getProject.mockResolvedValue(sampleDto());
+      render(ProjectForm);
+
+      const id = await screen.findByLabelText("ID");
+      await fireEvent.input(id, { target: { value: "acme-two" } });
+      await fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+
+      await waitFor(() => expect(renameProject).toHaveBeenCalledWith("acme", "acme-two"));
+      await waitFor(() => expect(saveProject).toHaveBeenCalledTimes(1));
+      // The field save must target the NEW id, not the one the form opened on.
+      expect((saveProject.mock.calls[0][0] as ReturnType<typeof sampleDto>).name).toBe("acme-two");
+      expect(renameProject.mock.invocationCallOrder[0]).toBeLessThan(
+        saveProject.mock.invocationCallOrder[0],
+      );
+    });
+
+    it("aborts the whole save when the daemon refuses the rename", async () => {
+      getProject.mockResolvedValue(sampleDto());
+      renameProject.mockRejectedValue(
+        new Error('renameProject: "acme" still has 1 session (lola-acme-eng-1)'),
+      );
+      render(ProjectForm);
+
+      const id = await screen.findByLabelText("ID");
+      await fireEvent.input(id, { target: { value: "acme-two" } });
+      await fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+
+      await waitFor(() => expect(renameProject).toHaveBeenCalledTimes(1));
+      // No partial write: the fields must not be saved against either id.
+      expect(saveProject).not.toHaveBeenCalled();
+      // ...and the form stays open and re-savable rather than wedging on `saving`.
+      expect(screen.getByRole("button", { name: /^save$/i })).toBeEnabled();
+    });
+
+    it("removes the project by the id on disk, not a half-typed rename", async () => {
+      getProject.mockResolvedValue(sampleDto());
+      render(ProjectForm);
+
+      const id = await screen.findByLabelText("ID");
+      await fireEvent.input(id, { target: { value: "acme-typo" } });
+      await fireEvent.click(screen.getByRole("button", { name: /^remove$/i }));
+      await fireEvent.click(screen.getByRole("button", { name: /confirm|yes|remove/i }));
+
+      await waitFor(() => expect(removeProject).toHaveBeenCalledWith("acme"));
     });
   });
 });
