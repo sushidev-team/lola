@@ -1,8 +1,9 @@
-package gitremote
+package gitrepo
 
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 )
 
@@ -111,5 +112,92 @@ func TestDetectAgainstRealGit(t *testing.T) {
 	dir := t.TempDir()
 	if got := Detect(context.Background(), dir); got != "" {
 		t.Errorf("Detect on a non-repo = %q, want empty", got)
+	}
+}
+
+// fakeGit routes for-each-ref / symbolic-ref to canned output.
+func fakeGit(refs, head string, headErr error) func(context.Context, string, string, ...string) (string, error) {
+	return func(_ context.Context, _, _ string, args ...string) (string, error) {
+		switch args[0] {
+		case "for-each-ref":
+			return refs, nil
+		case "symbolic-ref":
+			return head, headErr
+		}
+		return "", errors.New("unexpected git call")
+	}
+}
+
+// Local and remote-tracking branches merge into one list: a base branch never
+// checked out locally is still offerable, and the "<remote>/" prefix is gone.
+func TestBranchesMergesLocalAndRemote(t *testing.T) {
+	b := BranchLister{run: fakeGit(
+		"main\nfeature/a\norigin/main\norigin/release-2\norigin/HEAD\n",
+		"origin/main\n", nil,
+	)}
+	got := b.Branches(context.Background(), "/tmp/web")
+	want := []string{"main", "feature/a", "release-2"}
+	if !slices.Equal(got, want) {
+		t.Errorf("Branches = %v, want %v", got, want)
+	}
+}
+
+// origin/HEAD is a symbolic pointer, not something anyone forks from.
+func TestBranchesDropsRemoteHead(t *testing.T) {
+	b := BranchLister{run: fakeGit("origin/HEAD\norigin/main\n", "", errors.New("no head"))}
+	if got := b.Branches(context.Background(), "/tmp/web"); !slices.Equal(got, []string{"main"}) {
+		t.Errorf("Branches = %v, want [main]", got)
+	}
+}
+
+// The repository's own default branch is floated to the top — it is the answer
+// almost every time.
+func TestBranchesPutsDefaultFirst(t *testing.T) {
+	b := BranchLister{run: fakeGit("alpha\nmain\nzulu\n", "origin/main\n", nil)}
+	got := b.Branches(context.Background(), "/tmp/web")
+	if len(got) == 0 || got[0] != "main" {
+		t.Errorf("Branches = %v, want main first", got)
+	}
+	if !slices.Equal(got, []string{"main", "alpha", "zulu"}) {
+		t.Errorf("Branches = %v, want the rest alphabetical", got)
+	}
+}
+
+// Without origin/HEAD the list is simply alphabetical rather than failing.
+func TestBranchesWithoutOriginHead(t *testing.T) {
+	b := BranchLister{run: fakeGit("zulu\nalpha\n", "", errors.New("not a symbolic ref"))}
+	if got := b.Branches(context.Background(), "/tmp/web"); !slices.Equal(got, []string{"alpha", "zulu"}) {
+		t.Errorf("Branches = %v, want [alpha zulu]", got)
+	}
+}
+
+// A local branch whose name merely contains a slash keeps its full name — only
+// actual remote refs are de-prefixed.
+func TestBranchesKeepsSlashedLocalNames(t *testing.T) {
+	b := BranchLister{run: fakeGit("feature/login\nrenovate/deps\n", "", errors.New("none"))}
+	got := b.Branches(context.Background(), "/tmp/web")
+	if !slices.Contains(got, "feature/login") || !slices.Contains(got, "renovate/deps") {
+		t.Errorf("Branches = %v, want slashed local names intact", got)
+	}
+}
+
+// Unknown is nil, never an error: git failing or a non-checkout just means the
+// user types the branch instead.
+func TestBranchesFailsClosed(t *testing.T) {
+	b := BranchLister{run: func(context.Context, string, string, ...string) (string, error) {
+		return "", errors.New("fatal: not a git repository")
+	}}
+	if got := b.Branches(context.Background(), "/tmp/nope"); got != nil {
+		t.Errorf("Branches = %v, want nil", got)
+	}
+	if got := b.Branches(context.Background(), ""); got != nil {
+		t.Errorf("Branches(\"\") = %v, want nil", got)
+	}
+}
+
+// The real git path: an empty dir yields nothing rather than an error.
+func TestBranchesAgainstRealGit(t *testing.T) {
+	if got := Branches(context.Background(), t.TempDir()); got != nil {
+		t.Errorf("Branches on a non-repo = %v, want nil", got)
 	}
 }

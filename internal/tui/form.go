@@ -13,7 +13,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/sushidev-team/lola/internal/config"
-	"github.com/sushidev-team/lola/internal/gitremote"
+	"github.com/sushidev-team/lola/internal/gitrepo"
 	"github.com/sushidev-team/lola/internal/linear"
 )
 
@@ -155,6 +155,11 @@ type formModel struct {
 	// typed, purely so the view can say where it came from.
 	repoDetectedFor string
 	repoAuto        bool
+
+	// branches is the checkout's branch list, loaded lazily for the default
+	// branch picker; branchesFor is the Path it was loaded against.
+	branches    []string
+	branchesFor string
 }
 
 // repoDetectedMsg carries the result of a background repo detection back to the
@@ -164,13 +169,41 @@ type repoDetectedMsg struct {
 	repo string
 }
 
+// branchesMsg carries a checkout's branch list back to the form. Branches is
+// nil when the path is not a checkout — the field then stays free-text.
+type branchesMsg struct {
+	path     string
+	branches []string
+}
+
+// loadBranchesCmd lists the checkout's branches off the UI thread, bounded so a
+// stale network mount cannot stall the form.
+func loadBranchesCmd(path string) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		return branchesMsg{path: path, branches: gitrepo.Branches(ctx, path)}
+	}
+}
+
+// maybeLoadBranches returns a command to refresh the branch list when the path
+// has changed since it was last loaded.
+func (f *formModel) maybeLoadBranches() tea.Cmd {
+	path := strings.TrimSpace(f.poll.Path)
+	if path == "" || path == f.branchesFor {
+		return nil
+	}
+	f.branchesFor = path
+	return loadBranchesCmd(path)
+}
+
 // detectRepoCmd resolves the GitHub owner/name of a checkout off the UI thread.
 // Bounded: a path on a stale network mount must not wedge the form.
 func detectRepoCmd(path string) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
-		return repoDetectedMsg{path: path, repo: gitremote.Detect(ctx, path)}
+		return repoDetectedMsg{path: path, repo: gitrepo.Detect(ctx, path)}
 	}
 }
 
@@ -178,7 +211,7 @@ func detectRepoCmd(path string) tea.Cmd {
 // one: a path is set, the repo is still empty, and this path has not been tried
 // yet. Detection only ever FILLS an empty field — it never overwrites what the
 // user typed, and a checkout with no GitHub remote leaves it empty (which is
-// the safe, fail-closed value: see internal/gitremote).
+// the safe, fail-closed value: see internal/gitrepo).
 func (f *formModel) maybeDetectRepo() tea.Cmd {
 	path := strings.TrimSpace(f.poll.Path)
 	if path == "" || strings.TrimSpace(f.poll.Repo) != "" || path == f.repoDetectedFor {
@@ -318,10 +351,9 @@ func newFormModel(cfg *config.Config, existing *config.Project) (*formModel, tea
 		f.loading = "loading teams…"
 		cmd = fetchTeamsCmd(cfg)
 	}
-	// An existing project with a path but no repo gets one filled in on open.
-	if detect := f.maybeDetectRepo(); detect != nil {
-		cmd = tea.Batch(cmd, detect)
-	}
+	// An existing project with a path but no repo gets one filled in on open,
+	// and its branch list is ready before the user reaches the field.
+	cmd = tea.Batch(cmd, f.maybeDetectRepo(), f.maybeLoadBranches())
 	return f, cmd
 }
 
@@ -408,6 +440,10 @@ func (f *formModel) update(msg tea.Msg) (tea.Cmd, formEvent) {
 		// the user may have typed a repo or changed the path meanwhile.
 		if v.repo != "" && strings.TrimSpace(f.poll.Repo) == "" && v.path == strings.TrimSpace(f.poll.Path) {
 			f.poll.Repo, f.repoAuto = v.repo, true
+		}
+	case branchesMsg:
+		if v.path == strings.TrimSpace(f.poll.Path) {
+			f.branches = v.branches
 		}
 	case metaMsg:
 		f.loading = ""
@@ -563,7 +599,7 @@ func (f *formModel) leftField(fd fieldID) tea.Cmd {
 	if fd != fPath {
 		return nil
 	}
-	return f.maybeDetectRepo()
+	return tea.Batch(f.maybeDetectRepo(), f.maybeLoadBranches())
 }
 
 // switchTab moves to the next/previous tab, resetting the cursor so it can
@@ -650,6 +686,11 @@ func (f *formModel) refresh() tea.Cmd {
 
 func (f *formModel) interact(cur fieldID) (tea.Cmd, formEvent) {
 	switch {
+	case cur == fDefaultBranch:
+		// Typable AND pickable: enter lists the checkout's branches, but the
+		// field stays free text so a path that is not a checkout — or a branch
+		// that does not exist yet — is never a dead end.
+		return f.openPicker(cur), formNone
 	case textFields[cur]:
 		// enter advances to the next field
 		if f.cursor < len(f.fields())-1 {
@@ -812,6 +853,18 @@ func (f *formModel) openPicker(cur fieldID) tea.Cmd {
 			return nil
 		}
 		selected = []string{f.poll.AssigneeUserID}
+	case fDefaultBranch:
+		if len(f.branches) == 0 {
+			// Not a checkout, or the path is not set yet. Say so instead of
+			// opening an empty list — the field is still typable.
+			f.loadErr = "no branches found — set Path to a git checkout, or type the branch"
+			return f.maybeLoadBranches()
+		}
+		title = "Default branch"
+		for _, b := range f.branches {
+			opts = append(opts, pickOpt{b, b})
+		}
+		selected = []string{f.poll.DefaultBranch}
 	case fDedup:
 		title = "Dedup mode"
 		opts = []pickOpt{{"label", "label (flip trigger label on spawn)"}, {"seen", "seen (local seen-file)"}}
@@ -932,6 +985,8 @@ func (f *formModel) applyPick(p *picker) tea.Cmd {
 		}
 	case fCycle:
 		f.poll.CycleID = id
+	case fDefaultBranch:
+		f.poll.DefaultBranch = id
 	case fMatchMode:
 		f.poll.MatchMode = id
 	case fAssignee:
@@ -1247,7 +1302,7 @@ func fieldHelp(fd fieldID) string {
 	case fPath:
 		return "Local repository path. Worktrees are forked from it; it is never checked out into itself."
 	case fDefaultBranch:
-		return "Base branch worktrees fork from."
+		return "Base branch worktrees fork from, and the base the agent opens its PR against. enter lists the checkout's branches; you can also type one."
 	case fBranchPrefix:
 		return "Prefix for a session's branch (e.g. \"lola/\" yields lola/eng-42). Empty inherits [defaults].branch_prefix, then \"lola/\"."
 	case fAgent:

@@ -23,6 +23,18 @@ import { Call as $Call, CancellablePromise as $CancellablePromise, Create as $Cr
 import * as $models from "./models.js";
 
 /**
+ * Branches lists the branches the checkout at path can fork worktrees from —
+ * local branches plus remote-tracking ones with no local counterpart, the
+ * repository's own default first. Empty when path is not a checkout; the form
+ * then leaves the field as free text rather than trapping the user.
+ */
+export function Branches(path: string): $CancellablePromise<string[]> {
+    return $Call.ByID(3689606875, path).then(($result: any) => {
+        return $$createType0($result);
+    });
+}
+
+/**
  * ConfigExists reports whether ~/.lola/config.toml is present, so the frontend
  * can gate a first-run setup screen.
  */
@@ -51,13 +63,13 @@ export function DetectRepo(path: string): $CancellablePromise<string> {
  */
 export function GetProject(name: string): $CancellablePromise<$models.ProjectFormDTO> {
     return $Call.ByID(3485741446, name).then(($result: any) => {
-        return $$createType0($result);
+        return $$createType1($result);
     });
 }
 
 export function GetSettings(): $CancellablePromise<$models.SettingsDTO> {
     return $Call.ByID(2761787168).then(($result: any) => {
-        return $$createType1($result);
+        return $$createType2($result);
     });
 }
 
@@ -80,7 +92,7 @@ export function SaveSettings(dto: $models.SettingsDTO): $CancellablePromise<void
  */
 export function Setup(dto: $models.SetupDTO): $CancellablePromise<$models.SetupResultDTO> {
     return $Call.ByID(3057086516, dto).then(($result: any) => {
-        return $$createType2($result);
+        return $$createType3($result);
     });
 }
 
@@ -93,6 +105,7 @@ export function ValidateLinearKey(key: string): $CancellablePromise<void> {
 }
 
 // Private type creation functions
-const $$createType0 = $models.ProjectFormDTO.createFrom;
-const $$createType1 = $models.SettingsDTO.createFrom;
-const $$createType2 = $models.SetupResultDTO.createFrom;
+const $$createType0 = $Create.Array($Create.Any);
+const $$createType1 = $models.ProjectFormDTO.createFrom;
+const $$createType2 = $models.SettingsDTO.createFrom;
+const $$createType3 = $models.SetupResultDTO.createFrom;

@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/sushidev-team/lola/internal/config"
-	"github.com/sushidev-team/lola/internal/gitremote"
+	"github.com/sushidev-team/lola/internal/gitrepo"
 	"github.com/sushidev-team/lola/internal/linear"
 	"github.com/sushidev-team/lola/internal/protocol"
 	"github.com/sushidev-team/lola/internal/secrets"
@@ -449,7 +449,21 @@ func (s *ConfigService) SaveProject(dto ProjectFormDTO) error {
 func (s *ConfigService) DetectRepo(path string) string {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	return gitremote.Detect(ctx, path)
+	return gitrepo.Detect(ctx, path)
+}
+
+// Branches lists the branches the checkout at path can fork worktrees from —
+// local branches plus remote-tracking ones with no local counterpart, the
+// repository's own default first. Empty when path is not a checkout; the form
+// then leaves the field as free text rather than trapping the user.
+func (s *ConfigService) Branches(path string) []string {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	b := gitrepo.Branches(ctx, path)
+	if b == nil {
+		return []string{} // marshal as [] rather than null for the frontend
+	}
+	return b
 }
 
 func (s *ConfigService) RemoveProject(name string) error {

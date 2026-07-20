@@ -59,6 +59,25 @@
   let repoDetectedFor = $state("");
   let repoAuto = $state(false);
 
+  // The checkout's branches, offered as suggestions on Default branch. A
+  // datalist keeps the input free text, so a path that is not a checkout — or a
+  // branch that does not exist yet — is never a dead end.
+  let branches = $state<string[]>([]);
+  let branchesFor = $state("");
+
+  async function loadBranches() {
+    if (!f) return;
+    const path = f.path.trim();
+    if (!path || path === branchesFor) return;
+    branchesFor = path;
+    try {
+      const found = await ConfigService.Branches(path);
+      if (f && f.path.trim() === path) branches = found ?? [];
+    } catch {
+      branches = [];
+    }
+  }
+
   async function detectRepo() {
     if (!f) return;
     const path = f.path.trim();
@@ -462,7 +481,10 @@
           null,
           false,
           "",
-          detectRepo,
+          () => {
+            void detectRepo();
+            void loadBranches();
+          },
         )}
         {@render textRow(
           "Repo",
@@ -475,7 +497,29 @@
             ? "detected from the checkout — verify it if this is a fork"
             : "for PR checks; empty disables them",
         )}
-        {@render textRow("Default branch", d.defaultBranch, (v) => { d.defaultBranch = v; }, "main")}
+        <!-- default branch: suggestions from the checkout, still free text -->
+        <div class={rowCls}>
+          {@render cap("Default branch", null)}
+          <span>
+            <input
+              class="{inputCls} font-mono"
+              aria-label="Default branch"
+              list="lola-branches"
+              placeholder="main"
+              value={d.defaultBranch}
+              oninput={(e) => (d.defaultBranch = e.currentTarget.value)}
+              onfocus={() => void loadBranches()}
+            />
+            <datalist id="lola-branches">
+              {#each branches as b (b)}<option value={b}></option>{/each}
+            </datalist>
+            <span class={hintCls}>
+              {branches.length
+                ? "branches from the checkout — or type one"
+                : "worktrees fork from this branch"}
+            </span>
+          </span>
+        </div>
         {@render textRow("Branch prefix", d.branchPrefix, (v) => { d.branchPrefix = v; }, "lola/", null, false, "empty inherits the [defaults] prefix")}
 
         <!-- agent: "" already means inherit, so no bitmap entry -->

@@ -3,13 +3,14 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // Mock the bindings (never a live daemon/Linear). vi.hoisted so the fns exist
 // when the hoisted vi.mock factories run.
-const { getProject, saveProject, removeProject, getSettings, detectRepo, teamsFn, teamMetaFn } = vi.hoisted(
+const { getProject, saveProject, removeProject, getSettings, detectRepo, branchesFn, teamsFn, teamMetaFn } = vi.hoisted(
   () => ({
     getProject: vi.fn(),
     saveProject: vi.fn(),
     removeProject: vi.fn(),
     getSettings: vi.fn(),
     detectRepo: vi.fn(),
+    branchesFn: vi.fn(),
     teamsFn: vi.fn(),
     teamMetaFn: vi.fn(),
   }),
@@ -22,6 +23,7 @@ vi.mock("@bindings/desktop", () => ({
     RemoveProject: (...a: unknown[]) => removeProject(...a),
     GetSettings: () => getSettings(),
     DetectRepo: (...a: unknown[]) => detectRepo(...a),
+    Branches: (...a: unknown[]) => branchesFn(...a),
   },
   LinearService: {
     Teams: (...a: unknown[]) => teamsFn(...a),
@@ -140,6 +142,7 @@ describe("ProjectForm", () => {
     removeProject.mockReset().mockResolvedValue(undefined);
     getSettings.mockReset().mockResolvedValue(settingsDto());
     detectRepo.mockReset().mockResolvedValue("");
+    branchesFn.mockReset().mockResolvedValue([]);
     teamsFn.mockReset().mockResolvedValue([
       { id: "team-uuid-1", key: "ENG", name: "Engineering" },
       { id: "team-uuid-2", key: "OPS", name: "Operations" },
@@ -359,6 +362,36 @@ describe("ProjectForm", () => {
       await waitFor(() => expect(detectRepo).toHaveBeenCalledTimes(1));
       await fireEvent.blur(path);
       expect(detectRepo).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // The default branch offers the checkout's branches while staying free text.
+  describe("default branch", () => {
+    it("offers the checkout's branches as suggestions", async () => {
+      getProject.mockResolvedValue({ ...sampleDto(), path: "/tmp/web" });
+      branchesFn.mockResolvedValue(["main", "develop"]);
+      render(ProjectForm);
+
+      const branch = await screen.findByLabelText("Default branch");
+      await fireEvent.focus(branch);
+
+      await waitFor(() => expect(branchesFn).toHaveBeenCalledWith("/tmp/web"));
+      await waitFor(() => {
+        const list = document.getElementById("lola-branches");
+        const values = Array.from(list?.querySelectorAll("option") ?? []).map((o) => o.value);
+        expect(values).toEqual(["main", "develop"]);
+      });
+    });
+
+    it("stays typable when the path is not a checkout", async () => {
+      getProject.mockResolvedValue({ ...sampleDto(), path: "/tmp/plain", defaultBranch: "" });
+      branchesFn.mockResolvedValue([]);
+      render(ProjectForm);
+
+      const branch = await screen.findByLabelText("Default branch");
+      await fireEvent.focus(branch);
+      await fireEvent.input(branch, { target: { value: "trunk" } });
+      expect(branch).toHaveValue("trunk");
     });
   });
 });

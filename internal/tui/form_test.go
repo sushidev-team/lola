@@ -604,3 +604,88 @@ func TestFormTypingClearsDetectedMarker(t *testing.T) {
 		t.Error("typing into Repo must clear the detected marker")
 	}
 }
+
+// The default branch is pickable from the checkout's branches, and still
+// typable — a path that is not a checkout must never be a dead end.
+func TestFormDefaultBranchPicker(t *testing.T) {
+	f, _ := newFormOn(t, []config.Project{{Name: "web", Path: "/tmp/web"}}, "web")
+	f.branches = []string{"main", "develop", "release-2"}
+	f.tab = tabRepo
+	f.cursor = slices.Index(f.fields(), fDefaultBranch)
+
+	f.interact(fDefaultBranch)
+	if f.picker == nil || f.picker.field != fDefaultBranch {
+		t.Fatalf("enter must open the branch picker, got %+v", f.picker)
+	}
+	if f.picker.multi {
+		t.Error("the default branch is a single choice")
+	}
+	f.picker.cursor = 1 // develop
+	f.pickerKey(keyMsg("enter"))
+	if f.poll.DefaultBranch != "develop" {
+		t.Errorf("DefaultBranch = %q, want develop", f.poll.DefaultBranch)
+	}
+}
+
+// The picker preselects the current value so enter is a no-op rather than a
+// silent change to whatever sits at the top.
+func TestFormDefaultBranchPickerPreselects(t *testing.T) {
+	f, _ := newFormOn(t, []config.Project{{Name: "web", Path: "/tmp/web"}}, "web")
+	f.branches = []string{"main", "develop"}
+	f.poll.DefaultBranch = "develop"
+
+	f.interact(fDefaultBranch)
+	if f.picker == nil {
+		t.Fatal("picker did not open")
+	}
+	if got := f.picker.opts[f.picker.cursor].id; got != "develop" {
+		t.Errorf("cursor on %q, want the current value develop", got)
+	}
+}
+
+// With no branches (path unset, or not a checkout) the picker refuses to open
+// and says why — the field stays free text.
+func TestFormDefaultBranchPickerRefusesWithoutBranches(t *testing.T) {
+	f, _ := newFormOn(t, []config.Project{{Name: "web", Path: "/tmp/web"}}, "web")
+	f.branches = nil
+
+	f.interact(fDefaultBranch)
+	if f.picker != nil {
+		t.Fatal("the picker must not open with nothing to pick")
+	}
+	if !strings.Contains(f.loadErr, "no branches found") {
+		t.Errorf("loadErr = %q, want an explanation", f.loadErr)
+	}
+	// Still typable.
+	f.tab = tabRepo
+	f.cursor = slices.Index(f.fields(), fDefaultBranch)
+	f.poll.DefaultBranch = ""
+	f.key(keyMsg("m"))
+	if f.poll.DefaultBranch != "m" {
+		t.Errorf("DefaultBranch = %q, want typing to still work", f.poll.DefaultBranch)
+	}
+}
+
+// Leaving Path refreshes the branch list, and a result for a path the user has
+// since changed is dropped.
+func TestFormBranchListLoadsOnPathChange(t *testing.T) {
+	f, _ := newNativeTestForm(t, nil)
+	f.poll.Path = "/tmp/web"
+
+	if f.maybeLoadBranches() == nil {
+		t.Fatal("a new path must load its branches")
+	}
+	if f.maybeLoadBranches() != nil {
+		t.Error("the same path must not reload")
+	}
+	f.update(branchesMsg{path: "/tmp/web", branches: []string{"main"}})
+	if !slices.Equal(f.branches, []string{"main"}) {
+		t.Errorf("branches = %v, want [main]", f.branches)
+	}
+
+	f.poll.Path = "/tmp/other"
+	f.update(branchesMsg{path: "/tmp/web", branches: []string{"stale"}})
+	if slices.Contains(f.branches, "stale") {
+		t.Error("a result for a superseded path must be dropped")
+	}
+}
