@@ -118,9 +118,12 @@ func (d *Daemon) react(ctx context.Context, s session.Session) {
 // terminate the tmux agent, remove the worktree (dirty-safe, never force), drop
 // the store entry, and free the issue's in-flight claim — then notify Info. A
 // worktree with uncommitted changes is KEPT (not force-removed) and the operator
-// is notified; LastReactedStatus is stamped so that keep-and-notify happens once
-// rather than every cycle. A non-dirty removal error is left un-stamped so the
-// next cycle retries the cleanup.
+// is notified, but the store entry is dropped either way: a clean and a dirty
+// merge both leave the sessions view, differing only in whether the checkout
+// survives on disk. Dropping the dirty case too is deliberate — a lingering
+// "merged" entry is re-observed every cycle and never ages out, so keeping it
+// would let dirty merges pile up permanently. A non-dirty removal error keeps
+// the entry (un-dropped) so the next cycle retries the cleanup.
 func (d *Daemon) reactMerged(ctx context.Context, s session.Session, notifier notify.Notifier) {
 	d.mu.Lock()
 	nat := d.native
@@ -144,18 +147,23 @@ func (d *Daemon) reactMerged(ctx context.Context, s session.Session, notifier no
 
 	err := nat.Kill(cctx, s, removeWorktree, false) // never force: dirty is kept
 	if errors.Is(err, worktree.ErrDirty) {
-		d.sessions.Update(s.ID, func(cur *session.Session) bool {
-			cur.LastReactedStatus = "merged"
-			return true
-		})
-		d.reactSave()
+		// Kill stops the tmux agent BEFORE touching the worktree (see
+		// runtime.Native.Kill), so on ErrDirty the agent is already down and only
+		// the uncommitted checkout survives on disk. Drop the store entry — freeing
+		// the in-flight claim and clearing the session from the view exactly like
+		// the clean path — but leave the worktree at <dir> for inspection, and
+		// notify the operator ONCE so the kept work is not silently lost. Dropping
+		// rather than stamping a phantom "merged" record is what stops dirty merges
+		// from piling up in the sessions store forever (they are re-observed every
+		// cycle and never age out while an entry lingers).
+		d.dropSession(s)
 		notifier.Notify(cctx, notify.Note{
 			Title:    "PR merged — worktree kept",
-			Body:     fmt.Sprintf("%s merged, but its worktree has uncommitted changes and was kept at %s", issueLabel(s), dir),
+			Body:     fmt.Sprintf("%s merged; agent stopped and slot freed, but its worktree has uncommitted changes and was kept at %s", issueLabel(s), dir),
 			Priority: notify.Info,
 			URL:      prURL(s),
 		})
-		d.logf("", "react: %s merged; worktree kept (uncommitted changes) at %s", s.ID, dir)
+		d.logf("", "react: %s merged; worktree kept (uncommitted changes) at %s, store entry dropped", s.ID, dir)
 		return
 	}
 	if err != nil {

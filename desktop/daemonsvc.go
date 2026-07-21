@@ -101,14 +101,16 @@ func (s *DaemonService) Revive(session string) (protocol.ReviveData, error) {
 	return d, err
 }
 
-// Review forces a CodeRabbit QA pass for one session now.
-func (s *DaemonService) Review(session string) (protocol.ReviewData, error) {
+// Review forces a QA review PASS for one session now. provider optionally
+// selects which pass provider kind to force (coderabbit-cli | claude-session);
+// "" forces the daemon's primary pass provider.
+func (s *DaemonService) Review(session, provider string) (protocol.ReviewData, error) {
 	var d protocol.ReviewData
-	err := call(protocol.Request{Cmd: "review", Session: session}, longTimeout, &d)
+	err := call(protocol.Request{Cmd: "review", Session: session, Provider: provider}, longTimeout, &d)
 	return d, err
 }
 
-// CodeRabbit forces the PR-comment watch for one session now.
+// CodeRabbit forces the PR-comment watch for one session now (the coderabbit-watch alias).
 func (s *DaemonService) CodeRabbit(session string) (protocol.CodeRabbitData, error) {
 	var d protocol.CodeRabbitData
 	err := call(protocol.Request{Cmd: "coderabbit", Session: session}, longTimeout, &d)

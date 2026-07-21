@@ -193,7 +193,74 @@ type Session struct {
 	// is the P9 equivalent of PendingReaction — a one-shot-per-PR deferral — so a
 	// review hand-off is deferred rather than dropped when the agent is busy, and
 	// never sent unsanitized or into a mid-turn pane. Persists across restarts.
+	//
+	// Legacy scalar, superseded by the kind-keyed PendingHandoffs map. Kept
+	// PARSEABLE only so migrateReviewState can fold it forward; no live code path
+	// reads it after migration.
 	PendingReviewFindings string `json:"pending_review_findings,omitempty"`
+
+	// Flexible-review fire-once guards (PLAN §3.2): the four legacy review
+	// scalars above (ReviewedPR, LastCodeRabbitAt, PendingCodeRabbit,
+	// PendingReviewFindings) generalize to these kind-keyed maps so any subset of
+	// provider kinds (coderabbit-cli | coderabbit-watch | claude-session | …) can
+	// run per session, each with its own independent one-shot guard. migrateReviewState
+	// folds the scalars in on the first load, after which the maps are AUTHORITATIVE
+	// and no code reads the scalars again. All persist in sessions.json.
+
+	// ReviewedPRs maps a pass-shape provider kind -> the PR number that provider
+	// last reviewed (0/absent = never). Per-PR one-shot guard: the pass runs once
+	// per PR per kind and a NEW PR number re-triggers it exactly once.
+	ReviewedPRs map[string]int `json:"reviewed_prs,omitempty"`
+
+	// ReviewWatermarks maps a watch-shape provider kind -> the timestamp of the
+	// newest bot comment/review already routed for this session. The poll fires
+	// only on items STRICTLY newer, so a comment is surfaced once and the watch
+	// survives daemon downtime.
+	ReviewWatermarks map[string]time.Time `json:"review_watermarks,omitempty"`
+
+	// PendingHandoffs maps a provider kind -> the deferred worker hand-off text
+	// (full findings for a pass shape, single-line pointer for a watch) that was
+	// ready but could not be sent because the agent was mid-turn (AtPrompt false).
+	// A later cycle delivers it through the send-keys idle-gate, sanitizing it
+	// immediately before the send, then clears the entry. Keyed by kind so two
+	// providers' hand-offs never clobber each other.
+	PendingHandoffs map[string]string `json:"pending_handoffs,omitempty"`
+
+	// PostedGitHubPRs maps a provider kind -> the PR number the github transport
+	// has SETTLED (a successful post OR a permanent gh failure). Per-PR settle
+	// guard so the github sink no-ops for a kind/PR it has already settled and a
+	// transient failure retries next cycle.
+	PostedGitHubPRs map[string]int `json:"posted_github_prs,omitempty"`
+}
+
+// migrateReviewState folds the four legacy review scalars into the kind-keyed
+// maps (PLAN §3.2). It is IDEMPOTENT: it only folds when the maps are nil, so a
+// record already carrying maps (a post-migration snapshot) is left untouched and
+// a second call is a no-op. After the fold the maps are authoritative and no code
+// path reads the scalars again. Run on Store load AND in Adopt so both an
+// upgraded on-disk snapshot and a live-adopted survivor migrate the same way,
+// carrying the guard keys over with no re-review. The synthesized-provider kinds
+// (coderabbit-cli / coderabbit-watch) match the legacy tables so the keys line up.
+func (s *Session) migrateReviewState() {
+	if s.ReviewedPRs != nil || s.ReviewWatermarks != nil ||
+		s.PendingHandoffs != nil || s.PostedGitHubPRs != nil {
+		return // already migrated (maps are authoritative)
+	}
+	if s.ReviewedPR != 0 {
+		s.ReviewedPRs = map[string]int{"coderabbit-cli": s.ReviewedPR}
+	}
+	if !s.LastCodeRabbitAt.IsZero() {
+		s.ReviewWatermarks = map[string]time.Time{"coderabbit-watch": s.LastCodeRabbitAt}
+	}
+	if s.PendingReviewFindings != "" || s.PendingCodeRabbit != "" {
+		s.PendingHandoffs = map[string]string{}
+		if s.PendingReviewFindings != "" {
+			s.PendingHandoffs["coderabbit-cli"] = s.PendingReviewFindings
+		}
+		if s.PendingCodeRabbit != "" {
+			s.PendingHandoffs["coderabbit-watch"] = s.PendingCodeRabbit
+		}
+	}
 }
 
 // EffectiveKind resolves the session's Kind, failing CLOSED so an unstamped,
@@ -317,6 +384,10 @@ func (s *Store) load() {
 			}
 			sess.Kind = sess.EffectiveKind()
 		}
+		// Fold the legacy review scalars into the kind-keyed maps (PLAN §3.2) so
+		// the in-memory record is authoritative and downstream review code reads
+		// only the maps. Idempotent: a post-migration snapshot already carries maps.
+		sess.migrateReviewState()
 		s.sessions[sess.ID] = sess
 	}
 }

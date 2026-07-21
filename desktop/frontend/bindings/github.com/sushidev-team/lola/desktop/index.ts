@@ -25,6 +25,7 @@ export type {
     LinearTeamMeta,
     ProjectFormDTO,
     ReleaseEntryDTO,
+    ReviewProviderDTO,
     SettingsDTO,
     SetupDTO,
     SetupResultDTO,

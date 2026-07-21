@@ -19,6 +19,7 @@ import (
 	"github.com/sushidev-team/lola/internal/notify"
 	"github.com/sushidev-team/lola/internal/scm"
 	"github.com/sushidev-team/lola/internal/session"
+	"github.com/sushidev-team/lola/internal/worktree"
 )
 
 // sendKeysCall records one send-keys into a pane.
@@ -159,6 +160,43 @@ func TestReactMergedCleansUpAndNotifies(t *testing.T) {
 	}
 	if len(seams.sendCalls()) != 0 {
 		t.Error("merged cleanup must never send-keys")
+	}
+}
+
+// A merged PR whose worktree is dirty keeps the checkout on disk (Kill refuses
+// with ErrDirty) but STILL drops the store entry and frees the in-flight claim,
+// so a dirty merge does not linger in the sessions view forever. The operator is
+// notified once that the worktree was kept.
+func TestReactMergedDirtyDropsEntryKeepsWorktree(t *testing.T) {
+	nat := &fakeNative{killErr: worktree.ErrDirty}
+	d := newTestDaemon(t, reactTestConfig(nativePoll("p1")), &linear.Fake{}, nat)
+	seams := &fakeReactSeams{}
+	seams.install(d)
+
+	pr := openPR(7, "MERGEABLE", "APPROVED", "pass")
+	pr.State = "MERGED"
+	s := reactSess("FE-1", "merged", pr)
+	d.sessions.Upsert(s)
+	d.inflight.Add(s.IssueUUID, s.Issue)
+
+	d.react(context.Background(), s)
+
+	calls := nat.killCalls()
+	if len(calls) != 1 || !calls[0].removeWorktree || calls[0].force {
+		t.Fatalf("dirty merged Kill = %+v, want one {removeWorktree:true, force:false}", calls)
+	}
+	if _, ok := d.sessions.Get(s.ID); ok {
+		t.Error("a dirty merged session must still be dropped from the store")
+	}
+	if d.inflight.Has(s.IssueUUID) {
+		t.Error("a dirty merged cleanup must free the in-flight claim")
+	}
+	info := seams.notesByPriority(notify.Info)
+	if len(info) != 1 {
+		t.Fatalf("want exactly one Info notification, got %d (%+v)", len(info), seams.notes)
+	}
+	if !strings.Contains(info[0].Body, "kept") {
+		t.Errorf("dirty-merge notification should say the worktree was kept, got %q", info[0].Body)
 	}
 }
 

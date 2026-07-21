@@ -65,6 +65,21 @@ type botItem struct {
 // check" for "no new comments"); items with an unparseable timestamp are skipped
 // (they cannot be watermarked safely).
 func (c *Client) CodeRabbitComments(ctx context.Context, repo string, pr int, since time.Time, author string) (string, time.Time, error) {
+	return c.codeRabbitComments(ctx, repo, pr, since, author, "")
+}
+
+// CodeRabbitCommentsExcluding is CodeRabbitComments with a self-feedback guard:
+// any comment/review whose author login equals `selfLogin` (case-insensitive,
+// exact) is dropped BEFORE author matching, so a review lola itself posted via
+// the `github` transport (PostPRComment) is never re-ingested by its own watch
+// (PLAN §4.4 / §5.3). An empty selfLogin disables the filter (the default
+// author "coderabbitai" already won't collide with lola's gh login, so the
+// caller passes "" when AuthedLogin can't be resolved — fail-open).
+func (c *Client) CodeRabbitCommentsExcluding(ctx context.Context, repo string, pr int, since time.Time, author, selfLogin string) (string, time.Time, error) {
+	return c.codeRabbitComments(ctx, repo, pr, since, author, selfLogin)
+}
+
+func (c *Client) codeRabbitComments(ctx context.Context, repo string, pr int, since time.Time, author, selfLogin string) (string, time.Time, error) {
 	if author == "" {
 		author = "coderabbitai"
 	}
@@ -79,8 +94,13 @@ func (c *Client) CodeRabbitComments(ctx context.Context, repo string, pr int, si
 	}
 
 	needle := strings.ToLower(author)
+	self := strings.ToLower(selfLogin)
 	matches := func(login string) bool {
-		return strings.Contains(strings.ToLower(login), needle)
+		l := strings.ToLower(login)
+		if self != "" && l == self {
+			return false // never treat lola's own posted comment as bot feedback
+		}
+		return strings.Contains(l, needle)
 	}
 
 	latest := since

@@ -78,6 +78,15 @@ export function GetTheme(): $CancellablePromise<string> {
 }
 
 /**
+ * MigrateReview folds the legacy [review]/[coderabbit] tables into the editable
+ * provider catalog and persists (one-way; mirrors `lola config migrate-review`
+ * and the TUI's in-place migrate). A no-op when there is nothing to migrate.
+ */
+export function MigrateReview(): $CancellablePromise<void> {
+    return $Call.ByID(486961436);
+}
+
+/**
  * PrioritySortKeys returns the sort keys the daemon understands, so the
  * settings form can offer them instead of taking free text. These are LOLA's
  * own keys, not a Linear concept — there is nothing to fetch from the API.
@@ -88,6 +97,14 @@ export function PrioritySortKeys(): $CancellablePromise<string[] | null> {
 
 export function RemoveProject(name: string): $CancellablePromise<void> {
     return $Call.ByID(581203932, name);
+}
+
+/**
+ * ReviewProviderKinds / TransportTokens expose the selectable catalog values so
+ * the frontend renders its pickers without hardcoding them.
+ */
+export function ReviewProviderKinds(): $CancellablePromise<string[] | null> {
+    return $Call.ByID(3055606205);
 }
 
 export function SaveProject(dto: $models.ProjectFormDTO): $CancellablePromise<void> {
@@ -127,6 +144,10 @@ export function Setup(dto: $models.SetupDTO): $CancellablePromise<$models.SetupR
  */
 export function Themes(): $CancellablePromise<string[] | null> {
     return $Call.ByID(2762792109);
+}
+
+export function TransportTokens(): $CancellablePromise<string[] | null> {
+    return $Call.ByID(2864709098);
 }
 
 /**

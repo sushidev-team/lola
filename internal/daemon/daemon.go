@@ -26,6 +26,7 @@ import (
 	"github.com/sushidev-team/lola/internal/linear"
 	"github.com/sushidev-team/lola/internal/notify"
 	"github.com/sushidev-team/lola/internal/review"
+	"github.com/sushidev-team/lola/internal/reviewclaude"
 	"github.com/sushidev-team/lola/internal/runtime"
 	"github.com/sushidev-team/lola/internal/scm"
 	"github.com/sushidev-team/lola/internal/secrets"
@@ -135,12 +136,14 @@ type Daemon struct {
 	failingChecks  func(ctx context.Context, repo string, pr int) (string, error)
 	reviewComments func(ctx context.Context, repo string, pr int) (string, error)
 
-	// coderabbitComments is the [coderabbit] PR-comment WATCH fetch seam: it
-	// returns the reviewer-bot feedback on a PR newer than `since` plus the new
-	// watermark (see scm.CodeRabbitComments). Set once in newDaemon (like
+	// coderabbitComments is the coderabbit-watch PR-comment fetch seam: it returns
+	// the reviewer-bot feedback on a PR newer than `since` plus the new watermark
+	// (see scm.CodeRabbitCommentsExcluding). The trailing selfLogin drops lola's
+	// OWN github-transport comments so the watch never re-ingests them (§4.4);
+	// callers pass "" when no self-filter is needed. Set once in newDaemon (like
 	// prForBranch); overridden by tests. Always non-nil — the watch itself is
-	// gated by [coderabbit].enabled, not by this seam.
-	coderabbitComments func(ctx context.Context, repo string, pr int, since time.Time, author string) (string, time.Time, error)
+	// gated by the coderabbit-watch provider being enabled, not by this seam.
+	coderabbitComments func(ctx context.Context, repo string, pr int, since time.Time, author, selfLogin string) (string, time.Time, error)
 
 	// Orchestrator brain (PLAN P5.25): the OPT-IN, bounded, headless-claude
 	// SUMMARIZER wired into the EXISTING escalation notify/comment and approved
@@ -157,25 +160,44 @@ type Daemon struct {
 	paneTail       func(ctx context.Context, tmuxName string, lines int) (string, error)
 	prDiff         func(ctx context.Context, repo string, pr int) (string, error)
 
-	// QA review buddy (PLAN P9): the OPT-IN, EVENT-TRIGGERED CodeRabbit review
-	// pass wired into the observer's PR-open transition (and the manual `lola
-	// review` command). It adds NO persistent agent and NO new observed
-	// transition — on PR-open it runs one bounded `coderabbit review` and hands
-	// the (UNTRUSTED, diff-derived) findings to the human (notify + optional
-	// Linear comment) and, sanitized-and-idle-gated, to the worker. review is nil
-	// when [review].enabled is false OR coderabbit is unavailable (checked ONCE at
-	// startup); reviewRun is its exec seam and is nil in exactly the same case, so
-	// every call site treats "nil seam" as "review off" — zero behavior change
-	// when the buddy is disabled. Rebuilt on reload (setReviewLocked). Tests
-	// install a fake reviewRun directly.
-	review    *review.Client
-	reviewRun func(ctx context.Context, worktreeDir, baseBranch string) (string, error)
+	// Flexible review system (PLAN flexible-review §2–5): the daemon-wide provider
+	// CATALOG plus the per-kind exec CLIENTS behind late-bound seams. reviewProviders
+	// is the resolved descriptor set (built from the [[review.provider]] catalog, or
+	// synthesized from the legacy [review]/[coderabbit] tables) and drives which
+	// kinds run per session, their transports, and their fallback chains. Rebuilt
+	// under d.mu by setReviewProvidersLocked on Run and reload. Guarded by d.mu.
+	//
+	// review/reviewRun (coderabbit-cli) and claudeReview/claudeReviewRun
+	// (claude-session) are the two sync "pass" exec clients + seams; the seam is
+	// nil when that kind is disabled or its binary is unavailable, which every
+	// call site (and the fallback chain) treats as "that provider can't answer".
+	// The seams are looked up under d.mu AT CALL TIME (late binding), so a fake
+	// installed after setReviewProvidersLocked still wins. Tests install a fake
+	// reviewRun / claudeReviewRun directly.
+	reviewProviders []reviewProvider
+	review          *review.Client
+	reviewRun       func(ctx context.Context, worktreeDir, baseBranch string) (string, error)
+	claudeReview    *reviewclaude.Client
+	claudeReviewRun func(ctx context.Context, worktreeDir, baseBranch string) (string, error)
+
+	// postPRComment is the `github` transport WRITE seam (Locked decision 1):
+	// `gh pr comment <pr> --repo <repo> --body-file -` with the untrusted findings
+	// on stdin (scm.PostPRComment). Set once in newDaemon; tests install a counting
+	// fake. Looked up under d.mu at call time like the pass seams.
+	postPRComment func(ctx context.Context, repo string, pr int, body string) error
+
+	// authedLogin resolves lola's OWN gh login (scm.AuthedLogin), consulted at most
+	// ONCE per daemon lifetime via resolveSelfLogin (selfLoginOnce) so the watch's
+	// self-feedback filter costs no per-cycle exec. selfLogin caches the result.
+	authedLogin   func(ctx context.Context) (string, error)
+	selfLoginOnce sync.Once
+	selfLogin     string
 
 	// reviewCycleCtx is the CURRENT observe cycle's shared review budget: one
 	// review timeout for the WHOLE cycle (not per session), derived from
 	// shutdownCtx so a slow/hung `coderabbit review` is capped for the cycle and
 	// abortable at shutdown (it is read-only and safe to abort). observeNative
-	// sets it at cycle start and clears it at the end; runReviewPass reads it
+	// sets it at cycle start and clears it at the end; runReviewChain reads it
 	// (falling back to its own ctx when nil, e.g. the manual command). Guarded by
 	// reviewMu.
 	reviewMu       sync.Mutex
@@ -248,7 +270,14 @@ func newDaemon(cfg *config.Config, lin linear.API, logger *log.Logger, home stri
 	d.prsCache = newPRCache()
 	d.failingChecks = scmc.FailingChecks
 	d.reviewComments = scmc.ReviewComments
-	d.coderabbitComments = scmc.CodeRabbitComments
+	// Flexible-review raw seams (the exec CLIENTS are built later by
+	// setReviewProvidersLocked from the catalog / legacy synthesis). The watch
+	// fetch is the self-filtering variant (selfLogin "" ⇒ no filter); the github
+	// WRITE and the self-login resolver are the two new gh seams. All overridden
+	// by tests after construction.
+	d.coderabbitComments = scmc.CodeRabbitCommentsExcluding
+	d.postPRComment = scmc.PostPRComment
+	d.authedLogin = scmc.AuthedLogin
 	d.sendKeys = func(ctx context.Context, tmuxName, text string) error {
 		return d.tmuxClient().SendKeys(ctx, tmuxName, text)
 	}
@@ -340,19 +369,20 @@ func Run(ctx context.Context) error {
 	d.mu.Lock()
 	d.setBrainLocked(cfg.Brain)
 	brainEnabledButMissing := cfg.Brain.Enabled && d.brain == nil
-	// QA review buddy (PLAN P9): build the OPT-IN CodeRabbit review client from
-	// [review]. Disabled by default (nil ⇒ review off). Check availability ONCE at
-	// startup: an operator who enabled the buddy but has no coderabbit on PATH
-	// gets a single log line and the pass simply never fires, never a per-cycle
-	// error.
-	d.setReviewLocked(cfg.Review)
-	reviewEnabledButMissing := cfg.Review.Enabled && d.review == nil
+	// Flexible review system: build the provider catalog (or synthesize it from
+	// the legacy [review]/[coderabbit] tables) and its per-kind exec clients.
+	// Disabled by default (empty catalog ⇒ every pass/watch off). Availability is
+	// resolved ONCE here: an operator who enabled a pass provider whose binary is
+	// missing gets a single log line and that provider simply never answers (or is
+	// skipped in a fallback chain), never a per-cycle error.
+	d.setReviewProvidersLocked(cfg)
+	reviewWarn := d.reviewUnavailableWarnLocked()
 	d.mu.Unlock()
 	if brainEnabledButMissing {
 		logger.Printf("brain: [brain].enabled is true but claude is not available on PATH — using generic notify/comment templates")
 	}
-	if reviewEnabledButMissing {
-		logger.Printf("review: [review].enabled is true but coderabbit is not available on PATH (run: coderabbit auth login) — QA review pass disabled")
+	if reviewWarn != "" {
+		logger.Printf("%s", reviewWarn)
 	}
 	if err := cfg.Validate(); err != nil {
 		// Not fatal: the daemon stays up so status/reload can surface and
@@ -788,10 +818,15 @@ func (d *Daemon) adoptNativeSessions(ctx context.Context) {
 			s.CIRetries = prev.CIRetries
 			s.Escalated = prev.Escalated
 			s.PendingReaction = prev.PendingReaction
-			s.ReviewedPR = prev.ReviewedPR
-			s.PendingReviewFindings = prev.PendingReviewFindings
-			s.LastCodeRabbitAt = prev.LastCodeRabbitAt
-			s.PendingCodeRabbit = prev.PendingCodeRabbit
+			// Flexible-review fire-once guards (PLAN §3.2): carry the four kind-keyed
+			// maps forward, NOT the legacy scalars. prev came through Store.load, which
+			// runs migrateReviewState, so its maps are already authoritative (any old
+			// on-disk scalars are folded in). Copying them means an adopted survivor is
+			// never re-reviewed / re-watched / re-posted for a PR it already settled.
+			s.ReviewedPRs = prev.ReviewedPRs
+			s.ReviewWatermarks = prev.ReviewWatermarks
+			s.PendingHandoffs = prev.PendingHandoffs
+			s.PostedGitHubPRs = prev.PostedGitHubPRs
 			if len(s.RemovedLabels) == 0 {
 				s.RemovedLabels = prev.RemovedLabels
 			}

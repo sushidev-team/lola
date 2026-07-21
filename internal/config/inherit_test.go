@@ -414,6 +414,285 @@ path = "/tmp/web"
 	}
 }
 
+// --- Phase 7: per-project review-provider selection (the inheritance bitmap) ---
+//
+// These mirror the match_labels discipline exactly (see the tests above): the
+// `review` key is an inheritable []provKind carried through the pointer mirror
+// (nil = inherit vs `review = []` = override to nothing), with an Inherits.Review
+// bit whose ZERO value means "explicit". The trap — mutating the resolved field
+// without clearing the bit silently discards the write — is exercised too.
+
+// A project that omits `review` takes [defaults].review, and the bit records it.
+func TestReviewInheritedFromDefaults(t *testing.T) {
+	c, _ := writeCfg(t, `
+[defaults]
+global_cap = 4
+concurrency_cap = 2
+review = ["coderabbit-cli", "claude-session"]
+
+[[project]]
+name = "web"
+path = "/tmp/web"
+team_id = "team-1"
+`)
+	p := c.ProjectByName("web")
+	if !p.Inherits.Review {
+		t.Error("an omitted review key must be marked inherited")
+	}
+	if !reflect.DeepEqual(p.Review, []provKind{provCoderabbitCLI, provClaudeSession}) {
+		t.Errorf("review = %v, want the [defaults] value", p.Review)
+	}
+}
+
+// A present-but-empty `review = []` is an override to nothing, NOT an inherit,
+// and survives a save/load cycle rather than decaying into inherit.
+func TestReviewPresentButEmptyOverridesToNothing(t *testing.T) {
+	c, path := writeCfg(t, `
+[defaults]
+global_cap = 4
+concurrency_cap = 2
+review = ["coderabbit-cli"]
+
+[[project]]
+name = "web"
+path = "/tmp/web"
+team_id = "team-1"
+review = []
+`)
+	p := c.ProjectByName("web")
+	if p.Inherits.Review {
+		t.Error("an explicit empty review must not be treated as inherit")
+	}
+	if p.Review == nil || len(p.Review) != 0 {
+		t.Fatalf("review = %v, want the empty override (non-nil, len 0)", p.Review)
+	}
+
+	if err := c.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	again, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if q := again.ProjectByName("web"); q.Inherits.Review || q.Review == nil || len(q.Review) != 0 {
+		t.Errorf("empty review override lost on round trip: %v inherits=%v", q.Review, q.Inherits.Review)
+	}
+}
+
+// The bitmap ZERO value means "fully explicit": a hand-built Project literal
+// with a non-nil Review and a zero Inherits writes `review` under [[project]]
+// and never decays to inherit — matching how MatchLabels behaves.
+func TestReviewBitmapZeroValueIsExplicit(t *testing.T) {
+	t.Setenv("LOLA_HOME", t.TempDir())
+	path, err := DefaultPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &Config{
+		Defaults: Defaults{GlobalCap: 4, ConcurrencyCap: 1, Review: []provKind{provCoderabbitCLI}},
+		Projects: []Project{{
+			Name:   "web",
+			Path:   "/tmp/web",
+			Review: []provKind{provClaudeSession},
+			// Inherits is the zero value: a construction site that never sets a
+			// bit means "every key explicit", so review must be written.
+		}},
+	}
+	if err := c.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Once under [defaults], once as the explicit [[project]] override. Match the
+	// key assignment ("review = [") specifically — the reactions default message
+	// also contains the word "review".
+	if n := strings.Count(string(raw), "review = ["); n != 2 {
+		t.Errorf("review written %d times, want 2 ([defaults] + explicit [[project]]):\n%s", n, raw)
+	}
+	again, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := again.ProjectByName("web")
+	if q.Inherits.Review {
+		t.Error("an explicit project review must not decay to inherit on load")
+	}
+	if !reflect.DeepEqual(q.Review, []provKind{provClaudeSession}) {
+		t.Errorf("review = %v, want the explicit project value", q.Review)
+	}
+}
+
+// Saving must not freeze an inherited review into the file: after a save, a
+// change to [defaults].review still reaches the project.
+func TestReviewInheritedKeysAreNotWrittenBack(t *testing.T) {
+	c, path := writeCfg(t, `
+[defaults]
+global_cap = 4
+concurrency_cap = 2
+review = ["coderabbit-cli"]
+
+[[project]]
+name = "web"
+path = "/tmp/web"
+team_id = "team-1"
+`)
+	if err := c.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// review must appear once — under [defaults], not under [[project]]. Match
+	// the key assignment specifically (the reactions default message also
+	// contains the word "review").
+	if n := strings.Count(string(raw), "review = ["); n != 1 {
+		t.Errorf("review written %d times, want 1 (only [defaults]):\n%s", n, raw)
+	}
+
+	c.Defaults.Review = []provKind{provClaudeSession}
+	if err := c.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	again, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := again.ProjectByName("web").Review; !reflect.DeepEqual(got, []provKind{provClaudeSession}) {
+		t.Errorf("project review = %v, want to track the changed default", got)
+	}
+}
+
+// The trap: mutating the resolved Review field WITHOUT clearing Inherits.Review
+// silently discards the write on Save — projectToFile omits the key while the
+// bit is set. The project must reload as still-inherited, holding the [defaults]
+// value, never the stray override.
+func TestReviewMutateWithoutClearingBitIsDiscarded(t *testing.T) {
+	c, path := writeCfg(t, `
+[defaults]
+global_cap = 4
+concurrency_cap = 2
+review = ["coderabbit-cli"]
+
+[[project]]
+name = "web"
+path = "/tmp/web"
+team_id = "team-1"
+`)
+	p := c.ProjectByName("web")
+	if !p.Inherits.Review {
+		t.Fatal("precondition: the project should inherit review")
+	}
+	// Mutate the resolved field but leave the inherit bit set — the trap.
+	p.Review = []provKind{provClaudeSession}
+	if err := c.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	again, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := again.ProjectByName("web")
+	if !q.Inherits.Review {
+		t.Error("a write that never cleared the inherit bit must not persist as an override")
+	}
+	if !reflect.DeepEqual(q.Review, []provKind{provCoderabbitCLI}) {
+		t.Errorf("review = %v, want the inherited [defaults] value (the stray write must be discarded)", q.Review)
+	}
+}
+
+// ResolveInheritance is idempotent for review, and an explicit override (a list,
+// or an empty override-to-nothing) survives a Load -> Save -> Load identity.
+func TestReviewResolveInheritanceRoundTripIdentity(t *testing.T) {
+	c, path := writeCfg(t, `
+[defaults]
+global_cap = 4
+concurrency_cap = 2
+
+[[project]]
+name = "web"
+path = "/tmp/web"
+team_id = "team-1"
+review = ["coderabbit-cli", "claude-session"]
+
+[[project]]
+name = "api"
+path = "/tmp/api"
+team_id = "team-1"
+review = []
+`)
+	first := *c.ProjectByName("web")
+	c.ResolveInheritance()
+	c.ResolveInheritance()
+	if got := *c.ProjectByName("web"); !reflect.DeepEqual(first, got) {
+		t.Errorf("review resolution drifted:\n first: %+v\n after: %+v", first, got)
+	}
+
+	if err := c.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	again, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"web", "api"} {
+		a, b := c.ProjectByName(name), again.ProjectByName(name)
+		if !reflect.DeepEqual(a.Review, b.Review) || a.Inherits.Review != b.Inherits.Review {
+			t.Errorf("%s review round-trip drift: %v/inherit=%v -> %v/inherit=%v",
+				name, a.Review, a.Inherits.Review, b.Review, b.Inherits.Review)
+		}
+	}
+}
+
+// A project's per-project review selection must name a kind that is an enabled
+// provider in the effective catalog; an unavailable kind is rejected, an enabled
+// one validates.
+func TestProjectReviewValidatedAgainstCatalog(t *testing.T) {
+	bad, _ := writeCfg(t, `
+[defaults]
+global_cap = 4
+concurrency_cap = 2
+
+[[review.provider]]
+provider = "coderabbit-cli"
+enabled = true
+
+[[project]]
+name = "web"
+path = "/tmp/web"
+team_id = "team-1"
+cycle_mode = "none"
+assignee_mode = "anyone"
+review = ["claude-session"]
+`)
+	if err := bad.Validate(); err == nil || !strings.Contains(err.Error(), "enabled provider in the catalog") {
+		t.Fatalf("want a catalog-membership rejection for an unlisted kind, got %v", err)
+	}
+
+	good, _ := writeCfg(t, `
+[defaults]
+global_cap = 4
+concurrency_cap = 2
+
+[[review.provider]]
+provider = "coderabbit-cli"
+enabled = true
+
+[[project]]
+name = "web"
+path = "/tmp/web"
+team_id = "team-1"
+cycle_mode = "none"
+assignee_mode = "anyone"
+review = ["coderabbit-cli"]
+`)
+	if err := good.Validate(); err != nil {
+		t.Fatalf("selecting an enabled catalog kind must validate, got %v", err)
+	}
+}
+
 // A clean config reports nothing.
 func TestNoNoticesOnCleanConfig(t *testing.T) {
 	c, _ := writeCfg(t, `

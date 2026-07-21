@@ -858,9 +858,12 @@ func TestAdoptNativeSessionsPreservesHookAndGuardState(t *testing.T) {
 	prev.LastReactedStatus = "ci_failed"
 	prev.CIRetries = 2
 	prev.Escalated = true
-	prev.ReviewedPR = 7
-	prev.LastCodeRabbitAt = time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
-	prev.PendingCodeRabbit = "CodeRabbit posted new review feedback on PR #7. …"
+	// Flexible-review guards in their kind-keyed map form (a record loaded through
+	// Store.load has already migrated any legacy scalars into these maps).
+	prev.ReviewedPRs = map[string]int{"coderabbit-cli": 7}
+	prev.ReviewWatermarks = map[string]time.Time{"coderabbit-watch": time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)}
+	prev.PendingHandoffs = map[string]string{"coderabbit-watch": "CodeRabbit posted new review feedback on PR #7. …"}
+	prev.PostedGitHubPRs = map[string]int{"coderabbit-cli": 7}
 	prev.RemovedLabels = []string{"lbl-trigger"}
 	d.sessions.Upsert(prev)
 
@@ -877,11 +880,11 @@ func TestAdoptNativeSessionsPreservesHookAndGuardState(t *testing.T) {
 	if got.LastReactedStatus != "ci_failed" || got.CIRetries != 2 || !got.Escalated {
 		t.Errorf("reaction guards must survive adoption, got %+v", got)
 	}
-	if got.ReviewedPR != 7 {
-		t.Errorf("review guard must survive adoption, got ReviewedPR=%d", got.ReviewedPR)
+	if got.ReviewedPRs["coderabbit-cli"] != 7 || got.PostedGitHubPRs["coderabbit-cli"] != 7 {
+		t.Errorf("review pass + github guards must survive adoption, got %+v / %+v", got.ReviewedPRs, got.PostedGitHubPRs)
 	}
-	if got.PendingCodeRabbit == "" || got.LastCodeRabbitAt.IsZero() {
-		t.Errorf("coderabbit watermark + deferred hand-off must survive adoption, got %+v", got)
+	if got.PendingHandoffs["coderabbit-watch"] == "" || got.ReviewWatermarks["coderabbit-watch"].IsZero() {
+		t.Errorf("watch watermark + deferred hand-off must survive adoption, got %+v", got)
 	}
 	if len(got.RemovedLabels) != 1 || got.RemovedLabels[0] != "lbl-trigger" {
 		t.Errorf("removed-labels (orphan revert) must survive adoption, got %v", got.RemovedLabels)

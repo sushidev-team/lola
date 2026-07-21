@@ -102,18 +102,13 @@ type SettingsDTO struct {
 	BrainSummarizeEscalation bool   `json:"brainSummarizeEscalation"`
 	BrainSummarizeApproved   bool   `json:"brainSummarizeApproved"`
 
-	ReviewEnabled         bool   `json:"reviewEnabled"`
-	ReviewCommand         string `json:"reviewCommand"`
-	ReviewOnPROpen        bool   `json:"reviewOnPrOpen"`
-	ReviewSendToAgent     bool   `json:"reviewSendToAgent"`
-	ReviewCommentOnLinear bool   `json:"reviewCommentOnLinear"`
-	ReviewTimeout         int    `json:"reviewTimeout"`
-
-	CrEnabled         bool   `json:"crEnabled"`
-	CrAuthor          string `json:"crAuthor"`
-	CrNotify          bool   `json:"crNotify"`
-	CrSendToAgent     bool   `json:"crSendToAgent"`
-	CrCommentOnLinear bool   `json:"crCommentOnLinear"`
+	// ReviewProviders is the pluggable review catalog ([[review.provider]]),
+	// resolved to the EFFECTIVE set (the real catalog, or the entries synthesized
+	// from the legacy [review]/[coderabbit] tables). ReviewLegacy reports that the
+	// config still carries the legacy tables and no catalog — in which state the
+	// UI shows the providers read-only and offers MigrateReview.
+	ReviewProviders []ReviewProviderDTO `json:"reviewProviders"`
+	ReviewLegacy    bool                `json:"reviewLegacy"`
 
 	// Project defaults: the [defaults] counterpart of each inheritable
 	// [[project]] key. A project that does not override the key uses these.
@@ -129,11 +124,102 @@ type SettingsDTO struct {
 	PrioritySort   []string `json:"prioritySort"`
 }
 
+// ReviewProviderDTO is one entry of the review provider catalog, flattened for
+// the settings form. Provider/Fallback/Transports are plain strings so the
+// frontend never needs the (unexported) provKind type; the Go side converts.
+type ReviewProviderDTO struct {
+	Provider       string   `json:"provider"` // coderabbit-cli | coderabbit-watch | claude-session
+	Enabled        bool     `json:"enabled"`
+	OnPROpen       bool     `json:"onPrOpen"`
+	Command        string   `json:"command"`        // coderabbit-cli only
+	TimeoutSeconds int      `json:"timeoutSeconds"` // pass shapes
+	Model          string   `json:"model"`          // claude-session only
+	Author         string   `json:"author"`         // coderabbit-watch only
+	Transports     []string `json:"transports"`     // lola (always) | github | linear
+	Notify         bool     `json:"notify"`
+	SendToAgent    bool     `json:"sendToAgent"`
+	Fallback       []string `json:"fallback"` // ordered pass kinds
+}
+
 // PrioritySortKeys returns the sort keys the daemon understands, so the
 // settings form can offer them instead of taking free text. These are LOLA's
 // own keys, not a Linear concept — there is nothing to fetch from the API.
 func (s *ConfigService) PrioritySortKeys() []string {
 	return append([]string(nil), config.PrioritySortKeys...)
+}
+
+// ReviewProviderKinds / TransportTokens expose the selectable catalog values so
+// the frontend renders its pickers without hardcoding them.
+func (s *ConfigService) ReviewProviderKinds() []string { return config.ReviewProviderKinds() }
+func (s *ConfigService) TransportTokens() []string     { return config.TransportTokens() }
+
+// reviewProvidersDTO flattens the effective catalog for the form.
+func reviewProvidersDTO(cfg *config.Config) []ReviewProviderDTO {
+	eff := cfg.EffectiveReviewProviders()
+	out := make([]ReviewProviderDTO, 0, len(eff))
+	for _, p := range eff {
+		out = append(out, ReviewProviderDTO{
+			Provider:       p.KindString(),
+			Enabled:        p.Enabled,
+			OnPROpen:       p.OnPROpen,
+			Command:        p.Command,
+			TimeoutSeconds: p.TimeoutSeconds,
+			Model:          p.Model,
+			Author:         p.Author,
+			Transports:     p.Transports.Strings(),
+			Notify:         p.Notify,
+			SendToAgent:    p.SendToAgent,
+			Fallback:       p.FallbackStrings(),
+		})
+	}
+	return out
+}
+
+// providersFromDTO rebuilds the catalog from the form, emitting an entry for
+// every VALID kind (unknown kinds are dropped). Transports/fallback are set via
+// the string setters so the frontend never touches provKind.
+func providersFromDTO(dtos []ReviewProviderDTO) []config.ReviewProvider {
+	var out []config.ReviewProvider
+	for _, d := range dtos {
+		p, ok := config.NewReviewProvider(d.Provider)
+		if !ok {
+			continue
+		}
+		p.Enabled = d.Enabled
+		p.OnPROpen = d.OnPROpen
+		p.Command = d.Command
+		p.TimeoutSeconds = d.TimeoutSeconds
+		p.Model = d.Model
+		p.Author = d.Author
+		p.Notify = d.Notify
+		p.SendToAgent = d.SendToAgent
+		p.SetTransportTokens(d.Transports)
+		p.SetFallbackKinds(d.Fallback)
+		out = append(out, p)
+	}
+	return out
+}
+
+// legacyReviewOnly reports whether the config still carries the legacy tables
+// and no catalog — the read-only-pending-migration state.
+func legacyReviewOnly(cfg *config.Config) bool {
+	hasLegacy := cfg.Review != (config.ReviewConfig{}) || cfg.CodeRabbit != (config.CodeRabbitConfig{})
+	return hasLegacy && len(cfg.ReviewProviders) == 0
+}
+
+// MigrateReview folds the legacy [review]/[coderabbit] tables into the editable
+// provider catalog and persists (one-way; mirrors `lola config migrate-review`
+// and the TUI's in-place migrate). A no-op when there is nothing to migrate.
+func (s *ConfigService) MigrateReview() error {
+	cfg, path, err := loadConfig()
+	if err != nil {
+		return err
+	}
+	if !legacyReviewOnly(cfg) {
+		return nil
+	}
+	config.MigrateLegacyReview(cfg)
+	return saveConfig(cfg, path)
 }
 
 func (s *ConfigService) GetSettings() (SettingsDTO, error) {
@@ -153,17 +239,8 @@ func (s *ConfigService) GetSettings() (SettingsDTO, error) {
 		BrainTimeout:             cfg.Brain.TimeoutSeconds,
 		BrainSummarizeEscalation: cfg.Brain.SummarizeEscalation,
 		BrainSummarizeApproved:   cfg.Brain.SummarizeApproved,
-		ReviewEnabled:            cfg.Review.Enabled,
-		ReviewCommand:            cfg.Review.Command,
-		ReviewOnPROpen:           cfg.Review.OnPROpen,
-		ReviewSendToAgent:        cfg.Review.SendToAgent,
-		ReviewCommentOnLinear:    cfg.Review.CommentOnLinear,
-		ReviewTimeout:            cfg.Review.TimeoutSeconds,
-		CrEnabled:                cfg.CodeRabbit.Enabled,
-		CrAuthor:                 cfg.CodeRabbit.Author,
-		CrNotify:                 cfg.CodeRabbit.Notify,
-		CrSendToAgent:            cfg.CodeRabbit.SendToAgent,
-		CrCommentOnLinear:        cfg.CodeRabbit.CommentOnLinear,
+		ReviewProviders:          reviewProvidersDTO(cfg),
+		ReviewLegacy:             legacyReviewOnly(cfg),
 
 		BranchPrefix:   cfg.Defaults.BranchPrefix,
 		Symlinks:       cfg.Defaults.Symlinks,
@@ -200,17 +277,14 @@ func (s *ConfigService) SaveSettings(dto SettingsDTO) error {
 	cfg.Brain.TimeoutSeconds = dto.BrainTimeout
 	cfg.Brain.SummarizeEscalation = dto.BrainSummarizeEscalation
 	cfg.Brain.SummarizeApproved = dto.BrainSummarizeApproved
-	cfg.Review.Enabled = dto.ReviewEnabled
-	cfg.Review.Command = dto.ReviewCommand
-	cfg.Review.OnPROpen = dto.ReviewOnPROpen
-	cfg.Review.SendToAgent = dto.ReviewSendToAgent
-	cfg.Review.CommentOnLinear = dto.ReviewCommentOnLinear
-	cfg.Review.TimeoutSeconds = dto.ReviewTimeout
-	cfg.CodeRabbit.Enabled = dto.CrEnabled
-	cfg.CodeRabbit.Author = dto.CrAuthor
-	cfg.CodeRabbit.Notify = dto.CrNotify
-	cfg.CodeRabbit.SendToAgent = dto.CrSendToAgent
-	cfg.CodeRabbit.CommentOnLinear = dto.CrCommentOnLinear
+	// Review catalog. While the legacy tables are still present (read-only in the
+	// UI), the provider array is not written back — editing it alongside the
+	// legacy tables would produce a mixed config, a hard validation error;
+	// MigrateReview is the explicit path off that. In catalog mode the built
+	// array replaces the catalog and the legacy tables stay empty.
+	if !legacyReviewOnly(cfg) {
+		cfg.ReviewProviders = providersFromDTO(dto.ReviewProviders)
+	}
 
 	env, err := linesToEnv(dto.Env)
 	if err != nil {

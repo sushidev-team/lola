@@ -232,6 +232,80 @@
       saving = false;
     }
   }
+
+  // --- review provider catalog ----------------------------------------------
+  //
+  // The Review tab edits d.reviewProviders (the [[review.provider]] catalog).
+  // A legacy [review]/[coderabbit] config is shown read-only until migrated:
+  // editing it alongside a catalog is a hard validation error, so MigrateReview
+  // is the one-way path off it.
+  const ALL_KINDS = ["coderabbit-cli", "coderabbit-watch", "claude-session"];
+  const KIND_LABELS: Record<string, string> = {
+    "coderabbit-cli": "coderabbit-cli — execs `coderabbit review` on PR-open",
+    "coderabbit-watch": "coderabbit-watch — polls the PR for the app's comments",
+    "claude-session": "claude-session — headless `claude -p` review on PR-open",
+  };
+  const TRANSPORTS = ["lola", "github", "linear"];
+  const isWatch = (kind: string) => kind === "coderabbit-watch";
+  // Transports offered per kind: the watch forbids github (its feedback is
+  // already on the PR).
+  const transportsFor = (kind: string) => (isWatch(kind) ? ["lola", "linear"] : TRANSPORTS);
+  // A provider may fall through to the OTHER pass kind only (never itself / the watch).
+  const fallbackFor = (kind: string) => ALL_KINDS.filter((k) => k !== kind && !isWatch(k));
+
+  const providers = () => (dto?.reviewProviders ?? []) as any[];
+  const providerOf = (kind: string) => providers().find((p) => p.provider === kind);
+  const missingKinds = () => ALL_KINDS.filter((k) => !providerOf(k));
+
+  function addProvider(kind: string) {
+    if (!dto || providerOf(kind)) return;
+    dto.reviewProviders = [
+      ...providers(),
+      {
+        provider: kind,
+        enabled: true,
+        onPrOpen: !isWatch(kind),
+        command: "",
+        timeoutSeconds: 300,
+        model: "",
+        author: isWatch(kind) ? "coderabbitai" : "",
+        transports: ["lola"],
+        notify: true,
+        sendToAgent: true,
+        fallback: [],
+      },
+    ];
+  }
+
+  function removeProvider(kind: string) {
+    if (!dto) return;
+    dto.reviewProviders = providers().filter((p) => p.provider !== kind);
+  }
+
+  function toggleTransport(p: any, t: string, on: boolean) {
+    const set = new Set<string>(p.transports ?? []);
+    if (on) set.add(t);
+    else set.delete(t);
+    set.add("lola"); // lola is always present
+    p.transports = TRANSPORTS.filter((x) => set.has(x));
+  }
+
+  function toggleFallback(p: any, k: string, on: boolean) {
+    const set = new Set<string>(p.fallback ?? []);
+    if (on) set.add(k);
+    else set.delete(k);
+    p.fallback = fallbackFor(p.provider).filter((x) => set.has(x));
+  }
+
+  async function migrateReview() {
+    try {
+      await ConfigService.MigrateReview();
+      dto = { ...(await ConfigService.GetSettings()) };
+      store.setFlash("migrated to review providers", "good");
+    } catch (err) {
+      store.setFlash(String(err), "bad");
+    }
+  }
 </script>
 
 {#snippet head(label: string)}
@@ -538,65 +612,120 @@
         </section>
       {:else}
         <div class="space-y-5">
-          <section>
-            {@render head("CodeRabbit review")}
-            <div class="space-y-2">
-              <label class="flex cursor-pointer items-center gap-2">
-                <input type="checkbox" class="accent-accent" bind:checked={d.reviewEnabled} />
-                <span>Enabled</span>
-              </label>
-              <label class={rowCls}>
-                <span class="text-faint">Command</span>
-                <input class={inputCls} type="text" placeholder="coderabbit review" bind:value={d.reviewCommand} />
-              </label>
-              <label class={rowCls}>
-                <span class="text-faint">Timeout (s)</span>
-                <input class={inputCls} type="number" min="0" bind:value={d.reviewTimeout} />
-              </label>
-              <div class="flex flex-wrap gap-x-6 gap-y-2 pt-1">
-                <label class="flex cursor-pointer items-center gap-2">
-                  <input type="checkbox" class="accent-accent" bind:checked={d.reviewOnPrOpen} />
-                  <span>On PR open</span>
-                </label>
-                <label class="flex cursor-pointer items-center gap-2">
-                  <input type="checkbox" class="accent-accent" bind:checked={d.reviewSendToAgent} />
-                  <span>Send to agent</span>
-                </label>
-                <label class="flex cursor-pointer items-center gap-2">
-                  <input type="checkbox" class="accent-accent" bind:checked={d.reviewCommentOnLinear} />
-                  <span>Comment on Linear</span>
-                </label>
-              </div>
+          {#if d.reviewLegacy}
+            <div class="rounded border border-warn/40 bg-warn/10 px-3 py-2 text-xs text-ink">
+              <p>
+                This config still uses the legacy <code>[review]</code>/<code>[coderabbit]</code> tables. They are
+                <span class="text-faint">read-only</span> here — migrate them into the editable provider catalog to continue.
+              </p>
+              <button
+                class="mt-2 rounded border border-edge px-2 py-1 text-[11px] hover:border-accent"
+                onclick={migrateReview}>Migrate to providers</button>
             </div>
-          </section>
+          {/if}
 
-          <section class="border-t border-edge/40 pt-4">
-            {@render head("CodeRabbit watch")}
-            <div class="space-y-2">
-              <label class="flex cursor-pointer items-center gap-2">
-                <input type="checkbox" class="accent-accent" bind:checked={d.crEnabled} />
-                <span>Enabled</span>
-              </label>
-              <label class={rowCls}>
-                <span class="text-faint">Author</span>
-                <input class={inputCls} type="text" placeholder="coderabbitai[bot]" bind:value={d.crAuthor} />
-              </label>
-              <div class="flex flex-wrap gap-x-6 gap-y-2 pt-1">
-                <label class="flex cursor-pointer items-center gap-2">
-                  <input type="checkbox" class="accent-accent" bind:checked={d.crNotify} />
-                  <span>Notify</span>
-                </label>
-                <label class="flex cursor-pointer items-center gap-2">
-                  <input type="checkbox" class="accent-accent" bind:checked={d.crSendToAgent} />
-                  <span>Send to agent</span>
-                </label>
-                <label class="flex cursor-pointer items-center gap-2">
-                  <input type="checkbox" class="accent-accent" bind:checked={d.crCommentOnLinear} />
-                  <span>Comment on Linear</span>
-                </label>
+          {#each providers() as p (p.provider)}
+            <section class="border-t border-edge/40 pt-4 first:border-t-0 first:pt-0" class:opacity-60={d.reviewLegacy}>
+              {@render head(KIND_LABELS[p.provider] ?? p.provider)}
+              <div class="space-y-2">
+                <div class="flex items-center justify-between">
+                  <label class="flex cursor-pointer items-center gap-2">
+                    <input type="checkbox" class="accent-accent" disabled={d.reviewLegacy} bind:checked={p.enabled} />
+                    <span>Enabled</span>
+                  </label>
+                  {#if !d.reviewLegacy}
+                    <button class="text-[11px] text-faint hover:text-bad" onclick={() => removeProvider(p.provider)}>remove</button>
+                  {/if}
+                </div>
+
+                {#if p.provider === "coderabbit-cli"}
+                  <label class={rowCls}>
+                    <span class="text-faint">Command</span>
+                    <input class={inputCls} type="text" placeholder="coderabbit review" disabled={d.reviewLegacy} bind:value={p.command} />
+                  </label>
+                {/if}
+                {#if p.provider === "claude-session"}
+                  <label class={rowCls}>
+                    <span class="text-faint">Model</span>
+                    <input class={inputCls} type="text" placeholder="(claude default)" disabled={d.reviewLegacy} bind:value={p.model} />
+                  </label>
+                {/if}
+                {#if isWatch(p.provider)}
+                  <label class={rowCls}>
+                    <span class="text-faint">Author</span>
+                    <input class={inputCls} type="text" placeholder="coderabbitai" disabled={d.reviewLegacy} bind:value={p.author} />
+                  </label>
+                {:else}
+                  <label class={rowCls}>
+                    <span class="text-faint">Timeout (s)</span>
+                    <input class={inputCls} type="number" min="0" disabled={d.reviewLegacy} bind:value={p.timeoutSeconds} />
+                  </label>
+                {/if}
+
+                <div class="flex flex-wrap gap-x-6 gap-y-2 pt-1">
+                  {#if !isWatch(p.provider)}
+                    <label class="flex cursor-pointer items-center gap-2">
+                      <input type="checkbox" class="accent-accent" disabled={d.reviewLegacy} bind:checked={p.onPrOpen} />
+                      <span>On PR open</span>
+                    </label>
+                  {/if}
+                  <label class="flex cursor-pointer items-center gap-2">
+                    <input type="checkbox" class="accent-accent" disabled={d.reviewLegacy} bind:checked={p.notify} />
+                    <span>Notify</span>
+                  </label>
+                  <label class="flex cursor-pointer items-center gap-2">
+                    <input type="checkbox" class="accent-accent" disabled={d.reviewLegacy} bind:checked={p.sendToAgent} />
+                    <span>Send to agent</span>
+                  </label>
+                </div>
+
+                <div class={rowTopCls}>
+                  <span class="text-faint">Transports</span>
+                  <div class="flex flex-wrap gap-x-6 gap-y-2">
+                    {#each transportsFor(p.provider) as t}
+                      <label class="flex cursor-pointer items-center gap-2">
+                        <input
+                          type="checkbox"
+                          class="accent-accent"
+                          disabled={d.reviewLegacy || t === "lola"}
+                          checked={(p.transports ?? []).includes(t)}
+                          onchange={(e) => toggleTransport(p, t, (e.currentTarget as HTMLInputElement).checked)} />
+                        <span>{t}{t === "lola" ? " (always)" : ""}</span>
+                      </label>
+                    {/each}
+                  </div>
+                </div>
+
+                {#if !isWatch(p.provider)}
+                  <div class={rowTopCls}>
+                    <span class="text-faint">Fallback</span>
+                    <div class="flex flex-wrap gap-x-6 gap-y-2">
+                      {#each fallbackFor(p.provider) as k}
+                        <label class="flex cursor-pointer items-center gap-2">
+                          <input
+                            type="checkbox"
+                            class="accent-accent"
+                            disabled={d.reviewLegacy}
+                            checked={(p.fallback ?? []).includes(k)}
+                            onchange={(e) => toggleFallback(p, k, (e.currentTarget as HTMLInputElement).checked)} />
+                          <span>{k}</span>
+                        </label>
+                      {/each}
+                    </div>
+                  </div>
+                {/if}
               </div>
+            </section>
+          {/each}
+
+          {#if !d.reviewLegacy && missingKinds().length}
+            <div class="flex flex-wrap items-center gap-2 border-t border-edge/40 pt-4">
+              <span class="text-faint text-xs">Add provider:</span>
+              {#each missingKinds() as k}
+                <button class="rounded border border-edge px-2 py-1 text-[11px] hover:border-accent" onclick={() => addProvider(k)}>{k}</button>
+              {/each}
             </div>
-          </section>
+          {/if}
         </div>
       {/if}
     </div>

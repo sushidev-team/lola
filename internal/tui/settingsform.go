@@ -71,7 +71,7 @@ var settingsTabs = []struct {
 	{stProjectDefaults, "Project defaults"},
 	{stNotify, "Notify"},
 	{stBrain, "Brain"},
-	{stCodeRabbit, "CodeRabbit"},
+	{stCodeRabbit, "Review"},
 }
 
 type setField struct {
@@ -97,6 +97,12 @@ type setField struct {
 	// over config.PrioritySortKeys. Unlike wsPick there is nothing to fetch —
 	// the valid keys are lola's own, not Linear's.
 	sortPick bool
+	// choices, when non-empty, makes an sfList field a FIXED multiselect: enter
+	// opens a picker over these options (not the raw line editor / label fetch),
+	// writing the chosen ids back to lines in option order. Used by the review
+	// provider editor's transports and fallback fields — local constants, so
+	// nothing is fetched and it works offline.
+	choices []setPickOpt
 }
 
 type settingsForm struct {
@@ -131,6 +137,13 @@ type settingsForm struct {
 	wsNames map[string]string
 	wsErr   string
 	picker  *setPicker
+
+	// reviewLegacy is set when the config still carries the legacy
+	// [review]/[coderabbit] tables and no [[review.provider]] catalog. In that
+	// state the Review tab is READ-ONLY (editing would produce a mixed config,
+	// which is a hard validation error) and offers a one-key migration into the
+	// editable provider catalog. Cleared once migrated.
+	reviewLegacy bool
 }
 
 // setPicker is the workspace-label chooser floated over the field list. It is
@@ -178,8 +191,20 @@ const wsLabelHelp = " enter opens the workspace-label picker; raw UUID entry sta
 // enabled), so saving without touching them is a faithful round-trip.
 func newSettingsForm(cfgPath string, cfg *config.Config) *settingsForm {
 	itoa := strconv.Itoa
-	d, n, br, rv, cr := cfg.Defaults, cfg.Notify, cfg.Brain, cfg.Review, cfg.CodeRabbit
+	d, n, br := cfg.Defaults, cfg.Notify, cfg.Brain
+	// Review providers: seed each kind's fields from the EFFECTIVE catalog (the
+	// real [[review.provider]] entries, or the ones synthesized from the legacy
+	// tables), falling back to a fresh disabled provider for a kind that is not
+	// configured. A legacy-only config renders these READ-ONLY until migrated.
+	rp := reviewProviderSeed(cfg)
+	cli, watch, claude := rp("coderabbit-cli"), rp("coderabbit-watch"), rp("claude-session")
+	reviewLegacy := legacyReviewOnly(cfg)
+	// The fixed multiselect option sets. github is offered on the pass kinds
+	// only; the watch forbids it (validation), so its editor omits it.
+	trAll := transportOpts(true)
+	trNoGitHub := transportOpts(false)
 	f := &settingsForm{
+		reviewLegacy: reviewLegacy,
 		cfgPath: cfgPath,
 		cfg:     cfg,
 		fields: []setField{
@@ -214,23 +239,34 @@ func newSettingsForm(cfgPath string, cfg *config.Config) *settingsForm {
 			{key: "brain_esc", tab: stBrain, label: "Summarize escalation", help: "Summarize WHY a session is blocked on escalation.", kind: sfBool, b: br.SummarizeEscalation},
 			{key: "brain_appr", tab: stBrain, label: "Summarize approved", help: "Summarize PR risk on approved+green.", kind: sfBool, b: br.SummarizeApproved},
 
-			// CodeRabbit — one tab, two subsections. [review] runs the CLI on
-			// PR-open; [coderabbit] watches the PR for the app's comments. They are
-			// separate config tables but the same integration, so they read as one.
-			// No top-level section header: the tab title already says CodeRabbit,
-			// and each subsection names its own table.
-			{key: "review_enabled", tab: stCodeRabbit, subsection: "CLI review — execs `coderabbit review` locally on PR-open [review]", indent: true, label: "Enabled", help: "Opt-in CodeRabbit CLI QA pass: execs `coderabbit review` against the worktree when a session first opens a PR.", kind: sfBool, b: rv.Enabled},
-			{key: "review_command", tab: stCodeRabbit, indent: true, label: "Command", help: "coderabbit argv override (space-split); empty = built-in default.", kind: sfText, text: rv.Command},
-			{key: "review_onpropen", tab: stCodeRabbit, indent: true, label: "On PR open", help: "Run the pass automatically when a session first opens a PR.", kind: sfBool, b: rv.OnPROpen},
-			{key: "review_send", tab: stCodeRabbit, indent: true, label: "Send to agent", help: "Feed findings back to the worker via the send-keys gate.", kind: sfBool, b: rv.SendToAgent},
-			{key: "review_linear", tab: stCodeRabbit, indent: true, label: "Comment on Linear", help: "Also post findings as a Linear comment.", kind: sfBool, b: rv.CommentOnLinear},
-			{key: "review_timeout", tab: stCodeRabbit, indent: true, label: "Timeout seconds", help: "Hard cap per review pass. Must be >= 0.", kind: sfInt, text: itoa(rv.TimeoutSeconds)},
+			// Review — the pluggable provider catalog ([[review.provider]]). One
+			// indented subsection per KIND; each names its config kind. transports
+			// and fallback are fixed multiselects (enter opens a local picker), the
+			// notify/send toggles refine the always-on `lola` transport. A
+			// legacy-only config shows these READ-ONLY with a migrate action.
+			{key: "pv_cli_enabled", tab: stCodeRabbit, subsection: "coderabbit-cli — execs `coderabbit review` locally on PR-open", indent: true, label: "Enabled", help: "Opt-in CodeRabbit CLI QA pass: execs `coderabbit review` against the worktree when a session first opens a PR.", kind: sfBool, b: cli.Enabled},
+			{key: "pv_cli_onpropen", tab: stCodeRabbit, indent: true, label: "On PR open", help: "Run the pass automatically when a session first opens a PR.", kind: sfBool, b: cli.OnPROpen},
+			{key: "pv_cli_command", tab: stCodeRabbit, indent: true, label: "Command", help: "coderabbit argv override (space-split); empty = built-in default.", kind: sfText, text: cli.Command},
+			{key: "pv_cli_timeout", tab: stCodeRabbit, indent: true, label: "Timeout seconds", help: "Hard cap per review pass. Must be >= 0.", kind: sfInt, text: itoa(cli.TimeoutSeconds)},
+			{key: "pv_cli_notify", tab: stCodeRabbit, indent: true, label: "Notify", help: "lola transport: surface findings to a human (desktop/Slack).", kind: sfBool, b: cli.Notify},
+			{key: "pv_cli_send", tab: stCodeRabbit, indent: true, label: "Send to agent", help: "lola transport: feed findings back to the worker via the send-keys gate.", kind: sfBool, b: cli.SendToAgent},
+			{key: "pv_cli_transports", tab: stCodeRabbit, indent: true, label: "Transports", help: "Sinks findings route to: lola (always on: notify + agent), github (PR comment), linear (issue comment). enter picks.", kind: sfList, choices: trAll, lines: cli.Transports.Strings()},
+			{key: "pv_cli_fallback", tab: stCodeRabbit, indent: true, label: "Fallback", help: "Ordered pass kinds tried when this provider can't answer (unavailable / over-quota). enter picks.", kind: sfList, choices: fallbackOpts("coderabbit-cli"), lines: cli.FallbackStrings()},
 
-			{key: "cr_enabled", tab: stCodeRabbit, subsection: "PR-comment watch — polls the PR for the app's comments [coderabbit]", indent: true, label: "Enabled", help: "Opt-in PR-comment watch: polls the GitHub PR for comments the CodeRabbit app (or another bot) leaves, and routes them. Unlike the CLI review above, this needs no local coderabbit binary.", kind: sfBool, b: cr.Enabled},
-			{key: "cr_author", tab: stCodeRabbit, indent: true, label: "Author", help: "Login substring matched against comment authors. Default coderabbitai.", kind: sfText, text: crAuthor(cr)},
-			{key: "cr_notify", tab: stCodeRabbit, indent: true, label: "Notify", help: "Surface each new comment to a human.", kind: sfBool, b: cr.Notify},
-			{key: "cr_send", tab: stCodeRabbit, indent: true, label: "Send to agent", help: "Relay each new comment to the worker via the send-keys gate.", kind: sfBool, b: cr.SendToAgent},
-			{key: "cr_linear", tab: stCodeRabbit, indent: true, label: "Comment on Linear", help: "Also mirror each new comment onto the Linear issue.", kind: sfBool, b: cr.CommentOnLinear},
+			{key: "pv_watch_enabled", tab: stCodeRabbit, subsection: "coderabbit-watch — polls the PR for the app's comments", indent: true, label: "Enabled", help: "Opt-in PR-comment watch: polls the GitHub PR for comments the CodeRabbit app (or another bot) leaves, and routes them. Needs no local coderabbit binary. No github transport / fallback (its feedback is already on the PR).", kind: sfBool, b: watch.Enabled},
+			{key: "pv_watch_author", tab: stCodeRabbit, indent: true, label: "Author", help: "Login substring matched against comment authors. Default coderabbitai.", kind: sfText, text: watchAuthor(watch)},
+			{key: "pv_watch_notify", tab: stCodeRabbit, indent: true, label: "Notify", help: "lola transport: surface each new comment to a human.", kind: sfBool, b: watch.Notify},
+			{key: "pv_watch_send", tab: stCodeRabbit, indent: true, label: "Send to agent", help: "lola transport: relay each new comment to the worker via the send-keys gate.", kind: sfBool, b: watch.SendToAgent},
+			{key: "pv_watch_transports", tab: stCodeRabbit, indent: true, label: "Transports", help: "Sinks: lola (always on), linear (issue comment). github is not offered — the feedback is already on the PR. enter picks.", kind: sfList, choices: trNoGitHub, lines: watch.Transports.Strings()},
+
+			{key: "pv_claude_enabled", tab: stCodeRabbit, subsection: "claude-session — headless `claude -p` review on PR-open", indent: true, label: "Enabled", help: "Opt-in headless Claude review pass: runs `claude -p` over the PR diff when a session first opens a PR.", kind: sfBool, b: claude.Enabled},
+			{key: "pv_claude_onpropen", tab: stCodeRabbit, indent: true, label: "On PR open", help: "Run the pass automatically when a session first opens a PR.", kind: sfBool, b: claude.OnPROpen},
+			{key: "pv_claude_model", tab: stCodeRabbit, indent: true, label: "Model", help: "claude --model override; empty = claude's default.", kind: sfText, text: claude.Model},
+			{key: "pv_claude_timeout", tab: stCodeRabbit, indent: true, label: "Timeout seconds", help: "Hard cap per review pass. Must be >= 0.", kind: sfInt, text: itoa(claude.TimeoutSeconds)},
+			{key: "pv_claude_notify", tab: stCodeRabbit, indent: true, label: "Notify", help: "lola transport: surface findings to a human.", kind: sfBool, b: claude.Notify},
+			{key: "pv_claude_send", tab: stCodeRabbit, indent: true, label: "Send to agent", help: "lola transport: feed findings back to the worker via the send-keys gate.", kind: sfBool, b: claude.SendToAgent},
+			{key: "pv_claude_transports", tab: stCodeRabbit, indent: true, label: "Transports", help: "Sinks: lola (always on), github (PR comment), linear (issue comment). enter picks.", kind: sfList, choices: trAll, lines: claude.Transports.Strings()},
+			{key: "pv_claude_fallback", tab: stCodeRabbit, indent: true, label: "Fallback", help: "Ordered pass kinds tried when this provider can't answer. enter picks.", kind: sfList, choices: fallbackOpts("claude-session"), lines: claude.FallbackStrings()},
 		},
 	}
 	// Warm the label NAMES from the on-disk cache for rendering. This is a local
@@ -242,13 +278,71 @@ func newSettingsForm(cfgPath string, cfg *config.Config) *settingsForm {
 	return f
 }
 
-// crAuthor pre-fills the author field with the effective default when unset, so
-// the editor shows what the watch will actually match.
-func crAuthor(cr config.CodeRabbitConfig) string {
-	if cr.Author == "" {
+// watchAuthor pre-fills the watch's author field with the effective default
+// when unset, so the editor shows what the watch will actually match.
+func watchAuthor(p config.ReviewProvider) string {
+	if p.Author == "" {
 		return config.DefaultCodeRabbitAuthor
 	}
-	return cr.Author
+	return p.Author
+}
+
+// reviewProviderSeed returns a lookup that yields the effective provider for a
+// kind (from the real catalog or the legacy synthesis), or a fresh DISABLED
+// provider when the kind is not configured — so every kind's fields have a
+// sensible pre-fill even before it is enabled.
+func reviewProviderSeed(cfg *config.Config) func(kind string) config.ReviewProvider {
+	byKind := map[string]config.ReviewProvider{}
+	for _, p := range cfg.EffectiveReviewProviders() {
+		byKind[p.KindString()] = p
+	}
+	return func(kind string) config.ReviewProvider {
+		if p, ok := byKind[kind]; ok {
+			return p
+		}
+		// A kind that is not in the catalog seeds DISABLED with its sinks OFF, so
+		// enabling it in the editor flips the dependent toggles on (enableDefaults)
+		// exactly as saving `enabled = true` alone would resolve — rather than
+		// showing them pre-checked while the provider itself is off.
+		p, _ := config.NewReviewProvider(kind)
+		p.Enabled, p.OnPROpen, p.Notify, p.SendToAgent = false, false, false, false
+		return p
+	}
+}
+
+// legacyReviewOnly reports whether the config carries the legacy
+// [review]/[coderabbit] tables but no [[review.provider]] catalog — the state
+// in which the Review tab is read-only pending migration.
+func legacyReviewOnly(cfg *config.Config) bool {
+	hasLegacy := cfg.Review != (config.ReviewConfig{}) || cfg.CodeRabbit != (config.CodeRabbitConfig{})
+	return hasLegacy && len(cfg.ReviewProviders) == 0
+}
+
+// transportOpts builds the transport multiselect options; github is included
+// only for the pass kinds (the watch forbids it).
+func transportOpts(withGitHub bool) []setPickOpt {
+	var out []setPickOpt
+	for _, t := range config.TransportTokens() {
+		if t == string(config.TransportGitHub) && !withGitHub {
+			continue
+		}
+		out = append(out, setPickOpt{t, t})
+	}
+	return out
+}
+
+// fallbackOpts lists the pass kinds a provider may fall through to: every pass
+// kind except itself (the watch is not a valid fallback — it cannot classify
+// quota).
+func fallbackOpts(self string) []setPickOpt {
+	var out []setPickOpt
+	for _, k := range config.ReviewProviderKinds() {
+		if k == self || config.IsWatchKind(k) {
+			continue
+		}
+		out = append(out, setPickOpt{k, k})
+	}
+	return out
 }
 
 // agentKindStrings is the [defaults].agent picker's cycle order: the concrete
@@ -400,9 +494,10 @@ func (f *settingsForm) maybeLoadLabelNames() tea.Cmd {
 // defaults these on). The editor mirrors that so enabling a feature in the TUI is
 // not silently inert with every sink left off.
 var enableDefaults = map[string][]string{
-	"cr_enabled":     {"cr_notify", "cr_send"},
-	"review_enabled": {"review_onpropen", "review_send"},
-	"brain_enabled":  {"brain_esc", "brain_appr"},
+	"pv_cli_enabled":    {"pv_cli_onpropen", "pv_cli_notify", "pv_cli_send"},
+	"pv_watch_enabled":  {"pv_watch_notify", "pv_watch_send"},
+	"pv_claude_enabled": {"pv_claude_onpropen", "pv_claude_notify", "pv_claude_send"},
+	"brain_enabled":     {"brain_esc", "brain_appr"},
 }
 
 // toggleBool flips a bool field. When it flips a master "enabled" switch OFF→ON,
@@ -475,13 +570,30 @@ func (f *settingsForm) key(k tea.KeyPressMsg) (tea.Cmd, settingsFormEvent) {
 		if fld.wsPick {
 			return f.refreshWorkspaceLabels(fld), settingsFormNone
 		}
+	case "m", "M":
+		// Migrate the legacy [review]/[coderabbit] tables into the editable
+		// provider catalog — the only action offered while the Review tab is
+		// read-only. A no-op elsewhere (an "m" is a literal in a text field,
+		// handled by the default case below).
+		if f.reviewReadOnly() {
+			f.migrateReview()
+			return nil, settingsFormNone
+		}
+		f.typeInto(fld, k)
 	case "enter":
+		if f.reviewReadOnly() {
+			return nil, settingsFormNone // read-only pending migration
+		}
 		if fld.sortPick {
 			f.openSortPicker(fld)
 			return nil, settingsFormNone
 		}
 		if fld.wsPick {
 			return f.openLabelPicker(fld), settingsFormNone
+		}
+		if len(fld.choices) > 0 {
+			f.openChoicePicker(fld)
+			return nil, settingsFormNone
 		}
 		switch fld.kind {
 		case sfBool:
@@ -492,6 +604,9 @@ func (f *settingsForm) key(k tea.KeyPressMsg) (tea.Cmd, settingsFormEvent) {
 			f.openList(fld)
 		}
 	case "space":
+		if f.reviewReadOnly() {
+			return nil, settingsFormNone
+		}
 		// Space toggles a bool and cycles an enum, but is a literal character in a
 		// text field (e.g. the review command argv); int and list fields ignore it.
 		switch fld.kind {
@@ -503,18 +618,82 @@ func (f *settingsForm) key(k tea.KeyPressMsg) (tea.Cmd, settingsFormEvent) {
 			fld.text += " "
 		}
 	case "backspace":
+		if f.reviewReadOnly() {
+			return nil, settingsFormNone
+		}
 		if fld.kind == sfText || fld.kind == sfInt {
 			fld.text = dropLastRune(fld.text)
 		}
 	default:
-		switch {
-		case fld.kind == sfInt && len(k.Text) == 1 && k.Text >= "0" && k.Text <= "9":
-			fld.text += k.Text
-		case fld.kind == sfText && k.Text != "":
-			fld.text += k.Text
+		if f.reviewReadOnly() {
+			return nil, settingsFormNone
 		}
+		f.typeInto(fld, k)
 	}
 	return nil, settingsFormNone
+}
+
+// typeInto appends a typed character to a text/int field (digits only for int).
+func (f *settingsForm) typeInto(fld *setField, k tea.KeyPressMsg) {
+	switch {
+	case fld.kind == sfInt && len(k.Text) == 1 && k.Text >= "0" && k.Text <= "9":
+		fld.text += k.Text
+	case fld.kind == sfText && k.Text != "":
+		fld.text += k.Text
+	}
+}
+
+// reviewReadOnly reports whether the focused tab is the (legacy, unmigrated)
+// Review tab, in which every edit is suppressed and only the migrate action runs.
+func (f *settingsForm) reviewReadOnly() bool {
+	return f.reviewLegacy && f.tab == stCodeRabbit
+}
+
+// openChoicePicker opens a fixed multiselect over fld.choices, seeded from the
+// field's current lines. applyPick writes the selection back to lines in option
+// order, so save() reads it uniformly with the other list fields.
+func (f *settingsForm) openChoicePicker(fld *setField) {
+	p := &setPicker{title: fld.label, key: fld.key, multi: true, sel: map[string]bool{}}
+	for _, id := range trimDropEmpty(fld.lines) {
+		p.sel[id] = true
+	}
+	p.opts = append(p.opts, fld.choices...)
+	for i, o := range p.opts {
+		if p.sel[o.id] {
+			p.cursor = i
+			break
+		}
+	}
+	f.picker = p
+}
+
+// migrateReview folds the legacy [review]/[coderabbit] tables into the catalog,
+// persists, and rebuilds the Review tab as an editable provider editor. One-way
+// (mirrors `lola config migrate-review`); a Validate/Save failure leaves the
+// legacy config in place and surfaces the reason.
+func (f *settingsForm) migrateReview() {
+	config.MigrateLegacyReview(f.cfg)
+	if err := f.cfg.Validate(); err != nil {
+		f.err = "migrate failed: " + err.Error()
+		return
+	}
+	if err := f.cfg.Save(f.cfgPath); err != nil {
+		f.err = "migrate save failed: " + err.Error()
+		return
+	}
+	// Reseed the provider fields from the freshly-written catalog and drop
+	// read-only mode so the editor is now live.
+	fresh := newSettingsForm(f.cfgPath, f.cfg)
+	for i := range f.fields {
+		if f.fields[i].tab != stCodeRabbit {
+			continue
+		}
+		if nf := fresh.field(f.fields[i].key); nf != nil {
+			f.fields[i] = *nf
+		}
+	}
+	f.reviewLegacy = false
+	f.cursor = 0
 }
 
 // openList opens a list/env field for line editing, seeding an empty field with
@@ -890,8 +1069,9 @@ func (f *settingsForm) pickerKey(k tea.KeyPressMsg) (tea.Cmd, settingsFormEvent)
 		}
 	case "ctrl+r":
 		// Refetch past the cache, keeping the pending selection's field so the
-		// picker reopens on the fresh set.
-		if fld := f.field(p.key); fld != nil {
+		// picker reopens on the fresh set. Only the workspace-label pickers fetch;
+		// a fixed choice picker (transports/fallback) has nothing to refresh.
+		if fld := f.field(p.key); fld != nil && fld.wsPick {
 			return f.refreshWorkspaceLabels(fld), settingsFormNone
 		}
 	case "enter":
@@ -1034,14 +1214,19 @@ func (f *settingsForm) save() settingsFormEvent {
 	if err != nil {
 		return settingsFormNone
 	}
-	rt, err := f.parseInt("review_timeout")
-	if err != nil {
-		return settingsFormNone
-	}
 	interval, perr := time.ParseDuration(strings.TrimSpace(f.field("poll_interval").text))
 	if perr != nil {
 		f.err = "poll interval: " + perr.Error()
 		return settingsFormNone
+	}
+	// The provider catalog (skipped entirely while the Review tab is read-only —
+	// the legacy tables stay as they are pending an explicit migrate).
+	var provs []config.ReviewProvider
+	if !f.reviewLegacy {
+		var perr error
+		if provs, perr = f.buildReviewProviders(); perr != nil {
+			return settingsFormNone // f.err already set
+		}
 	}
 
 	c := f.cfg
@@ -1050,6 +1235,7 @@ func (f *settingsForm) save() settingsFormEvent {
 	// REPLACED below, never mutated in place, so the value copy is a complete
 	// rollback (same reason NotifyConfig.Routing survives untouched).
 	oldD, oldN, oldB, oldR, oldC := c.Defaults, c.Notify, c.Brain, c.Review, c.CodeRabbit
+	oldP := c.ReviewProviders
 
 	c.Defaults.GlobalCap = gc
 	c.Defaults.ConcurrencyCap = cc
@@ -1078,32 +1264,82 @@ func (f *settingsForm) save() settingsFormEvent {
 	c.Brain.SummarizeEscalation = f.field("brain_esc").b
 	c.Brain.SummarizeApproved = f.field("brain_appr").b
 
-	c.Review.Enabled = f.field("review_enabled").b
-	c.Review.Command = strings.TrimSpace(f.field("review_command").text)
-	c.Review.OnPROpen = f.field("review_onpropen").b
-	c.Review.SendToAgent = f.field("review_send").b
-	c.Review.CommentOnLinear = f.field("review_linear").b
-	c.Review.TimeoutSeconds = rt
+	// The review provider catalog replaces the two legacy tables. In catalog
+	// mode the legacy tables MUST stay zero (a non-empty pair alongside a catalog
+	// is a hard validation error); the read-only guard above means we only reach
+	// here with legacy already cleared, so assigning the built catalog is safe.
+	if !f.reviewLegacy {
+		c.ReviewProviders = provs
+	}
 
-	c.CodeRabbit.Enabled = f.field("cr_enabled").b
-	c.CodeRabbit.Author = strings.TrimSpace(f.field("cr_author").text)
-	c.CodeRabbit.Notify = f.field("cr_notify").b
-	c.CodeRabbit.SendToAgent = f.field("cr_send").b
-	c.CodeRabbit.CommentOnLinear = f.field("cr_linear").b
-
-	if err := c.Validate(); err != nil {
+	rollback := func() {
 		c.Defaults, c.Notify, c.Brain, c.Review, c.CodeRabbit = oldD, oldN, oldB, oldR, oldC
+		c.ReviewProviders = oldP
 		c.ResolveInheritance() // re-resolve projects against the restored defaults
+	}
+	if err := c.Validate(); err != nil {
+		rollback()
 		f.err = "invalid: " + err.Error()
 		return settingsFormNone
 	}
 	if err := c.Save(f.cfgPath); err != nil {
-		c.Defaults, c.Notify, c.Brain, c.Review, c.CodeRabbit = oldD, oldN, oldB, oldR, oldC
-		c.ResolveInheritance() // re-resolve projects against the restored defaults
+		rollback()
 		f.err = "save failed: " + err.Error()
 		return settingsFormNone
 	}
 	return settingsFormSaved
+}
+
+// buildReviewProviders assembles the catalog from the per-kind fields, emitting
+// an entry for every ENABLED kind (a disabled kind is dropped, so a config that
+// enables nothing writes no [[review.provider]] table — fresh-omits). The two
+// timeout fields are parsed here so a malformed one aborts save before any
+// mutation; on that path f.err is set and a non-nil error is returned.
+func (f *settingsForm) buildReviewProviders() ([]config.ReviewProvider, error) {
+	cliTimeout, err := f.parseInt("pv_cli_timeout")
+	if err != nil {
+		return nil, err
+	}
+	claudeTimeout, err := f.parseInt("pv_claude_timeout")
+	if err != nil {
+		return nil, err
+	}
+	var out []config.ReviewProvider
+
+	if f.field("pv_cli_enabled").b {
+		p, _ := config.NewReviewProvider("coderabbit-cli")
+		p.Enabled = true
+		p.OnPROpen = f.field("pv_cli_onpropen").b
+		p.Command = strings.TrimSpace(f.field("pv_cli_command").text)
+		p.TimeoutSeconds = cliTimeout
+		p.Notify = f.field("pv_cli_notify").b
+		p.SendToAgent = f.field("pv_cli_send").b
+		p.SetTransportTokens(trimDropEmpty(f.field("pv_cli_transports").lines))
+		p.SetFallbackKinds(trimDropEmpty(f.field("pv_cli_fallback").lines))
+		out = append(out, p)
+	}
+	if f.field("pv_watch_enabled").b {
+		p, _ := config.NewReviewProvider("coderabbit-watch")
+		p.Enabled = true
+		p.Author = strings.TrimSpace(f.field("pv_watch_author").text)
+		p.Notify = f.field("pv_watch_notify").b
+		p.SendToAgent = f.field("pv_watch_send").b
+		p.SetTransportTokens(trimDropEmpty(f.field("pv_watch_transports").lines))
+		out = append(out, p)
+	}
+	if f.field("pv_claude_enabled").b {
+		p, _ := config.NewReviewProvider("claude-session")
+		p.Enabled = true
+		p.OnPROpen = f.field("pv_claude_onpropen").b
+		p.Model = strings.TrimSpace(f.field("pv_claude_model").text)
+		p.TimeoutSeconds = claudeTimeout
+		p.Notify = f.field("pv_claude_notify").b
+		p.SendToAgent = f.field("pv_claude_send").b
+		p.SetTransportTokens(trimDropEmpty(f.field("pv_claude_transports").lines))
+		p.SetFallbackKinds(trimDropEmpty(f.field("pv_claude_fallback").lines))
+		out = append(out, p)
+	}
+	return out, nil
 }
 
 // parseInt reads an int field, setting f.err (and returning the error) on a
@@ -1177,9 +1413,9 @@ func (f *settingsForm) fieldRegion() (lines []string, fieldLine []int) {
 			fieldLine[vi] = len(lines)
 			lines = append(lines, indent+marker+lab)
 			if len(fld.lines) == 0 {
-				// wsPick fields open a picker on enter, not the line editor.
+				// wsPick / choice fields open a picker on enter, not the line editor.
 				empty := "(none — enter to add)"
-				if fld.wsPick {
+				if fld.wsPick || len(fld.choices) > 0 {
 					empty = "(none — enter to pick)"
 				}
 				lines = append(lines, indent+"      "+faintText.Render(empty))
@@ -1253,8 +1489,16 @@ func (f *settingsForm) footerLines() []string {
 	if f.cur().wsPick && f.wsErr != "" {
 		out = append(out, "", warnText.Render("! "+f.wsErr))
 	}
+	// The Review tab is read-only while the legacy tables are still present:
+	// editing them alongside a catalog is a hard validation error, so the only
+	// action is to migrate into the editable provider catalog.
+	if f.reviewReadOnly() {
+		out = append(out, "", warnText.Render("! legacy [review]/[coderabbit] tables — read-only. Press m to migrate to the editable provider catalog."))
+	}
 	hint := "tab/⇧tab section · ↑/↓ field · space toggle · ctrl-s save · esc cancel"
 	switch {
+	case f.reviewReadOnly():
+		hint = "m migrate to providers · tab/⇧tab section · ↑/↓ field · ctrl-s save · esc cancel"
 	case f.editing:
 		hint = "editing " + f.cur().label + " — ↑/↓ line · enter new line · esc done"
 	case f.cur().wsPick:

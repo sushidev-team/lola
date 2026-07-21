@@ -196,9 +196,12 @@ class Store {
   revive(session: string) {
     return this.act(() => DaemonService.Revive(session), `revived ${session}`);
   }
-  review(session: string) {
-    return this.act(() => DaemonService.Review(session), "review requested");
+  // review forces a QA review PASS. provider optionally selects the pass
+  // provider kind (coderabbit-cli | claude-session); "" forces the primary.
+  review(session: string, provider = "") {
+    return this.act(() => DaemonService.Review(session, provider), "review requested");
   }
+  // coderabbit is kept as the back-compat alias forcing the watch kind.
   coderabbit(session: string) {
     return this.act(() => DaemonService.CodeRabbit(session), "coderabbit poll requested");
   }

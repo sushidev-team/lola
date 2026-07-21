@@ -128,6 +128,52 @@ export interface ReleaseEntryDTO {
     "publishedAt": string;
 }
 
+/**
+ * ReviewProviderDTO is one entry of the review provider catalog, flattened for
+ * the settings form. Provider/Fallback/Transports are plain strings so the
+ * frontend never needs the (unexported) provKind type; the Go side converts.
+ */
+export interface ReviewProviderDTO {
+    /**
+     * coderabbit-cli | coderabbit-watch | claude-session
+     */
+    "provider": string;
+    "enabled": boolean;
+    "onPrOpen": boolean;
+
+    /**
+     * coderabbit-cli only
+     */
+    "command": string;
+
+    /**
+     * pass shapes
+     */
+    "timeoutSeconds": number;
+
+    /**
+     * claude-session only
+     */
+    "model": string;
+
+    /**
+     * coderabbit-watch only
+     */
+    "author": string;
+
+    /**
+     * lola (always) | github | linear
+     */
+    "transports": string[] | null;
+    "notify": boolean;
+    "sendToAgent": boolean;
+
+    /**
+     * ordered pass kinds
+     */
+    "fallback": string[] | null;
+}
+
 export interface SettingsDTO {
     "globalCap": number;
     "concurrencyCap": number;
@@ -152,17 +198,16 @@ export interface SettingsDTO {
     "brainTimeout": number;
     "brainSummarizeEscalation": boolean;
     "brainSummarizeApproved": boolean;
-    "reviewEnabled": boolean;
-    "reviewCommand": string;
-    "reviewOnPrOpen": boolean;
-    "reviewSendToAgent": boolean;
-    "reviewCommentOnLinear": boolean;
-    "reviewTimeout": number;
-    "crEnabled": boolean;
-    "crAuthor": string;
-    "crNotify": boolean;
-    "crSendToAgent": boolean;
-    "crCommentOnLinear": boolean;
+
+    /**
+     * ReviewProviders is the pluggable review catalog ([[review.provider]]),
+     * resolved to the EFFECTIVE set (the real catalog, or the entries synthesized
+     * from the legacy [review]/[coderabbit] tables). ReviewLegacy reports that the
+     * config still carries the legacy tables and no catalog — in which state the
+     * UI shows the providers read-only and offers MigrateReview.
+     */
+    "reviewProviders": ReviewProviderDTO[] | null;
+    "reviewLegacy": boolean;
 
     /**
      * Project defaults: the [defaults] counterpart of each inheritable

@@ -29,6 +29,7 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"sync"
 )
 
 // PR is the observed state of one pull request. The JSON tags are for lola's
@@ -46,7 +47,19 @@ type PR struct {
 
 // Client shells out to the gh CLI. GhBin is the binary to invoke; empty means
 // resolve "gh" via LookPath (launchd contexts should set an absolute path).
-type Client struct{ GhBin string }
+//
+// loginOnce/login/loginErr memoize AuthedLogin (see reviewpost.go) so the
+// self-feedback filter costs at most ONE `gh api user` exec for the process
+// lifetime — the "no new per-cycle gh exec" invariant. A Client therefore
+// carries a sync.Once and must only ever be used through a pointer (all
+// construction sites already do: &scm.Client{}).
+type Client struct {
+	GhBin string
+
+	loginOnce sync.Once
+	login     string
+	loginErr  error
+}
 
 // prRow mirrors the gh JSON field names requested via --json.
 type prRow struct {

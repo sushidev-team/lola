@@ -189,7 +189,7 @@ func (d *Daemon) handle(ctx context.Context, req protocol.Request) protocol.Resp
 		}
 		return protocol.Response{OK: true}
 	case "review":
-		data, err := d.handleReview(ctx, req.Session)
+		data, err := d.handleReviewProvider(ctx, req.Session, req.Provider)
 		if err != nil {
 			return protocol.Response{OK: false, Error: err.Error()}
 		}
@@ -441,11 +441,12 @@ func (d *Daemon) handleReload(ctx context.Context) error {
 	// operator can enable/disable it or change model/timeout via reload. A now-
 	// disabled or newly-unavailable brain drops back to generic templates.
 	d.setBrainLocked(nc.Brain)
-	// Rebuild the QA review client from the new [review] table (P9): enabling/
-	// disabling the buddy or changing its command/timeout takes effect live. A
-	// now-disabled or newly-unavailable coderabbit leaves reviewRun nil (review
-	// off). Under d.mu, like the brain.
-	d.setReviewLocked(nc.Review)
+	// Rebuild the flexible review provider catalog + per-kind clients from the new
+	// config (the [[review.provider]] catalog, or legacy synthesis): enabling/
+	// disabling a provider or changing its command/timeout/transports/fallback
+	// takes effect live. A now-disabled or newly-unavailable pass leaves its seam
+	// nil (that provider off). Under d.mu, like the brain.
+	d.setReviewProvidersLocked(nc)
 	if d.realNative && (!reflect.DeepEqual(old.Projects, nc.Projects) ||
 		old.TmuxSocketName() != nc.TmuxSocketName()) {
 		// The native runtime captures both its config reference (for the project

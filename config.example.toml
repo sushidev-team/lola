@@ -161,8 +161,90 @@ endpoint = "https://api.linear.app/graphql"
 # summarize_escalation = true    # summarize why a stuck session is blocked
 # summarize_approved = true      # summarize an approved+green PR before a human merges
 
+# ===========================================================================
+# THE REVIEW CATALOG — [[review.provider]] (OPTIONAL, OFF BY DEFAULT)
+#
+# The canonical, flexible superset of the legacy [review]/[coderabbit] tables
+# below. A provider CATALOG: each [[review.provider]] is one provider of a given
+# KIND, and any subset can run for a session. The two spellings are MUTUALLY
+# EXCLUSIVE — a config carrying BOTH the catalog and a non-empty [review] or
+# [coderabbit] table is a HARD validation error. Convert once, one-way, with:
+#
+#     lola config migrate-review        # folds legacy -> catalog, then `lola reload`
+#
+# KINDS (three kinds, two execution SHAPES):
+#   coderabbit-cli    (pass)  exec the CodeRabbit CLI on the PR branch; once/PR.
+#   claude-session    (pass)  headless `claude -p` review (diff piped on stdin);
+#                             once/PR. Handy as a coderabbit-cli FALLBACK.
+#   coderabbit-watch  (watch) poll the PR (gh, ~30s) for the CodeRabbit GitHub
+#                             app's comments (or any bot via `author`); watermark.
+# At most ONE provider per kind (guards key by kind).
+#
+# TRANSPORTS — where findings go: a multiselect over {lola, github, linear}.
+#   lola   ALWAYS present (auto-appended). Expands to two sinks refined by the
+#          per-provider bools: notify (desktop/Slack, gated by `notify`) and the
+#          worker hand-off (send-keys, gated by `send_to_agent`). Muting either
+#          independently is what preserves the legacy notify=false opt-out.
+#   github Post findings as a PLAIN GitHub PR comment (gh pr comment, body on
+#          stdin — never a review that could approve/request-changes). PASS
+#          shapes only; FORBIDDEN on coderabbit-watch (its feedback is already on
+#          the PR — re-posting is a self-feedback loop). Idempotent per PR. Any
+#          @coderabbitai mention in the body is neutralized, so lola posting its
+#          own review NEVER triggers a new CodeRabbit run.
+#   linear Mirror findings onto the session's Linear issue.
+# Only the worker hand-off sanitizes + idle-gates; notify/github/linear are HUMAN
+# sinks carrying the full untrusted findings verbatim (never re-fed as control).
+#
+# FALLBACK — `fallback = [kinds]` on a PASS provider advances to another pass
+# kind when THIS one can't answer (tool missing / timeout / OVER-QUOTA). The
+# result routes under the PRIMARY's transports. A real exit/auth error is a
+# graceful skip that does NOT fall through (fail-closed). Fallback is PASS-SHAPE
+# ONLY and is forbidden on coderabbit-watch: the CodeRabbit GitHub app posts
+# "out of reviews" as an ordinary PR comment (err==nil, classifier-undetectable),
+# so a watch has no quota signal — use coderabbit-cli for quota->claude fallback.
+#
+# Omit this whole section to keep review OFF. The values below are the defaults
+# once a provider is enabled.
 # ---------------------------------------------------------------------------
-# [review] — OPTIONAL, OFF BY DEFAULT (P9). The "QA buddy": an EVENT-TRIGGERED
+# [[review.provider]]
+# provider        = "coderabbit-cli"                        # coderabbit-cli | coderabbit-watch | claude-session
+# enabled         = true                                    # master switch; default false
+# on_pr_open      = true                                    # run when a session first opens a PR (pass shapes); default true
+# command         = "coderabbit review --plain --type all"  # coderabbit-cli argv override (space-split); empty = runner default
+# timeout_seconds = 300                                     # hard cap per pass (pass shapes); must be >= 0
+# transports      = ["lola", "github"]                      # {lola (always forced present), github, linear}
+# notify          = true                                    # lola transport: notify a human; default true
+# send_to_agent   = true                                    # lola transport: hand findings to the worker; default true
+# fallback        = ["claude-session"]                      # ordered pass kinds tried when this one can't answer
+#
+# [[review.provider]]
+# provider        = "claude-session"                        # headless `claude -p`; here only as coderabbit-cli's fallback
+# enabled         = true
+# model           = "claude-sonnet-4-5"                     # optional --model; empty = claude's default
+# timeout_seconds = 300
+# transports      = ["lola"]
+#
+# [[review.provider]]
+# provider        = "coderabbit-watch"                      # poll the PR for the CodeRabbit app's comments
+# enabled         = true
+# author          = "coderabbitai"                          # login SUBSTRING matched against comment authors
+# transports      = ["lola"]                                # github is NOT allowed here (validation error)
+# notify          = true
+# send_to_agent   = true
+#
+# WATCH-ONLY posture (read CodeRabbit, never invoke a new run): configure JUST the
+# coderabbit-watch provider above. lola polls + relays the CodeRabbit app's own
+# automatic review and never execs `coderabbit review` (that is coderabbit-cli) and
+# never posts to the PR — so no new CodeRabbit run and no review credit spent. Want
+# lola to also post its OWN public review? Add a claude-session (or coderabbit-cli)
+# provider with transports = ["lola", "github"]; its posted comment is trigger-safe.
+
+# ---------------------------------------------------------------------------
+# [review] — LEGACY, OPTIONAL, OFF BY DEFAULT (P9). Equivalent to a single
+# coderabbit-cli provider above; prefer the catalog (`lola config migrate-review`
+# converts). Still supported forever. NOTE: cannot coexist with a
+# [[review.provider]] catalog — that mix is a hard validation error.
+# The "QA buddy": an EVENT-TRIGGERED
 # CodeRabbit review pass, NOT a persistent second agent. When enabled, the first
 # time a session opens a PR lola execs the CodeRabbit CLI against that branch and
 # hands the findings back to the worker (through the SAME send-keys safety gate
@@ -186,7 +268,11 @@ endpoint = "https://api.linear.app/graphql"
 # timeout_seconds = 300          # hard cap per review pass; must be >= 0
 
 # ---------------------------------------------------------------------------
-# [coderabbit] — OPTIONAL, OFF BY DEFAULT. The PR-COMMENT WATCH — distinct from
+# [coderabbit] — LEGACY, OPTIONAL, OFF BY DEFAULT. Equivalent to a single
+# coderabbit-watch provider in the catalog above; prefer the catalog
+# (`lola config migrate-review` converts). Cannot coexist with a
+# [[review.provider]] catalog — that mix is a hard validation error.
+# The PR-COMMENT WATCH — distinct from
 # [review]. [review] execs the CodeRabbit CLI locally; [coderabbit] instead POLLS
 # each session's GitHub PR (via gh, on the ~30s observer cadence) for comments and
 # reviews left by the CodeRabbit GitHub app (or ANY reviewer bot, via `author`)
