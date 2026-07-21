@@ -45,9 +45,21 @@
       <StatusPill status={session.status} />
       {#if session.branch}<span class="font-mono text-[11px] text-faint">{session.branch}</span>{/if}
       <span class="ml-auto flex items-center gap-1.5">
-        <button class="rounded border border-edge px-2 py-[1px] hover:border-accent hover:text-accent-ink" onclick={() => nav.toggleFocusTerm(session.id)}>
-          {focused ? "⤢ minimize" : "⛶ focus"}
-        </button>
+        {#if focused}
+          <!-- Prominent, so leaving fullscreen is obvious — the compact bordered
+               variant read as decoration and left people feeling stuck. -->
+          <button
+            class="rounded bg-accent-fill px-2.5 py-[2px] font-medium text-accent-ink hover:bg-accent-fill-hover"
+            title="exit fullscreen"
+            onclick={() => nav.toggleFocusTerm(session.id)}>⤢ minimize</button
+          >
+        {:else}
+          <button
+            class="rounded border border-edge px-2 py-[1px] hover:border-accent hover:text-accent-ink"
+            title="expand to fullscreen"
+            onclick={() => nav.toggleFocusTerm(session.id)}>⛶ focus</button
+          >
+        {/if}
       </span>
     </div>
 

@@ -7,20 +7,30 @@
 <footer
   class="flex h-8 shrink-0 items-center gap-3 border-t border-edge/70 bg-canvas px-4 text-[11px] select-none"
 >
+  <!-- Daemon liveness lives here now (moved out of the top bar): a quiet pill,
+       plus an inline "start" when it is down. -->
+  {#if store.alive}
+    <span class="flex items-center gap-1.5 text-good"><span>●</span>running</span>
+  {:else if store.connected}
+    <span class="flex items-center gap-1.5 text-bad"><span>○</span>down</span>
+    <button
+      class="rounded border border-edge px-2 py-[1px] text-ink hover:border-accent hover:text-accent-ink"
+      onclick={() => store.startDaemon()}>start</button
+    >
+  {:else}
+    <span class="flex items-center gap-1.5 text-faint"><span>○</span>connecting…</span>
+  {/if}
+
   {#if store.flash}
+    <span class="text-edge">·</span>
     <span
       class:text-good={store.flash.kind === "good"}
       class:text-warn={store.flash.kind === "warn"}
       class:text-bad={store.flash.kind === "bad"}
       class="truncate">{store.flash.text}</span
     >
-  {:else if !store.alive && store.connected}
-    <span class="text-bad">daemon not running</span>
-    <button
-      class="rounded border border-edge px-2 py-[1px] text-ink hover:border-accent hover:text-accent-ink"
-      onclick={() => store.startDaemon()}>start daemon</button
-    >
   {:else if hints}
+    <span class="text-edge">·</span>
     <span class="truncate text-faint">{@render hints()}</span>
   {/if}
 

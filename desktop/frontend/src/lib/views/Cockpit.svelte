@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { store } from "$lib/store.svelte";
+  import { store, sortSessions } from "$lib/store.svelte";
   import { nav } from "$lib/nav.svelte";
   import Panel from "$lib/components/Panel.svelte";
   import Rail from "$lib/components/Rail.svelte";
@@ -7,8 +7,17 @@
   import SessionsKanban from "$lib/components/SessionsKanban.svelte";
   import SessionEmbed from "$lib/components/SessionEmbed.svelte";
   import TerminalGrid from "$lib/views/TerminalGrid.svelte";
+  import { reflowGridRows } from "$lib/reflow";
 
-  const rows = $derived(nav.scoped ? store.sessionsForProject(nav.project) : store.sorted);
+  // Derive rows from store.sessions DIRECTLY (not the store.sorted chained
+  // class-derived): the rail's direct store.sessions reads stay live in the
+  // production webview while this view's read of the cross-module derived did
+  // not re-render on async pushes. Sorting here is cheap and keeps the read
+  // one hop from the reactive source.
+  const rows = $derived.by(() => {
+    const sorted = sortSessions(store.sessions);
+    return nav.scoped ? sorted.filter((s) => s.project === nav.project) : sorted;
+  });
   const selected = $derived(store.sessionById(nav.selectedId));
   // When a terminal is focused (the ⛶ focus button or a grid-tile click), it
   // takes over the whole cockpit as one big interactive terminal.
@@ -33,23 +42,31 @@
 {#if focusedSession}
   <!-- Focused terminal: the whole cockpit is one big interactive terminal. Grid
        so the panel stretches to fill (a plain block leaves it content-height). -->
-  <div class="grid h-full min-h-0 p-2" style="grid-template-rows:minmax(0,1fr)">
+  <div class="grid h-full min-h-0 p-2" style="grid-template-rows:minmax(0,1fr)" {@attach reflowGridRows}>
     <Panel focused pad={false}>
       <SessionEmbed session={focusedSession} focused />
     </Panel>
   </div>
 {:else}
-<div class="flex h-full min-h-0 gap-2 p-2">
+<!-- Outer GRID, not a flex row: WebKit sizes a nested grid's fr tracks off its
+     container height, and a flex-1 item's height is resolved too late on first
+     paint (the panels collapse until a later relayout). A grid *cell* gives the
+     main column a definite height from the first frame, so its own fr rows
+     resolve immediately. See CLAUDE.md's WebKit gotcha + $lib/reflow. -->
+<div
+  class="grid h-full min-h-0 gap-2 p-2"
+  style="grid-template-columns:300px minmax(0,1fr)"
+>
   <!-- left rail -->
-  <aside class="w-[300px] shrink-0 overflow-hidden">
+  <aside class="min-h-0 overflow-hidden">
     <Rail />
   </aside>
 
-  <!-- main column: a grid so panels stretch to full width in WebKit (a nested
-       flex column does not) -->
+  <!-- main column: a grid so panels stretch to full width AND height in WebKit -->
   <div
-    class="grid min-w-0 min-h-0 flex-1 gap-2"
+    class="grid min-w-0 min-h-0 gap-2"
     style="grid-template-rows:{nav.lens === 'grid' ? 'minmax(0,1fr)' : 'minmax(0,3fr) minmax(0,2fr)'}"
+    {@attach reflowGridRows}
   >
     <Panel
       title={nav.scoped ? `Sessions · ${store.displayNameFor(nav.project)}` : "Sessions"}

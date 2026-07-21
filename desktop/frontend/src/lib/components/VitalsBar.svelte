@@ -5,7 +5,10 @@
   import LolaLogo from "$lib/components/LolaLogo.svelte";
 
   // The top strip. Doubles as the frameless window-drag region; the left pad
-  // clears the inset traffic lights.
+  // clears the inset traffic lights. Kept deliberately sparse — session/project/
+  // poll counts live in the rail, and daemon liveness lives in the footer — so
+  // this bar carries only identity, the one urgent alert, health-on-hover, the
+  // clock and settings.
   let clock = $state("");
   let timer: ReturnType<typeof setInterval>;
   function tick() {
@@ -18,8 +21,9 @@
   });
   onDestroy(() => clearInterval(timer));
 
-  const pollsEnabled = $derived((store.status?.polls ?? []).filter((p) => p.enabled).length);
-  const pollsTotal = $derived((store.status?.polls ?? []).length);
+  // One summary of the two health flags: green only when both are OK, red the
+  // moment either fails — the detail (which one) is the hover reveal.
+  const healthOk = $derived(!!store.status && store.status.runtimeOk && store.status.linearOk);
 </script>
 
 <header
@@ -27,33 +31,31 @@
 >
   <LolaLogo class="h-[15px] w-auto shrink-0" />
 
-  <span class="text-edge">·</span>
-  {#if store.alive}
-    <span class="text-good">● running</span>
-  {:else}
-    <span class="text-bad">○ down</span>
-  {/if}
-
-  {#if store.status}
-    <span class="text-edge">·</span>
-    <span class={store.status.runtimeOk ? "text-faint" : "text-bad"}>
-      runtime {store.status.runtimeOk ? "✓" : "✗"}
-    </span>
-    <span class="text-edge">·</span>
-    <span class={store.status.linearOk ? "text-faint" : "text-bad"}>
-      linear {store.status.linearOk ? "✓" : "✗"}
-    </span>
-  {/if}
-
   {#if store.needsYou > 0}
     <span class="text-edge">·</span>
     <span class="font-medium text-orange">{store.needsYou} need you</span>
   {/if}
 
   <span class="ml-auto flex items-center gap-3 text-faint">
-    <span>sessions {store.sessions.length}</span>
-    <span>projects {store.projects.length}</span>
-    <span>polls {pollsEnabled}/{pollsTotal}</span>
+    {#if store.status}
+      <!-- Health: a single dot by default; hovering reveals which of runtime /
+           linear is which, so the bar stays quiet until something is wrong. -->
+      <span class="group flex items-center gap-2" title="daemon health">
+        <span class={healthOk ? "text-good" : "text-bad"}>{healthOk ? "●" : "▲"}</span>
+        <span
+          class="flex max-w-0 items-center gap-2 overflow-hidden opacity-0 transition-all duration-150 group-hover:max-w-[220px] group-hover:opacity-100"
+        >
+          <span class="whitespace-nowrap {store.status.runtimeOk ? 'text-faint' : 'text-bad'}">
+            runtime {store.status.runtimeOk ? "✓" : "✗"}
+          </span>
+          <span class="text-edge">·</span>
+          <span class="whitespace-nowrap {store.status.linearOk ? 'text-faint' : 'text-bad'}">
+            linear {store.status.linearOk ? "✓" : "✗"}
+          </span>
+        </span>
+      </span>
+    {/if}
+
     <span class="tabular-nums">{clock}</span>
 
     <!-- no-drag: the header is the window drag region, so anything clickable

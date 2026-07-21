@@ -60,8 +60,18 @@
 
   <!-- Projects switcher -->
   <Panel title="Projects" count={store.projects.length} focused={false}>
+    {#snippet actions()}
+      <button
+        class="rounded border border-edge px-1.5 py-[1px] text-[11px] font-normal text-faint hover:border-accent hover:text-accent-ink"
+        title="add a project"
+        onclick={() => nav.openOverlay("project", "")}>+ add</button
+      >
+    {/snippet}
     {#if store.projects.length === 0}
-      <div class="text-xs text-faint">no projects — press p to add one</div>
+      <button
+        class="w-full rounded border border-dashed border-edge px-2 py-3 text-center text-xs text-faint hover:border-accent hover:text-accent-ink"
+        onclick={() => nav.openOverlay("project", "")}>no projects — add one</button
+      >
     {:else}
       <ul class="flex flex-col text-xs">
         {#each store.projects as p (p.name)}
@@ -78,9 +88,23 @@
               {#if p.needsYou > 0}<span class="text-orange">{p.needsYou}!</span>{/if}
               {#if p.ciRed > 0}<span class="text-bad">{p.ciRed}✕</span>{/if}
             </button>
+            <!-- Settings is always visible (faint), so it's obvious a project
+                 can be configured; the hub arrow reveals on hover. -->
             <button
-              class="px-1.5 text-faint opacity-0 group-hover:opacity-100 hover:text-accent-ink"
+              class="shrink-0 px-1 text-faint/70 hover:text-accent-ink"
+              title="project settings"
+              aria-label="{displayName(p)} settings"
+              onclick={() => nav.openOverlay("project", p.name)}
+            >
+              <svg viewBox="0 0 24 24" class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <circle cx="12" cy="12" r="3" />
+                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+              </svg>
+            </button>
+            <button
+              class="shrink-0 px-1.5 text-faint opacity-0 group-hover:opacity-100 hover:text-accent-ink"
               title="open project hub"
+              aria-label="{displayName(p)} hub"
               onclick={() => nav.goDetail(p.name)}>›</button
             >
           </li>
