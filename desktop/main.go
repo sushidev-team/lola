@@ -30,6 +30,12 @@ func fixHiDPIOnReady(win *application.WebviewWindow) {
 //go:embed all:frontend/dist
 var assets embed.FS
 
+// version is the compiled-in app version, injected at build time via
+// -ldflags "-X main.version=<tag>" (see build/darwin/Taskfile.yml and the
+// release workflow). The "dev" default marks an un-tagged local build; the
+// update checker treats a non-semver version as "always offer the release".
+var version = "dev"
+
 // canvasByTheme is the native-window twin of the frontend's --color-canvas: for
 // every [ui].theme id, the Catppuccin `mantle` that catppuccin.ts maps that
 // token to. It is a MIRROR of TypeScript data, which is normally the wrong
@@ -91,6 +97,7 @@ func main() {
 
 	daemon := &DaemonService{}
 	term := NewTermService()
+	updater := NewUpdateService()
 
 	app := application.New(application.Options{
 		Name:        "lola",
@@ -101,6 +108,7 @@ func main() {
 			application.NewService(&ConfigService{}),
 			application.NewService(&DoctorService{}),
 			application.NewService(NewLinearService()),
+			application.NewService(updater),
 		},
 		Assets: application.AssetOptions{
 			Handler: application.AssetFileServerFS(assets),
@@ -112,6 +120,8 @@ func main() {
 
 	// Give the terminal service the emitter it streams PTY bytes over.
 	term.SetApp(app)
+	// The updater emits download-progress events and quits for the install swap.
+	updater.SetApp(app)
 
 	win := app.Window.NewWithOptions(application.WebviewWindowOptions{
 		Title:            "lola",
@@ -175,6 +185,11 @@ func newStatusBarMenu(app *application.App, win application.Window) {
 		win.Focus()
 		app.Event.Emit(evtOpenSettings, struct{}{})
 	})
+	menu.Add("Check for Updates…").OnClick(func(*application.Context) {
+		win.Show()
+		win.Focus()
+		app.Event.Emit(evtOpenUpdate, struct{}{})
+	})
 	menu.AddSeparator()
 	menu.Add("Quit lola").OnClick(func(*application.Context) { app.Quit() })
 
@@ -217,14 +232,18 @@ const (
 	// evtOpenSettings is fired by the status-bar menu. The overlay lives in the
 	// frontend's nav state, so the menu cannot open it directly — it asks.
 	evtOpenSettings = "app:open-settings" // no payload
+	// evtOpenUpdate opens the software-update overlay from the status-bar menu.
+	evtOpenUpdate = "app:open-update" // no payload
 )
 
 func init() {
 	application.RegisterEvent[bool](evtAlive)
 	application.RegisterEvent[struct{}](evtOpenSettings)
+	application.RegisterEvent[struct{}](evtOpenUpdate)
 	application.RegisterEvent[protocol.SessionsData](evtSessions)
 	application.RegisterEvent[protocol.ProjectsData](evtProjects)
 	application.RegisterEvent[protocol.StatusData](evtStatus)
+	application.RegisterEvent[UpdateProgressDTO](evtUpdateProgress)
 }
 
 func pushLoop(app *application.App, d *DaemonService) {

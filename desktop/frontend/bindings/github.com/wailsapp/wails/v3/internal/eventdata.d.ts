@@ -7,16 +7,21 @@ import type { Events } from "@wailsio/runtime";
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
+import type * as main$0 from "../../../../sushidev-team/lola/desktop/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
 import type * as protocol$0 from "../../../../sushidev-team/lola/internal/protocol/models.js";
 
 declare module "@wailsio/runtime" {
     namespace Events {
         interface CustomEvents {
             "app:open-settings": {};
+            "app:open-update": {};
             "daemon:alive": boolean;
             "daemon:projects": protocol$0.ProjectsData;
             "daemon:sessions": protocol$0.SessionsData;
             "daemon:status": protocol$0.StatusData;
+            "update:download-progress": main$0.UpdateProgressDTO;
         }
     }
 }

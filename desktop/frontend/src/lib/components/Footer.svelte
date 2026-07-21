@@ -1,5 +1,7 @@
 <script lang="ts">
   import { store } from "$lib/store.svelte";
+  import { updates } from "$lib/update.svelte";
+  import { nav } from "$lib/nav.svelte";
   import type { Snippet } from "svelte";
   let { hints }: { hints?: Snippet } = $props();
 </script>
@@ -45,6 +47,22 @@
         class="rounded px-1.5 py-[1px] hover:text-bad"
         title="stop daemon"
         onclick={() => store.stopDaemon()}>■ stop</button
+      >
+      <span class="text-edge">·</span>
+    {/if}
+    <!-- Version, and an update badge when a newer release is out. Clicking
+         either opens the software-update overlay. -->
+    {#if updates.available}
+      <button
+        class="rounded border border-accent px-1.5 py-[1px] text-accent-ink hover:opacity-90"
+        title="update available: v{updates.info?.latestVersion}"
+        onclick={() => nav.openOverlay("update")}>↑ update</button
+      >
+    {:else}
+      <button
+        class="rounded px-1.5 py-[1px] hover:text-ink"
+        title="check for updates"
+        onclick={() => nav.openOverlay("update")}>v{updates.version}</button
       >
     {/if}
   </span>

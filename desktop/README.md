@@ -62,8 +62,52 @@ cd desktop && wails3 generate bindings -ts -d frontend/bindings
 ```sh
 cd desktop
 wails3 task build      # compiles the binary
-wails3 task package    # → bin/lola.app  (ad-hoc signed, fine for local use)
+wails3 task package    # → bin/lola-desktop.app  (ad-hoc signed, fine for local use)
+
+# Stamp the in-app version (defaults to "dev" otherwise). The release workflow
+# passes the git tag; do the same locally to test the update flow end-to-end:
+wails3 task darwin:package:universal VERSION=1.2.3
 ```
+
+`VERSION` is injected into `main.version` (`-ldflags -X main.version=…`, see
+`build/darwin/Taskfile.yml`) and read by the update checker. A `dev` build is
+treated as "older than every release", so it always offers the latest.
+
+## Self-update
+
+The app updates itself from this repo's **GitHub Releases**. Releases are cut by
+**release-please**: merging its release PR tags the repo and creates the GitHub
+Release, which triggers `.github/workflows/build.yml` — goreleaser attaches the
+CLI archives, and the `desktop` job builds a **universal** `.app`, signs +
+notarizes it, wraps it in `lola-desktop-<version>-universal.dmg`, and attaches
+that. (`workflow_dispatch` on `build.yml` re-runs the artifact build against an
+existing tag — useful the first time the signing secrets land.)
+
+In the app (`internal/update` + `updatesvc.go` → `UpdateService`):
+
+- **Check** — `CheckForUpdates` hits `GET /repos/sushidev-team/lola/releases/latest`
+  **anonymously**. That works only because the repo is **public**; there is no
+  separate `*-releases` repo and no token (contrast rize-reporting, whose private
+  source repo forces a public mirror). Make the repo private again and the check
+  returns 404.
+- **Download** — streams the DMG into `~/Downloads`, emitting
+  `update:download-progress` events the footer/overlay render.
+- **Install** — `installer.go` mounts the DMG, `ditto`-stages the new bundle,
+  writes a detached script that waits for this PID to exit, swaps the `.app`, and
+  relaunches. `InstallAndRestart` then quits the app so the script can proceed.
+
+UI: the **footer** shows `v<version>` (an `↑ update` badge when one is out) and
+opens the **software-update overlay** (`views/UpdateOverlay.svelte`); the macOS
+status-bar menu has **Check for Updates…**. A once-a-day auto-check
+(interval-gated in `Prefs`, persisted at `~/.lola/desktop-update.json` — NOT the
+daemon's `config.toml`) drives the badge; a skipped version is remembered there.
+
+**Signing secrets** the `desktop` job needs (same names as rize-reporting):
+`APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_TEAM_ID`,
+`APP_STORE_CONNECT_PRIVATE_KEY`, `APP_STORE_CONNECT_KEY_ID`,
+`APP_STORE_CONNECT_ISSUER_ID`. Without them that job fails while the CLI release
+still succeeds; the notarized DMG is what lets Gatekeeper open an auto-installed
+update without a warning.
 
 ## Test
 

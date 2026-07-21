@@ -122,6 +122,12 @@ export interface ProjectFormDTO {
     "isNew": boolean;
 }
 
+export interface ReleaseEntryDTO {
+    "version": string;
+    "releaseNotes": string;
+    "publishedAt": string;
+}
+
 export interface SettingsDTO {
     "globalCap": number;
     "concurrencyCap": number;
@@ -200,4 +206,36 @@ export interface SetupResultDTO {
      */
     "envVar": string;
     "message": string;
+}
+
+export interface UpdateInfoDTO {
+    "available": boolean;
+    "currentVersion": string;
+    "latestVersion": string;
+    "releaseNotes": string;
+    "publishedAt": string;
+    "downloadURL": string;
+    "browserURL": string;
+    "assetName": string;
+    "assetSize": number;
+    "releases": ReleaseEntryDTO[] | null;
+}
+
+/**
+ * UpdateProgressDTO is the payload of evtUpdateProgress.
+ */
+export interface UpdateProgressDTO {
+    "totalBytes": number;
+    "downloadedBytes": number;
+    "percentage": number;
+    "status": string;
+    "error"?: string;
+    "filePath"?: string;
+}
+
+export interface UpdateSettingsDTO {
+    "autoCheck": boolean;
+    "lastCheckTime": string;
+    "skippedVersion"?: string;
+    "checkIntervalHours": number;
 }

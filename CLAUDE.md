@@ -252,11 +252,12 @@ module) precisely so it can reuse `internal/protocol`, `internal/config`,
 `internal/doctor`, `internal/linear`, `internal/secrets` — Go's `internal/` rule
 forbids that from a sibling module. It is a **client of the same daemon socket**
 the TUI uses; it never embeds the daemon, and it drives `tmux -L lola` directly
-for terminal streaming. Five bound Wails services: `DaemonService` (every
+for terminal streaming. Six bound Wails services: `DaemonService` (every
 protocol command + daemon start/stop/restart), `TermService` (capture-pane
 snapshots for the grid + a live `tmux attach` PTY for the focused terminal),
 `ConfigService` (read/write config.toml + first-run setup), `DoctorService`,
-`LinearService` (team metadata for the cascading pickers). Note there is ONE
+`LinearService` (team metadata for the cascading pickers), `UpdateService`
+(GitHub-Releases self-update — see the update gotcha below). Note there is ONE
 project form, not a project form plus a poll form: a project IS the poll unit,
 so repository setup / filter / labels / write-back are TABS of a single overlay
 (same in the TUI — `internal/tui/form.go`, which absorbed the old
@@ -300,6 +301,33 @@ distinct binary from the v2 `wails`. See `desktop/README.md`.
   is placed to fill the tile; the viewBox bounds the overflow). The unused
   `build/appicon.icon/` Icon Composer source is kept only in case Liquid Glass
   is revisited — re-enabling it reintroduces the float.
+- **Self-update assumes a PUBLIC repo — no separate releases repo.**
+  `UpdateService` (`desktop/updatesvc.go` + the pure `desktop/internal/update`
+  leaf) checks `GET /repos/sushidev-team/lola/releases/latest` **anonymously**
+  and installs the attached universal DMG by mounting it, `ditto`-staging the new
+  bundle, and running a detached script that swaps the `.app` after the app quits.
+  Anonymous only works because the repo is public — making it private again 404s
+  the check (rize-reporting needs a `*-releases` mirror precisely because ITS
+  source repo is private; lola must not copy that). The compiled `main.version`
+  (default `"dev"`, injected via `-ldflags -X main.version=` in
+  `build/darwin/Taskfile.yml`'s production branch, passed `VERSION=<tag>` by the
+  `desktop` job in `.github/workflows/release.yml`) is the checker's "current"
+  version; a non-semver value (`dev`) means "always offer the release". Update
+  cadence/skip live in `~/.lola/desktop-update.json`, NOT `config.toml` — the
+  daemon and TUI never read them. The `desktop` job in `.github/workflows/build.yml`
+  needs the Apple signing secrets (same names as rize) or it fails while the CLI
+  release still succeeds; a notarized DMG is what keeps Gatekeeper quiet on the
+  auto-installed swap.
+- **Releases are release-please, not manual `v*` tags.** `.github/workflows/
+  release-please.yml` maintains a release PR from Conventional Commits; merging
+  it tags the repo + creates the GitHub Release, then calls the reusable
+  `build.yml` (goreleaser CLI archives + the signed desktop DMG). A
+  release-please tag does NOT fire a `push: tags` workflow (GitHub blocks that
+  recursion), which is why `build.yml` is invoked via `uses:`, not a tag trigger.
+  goreleaser runs `changelog.disable` + `release.mode: append` so it uploads
+  artifacts onto the release-please-authored release WITHOUT clobbering its
+  notes. Version lives in `.release-please-manifest.json`; `release-please-config.json`
+  also bumps `desktop/build/config.yml`'s `info.version`.
 
 ## Reference docs
 

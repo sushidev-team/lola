@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import { Events } from "@wailsio/runtime";
   import { store } from "$lib/store.svelte";
+  import { updates } from "$lib/update.svelte";
   import { nav } from "$lib/nav.svelte";
   import VitalsBar from "$lib/components/VitalsBar.svelte";
   import Footer from "$lib/components/Footer.svelte";
@@ -13,13 +14,18 @@
   import DoctorOverlay from "$lib/views/DoctorOverlay.svelte";
   import SettingsForm from "$lib/views/SettingsForm.svelte";
   import ProjectForm from "$lib/views/ProjectForm.svelte";
+  import UpdateOverlay from "$lib/views/UpdateOverlay.svelte";
   import Setup from "$lib/views/Setup.svelte";
 
   onMount(() => {
     store.start();
-    // The macOS status-bar menu cannot open the overlay itself — it is nav
-    // state that lives here — so it asks. See newStatusBarMenu in main.go.
+    // Load the version + run the interval-gated startup auto-check so the footer
+    // can surface a badge when a release is out.
+    void updates.init();
+    // The macOS status-bar menu cannot open an overlay itself — it is nav state
+    // that lives here — so it asks. See newStatusBarMenu in main.go.
     Events.On("app:open-settings", () => nav.openOverlay("settings"));
+    Events.On("app:open-update", () => nav.openOverlay("update"));
   });
 
   function typing(el: EventTarget | null): boolean {
@@ -96,5 +102,7 @@
   <SettingsForm />
 {:else if nav.overlay === "project"}
   <ProjectForm />
+{:else if nav.overlay === "update"}
+  <UpdateOverlay />
 {/if}
 {/if}

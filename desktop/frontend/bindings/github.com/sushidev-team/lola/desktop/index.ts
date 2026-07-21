@@ -6,12 +6,14 @@ import * as DaemonService from "./daemonservice.js";
 import * as DoctorService from "./doctorservice.js";
 import * as LinearService from "./linearservice.js";
 import * as TermService from "./termservice.js";
+import * as UpdateService from "./updateservice.js";
 export {
     ConfigService,
     DaemonService,
     DoctorService,
     LinearService,
-    TermService
+    TermService,
+    UpdateService
 };
 
 export type {
@@ -22,7 +24,11 @@ export type {
     LinearTeam,
     LinearTeamMeta,
     ProjectFormDTO,
+    ReleaseEntryDTO,
     SettingsDTO,
     SetupDTO,
-    SetupResultDTO
+    SetupResultDTO,
+    UpdateInfoDTO,
+    UpdateProgressDTO,
+    UpdateSettingsDTO
 } from "./models.js";
