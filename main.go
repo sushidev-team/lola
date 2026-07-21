@@ -59,6 +59,7 @@ func main() {
 		answerCmd(),
 		reviewCmd(),
 		coderabbitCmd(),
+		configCmd(),
 		logsCmd(),
 		doctorCmd(),
 		setupCmd(),
@@ -207,18 +208,22 @@ func answerCmd() *cobra.Command {
 // prints the outcome — found issues / clean / skipped (review not enabled) — or
 // the daemon's error.
 func reviewCmd() *cobra.Command {
-	return &cobra.Command{
+	var provider string
+	cmd := &cobra.Command{
 		Use:   "review <session>",
-		Short: "Run the CodeRabbit QA review pass for a session now (ignores the once-per-PR guard)",
+		Short: "Run the QA review pass for a session now (ignores the once-per-PR guard)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, a []string) error {
-			raw, err := json.Marshal(protocol.Request{Cmd: "review", Session: a[0]})
+			raw, err := json.Marshal(protocol.Request{Cmd: "review", Session: a[0], Provider: provider})
 			if err != nil {
 				return err
 			}
 			return tui.Send(string(raw))
 		},
 	}
+	cmd.Flags().StringVar(&provider, "provider", "",
+		"which pass provider to force (coderabbit-cli | claude-session); default: the primary enabled one")
+	return cmd
 }
 
 // coderabbitCmd forces the [coderabbit] PR-comment watch for one session now
@@ -313,6 +318,48 @@ func hookDetail(r io.Reader) string {
 		}
 	}
 	return ""
+}
+
+// configCmd groups low-level config maintenance. Its only (hidden) subcommand
+// is the one-way `migrate-review`, which folds the legacy [review]/[coderabbit]
+// tables into the canonical [[review.provider]] catalog — the explicit,
+// opt-in resolution for the mutually-exclusive legacy+catalog hard error.
+func configCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:    "config",
+		Short:  "Config maintenance commands",
+		Hidden: true,
+	}
+	cmd.AddCommand(&cobra.Command{
+		Use:   "migrate-review",
+		Short: "Migrate the legacy [review]/[coderabbit] tables into the [[review.provider]] catalog",
+		Args:  cobra.NoArgs,
+		RunE: func(c *cobra.Command, _ []string) error {
+			path, err := config.DefaultPath()
+			if err != nil {
+				return err
+			}
+			cfg, err := config.Load(path)
+			if err != nil {
+				return err
+			}
+			had := cfg.Review != (config.ReviewConfig{}) || cfg.CodeRabbit != (config.CodeRabbitConfig{})
+			if !had {
+				fmt.Fprintln(c.OutOrStdout(), "nothing to migrate: no legacy [review]/[coderabbit] tables")
+				return nil
+			}
+			config.MigrateLegacyReview(cfg)
+			if err := cfg.Validate(); err != nil {
+				return fmt.Errorf("migrated config is invalid: %w", err)
+			}
+			if err := cfg.Save(path); err != nil {
+				return err
+			}
+			fmt.Fprintf(c.OutOrStdout(), "migrated legacy review tables into %d provider(s); run `lola reload`\n", len(cfg.ReviewProviders))
+			return nil
+		},
+	})
+	return cmd
 }
 
 // setupCmd always runs the first-run configuration wizard, even when a config

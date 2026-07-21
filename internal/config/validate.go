@@ -238,6 +238,8 @@ func (c *Config) Validate() error {
 	errs = append(errs, c.validateNotify()...)
 	errs = append(errs, c.validateBrain()...)
 	errs = append(errs, c.validateReview()...)
+	errs = append(errs, c.validateReviewProviders()...)
+	errs = append(errs, c.validateProjectReview()...)
 	errs = append(errs, c.validateUI()...)
 
 	return errors.Join(errs...)
@@ -300,6 +302,175 @@ func (c *Config) validateReview() []error {
 	var errs []error
 	if c.Review.TimeoutSeconds < 0 {
 		errs = append(errs, fmt.Errorf("review.timeout_seconds must be >= 0, got %d", c.Review.TimeoutSeconds))
+	}
+	return errs
+}
+
+// validateReviewProviders checks the NEW [[review.provider]] catalog. Its rules
+// mirror the PrioritySort dup/unknown pattern above and enforce the provider
+// invariants (see reviewprovider.go / PLAN §1.4):
+//
+//   - the catalog and the legacy [review]/[coderabbit] tables are MUTUALLY
+//     EXCLUSIVE — a mixed file is a hard error pointing at `lola config
+//     migrate-review`;
+//   - unknown provider kind; more than one provider of the same kind (guards
+//     key by kind, so a duplicate is ambiguous);
+//   - unknown transport token; the github transport on a coderabbit-watch (its
+//     feedback is already on the PR — a review of it is a self-feedback loop);
+//   - fallback on a watch (a watch cannot classify quota); a fallback entry
+//     that is an unknown kind / the provider's own kind / a watch kind / not
+//     present-and-enabled in the catalog / part of a cycle;
+//   - timeout_seconds < 0.
+//
+// An empty catalog validates trivially (the legacy path is checked by
+// validateReview).
+func (c *Config) validateReviewProviders() []error {
+	var errs []error
+	if len(c.ReviewProviders) == 0 {
+		return errs
+	}
+
+	// Mutually exclusive with the legacy tables. A mixed file is a hard error,
+	// resolved by the one-way `lola config migrate-review`.
+	if c.Review != (ReviewConfig{}) || c.CodeRabbit != (CodeRabbitConfig{}) {
+		errs = append(errs, errors.New(
+			"the [[review.provider]] catalog cannot coexist with the legacy [review]/[coderabbit] tables; run `lola config migrate-review` to fold the legacy tables into the catalog"))
+	}
+
+	// Index providers by kind, catching unknown kinds and duplicates.
+	byKind := map[provKind]ReviewProvider{}
+	seen := map[provKind]bool{}
+	for _, p := range c.ReviewProviders {
+		if !p.Provider.valid() {
+			errs = append(errs, fmt.Errorf("review provider: unknown provider kind %q (must be coderabbit-cli|coderabbit-watch|claude-session)", p.Provider))
+			continue
+		}
+		if seen[p.Provider] {
+			errs = append(errs, fmt.Errorf("review provider %q: at most one provider per kind is allowed", p.Provider))
+			continue
+		}
+		seen[p.Provider] = true
+		byKind[p.Provider] = p
+	}
+
+	for _, p := range c.ReviewProviders {
+		if !p.Provider.valid() {
+			continue
+		}
+		if p.TimeoutSeconds < 0 {
+			errs = append(errs, fmt.Errorf("review provider %q: timeout_seconds must be >= 0, got %d", p.Provider, p.TimeoutSeconds))
+		}
+		for _, t := range p.Transports {
+			if !t.valid() {
+				errs = append(errs, fmt.Errorf("review provider %q: unknown transport %q (must be lola|github|linear)", p.Provider, t))
+			}
+		}
+		if p.Provider.isWatch() && p.Transports.Has(TransportGitHub) {
+			errs = append(errs, fmt.Errorf("review provider %q: the github transport is not allowed on a watch provider (its feedback is already on the PR)", p.Provider))
+		}
+		if p.Provider.isWatch() && len(p.Fallback) > 0 {
+			errs = append(errs, fmt.Errorf("review provider %q: fallback is not allowed on a watch provider (a watch cannot classify over-quota)", p.Provider))
+		}
+		for _, fb := range p.Fallback {
+			switch {
+			case !fb.valid():
+				errs = append(errs, fmt.Errorf("review provider %q: fallback references unknown kind %q", p.Provider, fb))
+			case fb == p.Provider:
+				errs = append(errs, fmt.Errorf("review provider %q: fallback cannot reference its own kind", p.Provider))
+			case fb.isWatch():
+				errs = append(errs, fmt.Errorf("review provider %q: fallback cannot reference the watch kind %q (fallback is pass-shape only)", p.Provider, fb))
+			default:
+				target, ok := byKind[fb]
+				if !ok {
+					errs = append(errs, fmt.Errorf("review provider %q: fallback %q is not present in the catalog", p.Provider, fb))
+				} else if !target.Enabled {
+					errs = append(errs, fmt.Errorf("review provider %q: fallback %q must be enabled", p.Provider, fb))
+				}
+			}
+		}
+	}
+
+	if cyc := reviewFallbackCycle(byKind); cyc != "" {
+		errs = append(errs, fmt.Errorf("review provider fallback forms a cycle involving %q", cyc))
+	}
+
+	return errs
+}
+
+// reviewFallbackCycle returns a kind on a fallback cycle, or "" if the fallback
+// graph (edges provider -> each fallback kind present in the catalog) is
+// acyclic. Standard white/gray/black DFS; kinds are visited in sorted order for
+// a deterministic message.
+func reviewFallbackCycle(byKind map[provKind]ReviewProvider) provKind {
+	const (
+		white = 0
+		gray  = 1
+		black = 2
+	)
+	color := map[provKind]int{}
+	var dfs func(k provKind) provKind
+	dfs = func(k provKind) provKind {
+		color[k] = gray
+		for _, fb := range byKind[k].Fallback {
+			if _, ok := byKind[fb]; !ok {
+				continue // unknown/absent target — reported separately
+			}
+			switch color[fb] {
+			case gray:
+				return fb
+			case white:
+				if c := dfs(fb); c != "" {
+					return c
+				}
+			}
+		}
+		color[k] = black
+		return ""
+	}
+	kinds := make([]provKind, 0, len(byKind))
+	for k := range byKind {
+		kinds = append(kinds, k)
+	}
+	slices.Sort(kinds)
+	for _, k := range kinds {
+		if color[k] == white {
+			if c := dfs(k); c != "" {
+				return c
+			}
+		}
+	}
+	return ""
+}
+
+// validateProjectReview checks each project's per-project review-provider
+// override (Project.Review, the inheritable `review` key). A selected kind must
+// name a known provider AND be present-and-enabled in the effective catalog
+// (catalog when configured, else legacy synthesis) — otherwise the project
+// would ask for a review nothing can run. A nil/empty selection validates
+// trivially (inherit / no per-project review). The resolved value is checked,
+// so an inherited selection is validated on every project that carries it.
+func (c *Config) validateProjectReview() []error {
+	var errs []error
+
+	// Enabled provider kinds available to select from.
+	enabled := map[provKind]bool{}
+	for _, p := range c.EffectiveReviewProviders() {
+		if p.Enabled {
+			enabled[p.Provider] = true
+		}
+	}
+
+	for i := range c.Projects {
+		pr := &c.Projects[i]
+		id := fmt.Sprintf("project %q", pr.Name)
+		for _, k := range pr.Review {
+			switch {
+			case !k.valid():
+				errs = append(errs, fmt.Errorf("%s: review references unknown provider kind %q (must be coderabbit-cli|coderabbit-watch|claude-session)", id, k))
+			case !enabled[k]:
+				errs = append(errs, fmt.Errorf("%s: review kind %q must be an enabled provider in the catalog", id, k))
+			}
+		}
 	}
 	return errs
 }

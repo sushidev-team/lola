@@ -143,6 +143,46 @@ func TestCodeRabbitCommentsGhErrorIsDistinct(t *testing.T) {
 	}
 }
 
+func TestCodeRabbitCommentsExcludesSelfLogin(t *testing.T) {
+	// Two comments both match the author needle "octo": one authored by lola's
+	// own gh login (a review it posted via the github transport) and one by a
+	// genuine third-party bot. The self-login filter must drop ONLY lola's own,
+	// leaving substring author matching otherwise intact.
+	fixture := `{
+	  "comments": [
+	    {"author":{"login":"octolola"},"body":"self review post","createdAt":"2024-01-02T10:00:00Z"},
+	    {"author":{"login":"octobot"},"body":"third-party octo tool","createdAt":"2024-01-03T10:00:00Z"}
+	  ],
+	  "reviews": []
+	}`
+	since := mustTime(t, "2024-01-01T00:00:00Z")
+
+	// Without a self login, both surface — proving the filter is what removes one.
+	bin, _ := fakeGhRouter(t, map[string]ghResp{"pr_view": {out: fixture, code: 0}})
+	c := &Client{GhBin: bin}
+	text, _, err := c.CodeRabbitComments(context.Background(), "acme/nori", 7, since, "octo")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(text, "self review post") || !strings.Contains(text, "third-party octo tool") {
+		t.Fatalf("baseline: both octo-matching comments should surface:\n%s", text)
+	}
+
+	// With the self login, lola's own comment is dropped; the third party stays.
+	bin2, _ := fakeGhRouter(t, map[string]ghResp{"pr_view": {out: fixture, code: 0}})
+	c2 := &Client{GhBin: bin2}
+	text, _, err = c2.CodeRabbitCommentsExcluding(context.Background(), "acme/nori", 7, since, "octo", "octolola")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if strings.Contains(text, "self review post") {
+		t.Errorf("lola's own posted comment must be filtered out:\n%s", text)
+	}
+	if !strings.Contains(text, "third-party octo tool") {
+		t.Errorf("a third-party bot comment must still surface:\n%s", text)
+	}
+}
+
 func TestCodeRabbitCommentsSizeBound(t *testing.T) {
 	huge := strings.Repeat("x", reactionMaxBytes*2)
 	fixture := `{"comments":[{"author":{"login":"coderabbitai[bot]"},"body":"` + huge + `","createdAt":"2024-02-01T00:00:00Z"}],"reviews":[]}`

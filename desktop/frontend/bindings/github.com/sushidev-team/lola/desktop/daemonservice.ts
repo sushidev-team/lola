@@ -40,7 +40,7 @@ export function Answer(session: string, text: string): $CancellablePromise<void>
 }
 
 /**
- * CodeRabbit forces the PR-comment watch for one session now.
+ * CodeRabbit forces the PR-comment watch for one session now (the coderabbit-watch alias).
  */
 export function CodeRabbit(session: string): $CancellablePromise<protocol$0.CodeRabbitData> {
     return $Call.ByID(2376086832, session);
@@ -159,10 +159,12 @@ export function RestartDaemon(): $CancellablePromise<void> {
 }
 
 /**
- * Review forces a CodeRabbit QA pass for one session now.
+ * Review forces a QA review PASS for one session now. provider optionally
+ * selects which pass provider kind to force (coderabbit-cli | claude-session);
+ * "" forces the daemon's primary pass provider.
  */
-export function Review(session: string): $CancellablePromise<protocol$0.ReviewData> {
-    return $Call.ByID(4119390853, session);
+export function Review(session: string, provider: string): $CancellablePromise<protocol$0.ReviewData> {
+    return $Call.ByID(4119390853, session, provider);
 }
 
 /**

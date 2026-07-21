@@ -69,6 +69,8 @@ const (
 	fCommentOnMerged
 	fBlockedLabel
 	fCommentOnBlocked
+	// Review tab: this project's per-project review-provider override.
+	fReview
 	fSave
 )
 
@@ -83,6 +85,7 @@ const (
 	tabFilter
 	tabLabels
 	tabWriteback
+	tabReview
 )
 
 var formTabs = []struct {
@@ -93,6 +96,7 @@ var formTabs = []struct {
 	{tabFilter, "Filter"},
 	{tabLabels, "Labels"},
 	{tabWriteback, "Write-back"},
+	{tabReview, "Review"},
 }
 
 // listFields are edited as one entry per line (an open sub-editor), not inline.
@@ -118,6 +122,7 @@ var inheritable = map[fieldID]func(*config.ProjectInherits) *bool{
 	fBlockedLabel: func(i *config.ProjectInherits) *bool {
 		return &i.BlockedLabelID
 	},
+	fReview: func(i *config.ProjectInherits) *bool { return &i.Review },
 }
 
 type pickOpt struct{ id, label string }
@@ -292,6 +297,8 @@ func (f *formModel) setInherit(fd fieldID, v bool) {
 		f.poll.OnSentSetLabel = d.OnSentSetLabel
 	case fBlockedLabel:
 		f.poll.BlockedLabelID = d.BlockedLabelID
+	case fReview:
+		f.poll.Review = slices.Clone(d.Review)
 	}
 }
 
@@ -322,6 +329,7 @@ func newFormModel(cfg *config.Config, existing *config.Project) (*formModel, tea
 		f.poll.StateIDs = slices.Clone(existing.StateIDs)
 		f.poll.MatchLabels = slices.Clone(existing.MatchLabels)
 		f.poll.PrioritySort = slices.Clone(existing.PrioritySort)
+		f.poll.Review = slices.Clone(existing.Review)
 		if existing.ConcurrencyCap > 0 {
 			f.capBuf = strconv.Itoa(existing.ConcurrencyCap)
 		}
@@ -343,6 +351,7 @@ func newFormModel(cfg *config.Config, existing *config.Project) (*formModel, tea
 				Symlinks: true, PostCreate: true, Env: true,
 				MatchLabels: true, MatchMode: true, OnSentSetLabel: true,
 				BlockedLabelID: true, DedupMode: true, PrioritySort: true,
+				Review: true,
 			},
 		}
 		seedPollDefaults(&f.poll)
@@ -362,6 +371,7 @@ func newFormModel(cfg *config.Config, existing *config.Project) (*formModel, tea
 		f.poll.DedupMode = orDefault(cfg.Defaults.DedupMode, config.DefaultDedupMode)
 		f.poll.OnSentSetLabel = cfg.Defaults.OnSentSetLabel
 		f.poll.BlockedLabelID = cfg.Defaults.BlockedLabelID
+		f.poll.Review = slices.Clone(cfg.Defaults.Review)
 	}
 	var cmd tea.Cmd
 	if f.poll.TeamID != "" {
@@ -436,6 +446,8 @@ func (f *formModel) fields() []fieldID {
 			}
 			fs = append(fs, fCommentOnPR, fOnMergedState, fCommentOnMerged, fBlockedLabel, fCommentOnBlocked)
 		}
+	case tabReview:
+		fs = []fieldID{fReview}
 	}
 	return append(fs, fSave)
 }
@@ -926,6 +938,16 @@ func (f *formModel) openPicker(cur fieldID) tea.Cmd {
 			opts = append(opts, pickOpt{l.ID, labelDisplay(l)})
 		}
 		selected = []string{f.poll.BlockedLabelID}
+	case fReview:
+		multi, title = true, "Review providers"
+		for _, k := range f.cfg.ReviewCatalogKinds() {
+			opts = append(opts, pickOpt{k, k})
+		}
+		if len(opts) == 0 {
+			f.loadErr = "no review providers configured — add a [[review.provider]] to the review catalog first"
+			return nil
+		}
+		selected = f.poll.ReviewKindStrings()
 	}
 
 	p := &picker{title: title, field: cur, opts: opts, multi: multi, sel: map[string]bool{}}
@@ -993,6 +1015,10 @@ func (f *formModel) applyPick(p *picker) tea.Cmd {
 			f.poll.StateIDs = ids
 		case fLabels:
 			f.poll.MatchLabels = ids
+		case fReview:
+			// override(p.field) above already cleared Inherits.Review; without it
+			// projectToFile would omit the key and Save would silently discard this.
+			f.poll.SetReviewKinds(ids)
 		}
 		return nil
 	}
@@ -1097,6 +1123,7 @@ func applyProject(dst *config.Project, src config.Project) {
 	dst.CommentOnMerged = src.CommentOnMerged
 	dst.CommentOnBlocked = src.CommentOnBlocked
 	dst.PRRequiresChecks = src.PRRequiresChecks
+	dst.Review = src.Review
 	// Assign unconditionally: an empty src.Repo must be able to CLEAR an existing
 	// value, not silently leave the old one in place.
 	dst.Repo = src.Repo
@@ -1471,6 +1498,8 @@ func fieldHelp(fd fieldID) string {
 		return "Label added when the agent is blocked and needs a human (CI retries exhausted). (none) = no label."
 	case fCommentOnBlocked:
 		return "enter toggles · also comment the block reason when the agent is blocked."
+	case fReview:
+		return "Which review providers run for this project's sessions. Empty inherits [defaults].review; override to none to disable review here. Pick from the enabled catalog."
 	case fSave:
 		return ""
 	}
@@ -1543,6 +1572,8 @@ func (f *formModel) label(fd fieldID) string {
 		return "On blocked → label"
 	case fCommentOnBlocked:
 		return "  comment on blocked"
+	case fReview:
+		return "Review providers"
 	case fSave:
 		return ""
 	}
@@ -1725,6 +1756,12 @@ func (f *formModel) display(fd fieldID) string {
 		return boolDisplay(f.poll.CommentOnMerged)
 	case fCommentOnBlocked:
 		return boolDisplay(f.poll.CommentOnBlocked)
+	case fReview:
+		kinds := f.poll.ReviewKindStrings()
+		if len(kinds) == 0 {
+			return faintText.Render("(none)")
+		}
+		return strings.Join(kinds, ", ")
 	case fSave:
 		return "[ Save ]"
 	}

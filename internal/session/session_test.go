@@ -484,3 +484,113 @@ func TestSnapshotDoesNotAliasPR(t *testing.T) {
 		t.Fatalf("mutating a snapshot PR leaked into the store: State = %q", got)
 	}
 }
+
+// TestReviewMapsRoundTrip verifies the four flexible-review guard maps (PLAN
+// §3.2) survive a Save/load cycle intact. A record carrying non-nil maps is
+// already migrated, so migrateReviewState leaves it untouched on reload.
+func TestReviewMapsRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	wm := time.Date(2026, 7, 21, 10, 30, 0, 0, time.UTC)
+
+	st := NewStore(dir)
+	st.Upsert(Session{
+		ID:               "s-1",
+		Source:           "native",
+		Project:          "alpha",
+		Issue:            "ENG-9",
+		ReviewedPRs:      map[string]int{"coderabbit-cli": 42, "claude-session": 7},
+		ReviewWatermarks: map[string]time.Time{"coderabbit-watch": wm},
+		PendingHandoffs:  map[string]string{"coderabbit-cli": "findings", "coderabbit-watch": "pointer"},
+		PostedGitHubPRs:  map[string]int{"claude-session": 42},
+	})
+	if err := st.Save(); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	got, ok := NewStore(dir).Get("s-1")
+	if !ok {
+		t.Fatal("session s-1 missing after reload")
+	}
+	if got.ReviewedPRs["coderabbit-cli"] != 42 || got.ReviewedPRs["claude-session"] != 7 {
+		t.Errorf("ReviewedPRs = %v", got.ReviewedPRs)
+	}
+	if w := got.ReviewWatermarks["coderabbit-watch"]; !w.Equal(wm) {
+		t.Errorf("ReviewWatermarks[coderabbit-watch] = %v, want %v", w, wm)
+	}
+	if got.PendingHandoffs["coderabbit-cli"] != "findings" || got.PendingHandoffs["coderabbit-watch"] != "pointer" {
+		t.Errorf("PendingHandoffs = %v", got.PendingHandoffs)
+	}
+	if got.PostedGitHubPRs["claude-session"] != 42 {
+		t.Errorf("PostedGitHubPRs = %v", got.PostedGitHubPRs)
+	}
+	// A record that already carries maps must not be re-folded from the (unset)
+	// scalars: no phantom keys appear.
+	if len(got.ReviewedPRs) != 2 {
+		t.Errorf("ReviewedPRs gained phantom keys on reload: %v", got.ReviewedPRs)
+	}
+}
+
+// TestMigrateReviewStateFold verifies the idempotent fold of the four legacy
+// review scalars into the kind-keyed maps (PLAN §3.2) on load, and that a second
+// call is a no-op.
+func TestMigrateReviewStateFold(t *testing.T) {
+	wm := time.Date(2026, 7, 20, 8, 0, 0, 0, time.UTC)
+	s := Session{
+		ReviewedPR:            13,
+		LastCodeRabbitAt:      wm,
+		PendingReviewFindings: "cli-findings",
+		PendingCodeRabbit:     "watch-pointer",
+	}
+
+	s.migrateReviewState()
+
+	if s.ReviewedPRs["coderabbit-cli"] != 13 {
+		t.Errorf("ReviewedPRs[coderabbit-cli] = %d, want 13", s.ReviewedPRs["coderabbit-cli"])
+	}
+	if !s.ReviewWatermarks["coderabbit-watch"].Equal(wm) {
+		t.Errorf("ReviewWatermarks[coderabbit-watch] = %v, want %v", s.ReviewWatermarks["coderabbit-watch"], wm)
+	}
+	if s.PendingHandoffs["coderabbit-cli"] != "cli-findings" {
+		t.Errorf("PendingHandoffs[coderabbit-cli] = %q", s.PendingHandoffs["coderabbit-cli"])
+	}
+	if s.PendingHandoffs["coderabbit-watch"] != "watch-pointer" {
+		t.Errorf("PendingHandoffs[coderabbit-watch] = %q", s.PendingHandoffs["coderabbit-watch"])
+	}
+
+	// Idempotent: mutate the maps, call again, and confirm the fold does not
+	// overwrite the now-authoritative maps from the stale scalars.
+	s.ReviewedPRs["coderabbit-cli"] = 99
+	s.migrateReviewState()
+	if s.ReviewedPRs["coderabbit-cli"] != 99 {
+		t.Errorf("migrateReviewState re-folded stale scalar: ReviewedPRs[coderabbit-cli] = %d, want 99", s.ReviewedPRs["coderabbit-cli"])
+	}
+}
+
+// TestMigrateReviewStateThroughLoad confirms an on-disk snapshot written with
+// only the legacy scalars comes back with the maps populated (the fold runs on
+// Store load).
+func TestMigrateReviewStateThroughLoad(t *testing.T) {
+	dir := t.TempDir()
+	st := NewStore(dir)
+	st.Upsert(Session{
+		ID:               "legacy-1",
+		Project:          "alpha",
+		Issue:            "ENG-3",
+		ReviewedPR:       21,
+		LastCodeRabbitAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+	})
+	if err := st.Save(); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	got, ok := NewStore(dir).Get("legacy-1")
+	if !ok {
+		t.Fatal("legacy-1 missing after reload")
+	}
+	if got.ReviewedPRs["coderabbit-cli"] != 21 {
+		t.Errorf("fold on load missed ReviewedPR: ReviewedPRs = %v", got.ReviewedPRs)
+	}
+	if got.ReviewWatermarks["coderabbit-watch"].IsZero() {
+		t.Errorf("fold on load missed LastCodeRabbitAt: ReviewWatermarks = %v", got.ReviewWatermarks)
+	}
+}

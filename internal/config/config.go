@@ -83,6 +83,7 @@ type ProjectInherits struct {
 	BlockedLabelID bool
 	DedupMode      bool
 	PrioritySort   bool
+	Review         bool
 }
 
 // Project is one [[project]] table: a local repository the native runtime can
@@ -151,6 +152,16 @@ type Project struct {
 	// not draft, checks green) rather than merely open.
 	PRRequiresChecks bool `toml:"pr_requires_checks,omitempty"`
 
+	// --- Review (optional) -------------------------------------------------
+	// Review is this project's per-project override of WHICH global review
+	// provider kinds run for its sessions — a subset of the enabled catalog
+	// (see reviewprovider.go). Like the other inheritable slices, a NIL value
+	// inherits [defaults].review while a present-but-empty value ("override to
+	// nothing") disables review for this project. Every kind must exist and be
+	// enabled in the effective catalog (validateProjectReview). The resolved
+	// value lives here; Inherits.Review records whether it was inherited.
+	Review []provKind `toml:"review,omitempty"`
+
 	// Inherits marks which of the [defaults]-inheritable fields above this
 	// project leaves to [defaults]; the fields themselves always hold the
 	// resolved value. Never serialized — Load derives it from key absence and
@@ -199,6 +210,10 @@ type Defaults struct {
 	BlockedLabelID string            `toml:"blocked_label_id"`
 	DedupMode      string            `toml:"dedup_mode"`
 	PrioritySort   []string          `toml:"priority_sort"`
+	// Review is the default per-project review-provider selection inherited by a
+	// project that omits `review` (see Project.Review). Empty leaves projects to
+	// the global catalog's own applies-independently pass.
+	Review []provKind `toml:"review"`
 }
 
 // LinearConfig is the [linear] table. It intentionally has no api_key field:
@@ -220,6 +235,13 @@ type Config struct {
 	CodeRabbit CodeRabbitConfig `toml:"coderabbit"`
 	Tmux       TmuxConfig       `toml:"tmux"`
 	UI         UIConfig         `toml:"ui"`
+
+	// ReviewProviders is the NEW canonical global review CATALOG (resolved from
+	// [[review.provider]]). Empty when the file uses the legacy [review]/
+	// [coderabbit] tables instead — the two are mutually exclusive. Serialized
+	// on Save via reviewMirror(); the runtime provider set (catalog or legacy
+	// synthesis) is EffectiveReviewProviders(). See reviewprovider.go.
+	ReviewProviders []ReviewProvider `toml:"-"`
 
 	// notices are NON-FATAL repairs Load made to the file: things that were
 	// already inert but would otherwise be rejected, so a config nobody could
@@ -368,6 +390,11 @@ type fileProject struct {
 	CommentOnBlocked bool    `toml:"comment_on_blocked,omitempty"`
 	PRRequiresChecks bool    `toml:"pr_requires_checks,omitempty"`
 
+	// Review is a POINTER-to-slice so an absent key (nil -> inherit) stays
+	// distinct from an explicit `review = []` (override to nothing), exactly as
+	// MatchLabels does. See projectFromFile / projectToFile.
+	Review *[]provKind `toml:"review,omitempty"`
+
 	LegacyPolls []legacyPoll `toml:"poll,omitempty"` // pre-merge [[project.poll]]; folded onto the project on load, dropped on save
 }
 
@@ -479,6 +506,7 @@ func projectFromFile(fp fileProject) Project {
 	dedupMode, hasDedupMode := deref(fp.DedupMode)
 	onSentSetLabel, hasOnSentSetLabel := deref(fp.OnSentSetLabel)
 	blockedLabelID, hasBlockedLabelID := deref(fp.BlockedLabelID)
+	review, hasReview := deref(fp.Review)
 
 	return Project{
 		Name:           fp.Name,
@@ -505,6 +533,7 @@ func projectFromFile(fp fileProject) Project {
 		PrioritySort:   prioritySort,
 		DedupMode:      dedupMode,
 		OnSentSetLabel: onSentSetLabel,
+		Review:         review,
 
 		Inherits: ProjectInherits{
 			PostCreate:     !hasPostCreate,
@@ -516,6 +545,7 @@ func projectFromFile(fp fileProject) Project {
 			BlockedLabelID: !hasBlockedLabelID,
 			DedupMode:      !hasDedupMode,
 			PrioritySort:   !hasPrioritySort,
+			Review:         !hasReview,
 		},
 
 		OnSpawnStateID:   fp.OnSpawnStateID,
@@ -562,6 +592,7 @@ func projectToFile(p Project) fileProject {
 		PrioritySort:   ptr(p.PrioritySort, set(o.PrioritySort)),
 		DedupMode:      ptr(p.DedupMode, set(o.DedupMode)),
 		OnSentSetLabel: ptr(p.OnSentSetLabel, set(o.OnSentSetLabel)),
+		Review:         ptr(p.Review, set(o.Review)),
 
 		OnSpawnStateID:   p.OnSpawnStateID,
 		OnPRStateID:      p.OnPRStateID,
@@ -595,6 +626,7 @@ type fileDefaults struct {
 	BlockedLabelID string            `toml:"blocked_label_id,omitempty"`
 	DedupMode      string            `toml:"dedup_mode,omitempty"`
 	PrioritySort   []string          `toml:"priority_sort,omitempty"`
+	Review         []provKind        `toml:"review,omitempty"`
 }
 
 // config flattens the on-disk mirror into the in-memory Config and MIGRATES the
@@ -656,18 +688,29 @@ func (fc *fileConfig) config() *Config {
 			BlockedLabelID: fc.Defaults.BlockedLabelID,
 			DedupMode:      fc.Defaults.DedupMode,
 			PrioritySort:   fc.Defaults.PrioritySort,
+			Review:         fc.Defaults.Review,
 		},
-		Linear:      fc.Linear,
-		Projects:    projects,
-		migrateErrs: migrateErrs,
-		Reactions:   resolveReactions(fc.Reactions),
-		Notify:      resolveNotify(fc.Notify),
-		Brain:       resolveBrain(fc.Brain),
-		Review:      resolveReview(fc.Review),
-		CodeRabbit:  resolveCodeRabbit(fc.CodeRabbit),
-		Tmux:        resolveTmux(fc.Tmux),
-		UI:          resolveUI(fc.UI),
+		Linear:          fc.Linear,
+		Projects:        projects,
+		migrateErrs:     migrateErrs,
+		Reactions:       resolveReactions(fc.Reactions),
+		Notify:          resolveNotify(fc.Notify),
+		Brain:           resolveBrain(fc.Brain),
+		Review:          resolveReview(fc.Review),
+		ReviewProviders: resolveReviewProviders(reviewProviderEntries(fc.Review)),
+		CodeRabbit:      resolveCodeRabbit(fc.CodeRabbit),
+		Tmux:            resolveTmux(fc.Tmux),
+		UI:              resolveUI(fc.UI),
 	}
+}
+
+// reviewProviderEntries returns the [[review.provider]] catalog carried by the
+// [review] mirror, nil-safe for an absent table.
+func reviewProviderEntries(fr *fileReviewConfig) []fileReviewProvider {
+	if fr == nil {
+		return nil
+	}
+	return fr.Provider
 }
 
 // file serializes the flat model: each project's polling fields are written
@@ -695,17 +738,37 @@ func (c *Config) file() *fileConfig {
 			BlockedLabelID: c.Defaults.BlockedLabelID,
 			DedupMode:      c.Defaults.DedupMode,
 			PrioritySort:   c.Defaults.PrioritySort,
+			Review:         c.Defaults.Review,
 		},
 		Linear:     c.Linear,
 		Projects:   fps,
 		Reactions:  reactionsFile(c.Reactions),
 		Notify:     notifyFile(c.Notify),
 		Brain:      brainFile(c.Brain),
-		Review:     reviewFile(c.Review),
+		Review:     c.reviewMirror(),
 		CodeRabbit: coderabbitFile(c.CodeRabbit),
 		Tmux:       tmuxFile(c.Tmux),
 		UI:         uiFile(c.UI),
 	}
+}
+
+// reviewMirror composes the on-disk [review] table from BOTH the legacy scalar
+// keys and the NEW catalog. A legacy-only config stays byte-identical (scalars
+// set, provider array nil); a catalog-only config emits [[review.provider]]
+// with nil scalars (no phantom legacy block); both empty omits [review]
+// entirely. A mixed in-memory config would serialize both — that pairing is a
+// hard validation error (see validateReviewProviders), not a Save-time concern.
+func (c *Config) reviewMirror() *fileReviewConfig {
+	scal := reviewFile(c.Review)                    // nil when c.Review == zero
+	provs := reviewProvidersFile(c.ReviewProviders) // nil when the catalog is empty
+	if scal == nil && provs == nil {
+		return nil // omit the whole [review] table
+	}
+	if scal == nil {
+		scal = &fileReviewConfig{} // catalog-only: nil scalars
+	}
+	scal.Provider = provs
+	return scal
 }
 
 // Home returns the lola runtime directory: $LOLA_HOME if set, else ~/.lola.
@@ -830,6 +893,7 @@ func (c *Config) ResolveInheritance() {
 		in.Env = in.Env || p.Env == nil
 		in.MatchLabels = in.MatchLabels || p.MatchLabels == nil
 		in.PrioritySort = in.PrioritySort || p.PrioritySort == nil
+		in.Review = in.Review || p.Review == nil
 		p.Inherits = in
 
 		// The rest resolve on the Inherits bit alone: an empty value there is a
@@ -861,6 +925,9 @@ func (c *Config) ResolveInheritance() {
 		}
 		if in.MatchLabels {
 			p.MatchLabels = slices.Clone(d.MatchLabels)
+		}
+		if in.Review {
+			p.Review = slices.Clone(d.Review)
 		}
 		if in.PrioritySort {
 			if len(d.PrioritySort) > 0 {

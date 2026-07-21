@@ -110,8 +110,8 @@ func (d *Daemon) observeNative(ctx context.Context) {
 	}
 	brainOn := d.brainSummarize != nil
 	bc := d.cfg.Brain
-	reviewOn := d.reviewRun != nil
-	rc := d.cfg.Review
+	reviewBudgetOn := d.anyPassOnPROpenLocked()
+	reviewBudget := d.reviewCycleBudgetLocked()
 	d.mu.Unlock()
 	if nat == nil {
 		return
@@ -143,13 +143,14 @@ func (d *Daemon) observeNative(ctx context.Context) {
 	// neither stall the review of every LATER session in the snapshot (the first
 	// slow call spends the budget; the rest abort fast) nor delay graceful
 	// shutdown (cancellation aborts the read-only review exec). Off by default →
-	// no budget. Only needed when the PR-open auto-trigger can fire (OnPROpen).
-	if reviewOn && rc.OnPROpen {
+	// no budget. Installed whenever ANY enabled pass provider triggers on PR-open;
+	// the budget is the largest such provider's timeout (each exec self-bounds).
+	if reviewBudgetOn {
 		parent := d.shutdownCtx
 		if parent == nil {
 			parent = ctx
 		}
-		rctx, cancel := context.WithTimeout(parent, reviewTimeout(rc))
+		rctx, cancel := context.WithTimeout(parent, reviewBudget)
 		defer cancel()
 		d.setReviewCycleCtx(rctx)
 		defer d.setReviewCycleCtx(nil)
@@ -337,20 +338,17 @@ func (d *Daemon) observeNative(ctx context.Context) {
 			// session is simply gone here, a no-op.
 			if cur, ok := d.sessions.Get(s.ID); ok {
 				d.writeBackEscalation(ctx, cur)
-				// P9 QA review buddy: fire ONE bounded CodeRabbit pass the first
-				// time this session has an open PR (opt-in), then deliver any
-				// hand-off deferred because the worker was mid-turn. Both no-op
-				// when review is off. Re-read for fresh PR / AtPrompt / guard facts.
-				d.reviewOnPROpen(ctx, cur)
-				// [coderabbit] PR-comment WATCH: poll the open PR for new
-				// CodeRabbit (GitHub-app) comments and route them. No-op when the
-				// watch is off. Uses the same fresh cur for PR / AtPrompt facts.
-				d.coderabbitWatch(ctx, cur)
+				// Flexible review: run every independently-applying provider for this
+				// session — each enabled pass provider fires its bounded PR-open chain
+				// (guarded once per PR per kind), each watch provider polls its
+				// watermark. All no-op when no providers are configured. Re-read for
+				// fresh PR / AtPrompt / guard facts.
+				d.runReviewProviders(ctx, cur)
 			}
-			// Flush a deferred review / comment hand-off once the worker is idle at
-			// its prompt again (each re-reads the record itself).
-			d.flushPendingReview(ctx, s.ID)
-			d.flushPendingCodeRabbit(ctx, s.ID)
+			// Flush any hand-off deferred because the worker was mid-turn, once it is
+			// idle at its prompt again (re-reads the record itself; one delivered
+			// per cycle since a send consumes AtPrompt).
+			d.flushReviewHandoffs(ctx, s.ID)
 		}
 	}
 	if !touched {

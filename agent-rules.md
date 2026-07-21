@@ -95,6 +95,70 @@ socket.
 - `[brain]`, `[review]`, and `[coderabbit]` are lola-INTERNAL helpers that
   always shell `claude -p` regardless of the coding-agent choice — they are NOT
   the pluggable coding agent and must not follow the `agent` setting.
+- **[changed]** The review helper generalized from the two hardcoded tables into
+  a provider CATALOG (`[[review.provider]]`) with three kinds
+  (`coderabbit-cli` = CLI pass, `coderabbit-watch` = PR-comment watch,
+  `claude-session` = headless `claude -p` pass). The legacy `[review]`/
+  `[coderabbit]` tables still work forever (synthesized into `coderabbit-cli`/
+  `coderabbit-watch` providers); catalog + a non-empty legacy table is a HARD
+  validation error, resolved one-way by `lola config migrate-review`. The
+  `claude-session` provider is still a lola-INTERNAL `claude -p` helper — it does
+  NOT follow the `agent` setting.
+
+## Review providers (flexible review)
+
+- **[changed]** At most ONE provider per KIND (guards key by kind). Two execution
+  SHAPES: PASS (coderabbit-cli/claude-session — exec, return findings synchronously,
+  per-PR guard) and WATCH (coderabbit-watch — poll the PR, watermark guard). A
+  provider runs per session only if enabled AND not referenced in any other
+  enabled provider's `fallback` (a fallback-only provider runs ONLY when reached
+  via a chain — prevents double-review/double-hand-off).
+- **[changed]** Fire-once guards are KIND-KEYED maps in session state
+  (`ReviewedPRs`/`ReviewWatermarks`/`PendingHandoffs`/`PostedGitHubPRs`), stamped
+  BEFORE the exec (a pass chain stamps the PRIMARY kind so a fell-through fallback
+  never re-fires), migrated idempotently from the old scalars (`migrateReviewState`,
+  run on Store load AND in Adopt) and carried through Adopt. The synthesized legacy
+  providers reuse the same fixed kind keys, so an upgraded/adopted session is NOT
+  re-reviewed.
+- **[changed]** Transports = a multiselect over `{lola, github, linear}`. `lola`
+  is ALWAYS present (force-appended on resolve) and expands to the notify sink
+  (gated by the `notify` bool) + the worker hand-off sink (gated by
+  `send_to_agent`) — muting either independently is what preserves the legacy
+  `notify=false` opt-out. `github`/`linear` are additive opt-in public sinks.
+- **[changed]** Only the worker hand-off sink SANITIZES + idle-gates: it reuses
+  the existing `AtPrompt` atomic idle-gate + `sanitizeAgentText` + defer-never-drop
+  VERBATIM, never run as a command, pending stash keyed `PendingHandoffs[kind]`.
+  notify/github/linear are HUMAN sinks — full untrusted findings verbatim, NO
+  sanitize, NEVER re-fed into the control loop. Per-kind labels/preambles so a
+  `claude-session`'s findings read "Claude review", never mislabeled "CodeRabbit".
+- **[changed]** The `github` sink is `gh pr comment <pr> --repo <repo> --body-file -`
+  ONLY (body on STDIN, never argv) — a plain PR comment, never `gh pr review`
+  (no approve/request-changes). PASS shapes only; validation FORBIDS `github` on a
+  `coderabbit-watch` (its feedback is already on the PR — a self-feedback loop).
+  Idempotent per PR via `PostedGitHubPRs[kind]`: a SUCCESS or a PERMANENT gh error
+  (422/403) stamps the settle guard + logs once; a TRANSIENT error (5xx/timeout/
+  missing repo) leaves it unstamped to retry next cycle. Empty body = skip.
+  Fail-closed: missing repo / gh-not-authed = silent skip.
+- **[changed]** Fallback (PASS-SHAPE ONLY): a provider that CAN'T answer
+  (`ErrNotFound`/`ErrTimeout`/`ErrQuota`/binary-unavailable) advances to the next
+  configured fallback kind; the result routes under the PRIMARY's transports.
+  `ErrAuth`/`ErrExit` are a graceful skip that does NOT fall through (fail-closed:
+  auth is an operator fix; a genuine failure must not burn the paid fallback).
+  Each exec self-bounded by its own `timeout_seconds`; the whole cycle stays under
+  the shared shutdown-abortable `reviewCycleCtx`. Chain exhausted / graceful skip
+  leaves the guard SET and logs once, never errors per cycle, never blocks lifecycle.
+- **[changed]** WATCH cannot fall back. The CodeRabbit GitHub app posts "out of
+  reviews" as an ordinary PR comment (non-empty, `err==nil`,
+  classifier-undetectable), so a watch has no quota signal — validation forbids
+  `fallback` on a `coderabbit-watch`. Quota->claude fallback requires the
+  `coderabbit-cli` provider (whose exit/stderr carries the quota signal).
+- **[changed]** Self-feedback guard (only when BOTH a github pass provider AND a
+  watch are configured): the gh authed login is resolved ONCE (memoized
+  `scm.Client.AuthedLogin`, `gh api user --jq .login`) and passed to the watch to
+  drop lola-posted comments — ZERO new per-cycle gh exec. Resolution failure =
+  fail-open (skip the filter; the default `author="coderabbitai"` won't match
+  lola's login anyway). Combined with the github-off-watch validation, a
+  lola-posted comment is never re-ingested by its own watch.
 
 ## Caps
 

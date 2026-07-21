@@ -80,6 +80,12 @@ var (
 	// ErrExit: coderabbit exited nonzero for some other reason; the wrapped
 	// message surfaces redacted stderr.
 	ErrExit = errors.New("review: coderabbit exited nonzero")
+	// ErrQuota: coderabbit is out of reviews / rate-limited / over quota. Unlike
+	// the other sentinels this can arrive on a CLEAN exit (a limit line printed
+	// to stdout with exit 0), so classification scans the stdout head too. It is
+	// the one class that drives fallback: the caller advances to the next
+	// provider in the chain rather than skipping QA outright.
+	ErrQuota = errors.New("review: coderabbit over quota / rate-limited")
 )
 
 // Client runs bounded, one-shot CodeRabbit reviews. The zero value is usable
@@ -157,7 +163,7 @@ var runReview = func(ctx context.Context, bin string, args []string, dir string,
 	// auth session). This package never reads, sets, or logs that credential.
 
 	err := cmd.Run()
-	if e := classifyRunErr(err, cctx.Err(), stderr.String(), timeout); e != nil {
+	if e := classifyRunErr(err, cctx.Err(), stderr.String(), stdout.String(), timeout); e != nil {
 		return "", e
 	}
 	return stdout.String(), nil
@@ -165,12 +171,23 @@ var runReview = func(ctx context.Context, bin string, args []string, dir string,
 
 // classifyRunErr maps a raw exec result to a distinct sentinel. Deadline is
 // checked first because a killed process surfaces as "signal: killed", not as a
-// deadline error. On a nonzero exit, stderr is inspected for auth cues (→
-// ErrAuth, no stderr surfaced) and otherwise surfaced through redactSecrets so
-// an error can never carry a key.
-func classifyRunErr(runErr, ctxErr error, stderr string, timeout time.Duration) error {
+// deadline error. Quota is checked next — over stderr, and over stdout ONLY when
+// stdout is a short limit line rather than a real findings body (isStdoutQuota)
+// — because coderabbit may print an "out of reviews" line to stdout and exit 0,
+// so a quota signal must be caught even on a clean run (before the runErr==nil
+// short-circuit) and must win over ErrAuth/ErrExit so the caller can fall
+// through to a fallback provider. Gating the stdout scan on shortness stops a
+// legitimate multi-KB review that merely mentions "rate limit"/"429" in its
+// prose from self-classifying as ErrQuota and being discarded. On a plain
+// nonzero exit, stderr is inspected for auth cues (→ ErrAuth, no stderr
+// surfaced) and otherwise surfaced through redactSecrets so an error can never
+// carry a key.
+func classifyRunErr(runErr, ctxErr error, stderr, stdout string, timeout time.Duration) error {
 	if errors.Is(ctxErr, context.DeadlineExceeded) {
 		return fmt.Errorf("%w after %s", ErrTimeout, timeout)
+	}
+	if looksLikeQuotaError(stderr) || isStdoutQuota(stdout) {
+		return ErrQuota // actionable class only; never echoes stdout/stderr
 	}
 	if runErr == nil {
 		return nil
@@ -194,12 +211,49 @@ func classifyRunErr(runErr, ctxErr error, stderr string, timeout time.Duration) 
 	return fmt.Errorf("review: coderabbit run failed: %s", redactSecrets(runErr.Error()))
 }
 
+// quotaProbeBytes bounds how much stdout is treated as a bare "limit line" quota
+// probe. A genuine over-quota message is short (a one-liner like "out of reviews
+// for this cycle"); a real findings body is many KB. Gating the stdout quota
+// scan on this ceiling stops a legitimate review that merely DISCUSSES rate
+// limits / 429 / "exceeded" in its prose from self-classifying as ErrQuota and
+// being discarded (which would wrongly trip the fallback chain).
+const quotaProbeBytes = 512
+
+// isStdoutQuota reports whether stdout is a short, quota-signalling limit line
+// rather than a substantial findings body. See quotaProbeBytes.
+func isStdoutQuota(stdout string) bool {
+	s := strings.TrimSpace(stdout)
+	if len(s) > quotaProbeBytes {
+		return false
+	}
+	return looksLikeQuotaError(s)
+}
+
 // looksLikeAuthError is a best-effort classifier: on a failed run, stderr that
 // mentions auth/login/unauthenticated almost certainly means coderabbit needs
 // `coderabbit auth login`.
 func looksLikeAuthError(stderr string) bool {
 	l := strings.ToLower(stderr)
 	for _, kw := range []string{"unauthenticated", "unauthorized", "not logged in", "auth", "login", "credential"} {
+		if strings.Contains(l, kw) {
+			return true
+		}
+	}
+	return false
+}
+
+// looksLikeQuotaError is a best-effort classifier: output (stderr OR the stdout
+// head) that mentions an out-of-reviews / rate-limit / quota condition almost
+// certainly means the provider cannot answer right now, so the caller should
+// advance to a fallback provider rather than skip QA. The cues are conservative
+// and case-folded; they are matched against provider output only (never the
+// findings we hand a human), so a false positive merely triggers a fallback.
+func looksLikeQuotaError(s string) bool {
+	l := strings.ToLower(s)
+	for _, kw := range []string{
+		"out of reviews", "usage limit", "rate limit", "rate_limit", "quota",
+		"429", "too many requests", "exceeded", "insufficient", "credit balance",
+	} {
 		if strings.Contains(l, kw) {
 			return true
 		}

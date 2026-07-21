@@ -84,6 +84,27 @@ type fileReviewConfig struct {
 	SendToAgent     *bool   `toml:"send_to_agent,omitempty"`
 	CommentOnLinear *bool   `toml:"comment_on_linear,omitempty"`
 	TimeoutSeconds  *int    `toml:"timeout_seconds,omitempty"`
+
+	// Provider holds the NEW canonical [[review.provider]] catalog (array of
+	// tables nested under [review]). It sits ALONGSIDE the legacy scalar keys
+	// so a mixed file is detectable — and rejected — by validateReviewProviders.
+	// A catalog-only file leaves every scalar pointer above nil, which is what
+	// hasLegacyReviewScalars keys off so resolveReview does not materialize a
+	// spurious legacy [review] block. See internal/config/reviewprovider.go.
+	Provider []fileReviewProvider `toml:"provider,omitempty"`
+}
+
+// hasLegacyReviewScalars reports whether any legacy [review] scalar key is
+// present (non-nil). It is FALSE for a catalog-only mirror (all scalars nil,
+// only Provider set), which is how resolveReview knows to return the zero
+// ReviewConfig instead of a spurious TimeoutSeconds=300 block — keeping a
+// catalog-only file's Save/Load an identity with no phantom [review] scalars.
+func hasLegacyReviewScalars(fr *fileReviewConfig) bool {
+	if fr == nil {
+		return false
+	}
+	return fr.Enabled != nil || fr.Command != nil || fr.OnPROpen != nil ||
+		fr.SendToAgent != nil || fr.CommentOnLinear != nil || fr.TimeoutSeconds != nil
 }
 
 // resolveReview materializes the [review] table. A nil (absent) mirror yields the
@@ -95,6 +116,13 @@ type fileReviewConfig struct {
 // open and feeds the worker), while comment_on_linear defaults OFF regardless.
 func resolveReview(fr *fileReviewConfig) ReviewConfig {
 	if fr == nil {
+		return ReviewConfig{}
+	}
+	// A catalog-only mirror (all legacy scalars nil, only [[review.provider]]
+	// set) resolves to the ZERO ReviewConfig — the catalog lives on
+	// Config.ReviewProviders, not here — so Save does not re-emit a phantom
+	// legacy [review] block.
+	if !hasLegacyReviewScalars(fr) {
 		return ReviewConfig{}
 	}
 	r := ReviewConfig{TimeoutSeconds: DefaultReviewTimeoutSeconds}

@@ -53,14 +53,16 @@ import (
 // Status is "needs_input" — the one moment the agent is provably parked at its
 // prompt, so typing cannot corrupt a mid-turn agent (the send-keys safety gate,
 // PLAN P3/P7). The reply is OK on a delivered answer, an error otherwise.
-// Cmd "review" FORCES the P9 QA review pass (CodeRabbit) for one session now,
-// ignoring the per-PR one-shot guard: Session names the target. The daemon runs
-// one bounded `coderabbit review` against the session's worktree and routes the
-// findings the same way the PR-open auto-trigger does (notify + optional Linear
-// comment + optional sanitized, idle-gated worker hand-off), replying
-// Response.Data = ReviewData with a short outcome. Review disabled / no
-// coderabbit yields a "skipped" ReviewData (not an error); an unknown session or
-// an exec failure is an error.
+// Cmd "review" FORCES a QA review PASS for one session now, ignoring the per-PR
+// one-shot guard: Session names the target. Provider optionally selects WHICH
+// pass provider kind to force (coderabbit-cli | claude-session); "" forces the
+// daemon's primary (first enabled) pass provider. The daemon runs one bounded
+// pass against the session's worktree and routes the findings the same way the
+// PR-open auto-trigger does (notify + optional GitHub/Linear comment + optional
+// sanitized, idle-gated worker hand-off), replying Response.Data = ReviewData
+// with a short outcome. No matching provider enabled yields a "skipped"
+// ReviewData (not an error); an unknown session, a non-pass Provider, or an exec
+// failure is an error.
 // Cmd "coderabbit" FORCES the [coderabbit] PR-comment WATCH for one session now,
 // ignoring the LastCodeRabbitAt watermark: Session names the target. The daemon
 // polls the session's open PR (one `gh pr view`) for CodeRabbit-app comments and
@@ -73,6 +75,11 @@ type Request struct {
 	Cmd    string `json:"cmd"` // stop|status|reload|enable|disable|pollOnce|sessions|projects|prs|hookEvent|kill|revive|pane|answer|review|coderabbit|open|renameProject
 	Poll   string `json:"poll,omitempty"`
 	DryRun bool   `json:"dryRun,omitempty"`
+
+	// Provider optionally selects which review provider kind cmd=review forces
+	// (coderabbit-cli | claude-session). "" forces the daemon's primary pass
+	// provider. Ignored by every other command.
+	Provider string `json:"provider,omitempty"`
 
 	// Open fields, set only for cmd=open: manually check out a branch/PR of a
 	// project into a throwaway worktree + shell. Project names the [[project]];

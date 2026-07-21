@@ -79,18 +79,18 @@ func TestSettingsFormPrefillAndSave(t *testing.T) {
 	if got := f.field("poll_interval").text; got != "1m0s" {
 		t.Errorf("poll_interval prefill = %q, want 1m0s", got)
 	}
-	// coderabbit author pre-fills the effective default when unset.
-	if got := f.field("cr_author").text; got != config.DefaultCodeRabbitAuthor {
-		t.Errorf("cr_author prefill = %q, want %q", got, config.DefaultCodeRabbitAuthor)
+	// The watch provider's author pre-fills the effective default when unset.
+	if got := f.field("pv_watch_author").text; got != config.DefaultCodeRabbitAuthor {
+		t.Errorf("pv_watch_author prefill = %q, want %q", got, config.DefaultCodeRabbitAuthor)
 	}
 
 	// Turn the watch on, set a custom author, and enable notify + send.
-	f.field("cr_enabled").b = true
-	f.field("cr_notify").b = true
-	f.field("cr_send").b = true
-	f.field("cr_author").text = "sonarcloud"
-	// Also flip a [review] toggle and bump the global cap.
-	f.field("review_enabled").b = true
+	f.field("pv_watch_enabled").b = true
+	f.field("pv_watch_notify").b = true
+	f.field("pv_watch_send").b = true
+	f.field("pv_watch_author").text = "sonarcloud"
+	// Also enable the coderabbit-cli provider and bump the global cap.
+	f.field("pv_cli_enabled").b = true
 	f.field("global_cap").text = "8"
 
 	if ev := f.save(); ev != settingsFormSaved {
@@ -104,12 +104,21 @@ func TestSettingsFormPrefillAndSave(t *testing.T) {
 	if reloaded.Defaults.GlobalCap != 8 {
 		t.Errorf("global_cap = %d, want 8", reloaded.Defaults.GlobalCap)
 	}
-	cr := reloaded.CodeRabbit
-	if !cr.Enabled || cr.Author != "sonarcloud" || !cr.Notify || !cr.SendToAgent {
-		t.Errorf("coderabbit not persisted: %+v", cr)
+	// The two enabled providers round-trip into the catalog; the legacy tables
+	// stay empty (catalog-only).
+	if reloaded.Review != (config.ReviewConfig{}) || reloaded.CodeRabbit != (config.CodeRabbitConfig{}) {
+		t.Errorf("legacy tables must stay empty in catalog mode: %+v / %+v", reloaded.Review, reloaded.CodeRabbit)
 	}
-	if !reloaded.Review.Enabled {
-		t.Error("review.enabled must persist")
+	byKind := map[string]config.ReviewProvider{}
+	for _, p := range reloaded.ReviewProviders {
+		byKind[p.KindString()] = p
+	}
+	watch, ok := byKind["coderabbit-watch"]
+	if !ok || !watch.Enabled || watch.Author != "sonarcloud" || !watch.Notify || !watch.SendToAgent {
+		t.Errorf("watch provider not persisted: %+v (ok=%v)", watch, ok)
+	}
+	if cli, ok := byKind["coderabbit-cli"]; !ok || !cli.Enabled {
+		t.Errorf("coderabbit-cli provider must persist enabled: %+v (ok=%v)", cli, ok)
 	}
 }
 
@@ -332,7 +341,7 @@ func TestSettingsFormBoolToggleViaKeys(t *testing.T) {
 	m := newTestRoot(t)
 	f := newSettingsForm(m.cfgPath, m.cfg)
 
-	focusField(t, f, "cr_enabled")
+	focusField(t, f, "pv_watch_enabled")
 	before := f.cur().b
 	_, _ = f.update(keyMsg(" "))
 	if f.cur().b == before {
@@ -343,14 +352,14 @@ func TestSettingsFormBoolToggleViaKeys(t *testing.T) {
 func TestSettingsFormRejectsBadInt(t *testing.T) {
 	m := newTestRoot(t)
 	f := newSettingsForm(m.cfgPath, m.cfg)
-	f.field("review_timeout").text = "abc"
+	f.field("pv_cli_timeout").text = "abc"
 
 	if ev := f.save(); ev != settingsFormNone || f.err == "" {
 		t.Fatalf("bad int must abort save with an error, got ev=%v err=%q", ev, f.err)
 	}
-	// Config on disk is untouched (review still disabled from newTestRoot).
+	// Config on disk is untouched (no providers written from newTestRoot).
 	reloaded, _ := config.Load(m.cfgPath)
-	if reloaded.Review.Enabled {
+	if len(reloaded.ReviewProviders) != 0 {
 		t.Error("a rejected save must not have written anything")
 	}
 }
@@ -421,37 +430,124 @@ func TestSettingsFormOnlyDigitsInIntField(t *testing.T) {
 	}
 }
 
-// The two CodeRabbit features share ONE tab as two distinct, indented
+// The three review provider KINDS share ONE tab as distinct, indented
 // subsections — so they read as one integration but are never mistaken for each
-// other. No top-level section header: the tab title already says CodeRabbit,
-// and each subsection names its own config table.
-func TestSettingsFormDistinguishesReviewAndCoderabbit(t *testing.T) {
+// other. No top-level section header: the tab title already says Review, and
+// each subsection names its own provider kind.
+func TestSettingsFormDistinguishesReviewProviders(t *testing.T) {
 	m := newTestRoot(t)
 	f := newSettingsForm(m.cfgPath, m.cfg)
-	rv := f.field("review_enabled")
-	cr := f.field("cr_enabled")
+	cli := f.field("pv_cli_enabled")
+	watch := f.field("pv_watch_enabled")
+	claude := f.field("pv_claude_enabled")
 
-	if rv.tab != stCodeRabbit || cr.tab != stCodeRabbit {
-		t.Errorf("both features belong on the CodeRabbit tab, got %v / %v", rv.tab, cr.tab)
+	for _, fld := range []*setField{cli, watch, claude} {
+		if fld.tab != stCodeRabbit {
+			t.Errorf("every provider belongs on the Review tab, got %v for %q", fld.tab, fld.key)
+		}
+		if fld.section != "" {
+			t.Errorf("the tab title replaces the section header, got %q for %q", fld.section, fld.key)
+		}
+		if !fld.indent {
+			t.Errorf("every provider subsection must be indented, got %q not indented", fld.key)
+		}
 	}
-	if rv.section != "" || cr.section != "" {
-		t.Errorf("the tab title replaces the section header, got %q / %q", rv.section, cr.section)
+	// Distinct subsections, each naming its own provider kind.
+	if cli.subsection == watch.subsection || cli.subsection == claude.subsection || watch.subsection == claude.subsection {
+		t.Errorf("each provider needs a distinct subsection, got %q / %q / %q", cli.subsection, watch.subsection, claude.subsection)
 	}
-	// Both are indented under distinct subsections naming their own table.
-	if rv.subsection == "" || cr.subsection == "" || rv.subsection == cr.subsection {
-		t.Errorf("each feature needs a distinct subsection, got %q / %q", rv.subsection, cr.subsection)
-	}
-	if !strings.Contains(rv.subsection, "[review]") || !strings.Contains(cr.subsection, "[coderabbit]") {
-		t.Errorf("each subsection must name its config table, got %q / %q", rv.subsection, cr.subsection)
-	}
-	if !rv.indent || !cr.indent {
-		t.Error("both CodeRabbit subsections must be indented under the tab")
+	if !strings.Contains(cli.subsection, "coderabbit-cli") ||
+		!strings.Contains(watch.subsection, "coderabbit-watch") ||
+		!strings.Contains(claude.subsection, "claude-session") {
+		t.Errorf("each subsection must name its kind, got %q / %q / %q", cli.subsection, watch.subsection, claude.subsection)
 	}
 
 	f.tab = stCodeRabbit
 	out := f.view()
-	if !strings.Contains(out, rv.subsection) || !strings.Contains(out, cr.subsection) {
-		t.Errorf("both subsections must render:\n%s", out)
+	if !strings.Contains(out, cli.subsection) || !strings.Contains(out, watch.subsection) || !strings.Contains(out, claude.subsection) {
+		t.Errorf("all three subsections must render:\n%s", out)
+	}
+}
+
+// The watch provider forbids the github transport (its feedback is already on
+// the PR) and offers no fallback (it cannot classify quota); the pass providers
+// offer both. The editor reflects those constraints in its choice sets.
+func TestSettingsFormWatchOmitsGithubAndFallback(t *testing.T) {
+	m := newTestRoot(t)
+	f := newSettingsForm(m.cfgPath, m.cfg)
+
+	tokens := func(opts []setPickOpt) []string {
+		out := make([]string, len(opts))
+		for i, o := range opts {
+			out[i] = o.id
+		}
+		return out
+	}
+	if got := tokens(f.field("pv_cli_transports").choices); !slices.Contains(got, "github") {
+		t.Errorf("coderabbit-cli transports must offer github, got %v", got)
+	}
+	if got := tokens(f.field("pv_watch_transports").choices); slices.Contains(got, "github") {
+		t.Errorf("coderabbit-watch transports must NOT offer github, got %v", got)
+	}
+	if f.field("pv_watch_transports").choices == nil {
+		t.Error("watch must still offer a transports picker (lola/linear)")
+	}
+	// The watch has no fallback field at all.
+	if f.field("pv_watch_fallback") != nil {
+		t.Error("coderabbit-watch must not have a fallback field")
+	}
+	// A pass provider's fallback offers the OTHER pass kind, never itself or the watch.
+	if got := tokens(f.field("pv_cli_fallback").choices); !slices.Equal(got, []string{"claude-session"}) {
+		t.Errorf("coderabbit-cli fallback must offer [claude-session], got %v", got)
+	}
+	if got := tokens(f.field("pv_claude_fallback").choices); !slices.Equal(got, []string{"coderabbit-cli"}) {
+		t.Errorf("claude-session fallback must offer [coderabbit-cli], got %v", got)
+	}
+}
+
+// A legacy [review]/[coderabbit] config renders the Review tab read-only and
+// offers an in-place migration into the editable provider catalog. After
+// migrating, the same providers are present, editable, and the legacy tables
+// are cleared on disk.
+func TestSettingsFormLegacyReviewMigrates(t *testing.T) {
+	m := newTestRoot(t)
+	m.cfg.Review = config.ReviewConfig{Enabled: true, Command: "coderabbit review", OnPROpen: true, SendToAgent: true, TimeoutSeconds: 300}
+	m.cfg.CodeRabbit = config.CodeRabbitConfig{Enabled: true, Author: "coderabbitai", Notify: true, SendToAgent: true}
+	if err := m.cfg.Save(m.cfgPath); err != nil {
+		t.Fatalf("seed save: %v", err)
+	}
+	f := newSettingsForm(m.cfgPath, m.cfg)
+	if !f.reviewLegacy {
+		t.Fatal("a legacy config must open the Review tab read-only")
+	}
+	// Edits are suppressed while read-only.
+	f.tab = stCodeRabbit
+	focusField(t, f, "pv_cli_enabled")
+	before := f.field("pv_cli_enabled").b
+	_, _ = f.update(keyMsg(" "))
+	if f.field("pv_cli_enabled").b != before {
+		t.Error("read-only Review tab must not toggle a field")
+	}
+	// m migrates.
+	if _, ev := f.update(keyMsg("m")); ev != settingsFormNone {
+		t.Fatalf("m must run the migration in place, got ev=%v err=%q", ev, f.err)
+	}
+	if f.reviewLegacy {
+		t.Fatalf("migration must clear read-only mode, err=%q", f.err)
+	}
+	reloaded, err := config.Load(m.cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.Review != (config.ReviewConfig{}) || reloaded.CodeRabbit != (config.CodeRabbitConfig{}) {
+		t.Errorf("migration must clear the legacy tables, got %+v / %+v", reloaded.Review, reloaded.CodeRabbit)
+	}
+	if len(reloaded.ReviewProviders) != 2 {
+		t.Errorf("migration must synthesize both providers, got %d", len(reloaded.ReviewProviders))
+	}
+	// The editor now reflects the catalog and is editable.
+	if !f.field("pv_cli_enabled").b || !f.field("pv_watch_enabled").b {
+		t.Error("migrated providers must show enabled in the editor")
 	}
 }
 
@@ -609,8 +705,9 @@ func TestSettingsFormEnablingFlipsDependentSinks(t *testing.T) {
 		master string
 		deps   []string
 	}{
-		{"cr_enabled", []string{"cr_notify", "cr_send"}},
-		{"review_enabled", []string{"review_onpropen", "review_send"}},
+		{"pv_cli_enabled", []string{"pv_cli_onpropen", "pv_cli_notify", "pv_cli_send"}},
+		{"pv_watch_enabled", []string{"pv_watch_notify", "pv_watch_send"}},
+		{"pv_claude_enabled", []string{"pv_claude_onpropen", "pv_claude_notify", "pv_claude_send"}},
 		{"brain_enabled", []string{"brain_esc", "brain_appr"}},
 	}
 	for _, tc := range cases {
