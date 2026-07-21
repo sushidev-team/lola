@@ -37,17 +37,14 @@ archives:
 checksum:
   name_template: 'checksums.txt'
 
+# release-please owns the changelog + the GitHub Release body. goreleaser must
+# not generate or write release notes, or it would clobber them.
 changelog:
-  sort: asc
-  use: github
-  filters:
-    exclude:
-      - '^docs:'
-      - '^test:'
-      - '^chore:'
-      - Merge pull request
-      - Merge branch
+  disable: true
 
 release:
-  draft: false
-  prerelease: auto
+  # The release already exists (release-please created it on the merged release
+  # PR). Append mode uploads the archives + checksums onto it without touching
+  # the release-please-authored notes. With changelog disabled there are no
+  # goreleaser notes to append — it purely attaches artifacts.
+  mode: append

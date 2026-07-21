@@ -1,0 +1,175 @@
+name: Build & Publish Release Artifacts
+
+# Reusable: release-please.yml calls this once it cuts a release (release_created
+# == true). Also exposes workflow_dispatch so the artifact build can be re-run
+# against an existing tag WITHOUT a new release — handy the first time the Apple
+# signing secrets land after a release already went out.
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: 'Version without the v prefix (e.g. 1.2.3)'
+        required: true
+        type: string
+      tag:
+        description: 'Git tag (e.g. v1.2.3)'
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version without the v prefix (e.g. 1.2.3)'
+        required: true
+        type: string
+      tag:
+        description: 'Git tag (e.g. v1.2.3)'
+        required: true
+        type: string
+
+permissions:
+  contents: write # upload artifacts onto the release-please-created release
+
+jobs:
+  # CLI binaries (darwin+linux, amd64+arm64) via goreleaser. release-please
+  # already created the GitHub Release + notes, so goreleaser runs in append
+  # mode (changelog disabled) — it only uploads the archives + checksums.
+  release:
+    runs-on: macos-latest # native darwin build; also cross-compiles linux
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+          fetch-depth: 0 # goreleaser needs full history + the tag for versioning
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: true
+
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: '~> v2'
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Build, sign, notarize and attach the lola-desktop .app (as a universal DMG)
+  # to the SAME release. The in-app updater (desktop/internal/update) downloads
+  # this DMG from the public repo's release.
+  #
+  # Requires the Apple Developer secrets below. Without them this job fails while
+  # the CLI release above still succeeds. A notarized DMG is what lets Gatekeeper
+  # open the auto-installed update without a warning.
+  desktop:
+    needs: release
+    runs-on: macos-latest
+    env:
+      APP_PATH: desktop/bin/lola-desktop.app
+      IDENTITY: 'Developer ID Application: Sushi Dev KG (${{ secrets.APPLE_TEAM_ID }})'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: desktop/frontend/package-lock.json
+
+      - name: Install Wails v3 CLI
+        run: go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-alpha2.117
+
+      - name: Build universal .app (version-stamped)
+        working-directory: desktop
+        run: wails3 task darwin:package:universal VERSION=${{ inputs.version }}
+
+      - name: Import code signing certificate
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+          KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          echo "$APPLE_CERTIFICATE" | base64 --decode > $RUNNER_TEMP/certificate.p12
+          security import $RUNNER_TEMP/certificate.p12 -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychain -d user -s "$KEYCHAIN_PATH"
+          echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> $GITHUB_ENV
+
+      - name: Setup App Store Connect API key
+        env:
+          APP_STORE_CONNECT_PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_PRIVATE_KEY }}
+        run: |
+          mkdir -p ~/private_keys
+          echo "$APP_STORE_CONNECT_PRIVATE_KEY" > ~/private_keys/AuthKey.p8
+
+      - name: Sign the app bundle
+        run: |
+          # Sign nested code first, then the bundle itself, hardened runtime on.
+          find "$APP_PATH" -type f \( -name "*.dylib" -o -name "*.framework" -o -perm +111 \) -exec \
+            codesign --force --options runtime --timestamp --sign "$IDENTITY" {} \;
+          codesign --force --options runtime --timestamp --sign "$IDENTITY" "$APP_PATH"
+          codesign --verify --deep --strict "$APP_PATH"
+
+      - name: Notarize the app bundle
+        timeout-minutes: 15
+        env:
+          APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+        run: |
+          ditto -c -k --keepParent "$APP_PATH" app.zip
+          xcrun notarytool submit app.zip \
+            --key ~/private_keys/AuthKey.p8 \
+            --key-id "$APP_STORE_CONNECT_KEY_ID" \
+            --issuer "$APP_STORE_CONNECT_ISSUER_ID" \
+            --wait --timeout 10m
+          xcrun stapler staple "$APP_PATH"
+          rm app.zip
+
+      - name: Create universal DMG
+        id: dmg
+        run: |
+          DMG_NAME="lola-desktop-${{ inputs.version }}-universal.dmg"
+          rm -rf dmg-contents && mkdir -p dmg-contents
+          cp -R "$APP_PATH" dmg-contents/
+          ln -s /Applications dmg-contents/Applications
+          hdiutil create -volname "lola" -srcfolder dmg-contents -ov -format UDZO "$DMG_NAME"
+          echo "name=${DMG_NAME}" >> "$GITHUB_OUTPUT"
+
+      - name: Sign & notarize the DMG
+        timeout-minutes: 15
+        env:
+          APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+        run: |
+          DMG_NAME="${{ steps.dmg.outputs.name }}"
+          codesign --force --timestamp --sign "$IDENTITY" "$DMG_NAME"
+          xcrun notarytool submit "$DMG_NAME" \
+            --key ~/private_keys/AuthKey.p8 \
+            --key-id "$APP_STORE_CONNECT_KEY_ID" \
+            --issuer "$APP_STORE_CONNECT_ISSUER_ID" \
+            --wait --timeout 10m
+          xcrun stapler staple "$DMG_NAME"
+
+      - name: Cleanup signing material
+        if: always()
+        run: |
+          rm -rf ~/private_keys || true
+          if [ -n "$KEYCHAIN_PATH" ]; then security delete-keychain "$KEYCHAIN_PATH" || true; fi
+
+      - name: Attach DMG to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag }}
+          files: ${{ steps.dmg.outputs.name }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

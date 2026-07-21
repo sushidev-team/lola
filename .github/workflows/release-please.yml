@@ -1,0 +1,41 @@
+name: Release Please
+
+# Conventional-commit driven releases. On every push to main, release-please
+# maintains a "release PR" that bumps the version + CHANGELOG. Merging that PR
+# creates the git tag AND the GitHub Release, then this workflow calls build.yml
+# to attach the CLI archives (goreleaser) and the signed lola-desktop DMG.
+#
+# Note: a tag created by release-please via GITHUB_TOKEN does NOT itself trigger
+# a `push: tags` workflow (GitHub blocks that recursion), which is exactly why
+# build.yml is invoked here via `uses:` rather than by a tag trigger.
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: release
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  build:
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created == 'true' }}
+    uses: ./.github/workflows/build.yml
+    with:
+      version: ${{ needs.release-please.outputs.version }}
+      tag: ${{ needs.release-please.outputs.tag_name }}
+    secrets: inherit
