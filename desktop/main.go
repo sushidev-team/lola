@@ -8,8 +8,10 @@ package main
 import (
 	"embed"
 	"log"
+	"math"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/sushidev-team/lola/internal/config"
@@ -147,6 +149,10 @@ func main() {
 
 	newStatusBarMenu(app, win)
 
+	// Install the app menu, repointing its Zoom In/Out/Actual Size items to
+	// reflowing page zoom (see installAppMenu / zoomController).
+	installAppMenu(app, newZoomController(win))
+
 	// Force the WKWebView to report the screen's real backing scale factor once
 	// the window is up, so Retina renders crisply (see hidpi_darwin.go). Runs on
 	// every focus but is idempotent.
@@ -194,6 +200,80 @@ func newStatusBarMenu(app *application.App, win application.Window) {
 	menu.Add("Quit lola").OnClick(func(*application.Context) { app.Quit() })
 
 	tray.SetMenu(menu)
+}
+
+// Page-zoom bounds. Steps of 0.1 land on 1.0 exactly, and the range matches a
+// browser's usual zoom span.
+const (
+	zoomMin  = 0.5
+	zoomMax  = 3.0
+	zoomStep = 0.1
+)
+
+// zoomController drives WKWebView page zoom in response to the View-menu Zoom
+// items. It exists because Wails' built-in Zoom roles call
+// -[WKWebView setMagnification:], which visually scales the surface WITHOUT
+// reflowing — so past 100% the fixed-origin content spills off the right edge
+// of our frameless, scrollbar-less window. setPageZoom shrinks the layout
+// viewport by 1/factor and repaints, so the responsive flight-deck reflows and
+// keeps fitting the width. Menu clicks are serialized on the main thread, but a
+// mutex guards `factor` cheaply since setPageZoom itself may hop threads.
+type zoomController struct {
+	win    *application.WebviewWindow
+	mu     sync.Mutex
+	factor float64
+}
+
+func newZoomController(win *application.WebviewWindow) *zoomController {
+	return &zoomController{win: win, factor: 1.0}
+}
+
+func (z *zoomController) set(f float64) {
+	f = math.Round(f*10) / 10 // snap to a clean 0.1 step so presses hit 1.0
+	if f < zoomMin {
+		f = zoomMin
+	}
+	if f > zoomMax {
+		f = zoomMax
+	}
+	z.mu.Lock()
+	z.factor = f
+	z.mu.Unlock()
+	setPageZoom(z.win.NativeWindow(), f)
+}
+
+func (z *zoomController) in() {
+	z.mu.Lock()
+	f := z.factor
+	z.mu.Unlock()
+	z.set(f + zoomStep)
+}
+
+func (z *zoomController) out() {
+	z.mu.Lock()
+	f := z.factor
+	z.mu.Unlock()
+	z.set(f - zoomStep)
+}
+
+func (z *zoomController) reset() { z.set(1.0) }
+
+// installAppMenu sets the standard macOS app menu but swaps the three View-menu
+// Zoom items from Wails' magnification handlers to reflowing page zoom. It only
+// repoints the existing role items (label + Cmd+/-/0 accelerators intact), so
+// the menu looks and reads exactly like the default.
+func installAppMenu(app *application.App, zoom *zoomController) {
+	menu := application.DefaultApplicationMenu()
+	if it := menu.FindByRole(application.ZoomIn); it != nil {
+		it.OnClick(func(*application.Context) { zoom.in() })
+	}
+	if it := menu.FindByRole(application.ZoomOut); it != nil {
+		it.OnClick(func(*application.Context) { zoom.out() })
+	}
+	if it := menu.FindByRole(application.ResetZoom); it != nil {
+		it.OnClick(func(*application.Context) { zoom.reset() })
+	}
+	app.Menu.SetApplicationMenu(menu)
 }
 
 // ensurePATH augments the process PATH with the usual Homebrew locations. A
