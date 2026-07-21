@@ -9,11 +9,10 @@
   import TerminalGrid from "$lib/views/TerminalGrid.svelte";
   import { reflowGridRows } from "$lib/reflow";
 
-  // Derive rows from store.sessions DIRECTLY (not the store.sorted chained
-  // class-derived): the rail's direct store.sessions reads stay live in the
-  // production webview while this view's read of the cross-module derived did
-  // not re-render on async pushes. Sorting here is cheap and keeps the read
-  // one hop from the reactive source.
+  // Sort straight off store.sessions ($state), NOT via a chained class-$derived:
+  // the rail's direct store.sessions reads stay live in the production webview
+  // while a read of a cross-module derived-of-a-derived did not re-render on the
+  // async push (the list stayed empty until a manual re-render). Sorting is cheap.
   const rows = $derived.by(() => {
     const sorted = sortSessions(store.sessions);
     return nav.scoped ? sorted.filter((s) => s.project === nav.project) : sorted;

@@ -50,9 +50,6 @@ class Store {
   private flashTimer: ReturnType<typeof setTimeout> | undefined;
   private started = false;
 
-  /** Sessions in the canonical attention-first order. */
-  sorted = $derived(sortSessions(this.sessions));
-
   /** Count of sessions parked on a human. */
   needsYou = $derived(
     this.sessions.filter((s) =>
@@ -116,8 +113,12 @@ class Store {
     return p ? displayName(p) : name;
   }
 
+  // Sort straight off `this.sessions` ($state), NOT via a chained class-$derived:
+  // reading a derived-of-a-derived across the module boundary went stale in the
+  // production WebView (the list stayed empty until a manual re-render forced a
+  // flush), while a direct read of the $state field stays live. Sorting is cheap.
   sessionsForProject(name: string): SessionInfo[] {
-    return this.sorted.filter((s) => s.project === name);
+    return sortSessions(this.sessions).filter((s) => s.project === name);
   }
 
   sessionById(id: string): SessionInfo | undefined {
