@@ -48,8 +48,10 @@ export function Capture(name: string, lines: number): $CancellablePromise<string
 
 /**
  * CaptureMany snapshots several panes in one call so the grid refresh is a single
- * round-trip from the frontend. A pane that fails to capture (session gone) is
- * simply omitted from the map rather than failing the whole batch.
+ * round-trip from the frontend. Panes are captured concurrently, so the batch is
+ * bounded by the slowest capture rather than their sum. A pane that fails to
+ * capture (session gone) is simply omitted from the map rather than failing the
+ * whole batch.
  */
 export function CaptureMany(names: string[] | null, lines: number): $CancellablePromise<{ [_ in string]?: string } | null> {
     return $Call.ByID(261382224, names, lines);

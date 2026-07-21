@@ -10,6 +10,9 @@
  * Read commands (Sessions/Projects/Status) hit the daemon's in-memory caches and
  * are safe to poll frequently; the open* / pollOnce family do real work and use
  * the long timeout.
+ * 
+ * lifecycleMu serializes the check-then-act Start/Stop/Restart sequences so two
+ * UI-driven lifecycle calls can't race into a double spawn or a spawn-vs-stop.
  * @module
  */
 
@@ -147,7 +150,9 @@ export function RenameProject($from: string, to: string): $CancellablePromise<pr
 }
 
 /**
- * RestartDaemon stops (if up), waits for the socket to clear, then respawns.
+ * RestartDaemon stops (if up), waits for the socket to clear, then respawns. It
+ * holds lifecycleMu across the whole sequence and reuses the locked helpers, so
+ * it never re-locks recursively.
  */
 export function RestartDaemon(): $CancellablePromise<void> {
     return $Call.ByID(1780015196);
