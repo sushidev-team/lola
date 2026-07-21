@@ -31,6 +31,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -110,12 +111,12 @@ func (d *Daemon) setReviewProvidersLocked(nc *config.Config) {
 	descs := make([]reviewProvider, 0, len(eff))
 	for _, cp := range eff {
 		desc := reviewProvider{
-			Kind:        provKind(string(cp.Provider)),
-			Enabled:     cp.Enabled,
-			OnPROpen:    cp.OnPROpen,
-			Transports:  cp.Transports,
-			Notify:      cp.Notify,
-			SendToAgent: cp.SendToAgent,
+			Kind:           provKind(string(cp.Provider)),
+			Enabled:        cp.Enabled,
+			OnPROpen:       cp.OnPROpen,
+			Transports:     cp.Transports,
+			Notify:         cp.Notify,
+			SendToAgent:    cp.SendToAgent,
 			Author:         cp.Author,
 			Fallback:       toDaemonKinds(cp.Fallback),
 			TimeoutSeconds: cp.TimeoutSeconds,
@@ -778,6 +779,10 @@ func (d *Daemon) commentOnLinear(ctx context.Context, s session.Session, p revie
 //
 // The body is the full UNTRUSTED findings — NOT sanitized (a PR comment is a
 // human sink, never re-fed to the agent as control) — bounded inside PostPRComment.
+// It IS run through neutralizeBotTriggers first so a `@coderabbitai` mention that
+// happens to appear in the findings can never kick off a fresh CodeRabbit review
+// on the PR (the "check the PR but never trigger a new CodeRabbit there" guarantee
+// that makes a watch-only posture safe even alongside a github-posting provider).
 func (d *Daemon) postGithubSink(ctx context.Context, s session.Session, p reviewProvider, findings string) {
 	if s.Repo == "" || s.PR == nil || s.PR.Number <= 0 {
 		return // fail-closed: nowhere to post
@@ -791,7 +796,7 @@ func (d *Daemon) postGithubSink(ctx context.Context, s session.Session, p review
 	}
 	cctx, cancel := context.WithTimeout(ctx, reactExecTimeout)
 	defer cancel()
-	err := post(cctx, s.Repo, s.PR.Number, findings)
+	err := post(cctx, s.Repo, s.PR.Number, neutralizeBotTriggers(findings))
 	if err == nil {
 		d.stampGithubSettled(s.ID, p.Kind, s.PR.Number)
 		d.logf("", "review: %s (%s) posted findings to PR #%d as a github comment", s.ID, p.Kind, s.PR.Number)
@@ -805,6 +810,26 @@ func (d *Daemon) postGithubSink(ctx context.Context, s session.Session, p review
 		return
 	}
 	d.logf("", "review: %s (%s) github post to PR #%d failed (transient, will retry): %v", s.ID, p.Kind, s.PR.Number, err)
+}
+
+// botTriggerRe matches an @-mention of the CodeRabbit GitHub app (@coderabbit or
+// @coderabbitai, case-insensitive). lola posts its own review findings as a plain
+// PR comment via the `github` transport; a live @coderabbitai mention in that body
+// would be parsed by the CodeRabbit app as a command and start a BRAND-NEW
+// CodeRabbit review on the PR. That defeats a watch-only posture (read CodeRabbit's
+// own automatic review, never invoke a new one) and can silently burn a review
+// credit, so lola defuses the mention before posting.
+var botTriggerRe = regexp.MustCompile(`(?i)@(coderabbit)`)
+
+// neutralizeBotTriggers rewrites any @coderabbit / @coderabbitai mention in a body
+// lola is about to post to a PR so it can never trigger a new CodeRabbit review. A
+// zero-width space is inserted after the `@`, which breaks both GitHub's @-mention
+// detection AND any literal `@coderabbitai` command scan while leaving the text
+// visually unchanged. This is the enforcing mechanism behind "check the PR but
+// never trigger a new CodeRabbit there"; it applies only to the github sink (the
+// worker/notify/linear sinks never reach the CodeRabbit app).
+func neutralizeBotTriggers(body string) string {
+	return botTriggerRe.ReplaceAllString(body, "@\u200b$1")
 }
 
 // isPermanentGhError classifies a gh error as permanent (the post can never

@@ -188,7 +188,9 @@ endpoint = "https://api.linear.app/graphql"
 #   github Post findings as a PLAIN GitHub PR comment (gh pr comment, body on
 #          stdin — never a review that could approve/request-changes). PASS
 #          shapes only; FORBIDDEN on coderabbit-watch (its feedback is already on
-#          the PR — re-posting is a self-feedback loop). Idempotent per PR.
+#          the PR — re-posting is a self-feedback loop). Idempotent per PR. Any
+#          @coderabbitai mention in the body is neutralized, so lola posting its
+#          own review NEVER triggers a new CodeRabbit run.
 #   linear Mirror findings onto the session's Linear issue.
 # Only the worker hand-off sanitizes + idle-gates; notify/github/linear are HUMAN
 # sinks carrying the full untrusted findings verbatim (never re-fed as control).
@@ -229,6 +231,13 @@ endpoint = "https://api.linear.app/graphql"
 # transports      = ["lola"]                                # github is NOT allowed here (validation error)
 # notify          = true
 # send_to_agent   = true
+#
+# WATCH-ONLY posture (read CodeRabbit, never invoke a new run): configure JUST the
+# coderabbit-watch provider above. lola polls + relays the CodeRabbit app's own
+# automatic review and never execs `coderabbit review` (that is coderabbit-cli) and
+# never posts to the PR — so no new CodeRabbit run and no review credit spent. Want
+# lola to also post its OWN public review? Add a claude-session (or coderabbit-cli)
+# provider with transports = ["lola", "github"]; its posted comment is trigger-safe.
 
 # ---------------------------------------------------------------------------
 # [review] — LEGACY, OPTIONAL, OFF BY DEFAULT (P9). Equivalent to a single

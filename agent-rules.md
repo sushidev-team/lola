@@ -139,6 +139,15 @@ socket.
   (422/403) stamps the settle guard + logs once; a TRANSIENT error (5xx/timeout/
   missing repo) leaves it unstamped to retry next cycle. Empty body = skip.
   Fail-closed: missing repo / gh-not-authed = silent skip.
+- **[changed]** lola NEVER triggers a new CodeRabbit review. The github sink runs
+  the posted body through `neutralizeBotTriggers` (`reviewer.go`), inserting a
+  zero-width space after the `@` of any `@coderabbit`/`@coderabbitai` mention so a
+  findings body that happens to name the bot can't be parsed as a command and kick
+  off a fresh CodeRabbit run (which would also burn a review credit). Applies to
+  the github sink ONLY — notify/linear/worker never reach the CodeRabbit app. This
+  is what makes a WATCH-ONLY posture (a single `coderabbit-watch` provider: poll +
+  relay CodeRabbit's own auto-review, never exec `coderabbit review`, never post to
+  the PR) safe even when paired with a github-posting `claude-session`/`coderabbit-cli`.
 - **[changed]** Fallback (PASS-SHAPE ONLY): a provider that CAN'T answer
   (`ErrNotFound`/`ErrTimeout`/`ErrQuota`/binary-unavailable) advances to the next
   configured fallback kind; the result routes under the PRIMARY's transports.

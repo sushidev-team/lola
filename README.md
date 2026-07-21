@@ -571,7 +571,10 @@ over three friendly tokens:
   The post is idempotent per PR (a settle guard prevents per-cycle spam; a
   permanent gh failure such as 422/403 stamps the guard and logs once; a
   transient failure retries next cycle). Fail-closed: a missing repo or
-  unauthenticated `gh` skips silently.
+  unauthenticated `gh` skips silently. Any `@coderabbitai` mention in the posted
+  body is **neutralized** (a zero-width space is inserted after the `@`) so
+  lola's own comment can never be parsed by the CodeRabbit app as a command and
+  trigger a **new** CodeRabbit review — posting is always safe.
 - **`linear`** — mirror findings onto the session's Linear issue as a comment.
 
 Only the **worker hand-off** sanitizes and idle-gates its text; **notify /
@@ -600,6 +603,19 @@ silently burn the paid fallback). Each entry is bounded by its own
 > fallback on. If you want quota → `claude-session` fallback, run the
 > **`coderabbit-cli`** provider (whose exit/stderr carries the quota signal) with
 > `fallback = ["claude-session"]`.
+
+> **Watch-only posture (read CodeRabbit, never invoke it).** To let lola
+> automatically pick up CodeRabbit's own automatic PR review **without ever
+> triggering a new CodeRabbit run or spending a review credit**, configure a
+> single `coderabbit-watch` provider (with `lola` and/or `linear` transports).
+> The watch only **polls and relays** the CodeRabbit GitHub app's existing
+> comments — it never execs `coderabbit review` (that is the separate
+> `coderabbit-cli` provider) and never posts to the PR (validation forbids the
+> `github` transport on a watch). If you additionally want lola to post its **own**
+> public review, pair the watch with a `claude-session` (or `coderabbit-cli`)
+> provider carrying the `github` transport: its posted comment is trigger-safe
+> because `@coderabbitai` mentions are neutralized (above), so lola still never
+> spins up a fresh CodeRabbit review.
 
 **Validation** rejects: an unknown `provider` kind; more than one provider per
 kind; an unknown `transports` token; `github` on a `coderabbit-watch`; `fallback`
