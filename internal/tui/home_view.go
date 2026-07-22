@@ -190,15 +190,11 @@ func (m *rootModel) homeKeybar(w int) string {
 		return previewLine(warnText.Render("y")+faintText.Render(" remove · ")+warnText.Render("n")+faintText.Render(" cancel"), w)
 	}
 	keys := []string{"↑↓ move", "enter open", "a add", "e edit", "space poll", "x remove", "/ filter", "esc back"}
-	keys = append(keys, "S settings", "d doctor")
-	if m.manageDaemon() {
-		if m.home.data == nil {
-			keys = append(keys, "^r start daemon")
-		} else {
-			keys = append(keys, "^r restart", "^x stop")
-		}
+	keys = append(keys, "S settings")
+	if m.manageDaemon() && m.home.data == nil {
+		keys = append(keys, "^r start daemon") // urgent while the daemon is down
 	}
-	keys = append(keys, "q quit")
+	keys = append(keys, "? help", "q quit")
 	return previewLine(faintText.Render(strings.Join(keys, " · ")), w)
 }
 

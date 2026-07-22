@@ -160,6 +160,8 @@ func (m *rootModel) updateTicketPicker(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case "r":
 		p.loading, p.flash, p.gen = true, "", p.gen+1
 		return m, fetchTicketsCmd(p.project, p.scope, p.gen)
+	case "?":
+		m.showHelp = true
 	case "/":
 		p.filtering, p.filter = true, ""
 	case "enter", "l", "right":

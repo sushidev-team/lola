@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { store, type SessionInfo } from "$lib/store.svelte";
+  import { store } from "$lib/store.svelte";
   import { nav } from "$lib/nav.svelte";
   import StatusPill from "./StatusPill.svelte";
   import LiveTerminal from "./LiveTerminal.svelte";
@@ -9,7 +9,15 @@
   // they no longer do, because the size is half of a matched metric set (see
   // TERM_FONT). Focus changes how much room the terminal gets, not how big its
   // type is, which is also how Ghostty behaves.
-  let { session, focused = false }: { session: SessionInfo | undefined; focused?: boolean } = $props();
+  //
+  // Takes the session ID (a plain nav value) and resolves the session from the
+  // store HERE rather than receiving the resolved object as a prop: the Cockpit
+  // view container does not re-render on the async daemon push in the production
+  // WKWebView, so a `store.sessionById(...)` computed up there stays frozen at
+  // undefined ("select a session" forever). A leaf component's own read reacts.
+  // See WKWEBVIEW_REACTIVITY in Cockpit.svelte.
+  let { sessionId, focused = false }: { sessionId: string; focused?: boolean } = $props();
+  const session = $derived(sessionId ? store.sessionById(sessionId) : undefined);
 
   let answer = $state("");
   let confirmKill = $state(false);
@@ -35,9 +43,13 @@
     <div class="text-[11px] opacity-70">its live agent terminal shows here</div>
   </div>
 {:else}
+  <!-- z-10 header keeps the chrome above the WebGL terminal canvas. The terminal
+       wrapper stays in normal flow (NO `isolate` on the root, NO `z-0` on the
+       wrapper): wrapping the canvas in its own `isolate`+`z-0` stacking context made
+       WKWebView paint the wrapper's opaque `bg-panel` over it — a blank terminal. -->
   <div class="flex h-full min-h-0 flex-col">
-    <!-- header -->
-    <div class="flex flex-wrap items-center gap-2 border-b border-edge/60 px-3 py-1.5 text-xs">
+    <!-- header — z-10 keeps the minimize/focus button above the canvas layer. -->
+    <div class="relative z-10 flex flex-wrap items-center gap-2 border-b border-edge/60 px-3 py-1.5 text-xs">
       <span class="font-semibold text-accent-ink">{session.issue || session.id.slice(0, 8)}</span>
       <span class="truncate text-faint">{session.title}</span>
       <span class="text-edge">·</span>
@@ -46,8 +58,6 @@
       {#if session.branch}<span class="font-mono text-[11px] text-faint">{session.branch}</span>{/if}
       <span class="ml-auto flex items-center gap-1.5">
         {#if focused}
-          <!-- Prominent, so leaving fullscreen is obvious — the compact bordered
-               variant read as decoration and left people feeling stuck. -->
           <button
             class="rounded bg-accent-fill px-2.5 py-[2px] font-medium text-accent-ink hover:bg-accent-fill-hover"
             title="exit fullscreen"
@@ -89,7 +99,9 @@
     {#if session.status === "needs_input"}
       <div class="flex items-center gap-2 border-t border-orange/40 bg-orange/5 px-3 py-2">
         <span class="text-orange">?</span>
+        <!-- id lets the global 'a' shortcut (App.svelte) focus this box directly. -->
         <input
+          id="session-answer"
           class="min-w-0 flex-1 rounded border border-edge bg-canvas px-2 py-1 text-xs text-ink outline-none focus:border-accent placeholder:text-placeholder"
           placeholder="type a reply to the agent…"
           bind:value={answer}

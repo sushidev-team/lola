@@ -181,6 +181,72 @@ func (m *rootModel) doctorModal() string {
 	return m.modalOver("doctor", content)
 }
 
+// helpModal floats a static keybinding reference over the current screen. It is
+// the home for every shortcut the trimmed keybar no longer prints; '?' opens it
+// from any screen (cockpit, home, detail, pickers) and esc/'?'/q close it — both
+// wired in Update. Two columns so the full cheat-sheet fits without scrolling.
+func (m *rootModel) helpModal() string {
+	keyStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(colAccent))
+	const keyW = 9
+	row := func(k, d string) string { return padTo(keyStyle.Render(k), keyW) + faintText.Render(d) }
+	head := func(s string) string { return titleStyle.Render(s) }
+
+	left := []string{
+		head("Navigate"),
+		row("↑/k ↓/j", "move selection"),
+		row("g / G", "first / last"),
+		row("h/← l/→", "back / enter"),
+		row("tab", "switch panel"),
+		row("enter", "focus terminal"),
+		row("esc", "back / minimize"),
+		row("/", "filter"),
+		row("!", "who-needs-me"),
+		row("V", "cycle lens"),
+		row("v", "preview size"),
+		"",
+		head("Session actions"),
+		row("s", "shell ⇄ agent"),
+		row("a", "answer input"),
+		row("x", "kill session"),
+		row("o", "open PR"),
+		row("c", "coderabbit now"),
+		row("R", "revive dead"),
+		row("O", "open branch/PR"),
+		row("n / N", "next / prev input"),
+	}
+	right := []string{
+		head("Projects & polls"),
+		row("p", "projects list"),
+		row("P", "edit project"),
+		row("n", "new project"),
+		row("space", "toggle polling"),
+		row("x", "stop polling"),
+		row("r", "refresh cache"),
+		"",
+		head("Global"),
+		row("S", "settings"),
+		row("d", "doctor"),
+		row("?", "this help"),
+		row("^r / ^x", "restart / stop"),
+		row("q / ^c", "quit"),
+		"",
+		head("Embedded terminal"),
+		row("^q", "back to cockpit"),
+		row("^g", "select-mode (copy)"),
+	}
+	// joinCols pads each column's missing rows to the width of its FIRST line
+	// only, so hold every line to a fixed width first for clean alignment.
+	const colW = 32
+	pad := func(col []string) []string {
+		out := make([]string, len(col))
+		for i, l := range col {
+			out[i] = padTo(l, colW)
+		}
+		return out
+	}
+	return m.modalOver("keybindings  ·  esc to close", joinCols(3, pad(left), pad(right)))
+}
+
 // formModal floats the poll edit form (or its open picker) as a centered modal
 // over the dimmed cockpit. The form renders itself to the modal's inner height
 // so its own picker scroll-window sizes correctly; its leading title line is
@@ -223,10 +289,11 @@ func (m *rootModel) formModal() string {
 	return strings.Join(placeModal(m.backdropLines(), modal, W), "\n")
 }
 
-// railColumn stacks three panels: a fixed Triage summary, a flexible Activity
-// feed (the live "what's happening" ticker) that soaks up the rail's otherwise
-// wasted middle, and a Polls panel sized to the poll list. The three heights
-// always sum to exactly h so the column matches the frame.
+// railColumn stacks three panels: a fixed Triage summary, a Projects panel sized
+// to the project list sitting directly under it, and a flexible Activity feed
+// (the live "what's happening" ticker / history) anchored at the bottom that
+// soaks up the rail's otherwise wasted space. The three heights always sum to
+// exactly h so the column matches the frame.
 func (m *rootModel) railColumn(w, h int) []string {
 	// Triage: hero + 3 meters + total = 5 content lines → 7 with the box; +1
 	// slack. Clamp so the other two panels always keep a usable slice.
@@ -256,7 +323,7 @@ func (m *rootModel) railColumn(w, h int) []string {
 	triage := box(paneTitle("Triage", ""), m.triageBody(w-4), w, triageH, false)
 	activity := box("Activity", m.activityBody(w-4, activityH-2), w, activityH, false)
 	projects := box(paneTitle("Projects", fmt.Sprintf("%d", len(m.cfg.Projects))), m.projectRailBody(w-4, railH-2), w, railH, m.focus == focusPolls)
-	return stackRows(triage, activity, projects)
+	return stackRows(triage, projects, activity)
 }
 
 // mainColumn stacks the Sessions table over the Detail/Agent panel. When the
@@ -702,42 +769,31 @@ func (m *rootModel) keybar(w int) string {
 	case m.list.confirmDelete:
 		return previewLine(warnText.Render("y")+faintText.Render(" stop polling · ")+warnText.Render("n")+faintText.Render(" cancel"), w)
 	}
+	// Trimmed to the essentials: the full reference lives in the '?' overlay
+	// (helpModal), so the keybar prints only the everyday keys plus a couple of
+	// context-sensitive ones (answer when a session is asking, a live-shell ●
+	// re-enter hint). Everything rarer — o/c/R/O/!/n/N/P/d, restart/stop — is one
+	// '?' away.
 	var keys []string
 	if m.focus == focusPolls {
-		keys = []string{"↑↓ move", "n new", "enter open", "space toggle", "x stop poll", "r cache", "tab → sessions"}
+		keys = []string{"↑↓ move", "enter open", "space toggle", "n new", "tab → sessions"}
 	} else {
-		keys = []string{"↑↓ move", "enter focus"}
+		keys = []string{"↑↓ move", "enter focus", "tab → projects", "/ filter", "x kill"}
 		if sel := s.selected(); sel != nil {
-			if m.showShell {
-				keys = append(keys, "s agent") // toggle back to the agent view
-			} else if sel.Worktree != "" {
-				shell := "s shell"
-				if m.runningShell(sel.ID) {
-					shell += " " + goodText.Render("●") // a live shell to re-enter
-				}
-				keys = append(keys, shell)
-			}
 			if sel.Status == "needs_input" {
 				keys = append(keys, "a answer")
 			}
-			if sel.Status == "dead" || sel.Status == "session_ended" {
-				keys = append(keys, "R revive")
-			}
-			if sel.PRURL != "" {
-				keys = append(keys, "o PR", "c coderabbit")
+			if !m.showShell && sel.Worktree != "" && m.runningShell(sel.ID) {
+				keys = append(keys, "s shell "+goodText.Render("●")) // a live shell to re-enter
 			}
 		}
-		keys = append(keys, "x kill", "O open", "/ filter", "! needs-you", "V lens", "n next!", "tab → projects")
+		keys = append(keys, "V lens")
 	}
-	keys = append(keys, "p manage", "P edit", "S settings", "d doctor")
-	if m.manageDaemon() {
-		if m.list.status == nil {
-			keys = append(keys, "^r start daemon")
-		} else {
-			keys = append(keys, "^r restart", "^x stop")
-		}
+	keys = append(keys, "p projects", "S settings")
+	if m.manageDaemon() && m.list.status == nil {
+		keys = append(keys, "^r start daemon") // urgent while the daemon is down
 	}
-	keys = append(keys, "q quit")
+	keys = append(keys, "? help", "q quit")
 	return previewLine(faintText.Render(strings.Join(keys, " · ")), w)
 }
 

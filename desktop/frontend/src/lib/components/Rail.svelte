@@ -1,10 +1,11 @@
 <script lang="ts">
   import { store } from "$lib/store.svelte";
   import { nav } from "$lib/nav.svelte";
-  import { sortRank, eventPhrase, statusText } from "$lib/theme";
+  import { sortRank } from "$lib/theme";
   import { displayName } from "$lib/slug";
   import Panel from "./Panel.svelte";
   import Meter from "./Meter.svelte";
+  import ActivityFeed from "./ActivityFeed.svelte";
 
   const total = $derived(store.sessions.length);
   const fixing = $derived(store.sessions.filter((s) => sortRank(s.status) === 1).length);
@@ -41,24 +42,7 @@
     {/if}
   </Panel>
 
-  <!-- Activity — grows to fill the rail -->
-  <Panel title="Activity" note="newest first" fill>
-    {#if store.activity.length === 0}
-      <div class="text-xs text-faint">no activity yet</div>
-    {:else}
-      <ul class="flex flex-col gap-1 text-xs">
-        {#each store.activity.slice(0, 40) as ev (ev.id + ev.to + ev.ago)}
-          <li class="flex items-baseline gap-1.5">
-            <span class="font-medium text-ink">{ev.issue || ev.id.slice(0, 6)}</span>
-            <span class={statusText(ev.to)}>{eventPhrase(ev.from, ev.to)}</span>
-            <span class="ml-auto text-faint tabular-nums">{ev.ago}</span>
-          </li>
-        {/each}
-      </ul>
-    {/if}
-  </Panel>
-
-  <!-- Projects switcher -->
+  <!-- Projects switcher — sits directly under Triage -->
   <Panel title="Projects" count={store.projects.length} focused={false}>
     {#snippet actions()}
       <button
@@ -111,5 +95,13 @@
         {/each}
       </ul>
     {/if}
+  </Panel>
+
+  <!-- Activity (history) — grows to fill the rail, anchored at the bottom. The
+       store.activity read is isolated in <ActivityFeed>, though the real fix for
+       the "reading activity froze the sessions list" bug is in store.svelte.ts
+       (sessions + activity must not be written in the same flush). -->
+  <Panel title="Activity" note="newest first" fill>
+    <ActivityFeed />
   </Panel>
 </div>

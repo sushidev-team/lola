@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { Events } from "@wailsio/runtime";
-  import { store } from "$lib/store.svelte";
+  import { store, scopedSessions, type SessionInfo } from "$lib/store.svelte";
   import { updates } from "$lib/update.svelte";
   import { nav } from "$lib/nav.svelte";
   import VitalsBar from "$lib/components/VitalsBar.svelte";
@@ -15,7 +15,11 @@
   import SettingsForm from "$lib/views/SettingsForm.svelte";
   import ProjectForm from "$lib/views/ProjectForm.svelte";
   import UpdateOverlay from "$lib/views/UpdateOverlay.svelte";
+  import HelpOverlay from "$lib/views/HelpOverlay.svelte";
   import Setup from "$lib/views/Setup.svelte";
+
+  // The currently-selected cockpit session, for footer hints + actions.
+  const sel = $derived(store.sessionById(nav.selectedId));
 
   onMount(() => {
     store.start();
@@ -41,30 +45,143 @@
     );
   }
 
+  // The cockpit's visible rows, in the SAME order the table renders (shared with
+  // Cockpit.svelte via scopedSessions) so arrow-key movement matches the list.
+  function cockpitRows(): SessionInfo[] {
+    return scopedSessions(store.sessions, nav.scoped, nav.project);
+  }
+
+  function moveSel(delta: number) {
+    const rows = cockpitRows();
+    if (rows.length === 0) return;
+    let i = rows.findIndex((r) => r.id === nav.selectedId);
+    i = i < 0 ? 0 : Math.min(rows.length - 1, Math.max(0, i + delta));
+    nav.select(rows[i].id);
+  }
+
+  // Jump to the next/prev session parked on a human (needs_input), wrapping.
+  function jumpNeedsInput(dir: number) {
+    const rows = cockpitRows();
+    const len = rows.length;
+    if (len === 0) return;
+    let start = rows.findIndex((r) => r.id === nav.selectedId);
+    if (start < 0) start = 0;
+    for (let n = 1; n <= len; n++) {
+      const r = rows[(((start + dir * n) % len) + len) % len];
+      if (r.status === "needs_input") {
+        nav.select(r.id);
+        return;
+      }
+    }
+  }
+
+  // The answer box lives in the split view's lower SessionEmbed and only exists
+  // for a needs_input session — focus it so 'a' drops the user straight into a
+  // reply. rAF lets a just-moved selection mount its card first.
+  function focusAnswer() {
+    if (sel?.status !== "needs_input" || nav.lens === "grid") return;
+    requestAnimationFrame(() => document.getElementById("session-answer")?.focus());
+  }
+
+  // Cockpit session navigation + actions. Returns true when a key was consumed
+  // (so the caller can preventDefault the browser's own Enter/arrow/space use).
+  function cockpitKey(e: KeyboardEvent): boolean {
+    const rows = cockpitRows();
+    switch (e.key) {
+      case "j":
+      case "ArrowDown":
+        moveSel(1);
+        return true;
+      case "k":
+      case "ArrowUp":
+        moveSel(-1);
+        return true;
+      case "g":
+        if (rows[0]) nav.select(rows[0].id);
+        return true;
+      case "G":
+        if (rows.length) nav.select(rows[rows.length - 1].id);
+        return true;
+      case "Enter":
+        if (sel) nav.toggleFocusTerm(sel.id);
+        return true;
+      case "V":
+        nav.cycleLens();
+        return true;
+      case "n":
+        jumpNeedsInput(1);
+        return true;
+      case "N":
+        jumpNeedsInput(-1);
+        return true;
+      case "a":
+        focusAnswer();
+        return true;
+      case "x":
+        if (sel) store.kill(sel.id);
+        return true;
+      case "o":
+        if (sel?.prUrl) store.openURL(sel.prUrl);
+        return true;
+      case "c":
+        if (sel) store.coderabbit(sel.id);
+        return true;
+      case "R":
+        if (sel && (sel.status === "dead" || sel.status === "session_ended")) store.revive(sel.id);
+        return true;
+      case "P":
+        if (sel) nav.openOverlay("project", sel.project);
+        return true;
+    }
+    return false;
+  }
+
   function onKey(e: KeyboardEvent) {
     if (typing(e.target)) return;
-    if (nav.overlay) {
-      if (e.key === "Escape") nav.closeOverlay();
+
+    // Let a focused button/link handle its own Enter/Space natively instead of
+    // firing a cockpit action on top of the activation (e.g. a lens toggle that
+    // still holds focus after a click).
+    const active = document.activeElement as HTMLElement | null;
+    if ((e.key === "Enter" || e.key === " ") && active && (active.tagName === "BUTTON" || active.tagName === "A")) {
       return;
     }
-    // A focused live terminal swallows shortcuts (handled inside the view).
+
+    // An open overlay swallows keys: Escape closes any of them, '?' also closes
+    // the help overlay (so the same key toggles it off).
+    if (nav.overlay) {
+      if (e.key === "Escape" || (nav.overlay === "help" && e.key === "?")) nav.closeOverlay();
+      return;
+    }
+    // A focused live terminal owns the keyboard (handled inside the view).
     if (nav.focusedTerm) return;
 
+    // '?' opens the keybinding reference from any view.
+    if (e.key === "?") {
+      nav.openOverlay("help");
+      e.preventDefault();
+      return;
+    }
+
+    // View-independent globals.
     switch (e.key) {
       case "p":
         nav.goHome();
-        break;
+        return;
       case "d":
         nav.openOverlay("doctor");
-        break;
+        return;
       case "S":
         nav.openOverlay("settings");
-        break;
+        return;
       case "Escape":
         if (nav.view !== "cockpit") nav.goCockpit(nav.scoped ? nav.project : "");
         else if (nav.scoped) nav.goCockpit("");
-        break;
+        return;
     }
+
+    // Cockpit session navigation + actions.
+    if (nav.view === "cockpit" && cockpitKey(e)) e.preventDefault();
   }
 </script>
 
@@ -93,7 +210,15 @@
     {/if}
   </main>
 
-  <Footer />
+  <Footer>
+    {#snippet hints()}
+      {#if nav.view === "cockpit"}
+        <span class="tabular-nums">↑↓</span> move · <span class="tabular-nums">⏎</span> terminal · V lens · x kill{#if sel?.status === "needs_input"} · a answer{/if} · p projects · ? help
+      {:else}
+        esc back · p projects · ? help
+      {/if}
+    {/snippet}
+  </Footer>
 </div>
 
 {#if nav.overlay === "doctor"}
@@ -104,5 +229,7 @@
   <ProjectForm />
 {:else if nav.overlay === "update"}
   <UpdateOverlay />
+{:else if nav.overlay === "help"}
+  <HelpOverlay />
 {/if}
 {/if}

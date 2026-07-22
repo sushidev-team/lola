@@ -1,16 +1,26 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
-  import { store, type SessionInfo } from "$lib/store.svelte";
+  import { store, scopedSessions } from "$lib/store.svelte";
   import { nav } from "$lib/nav.svelte";
   import { TermService } from "@bindings/desktop";
   import SnapshotTile from "$lib/components/SnapshotTile.svelte";
   import StatusPill from "$lib/components/StatusPill.svelte";
 
-  let { rows }: { rows: SessionInfo[] } = $props();
+  // Reads the store directly (leaf component) — the Cockpit view can't pass live
+  // rows in the production WKWebView. See WKWEBVIEW_REACTIVITY in Cockpit.svelte.
+  const rows = $derived(scopedSessions(store.sessions, nav.scoped, nav.project));
 
-  // The tmux-backed sessions we can actually render terminals for. Clicking a
-  // tile sets nav.focusedTerm; the Cockpit then takes over with the big terminal.
+  // The tmux-backed sessions we can actually render terminals for.
   const tiles = $derived(rows.filter((s) => s.tmuxName));
+
+  // Opening a tile switches to the list lens (whose detail panel is what expands to
+  // the fullscreen terminal) and focuses the session. Focus is a CSS state on that
+  // detail terminal, not a separate mount — see SessionsColumn.svelte.
+  function openTile(id: string) {
+    nav.lens = "list";
+    nav.select(id);
+    nav.focusedTerm = id;
+  }
 
   // Snapshot cache: session id → last capture-pane text.
   let snaps = $state<Record<string, string>>({});
@@ -64,15 +74,11 @@
         role="button"
         tabindex="0"
         title="open the live terminal"
-        onclick={() => {
-          nav.select(s.id);
-          nav.focusedTerm = s.id;
-        }}
+        onclick={() => openTile(s.id)}
         onkeydown={(e) => {
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();
-            nav.select(s.id);
-            nav.focusedTerm = s.id;
+            openTile(s.id);
           }
         }}
       >

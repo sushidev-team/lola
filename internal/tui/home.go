@@ -231,6 +231,8 @@ func (m *rootModel) updateHome(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.homeTogglePoll()
 	case "/":
 		h.filtering, h.filter = true, ""
+	case "?":
+		m.showHelp = true
 	case "d":
 		m.doctorLoading, m.doctorScroll = true, 0
 		return m, runDoctorCmd(m.cfg)

@@ -300,3 +300,35 @@ func TestExplainReloadRejectionIgnoresNonValidationErrors(t *testing.T) {
 		}
 	}
 }
+
+// TestHelpOverlay covers the '?' keybinding reference: '?' opens it from the
+// cockpit, it renders the full cheat-sheet (keys the trimmed keybar no longer
+// prints), and esc / '?' close it again.
+func TestHelpOverlay(t *testing.T) {
+	m := newTestRoot(t)
+	if m.showHelp {
+		t.Fatal("help overlay must start closed")
+	}
+	m.Update(keyMsg("?"))
+	if !m.showHelp {
+		t.Fatal("'?' must open the help overlay")
+	}
+	v := m.viewString()
+	// The overlay is the home of every shortcut trimmed off the keybar.
+	for _, want := range []string{"keybindings", "cycle lens", "open PR", "revive", "coderabbit"} {
+		if !strings.Contains(v, want) {
+			t.Errorf("help overlay missing %q:\n%s", want, v)
+		}
+	}
+	// While open it swallows navigation keys; esc closes it.
+	m.Update(keyMsg("esc"))
+	if m.showHelp {
+		t.Fatal("esc must close the help overlay")
+	}
+	// '?' also closes it (toggle-off from within the overlay gate).
+	m.Update(keyMsg("?"))
+	m.Update(keyMsg("?"))
+	if m.showHelp {
+		t.Fatal("'?' inside the overlay must close it")
+	}
+}

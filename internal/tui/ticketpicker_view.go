@@ -130,6 +130,6 @@ func (m *rootModel) ticketKeybar(w int) string {
 	if p.filtering {
 		return previewLine(faintText.Render("type to filter · enter apply · esc clear"), w)
 	}
-	keys := []string{"↑↓ move", "enter start (worktree + agent)", "[ ] scope", "r refresh", "/ filter", "esc back", "q quit"}
+	keys := []string{"↑↓ move", "enter start (worktree + agent)", "[ ] scope", "r refresh", "/ filter", "esc back", "? help", "q quit"}
 	return previewLine(faintText.Render(strings.Join(keys, " · ")), w)
 }

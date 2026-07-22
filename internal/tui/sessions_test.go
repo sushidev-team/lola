@@ -114,10 +114,9 @@ func TestPRShownRegardlessOfStatus(t *testing.T) {
 			t.Errorf("detail card missing prominent PR field %q:\n%s", want, v)
 		}
 	}
-	// The footer advertises "o PR" because a PR exists.
-	if !strings.Contains(v, "o PR") {
-		t.Errorf("footer must advertise 'o PR' when a PR exists:\n%s", v)
-	}
+	// ('o PR' is no longer advertised in the trimmed keybar — it lives in the '?'
+	// help overlay now; the PR is still surfaced by the detail card + list badge
+	// asserted above, which is what "shown regardless of status" is about.)
 
 	// Kanban lens: the card carries "#229" with the checks glyph too.
 	m.sessions.view = viewKanban
@@ -821,9 +820,12 @@ func TestJumpToNextNeedsInput(t *testing.T) {
 		t.Fatalf("n must jump to the needs_input session at index 2, got %d", m.sessions.cursor)
 	}
 
-	// The needs_input row is flagged with a "!" marker in the list.
-	m.sessions.cursor = 0
-	if !strings.Contains(m.viewString(), "!") {
+	// The needs_input row is flagged with a warn "!" marker in the list — but only
+	// when it is NOT the current selection (the selected row shows "›" instead).
+	// Select a working row so the needs_input row renders its marker. (This used to
+	// pass off the keybar's old "! needs-you" hint, which the '?' overlay now owns.)
+	m.sessions.selID, m.sessions.cursor = "a", 0
+	if !strings.Contains(m.viewString(), warnText.Render("!")) {
 		t.Errorf("needs_input row must carry a '!' flag in the list:\n%s", m.viewString())
 	}
 }

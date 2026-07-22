@@ -127,6 +127,9 @@ func (m *rootModel) updateDetail(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.runDetailAction(actions[d.cursor])
 		}
 		return m, nil
+	case "?":
+		m.showHelp = true
+		return m, nil
 	case "d":
 		m.doctorLoading, m.doctorScroll = true, 0
 		return m, runDoctorCmd(m.cfg)

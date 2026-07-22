@@ -195,10 +195,6 @@ func (m *rootModel) detailKeybar(w int) string {
 		return previewLine(faintText.Render("type a branch · tab agent/shell · enter create · esc cancel"), w)
 	}
 	keys := []string{"↑↓ move", "enter run", "p PR", "t ticket", "w worktree", "P polls", "s sessions", "e edit", "esc back"}
-	keys = append(keys, "S settings", "d doctor")
-	if m.manageDaemon() {
-		keys = append(keys, "^r restart", "^x stop")
-	}
-	keys = append(keys, "q quit")
+	keys = append(keys, "S settings", "? help", "q quit")
 	return previewLine(faintText.Render(strings.Join(keys, " · ")), w)
 }

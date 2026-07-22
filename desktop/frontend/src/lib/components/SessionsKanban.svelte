@@ -1,10 +1,12 @@
 <script lang="ts">
-  import { store, type SessionInfo } from "$lib/store.svelte";
+  import { store, scopedSessions } from "$lib/store.svelte";
   import { nav } from "$lib/nav.svelte";
   import { KANBAN_COLUMNS, statusBadge, statusText } from "$lib/theme";
   import PrBadge from "./PrBadge.svelte";
 
-  let { rows }: { rows: SessionInfo[] } = $props();
+  // Reads the store directly (leaf component) — the Cockpit view can't pass live
+  // rows in the production WKWebView. See WKWEBVIEW_REACTIVITY in Cockpit.svelte.
+  const rows = $derived(scopedSessions(store.sessions, nav.scoped, nav.project));
   const cols = $derived(
     KANBAN_COLUMNS.map((c) => ({
       title: c.title,

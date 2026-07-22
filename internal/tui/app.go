@@ -86,6 +86,11 @@ type rootModel struct {
 	doctorReport  *doctor.Report
 	doctorScroll  int
 
+	// Help overlay ('?'): a static keybinding reference floated over the current
+	// screen. It holds every shortcut so the always-on keybar can stay trimmed to
+	// the essentials. esc / '?' close it. Purely presentational — no scroll state.
+	showHelp bool
+
 	// daemonOp is the in-flight lifecycle transition ("starting"/"stopping"/
 	// "restarting"), shown in the message line while a ^r/^x/auto-start op runs;
 	// cleared when its daemonOpMsg arrives. Only set in self-managed mode.
@@ -429,6 +434,20 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// The help overlay ('?') is a read-only keybinding reference. While open it
+	// swallows every keystroke; esc / '?' / q close it. It never coexists with the
+	// editors above (you can only open it when '?' actually reaches a view), so
+	// this gate is safe to sit ahead of the settings/doctor/form routing.
+	if m.showHelp {
+		if k, ok := msg.(tea.KeyPressMsg); ok {
+			switch k.String() {
+			case "esc", "?", "q":
+				m.showHelp = false
+			}
+		}
+		return m, nil
+	}
+
 	// The global settings editor owns all input while open. It takes the whole
 	// msg and returns a tea.Cmd, exactly like the project form below: its Linear
 	// label pickers load asynchronously, so it needs both a way to dispatch a
@@ -518,6 +537,9 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.focus = focusSessions
 			}
 			return m, nil
+		case "?":
+			m.showHelp = true
+			return m, nil
 		case "d":
 			m.doctorLoading, m.doctorScroll = true, 0
 			return m, runDoctorCmd(m.cfg)
@@ -588,6 +610,9 @@ func (m *rootModel) View() tea.View {
 }
 
 func (m *rootModel) viewString() string {
+	if m.showHelp {
+		return m.helpModal()
+	}
 	if m.doctorLoading || m.doctorReport != nil {
 		return m.doctorModal()
 	}

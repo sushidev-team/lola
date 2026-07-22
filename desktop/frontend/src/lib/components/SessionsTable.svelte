@@ -1,11 +1,17 @@
 <script lang="ts">
-  import { store, type SessionInfo } from "$lib/store.svelte";
+  import { store, scopedSessions } from "$lib/store.svelte";
   import { nav } from "$lib/nav.svelte";
   import { isAttention, reactingText } from "$lib/theme";
   import StatusPill from "./StatusPill.svelte";
   import PrBadge from "./PrBadge.svelte";
 
-  let { rows, dense = false }: { rows: SessionInfo[]; dense?: boolean } = $props();
+  let { dense = false }: { dense?: boolean } = $props();
+
+  // Read the store directly here (a leaf component) rather than receiving `rows`
+  // from the Cockpit view: the view container does not re-render on the async
+  // daemon push in the production WKWebView, so a prop threaded from it stays
+  // frozen empty. See WKWEBVIEW_REACTIVITY in Cockpit.svelte.
+  const rows = $derived(scopedSessions(store.sessions, nav.scoped, nav.project));
 </script>
 
 <div class="min-w-0 text-xs">

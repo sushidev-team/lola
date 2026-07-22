@@ -27,7 +27,7 @@ const attachProbeTimeout = 2 * time.Second
 // scrollback via cmd=pane); fullPreviewLines is the "fuller" toggle. Both are
 // bounded well under the daemon's own cap so a capture never floods the frame.
 const (
-	previewLines     = 8
+	previewLines     = 12
 	fullPreviewLines = 20
 )
 

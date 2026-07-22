@@ -155,6 +155,8 @@ func (m *rootModel) updatePRPicker(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if len(rows) > 0 {
 			p.cursor = len(rows) - 1
 		}
+	case "?":
+		m.showHelp = true
 	case "/":
 		p.filtering, p.filter = true, ""
 	case "r":

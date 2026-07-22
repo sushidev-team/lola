@@ -36,6 +36,17 @@ export function sortSessions(list: SessionInfo[]): SessionInfo[] {
   });
 }
 
+/**
+ * The cockpit's visible session rows: sorted (attention-first) and, when the
+ * cockpit is scoped to a project, filtered to it. Shared by Cockpit.svelte and
+ * the global keyboard handler so arrow-key movement walks the SAME order the
+ * table renders — a second copy of the sort/filter would drift.
+ */
+export function scopedSessions(list: SessionInfo[], scoped: boolean, project: string): SessionInfo[] {
+  const sorted = sortSessions(list);
+  return scoped ? sorted.filter((s) => s.project === project) : sorted;
+}
+
 class Store {
   alive = $state(false);
   connected = $state(false); // have we received a first push yet
@@ -57,6 +68,20 @@ class Store {
     ).length,
   );
 
+  // WKWEBVIEW: `sessions` and `activity` both arrive on the SAME daemon push, but
+  // writing them in the SAME synchronous flush corrupts the sessions signal for
+  // sibling components in the production WKWebView — verified live: the sessions
+  // list stayed empty on startup and the lower terminal never followed the
+  // selection WHENEVER any component also read store.activity (the rail's Activity
+  // feed). Deferring the activity write to its own task puts it in a separate
+  // flush and the corruption disappears. A MACROTASK (setTimeout) is required — a
+  // microtask still batches with Svelte's flush and does not fix it. The ~1-frame
+  // lag on the activity feed is imperceptible. Route EVERY activity write through
+  // here; never assign this.activity in the same statement block as this.sessions.
+  private setActivity(events: ActivityEvent[]) {
+    setTimeout(() => (this.activity = events), 0);
+  }
+
   /** Subscribe to backend push events. Idempotent. */
   start() {
     if (this.started) return;
@@ -68,13 +93,13 @@ class Store {
       this.connected = true;
       if (!e.data) {
         this.sessions = [];
-        this.activity = [];
+        this.setActivity([]);
       }
     });
     Events.On("daemon:sessions", (e) => {
       this.sessions = e.data?.sessions ?? [];
-      this.activity = e.data?.events ?? [];
       this.connected = true;
+      this.setActivity(e.data?.events ?? []);
     });
     Events.On("daemon:projects", (e) => {
       this.projects = e.data?.projects ?? [];
@@ -155,7 +180,7 @@ class Store {
     ]);
     if (sd.status === "fulfilled") {
       this.sessions = sd.value.sessions ?? [];
-      this.activity = sd.value.events ?? [];
+      this.setActivity(sd.value.events ?? []); // separate flush — see setActivity
     }
     if (pd.status === "fulfilled") this.projects = pd.value.projects ?? [];
     if (st.status === "fulfilled") this.status = st.value;
