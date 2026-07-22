@@ -126,7 +126,12 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   overflow: hidden; /* the app owns its own scroll regions */
-  user-select: none; /* app chrome isn't selectable; terminals opt back in */
+  /* App chrome isn't selectable — clicking a row/label must not highlight text
+     (terminals + form fields opt back in below). WKWebView needs the -webkit-
+     prefix to actually PREVENT selection; the unprefixed property alone did not
+     stop double-click word selection on clickable rows. */
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 /* The frameless title-bar drag strip (traffic lights are inset). Any element
@@ -166,6 +171,7 @@ select {
 /* Terminals may be selected (copy out); snapshots stay inert. */
 .term-live,
 .term-live * {
+  -webkit-user-select: text;
   user-select: text;
 }
 
@@ -174,6 +180,7 @@ select {
    textareas is crippled. Terminals keep their own opt-in above. */
 input,
 textarea {
+  -webkit-user-select: text;
   user-select: text;
 }
 

@@ -31,11 +31,6 @@
 >
   <LolaLogo class="h-[15px] w-auto shrink-0" />
 
-  {#if store.needsYou > 0}
-    <span class="text-edge">·</span>
-    <span class="font-medium text-orange">{store.needsYou} need you</span>
-  {/if}
-
   <span class="ml-auto flex items-center gap-3 text-faint">
     {#if store.status}
       <!-- Health: a single dot by default; hovering reveals which of runtime /

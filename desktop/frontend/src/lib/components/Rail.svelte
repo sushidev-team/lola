@@ -25,15 +25,13 @@
 <div class="flex h-full min-h-0 flex-col gap-2">
   <!-- Triage — sizes to content -->
   <Panel title="Triage">
-    {#if store.needsYou > 0}
-      <div class="mb-2 text-sm font-bold text-orange">{store.needsYou}&nbsp; NEED YOU</div>
-    {:else}
-      <div class="mb-2 text-sm font-bold text-good">0 <span class="font-normal text-faint">all clear</span></div>
-    {/if}
     {#if total === 0}
       <div class="text-xs text-faint">no active sessions</div>
     {:else}
       <div class="flex flex-col gap-1.5">
+        <!-- "need you" is the same meter format as the rest, just an emphasised
+             (orange, slightly bolder) label. -->
+        <Meter label="need you" value={store.needsYou} {total} color="var(--color-orange)" strong />
         <Meter label="working" value={working} {total} color="var(--color-info)" />
         <Meter label="ready" value={ready} {total} color="var(--color-good)" />
         <Meter label="fixing" value={fixing} {total} color="var(--color-bad)" />
