@@ -4,7 +4,7 @@
 // call `store.kill(id)` — they never touch the bindings directly.
 
 import { Events } from "@wailsio/runtime";
-import { DaemonService, ConfigService } from "@bindings/desktop";
+import { DaemonService, ConfigService, TermService } from "@bindings/desktop";
 import type {
   SessionInfo,
   ProjectInfo,
@@ -216,6 +216,9 @@ class Store {
     return this.act(() => DaemonService.Answer(session, text), "answer sent");
   }
   kill(session: string, force = false) {
+    // Reap the session's worktree shells too, so they don't linger as orphan tabs
+    // once the daemon removes the worktree (best-effort, fire-and-forget).
+    void TermService.CloseSessionShells(session).catch(() => {});
     return this.act(() => DaemonService.Kill(session, force), `killed ${session}`);
   }
   revive(session: string) {

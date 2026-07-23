@@ -586,10 +586,8 @@ func (m *rootModel) updateSessions(msg tea.Msg) (tea.Model, tea.Cmd) {
 		target := s.killTarget
 		s.killTarget = ""
 		if target != "" && (k.String() == "y" || k.String() == "Y") {
-			// The kill removes the worktree, so any shell rooted there must go too.
-			if tv := m.terms[target]; tv != nil {
-				m.reapTerm(tv, "")
-			}
+			// The kill removes the worktree, so every shell rooted there must go too.
+			m.closeSessionShells(target)
 			return m, killSelectedCmd(target)
 		}
 		return m, nil
@@ -614,7 +612,17 @@ func (m *rootModel) updateSessions(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case "enter":
 		return m.focusEmbed()
 	case "s":
-		return m.toggleShell()
+		return m.newShell()
+	case "<", ",":
+		// '<' / '>' switch terminal tabs — Option-free on both US (Shift+,/.) and
+		// German (dedicated <> key) layouts, unlike '[' / ']' which need Option on
+		// German and never reach the TUI. ',' / '.' are the same physical keys
+		// unshifted, accepted too so the binding works whether or not Shift is held.
+		return m.cycleEmbedTab(-1)
+	case ">", ".":
+		return m.cycleEmbedTab(+1)
+	case "w":
+		return m.closeActiveShell()
 	case "o":
 		return m, m.openSelectedPR()
 	case "c":

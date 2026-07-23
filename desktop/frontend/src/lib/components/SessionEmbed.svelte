@@ -1,6 +1,7 @@
 <script lang="ts">
   import { store } from "$lib/store.svelte";
   import { nav } from "$lib/nav.svelte";
+  import { terms, AGENT } from "$lib/terms.svelte";
   import StatusPill from "./StatusPill.svelte";
   import LiveTerminal from "./LiveTerminal.svelte";
 
@@ -19,19 +20,32 @@
   let { sessionId, focused = false }: { sessionId: string; focused?: boolean } = $props();
   const session = $derived(sessionId ? store.sessionById(sessionId) : undefined);
 
-  let answer = $state("");
-  let confirmKill = $state(false);
+  // Terminal tabs. Every session shows its agent pane; any number of shell tabs
+  // can be opened (each a real tmux session in the worktree — see $lib/terms). The
+  // bar hides when there are no shells AND the panel is compact: nothing to switch,
+  // so no chrome. Focus (the big/fullscreen view) always shows it, so a shell is
+  // reachable there without the "s" shortcut.
+  const shells = $derived(session ? terms.shellsFor(session.id) : []);
+  const activeTab = $derived(session ? terms.activeTab(session.id) : AGENT);
+  const showTabs = $derived(!!session && (shells.length > 0 || focused));
 
-  function send() {
-    if (!session || !answer.trim()) return;
-    store.answer(session.id, answer);
-    answer = "";
-  }
-  function doKill() {
-    if (!session) return;
-    store.kill(session.id);
-    confirmKill = false;
-  }
+  // The tmux name the LiveTerminal attaches to for the active tab. Keying the
+  // terminal on this (below) swaps agent ⇄ shell by re-attaching — the same
+  // proven remount the selection change already does, never a live DOM toggle. A
+  // shell tab IS its tmux name; the agent tab resolves to the session's pane.
+  const activeName = $derived(!session ? "" : activeTab === AGENT ? session.tmuxName : activeTab);
+  const activeIsShell = $derived(activeTab !== AGENT);
+
+  // Discover this session's shell tabs from the tmux server on selection, then
+  // poll so a shell opened in the TUI (or another window) appears here within a
+  // few seconds — the two surfaces attach to the same tmux sessions.
+  $effect(() => {
+    const id = session?.id;
+    if (!id) return;
+    terms.refresh(id);
+    const poll = setInterval(() => terms.refresh(id), 4000);
+    return () => clearInterval(poll);
+  });
 
   const canRevive = $derived(session && (session.status === "dead" || session.status === "session_ended"));
 </script>
@@ -73,43 +87,70 @@
       </span>
     </div>
 
-    <!-- Live agent terminal. p-4 = 16px, matching Ghostty's window-padding-x/y;
-         p-2 gave it half the breathing room and contributed to the cramped read.
-         bg-panel is the flavor's `base` — the exact colour LiveTerminal paints as
-         its terminal background — so the padding gutter is seamless with the
-         terminal and the OSC-11 background an agent reads is genuinely the colour
-         surrounding it. There is no fontSize prop any more: the old
-         `focused ? 14 : 12` broke the cell arithmetic (see TERM_FONT). -->
+    <!-- Terminal tabs. Shown when a shell is open or the panel is focused/big:
+         the agent tab, one tab per shell (each with a "×" to close), and a "+"
+         that opens another shell. Collapses in the compact, agent-only case so
+         the plain detail panel stays chrome-free. -->
+    {#if showTabs}
+      <div class="relative z-10 flex flex-wrap items-center gap-1 border-b border-edge/60 px-2 py-1 text-[11px]">
+        <button
+          class="rounded px-2 py-[2px] font-medium"
+          class:bg-accent-fill={activeTab === AGENT}
+          class:text-accent-ink={activeTab === AGENT}
+          class:text-faint={activeTab !== AGENT}
+          onclick={() => terms.select(session.id, AGENT)}>agent</button
+        >
+        {#each shells as sh (sh)}
+          <span class="flex items-center rounded" class:bg-accent-fill={activeTab === sh}>
+            <button
+              class="rounded-l px-2 py-[2px] font-medium"
+              class:text-accent-ink={activeTab === sh}
+              class:text-faint={activeTab !== sh}
+              onclick={() => terms.select(session.id, sh)}>{terms.labelFor(session.id, sh)}</button
+            >
+            <button
+              class="rounded-r pr-1.5 py-[2px] text-faint hover:text-bad"
+              title="close shell"
+              onclick={() => terms.closeShell(session.id, sh)}>×</button
+            >
+          </span>
+        {/each}
+        <button
+          class="rounded px-2 py-[2px] text-faint hover:text-accent-ink"
+          title="open a shell in the worktree"
+          onclick={() => terms.newShell(session.id, session.worktree)}>+ shell</button
+        >
+      </div>
+    {/if}
+
+    <!-- Live terminal (agent pane or worktree shell). p-4 = 16px, matching
+         Ghostty's window-padding-x/y; p-2 gave it half the breathing room and
+         contributed to the cramped read. bg-panel is the flavor's `base` — the
+         exact colour LiveTerminal paints as its terminal background — so the
+         padding gutter is seamless with the terminal and the OSC-11 background an
+         agent reads is genuinely the colour surrounding it. There is no fontSize
+         prop any more: the old `focused ? 14 : 12` broke the cell arithmetic
+         (see TERM_FONT). -->
     <div class="min-h-0 flex-1 bg-panel p-4">
-      {#if session.tmuxName}
-        <!-- Keyed on the session ONLY. The old key also carried a focus flag, to
-             force a rebuild when the removed `fontSize={focused ? 14 : 12}` prop
-             changed; with one cell size for every terminal, focus changes nothing
-             here and rebuilding on it would detach and re-attach the tmux PTY —
-             and drop the scrollback — every time the user moved the selection. -->
-        {#key session.id}
-          <LiveTerminal name={session.tmuxName} webgl interactive />
+      {#if activeName}
+        <!-- Keyed on the active tab's tmux name, which already carries the session
+             identity: switching agent ⇄ shell (or moving the selection) re-attaches
+             by remounting. Keyed on the NAME, not a focus flag — with one cell size
+             for every terminal, focus changes nothing here, and rebuilding on it
+             would drop the scrollback every time the panel expanded. -->
+        {#key activeName}
+          <LiveTerminal
+            name={activeName}
+            webgl
+            interactive
+            autofocus={activeIsShell || focused}
+            onExit={activeIsShell ? () => terms.shellExited(session.id, activeName) : undefined}
+          />
         {/key}
       {:else}
         <div class="flex h-full items-center justify-center text-sm text-faint">no tmux session (dead)</div>
       {/if}
     </div>
-
-    <!-- answer card for needs_input -->
-    {#if session.status === "needs_input"}
-      <div class="flex items-center gap-2 border-t border-orange/40 bg-orange/5 px-3 py-2">
-        <span class="text-orange">?</span>
-        <!-- id lets the global 'a' shortcut (App.svelte) focus this box directly. -->
-        <input
-          id="session-answer"
-          class="min-w-0 flex-1 rounded border border-edge bg-canvas px-2 py-1 text-xs text-ink outline-none focus:border-accent placeholder:text-placeholder"
-          placeholder="type a reply to the agent…"
-          bind:value={answer}
-          onkeydown={(e) => e.key === "Enter" && send()}
-        />
-        <button class="rounded bg-accent-fill px-2 py-1 text-xs text-accent-ink hover:bg-accent-fill-hover" onclick={send}>send</button>
-      </div>
-    {/if}
 
     <!-- actions -->
     <div class="flex flex-wrap items-center gap-1.5 border-t border-edge/60 px-3 py-1.5 text-xs">
@@ -122,13 +163,9 @@
         <button class="rounded px-2 py-[1px] text-info hover:text-accent-ink" onclick={() => store.revive(session.id)}>revive</button>
       {/if}
       <span class="ml-auto">
-        {#if confirmKill}
-          <span class="text-warn">kill {session.issue || session.id.slice(0, 8)}?</span>
-          <button class="ml-1 rounded px-1.5 text-bad hover:underline" onclick={doKill}>yes</button>
-          <button class="rounded px-1.5 text-faint hover:underline" onclick={() => (confirmKill = false)}>no</button>
-        {:else}
-          <button class="rounded px-2 py-[1px] text-faint hover:text-bad" onclick={() => (confirmKill = true)}>kill</button>
-        {/if}
+        <!-- Opens the shared KillConfirm dialog (App.svelte) rather than an inline
+             yes/no, so the 'x' shortcut and this button confirm the same way. -->
+        <button class="rounded px-2 py-[1px] text-faint hover:text-bad" onclick={() => nav.confirmKill(session.id)}>kill</button>
       </span>
     </div>
   </div>

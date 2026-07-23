@@ -4,6 +4,7 @@
   import { store, scopedSessions, type SessionInfo } from "$lib/store.svelte";
   import { updates } from "$lib/update.svelte";
   import { nav } from "$lib/nav.svelte";
+  import { terms } from "$lib/terms.svelte";
   import VitalsBar from "$lib/components/VitalsBar.svelte";
   import Footer from "$lib/components/Footer.svelte";
   import Cockpit from "$lib/views/Cockpit.svelte";
@@ -16,6 +17,7 @@
   import ProjectForm from "$lib/views/ProjectForm.svelte";
   import UpdateOverlay from "$lib/views/UpdateOverlay.svelte";
   import HelpOverlay from "$lib/views/HelpOverlay.svelte";
+  import KillConfirm from "$lib/components/KillConfirm.svelte";
   import Setup from "$lib/views/Setup.svelte";
 
   // The currently-selected cockpit session, for footer hints + actions.
@@ -75,14 +77,6 @@
     }
   }
 
-  // The answer box lives in the split view's lower SessionEmbed and only exists
-  // for a needs_input session — focus it so 'a' drops the user straight into a
-  // reply. rAF lets a just-moved selection mount its card first.
-  function focusAnswer() {
-    if (sel?.status !== "needs_input" || nav.lens === "grid") return;
-    requestAnimationFrame(() => document.getElementById("session-answer")?.focus());
-  }
-
   // Cockpit session navigation + actions. Returns true when a key was consumed
   // (so the caller can preventDefault the browser's own Enter/arrow/space use).
   function cockpitKey(e: KeyboardEvent): boolean {
@@ -114,11 +108,25 @@
       case "N":
         jumpNeedsInput(-1);
         return true;
-      case "a":
-        focusAnswer();
+      case "s":
+        // Open a worktree shell for the selection — the desktop equivalent of the
+        // TUI's "s". Repeatable: each press adds another shell tab. No-op in the
+        // grid lens, which has no embed.
+        if (sel && nav.lens !== "grid") terms.newShell(sel.id, sel.worktree);
+        return true;
+      // '<' / '>' switch terminal tabs. Both the shifted glyph and the unshifted
+      // ',' / '.' on the same key are bound, so it works with or without Shift and
+      // on layouts (German) where '[' / ']' need Option and never arrive.
+      case "<":
+      case ",":
+        if (sel && nav.lens !== "grid") terms.cycleTab(sel.id, -1);
+        return true;
+      case ">":
+      case ".":
+        if (sel && nav.lens !== "grid") terms.cycleTab(sel.id, +1);
         return true;
       case "x":
-        if (sel) store.kill(sel.id);
+        if (sel) nav.confirmKill(sel.id); // ask first — KillConfirm dialog
         return true;
       case "o":
         if (sel?.prUrl) store.openURL(sel.prUrl);
@@ -144,6 +152,17 @@
     // still holds focus after a click).
     const active = document.activeElement as HTMLElement | null;
     if ((e.key === "Enter" || e.key === " ") && active && (active.tagName === "BUTTON" || active.tagName === "A")) {
+      return;
+    }
+
+    // The kill-confirmation dialog swallows every key while open: Escape cancels,
+    // Enter is left to the focused Cancel button (safe default for a destructive
+    // action). Nothing else leaks through to a cockpit action underneath.
+    if (nav.killTarget) {
+      if (e.key === "Escape") {
+        nav.cancelKill();
+        e.preventDefault();
+      }
       return;
     }
 
@@ -196,24 +215,34 @@
 <div class="flex h-full flex-col bg-canvas text-ink">
   <VitalsBar />
 
-  <main class="min-h-0 flex-1 overflow-hidden">
-    {#if nav.view === "cockpit"}
-      <Cockpit />
-    {:else if nav.view === "home"}
-      <Home />
-    {:else if nav.view === "detail"}
-      <ProjectDetail />
-    {:else if nav.view === "prpicker"}
-      <PRPicker />
-    {:else if nav.view === "ticketpicker"}
-      <TicketPicker />
+  <!-- The Cockpit stays MOUNTED for every view. Unmounting it tears down its live
+       LiveTerminals, and a LiveTerminal unmount freezes THIS component's template
+       effect in the production WKWebView — the same failure as the fullscreen
+       toggle (see SessionsColumn / CockpitLayout). Once frozen, later nav.view
+       changes stop re-rendering, which is why the projects "back" did nothing. So
+       the other views render as an opaque overlay ON TOP of the cockpit instead of
+       replacing it; nav.view changes now always re-render. -->
+  <main class="relative min-h-0 flex-1 overflow-hidden">
+    <Cockpit />
+    {#if nav.view !== "cockpit"}
+      <div class="absolute inset-0 z-40 overflow-hidden bg-canvas">
+        {#if nav.view === "home"}
+          <Home />
+        {:else if nav.view === "detail"}
+          <ProjectDetail />
+        {:else if nav.view === "prpicker"}
+          <PRPicker />
+        {:else if nav.view === "ticketpicker"}
+          <TicketPicker />
+        {/if}
+      </div>
     {/if}
   </main>
 
   <Footer>
     {#snippet hints()}
       {#if nav.view === "cockpit"}
-        <span class="tabular-nums">↑↓</span> move · <span class="tabular-nums">⏎</span> terminal · V lens · x kill{#if sel?.status === "needs_input"} · a answer{/if} · p projects · ? help
+        <span class="tabular-nums">↑↓</span> move · <span class="tabular-nums">⏎</span> terminal · s shell · V lens · x kill · p projects · ? help
       {:else}
         esc back · p projects · ? help
       {/if}
@@ -231,5 +260,8 @@
   <UpdateOverlay />
 {:else if nav.overlay === "help"}
   <HelpOverlay />
+{/if}
+{#if nav.killTarget}
+  <KillConfirm />
 {/if}
 {/if}

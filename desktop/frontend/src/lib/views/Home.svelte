@@ -30,11 +30,17 @@
 
 <div class="flex h-full min-h-0 flex-col p-4">
   <div class="mb-3 flex items-center gap-3">
+    <button
+      class="rounded border border-edge px-2 py-1 text-xs text-faint hover:border-accent hover:text-accent-ink"
+      title="back to cockpit (esc)"
+      onclick={() => nav.goCockpit()}>← back</button
+    >
     <div class="text-sm text-faint">lola <span class="text-edge">▸</span> <span class="text-ink">projects</span></div>
     <input
       class="ml-auto w-56 rounded border border-edge bg-canvas px-2 py-1 text-xs text-ink outline-none focus:border-accent placeholder:text-placeholder"
       placeholder="filter projects…"
       bind:value={filter}
+      onkeydown={(e) => e.key === "Escape" && nav.goCockpit()}
     />
     <button
       class="rounded bg-accent-fill px-3 py-1 text-xs text-accent-ink hover:bg-accent-fill-hover"

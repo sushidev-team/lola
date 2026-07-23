@@ -58,15 +58,39 @@ export function CaptureMany(names: string[] | null, lines: number): $Cancellable
 }
 
 /**
+ * CloseSessionShells kills every shell tmux session for a lola session — called
+ * when the session is killed so its shells (rooted in the now-removed worktree)
+ * don't linger as orphan tabs in either surface. Best-effort.
+ */
+export function CloseSessionShells(sessionID: string): $CancellablePromise<void> {
+    return $Call.ByID(3843539944, sessionID);
+}
+
+/**
+ * CloseShell tears down one shell: detach any live stream, then kill its tmux
+ * session so it doesn't linger after the tab is closed. Idempotent — killing an
+ * absent session is a no-op. shell is the full "-shell" tmux name; the marker
+ * guard keeps this from ever killing an agent session.
+ */
+export function CloseShell(shell: string): $CancellablePromise<void> {
+    return $Call.ByID(4064217889, shell);
+}
+
+/**
  * Detach closes the PTY: the tmux client detaches (the agent keeps running,
- * untouched) and the stream's goroutines wind down. Idempotent.
+ * untouched) and the stream's goroutines wind down. Idempotent. Marks the stream
+ * detached FIRST so the read loop's teardown (unblocked by the close) knows this
+ * was intentional and suppresses the exit event — detaching a shell tab must NOT
+ * look like the shell exiting, or switching tabs would kill the shell.
  */
 export function Detach(name: string): $CancellablePromise<void> {
     return $Call.ByID(2614283856, name);
 }
 
 /**
- * Resize propagates an xterm resize to the PTY so the remote app reflows.
+ * Resize propagates an xterm resize to the PTY so the remote app reflows. Like
+ * Write, a resize aimed at an already-gone stream is a no-op (the ResizeObserver
+ * can fire once more as the terminal tears down) rather than an error.
  */
 export function Resize(name: string, cols: number, rows: number): $CancellablePromise<void> {
     return $Call.ByID(2185863351, name, cols, rows);
@@ -80,7 +104,31 @@ export function SetApp(app: application$0.App | null): $CancellablePromise<void>
 }
 
 /**
- * Write forwards keystrokes (xterm onData, always valid UTF-8) to the PTY.
+ * Shell ensures the named shell tmux session exists, rooted in worktree, and
+ * returns its name so the frontend can Attach to it exactly like the agent pane.
+ * The desktop equivalent of the TUI's shell. The frontend owns the name (and its
+ * uniqueness); Shell only validates it carries the shell marker. Idempotent: an
+ * already-running session of that name is reused, so a re-open re-attaches.
+ */
+export function Shell(shell: string, worktree: string): $CancellablePromise<string> {
+    return $Call.ByID(1084872819, shell, worktree);
+}
+
+/**
+ * Shells lists a lola session's shell tmux sessions ("<id>-shell-N") on the lola
+ * server, sorted by their trailing index. Both the app and the TUI discover the
+ * SAME sessions, so a shell opened in either shows up as a tab in the other. An
+ * empty result (or a tmux error) simply means no shells.
+ */
+export function Shells(sessionID: string): $CancellablePromise<string[] | null> {
+    return $Call.ByID(3412002816, sessionID);
+}
+
+/**
+ * Write forwards keystrokes (xterm onData, always valid UTF-8) to the PTY. A
+ * write to a stream that has already ended (the terminal exited, tearing itself
+ * down a frame before xterm's last onData) is a silent no-op, NOT an error: the
+ * keystroke has nowhere to go and surfacing it would spam the log on every exit.
  */
 export function Write(name: string, data: string): $CancellablePromise<void> {
     return $Call.ByID(3287491394, name, data);

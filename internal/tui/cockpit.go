@@ -205,7 +205,9 @@ func (m *rootModel) helpModal() string {
 		row("v", "preview size"),
 		"",
 		head("Session actions"),
-		row("s", "shell ⇄ agent"),
+		row("s", "new worktree shell"),
+		row("< / >", "prev / next terminal tab"),
+		row("w", "close shell tab"),
 		row("a", "answer input"),
 		row("x", "kill session"),
 		row("o", "open PR"),
@@ -514,11 +516,43 @@ func (m *rootModel) sessionsBody(w, h int) []string {
 	return out
 }
 
-// detailBody renders the panel body: the live embedded AGENT (a bottom viewport
-// of its screen) when one is attached for the selection, otherwise the static
-// detail card / capture preview.
+// embedTabBar renders the Detail terminal's tab row: the agent plus one tab per
+// shell (active highlighted), and a trailing "+" for "s new shell". Empty when
+// the selection has no shells AND the panel is not focused — nothing to switch,
+// so no chrome (matches the desktop). A stale active index (its shell exited but
+// hasn't been reaped yet) simply highlights that tab for one frame.
+func (m *rootModel) embedTabBar(w int) string {
+	sel := m.sessions.selected()
+	if sel == nil {
+		return ""
+	}
+	shells := m.shellNames[sel.ID]
+	if len(shells) == 0 && !m.embedFocused {
+		return ""
+	}
+	active := m.embedTab[sel.ID]
+	tab := func(label string, idx int) string {
+		if idx == active {
+			return boxTitleHi.Render("[" + label + "]")
+		}
+		return faintText.Render(" " + label + " ")
+	}
+	parts := []string{tab("agent", 0)}
+	for i := range shells {
+		parts = append(parts, tab(fmt.Sprintf("sh%d", i+1), i+1))
+	}
+	parts = append(parts, faintText.Render("+"))
+	return previewLine(strings.Join(parts, " "), w)
+}
+
+// detailBody renders the panel body: the live embedded AGENT/SHELL (a bottom
+// viewport of its screen, under a tab row) when one is attached for the
+// selection, otherwise the static detail card / capture preview.
 func (m *rootModel) detailBody(w, h int) []string {
 	if e := m.currentEmbed(); e != nil {
+		if bar := m.embedTabBar(w); bar != "" && h > 1 {
+			return append([]string{bar}, m.embedBody(e, w, h-1)...)
+		}
 		return m.embedBody(e, w, h)
 	}
 	raw := m.sessionDetail()
@@ -614,26 +648,23 @@ func (m *rootModel) triageBody(w int) []string {
 		}
 	}
 	total := len(sess)
-
-	var out []string
-	// Hero: a bold count + "NEED YOU" (orange), or an all-clear note.
-	if need > 0 {
-		out = append(out, statusOrange.Bold(true).Render(fmt.Sprintf("%d", need))+"  "+statusOrange.Render("NEED YOU"))
-	} else {
-		out = append(out, goodText.Bold(true).Render("0")+"  "+faintText.Render("all clear"))
-	}
 	// Nothing running: no bars (they'd read as a gray smear) — say so plainly.
 	if total == 0 {
-		out = append(out, "", faintText.Render("no active sessions"))
-		return out
+		return []string{faintText.Render("no active sessions")}
 	}
-	meterW := w - 12
+	meterW := w - 13
 	if meterW < 4 {
 		meterW = 4
 	}
-	out = append(out, triageMeter("working", work, total, meterW, statusBlue))
-	out = append(out, triageMeter("ready", ready, total, meterW, goodText))
-	out = append(out, triageMeter("fixing", fix, total, meterW, badText))
+	// Uniform meter rows (matches the desktop Triage): "need you" is the SAME bar
+	// format as the rest, just emphasised — an orange, coloured label — not a
+	// special hero line with its own indentation.
+	out := []string{
+		triageMeter("need you", need, total, meterW, statusOrange, true),
+		triageMeter("working", work, total, meterW, statusBlue, false),
+		triageMeter("ready", ready, total, meterW, goodText, false),
+		triageMeter("fixing", fix, total, meterW, badText, false),
+	}
 	withPR := 0
 	for _, x := range sess {
 		if x.PRNumber > 0 {
@@ -648,10 +679,12 @@ func (m *rootModel) triageBody(w int) []string {
 	return out
 }
 
-// triageMeter renders "N label ━━━━" — a colored+bold count, a muted label, then
-// a thin proportional bar: the filled portion in the category color, the rest a
-// very dark track rule (so an empty bar is a subtle line, never a gray block).
-func triageMeter(label string, n, total, w int, style lipgloss.Style) string {
+// triageMeter renders "N label ━━━━" — a colored+bold count, a label, then a thin
+// proportional bar: the filled portion in the category color, the rest a very
+// dark track rule (so an empty bar is a subtle line, never a gray block). strong
+// tints the LABEL in the category colour (used for "need you"); otherwise the
+// label is muted and uniform, like the desktop's Meter.
+func triageMeter(label string, n, total, w int, style lipgloss.Style, strong bool) string {
 	filled := 0
 	if total > 0 {
 		filled = n * w / total
@@ -662,7 +695,11 @@ func triageMeter(label string, n, total, w int, style lipgloss.Style) string {
 	if n > 0 && filled == 0 {
 		filled = 1
 	}
-	head := style.Bold(true).Render(fmt.Sprintf("%2d", n)) + faintText.Render(fmt.Sprintf(" %-7s", label))
+	labelStyle := faintText
+	if strong {
+		labelStyle = style.Bold(true)
+	}
+	head := style.Bold(true).Render(fmt.Sprintf("%2d", n)) + labelStyle.Render(fmt.Sprintf(" %-8s", label))
 	bar := style.Render(strings.Repeat("━", filled)) + meterTrack.Render(strings.Repeat("━", w-filled))
 	return head + " " + bar
 }
@@ -724,7 +761,16 @@ func (m *rootModel) cockpitMessage() string {
 	s := &m.sessions
 	switch {
 	case s.confirmKill:
-		return warnText.Render(fmt.Sprintf("kill session %q? (y/n)", s.killTarget))
+		label := s.killTarget
+		if s.data != nil {
+			for i := range s.data.Sessions {
+				if info := s.data.Sessions[i]; info.ID == s.killTarget && info.Issue != "" {
+					label = info.Issue
+					break
+				}
+			}
+		}
+		return warnText.Render(fmt.Sprintf("kill %s? removes worktree, stops agent (y/n)", label))
 	case m.list.confirmDelete:
 		name := ""
 		if p := m.selectedRailProject(); p != nil {
@@ -783,8 +829,12 @@ func (m *rootModel) keybar(w int) string {
 			if sel.Status == "needs_input" {
 				keys = append(keys, "a answer")
 			}
-			if !m.showShell && sel.Worktree != "" && m.runningShell(sel.ID) {
-				keys = append(keys, "s shell "+goodText.Render("●")) // a live shell to re-enter
+			if sel.Worktree != "" {
+				if len(m.shellNames[sel.ID]) > 0 {
+					keys = append(keys, "s +shell "+goodText.Render("●")+" · < > tabs") // live shells to switch
+				} else {
+					keys = append(keys, "s shell")
+				}
 			}
 		}
 		keys = append(keys, "V lens")

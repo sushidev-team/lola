@@ -26,6 +26,8 @@ class Nav {
   lens = $state<Lens>("list");
   /** The session whose live terminal is expanded/focused ("" = none). */
   focusedTerm = $state<string>("");
+  /** Session id awaiting a kill confirmation ("" = no dialog open). */
+  killTarget = $state<string>("");
 
   goCockpit(scopeProject = "") {
     this.view = "cockpit";
@@ -72,6 +74,14 @@ class Nav {
   }
   toggleFocusTerm(id: string) {
     this.focusedTerm = this.focusedTerm === id ? "" : id;
+  }
+  /** Open the kill-confirmation dialog for a session. */
+  confirmKill(id: string) {
+    this.killTarget = id;
+  }
+  /** Dismiss the kill-confirmation dialog. */
+  cancelKill() {
+    this.killTarget = "";
   }
 }
 

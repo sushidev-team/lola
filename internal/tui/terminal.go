@@ -1,106 +1,63 @@
-// Embedded terminals for the Detail panel. Both kinds — the live AGENT (a tmux
-// attach) and a per-session SHELL (its worktree) — render in-panel and share one
-// focus/keyboard model (see agentembed.go: currentEmbed / handleEmbedKey). This
-// file owns the SHELL side: the per-session registry (m.terms, persistent so a
-// `composer dev` survives a detach and can be re-entered), reaping, and the
-// keystroke encoder shared by both kinds.
+// Embedded terminal for the Detail panel. Both kinds — the live AGENT and a
+// worktree SHELL — are `tmux attach` views onto a tmux session on lola's server;
+// the tmux session is the durable thing (shared with the desktop app, which
+// attaches to the very same sessions). Only the ACTIVE tab is attached at a time
+// (a single embed), so switching tabs re-attaches; the other shells keep running
+// detached. agentembed.go owns the attach + the per-session tab model
+// (shellNames / embedTab); this file holds the shared value type and keystroke
+// encoder.
 package tui
 
 import (
-	"os"
-	"os/exec"
+	"strconv"
+	"strings"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/sushidev-team/lola/internal/vtterm"
 )
 
-// Terminal kinds. A SHELL owns a durable process (composer dev), so it lives in
-// the registry and Ctrl-q merely unfocuses it. An AGENT is a `tmux attach` view
-// onto the agent's tmux session — the tmux session is the durable thing.
+// Terminal kinds. Both are tmux attaches; the kind only drives labelling and the
+// "attaching…" spinner (agent only).
 const (
 	termShell = iota
 	termAgent
 )
 
-// termView holds one embedded terminal.
+// termView holds the one live embed attach.
 type termView struct {
 	term      *vtterm.Term
 	title     string
 	sessionID string
-	kind      int // termShell | termAgent
-	w, h      int // terminal grid size
+	tmuxName  string // the tmux session this attaches to (agent name or "<id>-shell-N")
+	kind      int    // termShell | termAgent
+	w, h      int    // terminal grid size
 }
 
-// newShellTerm starts $SHELL (login) in dir as a per-session embedded shell,
-// registers it (persistent), and returns it. Sized to the embed dimensions so
-// the Detail viewport and the focused-expanded view share one geometry.
-func (m *rootModel) newShellTerm(sessionID, title, dir string) (*termView, error) {
-	shell := os.Getenv("SHELL")
-	if shell == "" {
-		shell = "/bin/sh"
-	}
-	cmd := exec.Command(shell, "-l")
-	if dir != "" {
-		cmd.Dir = dir
-	}
-	// TERM tells the child which sequences to emit; xterm-256color is what x/vt
-	// models. Keep the user's env otherwise (PATH, etc. for composer/node/…).
-	cmd.Env = append(os.Environ(), "TERM=xterm-256color", "LOLA_TERMINAL=1")
-
-	cw, ch := m.agentSize()
-	t, err := vtterm.New(cmd, cw, ch)
-	if err != nil {
-		return nil, err
-	}
-	tv := &termView{term: t, title: title, sessionID: sessionID, kind: termShell, w: cw, h: ch}
-	if m.terms == nil {
-		m.terms = map[string]*termView{}
-	}
-	m.terms[sessionID] = tv
-	return tv, nil
+// shellIndex parses the trailing N from a "<id>-shell-N" tmux name (0 if absent),
+// so shells sort and number stably. Shared by the TUI and mirrored in the app.
+func shellIndex(id, name string) int {
+	n, _ := strconv.Atoi(strings.TrimPrefix(name, id+"-shell-"))
+	return n
 }
 
-// reapTerm kills + closes a terminal and removes it from the registry — used
-// when its process has exited, its session is killed, or lola quits.
-func (m *rootModel) reapTerm(tv *termView, flash string) {
-	if tv == nil {
-		return
-	}
-	_ = tv.term.Close()
-	delete(m.terms, tv.sessionID)
-	if flash != "" {
-		m.sessions.flash, m.sessions.flashGood = flash, false
-	}
+// cycleTabIndex advances a tab index across {agent(0), shell1…shellN}, wrapping.
+// Pure so the wrap math is unit-testable without a tmux server.
+func cycleTabIndex(cur, nShells, dir int) int {
+	span := nShells + 1
+	return ((cur+dir)%span + span) % span
 }
 
-// sweepTerms reaps any registered shell whose process has exited but which is
-// not the one currently shown, so a backgrounded shell that ended on its own
-// doesn't linger as a zombie. Called off the status tick.
-func (m *rootModel) sweepTerms() {
-	cur := m.currentEmbed()
-	for id, tv := range m.terms {
-		if tv != cur && tv.term.Exited() {
-			_ = tv.term.Close()
-			delete(m.terms, id)
-		}
-	}
-}
-
-// closeAllTerms tears every terminal down — called on quit so no child process
-// is orphaned (shells and the embedded agent attach).
-func (m *rootModel) closeAllTerms() {
-	for id, tv := range m.terms {
-		_ = tv.term.Close()
-		delete(m.terms, id)
-	}
-	m.closeAgent()
-}
-
-// runningShell reports whether a session has a live (non-exited) shell, so the
-// cockpit can advertise the re-enter affordance.
+// runningShell reports whether a session has any shell tab, so the cockpit can
+// advertise the re-enter affordance. Reads the last discovered list.
 func (m *rootModel) runningShell(sessionID string) bool {
-	tv := m.terms[sessionID]
-	return tv != nil && !tv.term.Exited()
+	return len(m.shellNames[sessionID]) > 0
+}
+
+// closeAllTerms tears the live embed down — called on quit so the attach child
+// isn't orphaned. The shells are tmux sessions that keep running (detached),
+// exactly like the agent, so there is nothing else to close.
+func (m *rootModel) closeAllTerms() {
+	m.closeAgent()
 }
 
 // keyToBytes encodes a bubbletea v2 key press as the input bytes a PTY child

@@ -1,74 +1,37 @@
 package tui
 
-import (
-	"os/exec"
-	"testing"
-	"time"
+import "testing"
 
-	"github.com/sushidev-team/lola/internal/vtterm"
-)
-
-// liveTerm registers a long-running (cat) shell for sessionID.
-func liveTerm(t *testing.T, m *rootModel, sessionID string) *termView {
-	t.Helper()
-	term, err := vtterm.New(exec.Command("cat"), 78, 22)
-	if err != nil {
-		t.Fatalf("vtterm.New: %v", err)
+// shellIndex parses the trailing N from a "<id>-shell-N" tmux name so shells sort
+// and number stably; a name without a numeric suffix is index 0.
+func TestShellIndex(t *testing.T) {
+	cases := map[string]int{
+		"NORI-1-shell-1":  1,
+		"NORI-1-shell-12": 12,
+		"NORI-1":          0, // not a shell name
+		"NORI-1-shell-":   0, // empty number
 	}
-	tv := &termView{term: term, sessionID: sessionID, kind: termShell, title: "shell"}
-	if m.terms == nil {
-		m.terms = map[string]*termView{}
-	}
-	m.terms[sessionID] = tv
-	return tv
-}
-
-// reapTerm closes a shell and removes it from the registry; runningShell
-// reflects that.
-func TestReapTerm(t *testing.T) {
-	m := newTestRoot(t)
-	tv := liveTerm(t, m, "s1")
-	if !m.runningShell("s1") {
-		t.Fatal("a fresh shell must be running")
-	}
-	m.reapTerm(tv, "gone")
-	if m.runningShell("s1") || m.terms["s1"] != nil {
-		t.Error("reaped shell must be removed from the registry")
-	}
-	if m.sessions.flash != "gone" {
-		t.Errorf("reap flash = %q, want %q", m.sessions.flash, "gone")
+	for name, want := range cases {
+		if got := shellIndex("NORI-1", name); got != want {
+			t.Errorf("shellIndex(%q) = %d, want %d", name, got, want)
+		}
 	}
 }
 
-// sweepTerms reaps a registered shell whose process has exited (and which is not
-// the shown embed).
-func TestSweepReapsExited(t *testing.T) {
-	m := newTestRoot(t)
-	term, err := vtterm.New(exec.Command("sh", "-c", "exit 0"), 40, 5)
-	if err != nil {
-		t.Fatalf("vtterm.New: %v", err)
+// cycleTabIndex walks {agent(0), shell1…shellN} and wraps at both ends.
+func TestCycleTabIndex(t *testing.T) {
+	// 2 shells → tabs {0,1,2}, span 3.
+	if got := cycleTabIndex(0, 2, +1); got != 1 {
+		t.Errorf("0 +1 = %d, want 1", got)
 	}
-	m.terms = map[string]*termView{"s2": {term: term, sessionID: "s2", kind: termShell}}
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) && !term.Exited() {
-		time.Sleep(20 * time.Millisecond)
+	if got := cycleTabIndex(2, 2, +1); got != 0 {
+		t.Errorf("2 +1 = %d, want 0 (wrap forward)", got)
 	}
-	if !term.Exited() {
-		t.Fatal("child never exited")
+	if got := cycleTabIndex(0, 2, -1); got != 2 {
+		t.Errorf("0 -1 = %d, want 2 (wrap backward)", got)
 	}
-	m.sweepTerms() // exited + not shown → reaped
-	if m.terms["s2"] != nil {
-		t.Error("sweep must reap an exited shell")
-	}
-}
-
-// closeAllTerms tears down every registered shell (called on quit).
-func TestCloseAllTerms(t *testing.T) {
-	m := newTestRoot(t)
-	liveTerm(t, m, "a")
-	liveTerm(t, m, "b")
-	m.closeAllTerms()
-	if len(m.terms) != 0 {
-		t.Errorf("closeAllTerms must clear the registry (terms=%d)", len(m.terms))
+	// No shells → only the agent tab; every move stays on 0.
+	if got := cycleTabIndex(0, 0, +1); got != 0 {
+		t.Errorf("no shells: 0 +1 = %d, want 0", got)
 	}
 }

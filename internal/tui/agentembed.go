@@ -12,9 +12,12 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
+	"sort"
+	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -41,21 +44,37 @@ type agentDebounceMsg struct{ token int }
 // attaches.
 const agentDebounceDelay = 180 * time.Millisecond
 
-// scheduleAgentSync drops the stale agent view and debounces a re-attach to the
-// (soon-to-be-settled) selection. A no-op when the right agent is already shown.
+// scheduleAgentSync drops the stale embed and debounces a re-attach to the
+// (soon-to-be-settled) selection's ACTIVE tab. A no-op when the right target is
+// already shown.
 func (m *rootModel) scheduleAgentSync() tea.Cmd {
-	sel := m.sessions.selected()
-	target := ""
-	if sel != nil && sel.TmuxName != "" && sel.Status != "dead" && sel.Status != "session_ended" {
-		target = sel.ID
-	}
+	target, _, _ := m.activeTabTmux()
 	if target == m.agentFor && (m.agentTerm != nil || target == "") {
 		return nil
 	}
-	m.closeAgent() // clear the previous session's view immediately
+	m.closeAgent() // clear the previous view immediately
 	m.agentDebounce++
 	tok := m.agentDebounce
 	return tea.Tick(agentDebounceDelay, func(time.Time) tea.Msg { return agentDebounceMsg{token: tok} })
+}
+
+// activeTabTmux resolves the SELECTED session's active tab to the tmux session
+// the embed should attach to: a shell name for a shell tab, else the agent's own
+// tmux session. ok is false when there is nothing live to show — no selection, or
+// the agent tab of a dead/terminal session.
+func (m *rootModel) activeTabTmux() (name string, kind int, ok bool) {
+	sel := m.sessions.selected()
+	if sel == nil {
+		return "", termAgent, false
+	}
+	names := m.shellNames[sel.ID]
+	if tab := m.embedTab[sel.ID]; tab >= 1 && tab <= len(names) {
+		return names[tab-1], termShell, true
+	}
+	if sel.TmuxName != "" && sel.Status != "dead" && sel.Status != "session_ended" {
+		return sel.TmuxName, termAgent, true
+	}
+	return "", termAgent, false
 }
 
 func waitEmbedFrame(t *vtterm.Term, gen int) tea.Cmd {
@@ -104,15 +123,15 @@ func (m *rootModel) agentSize() (int, int) {
 	return innerW, innerH
 }
 
-// syncAgentPreview makes the live embedded agent match the current selection: a
-// tmux-backed, non-terminal session gets a fresh attach; anything else clears
-// it. A no-op when already showing the right session. Returns the frame-wait
-// (and, for a new attach, the spinner) command.
+// syncAgentPreview makes the live embed match the selection's ACTIVE tab: the
+// agent's tmux session, or a shell's — a fresh attach either way; a dead/terminal
+// agent tab clears it. A no-op when already showing the right target. Returns the
+// frame-wait (and, for the agent, the spinner) command.
 func (m *rootModel) syncAgentPreview() tea.Cmd {
 	sel := m.sessions.selected()
-	target := ""
-	if sel != nil && sel.TmuxName != "" && sel.Status != "dead" && sel.Status != "session_ended" {
-		target = sel.ID
+	target, kind, ok := m.activeTabTmux()
+	if !ok {
+		target = ""
 	}
 	if target == m.agentFor && (m.agentTerm != nil || target == "") {
 		return nil
@@ -120,9 +139,9 @@ func (m *rootModel) syncAgentPreview() tea.Cmd {
 	m.closeAgent()
 	m.agentFor = target
 	if target == "" {
-		return m.armEmbed() // may still show a shell for this session
+		return m.armEmbed()
 	}
-	argv := m.sessions.tmuxClient(m.cfg.TmuxSocketName()).AttachArgs(sel.TmuxName)
+	argv := m.sessions.tmuxClient(m.cfg.TmuxSocketName()).AttachArgs(target)
 	cw, ch := m.agentSize()
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Env = append(os.Environ(), "TERM=xterm-256color", "LOLA_TERMINAL=1")
@@ -131,8 +150,12 @@ func (m *rootModel) syncAgentPreview() tea.Cmd {
 		m.agentFor = ""
 		return m.armEmbed()
 	}
-	m.agentTerm = &termView{term: t, sessionID: sel.ID, kind: termAgent, title: "agent · " + dash(sel.Issue), w: cw, h: ch}
-	m.ensureTmuxMouse() // so wheel-scroll reaches the agent once focused
+	title := "agent · " + dash(sel.Issue)
+	if kind == termShell {
+		title = "shell"
+	}
+	m.agentTerm = &termView{term: t, sessionID: sel.ID, tmuxName: target, kind: kind, title: title, w: cw, h: ch}
+	m.ensureTmuxMouse() // so wheel-scroll reaches the embed once focused
 	cmds := []tea.Cmd{m.armEmbed()}
 	if !m.spinning {
 		m.spinning = true
@@ -153,18 +176,14 @@ func (m *rootModel) closeAgent() {
 }
 
 // currentEmbed is the terminal shown in the Detail panel for the selection: the
-// SHELL when the user switched to it (and it is live), otherwise the live AGENT.
+// single live embed attach (agent or shell), as long as it belongs to the
+// selected session. Its kind drives the Shell/Agent label and the tab bar.
 func (m *rootModel) currentEmbed() *termView {
 	sel := m.sessions.selected()
 	if sel == nil {
 		return nil
 	}
-	if m.showShell {
-		if tv := m.terms[sel.ID]; tv != nil && !tv.term.Exited() {
-			return tv
-		}
-	}
-	if m.agentTerm != nil && m.agentFor == sel.ID {
+	if m.agentTerm != nil && m.agentTerm.sessionID == sel.ID {
 		return m.agentTerm
 	}
 	return nil
@@ -180,17 +199,14 @@ func (m *rootModel) armEmbed() tea.Cmd {
 	return nil
 }
 
-// resizeEmbed re-sizes the live agent and the shown shell to the current window.
+// resizeEmbed re-sizes the live embed attach to the current window.
 func (m *rootModel) resizeEmbed() {
+	if m.agentTerm == nil {
+		return
+	}
 	w, h := m.agentSize()
-	if m.agentTerm != nil {
-		m.agentTerm.w, m.agentTerm.h = w, h
-		m.agentTerm.term.Resize(w, h)
-	}
-	if e := m.currentEmbed(); e != nil && e.kind == termShell {
-		e.w, e.h = w, h
-		e.term.Resize(w, h)
-	}
+	m.agentTerm.w, m.agentTerm.h = w, h
+	m.agentTerm.term.Resize(w, h)
 }
 
 // focusEmbed expands + focuses whatever the Detail panel is showing (agent or
@@ -205,36 +221,154 @@ func (m *rootModel) focusEmbed() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// toggleShell switches the Detail panel between the agent view and a per-session
-// worktree shell (opening the shell on first use), and focuses it. Pressing it
-// again returns to the agent.
-func (m *rootModel) toggleShell() (tea.Model, tea.Cmd) {
+// newShell opens ANOTHER worktree shell for the selected session as a new tmux
+// session ("<id>-shell-N"), makes it the active tab, and focuses it. There is no
+// per-session limit — each press adds another. Because the shell is a tmux
+// session on the shared lola server, the desktop app (which discovers the same
+// sessions) shows it as a tab too, and vice versa.
+func (m *rootModel) newShell() (tea.Model, tea.Cmd) {
 	sel := m.sessions.selected()
 	if sel == nil {
 		return m, nil
-	}
-	if m.showShell { // currently on the shell → back to the agent
-		m.showShell = false
-		return m, m.armEmbed()
 	}
 	if sel.Worktree == "" {
 		m.sessions.flash, m.sessions.flashGood = "no worktree for this session", false
 		return m, nil
 	}
-	tv := m.terms[sel.ID]
-	if tv != nil && tv.term.Exited() {
-		m.reapTerm(tv, "")
-		tv = nil
+	name := m.nextShellName(sel.ID)
+	if err := m.createShellSession(name, sel.Worktree); err != nil {
+		m.sessions.flash, m.sessions.flashGood = "shell failed: "+err.Error(), false
+		return m, nil
 	}
-	if tv == nil {
-		var err error
-		if tv, err = m.newShellTerm(sel.ID, "shell · "+dash(sel.Issue), sel.Worktree); err != nil {
-			m.sessions.flash, m.sessions.flashGood = "shell failed: "+err.Error(), false
-			return m, nil
+	m.refreshShells(sel.ID)
+	if m.embedTab == nil {
+		m.embedTab = map[string]int{}
+	}
+	for i, n := range m.shellNames[sel.ID] {
+		if n == name {
+			m.embedTab[sel.ID] = i + 1
+			break
 		}
 	}
-	m.showShell, m.embedFocused = true, true
-	return m, m.armEmbed()
+	m.embedFocused = true
+	return m, m.syncAgentPreview()
+}
+
+// cycleEmbedTab moves the selected session's active Detail tab across
+// {agent, shell1, shell2, …}, wrapping. dir +1 next, -1 previous. Re-discovers
+// first so shells opened elsewhere (the app) are included. A no-op with no shells.
+func (m *rootModel) cycleEmbedTab(dir int) (tea.Model, tea.Cmd) {
+	sel := m.sessions.selected()
+	if sel == nil {
+		return m, nil
+	}
+	m.refreshShells(sel.ID)
+	n := len(m.shellNames[sel.ID])
+	if n == 0 {
+		return m, nil
+	}
+	if m.embedTab == nil {
+		m.embedTab = map[string]int{}
+	}
+	m.embedTab[sel.ID] = cycleTabIndex(m.embedTab[sel.ID], n, dir)
+	return m, m.syncAgentPreview()
+}
+
+// closeActiveShell kills the shell on the active tab (a no-op on the agent tab),
+// mirroring the desktop tab's "×", and falls the tab back to its left neighbour.
+func (m *rootModel) closeActiveShell() (tea.Model, tea.Cmd) {
+	sel := m.sessions.selected()
+	if sel == nil {
+		return m, nil
+	}
+	tab := m.embedTab[sel.ID]
+	names := m.shellNames[sel.ID]
+	if tab < 1 || tab > len(names) {
+		return m, nil // on the agent tab — nothing to close
+	}
+	name := names[tab-1]
+	if m.agentTerm != nil && m.agentTerm.tmuxName == name {
+		m.closeAgent() // drop our attach before killing the session
+	}
+	m.killShellSession(name)
+	m.embedTab[sel.ID] = tab - 1 // fall back to the left tab (agent if it was first)
+	m.refreshShells(sel.ID)
+	m.sessions.flash, m.sessions.flashGood = "shell closed", false
+	return m, m.syncAgentPreview()
+}
+
+// --- shell tmux sessions (shared with the desktop app) ----------------------
+
+// refreshShells re-reads the tmux server for this session's "<id>-shell-N"
+// sessions, so tabs reflect shells opened anywhere — the desktop app, another
+// lola, or here. Best-effort: on a tmux error the last-known list stands.
+func (m *rootModel) refreshShells(id string) {
+	if m.shellNames == nil {
+		m.shellNames = map[string][]string{}
+	}
+	c := m.sessions.tmuxClient(m.cfg.TmuxSocketName())
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	sessions, err := c.ListSessions(ctx)
+	if err != nil {
+		return
+	}
+	prefix := id + "-shell-"
+	var names []string
+	for _, s := range sessions {
+		if strings.HasPrefix(s.Name, prefix) {
+			names = append(names, s.Name)
+		}
+	}
+	sort.Slice(names, func(i, j int) bool { return shellIndex(id, names[i]) < shellIndex(id, names[j]) })
+	m.shellNames[id] = names
+	if m.embedTab[id] > len(names) { // active tab outlived its shell
+		m.embedTab[id] = len(names)
+	}
+}
+
+// nextShellName picks the next free "<id>-shell-N" (max existing index + 1),
+// discovering first so it never collides with a shell opened in the app.
+func (m *rootModel) nextShellName(id string) string {
+	m.refreshShells(id)
+	max := 0
+	for _, n := range m.shellNames[id] {
+		if i := shellIndex(id, n); i > max {
+			max = i
+		}
+	}
+	return fmt.Sprintf("%s-shell-%d", id, max+1)
+}
+
+// createShellSession spawns a detached tmux session running the default shell in
+// dir. Empty command → the user's login shell, mirroring internal/tmux.NewSession.
+func (m *rootModel) createShellSession(name, dir string) error {
+	c := m.sessions.tmuxClient(m.cfg.TmuxSocketName())
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return c.NewSession(ctx, name, dir, "")
+}
+
+// killShellSession terminates one shell tmux session (best-effort, idempotent).
+func (m *rootModel) killShellSession(name string) {
+	c := m.sessions.tmuxClient(m.cfg.TmuxSocketName())
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	_ = c.KillSession(ctx, name)
+}
+
+// closeSessionShells kills every shell tmux session for one lola session — used
+// on kill, where the worktree is about to go, so the shells rooted there must too.
+func (m *rootModel) closeSessionShells(id string) {
+	if m.agentTerm != nil && m.agentTerm.sessionID == id && m.agentTerm.kind == termShell {
+		m.closeAgent()
+	}
+	m.refreshShells(id)
+	for _, name := range m.shellNames[id] {
+		m.killShellSession(name)
+	}
+	delete(m.shellNames, id)
+	delete(m.embedTab, id)
 }
 
 // handleEmbedKey routes a keystroke while the embed is FOCUSED: Ctrl-q unfocuses

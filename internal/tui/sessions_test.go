@@ -281,8 +281,8 @@ func TestSessionsKillConfirmAndSend(t *testing.T) {
 		t.Fatal("x must open the kill confirmation")
 	}
 	v := m.viewString()
-	if !strings.Contains(v, `kill session "s1"? (y/n)`) {
-		t.Errorf("view must prompt to confirm the kill:\n%s", v)
+	if !strings.Contains(v, "kill ENG-123?") || !strings.Contains(v, "(y/n)") {
+		t.Errorf("view must prompt to confirm the kill (naming the issue):\n%s", v)
 	}
 	if strings.Contains(v, "force") || strings.Contains(v, "--force") {
 		t.Errorf("the TUI must never offer a force path:\n%s", v)
@@ -350,12 +350,13 @@ func TestSessionsKillTargetPinnedAcrossRefresh(t *testing.T) {
 		t.Fatalf("cursor should now point at s3 after the reshuffle, got %v", sel)
 	}
 
-	// The pinned target — and the prompt — must still reference s1.
+	// The pinned target — and the prompt — must still reference s1 (issue ENG-123),
+	// not the reshuffled cursor s3 (issue ENG-1).
 	if m.sessions.killTarget != "s1" {
 		t.Errorf("kill target must stay pinned to s1, got %q", m.sessions.killTarget)
 	}
-	if v := m.viewString(); !strings.Contains(v, `kill session "s1"? (y/n)`) {
-		t.Errorf("prompt must still name s1, not the reshuffled cursor:\n%s", v)
+	if v := m.viewString(); !strings.Contains(v, "kill ENG-123?") {
+		t.Errorf("prompt must still name s1's ENG-123, not the reshuffled cursor:\n%s", v)
 	}
 
 	// "y" confirms against the pinned s1 and resets the target.

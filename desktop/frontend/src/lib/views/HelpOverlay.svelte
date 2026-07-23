@@ -20,7 +20,8 @@
     {
       title: "Session actions",
       keys: [
-        ["a", "answer (needs input)"],
+        ["s", "new worktree shell"],
+        ["< / >", "prev / next terminal tab"],
         ["x", "kill session"],
         ["o", "open PR in browser"],
         ["c", "coderabbit review"],

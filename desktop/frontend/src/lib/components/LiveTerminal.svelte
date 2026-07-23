@@ -20,17 +20,34 @@
   // old `focused ? 14 : 12` did exactly that, giving 14px glyphs an 8px pitch
   // (their own advance is 8.4287), which is why the terminal read as
   // simultaneously bigger and more cramped than Ghostty.
+  // onExit fires when the attached tmux session ends on its OWN — the shell
+  // exited, or an attach hit an already-gone session (tmux's client exits, the
+  // PTY EOFs, the backend emits pty:<name>:exit). A deliberate Detach does NOT
+  // fire it. SessionEmbed passes it only for a shell tab, to retire that tab.
+  // autofocus grabs the keyboard for this terminal once it opens, so a shell tab
+  // (or a fullscreen embed) can be typed into immediately without a click. Left
+  // off for the compact agent pane, which remounts as the selection moves and
+  // must not steal keys from the sessions list.
   let {
     name,
     webgl = true,
     interactive = true,
-  }: { name: string; webgl?: boolean; interactive?: boolean } = $props();
+    onExit,
+    autofocus = false,
+  }: {
+    name: string;
+    webgl?: boolean;
+    interactive?: boolean;
+    onExit?: () => void;
+    autofocus?: boolean;
+  } = $props();
 
   let host: HTMLDivElement;
   let term: Terminal | undefined;
   let fit: FitAddon | undefined;
   let gl: WebglAddon | undefined;
   let off: (() => void) | undefined;
+  let offExit: (() => void) | undefined;
   let ro: ResizeObserver | undefined;
   let resizeTimer: ReturnType<typeof setTimeout> | undefined;
   let disposed = false;
@@ -155,11 +172,23 @@
     if (interactive) {
       term.onData((d) => TermService.Write(name, d));
       term.onResize(({ cols, rows }) => TermService.Resize(name, cols, rows));
+      // Grab the keyboard now so a shell tab / fullscreen embed is typeable
+      // without a click — the reported "I start typing and it goes nowhere".
+      if (autofocus) term.focus();
     }
 
     off = Events.On(`pty:${name}`, (e: { data: string }) => {
       term?.write(b64ToBytes(e.data));
     });
+
+    // A shell tab asks to be told when its session ends so it can close itself.
+    // Subscribe only when wanted (the agent pane passes no onExit): its own tmux
+    // ending means the session died, which the store already reflects elsewhere.
+    if (onExit) {
+      offExit = Events.On(`pty:${name}:exit`, () => {
+        if (!disposed) onExit?.();
+      });
+    }
 
     attach = TermService.Attach(name, cols, rows).catch(() => {
       term?.writeln("\x1b[31m[ could not attach to session ]\x1b[0m");
@@ -222,6 +251,7 @@
     // must not leave a terminal attached to a tmux pane nobody is watching.
     disposed = true;
     off?.();
+    offExit?.();
     ro?.disconnect();
     clearTimeout(resizeTimer);
     // Detach only a session we actually attached, and only AFTER Attach settles.

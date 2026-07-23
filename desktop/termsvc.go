@@ -8,7 +8,9 @@ import (
 	"math"
 	"os"
 	"os/exec"
+	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -129,6 +131,120 @@ func (t *TermService) CaptureMany(names []string, lines int) map[string]string {
 	return out
 }
 
+// --- auxiliary shell sessions ------------------------------------------------
+
+// shellMarker must appear in every shell tmux name. A shell is a SECOND session
+// on the lola server, rooted in the agent's worktree (not a window of the agent's
+// session, so the agent pane is never disturbed and the grid keeps showing it).
+// The frontend names them "<sessionId>-shell-<n>" — one lola session can have
+// any number. This marker is also a guard: Shell / CloseShell refuse a name
+// without it, so neither can ever create or kill an agent session by mistake.
+const shellMarker = "-shell"
+
+// Shell ensures the named shell tmux session exists, rooted in worktree, and
+// returns its name so the frontend can Attach to it exactly like the agent pane.
+// The desktop equivalent of the TUI's shell. The frontend owns the name (and its
+// uniqueness); Shell only validates it carries the shell marker. Idempotent: an
+// already-running session of that name is reused, so a re-open re-attaches.
+func (t *TermService) Shell(shell, worktree string) (string, error) {
+	bin, err := t.tmux()
+	if err != nil {
+		return "", err
+	}
+	if !strings.Contains(shell, shellMarker) {
+		return "", fmt.Errorf("not a shell session name: %q", shell)
+	}
+	if worktree == "" {
+		return "", errors.New("session has no worktree")
+	}
+	if fi, err := os.Stat(worktree); err != nil || !fi.IsDir() {
+		return "", fmt.Errorf("worktree unavailable: %s", worktree)
+	}
+	if t.hasSession(bin, shell) {
+		return shell, nil // reuse — re-attach, don't respawn
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	// -d creates it detached (the frontend attaches via Attach); an empty command
+	// starts the user's default shell in -c worktree, mirroring internal/tmux's
+	// NewSession. No per-session set-option: the shell inherits the same server
+	// defaults (mouse, etc.) the agent panes use, so both tabs scroll identically.
+	if out, err := exec.CommandContext(ctx, bin, "-L", "lola", "new-session", "-d",
+		"-s", shell, "-c", worktree).CombinedOutput(); err != nil {
+		return "", fmt.Errorf("new shell %s: %w: %s", shell, err, out)
+	}
+	return shell, nil
+}
+
+// hasSession reports whether the lola tmux server already has an exactly-named
+// session, so Shell can reuse one instead of spawning a duplicate.
+func (t *TermService) hasSession(bin, name string) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	return exec.CommandContext(ctx, bin, "-L", "lola", "has-session", "-t", "="+name).Run() == nil
+}
+
+// Shells lists a lola session's shell tmux sessions ("<id>-shell-N") on the lola
+// server, sorted by their trailing index. Both the app and the TUI discover the
+// SAME sessions, so a shell opened in either shows up as a tab in the other. An
+// empty result (or a tmux error) simply means no shells.
+func (t *TermService) Shells(sessionID string) []string {
+	bin, err := t.tmux()
+	if err != nil || sessionID == "" {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, bin, "-L", "lola", "list-sessions", "-F", "#{session_name}").Output()
+	if err != nil {
+		return nil // no server / no sessions
+	}
+	prefix := sessionID + shellMarker + "-" // "<id>-shell-"
+	var names []string
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if strings.HasPrefix(line, prefix) {
+			names = append(names, line)
+		}
+	}
+	sort.Slice(names, func(i, j int) bool { return shellSessionIndex(sessionID, names[i]) < shellSessionIndex(sessionID, names[j]) })
+	return names
+}
+
+// shellSessionIndex parses the trailing N from "<id>-shell-N" (0 if absent), so
+// shells sort and number stably — the mirror of the TUI's shellIndex.
+func shellSessionIndex(id, name string) int {
+	n, _ := strconv.Atoi(strings.TrimPrefix(name, id+shellMarker+"-"))
+	return n
+}
+
+// CloseSessionShells kills every shell tmux session for a lola session — called
+// when the session is killed so its shells (rooted in the now-removed worktree)
+// don't linger as orphan tabs in either surface. Best-effort.
+func (t *TermService) CloseSessionShells(sessionID string) {
+	for _, name := range t.Shells(sessionID) {
+		_ = t.CloseShell(name)
+	}
+}
+
+// CloseShell tears down one shell: detach any live stream, then kill its tmux
+// session so it doesn't linger after the tab is closed. Idempotent — killing an
+// absent session is a no-op. shell is the full "-shell" tmux name; the marker
+// guard keeps this from ever killing an agent session.
+func (t *TermService) CloseShell(shell string) error {
+	bin, err := t.tmux()
+	if err != nil {
+		return err
+	}
+	if !strings.Contains(shell, shellMarker) {
+		return fmt.Errorf("not a shell session name: %q", shell)
+	}
+	_ = t.Detach(shell)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	_ = exec.CommandContext(ctx, bin, "-L", "lola", "kill-session", "-t", "="+shell).Run()
+	return nil
+}
+
 // --- live PTY attach (focused terminal) -------------------------------------
 
 type ptyStream struct {
@@ -136,9 +252,10 @@ type ptyStream struct {
 	cmd    *exec.Cmd
 	cancel context.CancelFunc
 
-	mu      sync.Mutex
-	pending []byte
-	closed  bool
+	mu       sync.Mutex
+	pending  []byte
+	closed   bool
+	detached bool // teardown was frontend-initiated (Detach), so no exit event fires
 }
 
 // Attach starts an interactive `tmux attach` to the named session in a PTY sized
@@ -228,27 +345,29 @@ func (t *TermService) flushLoop(name string, s *ptyStream) {
 	}
 }
 
-// Write forwards keystrokes (xterm onData, always valid UTF-8) to the PTY.
+// Write forwards keystrokes (xterm onData, always valid UTF-8) to the PTY. A
+// write to a stream that has already ended (the terminal exited, tearing itself
+// down a frame before xterm's last onData) is a silent no-op, NOT an error: the
+// keystroke has nowhere to go and surfacing it would spam the log on every exit.
 func (t *TermService) Write(name, data string) error {
 	t.mu.Lock()
 	s := t.streams[name]
 	t.mu.Unlock()
 	if s == nil {
-		return errors.New("no such terminal stream")
+		return nil
 	}
 	_, err := s.f.Write([]byte(data))
 	return err
 }
 
-// Resize propagates an xterm resize to the PTY so the remote app reflows.
+// Resize propagates an xterm resize to the PTY so the remote app reflows. Like
+// Write, a resize aimed at an already-gone stream is a no-op (the ResizeObserver
+// can fire once more as the terminal tears down) rather than an error.
 func (t *TermService) Resize(name string, cols, rows int) error {
 	t.mu.Lock()
 	s := t.streams[name]
 	t.mu.Unlock()
-	if s == nil {
-		return errors.New("no such terminal stream")
-	}
-	if cols <= 0 || rows <= 0 {
+	if s == nil || cols <= 0 || rows <= 0 {
 		return nil
 	}
 	return pty.Setsize(s.f, &pty.Winsize{Cols: clampWinDim(cols), Rows: clampWinDim(rows)})
@@ -265,7 +384,10 @@ func clampWinDim(n int) uint16 {
 }
 
 // Detach closes the PTY: the tmux client detaches (the agent keeps running,
-// untouched) and the stream's goroutines wind down. Idempotent.
+// untouched) and the stream's goroutines wind down. Idempotent. Marks the stream
+// detached FIRST so the read loop's teardown (unblocked by the close) knows this
+// was intentional and suppresses the exit event — detaching a shell tab must NOT
+// look like the shell exiting, or switching tabs would kill the shell.
 func (t *TermService) Detach(name string) error {
 	t.mu.Lock()
 	s := t.streams[name]
@@ -274,19 +396,30 @@ func (t *TermService) Detach(name string) error {
 	if s == nil {
 		return nil
 	}
+	s.mu.Lock()
+	s.detached = true
+	s.mu.Unlock()
 	t.closeStream(s)
 	return nil
 }
 
 // endStream is the read-loop's teardown path (PTY EOF/error): drop the registry
-// entry and close, matching an explicit Detach.
+// entry, close, and — unless a Detach set this in motion — emit `pty:<name>:exit`
+// so the frontend can retire a tab whose shell exited on its own (e.g. the user
+// typed `exit`). The agent pane subscribes to nothing here, so its exit is inert.
 func (t *TermService) endStream(name string, s *ptyStream) {
 	t.mu.Lock()
 	if t.streams[name] == s {
 		delete(t.streams, name)
 	}
 	t.mu.Unlock()
+	s.mu.Lock()
+	intentional := s.detached
+	s.mu.Unlock()
 	t.closeStream(s)
+	if !intentional && t.app != nil {
+		t.app.Event.Emit("pty:"+name+":exit", "")
+	}
 }
 
 func (t *TermService) closeStream(s *ptyStream) {

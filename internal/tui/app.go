@@ -56,17 +56,22 @@ type rootModel struct {
 	list     listModel
 	sessions sessionsModel
 	form     *formModel
-	settings *settingsForm        // global settings editor modal ('S'); nil otherwise
-	terms    map[string]*termView // per-session persistent shells, keyed by session ID
+	settings *settingsForm // global settings editor modal ('S'); nil otherwise
 
-	// The embedded terminal shown in the Detail panel for the selected session:
-	// the live AGENT (a tmux attach, re-targeted as the selection moves) by
-	// default, or a per-session SHELL when showShell is set. 'enter' focuses +
-	// expands whichever is shown into the main column; Ctrl-q shrinks it back.
-	// currentEmbed() resolves which one; embedGen guards the repaint waiter.
+	// Per-session shell tabs, DISCOVERED from the tmux server ("<id>-shell-N"
+	// sessions) so they stay in sync with the desktop app, which attaches to the
+	// very same sessions. embedTab is the active Detail tab per session: 0 = the
+	// live agent, k≥1 = the (k-1)th shell in shellNames. See agentembed.go.
+	shellNames map[string][]string
+	embedTab   map[string]int
+
+	// The single embedded terminal shown in the Detail panel for the selected
+	// session — the live AGENT or one of its SHELLS, whichever the active tab
+	// names, attached lazily and re-attached when the tab or selection changes.
+	// 'enter' focuses + expands it into the main column; Ctrl-q shrinks it back.
+	// currentEmbed() resolves it; embedGen guards the repaint waiter.
 	agentTerm    *termView
-	agentFor     string // session ID agentTerm is attached to ("" = none)
-	showShell    bool   // Detail shows the session's shell instead of the agent
+	agentFor     string // tmux session name agentTerm is attached to ("" = none)
 	embedFocused bool   // the shown embed has keyboard + is expanded
 	embedSelect  bool   // select-mode (opt-in, Ctrl-g): release the mouse to the outer
 	//                      terminal for native drag-select/copy and ⌘-click-to-open. OFF by
@@ -294,7 +299,9 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.handleTicketsMsg(v)
 		return m, nil
 	case statusTickMsg:
-		m.sweepTerms() // reap any detached shell whose process has exited
+		if sel := m.sessions.selected(); sel != nil {
+			m.refreshShells(sel.ID) // keep the selected session's shell tabs in sync with the app
+		}
 		if m.form != nil {
 			return m, statusTick()
 		}
@@ -392,13 +399,15 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if e.term.Exited() {
-			if e.kind == termAgent {
-				m.closeAgent()
-			} else {
-				m.reapTerm(e, "shell exited")
-				m.showShell = false
+			kind, id := e.kind, e.sessionID
+			m.closeAgent()
+			if kind == termShell {
+				// The shell's tmux session is gone (it exited, e.g. `exit`): drop it
+				// from the tabs and clamp the active tab, then re-attach.
+				m.refreshShells(id)
+				m.sessions.flash, m.sessions.flashGood = "shell exited", false
 			}
-			return m, m.armEmbed() // fall back to the agent, if any
+			return m, m.syncAgentPreview() // re-attach to the new active tab
 		}
 		return m, waitEmbedFrame(e.term, m.embedGen)
 	case spinnerTickMsg:

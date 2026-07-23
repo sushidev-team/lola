@@ -176,17 +176,50 @@ func TestSyncAgentSkipsNonLive(t *testing.T) {
 	}
 }
 
-// toggleShell on a session with no worktree flashes and opens nothing.
-func TestToggleShellNoWorktree(t *testing.T) {
+// newShell on a session with no worktree flashes and opens nothing (it returns
+// before touching tmux).
+func TestNewShellNoWorktree(t *testing.T) {
 	m := newTestRoot(t)
 	m.sessions.data = &protocol.SessionsData{Sessions: []protocol.SessionInfo{{ID: "s1", TmuxName: "lola-x", Worktree: ""}}}
 	m.sessions.cursor = 0
-	m.toggleShell()
-	if m.showShell || len(m.terms) != 0 {
-		t.Error("toggleShell without a worktree must not open a shell")
+	m.newShell()
+	if len(m.shellNames["s1"]) != 0 {
+		t.Error("newShell without a worktree must not open a shell")
 	}
 	if m.sessions.flash == "" {
-		t.Error("toggleShell without a worktree must flash")
+		t.Error("newShell without a worktree must flash")
+	}
+}
+
+// activeTabTmux resolves the selected session's active tab to the tmux session
+// the embed attaches to: the agent's pane on tab 0, the matching shell on a shell
+// tab, and a fall-back to the agent for a stale index or a dead agent.
+func TestActiveTabTmux(t *testing.T) {
+	m := newTestRoot(t)
+	m.sessions.data = &protocol.SessionsData{Sessions: []protocol.SessionInfo{{ID: "s1", TmuxName: "s1", Worktree: "/wt", Status: "working"}}}
+	m.sessions.cursor = 0
+	m.shellNames = map[string][]string{"s1": {"s1-shell-1", "s1-shell-2"}}
+	m.embedTab = map[string]int{}
+
+	// Tab 0 → the agent's tmux session.
+	if name, kind, ok := m.activeTabTmux(); !ok || kind != termAgent || name != "s1" {
+		t.Fatalf("agent tab: got (%q, %d, %v), want (s1, agent, true)", name, kind, ok)
+	}
+	// Tab 2 → the second shell.
+	m.embedTab["s1"] = 2
+	if name, kind, ok := m.activeTabTmux(); !ok || kind != termShell || name != "s1-shell-2" {
+		t.Fatalf("shell tab: got (%q, %d, %v), want (s1-shell-2, shell, true)", name, kind, ok)
+	}
+	// A stale index beyond the shell count falls back to the agent.
+	m.embedTab["s1"] = 9
+	if name, kind, _ := m.activeTabTmux(); kind != termAgent || name != "s1" {
+		t.Fatalf("stale tab must fall back to the agent, got (%q, %d)", name, kind)
+	}
+	// A dead agent on tab 0 → nothing live to attach.
+	m.embedTab["s1"] = 0
+	m.sessions.data.Sessions[0].Status = "dead"
+	if _, _, ok := m.activeTabTmux(); ok {
+		t.Fatal("dead agent tab must report nothing live")
 	}
 }
 
