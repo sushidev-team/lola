@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.2.1](https://github.com/sushidev-team/lola/compare/v0.2.0...v0.2.1) (2026-07-23)
+
+
+### Features
+
+* **desktop,tui:** synced multi-shell terminal tabs + kill dialog, WKWebView/keyboard fixes ([74b9448](https://github.com/sushidev-team/lola/commit/74b94483eb1e22592b32c4740d876ac598870f43))
+* scaling of app possible ([0df277d](https://github.com/sushidev-team/lola/commit/0df277d87a64ff82bf73a62c8cf504a9a1ff8432))
+* unified TUI/app keyboard scheme + fix desktop WKWebView reactivity ([f253f35](https://github.com/sushidev-team/lola/commit/f253f35fa01157394d35341f5e1051ecef3ed81e))
+
+
+### Bug Fixes
+
+* **daemon:** drop merged session from store even when its worktree is dirty ([8d4e133](https://github.com/sushidev-team/lola/commit/8d4e133167e246bc25b04adb5e0ac6b996ba22ed))
+* **desktop:** non-selectable chrome + reformat the triage "need you" ([898834b](https://github.com/sushidev-team/lola/commit/898834ba47ee3f842cd271a28d2312594d781cb3))
+* git keep keep ([649d76d](https://github.com/sushidev-team/lola/commit/649d76da360458b03720893ea5101d3de06e290e))
+
 ## [0.2.0](https://github.com/sushidev-team/lola/compare/v0.1.0...v0.2.0) (2026-07-21)
 
 
