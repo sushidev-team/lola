@@ -332,3 +332,34 @@ func TestHelpOverlay(t *testing.T) {
 		t.Fatal("'?' inside the overlay must close it")
 	}
 }
+
+// ctrl+c is handled at the very top of Update, ahead of the form routing, so
+// without an explicit gate a reflexive ctrl+c mid-edit quit the whole TUI and
+// took every unsaved edit with it — the one keystroke the discard prompt cannot
+// intercept. It must be inert while a config form owns the screen.
+func TestCtrlCDoesNotQuitWhileAFormIsOpen(t *testing.T) {
+	m := newTestRoot(t)
+
+	// Project form open.
+	f, _ := newFormModel(m.cfg, m.cfg.ProjectByName("nori-app"))
+	m.form = f
+	if _, cmd := m.Update(keyMsg("ctrl+c")); cmd != nil {
+		t.Error("ctrl+c must not quit while the project form is open")
+	}
+	if m.form == nil {
+		t.Error("ctrl+c must not close the project form either")
+	}
+
+	// Settings form open.
+	m.form = nil
+	m.settings = newSettingsForm(m.cfgPath, m.cfg)
+	if _, cmd := m.Update(keyMsg("ctrl+c")); cmd != nil {
+		t.Error("ctrl+c must not quit while the settings form is open")
+	}
+
+	// With no form open it still quits — the gate is scoped, not a removal.
+	m.settings = nil
+	if _, cmd := m.Update(keyMsg("ctrl+c")); cmd == nil {
+		t.Error("ctrl+c must still quit the cockpit")
+	}
+}

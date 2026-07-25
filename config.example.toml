@@ -322,7 +322,9 @@ endpoint = "https://api.linear.app/graphql"
 # [ui] — OPTIONAL appearance. Presentation only: nothing the daemon does reads
 # this, so omitting the whole section is zero behavior change. The theme sets
 # lola-desktop's app chrome, its terminal colors and the ANSI palette used to
-# render pane snapshots, all from one identifier.
+# render pane snapshots — AND the TUI cockpit's palette — all from one
+# identifier, so the two surfaces match. Editable from either: the app's
+# Appearance settings tab, or the TUI's S -> Appearance tab.
 #
 # Only the four values below are accepted — an unknown name is REJECTED at load
 # rather than silently falling back, so a typo tells you instead of quietly

@@ -1,10 +1,12 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
 	"charm.land/lipgloss/v2"
+	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/protocol"
 )
 
@@ -124,5 +126,47 @@ func TestActivityBody(t *testing.T) {
 		if w := lipgloss.Width(ln); w > 24 {
 			t.Errorf("line exceeds width 24: %d (%q)", w, stripANSI(ln))
 		}
+	}
+}
+
+// The project rail used to hard-truncate to the first h rows, so a project past
+// the panel height vanished and the cursor could sit on a row nothing on screen
+// reflected. It windows around the cursor now, and says how many are hidden.
+func TestProjectRailWindowsAroundCursorInsteadOfTruncating(t *testing.T) {
+	m := newTestRoot(t)
+	m.cfg.Projects = nil
+	for i := 0; i < 12; i++ {
+		m.cfg.Projects = append(m.cfg.Projects, config.Project{
+			Name: fmt.Sprintf("proj-%02d", i), Path: "/tmp/p", DefaultBranch: "main",
+		})
+	}
+	m.list = newListModel(m.cfg)
+	m.focus = focusPolls
+
+	const h = 5
+	// Cursor near the END: the old truncation showed rows 0..4 and the selected
+	// project was simply not on screen.
+	m.list.cursor = 11
+	out := stripANSI(strings.Join(m.projectRailBody(30, h), "\n"))
+	if !strings.Contains(out, "proj-11") {
+		t.Errorf("the selected project must be visible:\n%s", out)
+	}
+	if strings.Contains(out, "proj-00") {
+		t.Errorf("the window must have scrolled past the first rows:\n%s", out)
+	}
+	if !strings.Contains(out, "more") {
+		t.Errorf("hidden rows must be announced:\n%s", out)
+	}
+
+	// Cursor at the TOP still shows the first project.
+	m.list.cursor = 0
+	out = stripANSI(strings.Join(m.projectRailBody(30, h), "\n"))
+	if !strings.Contains(out, "proj-00") {
+		t.Errorf("cursor at the top must show the first project:\n%s", out)
+	}
+
+	// It never renders more lines than it was given.
+	if got := len(m.projectRailBody(30, h)); got != h {
+		t.Errorf("rail rendered %d lines, want exactly %d", got, h)
 	}
 }

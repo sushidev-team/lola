@@ -6,6 +6,7 @@
   import { nav } from "$lib/nav.svelte";
   import { terms } from "$lib/terms.svelte";
   import VitalsBar from "$lib/components/VitalsBar.svelte";
+  import PushErrorBanner from "$lib/components/PushErrorBanner.svelte";
   import Footer from "$lib/components/Footer.svelte";
   import Cockpit from "$lib/views/Cockpit.svelte";
   import Home from "$lib/views/Home.svelte";
@@ -17,7 +18,9 @@
   import ProjectForm from "$lib/views/ProjectForm.svelte";
   import UpdateOverlay from "$lib/views/UpdateOverlay.svelte";
   import HelpOverlay from "$lib/views/HelpOverlay.svelte";
-  import KillConfirm from "$lib/components/KillConfirm.svelte";
+  import ConfirmDialog from "$lib/components/ConfirmDialog.svelte";
+  import { confirm } from "$lib/confirm.svelte";
+  import { overlayClose } from "$lib/overlayClose";
   import Setup from "$lib/views/Setup.svelte";
 
   // The currently-selected cockpit session, for footer hints + actions.
@@ -126,7 +129,7 @@
         if (sel && nav.lens !== "grid") terms.cycleTab(sel.id, +1);
         return true;
       case "x":
-        if (sel) nav.confirmKill(sel.id); // ask first — KillConfirm dialog
+        if (sel) store.askKill(sel.id); // ask first — shared confirm dialog
         return true;
       case "o":
         if (sel?.prUrl) store.openURL(sel.prUrl);
@@ -145,6 +148,36 @@
   }
 
   function onKey(e: KeyboardEvent) {
+    // A pending confirmation and an open overlay own Escape even while one of
+    // their own fields is focused — the guarded config forms open the confirm
+    // from inside a text input — so both are handled BEFORE the typing() bail
+    // below, which would otherwise let the field swallow the Escape that should
+    // close the overlay. (Modal no longer handles Escape itself, so these are the
+    // single place it fires.)
+
+    // A pending confirmation swallows every key while open: Escape cancels, Enter
+    // is left to the dialog's own focus (safe default for a destructive action).
+    // Nothing else leaks through to a cockpit action underneath.
+    if (confirm.request) {
+      if (e.key === "Escape") {
+        confirm.cancel();
+        e.preventDefault();
+      }
+      return;
+    }
+
+    // An open overlay swallows keys: Escape closes any of them, '?' also closes
+    // the help overlay (so the same key toggles it off). A guarded overlay (an
+    // edit form) registers its own close so the dirty check + discard prompt run;
+    // ask it first, falling back to a blunt close for the overlays that don't.
+    if (nav.overlay) {
+      if (e.key === "Escape" || (nav.overlay === "help" && e.key === "?")) {
+        if (!overlayClose.request()) nav.closeOverlay();
+        e.preventDefault();
+      }
+      return;
+    }
+
     if (typing(e.target)) return;
 
     // Let a focused button/link handle its own Enter/Space natively instead of
@@ -155,23 +188,6 @@
       return;
     }
 
-    // The kill-confirmation dialog swallows every key while open: Escape cancels,
-    // Enter is left to the focused Cancel button (safe default for a destructive
-    // action). Nothing else leaks through to a cockpit action underneath.
-    if (nav.killTarget) {
-      if (e.key === "Escape") {
-        nav.cancelKill();
-        e.preventDefault();
-      }
-      return;
-    }
-
-    // An open overlay swallows keys: Escape closes any of them, '?' also closes
-    // the help overlay (so the same key toggles it off).
-    if (nav.overlay) {
-      if (e.key === "Escape" || (nav.overlay === "help" && e.key === "?")) nav.closeOverlay();
-      return;
-    }
     // A focused live terminal owns the keyboard (handled inside the view).
     if (nav.focusedTerm) return;
 
@@ -214,6 +230,9 @@
 {:else}
 <div class="flex h-full flex-col bg-canvas text-ink">
   <VitalsBar />
+  <!-- Out-of-date-daemon banner: always mounted (so it reacts), self-hides when
+       there is no push error. See PushErrorBanner / store.pushErrors. -->
+  <PushErrorBanner />
 
   <!-- The Cockpit stays MOUNTED for every view. Unmounting it tears down its live
        LiveTerminals, and a LiveTerminal unmount freezes THIS component's template
@@ -241,7 +260,11 @@
 
   <Footer>
     {#snippet hints()}
-      {#if nav.view === "cockpit"}
+      <!-- Truthful per context: the shell/tab keys are no-ops in the grid lens
+           (there is no embed to open them in), so don't advertise them there. -->
+      {#if nav.view === "cockpit" && nav.lens === "grid"}
+        <span class="tabular-nums">↑↓</span> move · <span class="tabular-nums">⏎</span> open · V lens · x kill · p projects · ? help
+      {:else if nav.view === "cockpit"}
         <span class="tabular-nums">↑↓</span> move · <span class="tabular-nums">⏎</span> terminal · s shell · V lens · x kill · p projects · ? help
       {:else}
         esc back · p projects · ? help
@@ -261,7 +284,5 @@
 {:else if nav.overlay === "help"}
   <HelpOverlay />
 {/if}
-{#if nav.killTarget}
-  <KillConfirm />
-{/if}
+<ConfirmDialog />
 {/if}

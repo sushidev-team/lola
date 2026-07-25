@@ -36,4 +36,39 @@ describe("nav.toggleFocusTerm", () => {
     nav.toggleFocusTerm("s1");
     expect(nav.focusedTerm).toBe("");
   });
+
+  // The grid lens renders no detail panel, so focusing from it must leave the
+  // grid — otherwise focusedTerm is set with no terminal mounted to own the
+  // keyboard, and the global handler's early return wedges every shortcut.
+  it("leaves the grid lens when focusing a terminal", () => {
+    nav.setLens("grid");
+    nav.toggleFocusTerm("s1");
+    expect(nav.lens).toBe("list");
+    expect(nav.focusedTerm).toBe("s1");
+  });
+});
+
+describe("nav.setLens", () => {
+  it("clears a focused terminal when switching INTO the grid", () => {
+    nav.setLens("list");
+    nav.toggleFocusTerm("s1");
+    expect(nav.focusedTerm).toBe("s1");
+    nav.setLens("grid");
+    expect(nav.focusedTerm).toBe("");
+  });
+
+  it("leaves a focused terminal alone for the other lenses", () => {
+    nav.setLens("list");
+    nav.toggleFocusTerm("s1");
+    nav.setLens("kanban");
+    expect(nav.focusedTerm).toBe("s1");
+  });
+
+  it("cycleLens routes through setLens, so grid still clears the focus", () => {
+    nav.setLens("kanban");
+    nav.focusedTerm = "s1";
+    nav.cycleLens(); // kanban → grid
+    expect(nav.lens).toBe("grid");
+    expect(nav.focusedTerm).toBe("");
+  });
 });

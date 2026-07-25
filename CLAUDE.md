@@ -231,6 +231,43 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   `config.toml`, never appear in argv, a log line, or a returned error. Follow
   the existing pattern (resolve from keychain/env by *name*; sanitize
   `*url.Error`) when touching those packages.
+- **`[ui].theme` paints BOTH surfaces, and the TUI palette is a `var` block.**
+  `internal/tui/catppuccin.go` is a Go port of `desktop/frontend/src/lib/
+  catppuccin.ts` — the same four flavors, the same contrast-walking token math —
+  so the TUI and the app derive identical semantic colors from one identifier and
+  `catppuccin-latte` genuinely lightens the TUI. Consequences:
+  - `internal/tui/theme.go`'s palette is `var`, not `const`, because `applyTheme`
+    repaints it. It is SEEDED with the historical navy values so a test that
+    never calls `applyTheme` is unaffected.
+  - A `var` reassignment does NOT update a `lipgloss.Style` built at init. Every
+    package-level style derived from the palette must be declared bare and
+    (re)built inside a `rebuildXStyles()` that `rebuildStyles()` calls — **adding
+    a new palette-derived style without registering it there means it silently
+    keeps the previous flavor's colors.**
+  - `applyTheme` is called on load (`Run`) and on every reload/settings save, so
+    the flavor applies without a restart. Unknown/empty id → the default flavor.
+  - Both settings UIs write the key (TUI `S` → Appearance, app → Appearance); the
+    app additionally live-previews. Keep the Go `config.UIThemes` list and the TS
+    `THEME_IDS` list identical — `Validate` rejects anything outside the Go one.
+- **Destructive actions confirm, and the key that does the destructive thing is
+  the SHIFTED one.** On both project lists (TUI home and the cockpit rail) `x`
+  stops polling (reversible) and `X` removes the `[[project]]` from config; `n`
+  and `a` both open the new-project form on both. They previously disagreed —
+  same key, reversible on one screen and destructive on the other. In the desktop
+  app every irreversible action routes through the single `confirm` store
+  (`desktop/frontend/src/lib/confirm.svelte.ts`) and its one `ConfirmDialog`, so
+  a shortcut and a button ask the same way; don't add a second bespoke dialog.
+- **Both TUI config forms guard unsaved edits, and the guard has a hole only a
+  gate can close.** `formModel` and `settingsForm` each keep a `baseline`
+  snapshot; `esc` on a dirty form arms `confirmDiscard` (y/n) instead of
+  cancelling. Two things to preserve when touching them:
+  - `rebase()` must be called after **every async fill** (repo auto-detection,
+    Linear team/label loads). Those are not human edits, and without the rebase
+    an untouched form starts claiming unsaved changes.
+  - `ctrl+c` is handled at the TOP of `rootModel.Update`, *ahead* of the form
+    routing, so the discard prompt can never see it. It is explicitly gated on
+    `m.form == nil && m.settings == nil`. Removing that gate silently restores
+    "reflexive ctrl+c throws away the whole form".
 
 ## Testing conventions
 

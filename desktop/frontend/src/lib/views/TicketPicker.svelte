@@ -79,7 +79,7 @@
     <button class="text-faint hover:text-accent-ink" onclick={() => nav.goDetail(nav.project)}>‹ back</button>
     <div class="text-sm text-faint">
       lola <span class="text-edge">▸</span>
-      <span class="text-ink">{nav.project}</span>
+      <span class="text-ink">{store.displayNameFor(nav.project)}</span>
       <span class="text-edge">▸</span>
       <span class="text-ink">tickets</span>
     </div>

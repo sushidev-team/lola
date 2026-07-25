@@ -19,6 +19,7 @@ import type {
 } from "@bindings/internal/protocol";
 import { sortRank } from "./theme";
 import { displayName } from "./slug";
+import { confirm } from "./confirm.svelte";
 
 type Flash = { text: string; kind: "good" | "warn" | "bad" } | null;
 
@@ -58,8 +59,26 @@ class Store {
   status = $state<StatusData | null>(null);
   flash = $state<Flash>(null);
 
+  // Push-loop command failures keyed by command name. The 2s push path (main.go
+  // pushLoop) swallowed per-command errors, so a daemon predating a command
+  // (answering `unknown cmd`) silently blanked that read — e.g. Projects → an
+  // empty Rail with no reason. The backend now emits `daemon:pusherr` on a change
+  // (a non-empty msg on failure, "" when it recovers), and this holds the current
+  // set so a dismissible banner can explain it. Dismissing clears the local copy;
+  // a persistent failure is not re-emitted, so it stays dismissed.
+  pushErrors = $state<Record<string, string>>({});
+
   private flashTimer: ReturnType<typeof setTimeout> | undefined;
   private started = false;
+
+  /** The first live push error, if any — drives the out-of-date banner. */
+  pushError = $derived.by(() => {
+    for (const cmd of Object.keys(this.pushErrors)) {
+      const msg = this.pushErrors[cmd];
+      if (msg) return { cmd, msg };
+    }
+    return null;
+  });
 
   /** Count of sessions parked on a human. */
   needsYou = $derived(
@@ -94,7 +113,19 @@ class Store {
       if (!e.data) {
         this.sessions = [];
         this.setActivity([]);
+        // A down daemon isn't "out of date"; the offline state covers it, so drop
+        // any stale push-error banner. The backend resets its own dedup while
+        // down, so a still-out-of-date daemon re-announces on the way back up.
+        this.pushErrors = {};
       }
+    });
+    Events.On("daemon:pusherr", (e) => {
+      const cmd = e.data?.cmd ?? "";
+      if (!cmd) return;
+      const next = { ...this.pushErrors };
+      if (e.data?.msg) next[cmd] = e.data.msg;
+      else delete next[cmd];
+      this.pushErrors = next;
     });
     Events.On("daemon:sessions", (e) => {
       this.sessions = e.data?.sessions ?? [];
@@ -154,6 +185,12 @@ class Store {
     this.flash = { text, kind };
     clearTimeout(this.flashTimer);
     this.flashTimer = setTimeout(() => (this.flash = null), 4000);
+  }
+
+  /** Dismiss the out-of-date banner. A persistent failure is not re-emitted (the
+   *  backend dedups), so it stays dismissed until a new/different command fails. */
+  dismissPushError() {
+    this.pushErrors = {};
   }
 
   // --- reads ----------------------------------------------------------------
@@ -265,6 +302,38 @@ class Store {
   }
   stopDaemon() {
     return this.act(() => DaemonService.StopDaemon(), "daemon stopped");
+  }
+
+  // --- confirmed (destructive) actions --------------------------------------
+  //
+  // Every irreversible action routes through `confirm` so it asks the same way,
+  // whether it was triggered by a shortcut or a button.
+
+  /** Ask, then kill. Used by the 'x' shortcut and the session panel's button. */
+  askKill(id: string) {
+    const s = this.sessionById(id);
+    const label = s ? s.issue || s.id.slice(0, 8) : id;
+    confirm.ask({
+      title: "Kill session?",
+      body: s?.title ? `Kill ${label} — ${s.title}?` : `Kill ${label}?`,
+      detail: "This stops its agent and removes the worktree. Unpushed work is lost.",
+      confirmLabel: "Kill",
+      onConfirm: () => void this.kill(id),
+    });
+  }
+
+  /** Ask, then stop the daemon — it halts every poll, so it is not a one-click. */
+  askStopDaemon() {
+    const live = this.sessions.length;
+    confirm.ask({
+      title: "Stop the daemon?",
+      body: "Stop lola's daemon?",
+      detail:
+        `Polling stops and no new issues are picked up until it is started again.` +
+        (live > 0 ? ` ${live} observed session${live === 1 ? "" : "s"} keep running in tmux.` : ""),
+      confirmLabel: "Stop",
+      onConfirm: () => void this.stopDaemon(),
+    });
   }
   restartDaemon() {
     return this.act(() => DaemonService.RestartDaemon(), "daemon restarted");

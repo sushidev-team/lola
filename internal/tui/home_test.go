@@ -145,15 +145,18 @@ func TestHomeAddProject(t *testing.T) {
 	}
 }
 
-// 'x' then 'y' removes a project and its polls from config.
+// 'X' then 'y' removes a project and its polls from config. The destructive
+// action is the SHIFTED key: plain 'x' means "stop polling" on both project
+// lists (here and the cockpit rail), so the same keystroke can't be reversible
+// on one screen and destructive on the other.
 func TestHomeRemoveProject(t *testing.T) {
 	m := homeRoot(t)
 	m.home.selName = "nori-app"
 	m.home.repin(m.cfg)
 
-	m.Update(keyMsg("x"))
+	m.Update(keyMsg("X"))
 	if !m.home.confirmRemove {
-		t.Fatal("'x' should ask to confirm removal")
+		t.Fatal("'X' should ask to confirm removal")
 	}
 	m.Update(keyMsg("y"))
 
@@ -163,6 +166,46 @@ func TestHomeRemoveProject(t *testing.T) {
 	}
 	if reloaded.ProjectByName("nori-app") != nil {
 		t.Error("project not removed from config (its polling goes with it)")
+	}
+}
+
+// 'x' stops polling and leaves the [[project]] in place — the reversible half of
+// the pair. It must NOT arm the removal confirmation.
+func TestHomeStopPollingKeepsProject(t *testing.T) {
+	m := homeRoot(t)
+	m.home.selName = "A" // a project that actually polls (nori-app has no team)
+	m.home.repin(m.cfg)
+
+	m.Update(keyMsg("x"))
+	if m.home.confirmRemove {
+		t.Fatal("'x' must not arm the REMOVE confirmation")
+	}
+	if !m.home.confirmStop {
+		t.Fatal("'x' should ask to confirm stopping polling")
+	}
+	m.Update(keyMsg("y"))
+
+	reloaded, err := config.Load(m.cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := reloaded.ProjectByName("A")
+	if p == nil {
+		t.Fatal("'x' must keep the project in config — it only stops polling")
+	}
+	if p.Polls() {
+		t.Error("polling still configured after 'x'")
+	}
+}
+
+// 'n' is an alias of 'a' here, so "new project" is the same key on both lists.
+func TestHomeNewProjectAcceptsBothKeys(t *testing.T) {
+	for _, key := range []string{"a", "n"} {
+		m := homeRoot(t)
+		m.Update(keyMsg(key))
+		if !m.home.adding {
+			t.Fatalf("%q should open the new-project prompt", key)
+		}
 	}
 }
 

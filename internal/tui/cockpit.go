@@ -25,17 +25,28 @@ const (
 
 // meterTrack is the unfilled portion of a Triage bar: a thin, very dark rule so
 // the empty track reads as a subtle line, never a gray block.
-var meterTrack = lipgloss.NewStyle().Foreground(lipgloss.Color(colBorder))
-
+//
 // paneBadge renders a pane's name as a small, solid slate chip with a bold
 // near-white label. It previously held an ordinal digit (` 1 `), but the digit
 // read as a "press N to jump" affordance that nothing honored, so the name now
 // lives in the chip instead. A neutral chip (rather than accent) keeps the cyan
 // focus border as the sole focus cue.
-var paneBadge = lipgloss.NewStyle().
-	Background(lipgloss.Color(colBorder)).
-	Foreground(lipgloss.Color("#eef2f6")).
-	Bold(true)
+//
+// Both are palette-derived and so declared bare + rebuilt by rebuildCockpitStyles
+// on a theme change (see theme.go). The badge label stays a fixed near-white
+// regardless of flavor.
+var (
+	meterTrack lipgloss.Style
+	paneBadge  lipgloss.Style
+)
+
+func rebuildCockpitStyles() {
+	meterTrack = lipgloss.NewStyle().Foreground(lipgloss.Color(colBorder))
+	paneBadge = lipgloss.NewStyle().
+		Background(lipgloss.Color(colBorder)).
+		Foreground(lipgloss.Color("#eef2f6")).
+		Bold(true)
+}
 
 // paneTitle composes a cockpit pane heading: the name chip, then optional faint
 // context. It carries its own ANSI so box() places it verbatim (the chip is
@@ -219,10 +230,13 @@ func (m *rootModel) helpModal() string {
 	right := []string{
 		head("Projects & polls"),
 		row("p", "projects list"),
-		row("P", "edit project"),
-		row("n", "new project"),
+		row("P / e", "edit project"),
+		row("n / a", "new project"),
+		row("s", "project's sessions"),
 		row("space", "toggle polling"),
 		row("x", "stop polling"),
+		row("X", "remove project"),
+		row("/", "filter projects"),
 		row("r", "refresh cache"),
 		"",
 		head("Global"),
@@ -376,7 +390,7 @@ func (m *rootModel) detailTitle() string {
 	}
 	extra := sel.Issue
 	if sel.Project != "" {
-		extra += " · " + sel.Project
+		extra += " · " + m.projLabel(sel.Project)
 	}
 	if sel.PRNumber > 0 {
 		extra += fmt.Sprintf(" · #%d", sel.PRNumber)
@@ -408,6 +422,13 @@ func (m *rootModel) sessionsTitle() string {
 		lens = "kanban"
 	}
 	extra := lens
+	// Name the project scope. Entering scoped sessions (from a project's detail
+	// or the PR picker) used to look identical to the global view, so a filtered-
+	// looking-empty list gave no hint that a scope was in effect — nor that esc
+	// is what lifts it.
+	if p := m.sessions.filter.Project; p != "" {
+		extra = m.projLabel(p) + " only · " + extra + " · esc for all"
+	}
 	if m.sessions.filter.AttentionOnly {
 		extra += " · needs-you only"
 	}
@@ -453,7 +474,7 @@ func (m *rootModel) sessionsBody(w, h int) []string {
 			anyTitle = true
 		}
 		rows[i] = []string{
-			marker, issue, si.Project,
+			marker, issue, m.projLabel(si.Project),
 			statusPill(si.Status), pr,
 			reactingStyle(si.Reacting).Render(dash(si.Reacting)), dash(si.Age),
 		}
@@ -577,7 +598,9 @@ func (m *rootModel) detailBody(w, h int) []string {
 func (m *rootModel) projectRailBody(w, h int) []string {
 	l := &m.list
 	if len(m.cfg.Projects) == 0 {
-		return []string{faintText.Render("no projects — press p to add one")}
+		// 'n' (or 'a') creates; 'p' only switches to the projects screen. The hint
+		// used to name 'p', which took the user somewhere else entirely.
+		return []string{faintText.Render("no projects — press n to add one")}
 	}
 	rows := make([]string, 0, len(m.cfg.Projects))
 	for i, p := range m.cfg.Projects {
@@ -621,8 +644,24 @@ func (m *rootModel) projectRailBody(w, h int) []string {
 		}
 		rows = append(rows, previewLine(left+strings.Repeat(" ", gap)+faintText.Render(last), w))
 	}
+	// Window around the cursor rather than hard-truncating to the first h rows:
+	// a plain rows[:h] made every project past the panel height simply vanish,
+	// and the cursor could sit on an invisible row (arrow keys moving a selection
+	// nothing on screen reflected). The last visible line becomes a "+N more"
+	// marker so the hidden rows are at least discoverable — same discipline as
+	// the projects screen's viewportStart windowing.
 	if len(rows) > h {
-		rows = rows[:h]
+		// The marker gets its OWN line (window into h-1) rather than overwriting
+		// the last row — overwriting can clobber the very row the cursor is on,
+		// which is exactly the case this windowing exists to fix.
+		vis := h - 1
+		if vis < 1 {
+			vis = 1
+		}
+		start := viewportStart(l.cursor, len(rows), vis)
+		hidden := len(rows) - vis
+		rows = append(rows[start:start+vis:start+vis],
+			previewLine(faintText.Render(fmt.Sprintf("  +%d more — p for all", hidden)), w))
 	}
 	return rows
 }
@@ -822,7 +861,7 @@ func (m *rootModel) keybar(w int) string {
 	// '?' away.
 	var keys []string
 	if m.focus == focusPolls {
-		keys = []string{"↑↓ move", "enter open", "space toggle", "n new", "tab → sessions"}
+		keys = []string{"↑↓ move", "enter open", "space toggle", "n new", "x stop", "X remove", "tab → sessions"}
 	} else {
 		keys = []string{"↑↓ move", "enter focus", "tab → projects", "/ filter", "x kill"}
 		if sel := s.selected(); sel != nil {

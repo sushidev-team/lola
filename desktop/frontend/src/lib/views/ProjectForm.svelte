@@ -1,8 +1,11 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, onDestroy } from "svelte";
   import { linesToText, splitLines, cleanLines } from "$lib/lines";
   import { store } from "$lib/store.svelte";
   import { nav } from "$lib/nav.svelte";
+  import { confirm } from "$lib/confirm.svelte";
+  import { overlayClose } from "$lib/overlayClose";
+  import { deepEqual } from "$lib/deepEqual";
   import Modal from "$lib/components/Modal.svelte";
   import Tabs from "$lib/components/Tabs.svelte";
   import { ConfigService, DaemonService, LinearService } from "@bindings/desktop";
@@ -48,8 +51,19 @@
   let defaults = $state<SettingsDTO | null>(null);
   let loadErr = $state("");
   let saving = $state(false);
+  // A save that the daemon rejects used to surface only as a footer flash — behind
+  // this backdrop, truncated, gone in 4s — so it read like a save that just didn't
+  // close. Held here and shown inline instead; cleared on the next attempt.
+  let saveErr = $state("");
   let confirmRemove = $state(false);
   let tab = $state(nav.overlayTab || "repo");
+
+  // The DTO exactly as it was loaded, so a close can tell real edits from an
+  // untouched form and only prompt to discard when something changed. Snapshotted
+  // AFTER the normalization below so the comparison is against the same shape the
+  // form mutates, not the raw backend DTO.
+  let loaded = $state<ProjectFormDTO | null>(null);
+  const dirty = $derived.by(() => (f && loaded ? !deepEqual($state.snapshot(f), $state.snapshot(loaded)) : false));
 
   // Repo auto-detection. The checkout's GitHub remote is resolved when Path is
   // filled in, so owner/name does not have to be copied by hand. It only ever
@@ -216,6 +230,9 @@
       // label is normalized like inherits: a DTO from an older backend must not
       // leave it undefined and make every .trim() on it throw.
       f = { ...d, label: d.label ?? "", inherits: inheritsOf(d.inherits) };
+      // The baseline the dirty check compares against — the normalized DTO, not
+      // the raw one, and before any user edit.
+      loaded = $state.snapshot(f) as ProjectFormDTO;
       origName = d.name;
       // Only a NEW project derives its id from the label. An existing id is
       // load-bearing and must not drift when someone edits the label.
@@ -277,6 +294,7 @@
     } catch (e) {
       // The daemon names the live sessions in its message; surface it verbatim
       // so the human knows what to finish rather than just that it failed.
+      saveErr = String(e);
       store.setFlash(String(e), "bad");
       saving = false;
       return false;
@@ -286,6 +304,7 @@
   async function save() {
     if (!f || !canSave) return;
     saving = true;
+    saveErr = "";
     const id = slug(f.name);
     if (!f.isNew && id !== origName && !(await renameFirst(id))) return;
     const label = f.label.trim();
@@ -315,10 +334,36 @@
       );
       nav.closeOverlay();
     } catch (e) {
+      saveErr = String(e);
       store.setFlash(String(e), "bad");
       saving = false;
     }
   }
+
+  /**
+   * The single close path for the ✕, the backdrop, Escape and the cancel button
+   * (see overlayClose): a stray one of those after editing several tabs would
+   * drop every edit, so a dirty form routes the close through the confirm dialog
+   * instead of closing outright. Save and remove close directly and never reach
+   * here, so neither trips the prompt.
+   */
+  function requestClose() {
+    if (!dirty) {
+      nav.closeOverlay();
+      return;
+    }
+    confirm.ask({
+      title: "Discard changes?",
+      body: `Discard your unsaved changes to ${f ? displayName(f) : "this project"}?`,
+      confirmLabel: "Discard",
+      onConfirm: () => nav.closeOverlay(),
+    });
+  }
+
+  // Escape closes from App.svelte's global handler; register so it asks this
+  // form (running the dirty guard) rather than closing the overlay blindly.
+  onMount(() => overlayClose.register(requestClose));
+  onDestroy(() => overlayClose.unregister(requestClose));
 
   async function remove() {
     if (!f) return;
@@ -507,7 +552,7 @@
   </div>
 {/snippet}
 
-<Modal {title} onClose={() => nav.closeOverlay()} width="660px">
+<Modal {title} onClose={requestClose} width="660px">
   {#if loadErr}
     <div class="rounded border border-bad/40 bg-bad/10 px-3 py-2 text-xs text-bad">{loadErr}</div>
   {:else if !f}
@@ -763,6 +808,21 @@
     {/if}
   {/if}
 
+  <!-- The save error, inline and above the footer where it can't hide behind the
+       backdrop. A Go error can be long and multi-line, so it wraps rather than
+       truncating and stays selectable; dismissable, and cleared on the next save. -->
+  {#if saveErr}
+    <div class="mt-3 flex items-start gap-2 rounded border border-bad/40 bg-bad/10 px-3 py-2 text-xs text-bad">
+      <span class="min-w-0 flex-1 font-mono break-words whitespace-pre-wrap select-text">{saveErr}</span>
+      <button
+        type="button"
+        class="shrink-0 leading-none text-bad/70 hover:text-bad"
+        aria-label="dismiss error"
+        onclick={() => (saveErr = "")}>✕</button
+      >
+    </div>
+  {/if}
+
   {#snippet footer()}
     <div class="flex items-center gap-2">
       {#if f && !f.isNew}
@@ -773,7 +833,7 @@
           <button class="px-3 py-1 text-xs text-bad/80 hover:text-bad" onclick={() => (confirmRemove = true)}>remove</button>
         {/if}
       {/if}
-      <button class="ml-auto px-3 py-1 text-xs text-faint hover:text-ink" onclick={() => nav.closeOverlay()}>cancel</button>
+      <button class="ml-auto px-3 py-1 text-xs text-faint hover:text-ink" onclick={requestClose}>cancel</button>
       <button
         class="rounded bg-accent-fill px-3 py-1 text-xs text-accent-ink hover:bg-accent-fill-hover disabled:opacity-40"
         disabled={!canSave}

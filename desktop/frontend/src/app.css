@@ -184,6 +184,20 @@ textarea {
   user-select: text;
 }
 
+/* Genuine content — not chrome — opts back out of the app-wide `user-select:
+   none` so a user can select and copy it into an issue: error/flash text, the
+   doctor report body, session ids and titles, branch names, PR refs. WKWebView
+   needs the -webkit- prefix (the unprefixed property alone did not re-enable
+   selection over the chrome rule), so both are set, mirroring the terminal and
+   form opt-ins above. Plain unlayered CSS, NOT an `@utility`: the `user-select:
+   none` on `body` is itself unlayered and would beat a utilities-layer class
+   regardless of specificity, so this opt-in has to be unlayered too. */
+.selectable,
+.selectable * {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
 /* ---------------------------------------------------------------------------
    Terminal stroke weight. `body` sets -webkit-font-smoothing: antialiased,
    which costs ~32% of the glyph ink on DOM text (measured 86.45 -> 58.40 on a

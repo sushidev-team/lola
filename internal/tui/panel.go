@@ -14,12 +14,22 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
+// Palette-derived panel styles, rebuilt by rebuildPanelStyles on a theme change
+// (see theme.go). Declared bare so applyTheme's palette repaint is the single
+// source of their colors; the *Hi pair is the accent-colored focus variant.
 var (
-	boxBorder   = lipgloss.NewStyle().Foreground(lipgloss.Color(colBorder))
-	boxBorderHi = lipgloss.NewStyle().Foreground(lipgloss.Color(colAccent)) // cyan focus
-	boxTitle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(colText))
-	boxTitleHi  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(colAccent))
+	boxBorder   lipgloss.Style
+	boxBorderHi lipgloss.Style // cyan focus
+	boxTitle    lipgloss.Style
+	boxTitleHi  lipgloss.Style
 )
+
+func rebuildPanelStyles() {
+	boxBorder = lipgloss.NewStyle().Foreground(lipgloss.Color(colBorder))
+	boxBorderHi = lipgloss.NewStyle().Foreground(lipgloss.Color(colAccent))
+	boxTitle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(colText))
+	boxTitleHi = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(colAccent))
+}
 
 // box renders a titled, rounded-border panel of exact OUTER width w and OUTER
 // height h (both including the border). Content sits inside a one-column gutter

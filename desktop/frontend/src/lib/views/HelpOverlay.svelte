@@ -12,7 +12,8 @@
         ["j / k · ↑ ↓", "move selection"],
         ["g / G", "first / last"],
         ["Enter", "open live terminal"],
-        ["Esc", "back / minimize"],
+        ["Esc", "back / unscope"],
+        ["Ctrl-Q", "leave a focused terminal"],
         ["V", "cycle lens · list / board / terminals"],
         ["n / N", "next / prev needs-input"],
       ],
@@ -62,8 +63,9 @@
   </div>
 
   <p class="mt-6 border-t border-edge/60 pt-4 text-[11px] leading-relaxed text-faint">
-    A double-click (or <span class="text-ink">Enter</span>) opens a session's live terminal fullscreen; inside it, keys
-    drive the agent and <span class="text-ink">Esc</span> returns here. The footer always shows the essentials —
+    A double-click (or <span class="text-ink">Enter</span>) opens a session's live terminal fullscreen. Inside it every key
+    — <span class="text-ink">Esc</span> included — goes to the agent, so
+    <span class="text-ink">Ctrl-Q</span> is the way back out. The footer always shows the essentials —
     <span class="text-ink">?</span> reveals the rest.
   </p>
 </Modal>

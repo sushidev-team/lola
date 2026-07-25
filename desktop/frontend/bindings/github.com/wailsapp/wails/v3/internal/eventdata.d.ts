@@ -19,6 +19,7 @@ declare module "@wailsio/runtime" {
             "app:open-update": {};
             "daemon:alive": boolean;
             "daemon:projects": protocol$0.ProjectsData;
+            "daemon:pusherr": main$0.PushErrDTO;
             "daemon:sessions": protocol$0.SessionsData;
             "daemon:status": protocol$0.StatusData;
             "update:download-progress": main$0.UpdateProgressDTO;

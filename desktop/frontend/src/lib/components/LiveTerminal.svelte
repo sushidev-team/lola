@@ -28,18 +28,25 @@
   // (or a fullscreen embed) can be typed into immediately without a click. Left
   // off for the compact agent pane, which remounts as the selection moves and
   // must not steal keys from the sessions list.
+  // onEscapeFocus, when set, makes Ctrl-q hand the keyboard back to the app
+  // instead of forwarding it to tmux. Needed because a focused terminal receives
+  // EVERYTHING — Escape included, which agents use — so without an explicit
+  // chord the only way out of the fullscreen view is the mouse. Ctrl-q is the
+  // TUI's own "back to cockpit" binding; same chord here so the two agree.
   let {
     name,
     webgl = true,
     interactive = true,
     onExit,
     autofocus = false,
+    onEscapeFocus,
   }: {
     name: string;
     webgl?: boolean;
     interactive?: boolean;
     onExit?: () => void;
     autofocus?: boolean;
+    onEscapeFocus?: () => void;
   } = $props();
 
   let host: HTMLDivElement;
@@ -165,6 +172,26 @@
         gl = undefined;
       }
     }
+
+    // Registered unconditionally and gated INSIDE the handler: `focused` flips
+    // without remounting this component (the terminal is keyed on the tmux name,
+    // not on focus), so a handler installed only when the prop was set at boot
+    // would never exist for the terminal that later becomes fullscreen.
+    term.attachCustomKeyEventHandler((e) => {
+      if (
+        e.type === "keydown" &&
+        e.ctrlKey &&
+        !e.metaKey &&
+        !e.altKey &&
+        (e.key === "q" || e.key === "Q") &&
+        onEscapeFocus
+      ) {
+        e.preventDefault();
+        onEscapeFocus();
+        return false; // swallow: never reaches tmux
+      }
+      return true;
+    });
 
     fit.fit();
     const { cols, rows } = term;

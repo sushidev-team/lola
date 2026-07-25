@@ -61,6 +61,7 @@ const (
 	stNotify
 	stBrain
 	stCodeRabbit
+	stAppearance
 )
 
 var settingsTabs = []struct {
@@ -72,6 +73,7 @@ var settingsTabs = []struct {
 	{stNotify, "Notify"},
 	{stBrain, "Brain"},
 	{stCodeRabbit, "Review"},
+	{stAppearance, "Appearance"},
 }
 
 type setField struct {
@@ -115,6 +117,12 @@ type settingsForm struct {
 	editing bool // a list/env field is OPEN for line editing
 	lineCur int  // which line, while editing
 	err     string
+
+	// Unsaved-changes guard, same contract as the project form: baseline is the
+	// state the form opened in, re-taken after an async label load so a fill-in
+	// never reads as a human edit; esc on a dirty form asks instead of discarding.
+	baseline       string
+	confirmDiscard bool
 
 	// Workspace-label picker state. wsLabels is the organisation-level label
 	// set backing the three [defaults] label fields; wsTried records that a
@@ -239,6 +247,11 @@ func newSettingsForm(cfgPath string, cfg *config.Config) *settingsForm {
 			{key: "brain_esc", tab: stBrain, label: "Summarize escalation", help: "Summarize WHY a session is blocked on escalation.", kind: sfBool, b: br.SummarizeEscalation},
 			{key: "brain_appr", tab: stBrain, label: "Summarize approved", help: "Summarize PR risk on approved+green.", kind: sfBool, b: br.SummarizeApproved},
 
+			// [ui] — presentation only; no daemon behavior reads it. The TUI paints
+			// from this flavor (applyTheme) and so does the desktop app, so the
+			// setting was reachable only from the app until this tab existed.
+			{key: "ui_theme", tab: stAppearance, section: "[ui]", sectionNote: "palette shared with lola-desktop", label: "Theme", help: "Catppuccin flavor for the cockpit and every terminal. space/enter cycles; latte is the light one. Applies on save.", kind: sfEnum, options: config.UIThemes, text: cfg.UITheme()},
+
 			// Review — the pluggable provider catalog ([[review.provider]]). One
 			// indented subsection per KIND; each names its config kind. transports
 			// and fallback are fixed multiselects (enter opens a local picker), the
@@ -275,8 +288,28 @@ func newSettingsForm(cfgPath string, cfg *config.Config) *settingsForm {
 	if ls, err := loadWorkspaceLabelCache(); err == nil {
 		f.rememberLabelNames(ls)
 	}
+	f.rebase()
 	return f
 }
+
+// snapshot serializes every editable value across all tabs. The fields slice IS
+// the edit buffer (each setField carries its own text/bool/lines), so hashing it
+// captures the whole form in one place.
+func (f *settingsForm) snapshot() string {
+	var b strings.Builder
+	for i := range f.fields {
+		fd := &f.fields[i]
+		fmt.Fprintf(&b, "%s=%q,%v,%v;", fd.key, fd.text, fd.b, fd.lines)
+	}
+	return b.String()
+}
+
+// rebase declares the CURRENT state unmodified — on open, and after an async
+// label load fills something in.
+func (f *settingsForm) rebase() { f.baseline = f.snapshot() }
+
+// dirty reports whether a cancel would throw edits away.
+func (f *settingsForm) dirty() bool { return f.snapshot() != f.baseline }
 
 // watchAuthor pre-fills the watch's author field with the effective default
 // when unset, so the editor shows what the watch will actually match.
@@ -533,11 +566,23 @@ func (f *settingsForm) update(msg tea.Msg) (tea.Cmd, settingsFormEvent) {
 func (f *settingsForm) updateNonKey(msg tea.Msg) (tea.Cmd, settingsFormEvent) {
 	if v, ok := msg.(workspaceLabelsMsg); ok {
 		f.applyWorkspaceLabels(v)
+		// An arriving label set is not a human edit — re-baseline so it can't arm
+		// the discard prompt on a form nobody typed into.
+		f.rebase()
 	}
 	return nil, settingsFormNone
 }
 
 func (f *settingsForm) key(k tea.KeyPressMsg) (tea.Cmd, settingsFormEvent) {
+	// The discard prompt owns every keystroke while it is up (see the project
+	// form). Handled before f.err is cleared so the prompt survives a redraw.
+	if f.confirmDiscard {
+		f.confirmDiscard = false
+		if s := k.String(); s == "y" || s == "Y" {
+			return nil, settingsFormCancel
+		}
+		return nil, settingsFormNone
+	}
 	f.err = ""
 	if f.picker != nil {
 		return f.pickerKey(k)
@@ -548,6 +593,10 @@ func (f *settingsForm) key(k tea.KeyPressMsg) (tea.Cmd, settingsFormEvent) {
 	fld := f.cur()
 	switch k.String() {
 	case "esc":
+		if f.dirty() {
+			f.confirmDiscard = true
+			return nil, settingsFormNone
+		}
 		return nil, settingsFormCancel
 	case "ctrl+s":
 		return nil, f.save()
@@ -1235,6 +1284,7 @@ func (f *settingsForm) save() settingsFormEvent {
 	// REPLACED below, never mutated in place, so the value copy is a complete
 	// rollback (same reason NotifyConfig.Routing survives untouched).
 	oldD, oldN, oldB, oldR, oldC := c.Defaults, c.Notify, c.Brain, c.Review, c.CodeRabbit
+	oldUI := c.UI
 	oldP := c.ReviewProviders
 
 	c.Defaults.GlobalCap = gc
@@ -1264,6 +1314,8 @@ func (f *settingsForm) save() settingsFormEvent {
 	c.Brain.SummarizeEscalation = f.field("brain_esc").b
 	c.Brain.SummarizeApproved = f.field("brain_appr").b
 
+	c.UI.Theme = strings.TrimSpace(f.field("ui_theme").text)
+
 	// The review provider catalog replaces the two legacy tables. In catalog
 	// mode the legacy tables MUST stay zero (a non-empty pair alongside a catalog
 	// is a hard validation error); the read-only guard above means we only reach
@@ -1274,6 +1326,7 @@ func (f *settingsForm) save() settingsFormEvent {
 
 	rollback := func() {
 		c.Defaults, c.Notify, c.Brain, c.Review, c.CodeRabbit = oldD, oldN, oldB, oldR, oldC
+		c.UI = oldUI
 		c.ReviewProviders = oldP
 		c.ResolveInheritance() // re-resolve projects against the restored defaults
 	}
@@ -1497,6 +1550,12 @@ func (f *settingsForm) footerLines() []string {
 	}
 	hint := "tab/⇧tab section · ↑/↓ field · space toggle · ctrl-s save · esc cancel"
 	switch {
+	case f.confirmDiscard:
+		// Replaces the key hint entirely: while the prompt is up, answering it is
+		// the only thing the footer should offer.
+		hint = "unsaved changes — y discard · n keep editing"
+		out = append(out, "", warnText.Render(hint))
+		return out
 	case f.reviewReadOnly():
 		hint = "m migrate to providers · tab/⇧tab section · ↑/↓ field · ctrl-s save · esc cancel"
 	case f.editing:

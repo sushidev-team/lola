@@ -308,6 +308,10 @@ const (
 	evtSessions = "daemon:sessions" // protocol.SessionsData
 	evtProjects = "daemon:projects" // protocol.ProjectsData
 	evtStatus   = "daemon:status"   // protocol.StatusData
+	// evtPushErr carries a push-loop command failure so the frontend can explain
+	// a blanked read (an out-of-date daemon answering `unknown cmd`) instead of
+	// swallowing it. A non-empty Msg means failure; "" means the command recovered.
+	evtPushErr = "daemon:pusherr" // PushErrDTO
 
 	// evtOpenSettings is fired by the status-bar menu. The overlay lives in the
 	// frontend's nav state, so the menu cannot open it directly — it asks.
@@ -316,6 +320,14 @@ const (
 	evtOpenUpdate = "app:open-update" // no payload
 )
 
+// PushErrDTO is the payload of evtPushErr: which push-loop command failed and
+// the daemon's error text. Emitted only on a change (see pushLoop) so a
+// persistent failure is announced once, not every 2s.
+type PushErrDTO struct {
+	Cmd string `json:"cmd"`
+	Msg string `json:"msg"`
+}
+
 func init() {
 	application.RegisterEvent[bool](evtAlive)
 	application.RegisterEvent[struct{}](evtOpenSettings)
@@ -323,6 +335,7 @@ func init() {
 	application.RegisterEvent[protocol.SessionsData](evtSessions)
 	application.RegisterEvent[protocol.ProjectsData](evtProjects)
 	application.RegisterEvent[protocol.StatusData](evtStatus)
+	application.RegisterEvent[PushErrDTO](evtPushErr)
 	application.RegisterEvent[UpdateProgressDTO](evtUpdateProgress)
 }
 
@@ -330,6 +343,23 @@ func pushLoop(app *application.App, d *DaemonService) {
 	const fast = 2 * time.Second // sessions cadence; projects/status every other tick
 	tick := time.NewTicker(fast)
 	defer tick.Stop()
+
+	// Last push error surfaced per command, so a persistent failure (an
+	// out-of-date daemon) is announced once rather than every 2s — the banner is
+	// dismissible and re-emitting would resurrect it. emitPushErr diffs against
+	// this and fires evtPushErr only on a change (including recovery → "").
+	lastErr := map[string]string{}
+	emitPushErr := func(cmd string, err error) {
+		msg := ""
+		if err != nil {
+			msg = err.Error()
+		}
+		if lastErr[cmd] == msg {
+			return
+		}
+		lastErr[cmd] = msg
+		app.Event.Emit(evtPushErr, PushErrDTO{Cmd: cmd, Msg: msg})
+	}
 
 	var lastAlive bool
 	var first = true
@@ -342,18 +372,31 @@ func pushLoop(app *application.App, d *DaemonService) {
 			first = false
 		}
 		if !alive {
+			// A down daemon isn't "out of date" — the frontend's offline state
+			// covers it. Reset the dedup so a still-out-of-date daemon re-announces
+			// its errors when it comes back up.
+			clear(lastErr)
 			i++
 			continue
 		}
-		if sd, err := d.Sessions(); err == nil {
+		if sd, err := d.Sessions(); err != nil {
+			emitPushErr("sessions", err)
+		} else {
 			app.Event.Emit(evtSessions, sd)
+			emitPushErr("sessions", nil)
 		}
 		if i%2 == 0 {
-			if pd, err := d.Projects(); err == nil {
+			if pd, err := d.Projects(); err != nil {
+				emitPushErr("projects", err)
+			} else {
 				app.Event.Emit(evtProjects, pd)
+				emitPushErr("projects", nil)
 			}
-			if st, err := d.Status(); err == nil {
+			if st, err := d.Status(); err != nil {
+				emitPushErr("status", err)
+			} else {
 				app.Event.Emit(evtStatus, st)
+				emitPushErr("status", nil)
 			}
 		}
 		i++

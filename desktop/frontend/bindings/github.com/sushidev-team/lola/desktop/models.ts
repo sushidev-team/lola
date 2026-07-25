@@ -122,6 +122,16 @@ export interface ProjectFormDTO {
     "isNew": boolean;
 }
 
+/**
+ * PushErrDTO is the payload of evtPushErr: which push-loop command failed and
+ * the daemon's error text. Emitted only on a change (see pushLoop) so a
+ * persistent failure is announced once, not every 2s.
+ */
+export interface PushErrDTO {
+    "cmd": string;
+    "msg": string;
+}
+
 export interface ReleaseEntryDTO {
     "version": string;
     "releaseNotes": string;

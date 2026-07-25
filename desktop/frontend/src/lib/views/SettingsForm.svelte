@@ -4,6 +4,9 @@
   import Tabs from "$lib/components/Tabs.svelte";
   import { store } from "$lib/store.svelte";
   import { nav } from "$lib/nav.svelte";
+  import { confirm } from "$lib/confirm.svelte";
+  import { overlayClose } from "$lib/overlayClose";
+  import { deepEqual } from "$lib/deepEqual";
   import { ConfigService, LinearService } from "@bindings/desktop";
   import type { SettingsDTO, LinearOption } from "@bindings/desktop/models";
   import { linesToText, splitLines, cleanLines } from "$lib/lines";
@@ -16,7 +19,39 @@
   let loading = $state(true);
   let loadError = $state("");
   let saving = $state(false);
-  let tab = $state(nav.overlayTab || "defaults");
+  // A rejected SaveSettings used to surface only as a footer flash — behind this
+  // backdrop, truncated, gone in 4s — so it read like a save that just didn't
+  // close. Held here and shown inline instead; cleared on the next attempt.
+  let saveErr = $state("");
+
+  // The DTO exactly as it was loaded, so a close can tell real edits apart from an
+  // untouched form and only prompt to discard when something changed. The theme
+  // is deliberately NOT part of this: [ui] is not a DTO field and already reverts
+  // on every close path (see previewTheme / revertTheme), so a theme-only preview
+  // is not "unsaved changes" to guard.
+  let loaded = $state<SettingsDTO | null>(null);
+  const dirty = $derived.by(() => (dto && loaded ? !deepEqual($state.snapshot(dto), $state.snapshot(loaded)) : false));
+
+  /** Reset the dirty baseline to the current DTO — after load and after a migrate. */
+  function markPristine() {
+    loaded = dto ? ($state.snapshot(dto) as SettingsDTO) : null;
+  }
+
+  const TABS = [
+    { id: "defaults", label: "Defaults" },
+    { id: "project", label: "Project defaults" },
+    { id: "notify", label: "Notify" },
+    { id: "brain", label: "Brain" },
+    // "Review", not "CodeRabbit": the body is the whole [[review.provider]]
+    // catalog — coderabbit-cli, coderabbit-watch AND claude-session — so naming
+    // the tab after one provider hid the other two.
+    { id: "review", label: "Review" },
+    { id: "appearance", label: "Appearance" },
+  ];
+
+  // Every tab body is an explicit `{:else if tab === …}` branch with no catch-all,
+  // so an unknown deep-link id would render a blank pane. Clamp it to a real tab.
+  let tab = $state(TABS.some((t) => t.id === nav.overlayTab) ? nav.overlayTab : "defaults");
 
   // The [defaults] label keys offer WORKSPACE (organisation-level) labels, not
   // team labels: a shared default is inherited by projects on any team, and a
@@ -141,6 +176,31 @@
     nav.closeOverlay();
   }
 
+  /**
+   * The single close path for the ✕, the backdrop, Escape and the cancel button
+   * (see overlayClose): a stray one of those after editing several tabs would drop
+   * every edit, so a dirty form routes the close through the confirm dialog first.
+   * Both the plain and the confirmed path go through cancel(), which also reverts
+   * an uncommitted theme preview. Save closes directly and never reaches here.
+   */
+  function requestClose() {
+    if (!dirty) {
+      cancel();
+      return;
+    }
+    confirm.ask({
+      title: "Discard changes?",
+      body: "Discard your unsaved changes to settings?",
+      confirmLabel: "Discard",
+      onConfirm: cancel,
+    });
+  }
+
+  // Escape closes from App.svelte's global handler; register so it asks this form
+  // (running the dirty guard) rather than closing the overlay blindly.
+  onMount(() => overlayClose.register(requestClose));
+  onDestroy(() => overlayClose.unregister(requestClose));
+
   // Hung off the lifecycle, not just the cancel button: Escape, the backdrop and
   // the ✕ all close the overlay too, and so does the overlay being swapped out
   // from under us. A preview must never outlive the form that started it.
@@ -162,15 +222,6 @@
     lazyLoadFor(id);
   }
 
-  const TABS = [
-    { id: "defaults", label: "Defaults" },
-    { id: "project", label: "Project defaults" },
-    { id: "notify", label: "Notify" },
-    { id: "brain", label: "Brain" },
-    { id: "coderabbit", label: "CodeRabbit" },
-    { id: "appearance", label: "Appearance" },
-  ];
-
   const AGENTS = ["claude", "codex", "opencode"];
 
   const inputCls =
@@ -188,6 +239,7 @@
   onMount(async () => {
     try {
       dto = { ...(await ConfigService.GetSettings()) };
+      markPristine(); // baseline for the dirty check, before any edit
     } catch (err) {
       loadError = String(err);
       store.setFlash(String(err), "bad");
@@ -202,6 +254,7 @@
   async function save() {
     if (!dto) return;
     saving = true;
+    saveErr = "";
     try {
       await ConfigService.SaveSettings({
         ...dto,
@@ -227,6 +280,7 @@
       store.setFlash("settings saved", "good");
       nav.closeOverlay();
     } catch (err) {
+      saveErr = String(err);
       store.setFlash(String(err), "bad");
     } finally {
       saving = false;
@@ -301,6 +355,9 @@
     try {
       await ConfigService.MigrateReview();
       dto = { ...(await ConfigService.GetSettings()) };
+      // The migrate already wrote config, so the reloaded DTO is the new baseline
+      // — not an unsaved edit the discard prompt should fire on.
+      markPristine();
       store.setFlash("migrated to review providers", "good");
     } catch (err) {
       store.setFlash(String(err), "bad");
@@ -365,7 +422,7 @@
   {/if}
 {/snippet}
 
-<Modal title="settings" onClose={cancel} width="640px">
+<Modal title="settings" onClose={requestClose} width="640px">
   {#if loading}
     <div class="py-10 text-center text-xs text-faint">loading settings…</div>
   {:else if loadError}
@@ -610,7 +667,7 @@
             {/each}
           </div>
         </section>
-      {:else}
+      {:else if tab === "review"}
         <div class="space-y-5">
           {#if d.reviewLegacy}
             <div class="rounded border border-warn/40 bg-warn/10 px-3 py-2 text-xs text-ink">
@@ -718,11 +775,27 @@
             </section>
           {/each}
 
+          <!-- Empty state. Without it a fresh config showed the Review tab as three
+               bare buttons with raw kind ids and no clue what a "provider" is. -->
+          {#if !d.reviewLegacy && providers().length === 0}
+            <div class="rounded border border-edge/60 px-3 py-3">
+              <p class="text-ink">No review pass configured.</p>
+              <p class="mt-1 text-[11px] text-faint">
+                A provider runs a QA pass over each pull request and routes its findings back — to the worker agent, the PR, or
+                the Linear issue. Add one below to turn reviews on.
+              </p>
+            </div>
+          {/if}
+
           {#if !d.reviewLegacy && missingKinds().length}
             <div class="flex flex-wrap items-center gap-2 border-t border-edge/40 pt-4">
               <span class="text-faint text-xs">Add provider:</span>
               {#each missingKinds() as k}
-                <button class="rounded border border-edge px-2 py-1 text-[11px] hover:border-accent" onclick={() => addProvider(k)}>{k}</button>
+                <button
+                  class="rounded border border-edge px-2 py-1 text-[11px] hover:border-accent"
+                  title={KIND_LABELS[k] ?? k}
+                  onclick={() => addProvider(k)}>{k}</button
+                >
               {/each}
             </div>
           {/if}
@@ -731,9 +804,24 @@
     </div>
   {/if}
 
+  <!-- The save error, inline and above the footer where it can't hide behind the
+       backdrop. A Go error can be long and multi-line, so it wraps rather than
+       truncating and stays selectable; dismissable, and cleared on the next save. -->
+  {#if saveErr}
+    <div class="mt-3 flex items-start gap-2 rounded border border-bad/40 bg-bad/10 px-3 py-2 text-xs text-bad">
+      <span class="min-w-0 flex-1 font-mono break-words whitespace-pre-wrap select-text">{saveErr}</span>
+      <button
+        type="button"
+        class="shrink-0 leading-none text-bad/70 hover:text-bad"
+        aria-label="dismiss error"
+        onclick={() => (saveErr = "")}>✕</button
+      >
+    </div>
+  {/if}
+
   {#snippet footer()}
     <div class="flex items-center justify-end gap-2">
-      <button class="rounded px-3 py-1 text-xs text-faint hover:text-ink" onclick={cancel}>cancel</button>
+      <button class="rounded px-3 py-1 text-xs text-faint hover:text-ink" onclick={requestClose}>cancel</button>
       <button
         class="rounded bg-accent-fill px-3 py-1 text-xs text-accent-ink hover:bg-accent-fill-hover disabled:opacity-40"
         onclick={save}

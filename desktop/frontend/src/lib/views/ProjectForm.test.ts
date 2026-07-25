@@ -1,5 +1,5 @@
 import { render, screen, fireEvent, waitFor, within, cleanup } from "@testing-library/svelte";
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // Mock the bindings (never a live daemon/Linear). vi.hoisted so the fns exist
 // when the hoisted vi.mock factories run.
@@ -45,6 +45,7 @@ vi.mock("@wailsio/runtime", () => ({
 
 import ProjectForm from "./ProjectForm.svelte";
 import { nav } from "$lib/nav.svelte";
+import { confirm } from "$lib/confirm.svelte";
 
 // A project that overrides post-create/env/blocked-label but inherits
 // symlinks/match-labels/match-mode from [defaults] — so one form exercises both
@@ -153,6 +154,7 @@ describe("ProjectForm", () => {
       { id: "team-uuid-2", key: "OPS", name: "Operations" },
     ]);
     teamMetaFn.mockReset().mockResolvedValue(meta);
+    confirm.cancel(); // the confirm store is a singleton — clear it between tests
     nav.overlayProject = "acme";
     nav.overlayTab = "";
   });
@@ -511,6 +513,98 @@ describe("ProjectForm", () => {
       await fireEvent.click(screen.getByRole("button", { name: /confirm|yes|remove/i }));
 
       await waitFor(() => expect(removeProject).toHaveBeenCalledWith("acme"));
+    });
+  });
+
+  // A mis-click on the big dim backdrop — or a stray Escape — after editing
+  // several tabs must not silently drop the edits. Every close path (backdrop, ✕,
+  // Escape, this cancel button) runs the same requestClose, so the footer cancel
+  // exercises the guard for all of them.
+  describe("unsaved-changes guard", () => {
+    afterEach(() => vi.restoreAllMocks());
+
+    it("closes a pristine form immediately, with no prompt", async () => {
+      render(ProjectForm);
+      await screen.findByLabelText("Path"); // fully loaded
+      const close = vi.spyOn(nav, "closeOverlay");
+
+      await fireEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
+
+      expect(close).toHaveBeenCalledTimes(1);
+      expect(confirm.request).toBeNull();
+    });
+
+    it("prompts before discarding an edited form and does NOT close until confirmed", async () => {
+      render(ProjectForm);
+      const label = await screen.findByLabelText("Label");
+      await fireEvent.input(label, { target: { value: "Acme Web" } });
+      const close = vi.spyOn(nav, "closeOverlay");
+
+      await fireEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
+
+      // The confirm dialog is up and the overlay is still open.
+      expect(confirm.request?.title).toBe("Discard changes?");
+      expect(confirm.request?.confirmLabel).toBe("Discard");
+      expect(close).not.toHaveBeenCalled();
+    });
+
+    it("closes once the discard is confirmed", async () => {
+      render(ProjectForm);
+      const label = await screen.findByLabelText("Label");
+      await fireEvent.input(label, { target: { value: "Acme Web" } });
+      const close = vi.spyOn(nav, "closeOverlay");
+
+      await fireEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
+      confirm.accept(); // the dialog's "Discard" button
+
+      expect(close).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not prompt when only the id was normalized back to the same value", async () => {
+      // Re-typing the label to what it already was leaves the DTO unchanged, so a
+      // close is instant — the guard keys off value, not focus.
+      getProject.mockResolvedValue({ ...sampleDto(), label: "Acme" });
+      render(ProjectForm);
+      const label = await screen.findByLabelText("Label");
+      await fireEvent.input(label, { target: { value: "Acme" } });
+      const close = vi.spyOn(nav, "closeOverlay");
+
+      await fireEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
+
+      expect(confirm.request).toBeNull();
+      expect(close).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // A failed save used to vanish into the footer flash behind this backdrop; it
+  // now stays visible inline until the next attempt.
+  describe("save errors", () => {
+    it("renders a rejected save inline and keeps the modal open", async () => {
+      saveProject.mockRejectedValueOnce(new Error("SaveProject: repo owner/name is invalid\n  (line 2)"));
+      render(ProjectForm);
+      await screen.findByLabelText("Path");
+      const close = vi.spyOn(nav, "closeOverlay");
+
+      await fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+
+      expect(await screen.findByText(/repo owner\/name is invalid/)).toBeInTheDocument();
+      expect(close).not.toHaveBeenCalled();
+      // Re-savable, not wedged on `saving`.
+      expect(screen.getByRole("button", { name: /^save$/i })).toBeEnabled();
+
+      vi.restoreAllMocks();
+    });
+
+    it("dismisses the inline error on request", async () => {
+      saveProject.mockRejectedValueOnce(new Error("boom"));
+      render(ProjectForm);
+      await screen.findByLabelText("Path");
+
+      await fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+      await screen.findByText(/boom/);
+      await fireEvent.click(screen.getByRole("button", { name: /dismiss error/i }));
+
+      expect(screen.queryByText(/boom/)).not.toBeInTheDocument();
     });
   });
 });

@@ -4,6 +4,7 @@
   import { isAttention, reactingText } from "$lib/theme";
   import StatusPill from "./StatusPill.svelte";
   import PrBadge from "./PrBadge.svelte";
+  import SessionsEmpty from "./SessionsEmpty.svelte";
 
   let { dense = false }: { dense?: boolean } = $props();
 
@@ -41,11 +42,11 @@
             {#if sel}<span class="font-bold text-accent-ink">›</span>
             {:else if isAttention(s.status) && s.status === "needs_input"}<span class="text-warn">!</span>{/if}
           </td>
-          <td class="py-1 pr-2 font-medium whitespace-nowrap" class:text-accent-ink={sel}>{s.issue || s.id.slice(0, 8)}</td>
+          <td class="selectable py-1 pr-2 font-medium whitespace-nowrap" class:text-accent-ink={sel}>{s.issue || s.id.slice(0, 8)}</td>
           {#if !dense}
-            <td class="max-w-[22rem] truncate py-1 pr-2 text-faint">{s.title}</td>
+            <td class="selectable max-w-[22rem] truncate py-1 pr-2 text-faint">{s.title}</td>
           {/if}
-          <td class="py-1 pr-2 whitespace-nowrap text-faint">{s.project}</td>
+          <td class="py-1 pr-2 whitespace-nowrap text-faint">{store.displayNameFor(s.project)}</td>
           <td class="py-1 pr-2"><StatusPill status={s.status} /></td>
           <td class="py-1 pr-2"><PrBadge session={s} /></td>
           {#if !dense}
@@ -58,6 +59,10 @@
   </table>
 
   {#if rows.length === 0}
-    <div class="px-3 py-6 text-center text-faint">no sessions observed</div>
+    <SessionsEmpty>
+      {#snippet idle()}
+        <div class="px-3 py-6 text-center text-faint">no sessions observed</div>
+      {/snippet}
+    </SessionsEmpty>
   {/if}
 </div>

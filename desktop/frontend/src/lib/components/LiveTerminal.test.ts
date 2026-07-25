@@ -50,6 +50,7 @@ const spies = vi.hoisted(() => {
     open: vi.fn(),
     fit: vi.fn(),
     refresh: vi.fn(),
+    attachKey: vi.fn(),
     clearTextureAtlas: vi.fn(),
     attach: vi.fn(async () => {}),
     detach: vi.fn(async () => {}),
@@ -68,6 +69,9 @@ vi.mock("@xterm/xterm", () => ({
     public open = spies.open;
     public onData = vi.fn();
     public onResize = vi.fn();
+    public focus = vi.fn();
+    // Captured so the Ctrl-Q escape-hatch tests can drive it directly.
+    public attachCustomKeyEventHandler = spies.attachKey;
     public refresh = spies.refresh;
     public write = vi.fn();
     public writeln = vi.fn();
@@ -180,6 +184,46 @@ describe("LiveTerminal font ordering", () => {
     // A fallback cell beats a terminal that rebuilds itself for nothing.
     expect(spies.familyWrites).toEqual([]);
     expect(spies.clearTextureAtlas).not.toHaveBeenCalled();
+  });
+
+  // A focused terminal forwards EVERY key to tmux, Escape included (agents use
+  // it), so Ctrl-Q is the only keyboard route back to the cockpit. The handler is
+  // registered unconditionally and gated on the prop inside, because `focused`
+  // flips without remounting this component.
+  describe("Ctrl-Q escape hatch", () => {
+    /** Boot a terminal and hand back the key handler it registered. */
+    async function bootWith(onEscapeFocus?: () => void) {
+      render(LiveTerminal, { props: { name: "s9", webgl: false, interactive: true, onEscapeFocus } });
+      gate.state.ready.settle(true);
+      await vi.waitFor(() => expect(spies.open).toHaveBeenCalledTimes(1));
+      return spies.attachKey.mock.calls[0][0] as (e: KeyboardEvent) => boolean;
+    }
+
+    const ctrlQ = () =>
+      ({ type: "keydown", ctrlKey: true, metaKey: false, altKey: false, key: "q", preventDefault: vi.fn() }) as unknown as KeyboardEvent;
+
+    it("swallows Ctrl-Q and calls back instead of forwarding it to tmux", async () => {
+      const onEscapeFocus = vi.fn();
+      const handler = await bootWith(onEscapeFocus);
+      expect(handler(ctrlQ())).toBe(false);
+      expect(onEscapeFocus).toHaveBeenCalledOnce();
+    });
+
+    it("forwards Ctrl-Q normally when there is no focus to leave", async () => {
+      const handler = await bootWith(undefined);
+      expect(handler(ctrlQ())).toBe(true);
+    });
+
+    it("forwards every other key, including a bare Escape the agent needs", async () => {
+      const onEscapeFocus = vi.fn();
+      const handler = await bootWith(onEscapeFocus);
+      const esc = { type: "keydown", ctrlKey: false, metaKey: false, altKey: false, key: "Escape", preventDefault: vi.fn() };
+      expect(handler(esc as unknown as KeyboardEvent)).toBe(true);
+      // ⌘Q is macOS "quit app" — never our chord.
+      const cmdQ = { type: "keydown", ctrlKey: false, metaKey: true, altKey: false, key: "q", preventDefault: vi.fn() };
+      expect(handler(cmdQ as unknown as KeyboardEvent)).toBe(true);
+      expect(onEscapeFocus).not.toHaveBeenCalled();
+    });
   });
 
   it("never attaches when unmounted during the font wait", async () => {

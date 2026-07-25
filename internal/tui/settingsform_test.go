@@ -158,12 +158,15 @@ func TestSettingsFormTabsFilterFields(t *testing.T) {
 	}
 
 	// shift+tab back, then wrap backwards past the first tab onto the last.
+	// Derived from settingsTabs rather than named, so adding a tab doesn't break
+	// a test about WRAPPING.
+	lastTab := settingsTabs[len(settingsTabs)-1].tab
 	_, _ = f.update(shiftTabKey())
 	if f.tab != stDefaults {
 		t.Fatalf("shift+tab must go back to Defaults, got %v", f.tab)
 	}
 	_, _ = f.update(shiftTabKey())
-	if f.tab != stCodeRabbit {
+	if f.tab != lastTab {
 		t.Fatalf("shift+tab must wrap onto the last tab, got %v", f.tab)
 	}
 	// right/left are aliases, and wrap forwards off the last tab.
@@ -172,7 +175,7 @@ func TestSettingsFormTabsFilterFields(t *testing.T) {
 		t.Fatalf("right must wrap onto the first tab, got %v", f.tab)
 	}
 	_, _ = f.update(keyMsg("left"))
-	if f.tab != stCodeRabbit {
+	if f.tab != lastTab {
 		t.Fatalf("left must wrap back onto the last tab, got %v", f.tab)
 	}
 
@@ -331,9 +334,54 @@ func TestSettingsFormListSubEditor(t *testing.T) {
 	if _, ev := f.update(keyMsg("esc")); ev != settingsFormNone || f.editing {
 		t.Fatalf("esc must close the list, not cancel the form (ev=%v editing=%v)", ev, f.editing)
 	}
-	// esc again, now in field navigation, does cancel.
+	// esc again, now in field navigation. The list edits above made the form
+	// dirty, so it ASKS instead of throwing them away.
+	if _, ev := f.update(keyMsg("esc")); ev != settingsFormNone || !f.confirmDiscard {
+		t.Fatalf("esc on a dirty form must ask before discarding (ev=%v confirm=%v)", ev, f.confirmDiscard)
+	}
+	if _, ev := f.update(keyMsg("y")); ev != settingsFormCancel {
+		t.Errorf("y at the discard prompt must cancel, got %v", ev)
+	}
+}
+
+// The unsaved-changes guard: a form nobody typed into closes instantly, a dirty
+// one asks first, and answering "n" keeps every edit.
+func TestSettingsFormDiscardGuard(t *testing.T) {
+	m := newTestRoot(t)
+
+	// Clean form: esc cancels straight away, no prompt.
+	f := newSettingsForm(m.cfgPath, m.cfg)
+	if f.dirty() {
+		t.Fatal("a freshly opened form must not be dirty")
+	}
 	if _, ev := f.update(keyMsg("esc")); ev != settingsFormCancel {
-		t.Errorf("esc in field navigation must cancel, got %v", ev)
+		t.Fatalf("esc on a clean form must cancel outright, got %v", ev)
+	}
+
+	// Dirty form: esc asks; "n" keeps editing AND keeps the edit.
+	f = newSettingsForm(m.cfgPath, m.cfg)
+	focusField(t, f, "global_cap")
+	_, _ = f.update(keyMsg("9"))
+	if !f.dirty() {
+		t.Fatal("typing into a field must mark the form dirty")
+	}
+	if _, ev := f.update(keyMsg("esc")); ev != settingsFormNone || !f.confirmDiscard {
+		t.Fatalf("esc on a dirty form must arm the prompt (ev=%v confirm=%v)", ev, f.confirmDiscard)
+	}
+	if _, ev := f.update(keyMsg("n")); ev != settingsFormNone {
+		t.Fatalf("n must keep editing, got %v", ev)
+	}
+	if f.confirmDiscard {
+		t.Error("n must dismiss the prompt")
+	}
+	if !strings.Contains(f.field("global_cap").text, "9") {
+		t.Errorf("n must keep the edit, got %q", f.field("global_cap").text)
+	}
+
+	// The prompt is rendered, so the user knows what the y/n is for.
+	f.confirmDiscard = true
+	if out := f.view(); !strings.Contains(out, "unsaved changes") {
+		t.Errorf("the discard prompt must be visible:\n%s", out)
 	}
 }
 
@@ -608,6 +656,55 @@ func TestSettingsFormAgentPickerCyclesAndSaves(t *testing.T) {
 	if out := f.view(); !strings.Contains(out, "Coding agent") || !strings.Contains(out, "codex") {
 		t.Errorf("agent picker must render its label and value:\n%s", out)
 	}
+}
+
+// The Appearance tab writes [ui].theme, and the TUI paints from it. Before this
+// tab existed the flavor was reachable only from the desktop app, so a TUI-only
+// user had no way to change a palette the TUI nonetheless obeys.
+func TestSettingsFormThemePicksFlavorAndSaves(t *testing.T) {
+	m := newTestRoot(t)
+	f := newSettingsForm(m.cfgPath, m.cfg)
+
+	tf := f.field("ui_theme")
+	if tf == nil {
+		t.Fatal("ui_theme field missing from the Appearance tab")
+	}
+	if tf.tab != stAppearance {
+		t.Errorf("ui_theme must live on the Appearance tab, got %v", tf.tab)
+	}
+	if tf.kind != sfEnum {
+		t.Errorf("ui_theme must be a cycle field, got kind %v", tf.kind)
+	}
+	// Prefilled with the EFFECTIVE theme, never "" — an unset config still has a
+	// flavor it is actually painting in.
+	if tf.text != config.DefaultUITheme {
+		t.Errorf("ui_theme prefill = %q, want %q", tf.text, config.DefaultUITheme)
+	}
+	if !slices.Equal(tf.options, config.UIThemes) {
+		t.Errorf("ui_theme options = %v, want config.UIThemes %v", tf.options, config.UIThemes)
+	}
+
+	tf.text = "catppuccin-latte"
+	if ev := f.save(); ev != settingsFormSaved {
+		t.Fatalf("save = %v, err=%q", ev, f.err)
+	}
+	reloaded, err := config.Load(m.cfgPath)
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if reloaded.UITheme() != "catppuccin-latte" {
+		t.Errorf("[ui].theme = %q, want catppuccin-latte", reloaded.UITheme())
+	}
+
+	// And the palette actually follows it: latte is the light flavor, so the
+	// canvas must not still be a dark one.
+	dark := colCanvas
+	applyTheme(reloaded.UITheme())
+	light := colCanvas
+	if light == dark {
+		t.Errorf("applyTheme did not repaint the canvas (still %q)", light)
+	}
+	applyTheme(config.DefaultUITheme) // restore for the rest of the package
 }
 
 // Selecting the effective default (claude) persists as an empty value so the

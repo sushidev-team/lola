@@ -83,6 +83,8 @@ vi.mock("$lib/store.svelte", () => ({ store: { setFlash } }));
 vi.mock("$lib/nav.svelte", () => ({ nav: { closeOverlay, overlayTab: "" } }));
 
 import SettingsForm from "./SettingsForm.svelte";
+import { nav } from "$lib/nav.svelte"; // the mock above — used to drive overlayTab
+import { confirm } from "$lib/confirm.svelte"; // the real singleton — the guard uses it
 // The real appearance store, not a mock: the preview's whole job is to repaint
 // the document, and asserting on `data-theme` proves it actually happened
 // rather than that a spy was called.
@@ -107,6 +109,7 @@ describe("SettingsForm", () => {
     TeamMeta.mockReset();
     setFlash.mockReset();
     closeOverlay.mockReset();
+    confirm.cancel(); // the confirm store is a singleton — clear it between tests
     // `appearance` is a module singleton, so a preview would otherwise leak into
     // the next test. Reset it to the persisted-default state the app boots in.
     appearance.id = DEFAULT_THEME_ID;
@@ -125,15 +128,31 @@ describe("SettingsForm", () => {
   it("tabs the sections instead of stacking them", async () => {
     render(SettingsForm);
     await screen.findByDisplayValue("60s");
-    for (const t of ["Defaults", "Project defaults", "Notify", "Brain", "CodeRabbit", "Appearance"]) {
+    // The provider-catalog tab is "Review", not "CodeRabbit": it holds every
+    // [[review.provider]] kind, claude-session included.
+    for (const t of ["Defaults", "Project defaults", "Notify", "Brain", "Review", "Appearance"]) {
       expect(screen.getByRole("tab", { name: t })).toBeInTheDocument();
     }
     // Off-tab content isn't mounted…
-    expect(screen.queryByText("CodeRabbit watch")).not.toBeInTheDocument();
-    // …until its tab is picked.
-    await fireEvent.click(screen.getByRole("tab", { name: "CodeRabbit" }));
-    expect(screen.getByText("CodeRabbit review")).toBeInTheDocument();
-    expect(screen.getByText("CodeRabbit watch")).toBeInTheDocument();
+    expect(screen.queryByText("No review pass configured.")).not.toBeInTheDocument();
+    // …until its tab is picked. This DTO has no [[review.provider]] entries, so
+    // the tab must explain itself rather than showing three bare kind buttons.
+    await fireEvent.click(screen.getByRole("tab", { name: "Review" }));
+    expect(screen.getByText("No review pass configured.")).toBeInTheDocument();
+    for (const k of ["coderabbit-cli", "coderabbit-watch", "claude-session"]) {
+      expect(screen.getByRole("button", { name: k })).toBeInTheDocument();
+    }
+  });
+
+  it("clamps an unknown deep-linked tab id to Defaults instead of a blank pane", async () => {
+    nav.overlayTab = "nope";
+    try {
+      render(SettingsForm);
+      expect(await screen.findByDisplayValue("60s")).toBeInTheDocument();
+      expect(screen.getByRole("tab", { name: "Defaults" })).toHaveAttribute("aria-selected", "true");
+    } finally {
+      nav.overlayTab = "";
+    }
   });
 
   it("offers workspace-label pickers for all three [defaults] label keys", async () => {
@@ -421,6 +440,73 @@ describe("SettingsForm", () => {
       expect(block, "config.UIThemes not found in internal/config/ui.go").not.toBeNull();
       const goIds = [...block![1].matchAll(/"([^"]+)"/g)].map((m) => m[1]);
       expect(goIds.slice().sort()).toEqual(THEME_IDS.slice().sort());
+    });
+  });
+
+  // A mis-click on the dim backdrop — or a stray Escape — after editing across
+  // tabs must not silently drop the edits. All four close paths (backdrop, ✕,
+  // Escape, this cancel button) run one requestClose, so the footer cancel stands
+  // in for them. Dirty is keyed off the DTO; a theme-only preview is not counted
+  // (it reverts on close on its own — see the appearance tests above).
+  describe("unsaved-changes guard", () => {
+    it("closes a pristine form immediately, with no prompt", async () => {
+      render(SettingsForm);
+      await screen.findByDisplayValue("60s"); // fully loaded
+
+      await fireEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
+
+      expect(closeOverlay).toHaveBeenCalledTimes(1);
+      expect(confirm.request).toBeNull();
+    });
+
+    it("prompts before discarding an edited form and does NOT close until confirmed", async () => {
+      render(SettingsForm);
+      const poll = await screen.findByDisplayValue("60s");
+      await fireEvent.input(poll, { target: { value: "30s" } });
+
+      await fireEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
+
+      expect(confirm.request?.title).toBe("Discard changes?");
+      expect(confirm.request?.confirmLabel).toBe("Discard");
+      expect(closeOverlay).not.toHaveBeenCalled();
+    });
+
+    it("closes once the discard is confirmed", async () => {
+      render(SettingsForm);
+      const poll = await screen.findByDisplayValue("60s");
+      await fireEvent.input(poll, { target: { value: "30s" } });
+
+      await fireEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
+      confirm.accept(); // the dialog's "Discard" button
+
+      expect(closeOverlay).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // A failed save used to vanish into the footer flash behind this backdrop; it
+  // now stays visible inline until the next attempt.
+  describe("save errors", () => {
+    it("renders a rejected save inline and keeps the modal open", async () => {
+      SaveSettings.mockRejectedValueOnce(new Error("SaveSettings: poll_interval is not a duration\n  (check [defaults])"));
+      render(SettingsForm);
+      await screen.findByDisplayValue("60s");
+
+      await fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+
+      expect(await screen.findByText(/poll_interval is not a duration/)).toBeInTheDocument();
+      expect(closeOverlay).not.toHaveBeenCalled();
+    });
+
+    it("dismisses the inline error on request", async () => {
+      SaveSettings.mockRejectedValueOnce(new Error("boom"));
+      render(SettingsForm);
+      await screen.findByDisplayValue("60s");
+
+      await fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+      await screen.findByText(/boom/);
+      await fireEvent.click(screen.getByRole("button", { name: /dismiss error/i }));
+
+      expect(screen.queryByText(/boom/)).not.toBeInTheDocument();
     });
   });
 });

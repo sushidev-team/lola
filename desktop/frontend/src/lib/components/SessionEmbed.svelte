@@ -64,17 +64,21 @@
   <div class="flex h-full min-h-0 flex-col">
     <!-- header — z-10 keeps the minimize/focus button above the canvas layer. -->
     <div class="relative z-10 flex flex-wrap items-center gap-2 border-b border-edge/60 px-3 py-1.5 text-xs">
-      <span class="font-semibold text-accent-ink">{session.issue || session.id.slice(0, 8)}</span>
-      <span class="truncate text-faint">{session.title}</span>
+      <span class="selectable font-semibold text-accent-ink">{session.issue || session.id.slice(0, 8)}</span>
+      <span class="selectable truncate text-faint">{session.title}</span>
       <span class="text-edge">·</span>
-      <span class="text-faint">{session.project}</span>
+      <span class="text-faint">{store.displayNameFor(session.project)}</span>
       <StatusPill status={session.status} />
-      {#if session.branch}<span class="font-mono text-[11px] text-faint">{session.branch}</span>{/if}
+      {#if session.branch}<span class="selectable font-mono text-[11px] text-faint">{session.branch}</span>{/if}
       <span class="ml-auto flex items-center gap-1.5">
         {#if focused}
+          <!-- The chord is spelled out, not just tooltipped: while this terminal
+               has focus every other key goes to the agent, so this is the only
+               way back to the cockpit without reaching for the mouse. -->
+          <span class="text-[10px] text-faint">⌃Q back</span>
           <button
             class="rounded bg-accent-fill px-2.5 py-[2px] font-medium text-accent-ink hover:bg-accent-fill-hover"
-            title="exit fullscreen"
+            title="exit fullscreen (Ctrl-Q)"
             onclick={() => nav.toggleFocusTerm(session.id)}>⤢ minimize</button
           >
         {:else}
@@ -145,6 +149,7 @@
             interactive
             autofocus={activeIsShell || focused}
             onExit={activeIsShell ? () => terms.shellExited(session.id, activeName) : undefined}
+            onEscapeFocus={focused ? () => nav.toggleFocusTerm(session.id) : undefined}
           />
         {/key}
       {:else}
@@ -163,9 +168,9 @@
         <button class="rounded px-2 py-[1px] text-info hover:text-accent-ink" onclick={() => store.revive(session.id)}>revive</button>
       {/if}
       <span class="ml-auto">
-        <!-- Opens the shared KillConfirm dialog (App.svelte) rather than an inline
+        <!-- Opens the shared confirm dialog (App.svelte) rather than an inline
              yes/no, so the 'x' shortcut and this button confirm the same way. -->
-        <button class="rounded px-2 py-[1px] text-faint hover:text-bad" onclick={() => nav.confirmKill(session.id)}>kill</button>
+        <button class="rounded px-2 py-[1px] text-faint hover:text-bad" onclick={() => store.askKill(session.id)}>kill</button>
       </span>
     </div>
   </div>

@@ -900,3 +900,113 @@ func TestFormRejectsUnsluggableID(t *testing.T) {
 		t.Errorf("errs = %v, want the id requirement", f.errs)
 	}
 }
+
+// The unsaved-changes guard. A multi-tab project form is a lot of work to lose
+// to one keystroke, so esc on a dirty form asks first; a form nobody touched
+// still closes instantly.
+func TestFormDiscardGuard(t *testing.T) {
+	projects := []config.Project{{Name: "web", Path: "/tmp/web", Repo: "acme/web"}}
+
+	// Clean form: esc cancels outright.
+	f, _ := newFormOn(t, projects, "web")
+	if f.dirty() {
+		t.Fatal("a freshly opened form must not be dirty")
+	}
+	if _, ev := f.update(keyMsg("esc")); ev != formCancel {
+		t.Fatalf("esc on a clean form must cancel outright, got %v", ev)
+	}
+
+	// Dirty form: esc asks instead of discarding.
+	f, _ = newFormOn(t, projects, "web")
+	f.cursor = slices.Index(f.fields(), fName)
+	_, _ = f.update(keyMsg("x"))
+	if !f.dirty() {
+		t.Fatal("typing into a field must mark the form dirty")
+	}
+	if _, ev := f.update(keyMsg("esc")); ev != formNone || !f.confirmDiscard {
+		t.Fatalf("esc on a dirty form must arm the prompt (ev=%v confirm=%v)", ev, f.confirmDiscard)
+	}
+	if out := f.view(24); !strings.Contains(stripANSI(out), "unsaved changes") {
+		t.Errorf("the discard prompt must be visible:\n%s", out)
+	}
+	// "n" keeps editing and keeps the edit.
+	if _, ev := f.update(keyMsg("n")); ev != formNone || f.confirmDiscard {
+		t.Fatalf("n must dismiss the prompt and keep editing (ev=%v confirm=%v)", ev, f.confirmDiscard)
+	}
+	if !f.dirty() {
+		t.Error("n must keep the edits")
+	}
+	// "y" discards.
+	_, _ = f.update(keyMsg("esc"))
+	if _, ev := f.update(keyMsg("y")); ev != formCancel {
+		t.Errorf("y at the discard prompt must cancel, got %v", ev)
+	}
+}
+
+// An ASYNC fill (repo auto-detection, arriving Linear metadata) is not a human
+// edit — it must not make an untouched form ask about "unsaved changes".
+func TestFormAsyncFillDoesNotArmDiscardPrompt(t *testing.T) {
+	f, _ := newFormOn(t, []config.Project{{Name: "web", Path: "/tmp/web"}}, "web")
+
+	// The detection lands and fills the still-empty repo field.
+	_, _ = f.update(repoDetectedMsg{path: "/tmp/web", repo: "acme/web"})
+	if f.poll.Repo != "acme/web" {
+		t.Fatalf("repo detection did not fill the field, got %q", f.poll.Repo)
+	}
+	if f.dirty() {
+		t.Error("an auto-detected repo must not count as a human edit")
+	}
+	if _, ev := f.update(keyMsg("esc")); ev != formCancel {
+		t.Errorf("esc must still cancel outright after an async fill, got %v", ev)
+	}
+}
+
+// A failed save can be caused by a field on a tab the user is not looking at.
+// The strip flags the offending tab so the error list isn't naming a field with
+// no clue where to find it.
+func TestFormTabStripFlagsTabsCarryingErrors(t *testing.T) {
+	f, _ := newNativeTestForm(t, nil) // a new project: id and path both empty
+
+	// Move off the Repo tab, so the flag has to be visible from elsewhere.
+	f.tab = tabFilter
+	if strings.Contains(stripANSI(f.tabStrip()), "Repo!") {
+		t.Fatal("nothing is flagged before a save is attempted")
+	}
+
+	if _, ev := f.save(); ev != formNone {
+		t.Fatalf("save must fail on an empty new project, got %v", ev)
+	}
+	if len(f.errs) == 0 {
+		t.Fatal("save must report validation errors")
+	}
+	strip := stripANSI(f.tabStrip())
+	if !strings.Contains(strip, "Repo!") {
+		t.Errorf("the Repo tab must be flagged — id/path live there:\n%s", strip)
+	}
+	if strings.Contains(strip, "Filter!") {
+		t.Errorf("a tab with no failing field must not be flagged:\n%s", strip)
+	}
+
+	// A later, clean save clears the flags rather than leaving them stuck.
+	f.errs, f.errTabs = nil, nil
+	if strings.Contains(stripANSI(f.tabStrip()), "!") {
+		t.Error("flags must clear once the errors are gone")
+	}
+}
+
+// left/right switch sections too, matching the settings form — arrow-based tab
+// switching used to work in one of the two forms only.
+func TestFormArrowKeysSwitchTabs(t *testing.T) {
+	f, _ := newFormOn(t, []config.Project{{Name: "web", Path: "/tmp/web"}}, "web")
+	if f.tab != tabRepo {
+		t.Fatalf("form must open on Repo, got %v", f.tab)
+	}
+	_, _ = f.update(keyMsg("right"))
+	if f.tab != tabFilter {
+		t.Errorf("right must advance the tab, got %v", f.tab)
+	}
+	_, _ = f.update(keyMsg("left"))
+	if f.tab != tabRepo {
+		t.Errorf("left must go back, got %v", f.tab)
+	}
+}

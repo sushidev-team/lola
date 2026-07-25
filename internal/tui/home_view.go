@@ -160,8 +160,10 @@ func homeAttention(info protocol.ProjectInfo) string {
 func (m *rootModel) homeMessage(w int) string {
 	h := &m.home
 	switch {
+	case h.confirmStop:
+		return previewLine(warnText.Render(fmt.Sprintf("stop polling for %q? (the project stays in config) (y/n)", m.projLabel(h.stopTarget))), w)
 	case h.confirmRemove:
-		return previewLine(warnText.Render(fmt.Sprintf("remove project %q from config? (y/n)", h.removeTarget)), w)
+		return previewLine(badText.Render(fmt.Sprintf("REMOVE project %q from config? (y/n)", m.projLabel(h.removeTarget))), w)
 	case h.adding:
 		return previewLine(warnText.Render("new project name: ")+h.addInput+"_"+faintText.Render("  · enter create · esc cancel"), w)
 	case h.flash != "":
@@ -186,10 +188,14 @@ func (m *rootModel) homeKeybar(w int) string {
 		return previewLine(faintText.Render("type to filter · enter apply · esc clear"), w)
 	case h.adding:
 		return previewLine(faintText.Render("type a name · enter create · esc cancel"), w)
+	case h.confirmStop:
+		return previewLine(warnText.Render("y")+faintText.Render(" stop polling · ")+warnText.Render("n")+faintText.Render(" cancel"), w)
 	case h.confirmRemove:
-		return previewLine(warnText.Render("y")+faintText.Render(" remove · ")+warnText.Render("n")+faintText.Render(" cancel"), w)
+		return previewLine(badText.Render("y")+faintText.Render(" remove from config · ")+warnText.Render("n")+faintText.Render(" cancel"), w)
 	}
-	keys := []string{"↑↓ move", "enter open", "a add", "e edit", "space poll", "x remove", "/ filter", "esc back"}
+	// 'x' stops polling and 'X' removes, matching the cockpit rail — the two used
+	// to be the same key with different meanings on the two project lists.
+	keys := []string{"↑↓ move", "enter open", "s sessions", "n add", "e edit", "space poll", "x stop", "X remove", "/ filter", "esc back"}
 	keys = append(keys, "S settings")
 	if m.manageDaemon() && m.home.data == nil {
 		keys = append(keys, "^r start daemon") // urgent while the daemon is down

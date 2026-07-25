@@ -24,13 +24,24 @@ import (
 
 var errDaemonDown = errors.New("daemon not running (start with: lola run)")
 
+// Palette-derived text styles, rebuilt by rebuildClientStyles whenever the theme
+// changes (see theme.go). Declared bare so applyTheme's palette repaint is the
+// single source of their colors.
 var (
-	tblHeader = lipgloss.NewStyle().Foreground(lipgloss.Color(colFaint)) // muted uppercase column heads
-	badText   = lipgloss.NewStyle().Foreground(lipgloss.Color(colBad))
-	goodText  = lipgloss.NewStyle().Foreground(lipgloss.Color(colGood))
-	warnText  = lipgloss.NewStyle().Foreground(lipgloss.Color(colWarn))
-	faintText = lipgloss.NewStyle().Foreground(lipgloss.Color(colFaint))
+	tblHeader lipgloss.Style // muted uppercase column heads
+	badText   lipgloss.Style
+	goodText  lipgloss.Style
+	warnText  lipgloss.Style
+	faintText lipgloss.Style
 )
+
+func rebuildClientStyles() {
+	tblHeader = lipgloss.NewStyle().Foreground(lipgloss.Color(colFaint))
+	badText = lipgloss.NewStyle().Foreground(lipgloss.Color(colBad))
+	goodText = lipgloss.NewStyle().Foreground(lipgloss.Color(colGood))
+	warnText = lipgloss.NewStyle().Foreground(lipgloss.Color(colWarn))
+	faintText = lipgloss.NewStyle().Foreground(lipgloss.Color(colFaint))
+}
 
 func socketPath() (string, error) {
 	home, err := config.Home()

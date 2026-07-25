@@ -26,8 +26,6 @@ class Nav {
   lens = $state<Lens>("list");
   /** The session whose live terminal is expanded/focused ("" = none). */
   focusedTerm = $state<string>("");
-  /** Session id awaiting a kill confirmation ("" = no dialog open). */
-  killTarget = $state<string>("");
 
   goCockpit(scopeProject = "") {
     this.view = "cockpit";
@@ -69,19 +67,24 @@ class Nav {
   select(id: string) {
     this.selectedId = id;
   }
+  /**
+   * Switch lens. Always go through here rather than assigning `lens`: the grid
+   * lens renders NO detail panel, so a `focusedTerm` surviving into it would
+   * leave the app with no mounted terminal to own the keyboard — and the global
+   * key handler bails out early while `focusedTerm` is set, wedging every
+   * shortcut including the one that would clear it.
+   */
+  setLens(l: Lens) {
+    this.lens = l;
+    if (l === "grid") this.focusedTerm = "";
+  }
   cycleLens() {
-    this.lens = this.lens === "list" ? "kanban" : this.lens === "kanban" ? "grid" : "list";
+    this.setLens(this.lens === "list" ? "kanban" : this.lens === "kanban" ? "grid" : "list");
   }
   toggleFocusTerm(id: string) {
+    // Focusing from the grid has to leave it first — see setLens.
+    if (this.lens === "grid") this.lens = "list";
     this.focusedTerm = this.focusedTerm === id ? "" : id;
-  }
-  /** Open the kill-confirmation dialog for a session. */
-  confirmKill(id: string) {
-    this.killTarget = id;
-  }
-  /** Dismiss the kill-confirmation dialog. */
-  cancelKill() {
-    this.killTarget = "";
   }
 }
 

@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os/exec"
 	"strings"
 	"time"
 
@@ -40,13 +39,25 @@ const (
 	viewKanban
 )
 
+// Palette-derived session styles, rebuilt by rebuildSessionStyles on a theme
+// change (see theme.go). Declared bare; applyTheme owns their colors. The dead
+// pill keeps a near-white foreground regardless of flavor — it is the one status
+// that must shout on a solid alarm fill.
 var (
-	statusBlue   = lipgloss.NewStyle().Foreground(lipgloss.Color(colBlue))
+	statusBlue   lipgloss.Style
+	statusOrange lipgloss.Style
+	statusDeadBg lipgloss.Style
+	srcNative    lipgloss.Style
+	prLineStyle  lipgloss.Style
+)
+
+func rebuildSessionStyles() {
+	statusBlue = lipgloss.NewStyle().Foreground(lipgloss.Color(colBlue))
 	statusOrange = lipgloss.NewStyle().Foreground(lipgloss.Color(colOrange))
 	statusDeadBg = lipgloss.NewStyle().Foreground(lipgloss.Color("#f4f4f4")).Background(lipgloss.Color(colBad))
-	srcNative    = lipgloss.NewStyle().Foreground(lipgloss.Color(colAccent))
-	prLineStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(colMagenta))
-)
+	srcNative = lipgloss.NewStyle().Foreground(lipgloss.Color(colAccent))
+	prLineStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(colMagenta))
+}
 
 // statusStyle maps a derived session status (scm.DeriveStatus / AO attention
 // states / native runtime states) to its display style: working=blue,
@@ -847,19 +858,17 @@ func (m *rootModel) jumpNeedsInput(dir int) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// openSelectedPR opens the selected session's PR in the default browser,
-// best-effort (macOS /usr/bin/open; failures only flash).
+// openSelectedPR opens the selected session's PR in the default browser via the
+// daemon's openURL command — the SAME path the PR/ticket pickers use. It used to
+// exec /usr/bin/open directly and discard the error, so a failure was completely
+// silent and the key did nothing at all off macOS.
 func (m *rootModel) openSelectedPR() tea.Cmd {
 	sel := m.sessions.selected()
 	if sel == nil || sel.PRURL == "" {
-		m.sessions.flash = "no PR for this session"
+		m.sessions.flash, m.sessions.flashGood = "no PR for this session", false
 		return nil
 	}
-	url := sel.PRURL
-	return func() tea.Msg {
-		_ = exec.Command("/usr/bin/open", url).Start()
-		return nil
-	}
+	return openURLCmd(sel.PRURL)
 }
 
 // ---- view ----

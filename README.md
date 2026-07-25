@@ -701,9 +701,15 @@ without `[tmux]` always validates.
 ### `[ui]` (optional)
 
 **Appearance only** — nothing the daemon does reads this table, so omitting it
-is zero behavior change. One identifier drives all of lola-desktop's color: the
-app chrome, the embedded terminals, and the ANSI palette the session grid
-renders pane snapshots with.
+is zero behavior change. One identifier drives the color of **both** surfaces:
+lola-desktop's app chrome, its embedded terminals and the ANSI palette its
+session grid renders pane snapshots with, *and* the TUI cockpit. The two derive
+their semantic colors from the same flavor with the same contrast math, so they
+match — and picking the light flavor (`catppuccin-latte`) lightens the TUI too.
+
+Set it from either surface: the app's **Appearance** settings tab (which
+previews a flavor as you move through the list) or the TUI's `S` → **Appearance**
+tab (which repaints on save). Both write the same key.
 
 | Key | Type | Description |
 | --- | --- | --- |

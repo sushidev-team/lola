@@ -34,6 +34,15 @@ type homeModel struct {
 	adding   bool // inline "new project" name prompt
 	addInput string
 
+	// Two separate confirmations, because the two actions are not the same kind
+	// of thing: stopping polling is reversible from the project form, removing
+	// drops the [[project]] from config. They used to share the key 'x' with the
+	// cockpit rail — where 'x' means STOP POLLING — so the same keystroke on two
+	// screens listing the same projects did the reversible thing in one place and
+	// the destructive one in the other. Now 'x' stops polling on both and the
+	// destructive action is the shifted 'X'.
+	confirmStop   bool
+	stopTarget    string
 	confirmRemove bool
 	removeTarget  string
 
@@ -170,6 +179,13 @@ func (m *rootModel) updateHome(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if h.adding {
 		return m.updateHomeAdd(k)
 	}
+	if h.confirmStop {
+		h.confirmStop = false
+		if s := k.String(); s == "y" || s == "Y" {
+			return m, m.stopPolling(h.stopTarget)
+		}
+		return m, nil
+	}
 	if h.confirmRemove {
 		h.confirmRemove = false
 		if s := k.String(); s == "y" || s == "Y" {
@@ -223,7 +239,23 @@ func (m *rootModel) updateHome(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.form = f
 			return m, cmd
 		}
+	case "n":
+		// Alias of 'a'. The cockpit rail creates a project with 'n' and this
+		// screen used to accept only 'a', so the same action needed two different
+		// keys depending on which project list you were looking at.
+		h.adding, h.addInput = true, ""
 	case "x":
+		// Stop polling — same meaning as 'x' on the cockpit rail.
+		if p := h.selectedProject(m.cfg); p != nil {
+			if !p.Polls() {
+				h.flash, h.flashGood = p.DisplayName()+" does not poll — nothing to stop", false
+				return m, nil
+			}
+			h.confirmStop, h.stopTarget = true, p.Name
+		}
+	case "X":
+		// Remove the [[project]] from config. Shifted because it is the
+		// destructive one; 'x' next to it merely stops polling.
 		if p := h.selectedProject(m.cfg); p != nil {
 			h.confirmRemove, h.removeTarget = true, p.Name
 		}
@@ -340,6 +372,33 @@ func (m *rootModel) addProject(name string) tea.Cmd {
 	m.form = f
 	m.home.selName = name
 	return cmd
+}
+
+// stopPolling zeroes a project's polling config, leaving the [[project]] itself
+// in place (its worktrees / PRs stay reachable). This is the home screen's 'x',
+// the same action the cockpit rail's 'x' performs through deleteSelected — kept
+// as its own function because home selects by name while the rail selects by
+// cursor, and the two screens flash into different places.
+func (m *rootModel) stopPolling(name string) tea.Cmd {
+	// Re-read config first: the daemon (enable/disable) may have persisted
+	// changes since our snapshot, and saving the stale copy would revert them.
+	m.reloadConfig()
+	pr := m.cfg.ProjectByName(name)
+	if pr == nil {
+		m.home.flash, m.home.flashGood = "project already gone", false
+		return bestEffortReloadCmd
+	}
+	if !pr.Polls() {
+		m.home.flash, m.home.flashGood = "polling already off", false
+		return bestEffortReloadCmd
+	}
+	clearPolling(pr)
+	if err := m.cfg.Save(m.cfgPath); err != nil {
+		m.home.flash, m.home.flashGood = "save failed: "+err.Error(), false
+		return nil
+	}
+	m.home.flash, m.home.flashGood = "polling stopped for "+m.cfg.DisplayNameFor(name), true
+	return bestEffortReloadCmd
 }
 
 // removeProject drops a [[project]] and its nested polls from config. A live

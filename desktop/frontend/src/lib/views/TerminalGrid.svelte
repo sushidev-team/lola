@@ -2,8 +2,10 @@
   import { onMount, onDestroy } from "svelte";
   import { store, scopedSessions } from "$lib/store.svelte";
   import { nav } from "$lib/nav.svelte";
+  import { statusLabel } from "$lib/theme";
   import { TermService } from "@bindings/desktop";
   import SnapshotTile from "$lib/components/SnapshotTile.svelte";
+  import SessionsEmpty from "$lib/components/SessionsEmpty.svelte";
   import StatusPill from "$lib/components/StatusPill.svelte";
 
   // Reads the store directly (leaf component) — the Cockpit view can't pass live
@@ -17,7 +19,7 @@
   // the fullscreen terminal) and focuses the session. Focus is a CSS state on that
   // detail terminal, not a separate mount — see SessionsColumn.svelte.
   function openTile(id: string) {
-    nav.lens = "list";
+    nav.setLens("list");
     nav.select(id);
     nav.focusedTerm = id;
   }
@@ -51,9 +53,13 @@
 </script>
 
 {#if tiles.length === 0}
-  <div class="flex h-full items-center justify-center text-sm text-faint">
-    no live terminals — start a session to see it here
-  </div>
+  <SessionsEmpty>
+    {#snippet idle()}
+      <div class="flex h-full items-center justify-center text-sm text-faint">
+        no live terminals — start a session to see it here
+      </div>
+    {/snippet}
+  </SessionsEmpty>
 {:else}
   <div
     class="grid h-full min-h-0 auto-rows-[minmax(150px,1fr)] content-start gap-2 overflow-auto p-2"
@@ -61,6 +67,10 @@
   >
     {#each tiles as s (s.id)}
       {@const sel = nav.selectedId === s.id}
+      <!-- A dead / ended session keeps its last captured frame (the grid holds
+           the frame on a capture failure by design), which looks live. Mark it
+           so the stale snapshot reads as gone, and offer to revive it. -->
+      {@const dead = s.status === "dead" || s.status === "session_ended"}
       <!--
         The whole tile is one click target that opens the live terminal. It must
         be a single click, not a double: the snapshot refreshes on a timer, and a
@@ -83,12 +93,28 @@
         }}
       >
         <div class="flex items-center gap-1.5 border-b border-edge/50 bg-panel/70 px-2 py-1 text-[11px]">
-          <span class="truncate font-medium" class:text-accent-ink={sel}>{s.issue || s.id.slice(0, 8)}</span>
-          <span class="truncate text-faint">{s.project}</span>
+          <span class="selectable truncate font-medium" class:text-accent-ink={sel}>{s.issue || s.id.slice(0, 8)}</span>
+          <span class="truncate text-faint">{store.displayNameFor(s.project)}</span>
           <span class="ml-auto shrink-0"><StatusPill status={s.status} /></span>
         </div>
-        <div class="pointer-events-none min-h-0 flex-1">
-          <SnapshotTile text={snaps[s.tmuxName] ?? ""} />
+        <div class="relative min-h-0 flex-1">
+          <!-- Dim the frozen frame so it no longer passes for a live terminal. -->
+          <div class="pointer-events-none h-full" class:opacity-40={dead}>
+            <SnapshotTile text={snaps[s.tmuxName] ?? ""} />
+          </div>
+          {#if dead}
+            <div class="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-canvas/50">
+              <span class="text-[11px] font-medium text-faint">{statusLabel(s.status)}</span>
+              <!-- stopPropagation: reviving must not also open the (dead) terminal. -->
+              <button
+                class="rounded border border-edge px-2 py-1 text-[11px] text-info hover:border-accent hover:text-accent-ink"
+                onclick={(e) => {
+                  e.stopPropagation();
+                  store.revive(s.id);
+                }}>revive</button
+              >
+            </div>
+          {/if}
         </div>
         <div
           class="pointer-events-none flex items-center justify-end border-t border-edge/40 px-2 py-0.5 text-[10px] text-faint opacity-0 transition-opacity group-hover:opacity-100"

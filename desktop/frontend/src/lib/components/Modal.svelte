@@ -42,7 +42,8 @@
   });
 
   // Trap Tab within the dialog: wrap first↔last so focus can't escape the modal
-  // while it is open. Escape / backdrop close stay on the outer element below.
+  // while it is open. Backdrop close stays on the outer element below; Escape is
+  // App.svelte's (see the note above the markup).
   function onKeydown(e: KeyboardEvent) {
     if (e.key !== "Tab") return;
     const els = focusables();
@@ -64,10 +65,14 @@
   }
 </script>
 
+<!-- Escape is NOT handled here: App.svelte's global key handler owns it for every
+     overlay, so routing it through onClose here as well would fire a guarded
+     form's requestClose twice on one keypress — opening the discard prompt and
+     then, on the second pass, cancelling it. Backdrop click still closes. -->
+<!-- svelte-ignore a11y_click_events_have_key_events -->
 <div
   class="fixed inset-0 z-40 flex items-center justify-center bg-black/45 backdrop-blur-[2px]"
   onclick={(e) => e.target === e.currentTarget && onClose()}
-  onkeydown={(e) => e.key === "Escape" && onClose()}
   role="presentation"
 >
   <div

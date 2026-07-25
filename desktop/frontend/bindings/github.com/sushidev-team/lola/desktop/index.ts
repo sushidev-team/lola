@@ -24,6 +24,7 @@ export type {
     LinearTeam,
     LinearTeamMeta,
     ProjectFormDTO,
+    PushErrDTO,
     ReleaseEntryDTO,
     ReviewProviderDTO,
     SettingsDTO,

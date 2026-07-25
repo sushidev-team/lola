@@ -194,7 +194,9 @@ func (m *rootModel) detailKeybar(w int) string {
 	if m.detail.wtMode {
 		return previewLine(faintText.Render("type a branch · tab agent/shell · enter create · esc cancel"), w)
 	}
-	keys := []string{"↑↓ move", "enter run", "p PR", "t ticket", "w worktree", "P polls", "s sessions", "e edit", "esc back"}
+	// Mirrors detailActions() exactly — "P polls" used to sit here with no 'P'
+	// handler behind it, so the keybar advertised a key that did nothing.
+	keys := []string{"↑↓ move", "enter run", "p PR", "t ticket", "w worktree", "s sessions", "e edit", "esc back"}
 	keys = append(keys, "S settings", "? help", "q quit")
 	return previewLine(faintText.Render(strings.Join(keys, " · ")), w)
 }

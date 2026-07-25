@@ -135,6 +135,17 @@ func (m *rootModel) routePaste(content string) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// projLabel is the display string for a project id — its [[project]].label when
+// set, else the id. Every surface that PRINTS a project goes through here (the
+// bare Name is an identity/path token, never UI text); nil-safe because m.cfg is
+// unset until the first config load while the tables already render.
+func (m *rootModel) projLabel(name string) string {
+	if m.cfg == nil {
+		return name
+	}
+	return m.cfg.DisplayNameFor(name)
+}
+
 // manageDaemon reports whether the TUI owns the daemon lifecycle (auto-start,
 // ^r restart, ^x stop). Off when [defaults].manage_daemon = false (launchd owns
 // it), so the TUI never fights an external supervisor.
@@ -174,6 +185,10 @@ func Run() error {
 	if err != nil {
 		return err
 	}
+	// Paint the palette from [ui].theme before the first frame so the cockpit
+	// comes up in the resolved Catppuccin flavor (mocha by default), matching the
+	// desktop app rather than the historical navy seed.
+	applyTheme(cfg.UITheme())
 	// The main screen is the cockpit — all sessions (unscoped) plus the poll/
 	// project rail, exactly as before the project-centric restructure. The
 	// project list (home) and the pickers are drill-ins reached from it (p).
@@ -385,8 +400,12 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(fetchStatusCmd, fetchSessionsCmd)
 	case tea.KeyPressMsg:
 		// ctrl+c quits — EXCEPT while the embed is focused, where it is forwarded
-		// to the terminal (interrupt) via the embed-key routing below.
-		if v.String() == "ctrl+c" && !m.embedFocused {
+		// to the terminal (interrupt) via the embed-key routing below, and EXCEPT
+		// while a config form is open. This gate runs ahead of the form routing, so
+		// without the check a reflexive ctrl+c mid-edit hard-quit the whole TUI and
+		// took every unsaved edit with it — the one keystroke the discard prompt
+		// could not protect against.
+		if v.String() == "ctrl+c" && !m.embedFocused && m.form == nil && m.settings == nil {
 			m.closeAllTerms()
 			return m, tea.Quit
 		}
@@ -469,6 +488,10 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case settingsFormSaved:
 			m.settings = nil
 			m.reloadConfig()
+			// [ui].theme may have changed on the Appearance tab; repaint the palette
+			// (and every style derived from it) before the next frame instead of
+			// making the user restart the TUI. reloadConfig already re-read the file.
+			applyTheme(m.cfg.UITheme())
 			if m.view == viewHome {
 				m.home.flash, m.home.flashGood = "settings saved", true
 			} else {
@@ -730,12 +753,27 @@ func (m *rootModel) listKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if p := m.selectedRailProject(); p != nil {
 			return m.enterDetail(p.Name)
 		}
+	case "a":
+		// Alias of 'n' — the projects screen creates with 'a', so both keys work
+		// on both project lists rather than one each.
+		f, cmd := newFormModel(m.cfg, nil)
+		m.form = f
+		return m, cmd
 	case "x":
 		// 'x' stops the project polling; it is a no-op on a project that never polls.
 		if p := m.selectedRailProject(); p != nil && p.Polls() {
 			l.confirmDelete = true
 		} else if p != nil {
-			l.flash = p.Name + " does not poll — nothing to stop"
+			l.flash = m.projLabel(p.Name) + " does not poll — nothing to stop"
+		}
+	case "X":
+		// Remove the [[project]] outright — the destructive sibling of 'x', and
+		// the same binding the projects screen uses.
+		if p := m.selectedRailProject(); p != nil {
+			m.home.confirmRemove, m.home.removeTarget = true, p.Name
+			m.view = viewHome
+			m.home.repin(m.cfg)
+			return m, fetchProjectsCmd
 		}
 	case "d":
 		m.doctorLoading, m.doctorScroll = true, 0
@@ -926,6 +964,10 @@ func (m *rootModel) reloadConfig() {
 	if cfg, err := config.Load(m.cfgPath); err == nil {
 		m.cfg = cfg
 		m.list.teamNames = teamNamesFromCache(cfg)
+		// Repaint the palette in case [ui].theme changed (e.g. the settings form
+		// saved a new flavor); reloadConfig is the shared reload path so this
+		// covers form saves and daemon-driven config rewrites without a restart.
+		applyTheme(cfg.UITheme())
 	}
 	if n := len(m.railProjectPtrs()); m.list.cursor >= n && m.list.cursor > 0 {
 		m.list.cursor = n - 1

@@ -51,7 +51,7 @@
             class:text-on-accent={nav.lens === l.id}
             class:text-faint={nav.lens !== l.id}
             title={l.label}
-            onclick={() => (nav.lens = l.id)}>{l.icon}</button
+            onclick={() => nav.setLens(l.id)}>{l.icon}</button
           >
         {/each}
       </span>

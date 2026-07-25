@@ -160,6 +160,21 @@ type formModel struct {
 	lineCur int      // which line, while editing
 	errs    []string // validation errors shown at the bottom
 
+	// Unsaved-changes guard. baseline is a snapshot of the editable state taken
+	// when the form opened and re-taken whenever an ASYNC load fills something in
+	// (repo detection, branch/team metadata) — those are not the human's edits and
+	// must not make an untouched form look dirty. esc on a dirty form arms
+	// confirmDiscard instead of throwing the work away silently; a clean form
+	// still closes instantly.
+	baseline       string
+	confirmDiscard bool
+
+	// Tabs carrying a validation error, so a problem on a HIDDEN tab is still
+	// visible in the strip — save can fail for a field the user cannot currently
+	// see. Only errors we can attribute to a field are marked; config.Validate's
+	// generic messages have no tab and are shown in the error list alone.
+	errTabs map[formTab]bool
+
 	// idAuto marks the ID field as still tracking the Label: every label
 	// keystroke re-derives it. Typing in the ID clears this for good, so a
 	// hand-picked identity is never silently rewritten. An existing project
@@ -384,8 +399,22 @@ func newFormModel(cfg *config.Config, existing *config.Project) (*formModel, tea
 	// An existing project with a path but no repo gets one filled in on open,
 	// and its branch list is ready before the user reaches the field.
 	cmd = tea.Batch(cmd, f.maybeDetectRepo(), f.maybeLoadBranches())
+	f.rebase()
 	return f, cmd
 }
+
+// snapshot serializes everything a human can edit in this form. Maps print in
+// sorted key order under %v, so the result is stable across identical states.
+func (f *formModel) snapshot() string {
+	return fmt.Sprintf("%+v|%s|%v|%v|%v", f.poll, f.capBuf, f.symlinks, f.postCreate, f.env)
+}
+
+// rebase declares the CURRENT state to be the unmodified one. Called on open and
+// after every async fill, so only human edits count as dirty.
+func (f *formModel) rebase() { f.baseline = f.snapshot() }
+
+// dirty reports whether the form holds edits that a cancel would throw away.
+func (f *formModel) dirty() bool { return f.snapshot() != f.baseline }
 
 // seedPollDefaults fills the polling enums that Validate requires a value for,
 // leaving any already-set field alone. Applied to a project with no polling
@@ -487,10 +516,22 @@ func (f *formModel) update(msg tea.Msg) (tea.Cmd, formEvent) {
 	case tea.KeyPressMsg:
 		return f.key(v)
 	}
+	// Every case above is an async load, not a human edit — re-baseline so an
+	// auto-detected repo (or arriving metadata) never arms the discard prompt.
+	f.rebase()
 	return nil, formNone
 }
 
 func (f *formModel) key(k tea.KeyPressMsg) (tea.Cmd, formEvent) {
+	// The discard prompt owns every keystroke while it is up, so a stray key can
+	// neither answer it by accident nor edit the form underneath it.
+	if f.confirmDiscard {
+		f.confirmDiscard = false
+		if s := k.String(); s == "y" || s == "Y" {
+			return nil, formCancel
+		}
+		return nil, formNone
+	}
 	if f.picker != nil {
 		return f.pickerKey(k), formNone
 	}
@@ -505,11 +546,18 @@ func (f *formModel) key(k tea.KeyPressMsg) (tea.Cmd, formEvent) {
 
 	switch k.String() {
 	case "esc":
+		// A filled-in multi-tab form is a lot of work to lose to one keystroke.
+		if f.dirty() {
+			f.confirmDiscard = true
+			return nil, formNone
+		}
 		return nil, formCancel
-	case "tab":
+	// left/right are aliases for the tab switch, matching the settings form —
+	// arrow-based section switching worked in one of the two forms only.
+	case "tab", "right":
 		f.switchTab(1)
 		return f.leftField(cur), formNone
-	case "shift+tab":
+	case "shift+tab", "left":
 		f.switchTab(-1)
 		return f.leftField(cur), formNone
 	case "up":
@@ -1166,8 +1214,18 @@ func (f *formModel) renameProject(from, to string) error {
 	return nil
 }
 
+// addErr records a validation failure against the tab whose field produced it,
+// so tabStrip can flag a tab the user is not currently looking at.
+func (f *formModel) addErr(tab formTab, msg string) {
+	f.errs = append(f.errs, msg)
+	if f.errTabs == nil {
+		f.errTabs = map[formTab]bool{}
+	}
+	f.errTabs[tab] = true
+}
+
 func (f *formModel) save() (tea.Cmd, formEvent) {
-	f.errs = nil
+	f.errs, f.errTabs = nil, nil
 	p := f.poll
 	// Canonicalize the ID here rather than while typing (SlugTyping deliberately
 	// leaves the edges alone so a hyphen can be entered at all) — but only when
@@ -1195,7 +1253,7 @@ func (f *formModel) save() (tea.Cmd, formEvent) {
 	if f.capBuf != "" {
 		n, err := strconv.Atoi(f.capBuf)
 		if err != nil || n <= 0 {
-			f.errs = append(f.errs, "concurrency_cap must be a positive integer")
+			f.addErr(tabRepo, "concurrency_cap must be a positive integer")
 		} else {
 			p.ConcurrencyCap = n
 		}
@@ -1208,10 +1266,10 @@ func (f *formModel) save() (tea.Cmd, formEvent) {
 		target = p.Name
 	}
 	if target == "" {
-		f.errs = append(f.errs, "id is required — a label like \"Nori App\" becomes the id \"nori-app\"")
+		f.addErr(tabRepo, "id is required — a label like \"Nori App\" becomes the id \"nori-app\"")
 	}
 	if p.Path == "" {
-		f.errs = append(f.errs, "path is required — the local repository this project's worktrees fork from")
+		f.addErr(tabRepo, "path is required — the local repository this project's worktrees fork from")
 	}
 
 	if len(f.errs) > 0 {
@@ -1318,6 +1376,12 @@ func (f *formModel) tabStrip() string {
 	var parts []string
 	for _, t := range formTabs {
 		label := " " + t.title + " "
+		// A "!" suffix, not colour alone: save can fail on a field that lives on a
+		// tab the user is not looking at, and without this the error list named a
+		// field with no clue where to find it.
+		if f.errTabs[t.tab] {
+			label = " " + t.title + badText.Render("!") + " "
+		}
 		if t.tab == f.tab {
 			parts = append(parts, selStyle.Render(label))
 		} else {
@@ -1424,9 +1488,17 @@ func (f *formModel) view(height int) string {
 			b.WriteString(badText.Render("✗ "+e) + "\n")
 		}
 	}
-	hint := "↑/↓ move · tab/shift-tab section · enter select/edit · ctrl-o inherit/override · r refresh linear · esc back"
+	hint := "↑/↓ move · tab/shift-tab section · enter select/edit · ctrl-o inherit/override · r refresh linear · ctrl-s save · esc back"
 	if f.editing {
 		hint = "editing " + f.label(fields[f.cursor]) + " — ↑/↓ line · enter new line · esc done"
+	}
+	if f.confirmDiscard {
+		// Replaces the key hint rather than sitting beside it, so the only thing
+		// the footer offers while the prompt is up is the answer to the prompt.
+		b.WriteString("\n" + warnText.Render("unsaved changes") + faintText.Render(" — ") +
+			warnText.Render("y") + faintText.Render(" discard · ") +
+			warnText.Render("n") + faintText.Render(" keep editing") + "\n")
+		return b.String()
 	}
 	b.WriteString("\n" + faintText.Render(hint) + "\n")
 	return b.String()

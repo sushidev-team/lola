@@ -29,7 +29,7 @@
       class:text-good={store.flash.kind === "good"}
       class:text-warn={store.flash.kind === "warn"}
       class:text-bad={store.flash.kind === "bad"}
-      class="truncate">{store.flash.text}</span
+      class="selectable truncate">{store.flash.text}</span
     >
   {:else if hints}
     <span class="text-edge">·</span>
@@ -43,10 +43,12 @@
         title="restart daemon"
         onclick={() => store.restartDaemon()}>⟳ restart</button
       >
+      <!-- Asks first: stopping the daemon halts every poll, and this button sits
+           one pixel from "restart" in a bar the user clicks all day. -->
       <button
         class="rounded px-1.5 py-[1px] hover:text-bad"
         title="stop daemon"
-        onclick={() => store.stopDaemon()}>■ stop</button
+        onclick={() => store.askStopDaemon()}>■ stop</button
       >
       <span class="text-edge">·</span>
     {/if}
