@@ -196,12 +196,22 @@ func agentBadge(agentState string) string {
 }
 
 // statusPillFor renders the STATUS cell for a session: the rolled-up pill,
-// plus a faint agent-axis badge when the axes DIVERGE under an open PR — a
-// "ci_pending ·wk" says CI is running AND the agent is still typing, where the
-// old single string hid the agent entirely. Suppressed when the rollup already
-// tells the whole story (pre-PR, needs_input, merged/closed/dead).
+// plus ONE qualifier —
+//
+//   - the [statusagent] interpreter's DISAGREEING judgement, marked "≈" (it is
+//     an approximation from untrusted material, never the deterministic
+//     truth): "working ≈stuck" says the pipeline believes working, the
+//     interpreter believes wedged;
+//   - else a faint agent-axis badge when the axes diverge under an open PR —
+//     "ci_pending ·wk" says CI is running AND the agent is still typing.
+//
+// Suppressed when the rollup already tells the whole story (pre-PR,
+// needs_input, merged/closed/dead).
 func statusPillFor(si protocol.SessionInfo) string {
 	pill := statusPill(si.Status)
+	if si.InterpretedState != "" {
+		return pill + statusOrange.Render("≈"+statusLabel(si.InterpretedState))
+	}
 	b := agentBadge(si.AgentState)
 	if b == "" || si.Delivery == "" || si.Delivery == "none" ||
 		si.Status == "merged" || si.Status == "closed" || si.Status == "dead" ||
@@ -230,6 +240,25 @@ func agentDetailLine(si protocol.SessionInfo) string {
 		parts = append(parts, "active "+shortAgo(si.LastActivityAt)+" ago")
 	}
 	return "agent:    " + strings.Join(parts, " · ")
+}
+
+// interpretedLines renders the [statusagent] overlay for the detail panel:
+// the one-line headline (marked "≈" — an untrusted approximation) and, when
+// the interpreter believes the agent is blocked, what it is waiting on.
+// Empty when no valid judgement is on the wire.
+func interpretedLines(si protocol.SessionInfo) []string {
+	if si.Headline == "" {
+		return nil
+	}
+	head := "≈ " + si.Headline
+	if si.HeadlineAgo != "" {
+		head += " (" + si.HeadlineAgo + " ago)"
+	}
+	out := []string{head}
+	if si.WaitingOn != "" {
+		out = append(out, "≈ waiting on: "+si.WaitingOn)
+	}
+	return out
 }
 
 // StatusDisplay is the shared status presentation reused by every session lens:

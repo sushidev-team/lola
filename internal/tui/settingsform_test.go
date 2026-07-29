@@ -1507,3 +1507,53 @@ func TestSettingsFormEmptyLabelListSaysPick(t *testing.T) {
 		t.Errorf("a label list opens a picker on enter:\n%s", view)
 	}
 }
+
+// The Interpreter tab round-trips the [statusagent] table, including the
+// float confidence field, and a bad float is rejected before any mutation.
+func TestSettingsFormStatusAgentRoundTrip(t *testing.T) {
+	m := newTestRoot(t)
+	f := newSettingsForm(m.cfgPath, m.cfg)
+
+	// Absent table pre-fills the zero config.
+	if f.field("sa_enabled").b {
+		t.Fatal("sa_enabled prefill = true, want false for an absent table")
+	}
+
+	f.field("sa_enabled").b = true
+	f.field("sa_model").text = "haiku"
+	f.field("sa_timeout").text = "45"
+	f.field("sa_interval").text = "90"
+	f.field("sa_maxcycle").text = "3"
+	f.field("sa_confidence").text = "0.7"
+	f.field("sa_transcript").b = true
+
+	if ev := f.save(); ev != settingsFormSaved {
+		t.Fatalf("save = %v, err=%q", ev, f.err)
+	}
+	reloaded, err := config.Load(m.cfgPath)
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	sa := reloaded.StatusAgent
+	if !sa.Enabled || sa.Model != "haiku" || sa.TimeoutSeconds != 45 ||
+		sa.MinIntervalSeconds != 90 || sa.MaxPerCycle != 3 ||
+		sa.MinConfidence != 0.7 || !sa.IncludeTranscript {
+		t.Fatalf("[statusagent] round-trip = %+v", sa)
+	}
+}
+
+func TestSettingsFormRejectsBadConfidence(t *testing.T) {
+	m := newTestRoot(t)
+	f := newSettingsForm(m.cfgPath, m.cfg)
+	f.field("sa_confidence").text = "not-a-number"
+	if ev := f.save(); ev == settingsFormSaved {
+		t.Fatal("save accepted a non-numeric confidence")
+	}
+	if f.err == "" {
+		t.Fatal("bad confidence must set f.err")
+	}
+	f.field("sa_confidence").text = "1.5"
+	if ev := f.save(); ev == settingsFormSaved {
+		t.Fatal("save accepted an out-of-range confidence (Validate must reject)")
+	}
+}

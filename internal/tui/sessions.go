@@ -909,6 +909,10 @@ func (m *rootModel) sessionDetail() string {
 		if line := agentDetailLine(*sel); line != "" {
 			b.WriteString(faintText.Render(line) + "\n")
 		}
+		// The interpreter's headline (untrusted, "≈"-marked, display only).
+		for _, line := range interpretedLines(*sel) {
+			b.WriteString(statusOrange.Render(line) + "\n")
+		}
 		if sel.PRStale {
 			b.WriteString(statusOrange.Render("⚠ PR facts stale — gh has been failing; the delivery state may be old") + "\n")
 		}
@@ -958,6 +962,9 @@ func (m *rootModel) sessionDetail() string {
 	fmt.Fprintf(&b, "status:   %s\n", statusStyle(sel.Status).Render(sel.Status))
 	if line := agentDetailLine(*sel); line != "" {
 		b.WriteString(faintText.Render(line) + "\n")
+	}
+	for _, line := range interpretedLines(*sel) {
+		b.WriteString(statusOrange.Render(line) + "\n")
 	}
 	if sel.LastNotification != "" {
 		b.WriteString(faintText.Render("note:     "+truncPlain(sel.LastNotification, 100)) + "\n")
