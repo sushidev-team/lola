@@ -182,51 +182,5 @@ func TestChecksStateTerminalBadConclusions(t *testing.T) {
 	}
 }
 
-func TestDeriveStatus(t *testing.T) {
-	open := func(draft bool, review, checks string) *PR {
-		return &PR{State: "OPEN", IsDraft: draft, ReviewDecision: review, ChecksState: checks}
-	}
-	conflicting := func(draft bool, review, checks string) *PR {
-		pr := open(draft, review, checks)
-		pr.Mergeable = "CONFLICTING"
-		return pr
-	}
-	cases := []struct {
-		name  string
-		alive bool
-		pr    *PR
-		want  string
-	}{
-		{"no PR, session alive", true, nil, "working"},
-		{"no PR, session dead", false, nil, "no_pr"},
-		{"merged wins over everything", false, &PR{State: "MERGED", IsDraft: true, ChecksState: "fail"}, "merged"},
-		{"closed wins over draft/checks", true, &PR{State: "CLOSED", IsDraft: true, ChecksState: "fail"}, "closed"},
-		{"draft wins over failing checks", true, &PR{State: "OPEN", IsDraft: true, ChecksState: "fail"}, "draft"},
-		{"ci failed wins over changes requested", true, open(false, "CHANGES_REQUESTED", "fail"), "ci_failed"},
-		{"changes requested", true, open(false, "CHANGES_REQUESTED", "pass"), "changes_requested"},
-		{"changes requested with pending checks", true, open(false, "CHANGES_REQUESTED", "pending"), "changes_requested"},
-		{"approved and green", true, open(false, "APPROVED", "pass"), "approved"},
-		{"approved but checks pending", true, open(false, "APPROVED", "pending"), "ci_pending"},
-		{"approved but no checks", true, open(false, "APPROVED", "none"), "review_pending"},
-		{"ci pending, review required", true, open(false, "REVIEW_REQUIRED", "pending"), "ci_pending"},
-		{"green, review required", true, open(false, "REVIEW_REQUIRED", "pass"), "review_pending"},
-		{"green, no review requirement", true, open(false, "", "pass"), "review_pending"},
-		{"no checks, no review decision", false, open(false, "", "none"), "review_pending"},
-		{"merge conflict", true, conflicting(false, "", "pass"), "merge_conflict"},
-		{"merge conflict with pending checks", true, conflicting(false, "", "pending"), "merge_conflict"},
-		{"ci failed wins over merge conflict", true, conflicting(false, "", "fail"), "ci_failed"},
-		{"merge conflict wins over changes requested", true, conflicting(false, "CHANGES_REQUESTED", "pass"), "merge_conflict"},
-		{"conflicting PR must never read approved", true, conflicting(false, "APPROVED", "pass"), "merge_conflict"},
-		{"draft wins over merge conflict", true, conflicting(true, "", "pass"), "draft"},
-		{"merged wins over merge conflict", false, &PR{State: "MERGED", Mergeable: "CONFLICTING"}, "merged"},
-		{"mergeable unknown is not a conflict", true, &PR{State: "OPEN", Mergeable: "UNKNOWN", ChecksState: "pass"}, "review_pending"},
-		{"mergeable clean is not a conflict", true, &PR{State: "OPEN", Mergeable: "MERGEABLE", ChecksState: "pass"}, "review_pending"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := DeriveStatus(tc.alive, tc.pr); got != tc.want {
-				t.Errorf("DeriveStatus(%v, %+v) = %q, want %q", tc.alive, tc.pr, got, tc.want)
-			}
-		})
-	}
-}
+// Status derivation moved to internal/state.DeriveDelivery (see
+// state/delivery_test.go) — scm ships facts only.

@@ -14,6 +14,7 @@ import (
 	"github.com/sushidev-team/lola/internal/linear"
 	"github.com/sushidev-team/lola/internal/scm"
 	"github.com/sushidev-team/lola/internal/session"
+	"github.com/sushidev-team/lola/internal/state"
 )
 
 const observeInterval = 30 * time.Second
@@ -394,7 +395,9 @@ func (d *Daemon) observeManualShell(ctx context.Context, nat NativeAPI, s sessio
 // nativeStatus derives a native session's status for this cycle from its
 // hook-driven current status, tmux pane liveness, and the PR facts in hand:
 //
-//   - Known PR facts drive scm.DeriveStatus — the shared status vocabulary.
+//   - Known PR facts drive state.DeriveDelivery — the shared delivery
+//     vocabulary. (INTERIM: no hysteresis — the previous delivery axis is
+//     threaded through in the full axis rewrite of this file.)
 //   - A hook-reported needs_input outranks any PR-derived status while the
 //     pane is alive (a human is being waited on), except "merged".
 //   - No PR facts → the hook-driven status stands (working / idle / …).
@@ -403,7 +406,7 @@ func (d *Daemon) observeManualShell(ctx context.Context, nat NativeAPI, s sessio
 func nativeStatus(current string, alive bool, pr *scm.PR) string {
 	status := current
 	if pr != nil {
-		status = scm.DeriveStatus(alive, pr)
+		status = string(state.DeriveDelivery(pr, state.DeliveryNone))
 	}
 	if alive && current == "needs_input" && status != "merged" {
 		status = "needs_input"

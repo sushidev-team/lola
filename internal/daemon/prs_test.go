@@ -41,8 +41,8 @@ func TestHandlePrsMapsAndDecorates(t *testing.T) {
 			t.Errorf("listed wrong repo %q", repo)
 		}
 		return []scm.OpenPR{
-			{Number: 229, Title: "fix oauth", Author: "mreit", Branch: "fix/oauth", Checks: "pass", Review: "APPROVED", Status: "approved"},
-			{Number: 240, Title: "fork fix", Author: "ext", Branch: "patch-1", IsFork: true, Checks: "pass", Status: "review_pending"},
+			{Number: 229, Title: "fix oauth", Author: "mreit", Branch: "fix/oauth", Checks: "pass", Review: "APPROVED", Mergeable: "MERGEABLE"},
+			{Number: 240, Title: "fork fix", Author: "ext", Branch: "patch-1", IsFork: true, Checks: "pass", Mergeable: "MERGEABLE"},
 		}, nil
 	}
 	// A live session already holds fix/oauth.
