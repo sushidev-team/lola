@@ -180,15 +180,17 @@ func statusBadge(status string) string {
 
 // agentBadge is the ≤2-char glyph for the AGENT axis — the truthful "what is
 // the agent itself doing" underneath a delivery-owned rollup. "" for states
-// not worth a badge.
+// not worth a badge: idle deliberately gets NONE, because an idle agent under
+// an open PR is the routine resting state (turn done, PR in review) — badging
+// it would stamp "·.." noise on every parked row. Only the informative
+// divergences show: still working, or exited, while the PR state suggests
+// otherwise.
 func agentBadge(agentState string) string {
 	switch agentState {
 	case "working", "starting":
 		return "wk"
 	case "waiting_input":
 		return "?!"
-	case "idle":
-		return ".."
 	case "exited":
 		return "en"
 	}

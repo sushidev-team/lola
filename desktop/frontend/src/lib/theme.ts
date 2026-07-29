@@ -234,7 +234,13 @@ export const ALL_STATUSES: string[] = [
   "merged", "closed",
 ];
 
-/** ≤2-char glyph for the AGENT axis (agentBadge in the TUI). "" = no badge. */
+/**
+ * ≤2-char glyph for the AGENT axis (agentBadge in the TUI). "" = no badge.
+ * idle deliberately gets NONE: an idle agent under an open PR is the routine
+ * resting state (turn done, PR in review) — badging it would stamp "·.." noise
+ * on every parked row. Only the informative divergences show: still working,
+ * or exited, while the PR state suggests otherwise.
+ */
 export function agentBadge(agentState: string): string {
   switch (agentState) {
     case "working":
@@ -242,8 +248,6 @@ export function agentBadge(agentState: string): string {
       return "wk";
     case "waiting_input":
       return "?!";
-    case "idle":
-      return "..";
     case "exited":
       return "en";
     default:
