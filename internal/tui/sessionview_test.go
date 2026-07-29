@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/sushidev-team/lola/internal/protocol"
+	"github.com/sushidev-team/lola/internal/state"
 )
 
 // mixedSessions is a deliberately out-of-order set spanning every sort tier,
@@ -134,13 +135,7 @@ func TestAttentionCount(t *testing.T) {
 }
 
 // allStatuses is the full derived status vocabulary the views must handle.
-var allStatuses = []string{
-	"working", "needs_input", "idle", "ci_failed", "changes_requested",
-	"merge_conflict", "ci_pending", "review_pending", "approved", "pr_open",
-	"merged", "dead", "session_ended",
-	// extended vocabulary that DeriveStatus can emit:
-	"draft", "no_pr", "closed", "no_signal",
-}
+var allStatuses = state.AllStatuses()
 
 func TestKanbanColumnsUniqueKeysAndStatuses(t *testing.T) {
 	seenKey := map[string]bool{}
@@ -192,11 +187,15 @@ func TestGroupKanbanEveryStatusExactlyOneColumn(t *testing.T) {
 		}
 	}
 
-	// Unknown/extended statuses land in the fallback (Working) column.
-	for _, s := range []string{"no_pr", "closed", "no_signal", "totally_made_up"} {
+	// Unknown statuses land in the fallback (Working) column; closed is real
+	// vocabulary now and belongs in Done.
+	for _, s := range []string{"totally_made_up", "shell", "orphaned"} {
 		if got := kanbanKeyForStatus(s); got != kanbanFallbackKey {
 			t.Errorf("kanbanKeyForStatus(%q) = %q, want fallback %q", s, got, kanbanFallbackKey)
 		}
+	}
+	if got := kanbanKeyForStatus("closed"); got != "done" {
+		t.Errorf(`kanbanKeyForStatus("closed") = %q, want done`, got)
 	}
 }
 

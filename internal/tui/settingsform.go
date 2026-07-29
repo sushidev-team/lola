@@ -213,8 +213,8 @@ func newSettingsForm(cfgPath string, cfg *config.Config) *settingsForm {
 	trNoGitHub := transportOpts(false)
 	f := &settingsForm{
 		reviewLegacy: reviewLegacy,
-		cfgPath: cfgPath,
-		cfg:     cfg,
+		cfgPath:      cfgPath,
+		cfg:          cfg,
 		fields: []setField{
 			// [defaults] — daemon-wide knobs.
 			{key: "global_cap", tab: stDefaults, section: "[defaults]", sectionNote: "caps, interval, agent", label: "Global cap", help: "Max concurrent sessions across all polls. Must be > 0.", kind: sfInt, text: itoa(d.GlobalCap)},

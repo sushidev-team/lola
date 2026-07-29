@@ -164,7 +164,6 @@ func TestStatusStyleMapping(t *testing.T) {
 		{"merge_conflict", lipgloss.Color(colBad)},
 		{"approved", lipgloss.Color(colGood)},
 		{"needs_input", lipgloss.Color(colOrange)},
-		{"no_signal", lipgloss.Color(colOrange)},
 	}
 	for _, c := range cases {
 		if got := statusStyle(c.status).GetForeground(); got != c.fg {
@@ -172,7 +171,7 @@ func TestStatusStyleMapping(t *testing.T) {
 		}
 	}
 	// The quiet/terminal states render in the muted palette foreground.
-	for _, dim := range []string{"merged", "session_ended", "idle"} {
+	for _, dim := range []string{"merged", "session_ended", "idle", "closed", "shell", "orphaned"} {
 		if got := statusStyle(dim).GetForeground(); got != lipgloss.Color(colFaint) {
 			t.Errorf("statusStyle(%q) foreground = %v, want faint %v", dim, got, colFaint)
 		}

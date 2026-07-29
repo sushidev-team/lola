@@ -189,7 +189,7 @@ type SessionInfo struct {
 	Issue    string `json:"issue"`  // Linear identifier, e.g. ENG-123
 	Title    string `json:"title"`  // Linear issue title, "" when unknown (older/adopted records)
 	Branch   string `json:"branch"` // "" when unknown
-	Status   string `json:"status"` // derived (scm.DeriveStatus / hook-driven states)
+	Status   string `json:"status"` // the rolled-up status (state.Rollup vocabulary)
 	PRURL    string `json:"prUrl"`
 	PRNumber int    `json:"prNumber"` // 0 when no PR observed
 	Checks   string `json:"checks"`   // pass|fail|pending|none, "" when no PR
@@ -198,6 +198,22 @@ type SessionInfo struct {
 	Source   string `json:"source"`   // always "native"; kept for wire compat with pre-P3 clients
 	Worktree string `json:"worktree"` // native runtime: the session's git worktree dir; "" otherwise
 	Age      string `json:"age"`      // human duration since first observed, e.g. "2h05m"
+
+	// The two state axes underneath Status (see internal/state), with raw
+	// freshness timestamps so a client can render a live "ago" between
+	// refreshes. All omitempty: absent on an older daemon.
+	AgentState      string    `json:"agentState,omitempty"`     // starting|working|waiting_input|idle|exited|dead|shell|orphaned
+	Delivery        string    `json:"delivery,omitempty"`       // none|draft|ci_pending|…|merged|closed
+	StatusSince     time.Time `json:"statusSince,omitzero"`     // when the rolled-up Status last changed
+	AgentStateSince time.Time `json:"agentStateSince,omitzero"` // when the agent axis last changed
+	LastActivityAt  time.Time `json:"lastActivityAt,omitzero"`  // last POSITIVE evidence of work
+	ActivitySource  string    `json:"activitySource,omitempty"` // hook|pane|tmux_activity
+	PRObservedAt    time.Time `json:"prObservedAt,omitzero"`    // last successful gh PR fetch
+	PRStale         bool      `json:"prStale,omitempty"`        // PR facts are ≥3 failed fetches old
+	AtPrompt        bool      `json:"atPrompt,omitempty"`        // agent idle at its prompt (send-keys gate open)
+	InputReason     string    `json:"inputReason,omitempty"`     // why waiting_input: permission_prompt|question|idle_notification
+	CurrentTool     string    `json:"currentTool,omitempty"`     // tool the in-flight turn runs right now (PostToolUse)
+	LastNotification string   `json:"lastNotification,omitempty"` // last Notification message (display-only text)
 
 	// Reaction-engine posture (PLAN P3), flattened so the TUI renders reaction
 	// state without importing internal/session or re-deriving it.

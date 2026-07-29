@@ -352,6 +352,11 @@ func (d *Daemon) warnUnknownHookSession(id, event string) {
 // sessionsData builds the reply for cmd=sessions from the observer's cached
 // store snapshot. Nothing is exec'd on the request path — a stale-but-instant
 // answer beats a request that hangs on ao/gh/tmux (observer cadence is 30s).
+// prStaleFailures is how many consecutive failed gh PR fetches make the
+// session's PR facts "stale" on the wire (SessionInfo.PRStale): one failure is
+// routine (a blip, a rate limit); three ≈ 90s of blindness is worth a warning.
+const prStaleFailures = 3
+
 func (d *Daemon) sessionsData() protocol.SessionsData {
 	snap := d.sessions.Snapshot()
 	now := time.Now()
@@ -375,6 +380,19 @@ func (d *Daemon) sessionsData() protocol.SessionsData {
 			CIRetries: s.CIRetries,
 			Escalated: s.Escalated,
 			Reacting:  reactingLabel(s.Status, s.CIRetries, s.Escalated, ciBudget),
+
+			AgentState:       string(s.AgentState),
+			Delivery:         string(s.Delivery),
+			StatusSince:      s.StatusSince,
+			AgentStateSince:  s.AgentStateSince,
+			LastActivityAt:   s.LastActivityAt,
+			ActivitySource:   string(s.ActivitySource),
+			PRObservedAt:     s.PRObservedAt,
+			PRStale:          s.PR != nil && s.PRFetchFailures >= prStaleFailures,
+			AtPrompt:         s.AtPrompt,
+			InputReason:      string(s.InputReason),
+			CurrentTool:      s.CurrentTool,
+			LastNotification: s.LastNotification,
 		}
 		if s.Source == "native" {
 			// Native sessions live in worktrees the daemon created at
