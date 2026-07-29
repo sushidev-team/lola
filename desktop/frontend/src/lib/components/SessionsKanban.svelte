@@ -1,6 +1,7 @@
 <script lang="ts">
   import { store, scopedSessions } from "$lib/store.svelte";
   import { nav } from "$lib/nav.svelte";
+  import { sessionMenu } from "$lib/sessionmenu.svelte";
   import { KANBAN_COLUMNS, statusBadge, statusText } from "$lib/theme";
   import PrBadge from "./PrBadge.svelte";
   import SessionsEmpty from "./SessionsEmpty.svelte";
@@ -37,13 +38,17 @@
               class:bg-sel={sel}
               onclick={() => nav.select(s.id)}
               ondblclick={() => nav.toggleFocusTerm(s.id)}
+              oncontextmenu={(e) => {
+                nav.select(s.id);
+                sessionMenu.open(s.id, e);
+              }}
             >
               <div class="flex items-center gap-1.5">
                 {#if s.status === "needs_input" && !sel}<span class="text-warn">!</span>{/if}
-                <span class="selectable font-medium" class:text-accent-ink={sel}>{s.issue || s.id.slice(0, 8)}</span>
+                <span class="font-medium" class:text-accent-ink={sel}>{s.issue || s.id.slice(0, 8)}</span>
                 <span class="ml-auto font-mono text-[10px] {statusText(s.status)}">{statusBadge(s.status)}</span>
               </div>
-              {#if s.title}<div class="selectable truncate text-[11px] text-faint">{s.title}</div>{/if}
+              {#if s.title}<div class="truncate text-[11px] text-faint">{s.title}</div>{/if}
               <div class="mt-0.5"><PrBadge session={s} /></div>
             </button>
           {/each}

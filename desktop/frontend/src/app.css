@@ -186,7 +186,10 @@ textarea {
 
 /* Genuine content — not chrome — opts back out of the app-wide `user-select:
    none` so a user can select and copy it into an issue: error/flash text, the
-   doctor report body, session ids and titles, branch names, PR refs. WKWebView
+   doctor report body, the detail header's issue/title/branch. Clickable session
+   ROWS (table, kanban, grid tiles, project detail) stay non-selectable — a
+   click or double-click there is navigation, and word-selection fighting it
+   read as a glitch; copy from the detail header instead. WKWebView
    needs the -webkit- prefix (the unprefixed property alone did not re-enable
    selection over the chrome rule), so both are set, mirroring the terminal and
    form opt-ins above. Plain unlayered CSS, NOT an `@utility`: the `user-select:

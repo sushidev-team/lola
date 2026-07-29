@@ -225,8 +225,8 @@
                 class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs hover:bg-sel/50"
                 onclick={() => openSession(s.id)}
               >
-                <span class="selectable shrink-0 font-mono text-[11px] text-faint">{s.issue || "—"}</span>
-                <span class="selectable min-w-0 flex-1 truncate text-ink">{s.title || s.branch || "(untitled)"}</span>
+                <span class="shrink-0 font-mono text-[11px] text-faint">{s.issue || "—"}</span>
+                <span class="min-w-0 flex-1 truncate text-ink">{s.title || s.branch || "(untitled)"}</span>
                 <StatusPill status={s.status} />
                 {#if s.prNumber > 0}<span class="shrink-0 text-[11px] text-magenta">#{s.prNumber}</span>{/if}
               </button>

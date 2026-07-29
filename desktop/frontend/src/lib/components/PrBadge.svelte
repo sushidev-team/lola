@@ -5,7 +5,7 @@
 
 {#if session.prNumber > 0}
   <span class="inline-flex items-center gap-1 whitespace-nowrap text-xs">
-    <span class="selectable text-magenta">#{session.prNumber}</span>
+    <span class="text-magenta">#{session.prNumber}</span>
     {#if session.checks === "pass"}<span class="text-good" title="checks pass">✓</span>
     {:else if session.checks === "fail"}<span class="text-bad" title="checks failed">✕ci</span>
     {:else if session.checks === "pending"}<span class="text-warn" title="checks running">⧗</span>{/if}

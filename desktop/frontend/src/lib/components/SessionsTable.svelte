@@ -1,6 +1,7 @@
 <script lang="ts">
   import { store, scopedSessions } from "$lib/store.svelte";
   import { nav } from "$lib/nav.svelte";
+  import { sessionMenu } from "$lib/sessionmenu.svelte";
   import { isAttention, reactingText } from "$lib/theme";
   import StatusPill from "./StatusPill.svelte";
   import PrBadge from "./PrBadge.svelte";
@@ -37,14 +38,18 @@
           class:bg-sel={sel}
           onclick={() => nav.select(s.id)}
           ondblclick={() => nav.toggleFocusTerm(s.id)}
+          oncontextmenu={(e) => {
+            nav.select(s.id);
+            sessionMenu.open(s.id, e);
+          }}
         >
           <td class="py-1 pl-2 text-center">
             {#if sel}<span class="font-bold text-accent-ink">›</span>
             {:else if isAttention(s.status) && s.status === "needs_input"}<span class="text-warn">!</span>{/if}
           </td>
-          <td class="selectable py-1 pr-2 font-medium whitespace-nowrap" class:text-accent-ink={sel}>{s.issue || s.id.slice(0, 8)}</td>
+          <td class="py-1 pr-2 font-medium whitespace-nowrap" class:text-accent-ink={sel}>{s.issue || s.id.slice(0, 8)}</td>
           {#if !dense}
-            <td class="selectable max-w-[22rem] truncate py-1 pr-2 text-faint">{s.title}</td>
+            <td class="max-w-[22rem] truncate py-1 pr-2 text-faint">{s.title}</td>
           {/if}
           <td class="py-1 pr-2 whitespace-nowrap text-faint">{store.displayNameFor(s.project)}</td>
           <td class="py-1 pr-2"><StatusPill status={s.status} /></td>

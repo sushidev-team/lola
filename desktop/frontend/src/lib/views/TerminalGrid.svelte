@@ -2,6 +2,7 @@
   import { onMount, onDestroy } from "svelte";
   import { store, scopedSessions } from "$lib/store.svelte";
   import { nav } from "$lib/nav.svelte";
+  import { sessionMenu } from "$lib/sessionmenu.svelte";
   import { statusLabel } from "$lib/theme";
   import { TermService } from "@bindings/desktop";
   import SnapshotTile from "$lib/components/SnapshotTile.svelte";
@@ -85,6 +86,10 @@
         tabindex="0"
         title="open the live terminal"
         onclick={() => openTile(s.id)}
+        oncontextmenu={(e) => {
+          nav.select(s.id);
+          sessionMenu.open(s.id, e);
+        }}
         onkeydown={(e) => {
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();
@@ -93,7 +98,7 @@
         }}
       >
         <div class="flex items-center gap-1.5 border-b border-edge/50 bg-panel/70 px-2 py-1 text-[11px]">
-          <span class="selectable truncate font-medium" class:text-accent-ink={sel}>{s.issue || s.id.slice(0, 8)}</span>
+          <span class="truncate font-medium" class:text-accent-ink={sel}>{s.issue || s.id.slice(0, 8)}</span>
           <span class="truncate text-faint">{store.displayNameFor(s.project)}</span>
           <span class="ml-auto shrink-0"><StatusPill status={s.status} /></span>
         </div>

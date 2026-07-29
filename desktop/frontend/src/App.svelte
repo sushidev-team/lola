@@ -19,7 +19,9 @@
   import UpdateOverlay from "$lib/views/UpdateOverlay.svelte";
   import HelpOverlay from "$lib/views/HelpOverlay.svelte";
   import ConfirmDialog from "$lib/components/ConfirmDialog.svelte";
+  import SessionMenu from "$lib/components/SessionMenu.svelte";
   import { confirm } from "$lib/confirm.svelte";
+  import { sessionMenu } from "$lib/sessionmenu.svelte";
   import { overlayClose } from "$lib/overlayClose";
   import Setup from "$lib/views/Setup.svelte";
 
@@ -155,6 +157,17 @@
     // close the overlay. (Modal no longer handles Escape itself, so these are the
     // single place it fires.)
 
+    // An open context menu swallows every key: Escape closes it, nothing else
+    // leaks through to a cockpit action underneath. Checked before the confirm
+    // dialog only for order's sake — the menu closes before it opens one.
+    if (sessionMenu.request) {
+      if (e.key === "Escape") {
+        sessionMenu.close();
+        e.preventDefault();
+      }
+      return;
+    }
+
     // A pending confirmation swallows every key while open: Escape cancels, Enter
     // is left to the dialog's own focus (safe default for a destructive action).
     // Nothing else leaks through to a cockpit action underneath.
@@ -285,4 +298,5 @@
   <HelpOverlay />
 {/if}
 <ConfirmDialog />
+<SessionMenu />
 {/if}
