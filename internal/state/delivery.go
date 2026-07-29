@@ -19,6 +19,20 @@ const (
 	DeliveryClosed           DeliveryState = "closed"
 )
 
+// DeliveryFromStatus recognizes a legacy collapsed status string that IS a
+// delivery word (used by the snapshot migration when a record carries a
+// delivery-owned status but no PR facts to re-derive it from).
+func DeliveryFromStatus(status string) (DeliveryState, bool) {
+	switch d := DeliveryState(status); d {
+	case DeliveryDraft, DeliveryCIPending, DeliveryCIFailed,
+		DeliveryMergeConflict, DeliveryChangesRequested,
+		DeliveryReviewPending, DeliveryApproved, DeliveryMerged,
+		DeliveryClosed:
+		return d, true
+	}
+	return DeliveryNone, false
+}
+
 // DeriveDelivery maps observed PR facts to the delivery axis, in strict
 // priority order. prev is the session's current delivery state, consulted
 // only for the Mergeable=UNKNOWN hysteresis.

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/sushidev-team/lola/internal/scm"
+	"github.com/sushidev-team/lola/internal/state"
 )
 
 // Kind is a session's launch provenance. It governs Linear coupling and
@@ -92,6 +93,67 @@ type Session struct {
 	// and therefore is NOT evidence of activity. Persisted so the guard survives
 	// a daemon restart.
 	LastActivityAt time.Time `json:"last_activity_at,omitempty"`
+
+	// ---- Two-axis state (internal/state). Status above is the DERIVED rollup
+	// of these two axes — state.Rollup is its only producer, and the
+	// SetAgentState / SetDelivery mutators below are the only write path.
+	// Writing Status directly is a bug (the axes and the rollup would drift).
+
+	// AgentState is the agent axis: what the coding agent itself is doing,
+	// owned by lifecycle hooks + pane classification + tmux liveness, and
+	// NEVER masked by PR facts (that masking is what the old one-string
+	// status did, and it made a post-PR agent invisible).
+	AgentState      state.AgentState `json:"agent_state,omitempty"`
+	AgentStateSince time.Time        `json:"agent_state_since,omitempty"`
+	// Delivery is the PR axis, owned solely by observed gh facts.
+	Delivery      state.DeliveryState `json:"delivery_state,omitempty"`
+	DeliverySince time.Time           `json:"delivery_since,omitempty"`
+	// StatusSince is when the rolled-up Status last changed.
+	StatusSince time.Time `json:"status_since,omitempty"`
+	// PRObservedAt is the last SUCCESSFUL gh PR fetch for this session;
+	// PRFetchFailures counts consecutive failures since. Together they make
+	// stale PR facts visible instead of silently pinning an hours-old state.
+	PRObservedAt    time.Time `json:"pr_observed_at,omitempty"`
+	PRFetchFailures int       `json:"pr_fetch_failures,omitempty"`
+	// ActivitySource says which signal last stamped LastActivityAt.
+	ActivitySource state.ActivitySource `json:"activity_source,omitempty"`
+	// InputReason says WHY the agent is waiting_input (permission prompt,
+	// visible question, or a bare idle notification).
+	InputReason state.InputReason `json:"input_reason,omitempty"`
+	// CurrentTool is the tool name from the last PostToolUse hook of the
+	// in-flight turn ("" once the turn stops). Display only.
+	CurrentTool string `json:"current_tool,omitempty"`
+	// LastNotification is the (truncated) message of the last Notification
+	// hook — rendered agent output: display only, never executed, never fed
+	// back to any agent.
+	LastNotification string `json:"last_notification,omitempty"`
+	// TranscriptPath is the agent's own transcript file as reported by its
+	// hooks (Claude Code hands the JSONL path on every event).
+	TranscriptPath string `json:"transcript_path,omitempty"`
+	// AtPromptVerified qualifies AtPrompt: false when the gate was carried
+	// across a daemon restart (adoption) and no live signal has confirmed it
+	// since. The send-keys paths re-verify an unverified gate against the
+	// pane before typing, so a restart can never cause a send into a
+	// mid-turn agent.
+	AtPromptVerified bool `json:"at_prompt_verified,omitempty"`
+
+	// ---- [statusagent] interpreter overlay (DISPLAY ONLY). These fields are
+	// untrusted LLM output derived from attacker-influenceable pane text:
+	// they overlay the DISPLAYED agent axis in sessionsData and nothing else.
+	// react / dispatch / writeback / answer / reconcile must never read them.
+	InterpretedState         string    `json:"interpreted_state,omitempty"`
+	Summary                  string    `json:"summary,omitempty"`
+	WaitingOn                string    `json:"waiting_on,omitempty"`
+	InterpretedConfidence    float64   `json:"interpreted_confidence,omitempty"`
+	SummaryAt                time.Time `json:"summary_at,omitempty"`
+	InterpretedForAgentState string    `json:"interpreted_for_agent_state,omitempty"`
+	// LastInterpretedAt / LastInterpretedHash are the interpreter's cost
+	// controls: the per-session debounce anchor (stamped on every ATTEMPT,
+	// including skips and errors) and the input-bundle hash that lets an
+	// unchanged session skip the LLM call entirely.
+	LastInterpretedAt   time.Time `json:"last_interpreted_at,omitempty"`
+	LastInterpretedHash string    `json:"last_interpreted_hash,omitempty"`
+
 	// RemovedLabels are the match-label UUIDs the post-spawn label flip
 	// actually stripped from this issue (the trigger labels it carried at
 	// flip time — a strict subset of match_labels under match_mode=any). An
@@ -263,6 +325,95 @@ func (s *Session) migrateReviewState() {
 	}
 }
 
+// SetAgentState moves the agent axis and recomputes the rollup. Entering
+// working/starting stamps LastActivityAt (+ ActivitySource): every path that
+// asserts work thereby restarts the anti-false-working clock, which is what
+// structurally fixes the old revive/answer bug (they set "working" without
+// activity evidence and were downgraded 45s later). Leaving waiting_input
+// clears InputReason; a stopped turn clears CurrentTool. Returns whether the
+// axis changed.
+func (s *Session) SetAgentState(a state.AgentState, src state.ActivitySource, now time.Time) bool {
+	changed := s.AgentState != a
+	if changed {
+		s.AgentState = a
+		s.AgentStateSince = now
+		if a != state.AgentWaitingInput {
+			s.InputReason = ""
+		}
+		if a != state.AgentWorking && a != state.AgentStarting {
+			s.CurrentTool = ""
+		}
+	}
+	if a == state.AgentWorking || a == state.AgentStarting {
+		s.TouchActivity(src, now)
+	}
+	s.recomputeStatus(now)
+	return changed
+}
+
+// SetDelivery moves the PR axis and recomputes the rollup. Returns whether
+// the axis changed.
+func (s *Session) SetDelivery(d state.DeliveryState, now time.Time) bool {
+	changed := s.Delivery != d
+	if changed {
+		s.Delivery = d
+		s.DeliverySince = now
+	}
+	s.recomputeStatus(now)
+	return changed
+}
+
+// TouchActivity records POSITIVE evidence of work (a hook heartbeat, a
+// working pane cue, fresh tmux output) without moving the agent axis.
+func (s *Session) TouchActivity(src state.ActivitySource, now time.Time) {
+	s.LastActivityAt = now
+	s.ActivitySource = src
+}
+
+// recomputeStatus re-derives the rollup from the two axes and stamps
+// StatusSince on change. It is the ONLY place Status is written once a record
+// carries axes.
+func (s *Session) recomputeStatus(now time.Time) {
+	next := state.Rollup(s.AgentState, s.Delivery)
+	if s.Status != next {
+		s.Status = next
+		s.StatusSince = now
+	}
+}
+
+// migrateAxes backfills the two axes for a pre-axis snapshot record (axes
+// absent). The delivery axis is re-derived from the persisted PR facts —
+// exact — falling back to the status string itself when the record carries a
+// delivery-owned status but no PR facts. The agent axis is exact for
+// agent-owned statuses and seeded Idle otherwise (the first hook or pane
+// classification corrects it; the rollup reproduces the stored status either
+// way — asserted by TestFromLegacyRoundTrips). Since fields seed from
+// LastSeen. AtPromptVerified seeds true: the record was written by a live
+// pre-upgrade daemon, the same trust the old code extended; only adoption
+// after a restart marks a gate unverified.
+func (s *Session) migrateAxes() {
+	if s.AgentState != "" {
+		return // already axis-bearing
+	}
+	d := state.DeriveDelivery(s.PR, state.DeliveryNone)
+	if d == state.DeliveryNone {
+		if dd, ok := state.DeliveryFromStatus(s.Status); ok {
+			d = dd
+		}
+	}
+	a, d := state.FromLegacy(s.Status, d)
+	s.AgentState = a
+	s.Delivery = d
+	s.AgentStateSince = s.LastSeen
+	s.DeliverySince = s.LastSeen
+	s.StatusSince = s.LastSeen
+	s.AtPromptVerified = true
+	// Deliberately NOT recomputing Status here: a legacy record whose stored
+	// status disagrees with the rollup (possible only for the unreachable
+	// "no_pr"/"pr_open" words) keeps what it displayed; the first live cycle
+	// re-derives everything.
+}
+
 // EffectiveKind resolves the session's Kind, failing CLOSED so an unstamped,
 // keyless record can never be mistaken for a Linear writer. Precedence:
 //   - an explicit Kind wins;
@@ -388,6 +539,9 @@ func (s *Store) load() {
 		// the in-memory record is authoritative and downstream review code reads
 		// only the maps. Idempotent: a post-migration snapshot already carries maps.
 		sess.migrateReviewState()
+		// Backfill the two-axis state for pre-axis snapshots. Idempotent: an
+		// axis-bearing record is left untouched.
+		sess.migrateAxes()
 		s.sessions[sess.ID] = sess
 	}
 }
@@ -504,6 +658,48 @@ func (s *Store) Update(id string, fn func(sess *Session) bool) (Session, bool) {
 	// under the store lock (see OnTransition) — the daemon's handler only
 	// touches its own event ring, never the store.
 	if s.onTransition != nil && stored.Status != oldStatus {
+		s.onTransition(oldStatus, stored)
+	}
+	return sess, true
+}
+
+// Apply is Update that also handles the not-yet-present case atomically: fn
+// receives a copy of the current record (zero Session when absent) plus
+// whether it existed, and returns whether to commit. It exists for the
+// insert-or-update paths (adoption after a restart, revive) that previously
+// did Get→mutate→Upsert — an unlocked read-modify-write that raced the hook
+// handler and could erase a transition landing mid-merge. Semantics match
+// Update for existing records (LastSeen stamped, transition callback fired on
+// a Status change) and Upsert for inserts (FirstSeen/LastSeen stamped, NO
+// transition callback — a birth is recorded explicitly by its spawn/adopt
+// site, exactly as Upsert behaved).
+func (s *Store) Apply(id string, fn func(sess *Session, exists bool) bool) (Session, bool) {
+	if id == "" {
+		return Session{}, false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sess, existed := s.sessions[id]
+	oldStatus := sess.Status
+	if sess.PR != nil {
+		pr := *sess.PR
+		sess.PR = &pr
+	}
+	if !fn(&sess, existed) {
+		return sess, false
+	}
+	sess.ID = id // the key is immutable
+	sess.LastSeen = time.Now()
+	if sess.FirstSeen.IsZero() {
+		sess.FirstSeen = sess.LastSeen
+	}
+	stored := sess
+	if stored.PR != nil {
+		pr := *stored.PR
+		stored.PR = &pr
+	}
+	s.sessions[id] = stored
+	if existed && s.onTransition != nil && stored.Status != oldStatus {
 		s.onTransition(oldStatus, stored)
 	}
 	return sess, true
