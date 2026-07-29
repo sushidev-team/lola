@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { AA, FLAVORS, THEME_IDS, TOKEN_NAMES, contrast, panelBg, toTokens } from "./catppuccin";
 import {
+  ALL_STATUSES,
   statusText,
   pillKind,
   pillClasses,
@@ -110,16 +111,22 @@ describe("statusText", () => {
 });
 
 describe("statusLabel", () => {
-  it("shortens the noisy labels", () => {
+  it("humanizes every raw status word", () => {
     expect(statusLabel("changes_requested")).toBe("changes");
     expect(statusLabel("review_pending")).toBe("review");
     expect(statusLabel("merge_conflict")).toBe("conflict");
     expect(statusLabel("session_ended")).toBe("ended");
-    expect(statusLabel("ci_pending")).toBe("pending");
+    expect(statusLabel("ci_pending")).toBe("ci running");
+    expect(statusLabel("ci_failed")).toBe("ci failed");
     expect(statusLabel("needs_input")).toBe("needs you");
+    expect(statusLabel("waiting_input")).toBe("waiting");
   });
-  it("passes unknown through unchanged", () => {
+  it("passes plain words through and de-underscores unknowns", () => {
     expect(statusLabel("working")).toBe("working");
+    expect(statusLabel("some_future_word")).toBe("some future word");
+  });
+  it("never renders an underscore for any vocabulary word", () => {
+    for (const s of ALL_STATUSES) expect(statusLabel(s)).not.toContain("_");
   });
 });
 

@@ -81,7 +81,13 @@ export function pillClasses(status: string): string {
   }
 }
 
-/** Short human label for a status (statusLabel in the TUI). */
+/**
+ * Human label for a status (or agent-axis / interpreted) word — statusLabel
+ * in the TUI, kept identical. Every raw identifier gets a readable spelling
+ * (a rendered "ci_failed" reads like a translation placeholder, not a badge);
+ * the fallback de-underscores so an unmapped future word can never leak an
+ * identifier into the UI. Display-only: control flow keys on the raw string.
+ */
 export function statusLabel(status: string): string {
   switch (status) {
     case "changes_requested":
@@ -93,11 +99,15 @@ export function statusLabel(status: string): string {
     case "session_ended":
       return "ended";
     case "ci_pending":
-      return "pending";
+      return "ci running";
+    case "ci_failed":
+      return "ci failed";
     case "needs_input":
       return "needs you";
+    case "waiting_input": // agent axis / interpreted overlay
+      return "waiting";
     default:
-      return status;
+      return status.replaceAll("_", " ");
   }
 }
 

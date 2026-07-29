@@ -2,6 +2,7 @@ package tui
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/sushidev-team/lola/internal/protocol"
@@ -211,6 +212,29 @@ func TestStatusDisplayReusesStyleAndHasBadge(t *testing.T) {
 		// Style must be exactly what statusStyle yields (no divergence).
 		if d.Style.GetForeground() != statusStyle(s).GetForeground() {
 			t.Errorf("statusDisplay(%q) style diverged from statusStyle", s)
+		}
+	}
+}
+
+// statusLabel humanizes every raw status word — a rendered "ci_failed" reads
+// like a translation placeholder — and the fallback de-underscores unknowns.
+func TestStatusLabelNeverRendersUnderscores(t *testing.T) {
+	for _, s := range allStatuses {
+		if strings.Contains(statusLabel(s), "_") {
+			t.Errorf("statusLabel(%q) = %q renders a raw identifier", s, statusLabel(s))
+		}
+	}
+	cases := map[string]string{
+		"ci_failed":        "ci failed",
+		"ci_pending":       "ci running",
+		"needs_input":      "needs you",
+		"waiting_input":    "waiting",
+		"some_future_word": "some future word",
+		"working":          "working",
+	}
+	for in, want := range cases {
+		if got := statusLabel(in); got != want {
+			t.Errorf("statusLabel(%q) = %q, want %q", in, got, want)
 		}
 	}
 }

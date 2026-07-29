@@ -229,7 +229,7 @@ func agentDetailLine(si protocol.SessionInfo) string {
 	if si.AgentState == "" {
 		return ""
 	}
-	parts := []string{si.AgentState}
+	parts := []string{statusLabel(si.AgentState)}
 	if si.InputReason != "" {
 		parts = append(parts, strings.ReplaceAll(si.InputReason, "_", " "))
 	}
@@ -300,10 +300,13 @@ func statusPill(status string) string {
 	}
 }
 
-// statusLabel shortens the long derived-status words so the STATUS column stays
-// tight — a full "changes_requested" is 17 columns and shoves the table wide.
-// The mapping is display-only; every control-flow comparison still uses the raw
-// status string.
+// statusLabel is the human label for a status (or agent-axis / interpreted)
+// word: every raw identifier gets a readable spelling — a rendered
+// "ci_failed" reads like a translation placeholder, not a badge. Long words
+// are shortened so the STATUS column stays tight ("changes_requested" is 17
+// columns). The mapping is display-only; every control-flow comparison still
+// uses the raw status string. The fallback de-underscores, so an unmapped
+// future word can never leak an identifier into the UI.
 func statusLabel(status string) string {
 	switch status {
 	case "changes_requested":
@@ -315,11 +318,15 @@ func statusLabel(status string) string {
 	case "session_ended":
 		return "ended"
 	case "ci_pending":
-		return "pending"
+		return "ci running"
+	case "ci_failed":
+		return "ci failed"
 	case "needs_input":
 		return "needs you"
+	case "waiting_input": // agent axis / interpreted overlay
+		return "waiting"
 	}
-	return status
+	return strings.ReplaceAll(status, "_", " ")
 }
 
 // pillFill renders a SOLID, bold chip (one space of padding each side).
