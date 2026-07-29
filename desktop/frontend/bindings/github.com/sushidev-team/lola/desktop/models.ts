@@ -210,6 +210,18 @@ export interface SettingsDTO {
     "brainSummarizeApproved": boolean;
 
     /**
+     * [statusagent] — the display-only status interpreter.
+     */
+    "statusAgentEnabled": boolean;
+    "statusAgentBin": string;
+    "statusAgentModel": string;
+    "statusAgentTimeout": number;
+    "statusAgentMinInterval": number;
+    "statusAgentMaxPerCycle": number;
+    "statusAgentMinConfidence": number;
+    "statusAgentIncludeTranscript": boolean;
+
+    /**
      * ReviewProviders is the pluggable review catalog ([[review.provider]]),
      * resolved to the EFFECTIVE set (the real catalog, or the entries synthesized
      * from the legacy [review]/[coderabbit] tables). ReviewLegacy reports that the

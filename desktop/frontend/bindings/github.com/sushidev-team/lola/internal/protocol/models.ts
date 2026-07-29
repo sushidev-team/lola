@@ -373,7 +373,7 @@ export interface SessionInfo {
     "branch": string;
 
     /**
-     * derived (scm.DeriveStatus / hook-driven states)
+     * the rolled-up status (state.Rollup vocabulary)
      */
     "status": string;
     "prUrl": string;
@@ -414,6 +414,94 @@ export interface SessionInfo {
     "age": string;
 
     /**
+     * The two state axes underneath Status (see internal/state), with raw
+     * freshness timestamps so a client can render a live "ago" between
+     * refreshes. All omitempty: absent on an older daemon.
+     * starting|working|waiting_input|idle|exited|dead|shell|orphaned
+     */
+    "agentState"?: string;
+
+    /**
+     * none|draft|ci_pending|…|merged|closed
+     */
+    "delivery"?: string;
+
+    /**
+     * when the rolled-up Status last changed
+     */
+    "statusSince"?: string;
+
+    /**
+     * when the agent axis last changed
+     */
+    "agentStateSince"?: string;
+
+    /**
+     * last POSITIVE evidence of work
+     */
+    "lastActivityAt"?: string;
+
+    /**
+     * hook|pane|tmux_activity
+     */
+    "activitySource"?: string;
+
+    /**
+     * last successful gh PR fetch
+     */
+    "prObservedAt"?: string;
+
+    /**
+     * PR facts are ≥3 failed fetches old
+     */
+    "prStale"?: boolean;
+
+    /**
+     * agent idle at its prompt (send-keys gate open)
+     */
+    "atPrompt"?: boolean;
+
+    /**
+     * why waiting_input: permission_prompt|question|idle_notification
+     */
+    "inputReason"?: string;
+
+    /**
+     * tool the in-flight turn runs right now (PostToolUse)
+     */
+    "currentTool"?: string;
+
+    /**
+     * last Notification message (display-only text)
+     */
+    "lastNotification"?: string;
+
+    /**
+     * [statusagent] interpreter overlay — untrusted LLM text, DISPLAY ONLY,
+     * pre-gated daemon-side (confidence, freshness, supersession): a client
+     * renders it verbatim or not at all. InterpretedState is set ONLY when the
+     * interpreter DISAGREES with agentState (render with an "approx" marker);
+     * Headline ships whenever a valid judgement exists.
+     * working|waiting_input|idle|stuck; "" = no override
+     */
+    "interpretedState"?: string;
+
+    /**
+     * one line: what the agent is doing right now
+     */
+    "headline"?: string;
+
+    /**
+     * what the agent needs, when blocked
+     */
+    "waitingOn"?: string;
+
+    /**
+     * formatted age of the judgement, e.g. "2m"
+     */
+    "headlineAgo"?: string;
+
+    /**
      * Reaction-engine posture (PLAN P3), flattened so the TUI renders reaction
      * state without importing internal/session or re-deriving it.
      * ci_failed recovery attempts already spent on the current failing streak
@@ -432,23 +520,6 @@ export interface SessionInfo {
      * "addressing review" | "rebasing" | "ready to merge".
      */
     "reacting": string;
-
-    /**
-     * The two state axes underneath Status (see internal/state), with raw
-     * freshness timestamps. All optional: absent on an older daemon.
-     */
-    "agentState"?: string;
-    "delivery"?: string;
-    "statusSince"?: string;
-    "agentStateSince"?: string;
-    "lastActivityAt"?: string;
-    "activitySource"?: string;
-    "prObservedAt"?: string;
-    "prStale"?: boolean;
-    "atPrompt"?: boolean;
-    "inputReason"?: string;
-    "currentTool"?: string;
-    "lastNotification"?: string;
 }
 
 /**

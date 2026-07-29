@@ -68,7 +68,11 @@
       <span class="selectable truncate text-faint">{session.title}</span>
       <span class="text-edge">·</span>
       <span class="text-faint">{store.displayNameFor(session.project)}</span>
-      <StatusPill status={session.status} agentState={session.agentState} delivery={session.delivery} />
+      <StatusPill status={session.status} agentState={session.agentState} delivery={session.delivery} interpreted={session.interpretedState} />
+      {#if session.headline}
+        <!-- The interpreter's one-line judgement (untrusted, display only). -->
+        <span class="truncate text-[11px] text-orange" title={session.waitingOn || undefined}>≈ {session.headline}</span>
+      {/if}
       {#if session.currentTool}
         <!-- What the in-flight turn runs right now (PostToolUse hook). -->
         <span class="font-mono text-[10px] text-faint" title="tool the agent is running">{session.currentTool}</span>

@@ -52,8 +52,8 @@
             <td class="max-w-[22rem] truncate py-1 pr-2 text-faint">{s.title}</td>
           {/if}
           <td class="py-1 pr-2 whitespace-nowrap text-faint">{store.displayNameFor(s.project)}</td>
-          <td class="py-1 pr-2" title={s.lastNotification || undefined}>
-            <StatusPill status={s.status} agentState={s.agentState} delivery={s.delivery} />
+          <td class="py-1 pr-2" title={s.headline || s.lastNotification || undefined}>
+            <StatusPill status={s.status} agentState={s.agentState} delivery={s.delivery} interpreted={s.interpretedState} />
           </td>
           <td class="py-1 pr-2"><PrBadge session={s} /></td>
           {#if !dense}

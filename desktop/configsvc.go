@@ -102,6 +102,16 @@ type SettingsDTO struct {
 	BrainSummarizeEscalation bool   `json:"brainSummarizeEscalation"`
 	BrainSummarizeApproved   bool   `json:"brainSummarizeApproved"`
 
+	// [statusagent] — the display-only status interpreter.
+	StatusAgentEnabled           bool    `json:"statusAgentEnabled"`
+	StatusAgentBin               string  `json:"statusAgentBin"`
+	StatusAgentModel             string  `json:"statusAgentModel"`
+	StatusAgentTimeout           int     `json:"statusAgentTimeout"`
+	StatusAgentMinInterval       int     `json:"statusAgentMinInterval"`
+	StatusAgentMaxPerCycle       int     `json:"statusAgentMaxPerCycle"`
+	StatusAgentMinConfidence     float64 `json:"statusAgentMinConfidence"`
+	StatusAgentIncludeTranscript bool    `json:"statusAgentIncludeTranscript"`
+
 	// ReviewProviders is the pluggable review catalog ([[review.provider]]),
 	// resolved to the EFFECTIVE set (the real catalog, or the entries synthesized
 	// from the legacy [review]/[coderabbit] tables). ReviewLegacy reports that the
@@ -239,8 +249,18 @@ func (s *ConfigService) GetSettings() (SettingsDTO, error) {
 		BrainTimeout:             cfg.Brain.TimeoutSeconds,
 		BrainSummarizeEscalation: cfg.Brain.SummarizeEscalation,
 		BrainSummarizeApproved:   cfg.Brain.SummarizeApproved,
-		ReviewProviders:          reviewProvidersDTO(cfg),
-		ReviewLegacy:             legacyReviewOnly(cfg),
+
+		StatusAgentEnabled:           cfg.StatusAgent.Enabled,
+		StatusAgentBin:               cfg.StatusAgent.Bin,
+		StatusAgentModel:             cfg.StatusAgent.Model,
+		StatusAgentTimeout:           cfg.StatusAgent.TimeoutSeconds,
+		StatusAgentMinInterval:       cfg.StatusAgent.MinIntervalSeconds,
+		StatusAgentMaxPerCycle:       cfg.StatusAgent.MaxPerCycle,
+		StatusAgentMinConfidence:     cfg.StatusAgent.MinConfidence,
+		StatusAgentIncludeTranscript: cfg.StatusAgent.IncludeTranscript,
+
+		ReviewProviders: reviewProvidersDTO(cfg),
+		ReviewLegacy:    legacyReviewOnly(cfg),
 
 		BranchPrefix:   cfg.Defaults.BranchPrefix,
 		Symlinks:       cfg.Defaults.Symlinks,
@@ -277,6 +297,14 @@ func (s *ConfigService) SaveSettings(dto SettingsDTO) error {
 	cfg.Brain.TimeoutSeconds = dto.BrainTimeout
 	cfg.Brain.SummarizeEscalation = dto.BrainSummarizeEscalation
 	cfg.Brain.SummarizeApproved = dto.BrainSummarizeApproved
+	cfg.StatusAgent.Enabled = dto.StatusAgentEnabled
+	cfg.StatusAgent.Bin = dto.StatusAgentBin
+	cfg.StatusAgent.Model = dto.StatusAgentModel
+	cfg.StatusAgent.TimeoutSeconds = dto.StatusAgentTimeout
+	cfg.StatusAgent.MinIntervalSeconds = dto.StatusAgentMinInterval
+	cfg.StatusAgent.MaxPerCycle = dto.StatusAgentMaxPerCycle
+	cfg.StatusAgent.MinConfidence = dto.StatusAgentMinConfidence
+	cfg.StatusAgent.IncludeTranscript = dto.StatusAgentIncludeTranscript
 	// Review catalog. While the legacy tables are still present (read-only in the
 	// UI), the provider array is not written back — editing it alongside the
 	// legacy tables would produce a mixed config, a hard validation error;
