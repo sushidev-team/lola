@@ -146,7 +146,7 @@ func TestPostNoSession(t *testing.T) {
 	t.Setenv("LOLA_SESSION", "")
 	t.Setenv("LOLA_HOME", t.TempDir())
 
-	err := Post("stop", "")
+	err := Post("stop", protocol.HookPayload{})
 	if err == nil || !strings.Contains(err.Error(), "not a lola session") {
 		t.Fatalf("Post without LOLA_SESSION = %v, want 'not a lola session' error", err)
 	}
@@ -157,7 +157,7 @@ func TestPostDaemonDown(t *testing.T) {
 	t.Setenv("LOLA_HOME", t.TempDir()) // no socket
 
 	start := time.Now()
-	if err := Post("stop", ""); err == nil {
+	if err := Post("stop", protocol.HookPayload{}); err == nil {
 		t.Fatal("Post with no socket = nil, want dial error")
 	}
 	if d := time.Since(start); d > postTimeout {
@@ -198,12 +198,15 @@ func TestPostSendsHookEvent(t *testing.T) {
 		conn.Write(append(out, '\n'))
 	}()
 
-	if err := Post("notification", "permission_request"); err != nil {
+	if err := Post("notification", protocol.HookPayload{Reason: "permission_request", Message: "Claude needs your permission to use Bash"}); err != nil {
 		t.Fatalf("Post = %v, want nil", err)
 	}
 	select {
 	case req := <-got:
-		want := protocol.Request{Cmd: "hookEvent", Session: "sess-42", Event: "notification", Detail: "permission_request"}
+		want := protocol.Request{
+			Cmd: "hookEvent", Session: "sess-42", Event: "notification", Detail: "permission_request",
+			Hook: &protocol.HookPayload{Reason: "permission_request", Message: "Claude needs your permission to use Bash"},
+		}
 		if !reflect.DeepEqual(req, want) {
 			t.Errorf("daemon received %+v, want %+v", req, want)
 		}
@@ -241,7 +244,7 @@ func TestPostSurvivesSilentDaemon(t *testing.T) {
 	t.Cleanup(func() { postTimeout = old })
 
 	start := time.Now()
-	if err := Post("tool_use", ""); err != nil {
+	if err := Post("tool_use", protocol.HookPayload{}); err != nil {
 		t.Fatalf("Post = %v, want nil (reply is best-effort)", err)
 	}
 	if d := time.Since(start); d > time.Second {

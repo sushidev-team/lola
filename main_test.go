@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/sushidev-team/lola/internal/protocol"
 )
 
 // fakeBin writes an executable no-op script named tool into dir.
@@ -141,20 +143,38 @@ func TestHookCmdCodexNotify(t *testing.T) {
 	}
 }
 
-func TestHookDetail(t *testing.T) {
+func TestHookPayload(t *testing.T) {
 	cases := []struct {
-		name, in, want string
+		name, in string
+		want     protocol.HookPayload
 	}{
-		{"notification", `{"notification_type":"permission_request","message":"..."}`, "permission_request"},
-		{"stop", `{"session_id":"s","cwd":"/w","stop_reason":"end_turn"}`, "end_turn"},
-		{"session end", `{"end_reason":"exit"}`, "exit"},
-		{"no known field", `{"session_id":"s"}`, ""},
-		{"invalid json", `garbage{`, ""},
-		{"empty", ``, ""},
+		{"notification",
+			`{"notification_type":"permission_request","message":"Claude needs your permission to use Bash","transcript_path":"/t.jsonl","session_id":"abc"}`,
+			protocol.HookPayload{Reason: "permission_request", Message: "Claude needs your permission to use Bash", TranscriptPath: "/t.jsonl", AgentSessionID: "abc"}},
+		{"stop", `{"session_id":"s","cwd":"/w","stop_reason":"end_turn"}`,
+			protocol.HookPayload{Reason: "end_turn", AgentSessionID: "s"}},
+		{"tool use", `{"tool_name":"Bash","tool_input":{"command":"go test"}}`,
+			protocol.HookPayload{ToolName: "Bash"}},
+		{"user prompt", `{"prompt":"fix the flaky test"}`,
+			protocol.HookPayload{Prompt: "fix the flaky test"}},
+		{"session end", `{"end_reason":"exit"}`, protocol.HookPayload{Reason: "exit"}},
+		{"no known field", `{"cwd":"/w"}`, protocol.HookPayload{}},
+		{"invalid json", `garbage{`, protocol.HookPayload{}},
+		{"empty", ``, protocol.HookPayload{}},
 	}
 	for _, tc := range cases {
-		if got := hookDetail(strings.NewReader(tc.in)); got != tc.want {
-			t.Errorf("%s: hookDetail(%q) = %q, want %q", tc.name, tc.in, got, tc.want)
+		if got := hookPayload(strings.NewReader(tc.in)); got != tc.want {
+			t.Errorf("%s: hookPayload(%q) = %+v, want %+v", tc.name, tc.in, got, tc.want)
 		}
+	}
+}
+
+// A hostile or bloated payload field is capped before it can reach the wire.
+func TestHookPayloadCapsFields(t *testing.T) {
+	huge := strings.Repeat("x", 1<<16)
+	in := `{"message":"` + huge + `"}`
+	got := hookPayload(strings.NewReader(in))
+	if len(got.Message) > maxHookField {
+		t.Fatalf("message len = %d, want <= %d", len(got.Message), maxHookField)
 	}
 }

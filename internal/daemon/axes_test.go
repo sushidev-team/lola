@@ -281,6 +281,57 @@ func TestHookEventReverifiesAdoptedGate(t *testing.T) {
 	}
 }
 
+// The structured hook payload lands on the record: notification message +
+// classified reason, tool name, transcript path. A nil payload (old hook
+// binary) behaves exactly like before.
+func TestHookPayloadIngestion(t *testing.T) {
+	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})
+	s := nativeSess("FE-1", "working")
+	d.sessions.Upsert(s)
+
+	d.handleHookEvent(protocol.Request{
+		Cmd: "hookEvent", Session: s.ID, Event: "tool_use",
+		Hook: &protocol.HookPayload{ToolName: "Bash", TranscriptPath: "/t/x.jsonl"},
+	})
+	got := getSess(t, d, s.ID)
+	if got.CurrentTool != "Bash" || got.TranscriptPath != "/t/x.jsonl" {
+		t.Fatalf("tool_use payload not ingested: tool=%q transcript=%q", got.CurrentTool, got.TranscriptPath)
+	}
+
+	d.handleHookEvent(protocol.Request{
+		Cmd: "hookEvent", Session: s.ID, Event: "notification",
+		Hook: &protocol.HookPayload{Message: "Claude needs your permission to use Bash", Reason: "permission_request"},
+	})
+	got = getSess(t, d, s.ID)
+	if got.InputReason != state.InputPermission {
+		t.Fatalf("InputReason = %q, want permission_prompt", got.InputReason)
+	}
+	if got.LastNotification == "" {
+		t.Fatal("LastNotification not recorded")
+	}
+	if got.CurrentTool != "" {
+		t.Fatal("leaving working must clear CurrentTool")
+	}
+
+	// A bare idle-notification classifies as idle_notification.
+	d.handleHookEvent(protocol.Request{Cmd: "hookEvent", Session: s.ID, Event: "user_prompt"})
+	d.handleHookEvent(protocol.Request{
+		Cmd: "hookEvent", Session: s.ID, Event: "notification",
+		Hook: &protocol.HookPayload{Message: "Claude is waiting for your input"},
+	})
+	got = getSess(t, d, s.ID)
+	if got.InputReason != state.InputIdleNotify {
+		t.Fatalf("InputReason = %q, want idle_notification", got.InputReason)
+	}
+
+	// Nil payload: still a full transition, no field noise.
+	d.handleHookEvent(protocol.Request{Cmd: "hookEvent", Session: s.ID, Event: "stop"})
+	got = getSess(t, d, s.ID)
+	if got.AgentState != state.AgentIdle || !got.AtPrompt {
+		t.Fatalf("nil-payload stop: axis=%q atPrompt=%v", got.AgentState, got.AtPrompt)
+	}
+}
+
 // Adoption marks the carried gate unverified end-to-end.
 func TestAdoptMarksGateUnverified(t *testing.T) {
 	home := t.TempDir()

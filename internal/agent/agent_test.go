@@ -265,64 +265,68 @@ func TestOpenCodePluginJSEscapesUnsafePath(t *testing.T) {
 
 func TestParseCodexNotify(t *testing.T) {
 	cases := []struct {
-		name       string
-		in         string
-		wantEvent  string
-		wantDetail string
+		name      string
+		in        string
+		wantEvent string
+		wantMsg   string
+		wantType  string
 	}{
 		{
-			name:       "turn complete with message",
-			in:         `{"type":"agent-turn-complete","last-assistant-message":"all done"}`,
-			wantEvent:  "stop",
-			wantDetail: "all done",
+			name:      "turn complete with message",
+			in:        `{"type":"agent-turn-complete","last-assistant-message":"all done"}`,
+			wantEvent: "stop",
+			wantMsg:   "all done",
+			wantType:  "agent-turn-complete",
 		},
 		{
-			name:       "turn complete without message falls back to type",
-			in:         `{"type":"agent-turn-complete"}`,
-			wantEvent:  "stop",
-			wantDetail: "agent-turn-complete",
+			name:      "turn complete without message",
+			in:        `{"type":"agent-turn-complete"}`,
+			wantEvent: "stop",
+			wantType:  "agent-turn-complete",
 		},
 		{
-			name:       "turn complete empty message falls back to type",
-			in:         `{"type":"agent-turn-complete","last-assistant-message":""}`,
-			wantEvent:  "stop",
-			wantDetail: "agent-turn-complete",
+			name:      "turn complete empty message",
+			in:        `{"type":"agent-turn-complete","last-assistant-message":""}`,
+			wantEvent: "stop",
+			wantType:  "agent-turn-complete",
 		},
 		{
-			name:       "approval requested",
-			in:         `{"type":"approval-requested","last-assistant-message":"run rm?"}`,
-			wantEvent:  "notification",
-			wantDetail: "run rm?",
+			name:      "approval requested",
+			in:        `{"type":"approval-requested","last-assistant-message":"run rm?"}`,
+			wantEvent: "notification",
+			wantMsg:   "run rm?",
+			wantType:  "approval-requested",
 		},
 		{
-			name:       "approval requested no message",
-			in:         `{"type":"approval-requested"}`,
-			wantEvent:  "notification",
-			wantDetail: "approval-requested",
+			name:      "approval requested no message",
+			in:        `{"type":"approval-requested"}`,
+			wantEvent: "notification",
+			wantType:  "approval-requested",
 		},
 		{
-			name:       "extra fields ignored",
-			in:         `{"type":"agent-turn-complete","last-assistant-message":"hi","turn-id":7,"extra":true}`,
-			wantEvent:  "stop",
-			wantDetail: "hi",
+			name:      "extra fields ignored",
+			in:        `{"type":"agent-turn-complete","last-assistant-message":"hi","turn-id":7,"extra":true}`,
+			wantEvent: "stop",
+			wantMsg:   "hi",
+			wantType:  "agent-turn-complete",
 		},
 		// Unknown / missing / garbage -> skipped by the caller.
-		{name: "unknown type", in: `{"type":"agent-message"}`, wantEvent: "", wantDetail: ""},
-		{name: "missing type", in: `{"last-assistant-message":"hi"}`, wantEvent: "", wantDetail: ""},
-		{name: "empty object", in: `{}`, wantEvent: "", wantDetail: ""},
-		{name: "null", in: `null`, wantEvent: "", wantDetail: ""},
-		{name: "empty string", in: ``, wantEvent: "", wantDetail: ""},
-		{name: "malformed json", in: `{"type":`, wantEvent: "", wantDetail: ""},
-		{name: "not an object", in: `123`, wantEvent: "", wantDetail: ""},
-		{name: "json array", in: `["agent-turn-complete"]`, wantEvent: "", wantDetail: ""},
-		{name: "whitespace", in: `   `, wantEvent: "", wantDetail: ""},
+		{name: "unknown type", in: `{"type":"agent-message"}`},
+		{name: "missing type", in: `{"last-assistant-message":"hi"}`},
+		{name: "empty object", in: `{}`},
+		{name: "null", in: `null`},
+		{name: "empty string", in: ``},
+		{name: "malformed json", in: `{"type":`},
+		{name: "not an object", in: `123`},
+		{name: "json array", in: `["agent-turn-complete"]`},
+		{name: "whitespace", in: `   `},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			gotEvent, gotDetail := ParseCodexNotify(c.in)
-			if gotEvent != c.wantEvent || gotDetail != c.wantDetail {
-				t.Errorf("ParseCodexNotify(%q) = (%q, %q), want (%q, %q)",
-					c.in, gotEvent, gotDetail, c.wantEvent, c.wantDetail)
+			gotEvent, gotMsg, gotType := ParseCodexNotify(c.in)
+			if gotEvent != c.wantEvent || gotMsg != c.wantMsg || gotType != c.wantType {
+				t.Errorf("ParseCodexNotify(%q) = (%q, %q, %q), want (%q, %q, %q)",
+					c.in, gotEvent, gotMsg, gotType, c.wantEvent, c.wantMsg, c.wantType)
 			}
 		})
 	}

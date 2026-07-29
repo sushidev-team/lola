@@ -245,11 +245,23 @@ func (d *Daemon) handleHookEvent(req protocol.Request) protocol.Response {
 		newStatus     string
 	)
 	now := time.Now()
+	// The structured payload is optional: a pre-payload `lola hook` binary in a
+	// long-lived pane sends none, and every consumer below treats the zero
+	// value as "unknown". Message/Prompt are rendered agent/user text —
+	// DISPLAY-ONLY, never executed, never fed back to any agent.
+	var payload protocol.HookPayload
+	if req.Hook != nil {
+		payload = *req.Hook
+	}
 	_, known := d.sessions.Update(req.Session, func(sess *session.Session) bool {
 		prev := sess.Status
 		// Every recognized hook is a LIVE signal from inside the agent's own
 		// pane, so it also re-verifies a gate carried across a daemon restart
-		// (see Session.AtPromptVerified).
+		// (see Session.AtPromptVerified). Every hook may also carry the
+		// transcript path — record it for the status interpreter.
+		if payload.TranscriptPath != "" {
+			sess.TranscriptPath = payload.TranscriptPath
+		}
 		switch req.Event {
 		case "stop":
 			sess.SetAgentState(state.AgentIdle, "", now)
@@ -257,7 +269,12 @@ func (d *Daemon) handleHookEvent(req protocol.Request) protocol.Response {
 			sess.AtPromptVerified = true
 		case "notification":
 			sess.SetAgentState(state.AgentWaitingInput, "", now)
-			sess.InputReason = state.InputIdleNotify
+			// The message finally says WHY: a permission prompt reads
+			// differently from an idle "waiting for your input" nudge.
+			sess.InputReason = state.ClassifyNotification(payload.Message, payload.Reason)
+			if payload.Message != "" {
+				sess.LastNotification = payload.Message
+			}
 			sess.AtPrompt = false // waiting on a human: never send-keys
 			sess.AtPromptVerified = true
 		case "session_end":
@@ -277,6 +294,9 @@ func (d *Daemon) handleHookEvent(req protocol.Request) protocol.Response {
 			switch sess.AgentState {
 			case state.AgentIdle, state.AgentStarting:
 				sess.SetAgentState(state.AgentWorking, state.SourceHook, now)
+			}
+			if payload.ToolName != "" && (sess.AgentState == state.AgentWorking || sess.AgentState == state.AgentStarting) {
+				sess.CurrentTool = payload.ToolName // what the in-flight turn is doing right now
 			}
 		case "user_prompt":
 			// Turn START: a prompt was submitted (an autonomous turn, or a human

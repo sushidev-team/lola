@@ -92,6 +92,7 @@ type Request struct {
 	Session string `json:"session,omitempty"` // lola session ID ($LOLA_SESSION in the agent's pane); also the kill/pane/answer target
 	Event   string `json:"event,omitempty"`   // normalized: stop|notification|session_end|tool_use|user_prompt
 	Detail  string `json:"detail,omitempty"`  // optional: notification_type / stop_reason / end_reason
+	Hook    *HookPayload `json:"hook,omitempty"` // structured payload fields; nil from pre-payload hook binaries
 
 	// Force is set only for cmd=kill: remove the worktree even when it has
 	// uncommitted changes. Deliberate CLI-only friction (`lola kill <id>
@@ -110,6 +111,21 @@ type Request struct {
 	// (prs, tickets, openManual, …) whose inputs don't fit the flat fields above.
 	// Each such handler unmarshals it into its own <Cmd>Args type.
 	Args json.RawMessage `json:"args,omitempty"`
+}
+
+// HookPayload carries the structured fields the `lola hook` CLI extracts from
+// a lifecycle hook's stdin (Claude Code writes a JSON event payload there) or
+// from a codex notify argv payload. Every field is optional and size-capped by
+// the CLI before it touches the wire. Message and Prompt are rendered
+// agent/user text: DISPLAY-ONLY on the daemon side — never executed, never
+// send-keys'd, never fed back to any agent.
+type HookPayload struct {
+	ToolName       string `json:"toolName,omitempty"`       // PostToolUse: which tool ran
+	Message        string `json:"message,omitempty"`        // Notification text / codex last-assistant-message
+	Prompt         string `json:"prompt,omitempty"`         // UserPromptSubmit: the submitted prompt
+	TranscriptPath string `json:"transcriptPath,omitempty"` // the agent's own transcript file
+	AgentSessionID string `json:"agentSessionId,omitempty"` // the agent's internal conversation id
+	Reason         string `json:"reason,omitempty"`         // notification_type / stop_reason / end_reason
 }
 
 // Response is one line of JSON sent back by the daemon.

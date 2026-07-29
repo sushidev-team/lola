@@ -32,10 +32,12 @@ var postTimeout = 2 * time.Second
 
 // Post reports one normalized hook event ("stop", "notification",
 // "session_end", "tool_use", "user_prompt") for the session named by
-// $LOLA_SESSION to the daemon socket at config.Home()/lola.sock. It sends a single
-// protocol.Request line and reads the single response line best-effort — a
-// missing or slow reply is not an error once the request is on the wire.
-func Post(event, detail string) error {
+// $LOLA_SESSION to the daemon socket at config.Home()/lola.sock, carrying the
+// structured payload fields the CLI extracted (protocol.HookPayload; a zero
+// payload is omitted from the wire). It sends a single protocol.Request line
+// and reads the single response line best-effort — a missing or slow reply is
+// not an error once the request is on the wire.
+func Post(event string, p protocol.HookPayload) error {
 	session := os.Getenv("LOLA_SESSION")
 	if session == "" {
 		return errors.New("not a lola session ($LOLA_SESSION unset)")
@@ -54,12 +56,16 @@ func Post(event, detail string) error {
 	defer conn.Close()
 	_ = conn.SetDeadline(deadline)
 
-	raw, err := json.Marshal(protocol.Request{
+	req := protocol.Request{
 		Cmd:     "hookEvent",
 		Session: session,
 		Event:   event,
-		Detail:  detail,
-	})
+		Detail:  p.Reason, // the legacy short-reason field, kept for log lines
+	}
+	if p != (protocol.HookPayload{}) {
+		req.Hook = &p
+	}
+	raw, err := json.Marshal(req)
 	if err != nil {
 		return err
 	}
