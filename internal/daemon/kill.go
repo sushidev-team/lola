@@ -9,6 +9,7 @@ import (
 
 	"github.com/sushidev-team/lola/internal/protocol"
 	"github.com/sushidev-team/lola/internal/session"
+	"github.com/sushidev-team/lola/internal/state"
 	"github.com/sushidev-team/lola/internal/worktree"
 )
 
@@ -78,7 +79,7 @@ func (d *Daemon) handleKill(ctx context.Context, sessionID string, force bool) (
 		// entry, flag the session dead so the TUI shows it, and tell the caller
 		// how to override.
 		d.sessions.Update(s.ID, func(sess *session.Session) bool {
-			sess.Status = "dead"
+			sess.SetAgentState(state.AgentDead, "", time.Now())
 			return true
 		})
 		if saveErr := d.sessions.Save(); saveErr != nil {

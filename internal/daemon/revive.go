@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/sushidev-team/lola/internal/protocol"
+	"github.com/sushidev-team/lola/internal/session"
+	"github.com/sushidev-team/lola/internal/state"
 )
 
 // reviveExecTimeout bounds the tmux execs a revive drives (new-session +
@@ -60,12 +62,24 @@ func (d *Daemon) handleRevive(ctx context.Context, sessionID string) (protocol.R
 	}
 
 	// Re-establish the dispatch guard BEFORE the store is observed for pickup, so
-	// the revived issue cannot be spawned a second time. The Upsert also makes the
-	// session count toward liveCounted again.
+	// the revived issue cannot be spawned a second time. Apply (atomic
+	// insert-or-update, replacing the racy Get→mutate→Upsert) makes the session
+	// count toward liveCounted again without erasing a hook transition the
+	// freshly relaunched agent may have landed in the meantime: the revived
+	// record wins only the axis/tmux fields it actually re-derived.
 	if revived.IssueUUID != "" {
 		d.inflight.Add(revived.IssueUUID, revived.Issue)
 	}
-	d.sessions.Upsert(revived)
+	d.sessions.Apply(revived.ID, func(cur *session.Session, exists bool) bool {
+		if !exists || cur.AgentState == state.AgentDead || cur.AgentState == "" {
+			*cur = revived
+			return true
+		}
+		// A hook from the relaunched agent already moved the axis (it beat this
+		// write): keep the fresher axis, take only the relaunch bookkeeping.
+		cur.TmuxName = revived.TmuxName
+		return true
+	})
 	if err := d.sessions.Save(); err != nil {
 		d.logf("", "revive: persist sessions: %v", err)
 	}

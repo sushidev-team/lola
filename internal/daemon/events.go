@@ -21,6 +21,7 @@ import (
 
 	"github.com/sushidev-team/lola/internal/protocol"
 	"github.com/sushidev-team/lola/internal/session"
+	"github.com/sushidev-team/lola/internal/state"
 )
 
 // eventLogCap bounds the activity ring. A rail feed shows ~4-10 lines; a couple
@@ -70,24 +71,10 @@ func (l *eventLog) snapshot() []sessionEvent {
 }
 
 // notableTransition decides whether a from→to status change is worth a feed
-// line. A spawn (from "") always is. Routine noise is dropped: the idle↔working
-// turn churn (working is kept ONLY as a "resumed" signal out of needs_input),
-// and the internal non-statuses that never read as an event to a human.
+// line (state.Notable): a spawn always is; the idle↔working turn churn and
+// the orphaned adoption anomaly are dropped.
 func notableTransition(from, to string) bool {
-	if to == "" {
-		return false
-	}
-	if from == "" {
-		return true // spawn
-	}
-	switch to {
-	case "idle", "no_pr", "no_signal", "orphaned", "none":
-		return false
-	case "working":
-		return from == "needs_input" // resumed after waiting on a human
-	default:
-		return true
-	}
+	return state.Notable(from, to)
 }
 
 // recordSessionEvent is the single capture helper wired to both

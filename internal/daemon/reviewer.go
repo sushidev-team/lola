@@ -644,7 +644,9 @@ func (d *Daemon) sendHandoffToAgent(ctx context.Context, s session.Session, p re
 	if s.TmuxName == "" {
 		return
 	}
-	if !s.AtPrompt {
+	if !s.AtPrompt || !d.ensurePromptVerified(ctx, s) {
+		// Mid-turn, or an adoption-carried gate that cannot be verified against
+		// the live pane (see ensurePromptVerified): defer, never type.
 		d.deferHandoff(s.ID, p.Kind, stash)
 		d.logf("", "review: %s (%s) worker is mid-turn — deferring the hand-off", s.ID, p.Kind)
 		return

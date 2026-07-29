@@ -370,6 +370,19 @@ func (s *Session) TouchActivity(src state.ActivitySource, now time.Time) {
 	s.ActivitySource = src
 }
 
+// Reroll re-derives the rollup after axis fields were assigned DIRECTLY (the
+// adoption merge copies a prior record's delivery axis wholesale, Since
+// stamps included). Every other writer must go through SetAgentState /
+// SetDelivery, which reroll implicitly.
+func (s *Session) Reroll(now time.Time) { s.recomputeStatus(now) }
+
+// EnsureAxes backfills the two-axis state on a record that predates it (axes
+// absent, legacy Status string only). Idempotent — an axis-bearing record is
+// untouched. Store.Update/Apply run it on every record they hand out, so a
+// mutator can rely on the axes being present no matter how the record was
+// inserted.
+func (s *Session) EnsureAxes() { s.migrateAxes() }
+
 // recomputeStatus re-derives the rollup from the two axes and stamps
 // StatusSince on change. It is the ONLY place Status is written once a record
 // carries axes.
@@ -613,6 +626,7 @@ func (s *Store) Upsert(sess Session) {
 		pr := *sess.PR
 		sess.PR = &pr // never share a pointer with the caller
 	}
+	sess.EnsureAxes() // a legacy axis-less record gets axes on the way in
 	s.sessions[sess.ID] = sess
 }
 
@@ -640,6 +654,7 @@ func (s *Store) Update(id string, fn func(sess *Session) bool) (Session, bool) {
 		pr := *sess.PR
 		sess.PR = &pr
 	}
+	sess.EnsureAxes() // a legacy axis-less record gets axes before fn sees it
 	if !fn(&sess) {
 		return sess, true
 	}
@@ -684,6 +699,9 @@ func (s *Store) Apply(id string, fn func(sess *Session, exists bool) bool) (Sess
 	if sess.PR != nil {
 		pr := *sess.PR
 		sess.PR = &pr
+	}
+	if existed {
+		sess.EnsureAxes() // a legacy axis-less record gets axes before fn sees it
 	}
 	if !fn(&sess, existed) {
 		return sess, false

@@ -90,7 +90,7 @@ func (f *fakeNative) Spawn(ctx context.Context, p config.Project, is linear.Issu
 		Branch:    "lola/" + strings.ToLower(is.Identifier),
 		Repo:      p.Repo,
 		TmuxName:  id,
-		Status:    runtime.StatusWorking,
+		Status:    "working",
 	}, nil
 }
 
@@ -157,7 +157,7 @@ func (f *fakeNative) OpenPRAgent(ctx context.Context, p config.Project, id, bran
 	if err != nil {
 		return session.Session{}, err
 	}
-	return session.Session{ID: id, Source: "native", Kind: session.KindPR, Project: p.Name, Branch: branch, Repo: p.Repo, TmuxName: id, Status: runtime.StatusWorking, Agent: "claude"}, nil
+	return session.Session{ID: id, Source: "native", Kind: session.KindPR, Project: p.Name, Branch: branch, Repo: p.Repo, TmuxName: id, Status: "working", Agent: "claude"}, nil
 }
 
 func (f *fakeNative) OpenManualAgent(ctx context.Context, p config.Project, id, branch, base, prompt string) (session.Session, error) {
@@ -168,7 +168,7 @@ func (f *fakeNative) OpenManualAgent(ctx context.Context, p config.Project, id, 
 	if err != nil {
 		return session.Session{}, err
 	}
-	return session.Session{ID: id, Source: "native", Kind: session.KindManual, Project: p.Name, Branch: branch, Repo: p.Repo, TmuxName: id, Status: runtime.StatusWorking, Agent: "claude"}, nil
+	return session.Session{ID: id, Source: "native", Kind: session.KindManual, Project: p.Name, Branch: branch, Repo: p.Repo, TmuxName: id, Status: "working", Agent: "claude"}, nil
 }
 
 func (f *fakeNative) prAgentCalls() []nativeAgentCall {
@@ -218,7 +218,7 @@ func (f *fakeNative) Revive(ctx context.Context, s session.Session) (session.Ses
 	if f.reviveErr != nil {
 		return session.Session{}, f.reviveErr
 	}
-	s.Status = runtime.StatusWorking
+	s.Status = "working"
 	s.TmuxName = s.ID
 	return s, nil
 }

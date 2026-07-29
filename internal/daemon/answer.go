@@ -10,6 +10,7 @@ import (
 	"github.com/sushidev-team/lola/internal/attention"
 	"github.com/sushidev-team/lola/internal/protocol"
 	"github.com/sushidev-team/lola/internal/session"
+	"github.com/sushidev-team/lola/internal/state"
 )
 
 // answerExecTimeout bounds the single tmux exec each pane/answer request drives
@@ -101,12 +102,15 @@ func (d *Daemon) handleAnswer(ctx context.Context, sessionID, text string) error
 		return fmt.Errorf("send answer to %s: %w", sessionID, err)
 	}
 
-	// The agent is resuming: close the send-keys gate and promote it back to
-	// working. The next lifecycle hook (tool_use / stop / notification) corrects
-	// this to the real state.
+	// The agent is resuming: close the send-keys gate and promote its axis back
+	// to working. SetAgentState stamps LastActivityAt, so the answered session
+	// gets the full anti-false-working grace window even for agents that emit
+	// no user_prompt hook (codex/opencode) — the old bare Status write skipped
+	// the stamp and the guard downgraded them within a cycle. The next
+	// lifecycle hook corrects this to the real state.
 	d.sessions.Update(sessionID, func(cur *session.Session) bool {
 		cur.AtPrompt = false
-		cur.Status = "working"
+		cur.SetAgentState(state.AgentWorking, "", time.Now())
 		return true
 	})
 	if err := d.sessions.Save(); err != nil {

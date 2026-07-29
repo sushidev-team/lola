@@ -16,6 +16,7 @@ import (
 	"github.com/sushidev-team/lola/internal/notify"
 	"github.com/sushidev-team/lola/internal/protocol"
 	"github.com/sushidev-team/lola/internal/session"
+	"github.com/sushidev-team/lola/internal/state"
 )
 
 // serve runs the accept loop until the listener is closed at shutdown.
@@ -246,31 +247,48 @@ func (d *Daemon) handleHookEvent(req protocol.Request) protocol.Response {
 	now := time.Now()
 	_, known := d.sessions.Update(req.Session, func(sess *session.Session) bool {
 		prev := sess.Status
+		// Every recognized hook is a LIVE signal from inside the agent's own
+		// pane, so it also re-verifies a gate carried across a daemon restart
+		// (see Session.AtPromptVerified).
 		switch req.Event {
 		case "stop":
-			sess.Status = "idle"
+			sess.SetAgentState(state.AgentIdle, "", now)
 			sess.AtPrompt = true // idle at the prompt: safe to send-keys into
+			sess.AtPromptVerified = true
 		case "notification":
-			sess.Status = "needs_input"
+			sess.SetAgentState(state.AgentWaitingInput, "", now)
+			sess.InputReason = state.InputIdleNotify
 			sess.AtPrompt = false // waiting on a human: never send-keys
+			sess.AtPromptVerified = true
 		case "session_end":
-			sess.Status = "session_ended"
+			sess.SetAgentState(state.AgentExited, "", now)
 			sess.AtPrompt = false
+			sess.AtPromptVerified = true
 		case "tool_use":
-			sess.AtPrompt = false     // mid-turn (busy): never send-keys
-			sess.LastActivityAt = now // POSITIVE evidence of work (heartbeat)
-			if sess.Status == "idle" {
-				sess.Status = "working"
+			sess.AtPrompt = false // mid-turn (busy): never send-keys
+			sess.AtPromptVerified = true
+			sess.TouchActivity(state.SourceHook, now) // POSITIVE evidence of work (heartbeat)
+			// A running tool promotes only a RESTING-idle (or just-spawned) axis
+			// back to working. Deliberately NOT waiting_input: PostToolUse is the
+			// one async hook, so a late-delivered tool_use can land AFTER the
+			// Notification that parked the agent — clearing needs_input on it
+			// would hide a genuine block. user_prompt (synchronous, definitive
+			// turn start) is what clears waiting_input.
+			switch sess.AgentState {
+			case state.AgentIdle, state.AgentStarting:
+				sess.SetAgentState(state.AgentWorking, state.SourceHook, now)
 			}
 		case "user_prompt":
 			// Turn START: a prompt was submitted (an autonomous turn, or a human
 			// attach nudge). Clear the send-keys gate so the reaction engine never
-			// types into the now-busy pane, and promote an idle / needs_input
-			// session to working — the agent is actively processing again.
+			// types into the now-busy pane, and promote a resting axis back to
+			// working — the agent is actively processing again.
 			sess.AtPrompt = false
-			sess.LastActivityAt = now // POSITIVE evidence of work (turn start)
-			if sess.Status == "idle" || sess.Status == "needs_input" {
-				sess.Status = "working"
+			sess.AtPromptVerified = true
+			sess.TouchActivity(state.SourceHook, now) // POSITIVE evidence of work (turn start)
+			switch sess.AgentState {
+			case state.AgentIdle, state.AgentWaitingInput, state.AgentStarting:
+				sess.SetAgentState(state.AgentWorking, state.SourceHook, now)
 			}
 		default:
 			unknownEvent = true

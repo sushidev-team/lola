@@ -21,8 +21,8 @@ func TestNotableTransition(t *testing.T) {
 		{"working", "needs_input", true},   // needs you
 		{"ci_pending", "ci_failed", true},  // CI broke
 		{"review_pending", "merged", true}, // merged
-		{"working", "no_pr", false},        // internal
-		{"working", "orphaned", false},     // internal
+		{"working", "orphaned", false},     // adoption anomaly, not feed-worthy
+		{"working", "closed", true},        // PR closed without merging
 		{"working", "", false},             // no status
 	}
 	for _, c := range cases {

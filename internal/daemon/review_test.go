@@ -513,7 +513,7 @@ func TestReviewFallbackAdvancesOnQuota(t *testing.T) {
 	setProviders(d, cli, claude)
 
 	prim := &fakeReview{err: review.ErrQuota}       // primary over quota
-	fb := &fakeReview{findings: "FALLBACK-FINDING"}  // fallback answers
+	fb := &fakeReview{findings: "FALLBACK-FINDING"} // fallback answers
 	prim.installKind(d, kindCoderabbitCLI)
 	fb.installKind(d, kindClaudeSession)
 

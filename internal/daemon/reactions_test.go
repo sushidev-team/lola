@@ -10,6 +10,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -200,10 +201,13 @@ func TestReactMergedDirtyDropsEntryKeepsWorktree(t *testing.T) {
 	}
 }
 
-// A merged session already reacted to (LastReactedStatus=="merged", e.g. a dirty
-// worktree kept) is not cleaned or notified again.
-func TestReactMergedFiresOnce(t *testing.T) {
-	nat := &fakeNative{}
+// A merged cleanup that fails with a NON-dirty error keeps the store entry
+// un-dropped and un-notified, so the next cycle retries — reactMerged's
+// idempotence is drop-on-success, not a one-shot guard (the old
+// LastReactedStatus=="merged" guard could never be stamped: success removes
+// the record it would have been stamped on).
+func TestReactMergedRetriesOnError(t *testing.T) {
+	nat := &fakeNative{killErr: errors.New("tmux exploded")}
 	d := newTestDaemon(t, reactTestConfig(nativePoll("p1")), &linear.Fake{}, nat)
 	seams := &fakeReactSeams{}
 	seams.install(d)
@@ -211,15 +215,24 @@ func TestReactMergedFiresOnce(t *testing.T) {
 	pr := openPR(7, "MERGEABLE", "", "pass")
 	pr.State = "MERGED"
 	s := reactSess("FE-1", "merged", pr)
-	s.LastReactedStatus = "merged"
 	d.sessions.Upsert(s)
 
 	d.react(context.Background(), s)
-	if len(nat.killCalls()) != 0 {
-		t.Error("a merged session already cleaned/kept must not be killed again")
+	if len(nat.killCalls()) != 1 {
+		t.Fatalf("want one kill attempt, got %d", len(nat.killCalls()))
+	}
+	if _, ok := d.sessions.Get(s.ID); !ok {
+		t.Error("a failed merged cleanup must keep the store entry for the retry")
 	}
 	if seams.noteCount() != 0 {
-		t.Error("a merged session already reacted to must not re-notify")
+		t.Error("a failed merged cleanup must not notify (nothing was cleaned)")
+	}
+
+	// Next cycle retries the still-merged session.
+	got, _ := d.sessions.Get(s.ID)
+	d.react(context.Background(), got)
+	if len(nat.killCalls()) != 2 {
+		t.Errorf("want the retry's second kill attempt, got %d", len(nat.killCalls()))
 	}
 }
 
