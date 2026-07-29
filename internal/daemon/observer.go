@@ -201,6 +201,10 @@ func (d *Daemon) observeNative(ctx context.Context) {
 	}
 
 	touched := false
+	interpretQueued := 0
+	d.mu.Lock()
+	interpretPerCycle := d.cfg.StatusAgent.MaxPerCycle
+	d.mu.Unlock()
 	for _, s := range d.sessions.Snapshot() {
 		if s.Source != "native" {
 			continue
@@ -394,6 +398,16 @@ func (d *Daemon) observeNative(ctx context.Context) {
 			// idle at its prompt again (re-reads the record itself; one delivered
 			// per cycle since a send consumes AtPrompt).
 			d.flushReviewHandoffs(ctx, s.ID)
+			// Status interpreter, ambiguous-state sweep: a session whose
+			// deterministic story is thin (waiting on a human, unreadable pane,
+			// long-quiet "working") queues an interpretation — capped per cycle,
+			// debounced + hash-deduped by the worker itself.
+			if interpretQueued < interpretPerCycle && alive &&
+				shouldInterpretAmbiguous(updated, paneClassified && paneAct == attention.ActivityUnknown, now) {
+				if d.maybeQueueInterpret(updated.ID) {
+					interpretQueued++
+				}
+			}
 		}
 	}
 	if !touched {

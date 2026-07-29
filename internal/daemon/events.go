@@ -96,6 +96,29 @@ func (d *Daemon) recordSessionEvent(from string, s session.Session) {
 	})
 }
 
+// eventsFor returns up to n of the ring's recorded transitions for one
+// session, newest first, as compact "from→to (Xm ago)" lines — the status
+// interpreter's transition context. Empty when the session has none recorded.
+func (d *Daemon) eventsFor(id string, n int, now time.Time) []string {
+	if d.events == nil || id == "" {
+		return nil
+	}
+	evs := d.events.snapshot()
+	out := make([]string, 0, n)
+	for i := len(evs) - 1; i >= 0 && len(out) < n; i-- {
+		e := evs[i]
+		if e.id != id {
+			continue
+		}
+		from := e.from
+		if from == "" {
+			from = "spawned"
+		}
+		out = append(out, from+"→"+e.to+" ("+formatAge(now.Sub(e.at))+" ago)")
+	}
+	return out
+}
+
 // eventFeed flattens the ring into render-ready protocol.Events, NEWEST FIRST,
 // with each Ago formatted against now (the request time), matching how
 // SessionInfo.Age is computed.

@@ -215,6 +215,16 @@ type SessionInfo struct {
 	CurrentTool     string    `json:"currentTool,omitempty"`     // tool the in-flight turn runs right now (PostToolUse)
 	LastNotification string   `json:"lastNotification,omitempty"` // last Notification message (display-only text)
 
+	// [statusagent] interpreter overlay — untrusted LLM text, DISPLAY ONLY,
+	// pre-gated daemon-side (confidence, freshness, supersession): a client
+	// renders it verbatim or not at all. InterpretedState is set ONLY when the
+	// interpreter DISAGREES with agentState (render with an "approx" marker);
+	// Headline ships whenever a valid judgement exists.
+	InterpretedState string `json:"interpretedState,omitempty"` // working|waiting_input|idle|stuck; "" = no override
+	Headline         string `json:"headline,omitempty"`         // one line: what the agent is doing right now
+	WaitingOn        string `json:"waitingOn,omitempty"`        // what the agent needs, when blocked
+	HeadlineAgo      string `json:"headlineAgo,omitempty"`      // formatted age of the judgement, e.g. "2m"
+
 	// Reaction-engine posture (PLAN P3), flattened so the TUI renders reaction
 	// state without importing internal/session or re-deriving it.
 	CIRetries int  `json:"ciRetries"` // ci_failed recovery attempts already spent on the current failing streak

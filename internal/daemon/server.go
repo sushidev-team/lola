@@ -361,9 +361,11 @@ func (d *Daemon) sessionsData() protocol.SessionsData {
 	snap := d.sessions.Snapshot()
 	now := time.Now()
 	// The ci_failed retry budget is the "N/M" denominator of the reacting
-	// label; reactions config is global, read once under the config lock.
+	// label; reactions config is global, read once under the config lock. The
+	// interpreter's confidence floor gates the display overlay below.
 	d.mu.Lock()
 	ciBudget := d.cfg.Reactions.CIFailed.Retries
+	minConfidence := d.cfg.StatusAgent.MinConfidence
 	d.mu.Unlock()
 	out := protocol.SessionsData{Sessions: make([]protocol.SessionInfo, 0, len(snap))}
 	for _, s := range snap {
@@ -405,6 +407,14 @@ func (d *Daemon) sessionsData() protocol.SessionsData {
 			si.PRNumber = s.PR.Number
 			si.Checks = s.PR.ChecksState
 			si.Review = s.PR.ReviewDecision
+		}
+		// [statusagent] display overlay, pre-gated here (the ONE consumer of
+		// the overlay fields): clients render what arrives or nothing.
+		if istate, headline, waitingOn, at := displayOverlay(s, minConfidence, now); headline != "" || istate != "" {
+			si.InterpretedState = istate
+			si.Headline = headline
+			si.WaitingOn = waitingOn
+			si.HeadlineAgo = formatAge(now.Sub(at))
 		}
 		out.Sessions = append(out.Sessions, si)
 	}
@@ -497,6 +507,7 @@ func (d *Daemon) handleReload(ctx context.Context) error {
 	// operator can enable/disable it or change model/timeout via reload. A now-
 	// disabled or newly-unavailable brain drops back to generic templates.
 	d.setBrainLocked(nc.Brain)
+	d.setStatusAgentLocked(nc.StatusAgent)
 	// Rebuild the flexible review provider catalog + per-kind clients from the new
 	// config (the [[review.provider]] catalog, or legacy synthesis): enabling/
 	// disabling a provider or changing its command/timeout/transports/fallback

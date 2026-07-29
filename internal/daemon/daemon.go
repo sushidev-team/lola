@@ -18,6 +18,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -32,6 +33,7 @@ import (
 	"github.com/sushidev-team/lola/internal/secrets"
 	"github.com/sushidev-team/lola/internal/session"
 	"github.com/sushidev-team/lola/internal/state"
+	"github.com/sushidev-team/lola/internal/statusagent"
 	"github.com/sushidev-team/lola/internal/tmux"
 	"github.com/sushidev-team/lola/internal/worktree"
 )
@@ -167,6 +169,21 @@ type Daemon struct {
 	// observer fall back to per-session NativeAPI.Alive with no activity signal.
 	listTmuxSessions func(ctx context.Context) ([]tmux.Session, error)
 
+	// Status interpreter ([statusagent], statusagentwire.go): the OPT-IN
+	// display-only LLM pass. statusAgent/interpretSeam are nil when disabled or
+	// the binary is missing (mirrored into interpretOn, the atomic the store's
+	// OnTransition callback gates on WITHOUT taking d.mu — lock order there is
+	// store → nothing). interpretCh feeds the single worker; interpretBusy is
+	// its per-session in-flight guard (interpretMu is never taken under the
+	// store lock). Tests install a fake interpretSeam directly.
+	statusAgent     *statusagent.Client
+	interpretSeam   func(ctx context.Context, contextText string) (string, error)
+	interpretOn     atomic.Bool
+	interpretCh     chan string
+	interpretMu     sync.Mutex
+	interpretBusy   map[string]bool
+	statusAgentWarn sync.Once // "enabled but binary missing" logged once
+
 	// Flexible review system (PLAN flexible-review §2–5): the daemon-wide provider
 	// CATALOG plus the per-kind exec CLIENTS behind late-bound seams. reviewProviders
 	// is the resolved descriptor set (built from the [[review.provider]] catalog, or
@@ -269,7 +286,15 @@ func newDaemon(cfg *config.Config, lin linear.API, logger *log.Logger, home stri
 	}
 	// Feed the activity ring from every status transition the store commits
 	// (the spawn birth is recorded separately at the dispatch site).
-	d.sessions.OnTransition(d.recordSessionEvent)
+	d.sessions.OnTransition(func(from string, s session.Session) {
+		d.recordSessionEvent(from, s)
+		// A notable transition is also the status interpreter's trigger. Runs
+		// under the store lock: interpretOnTransition does nothing but cheap
+		// field checks and a non-blocking channel send.
+		d.interpretOnTransition(from, s)
+	})
+	d.interpretCh = make(chan string, interpretQueueCap)
+	d.interpretBusy = map[string]bool{}
 	d.openPR = d.ghOpenPR
 	scmc := &scm.Client{}
 	d.prForBranch = scmc.PRForBranch
@@ -383,6 +408,7 @@ func Run(ctx context.Context) error {
 	// single log line and the generic behavior, never a per-cycle error.
 	d.mu.Lock()
 	d.setBrainLocked(cfg.Brain)
+	d.setStatusAgentLocked(cfg.StatusAgent)
 	brainEnabledButMissing := cfg.Brain.Enabled && d.brain == nil
 	// Flexible review system: build the provider catalog (or synthesize it from
 	// the legacy [review]/[coderabbit] tables) and its per-kind exec clients.
@@ -460,6 +486,12 @@ func Run(ctx context.Context) error {
 
 	d.wg.Add(1)
 	go d.observeLoop(ctx)
+
+	// Status interpreter worker ([statusagent], statusagentwire.go). On the
+	// CANCELLABLE run context, deliberately not shutdown-shielded: an
+	// interpretation is read-only and safe to abort.
+	d.wg.Add(1)
+	go d.interpretLoop(ctx)
 
 	go d.serve(ctx, ln)
 
