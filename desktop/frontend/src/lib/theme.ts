@@ -23,11 +23,13 @@ export function statusText(status: string): string {
     case "approved":
       return "text-good";
     case "needs_input":
-    case "no_signal":
       return "text-orange";
     case "merged":
     case "session_ended":
     case "idle":
+    case "closed":
+    case "shell":
+    case "orphaned":
       return "text-faint";
     default:
       return "text-ink";
@@ -48,7 +50,6 @@ export function pillKind(status: string): PillKind {
     case "draft":
       return "work";
     case "approved":
-    case "pr_open":
       return "done";
     case "review_pending":
       return "grey";
@@ -111,12 +112,14 @@ export function statusBadge(status: string): string {
     merge_conflict: "mc",
     review_pending: "rv",
     approved: "ok",
-    pr_open: "pr",
     merged: "mg",
     dead: "xx",
     session_ended: "en",
     idle: "..",
     draft: "df",
+    closed: "cl",
+    shell: "sh",
+    orphaned: "or",
   };
   return m[status] ?? "??";
 }
@@ -136,7 +139,6 @@ export function sortRank(status: string): number {
       return 2;
     case "review_pending":
     case "approved":
-    case "pr_open":
       return 3;
     case "merged":
     case "dead":
@@ -163,10 +165,10 @@ export function isAttention(status: string): boolean {
 /** Kanban columns and the statuses they bucket (KanbanColumns in the TUI). */
 export const KANBAN_COLUMNS: { title: string; statuses: string[] }[] = [
   { title: "Needs You", statuses: ["needs_input"] },
-  { title: "Working", statuses: ["working", "ci_pending", "idle"] },
+  { title: "Working", statuses: ["working", "ci_pending", "idle", "draft"] },
   { title: "Fixing", statuses: ["ci_failed", "changes_requested", "merge_conflict"] },
-  { title: "In Review", statuses: ["review_pending", "approved", "pr_open"] },
-  { title: "Done", statuses: ["merged", "dead", "session_ended"] },
+  { title: "In Review", statuses: ["review_pending", "approved"] },
+  { title: "Done", statuses: ["merged", "closed", "dead", "session_ended"] },
 ];
 
 /** Which kanban column a status falls in; unmapped → Working (the TUI fallback). */
@@ -207,6 +209,48 @@ export function reactingText(reacting: string): string {
   )
     return "text-warn";
   return "text-ink";
+}
+
+/**
+ * The complete rolled-up status vocabulary, mirroring Go's
+ * internal/state.AllStatuses(). desktop/state_parity_test.go parses this
+ * array and fails the build when the two lists drift — keep order identical.
+ */
+export const ALL_STATUSES: string[] = [
+  "working", "idle", "needs_input", "session_ended", "dead",
+  "shell", "orphaned",
+  "draft", "ci_pending", "ci_failed", "merge_conflict",
+  "changes_requested", "review_pending", "approved",
+  "merged", "closed",
+];
+
+/** ≤2-char glyph for the AGENT axis (agentBadge in the TUI). "" = no badge. */
+export function agentBadge(agentState: string): string {
+  switch (agentState) {
+    case "working":
+    case "starting":
+      return "wk";
+    case "waiting_input":
+      return "?!";
+    case "idle":
+      return "..";
+    case "exited":
+      return "en";
+    default:
+      return "";
+  }
+}
+
+/**
+ * Whether to show the agent-axis badge next to the status pill: only when the
+ * axes DIVERGE under an open PR (statusPillFor in the TUI) — "ci_pending ·wk"
+ * says CI is running AND the agent is still typing.
+ */
+export function showAgentBadge(status: string, agentState?: string, delivery?: string): boolean {
+  if (!agentState || !delivery || delivery === "none") return false;
+  if (status === "merged" || status === "closed" || status === "dead" || status === "needs_input") return false;
+  if (status === agentState) return false;
+  return agentBadge(agentState) !== "";
 }
 
 export interface Attentionish {

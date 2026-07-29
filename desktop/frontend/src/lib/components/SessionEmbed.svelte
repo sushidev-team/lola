@@ -68,7 +68,14 @@
       <span class="selectable truncate text-faint">{session.title}</span>
       <span class="text-edge">·</span>
       <span class="text-faint">{store.displayNameFor(session.project)}</span>
-      <StatusPill status={session.status} />
+      <StatusPill status={session.status} agentState={session.agentState} delivery={session.delivery} />
+      {#if session.currentTool}
+        <!-- What the in-flight turn runs right now (PostToolUse hook). -->
+        <span class="font-mono text-[10px] text-faint" title="tool the agent is running">{session.currentTool}</span>
+      {/if}
+      {#if session.prStale}
+        <span class="text-[10px] text-warn" title="gh has been failing; the delivery state may be old">⚠ PR stale</span>
+      {/if}
       {#if session.branch}<span class="selectable font-mono text-[11px] text-faint">{session.branch}</span>{/if}
       <span class="ml-auto flex items-center gap-1.5">
         {#if focused}

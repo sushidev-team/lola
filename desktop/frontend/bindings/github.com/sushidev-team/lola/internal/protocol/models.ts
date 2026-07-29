@@ -432,6 +432,23 @@ export interface SessionInfo {
      * "addressing review" | "rebasing" | "ready to merge".
      */
     "reacting": string;
+
+    /**
+     * The two state axes underneath Status (see internal/state), with raw
+     * freshness timestamps. All optional: absent on an older daemon.
+     */
+    "agentState"?: string;
+    "delivery"?: string;
+    "statusSince"?: string;
+    "agentStateSince"?: string;
+    "lastActivityAt"?: string;
+    "activitySource"?: string;
+    "prObservedAt"?: string;
+    "prStale"?: boolean;
+    "atPrompt"?: boolean;
+    "inputReason"?: string;
+    "currentTool"?: string;
+    "lastNotification"?: string;
 }
 
 /**

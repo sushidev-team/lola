@@ -52,7 +52,9 @@
             <td class="max-w-[22rem] truncate py-1 pr-2 text-faint">{s.title}</td>
           {/if}
           <td class="py-1 pr-2 whitespace-nowrap text-faint">{store.displayNameFor(s.project)}</td>
-          <td class="py-1 pr-2"><StatusPill status={s.status} /></td>
+          <td class="py-1 pr-2" title={s.lastNotification || undefined}>
+            <StatusPill status={s.status} agentState={s.agentState} delivery={s.delivery} />
+          </td>
           <td class="py-1 pr-2"><PrBadge session={s} /></td>
           {#if !dense}
             <td class="py-1 pr-2 whitespace-nowrap {reactingText(s.reacting)}">{s.reacting}</td>
