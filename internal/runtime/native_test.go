@@ -759,8 +759,9 @@ func TestSpawnRejectsIssueWithoutIdentifier(t *testing.T) {
 func TestAdoptPairingMatrix(t *testing.T) {
 	f := newFixture(t, "", "")
 	// On disk + registered: eng-1 (tmux alive -> working), eng-2 (no tmux ->
-	// dead). Tmux only: eng-9 (-> orphaned, reported but never killed) and a
-	// non-lola session (ignored).
+	// dead). Tmux only: eng-9 (-> orphaned, reported but never killed), a
+	// non-lola session (ignored), and an embedded shell TAB
+	// ("<id>-shell-1", ignored — it belongs to eng-1, not a session of its own).
 	base := filepath.Join(f.root, "nori")
 	dir1 := filepath.Join(base, "lola-nori-eng-1")
 	dir2 := filepath.Join(base, "lola-nori-eng-2")
@@ -781,6 +782,7 @@ LOLA_EOF
 	tmuxBin, tmuxLog := scriptBin(t, "tmux", `*"ls -F"*)
   cat <<'LOLA_EOF'
 lola-nori-eng-1	1720000000	0
+lola-nori-eng-1-shell-1	1720000003	0
 lola-nori-eng-9	1720000001	0
 main	1720000002	1
 LOLA_EOF

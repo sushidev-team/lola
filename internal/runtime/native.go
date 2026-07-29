@@ -68,6 +68,18 @@ const sessionPrefix = "lola-"
 // adoption can recognize a manual session from its ID alone.
 const manualInfix = "open-"
 
+// shellTabRe matches the auxiliary shell-TAB tmux sessions the TUI's and the
+// desktop app's embedded terminals open beside an agent pane
+// ("<sessionID>-shell-N" — see internal/tui/agentembed.go nextShellName and
+// desktop/termsvc.go shellMarker). They belong to a parent session; Adopt
+// must never report them as sessions of their own.
+var shellTabRe = regexp.MustCompile(`-shell-\d+$`)
+
+// IsShellTabSession reports whether a tmux session name is an embedded
+// shell TAB of a parent session rather than a session of its own. The daemon
+// uses it to purge phantom records an older daemon's Adopt created.
+func IsShellTabSession(name string) bool { return shellTabRe.MatchString(name) }
+
 // lolaDir is the runtime scratch directory inside each worktree, holding
 // prompt.md, env, and the per-agent callback artifact(s) (Claude's
 // settings.json, or Codex's codex/ home). It is excluded via the worktree's
@@ -813,6 +825,18 @@ func (n *Native) Adopt(ctx context.Context) ([]session.Session, error) {
 	for _, ts := range tmuxSessions {
 		if strings.HasPrefix(ts.Name, sessionPrefix) {
 			live[ts.Name] = true
+		}
+	}
+
+	// Shell TABS ("<sessionID>-shell-N", opened by the TUI's / the app's
+	// embedded terminal next to an agent pane) are auxiliary tmux sessions of a
+	// PARENT session, not sessions of their own — adopting an unpaired one
+	// would report a phantom "orphaned" row per open tab after every daemon
+	// restart. They never pair (no worktree carries the -shell-N suffix), so
+	// dropping them from the orphan scan loses nothing.
+	for name := range live {
+		if shellTabRe.MatchString(name) {
+			delete(live, name)
 		}
 	}
 

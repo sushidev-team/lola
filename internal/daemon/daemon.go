@@ -933,7 +933,23 @@ func (d *Daemon) adoptNativeSessions(ctx context.Context) {
 			d.logf("", "adopt: %s is a lola tmux session without a worktree (orphaned; kill candidate)", adopted.ID)
 		}
 	}
-	if len(found) == 0 {
+	// Purge phantom shell-TAB records an OLDER daemon's Adopt created (it
+	// reported "<id>-shell-N" panes as orphaned sessions). The current Adopt
+	// filters them, but a persisted phantom would otherwise sit in the store
+	// forever: its pane is alive, so the observer keeps re-stamping LastSeen
+	// and the retention prune never fires. Store-record removal only — the
+	// tmux session itself is a live terminal tab and is left alone.
+	purged := 0
+	for _, s := range d.sessions.Snapshot() {
+		if s.Source == "native" && runtime.IsShellTabSession(s.ID) {
+			d.sessions.Delete(s.ID)
+			purged++
+		}
+	}
+	if purged > 0 {
+		d.logf("", "adopt: purged %d phantom shell-tab record(s)", purged)
+	}
+	if len(found) == 0 && purged == 0 {
 		return
 	}
 	d.logf("", "adopt: %d native session(s) recorded", len(found))

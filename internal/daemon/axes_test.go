@@ -396,3 +396,30 @@ func TestAdoptMarksGateUnverified(t *testing.T) {
 		t.Fatal("an adoption-carried gate must be UNVERIFIED until a live signal confirms it")
 	}
 }
+
+// Adoption purges phantom shell-tab records an older daemon created
+// ("<id>-shell-N" panes reported as orphaned sessions) — their panes stay
+// alive, so nothing else would ever prune them.
+func TestAdoptPurgesShellTabPhantoms(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("LOLA_HOME", home)
+	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{},
+		&fakeNative{})
+
+	real := nativeSess("FE-1", "working")
+	phantom := session.Session{
+		ID: real.ID + "-shell-1", Source: "native", Project: "p1",
+		TmuxName: real.ID + "-shell-1", Status: "orphaned",
+	}
+	d.sessions.Upsert(real)
+	d.sessions.Upsert(phantom)
+
+	d.adoptNativeSessions(context.Background())
+
+	if _, ok := d.sessions.Get(phantom.ID); ok {
+		t.Fatal("phantom shell-tab record survived adoption")
+	}
+	if _, ok := d.sessions.Get(real.ID); !ok {
+		t.Fatal("real session must survive the purge")
+	}
+}
