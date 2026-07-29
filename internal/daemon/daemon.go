@@ -161,6 +161,12 @@ type Daemon struct {
 	paneTail       func(ctx context.Context, tmuxName string, lines int) (string, error)
 	prDiff         func(ctx context.Context, repo string, pr int) (string, error)
 
+	// listTmuxSessions lists every session on lola's tmux server in ONE exec —
+	// the observer's per-cycle liveness + #{session_activity} source (replacing
+	// N per-session has-session probes). nil (tests without the seam) makes the
+	// observer fall back to per-session NativeAPI.Alive with no activity signal.
+	listTmuxSessions func(ctx context.Context) ([]tmux.Session, error)
+
 	// Flexible review system (PLAN flexible-review §2–5): the daemon-wide provider
 	// CATALOG plus the per-kind exec CLIENTS behind late-bound seams. reviewProviders
 	// is the resolved descriptor set (built from the [[review.provider]] catalog, or
@@ -358,6 +364,14 @@ func Run(ctx context.Context) error {
 	}
 	d.lolaBin = lolaBin
 	d.native = newNativeRuntime(cfg, home, lolaBin, d.linearKey, d.nativeLogf)
+	// One `tmux ls` per observe cycle answers liveness for EVERY session (and
+	// carries #{session_activity}, the zero-cost output-freshness stamp) —
+	// replacing N per-session `has-session` execs. Wired HERE (production
+	// Run), not in newDaemon: a bare test daemon must never exec the real
+	// tmux, and nil makes the observer fall back to per-session Alive.
+	d.listTmuxSessions = func(ctx context.Context) ([]tmux.Session, error) {
+		return d.tmuxClient().ListSessions(ctx)
+	}
 	d.realNative = true
 	// Reaction notifier (PLAN P3.20): resolve the [notify] table into a live
 	// desktop/Slack fan-out. Rebuilt on reload (handleReload). The Slack webhook

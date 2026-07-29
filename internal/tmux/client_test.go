@@ -85,7 +85,10 @@ func TestRunPinsCwd(t *testing.T) {
 }
 
 func TestListSessionsParsesFormatLines(t *testing.T) {
-	fixture := "main\t1720000000\t1\nlola-NORI-12-1\t1720003600\t0"
+	// One 4-field line (current format, with #{session_activity}) and one
+	// 3-field line (an older server / mixed-upgrade state): both must parse,
+	// the latter with a zero ("unknown") Activity.
+	fixture := "main\t1720000000\t1\t1720009999\nlola-NORI-12-1\t1720003600\t0"
 	bin, argsLog := fakeTmux(t, fixture, "", 0)
 	c := &Client{Bin: bin}
 
@@ -94,18 +97,19 @@ func TestListSessionsParsesFormatLines(t *testing.T) {
 		t.Fatalf("ListSessions: %v", err)
 	}
 	want := []Session{
-		{Name: "main", Created: time.Unix(1720000000, 0), Attached: true},
+		{Name: "main", Created: time.Unix(1720000000, 0), Attached: true, Activity: time.Unix(1720009999, 0)},
 		{Name: "lola-NORI-12-1", Created: time.Unix(1720003600, 0), Attached: false},
 	}
 	if len(got) != len(want) {
 		t.Fatalf("got %d sessions, want %d: %+v", len(got), len(want), got)
 	}
 	for i := range want {
-		if !got[i].Created.Equal(want[i].Created) || got[i].Name != want[i].Name || got[i].Attached != want[i].Attached {
+		if !got[i].Created.Equal(want[i].Created) || got[i].Name != want[i].Name ||
+			got[i].Attached != want[i].Attached || !got[i].Activity.Equal(want[i].Activity) {
 			t.Errorf("session[%d] = %+v, want %+v", i, got[i], want[i])
 		}
 	}
-	wantArgs := "-L lola ls -F #{session_name}\t#{session_created}\t#{session_attached}"
+	wantArgs := "-L lola ls -F #{session_name}\t#{session_created}\t#{session_attached}\t#{session_activity}"
 	if args := loggedArgs(t, argsLog); args != wantArgs {
 		t.Errorf("invoked %q, want %q", args, wantArgs)
 	}

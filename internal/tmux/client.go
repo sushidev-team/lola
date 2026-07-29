@@ -27,8 +27,11 @@ import (
 )
 
 // listFormat is the `tmux ls -F` format: tab-separated name, creation epoch
-// seconds, and attached-client count.
-const listFormat = "#{session_name}\t#{session_created}\t#{session_attached}"
+// seconds, attached-client count, and last-activity epoch seconds
+// (#{session_activity} — tmux's own "when did this session's pane last emit
+// bytes" stamp, a zero-cost activity signal the observer feeds the
+// anti-false-working guard).
+const listFormat = "#{session_name}\t#{session_created}\t#{session_attached}\t#{session_activity}"
 
 // OrphanSessionPrefix is the tmux session-name prefix lola gives every session
 // it spawns ("lola-<project>-<identifier>"). The migration guards (daemon +
@@ -41,6 +44,10 @@ type Session struct {
 	Name     string
 	Created  time.Time
 	Attached bool
+	// Activity is tmux's #{session_activity}: the last time any pane of the
+	// session produced output. Zero when the server predates the format field
+	// (a mid-upgrade mixed state) — consumers must treat zero as "unknown".
+	Activity time.Time
 }
 
 // Client shells out to tmux. Bin is an absolute path or "tmux"; a bare name
@@ -147,7 +154,9 @@ func (c *Client) ListSessions(ctx context.Context) ([]Session, error) {
 			continue
 		}
 		fields := strings.Split(line, "\t")
-		if len(fields) != 3 {
+		// 3 fields tolerated: an older tmux (or a test fake) without the
+		// trailing #{session_activity} column parses with Activity zero.
+		if len(fields) != 3 && len(fields) != 4 {
 			return nil, fmt.Errorf("tmux ls: unexpected line %q", line)
 		}
 		created, err := strconv.ParseInt(fields[1], 10, 64)
@@ -158,11 +167,19 @@ func (c *Client) ListSessions(ctx context.Context) ([]Session, error) {
 		if err != nil {
 			return nil, fmt.Errorf("tmux ls: bad session_attached in %q: %w", line, err)
 		}
-		sessions = append(sessions, Session{
+		s := Session{
 			Name:     fields[0],
 			Created:  time.Unix(created, 0),
 			Attached: attached > 0,
-		})
+		}
+		if len(fields) == 4 && fields[3] != "" {
+			// Best-effort: a malformed activity stamp degrades to zero
+			// ("unknown"), never fails the whole listing.
+			if act, err := strconv.ParseInt(fields[3], 10, 64); err == nil && act > 0 {
+				s.Activity = time.Unix(act, 0)
+			}
+		}
+		sessions = append(sessions, s)
 	}
 	return sessions, nil
 }

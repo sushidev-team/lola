@@ -16,6 +16,7 @@ import (
 	"github.com/sushidev-team/lola/internal/scm"
 	"github.com/sushidev-team/lola/internal/session"
 	"github.com/sushidev-team/lola/internal/state"
+	"github.com/sushidev-team/lola/internal/tmux"
 )
 
 // THE FLAP FIX: with an open PR (delivery ci_pending), a stop hook moves only
@@ -159,6 +160,46 @@ func TestNativeLiveCountedCountsMergeConflict(t *testing.T) {
 	}
 	if got := NativeLiveCounted(sessions); got != 2 {
 		t.Fatalf("NativeLiveCounted = %d, want 2 (merge_conflict + working)", got)
+	}
+}
+
+// tmux #{session_activity} SUSTAINS a working axis (refreshing the anti-
+// false-working anchor for agents with no tool_use heartbeat) but never
+// upgrades a resting one — output is not a new turn.
+func TestTmuxActivitySustainsWorkingNeverUpgrades(t *testing.T) {
+	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})
+	(&fakeObsSeams{}).install(d)
+	d.paneTail = func(ctx context.Context, tmuxName string, lines int) (string, error) {
+		return paneUnknown, nil // no pane cue: only the activity stamp speaks
+	}
+
+	working := nativeSess("FE-1", "working")
+	working.Agent = "codex" // no tool_use hook: the old pipeline starved this anchor
+	working.LastActivityAt = time.Now().Add(-2 * time.Minute) // past the 45s guard
+	idle := nativeSess("FE-2", "idle")
+	d.sessions.Upsert(working)
+	d.sessions.Upsert(idle)
+
+	fresh := time.Now()
+	d.listTmuxSessions = func(ctx context.Context) ([]tmux.Session, error) {
+		return []tmux.Session{
+			{Name: working.ID, Activity: fresh},
+			{Name: idle.ID, Activity: fresh},
+		}, nil
+	}
+
+	d.observe(context.Background())
+
+	got := getSess(t, d, working.ID)
+	if got.Status != "working" {
+		t.Fatalf("working codex session = %q, want working sustained by tmux activity", got.Status)
+	}
+	if got.ActivitySource != state.SourceTmuxActivity {
+		t.Fatalf("ActivitySource = %q, want tmux_activity", got.ActivitySource)
+	}
+	gotIdle := getSess(t, d, idle.ID)
+	if gotIdle.AgentState != state.AgentIdle {
+		t.Fatalf("idle session = %q, fresh output must NOT upgrade idle to working", gotIdle.AgentState)
 	}
 }
 

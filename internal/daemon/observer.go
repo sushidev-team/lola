@@ -166,18 +166,53 @@ func (d *Daemon) observeNative(ctx context.Context) {
 		lin = a
 	}
 
+	// ONE `tmux ls` answers liveness for every session this cycle and carries
+	// #{session_activity} (tmux's own "when did the pane last emit bytes"
+	// stamp). On error — or without the seam — fall back to the per-session
+	// Alive probes, with no activity signal (zero time = unknown).
+	var (
+		aliveByName    map[string]bool
+		activityByName map[string]time.Time
+	)
+	if d.listTmuxSessions != nil {
+		cctx, cancel := context.WithTimeout(ctx, observeExecTimeout)
+		ls, err := d.listTmuxSessions(cctx)
+		cancel()
+		if err != nil {
+			d.logf("", "observe: tmux ls failed (falling back to per-session probes): %v", err)
+		} else {
+			aliveByName = make(map[string]bool, len(ls))
+			activityByName = make(map[string]time.Time, len(ls))
+			for _, ts := range ls {
+				aliveByName[ts.Name] = true
+				if !ts.Activity.IsZero() {
+					activityByName[ts.Name] = ts.Activity
+				}
+			}
+		}
+	}
+	sessionAlive := func(s session.Session) (alive bool, activity time.Time) {
+		if aliveByName != nil {
+			return aliveByName[paneTarget(s)], activityByName[paneTarget(s)]
+		}
+		cctx, cancel := context.WithTimeout(ctx, observeExecTimeout)
+		defer cancel()
+		return nat.Alive(cctx, s), time.Time{}
+	}
+
 	touched := false
 	for _, s := range d.sessions.Snapshot() {
 		if s.Source != "native" {
 			continue
 		}
+		alive, tmuxActivity := sessionAlive(s)
 		// An agent-less shell (`lola open`, the manual-shell flow) has no coding
 		// agent: its status is pure tmux liveness and it must NEVER reach the
 		// reaction / write-back / review / coderabbit engines below (which would
 		// send-keys into the human's interactive shell). Refresh it in isolation
 		// and skip the whole agent path.
 		if s.IsAgentless() {
-			if d.observeManualShell(ctx, nat, s) {
+			if d.observeManualShell(s, alive) {
 				touched = true
 			}
 			continue
@@ -195,9 +230,6 @@ func (d *Daemon) observeNative(ctx context.Context) {
 			}
 			cancel()
 		}
-		cctx, cancel := context.WithTimeout(ctx, observeExecTimeout)
-		alive := nat.Alive(cctx, s)
-		cancel()
 
 		repo := s.Repo
 		if repo == "" {
@@ -291,14 +323,27 @@ func (d *Daemon) observeNative(ctx context.Context) {
 				}
 			}
 
-			// 2. AGENT axis — liveness + hooks (already merged into cur) + pane.
+			// 2. AGENT axis — liveness + hooks (already merged into cur) + pane
+			// + tmux's own activity stamp.
 			agentChanged := false
 			if !alive {
 				// A dead pane is terminal for the agent axis; the rollup still
 				// reads "merged" when the delivery axis says so (Rollup rule 1).
 				agentChanged = cur.SetAgentState(state.AgentDead, "", now)
-			} else if paneClassified {
-				agentChanged = agentReconcile(cur, paneAct, paneQuestion, now)
+			} else {
+				// Fresh pane output SUSTAINS a working/starting axis (refreshing
+				// the anti-false-working anchor before the guard below reads it)
+				// but never upgrades a resting axis — output is not a new turn
+				// (idle agents redraw their prompt too). Applied first so codex/
+				// opencode sessions, whose hook set has no tool_use heartbeat,
+				// stop being downgraded while genuinely working.
+				if !tmuxActivity.IsZero() && tmuxActivity.After(cur.LastActivityAt) &&
+					(cur.AgentState == state.AgentWorking || cur.AgentState == state.AgentStarting) {
+					cur.TouchActivity(state.SourceTmuxActivity, tmuxActivity)
+				}
+				if paneClassified {
+					agentChanged = agentReconcile(cur, paneAct, paneQuestion, now)
+				}
 			}
 
 			if !alive && !agentChanged && !deliveryChanged {
@@ -367,10 +412,7 @@ func (d *Daemon) observeNative(ctx context.Context) {
 // is gone (a dead shell then ages out of the store via the retention prune). An
 // alive shell is always re-stamped so its LastSeen stays fresh and a long-lived
 // checkout never ages out from under the human. Returns whether it wrote.
-func (d *Daemon) observeManualShell(ctx context.Context, nat NativeAPI, s session.Session) bool {
-	cctx, cancel := context.WithTimeout(ctx, observeExecTimeout)
-	alive := nat.Alive(cctx, s)
-	cancel()
+func (d *Daemon) observeManualShell(s session.Session, alive bool) bool {
 	wrote := false
 	now := time.Now()
 	d.sessions.Update(s.ID, func(cur *session.Session) bool {
