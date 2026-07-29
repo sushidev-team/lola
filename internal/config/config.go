@@ -225,16 +225,17 @@ type LinearConfig struct {
 }
 
 type Config struct {
-	Defaults   Defaults         `toml:"defaults"`
-	Linear     LinearConfig     `toml:"linear"`
-	Projects   []Project        `toml:"project"`
-	Reactions  ReactionsConfig  `toml:"reactions"`
-	Notify     NotifyConfig     `toml:"notify"`
-	Brain      BrainConfig      `toml:"brain"`
-	Review     ReviewConfig     `toml:"review"`
-	CodeRabbit CodeRabbitConfig `toml:"coderabbit"`
-	Tmux       TmuxConfig       `toml:"tmux"`
-	UI         UIConfig         `toml:"ui"`
+	Defaults    Defaults          `toml:"defaults"`
+	Linear      LinearConfig      `toml:"linear"`
+	Projects    []Project         `toml:"project"`
+	Reactions   ReactionsConfig   `toml:"reactions"`
+	Notify      NotifyConfig      `toml:"notify"`
+	Brain       BrainConfig       `toml:"brain"`
+	StatusAgent StatusAgentConfig `toml:"statusagent"`
+	Review      ReviewConfig      `toml:"review"`
+	CodeRabbit  CodeRabbitConfig  `toml:"coderabbit"`
+	Tmux        TmuxConfig        `toml:"tmux"`
+	UI          UIConfig          `toml:"ui"`
 
 	// ReviewProviders is the NEW canonical global review CATALOG (resolved from
 	// [[review.provider]]). Empty when the file uses the legacy [review]/
@@ -331,17 +332,18 @@ func (d *Duration) UnmarshalText(text []byte) error {
 // fileConfig / fileDefaults mirror Config for (de)serialization only, so
 // Config can expose PollInterval as a plain time.Duration.
 type fileConfig struct {
-	Defaults   fileDefaults          `toml:"defaults"`
-	Linear     LinearConfig          `toml:"linear"`
-	Projects   []fileProject         `toml:"project"`
-	Polls      []legacyPoll          `toml:"poll,omitempty"` // COMPAT-ONLY: pre-merge top-level polls, folded onto their project on load
-	Reactions  *fileReactionsConfig  `toml:"reactions,omitempty"`
-	Notify     *fileNotifyConfig     `toml:"notify,omitempty"`
-	Brain      *fileBrainConfig      `toml:"brain,omitempty"`
-	Review     *fileReviewConfig     `toml:"review,omitempty"`
-	CodeRabbit *fileCodeRabbitConfig `toml:"coderabbit,omitempty"`
-	Tmux       *fileTmuxConfig       `toml:"tmux,omitempty"`
-	UI         *fileUIConfig         `toml:"ui,omitempty"`
+	Defaults    fileDefaults           `toml:"defaults"`
+	Linear      LinearConfig           `toml:"linear"`
+	Projects    []fileProject          `toml:"project"`
+	Polls       []legacyPoll           `toml:"poll,omitempty"` // COMPAT-ONLY: pre-merge top-level polls, folded onto their project on load
+	Reactions   *fileReactionsConfig   `toml:"reactions,omitempty"`
+	Notify      *fileNotifyConfig      `toml:"notify,omitempty"`
+	Brain       *fileBrainConfig       `toml:"brain,omitempty"`
+	StatusAgent *fileStatusAgentConfig `toml:"statusagent,omitempty"`
+	Review      *fileReviewConfig      `toml:"review,omitempty"`
+	CodeRabbit  *fileCodeRabbitConfig  `toml:"coderabbit,omitempty"`
+	Tmux        *fileTmuxConfig        `toml:"tmux,omitempty"`
+	UI          *fileUIConfig          `toml:"ui,omitempty"`
 }
 
 // fileProject mirrors Project on disk. Its polling fields are inline; the
@@ -696,6 +698,7 @@ func (fc *fileConfig) config() *Config {
 		Reactions:       resolveReactions(fc.Reactions),
 		Notify:          resolveNotify(fc.Notify),
 		Brain:           resolveBrain(fc.Brain),
+		StatusAgent:     resolveStatusAgent(fc.StatusAgent),
 		Review:          resolveReview(fc.Review),
 		ReviewProviders: resolveReviewProviders(reviewProviderEntries(fc.Review)),
 		CodeRabbit:      resolveCodeRabbit(fc.CodeRabbit),
@@ -740,15 +743,16 @@ func (c *Config) file() *fileConfig {
 			PrioritySort:   c.Defaults.PrioritySort,
 			Review:         c.Defaults.Review,
 		},
-		Linear:     c.Linear,
-		Projects:   fps,
-		Reactions:  reactionsFile(c.Reactions),
-		Notify:     notifyFile(c.Notify),
-		Brain:      brainFile(c.Brain),
-		Review:     c.reviewMirror(),
-		CodeRabbit: coderabbitFile(c.CodeRabbit),
-		Tmux:       tmuxFile(c.Tmux),
-		UI:         uiFile(c.UI),
+		Linear:      c.Linear,
+		Projects:    fps,
+		Reactions:   reactionsFile(c.Reactions),
+		Notify:      notifyFile(c.Notify),
+		Brain:       brainFile(c.Brain),
+		StatusAgent: statusAgentFile(c.StatusAgent),
+		Review:      c.reviewMirror(),
+		CodeRabbit:  coderabbitFile(c.CodeRabbit),
+		Tmux:        tmuxFile(c.Tmux),
+		UI:          uiFile(c.UI),
 	}
 }
 
