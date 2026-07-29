@@ -11,6 +11,7 @@ import (
 
 	"github.com/sushidev-team/lola/internal/protocol"
 	"github.com/sushidev-team/lola/internal/scm"
+	"github.com/sushidev-team/lola/internal/state"
 )
 
 // prsExecTimeout bounds the single `gh pr list` a cmd=prs miss runs, so a hung
@@ -110,11 +111,26 @@ func (d *Daemon) handlePrs(ctx context.Context, raw json.RawMessage) (protocol.P
 			Checks:      pr.Checks,
 			Review:      pr.Review,
 			URL:         pr.URL,
-			Status:      pr.Status,
+			Status:      openPRStatus(pr),
 			AlreadyOpen: held[pr.Branch],
 		})
 	}
 	return data, nil
+}
+
+// openPRStatus derives the picker row's status word from an open PR's facts
+// via the shared delivery derivation (scm ships facts only). No hysteresis:
+// the picker has no prior state for a PR it is only listing.
+func openPRStatus(pr scm.OpenPR) string {
+	return string(state.DeriveDelivery(&scm.PR{
+		Number:         pr.Number,
+		URL:            pr.URL,
+		State:          "OPEN",
+		IsDraft:        pr.IsDraft,
+		Mergeable:      pr.Mergeable,
+		ReviewDecision: pr.Review,
+		ChecksState:    pr.Checks,
+	}, state.DeliveryNone))
 }
 
 // cachedOpenPRs returns a repo's open PRs, serving a fresh cache entry when one

@@ -28,27 +28,33 @@ import (
 	"strconv"
 	"strings"
 
+	"time"
+
 	"github.com/sushidev-team/lola/internal/agent"
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/hook"
 	"github.com/sushidev-team/lola/internal/linear"
 	"github.com/sushidev-team/lola/internal/session"
+	"github.com/sushidev-team/lola/internal/state"
 	"github.com/sushidev-team/lola/internal/tmux"
 	"github.com/sushidev-team/lola/internal/worktree"
 )
 
-// Session status values reported by Spawn and Adopt. They deliberately reuse
-// the observer's vocabulary where one exists ("working").
-const (
-	// StatusWorking: tmux session alive and worktree present.
-	StatusWorking = "working"
-	// StatusDead: worktree exists but its tmux session is gone — a cleanup
-	// candidate for the daemon (after checking the PR merged).
-	StatusDead = "dead"
-	// StatusOrphaned: a lola-* tmux session without a matching worktree — a
-	// kill candidate. Adopt only reports it; it never auto-kills.
-	StatusOrphaned = "orphaned"
-)
+// withAgentState stamps the agent axis (and thereby the rolled-up Status) on
+// a freshly constructed session record. Every constructor goes through it so
+// a runtime-born record is always axis-bearing:
+//
+//	state.AgentStarting — spawned agent, no first heartbeat yet (rolls up
+//	  "working" so the dispatch budget counts the slot immediately)
+//	state.AgentWorking  — adopted live agent pane
+//	state.AgentShell    — agent-less shell (`lola open`)
+//	state.AgentDead     — worktree without a tmux session (cleanup candidate)
+//	state.AgentOrphaned — lola-* tmux session without a worktree; Adopt only
+//	  reports it, never auto-kills
+func withAgentState(s session.Session, a state.AgentState) session.Session {
+	s.SetAgentState(a, "", time.Now())
+	return s
+}
 
 // sessionPrefix namespaces everything the native runtime owns: tmux session
 // names and worktree directory basenames. Adopt scans by this prefix.
@@ -61,6 +67,18 @@ const sessionPrefix = "lola-"
 // key), so both SessionID-shape parsing (issueFromSessionID) and restart
 // adoption can recognize a manual session from its ID alone.
 const manualInfix = "open-"
+
+// shellTabRe matches the auxiliary shell-TAB tmux sessions the TUI's and the
+// desktop app's embedded terminals open beside an agent pane
+// ("<sessionID>-shell-N" — see internal/tui/agentembed.go nextShellName and
+// desktop/termsvc.go shellMarker). They belong to a parent session; Adopt
+// must never report them as sessions of their own.
+var shellTabRe = regexp.MustCompile(`-shell-\d+$`)
+
+// IsShellTabSession reports whether a tmux session name is an embedded
+// shell TAB of a parent session rather than a session of its own. The daemon
+// uses it to purge phantom records an older daemon's Adopt created.
+func IsShellTabSession(name string) bool { return shellTabRe.MatchString(name) }
 
 // lolaDir is the runtime scratch directory inside each worktree, holding
 // prompt.md, env, and the per-agent callback artifact(s) (Claude's
@@ -278,7 +296,7 @@ func (n *Native) Spawn(ctx context.Context, p config.Project, issue linear.Issue
 		n.Logf("session %s: status-bar styling failed (cosmetic, session is up): %v", id, err)
 	}
 
-	return session.Session{
+	return withAgentState(session.Session{
 		ID:        id,
 		Source:    "native",
 		Kind:      session.KindLinear,
@@ -290,9 +308,8 @@ func (n *Native) Spawn(ctx context.Context, p config.Project, issue linear.Issue
 		Repo:      p.Repo,
 		Worktree:  dir,
 		TmuxName:  id,
-		Status:    StatusWorking,
 		Agent:     string(kind),
-	}, nil
+	}, state.AgentStarting), nil
 }
 
 // Open checks out an EXISTING branch or PR of project p into a throwaway
@@ -352,7 +369,7 @@ func (n *Native) Open(ctx context.Context, p config.Project, sessionID, fetchRef
 		n.Logf("session %s: status-bar styling failed (cosmetic, shell is up): %v", sessionID, err)
 	}
 
-	return session.Session{
+	return withAgentState(session.Session{
 		ID:        sessionID,
 		Source:    "native",
 		Kind:      session.KindPR, // detached checkout of an existing upstream ref: non-owning
@@ -364,8 +381,7 @@ func (n *Native) Open(ctx context.Context, p config.Project, sessionID, fetchRef
 		Repo:      p.Repo,
 		Worktree:  dir,
 		TmuxName:  sessionID,
-		Status:    "shell",
-	}, nil
+	}, state.AgentShell), nil
 }
 
 // OpenManual creates a NEW branch off base (empty → the project's default
@@ -415,7 +431,7 @@ func (n *Native) OpenManual(ctx context.Context, p config.Project, sessionID, br
 		n.Logf("session %s: status-bar styling failed (cosmetic, shell is up): %v", sessionID, err)
 	}
 
-	return session.Session{
+	return withAgentState(session.Session{
 		ID:        sessionID,
 		Source:    "native",
 		Kind:      session.KindManual, // lola-owned new branch: owns + deletes it on teardown
@@ -426,8 +442,7 @@ func (n *Native) OpenManual(ctx context.Context, p config.Project, sessionID, br
 		Repo:      p.Repo,
 		Worktree:  dir,
 		TmuxName:  sessionID,
-		Status:    "shell",
-	}, nil
+	}, state.AgentShell), nil
 }
 
 // finishAgentLaunch performs the shared post-worktree steps for an AGENT
@@ -500,7 +515,7 @@ func (n *Native) OpenPRAgent(ctx context.Context, p config.Project, sessionID, b
 	if err := n.finishAgentLaunch(ctx, p, sessionID, dir, branch, kind, false /* pr: upstream branch, not owned */, prompt); err != nil {
 		return session.Session{}, err
 	}
-	return session.Session{
+	return withAgentState(session.Session{
 		ID:       sessionID,
 		Source:   "native",
 		Kind:     session.KindPR,
@@ -510,9 +525,8 @@ func (n *Native) OpenPRAgent(ctx context.Context, p config.Project, sessionID, b
 		Repo:     p.Repo,
 		Worktree: dir,
 		TmuxName: sessionID,
-		Status:   StatusWorking,
 		Agent:    string(kind),
-	}, nil
+	}, state.AgentStarting), nil
 }
 
 // OpenManualAgent creates a NEW branch off base and launches the coding agent on
@@ -530,7 +544,7 @@ func (n *Native) OpenManualAgent(ctx context.Context, p config.Project, sessionI
 	if err := n.finishAgentLaunch(ctx, p, sessionID, dir, branch, kind, true /* manual: lola-owned branch */, prompt); err != nil {
 		return session.Session{}, err
 	}
-	return session.Session{
+	return withAgentState(session.Session{
 		ID:       sessionID,
 		Source:   "native",
 		Kind:     session.KindManual,
@@ -540,9 +554,8 @@ func (n *Native) OpenManualAgent(ctx context.Context, p config.Project, sessionI
 		Repo:     p.Repo,
 		Worktree: dir,
 		TmuxName: sessionID,
-		Status:   StatusWorking,
 		Agent:    string(kind),
-	}, nil
+	}, state.AgentStarting), nil
 }
 
 // shellCommand builds the tmux command for a manual (`lola open`) session: a
@@ -793,9 +806,9 @@ func (n *Native) rollbackTmux(ctx context.Context, p config.Project, id, dir, br
 // tmux sessions with worktree directories under WT.Root across all configured
 // projects and reports one session.Session per finding:
 //
-//	tmux alive + worktree present  → StatusWorking (re-adopt)
-//	worktree without tmux          → StatusDead (cleanup candidate)
-//	tmux without worktree          → StatusOrphaned (kill candidate)
+//	tmux alive + worktree present  → AgentWorking (re-adopt)
+//	worktree without tmux          → AgentDead (cleanup candidate)
+//	tmux without worktree          → AgentOrphaned (kill candidate)
 //
 // Adopt observes and reports only — it never kills sessions or removes
 // worktrees; acting on dead/orphaned candidates is the daemon's decision.
@@ -815,6 +828,18 @@ func (n *Native) Adopt(ctx context.Context) ([]session.Session, error) {
 		}
 	}
 
+	// Shell TABS ("<sessionID>-shell-N", opened by the TUI's / the app's
+	// embedded terminal next to an agent pane) are auxiliary tmux sessions of a
+	// PARENT session, not sessions of their own — adopting an unpaired one
+	// would report a phantom "orphaned" row per open tab after every daemon
+	// restart. They never pair (no worktree carries the -shell-N suffix), so
+	// dropping them from the orphan scan loses nothing.
+	for name := range live {
+		if shellTabRe.MatchString(name) {
+			delete(live, name)
+		}
+	}
+
 	out := []session.Session{}
 	paired := map[string]bool{}
 	for _, p := range n.Cfg.Projects {
@@ -827,19 +852,19 @@ func (n *Native) Adopt(ctx context.Context) ([]session.Session, error) {
 			if !strings.HasPrefix(id, sessionPrefix) {
 				continue // not ours; leave foreign dirs alone
 			}
-			status := StatusDead
+			a := state.AgentDead
 			if live[id] {
-				status = StatusWorking
+				a = state.AgentWorking
 				paired[id] = true
 			}
 			// A manually-opened shell has no coding agent: recover it as such from
 			// its ID shape (backstop for a lost store record) so a live one comes
 			// back as "shell" and the daemon keeps it out of the control loop.
 			manual := isManualSessionID(id, p.Name)
-			if manual && status == StatusWorking {
-				status = "shell"
+			if manual && a == state.AgentWorking {
+				a = state.AgentShell
 			}
-			out = append(out, session.Session{
+			out = append(out, withAgentState(session.Session{
 				ID:        id,
 				Source:    "native",
 				Manual:    manual,
@@ -848,8 +873,7 @@ func (n *Native) Adopt(ctx context.Context) ([]session.Session, error) {
 				Issue:     issueFromSessionID(id, p.Name),
 				Repo:      p.Repo,
 				TmuxName:  id,
-				Status:    status,
-			})
+			}, a))
 		}
 	}
 
@@ -859,7 +883,7 @@ func (n *Native) Adopt(ctx context.Context) ([]session.Session, error) {
 		}
 		project := n.projectForSessionName(name)
 		manual := isManualSessionID(name, project)
-		out = append(out, session.Session{
+		out = append(out, withAgentState(session.Session{
 			ID:        name,
 			Source:    "native",
 			Manual:    manual,
@@ -867,8 +891,7 @@ func (n *Native) Adopt(ctx context.Context) ([]session.Session, error) {
 			Project:   project,
 			Issue:     issueFromSessionID(name, project),
 			TmuxName:  name,
-			Status:    StatusOrphaned,
-		})
+		}, state.AgentOrphaned))
 	}
 
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
@@ -960,7 +983,11 @@ func (n *Native) Revive(ctx context.Context, s session.Session) (session.Session
 		n.Logf("session %s: status-bar styling failed (cosmetic, session is up): %v", id, err)
 	}
 	revived := s
-	revived.Status = StatusWorking
+	// SetAgentState stamps LastActivityAt on the working entry, so the freshly
+	// relaunched pane gets the full anti-false-working grace window instead of
+	// inheriting the pre-death activity anchor (which was already stale and
+	// used to downgrade a just-revived session to idle on the next cycle).
+	revived.SetAgentState(state.AgentWorking, "", time.Now())
 	revived.TmuxName = id
 	return revived, nil
 }

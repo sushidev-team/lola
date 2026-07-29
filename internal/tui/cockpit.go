@@ -475,7 +475,7 @@ func (m *rootModel) sessionsBody(w, h int) []string {
 		}
 		rows[i] = []string{
 			marker, issue, m.projLabel(si.Project),
-			statusPill(si.Status), pr,
+			statusPillFor(si), pr,
 			reactingStyle(si.Reacting).Render(dash(si.Reacting)), dash(si.Age),
 		}
 	}

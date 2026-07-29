@@ -171,13 +171,15 @@ socket.
 
 ## Caps
 
-- **[changed from AO bridge]** budget = min(poll.concurrency_cap, global_cap −
-  liveCounted). liveCounted counts ONLY **native** sessions in the store whose
-  derived status occupies a slot: `working`, `needs_input`, `draft`,
-  `ci_failed`, `changes_requested`, `ci_pending`. Parked-for-review (approved,
-  review_pending, no_pr) and terminal (merged, dead, session_ended) don't
-  count, so held PRs don't stall pickup. (Was: AO sessions in
-  `ao.counting_states`.)
+- **[changed from AO bridge] [changed: two-axis status]** budget =
+  min(poll.concurrency_cap, global_cap − liveCounted). liveCounted counts ONLY
+  **native** sessions in the store whose rolled-up status occupies a slot
+  (`state.HoldsSlot`): `working`, `needs_input`, `draft`, `ci_failed`,
+  `changes_requested`, `ci_pending`, `merge_conflict` (the engine is actively
+  re-prompting a conflicting agent to rebase, so its runner is busy).
+  Parked-for-review (approved, review_pending) and terminal (merged, closed,
+  dead, session_ended) don't count, so held PRs don't stall pickup. (Was: AO
+  sessions in `ao.counting_states`; merge_conflict previously did not count.)
 - **[changed from AO bridge]** liveCounted MUST come from the native session
   store snapshot, never a local counter or `ao session ls --json`.
 - When capped, sort by priority_sort (priority then createdAt) for deterministic selection.
@@ -205,10 +207,18 @@ socket.
 - **[changed from AO bridge]** Surface "runtime unavailable" (missing
   tmux/git/claude or unknown project) and "Linear auth failed" in `status`;
   never fail silently (was: "AO not running").
-- **[changed from AO bridge]** The observer tracks PR/CI via `gh` (scm.PRForBranch
-  → DeriveStatus). Acting on that state — CI-fix, review-comment, escalation,
-  Slack/desktop notifications — is P3 (future work), not shipped. (Was: Slack
-  fires only the lola-owned "picked up" event; AO owns PR/CI notifications.)
+- **[changed from AO bridge] [changed: two-axis status]** The observer tracks
+  PR/CI via `gh` (scm.PRForBranch → state.DeriveDelivery) onto the DELIVERY
+  axis, and hooks/pane/tmux-activity onto the AGENT axis; `state.Rollup` is the
+  ONLY producer of the one-string status (`internal/state` owns the whole
+  vocabulary and every counting/attention table). A closed-unmerged PR notifies
+  once and stops shielding its issue from the orphan revert. (Was:
+  scm.DeriveStatus as the single collapsed derivation.)
+- **[new: statusagent]** The optional `[statusagent]` interpreter (bounded
+  `claude -p`, default sonnet) may OVERLAY the displayed agent state and add a
+  headline — display only, `≈`-marked, confidence/freshness/supersession gated
+  daemon-side. It must never touch Status, the axes, slot counting, reactions,
+  write-back, answer gating, or send-keys.
 
 ## Daemon
 

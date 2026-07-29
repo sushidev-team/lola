@@ -11,23 +11,14 @@ import (
 
 	"charm.land/lipgloss/v2"
 	"github.com/sushidev-team/lola/internal/protocol"
+	"github.com/sushidev-team/lola/internal/state"
 )
 
-// attentionStatuses are the derived statuses that mean a human is on the
-// critical path: the agent is blocked (needs_input) or its work regressed
-// (ci_failed / changes_requested / merge_conflict). These are the "NEEDS YOU"
-// set surfaced by the Attention lens, the header summary count, and the
-// attention-first sort — one source of truth for "who needs me".
-var attentionStatuses = map[string]bool{
-	"needs_input":       true,
-	"ci_failed":         true,
-	"changes_requested": true,
-	"merge_conflict":    true,
-}
-
-// needsHuman reports whether a status requires human action (see
-// attentionStatuses).
-func needsHuman(status string) bool { return attentionStatuses[status] }
+// needsHuman reports whether a status requires human action: the agent is
+// blocked (needs_input) or its work regressed (ci_failed / changes_requested /
+// merge_conflict). Delegates to state.NeedsAttention — the ONE attention
+// classification, shared with the daemon and mirrored by the desktop.
+func needsHuman(status string) bool { return state.NeedsAttention(status) }
 
 // AttentionCount is how many sessions currently need a human, for the header
 // summary bar (e.g. "3 need you").
@@ -42,26 +33,8 @@ func AttentionCount(in []protocol.SessionInfo) int {
 }
 
 // sortRank buckets a status into the attention-first sort tiers (lower sorts
-// first): 0 blocked-on-human, 1 action-needed (broken work), 2 actively
-// working, 3 parked-for-review, 4 quiet (idle / no signal), 5 done. Any status
-// outside the known vocabulary falls into tier 4 (quiet) — it is neither
-// urgent nor terminal, so it parks above the done tier without jumping ahead of
-// real work.
-func sortRank(status string) int {
-	switch status {
-	case "needs_input":
-		return 0
-	case "ci_failed", "changes_requested", "merge_conflict":
-		return 1
-	case "working", "ci_pending", "draft":
-		return 2
-	case "review_pending", "approved", "pr_open":
-		return 3
-	case "merged", "dead", "session_ended", "closed":
-		return 5
-	}
-	return 4
-}
+// first) — state.SortRank, the shared classification.
+func sortRank(status string) int { return state.SortRank(status) }
 
 // SortSessions returns a new slice ordered attention-first: needs_input, then
 // action-needed (ci_failed / changes_requested / merge_conflict), then active
@@ -128,46 +101,20 @@ func Apply(in []protocol.SessionInfo, f Filter) []protocol.SessionInfo {
 	return out
 }
 
-// KanbanColumn is one Board lens column: a stable Key (map/index key), a human
-// Title, and the set of statuses that land in it.
-type KanbanColumn struct {
-	Key      string
-	Title    string
-	Statuses []string
-}
-
-// kanbanFallbackKey is the column an unknown/unmapped status routes to. The
-// Working column is the safe default: an unrecognized status most likely means
-// a live agent in a state the vocabulary has not caught up to, so it belongs
-// with the active work rather than hidden in Done.
-const kanbanFallbackKey = "working"
+// KanbanColumn is one Board lens column — state.KanbanColumn, the shared
+// column→statuses mapping (mirrored by the desktop's theme.ts).
+type KanbanColumn = state.KanbanColumn
 
 // KanbanColumns returns the ordered Board columns, left-to-right by human
-// triage priority: the leftmost column is the human's queue. Together the
-// columns cover the derived status vocabulary; any status not listed here is
-// grouped into the Working column by GroupKanban (see kanbanFallbackKey).
-func KanbanColumns() []KanbanColumn {
-	return []KanbanColumn{
-		{Key: "needs", Title: "Needs You", Statuses: []string{"needs_input"}},
-		{Key: "working", Title: "Working", Statuses: []string{"working", "ci_pending", "idle"}},
-		{Key: "fixing", Title: "Fixing", Statuses: []string{"ci_failed", "changes_requested", "merge_conflict"}},
-		{Key: "review", Title: "In Review", Statuses: []string{"review_pending", "approved", "pr_open"}},
-		{Key: "done", Title: "Done", Statuses: []string{"merged", "dead", "session_ended"}},
-	}
-}
+// triage priority: the leftmost column is the human's queue.
+func KanbanColumns() []KanbanColumn { return state.KanbanColumns() }
 
-// kanbanKeyForStatus maps a status to its column Key, or kanbanFallbackKey when
-// unmapped.
-func kanbanKeyForStatus(status string) string {
-	for _, col := range KanbanColumns() {
-		for _, s := range col.Statuses {
-			if s == status {
-				return col.Key
-			}
-		}
-	}
-	return kanbanFallbackKey
-}
+// kanbanFallbackKey is the column an unknown/unmapped status routes to.
+const kanbanFallbackKey = state.KanbanFallbackKey
+
+// kanbanKeyForStatus maps a status to its column Key, or the fallback
+// (Working) when unmapped.
+func kanbanKeyForStatus(status string) string { return state.KanbanKeyFor(status) }
 
 // GroupKanban buckets sessions into Board columns keyed by KanbanColumn.Key.
 // Every session lands in exactly one column: a status outside the mapped
@@ -221,8 +168,99 @@ func statusBadge(status string) string {
 		return ".."
 	case "draft":
 		return "df"
+	case "closed":
+		return "cl"
+	case "shell":
+		return "sh"
+	case "orphaned":
+		return "or"
 	}
 	return "??"
+}
+
+// agentBadge is the ≤2-char glyph for the AGENT axis — the truthful "what is
+// the agent itself doing" underneath a delivery-owned rollup. "" for states
+// not worth a badge: idle deliberately gets NONE, because an idle agent under
+// an open PR is the routine resting state (turn done, PR in review) — badging
+// it would stamp "·.." noise on every parked row. Only the informative
+// divergences show: still working, or exited, while the PR state suggests
+// otherwise.
+func agentBadge(agentState string) string {
+	switch agentState {
+	case "working", "starting":
+		return "wk"
+	case "waiting_input":
+		return "?!"
+	case "exited":
+		return "en"
+	}
+	return ""
+}
+
+// statusPillFor renders the STATUS cell for a session: the rolled-up pill,
+// plus ONE qualifier —
+//
+//   - the [statusagent] interpreter's DISAGREEING judgement, marked "≈" (it is
+//     an approximation from untrusted material, never the deterministic
+//     truth): "working ≈stuck" says the pipeline believes working, the
+//     interpreter believes wedged;
+//   - else a faint agent-axis badge when the axes diverge under an open PR —
+//     "ci_pending ·wk" says CI is running AND the agent is still typing.
+//
+// Suppressed when the rollup already tells the whole story (pre-PR,
+// needs_input, merged/closed/dead).
+func statusPillFor(si protocol.SessionInfo) string {
+	pill := statusPill(si.Status)
+	if si.InterpretedState != "" {
+		return pill + statusOrange.Render("≈"+statusLabel(si.InterpretedState))
+	}
+	b := agentBadge(si.AgentState)
+	if b == "" || si.Delivery == "" || si.Delivery == "none" ||
+		si.Status == "merged" || si.Status == "closed" || si.Status == "dead" ||
+		si.Status == "needs_input" || si.Status == si.AgentState {
+		return pill
+	}
+	return pill + faintText.Render("·"+b)
+}
+
+// agentDetailLine renders the detail panel's agent-axis line: state, why it is
+// waiting (InputReason), the tool the in-flight turn runs, and how fresh the
+// last positive activity evidence is (shortAgo, shared with the home screen).
+// "" when the record carries no axis (an older daemon).
+func agentDetailLine(si protocol.SessionInfo) string {
+	if si.AgentState == "" {
+		return ""
+	}
+	parts := []string{statusLabel(si.AgentState)}
+	if si.InputReason != "" {
+		parts = append(parts, strings.ReplaceAll(si.InputReason, "_", " "))
+	}
+	if si.CurrentTool != "" {
+		parts = append(parts, "tool "+si.CurrentTool)
+	}
+	if !si.LastActivityAt.IsZero() {
+		parts = append(parts, "active "+shortAgo(si.LastActivityAt)+" ago")
+	}
+	return "agent:    " + strings.Join(parts, " · ")
+}
+
+// interpretedLines renders the [statusagent] overlay for the detail panel:
+// the one-line headline (marked "≈" — an untrusted approximation) and, when
+// the interpreter believes the agent is blocked, what it is waiting on.
+// Empty when no valid judgement is on the wire.
+func interpretedLines(si protocol.SessionInfo) []string {
+	if si.Headline == "" {
+		return nil
+	}
+	head := "≈ " + si.Headline
+	if si.HeadlineAgo != "" {
+		head += " (" + si.HeadlineAgo + " ago)"
+	}
+	out := []string{head}
+	if si.WaitingOn != "" {
+		out = append(out, "≈ waiting on: "+si.WaitingOn)
+	}
+	return out
 }
 
 // StatusDisplay is the shared status presentation reused by every session lens:
@@ -255,7 +293,7 @@ func statusPill(status string) string {
 		return pillFill(pillBrokenBg, pillBrokenFg, label) // solid rose
 	case "working", "ci_pending", "draft":
 		return pillTint(pillWorkBg, pillWorkFg, label) // tinted blue
-	case "approved", "pr_open":
+	case "approved":
 		return pillTint(pillDoneBg, pillDoneFg, label) // tinted green
 	case "review_pending":
 		return pillTint(pillGreyBg, pillGreyFg, label) // neutral grey
@@ -264,10 +302,13 @@ func statusPill(status string) string {
 	}
 }
 
-// statusLabel shortens the long derived-status words so the STATUS column stays
-// tight — a full "changes_requested" is 17 columns and shoves the table wide.
-// The mapping is display-only; every control-flow comparison still uses the raw
-// status string.
+// statusLabel is the human label for a status (or agent-axis / interpreted)
+// word: every raw identifier gets a readable spelling — a rendered
+// "ci_failed" reads like a translation placeholder, not a badge. Long words
+// are shortened so the STATUS column stays tight ("changes_requested" is 17
+// columns). The mapping is display-only; every control-flow comparison still
+// uses the raw status string. The fallback de-underscores, so an unmapped
+// future word can never leak an identifier into the UI.
 func statusLabel(status string) string {
 	switch status {
 	case "changes_requested":
@@ -279,11 +320,15 @@ func statusLabel(status string) string {
 	case "session_ended":
 		return "ended"
 	case "ci_pending":
-		return "pending"
+		return "ci running"
+	case "ci_failed":
+		return "ci failed"
 	case "needs_input":
 		return "needs you"
+	case "waiting_input": // agent axis / interpreted overlay
+		return "waiting"
 	}
-	return status
+	return strings.ReplaceAll(status, "_", " ")
 }
 
 // pillFill renders a SOLID, bold chip (one space of padding each side).

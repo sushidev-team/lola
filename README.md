@@ -95,7 +95,7 @@ The Makefile sets a repo-local `GOCACHE` so builds work in sandboxed shells.
 
 | Command | Description |
 | --- | --- |
-| `lola` / `lola tui` | Open the TUI. The landing **cockpit** shows a rail of polling projects and the live session view. On first run — no `config.toml` yet — this enters the setup wizard first. Keys: `p` open the **project list**, `d` inline health report, `P` edit the selected project, `S` global settings editor (`[defaults]`/`[notify]`/`[brain]`/`[review]`/`[coderabbit]`), `^r` restart the daemon (brings up the newest build), `^x` stop it (self-managed mode only). Enter on a project opens its **detail hub** — open a PR (picker → shell), start a Linear ticket (picker → worktree + agent), new manual worktree, manage the project's polling, view its sessions, edit the project. These hub actions are TUI-only (socket commands under the hood), not separate CLI subcommands. |
+| `lola` / `lola tui` | Open the TUI. The landing **cockpit** shows a rail of polling projects and the live session view. On first run — no `config.toml` yet — this enters the setup wizard first. Keys: `p` open the **project list**, `d` inline health report, `P` edit the selected project, `S` global settings editor (`[defaults]`/`[notify]`/`[brain]`/`[statusagent]`/`[review]`/`[coderabbit]`), `^r` restart the daemon (brings up the newest build), `^x` stop it (self-managed mode only). Enter on a project opens its **detail hub** — open a PR (picker → shell), start a Linear ticket (picker → worktree + agent), new manual worktree, manage the project's polling, view its sessions, edit the project. These hub actions are TUI-only (socket commands under the hood), not separate CLI subcommands. |
 | `lola setup` | Run the first-run configuration wizard (Linear key → Keychain, one `[[project]]`, defaults) and write `config.toml`. Re-runnable any time. |
 | `lola doctor` | Print an aligned health report (tmux/git/claude/gh on PATH, Linear key readable, daemon socket, config validity, per-project repos); exits 1 on a critical failure. Never prints the key value. |
 | `lola run` | Start the daemon (this is what launchd invokes) |
@@ -503,6 +503,45 @@ The daemon execs `claude` directly and relies on your existing claude auth
 (`~/.claude`) or `ANTHROPIC_API_KEY` in the daemon's environment; lola does not
 manage keys here. Each summary **spends Anthropic tokens**, so the feature is
 deliberately opt-in. `lola doctor` reports whether `claude` is on `PATH`.
+
+### `[statusagent]` (optional, off by default)
+
+The **status interpreter**: a small bounded `claude -p` pass (default
+`--model sonnet`) that reads one session's observed material — its tmux pane
+tail, recent status transitions, PR facts, optionally the agent's own
+transcript tail — and judges what the agent is **actually** doing. The result
+shows up as a one-line **headline** ("rewriting the auth middleware tests")
+and, when the interpreter disagrees with the deterministic state, an
+`≈`-marked overlay next to the status pill in both the TUI and the desktop
+app (e.g. `working ≈stuck`). It can also say `waiting_input`, `idle`, or
+`stuck` — "stuck" (a wedged agent: error loop, crashed process) is a state the
+deterministic pipeline cannot see at all.
+
+| Key | Type | Description |
+| --- | --- | --- |
+| `enabled` | bool | Master switch. Default `false`; an absent table is also off. |
+| `bin` | string | The claude executable; empty resolves `claude` via `PATH` (pin an absolute path for launchd). |
+| `model` | string | Passed as `--model`. Unset key defaults to `sonnet`; explicitly `""` uses claude's default model. |
+| `timeout_seconds` | int | Hard cap per interpretation. Must be `>= 0`. Default `60`. |
+| `min_interval_seconds` | int | Per-session debounce between interpretation attempts. Default `120`. |
+| `max_per_cycle` | int | Interpretations queued per 30s observer cycle. Default `2`. |
+| `min_confidence` | float | `0`–`1`; judgements below this are discarded and the deterministic status stands. Default `0.5`. |
+| `include_transcript` | bool | Also feed the agent's transcript tail (more signal, more tokens). Default `false`. |
+
+The interpretation is **display-only, always**: it can never change the real
+status, occupy or free an agent slot, trigger a reaction, write to Linear, or
+type into an agent — the material it reads is attacker-influenceable, so its
+output is untrusted text for human eyes, marked `≈` wherever it renders. It
+expires after 10 minutes and is dropped instantly when the agent's real state
+moves on.
+
+Cost is bounded hard: interpretations fire only on notable status transitions
+and ambiguous states (blocked on a human, an unreadable pane, a long-quiet
+"working"), each session is debounced by `min_interval_seconds`, each observer
+cycle queues at most `max_per_cycle`, and a session whose pane and facts are
+unchanged since the last attempt **skips the call entirely** — a quiet fleet
+costs approximately nothing. Auth is the same story as `[brain]`: your
+existing claude login or `ANTHROPIC_API_KEY`, never managed or logged by lola.
 
 ### The review catalog
 

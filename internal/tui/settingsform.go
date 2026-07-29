@@ -60,6 +60,7 @@ const (
 	stProjectDefaults
 	stNotify
 	stBrain
+	stStatusAgent
 	stCodeRabbit
 	stAppearance
 )
@@ -72,6 +73,7 @@ var settingsTabs = []struct {
 	{stProjectDefaults, "Project defaults"},
 	{stNotify, "Notify"},
 	{stBrain, "Brain"},
+	{stStatusAgent, "Interpreter"},
 	{stCodeRabbit, "Review"},
 	{stAppearance, "Appearance"},
 }
@@ -200,6 +202,7 @@ const wsLabelHelp = " enter opens the workspace-label picker; raw UUID entry sta
 func newSettingsForm(cfgPath string, cfg *config.Config) *settingsForm {
 	itoa := strconv.Itoa
 	d, n, br := cfg.Defaults, cfg.Notify, cfg.Brain
+	sa := cfg.StatusAgent
 	// Review providers: seed each kind's fields from the EFFECTIVE catalog (the
 	// real [[review.provider]] entries, or the ones synthesized from the legacy
 	// tables), falling back to a fresh disabled provider for a kind that is not
@@ -213,8 +216,8 @@ func newSettingsForm(cfgPath string, cfg *config.Config) *settingsForm {
 	trNoGitHub := transportOpts(false)
 	f := &settingsForm{
 		reviewLegacy: reviewLegacy,
-		cfgPath: cfgPath,
-		cfg:     cfg,
+		cfgPath:      cfgPath,
+		cfg:          cfg,
 		fields: []setField{
 			// [defaults] — daemon-wide knobs.
 			{key: "global_cap", tab: stDefaults, section: "[defaults]", sectionNote: "caps, interval, agent", label: "Global cap", help: "Max concurrent sessions across all polls. Must be > 0.", kind: sfInt, text: itoa(d.GlobalCap)},
@@ -246,6 +249,18 @@ func newSettingsForm(cfgPath string, cfg *config.Config) *settingsForm {
 			{key: "brain_timeout", tab: stBrain, label: "Timeout seconds", help: "Hard cap per summary call. Must be >= 0.", kind: sfInt, text: itoa(br.TimeoutSeconds)},
 			{key: "brain_esc", tab: stBrain, label: "Summarize escalation", help: "Summarize WHY a session is blocked on escalation.", kind: sfBool, b: br.SummarizeEscalation},
 			{key: "brain_appr", tab: stBrain, label: "Summarize approved", help: "Summarize PR risk on approved+green.", kind: sfBool, b: br.SummarizeApproved},
+
+		// [statusagent] — the DISPLAY-ONLY status interpreter: a small claude
+		// pass that judges what each agent is actually doing (headline + an
+		// interpreted agent-state overlay). Never enters the control loop.
+		{key: "sa_enabled", tab: stStatusAgent, section: "[statusagent]", sectionNote: "claude status interpretation for the session list", label: "Enabled", help: "Opt-in interpreter: pane + events + PR facts → what the agent is REALLY doing. Display only.", kind: sfBool, b: sa.Enabled},
+		{key: "sa_bin", tab: stStatusAgent, label: "Binary", help: "claude executable; empty resolves \"claude\" via PATH (pin absolute for launchd).", kind: sfText, text: sa.Bin},
+		{key: "sa_model", tab: stStatusAgent, label: "Model", help: "claude --model per interpretation; the recommended default is \"sonnet\"; empty = claude's default.", kind: sfText, text: sa.Model},
+		{key: "sa_timeout", tab: stStatusAgent, label: "Timeout seconds", help: "Hard cap per interpretation call. Must be >= 0.", kind: sfInt, text: itoa(sa.TimeoutSeconds)},
+		{key: "sa_interval", tab: stStatusAgent, label: "Min interval seconds", help: "Per-session debounce between interpretation attempts. Must be >= 0.", kind: sfInt, text: itoa(sa.MinIntervalSeconds)},
+		{key: "sa_maxcycle", tab: stStatusAgent, label: "Max per cycle", help: "Interpretations queued per 30s observer cycle. Must be >= 0.", kind: sfInt, text: itoa(sa.MaxPerCycle)},
+		{key: "sa_confidence", tab: stStatusAgent, label: "Min confidence", help: "0-1; judgements below this are discarded and the deterministic status stands.", kind: sfText, text: formatFloat(sa.MinConfidence)},
+		{key: "sa_transcript", tab: stStatusAgent, label: "Include transcript", help: "Also feed the agent's own transcript tail (more signal, more tokens).", kind: sfBool, b: sa.IncludeTranscript},
 
 			// [ui] — presentation only; no daemon behavior reads it. The TUI paints
 			// from this flavor (applyTheme) and so does the desktop app, so the
@@ -1263,6 +1278,22 @@ func (f *settingsForm) save() settingsFormEvent {
 	if err != nil {
 		return settingsFormNone
 	}
+	saTimeout, err := f.parseInt("sa_timeout")
+	if err != nil {
+		return settingsFormNone
+	}
+	saInterval, err := f.parseInt("sa_interval")
+	if err != nil {
+		return settingsFormNone
+	}
+	saMaxCycle, err := f.parseInt("sa_maxcycle")
+	if err != nil {
+		return settingsFormNone
+	}
+	saConfidence, err := f.parseFloat("sa_confidence")
+	if err != nil {
+		return settingsFormNone
+	}
 	interval, perr := time.ParseDuration(strings.TrimSpace(f.field("poll_interval").text))
 	if perr != nil {
 		f.err = "poll interval: " + perr.Error()
@@ -1286,6 +1317,7 @@ func (f *settingsForm) save() settingsFormEvent {
 	oldD, oldN, oldB, oldR, oldC := c.Defaults, c.Notify, c.Brain, c.Review, c.CodeRabbit
 	oldUI := c.UI
 	oldP := c.ReviewProviders
+	oldSA := c.StatusAgent
 
 	c.Defaults.GlobalCap = gc
 	c.Defaults.ConcurrencyCap = cc
@@ -1314,6 +1346,15 @@ func (f *settingsForm) save() settingsFormEvent {
 	c.Brain.SummarizeEscalation = f.field("brain_esc").b
 	c.Brain.SummarizeApproved = f.field("brain_appr").b
 
+	c.StatusAgent.Enabled = f.field("sa_enabled").b
+	c.StatusAgent.Bin = strings.TrimSpace(f.field("sa_bin").text)
+	c.StatusAgent.Model = strings.TrimSpace(f.field("sa_model").text)
+	c.StatusAgent.TimeoutSeconds = saTimeout
+	c.StatusAgent.MinIntervalSeconds = saInterval
+	c.StatusAgent.MaxPerCycle = saMaxCycle
+	c.StatusAgent.MinConfidence = saConfidence
+	c.StatusAgent.IncludeTranscript = f.field("sa_transcript").b
+
 	c.UI.Theme = strings.TrimSpace(f.field("ui_theme").text)
 
 	// The review provider catalog replaces the two legacy tables. In catalog
@@ -1328,6 +1369,7 @@ func (f *settingsForm) save() settingsFormEvent {
 		c.Defaults, c.Notify, c.Brain, c.Review, c.CodeRabbit = oldD, oldN, oldB, oldR, oldC
 		c.UI = oldUI
 		c.ReviewProviders = oldP
+		c.StatusAgent = oldSA
 		c.ResolveInheritance() // re-resolve projects against the restored defaults
 	}
 	if err := c.Validate(); err != nil {
@@ -1403,6 +1445,20 @@ func (f *settingsForm) parseInt(key string) (int, error) {
 		f.err = strings.ReplaceAll(key, "_", " ") + ": not a whole number"
 	}
 	return v, err
+}
+
+// parseFloat parses a decimal field (the interpreter's confidence floor).
+func (f *settingsForm) parseFloat(key string) (float64, error) {
+	v, err := strconv.ParseFloat(strings.TrimSpace(f.field(key).text), 64)
+	if err != nil {
+		f.err = strings.ReplaceAll(key, "_", " ") + ": not a number"
+	}
+	return v, err
+}
+
+// formatFloat renders a float field value compactly ("0.5", not "0.500000").
+func formatFloat(v float64) string {
+	return strconv.FormatFloat(v, 'g', -1, 64)
 }
 
 // tabStrip renders the pinned tab header: the active tab highlighted, the rest

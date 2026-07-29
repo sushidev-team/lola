@@ -12,6 +12,7 @@ import (
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/linear"
 	"github.com/sushidev-team/lola/internal/session"
+	"github.com/sushidev-team/lola/internal/state"
 )
 
 const reconcileInterval = 5 * time.Minute
@@ -92,17 +93,15 @@ func (d *Daemon) reconcile(ctx context.Context) {
 }
 
 // nativeSessionPresent reports whether a native session's status still
-// accounts for its issue in the orphan reconciliation: everything except a
-// dead pane ("dead" / "session_ended"). This is deliberately WIDER than the
-// budget's NativeLiveCounted — a parked session (approved, review_pending, …)
-// holds no agent slot but must still shield its issue from an orphan revert:
-// its pane is alive and its work is delivered.
+// accounts for its issue in the orphan reconciliation (state.Present). The
+// set is deliberately WIDER than the budget's NativeLiveCounted — a parked
+// session (approved, review_pending, …) holds no agent slot but must still
+// shield its issue from an orphan revert: its pane is alive and its work is
+// delivered. "closed" no longer shields (a change from the pre-axis table):
+// the work was explicitly rejected, so the issue must become revertable
+// instead of being shielded forever by a lingering pane.
 func nativeSessionPresent(status string) bool {
-	switch status {
-	case "dead", "session_ended":
-		return false
-	}
-	return true
+	return state.Present(status)
 }
 
 // nativeSessionForIssue returns the stored native session working on the

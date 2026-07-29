@@ -281,16 +281,20 @@ func hookCmd() *cobra.Command {
 				if len(args) > 1 {
 					payload = args[1]
 				}
-				normEvent, detail := agent.ParseCodexNotify(payload)
+				normEvent, message, notifyType := agent.ParseCodexNotify(payload)
 				if normEvent == "" {
 					return nil
 				}
-				if err := hook.Post(normEvent, detail); err != nil {
+				p := protocol.HookPayload{
+					Message: capHookField(message),
+					Reason:  capHookField(notifyType),
+				}
+				if err := hook.Post(normEvent, p); err != nil {
 					fmt.Fprintln(c.ErrOrStderr(), "lola hook:", err)
 				}
 				return nil
 			}
-			if err := hook.Post(event, hookDetail(c.InOrStdin())); err != nil {
+			if err := hook.Post(event, hookPayload(c.InOrStdin())); err != nil {
 				fmt.Fprintln(c.ErrOrStderr(), "lola hook:", err)
 			}
 			return nil
@@ -298,26 +302,56 @@ func hookCmd() *cobra.Command {
 	}
 }
 
-// hookDetail drains the hook's stdin (Claude Code writes the event payload
-// there; it must be consumed either way) and best-effort extracts the most
-// specific reason field. Any read or parse failure yields "".
-func hookDetail(r io.Reader) string {
+// maxHookField caps every extracted hook payload field before it reaches the
+// wire: enough for any real notification/tool name, small enough that a
+// hostile payload cannot bloat the socket line or the session store.
+const maxHookField = 2048
+
+// capHookField truncates one extracted field to maxHookField bytes, trimming a
+// torn trailing rune.
+func capHookField(s string) string {
+	if len(s) > maxHookField {
+		s = strings.ToValidUTF8(s[:maxHookField], "")
+	}
+	return s
+}
+
+// hookPayload drains the hook's stdin (Claude Code writes the event payload
+// there; it must be consumed either way) and best-effort extracts the
+// structured fields lola uses: tool name (PostToolUse), notification message,
+// submitted prompt, the transcript path + agent conversation id, and the most
+// specific reason. Any read or parse failure yields the zero payload.
+func hookPayload(r io.Reader) protocol.HookPayload {
 	raw, err := io.ReadAll(io.LimitReader(r, 1<<20))
 	if err != nil {
-		return ""
+		return protocol.HookPayload{}
 	}
 	var p struct {
+		SessionID        string `json:"session_id"`
+		TranscriptPath   string `json:"transcript_path"`
+		ToolName         string `json:"tool_name"`         // PostToolUse
+		Message          string `json:"message"`           // Notification
+		Prompt           string `json:"prompt"`            // UserPromptSubmit
 		NotificationType string `json:"notification_type"` // Notification
 		StopReason       string `json:"stop_reason"`       // Stop
 		EndReason        string `json:"end_reason"`        // SessionEnd
 	}
 	_ = json.Unmarshal(raw, &p)
-	for _, s := range []string{p.NotificationType, p.StopReason, p.EndReason} {
-		if s != "" {
-			return s
-		}
+	reason := p.NotificationType
+	if reason == "" {
+		reason = p.StopReason
 	}
-	return ""
+	if reason == "" {
+		reason = p.EndReason
+	}
+	return protocol.HookPayload{
+		ToolName:       capHookField(p.ToolName),
+		Message:        capHookField(p.Message),
+		Prompt:         capHookField(p.Prompt),
+		TranscriptPath: capHookField(p.TranscriptPath),
+		AgentSessionID: capHookField(p.SessionID),
+		Reason:         capHookField(reason),
+	}
 }
 
 // configCmd groups low-level config maintenance. Its only (hidden) subcommand

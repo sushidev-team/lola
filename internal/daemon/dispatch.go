@@ -15,6 +15,7 @@ import (
 	"github.com/sushidev-team/lola/internal/linear"
 	"github.com/sushidev-team/lola/internal/protocol"
 	"github.com/sushidev-team/lola/internal/session"
+	"github.com/sushidev-team/lola/internal/state"
 )
 
 // SeenTTL is the label-mode race-guard window: a seen entry younger than
@@ -42,30 +43,18 @@ func Budget(pollCap, globalCap, liveCounted int) int {
 	return b
 }
 
-// nativeCountingStatuses are the derived session-store statuses under which a
-// native session occupies an agent slot. Parked-for-review states (approved,
-// review_pending, no_pr, idle after the PR opened, …) and terminal states
-// (merged, dead, session_ended) hold no slot, so held PRs never stall new
-// pickups. "draft" counts: a draft PR means the agent is still iterating and
-// its claude process still occupies a runner.
-var nativeCountingStatuses = map[string]bool{
-	"working":           true,
-	"needs_input":       true,
-	"draft":             true,
-	"ci_failed":         true,
-	"changes_requested": true,
-	"ci_pending":        true,
-}
-
 // NativeLiveCounted returns how many native sessions in sessions (a session
-// store snapshot) currently occupy an agent slot. It is a tick's liveCounted:
+// store snapshot) currently occupy an agent slot (state.HoldsSlot — the ONE
+// slot classification; merge_conflict counts there, a deliberate change from
+// the pre-axis table, because the reaction engine is actively re-prompting
+// that agent to rebase). It is a tick's liveCounted:
 //
 //	budget = Budget(pollCap, globalCap, NativeLiveCounted(store))
 //	       = min(pollCap, globalCap − NativeLiveCounted(store))
 func NativeLiveCounted(sessions []session.Session) int {
 	n := 0
 	for _, s := range sessions {
-		if s.Source == "native" && nativeCountingStatuses[s.Status] {
+		if s.Source == "native" && state.HoldsSlot(s.Status) {
 			n++
 		}
 	}

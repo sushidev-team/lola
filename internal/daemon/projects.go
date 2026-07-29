@@ -9,6 +9,7 @@ import (
 	"github.com/sushidev-team/lola/internal/agent"
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/protocol"
+	"github.com/sushidev-team/lola/internal/state"
 )
 
 // projectsData builds the reply for cmd=projects: every configured [[project]]
@@ -93,7 +94,7 @@ func (d *Daemon) projectsData(_ context.Context) protocol.ProjectsData {
 				continue
 			}
 			info.Sessions++
-			if nativeCountingStatuses[s.Status] {
+			if state.HoldsSlot(s.Status) {
 				info.LiveCounted++
 			}
 			switch s.Status {

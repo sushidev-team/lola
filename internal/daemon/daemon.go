@@ -18,6 +18,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -31,6 +32,8 @@ import (
 	"github.com/sushidev-team/lola/internal/scm"
 	"github.com/sushidev-team/lola/internal/secrets"
 	"github.com/sushidev-team/lola/internal/session"
+	"github.com/sushidev-team/lola/internal/state"
+	"github.com/sushidev-team/lola/internal/statusagent"
 	"github.com/sushidev-team/lola/internal/tmux"
 	"github.com/sushidev-team/lola/internal/worktree"
 )
@@ -160,6 +163,27 @@ type Daemon struct {
 	paneTail       func(ctx context.Context, tmuxName string, lines int) (string, error)
 	prDiff         func(ctx context.Context, repo string, pr int) (string, error)
 
+	// listTmuxSessions lists every session on lola's tmux server in ONE exec —
+	// the observer's per-cycle liveness + #{session_activity} source (replacing
+	// N per-session has-session probes). nil (tests without the seam) makes the
+	// observer fall back to per-session NativeAPI.Alive with no activity signal.
+	listTmuxSessions func(ctx context.Context) ([]tmux.Session, error)
+
+	// Status interpreter ([statusagent], statusagentwire.go): the OPT-IN
+	// display-only LLM pass. statusAgent/interpretSeam are nil when disabled or
+	// the binary is missing (mirrored into interpretOn, the atomic the store's
+	// OnTransition callback gates on WITHOUT taking d.mu — lock order there is
+	// store → nothing). interpretCh feeds the single worker; interpretBusy is
+	// its per-session in-flight guard (interpretMu is never taken under the
+	// store lock). Tests install a fake interpretSeam directly.
+	statusAgent     *statusagent.Client
+	interpretSeam   func(ctx context.Context, contextText string) (string, error)
+	interpretOn     atomic.Bool
+	interpretCh     chan string
+	interpretMu     sync.Mutex
+	interpretBusy   map[string]bool
+	statusAgentWarn sync.Once // "enabled but binary missing" logged once
+
 	// Flexible review system (PLAN flexible-review §2–5): the daemon-wide provider
 	// CATALOG plus the per-kind exec CLIENTS behind late-bound seams. reviewProviders
 	// is the resolved descriptor set (built from the [[review.provider]] catalog, or
@@ -262,7 +286,15 @@ func newDaemon(cfg *config.Config, lin linear.API, logger *log.Logger, home stri
 	}
 	// Feed the activity ring from every status transition the store commits
 	// (the spawn birth is recorded separately at the dispatch site).
-	d.sessions.OnTransition(d.recordSessionEvent)
+	d.sessions.OnTransition(func(from string, s session.Session) {
+		d.recordSessionEvent(from, s)
+		// A notable transition is also the status interpreter's trigger. Runs
+		// under the store lock: interpretOnTransition does nothing but cheap
+		// field checks and a non-blocking channel send.
+		d.interpretOnTransition(from, s)
+	})
+	d.interpretCh = make(chan string, interpretQueueCap)
+	d.interpretBusy = map[string]bool{}
 	d.openPR = d.ghOpenPR
 	scmc := &scm.Client{}
 	d.prForBranch = scmc.PRForBranch
@@ -357,6 +389,14 @@ func Run(ctx context.Context) error {
 	}
 	d.lolaBin = lolaBin
 	d.native = newNativeRuntime(cfg, home, lolaBin, d.linearKey, d.nativeLogf)
+	// One `tmux ls` per observe cycle answers liveness for EVERY session (and
+	// carries #{session_activity}, the zero-cost output-freshness stamp) —
+	// replacing N per-session `has-session` execs. Wired HERE (production
+	// Run), not in newDaemon: a bare test daemon must never exec the real
+	// tmux, and nil makes the observer fall back to per-session Alive.
+	d.listTmuxSessions = func(ctx context.Context) ([]tmux.Session, error) {
+		return d.tmuxClient().ListSessions(ctx)
+	}
 	d.realNative = true
 	// Reaction notifier (PLAN P3.20): resolve the [notify] table into a live
 	// desktop/Slack fan-out. Rebuilt on reload (handleReload). The Slack webhook
@@ -368,6 +408,7 @@ func Run(ctx context.Context) error {
 	// single log line and the generic behavior, never a per-cycle error.
 	d.mu.Lock()
 	d.setBrainLocked(cfg.Brain)
+	d.setStatusAgentLocked(cfg.StatusAgent)
 	brainEnabledButMissing := cfg.Brain.Enabled && d.brain == nil
 	// Flexible review system: build the provider catalog (or synthesize it from
 	// the legacy [review]/[coderabbit] tables) and its per-kind exec clients.
@@ -445,6 +486,12 @@ func Run(ctx context.Context) error {
 
 	d.wg.Add(1)
 	go d.observeLoop(ctx)
+
+	// Status interpreter worker ([statusagent], statusagentwire.go). On the
+	// CANCELLABLE run context, deliberately not shutdown-shielded: an
+	// interpretation is read-only and safe to abort.
+	d.wg.Add(1)
+	go d.interpretLoop(ctx)
 
 	go d.serve(ctx, ln)
 
@@ -757,97 +804,152 @@ func (d *Daemon) adoptNativeSessions(ctx context.Context) {
 		d.logf("", "adopt: native session scan failed: %v", err)
 		return
 	}
-	for _, s := range found {
-		if prev, ok := d.sessions.Get(s.ID); ok {
-			// The persisted record is authoritative for the launch discriminator
-			// (Kind/Agentless) — Adopt only re-derives it from the ID shape as a
-			// store-loss backstop. Carry it forward. An agent-less session
-			// (`lola open`, the manual-shell flow) must additionally stay out of the
-			// control loop across a restart: keep its "no Linear issue" identity and
-			// coerce a scanned "working" back to "shell".
-			if prev.Kind != "" {
-				s.Kind = prev.Kind
-			}
-			if prev.Agentless || prev.Manual {
-				s.Agentless = true
-				s.Manual = prev.Manual
-				s.Issue = ""
-				if s.Status == "working" {
-					s.Status = "shell"
+	for _, scanned := range found {
+		s := scanned
+		// runtime.Adopt reports axis-bearing records; any other NativeAPI
+		// implementation (tests, future runtimes) may still hand back a bare
+		// legacy Status — give it axes before the merge below rerolls.
+		s.EnsureAxes()
+		var adopted session.Session
+		d.sessions.Apply(s.ID, func(cur *session.Session, exists bool) bool {
+			if exists {
+				prev := *cur
+				// The persisted record is authoritative for the launch discriminator
+				// (Kind/Agentless) — Adopt only re-derives it from the ID shape as a
+				// store-loss backstop. Carry it forward. An agent-less session
+				// (`lola open`, the manual-shell flow) must additionally stay out of the
+				// control loop across a restart: keep its "no Linear issue" identity and
+				// coerce a scanned "working" back to "shell".
+				if prev.Kind != "" {
+					s.Kind = prev.Kind
+				}
+				if prev.Agentless || prev.Manual {
+					s.Agentless = true
+					s.Manual = prev.Manual
+					s.Issue = ""
+					if s.AgentState == state.AgentWorking {
+						s.SetAgentState(state.AgentShell, "", time.Now())
+					}
+				}
+				if s.Branch == "" {
+					s.Branch = prev.Branch
+				}
+				if s.Worktree == "" {
+					s.Worktree = prev.Worktree
+				}
+				if s.Repo == "" {
+					s.Repo = prev.Repo
+				}
+				if s.Issue == "" {
+					s.Issue = prev.Issue
+				}
+				if s.Title == "" {
+					s.Title = prev.Title // adopt scans tmux only; the title lives in the persisted record
+				}
+				if s.IssueUUID == "" {
+					s.IssueUUID = prev.IssueUUID
+				}
+				if s.PollName == "" {
+					s.PollName = prev.PollName // preserve the P4 write-back owner
+				}
+				if s.Agent == "" {
+					s.Agent = prev.Agent // the scan cannot see which coding agent runs inside
+				}
+				// Carry forward the P4 write-back one-shot guards so a restart never
+				// re-comments a transition already narrated to Linear.
+				s.WBSpawnDone = s.WBSpawnDone || prev.WBSpawnDone
+				s.WBPRDone = s.WBPRDone || prev.WBPRDone
+				s.WBMergedDone = s.WBMergedDone || prev.WBMergedDone
+				s.WBBlockedDone = s.WBBlockedDone || prev.WBBlockedDone
+				s.PR = prev.PR
+				// Carry the whole DELIVERY axis: it is derived from persisted gh
+				// facts the tmux scan knows nothing about. With it, a dead pane
+				// whose PR merged rolls back up to "merged" (Rollup rule 1) — the
+				// old special-case for exactly that is gone.
+				s.Delivery = prev.Delivery
+				s.DeliverySince = prev.DeliverySince
+				s.PRObservedAt = prev.PRObservedAt
+				s.PRFetchFailures = prev.PRFetchFailures
+				// Carry forward the hook-driven / one-shot state a tmux scan cannot
+				// recover. Without this a restart resets AtPrompt to false — and since
+				// only a fresh Stop hook re-opens the send-keys gate (which an
+				// already-idle adopted agent never fires), every DEFERRED hand-off
+				// (reaction / review / coderabbit) would wedge un-delivered — and
+				// re-fires the reaction/review/coderabbit one-shots. Preserve the gate,
+				// the reaction guards, the review + coderabbit guards, and any stashed
+				// (deferred) hand-off + watermark.
+				s.AtPrompt = prev.AtPrompt
+				s.LastActivityAt = prev.LastActivityAt
+				s.ActivitySource = prev.ActivitySource
+				s.InputReason = prev.InputReason
+				s.CurrentTool = prev.CurrentTool
+				s.LastNotification = prev.LastNotification
+				s.TranscriptPath = prev.TranscriptPath
+				s.LastReactedStatus = prev.LastReactedStatus
+				s.CIRetries = prev.CIRetries
+				s.Escalated = prev.Escalated
+				s.PendingReaction = prev.PendingReaction
+				// Interpreter overlay + cost fields ride along; the overlay's own
+				// freshness gates (expiry, axis supersession) decide whether any of
+				// it is still shown.
+				s.InterpretedState = prev.InterpretedState
+				s.Summary = prev.Summary
+				s.WaitingOn = prev.WaitingOn
+				s.InterpretedConfidence = prev.InterpretedConfidence
+				s.SummaryAt = prev.SummaryAt
+				s.InterpretedForAgentState = prev.InterpretedForAgentState
+				s.LastInterpretedAt = prev.LastInterpretedAt
+				s.LastInterpretedHash = prev.LastInterpretedHash
+				// Flexible-review fire-once guards (PLAN §3.2): carry the four kind-keyed
+				// maps forward, NOT the legacy scalars. prev came through Store.load, which
+				// runs migrateReviewState, so its maps are already authoritative (any old
+				// on-disk scalars are folded in). Copying them means an adopted survivor is
+				// never re-reviewed / re-watched / re-posted for a PR it already settled.
+				s.ReviewedPRs = prev.ReviewedPRs
+				s.ReviewWatermarks = prev.ReviewWatermarks
+				s.PendingHandoffs = prev.PendingHandoffs
+				s.PostedGitHubPRs = prev.PostedGitHubPRs
+				if len(s.RemovedLabels) == 0 {
+					s.RemovedLabels = prev.RemovedLabels
 				}
 			}
-			if s.Branch == "" {
-				s.Branch = prev.Branch
+			// The carried AtPrompt gate is UNVERIFIED after a restart: the agent
+			// may have resumed while the daemon was down. Every send-keys path
+			// re-verifies against the live pane (ensurePromptVerified) or a fresh
+			// hook re-verifies first — either way, nothing types on a stale gate.
+			s.AtPromptVerified = false
+			if s.TmuxName == "" {
+				s.TmuxName = s.ID // native sessions ARE tmux sessions
 			}
-			if s.Worktree == "" {
-				s.Worktree = prev.Worktree
-			}
-			if s.Repo == "" {
-				s.Repo = prev.Repo
-			}
-			if s.Issue == "" {
-				s.Issue = prev.Issue
-			}
-			if s.Title == "" {
-				s.Title = prev.Title // adopt scans tmux only; the title lives in the persisted record
-			}
-			if s.IssueUUID == "" {
-				s.IssueUUID = prev.IssueUUID
-			}
-			if s.PollName == "" {
-				s.PollName = prev.PollName // preserve the P4 write-back owner
-			}
-			// Carry forward the P4 write-back one-shot guards so a restart never
-			// re-comments a transition already narrated to Linear.
-			s.WBSpawnDone = s.WBSpawnDone || prev.WBSpawnDone
-			s.WBPRDone = s.WBPRDone || prev.WBPRDone
-			s.WBMergedDone = s.WBMergedDone || prev.WBMergedDone
-			s.WBBlockedDone = s.WBBlockedDone || prev.WBBlockedDone
-			s.PR = prev.PR
-			// Carry forward the hook-driven / one-shot state a tmux scan cannot
-			// recover. Without this a restart resets AtPrompt to false — and since
-			// only a fresh Stop hook re-opens the send-keys gate (which an
-			// already-idle adopted agent never fires), every DEFERRED hand-off
-			// (reaction / review / coderabbit) would wedge un-delivered — and
-			// re-fires the reaction/review/coderabbit one-shots. Preserve the gate,
-			// the reaction guards, the review + coderabbit guards, and any stashed
-			// (deferred) hand-off + watermark.
-			s.AtPrompt = prev.AtPrompt
-			s.LastActivityAt = prev.LastActivityAt
-			s.LastReactedStatus = prev.LastReactedStatus
-			s.CIRetries = prev.CIRetries
-			s.Escalated = prev.Escalated
-			s.PendingReaction = prev.PendingReaction
-			// Flexible-review fire-once guards (PLAN §3.2): carry the four kind-keyed
-			// maps forward, NOT the legacy scalars. prev came through Store.load, which
-			// runs migrateReviewState, so its maps are already authoritative (any old
-			// on-disk scalars are folded in). Copying them means an adopted survivor is
-			// never re-reviewed / re-watched / re-posted for a PR it already settled.
-			s.ReviewedPRs = prev.ReviewedPRs
-			s.ReviewWatermarks = prev.ReviewWatermarks
-			s.PendingHandoffs = prev.PendingHandoffs
-			s.PostedGitHubPRs = prev.PostedGitHubPRs
-			if len(s.RemovedLabels) == 0 {
-				s.RemovedLabels = prev.RemovedLabels
-			}
-			if s.Status == "dead" && prev.Status == "merged" {
-				// A merged session's pane going away is the expected end of
-				// life, not an anomaly worth resurrecting as "dead".
-				s.Status = "merged"
-			}
-		}
-		if s.TmuxName == "" {
-			s.TmuxName = s.ID // native sessions ARE tmux sessions
-		}
-		switch s.Status {
+			s.Reroll(time.Now())
+			adopted = s
+			*cur = s
+			return true
+		})
+		switch adopted.Status {
 		case "dead":
-			d.logf("", "adopt: %s has a worktree but no tmux session (dead; reconcile may revert its issue)", s.ID)
+			d.logf("", "adopt: %s has a worktree but no tmux session (dead; reconcile may revert its issue)", adopted.ID)
 		case "orphaned":
-			d.logf("", "adopt: %s is a lola tmux session without a worktree (orphaned; kill candidate)", s.ID)
+			d.logf("", "adopt: %s is a lola tmux session without a worktree (orphaned; kill candidate)", adopted.ID)
 		}
-		d.sessions.Upsert(s)
 	}
-	if len(found) == 0 {
+	// Purge phantom shell-TAB records an OLDER daemon's Adopt created (it
+	// reported "<id>-shell-N" panes as orphaned sessions). The current Adopt
+	// filters them, but a persisted phantom would otherwise sit in the store
+	// forever: its pane is alive, so the observer keeps re-stamping LastSeen
+	// and the retention prune never fires. Store-record removal only — the
+	// tmux session itself is a live terminal tab and is left alone.
+	purged := 0
+	for _, s := range d.sessions.Snapshot() {
+		if s.Source == "native" && runtime.IsShellTabSession(s.ID) {
+			d.sessions.Delete(s.ID)
+			purged++
+		}
+	}
+	if purged > 0 {
+		d.logf("", "adopt: purged %d phantom shell-tab record(s)", purged)
+	}
+	if len(found) == 0 && purged == 0 {
 		return
 	}
 	d.logf("", "adopt: %d native session(s) recorded", len(found))

@@ -16,6 +16,7 @@ import (
 	"github.com/sushidev-team/lola/internal/notify"
 	"github.com/sushidev-team/lola/internal/protocol"
 	"github.com/sushidev-team/lola/internal/session"
+	"github.com/sushidev-team/lola/internal/state"
 )
 
 // serve runs the accept loop until the listener is closed at shutdown.
@@ -244,33 +245,70 @@ func (d *Daemon) handleHookEvent(req protocol.Request) protocol.Response {
 		newStatus     string
 	)
 	now := time.Now()
+	// The structured payload is optional: a pre-payload `lola hook` binary in a
+	// long-lived pane sends none, and every consumer below treats the zero
+	// value as "unknown". Message/Prompt are rendered agent/user text —
+	// DISPLAY-ONLY, never executed, never fed back to any agent.
+	var payload protocol.HookPayload
+	if req.Hook != nil {
+		payload = *req.Hook
+	}
 	_, known := d.sessions.Update(req.Session, func(sess *session.Session) bool {
 		prev := sess.Status
+		// Every recognized hook is a LIVE signal from inside the agent's own
+		// pane, so it also re-verifies a gate carried across a daemon restart
+		// (see Session.AtPromptVerified). Every hook may also carry the
+		// transcript path — record it for the status interpreter.
+		if payload.TranscriptPath != "" {
+			sess.TranscriptPath = payload.TranscriptPath
+		}
 		switch req.Event {
 		case "stop":
-			sess.Status = "idle"
+			sess.SetAgentState(state.AgentIdle, "", now)
 			sess.AtPrompt = true // idle at the prompt: safe to send-keys into
+			sess.AtPromptVerified = true
 		case "notification":
-			sess.Status = "needs_input"
+			sess.SetAgentState(state.AgentWaitingInput, "", now)
+			// The message finally says WHY: a permission prompt reads
+			// differently from an idle "waiting for your input" nudge.
+			sess.InputReason = state.ClassifyNotification(payload.Message, payload.Reason)
+			if payload.Message != "" {
+				sess.LastNotification = payload.Message
+			}
 			sess.AtPrompt = false // waiting on a human: never send-keys
+			sess.AtPromptVerified = true
 		case "session_end":
-			sess.Status = "session_ended"
+			sess.SetAgentState(state.AgentExited, "", now)
 			sess.AtPrompt = false
+			sess.AtPromptVerified = true
 		case "tool_use":
-			sess.AtPrompt = false     // mid-turn (busy): never send-keys
-			sess.LastActivityAt = now // POSITIVE evidence of work (heartbeat)
-			if sess.Status == "idle" {
-				sess.Status = "working"
+			sess.AtPrompt = false // mid-turn (busy): never send-keys
+			sess.AtPromptVerified = true
+			sess.TouchActivity(state.SourceHook, now) // POSITIVE evidence of work (heartbeat)
+			// A running tool promotes only a RESTING-idle (or just-spawned) axis
+			// back to working. Deliberately NOT waiting_input: PostToolUse is the
+			// one async hook, so a late-delivered tool_use can land AFTER the
+			// Notification that parked the agent — clearing needs_input on it
+			// would hide a genuine block. user_prompt (synchronous, definitive
+			// turn start) is what clears waiting_input.
+			switch sess.AgentState {
+			case state.AgentIdle, state.AgentStarting:
+				sess.SetAgentState(state.AgentWorking, state.SourceHook, now)
+			}
+			if payload.ToolName != "" && (sess.AgentState == state.AgentWorking || sess.AgentState == state.AgentStarting) {
+				sess.CurrentTool = payload.ToolName // what the in-flight turn is doing right now
 			}
 		case "user_prompt":
 			// Turn START: a prompt was submitted (an autonomous turn, or a human
 			// attach nudge). Clear the send-keys gate so the reaction engine never
-			// types into the now-busy pane, and promote an idle / needs_input
-			// session to working — the agent is actively processing again.
+			// types into the now-busy pane, and promote a resting axis back to
+			// working — the agent is actively processing again.
 			sess.AtPrompt = false
-			sess.LastActivityAt = now // POSITIVE evidence of work (turn start)
-			if sess.Status == "idle" || sess.Status == "needs_input" {
-				sess.Status = "working"
+			sess.AtPromptVerified = true
+			sess.TouchActivity(state.SourceHook, now) // POSITIVE evidence of work (turn start)
+			switch sess.AgentState {
+			case state.AgentIdle, state.AgentWaitingInput, state.AgentStarting:
+				sess.SetAgentState(state.AgentWorking, state.SourceHook, now)
 			}
 		default:
 			unknownEvent = true
@@ -314,13 +352,20 @@ func (d *Daemon) warnUnknownHookSession(id, event string) {
 // sessionsData builds the reply for cmd=sessions from the observer's cached
 // store snapshot. Nothing is exec'd on the request path — a stale-but-instant
 // answer beats a request that hangs on ao/gh/tmux (observer cadence is 30s).
+// prStaleFailures is how many consecutive failed gh PR fetches make the
+// session's PR facts "stale" on the wire (SessionInfo.PRStale): one failure is
+// routine (a blip, a rate limit); three ≈ 90s of blindness is worth a warning.
+const prStaleFailures = 3
+
 func (d *Daemon) sessionsData() protocol.SessionsData {
 	snap := d.sessions.Snapshot()
 	now := time.Now()
 	// The ci_failed retry budget is the "N/M" denominator of the reacting
-	// label; reactions config is global, read once under the config lock.
+	// label; reactions config is global, read once under the config lock. The
+	// interpreter's confidence floor gates the display overlay below.
 	d.mu.Lock()
 	ciBudget := d.cfg.Reactions.CIFailed.Retries
+	minConfidence := d.cfg.StatusAgent.MinConfidence
 	d.mu.Unlock()
 	out := protocol.SessionsData{Sessions: make([]protocol.SessionInfo, 0, len(snap))}
 	for _, s := range snap {
@@ -337,6 +382,19 @@ func (d *Daemon) sessionsData() protocol.SessionsData {
 			CIRetries: s.CIRetries,
 			Escalated: s.Escalated,
 			Reacting:  reactingLabel(s.Status, s.CIRetries, s.Escalated, ciBudget),
+
+			AgentState:       string(s.AgentState),
+			Delivery:         string(s.Delivery),
+			StatusSince:      s.StatusSince,
+			AgentStateSince:  s.AgentStateSince,
+			LastActivityAt:   s.LastActivityAt,
+			ActivitySource:   string(s.ActivitySource),
+			PRObservedAt:     s.PRObservedAt,
+			PRStale:          s.PR != nil && s.PRFetchFailures >= prStaleFailures,
+			AtPrompt:         s.AtPrompt,
+			InputReason:      string(s.InputReason),
+			CurrentTool:      s.CurrentTool,
+			LastNotification: s.LastNotification,
 		}
 		if s.Source == "native" {
 			// Native sessions live in worktrees the daemon created at
@@ -349,6 +407,14 @@ func (d *Daemon) sessionsData() protocol.SessionsData {
 			si.PRNumber = s.PR.Number
 			si.Checks = s.PR.ChecksState
 			si.Review = s.PR.ReviewDecision
+		}
+		// [statusagent] display overlay, pre-gated here (the ONE consumer of
+		// the overlay fields): clients render what arrives or nothing.
+		if istate, headline, waitingOn, at := displayOverlay(s, minConfidence, now); headline != "" || istate != "" {
+			si.InterpretedState = istate
+			si.Headline = headline
+			si.WaitingOn = waitingOn
+			si.HeadlineAgo = formatAge(now.Sub(at))
 		}
 		out.Sessions = append(out.Sessions, si)
 	}
@@ -441,6 +507,7 @@ func (d *Daemon) handleReload(ctx context.Context) error {
 	// operator can enable/disable it or change model/timeout via reload. A now-
 	// disabled or newly-unavailable brain drops back to generic templates.
 	d.setBrainLocked(nc.Brain)
+	d.setStatusAgentLocked(nc.StatusAgent)
 	// Rebuild the flexible review provider catalog + per-kind clients from the new
 	// config (the [[review.provider]] catalog, or legacy synthesis): enabling/
 	// disabling a provider or changing its command/timeout/transports/fallback

@@ -127,16 +127,14 @@ func TestObserveManualShellLiveness(t *testing.T) {
 	id := runtime.ManualSessionID("p1", "pr-42")
 	d.sessions.Upsert(session.Session{ID: id, Source: "native", Manual: true, Project: "p1", TmuxName: id, Status: "shell"})
 
-	nat.alive[id] = true
 	s, _ := d.sessions.Get(id)
-	d.observeManualShell(context.Background(), nat, s)
+	d.observeManualShell(s, true)
 	if got, _ := d.sessions.Get(id); got.Status != "shell" {
 		t.Errorf("alive shell status = %q, want shell", got.Status)
 	}
 
-	nat.alive[id] = false
 	s, _ = d.sessions.Get(id)
-	d.observeManualShell(context.Background(), nat, s)
+	d.observeManualShell(s, false)
 	if got, _ := d.sessions.Get(id); got.Status != "dead" {
 		t.Errorf("gone shell status = %q, want dead", got.Status)
 	}

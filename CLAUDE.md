@@ -91,12 +91,27 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   PostToolUse/UserPromptSubmit to `lola hook`, which posts to the socket. This
   path is on the agent's critical path: bounded 2s, always exits 0 — a broken
   lola must never wedge or fail an agent's turn.
-- `internal/scm` — GitHub PR/CI observation via `gh`. `DeriveStatus` is the ONE
-  deterministic status derivation used everywhere (caps, reactions, reconcile,
-  TUI).
+- `internal/scm` — GitHub PR/CI observation via `gh`. Ships FACTS only (PR
+  state, checks rollup, mergeability) — status derivation moved to
+  `internal/state`, which sits above it (scm must never import state).
+- `internal/state` — THE status vocabulary, single home. A session is two
+  ORTHOGONAL axes: `AgentState` (what the agent itself does — hooks + pane +
+  tmux liveness own it, PR facts never mask it) × `DeliveryState` (where the
+  PR stands — gh facts only, via `DeriveDelivery` with UNKNOWN-mergeable
+  hysteresis). `Rollup(a, d)` is the ONLY producer of the legacy one-string
+  status; the consumer tables (`HoldsSlot`, `Present`, `Notable`,
+  `NeedsAttention`, `SortRank`, `KanbanColumns`) are the only slot/attention
+  classifications — the desktop's `theme.ts` mirrors them and
+  `desktop/state_parity_test.go` pins the two byte-identical.
 - `internal/session` — pure data: the `Session` model + JSON snapshot `Store`
-  (atomic temp+rename). No exec. Holds derived `Status`, PR state, and the
-  persisted one-shot guards for reactions (P3) and write-back (P4).
+  (atomic temp+rename). No exec. Holds the two axes + freshness stamps, the
+  derived rollup `Status` (written ONLY by the `SetAgentState`/`SetDelivery`
+  mutators), PR state, the persisted one-shot guards for reactions (P3) and
+  write-back (P4), and the display-only `[statusagent]` overlay fields.
+- `internal/statusagent` — the OPT-IN status interpreter: one bounded
+  `claude -p` per interpretation (default `--model sonnet`) judging what an
+  agent is ACTUALLY doing from pane/events/PR context. Output is parsed,
+  whitelisted, clamped — and DISPLAY-ONLY (see the invariant below).
 - `internal/agent` — the pluggable coding-agent leaf (stdlib + regexp only; must
   NOT import config/session/hook/runtime/attention): the `claude`|`codex`|
   `opencode` kind enum, per-kind launch argv (`LaunchArgs`), the callback-config
@@ -131,11 +146,18 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   in-flight/dedup → sort by `priority_sort` → take `Budget(pollCap, globalCap,
   liveCounted)` → per issue: **mark in-flight+seen FIRST, then spawn**, then
   (label mode, success only) re-read labels fresh and flip.
-- `observer.go` — read-only ~30s loop merging native sessions with `gh` PR
-  state into the `session.Store` snapshot; the `sessions` socket command serves
-  the cache (a client request never execs gh/tmux). Contains the
-  anti-false-working guard (`staleWorkingThreshold`).
-- `reactions.go` — P3 engine acting on derived status changes.
+- `observer.go` — read-only ~30s loop: ONE `tmux ls` per cycle (liveness +
+  `#{session_activity}`, the sustain-only activity signal), gh PR facts onto
+  the DELIVERY axis (failed fetches counted → `PRStale` on the wire, facts
+  never invented), pane classification onto the AGENT axis pre- AND post-PR
+  (`agentReconcile`) — into the `session.Store` snapshot; the `sessions`
+  socket command serves the cache (a client request never execs gh/tmux).
+  Contains the anti-false-working guard (`staleWorkingThreshold`).
+- `reactions.go` — P3 engine acting on derived status changes. Also owns
+  `ensurePromptVerified`, the pre-send pane check for an adoption-carried
+  (unverified) AtPrompt gate.
+- `statusagentwire.go` — the `[statusagent]` interpreter's worker/triggers/
+  cost controls and `displayOverlay`, the overlay's ONE consumer.
 - `reconcile.go` — ~5m pass reverting orphaned issues (labeled-sent but no
   counted session and no open PR after `orphanTimeout`).
 - `writeback.go` — P4 Linear state transitions + comments.
@@ -202,10 +224,19 @@ each of which owns exactly one external tool or concern behind an **exec seam**
 - **Dispatch order is load-bearing.** Record in-flight + write seen *before*
   spawning, so a crash mid-spawn can't double-dispatch. Upsert the session into
   the store immediately so the next `Budget` call counts it.
+- **Status is two axes; `state.Rollup` is its only producer.** `AgentState`
+  (hooks + pane + tmux liveness) and `DeliveryState` (gh facts) live side by
+  side on the `Session`; the rolled-up `Status` string is derived from them by
+  the `SetAgentState`/`SetDelivery` mutators — writing `Status` directly is a
+  bug (the axes and the rollup drift). Post-PR the delivery axis owns the
+  rollup while the agent axis stays truthful underneath (that split is what
+  killed the old hook↔observer status flap). `state.FromLegacy` backfills axes
+  for pre-axis snapshots on load/Upsert, so legacy records keep working.
 - **`liveCounted` comes from the session store snapshot**, never a local
-  counter. Only slot-occupying derived statuses count (`working`, `needs_input`,
-  `draft`, `ci_failed`, `changes_requested`, `ci_pending`); parked-for-review
-  and terminal statuses don't, so held PRs don't stall pickup.
+  counter. Only slot-occupying rolled-up statuses count (`state.HoldsSlot`:
+  `working`, `needs_input`, `draft`, `ci_failed`, `changes_requested`,
+  `ci_pending`, `merge_conflict`); parked-for-review and terminal statuses
+  don't, so held PRs don't stall pickup.
 - **Fail CLOSED on unknowns.** The reconcile orphan-revert skips whenever the
   open-PR check can't answer (no repo, gh error) — better a stuck label than
   lost work.
@@ -213,7 +244,10 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   corrupts it. Every path that types goes through the `AtPrompt` idle gate
   (consumed atomically via `Store.Update`); a non-idle session has its reaction
   **deferred**, never forced. Payloads are sanitized (control chars stripped)
-  and are **never** run as a command.
+  and are **never** run as a command. A gate carried across a daemon restart is
+  UNVERIFIED (`AtPromptVerified=false` from adoption) and must pass
+  `ensurePromptVerified` (live hook or a waiting pane) before the first send —
+  ambiguity fails closed (defer).
 - **Fire once per transition.** Reactions and write-backs use persisted
   one-shot guards (`LastReactedStatus`, `WB*Done`, review's per-PR guard) so
   they don't re-fire on every 30s observer cycle.
@@ -221,7 +255,12 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   `review` findings are derived from attacker-influenceable context (PR diffs,
   CI logs, pane text). They may go to a human (notify + Linear comment) but the
   brain summary must **never** be fed back to the worker agent; review findings
-  reach the worker only through the sanitize + idle gate.
+  reach the worker only through the sanitize + idle gate. The `[statusagent]`
+  interpreter is stricter still: its parsed judgement reaches ONLY the wire's
+  display fields (`displayOverlay` in `statusagentwire.go` is the one reader)
+  — never `Status`, the axes, `AtPrompt`, dispatch counting, reactions,
+  write-back, answer gating, or send-keys. Adding a reader of the overlay
+  fields anywhere in the control loop breaks the design.
 - **Shutdown-shielded loops.** The observer and reconcile loops run on
   `context.WithoutCancel` and are panic-guarded, with a per-exec deadline on
   every gh/tmux call so a wedged external process can't hang graceful shutdown

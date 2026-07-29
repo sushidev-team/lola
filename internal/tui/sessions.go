@@ -71,11 +71,11 @@ func statusStyle(status string) lipgloss.Style {
 		return badText
 	case "approved":
 		return goodText
-	case "needs_input", "no_signal":
+	case "needs_input":
 		return statusOrange
 	case "dead":
 		return statusDeadBg
-	case "merged", "session_ended", "idle":
+	case "merged", "session_ended", "idle", "closed", "shell", "orphaned":
 		return faintText
 	}
 	return lipgloss.NewStyle()
@@ -904,6 +904,18 @@ func (m *rootModel) sessionDetail() string {
 		if sel.Worktree != "" {
 			b.WriteString(faintText.Render("worktree: "+sel.Worktree) + "\n")
 		}
+		// The agent axis, truthful even under an open PR: what the agent itself
+		// is doing, why it waits, which tool the turn runs, activity freshness.
+		if line := agentDetailLine(*sel); line != "" {
+			b.WriteString(faintText.Render(line) + "\n")
+		}
+		// The interpreter's headline (untrusted, "≈"-marked, display only).
+		for _, line := range interpretedLines(*sel) {
+			b.WriteString(statusOrange.Render(line) + "\n")
+		}
+		if sel.PRStale {
+			b.WriteString(statusOrange.Render("⚠ PR facts stale — gh has been failing; the delivery state may be old") + "\n")
+		}
 		// PR panel above the fold: unmissable for ANY tmux-backed session that has
 		// a PR, not just AO/detail-card sessions.
 		if blk := prDetailBlock(*sel); blk != "" {
@@ -948,6 +960,18 @@ func (m *rootModel) sessionDetail() string {
 	fmt.Fprintf(&b, "branch:   %s\n", dash(sel.Branch))
 	fmt.Fprintf(&b, "worktree: %s\n", dash(sel.Worktree))
 	fmt.Fprintf(&b, "status:   %s\n", statusStyle(sel.Status).Render(sel.Status))
+	if line := agentDetailLine(*sel); line != "" {
+		b.WriteString(faintText.Render(line) + "\n")
+	}
+	for _, line := range interpretedLines(*sel) {
+		b.WriteString(statusOrange.Render(line) + "\n")
+	}
+	if sel.LastNotification != "" {
+		b.WriteString(faintText.Render("note:     "+truncPlain(sel.LastNotification, 100)) + "\n")
+	}
+	if sel.PRStale {
+		b.WriteString(statusOrange.Render("⚠ PR facts stale — gh has been failing") + "\n")
+	}
 	fmt.Fprintf(&b, "review:   %s\n", dash(sel.Review))
 	if sel.Reacting != "" {
 		fmt.Fprintf(&b, "reacting: %s\n", reactingStyle(sel.Reacting).Render(sel.Reacting))

@@ -21,6 +21,7 @@ import (
 
 	"github.com/sushidev-team/lola/internal/protocol"
 	"github.com/sushidev-team/lola/internal/session"
+	"github.com/sushidev-team/lola/internal/state"
 )
 
 // eventLogCap bounds the activity ring. A rail feed shows ~4-10 lines; a couple
@@ -70,24 +71,10 @@ func (l *eventLog) snapshot() []sessionEvent {
 }
 
 // notableTransition decides whether a from→to status change is worth a feed
-// line. A spawn (from "") always is. Routine noise is dropped: the idle↔working
-// turn churn (working is kept ONLY as a "resumed" signal out of needs_input),
-// and the internal non-statuses that never read as an event to a human.
+// line (state.Notable): a spawn always is; the idle↔working turn churn and
+// the orphaned adoption anomaly are dropped.
 func notableTransition(from, to string) bool {
-	if to == "" {
-		return false
-	}
-	if from == "" {
-		return true // spawn
-	}
-	switch to {
-	case "idle", "no_pr", "no_signal", "orphaned", "none":
-		return false
-	case "working":
-		return from == "needs_input" // resumed after waiting on a human
-	default:
-		return true
-	}
+	return state.Notable(from, to)
 }
 
 // recordSessionEvent is the single capture helper wired to both
@@ -107,6 +94,29 @@ func (d *Daemon) recordSessionEvent(from string, s session.Session) {
 		from:  from,
 		to:    s.Status,
 	})
+}
+
+// eventsFor returns up to n of the ring's recorded transitions for one
+// session, newest first, as compact "from→to (Xm ago)" lines — the status
+// interpreter's transition context. Empty when the session has none recorded.
+func (d *Daemon) eventsFor(id string, n int, now time.Time) []string {
+	if d.events == nil || id == "" {
+		return nil
+	}
+	evs := d.events.snapshot()
+	out := make([]string, 0, n)
+	for i := len(evs) - 1; i >= 0 && len(out) < n; i-- {
+		e := evs[i]
+		if e.id != id {
+			continue
+		}
+		from := e.from
+		if from == "" {
+			from = "spawned"
+		}
+		out = append(out, from+"→"+e.to+" ("+formatAge(now.Sub(e.at))+" ago)")
+	}
+	return out
 }
 
 // eventFeed flattens the ring into render-ready protocol.Events, NEWEST FIRST,

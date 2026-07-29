@@ -161,6 +161,35 @@ endpoint = "https://api.linear.app/graphql"
 # summarize_escalation = true    # summarize why a stuck session is blocked
 # summarize_approved = true      # summarize an approved+green PR before a human merges
 
+# ---------------------------------------------------------------------------
+# [statusagent] — OPTIONAL, OFF BY DEFAULT. The status INTERPRETER: a small
+# bounded `claude -p` pass that reads one session's pane tail, recent lifecycle
+# events, and PR facts, and judges what the agent is ACTUALLY doing — an
+# interpreted agent-state overlay plus a one-line headline ("rewriting the auth
+# middleware tests") shown in the TUI and the desktop app. Display only: it can
+# never change the real status, the dispatch budget, reactions, or anything
+# that types into an agent — the material it reads is attacker-influenceable,
+# so its output is untrusted text for human eyes.
+#
+# COST: each interpretation spends tokens (default --model sonnet). The daemon
+# bounds spend hard: interpretations run only on agent-state transitions or
+# ambiguous/stale states, at most min_interval_seconds apart per session, at
+# most max_per_cycle queued per 30s observer cycle, and an unchanged session
+# (same pane/facts hash) skips the call entirely — a quiet fleet costs ~0.
+#
+# Omit this whole section to keep the interpreter OFF — zero behavior change.
+# The values shown below are the built-in defaults once enabled.
+# ---------------------------------------------------------------------------
+# [statusagent]
+# enabled = true                 # master switch; false (and an absent table) = off
+# bin = ""                       # claude executable; "" resolves "claude" via PATH (pin absolute for launchd)
+# model = "sonnet"               # --model per call; explicitly "" = claude's default model
+# timeout_seconds = 60           # hard cap per interpretation; must be >= 0
+# min_interval_seconds = 120     # per-session debounce between interpretation attempts
+# max_per_cycle = 2              # interpretations queued per 30s observer cycle
+# min_confidence = 0.5           # judgements below this are discarded (deterministic display stands)
+# include_transcript = false     # also feed the agent's own transcript tail (more signal, more tokens)
+
 # ===========================================================================
 # THE REVIEW CATALOG — [[review.provider]] (OPTIONAL, OFF BY DEFAULT)
 #

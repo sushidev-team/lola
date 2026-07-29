@@ -92,6 +92,7 @@ type Request struct {
 	Session string `json:"session,omitempty"` // lola session ID ($LOLA_SESSION in the agent's pane); also the kill/pane/answer target
 	Event   string `json:"event,omitempty"`   // normalized: stop|notification|session_end|tool_use|user_prompt
 	Detail  string `json:"detail,omitempty"`  // optional: notification_type / stop_reason / end_reason
+	Hook    *HookPayload `json:"hook,omitempty"` // structured payload fields; nil from pre-payload hook binaries
 
 	// Force is set only for cmd=kill: remove the worktree even when it has
 	// uncommitted changes. Deliberate CLI-only friction (`lola kill <id>
@@ -110,6 +111,21 @@ type Request struct {
 	// (prs, tickets, openManual, …) whose inputs don't fit the flat fields above.
 	// Each such handler unmarshals it into its own <Cmd>Args type.
 	Args json.RawMessage `json:"args,omitempty"`
+}
+
+// HookPayload carries the structured fields the `lola hook` CLI extracts from
+// a lifecycle hook's stdin (Claude Code writes a JSON event payload there) or
+// from a codex notify argv payload. Every field is optional and size-capped by
+// the CLI before it touches the wire. Message and Prompt are rendered
+// agent/user text: DISPLAY-ONLY on the daemon side — never executed, never
+// send-keys'd, never fed back to any agent.
+type HookPayload struct {
+	ToolName       string `json:"toolName,omitempty"`       // PostToolUse: which tool ran
+	Message        string `json:"message,omitempty"`        // Notification text / codex last-assistant-message
+	Prompt         string `json:"prompt,omitempty"`         // UserPromptSubmit: the submitted prompt
+	TranscriptPath string `json:"transcriptPath,omitempty"` // the agent's own transcript file
+	AgentSessionID string `json:"agentSessionId,omitempty"` // the agent's internal conversation id
+	Reason         string `json:"reason,omitempty"`         // notification_type / stop_reason / end_reason
 }
 
 // Response is one line of JSON sent back by the daemon.
@@ -173,7 +189,7 @@ type SessionInfo struct {
 	Issue    string `json:"issue"`  // Linear identifier, e.g. ENG-123
 	Title    string `json:"title"`  // Linear issue title, "" when unknown (older/adopted records)
 	Branch   string `json:"branch"` // "" when unknown
-	Status   string `json:"status"` // derived (scm.DeriveStatus / hook-driven states)
+	Status   string `json:"status"` // the rolled-up status (state.Rollup vocabulary)
 	PRURL    string `json:"prUrl"`
 	PRNumber int    `json:"prNumber"` // 0 when no PR observed
 	Checks   string `json:"checks"`   // pass|fail|pending|none, "" when no PR
@@ -182,6 +198,32 @@ type SessionInfo struct {
 	Source   string `json:"source"`   // always "native"; kept for wire compat with pre-P3 clients
 	Worktree string `json:"worktree"` // native runtime: the session's git worktree dir; "" otherwise
 	Age      string `json:"age"`      // human duration since first observed, e.g. "2h05m"
+
+	// The two state axes underneath Status (see internal/state), with raw
+	// freshness timestamps so a client can render a live "ago" between
+	// refreshes. All omitempty: absent on an older daemon.
+	AgentState      string    `json:"agentState,omitempty"`     // starting|working|waiting_input|idle|exited|dead|shell|orphaned
+	Delivery        string    `json:"delivery,omitempty"`       // none|draft|ci_pending|…|merged|closed
+	StatusSince     time.Time `json:"statusSince,omitzero"`     // when the rolled-up Status last changed
+	AgentStateSince time.Time `json:"agentStateSince,omitzero"` // when the agent axis last changed
+	LastActivityAt  time.Time `json:"lastActivityAt,omitzero"`  // last POSITIVE evidence of work
+	ActivitySource  string    `json:"activitySource,omitempty"` // hook|pane|tmux_activity
+	PRObservedAt    time.Time `json:"prObservedAt,omitzero"`    // last successful gh PR fetch
+	PRStale         bool      `json:"prStale,omitempty"`        // PR facts are ≥3 failed fetches old
+	AtPrompt        bool      `json:"atPrompt,omitempty"`        // agent idle at its prompt (send-keys gate open)
+	InputReason     string    `json:"inputReason,omitempty"`     // why waiting_input: permission_prompt|question|idle_notification
+	CurrentTool     string    `json:"currentTool,omitempty"`     // tool the in-flight turn runs right now (PostToolUse)
+	LastNotification string   `json:"lastNotification,omitempty"` // last Notification message (display-only text)
+
+	// [statusagent] interpreter overlay — untrusted LLM text, DISPLAY ONLY,
+	// pre-gated daemon-side (confidence, freshness, supersession): a client
+	// renders it verbatim or not at all. InterpretedState is set ONLY when the
+	// interpreter DISAGREES with agentState (render with an "approx" marker);
+	// Headline ships whenever a valid judgement exists.
+	InterpretedState string `json:"interpretedState,omitempty"` // working|waiting_input|idle|stuck; "" = no override
+	Headline         string `json:"headline,omitempty"`         // one line: what the agent is doing right now
+	WaitingOn        string `json:"waitingOn,omitempty"`        // what the agent needs, when blocked
+	HeadlineAgo      string `json:"headlineAgo,omitempty"`      // formatted age of the judgement, e.g. "2m"
 
 	// Reaction-engine posture (PLAN P3), flattened so the TUI renders reaction
 	// state without importing internal/session or re-deriving it.

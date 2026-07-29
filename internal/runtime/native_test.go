@@ -10,15 +10,28 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sushidev-team/lola/internal/agent"
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/hook"
 	"github.com/sushidev-team/lola/internal/linear"
 	"github.com/sushidev-team/lola/internal/session"
+	"github.com/sushidev-team/lola/internal/state"
 	"github.com/sushidev-team/lola/internal/tmux"
 	"github.com/sushidev-team/lola/internal/worktree"
 )
+
+// stripAxisStamps zeroes the axis timestamps a constructor stamps with
+// time.Now (via withAgentState) so a returned session can DeepEqual a literal
+// fixture; the axis VALUES themselves stay and are asserted.
+func stripAxisStamps(s session.Session) session.Session {
+	s.AgentStateSince = time.Time{}
+	s.DeliverySince = time.Time{}
+	s.StatusSince = time.Time{}
+	s.LastActivityAt = time.Time{}
+	return s
+}
 
 // scriptBin installs a shell script standing in for a binary (git, tmux): it
 // appends its argv (one line per invocation) to the returned log, then runs
@@ -132,9 +145,10 @@ func TestSpawnHappyPathFullSequence(t *testing.T) {
 		Title:     "Fix login flow",
 		IssueUUID: "uuid-42", Branch: "lola/eng-42", Repo: "owner/nori",
 		Worktree: dir,
-		TmuxName: id, Status: StatusWorking, Agent: "claude",
+		TmuxName: id, Status: "working", Agent: "claude",
+		AgentState: state.AgentStarting,
 	}
-	if !reflect.DeepEqual(got, want) {
+	if !reflect.DeepEqual(stripAxisStamps(got), want) {
 		t.Errorf("session = %+v\nwant      %+v", got, want)
 	}
 
@@ -364,8 +378,8 @@ func TestSpawnChromeFailureIsAdvisoryOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn must succeed despite chrome failure: %v", err)
 	}
-	if got.Status != StatusWorking {
-		t.Errorf("Status = %q, want %q", got.Status, StatusWorking)
+	if got.Status != "working" {
+		t.Errorf("Status = %q, want %q", got.Status, "working")
 	}
 	if !strings.Contains(logged, "styling failed") {
 		t.Errorf("chrome failure must be logged via Logf, got %q", logged)
@@ -537,8 +551,8 @@ func TestSpawnCodexWithoutAuthSourceStillSpawns(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Spawn must succeed without a codex login: %v", err)
 	}
-	if got.Status != StatusWorking {
-		t.Errorf("Status = %q, want %q", got.Status, StatusWorking)
+	if got.Status != "working" {
+		t.Errorf("Status = %q, want %q", got.Status, "working")
 	}
 	dir := filepath.Join(f.root, "nori", "lola-nori-eng-42")
 	if _, err := os.Lstat(filepath.Join(dir, ".lola", "codex", "auth.json")); !os.IsNotExist(err) {
@@ -745,8 +759,9 @@ func TestSpawnRejectsIssueWithoutIdentifier(t *testing.T) {
 func TestAdoptPairingMatrix(t *testing.T) {
 	f := newFixture(t, "", "")
 	// On disk + registered: eng-1 (tmux alive -> working), eng-2 (no tmux ->
-	// dead). Tmux only: eng-9 (-> orphaned, reported but never killed) and a
-	// non-lola session (ignored).
+	// dead). Tmux only: eng-9 (-> orphaned, reported but never killed), a
+	// non-lola session (ignored), and an embedded shell TAB
+	// ("<id>-shell-1", ignored — it belongs to eng-1, not a session of its own).
 	base := filepath.Join(f.root, "nori")
 	dir1 := filepath.Join(base, "lola-nori-eng-1")
 	dir2 := filepath.Join(base, "lola-nori-eng-2")
@@ -767,6 +782,7 @@ LOLA_EOF
 	tmuxBin, tmuxLog := scriptBin(t, "tmux", `*"ls -F"*)
   cat <<'LOLA_EOF'
 lola-nori-eng-1	1720000000	0
+lola-nori-eng-1-shell-1	1720000003	0
 lola-nori-eng-9	1720000001	0
 main	1720000002	1
 LOLA_EOF
@@ -780,15 +796,15 @@ LOLA_EOF
 		t.Fatalf("Adopt: %v", err)
 	}
 	want := []session.Session{
-		{ID: "lola-nori-eng-1", Source: "native", Project: "nori", Issue: "ENG-1", Repo: "owner/nori", TmuxName: "lola-nori-eng-1", Status: StatusWorking},
-		{ID: "lola-nori-eng-2", Source: "native", Project: "nori", Issue: "ENG-2", Repo: "owner/nori", TmuxName: "lola-nori-eng-2", Status: StatusDead},
-		{ID: "lola-nori-eng-9", Source: "native", Project: "nori", Issue: "ENG-9", TmuxName: "lola-nori-eng-9", Status: StatusOrphaned},
+		{ID: "lola-nori-eng-1", Source: "native", Project: "nori", Issue: "ENG-1", Repo: "owner/nori", TmuxName: "lola-nori-eng-1", Status: "working", AgentState: state.AgentWorking},
+		{ID: "lola-nori-eng-2", Source: "native", Project: "nori", Issue: "ENG-2", Repo: "owner/nori", TmuxName: "lola-nori-eng-2", Status: "dead", AgentState: state.AgentDead},
+		{ID: "lola-nori-eng-9", Source: "native", Project: "nori", Issue: "ENG-9", TmuxName: "lola-nori-eng-9", Status: "orphaned", AgentState: state.AgentOrphaned},
 	}
 	if len(got) != len(want) {
 		t.Fatalf("Adopt = %+v\nwant %+v", got, want)
 	}
 	for i := range want {
-		if !reflect.DeepEqual(got[i], want[i]) {
+		if !reflect.DeepEqual(stripAxisStamps(got[i]), want[i]) {
 			t.Errorf("adopt[%d] = %+v\nwant       %+v", i, got[i], want[i])
 		}
 	}
@@ -1293,8 +1309,9 @@ func TestOpenHappyPath(t *testing.T) {
 		Title: "manual: pr-42", Branch: "pr-42", Repo: "owner/nori",
 		Worktree: dir,
 		TmuxName: id, Status: "shell",
+		AgentState: state.AgentShell,
 	}
-	if !reflect.DeepEqual(got, want) {
+	if !reflect.DeepEqual(stripAxisStamps(got), want) {
 		t.Errorf("session = %+v\nwant      %+v", got, want)
 	}
 
@@ -1344,8 +1361,8 @@ func TestReviveRelaunchesOnKeptWorktree(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Revive: %v", err)
 	}
-	if got.Status != StatusWorking {
-		t.Errorf("revived status = %q, want %q", got.Status, StatusWorking)
+	if got.Status != "working" {
+		t.Errorf("revived status = %q, want %q", got.Status, "working")
 	}
 	if got.TmuxName != id {
 		t.Errorf("revived TmuxName = %q, want %q", got.TmuxName, id)

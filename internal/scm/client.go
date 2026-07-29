@@ -1,9 +1,10 @@
 // Package scm observes GitHub PR/CI state via the gh CLI (PLAN P1.7).
 //
-// It is a pure request/derive layer: one gh invocation per call, no internal
-// polling loops — the daemon owns cadence. DeriveStatus is the single
-// deterministic status derivation Lola uses everywhere (caps, reactions,
-// reconcile, TUI).
+// It is a pure request/fact layer: one gh invocation per call, no internal
+// polling loops — the daemon owns cadence — and no status derivation: PR
+// facts feed internal/state.DeriveDelivery, the single delivery-axis
+// derivation Lola uses everywhere (caps, reactions, reconcile, TUI). scm
+// stays a leaf below internal/state, so it must never import it.
 //
 // JSON assumptions (verified against gh 2.x `pr list --json`):
 //   - Output is a top-level JSON array of PR objects; `[]` when the branch
@@ -122,9 +123,10 @@ func (c *Client) PRForBranch(ctx context.Context, repo, branch string) (*PR, err
 }
 
 // OpenPR is one open pull request as the PR picker needs it: identity, head
-// branch, CI/review posture (via the shared checksState / DeriveStatus), and a
+// branch, CI/review/mergeability facts (via the shared checksState), and a
 // fork flag (the head is a different owner than the base repo) so the caller can
-// refuse push-back tracking on forks.
+// refuse push-back tracking on forks. The caller derives any status word from
+// these facts (internal/state.DeriveDelivery) — scm ships facts only.
 type OpenPR struct {
 	Number    int
 	Title     string
@@ -134,9 +136,9 @@ type OpenPR struct {
 	IsFork    bool
 	Checks    string // pass | fail | pending | none
 	Review    string // APPROVED | CHANGES_REQUESTED | REVIEW_REQUIRED | ""
+	Mergeable string // MERGEABLE | CONFLICTING | UNKNOWN
 	URL       string
 	UpdatedAt string // RFC3339, gh's updatedAt
-	Status    string // DeriveStatus(true, &pr) — the shared status vocabulary
 }
 
 // openPRRow mirrors the wider gh JSON the picker requests.
@@ -184,11 +186,6 @@ func (c *Client) ListOpenPRs(ctx context.Context, repo string) ([]OpenPR, error)
 	owner := repoOwner(repo)
 	prs := make([]OpenPR, 0, len(rows))
 	for _, r := range rows {
-		pr := &PR{
-			Number: r.Number, URL: r.URL, State: "OPEN", IsDraft: r.IsDraft,
-			Mergeable: r.Mergeable, ReviewDecision: r.ReviewDecision,
-			ChecksState: checksState(r.StatusCheckRollup),
-		}
 		prs = append(prs, OpenPR{
 			Number:    r.Number,
 			Title:     r.Title,
@@ -196,11 +193,11 @@ func (c *Client) ListOpenPRs(ctx context.Context, repo string) ([]OpenPR, error)
 			Branch:    r.HeadRefName,
 			IsDraft:   r.IsDraft,
 			IsFork:    r.HeadRepositoryOwner.Login != "" && owner != "" && !strings.EqualFold(r.HeadRepositoryOwner.Login, owner),
-			Checks:    pr.ChecksState,
+			Checks:    checksState(r.StatusCheckRollup),
 			Review:    r.ReviewDecision,
+			Mergeable: r.Mergeable,
 			URL:       r.URL,
 			UpdatedAt: r.UpdatedAt,
-			Status:    DeriveStatus(true, pr),
 		})
 	}
 	return prs, nil
@@ -248,62 +245,3 @@ func checksState(rollup []rollupEntry) string {
 	return "pass"
 }
 
-// DeriveStatus is the single deterministic session-status derivation, applied
-// in strict priority order:
-//
-//	pr == nil            → "working" (session alive) | "no_pr" (dead)
-//	State MERGED         → "merged"
-//	State CLOSED         → "closed"
-//	IsDraft              → "draft"
-//	ChecksState fail     → "ci_failed"
-//	Mergeable CONFLICTING → "merge_conflict"
-//	CHANGES_REQUESTED    → "changes_requested"
-//	APPROVED + pass      → "approved"
-//	ChecksState pending  → "ci_pending"
-//	otherwise            → "review_pending"
-//
-// Note the deliberate asymmetry: APPROVED only yields "approved" when checks
-// pass; APPROVED with no checks at all ("none") stays "review_pending" and
-// APPROVED with running checks is "ci_pending" — never park a PR as approved
-// while its CI story is incomplete.
-//
-// merge_conflict (PLAN P1.7, consumed by the P3.18 rebase reaction) sits
-// deliberately below ci_failed — a red CI on the agent's own code is the more
-// immediate signal, and the rebase that resolves the conflict re-runs CI
-// either way — and above the review states: a CONFLICTING PR cannot merge no
-// matter what review says, so APPROVED+green+CONFLICTING must never read
-// "approved" (which per PLAN semantics means park-and-notify). Mergeable
-// UNKNOWN (GitHub still computing) is treated as not conflicting.
-func DeriveStatus(sessionAlive bool, pr *PR) string {
-	if pr == nil {
-		if sessionAlive {
-			return "working"
-		}
-		return "no_pr"
-	}
-	switch pr.State {
-	case "MERGED":
-		return "merged"
-	case "CLOSED":
-		return "closed"
-	}
-	if pr.IsDraft {
-		return "draft"
-	}
-	if pr.ChecksState == "fail" {
-		return "ci_failed"
-	}
-	if pr.Mergeable == "CONFLICTING" {
-		return "merge_conflict"
-	}
-	if pr.ReviewDecision == "CHANGES_REQUESTED" {
-		return "changes_requested"
-	}
-	if pr.ReviewDecision == "APPROVED" && pr.ChecksState == "pass" {
-		return "approved"
-	}
-	if pr.ChecksState == "pending" {
-		return "ci_pending"
-	}
-	return "review_pending"
-}

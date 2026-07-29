@@ -14,6 +14,7 @@ import (
 	"github.com/sushidev-team/lola/internal/linear"
 	"github.com/sushidev-team/lola/internal/scm"
 	"github.com/sushidev-team/lola/internal/session"
+	"github.com/sushidev-team/lola/internal/state"
 )
 
 const observeInterval = 30 * time.Second
@@ -165,18 +166,57 @@ func (d *Daemon) observeNative(ctx context.Context) {
 		lin = a
 	}
 
+	// ONE `tmux ls` answers liveness for every session this cycle and carries
+	// #{session_activity} (tmux's own "when did the pane last emit bytes"
+	// stamp). On error — or without the seam — fall back to the per-session
+	// Alive probes, with no activity signal (zero time = unknown).
+	var (
+		aliveByName    map[string]bool
+		activityByName map[string]time.Time
+	)
+	if d.listTmuxSessions != nil {
+		cctx, cancel := context.WithTimeout(ctx, observeExecTimeout)
+		ls, err := d.listTmuxSessions(cctx)
+		cancel()
+		if err != nil {
+			d.logf("", "observe: tmux ls failed (falling back to per-session probes): %v", err)
+		} else {
+			aliveByName = make(map[string]bool, len(ls))
+			activityByName = make(map[string]time.Time, len(ls))
+			for _, ts := range ls {
+				aliveByName[ts.Name] = true
+				if !ts.Activity.IsZero() {
+					activityByName[ts.Name] = ts.Activity
+				}
+			}
+		}
+	}
+	sessionAlive := func(s session.Session) (alive bool, activity time.Time) {
+		if aliveByName != nil {
+			return aliveByName[paneTarget(s)], activityByName[paneTarget(s)]
+		}
+		cctx, cancel := context.WithTimeout(ctx, observeExecTimeout)
+		defer cancel()
+		return nat.Alive(cctx, s), time.Time{}
+	}
+
 	touched := false
+	interpretQueued := 0
+	d.mu.Lock()
+	interpretPerCycle := d.cfg.StatusAgent.MaxPerCycle
+	d.mu.Unlock()
 	for _, s := range d.sessions.Snapshot() {
 		if s.Source != "native" {
 			continue
 		}
+		alive, tmuxActivity := sessionAlive(s)
 		// An agent-less shell (`lola open`, the manual-shell flow) has no coding
 		// agent: its status is pure tmux liveness and it must NEVER reach the
 		// reaction / write-back / review / coderabbit engines below (which would
 		// send-keys into the human's interactive shell). Refresh it in isolation
 		// and skip the whole agent path.
 		if s.IsAgentless() {
-			if d.observeManualShell(ctx, nat, s) {
+			if d.observeManualShell(s, alive) {
 				touched = true
 			}
 			continue
@@ -194,9 +234,6 @@ func (d *Daemon) observeNative(ctx context.Context) {
 			}
 			cancel()
 		}
-		cctx, cancel := context.WithTimeout(ctx, observeExecTimeout)
-		alive := nat.Alive(cctx, s)
-		cancel()
 
 		repo := s.Repo
 		if repo == "" {
@@ -221,16 +258,11 @@ func (d *Daemon) observeNative(ctx context.Context) {
 		// Live-pane activity corroboration (working-vs-waiting BULLETPROOF):
 		// capture the pane ONCE this cycle for EVERY alive session. Claude Code
 		// hooks do not reliably fire when the agent asks a plain-text question and
-		// waits, so a stuck "working" (pre-PR) or an unsurfaced block (post-PR) is
-		// exactly the reported bug; the live pane is the authority that corrects it.
-		//   - Pre-PR (cur.PR == nil): the hook-driven worklife status (working /
-		//     idle / needs_input) stands unchecked, so the pane is its full
-		//     authority — see paneReconcile.
-		//   - Post-PR: scm.DeriveStatus owns the status, EXCEPT that a definite
-		//     waiting pane showing an answerable question still surfaces
-		//     needs_input — an agent can ask a plain-text follow-up AFTER opening a
-		//     PR (review feedback, "also bump the changelog?") with no reliable
-		//     hook, and must not be masked by the PR-derived status.
+		// waits, so a stuck "working" is exactly the reported bug; the live pane
+		// is the authority that corrects it. The pane owns the AGENT axis only —
+		// pre- AND post-PR, because the axes no longer fight: the delivery axis
+		// (gh facts) owns the post-PR rollup while the agent axis stays truthful
+		// underneath (see agentReconcile).
 		// A pane we cannot READ is treated as ActivityUnknown (not skipped): a pane
 		// that cannot confirm work must not keep a hook-stuck "working" trusted, so
 		// the anti-false-working staleness guard still runs. Classify/Parse are
@@ -261,14 +293,16 @@ func (d *Daemon) observeNative(ctx context.Context) {
 		// Merge this cycle's facts as ONE atomic read-modify-write. The execs
 		// above take seconds, and a hook event (needs_input / idle /
 		// session_ended) can land on the record meanwhile — deriving the
-		// status from this loop's stale snapshot and Upserting it back would
+		// axes from this loop's stale snapshot and Upserting them back would
 		// silently erase that transition, and permanently so: an agent
 		// blocked on a permission prompt fires no further hooks. Update
 		// re-reads the CURRENT record under the store lock, so a concurrent
-		// needs_input flows into nativeStatus and is preserved.
+		// hook transition flows into the merge and is preserved.
 		now := time.Now()
+		prFetchAttempted := s.Branch != "" && repo != ""
 		becameDead, applied, titleBackfilled := false, false, false
 		updated, known := d.sessions.Update(s.ID, func(cur *session.Session) bool {
+			prevStatus := cur.Status
 			if backfillTitle != "" && cur.Title == "" {
 				cur.Title = backfillTitle
 				titleBackfilled = true
@@ -276,39 +310,54 @@ func (d *Daemon) observeNative(ctx context.Context) {
 			if cur.Repo == "" {
 				cur.Repo = repo
 			}
-			if prKnown {
-				cur.PR = pr
+
+			// 1. DELIVERY axis — owned solely by gh facts. A failed fetch keeps
+			// the last known facts and counts the failure, so staleness is
+			// VISIBLE (PRStale on the wire) instead of silently pinning an
+			// hours-old state; facts are never invented.
+			deliveryChanged := false
+			if prFetchAttempted {
+				if prKnown {
+					cur.PR = pr
+					cur.PRObservedAt = now
+					cur.PRFetchFailures = 0
+					deliveryChanged = cur.SetDelivery(state.DeriveDelivery(pr, cur.Delivery), now)
+				} else {
+					cur.PRFetchFailures++
+				}
 			}
-			status := nativeStatus(cur.Status, alive, cur.PR)
-			// Reconcile the hook-driven worklife status against the live pane.
-			// Only pre-PR (cur.PR == nil) worklife statuses are pane-owned; a
-			// PR-derived status stays authoritative EXCEPT for the post-PR waiting
-			// backstop below. Guarded on a successful classify this cycle.
-			if paneClassified && cur.PR == nil && isWorklife(status) {
-				status = paneReconcile(cur, status, paneAct, paneQuestion, now)
-			} else if paneClassified && cur.PR != nil && alive &&
-				status != "merged" && paneAct == attention.ActivityWaiting && paneQuestion {
-				// Post-PR waiting backstop (BULLETPROOF, part 2): a DEFINITE
-				// waiting pane (input box at rest, no spinner) that ALSO shows an
-				// answerable question is positive evidence the agent is blocked on
-				// a human despite the open PR. Surface needs_input so the human is
-				// told and P7's cmd=answer is permitted; the existing needs_input
-				// rescue in nativeStatus then preserves it across cycles until a
-				// hook or working pane moves it on. A merged PR is terminal and
-				// never overridden; a bare idle prompt (no question) is left on its
-				// PR-derived status so routine post-PR idling is not escalated.
-				cur.AtPrompt = false
-				status = "needs_input"
+
+			// 2. AGENT axis — liveness + hooks (already merged into cur) + pane
+			// + tmux's own activity stamp.
+			agentChanged := false
+			if !alive {
+				// A dead pane is terminal for the agent axis; the rollup still
+				// reads "merged" when the delivery axis says so (Rollup rule 1).
+				agentChanged = cur.SetAgentState(state.AgentDead, "", now)
+			} else {
+				// Fresh pane output SUSTAINS a working/starting axis (refreshing
+				// the anti-false-working anchor before the guard below reads it)
+				// but never upgrades a resting axis — output is not a new turn
+				// (idle agents redraw their prompt too). Applied first so codex/
+				// opencode sessions, whose hook set has no tool_use heartbeat,
+				// stop being downgraded while genuinely working.
+				if !tmuxActivity.IsZero() && tmuxActivity.After(cur.LastActivityAt) &&
+					(cur.AgentState == state.AgentWorking || cur.AgentState == state.AgentStarting) {
+					cur.TouchActivity(state.SourceTmuxActivity, tmuxActivity)
+				}
+				if paneClassified {
+					agentChanged = agentReconcile(cur, paneAct, paneQuestion, now)
+				}
 			}
-			if !alive && status == cur.Status {
+
+			if !alive && !agentChanged && !deliveryChanged {
 				// Already-settled terminal record: discard so LastSeen freezes and
 				// the store's retention prune eventually drops it — UNLESS we just
 				// backfilled its title, which must be committed (Update discards the
 				// mutation on a false return).
 				return titleBackfilled
 			}
-			becameDead = status == "dead" && cur.Status != "dead"
-			cur.Status = status
+			becameDead = cur.Status == "dead" && prevStatus != "dead"
 			if cur.TmuxName == "" {
 				cur.TmuxName = cur.ID
 			}
@@ -349,6 +398,16 @@ func (d *Daemon) observeNative(ctx context.Context) {
 			// idle at its prompt again (re-reads the record itself; one delivered
 			// per cycle since a send consumes AtPrompt).
 			d.flushReviewHandoffs(ctx, s.ID)
+			// Status interpreter, ambiguous-state sweep: a session whose
+			// deterministic story is thin (waiting on a human, unreadable pane,
+			// long-quiet "working") queues an interpretation — capped per cycle,
+			// debounced + hash-deduped by the worker itself.
+			if interpretQueued < interpretPerCycle && alive &&
+				shouldInterpretAmbiguous(updated, paneClassified && paneAct == attention.ActivityUnknown, now) {
+				if d.maybeQueueInterpret(updated.ID) {
+					interpretQueued++
+				}
+			}
 		}
 	}
 	if !touched {
@@ -367,116 +426,106 @@ func (d *Daemon) observeNative(ctx context.Context) {
 // is gone (a dead shell then ages out of the store via the retention prune). An
 // alive shell is always re-stamped so its LastSeen stays fresh and a long-lived
 // checkout never ages out from under the human. Returns whether it wrote.
-func (d *Daemon) observeManualShell(ctx context.Context, nat NativeAPI, s session.Session) bool {
-	cctx, cancel := context.WithTimeout(ctx, observeExecTimeout)
-	alive := nat.Alive(cctx, s)
-	cancel()
+func (d *Daemon) observeManualShell(s session.Session, alive bool) bool {
 	wrote := false
+	now := time.Now()
 	d.sessions.Update(s.ID, func(cur *session.Session) bool {
 		if cur.TmuxName == "" {
 			cur.TmuxName = cur.ID
 		}
 		if alive {
-			cur.Status = "shell"
+			cur.SetAgentState(state.AgentShell, "", now)
 			wrote = true
 			return true // keep LastSeen fresh so an open shell never ages out
 		}
-		if cur.Status == "dead" {
+		if cur.AgentState == state.AgentDead {
 			return false // already settled: freeze LastSeen so retention drops it
 		}
-		cur.Status = "dead"
+		cur.SetAgentState(state.AgentDead, "", now)
 		wrote = true
 		return true
 	})
 	return wrote
 }
 
-// nativeStatus derives a native session's status for this cycle from its
-// hook-driven current status, tmux pane liveness, and the PR facts in hand:
-//
-//   - Known PR facts drive scm.DeriveStatus — the shared status vocabulary.
-//   - A hook-reported needs_input outranks any PR-derived status while the
-//     pane is alive (a human is being waited on), except "merged".
-//   - No PR facts → the hook-driven status stands (working / idle / …).
-//   - A dead tmux pane forces "dead" unless the PR is merged — a merged PR is
-//     the one legitimate way for a native session to end in P2.
-func nativeStatus(current string, alive bool, pr *scm.PR) string {
-	status := current
-	if pr != nil {
-		status = scm.DeriveStatus(alive, pr)
-	}
-	if alive && current == "needs_input" && status != "merged" {
-		status = "needs_input"
-	}
-	if !alive && status != "merged" {
-		return "dead"
-	}
-	return status
-}
-
-// isWorklife reports whether status is one of the pre-PR "worklife" states the
-// pane classifier is allowed to own — the hook-driven trio that stands unchecked
-// until a PR exists. Terminal / PR-derived / session_ended statuses are left
-// alone so the pane never fights an authoritative signal.
-func isWorklife(status string) bool {
-	return status == "working" || status == "idle" || status == "needs_input"
-}
-
-// paneReconcile is the working-vs-waiting authority: it adjusts a pre-PR
-// worklife status using the live pane classification and upholds the invariant
-// that "working" requires POSITIVE evidence of activity. It returns the
-// reconciled status and may stamp LastActivityAt / clear AtPrompt on cur.
+// agentReconcile is the working-vs-waiting authority for the AGENT axis: it
+// adjusts a live session's AgentState using the pane classification and
+// upholds the invariant that "working" requires POSITIVE evidence of
+// activity. It runs pre- AND post-PR — the delivery axis owns the post-PR
+// rollup regardless, so pane evidence never fights PR facts; it just keeps
+// the agent axis truthful underneath. Returns whether the axis changed.
 //
 // Precedence (documented, non-flapping):
 //
-//   - ActivityWorking is positive proof of work: the status becomes "working"
-//     and LastActivityAt is stamped, trusted even over a STALE hook-set
-//     needs_input (the agent has provably resumed). This is the only upgrade
-//     back to working from the pane.
-//   - ActivityWaiting is a definite "human awaited" cue (input box at rest, no
-//     spinner): the status becomes "needs_input". A definite waiting pane wins
-//     over a "working" status (THE BUG FIX — a waiting agent no longer reports
-//     working) and reinforces an existing hook-set needs_input. AtPrompt stays
-//     false: the agent is at a prompt for the HUMAN, not safe for auto
-//     send-keys, and P7's cmd=answer still permits a human reply on needs_input.
+//   - Exited / shell / orphaned sessions are not pane-owned: the pane of an
+//     exited agent is a plain shell and must not resurrect any state.
+//   - ActivityWorking is positive proof of work: the axis becomes working and
+//     LastActivityAt is stamped, trusted even over a STALE hook-set
+//     waiting_input (the agent has provably resumed). This is the only
+//     upgrade back to working from the pane.
+//   - ActivityWaiting is a definite "input box at rest, no spinner" cue.
+//     Pre-PR (delivery none) it means blocked-on-a-human regardless of a
+//     visible question — an agent resting WITHOUT having produced a PR is
+//     waiting for the human either way (unchanged from the pre-axis rule).
+//     Post-PR it needs an answerable question to mean blocked (routine
+//     post-PR idling must not escalate); without one the axis just settles
+//     to idle — truthful underneath, while the rollup still shows the
+//     delivery state. AtPrompt is closed on the blocked outcomes only: a
+//     bare resting prompt post-PR is exactly where a Stop hook legitimately
+//     opened the send-keys gate.
 //   - ActivityUnknown does NOT derive working/waiting from the pane — the
-//     hook-driven status stands, so a very recent hook (working from tool_use /
-//     user_prompt, or needs_input from a Notification) always wins over an
-//     ambiguous pane. The one exception is the anti-false-working guard below.
+//     hook-driven axis stands, so a very recent hook always wins over an
+//     ambiguous pane. The one exception is the anti-false-working guard.
 //
-// Anti-false-working guard (ActivityUnknown only): a "working" status with no
-// positive activity for longer than staleWorkingThreshold, which the pane
-// cannot confirm, must stop asserting work — it downgrades to needs_input when a
-// question/prompt is visible, else to idle. It never fires before the threshold
-// (no flapping), and requires the pane to NOT show a working cue (Unknown). A
-// working status that has never recorded activity (LastActivityAt zero — a
-// freshly adopted/spawned session before its first heartbeat) starts the
-// staleness clock from now instead of downgrading on first sight, so a genuinely
-// starting agent is given the same grace window rather than flickering to idle.
-func paneReconcile(cur *session.Session, status string, act attention.Activity, hasQuestion bool, now time.Time) string {
+// Anti-false-working guard (ActivityUnknown only): a working/starting axis
+// with no positive activity for longer than staleWorkingThreshold, which the
+// pane cannot confirm, must stop asserting work — it downgrades to
+// waiting_input when a question/prompt is visible, else to idle. It never
+// fires before the threshold (no flapping). An axis that has never recorded
+// activity (LastActivityAt zero — an adopted session before its first
+// heartbeat) starts the staleness clock from now instead of downgrading on
+// first sight.
+func agentReconcile(cur *session.Session, act attention.Activity, hasQuestion bool, now time.Time) bool {
+	switch cur.AgentState {
+	case state.AgentExited, state.AgentShell, state.AgentOrphaned:
+		return false // not pane-owned
+	}
 	switch act {
 	case attention.ActivityWorking:
-		cur.LastActivityAt = now
 		cur.AtPrompt = false
-		return "working"
+		cur.AtPromptVerified = true // live positive evidence: the gate state is current
+		return cur.SetAgentState(state.AgentWorking, state.SourcePane, now)
 	case attention.ActivityWaiting:
-		cur.AtPrompt = false
-		return "needs_input"
-	default: // ActivityUnknown: keep the hook status, subject to the guard.
-		if status != "working" {
-			return status
+		if hasQuestion || cur.Delivery == state.DeliveryNone {
+			cur.AtPrompt = false
+			cur.AtPromptVerified = true
+			changed := cur.SetAgentState(state.AgentWaitingInput, "", now)
+			if hasQuestion {
+				cur.InputReason = state.InputQuestion
+			}
+			return changed
+		}
+		if cur.AgentState == state.AgentWorking || cur.AgentState == state.AgentStarting {
+			return cur.SetAgentState(state.AgentIdle, "", now)
+		}
+		return false
+	default: // ActivityUnknown: keep the hook-driven axis, subject to the guard.
+		if cur.AgentState != state.AgentWorking && cur.AgentState != state.AgentStarting {
+			return false
 		}
 		if cur.LastActivityAt.IsZero() {
-			cur.LastActivityAt = now // start the clock; grace this cycle
-			return status
+			cur.TouchActivity("", now) // start the clock; grace this cycle
+			return false
 		}
 		if now.Sub(cur.LastActivityAt) <= staleWorkingThreshold {
-			return status // still within the activity window: trust the hook
+			return false // still within the activity window: trust the hook
 		}
 		cur.AtPrompt = false
 		if hasQuestion {
-			return "needs_input"
+			changed := cur.SetAgentState(state.AgentWaitingInput, "", now)
+			cur.InputReason = state.InputQuestion
+			return changed
 		}
-		return "idle"
+		return cur.SetAgentState(state.AgentIdle, "", now)
 	}
 }

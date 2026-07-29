@@ -198,23 +198,24 @@ func OpenCodePluginJS(lolaBin string) []byte {
 }
 
 // ParseCodexNotify maps a Codex `notify` JSON payload to a normalized lola hook
-// event and a human-facing detail string. Codex uses hyphenated field names.
+// event plus its useful payload fields. Codex uses hyphenated field names.
 // The mapping:
 //
 //	type "agent-turn-complete" -> event "stop"
 //	type "approval-requested"  -> event "notification"
 //	any other / missing type   -> event ""  (the caller skips these)
 //
-// detail is the "last-assistant-message" field when present, otherwise the raw
-// type. Malformed or non-object JSON yields ("", ""), so a garbage payload is
-// silently ignored by the caller.
-func ParseCodexNotify(jsonArg string) (event, detail string) {
+// message is the "last-assistant-message" field (may be empty), notifyType the
+// raw type — the caller forwards both so the daemon can display what codex
+// said instead of discarding it. Malformed or non-object JSON yields
+// ("", "", ""), so a garbage payload is silently ignored by the caller.
+func ParseCodexNotify(jsonArg string) (event, message, notifyType string) {
 	var p struct {
 		Type    string `json:"type"`
 		LastMsg string `json:"last-assistant-message"`
 	}
 	if err := json.Unmarshal([]byte(jsonArg), &p); err != nil {
-		return "", ""
+		return "", "", ""
 	}
 	switch p.Type {
 	case "agent-turn-complete":
@@ -222,12 +223,7 @@ func ParseCodexNotify(jsonArg string) (event, detail string) {
 	case "approval-requested":
 		event = "notification"
 	default:
-		return "", ""
+		return "", "", ""
 	}
-	if p.LastMsg != "" {
-		detail = p.LastMsg
-	} else {
-		detail = p.Type
-	}
-	return event, detail
+	return event, p.LastMsg, p.Type
 }

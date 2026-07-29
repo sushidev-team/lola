@@ -35,9 +35,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sushidev-team/lola/internal/agent"
+	"github.com/sushidev-team/lola/internal/attention"
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/notify"
 	"github.com/sushidev-team/lola/internal/session"
+	"github.com/sushidev-team/lola/internal/state"
 	"github.com/sushidev-team/lola/internal/worktree"
 )
 
@@ -63,6 +66,10 @@ func (d *Daemon) react(ctx context.Context, s session.Session) {
 	if s.Source != "native" || s.TmuxName == "" {
 		return
 	}
+	// The observer hands an axis-bearing record; a direct caller (tests, future
+	// paths) may still hold a bare legacy snapshot — the delivery-axis dispatch
+	// below needs the axes either way.
+	s.EnsureAxes()
 
 	d.mu.Lock()
 	rc := d.cfg.Reactions
@@ -74,24 +81,28 @@ func (d *Daemon) react(ctx context.Context, s session.Session) {
 
 	switch {
 	case s.Status == "merged":
-		// Loop close: clean up the worktree and free the slot, once. Gated by
-		// the Merged.auto toggle; a dirty post-merge worktree is kept, not
+		// Loop close: clean up the worktree and free the slot. Gated by the
+		// Merged.auto toggle; a dirty post-merge worktree is kept, not
 		// force-removed. Auto-merge is intentionally NOT implemented anywhere in
-		// P3 — merged means a human already merged.
-		if rc.Merged.Auto && s.LastReactedStatus != "merged" {
+		// P3 — merged means a human already merged. There is deliberately no
+		// LastReactedStatus guard here: reactMerged is idempotent by DROPPING
+		// the store entry on success, and a failed cleanup must retry next
+		// cycle (a guard would have suppressed the retry and could never be
+		// stamped anyway — the entry is gone when it succeeds).
+		if rc.Merged.Auto {
 			d.reactMerged(ctx, s, notifier)
 		}
 
 	case s.Status == "ci_failed":
 		d.reactCIFailed(ctx, s, rc.CIFailed, notifier)
 
-	case s.PR != nil && s.PR.Mergeable == "CONFLICTING":
-		// A conflicting PR is detected off the Mergeable fact rather than a
-		// single status so it still fires when some higher-priority open status
-		// is showing; in practice DeriveStatus already surfaces this as
-		// "merge_conflict" except when CI is also red, and in that case the
-		// ci_failed branch above has already handled (and returned for) this
-		// session — the rebase would re-run CI anyway.
+	case s.Delivery == state.DeliveryMergeConflict:
+		// A conflicting PR is detected off the DELIVERY axis rather than the
+		// rolled-up status so it still fires while a waiting_input agent masks
+		// the rollup as needs_input. ci_failed cannot mask it here: the
+		// delivery derivation ranks ci_failed above merge_conflict, and that
+		// branch above has already handled (and returned for) this session —
+		// the rebase would re-run CI anyway.
 		if rc.MergeConflict.Auto {
 			d.reactSendAgent(ctx, s, "merge_conflict", rc.MergeConflict.Message, notifier, nil)
 		}
@@ -107,11 +118,50 @@ func (d *Daemon) react(ctx context.Context, s session.Session) {
 		// only notifies (documented: there is no merge action in P3).
 		d.reactApproved(ctx, s, notifier)
 
+	case s.Status == "closed":
+		// A PR closed WITHOUT merging: the work was rejected or abandoned.
+		// Notify once (LastReactedStatus guard) and leave everything alone —
+		// never send-keys, never auto-kill; the human decides what happens to
+		// the worktree. state.Present("closed") is false, so the reconcile
+		// orphan-revert stops shielding this issue and the label can revert.
+		d.reactClosed(ctx, s, notifier)
+
 	default:
 		// Any other (benign / transient) status: the session left whatever state
 		// it last reacted to, so clear the one-shot guards for a clean re-entry.
 		d.resetReactionGuards(s)
 	}
+}
+
+// reactClosed surfaces a closed-unmerged PR to the operator exactly once per
+// entry into "closed". Read-only apart from the one-shot stamp: no send-keys,
+// no cleanup — a closed PR may be reopened, and destroying the worktree is a
+// human decision (kill).
+func (d *Daemon) reactClosed(ctx context.Context, s session.Session, notifier notify.Notifier) {
+	if s.LastReactedStatus == "closed" {
+		return
+	}
+	acted := false
+	d.sessions.Update(s.ID, func(cur *session.Session) bool {
+		if cur.Status != "closed" || cur.LastReactedStatus == "closed" {
+			return false
+		}
+		cur.LastReactedStatus = "closed"
+		cur.PendingReaction = ""
+		acted = true
+		return true
+	})
+	if !acted {
+		return
+	}
+	d.reactSave()
+	notifier.Notify(ctx, notify.Note{
+		Title:    "PR closed without merging",
+		Body:     fmt.Sprintf("%s: its PR was closed without merging — the session and worktree are kept; kill the session when you are done with it", issueLabel(s)),
+		Priority: notify.Action,
+		URL:      prURL(s),
+	})
+	d.logf("", "react: %s PR closed without merging — notified, session kept", s.ID)
 }
 
 // reactMerged closes the loop for a merged PR by REUSING the kill/cleanup path:
@@ -288,16 +338,74 @@ func (d *Daemon) reactApproved(ctx context.Context, s session.Session, notifier 
 	d.logf("", "react: %s approved and green — parked for human merge", s.ID)
 }
 
+// ensurePromptVerified re-verifies an AtPrompt gate that was carried across a
+// daemon restart (adoption preserves the gate but marks it UNVERIFIED — see
+// Session.AtPromptVerified) against the live pane, so the first send-keys
+// after a restart can never type into an agent that resumed while the daemon
+// was down. A verified gate returns true immediately. Otherwise the pane is
+// captured and classified (a pure read, never trusted beyond this gate):
+//
+//   - ActivityWaiting: the agent really is resting at a prompt — the gate is
+//     marked verified (atomically, only while it is still open) and trusted.
+//   - ActivityWorking: the agent is mid-turn — the stale gate is CLOSED
+//     without sending; a real Stop hook re-opens it.
+//   - ActivityUnknown / capture failure: not proven either way — fail CLOSED:
+//     the send defers and a later hook or pane cycle settles the gate.
+func (d *Daemon) ensurePromptVerified(ctx context.Context, s session.Session) bool {
+	// Re-read the live record: the caller's copy is a cycle-old snapshot and a
+	// hook may have verified (or closed) the gate since.
+	if cur, ok := d.sessions.Get(s.ID); ok {
+		s = cur
+	}
+	if s.AtPromptVerified {
+		return true
+	}
+	cctx, cancel := context.WithTimeout(ctx, reactExecTimeout)
+	text, err := d.paneTail(cctx, paneTarget(s), observePaneLines)
+	cancel()
+	if err != nil {
+		d.logf("", "react: %s prompt-gate verification capture failed (deferring send): %v", s.ID, err)
+		return false
+	}
+	switch attention.Classify(text, agent.Parse(s.Agent)) {
+	case attention.ActivityWaiting:
+		verified := false
+		d.sessions.Update(s.ID, func(cur *session.Session) bool {
+			if !cur.AtPrompt {
+				return false // a hook resumed the agent meanwhile: nothing to verify
+			}
+			cur.AtPromptVerified = true
+			verified = true
+			return true
+		})
+		return verified
+	case attention.ActivityWorking:
+		d.sessions.Update(s.ID, func(cur *session.Session) bool {
+			if !cur.AtPrompt {
+				return false
+			}
+			cur.AtPrompt = false // the carried gate was stale: close it
+			cur.AtPromptVerified = true
+			return true
+		})
+		d.logf("", "react: %s carried AtPrompt gate was stale (pane is mid-turn) — closed without sending", s.ID)
+		return false
+	default:
+		return false
+	}
+}
+
 // reactSendAgent is the ONLY path that types into a live agent. It enforces the
 // send-keys safety gate:
 //
 //   - Already reacted to this state-entry (LastReactedStatus == key) → no-op.
-//   - Agent not idle at its prompt (AtPrompt false) → the reaction is DEFERRED:
-//     PendingReaction is recorded and a later cycle (once a Stop hook sets
-//     AtPrompt) retries. Nothing is typed.
-//   - Agent idle at its prompt → the (optional) detail is fetched, the message
-//     rendered, then AtPrompt is CONSUMED atomically together with stamping
-//     LastReactedStatus (and, for ci_failed, bumping CIRetries) in one
+//   - Agent not idle at its prompt (AtPrompt false), or the gate was carried
+//     across a restart and cannot be verified against the live pane
+//     (ensurePromptVerified) → the reaction is DEFERRED: PendingReaction is
+//     recorded and a later cycle retries. Nothing is typed.
+//   - Agent verifiably idle at its prompt → the (optional) detail is fetched,
+//     the message rendered, then AtPrompt is CONSUMED atomically together with
+//     stamping LastReactedStatus (and, for ci_failed, bumping CIRetries) in one
 //     Store.Update. Only if that atomic consume wins is the text actually sent —
 //     so a hook that flipped AtPrompt false in the meantime cancels the send.
 //
@@ -308,10 +416,11 @@ func (d *Daemon) reactSendAgent(ctx context.Context, s session.Session, key, tem
 		return // one-shot: already sent for this entry into the state
 	}
 
-	if !s.AtPrompt {
-		// Defer: the agent is mid-turn. Record the pending reaction (idempotently)
-		// so it is visible; the LastReactedStatus guard is what actually makes the
-		// next AtPrompt cycle retry.
+	if !s.AtPrompt || !d.ensurePromptVerified(ctx, s) {
+		// Defer: the agent is mid-turn (or its carried gate is unverifiable).
+		// Record the pending reaction (idempotently) so it is visible; the
+		// LastReactedStatus guard is what actually makes the next AtPrompt
+		// cycle retry.
 		d.sessions.Update(s.ID, func(cur *session.Session) bool {
 			if cur.PendingReaction == key {
 				return false
@@ -391,7 +500,10 @@ func (d *Daemon) resetReactionGuards(s session.Session) {
 		// re-surfaces (or genuinely resolves).
 		return
 	}
-	ciResolved := s.Status != "ci_failed" && s.Status != "ci_pending"
+	// The CI streak is preserved while CI is still in play ON THE DELIVERY
+	// AXIS — readable directly now, instead of inferring it through a rollup
+	// that other states can mask.
+	ciResolved := s.Delivery != state.DeliveryCIFailed && s.Delivery != state.DeliveryCIPending
 	if s.LastReactedStatus == "" && s.PendingReaction == "" && s.CIRetries == 0 && !s.Escalated {
 		return // nothing to clear
 	}

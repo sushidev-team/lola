@@ -42,6 +42,7 @@
     { id: "project", label: "Project defaults" },
     { id: "notify", label: "Notify" },
     { id: "brain", label: "Brain" },
+    { id: "interpreter", label: "Interpreter" },
     // "Review", not "CodeRabbit": the body is the whole [[review.provider]]
     // catalog — coderabbit-cli, coderabbit-watch AND claude-session — so naming
     // the tab after one provider hid the other two.
@@ -622,6 +623,49 @@
                 <span>Summarize on approved</span>
               </label>
             </div>
+          </div>
+        </section>
+      {:else if tab === "interpreter"}
+        <section>
+          {@render head("Interpreter")}
+          <p class="mb-3 text-[10px] text-faint">
+            The <span class="font-mono text-ink">[statusagent]</span> status interpreter: a small bounded claude pass that judges what
+            each agent is <span class="text-ink">actually</span> doing (an "≈" overlay + one-line headline in the session list).
+            Display only — it can never change the real status or type into an agent. Each interpretation spends tokens.
+          </p>
+          <div class="space-y-2">
+            <label class="flex cursor-pointer items-center gap-2">
+              <input type="checkbox" class="accent-accent" bind:checked={d.statusAgentEnabled} />
+              <span>Enabled</span>
+            </label>
+            <label class={rowCls}>
+              <span class="text-faint">Binary</span>
+              <input class={inputCls} type="text" placeholder="claude (via PATH)" bind:value={d.statusAgentBin} />
+            </label>
+            <label class={rowCls}>
+              <span class="text-faint">Model</span>
+              <input class={inputCls} type="text" placeholder="sonnet" bind:value={d.statusAgentModel} />
+            </label>
+            <label class={rowCls}>
+              <span class="text-faint">Timeout (s)</span>
+              <input class={inputCls} type="number" min="0" bind:value={d.statusAgentTimeout} />
+            </label>
+            <label class={rowCls}>
+              <span class="text-faint">Min interval (s)</span>
+              <input class={inputCls} type="number" min="0" bind:value={d.statusAgentMinInterval} />
+            </label>
+            <label class={rowCls}>
+              <span class="text-faint">Max per cycle</span>
+              <input class={inputCls} type="number" min="0" bind:value={d.statusAgentMaxPerCycle} />
+            </label>
+            <label class={rowCls}>
+              <span class="text-faint">Min confidence</span>
+              <input class={inputCls} type="number" min="0" max="1" step="0.05" bind:value={d.statusAgentMinConfidence} />
+            </label>
+            <label class="flex cursor-pointer items-center gap-2">
+              <input type="checkbox" class="accent-accent" bind:checked={d.statusAgentIncludeTranscript} />
+              <span>Include transcript tail</span>
+            </label>
           </div>
         </section>
       {:else if tab === "appearance"}
