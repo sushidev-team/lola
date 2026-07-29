@@ -269,3 +269,29 @@ func TestObserverQueuesAmbiguousCapped(t *testing.T) {
 		t.Fatalf("queued %d interpretations, want the max_per_cycle cap of 2", queued)
 	}
 }
+
+// An unchanged input bundle refreshes the existing overlay's validity (the
+// judgement still holds) instead of letting it expire on a still session.
+func TestInterpretHashSkipRefreshesOverlay(t *testing.T) {
+	d, s, calls := interpDaemon(t, `{"agent_state":"stuck","headline":"looping on a failing build","confidence":0.9}`)
+	d.interpretOne(context.Background(), s.ID)
+	if *calls != 1 {
+		t.Fatalf("first run: %d calls, want 1", *calls)
+	}
+	// Age the judgement close to expiry, clear the debounce, re-run: the input
+	// is unchanged, so no exec — but SummaryAt must be refreshed.
+	old := time.Now().Add(-9 * time.Minute)
+	d.sessions.Update(s.ID, func(cur *session.Session) bool {
+		cur.SummaryAt = old
+		cur.LastInterpretedAt = time.Now().Add(-time.Hour)
+		return true
+	})
+	d.interpretOne(context.Background(), s.ID)
+	if *calls != 1 {
+		t.Fatalf("unchanged input exec'd again: %d calls", *calls)
+	}
+	got, _ := d.sessions.Get(s.ID)
+	if !got.SummaryAt.After(old) {
+		t.Fatal("hash skip must refresh SummaryAt while the judgement's basis is unchanged")
+	}
+}

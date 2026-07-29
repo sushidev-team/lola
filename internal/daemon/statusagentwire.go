@@ -233,6 +233,12 @@ func (d *Daemon) interpretOne(ctx context.Context, id string) {
 	if hash != "" && hash == s.LastInterpretedHash {
 		d.sessions.Update(id, func(cur *session.Session) bool {
 			cur.LastInterpretedAt = now
+			// The input bundle is UNCHANGED, so the existing judgement still
+			// holds: refresh its validity (SummaryAt) instead of letting the
+			// overlay silently expire on a session that just sat still.
+			if cur.Summary != "" && cur.InterpretedForAgentState == string(cur.AgentState) {
+				cur.SummaryAt = now
+			}
 			return true
 		})
 		return
