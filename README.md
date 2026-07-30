@@ -734,7 +734,8 @@ without `[tmux]` always validates.
 | --- | --- | --- |
 | `socket_name` | string | The tmux server socket (`tmux -L <name>`) lola runs sessions on. Default `"lola"`. This is its **own** server, isolated from your default tmux. |
 | `detach_key` | string | Opt-in single key bound to detach (e.g. `"F12"`). Empty keeps tmux's default **Ctrl-b d**. The status bar's detach hint follows whatever this resolves to. |
-| `status_right` | string | Raw tmux `status-right` format override. Empty uses lola's built-in branded bar. |
+| `status_bar` | bool | Show tmux's own status bar inside the session. Default `false` — the TUI and lola-desktop each render the issue, title, status and branch in their own header directly above the terminal, so the bar restated a subset of that one row lower and cost a row of scrollback. Turn it on if you attach in a bare terminal, where nothing else names the session. |
+| `status_right` | string | Raw tmux `status-right` format override. Empty uses lola's built-in branded bar. Only rendered when `status_bar` is on. |
 | `mouse` | bool | Enable tmux mouse mode inside the session. Default `false`. |
 
 ### `[ui]` (optional)

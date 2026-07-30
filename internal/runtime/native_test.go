@@ -204,19 +204,17 @@ func TestSpawnHappyPathFullSequence(t *testing.T) {
 	// single shell command that sources the 0600 .lola/env (which exports
 	// LOLA_SESSION and any secret) and execs claude with the generated settings
 	// and the short read-the-prompt argv. Nothing secret is on argv.
-	// One detached new-session, then the best-effort per-session status-bar
-	// chrome on the SAME isolated "-L lola" server: status on, widened lengths,
-	// the branded "LOLA | ENG-42" left and the default "detach C-b d" right (no
-	// custom detach key or mouse configured on this fixture).
+	// One detached new-session, then the best-effort per-session chrome on the
+	// SAME isolated "-L lola" server. The DEFAULT chrome hides tmux's status bar
+	// — lola's own surfaces render the issue/status header above the terminal —
+	// so nothing but "status off" is sent; the branding path is covered by
+	// TestSpawnAppliesConfiguredChrome, which opts the bar back on. No custom
+	// detach key or mouse is configured on this fixture.
 	wantTmux := strings.Join([]string{
 		"-L lola new-session -d -s " + id + " -c " + dir +
 			" exec sh -c 'set -a; . ./.lola/env; set +a; exec /usr/local/bin/claude --settings .lola/settings.json" +
 			` '\''You are lola session ` + id + `. Read .lola/prompt.md in the current directory first; it contains your task briefing.'\'''`,
-		"-L lola set-option -t =" + id + " status on",
-		"-L lola set-option -t =" + id + " status-left-length 80",
-		"-L lola set-option -t =" + id + " status-right-length 80",
-		"-L lola set-option -t =" + id + " status-left LOLA | ENG-42",
-		"-L lola set-option -t =" + id + " status-right detach C-b d",
+		"-L lola set-option -t =" + id + " status off",
 	}, "\n")
 	if gotTmux := loggedArgs(t, f.tmuxLog); gotTmux != wantTmux {
 		t.Errorf("tmux calls:\n%s\nwant:\n%s", gotTmux, wantTmux)
@@ -345,7 +343,7 @@ func TestSpawnProjectEnvLandsInEnvFileNotArgv(t *testing.T) {
 // the isolated "-L lola" server after launch.
 func TestSpawnAppliesConfiguredChrome(t *testing.T) {
 	f := newFixture(t, "", "")
-	f.n.Cfg.Tmux = config.TmuxConfig{DetachKey: "F12", Mouse: true, StatusRight: "custom"}
+	f.n.Cfg.Tmux = config.TmuxConfig{DetachKey: "F12", Mouse: true, StatusRight: "custom", StatusBar: true}
 
 	if _, err := f.n.Spawn(context.Background(), f.p, issueENG42()); err != nil {
 		t.Fatalf("Spawn: %v", err)
@@ -811,6 +809,22 @@ LOLA_EOF
 	// Pure observation: the orphaned session must not be killed.
 	if strings.Contains(loggedArgs(t, tmuxLog), "kill-session") {
 		t.Errorf("Adopt must never kill; tmux calls:\n%s", loggedArgs(t, tmuxLog))
+	}
+
+	// Adoption re-applies the chrome, so a [tmux] change (e.g. status_bar going
+	// off) reaches sessions that survived the restart instead of only new ones.
+	// Only the LIVE ones: eng-2 is dead and eng-9 orphaned-but-live.
+	calls := loggedArgs(t, tmuxLog)
+	for _, want := range []string{
+		"-L lola set-option -t =lola-nori-eng-1 status off",
+		"-L lola set-option -t =lola-nori-eng-9 status off",
+	} {
+		if !strings.Contains(calls, want) {
+			t.Errorf("Adopt should re-apply chrome, missing %q:\n%s", want, calls)
+		}
+	}
+	if strings.Contains(calls, "-t =lola-nori-eng-2 ") {
+		t.Errorf("Adopt must not configure a session with no tmux session:\n%s", calls)
 	}
 }
 

@@ -48,6 +48,7 @@ socket_name = "work"
 detach_key = "F12"
 status_right = "#[fg=green]#S"
 mouse = true
+status_bar = true
 `
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
@@ -61,6 +62,7 @@ mouse = true
 		DetachKey:   "F12",
 		StatusRight: "#[fg=green]#S",
 		Mouse:       true,
+		StatusBar:   true,
 	}
 	if c.Tmux != want {
 		t.Errorf("tmux = %+v, want %+v", c.Tmux, want)
@@ -105,6 +107,7 @@ func TestTmuxRoundTrip(t *testing.T) {
 		DetachKey:   "F12",
 		StatusRight: "#[fg=red]lola",
 		Mouse:       true,
+		StatusBar:   true,
 	}
 	if err := orig.Save(path); err != nil {
 		t.Fatal(err)
@@ -199,5 +202,41 @@ func TestSessionChrome(t *testing.T) {
 	bare := (&Config{}).SessionChrome("")
 	if bare.Brand != TmuxBrand || bare.Label != "" || bare.DetachKey != "" {
 		t.Errorf("zero-config chrome = %+v, want brand-only", bare)
+	}
+}
+
+// status_bar defaults to OFF, and an explicit `true` survives. The default is
+// load-bearing: lola's own surfaces render the issue/status header directly
+// above the embedded terminal, so tmux's bar restated a subset of it one row
+// lower. A flipped default would put that duplication back on every session.
+func TestTmuxStatusBarDefaultsOff(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("[defaults]\nglobal_cap = 4\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Tmux.StatusBar {
+		t.Error("status_bar = true, want false when [tmux] is absent")
+	}
+	if got := c.SessionChrome("ENG-1").StatusBar; got {
+		t.Error("SessionChrome must carry status_bar=false through to the tmux layer")
+	}
+
+	path2 := filepath.Join(t.TempDir(), "on.toml")
+	if err := os.WriteFile(path2, []byte("[defaults]\nglobal_cap = 4\n\n[tmux]\nstatus_bar = true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c2, err := Load(path2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c2.Tmux.StatusBar {
+		t.Error("status_bar = false, want the explicit true honored")
+	}
+	if got := c2.SessionChrome("ENG-1").StatusBar; !got {
+		t.Error("SessionChrome must carry status_bar=true through to the tmux layer")
 	}
 }

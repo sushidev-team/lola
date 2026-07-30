@@ -406,12 +406,22 @@ func (c *Client) BuildViewer(ctx context.Context, viewer, dir string, tabs []Vie
 // derived agent status). DetachKey, when non-empty (e.g. "F12"), binds a
 // single-key detach on the lola server and is surfaced in the status hint;
 // empty leaves the default "C-b d". Mouse toggles the session's mouse mode.
+//
+// StatusBar gates the bar itself. It is OFF by default because lola's own
+// surfaces already render the issue, title, status and branch in their own
+// header directly above the terminal — the tmux bar restated a subset of that
+// one row lower, in a second visual language, and cost a row of scrollback for
+// it. Off, the terminal reaches the panel edge and reads as embedded rather than
+// framed. Turn it on for attaching in a bare terminal, where nothing else names
+// the session. When it is off the branding options are not sent at all: setting
+// status-left on a hidden bar is dead configuration.
 type SessionChrome struct {
 	Brand       string
 	Label       string
 	StatusRight string
 	DetachKey   string
 	Mouse       bool
+	StatusBar   bool
 }
 
 // ConfigureSession applies chrome to a single session on the isolated lola
@@ -426,13 +436,19 @@ type SessionChrome struct {
 // not fail the spawn — the caller treats a non-nil return as advisory.
 func (c *Client) ConfigureSession(ctx context.Context, name string, opts SessionChrome) error {
 	target := "=" + name
-	cmds := [][]string{
-		{"set-option", "-t", target, "status", "on"},
-		// Defaults truncate to 10 chars; widen so the chrome is not cut off.
-		{"set-option", "-t", target, "status-left-length", "80"},
-		{"set-option", "-t", target, "status-right-length", "80"},
-		{"set-option", "-t", target, "status-left", chromeStatusLeft(opts)},
-		{"set-option", "-t", target, "status-right", chromeStatusRight(opts)},
+	// "status off" is still SENT explicitly rather than simply skipped: sessions
+	// are adopted across daemon restarts and re-configured in place, so a session
+	// that was spawned while the bar was on has to be told to drop it.
+	cmds := [][]string{{"set-option", "-t", target, "status", "off"}}
+	if opts.StatusBar {
+		cmds = [][]string{
+			{"set-option", "-t", target, "status", "on"},
+			// Defaults truncate to 10 chars; widen so the chrome is not cut off.
+			{"set-option", "-t", target, "status-left-length", "80"},
+			{"set-option", "-t", target, "status-right-length", "80"},
+			{"set-option", "-t", target, "status-left", chromeStatusLeft(opts)},
+			{"set-option", "-t", target, "status-right", chromeStatusRight(opts)},
+		}
 	}
 	if opts.Mouse {
 		cmds = append(cmds, []string{"set-option", "-t", target, "mouse", "on"})

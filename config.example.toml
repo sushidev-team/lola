@@ -340,11 +340,18 @@ endpoint = "https://api.linear.app/graphql"
 # DETACH: by default you detach with tmux's built-in Ctrl-b d. Binding a single
 # friendlier key (e.g. "F12") is OPT-IN because remapping keys is a taste
 # choice; when set, lola's status bar shows that key as the detach hint.
+#
+# STATUS BAR: off by default. The TUI and lola-desktop both print the issue,
+# title, status and branch in their own header directly above the terminal, so
+# tmux's bar restated a subset of that one row lower and cost a row of
+# scrollback. Turn it on if you attach in a bare terminal, where nothing else
+# names the session; status_right and the LOLA brand only render when it is on.
 # ---------------------------------------------------------------------------
 # [tmux]
 # socket_name = "lola"   # isolated tmux server socket (tmux -L); its own server, never your default one
 # detach_key = ""        # opt-in single detach key (e.g. "F12"); empty keeps tmux's default Ctrl-b d
-# status_right = ""       # raw tmux status-right override; empty = lola's built-in branded bar
+# status_bar = false      # show tmux's own status bar in the session; off = the embedded terminal is chrome-free
+# status_right = ""       # raw tmux status-right override; empty = lola's built-in branded bar (needs status_bar)
 # mouse = false           # enable tmux mouse mode inside the session
 
 # ---------------------------------------------------------------------------

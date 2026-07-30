@@ -166,6 +166,13 @@ func slugify(label string) string {
 // human should clean them up.
 const maxSpawnAttempts = 20
 
+// adoptChromeTimeout bounds Adopt's whole status-bar reconciliation pass. It is
+// generous because the work is a handful of tmux set-options per live session,
+// and it exists only so a wedged tmux server cannot block daemon startup
+// forever — the chrome is cosmetic, and giving up on it is always better than
+// not coming up.
+const adoptChromeTimeout = 15 * time.Second
+
 // attemptSuffixRe matches the retry suffix Spawn appends to session IDs
 // ("-r2", "-r3", …). Linear identifiers are <TEAMKEY>-<number>, so a
 // lowercased identifier can never end in "-r<digits>" itself.
@@ -895,6 +902,45 @@ func (n *Native) Adopt(ctx context.Context) ([]session.Session, error) {
 	}
 
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+
+	// Re-apply the chrome to every session that survived the restart. Spawn and
+	// Revive were the only places that configured it, so a [tmux] change — say
+	// turning status_bar off — reached NEW sessions only, and a long-running one
+	// kept whatever it was born with until it was killed and respawned. Adoption
+	// is the one moment the daemon has the fresh config and the live session list
+	// side by side, so it is where the two get reconciled.
+	//
+	// Best-effort and non-fatal, exactly as in Spawn: this is cosmetics, and a
+	// tmux hiccup must never turn a successful adoption into a lost session. Only
+	// sessions with a LIVE pane are touched — a dead row has no tmux session to
+	// configure and would just log a failure per restart. An ORPHANED row does
+	// have one (it is a live pane with no worktree, see the pairing loop above),
+	// so it is configured like any other.
+	//
+	// The whole loop shares ONE deadline. Adoption previously ran a single
+	// list-sessions; this adds up to three execs per live session (and up to five
+	// with status_bar on), and internal/tmux's run() inherits its caller's context
+	// with no deadline of its own. Adopt runs before the daemon's waitgroup exists
+	// so it cannot hang graceful shutdown — but a wedged tmux would block STARTUP
+	// indefinitely, which is the same failure wearing a different hat.
+	cctx, cancel := context.WithTimeout(ctx, adoptChromeTimeout)
+	defer cancel()
+	for _, s := range out {
+		if !live[s.TmuxName] {
+			continue
+		}
+		// Label with the same value the spawning path used: the issue for an agent
+		// session, the branch for an agentless (`lola open`) shell — whose Issue is
+		// empty, so passing it unconditionally silently downgraded those bars to a
+		// bare "LOLA" on every restart.
+		label := s.Issue
+		if label == "" {
+			label = s.Branch
+		}
+		if err := n.Tmux.ConfigureSession(cctx, s.TmuxName, n.Cfg.SessionChrome(label)); err != nil && n.Logf != nil {
+			n.Logf("session %s: status-bar styling failed on adopt (cosmetic, session is up): %v", s.TmuxName, err)
+		}
+	}
 	return out, nil
 }
 

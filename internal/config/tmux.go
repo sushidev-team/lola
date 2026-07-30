@@ -44,11 +44,18 @@ const (
 //   - StatusRight overrides the status bar's right side (a raw tmux status-right
 //     format string). "" uses lola's built-in branded format.
 //   - Mouse enables tmux mouse mode inside the session. Off by default.
+//   - StatusBar shows tmux's own status bar inside the session. OFF by default:
+//     the TUI and lola-desktop both print the issue, title, status and branch in
+//     their own header directly above the terminal, so the bar restated a subset
+//     of that one row lower in a second visual language. Turn it on if you attach
+//     in a bare terminal, where nothing else names the session. status_right and
+//     the brand are only rendered when it is on.
 type TmuxConfig struct {
 	SocketName  string `toml:"socket_name"`
 	DetachKey   string `toml:"detach_key"`
 	StatusRight string `toml:"status_right"`
 	Mouse       bool   `toml:"mouse"`
+	StatusBar   bool   `toml:"status_bar"`
 }
 
 // DetachHint returns the human-facing key hint for detaching from an attached
@@ -89,6 +96,7 @@ func (c *Config) SessionChrome(label string) tmux.SessionChrome {
 		StatusRight: c.Tmux.StatusRight,
 		DetachKey:   c.Tmux.DetachKey,
 		Mouse:       c.Tmux.Mouse,
+		StatusBar:   c.Tmux.StatusBar,
 	}
 }
 
@@ -99,10 +107,11 @@ type fileTmuxConfig struct {
 	DetachKey   *string `toml:"detach_key,omitempty"`
 	StatusRight *string `toml:"status_right,omitempty"`
 	Mouse       *bool   `toml:"mouse,omitempty"`
+	StatusBar   *bool   `toml:"status_bar,omitempty"`
 }
 
 // defaultTmux is the [tmux] default: the isolated "lola" socket, tmux's default
-// detach, the built-in branded status bar, mouse off.
+// detach, NO status bar (lola's own surfaces render that chrome), mouse off.
 func defaultTmux() TmuxConfig {
 	return TmuxConfig{SocketName: DefaultTmuxSocketName}
 }
@@ -128,6 +137,9 @@ func resolveTmux(ft *fileTmuxConfig) TmuxConfig {
 	if ft.Mouse != nil {
 		d.Mouse = *ft.Mouse
 	}
+	if ft.StatusBar != nil {
+		d.StatusBar = *ft.StatusBar
+	}
 	return d
 }
 
@@ -145,5 +157,6 @@ func tmuxFile(t TmuxConfig) *fileTmuxConfig {
 		DetachKey:   &t.DetachKey,
 		StatusRight: &t.StatusRight,
 		Mouse:       &t.Mouse,
+		StatusBar:   &t.StatusBar,
 	}
 }

@@ -369,6 +369,7 @@ func TestConfigureSessionEmitsChromeArgv(t *testing.T) {
 		StatusRight: "working",
 		DetachKey:   "F12",
 		Mouse:       true,
+		StatusBar:   true,
 	})
 	if err != nil {
 		t.Fatalf("ConfigureSession: %v", err)
@@ -396,6 +397,7 @@ func TestConfigureSessionDefaultsNoDetachBindingNoMouse(t *testing.T) {
 	err := c.ConfigureSession(context.Background(), "s1", SessionChrome{
 		Label:       "NORI-12",
 		StatusRight: "idle",
+		StatusBar:   true,
 	})
 	if err != nil {
 		t.Fatalf("ConfigureSession: %v", err)
@@ -416,11 +418,42 @@ func TestConfigureSessionDefaultsNoDetachBindingNoMouse(t *testing.T) {
 	}
 }
 
+// The DEFAULT chrome (StatusBar false) hides tmux's bar entirely and sends none
+// of the branding — a status-left on a hidden bar is dead configuration. "status
+// off" is sent explicitly rather than skipped so a session adopted from a daemon
+// that ran with the bar ON loses it on re-configure.
+func TestConfigureSessionStatusBarOffByDefault(t *testing.T) {
+	bin, argsLog := fakeTmux(t, "", "", 0)
+	c := &Client{Bin: bin}
+
+	err := c.ConfigureSession(context.Background(), "s1", SessionChrome{
+		Brand:       "LOLA",
+		Label:       "NORI-12",
+		StatusRight: "working",
+		DetachKey:   "F12",
+		Mouse:       true,
+	})
+	if err != nil {
+		t.Fatalf("ConfigureSession: %v", err)
+	}
+	// The detach binding and mouse mode are independent of the bar and stay.
+	want := strings.Join([]string{
+		"-L lola set-option -t =s1 status off",
+		"-L lola set-option -t =s1 mouse on",
+		"-L lola bind-key -n F12 detach-client",
+	}, "\n")
+	if args := loggedArgs(t, argsLog); args != want {
+		t.Errorf("ConfigureSession argv:\n%s\nwant:\n%s", args, want)
+	}
+}
+
 func TestConfigureSessionBestEffortJoinsErrors(t *testing.T) {
 	bin, argsLog := fakeTmux(t, "", "boom", 1)
 	c := &Client{Bin: bin}
 
-	err := c.ConfigureSession(context.Background(), "s1", SessionChrome{DetachKey: "F12"})
+	// StatusBar on, so the full command set is exercised — this asserts that a
+	// failure does not short-circuit the rest, which needs more than one command.
+	err := c.ConfigureSession(context.Background(), "s1", SessionChrome{DetachKey: "F12", StatusBar: true})
 	if err == nil {
 		t.Fatal("ConfigureSession: want joined error when tmux fails")
 	}
