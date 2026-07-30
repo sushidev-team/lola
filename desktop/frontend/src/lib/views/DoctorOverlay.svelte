@@ -37,20 +37,22 @@
 
 <Modal title="doctor" onClose={() => nav.closeOverlay()}>
   {#if error}
-    <div class="selectable text-xs text-bad">✗ doctor failed: {error}</div>
+    <div class="selectable text-bad">✗ doctor failed: {error}</div>
   {:else if !report}
-    <div class="text-xs text-faint">running checks…</div>
+    <div class="text-faint">running checks…</div>
   {:else if (report.results?.length ?? 0) === 0}
-    <div class="px-1 py-8 text-center text-xs text-faint">No checks reported.</div>
+    <div class="px-1 py-8 text-center text-faint">No checks reported.</div>
   {:else}
-    <div class="selectable flex flex-col gap-0.5 text-xs transition-opacity" class:opacity-50={running}>
+    <!-- No size class anywhere in the list: the check name is the base 13px and
+         its detail is separated by colour alone. -->
+    <div class="selectable flex flex-col gap-0.5 transition-opacity" class:opacity-50={running}>
       {#each report.results ?? [] as r (r.name)}
         {@const g = glyph(r)}
-        <div class="flex items-start gap-2 rounded px-1 py-1 hover:bg-sel/40">
+        <div class="flex items-start gap-2 rounded px-1 py-1.5 hover:bg-sel/40">
           <span class="w-4 shrink-0 text-center {g.cls}">{g.char}</span>
           <div class="min-w-0 flex-1">
             <span class="font-medium text-ink">{r.name}</span>
-            {#if r.detail}<span class="ml-2 text-faint">{r.detail}</span>{/if}
+            {#if r.detail}<span class="ml-2 text-sm text-faint">{r.detail}</span>{/if}
           </div>
         </div>
       {/each}
@@ -58,7 +60,7 @@
   {/if}
 
   {#snippet footer()}
-    <div class="flex items-center gap-2 text-xs">
+    <div class="flex items-center gap-2">
       {#if running && report}
         <span class="text-faint">re-running checks…</span>
       {:else if report}
@@ -71,7 +73,7 @@
       {/if}
       <!-- Re-run in place after fixing a failing check, rather than reopening. -->
       <button
-        class="ml-auto rounded border border-edge px-2 py-[1px] text-faint hover:border-accent hover:text-accent-ink disabled:opacity-40"
+        class="ml-auto rounded border border-edge px-2 py-1 text-faint hover:border-accent hover:text-accent-ink disabled:opacity-40"
         disabled={running}
         onclick={run}>{running ? "running…" : "↻ re-run"}</button
       >

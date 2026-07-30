@@ -59,41 +59,41 @@
 
   <div
     bind:this={el}
-    class="fixed z-50 min-w-[11rem] rounded-md border border-edge bg-panel py-1 text-xs shadow-lg"
+    class="fixed z-50 min-w-[11rem] rounded-md border border-edge bg-panel py-1 shadow-lg"
     style="left:{req.x}px;top:{req.y}px"
     role="menu"
   >
-    <div class="truncate px-3 py-1 text-[10px] tracking-wider text-faint uppercase">
+    <div class="label truncate px-3 py-1 text-faint">
       {session.issue || session.id.slice(0, 8)}
     </div>
     <button
-      class="block w-full px-3 py-1 text-left hover:bg-sel disabled:opacity-40"
+      class="block w-full px-3 py-1.5 text-left hover:bg-sel disabled:opacity-40"
       role="menuitem"
       disabled={!session.worktree}
       title={session.worktree ? "open a shell in the worktree" : "session has no worktree"}
       onclick={() => run((s) => addShell(s))}>+ add shell</button
     >
     <button
-      class="block w-full px-3 py-1 text-left hover:bg-sel"
+      class="block w-full px-3 py-1.5 text-left hover:bg-sel"
       role="menuitem"
       title="force a QA review pass now"
       onclick={() => run((s) => store.review(s.id))}>trigger review</button
     >
     <button
-      class="block w-full px-3 py-1 text-left hover:bg-sel"
+      class="block w-full px-3 py-1.5 text-left hover:bg-sel"
       role="menuitem"
       onclick={() => run((s) => store.coderabbit(s.id))}>coderabbit</button
     >
     {#if session.prNumber > 0}
       <button
-        class="block w-full px-3 py-1 text-left hover:bg-sel"
+        class="block w-full px-3 py-1.5 text-left hover:bg-sel"
         role="menuitem"
         onclick={() => run((s) => store.openURL(s.prUrl))}>open PR ↗</button
       >
     {/if}
     {#if canRevive}
       <button
-        class="block w-full px-3 py-1 text-left text-info hover:bg-sel"
+        class="block w-full px-3 py-1.5 text-left text-info hover:bg-sel"
         role="menuitem"
         onclick={() => run((s) => store.revive(s.id))}>revive</button
       >
@@ -101,7 +101,7 @@
     <div class="my-1 border-t border-edge/60"></div>
     <!-- Routes through the shared confirm dialog, same as the 'x' shortcut. -->
     <button
-      class="block w-full px-3 py-1 text-left text-faint hover:bg-sel hover:text-bad"
+      class="block w-full px-3 py-1.5 text-left text-faint hover:bg-sel hover:text-bad"
       role="menuitem"
       onclick={() => run((s) => store.askKill(s.id))}>kill…</button
     >

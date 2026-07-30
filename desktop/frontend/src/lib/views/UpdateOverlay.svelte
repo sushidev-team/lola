@@ -48,38 +48,42 @@
 
 <Modal title="software update" onClose={() => nav.closeOverlay()} width="620px">
   {#if updates.checking && !updates.info}
-    <div class="text-xs text-faint">checking for updates…</div>
+    <div class="text-sm text-faint">checking for updates…</div>
   {:else if updates.error && !updates.info}
-    <div class="text-xs text-bad">✗ {updates.error}</div>
+    <div class="text-bad">✗ {updates.error}</div>
   {:else if !updates.available}
     <div class="flex flex-col gap-2 py-4 text-center">
       <span class="text-good">✓ you're up to date</span>
-      <span class="text-xs text-faint">running v{updates.info?.currentVersion || updates.version}</span>
+      <span class="num text-sm text-faint">running v{updates.info?.currentVersion || updates.version}</span>
     </div>
   {:else}
-    <div class="flex flex-col gap-3 text-xs">
-      <div class="flex items-baseline gap-2">
-        <span class="text-faint">v{updates.info?.currentVersion || updates.version}</span>
-        <span class="text-faint">→</span>
-        <span class="text-base font-semibold text-accent-ink">v{updates.info?.latestVersion}</span>
+    <div class="flex flex-col gap-3">
+      <div class="num flex items-baseline gap-2">
+        <span class="text-sm text-faint">v{updates.info?.currentVersion || updates.version}</span>
+        <span class="text-sm text-faint">→</span>
+        <!-- text-xl is the ceiling and brings its own 600: the version you are
+             being offered is the one thing this dialog is about. -->
+        <span class="text-xl text-accent-ink">v{updates.info?.latestVersion}</span>
         {#if updates.info?.publishedAt}
-          <span class="ml-auto text-faint">{fmtDate(updates.info.publishedAt)}</span>
+          <span class="ml-auto text-sm text-faint">{fmtDate(updates.info.publishedAt)}</span>
         {/if}
       </div>
 
       {#if updates.info?.assetSize}
-        <div class="text-faint">download size: {fmtBytes(updates.info.assetSize)}</div>
+        <div class="num text-sm text-faint">download size: {fmtBytes(updates.info.assetSize)}</div>
       {/if}
 
       {#if notesList.length}
         <div class="flex max-h-64 flex-col gap-3 overflow-auto rounded border border-edge/70 bg-canvas/40 p-3">
           {#each notesList as r (r.version)}
             <div>
-              <div class="font-semibold text-ink">v{r.version}</div>
+              <div class="num font-medium text-ink">v{r.version}</div>
               {#if r.releaseNotes}
-                <pre class="mt-1 font-sans text-[11px] whitespace-pre-wrap text-faint">{r.releaseNotes}</pre>
+                <!-- Multi-line prose: `copy` is the only sanctioned line-height
+                     deviation and the only measure constraint in the app. -->
+                <pre class="copy mt-1 font-sans text-sm whitespace-pre-wrap text-faint">{r.releaseNotes}</pre>
               {:else}
-                <div class="mt-1 text-[11px] text-faint italic">no release notes</div>
+                <div class="mt-1 text-sm text-faint italic">no release notes</div>
               {/if}
             </div>
           {/each}
@@ -91,7 +95,7 @@
           <div class="h-2 overflow-hidden rounded bg-sel/60">
             <div class="h-full bg-accent transition-[width] duration-150" style="width:{pct}%"></div>
           </div>
-          <div class="text-faint">
+          <div class="num text-sm text-faint">
             downloading… {pct}%
             {#if updates.progress?.totalBytes}
               · {fmtBytes(updates.progress.downloadedBytes)} / {fmtBytes(updates.progress.totalBytes)}
@@ -109,21 +113,21 @@
   {/if}
 
   {#snippet footer()}
-    <div class="flex items-center gap-2 text-xs">
+    <div class="flex items-center gap-2">
       {#if updates.available}
         {#if updates.installing}
           <span class="text-faint">installing — the app will restart…</span>
         {:else if updates.dmgPath}
           <button
-            class="rounded border border-accent bg-accent px-2.5 py-1 font-medium text-accent-ink hover:opacity-90"
+            class="rounded border border-accent bg-accent px-2.5 py-1 font-medium text-on-accent hover:opacity-90"
             onclick={() => updates.install()}>install & restart</button
           >
-          <span class="text-faint">lola will quit and reopen on the new version</span>
+          <span class="text-sm text-faint">lola will quit and reopen on the new version</span>
         {:else if updates.downloading}
           <span class="text-faint">please wait…</span>
         {:else}
           <button
-            class="rounded border border-accent bg-accent px-2.5 py-1 font-medium text-accent-ink hover:opacity-90"
+            class="rounded border border-accent bg-accent px-2.5 py-1 font-medium text-on-accent hover:opacity-90"
             onclick={() => updates.download()}>download</button
           >
           <button
@@ -144,7 +148,7 @@
           disabled={updates.checking}
           onclick={() => updates.check(true)}>{updates.checking ? "checking…" : "check again"}</button
         >
-        <span class="ml-auto text-faint">v{updates.version}</span>
+        <span class="num ml-auto text-sm text-faint">v{updates.version}</span>
       {/if}
     </div>
   {/snippet}

@@ -27,6 +27,6 @@
       class="m-0 whitespace-pre leading-[1.2] text-ink"
       style="font-family:var(--font-term);font-size:calc(13px * var(--snap-scale))">{@html html}</pre>
   {:else}
-    <div class="flex h-full items-center justify-center text-[11px] text-faint">no pane output</div>
+    <div class="flex h-full items-center justify-center text-sm text-faint">no pane output</div>
   {/if}
 </div>

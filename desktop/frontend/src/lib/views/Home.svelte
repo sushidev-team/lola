@@ -29,28 +29,21 @@
 </script>
 
 <div class="flex h-full min-h-0 flex-col p-4">
+  <!-- The back button, the "lola ▸ projects" breadcrumb and "+ add project" all
+       moved to MainTopBar — the view no longer draws its own header chrome, it
+       only owns the content. -->
   <div class="mb-3 flex items-center gap-3">
-    <button
-      class="rounded border border-edge px-2 py-1 text-xs text-faint hover:border-accent hover:text-accent-ink"
-      title="back to cockpit (esc)"
-      onclick={() => nav.goCockpit()}>← back</button
-    >
-    <div class="text-sm text-faint">lola <span class="text-edge">▸</span> <span class="text-ink">projects</span></div>
     <input
-      class="ml-auto w-56 rounded border border-edge bg-canvas px-2 py-1 text-xs text-ink outline-none focus:border-accent placeholder:text-placeholder"
+      class="ml-auto w-56 rounded border border-edge bg-canvas px-2 py-1.5 text-ink outline-none focus:border-accent placeholder:text-placeholder"
       placeholder="filter projects…"
       bind:value={filter}
       onkeydown={(e) => e.key === "Escape" && nav.goCockpit()}
     />
-    <button
-      class="rounded bg-accent-fill px-3 py-1 text-xs text-accent-ink hover:bg-accent-fill-hover"
-      onclick={() => nav.openOverlay("project", "")}>+ add project</button
-    >
   </div>
 
   <div class="min-h-0 flex-1 overflow-auto rounded-[10px] border border-edge">
-    <table class="w-full text-xs">
-      <thead class="sticky top-0 bg-panel/95 text-left text-[10px] tracking-wider text-faint uppercase backdrop-blur">
+    <table class="w-full">
+      <thead class="label sticky top-0 bg-panel/95 text-left text-faint backdrop-blur">
         <tr>
           <th class="px-3 py-2">Project</th>
           <th class="px-3 py-2">Path</th>
@@ -69,16 +62,16 @@
               {displayName(p)}
               {#if !p.agentOk}<span class="ml-1 text-bad" title={p.agentErr}>✗</span>{/if}
             </td>
-            <td class="px-3 py-2 font-mono text-[11px] text-faint">{compactPath(p.path)}</td>
-            <td class="px-3 py-2 {poll.cls}">{poll.text}</td>
-            <td class="px-3 py-2 text-right tabular-nums">{store.alive ? p.liveCounted : "—"}</td>
-            <td class="px-3 py-2">
+            <td class="px-3 py-2 font-mono text-sm text-faint">{compactPath(p.path)}</td>
+            <td class="px-3 py-2 text-sm {poll.cls}">{poll.text}</td>
+            <td class="num px-3 py-2 text-right">{store.alive ? p.liveCounted : "—"}</td>
+            <td class="num px-3 py-2 text-sm">
               {#if p.needsYou > 0}<span class="text-orange">{p.needsYou} need</span>{/if}
               {#if p.ciRed > 0}<span class="ml-1 text-bad">{p.ciRed} ci</span>{/if}
               {#if p.needsYou === 0 && p.ciRed === 0}<span class="text-faint">—</span>{/if}
             </td>
-            <td class="px-3 py-2 text-right text-faint tabular-nums">{p.openPrs > 0 ? `${p.openPrs} PR` : ""}</td>
-            <td class="px-3 py-2 text-right whitespace-nowrap opacity-0 group-hover:opacity-100">
+            <td class="num px-3 py-2 text-right text-sm text-faint">{p.openPrs > 0 ? `${p.openPrs} PR` : ""}</td>
+            <td class="px-3 py-2 text-right text-sm whitespace-nowrap opacity-0 group-hover:opacity-100">
               <button class="px-1.5 text-faint hover:text-accent-ink" onclick={() => nav.goCockpit(p.name)}>sessions</button>
               <button class="px-1.5 text-faint hover:text-accent-ink" onclick={() => nav.openOverlay("project", p.name)}>edit</button>
               <button class="px-1.5 text-faint hover:text-accent-ink" onclick={() => nav.goDetail(p.name)}>open ›</button>

@@ -19,7 +19,7 @@
   fill="none"
   xmlns="http://www.w3.org/2000/svg"
   role="img"
-  aria-label="lola"
+  aria-label="Lola"
 >
   <path d="M257 0.5L75 5.13356L258 13.9075L257 0.5Z" fill="#E13F3C" />
   <path d="M256.984 10.8901L72 15.5997L258 24.5175L256.984 10.8901Z" fill="#E13F3C" />

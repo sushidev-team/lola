@@ -51,6 +51,37 @@
    Tailwind v4 turns each --color-* into a utility (bg-canvas, text-accent-ink, …)
    that compiles to var(--color-*) — which is what makes the runtime override
    reach every one of them without a rebuild.
+
+   The type scale at the BOTTOM of the block is the same idea applied to size.
+   The app used to carry ~180 hand-placed size classes drawn from 10px, 11px,
+   12px and 13px with near-uniform weight, which is a lot of decisions and no
+   hierarchy. There are now FIVE sizes, each with exactly one job, and the
+   default one is set on `body` so most elements carry no size class at all:
+
+     text-xs   12px  UPPERCASE micro-labels ONLY, and only via `label` below —
+                     column heads, form section heads, sidebar group labels.
+                     Never lowercase, never for reading. It shares text-sm's 12px
+                     ON PURPOSE: every `label` call site pairs it with
+                     --color-faint, and 11px put the app's most-repeated chrome
+                     (every column head, every group label) BELOW the faint floor
+                     stated on the next line — the rule this file itself sets. The
+                     level is still unmistakably its own, because uppercase + 600
+                     + 0.06em tracking separate it from 12px/400 metadata far more
+                     than one pixel of size ever did.
+     text-sm   12px  the metadata tier — counts, ages, hints, badges, the
+                     footers of things. This is the FLOOR for --color-faint:
+                     antialiased faint text at 10px is the reported "hard to
+                     read", and 12px/400 is where it stops being that.
+     text-base 13px  THE DEFAULT, inherited from `body`. Row text, labels,
+                     inputs, buttons, list items — anything a user reads.
+     text-lg   15px  section titles: the one level that must out-rank the
+                     content directly under it.
+     text-xl   18px  view titles and hero empty states. The ceiling.
+
+   Weight and letter-spacing ride ALONG with the two title sizes and the
+   micro-label, so a call site cannot ship the size and forget the tracking (or
+   apply it twice). Hierarchy is size, then weight, then colour, and one element
+   may spend only two of the three — which is why nothing here needs a 700.
 ---------------------------------------------------------------------------- */
 @theme {
   --color-canvas: #181825; /* app background — Catppuccin `mantle` */
@@ -100,6 +131,50 @@
   --font-term: "Hack", "JetBrains Mono", ui-monospace, Menlo, monospace;
 
   --radius-panel: 10px;
+
+  /* -------------------------------------------------------------------------
+     Type scale. FIVE sizes, no more. `--text-*: initial` clears Tailwind's stock
+     scale first, so `text-2xl`/`text-3xl`/… no longer generate any CSS — a stray
+     one is inert (the element simply inherits 13px) instead of silently
+     reintroducing a sixth size. Sizes are px, not rem: this is a fixed-DPI
+     desktop chrome and the page-zoom controller (desktop/main.go's
+     zoomController) scales the whole webview, not the root font-size.
+
+     Line-heights are px so a 13px row and a 12px meta line in the same flex row
+     share a baseline grid. Weight and letter-spacing are baked into the two
+     title tokens and the micro-label token so they can never be forgotten or
+     doubled at a call site. Nothing here is a --color-*; the Catppuccin pin in
+     catppuccin.test.ts reads only the slice above --font-sans and is untouched
+     (this comment sits well below that first occurrence, so it cannot move the
+     slice boundary).
+  ------------------------------------------------------------------------- */
+  --text-*: initial;
+
+  /* UPPERCASE micro-labels only — always via the `label` utility below. */
+  --text-xs: 12px;
+  --text-xs--line-height: 16px;
+  --text-xs--font-weight: 600;
+  --text-xs--letter-spacing: 0.06em;
+
+  /* Metadata / the --color-faint tier: counts, ages, hints, badges, footers. */
+  --text-sm: 12px;
+  --text-sm--line-height: 16px;
+
+  /* THE DEFAULT. Set on `body`, so most elements carry no size class at all. */
+  --text-base: 13px;
+  --text-base--line-height: 18px;
+
+  /* Section titles — the one level that must out-rank its own content. */
+  --text-lg: 15px;
+  --text-lg--line-height: 20px;
+  --text-lg--font-weight: 600;
+  --text-lg--letter-spacing: -0.006em;
+
+  /* View titles and hero empty states. The ceiling: nothing is larger. */
+  --text-xl: 18px;
+  --text-xl--line-height: 24px;
+  --text-xl--font-weight: 600;
+  --text-xl--letter-spacing: -0.01em;
 }
 
 /* ---------------------------------------------------------------------------
@@ -123,6 +198,15 @@ body {
   background: var(--color-canvas);
   color: var(--color-ink);
   font-family: var(--font-sans);
+  /* The base size lives HERE, not on a `text-base` class in markup: it is what
+     lets ~150 of the app's 183 size utilities be deleted rather than rewritten.
+     After this, a `text-*` class in a template is a deliberate deviation. */
+  font-size: var(--text-base);
+  line-height: var(--text-base--line-height);
+  font-optical-sizing: auto;
+  /* SF Pro ships real 400/500/600. Synthesis could only ever produce a smeared
+     fake, and a wrong weight is easier to spot than a blurred one. */
+  font-synthesis: none;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   overflow: hidden; /* the app owns its own scroll regions */
@@ -173,6 +257,16 @@ select {
 .term-live * {
   -webkit-user-select: text;
   user-select: text;
+}
+
+/* The UA stylesheet's `th { font-weight: bold }` matches the <th> DIRECTLY, so it
+   beats a 600 inherited from a `.label` on the <tr>/<thead> — every column head
+   was silently shipping at 700, the one weight the type scale bans in chrome.
+   Tailwind's preflight has no `th` rule to lean on. Unlayered, so it also outranks
+   the utilities layer, and `inherit` (not a literal) keeps `.label`'s bundled
+   weight the single source of truth. */
+th {
+  font-weight: inherit;
 }
 
 /* Form fields opt back out of the app-chrome `user-select: none` so their text
@@ -229,6 +323,19 @@ textarea {
   background: transparent !important;
 }
 
+/* Motion is decoration here — the live-agent pulse in <AgentActivity> is the only
+   animation in the chrome, and its meaning is carried by the dot, not by the
+   movement. Under prefers-reduced-motion the dot stays and the ping stops. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
 /* Focus ring consistent with the accent. */
 :focus-visible {
   outline: 2px solid color-mix(in srgb, var(--color-accent) 70%, transparent);
@@ -243,4 +350,58 @@ textarea {
   background: color-mix(in srgb, var(--color-panel) 82%, var(--color-canvas));
   border: 1px solid var(--color-edge);
   border-radius: var(--radius-panel);
+}
+
+/* Uppercase micro-label: table column heads, form section heads, sidebar group
+   labels, the context-menu header. This is the ONLY sanctioned way to render a
+   micro-label — it bundles size, line-height, weight, tracking and the
+   uppercasing so no call site can ship three of the four. Pair it with a colour
+   (`label text-faint`), never with a `text-*` size or a `tracking-*`.
+
+   NOT for a control a user must find: it is the quietest thing the scale can
+   produce, so using it on primary navigation (it was on the config overlays' tab
+   strip) makes the first control you need the smallest and faintest element on
+   screen. Tabs use base size + weight instead. */
+@utility label {
+  font-size: var(--text-xs);
+  line-height: var(--text-xs--line-height);
+  font-weight: var(--text-xs--font-weight);
+  letter-spacing: var(--text-xs--letter-spacing);
+  text-transform: uppercase;
+}
+
+/* The ONE sanctioned size above the scale's text-xl ceiling, and it is not type:
+   it is the decorative mark on a hero empty state. Sized here rather than as an
+   inline `text-[40px]` precisely so the "no arbitrary text-[Npx]" rule keeps a
+   clean grep — a decoration needs an escape hatch, but exactly one, named. Pair
+   it with `text-edge`; it must never out-shout the sentence beneath it. */
+@utility hero-glyph {
+  font-size: 40px;
+  line-height: 1;
+}
+
+/* Every number that can change, and every number in a column, is tabular. The
+   system stack's SF Pro defaults to PROPORTIONAL figures, so an untagged number
+   reflows its neighbours on each 30s observer push. */
+@utility num {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Multi-line paragraph copy — the ONLY place a line-height deviates from its
+   token, and the only measure constraint in the app. Replaces the ad-hoc
+   `leading-relaxed` in ConfirmDialog and HelpOverlay.
+
+   `--tw-leading` is NOT decoration. Tailwind compiles every size utility to
+   `line-height: var(--tw-leading, var(--text-sm--line-height))`, and it emits
+   `.copy` BEFORE `.text-sm` in the utilities layer (verified against the
+   compiled output — the sort is Tailwind's, not source order). So a bare
+   `line-height: 1.55` here LOSES to the paired size class and `copy text-sm`
+   would silently render at the 16px token. Writing `--tw-leading` — the same
+   channel Tailwind's own `leading-*` utilities use — makes the size utility
+   resolve to 1.55 itself, which is order-independent. The literal `line-height`
+   stays for `copy` on an element that carries no size class at all. */
+@utility copy {
+  --tw-leading: 1.55;
+  line-height: 1.55;
+  max-width: 62ch;
 }

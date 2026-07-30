@@ -14,18 +14,20 @@
 
 {#if req}
   <Modal title={req.title} onClose={() => confirm.cancel()} width="420px">
-    <p class="text-sm leading-relaxed text-ink">{req.body}</p>
+    <!-- `copy` is the only sanctioned line-height deviation: multi-line prose
+         gets 1.55 and a 62ch measure. -->
+    <p class="copy text-ink">{req.body}</p>
     {#if req.detail}
-      <p class="mt-2 text-xs text-faint">{req.detail}</p>
+      <p class="mt-2 text-sm text-faint">{req.detail}</p>
     {/if}
     {#snippet footer()}
       <div class="flex justify-end gap-2">
         <button
-          class="rounded border border-edge px-3 py-1 text-xs text-faint hover:text-ink"
+          class="rounded border border-edge px-3 py-1.5 text-faint hover:text-ink"
           onclick={() => confirm.cancel()}>Cancel</button
         >
         <button
-          class="rounded bg-bad px-3 py-1 text-xs font-medium text-on-bad hover:opacity-90"
+          class="rounded bg-bad px-3 py-1.5 font-medium text-on-bad hover:opacity-90"
           onclick={() => confirm.accept()}>{req.confirmLabel}</button
         >
       </div>

@@ -38,8 +38,8 @@
       role="tab"
       aria-selected={active === t.id}
       tabindex={active === t.id ? 0 : -1}
-      class="-mb-px border-b-2 px-2.5 py-1.5 text-[11px] tracking-wide uppercase transition-colors {active === t.id
-        ? 'border-accent text-accent-ink'
+      class="-mb-px border-b-2 px-2.5 py-2 transition-colors {active === t.id
+        ? 'border-accent font-medium text-accent-ink'
         : 'border-transparent text-faint hover:text-ink'}"
       onclick={() => onSelect(t.id)}
       onkeydown={(e) => onKey(e, i)}>{t.label}</button

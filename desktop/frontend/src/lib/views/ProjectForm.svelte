@@ -381,11 +381,11 @@
 
   const rowCls = "grid grid-cols-[170px_1fr] items-center gap-3";
   const rowTopCls = "grid grid-cols-[170px_1fr] items-start gap-3";
-  const labelCls = "flex items-center gap-1.5 text-[11px] tracking-wide text-faint uppercase";
+  const labelCls = "label flex items-center gap-1.5 text-faint";
   const inputCls =
-    "w-full rounded border border-edge bg-canvas px-2 py-1 text-xs text-ink outline-none focus:border-accent placeholder:text-placeholder";
+    "w-full rounded border border-edge bg-canvas px-2 py-1.5 text-ink outline-none focus:border-accent placeholder:text-placeholder";
   const cbCls = "h-3.5 w-3.5 accent-[var(--color-accent)]";
-  const hintCls = "mt-1 block text-[10px] text-faint";
+  const hintCls = "mt-1 block text-sm text-faint";
 </script>
 
 <!--
@@ -399,7 +399,7 @@
       {@const on = inherited(k)}
       <button
         type="button"
-        class="rounded border px-1 py-px text-[9px] tracking-wide normal-case {on
+        class="label rounded border px-1 py-px font-normal normal-case {on
           ? 'border-edge text-faint hover:border-accent hover:text-accent-ink'
           : 'border-accent/40 text-accent-ink hover:border-accent hover:text-accent-ink'}"
         title={on
@@ -521,7 +521,7 @@
       {@render cap(caption, k)}
       <div class="max-h-36 space-y-1 overflow-auto rounded border border-edge p-2 {ghost(k)}">
         {#each options as o (o.id)}
-          <label class="flex items-center gap-2 text-xs text-ink">
+          <label class="flex items-center gap-2 text-ink">
             <input
               type="checkbox"
               class={cbCls}
@@ -534,7 +534,7 @@
             <span class="truncate">{o.label}</span>
           </label>
         {/each}
-        {#if options.length === 0}<span class="text-[11px] text-faint">none</span>{/if}
+        {#if options.length === 0}<span class="text-sm text-faint">none</span>{/if}
       </div>
     </div>
   {:else}
@@ -545,7 +545,7 @@
 {#snippet boolRow(caption: string, checked: boolean, onToggle: () => void, hint = "")}
   <div class={rowCls}>
     <span class={labelCls}>{caption}</span>
-    <label class="flex items-center gap-2 text-xs text-ink">
+    <label class="flex items-center gap-2 text-ink">
       <input type="checkbox" class={cbCls} {checked} onchange={onToggle} aria-label={caption} />
       {#if hint}<span class="text-faint">{hint}</span>{/if}
     </label>
@@ -554,9 +554,9 @@
 
 <Modal {title} onClose={requestClose} width="660px">
   {#if loadErr}
-    <div class="rounded border border-bad/40 bg-bad/10 px-3 py-2 text-xs text-bad">{loadErr}</div>
+    <div class="rounded border border-bad/40 bg-bad/10 px-3 py-2 text-sm text-bad">{loadErr}</div>
   {:else if !f}
-    <div class="px-3 py-8 text-center text-xs text-faint">loading project…</div>
+    <div class="px-3 py-8 text-center text-sm text-faint">loading project…</div>
   {:else}
     {@const d = f}
     <Tabs tabs={TABS} active={tab} onSelect={(id) => (tab = id)} />
@@ -649,7 +649,7 @@
             {#each agents as a (a.id)}
               <button
                 type="button"
-                class="rounded px-2 py-[2px] text-[11px]"
+                class="rounded px-2 py-[2px] text-sm"
                 class:bg-accent={d.agent === a.id}
                 class:text-on-accent={d.agent === a.id}
                 class:text-faint={d.agent !== a.id}
@@ -680,7 +680,7 @@
     {:else if tab === "filter"}
       <div class="space-y-2">
         {#if teamsErr}
-          <p class="mb-3 rounded border border-warn/40 bg-warn/10 px-3 py-2 text-[11px] text-warn">
+          <p class="mb-3 rounded border border-warn/40 bg-warn/10 px-3 py-2 text-sm text-warn">
             Linear metadata unavailable ({teamsErr}) — paste UUIDs directly below.
           </p>
         {/if}
@@ -709,9 +709,9 @@
         </div>
 
         {#if metaLoading}
-          <p class="text-[11px] text-faint">loading Linear metadata…</p>
+          <p class="text-sm text-faint">loading Linear metadata…</p>
         {:else if metaErr}
-          <p class="rounded border border-warn/40 bg-warn/10 px-3 py-1.5 text-[11px] text-warn">
+          <p class="rounded border border-warn/40 bg-warn/10 px-3 py-1.5 text-sm text-warn">
             couldn't load team metadata ({metaErr}) — using raw UUID inputs
           </p>
         {/if}
@@ -750,7 +750,7 @@
         <div class={rowCls}>
           <span class={labelCls}>Concurrency cap</span>
           <span>
-            <input type="number" min="0" class="{inputCls} w-24 tabular-nums" aria-label="Concurrency cap" bind:value={d.concurrencyCap} />
+            <input type="number" min="0" class="{inputCls} num w-24" aria-label="Concurrency cap" bind:value={d.concurrencyCap} />
             <span class={hintCls}>0 uses the [defaults] cap</span>
           </span>
         </div>
@@ -789,7 +789,7 @@
           "(none)",
           "onSentSetLabel",
         )}
-        <p class="pt-1 text-[10px] text-faint">
+        <p class="copy pt-1 text-sm text-faint">
           Label UUIDs are team-scoped — changing the team on the Filter tab clears the ones this project overrides.
         </p>
       </div>
@@ -812,11 +812,11 @@
        backdrop. A Go error can be long and multi-line, so it wraps rather than
        truncating and stays selectable; dismissable, and cleared on the next save. -->
   {#if saveErr}
-    <div class="mt-3 flex items-start gap-2 rounded border border-bad/40 bg-bad/10 px-3 py-2 text-xs text-bad">
+    <div class="mt-3 flex items-start gap-2 rounded border border-bad/40 bg-bad/10 px-3 py-2 text-sm text-bad">
       <span class="min-w-0 flex-1 font-mono break-words whitespace-pre-wrap select-text">{saveErr}</span>
       <button
         type="button"
-        class="shrink-0 leading-none text-bad/70 hover:text-bad"
+        class="shrink-0 text-bad/70 hover:text-bad"
         aria-label="dismiss error"
         onclick={() => (saveErr = "")}>✕</button
       >
@@ -827,15 +827,15 @@
     <div class="flex items-center gap-2">
       {#if f && !f.isNew}
         {#if confirmRemove}
-          <button class="rounded bg-bad/20 px-3 py-1 text-xs text-bad hover:bg-bad/30" onclick={remove}>confirm remove</button>
-          <button class="px-2 py-1 text-xs text-faint hover:text-ink" onclick={() => (confirmRemove = false)}>cancel</button>
+          <button class="rounded bg-bad/20 px-3 py-1.5 text-bad hover:bg-bad/30" onclick={remove}>confirm remove</button>
+          <button class="px-2 py-1.5 text-faint hover:text-ink" onclick={() => (confirmRemove = false)}>cancel</button>
         {:else}
-          <button class="px-3 py-1 text-xs text-bad/80 hover:text-bad" onclick={() => (confirmRemove = true)}>remove</button>
+          <button class="px-3 py-1.5 text-bad/80 hover:text-bad" onclick={() => (confirmRemove = true)}>remove</button>
         {/if}
       {/if}
-      <button class="ml-auto px-3 py-1 text-xs text-faint hover:text-ink" onclick={requestClose}>cancel</button>
+      <button class="ml-auto px-3 py-1.5 text-faint hover:text-ink" onclick={requestClose}>cancel</button>
       <button
-        class="rounded bg-accent-fill px-3 py-1 text-xs text-accent-ink hover:bg-accent-fill-hover disabled:opacity-40"
+        class="rounded bg-accent-fill px-3 py-1.5 text-accent-ink hover:bg-accent-fill-hover disabled:opacity-40"
         disabled={!canSave}
         onclick={save}>{saving ? "saving…" : "save"}</button
       >

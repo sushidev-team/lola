@@ -226,11 +226,11 @@
   const AGENTS = ["claude", "codex", "opencode"];
 
   const inputCls =
-    "w-full rounded border border-edge bg-canvas px-2 py-1 text-xs text-ink outline-none focus:border-accent placeholder:text-placeholder";
+    "w-full rounded border border-edge bg-canvas px-2 py-1.5 text-ink outline-none focus:border-accent placeholder:text-placeholder";
   const rowCls = "grid grid-cols-[11rem_1fr] items-center gap-3";
   const rowTopCls = "grid grid-cols-[11rem_1fr] items-start gap-3";
   const cbCls = "h-3.5 w-3.5 accent-[var(--color-accent)]";
-  const hintCls = "mt-1 block text-[10px] text-faint";
+  const hintCls = "mt-1 block text-sm text-faint";
 
   function toggleId(arr: string[] | null, id: string): string[] {
     const a = arr ?? [];
@@ -367,7 +367,11 @@
 </script>
 
 {#snippet head(label: string)}
-  <h3 class="mb-2 text-[10px] font-semibold tracking-wider text-faint uppercase">{label}</h3>
+  <!-- text-lg, not `label`: a section head rendered as an 12px uppercase faint
+       micro-label is smaller AND quieter than the 13px rows it heads, which is
+       hierarchy upside down. This is the one place in the settings overlay that
+       must out-rank the content under it. `label` stays for per-field captions. -->
+  <h3 class="mb-2 text-lg text-ink">{label}</h3>
 {/snippet}
 
 {#snippet areaRow(caption: string, value: string[] | null, onChange: (v: string[]) => void, placeholder = "", hint = "")}
@@ -425,14 +429,16 @@
 
 <Modal title="settings" onClose={requestClose} width="640px">
   {#if loading}
-    <div class="py-10 text-center text-xs text-faint">loading settings…</div>
+    <div class="py-10 text-center text-faint">loading settings…</div>
   {:else if loadError}
-    <div class="py-10 text-center text-xs text-bad">{loadError}</div>
+    <div class="py-10 text-center text-bad">{loadError}</div>
   {:else if dto}
     {@const d = dto}
     <Tabs tabs={TABS} active={tab} onSelect={selectTab} />
 
-    <div class="text-xs">
+    <!-- No size class: every field caption, control and option inherits the
+         13px base. Only the faint explanations and micro-labels step down. -->
+    <div>
       {#if tab === "defaults"}
         <section>
           {@render head("Defaults")}
@@ -466,7 +472,7 @@
       {:else if tab === "project"}
         <section>
           {@render head("Project defaults")}
-          <p class="mb-3 text-[10px] text-faint">
+          <p class="copy mb-3 text-sm text-faint">
             Every [[project]] that omits one of these keys inherits it. The project editor shows an inherited value ghosted. The label fields
             offer <span class="text-ink">workspace</span> labels, which apply across every team — a project's own pickers offer that project's
             team labels instead.
@@ -481,13 +487,13 @@
             {@render areaRow("Env", d.env, (v) => { d.env = v; }, "KEY=value", "one KEY=value per line")}
 
             {#if wsLoading}
-              <p class="text-[10px] text-faint">loading workspace labels…</p>
+              <p class="text-sm text-faint">loading workspace labels…</p>
             {:else if wsErr}
-              <p class="rounded border border-warn/40 bg-warn/10 px-3 py-2 text-[10px] text-warn">
+              <p class="rounded border border-warn/40 bg-warn/10 px-3 py-2 text-sm text-warn">
                 couldn't load workspace labels ({wsErr}) — enter the UUIDs by hand below
               </p>
             {:else if wsLabels && wsLabels.length === 0}
-              <p class="rounded border border-edge bg-canvas px-3 py-2 text-[10px] text-faint">
+              <p class="rounded border border-edge bg-canvas px-3 py-2 text-sm text-faint">
                 This workspace has no organisation-level labels. A shared default is inherited by projects on any team, so it should be one —
                 create it in Linear, or paste a UUID below.
               </p>
@@ -499,7 +505,7 @@
                 <span>
                   <div class="max-h-36 space-y-1 overflow-auto rounded border border-edge p-2">
                     {#each wsLabels ?? [] as o (o.id)}
-                      <label class="flex items-center gap-2 text-xs text-ink">
+                      <label class="flex items-center gap-2 text-ink">
                         <input
                           type="checkbox"
                           class={cbCls}
@@ -553,7 +559,7 @@
                       {@const rank = (d.prioritySort ?? []).indexOf(k)}
                       <button
                         type="button"
-                        class="flex w-full items-center gap-2 rounded px-1 py-0.5 text-left text-xs hover:bg-edge/40"
+                        class="flex w-full items-center gap-2 rounded px-1 py-1 text-left hover:bg-edge/40"
                         onclick={() => toggleSortKey(k)}
                       >
                         <span
@@ -628,7 +634,7 @@
       {:else if tab === "interpreter"}
         <section>
           {@render head("Interpreter")}
-          <p class="mb-3 text-[10px] text-faint">
+          <p class="copy mb-3 text-sm text-faint">
             The <span class="font-mono text-ink">[statusagent]</span> status interpreter: a small bounded claude pass that judges what
             each agent is <span class="text-ink">actually</span> doing (an "≈" overlay + one-line headline in the session list).
             Display only — it can never change the real status or type into an agent. Each interpretation spends tokens.
@@ -671,7 +677,7 @@
       {:else if tab === "appearance"}
         <section>
           {@render head("Appearance")}
-          <p class="mb-3 text-[10px] text-faint">
+          <p class="copy mb-3 text-sm text-faint">
             Sets <span class="font-mono text-ink">[ui].theme</span>, which colours the app chrome and every terminal from one palette.
             Picking a flavor <span class="text-ink">previews it immediately</span>; save writes it to config.toml, cancel puts the old one
             back.
@@ -695,8 +701,8 @@
                 onclick={() => previewTheme(id)}
               >
                 <span class="flex items-baseline gap-2">
-                  <span class="text-xs font-semibold" style="color:{f.text}">{f.label}</span>
-                  <span class="ml-auto text-[9px] tracking-wider uppercase" style="color:{on ? f.sky : f.overlay1}">
+                  <span class="font-medium" style="color:{f.text}">{f.label}</span>
+                  <span class="label ml-auto" style="color:{on ? f.sky : f.overlay1}">
                     {on ? "selected" : f.dark ? "dark" : "light"}
                   </span>
                 </span>
@@ -714,13 +720,13 @@
       {:else if tab === "review"}
         <div class="space-y-5">
           {#if d.reviewLegacy}
-            <div class="rounded border border-warn/40 bg-warn/10 px-3 py-2 text-xs text-ink">
+            <div class="rounded border border-warn/40 bg-warn/10 px-3 py-2 text-ink">
               <p>
                 This config still uses the legacy <code>[review]</code>/<code>[coderabbit]</code> tables. They are
                 <span class="text-faint">read-only</span> here — migrate them into the editable provider catalog to continue.
               </p>
               <button
-                class="mt-2 rounded border border-edge px-2 py-1 text-[11px] hover:border-accent"
+                class="mt-2 rounded border border-edge px-2 py-1.5 hover:border-accent"
                 onclick={migrateReview}>Migrate to providers</button>
             </div>
           {/if}
@@ -735,7 +741,7 @@
                     <span>Enabled</span>
                   </label>
                   {#if !d.reviewLegacy}
-                    <button class="text-[11px] text-faint hover:text-bad" onclick={() => removeProvider(p.provider)}>remove</button>
+                    <button class="text-sm text-faint hover:text-bad" onclick={() => removeProvider(p.provider)}>remove</button>
                   {/if}
                 </div>
 
@@ -824,7 +830,7 @@
           {#if !d.reviewLegacy && providers().length === 0}
             <div class="rounded border border-edge/60 px-3 py-3">
               <p class="text-ink">No review pass configured.</p>
-              <p class="mt-1 text-[11px] text-faint">
+              <p class="copy mt-1 text-sm text-faint">
                 A provider runs a QA pass over each pull request and routes its findings back — to the worker agent, the PR, or
                 the Linear issue. Add one below to turn reviews on.
               </p>
@@ -833,10 +839,10 @@
 
           {#if !d.reviewLegacy && missingKinds().length}
             <div class="flex flex-wrap items-center gap-2 border-t border-edge/40 pt-4">
-              <span class="text-faint text-xs">Add provider:</span>
+              <span class="text-sm text-faint">Add provider:</span>
               {#each missingKinds() as k}
                 <button
-                  class="rounded border border-edge px-2 py-1 text-[11px] hover:border-accent"
+                  class="rounded border border-edge px-2 py-1.5 text-sm hover:border-accent"
                   title={KIND_LABELS[k] ?? k}
                   onclick={() => addProvider(k)}>{k}</button
                 >
@@ -852,11 +858,11 @@
        backdrop. A Go error can be long and multi-line, so it wraps rather than
        truncating and stays selectable; dismissable, and cleared on the next save. -->
   {#if saveErr}
-    <div class="mt-3 flex items-start gap-2 rounded border border-bad/40 bg-bad/10 px-3 py-2 text-xs text-bad">
+    <div class="mt-3 flex items-start gap-2 rounded border border-bad/40 bg-bad/10 px-3 py-2 text-sm text-bad">
       <span class="min-w-0 flex-1 font-mono break-words whitespace-pre-wrap select-text">{saveErr}</span>
       <button
         type="button"
-        class="shrink-0 leading-none text-bad/70 hover:text-bad"
+        class="shrink-0 text-bad/70 hover:text-bad"
         aria-label="dismiss error"
         onclick={() => (saveErr = "")}>✕</button
       >
@@ -865,9 +871,9 @@
 
   {#snippet footer()}
     <div class="flex items-center justify-end gap-2">
-      <button class="rounded px-3 py-1 text-xs text-faint hover:text-ink" onclick={requestClose}>cancel</button>
+      <button class="rounded px-3 py-1.5 text-faint hover:text-ink" onclick={requestClose}>cancel</button>
       <button
-        class="rounded bg-accent-fill px-3 py-1 text-xs text-accent-ink hover:bg-accent-fill-hover disabled:opacity-40"
+        class="rounded bg-accent-fill px-3 py-1.5 text-accent-ink hover:bg-accent-fill-hover disabled:opacity-40"
         onclick={save}
         disabled={saving || loading || !dto}>{saving ? "saving…" : "save"}</button
       >

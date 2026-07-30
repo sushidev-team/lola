@@ -16,19 +16,21 @@
 
 {#if !store.connected}
   <!-- No push yet: stay neutral so a cold start never flashes "offline". -->
-  <div class="flex h-full items-center justify-center px-4 py-8 text-center text-sm text-faint">
+  <div class="flex h-full items-center justify-center px-4 py-8 text-center text-faint">
     connecting…
   </div>
 {:else if !store.alive}
   <!-- Daemon is down. Say what happened and give the one recovery action. -->
   <div class="flex h-full flex-col items-center justify-center gap-2 px-6 py-8 text-center">
-    <span class="text-sm font-medium text-bad">The lola daemon isn't running</span>
-    <span class="max-w-xs text-xs text-faint">
+    <!-- text-xl is the ceiling and carries its own 600 — a hero empty state is
+         the one place the app goes above 15px. -->
+    <span class="text-xl text-bad">The lola daemon isn't running</span>
+    <span class="copy text-sm text-faint">
       Nothing can be observed or spawned until it starts. It watches Linear and runs your coding
       agents.
     </span>
     <button
-      class="mt-1 rounded bg-accent-fill px-3 py-1.5 text-xs font-medium text-accent-ink hover:bg-accent-fill-hover"
+      class="mt-1 rounded bg-accent-fill px-3 py-1.5 font-medium text-accent-ink hover:bg-accent-fill-hover"
       onclick={() => store.startDaemon()}>Start the daemon</button
     >
   </div>
