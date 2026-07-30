@@ -165,22 +165,27 @@ tasks:
       - 'echo "Skipping codesign (not available on {{OS}}). Sign the .app on macOS before distribution."'
 
   run:
+    # The dev bundle lives in its own bin/dev/ subdirectory rather than being
+    # named "<APP_NAME>.dev.app", because macOS labels the Dock/Finder entry from
+    # the bundle DIRECTORY name and honours CFBundleDisplayName only when it
+    # matches that filename. A "Lola.dev.app" directory would read "Lola.dev" in
+    # the Dock no matter what the plist says; "dev/Lola.app" reads "Lola".
     cmds:
-      - mkdir -p "{{.BIN_DIR}}/{{.APP_NAME}}.dev.app/Contents/MacOS"
-      - mkdir -p "{{.BIN_DIR}}/{{.APP_NAME}}.dev.app/Contents/Resources"
-      - cp build/darwin/icons.icns "{{.BIN_DIR}}/{{.APP_NAME}}.dev.app/Contents/Resources"
+      - mkdir -p "{{.BIN_DIR}}/dev/{{.APP_NAME}}.app/Contents/MacOS"
+      - mkdir -p "{{.BIN_DIR}}/dev/{{.APP_NAME}}.app/Contents/Resources"
+      - cp build/darwin/icons.icns "{{.BIN_DIR}}/dev/{{.APP_NAME}}.app/Contents/Resources"
       # Reused bundle dir: drop a stale Assets.car so `wails3 dev` shows the
       # icns, not an older Liquid-Glass tile that floats small (see CLAUDE.md).
       - |
         if [ -f build/darwin/Assets.car ]; then
-          cp build/darwin/Assets.car "{{.BIN_DIR}}/{{.APP_NAME}}.dev.app/Contents/Resources"
+          cp build/darwin/Assets.car "{{.BIN_DIR}}/dev/{{.APP_NAME}}.app/Contents/Resources"
         else
-          rm -f "{{.BIN_DIR}}/{{.APP_NAME}}.dev.app/Contents/Resources/Assets.car"
+          rm -f "{{.BIN_DIR}}/dev/{{.APP_NAME}}.app/Contents/Resources/Assets.car"
         fi
-      - cp "{{.BIN_DIR}}/{{.APP_NAME}}" "{{.BIN_DIR}}/{{.APP_NAME}}.dev.app/Contents/MacOS"
-      - cp "build/darwin/Info.dev.plist" "{{.BIN_DIR}}/{{.APP_NAME}}.dev.app/Contents/Info.plist"
-      - codesign --force --deep --sign - "{{.BIN_DIR}}/{{.APP_NAME}}.dev.app"
-      - '"{{.BIN_DIR}}/{{.APP_NAME}}.dev.app/Contents/MacOS/{{.APP_NAME}}"'
+      - cp "{{.BIN_DIR}}/{{.APP_NAME}}" "{{.BIN_DIR}}/dev/{{.APP_NAME}}.app/Contents/MacOS"
+      - cp "build/darwin/Info.dev.plist" "{{.BIN_DIR}}/dev/{{.APP_NAME}}.app/Contents/Info.plist"
+      - codesign --force --deep --sign - "{{.BIN_DIR}}/dev/{{.APP_NAME}}.app"
+      - '"{{.BIN_DIR}}/dev/{{.APP_NAME}}.app/Contents/MacOS/{{.APP_NAME}}"'
 
   sign:
     summary: Signs the application bundle with Developer ID

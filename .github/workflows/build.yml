@@ -53,9 +53,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # Build, sign, notarize and attach the lola-desktop .app (as a universal DMG)
-  # to the SAME release. The in-app updater (desktop/internal/update) downloads
-  # this DMG from the public repo's release.
+  # Build, sign, notarize and attach the desktop .app (as a universal DMG) to the
+  # SAME release. The in-app updater (desktop/internal/update) downloads this DMG
+  # from the public repo's release.
   #
   # Requires the Apple Developer secrets below. Without them this job fails while
   # the CLI release above still succeeds. A notarized DMG is what lets Gatekeeper
@@ -64,7 +64,9 @@ jobs:
     needs: release
     runs-on: macos-latest
     env:
-      APP_PATH: desktop/bin/lola-desktop.app
+      # Must match desktop/Taskfile.yml's APP_NAME — darwin:package:universal
+      # writes bin/{{.APP_NAME}}.app, and sign/notarize/staple/DMG all read this.
+      APP_PATH: desktop/bin/Lola.app
       IDENTITY: 'Developer ID Application: Sushi Dev KG (${{ secrets.APPLE_TEAM_ID }})'
     steps:
       - uses: actions/checkout@v4
@@ -142,7 +144,7 @@ jobs:
           rm -rf dmg-contents && mkdir -p dmg-contents
           cp -R "$APP_PATH" dmg-contents/
           ln -s /Applications dmg-contents/Applications
-          hdiutil create -volname "lola" -srcfolder dmg-contents -ov -format UDZO "$DMG_NAME"
+          hdiutil create -volname "Lola" -srcfolder dmg-contents -ov -format UDZO "$DMG_NAME"
           echo "name=${DMG_NAME}" >> "$GITHUB_OUTPUT"
 
       - name: Sign & notarize the DMG

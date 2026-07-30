@@ -1,7 +1,7 @@
 version: '3'
 info:
   companyName: sushidev
-  productName: lola
+  productName: Lola
   productIdentifier: dev.sushi.lola.desktop
   description: Native cockpit for the lola coding-agent orchestrator
   copyright: (c) 2026, sushidev

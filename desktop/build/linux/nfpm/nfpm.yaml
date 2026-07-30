@@ -17,11 +17,11 @@ license: "MIT"
 release: "1"
 
 contents:
-  - src: "./bin/lola-desktop"
+  - src: "./bin/Lola"
     dst: "/usr/local/bin/lola-desktop"
   - src: "./build/appicon.png"
     dst: "/usr/share/icons/hicolor/128x128/apps/lola-desktop.png"
-  - src: "./build/linux/lola-desktop.desktop"
+  - src: "./build/linux/Lola.desktop"
     dst: "/usr/share/applications/lola-desktop.desktop"
 
 # Default dependencies for the GTK4 + WebKitGTK 6.0 stack (Ubuntu 24.04+ / Debian 13+)

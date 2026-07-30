@@ -1,4 +1,4 @@
-// Command lola-desktop is a native macOS companion to the lola TUI. It is a
+// Command Lola is the native macOS companion to the lola TUI. It is a
 // Wails 3 app: a Go backend that speaks the daemon's unix-socket protocol and a
 // Svelte frontend that renders the same flight-deck the TUI does, with live
 // terminal tiles. The backend is a *client* of the daemon — it never embeds the
@@ -102,7 +102,10 @@ func main() {
 	updater := NewUpdateService()
 
 	app := application.New(application.Options{
-		Name:        "lola",
+		// Name drives the app menu's Hide/Quit/About role labels ("Quit Lola").
+		// The Dock/Finder/Cmd-Tab label comes from the .app bundle DIRECTORY
+		// name instead — see desktop/Taskfile.yml's APP_NAME.
+		Name:        "Lola",
 		Description: "Native cockpit for the lola coding-agent orchestrator",
 		Services: []application.Service{
 			application.NewService(daemon),
@@ -126,14 +129,17 @@ func main() {
 	updater.SetApp(app)
 
 	win := app.Window.NewWithOptions(application.WebviewWindowOptions{
-		Title:            "lola",
-		Width:            1280,
-		Height:           832,
-		MinWidth:         920,
+		Title:  "Lola",
+		Width:  1280,
+		Height: 832,
+		// 1000, not 920: the kanban lens has to keep fitting next to the 248px
+		// sidebar.
+		MinWidth:         1000,
 		MinHeight:        560,
 		BackgroundColour: windowCanvas(),
 		Mac: application.MacWindow{
-			// The whole top strip (the vitals bar) is draggable.
+			// The whole top strip is draggable (the frontend paints a .drag band
+			// across it — the sidebar's brand row plus the main top bar).
 			InvisibleTitleBarHeight: 36,
 			// Opaque, not vibrancy: the TUI theme is deliberately one cohesive
 			// opaque canvas, so we match it rather than letting the desktop bleed
@@ -178,11 +184,11 @@ func main() {
 // hidden window.
 func newStatusBarMenu(app *application.App, win application.Window) {
 	tray := app.SystemTray.New()
-	tray.SetLabel("lola")
-	tray.SetTooltip("lola — coding-agent orchestrator")
+	tray.SetLabel("Lola")
+	tray.SetTooltip("Lola — coding-agent orchestrator")
 
 	menu := app.Menu.New()
-	menu.Add("Open lola").OnClick(func(*application.Context) {
+	menu.Add("Open Lola").OnClick(func(*application.Context) {
 		win.Show()
 		win.Focus()
 	})
@@ -197,7 +203,7 @@ func newStatusBarMenu(app *application.App, win application.Window) {
 		app.Event.Emit(evtOpenUpdate, struct{}{})
 	})
 	menu.AddSeparator()
-	menu.Add("Quit lola").OnClick(func(*application.Context) { app.Quit() })
+	menu.Add("Quit Lola").OnClick(func(*application.Context) { app.Quit() })
 
 	tray.SetMenu(menu)
 }

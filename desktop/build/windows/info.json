@@ -8,7 +8,7 @@
 			"CompanyName": "sushidev",
 			"FileDescription": "Native cockpit for the lola coding-agent orchestrator",
 			"LegalCopyright": "(c) 2026, sushidev",
-			"ProductName": "lola",
+			"ProductName": "Lola",
 			"Comments": "Watches Linear and runs a coding agent per issue in its own git worktree and tmux session."
 		}
 	}

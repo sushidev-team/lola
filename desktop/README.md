@@ -1,4 +1,4 @@
-# lola-desktop
+# Lola (desktop)
 
 A native macOS companion to the lola TUI, built with **Wails 3 + Svelte 5 +
 Tailwind v4 + xterm.js**. It renders the same flight-deck the TUI does — projects,
@@ -31,7 +31,7 @@ desktop/
     │   │   ├── nav.svelte.ts     # view / overlay / selection / lens state
     │   │   ├── theme.ts          # status → color/pill/badge (ported from theme.go)
     │   │   ├── ansi.ts           # ANSI-SGR → HTML for the snapshot tiles
-    │   │   ├── components/       # Panel, Modal, StatusPill, Meter, terminals, …
+    │   │   ├── components/       # Sidebar, Panel, Modal, StatusPill, terminals, …
     │   │   └── views/            # Cockpit, Home, ProjectDetail, PRPicker, …
     │   └── app.css               # Tailwind v4 + theme tokens
     └── bindings/                 # generated TS bindings (wails3 generate bindings)
@@ -62,7 +62,7 @@ cd desktop && wails3 generate bindings -ts -d frontend/bindings
 ```sh
 cd desktop
 wails3 task build      # compiles the binary
-wails3 task package    # → bin/lola-desktop.app  (ad-hoc signed, fine for local use)
+wails3 task package    # → bin/Lola.app  (ad-hoc signed, fine for local use)
 
 # Stamp the in-app version (defaults to "dev" otherwise). The release workflow
 # passes the git tag; do the same locally to test the update flow end-to-end:
@@ -96,8 +96,9 @@ In the app (`internal/update` + `updatesvc.go` → `UpdateService`):
   writes a detached script that waits for this PID to exit, swaps the `.app`, and
   relaunches. `InstallAndRestart` then quits the app so the script can proceed.
 
-UI: the **footer** shows `v<version>` (an `↑ update` badge when one is out) and
-opens the **software-update overlay** (`views/UpdateOverlay.svelte`); the macOS
+UI: the sidebar's **status row** shows `v<version>` (an `↑ update` chip when one
+is out) and opens the **software-update overlay**
+(`views/UpdateOverlay.svelte`); the macOS
 status-bar menu has **Check for Updates…**. A once-a-day auto-check
 (interval-gated in `Prefs`, persisted at `~/.lola/desktop-update.json` — NOT the
 daemon's `config.toml`) drives the badge; a skipped version is remembered there.

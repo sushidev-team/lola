@@ -321,7 +321,7 @@ each of which owns exactly one external tool or concern behind an **exec seam**
 
 ## Desktop app (`desktop/`)
 
-`desktop/` is **lola-desktop**, a native macOS app (Wails 3 + Svelte 5 runes +
+`desktop/` is **Lola**, the native macOS app (Wails 3 + Svelte 5 runes +
 Tailwind v4 + xterm.js) that mirrors the TUI's flight-deck plus a live
 terminal-grid overview. It is a **package inside this Go module** (not a separate
 module) precisely so it can reuse `internal/protocol`, `internal/config`,
@@ -343,11 +343,25 @@ distinct binary from the v2 `wails`. See `desktop/README.md`.
 
 **Gotchas (learned the hard way — don't rediscover them):**
 
-- **`wails3 task build` only rebuilds the loose `bin/lola-desktop`. The `.app`
-  bundle is a copy made by `wails3 task package`.** So `open bin/lola-desktop.app`
+- **`wails3 task build` only rebuilds the loose `bin/Lola`. The `.app`
+  bundle is a copy made by `wails3 task package`.** So `open bin/Lola.app`
   after a `build` launches the *old* bundled binary — every source change looks
   like a no-op. **Iterate with `wails3 dev`** (live source, Web Inspector);
   `wails3 task package` when you want the `.app`.
+- **The Dock/Finder/Cmd-Tab label comes from the `.app` DIRECTORY name, not the
+  plist.** macOS honours `CFBundleDisplayName` only when it matches the on-disk
+  bundle filename case-insensitively; otherwise the filename wins (which is why
+  the Dock used to read `lola-desktop.dev` even though `CFBundleName` was
+  `lola`). So `desktop/Taskfile.yml`'s `APP_NAME: "Lola"` is the load-bearing
+  value: it names `bin/Lola`, `bin/Lola.app` and `bin/dev/Lola.app`, and
+  `build/darwin/Info*.plist`'s `CFBundleExecutable` must stay in lockstep with it
+  (the bundle task copies `bin/{{.APP_NAME}}` into `Contents/MacOS/`; a mismatch
+  makes the bundle unlaunchable). `.github/workflows/build.yml`'s `APP_PATH` must
+  match too — sign/notarize/staple/DMG all read it. The dev bundle is
+  `bin/dev/Lola.app`, not `bin/Lola.dev.app`, for the same reason. Never touch
+  `CFBundleIdentifier` (`dev.sushi.lola.desktop`) — changing it resets TCC grants
+  and orphans Dock tiles. Everything else stays lowercase `lola`: the CLI, the
+  socket, `~/.lola`, `tmux -L lola`, Go module paths, the DMG asset name.
 - **WebKit ≠ Chrome for flex.** The production WKWebView does **not** stretch a
   `display:flex` child inside a flex **column** (it collapses to content width);
   Chrome does, so it looks fine in a browser and broken in the app. Use **CSS

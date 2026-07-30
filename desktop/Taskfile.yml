@@ -1,7 +1,15 @@
 version: '3'
 
 vars:
-  APP_NAME: "lola-desktop"
+  # The user-visible app name. macOS labels the Dock/Finder/Cmd-Tab entry from
+  # the .app bundle's DIRECTORY name — CFBundleDisplayName is only honoured when
+  # it matches that filename case-insensitively — and every darwin task derives
+  # bin/{{.APP_NAME}}, bin/{{.APP_NAME}}.app and bin/dev/{{.APP_NAME}}.app from
+  # this one var. So this, not the plists, is what makes the Dock read "Lola".
+  # Keep build/darwin/Info*.plist's CFBundleExecutable in lockstep: the bundle
+  # task copies bin/{{.APP_NAME}} into Contents/MacOS/ and a mismatch makes the
+  # bundle unlaunchable.
+  APP_NAME: "Lola"
   BIN_DIR: "bin"
   PACKAGE_MANAGER: '{{.PACKAGE_MANAGER | default "npm"}}'
   VITE_PORT: '{{.WAILS_VITE_PORT | default 9245}}'

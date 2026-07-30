@@ -14,9 +14,9 @@
     ProcessorArchitecture="arm64" />
   
   <Properties>
-    <DisplayName>lola</DisplayName>
+    <DisplayName>Lola</DisplayName>
     <PublisherDisplayName>sushidev</PublisherDisplayName>
-    <Description>A lola-desktop application</Description>
+    <Description>Native cockpit for the lola coding-agent orchestrator</Description>
     <Logo>Assets\StoreLogo.png</Logo>
   </Properties>
   
@@ -29,10 +29,10 @@
   </Resources>
   
   <Applications>
-    <Application Id="dev.sushi.lola.desktop" Executable="lola-desktop" EntryPoint="Windows.FullTrustApplication">
+    <Application Id="dev.sushi.lola.desktop" Executable="Lola" EntryPoint="Windows.FullTrustApplication">
       <uap:VisualElements
-        DisplayName="lola"
-        Description="A lola-desktop application"
+        DisplayName="Lola"
+        Description="Native cockpit for the lola coding-agent orchestrator"
         BackgroundColor="transparent"
         Square150x150Logo="Assets\Square150x150Logo.png"
         Square44x44Logo="Assets\Square44x44Logo.png">
@@ -41,7 +41,7 @@
       </uap:VisualElements>
       
       <Extensions>
-        <desktop:Extension Category="windows.fullTrustProcess" Executable="lola-desktop" />
+        <desktop:Extension Category="windows.fullTrustProcess" Executable="Lola" />
         
         
       </Extensions>

@@ -2,8 +2,10 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>CFBundleDisplayName</key>
+	<string>Lola</string>
 	<key>CFBundleExecutable</key>
-	<string>lola-desktop</string>
+	<string>Lola</string>
 	<key>CFBundleGetInfoString</key>
 	<string>Watches Linear and runs a coding agent per issue in its own git worktree and tmux session.</string>
 	<key>CFBundleIconFile</key>
@@ -11,7 +13,7 @@
 	<key>CFBundleIdentifier</key>
 	<string>dev.sushi.lola.desktop</string>
 	<key>CFBundleName</key>
-	<string>lola</string>
+	<string>Lola</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
