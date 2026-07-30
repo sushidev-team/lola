@@ -3,6 +3,7 @@ package update
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -179,5 +180,48 @@ func TestShouldAutoCheck(t *testing.T) {
 	stale := Prefs{AutoCheck: true, CheckIntervalHours: 24, LastCheckTime: now.Add(-25 * time.Hour)}
 	if !stale.ShouldAutoCheck(now) {
 		t.Error("checked 25h ago (24h interval) should check")
+	}
+}
+
+// A case-only difference is NOT a rename. macOS volumes are case-insensitive by
+// default, so /Applications/lola.app and /Applications/Lola.app are one
+// directory: emitting the "drop the old bundle" block would delete the bundle
+// the script had just installed, leaving the user with nothing. This is the
+// exact shape of the app-rename this release ships, one normalization later.
+func TestUpdaterScriptNoDeleteOnCaseOnlyRename(t *testing.T) {
+	script := updaterScript(123, "/Applications/Lola.app", "/tmp/stage/Lola.app", "/Applications/lola.app")
+	if strings.Contains(script, "rm -rf \"/Applications/lola.app\"") {
+		t.Fatalf("case-only rename must not delete the old path:\n%s", script)
+	}
+	if strings.Contains(script, "# The bundle was renamed") {
+		t.Errorf("case-only rename must not emit the removal block:\n%s", script)
+	}
+}
+
+// The ordinary update: same name in, same name out, nothing extra removed.
+func TestUpdaterScriptNoRemovalWhenNameUnchanged(t *testing.T) {
+	script := updaterScript(123, "/Applications/Lola.app", "/tmp/stage/Lola.app", "/Applications/Lola.app")
+	if strings.Contains(script, "# The bundle was renamed") {
+		t.Errorf("unchanged name must not emit the removal block:\n%s", script)
+	}
+}
+
+// A genuine rename removes the old directory — otherwise two bundles sit in
+// /Applications and Launch Services keeps offering the stale one — but only
+// after `mv` succeeded and the destination is verified present.
+func TestUpdaterScriptRemovesOldBundleOnRealRenameOnlyAfterSuccess(t *testing.T) {
+	script := updaterScript(123, "/Applications/Lola.app", "/tmp/stage/Lola.app", "/Applications/lola-desktop.app")
+	if !strings.Contains(script, `rm -rf "/Applications/lola-desktop.app"`) {
+		t.Fatalf("a real rename must drop the old bundle:\n%s", script)
+	}
+	if !strings.Contains(script, `mv "/tmp/stage/Lola.app" "/Applications/Lola.app" || exit 1`) {
+		t.Errorf("the move must abort the script on failure:\n%s", script)
+	}
+	if !strings.Contains(script, `if [ -d "/Applications/Lola.app" ]; then`) {
+		t.Errorf("removal must be guarded on the destination existing:\n%s", script)
+	}
+	// The guard has to come BEFORE the delete, not merely exist somewhere.
+	if strings.Index(script, "if [ -d") > strings.Index(script, `rm -rf "/Applications/lola-desktop.app"`) {
+		t.Error("the -d guard must precede the removal")
 	}
 }
