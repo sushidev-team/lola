@@ -423,3 +423,63 @@ func TestAdoptPurgesShellTabPhantoms(t *testing.T) {
 		t.Fatal("real session must survive the purge")
 	}
 }
+
+// LastNotification / InputReason describe a WAITING_INPUT agent, and the
+// adoption merge assigns them directly — bypassing SetAgentState, the mutator
+// that clears them on a transition off waiting_input, since Reroll only
+// recomputes the rollup. Carried unconditionally, a daemon restart reinstated an
+// answered prompt onto a session Adopt had just scanned as working: the cockpit
+// showed a stale "waiting for your input" on a busy agent, and statusagentwire
+// fed that same line to the interpreter as CURRENT context. It self-healed only
+// on the next real axis transition.
+func TestAdoptDropsNotificationWhenAgentResumed(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("LOLA_HOME", home)
+	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, nil)
+
+	prior := nativeSess("FE-1", "needs_input")
+	prior.SetAgentState(state.AgentWaitingInput, "", time.Now())
+	prior.LastNotification = "Claude is waiting for your input"
+	prior.InputReason = state.InputQuestion
+	d.sessions.Upsert(prior)
+
+	// The human answered before the restart; the pane scan sees a busy agent.
+	adopted := prior
+	adopted.SetAgentState(state.AgentWorking, "", time.Now())
+	d.native = &fakeNative{adopted: []session.Session{adopted}}
+	d.adoptNativeSessions(context.Background())
+
+	got := getSess(t, d, prior.ID)
+	if got.LastNotification != "" {
+		t.Errorf("LastNotification = %q, want dropped for a session adopted as working", got.LastNotification)
+	}
+	if got.InputReason != "" {
+		t.Errorf("InputReason = %q, want dropped", got.InputReason)
+	}
+}
+
+// The mirror case: a session still parked on the prompt keeps its message, so
+// the restart does not blank a genuinely-waiting row.
+func TestAdoptKeepsNotificationWhileStillWaiting(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("LOLA_HOME", home)
+	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, nil)
+
+	prior := nativeSess("FE-2", "needs_input")
+	prior.SetAgentState(state.AgentWaitingInput, "", time.Now())
+	prior.LastNotification = "Claude needs your permission to run rm"
+	prior.InputReason = state.InputPermission
+	d.sessions.Upsert(prior)
+
+	adopted := prior // still waiting_input
+	d.native = &fakeNative{adopted: []session.Session{adopted}}
+	d.adoptNativeSessions(context.Background())
+
+	got := getSess(t, d, prior.ID)
+	if got.LastNotification != "Claude needs your permission to run rm" {
+		t.Errorf("LastNotification = %q, want preserved while still waiting", got.LastNotification)
+	}
+	if got.InputReason != state.InputPermission {
+		t.Errorf("InputReason = %q, want preserved", got.InputReason)
+	}
+}

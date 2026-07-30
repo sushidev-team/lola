@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/sushidev-team/lola/internal/scm"
+	"github.com/sushidev-team/lola/internal/state"
 )
 
 func TestRoundTrip(t *testing.T) {
@@ -592,5 +593,34 @@ func TestMigrateReviewStateThroughLoad(t *testing.T) {
 	}
 	if got.ReviewWatermarks["coderabbit-watch"].IsZero() {
 		t.Errorf("fold on load missed LastCodeRabbitAt: ReviewWatermarks = %v", got.ReviewWatermarks)
+	}
+}
+
+// LastNotification describes a waiting_input condition, so it must not outlive
+// it. It used to: only InputReason was cleared on the transition, so after a
+// human answered and the agent resumed, the cockpit kept showing the answered
+// prompt ("Claude is waiting for your input") on a session that was busy — and
+// statusagentwire fed that same stale line to the interpreter as CURRENT
+// context, biasing its judgement toward "waiting".
+func TestSetAgentStateClearsNotificationOnLeavingWaitingInput(t *testing.T) {
+	now := time.Now()
+	var s Session
+	s.SetAgentState(state.AgentWaitingInput, "", now)
+	s.LastNotification = "Claude is waiting for your input"
+	s.InputReason = state.InputQuestion
+
+	// Still waiting: the message is current, keep it.
+	s.SetAgentState(state.AgentWaitingInput, "", now.Add(time.Second))
+	if s.LastNotification == "" {
+		t.Fatal("a no-op transition must not clear the notification")
+	}
+
+	// The human answered and the agent went back to work.
+	s.SetAgentState(state.AgentWorking, state.SourceHook, now.Add(2*time.Second))
+	if s.LastNotification != "" {
+		t.Errorf("LastNotification = %q, want cleared once the agent left waiting_input", s.LastNotification)
+	}
+	if s.InputReason != "" {
+		t.Errorf("InputReason = %q, want cleared", s.InputReason)
 	}
 }

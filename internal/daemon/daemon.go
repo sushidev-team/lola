@@ -881,9 +881,20 @@ func (d *Daemon) adoptNativeSessions(ctx context.Context) {
 				s.AtPrompt = prev.AtPrompt
 				s.LastActivityAt = prev.LastActivityAt
 				s.ActivitySource = prev.ActivitySource
-				s.InputReason = prev.InputReason
 				s.CurrentTool = prev.CurrentTool
-				s.LastNotification = prev.LastNotification
+				// InputReason and LastNotification DESCRIBE a waiting_input agent, so
+				// they may only be carried onto one. This assignment bypasses
+				// SetAgentState — the mutator that clears them on a transition off
+				// waiting_input — and s.Reroll below only recomputes the rollup, so
+				// carrying them unconditionally reinstated an answered prompt onto a
+				// session that Adopt had just scanned as WORKING. That is precisely the
+				// staleness the mutator's clear exists to prevent, leaking back in
+				// across every daemon restart and self-healing only on the next real
+				// axis transition.
+				if s.AgentState == state.AgentWaitingInput {
+					s.InputReason = prev.InputReason
+					s.LastNotification = prev.LastNotification
+				}
 				s.TranscriptPath = prev.TranscriptPath
 				s.LastReactedStatus = prev.LastReactedStatus
 				s.CIRetries = prev.CIRetries

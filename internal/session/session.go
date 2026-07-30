@@ -339,6 +339,14 @@ func (s *Session) SetAgentState(a state.AgentState, src state.ActivitySource, no
 		s.AgentStateSince = now
 		if a != state.AgentWaitingInput {
 			s.InputReason = ""
+			// LastNotification DESCRIBES the waiting_input condition ("Claude is
+			// waiting for your input", a permission prompt, …). It used to outlive
+			// it: only InputReason was cleared here, so once the human answered and
+			// the agent went back to work the UI kept showing the answered prompt —
+			// and statusagentwire fed that same stale line to the interpreter as
+			// current context, biasing its judgement toward "waiting". The message
+			// is history the moment the axis moves off waiting_input.
+			s.LastNotification = ""
 		}
 		if a != state.AgentWorking && a != state.AgentStarting {
 			s.CurrentTool = ""
