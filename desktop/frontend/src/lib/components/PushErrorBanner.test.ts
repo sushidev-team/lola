@@ -4,7 +4,7 @@ import PushErrorBanner from "./PushErrorBanner.svelte";
 import { store } from "$lib/store.svelte";
 
 // The 2s push path used to swallow per-command errors, so an out-of-date daemon
-// silently blanked reads (the Rail, status). The banner surfaces it.
+// silently blanked reads (the sidebar, status). The banner surfaces it.
 describe("PushErrorBanner", () => {
   beforeEach(() => {
     cleanup();

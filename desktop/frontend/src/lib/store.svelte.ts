@@ -62,9 +62,9 @@ class Store {
   // Push-loop command failures keyed by command name. The 2s push path (main.go
   // pushLoop) swallowed per-command errors, so a daemon predating a command
   // (answering `unknown cmd`) silently blanked that read — e.g. Projects → an
-  // empty Rail with no reason. The backend now emits `daemon:pusherr` on a change
-  // (a non-empty msg on failure, "" when it recovers), and this holds the current
-  // set so a dismissible banner can explain it. Dismissing clears the local copy;
+  // empty sidebar with no reason. The backend now emits `daemon:pusherr` on a
+  // change (a non-empty msg on failure, "" when it recovers), and this holds the
+  // current set so a dismissible banner can explain it. Dismissing clears it;
   // a persistent failure is not re-emitted, so it stays dismissed.
   pushErrors = $state<Record<string, string>>({});
 
@@ -80,20 +80,13 @@ class Store {
     return null;
   });
 
-  /** Count of sessions parked on a human. */
-  needsYou = $derived(
-    this.sessions.filter((s) =>
-      ["needs_input", "ci_failed", "changes_requested", "merge_conflict"].includes(s.status),
-    ).length,
-  );
-
   // WKWEBVIEW: `sessions` and `activity` both arrive on the SAME daemon push, but
   // writing them in the SAME synchronous flush corrupts the sessions signal for
   // sibling components in the production WKWebView — verified live: the sessions
   // list stayed empty on startup and the lower terminal never followed the
-  // selection WHENEVER any component also read store.activity (the rail's Activity
-  // feed). Deferring the activity write to its own task puts it in a separate
-  // flush and the corruption disappears. A MACROTASK (setTimeout) is required — a
+  // selection WHENEVER any component also read store.activity (the sidebar's
+  // Activity feed). Deferring the activity write to its own task puts it in a
+  // separate flush and the corruption disappears. A MACROTASK (setTimeout) is required — a
   // microtask still batches with Svelte's flush and does not fix it. The ~1-frame
   // lag on the activity feed is imperceptible. Route EVERY activity write through
   // here; never assign this.activity in the same statement block as this.sessions.

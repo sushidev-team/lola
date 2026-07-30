@@ -523,8 +523,8 @@ export const ACCENT_FILL = 0.2;
  *
  * Every one of those seven is then run through readable() against the three
  * surfaces the app prints them on — canvas, panel and the selected-row band.
- * They are the STATUS colors (theme.ts statusText/reactingText), and Rail,
- * SessionsTable, SessionsKanban, VitalsBar and ProjectDetail print them bare,
+ * They are the STATUS colors (theme.ts statusText/reactingText), and the sidebar,
+ * SessionsTable, SessionsKanban and ProjectDetail print them bare,
  * with no fill of their own to lean on. On the dark flavors the names already
  * clear AA and come back verbatim, so the default theme does not move. Latte's
  * do not: green 2.92, yellow 2.29 and peach 2.61 on a panel — Catppuccin tunes

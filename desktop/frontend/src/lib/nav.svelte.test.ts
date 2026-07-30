@@ -6,6 +6,10 @@ beforeEach(() => {
   nav.lens = "list";
   nav.focusedTerm = "";
   nav.overlay = null;
+  nav.triage = "";
+  nav.sidebarOpen = true;
+  nav.scoped = false;
+  nav.project = "";
 });
 
 describe("nav.cycleLens", () => {
@@ -70,5 +74,37 @@ describe("nav.setLens", () => {
     nav.cycleLens(); // kanban → grid
     expect(nav.lens).toBe("grid");
     expect(nav.focusedTerm).toBe("");
+  });
+});
+
+describe("nav.toggleSidebar", () => {
+  it("toggles the sidebar on and off (the b shortcut)", () => {
+    expect(nav.sidebarOpen).toBe(true);
+    nav.toggleSidebar();
+    expect(nav.sidebarOpen).toBe(false);
+    nav.toggleSidebar();
+    expect(nav.sidebarOpen).toBe(true);
+  });
+});
+
+describe("nav.setTriage", () => {
+  it("sets and clears the triage filter", () => {
+    nav.setTriage("Needs You");
+    expect(nav.triage).toBe("Needs You");
+    nav.setTriage("");
+    expect(nav.triage).toBe("");
+  });
+
+  // Project scope and triage COMPOSE: scoping to a project must not silently
+  // widen the list back to every status, or "show me what needs me" evaporates
+  // the moment you click a project.
+  it("survives goCockpit — scope and filter compose", () => {
+    nav.setTriage("Fixing");
+    nav.goCockpit("nori");
+    expect(nav.scoped).toBe(true);
+    expect(nav.project).toBe("nori");
+    expect(nav.triage).toBe("Fixing");
+    nav.goCockpit("");
+    expect(nav.triage).toBe("Fixing");
   });
 });

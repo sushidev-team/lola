@@ -5,9 +5,12 @@
   import { updates } from "$lib/update.svelte";
   import { nav } from "$lib/nav.svelte";
   import { terms } from "$lib/terms.svelte";
-  import VitalsBar from "$lib/components/VitalsBar.svelte";
+  import { triaged } from "$lib/filters";
+  import { reflowGridRows } from "$lib/reflow";
+  import Sidebar from "$lib/components/Sidebar.svelte";
+  import MainTopBar from "$lib/components/MainTopBar.svelte";
   import PushErrorBanner from "$lib/components/PushErrorBanner.svelte";
-  import Footer from "$lib/components/Footer.svelte";
+  import Toast from "$lib/components/Toast.svelte";
   import Cockpit from "$lib/views/Cockpit.svelte";
   import Home from "$lib/views/Home.svelte";
   import ProjectDetail from "$lib/views/ProjectDetail.svelte";
@@ -25,13 +28,14 @@
   import { overlayClose } from "$lib/overlayClose";
   import Setup from "$lib/views/Setup.svelte";
 
-  // The currently-selected cockpit session, for footer hints + actions.
+  // The currently-selected cockpit session — the target of every session action
+  // the global key handler fires.
   const sel = $derived(store.sessionById(nav.selectedId));
 
   onMount(() => {
     store.start();
-    // Load the version + run the interval-gated startup auto-check so the footer
-    // can surface a badge when a release is out.
+    // Load the version + run the interval-gated startup auto-check so the
+    // sidebar's utility row can surface a badge when a release is out.
     void updates.init();
     // The macOS status-bar menu cannot open an overlay itself — it is nav state
     // that lives here — so it asks. See newStatusBarMenu in main.go.
@@ -53,9 +57,11 @@
   }
 
   // The cockpit's visible rows, in the SAME order the table renders (shared with
-  // Cockpit.svelte via scopedSessions) so arrow-key movement matches the list.
+  // Cockpit.svelte via scopedSessions) and through the SAME triage filter the
+  // sidebar applies — otherwise arrow-key movement walks a different list than
+  // the one on screen.
   function cockpitRows(): SessionInfo[] {
-    return scopedSessions(store.sessions, nav.scoped, nav.project);
+    return triaged(scopedSessions(store.sessions, nav.scoped, nav.project), nav.triage);
   }
 
   function moveSel(delta: number) {
@@ -222,8 +228,15 @@
       case "S":
         nav.openOverlay("settings");
         return;
+      case "b":
+        nav.toggleSidebar();
+        return;
+      // Escape unwinds ONE layer per press, outermost first: leave a view, then
+      // drop the triage filter, then leave the project scope. Collapsing them
+      // into one press would throw away two decisions on a reflex key.
       case "Escape":
         if (nav.view !== "cockpit") nav.goCockpit(nav.scoped ? nav.project : "");
+        else if (nav.triage !== "") nav.setTriage("");
         else if (nav.scoped) nav.goCockpit("");
         return;
     }
@@ -241,50 +254,59 @@
     <Setup />
   </div>
 {:else}
-<div class="flex h-full flex-col bg-canvas text-ink">
-  <VitalsBar />
-  <!-- Out-of-date-daemon banner: always mounted (so it reacts), self-hides when
-       there is no push error. See PushErrorBanner / store.pushErrors. -->
-  <PushErrorBanner />
+<!-- Two columns, as a CSS GRID: grid cells stretch reliably in WKWebView, a
+     display:flex child of a flex column does not. Collapse is the first track
+     going to 0px — never an {#if}, which would remount the sidebar. -->
+<div
+  class="grid h-full bg-canvas text-ink"
+  style="grid-template-columns:{nav.sidebarOpen ? '248px' : '0px'} minmax(0,1fr)"
+>
+  <!-- Full height, ALWAYS MOUNTED. Collapse is the grid track going to 0px plus
+       overflow-hidden + inert inside — never an {#if}. A new mount boundary in
+       this template is what froze the template effect before. -->
+  <Sidebar />
 
-  <!-- The Cockpit stays MOUNTED for every view. Unmounting it tears down its live
-       LiveTerminals, and a LiveTerminal unmount freezes THIS component's template
-       effect in the production WKWebView — the same failure as the fullscreen
-       toggle (see SessionsColumn / CockpitLayout). Once frozen, later nav.view
-       changes stop re-rendering, which is why the projects "back" did nothing. So
-       the other views render as an opaque overlay ON TOP of the cockpit instead of
-       replacing it; nav.view changes now always re-render. -->
-  <main class="relative min-h-0 flex-1 overflow-hidden">
-    <Cockpit />
-    {#if nav.view !== "cockpit"}
-      <div class="absolute inset-0 z-40 overflow-hidden bg-canvas">
-        {#if nav.view === "home"}
-          <Home />
-        {:else if nav.view === "detail"}
-          <ProjectDetail />
-        {:else if nav.view === "prpicker"}
-          <PRPicker />
-        {:else if nav.view === "ticketpicker"}
-          <TicketPicker />
-        {/if}
-      </div>
-    {/if}
-  </main>
+  <div class="grid min-h-0 min-w-0" style="grid-template-rows:44px auto minmax(0,1fr)" {@attach reflowGridRows}>
+    <MainTopBar />
+    <!-- Out-of-date-daemon banner: always mounted (so it reacts), self-hides when
+         there is no push error. The WRAPPER is what must always render: the banner
+         itself emits NO DOM node when there is no error, and auto-placement then
+         shifts <main> up into the `auto` row, leaving `minmax(0,1fr)` empty — the
+         whole cockpit collapses to content height and the terminal stops reaching
+         the bottom. An always-present empty div pins each child to its own row and
+         costs 0px when there is nothing to show. See PushErrorBanner /
+         store.pushErrors. -->
+    <div class="min-w-0"><PushErrorBanner /></div>
 
-  <Footer>
-    {#snippet hints()}
-      <!-- Truthful per context: the shell/tab keys are no-ops in the grid lens
-           (there is no embed to open them in), so don't advertise them there. -->
-      {#if nav.view === "cockpit" && nav.lens === "grid"}
-        <span class="tabular-nums">↑↓</span> move · <span class="tabular-nums">⏎</span> open · V lens · x kill · p projects · ? help
-      {:else if nav.view === "cockpit"}
-        <span class="tabular-nums">↑↓</span> move · <span class="tabular-nums">⏎</span> terminal · s shell · V lens · x kill · p projects · ? help
-      {:else}
-        esc back · p projects · ? help
+    <!-- The Cockpit stays MOUNTED for every view. Unmounting it tears down its live
+         LiveTerminals, and a LiveTerminal unmount freezes THIS component's template
+         effect in the production WKWebView — the same failure as the fullscreen
+         toggle (see SessionsColumn / CockpitLayout). Once frozen, later nav.view
+         changes stop re-rendering, which is why the projects "back" did nothing. So
+         the other views render as an opaque overlay ON TOP of the cockpit instead of
+         replacing it; nav.view changes now always re-render. -->
+    <main class="relative min-h-0 overflow-hidden">
+      <Cockpit />
+      {#if nav.view !== "cockpit"}
+        <div class="absolute inset-0 z-40 overflow-hidden bg-canvas">
+          {#if nav.view === "home"}
+            <Home />
+          {:else if nav.view === "detail"}
+            <ProjectDetail />
+          {:else if nav.view === "prpicker"}
+            <PRPicker />
+          {:else if nav.view === "ticketpicker"}
+            <TicketPicker />
+          {/if}
+        </div>
       {/if}
-    {/snippet}
-  </Footer>
+    </main>
+  </div>
 </div>
+
+<!-- Action results. Outside the grid on purpose: it is `fixed`, and a transient
+     message must cost the layout nothing. -->
+<Toast />
 
 {#if nav.overlay === "doctor"}
   <DoctorOverlay />

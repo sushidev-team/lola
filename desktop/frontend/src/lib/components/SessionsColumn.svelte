@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { store } from "$lib/store.svelte";
   import { nav } from "$lib/nav.svelte";
   import Panel from "./Panel.svelte";
   import SessionsTable from "./SessionsTable.svelte";
@@ -12,51 +11,37 @@
   // it directly (see WKWEBVIEW_REACTIVITY in Cockpit.svelte). Reads the live store
   // itself; the underlying reactivity is sound because the store no longer writes
   // sessions + activity in the same flush (see store.svelte.ts).
-  const lensLabel = $derived(nav.lens === "list" ? "list" : nav.lens === "kanban" ? "kanban" : "grid");
-  const count = $derived(store.sessions.length);
+  //
+  // The panel is deliberately UNTITLED now: <MainTopBar> names the view, counts
+  // its rows and owns the lens switcher, so a second title + count + accent
+  // border here was two chrome bars saying the same thing.
 
   // "Focus" (fullscreen) is a CSS state on the SAME detail terminal, NOT a
   // separate `{#if}` branch: mounting/unmounting a LiveTerminal on a toggle freezes
   // the template effect in WKWebView (see CockpitLayout.svelte). So the detail
   // SessionEmbed stays mounted and its wrapper simply becomes a fixed overlay.
   const focused = $derived(!!nav.focusedTerm);
-
-  const lenses: { id: "list" | "kanban" | "grid"; icon: string; label: string }[] = [
-    { id: "list", icon: "≡", label: "list" },
-    { id: "kanban", icon: "▤", label: "board" },
-    { id: "grid", icon: "▦", label: "terminals" },
-  ];
 </script>
 
 <!-- a grid so panels stretch to full width AND height in WebKit; the fr-rows +
-     reflowGridRows dance is the layout fix documented in $lib/reflow. -->
+     reflowGridRows dance is the layout fix documented in $lib/reflow.
+
+     The list row is `fit-content(45vh)`, NOT a fraction: a fixed 2fr/3fr split
+     left a half-empty sessions panel whenever there were only a handful of
+     sessions, and pinned the terminal to a fraction of the column instead of the
+     bottom. fit-content sizes the row to the table's own height and caps it at
+     45vh, past which the table scrolls inside its panel — so the terminal always
+     takes every remaining pixel down to the bottom edge, and short lists give it
+     more of them. The terminal row keeps `minmax(0,1fr)` so it absorbs the rest. -->
 <div
-  class="grid min-w-0 min-h-0 gap-2"
-  style="grid-template-rows:{nav.lens === 'grid' ? 'minmax(0,1fr)' : 'minmax(0,2fr) minmax(0,3fr)'}"
+  class="grid min-h-0 min-w-0 gap-3"
+  style="grid-template-rows:{nav.lens === 'grid' ? 'minmax(0,1fr)' : 'fit-content(45vh) minmax(0,1fr)'}"
   {@attach reflowGridRows}
 >
-  <Panel
-    title={nav.scoped ? `Sessions · ${store.displayNameFor(nav.project)}` : "Sessions"}
-    note={lensLabel}
-    {count}
-    focused
-    pad={false}
-  >
-    {#snippet actions()}
-      <span class="flex items-center gap-0.5 rounded border border-edge p-0.5">
-        {#each lenses as l (l.id)}
-          <button
-            class="rounded px-1.5 py-[1px] text-[11px] font-normal"
-            class:bg-accent={nav.lens === l.id}
-            class:text-on-accent={nav.lens === l.id}
-            class:text-faint={nav.lens !== l.id}
-            title={l.label}
-            onclick={() => nav.setLens(l.id)}>{l.icon}</button
-          >
-        {/each}
-      </span>
-    {/snippet}
-
+  <!-- Accented while the terminal is NOT focused, i.e. exactly when j/k/Enter go
+       to this list. In split view both panels previously rendered unfocused, so
+       nothing on screen said which pane the keyboard was driving. -->
+  <Panel pad={false} focused={!focused}>
     {#if nav.lens === "list"}
       <SessionsTable />
     {:else if nav.lens === "kanban"}
@@ -67,10 +52,21 @@
   </Panel>
 
   {#if nav.lens !== "grid"}
-    <!-- Detail / live terminal. When focused, the wrapper becomes a fixed overlay
-         covering the cockpit area (between the top bar and footer); the SessionEmbed
-         instance is unchanged, so the terminal resizes without remounting. -->
-    <div class={focused ? "fixed inset-x-0 top-9 bottom-8 z-30 flex min-h-0 p-2" : "contents"}>
+    <!-- Detail / live terminal. When focused, the wrapper becomes an overlay
+         covering the cockpit area; the SessionEmbed instance is unchanged, so the
+         terminal resizes without remounting. The sidebar stays visible on purpose
+         — losing all navigation on Enter is disorienting, and a terminal running
+         under the traffic lights looks broken.
+
+         `absolute inset-0`, NOT `fixed` offset by --app-sidebar-w: <main> is the
+         nearest positioned ancestor and already spans exactly the cockpit area,
+         so the overlay lands on the right rectangle by construction instead of by
+         arithmetic. The fixed version was pinned at `top-11` — the top bar's
+         height alone — so whenever PushErrorBanner occupied its row the focused
+         terminal covered the "daemon is out of date" alert. -->
+    <div
+      class={focused ? "absolute inset-0 z-30 flex min-h-0 p-3" : "contents"}
+    >
       <Panel focused={focused} fill={focused} pad={false}>
         <SessionEmbed sessionId={nav.selectedId} {focused} />
       </Panel>

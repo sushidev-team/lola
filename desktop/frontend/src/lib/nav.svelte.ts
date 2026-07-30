@@ -9,6 +9,17 @@ export type View = "cockpit" | "home" | "detail" | "prpicker" | "ticketpicker";
 export type Overlay = null | "doctor" | "settings" | "project" | "setup" | "update" | "help";
 export type Lens = "list" | "kanban" | "grid";
 
+/** Webview-local sidebar preference. Deliberately NOT in config.toml. */
+const SIDEBAR_KEY = "lola.sidebar";
+
+function readSidebar(): boolean {
+  try {
+    return localStorage.getItem(SIDEBAR_KEY) !== "0";
+  } catch {
+    return true; // storage unavailable → the sidebar is the default state
+  }
+}
+
 class Nav {
   view = $state<View>("cockpit");
   /** Project name backing detail/pickers and the cockpit's project scope. */
@@ -26,7 +37,37 @@ class Nav {
   lens = $state<Lens>("list");
   /** The session whose live terminal is expanded/focused ("" = none). */
   focusedTerm = $state<string>("");
+  /**
+   * Sidebar visible. Webview-local UI state — NOT a config.toml key; the daemon
+   * and the TUI never learn about it. Mirrored to localStorage so the choice
+   * survives a relaunch, best-effort: a webview preference is never worth
+   * throwing over.
+   */
+  sidebarOpen = $state(readSidebar());
+  /**
+   * Active triage filter — "" = all. One of $lib/filters' TRIAGE_FILTERS, i.e. a
+   * KANBAN_COLUMNS title, so the sidebar filter and the kanban lens partition
+   * sessions the same way.
+   */
+  triage = $state<string>("");
 
+  toggleSidebar() {
+    this.sidebarOpen = !this.sidebarOpen;
+    try {
+      localStorage.setItem(SIDEBAR_KEY, this.sidebarOpen ? "1" : "0");
+    } catch {
+      /* private mode / disabled storage — the preference just doesn't persist */
+    }
+  }
+  setTriage(t: string) {
+    this.triage = t;
+  }
+
+  /**
+   * Deliberately does NOT reset `triage`: the project scope and the triage
+   * filter compose, so switching projects keeps "show me only what needs me".
+   * Escape unwinds them one at a time (App.svelte's key handler).
+   */
   goCockpit(scopeProject = "") {
     this.view = "cockpit";
     this.scoped = scopeProject !== "";

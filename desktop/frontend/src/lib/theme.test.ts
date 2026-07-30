@@ -61,7 +61,7 @@ describe("pillClasses", () => {
 describe("statusText", () => {
   it("never hands a bare caller a color that assumes a fill behind it", () => {
     // statusText has three callers and only ONE of them (pillClasses) paints a
-    // fill first: Rail and SessionsKanban print it straight onto a panel. So
+    // fill first: the sidebar and SessionsKanban print it straight onto a panel. So
     // `dead` returning a built-in white was 1.14:1 on latte's panel. It is a
     // bad-family status and now says so; the pill supplies its own on-fill
     // foreground separately.

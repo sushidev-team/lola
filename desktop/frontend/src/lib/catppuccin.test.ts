@@ -374,8 +374,8 @@ describe("accent legibility", () => {
 });
 
 describe("semantic text tokens", () => {
-  // The six colors theme.ts turns a status into. Rail, SessionsTable,
-  // SessionsKanban, PrBadge, VitalsBar, DoctorOverlay and ProjectDetail print
+  // The six colors theme.ts turns a status into. The sidebar, SessionsTable,
+  // SessionsKanban, PrBadge, DoctorOverlay and ProjectDetail print
   // them BARE — no fill of their own — so the surface underneath is whatever
   // the row happens to be sitting on.
   const SEMANTIC = ["good", "bad", "warn", "info", "orange", "magenta"];

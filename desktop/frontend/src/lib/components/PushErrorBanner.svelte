@@ -5,8 +5,8 @@
   // reacts to pushError in the production WKWebView. See WKWEBVIEW_REACTIVITY.
   //
   // A live push error is almost always an out-of-date daemon: a `lola run`
-  // predating a command answers `unknown cmd`, which used to just blank the Rail
-  // / status with no explanation. Restarting it re-execs the newest binary.
+  // predating a command answers `unknown cmd`, which used to just blank the
+  // sidebar / status with no explanation. Restarting it re-execs the newest binary.
   const err = $derived(store.pushError);
 
   // Only `unknown cmd` actually proves a version skew. Any other failure from a
@@ -17,7 +17,7 @@
 
 {#if err}
   <div
-    class="flex shrink-0 items-center gap-3 border-b border-warn/40 bg-warn/10 px-4 py-1.5 text-xs text-ink"
+    class="flex shrink-0 items-center gap-3 border-b border-warn/40 bg-warn/10 px-4 py-2 text-ink"
     role="alert"
   >
     <span class="shrink-0 text-warn">⚠</span>
@@ -25,9 +25,9 @@
       {#if stale}
         The daemon is out of date — restart it to pick up the latest build.
       {:else}
-        The daemon failed to answer <span class="font-mono">{err.cmd}</span>, so that panel may be stale.
+        The daemon failed to answer <span class="font-mono text-sm">{err.cmd}</span>, so that panel may be stale.
       {/if}
-      <span class="selectable text-faint">({err.cmd}: {err.msg})</span>
+      <span class="selectable text-sm text-faint">({err.cmd}: {err.msg})</span>
     </span>
     {#if stale}
       <button

@@ -1,5 +1,4 @@
 <script lang="ts">
-  import Rail from "$lib/components/Rail.svelte";
   import SessionsColumn from "$lib/components/SessionsColumn.svelte";
   import AutoSelect from "$lib/components/AutoSelect.svelte";
 
@@ -10,16 +9,16 @@
   // either branch wedged it). So the split view is ALWAYS mounted and "focus"
   // (fullscreen) is done by SessionsColumn expanding its EXISTING detail terminal
   // to a fixed overlay via CSS — no remount, no freeze. See SessionsColumn.svelte.
+  //
+  // The left rail is gone: triage, projects and activity moved into the app-level
+  // <Sidebar>, so the cockpit is a single full-width column. It stays a GRID (not
+  // a bare block) because grid cells stretch to the container in WKWebView, which
+  // is what gives SessionsColumn its height.
 </script>
 
-<div class="grid h-full min-h-0 gap-2 p-2" style="grid-template-columns:300px minmax(0,1fr)">
+<div class="grid h-full min-h-0 p-3" style="grid-template-columns:minmax(0,1fr)">
   <!-- Keeps a live selection so the lower panel has a session to show. -->
   <AutoSelect />
-
-  <!-- left rail -->
-  <aside class="min-h-0 overflow-hidden">
-    <Rail />
-  </aside>
 
   <!-- main column — a component (not inline markup) so it reacts to the store -->
   <SessionsColumn />
