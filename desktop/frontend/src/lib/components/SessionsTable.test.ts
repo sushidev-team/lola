@@ -68,3 +68,91 @@ describe("SessionsTable empty states", () => {
     expect(screen.queryByText("Start the daemon")).not.toBeInTheDocument();
   });
 });
+
+// The agent axis used to hang off the status pill as theme.ts's two-letter
+// glyphs — "review ·wk" — which reads as a typo unless you already know the
+// vocabulary. It moved to <AgentActivity> as a live pulse plus plain language.
+// theme.ts still exports agentBadge (it is a pinned port of the TUI's theme.go),
+// so nothing stops a future edit from rendering it again; these pin it out.
+describe("SessionsTable agent activity", () => {
+  beforeEach(() => {
+    cleanup();
+    store.connected = true;
+    store.alive = true;
+    store.sessions = [];
+    nav.scoped = false;
+    nav.project = "";
+    nav.selectedId = "";
+    nav.triage = "";
+  });
+
+  it("never renders the two-letter agent badge next to the status pill", () => {
+    store.sessions = [
+      fakeSession({ status: "review_pending", agentState: "working", delivery: "review_pending" }),
+    ];
+    render(SessionsTable);
+    expect(screen.queryByText(/·wk/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/·\?!/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/·en/)).not.toBeInTheDocument();
+  });
+
+  it("announces a running agent for screen readers rather than only animating", () => {
+    store.sessions = [fakeSession({ agentState: "working" })];
+    render(SessionsTable);
+    expect(screen.getByText("agent running")).toBeInTheDocument();
+  });
+
+  it("shows the interpreter headline on the row, '≈'-marked as untrusted", () => {
+    store.sessions = [fakeSession({ headline: "grepping for the sync button" })];
+    render(SessionsTable);
+    expect(screen.getByText(/≈ grepping for the sync button/)).toBeInTheDocument();
+  });
+
+  it("falls back to the agent's last notification when there is no headline", () => {
+    // waiting_input, not idle: SetAgentState clears lastNotification on any
+    // transition off waiting_input, so a non-empty message on an idle session is
+    // a record the daemon cannot produce.
+    store.sessions = [
+      fakeSession({ agentState: "waiting_input", lastNotification: "Claude is waiting for your input" }),
+    ];
+    render(SessionsTable);
+    expect(screen.getByText("Claude is waiting for your input")).toBeInTheDocument();
+  });
+
+  it("stays quiet when the agent is idle with nothing to report", () => {
+    store.sessions = [fakeSession({ agentState: "idle" })];
+    render(SessionsTable);
+    expect(screen.queryByText("agent running")).not.toBeInTheDocument();
+  });
+});
+
+// A column was once removed from the body but left in the header, so the table
+// rendered 8 <th> over 7 <td> and every cell after the gap sat under the wrong
+// heading. Nothing caught it: the empty-state and content tests query by text,
+// which is blind to column alignment. This pins the two in step.
+describe("SessionsTable column alignment", () => {
+  beforeEach(() => {
+    cleanup();
+    store.connected = true;
+    store.alive = true;
+    store.sessions = [];
+    nav.scoped = false;
+    nav.project = "";
+    nav.selectedId = "";
+    nav.triage = "";
+  });
+
+  it("renders exactly one body cell per column heading", () => {
+    store.sessions = [fakeSession({ prNumber: 7, checks: "pass" })];
+    const { container } = render(SessionsTable);
+    const heads = container.querySelectorAll("thead th").length;
+    const cells = container.querySelectorAll("tbody tr:first-child td").length;
+    expect(cells).toBe(heads);
+  });
+
+  it("has no 'Reacting' heading — the posture rides with the status pill", () => {
+    store.sessions = [fakeSession()];
+    render(SessionsTable);
+    expect(screen.queryByText("Reacting")).not.toBeInTheDocument();
+  });
+});

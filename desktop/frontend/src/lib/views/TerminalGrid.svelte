@@ -3,15 +3,17 @@
   import { store, scopedSessions } from "$lib/store.svelte";
   import { nav } from "$lib/nav.svelte";
   import { sessionMenu } from "$lib/sessionmenu.svelte";
+  import { triaged } from "$lib/filters";
   import { statusLabel } from "$lib/theme";
   import { TermService } from "@bindings/desktop";
   import SnapshotTile from "$lib/components/SnapshotTile.svelte";
   import SessionsEmpty from "$lib/components/SessionsEmpty.svelte";
   import StatusPill from "$lib/components/StatusPill.svelte";
+  import LivePulse from "$lib/components/LivePulse.svelte";
 
   // Reads the store directly (leaf component) — the Cockpit view can't pass live
   // rows in the production WKWebView. See WKWEBVIEW_REACTIVITY in Cockpit.svelte.
-  const rows = $derived(scopedSessions(store.sessions, nav.scoped, nav.project));
+  const rows = $derived(triaged(scopedSessions(store.sessions, nav.scoped, nav.project), nav.triage));
 
   // The tmux-backed sessions we can actually render terminals for.
   const tiles = $derived(rows.filter((s) => s.tmuxName));
@@ -56,7 +58,7 @@
 {#if tiles.length === 0}
   <SessionsEmpty>
     {#snippet idle()}
-      <div class="flex h-full items-center justify-center text-sm text-faint">
+      <div class="flex h-full items-center justify-center text-faint">
         no live terminals — start a session to see it here
       </div>
     {/snippet}
@@ -97,10 +99,13 @@
           }
         }}
       >
-        <div class="flex items-center gap-1.5 border-b border-edge/50 bg-panel/70 px-2 py-1 text-[11px]">
+        <div class="flex items-center gap-1.5 border-b border-edge/50 bg-panel/70 px-2 py-1 text-sm">
           <span class="truncate font-medium" class:text-accent-ink={sel}>{s.issue || s.id.slice(0, 8)}</span>
           <span class="truncate text-faint">{store.displayNameFor(s.project)}</span>
-          <span class="ml-auto shrink-0"><StatusPill status={s.status} /></span>
+          <span class="ml-auto flex shrink-0 items-center gap-1.5">
+            <LivePulse agentState={s.agentState} />
+            <StatusPill status={s.status} />
+          </span>
         </div>
         <div class="relative min-h-0 flex-1">
           <!-- Dim the frozen frame so it no longer passes for a live terminal. -->
@@ -109,10 +114,12 @@
           </div>
           {#if dead}
             <div class="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-canvas/50">
-              <span class="text-[11px] font-medium text-faint">{statusLabel(s.status)}</span>
+              <!-- Colour already separates this from the tile chrome; a weight
+                   bump on top would be spending two tokens for one job. -->
+              <span class="text-sm text-faint">{statusLabel(s.status)}</span>
               <!-- stopPropagation: reviving must not also open the (dead) terminal. -->
               <button
-                class="rounded border border-edge px-2 py-1 text-[11px] text-info hover:border-accent hover:text-accent-ink"
+                class="rounded border border-edge px-2 py-1 text-sm text-info hover:border-accent hover:text-accent-ink"
                 onclick={(e) => {
                   e.stopPropagation();
                   store.revive(s.id);
@@ -122,7 +129,7 @@
           {/if}
         </div>
         <div
-          class="pointer-events-none flex items-center justify-end border-t border-edge/40 px-2 py-0.5 text-[10px] text-faint opacity-0 transition-opacity group-hover:opacity-100"
+          class="pointer-events-none flex items-center justify-end border-t border-edge/40 px-2 py-0.5 text-sm text-faint opacity-0 transition-opacity group-hover:opacity-100"
         >
           ⛶ open
         </div>

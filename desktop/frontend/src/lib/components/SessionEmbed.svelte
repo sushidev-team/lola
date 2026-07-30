@@ -3,6 +3,7 @@
   import { nav } from "$lib/nav.svelte";
   import { terms, AGENT } from "$lib/terms.svelte";
   import StatusPill from "./StatusPill.svelte";
+  import LivePulse from "./LivePulse.svelte";
   import LiveTerminal from "./LiveTerminal.svelte";
 
   // `focused` = the expanded full-cockpit view ("minimize" toggle); otherwise the
@@ -36,6 +37,27 @@
   const activeName = $derived(!session ? "" : activeTab === AGENT ? session.tmuxName : activeTab);
   const activeIsShell = $derived(activeTab !== AGENT);
 
+  // Picking a tab BY HAND focuses the terminal it selects, so typing lands in the
+  // agent's input immediately — clicking "agent" while a shell tab was open used
+  // to leave the pane unfocused, and the keystrokes went to the global handler
+  // instead (an innocent "s" opened another shell).
+  //
+  // It cannot simply be `autofocus` unconditionally: <LiveTerminal> is keyed on
+  // activeName, so it ALSO remounts when the selection moves, and focusing there
+  // would trap j/k inside the terminal the moment the list scrolled. So the intent
+  // is recorded on click and consumed by the next mount. Reset whenever the
+  // session changes, so a stale click can never focus a terminal the user arrived
+  // at with the keyboard.
+  let pickedTab = $state(false);
+  function selectTab(id: string, tab: string) {
+    pickedTab = true;
+    terms.select(id, tab);
+  }
+  $effect(() => {
+    sessionId; // re-run on selection change
+    pickedTab = false;
+  });
+
   // Discover this session's shell tabs from the tmux server on selection, then
   // poll so a shell opened in the TUI (or another window) appears here within a
   // few seconds — the two surfaces attach to the same tmux sessions.
@@ -51,10 +73,14 @@
 </script>
 
 {#if !session}
+  <!-- The glyph is decoration and must read as decoration: at the same text-xl as
+       the sentence under it, it parsed as a typo in the first line rather than an
+       icon above it. Scaled up and quietened with a colour (`edge`), not opacity —
+       faint at 40% lands near 1.3:1 on the light flavor. -->
   <div class="flex h-full flex-col items-center justify-center gap-1 text-faint">
-    <div class="text-2xl opacity-40">⌘</div>
-    <div class="text-sm">select a session</div>
-    <div class="text-[11px] opacity-70">its live agent terminal shows here</div>
+    <div class="hero-glyph text-edge" aria-hidden="true">⌘</div>
+    <div class="mt-2 text-xl">select a session</div>
+    <div class="text-sm">its live agent terminal shows here</div>
   </div>
 {:else}
   <!-- z-10 header keeps the chrome above the WebGL terminal canvas. The terminal
@@ -63,30 +89,33 @@
        WKWebView paint the wrapper's opaque `bg-panel` over it — a blank terminal. -->
   <div class="flex h-full min-h-0 flex-col">
     <!-- header — z-10 keeps the minimize/focus button above the canvas layer. -->
-    <div class="relative z-10 flex flex-wrap items-center gap-2 border-b border-edge/60 px-3 py-1.5 text-xs">
-      <span class="selectable font-semibold text-accent-ink">{session.issue || session.id.slice(0, 8)}</span>
-      <span class="selectable truncate text-faint">{session.title}</span>
+    <div class="relative z-10 flex flex-wrap items-center gap-2 border-b border-edge/60 px-3 py-2">
+      <span class="selectable font-medium text-accent-ink">{session.issue || session.id.slice(0, 8)}</span>
+      <span class="selectable truncate text-ink">{session.title}</span>
       <span class="text-edge">·</span>
-      <span class="text-faint">{store.displayNameFor(session.project)}</span>
-      <StatusPill status={session.status} agentState={session.agentState} delivery={session.delivery} interpreted={session.interpretedState} />
+      <span class="text-sm text-faint">{store.displayNameFor(session.project)}</span>
+      <LivePulse agentState={session.agentState} />
+      <StatusPill status={session.status} interpreted={session.interpretedState} />
       {#if session.headline}
         <!-- The interpreter's one-line judgement (untrusted, display only). -->
-        <span class="truncate text-[11px] text-orange" title={session.waitingOn || undefined}>≈ {session.headline}</span>
+        <span class="truncate text-sm text-orange" title={session.waitingOn || undefined}>≈ {session.headline}</span>
       {/if}
       {#if session.currentTool}
         <!-- What the in-flight turn runs right now (PostToolUse hook). -->
-        <span class="font-mono text-[10px] text-faint" title="tool the agent is running">{session.currentTool}</span>
+        <!-- Mono = identifier. Inline mono inside a 13px row is set one token
+             down so JetBrains Mono's lower x-height matches SF's apparent size. -->
+        <span class="font-mono text-sm text-faint" title="tool the agent is running">{session.currentTool}</span>
       {/if}
       {#if session.prStale}
-        <span class="text-[10px] text-warn" title="gh has been failing; the delivery state may be old">⚠ PR stale</span>
+        <span class="text-sm text-warn" title="gh has been failing; the delivery state may be old">⚠ PR stale</span>
       {/if}
-      {#if session.branch}<span class="selectable font-mono text-[11px] text-faint">{session.branch}</span>{/if}
+      {#if session.branch}<span class="selectable font-mono text-sm text-faint">{session.branch}</span>{/if}
       <span class="ml-auto flex items-center gap-1.5">
         {#if focused}
           <!-- The chord is spelled out, not just tooltipped: while this terminal
                has focus every other key goes to the agent, so this is the only
                way back to the cockpit without reaching for the mouse. -->
-          <span class="text-[10px] text-faint">⌃Q back</span>
+          <span class="text-sm text-faint">⌃Q back</span>
           <button
             class="rounded bg-accent-fill px-2.5 py-[2px] font-medium text-accent-ink hover:bg-accent-fill-hover"
             title="exit fullscreen (Ctrl-Q)"
@@ -107,13 +136,13 @@
          that opens another shell. Collapses in the compact, agent-only case so
          the plain detail panel stays chrome-free. -->
     {#if showTabs}
-      <div class="relative z-10 flex flex-wrap items-center gap-1 border-b border-edge/60 px-2 py-1 text-[11px]">
+      <div class="relative z-10 flex flex-wrap items-center gap-1 border-b border-edge/60 px-2 py-1 text-sm">
         <button
           class="rounded px-2 py-[2px] font-medium"
           class:bg-accent-fill={activeTab === AGENT}
           class:text-accent-ink={activeTab === AGENT}
           class:text-faint={activeTab !== AGENT}
-          onclick={() => terms.select(session.id, AGENT)}>agent</button
+          onclick={() => selectTab(session.id, AGENT)}>agent</button
         >
         {#each shells as sh (sh)}
           <span class="flex items-center rounded" class:bg-accent-fill={activeTab === sh}>
@@ -121,7 +150,7 @@
               class="rounded-l px-2 py-[2px] font-medium"
               class:text-accent-ink={activeTab === sh}
               class:text-faint={activeTab !== sh}
-              onclick={() => terms.select(session.id, sh)}>{terms.labelFor(session.id, sh)}</button
+              onclick={() => selectTab(session.id, sh)}>{terms.labelFor(session.id, sh)}</button
             >
             <button
               class="rounded-r pr-1.5 py-[2px] text-faint hover:text-bad"
@@ -158,18 +187,18 @@
             name={activeName}
             webgl
             interactive
-            autofocus={activeIsShell || focused}
+            autofocus={pickedTab || activeIsShell || focused}
             onExit={activeIsShell ? () => terms.shellExited(session.id, activeName) : undefined}
             onEscapeFocus={focused ? () => nav.toggleFocusTerm(session.id) : undefined}
           />
         {/key}
       {:else}
-        <div class="flex h-full items-center justify-center text-sm text-faint">no tmux session (dead)</div>
+        <div class="flex h-full items-center justify-center text-faint">no tmux session (dead)</div>
       {/if}
     </div>
 
     <!-- actions -->
-    <div class="flex flex-wrap items-center gap-1.5 border-t border-edge/60 px-3 py-1.5 text-xs">
+    <div class="flex flex-wrap items-center gap-1.5 border-t border-edge/60 px-3 py-1.5 text-sm">
       {#if session.prNumber > 0}
         <button class="rounded px-2 py-[1px] text-faint hover:text-accent-ink" onclick={() => store.openURL(session.prUrl)}>open PR ↗</button>
       {/if}

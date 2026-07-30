@@ -2,6 +2,7 @@
   import { store, type ProjectInfo } from "$lib/store.svelte";
   import { nav } from "$lib/nav.svelte";
   import StatusPill from "$lib/components/StatusPill.svelte";
+  import LivePulse from "$lib/components/LivePulse.svelte";
 
   const project = $derived<ProjectInfo | undefined>(store.projectByName(nav.project));
   const sessions = $derived(store.sessionsForProject(nav.project));
@@ -13,9 +14,7 @@
   let branch = $state("");
   let useAgent = $state(true);
 
-  function back() {
-    nav.goCockpit(nav.scoped ? nav.project : "");
-  }
+  // No local back()/breadcrumb any more — MainTopBar owns both for every view.
 
   async function startWorktree() {
     const b = branch.trim();
@@ -93,30 +92,22 @@
   ]);
 </script>
 
+<!-- No header here any more: the back button and the "Projects ▸ Nori"
+     breadcrumb are MainTopBar's, so this view only owns its content. -->
 <div class="flex h-full min-h-0 flex-col p-4">
-  <!-- header: back + breadcrumb -->
-  <div class="mb-3 flex items-center gap-3">
-    <button class="rounded px-2 py-1 text-xs text-faint hover:text-accent-ink" onclick={back}>← back</button>
-    <div class="text-sm text-faint">
-      <button class="text-faint hover:text-accent-ink" onclick={() => nav.goHome()}>lola</button>
-      <span class="text-edge">▸</span>
-      <span class="text-ink">{nav.project ? store.displayNameFor(nav.project) : "(no project)"}</span>
-    </div>
-  </div>
-
   <div class="min-h-0 flex-1 overflow-auto">
     <div class="mx-auto flex max-w-3xl flex-col gap-3">
       <!-- Status box -->
       <div class="rounded-[10px] border border-edge bg-panel/40 p-3">
         {#if project}
-          <div class="selectable font-mono text-[11px] text-faint">
+          <div class="selectable font-mono text-sm text-faint">
             path <span class="text-ink">{project.path || "(unset)"}</span>
             <span class="text-edge"> · </span>repo <span class="text-ink">{project.repo || "(none)"}</span>
             <span class="text-edge"> · </span>agent <span class="text-ink">{project.agent}</span>
             <span class="text-edge"> · </span>base <span class="text-ink">{project.defaultBranch || "(default)"}</span>
           </div>
 
-          <div class="mt-2 text-xs">
+          <div class="mt-2 text-sm">
             {#if project.pollsEnabled > 0}
               <span class="text-good">● on</span>
             {:else}
@@ -124,23 +115,23 @@
             {/if}
           </div>
 
-          <div class="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
+          <div class="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
             <span class={project.agentOk ? "text-good" : "text-bad"}>{project.agentOk ? "✓" : "✗"} agent</span>
             <span class="text-edge">·</span>
-            <span class="text-faint tabular-nums">{store.alive ? project.liveCounted : "—"} live</span>
+            <span class="num text-faint">{store.alive ? project.liveCounted : "—"} live</span>
             {#if project.needsYou > 0}
-              <span class="text-edge">·</span><span class="text-orange tabular-nums">{project.needsYou} need you</span>
+              <span class="text-edge">·</span><span class="num text-orange">{project.needsYou} need you</span>
             {/if}
             {#if project.ciRed > 0}
-              <span class="text-edge">·</span><span class="text-bad tabular-nums">{project.ciRed} ci-red</span>
+              <span class="text-edge">·</span><span class="num text-bad">{project.ciRed} ci-red</span>
             {/if}
           </div>
 
           {#if !project.agentOk && project.agentErr}
-            <div class="mt-2 text-[11px] text-bad">agent not ready: {project.agentErr} — launch verbs disabled</div>
+            <div class="mt-2 text-sm text-bad">agent not ready: {project.agentErr} — launch verbs disabled</div>
           {/if}
         {:else}
-          <div class="text-xs text-faint">
+          <div class="text-sm text-faint">
             project <span class="font-mono text-ink">{nav.project || "(none)"}</span> not found{store.alive
               ? ""
               : " — daemon offline"}.
@@ -160,28 +151,28 @@
               onclick={a.run}
             >
               <span
-                class="flex h-5 w-5 shrink-0 items-center justify-center rounded border border-edge text-[11px] font-semibold {a.enabled
+                class="flex h-5 w-5 shrink-0 items-center justify-center rounded border border-edge text-sm font-medium {a.enabled
                   ? 'text-accent-ink group-hover:border-accent'
                   : 'text-faint'}">{a.key}</span
               >
               <span class="min-w-0 flex-1">
-                <span class="block text-xs font-medium text-ink">{a.label}</span>
-                <span class="block truncate text-[11px] text-faint">{a.desc}</span>
+                <span class="block font-medium text-ink">{a.label}</span>
+                <span class="block truncate text-sm text-faint">{a.desc}</span>
               </span>
               {#if !a.enabled && a.hint}
-                <span class="shrink-0 text-[11px] text-warn">{a.hint}</span>
+                <span class="shrink-0 text-sm text-warn">{a.hint}</span>
               {/if}
             </button>
 
             {#if a.key === "W" && worktreeOpen}
               <div class="mt-1.5 ml-8 flex flex-wrap items-center gap-2 rounded-[10px] border border-edge/60 bg-panel/60 p-2">
                 <input
-                  class="w-56 rounded border border-edge bg-canvas px-2 py-1 font-mono text-xs text-ink outline-none focus:border-accent placeholder:text-placeholder"
+                  class="w-56 rounded border border-edge bg-canvas px-2 py-1.5 font-mono text-sm text-ink outline-none focus:border-accent placeholder:text-placeholder"
                   placeholder="branch name…"
                   bind:value={branch}
                   onkeydown={(e) => e.key === "Enter" && startWorktree()}
                 />
-                <span class="flex items-center gap-0.5 rounded border border-edge p-0.5 text-[11px]">
+                <span class="flex items-center gap-0.5 rounded border border-edge p-0.5 text-sm">
                   <button
                     class="rounded px-1.5 py-[1px]"
                     class:bg-accent={useAgent}
@@ -198,11 +189,11 @@
                   >
                 </span>
                 <button
-                  class="rounded bg-accent-fill px-3 py-1 text-xs text-accent-ink hover:bg-accent-fill-hover disabled:opacity-40"
+                  class="rounded bg-accent-fill px-3 py-1.5 text-accent-ink hover:bg-accent-fill-hover disabled:opacity-40"
                   disabled={!branch.trim()}
                   onclick={startWorktree}>start ›</button
                 >
-                <button class="px-2 py-1 text-xs text-faint hover:text-ink" onclick={() => (worktreeOpen = false)}
+                <button class="px-2 py-1.5 text-faint hover:text-ink" onclick={() => (worktreeOpen = false)}
                   >cancel</button
                 >
               </div>
@@ -213,27 +204,28 @@
 
       <!-- Live sessions strip -->
       <div class="rounded-[10px] border border-edge">
-        <div class="flex items-center gap-2 border-b border-edge/60 px-3 py-1.5 text-xs font-semibold text-ink">
-          <span>Live sessions</span><span class="text-faint">· {sessions.length}</span>
+        <div class="flex items-baseline gap-2 border-b border-edge/60 px-3 py-2 text-lg text-ink">
+          <span>Live sessions</span><span class="num text-sm text-faint">· {sessions.length}</span>
         </div>
         {#if sessions.length === 0}
-          <div class="px-3 py-6 text-center text-xs text-faint">no live sessions in this project</div>
+          <div class="px-3 py-6 text-center text-sm text-faint">no live sessions in this project</div>
         {:else}
           <div class="divide-y divide-edge/30">
             {#each shown as s (s.id)}
               <button
-                class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs hover:bg-sel/50"
+                class="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-sel/50"
                 onclick={() => openSession(s.id)}
               >
-                <span class="shrink-0 font-mono text-[11px] text-faint">{s.issue || "—"}</span>
+                <span class="shrink-0 font-mono text-sm text-faint">{s.issue || "—"}</span>
                 <span class="min-w-0 flex-1 truncate text-ink">{s.title || s.branch || "(untitled)"}</span>
+                <LivePulse agentState={s.agentState} />
                 <StatusPill status={s.status} />
-                {#if s.prNumber > 0}<span class="shrink-0 text-[11px] text-magenta">#{s.prNumber}</span>{/if}
+                {#if s.prNumber > 0}<span class="num shrink-0 text-sm text-magenta">#{s.prNumber}</span>{/if}
               </button>
             {/each}
             {#if moreCount > 0}
               <button
-                class="w-full px-3 py-1.5 text-left text-[11px] text-faint hover:text-accent-ink"
+                class="w-full px-3 py-2 text-left text-sm text-faint hover:text-accent-ink"
                 onclick={() => nav.goCockpit(nav.project)}>… {moreCount} more</button
               >
             {/if}
