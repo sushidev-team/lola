@@ -81,6 +81,20 @@ func TestHandleKillDirtyKeepsEntryAndFlagsDead(t *testing.T) {
 	if !strings.Contains(err.Error(), "--force") {
 		t.Errorf("error %q must tell the user to rerun with --force", err)
 	}
+	// The desktop app RE-ASKS on this refusal ("delete the worktree anyway?")
+	// instead of flashing the CLI hint, and the error string is all it gets —
+	// KillData is dropped on the error path. dirtyWorktreeRefusal() in
+	// desktop/frontend/src/lib/store.svelte.ts matches exactly these fragments,
+	// so rewording them silently turns the dialog back into a dead-end flash.
+	if !strings.Contains(err.Error(), "worktree kept (uncommitted changes)") {
+		t.Errorf("error %q must keep the phrase the desktop dialog matches", err)
+	}
+	if !strings.Contains(err.Error(), "uncommitted changes) at "+data.Worktree+" — rerun with --force") {
+		t.Errorf("error %q must name the kept worktree in the matched shape (worktree %q)", err, data.Worktree)
+	}
+	if data.Worktree == "" {
+		t.Error("KillData.Worktree must name the kept worktree on a dirty refusal")
+	}
 	if data.Removed {
 		t.Error("KillData.Removed must be false on a dirty refusal")
 	}

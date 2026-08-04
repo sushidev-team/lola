@@ -48,6 +48,28 @@ export function scopedSessions(list: SessionInfo[], scoped: boolean, project: st
   return scoped ? sorted.filter((s) => s.project === project) : sorted;
 }
 
+/**
+ * Recognise the daemon's dirty-worktree refusal in a failed kill.
+ *
+ * A kill without force keeps a worktree that has uncommitted changes and reports
+ * it as an ERROR (internal/daemon/kill.go), so the KillData carrying the path is
+ * dropped on the way over the bridge and its message string is all the frontend
+ * gets. Matching it is what lets the store re-ask instead of flashing a CLI hint
+ * ("rerun with --force") at someone who never typed a command.
+ * `internal/daemon/kill_test.go` pins the wording matched here.
+ *
+ * Returns the kept worktree path (or "" when the message names none), and null
+ * when the failure is anything else — those must stay plain errors.
+ */
+export function dirtyWorktreeRefusal(msg: string): string | null {
+  if (!msg.includes("worktree kept (uncommitted changes)") || !msg.includes("--force")) return null;
+  // Prefer the delimited capture: a home dir with a space would defeat \S+.
+  const m =
+    /uncommitted changes\) at (.+?) — rerun with --force/.exec(msg) ??
+    /uncommitted changes\) at (\S+)/.exec(msg);
+  return m ? m[1] : "";
+}
+
 class Store {
   alive = $state(false);
   connected = $state(false); // have we received a first push yet
@@ -245,11 +267,34 @@ class Store {
   answer(session: string, text: string) {
     return this.act(() => DaemonService.Answer(session, text), "answer sent");
   }
-  kill(session: string, force = false) {
+  /**
+   * Kill a session. A dirty worktree is refused unless force is set — and that
+   * refusal is NOT a dead end: the agent is already terminated by then and the
+   * worktree is all that survives, so the honest answer is a second question
+   * (askForceKill), not a red flash telling a GUI user to rerun a CLI flag.
+   */
+  async kill(session: string, force = false) {
     // Reap the session's worktree shells too, so they don't linger as orphan tabs
     // once the daemon removes the worktree (best-effort, fire-and-forget).
     void TermService.CloseSessionShells(session).catch(() => {});
-    return this.act(() => DaemonService.Kill(session, force), `killed ${session}`);
+    try {
+      const r = await DaemonService.Kill(session, force);
+      this.setFlash(`killed ${session}`, "good");
+      void this.refresh();
+      return r;
+    } catch (err) {
+      const msg = String(err);
+      const dir = force ? null : dirtyWorktreeRefusal(msg);
+      if (dir === null) {
+        this.setFlash(msg, "bad");
+        return undefined;
+      }
+      // The agent IS gone and the daemon has flagged the session dead, so refresh
+      // regardless of how the follow-up dialog is answered.
+      void this.refresh();
+      this.askForceKill(session, dir);
+      return undefined;
+    }
   }
   revive(session: string) {
     return this.act(() => DaemonService.Revive(session), `revived ${session}`);
@@ -312,6 +357,24 @@ class Store {
       detail: "This stops its agent and removes the worktree. Unpushed work is lost.",
       confirmLabel: "Kill",
       onConfirm: () => void this.kill(id),
+    });
+  }
+
+  /**
+   * Second stage of a kill the daemon refused: the agent is stopped but its
+   * worktree still holds uncommitted changes. Asking again is the whole point —
+   * force is the only way past it, and it destroys work, so it gets its own
+   * question with the path spelled out rather than riding on the first "Kill?".
+   */
+  askForceKill(id: string, dir: string) {
+    const s = this.sessionById(id);
+    const label = s ? s.issue || s.id.slice(0, 8) : id;
+    confirm.ask({
+      title: "Worktree has uncommitted changes",
+      body: `${label}'s agent is stopped, but its worktree still has uncommitted changes. Delete the worktree anyway?`,
+      detail: dir ? `${dir} — the changes there are lost for good.` : "The changes there are lost for good.",
+      confirmLabel: "Delete worktree",
+      onConfirm: () => void this.kill(id, true),
     });
   }
 

@@ -21,7 +21,7 @@ vi.mock("@bindings/desktop", () => ({
   TermService: { CloseSessionShells: (...a: unknown[]) => CloseSessionShells(...a) },
 }));
 
-const { store } = await import("./store.svelte");
+const { store, dirtyWorktreeRefusal } = await import("./store.svelte");
 const { confirm } = await import("./confirm.svelte");
 
 beforeEach(() => {
@@ -74,6 +74,68 @@ describe("destructive actions ask first", () => {
   it("falls back to the id when the session is unknown", () => {
     store.askKill("abcdef1234567890");
     expect(confirm.request?.body).toContain("abcdef12");
+  });
+});
+
+// A kill the daemon refuses because the worktree is dirty is a QUESTION, not a
+// failure: the agent is already dead and only force can clear the worktree, so
+// the store re-asks instead of flashing "rerun with --force" at a GUI user.
+describe("dirty-worktree kill re-asks with force", () => {
+  const dirty = (dir = "/Users/martin/.lola/worktrees/nori-app/lola-nori-app-nor-332") =>
+    new Error(
+      `RuntimeError: session lola-nori-app-nor-332 terminated; worktree kept (uncommitted changes) at ${dir} — rerun with --force to remove it`,
+    );
+
+  it("recognises the refusal and pulls out the worktree path", () => {
+    expect(dirtyWorktreeRefusal(String(dirty()))).toBe(
+      "/Users/martin/.lola/worktrees/nori-app/lola-nori-app-nor-332",
+    );
+    expect(dirtyWorktreeRefusal("/Volumes/My Disk/wt")).toBeNull();
+    expect(dirtyWorktreeRefusal("RuntimeError: unknown session x")).toBeNull();
+  });
+
+  it("survives a path containing spaces", () => {
+    expect(dirtyWorktreeRefusal(String(dirty("/Users/a b/.lola/worktrees/p/s")))).toBe(
+      "/Users/a b/.lola/worktrees/p/s",
+    );
+  });
+
+  it("opens a second dialog naming the worktree instead of flashing the error", async () => {
+    Kill.mockRejectedValueOnce(dirty());
+    await store.kill("lola-nori-app-nor-332");
+    expect(confirm.request?.confirmLabel).toBe("Delete worktree");
+    expect(confirm.request?.detail).toContain("/Users/martin/.lola/worktrees/nori-app");
+    expect(store.flash?.kind).not.toBe("bad");
+  });
+
+  it("accepting it retries with force", async () => {
+    Kill.mockRejectedValueOnce(dirty());
+    await store.kill("sess-1");
+    confirm.accept();
+    expect(Kill).toHaveBeenLastCalledWith("sess-1", true);
+  });
+
+  it("declining leaves the worktree alone", async () => {
+    Kill.mockRejectedValueOnce(dirty());
+    await store.kill("sess-1");
+    confirm.cancel();
+    expect(Kill).toHaveBeenCalledTimes(1);
+  });
+
+  // Any other failure — and a forced kill that still failed — stays a plain
+  // error; re-asking there would loop on something force cannot fix.
+  it("flashes other failures and asks nothing", async () => {
+    Kill.mockRejectedValueOnce(new Error("RuntimeError: unknown session sess-9"));
+    await store.kill("sess-9");
+    expect(confirm.request).toBeNull();
+    expect(store.flash?.kind).toBe("bad");
+  });
+
+  it("does not re-ask when force was already set", async () => {
+    Kill.mockRejectedValueOnce(dirty());
+    await store.kill("sess-1", true);
+    expect(confirm.request).toBeNull();
+    expect(store.flash?.kind).toBe("bad");
   });
 });
 
