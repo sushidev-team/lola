@@ -6,6 +6,7 @@
   import { nav } from "$lib/nav.svelte";
   import { terms } from "$lib/terms.svelte";
   import { triaged } from "$lib/filters";
+  import { isChord } from "$lib/keys";
   import { reflowGridRows } from "$lib/reflow";
   import Sidebar from "$lib/components/Sidebar.svelte";
   import MainTopBar from "$lib/components/MainTopBar.svelte";
@@ -41,7 +42,42 @@
     // that lives here — so it asks. See newStatusBarMenu in main.go.
     Events.On("app:open-settings", () => nav.openOverlay("settings"));
     Events.On("app:open-update", () => nav.openOverlay("update"));
+    // The Session menu's items + their ⌘ accelerators (see installAppMenu). They
+    // name an action; the target is the selection, which only the frontend knows.
+    Events.On("app:session-action", (e: { data: string }) => sessionAction(e.data));
   });
+
+  // Apply a Session-menu action to the current selection. AppKit delivers a menu
+  // accelerator from ANY focus — including inside a live terminal, which is the
+  // point — so the "an overlay owns the keyboard" rule that onKey enforces has to
+  // be repeated here, or ⌘⇧K would stack a second kill confirmation on top of an
+  // open dialog.
+  function sessionAction(action: string) {
+    if (nav.overlay || confirm.request || sessionMenu.request) return;
+    const s = sel;
+    if (!s) {
+      store.setFlash("no session selected", "warn");
+      return;
+    }
+    switch (action) {
+      case "review":
+        store.review(s.id); // the CONFIGURED provider, not coderabbit specifically
+        break;
+      case "open-pr":
+        if (s.prUrl) store.openURL(s.prUrl);
+        else store.setFlash("session has no PR yet", "warn");
+        break;
+      case "new-shell":
+        // The shell tab lives in the detail embed, which the grid lens doesn't
+        // render — leave the grid first, same move as SessionMenu's + add shell.
+        if (nav.lens === "grid") nav.setLens("list");
+        terms.newShell(s.id, s.worktree);
+        break;
+      case "kill":
+        store.askKill(s.id); // ask first — shared confirm dialog
+        break;
+    }
+  }
 
   function typing(el: EventTarget | null): boolean {
     const t = el as HTMLElement | null;
@@ -143,7 +179,11 @@
         if (sel?.prUrl) store.openURL(sel.prUrl);
         return true;
       case "c":
-        if (sel) store.coderabbit(sel.id);
+        // The CONFIGURED review provider (claude-session | coderabbit-cli | …),
+        // not coderabbit specifically — same as the menu's "Trigger Review" and
+        // ⌘⇧R. Forcing the coderabbit-watch pass is still reachable from the
+        // session context menu, which is where a provider-specific action belongs.
+        if (sel) store.review(sel.id);
         return true;
       case "R":
         if (sel && (sel.status === "dead" || sel.status === "session_ended")) store.revive(sel.id);
@@ -156,6 +196,17 @@
   }
 
   function onKey(e: KeyboardEvent) {
+    // A modifier chord is the platform's, never ours: every shortcut below is a
+    // BARE key, so without this bail Cmd-C ran "coderabbit review" instead of
+    // Copy and Cmd-X opened the kill confirmation instead of Cut (also Cmd-S,
+    // Cmd-O, Cmd-N, Cmd-G, Cmd-, …). Shift is not a modifier here — 'V', 'G',
+    // 'N', 'S', 'R', 'P', '?' are themselves shortcuts. See lib/keys.ts.
+    //
+    // It sits ABOVE the menu/confirm/overlay blocks on purpose: those swallow
+    // keys only to keep them off the cockpit actions, which this return already
+    // guarantees, and Cmd-C must keep copying while a dialog is open.
+    if (isChord(e)) return;
+
     // A pending confirmation and an open overlay own Escape even while one of
     // their own fields is focused — the guarded config forms open the confirm
     // from inside a text input — so both are handled BEFORE the typing() bail

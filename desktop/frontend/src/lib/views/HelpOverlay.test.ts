@@ -17,7 +17,9 @@ describe("HelpOverlay", () => {
     expect(screen.getByText("open live terminal")).toBeInTheDocument();
     expect(screen.getByText("cycle lens · list / board / terminals")).toBeInTheDocument();
     expect(screen.getByText("revive dead session")).toBeInTheDocument();
-    expect(screen.getByText("coderabbit review")).toBeInTheDocument();
+    // Provider-agnostic wording, and the Session-menu chord next to the bare key.
+    expect(screen.getByText("review · configured provider")).toBeInTheDocument();
+    expect(screen.getByText("c · ⌘⇧R")).toBeInTheDocument();
 
     // The overlay is a labelled modal dialog (focus-trapped, esc-closable).
     expect(screen.getByRole("dialog", { name: "Keyboard shortcuts" })).toBeInTheDocument();

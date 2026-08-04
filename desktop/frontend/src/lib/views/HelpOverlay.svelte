@@ -21,13 +21,16 @@
       ],
     },
     {
+      // The ⌘ chords are the macOS Session menu's accelerators (installAppMenu),
+      // not bindings in onKey — which is why they also work from inside a focused
+      // terminal, where every bare key belongs to the agent.
       title: "Session actions",
       keys: [
-        ["s", "new worktree shell"],
+        ["s · ⌘T", "new worktree shell"],
         ["< / >", "prev / next terminal tab"],
-        ["x", "kill session"],
-        ["o", "open PR in browser"],
-        ["c", "coderabbit review"],
+        ["x · ⌘⇧K", "kill session"],
+        ["o · ⌘⇧O", "open PR in browser"],
+        ["c · ⌘⇧R", "review · configured provider"],
         ["R", "revive dead session"],
         ["P", "edit session's project"],
       ],
@@ -69,6 +72,8 @@
     A double-click (or <span class="text-ink">Enter</span>) opens a session's live terminal fullscreen. Inside it every key
     — <span class="text-ink">Esc</span> included — goes to the agent, so
     <span class="text-ink">Ctrl-Q</span> is the way back out.
-    <span class="text-ink">?</span> reveals this list from anywhere.
+    <span class="text-ink">?</span> reveals this list from anywhere. The
+    <span class="text-ink">⌘</span> chords live in the <span class="text-ink">Session</span> menu and work even while a
+    terminal has the keyboard.
   </p>
 </Modal>

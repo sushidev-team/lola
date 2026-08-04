@@ -374,6 +374,20 @@ distinct binary from the v2 `wails`. See `desktop/README.md`.
   restart button, or stop+respawn) to pick up the new binary. The desktop store
   therefore uses `Promise.allSettled` so one unknown command can't blank the rest
   of the UI. (`setsid` is Linux-only; on macOS detach with `nohup … & disown`.)
+- **Bare keys are the frontend's; ⌘ chords are the macOS menu's — never both.**
+  Every shortcut in `App.svelte`'s `onKey` is an UNMODIFIED key, so it bails on
+  `isChord` (`lib/keys.ts`: meta/ctrl/alt, never shift — `V`/`G`/`N`/`S`/`R`/`P`
+  are real bindings). Without that, ⌘C ran a review instead of Copy and ⌘X asked
+  to kill a session. Modifier shortcuts therefore live in the **Session menu**
+  (`installAppMenu` / `newSessionMenu` in `desktop/main.go`), which emits
+  `app:session-action` for the frontend to apply to its selection — the backend
+  cannot know it. Two consequences: AppKit dispatches a menu accelerator BEFORE
+  the WKWebView, so those chords work even while a live terminal holds the
+  keyboard (a JS handler there never fires — xterm's textarea reads as "typing"),
+  and a duplicate accelerator silently shadows, which is why `Force Reload` was
+  moved off ⌘⇧R to ⌥⌘R. Adding one: keep it Cmd-based (Ctrl/Alt belong to
+  tmux/zellij inside the pane), avoid every Edit-menu chord and ⌘⌫ (delete-to-
+  line-start in a text field), and list it in `HelpOverlay.svelte`.
 - Fonts: the terminals + mono UI use bundled **JetBrains Mono**
   (`@fontsource/jetbrains-mono`, imported in `main.ts`); xterm re-fits on
   `document.fonts.ready` so cell metrics match once it loads.

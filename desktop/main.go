@@ -264,12 +264,35 @@ func (z *zoomController) out() {
 
 func (z *zoomController) reset() { z.set(1.0) }
 
-// installAppMenu sets the standard macOS app menu but swaps the three View-menu
-// Zoom items from Wails' magnification handlers to reflowing page zoom. It only
-// repoints the existing role items (label + Cmd+/-/0 accelerators intact), so
-// the menu looks and reads exactly like the default.
+// installAppMenu builds the macOS app menu. It is DefaultApplicationMenu's role
+// list, assembled by hand only so the "Session" submenu lands in its
+// conventional slot (before Window/Help) — Menu has no insert-at API — and
+// swaps the three View-menu Zoom items from Wails' magnification handlers to
+// reflowing page zoom. Repointing keeps the role items' labels and their
+// Cmd+/-/0 accelerators, so that part reads exactly like the default.
+//
+// The Session items are the app's ONE set of modifier shortcuts, and they live
+// in the menu rather than in the frontend's key handler on purpose:
+//   - AppKit dispatches a menu key equivalent before the WKWebView sees it, so
+//     ⌘⇧R works while a live terminal holds the keyboard — a JS handler there
+//     never fires, because xterm's hidden textarea counts as "typing".
+//   - the menu is where a macOS user looks for what a chord does, and AppKit
+//     refuses a duplicate accelerator loudly instead of two silent handlers.
+//
+// Every accelerator here is Cmd-based and none is a system or Edit-menu one
+// (⌘C/⌘V/⌘X/⌘A/⌘Z/⌘W/⌘Q, and ⌘⌫ which deletes to line start in a text field).
+// Cmd chords are also the one class tmux/zellij inside a pane never receive, so
+// these can't collide with a shell binding either.
 func installAppMenu(app *application.App, zoom *zoomController) {
-	menu := application.DefaultApplicationMenu()
+	menu := application.NewMenu()
+	menu.AddRole(application.AppMenu)
+	menu.AddRole(application.FileMenu)
+	menu.AddRole(application.EditMenu)
+	menu.AddRole(application.ViewMenu)
+	newSessionMenu(app, menu.AddSubmenu("Session"))
+	menu.AddRole(application.WindowMenu)
+	menu.AddRole(application.HelpMenu)
+
 	if it := menu.FindByRole(application.ZoomIn); it != nil {
 		it.OnClick(func(*application.Context) { zoom.in() })
 	}
@@ -279,7 +302,38 @@ func installAppMenu(app *application.App, zoom *zoomController) {
 	if it := menu.FindByRole(application.ResetZoom); it != nil {
 		it.OnClick(func(*application.Context) { zoom.reset() })
 	}
+	// Force Reload ships on ⌘⇧R, which Session > Trigger Review now owns — a
+	// duplicate accelerator would go to whichever item AppKit finds first. The
+	// item stays (it is a genuine escape hatch for a wedged webview), moved to
+	// ⌥⌘R next to Reload's ⌘R.
+	if it := menu.FindByRole(application.ForceReload); it != nil {
+		it.SetAccelerator("CmdOrCtrl+OptionOrAlt+r")
+	}
 	app.Menu.SetApplicationMenu(menu)
+}
+
+// newSessionMenu fills the Session submenu. Each item only ASKS the frontend to
+// act (evtSessionAction): the target is the cockpit's current selection, which
+// is frontend nav state the backend has no view of — the same reason the
+// status-bar menu emits for Settings instead of opening it.
+func newSessionMenu(app *application.App, menu *application.Menu) {
+	ask := func(action string) func(*application.Context) {
+		return func(*application.Context) { app.Event.Emit(evtSessionAction, action) }
+	}
+	menu.Add("Trigger Review").
+		SetTooltip("run the configured QA review provider on the selected session").
+		SetAccelerator("CmdOrCtrl+Shift+r").
+		OnClick(ask(actionReview))
+	menu.Add("Open PR in Browser").
+		SetAccelerator("CmdOrCtrl+Shift+o").
+		OnClick(ask(actionOpenPR))
+	menu.Add("New Worktree Shell").
+		SetAccelerator("CmdOrCtrl+t").
+		OnClick(ask(actionNewShell))
+	menu.AddSeparator()
+	menu.Add("Kill Session…").
+		SetAccelerator("CmdOrCtrl+Shift+k").
+		OnClick(ask(actionKill))
 }
 
 // ensurePATH augments the process PATH with the usual Homebrew locations. A
@@ -324,6 +378,19 @@ const (
 	evtOpenSettings = "app:open-settings" // no payload
 	// evtOpenUpdate opens the software-update overlay from the status-bar menu.
 	evtOpenUpdate = "app:open-update" // no payload
+	// evtSessionAction carries one of the action* names below from the Session
+	// menu (and its accelerator) to the frontend, which applies it to the
+	// cockpit's selected session. See newSessionMenu.
+	evtSessionAction = "app:session-action" // string
+)
+
+// The evtSessionAction payloads. Mirrored by the switch in App.svelte's
+// sessionAction — keep the two lists in step.
+const (
+	actionReview   = "review"
+	actionOpenPR   = "open-pr"
+	actionNewShell = "new-shell"
+	actionKill     = "kill"
 )
 
 // PushErrDTO is the payload of evtPushErr: which push-loop command failed and
@@ -338,6 +405,7 @@ func init() {
 	application.RegisterEvent[bool](evtAlive)
 	application.RegisterEvent[struct{}](evtOpenSettings)
 	application.RegisterEvent[struct{}](evtOpenUpdate)
+	application.RegisterEvent[string](evtSessionAction)
 	application.RegisterEvent[protocol.SessionsData](evtSessions)
 	application.RegisterEvent[protocol.ProjectsData](evtProjects)
 	application.RegisterEvent[protocol.StatusData](evtStatus)
