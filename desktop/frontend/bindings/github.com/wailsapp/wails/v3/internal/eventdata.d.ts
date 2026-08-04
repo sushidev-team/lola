@@ -17,6 +17,7 @@ declare module "@wailsio/runtime" {
         interface CustomEvents {
             "app:open-settings": {};
             "app:open-update": {};
+            "app:session-action": string;
             "daemon:alive": boolean;
             "daemon:projects": protocol$0.ProjectsData;
             "daemon:pusherr": main$0.PushErrDTO;
