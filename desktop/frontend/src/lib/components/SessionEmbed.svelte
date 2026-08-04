@@ -98,7 +98,7 @@
       <StatusPill status={session.status} interpreted={session.interpretedState} />
       {#if session.headline}
         <!-- The interpreter's one-line judgement (untrusted, display only). -->
-        <span class="truncate text-sm text-orange" title={session.waitingOn || undefined}>≈ {session.headline}</span>
+        <span class="truncate text-sm text-info" title={session.waitingOn || undefined}>≈ {session.headline}</span>
       {/if}
       {#if session.currentTool}
         <!-- What the in-flight turn runs right now (PostToolUse hook). -->

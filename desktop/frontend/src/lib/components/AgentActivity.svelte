@@ -52,7 +52,10 @@
       >
     {/if}
     {#if text}
-      <span class="truncate {session.headline ? 'text-orange' : 'text-faint'}"
+      <!-- The interpreter's headline reads as a live-progress note, not a
+           warning, so it carries the pulse dot's `info` blue. Orange is spoken
+           for by "you are needed" (needsYou, the waiting_input note above). -->
+      <span class="truncate {session.headline ? 'text-info' : 'text-faint'}"
         >{session.headline ? `≈ ${text}` : text}</span
       >
     {/if}
