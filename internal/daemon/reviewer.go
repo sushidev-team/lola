@@ -40,6 +40,7 @@ import (
 	"github.com/sushidev-team/lola/internal/review"
 	"github.com/sushidev-team/lola/internal/reviewclaude"
 	"github.com/sushidev-team/lola/internal/session"
+	"github.com/sushidev-team/lola/internal/state"
 )
 
 // provKind is the daemon-side provider kind. It mirrors config's (unexported)
@@ -630,26 +631,54 @@ func handoffStash(s session.Session, p reviewProvider, findings string) string {
 	return findings
 }
 
+// handoffDeliverable reports whether the worker is parked somewhere a hand-off
+// can safely be typed. It is DELIBERATELY wider than the bare AtPrompt gate the
+// reaction engine uses, and the extra case is the one that matters in practice:
+//
+//   - AtPrompt — the Stop hook fired and nothing has resumed the agent. The
+//     classic gate; the send CONSUMES it.
+//   - parked on an IDLE notification — AgentWaitingInput with InputIdleNotify.
+//     Claude Code emits that notification a minute or so after Stop, and
+//     handling it closes AtPrompt ("waiting on a human: never send-keys"). But
+//     the agent is provably sitting at its own prompt — this is the exact state
+//     handleAnswer types a human's reply into — so a review hand-off is just as
+//     safe there. Without this case a hand-off deferred at PR-open (the worker
+//     is virtually always mid-turn then: it just pushed) could only ever land in
+//     the narrow window between the Stop hook and that notification, which the
+//     30s observer cadence almost always misses. Findings then sat in
+//     PendingHandoffs forever.
+//
+// InputPermission stays excluded: typing prose into a y/n approval prompt
+// answers the wrong question, which is what the gate exists to prevent.
+func handoffDeliverable(s session.Session) bool {
+	return s.AtPrompt || (s.AgentState == state.AgentWaitingInput && s.InputReason == state.InputIdleNotify)
+}
+
 // sendHandoffToAgent is the generalized send-keys hand-off (PLAN §5.1), keyed on
-// PendingHandoffs[p.Kind]. It enforces the SAME send-keys safety gate as the
-// reaction engine: a mid-turn worker defers (stash, never type); an idle worker
-// has AtPrompt CONSUMED atomically (clearing the pending entry) before the send,
-// so a hook that resumed the agent meanwhile cancels the send (re-stashed).
+// PendingHandoffs[p.Kind]. It enforces the send-keys safety gate: a mid-turn
+// worker defers (stash, never type); a worker parked at its prompt
+// (handoffDeliverable) has that gate CONSUMED atomically — AtPrompt cleared and
+// the pending entry dropped — before the send, so a hook that resumed the agent
+// meanwhile cancels the send (re-stashed).
 //
 // stash is the RAW hand-off text (findings for handoffFull, pointer for
 // handoffPointer); the sanitized/prefixed message is rendered here, immediately
 // before the send — so the stash and every other sink hold the readable text
 // while the pane only ever receives sanitized bytes.
-func (d *Daemon) sendHandoffToAgent(ctx context.Context, s session.Session, p reviewProvider, stash string) {
+//
+// It reports whether it actually typed, so a caller iterating several pending
+// kinds delivers at most one per pass (see flushReviewHandoffs).
+func (d *Daemon) sendHandoffToAgent(ctx context.Context, s session.Session, p reviewProvider, stash string) bool {
 	if s.TmuxName == "" {
-		return
+		return false
 	}
-	if !s.AtPrompt || !d.ensurePromptVerified(ctx, s) {
-		// Mid-turn, or an adoption-carried gate that cannot be verified against
-		// the live pane (see ensurePromptVerified): defer, never type.
+	if !handoffDeliverable(s) || !d.ensurePromptVerified(ctx, s) {
+		// Mid-turn, waiting on a permission decision, or an adoption-carried gate
+		// that cannot be verified against the live pane (see ensurePromptVerified):
+		// defer, never type.
 		d.deferHandoff(s.ID, p.Kind, stash)
 		d.logf("", "review: %s (%s) worker is mid-turn — deferring the hand-off", s.ID, p.Kind)
-		return
+		return false
 	}
 
 	msg := stash
@@ -663,7 +692,7 @@ func (d *Daemon) sendHandoffToAgent(ctx context.Context, s session.Session, p re
 		tmuxName string
 	)
 	d.sessions.Update(s.ID, func(cur *session.Session) bool {
-		if !cur.AtPrompt {
+		if !handoffDeliverable(*cur) {
 			return false // a hook resumed the agent between the read above and here
 		}
 		cur.AtPrompt = false
@@ -677,7 +706,7 @@ func (d *Daemon) sendHandoffToAgent(ctx context.Context, s session.Session, p re
 	if !sent {
 		d.deferHandoff(s.ID, p.Kind, stash)
 		d.logf("", "review: %s (%s) worker no longer idle at prompt — deferring the hand-off", s.ID, p.Kind)
-		return
+		return false
 	}
 
 	sctx, cancel := context.WithTimeout(ctx, reactExecTimeout)
@@ -685,10 +714,21 @@ func (d *Daemon) sendHandoffToAgent(ctx context.Context, s session.Session, p re
 	if err := d.sendKeys(sctx, tmuxName, msg); err != nil {
 		// Gate already consumed; do not roll back (that would re-fire and spam).
 		d.logf("", "review: %s (%s) send-keys of hand-off failed: %v", s.ID, p.Kind, err)
-		return
+		return false
 	}
+	// The agent is resuming: promote the axis back to working, exactly as
+	// handleAnswer does after a human's reply. SetAgentState stamps
+	// LastActivityAt, so the anti-false-working guard grants the full grace
+	// window even for agents that emit no user_prompt hook (codex/opencode) —
+	// and, since the idle-notify parking is now cleared, the widened gate above
+	// cannot re-deliver on the next cycle.
+	d.sessions.Update(s.ID, func(cur *session.Session) bool {
+		cur.SetAgentState(state.AgentWorking, "", time.Now())
+		return true
+	})
 	d.reviewSave()
 	d.logf("", "review: %s (%s) handed feedback to the worker", s.ID, p.Kind)
+	return true
 }
 
 // deferHandoff stashes the hand-off text on PendingHandoffs[kind] for a later
@@ -713,12 +753,16 @@ func (d *Daemon) deferHandoff(id string, k provKind, stash string) {
 }
 
 // flushReviewHandoffs delivers any hand-off deferred earlier (worker mid-turn)
-// once the worker is idle at its prompt again. It attempts every pending kind;
-// the first successful send CONSUMES AtPrompt, so the rest re-defer for the next
-// idle cycle (matching the legacy one-at-a-time flush). Called every cycle.
+// once the worker is parked at its prompt again (handoffDeliverable). It
+// attempts the pending kinds in turn and STOPS after the first successful send:
+// one delivery per pass, the rest re-defer for the next idle cycle. That stop is
+// load-bearing now that a send no longer necessarily consumes an AtPrompt gate —
+// on the idle-notify path several kinds would otherwise all type into the same
+// prompt back-to-back. Called every observer cycle AND straight off the Stop
+// hook (see hookEvent), which is what closes the window the cadence used to miss.
 func (d *Daemon) flushReviewHandoffs(ctx context.Context, id string) {
 	s, ok := d.sessions.Get(id)
-	if !ok || len(s.PendingHandoffs) == 0 || !s.AtPrompt {
+	if !ok || len(s.PendingHandoffs) == 0 || !handoffDeliverable(s) {
 		return
 	}
 	for kStr := range s.PendingHandoffs {
@@ -726,23 +770,25 @@ func (d *Daemon) flushReviewHandoffs(ctx context.Context, id string) {
 		if !ok {
 			continue // kind no longer configured; leave the stash for a future config
 		}
-		d.flushPendingHandoff(ctx, id, p)
+		if d.flushPendingHandoff(ctx, id, p) {
+			return
+		}
 	}
 }
 
 // flushPendingHandoff re-reads the record and delivers the deferred hand-off for
 // p.Kind, no-op when nothing is pending or the worker is still busy (the send
-// just re-stashes then).
-func (d *Daemon) flushPendingHandoff(ctx context.Context, id string, p reviewProvider) {
+// just re-stashes then). It reports whether it typed.
+func (d *Daemon) flushPendingHandoff(ctx context.Context, id string, p reviewProvider) bool {
 	s, ok := d.sessions.Get(id)
-	if !ok || !s.AtPrompt {
-		return
+	if !ok || !handoffDeliverable(s) {
+		return false
 	}
 	stash := s.PendingHandoffs[string(p.Kind)]
 	if stash == "" {
-		return
+		return false
 	}
-	d.sendHandoffToAgent(ctx, s, p, stash)
+	return d.sendHandoffToAgent(ctx, s, p, stash)
 }
 
 // commentOnLinear posts the findings as a Linear comment via the P4 write-back

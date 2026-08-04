@@ -18,12 +18,15 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/linear"
 	"github.com/sushidev-team/lola/internal/notify"
+	"github.com/sushidev-team/lola/internal/protocol"
 	"github.com/sushidev-team/lola/internal/review"
 	"github.com/sushidev-team/lola/internal/session"
+	"github.com/sushidev-team/lola/internal/state"
 )
 
 // --- shared helpers (used by review_test.go and coderabbit_test.go) -----------
@@ -357,6 +360,203 @@ func TestReviewDefersWhenWorkerBusyThenFlushes(t *testing.T) {
 	d.flushReviewHandoffs(context.Background(), s.ID)
 	if len(seams.sendCalls()) != 1 {
 		t.Errorf("flush must not re-send a delivered hand-off, got %d sends", len(seams.sendCalls()))
+	}
+}
+
+// --- idle-notify parking is deliverable; a permission prompt is not -----------
+
+// parkSession puts a stored session in the "agent stopped for input" shape the
+// notification hook produces: AtPrompt closed, the agent axis parked with the
+// given reason (handleHookEvent's "notification" branch).
+func parkSession(t *testing.T, d *Daemon, id string, reason state.InputReason) {
+	t.Helper()
+	d.sessions.Update(id, func(cur *session.Session) bool {
+		cur.SetAgentState(state.AgentWaitingInput, "", time.Now())
+		cur.InputReason = reason
+		cur.AtPrompt = false
+		cur.AtPromptVerified = true
+		return true
+	})
+}
+
+// A hand-off deferred at PR-open must still land once Claude Code's idle
+// notification has parked the worker — that notification CLOSES AtPrompt, so
+// before handoffDeliverable this stash could only ever be delivered in the sliver
+// between the Stop hook and the notification, and in practice never was.
+func TestReviewFlushesToIdleNotifyParkedWorker(t *testing.T) {
+	d := newTestDaemon(t, reviewTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})
+	syncProviders(d)
+	seams := &fakeReactSeams{}
+	seams.install(d)
+	fr := &fakeReview{findings: "PARKED-FINDING"}
+	fr.install(d)
+
+	s := reactSess("FE-1", "review_pending", openPR(7, "MERGEABLE", "", "pass"))
+	s.AtPrompt = false // mid-turn at PR-open, as it always is in production
+	d.sessions.Upsert(s)
+	d.runReviewProviders(context.Background(), s)
+	if len(seams.sendCalls()) != 0 {
+		t.Fatal("a mid-turn worker must not be sent-keys")
+	}
+
+	// The turn ends and Claude Code parks the agent with its idle nudge.
+	parkSession(t, d, s.ID, state.InputIdleNotify)
+	d.flushReviewHandoffs(context.Background(), s.ID)
+
+	sends := seams.sendCalls()
+	if len(sends) != 1 || !strings.Contains(sends[0].text, "PARKED-FINDING") {
+		t.Fatalf("an idle-notify parked worker must receive the deferred hand-off, got %+v", sends)
+	}
+	got, _ := d.sessions.Get(s.ID)
+	if got.PendingHandoffs["coderabbit-cli"] != "" {
+		t.Errorf("PendingHandoffs[cli] must clear after delivery, got %q", got.PendingHandoffs["coderabbit-cli"])
+	}
+	// The send resumed the agent: the axis must say so, which is also what stops
+	// the widened gate from re-delivering on the next cycle.
+	if got.AgentState != state.AgentWorking {
+		t.Errorf("AgentState = %q after a delivered hand-off, want working", got.AgentState)
+	}
+	d.flushReviewHandoffs(context.Background(), s.ID)
+	if len(seams.sendCalls()) != 1 {
+		t.Errorf("a delivered hand-off must not re-send, got %d sends", len(seams.sendCalls()))
+	}
+}
+
+// A permission prompt stays untouchable: typing findings there answers the
+// approval question with prose.
+func TestReviewNeverFlushesToPermissionPrompt(t *testing.T) {
+	d := newTestDaemon(t, reviewTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})
+	syncProviders(d)
+	seams := &fakeReactSeams{}
+	seams.install(d)
+	fr := &fakeReview{findings: "DO-NOT-TYPE"}
+	fr.install(d)
+
+	s := reactSess("FE-1", "review_pending", openPR(7, "MERGEABLE", "", "pass"))
+	s.AtPrompt = false
+	d.sessions.Upsert(s)
+	d.runReviewProviders(context.Background(), s)
+
+	parkSession(t, d, s.ID, state.InputPermission)
+	d.flushReviewHandoffs(context.Background(), s.ID)
+
+	if sends := seams.sendCalls(); len(sends) != 0 {
+		t.Fatalf("a worker waiting on a permission decision must never be typed into, got %+v", sends)
+	}
+	got, _ := d.sessions.Get(s.ID)
+	if !strings.Contains(got.PendingHandoffs["coderabbit-cli"], "DO-NOT-TYPE") {
+		t.Errorf("the stash must survive an undeliverable flush, got %q", got.PendingHandoffs["coderabbit-cli"])
+	}
+}
+
+// A restart carries the stash but marks the gate UNVERIFIED. An idle-notify
+// parked worker must still be verifiable against its live pane — an
+// AtPrompt-only "still open" check inside ensurePromptVerified could never
+// re-verify one (the notification already closed AtPrompt), stranding the
+// hand-off for the life of the session.
+func TestReviewFlushVerifiesCarriedGateOnParkedWorker(t *testing.T) {
+	d := newTestDaemon(t, reviewTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})
+	syncProviders(d)
+	seams := &fakeReactSeams{}
+	seams.install(d)
+	d.paneTail = func(context.Context, string, int) (string, error) { return paneWaiting, nil }
+
+	s := reactSess("FE-1", "review_pending", openPR(7, "MERGEABLE", "", "pass"))
+	s.PendingHandoffs = map[string]string{string(kindCoderabbitCLI): "CARRIED-FINDING"}
+	d.sessions.Upsert(s)
+	parkSession(t, d, s.ID, state.InputIdleNotify)
+	// Adoption's carry: the gate survives the restart, unverified.
+	d.sessions.Update(s.ID, func(cur *session.Session) bool { cur.AtPromptVerified = false; return true })
+
+	d.flushReviewHandoffs(context.Background(), s.ID)
+
+	sends := seams.sendCalls()
+	if len(sends) != 1 || !strings.Contains(sends[0].text, "CARRIED-FINDING") {
+		t.Fatalf("a waiting pane must verify the carried gate and deliver, got %+v", sends)
+	}
+}
+
+// A mid-turn pane still blocks the same delivery: verification is what decides,
+// not the widened gate.
+func TestReviewFlushDefersWhenCarriedGatePaneIsWorking(t *testing.T) {
+	d := newTestDaemon(t, reviewTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})
+	syncProviders(d)
+	seams := &fakeReactSeams{}
+	seams.install(d)
+	d.paneTail = func(context.Context, string, int) (string, error) { return paneWorking, nil }
+
+	s := reactSess("FE-1", "review_pending", openPR(7, "MERGEABLE", "", "pass"))
+	s.PendingHandoffs = map[string]string{string(kindCoderabbitCLI): "CARRIED-FINDING"}
+	d.sessions.Upsert(s)
+	parkSession(t, d, s.ID, state.InputIdleNotify)
+	d.sessions.Update(s.ID, func(cur *session.Session) bool { cur.AtPromptVerified = false; return true })
+
+	d.flushReviewHandoffs(context.Background(), s.ID)
+
+	if sends := seams.sendCalls(); len(sends) != 0 {
+		t.Fatalf("a working pane must block the hand-off, got %+v", sends)
+	}
+	got, _ := d.sessions.Get(s.ID)
+	if !strings.Contains(got.PendingHandoffs[string(kindCoderabbitCLI)], "CARRIED-FINDING") {
+		t.Errorf("the stash must survive, got %q", got.PendingHandoffs[string(kindCoderabbitCLI)])
+	}
+}
+
+// Two kinds pending on a parked worker: exactly ONE lands per pass. Without the
+// early return they would both type into the same prompt, since an idle-notify
+// delivery consumes no AtPrompt gate.
+func TestReviewFlushDeliversOneKindPerPass(t *testing.T) {
+	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})
+	seams := &fakeReactSeams{}
+	seams.install(d)
+	setProviders(d, cliDesc(), claudeDesc())
+
+	s := reactSess("FE-1", "review_pending", openPR(7, "MERGEABLE", "", "pass"))
+	s.AtPrompt = false
+	s.PendingHandoffs = map[string]string{
+		string(kindCoderabbitCLI): "STASH-CLI",
+		string(kindClaudeSession): "STASH-CLAUDE",
+	}
+	d.sessions.Upsert(s)
+	parkSession(t, d, s.ID, state.InputIdleNotify)
+
+	d.flushReviewHandoffs(context.Background(), s.ID)
+	if n := len(seams.sendCalls()); n != 1 {
+		t.Fatalf("want exactly one hand-off per flush pass, got %d", n)
+	}
+	got, _ := d.sessions.Get(s.ID)
+	if len(got.PendingHandoffs) != 1 {
+		t.Errorf("the undelivered kind must stay stashed, got %+v", got.PendingHandoffs)
+	}
+}
+
+// The Stop hook flushes immediately — the 30s observer cadence is a backstop, not
+// the delivery path.
+func TestStopHookFlushesPendingHandoff(t *testing.T) {
+	d := newTestDaemon(t, reviewTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})
+	syncProviders(d)
+	seams := &fakeReactSeams{}
+	seams.install(d)
+
+	s := reactSess("FE-1", "review_pending", openPR(7, "MERGEABLE", "", "pass"))
+	s.AtPrompt = false
+	s.PendingHandoffs = map[string]string{string(kindCoderabbitCLI): "STOP-HOOK-FINDING"}
+	d.sessions.Upsert(s)
+
+	d.handleHookEvent(protocol.Request{Cmd: "hookEvent", Session: s.ID, Event: "stop"})
+
+	// The flush is async (a hook must never block the agent's turn), so poll.
+	deadline := time.Now().Add(2 * time.Second)
+	for len(seams.sendCalls()) == 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	sends := seams.sendCalls()
+	if len(sends) != 1 || !strings.Contains(sends[0].text, "STOP-HOOK-FINDING") {
+		t.Fatalf("the Stop hook must deliver the pending hand-off, got %+v", sends)
+	}
+	got, _ := d.sessions.Get(s.ID)
+	if got.PendingHandoffs[string(kindCoderabbitCLI)] != "" {
+		t.Errorf("PendingHandoffs must clear after the stop-hook delivery, got %q", got.PendingHandoffs[string(kindCoderabbitCLI)])
 	}
 }
 

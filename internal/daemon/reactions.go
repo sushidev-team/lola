@@ -351,6 +351,14 @@ func (d *Daemon) reactApproved(ctx context.Context, s session.Session, notifier 
 //     without sending; a real Stop hook re-opens it.
 //   - ActivityUnknown / capture failure: not proven either way — fail CLOSED:
 //     the send defers and a later hook or pane cycle settles the gate.
+//
+// "Still open" is handoffDeliverable, not a bare AtPrompt read, so a worker
+// parked on an idle notification can be verified after a restart too — adoption
+// marks every carried gate unverified, and an AtPrompt-only check could never
+// re-verify a session whose AtPrompt the notification had already closed,
+// stranding its review hand-off forever. This cannot loosen the reaction path:
+// reactSendAgent requires AtPrompt itself before calling here, and its own
+// atomic consume re-checks AtPrompt after.
 func (d *Daemon) ensurePromptVerified(ctx context.Context, s session.Session) bool {
 	// Re-read the live record: the caller's copy is a cycle-old snapshot and a
 	// hook may have verified (or closed) the gate since.
@@ -371,7 +379,7 @@ func (d *Daemon) ensurePromptVerified(ctx context.Context, s session.Session) bo
 	case attention.ActivityWaiting:
 		verified := false
 		d.sessions.Update(s.ID, func(cur *session.Session) bool {
-			if !cur.AtPrompt {
+			if !handoffDeliverable(*cur) {
 				return false // a hook resumed the agent meanwhile: nothing to verify
 			}
 			cur.AtPromptVerified = true
@@ -381,7 +389,7 @@ func (d *Daemon) ensurePromptVerified(ctx context.Context, s session.Session) bo
 		return verified
 	case attention.ActivityWorking:
 		d.sessions.Update(s.ID, func(cur *session.Session) bool {
-			if !cur.AtPrompt {
+			if !handoffDeliverable(*cur) {
 				return false
 			}
 			cur.AtPrompt = false // the carried gate was stale: close it

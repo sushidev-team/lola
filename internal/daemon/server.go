@@ -333,7 +333,40 @@ func (d *Daemon) handleHookEvent(req protocol.Request) protocol.Response {
 			d.logf("", "hookEvent: persist sessions: %v", err)
 		}
 	}
+	if req.Event == "stop" {
+		d.flushHandoffsOnStop(req.Session)
+	}
 	return ok
+}
+
+// flushHandoffsOnStop delivers a deferred review hand-off the moment the worker
+// goes idle, instead of waiting for the next observer cycle. The Stop hook is
+// the ONLY event that opens the AtPrompt gate, so this is the earliest — and
+// most reliable — delivery point: findings deferred at PR-open (where the worker
+// is essentially always mid-turn) used to have to survive up to 30s of cadence
+// before a flush looked, and Claude Code's idle notification routinely closed
+// the gate first.
+//
+// It runs ASYNC on a shutdown-shielded context, because a hook sits on the
+// agent's critical path (bounded 2s, always exits 0) and the flush execs
+// send-keys. Registering with the conn drain group means graceful shutdown waits
+// for an in-flight hand-off rather than SIGKILLing it mid-send; a daemon already
+// draining simply skips (the stash survives for the next cycle).
+func (d *Daemon) flushHandoffsOnStop(id string) {
+	if id == "" || !d.beginConnWork() {
+		return
+	}
+	go func() {
+		defer d.connWg.Done()
+		defer func() {
+			if r := recover(); r != nil {
+				d.logf("", "hookEvent: hand-off flush panicked for %s: %v", id, r)
+			}
+		}()
+		// Background, not the request context: the connection's context dies with
+		// the hook reply, which lands long before a send-keys can finish.
+		d.flushReviewHandoffs(context.Background(), id)
+	}()
 }
 
 // warnUnknownHookSession logs an unknown hookEvent session once per ID: hooks

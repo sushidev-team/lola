@@ -247,7 +247,22 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   and are **never** run as a command. A gate carried across a daemon restart is
   UNVERIFIED (`AtPromptVerified=false` from adoption) and must pass
   `ensurePromptVerified` (live hook or a waiting pane) before the first send —
-  ambiguity fails closed (defer).
+  ambiguity fails closed (defer). The **review hand-off** uses a deliberately
+  wider gate, `handoffDeliverable`: `AtPrompt` **or** parked on an idle
+  notification (`AgentWaitingInput` + `InputIdleNotify`), the same state
+  `handleAnswer` types a human's reply into. `InputPermission` stays excluded —
+  prose typed at a y/n approval answers the wrong question. Without the wider
+  gate the feature was dead: findings deferred at PR-open (the worker has just
+  pushed, so it is essentially always mid-turn) could only land in the sliver
+  between the Stop hook and Claude Code's idle notification, which closes
+  `AtPrompt` — the 30s observer cadence missed it every time and stashes piled
+  up in `PendingHandoffs` unread. Two consequences: the Stop hook flushes
+  immediately (`flushHandoffsOnStop`, async + drain-group registered, because a
+  hook must never block a turn), and `flushReviewHandoffs` stops after ONE
+  delivery per pass — an idle-notify delivery consumes no `AtPrompt`, so
+  without that stop several kinds would type into the same prompt back-to-back.
+  A delivered hand-off sets `AgentWorking` (as `handleAnswer` does), which is
+  what closes the wider gate against a re-send.
 - **Fire once per transition.** Reactions and write-backs use persisted
   one-shot guards (`LastReactedStatus`, `WB*Done`, review's per-PR guard) so
   they don't re-fire on every 30s observer cycle.
