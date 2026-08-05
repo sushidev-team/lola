@@ -10,6 +10,7 @@ beforeEach(() => {
   nav.sidebarOpen = true;
   nav.scoped = false;
   nav.project = "";
+  nav.view = "cockpit";
 });
 
 describe("nav.cycleLens", () => {
@@ -74,6 +75,46 @@ describe("nav.setLens", () => {
     nav.cycleLens(); // kanban → grid
     expect(nav.lens).toBe("grid");
     expect(nav.focusedTerm).toBe("");
+  });
+});
+
+describe("nav.toggleProjectScope", () => {
+  it("scopes to a project, then clears the scope on a second click", () => {
+    nav.toggleProjectScope("nori");
+    expect(nav.scoped).toBe(true);
+    expect(nav.project).toBe("nori");
+    nav.toggleProjectScope("nori");
+    expect(nav.scoped).toBe(false);
+    expect(nav.project).toBe("");
+  });
+
+  it("switches scope rather than clearing when a DIFFERENT project is clicked", () => {
+    nav.toggleProjectScope("nori");
+    nav.toggleProjectScope("okane");
+    expect(nav.scoped).toBe(true);
+    expect(nav.project).toBe("okane");
+  });
+
+  // `scoped` outlives goDetail, so the row is still drawn active on the project
+  // hub. A click there must NAVIGATE to that project's sessions — clearing would
+  // send the user somewhere they never asked for and read as a swallowed click.
+  it("navigates instead of clearing when the cockpit isn't the current view", () => {
+    nav.toggleProjectScope("nori");
+    nav.goDetail("nori");
+    nav.toggleProjectScope("nori");
+    expect(nav.view).toBe("cockpit");
+    expect(nav.scoped).toBe(true);
+    expect(nav.project).toBe("nori");
+  });
+
+  // Same rule the "All" breadcrumb follows: dropping the project scope must not
+  // silently widen the status filter back to everything.
+  it("keeps the triage filter when it clears the scope", () => {
+    nav.setTriage("Needs You");
+    nav.toggleProjectScope("nori");
+    nav.toggleProjectScope("nori");
+    expect(nav.scoped).toBe(false);
+    expect(nav.triage).toBe("Needs You");
   });
 });
 

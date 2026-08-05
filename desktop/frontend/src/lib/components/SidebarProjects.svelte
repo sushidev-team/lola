@@ -45,6 +45,10 @@
       {#each store.projects as p (p.name)}
         {@const d = pollDot(p.name)}
         {@const active = nav.scoped && nav.project === p.name}
+        <!-- Mirrors nav.toggleProjectScope's own condition: a row is drawn active
+             on the project hub too (scope outlives goDetail), and there the click
+             still navigates rather than clearing. -->
+        {@const clears = active && nav.view === "cockpit"}
         <li>
           <NavRow
             label={displayName(p)}
@@ -52,8 +56,8 @@
             glyphCls={d.cls}
             dim={d.faint}
             {active}
-            title="scope the cockpit to this project"
-            onclick={() => nav.goCockpit(p.name)}
+            title={clears ? "clear the project filter" : "scope the cockpit to this project"}
+            onclick={() => nav.toggleProjectScope(p.name)}
           >
             {#snippet badges()}
               <!-- Bare glyph counts on purpose: the triage row named "Needs You"

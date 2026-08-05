@@ -74,6 +74,23 @@ class Nav {
     this.project = scopeProject;
     this.focusedTerm = "";
   }
+  /**
+   * What a sidebar project row does when clicked. Clicking the project the
+   * cockpit is ALREADY scoped to drops the scope — the same destination as the
+   * "All" breadcrumb. Without it the project list was the one nav group with no
+   * way back to every-project: Triage carries an explicit "All sessions" row,
+   * Projects does not, so the only exits were the breadcrumb or Escape.
+   *
+   * The toggle fires ONLY while the scope is actually in effect on screen. From
+   * the project hub or the home list a row is still drawn active (`scoped`
+   * outlives `goDetail`), and a click there has to mean "take me to this
+   * project's sessions" — un-scoping would send you somewhere you never asked
+   * for and look like the click was swallowed.
+   */
+  toggleProjectScope(name: string) {
+    const clearing = this.view === "cockpit" && this.scoped && this.project === name;
+    this.goCockpit(clearing ? "" : name);
+  }
   goHome() {
     this.view = "home";
     this.focusedTerm = "";
