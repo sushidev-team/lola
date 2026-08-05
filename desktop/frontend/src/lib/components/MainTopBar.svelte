@@ -2,6 +2,7 @@
   import { store, scopedSessions } from "$lib/store.svelte";
   import { nav } from "$lib/nav.svelte";
   import { triaged } from "$lib/filters";
+  import Button from "./Button.svelte";
 
   // The main column's 44px context header. It replaces the old full-width vitals
   // bar: it starts at the SIDEBAR's right edge, not the window's, so together
@@ -69,20 +70,15 @@
 >
   {#if !nav.sidebarOpen}
     <!-- Placed AFTER the traffic-light padding, never inside it. -->
-    <button
-      class="rounded p-1 text-faint hover:bg-sel hover:text-ink"
-      title="show sidebar (b)"
-      aria-label="Show sidebar"
-      onclick={() => nav.toggleSidebar()}>»</button
-    >
+    <Button icon title="show sidebar (b)" aria-label="Show sidebar" onclick={() => nav.toggleSidebar()}>»</Button>
   {/if}
 
   {#if nav.view !== "cockpit"}
-    <button
-      class="rounded p-1 text-faint hover:bg-sel hover:text-ink"
+    <Button
+      icon
       title="back to sessions (Esc)"
       aria-label="Back to sessions"
-      onclick={() => nav.goCockpit(nav.scoped ? nav.project : "")}>←</button
+      onclick={() => nav.goCockpit(nav.scoped ? nav.project : "")}>←</Button
     >
   {/if}
 
@@ -109,36 +105,34 @@
          when the list is empty. Silent while everything is fine, so the bar stays
          quiet; opens the doctor, same as the sidebar chip. -->
     {#if !nav.sidebarOpen && store.connected && !daemonOk}
-      <button
-        class="flex items-center gap-1.5 rounded px-1.5 py-1 {store.alive ? 'text-warn' : 'text-bad'} hover:bg-sel"
+      <!-- Trailing `!` on the colour: it has to beat the variant's own text-faint,
+           and equal-specificity utilities are resolved by Tailwind's sheet order,
+           not by the class attribute. -->
+      <Button
+        class={store.alive ? "text-warn!" : "text-bad!"}
         title="{daemonHealth} · open doctor (d)"
         onclick={() => nav.openOverlay("doctor")}
       >
         <span aria-hidden="true">{store.alive ? "▲" : "○"}</span>
-        <span>{store.alive ? "degraded" : "daemon down"}</span>
-      </button>
+        <span>{store.alive ? "Degraded" : "Daemon down"}</span>
+      </Button>
     {/if}
     {#if nav.view === "cockpit"}
-      <span class="flex items-center gap-0.5 rounded border border-edge p-0.5">
+      <span class="flex items-center gap-0.5 rounded-md border border-edge p-0.5">
         {#each lenses as l (l.id)}
-          <button
-            class="rounded px-1.5 py-[1px] text-sm"
-            class:bg-accent={nav.lens === l.id}
-            class:text-on-accent={nav.lens === l.id}
-            class:text-faint={nav.lens !== l.id}
+          <Button
+            size="xs"
+            selected={nav.lens === l.id}
             title={l.label}
             aria-label="{l.label} lens"
-            aria-pressed={nav.lens === l.id}
-            onclick={() => nav.setLens(l.id)}>{l.icon}</button
+            onclick={() => nav.setLens(l.id)}>{l.icon}</Button
           >
         {/each}
       </span>
     {:else if nav.view === "home"}
-      <button
-        class="rounded border border-edge px-2 py-1 text-faint hover:border-accent hover:text-accent-ink"
-        title="add a project"
-        onclick={() => nav.openOverlay("project", "")}>+ Add project</button
-      >
+      <Button variant="secondary" title="add a project" onclick={() => nav.openOverlay("project", "")}>
+        <span aria-hidden="true">+</span> Add project
+      </Button>
     {/if}
   </span>
 </header>

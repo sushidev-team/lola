@@ -1,5 +1,6 @@
 <script lang="ts">
   import { store } from "$lib/store.svelte";
+  import Button from "./Button.svelte";
 
   // Reads the store directly (leaf component, always mounted) so its own template
   // reacts to pushError in the production WKWebView. See WKWEBVIEW_REACTIVITY.
@@ -30,16 +31,8 @@
       <span class="selectable text-sm text-faint">({err.cmd}: {err.msg})</span>
     </span>
     {#if stale}
-      <button
-        class="shrink-0 rounded border border-edge px-2 py-[1px] text-ink hover:border-accent hover:text-accent-ink"
-        onclick={() => store.restartDaemon()}>⟳ restart</button
-      >
+      <Button variant="secondary" onclick={() => store.restartDaemon()}>Restart</Button>
     {/if}
-    <button
-      class="shrink-0 rounded px-1.5 py-[1px] text-faint hover:text-ink"
-      title="dismiss"
-      aria-label="dismiss"
-      onclick={() => store.dismissPushError()}>✕</button
-    >
+    <Button icon title="dismiss" aria-label="dismiss" onclick={() => store.dismissPushError()}>✕</Button>
   </div>
 {/if}

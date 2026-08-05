@@ -5,6 +5,7 @@
   import StatusPill from "./StatusPill.svelte";
   import LivePulse from "./LivePulse.svelte";
   import LiveTerminal from "./LiveTerminal.svelte";
+  import Button from "./Button.svelte";
 
   // `focused` = the expanded full-cockpit view ("minimize" toggle); otherwise the
   // compact detail panel. The two used to differ in terminal font size as well —
@@ -116,17 +117,13 @@
                has focus every other key goes to the agent, so this is the only
                way back to the cockpit without reaching for the mouse. -->
           <span class="text-sm text-faint">⌃Q back</span>
-          <button
-            class="rounded bg-accent-fill px-2.5 py-[2px] font-medium text-accent-ink hover:bg-accent-fill-hover"
-            title="exit fullscreen (Ctrl-Q)"
-            onclick={() => nav.toggleFocusTerm(session.id)}>⤢ minimize</button
-          >
+          <Button variant="primary" size="xs" title="exit fullscreen (Ctrl-Q)" onclick={() => nav.toggleFocusTerm(session.id)}>
+            <span aria-hidden="true">⤢</span> Minimize
+          </Button>
         {:else}
-          <button
-            class="rounded border border-edge px-2 py-[1px] hover:border-accent hover:text-accent-ink"
-            title="expand to fullscreen"
-            onclick={() => nav.toggleFocusTerm(session.id)}>⛶ focus</button
-          >
+          <Button variant="secondary" size="xs" title="expand to fullscreen" onclick={() => nav.toggleFocusTerm(session.id)}>
+            <span aria-hidden="true">⛶</span> Focus
+          </Button>
         {/if}
       </span>
     </div>
@@ -136,34 +133,30 @@
          that opens another shell. Collapses in the compact, agent-only case so
          the plain detail panel stays chrome-free. -->
     {#if showTabs}
-      <div class="relative z-10 flex flex-wrap items-center gap-1 border-b border-edge/60 px-2 py-1 text-sm">
-        <button
-          class="rounded px-2 py-[2px] font-medium"
-          class:bg-accent-fill={activeTab === AGENT}
-          class:text-accent-ink={activeTab === AGENT}
-          class:text-faint={activeTab !== AGENT}
-          onclick={() => selectTab(session.id, AGENT)}>agent</button
-        >
+      <div class="relative z-10 flex flex-wrap items-center gap-1 border-b border-edge/60 px-2 py-1">
+        <Button size="xs" selected={activeTab === AGENT} onclick={() => selectTab(session.id, AGENT)}>Agent</Button>
         {#each shells as sh (sh)}
-          <span class="flex items-center rounded" class:bg-accent-fill={activeTab === sh}>
-            <button
-              class="rounded-l px-2 py-[2px] font-medium"
-              class:text-accent-ink={activeTab === sh}
-              class:text-faint={activeTab !== sh}
-              onclick={() => selectTab(session.id, sh)}>{terms.labelFor(session.id, sh)}</button
-            >
-            <button
-              class="rounded-r pr-1.5 py-[2px] text-faint hover:text-bad"
+          <!-- The selected chip is drawn on the LABEL only, never on a wrapper
+               around both: a wrapper background plus the button's own would be two
+               same-name utilities racing on source order, which Tailwind decides,
+               not the class attribute. The ✕ stays a separate control beside it. -->
+          <span class="flex items-center">
+            <Button size="xs" selected={activeTab === sh} onclick={() => selectTab(session.id, sh)}>
+              {terms.labelFor(session.id, sh)}
+            </Button>
+            <Button
+              variant="danger"
+              size="xs"
+              icon
               title="close shell"
-              onclick={() => terms.closeShell(session.id, sh)}>×</button
+              aria-label="close shell"
+              onclick={() => terms.closeShell(session.id, sh)}>×</Button
             >
           </span>
         {/each}
-        <button
-          class="rounded px-2 py-[2px] text-faint hover:text-accent-ink"
-          title="open a shell in the worktree"
-          onclick={() => terms.newShell(session.id, session.worktree)}>+ shell</button
-        >
+        <Button size="xs" title="open a shell in the worktree" onclick={() => terms.newShell(session.id, session.worktree)}>
+          <span aria-hidden="true">+</span> Shell
+        </Button>
       </div>
     {/if}
 
@@ -197,20 +190,22 @@
       {/if}
     </div>
 
-    <!-- actions -->
-    <div class="flex flex-wrap items-center gap-1.5 border-t border-edge/60 px-3 py-1.5 text-sm">
+    <!-- actions — ghost buttons: nothing painted until the cursor arrives, but a
+         real hover chip so the row reads as controls rather than as a sentence of
+         faint words. -->
+    <div class="flex flex-wrap items-center gap-1 border-t border-edge/60 px-2 py-1">
       {#if session.prNumber > 0}
-        <button class="rounded px-2 py-[1px] text-faint hover:text-accent-ink" onclick={() => store.openURL(session.prUrl)}>open PR ↗</button>
+        <Button onclick={() => store.openURL(session.prUrl)}>Open PR <span aria-hidden="true">↗</span></Button>
       {/if}
-      <button class="rounded px-2 py-[1px] text-faint hover:text-accent-ink" onclick={() => store.coderabbit(session.id)}>coderabbit</button>
-      <button class="rounded px-2 py-[1px] text-faint hover:text-accent-ink" onclick={() => store.review(session.id)}>review</button>
+      <Button onclick={() => store.coderabbit(session.id)}>CodeRabbit</Button>
+      <Button onclick={() => store.review(session.id)}>Review</Button>
       {#if canRevive}
-        <button class="rounded px-2 py-[1px] text-info hover:text-accent-ink" onclick={() => store.revive(session.id)}>revive</button>
+        <Button variant="accent" onclick={() => store.revive(session.id)}>Revive</Button>
       {/if}
       <span class="ml-auto">
         <!-- Opens the shared confirm dialog (App.svelte) rather than an inline
              yes/no, so the 'x' shortcut and this button confirm the same way. -->
-        <button class="rounded px-2 py-[1px] text-faint hover:text-bad" onclick={() => store.askKill(session.id)}>kill</button>
+        <Button variant="danger" onclick={() => store.askKill(session.id)}>Kill</Button>
       </span>
     </div>
   </div>

@@ -3,6 +3,7 @@
   import { store } from "$lib/store.svelte";
   import { nav } from "$lib/nav.svelte";
   import type { PrRow, PrsData } from "@bindings/internal/protocol";
+  import Button from "$lib/components/Button.svelte";
 
   let data = $state<PrsData | null>(null);
   let loading = $state(true);
@@ -96,12 +97,7 @@
   <div class="mb-3 flex items-center gap-3">
     <!-- MainTopBar owns the "Nori ▸ Open a PR" breadcrumb; this ‹ stays because
          it goes back to the project DETAIL, which the top bar's ← does not. -->
-    <button
-      class="rounded p-1 text-faint hover:bg-sel hover:text-ink"
-      title="back to project"
-      aria-label="Back to project"
-      onclick={() => nav.goDetail(nav.project)}>←</button
-    >
+    <Button icon title="back to project" aria-label="Back to project" onclick={() => nav.goDetail(nav.project)}>←</Button>
     {#if data}
       <span class="num text-sm text-faint">
         {data.prs?.length ?? 0} open · {data.ageSeconds}s ago{data.stale ? " · stale" : ""}
@@ -112,11 +108,9 @@
       placeholder="filter PRs…"
       bind:value={filter}
     />
-    <button
-      class="rounded bg-accent-fill px-3 py-1.5 text-accent-ink hover:bg-accent-fill-hover disabled:opacity-50"
-      disabled={loading}
-      onclick={() => load(true)}>↻ refresh</button
-    >
+    <Button variant="primary" size="md" disabled={loading} onclick={() => load(true)}>
+      <span aria-hidden="true">↻</span> Refresh
+    </Button>
   </div>
 
   <div class="min-h-0 flex-1 overflow-auto rounded-[10px] border border-edge">
@@ -127,7 +121,7 @@
     {:else if error}
       <div class="flex flex-col items-center gap-2 px-3 py-8 text-center">
         <span class="text-bad">couldn't list PRs: {error}</span>
-        <button class="rounded bg-accent-fill px-3 py-1.5 text-accent-ink hover:bg-accent-fill-hover" onclick={() => load(true)}>retry</button>
+        <Button variant="primary" size="md" onclick={() => load(true)}>Retry</Button>
       </div>
     {:else if !data || (data.prs?.length ?? 0) === 0}
       <div class="px-3 py-8 text-center text-faint">No open PRs — refresh</div>
@@ -161,10 +155,12 @@
               </td>
               <td class="px-3 py-2 text-center {ci.cls}" title={p.checks} onclick={() => openShell(p)}>{ci.glyph}</td>
               <td class="px-3 py-2 text-sm {rv.cls}" title={p.review} onclick={() => openShell(p)}>{rv.text}</td>
-              <td class="px-3 py-2 text-right text-sm whitespace-nowrap opacity-0 group-hover:opacity-100">
-                <button class="px-1.5 text-faint hover:text-accent-ink disabled:opacity-40" disabled={p.alreadyOpen} onclick={() => openShell(p)}>shell</button>
-                <button class="px-1.5 text-faint hover:text-accent-ink disabled:opacity-40" disabled={p.alreadyOpen || p.isFork} onclick={() => openAgent(p)}>agent</button>
-                <button class="px-1.5 text-faint hover:text-accent-ink" onclick={() => openBrowser(p)}>browser</button>
+              <td class="px-3 py-1 whitespace-nowrap opacity-0 group-hover:opacity-100">
+                <div class="flex items-center justify-end gap-0.5">
+                  <Button size="xs" disabled={p.alreadyOpen} onclick={() => openShell(p)}>Shell</Button>
+                  <Button size="xs" disabled={p.alreadyOpen || p.isFork} onclick={() => openAgent(p)}>Agent</Button>
+                  <Button size="xs" onclick={() => openBrowser(p)}>Browser</Button>
+                </div>
               </td>
             </tr>
           {/each}

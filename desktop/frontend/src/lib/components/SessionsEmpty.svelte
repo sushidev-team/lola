@@ -1,6 +1,7 @@
 <script lang="ts">
   import { store } from "$lib/store.svelte";
   import type { Snippet } from "svelte";
+  import Button from "./Button.svelte";
 
   // The sessions panel is blank in three very different situations: the first
   // push hasn't landed (startup), the daemon is down, or it is simply idle.
@@ -29,10 +30,7 @@
       Nothing can be observed or spawned until it starts. It watches Linear and runs your coding
       agents.
     </span>
-    <button
-      class="mt-1 rounded bg-accent-fill px-3 py-1.5 font-medium text-accent-ink hover:bg-accent-fill-hover"
-      onclick={() => store.startDaemon()}>Start the daemon</button
-    >
+    <Button variant="primary" size="md" class="mt-1" onclick={() => store.startDaemon()}>Start the daemon</Button>
   </div>
 {:else if idle}
   {@render idle()}

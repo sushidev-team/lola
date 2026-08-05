@@ -3,6 +3,7 @@
   import { nav } from "$lib/nav.svelte";
   import { displayName } from "$lib/slug";
   import NavRow from "./NavRow.svelte";
+  import Button from "./Button.svelte";
 
   // The project switcher, moved out of the old Rail panel onto the shared
   // NavRow. Reads the store directly (leaf component) — see Sidebar.svelte.
@@ -19,18 +20,23 @@
 <nav class="px-2 pt-3.5" aria-label="Projects">
   <div class="flex items-center px-2 pb-1">
     <h2 class="label text-faint">Projects</h2>
-    <button
-      class="ml-auto rounded px-1 text-sm text-faint opacity-0 transition-opacity group-hover/side:opacity-100 focus-visible:opacity-100 hover:text-accent-ink"
+    <Button
+      size="xs"
+      icon
+      class="ml-auto opacity-0 transition-opacity group-hover/side:opacity-100 focus-visible:opacity-100"
       title="add a project"
       aria-label="Add project"
-      onclick={() => nav.openOverlay("project", "")}>+</button
+      onclick={() => nav.openOverlay("project", "")}>+</Button
     >
   </div>
 
   {#if store.projects.length === 0}
+    <!-- A dashed drop-zone-ish placeholder, not a <Button>: it is an empty STATE
+         that happens to be clickable, and its dashed border and 3-line height are
+         not part of the button ladder. -->
     <button
-      class="w-full rounded-md border border-dashed border-edge px-2 py-3 text-center text-sm text-faint hover:border-accent hover:text-accent-ink"
-      onclick={() => nav.openOverlay("project", "")}>no projects — add one</button
+      class="w-full rounded-md border border-dashed border-edge px-2 py-3 text-center text-sm text-faint transition-colors hover:border-accent hover:text-accent-ink"
+      onclick={() => nav.openOverlay("project", "")}>No projects — add one</button
     >
   {:else}
     <!-- Capped so a long project list can never squeeze Activity out of the
@@ -68,8 +74,9 @@
                 >{/if}
             {/snippet}
             {#snippet actions()}
-              <button
-                class="rounded px-1 text-faint hover:text-accent-ink"
+              <Button
+                size="xs"
+                icon
                 title="project settings"
                 aria-label="{displayName(p)} settings"
                 onclick={() => nav.openOverlay("project", p.name)}
@@ -87,12 +94,13 @@
                   <circle cx="12" cy="12" r="3" />
                   <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
                 </svg>
-              </button>
-              <button
-                class="rounded px-1 text-faint hover:text-accent-ink"
+              </Button>
+              <Button
+                size="xs"
+                icon
                 title="open project hub"
                 aria-label="{displayName(p)} hub"
-                onclick={() => nav.goDetail(p.name)}>›</button
+                onclick={() => nav.goDetail(p.name)}>›</Button
               >
             {/snippet}
           </NavRow>

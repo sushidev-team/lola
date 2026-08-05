@@ -3,6 +3,7 @@
   import { nav } from "$lib/nav.svelte";
   import StatusPill from "$lib/components/StatusPill.svelte";
   import LivePulse from "$lib/components/LivePulse.svelte";
+  import Button from "$lib/components/Button.svelte";
 
   const project = $derived<ProjectInfo | undefined>(store.projectByName(nav.project));
   const sessions = $derived(store.sessionsForProject(nav.project));
@@ -172,30 +173,14 @@
                   bind:value={branch}
                   onkeydown={(e) => e.key === "Enter" && startWorktree()}
                 />
-                <span class="flex items-center gap-0.5 rounded border border-edge p-0.5 text-sm">
-                  <button
-                    class="rounded px-1.5 py-[1px]"
-                    class:bg-accent={useAgent}
-                    class:text-on-accent={useAgent}
-                    class:text-faint={!useAgent}
-                    onclick={() => (useAgent = true)}>agent</button
-                  >
-                  <button
-                    class="rounded px-1.5 py-[1px]"
-                    class:bg-accent={!useAgent}
-                    class:text-on-accent={!useAgent}
-                    class:text-faint={useAgent}
-                    onclick={() => (useAgent = false)}>shell</button
-                  >
+                <span class="flex items-center gap-0.5 rounded-md border border-edge p-0.5">
+                  <Button size="xs" selected={useAgent} onclick={() => (useAgent = true)}>Agent</Button>
+                  <Button size="xs" selected={!useAgent} onclick={() => (useAgent = false)}>Shell</Button>
                 </span>
-                <button
-                  class="rounded bg-accent-fill px-3 py-1.5 text-accent-ink hover:bg-accent-fill-hover disabled:opacity-40"
-                  disabled={!branch.trim()}
-                  onclick={startWorktree}>start ›</button
-                >
-                <button class="px-2 py-1.5 text-faint hover:text-ink" onclick={() => (worktreeOpen = false)}
-                  >cancel</button
-                >
+                <Button variant="primary" size="md" disabled={!branch.trim()} onclick={startWorktree}>
+                  Start <span aria-hidden="true">›</span>
+                </Button>
+                <Button size="md" onclick={() => (worktreeOpen = false)}>Cancel</Button>
               </div>
             {/if}
           </div>
@@ -224,10 +209,9 @@
               </button>
             {/each}
             {#if moreCount > 0}
-              <button
-                class="w-full px-3 py-2 text-left text-sm text-faint hover:text-accent-ink"
-                onclick={() => nav.goCockpit(nav.project)}>… {moreCount} more</button
-              >
+              <div class="p-1.5">
+                <Button block onclick={() => nav.goCockpit(nav.project)}>Show {moreCount} more</Button>
+              </div>
             {/if}
           </div>
         {/if}

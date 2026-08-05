@@ -3,6 +3,7 @@
   import { nav } from "$lib/nav.svelte";
   import { updates } from "$lib/update.svelte";
   import Modal from "$lib/components/Modal.svelte";
+  import Button from "$lib/components/Button.svelte";
 
   // Open with a fresh check unless a check already produced info this session.
   onMount(() => {
@@ -118,36 +119,26 @@
         {#if updates.installing}
           <span class="text-faint">installing — the app will restart…</span>
         {:else if updates.dmgPath}
-          <button
-            class="rounded border border-accent bg-accent px-2.5 py-1 font-medium text-on-accent hover:opacity-90"
-            onclick={() => updates.install()}>install & restart</button
-          >
+          <Button variant="primary" size="md" onclick={() => updates.install()}>Install & restart</Button>
           <span class="text-sm text-faint">lola will quit and reopen on the new version</span>
         {:else if updates.downloading}
           <span class="text-faint">please wait…</span>
         {:else}
-          <button
-            class="rounded border border-accent bg-accent px-2.5 py-1 font-medium text-on-accent hover:opacity-90"
-            onclick={() => updates.download()}>download</button
-          >
-          <button
-            class="rounded border border-edge px-2.5 py-1 text-ink hover:border-accent"
+          <Button variant="primary" size="md" onclick={() => updates.download()}>Download</Button>
+          <Button
+            variant="secondary"
+            size="md"
             onclick={() => {
               void updates.skip();
               nav.closeOverlay();
-            }}>skip this version</button
+            }}>Skip this version</Button
           >
-          <button
-            class="ml-auto rounded px-2.5 py-1 text-faint hover:text-ink"
-            onclick={() => nav.closeOverlay()}>later</button
-          >
+          <Button size="md" class="ml-auto" onclick={() => nav.closeOverlay()}>Later</Button>
         {/if}
       {:else}
-        <button
-          class="rounded border border-edge px-2.5 py-1 text-ink hover:border-accent disabled:opacity-50"
-          disabled={updates.checking}
-          onclick={() => updates.check(true)}>{updates.checking ? "checking…" : "check again"}</button
-        >
+        <Button variant="secondary" size="md" disabled={updates.checking} onclick={() => updates.check(true)}>
+          {updates.checking ? "Checking…" : "Check again"}
+        </Button>
         <span class="num ml-auto text-sm text-faint">v{updates.version}</span>
       {/if}
     </div>

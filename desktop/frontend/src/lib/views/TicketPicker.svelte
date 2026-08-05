@@ -3,9 +3,13 @@
   import { store } from "$lib/store.svelte";
   import { nav } from "$lib/nav.svelte";
   import type { TicketsData, TicketRow } from "@bindings/internal/protocol";
+  import Button from "$lib/components/Button.svelte";
 
   type Scope = "mine" | "team";
-  const scopes: Scope[] = ["mine", "team"];
+  const scopes: { id: Scope; label: string }[] = [
+    { id: "mine", label: "Mine" },
+    { id: "team", label: "Team" },
+  ];
 
   let scope = $state<Scope>("mine");
   let loading = $state(false);
@@ -78,29 +82,16 @@
   <div class="mb-3 flex items-center gap-3">
     <!-- MainTopBar owns the "Nori ▸ Start a ticket" breadcrumb; this ‹ back
          stays because it returns to the project DETAIL, not the cockpit. -->
-    <button
-      class="rounded p-1 text-faint hover:bg-sel hover:text-ink"
-      title="back to project"
-      aria-label="Back to project"
-      onclick={() => nav.goDetail(nav.project)}>←</button
-    >
+    <Button icon title="back to project" aria-label="Back to project" onclick={() => nav.goDetail(nav.project)}>←</Button>
 
-    <span class="ml-auto flex items-center gap-0.5 rounded border border-edge p-0.5">
-      {#each scopes as s (s)}
-        <button
-          class="rounded px-2 py-[1px] text-sm"
-          class:bg-accent={scope === s}
-          class:text-on-accent={scope === s}
-          class:text-faint={scope !== s}
-          onclick={() => pick(s)}>{s}</button
-        >
+    <span class="ml-auto flex items-center gap-0.5 rounded-md border border-edge p-0.5">
+      {#each scopes as s (s.id)}
+        <Button size="xs" selected={scope === s.id} onclick={() => pick(s.id)}>{s.label}</Button>
       {/each}
     </span>
-    <button
-      class="rounded bg-accent-fill px-3 py-1.5 text-accent-ink hover:bg-accent-fill-hover disabled:opacity-40"
-      disabled={loading || !store.alive}
-      onclick={() => load()}>↻ refresh</button
-    >
+    <Button variant="primary" size="md" disabled={loading || !store.alive} onclick={() => load()}>
+      <span aria-hidden="true">↻</span> Refresh
+    </Button>
   </div>
 
   <div class="mb-2 text-sm text-faint">
@@ -140,12 +131,12 @@
                 <div class="max-w-[52ch] truncate text-ink">{t.title}</div>
               </td>
               <td class="px-3 py-2 text-sm {p.cls}">{p.label}</td>
-              <td class="px-3 py-2 text-right text-sm whitespace-nowrap opacity-0 group-hover:opacity-100">
-                <button
-                  class="px-1.5 text-faint hover:text-accent-ink disabled:opacity-40"
-                  disabled={starting === t.identifier}
-                  onclick={() => start(t)}>{t.alreadyLive ? "live" : "start ›"}</button
-                >
+              <td class="px-3 py-1 whitespace-nowrap opacity-0 group-hover:opacity-100">
+                <div class="flex items-center justify-end">
+                  <Button size="xs" disabled={starting === t.identifier} onclick={() => start(t)}>
+                    {#if t.alreadyLive}Live{:else}Start <span aria-hidden="true">›</span>{/if}
+                  </Button>
+                </div>
               </td>
             </tr>
           {/each}

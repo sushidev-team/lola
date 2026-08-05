@@ -53,7 +53,7 @@ describe("TerminalGrid dead-tile marking", () => {
     expect(screen.getByText("ENG-1")).toBeInTheDocument();
     expect(screen.getByText("ENG-2")).toBeInTheDocument();
     // …but exactly one carries a revive affordance (the dead one).
-    expect(screen.getAllByText("revive")).toHaveLength(1);
+    expect(screen.getAllByText("Revive")).toHaveLength(1);
   });
 
   it("marks an ended session too", () => {
@@ -61,12 +61,12 @@ describe("TerminalGrid dead-tile marking", () => {
       fakeSession({ id: "acme-end", issue: "ENG-3", status: "session_ended", tmuxName: "acme-end" }),
     ];
     render(TerminalGrid);
-    expect(screen.getByText("revive")).toBeInTheDocument();
+    expect(screen.getByText("Revive")).toBeInTheDocument();
   });
 
   it("shows no revive when every tile is live", () => {
     store.sessions = [fakeSession({ status: "working" })];
     render(TerminalGrid);
-    expect(screen.queryByText("revive")).not.toBeInTheDocument();
+    expect(screen.queryByText("Revive")).not.toBeInTheDocument();
   });
 });

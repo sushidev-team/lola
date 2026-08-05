@@ -2,6 +2,7 @@
   import { onMount, onDestroy } from "svelte";
   import Modal from "$lib/components/Modal.svelte";
   import Tabs from "$lib/components/Tabs.svelte";
+  import Button from "$lib/components/Button.svelte";
   import { store } from "$lib/store.svelte";
   import { nav } from "$lib/nav.svelte";
   import { confirm } from "$lib/confirm.svelte";
@@ -457,13 +458,13 @@
             </label>
             <div class={rowCls}>
               <span class="text-faint">Agent</span>
-              <div class="inline-flex w-fit divide-x divide-edge overflow-hidden rounded border border-edge">
+              <!-- Segmented control: a hairline rail with a 2px gutter, so the
+                   selected chip is a rounded button INSIDE it rather than a
+                   flush-cut segment. Same shape as every other segmented control
+                   in the app (lens picker, scope picker, agent/shell). -->
+              <div class="inline-flex w-fit items-center gap-0.5 rounded-md border border-edge p-0.5">
                 {#each AGENTS as a (a)}
-                  <button
-                    type="button"
-                    class="px-3 py-1 {d.agent === a ? 'bg-accent-fill text-accent-ink' : 'text-faint hover:text-ink'}"
-                    onclick={() => { d.agent = a; }}>{a}</button
-                  >
+                  <Button selected={d.agent === a} onclick={() => { d.agent = a; }}>{a}</Button>
                 {/each}
               </div>
             </div>
@@ -557,17 +558,13 @@
                   <div class="space-y-1 rounded border border-edge p-2">
                     {#each sortKeys as k (k)}
                       {@const rank = (d.prioritySort ?? []).indexOf(k)}
-                      <button
-                        type="button"
-                        class="flex w-full items-center gap-2 rounded px-1 py-1 text-left hover:bg-edge/40"
-                        onclick={() => toggleSortKey(k)}
-                      >
+                      <Button block onclick={() => toggleSortKey(k)}>
                         <span
                           class="w-4 shrink-0 text-center font-mono {rank >= 0 ? 'text-accent-ink' : 'text-faint/40'}"
                         >{rank >= 0 ? rank + 1 : "·"}</span>
-                        <span class="text-ink">{k}</span>
+                        <span>{k}</span>
                         <span class="text-faint">{SORT_KEY_HELP[k] ?? ""}</span>
-                      </button>
+                      </Button>
                     {/each}
                   </div>
                   <span class={hintCls}>
@@ -725,9 +722,7 @@
                 This config still uses the legacy <code>[review]</code>/<code>[coderabbit]</code> tables. They are
                 <span class="text-faint">read-only</span> here — migrate them into the editable provider catalog to continue.
               </p>
-              <button
-                class="mt-2 rounded border border-edge px-2 py-1.5 hover:border-accent"
-                onclick={migrateReview}>Migrate to providers</button>
+              <Button variant="secondary" size="md" class="mt-2" onclick={migrateReview}>Migrate to providers</Button>
             </div>
           {/if}
 
@@ -741,7 +736,7 @@
                     <span>Enabled</span>
                   </label>
                   {#if !d.reviewLegacy}
-                    <button class="text-sm text-faint hover:text-bad" onclick={() => removeProvider(p.provider)}>remove</button>
+                    <Button variant="danger" onclick={() => removeProvider(p.provider)}>Remove</Button>
                   {/if}
                 </div>
 
@@ -841,11 +836,7 @@
             <div class="flex flex-wrap items-center gap-2 border-t border-edge/40 pt-4">
               <span class="text-sm text-faint">Add provider:</span>
               {#each missingKinds() as k}
-                <button
-                  class="rounded border border-edge px-2 py-1.5 text-sm hover:border-accent"
-                  title={KIND_LABELS[k] ?? k}
-                  onclick={() => addProvider(k)}>{k}</button
-                >
+                <Button variant="secondary" title={KIND_LABELS[k] ?? k} onclick={() => addProvider(k)}>{k}</Button>
               {/each}
             </div>
           {/if}
@@ -860,23 +851,16 @@
   {#if saveErr}
     <div class="mt-3 flex items-start gap-2 rounded border border-bad/40 bg-bad/10 px-3 py-2 text-sm text-bad">
       <span class="min-w-0 flex-1 font-mono break-words whitespace-pre-wrap select-text">{saveErr}</span>
-      <button
-        type="button"
-        class="shrink-0 text-bad/70 hover:text-bad"
-        aria-label="dismiss error"
-        onclick={() => (saveErr = "")}>✕</button
-      >
+      <Button variant="danger" size="xs" icon aria-label="dismiss error" onclick={() => (saveErr = "")}>✕</Button>
     </div>
   {/if}
 
   {#snippet footer()}
     <div class="flex items-center justify-end gap-2">
-      <button class="rounded px-3 py-1.5 text-faint hover:text-ink" onclick={requestClose}>cancel</button>
-      <button
-        class="rounded bg-accent-fill px-3 py-1.5 text-accent-ink hover:bg-accent-fill-hover disabled:opacity-40"
-        onclick={save}
-        disabled={saving || loading || !dto}>{saving ? "saving…" : "save"}</button
-      >
+      <Button size="md" onclick={requestClose}>Cancel</Button>
+      <Button variant="primary" size="md" onclick={save} disabled={saving || loading || !dto}>
+        {saving ? "Saving…" : "Save"}
+      </Button>
     </div>
   {/snippet}
 </Modal>

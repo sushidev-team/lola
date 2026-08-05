@@ -2,6 +2,7 @@
   import { store, type ProjectInfo } from "$lib/store.svelte";
   import { nav } from "$lib/nav.svelte";
   import { displayName } from "$lib/slug";
+  import Button from "$lib/components/Button.svelte";
 
   let filter = $state("");
   const rows = $derived(
@@ -71,10 +72,15 @@
               {#if p.needsYou === 0 && p.ciRed === 0}<span class="text-faint">—</span>{/if}
             </td>
             <td class="num px-3 py-2 text-right text-sm text-faint">{p.openPrs > 0 ? `${p.openPrs} PR` : ""}</td>
-            <td class="px-3 py-2 text-right text-sm whitespace-nowrap opacity-0 group-hover:opacity-100">
-              <button class="px-1.5 text-faint hover:text-accent-ink" onclick={() => nav.goCockpit(p.name)}>sessions</button>
-              <button class="px-1.5 text-faint hover:text-accent-ink" onclick={() => nav.openOverlay("project", p.name)}>edit</button>
-              <button class="px-1.5 text-faint hover:text-accent-ink" onclick={() => nav.goDetail(p.name)}>open ›</button>
+            <!-- Row actions: `justify-end` on the flex, not `text-right` on the
+                 cell — the buttons are inline-flex chips now, so text alignment no
+                 longer positions them. -->
+            <td class="px-3 py-1 whitespace-nowrap opacity-0 group-hover:opacity-100">
+              <div class="flex items-center justify-end gap-0.5">
+                <Button size="xs" onclick={() => nav.goCockpit(p.name)}>Sessions</Button>
+                <Button size="xs" onclick={() => nav.openOverlay("project", p.name)}>Edit</Button>
+                <Button size="xs" onclick={() => nav.goDetail(p.name)}>Open <span aria-hidden="true">›</span></Button>
+              </div>
             </td>
           </tr>
         {/each}

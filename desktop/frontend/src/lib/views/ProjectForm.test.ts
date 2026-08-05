@@ -249,12 +249,12 @@ describe("ProjectForm", () => {
     render(ProjectForm);
     const symlinks = await screen.findByLabelText("Symlinks");
     expect(symlinks.className).toContain("opacity-55");
-    expect(within(rowOf(symlinks)).getByRole("button", { name: "inherited" })).toBeInTheDocument();
+    expect(within(rowOf(symlinks)).getByRole("button", { name: "Inherited" })).toBeInTheDocument();
 
     // An overridden neighbour on the same tab chips the other way.
     const postCreate = screen.getByLabelText("Post-create");
     expect(postCreate.className).not.toContain("opacity-55");
-    expect(within(rowOf(postCreate)).getByRole("button", { name: "override" })).toBeInTheDocument();
+    expect(within(rowOf(postCreate)).getByRole("button", { name: "Override" })).toBeInTheDocument();
   });
 
   it("promotes an inherited field to an override when it is edited", async () => {
@@ -263,7 +263,7 @@ describe("ProjectForm", () => {
 
     await fireEvent.input(symlinks, { target: { value: "own-link" } });
 
-    expect(within(rowOf(symlinks)).getByRole("button", { name: "override" })).toBeInTheDocument();
+    expect(within(rowOf(symlinks)).getByRole("button", { name: "Override" })).toBeInTheDocument();
     expect(symlinks.className).not.toContain("opacity-55");
 
     await fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
@@ -277,9 +277,9 @@ describe("ProjectForm", () => {
     render(ProjectForm);
     const symlinks = await screen.findByLabelText("Symlinks");
 
-    await fireEvent.click(within(rowOf(symlinks)).getByRole("button", { name: "inherited" }));
+    await fireEvent.click(within(rowOf(symlinks)).getByRole("button", { name: "Inherited" }));
 
-    expect(within(rowOf(symlinks)).getByRole("button", { name: "override" })).toBeInTheDocument();
+    expect(within(rowOf(symlinks)).getByRole("button", { name: "Override" })).toBeInTheDocument();
   });
 
   it("reverting an override refills the control from [defaults]", async () => {
@@ -287,12 +287,12 @@ describe("ProjectForm", () => {
     const postCreate = await screen.findByLabelText("Post-create");
     expect(postCreate).toHaveValue("npm ci");
 
-    await fireEvent.click(within(rowOf(postCreate)).getByRole("button", { name: "override" }));
+    await fireEvent.click(within(rowOf(postCreate)).getByRole("button", { name: "Override" }));
 
     // The ghost now shows what [defaults] will actually apply.
     expect(postCreate).toHaveValue("make setup\nmake build");
     expect(postCreate.className).toContain("opacity-55");
-    expect(within(rowOf(postCreate)).getByRole("button", { name: "inherited" })).toBeInTheDocument();
+    expect(within(rowOf(postCreate)).getByRole("button", { name: "Inherited" })).toBeInTheDocument();
 
     await fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
     await waitFor(() => expect(saveProject).toHaveBeenCalledTimes(1));
@@ -306,9 +306,9 @@ describe("ProjectForm", () => {
     render(ProjectForm);
     const postCreate = await screen.findByLabelText("Post-create");
 
-    await fireEvent.click(within(rowOf(postCreate)).getByRole("button", { name: "override" }));
+    await fireEvent.click(within(rowOf(postCreate)).getByRole("button", { name: "Override" }));
 
-    expect(within(rowOf(postCreate)).getByRole("button", { name: "inherited" })).toBeInTheDocument();
+    expect(within(rowOf(postCreate)).getByRole("button", { name: "Inherited" })).toBeInTheDocument();
     expect(postCreate).toHaveValue("npm ci");
   });
 

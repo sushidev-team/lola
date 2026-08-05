@@ -2,6 +2,7 @@
   import { nav } from "$lib/nav.svelte";
   import { reflowGridRows } from "$lib/reflow";
   import LolaLogo from "./LolaLogo.svelte";
+  import Button from "./Button.svelte";
   import SidebarTriage from "./SidebarTriage.svelte";
   import SidebarProjects from "./SidebarProjects.svelte";
   import SidebarStatus from "./SidebarStatus.svelte";
@@ -33,11 +34,12 @@
        here would be neither draggable nor reliably clickable. -->
   <div class="drag flex items-center gap-2 pr-2 pl-[82px]">
     <LolaLogo class="h-[18px] w-auto shrink-0" />
-    <button
-      class="ml-auto rounded p-1 text-faint opacity-0 transition-opacity group-hover/side:opacity-100 focus-visible:opacity-100 hover:bg-sel hover:text-ink"
+    <Button
+      icon
+      class="ml-auto opacity-0 transition-opacity group-hover/side:opacity-100 focus-visible:opacity-100"
       title="hide sidebar (b)"
       aria-label="Hide sidebar"
-      onclick={() => nav.toggleSidebar()}>«</button
+      onclick={() => nav.toggleSidebar()}>«</Button
     >
   </div>
 

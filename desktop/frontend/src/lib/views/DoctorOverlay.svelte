@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import { nav } from "$lib/nav.svelte";
   import Modal from "$lib/components/Modal.svelte";
+  import Button from "$lib/components/Button.svelte";
   import { DoctorService } from "@bindings/desktop";
   import type { DoctorReportDTO, DoctorResultDTO } from "@bindings/desktop";
 
@@ -72,11 +73,9 @@
         <span class="text-faint">running checks…</span>
       {/if}
       <!-- Re-run in place after fixing a failing check, rather than reopening. -->
-      <button
-        class="ml-auto rounded border border-edge px-2 py-1 text-faint hover:border-accent hover:text-accent-ink disabled:opacity-40"
-        disabled={running}
-        onclick={run}>{running ? "running…" : "↻ re-run"}</button
-      >
+      <Button variant="secondary" size="md" class="ml-auto" disabled={running} onclick={run}>
+        {running ? "Running…" : "Re-run"}
+      </Button>
     </div>
   {/snippet}
 </Modal>

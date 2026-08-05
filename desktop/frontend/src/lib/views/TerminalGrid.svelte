@@ -10,6 +10,7 @@
   import SessionsEmpty from "$lib/components/SessionsEmpty.svelte";
   import StatusPill from "$lib/components/StatusPill.svelte";
   import LivePulse from "$lib/components/LivePulse.svelte";
+  import Button from "$lib/components/Button.svelte";
 
   // Reads the store directly (leaf component) — the Cockpit view can't pass live
   // rows in the production WKWebView. See WKWEBVIEW_REACTIVITY in Cockpit.svelte.
@@ -118,12 +119,12 @@
                    bump on top would be spending two tokens for one job. -->
               <span class="text-sm text-faint">{statusLabel(s.status)}</span>
               <!-- stopPropagation: reviving must not also open the (dead) terminal. -->
-              <button
-                class="rounded border border-edge px-2 py-1 text-sm text-info hover:border-accent hover:text-accent-ink"
+              <Button
+                variant="secondary"
                 onclick={(e) => {
                   e.stopPropagation();
                   store.revive(s.id);
-                }}>revive</button
+                }}>Revive</Button
               >
             </div>
           {/if}

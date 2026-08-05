@@ -7,6 +7,7 @@
   import { store, type SessionInfo } from "$lib/store.svelte";
   import { nav } from "$lib/nav.svelte";
   import { terms } from "$lib/terms.svelte";
+  import MenuItem from "./MenuItem.svelte";
 
   const req = $derived(sessionMenu.request);
   const session = $derived(req ? store.sessionById(req.id) : undefined);
@@ -57,53 +58,35 @@
     }}
   ></div>
 
+  <!-- p-1, not py-1: the items are rounded chips inside the popover, so they need
+       a gutter on all four sides or the hover fill runs into the border. -->
   <div
     bind:this={el}
-    class="fixed z-50 min-w-[11rem] rounded-md border border-edge bg-panel py-1 shadow-lg"
+    class="fixed z-50 min-w-[12rem] rounded-lg border border-edge bg-panel p-1 shadow-xl"
     style="left:{req.x}px;top:{req.y}px"
     role="menu"
   >
-    <div class="label truncate px-3 py-1 text-faint">
+    <div class="label truncate px-2 pt-1 pb-1.5 text-faint">
       {session.issue || session.id.slice(0, 8)}
     </div>
-    <button
-      class="block w-full px-3 py-1.5 text-left hover:bg-sel disabled:opacity-40"
-      role="menuitem"
+    <MenuItem
+      icon="+"
       disabled={!session.worktree}
       title={session.worktree ? "open a shell in the worktree" : "session has no worktree"}
-      onclick={() => run((s) => addShell(s))}>+ add shell</button
+      onclick={() => run((s) => addShell(s))}>Add shell</MenuItem
     >
-    <button
-      class="block w-full px-3 py-1.5 text-left hover:bg-sel"
-      role="menuitem"
-      title="force a QA review pass now"
-      onclick={() => run((s) => store.review(s.id))}>trigger review</button
-    >
-    <button
-      class="block w-full px-3 py-1.5 text-left hover:bg-sel"
-      role="menuitem"
-      onclick={() => run((s) => store.coderabbit(s.id))}>coderabbit</button
-    >
+    <MenuItem icon="◈" title="force a QA review pass now" onclick={() => run((s) => store.review(s.id))}>
+      Trigger review
+    </MenuItem>
+    <MenuItem icon="◇" onclick={() => run((s) => store.coderabbit(s.id))}>CodeRabbit</MenuItem>
     {#if session.prNumber > 0}
-      <button
-        class="block w-full px-3 py-1.5 text-left hover:bg-sel"
-        role="menuitem"
-        onclick={() => run((s) => store.openURL(s.prUrl))}>open PR ↗</button
-      >
+      <MenuItem icon="⑂" trailing="↗" onclick={() => run((s) => store.openURL(s.prUrl))}>Open PR</MenuItem>
     {/if}
     {#if canRevive}
-      <button
-        class="block w-full px-3 py-1.5 text-left text-info hover:bg-sel"
-        role="menuitem"
-        onclick={() => run((s) => store.revive(s.id))}>revive</button
-      >
+      <MenuItem variant="accent" icon="↻" onclick={() => run((s) => store.revive(s.id))}>Revive</MenuItem>
     {/if}
-    <div class="my-1 border-t border-edge/60"></div>
+    <div class="my-1 h-px bg-edge/60"></div>
     <!-- Routes through the shared confirm dialog, same as the 'x' shortcut. -->
-    <button
-      class="block w-full px-3 py-1.5 text-left text-faint hover:bg-sel hover:text-bad"
-      role="menuitem"
-      onclick={() => run((s) => store.askKill(s.id))}>kill…</button
-    >
+    <MenuItem variant="danger" icon="■" onclick={() => run((s) => store.askKill(s.id))}>Kill…</MenuItem>
   </div>
 {/if}

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { ConfigService } from "@bindings/desktop";
   import { store } from "$lib/store.svelte";
+  import Button from "$lib/components/Button.svelte";
 
   // First-run wizard: writes config.toml (Linear key → Keychain, one project,
   // caps/interval), mirroring the TUI's `lola setup`. Shown by App when no config
@@ -78,13 +79,9 @@
             bind:value={key}
             oninput={() => (keyState = "idle")}
           />
-          <button
-            class="rounded border border-edge px-2.5 py-1.5 text-faint hover:border-accent hover:text-accent-ink disabled:opacity-40"
-            disabled={!key.trim() || keyState === "checking"}
-            onclick={validateKey}
-          >
-            {keyState === "checking" ? "checking…" : "validate"}
-          </button>
+          <Button variant="secondary" size="md" disabled={!key.trim() || keyState === "checking"} onclick={validateKey}>
+            {keyState === "checking" ? "Checking…" : "Validate"}
+          </Button>
         </div>
         {#if keyState === "ok"}<p class="mt-1 text-sm text-good">✓ {keyMsg}</p>{/if}
         {#if keyState === "bad"}<p class="mt-1 text-sm text-bad">✗ {keyMsg}</p>{/if}
@@ -130,13 +127,9 @@
       {#if error}<div class="rounded border border-bad/40 bg-bad/10 px-3 py-2 text-sm text-bad">✗ {error}</div>{/if}
 
       <div class="flex items-center justify-end gap-2 pt-1">
-        <button
-          class="rounded bg-accent-fill px-4 py-1.5 font-medium text-accent-ink hover:bg-accent-fill-hover disabled:opacity-40"
-          disabled={!canSubmit}
-          onclick={submit}
-        >
-          {submitting ? "writing…" : "Write config & start"}
-        </button>
+        <Button variant="primary" size="md" class="px-4" disabled={!canSubmit} onclick={submit}>
+          {submitting ? "Writing…" : "Write config & start"}
+        </Button>
       </div>
     </div>
   </div>

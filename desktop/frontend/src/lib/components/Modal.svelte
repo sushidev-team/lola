@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Snippet } from "svelte";
   import { onMount, onDestroy } from "svelte";
+  import Button from "./Button.svelte";
   let {
     title,
     onClose,
@@ -89,7 +90,7 @@
       <!-- text-lg carries its own 600 + tracking: a dialog title is the one
            level that must out-rank everything inside the dialog. -->
       <h2 class="text-lg text-accent-ink">{title}</h2>
-      <button class="ml-auto text-faint hover:text-ink" onclick={onClose} aria-label="close">✕</button>
+      <Button icon class="ml-auto" onclick={onClose} aria-label="close">✕</Button>
     </header>
     <div class="min-h-0 flex-1 overflow-auto p-4">
       {@render children()}

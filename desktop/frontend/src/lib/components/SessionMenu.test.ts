@@ -49,33 +49,36 @@ describe("SessionMenu", () => {
     sessionMenu.request = { id: "acme-eng-1", x: 10, y: 10 };
     render(SessionMenu);
     expect(screen.getByRole("menu")).toBeInTheDocument();
-    expect(screen.getByText("+ add shell")).toBeEnabled();
-    expect(screen.getByText("trigger review")).toBeInTheDocument();
-    expect(screen.getByText("coderabbit")).toBeInTheDocument();
+    // By ROLE + accessible name, not by text: a <MenuItem> wraps its label in a
+    // span beside an aria-hidden glyph, so getByText would hand back the span
+    // and `toBeEnabled` would assert on the wrong node.
+    expect(screen.getByRole("menuitem", { name: "Add shell" })).toBeEnabled();
+    expect(screen.getByRole("menuitem", { name: "Trigger review" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "CodeRabbit" })).toBeInTheDocument();
     // No PR observed and not dead: the conditional items stay hidden.
-    expect(screen.queryByText("open PR ↗")).not.toBeInTheDocument();
-    expect(screen.queryByText("revive")).not.toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "Open PR" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "Revive" })).not.toBeInTheDocument();
   });
 
   it("disables add shell when the session has no worktree", () => {
     store.sessions = [fakeSession({ worktree: "" })];
     sessionMenu.request = { id: "acme-eng-1", x: 10, y: 10 };
     render(SessionMenu);
-    expect(screen.getByText("+ add shell")).toBeDisabled();
+    expect(screen.getByRole("menuitem", { name: "Add shell" })).toBeDisabled();
   });
 
   it("shows open PR and revive only when the session state warrants them", () => {
     store.sessions = [fakeSession({ prNumber: 7, prUrl: "https://x/pr/7", status: "dead" })];
     sessionMenu.request = { id: "acme-eng-1", x: 10, y: 10 };
     render(SessionMenu);
-    expect(screen.getByText("open PR ↗")).toBeInTheDocument();
-    expect(screen.getByText("revive")).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Open PR" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Revive" })).toBeInTheDocument();
   });
 
   it("routes kill through the shared confirm dialog and closes first", async () => {
     sessionMenu.request = { id: "acme-eng-1", x: 10, y: 10 };
     render(SessionMenu);
-    await fireEvent.click(screen.getByText("kill…"));
+    await fireEvent.click(screen.getByRole("menuitem", { name: "Kill…" }));
     expect(sessionMenu.request).toBeNull();
     expect(confirm.request?.title).toBe("Kill session?");
   });

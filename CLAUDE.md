@@ -303,6 +303,29 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   - Both settings UIs write the key (TUI `S` → Appearance, app → Appearance); the
     app additionally live-previews. Keep the Go `config.UIThemes` list and the TS
     `THEME_IDS` list identical — `Validate` rejects anything outside the Go one.
+- **Every action in the app is `<Button>`; every popover row is `<MenuItem>`.**
+  `desktop/frontend/src/lib/components/Button.svelte` owns the whole ladder —
+  sizes `xs`/`sm`/`md`, variants `ghost` (the default: transparent at rest, a
+  `bg-sel` chip on hover, Linear's shape) / `accent` / `secondary` / `primary` /
+  `danger` / `danger-solid`, plus `selected` for segmented controls, `icon` for
+  square glyph buttons and `block` for full-width rows. Do not hand-roll
+  `rounded … px-… hover:text-…` at a call site again. Consequences:
+  - Every class in it is a LITERAL in the module-level maps. Tailwind scans
+    source text, so a composed `` `bg-${x}` `` compiles to nothing.
+  - Hover rules are `enabled:hover:`, never bare `hover:` — CSS still matches
+    `:hover` on a disabled button, so a plain rule lights up a dead control.
+  - **Recolouring a variant needs Tailwind's trailing `!`** (`class="text-warn!"`).
+    A plain `text-warn` has the same specificity as the variant's `text-faint`
+    and the winner is decided by Tailwind's order in the compiled sheet, not by
+    the class attribute — the same trap applies to any width/border/gap override.
+  - Four things stay hand-rolled ON PURPOSE, each commented where it lives: the
+    `role="tab"` strip (`Tabs.svelte`), the theme swatches (drawn in their own
+    flavor's colours), the `[defaults]` inherit chip (caption-sized, not a
+    control), and the card-shaped rows (project actions, kanban cards, nav rows).
+  - Labels are **Sentence case** — "Open PR", "Trigger review", "CodeRabbit". The
+    app was all-lowercase, which read as prose rather than as controls. Tests
+    assert these strings; `getByRole("menuitem", { name })`, not `getByText`,
+    because a MenuItem wraps its label beside an aria-hidden glyph.
 - **Destructive actions confirm, and the key that does the destructive thing is
   the SHIFTED one.** On both project lists (TUI home and the cockpit rail) `x`
   stops polling (reversible) and `X` removes the `[[project]]` from config; `n`

@@ -275,7 +275,7 @@ describe("SettingsForm", () => {
     await fireEvent.click(await screen.findByRole("button", { name: /createdAt/ }));
     await fireEvent.click(await screen.findByRole("button", { name: /priority/ }));
 
-    await fireEvent.click(screen.getByRole("button", { name: "save" }));
+    await fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
     await waitFor(() => expect(SaveSettings).toHaveBeenCalled());
     expect(SaveSettings.mock.calls.at(-1)?.[0].prioritySort).toEqual(["createdAt", "priority"]);
   });

@@ -8,6 +8,7 @@
   // (the header ✕), so a stray Enter dismisses rather than destroys.
   import { confirm } from "$lib/confirm.svelte";
   import Modal from "./Modal.svelte";
+  import Button from "./Button.svelte";
 
   const req = $derived(confirm.request);
 </script>
@@ -22,14 +23,8 @@
     {/if}
     {#snippet footer()}
       <div class="flex justify-end gap-2">
-        <button
-          class="rounded border border-edge px-3 py-1.5 text-faint hover:text-ink"
-          onclick={() => confirm.cancel()}>Cancel</button
-        >
-        <button
-          class="rounded bg-bad px-3 py-1.5 font-medium text-on-bad hover:opacity-90"
-          onclick={() => confirm.accept()}>{req.confirmLabel}</button
-        >
+        <Button variant="secondary" size="md" onclick={() => confirm.cancel()}>Cancel</Button>
+        <Button variant="danger-solid" size="md" onclick={() => confirm.accept()}>{req.confirmLabel}</Button>
       </div>
     {/snippet}
   </Modal>

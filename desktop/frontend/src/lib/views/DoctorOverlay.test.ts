@@ -54,7 +54,7 @@ describe("DoctorOverlay", () => {
     await screen.findByText("tmux"); // initial run resolved
     expect(runMock).toHaveBeenCalledTimes(1);
 
-    await fireEvent.click(screen.getByText("↻ re-run"));
+    await fireEvent.click(screen.getByText("Re-run"));
     expect(runMock).toHaveBeenCalledTimes(2);
   });
 
@@ -65,14 +65,14 @@ describe("DoctorOverlay", () => {
     // Hang the next run so the in-flight state is observable.
     let settle: (v: unknown) => void = () => {};
     runMock.mockReturnValueOnce(new Promise((r) => (settle = r)));
-    await fireEvent.click(screen.getByText("↻ re-run"));
+    await fireEvent.click(screen.getByText("Re-run"));
 
     // The button reflects the run in flight; the previous results stay on screen
     // rather than flashing empty.
-    expect(screen.getByText("running…")).toBeInTheDocument();
+    expect(screen.getByText("Running…")).toBeInTheDocument();
     expect(screen.getByText("tmux")).toBeInTheDocument();
 
     settle(report);
-    await screen.findByText("↻ re-run"); // back to idle
+    await screen.findByText("Re-run"); // back to idle
   });
 });

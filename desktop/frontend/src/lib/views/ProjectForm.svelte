@@ -8,6 +8,7 @@
   import { deepEqual } from "$lib/deepEqual";
   import Modal from "$lib/components/Modal.svelte";
   import Tabs from "$lib/components/Tabs.svelte";
+  import Button from "$lib/components/Button.svelte";
   import { ConfigService, DaemonService, LinearService } from "@bindings/desktop";
   import { slug, slugTyping, displayName } from "$lib/slug";
   import type {
@@ -397,15 +398,18 @@
     <span>{caption}</span>
     {#if k}
       {@const on = inherited(k)}
+      <!-- A status chip you can click, not a full-height control: it sits inside a
+           field caption, so it keeps its own smaller geometry rather than
+           borrowing a <Button> size that would out-measure the label beside it. -->
       <button
         type="button"
-        class="label rounded border px-1 py-px font-normal normal-case {on
+        class="label rounded border px-1 py-px font-normal normal-case transition-colors {on
           ? 'border-edge text-faint hover:border-accent hover:text-accent-ink'
           : 'border-accent/40 text-accent-ink hover:border-accent hover:text-accent-ink'}"
         title={on
           ? "inherited from [defaults] — click to override it for this project"
           : "overridden for this project — click to go back to [defaults]"}
-        onclick={() => toggleInherit(k)}>{on ? "inherited" : "override"}</button
+        onclick={() => toggleInherit(k)}>{on ? "Inherited" : "Override"}</button
       >
     {/if}
   </span>
@@ -645,16 +649,9 @@
         <!-- agent: "" already means inherit, so no bitmap entry -->
         <div class={rowCls}>
           <span class={labelCls}>Agent</span>
-          <span class="flex w-fit items-center gap-0.5 rounded border border-edge p-0.5">
+          <span class="flex w-fit items-center gap-0.5 rounded-md border border-edge p-0.5">
             {#each agents as a (a.id)}
-              <button
-                type="button"
-                class="rounded px-2 py-[2px] text-sm"
-                class:bg-accent={d.agent === a.id}
-                class:text-on-accent={d.agent === a.id}
-                class:text-faint={d.agent !== a.id}
-                onclick={() => { d.agent = a.id; }}>{a.label}</button
-              >
+              <Button size="xs" selected={d.agent === a.id} onclick={() => { d.agent = a.id; }}>{a.label}</Button>
             {/each}
           </span>
         </div>
@@ -814,12 +811,7 @@
   {#if saveErr}
     <div class="mt-3 flex items-start gap-2 rounded border border-bad/40 bg-bad/10 px-3 py-2 text-sm text-bad">
       <span class="min-w-0 flex-1 font-mono break-words whitespace-pre-wrap select-text">{saveErr}</span>
-      <button
-        type="button"
-        class="shrink-0 text-bad/70 hover:text-bad"
-        aria-label="dismiss error"
-        onclick={() => (saveErr = "")}>✕</button
-      >
+      <Button variant="danger" size="xs" icon aria-label="dismiss error" onclick={() => (saveErr = "")}>✕</Button>
     </div>
   {/if}
 
@@ -827,18 +819,14 @@
     <div class="flex items-center gap-2">
       {#if f && !f.isNew}
         {#if confirmRemove}
-          <button class="rounded bg-bad/20 px-3 py-1.5 text-bad hover:bg-bad/30" onclick={remove}>confirm remove</button>
-          <button class="px-2 py-1.5 text-faint hover:text-ink" onclick={() => (confirmRemove = false)}>cancel</button>
+          <Button variant="danger-solid" size="md" onclick={remove}>Remove project</Button>
+          <Button size="md" onclick={() => (confirmRemove = false)}>Cancel</Button>
         {:else}
-          <button class="px-3 py-1.5 text-bad/80 hover:text-bad" onclick={() => (confirmRemove = true)}>remove</button>
+          <Button variant="danger" size="md" onclick={() => (confirmRemove = true)}>Remove</Button>
         {/if}
       {/if}
-      <button class="ml-auto px-3 py-1.5 text-faint hover:text-ink" onclick={requestClose}>cancel</button>
-      <button
-        class="rounded bg-accent-fill px-3 py-1.5 text-accent-ink hover:bg-accent-fill-hover disabled:opacity-40"
-        disabled={!canSave}
-        onclick={save}>{saving ? "saving…" : "save"}</button
-      >
+      <Button size="md" class="ml-auto" onclick={requestClose}>Cancel</Button>
+      <Button variant="primary" size="md" disabled={!canSave} onclick={save}>{saving ? "Saving…" : "Save"}</Button>
     </div>
   {/snippet}
 </Modal>
