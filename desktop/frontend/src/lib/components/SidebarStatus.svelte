@@ -43,6 +43,27 @@
     <span class="truncate">{daemonText}</span>
   </Button>
 
+  <!-- The version belongs to the daemon line, not to the overlay buttons: it
+       names what is running, so it reads as a caption beside the status rather
+       than as a third control at the far right. It sits BEFORE the hover
+       controls so revealing them expands into the free middle of the row and
+       never shoves the version sideways. -->
+  {#if updates.available}
+    <Button
+      variant="secondary"
+      size="xs"
+      class="num shrink-0 border-accent! text-accent-ink!"
+      title="update available: v{updates.info?.latestVersion}"
+      onclick={() => nav.openOverlay("update")}
+    >
+      <span aria-hidden="true">↑</span> Update
+    </Button>
+  {:else}
+    <Button size="xs" class="num shrink-0" title="check for updates" onclick={() => nav.openOverlay("update")}>
+      v{updates.version}
+    </Button>
+  {/if}
+
   {#if store.alive}
     <!-- Revealed on row hover: two low-frequency, one-way controls that should
          not sit permanently under the cursor's path. -->
@@ -87,11 +108,12 @@
     <Button variant="secondary" onclick={() => store.startDaemon()}>Start</Button>
   {/if}
 
-  <!-- Padding here is shaved deliberately: at 248px the row's worst case
-       (daemon chip + its two hover controls + help + settings + the wider
-       "↑ update" chip) is within a few px of the available width, and the
-       daemon chip is the only item that can shrink. -->
-  <span class="ml-auto flex items-center gap-0.5">
+  <!-- Help + settings, pinned to the right edge: two overlays that belong to the
+       app rather than to the daemon, so they sit apart from the status line and
+       land in the same corner every time. The daemon chip is still the row's
+       only shrinkable item if the worst case (a long status + the wider
+       "↑ Update" chip + revealed hover controls) runs out of room. -->
+  <span class="ml-auto flex shrink-0 items-center gap-0.5">
     <Button icon title="keyboard shortcuts (?)" aria-label="Keyboard shortcuts" onclick={() => nav.openOverlay("help")}>
       ?
     </Button>
@@ -110,20 +132,5 @@
         <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
       </svg>
     </Button>
-    {#if updates.available}
-      <Button
-        variant="secondary"
-        size="xs"
-        class="num border-accent! text-accent-ink!"
-        title="update available: v{updates.info?.latestVersion}"
-        onclick={() => nav.openOverlay("update")}
-      >
-        <span aria-hidden="true">↑</span> Update
-      </Button>
-    {:else}
-      <Button size="xs" class="num" title="check for updates" onclick={() => nav.openOverlay("update")}>
-        v{updates.version}
-      </Button>
-    {/if}
   </span>
 </div>
