@@ -14,7 +14,7 @@
 <!-- bg-panel is the flavor's `base`, i.e. exactly the colour LiveTerminal paints
      as its terminal background, so a snapshot tile and the focused terminal read
      as the same terminal rather than two surfaces at slightly different levels
-     (the enclosing Panel is panel mixed 82% toward canvas). -->
+     (the band around it is the canvas, a step below `base`). -->
 <div class="term-snap h-full w-full overflow-hidden bg-panel" style="--snap-scale:{scale}">
   {#if text}
     <!-- No `antialiased` utility here: body sets -webkit-font-smoothing:

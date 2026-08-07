@@ -16,7 +16,11 @@
   // is what gives SessionsColumn its height.
 </script>
 
-<div class="grid h-full min-h-0 p-3" style="grid-template-columns:minmax(0,1fr)">
+<!-- No padding: the cockpit is a stack of full-bleed BANDS separated by hairlines,
+     not a tray of floating cards. The 12px inset used to be spent three times over
+     (here, the panel border, the panel's own padding) before any session was
+     drawn. Each band owns its inner padding instead. -->
+<div class="grid h-full min-h-0" style="grid-template-columns:minmax(0,1fr)">
   <!-- Keeps a live selection so the lower panel has a session to show. -->
   <AutoSelect />
 

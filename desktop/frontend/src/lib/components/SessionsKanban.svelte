@@ -22,11 +22,15 @@
 </script>
 
 {#if store.connected && store.alive}
-  <div class="flex h-full min-h-0 gap-2 overflow-x-auto p-1">
+  <div class="flex h-full min-h-0 overflow-x-auto py-2">
     {#each cols as col (col.title)}
-      <!-- min-h-0 so the card list below can bound itself and scroll rather than
-           stretching the column past the panel and clipping its bottom cards. -->
-      <div class="flex min-h-0 min-w-[13rem] flex-1 flex-col">
+      <!-- Columns are divided by a hairline rather than by a gap: with the panel
+           gone the board is a boxed grid, and a rule is what tells two adjacent
+           empty columns apart. `last:border-r-0` so the rightmost one doesn't
+           draw a second edge against the window.
+           min-h-0 so the card list below can bound itself and scroll rather than
+           stretching the column past the band and clipping its bottom cards. -->
+      <div class="flex min-h-0 min-w-[13rem] flex-1 flex-col border-r border-edge/40 px-3 last:border-r-0">
         <!-- `label` — the app's column-head level (same as the table's <thead>),
              not a section title. At text-lg these five heads were the largest type
              on a screen whose actual content is the cards under them, and the

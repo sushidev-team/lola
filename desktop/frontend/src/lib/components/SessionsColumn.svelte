@@ -1,6 +1,5 @@
 <script lang="ts">
   import { nav } from "$lib/nav.svelte";
-  import Panel from "./Panel.svelte";
   import SessionsTable from "./SessionsTable.svelte";
   import SessionsKanban from "./SessionsKanban.svelte";
   import SessionEmbed from "./SessionEmbed.svelte";
@@ -34,15 +33,19 @@
      takes every remaining pixel down to the bottom edge, and short lists give it
      more of them. The terminal row keeps `minmax(0,1fr)` so it absorbs the rest. -->
 <div
-  class="grid min-h-0 min-w-0 gap-3"
+  class="grid min-h-0 min-w-0"
   style="grid-template-rows:{nav.lens === 'grid' ? 'minmax(0,1fr)' : 'fit-content(45vh) minmax(0,1fr)'}"
   {@attach reflowGridRows}
 >
-  <!-- Never accented: the list is a panel like every other panel. It used to
-       carry an accent border + ring while the keyboard was driving it, which read
-       as an error state on a surface the user looks at constantly. The lens
-       switcher and the selected row already say where the keyboard is. -->
-  <Panel pad={false}>
+  <!-- The sessions band. No card: it sits directly on the canvas, under the top
+       bar that already names and counts it, and its only chrome is the hairline
+       where the terminal band begins. A rounded panel here cost a border, a
+       radius and 12px of padding to say something the top bar had already said.
+
+       Never accented either: it used to carry an accent border + ring while the
+       keyboard was driving it, which read as an error state on a surface the user
+       looks at constantly. The lens switcher and the selected row say that. -->
+  <div class="min-h-0 min-w-0 overflow-auto border-b border-edge">
     {#if nav.lens === "list"}
       <SessionsTable />
     {:else if nav.lens === "kanban"}
@@ -50,7 +53,7 @@
     {:else}
       <TerminalGrid />
     {/if}
-  </Panel>
+  </div>
 
   {#if nav.lens !== "grid"}
     <!-- Detail / live terminal. When focused, the wrapper becomes an overlay
@@ -65,12 +68,20 @@
          arithmetic. The fixed version was pinned at `top-11` — the top bar's
          height alone — so whenever PushErrorBanner occupied its row the focused
          terminal covered the "daemon is out of date" alert. -->
-    <div
-      class={focused ? "absolute inset-0 z-30 flex min-h-0 p-3" : "contents"}
-    >
-      <Panel focused={focused} fill={focused} pad={false}>
+    <div class={focused ? "absolute inset-0 z-30 flex min-h-0" : "contents"}>
+      <!-- The terminal band. Raised half a step off the canvas (the same mix the
+           panel used) so the two bands separate by TONE rather than by a frame —
+           the hairline above does the rest. Focused, it covers the cockpit area
+           edge to edge and takes an accent hairline: nothing is inset, because a
+           fullscreen terminal floating 12px off the window read as a dialog. -->
+      <div
+        class="flex w-full min-h-0 min-w-0 flex-col overflow-hidden bg-[color-mix(in_srgb,var(--color-panel)_82%,var(--color-canvas))]"
+        class:flex-1={focused}
+        class:border={focused}
+        class:border-accent={focused}
+      >
         <SessionEmbed sessionId={nav.selectedId} {focused} />
-      </Panel>
+      </div>
     </div>
   {/if}
 </div>

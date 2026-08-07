@@ -44,9 +44,13 @@
 <!-- No size class: the table inherits the 13px base from `body`. Only the two
      metadata columns (project, age) and the column heads step away
      from it, so the issue key and title are the row's primary read. -->
-<div class="min-w-0">
+<!-- px-1 lands the first cell's own pl-2 on the app's 12px inset now that the
+     table sits on the canvas instead of inside a padded panel. -->
+<div class="min-w-0 px-1">
   <table class="w-full border-separate border-spacing-0">
-    <thead class="sticky top-0 bg-panel/90 backdrop-blur">
+    <!-- The sticky head must match what it sticks over: canvas, not the panel
+         tint the surrounding card used to paint. -->
+    <thead class="sticky top-0 bg-canvas/90 backdrop-blur">
       <!-- `label` carries the 11px size, the 600 weight, the tracking and the
            uppercasing as one token — never spell those out at a call site. py-2
            lands the head at the same 30px as a body row. -->

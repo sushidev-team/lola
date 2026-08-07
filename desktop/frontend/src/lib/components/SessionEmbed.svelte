@@ -235,7 +235,27 @@
         <span class="text-sm text-warn" title="gh has been failing; the delivery state may be old">⚠ PR stale</span>
       {/if}
       {#if session.branch}<span class="selectable font-mono text-sm text-faint">{session.branch}</span>{/if}
+      <!-- The session's actions live HERE, not in a band under the terminal. That
+           band cost a horizontal rule and a row of height at the bottom of the
+           window to hold four buttons that belong to the session named on this
+           line — and it stopped the terminal short of the window's edge, which is
+           the one thing the region is for. -->
       <span class="ml-auto flex items-center gap-1.5">
+        {#if session.prNumber > 0}
+          <Button size="xs" onclick={() => store.openURL(session.prUrl)}>Open PR <span aria-hidden="true">↗</span></Button>
+        {/if}
+        <Button size="xs" onclick={() => store.coderabbit(session.id)}>CodeRabbit</Button>
+        <Button size="xs" onclick={() => store.review(session.id)}>Review</Button>
+        {#if canRevive}
+          <Button variant="accent" size="xs" onclick={() => store.revive(session.id)}>Revive</Button>
+        {/if}
+        <!-- Opens the shared confirm dialog (App.svelte) rather than an inline
+             yes/no, so the 'x' shortcut and this button confirm the same way. -->
+        <Button variant="danger" size="xs" onclick={() => store.askKill(session.id)}>Kill</Button>
+        <!-- A rule, not a gap: Kill and Focus now share a row, and the one that
+             ends a session must not sit a stone's throw from the one that merely
+             makes it bigger. -->
+        <span class="mx-0.5 h-4 w-px shrink-0 bg-edge/60" aria-hidden="true"></span>
         {#if focused}
           <!-- The chord is spelled out, not just tooltipped: while this terminal
                has focus every other key goes to the agent, so this is the only
@@ -258,14 +278,26 @@
          the tabs, so it sits opposite them rather than trailing the row. Collapses
          in the compact, agent-only case so the plain detail panel stays chrome-free. -->
     {#if showTabs}
-      <div class="relative z-10 flex items-center gap-4 border-b border-edge/60 px-4 py-2">
-        <div class="flex min-w-0 flex-wrap items-center gap-2 select-none">
-          <!-- The agent tab carries no ×, so its own padding stands in for the
-               shell tabs' two 20px slots — near enough that the strip reads as
-               one row of tabs rather than two shapes. -->
-          <Button size="xs" class="px-3.5!" selected={activeTab === AGENT} onclick={() => selectTab(session.id, AGENT)}>
+      <!-- Boxed tabs, joined to the pane below. The strip draws the rule; the
+           active tab covers it with a strip of its own background (`-mb-px` over
+           `border-b border-panel`) and paints itself in the terminal's colour, so
+           the tab and the pane read as one surface and every other tab reads as
+           behind it. Chips floating in a padded row could not say that: they
+           looked like a toolbar that happened to sit above a terminal. -->
+      <div class="relative z-10 flex items-stretch border-b border-edge/60 select-none">
+        <div class="flex min-w-0 items-stretch">
+          <!-- The agent tab is the same cell as a shell tab minus the × and its
+               counterweight, so the strip is one row of boxes, not two shapes. -->
+          <button
+            type="button"
+            aria-pressed={activeTab === AGENT}
+            class="h-8 shrink-0 border-r border-edge/40 px-3.5 transition-colors {activeTab === AGENT
+              ? '-mb-px border-b border-panel bg-panel font-medium text-ink'
+              : 'text-faint hover:bg-sel hover:text-ink'}"
+            onclick={() => selectTab(session.id, AGENT)}
+          >
             Agent
-          </Button>
+          </button>
           {#each shells as sh, i (sh)}
             <!-- The tab is ONE chip containing two controls, so the wrapper — not
                  the label button — paints the background and the text colour, and
@@ -298,8 +330,9 @@
               bind:this={tabEls[i]}
               animate:flip={{ duration: flipMs }}
               role="group"
-              class="group flex shrink-0 items-center gap-1 rounded-md px-1.5 transition-colors {activeTab === sh
-                ? 'bg-accent-fill font-medium text-accent-ink'
+              class="group flex h-8 shrink-0 items-center gap-1 border-r border-edge/40 px-1.5 transition-colors {activeTab ===
+              sh
+                ? '-mb-px border-b border-panel bg-panel font-medium text-ink'
                 : 'text-faint hover:bg-sel hover:text-ink'}"
               class:opacity-60={dragging === i}
               style="touch-action: none"
@@ -338,14 +371,18 @@
             </div>
           {/each}
         </div>
-        <Button
-          size="xs"
-          class="ml-auto shrink-0 px-2.5!"
-          title="open a shell in the worktree"
-          onclick={() => terms.newShell(session.id, session.worktree)}
-        >
-          <span aria-hidden="true">+</span> Shell
-        </Button>
+        <!-- Still a Button, not a tab cell: it opens a shell, it never *is* one,
+             and the boxed cells to its left are what the distinction rides on. -->
+        <span class="ml-auto flex shrink-0 items-center pr-3 pl-2">
+          <Button
+            size="xs"
+            class="px-2.5!"
+            title="open a shell in the worktree"
+            onclick={() => terms.newShell(session.id, session.worktree)}
+          >
+            <span aria-hidden="true">+</span> Shell
+          </Button>
+        </span>
       </div>
 
       {#if tabMenu}
@@ -456,25 +493,6 @@
       {:else}
         <div class="flex h-full items-center justify-center text-faint">no tmux session (dead)</div>
       {/if}
-    </div>
-
-    <!-- actions — ghost buttons: nothing painted until the cursor arrives, but a
-         real hover chip so the row reads as controls rather than as a sentence of
-         faint words. -->
-    <div class="flex flex-wrap items-center gap-1 border-t border-edge/60 px-2 py-1">
-      {#if session.prNumber > 0}
-        <Button onclick={() => store.openURL(session.prUrl)}>Open PR <span aria-hidden="true">↗</span></Button>
-      {/if}
-      <Button onclick={() => store.coderabbit(session.id)}>CodeRabbit</Button>
-      <Button onclick={() => store.review(session.id)}>Review</Button>
-      {#if canRevive}
-        <Button variant="accent" onclick={() => store.revive(session.id)}>Revive</Button>
-      {/if}
-      <span class="ml-auto">
-        <!-- Opens the shared confirm dialog (App.svelte) rather than an inline
-             yes/no, so the 'x' shortcut and this button confirm the same way. -->
-        <Button variant="danger" onclick={() => store.askKill(session.id)}>Kill</Button>
-      </span>
     </div>
   </div>
 {/if}
