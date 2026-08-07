@@ -168,16 +168,16 @@ func TestRollupGoldens(t *testing.T) {
 		d    DeliveryState
 		want string
 	}{
-		{AgentDead, DeliveryMerged, "merged"},        // merged beats dead
-		{AgentWaitingInput, DeliveryMerged, "merged"},// merged beats waiting
-		{AgentDead, DeliveryCIFailed, "dead"},        // dead beats live PR states
+		{AgentDead, DeliveryMerged, "merged"},         // merged beats dead
+		{AgentWaitingInput, DeliveryMerged, "merged"}, // merged beats waiting
+		{AgentDead, DeliveryCIFailed, "dead"},         // dead beats live PR states
 		{AgentDead, DeliveryClosed, "dead"},
 		{AgentWaitingInput, DeliveryCIPending, "needs_input"}, // the rescue
 		{AgentWaitingInput, DeliveryClosed, "needs_input"},    // rescue beats closed
-		{AgentIdle, DeliveryCIPending, "ci_pending"}, // delivery owns rollup post-PR
+		{AgentIdle, DeliveryCIPending, "ci_pending"},          // delivery owns rollup post-PR
 		{AgentWorking, DeliveryCIPending, "ci_pending"},
 		{AgentExited, DeliveryReviewPending, "review_pending"},
-		{AgentStarting, DeliveryNone, "working"},     // spawn holds its slot
+		{AgentStarting, DeliveryNone, "working"}, // spawn holds its slot
 		{AgentIdle, DeliveryNone, "idle"},
 		{AgentExited, DeliveryNone, "session_ended"},
 		{AgentOrphaned, DeliveryNone, "orphaned"},

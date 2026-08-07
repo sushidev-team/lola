@@ -6,6 +6,7 @@
   import LivePulse from "./LivePulse.svelte";
   import LiveTerminal from "./LiveTerminal.svelte";
   import Button from "./Button.svelte";
+  import MenuItem from "./MenuItem.svelte";
 
   // `focused` = the expanded full-cockpit view ("minimize" toggle); otherwise the
   // compact detail panel. The two used to differ in terminal font size as well —
@@ -86,7 +87,7 @@
   }
 
   function dragStart(i: number, e: PointerEvent) {
-    if (e.button !== 0) return; // left button only; right-click is not a drag
+    if (e.button !== 0 || renaming) return; // left button only, and never while a name is being typed
     dragFrom = i;
     dragX = e.clientX;
   }
@@ -110,6 +111,61 @@
     if (el.hasPointerCapture?.(e.pointerId)) el.releasePointerCapture(e.pointerId);
     dragFrom = -1;
     dragging = -1;
+  }
+
+  // The tab's right-click menu (rename / close). Local state rather than a
+  // request pushed into sessionmenu.svelte.ts, because that store exists to give
+  // MANY session surfaces the same items — this menu acts on a tab, which only
+  // exists here. It borrows the same shape: a backdrop that swallows the next
+  // click, and a clamp so a tab near the window edge doesn't open off-screen.
+  let tabMenu = $state<{ tab: string; x: number; y: number } | null>(null);
+  let menuEl = $state<HTMLElement | null>(null);
+  $effect(() => {
+    const m = tabMenu;
+    const node = menuEl;
+    if (!m || !node) return;
+    const { width, height } = node.getBoundingClientRect();
+    node.style.left = `${Math.max(4, Math.min(m.x, window.innerWidth - width - 4))}px`;
+    node.style.top = `${Math.max(4, Math.min(m.y, window.innerHeight - height - 4))}px`;
+  });
+
+  function openTabMenu(tab: string, e: MouseEvent) {
+    e.preventDefault(); // suppress WebKit's own menu
+    e.stopPropagation(); // ...and the session menu the surface behind would open
+    renaming = "";
+    tabMenu = { tab, x: e.clientX, y: e.clientY };
+  }
+
+  // Renaming happens IN the tab: the label swaps for an input carrying the name
+  // it currently shows, so clearing the field is the documented way back to the
+  // default "Shell N" (terms.rename treats blank as "forget this name").
+  //
+  // The global shortcut handler already ignores keystrokes aimed at an <input>
+  // (App.svelte's `typing`), so an "s" typed into a tab name cannot open a shell.
+  let renaming = $state("");
+  let renameText = $state("");
+
+  function startRename(id: string, tab: string) {
+    tabMenu = null;
+    renameText = terms.labelFor(id, tab);
+    renaming = tab;
+  }
+
+  function commitRename(id: string) {
+    if (!renaming) return;
+    terms.rename(id, renaming, renameText);
+    renaming = "";
+  }
+
+  function renameKey(id: string, e: KeyboardEvent) {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      commitRename(id);
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation(); // Escape here means "abandon the edit", never "leave fullscreen"
+      renaming = "";
+    }
   }
 
   // Discover this session's shell tabs from the tmux server on selection, then
@@ -226,18 +282,38 @@
               onpointermove={(e) => dragMove(session.id, e)}
               onpointerup={dragEnd}
               onpointercancel={dragEnd}
+              oncontextmenu={(e) => openTabMenu(sh, e)}
             >
-              <!-- aria-pressed by hand: the chip that normally carries it moved to
-                   the wrapper, but the label is still the control being toggled. -->
-              <Button
-                variant="bare"
-                size="xs"
-                class="cursor-grab pr-6! pl-2.5!"
-                aria-pressed={activeTab === sh}
-                onclick={() => selectTab(session.id, sh)}
-              >
-                {terms.labelFor(session.id, sh)}
-              </Button>
+              {#if renaming === sh}
+                <!-- Sized in `ch` from the text so the tab neither jumps to a
+                     fixed field width nor clips what is being typed. Committing
+                     on blur as well as on Enter: clicking away from a rename is
+                     "keep it", the way an inline edit reads everywhere else. -->
+                <!-- svelte-ignore a11y_autofocus — the field exists only because
+                     the user just chose Rename; landing anywhere else is wrong. -->
+                <input
+                  autofocus
+                  bind:value={renameText}
+                  onkeydown={(e) => renameKey(session.id, e)}
+                  onblur={() => commitRename(session.id)}
+                  aria-label="tab name"
+                  class="h-6 rounded-md bg-canvas pr-6 pl-2.5 text-sm text-ink outline-none focus:ring-1 focus:ring-accent"
+                  style="width: {Math.max(6, renameText.length + 1)}ch"
+                />
+              {:else}
+                <!-- aria-pressed by hand: the chip that normally carries it moved
+                     to the wrapper, but the label is still the control toggled. -->
+                <Button
+                  variant="bare"
+                  size="xs"
+                  class="cursor-grab pr-6! pl-2.5!"
+                  aria-pressed={activeTab === sh}
+                  ondblclick={() => startRename(session.id, sh)}
+                  onclick={() => selectTab(session.id, sh)}
+                >
+                  {terms.labelFor(session.id, sh)}
+                </Button>
+              {/if}
               <!-- Colour is the whole affordance here: no chip of its own (it is
                    already sitting on one), just the glyph fading in with the tab
                    and going red under the cursor. -->
@@ -262,6 +338,42 @@
           <span aria-hidden="true">+</span> Shell
         </Button>
       </div>
+
+      {#if tabMenu}
+        <!-- Backdrop: any click (or another right-click) outside dismisses the
+             menu without reaching the surface underneath — the terminal below
+             would otherwise take the click and steal the keyboard. -->
+        <div
+          class="fixed inset-0 z-40"
+          role="presentation"
+          onclick={() => (tabMenu = null)}
+          oncontextmenu={(e) => {
+            e.preventDefault();
+            tabMenu = null;
+          }}
+        ></div>
+        <div
+          bind:this={menuEl}
+          class="fixed z-50 min-w-[10rem] rounded-lg border border-edge bg-panel p-1 shadow-xl"
+          style="left:{tabMenu.x}px;top:{tabMenu.y}px"
+          role="menu"
+        >
+          <div class="label truncate px-2 pt-1 pb-1.5 text-faint">{terms.labelFor(session.id, tabMenu.tab)}</div>
+          <MenuItem icon="✎" onclick={() => startRename(session.id, tabMenu?.tab ?? "")}>Rename…</MenuItem>
+          <div class="my-1 h-px bg-edge/60"></div>
+          <MenuItem
+            variant="danger"
+            icon="×"
+            onclick={() => {
+              const tab = tabMenu?.tab;
+              tabMenu = null;
+              if (tab) terms.closeShell(session.id, tab);
+            }}
+          >
+            {terms.isReviewTab(tabMenu.tab) ? "Close review" : "Close shell"}
+          </MenuItem>
+        </div>
+      {/if}
     {/if}
 
     <!-- Live terminal (agent pane or worktree shell). p-4 = 16px, matching

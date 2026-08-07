@@ -32,8 +32,8 @@ describe("review pane tabs", () => {
   it("labels the review pane 'Review' and leaves shell numbering alone", () => {
     const id = newId();
     seed(id, [`${id}-shell-1`, `${id}-shell-2`, `${id}-review`]);
-    expect(terms.labelFor(id, `${id}-shell-1`)).toBe("sh 1");
-    expect(terms.labelFor(id, `${id}-shell-2`)).toBe("sh 2");
+    expect(terms.labelFor(id, `${id}-shell-1`)).toBe("Shell 1");
+    expect(terms.labelFor(id, `${id}-shell-2`)).toBe("Shell 2");
     expect(terms.labelFor(id, `${id}-review`)).toBe("Review");
   });
 
@@ -73,8 +73,8 @@ describe("drag-to-sort tabs", () => {
     seed(id, [`${id}-shell-1`, `${id}-shell-2`, `${id}-shell-3`]);
     terms.moveTab(id, 2, 0);
     expect(terms.shellsFor(id)).toEqual([`${id}-shell-3`, `${id}-shell-1`, `${id}-shell-2`]);
-    expect(terms.labelFor(id, `${id}-shell-3`)).toBe("sh 1");
-    expect(terms.labelFor(id, `${id}-shell-1`)).toBe("sh 2");
+    expect(terms.labelFor(id, `${id}-shell-3`)).toBe("Shell 1");
+    expect(terms.labelFor(id, `${id}-shell-1`)).toBe("Shell 2");
   });
 
   it("ignores a no-op or out-of-range move", () => {
@@ -101,6 +101,44 @@ describe("drag-to-sort tabs", () => {
     terms.moveTab(id, 2, 0);
     seed(id, [`${id}-shell-1`, `${id}-shell-2`]);
     expect(terms.shellsFor(id)).toEqual([`${id}-shell-1`, `${id}-shell-2`]);
+  });
+
+  it("keeps a hand-given name on the tab it was given to, through a sort", () => {
+    const id = newId();
+    seed(id, [`${id}-shell-1`, `${id}-shell-2`]);
+    terms.rename(id, `${id}-shell-2`, "  Tests  ");
+    expect(terms.labelFor(id, `${id}-shell-2`)).toBe("Tests"); // trimmed
+    terms.moveTab(id, 1, 0);
+    expect(terms.labelFor(id, `${id}-shell-2`)).toBe("Tests"); // not renumbered with the position
+    expect(terms.labelFor(id, `${id}-shell-1`)).toBe("Shell 2");
+  });
+
+  it("falls back to the default when a name is cleared", () => {
+    const id = newId();
+    seed(id, [`${id}-shell-1`]);
+    terms.rename(id, `${id}-shell-1`, "Logs");
+    terms.rename(id, `${id}-shell-1`, "   ");
+    expect(terms.labelFor(id, `${id}-shell-1`)).toBe("Shell 1");
+  });
+
+  it("names the review pane too, and forgets the name when the tab closes", () => {
+    const id = newId();
+    seed(id, [`${id}-shell-1`, `${id}-review`]);
+    terms.rename(id, `${id}-review`, "QA");
+    expect(terms.labelFor(id, `${id}-review`)).toBe("QA");
+    terms.shellExited(id, `${id}-review`); // a reused tmux name must not inherit it
+    seed(id, [`${id}-shell-1`, `${id}-review`]);
+    expect(terms.labelFor(id, `${id}-review`)).toBe("Review");
+  });
+
+  it("persists names across a reload of the module", async () => {
+    const id = newId();
+    seed(id, [`${id}-shell-1`]);
+    terms.rename(id, `${id}-shell-1`, "Deploy");
+    vi.resetModules();
+    const fresh = (await import("./terms.svelte")).terms;
+    (fresh as unknown as { shells: Map<string, string[]> }).shells.set(id, [`${id}-shell-1`]);
+    expect(fresh.labelFor(id, `${id}-shell-1`)).toBe("Deploy");
   });
 
   it("cycles in the sorted order", () => {

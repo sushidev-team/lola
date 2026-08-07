@@ -671,6 +671,7 @@ func handoffStash(s session.Session, p reviewProvider, findings string) string {
 //
 //   - AtPrompt — the Stop hook fired and nothing has resumed the agent. The
 //     classic gate; the send CONSUMES it.
+//
 //   - parked on an IDLE notification — AgentWaitingInput with InputIdleNotify.
 //     Claude Code emits that notification a minute or so after Stop, and
 //     handling it closes AtPrompt ("waiting on a human: never send-keys"). But

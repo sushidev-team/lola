@@ -244,4 +244,3 @@ func checksState(rollup []rollupEntry) string {
 	}
 	return "pass"
 }
-

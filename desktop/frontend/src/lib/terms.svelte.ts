@@ -47,6 +47,7 @@ class Terms {
   private shells = new SvelteMap<string, string[]>(); // session id -> discovered shell tmux names
   private active = new SvelteMap<string, string>(); // session id -> AGENT | shell tmux name
   private order = new SvelteMap<string, string[]>(); // session id -> hand-sorted tab order (see shellsFor)
+  private names = new SvelteMap<string, Record<string, string>>(Object.entries(readNames())); // -> hand-given labels
 
   /** Shell tmux names open for session `id`, in the order its tabs are shown.
    *
@@ -82,14 +83,54 @@ class Terms {
     return isReviewTab(name);
   }
 
-  /** Display label for a tab: "Review" for the review pane, else the shell's
-   * 1-based position among the SHELLS (the review pane must not shift it). */
+  /** Display label for a tab: a hand-given name if it has one, "Review" for the
+   * review pane, else "Shell N" — N being the shell's 1-based position among the
+   * SHELLS (the review pane must not shift it, and a drag renumbers them). */
   labelFor(id: string, name: string): string {
+    const given = this.names.get(id)?.[name];
+    if (given) return given;
     if (isReviewTab(name)) return "Review";
     const i = this.shellsFor(id)
       .filter((n) => !isReviewTab(n))
       .indexOf(name);
-    return i === -1 ? "shell" : `sh ${i + 1}`;
+    return i === -1 ? "Shell" : `Shell ${i + 1}`;
+  }
+
+  /** Rename a tab. A blank label CLEARS the name, so the tab falls back to
+   * "Shell N" — that is the only way back, and it is why the rename field starts
+   * on the current label rather than on an empty box. */
+  rename(id: string, name: string, label: string) {
+    const next = { ...(this.names.get(id) ?? {}) };
+    const trimmed = label.trim().slice(0, 40); // a tab is a chip, not a paragraph
+    if (trimmed) next[name] = trimmed;
+    else delete next[name];
+    this.setNames(id, next);
+  }
+
+  // setNames writes one session's labels through to storage. The whole map is
+  // rewritten rather than patched: it is a handful of short strings, and a
+  // partial write is the kind of bug that only shows up after a relaunch.
+  private setNames(id: string, labels: Record<string, string>) {
+    if (Object.keys(labels).length) this.names.set(id, labels);
+    else this.names.delete(id);
+    try {
+      const all: NameMap = {};
+      for (const [k, v] of this.names) all[k] = v;
+      localStorage.setItem(NAMES_KEY, JSON.stringify(all));
+    } catch {
+      /* storage unavailable — the name still applies for this run */
+    }
+  }
+
+  // dropNames forgets labels for tabs that are no longer open. A closed shell's
+  // tmux name is reused by the next one ("<id>-shell-1" after shell 1 exits), so
+  // a kept label would land on a shell nobody named.
+  private dropNames(id: string, open: string[]) {
+    const cur = this.names.get(id);
+    if (!cur) return;
+    const live = new Set(open);
+    const next = Object.fromEntries(Object.entries(cur).filter(([n]) => live.has(n)));
+    if (Object.keys(next).length !== Object.keys(cur).length) this.setNames(id, next);
   }
 
   /** The tab session `id` shows: AGENT, or a shell name — never a stale/closed one. */
@@ -121,6 +162,7 @@ class Terms {
     try {
       const names = (await TermService.Shells(id)) ?? [];
       this.shells.set(id, names);
+      this.dropNames(id, names);
       const a = this.active.get(id);
       if (a && a !== AGENT && !names.includes(a)) this.active.set(id, names.at(-1) ?? AGENT);
     } catch {
@@ -187,6 +229,7 @@ class Terms {
     if (rest.length === this.shellsFor(id).length) return; // not ours / already gone
     if (this.activeTab(id) === name) this.active.set(id, rest.at(-1) ?? AGENT);
     this.shells.set(id, rest);
+    this.dropNames(id, rest);
   }
 
   // openShell backs the "s" shortcut too — the limit is gone, so "s" always opens

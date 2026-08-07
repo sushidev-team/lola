@@ -222,7 +222,9 @@ func (t *TermService) Shells(sessionID string) []string {
 			reviewPane = line
 		}
 	}
-	sort.Slice(names, func(i, j int) bool { return shellSessionIndex(sessionID, names[i]) < shellSessionIndex(sessionID, names[j]) })
+	sort.Slice(names, func(i, j int) bool {
+		return shellSessionIndex(sessionID, names[i]) < shellSessionIndex(sessionID, names[j])
+	})
 	// The review pane sorts LAST so the shell numbering above it never shifts
 	// when a review starts or ends.
 	if reviewPane != "" {

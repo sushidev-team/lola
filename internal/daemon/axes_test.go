@@ -174,7 +174,7 @@ func TestTmuxActivitySustainsWorkingNeverUpgrades(t *testing.T) {
 	}
 
 	working := nativeSess("FE-1", "working")
-	working.Agent = "codex" // no tool_use hook: the old pipeline starved this anchor
+	working.Agent = "codex"                                   // no tool_use hook: the old pipeline starved this anchor
 	working.LastActivityAt = time.Now().Add(-2 * time.Minute) // past the 45s guard
 	idle := nativeSess("FE-2", "idle")
 	d.sessions.Upsert(working)

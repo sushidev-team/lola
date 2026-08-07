@@ -52,13 +52,13 @@ func TestNotable(t *testing.T) {
 		from, to string
 		want     bool
 	}{
-		{"", "working", true},           // spawn
-		{"", "", false},                 // empty
-		{"working", "idle", false},      // turn churn
-		{"ci_pending", "idle", false},   // post-PR churn
-		{"working", "orphaned", false},  // adoption anomaly, not feed-worthy
-		{"idle", "working", false},      // routine turn start
-		{"needs_input", "working", true},// resumed after waiting on a human
+		{"", "working", true},            // spawn
+		{"", "", false},                  // empty
+		{"working", "idle", false},       // turn churn
+		{"ci_pending", "idle", false},    // post-PR churn
+		{"working", "orphaned", false},   // adoption anomaly, not feed-worthy
+		{"idle", "working", false},       // routine turn start
+		{"needs_input", "working", true}, // resumed after waiting on a human
 		{"working", "needs_input", true},
 		{"ci_pending", "ci_failed", true},
 		{"review_pending", "merged", true},

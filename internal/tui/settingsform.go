@@ -250,17 +250,17 @@ func newSettingsForm(cfgPath string, cfg *config.Config) *settingsForm {
 			{key: "brain_esc", tab: stBrain, label: "Summarize escalation", help: "Summarize WHY a session is blocked on escalation.", kind: sfBool, b: br.SummarizeEscalation},
 			{key: "brain_appr", tab: stBrain, label: "Summarize approved", help: "Summarize PR risk on approved+green.", kind: sfBool, b: br.SummarizeApproved},
 
-		// [statusagent] — the DISPLAY-ONLY status interpreter: a small claude
-		// pass that judges what each agent is actually doing (headline + an
-		// interpreted agent-state overlay). Never enters the control loop.
-		{key: "sa_enabled", tab: stStatusAgent, section: "[statusagent]", sectionNote: "claude status interpretation for the session list", label: "Enabled", help: "Opt-in interpreter: pane + events + PR facts → what the agent is REALLY doing. Display only.", kind: sfBool, b: sa.Enabled},
-		{key: "sa_bin", tab: stStatusAgent, label: "Binary", help: "claude executable; empty resolves \"claude\" via PATH (pin absolute for launchd).", kind: sfText, text: sa.Bin},
-		{key: "sa_model", tab: stStatusAgent, label: "Model", help: "claude --model per interpretation; the recommended default is \"sonnet\"; empty = claude's default.", kind: sfText, text: sa.Model},
-		{key: "sa_timeout", tab: stStatusAgent, label: "Timeout seconds", help: "Hard cap per interpretation call. Must be >= 0.", kind: sfInt, text: itoa(sa.TimeoutSeconds)},
-		{key: "sa_interval", tab: stStatusAgent, label: "Min interval seconds", help: "Per-session debounce between interpretation attempts. Must be >= 0.", kind: sfInt, text: itoa(sa.MinIntervalSeconds)},
-		{key: "sa_maxcycle", tab: stStatusAgent, label: "Max per cycle", help: "Interpretations queued per 30s observer cycle. Must be >= 0.", kind: sfInt, text: itoa(sa.MaxPerCycle)},
-		{key: "sa_confidence", tab: stStatusAgent, label: "Min confidence", help: "0-1; judgements below this are discarded and the deterministic status stands.", kind: sfText, text: formatFloat(sa.MinConfidence)},
-		{key: "sa_transcript", tab: stStatusAgent, label: "Include transcript", help: "Also feed the agent's own transcript tail (more signal, more tokens).", kind: sfBool, b: sa.IncludeTranscript},
+			// [statusagent] — the DISPLAY-ONLY status interpreter: a small claude
+			// pass that judges what each agent is actually doing (headline + an
+			// interpreted agent-state overlay). Never enters the control loop.
+			{key: "sa_enabled", tab: stStatusAgent, section: "[statusagent]", sectionNote: "claude status interpretation for the session list", label: "Enabled", help: "Opt-in interpreter: pane + events + PR facts → what the agent is REALLY doing. Display only.", kind: sfBool, b: sa.Enabled},
+			{key: "sa_bin", tab: stStatusAgent, label: "Binary", help: "claude executable; empty resolves \"claude\" via PATH (pin absolute for launchd).", kind: sfText, text: sa.Bin},
+			{key: "sa_model", tab: stStatusAgent, label: "Model", help: "claude --model per interpretation; the recommended default is \"sonnet\"; empty = claude's default.", kind: sfText, text: sa.Model},
+			{key: "sa_timeout", tab: stStatusAgent, label: "Timeout seconds", help: "Hard cap per interpretation call. Must be >= 0.", kind: sfInt, text: itoa(sa.TimeoutSeconds)},
+			{key: "sa_interval", tab: stStatusAgent, label: "Min interval seconds", help: "Per-session debounce between interpretation attempts. Must be >= 0.", kind: sfInt, text: itoa(sa.MinIntervalSeconds)},
+			{key: "sa_maxcycle", tab: stStatusAgent, label: "Max per cycle", help: "Interpretations queued per 30s observer cycle. Must be >= 0.", kind: sfInt, text: itoa(sa.MaxPerCycle)},
+			{key: "sa_confidence", tab: stStatusAgent, label: "Min confidence", help: "0-1; judgements below this are discarded and the deterministic status stands.", kind: sfText, text: formatFloat(sa.MinConfidence)},
+			{key: "sa_transcript", tab: stStatusAgent, label: "Include transcript", help: "Also feed the agent's own transcript tail (more signal, more tokens).", kind: sfBool, b: sa.IncludeTranscript},
 
 			// [ui] — presentation only; no daemon behavior reads it. The TUI paints
 			// from this flavor (applyTheme) and so does the desktop app, so the

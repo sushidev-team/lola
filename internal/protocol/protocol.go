@@ -89,10 +89,10 @@ type Request struct {
 	Ref     string `json:"ref,omitempty"`
 
 	// Hook callback fields, set only for cmd=hookEvent.
-	Session string `json:"session,omitempty"` // lola session ID ($LOLA_SESSION in the agent's pane); also the kill/pane/answer target
-	Event   string `json:"event,omitempty"`   // normalized: stop|notification|session_end|tool_use|user_prompt
-	Detail  string `json:"detail,omitempty"`  // optional: notification_type / stop_reason / end_reason
-	Hook    *HookPayload `json:"hook,omitempty"` // structured payload fields; nil from pre-payload hook binaries
+	Session string       `json:"session,omitempty"` // lola session ID ($LOLA_SESSION in the agent's pane); also the kill/pane/answer target
+	Event   string       `json:"event,omitempty"`   // normalized: stop|notification|session_end|tool_use|user_prompt
+	Detail  string       `json:"detail,omitempty"`  // optional: notification_type / stop_reason / end_reason
+	Hook    *HookPayload `json:"hook,omitempty"`    // structured payload fields; nil from pre-payload hook binaries
 
 	// Force is set only for cmd=kill: remove the worktree even when it has
 	// uncommitted changes. Deliberate CLI-only friction (`lola kill <id>
@@ -202,18 +202,18 @@ type SessionInfo struct {
 	// The two state axes underneath Status (see internal/state), with raw
 	// freshness timestamps so a client can render a live "ago" between
 	// refreshes. All omitempty: absent on an older daemon.
-	AgentState      string    `json:"agentState,omitempty"`     // starting|working|waiting_input|idle|exited|dead|shell|orphaned
-	Delivery        string    `json:"delivery,omitempty"`       // none|draft|ci_pending|…|merged|closed
-	StatusSince     time.Time `json:"statusSince,omitzero"`     // when the rolled-up Status last changed
-	AgentStateSince time.Time `json:"agentStateSince,omitzero"` // when the agent axis last changed
-	LastActivityAt  time.Time `json:"lastActivityAt,omitzero"`  // last POSITIVE evidence of work
-	ActivitySource  string    `json:"activitySource,omitempty"` // hook|pane|tmux_activity
-	PRObservedAt    time.Time `json:"prObservedAt,omitzero"`    // last successful gh PR fetch
-	PRStale         bool      `json:"prStale,omitempty"`        // PR facts are ≥3 failed fetches old
-	AtPrompt        bool      `json:"atPrompt,omitempty"`        // agent idle at its prompt (send-keys gate open)
-	InputReason     string    `json:"inputReason,omitempty"`     // why waiting_input: permission_prompt|question|idle_notification
-	CurrentTool     string    `json:"currentTool,omitempty"`     // tool the in-flight turn runs right now (PostToolUse)
-	LastNotification string   `json:"lastNotification,omitempty"` // last Notification message (display-only text)
+	AgentState       string    `json:"agentState,omitempty"`       // starting|working|waiting_input|idle|exited|dead|shell|orphaned
+	Delivery         string    `json:"delivery,omitempty"`         // none|draft|ci_pending|…|merged|closed
+	StatusSince      time.Time `json:"statusSince,omitzero"`       // when the rolled-up Status last changed
+	AgentStateSince  time.Time `json:"agentStateSince,omitzero"`   // when the agent axis last changed
+	LastActivityAt   time.Time `json:"lastActivityAt,omitzero"`    // last POSITIVE evidence of work
+	ActivitySource   string    `json:"activitySource,omitempty"`   // hook|pane|tmux_activity
+	PRObservedAt     time.Time `json:"prObservedAt,omitzero"`      // last successful gh PR fetch
+	PRStale          bool      `json:"prStale,omitempty"`          // PR facts are ≥3 failed fetches old
+	AtPrompt         bool      `json:"atPrompt,omitempty"`         // agent idle at its prompt (send-keys gate open)
+	InputReason      string    `json:"inputReason,omitempty"`      // why waiting_input: permission_prompt|question|idle_notification
+	CurrentTool      string    `json:"currentTool,omitempty"`      // tool the in-flight turn runs right now (PostToolUse)
+	LastNotification string    `json:"lastNotification,omitempty"` // last Notification message (display-only text)
 
 	// [statusagent] interpreter overlay — untrusted LLM text, DISPLAY ONLY,
 	// pre-gated daemon-side (confidence, freshness, supersession): a client
