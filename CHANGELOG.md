@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.2.2](https://github.com/sushidev-team/lola/compare/v0.2.1...v0.2.2) (2026-08-07)
+
+
+### Features
+
+* **desktop:** animate the tab strip and give rename real room ([5745ac0](https://github.com/sushidev-team/lola/commit/5745ac08a6c2fe78ef9fc5ceaf21f0ef510cbc8f))
+* **desktop:** give the footer row two halves ([63edebc](https://github.com/sushidev-team/lola/commit/63edebc610c8a67fe884336a3c4d33d10384f307))
+* **desktop:** move the version out of the utility row ([72dc778](https://github.com/sushidev-team/lola/commit/72dc778fc62e43800cfc9bcdd02981d874055ec0))
+* **desktop:** unbox the cockpit into bands ([b19240e](https://github.com/sushidev-team/lola/commit/b19240ee285a09032fda1418f298aa898530670c))
+
+
+### Bug Fixes
+
+* **ci:** sign by the identity's hash, not by the entity's name ([03b3f39](https://github.com/sushidev-team/lola/commit/03b3f3927bb1bbf075c10b4711c09c7c03ab030d))
+* **desktop:** let the daemon line have the footer until you reach for it ([39bf192](https://github.com/sushidev-team/lola/commit/39bf19200be16d956d1dec0b578b27b9e2e44b20))
+* **desktop:** make the terminal band a sheet the list slides under ([9048e7a](https://github.com/sushidev-team/lola/commit/9048e7a357b9aeacc0e9f321de93b5c9a1f88da4))
+* **desktop:** square the lens picker and quieten the board heads ([50024e7](https://github.com/sushidev-team/lola/commit/50024e75ce222d66ea7279817c0eace61bd46d95))
+
 ## [0.2.1](https://github.com/sushidev-team/lola/compare/v0.2.0...v0.2.1) (2026-08-05)
 
 
