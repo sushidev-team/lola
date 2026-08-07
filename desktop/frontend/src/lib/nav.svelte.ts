@@ -38,6 +38,15 @@ class Nav {
   /** The session whose live terminal is expanded/focused ("" = none). */
   focusedTerm = $state<string>("");
   /**
+   * Lens to return to when the focused terminal closes ("" = stay put).
+   *
+   * The grid lens cannot host a terminal (see setLens), so opening one from a
+   * tile has to switch to the list first. Without this the trip was one-way:
+   * minimizing dropped you in the list lens you never chose, and the grid you
+   * were reading — the whole point of the click — was gone.
+   */
+  returnLens = $state<Lens | "">("");
+  /**
    * Sidebar visible. Webview-local UI state — NOT a config.toml key; the daemon
    * and the TUI never learn about it. Mirrored to localStorage so the choice
    * survives a relaunch, best-effort: a webview preference is never worth
@@ -72,7 +81,7 @@ class Nav {
     this.view = "cockpit";
     this.scoped = scopeProject !== "";
     this.project = scopeProject;
-    this.focusedTerm = "";
+    this.dropFocus();
   }
   /**
    * What a sidebar project row does when clicked. Clicking the project the
@@ -93,22 +102,22 @@ class Nav {
   }
   goHome() {
     this.view = "home";
-    this.focusedTerm = "";
+    this.dropFocus();
   }
   goDetail(name: string) {
     this.project = name;
     this.view = "detail";
-    this.focusedTerm = "";
+    this.dropFocus();
   }
   goPRPicker(name: string) {
     this.project = name;
     this.view = "prpicker";
-    this.focusedTerm = "";
+    this.dropFocus();
   }
   goTicketPicker(name: string) {
     this.project = name;
     this.view = "ticketpicker";
-    this.focusedTerm = "";
+    this.dropFocus();
   }
 
   openOverlay(o: Overlay, project = "", tab = "") {
@@ -134,15 +143,38 @@ class Nav {
    */
   setLens(l: Lens) {
     this.lens = l;
-    if (l === "grid") this.focusedTerm = "";
+    // A lens picked BY HAND is where the user wants to be, so it also cancels
+    // any pending return — otherwise closing a terminal later would yank them
+    // back to a lens they had since left.
+    if (l === "grid") this.dropFocus();
+    else this.returnLens = "";
   }
   cycleLens() {
     this.setLens(this.lens === "list" ? "kanban" : this.lens === "kanban" ? "grid" : "list");
   }
   toggleFocusTerm(id: string) {
-    // Focusing from the grid has to leave it first — see setLens.
-    if (this.lens === "grid") this.lens = "list";
-    this.focusedTerm = this.focusedTerm === id ? "" : id;
+    if (this.focusedTerm === id) {
+      // Closing: hand the lens back to whoever opened the terminal.
+      this.focusedTerm = "";
+      if (this.returnLens) {
+        this.lens = this.returnLens;
+        this.returnLens = "";
+      }
+      return;
+    }
+    // Focusing from the grid has to leave it first — see setLens — so remember
+    // where to land when it closes.
+    if (this.lens === "grid") {
+      this.returnLens = "grid";
+      this.lens = "list";
+    }
+    this.focusedTerm = id;
+  }
+
+  /** Clear the focused terminal AND any lens it owed a return to. */
+  private dropFocus() {
+    this.focusedTerm = "";
+    this.returnLens = "";
   }
 }
 

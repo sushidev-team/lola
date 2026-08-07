@@ -165,6 +165,17 @@ function applyCodes(s: SGR, codes: number[], pal: AnsiPalette): SGR {
 // eslint-disable-next-line no-control-regex
 const CSI = /\x1b\[([0-9;]*)([A-Za-z])/g;
 
+// OSC — `ESC ] … BEL` or `ESC ] … ESC \`. Agents emit these constantly for
+// hyperlinks (OSC 8 wraps a PR link as `ESC]8;;<url>BEL text ESC]8;;BEL`) and
+// for the window title, and NONE of it is screen content. Unhandled, the whole
+// control string landed in the tile as text — that is the `]8;id=…;https://…`
+// garbage that used to sit in the middle of a snapshot, and it also inflated the
+// widest-line measurement, so a single decorated URL squeezed the type of an
+// entire tile. The terminating `?` is deliberate: a capture can cut a control
+// string in half, and consuming the truncated head is exactly right.
+// eslint-disable-next-line no-control-regex
+const OSC = /\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?|\x07/g;
+
 /**
  * Render an ANSI (SGR-only) snapshot into safe styled HTML.
  *
@@ -172,7 +183,8 @@ const CSI = /\x1b\[([0-9;]*)([A-Za-z])/g;
  *   component to make the output follow the live theme. Defaults to the default
  *   flavor so this stays callable as a pure one-argument function.
  */
-export function ansiToHtml(input: string, pal: AnsiPalette = DEFAULT_PALETTE): string {
+export function ansiToHtml(raw: string, pal: AnsiPalette = DEFAULT_PALETTE): string {
+  const input = raw.replace(OSC, "");
   let out = "";
   let state: SGR = {};
   let last = 0;
@@ -194,4 +206,52 @@ export function ansiToHtml(input: string, pal: AnsiPalette = DEFAULT_PALETTE): s
   }
   emit(input.slice(last));
   return out;
+}
+
+/**
+ * Drop trailing blank lines from a `capture-pane` snapshot.
+ *
+ * `capture-pane -S -<n>` ends at the bottom of the VISIBLE pane, so a pane whose
+ * cursor sits mid-screen comes back padded with empty rows — and an "empty" row
+ * is not necessarily an empty string: with `-e` it can still carry the SGR
+ * escapes tmux emitted for it. Blankness is therefore judged after stripping
+ * every CSI sequence, not on the raw line.
+ *
+ * Callers that anchor a snapshot to its bottom edge (SnapshotTile) need this:
+ * without it the padding is what lands on the floor and the newest output is
+ * pushed out of view.
+ */
+export function trimTrailingBlankLines(input: string): string {
+  const lines = input.split("\n");
+  let end = lines.length;
+  while (end > 0 && plain(lines[end - 1]).trim() === "") end--;
+  return lines.slice(0, end).join("\n");
+}
+
+/** A snapshot line with every escape removed — what the screen actually shows. */
+function plain(line: string): string {
+  return line.replace(OSC, "").replace(CSI, "");
+}
+
+/**
+ * The width, in character cells, of the widest line in a snapshot.
+ *
+ * This is how a tile sizes its type: a pane is as wide as tmux made it, so the
+ * only size that shows a whole line is one derived from the pane's own column
+ * count. Trailing spaces don't count (tmux pads rows out to the pane width, and
+ * padding is not content), and the result is capped so one pathological line —
+ * a minified blob, a base64 payload — can't drive every other tile's type down
+ * to nothing.
+ *
+ * Cells, not code units: a line is counted by code point so an emoji doesn't
+ * read as two columns. Genuinely double-width glyphs (CJK) still under-count by
+ * one cell each, which costs a sliver of right margin, never a cut line.
+ */
+export function paneColumns(text: string, cap = 220): number {
+  let max = 0;
+  for (const line of text.split("\n")) {
+    const n = Array.from(plain(line).replace(/\s+$/, "")).length;
+    if (n > max) max = n;
+  }
+  return Math.min(max, cap);
 }

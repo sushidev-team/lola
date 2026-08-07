@@ -5,6 +5,7 @@ import { nav } from "./nav.svelte";
 beforeEach(() => {
   nav.lens = "list";
   nav.focusedTerm = "";
+  nav.returnLens = "";
   nav.overlay = null;
   nav.triage = "";
   nav.sidebarOpen = true;
@@ -50,6 +51,45 @@ describe("nav.toggleFocusTerm", () => {
     nav.toggleFocusTerm("s1");
     expect(nav.lens).toBe("list");
     expect(nav.focusedTerm).toBe("s1");
+  });
+
+  // …and closing it puts the grid back. Minimizing used to drop the user in the
+  // list lens they never picked, with the wall of terminals they had been reading
+  // gone — the click that opened one terminal silently changed the whole view.
+  it("returns to the grid when the terminal it opened is closed", () => {
+    nav.setLens("grid");
+    nav.toggleFocusTerm("s1");
+    expect(nav.returnLens).toBe("grid");
+    nav.toggleFocusTerm("s1");
+    expect(nav.focusedTerm).toBe("");
+    expect(nav.lens).toBe("grid");
+    expect(nav.returnLens).toBe("");
+  });
+
+  it("owes nothing when the terminal was opened from the list itself", () => {
+    nav.setLens("list");
+    nav.toggleFocusTerm("s1");
+    nav.toggleFocusTerm("s1");
+    expect(nav.lens).toBe("list");
+    expect(nav.returnLens).toBe("");
+  });
+
+  // A lens chosen by hand while a terminal is up outranks the pending return.
+  it("drops the pending return when a lens is picked by hand", () => {
+    nav.setLens("grid");
+    nav.toggleFocusTerm("s1");
+    nav.setLens("kanban");
+    expect(nav.returnLens).toBe("");
+    nav.toggleFocusTerm("s1");
+    expect(nav.lens).toBe("kanban");
+  });
+
+  it("drops the pending return when navigating away", () => {
+    nav.setLens("grid");
+    nav.toggleFocusTerm("s1");
+    nav.goHome();
+    expect(nav.focusedTerm).toBe("");
+    expect(nav.returnLens).toBe("");
   });
 });
 
