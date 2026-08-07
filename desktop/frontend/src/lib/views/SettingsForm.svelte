@@ -328,6 +328,9 @@
         transports: ["lola"],
         notify: true,
         sendToAgent: true,
+        // A pass runs in a watchable "<session>-review" tmux session by default;
+        // a watch has no exec to watch.
+        visible: !isWatch(kind),
         fallback: [],
       },
     ];
@@ -779,6 +782,14 @@
                     <input type="checkbox" class="accent-accent" disabled={d.reviewLegacy} bind:checked={p.sendToAgent} />
                     <span>Send to agent</span>
                   </label>
+                  {#if !isWatch(p.provider)}
+                    <!-- The pass runs in its own "<session>-review" tmux session,
+                         so it shows up as a Review tab beside the shells. -->
+                    <label class="flex cursor-pointer items-center gap-2">
+                      <input type="checkbox" class="accent-accent" disabled={d.reviewLegacy} bind:checked={p.visible} />
+                      <span>Watch it run</span>
+                    </label>
+                  {/if}
                 </div>
 
                 <div class={rowTopCls}>

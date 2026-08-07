@@ -56,6 +56,11 @@ func (d *Daemon) handleKill(ctx context.Context, sessionID string, force bool) (
 	ctx, cancel := context.WithTimeout(ctx, killExecTimeout)
 	defer cancel()
 
+	// The session's review pane (reviewvisible.go) deliberately outlives its
+	// pass so the findings stay readable — but not its session: kill it here so
+	// a killed worker never leaves a stray tmux session behind.
+	d.killReviewPane(ctx, s.ID)
+
 	// Project gone from config: there is no safe worktree to target (the
 	// project's path/repo are unknown), so terminate the agent only, then drop
 	// the store entry and free the slot. removeWorktree=false keeps runtime.Kill

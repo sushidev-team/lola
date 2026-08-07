@@ -270,6 +270,30 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   it `ActivityWaiting`. It never short-circuits on `AtPromptVerified` — a hook
   verdict from before the pane went quiet is not evidence about now — and any
   capture failure or non-waiting classification defers.
+- **A review PASS runs in its own tmux session, and the pane is a DISPLAY.** With
+  `visible = true` (the per-provider default) a pass runs as the hidden
+  `lola review-run` inside `<sessionID>-review` on lola's tmux server, beside the
+  worker and the `-shell-N` tabs (`internal/daemon/reviewvisible.go`). Rules that
+  hold it together:
+  - The daemon NEVER parses the pane (it wraps, scrolls, is overwritten). The
+    child writes findings + an outcome class into
+    `~/.lola/cache/review/<session>/` (`internal/reviewrun`), and
+    `Status.Err()` maps that class back onto the SAME `Err*` sentinels a direct
+    exec returns — so transports, fallback chain and retry budget cannot tell a
+    visible pass from a direct one.
+  - A visible claude pass uses `--output-format stream-json --verbose` and
+    renders the events to plain lines (`internal/reviewclaude/stream.go`),
+    because a plain `-p` review prints NOTHING until it finishes — a blank pane
+    for ten minutes is not a progress display. The findings still come from the
+    terminal `result` event, byte-identical to the plain pass.
+  - The pane HOLDS after the pass (the child blocks forever) so the output stays
+    readable; the next pass for that session replaces the whole tmux session and
+    `lola kill` takes it down. Because it outlives its pass, adoption must not
+    see it as an orphan: `runtime.IsAuxSession` covers it, and Adopt drops it
+    only when its PARENT session is live beside it (a manual session on a branch
+    ending in `-review` would otherwise vanish).
+  - Everything degrades to the direct exec — no tmux, no session id, a tmux that
+    refuses the session. A pane that cannot open must never cost a review.
 - **A review PASS never runs on the observe loop.** A `claude-session` pass
   reads the PR's files, so a real PR takes 7–13 minutes; run inline it stalled
   tmux liveness, PR facts and reactions for every other session for that long,

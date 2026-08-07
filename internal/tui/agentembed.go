@@ -153,6 +153,9 @@ func (m *rootModel) syncAgentPreview() tea.Cmd {
 	title := "agent · " + dash(sel.Issue)
 	if kind == termShell {
 		title = "shell"
+		if strings.HasSuffix(target, "-review") {
+			title = "review" // the visible review pass's pane, not a worktree shell
+		}
 	}
 	m.agentTerm = &termView{term: t, sessionID: sel.ID, tmuxName: target, kind: kind, title: title, w: cw, h: ch}
 	m.ensureTmuxMouse() // so wheel-scroll reaches the embed once focused
@@ -299,9 +302,12 @@ func (m *rootModel) closeActiveShell() (tea.Model, tea.Cmd) {
 
 // --- shell tmux sessions (shared with the desktop app) ----------------------
 
-// refreshShells re-reads the tmux server for this session's "<id>-shell-N"
-// sessions, so tabs reflect shells opened anywhere — the desktop app, another
-// lola, or here. Best-effort: on a tmux error the last-known list stands.
+// refreshShells re-reads the tmux server for this session's auxiliary sessions:
+// its "<id>-shell-N" shells, plus the "<id>-review" pane a visible review pass
+// runs in (see internal/daemon/reviewvisible.go) — so tabs reflect shells opened
+// anywhere (the desktop app, another lola, or here) and a review the daemon
+// started shows up without the TUI being told. Best-effort: on a tmux error the
+// last-known list stands.
 func (m *rootModel) refreshShells(id string) {
 	if m.shellNames == nil {
 		m.shellNames = map[string][]string{}
@@ -314,13 +320,25 @@ func (m *rootModel) refreshShells(id string) {
 		return
 	}
 	prefix := id + "-shell-"
+	review := id + "-review" // the visible review pass's pane, if one is open
 	var names []string
+	reviewPane := ""
 	for _, s := range sessions {
 		if strings.HasPrefix(s.Name, prefix) {
 			names = append(names, s.Name)
+			continue
+		}
+		if s.Name == review {
+			reviewPane = s.Name
 		}
 	}
 	sort.Slice(names, func(i, j int) bool { return shellIndex(id, names[i]) < shellIndex(id, names[j]) })
+	// The review pane sorts LAST so a review starting or ending never renumbers
+	// the shell tabs beside it. nextShellName's max-index scan ignores it (it
+	// carries no "-shell-N" suffix), so it can never claim a shell number.
+	if reviewPane != "" {
+		names = append(names, reviewPane)
+	}
 	m.shellNames[id] = names
 	if m.embedTab[id] > len(names) { // active tab outlived its shell
 		m.embedTab[id] = len(names)

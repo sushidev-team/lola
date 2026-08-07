@@ -32,6 +32,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os/exec"
 	"regexp"
 	"strings"
@@ -145,11 +146,37 @@ func (c *Client) Review(ctx context.Context, worktreeDir, baseBranch string) (st
 	return capOutput(strings.TrimSpace(out), maxOutputBytes), nil
 }
 
+// ReviewStream is Review with a live display: it additionally copies
+// coderabbit's stdout to progress as it arrives, so the pass can be WATCHED in
+// a terminal while it runs. The findings, the caps and the error classes are
+// exactly Review's — a caller may swap the two freely. A nil progress writer
+// makes it identical to Review.
+func (c *Client) ReviewStream(ctx context.Context, worktreeDir, baseBranch string, progress io.Writer) (string, error) {
+	if progress == nil {
+		return c.Review(ctx, worktreeDir, baseBranch)
+	}
+	args := append(append([]string{}, c.args()...), "--base", baseBranch)
+	fmt.Fprintf(progress, "· %s %s\n", c.bin(), strings.Join(args, " "))
+	out, err := runReviewTo(ctx, c.bin(), args, worktreeDir, c.timeout(), progress)
+	if err != nil {
+		return "", err
+	}
+	return capOutput(strings.TrimSpace(out), maxOutputBytes), nil
+}
+
 // runReview is the exec seam. Tests override it to assert the bin, argv (incl.
 // --base), working dir, and timeout WITHOUT running coderabbit. The real
 // implementation applies the hard timeout, runs in worktreeDir, bounds the
 // stdout it retains, and classifies failures into the Err* sentinels.
 var runReview = func(ctx context.Context, bin string, args []string, dir string, timeout time.Duration) (string, error) {
+	return runReviewTo(ctx, bin, args, dir, timeout, nil)
+}
+
+// runReviewTo is the shared implementation of both entry points: it runs the
+// review under a hard timeout in dir and, when display is non-nil, ALSO copies
+// stdout there as it arrives (the capped buffer still bounds what is kept and
+// returned — a live display never widens the caps).
+func runReviewTo(ctx context.Context, bin string, args []string, dir string, timeout time.Duration, display io.Writer) (string, error) {
 	cctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
@@ -158,6 +185,9 @@ var runReview = func(ctx context.Context, bin string, args []string, dir string,
 	stdout := &cappedBuffer{cap: maxCaptureBytes}
 	stderr := &cappedBuffer{cap: maxStderrBytes}
 	cmd.Stdout = stdout
+	if display != nil {
+		cmd.Stdout = io.MultiWriter(stdout, display)
+	}
 	cmd.Stderr = stderr
 	// cmd.Env left nil: the child inherits the daemon env (coderabbit's own
 	// auth session). This package never reads, sets, or logs that credential.

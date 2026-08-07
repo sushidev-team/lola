@@ -179,6 +179,11 @@ export interface ReviewProviderDTO {
     "sendToAgent": boolean;
 
     /**
+     * pass shapes: run in a watchable "<session>-review" tmux session
+     */
+    "visible": boolean;
+
+    /**
      * ordered pass kinds
      */
     "fallback": string[] | null;

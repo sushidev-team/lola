@@ -85,6 +85,7 @@ enabled = true
 		Transports:     TransportSet{TransportLola},
 		Notify:         true,
 		SendToAgent:    true,
+		Visible:        true, // pass shapes run in a watchable review pane by default
 		Fallback:       nil,
 	}
 	if !reflect.DeepEqual(c.ReviewProviders[0], want) {
@@ -145,6 +146,7 @@ transports = ["github"]
 		Transports:     TransportSet{TransportLola, TransportGitHub},
 		Notify:         false,
 		SendToAgent:    false,
+		Visible:        true,
 		Fallback:       []provKind{provClaudeSession},
 	}
 	claude := ReviewProvider{
@@ -157,6 +159,7 @@ transports = ["github"]
 		Transports:     TransportSet{TransportGitHub, TransportLola}, // lola force-appended
 		Notify:         true,
 		SendToAgent:    true,
+		Visible:        true, // pass shapes run in a watchable review pane by default
 	}
 	if !reflect.DeepEqual(c.ReviewProviders, []ReviewProvider{cli, claude}) {
 		t.Errorf("providers = %+v\n          want %+v", c.ReviewProviders, []ReviewProvider{cli, claude})
@@ -338,6 +341,7 @@ send_to_agent = true
 			Transports:     TransportSet{TransportLola, TransportLinear}, // comment_on_linear
 			Notify:         true,                                         // cli always notifies
 			SendToAgent:    false,                                        // legacy send_to_agent=false preserved
+			Visible:        true,                                         // a pass is watchable, like the catalog default
 		},
 		{
 			Provider:    provCoderabbitWatch,

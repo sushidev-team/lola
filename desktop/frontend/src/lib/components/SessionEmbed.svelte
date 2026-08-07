@@ -148,8 +148,8 @@
               variant="danger"
               size="xs"
               icon
-              title="close shell"
-              aria-label="close shell"
+              title={terms.isReviewTab(sh) ? "close the review pane" : "close shell"}
+              aria-label={terms.isReviewTab(sh) ? "close review" : "close shell"}
               onclick={() => terms.closeShell(session.id, sh)}>×</Button
             >
           </span>

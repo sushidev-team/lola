@@ -85,8 +85,8 @@ type fakeReview struct {
 	onCall     func()
 }
 
-func (f *fakeReview) fn() func(ctx context.Context, dir, base string) (string, error) {
-	return func(ctx context.Context, dir, base string) (string, error) {
+func (f *fakeReview) fn() passRun {
+	return func(ctx context.Context, _, dir, base string) (string, error) {
 		f.mu.Lock()
 		f.calls = append(f.calls, reviewCall{dir, base})
 		f.lastCtxErr = ctx.Err()

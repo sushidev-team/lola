@@ -6,7 +6,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
+	"time"
 
 	"charm.land/lipgloss/v2"
 	"github.com/spf13/cobra"
@@ -16,6 +19,9 @@ import (
 	"github.com/sushidev-team/lola/internal/doctor"
 	"github.com/sushidev-team/lola/internal/hook"
 	"github.com/sushidev-team/lola/internal/protocol"
+	"github.com/sushidev-team/lola/internal/review"
+	"github.com/sushidev-team/lola/internal/reviewclaude"
+	"github.com/sushidev-team/lola/internal/reviewrun"
 	"github.com/sushidev-team/lola/internal/tui"
 )
 
@@ -64,6 +70,7 @@ func main() {
 		doctorCmd(),
 		setupCmd(),
 		hookCmd(),
+		reviewRunCmd(),
 	)
 
 	if err := root.Execute(); err != nil {
@@ -498,4 +505,106 @@ func logsCmd() *cobra.Command {
 	}
 	cmd.Flags().BoolVarP(&follow, "follow", "f", false, "follow the log")
 	return cmd
+}
+
+// reviewRunCmd is the CHILD half of a visible review pass (hidden, internal):
+// the daemon starts it inside a tmux session named "<session>-review" so the
+// pass can be watched while it runs, and reads its result from --state rather
+// than from the pane (a pane is a display — it wraps, scrolls and is eventually
+// overwritten, so nothing may be parsed back out of it).
+//
+// Everything it prints is for a HUMAN: a header, the streamed progress lines,
+// and the findings under a heading. The daemon meanwhile gets the findings
+// verbatim plus an outcome class from the two files reviewrun writes. It always
+// exits 0 — the status file, not the exit code, is the signal, and a nonzero
+// exit would only make tmux tear the pane down before anyone could read it.
+func reviewRunCmd() *cobra.Command {
+	var (
+		kind    string
+		dir     string
+		base    string
+		state   string
+		model   string
+		command string
+		timeout int
+	)
+	cmd := &cobra.Command{
+		Use:    "review-run",
+		Short:  "Run one review pass in this terminal (internal)",
+		Hidden: true,
+		RunE: func(c *cobra.Command, _ []string) error {
+			if dir == "" || base == "" || state == "" {
+				return fmt.Errorf("--dir, --base and --state are required")
+			}
+			out := c.OutOrStdout()
+			fmt.Fprintf(out, "lola review — %s\n%s onto %s\n\n", kind, dir, base)
+
+			findings, err := runVisibleReview(c.Context(), kind, dir, base, model, command, timeout, out)
+			printReviewOutcome(out, findings, err)
+			if werr := reviewrun.Write(state, findings, err); werr != nil {
+				fmt.Fprintf(out, "\n! could not hand the result back to lola: %v\n", werr)
+			}
+			holdPane(out)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&kind, "kind", "claude-session", "provider kind: claude-session | coderabbit-cli")
+	cmd.Flags().StringVar(&dir, "dir", "", "worktree to review in")
+	cmd.Flags().StringVar(&base, "base", "", "base branch to diff against")
+	cmd.Flags().StringVar(&state, "state", "", "directory to write findings + status into")
+	cmd.Flags().StringVar(&model, "model", "", "optional --model for claude-session")
+	cmd.Flags().StringVar(&command, "command", "", "optional argv override for coderabbit-cli")
+	cmd.Flags().IntVar(&timeout, "timeout-seconds", 0, "hard cap on the pass; 0 = the client default")
+	return cmd
+}
+
+// runVisibleReview dispatches to the right client's STREAMING entry point, so
+// the pane shows work as it happens instead of ten silent minutes.
+func runVisibleReview(ctx context.Context, kind, dir, base, model, command string, timeout int, out io.Writer) (string, error) {
+	switch kind {
+	case "coderabbit-cli":
+		cl := &review.Client{}
+		argv := config.ReviewConfig{Command: command}.CommandArgs()
+		if len(argv) > 0 {
+			cl.Bin, cl.Args = argv[0], argv[1:] // review always appends --base itself
+		}
+		if timeout > 0 {
+			cl.Timeout = time.Duration(timeout) * time.Second
+		}
+		return cl.ReviewStream(ctx, dir, base, out)
+	default:
+		cl := &reviewclaude.Client{Model: model}
+		if timeout > 0 {
+			cl.Timeout = time.Duration(timeout) * time.Second
+		}
+		return cl.ReviewStream(ctx, dir, base, out)
+	}
+}
+
+// printReviewOutcome closes the pane's transcript with what a human wants to
+// see: the findings in full, or why there are none.
+func printReviewOutcome(out io.Writer, findings string, err error) {
+	switch {
+	case err != nil:
+		fmt.Fprintf(out, "\n✗ the review could not run: %v\n", err)
+	case strings.TrimSpace(findings) == "":
+		fmt.Fprintln(out, "\n✓ clean — no findings.")
+	default:
+		fmt.Fprintf(out, "\n─── findings ───\n\n%s\n", findings)
+	}
+}
+
+// holdPane keeps the tmux pane alive after the pass so its output stays
+// readable; the daemon replaces the whole session on the next review, and
+// killing the worker session takes this one with it.
+//
+// It blocks on a SIGNAL, never on a bare `select {}`: with every other goroutine
+// parked, Go's deadlock detector would panic the process, tear the pane down and
+// destroy exactly the output this exists to preserve. Waiting on a signal is
+// also what makes the advertised ctrl-c work.
+func holdPane(out io.Writer) {
+	fmt.Fprintln(out, "\n(this pane stays until the next review — ctrl-c to close it)")
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+	<-stop
 }

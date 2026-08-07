@@ -577,6 +577,7 @@ provider per kind** is allowed (guards key by kind).
 | `transports` | []string | all | Multiselect over `{lola, github, linear}`; see below. Default `["lola"]`; `lola` is always forced present. |
 | `notify` | bool | all | `lola` transport: surface findings to a human (desktop/Slack). Default `true`. |
 | `send_to_agent` | bool | all | `lola` transport: hand findings to the worker via the send-keys gate. Default `true`. |
+| `visible` | bool | pass shapes | Run the pass in its own tmux session `<session>-review` so you can watch it and read its output afterwards. Default `true`. |
 | `fallback` | []string | pass shapes | Ordered kinds tried when this provider **can't answer** (unavailable / over-quota). Default none. |
 
 **Provider kinds** — three kinds map to two execution **shapes**:
@@ -634,6 +635,26 @@ primary). A real exit error or an auth failure is a **graceful skip that does no
 fall through** (fail-closed: auth is an operator fix; a genuine failure must not
 silently burn the paid fallback). Each entry is bounded by its own
 `timeout_seconds`, and every pass is shutdown-abortable.
+
+**Watching a review.** With `visible = true` (the default) a pass runs as
+`lola review-run` inside its own tmux session beside the worker's, named after
+it:
+
+```sh
+tmux -L lola attach -t =lola-nori-app-nor-357-review
+```
+
+The desktop app lists it as a **Review** tab next to the session's shell tabs,
+and the TUI sees the same tmux session. A `claude-session` pass streams there —
+each file the reviewer reads shows up as it happens — because a visible pass asks
+claude for `--output-format stream-json` and renders it to plain lines (a plain
+`-p` review prints nothing at all until it finishes). The pane **holds** when the
+pass ends, so the findings stay readable; the next review for that session
+replaces it, and killing the session kills it. The daemon never parses the pane:
+the child writes its findings and outcome to `~/.lola/cache/review/<session>/`,
+so a visible pass and a direct one are indistinguishable to the transports, the
+fallback chain and the retry budget. Anything that stops a pane from opening (no
+tmux, a tmux error) falls back to the plain in-process exec.
 
 **Where a pass runs.** A pass never runs on the observe loop: the observer
 queues it and a single **review worker** drains the queue one pass at a time, so

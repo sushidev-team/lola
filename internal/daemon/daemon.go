@@ -200,9 +200,9 @@ type Daemon struct {
 	// reviewRun / claudeReviewRun directly.
 	reviewProviders []reviewProvider
 	review          *review.Client
-	reviewRun       func(ctx context.Context, worktreeDir, baseBranch string) (string, error)
+	reviewRun       passRun
 	claudeReview    *reviewclaude.Client
-	claudeReviewRun func(ctx context.Context, worktreeDir, baseBranch string) (string, error)
+	claudeReviewRun passRun
 
 	// postPRComment is the `github` transport WRITE seam (Locked decision 1):
 	// `gh pr comment <pr> --repo <repo> --body-file -` with the untrusted findings
@@ -965,7 +965,7 @@ func (d *Daemon) adoptNativeSessions(ctx context.Context) {
 	// tmux session itself is a live terminal tab and is left alone.
 	purged := 0
 	for _, s := range d.sessions.Snapshot() {
-		if s.Source == "native" && runtime.IsShellTabSession(s.ID) {
+		if s.Source == "native" && runtime.IsAuxSession(s.ID) {
 			d.sessions.Delete(s.ID)
 			purged++
 		}

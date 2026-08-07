@@ -148,6 +148,7 @@ type ReviewProviderDTO struct {
 	Transports     []string `json:"transports"`     // lola (always) | github | linear
 	Notify         bool     `json:"notify"`
 	SendToAgent    bool     `json:"sendToAgent"`
+	Visible        bool     `json:"visible"`  // pass shapes: run in a watchable "<session>-review" tmux session
 	Fallback       []string `json:"fallback"` // ordered pass kinds
 }
 
@@ -179,6 +180,7 @@ func reviewProvidersDTO(cfg *config.Config) []ReviewProviderDTO {
 			Transports:     p.Transports.Strings(),
 			Notify:         p.Notify,
 			SendToAgent:    p.SendToAgent,
+			Visible:        p.Visible,
 			Fallback:       p.FallbackStrings(),
 		})
 	}
@@ -203,6 +205,7 @@ func providersFromDTO(dtos []ReviewProviderDTO) []config.ReviewProvider {
 		p.Author = d.Author
 		p.Notify = d.Notify
 		p.SendToAgent = d.SendToAgent
+		p.Visible = d.Visible
 		p.SetTransportTokens(d.Transports)
 		p.SetFallbackKinds(d.Fallback)
 		out = append(out, p)

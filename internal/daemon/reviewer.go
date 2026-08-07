@@ -56,6 +56,12 @@ const (
 	kindClaudeSession   provKind = "claude-session"
 )
 
+// passRun is the pass-shape exec seam: run provider kind K's review of the
+// worktree at dir against base, for the named session. The session id is passed
+// (rather than derived) because a VISIBLE pass runs in a tmux session named
+// after it — see reviewvisible.go; the direct clients ignore it.
+type passRun func(ctx context.Context, sessionID, worktreeDir, baseBranch string) (string, error)
+
 // provShape is a kind's execution shape.
 type provShape int
 
@@ -130,7 +136,7 @@ func (d *Daemon) setReviewProvidersLocked(nc *config.Config) {
 			if cp.Enabled {
 				if cl := buildClaudeReview(cp); cl != nil {
 					d.claudeReview = cl
-					d.claudeReviewRun = cl.Review
+					d.claudeReviewRun = d.passSeamFor(cp, ignoreSession(cl.Review))
 				}
 			}
 		case kindCoderabbitWatch:
@@ -144,13 +150,29 @@ func (d *Daemon) setReviewProvidersLocked(nc *config.Config) {
 					TimeoutSeconds: cp.TimeoutSeconds,
 				}); cl != nil {
 					d.review = cl
-					d.reviewRun = cl.Review
+					d.reviewRun = d.passSeamFor(cp, ignoreSession(cl.Review))
 				}
 			}
 		}
 		descs = append(descs, desc)
 	}
 	d.reviewProviders = descs
+}
+
+// passSeamFor picks how a pass EXECUTES: in its own tmux review pane when the
+// provider asks to be visible (reviewvisible.go — the pane falls back to direct
+// on its own whenever it cannot be used), or the plain in-process client call.
+func (d *Daemon) passSeamFor(cp config.ReviewProvider, direct passRun) passRun {
+	if !cp.Visible {
+		return direct
+	}
+	return d.visibleSeam(cp, direct)
+}
+
+// ignoreSession adapts a client's Review(ctx, dir, base) to the pass seam: the
+// in-process clients have no use for the session id.
+func ignoreSession(fn func(ctx context.Context, worktreeDir, baseBranch string) (string, error)) passRun {
+	return func(ctx context.Context, _, dir, base string) (string, error) { return fn(ctx, dir, base) }
 }
 
 // toDaemonKinds converts a catalog fallback chain (config's unexported provKind)
@@ -327,7 +349,7 @@ func (d *Daemon) anyGithubPassLocked() bool {
 
 // --- late-bound seam lookups (read the live seam under d.mu at call time) -----
 
-func (d *Daemon) passSeam(k provKind) func(ctx context.Context, dir, base string) (string, error) {
+func (d *Daemon) passSeam(k provKind) passRun {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	switch k {
@@ -489,7 +511,7 @@ func (d *Daemon) runReviewChain(ctx context.Context, s session.Session, p review
 		if run == nil {
 			continue // unavailable: advance (fail-closed to no review for this entry)
 		}
-		findings, err := run(ctx, dir, base)
+		findings, err := run(ctx, s.ID, dir, base)
 		if err == nil {
 			if k != p.Kind {
 				d.logf("", "review: %s primary %s could not answer; fallback %s reviewed PR #%d", s.ID, p.Kind, k, prNum)

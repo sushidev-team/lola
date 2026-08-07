@@ -1433,3 +1433,24 @@ func TestReviveWorktreeGoneErrors(t *testing.T) {
 		t.Errorf("Revive must not start a tmux session when the worktree is gone:\n%s", got)
 	}
 }
+
+// A tmux session belonging to some parent lola session — an embedded shell tab
+// or a review pane — is never a session of its own. Adoption drops both from
+// its scan, which is what keeps a held-open review pane from being reported as
+// an orphan after every daemon restart.
+func TestIsAuxSession(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		aux  bool
+	}{
+		{"lola-nori-app-nor-357", false},
+		{"lola-nori-app-nor-357-shell-1", true},
+		{"lola-nori-app-nor-357-review", true},
+		{"lola-open-review-tool-1", false}, // a session whose branch merely says "review"
+		{"lola-nori-app-nor-357-reviewer", false},
+	} {
+		if got := IsAuxSession(tc.name); got != tc.aux {
+			t.Errorf("IsAuxSession(%q) = %v, want %v", tc.name, got, tc.aux)
+		}
+	}
+}

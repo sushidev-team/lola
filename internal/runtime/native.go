@@ -75,10 +75,35 @@ const manualInfix = "open-"
 // must never report them as sessions of their own.
 var shellTabRe = regexp.MustCompile(`-shell-\d+$`)
 
+// reviewPaneRe matches the tmux session a VISIBLE review pass runs in
+// ("<sessionID>-review", see internal/daemon/reviewvisible.go). Like a shell
+// tab it belongs to a parent session — it is a window onto that session's
+// review, never a session of its own — and it deliberately OUTLIVES the pass so
+// its output stays readable, which is exactly when adoption would otherwise
+// report it as an orphan.
+var reviewPaneRe = regexp.MustCompile(`-review$`)
+
 // IsShellTabSession reports whether a tmux session name is an embedded
 // shell TAB of a parent session rather than a session of its own. The daemon
 // uses it to purge phantom records an older daemon's Adopt created.
 func IsShellTabSession(name string) bool { return shellTabRe.MatchString(name) }
+
+// IsAuxSession reports whether a tmux session name is an AUXILIARY session of
+// some parent lola session — an embedded shell tab or a review pane — rather
+// than a session of its own. Adoption drops these from its scan (a review pane
+// only when its parent is live beside it, see Adopt) and the daemon purges any
+// record an older daemon persisted for one.
+func IsAuxSession(name string) bool {
+	return shellTabRe.MatchString(name) || reviewPaneRe.MatchString(name)
+}
+
+// reviewPaneParent returns the session a review pane belongs to.
+func reviewPaneParent(name string) (string, bool) {
+	if !reviewPaneRe.MatchString(name) {
+		return "", false
+	}
+	return strings.TrimSuffix(name, "-review"), true
+}
 
 // lolaDir is the runtime scratch directory inside each worktree, holding
 // prompt.md, env, and the per-agent callback artifact(s) (Claude's
@@ -843,6 +868,14 @@ func (n *Native) Adopt(ctx context.Context) ([]session.Session, error) {
 	// dropping them from the orphan scan loses nothing.
 	for name := range live {
 		if shellTabRe.MatchString(name) {
+			delete(live, name)
+			continue
+		}
+		// A review pane is dropped only when its PARENT session is live beside
+		// it. The suffix alone is not proof: a manual `lola open` session on a
+		// branch that happens to end in "-review" would otherwise vanish from
+		// adoption entirely.
+		if parent, ok := reviewPaneParent(name); ok && live[parent] {
 			delete(live, name)
 		}
 	}

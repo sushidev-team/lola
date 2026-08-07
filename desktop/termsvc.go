@@ -141,6 +141,13 @@ func (t *TermService) CaptureMany(names []string, lines int) map[string]string {
 // without it, so neither can ever create or kill an agent session by mistake.
 const shellMarker = "-shell"
 
+// reviewMarker is the suffix of a session's REVIEW pane ("<id>-review"), the
+// tmux session a visible review pass runs in (internal/daemon/reviewvisible.go).
+// The daemon owns its lifetime — it opens the pane, and it holds it open after
+// the pass so the findings stay readable — so the app never CREATES one; it only
+// lists it as a tab beside the shells and may close it like any other tab.
+const reviewMarker = "-review"
+
 // Shell ensures the named shell tmux session exists, rooted in worktree, and
 // returns its name so the frontend can Attach to it exactly like the agent pane.
 // The desktop equivalent of the TUI's shell. The frontend owns the name (and its
@@ -184,10 +191,13 @@ func (t *TermService) hasSession(bin, name string) bool {
 	return exec.CommandContext(ctx, bin, "-L", "lola", "has-session", "-t", "="+name).Run() == nil
 }
 
-// Shells lists a lola session's shell tmux sessions ("<id>-shell-N") on the lola
-// server, sorted by their trailing index. Both the app and the TUI discover the
-// SAME sessions, so a shell opened in either shows up as a tab in the other. An
-// empty result (or a tmux error) simply means no shells.
+// Shells lists a lola session's auxiliary tmux sessions on the lola server: its
+// shells ("<id>-shell-N", sorted by their trailing index) followed by its review
+// pane ("<id>-review") when a visible review pass has opened one. Both the app
+// and the TUI discover the SAME sessions, so a shell opened in either shows up
+// as a tab in the other — and a review the daemon started shows up in both
+// without either having to be told. An empty result (or a tmux error) simply
+// means no auxiliary sessions.
 func (t *TermService) Shells(sessionID string) []string {
 	bin, err := t.tmux()
 	if err != nil || sessionID == "" {
@@ -200,13 +210,24 @@ func (t *TermService) Shells(sessionID string) []string {
 		return nil // no server / no sessions
 	}
 	prefix := sessionID + shellMarker + "-" // "<id>-shell-"
+	review := sessionID + reviewMarker      // "<id>-review"
 	var names []string
+	var reviewPane string
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 		if strings.HasPrefix(line, prefix) {
 			names = append(names, line)
+			continue
+		}
+		if line == review {
+			reviewPane = line
 		}
 	}
 	sort.Slice(names, func(i, j int) bool { return shellSessionIndex(sessionID, names[i]) < shellSessionIndex(sessionID, names[j]) })
+	// The review pane sorts LAST so the shell numbering above it never shifts
+	// when a review starts or ends.
+	if reviewPane != "" {
+		names = append(names, reviewPane)
+	}
 	return names
 }
 
@@ -235,7 +256,7 @@ func (t *TermService) CloseShell(shell string) error {
 	if err != nil {
 		return err
 	}
-	if !strings.Contains(shell, shellMarker) {
+	if !strings.Contains(shell, shellMarker) && !strings.HasSuffix(shell, reviewMarker) {
 		return fmt.Errorf("not a shell session name: %q", shell)
 	}
 	_ = t.Detach(shell)

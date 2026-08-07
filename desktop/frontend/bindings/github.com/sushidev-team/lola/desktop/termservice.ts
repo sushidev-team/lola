@@ -115,10 +115,13 @@ export function Shell(shell: string, worktree: string): $CancellablePromise<stri
 }
 
 /**
- * Shells lists a lola session's shell tmux sessions ("<id>-shell-N") on the lola
- * server, sorted by their trailing index. Both the app and the TUI discover the
- * SAME sessions, so a shell opened in either shows up as a tab in the other. An
- * empty result (or a tmux error) simply means no shells.
+ * Shells lists a lola session's auxiliary tmux sessions on the lola server: its
+ * shells ("<id>-shell-N", sorted by their trailing index) followed by its review
+ * pane ("<id>-review") when a visible review pass has opened one. Both the app
+ * and the TUI discover the SAME sessions, so a shell opened in either shows up
+ * as a tab in the other — and a review the daemon started shows up in both
+ * without either having to be told. An empty result (or a tmux error) simply
+ * means no auxiliary sessions.
  */
 export function Shells(sessionID: string): $CancellablePromise<string[] | null> {
     return $Call.ByID(3412002816, sessionID);

@@ -109,6 +109,8 @@ const (
 //   - Notify / SendToAgent refine the lola transport: they mute the notify sink
 //     and the worker hand-off independently (this preserves the legacy
 //     [coderabbit].notify=false opt-out).
+//   - Visible runs the pass in its own tmux session ("<session>-review") so a
+//     human can watch it and read its output afterwards; pass shapes only.
 //   - Fallback is the ordered chain of kinds tried when this provider cannot
 //     answer; pass shapes only, empty for a watch.
 type ReviewProvider struct {
@@ -122,6 +124,7 @@ type ReviewProvider struct {
 	Transports     TransportSet
 	Notify         bool
 	SendToAgent    bool
+	Visible        bool
 	Fallback       []provKind
 }
 
@@ -145,6 +148,7 @@ type fileReviewProvider struct {
 	Transports     *TransportSet `toml:"transports,omitempty"`
 	Notify         *bool         `toml:"notify,omitempty"`
 	SendToAgent    *bool         `toml:"send_to_agent,omitempty"`
+	Visible        *bool         `toml:"visible,omitempty"`
 	Fallback       *[]provKind   `toml:"fallback,omitempty"`
 }
 
@@ -172,6 +176,7 @@ func resolveReviewProvider(fp fileReviewProvider) ReviewProvider {
 		OnPROpen:       true,
 		Notify:         true,
 		SendToAgent:    true,
+		Visible:        true,
 		TimeoutSeconds: DefaultReviewTimeoutSeconds,
 		Author:         DefaultCodeRabbitAuthor,
 	}
@@ -207,6 +212,12 @@ func resolveReviewProvider(fp fileReviewProvider) ReviewProvider {
 	}
 	if fp.SendToAgent != nil {
 		p.SendToAgent = *fp.SendToAgent
+	}
+	if fp.Visible != nil {
+		p.Visible = *fp.Visible
+	}
+	if p.Provider.isWatch() {
+		p.Visible = false // a watch has no exec to watch: it polls the PR
 	}
 	if fp.Transports != nil {
 		p.Transports = slices.Clone(*fp.Transports)
@@ -250,6 +261,7 @@ func reviewProvidersFile(ps []ReviewProvider) []fileReviewProvider {
 			Author:         &p.Author,
 			Notify:         &p.Notify,
 			SendToAgent:    &p.SendToAgent,
+			Visible:        &p.Visible,
 		}
 		if len(p.Transports) > 0 {
 			ts := slices.Clone(p.Transports)
@@ -322,6 +334,9 @@ func NewReviewProvider(kind string) (ReviewProvider, bool) {
 	}
 	p := resolveReviewProvider(fileReviewProvider{})
 	p.Provider = provKind(kind)
+	if p.Provider.isWatch() {
+		p.Visible = false // resolution's watch rule, re-applied now that the kind is known
+	}
 	return p, true
 }
 
@@ -428,6 +443,7 @@ func synthesizeLegacyProviders(rc ReviewConfig, cc CodeRabbitConfig) []ReviewPro
 			Author:         DefaultCodeRabbitAuthor,
 			Transports:     tr,
 			Notify:         true,
+			Visible:        true, // a pass is watchable; matches the catalog default
 			SendToAgent:    rc.SendToAgent,
 		})
 	}

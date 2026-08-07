@@ -126,3 +126,46 @@ func TestCloseShellKillsSession(t *testing.T) {
 		t.Error("name without the shell marker must error")
 	}
 }
+
+// The review pane a visible review pass opens is listed as a tab too — LAST, so
+// a review starting or ending never renumbers the shell tabs beside it. Another
+// session's review pane is not this session's.
+func TestShellsIncludesTheReviewPaneLast(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "tmux")
+	script := "#!/bin/sh\n" +
+		"for a in \"$@\"; do case \"$a\" in list-sessions) " +
+		"printf '%s\\n' 'NORI-1' 'NORI-1-review' 'NORI-1-shell-2' 'NORI-2-review' 'NORI-1-shell-1'; exit 0;; esac; done\n" +
+		"exit 0\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	svc := &TermService{tmuxBin: bin, streams: map[string]*ptyStream{}}
+
+	got := svc.Shells("NORI-1")
+	want := []string{"NORI-1-shell-1", "NORI-1-shell-2", "NORI-1-review"}
+	if len(got) != len(want) {
+		t.Fatalf("Shells = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("Shells = %v, want %v", got, want)
+		}
+	}
+}
+
+// A review pane may be closed like any other tab; the marker guard still refuses
+// an agent session name, which is what keeps a stray call from killing an agent.
+func TestCloseShellAcceptsAReviewPane(t *testing.T) {
+	bin, logPath := fakeTmux(t, false)
+	svc := &TermService{tmuxBin: bin, streams: map[string]*ptyStream{}}
+	if err := svc.CloseShell("NORI-1-review"); err != nil {
+		t.Fatalf("CloseShell on a review pane: %v", err)
+	}
+	if !strings.Contains(tmuxLog(t, logPath), "kill-session -t =NORI-1-review") {
+		t.Error("CloseShell must kill the review pane's tmux session")
+	}
+	if err := svc.CloseShell("NORI-1"); err == nil {
+		t.Error("CloseShell must still refuse an agent session name")
+	}
+}

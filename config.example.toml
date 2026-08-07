@@ -242,6 +242,7 @@ endpoint = "https://api.linear.app/graphql"
 # command         = "coderabbit review --plain --type all"  # coderabbit-cli argv override (space-split); empty = runner default
 # timeout_seconds = 300                                     # hard cap per pass (pass shapes); must be >= 0
 # transports      = ["lola", "github"]                      # {lola (always forced present), github, linear}
+# visible         = true                                    # run the pass in a watchable "<session>-review" tmux session; default true
 # notify          = true                                    # lola transport: notify a human; default true
 # send_to_agent   = true                                    # lola transport: hand findings to the worker; default true
 # fallback        = ["claude-session"]                      # ordered pass kinds tried when this one can't answer

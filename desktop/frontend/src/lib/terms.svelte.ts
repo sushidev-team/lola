@@ -13,6 +13,17 @@ import { store } from "./store.svelte";
 /** The agent pane's tab key (a sentinel; every other tab is a shell tmux name). */
 export const AGENT = "agent";
 
+/** Suffix of a session's REVIEW pane ("<id>-review"). The daemon opens it for a
+ * visible review pass and holds it open afterwards so the findings stay
+ * readable; the app only discovers it (TermService.Shells returns it last) and
+ * shows it as a tab. It is never created here — there is no "+ Review". */
+const REVIEW_SUFFIX = "-review";
+
+/** Whether a discovered tab name is a session's review pane rather than a shell. */
+export function isReviewTab(name: string): boolean {
+  return name.endsWith(REVIEW_SUFFIX);
+}
+
 class Terms {
   private shells = new SvelteMap<string, string[]>(); // session id -> discovered shell tmux names
   private active = new SvelteMap<string, string>(); // session id -> AGENT | shell tmux name
@@ -22,9 +33,19 @@ class Terms {
     return this.shells.get(id) ?? [];
   }
 
-  /** Display label for a shell tab: its 1-based position, stable within the row. */
+  /** Whether a tab is this session's review pane (see isReviewTab). Exposed as a
+   * method so the template can ask without a second import. */
+  isReviewTab(name: string): boolean {
+    return isReviewTab(name);
+  }
+
+  /** Display label for a tab: "Review" for the review pane, else the shell's
+   * 1-based position among the SHELLS (the review pane must not shift it). */
   labelFor(id: string, name: string): string {
-    const i = this.shellsFor(id).indexOf(name);
+    if (isReviewTab(name)) return "Review";
+    const i = this.shellsFor(id)
+      .filter((n) => !isReviewTab(n))
+      .indexOf(name);
     return i === -1 ? "shell" : `sh ${i + 1}`;
   }
 
@@ -69,7 +90,7 @@ class Terms {
   private nextName(id: string): string {
     const prefix = `${id}-shell-`;
     let max = 0;
-    for (const n of this.shellsFor(id)) {
+    for (const n of this.shellsFor(id).filter((n) => !isReviewTab(n))) {
       const k = Number(n.slice(prefix.length));
       if (Number.isFinite(k) && k > max) max = k;
     }
