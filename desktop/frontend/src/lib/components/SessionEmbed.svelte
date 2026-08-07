@@ -278,12 +278,14 @@
          the tabs, so it sits opposite them rather than trailing the row. Collapses
          in the compact, agent-only case so the plain detail panel stays chrome-free. -->
     {#if showTabs}
-      <!-- Boxed tabs, joined to the pane below. The strip draws the rule; the
-           active tab covers it with a strip of its own background (`-mb-px` over
-           `border-b border-panel`) and paints itself in the terminal's colour, so
-           the tab and the pane read as one surface and every other tab reads as
-           behind it. Chips floating in a padded row could not say that: they
-           looked like a toolbar that happened to sit above a terminal. -->
+      <!-- Boxed tabs on a recessed strip. The active one is FILLED (`sel`, the
+           same band the selected table row wears) rather than merely painted in
+           the pane's colour: matching the pane made it the quietest cell in the
+           strip, which is the wrong way round for the one tab you are looking at.
+           Every cell keeps a hover a step above its own rest state — an inactive
+           tab lights to half a `sel` band, the active one warms toward `edge` —
+           so approaching a tab always says something, including the tab you are
+           already on. -->
       <!-- The strip is RECESSED half a step below the pane it sits on, which is
            what lets the active tab — painted in the pane's own `base` — read as
            lifted out of it. On a band that is uniformly `base` the active tab had
@@ -298,8 +300,8 @@
             type="button"
             aria-pressed={activeTab === AGENT}
             class="h-8 shrink-0 border-r border-edge/40 px-3.5 transition-colors {activeTab === AGENT
-              ? '-mb-px border-b border-panel bg-panel font-medium text-ink'
-              : 'text-faint hover:bg-sel hover:text-ink'}"
+              ? 'bg-sel font-medium text-ink hover:bg-[color-mix(in_srgb,var(--color-sel)_55%,var(--color-edge))]'
+              : 'text-faint hover:bg-sel/50 hover:text-ink'}"
             onclick={() => selectTab(session.id, AGENT)}
           >
             Agent
@@ -338,8 +340,8 @@
               role="group"
               class="group flex h-8 shrink-0 items-center gap-1 border-r border-edge/40 px-1.5 transition-colors {activeTab ===
               sh
-                ? '-mb-px border-b border-panel bg-panel font-medium text-ink'
-                : 'text-faint hover:bg-sel hover:text-ink'}"
+                ? 'bg-sel font-medium text-ink hover:bg-[color-mix(in_srgb,var(--color-sel)_55%,var(--color-edge))]'
+                : 'text-faint hover:bg-sel/50 hover:text-ink'}"
               class:opacity-60={dragging === i}
               style="touch-action: none"
               onpointerdown={(e) => dragStart(i, e)}
