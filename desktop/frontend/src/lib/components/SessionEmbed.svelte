@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { flip } from "svelte/animate";
   import { store } from "$lib/store.svelte";
   import { nav } from "$lib/nav.svelte";
   import { terms, AGENT } from "$lib/terms.svelte";
@@ -71,10 +72,12 @@
   // the tab selection. Same reason the drop is applied live during the move:
   // there is no drag image to place, only the row reordering under the cursor.
   const dragSlop = 5; // px before a press becomes a drag rather than a click
+  const flipMs = 140; // tab travel time; also how long a swap is locked (see below)
   let tabEls = $state<(HTMLElement | undefined)[]>([]);
   let dragging = $state(-1); // index being dragged, -1 = none (drives the ghost)
   let dragFrom = -1;
   let dragX = 0;
+  let swapLock = false;
 
   // The tab whose half the pointer is left of — i.e. where the dragged chip
   // would land. Falls through to the last tab when the pointer is past them all.
@@ -87,7 +90,7 @@
   }
 
   function dragStart(i: number, e: PointerEvent) {
-    if (e.button !== 0 || renaming) return; // left button only, and never while a name is being typed
+    if (e.button !== 0 || tabMenu) return; // left button only, and never behind an open popover
     dragFrom = i;
     dragX = e.clientX;
   }
@@ -99,11 +102,19 @@
       dragging = dragFrom;
       (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
     }
+    // A swap is locked for the length of the FLIP animation. The tabs travel to
+    // their new slots on a transform, so `getBoundingClientRect` reports where
+    // they are MID-FLIGHT — re-reading it immediately puts the pointer back over
+    // the neighbour's old half and swaps the pair straight back, forever. Waiting
+    // out the animation reads the settled layout instead.
+    if (swapLock) return;
     const to = tabIndexAt(e.clientX, shells.length);
     if (to === dragFrom) return;
     terms.moveTab(id, dragFrom, to);
     dragFrom = to;
     dragging = to;
+    swapLock = true;
+    setTimeout(() => (swapLock = false), flipMs);
   }
 
   function dragEnd(e: PointerEvent) {
@@ -111,6 +122,7 @@
     if (el.hasPointerCapture?.(e.pointerId)) el.releasePointerCapture(e.pointerId);
     dragFrom = -1;
     dragging = -1;
+    swapLock = false;
   }
 
   // The tab's right-click menu (rename / close). Local state rather than a
@@ -118,8 +130,20 @@
   // MANY session surfaces the same items — this menu acts on a tab, which only
   // exists here. It borrows the same shape: a backdrop that swallows the next
   // click, and a clamp so a tab near the window edge doesn't open off-screen.
-  let tabMenu = $state<{ tab: string; x: number; y: number } | null>(null);
+  // The popover has two faces: the menu (rename / close) and the rename FORM.
+  // Renaming used to happen in the tab itself, and a tab is the wrong size for a
+  // text field — the chip is sized to a two-word label, so the name being typed
+  // scrolled out of its own box. Reusing the popover gives the field real room
+  // without introducing a modal for a two-word edit.
+  type TabMenu = { tab: string; x: number; y: number; mode: "menu" | "rename" };
+  let tabMenu = $state<TabMenu | null>(null);
   let menuEl = $state<HTMLElement | null>(null);
+  let renameEl = $state<HTMLInputElement | null>(null);
+  let renameText = $state("");
+
+  // Clamp into the viewport once the popover has a measurable size, so a tab near
+  // the window edge doesn't open off-screen. Re-runs when the mode flips, because
+  // the rename form is the wider of the two faces.
   $effect(() => {
     const m = tabMenu;
     const node = menuEl;
@@ -129,43 +153,34 @@
     node.style.top = `${Math.max(4, Math.min(m.y, window.innerHeight - height - 4))}px`;
   });
 
+  // Focus + select on open, so typing replaces the current name and Enter alone
+  // confirms it. `select()` rather than a bare focus: the field is pre-filled
+  // precisely so clearing it is possible, and a caret at the end hides that.
+  $effect(() => {
+    if (tabMenu?.mode === "rename") renameEl?.select();
+  });
+
   function openTabMenu(tab: string, e: MouseEvent) {
     e.preventDefault(); // suppress WebKit's own menu
     e.stopPropagation(); // ...and the session menu the surface behind would open
-    renaming = "";
-    tabMenu = { tab, x: e.clientX, y: e.clientY };
+    tabMenu = { tab, x: e.clientX, y: e.clientY, mode: "menu" };
   }
 
-  // Renaming happens IN the tab: the label swaps for an input carrying the name
-  // it currently shows, so clearing the field is the documented way back to the
-  // default "Shell N" (terms.rename treats blank as "forget this name").
+  // The rename form is pre-filled with the label the tab currently shows, which
+  // is what makes emptying the field the way back to the default "Shell N"
+  // (terms.rename reads blank as "forget this name").
   //
   // The global shortcut handler already ignores keystrokes aimed at an <input>
   // (App.svelte's `typing`), so an "s" typed into a tab name cannot open a shell.
-  let renaming = $state("");
-  let renameText = $state("");
-
-  function startRename(id: string, tab: string) {
-    tabMenu = null;
+  function startRename(id: string, tab: string, at?: MouseEvent) {
     renameText = terms.labelFor(id, tab);
-    renaming = tab;
+    tabMenu = { tab, x: at ? at.clientX : (tabMenu?.x ?? 0), y: at ? at.clientY : (tabMenu?.y ?? 0), mode: "rename" };
   }
 
   function commitRename(id: string) {
-    if (!renaming) return;
-    terms.rename(id, renaming, renameText);
-    renaming = "";
-  }
-
-  function renameKey(id: string, e: KeyboardEvent) {
-    if (e.key === "Enter") {
-      e.preventDefault();
-      commitRename(id);
-    } else if (e.key === "Escape") {
-      e.preventDefault();
-      e.stopPropagation(); // Escape here means "abandon the edit", never "leave fullscreen"
-      renaming = "";
-    }
+    const tab = tabMenu?.tab;
+    tabMenu = null;
+    if (tab) terms.rename(id, tab, renameText);
   }
 
   // Discover this session's shell tabs from the tmux server on selection, then
@@ -243,9 +258,12 @@
          the tabs, so it sits opposite them rather than trailing the row. Collapses
          in the compact, agent-only case so the plain detail panel stays chrome-free. -->
     {#if showTabs}
-      <div class="relative z-10 flex items-center gap-3 border-b border-edge/60 px-3 py-1.5">
+      <div class="relative z-10 flex items-center gap-4 border-b border-edge/60 px-4 py-2">
         <div class="flex min-w-0 flex-wrap items-center gap-2 select-none">
-          <Button size="xs" class="px-2.5!" selected={activeTab === AGENT} onclick={() => selectTab(session.id, AGENT)}>
+          <!-- The agent tab carries no ×, so its own padding stands in for the
+               shell tabs' two 20px slots — near enough that the strip reads as
+               one row of tabs rather than two shapes. -->
+          <Button size="xs" class="px-3.5!" selected={activeTab === AGENT} onclick={() => selectTab(session.id, AGENT)}>
             Agent
           </Button>
           {#each shells as sh, i (sh)}
@@ -263,17 +281,24 @@
                  same reason `hover:` can't just be added next to `bg-accent-fill`:
                  the pseudo-class wins on specificity, so a selected tab would
                  lose its accent chip the moment the cursor arrived.
-                 The label reserves `pr-6` at rest — revealing the × must not
-                 resize the tab under the cursor, and a row that reflows on hover
-                 is a row you cannot aim at.
+                 The × keeps its slot in the flow whether or not it is visible,
+                 and an empty slot of the same width balances it on the left: the
+                 label then sits centred in the chip instead of shoved off it, and
+                 nothing reflows when the × fades in under the cursor.
                  role="group" is what the pointer handlers need to satisfy
                  a11y_no_static_element_interactions, and it is also true: the
                  wrapper only carries the drag, and both controls inside it are
                  real buttons that stay reachable from the keyboard. -->
+            <!-- animate:flip is what makes a drag legible: without it a tab
+                 teleports into its new slot and the only feedback is that the
+                 row is suddenly different. The each block is keyed on the tmux
+                 name, which is what lets Svelte match a moved tab to its old
+                 position and travel it there. -->
             <div
               bind:this={tabEls[i]}
+              animate:flip={{ duration: flipMs }}
               role="group"
-              class="group relative flex shrink-0 items-center rounded-md transition-colors {activeTab === sh
+              class="group flex shrink-0 items-center gap-1 rounded-md px-1.5 transition-colors {activeTab === sh
                 ? 'bg-accent-fill font-medium text-accent-ink'
                 : 'text-faint hover:bg-sel hover:text-ink'}"
               class:opacity-60={dragging === i}
@@ -284,36 +309,20 @@
               onpointercancel={dragEnd}
               oncontextmenu={(e) => openTabMenu(sh, e)}
             >
-              {#if renaming === sh}
-                <!-- Sized in `ch` from the text so the tab neither jumps to a
-                     fixed field width nor clips what is being typed. Committing
-                     on blur as well as on Enter: clicking away from a rename is
-                     "keep it", the way an inline edit reads everywhere else. -->
-                <!-- svelte-ignore a11y_autofocus — the field exists only because
-                     the user just chose Rename; landing anywhere else is wrong. -->
-                <input
-                  autofocus
-                  bind:value={renameText}
-                  onkeydown={(e) => renameKey(session.id, e)}
-                  onblur={() => commitRename(session.id)}
-                  aria-label="tab name"
-                  class="h-6 rounded-md bg-canvas pr-6 pl-2.5 text-sm text-ink outline-none focus:ring-1 focus:ring-accent"
-                  style="width: {Math.max(6, renameText.length + 1)}ch"
-                />
-              {:else}
-                <!-- aria-pressed by hand: the chip that normally carries it moved
-                     to the wrapper, but the label is still the control toggled. -->
-                <Button
-                  variant="bare"
-                  size="xs"
-                  class="cursor-grab pr-6! pl-2.5!"
-                  aria-pressed={activeTab === sh}
-                  ondblclick={() => startRename(session.id, sh)}
-                  onclick={() => selectTab(session.id, sh)}
-                >
-                  {terms.labelFor(session.id, sh)}
-                </Button>
-              {/if}
+              <!-- The × slot's counterweight. Purely optical, hence aria-hidden. -->
+              <span class="h-5 w-5 shrink-0" aria-hidden="true"></span>
+              <!-- aria-pressed by hand: the chip that normally carries it moved
+                   to the wrapper, but the label is still the control toggled. -->
+              <Button
+                variant="bare"
+                size="xs"
+                class="cursor-grab px-0.5!"
+                aria-pressed={activeTab === sh}
+                ondblclick={(e) => startRename(session.id, sh, e)}
+                onclick={() => selectTab(session.id, sh)}
+              >
+                {terms.labelFor(session.id, sh)}
+              </Button>
               <!-- Colour is the whole affordance here: no chip of its own (it is
                    already sitting on one), just the glyph fading in with the tab
                    and going red under the cursor. -->
@@ -321,7 +330,7 @@
                 variant="bare"
                 size="xs"
                 icon
-                class="absolute right-1 h-5! w-5! opacity-0 transition-[opacity,color] group-hover:opacity-100 hover:text-bad focus-visible:opacity-100"
+                class="h-5! w-5! opacity-0 transition-[opacity,color] group-hover:opacity-100 hover:text-bad focus-visible:opacity-100"
                 title={terms.isReviewTab(sh) ? "close the review pane" : "close shell"}
                 aria-label={terms.isReviewTab(sh) ? "close review" : "close shell"}
                 onclick={() => terms.closeShell(session.id, sh)}>×</Button
@@ -352,27 +361,70 @@
             tabMenu = null;
           }}
         ></div>
-        <div
-          bind:this={menuEl}
-          class="fixed z-50 min-w-[10rem] rounded-lg border border-edge bg-panel p-1 shadow-xl"
-          style="left:{tabMenu.x}px;top:{tabMenu.y}px"
-          role="menu"
-        >
-          <div class="label truncate px-2 pt-1 pb-1.5 text-faint">{terms.labelFor(session.id, tabMenu.tab)}</div>
-          <MenuItem icon="✎" onclick={() => startRename(session.id, tabMenu?.tab ?? "")}>Rename…</MenuItem>
-          <div class="my-1 h-px bg-edge/60"></div>
-          <MenuItem
-            variant="danger"
-            icon="×"
-            onclick={() => {
-              const tab = tabMenu?.tab;
-              tabMenu = null;
-              if (tab) terms.closeShell(session.id, tab);
+        {#if tabMenu.mode === "rename"}
+          <!-- The rename face. A form, so Enter submits without a keydown of our
+               own; Escape closes it. Cancel/Save rather than commit-on-blur —
+               the field is pre-filled, and a stray click elsewhere silently
+               renaming the tab is worse than one extra click to confirm. -->
+          <form
+            bind:this={menuEl}
+            class="fixed z-50 w-64 rounded-lg border border-edge bg-panel p-3 shadow-xl"
+            style="left:{tabMenu.x}px;top:{tabMenu.y}px"
+            onsubmit={(e) => {
+              e.preventDefault();
+              commitRename(session.id);
             }}
           >
-            {terms.isReviewTab(tabMenu.tab) ? "Close review" : "Close shell"}
-          </MenuItem>
-        </div>
+            <label class="label mb-1.5 block text-faint" for="tab-rename">Tab name</label>
+            <!-- The accent border IS the focus signal here, so the global
+                 :focus-visible ring is suppressed: the field is focused the moment
+                 the popover opens, and a 2px halo around a 256px panel read as an
+                 alarm rather than as focus. It needs the trailing `!` — app.css's
+                 `:focus-visible` rule is unlayered, and an unlayered rule beats any
+                 Tailwind utility on layer order, however specific the utility. -->
+            <input
+              id="tab-rename"
+              bind:this={renameEl}
+              bind:value={renameText}
+              maxlength="40"
+              spellcheck="false"
+              onkeydown={(e) => {
+                if (e.key !== "Escape") return;
+                e.preventDefault();
+                e.stopPropagation(); // "abandon the edit", never "leave fullscreen"
+                tabMenu = null;
+              }}
+              class="h-8 w-full rounded-md border border-edge bg-canvas px-2.5 text-ink focus:border-accent focus-visible:outline-none!"
+            />
+            <div class="mt-1.5 text-sm text-faint">Empty resets it to the default name.</div>
+            <div class="mt-3 flex justify-end gap-2">
+              <Button size="xs" onclick={() => (tabMenu = null)}>Cancel</Button>
+              <Button variant="primary" size="xs" type="submit">Save</Button>
+            </div>
+          </form>
+        {:else}
+          <div
+            bind:this={menuEl}
+            class="fixed z-50 min-w-[10rem] rounded-lg border border-edge bg-panel p-1 shadow-xl"
+            style="left:{tabMenu.x}px;top:{tabMenu.y}px"
+            role="menu"
+          >
+            <div class="label truncate px-2 pt-1 pb-1.5 text-faint">{terms.labelFor(session.id, tabMenu.tab)}</div>
+            <MenuItem icon="✎" onclick={() => startRename(session.id, tabMenu?.tab ?? "")}>Rename…</MenuItem>
+            <div class="my-1 h-px bg-edge/60"></div>
+            <MenuItem
+              variant="danger"
+              icon="×"
+              onclick={() => {
+                const tab = tabMenu?.tab;
+                tabMenu = null;
+                if (tab) terms.closeShell(session.id, tab);
+              }}
+            >
+              {terms.isReviewTab(tabMenu.tab) ? "Close review" : "Close shell"}
+            </MenuItem>
+          </div>
+        {/if}
       {/if}
     {/if}
 
