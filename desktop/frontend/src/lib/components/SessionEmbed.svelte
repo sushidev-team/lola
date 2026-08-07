@@ -284,7 +284,13 @@
            the tab and the pane read as one surface and every other tab reads as
            behind it. Chips floating in a padded row could not say that: they
            looked like a toolbar that happened to sit above a terminal. -->
-      <div class="relative z-10 flex items-stretch border-b border-edge/60 select-none">
+      <!-- The strip is RECESSED half a step below the pane it sits on, which is
+           what lets the active tab — painted in the pane's own `base` — read as
+           lifted out of it. On a band that is uniformly `base` the active tab had
+           nothing to be lighter than. -->
+      <div
+        class="relative z-10 flex items-stretch border-b border-edge/60 bg-[color-mix(in_srgb,var(--color-panel)_88%,var(--color-canvas))] select-none"
+      >
         <div class="flex min-w-0 items-stretch">
           <!-- The agent tab is the same cell as a shell tab minus the × and its
                counterweight, so the strip is one row of boxes, not two shapes. -->

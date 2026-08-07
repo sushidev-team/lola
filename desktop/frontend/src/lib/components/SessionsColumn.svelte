@@ -45,7 +45,7 @@
        Never accented either: it used to carry an accent border + ring while the
        keyboard was driving it, which read as an error state on a surface the user
        looks at constantly. The lens switcher and the selected row say that. -->
-  <div class="min-h-0 min-w-0 overflow-auto border-b border-edge">
+  <div class="min-h-0 min-w-0 overflow-auto">
     {#if nav.lens === "list"}
       <SessionsTable />
     {:else if nav.lens === "kanban"}
@@ -69,16 +69,25 @@
          height alone — so whenever PushErrorBanner occupied its row the focused
          terminal covered the "daemon is out of date" alert. -->
     <div class={focused ? "absolute inset-0 z-30 flex min-h-0" : "contents"}>
-      <!-- The terminal band. Raised half a step off the canvas (the same mix the
-           panel used) so the two bands separate by TONE rather than by a frame —
-           the hairline above does the rest. Focused, it covers the cockpit area
-           edge to edge and takes an accent hairline: nothing is inset, because a
-           fullscreen terminal floating 12px off the window read as a dialog. -->
+      <!-- The terminal band is a SHEET the list slides under, and that is the only
+           reason the two bands are told apart: a hairline between two tones four
+           values apart is not a boundary, it is a table rule, which is exactly how
+           the detail header read next to the row it describes.
+           Three things do the work, and none of them costs space: the band is the
+           terminal's own `base` (the widest step the palette has from the canvas
+           the list sits on), the rule above it is full-strength `edge` rather than
+           edge/60, and it casts a soft shadow UPWARD over the list. Elevation is
+           also the honest description — this band is a live terminal, not another
+           row of the table.
+           Focused, it covers the cockpit area edge to edge and takes an accent
+           hairline: nothing is inset, because a fullscreen terminal floating 12px
+           off the window read as a dialog. -->
       <div
-        class="flex w-full min-h-0 min-w-0 flex-col overflow-hidden bg-[color-mix(in_srgb,var(--color-panel)_82%,var(--color-canvas))]"
+        class="flex w-full min-h-0 min-w-0 flex-col overflow-hidden border-t bg-panel shadow-[0_-12px_28px_-18px_rgba(0,0,0,0.85)]"
         class:flex-1={focused}
         class:border={focused}
         class:border-accent={focused}
+        class:border-edge={!focused}
       >
         <SessionEmbed sessionId={nav.selectedId} {focused} />
       </div>
