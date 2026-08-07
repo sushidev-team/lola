@@ -28,7 +28,7 @@
   }
 </script>
 
-<nav class="min-w-0 px-4 pt-3" aria-label="Triage">
+<nav class="min-w-0 px-3 pt-3" aria-label="Triage">
   <h2 class="label px-2 pb-1 text-faint">Triage</h2>
   <NavRow
     label="All sessions"

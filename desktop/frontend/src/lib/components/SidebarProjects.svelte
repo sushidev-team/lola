@@ -17,7 +17,7 @@
   }
 </script>
 
-<nav class="min-w-0 px-4 pt-3.5" aria-label="Projects">
+<nav class="min-w-0 px-3 pt-3.5" aria-label="Projects">
   <div class="flex items-center px-2 pb-1">
     <h2 class="label text-faint">Projects</h2>
     <Button

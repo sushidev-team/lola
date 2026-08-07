@@ -37,8 +37,8 @@
   );
 </script>
 
-<div class="group/status flex h-11 items-center gap-1 border-t border-edge px-4 text-sm">
-  <Button class="min-w-0 {daemonCls}" title="{health} · open doctor (d)" onclick={() => nav.openOverlay("doctor")}>
+<div class="group/status flex h-11 items-center gap-1 border-t border-edge px-3 text-sm">
+  <Button class="min-w-0 shrink! {daemonCls}" title="{health} · open doctor (d)" onclick={() => nav.openOverlay("doctor")}>
     <span aria-hidden="true">{degraded ? "▲" : store.alive ? "●" : "○"}</span>
     <span class="truncate">{daemonText}</span>
   </Button>
@@ -50,7 +50,15 @@
          by the 12px font of this row, so both controls rendered visibly smaller
          than the 16px gear sitting a few pixels away. An explicit h-4 w-4 puts all
          three icons on the same optical size regardless of the type scale. -->
-    <span class="flex items-center opacity-0 transition-opacity group-hover/status:opacity-100 focus-within:opacity-100">
+    <!-- COLLAPSED to zero width at rest, not merely transparent: an invisible
+         control that still occupies its slot stole the room the daemon line
+         needs, so a status as ordinary as "Connecting…" arrived truncated. The
+         row now gives that line everything until the pointer arrives, and only
+         then makes space — which is also why the status button may shrink
+         (shrink! above) rather than being pushed past the sidebar's edge. -->
+    <span
+      class="flex max-w-0 items-center overflow-hidden opacity-0 transition-all duration-150 group-hover/status:max-w-16 group-hover/status:opacity-100 focus-within:max-w-16 focus-within:opacity-100"
+    >
       <Button icon title="restart daemon" aria-label="Restart daemon" onclick={() => store.restartDaemon()}>
         <svg
           viewBox="0 0 24 24"

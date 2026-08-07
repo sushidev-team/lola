@@ -32,7 +32,7 @@
        in this row is a real <button>, so app.css's `.no-drag, button, a, input…`
        rule opts it out of the drag region automatically — a clickable <div>
        here would be neither draggable nor reliably clickable. -->
-  <div class="drag flex min-w-0 items-center gap-2 overflow-hidden pr-4 pl-[82px]">
+  <div class="drag flex min-w-0 items-center gap-2 overflow-hidden pr-3 pl-[82px]">
     <LolaLogo class="h-[18px] w-auto min-w-0 shrink" />
     <Button
       icon
@@ -66,7 +66,7 @@
     <!-- Activity. flex + flex-1 (NOT a nested fr grid): the child is a plain
          block, which is the pattern Panel.svelte already proves in WKWebView. A
          second nested `fr` track is the collapse risk reflow.ts documents. -->
-    <div class="flex min-h-0 min-w-0 flex-col px-4 pt-3.5">
+    <div class="flex min-h-0 min-w-0 flex-col px-3 pt-3.5">
       <h2 class="label px-2 pb-1 text-faint">Activity</h2>
       <div class="min-h-0 flex-1 overflow-auto px-2"><ActivityFeed /></div>
     </div>
