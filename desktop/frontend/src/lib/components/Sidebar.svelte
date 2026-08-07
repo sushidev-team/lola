@@ -20,7 +20,7 @@
 </script>
 
 <aside
-  class="group/side grid h-full min-h-0 min-w-0 overflow-hidden border-r border-edge bg-canvas"
+  class="group/side grid h-full min-h-0 min-w-0 grid-cols-[minmax(0,1fr)] overflow-hidden border-r border-edge bg-canvas"
   style="grid-template-rows:44px minmax(0,1fr) 44px"
   aria-label="Sidebar"
   inert={!nav.sidebarOpen}
@@ -33,7 +33,7 @@
        rule opts it out of the drag region automatically — a clickable <div>
        here would be neither draggable nor reliably clickable. -->
   <div class="drag flex min-w-0 items-center gap-2 overflow-hidden pr-4 pl-[82px]">
-    <LolaLogo class="h-[18px] w-auto shrink" />
+    <LolaLogo class="h-[18px] w-auto min-w-0 shrink" />
     <Button
       icon
       class="ml-auto opacity-0 transition-opacity group-hover/side:opacity-100 focus-visible:opacity-100"

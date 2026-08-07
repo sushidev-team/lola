@@ -193,22 +193,33 @@
             Agent
           </Button>
           {#each shells as sh, i (sh)}
-            <!-- The selected chip is drawn on the LABEL only, never on this
-                 wrapper: a wrapper background plus the button's own would be two
-                 same-name utilities racing on source order, which Tailwind
-                 decides, not the class attribute. So the wrapper stays paint-free
-                 and only positions the ✕ inside the label's chip.
-                 The label reserves `pr-6` at rest — revealing the ✕ must not
+            <!-- The tab is ONE chip containing two controls, so the wrapper — not
+                 the label button — paints the background and the text colour, and
+                 both buttons inside it run `variant="bare"` (no chip, inherits
+                 colour). That is the fifth deliberate exception to "every action
+                 is a <Button>", and it exists because the × is INSIDE the tab:
+                 with the chip on the label, moving the cursor onto the × left the
+                 label unhovered and the tab visibly went dark under the pointer.
+                 One painter also keeps the old hazard away — a wrapper background
+                 plus the button's own would be two same-name utilities racing on
+                 Tailwind's source order rather than on the class attribute.
+                 Selected and hover are written as whole literal strings for the
+                 same reason `hover:` can't just be added next to `bg-accent-fill`:
+                 the pseudo-class wins on specificity, so a selected tab would
+                 lose its accent chip the moment the cursor arrived.
+                 The label reserves `pr-6` at rest — revealing the × must not
                  resize the tab under the cursor, and a row that reflows on hover
-                 is a row you cannot aim at. -->
-            <!-- role="group" is what the pointer handlers need to satisfy
+                 is a row you cannot aim at.
+                 role="group" is what the pointer handlers need to satisfy
                  a11y_no_static_element_interactions, and it is also true: the
                  wrapper only carries the drag, and both controls inside it are
                  real buttons that stay reachable from the keyboard. -->
             <div
               bind:this={tabEls[i]}
               role="group"
-              class="group relative flex shrink-0 items-center transition-opacity"
+              class="group relative flex shrink-0 items-center rounded-md transition-colors {activeTab === sh
+                ? 'bg-accent-fill font-medium text-accent-ink'
+                : 'text-faint hover:bg-sel hover:text-ink'}"
               class:opacity-60={dragging === i}
               style="touch-action: none"
               onpointerdown={(e) => dragStart(i, e)}
@@ -216,19 +227,25 @@
               onpointerup={dragEnd}
               onpointercancel={dragEnd}
             >
+              <!-- aria-pressed by hand: the chip that normally carries it moved to
+                   the wrapper, but the label is still the control being toggled. -->
               <Button
+                variant="bare"
                 size="xs"
                 class="cursor-grab pr-6! pl-2.5!"
-                selected={activeTab === sh}
+                aria-pressed={activeTab === sh}
                 onclick={() => selectTab(session.id, sh)}
               >
                 {terms.labelFor(session.id, sh)}
               </Button>
+              <!-- Colour is the whole affordance here: no chip of its own (it is
+                   already sitting on one), just the glyph fading in with the tab
+                   and going red under the cursor. -->
               <Button
-                variant="danger"
+                variant="bare"
                 size="xs"
                 icon
-                class="absolute right-1 h-5! w-5! rounded-sm opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
+                class="absolute right-1 h-5! w-5! opacity-0 transition-[opacity,color] group-hover:opacity-100 hover:text-bad focus-visible:opacity-100"
                 title={terms.isReviewTab(sh) ? "close the review pane" : "close shell"}
                 aria-label={terms.isReviewTab(sh) ? "close review" : "close shell"}
                 onclick={() => terms.closeShell(session.id, sh)}>×</Button

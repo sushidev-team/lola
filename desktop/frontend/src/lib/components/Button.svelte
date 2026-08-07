@@ -18,7 +18,7 @@
   // `enabled:hover:` rather than `hover:` throughout — CSS still matches :hover on
   // a disabled button, so a plain hover rule lights up a control that cannot be
   // clicked.
-  export type ButtonVariant = "ghost" | "accent" | "secondary" | "primary" | "danger" | "danger-bare" | "danger-solid";
+  export type ButtonVariant = "ghost" | "accent" | "secondary" | "primary" | "danger" | "danger-solid" | "bare";
   export type ButtonSize = "xs" | "sm" | "md";
 
   const BASE =
@@ -58,6 +58,13 @@
     // The confirm side of a destructive dialog. `on-bad` is the measured text
     // colour for that fill, so it stays legible on the light flavors too.
     "danger-solid": "bg-bad font-medium text-on-bad enabled:hover:opacity-90",
+    // No chip and no colour of its own — for a control that lives INSIDE another
+    // painted one (the terminal tab's label and its "×"). The surrounding chip
+    // owns the background and the text colour; a second chip here would read as a
+    // button nested in a button, and its own hover would fight the parent's.
+    // A call site adds only what it changes, e.g. `hover:text-bad` on the "×" —
+    // no trailing `!` needed, because this variant sets nothing to override.
+    bare: "text-inherit",
   };
 
   // Recolouring a variant (a status chip that is green/amber/red by health) needs

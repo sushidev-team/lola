@@ -24,6 +24,25 @@ export function isReviewTab(name: string): boolean {
   return name.endsWith(REVIEW_SUFFIX);
 }
 
+/** Webview-local tab names (the right-click → Rename). Deliberately NOT a
+ * config.toml key and not daemon state: the tmux session keeps its real name,
+ * this is only what the app calls it. Mirrored to localStorage — best-effort,
+ * like nav's sidebar flag — because a tmux shell outlives the app window, so a
+ * name that vanished on relaunch would be a name nobody bothers to set. */
+const NAMES_KEY = "lola.terms.names";
+
+type NameMap = Record<string, Record<string, string>>; // session id -> tab name -> label
+
+function readNames(): NameMap {
+  try {
+    const raw = localStorage.getItem(NAMES_KEY);
+    const parsed: unknown = raw ? JSON.parse(raw) : null;
+    return parsed && typeof parsed === "object" ? (parsed as NameMap) : {};
+  } catch {
+    return {}; // unreadable / disabled storage → everything falls back to "Shell N"
+  }
+}
+
 class Terms {
   private shells = new SvelteMap<string, string[]>(); // session id -> discovered shell tmux names
   private active = new SvelteMap<string, string>(); // session id -> AGENT | shell tmux name

@@ -365,10 +365,13 @@ each of which owns exactly one external tool or concern behind an **exec seam**
     A plain `text-warn` has the same specificity as the variant's `text-faint`
     and the winner is decided by Tailwind's order in the compiled sheet, not by
     the class attribute — the same trap applies to any width/border/gap override.
-  - Four things stay hand-rolled ON PURPOSE, each commented where it lives: the
+  - Five things stay hand-rolled ON PURPOSE, each commented where it lives: the
     `role="tab"` strip (`Tabs.svelte`), the theme swatches (drawn in their own
     flavor's colours), the `[defaults]` inherit chip (caption-sized, not a
-    control), and the card-shaped rows (project actions, kanban cards, nav rows).
+    control), the card-shaped rows (project actions, kanban cards, nav rows), and
+    the terminal tab chip (`SessionEmbed.svelte`) — one chip holding TWO buttons
+    (label + close ×), so the wrapper paints the background and both buttons run
+    `variant="bare"`; with the chip on the label, hovering the × dropped it.
   - Labels are **Sentence case** — "Open PR", "Trigger review", "CodeRabbit". The
     app was all-lowercase, which read as prose rather than as controls. Tests
     assert these strings; `getByRole("menuitem", { name })`, not `getByText`,
