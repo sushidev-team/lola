@@ -27,10 +27,14 @@
       <!-- min-h-0 so the card list below can bound itself and scroll rather than
            stretching the column past the panel and clipping its bottom cards. -->
       <div class="flex min-h-0 min-w-[13rem] flex-1 flex-col">
-        <!-- text-lg carries its own 600 and negative tracking — a column head is
-             the one level that must out-rank the cards under it. -->
-        <div class="mb-1.5 flex items-baseline gap-1.5 border-b border-edge/60 pb-2 text-lg">
-          <span>{col.title}</span><span class="num text-sm text-faint">{col.items.length}</span>
+        <!-- `label` — the app's column-head level (same as the table's <thead>),
+             not a section title. At text-lg these five heads were the largest type
+             on a screen whose actual content is the cards under them, and the
+             board read as five headlines over some fine print. Uppercase + 600 +
+             tracking still out-ranks a card at half the visual weight. -->
+        <div class="mb-1.5 flex items-baseline gap-1.5 border-b border-edge/60 pb-2">
+          <span class="label text-faint">{col.title}</span>
+          <span class="num text-sm text-faint">{col.items.length}</span>
         </div>
         <!-- min-h-0 flex-1: a tall column scrolls inside itself; without them it
              overflows the panel and the last cards are cut off. -->

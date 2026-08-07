@@ -56,12 +56,54 @@
       : "daemon health unknown",
   );
 
-  const lenses: { id: "list" | "kanban" | "grid"; icon: string; label: string }[] = [
-    { id: "list", icon: "≡", label: "list" },
-    { id: "kanban", icon: "▤", label: "board" },
-    { id: "grid", icon: "▦", label: "terminals" },
+  // The lens picker draws its three glyphs as SVG rather than as the box-drawing
+  // characters it used to spend (≡ ▤ ▦). Those are text: the font sets their
+  // weight, width and baseline, so the three sat at different sizes, none of them
+  // optically centred, in buttons that were pill-shaped around them. Drawn on the
+  // same 24-unit grid with the same stroke as the sidebar's gear, they finally
+  // read as one set — and they can then sit in genuinely square buttons.
+  const lenses: { id: "list" | "kanban" | "grid"; label: string }[] = [
+    { id: "list", label: "List" },
+    { id: "kanban", label: "Board" },
+    { id: "grid", label: "Terminals" },
   ];
 </script>
+
+{#snippet lensIcon(id: "list" | "kanban" | "grid")}
+  <svg
+    viewBox="0 0 24 24"
+    class="h-4 w-4"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="1.9"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    aria-hidden="true"
+  >
+    {#if id === "list"}
+      <!-- Rows with a leading marker: a plain three-line glyph reads as a hamburger menu. -->
+      <line x1="9" y1="6" x2="20" y2="6" />
+      <line x1="9" y1="12" x2="20" y2="12" />
+      <line x1="9" y1="18" x2="20" y2="18" />
+      <line x1="4" y1="6" x2="4.01" y2="6" />
+      <line x1="4" y1="12" x2="4.01" y2="12" />
+      <line x1="4" y1="18" x2="4.01" y2="18" />
+    {:else if id === "kanban"}
+      <!-- A framed board with two stacks of unequal height. Drawn as bars inside
+           a frame rather than as three bare outlined columns: at 16px an outlined
+           rect is nearly all stroke, and the three of them read as loose boxes
+           rather than as one board. -->
+      <rect x="3" y="3" width="18" height="18" rx="2.5" />
+      <line x1="8.5" y1="7.5" x2="8.5" y2="16.5" />
+      <line x1="15.5" y1="7.5" x2="15.5" y2="12.5" />
+    {:else}
+      <rect x="3.5" y="3.5" width="7.5" height="7.5" rx="1.5" />
+      <rect x="13" y="3.5" width="7.5" height="7.5" rx="1.5" />
+      <rect x="3.5" y="13" width="7.5" height="7.5" rx="1.5" />
+      <rect x="13" y="13" width="7.5" height="7.5" rx="1.5" />
+    {/if}
+  </svg>
+{/snippet}
 
 <header
   class="drag flex h-11 items-center gap-2 border-b border-edge bg-canvas pr-3 {nav.sidebarOpen
@@ -118,15 +160,24 @@
       </Button>
     {/if}
     {#if nav.view === "cockpit"}
-      <span class="flex items-center gap-0.5 rounded-md border border-edge p-0.5">
+      <!-- Square buttons in a hairline rail: a segmented control of icons, so the
+           three cells must be the same shape whatever is drawn in them. `icon` at
+           `xs` gives that (24px) — the old `size="xs"` text buttons were pills
+           whose width followed their glyph. The icon inside is 16px, i.e. the cell
+           is mostly icon and only 4px of gutter: a picker in the title bar should
+           spend its space on the marks, not around them. -->
+      <span class="flex items-center gap-0.5 rounded-lg border border-edge p-0.5">
         {#each lenses as l (l.id)}
           <Button
             size="xs"
+            icon
             selected={nav.lens === l.id}
             title={l.label}
             aria-label="{l.label} lens"
-            onclick={() => nav.setLens(l.id)}>{l.icon}</Button
+            onclick={() => nav.setLens(l.id)}
           >
+            {@render lensIcon(l.id)}
+          </Button>
         {/each}
       </span>
     {:else if nav.view === "home"}
