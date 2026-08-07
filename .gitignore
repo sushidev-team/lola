@@ -42,6 +42,7 @@ go.work.sum
 /dist/
 
 # lola-desktop (Wails 3 app) build artifacts
+desktop/node_modules/
 desktop/frontend/node_modules/
 # Ignore built assets but keep the dir tracked (via .gitkeep) so the
 # //go:embed all:frontend/dist in desktop/main.go resolves on a clean checkout
