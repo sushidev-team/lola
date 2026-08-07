@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.2.3](https://github.com/sushidev-team/lola/compare/v0.2.2...v0.2.3) (2026-08-07)
+
+
+### Features
+
+* **desktop:** reshape the terminal grid into readable landscape tiles ([c4a72cb](https://github.com/sushidev-team/lola/commit/c4a72cb320a1adfe9e114da7262622f5f3bf23e0))
+
+
+### Bug Fixes
+
+* **desktop:** fill the active terminal tab instead of hiding it ([7cc1836](https://github.com/sushidev-team/lola/commit/7cc1836a61545f1f9053a9d5480154938762e45c))
+
 ## [0.2.2](https://github.com/sushidev-team/lola/compare/v0.2.1...v0.2.2) (2026-08-07)
 
 
