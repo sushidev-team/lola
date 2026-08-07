@@ -38,10 +38,11 @@
   style="grid-template-rows:{nav.lens === 'grid' ? 'minmax(0,1fr)' : 'fit-content(45vh) minmax(0,1fr)'}"
   {@attach reflowGridRows}
 >
-  <!-- Accented while the terminal is NOT focused, i.e. exactly when j/k/Enter go
-       to this list. In split view both panels previously rendered unfocused, so
-       nothing on screen said which pane the keyboard was driving. -->
-  <Panel pad={false} focused={!focused}>
+  <!-- Never accented: the list is a panel like every other panel. It used to
+       carry an accent border + ring while the keyboard was driving it, which read
+       as an error state on a surface the user looks at constantly. The lens
+       switcher and the selected row already say where the keyboard is. -->
+  <Panel pad={false}>
     {#if nav.lens === "list"}
       <SessionsTable />
     {:else if nav.lens === "kanban"}
