@@ -1,5 +1,54 @@
 # Changelog
 
+## [0.2.1](https://github.com/sushidev-team/lola/compare/v0.2.0...v0.2.1) (2026-08-05)
+
+
+### Features
+
+* **config:** [statusagent] section ([78f9aad](https://github.com/sushidev-team/lola/commit/78f9aadfb299d47a4b86ffea3ced19ce1689bef7))
+* **daemon,protocol:** wire the status interpreter + display overlay ([8c5515a](https://github.com/sushidev-team/lola/commit/8c5515afdd10f97c58cf184e8b9ad9cdc67768ef))
+* **daemon,runtime,session:** two-axis observer, reactions, and adoption ([8c3859f](https://github.com/sushidev-team/lola/commit/8c3859fc4747fdd4c56b1906fd109d5519cf1386))
+* **desktop,tui:** synced multi-shell terminal tabs + kill dialog, WKWebView/keyboard fixes ([74b9448](https://github.com/sushidev-team/lola/commit/74b94483eb1e22592b32c4740d876ac598870f43))
+* **desktop,tui:** TUI honors [ui].theme + unsaved-work guards and keyboard-trap fixes ([cf17624](https://github.com/sushidev-team/lola/commit/cf17624d7f1a154600cfdee07ec9eb939a1a100b))
+* **desktop:** give actions a real button component ([813557c](https://github.com/sushidev-team/lola/commit/813557cc6e55306a7cdfdeb08062d70578b21915))
+* **desktop:** give the ⌘ chords a Session menu of their own ([46618b9](https://github.com/sushidev-team/lola/commit/46618b901242db68568b133e172d6866475ace63))
+* **desktop:** Interpreter settings tab + ≈ overlay rendering ([ffdf868](https://github.com/sushidev-team/lola/commit/ffdf868d897d00c9f6526ea38e892da1aee4cb19))
+* **desktop:** let a second click on a project clear its scope ([6c387f1](https://github.com/sushidev-team/lola/commit/6c387f1cea76aa30d20446ecd7597a5695aa4a73))
+* **desktop:** mirror the two-axis vocabulary + agent-aware pills ([9040b80](https://github.com/sushidev-team/lola/commit/9040b80243cf3b4e3ffcef31d873fef1c11ef388))
+* **desktop:** name the macOS app "Lola" ([51b303d](https://github.com/sushidev-team/lola/commit/51b303d2880edd1ab2d4a5a85f98d90384ea77b8))
+* **desktop:** replace the ad-hoc font sizes with a five-size type scale ([f72cade](https://github.com/sushidev-team/lola/commit/f72cade71203c0bcc8100cddeed9b179e8e6fca5))
+* **desktop:** replace the cockpit's left rail with a full-height sidebar ([a87cb53](https://github.com/sushidev-team/lola/commit/a87cb5353fa86484c8d58d7ca0c8ef20f3f1cc32))
+* **desktop:** session right-click context menu + non-selectable rows ([2d931c8](https://github.com/sushidev-team/lola/commit/2d931c85111925b5ace7310c6d4c0635ea7a02e9))
+* **desktop:** stop printing the same fact in three columns ([343e583](https://github.com/sushidev-team/lola/commit/343e5830e964bcc31f26f816f70691b5d26d6d64))
+* **hook,daemon:** ingest the full lifecycle-hook payload ([60fd045](https://github.com/sushidev-team/lola/commit/60fd045a0fed8105cb11c41a648f8ecf3eddc5ec))
+* **protocol,tui:** expose both axes + freshness; agent-aware rendering ([fbcaa38](https://github.com/sushidev-team/lola/commit/fbcaa38802567115890a17ae5e5ad855eb7971cc))
+* scaling of app possible ([0df277d](https://github.com/sushidev-team/lola/commit/0df277d87a64ff82bf73a62c8cf504a9a1ff8432))
+* **scm,daemon:** delivery cutover — scm ships facts, state derives ([a0ae0ee](https://github.com/sushidev-team/lola/commit/a0ae0eef0cba16158ea555738ff62f136adeea64))
+* **session:** two-axis fields, setter mutators, Store.Apply, axis migration ([af48b40](https://github.com/sushidev-team/lola/commit/af48b40118605eef56a15a0d1ab3b9d3a15e4ca9))
+* **state:** single two-axis status vocabulary package ([ed928fa](https://github.com/sushidev-team/lola/commit/ed928fa099580027197e9faf041f6fbb8a794dd1))
+* **statusagent:** bounded opt-in status-interpreter package ([5090650](https://github.com/sushidev-team/lola/commit/509065016bcca8434d063f1266468a0d1c7c3534))
+* **tmux,daemon:** session_activity signal + one tmux ls per observe cycle ([9179f69](https://github.com/sushidev-team/lola/commit/9179f69d3a76b9f667de0f0ba3555b7f21dd97be))
+* **tmux:** make the session status bar opt-in, and reconcile it on adopt ([de217ba](https://github.com/sushidev-team/lola/commit/de217ba622eb4a4b3f0f72248f5734860eda3c16))
+* **tui:** Interpreter settings tab + ≈-marked interpreted status ([6d3f84b](https://github.com/sushidev-team/lola/commit/6d3f84b846e56a3d83417532324bfb77f6c8a5e9))
+* unified TUI/app keyboard scheme + fix desktop WKWebView reactivity ([f253f35](https://github.com/sushidev-team/lola/commit/f253f35fa01157394d35341f5e1051ecef3ed81e))
+
+
+### Bug Fixes
+
+* **daemon:** deliver review hand-offs to a worker parked for input ([7d454ce](https://github.com/sushidev-team/lola/commit/7d454cebe8332f5a723e975d9081d1b50aa1db34))
+* **daemon:** drop merged session from store even when its worktree is dirty ([8d4e133](https://github.com/sushidev-team/lola/commit/8d4e133167e246bc25b04adb5e0ac6b996ba22ed))
+* **daemon:** drop the agent's notification once it stops waiting ([e22c846](https://github.com/sushidev-team/lola/commit/e22c846e7732149e7dde536d0b79db570b98a97a))
+* **daemon:** hash-skip refreshes a still-valid interpreter overlay ([5a469a3](https://github.com/sushidev-team/lola/commit/5a469a396a58907c0f07cfc330b6faf366d6b54a))
+* **desktop:** never delete the app bundle on a case-only rename ([8f026ca](https://github.com/sushidev-team/lola/commit/8f026ca94356bdf071802cae383e0bcefca6c3ac))
+* **desktop:** non-selectable chrome + reformat the triage "need you" ([898834b](https://github.com/sushidev-team/lola/commit/898834ba47ee3f842cd271a28d2312594d781cb3))
+* **desktop:** offer force when a kill hits a dirty worktree ([d02ad7d](https://github.com/sushidev-team/lola/commit/d02ad7dc26c35f69e5e3d8773cd0ba5336d4d009))
+* **desktop:** stop the activity headline reading as an error ([5bf7739](https://github.com/sushidev-team/lola/commit/5bf7739a1d9f3db8b6e06f40ef1c8d0ccdf690f7))
+* git keep keep ([649d76d](https://github.com/sushidev-team/lola/commit/649d76da360458b03720893ea5101d3de06e290e))
+* **review:** give claude review findings a scannable shape ([33b9adc](https://github.com/sushidev-team/lola/commit/33b9adc58cc8c4e0c1eb0e7bc6c3f05268e79d5b))
+* **runtime,daemon:** embedded shell tabs are not sessions ([b6c8835](https://github.com/sushidev-team/lola/commit/b6c883564fcc907f2b48552f6e9a9e473a87ce3b))
+* **tui,desktop:** humanize every status label ([b0451f9](https://github.com/sushidev-team/lola/commit/b0451f9687c7be449716d4ab62a2c34087e9b683))
+* **tui,desktop:** no agent badge for a routinely idle agent ([e2bfdb6](https://github.com/sushidev-team/lola/commit/e2bfdb61526212e48436e32d2b3943d3bc77a954))
+
 ## [0.2.0](https://github.com/sushidev-team/lola/compare/v0.1.0...v0.2.0) (2026-07-21)
 
 
