@@ -262,7 +262,30 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   delivery per pass — an idle-notify delivery consumes no `AtPrompt`, so
   without that stop several kinds would type into the same prompt back-to-back.
   A delivered hand-off sets `AgentWorking` (as `handleAnswer` does), which is
-  what closes the wider gate against a re-send.
+  what closes the wider gate against a re-send. The gate admits a THIRD state,
+  and that one needs live evidence: a session the observer's pane reconcile
+  parked on `AgentIdle` (both of its paths close `AtPrompt` and neither opens a
+  notification, so such a session was permanently unreachable) qualifies only
+  once `handoffPromptProof` → `paneWaitingNow` captures the pane and classifies
+  it `ActivityWaiting`. It never short-circuits on `AtPromptVerified` — a hook
+  verdict from before the pane went quiet is not evidence about now — and any
+  capture failure or non-waiting classification defers.
+- **A review PASS never runs on the observe loop.** A `claude-session` pass
+  reads the PR's files, so a real PR takes 7–13 minutes; run inline it stalled
+  tmux liveness, PR facts and reactions for every other session for that long,
+  which is why its timeout could not simply be raised. The observer calls
+  `queueReviewProviders` (watch shapes still poll inline — one bounded `gh`
+  call) and `internal/daemon/reviewworker.go`'s single worker drains the queue
+  one pass at a time on the cancellable run context. Two consequences:
+  - `claude-session`'s default `timeout_seconds` is 900
+    (`DefaultClaudeReviewTimeoutSeconds`), not the shared 300. At 300 every pass
+    on a medium PR died on the deadline.
+  - The once-per-PR guard is still stamped BEFORE the exec (crash safety), but
+    an outcome that never ANSWERED (timeout / quota / nothing available) now
+    releases it via `noteReviewOutcome` for up to `reviewMaxAttempts` tries per
+    PR. Without that release a single timeout locked the PR out of review
+    forever — the bug that made the feature look dead. A real answer (findings
+    or clean) and a graceful skip (auth / exit error) stay final.
 - **Fire once per transition.** Reactions and write-backs use persisted
   one-shot guards (`LastReactedStatus`, `WB*Done`, review's per-PR guard) so
   they don't re-fire on every 30s observer cycle.

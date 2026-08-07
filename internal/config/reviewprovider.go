@@ -189,6 +189,12 @@ func resolveReviewProvider(fp fileReviewProvider) ReviewProvider {
 	}
 	if fp.TimeoutSeconds != nil {
 		p.TimeoutSeconds = *fp.TimeoutSeconds
+	} else if p.Provider == provClaudeSession {
+		// Per-kind default: a claude-session pass reads the PR's files, so it
+		// needs minutes where a CLI pass needs seconds (see
+		// DefaultClaudeReviewTimeoutSeconds). Applied only when the key is
+		// ABSENT — an explicit timeout_seconds always wins.
+		p.TimeoutSeconds = DefaultClaudeReviewTimeoutSeconds
 	}
 	if fp.Model != nil {
 		p.Model = *fp.Model

@@ -35,6 +35,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sushidev-team/lola/internal/agent"
+	"github.com/sushidev-team/lola/internal/attention"
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/notify"
 	"github.com/sushidev-team/lola/internal/review"
@@ -390,11 +392,20 @@ func (d *Daemon) selfLoginForWatch(ctx context.Context) string {
 
 // --- per-session run (observer entry points) ---------------------------------
 
-// runReviewProviders runs every independently-applying provider for s in one
-// observer cycle: a pass provider fires its PR-open chain (guarded once per PR
+// noProviderSkip is the Skipped reason for "every entry in the chain was
+// unavailable". It is a retryable outcome (a binary can come back), so the
+// worker's attempt budget keys on it — hence a named const, not a literal.
+const noProviderSkip = "no available review provider"
+
+// runReviewProviders runs every independently-applying provider for s
+// SYNCHRONOUSLY: a pass provider fires its PR-open chain (guarded once per PR
 // per kind); a watch provider polls its watermark. Each kind's guards are
 // independent, so one firing never suppresses another. No-op when no providers
 // are configured.
+//
+// The observer does NOT call this — a pass exec runs for minutes and would
+// stall the cycle, so it calls queueReviewProviders (reviewworker.go) and the
+// worker ends up here one provider at a time.
 func (d *Daemon) runReviewProviders(ctx context.Context, s session.Session) {
 	for _, p := range d.appliesIndependently() {
 		if p.Shape == shapeWatch {
@@ -418,7 +429,10 @@ func (d *Daemon) runProviderPassOnPROpen(ctx context.Context, s session.Session,
 	if s.ReviewedPRs[string(p.Kind)] == s.PR.Number {
 		return // already reviewed this PR for this kind — never re-run on the cadence
 	}
-	d.runReviewChain(ctx, s, p, true)
+	// noteReviewOutcome decides whether the guard the chain just stamped stays
+	// stamped: a provider that could not ANSWER (timeout / quota / unavailable)
+	// releases it for a bounded number of retries. See reviewworker.go.
+	d.noteReviewOutcome(s, p, d.runReviewChain(ctx, s, p), s.PR.Number)
 }
 
 // runReviewChain runs the primary provider p and, when p can't answer, advances
@@ -434,12 +448,15 @@ func (d *Daemon) runProviderPassOnPROpen(ctx context.Context, s session.Session,
 //   - err in {ErrNotFound, ErrTimeout, ErrQuota} ⇒ advance to the next entry.
 //   - err == ErrAuth / ErrExit ⇒ graceful skip, STOP (no fallback): auth is an
 //     operator fix and a real exit must not silently burn the paid fallback.
-//   - chain exhausted ⇒ graceful skip (guard left set, logged once).
+//   - chain exhausted ⇒ graceful skip (guard left set unless the caller
+//     releases it — see noteReviewOutcome, logged once).
 //
-// useCycleBudget selects the exec context: the auto-trigger passes true to run
-// under the shared per-cycle budget; the manual command passes false so it runs
-// under its own caller ctx (immune to a concurrent cycle cancelling it).
-func (d *Daemon) runReviewChain(ctx context.Context, s session.Session, p reviewProvider, useCycleBudget bool) reviewResult {
+// The exec runs under the CALLER's context and each client's own Timeout. There
+// is no longer a shared per-cycle budget: the auto-trigger arrives here on the
+// review worker (its own goroutine, one job at a time), so a slow pass delays
+// nothing but the next queued pass, and the manual command arrives on its socket
+// handler. Both are abortable at shutdown through their parent context.
+func (d *Daemon) runReviewChain(ctx context.Context, s session.Session, p reviewProvider) reviewResult {
 	d.mu.Lock()
 	home := d.home
 	proj := d.cfg.ProjectByName(s.Project)
@@ -460,11 +477,6 @@ func (d *Daemon) runReviewChain(ctx context.Context, s session.Session, p review
 		d.stampReviewed(s.ID, p.Kind, s.PR.Number)
 	}
 
-	execCtx := ctx
-	if useCycleBudget {
-		execCtx = d.reviewContext(ctx)
-	}
-
 	prNum := 0
 	if s.PR != nil {
 		prNum = s.PR.Number
@@ -477,7 +489,7 @@ func (d *Daemon) runReviewChain(ctx context.Context, s session.Session, p review
 		if run == nil {
 			continue // unavailable: advance (fail-closed to no review for this entry)
 		}
-		findings, err := run(execCtx, dir, base)
+		findings, err := run(ctx, dir, base)
 		if err == nil {
 			if k != p.Kind {
 				d.logf("", "review: %s primary %s could not answer; fallback %s reviewed PR #%d", s.ID, p.Kind, k, prNum)
@@ -499,7 +511,7 @@ func (d *Daemon) runReviewChain(ctx context.Context, s session.Session, p review
 		d.logf("", "review: %s chain for PR #%d exhausted without an answer: %v", s.ID, prNum, lastErr)
 		return reviewResult{Err: lastErr}
 	}
-	return reviewResult{Skipped: "no available review provider"}
+	return reviewResult{Skipped: noProviderSkip}
 }
 
 // isFallbackErr reports whether err is a "provider can't answer right now" class
@@ -648,10 +660,55 @@ func handoffStash(s session.Session, p reviewProvider, findings string) string {
 //     30s observer cadence almost always misses. Findings then sat in
 //     PendingHandoffs forever.
 //
+//   - RESTING on a pane-derived idle — AgentIdle with the AtPrompt gate closed.
+//     The observer's pane reconcile parks a session there in two ways (a pane
+//     classified "waiting" while a PR is open, and a "working" axis gone stale
+//     with an unreadable pane) and NEITHER opens AtPrompt, so such a session was
+//     unreachable forever: nor-311 sat on an undelivered stash in exactly this
+//     state. It is admitted here only as a CANDIDATE — handoffPromptProof
+//     insists on a live pane classified "waiting" before anything is typed,
+//     because the stale-working variant reaches AgentIdle without ever having
+//     seen the pane.
+//
 // InputPermission stays excluded: typing prose into a y/n approval prompt
 // answers the wrong question, which is what the gate exists to prevent.
 func handoffDeliverable(s session.Session) bool {
-	return s.AtPrompt || (s.AgentState == state.AgentWaitingInput && s.InputReason == state.InputIdleNotify)
+	return s.AtPrompt ||
+		(s.AgentState == state.AgentWaitingInput && s.InputReason == state.InputIdleNotify) ||
+		s.AgentState == state.AgentIdle
+}
+
+// handoffPromptProof is the evidence step behind handoffDeliverable. A session
+// that qualifies through a HOOK (AtPrompt, or parked on an idle notification)
+// carries its own proof and only needs the adoption re-verification
+// (ensurePromptVerified). A session that qualifies only through the pane-derived
+// AgentIdle case has no such evidence — AtPromptVerified may still be true from
+// a hook that fired before the pane went quiet — so it must show a live pane
+// classified "waiting" right now, or the hand-off defers.
+func (d *Daemon) handoffPromptProof(ctx context.Context, s session.Session) bool {
+	if s.AtPrompt || (s.AgentState == state.AgentWaitingInput && s.InputReason == state.InputIdleNotify) {
+		return d.ensurePromptVerified(ctx, s)
+	}
+	return d.paneWaitingNow(ctx, s)
+}
+
+// paneWaitingNow captures the pane and reports whether the agent is sitting at
+// its prompt AT THIS MOMENT. Unlike ensurePromptVerified it never short-circuits
+// on a cached AtPromptVerified — it is the proof for a session whose idle state
+// was inferred, so an unreadable pane or any non-waiting classification is a
+// "no" (fail closed: defer, never type).
+func (d *Daemon) paneWaitingNow(ctx context.Context, s session.Session) bool {
+	if d.paneTail == nil {
+		return false
+	}
+	cctx, cancel := context.WithTimeout(ctx, reactExecTimeout)
+	text, err := d.paneTail(cctx, paneTarget(s), observePaneLines)
+	cancel()
+	if err != nil {
+		d.logf("", "review: %s pane capture failed (deferring the hand-off): %v", s.ID, err)
+		return false
+	}
+	return attention.Classify(text, agent.Parse(s.Agent)) == attention.ActivityWaiting
 }
 
 // sendHandoffToAgent is the generalized send-keys hand-off (PLAN §5.1), keyed on
@@ -672,10 +729,11 @@ func (d *Daemon) sendHandoffToAgent(ctx context.Context, s session.Session, p re
 	if s.TmuxName == "" {
 		return false
 	}
-	if !handoffDeliverable(s) || !d.ensurePromptVerified(ctx, s) {
-		// Mid-turn, waiting on a permission decision, or an adoption-carried gate
-		// that cannot be verified against the live pane (see ensurePromptVerified):
-		// defer, never type.
+	if !handoffDeliverable(s) || !d.handoffPromptProof(ctx, s) {
+		// Mid-turn, waiting on a permission decision, an adoption-carried gate
+		// that cannot be verified against the live pane (see ensurePromptVerified),
+		// or a pane-derived idle whose pane does not actually show a prompt (see
+		// handoffPromptProof): defer, never type.
 		d.deferHandoff(s.ID, p.Kind, stash)
 		d.logf("", "review: %s (%s) worker is mid-turn — deferring the hand-off", s.ID, p.Kind)
 		return false

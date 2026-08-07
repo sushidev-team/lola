@@ -422,6 +422,89 @@ func TestReviewFlushesToIdleNotifyParkedWorker(t *testing.T) {
 	}
 }
 
+// idleSession puts a stored session in the shape the observer's PANE reconcile
+// produces: the axis resting on AgentIdle with the AtPrompt gate closed and no
+// input reason. No hook is involved, so AtPromptVerified stays whatever an
+// earlier hook left it — which is why this state needs live pane proof.
+func idleSession(t *testing.T, d *Daemon, id string) {
+	t.Helper()
+	d.sessions.Update(id, func(cur *session.Session) bool {
+		cur.SetAgentState(state.AgentIdle, "", time.Now())
+		cur.InputReason = ""
+		cur.AtPrompt = false
+		cur.AtPromptVerified = true // a stale hook verdict must NOT be taken as proof
+		return true
+	})
+}
+
+// A worker the pane reconcile parked on AgentIdle (AtPrompt closed, no
+// notification) must receive its deferred hand-off once its pane shows a
+// prompt. Before this case existed such a session was unreachable and its
+// findings sat in PendingHandoffs for the life of the session.
+func TestReviewFlushesToPaneIdleWorker(t *testing.T) {
+	d := newTestDaemon(t, reviewTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})
+	syncProviders(d)
+	seams := &fakeReactSeams{}
+	seams.install(d)
+	fr := &fakeReview{findings: "PANE-IDLE-FINDING"}
+	fr.install(d)
+	d.paneTail = func(context.Context, string, int) (string, error) { return paneWaiting, nil }
+
+	s := reactSess("FE-1", "review_pending", openPR(7, "MERGEABLE", "", "pass"))
+	s.AtPrompt = false // mid-turn at PR-open
+	d.sessions.Upsert(s)
+	d.runReviewProviders(context.Background(), s)
+	if len(seams.sendCalls()) != 0 {
+		t.Fatal("a mid-turn worker must not be sent-keys")
+	}
+
+	idleSession(t, d, s.ID)
+	d.flushReviewHandoffs(context.Background(), s.ID)
+
+	sends := seams.sendCalls()
+	if len(sends) != 1 || !strings.Contains(sends[0].text, "PANE-IDLE-FINDING") {
+		t.Fatalf("a pane-idle worker must receive the deferred hand-off, got %+v", sends)
+	}
+	if got, _ := d.sessions.Get(s.ID); got.PendingHandoffs["coderabbit-cli"] != "" {
+		t.Errorf("PendingHandoffs[cli] must clear after delivery, got %q", got.PendingHandoffs["coderabbit-cli"])
+	}
+}
+
+// The pane is the ONLY evidence for a pane-derived idle: a stale AtPromptVerified
+// from an earlier hook must not authorize a send into a pane that is mid-turn.
+func TestReviewPaneIdleRequiresLivePaneProof(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		pane string
+		err  error
+	}{
+		{"mid-turn pane", paneWorking, nil},
+		{"unreadable pane", paneUnknown, nil},
+		{"capture fails", "", errors.New("boom")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := newTestDaemon(t, reviewTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})
+			syncProviders(d)
+			seams := &fakeReactSeams{}
+			seams.install(d)
+			d.paneTail = func(context.Context, string, int) (string, error) { return tc.pane, tc.err }
+
+			s := reactSess("FE-1", "review_pending", openPR(7, "MERGEABLE", "", "pass"))
+			s.PendingHandoffs = map[string]string{string(kindCoderabbitCLI): "NEEDS-PROOF"}
+			d.sessions.Upsert(s)
+			idleSession(t, d, s.ID)
+
+			d.flushReviewHandoffs(context.Background(), s.ID)
+			if sends := seams.sendCalls(); len(sends) != 0 {
+				t.Fatalf("without a waiting pane nothing may be typed, got %+v", sends)
+			}
+			if got, _ := d.sessions.Get(s.ID); got.PendingHandoffs["coderabbit-cli"] == "" {
+				t.Error("the stash must survive an unproven flush")
+			}
+		})
+	}
+}
+
 // A permission prompt stays untouchable: typing findings there answers the
 // approval question with prose.
 func TestReviewNeverFlushesToPermissionPrompt(t *testing.T) {
@@ -826,8 +909,66 @@ func TestReviewFallbackTimeoutThenUnavailable(t *testing.T) {
 	if prim.callCount() != 1 {
 		t.Fatalf("primary must be attempted once on ErrTimeout, got %d", prim.callCount())
 	}
+	// An exhausted chain never ANSWERED, so the guard is released for a bounded
+	// retry (see noteReviewOutcome) rather than locking the PR out forever.
+	if got, _ := d.sessions.Get(s.ID); got.ReviewedPRs["coderabbit-cli"] != 0 {
+		t.Errorf("guard must be released for a retry after an exhausted chain, got %d", got.ReviewedPRs["coderabbit-cli"])
+	}
+}
+
+// A provider that keeps timing out is retried a bounded number of times and
+// then left alone: the guard stays stamped so the PR stops re-burning the full
+// timeout every observe cycle.
+func TestReviewTimeoutRetriesThenGivesUp(t *testing.T) {
+	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})
+	(&fakeReactSeams{}).install(d)
+	setProviders(d, cliDesc())
+	fr := &fakeReview{err: review.ErrTimeout}
+	fr.installKind(d, kindCoderabbitCLI)
+
+	s := reactSess("FE-1", "review_pending", openPR(7, "MERGEABLE", "", "pass"))
+	s.AtPrompt = true
+	d.sessions.Upsert(s)
+
+	for i := 1; i <= reviewMaxAttempts; i++ {
+		cur, _ := d.sessions.Get(s.ID)
+		d.runReviewProviders(context.Background(), cur)
+		if fr.callCount() != i {
+			t.Fatalf("attempt %d: exec count = %d, want %d", i, fr.callCount(), i)
+		}
+	}
 	if got, _ := d.sessions.Get(s.ID); got.ReviewedPRs["coderabbit-cli"] != 7 {
-		t.Errorf("guard must be left set on an exhausted chain, got %d", got.ReviewedPRs["coderabbit-cli"])
+		t.Errorf("guard must stay stamped after %d failed attempts, got %d", reviewMaxAttempts, got.ReviewedPRs["coderabbit-cli"])
+	}
+	// The guard now suppresses any further attempt.
+	cur, _ := d.sessions.Get(s.ID)
+	d.runReviewProviders(context.Background(), cur)
+	if fr.callCount() != reviewMaxAttempts {
+		t.Errorf("exec count = %d, want no attempt past the %d-attempt ceiling", fr.callCount(), reviewMaxAttempts)
+	}
+}
+
+// A successful pass clears the attempt counter, so a LATER failure on the same
+// PR still gets its full retry budget.
+func TestReviewSuccessClearsTheAttemptBudget(t *testing.T) {
+	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})
+	(&fakeReactSeams{}).install(d)
+	setProviders(d, cliDesc())
+	fr := &fakeReview{err: review.ErrTimeout}
+	fr.installKind(d, kindCoderabbitCLI)
+
+	s := reactSess("FE-1", "review_pending", openPR(7, "MERGEABLE", "", "pass"))
+	s.AtPrompt = true
+	d.sessions.Upsert(s)
+
+	cur, _ := d.sessions.Get(s.ID)
+	d.runReviewProviders(context.Background(), cur) // 1 failed attempt
+	ok := &fakeReview{findings: "FOUND"}
+	ok.installKind(d, kindCoderabbitCLI)
+	cur, _ = d.sessions.Get(s.ID)
+	d.runReviewProviders(context.Background(), cur) // answers → budget cleared
+	if key := reviewFailKey(s.ID, kindCoderabbitCLI, 7); d.reviewFails[key] != 0 {
+		t.Errorf("attempt counter = %d after a successful pass, want 0", d.reviewFails[key])
 	}
 }
 
@@ -1067,7 +1208,7 @@ func TestHandleReviewUnknownSession(t *testing.T) {
 
 // --- manual `lola review` uses its OWN ctx, not the cycle budget --------------
 
-func TestHandleReviewUsesCallerCtxNotCycleBudget(t *testing.T) {
+func TestHandleReviewRunsUnderItsCallerCtx(t *testing.T) {
 	d := newTestDaemon(t, reviewTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})
 	syncProviders(d)
 	(&fakeReactSeams{}).install(d)
@@ -1078,24 +1219,22 @@ func TestHandleReviewUsesCallerCtxNotCycleBudget(t *testing.T) {
 	s.AtPrompt = true
 	d.sessions.Upsert(s)
 
-	cycleCtx, cancel := context.WithCancel(context.Background())
-	cancel()
-	d.setReviewCycleCtx(cycleCtx)
-
 	data, err := d.handleReview(context.Background(), s.ID)
 	if err != nil {
-		t.Fatalf("manual review must not fail because a concurrent cycle's budget was cancelled: %v", err)
+		t.Fatalf("manual review failed: %v", err)
 	}
 	if got := fr.ctxErr(); got != nil {
-		t.Errorf("manual review exec must run under its own live caller ctx, not the cancelled cycle budget; ctx.Err() = %v", got)
+		t.Errorf("manual review exec must run under its own live caller ctx; ctx.Err() = %v", got)
 	}
 	if !data.Ran || !strings.Contains(data.Findings, "MANUAL-FINDING") {
 		t.Errorf("manual review data = %+v, want ran with the findings", data)
 	}
 }
 
-// The in-cycle auto-trigger DOES run under the shared per-cycle budget.
-func TestReviewAutoTriggerUsesCycleBudget(t *testing.T) {
+// A pass NEVER runs on the observe loop: the observer queues it, and only the
+// review worker execs it. A claude-session pass takes minutes, so running it
+// inline stalled tmux liveness, PR facts and reactions for every other session.
+func TestObserveQueuesThePassInsteadOfRunningIt(t *testing.T) {
 	d := newTestDaemon(t, reviewTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})
 	syncProviders(d)
 	(&fakeReactSeams{}).install(d)
@@ -1106,20 +1245,60 @@ func TestReviewAutoTriggerUsesCycleBudget(t *testing.T) {
 	s.AtPrompt = true
 	d.sessions.Upsert(s)
 
-	cycleCtx, cancel := context.WithCancel(context.Background())
-	cancel()
-	d.setReviewCycleCtx(cycleCtx)
-
-	d.runReviewProviders(context.Background(), s)
-	if fr.callCount() != 1 {
-		t.Fatalf("auto-trigger must run the exec, got %d", fr.callCount())
+	d.queueReviewProviders(context.Background(), s)
+	if fr.callCount() != 0 {
+		t.Fatalf("the observer must not exec the pass itself, got %d execs", fr.callCount())
 	}
-	if fr.ctxErr() == nil {
-		t.Error("auto-trigger exec must run under the shared cycle budget (cancelled here), but saw a live ctx")
+	if got := findSession(t, d.sessions.Snapshot(), s.ID); got.ReviewedPRs["coderabbit-cli"] != 0 {
+		t.Errorf("queueing must not stamp the guard (the run does), got %d", got.ReviewedPRs["coderabbit-cli"])
+	}
+
+	if n := drainReviewQueue(t, d); n != 1 {
+		t.Fatalf("drained %d queued passes, want 1", n)
+	}
+	if fr.callCount() != 1 {
+		t.Fatalf("the worker must run the queued pass exactly once, got %d", fr.callCount())
+	}
+	if got := findSession(t, d.sessions.Snapshot(), s.ID); got.ReviewedPRs["coderabbit-cli"] != 7 {
+		t.Errorf("ReviewedPRs[cli] = %d, want 7 after the worker ran the pass", got.ReviewedPRs["coderabbit-cli"])
 	}
 }
 
-// --- full observe cycle wires the trigger + budget ----------------------------
+// A session/kind already queued is not queued twice by the next cycle.
+func TestQueueReviewPassDedupsWhileInFlight(t *testing.T) {
+	d := newTestDaemon(t, reviewTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})
+	syncProviders(d)
+	(&fakeReactSeams{}).install(d)
+	(&fakeReview{findings: "AUTO"}).install(d)
+
+	s := reactSess("FE-1", "review_pending", openPR(7, "MERGEABLE", "", "pass"))
+	d.sessions.Upsert(s)
+
+	d.queueReviewProviders(context.Background(), s)
+	d.queueReviewProviders(context.Background(), s)
+	if n := len(d.reviewCh); n != 1 {
+		t.Fatalf("queue holds %d jobs, want 1 (a queued session/kind must not re-queue)", n)
+	}
+}
+
+// drainReviewQueue runs every queued pass synchronously, as the review worker
+// would, and returns how many it ran. Tests never start reviewLoop — a real
+// goroutine would race their assertions.
+func drainReviewQueue(t *testing.T, d *Daemon) int {
+	t.Helper()
+	ran := 0
+	for {
+		select {
+		case job := <-d.reviewCh:
+			d.runQueuedReview(context.Background(), job)
+			ran++
+		default:
+			return ran
+		}
+	}
+}
+
+// --- full observe cycle wires the trigger -------------------------------------
 
 func TestObserveNativeFiresReviewOnPROpen(t *testing.T) {
 	d := newTestDaemon(t, reviewTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{alive: map[string]bool{}})
@@ -1137,6 +1316,7 @@ func TestObserveNativeFiresReviewOnPROpen(t *testing.T) {
 	obs.install(d)
 
 	d.observe(context.Background())
+	drainReviewQueue(t, d) // observe queues the pass; the worker runs it
 
 	if fr.callCount() != 1 {
 		t.Fatalf("observe must fire the review once on PR-open, got %d execs", fr.callCount())

@@ -111,8 +111,6 @@ func (d *Daemon) observeNative(ctx context.Context) {
 	}
 	brainOn := d.brainSummarize != nil
 	bc := d.cfg.Brain
-	reviewBudgetOn := d.anyPassOnPROpenLocked()
-	reviewBudget := d.reviewCycleBudgetLocked()
 	d.mu.Unlock()
 	if nat == nil {
 		return
@@ -137,25 +135,10 @@ func (d *Daemon) observeNative(ctx context.Context) {
 		defer d.setBrainCycleCtx(nil)
 	}
 
-	// Per-cycle review budget (P9): the QA review pass is the one exec on this
-	// loop that can run for the review timeout (~300s). Like the brain, share a
-	// SINGLE timeout across the whole cycle — derived from the shutdown-cancellable
-	// root, not this WithoutCancel ctx — so a slow/hung `coderabbit review` can
-	// neither stall the review of every LATER session in the snapshot (the first
-	// slow call spends the budget; the rest abort fast) nor delay graceful
-	// shutdown (cancellation aborts the read-only review exec). Off by default →
-	// no budget. Installed whenever ANY enabled pass provider triggers on PR-open;
-	// the budget is the largest such provider's timeout (each exec self-bounds).
-	if reviewBudgetOn {
-		parent := d.shutdownCtx
-		if parent == nil {
-			parent = ctx
-		}
-		rctx, cancel := context.WithTimeout(parent, reviewBudget)
-		defer cancel()
-		d.setReviewCycleCtx(rctx)
-		defer d.setReviewCycleCtx(nil)
-	}
+	// No per-cycle review budget lives here any more: the pass no longer runs on
+	// this loop at all. The observer queues it and the review worker
+	// (reviewworker.go) runs one pass at a time on the cancellable run context,
+	// so a slow provider delays neither the rest of this cycle nor shutdown.
 
 	// Title backfill (best-effort): sessions spawned before Session.Title
 	// existed carry no title, so their list row can only show the issue key.
@@ -387,12 +370,12 @@ func (d *Daemon) observeNative(ctx context.Context) {
 			// session is simply gone here, a no-op.
 			if cur, ok := d.sessions.Get(s.ID); ok {
 				d.writeBackEscalation(ctx, cur)
-				// Flexible review: run every independently-applying provider for this
-				// session — each enabled pass provider fires its bounded PR-open chain
-				// (guarded once per PR per kind), each watch provider polls its
-				// watermark. All no-op when no providers are configured. Re-read for
-				// fresh PR / AtPrompt / guard facts.
-				d.runReviewProviders(ctx, cur)
+				// Flexible review: watch providers poll their watermark inline (one
+				// bounded gh call); each enabled PASS provider is QUEUED for the review
+				// worker, which runs it off this loop — a pass exec takes minutes and
+				// used to stall the whole cycle. All no-op when no providers are
+				// configured. Re-read for fresh PR / AtPrompt / guard facts.
+				d.queueReviewProviders(ctx, cur)
 			}
 			// Flush any hand-off deferred because the worker was mid-turn, once it is
 			// idle at its prompt again (re-reads the record itself; one delivered

@@ -250,7 +250,7 @@ endpoint = "https://api.linear.app/graphql"
 # provider        = "claude-session"                        # headless `claude -p`; here only as coderabbit-cli's fallback
 # enabled         = true
 # model           = "claude-sonnet-4-5"                     # optional --model; empty = claude's default
-# timeout_seconds = 300
+# timeout_seconds = 900                                     # claude-session default: this pass reads the PR files
 # transports      = ["lola"]
 #
 # [[review.provider]]

@@ -152,7 +152,7 @@ transports = ["github"]
 		Enabled:        true,
 		OnPROpen:       true,
 		Model:          "sonnet",
-		TimeoutSeconds: DefaultReviewTimeoutSeconds,
+		TimeoutSeconds: DefaultClaudeReviewTimeoutSeconds, // per-kind default: this pass reads files
 		Author:         DefaultCodeRabbitAuthor,
 		Transports:     TransportSet{TransportGitHub, TransportLola}, // lola force-appended
 		Notify:         true,

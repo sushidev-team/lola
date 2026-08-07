@@ -53,34 +53,11 @@ func buildReview(rc config.ReviewConfig) *review.Client {
 	return cl
 }
 
-// setReviewCycleCtx installs (or clears, with nil) the current observe cycle's
-// shared review budget context — see the Daemon.reviewCycleCtx field.
-func (d *Daemon) setReviewCycleCtx(ctx context.Context) {
-	d.reviewMu.Lock()
-	d.reviewCycleCtx = ctx
-	d.reviewMu.Unlock()
-}
-
-// reviewContext returns the observe cycle's shared, shutdown-cancellable review
-// budget context when one is active, else fallback. A pass exec runs under it so
-// a hung provider is bounded ONCE per cycle, not once per session, and is aborted
-// at shutdown.
-//
-// It is consulted ONLY by the in-cycle auto-trigger (useCycleBudget). The manual
-// `lola review` command runs on its OWN socket-handler goroutine, concurrently
-// with the observe loop, and must NOT adopt the cycle's budget ctx: a
-// concurrently-finishing cycle would cancel the in-flight manual exec (surfacing
-// a spurious failure and poisoning the guard). The manual path passes its caller
-// ctx straight to the exec instead, where the client's own Timeout still bounds it.
-func (d *Daemon) reviewContext(fallback context.Context) context.Context {
-	d.reviewMu.Lock()
-	c := d.reviewCycleCtx
-	d.reviewMu.Unlock()
-	if c == nil {
-		return fallback
-	}
-	return c
-}
+// The observe cycle no longer shares one review budget: a pass runs on the
+// review worker (reviewworker.go), one at a time, under the cancellable run
+// context and its own client Timeout. The manual `lola review` command likewise
+// runs under its socket-handler ctx. Nothing derives a review context from the
+// cycle any more.
 
 // isReviewablePROpen reports whether pr is a real, open PR the review should
 // trigger on: a genuine PR number in the OPEN state (not merged/closed). Mirrors
@@ -164,9 +141,10 @@ func (d *Daemon) handleReviewProvider(ctx context.Context, sessionID, kind strin
 	}
 
 	// force: runReviewChain always runs the exec (the once-per-PR gate lives in
-	// the auto-trigger). useCycleBudget=false — this runs on the socket-handler
-	// goroutine, so it must use its OWN ctx, not the cycle's budget.
-	res := d.runReviewChain(ctx, s, p, false)
+	// the auto-trigger). It runs on this socket-handler goroutine, under the
+	// caller's ctx and the client's own Timeout — a forced review deliberately
+	// does NOT queue behind the review worker.
+	res := d.runReviewChain(ctx, s, p)
 	switch {
 	case res.Skipped != "":
 		return protocol.ReviewData{

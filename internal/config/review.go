@@ -22,6 +22,16 @@ import "strings"
 // daemon aborts the pass after this many seconds and skips the review.
 const DefaultReviewTimeoutSeconds = 300
 
+// DefaultClaudeReviewTimeoutSeconds is the same cap for a claude-session pass,
+// which needs a much larger one: that provider reads the PR's files (its prompt
+// tells the reviewer to verify a claim against the surrounding function and its
+// callers before reporting it), so a real PR routinely takes 7-13 minutes where
+// a CodeRabbit CLI pass is done in a couple. At 300s every pass on a
+// medium-sized PR died on the deadline, and since the once-per-PR guard is
+// stamped before the exec, that PR was then never reviewed at all. The pass runs
+// on its own worker (reviewworker.go), so a long review costs nobody else time.
+const DefaultClaudeReviewTimeoutSeconds = 900
+
 // Default hand-off strings for a completed review. ReviewToAgentPreamble is a
 // plain instruction prepended to the (sanitized) findings before they are typed
 // into the worker; ReviewNotifyTitle titles the human notification. Both are

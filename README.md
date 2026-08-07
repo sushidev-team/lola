@@ -571,7 +571,7 @@ provider per kind** is allowed (guards key by kind).
 | `enabled` | bool | all | Master switch. Default `false`. |
 | `on_pr_open` | bool | pass shapes | Run automatically when a session first opens a PR. Default `true`. |
 | `command` | string | `coderabbit-cli` | Optional space-split argv override; empty uses the runner default. |
-| `timeout_seconds` | int | pass shapes | Hard cap per pass. Must be `>= 0`. Default `300`. |
+| `timeout_seconds` | int | pass shapes | Hard cap per pass. Must be `>= 0`. Default `300`, but `900` for `claude-session` — that pass reads the PR's files before it reports, so a real PR takes 7–13 minutes where a CLI pass takes one or two. |
 | `model` | string | `claude-session` | Optional `--model` for the headless `claude -p` review; empty = claude's default. |
 | `author` | string | `coderabbit-watch` | Login **substring** matched (case-insensitively) against each comment author. Default `"coderabbitai"`. |
 | `transports` | []string | all | Multiselect over `{lola, github, linear}`; see below. Default `["lola"]`; `lola` is always forced present. |
@@ -633,7 +633,15 @@ primary's transports** (to get a fallback's github post, put `github` on the
 primary). A real exit error or an auth failure is a **graceful skip that does not
 fall through** (fail-closed: auth is an operator fix; a genuine failure must not
 silently burn the paid fallback). Each entry is bounded by its own
-`timeout_seconds`, and the whole cycle is shutdown-abortable.
+`timeout_seconds`, and every pass is shutdown-abortable.
+
+**Where a pass runs.** A pass never runs on the observe loop: the observer
+queues it and a single **review worker** drains the queue one pass at a time, so
+a multi-minute review delays nothing but the next queued review. A pass that
+could **not answer** (timeout / over-quota / nothing available) releases its
+once-per-PR guard and is retried on a later cycle, up to 3 attempts per PR;
+after that the PR is left alone. A pass that answered — including a clean one —
+and a graceful skip (auth / exit error) are final.
 
 > **Watch cannot fall back.** Fallback is **pass-shape only**, and validation
 > forbids `fallback` on a `coderabbit-watch`. When the CodeRabbit **GitHub app**

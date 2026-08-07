@@ -217,15 +217,18 @@ type Daemon struct {
 	selfLoginOnce sync.Once
 	selfLogin     string
 
-	// reviewCycleCtx is the CURRENT observe cycle's shared review budget: one
-	// review timeout for the WHOLE cycle (not per session), derived from
-	// shutdownCtx so a slow/hung `coderabbit review` is capped for the cycle and
-	// abortable at shutdown (it is read-only and safe to abort). observeNative
-	// sets it at cycle start and clears it at the end; runReviewChain reads it
-	// (falling back to its own ctx when nil, e.g. the manual command). Guarded by
+	// Review pass queue (reviewworker.go). A pass provider's exec is the one
+	// review-side call that runs for MINUTES (a claude-session review reads the
+	// PR's files), so it never runs on the observe loop: the observer enqueues a
+	// job and a single worker drains them one at a time. reviewBusy dedups a
+	// session/kind already queued or running; reviewFails counts consecutive
+	// could-not-answer outcomes per session/kind/PR so a retried pass gives up
+	// after reviewMaxAttempts instead of re-running forever. Both guarded by
 	// reviewMu.
-	reviewMu       sync.Mutex
-	reviewCycleCtx context.Context
+	reviewMu    sync.Mutex
+	reviewCh    chan reviewJob
+	reviewBusy  map[string]bool
+	reviewFails map[string]int
 
 	// escSummaries carries a brain escalation summary from react's Urgent notify
 	// (reactCIFailed) to the P4 blocked Linear comment (writeBackEscalation) in
@@ -295,6 +298,9 @@ func newDaemon(cfg *config.Config, lin linear.API, logger *log.Logger, home stri
 	})
 	d.interpretCh = make(chan string, interpretQueueCap)
 	d.interpretBusy = map[string]bool{}
+	d.reviewCh = make(chan reviewJob, reviewQueueCap)
+	d.reviewBusy = map[string]bool{}
+	d.reviewFails = map[string]int{}
 	d.openPR = d.ghOpenPR
 	scmc := &scm.Client{}
 	d.prForBranch = scmc.PRForBranch
@@ -492,6 +498,13 @@ func Run(ctx context.Context) error {
 	// interpretation is read-only and safe to abort.
 	d.wg.Add(1)
 	go d.interpretLoop(ctx)
+
+	// Review pass worker ([review] pass providers, reviewworker.go). Same
+	// posture as the interpreter: the CANCELLABLE run context, because a review
+	// is a read-only exec that may run for many minutes and must not hold up
+	// graceful shutdown.
+	d.wg.Add(1)
+	go d.reviewLoop(ctx)
 
 	go d.serve(ctx, ln)
 
