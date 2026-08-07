@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.4](https://github.com/sushidev-team/lola/compare/v0.2.3...v0.2.4) (2026-08-07)
+
+
+### Bug Fixes
+
+* **ci:** prove the notarization key parses before submitting ([7fabcc3](https://github.com/sushidev-team/lola/commit/7fabcc3e48d045342b09f93e44cf258c48ee90eb))
+
 ## [0.2.3](https://github.com/sushidev-team/lola/compare/v0.2.2...v0.2.3) (2026-08-07)
 
 
