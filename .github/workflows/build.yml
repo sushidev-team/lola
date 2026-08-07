@@ -129,7 +129,29 @@ jobs:
           APP_STORE_CONNECT_PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_PRIVATE_KEY }}
         run: |
           mkdir -p ~/private_keys
-          echo "$APP_STORE_CONNECT_PRIVATE_KEY" > ~/private_keys/AuthKey.p8
+          KEY=~/private_keys/AuthKey.p8
+          # notarytool wants the .p8 EXACTLY as App Store Connect issued it: a PEM
+          # with its BEGIN/END lines and real newlines. A secret pasted from
+          # somewhere that folded the newlines away (or that holds the base64 OF
+          # the file rather than its text) produces "Error: invalidPEMDocument"
+          # at submit time — a message that names neither the file nor the cause.
+          # So: accept both shapes, then PROVE the result parses before spending
+          # a build on it.
+          if printf '%s' "$APP_STORE_CONNECT_PRIVATE_KEY" | grep -q 'BEGIN PRIVATE KEY'; then
+            printf '%s\n' "$APP_STORE_CONNECT_PRIVATE_KEY" > "$KEY"
+          else
+            printf '%s' "$APP_STORE_CONNECT_PRIVATE_KEY" | base64 --decode > "$KEY" 2>/dev/null || true
+          fi
+          # openssl reads the key and writes nothing anywhere: it validates the
+          # document without ever putting the key in the log.
+          if ! openssl pkcs8 -nocrypt -in "$KEY" -topk8 -out /dev/null 2>/dev/null; then
+            echo "::error::APP_STORE_CONNECT_PRIVATE_KEY is not a valid PEM private key."
+            echo "Store the AuthKey_<KEYID>.p8 file VERBATIM, newlines and BEGIN/END lines included:"
+            echo "  gh secret set APP_STORE_CONNECT_PRIVATE_KEY < AuthKey_<KEYID>.p8"
+            echo "Got a $(wc -c < "$KEY" | tr -d ' ')-byte file of $(wc -l < "$KEY" | tr -d ' ') line(s); a valid key is ~240 bytes over 4+ lines."
+            exit 1
+          fi
+          chmod 600 "$KEY"
 
       - name: Sign the app bundle
         run: |
