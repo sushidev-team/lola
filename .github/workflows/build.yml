@@ -67,7 +67,6 @@ jobs:
       # Must match desktop/Taskfile.yml's APP_NAME — darwin:package:universal
       # writes bin/{{.APP_NAME}}.app, and sign/notarize/staple/DMG all read this.
       APP_PATH: desktop/bin/Lola.app
-      IDENTITY: 'Developer ID Application: Sushi Dev KG (${{ secrets.APPLE_TEAM_ID }})'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -106,6 +105,24 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           security list-keychain -d user -s "$KEYCHAIN_PATH"
           echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> $GITHUB_ENV
+          # Sign by the identity's SHA-1, resolved from the keychain we just
+          # filled — never by a hardcoded "Developer ID Application: <entity>"
+          # string. That string embeds the legal entity name, so re-issuing the
+          # certificate under a renamed entity (Sushi Dev KG -> Sushi Dev GmbH)
+          # broke every release with "no identity found" while the certificate
+          # itself was perfectly good. A hash cannot drift, and it is not a
+          # secret. The explicit failure below also tells the two cases apart:
+          # a p12 that carries no PRIVATE KEY imports a certificate but no
+          # identity, which produced the same misleading message.
+          IDENT_HASH=$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" \
+            | awk '/Developer ID Application/ {print $2; exit}')
+          if [ -z "$IDENT_HASH" ]; then
+            echo "::error::no 'Developer ID Application' identity in the imported keychain."
+            echo "APPLE_CERTIFICATE must be a p12 carrying BOTH the certificate and its private key."
+            security find-identity -v -p codesigning "$KEYCHAIN_PATH" || true
+            exit 1
+          fi
+          echo "IDENT_HASH=$IDENT_HASH" >> $GITHUB_ENV
 
       - name: Setup App Store Connect API key
         env:
@@ -118,8 +135,8 @@ jobs:
         run: |
           # Sign nested code first, then the bundle itself, hardened runtime on.
           find "$APP_PATH" -type f \( -name "*.dylib" -o -name "*.framework" -o -perm +111 \) -exec \
-            codesign --force --options runtime --timestamp --sign "$IDENTITY" {} \;
-          codesign --force --options runtime --timestamp --sign "$IDENTITY" "$APP_PATH"
+            codesign --force --options runtime --timestamp --sign "$IDENT_HASH" {} \;
+          codesign --force --options runtime --timestamp --sign "$IDENT_HASH" "$APP_PATH"
           codesign --verify --deep --strict "$APP_PATH"
 
       - name: Notarize the app bundle
@@ -154,7 +171,7 @@ jobs:
           APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
         run: |
           DMG_NAME="${{ steps.dmg.outputs.name }}"
-          codesign --force --timestamp --sign "$IDENTITY" "$DMG_NAME"
+          codesign --force --timestamp --sign "$IDENT_HASH" "$DMG_NAME"
           xcrun notarytool submit "$DMG_NAME" \
             --key ~/private_keys/AuthKey.p8 \
             --key-id "$APP_STORE_CONNECT_KEY_ID" \
