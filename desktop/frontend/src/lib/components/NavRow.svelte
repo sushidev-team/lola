@@ -69,11 +69,11 @@
     {/if}
   </button>
   {#if badges}
-    <span class="flex shrink-0 items-center gap-1 pr-1">{@render badges()}</span>
+    <span class="flex shrink-0 items-center gap-1 pr-2">{@render badges()}</span>
   {/if}
   {#if actions}
     <span
-      class="flex shrink-0 items-center pr-1 opacity-0 transition-opacity group-hover/row:opacity-100 focus-within:opacity-100"
+      class="flex shrink-0 items-center pr-2 opacity-0 transition-opacity group-hover/row:opacity-100 focus-within:opacity-100"
       >{@render actions()}</span
     >
   {/if}

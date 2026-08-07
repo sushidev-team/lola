@@ -37,7 +37,7 @@
   );
 </script>
 
-<div class="group/status flex h-11 items-center gap-1 border-t border-edge px-3 text-sm">
+<div class="group/status flex h-11 items-center gap-1 border-t border-edge px-4 text-sm">
   <Button class="min-w-0 {daemonCls}" title="{health} · open doctor (d)" onclick={() => nav.openOverlay("doctor")}>
     <span aria-hidden="true">{degraded ? "▲" : store.alive ? "●" : "○"}</span>
     <span class="truncate">{daemonText}</span>
