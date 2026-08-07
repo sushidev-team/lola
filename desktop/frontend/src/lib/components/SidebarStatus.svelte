@@ -1,11 +1,10 @@
 <script lang="ts">
   import { store } from "$lib/store.svelte";
-  import { updates } from "$lib/update.svelte";
   import { nav } from "$lib/nav.svelte";
   import Button from "./Button.svelte";
 
   // The pinned utility row: everything the old footer carried (daemon liveness,
-  // start/restart/stop, version + update badge) plus the vitals bar's health dot
+  // start/restart/stop) plus the vitals bar's health dot
   // and settings gear, in one 44px strip at the foot of the sidebar. The flash
   // moved out to <Toast> — a transient message in a permanent row made the row
   // twitch, and it was the one thing there that had no home of its own.
@@ -42,27 +41,6 @@
     <span aria-hidden="true">{degraded ? "▲" : store.alive ? "●" : "○"}</span>
     <span class="truncate">{daemonText}</span>
   </Button>
-
-  <!-- The version belongs to the daemon line, not to the overlay buttons: it
-       names what is running, so it reads as a caption beside the status rather
-       than as a third control at the far right. It sits BEFORE the hover
-       controls so revealing them expands into the free middle of the row and
-       never shoves the version sideways. -->
-  {#if updates.available}
-    <Button
-      variant="secondary"
-      size="xs"
-      class="num shrink-0 border-accent! text-accent-ink!"
-      title="update available: v{updates.info?.latestVersion}"
-      onclick={() => nav.openOverlay("update")}
-    >
-      <span aria-hidden="true">↑</span> Update
-    </Button>
-  {:else}
-    <Button size="xs" class="num shrink-0" title="check for updates" onclick={() => nav.openOverlay("update")}>
-      v{updates.version}
-    </Button>
-  {/if}
 
   {#if store.alive}
     <!-- Revealed on row hover: two low-frequency, one-way controls that should

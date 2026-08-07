@@ -6,6 +6,7 @@
   import SidebarTriage from "./SidebarTriage.svelte";
   import SidebarProjects from "./SidebarProjects.svelte";
   import SidebarStatus from "./SidebarStatus.svelte";
+  import SidebarVersion from "./SidebarVersion.svelte";
   import ActivityFeed from "./ActivityFeed.svelte";
 
   // Sidebar makes ZERO store reads. It is pure layout; every child reads
@@ -58,7 +59,7 @@
        column (it collapses to content width). Grid tracks stretch reliably. -->
   <div
     class="grid min-h-0 min-w-0 overflow-x-hidden overflow-y-auto"
-    style="grid-template-rows:auto auto minmax(7rem,1fr)"
+    style="grid-template-rows:auto auto minmax(7rem,1fr) auto"
   >
     <SidebarTriage />
     <SidebarProjects />
@@ -70,6 +71,12 @@
       <h2 class="label px-2 pb-1 text-faint">Activity</h2>
       <div class="min-h-0 flex-1 overflow-auto px-2"><ActivityFeed /></div>
     </div>
+
+    <!-- The version closes the body rather than joining the utility row: it
+         reports, it does not act, and among that row's four controls it read as
+         a fifth. Its own `auto` track keeps it below Activity and above the
+         row's border, whatever Activity's height turns out to be. -->
+    <SidebarVersion />
   </div>
 
   <!-- 3. Utility row -->
