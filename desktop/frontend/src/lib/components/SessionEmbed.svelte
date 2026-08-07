@@ -59,6 +59,59 @@
     pickedTab = false;
   });
 
+  // Drag-to-sort for the shell tabs. Pointer events, not HTML5 drag-and-drop:
+  // the draggable thing is a <button>, which WebKit refuses to start a native
+  // drag from without a `-webkit-user-drag` override, and the native drag image
+  // paints badly over the WebGL terminal canvas in the production WKWebView.
+  //
+  // The pointer is captured only AFTER it has travelled past `dragSlop`, so an
+  // ordinary click still reaches the label button — a captured pointerup
+  // retargets the following click to the capturing element, which would swallow
+  // the tab selection. Same reason the drop is applied live during the move:
+  // there is no drag image to place, only the row reordering under the cursor.
+  const dragSlop = 5; // px before a press becomes a drag rather than a click
+  let tabEls = $state<(HTMLElement | undefined)[]>([]);
+  let dragging = $state(-1); // index being dragged, -1 = none (drives the ghost)
+  let dragFrom = -1;
+  let dragX = 0;
+
+  // The tab whose half the pointer is left of — i.e. where the dragged chip
+  // would land. Falls through to the last tab when the pointer is past them all.
+  function tabIndexAt(x: number, count: number): number {
+    for (let i = 0; i < count; i++) {
+      const r = tabEls[i]?.getBoundingClientRect();
+      if (r && x < r.left + r.width / 2) return i;
+    }
+    return count - 1;
+  }
+
+  function dragStart(i: number, e: PointerEvent) {
+    if (e.button !== 0) return; // left button only; right-click is not a drag
+    dragFrom = i;
+    dragX = e.clientX;
+  }
+
+  function dragMove(id: string, e: PointerEvent) {
+    if (dragFrom < 0) return;
+    if (dragging < 0) {
+      if (Math.abs(e.clientX - dragX) < dragSlop) return;
+      dragging = dragFrom;
+      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    }
+    const to = tabIndexAt(e.clientX, shells.length);
+    if (to === dragFrom) return;
+    terms.moveTab(id, dragFrom, to);
+    dragFrom = to;
+    dragging = to;
+  }
+
+  function dragEnd(e: PointerEvent) {
+    const el = e.currentTarget as HTMLElement;
+    if (el.hasPointerCapture?.(e.pointerId)) el.releasePointerCapture(e.pointerId);
+    dragFrom = -1;
+    dragging = -1;
+  }
+
   // Discover this session's shell tabs from the tmux server on selection, then
   // poll so a shell opened in the TUI (or another window) appears here within a
   // few seconds — the two surfaces attach to the same tmux sessions.
@@ -129,32 +182,66 @@
     </div>
 
     <!-- Terminal tabs. Shown when a shell is open or the panel is focused/big:
-         the agent tab, one tab per shell (each with a "×" to close), and a "+"
-         that opens another shell. Collapses in the compact, agent-only case so
-         the plain detail panel stays chrome-free. -->
+         the agent tab, one tab per shell (drag to sort, "×" on hover to close),
+         and a "+ Shell" parked in the right corner — an *add* control, not one of
+         the tabs, so it sits opposite them rather than trailing the row. Collapses
+         in the compact, agent-only case so the plain detail panel stays chrome-free. -->
     {#if showTabs}
-      <div class="relative z-10 flex flex-wrap items-center gap-1 border-b border-edge/60 px-2 py-1">
-        <Button size="xs" selected={activeTab === AGENT} onclick={() => selectTab(session.id, AGENT)}>Agent</Button>
-        {#each shells as sh (sh)}
-          <!-- The selected chip is drawn on the LABEL only, never on a wrapper
-               around both: a wrapper background plus the button's own would be two
-               same-name utilities racing on source order, which Tailwind decides,
-               not the class attribute. The ✕ stays a separate control beside it. -->
-          <span class="flex items-center">
-            <Button size="xs" selected={activeTab === sh} onclick={() => selectTab(session.id, sh)}>
-              {terms.labelFor(session.id, sh)}
-            </Button>
-            <Button
-              variant="danger"
-              size="xs"
-              icon
-              title={terms.isReviewTab(sh) ? "close the review pane" : "close shell"}
-              aria-label={terms.isReviewTab(sh) ? "close review" : "close shell"}
-              onclick={() => terms.closeShell(session.id, sh)}>×</Button
+      <div class="relative z-10 flex items-center gap-3 border-b border-edge/60 px-3 py-1.5">
+        <div class="flex min-w-0 flex-wrap items-center gap-2 select-none">
+          <Button size="xs" class="px-2.5!" selected={activeTab === AGENT} onclick={() => selectTab(session.id, AGENT)}>
+            Agent
+          </Button>
+          {#each shells as sh, i (sh)}
+            <!-- The selected chip is drawn on the LABEL only, never on this
+                 wrapper: a wrapper background plus the button's own would be two
+                 same-name utilities racing on source order, which Tailwind
+                 decides, not the class attribute. So the wrapper stays paint-free
+                 and only positions the ✕ inside the label's chip.
+                 The label reserves `pr-6` at rest — revealing the ✕ must not
+                 resize the tab under the cursor, and a row that reflows on hover
+                 is a row you cannot aim at. -->
+            <!-- role="group" is what the pointer handlers need to satisfy
+                 a11y_no_static_element_interactions, and it is also true: the
+                 wrapper only carries the drag, and both controls inside it are
+                 real buttons that stay reachable from the keyboard. -->
+            <div
+              bind:this={tabEls[i]}
+              role="group"
+              class="group relative flex shrink-0 items-center transition-opacity"
+              class:opacity-60={dragging === i}
+              style="touch-action: none"
+              onpointerdown={(e) => dragStart(i, e)}
+              onpointermove={(e) => dragMove(session.id, e)}
+              onpointerup={dragEnd}
+              onpointercancel={dragEnd}
             >
-          </span>
-        {/each}
-        <Button size="xs" title="open a shell in the worktree" onclick={() => terms.newShell(session.id, session.worktree)}>
+              <Button
+                size="xs"
+                class="cursor-grab pr-6! pl-2.5!"
+                selected={activeTab === sh}
+                onclick={() => selectTab(session.id, sh)}
+              >
+                {terms.labelFor(session.id, sh)}
+              </Button>
+              <Button
+                variant="danger"
+                size="xs"
+                icon
+                class="absolute right-1 h-5! w-5! rounded-sm opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
+                title={terms.isReviewTab(sh) ? "close the review pane" : "close shell"}
+                aria-label={terms.isReviewTab(sh) ? "close review" : "close shell"}
+                onclick={() => terms.closeShell(session.id, sh)}>×</Button
+              >
+            </div>
+          {/each}
+        </div>
+        <Button
+          size="xs"
+          class="ml-auto shrink-0 px-2.5!"
+          title="open a shell in the worktree"
+          onclick={() => terms.newShell(session.id, session.worktree)}
+        >
           <span aria-hidden="true">+</span> Shell
         </Button>
       </div>

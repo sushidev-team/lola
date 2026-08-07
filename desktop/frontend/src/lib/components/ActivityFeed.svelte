@@ -15,10 +15,10 @@
     <!-- 30, not 40: the sidebar's activity track is shorter than the old rail
          panel, and rows nobody can scroll to are just retained memory. -->
     {#each store.activity.slice(0, 30) as ev (ev.id + ev.to + ev.ago)}
-      <li class="flex items-baseline gap-1.5">
-        <span class="font-medium text-ink">{ev.issue || ev.id.slice(0, 6)}</span>
-        <span class={statusText(ev.to)}>{eventPhrase(ev.from, ev.to)}</span>
-        <span class="num ml-auto text-faint">{ev.ago}</span>
+      <li class="flex min-w-0 items-baseline gap-1.5">
+        <span class="shrink-0 font-medium text-ink">{ev.issue || ev.id.slice(0, 6)}</span>
+        <span class="truncate {statusText(ev.to)}">{eventPhrase(ev.from, ev.to)}</span>
+        <span class="num ml-auto shrink-0 pl-1 text-faint">{ev.ago}</span>
       </li>
     {/each}
   </ul>

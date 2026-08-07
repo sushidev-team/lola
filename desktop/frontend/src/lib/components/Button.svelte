@@ -18,7 +18,7 @@
   // `enabled:hover:` rather than `hover:` throughout — CSS still matches :hover on
   // a disabled button, so a plain hover rule lights up a control that cannot be
   // clicked.
-  export type ButtonVariant = "ghost" | "accent" | "secondary" | "primary" | "danger" | "danger-solid";
+  export type ButtonVariant = "ghost" | "accent" | "secondary" | "primary" | "danger" | "danger-bare" | "danger-solid";
   export type ButtonSize = "xs" | "sm" | "md";
 
   const BASE =

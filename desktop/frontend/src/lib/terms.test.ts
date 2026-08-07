@@ -66,3 +66,49 @@ describe("review pane tabs", () => {
     expect(terms.activeTab(id)).toBe(AGENT);
   });
 });
+
+describe("drag-to-sort tabs", () => {
+  it("reorders the tabs and renumbers the labels by position", () => {
+    const id = newId();
+    seed(id, [`${id}-shell-1`, `${id}-shell-2`, `${id}-shell-3`]);
+    terms.moveTab(id, 2, 0);
+    expect(terms.shellsFor(id)).toEqual([`${id}-shell-3`, `${id}-shell-1`, `${id}-shell-2`]);
+    expect(terms.labelFor(id, `${id}-shell-3`)).toBe("sh 1");
+    expect(terms.labelFor(id, `${id}-shell-1`)).toBe("sh 2");
+  });
+
+  it("ignores a no-op or out-of-range move", () => {
+    const id = newId();
+    const names = [`${id}-shell-1`, `${id}-shell-2`];
+    seed(id, names);
+    terms.moveTab(id, 0, 0);
+    terms.moveTab(id, 1, 5);
+    terms.moveTab(id, -1, 0);
+    expect(terms.shellsFor(id)).toEqual(names);
+  });
+
+  it("survives a refresh, and appends a shell discovered after the sort", () => {
+    const id = newId();
+    seed(id, [`${id}-shell-1`, `${id}-shell-2`]);
+    terms.moveTab(id, 1, 0);
+    seed(id, [`${id}-shell-1`, `${id}-shell-2`, `${id}-shell-3`]); // discovery order, as refresh writes it
+    expect(terms.shellsFor(id)).toEqual([`${id}-shell-2`, `${id}-shell-1`, `${id}-shell-3`]);
+  });
+
+  it("drops a closed tab from the sorted order", () => {
+    const id = newId();
+    seed(id, [`${id}-shell-1`, `${id}-shell-2`, `${id}-review`]);
+    terms.moveTab(id, 2, 0);
+    seed(id, [`${id}-shell-1`, `${id}-shell-2`]);
+    expect(terms.shellsFor(id)).toEqual([`${id}-shell-1`, `${id}-shell-2`]);
+  });
+
+  it("cycles in the sorted order", () => {
+    const id = newId();
+    seed(id, [`${id}-shell-1`, `${id}-shell-2`]);
+    terms.moveTab(id, 1, 0);
+    terms.select(id, AGENT);
+    terms.cycleTab(id, 1);
+    expect(terms.activeTab(id)).toBe(`${id}-shell-2`);
+  });
+});

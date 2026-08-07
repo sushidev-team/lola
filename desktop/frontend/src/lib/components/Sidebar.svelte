@@ -20,7 +20,7 @@
 </script>
 
 <aside
-  class="group/side grid h-full min-h-0 overflow-hidden border-r border-edge bg-canvas"
+  class="group/side grid h-full min-h-0 min-w-0 overflow-hidden border-r border-edge bg-canvas"
   style="grid-template-rows:44px minmax(0,1fr) 44px"
   aria-label="Sidebar"
   inert={!nav.sidebarOpen}
@@ -32,8 +32,8 @@
        in this row is a real <button>, so app.css's `.no-drag, button, a, input…`
        rule opts it out of the drag region automatically — a clickable <div>
        here would be neither draggable nor reliably clickable. -->
-  <div class="drag flex items-center gap-2 pr-4 pl-[82px]">
-    <LolaLogo class="h-[18px] w-auto shrink-0" />
+  <div class="drag flex min-w-0 items-center gap-2 overflow-hidden pr-4 pl-[82px]">
+    <LolaLogo class="h-[18px] w-auto shrink" />
     <Button
       icon
       class="ml-auto opacity-0 transition-opacity group-hover/side:opacity-100 focus-visible:opacity-100"
@@ -57,7 +57,7 @@
        container, and WebKit does not stretch a display:flex child inside a flex
        column (it collapses to content width). Grid tracks stretch reliably. -->
   <div
-    class="grid min-h-0 overflow-x-hidden overflow-y-auto"
+    class="grid min-h-0 min-w-0 overflow-x-hidden overflow-y-auto"
     style="grid-template-rows:auto auto minmax(7rem,1fr)"
   >
     <SidebarTriage />
@@ -66,7 +66,7 @@
     <!-- Activity. flex + flex-1 (NOT a nested fr grid): the child is a plain
          block, which is the pattern Panel.svelte already proves in WKWebView. A
          second nested `fr` track is the collapse risk reflow.ts documents. -->
-    <div class="flex min-h-0 flex-col px-4 pt-3.5">
+    <div class="flex min-h-0 min-w-0 flex-col px-4 pt-3.5">
       <h2 class="label px-2 pb-1 text-faint">Activity</h2>
       <div class="min-h-0 flex-1 overflow-auto px-2"><ActivityFeed /></div>
     </div>

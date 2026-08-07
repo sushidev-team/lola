@@ -27,10 +27,34 @@ export function isReviewTab(name: string): boolean {
 class Terms {
   private shells = new SvelteMap<string, string[]>(); // session id -> discovered shell tmux names
   private active = new SvelteMap<string, string>(); // session id -> AGENT | shell tmux name
+  private order = new SvelteMap<string, string[]>(); // session id -> hand-sorted tab order (see shellsFor)
 
-  /** Discovered shell tmux names currently open for session `id`. */
+  /** Shell tmux names open for session `id`, in the order its tabs are shown.
+   *
+   * Discovery order is the server's; a hand drag (moveTab) records an order that
+   * is layered on top of it here rather than written back over the discovered
+   * list, so the next `refresh` cannot undo a sort. Names the order doesn't know
+   * (a shell opened since the drag) keep their discovered position at the end. */
   shellsFor(id: string): string[] {
-    return this.shells.get(id) ?? [];
+    const names = this.shells.get(id) ?? [];
+    const sorted = this.order.get(id);
+    if (!sorted || names.length < 2) return names;
+    const open = new Set(names);
+    const front = sorted.filter((n) => open.has(n));
+    if (!front.length) return names;
+    const placed = new Set(front);
+    return [...front, ...names.filter((n) => !placed.has(n))];
+  }
+
+  /** Move the tab at `from` to index `to` within this session's shell tabs (the
+   * drag-to-sort). Indices are positions in `shellsFor`, which the new order
+   * then becomes. Out-of-range or no-op moves are ignored. */
+  moveTab(id: string, from: number, to: number) {
+    const cur = this.shellsFor(id);
+    if (from === to || from < 0 || to < 0 || from >= cur.length || to >= cur.length) return;
+    const next = [...cur];
+    next.splice(to, 0, ...next.splice(from, 1));
+    this.order.set(id, next);
   }
 
   /** Whether a tab is this session's review pane (see isReviewTab). Exposed as a
