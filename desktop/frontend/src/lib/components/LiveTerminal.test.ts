@@ -54,6 +54,8 @@ const spies = vi.hoisted(() => {
     clearTextureAtlas: vi.fn(),
     attach: vi.fn(async () => {}),
     detach: vi.fn(async () => {}),
+    openURL: vi.fn(async () => {}),
+    webLinksHandler: undefined as undefined | ((e: MouseEvent, uri: string) => void),
   };
 });
 
@@ -94,6 +96,19 @@ vi.mock("@xterm/addon-webgl", () => ({
     public dispose = vi.fn();
   },
 }));
+
+vi.mock("@xterm/addon-web-links", () => ({
+  // Captures the click handler the component passes in, so the test can fire it.
+  WebLinksAddon: class {
+    public constructor(handler: (e: MouseEvent, uri: string) => void) {
+      spies.webLinksHandler = handler;
+    }
+    public activate = vi.fn();
+    public dispose = vi.fn();
+  },
+}));
+
+vi.mock("$lib/store.svelte", () => ({ store: { openURL: spies.openURL } }));
 
 vi.mock("@wailsio/runtime", () => ({
   Events: { On: vi.fn(() => () => {}) },
@@ -223,6 +238,31 @@ describe("LiveTerminal font ordering", () => {
       const cmdQ = { type: "keydown", ctrlKey: false, metaKey: true, altKey: false, key: "q", preventDefault: vi.fn() };
       expect(handler(cmdQ as unknown as KeyboardEvent)).toBe(true);
       expect(onEscapeFocus).not.toHaveBeenCalled();
+    });
+  });
+
+  // A URL printed by a dev server is the terminal's most-clicked text. Both link
+  // kinds must reach the DAEMON's opener, never window.open — this is a
+  // WKWebView, so a new window would open inside the app, and the daemon is
+  // where the http(s)-only guard lives.
+  describe("link opening", () => {
+    async function boot() {
+      render(LiveTerminal, { props: { name: "s10", webgl: false, interactive: true } });
+      gate.state.ready.settle(true);
+      await vi.waitFor(() => expect(spies.open).toHaveBeenCalledTimes(1));
+    }
+
+    it("opens a plain URL through the daemon", async () => {
+      await boot();
+      spies.webLinksHandler?.(new MouseEvent("click"), "http://127.0.0.1:8000");
+      expect(spies.openURL).toHaveBeenCalledWith("http://127.0.0.1:8000");
+    });
+
+    it("opens an OSC 8 hyperlink through the daemon", async () => {
+      await boot();
+      const activate = (spies.options.linkHandler as { activate: (e: MouseEvent, uri: string) => void }).activate;
+      activate(new MouseEvent("click"), "https://github.com/acme/widgets/pull/7");
+      expect(spies.openURL).toHaveBeenCalledWith("https://github.com/acme/widgets/pull/7");
     });
   });
 

@@ -4,7 +4,9 @@
   import { Terminal } from "@xterm/xterm";
   import { FitAddon } from "@xterm/addon-fit";
   import { WebglAddon } from "@xterm/addon-webgl";
+  import { WebLinksAddon } from "@xterm/addon-web-links";
   import { TermService } from "@bindings/desktop";
+  import { store } from "$lib/store.svelte";
   import { TERM_FONT, appearance, termFontLoaded, termFontReady } from "$lib/theme-runtime.svelte";
 
   // A live, interactive terminal attached to a session's tmux pane. WebGL is
@@ -172,6 +174,23 @@
         gl = undefined;
       }
     }
+
+    // URLs printed by a dev server, a test runner or an agent are the terminal's
+    // most-clicked text, and xterm ships NO link handling by default — the
+    // reported "I can't open the localhost link". Two kinds exist and both are
+    // wired to the same opener:
+    //   - plain text URLs, matched by WebLinksAddon;
+    //   - OSC 8 hyperlinks, where the program marks the text itself
+    //     (`linkHandler`, which xterm consults instead of the addon).
+    // Neither goes through window.open: this is a WKWebView, so a new window
+    // would open INSIDE the app. store.openURL asks the daemon, whose openURL
+    // command refuses anything that is not http(s) — the load-bearing guard,
+    // since a terminal can print `file://` or `javascript:` and a log line is
+    // untrusted text.
+    term.loadAddon(new WebLinksAddon((_e, uri) => void store.openURL(uri)));
+    term.options.linkHandler = {
+      activate: (_e, uri) => void store.openURL(uri),
+    };
 
     // Registered unconditionally and gated INSIDE the handler: `focused` flips
     // without remounting this component (the terminal is keyed on the tmux name,

@@ -320,8 +320,16 @@ class Store {
   openTicket(a: OpenTicketArgs) {
     return this.act(() => DaemonService.OpenTicket(a), `started ${a.identifier}`);
   }
-  openURL(url: string) {
-    return DaemonService.OpenURL(url);
+  // openURL hands a URL to the daemon's opener (which refuses anything that is
+  // not http(s)). A failure is FLASHED rather than thrown: the loudest caller is
+  // a click on a link inside a terminal, where a rejected promise would be an
+  // unhandled rejection and the click would look like it did nothing.
+  async openURL(url: string) {
+    try {
+      await DaemonService.OpenURL(url);
+    } catch (err) {
+      this.setFlash(String(err), "bad");
+    }
   }
   reload() {
     return this.act(() => DaemonService.Reload(), "config reloaded");

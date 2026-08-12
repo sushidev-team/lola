@@ -550,6 +550,18 @@ distinct binary from the v2 `wails`. See `desktop/README.md`.
 - Fonts: the terminals + mono UI use bundled **JetBrains Mono**
   (`@fontsource/jetbrains-mono`, imported in `main.ts`); xterm re-fits on
   `document.fonts.ready` so cell metrics match once it loads.
+- **A clickable URL in a terminal is xterm's job, not the multiplexer's, and it
+  must NOT use `window.open`.** xterm ships no link handling by default, which
+  is why a printed `http://127.0.0.1:8000` was dead text — nothing to do with
+  tmux (see the `multiplexer-choice` decision: lola stays on tmux). Both link
+  kinds are wired in `LiveTerminal.svelte`: `WebLinksAddon` for plain-text URLs
+  and `term.options.linkHandler` for OSC 8 hyperlinks. Both call
+  `store.openURL`, which asks the DAEMON (`cmd=openURL`) — that is where the
+  http(s)-only guard lives, and terminal text is untrusted (a log line can print
+  `file://` or `javascript:`). `window.open` in a WKWebView would open the page
+  *inside* the app, which is not a browser. Caveat worth knowing before
+  debugging a "dead" link: with `[tmux].mouse = true` (off by default) tmux
+  grabs mouse events, so clicks go to tmux and never reach xterm.
 - **App icon is icns-only — do NOT re-add `CFBundleIconName` / `Assets.car`.**
   On macOS 26 (Tahoe) the Dock prefers the Liquid Glass `Assets.car` icon
   whenever `CFBundleIconName` is set, and Wails' generated `Assets.car` drops
