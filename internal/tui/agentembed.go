@@ -21,6 +21,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/sushidev-team/lola/internal/lolaenv"
 	"github.com/sushidev-team/lola/internal/vtterm"
 )
 
@@ -359,12 +360,15 @@ func (m *rootModel) nextShellName(id string) string {
 }
 
 // createShellSession spawns a detached tmux session running the default shell in
-// dir. Empty command → the user's login shell, mirroring internal/tmux.NewSession.
+// dir, with the worktree's .lola/env exported — same command the agent pane and
+// `lola open` use. A bare login shell here would be the odd one out: the tab
+// would silently lack [[project]].env, so a project command typed in it would
+// behave differently from the same command in the agent pane.
 func (m *rootModel) createShellSession(name, dir string) error {
 	c := m.sessions.tmuxClient(m.cfg.TmuxSocketName())
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	return c.NewSession(ctx, name, dir, "")
+	return c.NewSession(ctx, name, dir, lolaenv.ShellCommand)
 }
 
 // killShellSession terminates one shell tmux session (best-effort, idempotent).

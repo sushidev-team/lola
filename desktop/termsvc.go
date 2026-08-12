@@ -16,6 +16,8 @@ import (
 
 	"github.com/creack/pty"
 	"github.com/wailsapp/wails/v3/pkg/application"
+
+	"github.com/sushidev-team/lola/internal/lolaenv"
 )
 
 // TermService bridges lola's isolated tmux server (tmux -L lola) to the webview.
@@ -172,12 +174,14 @@ func (t *TermService) Shell(shell, worktree string) (string, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	// -d creates it detached (the frontend attaches via Attach); an empty command
-	// starts the user's default shell in -c worktree, mirroring internal/tmux's
-	// NewSession. No per-session set-option: the shell inherits the same server
-	// defaults (mouse, etc.) the agent panes use, so both tabs scroll identically.
+	// -d creates it detached (the frontend attaches via Attach); the trailing
+	// command starts the user's default shell with the worktree's .lola/env
+	// exported, the same line the agent pane and the TUI's shell tabs use — a
+	// bare login shell would silently lack [[project]].env. No per-session
+	// set-option: the shell inherits the same server defaults (mouse, etc.) the
+	// agent panes use, so both tabs scroll identically.
 	if out, err := exec.CommandContext(ctx, bin, "-L", "lola", "new-session", "-d",
-		"-s", shell, "-c", worktree).CombinedOutput(); err != nil {
+		"-s", shell, "-c", worktree, lolaenv.ShellCommand).CombinedOutput(); err != nil {
 		return "", fmt.Errorf("new shell %s: %w: %s", shell, err, out)
 	}
 	return shell, nil

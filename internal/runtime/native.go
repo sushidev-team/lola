@@ -34,6 +34,7 @@ import (
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/hook"
 	"github.com/sushidev-team/lola/internal/linear"
+	"github.com/sushidev-team/lola/internal/lolaenv"
 	"github.com/sushidev-team/lola/internal/session"
 	"github.com/sushidev-team/lola/internal/state"
 	"github.com/sushidev-team/lola/internal/tmux"
@@ -274,6 +275,9 @@ func (n *Native) Spawn(ctx context.Context, p config.Project, issue linear.Issue
 	if err != nil {
 		return session.Session{}, fmt.Errorf("runtime: spawn %s: %w", id, err)
 	}
+	// Render [[project]].env against this session BEFORE anything reads it —
+	// Prepare hands it to post_create, envFile writes it into the pane.
+	p = expandProjectEnv(p, EnvVars{Session: id, Issue: issue.Identifier, Branch: branch, Project: p.Name, Worktree: dir})
 	fail := func(step string, cause error) (session.Session, error) {
 		return session.Session{}, n.rollback(ctx, p, id, dir, branch, step, cause)
 	}
@@ -366,6 +370,7 @@ func (n *Native) Open(ctx context.Context, p config.Project, sessionID, fetchRef
 	if err != nil {
 		return session.Session{}, fmt.Errorf("runtime: open %s: %w", sessionID, err)
 	}
+	p = expandProjectEnv(p, EnvVars{Session: sessionID, Branch: branch, Project: p.Name, Worktree: dir})
 	fail := func(step string, cause error) (session.Session, error) {
 		// The worktree is DETACHED — there is no lola-owned branch to delete, so
 		// pass "" (Remove's deleteBranch no-ops) and never risk the upstream branch.
@@ -432,6 +437,7 @@ func (n *Native) OpenManual(ctx context.Context, p config.Project, sessionID, br
 	if err != nil {
 		return session.Session{}, fmt.Errorf("runtime: open manual %s: %w", sessionID, err)
 	}
+	p = expandProjectEnv(p, EnvVars{Session: sessionID, Branch: branch, Project: p.Name, Worktree: dir})
 	fail := func(step string, cause error) (session.Session, error) {
 		// lola OWNS this new branch — pass it so a rollback removes it too.
 		if rmErr := n.WT.Remove(ctx, p, dir, branch, false); rmErr != nil {
@@ -485,6 +491,7 @@ func (n *Native) OpenManual(ctx context.Context, p config.Project, sessionID, br
 // the worktree back (force=false, so a dirty checkout is kept for inspection) —
 // deleting the branch only when ownsBranch — and returns the wrapped error.
 func (n *Native) finishAgentLaunch(ctx context.Context, p config.Project, id, dir, branch string, kind agent.Kind, ownsBranch bool, prompt string) error {
+	p = expandProjectEnv(p, EnvVars{Session: id, Branch: branch, Project: p.Name, Worktree: dir})
 	rb := func(step string, cause error) error {
 		delBranch := ""
 		if ownsBranch {
@@ -598,8 +605,7 @@ func (n *Native) OpenManualAgent(ctx context.Context, p config.Project, sessionI
 // and NO secret is ever placed on argv. "${SHELL:-/bin/sh}" is the human's login
 // shell, exec'd so the pane's process IS the interactive shell.
 func (n *Native) shellCommand() string {
-	posix := `set -a; [ -f ./` + lolaDir + `/env ] && . ./` + lolaDir + `/env; set +a; exec "${SHELL:-/bin/sh}"`
-	return "exec sh -c " + shQuote(posix)
+	return lolaenv.ShellCommand
 }
 
 // manualEnvFile renders a manual session's 0600 .lola/env: ONLY the project's

@@ -258,7 +258,7 @@ runtime layer, not on config load.
 | `branch_prefix` | string | Prefix prepended to a session's derived branch name (e.g. `"feat/"` yields `feat/eng-42`). Empty inherits `[defaults].branch_prefix`, then `"lola/"`. |
 | `post_create` | string array | Commands run inside a fresh worktree before the agent starts (e.g. `composer install`). Any failure blocks the session with a clear status — never a half-started agent. Omit to inherit `[defaults].post_create`. |
 | `symlinks` | string array | Files symlinked from the main checkout into each worktree, e.g. `[".env"]`. Beware: a shared `.env` usually means every worktree talks to the same database. Omit to inherit `[defaults].symlinks`. |
-| `env` | table of strings | Extra environment variables exported into each session (`[project.env]`); the agent and the `post_create` commands both see them. Omit to inherit `[defaults].env`. |
+| `env` | table of strings | Extra environment variables exported into each session (`[project.env]`); the agent pane, shell tabs and the `post_create` commands all see them. Values may reference the session — see [Per-session env values](#per-session-env-values). Omit to inherit `[defaults].env`. |
 | `agent` | `"claude"` \| `"codex"` \| `"opencode"` | Coding agent for sessions spawned into this repo, overriding `[defaults].agent`. Empty/omitted inherits the global default (ultimately `claude`). See [The coding agent](#the-coding-agent). |
 
 #### Repo auto-detection
@@ -308,6 +308,40 @@ running daemon — it is the only thing that knows whether a session is live.
 
 For a new project the id is derived from the label as you type (`Nori App` →
 `nori-app`); typing in the id field yourself breaks that link for good.
+
+#### Per-session env values
+
+`[project.env]` values are written to a 0600 `<worktree>/.lola/env`, which every
+lola-started pane sources before it runs anything — the agent, shell tabs,
+`lola open` shells — and which `post_create` commands get through their own
+environment. A terminal *you* open outside lola does not have them; source that
+file, or use a shell tab.
+
+A value may reference the session, with the same `{{.Field}}` spelling the
+reaction and write-back templates use:
+
+| Placeholder | Value |
+|---|---|
+| `{{.Session}}` | tmux session id, identical to the worktree directory name (`lola-nori-app-nor-366`) — unique for every session |
+| `{{.Issue}}` | Linear identifier (`NOR-366`); **empty** on PR and manual sessions |
+| `{{.Branch}}` | branch checked out in the worktree |
+| `{{.Project}}` | this project's name |
+| `{{.Worktree}}` | absolute worktree path |
+
+This earns its keep next to `symlinks = [".env"]`. A shared `.env` means every
+worktree also shares the services it names — the same Redis queue, the same
+cache prefix — so two dev stacks quietly consume each other's jobs, which reads
+as work vanishing rather than as a collision. Give each worktree its own
+namespace instead:
+
+```toml
+[project.env]
+REDIS_QUEUE = "{{{.Session}}}"   # → {lola-nori-app-nor-366}
+```
+
+Prefer `{{.Session}}` wherever the value has to be unique for every session:
+`{{.Issue}}` renders empty when there is no issue. Only values are rendered —
+names are validated shell identifiers and are never templated.
 
 ### `[[project]]` polling fields (optional; a project polls when `team_id` is set)
 

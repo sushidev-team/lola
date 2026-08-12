@@ -78,6 +78,9 @@ global_cap = 4
 #
 # [defaults.env]
 # APP_ENV = "local"
+# Values may reference this session: {{.Session}} (tmux session id, == the
+# worktree directory name), {{.Issue}} (Linear identifier, EMPTY on PR/manual
+# sessions), {{.Branch}}, {{.Project}}, {{.Worktree}}. See [project.env].
 
 [linear]
 # Keychain SERVICE NAME (tried first):
@@ -444,9 +447,31 @@ on_sent_set_label = "label_sent0000-1111-2222-3333-444455556666"
 # on_pr_state_id = "state_inreview-..."
 # on_merged_state_id = "state_done-..."
 # comment_on_pr = true
-# Extra environment variables exported into each session.
+# Extra environment variables exported into each session: into the agent's pane,
+# into shell tabs and `lola open` shells, and into post_create commands. They
+# are written to a 0600 <worktree>/.lola/env that each pane sources at start —
+# so a terminal YOU open outside lola does not have them (source that file, or
+# use a shell tab).
+#
+# VALUES may reference the session, with the same {{.Field}} spelling used by
+# reaction and write-back templates:
+#
+#   {{.Session}}   tmux session id, == the worktree directory name
+#                  (lola-nori-app-nor-366) — unique for EVERY session
+#   {{.Issue}}     Linear identifier (NOR-366); EMPTY on PR/manual sessions
+#   {{.Branch}}    branch checked out in the worktree
+#   {{.Project}}   this project's name
+#   {{.Worktree}}  absolute worktree path
+#
+# This matters when symlinks = [".env"]: every worktree then shares the backing
+# services that .env names, so two dev stacks consume each other's queue jobs —
+# which looks like work vanishing, not like a collision. Give each worktree its
+# own namespace instead. Prefer {{.Session}} where the value must be unique for
+# every session; {{.Issue}} renders empty when there is no issue.
+#
 [project.env]
 # APP_ENV = "local"
+# REDIS_QUEUE = "{{{.Session}}}"   # → {lola-nori-app-nor-366}
 
 # ---------------------------------------------------------------------------
 # Poll 4: Linear WRITE-BACK with state-based dedup (P4). Instead of flipping

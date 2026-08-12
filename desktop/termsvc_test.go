@@ -1,6 +1,7 @@
 package main
 
 import (
+	"github.com/sushidev-team/lola/internal/lolaenv"
 	"os"
 	"path/filepath"
 	"strings"
@@ -71,6 +72,11 @@ func TestShellCreatesSession(t *testing.T) {
 	}
 	if !strings.Contains(log, "new-session -d -s NORI-1-shell-2 -c "+wt) {
 		t.Errorf("expected new-session rooted in worktree, log:\n%s", log)
+	}
+	// The shell tab must source .lola/env like the agent pane does, or a
+	// project command typed here silently runs without [[project]].env.
+	if !strings.Contains(log, lolaenv.ShellCommand) {
+		t.Errorf("expected the shell to export .lola/env, log:\n%s", log)
 	}
 }
 
