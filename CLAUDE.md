@@ -132,6 +132,9 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   (keychain→env), best-effort desktop/Slack notify, opt-in headless-claude
   summarizer, opt-in CodeRabbit QA pass, pane→answerable-question heuristic
   parser (agent-aware), structured health checks.
+- `internal/reviewmd` — presentation-only leaf (stdlib): renders a provider's
+  plain findings into the GitHub Markdown posted on the PR. One caller
+  (`postGithubSink`); see the invariant below.
 - `internal/tui` — the interactive poll manager + sessions view, AND the plain
   socket client (`Send`/`Logs`) reused by the CLI subcommands.
 - `main.go` — cobra wiring only; each subcommand marshals a `protocol.Request`
@@ -294,6 +297,53 @@ each of which owns exactly one external tool or concern behind an **exec seam**
     ending in `-review` would otherwise vanish).
   - Everything degrades to the direct exec — no tmux, no session id, a tmux that
     refuses the session. A pane that cannot open must never cost a review.
+- **The github sink is the ONLY review sink that reshapes the findings, and
+  GitHub's sanitizer sets the whole design budget.** A comment body is
+  sanitized server-side: CSS, `<style>` and the `style` attribute are stripped,
+  so a PR comment can be STRUCTURED but never styled. `internal/reviewmd` (pure,
+  dependency-free) spends the five things that survive — an ALERT callout
+  (`> [!CAUTION]` / `[!WARNING]` / `[!NOTE]`, the only real colour available,
+  its level DERIVED from the worst severity), emoji, bold, code spans and links
+  — on a tally line over one COLLAPSED `<details>` per finding, each location
+  linked to `blob/<session branch>/<path>#L<line>`. A `<details>` renders as a
+  bare disclosure triangle with no box of its own; do not add markup trying to
+  give it one. `postGithubSink` is its one caller; the worker hand-off, the
+  notification and the Linear comment keep the raw text byte for byte.
+- **The review instruction's FORMAT block is a CONTRACT with `reviewmd`, and its
+  fields are split by AUDIENCE.** `reviewclaude`'s `-p` prompt asks for
+  `**Grade:** impact=… confidence=… effort=…` (three fixed enums) + `**Gist:**`
+  (one sentence) + `**Fix:** `(one sentence) + `**Detail:**` (≤4 sentences),
+  because nobody reads four prose paragraphs per finding on a PR. The renderer
+  puts Gist, then Fix, then the Grade chips (`<kbd>impact: high</kbd>` — `<kbd>`
+  is the only allowlisted element GitHub draws as a bordered chip rather than as
+  more code) inside ONE BLOCKQUOTE, and folds Detail — plus any field it does
+  not know — behind a NESTED `<details>` outside it. The blockquote is
+  load-bearing, not decoration: four flush blocks at equal weight read as debris
+  between findings, and its left rail is the only containment a sanitized
+  comment can express. Every line of the quote (including the blank ones, as a
+  bare `>`) must carry the prefix or GitHub ends the quote mid-body.
+  Consequences:
+  - The grade vocabulary is a WHITELIST (`gradeVocab`), and unknown axes/values
+    are dropped, not rendered: findings are model output and a chip reads as a
+    fact. Chip order is fixed by `gradeOrder`, not by what the model wrote.
+  - Renaming a field in the prompt without changing the renderer silently
+    degrades every review to the pass-through path — hence
+    `TestReviewInstructionPinsTheGradedShape` in `internal/reviewclaude`.
+  - The FOLD is presentation, not redaction: the worker agent, notify and Linear
+    still get every field raw, Detail included.
+  - A body carrying neither Grade nor Gist (a `coderabbit-cli` pass, a
+    pre-graded snapshot) is passed through verbatim, so old shapes still post.
+  Rules: it FAILS OPEN — anything it cannot parse (a `coderabbit-cli` plain-text
+  pass, a provider that ignored the format block) is posted verbatim under a
+  plain `###` heading, so a formatter can never eat a review; and a location is
+  linked ONLY when the repo is `owner/name`, the ref is URL-safe and the
+  location is a plain `path:line` (a wrong link would point a reader at someone
+  else's file). Its summary line is HTML-escaped with `<code>` spans rebuilt
+  from the backticks (inline Markdown inside `<summary>` is not reliably
+  rendered). It self-bounds to
+  `reviewmd.MaxBytes` (15KB) UNDER `scm.postCommentMaxBytes` (16KB) so the
+  head-clip there can never land mid-`<details>`; over budget it drops detail
+  bodies, never findings.
 - **A review PASS never runs on the observe loop.** A `claude-session` pass
   reads the PR's files, so a real PR takes 7–13 minutes; run inline it stalled
   tmux liveness, PR facts and reactions for every other session for that long,

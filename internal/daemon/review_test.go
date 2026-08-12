@@ -1038,6 +1038,61 @@ func TestReviewGithubSinkPostsFullTextOncePerPR(t *testing.T) {
 	}
 }
 
+// The github sink is the ONLY sink that reshapes the text: it posts
+// reviewmd-rendered Markdown (heading + collapsed details) while the worker
+// hand-off and the notification keep the provider's raw findings.
+func TestReviewGithubSinkRendersMarkdownAgentKeepsRaw(t *testing.T) {
+	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})
+	seams := &fakeReactSeams{}
+	seams.install(d)
+	claude := claudeDesc()
+	claude.Transports = config.TransportSet{config.TransportLola, config.TransportGitHub}
+	setProviders(d, claude)
+	fp := &fakePostPR{}
+	fp.install(d)
+
+	findings := "**[blocker]** `app/x.go:12` — nil deref on the error path\n" +
+		"- **What:** `load()` returns a nil client.\n" +
+		"- **Fix:** check the error before use.\n"
+
+	s := reactSess("FE-1", "review_pending", openPR(7, "MERGEABLE", "", "pass"))
+	s.AtPrompt, s.AtPromptVerified = true, true
+	d.sessions.Upsert(s)
+
+	d.routeFindings(context.Background(), s, claude, findings)
+
+	calls := fp.callsCopy()
+	if len(calls) != 1 {
+		t.Fatalf("github sink must post once, got %d", len(calls))
+	}
+	body := calls[0].body
+	for _, want := range []string{
+		"> [!CAUTION]\n> **Claude review** — 🛑 1 blocker", // alert tally, per-kind label
+		"<details>", "</details>",
+		// The location links to the session's own repo + branch.
+		`<a href="https://github.com/acme/widgets/blob/lola/fe-1/app/x.go#L12"><code>app/x.go:12</code></a>`,
+		"- **Fix:** check the error before use.", // substance preserved
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("github body missing %q:\n%s", want, body)
+		}
+	}
+
+	// The worker hand-off is untouched by the renderer: raw findings, no HTML.
+	sends := seams.sendCalls()
+	if len(sends) != 1 {
+		t.Fatalf("want one worker hand-off, got %d", len(sends))
+	}
+	if strings.Contains(sends[0].text, "<details>") || !strings.Contains(sends[0].text, "**[blocker]**") {
+		t.Errorf("worker hand-off must keep the RAW findings, got %q", sends[0].text)
+	}
+	// So is the notification head.
+	notes := seams.notesByPriority(notify.Action)
+	if len(notes) != 1 || strings.Contains(notes[0].Body, "<details>") {
+		t.Errorf("notify sink must keep the raw findings, got %+v", notes)
+	}
+}
+
 // A CLEAN review never posts an (empty) github comment.
 func TestReviewGithubSinkSkippedWhenClean(t *testing.T) {
 	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})

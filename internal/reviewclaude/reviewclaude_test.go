@@ -139,6 +139,26 @@ func TestBuildArgs(t *testing.T) {
 	}
 }
 
+// The FORMAT block is a contract with internal/reviewmd, which parses this
+// shape to render the PR comment. Renaming a field or widening the grade
+// vocabulary here without changing the renderer silently degrades every posted
+// review to the pass-through path.
+func TestReviewInstructionPinsTheGradedShape(t *testing.T) {
+	for _, want := range []string{
+		"**Grade:**", "**Gist:**", "**Fix:**", "**Detail:**",
+		"impact=high|medium|low",
+		"confidence=verified|likely",
+		"effort=small|medium|large",
+	} {
+		if !strings.Contains(reviewInstruction, want) {
+			t.Errorf("review instruction no longer specifies %q", want)
+		}
+	}
+	if !strings.Contains(reviewInstruction, "output nothing at all") {
+		t.Error("the empty-on-clean contract must stay in the instruction")
+	}
+}
+
 func TestReviewTrimsOutput(t *testing.T) {
 	stubGitDiff(t, "diff", nil)
 	stubClaude(t, "  \n finding one\nfinding two \n\n", nil)

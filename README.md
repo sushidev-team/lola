@@ -615,6 +615,22 @@ over three friendly tokens:
   body is **neutralized** (a zero-width space is inserted after the `@`) so
   lola's own comment can never be parsed by the CodeRabbit app as a command and
   trigger a **new** CodeRabbit review — posting is always safe.
+  The comment is the one sink that is **reformatted for humans**. GitHub
+  sanitizes CSS out of comment bodies, so the rendering spends what survives: a
+  **GitHub alert callout** carrying the title and severity tally (`> [!CAUTION]`
+  for a blocker, `[!WARNING]` for a major, `[!NOTE]` otherwise — the only real
+  colour a comment can show), then one **collapsed `<details>` per finding**,
+  each summary line carrying a severity emoji, the severity in bold and the
+  **file location linked** to that line on the session's branch. Opening a
+  finding shows a quoted block — one sentence on what breaks, one on the fix,
+  then three grade chips (`impact: high`, `confidence: verified`,
+  `effort: small`) drawn as `<kbd>` keys; everything else is folded behind a
+  nested `Detail` disclosure outside the quote. A ten-finding review
+  therefore reads as ten lines, and a triage decision costs two sentences.
+  Nothing is dropped — the worker agent, notify and Linear still receive every
+  field raw. Findings a provider emits in some other shape are posted verbatim
+  (unparsed ones under a plain heading), and a missing repo/branch simply drops
+  the links.
 - **`linear`** — mirror findings onto the session's Linear issue as a comment.
 
 Only the **worker hand-off** sanitizes and idle-gates its text; **notify /

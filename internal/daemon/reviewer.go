@@ -41,6 +41,7 @@ import (
 	"github.com/sushidev-team/lola/internal/notify"
 	"github.com/sushidev-team/lola/internal/review"
 	"github.com/sushidev-team/lola/internal/reviewclaude"
+	"github.com/sushidev-team/lola/internal/reviewmd"
 	"github.com/sushidev-team/lola/internal/session"
 	"github.com/sushidev-team/lola/internal/state"
 )
@@ -908,6 +909,13 @@ func (d *Daemon) commentOnLinear(ctx context.Context, s session.Session, p revie
 //
 // The body is the full UNTRUSTED findings — NOT sanitized (a PR comment is a
 // human sink, never re-fed to the agent as control) — bounded inside PostPRComment.
+// It is the ONLY sink that reshapes the text: reviewmd.Render turns the provider's
+// plain findings into scannable GitHub Markdown (an alert-callout tally plus one
+// collapsed <details> per finding, locations linked to the session's branch)
+// because this is the copy a human reads on the PR. The rendering is
+// presentation-only and fails open (unparseable findings are posted verbatim under
+// a plain heading, a missing repo/branch just drops the links); the agent, notify
+// and Linear sinks keep the raw text byte for byte.
 // It IS run through neutralizeBotTriggers first so a `@coderabbitai` mention that
 // happens to appear in the findings can never kick off a fresh CodeRabbit review
 // on the PR (the "check the PR but never trigger a new CodeRabbit there" guarantee
@@ -925,7 +933,12 @@ func (d *Daemon) postGithubSink(ctx context.Context, s session.Session, p review
 	}
 	cctx, cancel := context.WithTimeout(ctx, reactExecTimeout)
 	defer cancel()
-	err := post(cctx, s.Repo, s.PR.Number, neutralizeBotTriggers(findings))
+	body := neutralizeBotTriggers(reviewmd.Render(reviewmd.Options{
+		Title: labelsFor(p.Kind).notifyTitle,
+		Repo:  s.Repo,
+		Ref:   s.Branch, // empty ⇒ locations render as plain code, never a wrong link
+	}, findings))
+	err := post(cctx, s.Repo, s.PR.Number, body)
 	if err == nil {
 		d.stampGithubSettled(s.ID, p.Kind, s.PR.Number)
 		d.logf("", "review: %s (%s) posted findings to PR #%d as a github comment", s.ID, p.Kind, s.PR.Number)
