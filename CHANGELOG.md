@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.2.5](https://github.com/sushidev-team/lola/compare/v0.2.4...v0.2.5) (2026-08-12)
+
+
+### Features
+
+* **desktop:** make URLs in a terminal clickable ([21de937](https://github.com/sushidev-team/lola/commit/21de937082a5f9147aa83ef9c7d59e15b1694d8f))
+* **review:** render the github review comment for humans ([ec41d99](https://github.com/sushidev-team/lola/commit/ec41d99f3baeaabdfe0853b24c8334791e0efa53))
+* **runtime:** complete teardown on a merged PR ([f10d596](https://github.com/sushidev-team/lola/commit/f10d5963a0d31c9806f5ff22884720ad69660e04))
+* **runtime:** per-session values in [[project]].env, and shells that export them ([289ade0](https://github.com/sushidev-team/lola/commit/289ade064decf7961e4f1014892cab24cc2ca258))
+
 ## [0.2.4](https://github.com/sushidev-team/lola/compare/v0.2.3...v0.2.4) (2026-08-07)
 
 
