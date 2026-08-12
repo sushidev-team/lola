@@ -977,15 +977,25 @@ func (n *Native) Adopt(ctx context.Context) ([]session.Session, error) {
 	return out, nil
 }
 
-// Kill terminates the session. Ordering is deliberate: the tmux session is
+// Kill terminates the session. Ordering is deliberate: the tmux sessions are
 // killed FIRST (a session that is already gone is not an error), so the agent
 // is always stopped even if the subsequent worktree removal refuses — a dirty
 // worktree then survives with its agent already down. Only when removeWorktree
 // is set does worktree removal follow, with the given force: force=false
 // refuses a dirty worktree with worktree.ErrDirty (which propagates for the
 // caller to surface as "worktree dirty, kept at <dir>"), force=true removes it
-// regardless; a missing worktree directory is a no-op either way. Callers
-// invoke Kill for merged or explicitly killed sessions.
+// regardless. Callers invoke Kill for merged or explicitly killed sessions.
+//
+// "The tmux sessions" is plural on purpose: a session's embedded shell tabs
+// (`<id>-shell-N`) and its visible review pane (`<id>-review`) are SEPARATE
+// tmux sessions on lola's server, so killing only the agent left them running
+// against a worktree that was about to be deleted — a merged session's tabs
+// lingered until the next daemon restart dropped them.
+//
+// A missing worktree directory no longer ends the teardown early: the branch
+// deletion still runs, because a session whose checkout is already gone (the
+// operator removed it, or an earlier cleanup got half-way) otherwise left its
+// local branch behind forever.
 func (n *Native) Kill(ctx context.Context, s session.Session, removeWorktree, force bool) error {
 	name := s.TmuxName
 	if name == "" {
@@ -996,6 +1006,10 @@ func (n *Native) Kill(ctx context.Context, s session.Session, removeWorktree, fo
 			return fmt.Errorf("runtime: kill %s: %w", s.ID, err)
 		}
 	}
+	n.killAuxSessions(ctx, s.ID)
+	if name != s.ID {
+		n.killAuxSessions(ctx, name)
+	}
 	if !removeWorktree {
 		return nil
 	}
@@ -1003,23 +1017,73 @@ func (n *Native) Kill(ctx context.Context, s session.Session, removeWorktree, fo
 	if p == nil {
 		return fmt.Errorf("runtime: kill %s: unknown project %q, cannot remove worktree", s.ID, s.Project)
 	}
-	dir := filepath.Join(n.WT.Root, p.Name, s.ID)
-	if _, err := os.Stat(dir); errors.Is(err, fs.ErrNotExist) {
-		return nil // already gone
-	}
 	// Only lola-owned branches are deleted on teardown (see Session.OwnsBranch): a
 	// linear dispatch's branch and a manual new-branch worktree's branch. A pr
 	// session (`lola open` / the PR picker) is a DETACHED checkout whose recorded
-	// Branch is the UPSTREAM branch/PR label — pass "" so Remove never deletes it
-	// (deleteBranch no-ops on "").
+	// Branch is the UPSTREAM branch/PR label — pass "" so nothing deletes it
+	// (both Remove and DeleteBranch no-op on "").
 	branch := s.Branch
 	if !s.OwnsBranch() {
 		branch = ""
+	}
+	dir := filepath.Join(n.WT.Root, p.Name, s.ID)
+	if _, err := os.Stat(dir); errors.Is(err, fs.ErrNotExist) {
+		// Directory already gone: there is no checkout left to dirty-check or to
+		// hand to `git worktree remove`, but the branch it was checked out on may
+		// still exist. Prune the stale worktree registration and delete the branch
+		// so teardown is complete either way.
+		if err := n.WT.DeleteBranch(ctx, *p, branch); err != nil {
+			return fmt.Errorf("runtime: kill %s: %w", s.ID, err)
+		}
+		if branch != "" && n.Logf != nil {
+			n.Logf("session %s: worktree already gone; deleted local branch %s", s.ID, branch)
+		}
+		return nil
 	}
 	if err := n.WT.Remove(ctx, *p, dir, branch, force); err != nil {
 		return fmt.Errorf("runtime: kill %s: %w", s.ID, err)
 	}
 	return nil
+}
+
+// killAuxSessions kills every auxiliary tmux session belonging to parent — its
+// `-shell-N` tabs and its `-review` pane. It is BEST-EFFORT by design: these are
+// display surfaces, so a tmux hiccup here must never fail a teardown that has
+// already stopped the agent (the caller would otherwise retry the whole cleanup
+// forever over a stuck shell tab). A missing tmux, or no aux sessions at all,
+// is silently nothing to do.
+func (n *Native) killAuxSessions(ctx context.Context, parent string) {
+	if parent == "" {
+		return
+	}
+	sessions, err := n.Tmux.ListSessions(ctx)
+	if err != nil {
+		if n.Logf != nil {
+			n.Logf("session %s: could not list tmux sessions to drop its shell/review tabs: %v", parent, err)
+		}
+		return
+	}
+	for _, sess := range sessions {
+		if !isAuxOf(parent, sess.Name) {
+			continue
+		}
+		if err := n.Tmux.KillSession(ctx, sess.Name); err != nil && n.Logf != nil {
+			n.Logf("session %s: could not kill auxiliary tmux session %s: %v", parent, sess.Name, err)
+		}
+	}
+}
+
+// auxSuffixRe matches what a session name may carry BEYOND its parent's name to
+// still be that parent's auxiliary session. It is anchored at both ends
+// deliberately: "lola-fe-42" is a prefix of "lola-fe-420-shell-1", whose
+// remainder ("0-shell-1") ends in a shell-tab suffix and would otherwise make
+// one session's teardown kill an unrelated live session's tab.
+var auxSuffixRe = regexp.MustCompile(`^(?:-shell-\d+|-review)$`)
+
+// isAuxOf reports whether name is an auxiliary session of parent.
+func isAuxOf(parent, name string) bool {
+	rest, ok := strings.CutPrefix(name, parent)
+	return ok && auxSuffixRe.MatchString(rest)
 }
 
 // Alive reports whether the session's tmux session still exists.

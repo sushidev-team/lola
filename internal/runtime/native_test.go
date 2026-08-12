@@ -859,7 +859,13 @@ func TestKillRemovesCleanWorktreeAndBranch(t *testing.T) {
 	if err := f.n.Kill(context.Background(), killFixtureSession(), true, false); err != nil {
 		t.Fatalf("Kill: %v", err)
 	}
-	wantTmux := "-L lola has-session -t =lola-nori-eng-42\n-L lola kill-session -t =lola-nori-eng-42"
+	// The agent session is killed, then the server is listed once to find this
+	// session's shell/review tabs (the fake reports none here).
+	wantTmux := strings.Join([]string{
+		"-L lola has-session -t =lola-nori-eng-42",
+		"-L lola kill-session -t =lola-nori-eng-42",
+		"-L lola ls -F #{session_name}\t#{session_created}\t#{session_attached}\t#{session_activity}",
+	}, "\n")
 	if got := loggedArgs(t, f.tmuxLog); got != wantTmux {
 		t.Errorf("tmux calls:\n%s\nwant:\n%s", got, wantTmux)
 	}
@@ -870,6 +876,65 @@ func TestKillRemovesCleanWorktreeAndBranch(t *testing.T) {
 	}, "\n")
 	if got := loggedArgs(t, f.gitLog); got != wantGit {
 		t.Errorf("git calls:\n%s\nwant force=false removal:\n%s", got, wantGit)
+	}
+}
+
+// Shell tabs and the review pane are SEPARATE tmux sessions, so a teardown that
+// killed only the agent left them running against a worktree it then deleted.
+// Kill takes them down with it — and touches nothing belonging to another
+// session, including one whose name is a prefix of this one's.
+func TestKillDropsShellTabsAndReviewPane(t *testing.T) {
+	f := newFixture(t, "", `*"ls -F"*)
+  printf 'lola-nori-eng-42\t1\t0\t1\n'
+  printf 'lola-nori-eng-42-shell-1\t1\t0\t1\n'
+  printf 'lola-nori-eng-42-shell-2\t1\t0\t1\n'
+  printf 'lola-nori-eng-42-review\t1\t0\t1\n'
+  printf 'lola-nori-eng-420\t1\t0\t1\n'
+  printf 'lola-nori-eng-420-shell-1\t1\t0\t1\n'
+  exit 0
+  ;;`)
+	dir := filepath.Join(f.root, "nori", "lola-nori-eng-42")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := f.n.Kill(context.Background(), killFixtureSession(), true, false); err != nil {
+		t.Fatalf("Kill: %v", err)
+	}
+	calls := loggedArgs(t, f.tmuxLog)
+	for _, want := range []string{
+		"kill-session -t =lola-nori-eng-42\n",
+		"kill-session -t =lola-nori-eng-42-shell-1",
+		"kill-session -t =lola-nori-eng-42-shell-2",
+		"kill-session -t =lola-nori-eng-42-review",
+	} {
+		if !strings.Contains(calls+"\n", want) {
+			t.Errorf("missing %q in tmux calls:\n%s", want, calls)
+		}
+	}
+	for _, never := range []string{"=lola-nori-eng-420\n", "=lola-nori-eng-420-shell-1"} {
+		if strings.Contains(calls+"\n", "kill-session -t "+never) {
+			t.Errorf("killed a sibling session (%s):\n%s", never, calls)
+		}
+	}
+}
+
+// A tmux that cannot answer must not fail a teardown whose agent is already
+// down — the caller would retry the whole cleanup forever over a shell tab.
+func TestKillSurvivesAuxListFailure(t *testing.T) {
+	f := newFixture(t, "", `*"ls -F"*)
+  echo "no server running" >&2
+  exit 1
+  ;;`)
+	dir := filepath.Join(f.root, "nori", "lola-nori-eng-42")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.n.Kill(context.Background(), killFixtureSession(), true, false); err != nil {
+		t.Fatalf("Kill must not fail when the aux scan does: %v", err)
+	}
+	if !strings.Contains(loggedArgs(t, f.gitLog), "worktree remove") {
+		t.Error("worktree removal must still run after a failed aux scan")
 	}
 }
 
@@ -967,14 +1032,38 @@ func TestKillAbsentTmuxSessionIsNotAnError(t *testing.T) {
 	}
 }
 
-func TestKillMissingWorktreeDirIsNoop(t *testing.T) {
+// A checkout that is already gone still owns a local branch, and leaving it
+// behind was how merged sessions accumulated stale branches. Kill prunes git's
+// stale worktree registration (without it the delete is refused as "checked out
+// in a worktree") and deletes the branch.
+func TestKillMissingWorktreeDirStillDeletesBranch(t *testing.T) {
 	f := newFixture(t, "", `*"has-session"*) exit 1 ;;`)
-	// removeWorktree=true, but the dir never existed: nothing to remove.
 	if err := f.n.Kill(context.Background(), killFixtureSession(), true, false); err != nil {
 		t.Fatalf("Kill with missing worktree dir: %v", err)
 	}
+	wantGit := strings.Join([]string{
+		"-C " + f.repo + " worktree prune",
+		"-C " + f.repo + " branch -D lola/eng-42",
+	}, "\n")
+	if got := loggedArgs(t, f.gitLog); got != wantGit {
+		t.Errorf("git calls:\n%s\nwant:\n%s", got, wantGit)
+	}
+	if strings.Contains(loggedArgs(t, f.gitLog), "worktree remove") {
+		t.Error("nothing to remove: `git worktree remove` must not run for a missing dir")
+	}
+}
+
+// A pr-kind session's Branch is the UPSTREAM branch — the missing-dir path must
+// not delete it either.
+func TestKillMissingWorktreeDirKeepsUnownedBranch(t *testing.T) {
+	f := newFixture(t, "", `*"has-session"*) exit 1 ;;`)
+	s := killFixtureSession()
+	s.Kind = session.KindPR
+	if err := f.n.Kill(context.Background(), s, true, false); err != nil {
+		t.Fatalf("Kill with missing worktree dir: %v", err)
+	}
 	if got := loggedArgs(t, f.gitLog); got != "" {
-		t.Errorf("git must not run for a missing worktree dir; got:\n%s", got)
+		t.Errorf("an unowned branch must never be deleted; git calls:\n%s", got)
 	}
 }
 

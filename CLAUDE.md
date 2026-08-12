@@ -81,7 +81,9 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   `worktree` + `tmux` + `hook`; talks to git/tmux/claude only through them.
 - `internal/worktree` — per-session git worktrees under
   `~/.lola/worktrees/<project>/<session>/`. `Remove` refuses a dirty worktree
-  (`ErrDirty`) unless forced, and guards the project's main checkout.
+  (`ErrDirty`) unless forced, and guards the project's main checkout;
+  `DeleteBranch` is the branch-only half for a checkout that is already gone
+  (it prunes stale worktree registrations first, or git refuses the delete).
 - `internal/tmux` — thin tmux CLI adapter on lola's **own** server
   (`tmux -L lola`), isolated from the user's default tmux. Session targets use
   the `=` exact-match prefix.
@@ -273,6 +275,25 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   it `ActivityWaiting`. It never short-circuits on `AtPromptVerified` — a hook
   verdict from before the pane went quiet is not evidence about now — and any
   capture failure or non-waiting classification defers.
+- **Teardown is THREE things, and each has its own fail-closed rule.**
+  `runtime.Kill` (the merged-cleanup path and `lola kill`) takes down: (1) the
+  agent's tmux session AND its auxiliary sessions — `<id>-shell-N` tabs and the
+  `<id>-review` pane are SEPARATE tmux sessions, so killing only the agent left
+  them running against a worktree about to be deleted; (2) the worktree, dirty-
+  safe (`ErrDirty` unless forced); (3) the local branch, but only when
+  `Session.OwnsBranch()` (a `pr` session's Branch is UPSTREAM — deleting it
+  destroys someone else's ref). Rules that hold it together:
+  - The aux sweep is BEST-EFFORT: a tmux that cannot answer logs and continues,
+    because these are display surfaces and the caller retries the whole cleanup
+    on error — a stuck shell tab must never block a worktree removal forever.
+  - Matching is `parent + ^(-shell-\d+|-review)$`, anchored at BOTH ends:
+    `lola-fe-42` is a prefix of `lola-fe-420-shell-1`, and a loose suffix test
+    made one session's teardown kill a live sibling's tab.
+  - A missing worktree directory no longer ends teardown early — it deletes the
+    branch anyway (`worktree.DeleteBranch`), because a session whose checkout
+    was already gone otherwise left its branch behind forever.
+  - A DIRTY worktree keeps both the checkout and its branch. That is the whole
+    gate: uncommitted work is the one thing teardown never discards.
 - **A review PASS runs in its own tmux session, and the pane is a DISPLAY.** With
   `visible = true` (the per-provider default) a pass runs as the hidden
   `lola review-run` inside `<sessionID>-review` on lola's tmux server, beside the

@@ -165,8 +165,12 @@ func (d *Daemon) reactClosed(ctx context.Context, s session.Session, notifier no
 }
 
 // reactMerged closes the loop for a merged PR by REUSING the kill/cleanup path:
-// terminate the tmux agent, remove the worktree (dirty-safe, never force), drop
-// the store entry, and free the issue's in-flight claim — then notify Info. A
+// terminate the tmux agent AND its shell/review tabs, remove the worktree
+// (dirty-safe, never force) together with the local branch it was checked out
+// on, drop the store entry, and free the issue's in-flight claim — then notify
+// Info. Branch deletion is runtime.Kill's, so it holds the same two rules there:
+// only a lola-OWNED branch is deleted (a pr session's is upstream), and a dirty
+// worktree keeps both the checkout and its branch. A
 // worktree with uncommitted changes is KEPT (not force-removed) and the operator
 // is notified, but the store entry is dropped either way: a clean and a dirty
 // merge both leave the sessions view, differing only in whether the checkout
@@ -224,13 +228,17 @@ func (d *Daemon) reactMerged(ctx context.Context, s session.Session, notifier no
 	}
 
 	d.dropSession(s) // drops the store entry, frees the in-flight claim, persists
+	removed := "worktree removed"
+	if s.OwnsBranch() && s.Branch != "" {
+		removed = fmt.Sprintf("worktree and branch %s removed", s.Branch)
+	}
 	notifier.Notify(cctx, notify.Note{
 		Title:    "PR merged — cleaned up",
-		Body:     fmt.Sprintf("%s merged; worktree removed and the slot freed", issueLabel(s)),
+		Body:     fmt.Sprintf("%s merged; %s and the slot freed", issueLabel(s), removed),
 		Priority: notify.Info,
 		URL:      prURL(s),
 	})
-	d.logf("", "react: %s merged; worktree removed, slot freed", s.ID)
+	d.logf("", "react: %s merged; %s, tabs closed, slot freed", s.ID, removed)
 }
 
 // reactCIFailed handles a red PR (PLAN P3.16): while inside the retry budget it

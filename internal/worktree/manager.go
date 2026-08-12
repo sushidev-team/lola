@@ -398,6 +398,27 @@ func (m *Manager) removeUnregistered(ctx context.Context, p config.Project, dir,
 	return m.deleteBranch(ctx, p, branch)
 }
 
+// DeleteBranch removes a session's local branch WITHOUT removing a worktree —
+// the teardown path for a session whose checkout is already gone, where there
+// is nothing left for `git worktree remove` to do but the branch still exists.
+// It first prunes git's stale worktree registrations, because a directory that
+// vanished from disk leaves an administrative entry behind and git then refuses
+// to delete "a branch checked out in a worktree". "" is a no-op, so callers can
+// pass a non-owned branch unconditionally.
+//
+// Like the worktree-removing path it force-deletes (`branch -D`): a squash- or
+// rebase-merged PR leaves a local branch git does not consider merged, and the
+// non-force `-d` would refuse exactly the case this exists for.
+func (m *Manager) DeleteBranch(ctx context.Context, p config.Project, branch string) error {
+	if branch == "" {
+		return nil
+	}
+	// Best-effort: a prune failure only means the -D below may refuse, which the
+	// caller surfaces as a normal error.
+	_, _, _ = m.git(ctx, "-C", p.Path, "worktree", "prune")
+	return m.deleteBranch(ctx, p, branch)
+}
+
 // deleteBranch removes the session's local branch; "" and an already-missing
 // branch are both no-ops.
 func (m *Manager) deleteBranch(ctx context.Context, p config.Project, branch string) error {

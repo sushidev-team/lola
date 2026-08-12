@@ -162,6 +162,36 @@ func TestReactMergedCleansUpAndNotifies(t *testing.T) {
 	if len(seams.sendCalls()) != 0 {
 		t.Error("merged cleanup must never send-keys")
 	}
+	// The Info note names the branch that went with the worktree, so a merged
+	// cleanup reads as complete rather than as "something was removed".
+	if body := seams.notesByPriority(notify.Info)[0].Body; !strings.Contains(body, s.Branch) {
+		t.Errorf("merged notification should name the deleted branch %q, got %q", s.Branch, body)
+	}
+}
+
+// A pr-kind session's branch is upstream, so the cleanup must not claim to have
+// deleted it (runtime.Kill does not, via Session.OwnsBranch).
+func TestReactMergedPRKindDoesNotClaimBranchDeletion(t *testing.T) {
+	nat := &fakeNative{}
+	d := newTestDaemon(t, reactTestConfig(nativePoll("p1")), &linear.Fake{}, nat)
+	seams := &fakeReactSeams{}
+	seams.install(d)
+
+	pr := openPR(7, "MERGEABLE", "APPROVED", "pass")
+	pr.State = "MERGED"
+	s := reactSess("FE-1", "merged", pr)
+	s.Kind = session.KindPR
+	d.sessions.Upsert(s)
+
+	d.react(context.Background(), s)
+
+	info := seams.notesByPriority(notify.Info)
+	if len(info) != 1 {
+		t.Fatalf("want one Info notification, got %d", len(info))
+	}
+	if strings.Contains(info[0].Body, "branch") {
+		t.Errorf("must not mention branch deletion for a pr session, got %q", info[0].Body)
+	}
 }
 
 // A merged PR whose worktree is dirty keeps the checkout on disk (Kill refuses
