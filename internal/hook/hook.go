@@ -100,6 +100,28 @@ type settingsFile struct {
 		PostToolUse      []matcherEntry `json:"PostToolUse"`
 		UserPromptSubmit []matcherEntry `json:"UserPromptSubmit"`
 	} `json:"hooks"`
+	SkillOverrides map[string]string `json:"skillOverrides,omitempty"`
+}
+
+// modalSkills are the Claude Code skills that interrupt a session with a MODAL
+// dialog nobody is sitting in front of. SettingsJSON turns each off ("off" is
+// claude-code's own skillOverrides vocabulary, alongside "on", "name-only" and
+// "user-invocable-only"), because a lola worker runs unattended: an overlay
+// waiting on a keypress wedges the session for as long as it is up, holds a
+// concurrency slot, and — the reason this list exists — SWALLOWS anything the
+// daemon types at the pane.
+//
+// `auto-mode-setup` is the "Set up auto mode for your environment?" wizard. It
+// is offered only to sessions already in auto permission mode, which is every
+// lola worker, and it appears AFTER a turn ends — i.e. right where the Stop hook
+// has just opened the send-keys gate. Four review hand-offs were typed into it
+// and lost before the pane check in handoffPromptProof was tightened.
+//
+// The overrides are the PREVENTION half; they are not the safety net. Claude
+// Code adds dialogs faster than this list can track them, so attention.Classify
+// still fails closed on any modal it sees (ActivityBlocked) — keep both.
+var modalSkills = map[string]string{
+	"auto-mode-setup": "off",
 }
 
 // SettingsJSON generates the content of the per-session Claude Code settings
@@ -120,6 +142,11 @@ type settingsFile struct {
 //
 // Each hook has an explicit 10s timeout. Hook commands run with the pane's
 // environment, so the exported LOLA_SESSION is visible to `lola hook`.
+//
+// It also carries the modalSkills overrides, which suppress the interactive
+// dialogs an unattended worker can never answer. `--settings` lands in Claude
+// Code's flagSettings source, which is always merged, so the overrides apply
+// without touching the user's own settings.
 func SettingsJSON(lolaBin string) []byte {
 	bin := shQuote(lolaBin)
 	entry := func(event string, async bool) []matcherEntry {
@@ -142,6 +169,7 @@ func SettingsJSON(lolaBin string) []byte {
 	// Synchronous (not async): AtPrompt must be reliably cleared at turn start,
 	// before the agent produces any output the reaction engine might race.
 	s.Hooks.UserPromptSubmit = entry("user_prompt", false)
+	s.SkillOverrides = modalSkills
 
 	out, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {

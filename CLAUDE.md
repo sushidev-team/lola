@@ -276,14 +276,44 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   delivery per pass — an idle-notify delivery consumes no `AtPrompt`, so
   without that stop several kinds would type into the same prompt back-to-back.
   A delivered hand-off sets `AgentWorking` (as `handleAnswer` does), which is
-  what closes the wider gate against a re-send. The gate admits a THIRD state,
-  and that one needs live evidence: a session the observer's pane reconcile
-  parked on `AgentIdle` (both of its paths close `AtPrompt` and neither opens a
-  notification, so such a session was permanently unreachable) qualifies only
-  once `handoffPromptProof` → `paneWaitingNow` captures the pane and classifies
-  it `ActivityWaiting`. It never short-circuits on `AtPromptVerified` — a hook
-  verdict from before the pane went quiet is not evidence about now — and any
-  capture failure or non-waiting classification defers.
+  what closes the wider gate against a re-send. The gate admits a THIRD state:
+  a session the observer's pane reconcile parked on `AgentIdle` (both of its
+  paths close `AtPrompt` and neither opens a notification, so such a session was
+  permanently unreachable). And whichever of the three admits it, the gate is
+  only a candidate filter — `handoffPromptProof` → `paneWaitingNow` must capture
+  the pane and classify it `ActivityWaiting` before ONE byte is typed. It never
+  short-circuits on `AtPromptVerified`, for ANY of them: a hook verdict is
+  evidence about the moment the hook fired, not about now, and that gap is where
+  this broke. Claude Code ends a turn (Stop hook → `AtPrompt` +
+  `AtPromptVerified`) and THEN covers the pane with a modal setup dialog; the
+  short-circuit answered "verified" from the hook, the findings were typed into
+  the dialog, the gate was consumed and the stash dropped — four PRs' reviews
+  logged as `handed feedback to the worker` and read by nobody. A capture
+  failure or any non-waiting classification (including a modal's
+  `ActivityBlocked`) defers. One bounded tmux exec per delivery is the price.
+- **A MODAL is not a prompt, and `attention` is the one place that knows.**
+  Claude Code interrupts a session with keypress-driven overlays (the auto-mode
+  setup wizard and its siblings). Typed prose is swallowed by the widget and the
+  submit Enter answers the dialog, so a modal is the exact opposite of a resting
+  composer — yet it draws a `❯` on its focused row, which read as a caret. Hence
+  `attention.ActivityBlocked`, returned by `Classify` BEFORE every other cue
+  (an overlay owns the screen; the status line behind it is frozen). Rules:
+  - The cue is the full-width `▔` overlay RULE (`modalOverlayRe`), deliberately
+    NOT the `Esc to cancel` footer — that footer also renders under the
+    AskUserQuestion picker, a genuine answerable question that must keep
+    classifying `ActivityWaiting` so it still surfaces as needs_input.
+  - `agentReconcile` maps Blocked → `AgentWaitingInput` + `InputDialog`,
+    regardless of the delivery axis: unlike a bare resting prompt post-PR this
+    is not routine idling — nothing advances until a human presses a key, and
+    the session holds a concurrency slot meanwhile.
+  - Every send-keys path gets Blocked for free by failing closed on
+    "not `ActivityWaiting`". Don't add a Blocked case that types.
+  - PREVENTION is separate and lives in `hook.SettingsJSON`: `modalSkills`
+    writes `skillOverrides: {"auto-mode-setup": "off"}` into the per-session
+    `--settings` file (claude-code's flagSettings source is always merged, so
+    the user's own settings stay untouched). Keep BOTH halves — Claude Code
+    ships dialogs faster than that list can track them, and the classifier is
+    what catches the ones it doesn't know.
 - **Teardown is THREE things, and each has its own fail-closed rule.**
   `runtime.Kill` (the merged-cleanup path and `lola kill`) takes down: (1) the
   agent's tmux session AND its auxiliary sessions — `<id>-shell-N` tabs, the

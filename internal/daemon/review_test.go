@@ -1383,3 +1383,75 @@ func TestObserveNativeFiresReviewOnPROpen(t *testing.T) {
 		t.Errorf("ReviewedPRs[cli] = %d, want 7 after the observed PR-open review", got.ReviewedPRs["coderabbit-cli"])
 	}
 }
+
+// THE REGRESSION: claude-code ends a turn (Stop hook → AtPrompt + AtPromptVerified)
+// and THEN covers the pane with a modal setup dialog. handoffPromptProof used to
+// short-circuit on the hook's AtPromptVerified without looking at the pane, so the
+// findings were typed into the dialog, the gate was consumed and the stash was
+// dropped — the daemon logged a delivery that reached nobody. A hook verdict is
+// evidence about when it fired, not about now: every hand-off must see the pane.
+func TestReviewNeverTypesIntoAModalDespiteHookVerifiedGate(t *testing.T) {
+	d := newTestDaemon(t, reviewTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})
+	syncProviders(d)
+	seams := &fakeReactSeams{}
+	seams.install(d)
+	fr := &fakeReview{findings: "MODAL-SWALLOWED-FINDING"}
+	fr.install(d)
+	d.paneTail = func(context.Context, string, int) (string, error) { return paneModal, nil }
+
+	s := reactSess("FE-1", "review_pending", openPR(7, "MERGEABLE", "", "pass"))
+	s.AtPrompt = true         // the Stop hook fired…
+	s.AtPromptVerified = true // …and marked its own verdict verified
+	d.sessions.Upsert(s)
+
+	d.runReviewProviders(context.Background(), s)
+
+	if sends := seams.sendCalls(); len(sends) != 0 {
+		t.Fatalf("nothing may be typed into a modal, got %+v", sends)
+	}
+	got, _ := d.sessions.Get(s.ID)
+	if got.PendingHandoffs[string(kindCoderabbitCLI)] != "MODAL-SWALLOWED-FINDING" {
+		t.Fatalf("the findings must be stashed for a later cycle, got %q",
+			got.PendingHandoffs[string(kindCoderabbitCLI)])
+	}
+	if !got.AtPrompt {
+		t.Error("a deferred hand-off must not consume the gate")
+	}
+
+	// Once the dialog is gone and the pane rests, the stash delivers.
+	d.paneTail = func(context.Context, string, int) (string, error) { return paneWaiting, nil }
+	d.flushReviewHandoffs(context.Background(), s.ID)
+	sends := seams.sendCalls()
+	if len(sends) != 1 || !strings.Contains(sends[0].text, "MODAL-SWALLOWED-FINDING") {
+		t.Fatalf("the stash must deliver once the modal is dismissed, got %+v", sends)
+	}
+}
+
+// The same rule on the flush path, and for the idle-notify parked worker: the
+// widened gate admits it, the pane proof still has the last word.
+func TestReviewFlushNeverTypesIntoAModal(t *testing.T) {
+	d := newTestDaemon(t, reviewTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})
+	syncProviders(d)
+	seams := &fakeReactSeams{}
+	seams.install(d)
+	d.paneTail = func(context.Context, string, int) (string, error) { return paneModal, nil }
+
+	s := reactSess("FE-1", "review_pending", openPR(7, "MERGEABLE", "", "pass"))
+	s.PendingHandoffs = map[string]string{string(kindCoderabbitCLI): "STASHED"}
+	d.sessions.Upsert(s)
+	d.sessions.Update(s.ID, func(cur *session.Session) bool {
+		cur.SetAgentState(state.AgentWaitingInput, "", time.Now())
+		cur.InputReason = state.InputIdleNotify
+		cur.AtPromptVerified = true
+		return true
+	})
+
+	d.flushReviewHandoffs(context.Background(), s.ID)
+
+	if sends := seams.sendCalls(); len(sends) != 0 {
+		t.Fatalf("an idle-notify park over a modal must still defer, got %+v", sends)
+	}
+	if got, _ := d.sessions.Get(s.ID); got.PendingHandoffs[string(kindCoderabbitCLI)] != "STASHED" {
+		t.Error("the stash must survive a deferred flush")
+	}
+}

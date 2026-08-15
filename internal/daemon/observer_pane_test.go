@@ -8,6 +8,7 @@ import (
 
 	"github.com/sushidev-team/lola/internal/linear"
 	"github.com/sushidev-team/lola/internal/session"
+	"github.com/sushidev-team/lola/internal/state"
 )
 
 // Canned tmux pane tails the activity classifier reads unambiguously (mirrors
@@ -29,6 +30,19 @@ const (
 		"│ ❯ 1. Yes                                                 │\n" +
 		"│   2. No                                                  │\n" +
 		"╰────────────────────────────────────────────────────────╯\n"
+	// paneModal is claude-code's auto-mode setup overlay: the turn has ended, the
+	// pane is a keypress-driven form, and the "❯" marks the focused ROW rather
+	// than a composer. attention.Classify reads it as ActivityBlocked.
+	paneModal = "  ⏺ Pushed the branch and opened the PR.\n" +
+		"▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔\n" +
+		"   Set up auto mode for your environment?\n" +
+		"\n" +
+		"     How you use Claude here    ◀ Mixed ▶\n" +
+		"   ❯ Also scan shell history    [✔]\n" +
+		"\n" +
+		"     Continue\n" +
+		"\n" +
+		"   ←/→ to change usage · Enter to continue · Esc to cancel\n"
 )
 
 // paneDaemon builds a native-only test daemon with one seeded session, a PR seam
@@ -263,5 +277,52 @@ func TestObservePanePostPRIdleKeepsPRStatus(t *testing.T) {
 	got := getSess(t, d, seed.ID)
 	if got.Status == "needs_input" {
 		t.Fatalf("status = needs_input, want the PR-derived status (a question-less idle box must not escalate post-PR)")
+	}
+}
+
+// A modal overlay is a keypress-driven form, not a composer: the observer parks
+// the session on needs_input with InputDialog and CLOSES the send-keys gate a
+// Stop hook opened moments earlier. Without this the dialog's focused "❯" row
+// read as a resting prompt and every gate stayed wide open over it.
+func TestObservePaneModalParksOnDialogAndClosesGate(t *testing.T) {
+	seed := nativeSess("FE-1", "working")
+	seed.LastActivityAt = time.Now() // a fresh heartbeat must not keep it "working"
+	seed.AtPrompt = true             // the Stop hook that fired just before the dialog
+	d := paneDaemon(t, seed, true, paneModal)
+
+	d.observe(context.Background())
+
+	got := getSess(t, d, seed.ID)
+	if got.Status != "needs_input" {
+		t.Fatalf("status = %q, want needs_input (a modal blocks the agent)", got.Status)
+	}
+	if got.InputReason != state.InputDialog {
+		t.Errorf("InputReason = %q, want %q", got.InputReason, state.InputDialog)
+	}
+	if got.AtPrompt {
+		t.Error("AtPrompt = true; a modal must close the send-keys gate")
+	}
+	if !got.AtPromptVerified {
+		t.Error("AtPromptVerified = false; the live pane is current evidence about the gate")
+	}
+}
+
+// The delivery axis does not soften it: post-PR a bare resting prompt settles to
+// idle (routine post-PR idling), but a modal still escalates — nothing advances
+// until a human presses a key, and the session holds a concurrency slot meanwhile.
+func TestObservePaneModalEscalatesEvenPostPR(t *testing.T) {
+	seed := nativeSess("FE-1", "review_pending")
+	seed.Delivery = state.DeliveryReviewPending
+	seed.LastActivityAt = time.Now()
+	d := paneDaemon(t, seed, true, paneModal)
+
+	d.observe(context.Background())
+
+	got := getSess(t, d, seed.ID)
+	if got.AgentState != state.AgentWaitingInput {
+		t.Fatalf("AgentState = %q, want waiting_input", got.AgentState)
+	}
+	if got.Status != "needs_input" {
+		t.Errorf("status = %q, want needs_input", got.Status)
 	}
 }

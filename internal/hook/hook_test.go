@@ -78,6 +78,9 @@ const settingsGolden = `{
         ]
       }
     ]
+  },
+  "skillOverrides": {
+    "auto-mode-setup": "off"
   }
 }
 `
@@ -131,6 +134,34 @@ func TestSettingsJSONShape(t *testing.T) {
 		h := entries[0].Hooks[0]
 		if h.Type != "command" || h.Command != w.cmd || h.Timeout != 10 || h.Async != w.async {
 			t.Errorf("%s hook = %+v, want command=%q timeout=10 async=%v", event, h, w.cmd, w.async)
+		}
+	}
+}
+
+// The settings file also disables the claude-code skills that put up a MODAL an
+// unattended worker can never answer. `auto-mode-setup` is the one that broke a
+// review hand-off: it appears right after a turn ends, in exactly the sessions
+// lola runs (auto permission mode), and swallowed everything typed at the pane.
+func TestSettingsJSONDisablesModalSkills(t *testing.T) {
+	var parsed struct {
+		SkillOverrides map[string]string `json:"skillOverrides"`
+	}
+	if err := json.Unmarshal(SettingsJSON("/opt/lola"), &parsed); err != nil {
+		t.Fatalf("SettingsJSON is not valid JSON: %v", err)
+	}
+	if got := parsed.SkillOverrides["auto-mode-setup"]; got != "off" {
+		t.Errorf(`skillOverrides["auto-mode-setup"] = %q, want "off"`, got)
+	}
+	if len(parsed.SkillOverrides) != len(modalSkills) {
+		t.Errorf("got %d skill overrides, want %d (%v)", len(parsed.SkillOverrides), len(modalSkills), modalSkills)
+	}
+	// "off" is claude-code's own vocabulary; a value outside it is silently
+	// ignored, which would re-open the dialog without any visible failure.
+	for name, mode := range modalSkills {
+		switch mode {
+		case "on", "name-only", "user-invocable-only", "off":
+		default:
+			t.Errorf("skillOverrides[%q] = %q is not a claude-code override mode", name, mode)
 		}
 	}
 }

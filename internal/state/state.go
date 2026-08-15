@@ -65,6 +65,12 @@ const (
 	// InputIdleNotify is the agent's own "waiting for your input" nudge with
 	// no more specific evidence.
 	InputIdleNotify InputReason = "idle_notification"
+	// InputDialog is a MODAL the agent put up over its own pane (claude-code's
+	// setup/onboarding overlays), detected from the pane as attention.
+	// ActivityBlocked. Like InputPermission it is a keypress-driven form, not a
+	// composer, so it must never be admitted by a send-keys gate — typed prose is
+	// swallowed by the widget and the submit Enter answers the dialog.
+	InputDialog InputReason = "dialog"
 )
 
 // ActivitySource records which signal last stamped LastActivityAt, so a

@@ -52,6 +52,11 @@ func (f *fakeReactSeams) install(d *Daemon) {
 	d.reviewComments = func(_ context.Context, _ string, _ int) (string, error) {
 		return f.review, f.reviewErr
 	}
+	// A resting pane by default: handoffPromptProof now captures the pane for
+	// EVERY hand-off (no AtPromptVerified short-circuit), so a seam set that left
+	// the real tmux capture in place would defer every send. Tests that care about
+	// the pane assign d.paneTail AFTER install and override this.
+	d.paneTail = func(context.Context, string, int) (string, error) { return paneWaiting, nil }
 	d.notifier = f
 }
 

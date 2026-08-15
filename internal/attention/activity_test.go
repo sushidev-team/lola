@@ -352,3 +352,88 @@ func TestClassifyWorkingCuesSurviveANSI(t *testing.T) {
 		}
 	}
 }
+
+// autoModeModalPane is a verbatim tmux capture of the pane that produced the
+// bug: claude-code ended its turn (Stop hook → the send-keys gate opened) and
+// then covered the pane with its auto-mode setup dialog. The "❯" on the focused
+// row is a selection marker, not a composer — read as a resting caret it made
+// the pane look Waiting, and four review hand-offs were typed into it.
+const autoModeModalPane = "  Verified. 8106 PHP tests pass; coverage gate 98.0% (new code 100%).\n" +
+	"  vitest, tsc, pint, prettier clean.\n" +
+	"▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔\n" +
+	"   Set up auto mode for your environment?\n" +
+	"\n" +
+	"   Claude Code reads this project, your recent Claude sessions, and\n" +
+	"   optionally your shell history and other repositories.\n" +
+	"\n" +
+	"     How you use Claude here    ◀ Mixed ▶\n" +
+	"   ❯ Also scan shell history    [✔]\n" +
+	"     Also scan your other repos [ ]\n" +
+	"\n" +
+	"     Continue\n" +
+	"\n" +
+	"   ←/→ to change usage · Enter to continue · Esc to cancel\n"
+
+// A modal overlay classifies Blocked, not Waiting: the turn is over but the
+// screen is a keypress-driven form, so no send-keys path may type into it.
+func TestClassifyModalOverlayIsBlocked(t *testing.T) {
+	if got := Classify(autoModeModalPane, agent.Claude); got != ActivityBlocked {
+		t.Fatalf("Classify(auto-mode modal) = %s, want blocked", got)
+	}
+	// Legacy/unknown kinds resolve to claude and must behave identically.
+	if got := Classify(autoModeModalPane, agent.Parse("")); got != ActivityBlocked {
+		t.Errorf("Classify(auto-mode modal, legacy kind) = %s, want blocked", got)
+	}
+}
+
+// The modal cue must win over a stale working cue left on the screen behind the
+// overlay — the status line under a dialog is frozen, not live.
+func TestClassifyModalBeatsStaleWorkingCue(t *testing.T) {
+	in := "✳ Deciphering… (2m 6s · ↓ 4.5k tokens · esc to interrupt)\n" + autoModeModalPane
+	if got := Classify(in, agent.Claude); got != ActivityBlocked {
+		t.Errorf("Classify(modal over a stale status line) = %s, want blocked", got)
+	}
+}
+
+// The AskUserQuestion picker carries the SAME "Esc to cancel" footer as a modal
+// but is a genuine answerable question that must stay Waiting, so it keeps
+// surfacing as needs_input. This is why the overlay RULE — not the footer — is
+// the cue; matching the footer would demote every such question to Blocked.
+func TestClassifyAskUserQuestionStaysWaiting(t *testing.T) {
+	in := "────────────────────────────────────────────────────────────\n" +
+		"Rasterization lives where?\n" +
+		"\n" +
+		"❯ 1. nori-pdf-editor POST /rasterize (Recommended)\n" +
+		"  2. App-side (Imagick/Ghostscript)\n" +
+		"  3. Type something.\n" +
+		"────────────────────────────────────────────────────────────\n" +
+		"\n" +
+		"Enter to select · Tab/Arrow keys to navigate · Esc to cancel\n"
+	if got := Classify(in, agent.Claude); got != ActivityWaiting {
+		t.Errorf("Classify(AskUserQuestion picker) = %s, want waiting", got)
+	}
+}
+
+// The rule is claude-code chrome; codex and opencode never draw it, so the cue
+// stays gated to the claude branch (extending it could only add false positives).
+func TestClassifyModalCueGatedToClaude(t *testing.T) {
+	for _, k := range []agent.Kind{agent.Codex, agent.OpenCode} {
+		if got := Classify(autoModeModalPane, k); got == ActivityBlocked {
+			t.Errorf("Classify(modal, %v) = blocked; the overlay cue is claude-only", k)
+		}
+	}
+}
+
+// A short run of the glyph (a divider an agent printed, a table rule) is not an
+// overlay: the cue needs a full-width run alone on its line.
+func TestClassifyShortRuleIsNotAModal(t *testing.T) {
+	notModal := []string{
+		"▔▔▔▔▔ section ▔▔▔▔▔\n> \n",
+		"prefix ▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔ suffix\n> \n",
+	}
+	for _, in := range notModal {
+		if got := Classify(in, agent.Claude); got == ActivityBlocked {
+			t.Errorf("Classify(%q) = blocked, but there is no overlay rule", in)
+		}
+	}
+}

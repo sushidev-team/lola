@@ -702,25 +702,32 @@ func handoffDeliverable(s session.Session) bool {
 		s.AgentState == state.AgentIdle
 }
 
-// handoffPromptProof is the evidence step behind handoffDeliverable. A session
-// that qualifies through a HOOK (AtPrompt, or parked on an idle notification)
-// carries its own proof and only needs the adoption re-verification
-// (ensurePromptVerified). A session that qualifies only through the pane-derived
-// AgentIdle case has no such evidence — AtPromptVerified may still be true from
-// a hook that fired before the pane went quiet — so it must show a live pane
-// classified "waiting" right now, or the hand-off defers.
+// handoffPromptProof is the evidence step behind handoffDeliverable: EVERY
+// qualifying session must show a live pane classified "waiting" before anything
+// is typed, whatever opened its gate.
+//
+// It deliberately does NOT take the ensurePromptVerified short-circuit the
+// reaction engine uses. A hook verdict is evidence about the moment the hook
+// fired, not about now, and the gap between the two is exactly where this went
+// wrong: claude-code ends a turn (Stop hook → AtPrompt + AtPromptVerified) and
+// THEN puts up a modal setup dialog. The short-circuit answered "verified" from
+// the hook without ever looking at the pane, so the findings were typed into the
+// dialog, the gate was consumed, the stash was dropped — and the log said
+// "handed feedback to the worker" while four PRs' reviews reached nobody.
+// A pane capture costs one bounded tmux exec per delivery; a lost review costs
+// the whole review.
+//
+// Fail closed: an unreadable pane, a modal (ActivityBlocked), or any other
+// non-waiting classification defers the hand-off to a later cycle.
 func (d *Daemon) handoffPromptProof(ctx context.Context, s session.Session) bool {
-	if s.AtPrompt || (s.AgentState == state.AgentWaitingInput && s.InputReason == state.InputIdleNotify) {
-		return d.ensurePromptVerified(ctx, s)
-	}
 	return d.paneWaitingNow(ctx, s)
 }
 
 // paneWaitingNow captures the pane and reports whether the agent is sitting at
 // its prompt AT THIS MOMENT. Unlike ensurePromptVerified it never short-circuits
-// on a cached AtPromptVerified — it is the proof for a session whose idle state
-// was inferred, so an unreadable pane or any non-waiting classification is a
-// "no" (fail closed: defer, never type).
+// on a cached AtPromptVerified — it is the ONLY evidence handoffPromptProof
+// accepts, so an unreadable pane or any non-waiting classification (Working, a
+// modal's ActivityBlocked, Unknown) is a "no": fail closed, defer, never type.
 func (d *Daemon) paneWaitingNow(ctx context.Context, s session.Session) bool {
 	if d.paneTail == nil {
 		return false

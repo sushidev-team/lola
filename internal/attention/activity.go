@@ -46,6 +46,15 @@ const (
 	// yielded the turn and is waiting for a human, whether or not a question is
 	// visible above the prompt.
 	ActivityWaiting
+	// ActivityBlocked means the pane is owned by a MODAL dialog the agent itself
+	// put up (Claude Code's setup/onboarding overlays): the turn has ended, but
+	// the screen is NOT a text composer — it is a keypress-driven form. It is a
+	// distinct outcome from Waiting precisely because those two demand opposite
+	// handling: a waiting pane accepts typed prose, a modal SWALLOWS it (the
+	// keystrokes drive the widget and the submit Enter answers the dialog), so
+	// every send-keys path must treat Blocked as "never type here" and every
+	// status surface must show it as needing a human.
+	ActivityBlocked
 )
 
 // String renders the activity for logs and test failures.
@@ -55,6 +64,8 @@ func (a Activity) String() string {
 		return "working"
 	case ActivityWaiting:
 		return "waiting"
+	case ActivityBlocked:
+		return "blocked"
 	default:
 		return "unknown"
 	}
@@ -178,6 +189,32 @@ var (
 	// leading anchor keeps a "▣" embedded mid-line in ordinary output from tripping
 	// it.
 	openCodeMetaRe = regexp.MustCompile(`(?m)^\s*▣`)
+
+	// -----------------------------------------------------------------------
+	// BLOCKED cue. Checked BEFORE everything else, because a modal owns the
+	// whole screen: nothing rendered behind it is live, and the caret it draws
+	// on its own focused row is not a composer.
+	// -----------------------------------------------------------------------
+
+	// modalOverlayRe — the full-width rule of U+2594 (UPPER ONE EIGHTH BLOCK)
+	// claude-code draws as the top edge of a modal overlay, immediately above the
+	// dialog body ("Set up auto mode for your environment?" and its siblings).
+	// A run this long of that glyph, alone on its line, does not occur in ordinary
+	// tool output or prose.
+	//
+	// It is deliberately the ONLY cue: the obvious alternative, the dialog's
+	// keycap footer ("… · Esc to cancel"), also renders under the AskUserQuestion
+	// picker — which is a genuine answerable question that must keep classifying
+	// as Waiting so it surfaces as needs_input with a question. Matching the
+	// footer would silently demote every such question to Blocked.
+	//
+	// Fragility: the glyph and the overlay shape are claude-code rendering
+	// details, so a reworded/redrawn dialog would slip past and fall back to the
+	// pre-existing behavior (a modal's focused "❯ <label>" row reads as a resting
+	// caret, i.e. Waiting). That is the failure this cue exists to prevent, so
+	// re-verify it against a live modal pane whenever claude-code changes its
+	// dialog chrome.
+	modalOverlayRe = regexp.MustCompile(`(?m)^\s*\x{2594}{20,}\s*$`)
 )
 
 // claudeCues reports whether kind k uses claude-code's caret and question-parse
@@ -196,12 +233,20 @@ func claudeCues(k agent.Kind) bool {
 // Classify strips ANSI from paneText, restricts itself to the last rendered
 // screen, and returns:
 //
+//   - ActivityBlocked when a modal overlay owns the screen (checked FIRST — see
+//     below);
 //   - ActivityWorking when a positive activity cue is present (spinner, elapsed
 //     timer, streaming token counter, or "esc to interrupt");
 //   - ActivityWaiting when an input prompt is present with NO such cue (the
 //     bordered box, a "❯" caret, a boxed ">" caret, or an answerable question
 //     per Parse);
 //   - ActivityUnknown otherwise.
+//
+// The modal check comes before every other cue because a modal dialog covers the
+// pane: the status line behind it is frozen, and the "❯" the dialog draws on its
+// focused row is a selection marker, not a composer — read as a resting caret it
+// yields exactly the wrong answer (Waiting), which is what let a review hand-off
+// be typed into claude-code's auto-mode setup dialog and vanish.
 //
 // Working is checked first and wins WHEN a live cue is in the status tail: a
 // genuinely working pane still renders its input box below the status line, and
@@ -227,6 +272,13 @@ func Classify(paneText string, k agent.Kind) Activity {
 	screen := lastLines(clean, maxScreenLines)
 	tail := lastLines(clean, statusTailLines)
 
+	// A modal overlay owns the screen: whatever is rendered behind it is stale and
+	// its focused row's caret is a selection marker, not a composer. Claude-only —
+	// codex and opencode draw no such overlay, so extending it there could only
+	// add false positives.
+	if claudeCues(k) && modalOverlayRe.MatchString(screen) {
+		return ActivityBlocked
+	}
 	// "esc to interrupt" is the ONE unambiguous LIVE cue and is SHARED by every
 	// agent (claude, codex and opencode all print it while a turn streams). It
 	// always wins.

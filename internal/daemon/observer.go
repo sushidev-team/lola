@@ -449,6 +449,14 @@ func (d *Daemon) observeManualShell(s session.Session, alive bool) bool {
 //
 //   - Exited / shell / orphaned sessions are not pane-owned: the pane of an
 //     exited agent is a plain shell and must not resurrect any state.
+//   - ActivityBlocked is a MODAL the agent put up over its own pane. The turn
+//     has ended and a human must dismiss it, so the axis becomes waiting_input
+//     with InputDialog — regardless of the delivery axis, because unlike a bare
+//     resting prompt post-PR this is not routine idling: nothing advances until
+//     someone presses a key, and the session holds a concurrency slot meanwhile.
+//     AtPrompt is closed (and marked verified): the pane is live evidence that
+//     the gate a Stop hook opened moments earlier now points at a dialog, which
+//     is exactly the state no send-keys path may type into.
 //   - ActivityWorking is positive proof of work: the axis becomes working and
 //     LastActivityAt is stamped, trusted even over a STALE hook-set
 //     waiting_input (the agent has provably resumed). This is the only
@@ -481,6 +489,12 @@ func agentReconcile(cur *session.Session, act attention.Activity, hasQuestion bo
 		return false // not pane-owned
 	}
 	switch act {
+	case attention.ActivityBlocked:
+		cur.AtPrompt = false
+		cur.AtPromptVerified = true // live positive evidence: the gate state is current
+		changed := cur.SetAgentState(state.AgentWaitingInput, "", now)
+		cur.InputReason = state.InputDialog
+		return changed
 	case attention.ActivityWorking:
 		cur.AtPrompt = false
 		cur.AtPromptVerified = true // live positive evidence: the gate state is current
