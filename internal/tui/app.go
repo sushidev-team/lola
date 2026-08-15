@@ -370,6 +370,15 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// revived session re-renders as working.
 		m.sessions.flash, m.sessions.flashGood = v.msg, v.good
 		return m, fetchSessionsCmd
+	case devDoneMsg:
+		// Flash the toggle's outcome and refresh: the daemon has already written
+		// the derived dev state onto both sessions (the new holder and the one it
+		// was taken from), so the list reflects the move immediately.
+		m.sessions.flash, m.sessions.flashGood = v.msg, v.ok
+		if sel := m.sessions.selected(); sel != nil {
+			m.refreshShells(sel.ID) // the dev tabs appear (or vanish) in the tab bar
+		}
+		return m, fetchSessionsCmd
 	case coderabbitDoneMsg:
 		// Flash the CodeRabbit poll outcome; refresh so any status the routed
 		// feedback nudged (e.g. a hand-off waking the agent) re-derives.

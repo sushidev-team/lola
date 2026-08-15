@@ -303,6 +303,101 @@ func (c *Client) NewSession(ctx context.Context, name, dir, command string) erro
 	return err
 }
 
+// killTreeGrace is how long a pane's process group gets to exit on SIGTERM
+// before the remainder is SIGKILLed. It is the window a dev server needs to
+// close its listening socket — the whole point of the graceful step.
+const killTreeGrace = 3 * time.Second
+
+// PanePID returns the pid of the process running in the session's active pane.
+// The target is a target-PANE ("=name:"), so it resolves the session's current
+// window rather than requiring an index.
+func (c *Client) PanePID(ctx context.Context, name string) (int, error) {
+	out, _, err := c.run(ctx, "display-message", "-p", "-t", paneTarget(name), "#{pane_pid}")
+	if err != nil {
+		return 0, err
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(out))
+	if err != nil {
+		return 0, fmt.Errorf("tmux display-message: unexpected pane_pid %q: %w", strings.TrimSpace(out), err)
+	}
+	return pid, nil
+}
+
+// KillSessionTree kills a session AND the process GROUP its pane leads, then
+// the session itself.
+//
+// KillSession alone is NOT enough for anything that spawns children. tmux hangs
+// the pane's process up (SIGHUP); a child that ignores SIGHUP — `composer dev`'s
+// `php artisan serve`, and the `php -S` under it — survives as an orphan of
+// pid 1 and keeps its PORT bound. The next session's dev server then quietly
+// starts on 8001 instead of 8000, which is the same "find it and kill it by
+// hand" problem the dev tabs exist to remove.
+//
+// Signalling the pane's process group reaches those children: tmux gives each
+// pane a fresh session and process group, so everything the command spawns is
+// in it unless it deliberately leaves (setsid). It DEGRADES to a plain
+// KillSession — an unresolvable pane pid, a dead pane (no process left), an
+// unsupported platform — so a tab is always torn down even when the group
+// cannot be signalled.
+func (c *Client) KillSessionTree(ctx context.Context, name string) error {
+	if pid, err := c.PanePID(ctx, name); err == nil && pid > 1 {
+		if pgid, gerr := processGroupOf(pid); gerr == nil {
+			// Best-effort: the session teardown below runs either way, so a
+			// refused signal costs a leaked child, never the tab itself.
+			_ = killProcessGroup(pgid, killTreeGrace)
+		}
+	}
+	return c.KillSession(ctx, name)
+}
+
+// KeepDeadPane makes the named session OUTLIVE the command it runs: when the
+// process exits (cleanly, on a crash, or on a signal), tmux keeps the pane and
+// its output instead of destroying the session. The dev tabs use it so a `npm
+// run dev` that died at 03:00 still shows why — see DeadPanes for the read side.
+//
+// remain-on-exit is a WINDOW option, so the target is a target-WINDOW ("=name:",
+// the session's current window), not the bare session name tmux rejects with
+// "no such window".
+func (c *Client) KeepDeadPane(ctx context.Context, name string) error {
+	_, _, err := c.run(ctx, "set-option", "-t", "="+name+":", "-w", "remain-on-exit", "on")
+	return err
+}
+
+// DeadPanes reports, per session name, whether that session's panes have ALL
+// exited — true only for a session kept alive by KeepDeadPane whose command is
+// gone. One exec answers for the whole server (`list-panes -a`), which is what
+// lets the observer decide dev-tab liveness without a per-session probe.
+//
+// A tmux server that is not running is not an error: nothing is dead because
+// nothing is running, so an empty map and nil error come back — the same shape
+// ListSessions uses. A session with several panes counts as alive while any one
+// of them lives.
+func (c *Client) DeadPanes(ctx context.Context) (map[string]bool, error) {
+	out, stderr, err := c.run(ctx, "list-panes", "-a", "-F", "#{session_name}\t#{pane_dead}")
+	if err != nil {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) && ee.ExitCode() == 1 && strings.Contains(stderr, "no server") {
+			return map[string]bool{}, nil
+		}
+		return nil, err
+	}
+	dead := map[string]bool{}
+	for _, line := range strings.Split(strings.TrimRight(out, "\n"), "\n") {
+		name, flag, ok := strings.Cut(line, "\t")
+		if !ok || name == "" {
+			continue
+		}
+		if flag == "1" {
+			if _, seen := dead[name]; !seen {
+				dead[name] = true
+			}
+			continue
+		}
+		dead[name] = false // one live pane keeps the whole session alive
+	}
+	return dead, nil
+}
+
 // winTarget is a target-WINDOW spec ("=name:index"): exact session match plus an
 // explicit window index. link-window/rename-window/kill-window/select-window all
 // take a target-window (unlike the target-pane paneTarget builds).

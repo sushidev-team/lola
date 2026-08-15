@@ -122,6 +122,12 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   checks the resolved binary; `config.AgentForProject` resolves
   project→defaults→`claude`. `internal/attention` imports it for agent-aware
   pane classification.
+- `internal/devtab` — the naming convention for a session's DEV tabs
+  (`<sessionID>-dev-<n>`, 1-based into `[[project]].dev_commands`). A stdlib leaf
+  for the same reason `internal/lolaenv` is one: the daemon creates the tabs,
+  `internal/runtime` must recognize them as auxiliary sessions, and both the TUI
+  and the app discover them as terminal tabs — none of which may import the
+  others.
 - `internal/gitrepo` — resolves a checkout's GitHub `owner/name` from its git
   remotes (upstream, then origin) so the project forms can prefill
   `[[project]].repo`. Local git only — no network, no `gh`. Deliberately NOT in
@@ -163,6 +169,9 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   (unverified) AtPrompt gate.
 - `statusagentwire.go` — the `[statusagent]` interpreter's worker/triggers/
   cost controls and `displayOverlay`, the overlay's ONE consumer.
+- `dev.go` — the per-project ACTIVE session: `[[project]].dev_commands` running
+  in `<id>-dev-N` tabs, plus the observer's `reconcileDevTabs` derivation. See
+  the invariant below.
 - `reconcile.go` — ~5m pass reverting orphaned issues (labeled-sent but no
   counted session and no open PR after `orphanTimeout`).
 - `writeback.go` — P4 Linear state transitions + comments.
@@ -277,16 +286,23 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   capture failure or non-waiting classification defers.
 - **Teardown is THREE things, and each has its own fail-closed rule.**
   `runtime.Kill` (the merged-cleanup path and `lola kill`) takes down: (1) the
-  agent's tmux session AND its auxiliary sessions — `<id>-shell-N` tabs and the
-  `<id>-review` pane are SEPARATE tmux sessions, so killing only the agent left
-  them running against a worktree about to be deleted; (2) the worktree, dirty-
+  agent's tmux session AND its auxiliary sessions — `<id>-shell-N` tabs, the
+  `<id>-review` pane and the `<id>-dev-N` dev tabs are SEPARATE tmux sessions, so
+  killing only the agent left them running against a worktree about to be deleted
+  (and, for a dev tab, a port still bound); (2) the worktree, dirty-
   safe (`ErrDirty` unless forced); (3) the local branch, but only when
   `Session.OwnsBranch()` (a `pr` session's Branch is UPSTREAM — deleting it
   destroys someone else's ref). Rules that hold it together:
+  - The sweep kills each aux session's whole process GROUP
+    (`tmux.KillSessionTree`), not just its pane. `kill-session` only hangs the
+    pane process up, and anything that ignores SIGHUP — a dev tab's `php artisan
+    serve`, a server started by hand in a shell tab — survives as an orphan of
+    pid 1 still holding its port. It degrades to a plain `KillSession` whenever
+    the pane pid cannot be resolved, so a tab is always torn down.
   - The aux sweep is BEST-EFFORT: a tmux that cannot answer logs and continues,
     because these are display surfaces and the caller retries the whole cleanup
     on error — a stuck shell tab must never block a worktree removal forever.
-  - Matching is `parent + ^(-shell-\d+|-review)$`, anchored at BOTH ends:
+  - Matching is `parent + ^(-shell-\d+|-review|-dev-\d+)$`, anchored at BOTH ends:
     `lola-fe-42` is a prefix of `lola-fe-420-shell-1`, and a loose suffix test
     made one session's teardown kill a live sibling's tab.
   - A missing worktree directory no longer ends teardown early — it deletes the
@@ -294,6 +310,30 @@ each of which owns exactly one external tool or concern behind an **exec seam**
     was already gone otherwise left its branch behind forever.
   - A DIRTY worktree keeps both the checkout and its branch. That is the whole
     gate: uncommitted work is the one thing teardown never discards.
+- **The ACTIVE session is DERIVED from tmux, never remembered.** Only one session
+  per project may run `[[project]].dev_commands` (they bind ports), so `cmd=dev`
+  is a MOVE: `internal/daemon/dev.go` kills the previous holder's `<id>-dev-N`
+  tabs *before* starting its own, or "address already in use" is all the new tab
+  ever says. Rules that hold it together:
+  - `Session.DevActive`/`DevTabs` are a CACHE the toggle writes for an instant
+    UI, and `reconcileDevTabs` (one per observe cycle) overwrites them from the
+    tmux facts. Persisted intent would drift the moment a tab was closed, a
+    command crashed, or the daemon restarted; derivation cannot.
+  - The tabs carry `remain-on-exit`, so a crashed dev server keeps its pane and
+    its error message — which means the session's EXISTENCE proves nothing and
+    liveness is `#{pane_dead}` (`tmux.DeadPanes`, one `list-panes -a` per cycle,
+    and only in a cycle whose `tmux ls` actually showed a dev tab).
+  - A failed dead-pane probe changes NOTHING: a false "off" invites a restart
+    that kills a healthy server, a false "on" hides one that is gone.
+  - Stopping discovers by LISTING, not by the configured command count, so a tab
+    left over from a longer `dev_commands` list is still torn down — and it goes
+    through `KillSessionTree`, because `composer dev` spawns the process that
+    actually holds the port and that process ignores SIGHUP. Killing only the
+    tmux session left it orphaned on pid 1, so the session taking over started on
+    8001 and the feature had moved the problem instead of solving it.
+  - `dev_commands` is deliberately NOT a `[defaults]` key (see the inheritance
+    invariant): a dev command belongs to one repository, and an inherited one
+    would start the wrong stack in every project that forgot to override it.
 - **A review PASS runs in its own tmux session, and the pane is a DISPLAY.** With
   `visible = true` (the per-provider default) a pass runs as the hidden
   `lola review-run` inside `<sessionID>-review` on lola's tmux server, beside the
@@ -455,6 +495,10 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   app every irreversible action routes through the single `confirm` store
   (`desktop/frontend/src/lib/confirm.svelte.ts`) and its one `ConfirmDialog`, so
   a shortcut and a button ask the same way; don't add a second bespoke dialog.
+  The dev toggle is `D` in BOTH surfaces for two reasons: bare `d` is already the
+  doctor overlay in each, and activating a session stops another session's
+  running processes — heavy enough for the shifted key even though it is not
+  destructive.
 - **Both TUI config forms guard unsaved edits, and the guard has a hole only a
   gate can close.** `formModel` and `settingsForm` each keep a `baseline`
   snapshot; `esc` on a dirty form arms `confirmDiscard` (y/n) instead of

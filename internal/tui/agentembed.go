@@ -21,7 +21,9 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/sushidev-team/lola/internal/devtab"
 	"github.com/sushidev-team/lola/internal/lolaenv"
+	"github.com/sushidev-team/lola/internal/protocol"
 	"github.com/sushidev-team/lola/internal/vtterm"
 )
 
@@ -154,8 +156,11 @@ func (m *rootModel) syncAgentPreview() tea.Cmd {
 	title := "agent · " + dash(sel.Issue)
 	if kind == termShell {
 		title = "shell"
-		if strings.HasSuffix(target, "-review") {
+		switch {
+		case strings.HasSuffix(target, "-review"):
 			title = "review" // the visible review pass's pane, not a worktree shell
+		case devtab.Index(sel.ID, target) > 0:
+			title = "dev · " + devTabLabel(sel, target)
 		}
 	}
 	m.agentTerm = &termView{term: t, sessionID: sel.ID, tmuxName: target, kind: kind, title: title, w: cw, h: ch}
@@ -304,10 +309,11 @@ func (m *rootModel) closeActiveShell() (tea.Model, tea.Cmd) {
 // --- shell tmux sessions (shared with the desktop app) ----------------------
 
 // refreshShells re-reads the tmux server for this session's auxiliary sessions:
-// its "<id>-shell-N" shells, plus the "<id>-review" pane a visible review pass
-// runs in (see internal/daemon/reviewvisible.go) — so tabs reflect shells opened
-// anywhere (the desktop app, another lola, or here) and a review the daemon
-// started shows up without the TUI being told. Best-effort: on a tmux error the
+// its "<id>-dev-N" dev tabs, its "<id>-shell-N" shells, and the "<id>-review"
+// pane a visible review pass runs in (see internal/daemon/reviewvisible.go) — so
+// tabs reflect shells opened anywhere (the desktop app, another lola, or here)
+// and both the review a pass started and the dev processes the daemon started
+// show up without the TUI being told. Best-effort: on a tmux error the
 // last-known list stands.
 func (m *rootModel) refreshShells(id string) {
 	if m.shellNames == nil {
@@ -322,11 +328,15 @@ func (m *rootModel) refreshShells(id string) {
 	}
 	prefix := id + "-shell-"
 	review := id + "-review" // the visible review pass's pane, if one is open
-	var names []string
+	var names, devs []string
 	reviewPane := ""
 	for _, s := range sessions {
 		if strings.HasPrefix(s.Name, prefix) {
 			names = append(names, s.Name)
+			continue
+		}
+		if devtab.Index(id, s.Name) > 0 {
+			devs = append(devs, s.Name)
 			continue
 		}
 		if s.Name == review {
@@ -334,9 +344,14 @@ func (m *rootModel) refreshShells(id string) {
 		}
 	}
 	sort.Slice(names, func(i, j int) bool { return shellIndex(id, names[i]) < shellIndex(id, names[j]) })
+	sort.Slice(devs, func(i, j int) bool { return devtab.Index(id, devs[i]) < devtab.Index(id, devs[j]) })
+	// Dev tabs sort FIRST (right after the agent): they are the project's, not
+	// this session's, so their position stays put while shells come and go.
+	names = append(devs, names...)
 	// The review pane sorts LAST so a review starting or ending never renumbers
-	// the shell tabs beside it. nextShellName's max-index scan ignores it (it
-	// carries no "-shell-N" suffix), so it can never claim a shell number.
+	// the shell tabs beside it. nextShellName's max-index scan ignores both it
+	// and the dev tabs (neither carries a "-shell-N" suffix), so neither can
+	// claim a shell number.
 	if reviewPane != "" {
 		names = append(names, reviewPane)
 	}
@@ -344,6 +359,21 @@ func (m *rootModel) refreshShells(id string) {
 	if m.embedTab[id] > len(names) { // active tab outlived its shell
 		m.embedTab[id] = len(names)
 	}
+}
+
+// devTabLabel is the tab chip for a session's dev tab: the FIRST WORD of the
+// command it runs ("composer", "npm"), which is all a TUI tab has room for and
+// still tells two dev processes apart. It falls back to "dev<N>" whenever the
+// command is unknown — a session record from an older daemon, or a tab left over
+// from a dev_commands list that has since been shortened.
+func devTabLabel(sel *protocol.SessionInfo, name string) string {
+	i := devtab.Index(sel.ID, name)
+	if i > 0 && i <= len(sel.DevCommands) {
+		if word, _, _ := strings.Cut(strings.TrimSpace(sel.DevCommands[i-1]), " "); word != "" {
+			return truncPlain(word, 10)
+		}
+	}
+	return fmt.Sprintf("dev%d", i)
 }
 
 // nextShellName picks the next free "<id>-shell-N" (max existing index + 1),

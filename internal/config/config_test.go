@@ -1746,3 +1746,70 @@ func TestAgentDefaultWrittenWhenSet(t *testing.T) {
 		t.Errorf("applyDefaults set Defaults.Agent = %q, want empty (resolve at read time)", fresh.Defaults.Agent)
 	}
 }
+
+func TestDevCommandsRoundTripAndNeverInherit(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	orig := &Config{
+		Projects: []Project{{
+			Name:        "app",
+			Path:        "/tmp/app",
+			DevCommands: []string{"composer dev", "npm run dev"},
+		}},
+	}
+	if err := orig.Save(path); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	got, err := Load(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if len(got.Projects) != 1 {
+		t.Fatalf("want 1 project, got %d", len(got.Projects))
+	}
+	if diff := got.Projects[0].DevCommands; len(diff) != 2 || diff[0] != "composer dev" || diff[1] != "npm run dev" {
+		t.Errorf("dev_commands did not round-trip: %#v", diff)
+	}
+}
+
+func TestDevCommandsAreNotADefaultsKey(t *testing.T) {
+	// dev_commands is deliberately per project: a dev server command belongs to
+	// one repository, so an empty project must stay empty no matter what any
+	// other project (or [defaults]) carries. If it ever became inheritable this
+	// test is the one that has to change on purpose.
+	path := filepath.Join(t.TempDir(), "config.toml")
+	orig := &Config{
+		Projects: []Project{
+			{Name: "app", Path: "/tmp/app", DevCommands: []string{"composer dev"}},
+			{Name: "site", Path: "/tmp/site"},
+		},
+	}
+	if err := orig.Save(path); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	got, err := Load(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if n := len(got.Projects[1].DevCommands); n != 0 {
+		t.Errorf("project without dev_commands inherited %d entries: %#v", n, got.Projects[1].DevCommands)
+	}
+}
+
+func TestValidateRejectsBlankAndMultiLineDevCommands(t *testing.T) {
+	// Each entry becomes ONE tmux command line: a blank one opens a tab that
+	// dies instantly, a multi-line one is silently truncated at the newline.
+	c := &Config{Projects: []Project{{
+		Name:        "app",
+		Path:        "/tmp/app",
+		DevCommands: []string{"composer dev", "  ", "npm run dev\nnpm run build"},
+	}}}
+	err := c.Validate()
+	if err == nil {
+		t.Fatal("want validation errors for the blank and multi-line entries")
+	}
+	for _, want := range []string{"dev_commands[1] is empty", "dev_commands[2] must be a single line"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not mention %q", err, want)
+		}
+	}
+}

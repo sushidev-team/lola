@@ -43,6 +43,7 @@ const (
 	fAgent
 	fSymlinks
 	fPostCreate
+	fDevCommands
 	fEnv
 	// Filter tab: which Linear issues this project picks up.
 	fEnabled
@@ -100,7 +101,7 @@ var formTabs = []struct {
 }
 
 // listFields are edited as one entry per line (an open sub-editor), not inline.
-var listFields = map[fieldID]bool{fSymlinks: true, fPostCreate: true, fEnv: true}
+var listFields = map[fieldID]bool{fSymlinks: true, fPostCreate: true, fDevCommands: true, fEnv: true}
 
 // textFields are edited inline, character by character.
 var textFields = map[fieldID]bool{
@@ -144,9 +145,10 @@ type formModel struct {
 	capBuf   string         // text buffer for concurrency_cap
 
 	// Line buffers for the list fields; folded back into poll on save.
-	symlinks   []string
-	postCreate []string
-	env        []string // "KEY=value" per line
+	symlinks    []string
+	postCreate  []string
+	devCommands []string // long-running dev processes; only the ACTIVE session runs them
+	env         []string // "KEY=value" per line
 
 	teams   []linear.Team // available before a team is picked
 	meta    *teamMeta
@@ -267,6 +269,8 @@ func (f *formModel) lineBuf(fd fieldID) *[]string {
 		return &f.symlinks
 	case fPostCreate:
 		return &f.postCreate
+	case fDevCommands:
+		return &f.devCommands
 	case fEnv:
 		return &f.env
 	}
@@ -376,6 +380,10 @@ func newFormModel(cfg *config.Config, existing *config.Project) (*formModel, tea
 	// Inherited fields show the [defaults] value; overridden ones the project's.
 	f.symlinks = slices.Clone(f.poll.Symlinks)
 	f.postCreate = slices.Clone(f.poll.PostCreate)
+	// dev_commands is per project by design (no [defaults] counterpart): a dev
+	// server command belongs to one repository, so a new project starts empty
+	// rather than inheriting someone else's stack.
+	f.devCommands = slices.Clone(f.poll.DevCommands)
 	f.env = envLines(f.poll.Env)
 	if f.isNew {
 		f.symlinks = slices.Clone(cfg.Defaults.Symlinks)
@@ -406,7 +414,7 @@ func newFormModel(cfg *config.Config, existing *config.Project) (*formModel, tea
 // snapshot serializes everything a human can edit in this form. Maps print in
 // sorted key order under %v, so the result is stable across identical states.
 func (f *formModel) snapshot() string {
-	return fmt.Sprintf("%+v|%s|%v|%v|%v", f.poll, f.capBuf, f.symlinks, f.postCreate, f.env)
+	return fmt.Sprintf("%+v|%s|%v|%v|%v|%v", f.poll, f.capBuf, f.symlinks, f.postCreate, f.devCommands, f.env)
 }
 
 // rebase declares the CURRENT state to be the unmodified one. Called on open and
@@ -441,7 +449,7 @@ func (f *formModel) fields() []fieldID {
 	var fs []fieldID
 	switch f.tab {
 	case tabRepo:
-		fs = []fieldID{fLabel, fName, fPath, fRepo, fDefaultBranch, fBranchPrefix, fAgent, fSymlinks, fPostCreate, fEnv}
+		fs = []fieldID{fLabel, fName, fPath, fRepo, fDefaultBranch, fBranchPrefix, fAgent, fSymlinks, fPostCreate, fDevCommands, fEnv}
 	case tabFilter:
 		fs = []fieldID{fEnabled, fTeam}
 		if f.poll.TeamID != "" {
@@ -1145,6 +1153,7 @@ func applyProject(dst *config.Project, src config.Project) {
 	dst.Agent = src.Agent
 	dst.Symlinks = src.Symlinks
 	dst.PostCreate = src.PostCreate
+	dst.DevCommands = src.DevCommands
 	dst.Env = src.Env
 	dst.Inherits = src.Inherits
 
@@ -1248,6 +1257,7 @@ func (f *formModel) save() (tea.Cmd, formEvent) {
 	p.BranchPrefix = strings.TrimSpace(p.BranchPrefix)
 	p.Symlinks = trimDropEmpty(f.symlinks)
 	p.PostCreate = trimDropEmpty(f.postCreate)
+	p.DevCommands = trimDropEmpty(f.devCommands)
 	p.Env = parseEnvLines(f.env)
 	p.ConcurrencyCap = 0
 	if f.capBuf != "" {
@@ -1522,6 +1532,8 @@ func fieldHelp(fd fieldID) string {
 		return "One relative path per line, linked from main into each worktree (e.g. .env). Do NOT symlink vendor/ — it breaks PHP autoload; use post-create instead."
 	case fPostCreate:
 		return "One command per line, run in a fresh worktree before the agent (e.g. composer install)."
+	case fDevCommands:
+		return "One long-running dev command per line (e.g. composer dev). Only the ACTIVE session runs them — one session per project, each command in its own tab."
 	case fEnv:
 		return "One KEY=value per line, exported into the session and post-create commands."
 	case fEnabled:
@@ -1596,6 +1608,8 @@ func (f *formModel) label(fd fieldID) string {
 		return "Symlinks"
 	case fPostCreate:
 		return "Post-create"
+	case fDevCommands:
+		return "Dev commands"
 	case fEnv:
 		return "Env (KEY=value)"
 	case fEnabled:
@@ -1712,7 +1726,7 @@ func (f *formModel) display(fd fieldID) string {
 			return faintText.Render("(inherits " + f.cfg.AgentForProject(f.origName) + ")")
 		}
 		return f.poll.Agent
-	case fSymlinks, fPostCreate, fEnv:
+	case fSymlinks, fPostCreate, fDevCommands, fEnv:
 		if buf := f.lineBuf(fd); buf != nil {
 			n := len(trimDropEmpty(*buf))
 			if n == 0 {

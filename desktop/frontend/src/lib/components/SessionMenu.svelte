@@ -75,6 +75,22 @@
       title={session.worktree ? "open a shell in the worktree" : "session has no worktree"}
       onclick={() => run((s) => addShell(s))}>Add shell</MenuItem
     >
+    {#if session.devCommands?.length}
+      <!-- The project's dev processes run in ONE session at a time, so this is a
+           toggle, not an "open": switching it on here takes them off whoever had
+           them. The label says where they are, not what the click does — "Active"
+           with a filled dot IS the state. -->
+      <MenuItem
+        icon={session.devActive ? "●" : "○"}
+        variant={session.devActive ? "accent" : "default"}
+        title={session.devActive
+          ? `stop ${session.devCommands.join(", ")}`
+          : `run ${session.devCommands.join(", ")} here (stops them in any other session of this project)`}
+        onclick={() => run((s) => store.dev(s.id, !s.devActive))}
+      >
+        {session.devActive ? "Active — stop dev" : "Make active"}
+      </MenuItem>
+    {/if}
     <MenuItem icon="◈" title="force a QA review pass now" onclick={() => run((s) => store.review(s.id))}>
       Trigger review
     </MenuItem>

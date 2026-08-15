@@ -27,6 +27,7 @@
       title: "Session actions",
       keys: [
         ["s · ⌘T", "new worktree shell"],
+        ["D", "run dev here · one session per project"],
         ["< / >", "prev / next terminal tab"],
         ["x · ⌘⇧K", "kill session"],
         ["o · ⌘⇧O", "open PR in browser"],

@@ -308,6 +308,19 @@ class Store {
   coderabbit(session: string) {
     return this.act(() => DaemonService.CodeRabbit(session), "coderabbit poll requested");
   }
+  /**
+   * Run the project's dev_commands here (on = true), or stop them. Only one
+   * session per project may hold them, so activating MOVES them: the daemon
+   * kills the previous holder's tabs first. The dev TABS follow on their own:
+   * SessionEmbed rediscovers a session's tmux tabs every few seconds, and this
+   * module deliberately does not import terms (which imports this one).
+   */
+  dev(session: string, on: boolean) {
+    return this.act(
+      () => DaemonService.Dev(session, on),
+      on ? "dev processes started here" : "dev processes stopped",
+    );
+  }
   open(project: string, ref: string) {
     return this.act(() => DaemonService.Open(project, ref), `opened ${ref}`);
   }

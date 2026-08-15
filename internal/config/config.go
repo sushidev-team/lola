@@ -115,6 +115,15 @@ type Project struct {
 	PostCreate []string          `toml:"post_create,omitempty"`
 	Symlinks   []string          `toml:"symlinks,omitempty"`
 	Env        map[string]string `toml:"env,omitempty"`
+	// DevCommands are the project's long-running dev processes (`composer dev`,
+	// `npm run dev`) that the ACTIVE session runs — one tmux tab each, rooted in
+	// that session's worktree. Only one session per project may hold them at a
+	// time (activating another moves the whole set over), which is the point:
+	// these bind ports, so two sessions running them at once is the failure this
+	// exists to prevent. Deliberately NOT a [defaults]-inheritable key — a dev
+	// command is per repository, and an inherited one would start the wrong
+	// stack in every project that forgot to override it.
+	DevCommands []string `toml:"dev_commands,omitempty"`
 
 	// --- Linear polling (optional) -----------------------------------------
 	// The project polls Linear only when TeamID is set; Enabled toggles it
@@ -366,6 +375,9 @@ type fileProject struct {
 	PostCreate    *[]string          `toml:"post_create,omitempty"`
 	Symlinks      *[]string          `toml:"symlinks,omitempty"`
 	Env           *map[string]string `toml:"env,omitempty"`
+	// DevCommands is a PLAIN slice, not a pointer: it is not inheritable, so
+	// absent and empty mean the same thing (no dev tabs for this project).
+	DevCommands []string `toml:"dev_commands,omitempty"`
 
 	Enabled        bool      `toml:"enabled,omitempty"`
 	TeamID         string    `toml:"team_id,omitempty"`
@@ -521,6 +533,7 @@ func projectFromFile(fp fileProject) Project {
 		PostCreate:     postCreate,
 		Symlinks:       symlinks,
 		Env:            env,
+		DevCommands:    fp.DevCommands,
 		Enabled:        fp.Enabled,
 		TeamID:         fp.TeamID,
 		ProjectID:      fp.ProjectID,
@@ -580,6 +593,7 @@ func projectToFile(p Project) fileProject {
 		PostCreate:     ptr(p.PostCreate, set(o.PostCreate)),
 		Symlinks:       ptr(p.Symlinks, set(o.Symlinks)),
 		Env:            ptr(p.Env, set(o.Env)),
+		DevCommands:    p.DevCommands,
 		Enabled:        p.Enabled,
 		TeamID:         p.TeamID,
 		ProjectID:      p.ProjectID,

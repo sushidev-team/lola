@@ -63,6 +63,15 @@ import (
 // with a short outcome. No matching provider enabled yields a "skipped"
 // ReviewData (not an error); an unknown session, a non-pass Provider, or an exec
 // failure is an error.
+// Cmd "dev" moves the project's DEV PROCESSES onto one session, or stops them:
+// Args is a DevArgs naming the session and whether to switch it on. Activating
+// runs every [[project]].dev_commands entry in its own "<id>-dev-N" tmux tab
+// rooted in that session's worktree, after killing the tabs of whichever session
+// of the SAME project held them — only one session per project may run them,
+// because they bind ports. Switching off kills this session's tabs. The reply is
+// DevData. A session whose project configures no dev_commands is an error, as is
+// an unknown session.
+//
 // Cmd "coderabbit" FORCES the [coderabbit] PR-comment WATCH for one session now,
 // ignoring the LastCodeRabbitAt watermark: Session names the target. The daemon
 // polls the session's open PR (one `gh pr view`) for CodeRabbit-app comments and
@@ -72,7 +81,7 @@ import (
 // PR yields a "skipped" CodeRabbitData (not an error); an unknown session or a gh
 // failure is an error.
 type Request struct {
-	Cmd    string `json:"cmd"` // stop|status|reload|enable|disable|pollOnce|sessions|projects|prs|hookEvent|kill|revive|pane|answer|review|coderabbit|open|renameProject
+	Cmd    string `json:"cmd"` // stop|status|reload|enable|disable|pollOnce|sessions|projects|prs|hookEvent|kill|revive|pane|answer|review|coderabbit|dev|open|renameProject
 	Poll   string `json:"poll,omitempty"`
 	DryRun bool   `json:"dryRun,omitempty"`
 
@@ -211,7 +220,7 @@ type SessionInfo struct {
 	PRObservedAt     time.Time `json:"prObservedAt,omitzero"`      // last successful gh PR fetch
 	PRStale          bool      `json:"prStale,omitempty"`          // PR facts are ≥3 failed fetches old
 	AtPrompt         bool      `json:"atPrompt,omitempty"`         // agent idle at its prompt (send-keys gate open)
-	InputReason      string    `json:"inputReason,omitempty"`      // why waiting_input: permission_prompt|question|idle_notification
+	InputReason      string    `json:"inputReason,omitempty"`      // why waiting_input: permission_prompt|question|idle_notification|dialog
 	CurrentTool      string    `json:"currentTool,omitempty"`      // tool the in-flight turn runs right now (PostToolUse)
 	LastNotification string    `json:"lastNotification,omitempty"` // last Notification message (display-only text)
 
@@ -224,6 +233,15 @@ type SessionInfo struct {
 	Headline         string `json:"headline,omitempty"`         // one line: what the agent is doing right now
 	WaitingOn        string `json:"waitingOn,omitempty"`        // what the agent needs, when blocked
 	HeadlineAgo      string `json:"headlineAgo,omitempty"`      // formatted age of the judgement, e.g. "2m"
+
+	// Dev processes ([[project]].dev_commands). DevActive is true while this
+	// session holds them — derived from live tmux facts each observe cycle, so a
+	// closed tab or a crashed command reads as inactive within one cycle.
+	// DevCommands is its project's configured list (in tab order, so index N-1
+	// labels tab "<id>-dev-N"); a client renders the Active toggle only when it
+	// is non-empty.
+	DevActive   bool     `json:"devActive,omitempty"`
+	DevCommands []string `json:"devCommands,omitempty"`
 
 	// Reaction-engine posture (PLAN P3), flattened so the TUI renders reaction
 	// state without importing internal/session or re-deriving it.
@@ -419,6 +437,24 @@ type KillData struct {
 	Removed  bool   `json:"removed"`
 	Worktree string `json:"worktree,omitempty"`
 	Message  string `json:"message,omitempty"`
+}
+
+// DevArgs is Request.Args for cmd=dev: Session names the target session and On
+// selects activation (true) or teardown (false).
+type DevArgs struct {
+	Session string `json:"session"`
+	On      bool   `json:"on"`
+}
+
+// DevData is Response.Data for cmd=dev. Active mirrors the resulting state
+// (true when tabs are running), Commands are the dev_commands the tabs run in
+// order, Stopped names the session whose tabs were taken over ("" when none
+// were), and Message is the short human-readable outcome for the CLI/TUI.
+type DevData struct {
+	Active   bool     `json:"active"`
+	Commands []string `json:"commands,omitempty"`
+	Stopped  string   `json:"stopped,omitempty"`
+	Message  string   `json:"message,omitempty"`
 }
 
 // ReviveData is Response.Data for cmd=revive: a dead session relaunched on its

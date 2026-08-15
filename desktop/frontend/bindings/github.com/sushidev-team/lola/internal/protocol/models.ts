@@ -20,6 +20,19 @@ export interface CodeRabbitData {
 }
 
 /**
+ * DevData is Response.Data for cmd=dev. Active mirrors the resulting state
+ * (true when tabs are running), Commands are the dev_commands the tabs run in
+ * order, Stopped names the session whose tabs were taken over ("" when none
+ * were), and Message is the short human-readable outcome for the CLI/TUI.
+ */
+export interface DevData {
+    "active": boolean;
+    "commands"?: string[] | null;
+    "stopped"?: string;
+    "message"?: string;
+}
+
+/**
  * Event is one session status transition surfaced in the activity feed,
  * flattened to render-ready strings so the TUI needs no scm/session imports.
  * From is the prior derived status ("" means the session was just spawned); To
@@ -462,7 +475,7 @@ export interface SessionInfo {
     "atPrompt"?: boolean;
 
     /**
-     * why waiting_input: permission_prompt|question|idle_notification
+     * why waiting_input: permission_prompt|question|idle_notification|dialog
      */
     "inputReason"?: string;
 
@@ -500,6 +513,17 @@ export interface SessionInfo {
      * formatted age of the judgement, e.g. "2m"
      */
     "headlineAgo"?: string;
+
+    /**
+     * Dev processes ([[project]].dev_commands). DevActive is true while this
+     * session holds them — derived from live tmux facts each observe cycle, so a
+     * closed tab or a crashed command reads as inactive within one cycle.
+     * DevCommands is its project's configured list (in tab order, so index N-1
+     * labels tab "<id>-dev-N"); a client renders the Active toggle only when it
+     * is non-empty.
+     */
+    "devActive"?: boolean;
+    "devCommands"?: string[] | null;
 
     /**
      * Reaction-engine posture (PLAN P3), flattened so the TUI renders reaction

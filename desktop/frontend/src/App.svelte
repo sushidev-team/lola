@@ -185,6 +185,15 @@
         // session context menu, which is where a provider-specific action belongs.
         if (sel) store.review(sel.id);
         return true;
+      case "D":
+        // Run the project's dev_commands in the selected session (or stop them).
+        // SHIFTED because bare "d" is the doctor overlay — and because the toggle
+        // stops another session's running processes.
+        if (sel) {
+          if (sel.devCommands?.length) store.dev(sel.id, !sel.devActive);
+          else store.setFlash("no dev_commands configured for this project", "warn");
+        }
+        return true;
       case "R":
         if (sel && (sel.status === "dead" || sel.status === "session_ended")) store.revive(sel.id);
         return true;

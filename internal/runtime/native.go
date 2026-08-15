@@ -32,6 +32,7 @@ import (
 
 	"github.com/sushidev-team/lola/internal/agent"
 	"github.com/sushidev-team/lola/internal/config"
+	"github.com/sushidev-team/lola/internal/devtab"
 	"github.com/sushidev-team/lola/internal/hook"
 	"github.com/sushidev-team/lola/internal/linear"
 	"github.com/sushidev-team/lola/internal/lolaenv"
@@ -90,12 +91,12 @@ var reviewPaneRe = regexp.MustCompile(`-review$`)
 func IsShellTabSession(name string) bool { return shellTabRe.MatchString(name) }
 
 // IsAuxSession reports whether a tmux session name is an AUXILIARY session of
-// some parent lola session — an embedded shell tab or a review pane — rather
-// than a session of its own. Adoption drops these from its scan (a review pane
-// only when its parent is live beside it, see Adopt) and the daemon purges any
-// record an older daemon persisted for one.
+// some parent lola session — an embedded shell tab, a review pane or a dev tab
+// (internal/devtab) — rather than a session of its own. Adoption drops these
+// from its scan (a review pane only when its parent is live beside it, see
+// Adopt) and the daemon purges any record an older daemon persisted for one.
 func IsAuxSession(name string) bool {
-	return shellTabRe.MatchString(name) || reviewPaneRe.MatchString(name)
+	return shellTabRe.MatchString(name) || reviewPaneRe.MatchString(name) || devtab.Is(name)
 }
 
 // reviewPaneParent returns the session a review pane belongs to.
@@ -873,7 +874,11 @@ func (n *Native) Adopt(ctx context.Context) ([]session.Session, error) {
 	// restart. They never pair (no worktree carries the -shell-N suffix), so
 	// dropping them from the orphan scan loses nothing.
 	for name := range live {
-		if shellTabRe.MatchString(name) {
+		// Dev tabs ("<sessionID>-dev-N", a project's dev_commands running beside
+		// the agent) are auxiliary for the same reason, and they outlive their
+		// command (remain-on-exit keeps a crashed `npm run dev` readable), so an
+		// unpaired one is exactly what adoption would otherwise call an orphan.
+		if shellTabRe.MatchString(name) || devtab.Is(name) {
 			delete(live, name)
 			continue
 		}
@@ -1053,7 +1058,8 @@ func (n *Native) Kill(ctx context.Context, s session.Session, removeWorktree, fo
 }
 
 // killAuxSessions kills every auxiliary tmux session belonging to parent — its
-// `-shell-N` tabs and its `-review` pane. It is BEST-EFFORT by design: these are
+// `-shell-N` tabs, its `-review` pane and its `-dev-N` tabs (a killed session
+// must not leave a dev server bound to a port). It is BEST-EFFORT by design: these are
 // display surfaces, so a tmux hiccup here must never fail a teardown that has
 // already stopped the agent (the caller would otherwise retry the whole cleanup
 // forever over a stuck shell tab). A missing tmux, or no aux sessions at all,
@@ -1073,7 +1079,14 @@ func (n *Native) killAuxSessions(ctx context.Context, parent string) {
 		if !isAuxOf(parent, sess.Name) {
 			continue
 		}
-		if err := n.Tmux.KillSession(ctx, sess.Name); err != nil && n.Logf != nil {
+		// Every aux session goes down with its whole process GROUP, not just its
+		// pane process. A plain kill-session only hangs the pane up (SIGHUP),
+		// and anything that ignores it — a dev tab's `php artisan serve`, a
+		// server someone started by hand in a shell tab — survives as an orphan
+		// of pid 1, still holding its port and still pointed at a worktree that
+		// is about to be deleted. These sessions are being destroyed anyway, so
+		// there is nothing here worth preserving from the signal.
+		if err := n.Tmux.KillSessionTree(ctx, sess.Name); err != nil && n.Logf != nil {
 			n.Logf("session %s: could not kill auxiliary tmux session %s: %v", parent, sess.Name, err)
 		}
 	}
@@ -1083,8 +1096,9 @@ func (n *Native) killAuxSessions(ctx context.Context, parent string) {
 // still be that parent's auxiliary session. It is anchored at both ends
 // deliberately: "lola-fe-42" is a prefix of "lola-fe-420-shell-1", whose
 // remainder ("0-shell-1") ends in a shell-tab suffix and would otherwise make
-// one session's teardown kill an unrelated live session's tab.
-var auxSuffixRe = regexp.MustCompile(`^(?:-shell-\d+|-review)$`)
+// one session's teardown kill an unrelated live session's tab. Keep it in step
+// with internal/devtab (dev tabs) and reviewPaneSuffix.
+var auxSuffixRe = regexp.MustCompile(`^(?:-shell-\d+|-review|-dev-\d+)$`)
 
 // isAuxOf reports whether name is an auxiliary session of parent.
 func isAuxOf(parent, name string) bool {

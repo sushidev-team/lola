@@ -46,6 +46,16 @@ export function CodeRabbit(session: string): $CancellablePromise<protocol$0.Code
     return $Call.ByID(2376086832, session);
 }
 
+/**
+ * Dev moves the project's dev processes ([[project]].dev_commands) onto one
+ * session, or stops them. Activating is a MOVE: the daemon first kills the tabs
+ * of whichever session of that project held them, so the ports are free before
+ * the new tabs start.
+ */
+export function Dev(session: string, on: boolean): $CancellablePromise<protocol$0.DevData> {
+    return $Call.ByID(340192016, session, on);
+}
+
 export function Disable(poll: string): $CancellablePromise<void> {
     return $Call.ByID(3917859687, poll);
 }

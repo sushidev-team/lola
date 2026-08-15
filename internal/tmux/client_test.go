@@ -541,3 +541,95 @@ func TestBuildViewerEmptyTabsErrors(t *testing.T) {
 		t.Fatal("BuildViewer must error with no tabs")
 	}
 }
+
+func TestDeadPanesReportsOnlyFullyExitedSessions(t *testing.T) {
+	// A session's panes are listed one per line. "1" is a pane whose command has
+	// exited under remain-on-exit; a session is dead only when EVERY pane is.
+	fixture := "lola-app-eng-1-dev-1\t1\n" +
+		"lola-app-eng-1-dev-2\t0\n" +
+		"lola-app-eng-2-dev-1\t1\n" +
+		"lola-app-eng-2-dev-1\t0\n" + // second pane still alive → session alive
+		"lola-app-eng-3\t0"
+	bin, argsLog := fakeTmux(t, fixture, "", 0)
+	c := &Client{Bin: bin}
+
+	got, err := c.DeadPanes(context.Background())
+	if err != nil {
+		t.Fatalf("DeadPanes: %v", err)
+	}
+	want := map[string]bool{
+		"lola-app-eng-1-dev-1": true,
+		"lola-app-eng-1-dev-2": false,
+		"lola-app-eng-2-dev-1": false,
+		"lola-app-eng-3":       false,
+	}
+	for name, w := range want {
+		if got[name] != w {
+			t.Errorf("DeadPanes[%q] = %v, want %v", name, got[name], w)
+		}
+	}
+	wantArgs := "-L lola list-panes -a -F #{session_name}\t#{pane_dead}"
+	if args := loggedArgs(t, argsLog); args != wantArgs {
+		t.Errorf("invoked %q, want %q", args, wantArgs)
+	}
+}
+
+func TestDeadPanesNoServerIsEmptyNotError(t *testing.T) {
+	bin, _ := fakeTmux(t, "", "no server running on /private/tmp/tmux-501/lola", 1)
+	c := &Client{Bin: bin}
+
+	got, err := c.DeadPanes(context.Background())
+	if err != nil {
+		t.Fatalf("DeadPanes with no server: want nil error, got %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("want empty map, got %#v", got)
+	}
+}
+
+func TestKeepDeadPaneTargetsTheWindowNotTheSession(t *testing.T) {
+	// remain-on-exit is a WINDOW option: targeted at a bare session name tmux
+	// answers "no such window" and the pane vanishes on exit after all.
+	bin, argsLog := fakeTmux(t, "", "", 0)
+	c := &Client{Bin: bin}
+
+	if err := c.KeepDeadPane(context.Background(), "lola-app-eng-1-dev-1"); err != nil {
+		t.Fatalf("KeepDeadPane: %v", err)
+	}
+	wantArgs := "-L lola set-option -t =lola-app-eng-1-dev-1: -w remain-on-exit on"
+	if args := loggedArgs(t, argsLog); args != wantArgs {
+		t.Errorf("invoked %q, want %q", args, wantArgs)
+	}
+}
+
+func TestPanePIDReadsTheActivePane(t *testing.T) {
+	bin, argsLog := fakeTmux(t, "48845\n", "", 0)
+	c := &Client{Bin: bin}
+
+	pid, err := c.PanePID(context.Background(), "lola-app-eng-1-dev-1")
+	if err != nil {
+		t.Fatalf("PanePID: %v", err)
+	}
+	if pid != 48845 {
+		t.Errorf("PanePID = %d, want 48845", pid)
+	}
+	wantArgs := "-L lola display-message -p -t =lola-app-eng-1-dev-1: #{pane_pid}"
+	if args := loggedArgs(t, argsLog); args != wantArgs {
+		t.Errorf("invoked %q, want %q", args, wantArgs)
+	}
+}
+
+// KillSessionTree must ALWAYS take the tmux session down, even when the process
+// group cannot be resolved (a dead pane, a tmux that will not answer) — the tab
+// must never survive because the port could not be freed.
+func TestKillSessionTreeStillKillsTheSessionWithoutAPanePID(t *testing.T) {
+	bin, argsLog := fakeTmux(t, "not-a-pid\n", "", 0)
+	c := &Client{Bin: bin}
+
+	if err := c.KillSessionTree(context.Background(), "lola-app-eng-1-dev-1"); err != nil {
+		t.Fatalf("KillSessionTree: %v", err)
+	}
+	if args := loggedArgs(t, argsLog); !strings.Contains(args, "kill-session -t =lola-app-eng-1-dev-1") {
+		t.Errorf("invoked %q, want a kill-session despite the unusable pane pid", args)
+	}
+}

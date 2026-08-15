@@ -397,6 +397,35 @@ func openSessionCmd(project, target string) tea.Cmd {
 	}
 }
 
+// devDoneMsg carries the outcome of a `cmd=dev` toggle: msg is a terse line to
+// flash, ok is true when the daemon accepted it.
+type devDoneMsg struct {
+	msg string
+	ok  bool
+}
+
+// devToggleCmd switches the project's dev_commands onto id (on) or stops them.
+// Activating MOVES them: the daemon kills whichever session of the project held
+// the tabs first, so this is the whole "find the other composer dev, kill it,
+// restart it here" dance in one keystroke.
+func devToggleCmd(id string, on bool) tea.Cmd {
+	return func() tea.Msg {
+		args, _ := json.Marshal(protocol.DevArgs{Session: id, On: on})
+		resp, err := requestFn(protocol.Request{Cmd: "dev", Args: args})
+		if err != nil {
+			return devDoneMsg{msg: err.Error()}
+		}
+		if !resp.OK {
+			return devDoneMsg{msg: resp.Error}
+		}
+		var d protocol.DevData
+		if err := json.Unmarshal(resp.Data, &d); err != nil {
+			return devDoneMsg{msg: err.Error()}
+		}
+		return devDoneMsg{ok: true, msg: d.Message}
+	}
+}
+
 // coderabbitDoneMsg carries the outcome of a `cmd=coderabbit` force poll. msg is
 // a terse line to flash; ok is true when the poll ran (found or clean), false on
 // a skip (watch off / no open PR) or error.
@@ -624,6 +653,23 @@ func (m *rootModel) updateSessions(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.focusEmbed()
 	case "s":
 		return m.newShell()
+	case "D":
+		// Toggle the project's dev processes onto this session (one per project:
+		// activating takes them off whichever session was holding them). SHIFTED
+		// deliberately: bare "d" is the global doctor overlay, and this key stops
+		// another session's running processes.
+		if sel := s.selected(); sel != nil {
+			if len(sel.DevCommands) == 0 {
+				s.flash, s.flashGood = "no dev_commands configured for this project", false
+				return m, nil
+			}
+			if sel.DevActive {
+				s.flash, s.flashGood = "stopping dev processes…", true
+				return m, devToggleCmd(sel.ID, false)
+			}
+			s.flash, s.flashGood = "starting dev processes…", true
+			return m, devToggleCmd(sel.ID, true)
+		}
 	case "<", ",":
 		// '<' / '>' switch terminal tabs — Option-free on both US (Shift+,/.) and
 		// German (dedicated <> key) layouts, unlike '[' / ']' which need Option on
@@ -975,6 +1021,13 @@ func (m *rootModel) sessionDetail() string {
 	fmt.Fprintf(&b, "review:   %s\n", dash(sel.Review))
 	if sel.Reacting != "" {
 		fmt.Fprintf(&b, "reacting: %s\n", reactingStyle(sel.Reacting).Render(sel.Reacting))
+	}
+	if len(sel.DevCommands) > 0 {
+		state := faintText.Render("off (D to run here)")
+		if sel.DevActive {
+			state = goodText.Render("● " + strings.Join(sel.DevCommands, " · "))
+		}
+		fmt.Fprintf(&b, "dev:      %s\n", state)
 	}
 	fmt.Fprintf(&b, "age:      %s\n", dash(sel.Age))
 	return b.String()

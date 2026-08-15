@@ -184,6 +184,13 @@ func (d *Daemon) observeNative(ctx context.Context) {
 	}
 
 	touched := false
+	// Dev tabs are derived from the same listing, for EVERY session — including
+	// the agentless `lola open` shells the agent loop below skips, which are
+	// exactly the sessions a human checks a PR out in and wants the dev server
+	// on. Without the listing (the fallback path) the last known state stands.
+	if aliveByName != nil && d.reconcileDevTabs(ctx, aliveByName) {
+		touched = true
+	}
 	interpretQueued := 0
 	d.mu.Lock()
 	interpretPerCycle := d.cfg.StatusAgent.MaxPerCycle

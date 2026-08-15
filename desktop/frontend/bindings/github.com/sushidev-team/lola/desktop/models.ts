@@ -85,6 +85,13 @@ export interface ProjectFormDTO {
     "postCreate": string[] | null;
 
     /**
+     * DevCommands are the project's long-running dev processes, run by whichever
+     * session is ACTIVE (one per project — see internal/daemon/dev.go). Not an
+     * inheritable key: a dev command belongs to one repository.
+     */
+    "devCommands": string[] | null;
+
+    /**
      * "KEY=value" lines
      */
     "env": string[] | null;

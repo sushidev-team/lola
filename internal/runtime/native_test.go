@@ -758,8 +758,10 @@ func TestAdoptPairingMatrix(t *testing.T) {
 	f := newFixture(t, "", "")
 	// On disk + registered: eng-1 (tmux alive -> working), eng-2 (no tmux ->
 	// dead). Tmux only: eng-9 (-> orphaned, reported but never killed), a
-	// non-lola session (ignored), and an embedded shell TAB
-	// ("<id>-shell-1", ignored — it belongs to eng-1, not a session of its own).
+	// non-lola session (ignored), an embedded shell TAB ("<id>-shell-1") and a
+	// DEV tab ("<id>-dev-1") — both ignored: they belong to eng-1, not sessions
+	// of their own, and a dev tab outlives its command (remain-on-exit), so an
+	// unpaired one would otherwise be adopted as an orphan on every restart.
 	base := filepath.Join(f.root, "nori")
 	dir1 := filepath.Join(base, "lola-nori-eng-1")
 	dir2 := filepath.Join(base, "lola-nori-eng-2")
@@ -781,6 +783,7 @@ LOLA_EOF
   cat <<'LOLA_EOF'
 lola-nori-eng-1	1720000000	0
 lola-nori-eng-1-shell-1	1720000003	0
+lola-nori-eng-1-dev-1	1720000004	0
 lola-nori-eng-9	1720000001	0
 main	1720000002	1
 LOLA_EOF
@@ -889,8 +892,10 @@ func TestKillDropsShellTabsAndReviewPane(t *testing.T) {
   printf 'lola-nori-eng-42-shell-1\t1\t0\t1\n'
   printf 'lola-nori-eng-42-shell-2\t1\t0\t1\n'
   printf 'lola-nori-eng-42-review\t1\t0\t1\n'
+  printf 'lola-nori-eng-42-dev-1\t1\t0\t1\n'
   printf 'lola-nori-eng-420\t1\t0\t1\n'
   printf 'lola-nori-eng-420-shell-1\t1\t0\t1\n'
+  printf 'lola-nori-eng-420-dev-1\t1\t0\t1\n'
   exit 0
   ;;`)
 	dir := filepath.Join(f.root, "nori", "lola-nori-eng-42")
@@ -907,12 +912,14 @@ func TestKillDropsShellTabsAndReviewPane(t *testing.T) {
 		"kill-session -t =lola-nori-eng-42-shell-1",
 		"kill-session -t =lola-nori-eng-42-shell-2",
 		"kill-session -t =lola-nori-eng-42-review",
+		// A killed session must not leave its dev server bound to a port.
+		"kill-session -t =lola-nori-eng-42-dev-1",
 	} {
 		if !strings.Contains(calls+"\n", want) {
 			t.Errorf("missing %q in tmux calls:\n%s", want, calls)
 		}
 	}
-	for _, never := range []string{"=lola-nori-eng-420\n", "=lola-nori-eng-420-shell-1"} {
+	for _, never := range []string{"=lola-nori-eng-420\n", "=lola-nori-eng-420-shell-1", "=lola-nori-eng-420-dev-1"} {
 		if strings.Contains(calls+"\n", "kill-session -t "+never) {
 			t.Errorf("killed a sibling session (%s):\n%s", never, calls)
 		}
@@ -1535,6 +1542,10 @@ func TestIsAuxSession(t *testing.T) {
 		{"lola-nori-app-nor-357", false},
 		{"lola-nori-app-nor-357-shell-1", true},
 		{"lola-nori-app-nor-357-review", true},
+		{"lola-nori-app-nor-357-dev-1", true},
+		{"lola-nori-app-nor-357-dev-12", true},
+		{"lola-open-dev-branch", false}, // a session whose branch merely says "dev"
+		{"lola-nori-app-nor-357-dev", false},
 		{"lola-open-review-tool-1", false}, // a session whose branch merely says "review"
 		{"lola-nori-app-nor-357-reviewer", false},
 	} {

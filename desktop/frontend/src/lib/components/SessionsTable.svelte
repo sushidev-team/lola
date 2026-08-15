@@ -130,7 +130,15 @@
               <td class="max-w-[24rem] py-1.5 pr-2 align-middle"><AgentActivity session={s} /></td>
             {/if}
           {/if}
-          <td class="py-1.5 pr-2 align-middle text-sm whitespace-nowrap text-faint">{store.displayNameFor(s.project)}</td>
+          <!-- The dot marks the session running this project's dev_commands.
+               It rides on the PROJECT cell because that is the scope of the
+               exclusivity — one dot per project name in the whole table. -->
+          <td class="py-1.5 pr-2 align-middle text-sm whitespace-nowrap text-faint">
+            {store.displayNameFor(s.project)}{#if s.devActive}<span
+                class="ml-1 text-good"
+                title="running this project's dev commands">●</span
+              >{/if}
+          </td>
           <!-- The reaction posture rides WITH the status instead of in a column
                of its own: it is a qualifier on that status ("ci failed, and lola
                has spent 1 of 2 auto-retries"), not an independent axis. Only the

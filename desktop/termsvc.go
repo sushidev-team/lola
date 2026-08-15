@@ -17,6 +17,7 @@ import (
 	"github.com/creack/pty"
 	"github.com/wailsapp/wails/v3/pkg/application"
 
+	"github.com/sushidev-team/lola/internal/devtab"
 	"github.com/sushidev-team/lola/internal/lolaenv"
 )
 
@@ -196,8 +197,10 @@ func (t *TermService) hasSession(bin, name string) bool {
 }
 
 // Shells lists a lola session's auxiliary tmux sessions on the lola server: its
-// shells ("<id>-shell-N", sorted by their trailing index) followed by its review
-// pane ("<id>-review") when a visible review pass has opened one. Both the app
+// dev tabs ("<id>-dev-N", the project's dev_commands — the daemon owns their
+// lifetime, see internal/daemon/dev.go), then its shells ("<id>-shell-N", sorted
+// by their trailing index), then its review pane ("<id>-review") when a visible
+// review pass has opened one. Both the app
 // and the TUI discover the SAME sessions, so a shell opened in either shows up
 // as a tab in the other — and a review the daemon started shows up in both
 // without either having to be told. An empty result (or a tmux error) simply
@@ -215,11 +218,15 @@ func (t *TermService) Shells(sessionID string) []string {
 	}
 	prefix := sessionID + shellMarker + "-" // "<id>-shell-"
 	review := sessionID + reviewMarker      // "<id>-review"
-	var names []string
+	var names, devs []string
 	var reviewPane string
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 		if strings.HasPrefix(line, prefix) {
 			names = append(names, line)
+			continue
+		}
+		if devtab.Index(sessionID, line) > 0 {
+			devs = append(devs, line)
 			continue
 		}
 		if line == review {
@@ -229,6 +236,14 @@ func (t *TermService) Shells(sessionID string) []string {
 	sort.Slice(names, func(i, j int) bool {
 		return shellSessionIndex(sessionID, names[i]) < shellSessionIndex(sessionID, names[j])
 	})
+	sort.Slice(devs, func(i, j int) bool {
+		return devtab.Index(sessionID, devs[i]) < devtab.Index(sessionID, devs[j])
+	})
+	// Dev tabs sort FIRST (right after the agent): they belong to the project
+	// rather than to this session, so they hold their place while shells come
+	// and go — and the shell numbering above them never shifts because it is
+	// computed among shells alone.
+	names = append(devs, names...)
 	// The review pane sorts LAST so the shell numbering above it never shifts
 	// when a review starts or ends.
 	if reviewPane != "" {
@@ -262,7 +277,7 @@ func (t *TermService) CloseShell(shell string) error {
 	if err != nil {
 		return err
 	}
-	if !strings.Contains(shell, shellMarker) && !strings.HasSuffix(shell, reviewMarker) {
+	if !strings.Contains(shell, shellMarker) && !strings.HasSuffix(shell, reviewMarker) && !devtab.Is(shell) {
 		return fmt.Errorf("not a shell session name: %q", shell)
 	}
 	_ = t.Detach(shell)

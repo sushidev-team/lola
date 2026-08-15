@@ -8,6 +8,8 @@
 // which is invisible until something misbehaves at a distance.
 package lolaenv
 
+import "strings"
+
 // Dir is the per-worktree directory lola keeps its session artifacts in,
 // relative to the worktree root. Git-excluded, mode 0700.
 const Dir = ".lola"
@@ -30,3 +32,29 @@ const File = Dir + "/env"
 // Every byte here is a literal — nothing user-supplied is interpolated, which
 // is why this can be a constant rather than something quoted at run time.
 const ShellCommand = `exec sh -c 'set -a; [ -f ./` + File + ` ] && . ./` + File + `; set +a; exec "${SHELL:-/bin/sh}"'`
+
+// exportPrelude is the POSIX-only part ShellCommand and CommandLine share: the
+// env file exported into the process that follows it.
+const exportPrelude = `set -a; [ -f ./` + File + ` ] && . ./` + File + `; set +a; `
+
+// CommandLine is the single command argument for `tmux new-session` that runs
+// ONE command line with File exported — the dev tabs' equivalent of
+// ShellCommand (internal/daemon/dev.go runs a project's dev_commands with it).
+//
+// command is a user-authored shell line from config, so it is deliberately
+// INTERPRETED by sh (pipes, &&, env prefixes all work, exactly as
+// [[project]].post_create is run) — it is quoted only so it survives the trip
+// through the login shell intact, not to neuter it. It runs under `exec`, so the
+// pane's process IS the command: tmux's dead-pane detection then reports the
+// command's own exit, which is what makes a crashed dev server visible instead
+// of a wrapper shell sitting there looking alive.
+func CommandLine(command string) string {
+	return "exec sh -c " + shQuote(exportPrelude+"exec "+command)
+}
+
+// shQuote single-quotes s for a POSIX shell (the '\'' dance for embedded
+// quotes). Kept here rather than imported so this package stays stdlib-free
+// and the one contract lives in one file.
+func shQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}

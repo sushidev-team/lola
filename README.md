@@ -257,6 +257,7 @@ runtime layer, not on config load.
 | `default_branch` | string | Branch new session worktrees start from, and the base the agent is told to open its PR against. Default `main`. Both forms offer the checkout's branches once `path` is set (local plus remote-tracking, the repository's own default first) while staying free text, so a path that is not a checkout is never a dead end. |
 | `branch_prefix` | string | Prefix prepended to a session's derived branch name (e.g. `"feat/"` yields `feat/eng-42`). Empty inherits `[defaults].branch_prefix`, then `"lola/"`. |
 | `post_create` | string array | Commands run inside a fresh worktree before the agent starts (e.g. `composer install`). Any failure blocks the session with a clear status — never a half-started agent. Omit to inherit `[defaults].post_create`. |
+| `dev_commands` | string array | Long-running dev processes for this repository, e.g. `["composer dev", "npm run dev"]`. They run only in the project's **active** session — one session at a time, each command in its own terminal tab — see [The active session](#the-active-session). Deliberately **not** inheritable from `[defaults]`: a dev command belongs to one repository. |
 | `symlinks` | string array | Files symlinked from the main checkout into each worktree, e.g. `[".env"]`. Beware: a shared `.env` usually means every worktree talks to the same database. Omit to inherit `[defaults].symlinks`. |
 | `env` | table of strings | Extra environment variables exported into each session (`[project.env]`); the agent pane, shell tabs and the `post_create` commands all see them. Values may reference the session — see [Per-session env values](#per-session-env-values). Omit to inherit `[defaults].env`. |
 | `agent` | `"claude"` \| `"codex"` \| `"opencode"` | Coding agent for sessions spawned into this repo, overriding `[defaults].agent`. Empty/omitted inherits the global default (ultimately `claude`). See [The coding agent](#the-coding-agent). |
@@ -308,6 +309,39 @@ running daemon — it is the only thing that knows whether a session is live.
 
 For a new project the id is derived from the label as you type (`Nori App` →
 `nori-app`); typing in the id field yourself breaks that link for good.
+
+#### The active session
+
+Every worktree of a project wants to serve on the same port, so `composer dev`
+can only run in **one** session at a time. `dev_commands` makes that a toggle
+instead of a hunt:
+
+```toml
+[[project]]
+name = "nori-app"
+dev_commands = ["composer dev", "npm run dev"]
+```
+
+Switch a session **Active** — the button in the desktop app's session header,
+`Make active` in its right-click menu, or `D` in either surface — and lola
+
+- stops the dev tabs of whichever session of that project was holding them
+  (*first*, so the ports are free) — killing each tab's whole **process group**,
+  since `composer dev` spawns the process that actually holds the port and that
+  process ignores the hangup a plain tmux kill sends — then
+- starts each command in its own tmux tab beside the agent pane, rooted in that
+  session's worktree with its `env` exported, labelled with the command it runs.
+
+The toggle is **derived from tmux, not remembered**: closing a dev tab, a
+command that crashes, or a killed session all read back as inactive within one
+observe cycle (~30s), and the daemon never has to reconcile a stale flag. A tab
+whose command exits *keeps its pane* (tmux `remain-on-exit`), so the error that
+killed your dev server is still on screen when you come back to it — the session
+simply stops counting as active. Switching the toggle on again replaces the
+pane and restarts the command.
+
+Killing a session takes its dev tabs down with it, so a dead session never
+leaves a port bound.
 
 #### Per-session env values
 

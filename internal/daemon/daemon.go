@@ -169,6 +169,19 @@ type Daemon struct {
 	// observer fall back to per-session NativeAPI.Alive with no activity signal.
 	listTmuxSessions func(ctx context.Context) ([]tmux.Session, error)
 
+	// devTmux is the tmux adapter the dev-tab toggle drives (dev.go). nil uses
+	// the real lola-server client; tests inject a fake so the whole take-over →
+	// start → derive path runs without a tmux server.
+	devTmux func() devTmux
+
+	// deadPanes reports which tmux sessions have no live pane left. Only the
+	// DEV TABS need it (they are created with remain-on-exit, so a session
+	// whose command died still exists), and it is called only in a cycle that
+	// actually saw one, so a lola with no dev_commands execs exactly as much
+	// tmux as before. nil (tests without the seam) leaves the last known
+	// dev-tab state alone.
+	deadPanes func(ctx context.Context) (map[string]bool, error)
+
 	// Status interpreter ([statusagent], statusagentwire.go): the OPT-IN
 	// display-only LLM pass. statusAgent/interpretSeam are nil when disabled or
 	// the binary is missing (mirrored into interpretOn, the atomic the store's
@@ -402,6 +415,9 @@ func Run(ctx context.Context) error {
 	// tmux, and nil makes the observer fall back to per-session Alive.
 	d.listTmuxSessions = func(ctx context.Context) ([]tmux.Session, error) {
 		return d.tmuxClient().ListSessions(ctx)
+	}
+	d.deadPanes = func(ctx context.Context) (map[string]bool, error) {
+		return d.tmuxClient().DeadPanes(ctx)
 	}
 	d.realNative = true
 	// Reaction notifier (PLAN P3.20): resolve the [notify] table into a live

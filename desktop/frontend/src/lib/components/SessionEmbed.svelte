@@ -244,6 +244,22 @@
         {#if session.prNumber > 0}
           <Button size="xs" onclick={() => store.openURL(session.prUrl)}>Open PR <span aria-hidden="true">↗</span></Button>
         {/if}
+        {#if session.devCommands?.length}
+          <!-- The project's dev processes live in ONE session at a time, so this
+               is a segmented-style toggle rather than an action: selected means
+               THIS session is running them, and switching it on takes them off
+               whichever session had them. -->
+          <Button
+            size="xs"
+            selected={session.devActive}
+            title={session.devActive
+              ? `stop ${session.devCommands.join(", ")}`
+              : `run ${session.devCommands.join(", ")} here (stops them in any other session of this project)`}
+            onclick={() => store.dev(session.id, !session.devActive)}
+          >
+            <span aria-hidden="true">{session.devActive ? "●" : "○"}</span> Active
+          </Button>
+        {/if}
         <Button size="xs" onclick={() => store.coderabbit(session.id)}>CodeRabbit</Button>
         <Button size="xs" onclick={() => store.review(session.id)}>Review</Button>
         {#if canRevive}
@@ -372,8 +388,12 @@
                 size="xs"
                 icon
                 class="h-5! w-5! opacity-0 transition-[opacity,color] group-hover:opacity-100 hover:text-bad focus-visible:opacity-100"
-                title={terms.isReviewTab(sh) ? "close the review pane" : "close shell"}
-                aria-label={terms.isReviewTab(sh) ? "close review" : "close shell"}
+                title={terms.isReviewTab(sh)
+                  ? "close the review pane"
+                  : terms.isDevTab(sh)
+                    ? "stop this session's dev processes"
+                    : "close shell"}
+                aria-label={terms.isReviewTab(sh) ? "close review" : terms.isDevTab(sh) ? "stop dev" : "close shell"}
                 onclick={() => terms.closeShell(session.id, sh)}>×</Button
               >
             </div>

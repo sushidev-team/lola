@@ -10,6 +10,7 @@ import (
 	"net"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"time"
 
 	"github.com/sushidev-team/lola/internal/config"
@@ -197,6 +198,16 @@ func (d *Daemon) handle(ctx context.Context, req protocol.Request) protocol.Resp
 		return dataResponse(data)
 	case "coderabbit":
 		data, err := d.handleCodeRabbit(ctx, req.Session)
+		if err != nil {
+			return protocol.Response{OK: false, Error: err.Error()}
+		}
+		return dataResponse(data)
+	case "dev":
+		var a protocol.DevArgs
+		if err := json.Unmarshal(req.Args, &a); err != nil {
+			return protocol.Response{OK: false, Error: "dev: bad args: " + err.Error()}
+		}
+		data, err := d.handleDev(ctx, a.Session, a.On)
 		if err != nil {
 			return protocol.Response{OK: false, Error: err.Error()}
 		}
@@ -399,6 +410,15 @@ func (d *Daemon) sessionsData() protocol.SessionsData {
 	d.mu.Lock()
 	ciBudget := d.cfg.Reactions.CIFailed.Retries
 	minConfidence := d.cfg.StatusAgent.MinConfidence
+	// dev_commands per project, so a client knows whether the Active toggle
+	// applies at all (and what each "<id>-dev-N" tab runs) without a second
+	// round trip into config.
+	devCommands := map[string][]string{}
+	for _, p := range d.cfg.Projects {
+		if len(p.DevCommands) > 0 {
+			devCommands[p.Name] = slices.Clone(p.DevCommands)
+		}
+	}
 	d.mu.Unlock()
 	out := protocol.SessionsData{Sessions: make([]protocol.SessionInfo, 0, len(snap))}
 	for _, s := range snap {
@@ -428,6 +448,9 @@ func (d *Daemon) sessionsData() protocol.SessionsData {
 			InputReason:      string(s.InputReason),
 			CurrentTool:      s.CurrentTool,
 			LastNotification: s.LastNotification,
+
+			DevActive:   s.DevActive,
+			DevCommands: devCommands[s.Project],
 		}
 		if s.Source == "native" {
 			// Native sessions live in worktrees the daemon created at

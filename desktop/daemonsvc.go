@@ -117,6 +117,17 @@ func (s *DaemonService) CodeRabbit(session string) (protocol.CodeRabbitData, err
 	return d, err
 }
 
+// Dev moves the project's dev processes ([[project]].dev_commands) onto one
+// session, or stops them. Activating is a MOVE: the daemon first kills the tabs
+// of whichever session of that project held them, so the ports are free before
+// the new tabs start.
+func (s *DaemonService) Dev(session string, on bool) (protocol.DevData, error) {
+	args, _ := json.Marshal(protocol.DevArgs{Session: session, On: on})
+	var d protocol.DevData
+	err := call(protocol.Request{Cmd: "dev", Args: args}, longTimeout, &d)
+	return d, err
+}
+
 // --- launches ---------------------------------------------------------------
 
 // Open checks out a branch or PR of a project into a throwaway shell worktree.

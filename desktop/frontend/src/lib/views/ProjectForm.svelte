@@ -321,6 +321,7 @@
       branchPrefix: f.branchPrefix.trim(),
       symlinks: cleanLines(f.symlinks),
       postCreate: cleanLines(f.postCreate),
+      devCommands: cleanLines(f.devCommands),
       env: cleanLines(f.env),
       stateIds: cleanLines(f.stateIds),
       matchLabels: cleanLines(f.matchLabels),
@@ -671,6 +672,13 @@
           "npm install\nmake build",
           "one command per line — run after the worktree is created",
           "postCreate",
+        )}
+        {@render areaRow(
+          "Dev commands",
+          d.devCommands,
+          (v) => { d.devCommands = v; },
+          "composer dev\nnpm run dev",
+          "one long-running command per line — only the ACTIVE session runs them (one per project), each in its own terminal tab",
         )}
         {@render areaRow("Env", d.env, (v) => { d.env = v; }, "KEY=value\nAPI_URL=http://localhost", "one KEY=value per line", "env")}
       </div>

@@ -116,8 +116,10 @@ export function Shell(shell: string, worktree: string): $CancellablePromise<stri
 
 /**
  * Shells lists a lola session's auxiliary tmux sessions on the lola server: its
- * shells ("<id>-shell-N", sorted by their trailing index) followed by its review
- * pane ("<id>-review") when a visible review pass has opened one. Both the app
+ * dev tabs ("<id>-dev-N", the project's dev_commands — the daemon owns their
+ * lifetime, see internal/daemon/dev.go), then its shells ("<id>-shell-N", sorted
+ * by their trailing index), then its review pane ("<id>-review") when a visible
+ * review pass has opened one. Both the app
  * and the TUI discover the SAME sessions, so a shell opened in either shows up
  * as a tab in the other — and a review the daemon started shows up in both
  * without either having to be told. An empty result (or a tmux error) simply

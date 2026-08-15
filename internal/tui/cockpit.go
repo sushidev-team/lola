@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"charm.land/lipgloss/v2"
+	"github.com/sushidev-team/lola/internal/devtab"
 	"github.com/sushidev-team/lola/internal/protocol"
 )
 
@@ -217,6 +218,7 @@ func (m *rootModel) helpModal() string {
 		"",
 		head("Session actions"),
 		row("s", "new worktree shell"),
+		row("D", "run dev here (one per project)"),
 		row("< / >", "prev / next terminal tab"),
 		row("w", "close shell tab"),
 		row("a", "answer input"),
@@ -473,8 +475,15 @@ func (m *rootModel) sessionsBody(w, h int) []string {
 		if si.Title != "" {
 			anyTitle = true
 		}
+		// A green dot on the PROJECT cell marks the session currently running
+		// that project's dev_commands — the one question the list has to answer
+		// ("who has the dev server?") without a column of its own.
+		proj := m.projLabel(si.Project)
+		if si.DevActive {
+			proj += " " + goodText.Render("●")
+		}
 		rows[i] = []string{
-			marker, issue, m.projLabel(si.Project),
+			marker, issue, proj,
 			statusPillFor(si), pr,
 			reactingStyle(si.Reacting).Render(dash(si.Reacting)), dash(si.Age),
 		}
@@ -559,8 +568,17 @@ func (m *rootModel) embedTabBar(w int) string {
 		return faintText.Render(" " + label + " ")
 	}
 	parts := []string{tab("agent", 0)}
-	for i := range shells {
-		parts = append(parts, tab(fmt.Sprintf("sh%d", i+1), i+1))
+	shellNo := 0
+	for i, name := range shells {
+		switch {
+		case devtab.Index(sel.ID, name) > 0:
+			parts = append(parts, tab(devTabLabel(sel, name), i+1))
+		case strings.HasSuffix(name, "-review"):
+			parts = append(parts, tab("rev", i+1))
+		default:
+			shellNo++
+			parts = append(parts, tab(fmt.Sprintf("sh%d", shellNo), i+1))
+		}
 	}
 	parts = append(parts, faintText.Render("+"))
 	return previewLine(strings.Join(parts, " "), w)
@@ -873,6 +891,16 @@ func (m *rootModel) keybar(w int) string {
 					keys = append(keys, "s +shell "+goodText.Render("●")+" · < > tabs") // live shells to switch
 				} else {
 					keys = append(keys, "s shell")
+				}
+			}
+			// The dev toggle only exists for a project that configures
+			// dev_commands, and it reads as its own state: "d dev ●" means this
+			// session is the one holding them.
+			if len(sel.DevCommands) > 0 {
+				if sel.DevActive {
+					keys = append(keys, "D dev "+goodText.Render("●"))
+				} else {
+					keys = append(keys, "D dev")
 				}
 			}
 		}

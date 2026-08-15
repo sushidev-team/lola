@@ -3,6 +3,7 @@
 
 export type {
     CodeRabbitData,
+    DevData,
     Event,
     KillData,
     Match,

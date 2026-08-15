@@ -24,6 +24,27 @@ export function isReviewTab(name: string): boolean {
   return name.endsWith(REVIEW_SUFFIX);
 }
 
+/** Matches a session's DEV tab ("<id>-dev-<n>"): one of the project's
+ * dev_commands, started by the DAEMON (internal/daemon/dev.go) for whichever
+ * session currently holds them. Like the review pane it is only discovered here,
+ * never created — the "+ Shell" button has no dev counterpart, because which
+ * session runs them is a per-project decision the daemon arbitrates. */
+const DEV_RE = /-dev-(\d+)$/;
+
+/** Whether a discovered tab name is a dev tab. */
+export function isDevTab(name: string): boolean {
+  return DEV_RE.test(name);
+}
+
+/** The 1-based command index of a session's dev tab, or 0 when name is not one.
+ * The prefix is matched in full because "lola-fe-4" is a prefix of
+ * "lola-fe-42-dev-1" — the same trap internal/devtab guards in Go. */
+export function devTabIndex(id: string, name: string): number {
+  const rest = name.startsWith(`${id}-dev-`) ? name.slice(id.length + 5) : "";
+  const n = Number(rest);
+  return rest !== "" && Number.isInteger(n) && n > 0 ? n : 0;
+}
+
 /** Webview-local tab names (the right-click → Rename). Deliberately NOT a
  * config.toml key and not daemon state: the tmux session keeps its real name,
  * this is only what the app calls it. Mirrored to localStorage — best-effort,
@@ -83,6 +104,11 @@ class Terms {
     return isReviewTab(name);
   }
 
+  /** Whether a tab runs one of the project's dev_commands (see isDevTab). */
+  isDevTab(name: string): boolean {
+    return isDevTab(name);
+  }
+
   /** Display label for a tab: a hand-given name if it has one, "Review" for the
    * review pane, else "Shell N" — N being the shell's 1-based position among the
    * SHELLS (the review pane must not shift it, and a drag renumbers them). */
@@ -90,8 +116,17 @@ class Terms {
     const given = this.names.get(id)?.[name];
     if (given) return given;
     if (isReviewTab(name)) return "Review";
+    // A dev tab is labelled with the COMMAND it runs, which is the only thing
+    // that tells two of them apart at a glance. The command list travels on the
+    // session (SessionInfo.devCommands, index N-1 for "<id>-dev-N"); a tab whose
+    // command is gone from config falls back to its number.
+    const dev = devTabIndex(id, name);
+    if (dev > 0) {
+      const cmd = store.sessionById(id)?.devCommands?.[dev - 1];
+      return cmd || `Dev ${dev}`;
+    }
     const i = this.shellsFor(id)
-      .filter((n) => !isReviewTab(n))
+      .filter((n) => !isReviewTab(n) && !isDevTab(n))
       .indexOf(name);
     return i === -1 ? "Shell" : `Shell ${i + 1}`;
   }
@@ -175,7 +210,7 @@ class Terms {
   private nextName(id: string): string {
     const prefix = `${id}-shell-`;
     let max = 0;
-    for (const n of this.shellsFor(id).filter((n) => !isReviewTab(n))) {
+    for (const n of this.shellsFor(id).filter((n) => !isReviewTab(n) && !isDevTab(n))) {
       const k = Number(n.slice(prefix.length));
       if (Number.isFinite(k) && k > max) max = k;
     }
@@ -205,7 +240,19 @@ class Terms {
   // closeShell drops a shell tab and kills its tmux session (the "×"). Flip UI
   // state FIRST so the LiveTerminal unmounts (and detaches) before the kill, then
   // reconcile.
+  //
+  // Closing a DEV tab is not a tab operation but a state change: the session
+  // stops being the project's active one, so it goes through the daemon
+  // (cmd=dev off), which stops every dev tab of the session and re-derives the
+  // toggle. Killing the tmux session behind the daemon's back would leave the
+  // app claiming "active" until the next observe cycle corrected it.
   async closeShell(id: string, name: string): Promise<void> {
+    if (isDevTab(name)) {
+      this.forget(id, name);
+      await store.dev(id, false);
+      void this.refresh(id);
+      return;
+    }
     this.forget(id, name);
     try {
       await TermService.CloseShell(name);

@@ -407,6 +407,17 @@ post_create = [
   "composer install",
   "bun install --frozen-lockfile",
 ]
+# Long-running dev processes for THIS repository. They run only in the project's
+# ACTIVE session — one session at a time, each command in its own terminal tab
+# rooted in that session's worktree (with [project.env] exported). Switching
+# another session active stops these first, so the ports are free before the new
+# ones start; a command that dies keeps its pane (so you can read why) and the
+# session stops counting as active. Toggle with the app's "Active" button or `D`
+# in either surface. Per project by design — there is no [defaults].dev_commands.
+dev_commands = [
+  "composer dev",
+  "npm run dev",
+]
 # Files symlinked from the main checkout into each worktree.
 # CAVEAT: symlinking .env means every worktree talks to the SAME database
 # (and caches, queues, ...) as the main checkout — concurrent sessions can

@@ -175,3 +175,45 @@ func TestCloseShellAcceptsAReviewPane(t *testing.T) {
 		t.Error("CloseShell must still refuse an agent session name")
 	}
 }
+
+// Dev tabs ("<id>-dev-N", the project's dev_commands started by the daemon) are
+// listed FIRST — they belong to the project rather than to this session, so they
+// hold their place while shells come and go — and another session's dev tab is
+// not this session's, including one whose id merely starts with the same text.
+func TestShellsListsDevTabsFirst(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "tmux")
+	script := "#!/bin/sh\n" +
+		"for a in \"$@\"; do case \"$a\" in list-sessions) " +
+		"printf '%s\\n' 'NORI-1' 'NORI-1-shell-1' 'NORI-1-dev-2' 'NORI-1-review' 'NORI-1-dev-1' 'NORI-10-dev-1'; exit 0;; esac; done\n" +
+		"exit 0\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	svc := &TermService{tmuxBin: bin, streams: map[string]*ptyStream{}}
+
+	got := svc.Shells("NORI-1")
+	want := []string{"NORI-1-dev-1", "NORI-1-dev-2", "NORI-1-shell-1", "NORI-1-review"}
+	if len(got) != len(want) {
+		t.Fatalf("Shells = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("Shells[%d] = %q, want %q (full: %v)", i, got[i], want[i], got)
+		}
+	}
+}
+
+// The app closes a dev tab through the daemon (which stops the whole set), but
+// CloseShell must still ACCEPT the name: a stale tab left by a killed session is
+// reaped through the same path as a shell.
+func TestCloseShellAcceptsADevTab(t *testing.T) {
+	bin, logPath := fakeTmux(t, false)
+	svc := &TermService{tmuxBin: bin, streams: map[string]*ptyStream{}}
+	if err := svc.CloseShell("NORI-1-dev-1"); err != nil {
+		t.Fatalf("CloseShell on a dev tab: %v", err)
+	}
+	if !strings.Contains(tmuxLog(t, logPath), "kill-session -t =NORI-1-dev-1") {
+		t.Errorf("expected kill-session, log:\n%s", tmuxLog(t, logPath))
+	}
+}

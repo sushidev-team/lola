@@ -433,7 +433,11 @@ type ProjectFormDTO struct {
 	Agent         string   `json:"agent"` // ""=inherit | claude | codex | opencode
 	Symlinks      []string `json:"symlinks"`
 	PostCreate    []string `json:"postCreate"`
-	Env           []string `json:"env"` // "KEY=value" lines
+	// DevCommands are the project's long-running dev processes, run by whichever
+	// session is ACTIVE (one per project — see internal/daemon/dev.go). Not an
+	// inheritable key: a dev command belongs to one repository.
+	DevCommands []string `json:"devCommands"`
+	Env         []string `json:"env"` // "KEY=value" lines
 
 	// Linear polling filter.
 	Enabled        bool     `json:"enabled"`
@@ -511,6 +515,7 @@ func projectDTO(p *config.Project) ProjectFormDTO {
 		Agent:         p.Agent,
 		Symlinks:      p.Symlinks,
 		PostCreate:    p.PostCreate,
+		DevCommands:   p.DevCommands,
 		Env:           envToLines(p.Env),
 
 		Enabled:        p.Enabled,
@@ -593,6 +598,7 @@ func (s *ConfigService) SaveProject(dto ProjectFormDTO) error {
 	p.Agent = dto.Agent
 	p.Symlinks = nonEmpty(dto.Symlinks)
 	p.PostCreate = nonEmpty(dto.PostCreate)
+	p.DevCommands = nonEmpty(dto.DevCommands)
 	p.Env = env
 
 	p.Enabled = dto.Enabled

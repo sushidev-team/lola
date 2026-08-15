@@ -257,6 +257,22 @@ describe("ProjectForm", () => {
     expect(within(rowOf(postCreate)).getByRole("button", { name: "Override" })).toBeInTheDocument();
   });
 
+  it("edits dev_commands as a plain per-project list — no inherit chip", async () => {
+    render(ProjectForm);
+    const dev = await screen.findByLabelText("Dev commands");
+    // dev_commands has no [defaults] counterpart on purpose, so the row carries
+    // neither the ghost nor an Inherited/Override chip.
+    expect(dev.className).not.toContain("opacity-55");
+    expect(within(rowOf(dev)).queryByRole("button", { name: "Inherited" })).not.toBeInTheDocument();
+    expect(within(rowOf(dev)).queryByRole("button", { name: "Override" })).not.toBeInTheDocument();
+
+    await fireEvent.input(dev, { target: { value: "composer dev\nnpm run dev" } });
+    await fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+    await waitFor(() => expect(saveProject).toHaveBeenCalledTimes(1));
+    const arg = saveProject.mock.calls.at(-1)![0];
+    expect(arg.devCommands).toEqual(["composer dev", "npm run dev"]);
+  });
+
   it("promotes an inherited field to an override when it is edited", async () => {
     render(ProjectForm);
     const symlinks = await screen.findByLabelText("Symlinks");

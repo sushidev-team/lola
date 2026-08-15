@@ -6,7 +6,8 @@ vi.mock("@bindings/desktop", () => ({
   TermService: { Shells: vi.fn(async () => []), Shell: vi.fn(async () => ""), CloseShell: vi.fn(async () => {}) },
 }));
 
-const { terms, AGENT, isReviewTab } = await import("./terms.svelte");
+const { terms, AGENT, isReviewTab, isDevTab, devTabIndex } = await import("./terms.svelte");
+const { store } = await import("./store.svelte");
 
 // The store is a singleton; give each test its own session id instead of
 // resetting it, so ordering can never matter.
@@ -148,5 +149,62 @@ describe("drag-to-sort tabs", () => {
     terms.select(id, AGENT);
     terms.cycleTab(id, 1);
     expect(terms.activeTab(id)).toBe(`${id}-shell-2`);
+  });
+});
+
+describe("dev tabs", () => {
+  it("recognises a dev tab only when it carries an index", () => {
+    expect(isDevTab("lola-app-eng-1-dev-1")).toBe(true);
+    expect(isDevTab("lola-app-eng-1-dev-12")).toBe(true);
+    expect(isDevTab("lola-app-eng-1-dev")).toBe(false);
+    expect(isDevTab("lola-app-open-dev-branch")).toBe(false);
+    expect(isDevTab("lola-app-eng-1-shell-1")).toBe(false);
+  });
+
+  it("binds a dev tab to its EXACT parent (a shorter id is not a prefix match)", () => {
+    expect(devTabIndex("lola-fe-42", "lola-fe-42-dev-2")).toBe(2);
+    expect(devTabIndex("lola-fe-4", "lola-fe-42-dev-1")).toBe(0);
+    expect(devTabIndex("lola-fe-42", "lola-fe-42-shell-1")).toBe(0);
+  });
+
+  it("labels a dev tab with the command it runs and leaves shell numbering alone", () => {
+    const id = newId();
+    store.sessions = [{ id, devCommands: ["composer dev", "npm run dev"] } as never];
+    seed(id, [`${id}-dev-1`, `${id}-dev-2`, `${id}-shell-1`, `${id}-review`]);
+    expect(terms.labelFor(id, `${id}-dev-1`)).toBe("composer dev");
+    expect(terms.labelFor(id, `${id}-dev-2`)).toBe("npm run dev");
+    // The dev tabs must not shift the shells' numbering — they are the
+    // project's tabs, sitting ahead of this session's own.
+    expect(terms.labelFor(id, `${id}-shell-1`)).toBe("Shell 1");
+    expect(terms.labelFor(id, `${id}-review`)).toBe("Review");
+  });
+
+  it("falls back to 'Dev N' when config no longer describes that tab", () => {
+    const id = newId();
+    store.sessions = [{ id, devCommands: ["composer dev"] } as never];
+    seed(id, [`${id}-dev-1`, `${id}-dev-2`]);
+    expect(terms.labelFor(id, `${id}-dev-2`)).toBe("Dev 2");
+  });
+
+  it("closes a dev tab through the daemon toggle, not by killing the tmux session", async () => {
+    const id = newId();
+    store.sessions = [{ id, devCommands: ["composer dev"], devActive: true } as never];
+    seed(id, [`${id}-dev-1`]);
+    const devSpy = vi.spyOn(store, "dev").mockResolvedValue(undefined as never);
+    const { TermService } = await import("@bindings/desktop");
+
+    await terms.closeShell(id, `${id}-dev-1`);
+
+    expect(devSpy).toHaveBeenCalledWith(id, false);
+    expect(TermService.CloseShell).not.toHaveBeenCalled();
+    devSpy.mockRestore();
+  });
+
+  it("numbers a new shell past the shells only, ignoring dev tabs", async () => {
+    const id = newId();
+    seed(id, [`${id}-dev-1`, `${id}-dev-2`, `${id}-shell-1`]);
+    const { TermService } = await import("@bindings/desktop");
+    await terms.openShell(id, "/tmp/wt");
+    expect(TermService.Shell).toHaveBeenCalledWith(`${id}-shell-2`, "/tmp/wt");
   });
 });

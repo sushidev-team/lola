@@ -137,6 +137,16 @@ type Session struct {
 	// mid-turn agent.
 	AtPromptVerified bool `json:"at_prompt_verified,omitempty"`
 
+	// DevTabs is how many of the project's dev_commands this session currently
+	// holds RUNNING (its "<id>-dev-N" tmux tabs whose pane is still alive), and
+	// DevActive is the toggle the UIs render — true iff at least one is. Both
+	// are DERIVED from tmux facts by the observer, never persisted intent: a
+	// closed tab, a crashed `npm run dev` or a daemon restart therefore all read
+	// straight off the multiplexer rather than off a stale flag. Only one
+	// session per project may hold them (see internal/daemon/dev.go).
+	DevActive bool `json:"dev_active,omitempty"`
+	DevTabs   int  `json:"dev_tabs,omitempty"`
+
 	// ---- [statusagent] interpreter overlay (DISPLAY ONLY). These fields are
 	// untrusted LLM output derived from attacker-influenceable pane text:
 	// they overlay the DISPLAYED agent axis in sessionsData and nothing else.

@@ -75,6 +75,25 @@ describe("SessionMenu", () => {
     expect(screen.getByRole("menuitem", { name: "Revive" })).toBeInTheDocument();
   });
 
+  it("omits the dev toggle for a project with no dev_commands", () => {
+    sessionMenu.request = { id: "acme-eng-1", x: 10, y: 10 };
+    render(SessionMenu);
+    expect(screen.queryByRole("menuitem", { name: /dev/i })).not.toBeInTheDocument();
+  });
+
+  it("offers 'Make active' when the project has dev_commands, and reads back the running state", () => {
+    store.sessions = [fakeSession({ devCommands: ["composer dev"], devActive: false })];
+    sessionMenu.request = { id: "acme-eng-1", x: 10, y: 10 };
+    render(SessionMenu);
+    expect(screen.getByRole("menuitem", { name: "Make active" })).toBeInTheDocument();
+
+    cleanup();
+    store.sessions = [fakeSession({ devCommands: ["composer dev"], devActive: true })];
+    sessionMenu.request = { id: "acme-eng-1", x: 10, y: 10 };
+    render(SessionMenu);
+    expect(screen.getByRole("menuitem", { name: "Active — stop dev" })).toBeInTheDocument();
+  });
+
   it("routes kill through the shared confirm dialog and closes first", async () => {
     sessionMenu.request = { id: "acme-eng-1", x: 10, y: 10 };
     render(SessionMenu);

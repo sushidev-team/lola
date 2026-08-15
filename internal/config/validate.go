@@ -6,6 +6,7 @@ import (
 	"maps"
 	"regexp"
 	"slices"
+	"strings"
 
 	"github.com/sushidev-team/lola/internal/notify"
 )
@@ -150,6 +151,18 @@ func (c *Config) Validate() error {
 		for _, k := range slices.Sorted(maps.Keys(pr.Env)) {
 			if !envNameRe.MatchString(k) {
 				errs = append(errs, fmt.Errorf("%s: env key %q is not a valid shell identifier (must match [A-Za-z_][A-Za-z0-9_]*)", id, k))
+			}
+		}
+		// Each dev_commands entry becomes ONE tmux session's command line, so a
+		// blank entry would open a tab that dies instantly and a multi-line one
+		// would be truncated at the newline — both are config mistakes worth
+		// naming rather than debugging in a pane.
+		for j, cmd := range pr.DevCommands {
+			switch {
+			case strings.TrimSpace(cmd) == "":
+				errs = append(errs, fmt.Errorf("%s: dev_commands[%d] is empty", id, j))
+			case strings.ContainsAny(cmd, "\n\r"):
+				errs = append(errs, fmt.Errorf("%s: dev_commands[%d] must be a single line", id, j))
 			}
 		}
 	}
