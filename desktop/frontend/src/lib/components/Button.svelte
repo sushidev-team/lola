@@ -76,6 +76,23 @@
   // treatment for all of them — the app previously had `bg-accent`+`text-on-accent`
   // on two of them and `bg-accent-fill`+`text-accent-ink` on the others.
   const SELECTED = "bg-accent-fill font-medium text-accent-ink";
+
+  // In flight. A loading button is disabled — the actions behind these are not
+  // idempotent (activating a session STOPS another session's dev servers), so a
+  // second click while the first is still travelling is never what was meant —
+  // but it must not wear the 40% of a control that cannot be used at all: this
+  // one is working, and a faded spinner reads as a bug. Hence the `!` overrides
+  // of BASE's disabled rules (see the note above: same specificity otherwise,
+  // and Tailwind's sheet order would decide the winner).
+  const LOADING = "disabled:opacity-100! disabled:cursor-progress!";
+
+  // The spinner: a ring with one quarter cut out, in the button's own text
+  // colour, so it inherits every variant and needs no palette of its own.
+  // `motion-reduce` slows it rather than stopping it — an animation is the whole
+  // message here, and a frozen spinner says "hung".
+  const SPINNER =
+    "size-3 shrink-0 animate-spin rounded-full border-[1.5px] border-current border-t-transparent " +
+    "motion-reduce:animate-[spin_1.8s_linear_infinite]";
 </script>
 
 <script lang="ts">
@@ -91,6 +108,12 @@
     icon = false,
     /** Fill the parent's width and left-align (menu-ish / full-width rows). */
     block = false,
+    /**
+     * The action is in flight: shows a spinner ahead of the label and disables
+     * the button. Call sites that draw their own state glyph should drop it
+     * while this is set — the spinner takes that slot.
+     */
+    loading = false,
     class: klass = "",
     children,
     ...rest
@@ -100,6 +123,7 @@
     selected?: boolean;
     icon?: boolean;
     block?: boolean;
+    loading?: boolean;
     class?: string;
     children: Snippet;
   } & HTMLButtonAttributes = $props();
@@ -110,6 +134,7 @@
       icon ? ICON_SIZES[size] : SIZES[size],
       selected ? SELECTED : VARIANTS[variant],
       block ? "w-full justify-start" : icon ? "" : "justify-center",
+      loading ? LOADING : "",
       klass,
     ]
       .filter(Boolean)
@@ -120,6 +145,17 @@
 <!-- type="button" by default: an unqualified <button> inside a <form> submits it,
      and several of these live in the config overlays. A caller can still pass
      type="submit" through {...rest}. -->
-<button type="button" aria-pressed={selected ? true : undefined} {...rest} class={cls}>
+<!-- disabled/aria-busy come AFTER the spread: a loading button is disabled even
+     when the call site passed no disabled of its own, and a call site's
+     disabled={true} must still win while it is not loading. -->
+<button
+  type="button"
+  aria-pressed={selected ? true : undefined}
+  {...rest}
+  disabled={loading || rest.disabled}
+  aria-busy={loading ? true : undefined}
+  class={cls}
+>
+  {#if loading}<span class={SPINNER}></span>{/if}
   {@render children()}
 </button>
