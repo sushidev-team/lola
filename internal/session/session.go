@@ -147,6 +147,15 @@ type Session struct {
 	DevActive bool `json:"dev_active,omitempty"`
 	DevTabs   int  `json:"dev_tabs,omitempty"`
 
+	// DevURLs are the local testing addresses this session's dev tabs printed
+	// into their panes ("http://127.0.0.1:8001"), best first — scraped by
+	// internal/devurl, because lola cannot know what port `composer dev` picked
+	// (it moves the moment 8000 is taken) and reading it out of a scrolling log
+	// is the manual step this removes. DERIVED like the two fields above, and
+	// dropped the moment the tabs stop: an address for a server that is gone is
+	// worse than none.
+	DevURLs []string `json:"dev_urls,omitempty"`
+
 	// ---- [statusagent] interpreter overlay (DISPLAY ONLY). These fields are
 	// untrusted LLM output derived from attacker-influenceable pane text:
 	// they overlay the DISPLAYED agent axis in sessionsData and nothing else.

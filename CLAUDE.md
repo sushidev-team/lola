@@ -128,6 +128,26 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   `internal/runtime` must recognize them as auxiliary sessions, and both the TUI
   and the app discover them as terminal tabs — none of which may import the
   others.
+- `internal/proctree` — the ONE place lola signals a process it did not start:
+  the machine's process table (`ps`) plus whole-process-GROUP termination
+  (SIGTERM → grace → SIGKILL → settle). It exists because a process group is not
+  the whole story — a descendant that left the group (Claude Code's Bash tool
+  puts every command in its own) is unreachable by a group kill and is exactly
+  what keeps a port bound. Both `internal/tmux`'s `KillSessionTree` and the
+  daemon's dev sweep use it, which is why it is a stdlib leaf and not part of
+  either.
+- `internal/devurl` — pure text: scores the LOCAL testing URLs a dev command
+  printed into its pane and ranks the app's above the bundler's. It cannot be a
+  lookup table (lola does not know what `dev_commands` runs or what port it
+  settled on — the port MOVING is the whole point), so the CUE around the URL
+  decides: "Server running on", a `[server]` label, "Local:". Only http(s) on a
+  loopback host is ever returned, because the result is handed to an opener and
+  pane text is untrusted.
+- `internal/portproc` — one lsof question: which processes hold a LISTENING TCP
+  port, and from which working directory. The directory is the point — lola
+  cannot know what port `dev_commands` bind, so a stray dev server is found by
+  where it runs, not by its port (see the ACTIVE-session invariant). Fails open:
+  no lsof, or output it cannot parse, reports nothing rather than a guess.
 - `internal/gitrepo` — reads a checkout with LOCAL git only (no network, no
   `gh`): `Detect` resolves the GitHub `owner/name` from its remotes (upstream,
   then origin), `Branches` the fork-from candidates, and `Inspect` gathers root
@@ -346,12 +366,21 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   safe (`ErrDirty` unless forced); (3) the local branch, but only when
   `Session.OwnsBranch()` (a `pr` session's Branch is UPSTREAM — deleting it
   destroys someone else's ref). Rules that hold it together:
-  - The sweep kills each aux session's whole process GROUP
-    (`tmux.KillSessionTree`), not just its pane. `kill-session` only hangs the
-    pane process up, and anything that ignores SIGHUP — a dev tab's `php artisan
+  - EVERY session — the agent's own and each aux one — goes down through
+    `tmux.KillSessionTree`, not `KillSession`. `kill-session` only hangs the pane
+    process up, and anything that ignores SIGHUP — a dev tab's `php artisan
     serve`, a server started by hand in a shell tab — survives as an orphan of
     pid 1 still holding its port. It degrades to a plain `KillSession` whenever
     the pane pid cannot be resolved, so a tab is always torn down.
+  - `KillSessionTree` signals the pane's process group **and every group its
+    ppid TREE spans** (`internal/proctree`). The group alone is not enough:
+    Claude Code's Bash tool puts each command it runs in its OWN process group
+    (so it can time one out without touching the agent), so a `php artisan serve
+    --port=8000` the AGENT started is invisible to a group kill of its own pane
+    and outlives the whole session — holding the port against a worktree
+    teardown is about to delete. All groups share ONE grace window (SIGTERM,
+    then SIGKILL, then a short settle), because per-group grace would multiply
+    the wait by a user waiting on a port.
   - The aux sweep is BEST-EFFORT: a tmux that cannot answer logs and continues,
     because these are display surfaces and the caller retries the whole cleanup
     on error — a stuck shell tab must never block a worktree removal forever.
@@ -384,6 +413,34 @@ each of which owns exactly one external tool or concern behind an **exec seam**
     actually holds the port and that process ignores SIGHUP. Killing only the
     tmux session left it orphaned on pid 1, so the session taking over started on
     8001 and the feature had moved the problem instead of solving it.
+  - Killing the previous holder's TABS is not enough, so activation also SWEEPS
+    (`sweepPortSquatters`). The agent working in a worktree starts servers of its
+    own — `php artisan serve --port=8000`, to look at the page it just changed —
+    and those are neither a tmux session nor part of any pane's process group
+    (see the teardown invariant), so they outlive everything and the session
+    taking over silently serves :8001 from the wrong checkout. lola cannot find
+    such a process BY port (the port lives inside `composer dev`, not in config),
+    so it finds it by WHERE it runs: `internal/portproc` (lsof) lists listening
+    sockets with each owner's cwd, and anything listening from inside
+    `~/.lola/worktrees/<project>/` goes down with its groups. Its rails, in
+    order of how much damage each prevents: only that directory is ever swept
+    (a server in the project's own checkout is the user's, not lola's); a group
+    that owns a LIVE tmux pane — or the tmux server above it — is never
+    signalled (every agent's cwd IS its worktree, so without this the sweep
+    would kill the worker mid-turn); and it FAILS CLOSED, because no lsof, no
+    `ps` and no pane list each cost the protect set.
+  - The session's local ADDRESS is derived the same way and from the same place:
+    `scanDevURLs` reads the dev tabs' scrollback once the tabs are up, ranks
+    what it finds with `internal/devurl`, and puts it on `Session.DevURLs` →
+    `SessionInfo.devUrls` → a clickable chip in the app / a `serves:` line in the
+    TUI. Three rules keep it cheap and honest: it reads a pane only while
+    nothing is known or right after the tab set changed (the address does not
+    move on its own), it spends at most `devURLAttempts` reads per tab set so a
+    `--watch` tab that never prints one stops costing a 2000-line capture every
+    cycle, and `markDev` CLEARS the addresses on any change — a link to a server
+    that is gone is worse than no link. The app opens it through the daemon
+    (`cmd=openURL`, http(s)-only), never `window.open`: the address came out of
+    terminal text.
   - `dev_commands` is deliberately NOT a `[defaults]` key (see the inheritance
     invariant): a dev command belongs to one repository, and an inherited one
     would start the wrong stack in every project that forgot to override it.
@@ -519,8 +576,17 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   sizes `xs`/`sm`/`md`, variants `ghost` (the default: transparent at rest, a
   `bg-sel` chip on hover, Linear's shape) / `accent` / `secondary` / `primary` /
   `danger` / `danger-solid`, plus `selected` for segmented controls, `icon` for
-  square glyph buttons and `block` for full-width rows. Do not hand-roll
-  `rounded … px-… hover:text-…` at a call site again. Consequences:
+  square glyph buttons, `block` for full-width rows and `loading` for an action
+  in flight. Do not hand-roll `rounded … px-… hover:text-…` at a call site
+  again. Consequences:
+  - `loading` DISABLES the button — these actions are not idempotent, and the
+    dev toggle in particular stops another session's servers — but overrides the
+    disabled fade with `!`, because a control that is working must not wear the
+    40% of one that is dead. The in-flight flag belongs in the STORE, not in the
+    button: the dev toggle has three triggers (row button, context menu, `D`)
+    and a local flag would leave two of them looking inert. A call site that
+    draws its own state glyph hides it while loading — the spinner takes that
+    slot.
   - Every class in it is a LITERAL in the module-level maps. Tailwind scans
     source text, so a composed `` `bg-${x}` `` compiles to nothing.
   - Hover rules are `enabled:hover:`, never bare `hover:` — CSS still matches

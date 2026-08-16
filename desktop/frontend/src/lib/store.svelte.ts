@@ -90,6 +90,15 @@ class Store {
   // a persistent failure is not re-emitted, so it stays dismissed.
   pushErrors = $state<Record<string, string>>({});
 
+  // Sessions whose dev toggle is in flight, so the control can show it. This
+  // lives in the STORE rather than in the button because the toggle has three
+  // triggers (the session row's button, the context menu, the `D` shortcut) and
+  // only one of them is the button — a local flag would leave the other two
+  // looking like nothing happened. The call is genuinely slow: the daemon stops
+  // the previous holder's tabs and reclaims any port still held in the
+  // project's worktrees, each with its own SIGTERM grace, before it answers.
+  devPending = $state<Record<string, boolean>>({});
+
   private flashTimer: ReturnType<typeof setTimeout> | undefined;
   private started = false;
 
@@ -315,11 +324,17 @@ class Store {
    * SessionEmbed rediscovers a session's tmux tabs every few seconds, and this
    * module deliberately does not import terms (which imports this one).
    */
-  dev(session: string, on: boolean) {
-    return this.act(
-      () => DaemonService.Dev(session, on),
-      on ? "dev processes started here" : "dev processes stopped",
-    );
+  async dev(session: string, on: boolean) {
+    if (this.devPending[session]) return undefined; // already travelling
+    this.devPending[session] = true;
+    try {
+      return await this.act(
+        () => DaemonService.Dev(session, on),
+        on ? "dev processes started here" : "dev processes stopped",
+      );
+    } finally {
+      delete this.devPending[session];
+    }
   }
   open(project: string, ref: string) {
     return this.act(() => DaemonService.Open(project, ref), `opened ${ref}`);

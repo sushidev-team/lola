@@ -3,8 +3,7 @@
   import { store } from "$lib/store.svelte";
   import { nav } from "$lib/nav.svelte";
   import { terms, AGENT } from "$lib/terms.svelte";
-  import StatusPill from "./StatusPill.svelte";
-  import LivePulse from "./LivePulse.svelte";
+  import { devUrlLabel, MAX_URL_CHIPS } from "$lib/devurl";
   import LiveTerminal from "./LiveTerminal.svelte";
   import Button from "./Button.svelte";
   import MenuItem from "./MenuItem.svelte";
@@ -215,26 +214,31 @@
   <div class="flex h-full min-h-0 flex-col">
     <!-- header — z-10 keeps the minimize/focus button above the canvas layer. -->
     <div class="relative z-10 flex flex-wrap items-center gap-2 border-b border-edge/60 px-3 py-2">
+      <!-- Identity, then the ONE thing this row can say that the list above
+           cannot, then the actions. Everything that used to sit between them —
+           project name, live pulse, status pill, the interpreter's headline, the
+           current tool, the PR-stale warning, the branch — is already carried by
+           the row this session is selected FROM (SessionsTable's AgentActivity
+           column holds the pulse and the headline, its own cells hold the
+           project and the status), so repeating it here bought nothing and cost
+           the width that made the header wrap. -->
       <span class="selectable font-medium text-accent-ink">{session.issue || session.id.slice(0, 8)}</span>
       <span class="selectable truncate text-ink">{session.title}</span>
-      <span class="text-edge">·</span>
-      <span class="text-sm text-faint">{store.displayNameFor(session.project)}</span>
-      <LivePulse agentState={session.agentState} />
-      <StatusPill status={session.status} interpreted={session.interpretedState} />
-      {#if session.headline}
-        <!-- The interpreter's one-line judgement (untrusted, display only). -->
-        <span class="truncate text-sm text-info" title={session.waitingOn || undefined}>≈ {session.headline}</span>
+      <!-- The dev server's own address, scraped from its pane by the daemon
+           (internal/devurl). It is here rather than in the terminal because the
+           port MOVES — 8000 taken means 8001 — so the one place it is written is
+           a line that scrolled away minutes ago, and finding it again is the
+           manual step this removes. Opening goes through the daemon, which
+           refuses anything that is not http(s): the address came out of terminal
+           text, which is untrusted. -->
+      {#if session.devActive && session.devUrls?.length}
+        {#each session.devUrls.slice(0, MAX_URL_CHIPS) as url (url)}
+          <Button size="xs" class="font-mono!" title={`open ${url}`} onclick={() => store.openURL(url)}>
+            <span aria-hidden="true">↗</span>
+            {devUrlLabel(url)}
+          </Button>
+        {/each}
       {/if}
-      {#if session.currentTool}
-        <!-- What the in-flight turn runs right now (PostToolUse hook). -->
-        <!-- Mono = identifier. Inline mono inside a 13px row is set one token
-             down so JetBrains Mono's lower x-height matches SF's apparent size. -->
-        <span class="font-mono text-sm text-faint" title="tool the agent is running">{session.currentTool}</span>
-      {/if}
-      {#if session.prStale}
-        <span class="text-sm text-warn" title="gh has been failing; the delivery state may be old">⚠ PR stale</span>
-      {/if}
-      {#if session.branch}<span class="selectable font-mono text-sm text-faint">{session.branch}</span>{/if}
       <!-- The session's actions live HERE, not in a band under the terminal. That
            band cost a horizontal rule and a row of height at the bottom of the
            window to hold four buttons that belong to the session named on this
@@ -248,16 +252,25 @@
           <!-- The project's dev processes live in ONE session at a time, so this
                is a segmented-style toggle rather than an action: selected means
                THIS session is running them, and switching it on takes them off
-               whichever session had them. -->
+               whichever session had them.
+
+               It is also the slowest control on this row — the daemon stops the
+               other session's tabs and reclaims any port still held in the
+               project's worktrees before it answers — so it spends the wait as a
+               spinner in place of its state dot. Without one the click reads as
+               a no-op for a second or more, and the honest fix is to show the
+               work, not to answer before it is done. -->
           <Button
             size="xs"
             selected={session.devActive}
+            loading={store.devPending[session.id]}
             title={session.devActive
               ? `stop ${session.devCommands.join(", ")}`
               : `run ${session.devCommands.join(", ")} here (stops them in any other session of this project)`}
             onclick={() => store.dev(session.id, !session.devActive)}
           >
-            <span aria-hidden="true">{session.devActive ? "●" : "○"}</span> Active
+            {#if !store.devPending[session.id]}<span aria-hidden="true">{session.devActive ? "●" : "○"}</span>{/if}
+            Active
           </Button>
         {/if}
         <Button size="xs" onclick={() => store.coderabbit(session.id)}>CodeRabbit</Button>

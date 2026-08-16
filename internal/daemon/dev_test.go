@@ -25,6 +25,8 @@ type fakeDevTmux struct {
 	listErr   error
 	startErr  map[string]error
 	available bool
+	panePIDs  []int // what PanePIDs answers: the sweep's protect set
+	paneErr   error
 }
 
 func newFakeDevTmux(names ...string) *fakeDevTmux {
@@ -53,6 +55,12 @@ func (f *fakeDevTmux) ListSessions(context.Context) ([]tmux.Session, error) {
 		out = append(out, tmux.Session{Name: name})
 	}
 	return out, nil
+}
+
+func (f *fakeDevTmux) PanePIDs(context.Context) ([]int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]int(nil), f.panePIDs...), f.paneErr
 }
 
 func (f *fakeDevTmux) Has(_ context.Context, name string) bool {
@@ -324,5 +332,75 @@ func TestReconcileDevTabsNeedsNoProbeWhenNoTabsExist(t *testing.T) {
 	s, _ := d.sessions.Get("lola-app-eng-1")
 	if s.DevActive {
 		t.Error("session still reads as active with no dev tabs on the server")
+	}
+}
+
+// The port `composer dev` picked is only ever printed into its pane — and the
+// whole reason it is worth reading is that it MOVES (8000 taken, so 8001). The
+// observer scrapes it once the tabs are up, so a surface can offer the link
+// instead of leaving a human to find it in a scrolling log.
+func TestReconcileDevTabsPicksUpTheLocalURLFromThePane(t *testing.T) {
+	d, _ := devDaemon(t, []string{"composer dev"}, devSession("lola-app-eng-1"))
+	d.deadPanes = func(context.Context) (map[string]bool, error) { return map[string]bool{}, nil }
+	reads := 0
+	d.paneTail = func(_ context.Context, name string, _ int) (string, error) {
+		reads++
+		if name != "lola-app-eng-1-dev-1" {
+			t.Errorf("read pane %q, want the dev tab", name)
+		}
+		return "[server]   INFO  Server running on [http://127.0.0.1:8001].\n" +
+			"[vite]   ➜  Local:   http://localhost:5175/\n", nil
+	}
+	alive := map[string]bool{"lola-app-eng-1": true, "lola-app-eng-1-dev-1": true}
+
+	d.reconcileDevTabs(context.Background(), alive)
+	s, _ := d.sessions.Get("lola-app-eng-1")
+	if len(s.DevURLs) == 0 || s.DevURLs[0] != "http://127.0.0.1:8001" {
+		t.Fatalf("DevURLs = %v, want the app server first", s.DevURLs)
+	}
+
+	// A second cycle costs NOTHING: the address does not move on its own, and a
+	// 2000-line capture per session per 30s would.
+	d.reconcileDevTabs(context.Background(), alive)
+	if reads != 1 {
+		t.Errorf("read the pane %d times, want 1 while the tabs are unchanged", reads)
+	}
+}
+
+// The address is DERIVED, exactly like the toggle: a link to a server that is
+// gone is worse than no link.
+func TestReconcileDevTabsDropsTheURLWhenTheTabsStop(t *testing.T) {
+	d, _ := devDaemon(t, []string{"composer dev"}, devSession("lola-app-eng-1"))
+	d.deadPanes = func(context.Context) (map[string]bool, error) { return map[string]bool{}, nil }
+	d.paneTail = func(context.Context, string, int) (string, error) {
+		return "Server running on [http://127.0.0.1:8001].", nil
+	}
+	d.reconcileDevTabs(context.Background(), map[string]bool{"lola-app-eng-1-dev-1": true})
+
+	if !d.reconcileDevTabs(context.Background(), map[string]bool{"lola-app-eng-1": true}) {
+		t.Fatal("want a change when the dev tab disappears")
+	}
+	s, _ := d.sessions.Get("lola-app-eng-1")
+	if len(s.DevURLs) != 0 {
+		t.Errorf("DevURLs = %v, want none once the tabs are gone", s.DevURLs)
+	}
+}
+
+// A watcher tab never prints an address. Without a budget the observer would
+// spend a full-scrollback capture on it every cycle, forever.
+func TestReconcileDevTabsStopsHuntingForAnAddressThatNeverComes(t *testing.T) {
+	d, _ := devDaemon(t, []string{"tailwindcss --watch"}, devSession("lola-app-eng-1"))
+	d.deadPanes = func(context.Context) (map[string]bool, error) { return map[string]bool{}, nil }
+	reads := 0
+	d.paneTail = func(context.Context, string, int) (string, error) {
+		reads++
+		return "Rebuilding...\nDone in 142ms.", nil
+	}
+	alive := map[string]bool{"lola-app-eng-1-dev-1": true}
+	for range devURLAttempts + 5 {
+		d.reconcileDevTabs(context.Background(), alive)
+	}
+	if reads != devURLAttempts {
+		t.Errorf("read the pane %d times, want the %d-attempt budget", reads, devURLAttempts)
 	}
 }

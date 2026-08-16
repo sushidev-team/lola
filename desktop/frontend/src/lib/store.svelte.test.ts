@@ -2,16 +2,18 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // The bindings are the process boundary; stub them so the store's own logic —
 // specifically that destructive actions ASK before they act — is what's tested.
-const { Kill, StopDaemon, CloseSessionShells } = vi.hoisted(() => ({
+const { Kill, StopDaemon, CloseSessionShells, Dev } = vi.hoisted(() => ({
   Kill: vi.fn(),
   StopDaemon: vi.fn(),
   CloseSessionShells: vi.fn(),
+  Dev: vi.fn(),
 }));
 
 vi.mock("@bindings/desktop", () => ({
   DaemonService: {
     Kill: (...a: unknown[]) => Kill(...a),
     StopDaemon: () => StopDaemon(),
+    Dev: (...a: unknown[]) => Dev(...a),
     Alive: vi.fn().mockResolvedValue(false),
     Sessions: vi.fn(),
     Projects: vi.fn(),
@@ -29,6 +31,7 @@ beforeEach(() => {
   Kill.mockResolvedValue(undefined);
   StopDaemon.mockResolvedValue(undefined);
   CloseSessionShells.mockResolvedValue(undefined);
+  Dev.mockResolvedValue(undefined);
   confirm.cancel();
   store.sessions = [];
   store.pushErrors = {};
@@ -157,5 +160,51 @@ describe("push errors", () => {
     store.dismissPushError();
     expect(store.pushErrors).toEqual({});
     expect(store.pushError).toBeNull();
+  });
+});
+
+// The dev toggle is the app's slowest control: the daemon stops the previous
+// holder's tabs and reclaims any port still held in the project's worktrees,
+// each with its own SIGTERM grace, before it answers. The store owns the
+// in-flight flag because the toggle has three triggers (the row's button, the
+// context menu, the `D` shortcut) and only one of them is the button.
+describe("the dev toggle reports that it is in flight", () => {
+  beforeEach(() => {
+    store.devPending = {};
+  });
+
+  it("marks the session pending while the call travels, and clears it after", async () => {
+    let release!: () => void;
+    Dev.mockReturnValue(new Promise<void>((r) => (release = r)));
+
+    const call = store.dev("sess-1", true);
+    expect(store.devPending["sess-1"]).toBe(true);
+    // Only that session: another row's button must not spin.
+    expect(store.devPending["sess-2"]).toBeUndefined();
+
+    release();
+    await call;
+    expect(store.devPending["sess-1"]).toBeUndefined();
+  });
+
+  it("clears the flag when the daemon refuses", async () => {
+    Dev.mockRejectedValue(new Error("project configures no dev_commands"));
+    await store.dev("sess-1", true);
+    expect(store.devPending["sess-1"]).toBeUndefined();
+    expect(store.flash?.kind).toBe("bad");
+  });
+
+  // Activating is a MOVE — it stops another session's dev servers — so a second
+  // click while the first is still travelling is never what was meant.
+  it("ignores a second toggle while the first is still in flight", async () => {
+    let release!: () => void;
+    Dev.mockReturnValue(new Promise<void>((r) => (release = r)));
+
+    const first = store.dev("sess-1", true);
+    await store.dev("sess-1", false);
+    expect(Dev).toHaveBeenCalledTimes(1);
+
+    release();
+    await first;
   });
 });

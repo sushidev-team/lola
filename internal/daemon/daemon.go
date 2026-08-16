@@ -26,6 +26,7 @@ import (
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/linear"
 	"github.com/sushidev-team/lola/internal/notify"
+	"github.com/sushidev-team/lola/internal/portproc"
 	"github.com/sushidev-team/lola/internal/review"
 	"github.com/sushidev-team/lola/internal/reviewclaude"
 	"github.com/sushidev-team/lola/internal/runtime"
@@ -181,6 +182,22 @@ type Daemon struct {
 	// tmux as before. nil (tests without the seam) leaves the last known
 	// dev-tab state alone.
 	deadPanes func(ctx context.Context) (map[string]bool, error)
+
+	// portListeners lists every listening TCP socket with its owning process
+	// and that process's cwd (lsof). ONLY the dev take-over uses it, to reclaim
+	// a port from a server that is running inside one of the project's
+	// worktrees but belongs to no tmux pane — typically one the coding agent
+	// started through its Bash tool, which Claude Code puts in its own process
+	// group and which therefore survives every tmux-side teardown. nil (no
+	// lsof, or a test that did not inject one) skips the sweep entirely, which
+	// is the pre-sweep behavior.
+	portListeners func(ctx context.Context) ([]portproc.Listener, error)
+
+	// devURLTries bounds the pane reads spent hunting for a dev tab's local
+	// address, per session (dev.go). In memory only: it is a cost guard, not
+	// state — a daemon restart re-reading a pane once costs nothing, and a
+	// persisted counter would permanently blind a tab whose budget ran out.
+	devURLTries map[string]int
 
 	// Status interpreter ([statusagent], statusagentwire.go): the OPT-IN
 	// display-only LLM pass. statusAgent/interpretSeam are nil when disabled or
@@ -418,6 +435,15 @@ func Run(ctx context.Context) error {
 	}
 	d.deadPanes = func(ctx context.Context) (map[string]bool, error) {
 		return d.tmuxClient().DeadPanes(ctx)
+	}
+	// Stray-dev-server sweep (dev.go): wired only when lsof is actually there,
+	// so a host without it takes the nil path once instead of failing an exec
+	// on every activation. Like the seams above, production Run only — a bare
+	// test daemon must never exec the real lsof.
+	if finder := (&portproc.Finder{}); finder.Available() {
+		d.portListeners = finder.Listeners
+	} else {
+		logger.Printf("lsof not found: a dev take-over cannot reclaim a port from a stray dev server in a worktree")
 	}
 	d.realNative = true
 	// Reaction notifier (PLAN P3.20): resolve the [notify] table into a live

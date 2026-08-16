@@ -451,6 +451,7 @@ func (d *Daemon) sessionsData() protocol.SessionsData {
 
 			DevActive:   s.DevActive,
 			DevCommands: devCommands[s.Project],
+			DevURLs:     s.DevURLs,
 		}
 		if s.Source == "native" {
 			// Native sessions live in worktrees the daemon created at

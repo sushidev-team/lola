@@ -1028,6 +1028,13 @@ func (m *rootModel) sessionDetail() string {
 			state = goodText.Render("● " + strings.Join(sel.DevCommands, " · "))
 		}
 		fmt.Fprintf(&b, "dev:      %s\n", state)
+		// The address the dev server actually took — scraped from its pane by
+		// the daemon, because the port MOVES (8000 taken means 8001) and the
+		// line that says so scrolled away minutes ago. A terminal makes it
+		// clickable on its own; what a human needs from here is to SEE it.
+		if len(sel.DevURLs) > 0 {
+			fmt.Fprintf(&b, "serves:   %s\n", strings.Join(sel.DevURLs, "  "))
+		}
 	}
 	fmt.Fprintf(&b, "age:      %s\n", dash(sel.Age))
 	return b.String()

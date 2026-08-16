@@ -521,9 +521,17 @@ export interface SessionInfo {
      * DevCommands is its project's configured list (in tab order, so index N-1
      * labels tab "<id>-dev-N"); a client renders the Active toggle only when it
      * is non-empty.
+     * DevURLs are the local testing addresses those tabs printed
+     * ("http://127.0.0.1:8001"), best first, scraped from the panes by
+     * internal/devurl — lola cannot know what port the command picked, and a
+     * client should offer the link rather than make a human read it out of a
+     * scrolling log. Derived like DevActive: empty the moment the tabs stop.
+     * Only http(s) on a loopback host ever appears here, because a client hands
+     * it to an opener and pane text is untrusted.
      */
     "devActive"?: boolean;
     "devCommands"?: string[] | null;
+    "devUrls"?: string[] | null;
 
     /**
      * Reaction-engine posture (PLAN P3), flattened so the TUI renders reaction
