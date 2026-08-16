@@ -14,6 +14,7 @@
   import type {
     ProjectFormDTO,
     InheritsDTO,
+    PathInfoDTO,
     SettingsDTO,
     LinearTeam,
     LinearTeamMeta,
@@ -66,14 +67,18 @@
   let loaded = $state<ProjectFormDTO | null>(null);
   const dirty = $derived.by(() => (f && loaded ? !deepEqual($state.snapshot(f), $state.snapshot(loaded)) : false));
 
-  // Repo auto-detection. The checkout's GitHub remote is resolved when Path is
-  // filled in, so owner/name does not have to be copied by hand. It only ever
-  // FILLS an empty field: a detected value must never overwrite what the user
-  // typed, and a checkout with no GitHub remote leaves it empty — the safe,
+  // Everything on this tab is DERIVED from the folder: one InspectPath pass
+  // yields the GitHub remote, the branch worktrees fork from, the branch list
+  // and a suggested label/id, so adding a project is "pick the repo, press
+  // Save". It only ever FILLS: a detected value never overwrites what the user
+  // typed, and a checkout with no GitHub remote leaves Repo empty — the safe,
   // fail-closed value that disables PR checks rather than pointing them at the
-  // wrong repository. repoAuto only drives the "detected" hint.
-  let repoDetectedFor = $state("");
+  // wrong repository. repoAuto/branchAuto drive the hints and gate the fill.
+  let inspectedFor = $state("");
+  let pathInfo = $state<PathInfoDTO | null>(null);
   let repoAuto = $state(false);
+  let branchAuto = $state(false);
+  let picking = $state(false);
 
   // Label vs ID. The label is free text; the id is a path segment and the prefix
   // of every session/tmux name, so it is slugged as it is typed and changing it
@@ -89,36 +94,62 @@
   // datalist keeps the input free text, so a path that is not a checkout — or a
   // branch that does not exist yet — is never a dead end.
   let branches = $state<string[]>([]);
-  let branchesFor = $state("");
 
-  async function loadBranches() {
-    if (!f) return;
-    const path = f.path.trim();
-    if (!path || path === branchesFor) return;
-    branchesFor = path;
+  /**
+   * Read the checkout behind `path`. `fill` is what separates the two callers:
+   * a folder the user just PICKED (or left the field on) fills the derived
+   * values, while the pass on open only learns what the path is — filling an
+   * untouched form's fields behind the user's back would both surprise them and
+   * mark the form dirty. `snap` additionally adopts the repository ROOT, so
+   * picking a subdirectory still configures the repo.
+   */
+  async function inspect(path: string, { fill = false, snap = false } = {}) {
+    const p = path.trim();
+    if (!p) return;
+    if (!fill && p === inspectedFor) return;
+    inspectedFor = p;
+    let info: PathInfoDTO;
     try {
-      const found = await ConfigService.Branches(path);
-      if (f && f.path.trim() === path) branches = found ?? [];
+      info = await ConfigService.InspectPath(p);
     } catch {
-      branches = [];
+      return; // best-effort: an unreadable path just leaves the fields alone
     }
+    // Re-check on return: the user may have changed the path while this was in
+    // flight, and answering about the old checkout would fill in the wrong facts.
+    if (!f || f.path.trim() !== p) return;
+    pathInfo = info;
+    branches = info.branches ?? [];
+    if (!fill) return;
+    if (snap && info.path) {
+      f.path = info.path;
+      inspectedFor = info.path;
+    }
+    if (info.repo && !f.repo.trim()) {
+      f.repo = info.repo;
+      repoAuto = true;
+    }
+    if (info.defaultBranch && (branchAuto || !f.defaultBranch.trim())) f.defaultBranch = info.defaultBranch;
+    // Identity is suggested for a NEW project only: filling an existing
+    // project's empty label would write a label key nobody asked for.
+    if (!f.isNew) return;
+    if (!f.label.trim() && info.suggestedLabel) f.label = info.suggestedLabel;
+    if (idAuto) f.name = slug(f.label);
   }
 
-  async function detectRepo() {
-    if (!f) return;
-    const path = f.path.trim();
-    if (!path || f.repo.trim() || path === repoDetectedFor) return;
-    repoDetectedFor = path;
+  /** The native directory chooser. An empty return is a cancel, not an error. */
+  async function pickFolder() {
+    if (!f || picking) return;
+    picking = true;
     try {
-      const found = await ConfigService.DetectRepo(path);
-      // Re-check on return: the user may have typed a repo or changed the path
-      // while this was in flight.
-      if (found && f && !f.repo.trim() && f.path.trim() === path) {
-        f.repo = found;
-        repoAuto = true;
+      const chosen = await ConfigService.PickFolder(f.path.trim());
+      if (chosen && f) {
+        f.path = chosen;
+        await inspect(chosen, { fill: true, snap: true });
       }
-    } catch {
-      // Detection is best-effort; an unresolvable checkout just stays empty.
+    } catch (e) {
+      store.setFlash(String(e), "bad");
+    } finally {
+      picking = false;
     }
   }
 
@@ -238,6 +269,19 @@
       // Only a NEW project derives its id from the label. An existing id is
       // load-bearing and must not drift when someone edits the label.
       idAuto = d.isNew;
+      // The seeded "main" is a placeholder, not a choice — the checkout's own
+      // default branch replaces it. An existing project's branch is a decision.
+      branchAuto = d.isNew;
+      if (d.isNew) {
+        // Adding a project STARTS at the folder: nothing else on this tab can be
+        // derived without it. Cancelling the chooser leaves an empty form, so
+        // nothing is forced.
+        void pickFolder();
+      } else if (d.path.trim()) {
+        // Learn what the path is (branch list, checkout status) without filling
+        // anything: an untouched form must not come up dirty.
+        void inspect(d.path);
+      }
     } catch (e) {
       loadErr = String(e);
       store.setFlash(String(e), "bad");
@@ -598,19 +642,36 @@
             ? `rename ${origName} → ${slug(d.name)} · needs no live sessions`
             : "path segment + tmux name prefix; changing it is a rename",
         )}
-        {@render textRow(
-          "Path",
-          d.path,
-          (v) => { d.path = v; },
-          "/Users/you/code/my-project",
-          null,
-          false,
-          "",
-          () => {
-            void detectRepo();
-            void loadBranches();
-          },
-        )}
+        <!-- The folder is the FIRST decision and everything below is derived
+             from it, so the chooser sits on the row rather than in a menu. The
+             field stays typable: a path you already know is never a dead end. -->
+        <div class={rowCls}>
+          {@render cap("Path", null)}
+          <span>
+            <span class="flex items-center gap-2">
+              <input
+                class="{inputCls} min-w-0 flex-1 font-mono"
+                aria-label="Path"
+                placeholder="/Users/you/code/my-project"
+                value={d.path}
+                oninput={(e) => { d.path = e.currentTarget.value; }}
+                onblur={() => void inspect(d.path, { fill: true })}
+              />
+              <Button size="sm" variant="secondary" onclick={pickFolder} disabled={picking}>
+                {picking ? "Choosing…" : "Choose folder…"}
+              </Button>
+            </span>
+            <span class={hintCls}>
+              {#if pathInfo && pathInfo.path === d.path.trim() && !pathInfo.isRepo}
+                <span class="text-warn">not a git checkout — worktrees fork from this repository</span>
+              {:else if pathInfo?.isRepo}
+                the label, id, repo and default branch below came from this checkout
+              {:else}
+                the repository this project's worktrees fork from
+              {/if}
+            </span>
+          </span>
+        </div>
         {@render textRow(
           "Repo",
           d.repo,
@@ -632,8 +693,8 @@
               list="lola-branches"
               placeholder="main"
               value={d.defaultBranch}
-              oninput={(e) => (d.defaultBranch = e.currentTarget.value)}
-              onfocus={() => void loadBranches()}
+              oninput={(e) => { d.defaultBranch = e.currentTarget.value; branchAuto = false; }}
+              onfocus={() => void inspect(d.path)}
             />
             <datalist id="lola-branches">
               {#each branches as b (b)}<option value={b}></option>{/each}

@@ -23,35 +23,11 @@ import { Call as $Call, CancellablePromise as $CancellablePromise } from "@wails
 import * as $models from "./models.js";
 
 /**
- * Branches lists the branches the checkout at path can fork worktrees from —
- * local branches plus remote-tracking ones with no local counterpart, the
- * repository's own default first. Empty when path is not a checkout; the form
- * then leaves the field as free text rather than trapping the user.
- */
-export function Branches(path: string): $CancellablePromise<string[] | null> {
-    return $Call.ByID(3689606875, path);
-}
-
-/**
  * ConfigExists reports whether ~/.lola/config.toml is present, so the frontend
  * can gate a first-run setup screen.
  */
 export function ConfigExists(): $CancellablePromise<boolean> {
     return $Call.ByID(1455498937);
-}
-
-/**
- * DetectRepo resolves the GitHub "owner/name" of the checkout at path so the
- * project form can prefill Repo instead of making the user copy it. Returns ""
- * when it cannot be determined — not a git repo, no GitHub remote, a
- * non-GitHub host. That empty value is deliberate and safe: it disables PR
- * checks (fail-closed) rather than pointing them at the wrong repository.
- * 
- * Prefers the "upstream" remote over "origin": in a fork, origin is the fork
- * but upstream is where the pull requests actually land.
- */
-export function DetectRepo(path: string): $CancellablePromise<string> {
-    return $Call.ByID(1658393536, path);
 }
 
 /**
@@ -78,12 +54,43 @@ export function GetTheme(): $CancellablePromise<string> {
 }
 
 /**
+ * InspectPath reads a checkout in ONE pass — GitHub "owner/name", the branch
+ * worktrees should fork from, the branch list and a suggested label/id — so
+ * picking a folder fills the Repo tab instead of making the user copy four
+ * values by hand.
+ * 
+ * Every unknown is empty rather than guessed: a non-GitHub or unrecognised
+ * remote leaves Repo "" (fail-closed — that disables PR checks instead of
+ * pointing them at the wrong repository), and a directory that is not a checkout
+ * simply contributes nothing.
+ * 
+ * The label/id suggestion is computed HERE rather than in the frontend so the
+ * app and the TUI propose the same identity for the same folder.
+ */
+export function InspectPath(path: string): $CancellablePromise<$models.PathInfoDTO> {
+    return $Call.ByID(1398059134, path);
+}
+
+/**
  * MigrateReview folds the legacy [review]/[coderabbit] tables into the editable
  * provider catalog and persists (one-way; mirrors `lola config migrate-review`
  * and the TUI's in-place migrate). A no-op when there is nothing to migrate.
  */
 export function MigrateReview(): $CancellablePromise<void> {
     return $Call.ByID(486961436);
+}
+
+/**
+ * PickFolder opens the native directory chooser and returns the selected path,
+ * or "" when the user cancels. start seeds the dialog's directory so re-picking
+ * a project's folder does not begin at $HOME again.
+ * 
+ * The dialog is the app's, not the form's: only the backend can put a real macOS
+ * panel in front of the window, which is why this is a service method rather
+ * than anything in the frontend.
+ */
+export function PickFolder(start: string): $CancellablePromise<string> {
+    return $Call.ByID(549249398, start);
 }
 
 /**

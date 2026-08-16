@@ -3,15 +3,15 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // Mock the bindings (never a live daemon/Linear). vi.hoisted so the fns exist
 // when the hoisted vi.mock factories run.
-const { getProject, saveProject, removeProject, getSettings, detectRepo, branchesFn, teamsFn, teamMetaFn, renameProject } = vi.hoisted(
+const { getProject, saveProject, removeProject, getSettings, inspectPath, pickFolder, teamsFn, teamMetaFn, renameProject } = vi.hoisted(
   () => ({
     getProject: vi.fn(),
     saveProject: vi.fn(),
     renameProject: vi.fn(),
     removeProject: vi.fn(),
     getSettings: vi.fn(),
-    detectRepo: vi.fn(),
-    branchesFn: vi.fn(),
+    inspectPath: vi.fn(),
+    pickFolder: vi.fn(),
     teamsFn: vi.fn(),
     teamMetaFn: vi.fn(),
   }),
@@ -23,8 +23,8 @@ vi.mock("@bindings/desktop", () => ({
     SaveProject: (...a: unknown[]) => saveProject(...a),
     RemoveProject: (...a: unknown[]) => removeProject(...a),
     GetSettings: () => getSettings(),
-    DetectRepo: (...a: unknown[]) => detectRepo(...a),
-    Branches: (...a: unknown[]) => branchesFn(...a),
+    InspectPath: (...a: unknown[]) => inspectPath(...a),
+    PickFolder: (...a: unknown[]) => pickFolder(...a),
   },
   LinearService: {
     Teams: (...a: unknown[]) => teamsFn(...a),
@@ -134,6 +134,20 @@ const meta = {
   members: [{ id: "user-1", label: "Ada" }],
 };
 
+/** One InspectPath answer; overrides express "this checkout, but …". */
+function pathInfo(over: Record<string, unknown> = {}) {
+  return {
+    path: "",
+    isRepo: false,
+    repo: "",
+    defaultBranch: "",
+    branches: [],
+    suggestedLabel: "",
+    suggestedId: "",
+    ...over,
+  };
+}
+
 /** The grid row that owns a control, so a chip can be found next to its label. */
 function rowOf(control: HTMLElement): HTMLElement {
   return control.closest("div.grid") as HTMLElement;
@@ -147,8 +161,9 @@ describe("ProjectForm", () => {
     renameProject.mockReset().mockResolvedValue({ from: "", to: "", blockers: [] });
     removeProject.mockReset().mockResolvedValue(undefined);
     getSettings.mockReset().mockResolvedValue(settingsDto());
-    detectRepo.mockReset().mockResolvedValue("");
-    branchesFn.mockReset().mockResolvedValue([]);
+    inspectPath.mockReset().mockResolvedValue(pathInfo());
+    // The folder chooser is only auto-opened for a NEW project; "" is a cancel.
+    pickFolder.mockReset().mockResolvedValue("");
     teamsFn.mockReset().mockResolvedValue([
       { id: "team-uuid-1", key: "ENG", name: "Engineering" },
       { id: "team-uuid-2", key: "OPS", name: "Operations" },
@@ -328,12 +343,12 @@ describe("ProjectForm", () => {
     expect(postCreate).toHaveValue("npm ci");
   });
 
-  // Repo auto-detection: filling in Path resolves the checkout's GitHub remote
-  // so owner/name does not have to be copied by hand.
-  describe("repo auto-detection", () => {
+  // One InspectPath pass fills the whole Repo tab: the folder is the only thing
+  // the user has to supply.
+  describe("folder-driven autofill", () => {
     it("fills an empty repo from the checkout when Path is set", async () => {
       getProject.mockResolvedValue({ ...sampleDto(), repo: "", path: "" });
-      detectRepo.mockResolvedValue("acme/web");
+      inspectPath.mockResolvedValue(pathInfo({ path: "/tmp/web", isRepo: true, repo: "acme/web" }));
       render(ProjectForm);
 
       const path = await screen.findByLabelText("Path");
@@ -341,7 +356,7 @@ describe("ProjectForm", () => {
       await fireEvent.blur(path);
 
       await waitFor(() => {
-        expect(detectRepo).toHaveBeenCalledWith("/tmp/web");
+        expect(inspectPath).toHaveBeenCalledWith("/tmp/web");
         expect(screen.getByLabelText("Repo")).toHaveValue("acme/web");
       });
       expect(screen.getByText(/detected from the checkout/)).toBeInTheDocument();
@@ -349,42 +364,87 @@ describe("ProjectForm", () => {
 
     it("never overwrites a repo the user already set", async () => {
       getProject.mockResolvedValue({ ...sampleDto(), repo: "mine/web", path: "" });
-      detectRepo.mockResolvedValue("acme/web");
+      inspectPath.mockResolvedValue(pathInfo({ path: "/tmp/web", isRepo: true, repo: "acme/web" }));
       render(ProjectForm);
 
       const path = await screen.findByLabelText("Path");
       await fireEvent.input(path, { target: { value: "/tmp/web" } });
       await fireEvent.blur(path);
 
-      await waitFor(() => expect(screen.getByLabelText("Repo")).toHaveValue("mine/web"));
-      expect(detectRepo).not.toHaveBeenCalled();
+      await waitFor(() => expect(inspectPath).toHaveBeenCalled());
+      expect(screen.getByLabelText("Repo")).toHaveValue("mine/web");
     });
 
     it("leaves the field empty when the checkout has no GitHub remote", async () => {
       getProject.mockResolvedValue({ ...sampleDto(), repo: "", path: "" });
-      detectRepo.mockResolvedValue(""); // fail-closed
+      inspectPath.mockResolvedValue(pathInfo({ path: "/tmp/plain", isRepo: true })); // fail-closed
       render(ProjectForm);
 
       const path = await screen.findByLabelText("Path");
       await fireEvent.input(path, { target: { value: "/tmp/plain" } });
       await fireEvent.blur(path);
 
-      await waitFor(() => expect(detectRepo).toHaveBeenCalled());
+      await waitFor(() => expect(inspectPath).toHaveBeenCalled());
       expect(screen.getByLabelText("Repo")).toHaveValue("");
       expect(screen.queryByText(/detected from the checkout/)).not.toBeInTheDocument();
     });
 
-    it("resolves a given path only once", async () => {
-      getProject.mockResolvedValue({ ...sampleDto(), repo: "", path: "" });
-      detectRepo.mockResolvedValue("");
+    it("says so when the path is not a git checkout", async () => {
+      getProject.mockResolvedValue({ ...sampleDto(), path: "" });
+      inspectPath.mockResolvedValue(pathInfo({ path: "/tmp/plain", isRepo: false }));
       render(ProjectForm);
 
       const path = await screen.findByLabelText("Path");
-      await fireEvent.input(path, { target: { value: "/tmp/web" } });
+      await fireEvent.input(path, { target: { value: "/tmp/plain" } });
       await fireEvent.blur(path);
-      await waitFor(() => expect(detectRepo).toHaveBeenCalledTimes(1));
+
+      await waitFor(() => expect(screen.getByText(/not a git checkout/)).toBeInTheDocument());
+    });
+
+    it("opens the native chooser and adopts the checkout root", async () => {
+      getProject.mockResolvedValue({ ...sampleDto(), isNew: true, name: "", label: "", path: "", repo: "", defaultBranch: "main" });
+      pickFolder.mockResolvedValue("/Users/me/code/nori-app/src");
+      inspectPath.mockResolvedValue(
+        pathInfo({
+          path: "/Users/me/code/nori-app",
+          isRepo: true,
+          repo: "acme/nori-app",
+          defaultBranch: "develop",
+          branches: ["develop", "main"],
+          suggestedLabel: "Nori App",
+          suggestedId: "nori-app",
+        }),
+      );
+      render(ProjectForm);
+
+      // A NEW project opens straight into the chooser — the folder is the first
+      // decision and everything else falls out of it.
+      await waitFor(() => expect(pickFolder).toHaveBeenCalled());
+      await waitFor(() => expect(screen.getByLabelText("Path")).toHaveValue("/Users/me/code/nori-app"));
+      expect(screen.getByLabelText("Label")).toHaveValue("Nori App");
+      expect(screen.getByLabelText("ID")).toHaveValue("nori-app");
+      expect(screen.getByLabelText("Repo")).toHaveValue("acme/nori-app");
+      expect(screen.getByLabelText("Default branch")).toHaveValue("develop");
+    });
+
+    it("does not open the chooser for an existing project", async () => {
+      render(ProjectForm);
+      await screen.findByLabelText("Path");
+      expect(pickFolder).not.toHaveBeenCalled();
+    });
+
+    it("keeps an existing project's configured branch and label", async () => {
+      getProject.mockResolvedValue({ ...sampleDto(), label: "", defaultBranch: "release", path: "/tmp/web" });
+      inspectPath.mockResolvedValue(
+        pathInfo({ path: "/tmp/web", isRepo: true, defaultBranch: "main", suggestedLabel: "Web", suggestedId: "web" }),
+      );
+      render(ProjectForm);
+
+      const path = await screen.findByLabelText("Path");
       await fireEvent.blur(path);
-      expect(detectRepo).toHaveBeenCalledTimes(1);
+      await waitFor(() => expect(inspectPath).toHaveBeenCalled());
+      expect(screen.getByLabelText("Default branch")).toHaveValue("release");
+      expect(screen.getByLabelText("Label")).toHaveValue("");
     });
   });
 
@@ -392,13 +452,13 @@ describe("ProjectForm", () => {
   describe("default branch", () => {
     it("offers the checkout's branches as suggestions", async () => {
       getProject.mockResolvedValue({ ...sampleDto(), path: "/tmp/web" });
-      branchesFn.mockResolvedValue(["main", "develop"]);
+      inspectPath.mockResolvedValue(pathInfo({ path: "/tmp/web", isRepo: true, branches: ["main", "develop"] }));
       render(ProjectForm);
 
       const branch = await screen.findByLabelText("Default branch");
       await fireEvent.focus(branch);
 
-      await waitFor(() => expect(branchesFn).toHaveBeenCalledWith("/tmp/web"));
+      await waitFor(() => expect(inspectPath).toHaveBeenCalledWith("/tmp/web"));
       await waitFor(() => {
         const list = document.getElementById("lola-branches");
         const values = Array.from(list?.querySelectorAll("option") ?? []).map((o) => o.value);
@@ -408,7 +468,7 @@ describe("ProjectForm", () => {
 
     it("stays typable when the path is not a checkout", async () => {
       getProject.mockResolvedValue({ ...sampleDto(), path: "/tmp/plain", defaultBranch: "" });
-      branchesFn.mockResolvedValue([]);
+      inspectPath.mockResolvedValue(pathInfo({ path: "/tmp/plain" }));
       render(ProjectForm);
 
       const branch = await screen.findByLabelText("Default branch");

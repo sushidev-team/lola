@@ -20,8 +20,36 @@
 
   let submitting = $state(false);
   let error = $state("");
+  let picking = $state(false);
+  // Whether the path is a checkout, so the one thing this screen cannot fix
+  // later is visible now — every worktree forks from this repository.
+  let isRepo = $state<boolean | null>(null);
 
   const canSubmit = $derived(key.trim() !== "" && projectName.trim() !== "" && !submitting);
+
+  /**
+   * One folder pick fills the rest of the project block: name, GitHub repo and
+   * the branch worktrees fork from. Fill-only — anything already typed stays —
+   * and an unknown stays empty rather than being guessed at.
+   */
+  async function pickFolder() {
+    if (picking) return;
+    picking = true;
+    try {
+      const chosen = await ConfigService.PickFolder(projectPath.trim());
+      if (!chosen) return; // cancelled
+      const info = await ConfigService.InspectPath(chosen);
+      projectPath = info.path || chosen;
+      isRepo = info.isRepo;
+      if (!projectName.trim() && info.suggestedId) projectName = info.suggestedId;
+      if (!repo.trim() && info.repo) repo = info.repo;
+      if (info.defaultBranch && (!branch.trim() || branch === "main")) branch = info.defaultBranch;
+    } catch (e) {
+      error = String(e);
+    } finally {
+      picking = false;
+    }
+  }
 
   async function validateKey() {
     if (!key.trim()) return;
@@ -99,10 +127,25 @@
           <input class="w-full rounded border border-edge bg-canvas px-2 py-1.5 text-ink outline-none focus:border-accent" bind:value={branch} />
         </label>
       </div>
-      <label class="block">
+      <div class="block">
         <span class="mb-1 block label text-faint">Project path</span>
-        <input class="w-full rounded border border-edge bg-canvas px-2 py-1.5 font-mono text-sm text-ink outline-none focus:border-accent placeholder:text-placeholder" placeholder="/path/to/repo" bind:value={projectPath} />
-      </label>
+        <div class="flex gap-2">
+          <input
+            class="min-w-0 flex-1 rounded border border-edge bg-canvas px-2 py-1.5 font-mono text-sm text-ink outline-none focus:border-accent placeholder:text-placeholder"
+            aria-label="Project path"
+            placeholder="/path/to/repo"
+            bind:value={projectPath}
+          />
+          <Button variant="secondary" size="md" disabled={picking} onclick={pickFolder}>
+            {picking ? "Choosing…" : "Choose folder…"}
+          </Button>
+        </div>
+        {#if isRepo === false}
+          <p class="mt-1 text-sm text-warn">Not a git checkout — worktrees fork from this repository.</p>
+        {:else}
+          <p class="mt-1 text-sm text-faint">Choosing a folder fills the name, repo and branch below.</p>
+        {/if}
+      </div>
       <label class="block">
         <span class="mb-1 block label text-faint">GitHub repo</span>
         <input class="w-full rounded border border-edge bg-canvas px-2 py-1.5 text-ink outline-none focus:border-accent placeholder:text-placeholder" placeholder="owner/name" bind:value={repo} />

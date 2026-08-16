@@ -321,3 +321,38 @@ func TestSaveProjectRefusesToForkOnUnknownID(t *testing.T) {
 		t.Errorf("projects = %d, want the original one untouched", len(cfg.Projects))
 	}
 }
+
+// A directory that is not a checkout still yields a usable suggestion: the
+// derived facts are empty (fail-closed) but the id/label the form prefills come
+// from the folder name, so the pick is never wasted.
+func TestInspectPathOnPlainDirectory(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "nori-app")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	got := (&ConfigService{}).InspectPath(dir)
+	if got.IsRepo {
+		t.Errorf("isRepo = true for %q, want false", dir)
+	}
+	if got.Path != dir {
+		t.Errorf("path = %q, want the directory as given", got.Path)
+	}
+	if got.Repo != "" || got.DefaultBranch != "" {
+		t.Errorf("repo/branch = %q/%q, want both empty (fail closed)", got.Repo, got.DefaultBranch)
+	}
+	if got.Branches == nil {
+		t.Error("branches must marshal as [] rather than null")
+	}
+	if got.SuggestedLabel != "Nori App" || got.SuggestedID != "nori-app" {
+		t.Errorf("suggestion = %q/%q, want Nori App/nori-app", got.SuggestedLabel, got.SuggestedID)
+	}
+}
+
+// An empty path is answered, not errored: the form calls this on every blur.
+func TestInspectPathEmpty(t *testing.T) {
+	got := (&ConfigService{}).InspectPath("")
+	if got.IsRepo || got.Path != "" || got.SuggestedID != "" {
+		t.Errorf("InspectPath(\"\") = %+v, want the zero answer", got)
+	}
+}

@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/wailsapp/wails/v3/pkg/application"
+
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/gitrepo"
 	"github.com/sushidev-team/lola/internal/linear"
@@ -640,32 +642,80 @@ func (s *ConfigService) SaveProject(dto ProjectFormDTO) error {
 	return saveConfig(cfg, path)
 }
 
-// DetectRepo resolves the GitHub "owner/name" of the checkout at path so the
-// project form can prefill Repo instead of making the user copy it. Returns ""
-// when it cannot be determined — not a git repo, no GitHub remote, a
-// non-GitHub host. That empty value is deliberate and safe: it disables PR
-// checks (fail-closed) rather than pointing them at the wrong repository.
-//
-// Prefers the "upstream" remote over "origin": in a fork, origin is the fork
-// but upstream is where the pull requests actually land.
-func (s *ConfigService) DetectRepo(path string) string {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	return gitrepo.Detect(ctx, path)
+// PathInfoDTO is everything the project form derives from one picked folder.
+// Path is the checkout ROOT when there is one (picking a subdirectory still
+// configures the repository), else the directory as given.
+type PathInfoDTO struct {
+	Path           string   `json:"path"`
+	IsRepo         bool     `json:"isRepo"`
+	Repo           string   `json:"repo"`
+	DefaultBranch  string   `json:"defaultBranch"`
+	Branches       []string `json:"branches"`
+	SuggestedLabel string   `json:"suggestedLabel"`
+	SuggestedID    string   `json:"suggestedId"`
 }
 
-// Branches lists the branches the checkout at path can fork worktrees from —
-// local branches plus remote-tracking ones with no local counterpart, the
-// repository's own default first. Empty when path is not a checkout; the form
-// then leaves the field as free text rather than trapping the user.
-func (s *ConfigService) Branches(path string) []string {
+// InspectPath reads a checkout in ONE pass — GitHub "owner/name", the branch
+// worktrees should fork from, the branch list and a suggested label/id — so
+// picking a folder fills the Repo tab instead of making the user copy four
+// values by hand.
+//
+// Every unknown is empty rather than guessed: a non-GitHub or unrecognised
+// remote leaves Repo "" (fail-closed — that disables PR checks instead of
+// pointing them at the wrong repository), and a directory that is not a checkout
+// simply contributes nothing.
+//
+// The label/id suggestion is computed HERE rather than in the frontend so the
+// app and the TUI propose the same identity for the same folder.
+func (s *ConfigService) InspectPath(path string) PathInfoDTO {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	b := gitrepo.Branches(ctx, path)
-	if b == nil {
-		return []string{} // marshal as [] rather than null for the frontend
+	info := gitrepo.Inspect(ctx, path)
+
+	out := PathInfoDTO{
+		Path:          strings.TrimSpace(path),
+		IsRepo:        info.IsRepo,
+		Repo:          info.Repo,
+		DefaultBranch: info.DefaultBranch,
+		Branches:      info.Branches,
 	}
-	return b
+	if info.Root != "" {
+		out.Path = info.Root
+	}
+	if out.Branches == nil {
+		out.Branches = []string{} // marshal as [] rather than null for the frontend
+	}
+	out.SuggestedLabel = config.LabelFromPath(out.Path)
+	out.SuggestedID = config.Slug(out.SuggestedLabel)
+	return out
+}
+
+// PickFolder opens the native directory chooser and returns the selected path,
+// or "" when the user cancels. start seeds the dialog's directory so re-picking
+// a project's folder does not begin at $HOME again.
+//
+// The dialog is the app's, not the form's: only the backend can put a real macOS
+// panel in front of the window, which is why this is a service method rather
+// than anything in the frontend.
+func (s *ConfigService) PickFolder(start string) (string, error) {
+	app := application.Get()
+	if app == nil {
+		return "", errors.New("no application window to attach a dialog to")
+	}
+	d := app.Dialog.OpenFile().
+		CanChooseDirectories(true).
+		CanChooseFiles(false).
+		CanCreateDirectories(true).
+		ResolvesAliases(true).
+		SetTitle("Choose the project's repository").
+		SetButtonText("Use this folder")
+	if s := strings.TrimSpace(start); s != "" {
+		d.SetDirectory(s)
+	}
+	if win := app.Window.Current(); win != nil {
+		d.AttachToWindow(win)
+	}
+	return d.PromptForSingleSelection()
 }
 
 func (s *ConfigService) RemoveProject(name string) error {
@@ -766,8 +816,21 @@ func (s *ConfigService) Setup(dto SetupDTO) (SetupResultDTO, error) {
 	if branch == "" {
 		branch = config.DefaultBranchName
 	}
+	// The id is SLUGGED here: it becomes a worktree directory, a state filename
+	// and a tmux session prefix, so a name typed as "Nori App" must not reach the
+	// file with a space in it. The typed form is kept as the display Label when
+	// it says more than the id does.
+	name := config.Slug(dto.ProjectName)
+	if name == "" {
+		return SetupResultDTO{}, errors.New("project name must contain a letter or digit")
+	}
+	label := strings.TrimSpace(dto.ProjectName)
+	if label == name {
+		label = ""
+	}
 	cfg.Projects = []config.Project{{
-		Name:          dto.ProjectName,
+		Name:          name,
+		Label:         label,
 		Path:          dto.ProjectPath,
 		Repo:          dto.Repo,
 		DefaultBranch: branch,

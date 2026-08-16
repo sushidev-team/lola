@@ -128,13 +128,15 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   `internal/runtime` must recognize them as auxiliary sessions, and both the TUI
   and the app discover them as terminal tabs — none of which may import the
   others.
-- `internal/gitrepo` — resolves a checkout's GitHub `owner/name` from its git
-  remotes (upstream, then origin) so the project forms can prefill
-  `[[project]].repo`. Local git only — no network, no `gh`. Deliberately NOT in
-  `internal/scm` (gh-only) or `internal/config` (never execs). **Fails closed**:
-  every unknown returns `""`, because an empty repo merely disables the open-PR
-  check while a wrong one would make `gh pr list --repo` answer about someone
-  else's repository.
+- `internal/gitrepo` — reads a checkout with LOCAL git only (no network, no
+  `gh`): `Detect` resolves the GitHub `owner/name` from its remotes (upstream,
+  then origin), `Branches` the fork-from candidates, and `Inspect` gathers root
+  + repo + default branch + branches in ONE pass — the call behind the project
+  forms' folder-pick autofill. Deliberately NOT in `internal/scm` (gh-only) or
+  `internal/config` (never execs). **Fails closed**: every unknown returns the
+  zero value, because an empty repo merely disables the open-PR check while a
+  wrong one would make `gh pr list --repo` answer about someone else's
+  repository.
 - `internal/secrets` / `internal/notify` / `internal/brain` / `internal/review`
   / `internal/attention` / `internal/doctor` — Linear key resolution
   (keychain→env), best-effort desktop/Slack notify, opt-in headless-claude
@@ -224,6 +226,27 @@ each of which owns exactly one external tool or concern behind an **exec seam**
     worktree still carries the old name, then renames the config entry, carries
     the `.seen` file over and reloads. Do not "helpfully" extend it to live
     sessions without also moving worktrees + `git worktree repair` + tmux renames.
+- **Adding a project starts at the FOLDER, and every derived field is
+  FILL-ONLY.** The checkout is the one value nothing else can be derived
+  without, so a new project opens straight into a picker — the native chooser in
+  the app (`ConfigService.PickFolder`), `internal/tui/dirpicker.go` in the TUI
+  (a listing marks git checkouts, and `enter` on one TAKES it rather than
+  descending). One `gitrepo.Inspect` then fills `path` (the checkout ROOT, so
+  picking a subdirectory still configures the repo), `label`/`name`
+  (`config.LabelFromPath` → `Slug`, which round-trips back to the folder name),
+  `repo` and `default_branch`. Rules:
+  - A fill NEVER overwrites a human's value — only an empty field, or one this
+    form itself wrote (`repoAuto`/`branchAuto`). Typing or pasting clears those
+    flags, so a late answer cannot land on top of a decision.
+  - Identity (`label`/`name`) is suggested for a NEW project ONLY: filling an
+    existing project's empty label would write a `label` key nobody asked for on
+    the next save, and its `default_branch` is a decision, not a placeholder.
+  - The answer is matched against the CURRENT path before anything is applied; a
+    result for a path the user has since changed is dropped, or the form would
+    describe a repository it no longer names.
+  - The app runs the pass on OPEN without filling (branch list + checkout status
+    only) — an untouched form must not come up dirty; the TUI rebases its
+    baseline for the same reason.
 - **`[defaults]` label keys must be WORKSPACE labels, and that is a UI rule, not
   a validation one.** Linear has team labels (scoped to one team) and workspace
   labels (`IssueLabel.team == null`, valid everywhere). A `[defaults]` label is

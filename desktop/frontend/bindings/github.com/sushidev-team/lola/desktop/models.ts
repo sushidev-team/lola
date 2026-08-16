@@ -56,6 +56,21 @@ export interface LinearTeamMeta {
 }
 
 /**
+ * PathInfoDTO is everything the project form derives from one picked folder.
+ * Path is the checkout ROOT when there is one (picking a subdirectory still
+ * configures the repository), else the directory as given.
+ */
+export interface PathInfoDTO {
+    "path": string;
+    "isRepo": boolean;
+    "repo": string;
+    "defaultBranch": string;
+    "branches": string[] | null;
+    "suggestedLabel": string;
+    "suggestedId": string;
+}
+
+/**
  * ProjectFormDTO is the whole of one [[project]] — repository setup, Linear
  * polling filter and write-back — because a project IS the poll unit. The
  * values are the RESOLVED ones (see config.ResolveInheritance); Inherits says

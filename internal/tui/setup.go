@@ -19,6 +19,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/sushidev-team/lola/internal/config"
+	"github.com/sushidev-team/lola/internal/gitrepo"
 	"github.com/sushidev-team/lola/internal/linear"
 	"github.com/sushidev-team/lola/internal/secrets"
 )
@@ -68,11 +69,15 @@ type setupModel struct {
 	height   int
 	wrote    bool // a config was written (drives fall-through vs. quit)
 
+	// dirs is the folder browser, open over the wizard while the user picks the
+	// project's checkout — the same one the project form uses.
+	dirs *dirPicker
+
 	// Injectable seams so the wizard is hermetic in tests.
 	validateKey func(ctx context.Context, endpoint, key string) error
 	storeKey    func(service, key string) error
 	gitToplevel func() string
-	gitRemote   func(path string) string
+	inspectPath func(path string) gitrepo.Info
 }
 
 func newSetupModel() *setupModel {
@@ -90,8 +95,16 @@ func newSetupModel() *setupModel {
 		},
 		storeKey:    secrets.StoreLinearAPIKey,
 		gitToplevel: gitToplevelCWD,
-		gitRemote:   gitRemoteOrigin,
+		inspectPath: inspectCheckout,
 	}
+}
+
+// inspectCheckout reads a checkout's repo/branches/root, bounded so a path on a
+// stale network mount cannot hang the wizard.
+func inspectCheckout(path string) gitrepo.Info {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	return gitrepo.Inspect(ctx, path)
 }
 
 // Setup runs the wizard unconditionally (the `lola setup` command). It prints a
@@ -154,6 +167,19 @@ func (m *setupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.projectPath == "" {
 			m.projectPath = m.gitToplevel()
 		}
+		if m.projectPath == "" {
+			// Nothing to prefill (the wizard was not started inside a checkout),
+			// so open the folder browser rather than presenting an empty field
+			// that has to be typed absolutely.
+			return m, m.openDirs()
+		}
+		m.adoptPath(m.projectPath)
+		return m, nil
+	case dirLoadedMsg:
+		if m.dirs != nil {
+			cmd, _ := m.dirs.update(v)
+			return m, cmd
+		}
 		return m, nil
 	case tea.KeyPressMsg:
 		return m.handleKey(v)
@@ -169,11 +195,32 @@ func (m *setupModel) handleKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
+	// The folder browser owns every keystroke while it is up (it types to
+	// filter), and its esc closes IT rather than quitting the wizard.
+	if m.dirs != nil {
+		if k.String() == "ctrl+c" {
+			return m, tea.Quit
+		}
+		cmd, ev := m.dirs.update(k)
+		switch ev {
+		case dirPickerCancel:
+			m.dirs = nil
+		case dirPickerChosen:
+			chosen := m.dirs.chosen
+			m.dirs = nil
+			m.adoptPath(chosen)
+		}
+		return m, cmd
+	}
 	switch k.String() {
 	case "esc", "ctrl+c":
 		return m, tea.Quit // esc anywhere before the write quits without writing
 	case "enter":
 		return m.advance()
+	case "ctrl+f":
+		if m.step == stepProjectPath {
+			return m, m.openDirs()
+		}
 	}
 	if buf := m.activeBuf(); buf != nil {
 		editBuf(k, buf)
@@ -236,9 +283,7 @@ func (m *setupModel) advance() (tea.Model, tea.Cmd) {
 			m.fieldErr = "project path is required"
 			return m, nil
 		}
-		if m.repo == "" {
-			m.repo = m.gitRemote(strings.TrimSpace(m.projectPath))
-		}
+		m.adoptPath(m.projectPath)
 		m.step, m.fieldErr = stepRepo, ""
 	case stepRepo:
 		if r := strings.TrimSpace(m.repo); r != "" && !setupRepoRe.MatchString(r) {
@@ -280,6 +325,39 @@ func (m *setupModel) advance() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// openDirs puts the folder browser over the wizard, seeded at whatever the path
+// field already holds.
+func (m *setupModel) openDirs() tea.Cmd {
+	var cmd tea.Cmd
+	m.dirs, cmd = newDirPicker(dirPickerStart(nil, m.projectPath))
+	return cmd
+}
+
+// adoptPath takes a checkout as the project's path and fills what it implies:
+// the repository root (so a subdirectory still configures the repo), the GitHub
+// remote and the branch worktrees fork from. Fill-only — a value already typed
+// is never replaced, and a directory that is not a checkout simply contributes
+// nothing.
+func (m *setupModel) adoptPath(path string) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return
+	}
+	info := m.inspectPath(path)
+	if info.Root != "" {
+		path = info.Root
+	}
+	m.projectPath, m.fieldErr = path, ""
+	if m.repo == "" {
+		m.repo = info.Repo
+	}
+	// The seeded branch is a placeholder, not a choice: the checkout's own
+	// default replaces it, but anything the user typed stays.
+	if info.DefaultBranch != "" && (m.branch == "" || m.branch == config.DefaultBranchName) {
+		m.branch = info.DefaultBranch
+	}
+}
+
 func (m *setupModel) validateCmd() tea.Cmd {
 	endpoint, key, fn := m.endpoint, m.key, m.validateKey
 	return func() tea.Msg {
@@ -314,8 +392,16 @@ func (m *setupModel) write() error {
 	cfg.Defaults.ConcurrencyCap = conc
 	cfg.Defaults.GlobalCap = gcap
 	cfg.Defaults.PollInterval = interval
+	name := m.projectName()
+	label := config.LabelFromPath(strings.TrimSpace(m.projectPath))
+	if config.Slug(label) == name {
+		// The label adds nothing the id does not already say; DisplayName's
+		// fallback covers it and the file stays free of a redundant key.
+		label = ""
+	}
 	cfg.Projects = []config.Project{{
-		Name:          m.projectName(),
+		Name:          name,
+		Label:         label,
 		Path:          strings.TrimSpace(m.projectPath),
 		Repo:          strings.TrimSpace(m.repo),
 		DefaultBranch: strings.TrimSpace(m.branch),
@@ -327,16 +413,22 @@ func (m *setupModel) write() error {
 	return cfg.Save(path)
 }
 
-// projectName derives a [[project]] name from the repo (its "name" segment),
-// falling back to the path's base directory.
+// projectName derives a [[project]] id from the repo (its "name" segment),
+// falling back to the path's base directory. It is SLUGGED: the id is a
+// directory name, a state filename and a tmux session prefix, so a folder called
+// "Nori App" must not become an id with a space in it.
 func (m *setupModel) projectName() string {
 	if r := strings.TrimSpace(m.repo); r != "" {
 		if i := strings.LastIndex(r, "/"); i >= 0 && i < len(r)-1 {
-			return r[i+1:]
+			if s := config.Slug(r[i+1:]); s != "" {
+				return s
+			}
 		}
 	}
 	if p := strings.TrimSpace(m.projectPath); p != "" {
-		return filepath.Base(p)
+		if s := config.Slug(filepath.Base(p)); s != "" {
+			return s
+		}
 	}
 	return "project"
 }
@@ -350,6 +442,12 @@ func (m *setupModel) View() tea.View {
 }
 
 func (m *setupModel) viewString() string {
+	// The folder browser takes the whole screen while it is up: it is a list that
+	// scrolls, and rendering it beside the wizard's own rows would leave neither
+	// legible.
+	if m.dirs != nil {
+		return m.dirs.view(m.height)
+	}
 	var b strings.Builder
 	b.WriteString(titleStyle.Render("lola setup — first run") + "\n\n")
 
@@ -402,7 +500,11 @@ func (m *setupModel) viewString() string {
 		b.WriteString(badText.Render("✗ "+m.fieldErr) + "\n")
 	}
 
-	b.WriteString("\n" + faintText.Render("enter next · esc cancel (no config written)") + "\n")
+	hint := "enter next · esc cancel (no config written)"
+	if m.step == stepProjectPath {
+		hint = "enter next · ctrl-f browse for the folder · esc cancel (no config written)"
+	}
+	b.WriteString("\n" + faintText.Render(hint) + "\n")
 	return b.String()
 }
 
@@ -475,43 +577,6 @@ func gitToplevelCWD() string {
 	return strings.TrimSpace(string(out))
 }
 
-// gitRemoteOrigin returns the "owner/name" parsed from path's origin remote, or
-// "" when there is no repo/remote or it cannot be parsed.
-func gitRemoteOrigin(path string) string {
-	if path == "" {
-		return ""
-	}
-	out, err := exec.Command("git", "-C", path, "remote", "get-url", "origin").Output()
-	if err != nil {
-		return ""
-	}
-	return parseGitRemote(strings.TrimSpace(string(out)))
-}
-
-// parseGitRemote extracts "owner/name" from the common GitHub remote forms:
-//
-//	git@github.com:owner/repo.git
-//	https://github.com/owner/repo(.git)
-//	ssh://git@github.com/owner/repo.git
-//
-// It returns "" for anything it does not recognize.
-func parseGitRemote(url string) string {
-	url = strings.TrimSpace(url)
-	url = strings.TrimSuffix(url, ".git")
-	if url == "" {
-		return ""
-	}
-	// scp-like SSH: [user@]host:owner/repo
-	if !strings.Contains(url, "://") {
-		if i := strings.LastIndex(url, ":"); i >= 0 {
-			return strings.Trim(url[i+1:], "/")
-		}
-		return ""
-	}
-	// URL form (https://, ssh://): take the last two path segments.
-	rest := url[strings.Index(url, "://")+3:]
-	if i := strings.Index(rest, "/"); i >= 0 {
-		return strings.Trim(rest[i+1:], "/")
-	}
-	return ""
-}
+// The wizard's own remote parser is gone: internal/gitrepo owns that transform
+// now (and is stricter — it refuses to guess owner/name from a non-GitHub host),
+// reached through the inspectPath seam above.

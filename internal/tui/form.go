@@ -190,76 +190,59 @@ type formModel struct {
 	// rename nobody asked for. An untouched ID is saved verbatim.
 	idEdited bool
 
-	// repoDetectedFor is the Path that repo auto-detection last ran against,
-	// so moving the cursor around re-runs it only when the path actually
-	// changed. repoAuto marks the current Repo value as detected rather than
-	// typed, purely so the view can say where it came from.
-	repoDetectedFor string
-	repoAuto        bool
+	// repoAuto marks the current Repo value as detected rather than typed, purely
+	// so the view can say where it came from. branchAuto is the same idea for
+	// Default branch, and additionally GATES the fill: an existing project's
+	// configured branch is a decision that must never be overwritten by a probe,
+	// so only a new project starts with it set.
+	repoAuto   bool
+	branchAuto bool
 
-	// branches is the checkout's branch list, loaded lazily for the default
-	// branch picker; branchesFor is the Path it was loaded against.
-	branches    []string
-	branchesFor string
+	// inspectedFor is the Path the last git inspection ran against, so moving the
+	// cursor around re-runs it only when the path actually changed. inspected
+	// holds that answer: the branch list feeding the Default branch picker, and
+	// whether the path is a checkout at all.
+	inspectedFor string
+	inspected    gitrepo.Info
+	branches     []string
+
+	// dirs is the folder browser, open over the form while the user picks a
+	// checkout. A new project opens straight into it — the path is the field
+	// every other Repo-tab value is derived from.
+	dirs *dirPicker
 }
 
-// repoDetectedMsg carries the result of a background repo detection back to the
-// form. Repo is "" when the checkout has no usable GitHub remote.
-type repoDetectedMsg struct {
+// pathInspectedMsg carries one background git inspection back to the form. snap
+// marks an inspection the FOLDER BROWSER asked for, which is allowed to rewrite
+// Path to the checkout's root; an inspection of a typed path never moves what
+// the user is typing.
+type pathInspectedMsg struct {
 	path string
-	repo string
+	snap bool
+	info gitrepo.Info
 }
 
-// branchesMsg carries a checkout's branch list back to the form. Branches is
-// nil when the path is not a checkout — the field then stays free-text.
-type branchesMsg struct {
-	path     string
-	branches []string
-}
-
-// loadBranchesCmd lists the checkout's branches off the UI thread, bounded so a
-// stale network mount cannot stall the form.
-func loadBranchesCmd(path string) tea.Cmd {
+// inspectPathCmd reads a checkout's repo/branches/root off the UI thread,
+// bounded so a stale network mount cannot wedge the form.
+func inspectPathCmd(path string, snap bool) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
-		return branchesMsg{path: path, branches: gitrepo.Branches(ctx, path)}
+		return pathInspectedMsg{path: path, snap: snap, info: gitrepo.Inspect(ctx, path)}
 	}
 }
 
-// maybeLoadBranches returns a command to refresh the branch list when the path
-// has changed since it was last loaded.
-func (f *formModel) maybeLoadBranches() tea.Cmd {
+// maybeInspectPath returns an inspection command when the path has changed since
+// the last one. Everything it fills in is fill-only: a detected value never
+// overwrites what the user typed, and a checkout with no GitHub remote leaves
+// Repo empty (the safe, fail-closed value — see internal/gitrepo).
+func (f *formModel) maybeInspectPath() tea.Cmd {
 	path := strings.TrimSpace(f.poll.Path)
-	if path == "" || path == f.branchesFor {
+	if path == "" || path == f.inspectedFor {
 		return nil
 	}
-	f.branchesFor = path
-	return loadBranchesCmd(path)
-}
-
-// detectRepoCmd resolves the GitHub owner/name of a checkout off the UI thread.
-// Bounded: a path on a stale network mount must not wedge the form.
-func detectRepoCmd(path string) tea.Cmd {
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
-		return repoDetectedMsg{path: path, repo: gitrepo.Detect(ctx, path)}
-	}
-}
-
-// maybeDetectRepo returns a detection command when the form would benefit from
-// one: a path is set, the repo is still empty, and this path has not been tried
-// yet. Detection only ever FILLS an empty field — it never overwrites what the
-// user typed, and a checkout with no GitHub remote leaves it empty (which is
-// the safe, fail-closed value: see internal/gitrepo).
-func (f *formModel) maybeDetectRepo() tea.Cmd {
-	path := strings.TrimSpace(f.poll.Path)
-	if path == "" || strings.TrimSpace(f.poll.Repo) != "" || path == f.repoDetectedFor {
-		return nil
-	}
-	f.repoDetectedFor = path
-	return detectRepoCmd(path)
+	f.inspectedFor = path
+	return inspectPathCmd(path, false)
 }
 
 // lineBuf returns the line buffer backing a list field, or nil.
@@ -376,6 +359,9 @@ func newFormModel(cfg *config.Config, existing *config.Project) (*formModel, tea
 		seedPollDefaults(&f.poll)
 		f.capBuf = "1"
 		f.idAuto = true // a new project derives its ID from the label until told otherwise
+		// The seeded "main" is a placeholder, not a choice: the checkout's own
+		// default branch replaces it as soon as one is picked.
+		f.branchAuto = true
 	}
 	// Inherited fields show the [defaults] value; overridden ones the project's.
 	f.symlinks = slices.Clone(f.poll.Symlinks)
@@ -406,9 +392,64 @@ func newFormModel(cfg *config.Config, existing *config.Project) (*formModel, tea
 	}
 	// An existing project with a path but no repo gets one filled in on open,
 	// and its branch list is ready before the user reaches the field.
-	cmd = tea.Batch(cmd, f.maybeDetectRepo(), f.maybeLoadBranches())
+	cmd = tea.Batch(cmd, f.maybeInspectPath())
+	// A NEW project opens straight into the folder browser: the checkout is the
+	// one thing nothing else can be derived without, and everything on this tab
+	// (label, id, repo, default branch) falls out of it. esc backs out to an
+	// empty form, so nothing is forced.
+	if f.isNew {
+		var open tea.Cmd
+		f.dirs, open = newDirPicker(dirPickerStart(cfg, ""))
+		cmd = tea.Batch(cmd, open)
+	}
 	f.rebase()
 	return f, cmd
+}
+
+// openDirPicker puts the folder browser over the form, seeded at the current
+// path (or the directory most of the configured projects live in).
+func (f *formModel) openDirPicker() tea.Cmd {
+	var cmd tea.Cmd
+	f.dirs, cmd = newDirPicker(dirPickerStart(f.cfg, f.poll.Path))
+	return cmd
+}
+
+// choosePath adopts a folder picked in the browser and re-inspects it, with the
+// root-snapping the browser is allowed to do: picking any directory INSIDE a
+// checkout yields the checkout itself, so browsing into src/ and hitting enter
+// still configures the repository.
+func (f *formModel) choosePath(path string) tea.Cmd {
+	f.poll.Path = path
+	f.inspectedFor = path
+	return inspectPathCmd(path, true)
+}
+
+// applyInspection folds a git inspection into the form. Every write here is
+// FILL-ONLY — an empty field, or a value this form put there itself — so a probe
+// can never overwrite a human's decision.
+func (f *formModel) applyInspection(v pathInspectedMsg) {
+	f.inspected, f.branches, f.inspectedFor = v.info, v.info.Branches, v.path
+	if v.snap && v.info.Root != "" {
+		f.poll.Path = v.info.Root
+		f.inspectedFor = v.info.Root
+	}
+	if v.info.Repo != "" && strings.TrimSpace(f.poll.Repo) == "" {
+		f.poll.Repo, f.repoAuto = v.info.Repo, true
+	}
+	if v.info.DefaultBranch != "" && (f.branchAuto || strings.TrimSpace(f.poll.DefaultBranch) == "") {
+		f.poll.DefaultBranch = v.info.DefaultBranch
+	}
+	// Identity is suggested for a NEW project only: filling an existing project's
+	// empty label would write a label key nobody asked for on the next save.
+	if !f.isNew {
+		return
+	}
+	if strings.TrimSpace(f.poll.Label) == "" {
+		f.poll.Label = config.LabelFromPath(f.poll.Path)
+	}
+	if f.idAuto {
+		f.poll.Name = config.Slug(f.poll.Label)
+	}
 }
 
 // snapshot serializes everything a human can edit in this form. Maps print in
@@ -504,15 +545,18 @@ func (f *formModel) update(msg tea.Msg) (tea.Cmd, formEvent) {
 		} else {
 			f.teams, f.loadErr = v.teams, ""
 		}
-	case repoDetectedMsg:
-		// Only fill a still-empty field, and only for the path we asked about —
-		// the user may have typed a repo or changed the path meanwhile.
-		if v.repo != "" && strings.TrimSpace(f.poll.Repo) == "" && v.path == strings.TrimSpace(f.poll.Path) {
-			f.poll.Repo, f.repoAuto = v.repo, true
-		}
-	case branchesMsg:
+	case pathInspectedMsg:
+		// Only for the path we asked about: the user may have changed it while
+		// the inspection was in flight, and answering about the old checkout
+		// would fill the form with facts about a repository it no longer names.
 		if v.path == strings.TrimSpace(f.poll.Path) {
-			f.branches = v.branches
+			f.applyInspection(v)
+		}
+	case dirLoadedMsg:
+		if f.dirs != nil {
+			cmd, _ := f.dirs.update(v)
+			f.rebase()
+			return cmd, formNone
 		}
 	case metaMsg:
 		f.loading = ""
@@ -539,6 +583,20 @@ func (f *formModel) key(k tea.KeyPressMsg) (tea.Cmd, formEvent) {
 			return nil, formCancel
 		}
 		return nil, formNone
+	}
+	// The folder browser sits OVER the form and owns every keystroke while it is
+	// up — it types to filter, so an unconsumed key would edit the field behind it.
+	if f.dirs != nil {
+		cmd, ev := f.dirs.update(k)
+		switch ev {
+		case dirPickerCancel:
+			f.dirs = nil
+		case dirPickerChosen:
+			chosen := f.dirs.chosen
+			f.dirs = nil
+			return f.choosePath(chosen), formNone
+		}
+		return cmd, formNone
 	}
 	if f.picker != nil {
 		return f.pickerKey(k), formNone
@@ -602,8 +660,13 @@ func (f *formModel) key(k tea.KeyPressMsg) (tea.Cmd, formEvent) {
 	if buf == nil {
 		return nil, formNone
 	}
-	if cur == fRepo {
-		f.repoAuto = false // typed over: no longer the detected value
+	// Typed over: no longer this form's own suggestion, so a later inspection
+	// must leave both fields alone.
+	switch cur {
+	case fRepo:
+		f.repoAuto = false
+	case fDefaultBranch:
+		f.branchAuto = false
 	}
 	switch {
 	case k.Code == tea.KeyBackspace:
@@ -649,7 +712,9 @@ func (f *formModel) afterTextEdit(fd fieldID) {
 // takes a MULTI-line paste as multiple entries (pasting several symlinks at once
 // is the point); a single-line field takes the first non-blank line.
 func (f *formModel) paste(s string) {
-	if f.picker != nil || s == "" {
+	// The folder browser has no editable buffer of its own — a paste landing in
+	// the field behind it would be invisible.
+	if f.picker != nil || f.dirs != nil || s == "" {
 		return
 	}
 	fields := f.fields()
@@ -686,21 +751,24 @@ func (f *formModel) paste(s string) {
 		*buf += pasteDigits(s)
 		return
 	}
-	if cur == fRepo {
+	switch cur {
+	case fRepo:
 		f.repoAuto = false // pasted over: no longer the detected value
+	case fDefaultBranch:
+		f.branchAuto = false
 	}
 	*buf += pasteInline(s)
 	f.afterTextEdit(cur)
 }
 
 // leftField runs whatever should happen when focus leaves a field. Today that
-// is only repo auto-detection, triggered on leaving Path: resolving a checkout
-// mid-typing would fire once per keystroke.
+// is only the git inspection behind Path's autofill, triggered on LEAVING it:
+// resolving a checkout mid-typing would fire once per keystroke.
 func (f *formModel) leftField(fd fieldID) tea.Cmd {
 	if fd != fPath {
 		return nil
 	}
-	return tea.Batch(f.maybeDetectRepo(), f.maybeLoadBranches())
+	return f.maybeInspectPath()
 }
 
 // switchTab moves to the next/previous tab, resetting the cursor so it can
@@ -789,6 +857,11 @@ func (f *formModel) refresh() tea.Cmd {
 
 func (f *formModel) interact(cur fieldID) (tea.Cmd, formEvent) {
 	switch {
+	case cur == fPath:
+		// Typable AND browsable, like the branch below: enter opens the folder
+		// browser, but the field stays free text so a path you already know —
+		// or one on a machine the browser cannot reach — is never a dead end.
+		return f.openDirPicker(), formNone
 	case cur == fDefaultBranch:
 		// Typable AND pickable: enter lists the checkout's branches, but the
 		// field stays free text so a path that is not a checkout — or a branch
@@ -961,7 +1034,7 @@ func (f *formModel) openPicker(cur fieldID) tea.Cmd {
 			// Not a checkout, or the path is not set yet. Say so instead of
 			// opening an empty list — the field is still typable.
 			f.loadErr = "no branches found — set Path to a git checkout, or type the branch"
-			return f.maybeLoadBranches()
+			return f.maybeInspectPath()
 		}
 		title = "Default branch"
 		for _, b := range f.branches {
@@ -1103,7 +1176,7 @@ func (f *formModel) applyPick(p *picker) tea.Cmd {
 	case fCycle:
 		f.poll.CycleID = id
 	case fDefaultBranch:
-		f.poll.DefaultBranch = id
+		f.poll.DefaultBranch, f.branchAuto = id, false
 	case fMatchMode:
 		f.poll.MatchMode = id
 	case fAssignee:
@@ -1402,6 +1475,9 @@ func (f *formModel) tabStrip() string {
 }
 
 func (f *formModel) view(height int) string {
+	if f.dirs != nil {
+		return f.dirs.view(height)
+	}
 	if f.picker != nil {
 		return f.picker.view(height)
 	}
@@ -1521,7 +1597,7 @@ func fieldHelp(fd fieldID) string {
 	case fName:
 		return "Unique name for this project — its config key, and the prefix of every session it spawns."
 	case fPath:
-		return "Local repository path. Worktrees are forked from it; it is never checked out into itself."
+		return "Local repository path — enter browses for it. Picking one fills the label, id, GitHub repo and default branch; worktrees fork from it."
 	case fDefaultBranch:
 		return "Base branch worktrees fork from, and the base the agent opens its PR against. enter lists the checkout's branches; you can also type one."
 	case fBranchPrefix:
@@ -1708,7 +1784,13 @@ func (f *formModel) display(fd fieldID) string {
 		return f.poll.Name
 	case fPath:
 		if f.poll.Path == "" {
-			return faintText.Render("(required — /path/to/repo)")
+			return faintText.Render("(enter to browse — or type /path/to/repo)")
+		}
+		// A path that is NOT a checkout is worth saying out loud here: every
+		// worktree this project spawns forks from it, so the spawn would fail
+		// later for a reason the form knew about now.
+		if f.inspectedFor == strings.TrimSpace(f.poll.Path) && !f.inspected.IsRepo {
+			return f.poll.Path + warnText.Render("  not a git checkout")
 		}
 		return f.poll.Path
 	case fDefaultBranch:

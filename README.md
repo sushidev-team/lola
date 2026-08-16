@@ -253,8 +253,8 @@ runtime layer, not on config load.
 | `name` | string | Unique project **id** (required), and a path segment: it names the worktree directory (`worktrees/<name>/`) and the seen file (`state/<name>.seen`), prefixes every session/tmux name (`lola-<name>-eng-42`), and is what `lola status`, `enable`/`disable`/`poll`/`logs` key by. Keep it slug-shaped (lowercase letters, digits, `.` `_` `-`) — the forms slugify what you type. Changing it is a **rename**, not an edit; see [Renaming a project](#renaming-a-project). |
 | `label` | string | Free-text display name shown in the TUI and desktop (e.g. `"Nori App"`). Optional — empty falls back to `name`. Purely cosmetic: nothing keys by it, so you can change it at any time, including while sessions are running. |
 | `path` | string | Absolute path to the main checkout (required). A leading `~` is expanded on load. Session worktrees live under `~/.lola/worktrees/`, never inside the checkout. |
-| `repo` | string | GitHub repository as `owner/name`. Used for PR/CI observation of the sessions spawned for this project: the reconciler and observer pass it to `gh pr list --repo` so the open-PR check works regardless of the daemon's working directory. When empty, that check is unavailable and orphaned issues are **never** auto-reverted (fail-closed). Both forms **auto-detect** this from the checkout once `path` is set — see [Repo auto-detection](#repo-auto-detection). |
-| `default_branch` | string | Branch new session worktrees start from, and the base the agent is told to open its PR against. Default `main`. Both forms offer the checkout's branches once `path` is set (local plus remote-tracking, the repository's own default first) while staying free text, so a path that is not a checkout is never a dead end. |
+| `repo` | string | GitHub repository as `owner/name`. Used for PR/CI observation of the sessions spawned for this project: the reconciler and observer pass it to `gh pr list --repo` so the open-PR check works regardless of the daemon's working directory. When empty, that check is unavailable and orphaned issues are **never** auto-reverted (fail-closed). Both forms **auto-detect** this from the checkout once `path` is set — see [Adding a project](#adding-a-project-pick-the-folder-the-rest-fills-itself). |
+| `default_branch` | string | Branch new session worktrees start from, and the base the agent is told to open its PR against. Defaults to the checkout's own default branch when a folder is picked (see [Adding a project](#adding-a-project-pick-the-folder-the-rest-fills-itself)), else `main`. Both forms offer the checkout's branches once `path` is set (local plus remote-tracking, the repository's own default first) while staying free text, so a path that is not a checkout is never a dead end. |
 | `branch_prefix` | string | Prefix prepended to a session's derived branch name (e.g. `"feat/"` yields `feat/eng-42`). Empty inherits `[defaults].branch_prefix`, then `"lola/"`. |
 | `post_create` | string array | Commands run inside a fresh worktree before the agent starts (e.g. `composer install`). Any failure blocks the session with a clear status — never a half-started agent. Omit to inherit `[defaults].post_create`. |
 | `dev_commands` | string array | Long-running dev processes for this repository, e.g. `["composer dev", "npm run dev"]`. They run only in the project's **active** session — one session at a time, each command in its own terminal tab — see [The active session](#the-active-session). Deliberately **not** inheritable from `[defaults]`: a dev command belongs to one repository. |
@@ -262,24 +262,42 @@ runtime layer, not on config load.
 | `env` | table of strings | Extra environment variables exported into each session (`[project.env]`); the agent pane, shell tabs and the `post_create` commands all see them. Values may reference the session — see [Per-session env values](#per-session-env-values). Omit to inherit `[defaults].env`. |
 | `agent` | `"claude"` \| `"codex"` \| `"opencode"` | Coding agent for sessions spawned into this repo, overriding `[defaults].agent`. Empty/omitted inherits the global default (ultimately `claude`). See [The coding agent](#the-coding-agent). |
 
-#### Repo auto-detection
+#### Adding a project: pick the folder, the rest fills itself
 
-Filling in a project's `path` makes the TUI and desktop forms resolve `repo`
-from the checkout's git remotes, so `owner/name` need not be copied by hand. It
-prefers the **`upstream`** remote over `origin` — in a fork, `origin` is your
-fork but `upstream` is where the pull requests actually land, which is what
-PR/CI observation must watch. A detected value is flagged as such in the form;
-verify it on a fork.
+Adding a project starts at its checkout, because everything else on the Repo tab
+is derived from it. Both surfaces open the picker for you:
 
-Detection only ever **fills an empty field** and never overwrites a value you
-set. When it cannot determine the repo — not a git checkout, no remotes, a
-non-GitHub host, or a self-hosted GitHub Enterprise on a domain that does not
-name GitHub — it leaves the field **empty rather than guessing**. That is the
-safe direction: an empty `repo` disables the open-PR check (and so the orphan
-revert, fail-closed), whereas a wrong one would have `gh pr list --repo` answer
-confidently about someone else's repository.
+- **Desktop app** — "Add project" opens the native folder chooser straight away;
+  the Path row also carries a **Choose folder…** button. Cancelling leaves an
+  ordinary empty form.
+- **TUI** — `n`/`a` opens the project form directly into a **folder browser**
+  (`enter` on the Path field reopens it later). `↑`/`↓` move, typing narrows the
+  list, `→`/`enter` walks into a folder, `←` goes up, `ctrl-s` takes the folder
+  you are in, `ctrl-t` shows dot-directories and `esc` backs out. Directories
+  that are git checkouts are tagged `git`, and `enter` on one **takes** it — the
+  common case is a single keystroke.
 
-It reads local git remotes only — no network, no `gh`, no auth.
+One pass over local git then fills, from the picked folder:
+
+| field | from |
+| --- | --- |
+| `path` | the checkout **root** — picking a subdirectory still configures the repository |
+| `label` / `name` | the folder name (`nori-app` → label "Nori App", id `nori-app`) |
+| `repo` | the GitHub remote, **`upstream`** preferred over `origin` — in a fork, `origin` is your fork but `upstream` is where the pull requests land, which is what PR/CI observation must watch |
+| `default_branch` | `origin/HEAD` when git knows it, else a conventional name (`main`, `master`, `develop`, `trunk`) that **actually exists** in the checkout, else the checked-out branch |
+
+Every one of these only **fills an empty field** (or a value the form itself put
+there) and never overwrites what you set — a detected `repo` is flagged as such,
+so verify it on a fork. When something cannot be determined — not a git
+checkout, no remotes, a non-GitHub host, or a self-hosted GitHub Enterprise on a
+domain that does not name GitHub — the field is left **empty rather than
+guessed**. That is the safe direction: an empty `repo` disables the open-PR check
+(and so the orphan revert, fail-closed), whereas a wrong one would have
+`gh pr list --repo` answer confidently about someone else's repository. A path
+that is not a checkout is called out on the field rather than refused.
+
+It reads local git only — no network, no `gh`, no auth. Typing a path by hand
+still works everywhere the picker does.
 
 #### Renaming a project
 

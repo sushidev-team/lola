@@ -192,6 +192,7 @@ func TestRoutePasteReachesTheFocusedOverlay(t *testing.T) {
 		m := newTestRoot(t)
 		f, _ := newFormModel(m.cfg, nil)
 		m.form = f
+		f.dirs = nil // a new form opens into the folder browser; drive the field itself
 		f.tab = tabRepo
 		f.cursor = slices.Index(f.fields(), fPath)
 

@@ -23,6 +23,7 @@ export type {
     LinearOption,
     LinearTeam,
     LinearTeamMeta,
+    PathInfoDTO,
     ProjectFormDTO,
     PushErrDTO,
     ReleaseEntryDTO,

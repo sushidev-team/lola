@@ -9,6 +9,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/sushidev-team/lola/internal/config"
+	"github.com/sushidev-team/lola/internal/gitrepo"
 )
 
 // newTestSetup builds a wizard with hermetic seams: no real Linear call, no
@@ -20,7 +21,9 @@ func newTestSetup(t *testing.T, validateErr, storeErr error) *setupModel {
 	m.validateKey = func(ctx context.Context, endpoint, key string) error { return validateErr }
 	m.storeKey = func(service, key string) error { return storeErr }
 	m.gitToplevel = func() string { return "/tmp/nori-app" }
-	m.gitRemote = func(path string) string { return "sushidev-team/nori-app" }
+	m.inspectPath = func(path string) gitrepo.Info {
+		return gitrepo.Info{IsRepo: true, Root: path, Repo: "sushidev-team/nori-app", DefaultBranch: "main"}
+	}
 	return m
 }
 
@@ -193,18 +196,73 @@ func driveToWrite(t *testing.T, m *setupModel) bool {
 	return m.wrote
 }
 
-func TestParseGitRemoteTable(t *testing.T) {
-	cases := []struct{ in, want string }{
-		{"git@github.com:sushidev-team/nori-app.git", "sushidev-team/nori-app"},
-		{"git@github.com:sushidev-team/nori-app", "sushidev-team/nori-app"},
-		{"https://github.com/sushidev-team/nori-app.git", "sushidev-team/nori-app"},
-		{"https://github.com/sushidev-team/nori-app", "sushidev-team/nori-app"},
-		{"ssh://git@github.com/sushidev-team/nori-app.git", "sushidev-team/nori-app"},
-		{"", ""},
+// Remote parsing itself is internal/gitrepo's (see its ParseRemoteURL table);
+// what the wizard owns is USING it — the picked folder fills the repo and the
+// branch, and neither overwrites something already entered.
+func TestSetupAdoptPathFillsRepoAndBranch(t *testing.T) {
+	m := newTestSetup(t, nil, nil)
+	m.inspectPath = func(path string) gitrepo.Info {
+		return gitrepo.Info{IsRepo: true, Root: "/code/web", Repo: "acme/web", DefaultBranch: "develop"}
 	}
-	for _, c := range cases {
-		if got := parseGitRemote(c.in); got != c.want {
-			t.Errorf("parseGitRemote(%q) = %q, want %q", c.in, got, c.want)
-		}
+
+	m.adoptPath("/code/web/src")
+	if m.projectPath != "/code/web" {
+		t.Errorf("path = %q, want the checkout root", m.projectPath)
+	}
+	if m.repo != "acme/web" {
+		t.Errorf("repo = %q, want the detected remote", m.repo)
+	}
+	if m.branch != "develop" {
+		t.Errorf("branch = %q, want the checkout's default", m.branch)
+	}
+
+	// A value already entered wins over any later inspection.
+	m2 := newTestSetup(t, nil, nil)
+	m2.repo, m2.branch = "mine/web", "release"
+	m2.inspectPath = func(string) gitrepo.Info {
+		return gitrepo.Info{IsRepo: true, Root: "/code/web", Repo: "acme/web", DefaultBranch: "develop"}
+	}
+	m2.adoptPath("/code/web")
+	if m2.repo != "mine/web" || m2.branch != "release" {
+		t.Errorf("repo/branch = %q/%q, want the entered values kept", m2.repo, m2.branch)
+	}
+}
+
+// A directory that is not a checkout contributes nothing and is not an error —
+// the path is still taken, so `git init`-later stays possible.
+func TestSetupAdoptPathOnNonCheckout(t *testing.T) {
+	m := newTestSetup(t, nil, nil)
+	m.inspectPath = func(string) gitrepo.Info { return gitrepo.Info{} }
+
+	m.adoptPath("/code/plain")
+	if m.projectPath != "/code/plain" {
+		t.Errorf("path = %q, want it taken as typed", m.projectPath)
+	}
+	if m.repo != "" {
+		t.Errorf("repo = %q, want empty (fail closed)", m.repo)
+	}
+	if m.branch != config.DefaultBranchName {
+		t.Errorf("branch = %q, want the seeded default", m.branch)
+	}
+}
+
+// ctrl+f on the path step opens the folder browser, and choosing there fills
+// the path (the same wiring the project form uses).
+func TestSetupFolderBrowser(t *testing.T) {
+	m := newTestSetup(t, nil, nil)
+	m.step = stepProjectPath
+
+	if _, cmd := m.Update(keyMsg("ctrl+f")); cmd == nil {
+		t.Fatal("ctrl+f must open the browser and request a listing")
+	}
+	if m.dirs == nil {
+		t.Fatal("browser did not open")
+	}
+	// esc closes the browser rather than quitting the wizard.
+	if _, cmd := m.Update(keyMsg("esc")); cmd != nil {
+		t.Error("esc in the browser must not quit the wizard")
+	}
+	if m.dirs != nil {
+		t.Error("esc must close the browser")
 	}
 }
