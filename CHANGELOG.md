@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.2.6](https://github.com/sushidev-team/lola/compare/v0.2.5...v0.2.6) (2026-08-16)
+
+
+### Features
+
+* **daemon:** per-project dev commands with a one-session Active toggle ([13d825c](https://github.com/sushidev-team/lola/commit/13d825c4b0b3bc6ac319a88eb5f6d209ce879345))
+* **desktop:** a loading state on Button ([cf7f187](https://github.com/sushidev-team/lola/commit/cf7f187595c21b8f87e703867ba3c6a2ce5a65e1))
+* **dev:** reclaim squatted ports on take-over, and show what a session serves ([91f0278](https://github.com/sushidev-team/lola/commit/91f0278579d61ce548e1f885535c437e17b71fdf))
+* **projects:** pick the folder, and the rest of the project fills itself ([b92e83c](https://github.com/sushidev-team/lola/commit/b92e83c356e5e32f1a1f8f86ff816d19c5ac9fb7))
+
+
+### Bug Fixes
+
+* **review:** never hand findings to an agent behind a modal dialog ([971c7f7](https://github.com/sushidev-team/lola/commit/971c7f77cfe416049b51819c52c846010ac0a7c6))
+* **teardown:** kill every process below a pane, not just its group ([b5f2e31](https://github.com/sushidev-team/lola/commit/b5f2e319e5003817349c56faf5d124d08a78cb2d))
+
 ## [0.2.5](https://github.com/sushidev-team/lola/compare/v0.2.4...v0.2.5) (2026-08-12)
 
 
