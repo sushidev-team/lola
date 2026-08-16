@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/session"
@@ -402,5 +403,82 @@ func TestReconcileDevTabsStopsHuntingForAnAddressThatNeverComes(t *testing.T) {
 	}
 	if reads != devURLAttempts {
 		t.Errorf("read the pane %d times, want the %d-attempt budget", reads, devURLAttempts)
+	}
+}
+
+// The startup watch. The address appears a second or two after the tabs do, and
+// waiting a full observer cycle for it is half a minute of staring at a running
+// server with no link to it — so activation watches its own tabs closely until
+// one prints.
+func TestDevURLWatchFindsTheAddressWithoutTheObserver(t *testing.T) {
+	d, _ := devDaemon(t, []string{"composer dev"}, devSession("lola-app-eng-1"))
+	d.markDev("lola-app-eng-1", true, 1)
+	reads := 0
+	d.paneTail = func(_ context.Context, name string, lines int) (string, error) {
+		reads++
+		if name != "lola-app-eng-1-dev-1" {
+			t.Errorf("read pane %q, want the dev tab", name)
+		}
+		if lines != devURLWatchLines {
+			t.Errorf("read %d lines, want the short startup tail %d", lines, devURLWatchLines)
+		}
+		if reads < 2 {
+			return "  INFO  Booting...", nil // still starting, as it always is
+		}
+		return "  INFO  Server running on [http://127.0.0.1:8001].", nil
+	}
+
+	d.watchDevURLs(context.Background(), "lola-app-eng-1", 1)
+
+	s, _ := d.sessions.Get("lola-app-eng-1")
+	if len(s.DevURLs) == 0 || s.DevURLs[0] != "http://127.0.0.1:8001" {
+		t.Fatalf("DevURLs = %v, want the address the second read printed", s.DevURLs)
+	}
+	if reads != 2 {
+		t.Errorf("read the pane %d times, want it to stop at the first address", reads)
+	}
+}
+
+// The toggle is a MOVE, so a watch outlives its own tabs: another session can
+// take them over while this one is still looking. Writing an address onto a
+// session that no longer serves it is the stale link the whole design refuses.
+func TestDevURLWatchStopsWhenTheTabsMoveOn(t *testing.T) {
+	d, _ := devDaemon(t, []string{"composer dev"}, devSession("lola-app-eng-1"))
+	d.markDev("lola-app-eng-1", false, 0)
+	reads := 0
+	d.paneTail = func(context.Context, string, int) (string, error) {
+		reads++
+		return "Server running on [http://127.0.0.1:8001].", nil
+	}
+
+	d.watchDevURLs(context.Background(), "lola-app-eng-1", 1)
+
+	if reads != 0 {
+		t.Errorf("read the pane %d times, want none once the session lost its tabs", reads)
+	}
+	s, _ := d.sessions.Get("lola-app-eng-1")
+	if len(s.DevURLs) != 0 {
+		t.Errorf("DevURLs = %v, want none", s.DevURLs)
+	}
+}
+
+// Shutdown must not wait out the window: every read is a bounded, read-only
+// capture, so an aborted watch costs a link the next observer cycle finds anyway.
+func TestDevURLWatchStopsOnShutdown(t *testing.T) {
+	d, _ := devDaemon(t, []string{"composer dev"}, devSession("lola-app-eng-1"))
+	d.markDev("lola-app-eng-1", true, 1)
+	d.paneTail = func(context.Context, string, int) (string, error) { return "starting...", nil }
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	done := make(chan struct{})
+	go func() {
+		d.watchDevURLs(ctx, "lola-app-eng-1", 1)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the watch outlived its cancelled context")
 	}
 }

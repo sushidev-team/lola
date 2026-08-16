@@ -441,6 +441,18 @@ each of which owns exactly one external tool or concern behind an **exec seam**
     that is gone is worse than no link. The app opens it through the daemon
     (`cmd=openURL`, http(s)-only), never `window.open`: the address came out of
     terminal text.
+  - The address is found by TWO readers, and the fast one is the toggle's. A
+    server prints its address a second or two after its tab exists — the one
+    moment where the observer's 30s cadence is far too slow, since a human is
+    watching that tab come up — so activation starts `startDevURLWatch`: a
+    background poll of its OWN tabs (short `devURLWatchLines` tail, every
+    `devURLWatchEvery`, bounded by `devURLWatchWindow`) that stops at the first
+    address. It re-reads the session record every pass and gives up the moment
+    the tabs stop, change count or are taken over — the toggle is a MOVE, so a
+    watch outlives its own tabs — and it runs on the SHUTDOWN-CANCELLABLE
+    context, not a shielded one, because an aborted read costs only a link the
+    observer finds a cycle later. `scanDevURLs` stays as that fallback: nothing
+    depends on the watch succeeding.
   - `dev_commands` is deliberately NOT a `[defaults]` key (see the inheritance
     invariant): a dev command belongs to one repository, and an inherited one
     would start the wrong stack in every project that forgot to override it.

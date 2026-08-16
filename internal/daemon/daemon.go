@@ -199,6 +199,11 @@ type Daemon struct {
 	// persisted counter would permanently blind a tab whose budget ran out.
 	devURLTries map[string]int
 
+	// devURLWatching holds the sessions whose STARTUP address watch is running
+	// (dev.go's startDevURLWatch), so a second toggle cannot start a second
+	// watch over the same tabs.
+	devURLWatching map[string]bool
+
 	// Status interpreter ([statusagent], statusagentwire.go): the OPT-IN
 	// display-only LLM pass. statusAgent/interpretSeam are nil when disabled or
 	// the binary is missing (mirrored into interpretOn, the atomic the store's

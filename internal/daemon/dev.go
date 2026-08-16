@@ -131,6 +131,10 @@ func (d *Daemon) handleDev(ctx context.Context, sessionID string, on bool) (prot
 	if started == 0 {
 		return protocol.DevData{}, fmt.Errorf("session %s: no dev process could be started: %w", s.ID, errors.Join(errs...))
 	}
+	// The tabs are up but nothing has printed yet, and the observer's next look
+	// is up to a full cycle away — so the address is watched for, closely, right
+	// now (startDevURLWatch); the observer's own lazy scan stays as the fallback.
+	d.startDevURLWatch(s.ID, started)
 	msg := fmt.Sprintf("session %s: %d dev process(es) running", s.ID, started)
 	if stopped != "" {
 		msg += fmt.Sprintf(" (taken over from %s)", stopped)
@@ -448,18 +452,141 @@ func (d *Daemon) scanDevURLs(ctx context.Context, s session.Session, live int, l
 		return false
 	}
 
+	found := d.readDevURLs(ctx, liveTabs, devURLScanLines)
+	if len(found) == 0 {
+		return false
+	}
+	if d.setDevURLs(s.ID, found) {
+		d.logf("", "dev: %s serves %s", s.ID, strings.Join(found, ", "))
+		return true
+	}
+	return false
+}
+
+// The startup watch. A dev server prints its address a second or two after its
+// tab exists, which is the one moment in a session's life when the observer's
+// 30s cadence is far too slow: a human clicks the toggle, watches the tab come
+// up, and then waits half a minute for the link to the thing they can already
+// see running. So activation watches its own tabs closely for a short while.
+//
+// The window has to outlast a cold start (`composer dev` waits on a Vite build,
+// a Rails boot runs migrations) but not become a background poller: after it,
+// the observer's lazy scan is the fallback and the address is at most one cycle
+// behind.
+const (
+	devURLWatchWindow = 90 * time.Second
+	devURLWatchFirst  = 750 * time.Millisecond
+	devURLWatchEvery  = 2 * time.Second
+	// A SHORT tail, unlike the observer's: the line was printed seconds ago, so
+	// it is still near the bottom, and this reads a pane ~40 times where the
+	// observer reads it once.
+	devURLWatchLines = 300
+)
+
+// startDevURLWatch runs the startup watch in the background, at most one per
+// session.
+//
+// It is async because the toggle's reply is what un-freezes the button, and the
+// address is worth none of that wait. It hangs off the SHUTDOWN-CANCELLABLE run
+// context (like the interpreter and review workers, unlike the shielded observe
+// cycle): every read is a bounded, read-only capture-pane, so aborting one costs
+// a link that the next observer cycle finds anyway — while making graceful
+// shutdown wait up to devURLWatchWindow for it would be a real cost.
+func (d *Daemon) startDevURLWatch(sessionID string, tabs int) {
+	if sessionID == "" || tabs <= 0 || d.paneTail == nil {
+		return
+	}
+	d.mu.Lock()
+	ctx := d.shutdownCtx
+	if d.devURLWatching == nil {
+		d.devURLWatching = map[string]bool{}
+	}
+	if d.devURLWatching[sessionID] {
+		d.mu.Unlock()
+		return // a re-activation while the first watch is still looking
+	}
+	d.devURLWatching[sessionID] = true
+	d.mu.Unlock()
+	if ctx == nil {
+		ctx = context.Background() // a daemon that never called Run (tests)
+	}
+
+	go func() {
+		defer func() {
+			d.mu.Lock()
+			delete(d.devURLWatching, sessionID)
+			d.mu.Unlock()
+			if r := recover(); r != nil {
+				d.logf("", "dev: address watch panicked for %s: %v", sessionID, r)
+			}
+		}()
+		d.watchDevURLs(ctx, sessionID, tabs)
+	}()
+}
+
+// watchDevURLs polls a freshly activated session's dev tabs until they print an
+// address, the tabs change under it, or the window runs out.
+//
+// It re-reads the session record every pass rather than trusting the tabs it was
+// started with: the toggle is a MOVE, so the session can lose its tabs to
+// another one while this is still looking, and a watch that kept writing
+// addresses onto a session that no longer serves them is exactly the stale link
+// the whole design refuses.
+func (d *Daemon) watchDevURLs(ctx context.Context, sessionID string, tabs int) {
+	deadline := time.Now().Add(devURLWatchWindow)
+	wait := devURLWatchFirst
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(wait):
+		}
+		wait = devURLWatchEvery
+
+		s, ok := d.sessions.Get(sessionID)
+		switch {
+		case !ok, !s.DevActive, s.DevTabs != tabs:
+			return // stopped, taken over, or restarted — not this watch's tabs
+		case len(s.DevURLs) > 0:
+			return // the observer got there first
+		}
+		names := make([]string, 0, tabs)
+		for i := 1; i <= tabs; i++ {
+			names = append(names, devtab.Name(sessionID, i))
+		}
+		if urls := d.readDevURLs(ctx, names, devURLWatchLines); len(urls) > 0 {
+			if d.setDevURLs(sessionID, urls) {
+				d.logf("", "dev: %s serves %s", sessionID, strings.Join(urls, ", "))
+				if err := d.sessions.Save(); err != nil {
+					d.logf("", "dev: persist %s's addresses: %v", sessionID, err)
+				}
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			// Not an error: plenty of dev commands never print an address
+			// (`tailwindcss --watch`), and a slow one is still covered by the
+			// observer's own scan.
+			return
+		}
+	}
+}
+
+// readDevURLs captures each named tab and returns the ranked addresses they
+// advertise, best first and deduplicated across tabs — so a two-command project
+// keeps its app URL ahead of its bundler's even though the panes are ranked
+// independently. A tab that cannot be read is skipped, never fatal.
+func (d *Daemon) readDevURLs(ctx context.Context, names []string, lines int) []string {
 	var found []string
 	seen := map[string]bool{}
-	for _, name := range liveTabs {
+	for _, name := range names {
 		cctx, cancel := context.WithTimeout(ctx, devExecTimeout)
-		pane, err := d.paneTail(cctx, name, devURLScanLines)
+		pane, err := d.paneTail(cctx, name, lines)
 		cancel()
 		if err != nil {
 			d.logf("", "observe: could not read %s for its dev address: %v", name, err)
 			continue
 		}
-		// Per TAB, so a two-command project keeps its app URL ahead of its
-		// bundler's even though the panes are ranked independently.
 		for _, u := range devurl.URLs(pane) {
 			if !seen[u] {
 				seen[u] = true
@@ -470,14 +597,7 @@ func (d *Daemon) scanDevURLs(ctx context.Context, s session.Session, live int, l
 	if len(found) > devurl.MaxCandidates {
 		found = found[:devurl.MaxCandidates]
 	}
-	if len(found) == 0 {
-		return false
-	}
-	if d.setDevURLs(s.ID, found) {
-		d.logf("", "dev: %s serves %s", s.ID, strings.Join(found, ", "))
-		return true
-	}
-	return false
+	return found
 }
 
 // setDevURLs writes the derived addresses onto the record, reporting whether
