@@ -1013,7 +1013,14 @@ func (n *Native) Kill(ctx context.Context, s session.Session, removeWorktree, fo
 		name = s.ID
 	}
 	if n.Tmux.Has(ctx, name) {
-		if err := n.Tmux.KillSession(ctx, name); err != nil {
+		// The agent session goes down with its whole TREE, for the same reason
+		// the aux sessions below do — and one more. A coding agent starts
+		// servers of its own while it works (`php artisan serve` to look at the
+		// page it just changed), and Claude Code puts every command its Bash
+		// tool runs in its OWN process group, so those children survive both a
+		// kill-session and a kill of the pane's group. They then hold their port
+		// forever, pointed at a worktree this call is about to delete.
+		if err := n.Tmux.KillSessionTree(ctx, name); err != nil {
 			return fmt.Errorf("runtime: kill %s: %w", s.ID, err)
 		}
 	}

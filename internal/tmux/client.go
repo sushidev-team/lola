@@ -24,6 +24,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/sushidev-team/lola/internal/proctree"
 )
 
 // listFormat is the `tmux ls -F` format: tab-separated name, creation epoch
@@ -323,8 +325,8 @@ func (c *Client) PanePID(ctx context.Context, name string) (int, error) {
 	return pid, nil
 }
 
-// KillSessionTree kills a session AND the process GROUP its pane leads, then
-// the session itself.
+// KillSessionTree kills a session AND every process below its pane, then the
+// session itself.
 //
 // KillSession alone is NOT enough for anything that spawns children. tmux hangs
 // the pane's process up (SIGHUP); a child that ignores SIGHUP — `composer dev`'s
@@ -333,21 +335,59 @@ func (c *Client) PanePID(ctx context.Context, name string) (int, error) {
 // starts on 8001 instead of 8000, which is the same "find it and kill it by
 // hand" problem the dev tabs exist to remove.
 //
-// Signalling the pane's process group reaches those children: tmux gives each
-// pane a fresh session and process group, so everything the command spawns is
-// in it unless it deliberately leaves (setsid). It DEGRADES to a plain
-// KillSession — an unresolvable pane pid, a dead pane (no process left), an
-// unsupported platform — so a tab is always torn down even when the group
-// cannot be signalled.
+// The pane's process GROUP covers most of that tree: tmux gives each pane a
+// fresh session and process group, so everything the command spawns inherits
+// it. But a descendant that deliberately LEFT the group is invisible to a group
+// kill, and a coding agent is exactly such a case — Claude Code's Bash tool
+// puts every command it runs in its own process group, so a `php artisan serve
+// --port=8000` an agent started in its worktree outlives the whole session and
+// keeps the port. So the ppid tree is walked too (proctree) and every group it
+// spans is signalled together, sharing one grace window.
+//
+// It DEGRADES to a plain KillSession at every step — an unresolvable pane pid,
+// a dead pane (no process left), a `ps` that will not answer, an unsupported
+// platform — so a tab is always torn down even when nothing can be signalled.
 func (c *Client) KillSessionTree(ctx context.Context, name string) error {
 	if pid, err := c.PanePID(ctx, name); err == nil && pid > 1 {
-		if pgid, gerr := processGroupOf(pid); gerr == nil {
-			// Best-effort: the session teardown below runs either way, so a
-			// refused signal costs a leaked child, never the tab itself.
-			_ = killProcessGroup(pgid, killTreeGrace)
+		var groups []int
+		if pgid, gerr := proctree.GroupOf(pid); gerr == nil {
+			groups = append(groups, pgid)
 		}
+		if tbl, terr := proctree.Read(ctx); terr == nil {
+			groups = append(groups, tbl.TreeGroups(pid)...)
+		}
+		// Best-effort: the session teardown below runs either way, so a refused
+		// signal costs a leaked child, never the tab itself.
+		_ = proctree.KillGroups(groups, killTreeGrace)
 	}
 	return c.KillSession(ctx, name)
+}
+
+// PanePIDs returns the pid of every pane on lola's server, in one exec. It is
+// the daemon dev sweep's PROTECT set: a process lola is about to kill for
+// squatting on a port must not be one a live pane owns (an agent, a shell tab),
+// and a pid is the only thing that ties the two together.
+//
+// A tmux server that is not running is not an error — no panes, no pids — the
+// same shape ListSessions and DeadPanes use.
+func (c *Client) PanePIDs(ctx context.Context) ([]int, error) {
+	out, stderr, err := c.run(ctx, "list-panes", "-a", "-F", "#{pane_pid}")
+	if err != nil {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) && ee.ExitCode() == 1 && strings.Contains(stderr, "no server") {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var pids []int
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		pid, cerr := strconv.Atoi(strings.TrimSpace(line))
+		if cerr != nil || pid <= 1 {
+			continue
+		}
+		pids = append(pids, pid)
+	}
+	return pids, nil
 }
 
 // KeepDeadPane makes the named session OUTLIVE the command it runs: when the

@@ -862,10 +862,14 @@ func TestKillRemovesCleanWorktreeAndBranch(t *testing.T) {
 	if err := f.n.Kill(context.Background(), killFixtureSession(), true, false); err != nil {
 		t.Fatalf("Kill: %v", err)
 	}
-	// The agent session is killed, then the server is listed once to find this
-	// session's shell/review tabs (the fake reports none here).
+	// The agent session is killed with its whole process TREE — hence the pane
+	// pid lookup: an agent's own background servers sit in process groups of
+	// their own and outlive a plain kill-session, still holding their ports
+	// against the worktree this call deletes. Then the server is listed once to
+	// find this session's shell/review tabs (the fake reports none here).
 	wantTmux := strings.Join([]string{
 		"-L lola has-session -t =lola-nori-eng-42",
+		"-L lola display-message -p -t =lola-nori-eng-42: #{pane_pid}",
 		"-L lola kill-session -t =lola-nori-eng-42",
 		"-L lola ls -F #{session_name}\t#{session_created}\t#{session_attached}\t#{session_activity}",
 	}, "\n")
