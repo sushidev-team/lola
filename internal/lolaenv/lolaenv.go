@@ -52,9 +52,19 @@ func CommandLine(command string) string {
 	return "exec sh -c " + shQuote(exportPrelude+"exec "+command)
 }
 
-// shQuote single-quotes s for a POSIX shell (the '\'' dance for embedded
-// quotes). Kept here rather than imported so this package stays stdlib-free
-// and the one contract lives in one file.
+// shQuote single-quotes s for a POSIX shell. An embedded quote goes through the
+// usual close-escape-reopen dance:
+//
+//	'\''
+//
+// which is written as an indented code block on purpose. gofmt rewrites a pair
+// of adjacent apostrophes in doc-comment PROSE into a typographic close-quote,
+// so spelling the idiom out inline made this file permanently gofmt-unclean and
+// mangled the one thing the comment exists to show. A code block is left
+// verbatim.
+//
+// Kept here rather than imported so this package stays stdlib-free and the one
+// contract lives in one file.
 func shQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
