@@ -165,6 +165,17 @@ func Parse(paneText string, k agent.Kind) (Question, bool) {
 // stripANSI removes ANSI escape sequences, then drops any remaining C0/C1
 // control bytes (bare ESC, BEL, CR — CR is a submit vector and vanishes) while
 // preserving TAB and LF, which carry layout the block scan relies on.
+//
+// It also folds every Unicode space separator (category Zs) to a plain ASCII
+// space. That is not cosmetic: claude-code pads its composer caret with U+00A0
+// NO-BREAK SPACE, so a resting prompt renders as "❯ " (and "❯ <draft
+// text>" once a human has typed). Go's \s is ASCII-only, so every caret pattern
+// below — claudeCaretRe, plainCaretRe, promptIndicatorRe — missed it and
+// ActivityWaiting became UNREACHABLE for claude sessions: the pane never
+// corroborated an idle agent, so every send-keys gate (review hand-off,
+// reactions, the answer path) failed closed forever while the daemon logged
+// "worker is mid-turn". Normalizing here fixes every downstream pattern at once,
+// and an NBSP is a space on screen, so nothing else changes meaning.
 func stripANSI(s string) string {
 	s = ansiEscapeRe.ReplaceAllString(s, "")
 	return strings.Map(func(r rune) rune {
@@ -173,6 +184,9 @@ func stripANSI(s string) string {
 		}
 		if r < 0x20 || (r >= 0x7f && r <= 0x9f) {
 			return -1
+		}
+		if unicode.Is(unicode.Zs, r) {
+			return ' '
 		}
 		return r
 	}, s)

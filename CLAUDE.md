@@ -362,6 +362,29 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   logged as `handed feedback to the worker` and read by nobody. A capture
   failure or any non-waiting classification (including a modal's
   `ActivityBlocked`) defers. One bounded tmux exec per delivery is the price.
+- **A CARET is not proof of idleness, and the pane classifier is a claude-code
+  RENDERING mirror — re-verify it against a live pane.** Every send-keys gate
+  bottoms out in `attention.Classify`, so a rendering detail lola no longer
+  recognizes silently disables the whole feature rather than erroring. Two such
+  details are load-bearing today and both were learned from NOR-373, where a
+  review deferred as "mid-turn" for 15 minutes until a human pasted it by hand:
+  - The composer caret is padded with **U+00A0**, not a space (`❯ `), and
+    Go's `\s` is ASCII-only. Every caret pattern missed it, `ActivityWaiting`
+    became UNREACHABLE for claude sessions, and the review hand-off, the reaction
+    engine and the answer path all failed closed forever. `stripANSI` therefore
+    folds Unicode `Zs` to a plain space, once, for every downstream pattern.
+  - The composer is drawn at **ALL times**, mid-turn included, and this build
+    prints no `esc to interrupt` — so a resting caret no longer means the turn
+    ended, and the LIVE status line is the only discriminator: gerund + ellipsis
+    + a running timer (`✻ Harmonizing… (5m 58s · ↓ 17.9k tokens)`) while
+    streaming, past tense without either (`✻ Cogitated for 24m 46s`) once
+    finished. Hence `hasLiveWorkingCue`, checked BEFORE the waiting cue, while
+    the weak cues (a frozen token meter, a leftover spinner frame, codex's
+    `Working 4m 07s`) still lose to a resting prompt — a completed status line
+    keeps those on screen, and reading them as activity is the old sticky
+    false-`working` bug.
+  Also note the frame is plain `─` RULES, no corners, so `boxBorderRe` never
+  fires for claude and the `❯` caret carries the whole waiting classification.
 - **A MODAL is not a prompt, and `attention` is the one place that knows.**
   Claude Code interrupts a session with keypress-driven overlays (the auto-mode
   setup wizard and its siblings). Typed prose is swallowed by the widget and the

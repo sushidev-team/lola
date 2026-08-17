@@ -760,13 +760,23 @@ func (d *Daemon) sendHandoffToAgent(ctx context.Context, s session.Session, p re
 	if s.TmuxName == "" {
 		return false
 	}
-	if !handoffDeliverable(s) || !d.handoffPromptProof(ctx, s) {
+	if gated := !handoffDeliverable(s); gated || !d.handoffPromptProof(ctx, s) {
 		// Mid-turn, waiting on a permission decision, an adoption-carried gate
 		// that cannot be verified against the live pane (see ensurePromptVerified),
 		// or a pane-derived idle whose pane does not actually show a prompt (see
 		// handoffPromptProof): defer, never type.
+		//
+		// The two halves are named apart on purpose. A stash can sit undelivered
+		// for hours, and "the axes say busy" and "the axes say idle but the pane
+		// does not show a resting prompt" have completely different causes — the
+		// second is a classifier that no longer recognizes the agent's composer,
+		// which is invisible for as long as both read as one "mid-turn" line.
+		why := "the pane does not show a resting prompt"
+		if gated {
+			why = "the worker is mid-turn"
+		}
 		d.deferHandoff(s.ID, p.Kind, stash)
-		d.logf("", "review: %s (%s) worker is mid-turn — deferring the hand-off", s.ID, p.Kind)
+		d.logf("", "review: %s (%s) %s — deferring the hand-off", s.ID, p.Kind, why)
 		return false
 	}
 

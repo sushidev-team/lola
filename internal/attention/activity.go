@@ -248,14 +248,16 @@ func claudeCues(k agent.Kind) bool {
 // yields exactly the wrong answer (Waiting), which is what let a review hand-off
 // be typed into claude-code's auto-mode setup dialog and vanish.
 //
-// Working is checked first and wins WHEN a live cue is in the status tail: a
-// genuinely working pane still renders its input box below the status line, and
-// the live spinner is the ground truth. But the working scan is pinned to the
-// last statusTailLines rows (the live status cluster), so a cue that has since
-// scrolled up into scrollback does NOT win over the resting input box below it —
-// that stale-cue-beats-waiting case is the sticky false-"working" bug. Input
-// size is bounded to the tail (maxInput); working scans the last
-// statusTailLines lines, waiting the last maxScreenLines lines.
+// The working cues are split in two tiers around the waiting check, because a
+// claude-code pane renders its composer at ALL times (see hasLiveWorkingCue):
+// a LIVE status line (esc-to-interrupt, an ellipsis+elapsed timer, a
+// spinner+gerund…) beats the caret below it, while the WEAK cues (a frozen token
+// meter, a leftover spinner frame, codex's "Working" timer) still lose to a
+// resting prompt — a completed status line keeps those on screen, and reading
+// them as activity is the sticky false-"working" bug. Both working scans are
+// pinned to the last statusTailLines rows (the live status cluster), so a cue
+// that has scrolled up into scrollback counts for nothing. Input size is bounded
+// to the tail (maxInput); waiting scans the last maxScreenLines lines.
 //
 // k selects which agent's cue set applies. SHARED cues (esc-to-interrupt, the
 // braille spinner, the bordered input box) fire for every kind; claude-code's
@@ -279,19 +281,18 @@ func Classify(paneText string, k agent.Kind) Activity {
 	if claudeCues(k) && modalOverlayRe.MatchString(screen) {
 		return ActivityBlocked
 	}
-	// "esc to interrupt" is the ONE unambiguous LIVE cue and is SHARED by every
-	// agent (claude, codex and opencode all print it while a turn streams). It
-	// always wins.
-	if escInterruptRe.MatchString(tail) {
+	// A LIVE status line wins over the composer below it (see hasLiveWorkingCue):
+	// current claude-code renders its composer at ALL times, so a resting caret is
+	// no longer evidence that the turn ended.
+	if hasLiveWorkingCue(tail, k) {
 		return ActivityWorking
 	}
 	// A resting input prompt (bordered box, a caret, or an answerable question)
 	// means the agent has yielded. It beats the WEAKER working cues below, because
 	// a COMPLETED status line can leave a frozen token counter / elapsed timer /
-	// spinner frame on screen right next to the resting prompt — reading that as
-	// live activity is exactly the sticky false-"working" bug. A genuinely
-	// streaming turn shows "esc to interrupt" (handled above) and does not rest an
-	// empty caret, so nothing live is lost here.
+	// spinner frame on screen right next to the resting prompt ("✳ Cooked for
+	// 5m 59s · ↑ 12.5k tokens") — reading that as live activity is exactly the
+	// sticky false-"working" bug.
 	if hasWaitingCue(paneText, screen, k) {
 		return ActivityWaiting
 	}
@@ -301,6 +302,43 @@ func Classify(paneText string, k agent.Kind) Activity {
 		return ActivityWorking
 	}
 	return ActivityUnknown
+}
+
+// hasLiveWorkingCue reports whether the status tail shows a cue that can ONLY
+// be rendered by a turn that is still streaming — the subset of the working cues
+// that outranks a resting composer.
+//
+// Why the split exists: claude-code used to hide its composer while a turn ran,
+// so "a caret is on screen" was itself proof the agent had yielded and the only
+// cue allowed to beat it was the explicit "esc to interrupt" affordance. Current
+// builds render the composer at ALL times — a streaming pane shows
+// "✻ Harmonizing… (5m 58s · ↓ 17.9k tokens)" with an empty "❯ " directly below
+// it — so trusting the caret alone would classify every mid-turn pane as Waiting
+// and let a hand-off be typed into a live agent, the one thing the gate exists
+// to prevent.
+//
+// The discriminator is the SHAPE of the status line, because claude-code swaps
+// it when the turn ends: live is a gerund with an ellipsis plus a running timer
+// ("Harmonizing… (5m 58s)"), finished is past tense without either ("Cogitated
+// for 24m 46s"). So the live tier is: "esc to interrupt" (shared, explicit), the
+// ellipsis+parenthesised-elapsed timer, and the spinner-glyph+gerund… status
+// line. Everything else stays WEAK and keeps losing to a resting prompt: a
+// frozen token meter and a leftover braille frame both survive on a completed
+// status line, and codex's "Working 4m 07s" is pinned weak by an existing test
+// for the same reason.
+//
+// Fragility: this rides on claude-code's status-line wording. A build that drops
+// the ellipsis while streaming would fall back to Waiting mid-turn — re-verify
+// against a live pane whenever the status line changes, the same way the modal
+// cue is re-verified against a live dialog.
+func hasLiveWorkingCue(tail string, k agent.Kind) bool {
+	if escInterruptRe.MatchString(tail) {
+		return true // SHARED: every agent prints it while a turn streams.
+	}
+	if !claudeCues(k) {
+		return false
+	}
+	return gerundTimerRe.MatchString(tail) || spinnerStatusRe.MatchString(tail)
 }
 
 // hasWorkingCue reports whether the (ANSI-stripped) live status tail shows any
