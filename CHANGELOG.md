@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.8](https://github.com/sushidev-team/lola/compare/v0.2.7...v0.2.8) (2026-08-17)
+
+
+### Bug Fixes
+
+* **lolaenv:** keep the shell-quoting doc comment gofmt-stable ([53b4006](https://github.com/sushidev-team/lola/commit/53b4006a7e3cd76f3925209e17e896a4f6c005c5))
+
 ## [0.2.7](https://github.com/sushidev-team/lola/compare/v0.2.6...v0.2.7) (2026-08-17)
 
 
