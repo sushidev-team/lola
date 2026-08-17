@@ -283,7 +283,7 @@ func TestNewSessionArgs(t *testing.T) {
 	}
 	// The server default precedes the create — tmux reads history-limit when the
 	// PANE is born, so applying it afterwards would be dead configuration.
-	want := "-L lola set-option -g history-limit 10000\n" +
+	want := "-L lola set-option -g history-limit 10000\n-L lola set-option -g mouse off\n" +
 		"-L lola new-session -d -s lola-NORI-12-1 -c /work/nori claude"
 	if args := loggedArgs(t, argsLog); args != want {
 		t.Errorf("invoked %q, want %q", args, want)
@@ -304,16 +304,16 @@ func TestNewSessionAppliesConfiguredScrollback(t *testing.T) {
 	}
 }
 
-// Mouse mode is opt-in and only ever turned ON: the TUI embed enables it for its
-// own wheel forwarding, so a spawn writing "off" would disarm a surface someone
-// is scrolling in. The app never needs it (it drives copy mode directly).
-func TestConfigureServerMouseIsOptInAndNeverTurnedOff(t *testing.T) {
+// [tmux].mouse is the whole truth about mouse mode: it is written on every call,
+// in BOTH states, so a machine whose ~/.tmux.conf turned the mouse on cannot
+// hand tmux the clicks in a lola pane behind the operator's back.
+func TestConfigureServerOwnsTheMouseOption(t *testing.T) {
 	bin, argsLog := fakeTmux(t, "", "", 0)
 	if err := (&Client{Bin: bin}).ConfigureServer(context.Background()); err != nil {
 		t.Fatalf("ConfigureServer: %v", err)
 	}
-	if args := loggedArgs(t, argsLog); strings.Contains(args, "mouse") {
-		t.Errorf("mouse must not be touched when unset, got:\n%s", args)
+	if args := loggedArgs(t, argsLog); !strings.Contains(args, "-L lola set-option -g mouse off") {
+		t.Errorf("Mouse=false must disable mouse mode server-wide, got:\n%s", args)
 	}
 
 	bin, argsLog = fakeTmux(t, "", "", 0)
@@ -347,9 +347,9 @@ func TestNewSessionRetriesTheServerDefaultOnAColdServer(t *testing.T) {
 	if err := (&Client{Bin: bin}).NewSession(context.Background(), "s1", "/work", ""); err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
-	want := "-L lola set-option -g history-limit 10000\n" +
+	want := "-L lola set-option -g history-limit 10000\n-L lola set-option -g mouse off\n" +
 		"-L lola new-session -d -s s1 -c /work\n" +
-		"-L lola set-option -g history-limit 10000"
+		"-L lola set-option -g history-limit 10000\n-L lola set-option -g mouse off"
 	if args := loggedArgs(t, argsLog); args != want {
 		t.Errorf("invoked:\n%s\nwant the default retried once the server exists:\n%s", args, want)
 	}
@@ -381,7 +381,8 @@ func TestNewSessionOmitsEmptyCommand(t *testing.T) {
 	if err := c.NewSession(context.Background(), "s1", "/work", ""); err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
-	want := "-L lola set-option -g history-limit 10000\n-L lola new-session -d -s s1 -c /work"
+	want := "-L lola set-option -g history-limit 10000\n-L lola set-option -g mouse off\n" +
+		"-L lola new-session -d -s s1 -c /work"
 	if args := loggedArgs(t, argsLog); args != want {
 		t.Errorf("invoked %q, want default-shell form %q", args, want)
 	}

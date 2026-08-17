@@ -70,10 +70,10 @@ type Client struct {
 	// than a per-session option because tmux reads history-limit when a pane is
 	// CREATED — setting it on a session that already exists changes nothing.
 	Scrollback int
-	// Mouse mirrors [tmux].mouse: when true ConfigureServer turns tmux's mouse
-	// mode on for the whole lola server, so every session (agent, shell, dev tab,
-	// review pane) reports the wheel to tmux the same way. It is only ever turned
-	// ON here — see ConfigureServer for why it is never turned off.
+	// Mouse mirrors [tmux].mouse: ConfigureServer writes tmux's mouse mode for
+	// the whole lola server from it, on OR off, so every session (agent, shell,
+	// dev tab, review pane) treats mouse events the same way and the machine's
+	// own tmux config cannot decide it.
 	Mouse bool
 	// Dir is the working directory every tmux command runs from. It matters
 	// only for the command that first starts the tmux server, because that
@@ -342,9 +342,13 @@ func (c *Client) scrollback() int {
 //     new-session is what gives the new pane its full history. Current tmux also
 //     grows an existing pane's history when the option rises, so a late call is
 //     not wasted — it just cannot bring back lines already trimmed.
-//   - mouse is only ever turned ON. [tmux].mouse is opt-in and the TUI's embed
-//     enables it for its own wheel forwarding, so writing "off" here would let
-//     any spawn silently disarm the surface a user is currently scrolling in.
+//   - mouse is written on EVERY call, on or off, so [tmux].mouse is the whole
+//     truth about it: a machine whose ~/.tmux.conf sets `mouse on` would
+//     otherwise hand tmux the clicks in a lola pane (costing one-click links)
+//     even though the operator never asked for it. The cost of owning it is
+//     that a spawn resets what the TUI's ensureTmuxMouse turned on for its own
+//     wheel forwarding — with mouse off, that embed scrolls again only after the
+//     TUI re-enables it.
 //
 // It needs a RUNNING server and deliberately does not try to bootstrap one:
 // `start-server` on a cold socket brings a server up and lets it exit again in
@@ -358,11 +362,13 @@ func (c *Client) scrollback() int {
 // failures into the returned error for the caller to log, but a server option
 // must never fail a spawn.
 func (c *Client) ConfigureServer(ctx context.Context) error {
+	mouse := "off"
+	if c.Mouse {
+		mouse = "on"
+	}
 	cmds := [][]string{
 		{"set-option", "-g", "history-limit", strconv.Itoa(c.scrollback())},
-	}
-	if c.Mouse {
-		cmds = append(cmds, []string{"set-option", "-g", "mouse", "on"})
+		{"set-option", "-g", "mouse", mouse},
 	}
 	var errs []error
 	for _, a := range cmds {

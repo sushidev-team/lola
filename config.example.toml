@@ -364,7 +364,8 @@ endpoint = "https://api.linear.app/graphql"
 # status_bar = false      # show tmux's own status bar in the session; off = the embedded terminal is chrome-free
 # status_right = ""       # raw tmux status-right override; empty = lola's built-in branded bar (needs status_bar)
 # scrollback = 10000      # pane history lola gives every session (tmux history-limit); tmux's own default is 2000
-# mouse = false           # let tmux consume mouse events itself; NOT needed to scroll (see above)
+# mouse = false           # let tmux consume mouse events itself; NOT needed to scroll (see above).
+#                         # Written to lola's server in either state, so this key decides it, not ~/.tmux.conf.
 
 # ---------------------------------------------------------------------------
 # [ui] — OPTIONAL appearance. Presentation only: nothing the daemon does reads

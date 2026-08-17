@@ -902,7 +902,7 @@ without `[tmux]` always validates.
 | `status_bar` | bool | Show tmux's own status bar inside the session. Default `false` — the TUI and lola-desktop each render the issue, title, status and branch in their own header directly above the terminal, so the bar restated a subset of that one row lower and cost a row of scrollback. Turn it on if you attach in a bare terminal, where nothing else names the session. |
 | `status_right` | string | Raw tmux `status-right` format override. Empty uses lola's built-in branded bar. Only rendered when `status_bar` is on. |
 | `scrollback` | int | Pane history (tmux `history-limit`) every lola session is created with. Default `10000` — tmux's own default of 2000 lines is a couple of tool calls for an agent. Applied to lola's **own** tmux server, so it holds regardless of the machine's `~/.tmux.conf`; tmux reads it when a pane is created, so a change reaches the **next** session, not running ones. |
-| `mouse` | bool | Enable tmux mouse mode inside the session. Default `false`. This is **not** what makes a session scrollable — see below. |
+| `mouse` | bool | Enable tmux mouse mode inside the session. Default `false`. This is **not** what makes a session scrollable — see below. lola writes it on lola's own tmux server in **either** state, so this key decides it rather than the machine's `~/.tmux.conf`. |
 
 **Scrolling.** Sessions are scrollable out of the box: lola-desktop's terminals
 send the wheel to tmux's copy mode, and typing (or closing the terminal) returns

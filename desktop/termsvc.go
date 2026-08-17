@@ -199,21 +199,26 @@ func (t *TermService) Shell(shell, worktree string) (string, error) {
 	return shell, nil
 }
 
-// configureServer applies lola's pane-history default to the lola tmux server,
-// the app-side twin of (*tmux.Client).ConfigureServer. The number is read from
-// [tmux].scrollback so both surfaces agree; an unreadable config falls back to
-// lola's own default rather than leaving tmux's 2000. Best-effort — the error is
-// returned only so the caller can tell a COLD server (nothing to set the option
-// on yet) from a configured one.
+// configureServer applies lola's scroll defaults to the lola tmux server, the
+// app-side twin of (*tmux.Client).ConfigureServer — same two options, same
+// source: [tmux].scrollback and [tmux].mouse, so both surfaces agree and mouse
+// mode is decided by config rather than by the machine's ~/.tmux.conf. An
+// unreadable config falls back to lola's own defaults rather than leaving
+// tmux's. Best-effort — the error is returned only so the caller can tell a COLD
+// server (nothing to set an option on yet) from a configured one.
 func (t *TermService) configureServer(ctx context.Context, bin string) error {
-	lines := tmux.DefaultScrollback
+	lines, mouse := tmux.DefaultScrollback, "off"
 	if path, err := config.DefaultPath(); err == nil {
 		if cfg, err := config.Load(path); err == nil {
 			lines = cfg.Tmux.ScrollbackLines()
+			if cfg.Tmux.Mouse {
+				mouse = "on"
+			}
 		}
 	}
 	return exec.CommandContext(ctx, bin, "-L", "lola",
-		"set-option", "-g", "history-limit", strconv.Itoa(lines)).Run()
+		"set-option", "-g", "history-limit", strconv.Itoa(lines), ";",
+		"set-option", "-g", "mouse", mouse).Run()
 }
 
 // hasSession reports whether the lola tmux server already has an exactly-named

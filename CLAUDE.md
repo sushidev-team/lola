@@ -398,11 +398,14 @@ each of which owns exactly one external tool or concern behind an **exec seam**
     one tab and not the next. Isolation still holds: it is lola's own `-L` server.
     Every session-CREATING caller must build its client through
     `config.TmuxClient`, or its next spawn resets the server to the default
-    `scrollback` and silently discards the operator's. `mouse` is only ever
-    turned ON there (the TUI embed enables it for its own wheel forwarding — a
-    spawn writing "off" would disarm a surface someone is scrolling in), and
-    options tmux has dropped (`alternate-scroll`, gone in 3.5) do not belong in
-    it: they only log an "invalid option" advisory on every spawn.
+    `scrollback` and silently discards the operator's. `mouse` is written in BOTH
+    states, so `[tmux].mouse` is the whole truth about it and a machine whose
+    `~/.tmux.conf` says `mouse on` cannot hand tmux the clicks in a lola pane —
+    the cost is that a spawn resets what the TUI's `ensureTmuxMouse` turned on
+    for its own wheel forwarding. Options tmux has dropped
+    (`alternate-scroll`, gone in 3.5) do not belong in it: they only log an
+    "invalid option" advisory on every spawn — check a new one against a real
+    tmux before adding it.
 - **A MODAL is not a prompt, and `attention` is the one place that knows.**
   Claude Code interrupts a session with keypress-driven overlays (the auto-mode
   setup wizard and its siblings). Typed prose is swallowed by the widget and the

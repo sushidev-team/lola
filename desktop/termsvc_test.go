@@ -325,6 +325,11 @@ func TestShellAppliesTheScrollDefault(t *testing.T) {
 	if opt < 0 || create < 0 || opt > create {
 		t.Errorf("history-limit must be set before the create:\n%s", log)
 	}
+	// Mouse mode comes from [tmux].mouse in both states, exactly as the CLI writes
+	// it, so the two surfaces cannot leave the server in different modes.
+	if !strings.Contains(log, "set-option -g mouse off") {
+		t.Errorf("mouse must be written from config, not left to ~/.tmux.conf:\n%s", log)
+	}
 	// The server answered, so there is nothing to retry.
 	if got := strings.Count(log, "history-limit"); got != 1 {
 		t.Errorf("history-limit set %d times on a live server, want 1:\n%s", got, log)

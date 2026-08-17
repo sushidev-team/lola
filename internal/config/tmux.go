@@ -53,10 +53,12 @@ const (
 //     is created with; 0 resolves to DefaultTmuxScrollback. It is applied to
 //     lola's own tmux server, so it holds regardless of the machine's
 //     ~/.tmux.conf — and only for panes created after it is set.
-//   - Mouse enables tmux mouse mode inside the session. Off by default. It is
-//     NOT what makes a session scrollable: lola-desktop scrolls the pane through
-//     tmux's copy mode either way, and this only decides whether tmux itself
-//     also consumes mouse events (which costs one-click link opening).
+//   - Mouse enables tmux mouse mode inside the session. Off by default, and
+//     written to lola's own tmux server in EITHER state so this key — not the
+//     machine's ~/.tmux.conf — decides it. It is NOT what makes a session
+//     scrollable: lola-desktop scrolls the pane through tmux's copy mode either
+//     way, and this only decides whether tmux itself also consumes mouse events
+//     (which costs one-click link opening).
 //   - StatusBar shows tmux's own status bar inside the session. OFF by default:
 //     the TUI and lola-desktop both print the issue, title, status and branch in
 //     their own header directly above the terminal, so the bar restated a subset

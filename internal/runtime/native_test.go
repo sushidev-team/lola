@@ -204,16 +204,18 @@ func TestSpawnHappyPathFullSequence(t *testing.T) {
 	// single shell command that sources the 0600 .lola/env (which exports
 	// LOLA_SESSION and any secret) and execs claude with the generated settings
 	// and the short read-the-prompt argv. Nothing secret is on argv.
-	// The lola-owned scroll default FIRST (tmux reads history-limit when the pane
-	// is created, so it only counts before new-session), then one detached
+	// The lola-owned scroll defaults FIRST (tmux reads history-limit when the pane
+	// is created, so it only counts before new-session; mouse is written in both
+	// states so [tmux].mouse is the whole truth about it), then one detached
 	// new-session, then the best-effort per-session chrome on the SAME isolated
 	// "-L lola" server. The DEFAULT chrome hides tmux's status bar
 	// — lola's own surfaces render the issue/status header above the terminal —
 	// so nothing but "status off" is sent; the branding path is covered by
 	// TestSpawnAppliesConfiguredChrome, which opts the bar back on. No custom
-	// detach key or mouse is configured on this fixture.
+	// detach key is configured on this fixture.
 	wantTmux := strings.Join([]string{
 		"-L lola set-option -g history-limit 10000",
+		"-L lola set-option -g mouse off",
 		"-L lola new-session -d -s " + id + " -c " + dir +
 			" exec sh -c 'set -a; . ./.lola/env; set +a; exec /usr/local/bin/claude --settings .lola/settings.json" +
 			` '\''You are lola session ` + id + `. Read .lola/prompt.md in the current directory first; it contains your task briefing.'\'''`,
