@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -744,5 +745,195 @@ func TestKillSessionTreeStillKillsTheSessionWithoutAPanePID(t *testing.T) {
 	}
 	if args := loggedArgs(t, argsLog); !strings.Contains(args, "kill-session -t =lola-app-eng-1-dev-1") {
 		t.Errorf("invoked %q, want a kill-session despite the unusable pane pid", args)
+	}
+}
+
+// scrollFake stands in for tmux while a pane answers `display-message` with
+// `facts` ("<in_mode> <mouse_any> <width> <height>").
+func scrollFake(t *testing.T, facts string) (bin, argsLog string) {
+	t.Helper()
+	dir := t.TempDir()
+	bin = filepath.Join(dir, "tmux")
+	argsLog = filepath.Join(dir, "args.log")
+	script := "#!/bin/sh\necho \"$@\" >> " + argsLog + "\n" +
+		"case \"$3\" in display-message) echo '" + facts + "' ;; esac\nexit 0\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return bin, argsLog
+}
+
+// A program that asked for the wheel gets it. An agent runs full-screen on the
+// ALTERNATE screen, where tmux keeps no scrollback at all — copy mode there
+// opens on an empty history and reads "[0/0]" — so the scroll has to reach the
+// program, which keeps its own transcript. The bytes go straight to the PANE
+// (send-keys -l), not through tmux's mouse handling, so [tmux].mouse cannot
+// switch it off.
+func TestScrollPaneSendsTheWheelToAProgramThatWantsIt(t *testing.T) {
+	bin, argsLog := scrollFake(t, "0 1 80 24")
+	how, err := (&Client{Bin: bin}).ScrollPane(context.Background(), "lola-nori-1", 2)
+	if err != nil {
+		t.Fatalf("ScrollPane: %v", err)
+	}
+	if how != ScrollApp {
+		t.Errorf("transport = %v, want ScrollApp", how)
+	}
+	args := loggedArgs(t, argsLog)
+	// SGR wheel-up (button 64) twice, aimed at the middle of the pane.
+	want := "-L lola send-keys -l -t =lola-nori-1: \x1b[<64;40;12M\x1b[<64;40;12M"
+	if !strings.Contains(args, want) {
+		t.Errorf("invoked:\n%q\nwant a literal SGR wheel burst:\n%q", args, want)
+	}
+	if strings.Contains(args, "copy-mode") {
+		t.Errorf("a program that wants the wheel must not be put in copy mode:\n%s", args)
+	}
+}
+
+func TestScrollPaneWheelDownIsButton65(t *testing.T) {
+	bin, argsLog := scrollFake(t, "0 1 80 24")
+	if _, err := (&Client{Bin: bin}).ScrollPane(context.Background(), "lola-nori-1", -1); err != nil {
+		t.Fatalf("ScrollPane: %v", err)
+	}
+	if args := loggedArgs(t, argsLog); !strings.Contains(args, "\x1b[<65;40;12M") {
+		t.Errorf("invoked %q, want SGR wheel-DOWN (button 65)", args)
+	}
+}
+
+// A plain shell asks for nothing and its history IS tmux's, so there copy mode
+// is the only place to scroll.
+func TestScrollPaneUsesCopyModeWhenTheProgramIgnoresTheMouse(t *testing.T) {
+	bin, argsLog := scrollFake(t, "0 0 80 24")
+	how, err := (&Client{Bin: bin}).ScrollPane(context.Background(), "lola-nori-1-shell-1", 3)
+	if err != nil {
+		t.Fatalf("ScrollPane: %v", err)
+	}
+	if how != ScrollCopyMode {
+		t.Errorf("transport = %v, want ScrollCopyMode", how)
+	}
+	want := "-L lola copy-mode -e -t =lola-nori-1-shell-1: ; send-keys -X -N 3 -t =lola-nori-1-shell-1: scroll-up"
+	if args := loggedArgs(t, argsLog); !strings.Contains(args, want) {
+		t.Errorf("invoked:\n%s\nwant:\n%s", args, want)
+	}
+}
+
+// Once a pane IS in copy mode, keep scrolling copy mode — the same test tmux's
+// own wheel binding makes, so a pane the user scrolled by hand keeps behaving.
+func TestScrollPaneStaysInCopyModeOnceEntered(t *testing.T) {
+	bin, argsLog := scrollFake(t, "1 1 80 24")
+	how, err := (&Client{Bin: bin}).ScrollPane(context.Background(), "lola-nori-1", 1)
+	if err != nil {
+		t.Fatalf("ScrollPane: %v", err)
+	}
+	if how != ScrollCopyMode {
+		t.Errorf("transport = %v, want ScrollCopyMode", how)
+	}
+	if args := loggedArgs(t, argsLog); strings.Contains(args, "send-keys -l") {
+		t.Errorf("a pane already in copy mode must not be sent wheel bytes:\n%s", args)
+	}
+}
+
+// A pane that cannot be described is most likely gone; copy mode is the half
+// that cannot type anything into a program by mistake, so that is where an
+// unanswerable probe lands.
+func TestScrollPaneFailsTowardCopyMode(t *testing.T) {
+	bin, argsLog := fakeTmux(t, "", "can't find pane", 1)
+	if _, err := (&Client{Bin: bin}).ScrollPane(context.Background(), "gone", 1); err == nil {
+		t.Error("want the copy-mode failure surfaced")
+	}
+	if args := loggedArgs(t, argsLog); strings.Contains(args, "send-keys -l") {
+		t.Errorf("an unanswerable pane must not be sent wheel bytes:\n%s", args)
+	}
+}
+
+func TestScrollPaneBoundsItsInput(t *testing.T) {
+	bin, argsLog := scrollFake(t, "0 0 80 24")
+	c := &Client{Bin: bin}
+	if _, err := c.ScrollPane(context.Background(), "s1", 1<<30); err != nil {
+		t.Fatalf("ScrollPane: %v", err)
+	}
+	if args := loggedArgs(t, argsLog); !strings.Contains(args, "-N 500 ") {
+		t.Errorf("invoked:\n%s\nwant the count clamped to %d", args, MaxScrollLines)
+	}
+	if _, err := c.ScrollPane(context.Background(), "s1", 0); err != nil {
+		t.Fatalf("ScrollPane(0): %v", err)
+	}
+	if got := strings.Count(loggedArgs(t, argsLog), "display-message"); got != 1 {
+		t.Errorf("a zero scroll must not run tmux at all, ran %d probes", got)
+	}
+	if _, err := c.ScrollPane(context.Background(), "", 1); err == nil {
+		t.Error("empty session name must error")
+	}
+}
+
+// TestScrollPaneAgainstRealTmux is the one test that runs a REAL tmux, because
+// the bug it guards was a wrong belief about tmux rather than wrong argv: an
+// agent runs full-screen on the alternate screen, where tmux's scrollback is
+// EMPTY, so the copy mode a fake would happily accept shows "[0/0]" and scrolls
+// nothing. Only a live server can tell the two panes apart.
+func TestScrollPaneAgainstRealTmux(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux not installed")
+	}
+	sock := fmt.Sprintf("lola-scrolltest-%d", os.Getpid())
+	c := &Client{Bin: "tmux", SocketName: sock, Dir: t.TempDir()}
+	t.Cleanup(func() { _ = exec.Command("tmux", "-L", sock, "kill-server").Run() })
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// "app" asks for the wheel exactly as an agent does (DECSET 1003 any-event +
+	// 1006 SGR) and then echoes what it receives; "shell" asks for nothing.
+	if err := c.NewSession(ctx, "app", t.TempDir(), `printf '\033[?1003h\033[?1006h'; cat -v`); err != nil {
+		t.Fatalf("new session: %v", err)
+	}
+	if err := c.NewSession(ctx, "shell", t.TempDir(), `seq 1 200; sleep 60`); err != nil {
+		t.Fatalf("new session: %v", err)
+	}
+	// The DECSET has to land before the pane can be classified.
+	var wantsMouse bool
+	for i := 0; i < 50 && !wantsMouse; i++ {
+		time.Sleep(100 * time.Millisecond)
+		_, wantsMouse, _, _ = c.paneScrollFacts(ctx, paneTarget("app"))
+	}
+	if !wantsMouse {
+		t.Fatal("the fixture never requested mouse reporting")
+	}
+
+	how, err := c.ScrollPane(ctx, "app", 2)
+	if err != nil {
+		t.Fatalf("ScrollPane(app): %v", err)
+	}
+	if how != ScrollApp {
+		t.Fatalf("transport = %v, want ScrollApp for a program that asked for the wheel", how)
+	}
+	var pane string
+	for i := 0; i < 20; i++ {
+		time.Sleep(100 * time.Millisecond)
+		if pane, _ = c.CapturePane(ctx, "app", 0); strings.Contains(pane, "^[[<64;") {
+			break
+		}
+	}
+	if !strings.Contains(pane, "^[[<64;") {
+		t.Errorf("the program never received a wheel event, pane:\n%s", pane)
+	}
+	if inMode, _, _, _ := c.paneScrollFacts(ctx, paneTarget("app")); inMode {
+		t.Error("a program that handles the wheel itself must not be put in copy mode")
+	}
+
+	how, err = c.ScrollPane(ctx, "shell", 5)
+	if err != nil {
+		t.Fatalf("ScrollPane(shell): %v", err)
+	}
+	if how != ScrollCopyMode {
+		t.Fatalf("transport = %v, want ScrollCopyMode for a plain shell", how)
+	}
+	if inMode, _, _, _ := c.paneScrollFacts(ctx, paneTarget("shell")); !inMode {
+		t.Error("a plain shell must end up scrolled in copy mode")
+	}
+	// And a keystroke has to be able to get it back out again.
+	if err := c.LeaveCopyMode(ctx, "shell"); err != nil {
+		t.Fatalf("LeaveCopyMode: %v", err)
+	}
+	if inMode, _, _, _ := c.paneScrollFacts(ctx, paneTarget("shell")); inMode {
+		t.Error("LeaveCopyMode must return the pane to the live view")
 	}
 }

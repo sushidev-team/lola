@@ -901,14 +901,19 @@ without `[tmux]` always validates.
 | `detach_key` | string | Opt-in single key bound to detach (e.g. `"F12"`). Empty keeps tmux's default **Ctrl-b d**. The status bar's detach hint follows whatever this resolves to. |
 | `status_bar` | bool | Show tmux's own status bar inside the session. Default `false` — the TUI and lola-desktop each render the issue, title, status and branch in their own header directly above the terminal, so the bar restated a subset of that one row lower and cost a row of scrollback. Turn it on if you attach in a bare terminal, where nothing else names the session. |
 | `status_right` | string | Raw tmux `status-right` format override. Empty uses lola's built-in branded bar. Only rendered when `status_bar` is on. |
-| `scrollback` | int | Pane history (tmux `history-limit`) every lola session is created with. Default `10000` — tmux's own default of 2000 lines is a couple of tool calls for an agent. Applied to lola's **own** tmux server, so it holds regardless of the machine's `~/.tmux.conf`; tmux reads it when a pane is created, so a change reaches the **next** session, not running ones. |
-| `mouse` | bool | Enable tmux mouse mode inside the session. Default `false`. This is **not** what makes a session scrollable — see below. lola writes it on lola's own tmux server in **either** state, so this key decides it rather than the machine's `~/.tmux.conf`. |
+| `scrollback` | int | Pane history (tmux `history-limit`) every lola session is created with — the history a **shell** pane scrolls; a full-screen agent keeps its own (see below). Default `10000` — tmux's own default of 2000 lines is a couple of tool calls for an agent. Applied to lola's **own** tmux server, so it holds regardless of the machine's `~/.tmux.conf`; tmux reads it when a pane is created, so a change reaches the **next** session, not running ones. |
+| `mouse` | bool | Let tmux consume real mouse clicks and drags inside the session. Default `false`. This is **not** what makes a session scrollable — see below. lola writes it on lola's own tmux server in **either** state, so this key decides it rather than the machine's `~/.tmux.conf`. |
 
-**Scrolling.** Sessions are scrollable out of the box: lola-desktop's terminals
-send the wheel to tmux's copy mode, and typing (or closing the terminal) returns
-the pane to the live view. `mouse` is a separate, opt-in choice about who
-*consumes* mouse events — with it on, tmux handles the wheel itself and also
-takes clicks, which costs one-click link opening in the app.
+**Scrolling.** Sessions are scrollable out of the box in both surfaces, and
+`mouse` is **not** what makes them so. A pane has one of two histories: a
+full-screen program (an agent, `vim`, `less`) runs on the terminal's *alternate
+screen*, where tmux keeps **no scrollback at all** — that program keeps its own
+transcript and gets the wheel handed to it — while a plain shell has tmux's, and
+is scrolled through copy mode. lola asks the pane which it is and scrolls the
+right one; typing (or closing the terminal) returns a copy-mode pane to the live
+view. `mouse` is a separate choice about who consumes the events of a **real**
+mouse: with it on, tmux takes clicks and drags, which costs text selection in
+the app's terminals.
 
 ### `[ui]` (optional)
 

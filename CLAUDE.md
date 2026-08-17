@@ -362,20 +362,34 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   logged as `handed feedback to the worker` and read by nobody. A capture
   failure or any non-waiting classification (including a modal's
   `ActivityBlocked`) defers. One bounded tmux exec per delivery is the price.
-- **Scrolling a pane is a tmux COPY-MODE command, never a mouse event.** `tmux
-  attach` runs on the ALTERNATE screen, so the terminal it is attached to has no
-  scrollback of its own — the history lives in tmux and is only reachable from
-  copy mode. The app therefore intercepts the wheel in `LiveTerminal.svelte` and
-  calls `TermService.Scroll`, which runs `copy-mode -e` + `send-keys -X
-  scroll-up` on the pane. The rules around it:
-  - The custom wheel handler ALWAYS returns false. xterm's own alt-screen
+- **There are TWO scrollbacks, and `tmux.ScrollPane` is the one place that picks
+  between them.** An agent runs FULL-SCREEN, i.e. on the alternate screen, where
+  tmux keeps **no scrollback at all**: `#{history_size}` is 0 and copy mode opens
+  on an empty history reading `[0/0]`, whatever `history-limit` says. Such a
+  program keeps its own transcript and asks for the wheel itself
+  (`#{mouse_any_flag}`). A plain shell asks for nothing and its history IS
+  tmux's. So the pane is asked first — the same test tmux's own wheel binding
+  makes (`if -F '#{?pane_in_mode,1,#{mouse_any_flag}}' 'send -M' 'copy-mode
+  -e'`) — and the scroll goes either to the PROGRAM (an SGR wheel sequence
+  written with `send-keys -l`) or to COPY MODE (`copy-mode -e` + `send-keys -X
+  scroll-up`). Getting this wrong is not a degraded scroll, it is no scroll:
+  copy mode on an agent pane shows `[0/0]` and moves nothing. The rules:
+  - Neither route needs `[tmux].mouse`. The wheel bytes go to the PANE, not
+    through tmux's mouse handling — that option only decides whether tmux itself
+    consumes the events of a REAL mouse, which costs selection and hands clicks
+    to the program. Both surfaces therefore scroll with it off.
+  - Both surfaces call the same method: the app intercepts the wheel in
+    `LiveTerminal.svelte` → `TermService.Scroll`, the TUI in `forwardWheel`.
+    Neither may re-derive the routing; the TUI's old "write SGR into the tmux
+    CLIENT" needed `mouse on` and is exactly what broke when the option was
+    finally honoured as written.
+  - The app's custom wheel handler ALWAYS returns false. xterm's own alt-screen
     fallback converts the wheel into cursor keys (`Terminal.ts:808`), which walks
     the AGENT's input history instead of scrolling anything — that is the
     "terminal is not scrollable" bug as users actually meet it.
-  - It intercepts whether or not `[tmux].mouse` is on. Routing the wheel through
-    mouse reporting instead would work only with that option, and enabling it
-    costs one-click links (tmux consumes the click). One path, one behaviour.
-  - Copy mode is a property of the PANE, so it outlives the click that entered
+  - An unanswerable pane FAILS TOWARD COPY MODE: it is most likely gone, and copy
+    mode is the half that cannot type into a program by mistake.
+  - Copy mode is a property of the PANE, so it outlives the wheel that entered
     it: `TermService.Write` leaves it before the first keystroke after a scroll
     (typing snaps to the bottom, as in any terminal), `Detach` leaves it on
     teardown, and `tmux.SendKeys` cancels it before every daemon-side send — keys

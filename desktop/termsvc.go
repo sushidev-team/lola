@@ -478,31 +478,21 @@ func (t *TermService) cancelCopyMode(name string) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	_ = exec.CommandContext(ctx, bin, "-L", "lola", "copy-mode", "-q", "-t", "="+name+":").Run()
+	_ = t.scrollClient(bin).LeaveCopyMode(ctx, name)
 }
 
-// maxScrollLines caps one Scroll request. The frontend coalesces a wheel burst
-// into a single call, and a flick on a trackpad can otherwise ask tmux to walk
-// thousands of lines in one command — bounded here because the number arrives
-// from the webview.
-const maxScrollLines = 500
-
-// Scroll moves the named pane's view through its tmux history: lines > 0 scrolls
-// BACK (up, into scrollback), lines < 0 scrolls forward again. Zero is a no-op.
+// Scroll moves the named pane's view back through its history: lines > 0 scrolls
+// BACK (up), lines < 0 forward again, zero is a no-op. It is the whole reason a
+// lola terminal scrolls in the app: `tmux attach` runs on the alternate screen,
+// so xterm.js has no scrollback of its own and its fallback for that case turns
+// the wheel into cursor keys — which walks the AGENT's input history instead of
+// scrolling anything.
 //
-// This is what makes a lola terminal scrollable in the app, and it deliberately
-// does NOT go through the terminal's mouse reporting. `tmux attach` runs on the
-// alternate screen, so xterm.js has no scrollback of its own to show — the
-// history lives in tmux, reachable only from copy mode. The alternatives both
-// lose: xterm's built-in alt-screen fallback turns the wheel into arrow keys
-// (which walks the agent's input history instead of scrolling), and tmux's own
-// wheel handling needs [tmux].mouse, which then costs one-click links because
-// tmux consumes the click. Driving copy mode from here works with the mouse
-// option either way.
-//
-// `copy-mode -e` enters the mode and makes it exit on its own once the view is
-// scrolled back to the bottom, so scrolling down returns the pane to normal
-// without any state to track. Both commands go in ONE tmux invocation.
+// The work is (*tmux.Client).ScrollPane's, shared with the TUI, and it is what
+// decides WHICH history to move: the program's own (an agent on the alternate
+// screen keeps its transcript itself and asks for the wheel) or tmux's copy mode
+// (a plain shell). All this needs to know is which one happened, because only
+// copy mode leaves a mode behind for the next keystroke to cancel.
 func (t *TermService) Scroll(name string, lines int) error {
 	bin, err := t.tmux()
 	if err != nil {
@@ -514,14 +504,6 @@ func (t *TermService) Scroll(name string, lines int) error {
 	if lines == 0 {
 		return nil
 	}
-	verb := "scroll-up"
-	n := lines
-	if n < 0 {
-		verb, n = "scroll-down", -n
-	}
-	if n > maxScrollLines {
-		n = maxScrollLines
-	}
 	t.mu.Lock()
 	s := t.streams[name]
 	t.mu.Unlock()
@@ -530,20 +512,24 @@ func (t *TermService) Scroll(name string, lines int) error {
 		// before the pane is actually in copy mode (see ptyStream.scrollMu).
 		s.scrollMu.Lock()
 		defer s.scrollMu.Unlock()
-		s.scrolled = true
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	target := "=" + name + ":"
-	// One invocation, two commands: ";" is tmux's own command separator, passed
-	// as its own argv entry so no shell is involved.
-	out, err := exec.CommandContext(ctx, bin, "-L", "lola",
-		"copy-mode", "-e", "-t", target, ";",
-		"send-keys", "-X", "-N", strconv.Itoa(n), "-t", target, verb).CombinedOutput()
+	how, err := t.scrollClient(bin).ScrollPane(ctx, name, lines)
+	if s != nil {
+		s.scrolled = how == tmux.ScrollCopyMode
+	}
 	if err != nil {
-		return fmt.Errorf("scroll %s: %w: %s", name, err, out)
+		return fmt.Errorf("scroll %s: %w", name, err)
 	}
 	return nil
+}
+
+// scrollClient is the tmux client the scroll path runs through. The socket is
+// the hardcoded "lola" every other exec in this file uses, NOT [tmux].socket_name
+// — the app attaches to that server, so a scroll must address the same one.
+func (t *TermService) scrollClient(bin string) *tmux.Client {
+	return &tmux.Client{Bin: bin, SocketName: "lola"}
 }
 
 // Resize propagates an xterm resize to the PTY so the remote app reflows. Like

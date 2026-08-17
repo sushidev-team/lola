@@ -97,22 +97,18 @@ export function Resize(name: string, cols: number, rows: number): $CancellablePr
 }
 
 /**
- * Scroll moves the named pane's view through its tmux history: lines > 0 scrolls
- * BACK (up, into scrollback), lines < 0 scrolls forward again. Zero is a no-op.
+ * Scroll moves the named pane's view back through its history: lines > 0 scrolls
+ * BACK (up), lines < 0 forward again, zero is a no-op. It is the whole reason a
+ * lola terminal scrolls in the app: `tmux attach` runs on the alternate screen,
+ * so xterm.js has no scrollback of its own and its fallback for that case turns
+ * the wheel into cursor keys — which walks the AGENT's input history instead of
+ * scrolling anything.
  * 
- * This is what makes a lola terminal scrollable in the app, and it deliberately
- * does NOT go through the terminal's mouse reporting. `tmux attach` runs on the
- * alternate screen, so xterm.js has no scrollback of its own to show — the
- * history lives in tmux, reachable only from copy mode. The alternatives both
- * lose: xterm's built-in alt-screen fallback turns the wheel into arrow keys
- * (which walks the agent's input history instead of scrolling), and tmux's own
- * wheel handling needs [tmux].mouse, which then costs one-click links because
- * tmux consumes the click. Driving copy mode from here works with the mouse
- * option either way.
- * 
- * `copy-mode -e` enters the mode and makes it exit on its own once the view is
- * scrolled back to the bottom, so scrolling down returns the pane to normal
- * without any state to track. Both commands go in ONE tmux invocation.
+ * The work is (*tmux.Client).ScrollPane's, shared with the TUI, and it is what
+ * decides WHICH history to move: the program's own (an agent on the alternate
+ * screen keeps its transcript itself and asks for the wheel) or tmux's copy mode
+ * (a plain shell). All this needs to know is which one happened, because only
+ * copy mode leaves a mode behind for the next keystroke to cancel.
  */
 export function Scroll(name: string, lines: number): $CancellablePromise<void> {
     return $Call.ByID(1163232830, name, lines);

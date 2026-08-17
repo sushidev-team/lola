@@ -114,9 +114,9 @@
   // The wheel scrolls the tmux pane, and it has to be driven by hand because
   // `tmux attach` runs on the ALTERNATE screen: xterm's own scrollback stays
   // empty, so there is nothing here to scroll and `term.scrollLines` is inert.
-  // The history lives in tmux, reachable only through copy mode — which
-  // TermService.Scroll drives with a tmux command rather than mouse reporting,
-  // so it works whether or not [tmux].mouse is on (see the Go doc comment).
+  // TermService.Scroll asks the pane which history it actually has — an agent
+  // keeps its own transcript and wants the wheel itself, a plain shell has
+  // tmux's copy mode — and neither route needs [tmux].mouse.
   //
   // Returning false is the load-bearing half: it stops xterm's alt-screen
   // fallback, which converts the wheel into cursor keys (Terminal.ts:808) and

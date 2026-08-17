@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/sushidev-team/lola/internal/lolaenv"
+	"github.com/sushidev-team/lola/internal/tmux"
 )
 
 // fakeTmux installs a stub tmux that appends its argv to <dir>/args.log. Unless
@@ -260,7 +261,7 @@ func TestScrollBoundsItsInput(t *testing.T) {
 		t.Fatalf("Scroll: %v", err)
 	}
 	if got := tmuxLog(t, logPath); !strings.Contains(got, "-N 500 ") {
-		t.Errorf("scroll log:\n%s\nwant the count clamped to %d", got, maxScrollLines)
+		t.Errorf("scroll log:\n%s\nwant the count clamped to %d", got, tmux.MaxScrollLines)
 	}
 	if err := svc.Scroll("lola-nori-1", 0); err != nil {
 		t.Fatalf("Scroll(0): %v", err)

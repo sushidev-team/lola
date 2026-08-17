@@ -284,8 +284,8 @@ func (c *Client) SendKeys(ctx context.Context, name, text string) error {
 	// tmux's own wheel binding with [tmux].mouse on) puts it in copy mode, where
 	// keys are read as copy-mode COMMANDS instead of reaching the agent — so a
 	// reaction or a review hand-off typed into a scrolled-back pane is silently
-	// mangled. "-q" cancels the mode and is a no-op on a pane that has none.
-	_, _, _ = c.run(ctx, "copy-mode", "-q", "-t", paneTarget(name))
+	// mangled. It is a no-op on a pane that has no mode.
+	_ = c.LeaveCopyMode(ctx, name)
 	if _, _, err := c.run(ctx, "send-keys", "-t", paneTarget(name), "-l", text); err != nil {
 		return err
 	}
@@ -297,6 +297,129 @@ func (c *Client) SendKeys(ctx context.Context, name, text string) error {
 		}
 	}
 	_, _, err := c.run(ctx, "send-keys", "-t", paneTarget(name), "Enter")
+	return err
+}
+
+// ScrollTransport says how ScrollPane moved a pane's view, because the two
+// halves are not interchangeable to the caller: only ScrollCopyMode leaves the
+// pane in a mode a later keystroke has to cancel.
+type ScrollTransport int
+
+const (
+	// ScrollApp handed the wheel to the program running in the pane.
+	ScrollApp ScrollTransport = iota
+	// ScrollCopyMode moved tmux's own copy-mode view over the pane's history.
+	ScrollCopyMode
+)
+
+// MaxScrollLines caps one ScrollPane request. Callers coalesce a wheel burst
+// into a single call and the count can originate in a UI, so it is bounded here
+// rather than trusted.
+const MaxScrollLines = 500
+
+// ScrollPane scrolls a session's active pane by lines: positive scrolls BACK
+// (up, into history), negative forward again, zero is a no-op. It is the one
+// scroll path for both surfaces, and it exists because NEITHER surface has a
+// mouse event to hand tmux — the app intercepts the wheel in the webview, the
+// TUI reads it as a bubbletea message.
+//
+// There are two histories, and picking the wrong one is the whole bug this
+// replaces. A full-screen program (Claude Code, vim, less) runs on the
+// ALTERNATE screen, where tmux keeps NO scrollback at all: copy mode there opens
+// on an empty history and reads "[0/0]" — nothing to scroll, whatever the
+// history-limit says. Those programs keep their own transcript and ask for the
+// wheel themselves (mouse_any_flag), so the scroll has to reach THEM. A plain
+// shell asks for nothing and its history is exactly tmux's, so there copy mode
+// is the only answer. Which is why the pane is asked first — the same test
+// tmux's own wheel binding makes:
+//
+//	if -F '#{?pane_in_mode,1,#{mouse_any_flag}}' 'send -M' 'copy-mode -e'
+//
+// The app half writes the SGR wheel sequence straight to the PANE, not through
+// tmux's mouse handling, so it works with [tmux].mouse off — that option only
+// decides whether tmux itself consumes the events of a real mouse.
+func (c *Client) ScrollPane(ctx context.Context, name string, lines int) (ScrollTransport, error) {
+	if name == "" {
+		return ScrollApp, errors.New("tmux: scroll: empty session name")
+	}
+	if lines == 0 {
+		return ScrollApp, nil
+	}
+	up := lines > 0
+	n := lines
+	if !up {
+		n = -n
+	}
+	if n > MaxScrollLines {
+		n = MaxScrollLines
+	}
+	target := paneTarget(name)
+	inMode, wantsMouse, w, h := c.paneScrollFacts(ctx, target)
+	if !inMode && wantsMouse {
+		// One send-keys with the sequence repeated: -l is literal, so tmux passes
+		// the bytes to the program untouched instead of parsing them as key names.
+		if _, _, err := c.run(ctx, "send-keys", "-l", "-t", target, wheelSeq(up, n, w, h)); err != nil {
+			return ScrollApp, err
+		}
+		return ScrollApp, nil
+	}
+	verb := "scroll-up"
+	if !up {
+		verb = "scroll-down"
+	}
+	// "-e" leaves copy mode again as soon as the view reaches the bottom, so
+	// scrolling forward returns the pane to normal with no state to track.
+	if _, _, err := c.run(ctx, "copy-mode", "-e", "-t", target, ";",
+		"send-keys", "-X", "-N", strconv.Itoa(n), "-t", target, verb); err != nil {
+		return ScrollCopyMode, err
+	}
+	return ScrollCopyMode, nil
+}
+
+// paneScrollFacts asks the pane the one question ScrollPane needs, in a single
+// exec. It FAILS TOWARD COPY MODE: a pane that cannot be described is most
+// likely gone, and copy mode is the half that cannot type anything into a
+// program by mistake.
+func (c *Client) paneScrollFacts(ctx context.Context, target string) (inMode, wantsMouse bool, width, height int) {
+	out, _, err := c.run(ctx, "display-message", "-p", "-t", target,
+		"#{pane_in_mode} #{mouse_any_flag} #{pane_width} #{pane_height}")
+	if err != nil {
+		return false, false, 0, 0
+	}
+	f := strings.Fields(strings.TrimSpace(out))
+	if len(f) < 4 {
+		return false, false, 0, 0
+	}
+	width, _ = strconv.Atoi(f[2])
+	height, _ = strconv.Atoi(f[3])
+	return f[0] == "1", f[1] == "1", width, height
+}
+
+// wheelSeq builds n SGR wheel events (button 64 up / 65 down) aimed at the
+// middle of a w×h pane. The position is what a program uses to decide WHICH of
+// its regions scrolls, so the centre is the one point that is always inside the
+// content; a zero size (the pane could not be measured) falls back to 1;1.
+func wheelSeq(up bool, n, w, h int) string {
+	btn := 65
+	if up {
+		btn = 64
+	}
+	col, row := 1, 1
+	if w > 1 {
+		col = w / 2
+	}
+	if h > 1 {
+		row = h / 2
+	}
+	one := fmt.Sprintf("\x1b[<%d;%d;%dM", btn, col, row)
+	return strings.Repeat(one, n)
+}
+
+// LeaveCopyMode cancels any mode on the session's active pane, returning it to
+// the live view. A no-op on a pane that has no mode, so callers do not have to
+// ask first.
+func (c *Client) LeaveCopyMode(ctx context.Context, name string) error {
+	_, _, err := c.run(ctx, "copy-mode", "-q", "-t", paneTarget(name))
 	return err
 }
 

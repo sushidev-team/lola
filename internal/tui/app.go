@@ -80,7 +80,6 @@ type rootModel struct {
 	agentDebounce int  // debounce token; only the latest selection change attaches
 	spin          int  // braille spinner frame, advanced while a terminal is loading
 	spinning      bool // a spinner tick loop is active
-	tmuxMouseSet  bool // `mouse on` has been enabled on the lola tmux server
 
 	width  int
 	height int
