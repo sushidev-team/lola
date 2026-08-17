@@ -20,14 +20,20 @@
 
   const issues = $derived(data?.issues ?? []);
 
-  // The team a human recognizes. The UUID is what config keys by and what the
-  // daemon's name lookup falls back to when Linear can't answer — so it renders
-  // ONLY when there is nothing better, never beside a name.
+  // The heading is the PROJECT — that is what the human navigated into and what
+  // the breadcrumb above already names, and the store resolves its label without
+  // a round trip.
+  const projectLabel = $derived(store.displayNameFor(nav.project));
+
+  // The Linear team is secondary context, and its UUID is deliberately NOT a
+  // fallback: `data.team` is what config keys by, and a 36-character hex string
+  // where a name belongs reads as a bug (it was one). An unresolvable team simply
+  // shows nothing — the project name above it already says where you are.
   const teamLabel = $derived.by(() => {
     if (!data) return "";
-    const { teamName, teamKey, team } = data;
+    const { teamName, teamKey } = data;
     if (teamName && teamKey) return `${teamName} (${teamKey})`;
-    return teamName || teamKey || team || "";
+    return teamName || teamKey || "";
   });
 
   // Filters over what the row SHOWS — identifier, title, state, labels,
@@ -131,7 +137,11 @@
        different things is worse than either alone. -->
   <div class="mb-3 flex items-center gap-3">
     <span class="min-w-0 truncate text-sm text-faint">
-      {#if teamLabel}<span class="text-ink">{teamLabel}</span>{/if}
+      <span class="text-ink">{projectLabel}</span>
+      {#if teamLabel}
+        <span class="text-edge">·</span>
+        <span>{teamLabel}</span>
+      {/if}
       {#if data}
         <span class="text-edge">·</span>
         <span class="num">{rows.length}</span>
@@ -179,7 +189,6 @@
             <th class="w-[160px] px-3 py-2">Status</th>
             <th class="w-[92px] px-3 py-2">Priority</th>
             {#if scope === "team"}<th class="w-[128px] px-3 py-2">Assignee</th>{/if}
-            <th class="w-[72px] px-3 py-2 text-right">Updated</th>
             <th class="w-[92px] px-3 py-2"></th>
           </tr>
         </thead>
@@ -215,10 +224,6 @@
               {#if scope === "team"}
                 <td class="truncate px-3 py-2 text-sm text-faint">{t.assignee || "—"}</td>
               {/if}
-              <!-- `num` — tabular figures keep the ages from reflowing column width. -->
-              <td class="num px-3 py-2 text-right text-sm whitespace-nowrap text-faint" title="last updated">
-                {t.updated || "—"}
-              </td>
               <td class="px-3 py-1 whitespace-nowrap opacity-0 group-hover:opacity-100">
                 <div class="flex items-center justify-end">
                   <Button size="xs" disabled={starting === t.identifier} onclick={() => start(t)}>

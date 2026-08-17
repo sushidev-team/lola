@@ -51,6 +51,7 @@ vi.mock("$lib/store.svelte", () => ({
     tickets: ticketsMock,
     openTicket: openTicketMock,
     setFlash: setFlashMock,
+    displayNameFor: (name: string) => (name === "demo" ? "Demo Project" : name),
   },
 }));
 
@@ -67,19 +68,46 @@ describe("TicketPicker", () => {
     render(TicketPicker);
     expect(ticketsMock).toHaveBeenCalledWith("demo", "mine");
     expect(await screen.findByText("Invoices: No extra card")).toBeInTheDocument();
-    // Workflow state, staleness and labels ride the row.
+    // Workflow state, labels, estimate and priority ride the row.
     expect(screen.getByText("In Progress")).toBeInTheDocument();
-    expect(screen.getByText("2h05m")).toBeInTheDocument();
     expect(screen.getByText("bug")).toBeInTheDocument();
     expect(screen.getByText("High")).toBeInTheDocument();
+    expect(screen.getByText("3pt")).toBeInTheDocument();
   });
 
-  it("names the team instead of printing its UUID, and drops the scope caption", async () => {
+  // The age column is gone: the list is already sorted freshest-first within each
+  // state band, so it was a number nobody acted on taking width from the title.
+  it("does not show an Updated column", async () => {
     render(TicketPicker);
-    expect(await screen.findByText("Nori (NOR)")).toBeInTheDocument();
+    await screen.findByText("Invoices: No extra card");
+    expect(screen.queryByText("Updated")).not.toBeInTheDocument();
+    expect(screen.queryByText("2h05m")).not.toBeInTheDocument();
+    expect(screen.queryByText("6d3h")).not.toBeInTheDocument();
+  });
+
+  it("heads with the PROJECT, names the team beside it, and never prints a UUID", async () => {
+    render(TicketPicker);
+    // The project is what the human navigated into — the heading says so.
+    expect(await screen.findByText("Demo Project")).toBeInTheDocument();
+    expect(screen.getByText("Nori (NOR)")).toBeInTheDocument();
     expect(screen.queryByText(/ace69aca/)).not.toBeInTheDocument();
     // The Mine/Team switcher IS the scope label; no caption restates it.
     expect(screen.queryByText(/scope/i)).not.toBeInTheDocument();
+  });
+
+  // A team the daemon could not name must leave the row blank rather than fall
+  // back to the UUID — that fallback is what put a 36-char hex string in the
+  // heading in the first place.
+  it("shows no team at all when Linear could not name it", async () => {
+    ticketsMock.mockResolvedValueOnce({
+      team: "ace69aca-dd39-4c63-91dc-36bbf48b62c7",
+      teamName: "",
+      teamKey: "",
+      issues,
+    });
+    render(TicketPicker);
+    expect(await screen.findByText("Demo Project")).toBeInTheDocument();
+    expect(screen.queryByText(/ace69aca/)).not.toBeInTheDocument();
   });
 
   it("has no back button of its own — the breadcrumb owns that", async () => {

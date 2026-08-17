@@ -60,6 +60,25 @@ func TestTicketPickerShowsStateAndTeamName(t *testing.T) {
 	}
 }
 
+// An UNNAMEABLE team leaves the slot empty rather than falling back to the UUID:
+// the crumb already names the project, and a 36-char hex string in a header reads
+// as a bug (it was one, in the app's picker).
+func TestTicketPickerNeverRendersTheTeamUUID(t *testing.T) {
+	m := ticketPickerRootData(t, protocol.TicketsData{
+		Team: "ace69aca-dd39-4c63-91dc-36bbf48b62c7",
+		Issues: []protocol.TicketRow{
+			{Identifier: "NOR-9", UUID: "u9", Title: "fix oauth flow", Priority: 1},
+		},
+	})
+	v := stripANSI(m.ticketPickerView())
+	if strings.Contains(v, "ace69aca") {
+		t.Errorf("an unresolved team must render as nothing, not as its UUID:\n%s", v)
+	}
+	if !strings.Contains(v, "NOR-9") {
+		t.Errorf("the rows must still render:\n%s", v)
+	}
+}
+
 // `/` filters over what the row shows — state, labels and assignee included, not
 // just the identifier and title.
 func TestTicketPickerFilterCoversDisplayedFields(t *testing.T) {

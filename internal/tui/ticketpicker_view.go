@@ -24,7 +24,7 @@ func (m *rootModel) ticketPickerLines() []string {
 	out := make([]string, 0, H)
 	out = append(out, m.vitalsBar(W))
 
-	crumb := faintText.Render("lola ▸ "+p.project+" ▸ ") + "tickets"
+	crumb := faintText.Render("lola ▸ "+m.projLabel(p.project)+" ▸ ") + "tickets"
 	if team := ticketTeamLabel(p.data); team != "" {
 		crumb += faintText.Render("  ·  " + team)
 	}
@@ -47,10 +47,11 @@ func (m *rootModel) ticketPickerLines() []string {
 	return fitHeight(out, H)
 }
 
-// ticketTeamLabel names the team a human recognizes — "Frontend (FE)" — and
-// falls back to the raw UUID ONLY when the daemon could not resolve one (its
-// lookup fails open). A bare UUID in the header is noise: it is config's key,
-// not something anybody reads.
+// ticketTeamLabel names the team a human recognizes — "Frontend (FE)" — or
+// NOTHING when the daemon could not resolve one (its lookup fails open).
+// `d.Team` is deliberately not a fallback: it is the UUID config keys by, and a
+// 36-character hex string where a name belongs reads as a bug rather than as
+// information. The crumb beside it already names the project.
 func ticketTeamLabel(d *protocol.TicketsData) string {
 	if d == nil {
 		return ""
@@ -60,10 +61,8 @@ func ticketTeamLabel(d *protocol.TicketsData) string {
 		return d.TeamName + " (" + d.TeamKey + ")"
 	case d.TeamName != "":
 		return d.TeamName
-	case d.TeamKey != "":
-		return d.TeamKey
 	default:
-		return d.Team
+		return d.TeamKey
 	}
 }
 
