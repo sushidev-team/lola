@@ -60,6 +60,34 @@ GOCACHE=$PWD/.gocache GOFLAGS='-mod=mod -buildvcs=false' go test ./internal/daem
 Go 1.24+ (repo builds under 1.26). Deps: `cobra` (CLI), `bubbletea` + `lipgloss`
 (TUI), `BurntSushi/toml` (config). Everything else is stdlib + exec seams.
 
+### `make build` alone never reaches the running daemon
+
+`make build` writes `./lola` in the repo. The daemon on this machine is started
+from **`$GOPATH/bin/lola`** (the TUI's `^r` re-execs the current binary, the
+app's restart button and a hand-started `lola run` resolve it from `PATH`), so a
+change is only live after:
+
+```sh
+make build && GOCACHE=$PWD/.gocache GOFLAGS='-mod=mod -buildvcs=false' go install .
+```
+
+...followed by a daemon restart — the daemon does not hot-reload its own binary.
+Two traps that both cost a debugging session already:
+
+- **Replacing the file does not change the running process.** `go install` writes
+  a NEW inode; the old process keeps the one it started with, so `ls -l` on the
+  binary says "new" while the daemon is still running last week's code. What the
+  process is ACTUALLY executing:
+  `lsof -p <pid> | awk '$4=="txt"'` — compare that inode with
+  `stat -f '%i %N' $(command -v lola)`.
+- **A feature can be missing without a single error line.** A daemon predating a
+  command answers `unknown cmd "<x>"`, but one predating a *derivation* (dev
+  URLs, a new observer pass) simply never writes the field and logs nothing.
+  Before debugging the code, confirm the running image has it —
+  `go tool nm $(command -v lola) | grep <symbol>`, or
+  `go tool objdump -s '<caller>' $(command -v lola) | grep <callee>` to prove the
+  call site is wired, not just linked in.
+
 ## Architecture map
 
 The daemon (`internal/daemon`) is the heart; it composes the leaf packages,
@@ -705,7 +733,11 @@ distinct binary from the v2 `wails`. See `desktop/README.md`.
 - **The daemon does not hot-reload its own binary.** After `make build`, a
   still-running `lola run` keeps the old code — a daemon predating a command
   answers `unknown cmd "<x>"` (e.g. `projects`). Restart it (TUI `^r`, the app's
-  restart button, or stop+respawn) to pick up the new binary. The desktop store
+  restart button, or stop+respawn) to pick up the new binary — and note that the
+  restart resolves `$GOPATH/bin/lola`, NOT the repo's `./lola`, so a `make build`
+  without a `go install` restarts onto the same old code (see "`make build` alone
+  never reaches the running daemon" above, including how to check what the
+  process is really executing). The desktop store
   therefore uses `Promise.allSettled` so one unknown command can't blank the rest
   of the UI. (`setsid` is Linux-only; on macOS detach with `nohup … & disown`.)
 - **Bare keys are the frontend's; ⌘ chords are the macOS menu's — never both.**
