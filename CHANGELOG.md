@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.2.7](https://github.com/sushidev-team/lola/compare/v0.2.6...v0.2.7) (2026-08-17)
+
+
+### Features
+
+* **desktop:** make a DMG-only install reach a working state ([95e7632](https://github.com/sushidev-team/lola/commit/95e76324c0b3c68fc06576e6700fa3c4c2f3def1))
+
+
+### Performance Improvements
+
+* **dev:** find the dev server's address seconds after activation, not a cycle later ([c2a106a](https://github.com/sushidev-team/lola/commit/c2a106a645a1cdd617d89609ce9508092567c2de))
+
 ## [0.2.6](https://github.com/sushidev-team/lola/compare/v0.2.5...v0.2.6) (2026-08-16)
 
 
