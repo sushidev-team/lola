@@ -838,13 +838,28 @@ distinct binary from the v2 `wails`. See `desktop/README.md`.
   source repo is private; lola must not copy that). The compiled `main.version`
   (default `"dev"`, injected via `-ldflags -X main.version=` in
   `build/darwin/Taskfile.yml`'s production branch, passed `VERSION=<tag>` by the
-  `desktop` job in `.github/workflows/release.yml`) is the checker's "current"
+  `desktop` job in `.github/workflows/build.yml`) is the checker's "current"
   version; a non-semver value (`dev`) means "always offer the release". Update
   cadence/skip live in `~/.lola/desktop-update.json`, NOT `config.toml` — the
   daemon and TUI never read them. The `desktop` job in `.github/workflows/build.yml`
   needs the Apple signing secrets (same names as rize) or it fails while the CLI
   release still succeeds; a notarized DMG is what keeps Gatekeeper quiet on the
-  auto-installed swap.
+  auto-installed swap. Two rules follow from the DMG arriving AFTER the release:
+  - **"A newer version exists" and "there is a build to install" are separate
+    facts, and the UI must not merge them.** The release is published the moment
+    release-please merges; its signed+notarized DMG is attached minutes later by
+    the `desktop` job — and never, if that job fails. The store keeps
+    `available` (newer version) apart from `installable` (`available` + a
+    `downloadURL`), because folding the asset check into `available` told
+    everyone on the previous version "✓ you're up to date" for the whole window
+    — silently, and permanently after a failed signing job. Without a build,
+    `UpdateOverlay` names the version and offers the release page.
+  - **A manual check must be able to answer differently.** `Checker` caches the
+    release for `CacheDuration` (1h) per app run, so "Check again" was a no-op
+    against exactly the answer that goes stale first (the DMG landing on an
+    already-published release). `CheckForUpdates(force)` clears that cache, every
+    manual check passes `force`, and opening the overlay always re-checks rather
+    than reusing what the launch auto-check saw.
 - **Releases are release-please, not manual `v*` tags.** `.github/workflows/
   release-please.yml` maintains a release PR from Conventional Commits; merging
   it tags the repo + creates the GitHub Release, then calls the reusable

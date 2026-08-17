@@ -25,13 +25,24 @@ class UpdateStore {
 
   private started = false;
 
-  /** A newer, installable release exists and hasn't been suppressed. */
+  /**
+   * A newer release exists than the running build, and hasn't been suppressed.
+   *
+   * Deliberately NOT gated on a download URL. The macOS DMG is attached by a
+   * separate (signing + notarization) job minutes after the release itself is
+   * published, and it can fail on its own — so for a window after every release,
+   * and indefinitely after a failed one, a newer version exists with no asset to
+   * fetch. Folding that into `available` reported "you're up to date" to
+   * everyone running the previous version, which is the exact opposite of true.
+   */
   available = $derived(
     !!this.info?.available &&
-      !!this.info?.downloadURL &&
       !!this.info?.latestVersion &&
       this.info.latestVersion !== this.info.currentVersion,
   );
+
+  /** …and its macOS build is published, so the in-app download can run. */
+  installable = $derived(this.available && !!this.info?.downloadURL);
 
   /** Subscribe to progress events, load the version, kick the auto-check. Idempotent. */
   async init() {
@@ -66,12 +77,15 @@ class UpdateStore {
    * Query the latest release. A manual check surfaces errors and always shows an
    * available update; an auto check stays silent on error and honours the
    * user's skipped version so the footer badge doesn't reappear.
+   *
+   * `manual` is also what forces the backend past its release cache — a human
+   * asking again must be able to get a different answer.
    */
   async check(manual = true) {
     this.checking = true;
     this.error = "";
     try {
-      const info = await UpdateService.CheckForUpdates();
+      const info = await UpdateService.CheckForUpdates(manual);
       if (!manual && info.available && (await UpdateService.IsVersionSkipped(info.latestVersion))) {
         this.info = { ...info, available: false };
       } else {
