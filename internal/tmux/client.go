@@ -338,12 +338,19 @@ func (c *Client) scrollback() int {
 // ~/.tmux.conf says. tmux sources that file when the server starts, so lola's
 // values land afterwards and win.
 //
-//   - history-limit is read when a PANE is created, so this must run BEFORE the
-//     new-session it applies to. Sessions that already exist keep the history
-//     they were born with.
+//   - history-limit is read when a pane is CREATED, so running this before
+//     new-session is what gives the new pane its full history. Current tmux also
+//     grows an existing pane's history when the option rises, so a late call is
+//     not wasted — it just cannot bring back lines already trimmed.
 //   - mouse is only ever turned ON. [tmux].mouse is opt-in and the TUI's embed
 //     enables it for its own wheel forwarding, so writing "off" here would let
 //     any spawn silently disarm the surface a user is currently scrolling in.
+//
+// It needs a RUNNING server and deliberately does not try to bootstrap one:
+// `start-server` on a cold socket brings a server up and lets it exit again in
+// the same breath (a tmux server with no sessions does not linger), taking the
+// option with it. On a cold server this therefore fails, and NewSession re-runs
+// it once the session exists — see there.
 //
 // Only options every supported tmux still has belong here (alternate-scroll,
 // the obvious third candidate, was dropped by tmux 3.5 and merely logs an
@@ -370,18 +377,31 @@ func (c *Client) ConfigureServer(ctx context.Context) error {
 // An empty command starts the default shell.
 //
 // The server defaults are applied first, and deliberately on EVERY create: it is
-// two cheap set-options, it is the only moment tmux still reads history-limit
-// for the pane about to exist, and the tmux server outlives the daemon — so a
-// process that never creates a session cannot be relied on to have configured
-// the server this one is creating in.
+// one cheap set-option, it is the moment tmux reads history-limit for the pane
+// about to exist, and the tmux server outlives the daemon — so a process that
+// never creates a session cannot be relied on to have configured the server this
+// one is creating in.
+//
+// They are applied a SECOND time when that first attempt failed, which is what
+// covers a COLD server: with no tmux running there is nothing to set the option
+// on (and no way to pre-start one, see ConfigureServer), so the very first
+// session of the day would otherwise be born with tmux's 2000-line default and
+// keep it — precisely the "cannot scroll" symptom. The retry lands once the
+// session exists; current tmux grows the pane's history to match.
 func (c *Client) NewSession(ctx context.Context, name, dir, command string) error {
-	_ = c.ConfigureServer(ctx) // best-effort: a scroll default must not fail a spawn
+	// Best-effort: a scroll default must never fail a spawn.
+	coldServer := c.ConfigureServer(ctx) != nil
 	args := []string{"new-session", "-d", "-s", name, "-c", dir}
 	if command != "" {
 		args = append(args, command)
 	}
-	_, _, err := c.run(ctx, args...)
-	return err
+	if _, _, err := c.run(ctx, args...); err != nil {
+		return err
+	}
+	if coldServer {
+		_ = c.ConfigureServer(ctx)
+	}
+	return nil
 }
 
 // killTreeGrace is how long a pane's process group gets to exit on SIGTERM

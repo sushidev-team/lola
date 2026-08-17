@@ -325,6 +325,36 @@ func TestConfigureServerMouseIsOptInAndNeverTurnedOff(t *testing.T) {
 	}
 }
 
+// A COLD server has nothing to set an option on — and tmux offers no way to
+// pre-start one (a server with no sessions exits immediately), so the option is
+// applied AGAIN after the create. Without the retry the first session after a
+// reboot keeps tmux's 2000-line default, silently, for its whole life: exactly
+// the "cannot scroll far" symptom the setting exists to fix.
+func TestNewSessionRetriesTheServerDefaultOnAColdServer(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "tmux")
+	argsLog := filepath.Join(dir, "args.log")
+	started := filepath.Join(dir, "started")
+	// Stands in for tmux: set-option fails until a session exists.
+	script := "#!/bin/sh\necho \"$@\" >> " + argsLog + "\n" +
+		"case \"$3\" in\n" +
+		"  set-option) [ -f " + started + " ] || exit 1 ;;\n" +
+		"  new-session) touch " + started + " ;;\n" +
+		"esac\nexit 0\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := (&Client{Bin: bin}).NewSession(context.Background(), "s1", "/work", ""); err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	want := "-L lola set-option -g history-limit 10000\n" +
+		"-L lola new-session -d -s s1 -c /work\n" +
+		"-L lola set-option -g history-limit 10000"
+	if args := loggedArgs(t, argsLog); args != want {
+		t.Errorf("invoked:\n%s\nwant the default retried once the server exists:\n%s", args, want)
+	}
+}
+
 // A server option is chrome, not a precondition: a tmux that refuses it must
 // still get the session created.
 func TestNewSessionSurvivesServerOptionFailure(t *testing.T) {

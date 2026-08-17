@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sushidev-team/lola/internal/lolaenv"
 )
@@ -304,5 +305,100 @@ func TestWriteLeavesCopyModeOnceAfterAScroll(t *testing.T) {
 	}
 	if got := strings.Count(tmuxLog(t, logPath), "copy-mode -q"); got != 1 {
 		t.Errorf("copy-mode -q ran %d times, want exactly 1:\n%s", got, tmuxLog(t, logPath))
+	}
+}
+
+// A shell tab can be the session that starts a COLD tmux server (its agent pane
+// died and took the server with it), so it applies lola's pane-history default
+// the same way the CLI does — before the create, and again afterwards when there
+// was no server to set it on yet.
+func TestShellAppliesTheScrollDefault(t *testing.T) {
+	t.Setenv("LOLA_HOME", t.TempDir()) // no config.toml -> lola's own default
+	bin, logPath := fakeTmux(t, false)
+	svc := &TermService{tmuxBin: bin, streams: map[string]*ptyStream{}}
+	if _, err := svc.Shell("NORI-1-shell-1", t.TempDir()); err != nil {
+		t.Fatalf("Shell: %v", err)
+	}
+	log := tmuxLog(t, logPath)
+	opt := strings.Index(log, "set-option -g history-limit 10000")
+	create := strings.Index(log, "new-session")
+	if opt < 0 || create < 0 || opt > create {
+		t.Errorf("history-limit must be set before the create:\n%s", log)
+	}
+	// The server answered, so there is nothing to retry.
+	if got := strings.Count(log, "history-limit"); got != 1 {
+		t.Errorf("history-limit set %d times on a live server, want 1:\n%s", got, log)
+	}
+}
+
+func TestShellRetriesTheScrollDefaultOnAColdServer(t *testing.T) {
+	t.Setenv("LOLA_HOME", t.TempDir())
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "tmux")
+	logPath := filepath.Join(dir, "args.log")
+	started := filepath.Join(dir, "started")
+	// Stands in for tmux: has-session fails (so Shell creates), and set-option
+	// fails until a session exists.
+	script := "#!/bin/sh\necho \"$@\" >> " + logPath + "\n" +
+		"case \"$3\" in\n" +
+		"  has-session) exit 1 ;;\n" +
+		"  set-option) [ -f " + started + " ] || exit 1 ;;\n" +
+		"  new-session) touch " + started + " ;;\n" +
+		"esac\nexit 0\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	svc := &TermService{tmuxBin: bin, streams: map[string]*ptyStream{}}
+	if _, err := svc.Shell("NORI-1-shell-1", t.TempDir()); err != nil {
+		t.Fatalf("Shell: %v", err)
+	}
+	if got := strings.Count(tmuxLog(t, logPath), "history-limit"); got != 2 {
+		t.Errorf("history-limit set %d times on a cold server, want 2:\n%s", got, tmuxLog(t, logPath))
+	}
+}
+
+// The keystroke-cancels-copy-mode handshake has to survive a keystroke that
+// arrives WHILE the scroll is still running: Wails dispatches each webview call
+// on its own goroutine, so without a lock held across the copy-mode exec the
+// Write would consume the flag before the pane was in copy mode — and nothing
+// would ever cancel it again.
+func TestWriteWaitsForAnInFlightScroll(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "tmux")
+	logPath := filepath.Join(dir, "args.log")
+	// Entering copy mode is slow; cancelling is not.
+	script := "#!/bin/sh\ncase \"$3\" in copy-mode) case \"$4\" in -e) sleep 1;; esac;; esac\n" +
+		"echo \"$@\" >> " + logPath + "\nexit 0\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	defer w.Close()
+	go func() { io.Copy(io.Discard, r) }()
+
+	s := &ptyStream{f: w}
+	svc := &TermService{tmuxBin: bin, streams: map[string]*ptyStream{"lola-nori-1": s}}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if err := svc.Scroll("lola-nori-1", 5); err != nil {
+			t.Errorf("Scroll: %v", err)
+		}
+	}()
+	time.Sleep(100 * time.Millisecond) // land the keystroke mid-scroll
+	if err := svc.Write("lola-nori-1", "x"); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	<-done
+
+	log := tmuxLog(t, logPath)
+	enter := strings.Index(log, "copy-mode -e")
+	leave := strings.Index(log, "copy-mode -q")
+	if enter < 0 || leave < 0 || enter > leave {
+		t.Errorf("the keystroke must leave copy mode AFTER the scroll entered it:\n%s", log)
 	}
 }

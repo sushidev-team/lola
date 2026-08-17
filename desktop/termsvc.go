@@ -17,8 +17,10 @@ import (
 	"github.com/creack/pty"
 	"github.com/wailsapp/wails/v3/pkg/application"
 
+	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/devtab"
 	"github.com/sushidev-team/lola/internal/lolaenv"
+	"github.com/sushidev-team/lola/internal/tmux"
 )
 
 // TermService bridges lola's isolated tmux server (tmux -L lola) to the webview.
@@ -175,6 +177,12 @@ func (t *TermService) Shell(shell, worktree string) (string, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	// The scroll defaults FIRST, exactly as the CLI's (*tmux.Client).NewSession
+	// applies them (see its doc comment): tmux reads history-limit when a pane is
+	// created, and a shell tab can be the session that starts a cold server — a
+	// session whose agent pane died takes the whole server with it, and its shell
+	// tab would then be born with tmux's 2000-line default.
+	coldServer := t.configureServer(ctx, bin) != nil
 	// -d creates it detached (the frontend attaches via Attach); the trailing
 	// command starts the user's default shell with the worktree's .lola/env
 	// exported, the same line the agent pane and the TUI's shell tabs use — a
@@ -185,7 +193,27 @@ func (t *TermService) Shell(shell, worktree string) (string, error) {
 		"-s", shell, "-c", worktree, lolaenv.ShellCommand).CombinedOutput(); err != nil {
 		return "", fmt.Errorf("new shell %s: %w: %s", shell, err, out)
 	}
+	if coldServer {
+		_ = t.configureServer(ctx, bin) // nothing existed to configure before; there is now
+	}
 	return shell, nil
+}
+
+// configureServer applies lola's pane-history default to the lola tmux server,
+// the app-side twin of (*tmux.Client).ConfigureServer. The number is read from
+// [tmux].scrollback so both surfaces agree; an unreadable config falls back to
+// lola's own default rather than leaving tmux's 2000. Best-effort — the error is
+// returned only so the caller can tell a COLD server (nothing to set the option
+// on yet) from a configured one.
+func (t *TermService) configureServer(ctx context.Context, bin string) error {
+	lines := tmux.DefaultScrollback
+	if path, err := config.DefaultPath(); err == nil {
+		if cfg, err := config.Load(path); err == nil {
+			lines = cfg.Tmux.ScrollbackLines()
+		}
+	}
+	return exec.CommandContext(ctx, bin, "-L", "lola",
+		"set-option", "-g", "history-limit", strconv.Itoa(lines)).Run()
 }
 
 // hasSession reports whether the lola tmux server already has an exactly-named
@@ -298,6 +326,17 @@ type ptyStream struct {
 	pending  []byte
 	closed   bool
 	detached bool // teardown was frontend-initiated (Detach), so no exit event fires
+
+	// scrollMu serializes everything that moves the pane in or out of tmux copy
+	// mode: the enter in Scroll, the flag below, and the cancel in Write/Detach.
+	// It is NOT mu (which guards the byte buffer on the read path) because it is
+	// held across a tmux exec, and it has to be held that long: Wails dispatches
+	// each webview call on its own goroutine, so a keystroke arriving between
+	// "Scroll marked the pane scrolled" and "Scroll actually entered copy mode"
+	// would consume the flag before there was a mode to leave — and the pane
+	// would then sit in copy mode with nothing left to cancel it, swallowing
+	// every later keystroke.
+	scrollMu sync.Mutex
 	// scrolled records that Scroll put this pane into tmux copy mode, so the next
 	// keystroke can leave it first (see Write). It is only ever an over-estimate:
 	// copy mode can also end on its own (`copy-mode -e` exits at the bottom), and
@@ -409,21 +448,19 @@ func (t *TermService) Write(name, data string) error {
 	// reaching the agent — the pane would look wedged. One extra exec, and only
 	// for the FIRST key after a scroll: the flag is cleared here, so a normal
 	// typing burst costs nothing.
-	if s.takeScrolled() {
+	//
+	// The lock is held ACROSS the write, not just the flag: it both makes the
+	// cancel and the keystroke one step (a concurrent Scroll cannot slip copy
+	// mode in between them) and orders concurrent writes, since each one arrives
+	// on its own Wails goroutine.
+	s.scrollMu.Lock()
+	defer s.scrollMu.Unlock()
+	if s.scrolled {
+		s.scrolled = false
 		t.cancelCopyMode(name)
 	}
 	_, err := s.f.Write([]byte(data))
 	return err
-}
-
-// takeScrolled clears the copy-mode flag and reports whether it was set, so the
-// cancel below runs exactly once per scroll.
-func (s *ptyStream) takeScrolled() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	was := s.scrolled
-	s.scrolled = false
-	return was
 }
 
 // cancelCopyMode leaves copy mode on the pane (a no-op when it has no mode).
@@ -484,9 +521,11 @@ func (t *TermService) Scroll(name string, lines int) error {
 	s := t.streams[name]
 	t.mu.Unlock()
 	if s != nil {
-		s.mu.Lock()
+		// Held across the exec below, so a keystroke can never consume the flag
+		// before the pane is actually in copy mode (see ptyStream.scrollMu).
+		s.scrollMu.Lock()
+		defer s.scrollMu.Unlock()
 		s.scrolled = true
-		s.mu.Unlock()
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -544,9 +583,12 @@ func (t *TermService) Detach(name string) error {
 	// Hand the pane back live. Copy mode is a property of the PANE, not of this
 	// client, so a terminal closed while scrolled back would leave the agent's
 	// output piling up behind a frozen view for whoever looks next.
-	if s.takeScrolled() {
+	s.scrollMu.Lock()
+	if s.scrolled {
+		s.scrolled = false
 		t.cancelCopyMode(name)
 	}
+	s.scrollMu.Unlock()
 	t.closeStream(s)
 	return nil
 }

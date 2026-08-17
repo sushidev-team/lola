@@ -384,7 +384,14 @@ each of which owns exactly one external tool or concern behind an **exec seam**
     returning the live bottom of the pane while it is scrolled back, so pane
     classification, the observer and the grid snapshots need no changes.
   - `(*tmux.Client).ConfigureServer` is the ONE place lola sets a GLOBAL (`-g`)
-    tmux option, and `NewSession` calls it on every create. That is deliberate:
+    tmux option, and `NewSession` calls it on every create — TWICE when the first
+    call failed, because a COLD server cannot be configured at all: there is
+    nothing to set an option on, and tmux cannot pre-start one (`start-server` on
+    an empty socket brings a server up and lets it exit again in the same
+    breath). Without that retry the first session after a reboot keeps tmux's
+    2000-line default for its whole life. `desktop/termsvc.go`'s `Shell` repeats
+    the pattern, since a session whose agent pane died takes the server with it.
+    That is deliberate:
     `history-limit` is read when a PANE is created (so it must precede
     new-session and can never be applied retroactively), and every lola session —
     agent, `-shell-N`, `-dev-N`, `-review` — has to agree, or scrolling works in
