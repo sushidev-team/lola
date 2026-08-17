@@ -414,9 +414,12 @@ post_create = [
 # ones start; a command that dies keeps its pane (so you can read why) and the
 # session stops counting as active. Toggle with the app's "Active" button or `D`
 # in either surface. Per project by design — there is no [defaults].dev_commands.
+# Each entry is a shell line interpreted by sh, so `cd sub && npm run dev`,
+# pipes and env prefixes all work; the working directory is the worktree ROOT.
 dev_commands = [
   "composer dev",
   "npm run dev",
+  # "cd desktop && wails3 dev",
 ]
 # Files symlinked from the main checkout into each worktree.
 # CAVEAT: symlinking .env means every worktree talks to the SAME database

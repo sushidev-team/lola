@@ -72,6 +72,17 @@ import (
 // DevData. A session whose project configures no dev_commands is an error, as is
 // an unknown session.
 //
+// Cmd "devFreePort" resolves a PORT CLASH a dev tab died on: Args is a
+// DevFreePortArgs naming the session plus the port and pid the client was shown.
+// The daemon kills that process's group tree and restarts the session's dev
+// tabs, replying DevFreePortData. It is the one path that signals a process
+// lola did not start and does not own, so it is deliberately narrow: it is only
+// ever reached by a human answering a dialog, the port/pid must match the clash
+// the daemon has on record (SessionInfo.DevClash), that pid must STILL hold that
+// port when the request arrives (pids are reused), and a process group owning a
+// live tmux pane is refused outright. Anything else is an error and nothing is
+// signalled.
+//
 // Cmd "coderabbit" FORCES the [coderabbit] PR-comment WATCH for one session now,
 // ignoring the LastCodeRabbitAt watermark: Session names the target. The daemon
 // polls the session's open PR (one `gh pr view`) for CodeRabbit-app comments and
@@ -81,7 +92,7 @@ import (
 // PR yields a "skipped" CodeRabbitData (not an error); an unknown session or a gh
 // failure is an error.
 type Request struct {
-	Cmd    string `json:"cmd"` // stop|status|reload|enable|disable|pollOnce|sessions|projects|prs|hookEvent|kill|revive|pane|answer|review|coderabbit|dev|open|renameProject
+	Cmd    string `json:"cmd"` // stop|status|reload|enable|disable|pollOnce|sessions|projects|prs|hookEvent|kill|revive|pane|answer|review|coderabbit|dev|devFreePort|open|renameProject
 	Poll   string `json:"poll,omitempty"`
 	DryRun bool   `json:"dryRun,omitempty"`
 
@@ -247,9 +258,13 @@ type SessionInfo struct {
 	// scrolling log. Derived like DevActive: empty the moment the tabs stop.
 	// Only http(s) on a loopback host ever appears here, because a client hands
 	// it to an opener and pane text is untrusted.
-	DevActive   bool     `json:"devActive,omitempty"`
-	DevCommands []string `json:"devCommands,omitempty"`
-	DevURLs     []string `json:"devUrls,omitempty"`
+	// DevClash is set while a dev tab of this session is dead BECAUSE another
+	// process holds the port it wanted — the one dev failure lola can name and
+	// offer to undo (cmd=devFreePort). nil whenever the tabs are healthy.
+	DevActive   bool          `json:"devActive,omitempty"`
+	DevCommands []string      `json:"devCommands,omitempty"`
+	DevURLs     []string      `json:"devUrls,omitempty"`
+	DevClash    *DevClashInfo `json:"devClash,omitempty"`
 
 	// Reaction-engine posture (PLAN P3), flattened so the TUI renders reaction
 	// state without importing internal/session or re-deriving it.
@@ -463,6 +478,52 @@ type DevData struct {
 	Commands []string `json:"commands,omitempty"`
 	Stopped  string   `json:"stopped,omitempty"`
 	Message  string   `json:"message,omitempty"`
+}
+
+// DevClashInfo is why a dev tab is dead when the reason is a port another
+// process already holds — the flattened session.DevClash, rendered by both UIs
+// beside the dev toggle.
+//
+// It is EVIDENCE for a question, not a verdict: a client shows it and may offer
+// cmd=devFreePort, which re-checks that this pid still holds this port before
+// signalling anything. Port is the only value that came out of the terminal (an
+// integer; see internal/portclash) — Proc and Dir come from lsof, Command from
+// config.
+type DevClashInfo struct {
+	Tab     string `json:"tab"`
+	Command string `json:"command,omitempty"`
+	Port    int    `json:"port"`
+	PID     int    `json:"pid"`
+	Proc    string `json:"proc,omitempty"`
+	Dir     string `json:"dir,omitempty"`
+	// Ours reports whether the holder is listening from inside lola's worktrees
+	// for this project (a stray server of an earlier session) rather than from
+	// the user's own checkout. A client should word its confirmation
+	// differently for the two: reclaiming lola's own leftover is routine,
+	// killing the user's process is not.
+	Ours bool `json:"ours,omitempty"`
+}
+
+// DevFreePortArgs is the argument payload for cmd=devFreePort: kill the process
+// holding the port a session's dev tab died on, then start that session's dev
+// tabs again. Session names the session, and Port/PID must MATCH the clash the
+// daemon currently has on record — a stale dialog (the holder exited, another
+// process took the port, the tabs were restarted meanwhile) is refused rather
+// than applied to whatever is there now.
+type DevFreePortArgs struct {
+	Session string `json:"session"`
+	Port    int    `json:"port"`
+	PID     int    `json:"pid"`
+}
+
+// DevFreePortData is Response.Data for cmd=devFreePort. Freed reports whether
+// the holder was signalled, Dev the outcome of the restart that followed, and
+// Message the short human-readable summary for the CLI/TUI.
+type DevFreePortData struct {
+	Freed   bool    `json:"freed"`
+	Port    int     `json:"port"`
+	Dev     DevData `json:"dev"`
+	Message string  `json:"message,omitempty"`
 }
 
 // ReviveData is Response.Data for cmd=revive: a dead session relaunched on its

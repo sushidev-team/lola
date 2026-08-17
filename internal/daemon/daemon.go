@@ -204,6 +204,15 @@ type Daemon struct {
 	// watch over the same tabs.
 	devURLWatching map[string]bool
 
+	// devClashChecked holds the dev TABS whose death has already been examined
+	// for a port clash (devclash.go), keyed by tmux session name. A dead tab
+	// stays dead until someone restarts it, so without this the pane read and
+	// the lsof pass would repeat every observe cycle forever. Cleared the moment
+	// the tab lives again or disappears, so a restart is examined afresh. In
+	// memory only: it is a cost guard, and re-examining a dead tab once after a
+	// daemon restart is cheap.
+	devClashChecked map[string]bool
+
 	// Status interpreter ([statusagent], statusagentwire.go): the OPT-IN
 	// display-only LLM pass. statusAgent/interpretSeam are nil when disabled or
 	// the binary is missing (mirrored into interpretOn, the atomic the store's

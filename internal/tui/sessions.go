@@ -216,9 +216,19 @@ type sessionsModel struct {
 	flashGood   bool   // flash is a success (green) rather than a warning (yellow)
 	confirmKill bool   // "x" pressed: awaiting y/n to kill killTarget
 	killTarget  string // session ID captured when "x" was pressed (pinned across refreshes)
-	preview     string // rendered pane text (cmd=pane) for the selected session
-	previewFor  string // session ID the preview + paneData belong to ("" = none)
-	previewErr  string // last cmd=pane failure for previewFor, surfaced in the Detail panel
+
+	// "F" pressed on a session whose dev tab died on a taken port: awaiting y/n
+	// to kill the process holding it. The port/pid are PINNED with the target for
+	// the same reason killTarget is — a refresh between the question and the
+	// answer must not move the question onto another process — and the daemon
+	// refuses the request anyway unless they still match what it has on record.
+	confirmFreePort bool
+	freeTarget      string
+	freePort        int
+	freePID         int
+	preview         string // rendered pane text (cmd=pane) for the selected session
+	previewFor      string // session ID the preview + paneData belong to ("" = none)
+	previewErr      string // last cmd=pane failure for previewFor, surfaced in the Detail panel
 	// paneData is the daemon's read of the selected session's pane: the rendered
 	// text plus the attention parser's extracted question. It backs both the
 	// compact preview and — when the session is needs_input — the answer card.
@@ -419,6 +429,32 @@ func devToggleCmd(id string, on bool) tea.Cmd {
 			return devDoneMsg{msg: resp.Error}
 		}
 		var d protocol.DevData
+		if err := json.Unmarshal(resp.Data, &d); err != nil {
+			return devDoneMsg{msg: err.Error()}
+		}
+		return devDoneMsg{ok: true, msg: d.Message}
+	}
+}
+
+// devFreePortCmd kills the process holding the port a session's dev tab died on
+// and restarts the tabs (cmd=devFreePort).
+//
+// Port and pid travel back exactly as they were SHOWN: the daemon refuses the
+// request unless they still match the clash it has on record and that pid still
+// holds that port, so an answer given a minute late is rejected rather than
+// applied to whatever holds the port by then. The outcome rides the same
+// devDoneMsg the toggle uses — from here on the two are the same thing.
+func devFreePortCmd(id string, port, pid int) tea.Cmd {
+	return func() tea.Msg {
+		args, _ := json.Marshal(protocol.DevFreePortArgs{Session: id, Port: port, PID: pid})
+		resp, err := requestFn(protocol.Request{Cmd: "devFreePort", Args: args})
+		if err != nil {
+			return devDoneMsg{msg: err.Error()}
+		}
+		if !resp.OK {
+			return devDoneMsg{msg: resp.Error}
+		}
+		var d protocol.DevFreePortData
 		if err := json.Unmarshal(resp.Data, &d); err != nil {
 			return devDoneMsg{msg: err.Error()}
 		}
@@ -632,6 +668,19 @@ func (m *rootModel) updateSessions(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
+	// The port-clash confirmation, the same shape as the kill one: y/Y frees,
+	// anything else cancels, and the target is what was pinned when "F" was
+	// pressed — killing a process is not something a list refresh may re-aim.
+	if s.confirmFreePort {
+		s.confirmFreePort = false
+		target, port, pid := s.freeTarget, s.freePort, s.freePID
+		s.freeTarget, s.freePort, s.freePID = "", 0, 0
+		if target != "" && (k.String() == "y" || k.String() == "Y") {
+			s.flash, s.flashGood = fmt.Sprintf("freeing :%d…", port), true
+			return m, devFreePortCmd(target, port, pid)
+		}
+		return m, nil
+	}
 	s.flash, s.flashGood = "", false
 	switch k.String() {
 	case "q":
@@ -669,6 +718,19 @@ func (m *rootModel) updateSessions(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			s.flash, s.flashGood = "starting dev processes…", true
 			return m, devToggleCmd(sel.ID, true)
+		}
+	case "F":
+		// Free the port a dev tab died on, killing whatever holds it. SHIFTED and
+		// CONFIRMED because that process is regularly not lola's at all — it may
+		// be a dev server the human started in their own checkout — which is
+		// exactly why the daemon detects it but never acts on it by itself.
+		if sel := s.selected(); sel != nil {
+			if sel.DevClash == nil {
+				s.flash, s.flashGood = "no port clash to free on this session", false
+				return m, nil
+			}
+			s.confirmFreePort = true
+			s.freeTarget, s.freePort, s.freePID = sel.ID, sel.DevClash.Port, sel.DevClash.PID
 		}
 	case "<", ",":
 		// '<' / '>' switch terminal tabs — Option-free on both US (Shift+,/.) and
@@ -922,6 +984,36 @@ func (m *rootModel) openSelectedPR() tea.Cmd {
 // sessionDetail is the bottom pane: live capture-pane preview for tmux-backed
 // sessions, a static detail card otherwise. Both variants lead with a source
 // badge (ao|native); native sessions additionally show their worktree dir.
+// devClashLines states why a dev tab is dead when the reason is a port another
+// process already holds — and how to act on it.
+//
+// It is rendered in BOTH detail shapes (the live-pane preview and the no-pane
+// card) unlike the rest of the dev block, because a session with a clash almost
+// always has a live agent pane: showing it only on the card would hide it in
+// exactly the case it exists for. The pane itself cannot say any of this — the
+// command clears the screen on its way out — and the holder is usually a process
+// in another checkout entirely, so this is the only place the two facts meet.
+func devClashLines(sel protocol.SessionInfo) []string {
+	c := sel.DevClash
+	if c == nil {
+		return nil
+	}
+	holder := c.Proc
+	if holder == "" {
+		holder = "another process"
+	}
+	lines := []string{statusOrange.Render(
+		fmt.Sprintf("clash:    :%d held by %s (pid %d) — F to free", c.Port, holder, c.PID))}
+	if c.Dir != "" {
+		where := "outside lola"
+		if c.Ours {
+			where = "a leftover in"
+		}
+		lines = append(lines, faintText.Render("          "+where+" "+truncPlain(c.Dir, 70)))
+	}
+	return lines
+}
+
 func (m *rootModel) sessionDetail() string {
 	s := &m.sessions
 	sel := s.selected()
@@ -961,6 +1053,9 @@ func (m *rootModel) sessionDetail() string {
 		}
 		if sel.PRStale {
 			b.WriteString(statusOrange.Render("⚠ PR facts stale — gh has been failing; the delivery state may be old") + "\n")
+		}
+		for _, line := range devClashLines(*sel) {
+			b.WriteString(line + "\n")
 		}
 		// PR panel above the fold: unmissable for ANY tmux-backed session that has
 		// a PR, not just AO/detail-card sessions.
@@ -1034,6 +1129,9 @@ func (m *rootModel) sessionDetail() string {
 		// clickable on its own; what a human needs from here is to SEE it.
 		if len(sel.DevURLs) > 0 {
 			fmt.Fprintf(&b, "serves:   %s\n", strings.Join(sel.DevURLs, "  "))
+		}
+		for _, line := range devClashLines(*sel) {
+			b.WriteString(line + "\n")
 		}
 	}
 	fmt.Fprintf(&b, "age:      %s\n", dash(sel.Age))

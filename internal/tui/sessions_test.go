@@ -909,3 +909,75 @@ func TestSessionPreviewClippedToTerminalWidth(t *testing.T) {
 		t.Error("clipped preview line must still render its head")
 	}
 }
+
+// A dev tab that lost a port race is dead with an empty pane, so the detail
+// panel is the only place the reason — and the process responsible — is stated.
+// Acting on it is SHIFTED and confirmed: the holder is regularly not lola's.
+func TestSessionsFreePortConfirmAndSend(t *testing.T) {
+	m := newTestRoot(t)
+	m.tab = tabSessions
+	m.sessions.data = cannedSessions()
+	m.sessions.data.Sessions[0].DevCommands = []string{"cd desktop && wails3 dev"}
+	m.sessions.data.Sessions[0].DevClash = &protocol.DevClashInfo{
+		Tab: "s1-dev-1", Command: "cd desktop && wails3 dev",
+		Port: 9245, PID: 52791, Proc: "node", Dir: "/Users/x/code/app/desktop/frontend",
+	}
+	m.sessions.cursor = 0 // s1
+
+	if d := m.sessionDetail(); !strings.Contains(d, "9245") || !strings.Contains(d, "52791") ||
+		!strings.Contains(d, "/Users/x/code/app/desktop/frontend") {
+		t.Errorf("detail must name the port, the process holding it and where it runs:\n%s", d)
+	}
+
+	m.Update(keyMsg("F"))
+	if !m.sessions.confirmFreePort {
+		t.Fatal("F must open the free-port confirmation")
+	}
+	if v := m.viewString(); !strings.Contains(v, "(y/n)") || !strings.Contains(v, "9245") {
+		t.Errorf("view must ask before killing the holder:\n%s", v)
+	}
+
+	_, cmd := m.Update(keyMsg("y"))
+	if m.sessions.confirmFreePort {
+		t.Error("y must close the confirmation")
+	}
+	if cmd == nil {
+		t.Fatal("y must dispatch the free-port command")
+	}
+}
+
+// Anything but y cancels, and nothing is sent — the same shape as the kill
+// confirmation, because this also ends a process.
+func TestSessionsFreePortConfirmCancel(t *testing.T) {
+	m := newTestRoot(t)
+	m.tab = tabSessions
+	m.sessions.data = cannedSessions()
+	m.sessions.data.Sessions[0].DevClash = &protocol.DevClashInfo{Tab: "s1-dev-1", Port: 9245, PID: 52791, Proc: "node"}
+	m.sessions.cursor = 0
+
+	m.Update(keyMsg("F"))
+	_, cmd := m.Update(keyMsg("n"))
+	if m.sessions.confirmFreePort {
+		t.Error("n must close the confirmation")
+	}
+	if cmd != nil {
+		t.Error("n must not dispatch anything")
+	}
+}
+
+// Without a clash on record there is nothing to free: F says so rather than
+// arming a question about a process nobody named.
+func TestSessionsFreePortNeedsAClash(t *testing.T) {
+	m := newTestRoot(t)
+	m.tab = tabSessions
+	m.sessions.data = cannedSessions()
+	m.sessions.cursor = 0
+
+	m.Update(keyMsg("F"))
+	if m.sessions.confirmFreePort {
+		t.Fatal("F must not arm a confirmation without a recorded clash")
+	}
+	if !strings.Contains(m.sessions.flash, "no port clash") {
+		t.Errorf("flash = %q, want a hint that there is nothing to free", m.sessions.flash)
+	}
+}

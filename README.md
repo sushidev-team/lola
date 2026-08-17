@@ -384,6 +384,9 @@ Switch a session **Active** — the button in the desktop app's session header,
 - starts each command in its own tmux tab beside the agent pane, rooted in that
   session's worktree with its `env` exported, labelled with the command it runs.
 
+Each entry is a **shell line**, interpreted by `sh` in the worktree **root** —
+`cd desktop && wails3 dev`, `PORT=3001 npm run dev` and pipes all work.
+
 The toggle is **derived from tmux, not remembered**: closing a dev tab, a
 command that crashes, or a killed session all read back as inactive within one
 observe cycle (~30s), and the daemon never has to reconcile a stale flag. A tab
@@ -394,6 +397,26 @@ pane and restarts the command.
 
 Killing a session takes its dev tabs down with it, so a dead session never
 leaves a port bound.
+
+**When the port is already taken.** lola frees ports automatically only inside
+its own worktrees — a dev server running in *your* checkout is yours, not lola's
+to kill. That is also the clash you hit most: your own `npm run dev` holds 5173,
+the session's tab exits after one line, and the pane is usually cleared by then,
+so the tab just reads as dead. lola therefore reads a dead dev tab once, and if
+it says the address was in use, asks `lsof` who holds it:
+
+```
+clash:    :9245 held by node (pid 52791) — F to free
+          outside lola /Users/you/code/app/desktop/frontend
+```
+
+The app shows the same thing as a banner over the terminal with a **Free port**
+button. Both ask before doing anything — this is the one action that kills a
+process lola did not start — and the daemon re-checks that *that* pid still
+holds *that* port before signalling it, so an answer given a minute late is
+refused rather than aimed at whatever holds the port by then. A process
+belonging to a live lola session is never killed this way. Afterwards the dev
+tabs start again on their own.
 
 #### Per-session env values
 

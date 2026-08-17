@@ -128,6 +128,18 @@ func (s *DaemonService) Dev(session string, on bool) (protocol.DevData, error) {
 	return d, err
 }
 
+// DevFreePort kills the process holding the port a session's dev tab died on and
+// restarts that session's dev tabs. port/pid must match the clash the daemon
+// currently reports (SessionInfo.devClash) — this is the one path that signals a
+// process lola did not start, so a stale dialog is refused rather than applied to
+// whatever holds the port now.
+func (s *DaemonService) DevFreePort(session string, port, pid int) (protocol.DevFreePortData, error) {
+	args, _ := json.Marshal(protocol.DevFreePortArgs{Session: session, Port: port, PID: pid})
+	var d protocol.DevFreePortData
+	err := call(protocol.Request{Cmd: "devFreePort", Args: args}, longTimeout, &d)
+	return d, err
+}
+
 // --- launches ---------------------------------------------------------------
 
 // Open checks out a branch or PR of a project into a throwaway shell worktree.

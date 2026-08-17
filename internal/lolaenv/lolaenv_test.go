@@ -54,6 +54,50 @@ func TestCommandLineExportsTheEnvFileAndExecsTheCommand(t *testing.T) {
 	}
 }
 
+// The bug this guards: `exec` takes ONE command, so prefixing it onto a
+// compound line binds it to the first word only. `exec cd desktop && wails3 dev`
+// runs under macOS's /bin/sh (bash 3.2) as a silent no-op that exits 0 — the tab
+// dies instantly and the dev server never starts. A compound line must therefore
+// reach sh unprefixed, whole and in order.
+func TestCommandLineDoesNotExecCompoundLines(t *testing.T) {
+	for _, cmd := range []string{
+		"cd desktop && wails3 dev",
+		"npm run build | tee build.log",
+		"cd desktop; npm run dev",
+		"php artisan serve > serve.log 2>&1",
+		"cd desktop",
+	} {
+		got := CommandLine(cmd)
+		if strings.Contains(got, "exec "+cmd) {
+			t.Errorf("CommandLine(%q) still execs a compound line: %s", cmd, got)
+		}
+		if !strings.Contains(got, exportPrelude+cmd) {
+			t.Errorf("CommandLine(%q) must run the line verbatim after the prelude: %s", cmd, got)
+		}
+		if strings.Count(got, "exec sh -c ") != 1 {
+			t.Errorf("CommandLine(%q) want exactly one wrapper: %s", cmd, got)
+		}
+	}
+}
+
+// The exec is kept wherever it is safe, because it is what makes tmux report
+// the COMMAND's exit rather than a wrapper shell's. An env-assignment prefix
+// stays simple: both bash and dash apply it to the exec'd command.
+func TestCommandLineStillExecsSimpleCommands(t *testing.T) {
+	for _, cmd := range []string{
+		"composer dev",
+		"npm run dev",
+		"PORT=3000 npm run dev",
+		"  wails3 dev  ",
+	} {
+		got := CommandLine(cmd)
+		want := "exec " + strings.TrimSpace(cmd)
+		if !strings.Contains(got, want) {
+			t.Errorf("CommandLine(%q) dropped the exec: %s", cmd, got)
+		}
+	}
+}
+
 // A command carrying a single quote must survive the trip through the login
 // shell intact — the quoting exists for that, not to neuter the command (which
 // is user-authored config and is meant to be interpreted by sh, pipes and all).

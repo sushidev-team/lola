@@ -20,6 +20,35 @@ export interface CodeRabbitData {
 }
 
 /**
+ * DevClashInfo is why a dev tab is dead when the reason is a port another
+ * process already holds — the flattened session.DevClash, rendered by both UIs
+ * beside the dev toggle.
+ * 
+ * It is EVIDENCE for a question, not a verdict: a client shows it and may offer
+ * cmd=devFreePort, which re-checks that this pid still holds this port before
+ * signalling anything. Port is the only value that came out of the terminal (an
+ * integer; see internal/portclash) — Proc and Dir come from lsof, Command from
+ * config.
+ */
+export interface DevClashInfo {
+    "tab": string;
+    "command"?: string;
+    "port": number;
+    "pid": number;
+    "proc"?: string;
+    "dir"?: string;
+
+    /**
+     * Ours reports whether the holder is listening from inside lola's worktrees
+     * for this project (a stray server of an earlier session) rather than from
+     * the user's own checkout. A client should word its confirmation
+     * differently for the two: reclaiming lola's own leftover is routine,
+     * killing the user's process is not.
+     */
+    "ours"?: boolean;
+}
+
+/**
  * DevData is Response.Data for cmd=dev. Active mirrors the resulting state
  * (true when tabs are running), Commands are the dev_commands the tabs run in
  * order, Stopped names the session whose tabs were taken over ("" when none
@@ -29,6 +58,18 @@ export interface DevData {
     "active": boolean;
     "commands"?: string[] | null;
     "stopped"?: string;
+    "message"?: string;
+}
+
+/**
+ * DevFreePortData is Response.Data for cmd=devFreePort. Freed reports whether
+ * the holder was signalled, Dev the outcome of the restart that followed, and
+ * Message the short human-readable summary for the CLI/TUI.
+ */
+export interface DevFreePortData {
+    "freed": boolean;
+    "port": number;
+    "dev": DevData;
     "message"?: string;
 }
 
@@ -528,10 +569,14 @@ export interface SessionInfo {
      * scrolling log. Derived like DevActive: empty the moment the tabs stop.
      * Only http(s) on a loopback host ever appears here, because a client hands
      * it to an opener and pane text is untrusted.
+     * DevClash is set while a dev tab of this session is dead BECAUSE another
+     * process holds the port it wanted — the one dev failure lola can name and
+     * offer to undo (cmd=devFreePort). nil whenever the tabs are healthy.
      */
     "devActive"?: boolean;
     "devCommands"?: string[] | null;
     "devUrls"?: string[] | null;
+    "devClash"?: DevClashInfo | null;
 
     /**
      * Reaction-engine posture (PLAN P3), flattened so the TUI renders reaction

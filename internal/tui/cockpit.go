@@ -219,6 +219,7 @@ func (m *rootModel) helpModal() string {
 		head("Session actions"),
 		row("s", "new worktree shell"),
 		row("D", "run dev here (one per project)"),
+		row("F", "free the port a dev tab died on"),
 		row("< / >", "prev / next terminal tab"),
 		row("w", "close shell tab"),
 		row("a", "answer input"),
@@ -828,6 +829,9 @@ func (m *rootModel) cockpitMessage() string {
 			}
 		}
 		return warnText.Render(fmt.Sprintf("kill %s? removes worktree, stops agent (y/n)", label))
+	case s.confirmFreePort:
+		return warnText.Render(fmt.Sprintf(
+			"kill the process holding :%d (pid %d) and restart the dev processes? (y/n)", s.freePort, s.freePID))
 	case m.list.confirmDelete:
 		name := ""
 		if p := m.selectedRailProject(); p != nil {
@@ -869,6 +873,8 @@ func (m *rootModel) keybar(w int) string {
 		return previewLine(faintText.Render("enter send · esc cancel"), w)
 	case s.confirmKill:
 		return previewLine(warnText.Render("y")+faintText.Render(" kill · ")+warnText.Render("n")+faintText.Render(" cancel"), w)
+	case s.confirmFreePort:
+		return previewLine(warnText.Render("y")+faintText.Render(" free port · ")+warnText.Render("n")+faintText.Render(" cancel"), w)
 	case m.list.confirmDelete:
 		return previewLine(warnText.Render("y")+faintText.Render(" stop polling · ")+warnText.Render("n")+faintText.Render(" cancel"), w)
 	}

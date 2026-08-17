@@ -176,6 +176,15 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   cannot know what port `dev_commands` bind, so a stray dev server is found by
   where it runs, not by its port (see the ACTIVE-session invariant). Fails open:
   no lsof, or output it cannot parse, reports nothing rather than a guess.
+- `internal/portclash` — pure text, the mirror image of `internal/devurl`: did a
+  DEAD dev tab die because its port was taken, and which port was it? Every
+  server words that failure differently (`bind: address already in use`,
+  `EADDRINUSE`, `Port 9245 is in use`, `port is already allocated`), so the cue
+  is the phrase plus the address beside it. The ONLY thing it ever returns is an
+  integer in 1..65535 — the caller asks lsof about that port and offers a human a
+  kill button, so a number is the whole safe surface to carry out of untrusted
+  pane text. Fails closed on a wording it does not know or a message that names
+  no port.
 - `internal/gitrepo` — reads a checkout with LOCAL git only (no network, no
   `gh`): `Detect` resolves the GitHub `owner/name` from its remotes (upstream,
   then origin), `Branches` the fork-from candidates, and `Inspect` gathers root
@@ -429,6 +438,17 @@ each of which owns exactly one external tool or concern behind an **exec seam**
     UI, and `reconcileDevTabs` (one per observe cycle) overwrites them from the
     tmux facts. Persisted intent would drift the moment a tab was closed, a
     command crashed, or the daemon restarted; derivation cannot.
+  - A `dev_commands` entry is a SHELL LINE, and `lolaenv.CommandLine` only
+    `exec`s it when it is a SIMPLE command. `exec` takes one command, so
+    prefixing it onto `cd desktop && wails3 dev` binds it to `cd` — under macOS's
+    /bin/sh (bash 3.2) that is a silent exit 0 with the real command never
+    started, i.e. a dev tab that dies instantly and says nothing. A pipeline, an
+    `&&` chain, a redirect or a builtin head therefore runs unprefixed; the
+    wrapper `sh` waits for the command and exits with it, so `#{pane_dead}` still
+    fires at the right moment and only the "pane pid IS the command" property is
+    lost. The classifier is deliberately conservative (`commandSeparators`,
+    `shellWordBreakers`): a false "not simple" costs an optimization, a false
+    "simple" eats the command line.
   - The tabs carry `remain-on-exit`, so a crashed dev server keeps its pane and
     its error message — which means the session's EXISTENCE proves nothing and
     liveness is `#{pane_dead}` (`tmux.DeadPanes`, one `list-panes -a` per cycle,
@@ -481,6 +501,28 @@ each of which owns exactly one external tool or concern behind an **exec seam**
     context, not a shielded one, because an aborted read costs only a link the
     observer finds a cycle later. `scanDevURLs` stays as that fallback: nothing
     depends on the watch succeeding.
+  - A port the sweep may NOT reclaim becomes a QUESTION, never an action
+    (`internal/daemon/devclash.go`, `cmd=devFreePort`). The sweep only touches
+    `~/.lola/worktrees/<project>/`, so the common real-world clash — a
+    `npm run dev` the human started in their own checkout — kills the dev tab and
+    explains nothing: the command prints one line and exits, and `wails3 dev` or
+    `vite` clears the screen on the way out, so the tab reads as "dead, no reason
+    given". So a dead tab is read ONCE (`internal/portclash` → a port number,
+    nothing else), lsof names the holder, and the result rides `SessionInfo`
+    to a banner in the app / a `clash:` line + `F` in the TUI. Its rails:
+    - Detection is one-shot per DEATH (`devClashChecked`, re-armed when the tab
+      lives again): a dead pane never changes, so a second read learns nothing
+      and would cost a capture plus an lsof every cycle forever.
+    - lsof is asked only when the pane actually said a port was taken, and a
+      holder that cannot be resolved records NOTHING — the finding's only use is
+      offering to kill something.
+    - The kill is a human's answer to a dialog, and the daemon re-verifies at
+      that moment: session + port + pid must match the record AND that pid must
+      STILL hold that port (pids are reused, and the gap to a click is
+      unbounded). A group owning a live tmux pane is refused outright, as in the
+      sweep, and no ps / no tmux means no kill.
+    - The clash is DERIVED like `DevActive`/`DevURLs`: `markDev` drops it on any
+      tab change, because it describes tabs that no longer exist.
   - `dev_commands` is deliberately NOT a `[defaults]` key (see the inheritance
     invariant): a dev command belongs to one repository, and an inherited one
     would start the wrong stack in every project that forgot to override it.
