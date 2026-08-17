@@ -662,6 +662,29 @@ each of which owns exactly one external tool or concern behind an **exec seam**
     app was all-lowercase, which read as prose rather than as controls. Tests
     assert these strings; `getByRole("menuitem", { name })`, not `getByText`,
     because a MenuItem wraps its label beside an aria-hidden glyph.
+- **No form control in the app is drawn by the OS.** A bare
+  `<input type="checkbox">` and a bare `<select>` are painted by AppKit, so their
+  box, tick, caret and focus ring follow the user's macOS version rather than
+  this repo — two machines on the SAME build showed visibly different config
+  forms (macOS 26's Liquid Glass controls against the older flat ones), which is
+  a difference no screenshot can be debugged from. `Checkbox.svelte` and
+  `Select.svelte` own those two; `input[type="number"]`'s stepper is killed in
+  `app.css` (arrow keys still step). Rules:
+  - The tick and the caret are real sibling `<svg>` elements in `currentColor`,
+    never an `::after` on the input: WebKit does not reliably render
+    pseudo-elements on form controls, so that version works in `wails3 dev`
+    (Chrome) and disappears in the packaged app — the exact divergence these
+    components exist to remove.
+  - `class` on either component lands on the WRAPPER, not the control, so a
+    row-level fade (`ghost()`'s `opacity-55`, `has-[:disabled]:opacity-40`) dims
+    the tick/caret WITH the box instead of leaving it floating at full strength.
+  - What stays native ON PURPOSE: the `<select>` popup (an AppKit menu outside
+    the web view — re-drawing it means re-implementing keyboard nav, type-ahead
+    and a11y) and the textarea resize grabber. `color-scheme`, written per flavor
+    by `theme-runtime`, is the one lever over the popup and it is enough.
+  - `Controls.test.ts` greps every `.svelte` file for a raw `type="checkbox"` /
+    `<select` and fails on one, because a raw control looks perfectly fine on
+    whichever macOS the author happened to be running.
 - **Destructive actions confirm, and the key that does the destructive thing is
   the SHIFTED one.** On both project lists (TUI home and the cockpit rail) `x`
   stops polling (reversible) and `X` removes the `[[project]]` from config; `n`

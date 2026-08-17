@@ -9,6 +9,8 @@
   import Modal from "$lib/components/Modal.svelte";
   import Tabs from "$lib/components/Tabs.svelte";
   import Button from "$lib/components/Button.svelte";
+  import Checkbox from "$lib/components/Checkbox.svelte";
+  import Select from "$lib/components/Select.svelte";
   import { ConfigService, DaemonService, LinearService } from "@bindings/desktop";
   import { slug, slugTyping, displayName } from "$lib/slug";
   import type {
@@ -430,7 +432,6 @@
   const labelCls = "label flex items-center gap-1.5 text-faint";
   const inputCls =
     "w-full rounded border border-edge bg-canvas px-2 py-1.5 text-ink outline-none focus:border-accent placeholder:text-placeholder";
-  const cbCls = "h-3.5 w-3.5 accent-[var(--color-accent)]";
   const hintCls = "mt-1 block text-sm text-faint";
 </script>
 
@@ -530,8 +531,8 @@
   <div class={rowCls}>
     {@render cap(caption, k)}
     {#if options}
-      <select
-        class="{inputCls} {ghost(k)}"
+      <Select
+        class={ghost(k)}
         aria-label={caption}
         value={current}
         onchange={(e) => {
@@ -541,7 +542,7 @@
       >
         {#if anyLabel}<option value="">{anyLabel}</option>{/if}
         {#each options as o (o.id)}<option value={o.id}>{o.label}</option>{/each}
-      </select>
+      </Select>
     {:else}
       <input
         class="{inputCls} font-mono {ghost(k)}"
@@ -571,9 +572,7 @@
       <div class="max-h-36 space-y-1 overflow-auto rounded border border-edge p-2 {ghost(k)}">
         {#each options as o (o.id)}
           <label class="flex items-center gap-2 text-ink">
-            <input
-              type="checkbox"
-              class={cbCls}
+            <Checkbox
               checked={(selected ?? []).includes(o.id)}
               onchange={() => {
                 if (k) promote(k);
@@ -595,7 +594,7 @@
   <div class={rowCls}>
     <span class={labelCls}>{caption}</span>
     <label class="flex items-center gap-2 text-ink">
-      <input type="checkbox" class={cbCls} {checked} onchange={onToggle} aria-label={caption} />
+      <Checkbox {checked} onchange={onToggle} aria-label={caption} />
       {#if hint}<span class="text-faint">{hint}</span>{/if}
     </label>
   </div>
@@ -757,10 +756,10 @@
         <div class={rowCls}>
           <span class={labelCls}>Team</span>
           {#if teams.length > 0}
-            <select class={inputCls} aria-label="Team" value={d.teamId} onchange={(e) => onTeam(e.currentTarget.value)}>
+            <Select aria-label="Team" value={d.teamId} onchange={(e) => onTeam(e.currentTarget.value)}>
               <option value="">(pick a team)</option>
               {#each teams as t (t.id)}<option value={t.id}>{t.key} — {t.name}</option>{/each}
-            </select>
+            </Select>
           {:else}
             <!-- onchange, not oninput: switching teams clears the dependent IDs,
                  which must not happen on every keystroke of a pasted UUID. -->
