@@ -32,6 +32,12 @@ const (
 	// per-session label (the Linear issue) is composed with it by the consumer
 	// (see SessionChrome).
 	TmuxBrand = "LOLA"
+
+	// DefaultTmuxScrollback is the pane history every lola session gets when
+	// [tmux].scrollback is unset. It lives in internal/tmux (the layer that
+	// applies it) so the fallback is the same whether or not a Client was built
+	// from config.
+	DefaultTmuxScrollback = tmux.DefaultScrollback
 )
 
 // TmuxConfig is the [tmux] table.
@@ -43,7 +49,14 @@ const (
 //     remapping is a taste choice, so it stays off unless the operator asks.
 //   - StatusRight overrides the status bar's right side (a raw tmux status-right
 //     format string). "" uses lola's built-in branded format.
-//   - Mouse enables tmux mouse mode inside the session. Off by default.
+//   - Scrollback is the pane history (tmux `history-limit`) every lola session
+//     is created with; 0 resolves to DefaultTmuxScrollback. It is applied to
+//     lola's own tmux server, so it holds regardless of the machine's
+//     ~/.tmux.conf — and only for panes created after it is set.
+//   - Mouse enables tmux mouse mode inside the session. Off by default. It is
+//     NOT what makes a session scrollable: lola-desktop scrolls the pane through
+//     tmux's copy mode either way, and this only decides whether tmux itself
+//     also consumes mouse events (which costs one-click link opening).
 //   - StatusBar shows tmux's own status bar inside the session. OFF by default:
 //     the TUI and lola-desktop both print the issue, title, status and branch in
 //     their own header directly above the terminal, so the bar restated a subset
@@ -54,8 +67,19 @@ type TmuxConfig struct {
 	SocketName  string `toml:"socket_name"`
 	DetachKey   string `toml:"detach_key"`
 	StatusRight string `toml:"status_right"`
+	Scrollback  int    `toml:"scrollback"`
 	Mouse       bool   `toml:"mouse"`
 	StatusBar   bool   `toml:"status_bar"`
+}
+
+// ScrollbackLines is the resolved pane history size: the configured value when
+// positive, else DefaultTmuxScrollback. Zero keeps its "unset" meaning so the
+// zero TmuxConfig stays the unconfigured one (see tmuxFile).
+func (t TmuxConfig) ScrollbackLines() int {
+	if t.Scrollback > 0 {
+		return t.Scrollback
+	}
+	return DefaultTmuxScrollback
 }
 
 // DetachHint returns the human-facing key hint for detaching from an attached
@@ -79,6 +103,24 @@ func (c *Config) TmuxSocketName() string {
 		return c.Tmux.SocketName
 	}
 	return DefaultTmuxSocketName
+}
+
+// TmuxClient builds a tmux client on lola's isolated server carrying the
+// resolved [tmux] settings — the socket, plus the scroll defaults
+// (*Client).ConfigureServer applies before it creates a session. Every caller
+// that CREATES sessions must build its client here: a client without them would
+// reset the server's history-limit to the lola default on its next spawn and
+// silently undo an operator's [tmux].scrollback. bin may be "" (resolved via
+// PATH) and dir is the cwd the tmux SERVER inherits if this command starts it
+// (see tmux.Client.Dir — pass a directory that cannot be deleted).
+func (c *Config) TmuxClient(bin, dir string) *tmux.Client {
+	return &tmux.Client{
+		Bin:        bin,
+		SocketName: c.TmuxSocketName(),
+		Dir:        dir,
+		Scrollback: c.Tmux.ScrollbackLines(),
+		Mouse:      c.Tmux.Mouse,
+	}
 }
 
 // SessionChrome projects the resolved [tmux] config into the tmux.SessionChrome
@@ -106,6 +148,7 @@ type fileTmuxConfig struct {
 	SocketName  *string `toml:"socket_name,omitempty"`
 	DetachKey   *string `toml:"detach_key,omitempty"`
 	StatusRight *string `toml:"status_right,omitempty"`
+	Scrollback  *int    `toml:"scrollback,omitempty"`
 	Mouse       *bool   `toml:"mouse,omitempty"`
 	StatusBar   *bool   `toml:"status_bar,omitempty"`
 }
@@ -134,6 +177,9 @@ func resolveTmux(ft *fileTmuxConfig) TmuxConfig {
 	if ft.StatusRight != nil {
 		d.StatusRight = *ft.StatusRight
 	}
+	if ft.Scrollback != nil {
+		d.Scrollback = *ft.Scrollback
+	}
 	if ft.Mouse != nil {
 		d.Mouse = *ft.Mouse
 	}
@@ -156,6 +202,7 @@ func tmuxFile(t TmuxConfig) *fileTmuxConfig {
 		SocketName:  &t.SocketName,
 		DetachKey:   &t.DetachKey,
 		StatusRight: &t.StatusRight,
+		Scrollback:  &t.Scrollback,
 		Mouse:       &t.Mouse,
 		StatusBar:   &t.StatusBar,
 	}

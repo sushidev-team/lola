@@ -298,6 +298,11 @@ type ptyStream struct {
 	pending  []byte
 	closed   bool
 	detached bool // teardown was frontend-initiated (Detach), so no exit event fires
+	// scrolled records that Scroll put this pane into tmux copy mode, so the next
+	// keystroke can leave it first (see Write). It is only ever an over-estimate:
+	// copy mode can also end on its own (`copy-mode -e` exits at the bottom), and
+	// the cancel that clears it is a no-op on a pane that has no mode.
+	scrolled bool
 }
 
 // Attach starts an interactive `tmux attach` to the named session in a PTY sized
@@ -398,8 +403,103 @@ func (t *TermService) Write(name, data string) error {
 	if s == nil {
 		return nil
 	}
+	// Typing snaps back to the live view, the way every terminal behaves. Without
+	// this, a keystroke after a wheel-scroll is swallowed by tmux's copy mode key
+	// table (where "q" quits, "/" searches and prose does nothing) instead of
+	// reaching the agent — the pane would look wedged. One extra exec, and only
+	// for the FIRST key after a scroll: the flag is cleared here, so a normal
+	// typing burst costs nothing.
+	if s.takeScrolled() {
+		t.cancelCopyMode(name)
+	}
 	_, err := s.f.Write([]byte(data))
 	return err
+}
+
+// takeScrolled clears the copy-mode flag and reports whether it was set, so the
+// cancel below runs exactly once per scroll.
+func (s *ptyStream) takeScrolled() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	was := s.scrolled
+	s.scrolled = false
+	return was
+}
+
+// cancelCopyMode leaves copy mode on the pane (a no-op when it has no mode).
+// Best-effort: a failure here costs a keystroke's worth of confusion, never the
+// keystroke itself, so the caller writes regardless.
+func (t *TermService) cancelCopyMode(name string) {
+	bin, err := t.tmux()
+	if err != nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_ = exec.CommandContext(ctx, bin, "-L", "lola", "copy-mode", "-q", "-t", "="+name+":").Run()
+}
+
+// maxScrollLines caps one Scroll request. The frontend coalesces a wheel burst
+// into a single call, and a flick on a trackpad can otherwise ask tmux to walk
+// thousands of lines in one command — bounded here because the number arrives
+// from the webview.
+const maxScrollLines = 500
+
+// Scroll moves the named pane's view through its tmux history: lines > 0 scrolls
+// BACK (up, into scrollback), lines < 0 scrolls forward again. Zero is a no-op.
+//
+// This is what makes a lola terminal scrollable in the app, and it deliberately
+// does NOT go through the terminal's mouse reporting. `tmux attach` runs on the
+// alternate screen, so xterm.js has no scrollback of its own to show — the
+// history lives in tmux, reachable only from copy mode. The alternatives both
+// lose: xterm's built-in alt-screen fallback turns the wheel into arrow keys
+// (which walks the agent's input history instead of scrolling), and tmux's own
+// wheel handling needs [tmux].mouse, which then costs one-click links because
+// tmux consumes the click. Driving copy mode from here works with the mouse
+// option either way.
+//
+// `copy-mode -e` enters the mode and makes it exit on its own once the view is
+// scrolled back to the bottom, so scrolling down returns the pane to normal
+// without any state to track. Both commands go in ONE tmux invocation.
+func (t *TermService) Scroll(name string, lines int) error {
+	bin, err := t.tmux()
+	if err != nil {
+		return err
+	}
+	if name == "" {
+		return errors.New("empty session name")
+	}
+	if lines == 0 {
+		return nil
+	}
+	verb := "scroll-up"
+	n := lines
+	if n < 0 {
+		verb, n = "scroll-down", -n
+	}
+	if n > maxScrollLines {
+		n = maxScrollLines
+	}
+	t.mu.Lock()
+	s := t.streams[name]
+	t.mu.Unlock()
+	if s != nil {
+		s.mu.Lock()
+		s.scrolled = true
+		s.mu.Unlock()
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	target := "=" + name + ":"
+	// One invocation, two commands: ";" is tmux's own command separator, passed
+	// as its own argv entry so no shell is involved.
+	out, err := exec.CommandContext(ctx, bin, "-L", "lola",
+		"copy-mode", "-e", "-t", target, ";",
+		"send-keys", "-X", "-N", strconv.Itoa(n), "-t", target, verb).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("scroll %s: %w: %s", name, err, out)
+	}
+	return nil
 }
 
 // Resize propagates an xterm resize to the PTY so the remote app reflows. Like
@@ -441,6 +541,12 @@ func (t *TermService) Detach(name string) error {
 	s.mu.Lock()
 	s.detached = true
 	s.mu.Unlock()
+	// Hand the pane back live. Copy mode is a property of the PANE, not of this
+	// client, so a terminal closed while scrolled back would leave the agent's
+	// output piling up behind a frozen view for whoever looks next.
+	if s.takeScrolled() {
+		t.cancelCopyMode(name)
+	}
 	t.closeStream(s)
 	return nil
 }

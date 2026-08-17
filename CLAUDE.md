@@ -362,6 +362,40 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   logged as `handed feedback to the worker` and read by nobody. A capture
   failure or any non-waiting classification (including a modal's
   `ActivityBlocked`) defers. One bounded tmux exec per delivery is the price.
+- **Scrolling a pane is a tmux COPY-MODE command, never a mouse event.** `tmux
+  attach` runs on the ALTERNATE screen, so the terminal it is attached to has no
+  scrollback of its own — the history lives in tmux and is only reachable from
+  copy mode. The app therefore intercepts the wheel in `LiveTerminal.svelte` and
+  calls `TermService.Scroll`, which runs `copy-mode -e` + `send-keys -X
+  scroll-up` on the pane. The rules around it:
+  - The custom wheel handler ALWAYS returns false. xterm's own alt-screen
+    fallback converts the wheel into cursor keys (`Terminal.ts:808`), which walks
+    the AGENT's input history instead of scrolling anything — that is the
+    "terminal is not scrollable" bug as users actually meet it.
+  - It intercepts whether or not `[tmux].mouse` is on. Routing the wheel through
+    mouse reporting instead would work only with that option, and enabling it
+    costs one-click links (tmux consumes the click). One path, one behaviour.
+  - Copy mode is a property of the PANE, so it outlives the click that entered
+    it: `TermService.Write` leaves it before the first keystroke after a scroll
+    (typing snaps to the bottom, as in any terminal), `Detach` leaves it on
+    teardown, and `tmux.SendKeys` cancels it before every daemon-side send — keys
+    delivered to a scrolled-back pane are read as copy-mode COMMANDS and the
+    payload is silently lost. Only INPUT is affected: `capture-pane` keeps
+    returning the live bottom of the pane while it is scrolled back, so pane
+    classification, the observer and the grid snapshots need no changes.
+  - `(*tmux.Client).ConfigureServer` is the ONE place lola sets a GLOBAL (`-g`)
+    tmux option, and `NewSession` calls it on every create. That is deliberate:
+    `history-limit` is read when a PANE is created (so it must precede
+    new-session and can never be applied retroactively), and every lola session —
+    agent, `-shell-N`, `-dev-N`, `-review` — has to agree, or scrolling works in
+    one tab and not the next. Isolation still holds: it is lola's own `-L` server.
+    Every session-CREATING caller must build its client through
+    `config.TmuxClient`, or its next spawn resets the server to the default
+    `scrollback` and silently discards the operator's. `mouse` is only ever
+    turned ON there (the TUI embed enables it for its own wheel forwarding — a
+    spawn writing "off" would disarm a surface someone is scrolling in), and
+    options tmux has dropped (`alternate-scroll`, gone in 3.5) do not belong in
+    it: they only log an "invalid option" advisory on every spawn.
 - **A MODAL is not a prompt, and `attention` is the one place that knows.**
   Claude Code interrupts a session with keypress-driven overlays (the auto-mode
   setup wizard and its siblings). Typed prose is swallowed by the widget and the

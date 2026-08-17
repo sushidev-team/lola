@@ -232,10 +232,35 @@ func TestSendKeysLiteralThenEnter(t *testing.T) {
 	if err := c.SendKeys(context.Background(), "main", "fix the CI failure"); err != nil {
 		t.Fatalf("SendKeys: %v", err)
 	}
-	// send-keys also takes a target-PANE, so "=main:" (not "=main").
-	want := "-L lola send-keys -t =main: -l fix the CI failure\n-L lola send-keys -t =main: Enter"
+	// send-keys also takes a target-PANE, so "=main:" (not "=main"). The
+	// copy-mode cancel comes first: a pane a human scrolled back reads keys as
+	// copy-mode COMMANDS, so the payload would never reach the agent.
+	want := "-L lola copy-mode -q -t =main:\n" +
+		"-L lola send-keys -t =main: -l fix the CI failure\n-L lola send-keys -t =main: Enter"
 	if args := loggedArgs(t, argsLog); args != want {
 		t.Errorf("invoked:\n%s\nwant literal text then Enter:\n%s", args, want)
+	}
+}
+
+// A copy-mode cancel that fails must not stop the send: the pane usually has no
+// mode at all, and "could not leave a mode it was not in" is not a reason to
+// drop a reaction. Only the send-keys result decides.
+func TestSendKeysProceedsWhenCopyModeCancelFails(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "tmux")
+	argsLog := filepath.Join(dir, "args.log")
+	// Fail only the copy-mode call; everything else succeeds. argv is
+	// "-L lola <subcommand> ...", so the subcommand is $3.
+	script := "#!/bin/sh\necho \"$@\" >> " + argsLog + "\n" +
+		"case \"$3\" in copy-mode) exit 1;; esac\nexit 0\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := (&Client{Bin: bin}).SendKeys(context.Background(), "main", "hello"); err != nil {
+		t.Fatalf("SendKeys: %v", err)
+	}
+	if args := loggedArgs(t, argsLog); !strings.Contains(args, "send-keys -t =main: -l hello") {
+		t.Errorf("payload not sent after a failed copy-mode cancel:\n%s", args)
 	}
 }
 
@@ -256,9 +281,66 @@ func TestNewSessionArgs(t *testing.T) {
 	if err := c.NewSession(context.Background(), "lola-NORI-12-1", "/work/nori", "claude"); err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
-	want := "-L lola new-session -d -s lola-NORI-12-1 -c /work/nori claude"
+	// The server default precedes the create — tmux reads history-limit when the
+	// PANE is born, so applying it afterwards would be dead configuration.
+	want := "-L lola set-option -g history-limit 10000\n" +
+		"-L lola new-session -d -s lola-NORI-12-1 -c /work/nori claude"
 	if args := loggedArgs(t, argsLog); args != want {
 		t.Errorf("invoked %q, want %q", args, want)
+	}
+}
+
+// The scroll defaults are lola's OWN: a session it spawns has the same history
+// on every machine, whatever ~/.tmux.conf set when the server started.
+func TestNewSessionAppliesConfiguredScrollback(t *testing.T) {
+	bin, argsLog := fakeTmux(t, "", "", 0)
+	c := &Client{Bin: bin, Scrollback: 50000}
+
+	if err := c.NewSession(context.Background(), "s1", "/work", ""); err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	if args := loggedArgs(t, argsLog); !strings.Contains(args, "-L lola set-option -g history-limit 50000") {
+		t.Errorf("configured scrollback not applied:\n%s", args)
+	}
+}
+
+// Mouse mode is opt-in and only ever turned ON: the TUI embed enables it for its
+// own wheel forwarding, so a spawn writing "off" would disarm a surface someone
+// is scrolling in. The app never needs it (it drives copy mode directly).
+func TestConfigureServerMouseIsOptInAndNeverTurnedOff(t *testing.T) {
+	bin, argsLog := fakeTmux(t, "", "", 0)
+	if err := (&Client{Bin: bin}).ConfigureServer(context.Background()); err != nil {
+		t.Fatalf("ConfigureServer: %v", err)
+	}
+	if args := loggedArgs(t, argsLog); strings.Contains(args, "mouse") {
+		t.Errorf("mouse must not be touched when unset, got:\n%s", args)
+	}
+
+	bin, argsLog = fakeTmux(t, "", "", 0)
+	if err := (&Client{Bin: bin, Mouse: true}).ConfigureServer(context.Background()); err != nil {
+		t.Fatalf("ConfigureServer: %v", err)
+	}
+	if args := loggedArgs(t, argsLog); !strings.Contains(args, "-L lola set-option -g mouse on") {
+		t.Errorf("Mouse=true must enable mouse mode server-wide, got:\n%s", args)
+	}
+}
+
+// A server option is chrome, not a precondition: a tmux that refuses it must
+// still get the session created.
+func TestNewSessionSurvivesServerOptionFailure(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "tmux")
+	argsLog := filepath.Join(dir, "args.log")
+	script := "#!/bin/sh\necho \"$@\" >> " + argsLog + "\n" +
+		"case \"$3\" in set-option) exit 1;; esac\nexit 0\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := (&Client{Bin: bin}).NewSession(context.Background(), "s1", "/work", ""); err != nil {
+		t.Fatalf("NewSession must not fail on a rejected server option: %v", err)
+	}
+	if args := loggedArgs(t, argsLog); !strings.Contains(args, "new-session -d -s s1") {
+		t.Errorf("session not created:\n%s", args)
 	}
 }
 
@@ -269,7 +351,7 @@ func TestNewSessionOmitsEmptyCommand(t *testing.T) {
 	if err := c.NewSession(context.Background(), "s1", "/work", ""); err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
-	want := "-L lola new-session -d -s s1 -c /work"
+	want := "-L lola set-option -g history-limit 10000\n-L lola new-session -d -s s1 -c /work"
 	if args := loggedArgs(t, argsLog); args != want {
 		t.Errorf("invoked %q, want default-shell form %q", args, want)
 	}

@@ -97,6 +97,28 @@ export function Resize(name: string, cols: number, rows: number): $CancellablePr
 }
 
 /**
+ * Scroll moves the named pane's view through its tmux history: lines > 0 scrolls
+ * BACK (up, into scrollback), lines < 0 scrolls forward again. Zero is a no-op.
+ * 
+ * This is what makes a lola terminal scrollable in the app, and it deliberately
+ * does NOT go through the terminal's mouse reporting. `tmux attach` runs on the
+ * alternate screen, so xterm.js has no scrollback of its own to show — the
+ * history lives in tmux, reachable only from copy mode. The alternatives both
+ * lose: xterm's built-in alt-screen fallback turns the wheel into arrow keys
+ * (which walks the agent's input history instead of scrolling), and tmux's own
+ * wheel handling needs [tmux].mouse, which then costs one-click links because
+ * tmux consumes the click. Driving copy mode from here works with the mouse
+ * option either way.
+ * 
+ * `copy-mode -e` enters the mode and makes it exit on its own once the view is
+ * scrolled back to the bottom, so scrolling down returns the pane to normal
+ * without any state to track. Both commands go in ONE tmux invocation.
+ */
+export function Scroll(name: string, lines: number): $CancellablePromise<void> {
+    return $Call.ByID(1163232830, name, lines);
+}
+
+/**
  * SetApp injects the Wails emitter. Called once from main before Run.
  */
 export function SetApp(app: application$0.App | null): $CancellablePromise<void> {

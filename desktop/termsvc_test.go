@@ -1,11 +1,13 @@
 package main
 
 import (
-	"github.com/sushidev-team/lola/internal/lolaenv"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/sushidev-team/lola/internal/lolaenv"
 )
 
 // fakeTmux installs a stub tmux that appends its argv to <dir>/args.log. Unless
@@ -215,5 +217,92 @@ func TestCloseShellAcceptsADevTab(t *testing.T) {
 	}
 	if !strings.Contains(tmuxLog(t, logPath), "kill-session -t =NORI-1-dev-1") {
 		t.Errorf("expected kill-session, log:\n%s", tmuxLog(t, logPath))
+	}
+}
+
+// Scrolling drives tmux's COPY MODE rather than the terminal's mouse reporting:
+// `tmux attach` runs on the alternate screen, so the history the user wants is
+// tmux's, and reaching it this way works whether or not [tmux].mouse is on.
+// `-e` is what makes the pane leave copy mode on its own at the bottom.
+func TestScrollEntersCopyModeAndScrollsUp(t *testing.T) {
+	bin, logPath := fakeTmux(t, false)
+	svc := &TermService{tmuxBin: bin, streams: map[string]*ptyStream{}}
+	if err := svc.Scroll("lola-nori-1", 3); err != nil {
+		t.Fatalf("Scroll: %v", err)
+	}
+	// One invocation, two tmux commands separated by ";".
+	want := "copy-mode -e -t =lola-nori-1: ; send-keys -X -N 3 -t =lola-nori-1: scroll-up"
+	if got := tmuxLog(t, logPath); !strings.Contains(got, want) {
+		t.Errorf("scroll log:\n%s\nwant %q", got, want)
+	}
+}
+
+// A negative count scrolls back toward the live view — the same command with the
+// sign carried into the verb, so the frontend never has to know tmux's spelling.
+func TestScrollDownUsesScrollDown(t *testing.T) {
+	bin, logPath := fakeTmux(t, false)
+	svc := &TermService{tmuxBin: bin, streams: map[string]*ptyStream{}}
+	if err := svc.Scroll("lola-nori-1", -2); err != nil {
+		t.Fatalf("Scroll: %v", err)
+	}
+	if got := tmuxLog(t, logPath); !strings.Contains(got, "-N 2 -t =lola-nori-1: scroll-down") {
+		t.Errorf("scroll log:\n%s\nwant a scroll-down of 2", got)
+	}
+}
+
+// The line count comes from the webview, so it is bounded here; zero and an
+// empty name never reach tmux at all.
+func TestScrollBoundsItsInput(t *testing.T) {
+	bin, logPath := fakeTmux(t, false)
+	svc := &TermService{tmuxBin: bin, streams: map[string]*ptyStream{}}
+	if err := svc.Scroll("lola-nori-1", 1<<30); err != nil {
+		t.Fatalf("Scroll: %v", err)
+	}
+	if got := tmuxLog(t, logPath); !strings.Contains(got, "-N 500 ") {
+		t.Errorf("scroll log:\n%s\nwant the count clamped to %d", got, maxScrollLines)
+	}
+	if err := svc.Scroll("lola-nori-1", 0); err != nil {
+		t.Fatalf("Scroll(0): %v", err)
+	}
+	if strings.Count(tmuxLog(t, logPath), "copy-mode") != 1 {
+		t.Errorf("a zero scroll must not run tmux:\n%s", tmuxLog(t, logPath))
+	}
+	if err := svc.Scroll("", 3); err == nil {
+		t.Error("empty session name must error")
+	}
+}
+
+// Typing snaps back to the live view. A pane left in copy mode reads keys as
+// copy-mode COMMANDS, so without this the first keystroke after a scroll would
+// vanish instead of reaching the agent — and it costs one exec, only once per
+// scroll (the flag is consumed).
+func TestWriteLeavesCopyModeOnceAfterAScroll(t *testing.T) {
+	bin, logPath := fakeTmux(t, false)
+	s := &ptyStream{}
+	svc := &TermService{tmuxBin: bin, streams: map[string]*ptyStream{"lola-nori-1": s}}
+	if err := svc.Scroll("lola-nori-1", 5); err != nil {
+		t.Fatalf("Scroll: %v", err)
+	}
+	if !s.scrolled {
+		t.Fatal("Scroll must record that the pane is in copy mode")
+	}
+	// Write needs a real fd to write into; a pipe stands in for the PTY.
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	defer w.Close()
+	s.f = w
+	go func() { io.Copy(io.Discard, r) }()
+
+	if err := svc.Write("lola-nori-1", "hello"); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if err := svc.Write("lola-nori-1", " again"); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if got := strings.Count(tmuxLog(t, logPath), "copy-mode -q"); got != 1 {
+		t.Errorf("copy-mode -q ran %d times, want exactly 1:\n%s", got, tmuxLog(t, logPath))
 	}
 }

@@ -395,7 +395,10 @@ func (m *rootModel) nextShellName(id string) string {
 // would silently lack [[project]].env, so a project command typed in it would
 // behave differently from the same command in the agent pane.
 func (m *rootModel) createShellSession(name, dir string) error {
-	c := m.sessions.tmuxClient(m.cfg.TmuxSocketName())
+	// Built from config rather than reusing the cached read-only client: this is
+	// the TUI's one session-CREATING call, and the scroll defaults it applies to
+	// the server come from [tmux] (see config.TmuxClient).
+	c := m.cfg.TmuxClient("", "")
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	return c.NewSession(ctx, name, dir, lolaenv.ShellCommand)
