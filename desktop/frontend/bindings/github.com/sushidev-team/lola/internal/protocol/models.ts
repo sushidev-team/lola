@@ -630,7 +630,9 @@ export interface StatusData {
 }
 
 /**
- * TicketRow is one Linear issue for the picker.
+ * TicketRow is one Linear issue for the picker. Everything past Branch is
+ * DISPLAY: it tells a human which issue to pick (what state it is in, who holds
+ * it, how stale it is) and is never read back on the openTicket path.
  */
 export interface TicketRow {
     "identifier": string;
@@ -640,15 +642,38 @@ export interface TicketRow {
     "priority": number;
 
     /**
+     * State is the team's own workflow-state name ("In Progress"); StateType the
+     * stable enum behind it (triage|backlog|unstarted|started|completed|canceled),
+     * which is what a client colours and sorts by — names are per-team text.
+     */
+    "state"?: string;
+    "stateType"?: string;
+    "assignee"?: string;
+    "labels"?: string[] | null;
+    "estimate"?: number;
+
+    /**
+     * Updated is a pre-formatted age since the issue last changed ("2h05m"),
+     * formatted daemon-side exactly like SessionInfo.Age so both surfaces read
+     * the same and neither has to parse a timestamp.
+     */
+    "updated"?: string;
+
+    /**
      * a lola session already holds this issue
      */
     "alreadyLive": boolean;
 }
 
 /**
- * TicketsData is Response.Data for cmd=tickets: the browsable issues.
+ * TicketsData is Response.Data for cmd=tickets: the browsable issues. Team is
+ * the UUID config keys by; TeamName/TeamKey are its resolved display identity —
+ * both may be empty (the lookup fails open), so a client renders the UUID only
+ * as a last resort.
  */
 export interface TicketsData {
     "team": string;
+    "teamName"?: string;
+    "teamKey"?: string;
     "issues": TicketRow[] | null;
 }

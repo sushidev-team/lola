@@ -317,6 +317,15 @@ type Session struct {
 	// guard so the github sink no-ops for a kind/PR it has already settled and a
 	// transient failure retries next cycle.
 	PostedGitHubPRs map[string]int `json:"posted_github_prs,omitempty"`
+
+	// InlineReviewPRs maps a provider kind -> the PR number for which that kind's
+	// findings were posted as ANCHORED, resolvable review threads (not as one flat
+	// comment). It is the fact the worker hand-off needs and cannot re-derive: the
+	// agent is told to work the threads and resolve them only when they actually
+	// exist, and the hand-off is usually delivered minutes later — often after a
+	// daemon restart — so the fact has to persist. A github post that fell back to
+	// a plain comment leaves no entry, which is what keeps the instruction honest.
+	InlineReviewPRs map[string]int `json:"inline_review_prs,omitempty"`
 }
 
 // DevClash is a dev tab that died because its port was already taken, together

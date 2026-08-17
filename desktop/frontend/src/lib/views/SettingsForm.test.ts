@@ -319,6 +319,41 @@ describe("SettingsForm", () => {
     expect(await screen.findByLabelText("Priority sort")).toBeInTheDocument();
   });
 
+  // The github transport is the only sink with two shapes, so the choice between
+  // them appears only once github is actually selected — and defaults to the
+  // resolvable-threads one.
+  describe("review provider github shape", () => {
+    const inlineBox = () => screen.queryByRole("checkbox", { name: /Inline PR threads/ });
+
+    async function openClaudeProvider() {
+      render(SettingsForm);
+      await screen.findByDisplayValue("60s");
+      await fireEvent.click(screen.getByRole("tab", { name: "Review" }));
+      await fireEvent.click(screen.getByRole("button", { name: "claude-session" }));
+    }
+
+    it("hides the shape toggle until the github transport is picked", async () => {
+      await openClaudeProvider();
+      expect(inlineBox()).not.toBeInTheDocument();
+
+      await fireEvent.click(screen.getByRole("checkbox", { name: /^github$/ }));
+      expect(inlineBox()).toBeChecked();
+    });
+
+    it("saves the opt-out back to the provider", async () => {
+      await openClaudeProvider();
+      await fireEvent.click(screen.getByRole("checkbox", { name: /^github$/ }));
+      await fireEvent.click(inlineBox()!);
+
+      await fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+      await waitFor(() => expect(SaveSettings).toHaveBeenCalled());
+      const saved = SaveSettings.mock.calls.at(-1)?.[0].reviewProviders ?? [];
+      const claude = saved.find((p: any) => p.provider === "claude-session");
+      expect(claude.transports).toContain("github");
+      expect(claude.githubInline).toBe(false);
+    });
+  });
+
   // The theme is the only setting with a live preview, and the only one that is
   // not carried on the SettingsDTO: [ui] is presentation rather than a
   // [defaults] key, and ConfigService.SetTheme is its sole writer.

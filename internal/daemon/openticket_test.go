@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/linear"
@@ -146,7 +147,7 @@ func TestHandleTickets(t *testing.T) {
 	fake := &linear.Fake{Issues: []linear.Issue{
 		{ID: "u1", Identifier: "FE-1", Title: "one", Priority: 1},
 		{ID: "u2", Identifier: "FE-2", Title: "two", Priority: 3},
-	}}
+	}, TeamList: []linear.Team{{ID: "team-1", Key: "FE", Name: "Frontend"}}}
 	d := newTestDaemon(t, testConfig(labelPoll("p1")), fake, &fakeNative{})
 	// A live session on FE-1 marks it already-live.
 	d.sessions.Upsert(session.Session{ID: "s1", Source: "native", Kind: session.KindLinear, Project: "p1", IssueUUID: "u1", Status: "working"})
@@ -167,6 +168,10 @@ func TestHandleTickets(t *testing.T) {
 	if !fe1.AlreadyLive {
 		t.Error("FE-1 has a live session and must be flagged AlreadyLive")
 	}
+	// The picker shows a team NAME; the UUID is config's key, not a label.
+	if data.TeamName != "Frontend" || data.TeamKey != "FE" {
+		t.Errorf("team identity must resolve, got name=%q key=%q", data.TeamName, data.TeamKey)
+	}
 
 	// A project without a team is a distinct error.
 	d2 := newTestDaemon(t, &config.Config{
@@ -175,5 +180,73 @@ func TestHandleTickets(t *testing.T) {
 	}, &linear.Fake{}, &fakeNative{})
 	if _, err := d2.handleTickets(context.Background(), protocol.TicketsArgs{Project: "manual"}); err == nil {
 		t.Fatal("a project with no team must error, not return an empty list")
+	}
+}
+
+// The picker ships the DISPLAY facts a human picks by (state, assignee, labels,
+// age) and orders the list so the top of it is the answer: started work first,
+// then urgency, then the freshest. Linear's own order buries an urgent
+// in-progress issue under the backlog.
+func TestHandleTicketsEnrichesAndOrders(t *testing.T) {
+	now := time.Now().UTC()
+	fresh := now.Add(-90 * time.Minute).Format(time.RFC3339)
+	old := now.Add(-72 * time.Hour).Format(time.RFC3339)
+	fake := &linear.Fake{Issues: []linear.Issue{
+		{ID: "u1", Identifier: "FE-1", Title: "backlog low", Priority: 4, StateName: "Backlog", StateType: "backlog", UpdatedAt: fresh},
+		{ID: "u2", Identifier: "FE-2", Title: "todo urgent", Priority: 1, StateName: "Todo", StateType: "unstarted", UpdatedAt: old},
+		{ID: "u3", Identifier: "FE-3", Title: "in progress", Priority: 3, StateName: "In Progress", StateType: "started",
+			UpdatedAt: old, Assignee: "Ada", LabelNames: []string{"bug", "api"}, Estimate: 3},
+		{ID: "u4", Identifier: "FE-4", Title: "no priority", Priority: 0, StateName: "Todo", StateType: "unstarted", UpdatedAt: fresh},
+	}}
+	d := newTestDaemon(t, testConfig(labelPoll("p1")), fake, &fakeNative{})
+
+	data, err := d.handleTickets(context.Background(), protocol.TicketsArgs{Project: "p1", Scope: "team"})
+	if err != nil {
+		t.Fatalf("handleTickets: %v", err)
+	}
+	var order []string
+	for _, r := range data.Issues {
+		order = append(order, r.Identifier)
+	}
+	// started, then unstarted by priority (urgent before "none"), then backlog.
+	if want := []string{"FE-3", "FE-2", "FE-4", "FE-1"}; !slices.Equal(order, want) {
+		t.Errorf("pick order = %v, want %v", order, want)
+	}
+
+	r := data.Issues[0]
+	if r.State != "In Progress" || r.StateType != "started" {
+		t.Errorf("state must ride the row, got %q/%q", r.State, r.StateType)
+	}
+	if r.Assignee != "Ada" || !slices.Equal(r.Labels, []string{"bug", "api"}) || r.Estimate != 3 {
+		t.Errorf("assignee/labels/estimate must ride the row, got %q %v %v", r.Assignee, r.Labels, r.Estimate)
+	}
+	if r.Updated != "3d0h" {
+		t.Errorf("Updated must be a formatted age, got %q", r.Updated)
+	}
+
+	// A team lookup that fails costs the NAME, never the list.
+	fake2 := &linear.Fake{Issues: []linear.Issue{{ID: "u1", Identifier: "FE-1"}},
+		Errs: map[string]error{"Teams": errors.New("boom")}}
+	d2 := newTestDaemon(t, testConfig(labelPoll("p1")), fake2, &fakeNative{})
+	data2, err := d2.handleTickets(context.Background(), protocol.TicketsArgs{Project: "p1", Scope: "team"})
+	if err != nil {
+		t.Fatalf("a failed team lookup must not fail the list: %v", err)
+	}
+	if data2.TeamName != "" || len(data2.Issues) != 1 {
+		t.Errorf("want unnamed team + 1 issue, got name=%q issues=%d", data2.TeamName, len(data2.Issues))
+	}
+}
+
+// An issue with no updatedAt (or an unparseable one) reports NO age rather than
+// a fabricated one — the picker renders a dash.
+func TestTicketAgeFailsClosed(t *testing.T) {
+	now := time.Now()
+	for _, stamp := range []string{"", "   ", "not-a-time"} {
+		if got := ticketAge(stamp, now); got != "" {
+			t.Errorf("ticketAge(%q) = %q, want empty", stamp, got)
+		}
+	}
+	if got := ticketAge(now.Add(-2*time.Hour).UTC().Format(time.RFC3339), now); got != "2h00m" {
+		t.Errorf("ticketAge(2h ago) = %q", got)
 	}
 }

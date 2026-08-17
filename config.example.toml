@@ -217,11 +217,23 @@ endpoint = "https://api.linear.app/graphql"
 #          per-provider bools: notify (desktop/Slack, gated by `notify`) and the
 #          worker hand-off (send-keys, gated by `send_to_agent`). Muting either
 #          independently is what preserves the legacy notify=false opt-out.
-#   github Post findings as a PLAIN GitHub PR comment (gh pr comment, body on
-#          stdin — never a review that could approve/request-changes). PASS
+#   github Post findings onto the PR — never a review that could approve or
+#          request changes. TWO SHAPES, picked by `github_inline`:
+#            true  (default) ONE pull-request review (event: COMMENT) carrying a
+#                  summary body plus one ANCHORED, RESOLVABLE thread per finding,
+#                  on the line it names — GitHub's reply box and "Resolve
+#                  conversation" button, like a CodeRabbit review. A finding whose
+#                  line is not in the PR's diff stays in the summary body (and the
+#                  body says how many did); an anchor may snap up to 3 lines to
+#                  reach the diff and says so in its own body when it does. When
+#                  the threads exist the worker hand-off also asks the agent to
+#                  reply to and resolve each thread it fixes.
+#            false ONE plain PR comment (gh pr comment, body on stdin).
+#          Inline degrades to the plain comment by itself: no diff, nothing
+#          anchorable, no write access, a 422. PASS
 #          shapes only; FORBIDDEN on coderabbit-watch (its feedback is already on
 #          the PR — re-posting is a self-feedback loop). Idempotent per PR. Any
-#          @coderabbitai mention in the body is neutralized, so lola posting its
+#          @coderabbitai mention in any body is neutralized, so lola posting its
 #          own review NEVER triggers a new CodeRabbit run.
 #   linear Mirror findings onto the session's Linear issue.
 # Only the worker hand-off sanitizes + idle-gates; notify/github/linear are HUMAN
@@ -245,6 +257,7 @@ endpoint = "https://api.linear.app/graphql"
 # command         = "coderabbit review --plain --type all"  # coderabbit-cli argv override (space-split); empty = runner default
 # timeout_seconds = 300                                     # hard cap per pass (pass shapes); must be >= 0
 # transports      = ["lola", "github"]                      # {lola (always forced present), github, linear}
+# github_inline   = true                                    # github: anchored resolvable threads (default) vs one flat comment
 # visible         = true                                    # run the pass in a watchable "<session>-review" tmux session; default true
 # notify          = true                                    # lola transport: notify a human; default true
 # send_to_agent   = true                                    # lola transport: hand findings to the worker; default true

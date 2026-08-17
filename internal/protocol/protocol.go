@@ -400,20 +400,39 @@ type TicketsArgs struct {
 	Scope   string `json:"scope,omitempty"`
 }
 
-// TicketsData is Response.Data for cmd=tickets: the browsable issues.
+// TicketsData is Response.Data for cmd=tickets: the browsable issues. Team is
+// the UUID config keys by; TeamName/TeamKey are its resolved display identity —
+// both may be empty (the lookup fails open), so a client renders the UUID only
+// as a last resort.
 type TicketsData struct {
-	Team   string      `json:"team"`
-	Issues []TicketRow `json:"issues"`
+	Team     string      `json:"team"`
+	TeamName string      `json:"teamName,omitempty"`
+	TeamKey  string      `json:"teamKey,omitempty"`
+	Issues   []TicketRow `json:"issues"`
 }
 
-// TicketRow is one Linear issue for the picker.
+// TicketRow is one Linear issue for the picker. Everything past Branch is
+// DISPLAY: it tells a human which issue to pick (what state it is in, who holds
+// it, how stale it is) and is never read back on the openTicket path.
 type TicketRow struct {
-	Identifier  string  `json:"identifier"`
-	UUID        string  `json:"uuid"`
-	Title       string  `json:"title"`
-	Branch      string  `json:"branch"`
-	Priority    float64 `json:"priority"`
-	AlreadyLive bool    `json:"alreadyLive"` // a lola session already holds this issue
+	Identifier string  `json:"identifier"`
+	UUID       string  `json:"uuid"`
+	Title      string  `json:"title"`
+	Branch     string  `json:"branch"`
+	Priority   float64 `json:"priority"`
+	// State is the team's own workflow-state name ("In Progress"); StateType the
+	// stable enum behind it (triage|backlog|unstarted|started|completed|canceled),
+	// which is what a client colours and sorts by — names are per-team text.
+	State     string   `json:"state,omitempty"`
+	StateType string   `json:"stateType,omitempty"`
+	Assignee  string   `json:"assignee,omitempty"`
+	Labels    []string `json:"labels,omitempty"`
+	Estimate  float64  `json:"estimate,omitempty"`
+	// Updated is a pre-formatted age since the issue last changed ("2h05m"),
+	// formatted daemon-side exactly like SessionInfo.Age so both surfaces read
+	// the same and neither has to parse a timestamp.
+	Updated     string `json:"updated,omitempty"`
+	AlreadyLive bool   `json:"alreadyLive"` // a lola session already holds this issue
 }
 
 // OpenTicketArgs is the argument payload for cmd=openTicket: start a Linear issue

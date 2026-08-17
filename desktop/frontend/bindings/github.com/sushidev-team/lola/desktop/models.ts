@@ -284,6 +284,11 @@ export interface ReviewProviderDTO {
      * lola (always) | github | linear
      */
     "transports": string[] | null;
+
+    /**
+     * github: anchored, resolvable threads instead of one comment
+     */
+    "githubInline": boolean;
     "notify": boolean;
     "sendToAgent": boolean;
 

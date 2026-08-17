@@ -83,6 +83,7 @@ enabled = true
 		Model:          "",
 		Author:         DefaultCodeRabbitAuthor,
 		Transports:     TransportSet{TransportLola},
+		GitHubInline:   true, // inline PR threads are the github transport's default shape
 		Notify:         true,
 		SendToAgent:    true,
 		Visible:        true, // pass shapes run in a watchable review pane by default
@@ -144,6 +145,7 @@ transports = ["github"]
 		TimeoutSeconds: 120,
 		Author:         DefaultCodeRabbitAuthor,
 		Transports:     TransportSet{TransportLola, TransportGitHub},
+		GitHubInline:   true, // absent key ⇒ resolvable inline threads
 		Notify:         false,
 		SendToAgent:    false,
 		Visible:        true,
@@ -157,6 +159,7 @@ transports = ["github"]
 		TimeoutSeconds: DefaultClaudeReviewTimeoutSeconds, // per-kind default: this pass reads files
 		Author:         DefaultCodeRabbitAuthor,
 		Transports:     TransportSet{TransportGitHub, TransportLola}, // lola force-appended
+		GitHubInline:   true,
 		Notify:         true,
 		SendToAgent:    true,
 		Visible:        true, // pass shapes run in a watchable review pane by default
@@ -273,6 +276,47 @@ func TestReviewProvidersCatalogOnlySaveLoadIdentity(t *testing.T) {
 	}
 }
 
+// github_inline defaults ON (resolvable inline threads are the github
+// transport's shape) and an explicit false is preserved — that is the escape
+// hatch back to one flat PR comment.
+func TestReviewProviderGitHubInlineOptOut(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	body := `
+[defaults]
+global_cap = 4
+
+[[review.provider]]
+provider = "claude-session"
+enabled = true
+transports = ["github"]
+github_inline = false
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.ReviewProviders) != 1 {
+		t.Fatalf("want 1 provider, got %d", len(c.ReviewProviders))
+	}
+	if c.ReviewProviders[0].GitHubInline {
+		t.Error("github_inline = false must be preserved")
+	}
+	// And it survives a save/load round trip (the key is written explicitly).
+	if err := c.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	again, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.ReviewProviders[0].GitHubInline {
+		t.Error("github_inline = false lost on round trip")
+	}
+}
+
 // A fresh &Config{} persists no [[review.provider]] tables and reloads to an
 // empty catalog.
 func TestReviewProvidersFreshConfigOmits(t *testing.T) {
@@ -339,17 +383,19 @@ send_to_agent = true
 			TimeoutSeconds: 120,
 			Author:         DefaultCodeRabbitAuthor,
 			Transports:     TransportSet{TransportLola, TransportLinear}, // comment_on_linear
+			GitHubInline:   true,                                         // catalog default, moot without the github transport
 			Notify:         true,                                         // cli always notifies
 			SendToAgent:    false,                                        // legacy send_to_agent=false preserved
 			Visible:        true,                                         // a pass is watchable, like the catalog default
 		},
 		{
-			Provider:    provCoderabbitWatch,
-			Enabled:     true,
-			Author:      "sonarcloud",
-			Transports:  TransportSet{TransportLola}, // comment_on_linear off
-			Notify:      false,                       // the notify=false opt-out is preserved
-			SendToAgent: true,
+			Provider:     provCoderabbitWatch,
+			Enabled:      true,
+			Author:       "sonarcloud",
+			Transports:   TransportSet{TransportLola}, // comment_on_linear off
+			GitHubInline: true,                        // catalog default; a watch takes no github transport
+			Notify:       false,                       // the notify=false opt-out is preserved
+			SendToAgent:  true,
 		},
 	}
 	if !reflect.DeepEqual(got, want) {

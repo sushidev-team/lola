@@ -330,6 +330,9 @@
         model: "",
         author: isWatch(kind) ? "coderabbitai" : "",
         transports: ["lola"],
+        // The github transport posts anchored, resolvable threads by default;
+        // it degrades to one flat comment by itself when nothing can be anchored.
+        githubInline: true,
         notify: true,
         sendToAgent: true,
         // A pass runs in a watchable "<session>-review" tmux session by default;
@@ -945,6 +948,20 @@
                     {/each}
                   </div>
                 </div>
+
+                <!-- Only the github transport has two shapes, so the choice
+                     appears only once it is selected. Inline posts one anchored,
+                     resolvable thread per finding (and asks the worker to close
+                     the ones it fixes); off posts a single flat comment. -->
+                {#if !isWatch(p.provider) && (p.transports ?? []).includes("github")}
+                  <div class={rowTopCls}>
+                    <span class="text-faint">GitHub shape</span>
+                    <label class="flex cursor-pointer items-center gap-2">
+                      <Checkbox disabled={d.reviewLegacy} bind:checked={p.githubInline} />
+                      <span>Inline PR threads (resolvable)</span>
+                    </label>
+                  </div>
+                {/if}
 
                 {#if !isWatch(p.provider)}
                   <div class={rowTopCls}>

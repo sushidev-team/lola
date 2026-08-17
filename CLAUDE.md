@@ -200,8 +200,17 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   summarizer, opt-in CodeRabbit QA pass, pane→answerable-question heuristic
   parser (agent-aware), structured health checks.
 - `internal/reviewmd` — presentation-only leaf (stdlib): renders a provider's
-  plain findings into the GitHub Markdown posted on the PR. One caller
-  (`postGithubSink`); see the invariant below.
+  plain findings into the GitHub Markdown posted on the PR — as one comment
+  (`Render`) or split into anchored, resolvable review threads plus a summary
+  (`RenderInline`). Two callers, both in `internal/daemon` (`postGithubSink` /
+  `postGithubInline`); see the invariant below.
+- `internal/diffanchor` — pure text leaf: which `(path, line)` pairs of a unified
+  diff may carry a GitHub inline review comment (RIGHT side, added + context
+  lines, `Nearest` for the bounded snap). It exists because the reviews endpoint
+  is ATOMIC — one comment on a line outside the diff rejects the whole review —
+  so the diff decides before anything is posted. It cannot live in `scm` (which
+  never parses) or `reviewmd` (which never execs); it fails open toward FEWER
+  anchors, never a wrong one.
 - `internal/tui` — the interactive poll manager + sessions view, AND the plain
   socket client (`Send`/`Logs`) reused by the CLI subcommands.
 - `main.go` — cobra wiring only; each subcommand marshals a `protocol.Request`
@@ -585,6 +594,40 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   bare disclosure triangle with no box of its own; do not add markup trying to
   give it one. `postGithubSink` is its one caller; the worker hand-off, the
   notification and the Linear comment keep the raw text byte for byte.
+- **The INLINE github shape is the plain comment plus anchors, and the plain
+  comment stays the floor.** With `github_inline = true` (the default) the same
+  findings go up as ONE `event: COMMENT` review — a summary body plus one
+  anchored thread per finding (`internal/daemon/reviewinline.go`) — because only a
+  review THREAD gets GitHub's reply box and "Resolve conversation" button, which
+  is the entire point: the worker can close what it fixed. Its rails, in order of
+  how much damage each prevents:
+  - The endpoint is ATOMIC: one comment on a line outside the PR's diff rejects
+    the WHOLE review with 422. So the diff is fetched first
+    (`scm.PRReviewTarget` — head sha + unified diff in one call), `diffanchor`
+    decides what may be anchored, and a finding whose line is not there stays in
+    the summary body. NEVER post an anchor the diff did not confirm.
+  - Everything degrades to `postGithubSink`'s plain comment — nil seams, an
+    unreadable diff, nothing anchorable, 403/422. The ONE case that does not is a
+    TRANSIENT gh failure: it leaves the settle guard unstamped and returns "done"
+    so the next cycle retries the INLINE post, because silently flattening a
+    review over a 502 would make the shape depend on the weather.
+  - An anchor may SNAP up to `inlineAnchorWindow` (3) lines to reach the diff —
+    the review instruction asks for the smallest line carrying the defect, which
+    is routinely a context line just outside a hunk — and a snapped thread states
+    the reported location in its own body. A comment sitting on a line it is not
+    about, with nothing saying so, is worse than one in the summary.
+  - The summary's tally counts EVERY finding, threads included, and names how many
+    could not be anchored: the PR must never show fewer findings than the review
+    produced.
+  - `neutralizeBotTriggers` applies to EVERY body, thread bodies included — the
+    "@coderabbitai in a finding must never start a new CodeRabbit run" guarantee
+    is per-body, not per-post.
+  - The worker instruction (`inlineThreadNote`) is DERIVED at send time from
+    `Session.InlineReviewPRs[kind] == PR.Number`, not stashed: a hand-off is
+    usually delivered long after the post that created the threads, often after a
+    restart. It is lola's OWN text, appended AFTER the untrusted findings, and it
+    is silent unless the threads exist for exactly this PR — a fallback comment
+    must never tell an agent to resolve conversations that are not there.
 - **The review instruction's FORMAT block is a CONTRACT with `reviewmd`, and its
   fields are split by AUDIENCE.** `reviewclaude`'s `-p` prompt asks for
   `**Grade:** impact=… confidence=… effort=…` (three fixed enums) + `**Gist:**`

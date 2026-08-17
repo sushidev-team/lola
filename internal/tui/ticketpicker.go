@@ -93,11 +93,20 @@ func (m *rootModel) ticketRows() []protocol.TicketRow {
 	q := strings.ToLower(p.filter)
 	out := make([]protocol.TicketRow, 0, len(p.data.Issues))
 	for _, is := range p.data.Issues {
-		if strings.Contains(strings.ToLower(is.Identifier+" "+is.Title), q) {
+		if strings.Contains(strings.ToLower(ticketHaystack(is)), q) {
 			out = append(out, is)
 		}
 	}
 	return out
+}
+
+// ticketHaystack is what `/` filters over: everything the row DISPLAYS, so
+// typing a state ("progress"), a label ("bug") or an assignee narrows the list
+// the same way an identifier does.
+func ticketHaystack(is protocol.TicketRow) string {
+	parts := []string{is.Identifier, is.Title, is.State, is.Assignee}
+	parts = append(parts, is.Labels...)
+	return strings.Join(parts, " ")
 }
 
 func (m *rootModel) updateTicketPicker(msg tea.Msg) (tea.Model, tea.Cmd) {

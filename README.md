@@ -718,6 +718,7 @@ provider per kind** is allowed (guards key by kind).
 | `model` | string | `claude-session` | Optional `--model` for the headless `claude -p` review; empty = claude's default. |
 | `author` | string | `coderabbit-watch` | Login **substring** matched (case-insensitively) against each comment author. Default `"coderabbitai"`. |
 | `transports` | []string | all | Multiselect over `{lola, github, linear}`; see below. Default `["lola"]`; `lola` is always forced present. |
+| `github_inline` | bool | pass shapes with the `github` transport | Post the findings as a pull-request **review** with one anchored, **resolvable** thread per finding instead of a single flat comment. Default `true`; it degrades to the flat comment on its own whenever the anchors or the API say no. |
 | `notify` | bool | all | `lola` transport: surface findings to a human (desktop/Slack). Default `true`. |
 | `send_to_agent` | bool | all | `lola` transport: hand findings to the worker via the send-keys gate. Default `true`. |
 | `visible` | bool | pass shapes | Run the pass in its own tmux session `<session>-review` so you can watch it and read its output afterwards. Default `true`. |
@@ -747,8 +748,10 @@ over three friendly tokens:
   (desktop/Slack, gated by `notify`) and the **worker hand-off** sink (send-keys,
   gated by `send_to_agent`). This is what preserves the legacy `notify = false`
   opt-out — mute either sink independently while the other still fires.
-- **`github`** — post findings as a **plain GitHub PR comment** (`gh pr comment`,
-  body on stdin, never a review that could approve/request-changes). **Pass
+- **`github`** — post findings onto the PR. Two shapes, chosen by
+  `github_inline`: **inline review threads** (the default) or one **plain PR
+  comment**. Either way it is never a review that could approve or request
+  changes — the inline shape posts `event: COMMENT`. **Pass
   shapes only** — validation forbids `github` on a `coderabbit-watch` (its
   feedback is already on the PR; re-posting it would be a self-feedback loop).
   The post is idempotent per PR (a settle guard prevents per-cycle spam; a
@@ -774,6 +777,34 @@ over three friendly tokens:
   field raw. Findings a provider emits in some other shape are posted verbatim
   (unparsed ones under a plain heading), and a missing repo/branch simply drops
   the links.
+
+  With `github_inline = true` (the default) that same rendering is split across
+  **one review thread per finding**, anchored on the line the finding names — so
+  each finding gets GitHub's own reply box and **Resolve conversation** button,
+  the way a CodeRabbit review reads, and the summary comment keeps only the
+  callout, the tally, and the findings that could not be anchored. Three rules
+  make that safe and honest:
+  - The GitHub reviews endpoint is **atomic**: one comment naming a line outside
+    the PR's diff rejects the whole review. lola therefore reads the PR's head
+    SHA and diff first, anchors only lines the diff actually carries, and lets a
+    finding whose line is not there travel in the summary body — which says how
+    many did, so the PR never shows fewer findings than the review produced.
+  - A reviewer anchors at "the smallest line that carries the defect", which is
+    often a context line just outside a hunk, so an anchor may **snap** up to
+    three lines to reach the diff. A snapped thread states the reported location
+    in its own body — a comment sitting on a line it is not about, silently, is
+    worse than one in the summary.
+  - Everything degrades to the plain comment: no `gh`, an unreadable diff,
+    nothing anchorable, no write access, a 422 after all. Only a **transient**
+    failure keeps the inline shape (the guard stays unstamped and the next cycle
+    retries), so the shape never depends on the weather.
+
+  When the threads exist, the **worker hand-off** additionally tells the agent
+  they are there and asks it to work them: reply to a thread with what changed
+  and resolve it, or reply why it disagrees and leave it open — with the `gh api
+  graphql` calls to list, reply to and resolve a thread. That instruction is
+  lola's own text appended after the findings, and it is only added for the PR
+  the threads were actually posted for.
 - **`linear`** — mirror findings onto the session's Linear issue as a comment.
 
 Only the **worker hand-off** sanitizes and idle-gates its text; **notify /

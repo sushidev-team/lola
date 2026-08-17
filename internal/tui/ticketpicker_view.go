@@ -25,6 +25,9 @@ func (m *rootModel) ticketPickerLines() []string {
 	out = append(out, m.vitalsBar(W))
 
 	crumb := faintText.Render("lola ▸ "+p.project+" ▸ ") + "tickets"
+	if team := ticketTeamLabel(p.data); team != "" {
+		crumb += faintText.Render("  ·  " + team)
+	}
 	right := "scope " + scopeLabel(p.scope)
 	if p.data != nil {
 		right += faintText.Render(fmt.Sprintf("  ·  %d", len(p.data.Issues)))
@@ -42,6 +45,26 @@ func (m *rootModel) ticketPickerLines() []string {
 	out = append(out, m.ticketMessage(W))
 	out = append(out, m.ticketKeybar(W))
 	return fitHeight(out, H)
+}
+
+// ticketTeamLabel names the team a human recognizes — "Frontend (FE)" — and
+// falls back to the raw UUID ONLY when the daemon could not resolve one (its
+// lookup fails open). A bare UUID in the header is noise: it is config's key,
+// not something anybody reads.
+func ticketTeamLabel(d *protocol.TicketsData) string {
+	if d == nil {
+		return ""
+	}
+	switch {
+	case d.TeamName != "" && d.TeamKey != "":
+		return d.TeamName + " (" + d.TeamKey + ")"
+	case d.TeamName != "":
+		return d.TeamName
+	case d.TeamKey != "":
+		return d.TeamKey
+	default:
+		return d.Team
+	}
 }
 
 func scopeLabel(scope string) string {
@@ -67,10 +90,14 @@ func (m *rootModel) ticketPanel(w, panelH int) []string {
 		if len(rows) == 0 {
 			body = append(body, faintText.Render("  No issues in this scope — [ ] switch scope, r refresh"))
 		} else {
-			header := []string{"ISSUE", "TITLE", "PRIORITY"}
+			team := p.scope == "team"
+			header := []string{"ISSUE", "TITLE", "STATUS", "PRIORITY", "UPD"}
+			if team {
+				header = append(header, "ASSIGNEE")
+			}
 			cells := make([][]string, 0, len(rows))
 			for _, is := range rows {
-				cells = append(cells, ticketRowCells(is))
+				cells = append(cells, ticketRowCells(is, team))
 			}
 			widths := colWidths(header, cells)
 			body = append(body, tblHeader.Render(padCells(header, widths)))
@@ -91,12 +118,52 @@ func (m *rootModel) ticketPanel(w, panelH int) []string {
 	return box(paneTitle("Tickets", ""), body, w, panelH, true)
 }
 
-func ticketRowCells(is protocol.TicketRow) []string {
+func ticketRowCells(is protocol.TicketRow, teamScope bool) []string {
 	id := is.Identifier
 	if is.AlreadyLive {
 		id = faintText.Render(id + " ●")
 	}
-	return []string{id, truncPlain(is.Title, 46), ticketPriority(is.Priority)}
+	upd := is.Updated
+	if upd == "" {
+		upd = "—"
+	}
+	cells := []string{
+		id,
+		truncPlain(is.Title, 40),
+		ticketState(is.State, is.StateType),
+		ticketPriority(is.Priority),
+		faintText.Render(upd),
+	}
+	if teamScope {
+		who := is.Assignee
+		if who == "" {
+			who = "—"
+		}
+		cells = append(cells, faintText.Render(truncPlain(who, 14)))
+	}
+	return cells
+}
+
+// ticketState renders the team's own state NAME, coloured by the stable state
+// TYPE — the names are per-team free text ("Ready for QA", "Doing"), so the type
+// is the only thing worth branching on.
+func ticketState(name, stateType string) string {
+	if name == "" {
+		return faintText.Render("—")
+	}
+	name = truncPlain(name, 14)
+	switch stateType {
+	case "started":
+		return goodText.Render(name)
+	case "triage":
+		return warnText.Render(name)
+	case "unstarted":
+		return name
+	case "completed", "canceled":
+		return faintText.Render(name)
+	default:
+		return faintText.Render(name)
+	}
 }
 
 func ticketPriority(pri float64) string {

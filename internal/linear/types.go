@@ -26,5 +26,16 @@ type Issue struct {
 	BranchName string
 	Priority   float64
 	CreatedAt  string
+	UpdatedAt  string
+	// Workflow state as Linear reports it: StateName is the team's own label
+	// ("In Progress", "Ready for QA"), StateType the stable enum behind it
+	// (triage|backlog|unstarted|started|completed|canceled). Dispatch filters on
+	// state IDs and never reads these; they exist for the pickers, which show a
+	// human what an issue currently is.
+	StateName  string
+	StateType  string
+	Estimate   float64
+	Assignee   string
 	LabelIDs   []string
+	LabelNames []string // parallel to LabelIDs, display only
 }
