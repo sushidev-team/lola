@@ -17,8 +17,10 @@ import (
 	"github.com/creack/pty"
 	"github.com/wailsapp/wails/v3/pkg/application"
 
+	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/devtab"
 	"github.com/sushidev-team/lola/internal/lolaenv"
+	"github.com/sushidev-team/lola/internal/tmux"
 )
 
 // TermService bridges lola's isolated tmux server (tmux -L lola) to the webview.
@@ -175,6 +177,12 @@ func (t *TermService) Shell(shell, worktree string) (string, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	// The scroll defaults FIRST, exactly as the CLI's (*tmux.Client).NewSession
+	// applies them (see its doc comment): tmux reads history-limit when a pane is
+	// created, and a shell tab can be the session that starts a cold server — a
+	// session whose agent pane died takes the whole server with it, and its shell
+	// tab would then be born with tmux's 2000-line default.
+	coldServer := t.configureServer(ctx, bin) != nil
 	// -d creates it detached (the frontend attaches via Attach); the trailing
 	// command starts the user's default shell with the worktree's .lola/env
 	// exported, the same line the agent pane and the TUI's shell tabs use — a
@@ -185,7 +193,32 @@ func (t *TermService) Shell(shell, worktree string) (string, error) {
 		"-s", shell, "-c", worktree, lolaenv.ShellCommand).CombinedOutput(); err != nil {
 		return "", fmt.Errorf("new shell %s: %w: %s", shell, err, out)
 	}
+	if coldServer {
+		_ = t.configureServer(ctx, bin) // nothing existed to configure before; there is now
+	}
 	return shell, nil
+}
+
+// configureServer applies lola's scroll defaults to the lola tmux server, the
+// app-side twin of (*tmux.Client).ConfigureServer — same two options, same
+// source: [tmux].scrollback and [tmux].mouse, so both surfaces agree and mouse
+// mode is decided by config rather than by the machine's ~/.tmux.conf. An
+// unreadable config falls back to lola's own defaults rather than leaving
+// tmux's. Best-effort — the error is returned only so the caller can tell a COLD
+// server (nothing to set an option on yet) from a configured one.
+func (t *TermService) configureServer(ctx context.Context, bin string) error {
+	lines, mouse := tmux.DefaultScrollback, "off"
+	if path, err := config.DefaultPath(); err == nil {
+		if cfg, err := config.Load(path); err == nil {
+			lines = cfg.Tmux.ScrollbackLines()
+			if cfg.Tmux.Mouse {
+				mouse = "on"
+			}
+		}
+	}
+	return exec.CommandContext(ctx, bin, "-L", "lola",
+		"set-option", "-g", "history-limit", strconv.Itoa(lines), ";",
+		"set-option", "-g", "mouse", mouse).Run()
 }
 
 // hasSession reports whether the lola tmux server already has an exactly-named
@@ -298,6 +331,22 @@ type ptyStream struct {
 	pending  []byte
 	closed   bool
 	detached bool // teardown was frontend-initiated (Detach), so no exit event fires
+
+	// scrollMu serializes everything that moves the pane in or out of tmux copy
+	// mode: the enter in Scroll, the flag below, and the cancel in Write/Detach.
+	// It is NOT mu (which guards the byte buffer on the read path) because it is
+	// held across a tmux exec, and it has to be held that long: Wails dispatches
+	// each webview call on its own goroutine, so a keystroke arriving between
+	// "Scroll marked the pane scrolled" and "Scroll actually entered copy mode"
+	// would consume the flag before there was a mode to leave — and the pane
+	// would then sit in copy mode with nothing left to cancel it, swallowing
+	// every later keystroke.
+	scrollMu sync.Mutex
+	// scrolled records that Scroll put this pane into tmux copy mode, so the next
+	// keystroke can leave it first (see Write). It is only ever an over-estimate:
+	// copy mode can also end on its own (`copy-mode -e` exits at the bottom), and
+	// the cancel that clears it is a no-op on a pane that has no mode.
+	scrolled bool
 }
 
 // Attach starts an interactive `tmux attach` to the named session in a PTY sized
@@ -398,8 +447,89 @@ func (t *TermService) Write(name, data string) error {
 	if s == nil {
 		return nil
 	}
+	// Typing snaps back to the live view, the way every terminal behaves. Without
+	// this, a keystroke after a wheel-scroll is swallowed by tmux's copy mode key
+	// table (where "q" quits, "/" searches and prose does nothing) instead of
+	// reaching the agent — the pane would look wedged. One extra exec, and only
+	// for the FIRST key after a scroll: the flag is cleared here, so a normal
+	// typing burst costs nothing.
+	//
+	// The lock is held ACROSS the write, not just the flag: it both makes the
+	// cancel and the keystroke one step (a concurrent Scroll cannot slip copy
+	// mode in between them) and orders concurrent writes, since each one arrives
+	// on its own Wails goroutine.
+	s.scrollMu.Lock()
+	defer s.scrollMu.Unlock()
+	if s.scrolled {
+		s.scrolled = false
+		t.cancelCopyMode(name)
+	}
 	_, err := s.f.Write([]byte(data))
 	return err
+}
+
+// cancelCopyMode leaves copy mode on the pane (a no-op when it has no mode).
+// Best-effort: a failure here costs a keystroke's worth of confusion, never the
+// keystroke itself, so the caller writes regardless.
+func (t *TermService) cancelCopyMode(name string) {
+	bin, err := t.tmux()
+	if err != nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_ = t.scrollClient(bin).LeaveCopyMode(ctx, name)
+}
+
+// Scroll moves the named pane's view back through its history: lines > 0 scrolls
+// BACK (up), lines < 0 forward again, zero is a no-op. It is the whole reason a
+// lola terminal scrolls in the app: `tmux attach` runs on the alternate screen,
+// so xterm.js has no scrollback of its own and its fallback for that case turns
+// the wheel into cursor keys — which walks the AGENT's input history instead of
+// scrolling anything.
+//
+// The work is (*tmux.Client).ScrollPane's, shared with the TUI, and it is what
+// decides WHICH history to move: the program's own (an agent on the alternate
+// screen keeps its transcript itself and asks for the wheel) or tmux's copy mode
+// (a plain shell). All this needs to know is which one happened, because only
+// copy mode leaves a mode behind for the next keystroke to cancel.
+func (t *TermService) Scroll(name string, lines int) error {
+	bin, err := t.tmux()
+	if err != nil {
+		return err
+	}
+	if name == "" {
+		return errors.New("empty session name")
+	}
+	if lines == 0 {
+		return nil
+	}
+	t.mu.Lock()
+	s := t.streams[name]
+	t.mu.Unlock()
+	if s != nil {
+		// Held across the exec below, so a keystroke can never consume the flag
+		// before the pane is actually in copy mode (see ptyStream.scrollMu).
+		s.scrollMu.Lock()
+		defer s.scrollMu.Unlock()
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	how, err := t.scrollClient(bin).ScrollPane(ctx, name, lines)
+	if s != nil {
+		s.scrolled = how == tmux.ScrollCopyMode
+	}
+	if err != nil {
+		return fmt.Errorf("scroll %s: %w", name, err)
+	}
+	return nil
+}
+
+// scrollClient is the tmux client the scroll path runs through. The socket is
+// the hardcoded "lola" every other exec in this file uses, NOT [tmux].socket_name
+// — the app attaches to that server, so a scroll must address the same one.
+func (t *TermService) scrollClient(bin string) *tmux.Client {
+	return &tmux.Client{Bin: bin, SocketName: "lola"}
 }
 
 // Resize propagates an xterm resize to the PTY so the remote app reflows. Like
@@ -441,6 +571,15 @@ func (t *TermService) Detach(name string) error {
 	s.mu.Lock()
 	s.detached = true
 	s.mu.Unlock()
+	// Hand the pane back live. Copy mode is a property of the PANE, not of this
+	// client, so a terminal closed while scrolled back would leave the agent's
+	// output piling up behind a frozen view for whoever looks next.
+	s.scrollMu.Lock()
+	if s.scrolled {
+		s.scrolled = false
+		t.cancelCopyMode(name)
+	}
+	s.scrollMu.Unlock()
 	t.closeStream(s)
 	return nil
 }

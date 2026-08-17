@@ -51,9 +51,11 @@ const spies = vi.hoisted(() => {
     fit: vi.fn(),
     refresh: vi.fn(),
     attachKey: vi.fn(),
+    attachWheel: vi.fn(),
     clearTextureAtlas: vi.fn(),
     attach: vi.fn(async () => {}),
     detach: vi.fn(async () => {}),
+    scroll: vi.fn(async () => {}),
     openURL: vi.fn(async () => {}),
     webLinksHandler: undefined as undefined | ((e: MouseEvent, uri: string) => void),
   };
@@ -74,6 +76,8 @@ vi.mock("@xterm/xterm", () => ({
     public focus = vi.fn();
     // Captured so the Ctrl-Q escape-hatch tests can drive it directly.
     public attachCustomKeyEventHandler = spies.attachKey;
+    // Same for the wheel handler the scroll tests drive.
+    public attachCustomWheelEventHandler = spies.attachWheel;
     public refresh = spies.refresh;
     public write = vi.fn();
     public writeln = vi.fn();
@@ -120,6 +124,7 @@ vi.mock("@bindings/desktop", () => ({
     Detach: spies.detach,
     Write: vi.fn(),
     Resize: vi.fn(),
+    Scroll: spies.scroll,
   },
 }));
 
@@ -263,6 +268,60 @@ describe("LiveTerminal font ordering", () => {
       const activate = (spies.options.linkHandler as { activate: (e: MouseEvent, uri: string) => void }).activate;
       activate(new MouseEvent("click"), "https://github.com/acme/widgets/pull/7");
       expect(spies.openURL).toHaveBeenCalledWith("https://github.com/acme/widgets/pull/7");
+    });
+  });
+
+  // `tmux attach` runs on the ALTERNATE screen, so xterm has no scrollback of
+  // its own here and its built-in fallback turns the wheel into cursor keys —
+  // which walks the agent's input history instead of scrolling. The pane's real
+  // history lives in tmux, so the wheel is forwarded to TermService.Scroll and
+  // xterm is told to keep its hands off.
+  describe("wheel scrolling", () => {
+    /** Boot a terminal and hand back the wheel handler it registered. */
+    async function bootWheel(name = "s11") {
+      render(LiveTerminal, { props: { name, webgl: false, interactive: true } });
+      gate.state.ready.settle(true);
+      await vi.waitFor(() => expect(spies.open).toHaveBeenCalledTimes(1));
+      return spies.attachWheel.mock.calls[0][0] as (e: WheelEvent) => boolean;
+    }
+
+    // jsdom reports clientHeight 0, so the component falls back to a 17px cell —
+    // the same number TERM_FONT lands on. Three cells' worth of pixels.
+    const wheel = (deltaY: number, deltaMode = 0) => ({ deltaY, deltaMode }) as WheelEvent;
+
+    it("scrolls the tmux pane back and refuses xterm's arrow-key fallback", async () => {
+      const handler = await bootWheel();
+      expect(handler(wheel(-51))).toBe(false); // wheel up = back into history
+      await vi.waitFor(() => expect(spies.scroll).toHaveBeenCalledWith("s11", 3));
+    });
+
+    it("scrolls forward again on a downward wheel", async () => {
+      const handler = await bootWheel("s12");
+      expect(handler(wheel(51))).toBe(false);
+      await vi.waitFor(() => expect(spies.scroll).toHaveBeenCalledWith("s12", -3));
+    });
+
+    it("coalesces a burst into one tmux call", async () => {
+      const handler = await bootWheel("s13");
+      for (let i = 0; i < 4; i++) handler(wheel(-51));
+      await vi.waitFor(() => expect(spies.scroll).toHaveBeenCalledTimes(1));
+      expect(spies.scroll).toHaveBeenCalledWith("s13", 12);
+    });
+
+    // A trackpad delivers a few pixels at a time; rounding each event to zero
+    // would make slow scrolling do nothing at all.
+    it("accumulates sub-line deltas instead of dropping them", async () => {
+      const handler = await bootWheel("s14");
+      for (let i = 0; i < 6; i++) handler(wheel(-3));
+      await vi.waitFor(() => expect(spies.scroll).toHaveBeenCalledWith("s14", 1));
+    });
+
+    it("reads line and page deltas in the cell's units", async () => {
+      const handler = await bootWheel("s15");
+      handler(wheel(-2, 1)); // DOM_DELTA_LINE
+      await vi.waitFor(() => expect(spies.scroll).toHaveBeenCalledWith("s15", 2));
+      handler(wheel(-1, 2)); // DOM_DELTA_PAGE — one screen of 24 rows
+      await vi.waitFor(() => expect(spies.scroll).toHaveBeenCalledWith("s15", 24));
     });
   });
 

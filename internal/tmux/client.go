@@ -52,6 +52,12 @@ type Session struct {
 	Activity time.Time
 }
 
+// DefaultScrollback is the pane history (tmux `history-limit`) lola gives every
+// session on its own server when nothing else is configured. tmux's own default
+// is 2000 lines, which an agent burns through in a couple of tool calls — by the
+// time anyone scrolls back to read what happened, the interesting part is gone.
+const DefaultScrollback = 10000
+
 // Client shells out to tmux. Bin is an absolute path or "tmux"; a bare name
 // is resolved via exec.LookPath (launchd contexts should pass an absolute
 // path, see SPEC). SocketName selects the isolated tmux server via "-L"; an
@@ -59,6 +65,16 @@ type Session struct {
 type Client struct {
 	Bin        string
 	SocketName string
+	// Scrollback is the pane history size ConfigureServer applies to lola's own
+	// tmux server; 0 means DefaultScrollback. It is a SERVER-wide default rather
+	// than a per-session option because tmux reads history-limit when a pane is
+	// CREATED — setting it on a session that already exists changes nothing.
+	Scrollback int
+	// Mouse mirrors [tmux].mouse: ConfigureServer writes tmux's mouse mode for
+	// the whole lola server from it, on OR off, so every session (agent, shell,
+	// dev tab, review pane) treats mouse events the same way and the machine's
+	// own tmux config cannot decide it.
+	Mouse bool
 	// Dir is the working directory every tmux command runs from. It matters
 	// only for the command that first starts the tmux server, because that
 	// process's cwd becomes the SERVER's cwd for its whole lifetime — and the
@@ -264,6 +280,12 @@ func (c *Client) CapturePane(ctx context.Context, name string, lines int) (strin
 const submitSettleDelay = 600 * time.Millisecond
 
 func (c *Client) SendKeys(ctx context.Context, name, text string) error {
+	// Leave copy mode first. A human scrolling the pane back (the app's wheel, or
+	// tmux's own wheel binding with [tmux].mouse on) puts it in copy mode, where
+	// keys are read as copy-mode COMMANDS instead of reaching the agent — so a
+	// reaction or a review hand-off typed into a scrolled-back pane is silently
+	// mangled. It is a no-op on a pane that has no mode.
+	_ = c.LeaveCopyMode(ctx, name)
 	if _, _, err := c.run(ctx, "send-keys", "-t", paneTarget(name), "-l", text); err != nil {
 		return err
 	}
@@ -275,6 +297,129 @@ func (c *Client) SendKeys(ctx context.Context, name, text string) error {
 		}
 	}
 	_, _, err := c.run(ctx, "send-keys", "-t", paneTarget(name), "Enter")
+	return err
+}
+
+// ScrollTransport says how ScrollPane moved a pane's view, because the two
+// halves are not interchangeable to the caller: only ScrollCopyMode leaves the
+// pane in a mode a later keystroke has to cancel.
+type ScrollTransport int
+
+const (
+	// ScrollApp handed the wheel to the program running in the pane.
+	ScrollApp ScrollTransport = iota
+	// ScrollCopyMode moved tmux's own copy-mode view over the pane's history.
+	ScrollCopyMode
+)
+
+// MaxScrollLines caps one ScrollPane request. Callers coalesce a wheel burst
+// into a single call and the count can originate in a UI, so it is bounded here
+// rather than trusted.
+const MaxScrollLines = 500
+
+// ScrollPane scrolls a session's active pane by lines: positive scrolls BACK
+// (up, into history), negative forward again, zero is a no-op. It is the one
+// scroll path for both surfaces, and it exists because NEITHER surface has a
+// mouse event to hand tmux — the app intercepts the wheel in the webview, the
+// TUI reads it as a bubbletea message.
+//
+// There are two histories, and picking the wrong one is the whole bug this
+// replaces. A full-screen program (Claude Code, vim, less) runs on the
+// ALTERNATE screen, where tmux keeps NO scrollback at all: copy mode there opens
+// on an empty history and reads "[0/0]" — nothing to scroll, whatever the
+// history-limit says. Those programs keep their own transcript and ask for the
+// wheel themselves (mouse_any_flag), so the scroll has to reach THEM. A plain
+// shell asks for nothing and its history is exactly tmux's, so there copy mode
+// is the only answer. Which is why the pane is asked first — the same test
+// tmux's own wheel binding makes:
+//
+//	if -F '#{?pane_in_mode,1,#{mouse_any_flag}}' 'send -M' 'copy-mode -e'
+//
+// The app half writes the SGR wheel sequence straight to the PANE, not through
+// tmux's mouse handling, so it works with [tmux].mouse off — that option only
+// decides whether tmux itself consumes the events of a real mouse.
+func (c *Client) ScrollPane(ctx context.Context, name string, lines int) (ScrollTransport, error) {
+	if name == "" {
+		return ScrollApp, errors.New("tmux: scroll: empty session name")
+	}
+	if lines == 0 {
+		return ScrollApp, nil
+	}
+	up := lines > 0
+	n := lines
+	if !up {
+		n = -n
+	}
+	if n > MaxScrollLines {
+		n = MaxScrollLines
+	}
+	target := paneTarget(name)
+	inMode, wantsMouse, w, h := c.paneScrollFacts(ctx, target)
+	if !inMode && wantsMouse {
+		// One send-keys with the sequence repeated: -l is literal, so tmux passes
+		// the bytes to the program untouched instead of parsing them as key names.
+		if _, _, err := c.run(ctx, "send-keys", "-l", "-t", target, wheelSeq(up, n, w, h)); err != nil {
+			return ScrollApp, err
+		}
+		return ScrollApp, nil
+	}
+	verb := "scroll-up"
+	if !up {
+		verb = "scroll-down"
+	}
+	// "-e" leaves copy mode again as soon as the view reaches the bottom, so
+	// scrolling forward returns the pane to normal with no state to track.
+	if _, _, err := c.run(ctx, "copy-mode", "-e", "-t", target, ";",
+		"send-keys", "-X", "-N", strconv.Itoa(n), "-t", target, verb); err != nil {
+		return ScrollCopyMode, err
+	}
+	return ScrollCopyMode, nil
+}
+
+// paneScrollFacts asks the pane the one question ScrollPane needs, in a single
+// exec. It FAILS TOWARD COPY MODE: a pane that cannot be described is most
+// likely gone, and copy mode is the half that cannot type anything into a
+// program by mistake.
+func (c *Client) paneScrollFacts(ctx context.Context, target string) (inMode, wantsMouse bool, width, height int) {
+	out, _, err := c.run(ctx, "display-message", "-p", "-t", target,
+		"#{pane_in_mode} #{mouse_any_flag} #{pane_width} #{pane_height}")
+	if err != nil {
+		return false, false, 0, 0
+	}
+	f := strings.Fields(strings.TrimSpace(out))
+	if len(f) < 4 {
+		return false, false, 0, 0
+	}
+	width, _ = strconv.Atoi(f[2])
+	height, _ = strconv.Atoi(f[3])
+	return f[0] == "1", f[1] == "1", width, height
+}
+
+// wheelSeq builds n SGR wheel events (button 64 up / 65 down) aimed at the
+// middle of a w×h pane. The position is what a program uses to decide WHICH of
+// its regions scrolls, so the centre is the one point that is always inside the
+// content; a zero size (the pane could not be measured) falls back to 1;1.
+func wheelSeq(up bool, n, w, h int) string {
+	btn := 65
+	if up {
+		btn = 64
+	}
+	col, row := 1, 1
+	if w > 1 {
+		col = w / 2
+	}
+	if h > 1 {
+		row = h / 2
+	}
+	one := fmt.Sprintf("\x1b[<%d;%d;%dM", btn, col, row)
+	return strings.Repeat(one, n)
+}
+
+// LeaveCopyMode cancels any mode on the session's active pane, returning it to
+// the live view. A no-op on a pane that has no mode, so callers do not have to
+// ask first.
+func (c *Client) LeaveCopyMode(ctx context.Context, name string) error {
+	_, _, err := c.run(ctx, "copy-mode", "-q", "-t", paneTarget(name))
 	return err
 }
 
@@ -294,15 +439,98 @@ func (c *Client) AttachArgs(name string) []string {
 	return []string{c.bin(), "-L", c.socket(), "attach-session", "-t", "=" + name}
 }
 
+// scrollback is the resolved pane history size; 0 (unset) means the lola
+// default rather than tmux's, so a Client built without config still gets a
+// usable amount of history.
+func (c *Client) scrollback() int {
+	if c.Scrollback > 0 {
+		return c.Scrollback
+	}
+	return DefaultScrollback
+}
+
+// ConfigureServer applies lola's own scroll defaults to the whole "-L" server.
+// It is the ONE place lola sets a GLOBAL (-g) tmux option: unlike the chrome in
+// ConfigureSession, these are exactly the settings every lola session must share
+// — the agent pane, its shell tabs, its dev tabs and the review pane are all
+// separate sessions, and "scrolling works here but not there" is the bug this
+// prevents. Isolation still holds, because the server is lola's own socket.
+//
+// Setting them here (rather than reading the machine's tmux config) is the
+// point: a session spawned by lola scrolls the same on every machine, whatever
+// ~/.tmux.conf says. tmux sources that file when the server starts, so lola's
+// values land afterwards and win.
+//
+//   - history-limit is read when a pane is CREATED, so running this before
+//     new-session is what gives the new pane its full history. Current tmux also
+//     grows an existing pane's history when the option rises, so a late call is
+//     not wasted — it just cannot bring back lines already trimmed.
+//   - mouse is written on EVERY call, on or off, so [tmux].mouse is the whole
+//     truth about it: a machine whose ~/.tmux.conf sets `mouse on` would
+//     otherwise hand tmux the clicks in a lola pane (costing one-click links)
+//     even though the operator never asked for it. The cost of owning it is
+//     that a spawn resets what the TUI's ensureTmuxMouse turned on for its own
+//     wheel forwarding — with mouse off, that embed scrolls again only after the
+//     TUI re-enables it.
+//
+// It needs a RUNNING server and deliberately does not try to bootstrap one:
+// `start-server` on a cold socket brings a server up and lets it exit again in
+// the same breath (a tmux server with no sessions does not linger), taking the
+// option with it. On a cold server this therefore fails, and NewSession re-runs
+// it once the session exists — see there.
+//
+// Only options every supported tmux still has belong here (alternate-scroll,
+// the obvious third candidate, was dropped by tmux 3.5 and merely logs an
+// "invalid option" on every spawn now). Best-effort by contract: it joins
+// failures into the returned error for the caller to log, but a server option
+// must never fail a spawn.
+func (c *Client) ConfigureServer(ctx context.Context) error {
+	mouse := "off"
+	if c.Mouse {
+		mouse = "on"
+	}
+	cmds := [][]string{
+		{"set-option", "-g", "history-limit", strconv.Itoa(c.scrollback())},
+		{"set-option", "-g", "mouse", mouse},
+	}
+	var errs []error
+	for _, a := range cmds {
+		if _, _, err := c.run(ctx, a...); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
 // NewSession creates a detached session named name running command in dir.
 // An empty command starts the default shell.
+//
+// The server defaults are applied first, and deliberately on EVERY create: it is
+// one cheap set-option, it is the moment tmux reads history-limit for the pane
+// about to exist, and the tmux server outlives the daemon — so a process that
+// never creates a session cannot be relied on to have configured the server this
+// one is creating in.
+//
+// They are applied a SECOND time when that first attempt failed, which is what
+// covers a COLD server: with no tmux running there is nothing to set the option
+// on (and no way to pre-start one, see ConfigureServer), so the very first
+// session of the day would otherwise be born with tmux's 2000-line default and
+// keep it — precisely the "cannot scroll" symptom. The retry lands once the
+// session exists; current tmux grows the pane's history to match.
 func (c *Client) NewSession(ctx context.Context, name, dir, command string) error {
+	// Best-effort: a scroll default must never fail a spawn.
+	coldServer := c.ConfigureServer(ctx) != nil
 	args := []string{"new-session", "-d", "-s", name, "-c", dir}
 	if command != "" {
 		args = append(args, command)
 	}
-	_, _, err := c.run(ctx, args...)
-	return err
+	if _, _, err := c.run(ctx, args...); err != nil {
+		return err
+	}
+	if coldServer {
+		_ = c.ConfigureServer(ctx)
+	}
+	return nil
 }
 
 // killTreeGrace is how long a pane's process group gets to exit on SIGTERM

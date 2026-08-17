@@ -846,9 +846,9 @@ func (d *Daemon) tickMutex(name string) *sync.Mutex {
 // lock cannot deadlock.
 func (d *Daemon) tmuxClient() *tmux.Client {
 	d.mu.Lock()
-	sock := d.cfg.TmuxSocketName()
+	c := d.cfg.TmuxClient("tmux", d.home)
 	d.mu.Unlock()
-	return &tmux.Client{Bin: "tmux", SocketName: sock, Dir: d.home}
+	return c
 }
 
 // newNativeRuntime assembles the production native runtime for cfg: worktrees
@@ -863,7 +863,7 @@ func newNativeRuntime(cfg *config.Config, home, lolaBin string, linearKey func()
 	return &runtime.Native{
 		Cfg:       cfg,
 		WT:        &worktree.Manager{Root: filepath.Join(home, "worktrees")},
-		Tmux:      &tmux.Client{Bin: "tmux", SocketName: cfg.TmuxSocketName(), Dir: home},
+		Tmux:      cfg.TmuxClient("tmux", home),
 		LolaBin:   lolaBin,
 		Home:      home,
 		LinearKey: linearKey,

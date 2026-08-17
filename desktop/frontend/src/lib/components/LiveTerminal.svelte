@@ -60,6 +60,10 @@
   let ro: ResizeObserver | undefined;
   let resizeTimer: ReturnType<typeof setTimeout> | undefined;
   let disposed = false;
+  // Wheel → tmux copy-mode scroll, coalesced. See onWheel() below.
+  let wheelPixels = 0;
+  let wheelLines = 0;
+  let wheelTimer: ReturnType<typeof setTimeout> | undefined;
   // The Attach round-trip, tracked so teardown can Detach the SAME session
   // exactly once and never before it was attached (see boot() and onDestroy).
   let attach: Promise<unknown> | undefined;
@@ -105,6 +109,48 @@
     gl?.clearTextureAtlas();
     fit?.fit();
     term.refresh(0, term.rows - 1);
+  }
+
+  // The wheel scrolls the tmux pane, and it has to be driven by hand because
+  // `tmux attach` runs on the ALTERNATE screen: xterm's own scrollback stays
+  // empty, so there is nothing here to scroll and `term.scrollLines` is inert.
+  // TermService.Scroll asks the pane which history it actually has — an agent
+  // keeps its own transcript and wants the wheel itself, a plain shell has
+  // tmux's copy mode — and neither route needs [tmux].mouse.
+  //
+  // Returning false is the load-bearing half: it stops xterm's alt-screen
+  // fallback, which converts the wheel into cursor keys (Terminal.ts:808) and
+  // therefore walks the AGENT's input history instead of scrolling the pane —
+  // the "not scrollable" bug as it actually presents. The handler runs on both
+  // of xterm's wheel paths (its own listener and the mouse-reporting one), so
+  // this is the only place the decision has to be made.
+  //
+  // Lines are accumulated rather than sent per event: one flick is dozens of
+  // wheel events, and each Scroll is a tmux exec. The pixel remainder is kept so
+  // a slow trackpad drag still adds up to a line instead of rounding to nothing.
+  function onWheel(ev: WheelEvent): boolean {
+    if (!term) return true;
+    const cell = term.rows > 0 && host.clientHeight > 0 ? host.clientHeight / term.rows : 17;
+    let px = ev.deltaY;
+    if (ev.deltaMode === 1) px *= cell; // DOM_DELTA_LINE
+    else if (ev.deltaMode === 2) px *= cell * term.rows; // DOM_DELTA_PAGE
+    wheelPixels += px;
+    const lines = Math.trunc(wheelPixels / cell);
+    wheelPixels -= lines * cell;
+    // deltaY is positive scrolling DOWN; Scroll counts positive as scrolling
+    // BACK into history, so the sign flips here.
+    wheelLines -= lines;
+    if (wheelLines !== 0 && wheelTimer === undefined) {
+      wheelTimer = setTimeout(flushWheel, 16);
+    }
+    return false;
+  }
+
+  function flushWheel(): void {
+    wheelTimer = undefined;
+    const lines = wheelLines;
+    wheelLines = 0;
+    if (lines !== 0 && !disposed) void TermService.Scroll(name, lines).catch(() => {});
   }
 
   onMount(() => {
@@ -212,6 +258,8 @@
       return true;
     });
 
+    term.attachCustomWheelEventHandler(onWheel);
+
     fit.fit();
     const { cols, rows } = term;
 
@@ -300,6 +348,7 @@
     offExit?.();
     ro?.disconnect();
     clearTimeout(resizeTimer);
+    clearTimeout(wheelTimer);
     // Detach only a session we actually attached, and only AFTER Attach settles.
     // Tearing down during the pre-Attach font wait leaves `attach` undefined
     // (nothing to detach); tearing down while Attach is in flight defers the

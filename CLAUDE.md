@@ -426,6 +426,64 @@ each of which owns exactly one external tool or concern behind an **exec seam**
     the user's own settings stay untouched). Keep BOTH halves — Claude Code
     ships dialogs faster than that list can track them, and the classifier is
     what catches the ones it doesn't know.
+- **There are TWO scrollbacks, and `tmux.ScrollPane` is the one place that picks
+  between them.** An agent runs FULL-SCREEN, i.e. on the alternate screen, where
+  tmux keeps **no scrollback at all**: `#{history_size}` is 0 and copy mode opens
+  on an empty history reading `[0/0]`, whatever `history-limit` says. Such a
+  program keeps its own transcript and asks for the wheel itself
+  (`#{mouse_any_flag}`). A plain shell asks for nothing and its history IS
+  tmux's. So the pane is asked first — the same test tmux's own wheel binding
+  makes (`if -F '#{?pane_in_mode,1,#{mouse_any_flag}}' 'send -M' 'copy-mode
+  -e'`) — and the scroll goes either to the PROGRAM (an SGR wheel sequence
+  written with `send-keys -l`) or to COPY MODE (`copy-mode -e` + `send-keys -X
+  scroll-up`). Getting this wrong is not a degraded scroll, it is no scroll:
+  copy mode on an agent pane shows `[0/0]` and moves nothing. The rules:
+  - Neither route needs `[tmux].mouse`. The wheel bytes go to the PANE, not
+    through tmux's mouse handling — that option only decides whether tmux itself
+    consumes the events of a REAL mouse, which costs selection and hands clicks
+    to the program. Both surfaces therefore scroll with it off.
+  - Both surfaces call the same method: the app intercepts the wheel in
+    `LiveTerminal.svelte` → `TermService.Scroll`, the TUI in `forwardWheel`.
+    Neither may re-derive the routing; the TUI's old "write SGR into the tmux
+    CLIENT" needed `mouse on` and is exactly what broke when the option was
+    finally honoured as written.
+  - The app's custom wheel handler ALWAYS returns false. xterm's own alt-screen
+    fallback converts the wheel into cursor keys (`Terminal.ts:808`), which walks
+    the AGENT's input history instead of scrolling anything — that is the
+    "terminal is not scrollable" bug as users actually meet it.
+  - An unanswerable pane FAILS TOWARD COPY MODE: it is most likely gone, and copy
+    mode is the half that cannot type into a program by mistake.
+  - Copy mode is a property of the PANE, so it outlives the wheel that entered
+    it: `TermService.Write` leaves it before the first keystroke after a scroll
+    (typing snaps to the bottom, as in any terminal), `Detach` leaves it on
+    teardown, and `tmux.SendKeys` cancels it before every daemon-side send — keys
+    delivered to a scrolled-back pane are read as copy-mode COMMANDS and the
+    payload is silently lost. Only INPUT is affected: `capture-pane` keeps
+    returning the live bottom of the pane while it is scrolled back, so pane
+    classification, the observer and the grid snapshots need no changes.
+  - `(*tmux.Client).ConfigureServer` is the ONE place lola sets a GLOBAL (`-g`)
+    tmux option, and `NewSession` calls it on every create — TWICE when the first
+    call failed, because a COLD server cannot be configured at all: there is
+    nothing to set an option on, and tmux cannot pre-start one (`start-server` on
+    an empty socket brings a server up and lets it exit again in the same
+    breath). Without that retry the first session after a reboot keeps tmux's
+    2000-line default for its whole life. `desktop/termsvc.go`'s `Shell` repeats
+    the pattern, since a session whose agent pane died takes the server with it.
+    That is deliberate:
+    `history-limit` is read when a PANE is created (so it must precede
+    new-session and can never be applied retroactively), and every lola session —
+    agent, `-shell-N`, `-dev-N`, `-review` — has to agree, or scrolling works in
+    one tab and not the next. Isolation still holds: it is lola's own `-L` server.
+    Every session-CREATING caller must build its client through
+    `config.TmuxClient`, or its next spawn resets the server to the default
+    `scrollback` and silently discards the operator's. `mouse` is written in BOTH
+    states, so `[tmux].mouse` is the whole truth about it and a machine whose
+    `~/.tmux.conf` says `mouse on` cannot hand tmux the clicks in a lola pane —
+    the cost is that a spawn resets what the TUI's `ensureTmuxMouse` turned on
+    for its own wheel forwarding. Options tmux has dropped
+    (`alternate-scroll`, gone in 3.5) do not belong in it: they only log an
+    "invalid option" advisory on every spawn — check a new one against a real
+    tmux before adding it.
 - **Teardown is THREE things, and each has its own fail-closed rule.**
   `runtime.Kill` (the merged-cleanup path and `lola kill`) takes down: (1) the
   agent's tmux session AND its auxiliary sessions — `<id>-shell-N` tabs, the

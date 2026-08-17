@@ -363,13 +363,25 @@ endpoint = "https://api.linear.app/graphql"
 # tmux's bar restated a subset of that one row lower and cost a row of
 # scrollback. Turn it on if you attach in a bare terminal, where nothing else
 # names the session; status_right and the LOLA brand only render when it is on.
+#
+# SCROLLING works with `mouse` either way, in both the app and the TUI: lola
+# asks the pane which history it has — a full-screen program (the agent) keeps
+# its own transcript and is handed the wheel, a plain shell is scrolled through
+# tmux's copy mode — and drives the right one. `mouse` only decides who consumes
+# the events of a REAL mouse: with it on, tmux takes clicks and drags, which
+# costs text selection in the app's terminals. `scrollback` sizes the SHELL kind
+# of history (tmux history-limit) on lola's own server, so it holds whatever
+# ~/.tmux.conf says; tmux reads it when a pane is created, so a change applies
+# to the NEXT session.
 # ---------------------------------------------------------------------------
 # [tmux]
 # socket_name = "lola"   # isolated tmux server socket (tmux -L); its own server, never your default one
 # detach_key = ""        # opt-in single detach key (e.g. "F12"); empty keeps tmux's default Ctrl-b d
 # status_bar = false      # show tmux's own status bar in the session; off = the embedded terminal is chrome-free
 # status_right = ""       # raw tmux status-right override; empty = lola's built-in branded bar (needs status_bar)
-# mouse = false           # enable tmux mouse mode inside the session
+# scrollback = 10000      # tmux history-limit for shell/dev panes; tmux's own default is 2000
+# mouse = false           # let tmux consume real mouse clicks/drags; NOT needed to scroll (see above).
+#                         # Written to lola's server in either state, so this key decides it, not ~/.tmux.conf.
 
 # ---------------------------------------------------------------------------
 # [ui] — OPTIONAL appearance. Presentation only: nothing the daemon does reads

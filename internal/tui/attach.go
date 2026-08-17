@@ -29,16 +29,19 @@ const viewerBuildTimeout = 10 * time.Second
 // surface. It talks to tmux directly (no daemon needed) so it works even when
 // the daemon is down.
 func RunAttach(session string) error {
-	sock, dir := "", ""
+	dir := ""
 	if home, err := config.Home(); err == nil {
 		dir = home
 	}
+	// The viewer below CREATES a session, so this client carries the [tmux]
+	// scroll defaults too — an unreadable config just leaves lola's own.
+	cfg := &config.Config{}
 	if path, err := config.DefaultPath(); err == nil {
-		if cfg, err := config.Load(path); err == nil {
-			sock = cfg.TmuxSocketName()
+		if loaded, err := config.Load(path); err == nil {
+			cfg = loaded
 		}
 	}
-	c := &tmux.Client{Bin: "tmux", SocketName: sock, Dir: dir}
+	c := cfg.TmuxClient("tmux", dir)
 	if !c.Available() {
 		return fmt.Errorf("tmux is not on PATH")
 	}

@@ -164,7 +164,6 @@ func (m *rootModel) syncAgentPreview() tea.Cmd {
 		}
 	}
 	m.agentTerm = &termView{term: t, sessionID: sel.ID, tmuxName: target, kind: kind, title: title, w: cw, h: ch}
-	m.ensureTmuxMouse() // so wheel-scroll reaches the embed once focused
 	cmds := []tea.Cmd{m.armEmbed()}
 	if !m.spinning {
 		m.spinning = true
@@ -395,7 +394,10 @@ func (m *rootModel) nextShellName(id string) string {
 // would silently lack [[project]].env, so a project command typed in it would
 // behave differently from the same command in the agent pane.
 func (m *rootModel) createShellSession(name, dir string) error {
-	c := m.sessions.tmuxClient(m.cfg.TmuxSocketName())
+	// Built from config rather than reusing the cached read-only client: this is
+	// the TUI's one session-CREATING call, and the scroll defaults it applies to
+	// the server come from [tmux] (see config.TmuxClient).
+	c := m.cfg.TmuxClient("", "")
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	return c.NewSession(ctx, name, dir, lolaenv.ShellCommand)
@@ -445,70 +447,44 @@ func (m *rootModel) handleEmbedKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// forwardWheel encodes a mouse-wheel event as an SGR mouse sequence and sends it
-// to the focused embed so the inner app (Claude Code's history, tmux copy-mode)
-// scrolls. Coordinates are translated to the embed's own grid. This only takes
-// effect when the agent's tmux has `mouse on` (ensureTmuxMouse enables it) and
-// the inner app handles the wheel.
+// forwardWheel scrolls the focused embed's tmux pane, through the SAME
+// (*tmux.Client).ScrollPane both surfaces use — so the TUI and the app agree on
+// which history moves (the inner program's own, or tmux's copy mode) instead of
+// each guessing.
+//
+// It deliberately does NOT write an SGR sequence into the embedded tmux CLIENT
+// any more. That route only worked with `mouse on` — tmux drops mouse input from
+// a client otherwise — which is why the embed needed ensureTmuxMouse and why
+// scrolling died the moment [tmux].mouse was honoured as written. Addressing the
+// PANE has no such dependency.
+//
+// Bounded and best-effort: a wheel notch must never block the UI, so it runs on
+// its own goroutine with a short deadline and a failure is simply a notch that
+// did nothing.
 func (m *rootModel) forwardWheel(mo tea.Mouse) {
 	e := m.currentEmbed()
 	if e == nil {
 		return
 	}
-	btn := 64 // SGR wheel-up
+	lines := wheelLines
 	if mo.Button == tea.MouseWheelDown {
-		btn = 65
+		lines = -lines
 	}
-	col, row := m.embedMouseCoord(mo.X, mo.Y)
-	e.term.Write([]byte(fmt.Sprintf("\x1b[<%d;%d;%dM", btn, col, row)))
+	c, name := m.cfg.TmuxClient("", ""), e.tmuxName
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), wheelScrollTimeout)
+		defer cancel()
+		_, _ = c.ScrollPane(ctx, name, lines)
+	}()
 }
 
-// embedMouseCoord maps a screen mouse position to the focused embed's 1-based
-// grid, clamped in-bounds (mirrors the focused mainColumn layout offsets).
-func (m *rootModel) embedMouseCoord(x, y int) (int, int) {
-	W := m.width
-	if W <= 0 {
-		W = 100
-	}
-	railW := 32
-	if W < 104 {
-		railW = 28
-	}
-	const panelTop = 6 // vitals(1) + Sessions strip(4) + top border(1)
-	panelLeft := railW + 2
-	w, h := m.agentSize()
-	return clampInt(x-panelLeft+1, 1, w), clampInt(y-panelTop+1, 1, h)
-}
-
-func clampInt(v, lo, hi int) int {
-	if v < lo {
-		return lo
-	}
-	if v > hi {
-		return hi
-	}
-	return v
-}
-
-// ensureTmuxMouse enables `mouse on` on the lola tmux server once, best-effort,
-// so wheel events forwarded to an embedded agent actually reach the inner app.
-func (m *rootModel) ensureTmuxMouse() {
-	if m.tmuxMouseSet {
-		return
-	}
-	m.tmuxMouseSet = true
-	bin := os.Getenv("TMUX_BIN")
-	if bin == "" {
-		bin = "tmux"
-	}
-	sock := m.cfg.TmuxSocketName()
-	// mouse on: tmux processes wheel events from the client.
-	_ = exec.Command(bin, "-L", sock, "set-option", "-g", "mouse", "on").Run()
-	// alternate-scroll off: do NOT translate the wheel into arrow keys for
-	// alt-screen apps (that recalls input history instead of scrolling) — forward
-	// the real wheel so the inner app (Claude) can scroll its own history.
-	_ = exec.Command(bin, "-L", sock, "set-option", "-g", "alternate-scroll", "off").Run()
-}
+const (
+	// wheelLines is how far one notch scrolls, matching the three lines a
+	// terminal emulator sends per notch.
+	wheelLines = 3
+	// wheelScrollTimeout bounds the tmux calls behind one notch.
+	wheelScrollTimeout = 2 * time.Second
+)
 
 // handleEmbedPaste forwards pasted text to the focused embed as a BRACKETED
 // paste, so the child (agent / vim) treats it as one paste rather than
