@@ -76,6 +76,9 @@ type Daemon struct {
 	lin      linear.API // nil until the Linear API key resolves
 	linOK    bool
 	viewerID string
+	// teamIDs caches team UUID -> Team so the pickers can show a team's NAME
+	// without a Linear round trip per open. Display only; nothing keys by it.
+	teamIDs map[string]linear.Team
 	// Native runtime (PLAN P2): lola's own worktree+tmux+claude spawner.
 	// nil until Run wires the real one; tests inject fakes directly.
 	native     NativeAPI
@@ -254,6 +257,18 @@ type Daemon struct {
 	// fake. Looked up under d.mu at call time like the pass seams.
 	postPRComment func(ctx context.Context, repo string, pr int, body string) error
 
+	// postPRReview / prReviewTarget are the INLINE half of the same transport
+	// (see postGithubInline): one COMMENT review carrying a summary body plus an
+	// anchored, RESOLVABLE thread per finding — the only shape GitHub gives a
+	// "Resolve conversation" button. prReviewTarget fetches the two facts the
+	// anchoring needs first (the head sha the review pins to and the PR's unified
+	// diff); postPRReview posts the result. Both are set once in newDaemon and
+	// looked up under d.mu at call time; a nil seam, a fetch failure, or a
+	// permanent rejection all fall back to postPRComment, so the plain comment is
+	// still the floor this feature stands on.
+	postPRReview   func(ctx context.Context, repo string, pr int, commitID, body string, comments []scm.InlineComment) error
+	prReviewTarget func(ctx context.Context, repo string, pr int) (headSHA, diff string, err error)
+
 	// authedLogin resolves lola's OWN gh login (scm.AuthedLogin), consulted at most
 	// ONCE per daemon lifetime via resolveSelfLogin (selfLoginOnce) so the watch's
 	// self-feedback filter costs no per-cycle exec. selfLogin caches the result.
@@ -359,6 +374,8 @@ func newDaemon(cfg *config.Config, lin linear.API, logger *log.Logger, home stri
 	// by tests after construction.
 	d.coderabbitComments = scmc.CodeRabbitCommentsExcluding
 	d.postPRComment = scmc.PostPRComment
+	d.postPRReview = scmc.PostPRReview
+	d.prReviewTarget = scmc.PRReviewTarget
 	d.authedLogin = scmc.AuthedLogin
 	d.sendKeys = func(ctx context.Context, tmuxName, text string) error {
 		return d.tmuxClient().SendKeys(ctx, tmuxName, text)

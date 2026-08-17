@@ -264,7 +264,7 @@ func Render(o Options, findings string) string {
 	if len(fs) == 0 {
 		return clip(heading(o.Title, nil)+"\n\n"+body, MaxBytes)
 	}
-	return clip(build(o, fs, preamble), MaxBytes)
+	return clip(build(o, fs, fs, preamble, ""), MaxBytes)
 }
 
 // parse splits the body into findings plus any text preceding the first header
@@ -321,9 +321,20 @@ func splitHeaderRest(rest string) (loc, title string) {
 // emitted most-severe-first while the byte budget lasts; once it is spent the
 // remaining findings keep their summary line only, so a long review degrades by
 // hiding detail rather than by losing findings.
-func build(o Options, fs []finding, preamble string) string {
+//
+// `all` and `fs` are separate because the INLINE transport (see inline.go) posts
+// most findings as anchored review threads and leaves only the rest in this
+// body: the tally in the header must still describe the WHOLE review (`all`),
+// while the blocks below it cover just the findings that stayed here (`fs`).
+// note, when set, is a plain sentence placed under the header — it is where the
+// inline transport says how many findings went to threads instead.
+func build(o Options, all, fs []finding, preamble, note string) string {
 	var b strings.Builder
-	b.WriteString(alertHeader(o.Title, fs))
+	b.WriteString(alertHeader(o.Title, all))
+	if note != "" {
+		b.WriteString("\n\n")
+		b.WriteString(note)
+	}
 	if preamble != "" {
 		b.WriteString("\n\n")
 		b.WriteString(preamble)

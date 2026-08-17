@@ -42,6 +42,7 @@ import (
 	"github.com/sushidev-team/lola/internal/review"
 	"github.com/sushidev-team/lola/internal/reviewclaude"
 	"github.com/sushidev-team/lola/internal/reviewmd"
+	"github.com/sushidev-team/lola/internal/scm"
 	"github.com/sushidev-team/lola/internal/session"
 	"github.com/sushidev-team/lola/internal/state"
 )
@@ -89,6 +90,7 @@ type reviewProvider struct {
 	Enabled     bool
 	OnPROpen    bool                // pass shapes: run on the PR-open transition
 	Transports  config.TransportSet // resolved sinks (always contains lola)
+	Inline      bool                // github: post anchored, resolvable threads (not one comment)
 	Notify      bool                // lola: fire the notify sink
 	SendToAgent bool                // lola: fire the worker hand-off
 	Handoff     handoffStyle
@@ -125,6 +127,7 @@ func (d *Daemon) setReviewProvidersLocked(nc *config.Config) {
 			Enabled:        cp.Enabled,
 			OnPROpen:       cp.OnPROpen,
 			Transports:     cp.Transports,
+			Inline:         cp.GitHubInline,
 			Notify:         cp.Notify,
 			SendToAgent:    cp.SendToAgent,
 			Author:         cp.Author,
@@ -372,6 +375,15 @@ func (d *Daemon) postSeam() func(ctx context.Context, repo string, pr int, body 
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return d.postPRComment
+}
+
+func (d *Daemon) reviewPostSeams() (
+	post func(ctx context.Context, repo string, pr int, commitID, body string, comments []scm.InlineComment) error,
+	target func(ctx context.Context, repo string, pr int) (string, string, error),
+) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.postPRReview, d.prReviewTarget
 }
 
 // resolveSelfLogin returns lola's own gh login, resolved AT MOST ONCE per daemon
@@ -640,17 +652,27 @@ func (d *Daemon) routeFindings(ctx context.Context, s session.Session, p reviewP
 			URL:      prURL(s),
 		})
 	}
-	// agent — UNTRUSTED sink #2, the ONLY sanitized + idle-gated one.
+	// github — UNTRUSTED sink #2 (a PR comment or an inline review; pass shapes
+	// only). It runs BEFORE the agent hand-off on purpose: the inline shape posts
+	// resolvable threads and stamps InlineReviewPRs, which is what lets the
+	// hand-off below tell the worker to close them (inlineThreadNote). The order
+	// only matters for a worker that happens to be idle right now — a deferred
+	// hand-off is delivered long after either sink — but getting it wrong would
+	// silently drop the instruction in exactly the case where the agent is ready
+	// to act on it.
+	if p.Shape == shapePass && p.Transports.Has(config.TransportGitHub) {
+		d.postGithubSink(ctx, s, p, findings)
+		if cur, ok := d.sessions.Get(s.ID); ok {
+			s = cur // pick up the guards the post just stamped
+		}
+	}
+	// agent — UNTRUSTED sink #3, the ONLY sanitized + idle-gated one.
 	if p.SendToAgent {
 		d.sendHandoffToAgent(ctx, s, p, handoffStash(s, p, findings))
 	}
-	// linear — UNTRUSTED sink #3 (API payload shown to a human, no sanitize).
+	// linear — UNTRUSTED sink #4 (API payload shown to a human, no sanitize).
 	if p.Transports.Has(config.TransportLinear) {
 		d.commentOnLinear(ctx, s, p, findings)
-	}
-	// github — UNTRUSTED sink #4 (a PR comment; pass shapes only).
-	if p.Shape == shapePass && p.Transports.Has(config.TransportGitHub) {
-		d.postGithubSink(ctx, s, p, findings)
 	}
 	d.logf("", "review: %s (%s) routed (notify=%v agent=%v linear=%v github=%v)", s.ID, p.Kind,
 		p.Notify, p.SendToAgent, p.Transports.Has(config.TransportLinear), p.Shape == shapePass && p.Transports.Has(config.TransportGitHub))
@@ -760,13 +782,23 @@ func (d *Daemon) sendHandoffToAgent(ctx context.Context, s session.Session, p re
 	if s.TmuxName == "" {
 		return false
 	}
-	if !handoffDeliverable(s) || !d.handoffPromptProof(ctx, s) {
+	if gated := !handoffDeliverable(s); gated || !d.handoffPromptProof(ctx, s) {
 		// Mid-turn, waiting on a permission decision, an adoption-carried gate
 		// that cannot be verified against the live pane (see ensurePromptVerified),
 		// or a pane-derived idle whose pane does not actually show a prompt (see
 		// handoffPromptProof): defer, never type.
+		//
+		// The two halves are named apart on purpose. A stash can sit undelivered
+		// for hours, and "the axes say busy" and "the axes say idle but the pane
+		// does not show a resting prompt" have completely different causes — the
+		// second is a classifier that no longer recognizes the agent's composer,
+		// which is invisible for as long as both read as one "mid-turn" line.
+		why := "the pane does not show a resting prompt"
+		if gated {
+			why = "the worker is mid-turn"
+		}
 		d.deferHandoff(s.ID, p.Kind, stash)
-		d.logf("", "review: %s (%s) worker is mid-turn — deferring the hand-off", s.ID, p.Kind)
+		d.logf("", "review: %s (%s) %s — deferring the hand-off", s.ID, p.Kind, why)
 		return false
 	}
 
@@ -774,6 +806,12 @@ func (d *Daemon) sendHandoffToAgent(ctx context.Context, s session.Session, p re
 	if p.Handoff == handoffFull {
 		msg = labelsFor(p.Kind).agentPreamble + stash
 	}
+	// When the same findings are also sitting on the PR as resolvable threads,
+	// say so and how to close them (lola's own text, appended AFTER the untrusted
+	// findings so nothing in them can rewrite the instruction). It is derived at
+	// SEND time rather than stashed, because a hand-off is usually deferred past
+	// the post that created the threads — often past a daemon restart.
+	msg += inlineThreadNote(s, p)
 	msg = sanitizeAgentText(msg)
 
 	var (
@@ -933,6 +971,17 @@ func (d *Daemon) postGithubSink(ctx context.Context, s session.Session, p review
 	}
 	if s.PostedGitHubPRs[string(p.Kind)] == s.PR.Number {
 		return // already settled this PR for this kind
+	}
+	if p.Inline {
+		// Try the resolvable-threads shape first. It reports false for every
+		// reason a review cannot be posted that way — no seam, no diff, nothing
+		// anchorable, a permanent rejection — and the plain comment below then
+		// runs exactly as it always has. A TRANSIENT failure returns true after
+		// leaving the guard unstamped, so the next cycle retries the inline post
+		// instead of silently downgrading it.
+		if done := d.postGithubInline(ctx, s, p, findings); done {
+			return
+		}
 	}
 	post := d.postSeam()
 	if post == nil {

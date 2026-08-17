@@ -110,9 +110,15 @@ func (c *Client) Members(ctx context.Context, teamID string) ([]User, error) {
 // until pageInfo.hasNextPage is false. The filter is built via
 // BuildIssueFilter and passed as a variable — never string-interpolated.
 func (c *Client) MatchingIssues(ctx context.Context, p config.Project, activeCycleID, viewerID string) ([]Issue, error) {
+	// The state/assignee/estimate/updatedAt fields are for the pickers (a human
+	// choosing an issue); dispatch ignores them. They ride the SAME query because
+	// they are plain scalars on a node already being fetched — a second round trip
+	// per tick would cost far more than they do.
 	const q = `query($filter: IssueFilter, $after: String){
 		issues(filter:$filter, first:100, after:$after){
-			nodes{ id identifier title branchName priority createdAt labels{ nodes{ id } } }
+			nodes{ id identifier title branchName priority createdAt updatedAt estimate
+				state{ name type } assignee{ displayName name }
+				labels{ nodes{ id name } } }
 			pageInfo{ hasNextPage endCursor } } }`
 
 	filter := BuildIssueFilter(p, activeCycleID, viewerID)
@@ -131,7 +137,11 @@ func (c *Client) MatchingIssues(ctx context.Context, p config.Project, activeCyc
 					BranchName string
 					Priority   float64
 					CreatedAt  string
-					Labels     struct{ Nodes []struct{ ID string } }
+					UpdatedAt  string
+					Estimate   *float64
+					State      *struct{ Name, Type string }
+					Assignee   *struct{ DisplayName, Name string }
+					Labels     struct{ Nodes []struct{ ID, Name string } }
 				}
 				PageInfo struct {
 					HasNextPage bool
@@ -151,9 +161,22 @@ func (c *Client) MatchingIssues(ctx context.Context, p config.Project, activeCyc
 				BranchName: n.BranchName,
 				Priority:   n.Priority,
 				CreatedAt:  n.CreatedAt,
+				UpdatedAt:  n.UpdatedAt,
+			}
+			if n.State != nil {
+				iss.StateName, iss.StateType = n.State.Name, n.State.Type
+			}
+			if n.Assignee != nil {
+				if iss.Assignee = n.Assignee.DisplayName; iss.Assignee == "" {
+					iss.Assignee = n.Assignee.Name
+				}
+			}
+			if n.Estimate != nil {
+				iss.Estimate = *n.Estimate
 			}
 			for _, l := range n.Labels.Nodes {
 				iss.LabelIDs = append(iss.LabelIDs, l.ID)
+				iss.LabelNames = append(iss.LabelNames, l.Name)
 			}
 			out = append(out, iss)
 		}

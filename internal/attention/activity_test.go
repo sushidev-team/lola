@@ -169,6 +169,50 @@ func TestClassify(t *testing.T) {
 			in:   "✳ Baking… (12s · ↑ 3.2k tokens · esc to interrupt)\n> \n",
 			want: ActivityWorking,
 		},
+		{
+			// THE NOR-373 BUG, captured verbatim off a live pane: current
+			// claude-code frames its composer with plain rules (no box CORNERS, so
+			// boxBorderRe never fires) and pads the caret with U+00A0 — which Go's
+			// \s does not match. Both caret cues missed, ActivityWaiting became
+			// unreachable, and a review hand-off deferred as "worker is mid-turn"
+			// for 15 minutes until a human pasted the findings by hand.
+			name: "waiting: rules-framed composer whose caret is padded with U+00A0",
+			in: "  Ran the migration and pushed the branch.\n" +
+				"\n" +
+				"\x1b[37m✻\x1b[39m \x1b[37mCogitated for 24m 46s\x1b[39m\n" +
+				"\x1b[37m────────────────────────────────────────────\x1b[39m\n" +
+				"❯\u00a0\n" +
+				"\x1b[37m────────────────────────────────────────────\x1b[39m\n" +
+				"  ⏵⏵ auto mode on (shift+tab to cycle) · PR #303\n",
+			want: ActivityWaiting,
+		},
+		{
+			// Same composer, holding a draft a human typed but never submitted. The
+			// caret is followed by U+00A0 + text, so only the NBSP fold makes it a
+			// caret at all.
+			name: "waiting: rules-framed composer holding an unsent draft",
+			in: "✻ Worked for 4m 12s\n" +
+				"────────────────────────────────────────────\n" +
+				"❯\u00a0fix the two failing GraphQL tests\n" +
+				"────────────────────────────────────────────\n",
+			want: ActivityWaiting,
+		},
+		{
+			// The other half of the same rendering change: that composer is drawn
+			// while the turn STREAMS too, so a resting caret no longer proves the
+			// agent yielded. This build prints no "esc to interrupt" — the live
+			// status line (gerund… + parenthesised elapsed + token meter) is the
+			// only signal, and it must beat the caret below it or a hand-off gets
+			// typed into a mid-turn agent.
+			name: "working: live gerund+elapsed status line beats the always-rendered composer",
+			in: "⏺ Stopping servers and checking tree\n" +
+				"✻ Harmonizing… (5m 58s · ↓ 17.9k tokens)\n" +
+				"────────────────────────────────────────────\n" +
+				"❯\u00a0\n" +
+				"────────────────────────────────────────────\n" +
+				"  ⏵⏵ auto mode on (shift+tab to cycle) · PR #303 · ← 1 agent\n",
+			want: ActivityWorking,
+		},
 	}
 
 	for _, tc := range tests {

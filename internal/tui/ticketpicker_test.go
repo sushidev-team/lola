@@ -11,10 +11,14 @@ import (
 // with a canned tickets response.
 func ticketPickerRoot(t *testing.T, issues []protocol.TicketRow) *rootModel {
 	t.Helper()
+	return ticketPickerRootData(t, protocol.TicketsData{Team: "team-1", Issues: issues})
+}
+
+func ticketPickerRootData(t *testing.T, data protocol.TicketsData) *rootModel {
+	t.Helper()
 	m := detailRoot(t)
 	m.detail.project = "A" // "A" is a polling project (has team_id)
-	resp := mustData(t, protocol.TicketsData{Team: "team-1", Issues: issues})
-	fakeRequest(t, nil, resp, nil)
+	fakeRequest(t, nil, mustData(t, data), nil)
 	_, cmd := m.enterTicketPicker("A")
 	runCmd(t, m, cmd)
 	return m
@@ -31,6 +35,44 @@ func TestTicketPickerRendersRows(t *testing.T) {
 	for _, want := range []string{"tickets", "FE-9", "fix oauth flow", "urgent"} {
 		if !strings.Contains(v, want) {
 			t.Errorf("picker view missing %q:\n%s", want, v)
+		}
+	}
+}
+
+// The row carries the facts a human picks by — workflow state and staleness —
+// and the header names the TEAM rather than printing its UUID.
+func TestTicketPickerShowsStateAndTeamName(t *testing.T) {
+	m := ticketPickerRootData(t, protocol.TicketsData{
+		Team: "ace69aca-dd39-4c63-91dc-36bbf48b62c7", TeamName: "Nori", TeamKey: "NOR",
+		Issues: []protocol.TicketRow{
+			{Identifier: "NOR-9", UUID: "u9", Title: "fix oauth flow", Priority: 1,
+				State: "In Progress", StateType: "started", Updated: "2h05m"},
+		},
+	})
+	v := stripANSI(m.ticketPickerView())
+	for _, want := range []string{"Nori (NOR)", "In Progress", "2h05m", "STATUS"} {
+		if !strings.Contains(v, want) {
+			t.Errorf("picker view missing %q:\n%s", want, v)
+		}
+	}
+	if strings.Contains(v, "ace69aca") {
+		t.Errorf("the team UUID must not be rendered when a name resolved:\n%s", v)
+	}
+}
+
+// `/` filters over what the row shows — state, labels and assignee included, not
+// just the identifier and title.
+func TestTicketPickerFilterCoversDisplayedFields(t *testing.T) {
+	m := ticketPickerRoot(t, []protocol.TicketRow{
+		{Identifier: "NOR-1", UUID: "u1", Title: "one", State: "In Review"},
+		{Identifier: "NOR-2", UUID: "u2", Title: "two", Labels: []string{"bug"}},
+		{Identifier: "NOR-3", UUID: "u3", Title: "three", Assignee: "Ada"},
+	})
+	for q, want := range map[string]string{"review": "NOR-1", "bug": "NOR-2", "ada": "NOR-3"} {
+		m.ticket.filter = q
+		rows := m.ticketRows()
+		if len(rows) != 1 || rows[0].Identifier != want {
+			t.Errorf("filter %q = %v, want just %s", q, rows, want)
 		}
 	}
 }

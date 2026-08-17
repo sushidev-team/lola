@@ -106,6 +106,11 @@ const (
 //   - Model optionally sets claude-session's --model; claude-session only.
 //   - Author is the login substring matched by the watch; coderabbit-watch only.
 //   - Transports is the resolved sink multiselect (always contains lola).
+//   - GitHubInline refines the github transport: the findings are posted as a
+//     pull-request REVIEW with one anchored, resolvable thread per finding
+//     instead of a single issue comment. Default true; it degrades to the plain
+//     comment by itself whenever the anchors or the API say no, so turning it off
+//     is only needed to force the flat comment.
 //   - Notify / SendToAgent refine the lola transport: they mute the notify sink
 //     and the worker hand-off independently (this preserves the legacy
 //     [coderabbit].notify=false opt-out).
@@ -122,6 +127,7 @@ type ReviewProvider struct {
 	Model          string
 	Author         string
 	Transports     TransportSet
+	GitHubInline   bool
 	Notify         bool
 	SendToAgent    bool
 	Visible        bool
@@ -146,6 +152,7 @@ type fileReviewProvider struct {
 	Model          *string       `toml:"model,omitempty"`
 	Author         *string       `toml:"author,omitempty"`
 	Transports     *TransportSet `toml:"transports,omitempty"`
+	GitHubInline   *bool         `toml:"github_inline,omitempty"`
 	Notify         *bool         `toml:"notify,omitempty"`
 	SendToAgent    *bool         `toml:"send_to_agent,omitempty"`
 	Visible        *bool         `toml:"visible,omitempty"`
@@ -169,11 +176,13 @@ func resolveReviewProviders(fps []fileReviewProvider) []ReviewProvider {
 
 // resolveReviewProvider applies the per-provider defaults (§1.3): transports
 // absent -> [lola] and lola always force-appended; notify / send_to_agent /
-// on_pr_open absent -> true; timeout_seconds absent -> DefaultReviewTimeoutSeconds;
-// author absent/empty -> DefaultCodeRabbitAuthor; fallback absent/empty -> none.
+// on_pr_open / github_inline absent -> true; timeout_seconds absent ->
+// DefaultReviewTimeoutSeconds; author absent/empty -> DefaultCodeRabbitAuthor;
+// fallback absent/empty -> none.
 func resolveReviewProvider(fp fileReviewProvider) ReviewProvider {
 	p := ReviewProvider{
 		OnPROpen:       true,
+		GitHubInline:   true,
 		Notify:         true,
 		SendToAgent:    true,
 		Visible:        true,
@@ -206,6 +215,9 @@ func resolveReviewProvider(fp fileReviewProvider) ReviewProvider {
 	}
 	if fp.Author != nil && *fp.Author != "" {
 		p.Author = *fp.Author
+	}
+	if fp.GitHubInline != nil {
+		p.GitHubInline = *fp.GitHubInline
 	}
 	if fp.Notify != nil {
 		p.Notify = *fp.Notify
@@ -259,6 +271,7 @@ func reviewProvidersFile(ps []ReviewProvider) []fileReviewProvider {
 			TimeoutSeconds: &p.TimeoutSeconds,
 			Model:          &p.Model,
 			Author:         &p.Author,
+			GitHubInline:   &p.GitHubInline,
 			Notify:         &p.Notify,
 			SendToAgent:    &p.SendToAgent,
 			Visible:        &p.Visible,
@@ -442,6 +455,7 @@ func synthesizeLegacyProviders(rc ReviewConfig, cc CodeRabbitConfig) []ReviewPro
 			TimeoutSeconds: rc.TimeoutSeconds,
 			Author:         DefaultCodeRabbitAuthor,
 			Transports:     tr,
+			GitHubInline:   true, // matches the catalog default (moot without the github transport)
 			Notify:         true,
 			Visible:        true, // a pass is watchable; matches the catalog default
 			SendToAgent:    rc.SendToAgent,
@@ -453,12 +467,13 @@ func synthesizeLegacyProviders(rc ReviewConfig, cc CodeRabbitConfig) []ReviewPro
 			tr = append(tr, TransportLinear)
 		}
 		out = append(out, ReviewProvider{
-			Provider:    provCoderabbitWatch,
-			Enabled:     cc.Enabled,
-			Author:      cc.Author,
-			Transports:  tr,
-			Notify:      cc.Notify,
-			SendToAgent: cc.SendToAgent,
+			Provider:     provCoderabbitWatch,
+			Enabled:      cc.Enabled,
+			Author:       cc.Author,
+			Transports:   tr,
+			GitHubInline: true, // matches the catalog default (a watch takes no github transport)
+			Notify:       cc.Notify,
+			SendToAgent:  cc.SendToAgent,
 		})
 	}
 	return out

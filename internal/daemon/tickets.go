@@ -80,6 +80,9 @@ func (d *Daemon) handleTickets(ctx context.Context, a protocol.TicketsArgs) (pro
 	}
 
 	data := protocol.TicketsData{Team: team, Issues: make([]protocol.TicketRow, 0, len(issues))}
+	data.TeamName, data.TeamKey = d.teamIdentity(ctx, api, team)
+	now := time.Now()
+	sortTicketIssues(issues)
 	for _, is := range issues {
 		data.Issues = append(data.Issues, protocol.TicketRow{
 			Identifier:  is.Identifier,
@@ -87,10 +90,111 @@ func (d *Daemon) handleTickets(ctx context.Context, a protocol.TicketsArgs) (pro
 			Title:       is.Title,
 			Branch:      is.BranchName,
 			Priority:    is.Priority,
+			State:       is.StateName,
+			StateType:   is.StateType,
+			Assignee:    is.Assignee,
+			Labels:      slices.Clone(is.LabelNames),
+			Estimate:    is.Estimate,
+			Updated:     ticketAge(is.UpdatedAt, now),
 			AlreadyLive: d.inflight.Has(is.ID) || held[is.ID],
 		})
 	}
 	return data, nil
+}
+
+// teamIdentity resolves a team UUID to its (name, key), cached for the daemon's
+// lifetime. It FAILS OPEN — a Linear error or an id the workspace no longer
+// carries returns empty strings, because a picker showing a raw UUID is a
+// cosmetic loss while an error here would cost the whole issue list.
+func (d *Daemon) teamIdentity(ctx context.Context, api linear.API, teamID string) (name, key string) {
+	if teamID == "" {
+		return "", ""
+	}
+	d.mu.Lock()
+	t, ok := d.teamIDs[teamID]
+	d.mu.Unlock()
+	if ok {
+		return t.Name, t.Key
+	}
+	cctx, cancel := context.WithTimeout(ctx, ticketsExecTimeout)
+	teams, err := api.Teams(cctx)
+	cancel()
+	if err != nil {
+		return "", ""
+	}
+	d.mu.Lock()
+	if d.teamIDs == nil {
+		d.teamIDs = map[string]linear.Team{}
+	}
+	for _, tm := range teams {
+		d.teamIDs[tm.ID] = tm
+	}
+	t = d.teamIDs[teamID]
+	d.mu.Unlock()
+	return t.Name, t.Key
+}
+
+// ticketAge formats an RFC3339 stamp as an age string in SessionInfo.Age's
+// format. An unparseable or empty stamp yields "" — the picker then renders a
+// dash rather than a fabricated age.
+func ticketAge(stamp string, now time.Time) string {
+	stamp = strings.TrimSpace(stamp)
+	if stamp == "" {
+		return ""
+	}
+	t, err := time.Parse(time.RFC3339, stamp)
+	if err != nil {
+		return ""
+	}
+	return formatAge(now.Sub(t))
+}
+
+// ticketStateRank orders the workflow-state TYPES the way a person picking work
+// scans them: what is already moving, then what is queued, then the archive.
+// An unknown type sorts with the backlog rather than to the front.
+func ticketStateRank(stateType string) int {
+	switch stateType {
+	case "started":
+		return 0
+	case "triage":
+		return 1
+	case "unstarted":
+		return 2
+	case "backlog":
+		return 3
+	case "completed":
+		return 5
+	case "canceled":
+		return 6
+	default:
+		return 4
+	}
+}
+
+// sortTicketIssues puts the list in pick order: live work first, then urgency,
+// then the freshest. Linear's own ordering buries an urgent in-progress issue
+// under 300 backlog items — the picker's whole job is to make the top of the
+// list the answer. UpdatedAt is compared as its RFC3339 TEXT (that format sorts
+// lexicographically, and an unparseable/empty stamp then simply sorts last)
+// rather than parsed per comparison.
+func sortTicketIssues(rows []linear.Issue) {
+	slices.SortStableFunc(rows, func(a, b linear.Issue) int {
+		if c := ticketStateRank(a.StateType) - ticketStateRank(b.StateType); c != 0 {
+			return c
+		}
+		// Linear priority: 1 urgent … 4 low, 0 = none. None sorts last, not first.
+		if c := ticketPriorityRank(a.Priority) - ticketPriorityRank(b.Priority); c != 0 {
+			return c
+		}
+		return strings.Compare(b.UpdatedAt, a.UpdatedAt)
+	})
+}
+
+func ticketPriorityRank(p float64) int {
+	if p <= 0 {
+		return 9
+	}
+	return int(p)
 }
 
 // handleOpenTicket starts a Linear issue on demand (cmd=openTicket): a worktree +

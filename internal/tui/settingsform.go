@@ -311,6 +311,7 @@ func newSettingsForm(cfgPath string, cfg *config.Config) *settingsForm {
 			{key: "pv_cli_send", tab: stCodeRabbit, indent: true, label: "Send to agent", help: "lola transport: feed findings back to the worker via the send-keys gate.", kind: sfBool, b: cli.SendToAgent},
 			{key: "pv_cli_visible", tab: stCodeRabbit, indent: true, label: "Watch it run", help: "Run the pass in its own tmux session \"<session>-review\", so you can watch it and read its output afterwards.", kind: sfBool, b: cli.Visible},
 			{key: "pv_cli_transports", tab: stCodeRabbit, indent: true, label: "Transports", help: "Sinks findings route to: lola (always on: notify + agent), github (PR comment), linear (issue comment). enter picks.", kind: sfList, choices: trAll, lines: cli.Transports.Strings()},
+			{key: "pv_cli_inline", tab: stCodeRabbit, indent: true, label: "Inline PR threads", help: "github transport: post one anchored, resolvable review thread per finding instead of a single comment. Findings whose line is not in the diff stay in the summary; off = one flat comment.", kind: sfBool, b: cli.GitHubInline},
 			{key: "pv_cli_fallback", tab: stCodeRabbit, indent: true, label: "Fallback", help: "Ordered pass kinds tried when this provider can't answer (unavailable / over-quota). enter picks.", kind: sfList, choices: fallbackOpts("coderabbit-cli"), lines: cli.FallbackStrings()},
 
 			{key: "pv_watch_enabled", tab: stCodeRabbit, subsection: "coderabbit-watch — polls the PR for the app's comments", indent: true, label: "Enabled", help: "Opt-in PR-comment watch: polls the GitHub PR for comments the CodeRabbit app (or another bot) leaves, and routes them. Needs no local coderabbit binary. No github transport / fallback (its feedback is already on the PR).", kind: sfBool, b: watch.Enabled},
@@ -327,6 +328,7 @@ func newSettingsForm(cfgPath string, cfg *config.Config) *settingsForm {
 			{key: "pv_claude_send", tab: stCodeRabbit, indent: true, label: "Send to agent", help: "lola transport: feed findings back to the worker via the send-keys gate.", kind: sfBool, b: claude.SendToAgent},
 			{key: "pv_claude_visible", tab: stCodeRabbit, indent: true, label: "Watch it run", help: "Run the pass in its own tmux session \"<session>-review\" and stream its progress there, so you can watch it and read its findings afterwards.", kind: sfBool, b: claude.Visible},
 			{key: "pv_claude_transports", tab: stCodeRabbit, indent: true, label: "Transports", help: "Sinks: lola (always on), github (PR comment), linear (issue comment). enter picks.", kind: sfList, choices: trAll, lines: claude.Transports.Strings()},
+			{key: "pv_claude_inline", tab: stCodeRabbit, indent: true, label: "Inline PR threads", help: "github transport: post one anchored, resolvable review thread per finding instead of a single comment, and ask the worker to resolve each one it fixes. Off = one flat comment.", kind: sfBool, b: claude.GitHubInline},
 			{key: "pv_claude_fallback", tab: stCodeRabbit, indent: true, label: "Fallback", help: "Ordered pass kinds tried when this provider can't answer. enter picks.", kind: sfList, choices: fallbackOpts("claude-session"), lines: claude.FallbackStrings()},
 		},
 	}
@@ -1508,6 +1510,7 @@ func (f *settingsForm) buildReviewProviders() ([]config.ReviewProvider, error) {
 		p.Notify = f.field("pv_cli_notify").b
 		p.SendToAgent = f.field("pv_cli_send").b
 		p.Visible = f.field("pv_cli_visible").b
+		p.GitHubInline = f.field("pv_cli_inline").b
 		p.SetTransportTokens(trimDropEmpty(f.field("pv_cli_transports").lines))
 		p.SetFallbackKinds(trimDropEmpty(f.field("pv_cli_fallback").lines))
 		out = append(out, p)
@@ -1530,6 +1533,7 @@ func (f *settingsForm) buildReviewProviders() ([]config.ReviewProvider, error) {
 		p.Notify = f.field("pv_claude_notify").b
 		p.SendToAgent = f.field("pv_claude_send").b
 		p.Visible = f.field("pv_claude_visible").b
+		p.GitHubInline = f.field("pv_claude_inline").b
 		p.SetTransportTokens(trimDropEmpty(f.field("pv_claude_transports").lines))
 		p.SetFallbackKinds(trimDropEmpty(f.field("pv_claude_fallback").lines))
 		out = append(out, p)
