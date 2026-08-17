@@ -7,6 +7,7 @@
   import LiveTerminal from "./LiveTerminal.svelte";
   import Button from "./Button.svelte";
   import MenuItem from "./MenuItem.svelte";
+  import DevClashBanner from "./DevClashBanner.svelte";
 
   // `focused` = the expanded full-cockpit view ("minimize" toggle); otherwise the
   // compact detail panel. The two used to differ in terminal font size as well —
@@ -300,6 +301,13 @@
         {/if}
       </span>
     </div>
+
+    <!-- Why a dev tab died, when the reason is a port someone else holds. It sits
+         directly under the header — above the tabs — because the tab it is about
+         is usually the one being looked at, and because the terminal it belongs
+         to is exactly where the answer is NOT (the command clears the screen on
+         its way out). Absent whenever the tabs are healthy. -->
+    <DevClashBanner {session} />
 
     <!-- Terminal tabs. Shown when a shell is open or the panel is focused/big:
          the agent tab, one tab per shell (drag to sort, "×" on hover to close),

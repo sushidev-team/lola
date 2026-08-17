@@ -336,6 +336,25 @@ class Store {
       delete this.devPending[session];
     }
   }
+  /**
+   * Free the port a dev tab died on, then restart the tabs. Never called
+   * directly by a button — askFreePort asks first, because this kills a process
+   * lola did not start (see askFreePort).
+   *
+   * Port and pid are sent back exactly as they were shown: the daemon refuses
+   * the request unless they still match what it has on record AND that pid still
+   * holds that port, so a dialog left open while things moved on is rejected
+   * rather than applied to whatever is there now.
+   */
+  async devFreePort(session: string, port: number, pid: number) {
+    if (this.devPending[session]) return undefined;
+    this.devPending[session] = true;
+    try {
+      return await this.act(() => DaemonService.DevFreePort(session, port, pid), `freed port ${port}`);
+    } finally {
+      delete this.devPending[session];
+    }
+  }
   open(project: string, ref: string) {
     return this.act(() => DaemonService.Open(project, ref), `opened ${ref}`);
   }
@@ -411,6 +430,33 @@ class Store {
       detail: dir ? `${dir} — the changes there are lost for good.` : "The changes there are lost for good.",
       confirmLabel: "Delete worktree",
       onConfirm: () => void this.kill(id, true),
+    });
+  }
+
+  /**
+   * A dev tab died because another process holds its port: ask before killing
+   * that process.
+   *
+   * This is the one action that reaches OUTSIDE lola's own worktrees, which is
+   * exactly why it is a question and not an automatic sweep — the holder may be
+   * a `npm run dev` the user started in their own checkout an hour ago. So the
+   * dialog names the process, its pid and where it runs, and words the two cases
+   * differently: reclaiming lola's own leftover server is routine, killing the
+   * user's own process is not.
+   */
+  askFreePort(id: string) {
+    const s = this.sessionById(id);
+    const clash = s?.devClash;
+    if (!clash) return;
+    const where = clash.dir ? ` in ${clash.dir}` : "";
+    confirm.ask({
+      title: `Port ${clash.port} is taken`,
+      body: `${clash.proc || "A process"} (pid ${clash.pid})${where} is holding port ${clash.port}. Stop it and start the dev processes here?`,
+      detail: clash.ours
+        ? `It is a leftover dev server inside lola's worktrees — ${clash.command || "the dev command"} could not bind.`
+        : `It was not started by lola — anything unsaved in it is lost.`,
+      confirmLabel: "Stop it and retry",
+      onConfirm: () => void this.devFreePort(id, clash.port, clash.pid),
     });
   }
 

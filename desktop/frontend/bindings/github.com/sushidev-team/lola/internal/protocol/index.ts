@@ -3,7 +3,9 @@
 
 export type {
     CodeRabbitData,
+    DevClashInfo,
     DevData,
+    DevFreePortData,
     Event,
     KillData,
     Match,

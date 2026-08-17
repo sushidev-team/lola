@@ -176,6 +176,15 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   cannot know what port `dev_commands` bind, so a stray dev server is found by
   where it runs, not by its port (see the ACTIVE-session invariant). Fails open:
   no lsof, or output it cannot parse, reports nothing rather than a guess.
+- `internal/portclash` — pure text, the mirror image of `internal/devurl`: did a
+  DEAD dev tab die because its port was taken, and which port was it? Every
+  server words that failure differently (`bind: address already in use`,
+  `EADDRINUSE`, `Port 9245 is in use`, `port is already allocated`), so the cue
+  is the phrase plus the address beside it. The ONLY thing it ever returns is an
+  integer in 1..65535 — the caller asks lsof about that port and offers a human a
+  kill button, so a number is the whole safe surface to carry out of untrusted
+  pane text. Fails closed on a wording it does not know or a message that names
+  no port.
 - `internal/gitrepo` — reads a checkout with LOCAL git only (no network, no
   `gh`): `Detect` resolves the GitHub `owner/name` from its remotes (upstream,
   then origin), `Branches` the fork-from candidates, and `Inspect` gathers root
@@ -452,6 +461,17 @@ each of which owns exactly one external tool or concern behind an **exec seam**
     UI, and `reconcileDevTabs` (one per observe cycle) overwrites them from the
     tmux facts. Persisted intent would drift the moment a tab was closed, a
     command crashed, or the daemon restarted; derivation cannot.
+  - A `dev_commands` entry is a SHELL LINE, and `lolaenv.CommandLine` only
+    `exec`s it when it is a SIMPLE command. `exec` takes one command, so
+    prefixing it onto `cd desktop && wails3 dev` binds it to `cd` — under macOS's
+    /bin/sh (bash 3.2) that is a silent exit 0 with the real command never
+    started, i.e. a dev tab that dies instantly and says nothing. A pipeline, an
+    `&&` chain, a redirect or a builtin head therefore runs unprefixed; the
+    wrapper `sh` waits for the command and exits with it, so `#{pane_dead}` still
+    fires at the right moment and only the "pane pid IS the command" property is
+    lost. The classifier is deliberately conservative (`commandSeparators`,
+    `shellWordBreakers`): a false "not simple" costs an optimization, a false
+    "simple" eats the command line.
   - The tabs carry `remain-on-exit`, so a crashed dev server keeps its pane and
     its error message — which means the session's EXISTENCE proves nothing and
     liveness is `#{pane_dead}` (`tmux.DeadPanes`, one `list-panes -a` per cycle,
@@ -504,6 +524,28 @@ each of which owns exactly one external tool or concern behind an **exec seam**
     context, not a shielded one, because an aborted read costs only a link the
     observer finds a cycle later. `scanDevURLs` stays as that fallback: nothing
     depends on the watch succeeding.
+  - A port the sweep may NOT reclaim becomes a QUESTION, never an action
+    (`internal/daemon/devclash.go`, `cmd=devFreePort`). The sweep only touches
+    `~/.lola/worktrees/<project>/`, so the common real-world clash — a
+    `npm run dev` the human started in their own checkout — kills the dev tab and
+    explains nothing: the command prints one line and exits, and `wails3 dev` or
+    `vite` clears the screen on the way out, so the tab reads as "dead, no reason
+    given". So a dead tab is read ONCE (`internal/portclash` → a port number,
+    nothing else), lsof names the holder, and the result rides `SessionInfo`
+    to a banner in the app / a `clash:` line + `F` in the TUI. Its rails:
+    - Detection is one-shot per DEATH (`devClashChecked`, re-armed when the tab
+      lives again): a dead pane never changes, so a second read learns nothing
+      and would cost a capture plus an lsof every cycle forever.
+    - lsof is asked only when the pane actually said a port was taken, and a
+      holder that cannot be resolved records NOTHING — the finding's only use is
+      offering to kill something.
+    - The kill is a human's answer to a dialog, and the daemon re-verifies at
+      that moment: session + port + pid must match the record AND that pid must
+      STILL hold that port (pids are reused, and the gap to a click is
+      unbounded). A group owning a live tmux pane is refused outright, as in the
+      sweep, and no ps / no tmux means no kill.
+    - The clash is DERIVED like `DevActive`/`DevURLs`: `markDev` drops it on any
+      tab change, because it describes tabs that no longer exist.
   - `dev_commands` is deliberately NOT a `[defaults]` key (see the inheritance
     invariant): a dev command belongs to one repository, and an inherited one
     would start the wrong stack in every project that forgot to override it.
@@ -685,6 +727,29 @@ each of which owns exactly one external tool or concern behind an **exec seam**
     app was all-lowercase, which read as prose rather than as controls. Tests
     assert these strings; `getByRole("menuitem", { name })`, not `getByText`,
     because a MenuItem wraps its label beside an aria-hidden glyph.
+- **No form control in the app is drawn by the OS.** A bare
+  `<input type="checkbox">` and a bare `<select>` are painted by AppKit, so their
+  box, tick, caret and focus ring follow the user's macOS version rather than
+  this repo — two machines on the SAME build showed visibly different config
+  forms (macOS 26's Liquid Glass controls against the older flat ones), which is
+  a difference no screenshot can be debugged from. `Checkbox.svelte` and
+  `Select.svelte` own those two; `input[type="number"]`'s stepper is killed in
+  `app.css` (arrow keys still step). Rules:
+  - The tick and the caret are real sibling `<svg>` elements in `currentColor`,
+    never an `::after` on the input: WebKit does not reliably render
+    pseudo-elements on form controls, so that version works in `wails3 dev`
+    (Chrome) and disappears in the packaged app — the exact divergence these
+    components exist to remove.
+  - `class` on either component lands on the WRAPPER, not the control, so a
+    row-level fade (`ghost()`'s `opacity-55`, `has-[:disabled]:opacity-40`) dims
+    the tick/caret WITH the box instead of leaving it floating at full strength.
+  - What stays native ON PURPOSE: the `<select>` popup (an AppKit menu outside
+    the web view — re-drawing it means re-implementing keyboard nav, type-ahead
+    and a11y) and the textarea resize grabber. `color-scheme`, written per flavor
+    by `theme-runtime`, is the one lever over the popup and it is enough.
+  - `Controls.test.ts` greps every `.svelte` file for a raw `type="checkbox"` /
+    `<select` and fails on one, because a raw control looks perfectly fine on
+    whichever macOS the author happened to be running.
 - **Destructive actions confirm, and the key that does the destructive thing is
   the SHIFTED one.** On both project lists (TUI home and the cockpit rail) `x`
   stops polling (reversible) and `X` removes the `[[project]]` from config; `n`
@@ -861,13 +926,28 @@ distinct binary from the v2 `wails`. See `desktop/README.md`.
   source repo is private; lola must not copy that). The compiled `main.version`
   (default `"dev"`, injected via `-ldflags -X main.version=` in
   `build/darwin/Taskfile.yml`'s production branch, passed `VERSION=<tag>` by the
-  `desktop` job in `.github/workflows/release.yml`) is the checker's "current"
+  `desktop` job in `.github/workflows/build.yml`) is the checker's "current"
   version; a non-semver value (`dev`) means "always offer the release". Update
   cadence/skip live in `~/.lola/desktop-update.json`, NOT `config.toml` — the
   daemon and TUI never read them. The `desktop` job in `.github/workflows/build.yml`
   needs the Apple signing secrets (same names as rize) or it fails while the CLI
   release still succeeds; a notarized DMG is what keeps Gatekeeper quiet on the
-  auto-installed swap.
+  auto-installed swap. Two rules follow from the DMG arriving AFTER the release:
+  - **"A newer version exists" and "there is a build to install" are separate
+    facts, and the UI must not merge them.** The release is published the moment
+    release-please merges; its signed+notarized DMG is attached minutes later by
+    the `desktop` job — and never, if that job fails. The store keeps
+    `available` (newer version) apart from `installable` (`available` + a
+    `downloadURL`), because folding the asset check into `available` told
+    everyone on the previous version "✓ you're up to date" for the whole window
+    — silently, and permanently after a failed signing job. Without a build,
+    `UpdateOverlay` names the version and offers the release page.
+  - **A manual check must be able to answer differently.** `Checker` caches the
+    release for `CacheDuration` (1h) per app run, so "Check again" was a no-op
+    against exactly the answer that goes stale first (the DMG landing on an
+    already-published release). `CheckForUpdates(force)` clears that cache, every
+    manual check passes `force`, and opening the overlay always re-checks rather
+    than reusing what the launch auto-check saw.
 - **Releases are release-please, not manual `v*` tags.** `.github/workflows/
   release-please.yml` maintains a release PR from Conventional Commits; merging
   it tags the repo + creates the GitHub Release, then calls the reusable

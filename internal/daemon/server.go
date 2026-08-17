@@ -212,6 +212,16 @@ func (d *Daemon) handle(ctx context.Context, req protocol.Request) protocol.Resp
 			return protocol.Response{OK: false, Error: err.Error()}
 		}
 		return dataResponse(data)
+	case "devFreePort":
+		var a protocol.DevFreePortArgs
+		if err := json.Unmarshal(req.Args, &a); err != nil {
+			return protocol.Response{OK: false, Error: "devFreePort: bad args: " + err.Error()}
+		}
+		data, err := d.handleDevFreePort(ctx, a)
+		if err != nil {
+			return protocol.Response{OK: false, Error: err.Error()}
+		}
+		return dataResponse(data)
 	default:
 		return protocol.Response{OK: false, Error: fmt.Sprintf("unknown cmd %q", req.Cmd)}
 	}
@@ -452,6 +462,17 @@ func (d *Daemon) sessionsData() protocol.SessionsData {
 			DevActive:   s.DevActive,
 			DevCommands: devCommands[s.Project],
 			DevURLs:     s.DevURLs,
+		}
+		if c := s.DevClash; c != nil {
+			si.DevClash = &protocol.DevClashInfo{
+				Tab:     c.Tab,
+				Command: c.Command,
+				Port:    c.Port,
+				PID:     c.PID,
+				Proc:    c.Proc,
+				Dir:     c.Dir,
+				Ours:    c.Ours,
+			}
 		}
 		if s.Source == "native" {
 			// Native sessions live in worktrees the daemon created at

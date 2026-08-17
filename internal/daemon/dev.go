@@ -31,6 +31,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/devtab"
 	"github.com/sushidev-team/lola/internal/devurl"
 	"github.com/sushidev-team/lola/internal/lolaenv"
@@ -396,21 +397,43 @@ func (d *Daemon) reconcileDevTabs(ctx context.Context, aliveNames map[string]boo
 		dead = got
 	}
 
+	// A tab that lives again (or vanished) gets its clash examination re-armed,
+	// so a restart that dies the same way is explained a second time.
+	d.reapDevClashChecks(dead)
+
+	d.mu.Lock()
+	cfg, home := d.cfg, d.home
+	d.mu.Unlock()
+
 	changed := false
 	for _, s := range d.sessions.Snapshot() {
 		live := 0
-		var liveTabs []string
+		var liveTabs, deadTabs []string
 		for _, name := range tabs {
-			if devtab.Index(s.ID, name) > 0 && !dead[name] {
-				live++
-				liveTabs = append(liveTabs, name)
+			if devtab.Index(s.ID, name) == 0 {
+				continue
 			}
+			if dead[name] {
+				deadTabs = append(deadTabs, name)
+				continue
+			}
+			live++
+			liveTabs = append(liveTabs, name)
 		}
 		if s.DevActive != (live > 0) || s.DevTabs != live {
 			d.markDev(s.ID, live > 0, live)
 			changed = true
 		}
 		if d.scanDevURLs(ctx, s, live, liveTabs) {
+			changed = true
+		}
+		// After markDev, and off the FRESH record: the toggle above may have just
+		// cleared a clash this snapshot still carries.
+		var project *config.Project
+		if cfg != nil {
+			project = cfg.ProjectByName(s.Project)
+		}
+		if project != nil && d.scanDevClash(ctx, s.ID, deadTabs, project.Name, home, project.DevCommands) {
 			changed = true
 		}
 	}
@@ -647,6 +670,10 @@ func (d *Daemon) markDev(sessionID string, active bool, tabs int) {
 		// servers stopped, or restarted onto other ports. scanDevURLs finds them
 		// again on the next cycle — until then, none is the honest answer.
 		s.DevURLs = nil
+		// And it invalidates the explanation of why a tab died, for the same
+		// reason: these are different tabs. scanDevClash re-derives it if the new
+		// ones lose the same race.
+		s.DevClash = nil
 		return true
 	})
 }

@@ -2,12 +2,17 @@
   import { onMount } from "svelte";
   import { nav } from "$lib/nav.svelte";
   import { updates } from "$lib/update.svelte";
+  import { store } from "$lib/store.svelte";
   import Modal from "$lib/components/Modal.svelte";
   import Button from "$lib/components/Button.svelte";
 
-  // Open with a fresh check unless a check already produced info this session.
+  // Open with a FRESH check every time, not just when nothing was loaded yet.
+  // Opening this overlay is the one unambiguous "is there something new?" — and
+  // the answer it used to reuse was whatever the launch auto-check saw, which
+  // for a long-running app is hours old. `check(true)` also clears the backend's
+  // release cache, so the two staleness layers lift together.
   onMount(() => {
-    if (!updates.info && !updates.checking) void updates.check(true);
+    if (!updates.checking) void updates.check(true);
   });
 
   function fmtBytes(n: number): string {
@@ -56,6 +61,20 @@
     <div class="flex flex-col gap-2 py-4 text-center">
       <span class="text-good">✓ you're up to date</span>
       <span class="num text-sm text-faint">running v{updates.info?.currentVersion || updates.version}</span>
+    </div>
+  {:else if !updates.installable}
+    <!-- A newer version is out but carries no macOS build yet: the release is
+         published minutes before its signed+notarized DMG is attached, and that
+         job can also fail outright. Saying so is the whole point — the previous
+         version of this screen showed "up to date" here. -->
+    <div class="flex flex-col gap-2 py-4 text-center">
+      <span class="text-ink">
+        v{updates.info?.latestVersion} is out — no macOS build attached to it yet
+      </span>
+      <span class="num text-sm text-faint">
+        running v{updates.info?.currentVersion || updates.version} · the .dmg is signed and notarized after the
+        release is published, which takes a few minutes
+      </span>
     </div>
   {:else}
     <div class="flex flex-col gap-3">
@@ -115,7 +134,17 @@
 
   {#snippet footer()}
     <div class="flex items-center gap-2">
-      {#if updates.available}
+      {#if updates.available && !updates.installable}
+        {#if updates.info?.browserURL}
+          <Button variant="secondary" size="md" onclick={() => store.openURL(updates.info!.browserURL)}>
+            Open release page
+          </Button>
+        {/if}
+        <Button size="md" disabled={updates.checking} onclick={() => updates.check(true)}>
+          {updates.checking ? "Checking…" : "Check again"}
+        </Button>
+        <span class="num ml-auto text-sm text-faint">v{updates.version}</span>
+      {:else if updates.installable}
         {#if updates.installing}
           <span class="text-faint">installing — the app will restart…</span>
         {:else if updates.dmgPath}

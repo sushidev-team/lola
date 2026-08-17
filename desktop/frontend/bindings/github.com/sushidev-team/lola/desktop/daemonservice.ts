@@ -68,6 +68,17 @@ export function Dev(session: string, on: boolean): $CancellablePromise<protocol$
     return $Call.ByID(340192016, session, on);
 }
 
+/**
+ * DevFreePort kills the process holding the port a session's dev tab died on and
+ * restarts that session's dev tabs. port/pid must match the clash the daemon
+ * currently reports (SessionInfo.devClash) — this is the one path that signals a
+ * process lola did not start, so a stale dialog is refused rather than applied to
+ * whatever holds the port now.
+ */
+export function DevFreePort(session: string, port: number, pid: number): $CancellablePromise<protocol$0.DevFreePortData> {
+    return $Call.ByID(3893206393, session, port, pid);
+}
+
 export function Disable(poll: string): $CancellablePromise<void> {
     return $Call.ByID(3917859687, poll);
 }

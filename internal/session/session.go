@@ -156,6 +156,11 @@ type Session struct {
 	// worse than none.
 	DevURLs []string `json:"dev_urls,omitempty"`
 
+	// DevClash is why a dev tab died, in the ONE case lola can both explain and
+	// offer to fix: another process already holds the port the command wanted.
+	// Derived (see internal/daemon/dev.go), nil whenever the tabs are healthy.
+	DevClash *DevClash `json:"dev_clash,omitempty"`
+
 	// ---- [statusagent] interpreter overlay (DISPLAY ONLY). These fields are
 	// untrusted LLM output derived from attacker-influenceable pane text:
 	// they overlay the DISPLAYED agent axis in sessionsData and nothing else.
@@ -312,6 +317,43 @@ type Session struct {
 	// guard so the github sink no-ops for a kind/PR it has already settled and a
 	// transient failure retries next cycle.
 	PostedGitHubPRs map[string]int `json:"posted_github_prs,omitempty"`
+}
+
+// DevClash is a dev tab that died because its port was already taken, together
+// with the process holding it.
+//
+// It is the one dev-tab failure lola can both name and offer to undo, and it is
+// deliberately the only one modelled: everything else a command can die of is
+// its own output to read, while this one is invisible (the pane usually clears
+// itself) and its cause is a process somewhere else on the machine.
+//
+// Every field is DERIVED and re-derived: the port comes from the pane via
+// internal/portclash, the process from lsof via internal/portproc, and the whole
+// record is dropped the moment the tabs change (internal/daemon/dev.go). PID is
+// therefore evidence, never a licence — the kill path re-checks that this pid
+// still holds this port before signalling anything, because pids are reused.
+type DevClash struct {
+	// Tab is the tmux session of the dev tab that died ("<id>-dev-2"), and
+	// Command the [[project]].dev_commands entry it was running (config text,
+	// not pane output).
+	Tab     string `json:"tab"`
+	Command string `json:"command,omitempty"`
+	// Port is the only thing taken from the pane: an integer in 1..65535, so no
+	// untrusted text is carried out of the terminal (see internal/portclash).
+	Port int `json:"port"`
+	// The holder, as lsof reports it: pid, short command name and working
+	// directory ("" when it could not be resolved).
+	PID  int    `json:"pid"`
+	Proc string `json:"proc,omitempty"`
+	Dir  string `json:"dir,omitempty"`
+	// Ours is true when the holder is listening from inside lola's worktrees for
+	// this project — a stray server of an earlier session, which the activation
+	// sweep would normally have reclaimed. False means it belongs to the user
+	// (their own checkout, another app entirely), which is exactly the case lola
+	// refuses to act on by itself and asks about instead.
+	Ours bool `json:"ours,omitempty"`
+	// At is when the clash was detected.
+	At time.Time `json:"at,omitempty"`
 }
 
 // migrateReviewState folds the four legacy review scalars into the kind-keyed

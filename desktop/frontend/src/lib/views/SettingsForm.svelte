@@ -3,6 +3,8 @@
   import Modal from "$lib/components/Modal.svelte";
   import Tabs from "$lib/components/Tabs.svelte";
   import Button from "$lib/components/Button.svelte";
+  import Checkbox from "$lib/components/Checkbox.svelte";
+  import Select from "$lib/components/Select.svelte";
   import { store } from "$lib/store.svelte";
   import { nav } from "$lib/nav.svelte";
   import { confirm } from "$lib/confirm.svelte";
@@ -233,7 +235,6 @@
     "w-full rounded border border-edge bg-canvas px-2 py-1.5 text-ink outline-none focus:border-accent placeholder:text-placeholder";
   const rowCls = "grid grid-cols-[11rem_1fr] items-center gap-3";
   const rowTopCls = "grid grid-cols-[11rem_1fr] items-start gap-3";
-  const cbCls = "h-3.5 w-3.5 accent-[var(--color-accent)]";
   const hintCls = "mt-1 block text-sm text-faint";
 
   function toggleId(arr: string[] | null, id: string): string[] {
@@ -470,10 +471,10 @@
   <div class={hint ? rowTopCls : rowCls}>
     <span class="text-faint">{caption}</span>
     <span>
-      <select class={inputCls} aria-label={caption} value={current} onchange={(e) => onChange(e.currentTarget.value)}>
+      <Select aria-label={caption} value={current} onchange={(e) => onChange(e.currentTarget.value)}>
         {#if anyLabel}<option value="">{anyLabel}</option>{/if}
         {#each options as o (o.id)}<option value={o.id}>{o.label}</option>{/each}
-      </select>
+      </Select>
       {#if hint}<span class={hintCls}>{hint}</span>{/if}
     </span>
   </div>
@@ -650,9 +651,7 @@
                   <div class="max-h-36 space-y-1 overflow-auto rounded border border-edge p-2">
                     {#each wsLabels ?? [] as o (o.id)}
                       <label class="flex items-center gap-2 text-ink">
-                        <input
-                          type="checkbox"
-                          class={cbCls}
+                        <Checkbox
                           checked={(d.matchLabels ?? []).includes(o.id)}
                           onchange={() => { d.matchLabels = toggleId(d.matchLabels, o.id); }}
                         />
@@ -731,7 +730,7 @@
           {@render head("Notify")}
           <div class="space-y-2">
             <label class="flex cursor-pointer items-center gap-2">
-              <input type="checkbox" class="accent-accent" bind:checked={d.notifyDesktop} />
+              <Checkbox bind:checked={d.notifyDesktop} />
               <span>Desktop notifications</span>
             </label>
             <label class={rowTopCls}>
@@ -748,7 +747,7 @@
           {@render head("Brain")}
           <div class="space-y-2">
             <label class="flex cursor-pointer items-center gap-2">
-              <input type="checkbox" class="accent-accent" bind:checked={d.brainEnabled} />
+              <Checkbox bind:checked={d.brainEnabled} />
               <span>Enabled</span>
             </label>
             <label class={rowCls}>
@@ -761,11 +760,11 @@
             </label>
             <div class="flex flex-wrap gap-x-6 gap-y-2 pt-1">
               <label class="flex cursor-pointer items-center gap-2">
-                <input type="checkbox" class="accent-accent" bind:checked={d.brainSummarizeEscalation} />
+                <Checkbox bind:checked={d.brainSummarizeEscalation} />
                 <span>Summarize on escalation</span>
               </label>
               <label class="flex cursor-pointer items-center gap-2">
-                <input type="checkbox" class="accent-accent" bind:checked={d.brainSummarizeApproved} />
+                <Checkbox bind:checked={d.brainSummarizeApproved} />
                 <span>Summarize on approved</span>
               </label>
             </div>
@@ -781,7 +780,7 @@
           </p>
           <div class="space-y-2">
             <label class="flex cursor-pointer items-center gap-2">
-              <input type="checkbox" class="accent-accent" bind:checked={d.statusAgentEnabled} />
+              <Checkbox bind:checked={d.statusAgentEnabled} />
               <span>Enabled</span>
             </label>
             <label class={rowCls}>
@@ -809,7 +808,7 @@
               <input class={inputCls} type="number" min="0" max="1" step="0.05" bind:value={d.statusAgentMinConfidence} />
             </label>
             <label class="flex cursor-pointer items-center gap-2">
-              <input type="checkbox" class="accent-accent" bind:checked={d.statusAgentIncludeTranscript} />
+              <Checkbox bind:checked={d.statusAgentIncludeTranscript} />
               <span>Include transcript tail</span>
             </label>
           </div>
@@ -875,7 +874,7 @@
               <div class="space-y-2">
                 <div class="flex items-center justify-between">
                   <label class="flex cursor-pointer items-center gap-2">
-                    <input type="checkbox" class="accent-accent" disabled={d.reviewLegacy} bind:checked={p.enabled} />
+                    <Checkbox disabled={d.reviewLegacy} bind:checked={p.enabled} />
                     <span>Enabled</span>
                   </label>
                   {#if !d.reviewLegacy}
@@ -910,23 +909,23 @@
                 <div class="flex flex-wrap gap-x-6 gap-y-2 pt-1">
                   {#if !isWatch(p.provider)}
                     <label class="flex cursor-pointer items-center gap-2">
-                      <input type="checkbox" class="accent-accent" disabled={d.reviewLegacy} bind:checked={p.onPrOpen} />
+                      <Checkbox disabled={d.reviewLegacy} bind:checked={p.onPrOpen} />
                       <span>On PR open</span>
                     </label>
                   {/if}
                   <label class="flex cursor-pointer items-center gap-2">
-                    <input type="checkbox" class="accent-accent" disabled={d.reviewLegacy} bind:checked={p.notify} />
+                    <Checkbox disabled={d.reviewLegacy} bind:checked={p.notify} />
                     <span>Notify</span>
                   </label>
                   <label class="flex cursor-pointer items-center gap-2">
-                    <input type="checkbox" class="accent-accent" disabled={d.reviewLegacy} bind:checked={p.sendToAgent} />
+                    <Checkbox disabled={d.reviewLegacy} bind:checked={p.sendToAgent} />
                     <span>Send to agent</span>
                   </label>
                   {#if !isWatch(p.provider)}
                     <!-- The pass runs in its own "<session>-review" tmux session,
                          so it shows up as a Review tab beside the shells. -->
                     <label class="flex cursor-pointer items-center gap-2">
-                      <input type="checkbox" class="accent-accent" disabled={d.reviewLegacy} bind:checked={p.visible} />
+                      <Checkbox disabled={d.reviewLegacy} bind:checked={p.visible} />
                       <span>Watch it run</span>
                     </label>
                   {/if}
@@ -937,9 +936,7 @@
                   <div class="flex flex-wrap gap-x-6 gap-y-2">
                     {#each transportsFor(p.provider) as t}
                       <label class="flex cursor-pointer items-center gap-2">
-                        <input
-                          type="checkbox"
-                          class="accent-accent"
+                        <Checkbox
                           disabled={d.reviewLegacy || t === "lola"}
                           checked={(p.transports ?? []).includes(t)}
                           onchange={(e) => toggleTransport(p, t, (e.currentTarget as HTMLInputElement).checked)} />
@@ -955,9 +952,7 @@
                     <div class="flex flex-wrap gap-x-6 gap-y-2">
                       {#each fallbackFor(p.provider) as k}
                         <label class="flex cursor-pointer items-center gap-2">
-                          <input
-                            type="checkbox"
-                            class="accent-accent"
+                          <Checkbox
                             disabled={d.reviewLegacy}
                             checked={(p.fallback ?? []).includes(k)}
                             onchange={(e) => toggleFallback(p, k, (e.currentTarget as HTMLInputElement).checked)} />

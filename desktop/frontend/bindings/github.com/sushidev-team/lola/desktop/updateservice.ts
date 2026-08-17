@@ -25,9 +25,17 @@ import * as $models from "./models.js";
  * CheckForUpdates queries the latest release and records the check time. It
  * carries a skipped flag out via the DTO's Available field being left true —
  * the frontend decides whether to surface it against the skipped version.
+ * 
+ * force drops the checker's in-process cache first, and every MANUAL check
+ * passes it. Without that, "Check again" could not answer differently for a
+ * whole CacheDuration: the release the app cached at launch is exactly the one
+ * that goes stale first — a version published minutes later, or (the case this
+ * was written for) a release whose macOS DMG is still being notarized when the
+ * app first looked, so the answer flips from "no download" to "downloadable"
+ * with nothing about the running app changing.
  */
-export function CheckForUpdates(): $CancellablePromise<$models.UpdateInfoDTO> {
-    return $Call.ByID(670986527);
+export function CheckForUpdates(force: boolean): $CancellablePromise<$models.UpdateInfoDTO> {
+    return $Call.ByID(670986527, force);
 }
 
 /**

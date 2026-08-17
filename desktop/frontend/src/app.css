@@ -278,6 +278,41 @@ textarea {
   user-select: text;
 }
 
+/* ---------------------------------------------------------------------------
+   Native form-control chrome, removed.
+
+   Every widget AppKit draws for us is a widget this repo cannot style, and its
+   art changes with the user's macOS version — two machines on the SAME build
+   showed visibly different config forms (macOS 26's Liquid Glass controls
+   against the older flat ones), a difference no screenshot can be debugged
+   from. <Checkbox> and <Select> replace the two big ones with real DOM; the
+   number spinner is the third and it has no component, because a call site only
+   ever wants the field.
+
+   Hiding the stepper costs nothing: a focused number input still steps with ↑/↓
+   (that is UA keyboard behaviour, not the widget), and every one of these is a
+   cap or a timeout typed once. `appearance: textfield` is the Firefox/standard
+   half, the two -webkit pseudo-elements the WKWebView half; both are needed.
+
+   Unlayered, so a `text-*`/`bg-*` utility on the same element still wins for the
+   properties it sets — these touch only the widget, never the box.
+
+   What is deliberately LEFT native: the <select> popup menu (an AppKit menu
+   outside the web view — see Select.svelte) and the textarea resize grabber.
+   Re-drawing either means re-implementing keyboard and a11y behaviour we would
+   get wrong, and neither carries the form's visual weight.
+---------------------------------------------------------------------------- */
+input[type="number"] {
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  appearance: none;
+  margin: 0;
+}
+
 /* Genuine content — not chrome — opts back out of the app-wide `user-select:
    none` so a user can select and copy it into an issue: error/flash text, the
    doctor report body, the detail header's issue/title/branch. Clickable session
