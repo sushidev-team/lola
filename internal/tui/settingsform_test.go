@@ -48,6 +48,27 @@ func shiftTabKey() tea.KeyPressMsg {
 	return tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift}
 }
 
+// tabTo presses `tab` until the named tab is active, and fails if it never is.
+// Tests about what a tab CONTAINS must not also encode how many tabs precede it
+// — inserting one (Linear) silently broke two such tests, which is exactly the
+// kind of failure that says nothing about the change that caused it. Returns the
+// tea.Cmd of the press that landed, so a test can still assert the arrival's
+// side effect (the label load).
+func tabTo(t *testing.T, f *settingsForm, want settingsTab) tea.Cmd {
+	t.Helper()
+	var cmd tea.Cmd
+	for range settingsTabs {
+		if f.tab == want {
+			return cmd
+		}
+		cmd, _ = f.update(keyMsg("tab"))
+	}
+	if f.tab != want {
+		t.Fatalf("tab %v never reached (stopped on %v)", want, f.tab)
+	}
+	return cmd
+}
+
 // focusField moves the cursor onto the named field, switching to whichever tab
 // owns it. f.cursor is TAB-RELATIVE, so a bare index into f.fields is not a
 // valid cursor.
@@ -145,10 +166,7 @@ func TestSettingsFormTabsFilterFields(t *testing.T) {
 	}
 
 	// tab → Project defaults.
-	_, _ = f.update(keyMsg("tab"))
-	if f.tab != stProjectDefaults {
-		t.Fatalf("tab must advance to Project defaults, got %v", f.tab)
-	}
+	tabTo(t, f, stProjectDefaults)
 	out = f.view()
 	if !strings.Contains(out, "Branch prefix") || !strings.Contains(out, "Match mode") {
 		t.Errorf("Project defaults tab must show its fields:\n%s", out)
@@ -157,13 +175,23 @@ func TestSettingsFormTabsFilterFields(t *testing.T) {
 		t.Errorf("Project defaults tab must not show the Defaults fields:\n%s", out)
 	}
 
-	// shift+tab back, then wrap backwards past the first tab onto the last.
-	// Derived from settingsTabs rather than named, so adding a tab doesn't break
-	// a test about WRAPPING.
-	lastTab := settingsTabs[len(settingsTabs)-1].tab
+	// shift+tab steps BACK one tab...
 	_, _ = f.update(shiftTabKey())
+	if f.tab == stProjectDefaults {
+		t.Fatalf("shift+tab must move off Project defaults, got %v", f.tab)
+	}
+	// ...then wrap backwards past the first tab onto the last. Both the walk to
+	// the first tab and the last tab's identity are derived from settingsTabs,
+	// so adding a tab doesn't break a test about WRAPPING.
+	lastTab := settingsTabs[len(settingsTabs)-1].tab
+	for range settingsTabs {
+		if f.tab == stDefaults {
+			break
+		}
+		_, _ = f.update(shiftTabKey())
+	}
 	if f.tab != stDefaults {
-		t.Fatalf("shift+tab must go back to Defaults, got %v", f.tab)
+		t.Fatalf("shift+tab must reach Defaults, got %v", f.tab)
 	}
 	_, _ = f.update(shiftTabKey())
 	if f.tab != lastTab {
@@ -1342,10 +1370,7 @@ func TestSettingsFormLoadsLabelNamesOnTabSwitch(t *testing.T) {
 	}
 
 	// stDefaults -> stProjectDefaults
-	cmd, _ := f.update(keyMsg("tab"))
-	if f.tab != stProjectDefaults {
-		t.Fatalf("tab = %v, want the project-defaults tab", f.tab)
-	}
+	cmd := tabTo(t, f, stProjectDefaults)
 	if cmd == nil || !f.wsLoading {
 		t.Fatalf("landing on the tab must start the label load (cmd=%v loading=%v)", cmd, f.wsLoading)
 	}
@@ -1555,5 +1580,129 @@ func TestSettingsFormRejectsBadConfidence(t *testing.T) {
 	f.field("sa_confidence").text = "1.5"
 	if ev := f.save(); ev == settingsFormSaved {
 		t.Fatal("save accepted an out-of-range confidence (Validate must reject)")
+	}
+}
+
+// --- [linear] API key -------------------------------------------------------
+//
+// The key was settable only in `lola setup`: a hand-written config could never
+// gain one, and rotating a key meant editing the Keychain by hand — while a
+// daemon without a key fails every poll. These pin the field's contract.
+
+// stubKeychain replaces the keychain write for a test and records what it got.
+func stubKeychain(t *testing.T, fail bool) *struct{ service, key string } {
+	t.Helper()
+	got := &struct{ service, key string }{}
+	orig := storeLinearKey
+	storeLinearKey = func(service, key string) error {
+		got.service, got.key = service, key
+		if fail {
+			return errors.New("keychain unavailable")
+		}
+		return nil
+	}
+	t.Cleanup(func() { storeLinearKey = orig })
+	return got
+}
+
+// The field starts EMPTY on every open, because the key is never read back out
+// of the keychain. An untouched Linear tab must therefore write nothing at all.
+func TestSettingsFormLinearKeyStartsEmptyAndSavesNothing(t *testing.T) {
+	m := newTestRoot(t)
+	f := newSettingsForm(m.cfgPath, m.cfg)
+	if got := f.field("linear_key").text; got != "" {
+		t.Fatalf("linear_key must open empty, got %q", got)
+	}
+	got := stubKeychain(t, false)
+	if ev := f.save(); ev != settingsFormSaved {
+		t.Fatalf("save() = %v, want saved", ev)
+	}
+	if got.key != "" {
+		t.Errorf("an untouched key field must not write the keychain, got %q", got.key)
+	}
+	saved, err := config.Load(m.cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.Linear.APIKeyKeychain != "" || saved.Linear.APIKeyEnv != "" {
+		t.Errorf("no key source may be written for an untouched field: %+v", saved.Linear)
+	}
+}
+
+// A typed key goes to the KEYCHAIN, and config records only the source's NAME.
+func TestSettingsFormLinearKeyStoresToKeychain(t *testing.T) {
+	m := newTestRoot(t)
+	f := newSettingsForm(m.cfgPath, m.cfg)
+	kc := stubKeychain(t, false)
+
+	focusField(t, f, "linear_key")
+	f.paste("lin_api_secret")
+	if ev := f.save(); ev != settingsFormSaved {
+		t.Fatalf("save() = %v (err=%q), want saved", ev, f.err)
+	}
+
+	if kc.service != setupKeychainService || kc.key != "lin_api_secret" {
+		t.Errorf("keychain got service=%q key=%q, want %q / the typed key", kc.service, kc.key, setupKeychainService)
+	}
+	saved, err := config.Load(m.cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.Linear.APIKeyKeychain != setupKeychainService {
+		t.Errorf("api_key_keychain = %q, want %q", saved.Linear.APIKeyKeychain, setupKeychainService)
+	}
+	// The whole point of the keychain: the VALUE must never reach the file.
+	raw, err := os.ReadFile(m.cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "lin_api_secret") {
+		t.Fatalf("the key value leaked into config.toml:\n%s", raw)
+	}
+	// And it must not survive in the form either.
+	if got := f.field("linear_key").text; got != "" {
+		t.Errorf("the key field must be cleared after save, got %q", got)
+	}
+}
+
+// No keychain (non-darwin, a locked login keychain) must still leave a WORKING
+// configuration — an env var by name — and say so, because the user then has to
+// export it themselves.
+func TestSettingsFormLinearKeyFallsBackToEnvVar(t *testing.T) {
+	m := newTestRoot(t)
+	f := newSettingsForm(m.cfgPath, m.cfg)
+	stubKeychain(t, true)
+
+	focusField(t, f, "linear_key")
+	f.paste("lin_api_secret")
+	if ev := f.save(); ev != settingsFormSaved {
+		t.Fatalf("save() = %v (err=%q), want saved", ev, f.err)
+	}
+	saved, err := config.Load(m.cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.Linear.APIKeyEnv != setupEnvVar {
+		t.Errorf("api_key_env = %q, want %q", saved.Linear.APIKeyEnv, setupEnvVar)
+	}
+	if !strings.Contains(f.savedNote, setupEnvVar) {
+		t.Errorf("savedNote must name the env var to export, got %q", f.savedNote)
+	}
+}
+
+// The pane's scrollback is captured by lola's own attention parser, so the key
+// must never be rendered as characters.
+func TestSettingsFormLinearKeyRendersMasked(t *testing.T) {
+	m := newTestRoot(t)
+	f := newSettingsForm(m.cfgPath, m.cfg)
+	focusField(t, f, "linear_key")
+	f.paste("lin_api_secret")
+
+	out := f.view()
+	if strings.Contains(out, "lin_api_secret") {
+		t.Fatalf("the key must not be rendered:\n%s", out)
+	}
+	if !strings.Contains(out, "••") {
+		t.Errorf("expected a masked value:\n%s", out)
 	}
 }

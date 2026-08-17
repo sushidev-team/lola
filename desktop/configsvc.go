@@ -24,15 +24,21 @@ const (
 	setupEnvVar          = "LINEAR_API_KEY"
 )
 
+// storeLinearKey is the exec seam over the keychain write, so tests exercise
+// Setup and SetLinearKey without touching the operator's real login keychain.
+var storeLinearKey = secrets.StoreLinearAPIKey
+
 // ConfigService lets the settings / project / poll forms read and write
 // config.toml directly, the same way the TUI does — the daemon protocol has no
 // config-write command; config.toml is the single source of truth and the
 // daemon only re-reads it on `reload`. Every Save validates, persists atomically
 // (config.Save is temp+rename, 0600), then best-effort reloads a live daemon.
 //
-// Secrets never pass through here: the Linear key and Slack webhook live in the
-// keychain / env by *name*, and those name fields are the only secret-adjacent
-// values these DTOs carry.
+// Secrets are WRITE-ONLY here, and only through SetLinearKey: the Linear key and
+// Slack webhook live in the keychain / env by *name*, and those name fields are
+// the only secret-adjacent values any DTO carries. Nothing ever reads a secret
+// back out to the frontend — LinearKeyStatus reports where the key lives and
+// whether it resolves, never its value.
 type ConfigService struct{}
 
 func loadConfig() (*config.Config, string, error) {
@@ -758,6 +764,92 @@ func (s *ConfigService) ValidateLinearKey(key string) error {
 	return err
 }
 
+// LinearKeyStatusDTO describes WHERE the Linear key lives and whether it can be
+// resolved right now — never the key. Source is a human-readable origin
+// ("macOS Keychain (lola-linear)" / "environment variable LINEAR_API_KEY"), so
+// the settings screen can say why a key it cannot see is nonetheless fine.
+type LinearKeyStatusDTO struct {
+	Configured bool   `json:"configured"` // config names a source
+	Resolvable bool   `json:"resolvable"` // that source actually yields a key
+	Source     string `json:"source"`
+	Detail     string `json:"detail"` // why it does not resolve, when it doesn't
+}
+
+// LinearKeyStatus reports the key's origin and health for the settings screen.
+//
+// This exists because the key was settable ONLY in the first-run wizard: neither
+// this app's settings nor the TUI's had a field for it, so a key could never be
+// added to a hand-written config, and rotating one meant editing the Keychain by
+// hand. A daemon with no key fails every poll, which is the exact silent failure
+// the app is supposed to surface.
+func (s *ConfigService) LinearKeyStatus() LinearKeyStatusDTO {
+	cfg, _, err := loadConfig()
+	if err != nil {
+		return LinearKeyStatusDTO{Detail: err.Error()}
+	}
+	kc, env := cfg.Linear.APIKeyKeychain, cfg.Linear.APIKeyEnv
+	out := LinearKeyStatusDTO{Configured: kc != "" || env != ""}
+	switch {
+	case kc != "":
+		out.Source = "macOS Keychain (" + kc + ")"
+	case env != "":
+		out.Source = "environment variable " + env
+	default:
+		out.Detail = "no key source configured"
+		return out
+	}
+	// Resolve only to learn IF it works. The value is discarded immediately and
+	// never leaves this function.
+	if _, rerr := secrets.LinearAPIKey(kc, env); rerr != nil {
+		out.Detail = rerr.Error()
+		return out
+	}
+	out.Resolvable = true
+	return out
+}
+
+// SetLinearKey stores a new Linear key and points config.toml at it. The key
+// goes to the macOS Keychain under the same service the first-run wizards use,
+// so a key set here is read identically by the daemon, the TUI and this app;
+// when the Keychain is unavailable it falls back to naming an env var, exactly
+// as Setup does. The returned message says which happened.
+//
+// Deliberately NOT a SettingsDTO field, for the reasons the theme is not one
+// (see below) plus one of its own: a whole-form commit would carry a secret
+// through every save of an unrelated field, and a validation failure elsewhere
+// in the form would silently drop the key the user just typed.
+func (s *ConfigService) SetLinearKey(key string) (string, error) {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return "", errors.New("empty key")
+	}
+	cfg, path, err := loadConfig()
+	if err != nil {
+		return "", err
+	}
+	msg := ""
+	if serr := storeLinearKey(setupKeychainService, key); serr == nil {
+		cfg.Linear.APIKeyKeychain = setupKeychainService
+		cfg.Linear.APIKeyEnv = ""
+		msg = "key stored in the macOS Keychain (service " + setupKeychainService + ")"
+	} else {
+		// Keychain unavailable: name an env var instead. The key itself is NOT
+		// written anywhere — the user must export it — so say so plainly.
+		cfg.Linear.APIKeyEnv = setupEnvVar
+		msg = "couldn't use the Keychain — export the key as " + setupEnvVar + " before starting the daemon"
+	}
+	if cfg.Linear.Endpoint == "" {
+		cfg.Linear.Endpoint = config.DefaultEndpoint
+	}
+	if verr := cfg.Validate(); verr != nil {
+		return "", verr
+	}
+	if serr := saveConfig(cfg, path); serr != nil {
+		return "", serr
+	}
+	return msg, nil
+}
+
 type SetupDTO struct {
 	LinearKey      string `json:"linearKey"`
 	ProjectName    string `json:"projectName"`
@@ -791,7 +883,7 @@ func (s *ConfigService) Setup(dto SetupDTO) (SetupResultDTO, error) {
 	cfg.Linear.Endpoint = config.DefaultEndpoint
 
 	res := SetupResultDTO{}
-	if err := secrets.StoreLinearAPIKey(setupKeychainService, dto.LinearKey); err == nil {
+	if err := storeLinearKey(setupKeychainService, dto.LinearKey); err == nil {
 		cfg.Linear.APIKeyKeychain = setupKeychainService
 		res.KeychainStored = true
 		res.Message = "key stored in the macOS Keychain (service " + setupKeychainService + ")"

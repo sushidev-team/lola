@@ -73,6 +73,35 @@ wails3 task darwin:package:universal VERSION=1.2.3
 `build/darwin/Taskfile.yml`) and read by the update checker. A `dev` build is
 treated as "older than every release", so it always offers the latest.
 
+### The bundled `lola` CLI
+
+`package` also runs `darwin:build:cli`, which builds the repo-root CLI
+**universal** (`CGO_ENABLED=0`, both slices, `lipo`'d) and copies it into
+`Contents/Resources/bin/lola`. The app is a *client* — it starts a daemon by
+exec'ing `lola run` and cannot re-exec itself the way the TUI does — so without
+this a DMG-only install had no daemon to start and the first-run wizard failed
+with "lola binary not found on PATH".
+
+- The path is a contract with `desktop/lolabin.go`'s `bundledRelPath`;
+  `TestBundledPathMatchesThePackagingTask` pins the two together, because
+  changing one alone breaks the fallback silently.
+- Resolution is `$LOLA_BIN` → `PATH` → bundled. **PATH wins over the bundle**
+  so `go install` still drives the dev loop; `CLIInfo` reports which one was
+  chosen and flags a version mismatch, and `InstallCLI` symlinks the bundled
+  copy onto PATH for terminal use.
+- CI's nested-code signing sweep (`find … -perm +111`) picks the CLI up before
+  the bundle is sealed, so notarization covers it.
+- `wails3 dev` copies the CLI only if `bin/lola-cli` already exists — rebuilding
+  a universal binary every dev restart would tax the loop for something dev does
+  not need (a dev machine has `lola` on PATH, which wins anyway). Run
+  `wails3 task darwin:build:cli` once to exercise the fallback.
+
+Nothing else is vendored. `tmux` in particular must not be: `tmux -L lola` is a
+client/server pair shared with the CLI, and mixing builds hits a
+protocol-version mismatch — `git`/`gh`/the coding agent carry the user's own
+auth and installs. `ensurePATH` (in `main.go`) is what makes them reachable from
+a Finder-launched bundle.
+
 ## Self-update
 
 The app updates itself from this repo's **GitHub Releases**. Releases are cut by

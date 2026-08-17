@@ -6,10 +6,13 @@
 package main
 
 import (
+	"context"
 	"embed"
 	"log"
 	"math"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -336,29 +339,92 @@ func newSessionMenu(app *application.App, menu *application.Menu) {
 		OnClick(ask(actionKill))
 }
 
-// ensurePATH augments the process PATH with the usual Homebrew locations. A
-// .app launched from Finder inherits a minimal PATH (/usr/bin:/bin:/usr/sbin:
-// /sbin) — not the login shell's — so tmux/git/gh/lola under /opt/homebrew/bin
-// (Apple Silicon) or /usr/local/bin (Intel) would be "command not found". Every
-// child exec (tmux capture/attach, `lola run`) inherits this, so we fix it once
-// at startup. Harmless under `wails3 dev`, where PATH is already rich.
-func ensurePATH() {
-	want := []string{"/opt/homebrew/bin", "/usr/local/bin"}
-	cur := os.Getenv("PATH")
-	parts := strings.Split(cur, ":")
-	have := make(map[string]bool, len(parts))
-	for _, p := range parts {
-		have[p] = true
+// pathProbeTimeout bounds the login-shell PATH probe. A shell with a heavy rc
+// can take a moment; anything past this is a wedged profile we must not block
+// app startup on, and the static fallbacks below still apply.
+const pathProbeTimeout = 3 * time.Second
+
+// pathSentinel brackets the PATH the probe asks for. Login rc files print
+// banners, version notices and `motd` to stdout, so reading "the output" would
+// hand exec a directory list made of someone's shell greeting. The sentinel
+// makes the answer findable regardless of what surrounds it.
+const pathSentinel = "__LOLA_PATH__"
+
+// staticPATHDirs are the directories added when (or in addition to) the probe.
+// The Homebrew prefixes are where tmux/gh/git live; the Go and local bins are
+// where a `go install`ed lola lands, which is the single most common way to
+// have a CLI the app could not see.
+var staticPATHDirs = []string{
+	"/opt/homebrew/bin",
+	"/opt/homebrew/sbin",
+	"/usr/local/bin",
+	"~/go/bin",
+	"~/.local/bin",
+	"~/bin",
+}
+
+// loginShellPATH is the exec seam over the probe, so tests can drive ensurePATH
+// without a shell. It returns "" whenever it cannot answer — every caller
+// treats that as "use the static list", never as an error.
+var loginShellPATH = func() string {
+	sh := strings.TrimSpace(os.Getenv("SHELL"))
+	if sh == "" {
+		return ""
 	}
-	var prefix []string
-	for _, w := range want {
-		if !have[w] {
-			prefix = append(prefix, w)
+	ctx, cancel := context.WithTimeout(context.Background(), pathProbeTimeout)
+	defer cancel()
+	// -l (login) but NOT -i (interactive): the login profile is where PATH is
+	// built, and an interactive shell additionally loads prompt/plugin machinery
+	// that is slow and can block on a tty we do not have.
+	out, err := exec.CommandContext(ctx, sh, "-l", "-c",
+		"printf '\\n%s%s\\n' "+pathSentinel+" \"$PATH\"").Output()
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		if v, ok := strings.CutPrefix(strings.TrimSpace(line), pathSentinel); ok {
+			return v
 		}
 	}
-	if len(prefix) > 0 {
-		_ = os.Setenv("PATH", strings.Join(prefix, ":")+":"+cur)
+	return ""
+}
+
+// ensurePATH rebuilds the process PATH so child execs can find the user's
+// tools. A .app launched from Finder inherits a MINIMAL PATH (/usr/bin:/bin:
+// /usr/sbin:/sbin) — not the login shell's — so tmux/git/gh/claude/lola are all
+// "command not found" no matter where they are installed. Every child exec
+// (tmux capture/attach, `lola run`, the doctor's LookPath probes) inherits this,
+// so it is fixed once at startup.
+//
+// Two sources, in this order:
+//
+//  1. the LOGIN SHELL's PATH, which is the only thing that knows about version
+//     managers (mise, asdf, fnm, volta) — and `claude` is very often installed
+//     through one of those, so the old two-directory list could not find it;
+//  2. a static list of well-known directories, as the floor when the probe
+//     fails (no $SHELL, a wedged profile, a sandbox).
+//
+// Both go AHEAD of the inherited entries, matching the previous behaviour where
+// a Homebrew tool won over a system one — a user who installed a newer git
+// meant to use it. Order within each source is preserved and duplicates are
+// dropped, so the result stays the user's own precedence.
+func ensurePATH() {
+	var ordered []string
+	seen := map[string]bool{}
+	add := func(dirs []string) {
+		for _, d := range dirs {
+			d = expandHome(strings.TrimSpace(d))
+			if d == "" || seen[d] {
+				continue
+			}
+			seen[d] = true
+			ordered = append(ordered, d)
+		}
 	}
+	add(filepath.SplitList(loginShellPATH()))
+	add(staticPATHDirs)
+	add(filepath.SplitList(os.Getenv("PATH")))
+	_ = os.Setenv("PATH", strings.Join(ordered, string(os.PathListSeparator)))
 }
 
 // Event names the frontend subscribes to. Kept in one place so the binding

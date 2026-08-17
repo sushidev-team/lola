@@ -495,16 +495,24 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case settingsFormCancel:
 			m.settings = nil
 		case settingsFormSaved:
+			// Taken BEFORE the form is dropped: a save may carry an outcome the
+			// generic confirmation would hide (the Linear key falling back to an
+			// env var the user still has to export).
+			note := m.settings.savedNote
 			m.settings = nil
 			m.reloadConfig()
 			// [ui].theme may have changed on the Appearance tab; repaint the palette
 			// (and every style derived from it) before the next frame instead of
 			// making the user restart the TUI. reloadConfig already re-read the file.
 			applyTheme(m.cfg.UITheme())
+			msg := "settings saved"
+			if note != "" {
+				msg += " — " + note
+			}
 			if m.view == viewHome {
-				m.home.flash, m.home.flashGood = "settings saved", true
+				m.home.flash, m.home.flashGood = msg, true
 			} else {
-				m.list.flash = "settings saved"
+				m.list.flash = msg
 			}
 			return m, tea.Batch(bestEffortReloadCmd, fetchStatusCmd, fetchProjectsCmd)
 		}

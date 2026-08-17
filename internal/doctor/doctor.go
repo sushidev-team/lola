@@ -34,6 +34,7 @@ const (
 	checkGit       = "git"
 	checkClaude    = "claude"
 	checkGh        = "gh"
+	checkLolaCLI   = "lola cli"
 	checkLinear    = "linear api key"
 	checkDaemon    = "daemon"
 	checkConfig    = "config"
@@ -124,6 +125,7 @@ func Check(ctx context.Context, cfg *config.Config) Report {
 	add(lookPathResult(checkGit, true))
 	add(claudeResult(ctx))
 	add(ghResult())
+	add(lolaCLIResult())
 	add(migrationResult(ctx))
 
 	if cfg == nil {
@@ -157,6 +159,27 @@ func lookPathResult(name string, critical bool) Result {
 		return Result{Name: name, OK: false, Critical: critical, Detail: "not found on PATH"}
 	}
 	return Result{Name: name, OK: true, Critical: critical, Detail: path}
+}
+
+// lolaCLIResult reports whether the `lola` CLI is on PATH. NOT critical, and
+// deliberately so: the daemon running this check IS lola, and the desktop app
+// falls back to the copy bundled in its own .app — so a miss costs the shell
+// (`lola tui`, every subcommand), not the runtime.
+//
+// It exists because that miss used to be invisible. A DMG-only install ships no
+// CLI, and the app's first-run wizard then failed to start a daemon with an
+// error naming a lookup rather than a fix, while the doctor said nothing at all.
+func lolaCLIResult() Result {
+	path, err := exec.LookPath("lola")
+	if err != nil {
+		return Result{
+			Name:     checkLolaCLI,
+			OK:       false,
+			Critical: false,
+			Detail:   "not found on PATH — `lola` and `lola tui` are unavailable in a terminal (the desktop app uses its bundled copy)",
+		}
+	}
+	return Result{Name: checkLolaCLI, OK: true, Critical: false, Detail: path}
 }
 
 // claudeResult resolves claude and, when present, appends the first line of

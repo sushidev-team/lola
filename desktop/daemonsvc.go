@@ -3,8 +3,8 @@ package main
 import (
 	"encoding/json"
 	"errors"
-	"os"
 	"os/exec"
+	"path/filepath"
 	"sync"
 	"syscall"
 	"time"
@@ -220,14 +220,67 @@ func (s *DaemonService) PollOnce(poll string, dryRun bool) (protocol.PollOnceDat
 
 // --- daemon process control -------------------------------------------------
 
-// lolaBinary resolves the lola CLI used to (re)start the daemon: $LOLA_BIN, then
-// the first `lola` on PATH. The desktop app is a distinct binary, so it cannot
-// re-exec itself the way the TUI does.
-func lolaBinary() (string, error) {
-	if b := os.Getenv("LOLA_BIN"); b != "" {
-		return b, nil
+// CLIInfoDTO describes the `lola` CLI this app would run, so the UI can say
+// which binary the daemon comes from instead of leaving it invisible. Bundled
+// reports whether this .app ships a copy at all (a `wails3 dev` build does not),
+// which is what decides whether InstallCLI can do anything.
+type CLIInfoDTO struct {
+	Path           string `json:"path"`           // resolved binary, "" when none
+	Source         string `json:"source"`         // LOLA_BIN | PATH | bundled | ""
+	Version        string `json:"version"`        // first line of `lola --version`
+	Found          bool   `json:"found"`          //
+	Error          string `json:"error"`          // why nothing resolved
+	Bundled        bool   `json:"bundled"`        // this .app ships a CLI
+	BundledVersion string `json:"bundledVersion"` // version of the shipped copy
+	// Skewed reports that a PATH/LOLA_BIN binary was chosen whose version differs
+	// from the bundled one. Not an error — a developer's own build is the
+	// documented dev loop — but the cause of "the app has a feature the daemon
+	// has never heard of", so it must be visible rather than diagnosed.
+	Skewed bool `json:"skewed"`
+	// AppVersion is this app's compiled main.version, for the same comparison
+	// from the other side.
+	AppVersion string `json:"appVersion"`
+}
+
+// CLIInfo resolves the CLI and probes versions. Never errors: a machine with no
+// CLI at all is a state the UI has to render, not an exception.
+func (s *DaemonService) CLIInfo() CLIInfoDTO {
+	out := CLIInfoDTO{AppVersion: version}
+	if bp := bundledLolaPath(); bp != "" {
+		out.Bundled = true
+		out.BundledVersion = binVersion(bp)
 	}
-	return exec.LookPath("lola")
+	b, err := resolveLola()
+	if err != nil {
+		out.Error = err.Error()
+		return out
+	}
+	out.Found = true
+	out.Path = b.Path
+	out.Source = string(b.Source)
+	out.Version = binVersion(b.Path)
+	out.Skewed = out.Bundled && b.Source != srcBundled &&
+		out.Version != "" && out.BundledVersion != "" && out.Version != out.BundledVersion
+	return out
+}
+
+// InstallCLI symlinks the bundled CLI into the first writable directory on the
+// usual PATH, so `lola` / `lola tui` work in a terminal after a DMG-only
+// install. Returns the created path plus whether the shell will actually see it.
+func (s *DaemonService) InstallCLI() (CLIInstallDTO, error) {
+	path, err := installCLI()
+	if err != nil {
+		return CLIInstallDTO{}, err
+	}
+	return CLIInstallDTO{Path: path, OnPATH: onPATH(filepath.Dir(path))}, nil
+}
+
+// CLIInstallDTO is InstallCLI's result. OnPATH=false means the symlink exists
+// but the user's shell will not find it without a profile edit — worth saying,
+// since the action would otherwise look like it silently did nothing.
+type CLIInstallDTO struct {
+	Path   string `json:"path"`
+	OnPATH bool   `json:"onPath"`
 }
 
 // StartDaemon spawns a detached `lola run` if the socket is dead, mirroring
@@ -246,7 +299,10 @@ func (s *DaemonService) startLocked() error {
 	}
 	bin, err := lolaBinary()
 	if err != nil {
-		return errors.New("lola binary not found on PATH (set LOLA_BIN)")
+		// Surfaced verbatim in the UI, so it must name the FIX. The old text
+		// ("lola binary not found on PATH (set LOLA_BIN)") described the lookup
+		// that failed and left a fresh DMG install with nothing to act on.
+		return err
 	}
 	cmd := exec.Command(bin, "run")
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}

@@ -65,11 +65,20 @@ The Makefile sets a repo-local `GOCACHE` so builds work in sandboxed shells.
    spawn while any of them is missing and reports it in `lola status`.
 
 3. Store your Linear API key in the macOS Keychain (see
-   [Secrets](#secrets)):
+   [Secrets](#secrets)). Any of these writes the same item, so pick whichever
+   surface you are already in:
 
-   ```sh
-   security add-generic-password -a "$USER" -s lola-linear -U -w
-   ```
+   - `lola setup` — the first-run wizard;
+   - the TUI's settings editor (`S` → **Linear**) — also how you rotate a key;
+   - the desktop app's Settings → **Linear**, or its first-run screen;
+   - by hand:
+
+     ```sh
+     security add-generic-password -a "$USER" -s lola-linear -U -w
+     ```
+
+   Whichever you use, only the *name* of the source lands in `config.toml`
+   (`[linear].api_key_keychain`); the key itself never does.
 
 4. Register at least one repository as a `[[project]]`, then give it a `team_id`
    (and the other polling fields) to start it watching Linear — start from
@@ -91,13 +100,38 @@ The Makefile sets a repo-local `GOCACHE` so builds work in sandboxed shells.
    lola run
    ```
 
+## Installing the desktop app
+
+The macOS app (**Lola.app**) ships as a signed, notarized universal DMG on each
+[release](https://github.com/sushidev-team/lola/releases); the CLI ships beside
+it as `lola_<version>_darwin_<arch>.tar.gz`. Drag the app to `/Applications` and
+it works on its own — **the `.app` bundles the `lola` CLI** at
+`Contents/Resources/bin/lola`, so it can start a daemon with nothing else
+installed. Two consequences worth knowing:
+
+- **The bundled copy does not put `lola` on your `PATH`.** A terminal still has
+  no `lola` / `lola tui` after a DMG-only install. Either open the app's
+  **doctor** overlay (`d`) and press **Install CLI** — it symlinks the bundled
+  binary into the first writable directory of `/usr/local/bin`,
+  `/opt/homebrew/bin`, `~/.local/bin` — or install the tarball yourself.
+- **A `lola` already on `PATH` wins over the bundled one**, so a developer's own
+  `go install` build stays in charge (that is the dev loop). The doctor overlay
+  names which binary is in use and flags a version mismatch between the two;
+  `LOLA_BIN` pins one explicitly.
+
+The app cannot bundle the rest of the runtime — `tmux`, `git`, `gh` and the
+coding agent are the user's own installs (step 2 above), and the doctor reports
+any that are missing. `tmux` in particular must NOT be vendored: `tmux -L lola`
+is a client/server pair shared with the CLI, and mixing builds hits a
+protocol-version mismatch.
+
 ## Commands
 
 | Command | Description |
 | --- | --- |
-| `lola` / `lola tui` | Open the TUI. The landing **cockpit** shows a rail of polling projects and the live session view. On first run — no `config.toml` yet — this enters the setup wizard first. Keys: `p` open the **project list**, `d` inline health report, `P` edit the selected project, `S` global settings editor (`[defaults]`/`[notify]`/`[brain]`/`[statusagent]`/`[review]`/`[coderabbit]`), `^r` restart the daemon (brings up the newest build), `^x` stop it (self-managed mode only). Enter on a project opens its **detail hub** — open a PR (picker → shell), start a Linear ticket (picker → worktree + agent), new manual worktree, manage the project's polling, view its sessions, edit the project. These hub actions are TUI-only (socket commands under the hood), not separate CLI subcommands. |
+| `lola` / `lola tui` | Open the TUI. The landing **cockpit** shows a rail of polling projects and the live session view. On first run — no `config.toml` yet — this enters the setup wizard first. Keys: `p` open the **project list**, `d` inline health report, `P` edit the selected project, `S` global settings editor (`[linear]` API key/`[defaults]`/`[notify]`/`[brain]`/`[statusagent]`/`[review]`/`[coderabbit]`), `^r` restart the daemon (brings up the newest build), `^x` stop it (self-managed mode only). Enter on a project opens its **detail hub** — open a PR (picker → shell), start a Linear ticket (picker → worktree + agent), new manual worktree, manage the project's polling, view its sessions, edit the project. These hub actions are TUI-only (socket commands under the hood), not separate CLI subcommands. |
 | `lola setup` | Run the first-run configuration wizard (Linear key → Keychain, one `[[project]]`, defaults) and write `config.toml`. Re-runnable any time. |
-| `lola doctor` | Print an aligned health report (tmux/git/claude/gh on PATH, Linear key readable, daemon socket, config validity, per-project repos); exits 1 on a critical failure. Never prints the key value. |
+| `lola doctor` | Print an aligned health report (tmux/git/claude/gh/lola on PATH, Linear key readable, daemon socket, config validity, per-project repos); exits 1 on a critical failure. The `lola cli` row is a WARNING, not a critical failure — the daemon running the check is itself lola, and the desktop app falls back to its bundled copy, so a miss costs only the shell. Never prints the key value. |
 | `lola run` | Start the daemon (this is what launchd invokes) |
 | `lola stop` | Graceful shutdown: finish in-flight tick, close socket, exit 0 |
 | `lola status` | Table per polling project (keyed by project name): enabled, last run, last spawn, running, last error — plus `runtimeOk` / `linearOk` health flags |
@@ -966,6 +1000,13 @@ environment:
    ```sh
    security add-generic-password -a "$USER" -s lola-linear -U -w
    ```
+
+   `lola setup`, the TUI's settings editor (`S` → **Linear**) and the desktop
+   app's Settings → **Linear** all write this same item under the service name
+   `lola-linear` and point `[linear].api_key_keychain` at it — that is also how
+   you **rotate** a key without touching the Keychain by hand. Both editors
+   show only whether a key is configured and whether it resolves; neither ever
+   reads a stored key back out.
 
    lola reads it back with `security find-generic-password -s <name> -w`.
    A missing item falls through to the env var; any other keychain error

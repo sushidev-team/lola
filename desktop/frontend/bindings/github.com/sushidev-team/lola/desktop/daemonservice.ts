@@ -24,6 +24,10 @@ import { Call as $Call, CancellablePromise as $CancellablePromise } from "@wails
 // @ts-ignore: Unused imports
 import * as protocol$0 from "../internal/protocol/models.js";
 
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
+import * as $models from "./models.js";
+
 /**
  * Alive reports whether the daemon socket accepts a connection right now.
  */
@@ -37,6 +41,14 @@ export function Alive(): $CancellablePromise<boolean> {
  */
 export function Answer(session: string, text: string): $CancellablePromise<void> {
     return $Call.ByID(3662326747, session, text);
+}
+
+/**
+ * CLIInfo resolves the CLI and probes versions. Never errors: a machine with no
+ * CLI at all is a state the UI has to render, not an exception.
+ */
+export function CLIInfo(): $CancellablePromise<$models.CLIInfoDTO> {
+    return $Call.ByID(2538774285);
 }
 
 /**
@@ -65,6 +77,15 @@ export function Disable(poll: string): $CancellablePromise<void> {
  */
 export function Enable(poll: string): $CancellablePromise<void> {
     return $Call.ByID(948893506, poll);
+}
+
+/**
+ * InstallCLI symlinks the bundled CLI into the first writable directory on the
+ * usual PATH, so `lola` / `lola tui` work in a terminal after a DMG-only
+ * install. Returns the created path plus whether the shell will actually see it.
+ */
+export function InstallCLI(): $CancellablePromise<$models.CLIInstallDTO> {
+    return $Call.ByID(1179931118);
 }
 
 /**

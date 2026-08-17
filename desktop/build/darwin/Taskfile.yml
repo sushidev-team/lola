@@ -116,10 +116,45 @@ tasks:
       - wails3 tool lipo -output "{{.BIN_DIR}}/{{.APP_NAME}}" -input "{{.BIN_DIR}}/{{.APP_NAME}}-amd64" -input "{{.BIN_DIR}}/{{.APP_NAME}}-arm64"
       - rm -f "{{.BIN_DIR}}/{{.APP_NAME}}-amd64" "{{.BIN_DIR}}/{{.APP_NAME}}-arm64"
 
+  build:cli:
+    summary: Builds the `lola` CLI (universal) for bundling inside the .app
+    # The app is a CLIENT of the daemon: it starts one by exec'ing `lola run`,
+    # and cannot re-exec itself the way the TUI does. The DMG used to carry only
+    # the .app, so a fresh install had no CLI to run and the first-run wizard
+    # died on "lola binary not found on PATH". Shipping the CLI inside the bundle
+    # makes one artifact enough, and pins the daemon to the same commit as the
+    # app (version skew there is its own class of bug: a daemon predating a
+    # command answers `unknown cmd`).
+    #
+    # Always UNIVERSAL, regardless of the app's own arch: it is pure Go with
+    # CGO off, so both slices are cheap, and create:app:bundle is shared by the
+    # single-arch and universal package tasks — one artifact means neither can
+    # bundle the wrong architecture.
+    #
+    # VERSION matches the app's, so `lola --version` and the app agree.
+    internal: true
+    cmds:
+      # GOARCH is set PER COMMAND, not in the env: block below — that block
+      # applies to every cmd alike, so both slices came out as the host arch and
+      # lipo refused them ("have the same architectures").
+      - GOARCH=amd64 go build {{.CLI_FLAGS}} -o "{{.BIN_DIR}}/lola-cli-amd64" github.com/sushidev-team/lola
+      - GOARCH=arm64 go build {{.CLI_FLAGS}} -o "{{.BIN_DIR}}/lola-cli-arm64" github.com/sushidev-team/lola
+      - lipo -create -output "{{.BIN_DIR}}/lola-cli" "{{.BIN_DIR}}/lola-cli-amd64" "{{.BIN_DIR}}/lola-cli-arm64"
+      - rm -f "{{.BIN_DIR}}/lola-cli-amd64" "{{.BIN_DIR}}/lola-cli-arm64"
+    vars:
+      CLI_FLAGS: '-trimpath -buildvcs=false -ldflags="-w -s -X main.version={{.VERSION | default "dev"}}"'
+    env:
+      GOOS: darwin
+      CGO_ENABLED: 0
+      MACOSX_DEPLOYMENT_TARGET: "12.0"
+    generates:
+      - "{{.BIN_DIR}}/lola-cli"
+
   package:
     summary: Packages the application into a `.app` bundle
     deps:
       - task: build
+      - task: build:cli
     cmds:
       - task: create:app:bundle
 
@@ -127,6 +162,7 @@ tasks:
     summary: Packages darwin universal binary (arm64 + amd64)
     deps:
       - task: build:universal
+      - task: build:cli
     cmds:
       - task: create:app:bundle
 
@@ -149,6 +185,15 @@ tasks:
           rm -f "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/Resources/Assets.car"
         fi
       - cp "{{.BIN_DIR}}/{{.APP_NAME}}" "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/MacOS"
+      # The bundled `lola` CLI. Path is a contract with desktop/lolabin.go's
+      # bundledRelPath — change one and the app silently stops finding it.
+      # Under Contents/Resources/bin rather than Contents/MacOS because only the
+      # app's own executable belongs in MacOS; a second binary there confuses
+      # bundle tooling. It is signed by build.yml's `find … -perm +111` sweep
+      # before the bundle itself, so notarization covers it.
+      - mkdir -p "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/Resources/bin"
+      - cp "{{.BIN_DIR}}/lola-cli" "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/Resources/bin/lola"
+      - chmod +x "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/Resources/bin/lola"
       - cp build/darwin/Info.plist "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents"
       - task: '{{if eq OS "darwin"}}codesign:adhoc{{else}}codesign:skip{{end}}'
 
@@ -183,6 +228,18 @@ tasks:
           rm -f "{{.BIN_DIR}}/dev/{{.APP_NAME}}.app/Contents/Resources/Assets.car"
         fi
       - cp "{{.BIN_DIR}}/{{.APP_NAME}}" "{{.BIN_DIR}}/dev/{{.APP_NAME}}.app/Contents/MacOS"
+      # Mirror the production bundle's CLI when one has already been built, so
+      # the bundled-fallback path can be exercised under `wails3 dev`. NOT a
+      # build dependency: a dev machine has `lola` on PATH (which wins anyway),
+      # and rebuilding a universal CLI on every dev restart would tax the loop
+      # for something dev does not need. Run `wails3 task darwin:build:cli` once
+      # to test the fallback.
+      - |
+        if [ -f "{{.BIN_DIR}}/lola-cli" ]; then
+          mkdir -p "{{.BIN_DIR}}/dev/{{.APP_NAME}}.app/Contents/Resources/bin"
+          cp "{{.BIN_DIR}}/lola-cli" "{{.BIN_DIR}}/dev/{{.APP_NAME}}.app/Contents/Resources/bin/lola"
+          chmod +x "{{.BIN_DIR}}/dev/{{.APP_NAME}}.app/Contents/Resources/bin/lola"
+        fi
       - cp "build/darwin/Info.dev.plist" "{{.BIN_DIR}}/dev/{{.APP_NAME}}.app/Contents/Info.plist"
       - codesign --force --deep --sign - "{{.BIN_DIR}}/dev/{{.APP_NAME}}.app"
       - '"{{.BIN_DIR}}/dev/{{.APP_NAME}}.app/Contents/MacOS/{{.APP_NAME}}"'

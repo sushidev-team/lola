@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -354,5 +355,151 @@ func TestInspectPathEmpty(t *testing.T) {
 	got := (&ConfigService{}).InspectPath("")
 	if got.IsRepo || got.Path != "" || got.SuggestedID != "" {
 		t.Errorf("InspectPath(\"\") = %+v, want the zero answer", got)
+	}
+}
+
+// --- [linear] API key -------------------------------------------------------
+//
+// The key was settable only in the first-run wizard: neither this app's settings
+// nor the TUI's had a field for it, so a hand-written config could never gain
+// one and rotating a key meant editing the Keychain by hand — while a daemon
+// without a key fails every poll.
+
+// stubDesktopKeychain replaces the keychain write and records what it received.
+func stubDesktopKeychain(t *testing.T, fail bool) *struct{ service, key string } {
+	t.Helper()
+	got := &struct{ service, key string }{}
+	orig := storeLinearKey
+	storeLinearKey = func(service, key string) error {
+		got.service, got.key = service, key
+		if fail {
+			return errors.New("keychain unavailable")
+		}
+		return nil
+	}
+	t.Cleanup(func() { storeLinearKey = orig })
+	return got
+}
+
+func TestSetLinearKeyStoresToKeychainAndNamesTheSource(t *testing.T) {
+	path := writeTestConfig(t, minimalConfig)
+	kc := stubDesktopKeychain(t, false)
+	svc := &ConfigService{}
+
+	msg, err := svc.SetLinearKey("  lin_api_secret  ")
+	if err != nil {
+		t.Fatalf("SetLinearKey: %v", err)
+	}
+	if kc.service != setupKeychainService || kc.key != "lin_api_secret" {
+		t.Errorf("keychain got service=%q key=%q; the key must be trimmed", kc.service, kc.key)
+	}
+	if !strings.Contains(msg, "Keychain") {
+		t.Errorf("message must say where the key went, got %q", msg)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Linear.APIKeyKeychain != setupKeychainService {
+		t.Errorf("api_key_keychain = %q, want %q", cfg.Linear.APIKeyKeychain, setupKeychainService)
+	}
+	// The value must never reach the file — that is what the keychain is for.
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "lin_api_secret") {
+		t.Fatalf("the key leaked into config.toml:\n%s", raw)
+	}
+}
+
+// Rotating from an env-var config to a keychain one must not leave BOTH sources
+// named: the stale env var would keep winning or confusing the doctor.
+func TestSetLinearKeyClearsTheEnvSourceOnRotation(t *testing.T) {
+	path := writeTestConfig(t, minimalConfig+"\n[linear]\napi_key_env = \"OLD_VAR\"\n")
+	stubDesktopKeychain(t, false)
+
+	if _, err := (&ConfigService{}).SetLinearKey("lin_api_new"); err != nil {
+		t.Fatalf("SetLinearKey: %v", err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Linear.APIKeyEnv != "" {
+		t.Errorf("api_key_env = %q, want it cleared once the keychain holds the key", cfg.Linear.APIKeyEnv)
+	}
+}
+
+// No keychain must still leave a WORKING configuration, and say what the user
+// has left to do.
+func TestSetLinearKeyFallsBackToEnvVar(t *testing.T) {
+	path := writeTestConfig(t, minimalConfig)
+	stubDesktopKeychain(t, true)
+
+	msg, err := (&ConfigService{}).SetLinearKey("lin_api_secret")
+	if err != nil {
+		t.Fatalf("SetLinearKey: %v", err)
+	}
+	if !strings.Contains(msg, setupEnvVar) {
+		t.Errorf("message must name the env var to export, got %q", msg)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Linear.APIKeyEnv != setupEnvVar {
+		t.Errorf("api_key_env = %q, want %q", cfg.Linear.APIKeyEnv, setupEnvVar)
+	}
+}
+
+func TestSetLinearKeyRejectsEmpty(t *testing.T) {
+	writeTestConfig(t, minimalConfig)
+	stubDesktopKeychain(t, false)
+	if _, err := (&ConfigService{}).SetLinearKey("   "); err == nil {
+		t.Fatal("SetLinearKey(\"   \") must fail rather than write a blank key")
+	}
+}
+
+func TestLinearKeyStatusReportsSourceWithoutTheValue(t *testing.T) {
+	writeTestConfig(t, minimalConfig+"\n[linear]\napi_key_env = \"LOLA_TEST_LINEAR_KEY\"\n")
+	t.Setenv("LOLA_TEST_LINEAR_KEY", "lin_api_secret")
+
+	st := (&ConfigService{}).LinearKeyStatus()
+	if !st.Configured || !st.Resolvable {
+		t.Fatalf("status = %+v, want configured and resolvable", st)
+	}
+	if !strings.Contains(st.Source, "LOLA_TEST_LINEAR_KEY") {
+		t.Errorf("source = %q, want the env var named", st.Source)
+	}
+	// Secret discipline: nothing in the DTO may carry the key itself.
+	if strings.Contains(st.Source+st.Detail, "lin_api_secret") {
+		t.Fatalf("the key value leaked into the status DTO: %+v", st)
+	}
+}
+
+// A config naming a source that yields nothing is the exact silent failure the
+// app exists to surface: configured, but not resolvable.
+func TestLinearKeyStatusReportsAnUnreadableSource(t *testing.T) {
+	writeTestConfig(t, minimalConfig+"\n[linear]\napi_key_env = \"LOLA_TEST_MISSING_KEY\"\n")
+	t.Setenv("LOLA_TEST_MISSING_KEY", "")
+
+	st := (&ConfigService{}).LinearKeyStatus()
+	if !st.Configured {
+		t.Errorf("status = %+v, want configured", st)
+	}
+	if st.Resolvable {
+		t.Errorf("status = %+v, want NOT resolvable", st)
+	}
+	if st.Detail == "" {
+		t.Error("an unresolvable key must explain why")
+	}
+}
+
+func TestLinearKeyStatusWithNoSource(t *testing.T) {
+	writeTestConfig(t, minimalConfig)
+	st := (&ConfigService{}).LinearKeyStatus()
+	if st.Configured || st.Resolvable {
+		t.Fatalf("status = %+v, want neither configured nor resolvable", st)
 	}
 }

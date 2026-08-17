@@ -592,7 +592,23 @@ each of which owns exactly one external tool or concern behind an **exec seam**
 - **Secret discipline.** The Linear key and Slack webhook URL never live in
   `config.toml`, never appear in argv, a log line, or a returned error. Follow
   the existing pattern (resolve from keychain/env by *name*; sanitize
-  `*url.Error`) when touching those packages.
+  `*url.Error`) when touching those packages. The Linear key is the one secret
+  with a WRITE path in the settings UIs — it was previously settable only in the
+  setup wizards, so a hand-written config could never gain one and rotating a
+  key meant editing the Keychain by hand, while a keyless daemon fails every
+  poll. Its rails:
+  - Write-only, and NOT a form field. `ConfigService.SetLinearKey` (app) and the
+    TUI's `sfSecret` field write straight to the keychain; the key is
+    deliberately kept off `SettingsDTO` / the cfg write, for the reasons `[ui]`
+    is (see the comment above `Themes`) plus one of its own — a whole-form
+    commit would carry a secret through every unrelated save, and a validation
+    failure on another tab would silently drop the key just typed.
+  - Nothing reads a key back. `LinearKeyStatus` / `linearKeyHelp` resolve one
+    only to learn WHETHER it resolves, and report the source's name.
+  - Both surfaces mask it and clear the field after a successful store — the
+    TUI's pane in particular is captured by lola's own attention parser.
+  - A keychain failure still leaves a WORKING config (`api_key_env` by name) and
+    says so, because the user then has to export it themselves.
 - **`[ui].theme` paints BOTH surfaces, and the TUI palette is a `var` block.**
   `internal/tui/catppuccin.go` is a Go port of `desktop/frontend/src/lib/
   catppuccin.ts` — the same four flavors, the same contrast-walking token math —
@@ -730,6 +746,35 @@ distinct binary from the v2 `wails`. See `desktop/README.md`.
   grid** for fill-the-parent layouts (grid cells stretch reliably), or an
   explicit width — never rely on `align-items:stretch` for a flex-container child
   in a column. Verify layout in the actual `.app`, not just Chrome.
+- **The app SHIPS the CLI, and `desktop/lolabin.go` owns which one runs.** The
+  app is a client: it starts a daemon by exec'ing `lola run` and cannot re-exec
+  itself the way the TUI does. The DMG used to carry only the `.app`, so a fresh
+  install died in the first-run wizard on "lola binary not found on PATH". The
+  bundle now carries the CLI at `Contents/Resources/bin/lola`
+  (`build/darwin/Taskfile.yml`'s `build:cli` → `create:app:bundle`; the path is
+  pinned against `bundledRelPath` by a parity test). Resolution order is
+  `$LOLA_BIN` → `PATH` → bundled, and **PATH stays ahead on purpose** — a
+  developer's `go install` build is the dev loop below, and preferring the
+  shipped copy would make `go install` look like a no-op. Consequences:
+  - The bundled copy is the FLOOR, so the two can disagree in version;
+    `DaemonService.CLIInfo` reports both and the doctor overlay flags the skew
+    rather than leaving it to be debugged as a missing feature.
+  - `InstallCLI` SYMLINKS (never copies) the bundled binary onto PATH, so the
+    updater's bundle swap carries the CLI with it. It refuses to replace
+    anything that is not a symlink into a `.app` — a hand-installed CLI is not
+    ours to overwrite.
+  - Only `lola` is vendored. `tmux` must NOT be: `tmux -L lola` is a
+    client/server pair shared with the CLI, and mixing builds hits a
+    protocol-version mismatch. `git`/`gh`/the coding agent are the user's own
+    installs (auth, subscriptions) — hence the PATH work below.
+- **`ensurePATH` probes the LOGIN SHELL, not a fixed list.** A Finder-launched
+  `.app` inherits `/usr/bin:/bin:/usr/sbin:/sbin`, and the old two-entry
+  Homebrew list could not find a `claude` installed through a version manager
+  (mise/asdf/fnm/volta) or a `lola` in `~/go/bin`. It now runs `$SHELL -l -c`
+  once at startup, bounded, reading its answer from a SENTINEL rather than from
+  "the output" — login rc files print banners, and a PATH assembled from
+  someone's shell greeting would be handed straight to exec. A failed probe
+  falls back to the static list, which is a superset of the old behaviour.
 - **The daemon does not hot-reload its own binary.** After `make build`, a
   still-running `lola run` keeps the old code — a daemon predating a command
   answers `unknown cmd "<x>"` (e.g. `projects`). Restart it (TUI `^r`, the app's

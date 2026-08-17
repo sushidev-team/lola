@@ -8,9 +8,11 @@
  * daemon only re-reads it on `reload`. Every Save validates, persists atomically
  * (config.Save is temp+rename, 0600), then best-effort reloads a live daemon.
  * 
- * Secrets never pass through here: the Linear key and Slack webhook live in the
- * keychain / env by *name*, and those name fields are the only secret-adjacent
- * values these DTOs carry.
+ * Secrets are WRITE-ONLY here, and only through SetLinearKey: the Linear key and
+ * Slack webhook live in the keychain / env by *name*, and those name fields are
+ * the only secret-adjacent values any DTO carries. Nothing ever reads a secret
+ * back out to the frontend — LinearKeyStatus reports where the key lives and
+ * whether it resolves, never its value.
  * @module
  */
 
@@ -72,6 +74,19 @@ export function InspectPath(path: string): $CancellablePromise<$models.PathInfoD
 }
 
 /**
+ * LinearKeyStatus reports the key's origin and health for the settings screen.
+ * 
+ * This exists because the key was settable ONLY in the first-run wizard: neither
+ * this app's settings nor the TUI's had a field for it, so a key could never be
+ * added to a hand-written config, and rotating one meant editing the Keychain by
+ * hand. A daemon with no key fails every poll, which is the exact silent failure
+ * the app is supposed to surface.
+ */
+export function LinearKeyStatus(): $CancellablePromise<$models.LinearKeyStatusDTO> {
+    return $Call.ByID(1592524511);
+}
+
+/**
  * MigrateReview folds the legacy [review]/[coderabbit] tables into the editable
  * provider catalog and persists (one-way; mirrors `lola config migrate-review`
  * and the TUI's in-place migrate). A no-op when there is nothing to migrate.
@@ -120,6 +135,22 @@ export function SaveProject(dto: $models.ProjectFormDTO): $CancellablePromise<vo
 
 export function SaveSettings(dto: $models.SettingsDTO): $CancellablePromise<void> {
     return $Call.ByID(298700571, dto);
+}
+
+/**
+ * SetLinearKey stores a new Linear key and points config.toml at it. The key
+ * goes to the macOS Keychain under the same service the first-run wizards use,
+ * so a key set here is read identically by the daemon, the TUI and this app;
+ * when the Keychain is unavailable it falls back to naming an env var, exactly
+ * as Setup does. The returned message says which happened.
+ * 
+ * Deliberately NOT a SettingsDTO field, for the reasons the theme is not one
+ * (see below) plus one of its own: a whole-form commit would carry a secret
+ * through every save of an unrelated field, and a validation failure elsewhere
+ * in the form would silently drop the key the user just typed.
+ */
+export function SetLinearKey(key: string): $CancellablePromise<string> {
+    return $Call.ByID(835844419, key);
 }
 
 /**

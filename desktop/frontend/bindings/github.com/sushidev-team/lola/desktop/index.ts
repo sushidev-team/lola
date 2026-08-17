@@ -17,9 +17,12 @@ export {
 };
 
 export type {
+    CLIInfoDTO,
+    CLIInstallDTO,
     DoctorReportDTO,
     DoctorResultDTO,
     InheritsDTO,
+    LinearKeyStatusDTO,
     LinearOption,
     LinearTeam,
     LinearTeamMeta,

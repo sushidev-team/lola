@@ -9,7 +9,7 @@
   import { overlayClose } from "$lib/overlayClose";
   import { deepEqual } from "$lib/deepEqual";
   import { ConfigService, LinearService } from "@bindings/desktop";
-  import type { SettingsDTO, LinearOption } from "@bindings/desktop/models";
+  import type { SettingsDTO, LinearOption, LinearKeyStatusDTO } from "@bindings/desktop/models";
   import { linesToText, splitLines, cleanLines } from "$lib/lines";
   import { appearance, FLAVORS, THEME_IDS, type ThemeId } from "$lib/theme-runtime.svelte";
 
@@ -40,6 +40,7 @@
 
   const TABS = [
     { id: "defaults", label: "Defaults" },
+    { id: "linear", label: "Linear" },
     { id: "project", label: "Project defaults" },
     { id: "notify", label: "Notify" },
     { id: "brain", label: "Brain" },
@@ -216,6 +217,8 @@
       void loadSortKeys();
     } else if (id === "appearance") {
       void loadThemes();
+    } else if (id === "linear") {
+      void loadKeyStatus();
     }
   }
 
@@ -356,6 +359,73 @@
     p.fallback = fallbackFor(p.provider).filter((x) => set.has(x));
   }
 
+  // --- Linear API key ([linear]) --------------------------------------------
+  //
+  // The key is NOT a SettingsDTO field, for the reasons the theme is not one
+  // plus one of its own: a whole-form commit would carry a secret through every
+  // unrelated save, and a validation failure on some other tab would silently
+  // drop the key just typed. So this section has its own read (LinearKeyStatus,
+  // which reports the SOURCE and whether it resolves — never the value) and its
+  // own write (SetLinearKey), and neither touches `dto` or the dirty baseline.
+  //
+  // It exists because the key was settable only in the first-run wizard. A
+  // config written by hand, or a rotated key, had no path at all — and a daemon
+  // without a key fails every poll, the exact silent failure this app is for.
+  let keyStatus = $state<LinearKeyStatusDTO | null>(null);
+  let keyInput = $state("");
+  let keyBusy = $state<"" | "validating" | "saving">("");
+  let keyMsg = $state("");
+  let keyMsgKind = $state<"good" | "bad">("good");
+
+  async function loadKeyStatus() {
+    try {
+      keyStatus = await ConfigService.LinearKeyStatus();
+    } catch (e) {
+      keyStatus = null;
+      keyMsg = String(e);
+      keyMsgKind = "bad";
+    }
+  }
+
+  async function validateKey() {
+    if (!keyInput.trim()) return;
+    keyBusy = "validating";
+    keyMsg = "";
+    try {
+      await ConfigService.ValidateLinearKey(keyInput);
+      keyMsg = "Key is valid.";
+      keyMsgKind = "good";
+    } catch (e) {
+      keyMsg = String(e);
+      keyMsgKind = "bad";
+    } finally {
+      keyBusy = "";
+    }
+  }
+
+  async function saveKey() {
+    if (!keyInput.trim()) return;
+    keyBusy = "saving";
+    keyMsg = "";
+    try {
+      const msg = await ConfigService.SetLinearKey(keyInput);
+      // Clear the field on success: the key is stored, and leaving it in a DOM
+      // input keeps a live secret on screen for as long as the overlay is open.
+      keyInput = "";
+      keyMsg = msg;
+      keyMsgKind = "good";
+      await loadKeyStatus();
+      // The daemon reads the key at startup and on reload, so a key saved into a
+      // running daemon means nothing until it re-reads config.
+      await store.reload();
+    } catch (e) {
+      keyMsg = String(e);
+      keyMsgKind = "bad";
+    } finally {
+      keyBusy = "";
+    }
+  }
+
   async function migrateReview() {
     try {
       await ConfigService.MigrateReview();
@@ -472,6 +542,76 @@
               </div>
             </div>
           </div>
+        </section>
+      {:else if tab === "linear"}
+        <section>
+          {@render head("Linear")}
+          <p class="copy mb-3 text-sm text-faint">
+            lola reads every issue through this key. It is stored in the macOS Keychain and never written to
+            <span class="font-mono text-sm">config.toml</span> — only the name of its source is.
+          </p>
+
+          <div class="mb-4 rounded-lg border border-edge bg-canvas px-3 py-2.5">
+            {#if !keyStatus}
+              <span class="text-faint">Checking…</span>
+            {:else if keyStatus.resolvable}
+              <span class="text-good">✓ Key configured</span>
+              <span class="mt-1 block text-sm text-faint">Read from {keyStatus.source}.</span>
+            {:else if keyStatus.configured}
+              <span class="text-bad">✗ Key configured but unreadable</span>
+              <span class="mt-1 block text-sm text-faint">{keyStatus.source} — {keyStatus.detail}</span>
+            {:else}
+              <span class="text-warn">▲ No key configured</span>
+              <span class="mt-1 block text-sm text-faint">Every poll will fail until one is set.</span>
+            {/if}
+          </div>
+
+          <div class="space-y-2">
+            <div class={rowTopCls}>
+              <span class="text-faint">{keyStatus?.configured ? "Replace key" : "API key"}</span>
+              <span>
+                <input
+                  class="{inputCls} font-mono"
+                  type="password"
+                  autocomplete="off"
+                  aria-label="Linear API key"
+                  placeholder="lin_api_…"
+                  bind:value={keyInput}
+                  oninput={() => (keyMsg = "")}
+                />
+                <span class={hintCls}>Personal API key from Linear → Settings → Security &amp; access → API keys.</span>
+              </span>
+            </div>
+            <div class={rowCls}>
+              <span></span>
+              <span class="flex items-center gap-2">
+                <Button
+                  variant="secondary"
+                  disabled={!keyInput.trim() || keyBusy !== ""}
+                  loading={keyBusy === "validating"}
+                  onclick={validateKey}>Validate</Button
+                >
+                <Button
+                  variant="primary"
+                  disabled={!keyInput.trim() || keyBusy !== ""}
+                  loading={keyBusy === "saving"}
+                  onclick={saveKey}>Save key</Button
+                >
+              </span>
+            </div>
+            {#if keyMsg}
+              <div class={rowTopCls}>
+                <span></span>
+                <p class="text-sm {keyMsgKind === 'good' ? 'text-good' : 'text-bad'}">{keyMsg}</p>
+              </div>
+            {/if}
+          </div>
+
+          <!-- Saved on its own, not by the overlay's Save: the key is a secret and
+               must not ride along on an unrelated form commit (see saveKey). -->
+          <p class="copy mt-4 text-sm text-faint">
+            The key saves immediately — the overlay's Save button does not carry it.
+          </p>
         </section>
       {:else if tab === "project"}
         <section>

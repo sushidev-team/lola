@@ -7,10 +7,16 @@
 // The fields are split across a tab strip (tab / shift+tab, or left/right);
 // within a tab they are a flat, navigable list grouped by section header. Five
 // kinds: bool (space/enter toggles), text (type inline), int (digits, validated
-// on save), enum (space/enter cycles a fixed set), and list/env (enter opens a
-// one-entry-per-line sub-editor, over the shared fieldedit.go helpers). The
-// Slack webhook and Linear key are secrets and are NEVER edited here — [notify]
-// exposes only the env-var NAME that holds the webhook, never its value.
+// on save), enum (space/enter cycles a fixed set), list/env (enter opens a
+// one-entry-per-line sub-editor, over the shared fieldedit.go helpers), and
+// secret (types masked, and goes to the KEYCHAIN rather than into config.toml).
+//
+// Secret discipline: a secret's value never reaches config.toml, a log line or
+// the rendered pane. The Slack webhook is still name-only — [notify] exposes the
+// env var that HOLDS it, never its value. The Linear key is the one secret with
+// a write path here (sfSecret), because it was otherwise settable only in
+// `lola setup`, leaving no way to add one to a hand-written config or to rotate
+// a leaked one; it is written straight to the keychain and never read back.
 package tui
 
 import (
@@ -28,6 +34,7 @@ import (
 	"github.com/sushidev-team/lola/internal/agent"
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/linear"
+	"github.com/sushidev-team/lola/internal/secrets"
 )
 
 type settingsFormEvent int
@@ -47,6 +54,12 @@ const (
 	sfEnum // fixed set of values, cycled with space/enter (no free typing)
 	sfList // one value per line, edited in an open sub-editor
 	sfEnv  // one KEY=value per line, same sub-editor
+	// sfSecret types like sfText but RENDERS masked and is never written to
+	// config.toml — save() hands it to the keychain instead. Only the Linear API
+	// key uses it. Masking matters here beyond shoulder-surfing: the TUI runs
+	// inside tmux, so a plain-text key would sit in the pane's scrollback, which
+	// lola itself captures for the attention parser.
+	sfSecret
 )
 
 // settingsTab groups the fields into the config tables they write. [defaults]
@@ -57,6 +70,7 @@ type settingsTab int
 
 const (
 	stDefaults settingsTab = iota
+	stLinear
 	stProjectDefaults
 	stNotify
 	stBrain
@@ -70,6 +84,7 @@ var settingsTabs = []struct {
 	title string
 }{
 	{stDefaults, "Defaults"},
+	{stLinear, "Linear"},
 	{stProjectDefaults, "Project defaults"},
 	{stNotify, "Notify"},
 	{stBrain, "Brain"},
@@ -154,6 +169,12 @@ type settingsForm struct {
 	// which is a hard validation error) and offers a one-key migration into the
 	// editable provider catalog. Cleared once migrated.
 	reviewLegacy bool
+
+	// savedNote is a one-line message a successful save wants shown INSTEAD of
+	// the generic "settings saved" — today only the Linear key's outcome, which
+	// matters because the keychain-unavailable path leaves the user with work to
+	// do (export the env var) that a generic confirmation would hide.
+	savedNote string
 }
 
 // setPicker is the workspace-label chooser floated over the field list. It is
@@ -224,6 +245,16 @@ func newSettingsForm(cfgPath string, cfg *config.Config) *settingsForm {
 			{key: "concurrency_cap", tab: stDefaults, label: "Concurrency cap", help: "Default per-poll cap (a poll's own cap overrides). 0 = no per-poll default.", kind: sfInt, text: itoa(d.ConcurrencyCap)},
 			{key: "poll_interval", tab: stDefaults, label: "Poll interval", help: "How often each poll ticks, as a Go duration (e.g. 60s, 2m). Clamped up to 30s.", kind: sfText, text: d.PollInterval.String()},
 			{key: "agent", tab: stDefaults, label: "Coding agent", help: "Default coding agent each session spawns (a [[project]] can override). space/enter cycles claude|codex|opencode.", kind: sfEnum, options: agentKindStrings(), text: defaultAgentDisplay(d.Agent)},
+
+			// [linear] — the API key. Its VALUE never lands in config.toml (the
+			// keychain holds it; config records only the source's name), so this
+			// field is handled entirely outside the cfg write in save().
+			//
+			// It exists because the key was settable only in `lola setup`: a
+			// hand-written config could never gain one, and rotating a key meant
+			// editing the Keychain by hand — while a daemon without a key fails
+			// every poll.
+			{key: "linear_key", tab: stLinear, section: "[linear]", sectionNote: "API key (stored in the macOS Keychain)", label: "API key", help: linearKeyHelp(cfg), kind: sfSecret},
 
 			// [defaults] — the per-project fallbacks. Same TOML table, but every
 			// key here is the value a [[project]] gets when it omits its own, so
@@ -312,6 +343,28 @@ func newSettingsForm(cfgPath string, cfg *config.Config) *settingsForm {
 // snapshot serializes every editable value across all tabs. The fields slice IS
 // the edit buffer (each setField carries its own text/bool/lines), so hashing it
 // captures the whole form in one place.
+// linearKeyHelp describes where the key currently comes from and whether it
+// resolves, so the field says what typing into it will REPLACE. It resolves the
+// key only to learn whether it can be read; the value is discarded here and
+// never reaches a field, a log line or the pane.
+func linearKeyHelp(cfg *config.Config) string {
+	const how = " Type a key and ctrl+s to store it in the macOS Keychain; config.toml only records the source's name."
+	kc, env := cfg.Linear.APIKeyKeychain, cfg.Linear.APIKeyEnv
+	var src string
+	switch {
+	case kc != "":
+		src = "macOS Keychain (" + kc + ")"
+	case env != "":
+		src = "environment variable " + env
+	default:
+		return "No key configured — every poll fails until one is set." + how
+	}
+	if _, err := secrets.LinearAPIKey(kc, env); err != nil {
+		return "Configured (" + src + ") but UNREADABLE: " + shortErr(err) + "." + how
+	}
+	return "Key configured and readable (" + src + ")." + how
+}
+
 func (f *settingsForm) snapshot() string {
 	var b strings.Builder
 	for i := range f.fields {
@@ -491,7 +544,9 @@ func (f *settingsForm) paste(s string) {
 		return
 	}
 	switch fld.kind {
-	case sfText:
+	case sfText, sfSecret:
+		// Paste is the ONLY sane way to enter a 40-character API key, so the
+		// secret field takes it on the same terms as text.
 		fld.text += pasteInline(s)
 	case sfInt:
 		fld.text += pasteDigits(s)
@@ -687,7 +742,7 @@ func (f *settingsForm) key(k tea.KeyPressMsg) (tea.Cmd, settingsFormEvent) {
 		if f.reviewReadOnly() {
 			return nil, settingsFormNone
 		}
-		if fld.kind == sfText || fld.kind == sfInt {
+		if fld.kind == sfText || fld.kind == sfInt || fld.kind == sfSecret {
 			fld.text = dropLastRune(fld.text)
 		}
 	default:
@@ -699,12 +754,14 @@ func (f *settingsForm) key(k tea.KeyPressMsg) (tea.Cmd, settingsFormEvent) {
 	return nil, settingsFormNone
 }
 
-// typeInto appends a typed character to a text/int field (digits only for int).
+// typeInto appends a typed character to a text/secret/int field (digits only
+// for int). A secret accumulates in the same `text` field as plain text — only
+// the RENDERING and the save path differ.
 func (f *settingsForm) typeInto(fld *setField, k tea.KeyPressMsg) {
 	switch {
 	case fld.kind == sfInt && len(k.Text) == 1 && k.Text >= "0" && k.Text <= "9":
 		fld.text += k.Text
-	case fld.kind == sfText && k.Text != "":
+	case (fld.kind == sfText || fld.kind == sfSecret) && k.Text != "":
 		fld.text += k.Text
 	}
 }
@@ -1320,6 +1377,13 @@ func (f *settingsForm) save() settingsFormEvent {
 	oldUI := c.UI
 	oldP := c.ReviewProviders
 	oldSA := c.StatusAgent
+	oldLin := c.Linear
+
+	// The Linear key, if one was typed. This writes the KEYCHAIN before the
+	// config is validated, which is deliberate and safe in that order: a stored
+	// key that no config points at is inert, whereas a config naming a keychain
+	// service that holds nothing is a daemon that fails every poll.
+	keyMsg := applyLinearKey(c, f.field("linear_key").text)
 
 	c.Defaults.GlobalCap = gc
 	c.Defaults.ConcurrencyCap = cc
@@ -1372,6 +1436,7 @@ func (f *settingsForm) save() settingsFormEvent {
 		c.UI = oldUI
 		c.ReviewProviders = oldP
 		c.StatusAgent = oldSA
+		c.Linear = oldLin
 		c.ResolveInheritance() // re-resolve projects against the restored defaults
 	}
 	if err := c.Validate(); err != nil {
@@ -1384,7 +1449,38 @@ func (f *settingsForm) save() settingsFormEvent {
 		f.err = "save failed: " + err.Error()
 		return settingsFormNone
 	}
+	// Drop the typed key as soon as it is committed: the form is discarded on
+	// save anyway, but a secret should not outlive its use even by one frame.
+	f.field("linear_key").text = ""
+	f.savedNote = keyMsg
 	return settingsFormSaved
+}
+
+// storeLinearKey is the exec seam over the keychain write, so tests exercise
+// save() without touching the real login keychain.
+var storeLinearKey = secrets.StoreLinearAPIKey
+
+// applyLinearKey stores a newly typed API key and points [linear] at its source,
+// mutating c IN PLACE so the caller's Validate + Save carry it. A no-op when the
+// field is empty, which is the normal case: the field starts blank on every open
+// (the key is never read back into it), so an untouched Linear tab writes
+// nothing.
+//
+// The key's VALUE goes only to the keychain. If that fails we fall back to
+// naming an env var — exactly as the setup wizards do — and return the message
+// saying so, because in that case the user still has to export it themselves.
+func applyLinearKey(c *config.Config, key string) string {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return ""
+	}
+	if err := storeLinearKey(setupKeychainService, key); err != nil {
+		c.Linear.APIKeyEnv = setupEnvVar
+		return "keychain unavailable — export " + setupEnvVar + " with your key before running lola"
+	}
+	c.Linear.APIKeyKeychain = setupKeychainService
+	c.Linear.APIKeyEnv = ""
+	return "key stored in the macOS Keychain (service " + setupKeychainService + ")"
 }
 
 // buildReviewProviders assembles the catalog from the per-kind fields, emitting
@@ -1558,6 +1654,17 @@ func (f *settingsForm) fieldRegion() (lines []string, fieldLine []int) {
 			val = boolGlyph(fld.b)
 		case sfEnum:
 			val = enumGlyph(fld.text)
+		case sfSecret:
+			// Never the characters themselves: this pane's scrollback is captured
+			// by lola's own attention parser, and a key rendered here would land
+			// in it.
+			val = strings.Repeat("•", len([]rune(fld.text)))
+			if val == "" {
+				val = faintText.Render("(type or paste a key)")
+			}
+			if onField {
+				val += "_"
+			}
 		default:
 			val = fld.text
 			if fld.wsPick {

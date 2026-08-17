@@ -52,18 +52,35 @@ const fakeDto = {
 
 // vi.mock factories are hoisted; keep their fns in vi.hoisted so they exist when
 // the factories run.
-const { GetSettings, SaveSettings, PrioritySortKeys, Themes, SetTheme, WorkspaceLabels, TeamMeta, setFlash, closeOverlay } =
-  vi.hoisted(() => ({
-    GetSettings: vi.fn(),
-    SaveSettings: vi.fn(),
-    PrioritySortKeys: vi.fn(),
-    Themes: vi.fn(),
-    SetTheme: vi.fn(),
-    WorkspaceLabels: vi.fn(),
-    TeamMeta: vi.fn(),
-    setFlash: vi.fn(),
-    closeOverlay: vi.fn(),
-  }));
+const {
+  GetSettings,
+  SaveSettings,
+  PrioritySortKeys,
+  Themes,
+  SetTheme,
+  WorkspaceLabels,
+  TeamMeta,
+  LinearKeyStatus,
+  SetLinearKey,
+  ValidateLinearKey,
+  setFlash,
+  reload,
+  closeOverlay,
+} = vi.hoisted(() => ({
+  GetSettings: vi.fn(),
+  SaveSettings: vi.fn(),
+  PrioritySortKeys: vi.fn(),
+  Themes: vi.fn(),
+  SetTheme: vi.fn(),
+  WorkspaceLabels: vi.fn(),
+  TeamMeta: vi.fn(),
+  LinearKeyStatus: vi.fn(),
+  SetLinearKey: vi.fn(),
+  ValidateLinearKey: vi.fn(),
+  setFlash: vi.fn(),
+  reload: vi.fn(),
+  closeOverlay: vi.fn(),
+}));
 
 vi.mock("@bindings/desktop", () => ({
   ConfigService: {
@@ -72,6 +89,9 @@ vi.mock("@bindings/desktop", () => ({
     PrioritySortKeys: () => PrioritySortKeys(),
     Themes: () => Themes(),
     SetTheme: (name: string) => SetTheme(name),
+    LinearKeyStatus: () => LinearKeyStatus(),
+    SetLinearKey: (k: string) => SetLinearKey(k),
+    ValidateLinearKey: (k: string) => ValidateLinearKey(k),
   },
   LinearService: {
     WorkspaceLabels: () => WorkspaceLabels(),
@@ -79,7 +99,7 @@ vi.mock("@bindings/desktop", () => ({
     Teams: vi.fn(),
   },
 }));
-vi.mock("$lib/store.svelte", () => ({ store: { setFlash } }));
+vi.mock("$lib/store.svelte", () => ({ store: { setFlash, reload } }));
 vi.mock("$lib/nav.svelte", () => ({ nav: { closeOverlay, overlayTab: "" } }));
 
 import SettingsForm from "./SettingsForm.svelte";
@@ -107,7 +127,16 @@ describe("SettingsForm", () => {
     Themes.mockReset().mockResolvedValue([...THEME_IDS]);
     SetTheme.mockReset().mockResolvedValue(undefined);
     TeamMeta.mockReset();
+    LinearKeyStatus.mockReset().mockResolvedValue({
+      configured: true,
+      resolvable: true,
+      source: "macOS Keychain (lola-linear)",
+      detail: "",
+    });
+    SetLinearKey.mockReset().mockResolvedValue("key stored in the macOS Keychain (service lola-linear)");
+    ValidateLinearKey.mockReset().mockResolvedValue(undefined);
     setFlash.mockReset();
+    reload.mockReset().mockResolvedValue(undefined);
     closeOverlay.mockReset();
     confirm.cancel(); // the confirm store is a singleton — clear it between tests
     // `appearance` is a module singleton, so a preview would otherwise leak into
@@ -507,6 +536,114 @@ describe("SettingsForm", () => {
       await fireEvent.click(screen.getByRole("button", { name: /dismiss error/i }));
 
       expect(screen.queryByText(/boom/)).not.toBeInTheDocument();
+    });
+  });
+
+  // The Linear API key. It was settable ONLY in the first-run wizard: neither
+  // this form nor the TUI's had a field for it, so a hand-written config could
+  // never gain a key and rotating one meant editing the Keychain by hand — while
+  // a daemon without a key fails every poll.
+  describe("Linear API key", () => {
+    async function openLinearTab() {
+      render(SettingsForm);
+      await screen.findByDisplayValue("60s");
+      await fireEvent.click(screen.getByRole("tab", { name: "Linear" }));
+      return screen.findByLabelText("Linear API key");
+    }
+
+    it("reports where the key lives without ever showing it", async () => {
+      await openLinearTab();
+      expect(await screen.findByText("✓ Key configured")).toBeInTheDocument();
+      expect(screen.getByText(/macOS Keychain \(lola-linear\)/)).toBeInTheDocument();
+    });
+
+    // The state the app exists to surface: a config naming a source that yields
+    // nothing means every poll fails.
+    it("calls out a configured-but-unreadable key", async () => {
+      LinearKeyStatus.mockResolvedValue({
+        configured: true,
+        resolvable: false,
+        source: "environment variable LINEAR_API_KEY",
+        detail: "environment variable LINEAR_API_KEY is empty",
+      });
+      await openLinearTab();
+      expect(await screen.findByText("✗ Key configured but unreadable")).toBeInTheDocument();
+    });
+
+    it("warns when no key is configured at all", async () => {
+      LinearKeyStatus.mockResolvedValue({ configured: false, resolvable: false, source: "", detail: "" });
+      await openLinearTab();
+      expect(await screen.findByText("▲ No key configured")).toBeInTheDocument();
+    });
+
+    // A password input, not a text one: the value must not be readable over a
+    // shoulder or in a screenshot of the settings overlay.
+    it("masks the input", async () => {
+      const input = await openLinearTab();
+      expect(input).toHaveAttribute("type", "password");
+    });
+
+    it("validates a typed key against Linear before it is stored", async () => {
+      const input = await openLinearTab();
+      await fireEvent.input(input, { target: { value: "lin_api_secret" } });
+      await fireEvent.click(screen.getByRole("button", { name: "Validate" }));
+
+      expect(ValidateLinearKey).toHaveBeenCalledWith("lin_api_secret");
+      expect(await screen.findByText("Key is valid.")).toBeInTheDocument();
+      expect(SetLinearKey).not.toHaveBeenCalled(); // validating is not saving
+    });
+
+    it("surfaces a rejected key instead of storing it", async () => {
+      ValidateLinearKey.mockRejectedValueOnce(new Error("401 unauthorized"));
+      const input = await openLinearTab();
+      await fireEvent.input(input, { target: { value: "bad" } });
+      await fireEvent.click(screen.getByRole("button", { name: "Validate" }));
+
+      expect(await screen.findByText(/401 unauthorized/)).toBeInTheDocument();
+    });
+
+    // Saved on its own, NOT through SaveSettings: a whole-form commit would carry
+    // a secret through every unrelated save, and a validation failure on another
+    // tab would silently drop the key just typed.
+    it("saves the key on its own and reloads the daemon", async () => {
+      const input = await openLinearTab();
+      await fireEvent.input(input, { target: { value: "lin_api_secret" } });
+      await fireEvent.click(screen.getByRole("button", { name: "Save key" }));
+
+      await waitFor(() => expect(SetLinearKey).toHaveBeenCalledWith("lin_api_secret"));
+      expect(SaveSettings).not.toHaveBeenCalled();
+      // The daemon reads the key on start and on reload; without this the key is
+      // stored but the running daemon keeps failing every poll.
+      await waitFor(() => expect(reload).toHaveBeenCalled());
+    });
+
+    // Leaving a stored key in a DOM input keeps a live secret on screen for as
+    // long as the overlay is open.
+    it("clears the field once the key is stored", async () => {
+      const input = (await openLinearTab()) as HTMLInputElement;
+      await fireEvent.input(input, { target: { value: "lin_api_secret" } });
+      await fireEvent.click(screen.getByRole("button", { name: "Save key" }));
+
+      await waitFor(() => expect(input.value).toBe(""));
+    });
+
+    it("reports a failed store rather than claiming success", async () => {
+      SetLinearKey.mockRejectedValueOnce(new Error("config.toml is not writable"));
+      const input = await openLinearTab();
+      await fireEvent.input(input, { target: { value: "lin_api_secret" } });
+      await fireEvent.click(screen.getByRole("button", { name: "Save key" }));
+
+      expect(await screen.findByText(/config.toml is not writable/)).toBeInTheDocument();
+    });
+
+    // Typing a key must not make the FORM dirty — it is not part of the DTO, and
+    // a discard prompt about it would be about changes the form does not hold.
+    it("does not arm the unsaved-changes guard", async () => {
+      const input = await openLinearTab();
+      await fireEvent.input(input, { target: { value: "lin_api_secret" } });
+
+      await fireEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
+      expect(closeOverlay).toHaveBeenCalled();
     });
   });
 });
