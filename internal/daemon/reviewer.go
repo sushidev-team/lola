@@ -811,7 +811,19 @@ func (d *Daemon) sendHandoffToAgent(ctx context.Context, s session.Session, p re
 	// findings so nothing in them can rewrite the instruction). It is derived at
 	// SEND time rather than stashed, because a hand-off is usually deferred past
 	// the post that created the threads — often past a daemon restart.
-	msg += inlineThreadNote(s, p)
+	//
+	// Two strengths, and which one applies is decided by whether LOLA posted the
+	// threads. inlineThreadNote can state that they exist (InlineReviewPRs proves
+	// it); everything else — a CodeRabbit watch pointer at the bot's OWN inline
+	// comments, a run whose inline post fell back to a plain comment — gets the
+	// conditional prThreadNote, whose listing command is the source of truth. The
+	// worker must close what it fixed either way: leaving a dozen open
+	// conversations behind is exactly the failure this pipeline step exists for.
+	if note := inlineThreadNote(s, p); note != "" {
+		msg += note
+	} else {
+		msg += prThreadNote(s)
+	}
 	msg = sanitizeAgentText(msg)
 
 	var (

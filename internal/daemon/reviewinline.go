@@ -165,15 +165,16 @@ func (d *Daemon) stampInlineReview(id string, k provKind, pr int) {
 }
 
 // inlineThreadNote is the fixed instruction appended to a worker hand-off when
-// this kind's findings are ALSO sitting on the PR as resolvable threads. It is
-// lola's own text (never provider output), so it may safely carry directives:
-// the point of the inline shape is that the agent works the threads and CLOSES
-// them, and an agent that is not told the threads exist will fix the code and
-// leave twelve open conversations behind.
+// this kind's findings are ALSO sitting on the PR as resolvable threads lola
+// posted itself. It is lola's own text (never provider output), so it may
+// safely carry directives: the point of the inline shape is that the agent
+// works the threads and CLOSES them, and an agent that is not told the threads
+// exist will fix the code and leave twelve open conversations behind.
 //
 // It returns "" whenever the threads cannot be described exactly — no PR, a
 // different PR than the one the threads were posted for, a repo that is not
-// "owner/name" — because a stale instruction is worse than none.
+// "owner/name" — because a stale instruction is worse than none. The weaker
+// prThreadNote covers the hand-offs where lola did NOT post the threads.
 func inlineThreadNote(s session.Session, p reviewProvider) string {
 	if !p.Inline || s.PR == nil || s.PR.Number <= 0 {
 		return ""
@@ -188,14 +189,59 @@ func inlineThreadNote(s session.Session, p reviewProvider) string {
 	owner, name, pr := m[1], m[2], s.PR.Number
 	var b strings.Builder
 	fmt.Fprintf(&b, "\n\nThese findings are also open as inline review threads on PR #%d (%s). "+
-		"Work them there too: after fixing one, reply to its thread saying what you changed and resolve it; "+
-		"if you disagree, reply with why and leave it open. Do not resolve a thread you have not addressed.\n",
+		"Work them there too: fix the code, commit and push, then — for every finding you addressed — "+
+		"reply to its thread naming the pushed commit and what changed, and resolve that thread; "+
+		"if you disagree, reply with why and leave it open. Never resolve a thread you have not "+
+		"addressed, and never resolve one before its fix is pushed.\n",
 		pr, s.Repo)
+	b.WriteString(threadWorkflow(owner, name, s.Repo, pr))
+	return b.String()
+}
+
+// prThreadNote is the same close-the-loop instruction for feedback whose threads
+// lola did NOT post: CodeRabbit's own inline comments (the watch hand-off), a
+// human reviewer's (the changes_requested reaction), and the fallback plain
+// comment a failed inline post degrades to. lola cannot prove such threads exist
+// — nothing stamped InlineReviewPRs — so the wording is CONDITIONAL and the
+// listing command is the source of truth: an empty list is simply nothing to
+// close. That is the one honest way to instruct here; asserting threads that may
+// not be there is exactly what inlineThreadNote's stamp exists to prevent.
+//
+// Like inlineThreadNote it is lola's own text, appended AFTER the untrusted
+// feedback so nothing in that feedback can rewrite the instruction, and it
+// returns "" unless the PR and repo can be named exactly.
+func prThreadNote(s session.Session) string {
+	if s.PR == nil || s.PR.Number <= 0 {
+		return ""
+	}
+	m := repoSlugRe.FindStringSubmatch(s.Repo)
+	if m == nil {
+		return ""
+	}
+	owner, name, pr := m[1], m[2], s.PR.Number
+	var b strings.Builder
+	fmt.Fprintf(&b, "\n\nThis feedback may also be open as review threads on PR #%d (%s). "+
+		"After you commit and push the fixes, close the loop there: list the open threads, "+
+		"reply to each one you addressed naming the pushed commit and what changed, and resolve it; "+
+		"where you disagree, reply with why and leave it open. Never resolve a thread you have not "+
+		"addressed. An empty list means there is nothing to close — that is fine, do not invent work.\n",
+		pr, s.Repo)
+	b.WriteString(threadWorkflow(owner, name, s.Repo, pr))
+	return b.String()
+}
+
+// threadWorkflow is the gh recipe both notes hand the agent: list the open
+// threads, reply to one, resolve one. It is derived from the repo slug and PR
+// number only (lola's own text — nothing attacker-authored reaches these
+// commands), and it is what makes "resolve what you fixed" actionable rather
+// than a wish: no agent guesses the resolveReviewThread mutation on its own.
+func threadWorkflow(owner, name, repo string, pr int) string {
+	var b strings.Builder
 	fmt.Fprintf(&b, "List the open threads:\ngh api graphql -f query='{repository(owner:\"%s\",name:\"%s\")"+
 		"{pullRequest(number:%d){reviewThreads(first:100){nodes{id isResolved path line "+
 		"comments(first:1){nodes{databaseId body}}}}}}}'\n", owner, name, pr)
 	fmt.Fprintf(&b, "Reply to one (databaseId from above):\ngh api repos/%s/pulls/comments/<databaseId>/replies "+
-		"-f body='fixed in <sha>: <what changed>'\n", s.Repo)
+		"-f body='fixed in <sha>: <what changed>'\n", repo)
 	b.WriteString("Resolve one (id from above):\ngh api graphql -f query='mutation{resolveReviewThread" +
 		"(input:{threadId:\"<id>\"}){thread{isResolved}}}'")
 	return b.String()

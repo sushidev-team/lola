@@ -98,6 +98,24 @@ export interface Event {
 }
 
 /**
+ * GroupInfo is one configured [[group]] flattened for rendering. It carries no
+ * live facts because a group has none — it is arrangement only, and nothing in
+ * the daemon's control loop reads it.
+ */
+export interface GroupInfo {
+    "name": string;
+    "label"?: string;
+
+    /**
+     * Position is the group's index among the TOP-LEVEL rows — the sidebar draws
+     * folders beside the ungrouped projects, not in a section below them, so a
+     * group carries its own place in that list. See config.Group.
+     */
+    "position": number;
+    "collapsed"?: boolean;
+}
+
+/**
  * KillData is Response.Data for cmd=kill. Removed reports whether the worktree
  * was actually removed (false when the project is gone from config so there was
  * nothing safe to target, or on a dirty-refused kill — but a dirty refusal is
@@ -283,6 +301,13 @@ export interface ProjectInfo {
      */
     "name": string;
     "label"?: string;
+
+    /**
+     * Group is the [[group]] Name this project is filed under, "" for the top
+     * level. Always resolves to a group present in ProjectsData.Groups — config
+     * repairs a dangling reference to "" on load.
+     */
+    "group"?: string;
     "path": string;
     "repo": string;
     "defaultBranch": string;
@@ -339,6 +364,14 @@ export interface ProjectInfo {
  */
 export interface ProjectsData {
     "projects": ProjectInfo[] | null;
+
+    /**
+     * Groups is the configured [[group]] table in FILE ORDER — the UI folders
+     * projects are filed under. It ships beside the projects rather than being
+     * derived from them because an EMPTY group is a real, renderable thing: the
+     * app creates the folder first and lets projects be dragged into it after.
+     */
+    "groups"?: GroupInfo[] | null;
 }
 
 /**

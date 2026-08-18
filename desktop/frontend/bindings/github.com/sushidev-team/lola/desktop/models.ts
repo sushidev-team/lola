@@ -78,6 +78,18 @@ export interface DoctorResultDTO {
 }
 
 /**
+ * GroupDTO is one [[group]] as the frontend sees it. Position is its index
+ * among the top-level rows (see config.Group) — the sidebar draws folders beside
+ * the projects, so a group's place is a value of its own.
+ */
+export interface GroupDTO {
+    "name": string;
+    "label": string;
+    "position": number;
+    "collapsed": boolean;
+}
+
+/**
  * InheritsDTO mirrors config.ProjectInherits: true means the project leaves the
  * key to [defaults], so the form shows the resolved value as a ghost and the
  * key is not written into the project's own table.
@@ -171,6 +183,10 @@ export interface ProjectFormDTO {
      * save; changing Name is a RENAME and must go through
      * DaemonService.RenameProject FIRST, so that by the time SaveProject runs the
      * project on disk already answers to the new id.
+     * The project's GROUP is deliberately absent: filing a project is done in
+     * the sidebar, by dragging its row onto a folder, and a second place to set
+     * it would let a stale form move a project nobody dragged. SaveProject leaves
+     * Project.Group untouched.
      */
     "name": string;
     "label": string;
@@ -229,6 +245,26 @@ export interface ProjectFormDTO {
     "prRequiresChecks": boolean;
     "inherits": InheritsDTO;
     "isNew": boolean;
+}
+
+/**
+ * ProjectLayoutDTO is the WHOLE sidebar arrangement — every configured project
+ * in render order with its group, and every group in render order. Both lists
+ * are complete: a partial layout is a bug in the caller, not a merge to
+ * attempt, because the array positions ARE the order.
+ */
+export interface ProjectLayoutDTO {
+    "groups": GroupDTO[] | null;
+    "projects": ProjectPlacementDTO[] | null;
+}
+
+/**
+ * ProjectPlacementDTO is one row of the sidebar arrangement: a project id and
+ * the group it belongs to ("" = top level).
+ */
+export interface ProjectPlacementDTO {
+    "name": string;
+    "group": string;
 }
 
 /**

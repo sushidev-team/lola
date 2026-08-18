@@ -4,10 +4,11 @@
 // call `store.kill(id)` — they never touch the bindings directly.
 
 import { Events } from "@wailsio/runtime";
-import { DaemonService, ConfigService, TermService } from "@bindings/desktop";
+import { DaemonService, ConfigService, TermService, type ProjectLayoutDTO } from "@bindings/desktop";
 import type {
   SessionInfo,
   ProjectInfo,
+  GroupInfo,
   StatusData,
   Event as ActivityEvent,
   PaneData,
@@ -78,6 +79,11 @@ class Store {
   sessions = $state<SessionInfo[]>([]);
   activity = $state<ActivityEvent[]>([]);
   projects = $state<ProjectInfo[]>([]);
+  // The [[group]] folders projects are filed under, in config order. They ride
+  // the same push as the projects (and are pushed even when empty of members),
+  // because an empty group is renderable and must not need a second read to
+  // appear.
+  groups = $state<GroupInfo[]>([]);
   status = $state<StatusData | null>(null);
   flash = $state<Flash>(null);
 
@@ -158,6 +164,7 @@ class Store {
     });
     Events.On("daemon:projects", (e) => {
       this.projects = e.data?.projects ?? [];
+      this.groups = e.data?.groups ?? [];
     });
     Events.On("daemon:status", (e) => {
       this.status = e.data;
@@ -243,7 +250,10 @@ class Store {
       this.sessions = sd.value.sessions ?? [];
       this.setActivity(sd.value.events ?? []); // separate flush — see setActivity
     }
-    if (pd.status === "fulfilled") this.projects = pd.value.projects ?? [];
+    if (pd.status === "fulfilled") {
+      this.projects = pd.value.projects ?? [];
+      this.groups = pd.value.groups ?? [];
+    }
     if (st.status === "fulfilled") this.status = st.value;
     const rejected = [sd, pd, st].find((r) => r.status === "rejected");
     if (rejected) this.setFlash(String((rejected as PromiseRejectedResult).reason), "warn");
@@ -271,6 +281,48 @@ class Store {
       this.setFlash(String(err), "bad");
       return undefined;
     }
+  }
+
+  /**
+   * A config write whose SUCCESS needs no announcement — a drag that landed is
+   * already visible, a folder that collapsed is already collapsed — but whose
+   * FAILURE must still be said out loud, because the UI has by then optimistically
+   * drawn the new arrangement and would otherwise silently disagree with the file.
+   */
+  private async quiet<T>(fn: () => Promise<T>): Promise<T | undefined> {
+    try {
+      const r = await fn();
+      // AWAITED, unlike act()'s: the caller holds an optimistic view on screen
+      // until this resolves, so returning before the reload landed would show
+      // the pre-write arrangement for a frame — exactly the snap-back the
+      // optimistic view exists to prevent.
+      await this.refresh();
+      return r;
+    } catch (err) {
+      this.setFlash(String(err), "bad");
+      await this.refresh(); // snap the UI back to what is actually configured
+      return undefined;
+    }
+  }
+
+  // --- project groups & arrangement -----------------------------------------
+
+  addGroup(label: string) {
+    return this.act(() => ConfigService.AddGroup(label), "group added");
+  }
+  renameGroup(name: string, label: string) {
+    return this.act(() => ConfigService.RenameGroup(name, label), "group renamed");
+  }
+  /** Deletes the folder only: its projects move to the top level, untouched. */
+  removeGroup(name: string) {
+    return this.act(() => ConfigService.RemoveGroup(name), "group removed");
+  }
+  setGroupCollapsed(name: string, collapsed: boolean) {
+    return this.quiet(() => ConfigService.SetGroupCollapsed(name, collapsed));
+  }
+  /** Applies a whole arrangement (group order + every project's group and place). */
+  setProjectLayout(layout: ProjectLayoutDTO) {
+    return this.quiet(() => ConfigService.SetProjectLayout(layout));
   }
 
   answer(session: string, text: string) {

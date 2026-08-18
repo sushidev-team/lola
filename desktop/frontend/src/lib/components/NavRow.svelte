@@ -22,6 +22,7 @@
     dim = false,
     title,
     onclick,
+    onkeydown,
     badges,
     actions,
   }: {
@@ -36,6 +37,9 @@
     dim?: boolean;
     title?: string;
     onclick: () => void;
+    /** Optional key handling ON THE ROW's own control (the sidebar's alt+arrow
+     *  reorder). Left undefined by every other caller. */
+    onkeydown?: (e: KeyboardEvent) => void;
     /** Always-visible trailing content (counts/badges that must not hide). */
     badges?: Snippet;
     /** Trailing controls revealed on row hover / keyboard focus. */
@@ -61,6 +65,7 @@
     class="flex h-full min-w-0 grow items-center gap-2 rounded-md px-2 text-left"
     aria-current={active ? "true" : undefined}
     {onclick}
+    {onkeydown}
   >
     <span class="w-3.5 shrink-0 text-center text-sm {glyphCls}" aria-hidden="true">{glyph}</span>
     <span class="truncate" class:font-medium={active} class:text-faint={dim && !active}>{label}</span>

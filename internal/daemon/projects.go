@@ -33,6 +33,12 @@ func (d *Daemon) projectsData(_ context.Context) protocol.ProjectsData {
 		polls     []string
 		enabled   int
 	}
+	groups := make([]protocol.GroupInfo, 0, len(d.cfg.Groups))
+	for _, g := range d.cfg.Groups {
+		groups = append(groups, protocol.GroupInfo{
+			Name: g.Name, Label: g.Label, Position: g.Position, Collapsed: g.Collapsed,
+		})
+	}
 	metas := make([]projMeta, 0, len(d.cfg.Projects))
 	for _, pr := range d.cfg.Projects {
 		kind := d.cfg.AgentForProject(pr.Name)
@@ -56,6 +62,7 @@ func (d *Daemon) projectsData(_ context.Context) protocol.ProjectsData {
 		info := protocol.ProjectInfo{
 			Name:           m.p.Name,
 			Label:          m.p.Label,
+			Group:          m.p.Group,
 			Path:           m.p.Path,
 			Repo:           m.p.Repo,
 			DefaultBranch:  m.p.DefaultBranch,
@@ -109,7 +116,7 @@ func (d *Daemon) projectsData(_ context.Context) protocol.ProjectsData {
 		}
 		out = append(out, info)
 	}
-	return protocol.ProjectsData{Projects: out}
+	return protocol.ProjectsData{Projects: out, Groups: groups}
 }
 
 // projectPathOK reports whether path exists, is a directory, and holds a .git

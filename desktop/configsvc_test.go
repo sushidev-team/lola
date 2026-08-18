@@ -503,3 +503,285 @@ func TestLinearKeyStatusWithNoSource(t *testing.T) {
 		t.Fatalf("status = %+v, want neither configured nor resolvable", st)
 	}
 }
+
+// --- groups & layout ---------------------------------------------------------
+
+const twoProjectConfig = `[defaults]
+global_cap = 4
+
+[[project]]
+name = "okane"
+path = "/tmp/okane"
+
+[[project]]
+name = "lola"
+path = "/tmp/lola"
+`
+
+func TestAddGroupSlugsAndDedupes(t *testing.T) {
+	path := writeTestConfig(t, minimalConfig)
+	s := &ConfigService{}
+
+	name, err := s.AddGroup("Client Work")
+	if err != nil {
+		t.Fatalf("AddGroup: %v", err)
+	}
+	if name != "client-work" {
+		t.Fatalf("id = %q", name)
+	}
+	// A second folder a human would also call "Client Work" must coexist, not
+	// silently replace the first.
+	second, err := s.AddGroup("Client Work")
+	if err != nil {
+		t.Fatalf("AddGroup 2: %v", err)
+	}
+	if second != "client-work-2" {
+		t.Fatalf("second id = %q", second)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Groups) != 2 || cfg.Groups[0].Label != "Client Work" {
+		t.Fatalf("groups = %+v", cfg.Groups)
+	}
+}
+
+// A new folder lands at the END of the top-level list — after the ungrouped
+// projects and the folders already there — so adding one moves no existing row.
+func TestAddGroupLandsLast(t *testing.T) {
+	path := writeTestConfig(t, twoProjectConfig)
+	s := &ConfigService{}
+	if _, err := s.AddGroup("clients"); err != nil {
+		t.Fatalf("AddGroup: %v", err)
+	}
+	if _, err := s.AddGroup("internal"); err != nil {
+		t.Fatalf("AddGroup: %v", err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Groups[0].Position != 2 || cfg.Groups[1].Position != 3 {
+		t.Fatalf("positions = %d, %d", cfg.Groups[0].Position, cfg.Groups[1].Position)
+	}
+}
+
+// Filing a project is the sidebar's job (drag it onto the folder), so the form
+// must leave Project.Group alone rather than carry a stale copy of it.
+func TestSaveProjectLeavesTheGroupAlone(t *testing.T) {
+	path := writeTestConfig(t, twoProjectConfig)
+	s := &ConfigService{}
+	if _, err := s.AddGroup("clients"); err != nil {
+		t.Fatalf("AddGroup: %v", err)
+	}
+	if err := s.SetProjectLayout(ProjectLayoutDTO{
+		Groups:   []GroupDTO{{Name: "clients", Position: 1}},
+		Projects: []ProjectPlacementDTO{{Name: "okane", Group: "clients"}, {Name: "lola"}},
+	}); err != nil {
+		t.Fatalf("SetProjectLayout: %v", err)
+	}
+	dto, err := s.GetProject("okane")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dto.Label = "Okane renamed"
+	if err := s.SaveProject(dto); err != nil {
+		t.Fatalf("SaveProject: %v", err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := cfg.ProjectByName("okane")
+	if p.Group != "clients" {
+		t.Fatalf("group = %q, want clients", p.Group)
+	}
+	if p.Label != "Okane renamed" {
+		t.Fatalf("label = %q", p.Label)
+	}
+}
+
+// A label that already IS its id carries nothing, so it is not written — the
+// same rule SaveProject applies to a project's label.
+func TestAddGroupOmitsRedundantLabel(t *testing.T) {
+	path := writeTestConfig(t, minimalConfig)
+	s := &ConfigService{}
+	if _, err := s.AddGroup("clients"); err != nil {
+		t.Fatalf("AddGroup: %v", err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Groups[0].Label != "" {
+		t.Fatalf("label = %q, want empty", cfg.Groups[0].Label)
+	}
+}
+
+func TestAddGroupRejectsEmptyName(t *testing.T) {
+	writeTestConfig(t, minimalConfig)
+	s := &ConfigService{}
+	if _, err := s.AddGroup("   /// "); err == nil {
+		t.Fatal("want an error for a label that slugs to nothing")
+	}
+}
+
+func TestRemoveGroupUngroupsItsProjects(t *testing.T) {
+	path := writeTestConfig(t, twoProjectConfig)
+	s := &ConfigService{}
+	if _, err := s.AddGroup("clients"); err != nil {
+		t.Fatalf("AddGroup: %v", err)
+	}
+	if err := s.SetProjectLayout(ProjectLayoutDTO{
+		Groups: []GroupDTO{{Name: "clients", Position: 1}},
+		Projects: []ProjectPlacementDTO{
+			{Name: "okane", Group: "clients"},
+			{Name: "lola"},
+		},
+	}); err != nil {
+		t.Fatalf("SetProjectLayout: %v", err)
+	}
+	if err := s.RemoveGroup("clients"); err != nil {
+		t.Fatalf("RemoveGroup: %v", err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Groups) != 0 {
+		t.Fatalf("groups = %+v", cfg.Groups)
+	}
+	// Deleting a folder must never cost a project.
+	if len(cfg.Projects) != 2 {
+		t.Fatalf("projects = %+v", cfg.Projects)
+	}
+	if cfg.Projects[0].Group != "" {
+		t.Fatalf("project still filed under %q", cfg.Projects[0].Group)
+	}
+}
+
+func TestRenameGroupChangesLabelOnly(t *testing.T) {
+	path := writeTestConfig(t, minimalConfig)
+	s := &ConfigService{}
+	if _, err := s.AddGroup("clients"); err != nil {
+		t.Fatalf("AddGroup: %v", err)
+	}
+	if err := s.RenameGroup("clients", "Client Work"); err != nil {
+		t.Fatalf("RenameGroup: %v", err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Groups[0].Name != "clients" || cfg.Groups[0].Label != "Client Work" {
+		t.Fatalf("group = %+v", cfg.Groups[0])
+	}
+	if err := s.RenameGroup("nope", "x"); err == nil {
+		t.Fatal("want an error renaming a group that does not exist")
+	}
+}
+
+func TestSetGroupCollapsedPersists(t *testing.T) {
+	path := writeTestConfig(t, minimalConfig)
+	s := &ConfigService{}
+	if _, err := s.AddGroup("clients"); err != nil {
+		t.Fatalf("AddGroup: %v", err)
+	}
+	if err := s.SetGroupCollapsed("clients", true); err != nil {
+		t.Fatalf("SetGroupCollapsed: %v", err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Groups[0].Collapsed {
+		t.Fatal("collapse did not persist")
+	}
+	if err := s.SetGroupCollapsed("nope", true); err == nil {
+		t.Fatal("want an error for a group that does not exist")
+	}
+}
+
+func TestSetProjectLayoutReordersAndFiles(t *testing.T) {
+	path := writeTestConfig(t, twoProjectConfig)
+	s := &ConfigService{}
+	if _, err := s.AddGroup("clients"); err != nil {
+		t.Fatalf("AddGroup: %v", err)
+	}
+	if err := s.SetProjectLayout(ProjectLayoutDTO{
+		Groups: []GroupDTO{{Name: "clients", Position: 1, Collapsed: true}},
+		Projects: []ProjectPlacementDTO{
+			{Name: "lola"},
+			{Name: "okane", Group: "clients"},
+		},
+	}); err != nil {
+		t.Fatalf("SetProjectLayout: %v", err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The [[project]] array order IS the render order, in this app and the TUI.
+	if cfg.Projects[0].Name != "lola" || cfg.Projects[1].Name != "okane" {
+		t.Fatalf("order = %q, %q", cfg.Projects[0].Name, cfg.Projects[1].Name)
+	}
+	if cfg.Projects[1].Group != "clients" {
+		t.Fatalf("group = %q", cfg.Projects[1].Group)
+	}
+	if !cfg.Groups[0].Collapsed {
+		t.Fatal("collapse from the layout was dropped")
+	}
+	// The folder's PLACE among the top-level rows rides the layout too — it is
+	// what lets a folder sit between two projects rather than below them.
+	if cfg.Groups[0].Position != 1 {
+		t.Fatalf("position = %d, want 1", cfg.Groups[0].Position)
+	}
+	// Everything else about the project survives a pure arrangement change.
+	if cfg.Projects[1].Path != "/tmp/okane" {
+		t.Fatalf("path = %q", cfg.Projects[1].Path)
+	}
+}
+
+// The layout is computed by a drag handler against a snapshot that may be a
+// reload behind. Anything but an exact permutation is refused whole, so a stale
+// layout can neither resurrect a removed project nor drop an unknown one.
+func TestSetProjectLayoutRefusesStaleLayouts(t *testing.T) {
+	path := writeTestConfig(t, twoProjectConfig)
+	s := &ConfigService{}
+
+	cases := []struct {
+		name string
+		dto  ProjectLayoutDTO
+	}{
+		{"missing a project", ProjectLayoutDTO{Projects: []ProjectPlacementDTO{{Name: "lola"}}}},
+		{"names an unknown project", ProjectLayoutDTO{Projects: []ProjectPlacementDTO{
+			{Name: "lola"}, {Name: "ghost"},
+		}}},
+		{"repeats a project", ProjectLayoutDTO{Projects: []ProjectPlacementDTO{
+			{Name: "lola"}, {Name: "lola"},
+		}}},
+		{"names an unknown group", ProjectLayoutDTO{Projects: []ProjectPlacementDTO{
+			{Name: "lola", Group: "ghost"}, {Name: "okane"},
+		}}},
+		{"names an unknown group table", ProjectLayoutDTO{
+			Groups:   []GroupDTO{{Name: "ghost"}},
+			Projects: []ProjectPlacementDTO{{Name: "lola"}, {Name: "okane"}},
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := s.SetProjectLayout(tc.dto); err == nil {
+				t.Fatal("want an error")
+			}
+			cfg, err := config.Load(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Refused means NOTHING was written.
+			if len(cfg.Projects) != 2 || cfg.Projects[0].Name != "okane" {
+				t.Fatalf("config was mutated: %+v", cfg.Projects)
+			}
+		})
+	}
+}
