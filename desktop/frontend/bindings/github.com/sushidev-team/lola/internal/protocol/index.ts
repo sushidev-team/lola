@@ -7,6 +7,7 @@ export type {
     DevData,
     DevFreePortData,
     Event,
+    GroupInfo,
     KillData,
     Match,
     OpenData,

@@ -99,8 +99,15 @@ type Project struct {
 	// slug-shaped and is expensive to change — see Slug and DisplayName. Label
 	// is the free-text name shown in the UIs; empty falls back to Name, which is
 	// what every pre-Label config does.
-	Name          string `toml:"name"`
-	Label         string `toml:"label,omitempty"`
+	Name  string `toml:"name"`
+	Label string `toml:"label,omitempty"`
+	// Group files this project under a [[group]] by its Name. Empty means the
+	// project sits at the top level. It is pure ARRANGEMENT — nothing in the
+	// dispatch path reads it — and a reference to a group that does not exist is
+	// REPAIRED to "" on load rather than rejected (see sanitizeGroups).
+	// Deliberately not a [defaults]-inheritable key: an inherited group would
+	// file every project that forgot to override it under one folder.
+	Group         string `toml:"group,omitempty"`
 	Path          string `toml:"path"`
 	Repo          string `toml:"repo"`
 	DefaultBranch string `toml:"default_branch"`
@@ -237,6 +244,7 @@ type Config struct {
 	Defaults    Defaults          `toml:"defaults"`
 	Linear      LinearConfig      `toml:"linear"`
 	Projects    []Project         `toml:"project"`
+	Groups      []Group           `toml:"group"`
 	Reactions   ReactionsConfig   `toml:"reactions"`
 	Notify      NotifyConfig      `toml:"notify"`
 	Brain       BrainConfig       `toml:"brain"`
@@ -344,7 +352,8 @@ type fileConfig struct {
 	Defaults    fileDefaults           `toml:"defaults"`
 	Linear      LinearConfig           `toml:"linear"`
 	Projects    []fileProject          `toml:"project"`
-	Polls       []legacyPoll           `toml:"poll,omitempty"` // COMPAT-ONLY: pre-merge top-level polls, folded onto their project on load
+	Groups      []Group                `toml:"group,omitempty"` // the UI's project FOLDERS; no runtime effect (see group.go)
+	Polls       []legacyPoll           `toml:"poll,omitempty"`  // COMPAT-ONLY: pre-merge top-level polls, folded onto their project on load
 	Reactions   *fileReactionsConfig   `toml:"reactions,omitempty"`
 	Notify      *fileNotifyConfig      `toml:"notify,omitempty"`
 	Brain       *fileBrainConfig       `toml:"brain,omitempty"`
@@ -365,8 +374,11 @@ type fileConfig struct {
 // Inherits bitmap (a SET bit means "inherit this key from [defaults]"); see
 // projectFromFile / projectToFile for the translation.
 type fileProject struct {
-	Name          string             `toml:"name"`
-	Label         string             `toml:"label,omitempty"`
+	Name  string `toml:"name"`
+	Label string `toml:"label,omitempty"`
+	// Group is a PLAIN string, not a pointer: it is not inheritable, so absent
+	// and empty mean the same thing (this project sits at the top level).
+	Group         string             `toml:"group,omitempty"`
 	Path          string             `toml:"path"`
 	Repo          string             `toml:"repo"`
 	DefaultBranch string             `toml:"default_branch"`
@@ -525,6 +537,7 @@ func projectFromFile(fp fileProject) Project {
 	return Project{
 		Name:           fp.Name,
 		Label:          fp.Label,
+		Group:          fp.Group,
 		Path:           fp.Path,
 		Repo:           fp.Repo,
 		DefaultBranch:  fp.DefaultBranch,
@@ -585,6 +598,7 @@ func projectToFile(p Project) fileProject {
 	return fileProject{
 		Name:           p.Name,
 		Label:          p.Label,
+		Group:          p.Group,
 		Path:           p.Path,
 		Repo:           p.Repo,
 		DefaultBranch:  p.DefaultBranch,
@@ -708,6 +722,7 @@ func (fc *fileConfig) config() *Config {
 		},
 		Linear:          fc.Linear,
 		Projects:        projects,
+		Groups:          slices.Clone(fc.Groups),
 		migrateErrs:     migrateErrs,
 		Reactions:       resolveReactions(fc.Reactions),
 		Notify:          resolveNotify(fc.Notify),
@@ -759,6 +774,7 @@ func (c *Config) file() *fileConfig {
 		},
 		Linear:      c.Linear,
 		Projects:    fps,
+		Groups:      slices.Clone(c.Groups),
 		Reactions:   reactionsFile(c.Reactions),
 		Notify:      notifyFile(c.Notify),
 		Brain:       brainFile(c.Brain),
@@ -877,6 +893,11 @@ func (c *Config) applyDefaults() {
 	// Repair before resolving, so an inherited chain never carries a key the
 	// sorter would ignore.
 	c.sanitizePrioritySort()
+	// Groups are repaired HERE, on the load path, because this is the one place
+	// that runs once per file read — ResolveInheritance canonicalizes them again
+	// on every Validate/Save but discards the notices, so a repair is reported
+	// once and describes the file rather than the number of saves since.
+	c.notices = append(c.notices, c.sanitizeGroups()...)
 	c.ResolveInheritance()
 }
 
@@ -891,6 +912,13 @@ func (c *Config) applyDefaults() {
 // front so a config mutated in memory — the UIs edit [defaults] and projects in
 // the same pass — is never validated against stale resolved values.
 func (c *Config) ResolveInheritance() {
+	// Groups are not inheritable, but they ARE part of what makes save/load an
+	// identity: canonicalizing them here means every caller of this method
+	// (Load, Validate, Save) writes and validates the same repaired table. The
+	// notices it returns are dropped — applyDefaults reports them once, on the
+	// load path, so a notice describes the FILE rather than a canonicalization.
+	c.sanitizeGroups()
+
 	d := c.Defaults
 	for i := range c.Projects {
 		p := &c.Projects[i]

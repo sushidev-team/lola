@@ -286,6 +286,20 @@ type SessionInfo struct {
 // with these facts, so the home screen stays navigable when the daemon is down.
 type ProjectsData struct {
 	Projects []ProjectInfo `json:"projects"`
+	// Groups is the configured [[group]] table in FILE ORDER — the UI folders
+	// projects are filed under. It ships beside the projects rather than being
+	// derived from them because an EMPTY group is a real, renderable thing: the
+	// app creates the folder first and lets projects be dragged into it after.
+	Groups []GroupInfo `json:"groups,omitempty"`
+}
+
+// GroupInfo is one configured [[group]] flattened for rendering. It carries no
+// live facts because a group has none — it is arrangement only, and nothing in
+// the daemon's control loop reads it.
+type GroupInfo struct {
+	Name      string `json:"name"`
+	Label     string `json:"label,omitempty"`
+	Collapsed bool   `json:"collapsed,omitempty"`
 }
 
 // ProjectInfo is one configured project flattened to render-ready fields.
@@ -293,8 +307,12 @@ type ProjectInfo struct {
 	// Name is the project's ID — what paths, tmux names and every other
 	// name-keyed protocol field use. Label is its display string, "" when the
 	// project has none (render Name then).
-	Name          string `json:"name"`
-	Label         string `json:"label,omitempty"`
+	Name  string `json:"name"`
+	Label string `json:"label,omitempty"`
+	// Group is the [[group]] Name this project is filed under, "" for the top
+	// level. Always resolves to a group present in ProjectsData.Groups — config
+	// repairs a dangling reference to "" on load.
+	Group         string `json:"group,omitempty"`
 	Path          string `json:"path"`
 	Repo          string `json:"repo"`
 	DefaultBranch string `json:"defaultBranch"`

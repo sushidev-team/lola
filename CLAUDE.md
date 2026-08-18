@@ -292,6 +292,36 @@ each of which owns exactly one external tool or concern behind an **exec seam**
     worktree still carries the old name, then renames the config entry, carries
     the `.seen` file over and reloads. Do not "helpfully" extend it to live
     sessions without also moving worktrees + `git worktree repair` + tmux renames.
+- **The project list's ARRANGEMENT is the config file's own shape, and it is
+  display-only.** Two facts decide how the sidebar draws: the ORDER of the
+  `[[project]]` array (both surfaces render it as-is — the TUI's list is the
+  same array, so a drag in the app reorders it too) and `[[project]].group`,
+  naming a `[[group]]` table. Nothing in the daemon, runtime or dispatch path
+  reads a group; it is a folder, not a policy. Consequences:
+  - `[[group]]` is a TABLE rather than a bare string on the project so an EMPTY
+    group can exist — the app creates the folder first (`+` → New group) and
+    projects are dragged in after. A derived-from-members group could not
+    survive the moment between the two, nor be reordered or collapsed while
+    empty.
+  - A dangling `group` reference is REPAIRED to "" with a notice, never
+    rejected (`sanitizeGroups`, reached from `ResolveInheritance` so Load,
+    Validate and Save all canonicalize identically; notices are appended once,
+    on the load path). Getting arrangement wrong must never take a working
+    config down.
+  - `group` is deliberately NOT in the `[defaults]` inheritance bitmap: an
+    inherited group would file every project that forgot to override it under
+    one folder.
+  - The app sends the WHOLE arrangement (`ConfigService.SetProjectLayout`), and
+    it FAILS CLOSED — the payload must be an exact permutation of the configured
+    projects and groups or nothing is written. A drag is computed against a
+    snapshot that may be a reload behind; applying it loosely would resurrect a
+    project that was just removed. A refused layout costs one drag.
+  - The drag is POINTER events, not HTML5 drag-and-drop (WKWebView differs from
+    the dev server's Chrome), and every decision it makes — sections, gaps,
+    moves — lives in `desktop/frontend/src/lib/sidebarlayout.ts`, which has no
+    DOM, so it is testable. `⌥↑`/`⌥↓` on a focused row does the same move, and
+    the project form's Group field is the pointer-free way to file a project:
+    keep both, or the feature is mouse-only.
 - **Adding a project starts at the FOLDER, and every derived field is
   FILL-ONLY.** The checkout is the one value nothing else can be derived
   without, so a new project opens straight into a picker — the native chooser in

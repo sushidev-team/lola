@@ -413,6 +413,11 @@ name = "nori-app"
 # label is the free-text display name the UIs show. Optional — empty falls back
 # to `name`. Nothing keys by it, so it is safe to change at any time.
 label = "Nori App"
+# group files this project under a [[group]] below (by that group's `name`).
+# Omit it and the project sits at the top level of the sidebar. Pure display
+# arrangement — nothing in the daemon reads it — and a group that is not defined
+# is repaired to "no group" on load rather than rejected.
+# group = "clients"
 # Absolute path to the main checkout (a leading ~ is expanded on load).
 # Worktrees are created NEXT TO it under ~/.lola/, never inside it.
 path = "/Volumes/Git/sushi/internal/nori/nori-app"
@@ -572,3 +577,30 @@ on_sent_set_label = "label_sent0000-1111-2222-3333-444455556666"
 # comment_on_spawn = false
 # comment_on_merged = false
 # comment_on_blocked = true
+
+# ---------------------------------------------------------------------------
+# [[group]] — sidebar FOLDERS for the project list (optional, display only).
+#
+# Nothing in the daemon reads a group: it decides how the app arranges its
+# project list and nothing else. It is a table of its own — rather than a plain
+# string on the project — so a folder can exist while EMPTY, which is what lets
+# the app's "+ → New group" create one before anything is dragged into it.
+#
+# Order matters twice over. The [[group]] tables render in the order they appear
+# here, and within the sidebar the [[project]] tables' own order is the order
+# rows are drawn (the TUI's project list reads the same array, so a drag in the
+# app reorders both). Editing either array by hand is a supported way to
+# rearrange things.
+#
+# A [[project]].group naming a group that is not defined here is repaired to "no
+# group" on load with a notice (`lola doctor`), never rejected: the project is
+# shown at the top level rather than hidden inside a folder that does not exist.
+# ---------------------------------------------------------------------------
+# [[group]]
+# # name is the group's ID — the value [[project]].group references. Keep it
+# # slug-shaped; it is stable across a rename of the label below.
+# name = "clients"
+# # label is the free-text display name. Optional — empty falls back to `name`.
+# label = "Clients"
+# # collapsed persists the folder's disclosure state in the app.
+# collapsed = false

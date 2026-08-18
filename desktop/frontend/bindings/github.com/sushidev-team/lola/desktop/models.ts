@@ -78,6 +78,15 @@ export interface DoctorResultDTO {
 }
 
 /**
+ * GroupDTO is one [[group]] as the frontend sees it.
+ */
+export interface GroupDTO {
+    "name": string;
+    "label": string;
+    "collapsed": boolean;
+}
+
+/**
  * InheritsDTO mirrors config.ProjectInherits: true means the project leaves the
  * key to [defaults], so the form shows the resolved value as a ghost and the
  * key is not written into the project's own table.
@@ -174,6 +183,14 @@ export interface ProjectFormDTO {
      */
     "name": string;
     "label": string;
+
+    /**
+     * Group is the [[group]] this project is filed under in the sidebar, "" for
+     * the top level. It is arrangement, not behaviour — the field exists here so
+     * grouping is reachable without a pointer, since the other way to set it is
+     * dragging the row. A group that is not configured is refused.
+     */
+    "group": string;
     "path": string;
     "repo": string;
     "defaultBranch": string;
@@ -229,6 +246,26 @@ export interface ProjectFormDTO {
     "prRequiresChecks": boolean;
     "inherits": InheritsDTO;
     "isNew": boolean;
+}
+
+/**
+ * ProjectLayoutDTO is the WHOLE sidebar arrangement — every configured project
+ * in render order with its group, and every group in render order. Both lists
+ * are complete: a partial layout is a bug in the caller, not a merge to
+ * attempt, because the array positions ARE the order.
+ */
+export interface ProjectLayoutDTO {
+    "groups": GroupDTO[] | null;
+    "projects": ProjectPlacementDTO[] | null;
+}
+
+/**
+ * ProjectPlacementDTO is one row of the sidebar arrangement: a project id and
+ * the group it belongs to ("" = top level).
+ */
+export interface ProjectPlacementDTO {
+    "name": string;
+    "group": string;
 }
 
 /**

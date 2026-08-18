@@ -25,6 +25,18 @@ import { Call as $Call, CancellablePromise as $CancellablePromise } from "@wails
 import * as $models from "./models.js";
 
 /**
+ * AddGroup creates an empty group from a free-text label and returns its id.
+ * The id is derived with config.Slug — the same transform a project id goes
+ * through — and de-duplicated with a numeric suffix, so two folders a human
+ * would both call "Clients" can coexist instead of one silently replacing the
+ * other. Empty groups are the point: the folder is created first and projects
+ * are dragged into it after.
+ */
+export function AddGroup(label: string): $CancellablePromise<string> {
+    return $Call.ByID(403758441, label);
+}
+
+/**
  * ConfigExists reports whether ~/.lola/config.toml is present, so the frontend
  * can gate a first-run setup screen.
  */
@@ -53,6 +65,15 @@ export function GetSettings(): $CancellablePromise<$models.SettingsDTO> {
  */
 export function GetTheme(): $CancellablePromise<string> {
     return $Call.ByID(243714106);
+}
+
+/**
+ * Groups returns the configured groups in file order. The sidebar renders from
+ * the daemon's push (cmd=projects carries them), so this exists for the forms
+ * that need the list without a live daemon — a group picker on a project.
+ */
+export function Groups(): $CancellablePromise<$models.GroupDTO[] | null> {
+    return $Call.ByID(2495290395);
 }
 
 /**
@@ -117,8 +138,29 @@ export function PrioritySortKeys(): $CancellablePromise<string[] | null> {
     return $Call.ByID(3393829323);
 }
 
+/**
+ * RemoveGroup deletes the folder and files its members at the top level. It
+ * never touches a project beyond that reference: a group is arrangement, so
+ * deleting one must not be able to lose a project, its worktrees or its
+ * sessions.
+ */
+export function RemoveGroup(name: string): $CancellablePromise<void> {
+    return $Call.ByID(273890374, name);
+}
+
 export function RemoveProject(name: string): $CancellablePromise<void> {
     return $Call.ByID(581203932, name);
+}
+
+/**
+ * RenameGroup changes a group's DISPLAY label only. The id stays put on purpose:
+ * it is what every [[project]].group references, and rewriting it would have to
+ * rewrite those in the same breath for no gain — unlike a project id, a group id
+ * names no directory, tmux session or state file, so nothing reads it but this
+ * table.
+ */
+export function RenameGroup(name: string, label: string): $CancellablePromise<void> {
+    return $Call.ByID(2414476480, name, label);
 }
 
 /**
@@ -138,6 +180,16 @@ export function SaveSettings(dto: $models.SettingsDTO): $CancellablePromise<void
 }
 
 /**
+ * SetGroupCollapsed persists a folder's disclosure state. It lives in
+ * config.toml rather than in the web view's storage so the app and a future TUI
+ * rendering agree, and so it survives a reinstall like every other arrangement
+ * key.
+ */
+export function SetGroupCollapsed(name: string, collapsed: boolean): $CancellablePromise<void> {
+    return $Call.ByID(356289697, name, collapsed);
+}
+
+/**
  * SetLinearKey stores a new Linear key and points config.toml at it. The key
  * goes to the macOS Keychain under the same service the first-run wizards use,
  * so a key set here is read identically by the daemon, the TUI and this app;
@@ -151,6 +203,22 @@ export function SaveSettings(dto: $models.SettingsDTO): $CancellablePromise<void
  */
 export function SetLinearKey(key: string): $CancellablePromise<string> {
     return $Call.ByID(835844419, key);
+}
+
+/**
+ * SetProjectLayout applies a whole sidebar arrangement: the group order, and
+ * every project's group plus its position. It FAILS CLOSED — the projects list
+ * must be an exact permutation of what is configured and the groups list an
+ * exact permutation of the configured groups, or nothing is written.
+ * 
+ * That strictness is the point. The layout is computed by a drag handler in the
+ * frontend against a snapshot that may be a config reload behind; applying it
+ * loosely would let a stale layout resurrect a project the user just removed,
+ * or drop one it had not heard of yet. A refused layout costs one drag, which
+ * the next render corrects.
+ */
+export function SetProjectLayout(dto: $models.ProjectLayoutDTO): $CancellablePromise<void> {
+    return $Call.ByID(2494129060, dto);
 }
 
 /**

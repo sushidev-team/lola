@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -435,8 +436,13 @@ type ProjectFormDTO struct {
 	// save; changing Name is a RENAME and must go through
 	// DaemonService.RenameProject FIRST, so that by the time SaveProject runs the
 	// project on disk already answers to the new id.
-	Name          string   `json:"name"`
-	Label         string   `json:"label"`
+	Name  string `json:"name"`
+	Label string `json:"label"`
+	// Group is the [[group]] this project is filed under in the sidebar, "" for
+	// the top level. It is arrangement, not behaviour — the field exists here so
+	// grouping is reachable without a pointer, since the other way to set it is
+	// dragging the row. A group that is not configured is refused.
+	Group         string   `json:"group"`
 	Path          string   `json:"path"`
 	Repo          string   `json:"repo"`
 	DefaultBranch string   `json:"defaultBranch"`
@@ -519,6 +525,7 @@ func projectDTO(p *config.Project) ProjectFormDTO {
 	return ProjectFormDTO{
 		Name:          p.Name,
 		Label:         p.Label,
+		Group:         p.Group,
 		Path:          p.Path,
 		Repo:          p.Repo,
 		DefaultBranch: p.DefaultBranch,
@@ -602,6 +609,13 @@ func (s *ConfigService) SaveProject(dto ProjectFormDTO) error {
 	if p.Label == name {
 		p.Label = ""
 	}
+	// Refused rather than repaired: config would silently file the project at the
+	// top level on the next load, so a stale picker would look like it saved.
+	group := strings.TrimSpace(dto.Group)
+	if group != "" && cfg.GroupByName(group) == nil {
+		return errors.New("no such group: " + group)
+	}
+	p.Group = group
 	p.Path = dto.Path
 	p.Repo = dto.Repo
 	p.DefaultBranch = dto.DefaultBranch
@@ -989,4 +1003,229 @@ func nonEmpty(in []string) []string {
 		}
 	}
 	return out
+}
+
+// --- project groups & manual order ------------------------------------------
+//
+// A project's place in the sidebar is TWO facts, and both live in config.toml:
+// which [[group]] it is filed under (Project.Group) and where it sits in the
+// order (its index in the [[project]] array — the order every surface already
+// renders, TUI included, so a drag in the app reorders the TUI's list too).
+//
+// The frontend therefore never sends a delta. It computes the whole arrangement
+// and sends it as ONE layout, which is applied atomically or not at all: a drop
+// that moved a project between groups is a single write, and a layout naming a
+// project or group that no longer exists is refused rather than half-applied.
+
+// ProjectPlacementDTO is one row of the sidebar arrangement: a project id and
+// the group it belongs to ("" = top level).
+type ProjectPlacementDTO struct {
+	Name  string `json:"name"`
+	Group string `json:"group"`
+}
+
+// ProjectLayoutDTO is the WHOLE sidebar arrangement — every configured project
+// in render order with its group, and every group in render order. Both lists
+// are complete: a partial layout is a bug in the caller, not a merge to
+// attempt, because the array positions ARE the order.
+type ProjectLayoutDTO struct {
+	Groups   []GroupDTO            `json:"groups"`
+	Projects []ProjectPlacementDTO `json:"projects"`
+}
+
+// GroupDTO is one [[group]] as the frontend sees it.
+type GroupDTO struct {
+	Name      string `json:"name"`
+	Label     string `json:"label"`
+	Collapsed bool   `json:"collapsed"`
+}
+
+// Groups returns the configured groups in file order. The sidebar renders from
+// the daemon's push (cmd=projects carries them), so this exists for the forms
+// that need the list without a live daemon — a group picker on a project.
+func (s *ConfigService) Groups() ([]GroupDTO, error) {
+	cfg, _, err := loadConfig()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]GroupDTO, 0, len(cfg.Groups))
+	for _, g := range cfg.Groups {
+		out = append(out, GroupDTO{Name: g.Name, Label: g.Label, Collapsed: g.Collapsed})
+	}
+	return out, nil
+}
+
+// AddGroup creates an empty group from a free-text label and returns its id.
+// The id is derived with config.Slug — the same transform a project id goes
+// through — and de-duplicated with a numeric suffix, so two folders a human
+// would both call "Clients" can coexist instead of one silently replacing the
+// other. Empty groups are the point: the folder is created first and projects
+// are dragged into it after.
+func (s *ConfigService) AddGroup(label string) (string, error) {
+	cfg, path, err := loadConfig()
+	if err != nil {
+		return "", err
+	}
+	label = strings.TrimSpace(label)
+	base := config.Slug(label)
+	if base == "" {
+		return "", errors.New("group name is required")
+	}
+	name := base
+	for i := 2; cfg.GroupByName(name) != nil; i++ {
+		name = base + "-" + strconv.Itoa(i)
+	}
+	g := config.Group{Name: name}
+	if label != name {
+		// A label identical to the id carries nothing — DisplayName falls back
+		// to the id — so it is not written, exactly as a project's is not.
+		g.Label = label
+	}
+	cfg.Groups = append(cfg.Groups, g)
+	if err := saveConfig(cfg, path); err != nil {
+		return "", err
+	}
+	return name, nil
+}
+
+// RenameGroup changes a group's DISPLAY label only. The id stays put on purpose:
+// it is what every [[project]].group references, and rewriting it would have to
+// rewrite those in the same breath for no gain — unlike a project id, a group id
+// names no directory, tmux session or state file, so nothing reads it but this
+// table.
+func (s *ConfigService) RenameGroup(name, label string) error {
+	cfg, path, err := loadConfig()
+	if err != nil {
+		return err
+	}
+	g := cfg.GroupByName(name)
+	if g == nil {
+		return errors.New("no such group: " + name)
+	}
+	label = strings.TrimSpace(label)
+	if config.Slug(label) == "" {
+		return errors.New("group name is required")
+	}
+	if label == g.Name {
+		g.Label = ""
+	} else {
+		g.Label = label
+	}
+	return saveConfig(cfg, path)
+}
+
+// RemoveGroup deletes the folder and files its members at the top level. It
+// never touches a project beyond that reference: a group is arrangement, so
+// deleting one must not be able to lose a project, its worktrees or its
+// sessions.
+func (s *ConfigService) RemoveGroup(name string) error {
+	cfg, path, err := loadConfig()
+	if err != nil {
+		return err
+	}
+	if cfg.GroupByName(name) == nil {
+		return errors.New("no such group: " + name)
+	}
+	out := cfg.Groups[:0]
+	for _, g := range cfg.Groups {
+		if g.Name != name {
+			out = append(out, g)
+		}
+	}
+	cfg.Groups = out
+	for i := range cfg.Projects {
+		if cfg.Projects[i].Group == name {
+			cfg.Projects[i].Group = ""
+		}
+	}
+	return saveConfig(cfg, path)
+}
+
+// SetGroupCollapsed persists a folder's disclosure state. It lives in
+// config.toml rather than in the web view's storage so the app and a future TUI
+// rendering agree, and so it survives a reinstall like every other arrangement
+// key.
+func (s *ConfigService) SetGroupCollapsed(name string, collapsed bool) error {
+	cfg, path, err := loadConfig()
+	if err != nil {
+		return err
+	}
+	g := cfg.GroupByName(name)
+	if g == nil {
+		return errors.New("no such group: " + name)
+	}
+	if g.Collapsed == collapsed {
+		return nil // no write for a no-op toggle
+	}
+	g.Collapsed = collapsed
+	return saveConfig(cfg, path)
+}
+
+// SetProjectLayout applies a whole sidebar arrangement: the group order, and
+// every project's group plus its position. It FAILS CLOSED — the projects list
+// must be an exact permutation of what is configured and the groups list an
+// exact permutation of the configured groups, or nothing is written.
+//
+// That strictness is the point. The layout is computed by a drag handler in the
+// frontend against a snapshot that may be a config reload behind; applying it
+// loosely would let a stale layout resurrect a project the user just removed,
+// or drop one it had not heard of yet. A refused layout costs one drag, which
+// the next render corrects.
+func (s *ConfigService) SetProjectLayout(dto ProjectLayoutDTO) error {
+	cfg, path, err := loadConfig()
+	if err != nil {
+		return err
+	}
+
+	// Groups first: the projects below reference them.
+	byGroup := make(map[string]config.Group, len(cfg.Groups))
+	for _, g := range cfg.Groups {
+		byGroup[g.Name] = g
+	}
+	if len(dto.Groups) != len(byGroup) {
+		return errors.New("layout is out of date: the configured groups have changed")
+	}
+	groups := make([]config.Group, 0, len(dto.Groups))
+	seenGroup := make(map[string]bool, len(dto.Groups))
+	for _, gd := range dto.Groups {
+		cur, ok := byGroup[gd.Name]
+		if !ok || seenGroup[gd.Name] {
+			return errors.New("layout is out of date: the configured groups have changed")
+		}
+		seenGroup[gd.Name] = true
+		// Only the ORDER (and the disclosure state, which rides along with a
+		// drag) comes from the layout. The label is the rename path's to change.
+		cur.Collapsed = gd.Collapsed
+		groups = append(groups, cur)
+	}
+
+	byProject := make(map[string]int, len(cfg.Projects))
+	for i := range cfg.Projects {
+		byProject[cfg.Projects[i].Name] = i
+	}
+	if len(dto.Projects) != len(byProject) {
+		return errors.New("layout is out of date: the configured projects have changed")
+	}
+	projects := make([]config.Project, 0, len(dto.Projects))
+	seenProject := make(map[string]bool, len(dto.Projects))
+	for _, pd := range dto.Projects {
+		idx, ok := byProject[pd.Name]
+		if !ok || seenProject[pd.Name] {
+			return errors.New("layout is out of date: the configured projects have changed")
+		}
+		seenProject[pd.Name] = true
+		p := cfg.Projects[idx]
+		if g := strings.TrimSpace(pd.Group); g == "" {
+			p.Group = ""
+		} else if seenGroup[g] {
+			p.Group = g
+		} else {
+			return errors.New("layout names group " + g + ", which is not configured")
+		}
+		projects = append(projects, p)
+	}
+
+	cfg.Groups = groups
+	cfg.Projects = projects
+	return saveConfig(cfg, path)
 }

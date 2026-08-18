@@ -2,8 +2,10 @@
   // The '?' keybinding reference. Mirrors the TUI's help overlay. There is no
   // footer hint strip any more, so this is the ONLY place the full key model is
   // written down — every key listed here must actually be bound in App.svelte's
-  // onKey. Opened from anywhere via '?'; esc / '?' / the ✕ close it (App.svelte
-  // + Modal), and the sidebar's utility row has a '?' button for the mouse.
+  // onKey, in the macOS Session menu (the ⌘ chords), or on a specific focused
+  // control (⌥↑/⌥↓, which the sidebar row itself handles). Opened from anywhere
+  // via '?'; esc / '?' / the ✕ close it (App.svelte + Modal), and the sidebar's
+  // utility row has a '?' button for the mouse.
   import { nav } from "$lib/nav.svelte";
   import Modal from "$lib/components/Modal.svelte";
 
@@ -40,6 +42,9 @@
       title: "Global",
       keys: [
         ["b", "show / hide sidebar"],
+        // Not an onKey binding: it fires on the focused sidebar row itself, so
+        // it is listed under what it moves rather than as a global.
+        ["⌥↑ / ⌥↓", "reorder the focused project or group"],
         ["p", "projects"],
         ["S", "settings"],
         ["d", "doctor"],
