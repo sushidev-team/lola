@@ -41,30 +41,56 @@
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <!-- The pointerdown is a drag ENHANCEMENT; the row's own control below is a real
      <button>, so the keyboard and AT path are unaffected. -->
+<!-- `relative` for the actions, which are taken OUT of the flow: an
+     opacity-0 control still occupies its width, which pushed the count off the
+     right edge and left the row looking permanently mid-hover. -->
 <div
   data-head
-  class="group/row flex h-7 w-full items-center rounded-md text-faint transition-colors hover:bg-sel/60 hover:text-ink"
+  class="group/row relative flex h-7 w-full items-center rounded-md text-faint transition-colors hover:bg-sel/60 hover:text-ink"
   class:opacity-40={dragging}
   class:bg-accent-fill={dropTarget}
   class:text-accent-ink={dropTarget}
   {onpointerdown}
 >
   <button
-    class="flex h-full min-w-0 grow items-center gap-2 rounded-md px-2 text-left"
+    class="flex h-full min-w-0 grow items-center gap-2 rounded-md px-2 text-left group-hover/row:pr-14 group-focus-within/row:pr-14"
     aria-expanded={!collapsed}
     title={collapsed ? "expand group" : "collapse group"}
     onclick={ontoggle}
     {onkeydown}
   >
-    <span class="w-3.5 shrink-0 text-center text-sm" aria-hidden="true">{collapsed ? "▸" : "▾"}</span>
+    <!-- A drawn chevron rather than a ▸/▾ glyph: the glyph rendered at a
+         fraction of its em box, so it read as a speck next to 13px type, and its
+         two characters could not animate between states. This is the sidebar's
+         own icon language (see the project row's gear) at the same 14px as the
+         glyph column it sits in, and it ROTATES rather than swapping shape. -->
+    <svg
+      viewBox="0 0 24 24"
+      class="h-3.5 w-3.5 shrink-0 transition-transform duration-150"
+      class:rotate-90={!collapsed}
+      fill="none"
+      stroke="currentColor"
+      stroke-width="2.5"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M9 5l7 7-7 7" />
+    </svg>
     <span class="truncate font-medium">{label}</span>
     <!-- Always rendered, 0 included: a count that appears and vanishes as
-         projects move in and out makes the whole list jump. -->
-    <span class="num ml-auto shrink-0 pl-2 text-sm" class:text-faint={!dropTarget}>{count}</span>
+         projects move in and out makes the whole list jump. It steps aside for
+         the actions on hover — they share this slot rather than queueing up
+         beside it, which is what keeps the count on the right edge at rest. -->
+    <span
+      class="num ml-auto shrink-0 pl-2 text-sm transition-opacity group-hover/row:opacity-0 group-focus-within/row:opacity-0"
+      class:text-faint={!dropTarget}>{count}</span
+    >
   </button>
-  <!-- data-drag-ignore: controls, not drag handles (see SidebarProjects). -->
+  <!-- data-drag-ignore: controls, not drag handles (see SidebarProjects).
+       ABSOLUTE, so at rest they cost no width — see the wrapper's comment. -->
   <span
-    class="flex shrink-0 items-center pr-2 opacity-0 transition-opacity group-hover/row:opacity-100 focus-within:opacity-100"
+    class="absolute right-2 flex items-center opacity-0 transition-opacity group-hover/row:opacity-100 focus-within:opacity-100"
     data-drag-ignore
   >
     <Button size="xs" icon title="rename group" aria-label="Rename {label}" onclick={onrename}>✎</Button>
