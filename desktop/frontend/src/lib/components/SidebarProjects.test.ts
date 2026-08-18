@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, cleanup, fireEvent } from "@testing-library/svelte";
+import { tick } from "svelte";
 
 // The bindings are the process boundary. Stubbing them keeps this about what
 // the sidebar OFFERS and what it asks the backend to persist — the arrangement
@@ -204,16 +205,115 @@ describe("SidebarProjects", () => {
     });
   });
 
+  // jsdom implements no PointerEvent, so fireEvent.pointerDown synthesizes a
+  // bare Event and DROPS button/clientX/clientY — a drag fired that way never
+  // starts (the handler bails on `button !== 0`) and the test passes vacuously.
+  // A MouseEvent under the pointer event's name carries every field the handler
+  // actually reads.
+  function pointer(el: EventTarget, type: string, init: MouseEventInit = {}) {
+    el.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, ...init }));
+  }
+
+  // jsdom has no layout either, so a drag test has to supply the geometry the
+  // resolver reads. Stubbing it is what makes the WHOLE path testable — resolve → re-base
+  // onto post-lift coordinates → move → payload — which is exactly where the
+  // "downward drags land one row too far" bug lived.
+  function stubRect(el: Element, top: number, height: number) {
+    Object.defineProperty(el, "getBoundingClientRect", {
+      configurable: true,
+      value: () => ({ top, bottom: top + height, height, left: 0, right: 200, width: 200, x: 0, y: top }),
+    });
+  }
+
+  const ROW_H = 28;
+
+  it("drags a project down past its neighbour and lands it THERE, not past it", async () => {
+    // THREE rows, dropping into the MIDDLE gap. With two, a downward drag can
+    // only end at the tail, where clamping quietly absorbs an off-by-one — the
+    // shape of this test is what makes it able to fail.
+    store.projects = [fakeProject(), fakeProject({ name: "nori" }), fakeProject({ name: "okane" })];
+    store.groups = [];
+    const { container } = render(SidebarProjects);
+    const tops = Array.from(container.querySelectorAll("[data-toprow]"));
+    tops.forEach((el, i) => stubRect(el, i * ROW_H, ROW_H));
+
+    pointer(screen.getByRole("button", { name: "lola" }), "pointerdown", { button: 0, clientX: 0, clientY: 4 });
+    // Past nori's midpoint (28..56, middle 42) but short of okane's (56..84,
+    // middle 70): the indicator sits between them, and so must the row.
+    pointer(window, "pointermove", { clientX: 0, clientY: 50 });
+    pointer(window, "pointerup");
+    await tick();
+
+    expect(SetProjectLayout).toHaveBeenCalledWith({
+      groups: [],
+      projects: [
+        { name: "nori", group: "" },
+        { name: "lola", group: "" },
+        { name: "okane", group: "" },
+      ],
+    });
+  });
+
+  it("files a project into the folder its row is dropped on", async () => {
+    store.projects = [fakeProject(), fakeProject({ name: "nori" })];
+    store.groups = [{ name: "clients", label: "Clients", position: 2 }];
+    const { container } = render(SidebarProjects);
+    const tops = Array.from(container.querySelectorAll("[data-toprow]"));
+    tops.forEach((el, i) => stubRect(el, i * ROW_H, ROW_H));
+    // The folder's own header is the drop target; its (empty) member list keeps
+    // jsdom's zero-height rect, which the resolver skips.
+    const head = container.querySelector("[data-head]")!;
+    stubRect(head, 2 * ROW_H, ROW_H);
+
+    pointer(screen.getByRole("button", { name: "lola" }), "pointerdown", { button: 0, clientX: 0, clientY: 4 });
+    // The MIDDLE of the folder row — its edges would be the gaps either side.
+    pointer(window, "pointermove", { clientX: 0, clientY: 2 * ROW_H + ROW_H / 2 });
+    pointer(window, "pointerup");
+    await tick();
+
+    expect(SetProjectLayout).toHaveBeenCalledWith({
+      groups: [{ name: "clients", label: "Clients", position: 1, collapsed: false }],
+      projects: [
+        { name: "nori", group: "" },
+        { name: "lola", group: "clients" },
+      ],
+    });
+  });
+
+  it("writes nothing when a drag ends where it started", async () => {
+    store.projects = [fakeProject(), fakeProject({ name: "nori" })];
+    store.groups = [];
+    const { container } = render(SidebarProjects);
+    Array.from(container.querySelectorAll("[data-toprow]")).forEach((el, i) => stubRect(el, i * ROW_H, ROW_H));
+
+    pointer(screen.getByRole("button", { name: "lola" }), "pointerdown", { button: 0, clientX: 0, clientY: 4 });
+    pointer(window, "pointermove", { clientX: 0, clientY: 10 });
+    pointer(window, "pointerup");
+    await tick();
+    expect(SetProjectLayout).not.toHaveBeenCalled();
+  });
+
+  it("dismisses the add menu on Escape and returns focus to the trigger", async () => {
+    render(SidebarProjects);
+    const trigger = screen.getByRole("button", { name: "Add" });
+    await fireEvent.click(trigger);
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+    await fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(document.activeElement).toBe(trigger);
+  });
+
   it("abandons a drag on pointercancel without writing anything", async () => {
     // The OS can take the pointer away (a gesture, a system dialog) and no
     // pointerup follows; the half-drag must not survive into the next move.
-    render(SidebarProjects);
-    const row = screen.getByRole("button", { name: "lola" });
-    await fireEvent.pointerDown(row, { button: 0, clientX: 0, clientY: 0 });
-    await fireEvent.pointerMove(window, { clientX: 0, clientY: 80 });
-    await fireEvent.pointerCancel(window);
-    await fireEvent.pointerUp(window);
-    await fireEvent.pointerMove(window, { clientX: 0, clientY: 400 });
+    const { container } = render(SidebarProjects);
+    Array.from(container.querySelectorAll("[data-toprow]")).forEach((el, i) => stubRect(el, i * ROW_H, ROW_H));
+    pointer(screen.getByRole("button", { name: "lola" }), "pointerdown", { button: 0, clientX: 0, clientY: 4 });
+    pointer(window, "pointermove", { clientX: 0, clientY: 50 }); // a real drag, past the threshold
+    pointer(window, "pointercancel");
+    pointer(window, "pointerup");
+    pointer(window, "pointermove", { clientX: 0, clientY: 400 });
+    await tick();
     expect(SetProjectLayout).not.toHaveBeenCalled();
   });
 

@@ -50,11 +50,36 @@
   // inside the header: the sidebar body scrolls and clips, and a popover that
   // can be cut in half is worse than one that floats.
   let addMenu = $state<{ x: number; y: number } | null>(null);
+  // The element that opened the menu, so focus can return to it on Escape. Kept
+  // from the event rather than a bind:this — Button is a component, and binding
+  // it would hand back the instance, not the node.
+  let addTrigger: HTMLElement | null = null;
 
   function openAddMenu(e: MouseEvent) {
-    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    addTrigger = e.currentTarget as HTMLElement;
+    const r = addTrigger.getBoundingClientRect();
     addMenu = { x: Math.min(r.left, window.innerWidth - 180), y: r.bottom + 4 };
   }
+
+  function closeAddMenu(refocus = false) {
+    addMenu = null;
+    if (refocus) addTrigger?.focus();
+  }
+
+  // Escape closes the menu, on the CAPTURE phase and swallowed: App.svelte's
+  // global handler is on window too, and without this the key would fall through
+  // to a view shortcut with a menu still open on top of it.
+  $effect(() => {
+    if (!addMenu) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      e.stopPropagation();
+      closeAddMenu(true);
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  });
 
   // --- group add / rename -----------------------------------------------------
   let dialog = $state<{ mode: "add" | "rename"; name: string; value: string } | null>(null);
@@ -483,7 +508,7 @@
 {#if addMenu}
   <!-- Backdrop: any click outside dismisses without falling through to the
        surface underneath. Same shape as the session context menu. -->
-  <div class="fixed inset-0 z-40" role="presentation" onclick={() => (addMenu = null)}></div>
+  <div class="fixed inset-0 z-40" role="presentation" onclick={() => closeAddMenu()}></div>
   <div
     class="fixed z-50 min-w-[11rem] rounded-lg border border-edge bg-panel p-1 shadow-xl"
     style="left:{addMenu.x}px;top:{addMenu.y}px"
@@ -492,14 +517,14 @@
     <MenuItem
       icon="+"
       onclick={() => {
-        addMenu = null;
+        closeAddMenu();
         nav.openOverlay("project", "");
       }}>New project</MenuItem
     >
     <MenuItem
       icon="▸"
       onclick={() => {
-        addMenu = null;
+        closeAddMenu();
         dialog = { mode: "add", name: "", value: "" };
       }}>New group</MenuItem
     >
