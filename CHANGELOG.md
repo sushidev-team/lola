@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.2.9](https://github.com/sushidev-team/lola/compare/v0.2.8...v0.2.9) (2026-08-18)
+
+
+### Features
+
+* **desktop:** draw the form controls instead of letting macOS draw them ([0b0142f](https://github.com/sushidev-team/lola/commit/0b0142f6107b0daf17bc20770eaf6669368a5503))
+* **dev:** explain a dev tab that died on a taken port, and offer to free it ([09294bd](https://github.com/sushidev-team/lola/commit/09294bd4ea6115afd7d0a47215e9e4e55133826f))
+* inline resolvable PR review threads, the Linear ticket picker, live pane cues ([b8c8225](https://github.com/sushidev-team/lola/commit/b8c8225d233d61e55ad77d9030e1caa84c4b928b))
+
+
+### Bug Fixes
+
+* **attention:** recognize claude-code's current composer so hand-offs land ([025beeb](https://github.com/sushidev-team/lola/commit/025beeb36351923374c96025ae956477745723c4))
+* **desktop:** stop reporting "up to date" when a release has no build yet ([66c3bbc](https://github.com/sushidev-team/lola/commit/66c3bbcc7dba32cc2e6e473dca09e787e631f970))
+* **tickets:** head the issue picker with the project, drop the age column ([3288ae1](https://github.com/sushidev-team/lola/commit/3288ae10ac3bcff5127d299192d37aa71fb82829))
+* **tmux:** apply the scroll default on a cold server, and lock the copy-mode handshake ([5a288e9](https://github.com/sushidev-team/lola/commit/5a288e97c8d099448a3a75952a41f5b384c8095d))
+* **tmux:** let [tmux].mouse own the server's mouse option in both states ([cf37839](https://github.com/sushidev-team/lola/commit/cf3783977259c0cfbbe85b2c341e12780d810be1))
+* **tmux:** scroll lola panes from the app through tmux copy mode ([c6f6e07](https://github.com/sushidev-team/lola/commit/c6f6e07c56035e5f14ffabe135732cbed38c7d01))
+* **tmux:** scroll the history the pane actually has ([690b1e0](https://github.com/sushidev-team/lola/commit/690b1e0e2eb391207d41f2f23f82506e7f803d88))
+
 ## [0.2.8](https://github.com/sushidev-team/lola/compare/v0.2.7...v0.2.8) (2026-08-17)
 
 
