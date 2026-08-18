@@ -436,13 +436,12 @@ type ProjectFormDTO struct {
 	// save; changing Name is a RENAME and must go through
 	// DaemonService.RenameProject FIRST, so that by the time SaveProject runs the
 	// project on disk already answers to the new id.
-	Name  string `json:"name"`
-	Label string `json:"label"`
-	// Group is the [[group]] this project is filed under in the sidebar, "" for
-	// the top level. It is arrangement, not behaviour — the field exists here so
-	// grouping is reachable without a pointer, since the other way to set it is
-	// dragging the row. A group that is not configured is refused.
-	Group         string   `json:"group"`
+	// The project's GROUP is deliberately absent: filing a project is done in
+	// the sidebar, by dragging its row onto a folder, and a second place to set
+	// it would let a stale form move a project nobody dragged. SaveProject leaves
+	// Project.Group untouched.
+	Name          string   `json:"name"`
+	Label         string   `json:"label"`
 	Path          string   `json:"path"`
 	Repo          string   `json:"repo"`
 	DefaultBranch string   `json:"defaultBranch"`
@@ -525,7 +524,6 @@ func projectDTO(p *config.Project) ProjectFormDTO {
 	return ProjectFormDTO{
 		Name:          p.Name,
 		Label:         p.Label,
-		Group:         p.Group,
 		Path:          p.Path,
 		Repo:          p.Repo,
 		DefaultBranch: p.DefaultBranch,
@@ -609,13 +607,6 @@ func (s *ConfigService) SaveProject(dto ProjectFormDTO) error {
 	if p.Label == name {
 		p.Label = ""
 	}
-	// Refused rather than repaired: config would silently file the project at the
-	// top level on the next load, so a stale picker would look like it saved.
-	group := strings.TrimSpace(dto.Group)
-	if group != "" && cfg.GroupByName(group) == nil {
-		return errors.New("no such group: " + group)
-	}
-	p.Group = group
 	p.Path = dto.Path
 	p.Repo = dto.Repo
 	p.DefaultBranch = dto.DefaultBranch
@@ -1033,26 +1024,14 @@ type ProjectLayoutDTO struct {
 	Projects []ProjectPlacementDTO `json:"projects"`
 }
 
-// GroupDTO is one [[group]] as the frontend sees it.
+// GroupDTO is one [[group]] as the frontend sees it. Position is its index
+// among the top-level rows (see config.Group) — the sidebar draws folders beside
+// the projects, so a group's place is a value of its own.
 type GroupDTO struct {
 	Name      string `json:"name"`
 	Label     string `json:"label"`
+	Position  int    `json:"position"`
 	Collapsed bool   `json:"collapsed"`
-}
-
-// Groups returns the configured groups in file order. The sidebar renders from
-// the daemon's push (cmd=projects carries them), so this exists for the forms
-// that need the list without a live daemon — a group picker on a project.
-func (s *ConfigService) Groups() ([]GroupDTO, error) {
-	cfg, _, err := loadConfig()
-	if err != nil {
-		return nil, err
-	}
-	out := make([]GroupDTO, 0, len(cfg.Groups))
-	for _, g := range cfg.Groups {
-		out = append(out, GroupDTO{Name: g.Name, Label: g.Label, Collapsed: g.Collapsed})
-	}
-	return out, nil
 }
 
 // AddGroup creates an empty group from a free-text label and returns its id.
@@ -1075,7 +1054,16 @@ func (s *ConfigService) AddGroup(label string) (string, error) {
 	for i := 2; cfg.GroupByName(name) != nil; i++ {
 		name = base + "-" + strconv.Itoa(i)
 	}
-	g := config.Group{Name: name}
+	// The new folder lands at the END of the top-level list: after the ungrouped
+	// projects and after the folders that already exist. Anywhere else would
+	// move rows the user did not touch.
+	ungrouped := 0
+	for i := range cfg.Projects {
+		if cfg.Projects[i].Group == "" {
+			ungrouped++
+		}
+	}
+	g := config.Group{Name: name, Position: ungrouped + len(cfg.Groups)}
 	if label != name {
 		// A label identical to the id carries nothing — DisplayName falls back
 		// to the id — so it is not written, exactly as a project's is not.
@@ -1193,8 +1181,9 @@ func (s *ConfigService) SetProjectLayout(dto ProjectLayoutDTO) error {
 			return errors.New("layout is out of date: the configured groups have changed")
 		}
 		seenGroup[gd.Name] = true
-		// Only the ORDER (and the disclosure state, which rides along with a
+		// Only the PLACE (and the disclosure state, which rides along with a
 		// drag) comes from the layout. The label is the rename path's to change.
+		cur.Position = gd.Position
 		cur.Collapsed = gd.Collapsed
 		groups = append(groups, cur)
 	}

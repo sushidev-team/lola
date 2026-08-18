@@ -453,6 +453,17 @@ func (d *Daemon) reactSendAgent(ctx context.Context, s session.Session, key, tem
 		detail = fetchDetail()
 	}
 	msg := renderReaction(template, s, detail)
+	if key == "changes_requested" {
+		// The feedback this reaction relays IS a set of review threads — a human
+		// reviewer's, or a bot's inline comments (CodeRabbit posts its findings
+		// that way). Tell the worker to close the ones it fixes, and how: an
+		// agent that is never told leaves the conversations open and the PR reads
+		// as untouched however much of it was actually fixed. lola's own text,
+		// appended AFTER the rendered (untrusted) detail so nothing in the
+		// feedback can rewrite the instruction, and conditional in its wording
+		// because nothing here proves a thread is open right now.
+		msg += prThreadNote(s)
+	}
 
 	// Atomically re-check AtPrompt under the store lock and consume it. This is
 	// the true gate: the passed copy's AtPrompt may be stale by microseconds.

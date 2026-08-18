@@ -547,6 +547,61 @@ func TestAddGroupSlugsAndDedupes(t *testing.T) {
 	}
 }
 
+// A new folder lands at the END of the top-level list — after the ungrouped
+// projects and the folders already there — so adding one moves no existing row.
+func TestAddGroupLandsLast(t *testing.T) {
+	path := writeTestConfig(t, twoProjectConfig)
+	s := &ConfigService{}
+	if _, err := s.AddGroup("clients"); err != nil {
+		t.Fatalf("AddGroup: %v", err)
+	}
+	if _, err := s.AddGroup("internal"); err != nil {
+		t.Fatalf("AddGroup: %v", err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Groups[0].Position != 2 || cfg.Groups[1].Position != 3 {
+		t.Fatalf("positions = %d, %d", cfg.Groups[0].Position, cfg.Groups[1].Position)
+	}
+}
+
+// Filing a project is the sidebar's job (drag it onto the folder), so the form
+// must leave Project.Group alone rather than carry a stale copy of it.
+func TestSaveProjectLeavesTheGroupAlone(t *testing.T) {
+	path := writeTestConfig(t, twoProjectConfig)
+	s := &ConfigService{}
+	if _, err := s.AddGroup("clients"); err != nil {
+		t.Fatalf("AddGroup: %v", err)
+	}
+	if err := s.SetProjectLayout(ProjectLayoutDTO{
+		Groups:   []GroupDTO{{Name: "clients", Position: 1}},
+		Projects: []ProjectPlacementDTO{{Name: "okane", Group: "clients"}, {Name: "lola"}},
+	}); err != nil {
+		t.Fatalf("SetProjectLayout: %v", err)
+	}
+	dto, err := s.GetProject("okane")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dto.Label = "Okane renamed"
+	if err := s.SaveProject(dto); err != nil {
+		t.Fatalf("SaveProject: %v", err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := cfg.ProjectByName("okane")
+	if p.Group != "clients" {
+		t.Fatalf("group = %q, want clients", p.Group)
+	}
+	if p.Label != "Okane renamed" {
+		t.Fatalf("label = %q", p.Label)
+	}
+}
+
 // A label that already IS its id carries nothing, so it is not written — the
 // same rule SaveProject applies to a project's label.
 func TestAddGroupOmitsRedundantLabel(t *testing.T) {
@@ -579,7 +634,7 @@ func TestRemoveGroupUngroupsItsProjects(t *testing.T) {
 		t.Fatalf("AddGroup: %v", err)
 	}
 	if err := s.SetProjectLayout(ProjectLayoutDTO{
-		Groups: []GroupDTO{{Name: "clients"}},
+		Groups: []GroupDTO{{Name: "clients", Position: 1}},
 		Projects: []ProjectPlacementDTO{
 			{Name: "okane", Group: "clients"},
 			{Name: "lola"},
@@ -655,7 +710,7 @@ func TestSetProjectLayoutReordersAndFiles(t *testing.T) {
 		t.Fatalf("AddGroup: %v", err)
 	}
 	if err := s.SetProjectLayout(ProjectLayoutDTO{
-		Groups: []GroupDTO{{Name: "clients", Collapsed: true}},
+		Groups: []GroupDTO{{Name: "clients", Position: 1, Collapsed: true}},
 		Projects: []ProjectPlacementDTO{
 			{Name: "lola"},
 			{Name: "okane", Group: "clients"},
@@ -676,6 +731,11 @@ func TestSetProjectLayoutReordersAndFiles(t *testing.T) {
 	}
 	if !cfg.Groups[0].Collapsed {
 		t.Fatal("collapse from the layout was dropped")
+	}
+	// The folder's PLACE among the top-level rows rides the layout too — it is
+	// what lets a folder sit between two projects rather than below them.
+	if cfg.Groups[0].Position != 1 {
+		t.Fatalf("position = %d, want 1", cfg.Groups[0].Position)
 	}
 	// Everything else about the project survives a pure arrangement change.
 	if cfg.Projects[1].Path != "/tmp/okane" {

@@ -105,6 +105,13 @@ export interface Event {
 export interface GroupInfo {
     "name": string;
     "label"?: string;
+
+    /**
+     * Position is the group's index among the TOP-LEVEL rows — the sidebar draws
+     * folders beside the ungrouped projects, not in a section below them, so a
+     * group carries its own place in that list. See config.Group.
+     */
+    "position": number;
     "collapsed"?: boolean;
 }
 

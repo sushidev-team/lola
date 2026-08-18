@@ -13,8 +13,8 @@ func TestGroupsRoundTrip(t *testing.T) {
 
 	c := &Config{
 		Groups: []Group{
-			{Name: "clients", Label: "Clients"},
-			{Name: "internal", Collapsed: true},
+			{Name: "clients", Label: "Clients", Position: 1},
+			{Name: "internal", Position: 3, Collapsed: true},
 		},
 		Projects: []Project{
 			{Name: "okane", Path: "/tmp/okane", Group: "clients"},
@@ -31,11 +31,12 @@ func TestGroupsRoundTrip(t *testing.T) {
 	if len(got.Groups) != 2 {
 		t.Fatalf("groups = %+v", got.Groups)
 	}
-	if got.Groups[0].Name != "clients" || got.Groups[0].Label != "Clients" {
+	if got.Groups[0].Name != "clients" || got.Groups[0].Label != "Clients" || got.Groups[0].Position != 1 {
 		t.Fatalf("group[0] = %+v", got.Groups[0])
 	}
-	// Order is the file's, not a sort: the array position IS the render order.
-	if got.Groups[1].Name != "internal" || !got.Groups[1].Collapsed {
+	// A folder's place among the top-level rows is its own value, because an
+	// EMPTY folder has no member to derive one from.
+	if got.Groups[1].Name != "internal" || got.Groups[1].Position != 3 || !got.Groups[1].Collapsed {
 		t.Fatalf("group[1] = %+v", got.Groups[1])
 	}
 	if got.Projects[0].Group != "clients" {
@@ -136,6 +137,18 @@ func TestGroupSanitizeIsIdempotent(t *testing.T) {
 	}
 	if len(c.Groups) != 1 || c.Projects[0].Group != "" {
 		t.Fatalf("not canonical: groups=%+v project=%+v", c.Groups, c.Projects[0])
+	}
+}
+
+func TestNegativeGroupPositionIsClamped(t *testing.T) {
+	// "before everything" is a coherent wish, so it is clamped rather than
+	// reported: there is nothing for a human to fix.
+	c := &Config{Groups: []Group{{Name: "clients", Position: -4}}}
+	if n := c.sanitizeGroups(); len(n) != 0 {
+		t.Fatalf("notices = %v", n)
+	}
+	if c.Groups[0].Position != 0 {
+		t.Fatalf("position = %d", c.Groups[0].Position)
 	}
 }
 

@@ -42,9 +42,10 @@
       title: "Global",
       keys: [
         ["b", "show / hide sidebar"],
-        // Not an onKey binding: it fires on the focused sidebar row itself, so
-        // it is listed under what it moves rather than as a global.
-        ["⌥↑ / ⌥↓", "reorder the focused project or group"],
+        // Not onKey bindings: they fire on the focused sidebar row itself, so
+        // they are listed under what they move rather than as globals.
+        ["⌥↑ / ⌥↓", "move the focused project or folder"],
+        ["⌥→ / ⌥←", "file the focused project into a folder / out of it"],
         ["p", "projects"],
         ["S", "settings"],
         ["d", "doctor"],

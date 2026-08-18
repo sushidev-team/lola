@@ -12,7 +12,6 @@
   import Checkbox from "$lib/components/Checkbox.svelte";
   import Select from "$lib/components/Select.svelte";
   import { ConfigService, DaemonService, LinearService } from "@bindings/desktop";
-  import type { GroupDTO } from "@bindings/desktop";
   import { slug, slugTyping, displayName } from "$lib/slug";
   import type {
     ProjectFormDTO,
@@ -245,10 +244,6 @@
     return k && inherited(k) ? "opacity-55" : "";
   }
 
-  // The [[group]] folders this project can be filed under. Set from config on
-  // mount; empty simply means the Group field offers only "top level".
-  let groups = $state<GroupDTO[]>([]);
-
   async function loadMeta(teamId: string) {
     meta = null;
     metaErr = "";
@@ -293,13 +288,6 @@
       loadErr = String(e);
       store.setFlash(String(e), "bad");
       return;
-    }
-    try {
-      // From config, not the store's push: the group list is config's own and
-      // must still be offered when no daemon is running.
-      groups = (await ConfigService.Groups()) ?? [];
-    } catch {
-      // Non-fatal: the field falls back to whatever the project already has.
     }
     try {
       defaults = { ...(await ConfigService.GetSettings()) };
@@ -653,31 +641,6 @@
             ? `rename ${origName} → ${slug(d.name)} · needs no live sessions`
             : "path segment + tmux name prefix; changing it is a rename",
         )}
-        <!-- Which sidebar folder this project sits in. The sidebar's own way to
-             set it is dragging the row; this is the same fact reachable without
-             a pointer, and the only way to see it spelled out. -->
-        <div class={rowCls}>
-          {@render cap("Group", null)}
-          <span>
-            <Select
-              aria-label="Group"
-              value={d.group ?? ""}
-              onchange={(e) => {
-                d.group = e.currentTarget.value;
-              }}
-            >
-              <option value="">No group</option>
-              {#each groups as g (g.name)}<option value={g.name}>{g.label || g.name}</option>{/each}
-              <!-- A group the list does not carry (config unreadable, or the
-                   list is a beat behind a rename) must still be shown, or saving
-                   an untouched form would silently move the project out of it. -->
-              {#if d.group && !groups.some((g) => g.name === d.group)}
-                <option value={d.group}>{d.group}</option>
-              {/if}
-            </Select>
-            <span class={hintCls}>groups are created in the sidebar's + menu</span>
-          </span>
-        </div>
         <!-- The folder is the FIRST decision and everything below is derived
              from it, so the chooser sits on the row rather than in a menu. The
              field stays typable: a path you already know is never a dead end. -->

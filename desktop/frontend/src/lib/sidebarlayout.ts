@@ -1,118 +1,173 @@
 // The sidebar's project ARRANGEMENT, as pure data.
 //
-// A project's place is two facts, both in config.toml: which [[group]] it is
-// filed under and where it sits in the [[project]] array — the order every
-// surface renders, the TUI included. This module turns those two facts into the
-// sections the sidebar draws, applies a drag to them, and lowers the result back
-// into the layout ConfigService.SetProjectLayout takes.
+// The panel draws ONE list. A row is either a project or a FOLDER, side by side
+// in the same order — a folder is not a section below the projects, it is a row
+// among them that other rows can be dropped onto.
 //
-// It is deliberately free of Svelte, the store and the bindings: dragging is the
-// part of this feature that is hardest to verify by hand (WKWebView vs Chrome,
-// see LiveTerminal's history), so the decisions worth testing are made here,
-// where a test needs no DOM.
+// Both facts behind that list live in config.toml: `[[project]].group` files a
+// project into a folder, and the order comes from the `[[project]]` array (which
+// the TUI renders too) plus each `[[group]]`'s own `position`, since an EMPTY
+// folder has no member to derive a place from.
+//
+// This module is deliberately free of Svelte, the store and the bindings:
+// dragging is the part hardest to verify by hand (WKWebView vs Chrome, see
+// LiveTerminal's history), so every decision worth testing is made here, where a
+// test needs no DOM.
 
 export type LayoutProject = { name: string; group?: string };
-export type LayoutGroup = { name: string; label?: string; collapsed?: boolean };
+export type LayoutGroup = { name: string; label?: string; position?: number; collapsed?: boolean };
 
-/** One rendered block: the top-level section (group === null) or a folder. */
-export type Section<P extends LayoutProject = LayoutProject> = {
-  group: LayoutGroup | null;
-  projects: P[];
-};
+/** One top-level row: a loose project, or a folder with its members. */
+export type Row<P extends LayoutProject = LayoutProject> =
+  | { kind: "project"; project: P }
+  | { kind: "group"; group: LayoutGroup; projects: P[] };
 
 /**
- * Split projects into render sections: the ungrouped ones first, then every
- * configured group in its own order — EMPTY groups included, because an empty
- * folder is a real thing here (it is created before anything is dragged in).
+ * Build the top-level rows: the ungrouped projects in `[[project]]` order, with
+ * each folder spliced in at its own `position` (ascending, clamped, ties broken
+ * by config order). A folder's members keep their `[[project]]` order.
  *
- * The top-level section is always present, even when empty: it is the drop
- * target for dragging a project OUT of a folder, so it cannot vanish just
- * because every project currently sits in one.
+ * Round-trips with toLayout: rebuilding from the positions it writes reproduces
+ * the same list.
  */
-export function buildSections<P extends LayoutProject>(projects: P[], groups: LayoutGroup[]): Section<P>[] {
+export function buildRows<P extends LayoutProject>(projects: P[], groups: LayoutGroup[]): Row<P>[] {
   const known = new Set(groups.map((g) => g.name));
-  const sections: Section<P>[] = [{ group: null, projects: [] }];
-  const byGroup = new Map<string, P[]>();
-  for (const g of groups) {
-    const bucket: P[] = [];
-    byGroup.set(g.name, bucket);
-    sections.push({ group: g, projects: bucket });
-  }
+  const members = new Map<string, P[]>(groups.map((g) => [g.name, [] as P[]]));
+  const rows: Row<P>[] = [];
   for (const p of projects) {
     // A group the daemon does not list is treated as no group at all. Config
     // repairs a dangling reference on load, so this only covers the window
-    // between a group's removal and the next push — during which the project
+    // between a folder's removal and the next push — during which the project
     // must stay visible, never disappear into a folder nothing draws.
     const g = p.group && known.has(p.group) ? p.group : "";
-    if (g) byGroup.get(g)!.push(p);
-    else sections[0].projects.push(p);
+    if (g) members.get(g)!.push(p);
+    else rows.push({ kind: "project", project: p });
   }
-  return sections;
+  const ordered = groups.map((g, i) => ({ g, i })).sort((a, b) => (a.g.position ?? 0) - (b.g.position ?? 0) || a.i - b.i);
+  // `last` keeps two folders claiming the SAME position in config order: the
+  // second would otherwise splice in ahead of the first, so a hand-written
+  // config (or a not-yet-canonical one) would draw them back to front.
+  let last = -1;
+  for (const { g } of ordered) {
+    let at = clamp(g.position ?? 0, 0, rows.length);
+    if (at <= last) at = clamp(last + 1, 0, rows.length);
+    rows.splice(at, 0, { kind: "group", group: g, projects: members.get(g.name)! });
+    last = at;
+  }
+  return rows;
 }
 
 /** The layout payload ConfigService.SetProjectLayout expects. */
 export type Layout = {
-  groups: { name: string; label: string; collapsed: boolean }[];
+  groups: { name: string; label: string; position: number; collapsed: boolean }[];
   projects: { name: string; group: string }[];
 };
 
 /**
- * Lower sections back to a layout. Projects are flattened in RENDER order —
- * top level first, then each group's members — so the [[project]] array order
- * and what the sidebar shows can never disagree.
+ * Lower rows back to a layout. Projects are flattened in RENDER order — each
+ * top-level row in turn, a folder contributing its members — so the
+ * `[[project]]` array order and what the sidebar shows can never disagree, and
+ * every folder records the index it was actually drawn at.
  */
-export function toLayout(sections: Section[]): Layout {
+export function toLayout(rows: Row[]): Layout {
   const groups: Layout["groups"] = [];
   const projects: Layout["projects"] = [];
-  for (const s of sections) {
-    if (s.group) groups.push({ name: s.group.name, label: s.group.label ?? "", collapsed: !!s.group.collapsed });
-    for (const p of s.projects) projects.push({ name: p.name, group: s.group?.name ?? "" });
-  }
+  rows.forEach((row, i) => {
+    if (row.kind === "project") {
+      projects.push({ name: row.project.name, group: "" });
+      return;
+    }
+    groups.push({
+      name: row.group.name,
+      label: row.group.label ?? "",
+      position: i,
+      collapsed: !!row.group.collapsed,
+    });
+    for (const p of row.projects) projects.push({ name: p.name, group: row.group.name });
+  });
   return { groups, projects };
 }
 
+/** Where a dragged project is being dropped. */
+export type ProjectTarget =
+  /** Between top-level rows, at this index — i.e. ungrouped. */
+  | { kind: "top"; index: number }
+  /** Between a folder's members, at this index. */
+  | { kind: "group"; group: string; index: number }
+  /** ONTO a folder's row: file it there, at the end. */
+  | { kind: "into"; group: string };
+
 /**
- * Move a project to `index` within the section identified by `group` ("" = top
- * level), returning NEW sections. `index` counts positions in the target
- * section AFTER the project has been lifted out of wherever it was, which is
- * what a drop indicator drawn between rows means.
+ * Move a project, returning NEW rows. Indices count positions AFTER the project
+ * has been lifted out of wherever it was, which is what a drop indicator drawn
+ * between rows means.
  *
- * An unknown project or target returns the input unchanged: a drag against a
- * snapshot that has since been reloaded should cost the drag, not scramble the
- * arrangement.
+ * An unknown project or a folder that does not exist returns the input
+ * unchanged: a drag against a snapshot that has since been reloaded should cost
+ * the drag, not scramble the arrangement.
  */
-export function moveProject<P extends LayoutProject>(sections: Section<P>[], name: string, group: string, index: number): Section<P>[] {
-  const target = sections.find((s) => (s.group?.name ?? "") === group);
-  if (!target) return sections;
+export function moveProject<P extends LayoutProject>(rows: Row<P>[], name: string, to: ProjectTarget): Row<P>[] {
+  const group = to.kind === "top" ? "" : to.group;
+  if (group && !rows.some((r) => r.kind === "group" && r.group.name === group)) return rows;
+
   let moved: P | undefined;
-  const lifted = sections.map((s) => {
+  const lifted: Row<P>[] = [];
+  for (const row of rows) {
+    if (row.kind === "project") {
+      if (row.project.name === name) moved = row.project;
+      else lifted.push(row);
+      continue;
+    }
     const keep: P[] = [];
-    for (const p of s.projects) {
+    for (const p of row.projects) {
       if (p.name === name) moved = p;
       else keep.push(p);
     }
-    return { group: s.group, projects: keep };
-  });
-  if (!moved) return sections;
-  const dest = lifted.find((s) => (s.group?.name ?? "") === group)!;
-  const at = clamp(index, 0, dest.projects.length);
-  dest.projects.splice(at, 0, { ...moved, group } as P);
+    lifted.push({ kind: "group", group: row.group, projects: keep });
+  }
+  if (!moved) return rows;
+  const project = { ...moved, group } as P;
+
+  if (to.kind === "top") {
+    lifted.splice(clamp(to.index, 0, lifted.length), 0, { kind: "project", project });
+    return lifted;
+  }
+  const dest = lifted.find((r) => r.kind === "group" && r.group.name === group) as
+    | { kind: "group"; group: LayoutGroup; projects: P[] }
+    | undefined;
+  if (!dest) return rows;
+  const at = to.kind === "into" ? dest.projects.length : clamp(to.index, 0, dest.projects.length);
+  dest.projects.splice(at, 0, project);
   return lifted;
 }
 
 /**
- * Move a group to `index` among the groups, returning NEW sections. `index` is
- * a position among GROUPS only — the top-level section is not one and always
- * stays first, so a folder can never be dragged above the loose projects.
+ * Move a folder to `index` among the top-level rows, returning NEW rows. Its
+ * members travel with it — that is what makes it a folder rather than a section
+ * header.
  */
-export function moveGroup<P extends LayoutProject>(sections: Section<P>[], name: string, index: number): Section<P>[] {
-  const top = sections.filter((s) => !s.group);
-  const groups = sections.filter((s) => !!s.group);
-  const from = groups.findIndex((s) => s.group!.name === name);
-  if (from < 0) return sections;
-  const [moved] = groups.splice(from, 1);
-  groups.splice(clamp(index, 0, groups.length), 0, moved);
-  return [...top, ...groups];
+export function moveGroup<P extends LayoutProject>(rows: Row<P>[], name: string, index: number): Row<P>[] {
+  const from = rows.findIndex((r) => r.kind === "group" && r.group.name === name);
+  if (from < 0) return rows;
+  const out = [...rows];
+  const [moved] = out.splice(from, 1);
+  out.splice(clamp(index, 0, out.length), 0, moved);
+  return out;
+}
+
+/**
+ * Convert a gap index measured against the LIVE list — the one on screen, which
+ * still contains the row being dragged — into the post-lift index moveProject
+ * and moveGroup take. `sourceIndex` is the dragged row's own index in that same
+ * list, or null when it is not in it (dragging into a folder it is not in yet).
+ *
+ * Without this a downward drag lands one place PAST the indicator: the rows
+ * after the source shift up by one the moment it is lifted out. The live index
+ * is still what draws the indicator, so the two coordinate systems have to be
+ * converted between rather than merged.
+ */
+export function liftedIndex(gap: number, sourceIndex: number | null): number {
+  return sourceIndex !== null && sourceIndex < gap ? gap - 1 : gap;
 }
 
 /**
@@ -127,6 +182,21 @@ export function dropIndex(rows: { top: number; height: number }[], y: number): n
     if (y < rows[i].top + rows[i].height / 2) return i;
   }
   return rows.length;
+}
+
+/**
+ * How a folder's row reads a pointer at `y`: its middle band means "drop INTO
+ * this folder", its top and bottom edges mean the gaps either side of it.
+ *
+ * The edge bands are what keep a folder from swallowing every drop meant for
+ * the row above or below it — with a plain midpoint split there would be no way
+ * to place a project BETWEEN two folders.
+ */
+export function groupRowZone(rect: { top: number; height: number }, y: number): "before" | "into" | "after" {
+  const edge = rect.height * 0.3;
+  if (y < rect.top + edge) return "before";
+  if (y > rect.top + rect.height - edge) return "after";
+  return "into";
 }
 
 function clamp(n: number, lo: number, hi: number): number {

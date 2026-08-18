@@ -23,9 +23,17 @@ import (
 // is a UI rule and NOT validation (see Slug): a hand-written config may spell a
 // group name however it likes as long as it is unique and non-empty.
 type Group struct {
-	Name      string `toml:"name"`
-	Label     string `toml:"label,omitempty"`
-	Collapsed bool   `toml:"collapsed,omitempty"`
+	Name  string `toml:"name"`
+	Label string `toml:"label,omitempty"`
+	// Position is the group's index among the TOP-LEVEL rows — the one list the
+	// sidebar draws, in which a folder sits beside the ungrouped projects rather
+	// than in a section below them. The list is rebuilt as: the ungrouped
+	// projects in [[project]] order, then each group spliced in at its Position
+	// (ascending, clamped). That is why a group needs an index of its own and a
+	// project does not: a project's place is its position in the [[project]]
+	// array, but an EMPTY group has no member to derive a place from.
+	Position  int  `toml:"position,omitempty"`
+	Collapsed bool `toml:"collapsed,omitempty"`
 }
 
 // DisplayName is the group's render string: Label when set, Name otherwise —
@@ -84,6 +92,9 @@ func (c *Config) sanitizeGroups() []string {
 		case seen[g.Name]:
 			notices = append(notices, fmt.Sprintf("dropped a duplicate [[group]] %q", g.Name))
 			continue
+		}
+		if g.Position < 0 {
+			g.Position = 0 // a negative index is simply "first"; nothing to report
 		}
 		seen[g.Name] = true
 		out = append(out, g)

@@ -70,7 +70,7 @@ describe("SidebarProjects", () => {
     SetGroupCollapsed.mockResolvedValue(undefined);
     SetProjectLayout.mockResolvedValue(undefined);
     store.projects = [fakeProject(), fakeProject({ name: "okane", group: "clients" })];
-    store.groups = [{ name: "clients", label: "Clients" }];
+    store.groups = [{ name: "clients", label: "Clients", position: 1 }];
     store.status = null;
     confirm.cancel();
     nav.closeOverlay();
@@ -129,7 +129,7 @@ describe("SidebarProjects", () => {
   });
 
   it("hides a collapsed group's members", () => {
-    store.groups = [{ name: "clients", label: "Clients", collapsed: true }];
+    store.groups = [{ name: "clients", label: "Clients", position: 1, collapsed: true }];
     render(SidebarProjects);
     expect(screen.getByRole("button", { name: "Clients 1" })).toHaveAttribute("aria-expanded", "false");
     expect(screen.queryByRole("button", { name: "okane" })).not.toBeInTheDocument();
@@ -189,13 +189,16 @@ describe("SidebarProjects", () => {
 
   it("reorders groups with alt+arrow", async () => {
     store.projects = [];
-    store.groups = [{ name: "clients", label: "Clients" }, { name: "internal" }];
+    store.groups = [
+      { name: "clients", label: "Clients", position: 0 },
+      { name: "internal", position: 1 },
+    ];
     render(SidebarProjects);
     await fireEvent.keyDown(screen.getByRole("button", { name: "internal 0" }), { key: "ArrowUp", altKey: true });
     expect(SetProjectLayout).toHaveBeenCalledWith({
       groups: [
-        { name: "internal", label: "", collapsed: false },
-        { name: "clients", label: "Clients", collapsed: false },
+        { name: "internal", label: "", position: 0, collapsed: false },
+        { name: "clients", label: "Clients", position: 1, collapsed: false },
       ],
       projects: [],
     });
@@ -214,6 +217,49 @@ describe("SidebarProjects", () => {
     expect(SetProjectLayout).not.toHaveBeenCalled();
   });
 
+  it("files a project into a folder with alt+right and back out with alt+left", async () => {
+    // The project form deliberately has no group field, so this is the only
+    // pointer-free way to file a project — losing it makes the feature
+    // mouse-only.
+    store.projects = [fakeProject(), fakeProject({ name: "nori" })];
+    store.groups = [{ name: "clients", label: "Clients", position: 1 }];
+    render(SidebarProjects);
+    await fireEvent.keyDown(screen.getByRole("button", { name: "nori" }), { key: "ArrowRight", altKey: true });
+    expect(SetProjectLayout).toHaveBeenCalledWith({
+      groups: [{ name: "clients", label: "Clients", position: 1, collapsed: false }],
+      projects: [
+        { name: "lola", group: "" },
+        { name: "nori", group: "clients" },
+      ],
+    });
+
+    vi.clearAllMocks();
+    SetProjectLayout.mockResolvedValue(undefined);
+    cleanup();
+    store.projects = [fakeProject(), fakeProject({ name: "nori", group: "clients" })];
+    render(SidebarProjects);
+    await fireEvent.keyDown(screen.getByRole("button", { name: "nori" }), { key: "ArrowLeft", altKey: true });
+    expect(SetProjectLayout).toHaveBeenCalledWith({
+      groups: [{ name: "clients", label: "Clients", position: 1, collapsed: false }],
+      projects: [
+        { name: "lola", group: "" },
+        { name: "nori", group: "" },
+      ],
+    });
+  });
+
+  it("draws a folder among the projects, not in a section below them", () => {
+    store.projects = [fakeProject(), fakeProject({ name: "nori" })];
+    store.groups = [{ name: "clients", label: "Clients", position: 1 }];
+    const { container } = render(SidebarProjects);
+    const rows = Array.from(container.querySelectorAll("[data-toprow]"));
+    // The folder is a top-level row BETWEEN the two projects, not a section
+    // under them — the whole point of the panel's shape.
+    expect(rows.map((r) => r.getAttribute("data-group"))).toEqual([null, "clients", null]);
+    expect(rows[0].textContent).toContain("lola");
+    expect(rows[2].textContent).toContain("nori");
+  });
+
   it("keeps the empty state only while there is neither a project nor a group", () => {
     store.projects = [];
     store.groups = [];
@@ -221,7 +267,7 @@ describe("SidebarProjects", () => {
     expect(screen.getByRole("button", { name: "No projects — add one" })).toBeInTheDocument();
 
     cleanup();
-    store.groups = [{ name: "clients", label: "Clients" }];
+    store.groups = [{ name: "clients", label: "Clients", position: 0 }];
     render(SidebarProjects);
     expect(screen.queryByRole("button", { name: "No projects — add one" })).not.toBeInTheDocument();
   });

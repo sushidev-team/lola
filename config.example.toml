@@ -414,9 +414,10 @@ name = "nori-app"
 # to `name`. Nothing keys by it, so it is safe to change at any time.
 label = "Nori App"
 # group files this project under a [[group]] below (by that group's `name`).
-# Omit it and the project sits at the top level of the sidebar. Pure display
-# arrangement — nothing in the daemon reads it — and a group that is not defined
-# is repaired to "no group" on load rather than rejected.
+# Omit it and the project sits at the top level of the app's project panel. Pure
+# display arrangement — nothing in the daemon reads it — and a group that is not
+# defined is repaired to "no group" on load rather than rejected. The app sets
+# this by DRAGGING the row onto a folder; the project form has no group field.
 # group = "clients"
 # Absolute path to the main checkout (a leading ~ is expanded on load).
 # Worktrees are created NEXT TO it under ~/.lola/, never inside it.
@@ -579,18 +580,22 @@ on_sent_set_label = "label_sent0000-1111-2222-3333-444455556666"
 # comment_on_blocked = true
 
 # ---------------------------------------------------------------------------
-# [[group]] — sidebar FOLDERS for the project list (optional, display only).
+# [[group]] — FOLDERS for the app's project panel (optional, display only).
 #
 # Nothing in the daemon reads a group: it decides how the app arranges its
-# project list and nothing else. It is a table of its own — rather than a plain
-# string on the project — so a folder can exist while EMPTY, which is what lets
-# the app's "+ → New group" create one before anything is dragged into it.
+# project list and nothing else. The panel draws ONE list in which a folder is a
+# row beside the projects — drop a project onto it to file it there — not a
+# section below them.
 #
-# Order matters twice over. The [[group]] tables render in the order they appear
-# here, and within the sidebar the [[project]] tables' own order is the order
-# rows are drawn (the TUI's project list reads the same array, so a drag in the
-# app reorders both). Editing either array by hand is a supported way to
-# rearrange things.
+# It is a table of its own, rather than a plain string on the project, so a
+# folder can exist while EMPTY: that is what lets the app's "+ → New group"
+# create one before anything is dragged in.
+#
+# Two things decide the order, and both are hand-editable. The [[project]]
+# tables' own order is the order rows are drawn (the TUI's project list reads the
+# same array, so a drag in the app reorders both), and each [[group]]'s
+# `position` is its index among the top-level rows — needed because an empty
+# folder has no member to take a place from.
 #
 # A [[project]].group naming a group that is not defined here is repaired to "no
 # group" on load with a notice (`lola doctor`), never rejected: the project is
@@ -602,5 +607,11 @@ on_sent_set_label = "label_sent0000-1111-2222-3333-444455556666"
 # name = "clients"
 # # label is the free-text display name. Optional — empty falls back to `name`.
 # label = "Clients"
+# # position is the folder's ZERO-BASED index among the top-level rows (the
+# # ungrouped projects and the other folders — not a folder's own members).
+# # A negative value is repaired to 0, one past the end simply lands last, and
+# # two folders claiming the same index keep their order in this file, so a
+# # hand-written guess always loads.
+# position = 1
 # # collapsed persists the folder's disclosure state in the app.
 # collapsed = false

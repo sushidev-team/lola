@@ -292,22 +292,21 @@ each of which owns exactly one external tool or concern behind an **exec seam**
     worktree still carries the old name, then renames the config entry, carries
     the `.seen` file over and reloads. Do not "helpfully" extend it to live
     sessions without also moving worktrees + `git worktree repair` + tmux renames.
-- **The project list's ARRANGEMENT is the config file's own shape, and it is
-  display-only.** Two facts decide how the sidebar draws: the ORDER of the
-  `[[project]]` array (both surfaces render it as-is — the TUI's list is the
-  same array, so a drag in the app reorders it too) and `[[project]].group`,
-  naming a `[[group]]` table. Nothing in the daemon, runtime or dispatch path
-  reads a group; it is a folder, not a policy. Consequences:
-  - `[[group]]` is a TABLE rather than a bare string on the project so an EMPTY
-    group can exist — the app creates the folder first (`+` → New group) and
-    projects are dragged in after. A derived-from-members group could not
-    survive the moment between the two, nor be reordered or collapsed while
-    empty.
-  - A dangling `group` reference is REPAIRED to "" with a notice, never
-    rejected (`sanitizeGroups`, reached from `ResolveInheritance` so Load,
-    Validate and Save all canonicalize identically; notices are appended once,
-    on the load path). Getting arrangement wrong must never take a working
-    config down.
+- **The project panel is ONE list in which a FOLDER is a row, and the whole
+  arrangement is display-only.** Three config facts describe it, and nothing in
+  the daemon, runtime or dispatch path reads any of them: `[[project]].group`
+  files a project into a `[[group]]`, the `[[project]]` array's ORDER is the
+  order rows are drawn (the TUI's list is the same array, so a drag in the app
+  reorders it too), and each `[[group]]`'s `position` is its index among the
+  top-level rows. Consequences:
+  - `[[group]]` is a TABLE rather than a bare string on the project, and carries
+    its own `position`, because an EMPTY folder must exist and be placeable — the
+    app creates it (`+` → New group) and projects are dragged in after. A folder
+    derived from its members could be neither.
+  - A dangling `group` reference is REPAIRED to "" with a notice, never rejected
+    (`sanitizeGroups`, reached from `ResolveInheritance` so Load, Validate and
+    Save canonicalize identically; notices are appended once, on the load path).
+    Getting arrangement wrong must never take a working config down.
   - `group` is deliberately NOT in the `[defaults]` inheritance bitmap: an
     inherited group would file every project that forgot to override it under
     one folder.
@@ -316,12 +315,18 @@ each of which owns exactly one external tool or concern behind an **exec seam**
     projects and groups or nothing is written. A drag is computed against a
     snapshot that may be a reload behind; applying it loosely would resurrect a
     project that was just removed. A refused layout costs one drag.
+  - The project FORM has no group field on purpose. Filing a project is done by
+    dragging its row onto a folder, and a second place to set it would let a
+    stale form move a project nobody dragged — so `SaveProject` leaves
+    `Project.Group` untouched. The pointer-free equivalents are on the focused
+    row: `⌥↑`/`⌥↓` move it, `⌥→` files it into the nearest folder, `⌥←` takes it
+    back out. Keep them, or the feature is mouse-only.
   - The drag is POINTER events, not HTML5 drag-and-drop (WKWebView differs from
-    the dev server's Chrome), and every decision it makes — sections, gaps,
-    moves — lives in `desktop/frontend/src/lib/sidebarlayout.ts`, which has no
-    DOM, so it is testable. `⌥↑`/`⌥↓` on a focused row does the same move, and
-    the project form's Group field is the pointer-free way to file a project:
-    keep both, or the feature is mouse-only.
+    the dev server's Chrome), and every decision it makes — rows, gaps, the
+    folder row's into-band — lives in
+    `desktop/frontend/src/lib/sidebarlayout.ts`, which has no DOM, so it is
+    testable. `buildRows`/`toLayout` round-trip: rebuilding from the positions
+    written reproduces the same list.
 - **Adding a project starts at the FOLDER, and every derived field is
   FILL-ONLY.** The checkout is the one value nothing else can be derived
   without, so a new project opens straight into a picker — the native chooser in
@@ -716,6 +721,27 @@ each of which owns exactly one external tool or concern behind an **exec seam**
     restart. It is lola's OWN text, appended AFTER the untrusted findings, and it
     is silent unless the threads exist for exactly this PR — a fallback comment
     must never tell an agent to resolve conversations that are not there.
+- **Closing the threads is part of the pipeline, and the note's STRENGTH is what
+  keeps it honest.** Fixed code with a dozen open conversations reads as an
+  untouched PR, so every path that hands PR feedback to a worker ends with lola's
+  own close-the-loop instruction: fix, commit, push, THEN reply to each thread
+  you addressed and resolve it — never before the push, never one you did not
+  address. Two notes carry it and the difference is evidence, not tone:
+  - `inlineThreadNote` (`reviewinline.go`) ASSERTS the threads exist, because
+    `InlineReviewPRs[kind] == PR.Number` proves lola posted them.
+  - `prThreadNote` is the CONDITIONAL one for feedback whose threads lola did not
+    post — the coderabbit-watch pointer (the bot's own inline comments), a run
+    whose inline post fell back to a plain comment, and the `changes_requested`
+    reaction (a human reviewer's threads). Nothing there proves a thread is open,
+    so it says "may also be open", hands over the listing command as the source
+    of truth, and states that an empty list is nothing to close.
+  Both are derived from the repo slug + PR number only, both are appended AFTER
+  the untrusted feedback so nothing in it can rewrite the instruction, and both
+  return "" unless the PR and an `owner/name` repo can be named exactly. The gh
+  recipe itself (`threadWorkflow`: list → reply → `resolveReviewThread`) is
+  shared, and it is what makes the ask actionable — no agent guesses that
+  mutation on its own. The other reactions (`ci_failed`, `merge_conflict`) relay
+  no threads and stay silent about them.
 - **The review instruction's FORMAT block is a CONTRACT with `reviewmd`, and its
   fields are split by AUDIENCE.** `reviewclaude`'s `-p` prompt asks for
   `**Grade:** impact=… confidence=… effort=…` (three fixed enums) + `**Gist:**`

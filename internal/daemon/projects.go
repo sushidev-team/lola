@@ -35,7 +35,9 @@ func (d *Daemon) projectsData(_ context.Context) protocol.ProjectsData {
 	}
 	groups := make([]protocol.GroupInfo, 0, len(d.cfg.Groups))
 	for _, g := range d.cfg.Groups {
-		groups = append(groups, protocol.GroupInfo{Name: g.Name, Label: g.Label, Collapsed: g.Collapsed})
+		groups = append(groups, protocol.GroupInfo{
+			Name: g.Name, Label: g.Label, Position: g.Position, Collapsed: g.Collapsed,
+		})
 	}
 	metas := make([]projMeta, 0, len(d.cfg.Projects))
 	for _, pr := range d.cfg.Projects {

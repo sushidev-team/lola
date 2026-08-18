@@ -297,9 +297,13 @@ type ProjectsData struct {
 // live facts because a group has none — it is arrangement only, and nothing in
 // the daemon's control loop reads it.
 type GroupInfo struct {
-	Name      string `json:"name"`
-	Label     string `json:"label,omitempty"`
-	Collapsed bool   `json:"collapsed,omitempty"`
+	Name  string `json:"name"`
+	Label string `json:"label,omitempty"`
+	// Position is the group's index among the TOP-LEVEL rows — the sidebar draws
+	// folders beside the ungrouped projects, not in a section below them, so a
+	// group carries its own place in that list. See config.Group.
+	Position  int  `json:"position"`
+	Collapsed bool `json:"collapsed,omitempty"`
 }
 
 // ProjectInfo is one configured project flattened to render-ready fields.

@@ -1,18 +1,21 @@
 <script lang="ts">
   import Button from "./Button.svelte";
 
-  // A project GROUP's header row. Hand-rolled rather than a NavRow because it is
-  // not a nav target: clicking it discloses its members, it carries no glyph
-  // column of its own (the triangle takes that slot) and it must stay legible as
-  // a container while the rows below it are the things you actually click.
+  // A project FOLDER's row. It sits in the project list beside the projects
+  // rather than heading a section below them, and a project row dropped on it is
+  // filed inside — so it is a drop TARGET as much as a control.
   //
-  // Its density is NavRow's h-7 verbatim so the sidebar reads as one ladder.
+  // Hand-rolled rather than a NavRow because it is not a nav target: clicking it
+  // discloses its members and it carries no glyph column of its own (the
+  // triangle takes that slot). Its density is NavRow's h-7 verbatim so the list
+  // reads as one ladder.
 
   let {
     label,
     count,
     collapsed = false,
     dragging = false,
+    dropTarget = false,
     ontoggle,
     onkeydown,
     onrename,
@@ -24,6 +27,8 @@
     collapsed?: boolean;
     /** True while THIS row is the one being dragged. */
     dragging?: boolean;
+    /** True while a dragged project would be filed INTO this folder. */
+    dropTarget?: boolean;
     ontoggle: () => void;
     /** alt+arrow reorder, handled on the header's own control. */
     onkeydown?: (e: KeyboardEvent) => void;
@@ -34,9 +39,14 @@
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
+<!-- The pointerdown is a drag ENHANCEMENT; the row's own control below is a real
+     <button>, so the keyboard and AT path are unaffected. -->
 <div
+  data-head
   class="group/row flex h-7 w-full items-center rounded-md text-faint transition-colors hover:bg-sel/60 hover:text-ink"
   class:opacity-40={dragging}
+  class:bg-accent-fill={dropTarget}
+  class:text-accent-ink={dropTarget}
   {onpointerdown}
 >
   <button
@@ -50,7 +60,7 @@
     <span class="truncate font-medium">{label}</span>
     <!-- Always rendered, 0 included: a count that appears and vanishes as
          projects move in and out makes the whole list jump. -->
-    <span class="num ml-auto shrink-0 pl-2 text-sm text-faint">{count}</span>
+    <span class="num ml-auto shrink-0 pl-2 text-sm" class:text-faint={!dropTarget}>{count}</span>
   </button>
   <!-- data-drag-ignore: controls, not drag handles (see SidebarProjects). -->
   <span

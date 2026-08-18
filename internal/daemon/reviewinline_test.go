@@ -329,7 +329,8 @@ func TestInlineHandoffTellsTheAgentToResolveThreads(t *testing.T) {
 	text := sends[0].text
 	for _, want := range []string{
 		"inline review threads on PR #7 (acme/widgets)",
-		"resolve it",
+		"commit and push",
+		"resolve that thread",
 		"resolveReviewThread",
 		"reviewThreads(first:100)",
 	} {
@@ -343,8 +344,11 @@ func TestInlineHandoffTellsTheAgentToResolveThreads(t *testing.T) {
 	}
 }
 
-// No threads, no instruction: a plain-comment post must never tell the agent to
-// resolve conversations that do not exist.
+// No threads lola posted, no ASSERTION that any exist: a run that fell back to a
+// plain comment may still hand the worker the conditional close-the-loop recipe
+// (the PR may carry someone else's threads — CodeRabbit's, a human's — and the
+// listing command is the source of truth), but it must never state that these
+// findings are sitting there as threads.
 func TestInlineHandoffSilentWithoutThreads(t *testing.T) {
 	fi := &fakeInlineReview{targetErr: errors.New("gh: HTTP 502")}
 	fp := &fakePostPR{}
@@ -362,8 +366,11 @@ func TestInlineHandoffSilentWithoutThreads(t *testing.T) {
 	if len(sends) != 1 {
 		t.Fatalf("want one worker hand-off, got %d", len(sends))
 	}
-	if strings.Contains(sends[0].text, "resolveReviewThread") {
+	if strings.Contains(sends[0].text, "These findings are also open as inline review threads") {
 		t.Errorf("a fallback comment must not promise threads:\n%s", sends[0].text)
+	}
+	if !strings.Contains(sends[0].text, "may also be open as review threads on PR #7") {
+		t.Errorf("the fallback still asks the worker to close what it fixes:\n%s", sends[0].text)
 	}
 }
 
@@ -394,5 +401,34 @@ func TestInlineThreadNoteIsPRExact(t *testing.T) {
 	flat.Inline = false
 	if note := inlineThreadNote(s, flat); note != "" {
 		t.Errorf("a non-inline provider must produce no instruction:\n%s", note)
+	}
+}
+
+// prThreadNote covers the hand-offs lola did NOT post threads for. It must stay
+// CONDITIONAL in its wording (nothing here proves a thread is open), still carry
+// the gh recipe, and stay silent whenever the PR or repo cannot be named exactly.
+func TestPRThreadNoteIsConditional(t *testing.T) {
+	s := reactSess("FE-1", "review_pending", openPR(7, "MERGEABLE", "", "pass"))
+
+	note := prThreadNote(s)
+	if !strings.Contains(note, "may also be open as review threads on PR #7 (acme/widgets)") {
+		t.Errorf("the note must not assert threads exist:\n%s", note)
+	}
+	for _, want := range []string{"commit and push", "resolveReviewThread", "reviewThreads(first:100)"} {
+		if !strings.Contains(note, want) {
+			t.Errorf("note missing %q:\n%s", want, note)
+		}
+	}
+
+	noPR := s
+	noPR.PR = nil
+	if note := prThreadNote(noPR); note != "" {
+		t.Errorf("no PR, no instruction:\n%s", note)
+	}
+
+	noRepo := s
+	noRepo.Repo = "not a repo slug"
+	if note := prThreadNote(noRepo); note != "" {
+		t.Errorf("an unreadable repo must produce no instruction:\n%s", note)
 	}
 }

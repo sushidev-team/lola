@@ -68,15 +68,6 @@ export function GetTheme(): $CancellablePromise<string> {
 }
 
 /**
- * Groups returns the configured groups in file order. The sidebar renders from
- * the daemon's push (cmd=projects carries them), so this exists for the forms
- * that need the list without a live daemon — a group picker on a project.
- */
-export function Groups(): $CancellablePromise<$models.GroupDTO[] | null> {
-    return $Call.ByID(2495290395);
-}
-
-/**
  * InspectPath reads a checkout in ONE pass — GitHub "owner/name", the branch
  * worktrees should fork from, the branch list and a suggested label/id — so
  * picking a folder fills the Repo tab instead of making the user copy four

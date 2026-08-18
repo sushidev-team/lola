@@ -286,7 +286,7 @@ runtime layer, not on config load.
 | --- | --- | --- |
 | `name` | string | Unique project **id** (required), and a path segment: it names the worktree directory (`worktrees/<name>/`) and the seen file (`state/<name>.seen`), prefixes every session/tmux name (`lola-<name>-eng-42`), and is what `lola status`, `enable`/`disable`/`poll`/`logs` key by. Keep it slug-shaped (lowercase letters, digits, `.` `_` `-`) — the forms slugify what you type. Changing it is a **rename**, not an edit; see [Renaming a project](#renaming-a-project). |
 | `label` | string | Free-text display name shown in the TUI and desktop (e.g. `"Nori App"`). Optional — empty falls back to `name`. Purely cosmetic: nothing keys by it, so you can change it at any time, including while sessions are running. |
-| `group` | string | The `[[group]]` folder this project is filed under in the app's sidebar, by that group's `name`. Optional — empty puts it at the top level. Display only; see [Groups and ordering](#groups-and-ordering). A value naming no configured group is repaired to empty on load with a notice, never rejected. |
+| `group` | string | The `[[group]]` folder this project is filed under in the app's project panel, by that group's `name`. Optional — empty puts it at the top level. Display only, and set by dragging the row rather than on this form; see [Groups and ordering](#groups-and-ordering). A value naming no configured group is repaired to empty on load with a notice, never rejected. |
 | `path` | string | Absolute path to the main checkout (required). A leading `~` is expanded on load. Session worktrees live under `~/.lola/worktrees/`, never inside the checkout. |
 | `repo` | string | GitHub repository as `owner/name`. Used for PR/CI observation of the sessions spawned for this project: the reconciler and observer pass it to `gh pr list --repo` so the open-PR check works regardless of the daemon's working directory. When empty, that check is unavailable and orphaned issues are **never** auto-reverted (fail-closed). Both forms **auto-detect** this from the checkout once `path` is set — see [Adding a project](#adding-a-project-pick-the-folder-the-rest-fills-itself). |
 | `default_branch` | string | Branch new session worktrees start from, and the base the agent is told to open its PR against. Defaults to the checkout's own default branch when a folder is picked (see [Adding a project](#adding-a-project-pick-the-folder-the-rest-fills-itself)), else `main`. Both forms offer the checkout's branches once `path` is set (local plus remote-tracking, the repository's own default first) while staying free text, so a path that is not a checkout is never a dead end. |
@@ -299,17 +299,27 @@ runtime layer, not on config load.
 
 #### Groups and ordering
 
-Two things decide how the project list is arranged, and both are plain config:
+The app's project panel draws **one list** in which a folder is a row beside the
+projects, not a section under them. Two config facts describe it:
 
-- **Order** is the order of the `[[project]]` tables in the file. Both surfaces
-  render that array as-is, so rearranging it — by hand, or by dragging a row in
-  the app — reorders the desktop sidebar and the TUI's project list together.
 - **Grouping** is `[[project]].group`, naming a `[[group]]` table.
+- **Order** is the `[[project]]` array's own order — which the TUI's project list
+  renders too, so rearranging in the app reorders both surfaces — plus each
+  `[[group]]`'s `position`, its **zero-based** index among the top-level rows
+  (counting the ungrouped projects and the other folders, not a folder's
+  members). A folder needs an index of its own precisely because an **empty** one
+  has no member to derive a place from.
+
+  The app always writes canonical positions, so these rules only matter when
+  editing by hand: a negative value is repaired to `0` on load, a value past the
+  end simply lands last, and two folders claiming the same index keep their
+  order in the file. Nothing here is ever rejected.
 
 ```toml
 [[group]]
 name = "clients"        # the id [[project]].group references
 label = "Clients"       # display name; empty falls back to name
+position = 1            # zero-based index among the top-level rows
 collapsed = false       # the folder's disclosure state in the app
 
 [[project]]
@@ -319,14 +329,17 @@ group = "clients"
 
 A group is a **folder, not a policy** — nothing in the daemon reads one, so
 filing a project changes nothing about how it polls, spawns or is counted. It is
-a table of its own rather than a bare string so an **empty** group can exist:
-the app creates the folder first (sidebar `+` → *New group*) and projects are
-dragged in afterwards. Ungrouped projects render above the groups.
+a table of its own rather than a bare string so an **empty** folder can exist:
+the app creates it (panel `+` → *New group*) and projects are dragged in
+afterwards.
 
-In the app the whole arrangement is drag-and-drop: drag a project row into a
-folder or a new position, drag a folder to reorder it, and `⌥↑` / `⌥↓` move
-whichever row has focus without a pointer. A project's group is also a field on
-its form. Removing a group never removes a project — its members return to the
+In the app the whole arrangement is drag-and-drop: drop a project **onto** a
+folder row to file it there, into a gap to place it (out of a folder if it was in
+one), and drag a folder to move it with its members. There is deliberately **no**
+group field on the project form — a second place to set it would let a stale form
+move a project nobody dragged — so the same moves are bound on the focused row:
+`⌥↑`/`⌥↓` to move it, `⌥→` to file it into the nearest folder, `⌥←` to take it
+back out. Removing a folder never removes a project; its members return to the
 top level.
 
 The TUI does not draw the folders (its list stays flat) but it honours the

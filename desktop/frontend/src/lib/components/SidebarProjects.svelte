@@ -4,7 +4,17 @@
   import { nav } from "$lib/nav.svelte";
   import { confirm } from "$lib/confirm.svelte";
   import { displayName } from "$lib/slug";
-  import { buildSections, moveProject, moveGroup, toLayout, dropIndex, type Section } from "$lib/sidebarlayout";
+  import {
+    buildRows,
+    moveProject,
+    moveGroup,
+    toLayout,
+    dropIndex,
+    groupRowZone,
+    liftedIndex,
+    type Row,
+    type ProjectTarget,
+  } from "$lib/sidebarlayout";
   import NavRow from "./NavRow.svelte";
   import SidebarGroupRow from "./SidebarGroupRow.svelte";
   import Button from "./Button.svelte";
@@ -14,18 +24,18 @@
   // The project switcher, moved out of the old Rail panel onto the shared
   // NavRow. Reads the store directly (leaf component) — see Sidebar.svelte.
   //
-  // Projects are arranged in two ways, both persisted in config.toml and both
-  // driven from here: they can be filed under a [[group]] (a folder) and they
-  // can be dragged into any order. The order is the [[project]] array's, which
-  // is what the TUI renders too — so a drag here reorders both surfaces.
+  // The panel draws ONE list in which a FOLDER is a row beside the projects, not
+  // a section under them: drag a project onto a folder to file it there, drag it
+  // out to a gap to un-file it, drag a folder to move it, members and all. Both
+  // facts are config.toml — `[[project]].group` plus the `[[project]]` order and
+  // each `[[group]]`'s position — and neither has any effect on what the daemon
+  // does. The arrangement maths lives in $lib/sidebarlayout.
 
   // pending holds the arrangement a drop just applied, until the daemon's push
   // catches up. Without it the row snaps back to its old place for the frame
   // between the drop and the reload, which reads as "the drag didn't take".
-  let pending = $state<Section<ProjectInfo>[] | null>(null);
-  const sections = $derived(pending ?? buildSections(store.projects, store.groups));
-  const topSection = $derived(sections.find((s) => !s.group));
-  const groupSections = $derived(sections.filter((s) => s.group));
+  let pending = $state<Row<ProjectInfo>[] | null>(null);
+  const rows = $derived(pending ?? buildRows(store.projects, store.groups));
 
   function pollDot(name: string): { glyph: string; cls: string; faint: boolean } {
     const ps = (store.status?.polls ?? []).find((p) => p.name === name);
@@ -75,18 +85,20 @@
   // Pointer events rather than HTML5 drag-and-drop: this ships inside a
   // WKWebView, where dragover/dragimage behaviour differs from the Chrome the
   // dev server runs, and the decisions worth getting right (which gap, which
-  // section) live in $lib/sidebarlayout so they can be tested without a DOM.
+  // folder) live in $lib/sidebarlayout so they can be tested without a DOM.
   const DRAG_THRESHOLD = 4;
 
   type DragKind = "project" | "group";
   let listEl = $state<HTMLDivElement | null>(null);
   let press: { kind: DragKind; name: string; x: number; y: number } | null = null;
   let drag = $state<{ kind: DragKind; name: string } | null>(null);
-  let dropProject = $state<{ group: string; index: number } | null>(null);
-  let dropGroup = $state<number | null>(null);
+  /** Where the dragged PROJECT would land. */
+  let target = $state<ProjectTarget | null>(null);
+  /** Which top-level gap the dragged FOLDER would land in. */
+  let groupTarget = $state<number | null>(null);
   // A completed drag ends in a pointerup that the browser may follow with a
   // click on the row's primary button. Without this, every reorder would also
-  // toggle the project's scope (or collapse the group it landed in).
+  // toggle the project's scope (or collapse the folder it landed in).
   let suppressClick = false;
 
   function startPress(e: PointerEvent, kind: DragKind, name: string) {
@@ -115,8 +127,8 @@
     stopTracking();
     press = null;
     drag = null;
-    dropProject = null;
-    dropGroup = null;
+    target = null;
+    groupTarget = null;
   }
 
   function onPointerMove(e: PointerEvent) {
@@ -126,120 +138,105 @@
       if (Math.hypot(e.clientX - press.x, e.clientY - press.y) < DRAG_THRESHOLD) return;
       drag = { kind: press.kind, name: press.name };
     }
-    if (drag.kind === "project") dropProject = resolveProjectDrop(e.clientY);
-    else dropGroup = resolveGroupDrop(e.clientY);
+    if (drag.kind === "project") target = resolveProjectDrop(e.clientY);
+    else groupTarget = resolveGroupDrop(e.clientY);
   }
 
   async function onPointerUp() {
     stopTracking();
     const d = drag;
-    const toProject = dropProject;
-    const toGroup = dropGroup;
+    const toProject = target;
+    const toGroup = groupTarget;
     press = null;
     drag = null;
-    dropProject = null;
-    dropGroup = null;
+    target = null;
+    groupTarget = null;
     if (!d) return;
     suppressClick = true;
     setTimeout(() => (suppressClick = false), 0);
 
-    const base = sections;
-    let next: Section<ProjectInfo>[] | null = null;
-    if (d.kind === "project" && toProject) next = moveProject(base, d.name, toProject.group, toProject.index);
-    else if (d.kind === "group" && toGroup !== null) next = moveGroup(base, d.name, toGroup);
-    // A drop back where it started is not a config write. The layout is the
-    // whole arrangement, so writing it would touch config.toml (and reload the
-    // daemon) every time someone nudged a row.
-    if (!next || sameArrangement(base, next)) return;
+    if (d.kind === "project" && toProject) void tryArrangement(moveProject(rows, d.name, dropped(toProject, d.name)));
+    else if (d.kind === "group" && toGroup !== null) {
+      const src = rows.findIndex((r) => r.kind === "group" && r.group.name === d.name);
+      void tryArrangement(moveGroup(rows, d.name, liftedIndex(toGroup, src < 0 ? null : src)));
+    }
+  }
 
-    await applyArrangement(next);
+  /**
+   * Re-base a drop target from the LIVE list the indicator was drawn against to
+   * the post-lift list moveProject works in. Only a drag that ends BELOW its own
+   * starting row in the SAME list needs it — see liftedIndex.
+   */
+  function dropped(to: ProjectTarget, name: string): ProjectTarget {
+    if (to.kind === "into") return to;
+    if (to.kind === "top") {
+      const src = rows.findIndex((r) => r.kind === "project" && r.project.name === name);
+      return { kind: "top", index: liftedIndex(to.index, src < 0 ? null : src) };
+    }
+    const row = rows.find((r) => r.kind === "group" && r.group.name === to.group);
+    const src = row?.kind === "group" ? row.projects.findIndex((p) => p.name === name) : -1;
+    return { kind: "group", group: to.group, index: liftedIndex(to.index, src < 0 ? null : src) };
   }
 
   /**
    * Persist a new arrangement, holding it on screen meanwhile. Shared by the
-   * drop handler and the keyboard reorder so the two cannot drift.
+   * drop handler and the keyboard moves so the two cannot drift.
    */
-  async function applyArrangement(next: Section<ProjectInfo>[]) {
+  async function applyArrangement(next: Row<ProjectInfo>[]) {
     pending = next;
     await store.setProjectLayout(toLayout(next));
     pending = null;
   }
 
   /**
-   * alt+↑/↓ on a focused row moves it, so arranging the sidebar does not require
-   * a pointer. It moves WITHIN the row's own section; changing a project's group
-   * from the keyboard is the project form's Group field.
+   * Apply only a REAL change. A drop back where it started, or a nudge at the
+   * end of a list, must not write: the layout is the whole arrangement, so it
+   * would touch config.toml (and reload the daemon) for nothing.
    */
-  function nudgeProject(e: KeyboardEvent, group: string, index: number, name: string) {
-    const dir = arrowDir(e);
-    if (dir === 0) return;
-    e.preventDefault();
-    void tryArrangement(moveProject(sections, name, group, index + dir));
-  }
-
-  function nudgeGroup(e: KeyboardEvent, index: number, name: string) {
-    const dir = arrowDir(e);
-    if (dir === 0) return;
-    e.preventDefault();
-    void tryArrangement(moveGroup(sections, name, index + dir));
-  }
-
-  /** 0 unless this is the alt+arrow chord, in which case -1 (up) or +1 (down). */
-  function arrowDir(e: KeyboardEvent): -1 | 0 | 1 {
-    if (!e.altKey) return 0;
-    if (e.key === "ArrowUp") return -1;
-    if (e.key === "ArrowDown") return 1;
-    return 0;
-  }
-
-  /** Apply only a REAL change — a nudge at either end of a section is a no-op. */
-  function tryArrangement(next: Section<ProjectInfo>[]) {
-    if (sameArrangement(sections, next)) return;
+  function tryArrangement(next: Row<ProjectInfo>[]) {
+    if (JSON.stringify(toLayout(rows)) === JSON.stringify(toLayout(next))) return;
     return applyArrangement(next);
   }
 
-  function sameArrangement(a: Section<ProjectInfo>[], b: Section<ProjectInfo>[]): boolean {
-    return JSON.stringify(toLayout(a)) === JSON.stringify(toLayout(b));
+  /** Which gap — or which folder — the pointer is over. */
+  function resolveProjectDrop(y: number): ProjectTarget {
+    const tops = Array.from(listEl?.querySelectorAll<HTMLElement>("[data-toprow]") ?? []);
+    if (tops.length === 0) return { kind: "top", index: 0 };
+
+    // Inside an open folder's member list: this is a placement among ITS rows.
+    for (const el of tops) {
+      const g = el.dataset.group;
+      const members = g ? el.querySelector<HTMLElement>("[data-members]") : null;
+      if (!members) continue;
+      const r = members.getBoundingClientRect();
+      if (r.height > 0 && y >= r.top && y <= r.bottom) {
+        return { kind: "group", group: g!, index: dropIndex(rects(members.querySelectorAll("[data-row]")), y) };
+      }
+    }
+    // On a folder's own row: its middle band files the project INTO it, its
+    // edges are the gaps either side (which the top-level pass below resolves).
+    for (const el of tops) {
+      const g = el.dataset.group;
+      const head = g ? el.querySelector<HTMLElement>("[data-head]") : null;
+      if (!head) continue;
+      const r = head.getBoundingClientRect();
+      if (y >= r.top && y <= r.bottom && groupRowZone({ top: r.top, height: r.height }, y) === "into") {
+        return { kind: "into", group: g! };
+      }
+    }
+    return { kind: "top", index: dropIndex(rects(tops), y) };
   }
 
-  /** Which section, and which gap inside it, the pointer is over. */
-  function resolveProjectDrop(y: number): { group: string; index: number } | null {
-    const zones = Array.from(listEl?.querySelectorAll<HTMLElement>("[data-zone]") ?? []);
-    if (zones.length === 0) return null;
-    let hit = zones.find((z) => {
-      const r = z.getBoundingClientRect();
-      return y >= r.top && y <= r.bottom;
-    });
-    // Above the first zone or below the last: take the nearest, so overshooting
-    // the list still lands somewhere rather than cancelling the drag.
-    if (!hit) hit = zones.reduce((best, z) => (zoneDistance(z, y) < zoneDistance(best, y) ? z : best));
+  /** Which top-level gap a dragged folder is over. */
+  function resolveGroupDrop(y: number): number {
+    return dropIndex(rects(listEl?.querySelectorAll("[data-toprow]") ?? []), y);
+  }
 
-    const group = hit.dataset.zone ?? "";
-    // A collapsed group draws no rows, so its header IS the zone and its first
-    // slot is the only landing place that means anything.
-    if (hit.dataset.collapsed === "true") return { group, index: 0 };
-    const rows = Array.from(hit.querySelectorAll<HTMLElement>("[data-row]")).map((el) => {
+  function rects(els: ArrayLike<Element>): { top: number; height: number }[] {
+    return Array.from(els).map((el) => {
       const r = el.getBoundingClientRect();
       return { top: r.top, height: r.height };
     });
-    return { group, index: dropIndex(rows, y) };
-  }
-
-  /** Which gap between GROUPS the pointer is over. */
-  function resolveGroupDrop(y: number): number {
-    const zones = Array.from(listEl?.querySelectorAll<HTMLElement>("[data-group-zone]") ?? []);
-    return dropIndex(
-      zones.map((z) => {
-        const r = z.getBoundingClientRect();
-        return { top: r.top, height: r.height };
-      }),
-      y,
-    );
-  }
-
-  function zoneDistance(el: HTMLElement, y: number): number {
-    const r = el.getBoundingClientRect();
-    return y < r.top ? r.top - y : y - r.bottom;
   }
 
   function openProject(name: string) {
@@ -250,6 +247,64 @@
   function toggleGroup(name: string, collapsed: boolean) {
     if (suppressClick) return;
     void store.setGroupCollapsed(name, !collapsed);
+  }
+
+  // --- keyboard arranging -------------------------------------------------------
+  // The pointer drag is otherwise the ONLY way to arrange the panel — the project
+  // form deliberately has no group field — so the same moves are bound on the
+  // focused row: ⌥↑/⌥↓ to move it, ⌥→ to file it into the nearest folder, ⌥← to
+  // take it back out.
+
+  function nudgeProject(e: KeyboardEvent, name: string, group: string, index: number) {
+    if (!e.altKey) return;
+    const inGroup = group !== "";
+    let next: Row<ProjectInfo>[] | null = null;
+    switch (e.key) {
+      case "ArrowUp":
+      case "ArrowDown": {
+        const to = index + (e.key === "ArrowUp" ? -1 : 1);
+        next = moveProject(rows, name, inGroup ? { kind: "group", group, index: to } : { kind: "top", index: to });
+        break;
+      }
+      case "ArrowRight": {
+        if (inGroup) return; // already filed; ⌥→ has nothing further to do
+        const g = nearestGroup(index);
+        if (!g) return;
+        next = moveProject(rows, name, { kind: "into", group: g });
+        break;
+      }
+      case "ArrowLeft": {
+        if (!inGroup) return;
+        // Out of the folder and immediately after it, so the row stays where the
+        // eye last saw it.
+        const at = rows.findIndex((r) => r.kind === "group" && r.group.name === group);
+        next = moveProject(rows, name, { kind: "top", index: at + 1 });
+        break;
+      }
+      default:
+        return;
+    }
+    e.preventDefault();
+    if (next) void tryArrangement(next);
+  }
+
+  /** The folder nearest a top-level row: the closest one above, else below. */
+  function nearestGroup(index: number): string | null {
+    for (let i = index - 1; i >= 0; i--) {
+      const r = rows[i];
+      if (r.kind === "group") return r.group.name;
+    }
+    for (let i = index + 1; i < rows.length; i++) {
+      const r = rows[i];
+      if (r.kind === "group") return r.group.name;
+    }
+    return null;
+  }
+
+  function nudgeGroup(e: KeyboardEvent, name: string, index: number) {
+    if (!e.altKey || (e.key !== "ArrowUp" && e.key !== "ArrowDown")) return;
+    e.preventDefault();
+    void tryArrangement(moveGroup(rows, name, index + (e.key === "ArrowUp" ? -1 : 1)));
   }
 
   onDestroy(stopTracking);
@@ -270,7 +325,7 @@
     {active}
     title={clears ? "clear the project filter" : "scope the cockpit to this project"}
     onclick={() => openProject(p.name)}
-    onkeydown={(e) => nudgeProject(e, group, index, p.name)}
+    onkeydown={(e) => nudgeProject(e, p.name, group, index)}
   >
     {#snippet badges()}
       <!-- Bare glyph counts on purpose: the triage row named "Needs You"
@@ -331,32 +386,6 @@
   <li class="-my-px h-0.5 rounded-full bg-accent" aria-hidden="true"></li>
 {/snippet}
 
-{#snippet projectList(group: string, projects: ProjectInfo[])}
-  <ul>
-    {#each projects as p, i (p.name)}
-      {#if dropProject?.group === group && dropProject.index === i}{@render dropLine()}{/if}
-      <!-- svelte-ignore a11y_no_static_element_interactions -->
-      <!-- The pointerdown is a drag ENHANCEMENT on a row whose own control is a
-           real <button> (NavRow's), which keeps the keyboard and AT path intact;
-           the reorder itself is also reachable there via alt+arrow. -->
-      <li
-        data-row
-        class:opacity-40={drag?.kind === "project" && drag.name === p.name}
-        onpointerdown={(e) => startPress(e, "project", p.name)}
-      >
-        {@render projectRow(p, group, i)}
-      </li>
-    {/each}
-    {#if dropProject?.group === group && dropProject.index === projects.length}{@render dropLine()}{/if}
-    <!-- An empty section has no height and could never be hit, which would make
-         a project impossible to drag OUT of a folder (or into an empty one).
-         The placeholder exists only while a drag is in flight. -->
-    {#if projects.length === 0 && drag?.kind === "project"}
-      <li class="mx-2 h-6 rounded-md border border-dashed border-edge" aria-hidden="true"></li>
-    {/if}
-  </ul>
-{/snippet}
-
 <nav class="min-w-0 px-3 pt-3.5" aria-label="Projects">
   <div class="flex items-center px-2 pb-1">
     <h2 class="label text-faint">Projects</h2>
@@ -380,45 +409,73 @@
       onclick={() => nav.openOverlay("project", "")}>No projects — add one</button
     >
   {:else}
+    {@const gap = drag?.kind === "group" ? groupTarget : target?.kind === "top" ? target.index : null}
     <!-- Capped so a long project list can never squeeze Activity out of the
-         column; the list scrolls inside itself instead. The cap is on this
-         wrapper rather than on a <ul>, because the list is now several sections
-         and they scroll as one. -->
+         column; the list scrolls inside itself instead. -->
     <div bind:this={listEl} class="max-h-[38vh] overflow-auto" class:select-none={!!drag}>
-      <div data-zone="">
-        {@render projectList("", topSection?.projects ?? [])}
-      </div>
-
-      {#each groupSections as s, gi (s.group!.name)}
-        {@const g = s.group!}
-        {@const collapsed = !!g.collapsed}
-        {#if dropGroup === gi && drag?.kind === "group"}{@render dropLine()}{/if}
-        <div data-zone={g.name} data-group-zone data-collapsed={collapsed}>
-          <SidebarGroupRow
-            label={g.label || g.name}
-            count={s.projects.length}
-            {collapsed}
-            dragging={drag?.kind === "group" && drag.name === g.name}
-            ontoggle={() => toggleGroup(g.name, collapsed)}
-            onrename={() => (dialog = { mode: "rename", name: g.name, value: g.label || g.name })}
-            onremove={() => askRemoveGroup(g.name, g.label || g.name)}
-            onpointerdown={(e) => startPress(e, "group", g.name)}
-            onkeydown={(e) => nudgeGroup(e, gi, g.name)}
-          />
-          {#if collapsed}
-            <!-- Collapsed: the whole group is one drop slot, so the indicator
-                 sits under its header rather than among rows that aren't drawn. -->
-            {#if dropProject?.group === g.name}
-              <ul>{@render dropLine()}</ul>
-            {/if}
+      <ul>
+        {#each rows as row, i (row.kind === "group" ? "g:" + row.group.name : "p:" + row.project.name)}
+          {#if gap === i}{@render dropLine()}{/if}
+          {#if row.kind === "project"}
+            <!-- svelte-ignore a11y_no_static_element_interactions -->
+            <!-- The pointerdown is a drag ENHANCEMENT on a row whose own control
+                 is a real <button> (NavRow's), which keeps the keyboard and AT
+                 path intact; the same moves are on ⌥+arrow there. -->
+            <li
+              data-toprow
+              data-row
+              class:opacity-40={drag?.kind === "project" && drag.name === row.project.name}
+              onpointerdown={(e) => startPress(e, "project", row.project.name)}
+            >
+              {@render projectRow(row.project, "", i)}
+            </li>
           {:else}
-            <div class="pl-3">
-              {@render projectList(g.name, s.projects)}
-            </div>
+            {@const g = row.group}
+            {@const collapsed = !!g.collapsed}
+            <li data-toprow data-group={g.name}>
+              <SidebarGroupRow
+                label={g.label || g.name}
+                count={row.projects.length}
+                {collapsed}
+                dragging={drag?.kind === "group" && drag.name === g.name}
+                dropTarget={target?.kind === "into" && target.group === g.name}
+                ontoggle={() => toggleGroup(g.name, collapsed)}
+                onkeydown={(e) => nudgeGroup(e, g.name, i)}
+                onrename={() => (dialog = { mode: "rename", name: g.name, value: g.label || g.name })}
+                onremove={() => askRemoveGroup(g.name, g.label || g.name)}
+                onpointerdown={(e) => startPress(e, "group", g.name)}
+              />
+              {#if !collapsed}
+                <ul class="pl-3" data-members={g.name}>
+                  {#each row.projects as p, j (p.name)}
+                    {#if target?.kind === "group" && target.group === g.name && target.index === j}
+                      {@render dropLine()}
+                    {/if}
+                    <!-- svelte-ignore a11y_no_static_element_interactions -->
+                    <li
+                      data-row
+                      class:opacity-40={drag?.kind === "project" && drag.name === p.name}
+                      onpointerdown={(e) => startPress(e, "project", p.name)}
+                    >
+                      {@render projectRow(p, g.name, j)}
+                    </li>
+                  {/each}
+                  {#if target?.kind === "group" && target.group === g.name && target.index === row.projects.length}
+                    {@render dropLine()}
+                  {/if}
+                  <!-- An open, empty folder has no height of its own and could
+                       never be hit; the placeholder exists only mid-drag so it
+                       can still receive the row. -->
+                  {#if row.projects.length === 0 && drag?.kind === "project"}
+                    <li class="mx-2 h-6 rounded-md border border-dashed border-edge" aria-hidden="true"></li>
+                  {/if}
+                </ul>
+              {/if}
+            </li>
           {/if}
-        </div>
-      {/each}
-      {#if dropGroup === groupSections.length && drag?.kind === "group"}{@render dropLine()}{/if}
+        {/each}
+        {#if gap === rows.length}{@render dropLine()}{/if}
+      </ul>
     </div>
   {/if}
 </nav>
@@ -450,11 +507,7 @@
 {/if}
 
 {#if dialog}
-  <Modal
-    title={dialog.mode === "add" ? "New group" : "Rename group"}
-    width="420px"
-    onClose={() => (dialog = null)}
-  >
+  <Modal title={dialog.mode === "add" ? "New group" : "Rename group"} width="420px" onClose={() => (dialog = null)}>
     <label class="block">
       <span class="label mb-1 block text-faint">Name</span>
       <input

@@ -78,11 +78,14 @@ export interface DoctorResultDTO {
 }
 
 /**
- * GroupDTO is one [[group]] as the frontend sees it.
+ * GroupDTO is one [[group]] as the frontend sees it. Position is its index
+ * among the top-level rows (see config.Group) — the sidebar draws folders beside
+ * the projects, so a group's place is a value of its own.
  */
 export interface GroupDTO {
     "name": string;
     "label": string;
+    "position": number;
     "collapsed": boolean;
 }
 
@@ -180,17 +183,13 @@ export interface ProjectFormDTO {
      * save; changing Name is a RENAME and must go through
      * DaemonService.RenameProject FIRST, so that by the time SaveProject runs the
      * project on disk already answers to the new id.
+     * The project's GROUP is deliberately absent: filing a project is done in
+     * the sidebar, by dragging its row onto a folder, and a second place to set
+     * it would let a stale form move a project nobody dragged. SaveProject leaves
+     * Project.Group untouched.
      */
     "name": string;
     "label": string;
-
-    /**
-     * Group is the [[group]] this project is filed under in the sidebar, "" for
-     * the top level. It is arrangement, not behaviour — the field exists here so
-     * grouping is reachable without a pointer, since the other way to set it is
-     * dragging the row. A group that is not configured is refused.
-     */
-    "group": string;
     "path": string;
     "repo": string;
     "defaultBranch": string;

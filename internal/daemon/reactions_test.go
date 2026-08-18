@@ -624,3 +624,56 @@ func TestReactCIFailedResetsGuardAcrossRetryLoop(t *testing.T) {
 		t.Errorf("CIRetries = %d, want 2", got.CIRetries)
 	}
 }
+
+// The feedback changes_requested relays IS a set of review threads (a human's,
+// or CodeRabbit's inline comments), so the worker is told to close the ones it
+// fixes — after the push, and only those. The other two reactions relay no
+// threads and must stay silent about them.
+func TestReactChangesRequestedAsksToResolveThreads(t *testing.T) {
+	d := newTestDaemon(t, reactTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})
+	seams := &fakeReactSeams{review: "REVIEW-FEEDBACK-ABC"}
+	seams.install(d)
+
+	s := reactSess("FE-1", "changes_requested", openPR(3, "MERGEABLE", "CHANGES_REQUESTED", "pass"))
+	s.AtPrompt = true
+	d.sessions.Upsert(s)
+	d.react(context.Background(), s)
+
+	calls := seams.sendCalls()
+	if len(calls) != 1 {
+		t.Fatalf("want one send-keys, got %d", len(calls))
+	}
+	text := calls[0].text
+	for _, want := range []string{
+		"may also be open as review threads on PR #3 (acme/widgets)",
+		"commit and push",
+		"resolveReviewThread",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("changes_requested hand-off missing %q:\n%s", want, text)
+		}
+	}
+	// lola's own text sits AFTER the untrusted feedback, never before it.
+	if strings.Index(text, "REVIEW-FEEDBACK-ABC") > strings.Index(text, "resolveReviewThread") {
+		t.Errorf("the instruction must follow the untrusted feedback:\n%s", text)
+	}
+}
+
+func TestReactMergeConflictSaysNothingAboutThreads(t *testing.T) {
+	d := newTestDaemon(t, reactTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})
+	seams := &fakeReactSeams{}
+	seams.install(d)
+
+	s := reactSess("FE-1", "merge_conflict", openPR(4, "CONFLICTING", "", "pass"))
+	s.AtPrompt = true
+	d.sessions.Upsert(s)
+	d.react(context.Background(), s)
+
+	calls := seams.sendCalls()
+	if len(calls) != 1 {
+		t.Fatalf("want one send-keys, got %d", len(calls))
+	}
+	if strings.Contains(calls[0].text, "resolveReviewThread") {
+		t.Errorf("a rebase request relays no threads:\n%s", calls[0].text)
+	}
+}
