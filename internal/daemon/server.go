@@ -202,6 +202,12 @@ func (d *Daemon) handle(ctx context.Context, req protocol.Request) protocol.Resp
 			return protocol.Response{OK: false, Error: err.Error()}
 		}
 		return dataResponse(data)
+	case "resolveConflict":
+		data, err := d.handleResolveConflict(ctx, req.Session)
+		if err != nil {
+			return protocol.Response{OK: false, Error: err.Error()}
+		}
+		return dataResponse(data)
 	case "dev":
 		var a protocol.DevArgs
 		if err := json.Unmarshal(req.Args, &a); err != nil {

@@ -408,6 +408,17 @@ export interface RenameProjectData {
 }
 
 /**
+ * ResolveConflictData is Response.Data for cmd=resolveConflict. Branch is the
+ * project's default_branch the agent was asked to merge (so a client can say
+ * which branch it named rather than repeating its own guess), and Message is the
+ * short human-readable outcome.
+ */
+export interface ResolveConflictData {
+    "branch": string;
+    "message"?: string;
+}
+
+/**
  * ReviewData is Response.Data for cmd=review (PLAN P9): the outcome of a forced
  * QA review pass, flattened to render-ready fields for the CLI. Message is the
  * short human-readable line the CLI prints. Ran reports whether the review exec

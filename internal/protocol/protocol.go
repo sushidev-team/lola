@@ -83,6 +83,17 @@ import (
 // live tmux pane is refused outright. Anything else is an error and nothing is
 // signalled.
 //
+// Cmd "resolveConflict" asks a CONFLICTING session's coding agent to merge the
+// project's default_branch into its branch and resolve the conflicts: Session
+// names the target. It is the manual trigger for what [reactions].merge_conflict
+// does on its own, so it obeys the same send-keys safety rules — the session's
+// DELIVERY axis must be merge_conflict, its project must still be in config
+// (its default_branch is the whole content of the instruction), and the agent
+// must be provably resting at its prompt right now. Unlike the reaction it does
+// NOT defer: a mid-turn agent is an error, because the caller is a human
+// watching a button. The reply is ResolveConflictData naming the branch asked
+// for.
+//
 // Cmd "coderabbit" FORCES the [coderabbit] PR-comment WATCH for one session now,
 // ignoring the LastCodeRabbitAt watermark: Session names the target. The daemon
 // polls the session's open PR (one `gh pr view`) for CodeRabbit-app comments and
@@ -92,7 +103,7 @@ import (
 // PR yields a "skipped" CodeRabbitData (not an error); an unknown session or a gh
 // failure is an error.
 type Request struct {
-	Cmd    string `json:"cmd"` // stop|status|reload|enable|disable|pollOnce|sessions|projects|prs|hookEvent|kill|revive|pane|answer|review|coderabbit|dev|devFreePort|open|renameProject
+	Cmd    string `json:"cmd"` // stop|status|reload|enable|disable|pollOnce|sessions|projects|prs|hookEvent|kill|revive|pane|answer|review|coderabbit|resolveConflict|dev|devFreePort|open|renameProject
 	Poll   string `json:"poll,omitempty"`
 	DryRun bool   `json:"dryRun,omitempty"`
 
@@ -565,6 +576,15 @@ type DevFreePortData struct {
 	Port    int     `json:"port"`
 	Dev     DevData `json:"dev"`
 	Message string  `json:"message,omitempty"`
+}
+
+// ResolveConflictData is Response.Data for cmd=resolveConflict. Branch is the
+// project's default_branch the agent was asked to merge (so a client can say
+// which branch it named rather than repeating its own guess), and Message is the
+// short human-readable outcome.
+type ResolveConflictData struct {
+	Branch  string `json:"branch"`
+	Message string `json:"message,omitempty"`
 }
 
 // ReviveData is Response.Data for cmd=revive: a dead session relaunched on its

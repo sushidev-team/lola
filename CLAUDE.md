@@ -415,6 +415,17 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   logged as `handed feedback to the worker` and read by nobody. A capture
   failure or any non-waiting classification (including a modal's
   `ActivityBlocked`) defers. One bounded tmux exec per delivery is the price.
+  The MANUAL conflict resolution (`cmd=resolveConflict`,
+  `internal/daemon/resolveconflict.go` — the status pill's hover-morph and the
+  context menu's "Resolve conflicts") types through the same wide gate plus the
+  same pane proof, with two deliberate differences: it REFUSES instead of
+  deferring (the caller is a human watching a button, and a send that lands
+  minutes later with no further sign of it is worse than an honest "not now"),
+  and it does not read `LastReactedStatus` as an entry condition — a second click
+  is intent — while still STAMPING it, so the automatic reaction cannot pile a
+  rebase prompt on top of the merge just asked for. Its text is lola's own and
+  names the project's `default_branch` (a MERGE, matching what the tooltip
+  promises), rather than reusing `[reactions].merge_conflict.message`.
 - **A CARET is not proof of idleness, and the pane classifier is a claude-code
   RENDERING mirror — re-verify it against a live pane.** Every send-keys gate
   bottoms out in `attention.Classify`, so a rendering detail lola no longer

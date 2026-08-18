@@ -3,6 +3,7 @@ import { render, screen, cleanup, fireEvent } from "@testing-library/svelte";
 import SessionMenu from "./SessionMenu.svelte";
 import SessionsTable from "./SessionsTable.svelte";
 import { store, type SessionInfo } from "$lib/store.svelte";
+import type { ProjectInfo } from "@bindings/internal/protocol";
 import { nav } from "$lib/nav.svelte";
 import { sessionMenu } from "$lib/sessionmenu.svelte";
 import { confirm } from "$lib/confirm.svelte";
@@ -31,6 +32,7 @@ describe("SessionMenu", () => {
   beforeEach(() => {
     cleanup();
     store.sessions = [fakeSession()];
+    store.projects = [];
     store.connected = true;
     store.alive = true;
     nav.scoped = false;
@@ -92,6 +94,20 @@ describe("SessionMenu", () => {
     sessionMenu.request = { id: "acme-eng-1", x: 10, y: 10 };
     render(SessionMenu);
     expect(screen.getByRole("menuitem", { name: "Active — stop dev" })).toBeInTheDocument();
+  });
+
+  it("offers 'Resolve conflicts' only for a conflicting session, naming the branch", () => {
+    sessionMenu.request = { id: "acme-eng-1", x: 10, y: 10 };
+    render(SessionMenu);
+    expect(screen.queryByRole("menuitem", { name: "Resolve conflicts" })).not.toBeInTheDocument();
+
+    cleanup();
+    store.projects = [{ name: "acme", defaultBranch: "develop" } as ProjectInfo];
+    store.sessions = [fakeSession({ status: "merge_conflict", prNumber: 7, prUrl: "https://x/pr/7" })];
+    sessionMenu.request = { id: "acme-eng-1", x: 10, y: 10 };
+    render(SessionMenu);
+    const item = screen.getByRole("menuitem", { name: "Resolve conflicts" });
+    expect(item).toHaveAttribute("title", expect.stringContaining("develop"));
   });
 
   it("routes kill through the shared confirm dialog and closes first", async () => {

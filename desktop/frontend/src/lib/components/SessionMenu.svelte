@@ -91,6 +91,18 @@
         {session.devActive ? "Active — stop dev" : "Make active"}
       </MenuItem>
     {/if}
+    {#if session.status === "merge_conflict"}
+      <!-- The same action the status pill offers on hover, for anyone who reaches
+           a session by right-clicking it rather than by hovering its badge. -->
+      <MenuItem
+        variant="accent"
+        icon="⇄"
+        title={`merge ${store.defaultBranchFor(session.project) || "the default branch"} into this branch and resolve the conflicts (the session's agent does the work)`}
+        onclick={() => run((s) => store.resolveConflict(s.id))}
+      >
+        Resolve conflicts
+      </MenuItem>
+    {/if}
     <MenuItem icon="◈" title="force a QA review pass now" onclick={() => run((s) => store.review(s.id))}>
       Trigger review
     </MenuItem>

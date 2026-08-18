@@ -105,6 +105,13 @@ class Store {
   // project's worktrees, each with its own SIGTERM grace, before it answers.
   devPending = $state<Record<string, boolean>>({});
 
+  // Sessions whose conflict-resolution request is in flight. In the STORE for
+  // the same reason devPending is: the action has two triggers (the status
+  // pill's hover-morph and the context menu), and a flag living in one of them
+  // would leave the other looking inert while the daemon captures the pane and
+  // types.
+  resolvePending = $state<Record<string, boolean>>({});
+
   private flashTimer: ReturnType<typeof setTimeout> | undefined;
   private started = false;
 
@@ -198,6 +205,16 @@ class Store {
   displayNameFor(name: string): string {
     const p = this.projectByName(name);
     return p ? displayName(p) : name;
+  }
+
+  /**
+   * A project's configured default_branch — the branch a conflict resolution
+   * merges. Empty for an unknown project (or before the first Projects()
+   * response), so a caller renders a generic phrase rather than naming a branch
+   * lola never resolved.
+   */
+  defaultBranchFor(name: string): string {
+    return this.projectByName(name)?.defaultBranch ?? "";
   }
 
   // Sort straight off `this.sessions` ($state), NOT via a chained class-$derived:
@@ -368,6 +385,33 @@ class Store {
   // coderabbit is kept as the back-compat alias forcing the watch kind.
   coderabbit(session: string) {
     return this.act(() => DaemonService.CodeRabbit(session), "coderabbit poll requested");
+  }
+  /**
+   * Ask a CONFLICTING session's coding agent to merge the project's default
+   * branch into its branch and resolve the conflicts — the manual trigger for
+   * what [reactions].merge_conflict does on its own.
+   *
+   * The success flash is the DAEMON's sentence, not one composed here: it names
+   * the branch that was actually asked for (the project's configured
+   * default_branch), which is the one thing the click promised and the one thing
+   * this side would have to guess. A refusal — the PR no longer conflicts, or the
+   * agent is mid-turn and must not be typed into — arrives as an error and is
+   * flashed verbatim for the same reason.
+   */
+  async resolveConflict(session: string) {
+    if (this.resolvePending[session]) return undefined;
+    this.resolvePending[session] = true;
+    try {
+      const r = await DaemonService.ResolveConflict(session);
+      this.setFlash(r?.message || "asked the agent to resolve the conflicts", "good");
+      void this.refresh();
+      return r;
+    } catch (err) {
+      this.setFlash(String(err), "bad");
+      return undefined;
+    } finally {
+      delete this.resolvePending[session];
+    }
   }
   /**
    * Run the project's dev_commands here (on = true), or stop them. Only one

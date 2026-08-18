@@ -23,6 +23,7 @@ export type {
     ProjectsData,
     PrsData,
     RenameProjectData,
+    ResolveConflictData,
     ReviewData,
     ReviveData,
     SessionInfo,

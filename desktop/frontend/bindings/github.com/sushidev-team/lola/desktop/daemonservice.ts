@@ -192,6 +192,17 @@ export function RenameProject($from: string, to: string): $CancellablePromise<pr
 }
 
 /**
+ * ResolveConflict asks a conflicting session's coding agent to merge the
+ * project's default_branch into its branch and resolve the conflicts — the
+ * manual trigger for what [reactions].merge_conflict does on its own. The daemon
+ * refuses it (as an error) unless the PR really conflicts and the agent is
+ * provably resting at its prompt, so a mid-turn worker is never typed into.
+ */
+export function ResolveConflict(session: string): $CancellablePromise<protocol$0.ResolveConflictData> {
+    return $Call.ByID(1075551445, session);
+}
+
+/**
  * RestartDaemon stops (if up), waits for the socket to clear, then respawns. It
  * holds lifecycleMu across the whole sequence and reuses the locked helpers, so
  * it never re-locks recursively.

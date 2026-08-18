@@ -145,7 +145,17 @@
                two informative postures survive the filter — see $lib/reaction. -->
           <td class="py-1.5 pr-2 align-middle">
             <span class="inline-flex items-center gap-1.5">
-              <StatusPill status={s.status} interpreted={s.interpretedState} />
+              <!-- The pill is also the ACTION on a conflicting session: it morphs
+                   to "resolve" under the cursor and hands the merge to the
+                   session's agent. Only here — the grid's tiles are
+                   pointer-events-none inside a click-to-open tile, and the
+                   project panel's rows are themselves <button>s. -->
+              <StatusPill
+                status={s.status}
+                interpreted={s.interpretedState}
+                resolveBranch={store.defaultBranchFor(s.project)}
+                onResolve={() => store.resolveConflict(s.id)}
+              />
               {#if note}
                 <span
                   class="num whitespace-nowrap text-sm {reactionIsAlarm(note) ? 'text-bad' : 'text-faint'}"

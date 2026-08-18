@@ -117,6 +117,17 @@ func (s *DaemonService) CodeRabbit(session string) (protocol.CodeRabbitData, err
 	return d, err
 }
 
+// ResolveConflict asks a conflicting session's coding agent to merge the
+// project's default_branch into its branch and resolve the conflicts — the
+// manual trigger for what [reactions].merge_conflict does on its own. The daemon
+// refuses it (as an error) unless the PR really conflicts and the agent is
+// provably resting at its prompt, so a mid-turn worker is never typed into.
+func (s *DaemonService) ResolveConflict(session string) (protocol.ResolveConflictData, error) {
+	var d protocol.ResolveConflictData
+	err := call(protocol.Request{Cmd: "resolveConflict", Session: session}, shortTimeout, &d)
+	return d, err
+}
+
 // Dev moves the project's dev processes ([[project]].dev_commands) onto one
 // session, or stops them. Activating is a MOVE: the daemon first kills the tabs
 // of whichever session of that project held them, so the ports are free before
