@@ -243,6 +243,27 @@
     // not on focus), so a handler installed only when the prop was set at boot
     // would never exist for the terminal that later becomes fullscreen.
     term.attachCustomKeyEventHandler((e) => {
+      // Shift+Enter must insert a LINE BREAK, not submit. xterm never consults
+      // shift for Enter (Keyboard.ts sends a bare CR unless alt is held), so a
+      // coding agent sees the same byte as a plain Enter and sends the message
+      // half-written. The newline byte an agent actually wants is meta+Enter
+      // (ESC CR) — what ⌥Enter already produces here, and what Claude Code's
+      // own `/terminal-setup` teaches a native terminal to send for Shift+Enter.
+      // Written straight to the PTY rather than fixed up in onData: xterm has
+      // already lost the modifier by then.
+      if (
+        e.type === "keydown" &&
+        e.key === "Enter" &&
+        e.shiftKey &&
+        !e.ctrlKey &&
+        !e.metaKey &&
+        !e.altKey &&
+        interactive
+      ) {
+        e.preventDefault();
+        void TermService.Write(name, "\x1b\r");
+        return false; // swallow: the bare CR must never follow
+      }
       if (
         e.type === "keydown" &&
         e.ctrlKey &&

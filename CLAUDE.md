@@ -507,6 +507,22 @@ each of which owns exactly one external tool or concern behind an **exec seam**
     payload is silently lost. Only INPUT is affected: `capture-pane` keeps
     returning the live bottom of the pane while it is scrolled back, so pane
     classification, the observer and the grid snapshots need no changes.
+  - **Shift+Enter is a LINE BREAK, and BOTH surfaces have to encode it
+    themselves.** Neither xterm nor bubbletea consults shift for Enter — xterm's
+    `Keyboard.ts` sends a bare CR unless ALT is held, and `keyToBytes` read only
+    `k.Code` — so shift+enter reached the coding agent as an ordinary Enter and
+    sent the message half-written. The byte pair an agent inserts a newline for
+    is meta+Enter, `ESC CR` (what ⌥Enter already produced, and what Claude
+    Code's own `/terminal-setup` teaches a native terminal to send). So
+    `LiveTerminal.svelte`'s custom key handler writes `\x1b\r` straight to the
+    PTY and SWALLOWS the event — fixing it up in `onData` is impossible, the
+    modifier is gone by then — and `internal/tui/terminal.go` emits the same
+    pair on `tea.ModShift`. tmux is NOT involved: `ESC CR` passes through
+    untouched, and no `extended-keys` option is needed because nothing upstream
+    sends CSI-u. The TUI half is only REACHABLE when the outer terminal encodes
+    the modifier (kitty/CSI-u — bubbletea v2 requests disambiguation by
+    default); Terminal.app folds it into a plain CR and nothing in lola can tell
+    the difference. The app half always works.
   - `(*tmux.Client).ConfigureServer` is the ONE place lola sets a GLOBAL (`-g`)
     tmux option, and `NewSession` calls it on every create — TWICE when the first
     call failed, because a COLD server cannot be configured at all: there is

@@ -1,6 +1,10 @@
 package tui
 
-import "testing"
+import (
+	"testing"
+
+	tea "charm.land/bubbletea/v2"
+)
 
 // shellIndex parses the trailing N from a "<id>-shell-N" tmux name so shells sort
 // and number stably; a name without a numeric suffix is index 0.
@@ -33,5 +37,25 @@ func TestCycleTabIndex(t *testing.T) {
 	// No shells → only the agent tab; every move stays on 0.
 	if got := cycleTabIndex(0, 0, +1); got != 0 {
 		t.Errorf("no shells: 0 +1 = %d, want 0", got)
+	}
+}
+
+// keyToBytes re-encodes a key press as the bytes the PTY child expects. The one
+// case with a decision in it is Enter: a bare CR is "send this message" to a
+// coding agent, so shift+enter has to become the newline byte pair (ESC CR)
+// instead — the same encoding the desktop terminal writes.
+func TestKeyToBytesEnter(t *testing.T) {
+	plain := keyToBytes(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if string(plain) != "\r" {
+		t.Errorf("enter = %q, want %q", plain, "\r")
+	}
+	shifted := keyToBytes(tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModShift})
+	if string(shifted) != "\x1b\r" {
+		t.Errorf("shift+enter = %q, want %q (line break, not submit)", shifted, "\x1b\r")
+	}
+	// alt+enter already meant ESC CR and must keep doing so.
+	alt := keyToBytes(tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModAlt})
+	if string(alt) != "\x1b\r" {
+		t.Errorf("alt+enter = %q, want %q", alt, "\x1b\r")
 	}
 }

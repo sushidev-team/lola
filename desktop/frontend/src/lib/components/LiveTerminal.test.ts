@@ -54,6 +54,7 @@ const spies = vi.hoisted(() => {
     attachWheel: vi.fn(),
     clearTextureAtlas: vi.fn(),
     attach: vi.fn(async () => {}),
+    write: vi.fn(async () => {}),
     detach: vi.fn(async () => {}),
     scroll: vi.fn(async () => {}),
     openURL: vi.fn(async () => {}),
@@ -122,7 +123,7 @@ vi.mock("@bindings/desktop", () => ({
   TermService: {
     Attach: spies.attach,
     Detach: spies.detach,
-    Write: vi.fn(),
+    Write: spies.write,
     Resize: vi.fn(),
     Scroll: spies.scroll,
   },
@@ -243,6 +244,60 @@ describe("LiveTerminal font ordering", () => {
       const cmdQ = { type: "keydown", ctrlKey: false, metaKey: true, altKey: false, key: "q", preventDefault: vi.fn() };
       expect(handler(cmdQ as unknown as KeyboardEvent)).toBe(true);
       expect(onEscapeFocus).not.toHaveBeenCalled();
+    });
+  });
+
+  // xterm sends a bare CR for Enter whether or not shift is held (Keyboard.ts
+  // consults only alt), so shift+enter reached the agent as "send this message"
+  // and cut it off mid-sentence. The byte pair an agent inserts a newline for is
+  // ESC CR — meta+enter, which alt+enter already produces.
+  describe("shift+enter line break", () => {
+    /** Boot a terminal and hand back the key handler it registered. */
+    async function bootKeys(name = "s16", interactive = true) {
+      render(LiveTerminal, { props: { name, webgl: false, interactive } });
+      gate.state.ready.settle(true);
+      await vi.waitFor(() => expect(spies.open).toHaveBeenCalledTimes(1));
+      return spies.attachKey.mock.calls[0][0] as (e: KeyboardEvent) => boolean;
+    }
+
+    const enter = (mods: Partial<KeyboardEvent> = {}) =>
+      ({
+        type: "keydown",
+        key: "Enter",
+        shiftKey: false,
+        ctrlKey: false,
+        metaKey: false,
+        altKey: false,
+        preventDefault: vi.fn(),
+        ...mods,
+      }) as unknown as KeyboardEvent;
+
+    it("writes ESC CR and swallows the key so no bare CR follows", async () => {
+      const handler = await bootKeys();
+      expect(handler(enter({ shiftKey: true }))).toBe(false);
+      expect(spies.write).toHaveBeenCalledWith("s16", "\x1b\r");
+    });
+
+    it("leaves a plain Enter alone", async () => {
+      const handler = await bootKeys("s17");
+      expect(handler(enter())).toBe(true);
+      expect(spies.write).not.toHaveBeenCalled();
+    });
+
+    // ⌥⇧Enter and ⌘⇧Enter are somebody else's chords; xterm already encodes the
+    // alt one as ESC CR on its own.
+    it("leaves shift+enter with another modifier alone", async () => {
+      const handler = await bootKeys("s18");
+      expect(handler(enter({ shiftKey: true, altKey: true }))).toBe(true);
+      expect(handler(enter({ shiftKey: true, metaKey: true }))).toBe(true);
+      expect(spies.write).not.toHaveBeenCalled();
+    });
+
+    // A read-only tile has no PTY to write into.
+    it("does not write into a non-interactive terminal", async () => {
+      const handler = await bootKeys("s19", false);
+      expect(handler(enter({ shiftKey: true }))).toBe(true);
+      expect(spies.write).not.toHaveBeenCalled();
     });
   });
 
