@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.2.10](https://github.com/sushidev-team/lola/compare/v0.2.9...v0.2.10) (2026-08-18)
+
+
+### Features
+
+* **app:** group and reorder projects in the sidebar ([218457d](https://github.com/sushidev-team/lola/commit/218457dc4f4e1f6145d7282c5d45d90b0df24838))
+* **app:** group and reorder projects in the sidebar ([cdfe396](https://github.com/sushidev-team/lola/commit/cdfe396ceb3f7005a3c8d983f310471ec94bbece))
+* **app:** resolve a conflicting session from its status badge ([de60685](https://github.com/sushidev-team/lola/commit/de6068594ef33f12028d18608494eabf9c910162))
+
+
+### Bug Fixes
+
+* **app:** keep a group row's count on the right and grow its chevron ([87cce16](https://github.com/sushidev-team/lola/commit/87cce16750f5cfad53f0fe1199102ff72baea104))
+
 ## [0.2.9](https://github.com/sushidev-team/lola/compare/v0.2.8...v0.2.9) (2026-08-18)
 
 
