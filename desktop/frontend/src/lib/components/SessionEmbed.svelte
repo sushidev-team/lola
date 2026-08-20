@@ -246,9 +246,6 @@
            line — and it stopped the terminal short of the window's edge, which is
            the one thing the region is for. -->
       <span class="ml-auto flex items-center gap-1.5">
-        {#if session.prNumber > 0}
-          <Button size="xs" onclick={() => store.openURL(session.prUrl)}>Open PR <span aria-hidden="true">↗</span></Button>
-        {/if}
         {#if session.devCommands?.length}
           <!-- The project's dev processes live in ONE session at a time, so this
                is a segmented-style toggle rather than an action: selected means
@@ -274,6 +271,9 @@
             Active
           </Button>
         {/if}
+        {#if session.prNumber > 0}
+          <Button size="xs" onclick={() => store.openURL(session.prUrl)}>Open PR <span aria-hidden="true">↗</span></Button>
+        {/if}
         <Button size="xs" onclick={() => store.coderabbit(session.id)}>CodeRabbit</Button>
         <Button size="xs" onclick={() => store.review(session.id)}>Review</Button>
         {#if canRevive}
@@ -281,7 +281,37 @@
         {/if}
         <!-- Opens the shared confirm dialog (App.svelte) rather than an inline
              yes/no, so the 'x' shortcut and this button confirm the same way. -->
-        <Button variant="danger" size="xs" onclick={() => store.askKill(session.id)}>Kill</Button>
+        <!-- Icon-only, and the ONE control on this row that is: a skull needs no
+             label to read as "ends the session", and the glyph keeps the most
+             destructive button from wearing the same width as Review beside it.
+             `title` + `aria-label` carry the name the text no longer does.
+
+             DRAWN, not typed. The character U+2620 is text-default but no UI font
+             on macOS carries it, so WebKit falls back to Apple Color Emoji and
+             paints its own multi-colour art at 12px — an unreadable speck that no
+             font size fixed, because the problem was the fallback rather than the
+             scale. An inline path is the app's own icon language (see the sidebar
+             chevron), inherits `currentColor` so the danger red arrives on hover,
+             and renders identically in Chrome and WKWebView.
+
+             The eyes and nose are SUBPATHS of the one path with `fill-rule
+             ="evenodd"`, i.e. true cutouts — filling them with the panel colour
+             would show that colour instead of the `bg-bad/15` chip the moment the
+             button is hovered. -->
+        <Button
+          variant="danger"
+          size="xs"
+          icon
+          title="kill session"
+          aria-label="Kill session"
+          onclick={() => store.askKill(session.id)}
+        >
+          <svg viewBox="0 0 24 24" class="h-4.5 w-4.5 shrink-0" fill="currentColor" fill-rule="evenodd" aria-hidden="true">
+            <path
+              d="M12 2c-4.8 0-8.5 3.4-8.5 7.9 0 2.5 1 4.2 2.3 5.3.4.3.5.6.5 1v1.3A2.5 2.5 0 0 0 8.8 21H9v-2.1h1.8V21h2.4v-2.1H15V21h.2a2.5 2.5 0 0 0 2.5-2.5v-1.3c0-.4.1-.7.5-1 1.3-1.1 2.3-2.8 2.3-5.3C20.5 5.4 16.8 2 12 2Zm-3.1 6.2a2.7 2.7 0 1 1 0 5.4 2.7 2.7 0 0 1 0-5.4Zm6.2 0a2.7 2.7 0 1 1 0 5.4 2.7 2.7 0 0 1 0-5.4ZM12 13.6l1.3 2.5h-2.6L12 13.6Z"
+            />
+          </svg>
+        </Button>
         <!-- A rule, not a gap: Kill and Focus now share a row, and the one that
              ends a session must not sit a stone's throw from the one that merely
              makes it bigger. -->
