@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.2.11](https://github.com/sushidev-team/lola/compare/v0.2.10...v0.2.11) (2026-08-20)
+
+
+### Features
+
+* **app:** lead the session header with Active and kill with a drawn skull ([29cb47b](https://github.com/sushidev-team/lola/commit/29cb47bc3b982124bc7055f8e1bd1e40715d8613))
+
+
+### Bug Fixes
+
+* **terminal:** make shift+enter insert a line break, not send the message ([3bd0584](https://github.com/sushidev-team/lola/commit/3bd0584ac7a396c07cabe2253a7fb1ed8f34339a))
+
 ## [0.2.10](https://github.com/sushidev-team/lola/compare/v0.2.9...v0.2.10) (2026-08-18)
 
 
