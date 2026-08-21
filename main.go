@@ -354,7 +354,26 @@ func capHookField(s string) string {
 // structured fields lola uses: tool name (PostToolUse), notification message,
 // submitted prompt, the transcript path + agent conversation id, and the most
 // specific reason. Any read or parse failure yields the zero payload.
+//
+// A TTY on stdin is never drained: TTYs do not EOF, so io.ReadAll on one
+// blocks forever — and the blocked read competes with the agent TUI for the
+// pane's keystrokes. Diagnosed live: two `lola hook stop` children of an
+// opencode agent (the plugin's Bun `$` shell inherits the pane TTY as stdin)
+// sat blocked in read() for 7+ minutes eating ~4 of every 5 keystrokes the
+// user typed into the TUI, and never delivered their events to the daemon
+// (they block BEFORE the socket post — the source of stale AtPrompt states).
+// A character-device check is the classic isatty guard: no piped payload is
+// coming, so post immediately with an empty payload. Claude's path is
+// unaffected — it pipes JSON on stdin (a pipe, not a char device) and closes
+// it after. Codex is covered too: its payload arrives as argv
+// (CodexConfigTOML), and stdin there is whatever codex hands the notify
+// program, so reading it was always pointless.
 func hookPayload(r io.Reader) protocol.HookPayload {
+	if f, ok := r.(*os.File); ok {
+		if fi, err := f.Stat(); err == nil && fi.Mode()&os.ModeCharDevice != 0 {
+			return protocol.HookPayload{}
+		}
+	}
 	raw, err := io.ReadAll(io.LimitReader(r, 1<<20))
 	if err != nil {
 		return protocol.HookPayload{}

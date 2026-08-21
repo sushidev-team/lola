@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -176,5 +177,47 @@ func TestHookPayloadCapsFields(t *testing.T) {
 	got := hookPayload(strings.NewReader(in))
 	if len(got.Message) > maxHookField {
 		t.Fatalf("message len = %d, want <= %d", len(got.Message), maxHookField)
+	}
+}
+
+// A pipe is an *os.File but NOT a character device, so the TTY guard must let
+// it through — this is exactly claude's wiring (JSON piped, writer closed).
+func TestHookPayloadPipeStillRead(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	const payload = `{"session_id":"s","stop_reason":"done"}`
+	if _, err := w.WriteString(payload); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	w.Close()
+	got := hookPayload(r)
+	want := protocol.HookPayload{Reason: "done", AgentSessionID: "s"}
+	if got != want {
+		t.Errorf("hookPayload(pipe) = %+v, want %+v", got, want)
+	}
+}
+
+// /dev/null IS a character device, so it exercises the TTY guard's branch
+// observably and safely: the guard must return the zero payload without
+// reading. On a real TTY the same branch is what keeps `lola hook` from
+// blocking forever and eating the pane's keystrokes; /dev/null EOFs instantly,
+// so the test cannot hang either way — it pins that the guard fires.
+func TestHookPayloadCharDeviceSkipsRead(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("no /dev/null character device on windows")
+	}
+	f, err := os.Open("/dev/null")
+	if err != nil {
+		t.Skipf("cannot open /dev/null: %v", err)
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil || fi.Mode()&os.ModeCharDevice == 0 {
+		t.Skipf("/dev/null is not a character device here (stat=%v mode=%v)", err, fi.Mode())
+	}
+	if got := hookPayload(f); got != (protocol.HookPayload{}) {
+		t.Errorf("hookPayload(char device) = %+v, want the zero payload", got)
 	}
 }
