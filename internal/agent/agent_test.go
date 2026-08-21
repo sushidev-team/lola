@@ -134,12 +134,26 @@ func TestLaunchArgsResume(t *testing.T) {
 	if reflect.DeepEqual(got, LaunchArgs(Claude, "PROMPT")) {
 		t.Error("claude resume must differ from a fresh launch (add --continue)")
 	}
-	// Codex and opencode have no reliable headless resume, so they fall back to a
-	// fresh launch — revival still restarts them, just without continuity.
-	for _, k := range []Kind{Codex, OpenCode} {
-		if got := LaunchArgsResume(k, "PROMPT"); !reflect.DeepEqual(got, LaunchArgs(k, "PROMPT")) {
-			t.Errorf("LaunchArgsResume(%q) = %v, want LaunchArgs fallback %v", k, got, LaunchArgs(k, "PROMPT"))
+	// OpenCode resumes its prior session via --continue --auto, with no
+	// --prompt: --continue + --prompt is broken upstream
+	// (anomalyco/opencode#8850), and the resumed session already carries the
+	// task context. --auto keeps the revived session unattended.
+	oc := LaunchArgsResume(OpenCode, "PROMPT")
+	if want := []string{"--continue", "--auto"}; !reflect.DeepEqual(oc, want) {
+		t.Errorf("LaunchArgsResume(opencode) = %v, want %v", oc, want)
+	}
+	if reflect.DeepEqual(oc, LaunchArgs(OpenCode, "PROMPT")) {
+		t.Error("opencode resume must differ from a fresh launch (drop --prompt, add --continue)")
+	}
+	for _, arg := range oc {
+		if arg == "--prompt" {
+			t.Error("opencode resume must not pass --prompt (broken with --continue upstream)")
 		}
+	}
+	// Codex has no verified headless resume, so it falls back to a fresh
+	// launch — revival still restarts it, just without continuity.
+	if got := LaunchArgsResume(Codex, "PROMPT"); !reflect.DeepEqual(got, LaunchArgs(Codex, "PROMPT")) {
+		t.Errorf("LaunchArgsResume(codex) = %v, want LaunchArgs fallback %v", got, LaunchArgs(Codex, "PROMPT"))
 	}
 }
 

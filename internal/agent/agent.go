@@ -112,20 +112,35 @@ func LaunchArgs(k Kind, promptArg string) []string {
 }
 
 // LaunchArgsResume is LaunchArgs for REVIVING a session whose agent already ran
-// once in this worktree. Claude resumes its most recent conversation via
-// --continue (no positional prompt — the saved transcript already carries the
+// once in this worktree. Claude and opencode resume their most recent
+// conversation (no prompt — the saved transcript/session already carries the
 // task context), so a revived pane picks up where the dead one left off instead
-// of restarting from scratch. Only Claude has a reliable headless resume, so
-// codex and opencode fall back to a fresh launch identical to LaunchArgs; that
-// still restarts their agent on the kept worktree, just without conversation
-// continuity. The caller decides WHETHER to resume (a Claude session that died
-// before writing any transcript has nothing to continue); this only shapes the
-// argv once that decision is made.
+// of restarting from scratch:
+//
+//   - Claude:   --settings .lola/settings.json --continue
+//   - OpenCode: --continue --auto
+//     `--continue` resumes the last session of the current directory (each lola
+//     session owns its worktree, so that is the right conversation); `--auto`
+//     keeps the revived session unattended, matching the fresh launch's
+//     contract. No `--prompt`: combining it with `--continue` is broken
+//     upstream (anomalyco/opencode#8850), and the resumed transcript already
+//     carries the task context.
+//
+// Codex deliberately falls back to a fresh launch identical to LaunchArgs: its
+// `resume` subcommand's flag composition with `--ask-for-approval`/`--sandbox`
+// is unverified, so revival still restarts it on the kept worktree, just
+// without conversation continuity. The caller decides WHETHER to resume (an
+// agent that died before recording anything has nothing to continue); this
+// only shapes the argv once that decision is made.
 func LaunchArgsResume(k Kind, promptArg string) []string {
-	if k == Claude {
+	switch k {
+	case Claude:
 		return []string{"--settings", ".lola/settings.json", "--continue"}
+	case OpenCode:
+		return []string{"--continue", "--auto"}
+	default:
+		return LaunchArgs(k, promptArg)
 	}
-	return LaunchArgs(k, promptArg)
 }
 
 // CodexConfigTOML returns the body of a Codex `config.toml` (written under a
