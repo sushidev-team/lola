@@ -7,6 +7,7 @@
 *.dll
 *.so
 *.dylib
+.DS_Store
 
 # Test binary, built with `go test -c`
 *.test
@@ -51,3 +52,6 @@ desktop/frontend/dist/*
 !desktop/frontend/dist/.gitkeep
 desktop/bin/
 desktop/build/bin/
+
+.omo/*
+!/.omo/rules/
