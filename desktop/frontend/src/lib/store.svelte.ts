@@ -298,10 +298,11 @@ class Store {
 
   // --- actions (each flashes its outcome) -----------------------------------
 
-  private async act<T>(fn: () => Promise<T>, ok: string): Promise<T | undefined> {
+  private async act<T>(fn: () => Promise<T>, ok: string | ((r: T) => string)): Promise<T | undefined> {
     try {
       const r = await fn();
-      this.setFlash(ok, "good");
+      const msg = typeof ok === "function" ? ok(r) : ok;
+      this.setFlash(msg, "good");
       void this.refresh();
       return r;
     } catch (err) {
@@ -476,7 +477,7 @@ class Store {
   switchAgent(id: string, kind: string) {
     return this.act(
       () => DaemonService.SwitchAgent({ session: id, agent: kind }),
-      `switched ${id} to ${kind}`,
+      (r) => r?.message || `switched ${id} to ${kind}`,
     );
   }
   // openURL hands a URL to the daemon's opener (which refuses anything that is

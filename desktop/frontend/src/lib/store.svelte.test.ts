@@ -273,7 +273,20 @@ describe("agent launch and switch actions", () => {
     });
   });
 
-  it("switchAgent invokes DaemonService.SwitchAgent and flashes", async () => {
+  it("switchAgent invokes DaemonService.SwitchAgent and flashes the returned daemon message", async () => {
+    SwitchAgent.mockResolvedValueOnce({
+      agent: "codex",
+      message: "lola-p1-eng-1: switched claude → codex — worktree and branch kept, briefing at .lola/handoff.md",
+    });
+    await store.switchAgent("sess-1", "codex");
+    expect(SwitchAgent).toHaveBeenCalledWith({ session: "sess-1", agent: "codex" });
+    expect(store.flash?.text).toBe(
+      "lola-p1-eng-1: switched claude → codex — worktree and branch kept, briefing at .lola/handoff.md",
+    );
+  });
+
+  it("switchAgent falls back to generated text when the returned message is empty", async () => {
+    SwitchAgent.mockResolvedValueOnce({ agent: "codex", message: "" });
     await store.switchAgent("sess-1", "codex");
     expect(SwitchAgent).toHaveBeenCalledWith({ session: "sess-1", agent: "codex" });
     expect(store.flash?.text).toBe("switched sess-1 to codex");

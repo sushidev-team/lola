@@ -51,3 +51,6 @@ desktop/frontend/dist/*
 !desktop/frontend/dist/.gitkeep
 desktop/bin/
 desktop/build/bin/
+
+# oh-my-opencode orchestration state (plans, run-continuation) — never repo content
+.omo/

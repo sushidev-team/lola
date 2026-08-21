@@ -19,9 +19,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
+	"github.com/sushidev-team/lola/internal/agent"
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/secrets"
 	"github.com/sushidev-team/lola/internal/tmux"
@@ -40,6 +42,7 @@ const (
 	checkConfig    = "config"
 	checkRepaired  = "config repairs"
 	checkMigration = "migration"
+	checkFallback  = "agent fallback"
 )
 
 // defaultServerSessions is the seam over tmux.DefaultServerSessions so the
@@ -143,6 +146,9 @@ func Check(ctx context.Context, cfg *config.Config) Report {
 	add(daemonResult())
 	add(configResult(cfg))
 	if res, ok := repairResult(cfg); ok {
+		add(res)
+	}
+	for _, res := range fallbackResults(cfg) {
 		add(res)
 	}
 	for _, res := range projectResults(cfg) {
@@ -305,6 +311,60 @@ func repairResult(cfg *config.Config) (Result, bool) {
 		Critical: false,
 		Detail:   strings.Join(n, "; ") + " — save from the settings editor to write the cleaned value back",
 	}, true
+}
+
+// fallbackResults checks that binaries for configured agent fallback chains
+// resolve on PATH. Missing binaries are reported as non-critical warnings so
+// the operator is alerted before a quota limit triggers a failed fallback.
+// When no fallback chains are configured (or all resolve), no warning results
+// are added.
+func fallbackResults(cfg *config.Config) []Result {
+	if cfg == nil {
+		return nil
+	}
+
+	var out []Result
+	checkChain := func(name string, chain []string) {
+		var seen []string
+		for _, entry := range chain {
+			k := agent.Parse(entry)
+			bin := k.Binary()
+			if slices.Contains(seen, bin) {
+				continue
+			}
+			seen = append(seen, bin)
+			if _, err := exec.LookPath(bin); err != nil {
+				out = append(out, Result{
+					Name:     name,
+					OK:       false,
+					Critical: false,
+					Detail:   fmt.Sprintf("binary %q not found on PATH", bin),
+				})
+			}
+		}
+	}
+
+	// 1. Check [defaults].agent_fallback when set.
+	if len(cfg.Defaults.AgentFallback) > 0 {
+		checkChain(checkFallback, cfg.Defaults.AgentFallback)
+	}
+
+	// 2. Check per-project overrides.
+	for i := range cfg.Projects {
+		p := &cfg.Projects[i]
+		if p.AgentFallback != nil && !p.Inherits.AgentFallback {
+			name := fallbackCheckName(p.Name)
+			checkChain(name, p.AgentFallback)
+		}
+	}
+	return out
+}
+
+func fallbackCheckName(name string) string {
+	if name == "" {
+		return checkFallback + " (unnamed project)"
+	}
+	return fmt.Sprintf("%s (%s)", checkFallback, name)
 }
 
 // projectResults checks each [[project]]'s path exists and is a git repo.

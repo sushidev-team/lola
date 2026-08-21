@@ -159,3 +159,35 @@ func TestRenderHandoffSanitizesPaneTail(t *testing.T) {
 		t.Error("an embedded fence must be defused, not close the block early")
 	}
 }
+
+// Switching an agent re-renders the project's env template against the session
+// so per-session placeholders like {{.Session}} never land as literal text in
+// .lola/env.
+func TestSwitchAgentExpandsProjectEnv(t *testing.T) {
+	f := newFixture(t, "", "")
+	f.n.Cfg.Projects[0].Env = map[string]string{"LOLA_TEST_QUEUE": "{{.Session}}"}
+	f.p.Env = f.n.Cfg.Projects[0].Env
+	ctx := context.Background()
+
+	sess, err := f.n.Spawn(ctx, f.p, issueENG42(), "")
+	if err != nil {
+		t.Fatalf("spawn: %v", err)
+	}
+
+	if _, err := f.n.SwitchAgent(ctx, sess, agent.Codex, "hit its usage limit", ""); err != nil {
+		t.Fatalf("SwitchAgent: %v", err)
+	}
+
+	dir := sess.Worktree
+	env, err := os.ReadFile(filepath.Join(dir, ".lola", "env"))
+	if err != nil {
+		t.Fatalf("read env: %v", err)
+	}
+	want := "LOLA_TEST_QUEUE=" + sess.TmuxName + "\n"
+	if !strings.Contains(string(env), want) {
+		t.Errorf(".lola/env missing expanded session id:\nwant %q\ngot:\n%s", want, env)
+	}
+	if strings.Contains(string(env), "{{.Session}}") {
+		t.Errorf(".lola/env must not contain literal {{.Session}} placeholder:\n%s", env)
+	}
+}
