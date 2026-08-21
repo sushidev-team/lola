@@ -104,6 +104,13 @@ func (n *Native) SwitchAgent(ctx context.Context, s session.Session, kind agent.
 	}
 
 	if err := n.Tmux.NewSession(ctx, id, dir, n.launchCommandPrompt(id, kind, handoffLaunchPrompt(id, old), false)); err != nil {
+		// A partially created session must not linger as a zombie pane (same
+		// cleanup as finishAgentLaunch) — but the worktree is NEVER rolled
+		// back here: it is the kept hand-off surface, and the aux tabs still
+		// run in it. The session simply reads dead; revive covers it.
+		if n.Tmux.Has(ctx, id) {
+			_ = n.Tmux.KillSessionTree(ctx, id)
+		}
 		return session.Session{}, fmt.Errorf("runtime: switch agent %s: start %s: %w", id, kind, err)
 	}
 
