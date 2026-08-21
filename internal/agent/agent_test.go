@@ -230,14 +230,17 @@ func TestOpenCodePluginJS(t *testing.T) {
 		t.Errorf("plugin does not export LolaHook:\n%s", body)
 	}
 	// Every event mapping must be present, keyed off event.type and using
-	// .quiet().nothrow() so a failing hook can't break the agent's turn.
+	// .quiet().nothrow() so a failing hook can't break the agent's turn. Each
+	// command also redirects stdin from /dev/null: Bun's $ inherits the pane
+	// TTY as stdin, and `lola hook` must never sit reading a TTY (it never
+	// EOFs, and the blocked read eats the agent TUI's keystrokes).
 	wants := []string{
 		"session.idle",
-		"${lolaBin} hook stop`.quiet().nothrow()",
+		"${lolaBin} hook stop < /dev/null`.quiet().nothrow()",
 		"permission.asked",
-		"${lolaBin} hook notification`.quiet().nothrow()",
+		"${lolaBin} hook notification < /dev/null`.quiet().nothrow()",
 		"tool.execute.after",
-		"${lolaBin} hook tool_use`.quiet().nothrow()",
+		"${lolaBin} hook tool_use < /dev/null`.quiet().nothrow()",
 	}
 	for _, w := range wants {
 		if !strings.Contains(body, w) {

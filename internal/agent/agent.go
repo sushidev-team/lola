@@ -185,7 +185,12 @@ func CodexConfigTOML(lolaBin string) []byte {
 // inherited from the pane environment, so the daemon identifies the session
 // without any argument. The binary path is interpolated as a Bun `$` string,
 // which Bun escapes automatically — the launch stays safe even when lolaBin
-// contains spaces or shell metacharacters.
+// contains spaces or shell metacharacters. Every command redirects stdin from
+// /dev/null: Bun's `$` inherits the pane TTY as stdin, and `lola hook` must
+// never sit reading it (a TTY never EOFs, and the blocked read eats the
+// keystrokes the agent TUI is waiting for). Bun's shell implements sh-style
+// redirections, so the redirect is part of the command string while lolaBin
+// stays interpolated + escaped.
 func OpenCodePluginJS(lolaBin string) []byte {
 	// A JSON string literal is also a valid JS string literal; this quotes and
 	// escapes lolaBin for embedding as `const lolaBin = "…";`.
@@ -197,14 +202,16 @@ func OpenCodePluginJS(lolaBin string) []byte {
 		"// LOLA_SESSION is inherited from the pane environment so the daemon",
 		"// identifies the session. Bun's $ escapes the interpolated binary path,",
 		"// so the launch stays safe even when the path contains spaces or metacharacters.",
+		"// stdin is redirected from /dev/null because Bun's $ inherits the pane TTY",
+		"// and `lola hook` must never sit reading it.",
 		"const lolaBin = " + string(bin) + ";",
 		"",
 		"export const LolaHook = async ({ $ }) => ({",
 		"  event: async ({ event }) => {",
 		"    const t = event.type;",
-		"    if (t === \"session.idle\") await $`${lolaBin} hook stop`.quiet().nothrow();",
-		"    else if (t === \"permission.asked\") await $`${lolaBin} hook notification`.quiet().nothrow();",
-		"    else if (t === \"tool.execute.after\") await $`${lolaBin} hook tool_use`.quiet().nothrow();",
+		"    if (t === \"session.idle\") await $`${lolaBin} hook stop < /dev/null`.quiet().nothrow();",
+		"    else if (t === \"permission.asked\") await $`${lolaBin} hook notification < /dev/null`.quiet().nothrow();",
+		"    else if (t === \"tool.execute.after\") await $`${lolaBin} hook tool_use < /dev/null`.quiet().nothrow();",
 		"  },",
 		"});",
 		"",
