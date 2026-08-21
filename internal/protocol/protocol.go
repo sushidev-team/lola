@@ -103,7 +103,7 @@ import (
 // PR yields a "skipped" CodeRabbitData (not an error); an unknown session or a gh
 // failure is an error.
 type Request struct {
-	Cmd    string `json:"cmd"` // stop|status|reload|enable|disable|pollOnce|sessions|projects|prs|hookEvent|kill|revive|pane|answer|review|coderabbit|resolveConflict|dev|devFreePort|open|renameProject
+	Cmd    string `json:"cmd"` // stop|status|reload|enable|disable|pollOnce|sessions|projects|prs|hookEvent|kill|revive|pane|answer|review|coderabbit|resolveConflict|switchAgent|dev|devFreePort|open|renameProject
 	Poll   string `json:"poll,omitempty"`
 	DryRun bool   `json:"dryRun,omitempty"`
 
@@ -217,10 +217,11 @@ type Event struct {
 type SessionInfo struct {
 	ID       string `json:"id"`
 	Project  string `json:"project"`
-	Issue    string `json:"issue"`  // Linear identifier, e.g. ENG-123
-	Title    string `json:"title"`  // Linear issue title, "" when unknown (older/adopted records)
-	Branch   string `json:"branch"` // "" when unknown
-	Status   string `json:"status"` // the rolled-up status (state.Rollup vocabulary)
+	Issue    string `json:"issue"`     // Linear identifier, e.g. ENG-123
+	Title    string `json:"title"`     // Linear issue title, "" when unknown (older/adopted records)
+	Branch   string `json:"branch"`    // "" when unknown
+	Agent    string `json:"agent"`     // coding-agent kind driving the pane: claude|codex|opencode ("" = legacy claude)
+	Status   string `json:"status"`    // the rolled-up status (state.Rollup vocabulary)
 	PRURL    string `json:"prUrl"`
 	PRNumber int    `json:"prNumber"` // 0 when no PR observed
 	Checks   string `json:"checks"`   // pass|fail|pending|none, "" when no PR
@@ -406,6 +407,9 @@ type OpenManualArgs struct {
 	Base    string `json:"base,omitempty"`
 	Agent   bool   `json:"agent,omitempty"`  // launch the coding agent instead of a shell
 	Prompt  string `json:"prompt,omitempty"` // seed prompt when Agent is set
+	// AgentKind optionally overrides WHICH coding agent runs (claude|codex|
+	// opencode) instead of the project's configured default. "" = configured.
+	AgentKind string `json:"agentKind,omitempty"`
 }
 
 // OpenPrArgs is the argument payload for cmd=openPr: open a PR's head branch as a
@@ -477,6 +481,9 @@ type OpenTicketArgs struct {
 	UUID       string `json:"uuid"`
 	Branch     string `json:"branch,omitempty"`
 	Title      string `json:"title,omitempty"`
+	// AgentKind optionally overrides WHICH coding agent runs (claude|codex|
+	// opencode) instead of the project's configured default. "" = configured.
+	AgentKind string `json:"agentKind,omitempty"`
 }
 
 // RenameProjectArgs is the argument payload for cmd=renameProject: change a
@@ -584,6 +591,25 @@ type DevFreePortData struct {
 // short human-readable outcome.
 type ResolveConflictData struct {
 	Branch  string `json:"branch"`
+	Message string `json:"message,omitempty"`
+}
+
+// SwitchAgentArgs is the argument payload for cmd=switchAgent: replace the
+// session's coding agent with a DIFFERENT kind on the same worktree and branch
+// (SUSHI-585). Session names the target, Agent the new kind (claude|codex|
+// opencode). The old pane is stopped, a .lola/handoff.md briefing is written,
+// and the new agent launches fresh on the kept checkout. Refused for an
+// unknown session, an agentless shell, an invalid kind, the kind already
+// running, or a kind whose binary is not on PATH.
+type SwitchAgentArgs struct {
+	Session string `json:"session"`
+	Agent   string `json:"agent"`
+}
+
+// SwitchAgentData is Response.Data for cmd=switchAgent. Agent is the kind now
+// running; Message is the short human-readable outcome.
+type SwitchAgentData struct {
+	Agent   string `json:"agent"`
 	Message string `json:"message,omitempty"`
 }
 

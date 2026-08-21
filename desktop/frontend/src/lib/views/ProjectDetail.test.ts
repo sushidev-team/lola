@@ -90,4 +90,49 @@ describe("ProjectDetail", () => {
     render(ProjectDetail);
     expect(screen.getByText(/not found/)).toBeInTheDocument();
   });
+
+  it("offers agent selection in New worktree and carries agentKind", async () => {
+    const openManualSpy = vi.spyOn(store, "openManual").mockResolvedValue({} as never);
+    store.projects = [fakeProject({ agent: "codex" })];
+    render(ProjectDetail);
+
+    await fireEvent.click(screen.getByText("New worktree").closest("button")!);
+    expect(screen.getByText("Project default (codex)")).toBeInTheDocument();
+
+    const input = screen.getByPlaceholderText("branch name…");
+    await fireEvent.input(input, { target: { value: "feat/my-branch" } });
+
+    const agentSelect = screen.getByLabelText("Coding agent");
+    await fireEvent.change(agentSelect, { target: { value: "opencode" } });
+
+    await fireEvent.click(screen.getByRole("button", { name: "Start" }));
+    expect(openManualSpy).toHaveBeenCalledWith({
+      project: "acme",
+      branch: "feat/my-branch",
+      agent: true,
+      agentKind: "opencode",
+    });
+  });
+
+  it("omits agent select in Shell mode", async () => {
+    const openManualSpy = vi.spyOn(store, "openManual").mockResolvedValue({} as never);
+    store.projects = [fakeProject({ agent: "claude" })];
+    render(ProjectDetail);
+
+    await fireEvent.click(screen.getByText("New worktree").closest("button")!);
+    await fireEvent.click(screen.getByRole("button", { name: "Shell" }));
+
+    expect(screen.queryByLabelText("Coding agent")).not.toBeInTheDocument();
+
+    const input = screen.getByPlaceholderText("branch name…");
+    await fireEvent.input(input, { target: { value: "feat/shell-branch" } });
+    await fireEvent.click(screen.getByRole("button", { name: "Start" }));
+
+    expect(openManualSpy).toHaveBeenCalledWith({
+      project: "acme",
+      branch: "feat/shell-branch",
+      agent: false,
+      agentKind: undefined,
+    });
+  });
 });

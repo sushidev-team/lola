@@ -118,6 +118,41 @@ describe("SessionMenu", () => {
     expect(confirm.request?.title).toBe("Kill session?");
   });
 
+  it("offers switch agent options for the other kinds and confirms before switching", async () => {
+    store.sessions = [fakeSession({ agent: "claude" })];
+    sessionMenu.request = { id: "acme-eng-1", x: 10, y: 10 };
+    render(SessionMenu);
+
+    expect(screen.getByRole("menuitem", { name: "Switch to codex" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Switch to opencode" })).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "Switch to claude" })).not.toBeInTheDocument();
+
+    await fireEvent.click(screen.getByRole("menuitem", { name: "Switch to codex" }));
+    expect(sessionMenu.request).toBeNull();
+    expect(confirm.request?.title).toBe("Switch agent?");
+    expect(confirm.request?.body).toBe("Switch ENG-1 from claude to codex?");
+    expect(confirm.request?.detail).toBe("The pane is replaced on the same worktree.");
+    expect(confirm.request?.confirmLabel).toBe("Switch");
+  });
+
+  it("updates switch agent options when session runs codex", () => {
+    store.sessions = [fakeSession({ agent: "codex" })];
+    sessionMenu.request = { id: "acme-eng-1", x: 10, y: 10 };
+    render(SessionMenu);
+
+    expect(screen.getByRole("menuitem", { name: "Switch to claude" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Switch to opencode" })).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "Switch to codex" })).not.toBeInTheDocument();
+  });
+
+  it("omits switch agent options for shell sessions", () => {
+    store.sessions = [fakeSession({ status: "shell" })];
+    sessionMenu.request = { id: "acme-eng-1", x: 10, y: 10 };
+    render(SessionMenu);
+
+    expect(screen.queryByRole("menuitem", { name: /switch to/i })).not.toBeInTheDocument();
+  });
+
   it("dismisses on a backdrop click", async () => {
     sessionMenu.request = { id: "acme-eng-1", x: 10, y: 10 };
     render(SessionMenu);

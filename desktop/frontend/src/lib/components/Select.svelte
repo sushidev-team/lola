@@ -40,12 +40,13 @@
     children,
     /** Extra classes for the WRAPPER, so a row-level fade dims the caret too. */
     class: klass = "",
+    value = $bindable(),
     ...rest
-  }: { children: Snippet; class?: string } & HTMLSelectAttributes = $props();
+  }: { children: Snippet; class?: string; value?: any } & HTMLSelectAttributes = $props();
 </script>
 
 <span class="{WRAP} {klass}">
-  <select {...rest} class={FIELD}>
+  <select {...rest} bind:value class={FIELD}>
     {@render children()}
   </select>
   <svg

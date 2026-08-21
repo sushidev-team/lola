@@ -130,7 +130,7 @@ func TestSpawnHappyPathFullSequence(t *testing.T) {
 	f := newFixture(t, "", "")
 	ctx := context.Background()
 
-	got, err := f.n.Spawn(ctx, f.p, issueENG42())
+	got, err := f.n.Spawn(ctx, f.p, issueENG42(), "")
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
@@ -276,7 +276,7 @@ func TestSpawnForwardsLinearKeyViaEnvFileNotArgv(t *testing.T) {
 	const secret = "lin_api_sup3r-s3cret/value"
 	f.n.LinearKey = func() string { return secret }
 
-	if _, err := f.n.Spawn(context.Background(), f.p, issueENG42()); err != nil {
+	if _, err := f.n.Spawn(context.Background(), f.p, issueENG42(), ""); err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
 	dir := filepath.Join(f.root, "nori", "lola-nori-eng-42")
@@ -309,7 +309,7 @@ func TestSpawnNoLinearKeyOmitsKeyLine(t *testing.T) {
 	f := newFixture(t, "", "")
 	f.n.LinearKey = func() string { return "" } // resolvable but unavailable
 
-	if _, err := f.n.Spawn(context.Background(), f.p, issueENG42()); err != nil {
+	if _, err := f.n.Spawn(context.Background(), f.p, issueENG42(), ""); err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
 	dir := filepath.Join(f.root, "nori", "lola-nori-eng-42")
@@ -328,7 +328,7 @@ func TestSpawnProjectEnvLandsInEnvFileNotArgv(t *testing.T) {
 	f := newFixture(t, "", "")
 	f.p.Env = map[string]string{"APP_ENV": "local dev", "B_VAR": "plain"}
 
-	if _, err := f.n.Spawn(context.Background(), f.p, issueENG42()); err != nil {
+	if _, err := f.n.Spawn(context.Background(), f.p, issueENG42(), ""); err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
 	dir := filepath.Join(f.root, "nori", "lola-nori-eng-42")
@@ -350,7 +350,7 @@ func TestSpawnAppliesConfiguredChrome(t *testing.T) {
 	f := newFixture(t, "", "")
 	f.n.Cfg.Tmux = config.TmuxConfig{DetachKey: "F12", Mouse: true, StatusRight: "custom", StatusBar: true}
 
-	if _, err := f.n.Spawn(context.Background(), f.p, issueENG42()); err != nil {
+	if _, err := f.n.Spawn(context.Background(), f.p, issueENG42(), ""); err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
 	tmuxCalls := loggedArgs(t, f.tmuxLog)
@@ -377,7 +377,7 @@ func TestSpawnChromeFailureIsAdvisoryOnly(t *testing.T) {
 	var logged string
 	f.n.Logf = func(format string, args ...any) { logged = fmt.Sprintf(format, args...) }
 
-	got, err := f.n.Spawn(context.Background(), f.p, issueENG42())
+	got, err := f.n.Spawn(context.Background(), f.p, issueENG42(), "")
 	if err != nil {
 		t.Fatalf("Spawn must succeed despite chrome failure: %v", err)
 	}
@@ -415,7 +415,7 @@ func TestSpawnPerAgentLaunchAndArtifacts(t *testing.T) {
 			f := newFixture(t, "", "")
 			f.n.Cfg.Defaults.Agent = string(c.kind)
 
-			got, err := f.n.Spawn(context.Background(), f.p, issueENG42())
+			got, err := f.n.Spawn(context.Background(), f.p, issueENG42(), "")
 			if err != nil {
 				t.Fatalf("Spawn: %v", err)
 			}
@@ -504,7 +504,7 @@ func TestSpawnResolvesPerProjectAgentOverride(t *testing.T) {
 	f.n.Cfg.Defaults.Agent = "claude"   // global default
 	f.n.Cfg.Projects[0].Agent = "codex" // project override wins
 
-	got, err := f.n.Spawn(context.Background(), f.p, issueENG42())
+	got, err := f.n.Spawn(context.Background(), f.p, issueENG42(), "")
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
@@ -529,7 +529,7 @@ func TestSpawnCodexLinksExistingAuth(t *testing.T) {
 
 	f := newFixture(t, "", "")
 	f.n.Cfg.Defaults.Agent = "codex"
-	if _, err := f.n.Spawn(context.Background(), f.p, issueENG42()); err != nil {
+	if _, err := f.n.Spawn(context.Background(), f.p, issueENG42(), ""); err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
 	link := filepath.Join(f.root, "nori", "lola-nori-eng-42", ".lola", "codex", "auth.json")
@@ -550,7 +550,7 @@ func TestSpawnCodexWithoutAuthSourceStillSpawns(t *testing.T) {
 
 	f := newFixture(t, "", "")
 	f.n.Cfg.Defaults.Agent = "codex"
-	got, err := f.n.Spawn(context.Background(), f.p, issueENG42())
+	got, err := f.n.Spawn(context.Background(), f.p, issueENG42(), "")
 	if err != nil {
 		t.Fatalf("Spawn must succeed without a codex login: %v", err)
 	}
@@ -575,7 +575,7 @@ func TestSpawnUsesLinearBranchName(t *testing.T) {
 	issue := issueENG42()
 	issue.BranchName = "feat/eng-42-login"
 
-	got, err := f.n.Spawn(context.Background(), f.p, issue)
+	got, err := f.n.Spawn(context.Background(), f.p, issue, "")
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
@@ -602,7 +602,7 @@ func TestSpawnSuffixesIDAndBranchWhenPreviousWorktreeKept(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := f.n.Spawn(context.Background(), f.p, issueENG42())
+	got, err := f.n.Spawn(context.Background(), f.p, issueENG42(), "")
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
@@ -629,7 +629,7 @@ func TestSpawnSuffixesWhenBranchSurvives(t *testing.T) {
   exit 0
   ;;`, "")
 
-	got, err := f.n.Spawn(context.Background(), f.p, issueENG42())
+	got, err := f.n.Spawn(context.Background(), f.p, issueENG42(), "")
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
@@ -644,7 +644,7 @@ func TestSpawnGivesUpAfterMaxAttempts(t *testing.T) {
   exit 0
   ;;`, "")
 
-	_, err := f.n.Spawn(context.Background(), f.p, issueENG42())
+	_, err := f.n.Spawn(context.Background(), f.p, issueENG42(), "")
 	if err == nil {
 		t.Fatal("Spawn: want error when no session slot is free, got nil")
 	}
@@ -660,7 +660,7 @@ func TestSpawnPrepareFailureRollsBackCleanWorktree(t *testing.T) {
 	f := newFixture(t, "", "")
 	f.p.PostCreate = []string{"echo boom >&2; exit 3"}
 
-	_, err := f.n.Spawn(context.Background(), f.p, issueENG42())
+	_, err := f.n.Spawn(context.Background(), f.p, issueENG42(), "")
 	if err == nil {
 		t.Fatal("Spawn: want error from failing post_create, got nil")
 	}
@@ -693,7 +693,7 @@ func TestSpawnRollbackKeepsDirtyWorktree(t *testing.T) {
   ;;`, "")
 	f.p.PostCreate = []string{"exit 3"}
 
-	_, err := f.n.Spawn(context.Background(), f.p, issueENG42())
+	_, err := f.n.Spawn(context.Background(), f.p, issueENG42(), "")
 	if err == nil {
 		t.Fatal("Spawn: want error, got nil")
 	}
@@ -718,7 +718,7 @@ func TestSpawnTmuxFailureRollsBackWithoutSession(t *testing.T) {
 	f := newFixture(t, "", `*"new-session"*) exit 1 ;;
 *"has-session"*) exit 1 ;;`)
 
-	_, err := f.n.Spawn(context.Background(), f.p, issueENG42())
+	_, err := f.n.Spawn(context.Background(), f.p, issueENG42(), "")
 	if err == nil {
 		t.Fatal("Spawn: want error from tmux failure, got nil")
 	}
@@ -739,7 +739,7 @@ func TestSpawnTmuxFailureKillsHalfCreatedSession(t *testing.T) {
 	// rollback kills it, leaving no tmux session behind.
 	f := newFixture(t, "", `*"new-session"*) exit 1 ;;`)
 
-	_, err := f.n.Spawn(context.Background(), f.p, issueENG42())
+	_, err := f.n.Spawn(context.Background(), f.p, issueENG42(), "")
 	if err == nil {
 		t.Fatal("Spawn: want error, got nil")
 	}
@@ -751,7 +751,7 @@ func TestSpawnTmuxFailureKillsHalfCreatedSession(t *testing.T) {
 
 func TestSpawnRejectsIssueWithoutIdentifier(t *testing.T) {
 	f := newFixture(t, "", "")
-	if _, err := f.n.Spawn(context.Background(), f.p, linear.Issue{ID: "uuid"}); err == nil {
+	if _, err := f.n.Spawn(context.Background(), f.p, linear.Issue{ID: "uuid"}, ""); err == nil {
 		t.Fatal("Spawn without identifier: want error, got nil")
 	}
 	if loggedArgs(t, f.gitLog) != "" || loggedArgs(t, f.tmuxLog) != "" {

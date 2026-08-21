@@ -223,6 +223,7 @@ func (m *rootModel) helpModal() string {
 		row("< / >", "prev / next terminal tab"),
 		row("w", "close shell tab"),
 		row("a", "answer input"),
+		row("A", "switch agent"),
 		row("x", "kill session"),
 		row("o", "open PR"),
 		row("c", "coderabbit now"),
@@ -832,6 +833,28 @@ func (m *rootModel) cockpitMessage() string {
 	case s.confirmFreePort:
 		return warnText.Render(fmt.Sprintf(
 			"kill the process holding :%d (pid %d) and restart the dev processes? (y/n)", s.freePort, s.freePID))
+	case s.switching:
+		// The agent-switch chooser: one line, the kinds as a cursor pick-list
+		// (the same › marker the answer card uses), the target named by its
+		// issue like the kill confirmation.
+		label := s.switchFor
+		if s.data != nil {
+			for i := range s.data.Sessions {
+				if info := s.data.Sessions[i]; info.ID == s.switchFor && info.Issue != "" {
+					label = info.Issue
+					break
+				}
+			}
+		}
+		kinds := make([]string, len(s.switchKinds))
+		for i, k := range s.switchKinds {
+			if i == s.switchCursor {
+				kinds[i] = warnText.Render("› " + k)
+			} else {
+				kinds[i] = faintText.Render(k)
+			}
+		}
+		return warnText.Render("switch agent on "+label+": ") + strings.Join(kinds, faintText.Render("  "))
 	case m.list.confirmDelete:
 		name := ""
 		if p := m.selectedRailProject(); p != nil {
@@ -875,6 +898,8 @@ func (m *rootModel) keybar(w int) string {
 		return previewLine(warnText.Render("y")+faintText.Render(" kill · ")+warnText.Render("n")+faintText.Render(" cancel"), w)
 	case s.confirmFreePort:
 		return previewLine(warnText.Render("y")+faintText.Render(" free port · ")+warnText.Render("n")+faintText.Render(" cancel"), w)
+	case s.switching:
+		return previewLine(faintText.Render("↑↓ move · enter switch · esc cancel"), w)
 	case m.list.confirmDelete:
 		return previewLine(warnText.Render("y")+faintText.Render(" stop polling · ")+warnText.Render("n")+faintText.Render(" cancel"), w)
 	}

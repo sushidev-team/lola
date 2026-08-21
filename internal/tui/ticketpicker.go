@@ -1,7 +1,8 @@
 // The ticket picker: a fuzzy-filterable list of a project's Linear issues
 // (cmd=tickets). enter starts the selected issue — a worktree + agent, deduped
 // like a poll dispatch (cmd=openTicket). [ ] toggles the scope (mine/team); r
-// refreshes; esc returns to the project detail.
+// refreshes; a cycles the agent override (project default → claude → codex →
+// opencode); esc returns to the project detail.
 package tui
 
 import (
@@ -25,6 +26,7 @@ type ticketPickerModel struct {
 	filter    string
 	filtering bool
 	flash     string
+	agentKind string // agent override for openTicket; "" = the project's configured agent
 }
 
 type ticketsMsg struct {
@@ -169,6 +171,8 @@ func (m *rootModel) updateTicketPicker(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case "r":
 		p.loading, p.flash, p.gen = true, "", p.gen+1
 		return m, fetchTicketsCmd(p.project, p.scope, p.gen)
+	case "a":
+		p.agentKind = nextAgentKind(p.agentKind)
 	case "?":
 		m.showHelp = true
 	case "/":
@@ -193,5 +197,5 @@ func (m *rootModel) startTicket(is protocol.TicketRow) (tea.Model, tea.Cmd) {
 	m.sessions.selID = ""
 	m.view = viewCockpit
 	m.focus = focusSessions
-	return m, tea.Batch(openTicketCmd(p.project, is), fetchSessionsCmd)
+	return m, tea.Batch(openTicketCmd(p.project, is, p.agentKind), fetchSessionsCmd)
 }

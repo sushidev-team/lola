@@ -55,6 +55,17 @@ const (
 	// every send-keys path must treat Blocked as "never type here" and every
 	// status surface must show it as needing a human.
 	ActivityBlocked
+	// ActivityQuotaLimited means the pane shows the agent's own blocking
+	// usage-limit banner (Claude Code's "You've hit your limit · resets …",
+	// Codex's "You've hit your usage limit.", opencode's "Free usage
+	// exceeded", …): the turn is over and the agent cannot take another until
+	// the quota resets. It is a distinct outcome from Waiting precisely
+	// because the remedy is not an answer but a hand-off to a fallback agent
+	// — the daemon maps it to waiting_input with InputQuotaLimited and the
+	// fallback engine decides whether to respawn the next agent kind. Like
+	// Blocked it must never be typed into: the composer accepts the text but
+	// the agent is dead until the reset, so a send would silently vanish.
+	ActivityQuotaLimited
 )
 
 // String renders the activity for logs and test failures.
@@ -66,6 +77,8 @@ func (a Activity) String() string {
 		return "waiting"
 	case ActivityBlocked:
 		return "blocked"
+	case ActivityQuotaLimited:
+		return "quota_limited"
 	default:
 		return "unknown"
 	}
@@ -91,6 +104,13 @@ const maxScreenLines = 80
 // in the bottom cluster; a build that floats it far above the box would need
 // this widened, but the waiting scan below would still catch the resting prompt.
 const statusTailLines = 10
+
+// quotaTailLines bounds how many trailing lines the QUOTA scan inspects. A
+// usage-limit banner sits directly above the resting composer (the CLI prints
+// it when the turn dies and then idles), so a shallow window is enough — and
+// it is the safety rail: a banner that scrolled up into history must not
+// condemn a pane that has long moved on.
+const quotaTailLines = 30
 
 var (
 	// -----------------------------------------------------------------------
@@ -215,6 +235,37 @@ var (
 	// re-verify it against a live modal pane whenever claude-code changes its
 	// dialog chrome.
 	modalOverlayRe = regexp.MustCompile(`(?m)^\s*\x{2594}{20,}\s*$`)
+
+	// -----------------------------------------------------------------------
+	// QUOTA cues. Each agent prints its own BLOCKING usage-limit banner when a
+	// subscription/usage limit is hit and the turn is over until the reset:
+	//
+	//   - claude:   "You've hit your limit · resets 8pm (Europe/Berlin)",
+	//     "You're out of extra usage · resets 2pm", "Limit reached – contact an
+	//     admin to keep working", "API Error: Rate limit reached", "API Error:
+	//     Usage credits required …"
+	//   - codex:    "You've hit your usage limit. Upgrade to Pro …",
+	//     "Your workspace is out of credits.", "You hit your spend cap …",
+	//     "Request a limit increase from your owner …"
+	//   - opencode: "Free usage exceeded", "Subscription quota exhausted",
+	//     "insufficient_quota", "You exceeded your current quota", "credit
+	//     balance is too low to access the … API", "Too Many Requests: quota
+	//     exceeded", "… suspended due to insufficient balance …"
+	//
+	// Deliberately NOT here: opencode's transient "retrying in Ns - attempt
+	// #M" lines (the agent is still working) and generic prose like "rate
+	// limit" alone (a review or log line merely DISCUSSING limits — the
+	// phrases below are the CLIs' own banner wordings). The vocabularies are
+	// per kind so one agent's banner can never condemn another's pane. All are
+	// rendering details of the respective CLIs: re-verify against a live pane
+	// when one of them rewords its limit screen.
+	// -----------------------------------------------------------------------
+
+	claudeQuotaRe = regexp.MustCompile(`(?i)you've hit your (?:session )?limit\s*[·•]\s*resets|you're out of extra usage|limit reached\s*–\s*contact an admin|API Error:\s*(?:rate limit reached|usage credits required)`)
+
+	codexQuotaRe = regexp.MustCompile(`(?i)you've hit your usage limit|your workspace is out of credits|you hit your spend cap|request a limit increase from your owner`)
+
+	openCodeQuotaRe = regexp.MustCompile(`(?i)free usage exceeded|subscription quota (?:exhausted|exceeded)|insufficient_quota|exceeded_current_quota_error|you exceeded your current quota|credit balance is too low to access|suspended due to insufficient balance|too many requests:\s*quota exceeded`)
 )
 
 // claudeCues reports whether kind k uses claude-code's caret and question-parse
@@ -237,6 +288,11 @@ func claudeCues(k agent.Kind) bool {
 //     below);
 //   - ActivityWorking when a positive activity cue is present (spinner, elapsed
 //     timer, streaming token counter, or "esc to interrupt");
+//   - ActivityQuotaLimited when the agent's own blocking usage-limit banner is
+//     on screen (checked AFTER the live-working cue — a streaming agent is
+//     alive even if a stale banner sits in its tail — and BEFORE the waiting
+//     cue: the composer below a quota banner IS at rest, but the remedy is a
+//     fallback hand-off, not an answer);
 //   - ActivityWaiting when an input prompt is present with NO such cue (the
 //     bordered box, a "❯" caret, a boxed ">" caret, or an answerable question
 //     per Parse);
@@ -286,6 +342,13 @@ func Classify(paneText string, k agent.Kind) Activity {
 	// no longer evidence that the turn ended.
 	if hasLiveWorkingCue(tail, k) {
 		return ActivityWorking
+	}
+	// A blocking usage-limit banner means the turn died on quota. It outranks
+	// the waiting cue (the resting composer below the banner would otherwise
+	// read as an ordinary needs_input) and loses to the live-working cue above
+	// (a streaming agent is alive even when a stale banner sits in its tail).
+	if hasQuotaCue(clean, k) {
+		return ActivityQuotaLimited
 	}
 	// A resting input prompt (bordered box, a caret, or an answerable question)
 	// means the agent has yielded. It beats the WEAKER working cues below, because
@@ -430,6 +493,23 @@ func hasWaitingCue(paneText, screen string, k agent.Kind) bool {
 		return true
 	}
 	return false
+}
+
+// hasQuotaCue reports whether the pane tail shows the agent's own blocking
+// usage-limit banner for kind k. The vocabularies are per kind so one agent's
+// banner can never condemn another's pane, and every phrase is a BLOCKING
+// banner — opencode's transient "retrying in Ns - attempt #M" lines are
+// deliberately not matched (the agent is still working).
+func hasQuotaCue(clean string, k agent.Kind) bool {
+	tail := lastLines(clean, quotaTailLines)
+	switch k {
+	case agent.Codex:
+		return codexQuotaRe.MatchString(tail)
+	case agent.OpenCode:
+		return openCodeQuotaRe.MatchString(tail)
+	default:
+		return claudeQuotaRe.MatchString(tail)
+	}
 }
 
 // lastLines returns the trailing n lines of s (all of s when it has fewer). It

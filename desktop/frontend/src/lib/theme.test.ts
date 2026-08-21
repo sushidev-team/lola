@@ -120,6 +120,7 @@ describe("statusLabel", () => {
     expect(statusLabel("ci_failed")).toBe("ci failed");
     expect(statusLabel("needs_input")).toBe("needs you");
     expect(statusLabel("waiting_input")).toBe("waiting");
+    expect(statusLabel("quota_limited")).toBe("usage limit");
   });
   it("passes plain words through and de-underscores unknowns", () => {
     expect(statusLabel("working")).toBe("working");

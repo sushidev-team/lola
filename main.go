@@ -64,6 +64,7 @@ func main() {
 		reviveCmd(),
 		answerCmd(),
 		reviewCmd(),
+		switchAgentCmd(),
 		coderabbitCmd(),
 		configCmd(),
 		logsCmd(),
@@ -200,6 +201,31 @@ func answerCmd() *cobra.Command {
 		Args:  cobra.MinimumNArgs(2),
 		RunE: func(c *cobra.Command, a []string) error {
 			raw, err := json.Marshal(protocol.Request{Cmd: "answer", Session: a[0], Text: strings.Join(a[1:], " ")})
+			if err != nil {
+				return err
+			}
+			return tui.Send(string(raw))
+		},
+	}
+}
+
+// switchAgentCmd replaces a session's coding agent with a different kind on the
+// same worktree and branch (`lola switch-agent <session> <claude|codex|
+// opencode>`) — the manual half of the agent fallback: the old pane is stopped,
+// a .lola/handoff.md briefing is written, and the new agent launches fresh on
+// the kept checkout. Send prints the daemon's outcome or its refusal (unknown
+// session, shell session, same kind, binary missing).
+func switchAgentCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "switch-agent <session> <claude|codex|opencode>",
+		Short: "Switch a session's coding agent to a different kind on the same worktree",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(c *cobra.Command, a []string) error {
+			args, err := json.Marshal(protocol.SwitchAgentArgs{Session: a[0], Agent: a[1]})
+			if err != nil {
+				return err
+			}
+			raw, err := json.Marshal(protocol.Request{Cmd: "switchAgent", Args: args})
 			if err != nil {
 				return err
 			}

@@ -130,6 +130,19 @@ type Session struct {
 	// TranscriptPath is the agent's own transcript file as reported by its
 	// hooks (Claude Code hands the JSONL path on every event).
 	TranscriptPath string `json:"transcript_path,omitempty"`
+
+	// AgentsTried records the coding-agent kinds this session has already run
+	// BEFORE the current one (oldest first) — the fallback loop guard: the
+	// chain never hands the session back to a kind that already ran (and, for
+	// a quota switch, already exhausted its quota). Stamped by the daemon's
+	// switch path (internal/daemon/fallback.go).
+	AgentsTried []string `json:"agents_tried,omitempty"`
+
+	// FallbackNotified is the agent kind the "usage limit reached"
+	// notification last fired for, so the observer notifies ONCE per quota
+	// episode rather than on every 30s cycle. Cleared when the session leaves
+	// the quota-limited state and on a successful switch.
+	FallbackNotified string `json:"fallback_notified,omitempty"`
 	// AtPromptVerified qualifies AtPrompt: false when the gate was carried
 	// across a daemon restart (adoption) and no live signal has confirmed it
 	// since. The send-keys paths re-verify an unverified gate against the

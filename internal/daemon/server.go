@@ -13,6 +13,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/sushidev-team/lola/internal/agent"
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/notify"
 	"github.com/sushidev-team/lola/internal/protocol"
@@ -204,6 +205,16 @@ func (d *Daemon) handle(ctx context.Context, req protocol.Request) protocol.Resp
 		return dataResponse(data)
 	case "resolveConflict":
 		data, err := d.handleResolveConflict(ctx, req.Session)
+		if err != nil {
+			return protocol.Response{OK: false, Error: err.Error()}
+		}
+		return dataResponse(data)
+	case "switchAgent":
+		var a protocol.SwitchAgentArgs
+		if err := json.Unmarshal(req.Args, &a); err != nil {
+			return protocol.Response{OK: false, Error: "switchAgent: bad args: " + err.Error()}
+		}
+		data, err := d.handleSwitchAgent(ctx, a)
 		if err != nil {
 			return protocol.Response{OK: false, Error: err.Error()}
 		}
@@ -444,6 +455,7 @@ func (d *Daemon) sessionsData() protocol.SessionsData {
 			Issue:     s.Issue,
 			Title:     s.Title,
 			Branch:    s.Branch,
+			Agent:     agent.Parse(s.Agent).String(), // "" (legacy) reads as claude
 			Status:    s.Status,
 			TmuxName:  s.TmuxName,
 			Source:    s.Source,

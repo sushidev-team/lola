@@ -371,6 +371,10 @@ func (d *Daemon) observeNative(ctx context.Context) {
 			// without re-commenting.
 			d.writeBack(ctx, updated)
 			d.react(ctx, updated)
+			// Agent fallback (SUSHI-585): a quota-limited pane maps to
+			// waiting_input/quota_limited on the agent axis; the engine notifies
+			// once per episode or auto-switches per the configured chain.
+			d.maybeFallback(ctx, updated)
 			// Escalation (blocked) write-back AFTER react — react is what sets
 			// Escalated (CI retries exhausted). Re-read the record so the flag
 			// react just wrote is visible this cycle. A dropped (merged-cleaned)
@@ -494,6 +498,17 @@ func agentReconcile(cur *session.Session, act attention.Activity, hasQuestion bo
 		cur.AtPromptVerified = true // live positive evidence: the gate state is current
 		changed := cur.SetAgentState(state.AgentWaitingInput, "", now)
 		cur.InputReason = state.InputDialog
+		return changed
+	case attention.ActivityQuotaLimited:
+		// The agent's own usage-limit banner is on screen: the turn is over
+		// and the agent cannot take another until the quota resets. Maps to
+		// waiting_input with the quota reason — the remedy is the fallback
+		// hand-off (maybeFallback), never a typed answer, so the send-keys
+		// gate is closed exactly as for a modal.
+		cur.AtPrompt = false
+		cur.AtPromptVerified = true // live positive evidence: the gate state is current
+		changed := cur.SetAgentState(state.AgentWaitingInput, "", now)
+		cur.InputReason = state.InputQuotaLimited
 		return changed
 	case attention.ActivityWorking:
 		cur.AtPrompt = false

@@ -233,6 +233,12 @@ func (d *Daemon) handleOpenTicket(ctx context.Context, a protocol.OpenTicketArgs
 		polls = pp.Polls()
 	}
 	agentBin := agent.Parse(d.cfg.AgentForProject(project)).Binary()
+	if agent.Valid(strings.TrimSpace(a.AgentKind)) {
+		// A per-spawn override picks a different coding agent for this one
+		// session; the health gate must confirm THAT binary, not the configured
+		// default's.
+		agentBin = agent.Parse(strings.TrimSpace(a.AgentKind)).Binary()
+	}
 	d.mu.Unlock()
 	if pp == nil {
 		return protocol.OpenData{}, fmt.Errorf("unknown project %q", project)
@@ -292,7 +298,7 @@ func (d *Daemon) handleOpenTicket(ctx context.Context, a protocol.OpenTicketArgs
 
 	// (3) Spawn (bounded + shutdown behavior identical to dispatch).
 	cctx, cancel := context.WithTimeout(sctx, nativeSpawnTimeout)
-	sess, err := nat.Spawn(cctx, proj, is)
+	sess, err := nat.Spawn(cctx, proj, is, strings.TrimSpace(a.AgentKind))
 	cancel()
 	if err != nil {
 		d.inflight.Remove(uuid)

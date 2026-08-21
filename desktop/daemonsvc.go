@@ -184,6 +184,15 @@ func (s *DaemonService) OpenTicket(a protocol.OpenTicketArgs) (protocol.OpenData
 	return d, err
 }
 
+// SwitchAgent replaces a session's coding agent with a different kind on the
+// same worktree and branch (the manual half of the agent fallback).
+func (s *DaemonService) SwitchAgent(a protocol.SwitchAgentArgs) (protocol.SwitchAgentData, error) {
+	args, _ := json.Marshal(a)
+	var d protocol.SwitchAgentData
+	err := call(protocol.Request{Cmd: "switchAgent", Args: args}, longTimeout, &d)
+	return d, err
+}
+
 // OpenURL asks the daemon to open a URL in the default browser.
 func (s *DaemonService) OpenURL(url string) error {
 	args, _ := json.Marshal(protocol.OpenURLArgs{URL: url})

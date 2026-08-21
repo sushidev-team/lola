@@ -13,6 +13,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/sushidev-team/lola/internal/agent"
 	"github.com/sushidev-team/lola/internal/protocol"
 	"github.com/sushidev-team/lola/internal/tmux"
 )
@@ -254,6 +255,17 @@ type sessionsModel struct {
 	opening     bool
 	openInput   string
 	openProject string
+
+	// Agent-switch chooser ("A"). switching owns every keypress until enter
+	// (send cmd=switchAgent) or esc (cancel), like the answer card. switchFor
+	// pins the target session ID and switchKinds the choice list — every valid
+	// kind EXCEPT the one driving the session when "A" was pressed — so a
+	// background refresh between "A" and enter cannot re-aim the switch; the
+	// daemon re-checks the session, kind and binary anyway.
+	switching    bool
+	switchFor    string
+	switchCursor int
+	switchKinds  []string
 
 	tmux *tmux.Client
 	// hasPane probes whether a session name has a LIVE pane on the lola tmux
@@ -498,6 +510,36 @@ func coderabbitSelectedCmd(id string) tea.Cmd {
 	}
 }
 
+// switchDoneMsg carries the outcome of a cmd=switchAgent request. good is true
+// when the new agent launched; false surfaces the daemon's verbatim refusal
+// (unknown session, agentless shell, invalid or already-running kind, missing
+// binary) or a dial error.
+type switchDoneMsg struct {
+	msg  string
+	good bool
+}
+
+// switchAgentCmd replaces a session's coding agent with a different kind
+// (cmd=switchAgent): the daemon stops the old pane, writes a handoff briefing,
+// and launches the new kind on the kept worktree/branch.
+func switchAgentCmd(id, kind string) tea.Cmd {
+	return func() tea.Msg {
+		args, _ := json.Marshal(protocol.SwitchAgentArgs{Session: id, Agent: kind})
+		resp, err := requestFn(protocol.Request{Cmd: "switchAgent", Args: args})
+		if err != nil {
+			return switchDoneMsg{msg: err.Error()}
+		}
+		if !resp.OK {
+			return switchDoneMsg{msg: resp.Error}
+		}
+		var d protocol.SwitchAgentData
+		if err := json.Unmarshal(resp.Data, &d); err == nil && d.Message != "" {
+			return switchDoneMsg{msg: d.Message, good: true}
+		}
+		return switchDoneMsg{msg: "switched to " + kind, good: true}
+	}
+}
+
 func fetchSessionsCmd() tea.Msg {
 	resp, err := request(protocol.Request{Cmd: "sessions"})
 	if err != nil {
@@ -651,6 +693,11 @@ func (m *rootModel) updateSessions(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if s.opening {
 		return m.updateOpen(k)
 	}
+	// The agent-switch chooser owns every keypress until enter (switch) or esc
+	// (cancel) — see updateSwitchAgent.
+	if s.switching {
+		return m.updateSwitchAgent(k)
+	}
 	// A pending kill confirmation owns the next keypress: y/Y kills, anything
 	// else cancels. Force is never offered here (CLI-only friction). The target
 	// is the ID captured when "x" was pressed — NOT s.selected() re-read now: a
@@ -791,6 +838,8 @@ func (m *rootModel) updateSessions(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.reselectVisible()
 	case "a":
 		return m.startAnswer()
+	case "A":
+		return m.startSwitchAgent()
 	case "O":
 		return m.startOpen()
 	case "n":
@@ -942,6 +991,65 @@ func (m *rootModel) sendAnswer(text string) (tea.Model, tea.Cmd) {
 	s.answering = false
 	s.answerInput = ""
 	return m, answerCmd(id, text)
+}
+
+// startSwitchAgent opens the agent-switch chooser for the selected session: the
+// valid kinds EXCLUDING the one currently driving it ("" counts as claude —
+// legacy records). A shell session has no agent to switch and flashes a hint;
+// every other refusal (same kind, missing binary, …) is the daemon's to make.
+func (m *rootModel) startSwitchAgent() (tea.Model, tea.Cmd) {
+	s := &m.sessions
+	sel := s.selected()
+	if sel == nil {
+		return m, nil
+	}
+	if sel.Status == "shell" {
+		s.flash, s.flashGood = "no agent to switch on a shell session", false
+		return m, nil
+	}
+	cur := sel.Agent
+	if cur == "" {
+		cur = string(agent.Claude)
+	}
+	kinds := make([]string, 0, len(agent.Kinds)-1)
+	for _, k := range agent.Kinds {
+		if string(k) != cur {
+			kinds = append(kinds, string(k))
+		}
+	}
+	s.switching, s.switchFor, s.switchCursor, s.switchKinds = true, sel.ID, 0, kinds
+	return m, nil
+}
+
+// updateSwitchAgent drives the open agent-switch chooser: arrows/j/k move,
+// enter sends cmd=switchAgent for the pinned target, esc cancels.
+func (m *rootModel) updateSwitchAgent(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	s := &m.sessions
+	switch k.String() {
+	case "esc":
+		s.switching, s.switchFor, s.switchKinds = false, "", nil
+		return m, nil
+	case "up", "k":
+		if s.switchCursor > 0 {
+			s.switchCursor--
+		}
+		return m, nil
+	case "down", "j":
+		if s.switchCursor < len(s.switchKinds)-1 {
+			s.switchCursor++
+		}
+		return m, nil
+	case "enter":
+		if s.switchCursor >= len(s.switchKinds) {
+			s.switching, s.switchFor, s.switchKinds = false, "", nil
+			return m, nil
+		}
+		id, kind := s.switchFor, s.switchKinds[s.switchCursor]
+		s.switching, s.switchFor, s.switchKinds = false, "", nil
+		s.flash, s.flashGood = "switching to "+kind+"…", true
+		return m, switchAgentCmd(id, kind)
+	}
+	return m, nil
 }
 
 // jumpNeedsInput moves the cursor to the next (dir=+1) or previous (dir=-1)

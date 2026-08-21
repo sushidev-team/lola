@@ -141,6 +141,7 @@ protocol-version mismatch.
 | `lola attach [session]` | Hand the terminal to tmux on lola's isolated server. With **no argument** it (re)builds an aggregate viewer session with **one tab per live agent** (windows linked from each session, so switching tabs pages through every agent) and attaches to it — "attach once, see all agents". With a **session id** it attaches straight to that one. Talks to tmux directly (works even if the daemon is down); detach with `C-b d`. The viewer is a linked view — detaching or rebuilding it never touches the agent sessions. |
 | `lola kill <session> [--force]` | Terminate a session's agent (tmux) **and its shell/review tabs**, then clean up after it. A **clean** worktree is removed along with the local branch it was on, and the issue's slot is freed (so it can re-dispatch if it still matches); a **dirty** one (uncommitted changes) keeps both the checkout and the branch for inspection and the command exits nonzero — rerun with `--force` to remove it anyway. The agent is always stopped first, even when the worktree is kept. |
 | `lola revive <session>` | Inverse of `kill`: relaunch a **dead** session's agent on the worktree that was kept for inspection. Claude resumes its prior conversation via `--continue` when it recorded a transcript before dying, otherwise the agent restarts fresh on the same worktree. Refused if the session is still running. Use when a pane died to a transient fault (instant launch failure, crashed agent, machine sleep) rather than re-dispatching from scratch. |
+| `lola switch-agent <session> <kind>` | Replace a session's coding agent with a different kind (`claude`\|`codex`\|`opencode`) on the **same worktree and branch** — the manual half of the agent fallback (see [Agent fallback](#agent-fallback-usage-limits)). The old pane is stopped (shell/dev/review tabs survive), a `.lola/handoff.md` briefing is written for the new agent, and the new agent launches on it. Refused for an unknown session, a shell session, the kind already running, or a kind whose binary is not on `PATH`. |
 | `lola answer <session> <text>` | Deliver a human's inline reply to a session parked for input. Refused unless the session's derived status is `needs_input` (the one moment the agent is provably idle at its prompt), so a reply can never corrupt a mid-turn agent. |
 | `lola review <session> [--provider kind]` | Force a **pass-shape** review provider now, ignoring the once-per-PR guard, and route its findings per its transports. With no `--provider` it forces the primary enabled pass provider; `--provider coderabbit-cli\|claude-session` picks one explicitly. Skipped (not an error) when no such provider is enabled or its tool is unavailable. |
 | `lola coderabbit <session>` | Back-compat alias that forces the **watch-shape** provider now (`coderabbit-watch`) — poll the session's open PR for CodeRabbit (GitHub-app) comments, ignoring the watermark, and route any found (notify / worker / Linear per config). Skipped (not an error) when the watch is disabled or the session has no open PR. |
@@ -205,6 +206,7 @@ overrides it.
 | `branch_prefix` | string | `[[project]].branch_prefix` — prefix for a session's branch. Ultimate default `"lola/"`. |
 | `symlinks` | string array | `[[project]].symlinks` |
 | `post_create` | string array | `[[project]].post_create` |
+| `agent_fallback` | string array | `[[project]].agent_fallback` — ordered fallback kinds used when a session's agent hits its usage limit. Default none (notify only). See [Agent fallback](#agent-fallback-usage-limits). |
 | `env` | table of strings | `[[project]].env` (as `[defaults.env]`) |
 | `match_labels` | string array | `[[project]].match_labels` |
 | `match_mode` | `"any"` \| `"all"` | `[[project]].match_mode`. Ultimate default `"any"`. |
@@ -296,6 +298,7 @@ runtime layer, not on config load.
 | `symlinks` | string array | Files symlinked from the main checkout into each worktree, e.g. `[".env"]`. Beware: a shared `.env` usually means every worktree talks to the same database. Omit to inherit `[defaults].symlinks`. |
 | `env` | table of strings | Extra environment variables exported into each session (`[project.env]`); the agent pane, shell tabs and the `post_create` commands all see them. Values may reference the session — see [Per-session env values](#per-session-env-values). Omit to inherit `[defaults].env`. |
 | `agent` | `"claude"` \| `"codex"` \| `"opencode"` | Coding agent for sessions spawned into this repo, overriding `[defaults].agent`. Empty/omitted inherits the global default (ultimately `claude`). See [The coding agent](#the-coding-agent). |
+| `agent_fallback` | string array | Ordered fallback kinds for this repo when a session's agent hits its usage limit, e.g. `["codex", "opencode"]`. Omit to inherit `[defaults].agent_fallback`; set to `[]` to disable the fallback for this project. See [Agent fallback](#agent-fallback-usage-limits). |
 
 #### Groups and ordering
 
@@ -626,6 +629,7 @@ directives.
 | `merge_conflict` | `true` | — | Tell the agent to rebase and resolve (detected via the observer's `mergeable`). |
 | `approved_and_green` | **`false`** | — | **Never auto-merge.** Notify and park the worktree for a human; the default message is empty. |
 | `merged` | `true` | — | Auto cleanup: stop the agent **and its shell/review tabs**, remove the worktree and the local branch it was on, archive the session, free the slot. A worktree with uncommitted changes keeps both the checkout and its branch (you are notified once); a `pr` session's branch is upstream and is never deleted. |
+| `agent_fallback` | **`false`** | — | Agent hit its usage limit (detected from the pane) → hand the session to the next kind in the project's `agent_fallback` chain on the same worktree. Notify-only by default; `message` is unused (the replacement agent gets a generated handoff briefing, not a typed prompt). |
 
 Any unset field takes its default, so you can override just one thing (e.g.
 `retries = 0` to disable CI recovery, or `auto = false` on a single reaction)
@@ -1081,6 +1085,36 @@ best-effort symlinks into the isolated `CODEX_HOME`), or `opencode auth`.
 and `[coderabbit]` features always shell out to `claude -p` regardless of this
 setting — they are lola-internal helpers, **not** the coding agent, and never
 change with the agent choice.
+
+### Agent fallback (usage limits)
+
+When a session's agent hits its provider's **usage limit**, lola detects the
+banner in the pane (per-CLI wording for claude, codex and opencode; a transient
+"retrying" notice does not count) and the session reads as `needs_input` with
+the reason **usage limit**. What happens next is `[reactions].agent_fallback`:
+
+- `auto = false` (the default) — notify-only: the notification names the next
+  kind in the chain and suggests the switch.
+- `auto = true` — lola hands the session to the next kind in the chain **on the
+  same worktree and branch**: the old pane is replaced (shell, dev and review
+  tabs survive), a `.lola/handoff.md` briefing is written for the new agent
+  (the original prompt, the branch's commits and diffstat, the working-tree
+  status, the old agent's transcript path, and the dying pane's tail), and the
+  new agent launches on it.
+
+The chain is `agent_fallback` — on `[defaults]`, inheritable per `[[project]]` —
+e.g. `agent_fallback = ["codex", "opencode"]`. A session never revisits a kind
+it already ran (after claude → codex, a codex limit continues to opencode,
+never back to claude), and the target kind's binary must resolve on `PATH`
+**before** anything is torn down — a missing binary costs a notification,
+never the running pane. Each quota episode is acted on once and re-arms when
+the session leaves the usage-limited state.
+
+The same switch is available **manually** at any time, limit or not:
+`lola switch-agent <session> <kind>`, the `A` key in the TUI's session view,
+or **Switch agent** in the desktop app's session menu. And each spawn can
+override the project's agent up front — the agent selector in the ticket
+picker (`a` in the TUI) and in the manual-worktree form.
 
 **Note:** codex/opencode are exercised end-to-end only with those binaries
 installed; the Go test suite covers the launch-arg and callback-wiring plumbing

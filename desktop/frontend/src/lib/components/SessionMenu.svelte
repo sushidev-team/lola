@@ -12,6 +12,8 @@
   const req = $derived(sessionMenu.request);
   const session = $derived(req ? store.sessionById(req.id) : undefined);
   const canRevive = $derived(!!session && (session.status === "dead" || session.status === "session_ended"));
+  const AGENT_KINDS = ["claude", "codex", "opencode"] as const;
+  const otherAgents = $derived(AGENT_KINDS.filter((k) => k !== (session?.agent || "claude")));
 
   let el = $state<HTMLDivElement | null>(null);
 
@@ -112,6 +114,14 @@
     {/if}
     {#if canRevive}
       <MenuItem variant="accent" icon="↻" onclick={() => run((s) => store.revive(s.id))}>Revive</MenuItem>
+    {/if}
+    {#if session.status !== "shell"}
+      <div class="my-1 h-px bg-edge/60"></div>
+      {#each otherAgents as kind (kind)}
+        <MenuItem icon="⇄" onclick={() => run((s) => store.askSwitchAgent(s.id, kind))}>
+          Switch to {kind}
+        </MenuItem>
+      {/each}
     {/if}
     <div class="my-1 h-px bg-edge/60"></div>
     <!-- Routes through the shared confirm dialog, same as the 'x' shortcut. -->

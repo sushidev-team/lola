@@ -177,6 +177,9 @@ func (m *rootModel) detailMessage(w int) string {
 		launch := "shell"
 		if d.wtAgent {
 			launch = goodText.Render("agent")
+			if d.wtAgentKind != "" {
+				launch = goodText.Render("agent·" + d.wtAgentKind)
+			}
 		}
 		return previewLine(warnText.Render("new branch: ")+d.wtBranch+"_"+faintText.Render("  · launch: ")+launch+faintText.Render(" (tab) · enter create · esc cancel"), w)
 	case d.flash != "":
@@ -192,7 +195,7 @@ func (m *rootModel) detailMessage(w int) string {
 
 func (m *rootModel) detailKeybar(w int) string {
 	if m.detail.wtMode {
-		return previewLine(faintText.Render("type a branch · tab agent/shell · enter create · esc cancel"), w)
+		return previewLine(faintText.Render("type a branch · tab agent/shell · shift+tab agent kind · enter create · esc cancel"), w)
 	}
 	// Mirrors detailActions() exactly — "P polls" used to sit here with no 'P'
 	// handler behind it, so the keybar advertised a key that did nothing.

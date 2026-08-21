@@ -233,7 +233,7 @@ func agentDetailLine(si protocol.SessionInfo) string {
 	}
 	parts := []string{statusLabel(si.AgentState)}
 	if si.InputReason != "" {
-		parts = append(parts, strings.ReplaceAll(si.InputReason, "_", " "))
+		parts = append(parts, inputReasonLabel(si.InputReason))
 	}
 	if si.CurrentTool != "" {
 		parts = append(parts, "tool "+si.CurrentTool)
@@ -242,6 +242,17 @@ func agentDetailLine(si protocol.SessionInfo) string {
 		parts = append(parts, "active "+shortAgo(si.LastActivityAt)+" ago")
 	}
 	return "agent:    " + strings.Join(parts, " · ")
+}
+
+// inputReasonLabel humanizes why an agent waits: "quota_limited" is the one
+// reason whose de-underscored form misleads ("quota limited" reads like a
+// dashboard state, not the provider's usage limit hitting), so it gets the
+// human phrase; everything else de-underscores like statusLabel's fallback.
+func inputReasonLabel(reason string) string {
+	if reason == "quota_limited" {
+		return "usage limit"
+	}
+	return strings.ReplaceAll(reason, "_", " ")
 }
 
 // interpretedLines renders the [statusagent] overlay for the detail panel:

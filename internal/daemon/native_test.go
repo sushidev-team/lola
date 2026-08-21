@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sushidev-team/lola/internal/agent"
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/linear"
 	"github.com/sushidev-team/lola/internal/protocol"
@@ -49,9 +50,11 @@ type fakeNative struct {
 	prAgentErr     error // returned from OpenPRAgent
 	manualAgents   []nativeAgentCall
 	manualAgentErr error // returned from OpenManualAgent
+	switches       []nativeSwitchCall
+	switchErr      error // returned from SwitchAgent
 }
 
-type nativeSpawnCall struct{ project, identifier string }
+type nativeSpawnCall struct{ project, identifier, agentKind string }
 
 type nativeOpenCall struct{ project, id, ref, branch string }
 
@@ -65,11 +68,13 @@ type nativeKillCall struct {
 	force          bool
 }
 
+type nativeSwitchCall struct{ sessionID, kind, reason string }
+
 var _ NativeAPI = (*fakeNative)(nil)
 
-func (f *fakeNative) Spawn(ctx context.Context, p config.Project, is linear.Issue) (session.Session, error) {
+func (f *fakeNative) Spawn(ctx context.Context, p config.Project, is linear.Issue, agentOverride string) (session.Session, error) {
 	f.mu.Lock()
-	f.spawns = append(f.spawns, nativeSpawnCall{p.Name, is.Identifier})
+	f.spawns = append(f.spawns, nativeSpawnCall{p.Name, is.Identifier, agentOverride})
 	_, f.spawnDeadline = ctx.Deadline()
 	hook, err := f.onSpawn, f.spawnErr
 	f.mu.Unlock()
@@ -149,7 +154,7 @@ func (f *fakeNative) openManualCalls() []nativeOpenManualCall {
 	return slices.Clone(f.openManuals)
 }
 
-func (f *fakeNative) OpenPRAgent(ctx context.Context, p config.Project, id, branch, prompt string) (session.Session, error) {
+func (f *fakeNative) OpenPRAgent(ctx context.Context, p config.Project, id, branch, prompt, agentOverride string) (session.Session, error) {
 	f.mu.Lock()
 	f.prAgents = append(f.prAgents, nativeAgentCall{p.Name, id, branch, "", prompt})
 	err := f.prAgentErr
@@ -160,7 +165,7 @@ func (f *fakeNative) OpenPRAgent(ctx context.Context, p config.Project, id, bran
 	return session.Session{ID: id, Source: "native", Kind: session.KindPR, Project: p.Name, Branch: branch, Repo: p.Repo, TmuxName: id, Status: "working", Agent: "claude"}, nil
 }
 
-func (f *fakeNative) OpenManualAgent(ctx context.Context, p config.Project, id, branch, base, prompt string) (session.Session, error) {
+func (f *fakeNative) OpenManualAgent(ctx context.Context, p config.Project, id, branch, base, prompt, agentOverride string) (session.Session, error) {
 	f.mu.Lock()
 	f.manualAgents = append(f.manualAgents, nativeAgentCall{p.Name, id, branch, base, prompt})
 	err := f.manualAgentErr
@@ -227,6 +232,24 @@ func (f *fakeNative) reviveCalls() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return slices.Clone(f.revives)
+}
+
+func (f *fakeNative) SwitchAgent(ctx context.Context, s session.Session, kind agent.Kind, reason, paneTail string) (session.Session, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.switches = append(f.switches, nativeSwitchCall{s.ID, kind.String(), reason})
+	if f.switchErr != nil {
+		return session.Session{}, f.switchErr
+	}
+	s.Agent = kind.String()
+	s.Status = "working"
+	return s, nil
+}
+
+func (f *fakeNative) switchCalls() []nativeSwitchCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.switches)
 }
 
 func (f *fakeNative) spawnCalls() []nativeSpawnCall {
@@ -298,7 +321,7 @@ func TestTickNativePollSpawnsViaNativeRuntime(t *testing.T) {
 	if m := findMatch(t, res, "FE-7"); m.Action != "spawned" {
 		t.Fatalf("match = %+v, want spawned", m)
 	}
-	if got := nat.spawnCalls(); len(got) != 1 || got[0] != (nativeSpawnCall{"p1", "FE-7"}) {
+	if got := nat.spawnCalls(); len(got) != 1 || got[0] != (nativeSpawnCall{"p1", "FE-7", ""}) {
 		t.Errorf("native spawns = %+v, want [{p1 FE-7}]", got)
 	}
 

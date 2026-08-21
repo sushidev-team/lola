@@ -16,7 +16,7 @@ export {
     UpdateService
 };
 
-export type {
+export {
     CLIInfoDTO,
     CLIInstallDTO,
     DoctorReportDTO,

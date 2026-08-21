@@ -330,7 +330,8 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// open: a mid-interaction refresh could reorder/prune rows under the
 		// cursor (the kill target is pinned by ID regardless, but the frozen view
 		// keeps the prompt and the highlighted row in agreement).
-		if !m.sessions.confirmKill && !m.sessions.confirmFreePort && !m.sessions.answering && !m.sessions.filtering {
+		if !m.sessions.confirmKill && !m.sessions.confirmFreePort && !m.sessions.answering && !m.sessions.filtering &&
+			!m.sessions.switching {
 			cmds = append(cmds, fetchSessionsCmd)
 			if c := m.paneRefreshCmd(); c != nil {
 				cmds = append(cmds, c)
@@ -367,6 +368,11 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case reviveDoneMsg:
 		// Flash the outcome (green on a successful relaunch) and refresh so the
 		// revived session re-renders as working.
+		m.sessions.flash, m.sessions.flashGood = v.msg, v.good
+		return m, fetchSessionsCmd
+	case switchDoneMsg:
+		// Flash the agent-switch outcome (green when the new kind launched) and
+		// refresh so the session re-renders with its new agent.
 		m.sessions.flash, m.sessions.flashGood = v.msg, v.good
 		return m, fetchSessionsCmd
 	case devDoneMsg:
@@ -558,9 +564,10 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// Cockpit key routing. Global keys (focus cycle, doctor) fire unless a modal
 	// gate currently owns keystrokes — a poll delete / session kill confirmation,
-	// the answer card, or the filter bar (whose keys may be "tab"/"d"/digits).
+	// the answer card, the agent-switch chooser, or the filter bar (whose keys
+	// may be "tab"/"d"/digits).
 	gated := m.list.confirmDelete || m.sessions.confirmKill || m.sessions.confirmFreePort ||
-		m.sessions.answering || m.sessions.filtering || m.sessions.opening
+		m.sessions.answering || m.sessions.filtering || m.sessions.opening || m.sessions.switching
 	if k, ok := msg.(tea.KeyPressMsg); ok && !gated {
 		switch k.String() {
 		case "esc":
