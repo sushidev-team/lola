@@ -937,3 +937,101 @@ func TestScrollPaneAgainstRealTmux(t *testing.T) {
 		t.Error("LeaveCopyMode must return the pane to the live view")
 	}
 }
+
+// TestKillSessionTreeToleratesRacedTeardown pins the race the switch-agent
+// path hit live: the process-group kill BLOCKS through its grace window, a
+// promptly-exiting pane takes its tmux session down during that window, and
+// the trailing kill-session then fails with "can't find session" — even
+// though the teardown fully succeeded. KillSessionTree must treat a failed
+// kill-session on a session that no longer exists as success; only an error
+// while the session still exists is real.
+func TestKillSessionTreeToleratesRacedTeardown(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "tmux")
+	// A stateful fake: the session exists until the first kill-session, after
+	// which it is gone (the pane died under the group kill). has-session and
+	// display-message answer from that state.
+	script := `#!/bin/sh
+case "$3" in
+  has-session)
+    [ -f "` + dir + `/alive" ] && exit 0
+    echo "can't find session: $5" >&2
+    exit 1
+    ;;
+  display-message)
+    # No pane pid: the pane is already gone, so KillSessionTree skips the
+    # group kill and goes straight to the session teardown.
+    echo "0"
+    exit 0
+    ;;
+  kill-session)
+    if [ -f "` + dir + `/alive" ]; then
+      rm "` + dir + `/alive"
+      exit 0
+    fi
+    echo "can't find session: $5" >&2
+    exit 1
+    ;;
+esac
+exit 0`
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "alive"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	c := &Client{Bin: bin}
+	ctx := context.Background()
+
+	// Sanity: the session starts alive.
+	if !c.Has(ctx, "lola-nori-app-nor-382") {
+		t.Fatal("precondition: session must exist before the kill")
+	}
+	// First kill tears the session down normally.
+	if err := c.KillSessionTree(ctx, "lola-nori-app-nor-382"); err != nil {
+		t.Fatalf("first KillSessionTree: %v", err)
+	}
+	if c.Has(ctx, "lola-nori-app-nor-382") {
+		t.Fatal("session must be gone after the kill")
+	}
+
+	// The race: kill-session fails because the session is ALREADY gone —
+	// exactly the live failure ("stop claude: tmux kill-session: exit status
+	// 1: can't find session"). This must NOT be an error.
+	if err := c.KillSessionTree(ctx, "lola-nori-app-nor-382"); err != nil {
+		t.Fatalf("KillSessionTree must tolerate a raced teardown, got: %v", err)
+	}
+}
+
+// TestKillSessionTreeRealFailureKeepsError pins the other half: a kill-session
+// error while the session STILL exists is a real failure and must surface.
+func TestKillSessionTreeRealFailureKeepsError(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "tmux")
+	// has-session says the session exists; kill-session fails for another
+	// reason (e.g. a permission error), so the error is real and must return.
+	script := `#!/bin/sh
+case "$3" in
+  has-session)
+    exit 0
+    ;;
+  display-message)
+    echo "0"
+    exit 0
+    ;;
+  kill-session)
+    echo "permission denied" >&2
+    exit 1
+    ;;
+esac
+exit 0`
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	c := &Client{Bin: bin}
+	if err := c.KillSessionTree(context.Background(), "lola-nori-app-nor-382"); err == nil {
+		t.Fatal("a kill-session failure on a live session must be an error")
+	}
+}

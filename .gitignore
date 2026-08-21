@@ -53,5 +53,5 @@ desktop/frontend/dist/*
 desktop/bin/
 desktop/build/bin/
 
-.omo/*
-!/.omo/rules/
+# oh-my-opencode orchestration state (plans, run-continuation) — never repo content
+.omo/

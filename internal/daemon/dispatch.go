@@ -438,7 +438,7 @@ func (d *Daemon) tick(ctx context.Context, name string, dryRun bool) (protocol.P
 		// never abort them.
 		spawnTarget := "project " + project.Name
 		cctx, cancel := context.WithTimeout(ctx, nativeSpawnTimeout)
-		sess, spawnErr := nat.Spawn(cctx, project, is)
+		sess, spawnErr := nat.Spawn(cctx, project, is, "")
 		cancel()
 		if spawnErr == nil {
 			if pollRepo != "" {

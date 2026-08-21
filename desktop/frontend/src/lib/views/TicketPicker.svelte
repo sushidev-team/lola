@@ -4,6 +4,7 @@
   import { nav } from "$lib/nav.svelte";
   import type { TicketsData, TicketRow } from "@bindings/internal/protocol";
   import Button from "$lib/components/Button.svelte";
+  import Select from "$lib/components/Select.svelte";
 
   type Scope = "mine" | "team";
   const scopes: { id: Scope; label: string }[] = [
@@ -16,8 +17,11 @@
   let error = $state("");
   let starting = $state("");
   let filter = $state("");
+  let selectedAgent = $state("");
   let data = $state<TicketsData | null>(null);
 
+  const project = $derived(store.projectByName(nav.project));
+  const projectAgent = $derived(project?.agent || "claude");
   const issues = $derived(data?.issues ?? []);
 
   // The heading is the PROJECT — that is what the human navigated into and what
@@ -84,6 +88,7 @@
       uuid: t.uuid,
       branch: t.branch,
       title: t.title,
+      agentKind: selectedAgent || undefined,
     });
     starting = "";
     if (r) nav.goCockpit(nav.project);
@@ -156,6 +161,13 @@
       aria-label="Filter issues"
       bind:value={filter}
     />
+
+    <Select class="w-52 text-sm" bind:value={selectedAgent} aria-label="Coding agent">
+      <option value="">Project default ({projectAgent})</option>
+      <option value="claude">claude</option>
+      <option value="codex">codex</option>
+      <option value="opencode">opencode</option>
+    </Select>
 
     <!-- The scope switcher IS the scope label — the old "scope mine" caption
          under it restated the pressed button. -->

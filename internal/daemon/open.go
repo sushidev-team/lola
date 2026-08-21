@@ -99,6 +99,12 @@ func (d *Daemon) handleOpenManual(ctx context.Context, a protocol.OpenManualArgs
 	health := d.runtimeHealth
 	home := d.home
 	agentBin := agent.Parse(d.cfg.AgentForProject(project)).Binary()
+	if agent.Valid(strings.TrimSpace(a.AgentKind)) {
+		// A per-spawn override picks a different coding agent for this one
+		// session; the health gate must confirm THAT binary, not the
+		// configured default's.
+		agentBin = agent.Parse(strings.TrimSpace(a.AgentKind)).Binary()
+	}
 	d.mu.Unlock()
 	if p == nil {
 		return protocol.OpenData{}, fmt.Errorf("unknown project %q", project)
@@ -124,7 +130,7 @@ func (d *Daemon) handleOpenManual(ctx context.Context, a protocol.OpenManualArgs
 	var sess session.Session
 	var err error
 	if a.Agent {
-		sess, err = nat.OpenManualAgent(cctx, *p, id, branch, base, a.Prompt)
+		sess, err = nat.OpenManualAgent(cctx, *p, id, branch, base, a.Prompt, strings.TrimSpace(a.AgentKind))
 	} else {
 		sess, err = nat.OpenManual(cctx, *p, id, branch, base)
 	}
@@ -189,7 +195,7 @@ func (d *Daemon) handleOpenPr(ctx context.Context, a protocol.OpenPrArgs) (proto
 	prompt := fmt.Sprintf("You are on the branch %q of an existing pull request in %s. Review the current state, address any outstanding review feedback or CI failures, and push your changes back to this branch.", branch, p.Repo)
 
 	cctx, cancel := context.WithTimeout(ctx, nativeSpawnTimeout)
-	sess, err := nat.OpenPRAgent(cctx, *p, id, branch, prompt)
+	sess, err := nat.OpenPRAgent(cctx, *p, id, branch, prompt, "")
 	cancel()
 	if err != nil {
 		return protocol.OpenData{}, err

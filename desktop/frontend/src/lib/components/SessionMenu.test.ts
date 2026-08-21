@@ -1,12 +1,57 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, screen, cleanup, fireEvent } from "@testing-library/svelte";
 import SessionMenu from "./SessionMenu.svelte";
 import SessionsTable from "./SessionsTable.svelte";
+import SessionEmbed from "./SessionEmbed.svelte";
 import { store, type SessionInfo } from "$lib/store.svelte";
 import type { ProjectInfo } from "@bindings/internal/protocol";
 import { nav } from "$lib/nav.svelte";
 import { sessionMenu } from "$lib/sessionmenu.svelte";
 import { confirm } from "$lib/confirm.svelte";
+
+vi.mock("@xterm/xterm", () => ({
+  Terminal: class {
+    public options = {};
+    public loadAddon = vi.fn();
+    public open = vi.fn();
+    public onData = vi.fn();
+    public onResize = vi.fn();
+    public focus = vi.fn();
+    public attachCustomKeyEventHandler = vi.fn();
+    public attachCustomWheelEventHandler = vi.fn();
+    public refresh = vi.fn();
+    public write = vi.fn();
+    public writeln = vi.fn();
+    public dispose = vi.fn();
+  },
+}));
+vi.mock("@xterm/addon-fit", () => ({
+  FitAddon: class {
+    public fit = vi.fn();
+    public activate = vi.fn();
+    public dispose = vi.fn();
+  },
+}));
+vi.mock("@xterm/addon-webgl", () => ({
+  WebglAddon: class {
+    public onContextLoss = vi.fn();
+    public clearTextureAtlas = vi.fn();
+    public dispose = vi.fn();
+  },
+}));
+vi.mock("@xterm/addon-web-links", () => ({
+  WebLinksAddon: class {
+    public activate = vi.fn();
+    public dispose = vi.fn();
+  },
+}));
+
+class StubResizeObserver {
+  public observe(): void {}
+  public unobserve(): void {}
+  public disconnect(): void {}
+}
+globalThis.ResizeObserver ??= StubResizeObserver as unknown as typeof ResizeObserver;
 
 function fakeSession(over: Partial<SessionInfo> = {}): SessionInfo {
   return {
@@ -118,6 +163,41 @@ describe("SessionMenu", () => {
     expect(confirm.request?.title).toBe("Kill session?");
   });
 
+  it("offers switch agent options for the other kinds and confirms before switching", async () => {
+    store.sessions = [fakeSession({ agent: "claude" })];
+    sessionMenu.request = { id: "acme-eng-1", x: 10, y: 10 };
+    render(SessionMenu);
+
+    expect(screen.getByRole("menuitem", { name: "Switch to codex" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Switch to opencode" })).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "Switch to claude" })).not.toBeInTheDocument();
+
+    await fireEvent.click(screen.getByRole("menuitem", { name: "Switch to codex" }));
+    expect(sessionMenu.request).toBeNull();
+    expect(confirm.request?.title).toBe("Switch agent?");
+    expect(confirm.request?.body).toBe("Switch ENG-1 from claude to codex?");
+    expect(confirm.request?.detail).toBe("The pane is replaced on the same worktree.");
+    expect(confirm.request?.confirmLabel).toBe("Switch");
+  });
+
+  it("updates switch agent options when session runs codex", () => {
+    store.sessions = [fakeSession({ agent: "codex" })];
+    sessionMenu.request = { id: "acme-eng-1", x: 10, y: 10 };
+    render(SessionMenu);
+
+    expect(screen.getByRole("menuitem", { name: "Switch to claude" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Switch to opencode" })).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "Switch to codex" })).not.toBeInTheDocument();
+  });
+
+  it("omits switch agent options for shell sessions", () => {
+    store.sessions = [fakeSession({ status: "shell" })];
+    sessionMenu.request = { id: "acme-eng-1", x: 10, y: 10 };
+    render(SessionMenu);
+
+    expect(screen.queryByRole("menuitem", { name: /switch to/i })).not.toBeInTheDocument();
+  });
+
   it("dismisses on a backdrop click", async () => {
     sessionMenu.request = { id: "acme-eng-1", x: 10, y: 10 };
     render(SessionMenu);
@@ -150,5 +230,37 @@ describe("session surfaces open the menu", () => {
     await fireEvent.contextMenu(row, { clientX: 42, clientY: 24 });
     expect(nav.selectedId).toBe("acme-eng-1");
     expect(sessionMenu.request).toEqual({ id: "acme-eng-1", x: 42, y: 24 });
+  });
+});
+
+describe("SessionEmbed header", () => {
+  beforeEach(() => {
+    cleanup();
+    store.sessions = [];
+    store.projects = [];
+    store.connected = true;
+    store.alive = true;
+    nav.scoped = false;
+    nav.project = "";
+    nav.selectedId = "";
+  });
+
+  it("renders the agent kind chip for a session with agent: 'codex'", () => {
+    store.sessions = [fakeSession({ id: "acme-eng-1", agent: "codex" })];
+    render(SessionEmbed, { props: { sessionId: "acme-eng-1" } });
+    expect(screen.getByText("codex")).toBeInTheDocument();
+  });
+
+  it("renders claude for an older session with empty agent", () => {
+    store.sessions = [fakeSession({ id: "acme-eng-1", agent: "" })];
+    render(SessionEmbed, { props: { sessionId: "acme-eng-1" } });
+    expect(screen.getByText("claude")).toBeInTheDocument();
+  });
+
+  it("omits the agent kind chip for a shell session", () => {
+    store.sessions = [fakeSession({ id: "acme-eng-1", status: "shell", agent: "codex" })];
+    render(SessionEmbed, { props: { sessionId: "acme-eng-1" } });
+    expect(screen.queryByText("codex")).not.toBeInTheDocument();
+    expect(screen.queryByText("claude")).not.toBeInTheDocument();
   });
 });

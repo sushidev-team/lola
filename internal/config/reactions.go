@@ -55,6 +55,13 @@ type ReactionsConfig struct {
 	MergeConflict    Reaction `toml:"merge_conflict"`
 	ApprovedAndGreen Reaction `toml:"approved_and_green"`
 	Merged           Reaction `toml:"merged"`
+	// AgentFallback governs what happens when the pane classifier sees a
+	// session's agent hit its usage limit (InputReason quota_limited): Auto
+	// true switches the session to the next kind in the resolved
+	// agent_fallback chain; Auto false (the default) only notifies. Retries
+	// and Message are unused — a fallback replaces the pane, it never types
+	// into the quota-dead agent.
+	AgentFallback Reaction `toml:"agent_fallback"`
 }
 
 // NotifyConfig is the [notify] table. It holds the environment-variable NAME
@@ -94,6 +101,8 @@ func defaultRouting() map[string][]string {
 // defaultReactions is the [reactions] default set (PLAN P3): CI failures,
 // review changes, and merge conflicts auto-react by messaging the agent;
 // approved+green never auto-merges (notify-and-park only); merged auto-cleans.
+// agent_fallback defaults to notify-only: an automatic agent switch is a
+// destructive-feeling act (the live pane is replaced), so it is opt-in.
 func defaultReactions() ReactionsConfig {
 	return ReactionsConfig{
 		CIFailed:         Reaction{Auto: true, Retries: DefaultCIRetries, Message: DefaultCIFailedMessage},
@@ -101,6 +110,7 @@ func defaultReactions() ReactionsConfig {
 		MergeConflict:    Reaction{Auto: true, Message: DefaultMergeConflictMessage},
 		ApprovedAndGreen: Reaction{Auto: false, Message: ""},
 		Merged:           Reaction{Auto: true},
+		AgentFallback:    Reaction{Auto: false},
 	}
 }
 
@@ -156,6 +166,7 @@ type fileReactionsConfig struct {
 	MergeConflict    fileReaction `toml:"merge_conflict"`
 	ApprovedAndGreen fileReaction `toml:"approved_and_green"`
 	Merged           fileReaction `toml:"merged"`
+	AgentFallback    fileReaction `toml:"agent_fallback"`
 }
 
 type fileNotifyConfig struct {
@@ -191,6 +202,7 @@ func resolveReactions(frc *fileReactionsConfig) ReactionsConfig {
 	d.MergeConflict = frc.MergeConflict.resolve(d.MergeConflict)
 	d.ApprovedAndGreen = frc.ApprovedAndGreen.resolve(d.ApprovedAndGreen)
 	d.Merged = frc.Merged.resolve(d.Merged)
+	d.AgentFallback = frc.AgentFallback.resolve(d.AgentFallback)
 	return d
 }
 
@@ -233,6 +245,7 @@ func reactionsFile(rc ReactionsConfig) *fileReactionsConfig {
 		MergeConflict:    reactionFile(rc.MergeConflict),
 		ApprovedAndGreen: reactionFile(rc.ApprovedAndGreen),
 		Merged:           reactionFile(rc.Merged),
+		AgentFallback:    reactionFile(rc.AgentFallback),
 	}
 }
 

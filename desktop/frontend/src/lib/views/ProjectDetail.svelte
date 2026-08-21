@@ -4,6 +4,7 @@
   import StatusPill from "$lib/components/StatusPill.svelte";
   import LivePulse from "$lib/components/LivePulse.svelte";
   import Button from "$lib/components/Button.svelte";
+  import Select from "$lib/components/Select.svelte";
 
   const project = $derived<ProjectInfo | undefined>(store.projectByName(nav.project));
   const sessions = $derived(store.sessionsForProject(nav.project));
@@ -14,6 +15,7 @@
   let worktreeOpen = $state(false);
   let branch = $state("");
   let useAgent = $state(true);
+  let selectedAgent = $state("");
 
   // No local back()/breadcrumb any more — MainTopBar owns both for every view.
 
@@ -23,10 +25,16 @@
     // openManual resolves to undefined on failure (store.act swallows the error
     // into a flash). Only tear the form down and navigate on success — a failed
     // spawn must keep the prompt and the typed branch so it can be retried.
-    const r = await store.openManual({ project: nav.project, branch: b, agent: useAgent });
+    const r = await store.openManual({
+      project: nav.project,
+      branch: b,
+      agent: useAgent,
+      agentKind: useAgent && selectedAgent ? selectedAgent : undefined,
+    });
     if (r === undefined) return;
     worktreeOpen = false;
     branch = "";
+    selectedAgent = "";
     nav.goCockpit(nav.project);
   }
 
@@ -177,6 +185,14 @@
                   <Button size="xs" selected={useAgent} onclick={() => (useAgent = true)}>Agent</Button>
                   <Button size="xs" selected={!useAgent} onclick={() => (useAgent = false)}>Shell</Button>
                 </span>
+                {#if useAgent}
+                  <Select class="w-48 text-sm" bind:value={selectedAgent} aria-label="Coding agent">
+                    <option value="">Project default ({project?.agent || "claude"})</option>
+                    <option value="claude">claude</option>
+                    <option value="codex">codex</option>
+                    <option value="opencode">opencode</option>
+                  </Select>
+                {/if}
                 <Button variant="primary" size="md" disabled={!branch.trim()} onclick={startWorktree}>
                   Start <span aria-hidden="true">›</span>
                 </Button>

@@ -71,6 +71,12 @@ const (
 	// composer, so it must never be admitted by a send-keys gate — typed prose is
 	// swallowed by the widget and the submit Enter answers the dialog.
 	InputDialog InputReason = "dialog"
+	// InputQuotaLimited means the agent's pane shows its own usage-limit banner
+	// (attention.ActivityQuotaLimited): the turn is over and the agent cannot
+	// take another until the quota resets. The remedy is a hand-off to a
+	// fallback agent (internal/daemon/fallback.go), not an answer — so like
+	// InputDialog it must never be admitted by a send-keys gate.
+	InputQuotaLimited InputReason = "quota_limited"
 )
 
 // ActivitySource records which signal last stamped LastActivityAt, so a

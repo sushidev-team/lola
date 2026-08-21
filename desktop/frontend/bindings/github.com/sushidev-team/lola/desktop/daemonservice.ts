@@ -259,6 +259,14 @@ export function StopDaemon(): $CancellablePromise<void> {
 }
 
 /**
+ * SwitchAgent replaces a session's coding agent with a different kind on the
+ * same worktree and branch (the manual half of the agent fallback).
+ */
+export function SwitchAgent(a: protocol$0.SwitchAgentArgs): $CancellablePromise<protocol$0.SwitchAgentData> {
+    return $Call.ByID(2945493222, a);
+}
+
+/**
  * Tickets browses a project's Linear issues. scope is "mine" (default) or "team".
  */
 export function Tickets(project: string, scope: string): $CancellablePromise<protocol$0.TicketsData> {

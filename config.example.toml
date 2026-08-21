@@ -64,6 +64,11 @@ global_cap = 4
 # branch_prefix = "lola/"
 # symlinks = [".env"]
 # post_create = ["composer install", "bun install --frozen-lockfile"]
+# Fallback chain consulted when a session's agent hits its usage limit (lola
+# detects the banner in the pane): the next listed kind the session has not
+# already run takes over on the SAME worktree and branch — see
+# [reactions.agent_fallback] below. Valid kinds: claude | codex | opencode.
+# agent_fallback = ["codex", "opencode"]
 # match_labels = ["label_UUID_of_your_trigger_label"]
 # match_mode = "any"                 # any | all
 # dedup_mode = "label"               # label | seen | state
@@ -124,6 +129,12 @@ endpoint = "https://api.linear.app/graphql"
 #
 # [reactions.merged]              # merged → auto cleanup (remove worktree + branch, free the slot)
 # auto = true
+#
+# [reactions.agent_fallback]      # agent's usage limit hit (pane banner) → hand the
+#                                 # session to the next kind in [defaults].agent_fallback /
+#                                 # [[project]].agent_fallback, on the SAME worktree.
+# auto = false                    # false = notify only (suggest the switch);
+#                                 # true  = switch automatically.
 
 # ---------------------------------------------------------------------------
 # [notify] — best-effort desktop + Slack notifications, routed by priority
@@ -464,6 +475,10 @@ symlinks = [".env"]
 # (which itself defaults to claude). See [defaults].agent above for how each
 # agent's lifecycle callbacks are wired and where provider auth comes from.
 # agent = "claude"
+# Fallback agent chain for THIS repo when a session's agent hits its usage
+# limit. Omit to inherit [defaults].agent_fallback; set to [] to disable the
+# fallback for this project.
+# agent_fallback = ["codex"]
 #
 # --- Linear polling (OPTIONAL) ---------------------------------------------
 # Configure this project to auto-spawn agents from Linear. Omit team_id and the

@@ -52,6 +52,7 @@ vi.mock("$lib/store.svelte", () => ({
     openTicket: openTicketMock,
     setFlash: setFlashMock,
     displayNameFor: (name: string) => (name === "demo" ? "Demo Project" : name),
+    projectByName: (name: string) => ({ name, agent: "codex" }),
   },
 }));
 
@@ -160,5 +161,24 @@ describe("TicketPicker", () => {
     await fireEvent.click(screen.getByText("Invoices: No extra card"));
     expect(openTicketMock).not.toHaveBeenCalled();
     expect(setFlashMock).toHaveBeenCalled();
+  });
+
+  it("offers agent selection defaulting to the project agent and carries agentKind", async () => {
+    render(TicketPicker);
+    const agentSelect = await screen.findByLabelText("Coding agent");
+    expect(agentSelect).toBeInTheDocument();
+    expect(screen.getByText("Project default (codex)")).toBeInTheDocument();
+
+    await fireEvent.change(agentSelect, { target: { value: "opencode" } });
+    await fireEvent.click(screen.getByText("Timezone issues"));
+
+    expect(openTicketMock).toHaveBeenCalledWith({
+      project: "demo",
+      identifier: "NOR-372",
+      uuid: "u372",
+      branch: "lola/nor-372",
+      title: "Timezone issues",
+      agentKind: "opencode",
+    });
   });
 });

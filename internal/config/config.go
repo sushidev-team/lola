@@ -84,6 +84,7 @@ type ProjectInherits struct {
 	DedupMode      bool
 	PrioritySort   bool
 	Review         bool
+	AgentFallback  bool
 }
 
 // Project is one [[project]] table: a local repository the native runtime can
@@ -118,10 +119,18 @@ type Project struct {
 	// Agent is the coding-agent kind this project's sessions spawn:
 	// claude|codex|opencode. Empty inherits [defaults].agent (see
 	// AgentForProject); the whole chain defaults to "claude".
-	Agent      string            `toml:"agent,omitempty"`
-	PostCreate []string          `toml:"post_create,omitempty"`
-	Symlinks   []string          `toml:"symlinks,omitempty"`
-	Env        map[string]string `toml:"env,omitempty"`
+	Agent string `toml:"agent,omitempty"`
+	// AgentFallback is the ordered chain of coding-agent kinds a session may be
+	// handed to when its running agent hits its usage limit (claude|codex|
+	// opencode). Nil inherits [defaults].agent_fallback; a present-but-empty
+	// value ("override to nothing") disables fallback for this project. The
+	// resolved value lives here; Inherits.AgentFallback records whether it was
+	// inherited. The running agent's own kind and any already-tried kinds are
+	// skipped at switch time (see daemon/fallback.go).
+	AgentFallback []string          `toml:"agent_fallback,omitempty"`
+	PostCreate    []string          `toml:"post_create,omitempty"`
+	Symlinks      []string          `toml:"symlinks,omitempty"`
+	Env           map[string]string `toml:"env,omitempty"`
 	// DevCommands are the project's long-running dev processes (`composer dev`,
 	// `npm run dev`) that the ACTIVE session runs — one tmux tab each, rooted in
 	// that session's worktree. Only one session per project may hold them at a
@@ -199,6 +208,11 @@ type Defaults struct {
 	// for sessions whose project sets no override. Empty resolves to "claude"
 	// at read time (AgentForProject) — it is never force-written to disk.
 	Agent string `toml:"agent"`
+	// AgentFallback is the global ordered fallback chain of coding-agent kinds
+	// a session may be handed to when its agent hits its usage limit. Empty
+	// means no fallback. Per-project override: [[project]].agent_fallback
+	// (see FallbackChainFor).
+	AgentFallback []string `toml:"agent_fallback"`
 	// ManageDaemon toggles whether the TUI owns the daemon lifecycle: silent
 	// auto-start when the socket is dead on open, plus restart/stop from the
 	// keybar. A pointer so an unset value defaults to true (self-managed). Set
@@ -384,6 +398,7 @@ type fileProject struct {
 	DefaultBranch string             `toml:"default_branch"`
 	BranchPrefix  string             `toml:"branch_prefix,omitempty"`
 	Agent         string             `toml:"agent,omitempty"`
+	AgentFallback *[]string          `toml:"agent_fallback,omitempty"`
 	PostCreate    *[]string          `toml:"post_create,omitempty"`
 	Symlinks      *[]string          `toml:"symlinks,omitempty"`
 	Env           *map[string]string `toml:"env,omitempty"`
@@ -533,6 +548,7 @@ func projectFromFile(fp fileProject) Project {
 	onSentSetLabel, hasOnSentSetLabel := deref(fp.OnSentSetLabel)
 	blockedLabelID, hasBlockedLabelID := deref(fp.BlockedLabelID)
 	review, hasReview := deref(fp.Review)
+	agentFallback, hasAgentFallback := deref(fp.AgentFallback)
 
 	return Project{
 		Name:           fp.Name,
@@ -543,6 +559,7 @@ func projectFromFile(fp fileProject) Project {
 		DefaultBranch:  fp.DefaultBranch,
 		BranchPrefix:   fp.BranchPrefix,
 		Agent:          fp.Agent,
+		AgentFallback:  agentFallback,
 		PostCreate:     postCreate,
 		Symlinks:       symlinks,
 		Env:            env,
@@ -574,6 +591,7 @@ func projectFromFile(fp fileProject) Project {
 			DedupMode:      !hasDedupMode,
 			PrioritySort:   !hasPrioritySort,
 			Review:         !hasReview,
+			AgentFallback:  !hasAgentFallback,
 		},
 
 		OnSpawnStateID:   fp.OnSpawnStateID,
@@ -604,6 +622,7 @@ func projectToFile(p Project) fileProject {
 		DefaultBranch:  p.DefaultBranch,
 		BranchPrefix:   p.BranchPrefix,
 		Agent:          p.Agent,
+		AgentFallback:  ptr(p.AgentFallback, set(o.AgentFallback)),
 		PostCreate:     ptr(p.PostCreate, set(o.PostCreate)),
 		Symlinks:       ptr(p.Symlinks, set(o.Symlinks)),
 		Env:            ptr(p.Env, set(o.Env)),
@@ -641,6 +660,7 @@ type fileDefaults struct {
 	ConcurrencyCap int      `toml:"concurrency_cap"`
 	GlobalCap      int      `toml:"global_cap"`
 	Agent          string   `toml:"agent"`
+	AgentFallback  []string `toml:"agent_fallback,omitempty"`
 	ManageDaemon   *bool    `toml:"manage_daemon"`
 
 	// Project defaults. Plain values, not pointers: an absent key is a zero
@@ -707,6 +727,7 @@ func (fc *fileConfig) config() *Config {
 			ConcurrencyCap: fc.Defaults.ConcurrencyCap,
 			GlobalCap:      fc.Defaults.GlobalCap,
 			Agent:          fc.Defaults.Agent,
+			AgentFallback:  fc.Defaults.AgentFallback,
 			ManageDaemon:   fc.Defaults.ManageDaemon,
 			BranchPrefix:   fc.Defaults.BranchPrefix,
 			PostCreate:     fc.Defaults.PostCreate,
@@ -759,6 +780,7 @@ func (c *Config) file() *fileConfig {
 			ConcurrencyCap: c.Defaults.ConcurrencyCap,
 			GlobalCap:      c.Defaults.GlobalCap,
 			Agent:          c.Defaults.Agent,
+			AgentFallback:  c.Defaults.AgentFallback,
 			ManageDaemon:   c.Defaults.ManageDaemon,
 			BranchPrefix:   c.Defaults.BranchPrefix,
 			PostCreate:     c.Defaults.PostCreate,
@@ -940,6 +962,7 @@ func (c *Config) ResolveInheritance() {
 		in.MatchLabels = in.MatchLabels || p.MatchLabels == nil
 		in.PrioritySort = in.PrioritySort || p.PrioritySort == nil
 		in.Review = in.Review || p.Review == nil
+		in.AgentFallback = in.AgentFallback || p.AgentFallback == nil
 		p.Inherits = in
 
 		// The rest resolve on the Inherits bit alone: an empty value there is a
@@ -974,6 +997,9 @@ func (c *Config) ResolveInheritance() {
 		}
 		if in.Review {
 			p.Review = slices.Clone(d.Review)
+		}
+		if in.AgentFallback {
+			p.AgentFallback = slices.Clone(d.AgentFallback)
 		}
 		if in.PrioritySort {
 			if len(d.PrioritySort) > 0 {

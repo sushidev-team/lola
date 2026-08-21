@@ -181,6 +181,12 @@ export interface OpenManualArgs {
      * seed prompt when Agent is set
      */
     "prompt"?: string;
+
+    /**
+     * AgentKind optionally overrides WHICH coding agent runs (claude|codex|
+     * opencode) instead of the project's configured default. "" = configured.
+     */
+    "agentKind"?: string;
 }
 
 /**
@@ -207,6 +213,12 @@ export interface OpenTicketArgs {
     "uuid": string;
     "branch"?: string;
     "title"?: string;
+
+    /**
+     * AgentKind optionally overrides WHICH coding agent runs (claude|codex|
+     * opencode) instead of the project's configured default. "" = configured.
+     */
+    "agentKind"?: string;
 }
 
 /**
@@ -471,6 +483,11 @@ export interface SessionInfo {
     "branch": string;
 
     /**
+     * coding-agent kind driving the pane: claude|codex|opencode ("" = legacy claude)
+     */
+    "agent": string;
+
+    /**
      * the rolled-up status (state.Rollup vocabulary)
      */
     "status": string;
@@ -671,6 +688,29 @@ export interface StatusData {
     "runtimeErr"?: string;
     "linearOk": boolean;
     "polls": PollStatus[] | null;
+}
+
+/**
+ * SwitchAgentArgs is the argument payload for cmd=switchAgent: replace the
+ * session's coding agent with a DIFFERENT kind on the same worktree and branch
+ * (SUSHI-585). Session names the target, Agent the new kind (claude|codex|
+ * opencode). The old pane is stopped, a .lola/handoff.md briefing is written,
+ * and the new agent launches fresh on the kept checkout. Refused for an
+ * unknown session, an agentless shell, an invalid kind, the kind already
+ * running, or a kind whose binary is not on PATH.
+ */
+export interface SwitchAgentArgs {
+    "session": string;
+    "agent": string;
+}
+
+/**
+ * SwitchAgentData is Response.Data for cmd=switchAgent. Agent is the kind now
+ * running; Message is the short human-readable outcome.
+ */
+export interface SwitchAgentData {
+    "agent": string;
+    "message"?: string;
 }
 
 /**

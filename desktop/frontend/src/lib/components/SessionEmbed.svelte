@@ -225,6 +225,11 @@
            the width that made the header wrap. -->
       <span class="selectable font-medium text-accent-ink">{session.issue || session.id.slice(0, 8)}</span>
       <span class="selectable truncate text-ink">{session.title}</span>
+      {#if session.status !== "shell"}
+        <span class="inline-flex items-center whitespace-nowrap rounded bg-pill-grey px-1.5 py-[1px] text-sm text-pill-grey-fg">
+          {(session.agent || "claude").toLowerCase()}
+        </span>
+      {/if}
       <!-- The dev server's own address, scraped from its pane by the daemon
            (internal/devurl). It is here rather than in the terminal because the
            port MOVES — 8000 taken means 8001 — so the one place it is written is

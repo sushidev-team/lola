@@ -35,6 +35,8 @@ func keyMsg(s string) tea.KeyPressMsg {
 	switch s {
 	case "tab":
 		return tea.KeyPressMsg{Code: tea.KeyTab}
+	case "shift+tab":
+		return tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift}
 	case "enter":
 		return tea.KeyPressMsg{Code: tea.KeyEnter}
 	case "esc":
@@ -452,6 +454,119 @@ func TestPreviewLineTruncatesAndResets(t *testing.T) {
 	// Narrow lines pass through untruncated.
 	if got := previewLine("ok", 20); got != "ok\x1b[0m" {
 		t.Errorf("previewLine(ok, 20) = %q, want ok + reset", got)
+	}
+}
+
+// 'A' opens the agent-switch chooser: the kinds EXCLUDING the session's current
+// one ("" counts as claude), the chooser owns every keypress (arrows move it,
+// not the list), enter sends cmd=switchAgent for the pinned target, and the
+// daemon's reply flashes green.
+func TestSwitchAgentChooser(t *testing.T) {
+	m := newTestRoot(t)
+	m.sessions.data = &protocol.SessionsData{Sessions: []protocol.SessionInfo{{
+		ID: "s1", Project: "web", Issue: "ENG-1", Status: "working", Source: "native",
+		Agent: "codex",
+	}}}
+	m.sessions.cursor = 0
+
+	m.Update(keyMsg("A"))
+	if !m.sessions.switching {
+		t.Fatal("'A' should open the agent chooser")
+	}
+	if k := m.sessions.switchKinds; len(k) != 2 || k[0] != "claude" || k[1] != "opencode" {
+		t.Fatalf("kinds = %v, want [claude opencode] (codex excluded)", k)
+	}
+	if v := m.viewString(); !strings.Contains(v, "switch agent on ENG-1") {
+		t.Errorf("the chooser must name its target:\n%s", v)
+	}
+
+	// The chooser owns the keys: j moves the cursor, not the session list.
+	m.Update(keyMsg("j"))
+	if m.sessions.switchCursor != 1 || m.sessions.cursor != 0 {
+		t.Fatalf("cursor=%d list=%d, want chooser cursor 1 and list untouched", m.sessions.switchCursor, m.sessions.cursor)
+	}
+
+	var got []protocol.Request
+	fakeRequest(t, &got, mustData(t, protocol.SwitchAgentData{Agent: "opencode", Message: "switched to opencode"}), nil)
+	_, cmd := m.Update(keyMsg("enter"))
+	runCmd(t, m, cmd)
+	if m.sessions.switching {
+		t.Error("enter must close the chooser")
+	}
+	found := false
+	for _, r := range got {
+		if r.Cmd != "switchAgent" {
+			continue
+		}
+		var a protocol.SwitchAgentArgs
+		_ = json.Unmarshal(r.Args, &a)
+		if a.Session == "s1" && a.Agent == "opencode" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected cmd=switchAgent s1→opencode, got %+v", got)
+	}
+	if !m.sessions.flashGood || !strings.Contains(m.sessions.flash, "opencode") {
+		t.Errorf("success must flash the daemon's message, got %q", m.sessions.flash)
+	}
+}
+
+// esc cancels the chooser without sending; a legacy "" agent counts as claude
+// (codex + opencode offered); a shell session has no agent to switch.
+func TestSwitchAgentChooserEscLegacyAndShell(t *testing.T) {
+	m := newTestRoot(t)
+	m.sessions.data = &protocol.SessionsData{Sessions: []protocol.SessionInfo{{
+		ID: "s1", Project: "web", Issue: "ENG-1", Status: "working", Source: "native",
+	}}}
+	m.sessions.cursor = 0
+
+	var got []protocol.Request
+	fakeRequest(t, &got, nil, nil)
+	m.Update(keyMsg("A"))
+	if k := m.sessions.switchKinds; len(k) != 2 || k[0] != "codex" || k[1] != "opencode" {
+		t.Fatalf("kinds = %v, want [codex opencode] (legacy claude excluded)", k)
+	}
+	m.Update(keyMsg("esc"))
+	if m.sessions.switching {
+		t.Error("esc must close the chooser")
+	}
+	for _, r := range got {
+		if r.Cmd == "switchAgent" {
+			t.Error("esc must not send a switch")
+		}
+	}
+
+	// A shell session (lola open) never opens the chooser.
+	m.sessions.data.Sessions[0].Status = "shell"
+	m.Update(keyMsg("A"))
+	if m.sessions.switching {
+		t.Error("a shell session must not open the chooser")
+	}
+	if !strings.Contains(m.sessions.flash, "shell") {
+		t.Errorf("expected a shell hint, got %q", m.sessions.flash)
+	}
+}
+
+// A daemon refusal (same kind already running, binary missing, …) is flashed
+// verbatim as a warning, the same way revive refusals surface.
+func TestSwitchAgentRefusalFlashes(t *testing.T) {
+	m := newTestRoot(t)
+	m.sessions.data = &protocol.SessionsData{Sessions: []protocol.SessionInfo{{
+		ID: "s1", Project: "web", Issue: "ENG-1", Status: "working", Source: "native",
+		Agent: "claude",
+	}}}
+	m.sessions.cursor = 0
+
+	m.Update(keyMsg("A"))
+	fakeRequest(t, nil, &protocol.Response{OK: false, Error: "codex: binary not on PATH"}, nil)
+	_, cmd := m.Update(keyMsg("enter"))
+	runCmd(t, m, cmd)
+	if m.sessions.flashGood {
+		t.Error("a refusal must not flash green")
+	}
+	if !strings.Contains(m.sessions.flash, "codex: binary not on PATH") {
+		t.Errorf("the daemon's refusal must surface verbatim, got %q", m.sessions.flash)
 	}
 }
 

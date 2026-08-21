@@ -22,6 +22,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/sushidev-team/lola/internal/agent"
 	"github.com/sushidev-team/lola/internal/brain"
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/linear"
@@ -41,13 +42,15 @@ import (
 
 // NativeAPI is the daemon's seam over the native runtime (runtime.Native) so
 // dispatch, observation, adoption, and kills are testable with fakes. It
-// mirrors runtime.Native's exported lifecycle surface.
+// mirrors runtime.Native's exported lifecycle surface. The agentOverride
+// parameters carry a per-spawn agent-kind choice ("" = resolve from config).
 type NativeAPI interface {
-	Spawn(ctx context.Context, p config.Project, issue linear.Issue) (session.Session, error)
+	Spawn(ctx context.Context, p config.Project, issue linear.Issue, agentOverride string) (session.Session, error)
 	Open(ctx context.Context, p config.Project, sessionID, ref, branch string) (session.Session, error)
 	OpenManual(ctx context.Context, p config.Project, sessionID, branch, base string) (session.Session, error)
-	OpenPRAgent(ctx context.Context, p config.Project, sessionID, branch, prompt string) (session.Session, error)
-	OpenManualAgent(ctx context.Context, p config.Project, sessionID, branch, base, prompt string) (session.Session, error)
+	OpenPRAgent(ctx context.Context, p config.Project, sessionID, branch, prompt, agentOverride string) (session.Session, error)
+	OpenManualAgent(ctx context.Context, p config.Project, sessionID, branch, base, prompt, agentOverride string) (session.Session, error)
+	SwitchAgent(ctx context.Context, s session.Session, kind agent.Kind, reason, paneTail string) (session.Session, error)
 	Adopt(ctx context.Context) ([]session.Session, error)
 	Kill(ctx context.Context, s session.Session, removeWorktree, force bool) error
 	Alive(ctx context.Context, s session.Session) bool

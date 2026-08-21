@@ -4,15 +4,33 @@ import (
 	"encoding/json"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/sushidev-team/lola/internal/agent"
 	"github.com/sushidev-team/lola/internal/protocol"
 )
 
+// nextAgentKind advances the agent-override cycle shared by the ticket picker
+// ('a') and the manual-worktree prompt (shift+tab): "" (project default) →
+// claude → codex → opencode → back to "".
+func nextAgentKind(kind string) string {
+	switch kind {
+	case "":
+		return string(agent.Claude)
+	case string(agent.Claude):
+		return string(agent.Codex)
+	case string(agent.Codex):
+		return string(agent.OpenCode)
+	default:
+		return ""
+	}
+}
+
 // openManualCmd creates a new branch + worktree (cmd=openManual): with useAgent
 // it launches the coding agent (seeded with prompt), else a plain shell. base ""
-// branches off the project's default branch. Reuses openDoneMsg for the outcome.
-func openManualCmd(project, branch, base string, useAgent bool, prompt string) tea.Cmd {
+// branches off the project's default branch. agentKind overrides WHICH agent
+// runs ("" = the project's configured one). Reuses openDoneMsg for the outcome.
+func openManualCmd(project, branch, base string, useAgent bool, prompt string, agentKind string) tea.Cmd {
 	return func() tea.Msg {
-		args, _ := json.Marshal(protocol.OpenManualArgs{Project: project, Branch: branch, Base: base, Agent: useAgent, Prompt: prompt})
+		args, _ := json.Marshal(protocol.OpenManualArgs{Project: project, Branch: branch, Base: base, Agent: useAgent, Prompt: prompt, AgentKind: agentKind})
 		resp, err := requestFn(protocol.Request{Cmd: "openManual", Args: args})
 		if err != nil {
 			return openDoneMsg{msg: err.Error()}
@@ -49,10 +67,11 @@ func openPrCmd(project, branch string, number int, isFork bool) tea.Cmd {
 }
 
 // openTicketCmd starts a Linear issue on demand (cmd=openTicket): a worktree +
-// agent, deduped like a poll dispatch. Reuses openDoneMsg for the outcome.
-func openTicketCmd(project string, is protocol.TicketRow) tea.Cmd {
+// agent, deduped like a poll dispatch. agentKind overrides WHICH agent runs
+// ("" = the project's configured one). Reuses openDoneMsg for the outcome.
+func openTicketCmd(project string, is protocol.TicketRow, agentKind string) tea.Cmd {
 	return func() tea.Msg {
-		args, _ := json.Marshal(protocol.OpenTicketArgs{Project: project, Identifier: is.Identifier, UUID: is.UUID, Branch: is.Branch, Title: is.Title})
+		args, _ := json.Marshal(protocol.OpenTicketArgs{Project: project, Identifier: is.Identifier, UUID: is.UUID, Branch: is.Branch, Title: is.Title, AgentKind: agentKind})
 		resp, err := requestFn(protocol.Request{Cmd: "openTicket", Args: args})
 		if err != nil {
 			return openDoneMsg{msg: err.Error()}

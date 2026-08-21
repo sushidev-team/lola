@@ -238,6 +238,16 @@ func (n *Native) freeSessionSlot(ctx context.Context, p config.Project, baseID, 
 	return "", "", fmt.Errorf("no free session slot after %d attempts — clean up old %s* worktrees and branches", maxSpawnAttempts, baseID)
 }
 
+// resolveKind picks the agent kind for a launch: an explicit per-spawn
+// override when it names a valid kind (the ticket/manual pickers offer the
+// choice), else the project → [defaults] → claude chain.
+func (n *Native) resolveKind(project, override string) agent.Kind {
+	if agent.Valid(override) {
+		return agent.Parse(override)
+	}
+	return agent.Parse(n.Cfg.AgentForProject(project))
+}
+
 // Spawn creates the full native session for issue in project p:
 //
 //	worktree Create → Prepare → write <dir>/.lola/{prompt.md,settings.json}
@@ -252,16 +262,17 @@ func (n *Native) freeSessionSlot(ctx context.Context, p config.Project, baseID, 
 // pieces are rolled back best-effort — the tmux session is killed if it came
 // up, the worktree is removed only when clean (force=false; a dirty worktree
 // is kept for inspection) — and the returned error says what was left behind.
-func (n *Native) Spawn(ctx context.Context, p config.Project, issue linear.Issue) (session.Session, error) {
+func (n *Native) Spawn(ctx context.Context, p config.Project, issue linear.Issue, agentOverride string) (session.Session, error) {
 	if issue.Identifier == "" {
 		return session.Session{}, errors.New("runtime: spawn: issue has no identifier")
 	}
-	// Resolve which coding agent drives this session's pane: the project's
-	// override, else [defaults].agent, else "claude" (AgentForProject). Parse is
-	// total — an unknown/empty value falls back to Claude — so the launch line,
-	// the callback artifact(s), the launch env, and the recorded Session.Agent
-	// are all derived from this one Kind.
-	kind := agent.Parse(n.Cfg.AgentForProject(p.Name))
+	// Resolve which coding agent drives this session's pane: the per-spawn
+	// override (the ticket picker's choice) when it names a valid kind, else
+	// the project's override, else [defaults].agent, else "claude"
+	// (resolveKind). Parse is total — an unknown/empty value falls back to
+	// Claude — so the launch line, the callback artifact(s), the launch env,
+	// and the recorded Session.Agent are all derived from this one Kind.
+	kind := n.resolveKind(p.Name, agentOverride)
 	baseID := SessionID(p.Name, issue.Identifier)
 	baseBranch := issue.BranchName
 	if baseBranch == "" {
@@ -543,7 +554,7 @@ func (n *Native) finishAgentLaunch(ctx context.Context, p config.Project, id, di
 // PR" upgrade. The branch must be same-owner (the daemon refuses fork PRs before
 // calling this). Session Kind=pr: the branch is upstream and NEVER deleted on
 // teardown. prompt seeds .lola/prompt.md (the caller passes a PR briefing).
-func (n *Native) OpenPRAgent(ctx context.Context, p config.Project, sessionID, branch, prompt string) (session.Session, error) {
+func (n *Native) OpenPRAgent(ctx context.Context, p config.Project, sessionID, branch, prompt, agentOverride string) (session.Session, error) {
 	if sessionID == "" || branch == "" {
 		return session.Session{}, errors.New("runtime: open pr agent: session id and branch required")
 	}
@@ -551,7 +562,7 @@ func (n *Native) OpenPRAgent(ctx context.Context, p config.Project, sessionID, b
 	if err != nil {
 		return session.Session{}, fmt.Errorf("runtime: open pr agent %s: %w", sessionID, err)
 	}
-	kind := agent.Parse(n.Cfg.AgentForProject(p.Name))
+	kind := n.resolveKind(p.Name, agentOverride)
 	if err := n.finishAgentLaunch(ctx, p, sessionID, dir, branch, kind, false /* pr: upstream branch, not owned */, prompt); err != nil {
 		return session.Session{}, err
 	}
@@ -572,7 +583,7 @@ func (n *Native) OpenPRAgent(ctx context.Context, p config.Project, sessionID, b
 // OpenManualAgent creates a NEW branch off base and launches the coding agent on
 // it — the manual-worktree "with agent" variant. Session Kind=manual: lola owns
 // the branch and deletes it on teardown. prompt seeds .lola/prompt.md.
-func (n *Native) OpenManualAgent(ctx context.Context, p config.Project, sessionID, branch, base, prompt string) (session.Session, error) {
+func (n *Native) OpenManualAgent(ctx context.Context, p config.Project, sessionID, branch, base, prompt, agentOverride string) (session.Session, error) {
 	if sessionID == "" || branch == "" {
 		return session.Session{}, errors.New("runtime: open manual agent: session id and branch required")
 	}
@@ -580,7 +591,7 @@ func (n *Native) OpenManualAgent(ctx context.Context, p config.Project, sessionI
 	if err != nil {
 		return session.Session{}, fmt.Errorf("runtime: open manual agent %s: %w", sessionID, err)
 	}
-	kind := agent.Parse(n.Cfg.AgentForProject(p.Name))
+	kind := n.resolveKind(p.Name, agentOverride)
 	if err := n.finishAgentLaunch(ctx, p, sessionID, dir, branch, kind, true /* manual: lola-owned branch */, prompt); err != nil {
 		return session.Session{}, err
 	}
@@ -663,11 +674,23 @@ func manualEnvFile(p config.Project) []byte {
 // prompt. Spawn always passes false; only Revive passes true, and only after
 // confirming there is a transcript to continue.
 func (n *Native) launchCommand(id string, kind agent.Kind, resume bool) string {
+	return n.launchCommandPrompt(id, kind, defaultLaunchPrompt(id), resume)
+}
+
+// defaultLaunchPrompt is the fresh-spawn first-turn prompt: point the agent at
+// the briefing file.
+func defaultLaunchPrompt(id string) string {
+	return "You are lola session " + id + ". Read " + lolaDir + "/prompt.md in the current directory first; it contains your task briefing."
+}
+
+// launchCommandPrompt is launchCommand with the first-turn prompt supplied by
+// the caller — a takeover spawn (SwitchAgent) points the new agent at
+// .lola/handoff.md first, then .lola/prompt.md.
+func (n *Native) launchCommandPrompt(id string, kind agent.Kind, prompt string, resume bool) string {
 	bin := kind.Binary()
 	if kind == agent.Claude && n.ClaudeBin != "" {
 		bin = n.ClaudeBin
 	}
-	prompt := "You are lola session " + id + ". Read " + lolaDir + "/prompt.md in the current directory first; it contains your task briefing."
 	args := agent.LaunchArgs(kind, prompt)
 	if resume {
 		args = agent.LaunchArgsResume(kind, prompt)

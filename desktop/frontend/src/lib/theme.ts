@@ -106,6 +106,8 @@ export function statusLabel(status: string): string {
       return "needs you";
     case "waiting_input": // agent axis / interpreted overlay
       return "waiting";
+    case "quota_limited":
+      return "usage limit";
     default:
       return status.replaceAll("_", " ");
   }

@@ -29,10 +29,13 @@ type detailModel struct {
 
 	// Inline "new worktree" prompt (action w): collect a branch name, then
 	// create a new-branch worktree off the project's default branch — with the
-	// coding agent (wtAgent) or a plain shell (toggled with tab).
-	wtMode   bool
-	wtBranch string
-	wtAgent  bool
+	// coding agent (wtAgent, toggled with tab) or a plain shell. wtAgentKind
+	// overrides WHICH agent runs ("" = the project's configured one), cycled
+	// with shift+tab — which also implies the agent launch.
+	wtMode      bool
+	wtBranch    string
+	wtAgent     bool
+	wtAgentKind string
 }
 
 // enterDetail opens the project detail screen for the named project.
@@ -159,21 +162,32 @@ func (m *rootModel) updateDetail(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 // updateDetailWorktree drives the inline "new worktree" branch-name prompt.
-// Submitting creates a new-branch shell worktree (off the project's default
-// branch) and drops into the project-scoped cockpit so the shell is visible.
+// Submitting creates a new-branch worktree off the project's default branch and
+// drops into the project-scoped cockpit so the session is visible.
 func (m *rootModel) updateDetailWorktree(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	d := &m.detail
 	switch k.String() {
 	case "esc":
-		d.wtMode, d.wtBranch = false, ""
+		d.wtMode, d.wtBranch, d.wtAgentKind = false, "", ""
 		return m, nil
 	case "tab":
 		d.wtAgent = !d.wtAgent // toggle agent / shell
 		return m, nil
+	case "shift+tab":
+		// Cycle WHICH agent runs; picking one implies the agent launch. Bound
+		// to shift+tab rather than a printable key so it can never eat a
+		// branch-name character.
+		d.wtAgentKind = nextAgentKind(d.wtAgentKind)
+		d.wtAgent = true
+		return m, nil
 	case "enter":
 		branch := strings.TrimSpace(d.wtBranch)
 		useAgent := d.wtAgent
-		d.wtMode, d.wtBranch, d.wtAgent = false, "", false
+		kind := d.wtAgentKind
+		if !useAgent {
+			kind = "" // a shell launch carries no agent override
+		}
+		d.wtMode, d.wtBranch, d.wtAgent, d.wtAgentKind = false, "", false, ""
 		if branch == "" {
 			return m, nil
 		}
@@ -181,7 +195,7 @@ func (m *rootModel) updateDetailWorktree(k tea.KeyPressMsg) (tea.Model, tea.Cmd)
 		m.sessions.selID = ""
 		m.view = viewCockpit
 		m.focus = focusSessions
-		return m, tea.Batch(openManualCmd(d.project, branch, "", useAgent, ""), fetchSessionsCmd)
+		return m, tea.Batch(openManualCmd(d.project, branch, "", useAgent, "", kind), fetchSessionsCmd)
 	case "backspace":
 		if d.wtBranch != "" {
 			d.wtBranch = d.wtBranch[:len(d.wtBranch)-1]

@@ -278,7 +278,7 @@ func TestTickDispatchOrdering(t *testing.T) {
 
 	// Spawn got the IDENTIFIER (FE-231) and the resolved [[project]].
 	spawns := nat.spawnCalls()
-	if len(spawns) != 1 || spawns[0] != (nativeSpawnCall{"p1", "FE-231"}) {
+	if len(spawns) != 1 || spawns[0] != (nativeSpawnCall{"p1", "FE-231", ""}) {
 		t.Errorf("spawns = %+v, want [{p1 FE-231}]", spawns)
 	}
 

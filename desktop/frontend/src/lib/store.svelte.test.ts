@@ -2,11 +2,14 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // The bindings are the process boundary; stub them so the store's own logic —
 // specifically that destructive actions ASK before they act — is what's tested.
-const { Kill, StopDaemon, CloseSessionShells, Dev } = vi.hoisted(() => ({
+const { Kill, StopDaemon, CloseSessionShells, Dev, SwitchAgent, OpenManual, OpenTicket } = vi.hoisted(() => ({
   Kill: vi.fn(),
   StopDaemon: vi.fn(),
   CloseSessionShells: vi.fn(),
   Dev: vi.fn(),
+  SwitchAgent: vi.fn(),
+  OpenManual: vi.fn(),
+  OpenTicket: vi.fn(),
 }));
 
 vi.mock("@bindings/desktop", () => ({
@@ -14,6 +17,9 @@ vi.mock("@bindings/desktop", () => ({
     Kill: (...a: unknown[]) => Kill(...a),
     StopDaemon: () => StopDaemon(),
     Dev: (...a: unknown[]) => Dev(...a),
+    SwitchAgent: (...a: unknown[]) => SwitchAgent(...a),
+    OpenManual: (...a: unknown[]) => OpenManual(...a),
+    OpenTicket: (...a: unknown[]) => OpenTicket(...a),
     Alive: vi.fn().mockResolvedValue(false),
     Sessions: vi.fn(),
     Projects: vi.fn(),
@@ -32,6 +38,9 @@ beforeEach(() => {
   StopDaemon.mockResolvedValue(undefined);
   CloseSessionShells.mockResolvedValue(undefined);
   Dev.mockResolvedValue(undefined);
+  SwitchAgent.mockResolvedValue({ agent: "codex", message: "switched to codex" });
+  OpenManual.mockResolvedValue({ sessionID: "sess-new", branch: "feat/test" });
+  OpenTicket.mockResolvedValue({ sessionID: "sess-ticket", identifier: "ENG-10" });
   confirm.cancel();
   store.sessions = [];
   store.pushErrors = {};
@@ -54,6 +63,30 @@ describe("destructive actions ask first", () => {
     store.askKill("sess-1");
     confirm.cancel();
     expect(Kill).not.toHaveBeenCalled();
+  });
+
+  it("askSwitchAgent opens a confirmation and does NOT switch yet", () => {
+    store.sessions = [{ id: "sess-1", issue: "ENG-42", agent: "claude" } as never];
+    store.askSwitchAgent("sess-1", "codex");
+    expect(SwitchAgent).not.toHaveBeenCalled();
+    expect(confirm.request?.title).toBe("Switch agent?");
+    expect(confirm.request?.body).toBe("Switch ENG-42 from claude to codex?");
+    expect(confirm.request?.detail).toBe("The pane is replaced on the same worktree.");
+    expect(confirm.request?.confirmLabel).toBe("Switch");
+  });
+
+  it("accepting the switch agent confirmation calls switchAgent", () => {
+    store.sessions = [{ id: "sess-1", issue: "ENG-42", agent: "claude" } as never];
+    store.askSwitchAgent("sess-1", "codex");
+    confirm.accept();
+    expect(SwitchAgent).toHaveBeenCalledWith({ session: "sess-1", agent: "codex" });
+  });
+
+  it("cancelling the switch agent confirmation does nothing", () => {
+    store.sessions = [{ id: "sess-1", issue: "ENG-42", agent: "claude" } as never];
+    store.askSwitchAgent("sess-1", "codex");
+    confirm.cancel();
+    expect(SwitchAgent).not.toHaveBeenCalled();
   });
 
   // The daemon-stop button lives in the footer next to "restart"; a misclick used
@@ -206,5 +239,56 @@ describe("the dev toggle reports that it is in flight", () => {
 
     release();
     await first;
+  });
+});
+
+describe("agent launch and switch actions", () => {
+  it("openManual carries agentKind into the daemon request", async () => {
+    await store.openManual({
+      project: "acme",
+      branch: "feat/login",
+      agent: true,
+      agentKind: "codex",
+    });
+    expect(OpenManual).toHaveBeenCalledWith({
+      project: "acme",
+      branch: "feat/login",
+      agent: true,
+      agentKind: "codex",
+    });
+  });
+
+  it("openTicket carries agentKind into the daemon request", async () => {
+    await store.openTicket({
+      project: "acme",
+      identifier: "ENG-10",
+      uuid: "uuid-10",
+      agentKind: "opencode",
+    });
+    expect(OpenTicket).toHaveBeenCalledWith({
+      project: "acme",
+      identifier: "ENG-10",
+      uuid: "uuid-10",
+      agentKind: "opencode",
+    });
+  });
+
+  it("switchAgent invokes DaemonService.SwitchAgent and flashes the returned daemon message", async () => {
+    SwitchAgent.mockResolvedValueOnce({
+      agent: "codex",
+      message: "lola-p1-eng-1: switched claude → codex — worktree and branch kept, briefing at .lola/handoff.md",
+    });
+    await store.switchAgent("sess-1", "codex");
+    expect(SwitchAgent).toHaveBeenCalledWith({ session: "sess-1", agent: "codex" });
+    expect(store.flash?.text).toBe(
+      "lola-p1-eng-1: switched claude → codex — worktree and branch kept, briefing at .lola/handoff.md",
+    );
+  });
+
+  it("switchAgent falls back to generated text when the returned message is empty", async () => {
+    SwitchAgent.mockResolvedValueOnce({ agent: "codex", message: "" });
+    await store.switchAgent("sess-1", "codex");
+    expect(SwitchAgent).toHaveBeenCalledWith({ session: "sess-1", agent: "codex" });
+    expect(store.flash?.text).toBe("switched sess-1 to codex");
   });
 });

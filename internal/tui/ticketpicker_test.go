@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -146,6 +147,57 @@ func TestTicketPickerEscReturnsToDetail(t *testing.T) {
 	m.Update(keyMsg("esc"))
 	if m.view != viewDetail {
 		t.Fatalf("view = %d, want viewDetail", m.view)
+	}
+}
+
+// 'a' cycles the agent override (default → claude → codex → opencode → default),
+// the footer names a non-default choice, and the choice rides cmd=openTicket
+// as agentKind (absent for the default).
+func TestTicketPickerAgentOverride(t *testing.T) {
+	m := ticketPickerRoot(t, []protocol.TicketRow{
+		{Identifier: "FE-9", UUID: "u9", Title: "fix oauth"},
+	})
+	if v := stripANSI(m.ticketPickerView()); strings.Contains(v, "agent:") {
+		t.Errorf("the default choice must not print an agent marker:\n%s", v)
+	}
+
+	for _, want := range []string{"claude", "codex", "opencode", ""} {
+		m.Update(keyMsg("a"))
+		if m.ticket.agentKind != want {
+			t.Fatalf("cycle = %q, want %q", m.ticket.agentKind, want)
+		}
+		v := stripANSI(m.ticketPickerView())
+		if want != "" && !strings.Contains(v, "agent: "+want) {
+			t.Errorf("footer must show agent: %s:\n%s", want, v)
+		}
+		if want == "" && strings.Contains(v, "agent:") {
+			t.Errorf("wrapping past opencode must return to the default:\n%s", v)
+		}
+	}
+
+	// The chosen kind flows into cmd=openTicket.
+	m.Update(keyMsg("a")) // claude
+	m.Update(keyMsg("a")) // codex
+	var got []protocol.Request
+	fakeRequest(t, &got, mustData(t, protocol.OpenData{SessionID: "s", Message: "started FE-9"}), nil)
+	_, cmd := m.Update(keyMsg("enter"))
+	runCmd(t, m, cmd)
+
+	found := false
+	for _, r := range got {
+		if r.Cmd != "openTicket" {
+			continue
+		}
+		var a protocol.OpenTicketArgs
+		if err := json.Unmarshal(r.Args, &a); err != nil {
+			t.Fatal(err)
+		}
+		if a.AgentKind == "codex" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected cmd=openTicket with agentKind=codex, got %+v", got)
 	}
 }
 

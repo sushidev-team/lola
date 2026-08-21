@@ -216,6 +216,25 @@ func TestStatusDisplayReusesStyleAndHasBadge(t *testing.T) {
 	}
 }
 
+// inputReasonLabel: "quota_limited" renders as the human phrase "usage limit"
+// rather than its misleading de-underscored form; everything else de-underscores.
+func TestInputReasonLabel(t *testing.T) {
+	cases := map[string]string{
+		"quota_limited":     "usage limit",
+		"permission_prompt": "permission prompt",
+		"idle_notification": "idle notification",
+		"some_future_word":  "some future word",
+	}
+	for in, want := range cases {
+		if got := inputReasonLabel(in); got != want {
+			t.Errorf("inputReasonLabel(%q) = %q, want %q", in, got, want)
+		}
+	}
+	if line := agentDetailLine(protocol.SessionInfo{AgentState: "waiting_input", InputReason: "quota_limited"}); !strings.Contains(line, "usage limit") {
+		t.Errorf("agentDetailLine must render the human phrase, got %q", line)
+	}
+}
+
 // statusLabel humanizes every raw status word — a rendered "ci_failed" reads
 // like a translation placeholder — and the fallback de-underscores unknowns.
 func TestStatusLabelNeverRendersUnderscores(t *testing.T) {

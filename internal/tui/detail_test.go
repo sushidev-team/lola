@@ -126,6 +126,73 @@ func TestDetailWorktreeAgentToggle(t *testing.T) {
 	}
 }
 
+// shift+tab cycles the agent-kind override and implies the agent launch; the
+// kind rides cmd=openManual as agentKind, and a shell launch never carries one.
+func TestDetailWorktreeAgentKind(t *testing.T) {
+	m := detailRoot(t)
+	m.Update(keyMsg("w"))
+	m.Update(keyMsg("shift+tab"))
+	if !m.detail.wtAgent || m.detail.wtAgentKind != "claude" {
+		t.Fatalf("shift+tab = agent=%v kind=%q, want agent claude", m.detail.wtAgent, m.detail.wtAgentKind)
+	}
+	m.Update(keyMsg("shift+tab"))
+	if m.detail.wtAgentKind != "codex" {
+		t.Fatalf("second shift+tab kind = %q, want codex", m.detail.wtAgentKind)
+	}
+	if v := stripANSI(m.detailView()); !strings.Contains(v, "agent·codex") {
+		t.Errorf("the prompt must name the chosen agent:\n%s", v)
+	}
+	for _, r := range "feat/z" {
+		m.Update(keyMsg(string(r)))
+	}
+	var got []protocol.Request
+	fakeRequest(t, &got, mustData(t, protocol.OpenData{Message: "created feat/z"}), nil)
+	_, cmd := m.Update(keyMsg("enter"))
+	runCmd(t, m, cmd)
+
+	found := false
+	for _, r := range got {
+		if r.Cmd != "openManual" {
+			continue
+		}
+		var a protocol.OpenManualArgs
+		_ = json.Unmarshal(r.Args, &a)
+		if a.Agent && a.AgentKind == "codex" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected cmd=openManual with agent=true agentKind=codex, got %+v", got)
+	}
+}
+
+// A shell launch (tab off after picking a kind) must not carry the override.
+func TestDetailWorktreeShellCarriesNoKind(t *testing.T) {
+	m := detailRoot(t)
+	m.Update(keyMsg("w"))
+	m.Update(keyMsg("shift+tab")) // claude
+	m.Update(keyMsg("shift+tab")) // codex
+	m.Update(keyMsg("tab"))       // back to shell
+	for _, r := range "feat/s" {
+		m.Update(keyMsg(string(r)))
+	}
+	var got []protocol.Request
+	fakeRequest(t, &got, mustData(t, protocol.OpenData{Message: "created feat/s"}), nil)
+	_, cmd := m.Update(keyMsg("enter"))
+	runCmd(t, m, cmd)
+
+	for _, r := range got {
+		if r.Cmd != "openManual" {
+			continue
+		}
+		var a protocol.OpenManualArgs
+		_ = json.Unmarshal(r.Args, &a)
+		if a.AgentKind != "" {
+			t.Errorf("shell launch must not carry an agentKind, got %+v", a)
+		}
+	}
+}
+
 // 'e' from detail opens the project form — one overlay covering the whole
 // [[project]], preloaded with the viewed project rather than opened blank.
 func TestDetailEditOpensProjectForm(t *testing.T) {

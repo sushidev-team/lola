@@ -65,6 +65,20 @@ func (c *Config) AgentForProject(name string) string {
 	return orString(c.Defaults.Agent, DefaultAgent)
 }
 
+// FallbackChainFor resolves the ordered agent fallback chain for the named
+// project: its own agent_fallback when the key is set (a present-but-empty
+// value disables fallback for the project), else [defaults].agent_fallback,
+// else no fallback. The project field normally already holds the resolved
+// value (ResolveInheritance); the nil check keeps this correct on a config
+// that has not been resolved yet — the same posture as EffectiveCap. The
+// caller skips the running agent's own kind and any already-tried kinds.
+func (c *Config) FallbackChainFor(name string) []string {
+	if pr := c.ProjectByName(name); pr != nil && pr.AgentFallback != nil {
+		return slices.Clone(pr.AgentFallback)
+	}
+	return slices.Clone(c.Defaults.AgentFallback)
+}
+
 // BranchPrefixForProject resolves the branch-name prefix for the named project.
 // As with AgentForProject the project field is pre-resolved; a name matching no
 // project falls back to [defaults] then DefaultBranchPrefix ("lola/").
@@ -144,6 +158,11 @@ func (c *Config) Validate() error {
 		case "", "claude", "codex", "opencode":
 		default:
 			errs = append(errs, fmt.Errorf("%s: agent must be one of claude|codex|opencode (empty inherits), got %q", id, pr.Agent))
+		}
+		// The per-project fallback chain validates only when the project sets
+		// it — an inherited chain is reported once against [defaults].
+		if !pr.Inherits.AgentFallback {
+			errs = append(errs, validateAgentChain(id+".agent_fallback", pr.AgentFallback)...)
 		}
 		// env keys become NAME= assignments in a shell-sourced file at spawn
 		// time; only POSIX shell identifiers are allowed (see envNameRe) so a
@@ -284,6 +303,7 @@ func (c *Config) validateProjectDefaults() []error {
 			errs = append(errs, fmt.Errorf("defaults.priority_sort: unknown key %q (must be one of %v)", k, PrioritySortKeys))
 		}
 	}
+	errs = append(errs, validateAgentChain("defaults.agent_fallback", c.Defaults.AgentFallback)...)
 	// Same shell-identifier rule as [[project]].env — these pairs reach the
 	// same 0600 shell-sourced env file at spawn time. See envNameRe.
 	for _, k := range slices.Sorted(maps.Keys(c.Defaults.Env)) {
@@ -305,6 +325,26 @@ func (c *Config) validateProjectDefaults() []error {
 	// and this package never touches the network. The distinction is enforced
 	// where it CAN be: the settings UIs offer only workspace labels for the
 	// [defaults] keys, and per-team labels only on a project.
+	return errs
+}
+
+// validateAgentChain checks one agent_fallback chain: every entry must name a
+// known coding-agent kind and appear at most once.
+func validateAgentChain(field string, chain []string) []error {
+	var errs []error
+	seen := map[string]bool{}
+	for i, k := range chain {
+		switch k {
+		case "claude", "codex", "opencode":
+		default:
+			errs = append(errs, fmt.Errorf("%s[%d] must be one of claude|codex|opencode, got %q", field, i, k))
+			continue
+		}
+		if seen[k] {
+			errs = append(errs, fmt.Errorf("%s[%d] duplicates %q", field, i, k))
+		}
+		seen[k] = true
+	}
 	return errs
 }
 
@@ -514,6 +554,7 @@ func (c *Config) validateReactions() []error {
 		{"merge_conflict", c.Reactions.MergeConflict},
 		{"approved_and_green", c.Reactions.ApprovedAndGreen},
 		{"merged", c.Reactions.Merged},
+		{"agent_fallback", c.Reactions.AgentFallback},
 	}
 	for _, rc := range reactions {
 		if rc.r.Retries < 0 {

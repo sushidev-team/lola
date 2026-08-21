@@ -29,6 +29,8 @@ export type {
     SessionInfo,
     SessionsData,
     StatusData,
+    SwitchAgentArgs,
+    SwitchAgentData,
     TicketRow,
     TicketsData
 } from "./models.js";

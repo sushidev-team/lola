@@ -6,21 +6,31 @@
 import { Events } from "@wailsio/runtime";
 import { DaemonService, ConfigService, TermService, type ProjectLayoutDTO } from "@bindings/desktop";
 import type {
-  SessionInfo,
-  ProjectInfo,
+  SessionInfo as ProtocolSessionInfo,
+  ProjectInfo as ProtocolProjectInfo,
   GroupInfo,
   StatusData,
   Event as ActivityEvent,
   PaneData,
   PrsData,
   TicketsData,
-  OpenManualArgs,
+  OpenManualArgs as ProtocolOpenManualArgs,
   OpenPrArgs,
-  OpenTicketArgs,
+  OpenTicketArgs as ProtocolOpenTicketArgs,
 } from "@bindings/internal/protocol";
 import { sortRank } from "./theme";
 import { displayName } from "./slug";
 import { confirm } from "./confirm.svelte";
+
+type AgentKind = "claude" | "codex" | "opencode";
+
+type SessionInfo = ProtocolSessionInfo;
+
+type ProjectInfo = ProtocolProjectInfo;
+
+type OpenManualArgs = ProtocolOpenManualArgs;
+
+type OpenTicketArgs = ProtocolOpenTicketArgs;
 
 type Flash = { text: string; kind: "good" | "warn" | "bad" } | null;
 
@@ -288,10 +298,11 @@ class Store {
 
   // --- actions (each flashes its outcome) -----------------------------------
 
-  private async act<T>(fn: () => Promise<T>, ok: string): Promise<T | undefined> {
+  private async act<T>(fn: () => Promise<T>, ok: string | ((r: T) => string)): Promise<T | undefined> {
     try {
       const r = await fn();
-      this.setFlash(ok, "good");
+      const msg = typeof ok === "function" ? ok(r) : ok;
+      this.setFlash(msg, "good");
       void this.refresh();
       return r;
     } catch (err) {
@@ -463,6 +474,12 @@ class Store {
   openTicket(a: OpenTicketArgs) {
     return this.act(() => DaemonService.OpenTicket(a), `started ${a.identifier}`);
   }
+  switchAgent(id: string, kind: string) {
+    return this.act(
+      () => DaemonService.SwitchAgent({ session: id, agent: kind }),
+      (r) => r?.message || `switched ${id} to ${kind}`,
+    );
+  }
   // openURL hands a URL to the daemon's opener (which refuses anything that is
   // not http(s)). A failure is FLASHED rather than thrown: the loudest caller is
   // a click on a link inside a terminal, where a rejected promise would be an
@@ -556,6 +573,19 @@ class Store {
     });
   }
 
+  askSwitchAgent(id: string, targetAgent: string) {
+    const s = this.sessionById(id);
+    const label = s ? s.issue || s.id.slice(0, 8) : id;
+    const current = s?.agent || "claude";
+    confirm.ask({
+      title: "Switch agent?",
+      body: `Switch ${label} from ${current} to ${targetAgent}?`,
+      detail: "The pane is replaced on the same worktree.",
+      confirmLabel: "Switch",
+      onConfirm: () => void this.switchAgent(id, targetAgent),
+    });
+  }
+
   /** Ask, then stop the daemon — it halts every poll, so it is not a one-click. */
   askStopDaemon() {
     const live = this.sessions.length;
@@ -575,4 +605,4 @@ class Store {
 }
 
 export const store = new Store();
-export type { SessionInfo, ProjectInfo, StatusData, ActivityEvent };
+export type { SessionInfo, ProjectInfo, StatusData, ActivityEvent, OpenManualArgs, OpenTicketArgs, AgentKind };
