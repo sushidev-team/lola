@@ -217,11 +217,11 @@ type Event struct {
 type SessionInfo struct {
 	ID       string `json:"id"`
 	Project  string `json:"project"`
-	Issue    string `json:"issue"`     // Linear identifier, e.g. ENG-123
-	Title    string `json:"title"`     // Linear issue title, "" when unknown (older/adopted records)
-	Branch   string `json:"branch"`    // "" when unknown
-	Agent    string `json:"agent"`     // coding-agent kind driving the pane: claude|codex|opencode ("" = legacy claude)
-	Status   string `json:"status"`    // the rolled-up status (state.Rollup vocabulary)
+	Issue    string `json:"issue"`  // Linear identifier, e.g. ENG-123
+	Title    string `json:"title"`  // Linear issue title, "" when unknown (older/adopted records)
+	Branch   string `json:"branch"` // "" when unknown
+	Agent    string `json:"agent"`  // coding-agent kind driving the pane: claude|codex|opencode ("" = legacy claude)
+	Status   string `json:"status"` // the rolled-up status (state.Rollup vocabulary)
 	PRURL    string `json:"prUrl"`
 	PRNumber int    `json:"prNumber"` // 0 when no PR observed
 	Checks   string `json:"checks"`   // pass|fail|pending|none, "" when no PR
