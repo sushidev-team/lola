@@ -1525,6 +1525,186 @@ func TestReviveResumesWhenTranscriptExists(t *testing.T) {
 	}
 }
 
+// TestReviveResumesOpenCodeWhenSessionExists: when opencode saved a session for
+// the worktree, revive relaunches with --continue --auto (and no --prompt) so
+// the agent resumes its prior conversation instead of starting over.
+func TestReviveResumesOpenCodeWhenSessionExists(t *testing.T) {
+	f := newFixture(t, "", "")
+	xdg := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", xdg)
+	t.Setenv("HOME", t.TempDir()) // no claude transcript either
+	id := "lola-nori-eng-78"
+	dir := filepath.Join(f.root, "nori", id)
+	if err := os.MkdirAll(filepath.Join(dir, lolaDir), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// opencode's project dir is the worktree path with the leading "/" stripped
+	// and the remaining "/" replaced by "-".
+	encoded := strings.ReplaceAll(strings.TrimPrefix(dir, "/"), "/", "-")
+	info := filepath.Join(xdg, "opencode", "project", encoded, "storage", "session", "info")
+	if err := os.MkdirAll(info, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(info, "ses_test.json"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := session.Session{ID: id, Source: "native", Project: "nori", Issue: "ENG-78", Agent: "opencode", Status: "dead"}
+	if _, err := f.n.Revive(context.Background(), s); err != nil {
+		t.Fatalf("Revive: %v", err)
+	}
+	tmuxCalls := loggedArgs(t, f.tmuxLog)
+	if !strings.Contains(tmuxCalls, "--continue") || !strings.Contains(tmuxCalls, "--auto") {
+		t.Errorf("saved opencode session → revive must resume via --continue --auto:\n%s", tmuxCalls)
+	}
+	if strings.Contains(tmuxCalls, "--prompt") {
+		t.Errorf("opencode resume must not pass --prompt (broken with --continue upstream):\n%s", tmuxCalls)
+	}
+}
+
+// TestReviveOpenCodeFreshWithoutSession: an opencode session with no saved
+// opencode session launches fresh (the --prompt briefing, no --continue).
+func TestReviveOpenCodeFreshWithoutSession(t *testing.T) {
+	f := newFixture(t, "", "")
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
+	id := "lola-nori-eng-79"
+	if err := os.MkdirAll(filepath.Join(f.root, "nori", id, lolaDir), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	s := session.Session{ID: id, Source: "native", Project: "nori", Issue: "ENG-79", Agent: "opencode", Status: "dead"}
+	if _, err := f.n.Revive(context.Background(), s); err != nil {
+		t.Fatalf("Revive: %v", err)
+	}
+	tmuxCalls := loggedArgs(t, f.tmuxLog)
+	if !strings.Contains(tmuxCalls, "--prompt") {
+		t.Errorf("no saved opencode session → revive must launch fresh with --prompt:\n%s", tmuxCalls)
+	}
+	if strings.Contains(tmuxCalls, "--continue") {
+		t.Errorf("no saved opencode session → must not resume:\n%s", tmuxCalls)
+	}
+}
+
+// plantOpencodeDB creates a real minimal opencode SQLite session store at
+// <xdg>/opencode/opencode.db with the given rows (directory, parent_id).
+func plantOpencodeDB(t *testing.T, xdg string, rows []struct{ dir, parent string }) {
+	t.Helper()
+	if _, err := exec.LookPath("sqlite3"); err != nil {
+		t.Skip("sqlite3 not on PATH")
+	}
+	dir := filepath.Join(xdg, "opencode")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	db := filepath.Join(dir, "opencode.db")
+	args := []string{db, "CREATE TABLE session (id text PRIMARY KEY, parent_id text, directory text NOT NULL);"}
+	for i, r := range rows {
+		args = append(args, fmt.Sprintf("INSERT INTO session (id, parent_id, directory) VALUES ('ses_%d', %s, '%s');",
+			i, sqlNull(r.parent), r.dir))
+	}
+	if out, err := exec.Command("sqlite3", args...).CombinedOutput(); err != nil {
+		t.Fatalf("plant opencode db: %v\n%s", err, out)
+	}
+}
+
+// sqlNull renders s as a SQL literal, NULL for the empty string.
+func sqlNull(s string) string {
+	if s == "" {
+		return "NULL"
+	}
+	return "'" + s + "'"
+}
+
+// TestReviveResumesOpenCodeFromSQLite: current opencode builds store sessions
+// in SQLite (<data-root>/opencode/opencode.db, table session, column
+// directory); a root session (parent_id NULL) for the worktree makes revive
+// resume via --continue --auto.
+func TestReviveResumesOpenCodeFromSQLite(t *testing.T) {
+	f := newFixture(t, "", "")
+	xdg := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", xdg)
+	t.Setenv("HOME", t.TempDir())
+	id := "lola-nori-eng-80"
+	dir := filepath.Join(f.root, "nori", id)
+	if err := os.MkdirAll(filepath.Join(dir, lolaDir), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	plantOpencodeDB(t, xdg, []struct{ dir, parent string }{{dir, ""}})
+	s := session.Session{ID: id, Source: "native", Project: "nori", Issue: "ENG-80", Agent: "opencode", Status: "dead"}
+	if _, err := f.n.Revive(context.Background(), s); err != nil {
+		t.Fatalf("Revive: %v", err)
+	}
+	tmuxCalls := loggedArgs(t, f.tmuxLog)
+	if !strings.Contains(tmuxCalls, "--continue") || !strings.Contains(tmuxCalls, "--auto") {
+		t.Errorf("root session in the SQLite store → revive must resume via --continue --auto:\n%s", tmuxCalls)
+	}
+	if strings.Contains(tmuxCalls, "--prompt") {
+		t.Errorf("opencode resume must not pass --prompt:\n%s", tmuxCalls)
+	}
+}
+
+// TestReviveOpenCodeFreshWhenDBHasNoRootSession: the SQLite store exists but
+// holds only a child session (parent_id set) for the worktree — --continue
+// picks root sessions only, so revive launches fresh.
+func TestReviveOpenCodeFreshWhenDBHasNoRootSession(t *testing.T) {
+	f := newFixture(t, "", "")
+	xdg := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", xdg)
+	t.Setenv("HOME", t.TempDir())
+	id := "lola-nori-eng-81"
+	dir := filepath.Join(f.root, "nori", id)
+	if err := os.MkdirAll(filepath.Join(dir, lolaDir), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	plantOpencodeDB(t, xdg, []struct{ dir, parent string }{{dir, "ses_0"}})
+	s := session.Session{ID: id, Source: "native", Project: "nori", Issue: "ENG-81", Agent: "opencode", Status: "dead"}
+	if _, err := f.n.Revive(context.Background(), s); err != nil {
+		t.Fatalf("Revive: %v", err)
+	}
+	tmuxCalls := loggedArgs(t, f.tmuxLog)
+	if !strings.Contains(tmuxCalls, "--prompt") {
+		t.Errorf("no root session in the SQLite store → revive must launch fresh with --prompt:\n%s", tmuxCalls)
+	}
+	if strings.Contains(tmuxCalls, "--continue") {
+		t.Errorf("no root session in the SQLite store → must not resume:\n%s", tmuxCalls)
+	}
+}
+
+// TestReviveOpenCodeSeamConsulted: the SQLite seam is what answers the resume
+// gate — an empty db file (no tables, so the real query would fail) plus a
+// seam override returning true makes revive resume. Proves the wiring without
+// sqlite3.
+func TestReviveOpenCodeSeamConsulted(t *testing.T) {
+	f := newFixture(t, "", "")
+	xdg := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", xdg)
+	t.Setenv("HOME", t.TempDir())
+	id := "lola-nori-eng-82"
+	dir := filepath.Join(f.root, "nori", id)
+	if err := os.MkdirAll(filepath.Join(dir, lolaDir), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(xdg, "opencode"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(xdg, "opencode", "opencode.db"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	orig := opencodeSessionInDB
+	opencodeSessionInDB = func(ctx context.Context, db, dir string) bool { return true }
+	defer func() { opencodeSessionInDB = orig }()
+	s := session.Session{ID: id, Source: "native", Project: "nori", Issue: "ENG-82", Agent: "opencode", Status: "dead"}
+	if _, err := f.n.Revive(context.Background(), s); err != nil {
+		t.Fatalf("Revive: %v", err)
+	}
+	tmuxCalls := loggedArgs(t, f.tmuxLog)
+	if !strings.Contains(tmuxCalls, "--continue") || !strings.Contains(tmuxCalls, "--auto") {
+		t.Errorf("seam says a session exists → revive must resume via --continue --auto:\n%s", tmuxCalls)
+	}
+	if strings.Contains(tmuxCalls, "--prompt") {
+		t.Errorf("opencode resume must not pass --prompt:\n%s", tmuxCalls)
+	}
+}
+
 // TestReviveWorktreeGoneErrors: with the worktree removed there is nothing to
 // resume, so Revive errors (and never touches tmux) rather than launching into
 // a missing directory.

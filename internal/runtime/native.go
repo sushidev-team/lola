@@ -27,8 +27,9 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-
 	"time"
+
+	"os/exec"
 
 	"github.com/sushidev-team/lola/internal/agent"
 	"github.com/sushidev-team/lola/internal/config"
@@ -1149,11 +1150,12 @@ func (n *Native) Alive(ctx context.Context, s session.Session) bool {
 // whose worktree survives (dead sessions keep their worktree for inspection).
 // It reuses the existing worktree and its .lola artifacts (prompt, settings,
 // env) exactly as the original spawn left them and relaunches the agent in
-// place: when the agent is Claude AND it wrote a transcript before dying, the
-// pane comes back with `claude --continue` and resumes the prior conversation
-// (launchCommand resume=true); otherwise it launches fresh on the same worktree
-// — the case for a session that died so fast it never recorded a transcript
-// (an empty --continue would just error and re-kill the pane).
+// place: when the agent is Claude and it wrote a transcript before dying, or
+// opencode and it saved a session, the pane comes back with `--continue` and
+// resumes the prior conversation (launchCommand resume=true); otherwise it
+// launches fresh on the same worktree — the case for a session that died so
+// fast it never recorded anything (an empty --continue would just error and
+// re-kill the pane).
 //
 // The caller (daemon.handleRevive) is responsible for the checks Revive does
 // not do: that the session is not already alive, and re-establishing the
@@ -1166,7 +1168,8 @@ func (n *Native) Revive(ctx context.Context, s session.Session) (session.Session
 		return session.Session{}, fmt.Errorf("runtime: revive %s: worktree %s is gone — let the issue re-dispatch instead", id, dir)
 	}
 	kind := agent.Parse(s.Agent)
-	resume := kind == agent.Claude && claudeHasTranscript(dir)
+	resume := (kind == agent.Claude && claudeHasTranscript(dir)) ||
+		(kind == agent.OpenCode && opencodeHasSession(ctx, dir))
 	if err := n.Tmux.NewSession(ctx, id, dir, n.launchCommand(id, kind, resume)); err != nil {
 		return session.Session{}, fmt.Errorf("runtime: revive %s: %w", id, err)
 	}
@@ -1200,6 +1203,78 @@ func claudeHasTranscript(dir string) bool {
 	}
 	matches, _ := filepath.Glob(filepath.Join(home, ".claude", "projects", "*"+filepath.Base(dir)+"*", "*.jsonl"))
 	return len(matches) > 0
+}
+
+// opencodeHasSession reports whether opencode has a saved session for the
+// worktree at dir — i.e. whether `opencode --continue` has anything to resume.
+// The gate exists because `--continue` with no prior session is not graceful
+// (it hung the TUI upstream, anomalyco/opencode#23437, later made a clean
+// error-exit), so Revive must know a session exists before passing it.
+// opencode has used TWO storage generations, and either may hold the session:
+//
+//   - Legacy (pre-SQLite): sessions live under
+//     <data-root>/opencode/project/<encoded-dir>/storage/session/info/ses_*.json,
+//     where <encoded-dir> is the worktree's absolute path with the leading "/"
+//     stripped and the remaining "/" replaced by "-".
+//   - Current (SQLite): sessions live in <data-root>/opencode/opencode.db,
+//     table `session`, column `directory` holding the worktree path verbatim.
+//     Only ROOT sessions count (`parent_id IS NULL`) — that mirrors what
+//     `--continue` actually picks (the most recent root session; child/subagent
+//     sessions don't).
+//
+// `--continue` resumes the last session of the CURRENT directory, and each lola
+// session owns its worktree, so that resolves to the right conversation. The
+// data root is $XDG_DATA_HOME (read at call time) or ~/.local/share. Best-effort
+// and fail-closed: an unresolvable data root, a glob error, a missing sqlite3,
+// a locked db or any query failure means "no session", so Revive launches fresh.
+func opencodeHasSession(ctx context.Context, dir string) bool {
+	root := opencodeDataRoot()
+	if root == "" {
+		return false
+	}
+	// Legacy generation.
+	encoded := strings.ReplaceAll(strings.TrimPrefix(dir, "/"), "/", "-")
+	matches, _ := filepath.Glob(filepath.Join(root, "opencode", "project", encoded, "storage", "session", "info", "ses_*.json"))
+	if len(matches) > 0 {
+		return true
+	}
+	// Current generation: the SQLite store, when it exists.
+	db := filepath.Join(root, "opencode", "opencode.db")
+	if fi, err := os.Stat(db); err != nil || fi.IsDir() {
+		return false
+	}
+	return opencodeSessionInDB(ctx, db, dir)
+}
+
+// opencodeDataRoot resolves opencode's data directory: $XDG_DATA_HOME when set
+// (read at call time so tests can override it), else ~/.local/share. Returns ""
+// when neither resolves, which callers treat as "no session".
+func opencodeDataRoot() string {
+	if root := os.Getenv("XDG_DATA_HOME"); root != "" {
+		return root
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return ""
+	}
+	return filepath.Join(home, ".local", "share")
+}
+
+// opencodeSessionInDB reports whether opencode's SQLite session store at db
+// holds a root session for dir. Seam: overridden in tests; the default shells
+// the sqlite3 CLI (ships with macOS), bounded and fail-closed — a missing
+// binary, a locked db, a timeout or a schema mismatch all answer false.
+var opencodeSessionInDB = func(ctx context.Context, db, dir string) bool {
+	qctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	// SQLite string-literal escaping: double the single quotes.
+	esc := strings.ReplaceAll(dir, "'", "''")
+	query := "SELECT 1 FROM session WHERE directory = '" + esc + "' AND parent_id IS NULL LIMIT 1;"
+	out, err := exec.CommandContext(qctx, "sqlite3", db, query).Output()
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(string(out)) == "1"
 }
 
 // issueFromSessionID recovers the Linear identifier from a session ID built
