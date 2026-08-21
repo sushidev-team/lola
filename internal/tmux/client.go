@@ -588,7 +588,19 @@ func (c *Client) KillSessionTree(ctx context.Context, name string) error {
 		// signal costs a leaked child, never the tab itself.
 		_ = proctree.KillGroups(groups, killTreeGrace)
 	}
-	return c.KillSession(ctx, name)
+	// The group kill above BLOCKS through its grace window, and a pane whose
+	// whole tree exits promptly takes its tmux session down with it — so the
+	// trailing kill-session can race the session it is about to kill and fail
+	// with "can't find session". That is success wearing an error's clothes:
+	// the contract is "the session and its tree are down", and a session that
+	// no longer exists satisfies it. Only an error while the session STILL
+	// exists is real.
+	if err := c.KillSession(ctx, name); err != nil {
+		if c.Has(ctx, name) {
+			return err
+		}
+	}
+	return nil
 }
 
 // PanePIDs returns the pid of every pane on lola's server, in one exec. It is
