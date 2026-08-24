@@ -630,6 +630,47 @@ func (c *Client) PanePIDs(ctx context.Context) ([]int, error) {
 	return pids, nil
 }
 
+// PaneProc is one live pane: the pid running in it, and the tmux session that
+// owns the pane.
+type PaneProc struct {
+	Session string
+	PID     int
+}
+
+// PaneProcs is PanePIDs WITH each pane's owning session name, in one exec. The
+// dev take-over's protect set needs the name to tell a user SHELL tab — whose
+// pane leads whatever the human started inside it — from an agent pane, which
+// leads nothing it must protect (see internal/daemon/dev.go's sweep).
+//
+// A tmux server that is not running is not an error — no panes, no pids — the
+// same shape ListSessions and PanePIDs use.
+func (c *Client) PaneProcs(ctx context.Context) ([]PaneProc, error) {
+	out, stderr, err := c.run(ctx, "list-panes", "-a", "-F", "#{session_name}\t#{pane_pid}")
+	if err != nil {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) && ee.ExitCode() == 1 && strings.Contains(stderr, "no server") {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var panes []PaneProc
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		// The pid is the LAST field and session names never carry a tab, so cut
+		// at the right-most one rather than trusting the name's contents.
+		i := strings.LastIndex(line, "\t")
+		if i < 0 {
+			continue
+		}
+		name, pidStr := line[:i], line[i+1:]
+		pid, cerr := strconv.Atoi(strings.TrimSpace(pidStr))
+		if cerr != nil || pid <= 1 || name == "" {
+			continue
+		}
+		panes = append(panes, PaneProc{Session: name, PID: pid})
+	}
+	return panes, nil
+}
+
 // KeepDeadPane makes the named session OUTLIVE the command it runs: when the
 // process exits (cleanly, on a crash, or on a signal), tmux keeps the pane and
 // its output instead of destroying the session. The dev tabs use it so a `npm
