@@ -229,12 +229,7 @@ func newSettingsForm(cfgPath string, cfg *config.Config) *settingsForm {
 	// tables), falling back to a fresh disabled provider for a kind that is not
 	// configured. A legacy-only config renders these READ-ONLY until migrated.
 	rp := reviewProviderSeed(cfg)
-	cli, watch, claude := rp("coderabbit-cli"), rp("coderabbit-watch"), rp("claude-session")
 	reviewLegacy := legacyReviewOnly(cfg)
-	// The fixed multiselect option sets. github is offered on the pass kinds
-	// only; the watch forbids it (validation), so its editor omits it.
-	trAll := transportOpts(true)
-	trNoGitHub := transportOpts(false)
 	f := &settingsForm{
 		reviewLegacy: reviewLegacy,
 		cfgPath:      cfgPath,
@@ -298,40 +293,16 @@ func newSettingsForm(cfgPath string, cfg *config.Config) *settingsForm {
 			// setting was reachable only from the app until this tab existed.
 			{key: "ui_theme", tab: stAppearance, section: "[ui]", sectionNote: "palette shared with lola-desktop", label: "Theme", help: "Catppuccin flavor for the cockpit and every terminal. space/enter cycles; latte is the light one. Applies on save.", kind: sfEnum, options: config.UIThemes, text: cfg.UITheme()},
 
-			// Review — the pluggable provider catalog ([[review.provider]]). One
-			// indented subsection per KIND; each names its config kind. transports
-			// and fallback are fixed multiselects (enter opens a local picker), the
-			// notify/send toggles refine the always-on `lola` transport. A
-			// legacy-only config shows these READ-ONLY with a migrate action.
-			{key: "pv_cli_enabled", tab: stCodeRabbit, subsection: "coderabbit-cli — execs `coderabbit review` locally on PR-open", indent: true, label: "Enabled", help: "Opt-in CodeRabbit CLI QA pass: execs `coderabbit review` against the worktree when a session first opens a PR.", kind: sfBool, b: cli.Enabled},
-			{key: "pv_cli_onpropen", tab: stCodeRabbit, indent: true, label: "On PR open", help: "Run the pass automatically when a session first opens a PR.", kind: sfBool, b: cli.OnPROpen},
-			{key: "pv_cli_command", tab: stCodeRabbit, indent: true, label: "Command", help: "coderabbit argv override (space-split); empty = built-in default.", kind: sfText, text: cli.Command},
-			{key: "pv_cli_timeout", tab: stCodeRabbit, indent: true, label: "Timeout seconds", help: "Hard cap per review pass. Must be >= 0.", kind: sfInt, text: itoa(cli.TimeoutSeconds)},
-			{key: "pv_cli_notify", tab: stCodeRabbit, indent: true, label: "Notify", help: "lola transport: surface findings to a human (desktop/Slack).", kind: sfBool, b: cli.Notify},
-			{key: "pv_cli_send", tab: stCodeRabbit, indent: true, label: "Send to agent", help: "lola transport: feed findings back to the worker via the send-keys gate.", kind: sfBool, b: cli.SendToAgent},
-			{key: "pv_cli_visible", tab: stCodeRabbit, indent: true, label: "Watch it run", help: "Run the pass in its own tmux session \"<session>-review\", so you can watch it and read its output afterwards.", kind: sfBool, b: cli.Visible},
-			{key: "pv_cli_transports", tab: stCodeRabbit, indent: true, label: "Transports", help: "Sinks findings route to: lola (always on: notify + agent), github (PR comment), linear (issue comment). enter picks.", kind: sfList, choices: trAll, lines: cli.Transports.Strings()},
-			{key: "pv_cli_inline", tab: stCodeRabbit, indent: true, label: "Inline PR threads", help: "github transport: post one anchored, resolvable review thread per finding instead of a single comment. Findings whose line is not in the diff stay in the summary; off = one flat comment.", kind: sfBool, b: cli.GitHubInline},
-			{key: "pv_cli_fallback", tab: stCodeRabbit, indent: true, label: "Fallback", help: "Ordered pass kinds tried when this provider can't answer (unavailable / over-quota). enter picks.", kind: sfList, choices: fallbackOpts("coderabbit-cli"), lines: cli.FallbackStrings()},
-
-			{key: "pv_watch_enabled", tab: stCodeRabbit, subsection: "coderabbit-watch — polls the PR for the app's comments", indent: true, label: "Enabled", help: "Opt-in PR-comment watch: polls the GitHub PR for comments the CodeRabbit app (or another bot) leaves, and routes them. Needs no local coderabbit binary. No github transport / fallback (its feedback is already on the PR).", kind: sfBool, b: watch.Enabled},
-			{key: "pv_watch_author", tab: stCodeRabbit, indent: true, label: "Author", help: "Login substring matched against comment authors. Default coderabbitai.", kind: sfText, text: watchAuthor(watch)},
-			{key: "pv_watch_notify", tab: stCodeRabbit, indent: true, label: "Notify", help: "lola transport: surface each new comment to a human.", kind: sfBool, b: watch.Notify},
-			{key: "pv_watch_send", tab: stCodeRabbit, indent: true, label: "Send to agent", help: "lola transport: relay each new comment to the worker via the send-keys gate.", kind: sfBool, b: watch.SendToAgent},
-			{key: "pv_watch_transports", tab: stCodeRabbit, indent: true, label: "Transports", help: "Sinks: lola (always on), linear (issue comment). github is not offered — the feedback is already on the PR. enter picks.", kind: sfList, choices: trNoGitHub, lines: watch.Transports.Strings()},
-
-			{key: "pv_claude_enabled", tab: stCodeRabbit, subsection: "claude-session — headless `claude -p` review on PR-open", indent: true, label: "Enabled", help: "Opt-in headless Claude review pass: runs `claude -p` over the PR diff when a session first opens a PR.", kind: sfBool, b: claude.Enabled},
-			{key: "pv_claude_onpropen", tab: stCodeRabbit, indent: true, label: "On PR open", help: "Run the pass automatically when a session first opens a PR.", kind: sfBool, b: claude.OnPROpen},
-			{key: "pv_claude_model", tab: stCodeRabbit, indent: true, label: "Model", help: "claude --model override; empty = claude's default.", kind: sfText, text: claude.Model},
-			{key: "pv_claude_timeout", tab: stCodeRabbit, indent: true, label: "Timeout seconds", help: "Hard cap per review pass. Must be >= 0.", kind: sfInt, text: itoa(claude.TimeoutSeconds)},
-			{key: "pv_claude_notify", tab: stCodeRabbit, indent: true, label: "Notify", help: "lola transport: surface findings to a human.", kind: sfBool, b: claude.Notify},
-			{key: "pv_claude_send", tab: stCodeRabbit, indent: true, label: "Send to agent", help: "lola transport: feed findings back to the worker via the send-keys gate.", kind: sfBool, b: claude.SendToAgent},
-			{key: "pv_claude_visible", tab: stCodeRabbit, indent: true, label: "Watch it run", help: "Run the pass in its own tmux session \"<session>-review\" and stream its progress there, so you can watch it and read its findings afterwards.", kind: sfBool, b: claude.Visible},
-			{key: "pv_claude_transports", tab: stCodeRabbit, indent: true, label: "Transports", help: "Sinks: lola (always on), github (PR comment), linear (issue comment). enter picks.", kind: sfList, choices: trAll, lines: claude.Transports.Strings()},
-			{key: "pv_claude_inline", tab: stCodeRabbit, indent: true, label: "Inline PR threads", help: "github transport: post one anchored, resolvable review thread per finding instead of a single comment, and ask the worker to resolve each one it fixes. Off = one flat comment.", kind: sfBool, b: claude.GitHubInline},
-			{key: "pv_claude_fallback", tab: stCodeRabbit, indent: true, label: "Fallback", help: "Ordered pass kinds tried when this provider can't answer. enter picks.", kind: sfList, choices: fallbackOpts("claude-session"), lines: claude.FallbackStrings()},
+			// Review — the pluggable provider catalog ([[review.provider]]) — is
+			// GENERATED, one indented subsection per KIND, from
+			// config.ReviewProviderKinds(). It is generated rather than written out
+			// because the kind set is the pluggable part: hand-written blocks meant
+			// adding a review agent touched the field list, the save builder, the
+			// enable-defaults map and every key string. See reviewProviderFields.
+			// A legacy-only config shows these READ-ONLY with a migrate action.
 		},
 	}
+	f.fields = append(f.fields, reviewProviderFields(rp)...)
 	// Warm the label NAMES from the on-disk cache for rendering. This is a local
 	// file read, never a Linear call, and deliberately does not touch wsLabels:
 	// the picker stays lazy (see openLabelPicker).
@@ -385,8 +356,8 @@ func (f *settingsForm) dirty() bool { return f.snapshot() != f.baseline }
 
 // watchAuthor pre-fills the watch's author field with the effective default
 // when unset, so the editor shows what the watch will actually match.
-func watchAuthor(p config.ReviewProvider) string {
-	if p.Author == "" {
+func watchAuthor(kind string, p config.ReviewProvider) string {
+	if p.Author == "" && !config.ReviewKindRequiresAuthor(kind) {
 		return config.DefaultCodeRabbitAuthor
 	}
 	return p.Author
@@ -413,6 +384,138 @@ func reviewProviderSeed(cfg *config.Config) func(kind string) config.ReviewProvi
 		p.Enabled, p.OnPROpen, p.Notify, p.SendToAgent = false, false, false, false
 		return p
 	}
+}
+
+// pvKey builds a review-provider field key. Keys are derived from the kind, not
+// written out, so the generated fields, the save builder and enableDefaults can
+// never drift apart.
+func pvKey(kind, field string) string { return "pv_" + kind + "_" + field }
+
+// pvSubsection is a kind's subsection heading: the kind's own name plus one line
+// saying what it actually does, since the names alone ("custom-cli",
+// "bot-watch") do not.
+func pvSubsection(kind string) string {
+	switch {
+	case kind == "coderabbit-cli":
+		return kind + " — execs `coderabbit review` locally on PR-open"
+	case kind == "custom-cli":
+		return kind + " — execs YOUR review CLI (set Command) on PR-open"
+	case kind == "coderabbit-watch":
+		return kind + " — polls the PR for the CodeRabbit app's comments"
+	case kind == "bot-watch":
+		return kind + " — polls the PR for ANY review bot's comments (set Author)"
+	}
+	if a, ok := config.ReviewAgentFor(kind); ok {
+		return kind + " — headless `" + agent.Kind(a).Binary() + "` review on PR-open"
+	}
+	return kind
+}
+
+// reviewProviderFields generates the Review tab's editor: one indented
+// subsection per KIND, with only the fields that kind actually has. A pass kind
+// gets on-PR-open / timeout / visible / github+inline / fallback; a watch gets
+// an author and neither github nor fallback (validation forbids both); a cli
+// kind gets command + base flag; an agent kind gets a model.
+//
+// It is the single place the Review tab's shape is decided, so adding a kind to
+// config.ReviewProviderKinds() is all it takes for the TUI to offer it.
+func reviewProviderFields(seed func(kind string) config.ReviewProvider) []setField {
+	itoa := strconv.Itoa
+	var out []setField
+	for _, kind := range config.ReviewProviderKinds() {
+		p := seed(kind)
+		watch := config.IsWatchKind(kind)
+		agentModel, isAgent := config.ReviewAgentFor(kind)
+		_ = agentModel
+
+		add := func(f setField) {
+			f.tab, f.indent = stCodeRabbit, true
+			out = append(out, f)
+		}
+		add(setField{key: pvKey(kind, "enabled"), subsection: pvSubsection(kind), label: "Enabled",
+			help: pvEnabledHelp(kind), kind: sfBool, b: p.Enabled})
+		if !watch {
+			add(setField{key: pvKey(kind, "onpropen"), label: "On PR open",
+				help: "Run the pass automatically when a session first opens a PR.", kind: sfBool, b: p.OnPROpen})
+		}
+		if config.IsCLIKind(kind) {
+			cmdHelp := "Review CLI argv (space-split); empty = coderabbit's built-in default."
+			if config.ReviewKindRequiresCommand(kind) {
+				cmdHelp = "Review CLI argv (space-split). REQUIRED for this kind — it names the tool to run, e.g. \"greptile review --plain\"."
+			}
+			add(setField{key: pvKey(kind, "command"), label: "Command", help: cmdHelp, kind: sfText, text: p.Command})
+			add(setField{key: pvKey(kind, "baseflag"), label: "Base flag",
+				help: "Flag the PR's base branch is passed with (default --base). Empty passes no base at all, for a tool that takes none.",
+				kind: sfText, text: p.BaseFlag})
+		}
+		if isAgent {
+			add(setField{key: pvKey(kind, "model"), label: "Model",
+				help: "Agent --model override; empty = the agent's own default. opencode expects \"provider/model\".",
+				kind: sfText, text: p.Model})
+		}
+		if watch {
+			add(setField{key: pvKey(kind, "author"), label: "Author",
+				help: pvAuthorHelp(kind), kind: sfText, text: watchAuthor(kind, p)})
+		} else {
+			add(setField{key: pvKey(kind, "timeout"), label: "Timeout seconds",
+				help: "Hard cap per review pass. Must be >= 0.", kind: sfInt, text: itoa(p.TimeoutSeconds)})
+		}
+		add(setField{key: pvKey(kind, "notify"), label: "Notify",
+			help: "lola transport: surface findings to a human (desktop/Slack).", kind: sfBool, b: p.Notify})
+		add(setField{key: pvKey(kind, "send"), label: "Send to agent",
+			help: "lola transport: feed findings back to the worker via the send-keys gate.", kind: sfBool, b: p.SendToAgent})
+		if !watch {
+			add(setField{key: pvKey(kind, "visible"), label: "Watch it run",
+				help: "Run the pass in its own tmux session \"<session>-review\" and stream its progress there, so you can watch it and read its findings afterwards.",
+				kind: sfBool, b: p.Visible})
+		}
+		add(setField{key: pvKey(kind, "transports"), label: "Transports",
+			help: pvTransportsHelp(watch), kind: sfList, choices: transportOpts(!watch), lines: p.Transports.Strings()})
+		if !watch {
+			add(setField{key: pvKey(kind, "inline"), label: "Inline PR threads",
+				help: "github transport: post one anchored, resolvable review thread per finding instead of a single comment, and ask the worker to resolve each one it fixes. Off = one flat comment.",
+				kind: sfBool, b: p.GitHubInline})
+			add(setField{key: pvKey(kind, "fallback"), label: "Fallback",
+				help: "Ordered pass kinds tried when this provider can't answer (unavailable / over-quota). enter picks.",
+				kind: sfList, choices: fallbackOpts(kind), lines: p.FallbackStrings()})
+		}
+	}
+	return out
+}
+
+// pvEnabledHelp is a kind's one-line "what does enabling this do".
+func pvEnabledHelp(kind string) string {
+	switch kind {
+	case "coderabbit-cli":
+		return "Opt-in CodeRabbit CLI QA pass: execs `coderabbit review` against the worktree when a session first opens a PR."
+	case "custom-cli":
+		return "Opt-in QA pass over any review CLI you name in Command: execs it against the worktree when a session first opens a PR."
+	case "coderabbit-watch":
+		return "Opt-in PR-comment watch: polls the GitHub PR for comments the CodeRabbit app leaves, and routes them. Needs no local binary. No github transport / fallback (its feedback is already on the PR)."
+	case "bot-watch":
+		return "Opt-in PR-comment watch over ANY review bot (name it in Author): polls the PR for its comments and routes them. Needs no local binary. No github transport / fallback."
+	}
+	if a, ok := config.ReviewAgentFor(kind); ok {
+		return "Opt-in headless " + a + " review pass: runs one bounded, read-only `" + agent.Kind(a).Binary() + "` review over the PR diff when a session first opens a PR."
+	}
+	return "Enable this review provider."
+}
+
+// pvAuthorHelp explains the watch's author field, which is optional for the
+// coderabbit kind (it defaults) and mandatory for the generic one.
+func pvAuthorHelp(kind string) string {
+	if config.ReviewKindRequiresAuthor(kind) {
+		return "Login SUBSTRING matched against comment authors, e.g. \"greptile\". REQUIRED for this kind — it names the review bot to relay."
+	}
+	return "Login substring matched against comment authors. Default coderabbitai."
+}
+
+// pvTransportsHelp names the sinks a kind may route to; the watch omits github.
+func pvTransportsHelp(watch bool) string {
+	if watch {
+		return "Sinks: lola (always on), linear (issue comment). github is not offered — the feedback is already on the PR. enter picks."
+	}
+	return "Sinks findings route to: lola (always on: notify + agent), github (PR comment), linear (issue comment). enter picks."
 }
 
 // legacyReviewOnly reports whether the config carries the legacy
@@ -504,7 +607,13 @@ func (f *settingsForm) field(key string) *setField {
 			return &f.fields[i]
 		}
 	}
-	return nil // unreachable: keys are compile-time constants matched in save()
+	// Unreachable in practice: every key save() reads is either a literal that
+	// also appears in the field list, or a review-provider key derived by
+	// pvKey() from the SAME kind list and the SAME family predicates that
+	// generated the fields (see reviewProviderFields). Pinned by
+	// TestSettingsFormProviderKeysMatchTheSaveBuilder — a divergence would nil
+	// deref here rather than saving something wrong.
+	return nil
 }
 
 // visible returns the indices (into f.fields) of the ACTIVE tab's fields, in
@@ -600,11 +709,23 @@ func (f *settingsForm) maybeLoadLabelNames() tea.Cmd {
 // resolveCodeRabbit / resolveReview / resolveBrain: `enabled = true` alone
 // defaults these on). The editor mirrors that so enabling a feature in the TUI is
 // not silently inert with every sink left off.
-var enableDefaults = map[string][]string{
-	"pv_cli_enabled":    {"pv_cli_onpropen", "pv_cli_notify", "pv_cli_send"},
-	"pv_watch_enabled":  {"pv_watch_notify", "pv_watch_send"},
-	"pv_claude_enabled": {"pv_claude_onpropen", "pv_claude_notify", "pv_claude_send"},
-	"brain_enabled":     {"brain_esc", "brain_appr"},
+var enableDefaults = buildEnableDefaults()
+
+// buildEnableDefaults derives the review-provider half of the map from the same
+// kind list the fields are generated from, so a new kind's toggles are wired
+// automatically instead of being silently left inert.
+func buildEnableDefaults() map[string][]string {
+	m := map[string][]string{
+		"brain_enabled": {"brain_esc", "brain_appr"},
+	}
+	for _, kind := range config.ReviewProviderKinds() {
+		deps := []string{pvKey(kind, "notify"), pvKey(kind, "send")}
+		if !config.IsWatchKind(kind) {
+			deps = append([]string{pvKey(kind, "onpropen")}, deps...)
+		}
+		m[pvKey(kind, "enabled")] = deps
+	}
+	return m
 }
 
 // toggleBool flips a bool field. When it flips a master "enabled" switch OFF→ON,
@@ -1485,57 +1606,58 @@ func applyLinearKey(c *config.Config, key string) string {
 	return "key stored in the macOS Keychain (service " + setupKeychainService + ")"
 }
 
-// buildReviewProviders assembles the catalog from the per-kind fields, emitting
-// an entry for every ENABLED kind (a disabled kind is dropped, so a config that
-// enables nothing writes no [[review.provider]] table — fresh-omits). The two
-// timeout fields are parsed here so a malformed one aborts save before any
-// mutation; on that path f.err is set and a non-nil error is returned.
+// buildReviewProviders assembles the catalog from the generated per-kind fields,
+// emitting an entry for every ENABLED kind (a disabled kind is dropped, so a
+// config that enables nothing writes no [[review.provider]] table —
+// fresh-omits). It walks the SAME kind list and the SAME key derivation
+// reviewProviderFields used, so a kind can never be rendered but not saved.
+//
+// Every pass kind's timeout is parsed — enabled or not, and before anything is
+// appended — so a malformed one aborts save before any mutation; on that path
+// f.err is set and a non-nil error is returned.
 func (f *settingsForm) buildReviewProviders() ([]config.ReviewProvider, error) {
-	cliTimeout, err := f.parseInt("pv_cli_timeout")
-	if err != nil {
-		return nil, err
-	}
-	claudeTimeout, err := f.parseInt("pv_claude_timeout")
-	if err != nil {
-		return nil, err
-	}
 	var out []config.ReviewProvider
-
-	if f.field("pv_cli_enabled").b {
-		p, _ := config.NewReviewProvider("coderabbit-cli")
+	for _, kind := range config.ReviewProviderKinds() {
+		// Parse EVERY pass kind's timeout, enabled or not. The field is on screen
+		// and editable whichever way its toggle sits, so a malformed value must be
+		// reported rather than silently dropped when the kind happens to be off —
+		// the behaviour before the editor was generated.
+		timeout := 0
+		if !config.IsWatchKind(kind) {
+			v, err := f.parseInt(pvKey(kind, "timeout"))
+			if err != nil {
+				return nil, err
+			}
+			timeout = v
+		}
+		if !f.field(pvKey(kind, "enabled")).b {
+			continue
+		}
+		p, ok := config.NewReviewProvider(kind)
+		if !ok {
+			continue
+		}
 		p.Enabled = true
-		p.OnPROpen = f.field("pv_cli_onpropen").b
-		p.Command = strings.TrimSpace(f.field("pv_cli_command").text)
-		p.TimeoutSeconds = cliTimeout
-		p.Notify = f.field("pv_cli_notify").b
-		p.SendToAgent = f.field("pv_cli_send").b
-		p.Visible = f.field("pv_cli_visible").b
-		p.GitHubInline = f.field("pv_cli_inline").b
-		p.SetTransportTokens(trimDropEmpty(f.field("pv_cli_transports").lines))
-		p.SetFallbackKinds(trimDropEmpty(f.field("pv_cli_fallback").lines))
-		out = append(out, p)
-	}
-	if f.field("pv_watch_enabled").b {
-		p, _ := config.NewReviewProvider("coderabbit-watch")
-		p.Enabled = true
-		p.Author = strings.TrimSpace(f.field("pv_watch_author").text)
-		p.Notify = f.field("pv_watch_notify").b
-		p.SendToAgent = f.field("pv_watch_send").b
-		p.SetTransportTokens(trimDropEmpty(f.field("pv_watch_transports").lines))
-		out = append(out, p)
-	}
-	if f.field("pv_claude_enabled").b {
-		p, _ := config.NewReviewProvider("claude-session")
-		p.Enabled = true
-		p.OnPROpen = f.field("pv_claude_onpropen").b
-		p.Model = strings.TrimSpace(f.field("pv_claude_model").text)
-		p.TimeoutSeconds = claudeTimeout
-		p.Notify = f.field("pv_claude_notify").b
-		p.SendToAgent = f.field("pv_claude_send").b
-		p.Visible = f.field("pv_claude_visible").b
-		p.GitHubInline = f.field("pv_claude_inline").b
-		p.SetTransportTokens(trimDropEmpty(f.field("pv_claude_transports").lines))
-		p.SetFallbackKinds(trimDropEmpty(f.field("pv_claude_fallback").lines))
+		p.Notify = f.field(pvKey(kind, "notify")).b
+		p.SendToAgent = f.field(pvKey(kind, "send")).b
+		p.SetTransportTokens(trimDropEmpty(f.field(pvKey(kind, "transports")).lines))
+		if config.IsCLIKind(kind) {
+			p.Command = strings.TrimSpace(f.field(pvKey(kind, "command")).text)
+			p.BaseFlag = strings.TrimSpace(f.field(pvKey(kind, "baseflag")).text)
+		}
+		if _, isAgent := config.ReviewAgentFor(kind); isAgent {
+			p.Model = strings.TrimSpace(f.field(pvKey(kind, "model")).text)
+		}
+		if config.IsWatchKind(kind) {
+			p.Author = strings.TrimSpace(f.field(pvKey(kind, "author")).text)
+			out = append(out, p)
+			continue
+		}
+		p.OnPROpen = f.field(pvKey(kind, "onpropen")).b
+		p.TimeoutSeconds = timeout
+		p.Visible = f.field(pvKey(kind, "visible")).b
+		p.GitHubInline = f.field(pvKey(kind, "inline")).b
+		p.SetFallbackKinds(trimDropEmpty(f.field(pvKey(kind, "fallback")).lines))
 		out = append(out, p)
 	}
 	return out, nil

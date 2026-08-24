@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// inlineGraded is the shape internal/reviewclaude's FORMAT block asks for.
+// inlineGraded is the shape internal/reviewagent's FORMAT block asks for.
 const inlineGraded = "**[blocker]** `internal/tmux/client.go:357` — `Mouse=false` never turns mouse off\n" +
 	"- **Grade:** impact=high confidence=verified effort=small\n" +
 	"- **Gist:** A server that inherited `mouse on` keeps consuming mouse input.\n" +

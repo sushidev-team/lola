@@ -1,4 +1,4 @@
-package reviewclaude
+package reviewagent
 
 // Tests for the VISIBLE pass (stream.go): the stream-json argv, the rendering
 // of each event kind into a plain progress line, and ReviewStream's contract —
@@ -13,14 +13,28 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/sushidev-team/lola/internal/agent"
 )
 
-// swapStream installs a fake streaming exec seam for the duration of a test.
-func swapStream(t *testing.T, fn func(ctx context.Context, bin, model, instruction, dir, stdin string, timeout time.Duration, progress io.Writer) (string, error)) {
+// streamSeam is the signature both visible-pass exec seams share.
+type streamSeam func(ctx context.Context, k agent.Kind, bin string, args []string, dir, stdin string, timeout time.Duration, progress io.Writer) (string, error)
+
+// swapStream installs a fake streaming exec seam (claude's stream-json one) for
+// the duration of a test.
+func swapStream(t *testing.T, fn streamSeam) {
 	t.Helper()
-	orig := runClaudeStream
-	runClaudeStream = fn
-	t.Cleanup(func() { runClaudeStream = orig })
+	orig := runAgentStreamJSON
+	runAgentStreamJSON = fn
+	t.Cleanup(func() { runAgentStreamJSON = orig })
+}
+
+// swapStreamPlain installs a fake for the stderr-narrating seam (codex/opencode).
+func swapStreamPlain(t *testing.T, fn streamSeam) {
+	t.Helper()
+	orig := runAgentStreamPlain
+	runAgentStreamPlain = fn
+	t.Cleanup(func() { runAgentStreamPlain = orig })
 }
 
 // swapDiff installs a fake git-diff seam.
@@ -32,14 +46,14 @@ func swapDiff(t *testing.T, out string, err error) {
 }
 
 func TestStreamArgsAskForTheStreamFormat(t *testing.T) {
-	got := buildStreamArgs("sonnet", "REVIEW-INSTRUCTION")
+	got := agent.ReviewStreamArgs(agent.Claude, "REVIEW-INSTRUCTION", "sonnet")
 	want := []string{"-p", "REVIEW-INSTRUCTION", "--output-format", "stream-json", "--verbose", "--model", "sonnet"}
 	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
 		t.Errorf("argv = %v, want %v", got, want)
 	}
 	// --verbose is mandatory alongside stream-json in print mode; without it the
 	// CLI refuses to start and every visible pass would fail.
-	if !slices.Contains(buildStreamArgs("", "x"), "--verbose") {
+	if !slices.Contains(agent.ReviewStreamArgs(agent.Claude, "x", ""), "--verbose") {
 		t.Error("streaming argv must carry --verbose")
 	}
 }
@@ -132,7 +146,7 @@ func TestRenderStreamLineClipsLongValues(t *testing.T) {
 // ReviewStream returns the result event's text and writes progress as it goes.
 func TestReviewStreamReturnsFindingsAndWritesProgress(t *testing.T) {
 	swapDiff(t, "diff --git a/x b/x", nil)
-	swapStream(t, func(_ context.Context, _, _, _, _, stdin string, _ time.Duration, progress io.Writer) (string, error) {
+	swapStream(t, func(_ context.Context, _ agent.Kind, _ string, _ []string, _, stdin string, _ time.Duration, progress io.Writer) (string, error) {
 		if stdin != "diff --git a/x b/x" {
 			t.Errorf("the diff must reach claude on stdin, got %q", stdin)
 		}
@@ -157,7 +171,7 @@ func TestReviewStreamReturnsFindingsAndWritesProgress(t *testing.T) {
 func TestReviewStreamSkipsAnEmptyDiff(t *testing.T) {
 	swapDiff(t, "   \n", nil)
 	called := false
-	swapStream(t, func(context.Context, string, string, string, string, string, time.Duration, io.Writer) (string, error) {
+	swapStream(t, func(context.Context, agent.Kind, string, []string, string, string, time.Duration, io.Writer) (string, error) {
 		called = true
 		return "", nil
 	})
@@ -180,7 +194,7 @@ func TestReviewStreamSkipsAnEmptyDiff(t *testing.T) {
 // does not).
 func TestReviewStreamPropagatesSentinels(t *testing.T) {
 	swapDiff(t, "diff", nil)
-	swapStream(t, func(context.Context, string, string, string, string, string, time.Duration, io.Writer) (string, error) {
+	swapStream(t, func(context.Context, agent.Kind, string, []string, string, string, time.Duration, io.Writer) (string, error) {
 		return "", ErrTimeout
 	})
 	_, err := (&Client{}).ReviewStream(context.Background(), t.TempDir(), "main", io.Discard)
@@ -192,7 +206,7 @@ func TestReviewStreamPropagatesSentinels(t *testing.T) {
 // A nil progress writer is legal (discard), so a caller need not supply one.
 func TestReviewStreamAcceptsNilProgress(t *testing.T) {
 	swapDiff(t, "diff", nil)
-	swapStream(t, func(_ context.Context, _, _, _, _, _ string, _ time.Duration, progress io.Writer) (string, error) {
+	swapStream(t, func(_ context.Context, _ agent.Kind, _ string, _ []string, _, _ string, _ time.Duration, progress io.Writer) (string, error) {
 		progress.Write([]byte("ignored"))
 		return "OK", nil
 	})

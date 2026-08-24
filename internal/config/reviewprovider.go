@@ -1,17 +1,38 @@
 package config
 
-import "slices"
+import (
+	"slices"
+	"strings"
+
+	"github.com/sushidev-team/lola/internal/agent"
+)
 
 // The NEW canonical review schema: a GLOBAL provider CATALOG expressed as
 // nested array-of-tables under [review] ([[review.provider]]). It generalizes
 // the two legacy tables ([review] CLI pass + [coderabbit] PR-comment watch)
 // into a set of pluggable, independently-configured providers.
 //
-// A provider has a KIND (coderabbit-cli | coderabbit-watch | claude-session),
-// a set of TRANSPORTS (the sinks its findings route to), and — for the sync
-// "pass" kinds — an ordered FALLBACK chain of other kinds tried when it cannot
-// answer (unavailable / over-quota). At most ONE provider per kind is allowed
-// (guards key by kind), enforced by validateReviewProviders.
+// NOTHING here is hardwired to one vendor. A provider has a KIND, a set of
+// TRANSPORTS (the sinks its findings route to), and — for the sync "pass" kinds
+// — an ordered FALLBACK chain of other kinds tried when it cannot answer
+// (unavailable / over-quota). The kinds group into three FAMILIES, each of which
+// is a swappable slot rather than a fixed tool:
+//
+//	family   kinds                                                shape
+//	agent    claude-session, codex-session, opencode-session      pass
+//	cli      coderabbit-cli, custom-cli                           pass
+//	watch    coderabbit-watch, bot-watch                          watch
+//
+// So the review AGENT is a config choice (run codex instead of claude, or run
+// claude with codex as its over-quota fallback), the review CLI is a config
+// choice (custom-cli takes any `command`), and which bot's GitHub review is
+// relayed is a config choice (bot-watch takes any `author`). The coderabbit-*
+// and claude-* kinds are simply the ones that ship with a working default.
+//
+// At most ONE provider per kind is allowed (guards key by kind), enforced by
+// validateReviewProviders — which is also why every agent gets its own kind
+// rather than sharing one with an `agent =` field: two agents can then run as
+// primary and fallback for the same session.
 //
 // The catalog and the legacy [review]/[coderabbit] tables are MUTUALLY
 // EXCLUSIVE: a file that carries both is a hard validation error resolved by
@@ -23,29 +44,71 @@ import "slices"
 // legacy synthesis/migration; the daemon owns provider execution, guards, and
 // transport dispatch.
 
-// provKind names a review provider kind. The three kinds map to two execution
-// shapes: coderabbit-cli / claude-session are sync "pass" shapes (exec, return
-// findings); coderabbit-watch is a "watch" shape (poll the PR for bot comments).
+// provKind names a review provider kind. Each kind maps to one of two execution
+// shapes: the agent and cli families are sync "pass" shapes (exec, return
+// findings); the watch family is a "watch" shape (poll the PR for bot comments).
 type provKind string
 
 const (
-	provCoderabbitCLI   provKind = "coderabbit-cli"
+	// The cli family: exec an external review CLI in the worktree.
+	provCoderabbitCLI provKind = "coderabbit-cli"
+	provCustomCLI     provKind = "custom-cli"
+	// The watch family: poll the PR for a review bot's own comments.
 	provCoderabbitWatch provKind = "coderabbit-watch"
+	provBotWatch        provKind = "bot-watch"
+	// The agent family: one bounded, read-only headless coding-agent review.
 	provClaudeSession   provKind = "claude-session"
+	provCodexSession    provKind = "codex-session"
+	provOpenCodeSession provKind = "opencode-session"
 )
 
-// valid reports whether k is a known provider kind.
-func (k provKind) valid() bool {
-	switch k {
-	case provCoderabbitCLI, provCoderabbitWatch, provClaudeSession:
-		return true
-	}
-	return false
+// provKinds is every known kind, in the order UIs and validation messages
+// enumerate them: the two families that need a tool first, then the agents.
+var provKinds = []provKind{
+	provCoderabbitCLI, provCustomCLI,
+	provCoderabbitWatch, provBotWatch,
+	provClaudeSession, provCodexSession, provOpenCodeSession,
 }
 
-// isWatch reports whether k is the poll/watermark "watch" shape (the only kind
-// that cannot classify quota, so it takes no fallback and no github transport).
-func (k provKind) isWatch() bool { return k == provCoderabbitWatch }
+// provKindList renders the kinds for an error message ("a|b|c").
+func provKindList() string {
+	out := make([]string, len(provKinds))
+	for i, k := range provKinds {
+		out[i] = string(k)
+	}
+	return strings.Join(out, "|")
+}
+
+// valid reports whether k is a known provider kind.
+func (k provKind) valid() bool { return slices.Contains(provKinds, k) }
+
+// isWatch reports whether k is in the poll/watermark "watch" family (the only
+// shape that cannot classify quota, so it takes no fallback and no github
+// transport).
+func (k provKind) isWatch() bool {
+	return k == provCoderabbitWatch || k == provBotWatch
+}
+
+// isCLI reports whether k execs an external review CLI, so `command` (and
+// `base_flag`) apply to it.
+func (k provKind) isCLI() bool {
+	return k == provCoderabbitCLI || k == provCustomCLI
+}
+
+// reviewAgents maps each agent-family kind to the coding agent it runs. A kind
+// absent from this map is not an agent kind.
+var reviewAgents = map[provKind]agent.Kind{
+	provClaudeSession:   agent.Claude,
+	provCodexSession:    agent.Codex,
+	provOpenCodeSession: agent.OpenCode,
+}
+
+// reviewAgent returns the coding agent k reviews with, and whether k is an
+// agent-family kind at all.
+func (k provKind) reviewAgent() (agent.Kind, bool) {
+	a, ok := reviewAgents[k]
+	return a, ok
+}
 
 // Transport is a friendly token in a provider's `transports` multiselect. The
 // three tokens expand to the resolved canonical sinks: `lola` -> notify + agent
@@ -80,18 +143,34 @@ type TransportSet []Transport
 // Has reports whether the set contains x.
 func (ts TransportSet) Has(x Transport) bool { return slices.Contains(ts, x) }
 
-// Per-kind hand-off / notification labels for the claude-session provider,
-// alongside the coderabbit-kind values kept in review.go / coderabbit.go
-// (ReviewNotifyTitle, ReviewToAgentPreamble, CodeRabbitNotifyTitle, …). The
-// daemon's route code selects the label set by provider kind so a
-// claude-session's findings are never mislabeled "CodeRabbit". Plain strings
-// (no template eval) so nothing in the findings can inject a directive.
+// Per-kind hand-off / notification labels, alongside the coderabbit-kind values
+// kept in review.go / coderabbit.go (ReviewNotifyTitle, ReviewToAgentPreamble,
+// CodeRabbitNotifyTitle, …). The daemon's route code selects the label set by
+// provider kind so a codex review is never mislabeled "CodeRabbit" — the whole
+// point of a pluggable catalog is that the human reading a finding can tell WHO
+// produced it. Plain strings (no template eval) so nothing in the findings can
+// inject a directive.
 const (
 	// ClaudeReviewNotifyTitle titles the human-facing claude-session notification/comment.
 	ClaudeReviewNotifyTitle = "Claude review"
 	// ClaudeReviewToAgentPreamble prefixes the findings sent to the worker agent.
 	ClaudeReviewToAgentPreamble = "A Claude review of your PR found the following. Address the actionable items, commit, and push. Ignore anything already handled or out of scope:\n"
+	// CodexReviewNotifyTitle / OpenCodeReviewNotifyTitle are the same for the
+	// other two review agents.
+	CodexReviewNotifyTitle    = "Codex review"
+	OpenCodeReviewNotifyTitle = "opencode review"
+	// CustomCLIReviewNotifyTitle titles a custom-cli pass, whose tool lola cannot
+	// name (it is whatever `command` runs), so the label stays generic.
+	CustomCLIReviewNotifyTitle = "Code review"
 )
+
+// ReviewAgentPreamble is the worker hand-off preamble for a review by agent a.
+// It names the reviewer so the worker knows whose findings it is being handed,
+// and is lola's OWN text, prepended to untrusted findings — never templated
+// from them.
+func ReviewAgentPreamble(who string) string {
+	return "A " + who + " review of your PR found the following. Address the actionable items, commit, and push. Ignore anything already handled or out of scope:\n"
+}
 
 // ReviewProvider is one resolved entry of the global catalog. It carries the
 // RESOLVED value of every key (defaults already applied); the on-disk mirror
@@ -101,10 +180,19 @@ const (
 //
 //   - Provider is the kind; Enabled gates the entry.
 //   - OnPROpen (pass shapes) runs the pass when a session first opens a PR.
-//   - Command overrides the coderabbit-cli argv (space-split); coderabbit-cli only.
-//   - TimeoutSeconds bounds each pass (pass shapes); defaults to 300.
-//   - Model optionally sets claude-session's --model; claude-session only.
-//   - Author is the login substring matched by the watch; coderabbit-watch only.
+//   - Command is the review CLI argv (space-split); cli family only. It is
+//     OPTIONAL for coderabbit-cli (which has a working default) and REQUIRED for
+//     custom-cli (which has no tool of its own).
+//   - BaseFlag names the flag the base branch is passed with; cli family only.
+//     Defaults to "--base"; an explicit empty value appends nothing, for a tool
+//     that takes no base argument.
+//   - TimeoutSeconds bounds each pass (pass shapes); defaults to 300, or 900 for
+//     an agent kind (that pass reads the PR's files before it reports).
+//   - Model optionally sets the agent's --model; agent family only. opencode
+//     expects "provider/model".
+//   - Author is the login substring matched by the watch; watch family only. It
+//     defaults to CodeRabbit's login for coderabbit-watch and is REQUIRED for
+//     bot-watch (which exists precisely to name a different bot).
 //   - Transports is the resolved sink multiselect (always contains lola).
 //   - GitHubInline refines the github transport: the findings are posted as a
 //     pull-request REVIEW with one anchored, resolvable thread per finding
@@ -123,6 +211,7 @@ type ReviewProvider struct {
 	Enabled        bool
 	OnPROpen       bool
 	Command        string
+	BaseFlag       string
 	TimeoutSeconds int
 	Model          string
 	Author         string
@@ -148,6 +237,7 @@ type fileReviewProvider struct {
 	Enabled        *bool         `toml:"enabled,omitempty"`
 	OnPROpen       *bool         `toml:"on_pr_open,omitempty"`
 	Command        *string       `toml:"command,omitempty"`
+	BaseFlag       *string       `toml:"base_flag,omitempty"`
 	TimeoutSeconds *int          `toml:"timeout_seconds,omitempty"`
 	Model          *string       `toml:"model,omitempty"`
 	Author         *string       `toml:"author,omitempty"`
@@ -174,24 +264,52 @@ func resolveReviewProviders(fps []fileReviewProvider) []ReviewProvider {
 	return out
 }
 
+// applyKindDefaults fills the three defaults that depend on WHICH kind a
+// provider is. It is called with only p.Provider set, so it must never read
+// another field.
+//
+//   - TimeoutSeconds: an agent pass reads the PR's files before it reports, so a
+//     real PR takes minutes where a CLI pass takes seconds — hence
+//     DefaultClaudeReviewTimeoutSeconds for the agent family and
+//     DefaultReviewTimeoutSeconds for everything else.
+//   - BaseFlag: the cli family names the base branch on the argv
+//     (DefaultReviewBaseFlag). Non-cli kinds have no argv of their own.
+//   - Author: coderabbit-watch watches CodeRabbit. bot-watch deliberately gets
+//     NO default — it exists to watch a different bot, and defaulting it to
+//     CodeRabbit's login would silently make the two kinds identical.
+func applyKindDefaults(p *ReviewProvider) {
+	p.TimeoutSeconds = DefaultReviewTimeoutSeconds
+	if _, isAgent := p.Provider.reviewAgent(); isAgent {
+		p.TimeoutSeconds = DefaultClaudeReviewTimeoutSeconds
+	}
+	if p.Provider.isCLI() {
+		p.BaseFlag = DefaultReviewBaseFlag
+	}
+	if p.Provider == provCoderabbitWatch {
+		p.Author = DefaultCodeRabbitAuthor
+	}
+}
+
 // resolveReviewProvider applies the per-provider defaults (§1.3): transports
 // absent -> [lola] and lola always force-appended; notify / send_to_agent /
-// on_pr_open / github_inline absent -> true; timeout_seconds absent ->
-// DefaultReviewTimeoutSeconds; author absent/empty -> DefaultCodeRabbitAuthor;
-// fallback absent/empty -> none.
+// on_pr_open / github_inline absent -> true; fallback absent/empty -> none. The
+// three KIND-DEPENDENT defaults (timeout_seconds, base_flag, author) are applied
+// from kindDefaults once the kind is known, BEFORE the explicit keys overlay, so
+// an explicit value always wins and a kind that has no sensible default (a
+// bot-watch's author, a custom-cli's command) resolves EMPTY and is caught by
+// validation rather than silently inheriting CodeRabbit's.
 func resolveReviewProvider(fp fileReviewProvider) ReviewProvider {
 	p := ReviewProvider{
-		OnPROpen:       true,
-		GitHubInline:   true,
-		Notify:         true,
-		SendToAgent:    true,
-		Visible:        true,
-		TimeoutSeconds: DefaultReviewTimeoutSeconds,
-		Author:         DefaultCodeRabbitAuthor,
+		OnPROpen:     true,
+		GitHubInline: true,
+		Notify:       true,
+		SendToAgent:  true,
+		Visible:      true,
 	}
 	if fp.Provider != nil {
 		p.Provider = *fp.Provider
 	}
+	applyKindDefaults(&p)
 	if fp.Enabled != nil {
 		p.Enabled = *fp.Enabled
 	}
@@ -201,14 +319,11 @@ func resolveReviewProvider(fp fileReviewProvider) ReviewProvider {
 	if fp.Command != nil {
 		p.Command = *fp.Command
 	}
+	if fp.BaseFlag != nil {
+		p.BaseFlag = *fp.BaseFlag
+	}
 	if fp.TimeoutSeconds != nil {
 		p.TimeoutSeconds = *fp.TimeoutSeconds
-	} else if p.Provider == provClaudeSession {
-		// Per-kind default: a claude-session pass reads the PR's files, so it
-		// needs minutes where a CLI pass needs seconds (see
-		// DefaultClaudeReviewTimeoutSeconds). Applied only when the key is
-		// ABSENT — an explicit timeout_seconds always wins.
-		p.TimeoutSeconds = DefaultClaudeReviewTimeoutSeconds
 	}
 	if fp.Model != nil {
 		p.Model = *fp.Model
@@ -268,6 +383,7 @@ func reviewProvidersFile(ps []ReviewProvider) []fileReviewProvider {
 			Enabled:        &p.Enabled,
 			OnPROpen:       &p.OnPROpen,
 			Command:        &p.Command,
+			BaseFlag:       &p.BaseFlag,
 			TimeoutSeconds: &p.TimeoutSeconds,
 			Model:          &p.Model,
 			Author:         &p.Author,
@@ -299,9 +415,29 @@ func ptrProvKind(k provKind) *provKind { return &k }
 // provider's kind/fallback as plain strings, and construct/mutate a provider
 // from the string values its widgets carry — without ever touching provKind.
 
-// ReviewProviderKinds is the selectable provider-kind catalog, as strings.
+// ReviewProviderKinds is the selectable provider-kind catalog, as strings, in
+// the order a UI should offer them. Both UIs BUILD THEIR PROVIDER EDITORS FROM
+// THIS LIST rather than hardcoding kinds, so adding a kind here is all it takes
+// for both to offer it.
 func ReviewProviderKinds() []string {
-	return []string{string(provCoderabbitCLI), string(provCoderabbitWatch), string(provClaudeSession)}
+	out := make([]string, len(provKinds))
+	for i, k := range provKinds {
+		out[i] = string(k)
+	}
+	return out
+}
+
+// ReviewProviderPassKinds is the subset of ReviewProviderKinds with the sync
+// "pass" shape — the kinds a fallback chain may reference and `lola review
+// --provider` may force.
+func ReviewProviderPassKinds() []string {
+	var out []string
+	for _, k := range provKinds {
+		if !k.isWatch() {
+			out = append(out, string(k))
+		}
+	}
+	return out
 }
 
 // TransportTokens is the selectable transport multiselect, as strings.
@@ -312,9 +448,29 @@ func TransportTokens() []string {
 // ValidReviewProviderKind reports whether s names a known provider kind.
 func ValidReviewProviderKind(s string) bool { return provKind(s).valid() }
 
-// IsWatchKind reports whether s is the coderabbit-watch kind (no fallback / no
-// github transport — the UI hides those affordances for it).
+// IsWatchKind reports whether s is a watch-family kind (no fallback / no github
+// transport — the UI hides those affordances for it).
 func IsWatchKind(s string) bool { return provKind(s).isWatch() }
+
+// IsCLIKind reports whether s execs an external review CLI, so a UI should offer
+// it the `command` / `base_flag` fields.
+func IsCLIKind(s string) bool { return provKind(s).isCLI() }
+
+// ReviewAgentFor returns the coding agent kind s reviews with ("claude" |
+// "codex" | "opencode"), and false when s is not an agent-family kind — the test
+// a UI uses to decide whether to offer the `model` field.
+func ReviewAgentFor(s string) (string, bool) {
+	a, ok := provKind(s).reviewAgent()
+	return string(a), ok
+}
+
+// ReviewKindRequiresCommand reports whether s has no built-in tool of its own,
+// so `command` is mandatory rather than an override.
+func ReviewKindRequiresCommand(s string) bool { return provKind(s) == provCustomCLI }
+
+// ReviewKindRequiresAuthor reports whether s has no default bot login, so
+// `author` is mandatory.
+func ReviewKindRequiresAuthor(s string) bool { return provKind(s) == provBotWatch }
 
 // KindString returns the provider's kind as a plain string.
 func (p ReviewProvider) KindString() string { return string(p.Provider) }
@@ -342,15 +498,14 @@ func (ts TransportSet) Strings() []string {
 // from the same baseline a fresh [[review.provider]] resolves to. ok is false
 // for an unknown kind.
 func NewReviewProvider(kind string) (ReviewProvider, bool) {
-	if !provKind(kind).valid() {
+	k := provKind(kind)
+	if !k.valid() {
 		return ReviewProvider{}, false
 	}
-	p := resolveReviewProvider(fileReviewProvider{})
-	p.Provider = provKind(kind)
-	if p.Provider.isWatch() {
-		p.Visible = false // resolution's watch rule, re-applied now that the kind is known
-	}
-	return p, true
+	// Resolve an entry that carries ONLY the kind, so every kind-dependent
+	// default (timeout, base flag, author, the watch's Visible rule) is applied
+	// by the same code path a fresh [[review.provider]] takes on load.
+	return resolveReviewProvider(fileReviewProvider{Provider: &k}), true
 }
 
 // SetKind sets the provider's kind from a string.
@@ -452,6 +607,7 @@ func synthesizeLegacyProviders(rc ReviewConfig, cc CodeRabbitConfig) []ReviewPro
 			Enabled:        rc.Enabled,
 			OnPROpen:       rc.OnPROpen,
 			Command:        rc.Command,
+			BaseFlag:       DefaultReviewBaseFlag, // the legacy pass always passed --base
 			TimeoutSeconds: rc.TimeoutSeconds,
 			Author:         DefaultCodeRabbitAuthor,
 			Transports:     tr,

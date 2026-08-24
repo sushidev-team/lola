@@ -389,7 +389,7 @@ class Store {
     return this.act(() => DaemonService.Revive(session), `revived ${session}`);
   }
   // review forces a QA review PASS. provider optionally selects the pass
-  // provider kind (coderabbit-cli | claude-session); "" forces the primary.
+  // provider kind (any pass kind: a cli or agent one); "" forces the primary.
   review(session: string, provider = "") {
     return this.act(() => DaemonService.Review(session, provider), "review requested");
   }

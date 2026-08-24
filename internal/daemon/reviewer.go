@@ -5,9 +5,12 @@ package daemon
 // (review.go) and the [coderabbit] PR-comment watch (coderabbit.go) — into a set
 // of pluggable PROVIDERS, each with:
 //
-//   - a KIND (coderabbit-cli | coderabbit-watch | claude-session) mapping to one
-//     of two execution SHAPES: a sync "pass" (exec, return findings) or a "watch"
-//     (poll the PR for bot comments against a watermark);
+//   - a KIND — one of three FAMILIES, each a swappable slot rather than a fixed
+//     tool: an AGENT pass (claude-session | codex-session | opencode-session),
+//     a CLI pass (coderabbit-cli | custom-cli), or a bot WATCH
+//     (coderabbit-watch | bot-watch) — mapping to one of two execution SHAPES:
+//     a sync "pass" (exec, return findings) or a "watch" (poll the PR for bot
+//     comments against a watermark);
 //   - a set of TRANSPORTS (the sinks its findings route to: notify + agent via
 //     the always-on `lola` transport, plus opt-in `github` and `linear`);
 //   - for pass shapes, an ordered FALLBACK chain of other kinds tried when this
@@ -15,11 +18,12 @@ package daemon
 //
 // The descriptors live on d.reviewProviders (guarded by d.mu), built by
 // setReviewProvidersLocked from the [[review.provider]] catalog OR synthesized
-// from the legacy tables. The raw exec CLIENTS stay single func-field seams
-// (d.reviewRun / d.claudeReviewRun / d.coderabbitComments / d.postPRComment) so
-// the existing fake-install test model keeps working; the descriptor never
-// captures a seam — runReviewChain / runProviderWatch look it up under d.mu AT
-// CALL TIME (late binding), so a fake installed after setup still wins.
+// from the legacy tables. The raw exec CLIENTS live in the per-kind seam map
+// d.passRuns (plus the two single func fields d.coderabbitComments /
+// d.postPRComment) so the existing fake-install test model keeps working; the
+// descriptor never captures a seam — runReviewChain / runProviderWatch look it
+// up under d.mu AT CALL TIME (late binding), so a fake installed after setup
+// still wins.
 //
 // Every invariant of the two legacy features is preserved per kind: fire-once
 // guards (now kind-keyed maps), the sanitize + AtPrompt idle-gate on the worker
@@ -40,7 +44,7 @@ import (
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/notify"
 	"github.com/sushidev-team/lola/internal/review"
-	"github.com/sushidev-team/lola/internal/reviewclaude"
+	"github.com/sushidev-team/lola/internal/reviewagent"
 	"github.com/sushidev-team/lola/internal/reviewmd"
 	"github.com/sushidev-team/lola/internal/scm"
 	"github.com/sushidev-team/lola/internal/session"
@@ -57,6 +61,12 @@ const (
 	kindCoderabbitWatch provKind = "coderabbit-watch"
 	kindClaudeSession   provKind = "claude-session"
 )
+
+// The daemon deliberately names only the kinds it must MATCH ON by name (the
+// two legacy guard keys and the `lola coderabbit` alias target). Every other
+// kind — and every new one — is driven entirely by its config-side FAMILY
+// (config.ReviewAgentFor / config.IsCLIKind / config.IsWatchKind), so adding a
+// review agent needs no daemon change at all.
 
 // passRun is the pass-shape exec seam: run provider kind K's review of the
 // worktree at dir against base, for the named session. The session id is passed
@@ -107,23 +117,26 @@ type reviewProvider struct {
 // from Run and handleReload so enabling/disabling a provider (or changing its
 // command/timeout/transports/fallback) takes effect live.
 //
-// The clients (d.review/d.reviewRun for coderabbit-cli, d.claudeReview/
-// d.claudeReviewRun for claude-session) are rebuilt for EVERY enabled pass
-// provider — including a fallback-only one — so the chain can reach it; a nil
-// seam means that kind's binary is unavailable, which the chain treats as
+// The per-kind exec seams (d.passRuns) are rebuilt for EVERY enabled pass
+// provider — including a fallback-only one — so the chain can reach it; a kind
+// ABSENT from the map means its binary is unavailable, which the chain treats as
 // "can't answer" (advance / skip). The watch fetch seam is stateless and left
 // as wired in newDaemon.
+//
+// The per-kind switch is on the config-side FAMILY, never on a list of kind
+// names, so a new review agent (or a new generic CLI / watch kind) is picked up
+// here with no edit at all.
 func (d *Daemon) setReviewProvidersLocked(nc *config.Config) {
 	eff := nc.EffectiveReviewProviders()
 
-	// Reset the pass clients; each enabled pass provider rebuilds its own below.
-	d.review, d.reviewRun = nil, nil
-	d.claudeReview, d.claudeReviewRun = nil, nil
+	// Reset the pass seams; each enabled pass provider rebuilds its own below.
+	d.passRuns = map[provKind]passRun{}
 
 	descs := make([]reviewProvider, 0, len(eff))
 	for _, cp := range eff {
+		kind := provKind(string(cp.Provider))
 		desc := reviewProvider{
-			Kind:           provKind(string(cp.Provider)),
+			Kind:           kind,
 			Enabled:        cp.Enabled,
 			OnPROpen:       cp.OnPROpen,
 			Transports:     cp.Transports,
@@ -134,33 +147,38 @@ func (d *Daemon) setReviewProvidersLocked(nc *config.Config) {
 			Fallback:       toDaemonKinds(cp.Fallback),
 			TimeoutSeconds: cp.TimeoutSeconds,
 		}
-		switch desc.Kind {
-		case kindClaudeSession:
-			desc.Shape, desc.Handoff = shapePass, handoffFull
-			if cp.Enabled {
-				if cl := buildClaudeReview(cp); cl != nil {
-					d.claudeReview = cl
-					d.claudeReviewRun = d.passSeamFor(cp, ignoreSession(cl.Review))
-				}
-			}
-		case kindCoderabbitWatch:
+		if config.IsWatchKind(string(cp.Provider)) {
 			desc.Shape, desc.Handoff = shapeWatch, handoffPointer
-		default: // coderabbit-cli
-			desc.Shape, desc.Handoff = shapePass, handoffFull
-			if cp.Enabled {
-				if cl := buildReview(config.ReviewConfig{
-					Enabled:        true,
-					Command:        cp.Command,
-					TimeoutSeconds: cp.TimeoutSeconds,
-				}); cl != nil {
-					d.review = cl
-					d.reviewRun = d.passSeamFor(cp, ignoreSession(cl.Review))
-				}
+			descs = append(descs, desc)
+			continue
+		}
+		desc.Shape, desc.Handoff = shapePass, handoffFull
+		if cp.Enabled {
+			if direct := buildPassClient(cp); direct != nil {
+				d.passRuns[kind] = d.passSeamFor(cp, ignoreSession(direct))
 			}
 		}
 		descs = append(descs, desc)
 	}
 	d.reviewProviders = descs
+}
+
+// buildPassClient constructs the in-process review client for ONE pass provider,
+// or nil when its binary is not on PATH (the caller then leaves the kind out of
+// the seam map, which the chain reads as "can't answer"). Which client it builds
+// follows the kind's FAMILY: an agent kind gets a reviewagent.Client driving that
+// agent, anything else the cli family's review.Client.
+func buildPassClient(cp config.ReviewProvider) func(ctx context.Context, worktreeDir, baseBranch string) (string, error) {
+	if a, isAgent := config.ReviewAgentFor(string(cp.Provider)); isAgent {
+		if cl := buildAgentReview(a, cp); cl != nil {
+			return cl.Review
+		}
+		return nil
+	}
+	if cl := buildReview(cp); cl != nil {
+		return cl.Review
+	}
+	return nil
 }
 
 // passSeamFor picks how a pass EXECUTES: in its own tmux review pane when the
@@ -192,11 +210,12 @@ func toDaemonKinds[K ~string](in []K) []provKind {
 	return out
 }
 
-// buildClaudeReview constructs the headless-claude review client for a
-// claude-session provider, or nil when claude is not on PATH (so the seam stays
-// nil and the chain skips this provider). Model / timeout come from the entry.
-func buildClaudeReview(cp config.ReviewProvider) *reviewclaude.Client {
-	cl := &reviewclaude.Client{Model: cp.Model}
+// buildAgentReview constructs the headless review client for an agent-family
+// provider running coding agent a, or nil when that agent's binary is not on
+// PATH (so the kind stays out of the seam map and the chain skips it). Model /
+// timeout come from the entry.
+func buildAgentReview(a string, cp config.ReviewProvider) *reviewagent.Client {
+	cl := &reviewagent.Client{Agent: agent.Kind(a), Model: cp.Model}
 	if cp.TimeoutSeconds > 0 {
 		cl.Timeout = time.Duration(cp.TimeoutSeconds) * time.Second
 	}
@@ -213,24 +232,29 @@ func buildClaudeReview(cp config.ReviewProvider) *reviewclaude.Client {
 func (d *Daemon) reviewUnavailableWarnLocked() string {
 	var missing []string
 	for _, p := range d.reviewProviders {
-		if !p.Enabled || p.Shape != shapePass {
+		if !p.Enabled || p.Shape != shapePass || d.passRuns[p.Kind] != nil {
 			continue
 		}
-		switch p.Kind {
-		case kindCoderabbitCLI:
-			if d.reviewRun == nil {
-				missing = append(missing, "coderabbit-cli (coderabbit not on PATH; run: coderabbit auth login)")
-			}
-		case kindClaudeSession:
-			if d.claudeReviewRun == nil {
-				missing = append(missing, "claude-session (claude not on PATH)")
-			}
-		}
+		missing = append(missing, fmt.Sprintf("%s (%s not on PATH)", p.Kind, passBinaryName(p.Kind)))
 	}
 	if len(missing) == 0 {
 		return ""
 	}
 	return "review: enabled provider(s) unavailable, that pass will not run: " + strings.Join(missing, "; ")
+}
+
+// passBinaryName names the executable a pass kind needs, for the unavailable
+// warning. An agent kind reports its agent's binary; the cli family reports its
+// tool ("coderabbit", or "the configured command" for custom-cli, whose argv
+// lola cannot name from the kind alone).
+func passBinaryName(k provKind) string {
+	if a, isAgent := config.ReviewAgentFor(string(k)); isAgent {
+		return agent.Kind(a).Binary()
+	}
+	if k == kindCoderabbitCLI {
+		return "coderabbit"
+	}
+	return "its configured command"
 }
 
 // --- descriptor queries (all snapshot d.reviewProviders under d.mu) ----------
@@ -327,10 +351,20 @@ func (d *Daemon) resolveReviewForce(kind string) (reviewProvider, bool) {
 	return p, true
 }
 
-// watchProvider returns the enabled coderabbit-watch descriptor, if any.
+// watchProvider returns the enabled WATCH descriptor a forced poll targets, if
+// any — coderabbit-watch by preference, else whichever watch kind is enabled.
 func (d *Daemon) watchProvider() (reviewProvider, bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	// coderabbit-watch wins when both watch kinds are configured, because the
+	// command that reaches here is `lola coderabbit` and answering it with a
+	// different bot's feedback would be a surprise. The observer runs BOTH on the
+	// cadence regardless; this only picks what a forced poll re-surfaces.
+	for _, p := range d.reviewProviders {
+		if p.Enabled && p.Kind == kindCoderabbitWatch {
+			return p, true
+		}
+	}
 	for _, p := range d.reviewProviders {
 		if p.Enabled && p.Shape == shapeWatch {
 			return p, true
@@ -356,13 +390,23 @@ func (d *Daemon) anyGithubPassLocked() bool {
 func (d *Daemon) passSeam(k provKind) passRun {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	switch k {
-	case kindCoderabbitCLI:
-		return d.reviewRun
-	case kindClaudeSession:
-		return d.claudeReviewRun
+	return d.passRuns[k]
+}
+
+// setPassRun installs (or, with a nil fn, removes) one kind's pass seam. It is
+// the ONE writer besides setReviewProvidersLocked, so tests install a fake
+// without reaching into the map under their own lock.
+func (d *Daemon) setPassRun(k provKind, fn passRun) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.passRuns == nil {
+		d.passRuns = map[provKind]passRun{}
 	}
-	return nil
+	if fn == nil {
+		delete(d.passRuns, k)
+		return
+	}
+	d.passRuns[k] = fn
 }
 
 func (d *Daemon) watchSeam() func(ctx context.Context, repo string, pr int, since time.Time, author, selfLogin string) (string, time.Time, error) {
@@ -550,14 +594,14 @@ func (d *Daemon) runReviewChain(ctx context.Context, s session.Session, p review
 }
 
 // isFallbackErr reports whether err is a "provider can't answer right now" class
-// that should advance to a fallback (over BOTH the review and reviewclaude
+// that should advance to a fallback (over BOTH the review and reviewagent
 // sentinels). ErrAuth / ErrExit are deliberately excluded — they are a graceful
 // stop, not a fall-through.
 func isFallbackErr(err error) bool {
 	switch {
 	case errors.Is(err, review.ErrNotFound), errors.Is(err, review.ErrTimeout), errors.Is(err, review.ErrQuota):
 		return true
-	case errors.Is(err, reviewclaude.ErrNotFound), errors.Is(err, reviewclaude.ErrTimeout), errors.Is(err, reviewclaude.ErrQuota):
+	case errors.Is(err, reviewagent.ErrNotFound), errors.Is(err, reviewagent.ErrTimeout), errors.Is(err, reviewagent.ErrQuota):
 		return true
 	}
 	return false
@@ -627,7 +671,7 @@ func (d *Daemon) routeFindings(ctx context.Context, s session.Session, p reviewP
 	if notifier == nil {
 		notifier = notify.New(notify.NotifyConfig{})
 	}
-	lbl := labelsFor(p.Kind)
+	lbl := labelsFor(p)
 
 	findings = strings.TrimSpace(findings)
 	if findings == "" {
@@ -683,7 +727,7 @@ func (d *Daemon) routeFindings(ctx context.Context, s session.Session, p reviewP
 // single-line PR pointer for a watch (never the raw comment text).
 func handoffStash(s session.Session, p reviewProvider, findings string) string {
 	if p.Handoff == handoffPointer {
-		return coderabbitAgentPointer(s)
+		return watchAgentPointer(s, p)
 	}
 	return findings
 }
@@ -804,7 +848,7 @@ func (d *Daemon) sendHandoffToAgent(ctx context.Context, s session.Session, p re
 
 	msg := stash
 	if p.Handoff == handoffFull {
-		msg = labelsFor(p.Kind).agentPreamble + stash
+		msg = labelsFor(p).agentPreamble + stash
 	}
 	// When the same findings are also sitting on the PR as resolvable threads,
 	// say so and how to close them (lola's own text, appended AFTER the untrusted
@@ -945,7 +989,7 @@ func (d *Daemon) commentOnLinear(ctx context.Context, s session.Session, p revie
 	}
 	cctx, cancel := context.WithTimeout(ctx, reactExecTimeout)
 	defer cancel()
-	body := labelsFor(p.Kind).notifyTitle + ":\n\n" + findings
+	body := labelsFor(p).notifyTitle + ":\n\n" + findings
 	if err := api.CreateComment(cctx, s.IssueUUID, body); err != nil {
 		d.wbLinErr(fmt.Sprintf("%s comment for %s", p.Kind, issueLabel(s)), err)
 		return
@@ -973,7 +1017,7 @@ func (d *Daemon) commentOnLinear(ctx context.Context, s session.Session, p revie
 // presentation-only and fails open (unparseable findings are posted verbatim under
 // a plain heading, a missing repo/branch just drops the links); the agent, notify
 // and Linear sinks keep the raw text byte for byte.
-// It IS run through neutralizeBotTriggers first so a `@coderabbitai` mention that
+// It IS run through neutralizeWatchedBots first so a `@coderabbitai` mention that
 // happens to appear in the findings can never kick off a fresh CodeRabbit review
 // on the PR (the "check the PR but never trigger a new CodeRabbit there" guarantee
 // that makes a watch-only posture safe even alongside a github-posting provider).
@@ -1001,8 +1045,8 @@ func (d *Daemon) postGithubSink(ctx context.Context, s session.Session, p review
 	}
 	cctx, cancel := context.WithTimeout(ctx, reactExecTimeout)
 	defer cancel()
-	body := neutralizeBotTriggers(reviewmd.Render(reviewmd.Options{
-		Title: labelsFor(p.Kind).notifyTitle,
+	body := d.neutralizeWatchedBots(reviewmd.Render(reviewmd.Options{
+		Title: labelsFor(p).notifyTitle,
 		Repo:  s.Repo,
 		Ref:   s.Branch, // empty ⇒ locations render as plain code, never a wrong link
 	}, findings))
@@ -1042,6 +1086,61 @@ func neutralizeBotTriggers(body string) string {
 	return botTriggerRe.ReplaceAllString(body, "@\u200b$1")
 }
 
+// neutralizeWatchedBots is neutralizeBotTriggers PLUS the login of every WATCHED
+// bot in this daemon's catalog. The hazard generalizes with the catalog: any
+// review bot that reads its own @-mention as a command will start a fresh review
+// when lola's posted findings happen to name it — the same credit burn and the
+// same self-feedback loop, just not CodeRabbit's. So the authors lola is
+// configured to watch are defused too, on EVERY body (summary and thread alike).
+//
+// It is defensive, not exhaustive: lola can only defuse the bots it knows about,
+// and the coderabbit pattern stays unconditional so the historical guarantee
+// holds whether or not a watch is configured.
+func (d *Daemon) neutralizeWatchedBots(body string) string {
+	return d.botNeutralizer()(body)
+}
+
+// botNeutralizer builds neutralizeWatchedBots ONCE, so an inline post — which
+// defuses a dozen bodies (a summary plus one per thread) in a row — reads the
+// catalog and compiles its pattern a single time rather than per body.
+func (d *Daemon) botNeutralizer() func(string) string {
+	authors := d.watchedAuthors()
+	if len(authors) == 0 {
+		return neutralizeBotTriggers
+	}
+	// ONE case-insensitive alternation: GitHub logins are case-insensitive, so
+	// @Greptile-Apps is the same trigger as @greptile-apps. The authors are
+	// already sanitized to login characters, but they are quoted anyway — a
+	// config value must never be spliced into a pattern raw.
+	quoted := make([]string, len(authors))
+	for i, a := range authors {
+		quoted[i] = regexp.QuoteMeta(a)
+	}
+	re, err := regexp.Compile(`(?i)@(` + strings.Join(quoted, "|") + `)`)
+	if err != nil {
+		return neutralizeBotTriggers // unreachable after QuoteMeta; fail toward the plain defuse
+	}
+	return func(body string) string {
+		return re.ReplaceAllString(neutralizeBotTriggers(body), "@\u200b$1")
+	}
+}
+
+// watchedAuthors returns the sanitized login of every ENABLED watch provider.
+func (d *Daemon) watchedAuthors() []string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	var out []string
+	for _, p := range d.reviewProviders {
+		if !p.Enabled || p.Shape != shapeWatch {
+			continue
+		}
+		if who := botDisplayName(p.Author); who != "Bot" {
+			out = append(out, who)
+		}
+	}
+	return out
+}
+
 // isPermanentGhError classifies a gh error as permanent (the post can never
 // succeed for this PR: 422 unprocessable, 403 forbidden / no write permission) vs
 // transient (5xx, timeout, network — retry next cycle). The error is the
@@ -1062,37 +1161,86 @@ func isPermanentGhError(err error) bool {
 	return false
 }
 
-// coderabbitAgentPointer builds the single-line instruction handed to the worker
-// for a watch hand-off. It is derived only from the PR number (our own text — no
-// untrusted content), so it submits cleanly and carries nothing attacker-authored
-// into the pane.
-func coderabbitAgentPointer(s session.Session) string {
+// watchAgentPointer builds the single-line instruction handed to the worker for a
+// watch hand-off. It is derived only from the PR number and the provider's own
+// (sanitized) display name — our own text, no untrusted content — so it submits
+// cleanly and carries nothing attacker-authored into the pane. Naming the bot
+// matters once the watch is pluggable: "CodeRabbit posted feedback" sent for a
+// Greptile watch would point the worker at comments that do not exist.
+func watchAgentPointer(s session.Session, p reviewProvider) string {
 	n := 0
 	if s.PR != nil {
 		n = s.PR.Number
 	}
-	return fmt.Sprintf(config.CodeRabbitAgentPointerFmt, n, n)
+	if p.Kind == kindCoderabbitWatch {
+		return fmt.Sprintf(config.CodeRabbitAgentPointerFmt, n, n)
+	}
+	return config.BotAgentPointer(labelsFor(p).who, n)
 }
 
 // --- per-kind labels ---------------------------------------------------------
 
-// provLabels carries the per-kind human strings so a claude-session's findings
-// read "Claude review" and a coderabbit's read "CodeRabbit" (never mislabelled).
+// provLabels carries the per-provider human strings so a codex review reads
+// "Codex review" and a coderabbit's reads "CodeRabbit" — never mislabelled. With
+// the catalog pluggable, WHO produced a finding is the one thing a reader cannot
+// infer from the finding itself, so it is always stated.
 type provLabels struct {
 	notifyTitle   string
 	agentPreamble string // full hand-off only
+	who           string // the reviewer's display name, used in the watch pointer
 }
 
-func labelsFor(k provKind) provLabels {
-	switch k {
-	case kindClaudeSession:
-		return provLabels{config.ClaudeReviewNotifyTitle, config.ClaudeReviewToAgentPreamble}
-	case kindCoderabbitWatch:
-		return provLabels{config.CodeRabbitNotifyTitle, ""} // pointer hand-off, no preamble
-	default: // coderabbit-cli
-		return provLabels{config.ReviewNotifyTitle, config.ReviewToAgentPreamble}
+// labelsFor derives a provider's labels. It takes the DESCRIPTOR, not the bare
+// kind, because a generic watch is named by its configured `author` — a
+// bot-watch relaying Greptile must not announce itself as CodeRabbit — and only
+// the descriptor carries it.
+func labelsFor(p reviewProvider) provLabels {
+	if a, isAgent := config.ReviewAgentFor(string(p.Kind)); isAgent {
+		switch agent.Kind(a) {
+		case agent.Codex:
+			return provLabels{config.CodexReviewNotifyTitle, config.ReviewAgentPreamble("Codex"), "Codex"}
+		case agent.OpenCode:
+			return provLabels{config.OpenCodeReviewNotifyTitle, config.ReviewAgentPreamble("opencode"), "opencode"}
+		default:
+			return provLabels{config.ClaudeReviewNotifyTitle, config.ClaudeReviewToAgentPreamble, "Claude"}
+		}
 	}
+	switch p.Kind {
+	case kindCoderabbitWatch:
+		return provLabels{config.CodeRabbitNotifyTitle, "", config.DefaultCodeRabbitAuthor} // pointer hand-off, no preamble
+	case kindCoderabbitCLI:
+		return provLabels{config.ReviewNotifyTitle, config.ReviewToAgentPreamble, "CodeRabbit"}
+	}
+	// The generic kinds: a bot-watch is named by the bot it watches, a custom-cli
+	// by nothing at all (its tool is an argv lola must not quote into a label).
+	if p.Shape == shapeWatch {
+		who := botDisplayName(p.Author)
+		return provLabels{who + " review", "", who}
+	}
+	return provLabels{config.CustomCLIReviewNotifyTitle, config.ReviewAgentPreamble("code"), "the review tool"}
 }
+
+// botDisplayName renders a watch's configured author for a human label. The
+// author is an operator-typed login SUBSTRING, so it is clipped and stripped of
+// anything that is not a plain login character before it can reach a
+// notification title, a Linear comment or the worker's pane — it is config, not
+// findings, but it still ends up inside text lola generates.
+func botDisplayName(author string) string {
+	clean := botLoginRe.ReplaceAllString(author, "")
+	if len(clean) > maxBotNameBytes {
+		clean = clean[:maxBotNameBytes]
+	}
+	if clean == "" {
+		return "Bot"
+	}
+	return clean
+}
+
+// botLoginRe keeps only the characters a GitHub login can contain; maxBotNameBytes
+// bounds what a label may carry.
+var botLoginRe = regexp.MustCompile(`[^A-Za-z0-9_.\[\]-]+`)
+
+const maxBotNameBytes = 39 // GitHub's own login length ceiling
 
 // --- kind-keyed guard mutations ----------------------------------------------
 

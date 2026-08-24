@@ -4,6 +4,11 @@
 // OpenAI's Codex CLI, and sst/opencode — each launched with its own argv and
 // wired back to the daemon through its own lifecycle-callback mechanism.
 //
+// The same three agents also drive lola's one-shot REVIEW pass (the
+// `claude-session` / `codex-session` / `opencode-session` review providers), so
+// this package additionally owns the review argv — a very different, read-only
+// posture from the unattended worker launch. See ReviewArgs.
+//
 // This package is a pure leaf: it knows the argv, the binary name, and the
 // shape of each agent's callback artifact, and nothing about config, sessions,
 // hooks, the runtime, or pane classification. It imports only the standard
@@ -249,3 +254,103 @@ func ParseCodexNotify(jsonArg string) (event, message, notifyType string) {
 	}
 	return event, p.LastMsg, p.Type
 }
+
+// --- one-shot review runs ----------------------------------------------------
+//
+// Beside the per-issue WORKER launch above, lola drives the same three agents in
+// a second, very different mode: a single bounded, non-interactive REVIEW of a
+// pull request (the `claude-session` / `codex-session` / `opencode-session`
+// review providers). The review's prompt is lola's own fixed instruction on
+// argv; the PR's unified diff is piped on STDIN, which all three CLIs accept:
+//
+//   - claude:   `-p <instruction>` reads piped stdin as additional context.
+//   - codex:    `exec [PROMPT]` appends piped stdin to the prompt inside a
+//     literal `<stdin>…</stdin>` block.
+//   - opencode: `run [message..]` joins the positional message and piped stdin
+//     with a newline.
+//
+// A review READS; it must never write. Each agent is therefore launched in its
+// most restrictive non-interactive posture — the deliberate opposite of the
+// unattended, auto-approving worker launch above:
+//
+//   - claude:   no `--permission-mode`, so headless defaults stand (reads are
+//     allowed, an edit/exec that would need approval is denied).
+//   - codex:    `--sandbox read-only` (`codex exec` hardcodes "never ask", so
+//     the sandbox is the whole guard; `--ask-for-approval` is a TUI-only flag
+//     and does not exist on `exec`).
+//   - opencode: NO `--auto`. A non-interactive opencode already denies the
+//     blocking `question` permission, so reads proceed and anything that would
+//     ask is refused — the same posture as the other two.
+
+// ReviewArgs returns the argv that follows the binary name for a one-shot
+// review by agent k: lola's instruction as the prompt, plain text on stdout, and
+// an optional model override. The diff is NEVER here — it goes on stdin (see the
+// block above). Unknown kinds are treated as Claude.
+func ReviewArgs(k Kind, instruction, model string) []string {
+	switch k {
+	case Codex:
+		return codexReviewArgs(instruction, model)
+	case OpenCode:
+		return openCodeReviewArgs(instruction, model)
+	default:
+		args := []string{"-p", instruction, "--output-format", "text"}
+		return appendModel(args, "--model", model)
+	}
+}
+
+// ReviewStreamArgs is ReviewArgs for a VISIBLE review — one run in a tmux pane a
+// human watches. Only Claude needs a different argv: a plain `claude -p` prints
+// NOTHING until it finishes, so the visible pass asks for the stream-json event
+// feed and the caller renders it (see ReviewStreamsJSON). Codex and opencode
+// already narrate their progress on stderr, so their argv is unchanged and the
+// caller tees stderr to the pane instead (see ReviewProgressOnStderr).
+func ReviewStreamArgs(k Kind, instruction, model string) []string {
+	if k != Claude && Valid(string(k)) {
+		return ReviewArgs(k, instruction, model)
+	}
+	args := []string{"-p", instruction, "--output-format", "stream-json", "--verbose"}
+	return appendModel(args, "--model", model)
+}
+
+// codexReviewArgs builds `codex exec --sandbox read-only [--model m]
+// <instruction>`. The prompt is positional and MUST come last: piped stdin is
+// appended to it by codex itself. With stdout piped (never a TTY under lola),
+// `codex exec` prints ONLY the final assistant message there and every progress
+// line on stderr, which is exactly the plain-findings contract Review wants.
+func codexReviewArgs(instruction, model string) []string {
+	args := []string{"exec", "--sandbox", "read-only"}
+	args = appendModel(args, "--model", model)
+	return append(args, instruction)
+}
+
+// openCodeReviewArgs builds `opencode run [--model provider/model]
+// <instruction>`. The message is positional and MUST come last; piped stdin is
+// joined onto it with a newline. With stdout piped, opencode writes the
+// assistant text there and its progress on stderr. `--auto` is deliberately
+// omitted — see the posture note above.
+func openCodeReviewArgs(instruction, model string) []string {
+	args := []string{"run"}
+	args = appendModel(args, "--model", model)
+	return append(args, instruction)
+}
+
+// appendModel appends `flag model` when model is non-empty, leaving the agent's
+// own configured default in place otherwise.
+func appendModel(args []string, flag, model string) []string {
+	if model == "" {
+		return args
+	}
+	return append(args, flag, model)
+}
+
+// ReviewStreamsJSON reports whether k's ReviewStreamArgs makes it emit a
+// stream-json EVENT feed on stdout (which the caller must render to plain lines)
+// rather than the plain text its non-streaming argv produces. True for Claude
+// only.
+func ReviewStreamsJSON(k Kind) bool { return Parse(string(k)) == Claude }
+
+// ReviewProgressOnStderr reports whether k narrates a review's progress on
+// STDERR, so a visible pass has to tee stderr to the pane to show anything at
+// all. True for codex and opencode; Claude says nothing until its stream-json
+// feed is asked for on stdout.
+func ReviewProgressOnStderr(k Kind) bool { return Parse(string(k)) != Claude }

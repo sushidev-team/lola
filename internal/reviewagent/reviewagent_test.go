@@ -1,38 +1,67 @@
-package reviewclaude
+package reviewagent
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 	"unicode/utf8"
+
+	"github.com/sushidev-team/lola/internal/agent"
 )
 
-// claudeCapture records what the claude seam received on the last Review call.
-type claudeCapture struct {
-	bin         string
-	model       string
-	instruction string
-	dir         string
-	stdin       string
-	timeout     time.Duration
-	calls       int
+// agentCapture records what the agent seam received on the last Review call.
+type agentCapture struct {
+	kind    agent.Kind
+	bin     string
+	args    []string
+	dir     string
+	stdin   string
+	timeout time.Duration
+	calls   int
 }
 
-// stubClaude installs a runClaude replacement that records its args and returns
-// (out, err), restoring the real seam on cleanup so no test ever runs claude.
-func stubClaude(t *testing.T, out string, err error) *claudeCapture {
+// instruction returns the prompt carried in the captured argv: the value after
+// claude's `-p`, or the trailing positional for codex/opencode.
+func (c *agentCapture) instruction() string {
+	for i, a := range c.args {
+		if a == "-p" && i+1 < len(c.args) {
+			return c.args[i+1]
+		}
+	}
+	if len(c.args) == 0 {
+		return ""
+	}
+	return c.args[len(c.args)-1]
+}
+
+// model returns the value after `--model` in the captured argv, or "".
+func (c *agentCapture) model() string {
+	for i, a := range c.args {
+		if a == "--model" && i+1 < len(c.args) {
+			return c.args[i+1]
+		}
+	}
+	return ""
+}
+
+// stubClaude installs a runAgent replacement that records its args and returns
+// (out, err), restoring the real seam on cleanup so no test ever runs an agent.
+func stubClaude(t *testing.T, out string, err error) *agentCapture {
 	t.Helper()
-	orig := runClaude
-	t.Cleanup(func() { runClaude = orig })
-	c := &claudeCapture{}
-	runClaude = func(_ context.Context, bin, model, instruction, dir, stdin string, timeout time.Duration) (string, error) {
+	orig := runAgent
+	t.Cleanup(func() { runAgent = orig })
+	c := &agentCapture{}
+	runAgent = func(_ context.Context, k agent.Kind, bin string, args []string, dir, stdin string, timeout time.Duration) (string, error) {
 		c.calls++
-		c.bin, c.model, c.instruction, c.dir, c.stdin, c.timeout = bin, model, instruction, dir, stdin, timeout
+		c.kind, c.bin, c.args, c.dir, c.stdin, c.timeout = k, bin, slices.Clone(args), dir, stdin, timeout
 		return out, err
 	}
 	return c
@@ -89,17 +118,17 @@ func TestReviewBuildsArgvAndPipesDiffInWorktree(t *testing.T) {
 		t.Errorf("claude stdin = %q, want the diff %q", cap.stdin, diff)
 	}
 	// The diff must NOT leak into the argv (the -p instruction is our own text).
-	if strings.Contains(cap.instruction, "rm -rf") {
-		t.Errorf("diff leaked into the -p argv: %q", cap.instruction)
+	if strings.Contains(cap.instruction(), "rm -rf") {
+		t.Errorf("diff leaked into the -p argv: %q", cap.instruction())
 	}
-	if cap.instruction != reviewInstruction {
-		t.Errorf("instruction = %q, want the fixed reviewInstruction", cap.instruction)
+	if cap.instruction() != reviewInstruction {
+		t.Errorf("instruction = %q, want the fixed reviewInstruction", cap.instruction())
 	}
-	if cap.bin != defaultBin {
-		t.Errorf("bin = %q, want default %q", cap.bin, defaultBin)
+	if cap.bin != agent.Claude.Binary() {
+		t.Errorf("bin = %q, want default %q", cap.bin, agent.Claude.Binary())
 	}
-	if cap.model != "" {
-		t.Errorf("model = %q, want empty (claude default)", cap.model)
+	if cap.model() != "" {
+		t.Errorf("model = %q, want empty (claude default)", cap.model())
 	}
 	if cap.timeout != defaultTimeout {
 		t.Errorf("timeout = %s, want default %s", cap.timeout, defaultTimeout)
@@ -116,26 +145,26 @@ func TestReviewHonorsConfiguredBinModelTimeout(t *testing.T) {
 	if cap.bin != "/opt/claude" {
 		t.Errorf("bin = %q, want /opt/claude", cap.bin)
 	}
-	if cap.model != "claude-opus" {
-		t.Errorf("model = %q, want claude-opus", cap.model)
+	if cap.model() != "claude-opus" {
+		t.Errorf("model = %q, want claude-opus", cap.model())
 	}
 	if cap.timeout != 42*time.Second {
 		t.Errorf("timeout = %s, want 42s", cap.timeout)
 	}
 }
 
-// buildArgs must place the diff nowhere, force text output, and append --model
-// only when set.
+// agent.ReviewArgs must place the diff nowhere, force text output, and append
+// --model only when set.
 func TestBuildArgs(t *testing.T) {
-	got := buildArgs("", reviewInstruction)
+	got := agent.ReviewArgs(agent.Claude, reviewInstruction, "")
 	want := []string{"-p", reviewInstruction, "--output-format", "text"}
 	if !equal(got, want) {
-		t.Fatalf("buildArgs(no model) = %v, want %v", got, want)
+		t.Fatalf("ReviewArgs(no model) = %v, want %v", got, want)
 	}
-	got = buildArgs("claude-sonnet", reviewInstruction)
+	got = agent.ReviewArgs(agent.Claude, reviewInstruction, "claude-sonnet")
 	want = []string{"-p", reviewInstruction, "--output-format", "text", "--model", "claude-sonnet"}
 	if !equal(got, want) {
-		t.Fatalf("buildArgs(model) = %v, want %v", got, want)
+		t.Fatalf("ReviewArgs(model) = %v, want %v", got, want)
 	}
 }
 
@@ -268,22 +297,22 @@ func TestReviewPropagatesSeamSentinels(t *testing.T) {
 
 func TestClassifyRunErr(t *testing.T) {
 	// Deadline wins even when the raw error is "signal: killed".
-	if e := classifyRunErr(errors.New("signal: killed"), context.DeadlineExceeded, "", "", 3*time.Second); !errors.Is(e, ErrTimeout) {
+	if e := classifyRunErr(agent.Claude, errors.New("signal: killed"), context.DeadlineExceeded, "", "", 3*time.Second); !errors.Is(e, ErrTimeout) {
 		t.Errorf("deadline: got %v, want ErrTimeout", e)
 	}
 	// Not-found via a synthetic exec.Error.
 	notFound := &exec.Error{Name: "claude", Err: exec.ErrNotFound}
-	if e := classifyRunErr(notFound, nil, "", "", time.Second); !errors.Is(e, ErrNotFound) {
+	if e := classifyRunErr(agent.Claude, notFound, nil, "", "", time.Second); !errors.Is(e, ErrNotFound) {
 		t.Errorf("not-found: got %v, want ErrNotFound", e)
 	}
 	// Auth cue in stderr → ErrAuth.
-	authErr := classifyRunErr(&exec.ExitError{}, nil, "Error: invalid api key provided", "", time.Second)
+	authErr := classifyRunErr(agent.Claude, &exec.ExitError{}, nil, "Error: invalid api key provided", "", time.Second)
 	if !errors.Is(authErr, ErrAuth) {
 		t.Errorf("auth: got %v, want ErrAuth", authErr)
 	}
 	// Other nonzero exit surfaces stderr (synthetic ExitError has nil
 	// ProcessState — must not panic).
-	exitErr := classifyRunErr(&exec.ExitError{}, nil, "  parse error on line 3  ", "", time.Second)
+	exitErr := classifyRunErr(agent.Claude, &exec.ExitError{}, nil, "  parse error on line 3  ", "", time.Second)
 	if !errors.Is(exitErr, ErrExit) {
 		t.Errorf("exit: got %v, want ErrExit", exitErr)
 	}
@@ -295,10 +324,10 @@ func TestClassifyRunErr(t *testing.T) {
 		t.Errorf("plain exit misclassified as quota: %v", exitErr)
 	}
 	// Success and generic failure.
-	if e := classifyRunErr(nil, nil, "", "", time.Second); e != nil {
+	if e := classifyRunErr(agent.Claude, nil, nil, "", "", time.Second); e != nil {
 		t.Errorf("nil run error should classify to nil, got %v", e)
 	}
-	generic := classifyRunErr(errors.New("weird"), nil, "", "", time.Second)
+	generic := classifyRunErr(agent.Claude, errors.New("weird"), nil, "", "", time.Second)
 	if generic == nil || errors.Is(generic, ErrTimeout) || errors.Is(generic, ErrNotFound) || errors.Is(generic, ErrAuth) || errors.Is(generic, ErrExit) || errors.Is(generic, ErrQuota) {
 		t.Errorf("generic error misclassified: %v", generic)
 	}
@@ -310,21 +339,21 @@ func TestClassifyRunErr(t *testing.T) {
 // must win over ErrExit/ErrAuth so the caller can fall through to a fallback.
 func TestClassifyRunErrQuota(t *testing.T) {
 	// Quota cue in stderr on a nonzero exit → ErrQuota (not ErrExit).
-	if e := classifyRunErr(&exec.ExitError{}, nil, "Error: usage limit reached, try again later", "", time.Second); !errors.Is(e, ErrQuota) {
+	if e := classifyRunErr(agent.Claude, &exec.ExitError{}, nil, "Error: usage limit reached, try again later", "", time.Second); !errors.Is(e, ErrQuota) {
 		t.Errorf("stderr quota: got %v, want ErrQuota", e)
 	}
 	// Quota cue on the stdout head with a CLEAN exit (runErr == nil) → ErrQuota,
 	// caught before the nil short-circuit.
-	if e := classifyRunErr(nil, nil, "", "You have reached your usage limit for this period.", time.Second); !errors.Is(e, ErrQuota) {
+	if e := classifyRunErr(agent.Claude, nil, nil, "", "You have reached your usage limit for this period.", time.Second); !errors.Is(e, ErrQuota) {
 		t.Errorf("stdout quota (exit 0): got %v, want ErrQuota", e)
 	}
 	// Quota beats auth: a message carrying both cues classifies as quota so the
 	// chain falls through rather than skipping outright.
-	if e := classifyRunErr(&exec.ExitError{}, nil, "HTTP 429 too many requests; not authenticated", "", time.Second); !errors.Is(e, ErrQuota) {
+	if e := classifyRunErr(agent.Claude, &exec.ExitError{}, nil, "HTTP 429 too many requests; not authenticated", "", time.Second); !errors.Is(e, ErrQuota) {
 		t.Errorf("quota+auth: got %v, want ErrQuota", e)
 	}
 	// The error text never echoes the (attacker-influenceable) output.
-	q := classifyRunErr(nil, nil, "", "quota exceeded: sk-ant-DEADBEEFdeadbeef0123456789", time.Second)
+	q := classifyRunErr(agent.Claude, nil, nil, "", "quota exceeded: sk-ant-DEADBEEFdeadbeef0123456789", time.Second)
 	if strings.Contains(q.Error(), "sk-ant-DEADBEEFdeadbeef0123456789") {
 		t.Errorf("quota error leaked output: %q", q.Error())
 	}
@@ -337,7 +366,7 @@ func TestClassifyRunErrQuota(t *testing.T) {
 	if len(bigFindings) <= quotaProbeBytes {
 		t.Fatalf("test fixture too short (%d bytes) to exercise the shortness gate", len(bigFindings))
 	}
-	if e := classifyRunErr(nil, nil, "", bigFindings, time.Second); e != nil {
+	if e := classifyRunErr(agent.Claude, nil, nil, "", bigFindings, time.Second); e != nil {
 		t.Errorf("substantial findings mentioning quota words misclassified: got %v, want nil", e)
 	}
 }
@@ -389,7 +418,7 @@ func TestLooksLikeAuthError(t *testing.T) {
 func TestExitErrorNeverLeaksAKey(t *testing.T) {
 	const key = "sk-ant-api03-DEADBEEFdeadbeef0123456789ABCDEF"
 	stderr := "fatal: request failed using " + key + " while contacting the server"
-	e := classifyRunErr(&exec.ExitError{}, nil, stderr, "", time.Second)
+	e := classifyRunErr(agent.Claude, &exec.ExitError{}, nil, stderr, "", time.Second)
 	if !errors.Is(e, ErrExit) {
 		t.Fatalf("got %v, want ErrExit", e)
 	}
@@ -455,7 +484,7 @@ func TestCapTextLeavesSmallUnchanged(t *testing.T) {
 
 func TestAvailable(t *testing.T) {
 	// Missing binary → false.
-	if (&Client{Bin: "lola-reviewclaude-nonexistent-binary-zzz"}).Available() {
+	if (&Client{Bin: "lola-reviewagent-nonexistent-binary-zzz"}).Available() {
 		t.Error("Available() = true for a missing binary")
 	}
 	// A real, executable file (path form) → true.
@@ -469,16 +498,19 @@ func TestAvailable(t *testing.T) {
 	}
 }
 
-// TestRealClaudeSeamNotFound exercises the REAL runClaude (seam not overridden)
+// TestRealClaudeSeamNotFound exercises the REAL runAgent (seam not overridden)
 // with a binary that cannot be found, proving the exec+classify path returns
-// ErrNotFound without ever spawning claude. The git-diff seam is stubbed so no
-// real git runs.
+// ErrNotFound without ever spawning an agent — for EVERY agent kind, so a new
+// kind cannot quietly lose the "unavailable ⇒ the chain advances" contract. The
+// git-diff seam is stubbed so no real git runs.
 func TestRealClaudeSeamNotFound(t *testing.T) {
-	stubGitDiff(t, "some diff", nil)
-	cl := &Client{Bin: "lola-reviewclaude-nonexistent-binary-zzz", Timeout: 2 * time.Second}
-	_, err := cl.Review(context.Background(), t.TempDir(), "main")
-	if !errors.Is(err, ErrNotFound) {
-		t.Fatalf("err = %v, want ErrNotFound", err)
+	for _, k := range agent.Kinds {
+		stubGitDiff(t, "some diff", nil)
+		cl := &Client{Agent: k, Bin: "lola-reviewagent-nonexistent-binary-zzz", Timeout: 2 * time.Second}
+		_, err := cl.Review(context.Background(), t.TempDir(), "main")
+		if !errors.Is(err, ErrNotFound) {
+			t.Fatalf("%s: err = %v, want ErrNotFound", k, err)
+		}
 	}
 }
 
@@ -518,4 +550,127 @@ func tail(s string, n int) string {
 		return s
 	}
 	return s[len(s)-n:]
+}
+
+// The whole point of the package: WHICH agent reviews is a Client field, and
+// everything else — the instruction, the diff on stdin, the caps, the sentinels
+// — is identical across agents, so the review chain cannot tell them apart.
+func TestReviewDrivesTheConfiguredAgent(t *testing.T) {
+	const diff = "diff --git a/x b/x\n+; rm -rf / #dangerous\n"
+	for _, k := range agent.Kinds {
+		stubGitDiff(t, diff, nil)
+		cap := stubClaude(t, "findings", nil)
+
+		if _, err := (&Client{Agent: k}).Review(context.Background(), "/wt", "main"); err != nil {
+			t.Fatalf("%s: Review: %v", k, err)
+		}
+		if cap.kind != k {
+			t.Errorf("%s: seam got kind %q", k, cap.kind)
+		}
+		// The agent's own binary is resolved, not claude's.
+		if cap.bin != k.Binary() {
+			t.Errorf("%s: bin = %q, want %q", k, cap.bin, k.Binary())
+		}
+		// Same instruction for every agent — findings must not vary by harness.
+		if cap.instruction() != reviewInstruction {
+			t.Errorf("%s: instruction is not the shared reviewInstruction", k)
+		}
+		// The diff is DATA on stdin for every agent, never argv.
+		if cap.stdin != diff {
+			t.Errorf("%s: stdin = %q, want the diff", k, cap.stdin)
+		}
+		for _, a := range cap.args {
+			if strings.Contains(a, "rm -rf") {
+				t.Errorf("%s: diff leaked into argv: %v", k, cap.args)
+			}
+		}
+	}
+}
+
+// An empty/unknown Agent reviews with claude, so a zero Client (and a legacy
+// snapshot that carries no agent) behaves exactly as the claude-only reviewer did.
+func TestReviewDefaultsToClaude(t *testing.T) {
+	for _, a := range []agent.Kind{"", "nope"} {
+		stubGitDiff(t, "some diff", nil)
+		cap := stubClaude(t, "ok", nil)
+		if _, err := (&Client{Agent: a}).Review(context.Background(), "/wt", "main"); err != nil {
+			t.Fatalf("Review: %v", err)
+		}
+		if cap.kind != agent.Claude || cap.bin != agent.Claude.Binary() {
+			t.Errorf("Agent=%q resolved to (%q,%q), want claude", a, cap.kind, cap.bin)
+		}
+	}
+}
+
+// The model reaches the agent's own --model flag, whichever agent it is.
+func TestReviewPassesTheModelPerAgent(t *testing.T) {
+	for _, k := range agent.Kinds {
+		stubGitDiff(t, "some diff", nil)
+		cap := stubClaude(t, "ok", nil)
+		if _, err := (&Client{Agent: k, Model: "m/1"}).Review(context.Background(), "/wt", "main"); err != nil {
+			t.Fatalf("%s: Review: %v", k, err)
+		}
+		if cap.model() != "m/1" {
+			t.Errorf("%s: model = %q, want m/1", k, cap.model())
+		}
+	}
+}
+
+// ErrAuth carries a per-agent, actionable hint and NEVER any stderr — the hint
+// is the only thing that differs by agent, and a credential must not ride along.
+func TestAuthErrorHintsPerAgentWithoutStderr(t *testing.T) {
+	const secret = "ANTHROPIC_API_KEY=sk-ant-abcdefghijklmnop unauthorized"
+	for _, tc := range []struct {
+		kind agent.Kind
+		want string
+	}{
+		{agent.Claude, "ANTHROPIC_API_KEY"},
+		{agent.Codex, "codex login"},
+		{agent.OpenCode, "opencode auth login"},
+	} {
+		err := classifyRunErr(tc.kind, &exec.ExitError{}, nil, secret, "", time.Second)
+		if !errors.Is(err, ErrAuth) {
+			t.Fatalf("%s: err = %v, want ErrAuth", tc.kind, err)
+		}
+		if !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: %q does not carry the hint %q", tc.kind, err, tc.want)
+		}
+		if strings.Contains(err.Error(), "sk-ant-") {
+			t.Errorf("%s: auth error leaked the key: %q", tc.kind, err)
+		}
+	}
+}
+
+// The visible pass routes by agent: claude gets the stream-json renderer, the
+// stderr-narrating agents get the plain tee. Picking the wrong one is not a
+// degraded display, it is no findings at all.
+func TestReviewStreamRoutesByAgent(t *testing.T) {
+	for _, tc := range []struct {
+		kind     agent.Kind
+		wantJSON bool
+	}{
+		{agent.Claude, true},
+		{agent.Codex, false},
+		{agent.OpenCode, false},
+	} {
+		swapDiff(t, "some diff", nil)
+		jsonCalls, plainCalls := 0, 0
+		swapStream(t, func(_ context.Context, _ agent.Kind, _ string, _ []string, _, _ string, _ time.Duration, _ io.Writer) (string, error) {
+			jsonCalls++
+			return "findings", nil
+		})
+		swapStreamPlain(t, func(_ context.Context, _ agent.Kind, _ string, _ []string, _, _ string, _ time.Duration, _ io.Writer) (string, error) {
+			plainCalls++
+			return "findings", nil
+		})
+		var pane bytes.Buffer
+		out, err := (&Client{Agent: tc.kind}).ReviewStream(context.Background(), "/wt", "main", &pane)
+		if err != nil || out != "findings" {
+			t.Fatalf("%s: ReviewStream = (%q, %v)", tc.kind, out, err)
+		}
+		gotJSON := jsonCalls == 1 && plainCalls == 0
+		if gotJSON != tc.wantJSON {
+			t.Errorf("%s: json=%d plain=%d, wantJSON=%v", tc.kind, jsonCalls, plainCalls, tc.wantJSON)
+		}
+	}
 }

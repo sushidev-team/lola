@@ -24,7 +24,7 @@ import (
 	"strings"
 
 	"github.com/sushidev-team/lola/internal/review"
-	"github.com/sushidev-team/lola/internal/reviewclaude"
+	"github.com/sushidev-team/lola/internal/reviewagent"
 )
 
 const (
@@ -36,7 +36,7 @@ const (
 )
 
 // Outcome classes. They are provider-agnostic: a coderabbit-cli timeout and a
-// claude-session timeout both come back as ClassTimeout, exactly as the two
+// codex-session timeout both come back as ClassTimeout, exactly as the two
 // packages' own ErrTimeout sentinels are treated alike by the chain.
 const (
 	ClassOK       = "ok"
@@ -115,15 +115,15 @@ func Classify(err error) (class, message string) {
 	switch {
 	case err == nil:
 		return ClassOK, ""
-	case errors.Is(err, review.ErrNotFound), errors.Is(err, reviewclaude.ErrNotFound):
+	case errors.Is(err, review.ErrNotFound), errors.Is(err, reviewagent.ErrNotFound):
 		return ClassNotFound, err.Error()
-	case errors.Is(err, review.ErrTimeout), errors.Is(err, reviewclaude.ErrTimeout):
+	case errors.Is(err, review.ErrTimeout), errors.Is(err, reviewagent.ErrTimeout):
 		return ClassTimeout, err.Error()
-	case errors.Is(err, review.ErrQuota), errors.Is(err, reviewclaude.ErrQuota):
+	case errors.Is(err, review.ErrQuota), errors.Is(err, reviewagent.ErrQuota):
 		return ClassQuota, err.Error()
-	case errors.Is(err, review.ErrAuth), errors.Is(err, reviewclaude.ErrAuth):
+	case errors.Is(err, review.ErrAuth), errors.Is(err, reviewagent.ErrAuth):
 		return ClassAuth, err.Error()
-	case errors.Is(err, review.ErrExit), errors.Is(err, reviewclaude.ErrExit):
+	case errors.Is(err, review.ErrExit), errors.Is(err, reviewagent.ErrExit):
 		return ClassExit, err.Error()
 	}
 	return ClassFailed, err.Error()
@@ -138,15 +138,15 @@ func (s Status) Err() error {
 	case ClassOK, "":
 		return nil
 	case ClassNotFound:
-		return wrap(reviewclaude.ErrNotFound, s.Message)
+		return wrap(reviewagent.ErrNotFound, s.Message)
 	case ClassTimeout:
-		return wrap(reviewclaude.ErrTimeout, s.Message)
+		return wrap(reviewagent.ErrTimeout, s.Message)
 	case ClassQuota:
-		return wrap(reviewclaude.ErrQuota, s.Message)
+		return wrap(reviewagent.ErrQuota, s.Message)
 	case ClassAuth:
-		return wrap(reviewclaude.ErrAuth, s.Message)
+		return wrap(reviewagent.ErrAuth, s.Message)
 	case ClassExit:
-		return wrap(reviewclaude.ErrExit, s.Message)
+		return wrap(reviewagent.ErrExit, s.Message)
 	}
 	if s.Message != "" {
 		return fmt.Errorf("review: visible pass failed: %s", s.Message)

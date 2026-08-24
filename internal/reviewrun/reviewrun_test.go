@@ -11,7 +11,7 @@ import (
 	"testing"
 
 	"github.com/sushidev-team/lola/internal/review"
-	"github.com/sushidev-team/lola/internal/reviewclaude"
+	"github.com/sushidev-team/lola/internal/reviewagent"
 )
 
 func TestReadReportsNotDoneBeforeTheChildWrites(t *testing.T) {
@@ -70,12 +70,12 @@ func TestClassifyAndErrRoundTripEverySentinel(t *testing.T) {
 		fallback bool // does the chain advance on it?
 	}{
 		{"clean", nil, ClassOK, nil, false},
-		{"claude timeout", reviewclaude.ErrTimeout, ClassTimeout, reviewclaude.ErrTimeout, true},
-		{"cli timeout", review.ErrTimeout, ClassTimeout, reviewclaude.ErrTimeout, true},
-		{"quota", review.ErrQuota, ClassQuota, reviewclaude.ErrQuota, true},
-		{"not found", review.ErrNotFound, ClassNotFound, reviewclaude.ErrNotFound, true},
-		{"auth", reviewclaude.ErrAuth, ClassAuth, reviewclaude.ErrAuth, false},
-		{"exit", review.ErrExit, ClassExit, reviewclaude.ErrExit, false},
+		{"claude timeout", reviewagent.ErrTimeout, ClassTimeout, reviewagent.ErrTimeout, true},
+		{"cli timeout", review.ErrTimeout, ClassTimeout, reviewagent.ErrTimeout, true},
+		{"quota", review.ErrQuota, ClassQuota, reviewagent.ErrQuota, true},
+		{"not found", review.ErrNotFound, ClassNotFound, reviewagent.ErrNotFound, true},
+		{"auth", reviewagent.ErrAuth, ClassAuth, reviewagent.ErrAuth, false},
+		{"exit", review.ErrExit, ClassExit, reviewagent.ErrExit, false},
 		{"anything else", errors.New("git diff failed"), ClassFailed, nil, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

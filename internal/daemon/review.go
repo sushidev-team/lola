@@ -1,11 +1,11 @@
 package daemon
 
-// review.go holds the coderabbit-cli PASS CLIENT builder, the shared per-cycle
+// review.go holds the cli-family PASS CLIENT builder, the shared per-cycle
 // review budget, and the manual `lola review` force command. The trigger,
 // fallback chain, transport dispatch, and kind-keyed guards now live in the
-// provider-agnostic reviewer.go — this file keeps only the coderabbit-cli-shaped
-// bits (its client construction + timeout) plus the budget/context plumbing and
-// small shared helpers (isReviewablePROpen, reviewHead, reviewSave).
+// provider-agnostic reviewer.go — this file keeps only the CLI-shaped bits (its
+// client construction + timeout) plus the budget/context plumbing and small
+// shared helpers (isReviewablePROpen, reviewHead, reviewSave).
 //
 // The dominant invariants are unchanged and now enforced per provider in
 // reviewer.go: opt-in / zero-regression, bounded + fire-once + graceful skip,
@@ -29,26 +29,28 @@ import (
 // worker hand-off and the Linear comment carry the full findings.
 const reviewNotifyHeadBytes = 600
 
-// buildReview constructs the coderabbit-cli review client for rc, or nil when it
-// is disabled OR enabled-but-coderabbit-is-unavailable. A nil result is the
-// caller's "this pass can't answer" signal (a fallback chain skips it), so a
-// missing coderabbit degrades gracefully rather than erroring per cycle. The
-// Command override is split to an argv (bin + args-minus-base); an empty Command
-// uses the review package default.
-func buildReview(rc config.ReviewConfig) *review.Client {
-	if !rc.Enabled {
-		return nil
-	}
-	cl := &review.Client{}
-	if argv := rc.CommandArgs(); len(argv) > 0 {
+// buildReview constructs the review client for a cli-family provider, or nil
+// when its tool is not on PATH. A nil result is the caller's "this pass can't
+// answer" signal (a fallback chain skips it), so a missing binary degrades
+// gracefully rather than erroring per cycle.
+//
+// Command is split to an argv (bin + args-minus-base); an empty Command falls
+// back to the review package's CodeRabbit default, which is what makes
+// coderabbit-cli work with no keys at all while custom-cli — validated to carry
+// a command — runs whatever tool it names. BaseFlag decides how the base branch
+// is appended, and an EMPTY BaseFlag appends nothing (a tool that takes no base
+// argument), which is why it is threaded through rather than hardcoded.
+func buildReview(cp config.ReviewProvider) *review.Client {
+	cl := &review.Client{BaseFlag: cp.BaseFlag}
+	if argv := (config.ReviewConfig{Command: cp.Command}).CommandArgs(); len(argv) > 0 {
 		cl.Bin = argv[0]
-		cl.Args = argv[1:] // review always appends --base itself
+		cl.Args = argv[1:] // Review appends the base flag itself
 	}
-	if rc.TimeoutSeconds > 0 {
-		cl.Timeout = time.Duration(rc.TimeoutSeconds) * time.Second
+	if cp.TimeoutSeconds > 0 {
+		cl.Timeout = time.Duration(cp.TimeoutSeconds) * time.Second
 	}
 	if !cl.Available() {
-		return nil // enabled but coderabbit not on PATH: caller logs once, pass off
+		return nil // enabled but the tool is not on PATH: caller logs once, pass off
 	}
 	return cl
 }
@@ -157,7 +159,7 @@ func (d *Daemon) handleReviewProvider(ctx context.Context, sessionID, kind strin
 		return protocol.ReviewData{
 			Ran:     true,
 			Clean:   true,
-			Message: fmt.Sprintf("review complete: %s found no issues in %s", labelsFor(p.Kind).notifyTitle, sessionID),
+			Message: fmt.Sprintf("review complete: %s found no issues in %s", labelsFor(p).notifyTitle, sessionID),
 		}, nil
 	default:
 		return protocol.ReviewData{

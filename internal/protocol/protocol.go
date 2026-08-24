@@ -55,7 +55,7 @@ import (
 // PLAN P3/P7). The reply is OK on a delivered answer, an error otherwise.
 // Cmd "review" FORCES a QA review PASS for one session now, ignoring the per-PR
 // one-shot guard: Session names the target. Provider optionally selects WHICH
-// pass provider kind to force (coderabbit-cli | claude-session); "" forces the
+// pass provider kind to force (any pass kind — cli or agent); "" forces the
 // daemon's primary (first enabled) pass provider. The daemon runs one bounded
 // pass against the session's worktree and routes the findings the same way the
 // PR-open auto-trigger does (notify + optional GitHub/Linear comment + optional
@@ -108,7 +108,7 @@ type Request struct {
 	DryRun bool   `json:"dryRun,omitempty"`
 
 	// Provider optionally selects which review provider kind cmd=review forces
-	// (coderabbit-cli | claude-session). "" forces the daemon's primary pass
+	// (any pass kind — cli or agent). "" forces the daemon's primary pass
 	// provider. Ignored by every other command.
 	Provider string `json:"provider,omitempty"`
 

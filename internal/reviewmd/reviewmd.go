@@ -19,7 +19,7 @@
 // bold, code spans, and links — plus <details>/<summary>, which GitHub renders
 // as a plain disclosure triangle with no box of its own.
 //
-// The input shape it understands is the one internal/reviewclaude's instruction
+// The input shape it understands is the one internal/reviewagent's instruction
 // asks for, tolerantly matched:
 //
 //	**[blocker]** `path/to/file.ext:LINE` — short title

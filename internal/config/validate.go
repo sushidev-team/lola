@@ -369,12 +369,17 @@ func (c *Config) validateReview() []error {
 //     migrate-review`;
 //   - unknown provider kind; more than one provider of the same kind (guards
 //     key by kind, so a duplicate is ambiguous);
-//   - unknown transport token; the github transport on a coderabbit-watch (its
-//     feedback is already on the PR — a review of it is a self-feedback loop);
+//   - unknown transport token; the github transport on a watch (its feedback is
+//     already on the PR — a review of it is a self-feedback loop);
 //   - fallback on a watch (a watch cannot classify quota); a fallback entry
 //     that is an unknown kind / the provider's own kind / a watch kind / not
 //     present-and-enabled in the catalog / part of a cycle;
-//   - timeout_seconds < 0.
+//   - timeout_seconds < 0;
+//   - an ENABLED kind that names no tool: custom-cli without a `command` and
+//     bot-watch without an `author`. Those two kinds exist purely to point at
+//     something other than the built-in default, so an empty one would poll or
+//     exec nothing at all; the check is gated on Enabled so a half-written,
+//     disabled entry never blocks a reload.
 //
 // An empty catalog validates trivially (the legacy path is checked by
 // validateReview).
@@ -396,7 +401,7 @@ func (c *Config) validateReviewProviders() []error {
 	seen := map[provKind]bool{}
 	for _, p := range c.ReviewProviders {
 		if !p.Provider.valid() {
-			errs = append(errs, fmt.Errorf("review provider: unknown provider kind %q (must be coderabbit-cli|coderabbit-watch|claude-session)", p.Provider))
+			errs = append(errs, fmt.Errorf("review provider: unknown provider kind %q (must be %s)", p.Provider, provKindList()))
 			continue
 		}
 		if seen[p.Provider] {
@@ -413,6 +418,12 @@ func (c *Config) validateReviewProviders() []error {
 		}
 		if p.TimeoutSeconds < 0 {
 			errs = append(errs, fmt.Errorf("review provider %q: timeout_seconds must be >= 0, got %d", p.Provider, p.TimeoutSeconds))
+		}
+		if p.Enabled && ReviewKindRequiresCommand(string(p.Provider)) && strings.TrimSpace(p.Command) == "" {
+			errs = append(errs, fmt.Errorf("review provider %q: command is required (it names the review CLI to run; use the coderabbit-cli kind for CodeRabbit's built-in default)", p.Provider))
+		}
+		if p.Enabled && ReviewKindRequiresAuthor(string(p.Provider)) && strings.TrimSpace(p.Author) == "" {
+			errs = append(errs, fmt.Errorf("review provider %q: author is required (it names the review bot whose PR comments are relayed; use the coderabbit-watch kind for CodeRabbit)", p.Provider))
 		}
 		for _, t := range p.Transports {
 			if !t.valid() {
@@ -520,7 +531,7 @@ func (c *Config) validateProjectReview() []error {
 		for _, k := range pr.Review {
 			switch {
 			case !k.valid():
-				errs = append(errs, fmt.Errorf("%s: review references unknown provider kind %q (must be coderabbit-cli|coderabbit-watch|claude-session)", id, k))
+				errs = append(errs, fmt.Errorf("%s: review references unknown provider kind %q (must be %s)", id, k, provKindList()))
 			case !enabled[k]:
 				errs = append(errs, fmt.Errorf("%s: review kind %q must be an enabled provider in the catalog", id, k))
 			}

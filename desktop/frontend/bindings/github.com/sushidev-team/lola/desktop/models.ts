@@ -284,22 +284,69 @@ export interface ReleaseEntryDTO {
 }
 
 /**
+ * ReviewKindDTO describes ONE provider kind to the settings form: its id, the
+ * heading it is drawn under, and which fields it actually has. The frontend
+ * renders its Review tab from this list instead of a hardcoded array of kinds
+ * plus a set of `p.provider === "…"` tests, so adding a review agent to
+ * config.ReviewProviderKinds() makes the app offer it with no frontend edit —
+ * which is the whole point of a pluggable catalog.
+ */
+export interface ReviewKindDTO {
+    "kind": string;
+
+    /**
+     * Label is the section heading: the kind's name plus what it does.
+     */
+    "label": string;
+
+    /**
+     * Watch marks the poll/watermark shape: it has an author, and neither a
+     * github transport nor a fallback chain (validation forbids both).
+     */
+    "watch": boolean;
+
+    /**
+     * CLI marks a kind that execs an external review CLI (command + base flag).
+     */
+    "cli": boolean;
+
+    /**
+     * Agent names the coding agent an agent-family kind reviews with, or "" when
+     * the kind is not one (it is also the "offer a model field" test).
+     */
+    "agent": string;
+
+    /**
+     * RequiresCommand / RequiresAuthor mark the generic kinds, which carry no
+     * built-in tool or bot of their own and are rejected by validation while
+     * enabled-and-empty. The form marks the field required and says why.
+     */
+    "requiresCommand": boolean;
+    "requiresAuthor": boolean;
+}
+
+/**
  * ReviewProviderDTO is one entry of the review provider catalog, flattened for
  * the settings form. Provider/Fallback/Transports are plain strings so the
  * frontend never needs the (unexported) provKind type; the Go side converts.
  */
 export interface ReviewProviderDTO {
     /**
-     * coderabbit-cli | coderabbit-watch | claude-session
+     * one of ReviewKinds()
      */
     "provider": string;
     "enabled": boolean;
     "onPrOpen": boolean;
 
     /**
-     * coderabbit-cli only
+     * cli family
      */
     "command": string;
+
+    /**
+     * cli family; empty appends no base
+     */
+    "baseFlag": string;
 
     /**
      * pass shapes
@@ -307,12 +354,12 @@ export interface ReviewProviderDTO {
     "timeoutSeconds": number;
 
     /**
-     * claude-session only
+     * agent family
      */
     "model": string;
 
     /**
-     * coderabbit-watch only
+     * watch family
      */
     "author": string;
 

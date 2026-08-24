@@ -25,6 +25,7 @@ import (
 	"github.com/sushidev-team/lola/internal/notify"
 	"github.com/sushidev-team/lola/internal/protocol"
 	"github.com/sushidev-team/lola/internal/review"
+	"github.com/sushidev-team/lola/internal/reviewagent"
 	"github.com/sushidev-team/lola/internal/session"
 	"github.com/sushidev-team/lola/internal/state"
 )
@@ -103,18 +104,9 @@ func (f *fakeReview) fn() passRun {
 // install wires the fake onto the coderabbit-cli pass seam (the default kind).
 func (f *fakeReview) install(d *Daemon) { f.installKind(d, kindCoderabbitCLI) }
 
-// installKind wires the fake onto a specific pass kind's seam.
-func (f *fakeReview) installKind(d *Daemon, k provKind) {
-	fn := f.fn()
-	d.mu.Lock()
-	switch k {
-	case kindClaudeSession:
-		d.claudeReviewRun = fn
-	default:
-		d.reviewRun = fn
-	}
-	d.mu.Unlock()
-}
+// installKind wires the fake onto a specific pass kind's seam. Every kind goes
+// through the same map, so a fake for a new one needs no case here.
+func (f *fakeReview) installKind(d *Daemon, k provKind) { d.setPassRun(k, f.fn()) }
 
 func (f *fakeReview) ctxErr() error {
 	f.mu.Lock()
@@ -1454,4 +1446,266 @@ func TestReviewFlushNeverTypesIntoAModal(t *testing.T) {
 	if got, _ := d.sessions.Get(s.ID); got.PendingHandoffs[string(kindCoderabbitCLI)] != "STASHED" {
 		t.Error("the stash must survive a deferred flush")
 	}
+}
+
+// --- pluggable kinds (SUSHI-583) ---------------------------------------------
+
+// passDesc builds a pass descriptor of any kind, so the tests below cover the
+// kinds the daemon never names — proving dispatch is driven by the config-side
+// family, not a hardcoded list.
+func passDesc(k provKind) reviewProvider {
+	return reviewProvider{
+		Kind: k, Shape: shapePass, Enabled: true, OnPROpen: true,
+		Transports: config.TransportSet{config.TransportLola}, Notify: true, SendToAgent: true, Handoff: handoffFull,
+	}
+}
+
+// EVERY pass kind runs its own PR-open pass through the same guard and the same
+// routing. A kind the daemon does not name by constant must work identically, or
+// "add a review agent in config" is not actually enough.
+func TestEveryPassKindRunsAndRoutes(t *testing.T) {
+	for _, kind := range config.ReviewProviderPassKinds() {
+		t.Run(kind, func(t *testing.T) {
+			d := newTestDaemon(t, reviewTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})
+			setProviders(d, passDesc(provKind(kind)))
+			seams := &fakeReactSeams{}
+			seams.install(d)
+			fr := &fakeReview{findings: "one finding"}
+			fr.installKind(d, provKind(kind))
+
+			s := reactSess("FE-1", "review_pending", openPR(7, "MERGEABLE", "", "pass"))
+			s.AtPrompt = true
+			d.sessions.Upsert(s)
+			d.runReviewProviders(context.Background(), s)
+
+			if got := fr.callCount(); got != 1 {
+				t.Fatalf("%s: pass ran %d times, want 1", kind, got)
+			}
+			cur, _ := d.sessions.Get(s.ID)
+			if cur.ReviewedPRs[kind] != 7 {
+				t.Errorf("%s: guard = %v, want PR 7 stamped under its own kind", kind, cur.ReviewedPRs)
+			}
+			// ...and the findings reached the worker, sanitized + gated as always.
+			if len(sentTexts(seams)) != 1 {
+				t.Errorf("%s: worker hand-off = %d sends, want 1", kind, len(sentTexts(seams)))
+			}
+		})
+	}
+}
+
+// A guard is per KIND, so two agents reviewing the same PR do not suppress each
+// other — and one that has already run does not stop the other.
+func TestPerKindGuardsAreIndependentAcrossAgents(t *testing.T) {
+	d := newTestDaemon(t, reviewTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})
+	setProviders(d, passDesc(kindClaudeSession), passDesc(provKind("codex-session")))
+	(&fakeReactSeams{}).install(d)
+	claude := &fakeReview{findings: "claude finding"}
+	claude.installKind(d, kindClaudeSession)
+	codex := &fakeReview{findings: "codex finding"}
+	codex.installKind(d, provKind("codex-session"))
+
+	s := reactSess("FE-1", "review_pending", openPR(11, "MERGEABLE", "", "pass"))
+	s.AtPrompt = true
+	// claude already reviewed this PR; codex has not.
+	s.ReviewedPRs = map[string]int{"claude-session": 11}
+	d.sessions.Upsert(s)
+	d.runReviewProviders(context.Background(), s)
+
+	if got := claude.callCount(); got != 0 {
+		t.Errorf("claude ran %d times, want 0 (its guard is stamped)", got)
+	}
+	if got := codex.callCount(); got != 1 {
+		t.Errorf("codex ran %d times, want 1 (its own guard is clear)", got)
+	}
+}
+
+// The headline use case: claude is over quota, so codex reviews instead — and
+// the result routes under the PRIMARY's transports, not the fallback's.
+func TestAgentFallsBackToAnotherAgentOnQuota(t *testing.T) {
+	d := newTestDaemon(t, reviewTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})
+	primary := passDesc(kindClaudeSession)
+	primary.Fallback = []provKind{"codex-session"}
+	setProviders(d, primary, passDesc(provKind("codex-session")))
+	seams := &fakeReactSeams{}
+	seams.install(d)
+
+	claude := &fakeReview{err: reviewagent.ErrQuota}
+	claude.installKind(d, kindClaudeSession)
+	codex := &fakeReview{findings: "codex found something"}
+	codex.installKind(d, provKind("codex-session"))
+
+	s := reactSess("FE-1", "review_pending", openPR(3, "MERGEABLE", "", "pass"))
+	s.AtPrompt = true
+	d.sessions.Upsert(s)
+	d.runReviewProviders(context.Background(), s)
+
+	if claude.callCount() != 1 || codex.callCount() != 1 {
+		t.Fatalf("claude=%d codex=%d, want each tried once", claude.callCount(), codex.callCount())
+	}
+	sent := sentTexts(seams)
+	if len(sent) != 1 || !strings.Contains(sent[0], "codex found something") {
+		t.Fatalf("worker got %v, want the fallback's findings", sent)
+	}
+	// The hand-off is labelled by the PRIMARY (whose transports routed it), so a
+	// fallback result is never announced as coming from the wrong reviewer.
+	if !strings.Contains(sent[0], "Claude review") {
+		t.Errorf("hand-off preamble = %q, want the primary's label", sent[0])
+	}
+	// The guard is stamped on the PRIMARY kind only — the chain must not re-fire.
+	cur, _ := d.sessions.Get(s.ID)
+	if cur.ReviewedPRs["claude-session"] != 3 || cur.ReviewedPRs["codex-session"] != 0 {
+		t.Errorf("guards = %v, want only the primary stamped", cur.ReviewedPRs)
+	}
+}
+
+// A pass kind whose binary is unavailable is simply ABSENT from the seam map, and
+// the chain advances rather than failing the review.
+func TestUnavailableKindAdvancesTheChain(t *testing.T) {
+	d := newTestDaemon(t, reviewTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})
+	primary := passDesc(provKind("opencode-session"))
+	primary.Fallback = []provKind{"claude-session"}
+	setProviders(d, primary, passDesc(kindClaudeSession))
+	seams := &fakeReactSeams{}
+	seams.install(d)
+	// opencode has no seam at all (binary missing); claude does.
+	claude := &fakeReview{findings: "claude reviewed it"}
+	claude.installKind(d, kindClaudeSession)
+
+	s := reactSess("FE-1", "review_pending", openPR(4, "MERGEABLE", "", "pass"))
+	s.AtPrompt = true
+	d.sessions.Upsert(s)
+	d.runReviewProviders(context.Background(), s)
+
+	if claude.callCount() != 1 {
+		t.Fatalf("claude ran %d times, want 1 via the fallback", claude.callCount())
+	}
+	if sent := sentTexts(seams); len(sent) != 1 {
+		t.Errorf("worker hand-off = %v, want the fallback's findings", sent)
+	}
+}
+
+// Labels are per PROVIDER: each agent's findings say which agent produced them,
+// and a generic bot-watch names the bot it watches rather than CodeRabbit.
+func TestLabelsNameTheActualReviewer(t *testing.T) {
+	for _, tc := range []struct {
+		desc      reviewProvider
+		wantTitle string
+		wantWho   string
+	}{
+		{passDesc(kindClaudeSession), config.ClaudeReviewNotifyTitle, "Claude"},
+		{passDesc(provKind("codex-session")), config.CodexReviewNotifyTitle, "Codex"},
+		{passDesc(provKind("opencode-session")), config.OpenCodeReviewNotifyTitle, "opencode"},
+		{passDesc(kindCoderabbitCLI), config.ReviewNotifyTitle, "CodeRabbit"},
+		{passDesc(provKind("custom-cli")), config.CustomCLIReviewNotifyTitle, "the review tool"},
+		{watchDesc(), config.CodeRabbitNotifyTitle, config.DefaultCodeRabbitAuthor},
+	} {
+		lbl := labelsFor(tc.desc)
+		if lbl.notifyTitle != tc.wantTitle {
+			t.Errorf("%s: notify title = %q, want %q", tc.desc.Kind, lbl.notifyTitle, tc.wantTitle)
+		}
+		if lbl.who != tc.wantWho {
+			t.Errorf("%s: who = %q, want %q", tc.desc.Kind, lbl.who, tc.wantWho)
+		}
+	}
+	// A generic watch is named by its configured author.
+	bot := watchDesc()
+	bot.Kind, bot.Author = provKind("bot-watch"), "greptile-apps"
+	if lbl := labelsFor(bot); lbl.who != "greptile-apps" || lbl.notifyTitle != "greptile-apps review" {
+		t.Errorf("bot-watch labels = %+v, want the configured author", lbl)
+	}
+}
+
+// The author reaches a human-facing label and the worker's pane, so it is
+// sanitized to login characters and clipped — it is operator config, but it is
+// still interpolated into text lola generates.
+func TestBotDisplayNameSanitizes(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"coderabbitai", "coderabbitai"},
+		{"coderabbitai[bot]", "coderabbitai[bot]"},
+		{"greptile-apps", "greptile-apps"},
+		{"bad name; rm -rf /", "badnamerm-rf"},
+		{"", "Bot"},
+		{"   ", "Bot"},
+		{strings.Repeat("x", 100), strings.Repeat("x", 39)},
+	} {
+		if got := botDisplayName(tc.in); got != tc.want {
+			t.Errorf("botDisplayName(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// A generic watch hands the worker a pointer naming ITS bot: telling an agent
+// "CodeRabbit posted feedback" when Greptile did points it at comments that do
+// not exist.
+func TestWatchPointerNamesTheBot(t *testing.T) {
+	s := reactSess("FE-1", "review_pending", openPR(42, "MERGEABLE", "", "pass"))
+	if got := watchAgentPointer(s, watchDesc()); !strings.Contains(got, "CodeRabbit") || !strings.Contains(got, "#42") {
+		t.Errorf("coderabbit pointer = %q", got)
+	}
+	bot := watchDesc()
+	bot.Kind, bot.Author = provKind("bot-watch"), "greptile-apps"
+	got := watchAgentPointer(s, bot)
+	if !strings.Contains(got, "greptile-apps") || strings.Contains(got, "CodeRabbit") {
+		t.Errorf("bot-watch pointer = %q, want it to name greptile-apps", got)
+	}
+	if !strings.Contains(got, "#42") || !strings.Contains(got, "gh pr view 42") {
+		t.Errorf("bot-watch pointer = %q, want the PR number in both places", got)
+	}
+}
+
+// The @-mention defuse generalizes with the catalog: a bot that reads its own
+// mention as a command must not be triggered by lola's posted findings, whichever
+// bot it is. CodeRabbit stays defused unconditionally.
+func TestNeutralizeCoversConfiguredWatchBots(t *testing.T) {
+	d := newTestDaemon(t, reviewTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})
+	bot := watchDesc()
+	bot.Kind, bot.Author = provKind("bot-watch"), "greptile-apps"
+	setProviders(d, bot)
+
+	body := d.neutralizeWatchedBots("see @greptile-apps and @coderabbitai about @Greptile-Apps")
+	for _, live := range []string{"@greptile-apps", "@coderabbitai", "@Greptile-Apps"} {
+		if strings.Contains(body, live) {
+			t.Errorf("%q survived undefused in %q", live, body)
+		}
+	}
+	// Defusing is invisible: the text still reads the same to a human.
+	if strings.ReplaceAll(body, "​", "") != "see @greptile-apps and @coderabbitai about @Greptile-Apps" {
+		t.Errorf("neutralize changed more than the zero-width spaces: %q", body)
+	}
+	// A DISABLED watch is not defused for — only what lola actually watches.
+	bot.Enabled = false
+	setProviders(d, bot)
+	if got := d.neutralizeWatchedBots("@greptile-apps"); strings.Contains(got, "​") {
+		t.Errorf("a disabled watch must not be defused for, got %q", got)
+	}
+}
+
+// The unavailable-provider warning names each missing kind and the binary it
+// needs, so an operator who enabled codex-session without codex installed is told
+// which tool to install rather than being met with silence.
+func TestUnavailableWarnNamesEveryMissingKind(t *testing.T) {
+	d := newTestDaemon(t, reviewTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})
+	setProviders(d, passDesc(provKind("codex-session")), passDesc(kindCoderabbitCLI), watchDesc())
+	d.mu.Lock()
+	warn := d.reviewUnavailableWarnLocked()
+	d.mu.Unlock()
+
+	for _, want := range []string{"codex-session", "codex", "coderabbit-cli", "coderabbit"} {
+		if !strings.Contains(warn, want) {
+			t.Errorf("warning %q does not name %q", warn, want)
+		}
+	}
+	// A watch needs no binary, so it is never reported missing.
+	if strings.Contains(warn, "coderabbit-watch") {
+		t.Errorf("warning must not name the watch: %q", warn)
+	}
+}
+
+// sentTexts is the send-keys payloads a fake seam set recorded, in order.
+func sentTexts(f *fakeReactSeams) []string {
+	var out []string
+	for _, c := range f.sendCalls() {
+		out = append(out, c.text)
+	}
+	return out
 }

@@ -215,12 +215,28 @@ endpoint = "https://api.linear.app/graphql"
 #
 #     lola config migrate-review        # folds legacy -> catalog, then `lola reload`
 #
-# KINDS (three kinds, two execution SHAPES):
-#   coderabbit-cli    (pass)  exec the CodeRabbit CLI on the PR branch; once/PR.
-#   claude-session    (pass)  headless `claude -p` review (diff piped on stdin);
-#                             once/PR. Handy as a coderabbit-cli FALLBACK.
-#   coderabbit-watch  (watch) poll the PR (gh, ~30s) for the CodeRabbit GitHub
-#                             app's comments (or any bot via `author`); watermark.
+# KINDS — seven, in three FAMILIES over two execution SHAPES. Every family is a
+# swappable slot: which agent reviews, which CLI reviews, and whose GitHub review
+# is relayed are all config, not hardcoded.
+#
+#   CLI family (pass) — exec an external review CLI in the worktree, once/PR:
+#     coderabbit-cli      the CodeRabbit CLI; `command` optional (it has a default).
+#     custom-cli          ANY review CLI; `command` REQUIRED. `base_flag` decides
+#                         how the base branch reaches it ("--base" by default,
+#                         empty = pass none).
+#
+#   WATCH family (watch) — poll the PR (gh, ~30s) for a review bot's own comments
+#   against a watermark; needs no local binary:
+#     coderabbit-watch    the CodeRabbit GitHub app; `author` defaults to it.
+#     bot-watch           ANY review bot; `author` REQUIRED (e.g. "greptile").
+#
+#   AGENT family (pass) — ONE bounded, READ-ONLY headless coding-agent review of
+#   the PR diff (piped on stdin), once/PR. Each is its own kind, so one can be
+#   another's over-quota FALLBACK:
+#     claude-session      `claude -p`
+#     codex-session       `codex exec --sandbox read-only`
+#     opencode-session    `opencode run`   (`model` is "provider/model")
+#
 # At most ONE provider per kind (guards key by kind).
 #
 # TRANSPORTS — where findings go: a multiselect over {lola, github, linear}.
@@ -242,10 +258,11 @@ endpoint = "https://api.linear.app/graphql"
 #            false ONE plain PR comment (gh pr comment, body on stdin).
 #          Inline degrades to the plain comment by itself: no diff, nothing
 #          anchorable, no write access, a 422. PASS
-#          shapes only; FORBIDDEN on coderabbit-watch (its feedback is already on
+#          shapes only; FORBIDDEN on the watch family (its feedback is already on
 #          the PR — re-posting is a self-feedback loop). Idempotent per PR. Any
-#          @coderabbitai mention in any body is neutralized, so lola posting its
-#          own review NEVER triggers a new CodeRabbit run.
+#          @coderabbitai mention — and any @-mention of a bot you have a watch
+#          configured for — is neutralized in every body, so lola posting its own
+#          review NEVER triggers a new run of that bot.
 #   linear Mirror findings onto the session's Linear issue.
 # Only the worker hand-off sanitizes + idle-gates; notify/github/linear are HUMAN
 # sinks carrying the full untrusted findings verbatim (never re-fed as control).
@@ -254,31 +271,39 @@ endpoint = "https://api.linear.app/graphql"
 # kind when THIS one can't answer (tool missing / timeout / OVER-QUOTA). The
 # result routes under the PRIMARY's transports. A real exit/auth error is a
 # graceful skip that does NOT fall through (fail-closed). Fallback is PASS-SHAPE
-# ONLY and is forbidden on coderabbit-watch: the CodeRabbit GitHub app posts
-# "out of reviews" as an ordinary PR comment (err==nil, classifier-undetectable),
-# so a watch has no quota signal — use coderabbit-cli for quota->claude fallback.
+# ONLY and is forbidden on the watch family: a review bot posts "out of reviews"
+# as an ordinary PR comment (err==nil, classifier-undetectable), so a watch has no
+# quota signal — use a cli or agent provider for quota->fallback.
 #
 # Omit this whole section to keep review OFF. The values below are the defaults
 # once a provider is enabled.
 # ---------------------------------------------------------------------------
 # [[review.provider]]
-# provider        = "coderabbit-cli"                        # coderabbit-cli | coderabbit-watch | claude-session
+# provider        = "coderabbit-cli"                        # see KINDS above
 # enabled         = true                                    # master switch; default false
 # on_pr_open      = true                                    # run when a session first opens a PR (pass shapes); default true
-# command         = "coderabbit review --plain --type all"  # coderabbit-cli argv override (space-split); empty = runner default
+# command         = "coderabbit review --plain --type all"  # cli family argv (space-split); empty = coderabbit's default
+# base_flag       = "--base"                                # cli family: flag the base branch is passed with; "" = pass none
 # timeout_seconds = 300                                     # hard cap per pass (pass shapes); must be >= 0
 # transports      = ["lola", "github"]                      # {lola (always forced present), github, linear}
 # github_inline   = true                                    # github: anchored resolvable threads (default) vs one flat comment
 # visible         = true                                    # run the pass in a watchable "<session>-review" tmux session; default true
 # notify          = true                                    # lola transport: notify a human; default true
 # send_to_agent   = true                                    # lola transport: hand findings to the worker; default true
-# fallback        = ["claude-session"]                      # ordered pass kinds tried when this one can't answer
+# fallback        = ["claude-session", "codex-session"]     # ordered pass kinds tried when this one can't answer
 #
 # [[review.provider]]
-# provider        = "claude-session"                        # headless `claude -p`; here only as coderabbit-cli's fallback
+# provider        = "claude-session"                        # headless `claude -p`; here as coderabbit-cli's first fallback
 # enabled         = true
-# model           = "claude-sonnet-4-5"                     # optional --model; empty = claude's default
-# timeout_seconds = 900                                     # claude-session default: this pass reads the PR files
+# model           = "claude-sonnet-4-5"                     # optional --model; empty = the agent's default
+# timeout_seconds = 900                                     # agent-family default: this pass reads the PR files
+# transports      = ["lola"]
+#
+# [[review.provider]]
+# provider        = "codex-session"                         # headless `codex exec`; the second fallback above
+# enabled         = true                                    # a fallback-only provider still needs enabled = true
+# on_pr_open      = false                                   # ...but need not run a pass of its own
+# model           = "gpt-5.1"
 # transports      = ["lola"]
 #
 # [[review.provider]]
@@ -289,12 +314,27 @@ endpoint = "https://api.linear.app/graphql"
 # notify          = true
 # send_to_agent   = true
 #
-# WATCH-ONLY posture (read CodeRabbit, never invoke a new run): configure JUST the
-# coderabbit-watch provider above. lola polls + relays the CodeRabbit app's own
-# automatic review and never execs `coderabbit review` (that is coderabbit-cli) and
-# never posts to the PR — so no new CodeRabbit run and no review credit spent. Want
-# lola to also post its OWN public review? Add a claude-session (or coderabbit-cli)
-# provider with transports = ["lola", "github"]; its posted comment is trigger-safe.
+# Swapping the vendor, in full. Neither of these needs any code change:
+#
+# [[review.provider]]
+# provider        = "custom-cli"                            # any review CLI instead of CodeRabbit's
+# enabled         = true
+# command         = "greptile review --plain"               # REQUIRED for this kind
+# base_flag       = "--branch"                              # or "" if the tool takes no base argument
+# transports      = ["lola", "github"]
+#
+# [[review.provider]]
+# provider        = "bot-watch"                             # any review bot's GitHub review instead of CodeRabbit's
+# enabled         = true
+# author          = "greptile-apps"                         # REQUIRED for this kind
+# transports      = ["lola"]
+#
+# WATCH-ONLY posture (read the bot's review, never invoke a new run): configure
+# JUST a watch provider. lola polls + relays that bot's own automatic review and
+# never execs a review CLI (that is the cli family) and never posts to the PR — so
+# no new run and no review credit spent. Want lola to also post its OWN public
+# review? Add an agent or cli provider with transports = ["lola", "github"]; its
+# posted comment is trigger-safe.
 
 # ---------------------------------------------------------------------------
 # [review] — LEGACY, OPTIONAL, OFF BY DEFAULT (P9). Equivalent to a single

@@ -3,6 +3,7 @@ package agent
 import (
 	"encoding/json"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -346,5 +347,108 @@ func TestParseCodexNotify(t *testing.T) {
 					c.in, gotEvent, gotMsg, gotType, c.wantEvent, c.wantMsg, c.wantType)
 			}
 		})
+	}
+}
+
+// The review argv is the pluggable half of the review system: which agent runs
+// is config, so every kind must produce a runnable, READ-ONLY one-shot argv with
+// the prompt where that CLI expects it and the diff nowhere near it.
+func TestReviewArgs(t *testing.T) {
+	const instr = "REVIEW-INSTRUCTION"
+	for _, tc := range []struct {
+		kind Kind
+		want []string
+	}{
+		{Claude, []string{"-p", instr, "--output-format", "text"}},
+		{Codex, []string{"exec", "--sandbox", "read-only", instr}},
+		{OpenCode, []string{"run", instr}},
+	} {
+		got := ReviewArgs(tc.kind, instr, "")
+		if !slices.Equal(got, tc.want) {
+			t.Errorf("ReviewArgs(%s) = %v, want %v", tc.kind, got, tc.want)
+		}
+	}
+	// An unknown kind reviews with claude rather than producing no argv at all.
+	if got := ReviewArgs(Kind("nope"), instr, ""); !slices.Equal(got, ReviewArgs(Claude, instr, "")) {
+		t.Errorf("ReviewArgs(unknown) = %v, want claude's argv", got)
+	}
+}
+
+// codex and opencode take the prompt POSITIONALLY and append piped stdin to it,
+// so the instruction must be the LAST element — a flag after it would be read as
+// part of the prompt (or eat the prompt as its own value).
+func TestReviewArgsKeepThePromptLast(t *testing.T) {
+	for _, k := range []Kind{Codex, OpenCode} {
+		for _, model := range []string{"", "some-model"} {
+			args := ReviewArgs(k, "INSTR", model)
+			if args[len(args)-1] != "INSTR" {
+				t.Errorf("ReviewArgs(%s, model=%q) = %v, want the prompt last", k, model, args)
+			}
+		}
+	}
+}
+
+// A review READS; it must never be able to write. Each agent's most restrictive
+// non-interactive posture is the guard, and it is the exact opposite of the
+// unattended worker launch — so assert the worker's write-enabling flags are
+// absent from every review argv.
+func TestReviewArgsAreReadOnly(t *testing.T) {
+	forbidden := map[Kind][]string{
+		Claude:   {"--dangerously-skip-permissions", "--permission-mode"},
+		Codex:    {"workspace-write", "danger-full-access", "--yolo", "--dangerously-bypass-approvals-and-sandbox"},
+		OpenCode: {"--auto"},
+	}
+	for _, k := range Kinds {
+		for _, build := range []func() []string{
+			func() []string { return ReviewArgs(k, "i", "m") },
+			func() []string { return ReviewStreamArgs(k, "i", "m") },
+		} {
+			args := build()
+			for _, bad := range forbidden[k] {
+				if slices.Contains(args, bad) {
+					t.Errorf("%s review argv must not carry %q: %v", k, bad, args)
+				}
+			}
+		}
+	}
+	// Codex has no "ask a human" mode in exec, so the sandbox IS the guard.
+	if !slices.Contains(ReviewArgs(Codex, "i", ""), "read-only") {
+		t.Error("codex review must run under --sandbox read-only")
+	}
+}
+
+// Only claude needs a different argv to narrate; the other two already do it on
+// stderr, and the two predicates are what route the visible pass.
+func TestReviewStreamShapes(t *testing.T) {
+	if !ReviewStreamsJSON(Claude) || ReviewProgressOnStderr(Claude) {
+		t.Error("claude streams a stdout event feed, and says nothing on stderr")
+	}
+	for _, k := range []Kind{Codex, OpenCode} {
+		if ReviewStreamsJSON(k) || !ReviewProgressOnStderr(k) {
+			t.Errorf("%s narrates on stderr and emits no stream-json feed", k)
+		}
+		// ...so its streaming argv must be its plain one, unchanged.
+		if !slices.Equal(ReviewStreamArgs(k, "i", "m"), ReviewArgs(k, "i", "m")) {
+			t.Errorf("%s streaming argv must equal its plain argv", k)
+		}
+	}
+	if want := []string{"-p", "i", "--output-format", "stream-json", "--verbose", "--model", "m"}; !slices.Equal(ReviewStreamArgs(Claude, "i", "m"), want) {
+		t.Errorf("claude stream argv = %v, want %v", ReviewStreamArgs(Claude, "i", "m"), want)
+	}
+}
+
+// The model flag is the agent's own, and an empty model leaves the agent's
+// configured default in place rather than passing an empty value.
+func TestReviewArgsModel(t *testing.T) {
+	for _, k := range Kinds {
+		args := ReviewArgs(k, "i", "")
+		if slices.Contains(args, "--model") {
+			t.Errorf("%s: empty model must not pass --model: %v", k, args)
+		}
+		args = ReviewArgs(k, "i", "the-model")
+		i := slices.Index(args, "--model")
+		if i < 0 || i+1 >= len(args) || args[i+1] != "the-model" {
+			t.Errorf("%s: --model the-model missing from %v", k, args)
+		}
 	}
 }

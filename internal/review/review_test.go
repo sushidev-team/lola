@@ -39,7 +39,7 @@ func stubSeam(t *testing.T, out string, err error) *capture {
 
 func TestReviewBuildsArgvWithBaseAndRunsInWorktree(t *testing.T) {
 	cap := stubSeam(t, "some findings", nil)
-	if _, err := (&Client{}).Review(context.Background(), "/work/tree", "main"); err != nil {
+	if _, err := (&Client{BaseFlag: "--base"}).Review(context.Background(), "/work/tree", "main"); err != nil {
 		t.Fatalf("Review: %v", err)
 	}
 	if cap.calls != 1 {
@@ -62,7 +62,7 @@ func TestReviewBuildsArgvWithBaseAndRunsInWorktree(t *testing.T) {
 
 func TestReviewHonorsConfiguredBinArgsTimeout(t *testing.T) {
 	cap := stubSeam(t, "ok", nil)
-	cl := &Client{Bin: "/opt/cr", Args: []string{"review", "--agent"}, Timeout: 42 * time.Second}
+	cl := &Client{Bin: "/opt/cr", Args: []string{"review", "--agent"}, BaseFlag: "--base", Timeout: 42 * time.Second}
 	if _, err := cl.Review(context.Background(), "/wt", "develop"); err != nil {
 		t.Fatalf("Review: %v", err)
 	}
@@ -78,12 +78,12 @@ func TestReviewHonorsConfiguredBinArgsTimeout(t *testing.T) {
 }
 
 // Review must never mutate defaultArgs or a caller-supplied Args slice when it
-// appends --base.
+// appends the base flag.
 func TestReviewDoesNotMutateArgs(t *testing.T) {
 	stubSeam(t, "", nil)
 
 	// Default path: defaultArgs stays four elements across calls.
-	if _, err := (&Client{}).Review(context.Background(), "/wt", "main"); err != nil {
+	if _, err := (&Client{BaseFlag: "--base"}).Review(context.Background(), "/wt", "main"); err != nil {
 		t.Fatalf("Review: %v", err)
 	}
 	if len(defaultArgs) != 4 {
@@ -93,7 +93,7 @@ func TestReviewDoesNotMutateArgs(t *testing.T) {
 	// Caller slice with spare capacity: --base must not clobber it.
 	userArgs := make([]string, 2, 8)
 	userArgs[0], userArgs[1] = "review", "--plain"
-	cl := &Client{Args: userArgs}
+	cl := &Client{Args: userArgs, BaseFlag: "--base"}
 	if _, err := cl.Review(context.Background(), "/wt", "main"); err != nil {
 		t.Fatalf("Review: %v", err)
 	}
@@ -413,4 +413,31 @@ func tail(s string, n int) string {
 		return s
 	}
 	return s[len(s)-n:]
+}
+
+// An EMPTY BaseFlag appends nothing at all: the escape hatch for a review CLI
+// that takes no base argument. Getting this wrong hands an unknown flag to a
+// third-party tool, which fails the whole pass.
+func TestReviewOmitsBaseWhenNoBaseFlag(t *testing.T) {
+	cap := stubSeam(t, "", nil)
+	cl := &Client{Bin: "/opt/other", Args: []string{"scan", "--json"}}
+	if _, err := cl.Review(context.Background(), "/wt", "main"); err != nil {
+		t.Fatalf("Review: %v", err)
+	}
+	if want := []string{"scan", "--json"}; !equal(cap.args, want) {
+		t.Fatalf("args = %v, want %v (no base appended)", cap.args, want)
+	}
+}
+
+// A custom BaseFlag is used verbatim, so a tool that names the base differently
+// still gets it.
+func TestReviewHonorsCustomBaseFlag(t *testing.T) {
+	cap := stubSeam(t, "", nil)
+	cl := &Client{Bin: "/opt/other", Args: []string{"review"}, BaseFlag: "--target-branch"}
+	if _, err := cl.Review(context.Background(), "/wt", "develop"); err != nil {
+		t.Fatalf("Review: %v", err)
+	}
+	if want := []string{"review", "--target-branch", "develop"}; !equal(cap.args, want) {
+		t.Fatalf("args = %v, want %v", cap.args, want)
+	}
 }

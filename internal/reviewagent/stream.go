@@ -1,23 +1,28 @@
-package reviewclaude
+package reviewagent
 
-// stream.go is the VISIBLE variant of the review pass: the same one-shot
-// `claude -p` over the same instruction and the same diff-on-stdin, but asked
-// for `--output-format stream-json --verbose` so the run can be WATCHED while
-// it happens.
+// stream.go is the VISIBLE variant of the review pass: the same one-shot agent
+// invocation over the same instruction and the same diff-on-stdin, but arranged
+// so the run can be WATCHED while it happens.
 //
-// The plain pass (`--output-format text`) prints nothing at all until claude is
-// finished, which for a real PR means a blank pane for ten minutes or more —
-// useless as a progress display. The stream format emits one JSON object per
-// event instead, and this file renders those events into plain lines a human
-// can read at a glance ("→ Read app/Foo.php"). The rendered lines go to the
-// caller's writer (in production: the review tmux pane's stdout); the FINDINGS
-// still come back as the function's return value, taken from the terminal
-// `result` event, so every downstream sink is byte-identical to the plain pass.
+// The agents divide into two shapes, which is why there are two seams:
 //
-// The events are attacker-influenceable like everything else here (they quote
-// the diff and the files it touches). They are rendered for a human to LOOK at
-// and are never executed, never re-fed to an agent, and the findings still pass
-// the caller's sanitize + idle gate before they reach a worker's pane.
+//   - CLAUDE narrates nothing. A plain `claude -p --output-format text` prints
+//     absolutely nothing until it finishes, which for a real PR means a blank
+//     pane for ten minutes or more — useless as a progress display. So the
+//     visible pass asks for `--output-format stream-json --verbose`, which emits
+//     one JSON object per event, and this file renders those events into plain
+//     lines a human can read at a glance ("→ Read app/Foo.php"). The FINDINGS
+//     still come back from the terminal `result` event, so every downstream sink
+//     is byte-identical to the plain pass.
+//   - CODEX and OPENCODE already narrate: they write their progress to STDERR
+//     and only the answer to stdout. Their argv is therefore unchanged and the
+//     visible pass simply TEES both streams to the pane, capturing stdout as the
+//     findings exactly as the plain pass does.
+//
+// Either way the pane text is attacker-influenceable like everything else here
+// (it quotes the diff and the files it touches). It is rendered for a human to
+// LOOK at and is never executed, never re-fed to an agent, and the findings
+// still pass the caller's sanitize + idle gate before they reach a worker's pane.
 
 import (
 	"bufio"
@@ -28,6 +33,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/sushidev-team/lola/internal/agent"
 )
 
 const (
@@ -44,11 +51,12 @@ const (
 	maxRenderedText = 400
 )
 
-// ReviewStream runs the review like Review, but streams progress: it renders
-// each stream-json event as a plain line to progress (nil discards them) and
-// returns the trimmed, size-capped findings from the terminal result event. A
-// clean review still returns ("", nil), and the failure classes are the same
-// sentinels, so a caller can swap between Review and ReviewStream freely.
+// ReviewStream runs the review like Review, but streams progress to progress
+// (nil discards it) and returns the same trimmed, size-capped findings. A clean
+// review still returns ("", nil), and the failure classes are the same
+// sentinels, so a caller can swap between Review and ReviewStream freely — and
+// so can it swap agents: which of the two streaming shapes runs is decided here,
+// from the agent alone.
 func (c *Client) ReviewStream(ctx context.Context, worktreeDir, baseBranch string, progress io.Writer) (string, error) {
 	if progress == nil {
 		progress = io.Discard
@@ -61,36 +69,45 @@ func (c *Client) ReviewStream(ctx context.Context, worktreeDir, baseBranch strin
 		fmt.Fprintln(progress, "· nothing to review: the branch has no changes against "+baseBranch)
 		return "", nil
 	}
-	out, err := runClaudeStream(ctx, c.bin(), c.Model, reviewInstruction, worktreeDir,
-		capText(diff, maxDiffBytes), c.timeout(), progress)
+	k := c.kind()
+	args := agent.ReviewStreamArgs(k, reviewInstruction, c.Model)
+	stdin := capText(diff, maxDiffBytes)
+	fmt.Fprintf(progress, "· %s reviewing %s onto %s\n", c.bin(), worktreeDir, baseBranch)
+
+	var out string
+	if agent.ReviewStreamsJSON(k) {
+		out, err = runAgentStreamJSON(ctx, k, c.bin(), args, worktreeDir, stdin, c.timeout(), progress)
+	} else {
+		out, err = runAgentStreamPlain(ctx, k, c.bin(), args, worktreeDir, stdin, c.timeout(), progress)
+	}
 	if err != nil {
 		return "", err
 	}
 	return capText(strings.TrimSpace(out), maxOutputBytes), nil
 }
 
-// runClaudeStream is the streaming exec seam (the sibling of runClaude). Tests
-// override it to assert argv/stdin/timeout without running claude. The real
-// implementation applies the hard timeout, runs in worktreeDir, streams the
-// diff on stdin, renders every event line to progress as it arrives, and
+// runAgentStreamJSON is claude's streaming exec seam (the sibling of runAgent).
+// Tests override it to assert argv/stdin/timeout without running claude. The
+// real implementation applies the hard timeout, runs in dir, streams the diff on
+// stdin, renders every stream-json event line to progress as it arrives, and
 // classifies failures into the same Err* sentinels.
-var runClaudeStream = func(ctx context.Context, bin, model, instruction, dir, stdin string, timeout time.Duration, progress io.Writer) (string, error) {
+var runAgentStreamJSON = func(ctx context.Context, k agent.Kind, bin string, args []string, dir, stdin string, timeout time.Duration, progress io.Writer) (string, error) {
 	cctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(cctx, bin, buildStreamArgs(model, instruction)...)
+	cmd := exec.CommandContext(cctx, bin, args...)
 	cmd.Dir = dir
 	cmd.Stdin = strings.NewReader(stdin)
 	stderr := &cappedBuffer{cap: maxStderrBytes}
 	cmd.Stderr = stderr
 	pipe, err := cmd.StdoutPipe()
 	if err != nil {
-		return "", fmt.Errorf("reviewclaude: claude run failed: %s", redactSecrets(err.Error()))
+		return "", fmt.Errorf("reviewagent: %s run failed: %s", k.Binary(), redactSecrets(err.Error()))
 	}
 	if err := cmd.Start(); err != nil {
 		// Start reports "executable not found" here, where Run would have
 		// reported it below — classify it the same way.
-		return "", classifyRunErr(err, cctx.Err(), stderr.String(), "", timeout)
+		return "", classifyRunErr(k, err, cctx.Err(), stderr.String(), "", timeout)
 	}
 
 	// Render as the events arrive; the pane is a live display, so nothing is
@@ -110,24 +127,42 @@ var runClaudeStream = func(ctx context.Context, bin, model, instruction, dir, st
 	scanErr := sc.Err()
 
 	err = cmd.Wait()
-	if e := classifyRunErr(err, cctx.Err(), stderr.String(), result, timeout); e != nil {
+	if e := classifyRunErr(k, err, cctx.Err(), stderr.String(), result, timeout); e != nil {
 		return "", e
 	}
 	if scanErr != nil {
-		return "", fmt.Errorf("reviewclaude: reading the review stream failed: %s", redactSecrets(scanErr.Error()))
+		return "", fmt.Errorf("reviewagent: reading the review stream failed: %s", redactSecrets(scanErr.Error()))
 	}
 	return result, nil
 }
 
-// buildStreamArgs assembles the streaming argv. `--verbose` is REQUIRED by the
-// CLI alongside `--output-format stream-json` in print mode; the diff is never
-// here (it goes on stdin).
-func buildStreamArgs(model, instruction string) []string {
-	args := []string{"-p", instruction, "--output-format", "stream-json", "--verbose"}
-	if model != "" {
-		args = append(args, "--model", model)
+// runAgentStreamPlain is the streaming exec seam for the agents that narrate on
+// STDERR (codex, opencode). It is runAgent with two writers teed onto the pane:
+// stdout, which carries the findings and is still captured under the SAME cap,
+// and stderr, which carries the progress a human watches and is still buffered
+// (capped) for error classification. Teeing never widens a cap — the pane gets a
+// copy, the buffers decide what lola keeps.
+//
+// Both streams reach the child as PIPES, never a TTY, which is what makes codex
+// and opencode put their answer on stdout at all (each suppresses that copy when
+// it detects an interactive terminal).
+var runAgentStreamPlain = func(ctx context.Context, k agent.Kind, bin string, args []string, dir, stdin string, timeout time.Duration, progress io.Writer) (string, error) {
+	cctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(cctx, bin, args...)
+	cmd.Dir = dir
+	cmd.Stdin = strings.NewReader(stdin)
+	stdout := &cappedBuffer{cap: maxCaptureBytes}
+	stderr := &cappedBuffer{cap: maxStderrBytes}
+	cmd.Stdout = io.MultiWriter(stdout, progress)
+	cmd.Stderr = io.MultiWriter(stderr, progress)
+
+	err := cmd.Run()
+	if e := classifyRunErr(k, err, cctx.Err(), stderr.String(), stdout.String(), timeout); e != nil {
+		return "", e
 	}
-	return args
+	return stdout.String(), nil
 }
 
 // streamEvent is the SUBSET of a stream-json event this renderer needs. Unknown

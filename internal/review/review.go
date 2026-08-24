@@ -1,8 +1,14 @@
-// Package review is Lola's bounded, event-triggered QA pass over the CodeRabbit
-// CLI (PLAN P9). It is the coding agent's QA BUDDY: on PR-open (opt-in) it runs
-// exactly one `coderabbit review` against a worktree and hands the plain-text
+// Package review is Lola's bounded, event-triggered QA pass over an external
+// review CLI. It is the coding agent's QA BUDDY: on PR-open (opt-in) it runs
+// exactly one review command against a worktree and hands the plain-text
 // findings back to the worker agent and the human. It is NOT a persistent
 // second agent — one invocation, then done.
+//
+// CodeRabbit is the DEFAULT tool, not the only one: Bin/Args carry any review
+// CLI (the `custom-cli` provider kind supplies them from config), and BaseFlag
+// decides how — or whether — the base branch is named on its argv. The error
+// classes, the caps and the auth discipline below are the tool-agnostic part and
+// apply whichever binary runs.
 //
 // Hard contract — read before wiring this anywhere:
 //
@@ -19,11 +25,11 @@
 //     agent it MUST pass the P3 sanitizeAgentText control-char stripper and the
 //     AtPrompt idle-gate — it is never a command and never an unsanitized
 //     send-keys payload.
-//   - NO SECRETS. Auth is inherited, never managed here: the child coderabbit
-//     runs with the daemon's environment (its own `coderabbit auth login`
-//     session), so this package never reads, sets, or logs a credential. When
-//     coderabbit is not authenticated the pass returns ErrAuth with a clear
-//     "run: coderabbit auth login" hint. Any surfaced stderr is scrubbed
+//   - NO SECRETS. Auth is inherited, never managed here: the child runs with the
+//     daemon's environment (its own `coderabbit auth login` session, or whatever
+//     the configured tool uses), so this package never reads, sets, or logs a
+//     credential. When the tool is not authenticated the pass returns ErrAuth
+//     with a clear "run: coderabbit auth login" hint. Any surfaced stderr is scrubbed
 //     through redactSecrets so a nonzero-exit error can never carry a key.
 package review
 
@@ -63,9 +69,9 @@ const (
 	truncMarker = "\n…[truncated]"
 )
 
-// defaultArgs is the CodeRabbit argv (minus --base) used when Client.Args is
-// nil: a plain-text review of all finding types. It is never mutated — Review
-// copies before appending --base.
+// defaultArgs is the CodeRabbit argv (minus the base flag) used when Client.Args
+// is nil: a plain-text review of all finding types. It is never mutated — Review
+// copies before appending the base.
 var defaultArgs = []string{"review", "--plain", "--type", "all"}
 
 // Distinct, testable error classes. Callers key on these to skip the QA pass
@@ -94,10 +100,16 @@ var (
 type Client struct {
 	// Bin is the coderabbit executable; empty resolves "coderabbit" via PATH.
 	Bin string
-	// Args is the review argv minus --base; nil means defaultArgs
-	// (["review","--plain","--type","all"]). --base <baseBranch> is always
-	// appended by Review.
+	// Args is the review argv minus the base flag; nil means defaultArgs
+	// (["review","--plain","--type","all"]).
 	Args []string
+	// BaseFlag is the flag the base branch is passed with: Review appends
+	// `<BaseFlag> <baseBranch>` to the argv. EMPTY means append nothing at all —
+	// the escape hatch for a review CLI that takes no base argument (or wants it
+	// baked into Args). This package holds NO default for it: the resolved value
+	// comes from config (config.DefaultReviewBaseFlag is "--base", what CodeRabbit
+	// and most review CLIs use), so only an explicit `base_flag = ""` empties it.
+	BaseFlag string
 	// Timeout bounds one Review call; 0 means defaultTimeout (300s).
 	Timeout time.Duration
 }
@@ -130,16 +142,13 @@ func (c *Client) Available() bool {
 	return err == nil
 }
 
-// Review runs `<bin> <args...> --base <baseBranch>` with the working directory
-// set to worktreeDir and a hard timeout, returning coderabbit's trimmed,
+// Review runs `<bin> <args...> [<BaseFlag> <baseBranch>]` with the working
+// directory set to worktreeDir and a hard timeout, returning the tool's trimmed,
 // size-capped plain-text findings. It makes exactly one attempt and never
 // retries. A clean review (exit 0, no findings) returns ("", nil); failures map
 // to ErrNotFound / ErrTimeout / ErrAuth / ErrExit.
 func (c *Client) Review(ctx context.Context, worktreeDir, baseBranch string) (string, error) {
-	// Copy into a fresh backing array before appending so neither defaultArgs
-	// nor a caller-supplied Client.Args slice is ever mutated.
-	args := append(append([]string{}, c.args()...), "--base", baseBranch)
-	out, err := runReview(ctx, c.bin(), args, worktreeDir, c.timeout())
+	out, err := runReview(ctx, c.bin(), c.argv(baseBranch), worktreeDir, c.timeout())
 	if err != nil {
 		return "", err
 	}
@@ -155,7 +164,7 @@ func (c *Client) ReviewStream(ctx context.Context, worktreeDir, baseBranch strin
 	if progress == nil {
 		return c.Review(ctx, worktreeDir, baseBranch)
 	}
-	args := append(append([]string{}, c.args()...), "--base", baseBranch)
+	args := c.argv(baseBranch)
 	fmt.Fprintf(progress, "· %s %s\n", c.bin(), strings.Join(args, " "))
 	out, err := runReviewTo(ctx, c.bin(), args, worktreeDir, c.timeout(), progress)
 	if err != nil {
@@ -164,8 +173,19 @@ func (c *Client) ReviewStream(ctx context.Context, worktreeDir, baseBranch strin
 	return capOutput(strings.TrimSpace(out), maxOutputBytes), nil
 }
 
+// argv assembles the full review argv. It COPIES into a fresh backing array
+// before appending, so neither defaultArgs nor a caller-supplied Client.Args
+// slice is ever mutated; an empty BaseFlag appends nothing.
+func (c *Client) argv(baseBranch string) []string {
+	args := append([]string{}, c.args()...)
+	if c.BaseFlag != "" {
+		args = append(args, c.BaseFlag, baseBranch)
+	}
+	return args
+}
+
 // runReview is the exec seam. Tests override it to assert the bin, argv (incl.
-// --base), working dir, and timeout WITHOUT running coderabbit. The real
+// the base flag), working dir, and timeout WITHOUT running the review CLI. The real
 // implementation applies the hard timeout, runs in worktreeDir, bounds the
 // stdout it retains, and classifies failures into the Err* sentinels.
 var runReview = func(ctx context.Context, bin string, args []string, dir string, timeout time.Duration) (string, error) {

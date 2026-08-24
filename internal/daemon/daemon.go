@@ -28,8 +28,6 @@ import (
 	"github.com/sushidev-team/lola/internal/linear"
 	"github.com/sushidev-team/lola/internal/notify"
 	"github.com/sushidev-team/lola/internal/portproc"
-	"github.com/sushidev-team/lola/internal/review"
-	"github.com/sushidev-team/lola/internal/reviewclaude"
 	"github.com/sushidev-team/lola/internal/runtime"
 	"github.com/sushidev-team/lola/internal/scm"
 	"github.com/sushidev-team/lola/internal/secrets"
@@ -241,18 +239,19 @@ type Daemon struct {
 	// kinds run per session, their transports, and their fallback chains. Rebuilt
 	// under d.mu by setReviewProvidersLocked on Run and reload. Guarded by d.mu.
 	//
-	// review/reviewRun (coderabbit-cli) and claudeReview/claudeReviewRun
-	// (claude-session) are the two sync "pass" exec clients + seams; the seam is
-	// nil when that kind is disabled or its binary is unavailable, which every
-	// call site (and the fallback chain) treats as "that provider can't answer".
-	// The seams are looked up under d.mu AT CALL TIME (late binding), so a fake
-	// installed after setReviewProvidersLocked still wins. Tests install a fake
-	// reviewRun / claudeReviewRun directly.
+	// passRuns holds one sync "pass" exec seam PER KIND — the cli family's
+	// review.Client and the agent family's reviewagent.Client, both adapted to
+	// the same passRun signature. A kind is ABSENT from the map when it is
+	// disabled or its binary is unavailable, which every call site (and the
+	// fallback chain) treats as "that provider can't answer".
+	//
+	// It is a map, not a field per kind, precisely because the kind set is the
+	// pluggable part: adding a review agent must not mean adding a daemon field,
+	// a nil-reset, a seam switch case and a test hook. The seams are looked up
+	// under d.mu AT CALL TIME (late binding), so a fake installed after
+	// setReviewProvidersLocked still wins; tests install one with setPassRun.
 	reviewProviders []reviewProvider
-	review          *review.Client
-	reviewRun       passRun
-	claudeReview    *reviewclaude.Client
-	claudeReviewRun passRun
+	passRuns        map[provKind]passRun
 
 	// postPRComment is the `github` transport WRITE seam (Locked decision 1):
 	// `gh pr comment <pr> --repo <repo> --body-file -` with the untrusted findings
