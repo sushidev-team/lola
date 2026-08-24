@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -176,6 +177,13 @@ func (d *Daemon) takeOverProject(ctx context.Context, tm devTmux, s session.Sess
 // leave the port in the kernel for a moment.
 const squatterGrace = 3 * time.Second
 
+// shellTabRe matches a user SHELL tab ("<sessionID>-shell-N"). The same
+// convention internal/runtime's adoption guard and desktop/termsvc.go match by
+// their own copies: the take-over sweep needs it to tell a pane whose shell
+// LEADS the user's own processes from an agent pane, which leads nothing it
+// must spare.
+var shellTabRe = regexp.MustCompile(`-shell-\d+$`)
+
 // sweepPortSquatters kills whatever is still LISTENING from inside this
 // project's worktrees without a live tmux pane behind it, and returns one short
 // description per port reclaimed (for the toggle's message).
@@ -232,7 +240,7 @@ func (d *Daemon) sweepPortSquatters(ctx context.Context, tm devTmux, projectName
 	table, terr := proctree.Read(tctx)
 	tcancel()
 	pctx, pcancel := context.WithTimeout(ctx, devExecTimeout)
-	panePIDs, perr := tm.PanePIDs(pctx)
+	panes, perr := tm.PaneProcs(pctx)
 	pcancel()
 	if terr != nil || perr != nil {
 		d.logf("", "dev: leaving %d stray listener(s) in %s alone — cannot tell them from a live pane (ps: %v, tmux: %v)",
@@ -240,16 +248,32 @@ func (d *Daemon) sweepPortSquatters(ctx context.Context, tm devTmux, projectName
 		return nil
 	}
 
-	// Everything a live pane leads is off limits, and so is the tmux server
-	// above it: those groups hold the agents, the shell tabs and the dev tabs.
+	// A live pane's own group is off limits, and so is the tmux server above
+	// it: those groups hold the agents, the shell tabs and the dev tabs.
+	//
+	// A USER shell tab owns more than its own group. Job control gives every
+	// foreground command the human starts inside it (an `opencode` TUI, a
+	// hand-run server) a process group OF ITS OWN, so nothing covered by the
+	// pane's or the server's group would see it — yet ps shows it below the
+	// tab's shell, exactly like the orphaned dev servers this sweep reclaims.
+	// Everything such a pane LEADS is therefore protected too: without that
+	// walk, pressing Active killed the user's own long-running processes
+	// mid-session. An AGENT pane is deliberately excluded from the walk: a
+	// `php artisan serve` the agent started also descends from its live pane,
+	// and evicting exactly that on take-over is why the sweep exists.
 	protected := map[int]bool{}
-	for _, pid := range panePIDs {
-		if pgid := table.Group(pid); pgid > 1 {
+	for _, pp := range panes {
+		if pgid := table.Group(pp.PID); pgid > 1 {
 			protected[pgid] = true
 		}
-		if server := table.Parent(pid); server > 1 {
+		if server := table.Parent(pp.PID); server > 1 {
 			if pgid := table.Group(server); pgid > 1 {
 				protected[pgid] = true
+			}
+		}
+		if shellTabRe.MatchString(pp.Session) {
+			for _, g := range table.TreeGroups(pp.PID) {
+				protected[g] = true
 			}
 		}
 	}
@@ -694,6 +718,7 @@ type devTmux interface {
 	Available() bool
 	ListSessions(ctx context.Context) ([]tmux.Session, error)
 	PanePIDs(ctx context.Context) ([]int, error)
+	PaneProcs(ctx context.Context) ([]tmux.PaneProc, error)
 	Has(ctx context.Context, name string) bool
 	NewSession(ctx context.Context, name, dir, command string) error
 	KillSession(ctx context.Context, name string) error

@@ -26,7 +26,8 @@ type fakeDevTmux struct {
 	listErr   error
 	startErr  map[string]error
 	available bool
-	panePIDs  []int // what PanePIDs answers: the sweep's protect set
+	panePIDs  []int // what PanePIDs answers: killableGroups' protect set
+	paneProcs []tmux.PaneProc
 	paneErr   error
 }
 
@@ -62,6 +63,12 @@ func (f *fakeDevTmux) PanePIDs(context.Context) ([]int, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]int(nil), f.panePIDs...), f.paneErr
+}
+
+func (f *fakeDevTmux) PaneProcs(context.Context) ([]tmux.PaneProc, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]tmux.PaneProc(nil), f.paneProcs...), f.paneErr
 }
 
 func (f *fakeDevTmux) Has(_ context.Context, name string) bool {

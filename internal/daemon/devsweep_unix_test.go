@@ -10,6 +10,7 @@ package daemon
 import (
 	"context"
 	"errors"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -18,6 +19,7 @@ import (
 	"time"
 
 	"github.com/sushidev-team/lola/internal/portproc"
+	"github.com/sushidev-team/lola/internal/tmux"
 )
 
 // strayServer starts a process that behaves like the thing this sweep exists to
@@ -111,7 +113,7 @@ func TestHandleDevReclaimsAPortFromAStrayServerInTheProjectsWorktrees(t *testing
 func TestDevSweepNeverKillsWhatALiveTmuxPaneOwns(t *testing.T) {
 	d, tm := devDaemon(t, []string{"composer dev"}, devSession("lola-app-eng-1"))
 	stray, gone := strayServer(t)
-	tm.panePIDs = []int{stray} // the "agent" is this very process
+	tm.paneProcs = []tmux.PaneProc{{Session: "lola-app-eng-1", PID: stray}} // the "agent" is this very process
 	listeners(d, portproc.Listener{
 		PID: stray, Command: "node", Port: 5173,
 		Dir: filepath.Join(d.home, "worktrees", "app", "lola-app-eng-1"),
@@ -173,5 +175,54 @@ func TestDevSweepIsSkippedWithoutTheLsofSeam(t *testing.T) {
 	}
 	if _, err := d.handleDev(context.Background(), "lola-app-eng-1", true); err != nil {
 		t.Fatalf("handleDev without lsof: %v", err)
+	}
+}
+
+// THE BUG: a process the HUMAN started inside a "-shell-N" tab lives in a
+// process group OF ITS OWN — interactive-shell job control gives every
+// foreground command one — so it shares no group with the tab's shell and the
+// old protect set (the pane's group plus the tmux server above it) never saw
+// it. Pressing Active then read the user's own long-running `opencode` TUI as
+// an orphaned dev server and killed it mid-session. A shell tab's DESCENDANT
+// tree is therefore protected: ps shows its foreground children below the pane,
+// which is exactly the shape a real zsh and the command it runs have.
+func TestDevSweepSparesWhatAShellTabPaneLeads(t *testing.T) {
+	d, tm := devDaemon(t, []string{"composer dev"}, devSession("lola-app-eng-1"))
+	stray, gone := strayServer(t)
+	// The test process stands in for the tab's shell: the stray below it was
+	// "started" by it, in a group of its own.
+	tm.paneProcs = []tmux.PaneProc{{Session: "lola-app-eng-1-shell-1", PID: os.Getpid()}}
+	listeners(d, portproc.Listener{
+		PID: stray, Command: "opencode", Port: 5173,
+		Dir: filepath.Join(d.home, "worktrees", "app", "lola-app-eng-1"),
+	})
+
+	if freed := d.sweepPortSquatters(context.Background(), tm, "app", d.home); len(freed) != 0 {
+		t.Errorf("swept %v, want nothing — a user shell tab owns that group", freed)
+	}
+	if !stillAlive(gone) {
+		t.Fatal("the sweep killed a process the human started in a shell tab")
+	}
+}
+
+// The boundary that keeps the fix from swallowing the sweep's purpose: an AGENT
+// pane gets no descendant walk. A `php artisan serve` the agent started via its
+// Bash tool descends from its live pane exactly like the shell case above, and
+// evicting precisely that on take-over is why the sweep exists.
+func TestDevSweepStillReclaimsWhatAnAgentPaneLeads(t *testing.T) {
+	d, tm := devDaemon(t, []string{"composer dev"}, devSession("lola-app-eng-1"))
+	stray, gone := strayServer(t)
+	tm.paneProcs = []tmux.PaneProc{{Session: "lola-app-eng-1", PID: os.Getpid()}}
+	listeners(d, portproc.Listener{
+		PID: stray, Command: "php", Port: 8000,
+		Dir: filepath.Join(d.home, "worktrees", "app", "lola-app-eng-1"),
+	})
+
+	freed := d.sweepPortSquatters(context.Background(), tm, "app", d.home)
+	if len(freed) == 0 {
+		t.Error("swept nothing, want the agent-started server reclaimed")
+	}
+	if !waitGone(gone) {
+		t.Fatal("an agent-started server survived the take-over")
 	}
 }
