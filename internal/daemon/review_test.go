@@ -73,6 +73,12 @@ func watchDesc() reviewProvider {
 	}
 }
 
+// kindClaudeSession is the claude agent pass, named here for the many tests that
+// build a chain around it. It is deliberately NOT a constant in reviewer.go: the
+// daemon names only the kinds it special-cases, and this one is no longer among
+// them (its dispatch, labels and client all come from its config-side family).
+const kindClaudeSession provKind = "claude-session"
+
 // reviewCall records one pass exec (its worktree dir + base branch).
 type reviewCall struct{ dir, base string }
 
@@ -1708,4 +1714,103 @@ func sentTexts(f *fakeReactSeams) []string {
 		out = append(out, c.text)
 	}
 	return out
+}
+
+// Validation rejects a generic kind that names nothing, but Validate is NOT
+// fatal at startup — it only holds polls — so a hand-edited config plus a
+// restart reaches the runtime. There BOTH empty values fall back to CodeRabbit
+// (an empty `command` resolves to the coderabbit binary, an empty watch `author`
+// to "coderabbitai"), so a provider the operator pointed at another vendor would
+// silently run CodeRabbit instead. It must fail CLOSED and say so.
+func TestUnconfiguredGenericKindsFailClosed(t *testing.T) {
+	cfg := nativeTestConfig(nativePoll("p1"))
+	cli, _ := config.NewReviewProvider("custom-cli")
+	cli.Enabled = true // no command
+	watch, _ := config.NewReviewProvider("bot-watch")
+	watch.Enabled = true // no author
+	ok, _ := config.NewReviewProvider("coderabbit-cli")
+	ok.Enabled = true
+	cfg.ReviewProviders = []config.ReviewProvider{cli, watch, ok}
+
+	d := newTestDaemon(t, cfg, &linear.Fake{}, &fakeNative{})
+	syncProviders(d)
+
+	for _, kind := range []provKind{"custom-cli", "bot-watch"} {
+		p, found := d.providerByKind(kind)
+		if !found {
+			t.Fatalf("%s: descriptor missing", kind)
+		}
+		if p.Enabled {
+			t.Errorf("%s: must be disabled when it names nothing", kind)
+		}
+		if p.Unconfigured == "" {
+			t.Errorf("%s: must record WHY it was disabled", kind)
+		}
+		if d.passSeam(kind) != nil {
+			t.Errorf("%s: must have no exec seam", kind)
+		}
+	}
+	// A properly-configured provider beside them is untouched.
+	if p, _ := d.providerByKind(kindCoderabbitCLI); !p.Enabled || p.Unconfigured != "" {
+		t.Errorf("coderabbit-cli = %+v, want it left enabled", p)
+	}
+	// ...and the operator is told, by kind and by reason.
+	d.mu.Lock()
+	warn := d.reviewUnavailableWarnLocked()
+	d.mu.Unlock()
+	for _, want := range []string{"custom-cli", "no command configured", "bot-watch", "no author configured"} {
+		if !strings.Contains(warn, want) {
+			t.Errorf("warning %q does not carry %q", warn, want)
+		}
+	}
+}
+
+// A disabled generic kind names nothing on purpose and must not be reported.
+func TestDisabledGenericKindIsNotReported(t *testing.T) {
+	cfg := nativeTestConfig(nativePoll("p1"))
+	cli, _ := config.NewReviewProvider("custom-cli") // enabled=false, no command
+	cfg.ReviewProviders = []config.ReviewProvider{cli}
+
+	d := newTestDaemon(t, cfg, &linear.Fake{}, &fakeNative{})
+	syncProviders(d)
+	if p, _ := d.providerByKind("custom-cli"); p.Unconfigured != "" {
+		t.Errorf("a disabled provider must not be reported: %q", p.Unconfigured)
+	}
+	d.mu.Lock()
+	warn := d.reviewUnavailableWarnLocked()
+	d.mu.Unlock()
+	if warn != "" {
+		t.Errorf("warning = %q, want none", warn)
+	}
+}
+
+// The unavailable warning must NAME the binary that could not be resolved —
+// a custom-cli's own command, an agent's binary, and coderabbit's login hint.
+func TestUnavailableWarnNamesTheBinary(t *testing.T) {
+	cfg := nativeTestConfig(nativePoll("p1"))
+	custom, _ := config.NewReviewProvider("custom-cli")
+	custom.Enabled, custom.Command = true, "lola-nonexistent-review-tool --plain"
+	codex, _ := config.NewReviewProvider("codex-session")
+	codex.Enabled = true
+	cr, _ := config.NewReviewProvider("coderabbit-cli")
+	cr.Enabled = true
+	cfg.ReviewProviders = []config.ReviewProvider{custom, codex, cr}
+
+	d := newTestDaemon(t, cfg, &linear.Fake{}, &fakeNative{})
+	syncProviders(d)
+	d.mu.Lock()
+	warn := d.reviewUnavailableWarnLocked()
+	d.mu.Unlock()
+
+	if !strings.Contains(warn, "lola-nonexistent-review-tool not on PATH") {
+		t.Errorf("warning %q must name the custom-cli's own command", warn)
+	}
+	// The two whose binaries this machine may or may not have are only asserted
+	// when they are actually missing, so the test is not host-dependent.
+	if strings.Contains(warn, "codex-session") && !strings.Contains(warn, "codex not on PATH") {
+		t.Errorf("warning %q must name codex's binary", warn)
+	}
+	if strings.Contains(warn, "coderabbit-cli") && !strings.Contains(warn, "coderabbit auth login") {
+		t.Errorf("warning %q must keep coderabbit's actionable hint", warn)
+	}
 }

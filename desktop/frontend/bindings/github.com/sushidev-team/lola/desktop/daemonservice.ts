@@ -213,7 +213,8 @@ export function RestartDaemon(): $CancellablePromise<void> {
 
 /**
  * Review forces a QA review PASS for one session now. provider optionally
- * selects which pass provider kind to force (coderabbit-cli | claude-session);
+ * selects which pass provider kind to force (any pass kind — see
+ * config.ReviewProviderPassKinds);
  * "" forces the daemon's primary pass provider.
  */
 export function Review(session: string, provider: string): $CancellablePromise<protocol$0.ReviewData> {

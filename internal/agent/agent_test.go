@@ -452,3 +452,25 @@ func TestReviewArgsModel(t *testing.T) {
 		}
 	}
 }
+
+// All four review helpers must normalize a Kind IDENTICALLY. A caller that has
+// not pre-normalized must not get claude's argv from one and codex's renderer
+// from another — that mismatch shows up as an empty review, not as an error.
+func TestReviewHelpersNormalizeAlike(t *testing.T) {
+	for _, raw := range []Kind{"Codex", " codex ", "OPENCODE", "opencode", "nope", ""} {
+		want := Parse(string(raw))
+		if got := ReviewArgs(raw, "i", ""); !slices.Equal(got, ReviewArgs(want, "i", "")) {
+			t.Errorf("ReviewArgs(%q) = %v, want %s's argv", raw, got, want)
+		}
+		if got := ReviewStreamArgs(raw, "i", ""); !slices.Equal(got, ReviewStreamArgs(want, "i", "")) {
+			t.Errorf("ReviewStreamArgs(%q) = %v, want %s's argv", raw, got, want)
+		}
+		if ReviewStreamsJSON(raw) != ReviewStreamsJSON(want) || ReviewProgressOnStderr(raw) != ReviewProgressOnStderr(want) {
+			t.Errorf("%q: the stream predicates disagree with %s", raw, want)
+		}
+		// ...and the argv and the renderer must agree with each other.
+		if ReviewStreamsJSON(raw) != slices.Contains(ReviewStreamArgs(raw, "i", ""), "stream-json") {
+			t.Errorf("%q: ReviewStreamsJSON disagrees with the streaming argv", raw)
+		}
+	}
+}

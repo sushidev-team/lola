@@ -34,7 +34,9 @@
 //   - READ-ONLY. A review reports; it never edits. Each agent is launched in its
 //     most restrictive non-interactive posture (agent.ReviewArgs) — the opposite
 //     of the unattended worker launch — so a prompt injection in the diff cannot
-//     turn the reviewer into a writer.
+//     turn the reviewer into a writer. claude and codex are constrained by the
+//     argv itself; opencode has no read-only flag, so its posture rests on its
+//     own non-interactive defaults (see the note in internal/agent).
 //   - UNTRUSTED INPUT AND OUTPUT. The diff on stdin is attacker-influenceable
 //     and is fed to the agent as DATA to review, never executed — the review
 //     instruction (our own fixed text on argv) says so explicitly. The findings
@@ -278,7 +280,7 @@ var runGitDiff = func(ctx context.Context, dir, base string) (string, error) {
 	cmd := exec.CommandContext(cctx, "git", "diff", base+"...HEAD")
 	cmd.Dir = dir // the diff is taken IN the worktree
 	stdout := &cappedBuffer{cap: maxDiffCaptureBytes}
-	stderr := &cappedBuffer{cap: maxStderrBytes}
+	stderr := &tailBuffer{cap: maxStderrBytes}
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 
@@ -313,7 +315,7 @@ var runAgent = func(ctx context.Context, k agent.Kind, bin string, args []string
 	cmd.Dir = dir                        // the review runs IN the worktree
 	cmd.Stdin = strings.NewReader(stdin) // diff on stdin, never argv
 	stdout := &cappedBuffer{cap: maxCaptureBytes}
-	stderr := &cappedBuffer{cap: maxStderrBytes}
+	stderr := &tailBuffer{cap: maxStderrBytes}
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 	// cmd.Env left nil: the child inherits the daemon env (the agent's own CLI
@@ -328,22 +330,32 @@ var runAgent = func(ctx context.Context, k agent.Kind, bin string, args []string
 
 // classifyRunErr maps a raw exec result to a distinct sentinel. Deadline is
 // checked first because a killed process surfaces as "signal: killed", not as a
-// deadline error. Quota is checked next — over stderr, and over stdout ONLY when
-// stdout is a short limit line rather than a real findings body (isStdoutQuota)
-// — because an agent may print a limit line to stdout and exit 0, so a quota
-// signal must be caught even on a clean run (before the runErr==nil
-// short-circuit) and must win over ErrAuth/ErrExit so the caller can fall
-// through to a fallback provider. Gating the stdout scan on shortness stops a
-// legitimate multi-KB review that merely mentions "rate limit"/"429" in its
-// prose from self-classifying as ErrQuota and being discarded. On a plain
-// nonzero exit, stderr is inspected for auth cues (→ ErrAuth, no stderr
-// surfaced) and otherwise surfaced through redactSecrets so an error can never
-// carry a key.
+// deadline error. Quota is checked next, over two DIFFERENT windows, because it
+// is the one class that can arrive on a CLEAN exit and it must win over
+// ErrAuth/ErrExit so the caller can fall through to a fallback provider:
+//
+//   - stdout, ONLY when it is a short limit line rather than a real findings
+//     body (isStdoutQuota) — an agent may print "out of reviews" to stdout and
+//     exit 0, so this is checked before the runErr==nil short-circuit. Gating on
+//     shortness stops a legitimate multi-KB review that merely mentions "rate
+//     limit"/"429" in its prose from self-classifying and being discarded.
+//   - stderr, ONLY on a FAILED run. This gate matters as much as the stdout one,
+//     for the mirror-image reason: codex and opencode narrate their whole review
+//     on stderr (that is what makes a visible pass watchable — see
+//     ReviewProgressOnStderr), so on a successful run stderr is PROSE, not an
+//     error report. Scanning it unconditionally made a clean review of any code
+//     that mentions quotas or rate limits — reviewing this very package, say —
+//     classify as ErrQuota, throwing away real findings AND burning the paid
+//     fallback. A process that exited 0 is not over quota.
+//
+// On a plain nonzero exit, stderr is inspected for auth cues (→ ErrAuth, no
+// stderr surfaced) and otherwise surfaced through redactSecrets so an error can
+// never carry a key.
 func classifyRunErr(k agent.Kind, runErr, ctxErr error, stderr, stdout string, timeout time.Duration) error {
 	if errors.Is(ctxErr, context.DeadlineExceeded) {
 		return fmt.Errorf("%w after %s", ErrTimeout, timeout)
 	}
-	if looksLikeQuotaError(stderr) || isStdoutQuota(stdout) {
+	if isStdoutQuota(stdout) || (runErr != nil && looksLikeQuotaError(stderr)) {
 		return ErrQuota // actionable class only; never echoes stdout/stderr
 	}
 	if runErr == nil {
@@ -387,13 +399,26 @@ func isStdoutQuota(stdout string) bool {
 }
 
 // looksLikeAuthError is a best-effort classifier: on a failed run, stderr that
-// mentions auth/login/unauthenticated almost certainly means the agent needs a
+// reports an authentication problem almost certainly means the agent needs a
 // valid session or API key.
+//
+// The cues are PHRASES, never the bare words "auth" or "login". Those two match
+// any review that so much as reads AuthController.php, and codex and opencode
+// put their narration on stderr — so a bare-substring cue turned an ordinary
+// nonzero exit during an auth-related review into "not authenticated", handing
+// the operator a login command that fixes nothing. Every real message
+// ("Not logged in. Run codex login", "Invalid API key", "401 Unauthorized")
+// still matches on a phrase. Combined with the stderr TAIL buffer (see
+// tailBuffer), what is classified is the END of a failed run — where a CLI puts
+// its fatal error — rather than the narration that preceded it.
 func looksLikeAuthError(stderr string) bool {
 	l := strings.ToLower(stderr)
 	for _, kw := range []string{
-		"unauthenticated", "unauthorized", "not logged in", "invalid api key",
-		"authentication", "auth", "login", "credential",
+		"unauthenticated", "unauthorized", "not logged in", "not authenticated",
+		"invalid api key", "missing api key", "no api key", "api key not",
+		"authentication", "authorization failed", "auth failed", "auth error",
+		"please log in", "please login", "run: claude",
+		"invalid credential", "missing credential", "no credential", "credentials not",
 	} {
 		if strings.Contains(l, kw) {
 			return true
@@ -482,6 +507,40 @@ func trimPartialRune(s string) string {
 	}
 	return s
 }
+
+// tailBuffer keeps the LAST cap bytes written to it, discarding earlier ones,
+// while always accepting the whole write so a chatty child never blocks.
+//
+// It backs STDERR, where cappedBuffer's head-keeping is exactly wrong. codex and
+// opencode narrate their entire review there (that is what makes a visible pass
+// watchable), so the head of a failing run's stderr is prose and its ERROR — the
+// only part worth classifying or surfacing — is at the very end, past the cap.
+// Keeping the tail both stops that prose from being classified as a quota/auth
+// condition and makes a real error message survive to reach the operator.
+// STDOUT still keeps its HEAD: there the findings are the payload, and a
+// truncated review must keep its most severe findings, which come first.
+type tailBuffer struct {
+	buf []byte
+	cap int
+}
+
+func (b *tailBuffer) Write(p []byte) (int, error) {
+	n := len(p)
+	if b.cap <= 0 {
+		return n, nil
+	}
+	if len(p) >= b.cap {
+		b.buf = append(b.buf[:0], p[len(p)-b.cap:]...)
+		return n, nil
+	}
+	if over := len(b.buf) + len(p) - b.cap; over > 0 {
+		b.buf = b.buf[over:]
+	}
+	b.buf = append(b.buf, p...)
+	return n, nil
+}
+
+func (b *tailBuffer) String() string { return string(b.buf) }
 
 // cappedBuffer accumulates at most cap bytes but keeps accepting (and
 // discarding) the rest, so a chatty child never blocks on a full pipe while

@@ -118,7 +118,7 @@ func (d *Daemon) handleReview(ctx context.Context, sessionID string) (protocol.R
 }
 
 // handleReviewProvider is handleReview with the Phase 6 `--provider` selector:
-// kind picks WHICH pass provider to force (coderabbit-cli | claude-session);
+// kind picks WHICH pass provider to force (any pass kind — cli or agent);
 // "" forces the daemon's primary (first enabled) pass provider. A kind naming a
 // disabled/absent provider is a "skipped" outcome; a kind naming a WATCH
 // provider is an error (its force path is `lola coderabbit`).

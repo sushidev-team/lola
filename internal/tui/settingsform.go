@@ -425,8 +425,7 @@ func reviewProviderFields(seed func(kind string) config.ReviewProvider) []setFie
 	for _, kind := range config.ReviewProviderKinds() {
 		p := seed(kind)
 		watch := config.IsWatchKind(kind)
-		agentModel, isAgent := config.ReviewAgentFor(kind)
-		_ = agentModel
+		_, isAgent := config.ReviewAgentFor(kind)
 
 		add := func(f setField) {
 			f.tab, f.indent = stCodeRabbit, true

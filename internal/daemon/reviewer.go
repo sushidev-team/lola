@@ -56,17 +56,16 @@ import (
 // built from the catalog by string conversion.
 type provKind string
 
+// The daemon names ONLY the two kinds it must MATCH ON: the legacy guard keys,
+// which are also the coderabbit-cli fallback-hint and `lola coderabbit` alias
+// targets. Every other kind — and every new one — is driven entirely by its
+// config-side FAMILY (config.ReviewAgentFor / config.IsCLIKind /
+// config.IsWatchKind), so adding a review agent needs no daemon change at all.
+// Resist adding a third: a kind named here is a kind the daemon special-cases.
 const (
 	kindCoderabbitCLI   provKind = "coderabbit-cli"
 	kindCoderabbitWatch provKind = "coderabbit-watch"
-	kindClaudeSession   provKind = "claude-session"
 )
-
-// The daemon deliberately names only the kinds it must MATCH ON by name (the
-// two legacy guard keys and the `lola coderabbit` alias target). Every other
-// kind — and every new one — is driven entirely by its config-side FAMILY
-// (config.ReviewAgentFor / config.IsCLIKind / config.IsWatchKind), so adding a
-// review agent needs no daemon change at all.
 
 // passRun is the pass-shape exec seam: run provider kind K's review of the
 // worktree at dir against base, for the named session. The session id is passed
@@ -106,6 +105,10 @@ type reviewProvider struct {
 	Handoff     handoffStyle
 	Fallback    []provKind // ordered chain (pass shapes only)
 	Author      string     // watch only
+	// Unconfigured, when non-empty, says WHY an otherwise-enabled provider was
+	// forced off: a generic kind that names no tool or bot. It is reported once
+	// at startup rather than silently swallowed.
+	Unconfigured string
 	// TimeoutSeconds is the pass provider's own exec bound; it feeds the per-cycle
 	// budget ceiling only (each exec self-bounds via its client), 0 ⇒ default.
 	TimeoutSeconds int
@@ -131,6 +134,7 @@ func (d *Daemon) setReviewProvidersLocked(nc *config.Config) {
 
 	// Reset the pass seams; each enabled pass provider rebuilds its own below.
 	d.passRuns = map[provKind]passRun{}
+	d.passCommands = map[provKind]string{}
 
 	descs := make([]reviewProvider, 0, len(eff))
 	for _, cp := range eff {
@@ -147,13 +151,25 @@ func (d *Daemon) setReviewProvidersLocked(nc *config.Config) {
 			Fallback:       toDaemonKinds(cp.Fallback),
 			TimeoutSeconds: cp.TimeoutSeconds,
 		}
+		// FAIL CLOSED on a generic kind that names nothing. Validation rejects
+		// this, but Validate is NOT fatal at startup (it only holds polls), so a
+		// hand-edited config plus a restart would otherwise reach the runtime —
+		// where both defaults fall back to CodeRabbit: an empty `command` resolves
+		// to the coderabbit binary and an empty watch `author` to "coderabbitai".
+		// A provider the operator pointed at Greptile must never silently run
+		// CodeRabbit instead, so it is disabled and named in the startup warning.
+		if why := unconfiguredKindReason(cp); why != "" {
+			desc.Enabled = false
+			desc.Unconfigured = why
+		}
 		if config.IsWatchKind(string(cp.Provider)) {
 			desc.Shape, desc.Handoff = shapeWatch, handoffPointer
 			descs = append(descs, desc)
 			continue
 		}
 		desc.Shape, desc.Handoff = shapePass, handoffFull
-		if cp.Enabled {
+		if desc.Enabled {
+			d.passCommands[kind] = passBinaryFor(cp)
 			if direct := buildPassClient(cp); direct != nil {
 				d.passRuns[kind] = d.passSeamFor(cp, ignoreSession(direct))
 			}
@@ -161,6 +177,38 @@ func (d *Daemon) setReviewProvidersLocked(nc *config.Config) {
 		descs = append(descs, desc)
 	}
 	d.reviewProviders = descs
+}
+
+// passBinaryFor is the executable a pass provider will actually try to run, so
+// an unavailable-warning can name it. An agent kind resolves its agent's binary;
+// a cli kind resolves the head of its `command` argv, and "" when it has none
+// (coderabbit-cli's built-in default).
+func passBinaryFor(cp config.ReviewProvider) string {
+	if a, isAgent := config.ReviewAgentFor(string(cp.Provider)); isAgent {
+		return agent.Kind(a).Binary()
+	}
+	if argv := (config.ReviewConfig{Command: cp.Command}).CommandArgs(); len(argv) > 0 {
+		return argv[0]
+	}
+	return ""
+}
+
+// unconfiguredKindReason reports why cp cannot run — a generic kind whose one
+// mandatory key is blank — or "" when it is fine. It mirrors
+// config.validateReviewProviders, and exists because that validation is not
+// fatal at startup.
+func unconfiguredKindReason(cp config.ReviewProvider) string {
+	if !cp.Enabled {
+		return "" // a disabled provider names nothing on purpose
+	}
+	kind := string(cp.Provider)
+	if config.ReviewKindRequiresCommand(kind) && strings.TrimSpace(cp.Command) == "" {
+		return "no command configured (it names the review CLI to run)"
+	}
+	if config.ReviewKindRequiresAuthor(kind) && strings.TrimSpace(cp.Author) == "" {
+		return "no author configured (it names the review bot to relay)"
+	}
+	return ""
 }
 
 // buildPassClient constructs the in-process review client for ONE pass provider,
@@ -232,10 +280,14 @@ func buildAgentReview(a string, cp config.ReviewProvider) *reviewagent.Client {
 func (d *Daemon) reviewUnavailableWarnLocked() string {
 	var missing []string
 	for _, p := range d.reviewProviders {
+		if p.Unconfigured != "" {
+			missing = append(missing, fmt.Sprintf("%s (%s)", p.Kind, p.Unconfigured))
+			continue
+		}
 		if !p.Enabled || p.Shape != shapePass || d.passRuns[p.Kind] != nil {
 			continue
 		}
-		missing = append(missing, fmt.Sprintf("%s (%s not on PATH)", p.Kind, passBinaryName(p.Kind)))
+		missing = append(missing, fmt.Sprintf("%s (%s)", p.Kind, passUnavailableHint(p.Kind, d.passCommands[p.Kind])))
 	}
 	if len(missing) == 0 {
 		return ""
@@ -243,18 +295,21 @@ func (d *Daemon) reviewUnavailableWarnLocked() string {
 	return "review: enabled provider(s) unavailable, that pass will not run: " + strings.Join(missing, "; ")
 }
 
-// passBinaryName names the executable a pass kind needs, for the unavailable
-// warning. An agent kind reports its agent's binary; the cli family reports its
-// tool ("coderabbit", or "the configured command" for custom-cli, whose argv
-// lola cannot name from the kind alone).
-func passBinaryName(k provKind) string {
+// passUnavailableHint says WHICH binary a pass kind could not resolve, and how
+// to fix it where lola knows. bin is the tool the provider actually configured
+// (recorded at build time), so a custom-cli names the command the operator
+// wrote rather than an unhelpful "its configured command".
+func passUnavailableHint(k provKind, bin string) string {
 	if a, isAgent := config.ReviewAgentFor(string(k)); isAgent {
-		return agent.Kind(a).Binary()
+		return agent.Kind(a).Binary() + " not on PATH"
 	}
-	if k == kindCoderabbitCLI {
-		return "coderabbit"
+	if k == kindCoderabbitCLI && bin == "" {
+		return "coderabbit not on PATH; run: coderabbit auth login"
 	}
-	return "its configured command"
+	if bin == "" {
+		return "its configured command is not on PATH"
+	}
+	return bin + " not on PATH"
 }
 
 // --- descriptor queries (all snapshot d.reviewProviders under d.mu) ----------

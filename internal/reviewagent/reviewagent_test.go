@@ -674,3 +674,82 @@ func TestReviewStreamRoutesByAgent(t *testing.T) {
 		}
 	}
 }
+
+// codex and opencode narrate their whole review on STDERR, so a SUCCESSFUL run's
+// stderr is prose, not an error report. Scanning it for quota cues threw away
+// real findings and burned the paid fallback whenever the reviewed code merely
+// mentioned quotas or rate limits — the mirror image of the stdout gate.
+func TestCleanRunIgnoresQuotaCuesInNarration(t *testing.T) {
+	narration := strings.Repeat("→ Read internal/review/quota.go\n"+
+		"→ the diff changes rate limit handling; 429 retries are now bounded\n", 20)
+	if err := classifyRunErr(agent.Codex, nil, nil, narration, "**[major]** a real finding", time.Second); err != nil {
+		t.Fatalf("a clean run must not classify its own narration: %v", err)
+	}
+	// The same cues on a FAILED run are still a quota signal.
+	if err := classifyRunErr(agent.Codex, &exec.ExitError{}, nil, "error: usage limit reached", "", time.Second); !errors.Is(err, ErrQuota) {
+		t.Errorf("a failed run's quota message must still classify: %v", err)
+	}
+	// A short limit line on stdout with exit 0 is still caught (the other gate).
+	if err := classifyRunErr(agent.Codex, nil, nil, "", "You are out of reviews for this cycle.", time.Second); !errors.Is(err, ErrQuota) {
+		t.Errorf("a clean-exit stdout limit line must still classify: %v", err)
+	}
+}
+
+// The auth cues must be PHRASES: a bare "auth"/"login" substring turned any
+// nonzero exit during a review of auth-related code into "not authenticated",
+// handing the operator a login command that fixes nothing.
+func TestAuthCuesDoNotFireOnReviewedCode(t *testing.T) {
+	prose := "→ Read app/Http/Controllers/AuthController.php\n" +
+		"→ Read resources/views/auth/login.blade.php\n" +
+		"→ checking the credential rotation path\n"
+	err := classifyRunErr(agent.OpenCode, &exec.ExitError{}, nil, prose, "", time.Second)
+	if errors.Is(err, ErrAuth) {
+		t.Errorf("reviewing auth code must not classify as ErrAuth: %v", err)
+	}
+	for _, real := range []string{
+		"Not logged in. Run codex login to authenticate.",
+		"Invalid API key · Please run /login",
+		"401 Unauthorized",
+		"authentication failed",
+	} {
+		if err := classifyRunErr(agent.Codex, &exec.ExitError{}, nil, real, "", time.Second); !errors.Is(err, ErrAuth) {
+			t.Errorf("a real auth message must classify: %q -> %v", real, err)
+		}
+	}
+}
+
+// stderr keeps its TAIL, not its head: codex and opencode narrate their whole
+// review there, so a failing run's actual error is the LAST thing printed. A
+// head-capped buffer discarded exactly that and classified the prose instead.
+func TestTailBufferKeepsTheEndOfStderr(t *testing.T) {
+	b := &tailBuffer{cap: 16}
+	b.Write([]byte("narration narration narration "))
+	b.Write([]byte("FATAL: out of reviews"))
+	if got := b.String(); got != "out of reviews" && !strings.HasSuffix("FATAL: out of reviews", got) {
+		t.Fatalf("retained %q, want the tail of the stream", got)
+	}
+	if len(b.String()) > 16 {
+		t.Fatalf("retained %d bytes, want at most 16", len(b.String()))
+	}
+	// A single oversized write is clipped to its own tail, not dropped.
+	b2 := &tailBuffer{cap: 4}
+	b2.Write([]byte("abcdefgh"))
+	if b2.String() != "efgh" {
+		t.Fatalf("retained %q, want %q", b2.String(), "efgh")
+	}
+	// Writes always report the full length so the child never blocks.
+	if n, err := (&tailBuffer{cap: 2}).Write([]byte("abcdefgh")); n != 8 || err != nil {
+		t.Fatalf("Write = (%d, %v), want (8, nil)", n, err)
+	}
+}
+
+// The end-to-end shape of the fix: a real error that arrives AFTER kilobytes of
+// narration still reaches the operator and still classifies.
+func TestErrorSurvivesHeavyNarration(t *testing.T) {
+	stderr := strings.Repeat("→ Read some/file.go\n", 2000) + "error: usage limit reached, try again later"
+	buf := &tailBuffer{cap: maxStderrBytes}
+	buf.Write([]byte(stderr))
+	if err := classifyRunErr(agent.Codex, &exec.ExitError{}, nil, buf.String(), "", time.Second); !errors.Is(err, ErrQuota) {
+		t.Fatalf("err = %v, want ErrQuota from the tail of stderr", err)
+	}
+}

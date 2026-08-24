@@ -49,7 +49,7 @@
     { id: "brain", label: "Brain" },
     { id: "interpreter", label: "Interpreter" },
     // "Review", not "CodeRabbit": the body is the whole [[review.provider]]
-    // catalog — coderabbit-cli, coderabbit-watch AND claude-session — so naming
+    // catalog — every cli, watch AND agent kind — so naming
     // the tab after one provider hid the other two.
     { id: "review", label: "Review" },
     { id: "appearance", label: "Appearance" },
@@ -305,16 +305,23 @@
   // The kind catalog comes from the BACKEND (ConfigService.ReviewKinds), never a
   // hardcoded array here: which kinds exist, what each is called, and which
   // fields it has are config-side facts, and a second copy in TypeScript is a
-  // copy that drifts the first time a review agent is added. Until the call
-  // lands the tab renders whatever kinds the config already carries, so it is
-  // never blank.
+  // copy that drifts the first time a review agent is added.
+  //
+  // Until it lands the tab shows a loading line rather than the providers,
+  // because EVERY per-kind predicate below is false without it: a watch would be
+  // drawn with a Timeout and a github transport (which validation then rejects,
+  // with the save failing for no visible reason) and without the Author its
+  // whole configuration is. Half a form is worse than a moment of nothing.
   let reviewKinds = $state<ReviewKindDTO[]>([]);
+  let reviewKindsError = $state("");
 
   async function loadReviewKinds() {
     try {
       reviewKinds = (await ConfigService.ReviewKinds()) ?? [];
-    } catch {
-      reviewKinds = []; // the tab still renders the configured providers
+      reviewKindsError = reviewKinds.length ? "" : "the review provider catalog came back empty";
+    } catch (err) {
+      reviewKinds = [];
+      reviewKindsError = String(err);
     }
   }
 
@@ -322,6 +329,13 @@
   const kindMeta = (kind: string) => reviewKinds.find((k) => k.kind === kind);
   const kindLabel = (kind: string) => kindMeta(kind)?.label ?? kind;
   const TRANSPORTS = ["lola", "github", "linear"];
+  // Copies of internal/config's resolve-time defaults, used ONLY to seed a
+  // newly-added provider (the backend re-applies them on load either way).
+  // Pinned against the Go source by a test, like the theme ids and the kind list
+  // — an unpinned copy is one that drifts the first time a default changes.
+  const DEFAULT_BASE_FLAG = "--base";
+  const DEFAULT_PASS_TIMEOUT = 300;
+  const DEFAULT_AGENT_TIMEOUT = 900;
   const isWatch = (kind: string) => kindMeta(kind)?.watch ?? false;
   const isCLI = (kind: string) => kindMeta(kind)?.cli ?? false;
   const agentOf = (kind: string) => kindMeta(kind)?.agent ?? "";
@@ -348,10 +362,10 @@
         command: "",
         // Empty appends no base at all, so a cli kind starts with the default
         // flag every review CLI takes.
-        baseFlag: isCLI(kind) ? "--base" : "",
+        baseFlag: isCLI(kind) ? DEFAULT_BASE_FLAG : "",
         // An agent pass reads the PR's files before it reports, so it needs
         // minutes where a CLI pass needs seconds.
-        timeoutSeconds: agentOf(kind) ? 900 : 300,
+        timeoutSeconds: agentOf(kind) ? DEFAULT_AGENT_TIMEOUT : DEFAULT_PASS_TIMEOUT,
         model: "",
         // Only the coderabbit watch has a bot to default to; the generic one
         // exists precisely to name a different one, and validation rejects it
@@ -899,7 +913,20 @@
             </div>
           {/if}
 
-          {#each providers() as p (p.provider)}
+          {#if !reviewKinds.length}
+            <!-- Not "no providers": the config may well have some. Without the
+                 backend's kind descriptors this form cannot draw them with the
+                 right fields, so it says so instead of drawing them wrong. -->
+            <p class="text-faint">
+              {#if reviewKindsError}
+                Could not read the review provider catalog: {reviewKindsError}
+              {:else}
+                Loading the review provider catalog…
+              {/if}
+            </p>
+          {/if}
+
+          {#each reviewKinds.length ? providers() : [] as p (p.provider)}
             <section class="border-t border-edge/40 pt-4 first:border-t-0 first:pt-0" class:opacity-60={d.reviewLegacy}>
               {@render head(kindLabel(p.provider))}
               <div class="space-y-2">

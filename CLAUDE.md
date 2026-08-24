@@ -818,6 +818,29 @@ each of which owns exactly one external tool or concern behind an **exec seam**
     (the TUI directly, the app through `ConfigService.ReviewKinds()`), so a new
     kind is offered by both with no UI edit. The frontend's one remaining
     hardcoded copy is a test fixture, pinned against the Go list by a parity test.
+- **An agent's STDERR is its narration, so the classifier reads its TAIL and only
+  on failure.** codex and opencode print their whole review to stderr (that is
+  what makes a visible pass watchable), which breaks the two assumptions the
+  quota/auth classifier was built on when only claude ran there:
+  - The quota scan over stderr runs ONLY when the process actually failed. A
+    clean run's stderr is prose, and scanning it unconditionally made an ordinary
+    review of any code that mentions quotas or rate limits — this repository,
+    say — self-classify as `ErrQuota`: real findings discarded AND the paid
+    fallback burned. The stdout half keeps its own shortness gate for the
+    limit-line-with-exit-0 case.
+  - stderr is retained by a **tailBuffer**, not the head-keeping `cappedBuffer`
+    that stdout uses. A CLI's fatal error is the LAST thing it prints, so a head
+    cap threw the error away and classified the narration instead. stdout still
+    keeps its head — there the payload is the findings, most severe first.
+  - The auth cues are PHRASES, never bare `auth` / `login`, which match any
+    review that so much as reads `AuthController.php`.
+  A generic kind that names nothing FAILS CLOSED for the same family of reason:
+  `Validate` rejects it, but validation is not fatal at startup (it only holds
+  polls), and both empty values fall back to CodeRabbit downstream — an empty
+  `command` resolves to the coderabbit binary and an empty watch `author` to
+  `"coderabbitai"`. So `setReviewProvidersLocked` disables such a provider and
+  names it in the startup warning; a provider pointed at another vendor must
+  never silently run CodeRabbit.
 - **A review REPORTS; it never writes — and that is enforced by the argv.** An
   agent-family pass runs `internal/agent.ReviewArgs`, which launches each agent in
   its most restrictive non-interactive posture: claude's headless defaults (no

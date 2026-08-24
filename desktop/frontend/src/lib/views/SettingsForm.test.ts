@@ -397,6 +397,32 @@ describe("SettingsForm", () => {
     expect(goKinds).toEqual(reviewKinds.map((k) => k.kind));
   });
 
+  // The form seeds a newly-added provider with three defaults copied from
+  // internal/config. Pin them, or a changed Go default silently leaves the app
+  // creating providers with the old one.
+  it("seeds new providers with the defaults internal/config resolves", () => {
+    const go = readFileSync(process.cwd() + "/../../internal/config/review.go", "utf8") as string;
+    const num = (name: string) => {
+      const m = new RegExp(`const ${name} = (\\d+)`).exec(go);
+      expect(m, `${name} not found in internal/config/review.go`).not.toBeNull();
+      return Number(m![1]);
+    };
+    const str = (name: string) => {
+      const m = new RegExp(`const ${name} = "([^"]*)"`).exec(go);
+      expect(m, `${name} not found in internal/config/review.go`).not.toBeNull();
+      return m![1];
+    };
+    const svelte = readFileSync(process.cwd() + "/src/lib/views/SettingsForm.svelte", "utf8") as string;
+    const ts = (name: string) => {
+      const m = new RegExp(`const ${name} = "?([^";\n]+)"?;`).exec(svelte);
+      expect(m, `${name} not found in SettingsForm.svelte`).not.toBeNull();
+      return m![1];
+    };
+    expect(ts("DEFAULT_BASE_FLAG")).toBe(str("DefaultReviewBaseFlag"));
+    expect(Number(ts("DEFAULT_PASS_TIMEOUT"))).toBe(num("DefaultReviewTimeoutSeconds"));
+    expect(Number(ts("DEFAULT_AGENT_TIMEOUT"))).toBe(num("DefaultClaudeReviewTimeoutSeconds"));
+  });
+
   // The theme is the only setting with a live preview, and the only one that is
   // not carried on the SettingsDTO: [ui] is presentation rather than a
   // [defaults] key, and ConfigService.SetTheme is its sole writer.

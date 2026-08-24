@@ -278,16 +278,27 @@ func ParseCodexNotify(jsonArg string) (event, message, notifyType string) {
 //   - codex:    `--sandbox read-only` (`codex exec` hardcodes "never ask", so
 //     the sandbox is the whole guard; `--ask-for-approval` is a TUI-only flag
 //     and does not exist on `exec`).
-//   - opencode: NO `--auto`. A non-interactive opencode already denies the
-//     blocking `question` permission, so reads proceed and anything that would
-//     ask is refused — the same posture as the other two.
+//   - opencode: NO `--auto`. A non-interactive opencode denies the blocking
+//     `question` permission, so anything that would ask is refused.
+//
+// Be precise about what that last one is worth. claude and codex are constrained
+// by what lola puts on the argv, so their posture holds whatever the user's own
+// config says. opencode has no read-only flag to pass, so its posture rests on
+// ITS defaults: omitting `--auto` means lola never widens them, but a user who
+// has explicitly allowed edits in their own opencode config gets a reviewer that
+// could write to the worktree. That is the one gap in "a review never writes",
+// and it is opencode's to close — do not paper over it by claiming otherwise.
 
 // ReviewArgs returns the argv that follows the binary name for a one-shot
 // review by agent k: lola's instruction as the prompt, plain text on stdout, and
 // an optional model override. The diff is NEVER here — it goes on stdin (see the
 // block above). Unknown kinds are treated as Claude.
 func ReviewArgs(k Kind, instruction, model string) []string {
-	switch k {
+	// Parse, not a raw switch: all four review helpers must normalize IDENTICALLY
+	// or a caller that has not pre-normalized gets claude's argv from one and
+	// codex's renderer from another — an argv/renderer mismatch that shows up as
+	// an empty review, not as an error.
+	switch Parse(string(k)) {
 	case Codex:
 		return codexReviewArgs(instruction, model)
 	case OpenCode:
@@ -305,7 +316,7 @@ func ReviewArgs(k Kind, instruction, model string) []string {
 // already narrate their progress on stderr, so their argv is unchanged and the
 // caller tees stderr to the pane instead (see ReviewProgressOnStderr).
 func ReviewStreamArgs(k Kind, instruction, model string) []string {
-	if k != Claude && Valid(string(k)) {
+	if Parse(string(k)) != Claude {
 		return ReviewArgs(k, instruction, model)
 	}
 	args := []string{"-p", instruction, "--output-format", "stream-json", "--verbose"}

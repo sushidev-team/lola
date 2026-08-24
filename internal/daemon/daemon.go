@@ -252,6 +252,11 @@ type Daemon struct {
 	// setReviewProvidersLocked still wins; tests install one with setPassRun.
 	reviewProviders []reviewProvider
 	passRuns        map[provKind]passRun
+	// passCommands records the executable each enabled pass kind will actually
+	// try to run, so the startup "unavailable" warning can NAME it — a custom-cli
+	// otherwise reports only that "its configured command" is missing, which is
+	// exactly the thing the operator needs told back to them.
+	passCommands map[provKind]string
 
 	// postPRComment is the `github` transport WRITE seam (Locked decision 1):
 	// `gh pr comment <pr> --repo <repo> --body-file -` with the untrusted findings

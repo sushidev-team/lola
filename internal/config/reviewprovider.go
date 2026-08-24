@@ -294,7 +294,7 @@ func applyKindDefaults(p *ReviewProvider) {
 // absent -> [lola] and lola always force-appended; notify / send_to_agent /
 // on_pr_open / github_inline absent -> true; fallback absent/empty -> none. The
 // three KIND-DEPENDENT defaults (timeout_seconds, base_flag, author) are applied
-// from kindDefaults once the kind is known, BEFORE the explicit keys overlay, so
+// from applyKindDefaults once the kind is known, BEFORE the explicit keys overlay, so
 // an explicit value always wins and a kind that has no sensible default (a
 // bot-watch's author, a custom-cli's command) resolves EMPTY and is caught by
 // validation rather than silently inheriting CodeRabbit's.

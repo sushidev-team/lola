@@ -98,7 +98,7 @@ var runAgentStreamJSON = func(ctx context.Context, k agent.Kind, bin string, arg
 	cmd := exec.CommandContext(cctx, bin, args...)
 	cmd.Dir = dir
 	cmd.Stdin = strings.NewReader(stdin)
-	stderr := &cappedBuffer{cap: maxStderrBytes}
+	stderr := &tailBuffer{cap: maxStderrBytes}
 	cmd.Stderr = stderr
 	pipe, err := cmd.StdoutPipe()
 	if err != nil {
@@ -154,7 +154,7 @@ var runAgentStreamPlain = func(ctx context.Context, k agent.Kind, bin string, ar
 	cmd.Dir = dir
 	cmd.Stdin = strings.NewReader(stdin)
 	stdout := &cappedBuffer{cap: maxCaptureBytes}
-	stderr := &cappedBuffer{cap: maxStderrBytes}
+	stderr := &tailBuffer{cap: maxStderrBytes}
 	cmd.Stdout = io.MultiWriter(stdout, progress)
 	cmd.Stderr = io.MultiWriter(stderr, progress)
 
