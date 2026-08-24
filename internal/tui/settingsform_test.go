@@ -101,17 +101,17 @@ func TestSettingsFormPrefillAndSave(t *testing.T) {
 		t.Errorf("poll_interval prefill = %q, want 1m0s", got)
 	}
 	// The watch provider's author pre-fills the effective default when unset.
-	if got := f.field("pv_watch_author").text; got != config.DefaultCodeRabbitAuthor {
+	if got := f.field(pvKey("coderabbit-watch", "author")).text; got != config.DefaultCodeRabbitAuthor {
 		t.Errorf("pv_watch_author prefill = %q, want %q", got, config.DefaultCodeRabbitAuthor)
 	}
 
 	// Turn the watch on, set a custom author, and enable notify + send.
-	f.field("pv_watch_enabled").b = true
-	f.field("pv_watch_notify").b = true
-	f.field("pv_watch_send").b = true
-	f.field("pv_watch_author").text = "sonarcloud"
+	f.field(pvKey("coderabbit-watch", "enabled")).b = true
+	f.field(pvKey("coderabbit-watch", "notify")).b = true
+	f.field(pvKey("coderabbit-watch", "send")).b = true
+	f.field(pvKey("coderabbit-watch", "author")).text = "sonarcloud"
 	// Also enable the coderabbit-cli provider and bump the global cap.
-	f.field("pv_cli_enabled").b = true
+	f.field(pvKey("coderabbit-cli", "enabled")).b = true
 	f.field("global_cap").text = "8"
 
 	if ev := f.save(); ev != settingsFormSaved {
@@ -417,7 +417,7 @@ func TestSettingsFormBoolToggleViaKeys(t *testing.T) {
 	m := newTestRoot(t)
 	f := newSettingsForm(m.cfgPath, m.cfg)
 
-	focusField(t, f, "pv_watch_enabled")
+	focusField(t, f, pvKey("coderabbit-watch", "enabled"))
 	before := f.cur().b
 	_, _ = f.update(keyMsg(" "))
 	if f.cur().b == before {
@@ -428,7 +428,7 @@ func TestSettingsFormBoolToggleViaKeys(t *testing.T) {
 func TestSettingsFormRejectsBadInt(t *testing.T) {
 	m := newTestRoot(t)
 	f := newSettingsForm(m.cfgPath, m.cfg)
-	f.field("pv_cli_timeout").text = "abc"
+	f.field(pvKey("coderabbit-cli", "timeout")).text = "abc"
 
 	if ev := f.save(); ev != settingsFormNone || f.err == "" {
 		t.Fatalf("bad int must abort save with an error, got ev=%v err=%q", ev, f.err)
@@ -513,9 +513,9 @@ func TestSettingsFormOnlyDigitsInIntField(t *testing.T) {
 func TestSettingsFormDistinguishesReviewProviders(t *testing.T) {
 	m := newTestRoot(t)
 	f := newSettingsForm(m.cfgPath, m.cfg)
-	cli := f.field("pv_cli_enabled")
-	watch := f.field("pv_watch_enabled")
-	claude := f.field("pv_claude_enabled")
+	cli := f.field(pvKey("coderabbit-cli", "enabled"))
+	watch := f.field(pvKey("coderabbit-watch", "enabled"))
+	claude := f.field(pvKey("claude-session", "enabled"))
 
 	for _, fld := range []*setField{cli, watch, claude} {
 		if fld.tab != stCodeRabbit {
@@ -559,25 +559,40 @@ func TestSettingsFormWatchOmitsGithubAndFallback(t *testing.T) {
 		}
 		return out
 	}
-	if got := tokens(f.field("pv_cli_transports").choices); !slices.Contains(got, "github") {
+	if got := tokens(f.field(pvKey("coderabbit-cli", "transports")).choices); !slices.Contains(got, "github") {
 		t.Errorf("coderabbit-cli transports must offer github, got %v", got)
 	}
-	if got := tokens(f.field("pv_watch_transports").choices); slices.Contains(got, "github") {
+	if got := tokens(f.field(pvKey("coderabbit-watch", "transports")).choices); slices.Contains(got, "github") {
 		t.Errorf("coderabbit-watch transports must NOT offer github, got %v", got)
 	}
-	if f.field("pv_watch_transports").choices == nil {
+	if f.field(pvKey("coderabbit-watch", "transports")).choices == nil {
 		t.Error("watch must still offer a transports picker (lola/linear)")
 	}
 	// The watch has no fallback field at all.
-	if f.field("pv_watch_fallback") != nil {
+	if f.field(pvKey("coderabbit-watch", "fallback")) != nil {
 		t.Error("coderabbit-watch must not have a fallback field")
 	}
-	// A pass provider's fallback offers the OTHER pass kind, never itself or the watch.
-	if got := tokens(f.field("pv_cli_fallback").choices); !slices.Equal(got, []string{"claude-session"}) {
-		t.Errorf("coderabbit-cli fallback must offer [claude-session], got %v", got)
-	}
-	if got := tokens(f.field("pv_claude_fallback").choices); !slices.Equal(got, []string{"coderabbit-cli"}) {
-		t.Errorf("claude-session fallback must offer [coderabbit-cli], got %v", got)
+	// A pass provider's fallback offers every OTHER pass kind, never itself and
+	// never a watch (which cannot classify over-quota).
+	for _, self := range config.ReviewProviderPassKinds() {
+		got := tokens(f.field(pvKey(self, "fallback")).choices)
+		if slices.Contains(got, self) {
+			t.Errorf("%s fallback must not offer itself, got %v", self, got)
+		}
+		for _, k := range got {
+			if config.IsWatchKind(k) {
+				t.Errorf("%s fallback must not offer the watch kind %q, got %v", self, k, got)
+			}
+		}
+		var want []string
+		for _, k := range config.ReviewProviderPassKinds() {
+			if k != self {
+				want = append(want, k)
+			}
+		}
+		if !slices.Equal(got, want) {
+			t.Errorf("%s fallback = %v, want %v", self, got, want)
+		}
 	}
 }
 
@@ -598,10 +613,10 @@ func TestSettingsFormLegacyReviewMigrates(t *testing.T) {
 	}
 	// Edits are suppressed while read-only.
 	f.tab = stCodeRabbit
-	focusField(t, f, "pv_cli_enabled")
-	before := f.field("pv_cli_enabled").b
+	focusField(t, f, pvKey("coderabbit-cli", "enabled"))
+	before := f.field(pvKey("coderabbit-cli", "enabled")).b
 	_, _ = f.update(keyMsg(" "))
-	if f.field("pv_cli_enabled").b != before {
+	if f.field(pvKey("coderabbit-cli", "enabled")).b != before {
 		t.Error("read-only Review tab must not toggle a field")
 	}
 	// m migrates.
@@ -622,7 +637,7 @@ func TestSettingsFormLegacyReviewMigrates(t *testing.T) {
 		t.Errorf("migration must synthesize both providers, got %d", len(reloaded.ReviewProviders))
 	}
 	// The editor now reflects the catalog and is editable.
-	if !f.field("pv_cli_enabled").b || !f.field("pv_watch_enabled").b {
+	if !f.field(pvKey("coderabbit-cli", "enabled")).b || !f.field(pvKey("coderabbit-watch", "enabled")).b {
 		t.Error("migrated providers must show enabled in the editor")
 	}
 }
@@ -830,9 +845,9 @@ func TestSettingsFormEnablingFlipsDependentSinks(t *testing.T) {
 		master string
 		deps   []string
 	}{
-		{"pv_cli_enabled", []string{"pv_cli_onpropen", "pv_cli_notify", "pv_cli_send"}},
-		{"pv_watch_enabled", []string{"pv_watch_notify", "pv_watch_send"}},
-		{"pv_claude_enabled", []string{"pv_claude_onpropen", "pv_claude_notify", "pv_claude_send"}},
+		{pvKey("coderabbit-cli", "enabled"), []string{pvKey("coderabbit-cli", "onpropen"), pvKey("coderabbit-cli", "notify"), pvKey("coderabbit-cli", "send")}},
+		{pvKey("coderabbit-watch", "enabled"), []string{pvKey("coderabbit-watch", "notify"), pvKey("coderabbit-watch", "send")}},
+		{pvKey("claude-session", "enabled"), []string{pvKey("claude-session", "onpropen"), pvKey("claude-session", "notify"), pvKey("claude-session", "send")}},
 		{"brain_enabled", []string{"brain_esc", "brain_appr"}},
 	}
 	for _, tc := range cases {
@@ -1704,5 +1719,128 @@ func TestSettingsFormLinearKeyRendersMasked(t *testing.T) {
 	}
 	if !strings.Contains(out, "••") {
 		t.Errorf("expected a masked value:\n%s", out)
+	}
+}
+
+// The Review tab's fields are GENERATED per kind and read back by key, so the
+// generator and the save builder must agree exactly. This asserts every key the
+// builder can read exists — a divergence would nil-deref f.field() on save
+// rather than being caught by the type checker.
+func TestSettingsFormProviderKeysMatchTheSaveBuilder(t *testing.T) {
+	m := newTestRoot(t)
+	f := newSettingsForm(m.cfgPath, m.cfg)
+
+	for _, kind := range config.ReviewProviderKinds() {
+		want := []string{"enabled", "notify", "send", "transports"}
+		if config.IsCLIKind(kind) {
+			want = append(want, "command", "baseflag")
+		}
+		if _, isAgent := config.ReviewAgentFor(kind); isAgent {
+			want = append(want, "model")
+		}
+		if config.IsWatchKind(kind) {
+			want = append(want, "author")
+		} else {
+			want = append(want, "timeout", "onpropen", "visible", "inline", "fallback")
+		}
+		for _, name := range want {
+			if f.field(pvKey(kind, name)) == nil {
+				t.Errorf("%s: the save builder reads %q but no field generates it", kind, pvKey(kind, name))
+			}
+		}
+		// ...and the reverse: a field a kind does NOT have must not exist, or the
+		// editor would offer a knob that is silently dropped on save.
+		absent := []string{}
+		if !config.IsCLIKind(kind) {
+			absent = append(absent, "command", "baseflag")
+		}
+		if _, isAgent := config.ReviewAgentFor(kind); !isAgent {
+			absent = append(absent, "model")
+		}
+		if config.IsWatchKind(kind) {
+			absent = append(absent, "timeout", "onpropen", "visible", "inline", "fallback")
+		} else {
+			absent = append(absent, "author")
+		}
+		for _, name := range absent {
+			if f.field(pvKey(kind, name)) != nil {
+				t.Errorf("%s: field %q exists but that kind has no such setting", kind, pvKey(kind, name))
+			}
+		}
+	}
+}
+
+// Enabling a provider in the editor must turn its dependent sinks on, exactly as
+// resolving `enabled = true` alone would — for EVERY kind, so a new one is not
+// silently inert.
+func TestSettingsFormEnableDefaultsCoverEveryKind(t *testing.T) {
+	for _, kind := range config.ReviewProviderKinds() {
+		deps, ok := enableDefaults[pvKey(kind, "enabled")]
+		if !ok {
+			t.Errorf("%s: no enableDefaults entry", kind)
+			continue
+		}
+		want := []string{pvKey(kind, "notify"), pvKey(kind, "send")}
+		if !config.IsWatchKind(kind) {
+			want = append([]string{pvKey(kind, "onpropen")}, want...)
+		}
+		if !slices.Equal(deps, want) {
+			t.Errorf("%s: enableDefaults = %v, want %v", kind, deps, want)
+		}
+	}
+}
+
+// Saving with a new kind enabled writes a valid catalog entry, so the generated
+// editor really is a working path to the new providers.
+func TestSettingsFormSavesTheNewKinds(t *testing.T) {
+	m := newTestRoot(t)
+	f := newSettingsForm(m.cfgPath, m.cfg)
+
+	f.field(pvKey("codex-session", "enabled")).b = true
+	f.field(pvKey("codex-session", "model")).text = "gpt-5.1"
+	f.field(pvKey("custom-cli", "enabled")).b = true
+	f.field(pvKey("custom-cli", "command")).text = "greptile review --plain"
+	f.field(pvKey("custom-cli", "baseflag")).text = "--branch"
+	f.field(pvKey("bot-watch", "enabled")).b = true
+	f.field(pvKey("bot-watch", "author")).text = "greptile-apps"
+
+	if ev := f.save(); ev == settingsFormNone || f.err != "" {
+		t.Fatalf("save failed: ev=%v err=%q", ev, f.err)
+	}
+	reloaded, err := config.Load(m.cfgPath)
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if err := reloaded.Validate(); err != nil {
+		t.Fatalf("the saved config must validate: %v", err)
+	}
+	byKind := map[string]config.ReviewProvider{}
+	for _, p := range reloaded.ReviewProviders {
+		byKind[p.KindString()] = p
+	}
+	if got := byKind["codex-session"]; got.Model != "gpt-5.1" || got.TimeoutSeconds != config.DefaultClaudeReviewTimeoutSeconds {
+		t.Errorf("codex-session = %+v, want the model and the agent timeout default", got)
+	}
+	if got := byKind["custom-cli"]; got.Command != "greptile review --plain" || got.BaseFlag != "--branch" {
+		t.Errorf("custom-cli = %+v, want its own command + base flag", got)
+	}
+	if got := byKind["bot-watch"]; got.Author != "greptile-apps" {
+		t.Errorf("bot-watch author = %q", got.Author)
+	}
+}
+
+// An enabled generic kind left empty is a validation error, and the form must
+// surface it instead of writing a config the daemon then refuses to load.
+func TestSettingsFormRejectsAnEmptyGenericKind(t *testing.T) {
+	m := newTestRoot(t)
+	f := newSettingsForm(m.cfgPath, m.cfg)
+	f.field(pvKey("bot-watch", "enabled")).b = true // no author
+
+	if ev := f.save(); ev != settingsFormNone || f.err == "" {
+		t.Fatalf("an enabled bot-watch with no author must abort save, got ev=%v err=%q", ev, f.err)
+	}
+	reloaded, _ := config.Load(m.cfgPath)
+	if len(reloaded.ReviewProviders) != 0 {
+		t.Error("a rejected save must not have written anything")
 	}
 }

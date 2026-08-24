@@ -11,6 +11,7 @@ import (
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 
+	"github.com/sushidev-team/lola/internal/agent"
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/gitrepo"
 	"github.com/sushidev-team/lola/internal/linear"
@@ -147,13 +148,14 @@ type SettingsDTO struct {
 // the settings form. Provider/Fallback/Transports are plain strings so the
 // frontend never needs the (unexported) provKind type; the Go side converts.
 type ReviewProviderDTO struct {
-	Provider       string   `json:"provider"` // coderabbit-cli | coderabbit-watch | claude-session
+	Provider       string   `json:"provider"` // one of ReviewKinds()
 	Enabled        bool     `json:"enabled"`
 	OnPROpen       bool     `json:"onPrOpen"`
-	Command        string   `json:"command"`        // coderabbit-cli only
+	Command        string   `json:"command"`        // cli family
+	BaseFlag       string   `json:"baseFlag"`       // cli family; empty appends no base
 	TimeoutSeconds int      `json:"timeoutSeconds"` // pass shapes
-	Model          string   `json:"model"`          // claude-session only
-	Author         string   `json:"author"`         // coderabbit-watch only
+	Model          string   `json:"model"`          // agent family
+	Author         string   `json:"author"`         // watch family
 	Transports     []string `json:"transports"`     // lola (always) | github | linear
 	GitHubInline   bool     `json:"githubInline"`   // github: anchored, resolvable threads instead of one comment
 	Notify         bool     `json:"notify"`
@@ -174,6 +176,71 @@ func (s *ConfigService) PrioritySortKeys() []string {
 func (s *ConfigService) ReviewProviderKinds() []string { return config.ReviewProviderKinds() }
 func (s *ConfigService) TransportTokens() []string     { return config.TransportTokens() }
 
+// ReviewKindDTO describes ONE provider kind to the settings form: its id, the
+// heading it is drawn under, and which fields it actually has. The frontend
+// renders its Review tab from this list instead of a hardcoded array of kinds
+// plus a set of `p.provider === "…"` tests, so adding a review agent to
+// config.ReviewProviderKinds() makes the app offer it with no frontend edit —
+// which is the whole point of a pluggable catalog.
+type ReviewKindDTO struct {
+	Kind string `json:"kind"`
+	// Label is the section heading: the kind's name plus what it does.
+	Label string `json:"label"`
+	// Watch marks the poll/watermark shape: it has an author, and neither a
+	// github transport nor a fallback chain (validation forbids both).
+	Watch bool `json:"watch"`
+	// CLI marks a kind that execs an external review CLI (command + base flag).
+	CLI bool `json:"cli"`
+	// Agent names the coding agent an agent-family kind reviews with, or "" when
+	// the kind is not one (it is also the "offer a model field" test).
+	Agent string `json:"agent"`
+	// RequiresCommand / RequiresAuthor mark the generic kinds, which carry no
+	// built-in tool or bot of their own and are rejected by validation while
+	// enabled-and-empty. The form marks the field required and says why.
+	RequiresCommand bool `json:"requiresCommand"`
+	RequiresAuthor  bool `json:"requiresAuthor"`
+}
+
+// ReviewKinds returns one descriptor per selectable provider kind, in the order
+// the form should offer them.
+func (s *ConfigService) ReviewKinds() []ReviewKindDTO {
+	kinds := config.ReviewProviderKinds()
+	out := make([]ReviewKindDTO, 0, len(kinds))
+	for _, k := range kinds {
+		a, _ := config.ReviewAgentFor(k)
+		out = append(out, ReviewKindDTO{
+			Kind:            k,
+			Label:           reviewKindLabel(k),
+			Watch:           config.IsWatchKind(k),
+			CLI:             config.IsCLIKind(k),
+			Agent:           a,
+			RequiresCommand: config.ReviewKindRequiresCommand(k),
+			RequiresAuthor:  config.ReviewKindRequiresAuthor(k),
+		})
+	}
+	return out
+}
+
+// reviewKindLabel is a kind's section heading. The kind names alone
+// ("custom-cli", "bot-watch") do not say what they do, so each carries one
+// clause that does.
+func reviewKindLabel(kind string) string {
+	switch kind {
+	case "coderabbit-cli":
+		return kind + " — execs `coderabbit review` on PR-open"
+	case "custom-cli":
+		return kind + " — execs your own review CLI on PR-open"
+	case "coderabbit-watch":
+		return kind + " — polls the PR for the CodeRabbit app's comments"
+	case "bot-watch":
+		return kind + " — polls the PR for any review bot's comments"
+	}
+	if a, ok := config.ReviewAgentFor(kind); ok {
+		return kind + " — headless `" + agent.Kind(a).Binary() + "` review on PR-open"
+	}
+	return kind
+}
+
 // reviewProvidersDTO flattens the effective catalog for the form.
 func reviewProvidersDTO(cfg *config.Config) []ReviewProviderDTO {
 	eff := cfg.EffectiveReviewProviders()
@@ -184,6 +251,7 @@ func reviewProvidersDTO(cfg *config.Config) []ReviewProviderDTO {
 			Enabled:        p.Enabled,
 			OnPROpen:       p.OnPROpen,
 			Command:        p.Command,
+			BaseFlag:       p.BaseFlag,
 			TimeoutSeconds: p.TimeoutSeconds,
 			Model:          p.Model,
 			Author:         p.Author,
@@ -211,6 +279,7 @@ func providersFromDTO(dtos []ReviewProviderDTO) []config.ReviewProvider {
 		p.Enabled = d.Enabled
 		p.OnPROpen = d.OnPROpen
 		p.Command = d.Command
+		p.BaseFlag = d.BaseFlag
 		p.TimeoutSeconds = d.TimeoutSeconds
 		p.Model = d.Model
 		p.Author = d.Author

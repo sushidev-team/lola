@@ -11,6 +11,7 @@
   import { overlayClose } from "$lib/overlayClose";
   import { deepEqual } from "$lib/deepEqual";
   import { ConfigService, LinearService } from "@bindings/desktop";
+  import type { ReviewKindDTO } from "@bindings/desktop";
   import type { SettingsDTO, LinearOption, LinearKeyStatusDTO } from "@bindings/desktop/models";
   import { linesToText, splitLines, cleanLines } from "$lib/lines";
   import { appearance, FLAVORS, THEME_IDS, type ThemeId } from "$lib/theme-runtime.svelte";
@@ -48,7 +49,7 @@
     { id: "brain", label: "Brain" },
     { id: "interpreter", label: "Interpreter" },
     // "Review", not "CodeRabbit": the body is the whole [[review.provider]]
-    // catalog — coderabbit-cli, coderabbit-watch AND claude-session — so naming
+    // catalog — every cli, watch AND agent kind — so naming
     // the tab after one provider hid the other two.
     { id: "review", label: "Review" },
     { id: "appearance", label: "Appearance" },
@@ -221,6 +222,8 @@
       void loadThemes();
     } else if (id === "linear") {
       void loadKeyStatus();
+    } else if (id === "review") {
+      void loadReviewKinds();
     }
   }
 
@@ -299,23 +302,54 @@
   // A legacy [review]/[coderabbit] config is shown read-only until migrated:
   // editing it alongside a catalog is a hard validation error, so MigrateReview
   // is the one-way path off it.
-  const ALL_KINDS = ["coderabbit-cli", "coderabbit-watch", "claude-session"];
-  const KIND_LABELS: Record<string, string> = {
-    "coderabbit-cli": "coderabbit-cli — execs `coderabbit review` on PR-open",
-    "coderabbit-watch": "coderabbit-watch — polls the PR for the app's comments",
-    "claude-session": "claude-session — headless `claude -p` review on PR-open",
-  };
+  // The kind catalog comes from the BACKEND (ConfigService.ReviewKinds), never a
+  // hardcoded array here: which kinds exist, what each is called, and which
+  // fields it has are config-side facts, and a second copy in TypeScript is a
+  // copy that drifts the first time a review agent is added.
+  //
+  // Until it lands the tab shows a loading line rather than the providers,
+  // because EVERY per-kind predicate below is false without it: a watch would be
+  // drawn with a Timeout and a github transport (which validation then rejects,
+  // with the save failing for no visible reason) and without the Author its
+  // whole configuration is. Half a form is worse than a moment of nothing.
+  let reviewKinds = $state<ReviewKindDTO[]>([]);
+  let reviewKindsError = $state("");
+
+  async function loadReviewKinds() {
+    try {
+      reviewKinds = (await ConfigService.ReviewKinds()) ?? [];
+      reviewKindsError = reviewKinds.length ? "" : "the review provider catalog came back empty";
+    } catch (err) {
+      reviewKinds = [];
+      reviewKindsError = String(err);
+    }
+  }
+
+  const kindIds = () => reviewKinds.map((k) => k.kind);
+  const kindMeta = (kind: string) => reviewKinds.find((k) => k.kind === kind);
+  const kindLabel = (kind: string) => kindMeta(kind)?.label ?? kind;
   const TRANSPORTS = ["lola", "github", "linear"];
-  const isWatch = (kind: string) => kind === "coderabbit-watch";
-  // Transports offered per kind: the watch forbids github (its feedback is
+  // Copies of internal/config's resolve-time defaults, used ONLY to seed a
+  // newly-added provider (the backend re-applies them on load either way).
+  // Pinned against the Go source by a test, like the theme ids and the kind list
+  // — an unpinned copy is one that drifts the first time a default changes.
+  const DEFAULT_BASE_FLAG = "--base";
+  const DEFAULT_PASS_TIMEOUT = 300;
+  const DEFAULT_AGENT_TIMEOUT = 900;
+  const isWatch = (kind: string) => kindMeta(kind)?.watch ?? false;
+  const isCLI = (kind: string) => kindMeta(kind)?.cli ?? false;
+  const agentOf = (kind: string) => kindMeta(kind)?.agent ?? "";
+  const needsCommand = (kind: string) => kindMeta(kind)?.requiresCommand ?? false;
+  const needsAuthor = (kind: string) => kindMeta(kind)?.requiresAuthor ?? false;
+  // Transports offered per kind: a watch forbids github (its feedback is
   // already on the PR).
   const transportsFor = (kind: string) => (isWatch(kind) ? ["lola", "linear"] : TRANSPORTS);
-  // A provider may fall through to the OTHER pass kind only (never itself / the watch).
-  const fallbackFor = (kind: string) => ALL_KINDS.filter((k) => k !== kind && !isWatch(k));
+  // A provider may fall through to any OTHER pass kind (never itself / a watch).
+  const fallbackFor = (kind: string) => kindIds().filter((k) => k !== kind && !isWatch(k));
 
   const providers = () => (dto?.reviewProviders ?? []) as any[];
   const providerOf = (kind: string) => providers().find((p) => p.provider === kind);
-  const missingKinds = () => ALL_KINDS.filter((k) => !providerOf(k));
+  const missingKinds = () => kindIds().filter((k) => !providerOf(k));
 
   function addProvider(kind: string) {
     if (!dto || providerOf(kind)) return;
@@ -326,9 +360,17 @@
         enabled: true,
         onPrOpen: !isWatch(kind),
         command: "",
-        timeoutSeconds: 300,
+        // Empty appends no base at all, so a cli kind starts with the default
+        // flag every review CLI takes.
+        baseFlag: isCLI(kind) ? DEFAULT_BASE_FLAG : "",
+        // An agent pass reads the PR's files before it reports, so it needs
+        // minutes where a CLI pass needs seconds.
+        timeoutSeconds: agentOf(kind) ? DEFAULT_AGENT_TIMEOUT : DEFAULT_PASS_TIMEOUT,
         model: "",
-        author: isWatch(kind) ? "coderabbitai" : "",
+        // Only the coderabbit watch has a bot to default to; the generic one
+        // exists precisely to name a different one, and validation rejects it
+        // empty while enabled.
+        author: kind === "coderabbit-watch" ? "coderabbitai" : "",
         transports: ["lola"],
         // The github transport posts anchored, resolvable threads by default;
         // it degrades to one flat comment by itself when nothing can be anchored.
@@ -871,9 +913,22 @@
             </div>
           {/if}
 
-          {#each providers() as p (p.provider)}
+          {#if !reviewKinds.length}
+            <!-- Not "no providers": the config may well have some. Without the
+                 backend's kind descriptors this form cannot draw them with the
+                 right fields, so it says so instead of drawing them wrong. -->
+            <p class="text-faint">
+              {#if reviewKindsError}
+                Could not read the review provider catalog: {reviewKindsError}
+              {:else}
+                Loading the review provider catalog…
+              {/if}
+            </p>
+          {/if}
+
+          {#each reviewKinds.length ? providers() : [] as p (p.provider)}
             <section class="border-t border-edge/40 pt-4 first:border-t-0 first:pt-0" class:opacity-60={d.reviewLegacy}>
-              {@render head(KIND_LABELS[p.provider] ?? p.provider)}
+              {@render head(kindLabel(p.provider))}
               <div class="space-y-2">
                 <div class="flex items-center justify-between">
                   <label class="flex cursor-pointer items-center gap-2">
@@ -885,22 +940,48 @@
                   {/if}
                 </div>
 
-                {#if p.provider === "coderabbit-cli"}
+                <!-- Which fields a kind has comes from its backend descriptor
+                     (cli / agent / watch), never from its name, so a new kind is
+                     drawn correctly without a case of its own here. -->
+                {#if isCLI(p.provider)}
                   <label class={rowCls}>
-                    <span class="text-faint">Command</span>
-                    <input class={inputCls} type="text" placeholder="coderabbit review" disabled={d.reviewLegacy} bind:value={p.command} />
+                    <span class="text-faint">Command{needsCommand(p.provider) ? " *" : ""}</span>
+                    <input
+                      class={inputCls}
+                      type="text"
+                      placeholder={needsCommand(p.provider) ? "required, e.g. greptile review --plain" : "coderabbit review"}
+                      disabled={d.reviewLegacy}
+                      bind:value={p.command}
+                    />
                   </label>
+                  <label class={rowCls}>
+                    <span class="text-faint">Base flag</span>
+                    <input class={inputCls} type="text" placeholder="--base" disabled={d.reviewLegacy} bind:value={p.baseFlag} />
+                  </label>
+                  <span class={hintCls}>Flag the PR's base branch is passed with. Empty passes no base at all.</span>
                 {/if}
-                {#if p.provider === "claude-session"}
+                {#if agentOf(p.provider)}
                   <label class={rowCls}>
                     <span class="text-faint">Model</span>
-                    <input class={inputCls} type="text" placeholder="(claude default)" disabled={d.reviewLegacy} bind:value={p.model} />
+                    <input
+                      class={inputCls}
+                      type="text"
+                      placeholder={agentOf(p.provider) === "opencode" ? "(default) — provider/model" : `(${agentOf(p.provider)} default)`}
+                      disabled={d.reviewLegacy}
+                      bind:value={p.model}
+                    />
                   </label>
                 {/if}
                 {#if isWatch(p.provider)}
                   <label class={rowCls}>
-                    <span class="text-faint">Author</span>
-                    <input class={inputCls} type="text" placeholder="coderabbitai" disabled={d.reviewLegacy} bind:value={p.author} />
+                    <span class="text-faint">Author{needsAuthor(p.provider) ? " *" : ""}</span>
+                    <input
+                      class={inputCls}
+                      type="text"
+                      placeholder={needsAuthor(p.provider) ? "required, e.g. greptile" : "coderabbitai"}
+                      disabled={d.reviewLegacy}
+                      bind:value={p.author}
+                    />
                   </label>
                 {:else}
                   <label class={rowCls}>
@@ -999,7 +1080,7 @@
             <div class="flex flex-wrap items-center gap-2 border-t border-edge/40 pt-4">
               <span class="text-sm text-faint">Add provider:</span>
               {#each missingKinds() as k}
-                <Button variant="secondary" title={KIND_LABELS[k] ?? k} onclick={() => addProvider(k)}>{k}</Button>
+                <Button variant="secondary" title={kindLabel(k)} onclick={() => addProvider(k)}>{k}</Button>
               {/each}
             </div>
           {/if}

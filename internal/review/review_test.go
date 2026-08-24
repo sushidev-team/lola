@@ -39,7 +39,7 @@ func stubSeam(t *testing.T, out string, err error) *capture {
 
 func TestReviewBuildsArgvWithBaseAndRunsInWorktree(t *testing.T) {
 	cap := stubSeam(t, "some findings", nil)
-	if _, err := (&Client{}).Review(context.Background(), "/work/tree", "main"); err != nil {
+	if _, err := (&Client{BaseFlag: "--base"}).Review(context.Background(), "/work/tree", "main"); err != nil {
 		t.Fatalf("Review: %v", err)
 	}
 	if cap.calls != 1 {
@@ -62,7 +62,7 @@ func TestReviewBuildsArgvWithBaseAndRunsInWorktree(t *testing.T) {
 
 func TestReviewHonorsConfiguredBinArgsTimeout(t *testing.T) {
 	cap := stubSeam(t, "ok", nil)
-	cl := &Client{Bin: "/opt/cr", Args: []string{"review", "--agent"}, Timeout: 42 * time.Second}
+	cl := &Client{Bin: "/opt/cr", Args: []string{"review", "--agent"}, BaseFlag: "--base", Timeout: 42 * time.Second}
 	if _, err := cl.Review(context.Background(), "/wt", "develop"); err != nil {
 		t.Fatalf("Review: %v", err)
 	}
@@ -78,12 +78,12 @@ func TestReviewHonorsConfiguredBinArgsTimeout(t *testing.T) {
 }
 
 // Review must never mutate defaultArgs or a caller-supplied Args slice when it
-// appends --base.
+// appends the base flag.
 func TestReviewDoesNotMutateArgs(t *testing.T) {
 	stubSeam(t, "", nil)
 
 	// Default path: defaultArgs stays four elements across calls.
-	if _, err := (&Client{}).Review(context.Background(), "/wt", "main"); err != nil {
+	if _, err := (&Client{BaseFlag: "--base"}).Review(context.Background(), "/wt", "main"); err != nil {
 		t.Fatalf("Review: %v", err)
 	}
 	if len(defaultArgs) != 4 {
@@ -93,7 +93,7 @@ func TestReviewDoesNotMutateArgs(t *testing.T) {
 	// Caller slice with spare capacity: --base must not clobber it.
 	userArgs := make([]string, 2, 8)
 	userArgs[0], userArgs[1] = "review", "--plain"
-	cl := &Client{Args: userArgs}
+	cl := &Client{Args: userArgs, BaseFlag: "--base"}
 	if _, err := cl.Review(context.Background(), "/wt", "main"); err != nil {
 		t.Fatalf("Review: %v", err)
 	}
@@ -413,4 +413,105 @@ func tail(s string, n int) string {
 		return s
 	}
 	return s[len(s)-n:]
+}
+
+// An EMPTY BaseFlag appends nothing at all: the escape hatch for a review CLI
+// that takes no base argument. Getting this wrong hands an unknown flag to a
+// third-party tool, which fails the whole pass.
+func TestReviewOmitsBaseWhenNoBaseFlag(t *testing.T) {
+	cap := stubSeam(t, "", nil)
+	cl := &Client{Bin: "/opt/other", Args: []string{"scan", "--json"}}
+	if _, err := cl.Review(context.Background(), "/wt", "main"); err != nil {
+		t.Fatalf("Review: %v", err)
+	}
+	if want := []string{"scan", "--json"}; !equal(cap.args, want) {
+		t.Fatalf("args = %v, want %v (no base appended)", cap.args, want)
+	}
+}
+
+// A custom BaseFlag is used verbatim, so a tool that names the base differently
+// still gets it.
+func TestReviewHonorsCustomBaseFlag(t *testing.T) {
+	cap := stubSeam(t, "", nil)
+	cl := &Client{Bin: "/opt/other", Args: []string{"review"}, BaseFlag: "--target-branch"}
+	if _, err := cl.Review(context.Background(), "/wt", "develop"); err != nil {
+		t.Fatalf("Review: %v", err)
+	}
+	if want := []string{"review", "--target-branch", "develop"}; !equal(cap.args, want) {
+		t.Fatalf("args = %v, want %v", cap.args, want)
+	}
+}
+
+// The `custom-cli` provider points this package at ARBITRARY review CLIs, and a
+// tool that narrates its progress on stderr made a SUCCESSFUL review of
+// quota-related code self-classify as ErrQuota — findings discarded, paid
+// fallback burned. A process that exited 0 is not over quota.
+func TestCleanRunIgnoresQuotaCuesInNarration(t *testing.T) {
+	narration := strings.Repeat("scanning internal/review/quota.go\n"+
+		"note: this diff changes rate limit handling; 429 retries are now bounded\n", 20)
+	if err := classifyRunErr(nil, nil, narration, "**[major]** a real finding", time.Second); err != nil {
+		t.Fatalf("a clean run must not classify its own narration: %v", err)
+	}
+	// The same cues on a FAILED run are still a quota signal.
+	if err := classifyRunErr(&exec.ExitError{}, nil, "error: usage limit reached", "", time.Second); !errors.Is(err, ErrQuota) {
+		t.Errorf("a failed run's quota message must still classify: %v", err)
+	}
+	// coderabbit's own shape — a short limit line on stdout with exit 0 — is
+	// untouched: that is the case the stdout gate exists for.
+	if err := classifyRunErr(nil, nil, "", "You are out of reviews for this cycle.", time.Second); !errors.Is(err, ErrQuota) {
+		t.Errorf("a clean-exit stdout limit line must still classify: %v", err)
+	}
+}
+
+// The auth cues must be PHRASES: a bare "auth"/"login" substring turned any
+// nonzero exit during a review of auth-related code into ErrAuth, which is a
+// graceful skip that deliberately does NOT fall through to the fallback.
+func TestAuthCuesDoNotFireOnReviewedCode(t *testing.T) {
+	prose := "scanning app/Http/Controllers/AuthController.php\n" +
+		"scanning resources/views/auth/login.blade.php\n" +
+		"note: the credential rotation path is unchanged\n"
+	if err := classifyRunErr(&exec.ExitError{}, nil, prose, "", time.Second); errors.Is(err, ErrAuth) {
+		t.Errorf("reviewing auth code must not classify as ErrAuth: %v", err)
+	}
+	for _, real := range []string{
+		"not logged in — run: coderabbit auth login",
+		"Invalid API key",
+		"401 Unauthorized",
+		"authentication failed",
+	} {
+		if err := classifyRunErr(&exec.ExitError{}, nil, real, "", time.Second); !errors.Is(err, ErrAuth) {
+			t.Errorf("a real auth message must classify: %q -> %v", real, err)
+		}
+	}
+}
+
+// stderr keeps its TAIL, not its head: a chatty tool's actual error is the LAST
+// thing it prints, and a head cap discarded exactly that.
+func TestTailBufferKeepsTheEndOfStderr(t *testing.T) {
+	b := &tailBuffer{cap: 16}
+	b.Write([]byte("narration narration narration "))
+	b.Write([]byte("FATAL: out of reviews"))
+	if got := b.String(); !strings.HasSuffix("FATAL: out of reviews", got) || len(got) > 16 {
+		t.Fatalf("retained %q, want at most the last 16 bytes of the stream", got)
+	}
+	// A single oversized write is clipped to its own tail, not dropped.
+	b2 := &tailBuffer{cap: 4}
+	b2.Write([]byte("abcdefgh"))
+	if b2.String() != "efgh" {
+		t.Fatalf("retained %q, want %q", b2.String(), "efgh")
+	}
+	// Writes always report the full length so the child never blocks.
+	if n, err := (&tailBuffer{cap: 2}).Write([]byte("abcdefgh")); n != 8 || err != nil {
+		t.Fatalf("Write = (%d, %v), want (8, nil)", n, err)
+	}
+}
+
+// End to end: a real error arriving AFTER kilobytes of narration still reaches
+// the operator and still classifies.
+func TestErrorSurvivesHeavyNarration(t *testing.T) {
+	buf := &tailBuffer{cap: maxStderrBytes}
+	buf.Write([]byte(strings.Repeat("scanning some/file.go\n", 2000) + "error: usage limit reached, try again later"))
+	if err := classifyRunErr(&exec.ExitError{}, nil, buf.String(), "", time.Second); !errors.Is(err, ErrQuota) {
+		t.Fatalf("err = %v, want ErrQuota from the tail of stderr", err)
+	}
 }

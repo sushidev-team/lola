@@ -79,9 +79,10 @@ enabled = true
 		Enabled:        true,
 		OnPROpen:       true,
 		Command:        "",
+		BaseFlag:       DefaultReviewBaseFlag, // cli-family default
 		TimeoutSeconds: DefaultReviewTimeoutSeconds,
 		Model:          "",
-		Author:         DefaultCodeRabbitAuthor,
+		Author:         "", // only the coderabbit-watch kind defaults an author
 		Transports:     TransportSet{TransportLola},
 		GitHubInline:   true, // inline PR threads are the github transport's default shape
 		Notify:         true,
@@ -143,12 +144,12 @@ transports = ["github"]
 		OnPROpen:       true,
 		Command:        "coderabbit review --plain --type all",
 		TimeoutSeconds: 120,
-		Author:         DefaultCodeRabbitAuthor,
 		Transports:     TransportSet{TransportLola, TransportGitHub},
 		GitHubInline:   true, // absent key ⇒ resolvable inline threads
 		Notify:         false,
 		SendToAgent:    false,
 		Visible:        true,
+		BaseFlag:       DefaultReviewBaseFlag,
 		Fallback:       []provKind{provClaudeSession},
 	}
 	claude := ReviewProvider{
@@ -156,8 +157,7 @@ transports = ["github"]
 		Enabled:        true,
 		OnPROpen:       true,
 		Model:          "sonnet",
-		TimeoutSeconds: DefaultClaudeReviewTimeoutSeconds, // per-kind default: this pass reads files
-		Author:         DefaultCodeRabbitAuthor,
+		TimeoutSeconds: DefaultClaudeReviewTimeoutSeconds,            // per-kind default: this pass reads files
 		Transports:     TransportSet{TransportGitHub, TransportLola}, // lola force-appended
 		GitHubInline:   true,
 		Notify:         true,
@@ -380,6 +380,7 @@ send_to_agent = true
 			Enabled:        true,
 			OnPROpen:       true, // follows Enabled in the resolved legacy table
 			Command:        "coderabbit review --plain --type all",
+			BaseFlag:       DefaultReviewBaseFlag, // the legacy pass always passed --base
 			TimeoutSeconds: 120,
 			Author:         DefaultCodeRabbitAuthor,
 			Transports:     TransportSet{TransportLola, TransportLinear}, // comment_on_linear
@@ -611,5 +612,219 @@ func TestValidateReviewProviders(t *testing.T) {
 				t.Fatalf("error missing %q:\n%v", tc.wantErr, err)
 			}
 		})
+	}
+}
+
+// Every kind resolves to a usable provider with the defaults its FAMILY implies,
+// and no kind inherits a default that belongs to another family — the trap the
+// old unconditional `Author: DefaultCodeRabbitAuthor` baseline set, which made a
+// generic bot-watch silently identical to a coderabbit-watch.
+func TestReviewProviderKindDefaults(t *testing.T) {
+	for _, kind := range ReviewProviderKinds() {
+		p, ok := NewReviewProvider(kind)
+		if !ok {
+			t.Fatalf("NewReviewProvider(%q) rejected a kind ReviewProviderKinds() offers", kind)
+		}
+		if p.KindString() != kind {
+			t.Errorf("%s: KindString = %q", kind, p.KindString())
+		}
+		wantTimeout := DefaultReviewTimeoutSeconds
+		if _, isAgent := ReviewAgentFor(kind); isAgent {
+			wantTimeout = DefaultClaudeReviewTimeoutSeconds
+		}
+		if p.TimeoutSeconds != wantTimeout {
+			t.Errorf("%s: timeout = %d, want %d", kind, p.TimeoutSeconds, wantTimeout)
+		}
+		if want := IsCLIKind(kind); (p.BaseFlag == DefaultReviewBaseFlag) != want {
+			t.Errorf("%s: base_flag = %q, cli=%v", kind, p.BaseFlag, want)
+		}
+		if IsWatchKind(kind) && p.Visible {
+			t.Errorf("%s: a watch has no exec to watch", kind)
+		}
+		// Only the coderabbit watch has a bot to default to.
+		if want := kind == "coderabbit-watch"; (p.Author == DefaultCodeRabbitAuthor) != want {
+			t.Errorf("%s: author = %q, want default only for coderabbit-watch", kind, p.Author)
+		}
+		if p.Transports.Has(TransportLola) != true {
+			t.Errorf("%s: lola must always be present, got %v", kind, p.Transports)
+		}
+	}
+}
+
+// The three family predicates partition the catalog: every kind belongs to
+// exactly one, so a new kind cannot slip through unclassified and be treated as
+// a CLI pass by default.
+func TestReviewKindFamiliesPartitionTheCatalog(t *testing.T) {
+	for _, kind := range ReviewProviderKinds() {
+		_, isAgent := ReviewAgentFor(kind)
+		n := 0
+		for _, in := range []bool{IsWatchKind(kind), IsCLIKind(kind), isAgent} {
+			if in {
+				n++
+			}
+		}
+		if n != 1 {
+			t.Errorf("%s belongs to %d families, want exactly 1", kind, n)
+		}
+	}
+	// Pass kinds are exactly the non-watch ones.
+	for _, kind := range ReviewProviderPassKinds() {
+		if IsWatchKind(kind) {
+			t.Errorf("ReviewProviderPassKinds included the watch kind %q", kind)
+		}
+	}
+	if got, want := len(ReviewProviderPassKinds())+2, len(ReviewProviderKinds()); got != want {
+		t.Errorf("pass kinds + 2 watches = %d, want %d kinds", got, want)
+	}
+}
+
+// An agent kind's review agent is the one its name says, so a codex-session can
+// never quietly review with claude.
+func TestReviewAgentForNamesTheAgent(t *testing.T) {
+	for kind, want := range map[string]string{
+		"claude-session":   "claude",
+		"codex-session":    "codex",
+		"opencode-session": "opencode",
+	} {
+		got, ok := ReviewAgentFor(kind)
+		if !ok || got != want {
+			t.Errorf("ReviewAgentFor(%q) = (%q,%v), want (%q,true)", kind, got, ok, want)
+		}
+	}
+	if _, ok := ReviewAgentFor("coderabbit-cli"); ok {
+		t.Error("coderabbit-cli is not an agent kind")
+	}
+}
+
+// A catalog naming the new kinds round-trips through Save/Load unchanged, so an
+// operator's codex fallback and their custom CLI survive every settings save —
+// including the two keys the new kinds added, `command`/`base_flag` on a
+// custom-cli and `model` on an agent kind.
+func TestNewReviewKindsRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	body := `
+[defaults]
+global_cap = 4
+
+[[review.provider]]
+provider        = "custom-cli"
+enabled         = true
+command         = "greptile review --plain"
+base_flag       = "--branch"
+transports      = ["lola", "github"]
+fallback        = ["codex-session"]
+
+[[review.provider]]
+provider        = "codex-session"
+enabled         = true
+model           = "gpt-5.1"
+
+[[review.provider]]
+provider        = "opencode-session"
+enabled         = true
+model           = "anthropic/claude-sonnet-4-5"
+
+[[review.provider]]
+provider        = "bot-watch"
+enabled         = true
+author          = "greptile-apps"
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if err := c.Validate(); err != nil {
+		t.Fatalf("catalog must validate: %v", err)
+	}
+	before := c.ReviewProviders
+	if len(before) != 4 {
+		t.Fatalf("want 4 providers, got %d: %+v", len(before), before)
+	}
+	if custom := before[0]; custom.Command != "greptile review --plain" || custom.BaseFlag != "--branch" {
+		t.Errorf("custom-cli = %+v, want its own command + base flag", custom)
+	}
+	if before[1].TimeoutSeconds != DefaultClaudeReviewTimeoutSeconds {
+		t.Errorf("codex-session timeout = %d, want the agent default", before[1].TimeoutSeconds)
+	}
+	if before[2].Model != "anthropic/claude-sonnet-4-5" {
+		t.Errorf("opencode-session model = %q", before[2].Model)
+	}
+	if before[3].Author != "greptile-apps" {
+		t.Errorf("bot-watch author = %q", before[3].Author)
+	}
+
+	if err := c.Save(path); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	again, err := Load(path)
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if !reflect.DeepEqual(again.ReviewProviders, before) {
+		t.Errorf("round trip changed the catalog:\n got %+v\nwant %+v", again.ReviewProviders, before)
+	}
+}
+
+// The two GENERIC kinds carry no tool of their own, so an enabled one that names
+// nothing is a hard error rather than a provider that execs or polls nothing.
+// Disabled entries are left alone: a half-written one must never block a reload.
+func TestGenericKindsRequireTheirTarget(t *testing.T) {
+	mk := func(kind string, enabled bool, mutate func(*ReviewProvider)) *Config {
+		c := catalogBase()
+		p, _ := NewReviewProvider(kind)
+		p.Enabled = enabled
+		if mutate != nil {
+			mutate(&p)
+		}
+		c.ReviewProviders = []ReviewProvider{p}
+		return c
+	}
+	for _, tc := range []struct {
+		name    string
+		cfg     *Config
+		wantErr string
+	}{
+		{"custom-cli with no command", mk("custom-cli", true, nil), "command is required"},
+		{"bot-watch with no author", mk("bot-watch", true, nil), "author is required"},
+		{"disabled custom-cli", mk("custom-cli", false, nil), ""},
+		{"disabled bot-watch", mk("bot-watch", false, nil), ""},
+		{"custom-cli with a command", mk("custom-cli", true, func(p *ReviewProvider) { p.Command = "x review" }), ""},
+		{"bot-watch with an author", mk("bot-watch", true, func(p *ReviewProvider) { p.Author = "greptile" }), ""},
+		// Whitespace is not a name.
+		{"blank author", mk("bot-watch", true, func(p *ReviewProvider) { p.Author = "   " }), "author is required"},
+	} {
+		err := tc.cfg.Validate()
+		switch {
+		case tc.wantErr == "" && err != nil:
+			t.Errorf("%s: unexpected error %v", tc.name, err)
+		case tc.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tc.wantErr)):
+			t.Errorf("%s: err = %v, want one containing %q", tc.name, err, tc.wantErr)
+		}
+	}
+}
+
+// An agent kind may fall back to ANOTHER agent kind — the headline use case: run
+// claude, and when it is over quota let codex review instead.
+func TestAgentToAgentFallbackValidates(t *testing.T) {
+	primary, _ := NewReviewProvider("claude-session")
+	primary.Enabled = true
+	primary.SetFallbackKinds([]string{"codex-session", "opencode-session"})
+	codex, _ := NewReviewProvider("codex-session")
+	codex.Enabled = true
+	oc, _ := NewReviewProvider("opencode-session")
+	oc.Enabled = true
+
+	c := catalogBase()
+	c.ReviewProviders = []ReviewProvider{primary, codex, oc}
+	if err := c.Validate(); err != nil {
+		t.Fatalf("agent-to-agent fallback must validate: %v", err)
+	}
+	// ...but never onto a watch, which cannot classify quota.
+	c.ReviewProviders[0].SetFallbackKinds([]string{"bot-watch"})
+	if err := c.Validate(); err == nil {
+		t.Error("fallback onto a watch kind must be rejected")
 	}
 }

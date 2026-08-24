@@ -1,5 +1,11 @@
 # Flexible Review System — Implementation Plan
 
+> **Historical.** This is the plan the flexible review system was built from, kept
+> as a record of the decisions. It describes the THREE kinds it shipped with
+> (`coderabbit-cli`, `coderabbit-watch`, `claude-session`); SUSHI-583 later grew
+> that to seven in three swappable families (agent / cli / watch). For the current
+> shape read `README.md` and the review invariants in `CLAUDE.md`.
+
 ## Locked decisions (override anything below that conflicts)
 
 1. **GitHub transport = PR COMMENT only.** The `github` sink posts `gh pr comment <pr> --repo <repo> --body-file -` (a plain PR issue-comment, always allowed on lola's own PR) with the untrusted body on **stdin** — never argv. Do NOT use `gh pr review`. Name the seam `scm.Client.PostPRComment` / daemon `d.postPRComment` (file `internal/scm/reviewpost.go`). Everything else about the sink stands: empty-body skip, per-PR settle guard `PostedGitHubPRs[kind]`, transient-vs-permanent classification (permanent stamps the guard + logs once, transient retries next cycle), `ghError` secret-scrub, `reactionExecTimeout` bound, fail-closed on missing repo / gh-not-authed, still forbidden on `coderabbit-watch` by validation. Update §5.2, §1.4, §6 Phase 2, and §8 test argv accordingly (`gh pr comment ... --body-file -`).

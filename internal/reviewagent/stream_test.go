@@ -1,4 +1,4 @@
-package reviewclaude
+package reviewagent
 
 // Tests for the VISIBLE pass (stream.go): the stream-json argv, the rendering
 // of each event kind into a plain progress line, and ReviewStream's contract —
@@ -8,19 +8,35 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/sushidev-team/lola/internal/agent"
 )
 
-// swapStream installs a fake streaming exec seam for the duration of a test.
-func swapStream(t *testing.T, fn func(ctx context.Context, bin, model, instruction, dir, stdin string, timeout time.Duration, progress io.Writer) (string, error)) {
+// streamSeam is the signature both visible-pass exec seams share.
+type streamSeam func(ctx context.Context, k agent.Kind, bin string, args []string, dir, stdin string, timeout time.Duration, progress io.Writer) (string, error)
+
+// swapStream installs a fake streaming exec seam (claude's stream-json one) for
+// the duration of a test.
+func swapStream(t *testing.T, fn streamSeam) {
 	t.Helper()
-	orig := runClaudeStream
-	runClaudeStream = fn
-	t.Cleanup(func() { runClaudeStream = orig })
+	orig := runAgentStreamJSON
+	runAgentStreamJSON = fn
+	t.Cleanup(func() { runAgentStreamJSON = orig })
+}
+
+// swapStreamPlain installs a fake for the stderr-narrating seam (codex/opencode).
+func swapStreamPlain(t *testing.T, fn streamSeam) {
+	t.Helper()
+	orig := runAgentStreamPlain
+	runAgentStreamPlain = fn
+	t.Cleanup(func() { runAgentStreamPlain = orig })
 }
 
 // swapDiff installs a fake git-diff seam.
@@ -32,14 +48,14 @@ func swapDiff(t *testing.T, out string, err error) {
 }
 
 func TestStreamArgsAskForTheStreamFormat(t *testing.T) {
-	got := buildStreamArgs("sonnet", "REVIEW-INSTRUCTION")
+	got := agent.ReviewStreamArgs(agent.Claude, "REVIEW-INSTRUCTION", "sonnet")
 	want := []string{"-p", "REVIEW-INSTRUCTION", "--output-format", "stream-json", "--verbose", "--model", "sonnet"}
 	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
 		t.Errorf("argv = %v, want %v", got, want)
 	}
 	// --verbose is mandatory alongside stream-json in print mode; without it the
 	// CLI refuses to start and every visible pass would fail.
-	if !slices.Contains(buildStreamArgs("", "x"), "--verbose") {
+	if !slices.Contains(agent.ReviewStreamArgs(agent.Claude, "x", ""), "--verbose") {
 		t.Error("streaming argv must carry --verbose")
 	}
 }
@@ -132,7 +148,7 @@ func TestRenderStreamLineClipsLongValues(t *testing.T) {
 // ReviewStream returns the result event's text and writes progress as it goes.
 func TestReviewStreamReturnsFindingsAndWritesProgress(t *testing.T) {
 	swapDiff(t, "diff --git a/x b/x", nil)
-	swapStream(t, func(_ context.Context, _, _, _, _, stdin string, _ time.Duration, progress io.Writer) (string, error) {
+	swapStream(t, func(_ context.Context, _ agent.Kind, _ string, _ []string, _, stdin string, _ time.Duration, progress io.Writer) (string, error) {
 		if stdin != "diff --git a/x b/x" {
 			t.Errorf("the diff must reach claude on stdin, got %q", stdin)
 		}
@@ -157,7 +173,7 @@ func TestReviewStreamReturnsFindingsAndWritesProgress(t *testing.T) {
 func TestReviewStreamSkipsAnEmptyDiff(t *testing.T) {
 	swapDiff(t, "   \n", nil)
 	called := false
-	swapStream(t, func(context.Context, string, string, string, string, string, time.Duration, io.Writer) (string, error) {
+	swapStream(t, func(context.Context, agent.Kind, string, []string, string, string, time.Duration, io.Writer) (string, error) {
 		called = true
 		return "", nil
 	})
@@ -180,7 +196,7 @@ func TestReviewStreamSkipsAnEmptyDiff(t *testing.T) {
 // does not).
 func TestReviewStreamPropagatesSentinels(t *testing.T) {
 	swapDiff(t, "diff", nil)
-	swapStream(t, func(context.Context, string, string, string, string, string, time.Duration, io.Writer) (string, error) {
+	swapStream(t, func(context.Context, agent.Kind, string, []string, string, string, time.Duration, io.Writer) (string, error) {
 		return "", ErrTimeout
 	})
 	_, err := (&Client{}).ReviewStream(context.Background(), t.TempDir(), "main", io.Discard)
@@ -192,12 +208,68 @@ func TestReviewStreamPropagatesSentinels(t *testing.T) {
 // A nil progress writer is legal (discard), so a caller need not supply one.
 func TestReviewStreamAcceptsNilProgress(t *testing.T) {
 	swapDiff(t, "diff", nil)
-	swapStream(t, func(_ context.Context, _, _, _, _, _ string, _ time.Duration, progress io.Writer) (string, error) {
+	swapStream(t, func(_ context.Context, _ agent.Kind, _ string, _ []string, _, _ string, _ time.Duration, progress io.Writer) (string, error) {
 		progress.Write([]byte("ignored"))
 		return "OK", nil
 	})
 	got, err := (&Client{}).ReviewStream(context.Background(), t.TempDir(), "main", nil)
 	if err != nil || got != "OK" {
 		t.Fatalf("ReviewStream = (%q, %v), want OK/nil", got, err)
+	}
+}
+
+// os/exec runs a copier goroutine PER STREAM unless Stdout and Stderr are the
+// same interface value, and codex/opencode write to both at once. Both tees must
+// therefore be serialized onto the pane: unsynchronized, a progress writer that
+// is not itself thread-safe (a bytes.Buffer here, and anything holding an
+// in-process pane buffer in production) is a data race. Run with -race.
+func TestLockedWriterSerializesConcurrentTees(t *testing.T) {
+	var buf bytes.Buffer // deliberately NOT thread-safe
+	pane := &lockedWriter{w: &buf}
+	out := io.MultiWriter(&cappedBuffer{cap: 1 << 20}, pane)
+	errw := io.MultiWriter(&tailBuffer{cap: 1 << 20}, pane)
+
+	var wg sync.WaitGroup
+	for _, w := range []io.Writer{out, errw} {
+		wg.Add(1)
+		go func(w io.Writer) {
+			defer wg.Done()
+			for i := 0; i < 200; i++ {
+				fmt.Fprintln(w, "a line of narration")
+			}
+		}(w)
+	}
+	wg.Wait()
+
+	if got := strings.Count(buf.String(), "a line of narration"); got != 400 {
+		t.Fatalf("pane got %d lines, want 400 (writes were lost or torn)", got)
+	}
+	// Every line arrived whole — no interleaving mid-line.
+	for _, line := range strings.Split(strings.TrimSuffix(buf.String(), "\n"), "\n") {
+		if line != "a line of narration" {
+			t.Fatalf("torn line %q", line)
+		}
+	}
+}
+
+// The real seam must wire BOTH tees through one lock. Asserting on the writers
+// exec would receive is the only way to catch a future edit that reverts to two
+// bare MultiWriters (which would still pass every behavioural test on a
+// thread-safe pane, and race everywhere else).
+func TestStreamPlainTeesShareOneLock(t *testing.T) {
+	var buf bytes.Buffer
+	pane := &lockedWriter{w: &buf}
+	// Two MultiWriters over the SAME lockedWriter is the shape under test; the
+	// point is that the shared element is the lock, not the raw writer.
+	a := io.MultiWriter(&cappedBuffer{cap: 8}, pane)
+	b := io.MultiWriter(&tailBuffer{cap: 8}, pane)
+	if a == nil || b == nil {
+		t.Fatal("multiwriters must build")
+	}
+	if _, err := pane.Write([]byte("x")); err != nil {
+		t.Fatalf("locked write: %v", err)
+	}
+	if buf.String() != "x" {
+		t.Fatalf("pane = %q, want the byte to reach the underlying writer", buf.String())
 	}
 }

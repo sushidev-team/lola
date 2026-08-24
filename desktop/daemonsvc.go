@@ -102,7 +102,8 @@ func (s *DaemonService) Revive(session string) (protocol.ReviveData, error) {
 }
 
 // Review forces a QA review PASS for one session now. provider optionally
-// selects which pass provider kind to force (coderabbit-cli | claude-session);
+// selects which pass provider kind to force (any pass kind — see
+// config.ReviewProviderPassKinds);
 // "" forces the daemon's primary pass provider.
 func (s *DaemonService) Review(session, provider string) (protocol.ReviewData, error) {
 	var d protocol.ReviewData

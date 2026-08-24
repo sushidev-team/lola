@@ -56,6 +56,7 @@ const {
   GetSettings,
   SaveSettings,
   PrioritySortKeys,
+  ReviewKinds,
   Themes,
   SetTheme,
   WorkspaceLabels,
@@ -70,6 +71,7 @@ const {
   GetSettings: vi.fn(),
   SaveSettings: vi.fn(),
   PrioritySortKeys: vi.fn(),
+  ReviewKinds: vi.fn(),
   Themes: vi.fn(),
   SetTheme: vi.fn(),
   WorkspaceLabels: vi.fn(),
@@ -87,6 +89,7 @@ vi.mock("@bindings/desktop", () => ({
     GetSettings: () => GetSettings(),
     SaveSettings: (dto: unknown) => SaveSettings(dto),
     PrioritySortKeys: () => PrioritySortKeys(),
+    ReviewKinds: () => ReviewKinds(),
     Themes: () => Themes(),
     SetTheme: (name: string) => SetTheme(name),
     LinearKeyStatus: () => LinearKeyStatus(),
@@ -110,6 +113,20 @@ import { confirm } from "$lib/confirm.svelte"; // the real singleton — the gua
 // rather than that a spy was called.
 import { appearance, DEFAULT_THEME_ID, THEME_IDS } from "$lib/theme-runtime.svelte";
 
+// The kind descriptors ConfigService.ReviewKinds() serves. The Review tab is
+// rendered ENTIRELY from these — which kinds exist, what each is called, and
+// which fields it has — so a review agent added on the Go side needs no change
+// in the component. reviewKindsMatchGo below pins this list against the Go one.
+const reviewKinds = [
+  { kind: "coderabbit-cli", label: "coderabbit-cli — execs `coderabbit review` on PR-open", watch: false, cli: true, agent: "", requiresCommand: false, requiresAuthor: false },
+  { kind: "custom-cli", label: "custom-cli — execs your own review CLI on PR-open", watch: false, cli: true, agent: "", requiresCommand: true, requiresAuthor: false },
+  { kind: "coderabbit-watch", label: "coderabbit-watch — polls the PR for the CodeRabbit app's comments", watch: true, cli: false, agent: "", requiresCommand: false, requiresAuthor: false },
+  { kind: "bot-watch", label: "bot-watch — polls the PR for any review bot's comments", watch: true, cli: false, agent: "", requiresCommand: false, requiresAuthor: true },
+  { kind: "claude-session", label: "claude-session — headless `claude` review on PR-open", watch: false, cli: false, agent: "claude", requiresCommand: false, requiresAuthor: false },
+  { kind: "codex-session", label: "codex-session — headless `codex` review on PR-open", watch: false, cli: false, agent: "codex", requiresCommand: false, requiresAuthor: false },
+  { kind: "opencode-session", label: "opencode-session — headless `opencode` review on PR-open", watch: false, cli: false, agent: "opencode", requiresCommand: false, requiresAuthor: false },
+];
+
 // Organisation-level labels: no team, so valid for a [defaults] key that
 // projects on any team inherit.
 const workspaceLabels = [
@@ -124,6 +141,7 @@ describe("SettingsForm", () => {
     SaveSettings.mockReset().mockResolvedValue(undefined);
     WorkspaceLabels.mockReset().mockResolvedValue(workspaceLabels);
     PrioritySortKeys.mockReset().mockResolvedValue(["priority", "createdAt"]);
+    ReviewKinds.mockReset().mockResolvedValue(reviewKinds.map((k) => ({ ...k })));
     Themes.mockReset().mockResolvedValue([...THEME_IDS]);
     SetTheme.mockReset().mockResolvedValue(undefined);
     TeamMeta.mockReset();
@@ -165,11 +183,14 @@ describe("SettingsForm", () => {
     // Off-tab content isn't mounted…
     expect(screen.queryByText("No review pass configured.")).not.toBeInTheDocument();
     // …until its tab is picked. This DTO has no [[review.provider]] entries, so
-    // the tab must explain itself rather than showing three bare kind buttons.
+    // the tab must explain itself rather than showing bare kind buttons.
     await fireEvent.click(screen.getByRole("tab", { name: "Review" }));
     expect(screen.getByText("No review pass configured.")).toBeInTheDocument();
-    for (const k of ["coderabbit-cli", "coderabbit-watch", "claude-session"]) {
-      expect(screen.getByRole("button", { name: k })).toBeInTheDocument();
+    // Every kind the BACKEND offers is addable — the list is not hardcoded here
+    // or in the component, so a new review agent shows up on both sides at once.
+    await waitFor(() => expect(ReviewKinds).toHaveBeenCalled());
+    for (const k of reviewKinds) {
+      expect(await screen.findByRole("button", { name: k.kind })).toBeInTheDocument();
     }
   });
 
@@ -352,6 +373,54 @@ describe("SettingsForm", () => {
       expect(claude.transports).toContain("github");
       expect(claude.githubInline).toBe(false);
     });
+  });
+
+  // The fixture above stands in for ConfigService.ReviewKinds(). It is the ONE
+  // hardcoded copy of the kind catalog left in the frontend, and it exists only
+  // so the component can be rendered without a backend — so pin it against the
+  // Go source, the same way the theme ids are pinned. Without this a review
+  // agent added on the Go side would keep every test green while the app never
+  // offered it.
+  it("mocks exactly the provider kinds internal/config defines", () => {
+    const go = readFileSync(process.cwd() + "/../../internal/config/reviewprovider.go", "utf8") as string;
+    const block = /var provKinds = \[\]provKind\{([^}]*)\}/.exec(go);
+    expect(block, "provKinds not found in internal/config/reviewprovider.go").not.toBeNull();
+    // The list names the CONSTANTS, so resolve each to its string value.
+    const consts = new Map(
+      [...go.matchAll(/(prov[A-Za-z]+)\s+provKind = "([^"]+)"/g)].map((m) => [m[1], m[2]]),
+    );
+    const goKinds = block![1]
+      .split(",")
+      .map((x) => x.trim())
+      .filter(Boolean)
+      .map((name) => consts.get(name));
+    expect(goKinds).toEqual(reviewKinds.map((k) => k.kind));
+  });
+
+  // The form seeds a newly-added provider with three defaults copied from
+  // internal/config. Pin them, or a changed Go default silently leaves the app
+  // creating providers with the old one.
+  it("seeds new providers with the defaults internal/config resolves", () => {
+    const go = readFileSync(process.cwd() + "/../../internal/config/review.go", "utf8") as string;
+    const num = (name: string) => {
+      const m = new RegExp(`const ${name} = (\\d+)`).exec(go);
+      expect(m, `${name} not found in internal/config/review.go`).not.toBeNull();
+      return Number(m![1]);
+    };
+    const str = (name: string) => {
+      const m = new RegExp(`const ${name} = "([^"]*)"`).exec(go);
+      expect(m, `${name} not found in internal/config/review.go`).not.toBeNull();
+      return m![1];
+    };
+    const svelte = readFileSync(process.cwd() + "/src/lib/views/SettingsForm.svelte", "utf8") as string;
+    const ts = (name: string) => {
+      const m = new RegExp(`const ${name} = "?([^";\n]+)"?;`).exec(svelte);
+      expect(m, `${name} not found in SettingsForm.svelte`).not.toBeNull();
+      return m![1];
+    };
+    expect(ts("DEFAULT_BASE_FLAG")).toBe(str("DefaultReviewBaseFlag"));
+    expect(Number(ts("DEFAULT_PASS_TIMEOUT"))).toBe(num("DefaultReviewTimeoutSeconds"));
+    expect(Number(ts("DEFAULT_AGENT_TIMEOUT"))).toBe(num("DefaultClaudeReviewTimeoutSeconds"));
   });
 
   // The theme is the only setting with a live preview, and the only one that is

@@ -92,24 +92,30 @@ socket.
 - Provider auth is inherited from the daemon/pane env (`ANTHROPIC_API_KEY` /
   `OPENAI_API_KEY`) or an existing CLI login (`codex login`, `opencode auth`);
   never stored in config.toml.
-- `[brain]`, `[review]`, and `[coderabbit]` are lola-INTERNAL helpers that
-  always shell `claude -p` regardless of the coding-agent choice — they are NOT
-  the pluggable coding agent and must not follow the `agent` setting.
+- `[brain]` is a lola-INTERNAL helper that always shells `claude -p` regardless
+  of the coding-agent choice — it is NOT the pluggable coding agent and must not
+  follow the `agent` setting. The same is true of the REVIEW providers: an
+  agent-family provider names its own agent (`codex-session` runs codex) and is
+  configured per provider, so it too never follows the session's `agent` setting.
 - **[changed]** The review helper generalized from the two hardcoded tables into
-  a provider CATALOG (`[[review.provider]]`) with three kinds
-  (`coderabbit-cli` = CLI pass, `coderabbit-watch` = PR-comment watch,
-  `claude-session` = headless `claude -p` pass). The legacy `[review]`/
-  `[coderabbit]` tables still work forever (synthesized into `coderabbit-cli`/
-  `coderabbit-watch` providers); catalog + a non-empty legacy table is a HARD
-  validation error, resolved one-way by `lola config migrate-review`. The
-  `claude-session` provider is still a lola-INTERNAL `claude -p` helper — it does
-  NOT follow the `agent` setting.
+  a provider CATALOG (`[[review.provider]]`) with SEVEN kinds in three FAMILIES:
+  CLI passes (`coderabbit-cli`, `custom-cli`), bot WATCHES (`coderabbit-watch`,
+  `bot-watch`) and AGENT passes (`claude-session`, `codex-session`,
+  `opencode-session`). Every family is a swappable slot — which agent reviews,
+  which CLI reviews, and whose GitHub review is relayed are all config. The legacy
+  `[review]`/`[coderabbit]` tables still work forever (synthesized into
+  `coderabbit-cli`/`coderabbit-watch` providers); catalog + a non-empty legacy
+  table is a HARD validation error, resolved one-way by
+  `lola config migrate-review`.
 
 ## Review providers (flexible review)
 
-- **[changed]** At most ONE provider per KIND (guards key by kind). Two execution
-  SHAPES: PASS (coderabbit-cli/claude-session — exec, return findings synchronously,
-  per-PR guard) and WATCH (coderabbit-watch — poll the PR, watermark guard). A
+- **[changed]** At most ONE provider per KIND (guards key by kind) — which is
+  WHY every review agent gets its own kind rather than sharing one with an
+  `agent =` field: two agents can then run as primary and fallback for the same
+  session. Two execution SHAPES: PASS (the cli + agent families — exec, return
+  findings synchronously, per-PR guard) and WATCH (the watch family — poll the
+  PR, watermark guard). A
   provider runs per session only if enabled AND not referenced in any other
   enabled provider's `fallback` (a fallback-only provider runs ONLY when reached
   via a chain — prevents double-review/double-hand-off).
@@ -129,25 +135,34 @@ socket.
   the existing `AtPrompt` atomic idle-gate + `sanitizeAgentText` + defer-never-drop
   VERBATIM, never run as a command, pending stash keyed `PendingHandoffs[kind]`.
   notify/github/linear are HUMAN sinks — full untrusted findings verbatim, NO
-  sanitize, NEVER re-fed into the control loop. Per-kind labels/preambles so a
-  `claude-session`'s findings read "Claude review", never mislabeled "CodeRabbit".
+  sanitize, NEVER re-fed into the control loop. Per-PROVIDER labels/preambles so
+  a `codex-session`'s findings read "Codex review" and a `bot-watch`'s name the
+  bot it watches — never mislabeled "CodeRabbit". With the catalog pluggable, WHO
+  produced a finding is the one thing a reader cannot infer from the finding
+  itself, so it is always stated. A watch's author reaches those labels and the
+  worker's pane, so it is sanitized to login characters and clipped
+  (`botDisplayName`) before it is interpolated into any text lola generates.
 - **[changed]** The `github` sink is `gh pr comment <pr> --repo <repo> --body-file -`
   ONLY (body on STDIN, never argv) — a plain PR comment, never `gh pr review`
-  (no approve/request-changes). PASS shapes only; validation FORBIDS `github` on a
-  `coderabbit-watch` (its feedback is already on the PR — a self-feedback loop).
+  (no approve/request-changes). PASS shapes only; validation FORBIDS `github` on
+  a WATCH kind (its feedback is already on the PR — a self-feedback loop).
   Idempotent per PR via `PostedGitHubPRs[kind]`: a SUCCESS or a PERMANENT gh error
   (422/403) stamps the settle guard + logs once; a TRANSIENT error (5xx/timeout/
   missing repo) leaves it unstamped to retry next cycle. Empty body = skip.
   Fail-closed: missing repo / gh-not-authed = silent skip.
-- **[changed]** lola NEVER triggers a new CodeRabbit review. The github sink runs
-  the posted body through `neutralizeBotTriggers` (`reviewer.go`), inserting a
-  zero-width space after the `@` of any `@coderabbit`/`@coderabbitai` mention so a
-  findings body that happens to name the bot can't be parsed as a command and kick
-  off a fresh CodeRabbit run (which would also burn a review credit). Applies to
-  the github sink ONLY — notify/linear/worker never reach the CodeRabbit app. This
-  is what makes a WATCH-ONLY posture (a single `coderabbit-watch` provider: poll +
-  relay CodeRabbit's own auto-review, never exec `coderabbit review`, never post to
-  the PR) safe even when paired with a github-posting `claude-session`/`coderabbit-cli`.
+- **[changed]** lola NEVER triggers a new run of a review bot. The github sink
+  runs every posted body through `neutralizeWatchedBots` (`reviewer.go`),
+  inserting a zero-width space after the `@` of any `@coderabbit`/`@coderabbitai`
+  mention AND of any bot lola has an ENABLED watch configured for (one
+  case-insensitive alternation — GitHub logins are case-insensitive), so a
+  findings body that happens to name the bot can't be parsed as a command and
+  kick off a fresh run (which would also burn a review credit). The coderabbit
+  pattern is unconditional so the historical guarantee holds with or without a
+  watch; the configured half generalizes it with the catalog. Applies to the
+  github sink ONLY — notify/linear/worker never reach the bot. This is what makes
+  a WATCH-ONLY posture (a single watch provider: poll + relay the bot's own
+  auto-review, never exec a review CLI, never post to the PR) safe even when
+  paired with a github-posting agent/cli provider.
 - **[changed]** Fallback (PASS-SHAPE ONLY): a provider that CAN'T answer
   (`ErrNotFound`/`ErrTimeout`/`ErrQuota`/binary-unavailable) advances to the next
   configured fallback kind; the result routes under the PRIMARY's transports.
@@ -156,11 +171,63 @@ socket.
   Each exec self-bounded by its own `timeout_seconds`; the whole cycle stays under
   the shared shutdown-abortable `reviewCycleCtx`. Chain exhausted / graceful skip
   leaves the guard SET and logs once, never errors per cycle, never blocks lifecycle.
-- **[changed]** WATCH cannot fall back. The CodeRabbit GitHub app posts "out of
-  reviews" as an ordinary PR comment (non-empty, `err==nil`,
-  classifier-undetectable), so a watch has no quota signal — validation forbids
-  `fallback` on a `coderabbit-watch`. Quota->claude fallback requires the
-  `coderabbit-cli` provider (whose exit/stderr carries the quota signal).
+- **[changed]** WATCH cannot fall back. A review bot posts "out of reviews" as an
+  ordinary PR comment (non-empty, `err==nil`, classifier-undetectable), so a watch
+  has no quota signal — validation forbids `fallback` on a watch kind. A
+  quota->fallback chain requires a cli or agent provider (whose exit/stderr
+  carries the quota signal). Agent-to-agent is the common case: `claude-session`
+  with `fallback = ["codex-session"]` hands the review to codex on a usage limit.
+- **[new]** An AGENT-family provider is one bounded, READ-ONLY headless review by
+  the named agent: `internal/reviewagent` (the generalized former
+  `internal/reviewclaude`) drives claude|codex|opencode behind ONE Client, and
+  `internal/agent.ReviewArgs` owns each one's argv. The instruction, the diff on
+  STDIN, the caps and the Err* sentinels are IDENTICAL across agents, so the
+  chain cannot tell them apart. A review REPORTS; it never writes — each agent is
+  launched in its most restrictive non-interactive posture (claude: headless
+  defaults; codex: `--sandbox read-only`; opencode: NO `--auto`), the deliberate
+  opposite of the unattended worker launch, so a prompt injection in the diff
+  cannot turn the reviewer into a writer.
+- **[new]** The VISIBLE pass narrates per agent: claude prints nothing until it
+  finishes, so its visible run asks for `--output-format stream-json` and lola
+  renders the events; codex and opencode already narrate on STDERR and have it
+  teed to the pane. Both stream shapes still capture stdout under the SAME cap —
+  teeing never widens a cap. Both reach the child as PIPES, never a TTY, which is
+  what makes codex and opencode put their answer on stdout at all.
+- **[new]** The two GENERIC kinds carry no tool of their own, so validation
+  REJECTS an enabled `custom-cli` with no `command` and an enabled `bot-watch`
+  with no `author` — an empty one would exec or poll nothing. The check is gated
+  on `enabled`, so a half-written disabled entry never blocks a reload. The
+  RUNTIME fails closed independently (`unconfiguredKindReason`), because
+  `Validate` is not fatal at startup and both empty values fall back to
+  CodeRabbit downstream: such a provider is disabled and named in the startup
+  warning rather than silently running the wrong vendor. An UNKNOWN kind is
+  caught by the same check — every family predicate is false for one, so it would
+  otherwise land in the cli branch and resolve to the coderabbit binary.
+- **[new]** A review tool's STDERR is its NARRATION (codex/opencode print the
+  whole review there, and `custom-cli` runs arbitrary tools that may too), so the
+  quota scan over stderr runs ONLY on a failed run, stderr is retained by a TAIL
+  buffer (a CLI's fatal error is its last line; the head cap kept the prose and
+  discarded the error), and the auth cues are PHRASES rather than the bare
+  substrings `auth`/`login`. stdout keeps its HEAD — there the payload is the
+  findings, most severe first — and its own shortness gate. `internal/review` and
+  `internal/reviewagent` are independent leaves with independent copies of all
+  three: fixing one and not the other leaves the bug live for the other family. Their
+  defaults are per-kind and applied BEFORE the explicit keys overlay
+  (`applyKindDefaults`): a `bot-watch` deliberately gets NO author default, or it
+  would be silently identical to a `coderabbit-watch`.
+- **[new]** `base_flag` (cli family) is how the base branch reaches an arbitrary
+  review CLI: `<BaseFlag> <base>` appended to the argv, defaulting to `--base`,
+  and an explicit EMPTY value appends nothing at all (a tool that takes no base
+  argument). `internal/review` holds no default for it — config does — so only an
+  explicit `base_flag = ""` reaches the client empty.
+- **[new]** The daemon names ONLY the kinds it must match on (the two legacy
+  guard keys and the `lola coderabbit` alias target). Everything else is driven by
+  the config-side family predicates (`config.ReviewAgentFor` / `IsCLIKind` /
+  `IsWatchKind`), and the per-kind exec seams live in ONE map (`d.passRuns`), so
+  adding a review agent needs no daemon field, no seam switch case and no test
+  hook. Both UIs generate their provider editors from `config.ReviewProviderKinds()`
+  (the app via `ConfigService.ReviewKinds()`), so a new kind is offered by both
+  with no UI edit; a frontend parity test pins its fixture against the Go list.
 - **[changed]** Self-feedback guard (only when BOTH a github pass provider AND a
   watch are configured): the gh authed login is resolved ONCE (memoized
   `scm.Client.AuthedLogin`, `gh api user --jq .login`) and passed to the watch to

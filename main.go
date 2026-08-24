@@ -20,7 +20,7 @@ import (
 	"github.com/sushidev-team/lola/internal/hook"
 	"github.com/sushidev-team/lola/internal/protocol"
 	"github.com/sushidev-team/lola/internal/review"
-	"github.com/sushidev-team/lola/internal/reviewclaude"
+	"github.com/sushidev-team/lola/internal/reviewagent"
 	"github.com/sushidev-team/lola/internal/reviewrun"
 	"github.com/sushidev-team/lola/internal/tui"
 )
@@ -255,7 +255,7 @@ func reviewCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&provider, "provider", "",
-		"which pass provider to force (coderabbit-cli | claude-session); default: the primary enabled one")
+		"which pass provider to force ("+strings.Join(config.ReviewProviderPassKinds(), " | ")+"); default: the primary enabled one")
 	return cmd
 }
 
@@ -565,13 +565,14 @@ func logsCmd() *cobra.Command {
 // exit would only make tmux tear the pane down before anyone could read it.
 func reviewRunCmd() *cobra.Command {
 	var (
-		kind    string
-		dir     string
-		base    string
-		state   string
-		model   string
-		command string
-		timeout int
+		kind     string
+		dir      string
+		base     string
+		state    string
+		model    string
+		command  string
+		baseFlag string
+		timeout  int
 	)
 	cmd := &cobra.Command{
 		Use:    "review-run",
@@ -584,7 +585,7 @@ func reviewRunCmd() *cobra.Command {
 			out := c.OutOrStdout()
 			fmt.Fprintf(out, "lola review — %s\n%s onto %s\n\n", kind, dir, base)
 
-			findings, err := runVisibleReview(c.Context(), kind, dir, base, model, command, timeout, out)
+			findings, err := runVisibleReview(c.Context(), kind, dir, base, model, command, baseFlag, timeout, out)
 			printReviewOutcome(out, findings, err)
 			if werr := reviewrun.Write(state, findings, err); werr != nil {
 				fmt.Fprintf(out, "\n! could not hand the result back to lola: %v\n", werr)
@@ -593,37 +594,39 @@ func reviewRunCmd() *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&kind, "kind", "claude-session", "provider kind: claude-session | coderabbit-cli")
+	cmd.Flags().StringVar(&kind, "kind", "claude-session",
+		"provider kind: "+strings.Join(config.ReviewProviderPassKinds(), " | "))
 	cmd.Flags().StringVar(&dir, "dir", "", "worktree to review in")
 	cmd.Flags().StringVar(&base, "base", "", "base branch to diff against")
 	cmd.Flags().StringVar(&state, "state", "", "directory to write findings + status into")
-	cmd.Flags().StringVar(&model, "model", "", "optional --model for claude-session")
-	cmd.Flags().StringVar(&command, "command", "", "optional argv override for coderabbit-cli")
+	cmd.Flags().StringVar(&model, "model", "", "optional --model for an agent kind")
+	cmd.Flags().StringVar(&command, "command", "", "argv for a cli kind (required for custom-cli)")
+	cmd.Flags().StringVar(&baseFlag, "base-flag", config.DefaultReviewBaseFlag,
+		"cli kinds: flag the base branch is passed with; empty appends no base at all")
 	cmd.Flags().IntVar(&timeout, "timeout-seconds", 0, "hard cap on the pass; 0 = the client default")
 	return cmd
 }
 
 // runVisibleReview dispatches to the right client's STREAMING entry point, so
-// the pane shows work as it happens instead of ten silent minutes.
-func runVisibleReview(ctx context.Context, kind, dir, base, model, command string, timeout int, out io.Writer) (string, error) {
-	switch kind {
-	case "coderabbit-cli":
-		cl := &review.Client{}
-		argv := config.ReviewConfig{Command: command}.CommandArgs()
-		if len(argv) > 0 {
-			cl.Bin, cl.Args = argv[0], argv[1:] // review always appends --base itself
-		}
-		if timeout > 0 {
-			cl.Timeout = time.Duration(timeout) * time.Second
-		}
-		return cl.ReviewStream(ctx, dir, base, out)
-	default:
-		cl := &reviewclaude.Client{Model: model}
+// the pane shows work as it happens instead of ten silent minutes. The dispatch
+// is on the kind's FAMILY (config.ReviewAgentFor), so a new review agent needs no
+// case of its own here.
+func runVisibleReview(ctx context.Context, kind, dir, base, model, command, baseFlag string, timeout int, out io.Writer) (string, error) {
+	if a, isAgent := config.ReviewAgentFor(kind); isAgent {
+		cl := &reviewagent.Client{Agent: agent.Kind(a), Model: model}
 		if timeout > 0 {
 			cl.Timeout = time.Duration(timeout) * time.Second
 		}
 		return cl.ReviewStream(ctx, dir, base, out)
 	}
+	cl := &review.Client{BaseFlag: baseFlag}
+	if argv := (config.ReviewConfig{Command: command}).CommandArgs(); len(argv) > 0 {
+		cl.Bin, cl.Args = argv[0], argv[1:] // ReviewStream appends the base flag itself
+	}
+	if timeout > 0 {
+		cl.Timeout = time.Duration(timeout) * time.Second
+	}
+	return cl.ReviewStream(ctx, dir, base, out)
 }
 
 // printReviewOutcome closes the pane's transcript with what a human wants to

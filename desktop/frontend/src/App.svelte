@@ -179,7 +179,7 @@
         if (sel?.prUrl) store.openURL(sel.prUrl);
         return true;
       case "c":
-        // The CONFIGURED review provider (claude-session | coderabbit-cli | …),
+        // The CONFIGURED review provider (any pass kind — an agent or cli one),
         // not coderabbit specifically — same as the menu's "Trigger Review" and
         // ⌘⇧R. Forcing the coderabbit-watch pass is still reachable from the
         // session context menu, which is where a provider-specific action belongs.

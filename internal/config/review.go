@@ -32,6 +32,13 @@ const DefaultReviewTimeoutSeconds = 300
 // on its own worker (reviewworker.go), so a long review costs nobody else time.
 const DefaultClaudeReviewTimeoutSeconds = 900
 
+// DefaultReviewBaseFlag is the flag a cli-family provider names the PR's base
+// branch with on its argv (`… --base main`). It is what CodeRabbit takes and
+// what most review CLIs take; a tool that wants a different one sets
+// `base_flag`, and a tool that takes no base argument sets `base_flag = ""`
+// (which appends nothing — see review.Client.BaseFlag).
+const DefaultReviewBaseFlag = "--base"
+
 // Default hand-off strings for a completed review. ReviewToAgentPreamble is a
 // plain instruction prepended to the (sanitized) findings before they are typed
 // into the worker; ReviewNotifyTitle titles the human notification. Both are

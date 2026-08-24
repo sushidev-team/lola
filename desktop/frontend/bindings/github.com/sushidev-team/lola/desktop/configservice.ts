@@ -155,6 +155,14 @@ export function RenameGroup(name: string, label: string): $CancellablePromise<vo
 }
 
 /**
+ * ReviewKinds returns one descriptor per selectable provider kind, in the order
+ * the form should offer them.
+ */
+export function ReviewKinds(): $CancellablePromise<$models.ReviewKindDTO[] | null> {
+    return $Call.ByID(1023667510);
+}
+
+/**
  * ReviewProviderKinds / TransportTokens expose the selectable catalog values so
  * the frontend renders its pickers without hardcoding them.
  */

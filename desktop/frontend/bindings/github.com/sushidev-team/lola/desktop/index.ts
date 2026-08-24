@@ -33,6 +33,7 @@ export type {
     ProjectPlacementDTO,
     PushErrDTO,
     ReleaseEntryDTO,
+    ReviewKindDTO,
     ReviewProviderDTO,
     SettingsDTO,
     SetupDTO,

@@ -33,7 +33,7 @@ package daemon
 //
 // The untrusted-output rules are unchanged from the flat comment: the findings
 // are human-sink text (a PR comment), so they are NOT control-sanitized, but
-// every body — summary and thread alike — goes through neutralizeBotTriggers so
+// every body — summary and thread alike — goes through neutralizeWatchedBots so
 // an `@coderabbitai` string inside a finding can never start a fresh CodeRabbit
 // review on the PR.
 
@@ -98,7 +98,7 @@ func (d *Daemon) postGithubInline(ctx context.Context, s session.Session, p revi
 
 	anchors := diffanchor.Parse(diff)
 	rv := reviewmd.RenderInline(reviewmd.Options{
-		Title: labelsFor(p.Kind).notifyTitle,
+		Title: labelsFor(p).notifyTitle,
 		Repo:  s.Repo,
 		Ref:   s.Branch, // empty ⇒ body locations render as plain code, never a wrong link
 	}, findings, func(path string, line int) (int, bool) {
@@ -113,17 +113,20 @@ func (d *Daemon) postGithubInline(ctx context.Context, s session.Session, p revi
 		return false
 	}
 
+	// One neutralizer for the whole post: the summary and every thread body get
+	// the same defuse, and the catalog is read once rather than per body.
+	defuse := d.botNeutralizer()
 	comments := make([]scm.InlineComment, 0, len(rv.Comments))
 	for _, c := range rv.Comments {
 		comments = append(comments, scm.InlineComment{
 			Path: c.Path,
 			Line: c.Line,
-			Body: neutralizeBotTriggers(c.Body),
+			Body: defuse(c.Body),
 		})
 	}
 	pctx, pcancel := context.WithTimeout(ctx, reactExecTimeout)
 	defer pcancel()
-	err = post(pctx, s.Repo, s.PR.Number, sha, neutralizeBotTriggers(rv.Body), comments)
+	err = post(pctx, s.Repo, s.PR.Number, sha, defuse(rv.Body), comments)
 	if err == nil {
 		d.stampGithubSettled(s.ID, p.Kind, s.PR.Number)
 		d.stampInlineReview(s.ID, p.Kind, s.PR.Number)

@@ -1,14 +1,22 @@
-// Package review is Lola's bounded, event-triggered QA pass over the CodeRabbit
-// CLI (PLAN P9). It is the coding agent's QA BUDDY: on PR-open (opt-in) it runs
-// exactly one `coderabbit review` against a worktree and hands the plain-text
+// Package review is Lola's bounded, event-triggered QA pass over an external
+// review CLI. It is the coding agent's QA BUDDY: on PR-open (opt-in) it runs
+// exactly one review command against a worktree and hands the plain-text
 // findings back to the worker agent and the human. It is NOT a persistent
 // second agent — one invocation, then done.
 //
+// CodeRabbit is the DEFAULT tool, not the only one: Bin/Args carry any review
+// CLI (the `custom-cli` provider kind supplies them from config), and BaseFlag
+// decides how — or whether — the base branch is named on its argv. The error
+// classes, the caps and the auth discipline below are the tool-agnostic part and
+// apply whichever binary runs.
+//
 // Hard contract — read before wiring this anywhere:
 //
-//   - EVENT-TRIGGERED + BOUNDED. Each review is a single `coderabbit review`
-//     invocation with a hard context.WithTimeout (default 300s) and a
-//     size-capped stdout (~16KB, head-clipped with a truncation marker). No
+//   - EVENT-TRIGGERED + BOUNDED. Each review is a single review-CLI invocation
+//     with a hard context.WithTimeout (default 300s), a size-capped stdout
+//     (~16KB, head-clipped with a truncation marker) and a TAIL-capped stderr —
+//     the tool may narrate its progress there, and only its last words (the
+//     error, if any) are worth keeping or classifying. No
 //     loops, no retries: on any error or timeout the caller skips the pass
 //     gracefully (see the Err* sentinels), falling back to no QA rather than
 //     blocking. Reuse the caller's one-shot guards so a review fires at most
@@ -19,11 +27,11 @@
 //     agent it MUST pass the P3 sanitizeAgentText control-char stripper and the
 //     AtPrompt idle-gate — it is never a command and never an unsanitized
 //     send-keys payload.
-//   - NO SECRETS. Auth is inherited, never managed here: the child coderabbit
-//     runs with the daemon's environment (its own `coderabbit auth login`
-//     session), so this package never reads, sets, or logs a credential. When
-//     coderabbit is not authenticated the pass returns ErrAuth with a clear
-//     "run: coderabbit auth login" hint. Any surfaced stderr is scrubbed
+//   - NO SECRETS. Auth is inherited, never managed here: the child runs with the
+//     daemon's environment (its own `coderabbit auth login` session, or whatever
+//     the configured tool uses), so this package never reads, sets, or logs a
+//     credential. When the tool is not authenticated the pass returns ErrAuth
+//     with a clear "run: coderabbit auth login" hint. Any surfaced stderr is scrubbed
 //     through redactSecrets so a nonzero-exit error can never carry a key.
 package review
 
@@ -63,9 +71,9 @@ const (
 	truncMarker = "\n…[truncated]"
 )
 
-// defaultArgs is the CodeRabbit argv (minus --base) used when Client.Args is
-// nil: a plain-text review of all finding types. It is never mutated — Review
-// copies before appending --base.
+// defaultArgs is the CodeRabbit argv (minus the base flag) used when Client.Args
+// is nil: a plain-text review of all finding types. It is never mutated — Review
+// copies before appending the base.
 var defaultArgs = []string{"review", "--plain", "--type", "all"}
 
 // Distinct, testable error classes. Callers key on these to skip the QA pass
@@ -94,10 +102,16 @@ var (
 type Client struct {
 	// Bin is the coderabbit executable; empty resolves "coderabbit" via PATH.
 	Bin string
-	// Args is the review argv minus --base; nil means defaultArgs
-	// (["review","--plain","--type","all"]). --base <baseBranch> is always
-	// appended by Review.
+	// Args is the review argv minus the base flag; nil means defaultArgs
+	// (["review","--plain","--type","all"]).
 	Args []string
+	// BaseFlag is the flag the base branch is passed with: Review appends
+	// `<BaseFlag> <baseBranch>` to the argv. EMPTY means append nothing at all —
+	// the escape hatch for a review CLI that takes no base argument (or wants it
+	// baked into Args). This package holds NO default for it: the resolved value
+	// comes from config (config.DefaultReviewBaseFlag is "--base", what CodeRabbit
+	// and most review CLIs use), so only an explicit `base_flag = ""` empties it.
+	BaseFlag string
 	// Timeout bounds one Review call; 0 means defaultTimeout (300s).
 	Timeout time.Duration
 }
@@ -130,16 +144,13 @@ func (c *Client) Available() bool {
 	return err == nil
 }
 
-// Review runs `<bin> <args...> --base <baseBranch>` with the working directory
-// set to worktreeDir and a hard timeout, returning coderabbit's trimmed,
+// Review runs `<bin> <args...> [<BaseFlag> <baseBranch>]` with the working
+// directory set to worktreeDir and a hard timeout, returning the tool's trimmed,
 // size-capped plain-text findings. It makes exactly one attempt and never
 // retries. A clean review (exit 0, no findings) returns ("", nil); failures map
 // to ErrNotFound / ErrTimeout / ErrAuth / ErrExit.
 func (c *Client) Review(ctx context.Context, worktreeDir, baseBranch string) (string, error) {
-	// Copy into a fresh backing array before appending so neither defaultArgs
-	// nor a caller-supplied Client.Args slice is ever mutated.
-	args := append(append([]string{}, c.args()...), "--base", baseBranch)
-	out, err := runReview(ctx, c.bin(), args, worktreeDir, c.timeout())
+	out, err := runReview(ctx, c.bin(), c.argv(baseBranch), worktreeDir, c.timeout())
 	if err != nil {
 		return "", err
 	}
@@ -155,7 +166,7 @@ func (c *Client) ReviewStream(ctx context.Context, worktreeDir, baseBranch strin
 	if progress == nil {
 		return c.Review(ctx, worktreeDir, baseBranch)
 	}
-	args := append(append([]string{}, c.args()...), "--base", baseBranch)
+	args := c.argv(baseBranch)
 	fmt.Fprintf(progress, "· %s %s\n", c.bin(), strings.Join(args, " "))
 	out, err := runReviewTo(ctx, c.bin(), args, worktreeDir, c.timeout(), progress)
 	if err != nil {
@@ -164,8 +175,19 @@ func (c *Client) ReviewStream(ctx context.Context, worktreeDir, baseBranch strin
 	return capOutput(strings.TrimSpace(out), maxOutputBytes), nil
 }
 
+// argv assembles the full review argv. It COPIES into a fresh backing array
+// before appending, so neither defaultArgs nor a caller-supplied Client.Args
+// slice is ever mutated; an empty BaseFlag appends nothing.
+func (c *Client) argv(baseBranch string) []string {
+	args := append([]string{}, c.args()...)
+	if c.BaseFlag != "" {
+		args = append(args, c.BaseFlag, baseBranch)
+	}
+	return args
+}
+
 // runReview is the exec seam. Tests override it to assert the bin, argv (incl.
-// --base), working dir, and timeout WITHOUT running coderabbit. The real
+// the base flag), working dir, and timeout WITHOUT running the review CLI. The real
 // implementation applies the hard timeout, runs in worktreeDir, bounds the
 // stdout it retains, and classifies failures into the Err* sentinels.
 var runReview = func(ctx context.Context, bin string, args []string, dir string, timeout time.Duration) (string, error) {
@@ -183,7 +205,7 @@ func runReviewTo(ctx context.Context, bin string, args []string, dir string, tim
 	cmd := exec.CommandContext(cctx, bin, args...)
 	cmd.Dir = dir // the review runs IN the worktree
 	stdout := &cappedBuffer{cap: maxCaptureBytes}
-	stderr := &cappedBuffer{cap: maxStderrBytes}
+	stderr := &tailBuffer{cap: maxStderrBytes}
 	cmd.Stdout = stdout
 	if display != nil {
 		cmd.Stdout = io.MultiWriter(stdout, display)
@@ -201,22 +223,30 @@ func runReviewTo(ctx context.Context, bin string, args []string, dir string, tim
 
 // classifyRunErr maps a raw exec result to a distinct sentinel. Deadline is
 // checked first because a killed process surfaces as "signal: killed", not as a
-// deadline error. Quota is checked next — over stderr, and over stdout ONLY when
-// stdout is a short limit line rather than a real findings body (isStdoutQuota)
-// — because coderabbit may print an "out of reviews" line to stdout and exit 0,
-// so a quota signal must be caught even on a clean run (before the runErr==nil
-// short-circuit) and must win over ErrAuth/ErrExit so the caller can fall
-// through to a fallback provider. Gating the stdout scan on shortness stops a
-// legitimate multi-KB review that merely mentions "rate limit"/"429" in its
-// prose from self-classifying as ErrQuota and being discarded. On a plain
-// nonzero exit, stderr is inspected for auth cues (→ ErrAuth, no stderr
-// surfaced) and otherwise surfaced through redactSecrets so an error can never
-// carry a key.
+// deadline error. Quota is checked next, over two DIFFERENT windows, because it
+// is the one class that can arrive on a CLEAN exit and it must win over
+// ErrAuth/ErrExit so the caller can fall through to a fallback provider:
+//
+//   - stdout, ONLY when it is a short limit line rather than a real findings
+//     body (isStdoutQuota) — coderabbit may print "out of reviews" to stdout and
+//     exit 0, so this is checked before the runErr==nil short-circuit. Gating on
+//     shortness stops a legitimate multi-KB review that merely mentions "rate
+//     limit"/"429" in its prose from self-classifying and being discarded.
+//   - stderr, ONLY on a FAILED run. This package no longer runs one known tool:
+//     the `custom-cli` provider points it at ARBITRARY review CLIs, and a tool
+//     that narrates its progress on stderr would otherwise have an ordinary
+//     review of quota-related code classified as ErrQuota — throwing away real
+//     findings AND burning the paid fallback. A process that exited 0 is not
+//     over quota. (internal/reviewagent gates the same way, for the same reason.)
+//
+// On a plain nonzero exit, stderr is inspected for auth cues (→ ErrAuth, no
+// stderr surfaced) and otherwise surfaced through redactSecrets so an error can
+// never carry a key.
 func classifyRunErr(runErr, ctxErr error, stderr, stdout string, timeout time.Duration) error {
 	if errors.Is(ctxErr, context.DeadlineExceeded) {
 		return fmt.Errorf("%w after %s", ErrTimeout, timeout)
 	}
-	if looksLikeQuotaError(stderr) || isStdoutQuota(stdout) {
+	if isStdoutQuota(stdout) || (runErr != nil && looksLikeQuotaError(stderr)) {
 		return ErrQuota // actionable class only; never echoes stdout/stderr
 	}
 	if runErr == nil {
@@ -260,11 +290,26 @@ func isStdoutQuota(stdout string) bool {
 }
 
 // looksLikeAuthError is a best-effort classifier: on a failed run, stderr that
-// mentions auth/login/unauthenticated almost certainly means coderabbit needs
-// `coderabbit auth login`.
+// reports an authentication problem almost certainly means the tool needs a
+// login (for coderabbit, `coderabbit auth login`).
+//
+// The cues are PHRASES, never the bare words "auth" or "login". Those two match
+// any review that so much as reads AuthController.php, and a `custom-cli` tool
+// may narrate its review on stderr — so a bare-substring cue turned an ordinary
+// nonzero exit during an auth-related review into ErrAuth, which is a graceful
+// skip that deliberately does NOT fall through to the fallback provider. Every
+// real message ("not logged in", "Invalid API key", "401 Unauthorized") still
+// matches on a phrase, and the stderr TAIL buffer means what is classified is
+// the END of a failed run, where a CLI puts its fatal error.
 func looksLikeAuthError(stderr string) bool {
 	l := strings.ToLower(stderr)
-	for _, kw := range []string{"unauthenticated", "unauthorized", "not logged in", "auth", "login", "credential"} {
+	for _, kw := range []string{
+		"unauthenticated", "unauthorized", "not logged in", "not authenticated",
+		"invalid api key", "missing api key", "no api key", "api key not",
+		"authentication", "authorization failed", "auth failed", "auth error",
+		"please log in", "please login", "auth login",
+		"invalid credential", "missing credential", "no credential", "credentials not",
+	} {
 		if strings.Contains(l, kw) {
 			return true
 		}
@@ -352,6 +397,41 @@ func trimPartialRune(s string) string {
 	}
 	return s
 }
+
+// tailBuffer keeps the LAST cap bytes written to it, discarding earlier ones,
+// while always accepting the whole write so a chatty child never blocks.
+//
+// It backs STDERR, where cappedBuffer's head-keeping is exactly wrong once the
+// tool is not necessarily coderabbit: a `custom-cli` may narrate its whole review
+// there, and a CLI's fatal error is the LAST thing it prints. A head cap threw
+// that error away and left the narration to be classified in its place. Keeping
+// the tail both stops the prose from reading as a quota/auth condition and makes
+// a real error message survive to reach the operator. STDOUT still keeps its
+// HEAD: there the findings are the payload, and a truncated review must keep its
+// most severe findings, which come first. (internal/reviewagent carries the same
+// pair, for the same reason.)
+type tailBuffer struct {
+	buf []byte
+	cap int
+}
+
+func (b *tailBuffer) Write(p []byte) (int, error) {
+	n := len(p)
+	if b.cap <= 0 {
+		return n, nil
+	}
+	if len(p) >= b.cap {
+		b.buf = append(b.buf[:0], p[len(p)-b.cap:]...)
+		return n, nil
+	}
+	if over := len(b.buf) + len(p) - b.cap; over > 0 {
+		b.buf = b.buf[over:]
+	}
+	b.buf = append(b.buf, p...)
+	return n, nil
+}
+
+func (b *tailBuffer) String() string { return string(b.buf) }
 
 // cappedBuffer accumulates at most cap bytes but keeps accepting (and
 // discarding) the rest, so a chatty child never blocks on a full pipe while

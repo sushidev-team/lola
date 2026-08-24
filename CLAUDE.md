@@ -12,11 +12,15 @@ can react (re-prompt the agent, notify, clean up).
 
 The coding agent is **pluggable** — `claude` (default) | `codex` | `opencode`,
 set via `[defaults].agent` with a per-`[[project]].agent` override — with full
-lifecycle-callback parity. Beware the **two distinct** uses of "claude": (1) the
-pluggable coding agent spawned per issue (above), versus (2) lola-internal
-helpers that always shell `claude -p` regardless of that setting — the `[brain]`
-summarizer (`internal/brain`), `[review]`, and `[coderabbit]`. Those are NOT the
-coding agent and never change with the `agent` choice.
+lifecycle-callback parity. So is the REVIEW system: the `[[review.provider]]`
+catalog has seven kinds in three swappable families (agent / cli / bot-watch), so
+which agent reviews, which CLI reviews, and whose GitHub review is relayed are
+all config. Beware the **two distinct** uses of "claude": (1) the pluggable
+coding agent spawned per issue (above), versus (2) lola-internal helpers that
+always shell `claude -p` regardless of that setting — the `[brain]` summarizer
+(`internal/brain`) and `[statusagent]`. A review provider is a THIRD thing: it
+names its own agent per provider (`codex-session` runs codex) and follows neither
+the session's `agent` setting nor brain's hardcoded claude.
 
 One binary, two roles:
 - `lola run` — the daemon. Lifecycle is **TUI-managed by default**: the TUI
@@ -138,14 +142,24 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   derived rollup `Status` (written ONLY by the `SetAgentState`/`SetDelivery`
   mutators), PR state, the persisted one-shot guards for reactions (P3) and
   write-back (P4), and the display-only `[statusagent]` overlay fields.
+- `internal/reviewagent` — the AGENT-family review pass: ONE bounded, READ-ONLY
+  headless review by claude | codex | opencode (`Client.Agent` picks; the argv per
+  agent lives in `internal/agent.ReviewArgs`). Wears `internal/review.Client`'s
+  signature so the flexible-review chain drives cli, watch and every agent behind
+  one uniform pass seam — the instruction, the diff on STDIN, the caps and the
+  Err* sentinels are identical across agents. NOT `internal/brain`: brain's
+  summary must never reach the worker, while these findings do (sanitized +
+  idle-gated).
 - `internal/statusagent` — the OPT-IN status interpreter: one bounded
   `claude -p` per interpretation (default `--model sonnet`) judging what an
   agent is ACTUALLY doing from pane/events/PR context. Output is parsed,
   whitelisted, clamped — and DISPLAY-ONLY (see the invariant below).
 - `internal/agent` — the pluggable coding-agent leaf (stdlib + regexp only; must
   NOT import config/session/hook/runtime/attention): the `claude`|`codex`|
-  `opencode` kind enum, per-kind launch argv (`LaunchArgs`), the callback-config
-  bodies (codex `config.toml`, opencode plugin JS), and `ParseCodexNotify`.
+  `opencode` kind enum, per-kind launch argv (`LaunchArgs`), the REVIEW argv
+  (`ReviewArgs`/`ReviewStreamArgs` — a very different, READ-ONLY posture from the
+  unattended worker launch), the callback-config bodies (codex `config.toml`,
+  opencode plugin JS), and `ParseCodexNotify`.
   `internal/runtime` writes the right callback artifact at spawn; the health-gate
   checks the resolved binary; `config.AgentForProject` resolves
   project→defaults→`claude`. `internal/attention` imports it for agent-aware
@@ -690,7 +704,7 @@ each of which owns exactly one external tool or concern behind an **exec seam**
     exec returns — so transports, fallback chain and retry budget cannot tell a
     visible pass from a direct one.
   - A visible claude pass uses `--output-format stream-json --verbose` and
-    renders the events to plain lines (`internal/reviewclaude/stream.go`),
+    renders the events to plain lines (`internal/reviewagent/stream.go`),
     because a plain `-p` review prints NOTHING until it finishes — a blank pane
     for ten minutes is not a progress display. The findings still come from the
     terminal `result` event, byte-identical to the plain pass.
@@ -769,8 +783,90 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   shared, and it is what makes the ask actionable — no agent guesses that
   mutation on its own. The other reactions (`ci_failed`, `merge_conflict`) relay
   no threads and stay silent about them.
+- **Every review VENDOR is a config slot, and the daemon names only the kinds it
+  must match on.** The `[[review.provider]]` catalog holds seven kinds in three
+  FAMILIES — agent (`claude-session`|`codex-session`|`opencode-session`), cli
+  (`coderabbit-cli`|`custom-cli`) and watch (`coderabbit-watch`|`bot-watch`) — and
+  the point of the split is that swapping the tool is configuration, not code.
+  What holds it together:
+  - **Each agent gets its OWN kind rather than one kind with an `agent =` field.**
+    At most one provider per kind is allowed (guards key by kind), so a shared
+    kind would make "claude primary, codex fallback" — the headline case —
+    impossible to express.
+  - Dispatch switches on the config-side FAMILY (`config.ReviewAgentFor` /
+    `IsCLIKind` / `IsWatchKind`), never on a list of kind names, and the per-kind
+    exec seams live in ONE map (`d.passRuns`). Adding a kind therefore touches
+    neither a daemon field, nor a seam switch case, nor a test hook. The daemon
+    still names `coderabbit-cli`/`coderabbit-watch` (the legacy guard keys) and
+    `kindClaudeSession`, and nothing else may join them.
+  - Kind-dependent DEFAULTS are applied from `applyKindDefaults` once the kind is
+    known and BEFORE the explicit keys overlay. A `bot-watch` deliberately gets
+    NO author default: inheriting CodeRabbit's login would make the two watch
+    kinds silently identical, so an enabled one with no `author` — like an
+    enabled `custom-cli` with no `command` — is a validation error instead.
+  - Labels are per PROVIDER, not per kind name (`labelsFor` takes the
+    DESCRIPTOR), because a generic watch is named by its configured `author`.
+    That author reaches a notification title, a Linear comment and the worker's
+    pane, so it is sanitized to login characters and clipped (`botDisplayName`)
+    first — it is config, not findings, but it is still interpolated into text
+    lola generates.
+  - The @-mention defuse generalizes with it: `neutralizeWatchedBots` covers
+    `@coderabbit*` UNCONDITIONALLY (the historical guarantee) plus every ENABLED
+    watch's author, case-insensitively, on every body — a bot that reads its own
+    mention as a command would otherwise start a fresh run off lola's own post.
+  - Both UIs GENERATE their provider editors from `config.ReviewProviderKinds()`
+    (the TUI directly, the app through `ConfigService.ReviewKinds()`), so a new
+    kind is offered by both with no UI edit. The frontend's one remaining
+    hardcoded copy is a test fixture, pinned against the Go list by a parity test.
+- **A review tool's STDERR is its narration, so BOTH classifiers read its TAIL
+  and only on failure.** codex and opencode print their whole review to stderr
+  (that is what makes a visible pass watchable), and `custom-cli` points
+  `internal/review` at arbitrary tools that may do the same. That breaks the two
+  assumptions the quota/auth classifiers were built on when the only callers were
+  claude and coderabbit. `internal/review` and `internal/reviewagent` therefore
+  carry the SAME three rules — they are independent leaves with independent
+  copies, so a fix to one is only half a fix:
+  - The quota scan over stderr runs ONLY when the process actually failed. A
+    clean run's stderr is prose, and scanning it unconditionally made an ordinary
+    review of any code that mentions quotas or rate limits — this repository,
+    say — self-classify as `ErrQuota`: real findings discarded AND the paid
+    fallback burned. The stdout half keeps its own shortness gate for the
+    limit-line-with-exit-0 case, which is the shape coderabbit actually has.
+  - stderr is retained by a **tailBuffer**, not the head-keeping `cappedBuffer`
+    that stdout uses. A CLI's fatal error is the LAST thing it prints, so a head
+    cap threw the error away and classified the narration instead. stdout still
+    keeps its head — there the payload is the findings, most severe first.
+  - The auth cues are PHRASES, never bare `auth` / `login`, which match any
+    review that so much as reads `AuthController.php`.
+  A kind that names nothing FAILS CLOSED for the same family of reason — an
+  UNKNOWN kind included, since every family predicate is false for one and it
+  would otherwise resolve to the coderabbit binary:
+  `Validate` rejects it, but validation is not fatal at startup (it only holds
+  polls), and both empty values fall back to CodeRabbit downstream — an empty
+  `command` resolves to the coderabbit binary and an empty watch `author` to
+  `"coderabbitai"`. So `setReviewProvidersLocked` disables such a provider and
+  names it in the startup warning; a provider pointed at another vendor must
+  never silently run CodeRabbit.
+- **A review REPORTS; it never writes — and that is enforced by the argv.** An
+  agent-family pass runs `internal/agent.ReviewArgs`, which launches each agent in
+  its most restrictive non-interactive posture: claude's headless defaults (no
+  `--permission-mode`), codex's `--sandbox read-only` (`codex exec` hardcodes
+  "never ask", so the sandbox IS the guard — `--ask-for-approval` is a TUI-only
+  flag), and opencode with NO `--auto` (a non-interactive opencode already denies
+  the blocking `question` permission). This is the deliberate opposite of the
+  unattended worker launch above, and it is what stops a prompt injection in the
+  diff from turning the reviewer into a writer. Two more consequences:
+  - The prompt is POSITIONAL for codex and opencode and must stay LAST — both
+    append piped stdin to it, and a flag after it is read as part of the prompt.
+    The diff never touches argv for any agent.
+  - The VISIBLE pass narrates per agent: claude prints nothing until it finishes
+    (hence `--output-format stream-json` + lola's renderer), while codex and
+    opencode narrate on STDERR and have it teed to the pane. Both reach the child
+    as PIPES, never a TTY — which is exactly what makes codex and opencode print
+    their answer to stdout at all; each suppresses that copy when it detects an
+    interactive terminal.
 - **The review instruction's FORMAT block is a CONTRACT with `reviewmd`, and its
-  fields are split by AUDIENCE.** `reviewclaude`'s `-p` prompt asks for
+  fields are split by AUDIENCE.** `reviewagent`'s review prompt asks for
   `**Grade:** impact=… confidence=… effort=…` (three fixed enums) + `**Gist:**`
   (one sentence) + `**Fix:** `(one sentence) + `**Detail:**` (≤4 sentences),
   because nobody reads four prose paragraphs per finding on a PR. The renderer
@@ -788,7 +884,7 @@ each of which owns exactly one external tool or concern behind an **exec seam**
     fact. Chip order is fixed by `gradeOrder`, not by what the model wrote.
   - Renaming a field in the prompt without changing the renderer silently
     degrades every review to the pass-through path — hence
-    `TestReviewInstructionPinsTheGradedShape` in `internal/reviewclaude`.
+    `TestReviewInstructionPinsTheGradedShape` in `internal/reviewagent`.
   - The FOLD is presentation, not redaction: the worker agent, notify and Linear
     still get every field raw, Detail included.
   - A body carrying neither Grade nor Gist (a `coderabbit-cli` pass, a
@@ -804,14 +900,14 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   `reviewmd.MaxBytes` (15KB) UNDER `scm.postCommentMaxBytes` (16KB) so the
   head-clip there can never land mid-`<details>`; over budget it drops detail
   bodies, never findings.
-- **A review PASS never runs on the observe loop.** A `claude-session` pass
+- **A review PASS never runs on the observe loop.** An agent-family pass
   reads the PR's files, so a real PR takes 7–13 minutes; run inline it stalled
   tmux liveness, PR facts and reactions for every other session for that long,
   which is why its timeout could not simply be raised. The observer calls
   `queueReviewProviders` (watch shapes still poll inline — one bounded `gh`
   call) and `internal/daemon/reviewworker.go`'s single worker drains the queue
   one pass at a time on the cancellable run context. Two consequences:
-  - `claude-session`'s default `timeout_seconds` is 900
+  - The agent family's default `timeout_seconds` is 900
     (`DefaultClaudeReviewTimeoutSeconds`), not the shared 300. At 300 every pass
     on a medium PR died on the deadline.
   - The once-per-PR guard is still stamped BEFORE the exec (crash safety), but

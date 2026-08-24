@@ -7,12 +7,13 @@ package daemon
 //
 //	tmux -L lola attach -t =lola-nori-app-nor-357-review
 //
-// Two things make that more than a cosmetic change. A `claude -p` review with
-// `--output-format text` prints NOTHING until it is finished, so the visible
-// pass asks for the stream format and renders it to plain lines as it goes
-// (internal/reviewclaude/stream.go) — the pane shows each file the reviewer
-// reads. And the pane HOLDS after the pass ends, so the findings stay readable;
-// the next review for that session replaces the whole session.
+// Two things make that more than a cosmetic change. The pass is asked to
+// NARRATE: claude prints nothing at all until it finishes, so its visible run
+// switches to the stream format and renders each event to a plain line
+// (internal/reviewagent/stream.go), while codex and opencode already narrate on
+// stderr and simply have it teed to the pane — either way it shows each file the
+// reviewer reads. And the pane HOLDS after the pass ends, so the findings stay
+// readable; the next review for that session replaces the whole session.
 //
 // The pane is a DISPLAY, never a channel: it wraps, scrolls and is eventually
 // overwritten, so the daemon never parses it. The child writes the findings and
@@ -55,9 +56,9 @@ const (
 func reviewPaneName(sessionID string) string { return sessionID + reviewPaneSuffix }
 
 // visibleSeam wraps a pass provider's exec so it runs in a review pane. The
-// returned function has the pass-seam signature, so it drops straight onto
-// d.reviewRun / d.claudeReviewRun; direct is the in-process client call it
-// falls back to whenever a pane cannot be used.
+// returned function has the pass-seam signature, so it drops straight into
+// d.passRuns; direct is the in-process client call it falls back to whenever a
+// pane cannot be used.
 func (d *Daemon) visibleSeam(cp config.ReviewProvider, direct passRun) passRun {
 	return func(ctx context.Context, sessionID, dir, base string) (string, error) {
 		if sessionID == "" {
@@ -185,6 +186,12 @@ func reviewPaneCommand(lolaBin string, cp config.ReviewProvider, dir, base, stat
 	}
 	if cp.Command != "" {
 		args = append(args, "--command", shQuoteArg(cp.Command))
+	}
+	// base_flag is passed ONLY when it differs from the child's own default, so
+	// the common line stays short — but an explicitly EMPTY one must still cross
+	// (it means "append no base at all", which is not the default).
+	if cp.BaseFlag != config.DefaultReviewBaseFlag && config.IsCLIKind(string(cp.Provider)) {
+		args = append(args, "--base-flag", shQuoteArg(cp.BaseFlag))
 	}
 	if cp.TimeoutSeconds > 0 {
 		args = append(args, "--timeout-seconds", fmt.Sprint(cp.TimeoutSeconds))

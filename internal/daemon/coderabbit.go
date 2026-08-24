@@ -19,7 +19,8 @@ import (
 )
 
 // handleCodeRabbit serves cmd=coderabbit (`lola coderabbit <session>`): it FORCES
-// a coderabbit-watch poll now for the named session, IGNORING the kind's
+// a WATCH poll now for the named session (coderabbit-watch by preference — see
+// watchProvider — else whichever watch kind is on), IGNORING the kind's
 // watermark (it polls with a zero `since`, so the PR's CURRENT feedback is
 // re-surfaced and re-routed — the analog of `lola review` ignoring its
 // once-per-PR guard). It routes the comments the same way the observer does and
@@ -37,7 +38,7 @@ func (d *Daemon) handleCodeRabbit(ctx context.Context, sessionID string) (protoc
 	if !ok {
 		return protocol.CodeRabbitData{
 			Skipped: "not enabled",
-			Message: "coderabbit check skipped: no coderabbit-watch provider is enabled",
+			Message: "coderabbit check skipped: no watch provider is enabled",
 		}, nil
 	}
 	if s.Source != "native" || s.Repo == "" || !isReviewablePROpen(s.PR) {

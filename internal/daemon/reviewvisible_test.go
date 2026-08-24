@@ -14,7 +14,7 @@ import (
 
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/linear"
-	"github.com/sushidev-team/lola/internal/reviewclaude"
+	"github.com/sushidev-team/lola/internal/reviewagent"
 	"github.com/sushidev-team/lola/internal/reviewrun"
 )
 
@@ -97,7 +97,7 @@ func TestAwaitReviewPaneReadsTheHandBackFiles(t *testing.T) {
 func TestAwaitReviewPaneMapsTheOutcomeClass(t *testing.T) {
 	d := newTestDaemon(t, reviewTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})
 	state := t.TempDir()
-	if err := reviewrun.Write(state, "", reviewclaude.ErrTimeout); err != nil {
+	if err := reviewrun.Write(state, "", reviewagent.ErrTimeout); err != nil {
 		t.Fatal(err)
 	}
 
@@ -106,7 +106,7 @@ func TestAwaitReviewPaneMapsTheOutcomeClass(t *testing.T) {
 	if err != nil {
 		t.Fatalf("awaitReviewPane: %v", err)
 	}
-	if !errors.Is(st.Err(), reviewclaude.ErrTimeout) {
+	if !errors.Is(st.Err(), reviewagent.ErrTimeout) {
 		t.Errorf("status err = %v, want ErrTimeout", st.Err())
 	}
 	if !isFallbackErr(st.Err()) {
@@ -127,7 +127,7 @@ func TestAwaitReviewPaneGivesUpAndKillsThePane(t *testing.T) {
 	if err != nil {
 		t.Fatalf("awaitReviewPane: %v", err)
 	}
-	if !errors.Is(st.Err(), reviewclaude.ErrTimeout) {
+	if !errors.Is(st.Err(), reviewagent.ErrTimeout) {
 		t.Errorf("status err = %v, want ErrTimeout", st.Err())
 	}
 	if killer.count() != 1 {
@@ -190,4 +190,74 @@ func TestReviewPaneNaming(t *testing.T) {
 	if got := reviewPaneName("lola-nori-app-nor-357"); got != "lola-nori-app-nor-357-review" {
 		t.Errorf("reviewPaneName = %q", got)
 	}
+}
+
+// base_flag crosses to the child ONLY when it differs from the child's own
+// default — but an explicitly EMPTY one must still cross, because "" means
+// "append no base at all", which is not the default. Getting this wrong makes a
+// visible pass hand a `--base` a third-party tool does not take, and the whole
+// pass fails where the direct exec succeeded.
+func TestReviewPaneCommandCarriesTheBaseFlag(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		cp   config.ReviewProvider
+		want string // "" = the flag must be ABSENT
+	}{
+		{
+			name: "cli default is left to the child",
+			cp:   config.ReviewProvider{Provider: "coderabbit-cli", BaseFlag: config.DefaultReviewBaseFlag},
+		},
+		{
+			name: "a custom flag crosses",
+			cp:   config.ReviewProvider{Provider: "custom-cli", Command: "greptile review", BaseFlag: "--branch"},
+			want: "--base-flag --branch",
+		},
+		{
+			name: "an empty flag crosses as an empty argument",
+			cp:   config.ReviewProvider{Provider: "custom-cli", Command: "greptile review"},
+			want: "--base-flag ''",
+		},
+		{
+			name: "an agent kind never carries it",
+			cp:   config.ReviewProvider{Provider: "codex-session"},
+		},
+	} {
+		got := unwrapPaneCommand(t, reviewPaneCommand("lola", tc.cp, "/wt", "main", "/state"))
+		if tc.want == "" {
+			if strings.Contains(got, "--base-flag") {
+				t.Errorf("%s: line = %q, want no --base-flag", tc.name, got)
+			}
+			continue
+		}
+		if !strings.Contains(got, tc.want) {
+			t.Errorf("%s: line = %q, want it to carry %q", tc.name, got, tc.want)
+		}
+	}
+}
+
+// The pane runs whichever agent the kind names, so `--kind` must carry it — the
+// child dispatches on it and would otherwise review with claude.
+func TestReviewPaneCommandCarriesEveryKind(t *testing.T) {
+	for _, kind := range config.ReviewProviderPassKinds() {
+		cp, ok := config.NewReviewProvider(kind)
+		if !ok {
+			t.Fatalf("NewReviewProvider(%q) rejected a kind ReviewProviderPassKinds offers", kind)
+		}
+		got := reviewPaneCommand("lola", cp, "/wt", "main", "/state")
+		if !strings.Contains(got, "--kind "+kind) {
+			t.Errorf("%s: command = %q, want --kind %s", kind, got, kind)
+		}
+	}
+}
+
+// unwrapPaneCommand undoes the `sh -c '<line>'` wrapper so a test can assert on
+// the command line the login shell will actually run, rather than on its
+// doubly-escaped form.
+func unwrapPaneCommand(t *testing.T, cmd string) string {
+	t.Helper()
+	line, ok := strings.CutPrefix(cmd, "sh -c '")
+	if !ok || !strings.HasSuffix(line, "'") {
+		t.Fatalf("command = %q, want a quoted `sh -c` wrapper", cmd)
+	}
+	return strings.ReplaceAll(strings.TrimSuffix(line, "'"), `'\''`, "'")
 }

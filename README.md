@@ -143,7 +143,7 @@ protocol-version mismatch.
 | `lola revive <session>` | Inverse of `kill`: relaunch a **dead** session's agent on the worktree that was kept for inspection. Claude and opencode resume their prior conversation (`--continue`) when they recorded one before dying, otherwise the agent restarts fresh on the same worktree. Refused if the session is still running. Use when a pane died to a transient fault (instant launch failure, crashed agent, machine sleep) rather than re-dispatching from scratch. |
 | `lola switch-agent <session> <kind>` | Replace a session's coding agent with a different kind (`claude`\|`codex`\|`opencode`) on the **same worktree and branch** — the manual half of the agent fallback (see [Agent fallback](#agent-fallback-usage-limits)). The old pane is stopped (shell/dev/review tabs survive), a `.lola/handoff.md` briefing is written for the new agent, and the new agent launches on it. Refused for an unknown session, a shell session, the kind already running, or a kind whose binary is not on `PATH`. |
 | `lola answer <session> <text>` | Deliver a human's inline reply to a session parked for input. Refused unless the session's derived status is `needs_input` (the one moment the agent is provably idle at its prompt), so a reply can never corrupt a mid-turn agent. |
-| `lola review <session> [--provider kind]` | Force a **pass-shape** review provider now, ignoring the once-per-PR guard, and route its findings per its transports. With no `--provider` it forces the primary enabled pass provider; `--provider coderabbit-cli\|claude-session` picks one explicitly. Skipped (not an error) when no such provider is enabled or its tool is unavailable. |
+| `lola review <session> [--provider kind]` | Force a **pass-shape** review provider now, ignoring the once-per-PR guard, and route its findings per its transports. With no `--provider` it forces the primary enabled pass provider; `--provider <kind>` picks one explicitly (any pass kind: `coderabbit-cli`, `custom-cli`, `claude-session`, `codex-session`, `opencode-session`). Skipped (not an error) when no such provider is enabled or its tool is unavailable. |
 | `lola coderabbit <session>` | Back-compat alias that forces the **watch-shape** provider now (`coderabbit-watch`) — poll the session's open PR for CodeRabbit (GitHub-app) comments, ignoring the watermark, and route any found (notify / worker / Linear per config). Skipped (not an error) when the watch is disabled or the session has no open PR. |
 | `lola reload` | Re-read `config.toml`; the daemon diffs projects and starts/stops poll goroutines without disturbing unaffected ones |
 | `lola logs [name] [-f]` | Tail `~/.lola/daemon.log`, optionally filtered to one project (by name); `-f`/`--follow` to stream |
@@ -763,13 +763,14 @@ provider per kind** is allowed (guards key by kind).
 
 | Key | Type | Applies to | Description |
 | --- | --- | --- | --- |
-| `provider` | string | all | Kind: `coderabbit-cli` \| `coderabbit-watch` \| `claude-session`. Required. |
+| `provider` | string | all | Kind — one of the seven below. Required. |
 | `enabled` | bool | all | Master switch. Default `false`. |
 | `on_pr_open` | bool | pass shapes | Run automatically when a session first opens a PR. Default `true`. |
-| `command` | string | `coderabbit-cli` | Optional space-split argv override; empty uses the runner default. |
-| `timeout_seconds` | int | pass shapes | Hard cap per pass. Must be `>= 0`. Default `300`, but `900` for `claude-session` — that pass reads the PR's files before it reports, so a real PR takes 7–13 minutes where a CLI pass takes one or two. |
-| `model` | string | `claude-session` | Optional `--model` for the headless `claude -p` review; empty = claude's default. |
-| `author` | string | `coderabbit-watch` | Login **substring** matched (case-insensitively) against each comment author. Default `"coderabbitai"`. |
+| `command` | string | cli family | Space-split argv for the review CLI. Optional for `coderabbit-cli` (empty uses CodeRabbit's default); **required** for `custom-cli`. |
+| `base_flag` | string | cli family | The flag the PR's base branch is passed with (`… --base main`). Default `"--base"`; an explicit `""` passes **no** base at all, for a tool that takes none. |
+| `timeout_seconds` | int | pass shapes | Hard cap per pass. Must be `>= 0`. Default `300`, but `900` for the agent family — that pass reads the PR's files before it reports, so a real PR takes 7–13 minutes where a CLI pass takes one or two. |
+| `model` | string | agent family | Optional `--model` for the headless review; empty = the agent's own default. `opencode-session` expects `"provider/model"`. |
+| `author` | string | watch family | Login **substring** matched (case-insensitively) against each comment author. Defaults to `"coderabbitai"` for `coderabbit-watch`; **required** for `bot-watch`. |
 | `transports` | []string | all | Multiselect over `{lola, github, linear}`; see below. Default `["lola"]`; `lola` is always forced present. |
 | `github_inline` | bool | pass shapes with the `github` transport | Post the findings as a pull-request **review** with one anchored, **resolvable** thread per finding instead of a single flat comment. Default `true`; it degrades to the flat comment on its own whenever the anchors or the API say no. |
 | `notify` | bool | all | `lola` transport: surface findings to a human (desktop/Slack). Default `true`. |
@@ -777,21 +778,46 @@ provider per kind** is allowed (guards key by kind).
 | `visible` | bool | pass shapes | Run the pass in its own tmux session `<session>-review` so you can watch it and read its output afterwards. Default `true`. |
 | `fallback` | []string | pass shapes | Ordered kinds tried when this provider **can't answer** (unavailable / over-quota). Default none. |
 
-**Provider kinds** — three kinds map to two execution **shapes**:
+**Provider kinds** — seven kinds in three **families** over two execution
+**shapes**. Every family is a swappable slot: which agent reviews, which CLI
+reviews, and whose GitHub review is relayed are all configuration.
 
-- **`coderabbit-cli`** (*pass* shape): execs the CodeRabbit CLI against the PR
-  branch and returns findings synchronously. Runs **once per PR** (a per-session
-  guard records the reviewed PR number; a new PR number re-triggers once).
-- **`claude-session`** (*pass* shape): a headless `claude -p` review — lola pipes
-  the branch diff on stdin and claude returns findings. Same once-per-PR guard.
-  Useful as a `coderabbit-cli` **fallback** (see below). Execs `claude` directly
-  and relies on your existing claude auth (`~/.claude` / `ANTHROPIC_API_KEY`).
-- **`coderabbit-watch`** (*watch* shape): **polls** each session's GitHub PR (via
-  `gh`, on the ~30s observer cadence) for comments/reviews left by the CodeRabbit
-  **GitHub app** — or any reviewer bot, via `author` — and routes each **new**
-  one. A per-session **watermark** makes the poll fire-once per comment *and*
-  survive downtime (a webhook would be lost while the daemon is stopped; the next
-  cycle reconciles the PR's current comments instead of replaying a missed event).
+*CLI family* (*pass* shape) — exec an external review CLI in the worktree and
+return its findings synchronously. Runs **once per PR** (a per-session guard
+records the reviewed PR number; a new PR number re-triggers once).
+
+- **`coderabbit-cli`** — the CodeRabbit CLI. `command` is an optional override;
+  with it empty the built-in `coderabbit review --plain --type all` runs.
+- **`custom-cli`** — any other review CLI. `command` is **required** (there is no
+  built-in tool to fall back on) and `base_flag` decides how — or whether — the
+  base branch reaches it. Everything else (transports, fallback, the visible
+  pane, the once-per-PR guard) is identical to `coderabbit-cli`.
+
+*Agent family* (*pass* shape) — ONE bounded, **read-only** headless coding-agent
+review: lola pipes the branch diff on stdin and the agent returns findings, with
+the same once-per-PR guard. Each agent is its own kind, so one can be another's
+over-quota **fallback** (see below). Each execs its own binary and relies on the
+auth you already have for it — lola never reads or manages a credential.
+
+- **`claude-session`** — `claude -p`.
+- **`codex-session`** — `codex exec --sandbox read-only`.
+- **`opencode-session`** — `opencode run`.
+
+A review reports; it never writes. Each agent is launched in its most restrictive
+non-interactive posture — the deliberate opposite of the unattended worker launch
+— so reads proceed and anything that would edit or exec is refused.
+
+*Watch family* (*watch* shape) — **polls** each session's GitHub PR (via `gh`, on
+the ~30s observer cadence) for comments/reviews a review **bot** leaves, and
+routes each **new** one. Needs no local binary. A per-session **watermark** makes
+the poll fire-once per comment *and* survive downtime (a webhook would be lost
+while the daemon is stopped; the next cycle reconciles the PR's current comments
+instead of replaying a missed event).
+
+- **`coderabbit-watch`** — the CodeRabbit GitHub app; `author` defaults to it.
+- **`bot-watch`** — any other review bot; `author` is **required** (it is the
+  whole point of the kind). Its notification title, its Linear comment and the
+  pointer handed to the worker all name that bot rather than CodeRabbit.
 
 **Transports** — where a provider's findings go. `transports` is a multiselect
 over three friendly tokens:
@@ -805,15 +831,16 @@ over three friendly tokens:
   `github_inline`: **inline review threads** (the default) or one **plain PR
   comment**. Either way it is never a review that could approve or request
   changes — the inline shape posts `event: COMMENT`. **Pass
-  shapes only** — validation forbids `github` on a `coderabbit-watch` (its
-  feedback is already on the PR; re-posting it would be a self-feedback loop).
+  shapes only** — validation forbids `github` on a watch provider (its feedback
+  is already on the PR; re-posting it would be a self-feedback loop).
   The post is idempotent per PR (a settle guard prevents per-cycle spam; a
   permanent gh failure such as 422/403 stamps the guard and logs once; a
   transient failure retries next cycle). Fail-closed: a missing repo or
-  unauthenticated `gh` skips silently. Any `@coderabbitai` mention in the posted
-  body is **neutralized** (a zero-width space is inserted after the `@`) so
-  lola's own comment can never be parsed by the CodeRabbit app as a command and
-  trigger a **new** CodeRabbit review — posting is always safe.
+  unauthenticated `gh` skips silently. Any `@coderabbitai` mention — and any
+  @-mention of a bot you have a **watch** configured for — is **neutralized** in
+  the posted body (a zero-width space is inserted after the `@`) so lola's own
+  comment can never be parsed by that bot as a command and trigger a **new**
+  review run. Posting is always safe.
   The comment is the one sink that is **reformatted for humans**. GitHub
   sanitizes CSS out of comment bodies, so the rendering spends what survives: a
   **GitHub alert callout** carrying the title and severity tally (`> [!CAUTION]`
@@ -866,8 +893,10 @@ github / linear are human sinks** that carry the full untrusted findings verbati
 content), so the worker path uses the **same send-keys safety** as reactions:
 sanitized (control chars stripped), delivered only when the agent is idle at its
 prompt (deferred otherwise), and **never run as a command**. Titles/preambles are
-**per-kind**, so a `claude-session`'s findings are labeled "Claude review", not
-"CodeRabbit".
+**per-provider**, so a `codex-session`'s findings are labeled "Codex review" and a
+`bot-watch`'s name the bot it watches — never "CodeRabbit". With the catalog
+pluggable, *who* produced a finding is the one thing a reader cannot infer from
+the finding itself, so it is always stated.
 
 **Fallback chains** — a `fallback = [...]` list lets a pass provider hand off to
 another **pass** kind when it **can't answer**: the tool is missing, times out,
@@ -888,10 +917,12 @@ tmux -L lola attach -t =lola-nori-app-nor-357-review
 ```
 
 The desktop app lists it as a **Review** tab next to the session's shell tabs,
-and the TUI sees the same tmux session. A `claude-session` pass streams there —
-each file the reviewer reads shows up as it happens — because a visible pass asks
-claude for `--output-format stream-json` and renders it to plain lines (a plain
-`-p` review prints nothing at all until it finishes). The pane **holds** when the
+and the TUI sees the same tmux session. The pass **narrates** there — each file
+the reviewer reads shows up as it happens. How depends on the agent: a plain
+`claude -p` prints nothing at all until it finishes, so its visible run asks for
+`--output-format stream-json` and lola renders the events to plain lines, while
+codex and opencode already narrate on stderr and simply have it teed to the pane.
+A cli pass streams its tool's own stdout. The pane **holds** when the
 pass ends, so the findings stay readable; the next review for that session
 replaces it, and killing the session kills it. The daemon never parses the pane:
 the child writes its findings and outcome to `~/.lola/cache/review/<session>/`,
@@ -908,32 +939,35 @@ after that the PR is left alone. A pass that answered — including a clean one 
 and a graceful skip (auth / exit error) are final.
 
 > **Watch cannot fall back.** Fallback is **pass-shape only**, and validation
-> forbids `fallback` on a `coderabbit-watch`. When the CodeRabbit **GitHub app**
-> is out of reviews, it posts that as an ordinary PR comment — non-empty,
+> forbids `fallback` on a watch provider. When the CodeRabbit **GitHub app** is
+> out of reviews, it posts that as an ordinary PR comment — non-empty,
 > `err == nil`, classifier-undetectable — so a watch has no signal to trigger a
-> fallback on. If you want quota → `claude-session` fallback, run the
-> **`coderabbit-cli`** provider (whose exit/stderr carries the quota signal) with
-> `fallback = ["claude-session"]`.
+> fallback on. If you want quota → fallback, run a **cli** or **agent** provider
+> (whose exit/stderr carries the quota signal) with e.g.
+> `fallback = ["codex-session"]`. Agent-to-agent is the common case: run
+> `claude-session` as the primary with `fallback = ["codex-session"]` and a
+> claude usage limit hands the review straight to codex.
 
-> **Watch-only posture (read CodeRabbit, never invoke it).** To let lola
-> automatically pick up CodeRabbit's own automatic PR review **without ever
-> triggering a new CodeRabbit run or spending a review credit**, configure a
-> single `coderabbit-watch` provider (with `lola` and/or `linear` transports).
-> The watch only **polls and relays** the CodeRabbit GitHub app's existing
-> comments — it never execs `coderabbit review` (that is the separate
-> `coderabbit-cli` provider) and never posts to the PR (validation forbids the
-> `github` transport on a watch). If you additionally want lola to post its **own**
-> public review, pair the watch with a `claude-session` (or `coderabbit-cli`)
-> provider carrying the `github` transport: its posted comment is trigger-safe
-> because `@coderabbitai` mentions are neutralized (above), so lola still never
-> spins up a fresh CodeRabbit review.
+> **Watch-only posture (read the bot, never invoke it).** To let lola
+> automatically pick up a review bot's own automatic PR review **without ever
+> triggering a new run or spending a review credit**, configure a single watch
+> provider — `coderabbit-watch`, or `bot-watch` with that bot's `author` — with
+> `lola` and/or `linear` transports. The watch only **polls and relays** the
+> bot's existing comments: it never execs a review CLI (that is the cli family)
+> and never posts to the PR (validation forbids the `github` transport on a
+> watch). If you additionally want lola to post its **own** public review, pair
+> the watch with an agent or cli provider carrying the `github` transport: its
+> posted comment is trigger-safe because mentions of every watched bot are
+> neutralized (above), so lola still never spins up a fresh run.
 
 **Validation** rejects: an unknown `provider` kind; more than one provider per
-kind; an unknown `transports` token; `github` on a `coderabbit-watch`; `fallback`
-on a `coderabbit-watch`; a `fallback` entry that is unknown / the provider's own
-kind / a watch kind / absent-or-disabled in the catalog / part of a cycle;
-`timeout_seconds < 0`; and a **catalog alongside a non-empty legacy table** (run
-`lola config migrate-review`).
+kind; an unknown `transports` token; `github` on a watch; `fallback` on a watch;
+a `fallback` entry that is unknown / the provider's own kind / a watch kind /
+absent-or-disabled in the catalog / part of a cycle; `timeout_seconds < 0`; an
+**enabled `custom-cli` with no `command`** or an **enabled `bot-watch` with no
+`author`** (those kinds exist to point at something other than the built-in
+default, so an empty one would exec or poll nothing); and a **catalog alongside a
+non-empty legacy table** (run `lola config migrate-review`).
 
 Force any pass provider now with `lola review <session> [--provider kind]`, or the
 watch with `lola coderabbit <session>` — both ignore the once-per-PR guard /
