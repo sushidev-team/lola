@@ -838,7 +838,9 @@ each of which owns exactly one external tool or concern behind an **exec seam**
     keeps its head — there the payload is the findings, most severe first.
   - The auth cues are PHRASES, never bare `auth` / `login`, which match any
     review that so much as reads `AuthController.php`.
-  A generic kind that names nothing FAILS CLOSED for the same family of reason:
+  A kind that names nothing FAILS CLOSED for the same family of reason — an
+  UNKNOWN kind included, since every family predicate is false for one and it
+  would otherwise resolve to the coderabbit binary:
   `Validate` rejects it, but validation is not fatal at startup (it only holds
   polls), and both empty values fall back to CodeRabbit downstream — an empty
   `command` resolves to the coderabbit binary and an empty watch `author` to

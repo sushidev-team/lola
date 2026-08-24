@@ -202,6 +202,14 @@ func unconfiguredKindReason(cp config.ReviewProvider) string {
 		return "" // a disabled provider names nothing on purpose
 	}
 	kind := string(cp.Provider)
+	// An UNKNOWN kind first: every family predicate is false for one, so it would
+	// otherwise fall through to the cli branch and — with no command of its own —
+	// resolve to the coderabbit binary. A typo'd `greptile-cli` sending its PR to
+	// CodeRabbit is the same silent-wrong-vendor failure the two checks below
+	// exist to prevent, so it fails closed the same way.
+	if !config.ValidReviewProviderKind(kind) {
+		return "unknown provider kind (must be " + strings.Join(config.ReviewProviderKinds(), "|") + ")"
+	}
 	if config.ReviewKindRequiresCommand(kind) && strings.TrimSpace(cp.Command) == "" {
 		return "no command configured (it names the review CLI to run)"
 	}

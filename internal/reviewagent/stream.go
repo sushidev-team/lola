@@ -32,6 +32,7 @@ import (
 	"io"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/sushidev-team/lola/internal/agent"
@@ -155,8 +156,15 @@ var runAgentStreamPlain = func(ctx context.Context, k agent.Kind, bin string, ar
 	cmd.Stdin = strings.NewReader(stdin)
 	stdout := &cappedBuffer{cap: maxCaptureBytes}
 	stderr := &tailBuffer{cap: maxStderrBytes}
-	cmd.Stdout = io.MultiWriter(stdout, progress)
-	cmd.Stderr = io.MultiWriter(stderr, progress)
+	// ONE lock over the pane. os/exec reuses a single copier goroutine only when
+	// Stdout and Stderr are the same interface value (interfaceEqual); two
+	// distinct MultiWriters are not, so exec runs a goroutine per stream and both
+	// would write to progress concurrently — and these agents write to both
+	// streams at once. Unsynchronized that is interleaved output at best and, for
+	// a progress writer that is not itself thread-safe, a data race.
+	pane := &lockedWriter{w: progress}
+	cmd.Stdout = io.MultiWriter(stdout, pane)
+	cmd.Stderr = io.MultiWriter(stderr, pane)
 
 	err := cmd.Run()
 	if e := classifyRunErr(k, err, cctx.Err(), stderr.String(), stdout.String(), timeout); e != nil {
@@ -299,4 +307,19 @@ func firstNonEmpty(a, b string) string {
 		return a
 	}
 	return b
+}
+
+// lockedWriter serializes concurrent writes onto one underlying writer. It
+// exists for runAgentStreamPlain's two tees; nothing else needs it, because the
+// other seams have a single writer each (runAgentStreamJSON renders from the
+// caller's own goroutine, and internal/review tees stdout only).
+type lockedWriter struct {
+	mu sync.Mutex
+	w  io.Writer
+}
+
+func (l *lockedWriter) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.w.Write(p)
 }

@@ -200,7 +200,9 @@ socket.
   RUNTIME fails closed independently (`unconfiguredKindReason`), because
   `Validate` is not fatal at startup and both empty values fall back to
   CodeRabbit downstream: such a provider is disabled and named in the startup
-  warning rather than silently running the wrong vendor.
+  warning rather than silently running the wrong vendor. An UNKNOWN kind is
+  caught by the same check — every family predicate is false for one, so it would
+  otherwise land in the cli branch and resolve to the coderabbit binary.
 - **[new]** A review tool's STDERR is its NARRATION (codex/opencode print the
   whole review there, and `custom-cli` runs arbitrary tools that may too), so the
   quota scan over stderr runs ONLY on a failed run, stderr is retained by a TAIL

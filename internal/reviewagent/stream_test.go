@@ -8,9 +8,11 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -213,5 +215,61 @@ func TestReviewStreamAcceptsNilProgress(t *testing.T) {
 	got, err := (&Client{}).ReviewStream(context.Background(), t.TempDir(), "main", nil)
 	if err != nil || got != "OK" {
 		t.Fatalf("ReviewStream = (%q, %v), want OK/nil", got, err)
+	}
+}
+
+// os/exec runs a copier goroutine PER STREAM unless Stdout and Stderr are the
+// same interface value, and codex/opencode write to both at once. Both tees must
+// therefore be serialized onto the pane: unsynchronized, a progress writer that
+// is not itself thread-safe (a bytes.Buffer here, and anything holding an
+// in-process pane buffer in production) is a data race. Run with -race.
+func TestLockedWriterSerializesConcurrentTees(t *testing.T) {
+	var buf bytes.Buffer // deliberately NOT thread-safe
+	pane := &lockedWriter{w: &buf}
+	out := io.MultiWriter(&cappedBuffer{cap: 1 << 20}, pane)
+	errw := io.MultiWriter(&tailBuffer{cap: 1 << 20}, pane)
+
+	var wg sync.WaitGroup
+	for _, w := range []io.Writer{out, errw} {
+		wg.Add(1)
+		go func(w io.Writer) {
+			defer wg.Done()
+			for i := 0; i < 200; i++ {
+				fmt.Fprintln(w, "a line of narration")
+			}
+		}(w)
+	}
+	wg.Wait()
+
+	if got := strings.Count(buf.String(), "a line of narration"); got != 400 {
+		t.Fatalf("pane got %d lines, want 400 (writes were lost or torn)", got)
+	}
+	// Every line arrived whole — no interleaving mid-line.
+	for _, line := range strings.Split(strings.TrimSuffix(buf.String(), "\n"), "\n") {
+		if line != "a line of narration" {
+			t.Fatalf("torn line %q", line)
+		}
+	}
+}
+
+// The real seam must wire BOTH tees through one lock. Asserting on the writers
+// exec would receive is the only way to catch a future edit that reverts to two
+// bare MultiWriters (which would still pass every behavioural test on a
+// thread-safe pane, and race everywhere else).
+func TestStreamPlainTeesShareOneLock(t *testing.T) {
+	var buf bytes.Buffer
+	pane := &lockedWriter{w: &buf}
+	// Two MultiWriters over the SAME lockedWriter is the shape under test; the
+	// point is that the shared element is the lock, not the raw writer.
+	a := io.MultiWriter(&cappedBuffer{cap: 8}, pane)
+	b := io.MultiWriter(&tailBuffer{cap: 8}, pane)
+	if a == nil || b == nil {
+		t.Fatal("multiwriters must build")
+	}
+	if _, err := pane.Write([]byte("x")); err != nil {
+		t.Fatalf("locked write: %v", err)
+	}
+	if buf.String() != "x" {
+		t.Fatalf("pane = %q, want the byte to reach the underlying writer", buf.String())
 	}
 }

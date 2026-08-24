@@ -1814,3 +1814,48 @@ func TestUnavailableWarnNamesTheBinary(t *testing.T) {
 		t.Errorf("warning %q must keep coderabbit's actionable hint", warn)
 	}
 }
+
+// An UNKNOWN kind is the third way a provider can name nothing: every family
+// predicate is false for one, so it fell through to the cli branch and — with no
+// command of its own — resolved to the coderabbit binary. A typo'd kind sending
+// its PR to CodeRabbit is the same silent-wrong-vendor failure as an empty
+// custom-cli, so it must fail closed the same way.
+func TestUnknownKindFailsClosed(t *testing.T) {
+	cfg := nativeTestConfig(nativePoll("p1"))
+	// Built by hand: NewReviewProvider refuses an unknown kind, which is exactly
+	// why this can only arrive from a hand-edited config.toml.
+	unknown, _ := config.NewReviewProvider("coderabbit-cli")
+	unknown.SetKind("greptile-cli")
+	unknown.Enabled, unknown.Command = true, ""
+	cfg.ReviewProviders = []config.ReviewProvider{unknown}
+
+	d := newTestDaemon(t, cfg, &linear.Fake{}, &fakeNative{})
+	syncProviders(d)
+
+	p, ok := d.providerByKind("greptile-cli")
+	if !ok {
+		t.Fatal("descriptor missing")
+	}
+	if p.Enabled {
+		t.Error("an unknown kind must be disabled, not run as coderabbit")
+	}
+	if !strings.Contains(p.Unconfigured, "unknown provider kind") {
+		t.Errorf("Unconfigured = %q, want it to say the kind is unknown", p.Unconfigured)
+	}
+	if d.passSeam("greptile-cli") != nil {
+		t.Error("an unknown kind must have no exec seam")
+	}
+	// It never runs, so a session with an open PR is left entirely alone.
+	seams := &fakeReactSeams{}
+	seams.install(d)
+	s := reactSess("FE-1", "review_pending", openPR(9, "MERGEABLE", "", "pass"))
+	s.AtPrompt = true
+	d.sessions.Upsert(s)
+	d.runReviewProviders(context.Background(), s)
+	if cur, _ := d.sessions.Get(s.ID); len(cur.ReviewedPRs) != 0 {
+		t.Errorf("guards = %v, want none stamped", cur.ReviewedPRs)
+	}
+	if len(sentTexts(seams)) != 0 {
+		t.Errorf("worker got %v, want nothing", sentTexts(seams))
+	}
+}
