@@ -201,12 +201,15 @@ socket.
   `Validate` is not fatal at startup and both empty values fall back to
   CodeRabbit downstream: such a provider is disabled and named in the startup
   warning rather than silently running the wrong vendor.
-- **[new]** An agent's STDERR is its NARRATION (codex/opencode print the whole
-  review there), so the quota scan over stderr runs ONLY on a failed run, stderr
-  is retained by a TAIL buffer (a CLI's fatal error is its last line; the head
-  cap kept the prose and discarded the error), and the auth cues are PHRASES
-  rather than the bare substrings `auth`/`login`. stdout keeps its HEAD — there
-  the payload is the findings, most severe first — and its own shortness gate. Their
+- **[new]** A review tool's STDERR is its NARRATION (codex/opencode print the
+  whole review there, and `custom-cli` runs arbitrary tools that may too), so the
+  quota scan over stderr runs ONLY on a failed run, stderr is retained by a TAIL
+  buffer (a CLI's fatal error is its last line; the head cap kept the prose and
+  discarded the error), and the auth cues are PHRASES rather than the bare
+  substrings `auth`/`login`. stdout keeps its HEAD — there the payload is the
+  findings, most severe first — and its own shortness gate. `internal/review` and
+  `internal/reviewagent` are independent leaves with independent copies of all
+  three: fixing one and not the other leaves the bug live for the other family. Their
   defaults are per-kind and applied BEFORE the explicit keys overlay
   (`applyKindDefaults`): a `bot-watch` deliberately gets NO author default, or it
   would be silently identical to a `coderabbit-watch`.

@@ -818,16 +818,20 @@ each of which owns exactly one external tool or concern behind an **exec seam**
     (the TUI directly, the app through `ConfigService.ReviewKinds()`), so a new
     kind is offered by both with no UI edit. The frontend's one remaining
     hardcoded copy is a test fixture, pinned against the Go list by a parity test.
-- **An agent's STDERR is its narration, so the classifier reads its TAIL and only
-  on failure.** codex and opencode print their whole review to stderr (that is
-  what makes a visible pass watchable), which breaks the two assumptions the
-  quota/auth classifier was built on when only claude ran there:
+- **A review tool's STDERR is its narration, so BOTH classifiers read its TAIL
+  and only on failure.** codex and opencode print their whole review to stderr
+  (that is what makes a visible pass watchable), and `custom-cli` points
+  `internal/review` at arbitrary tools that may do the same. That breaks the two
+  assumptions the quota/auth classifiers were built on when the only callers were
+  claude and coderabbit. `internal/review` and `internal/reviewagent` therefore
+  carry the SAME three rules — they are independent leaves with independent
+  copies, so a fix to one is only half a fix:
   - The quota scan over stderr runs ONLY when the process actually failed. A
     clean run's stderr is prose, and scanning it unconditionally made an ordinary
     review of any code that mentions quotas or rate limits — this repository,
     say — self-classify as `ErrQuota`: real findings discarded AND the paid
     fallback burned. The stdout half keeps its own shortness gate for the
-    limit-line-with-exit-0 case.
+    limit-line-with-exit-0 case, which is the shape coderabbit actually has.
   - stderr is retained by a **tailBuffer**, not the head-keeping `cappedBuffer`
     that stdout uses. A CLI's fatal error is the LAST thing it prints, so a head
     cap threw the error away and classified the narration instead. stdout still

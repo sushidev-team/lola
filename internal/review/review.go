@@ -12,9 +12,11 @@
 //
 // Hard contract — read before wiring this anywhere:
 //
-//   - EVENT-TRIGGERED + BOUNDED. Each review is a single `coderabbit review`
-//     invocation with a hard context.WithTimeout (default 300s) and a
-//     size-capped stdout (~16KB, head-clipped with a truncation marker). No
+//   - EVENT-TRIGGERED + BOUNDED. Each review is a single review-CLI invocation
+//     with a hard context.WithTimeout (default 300s), a size-capped stdout
+//     (~16KB, head-clipped with a truncation marker) and a TAIL-capped stderr —
+//     the tool may narrate its progress there, and only its last words (the
+//     error, if any) are worth keeping or classifying. No
 //     loops, no retries: on any error or timeout the caller skips the pass
 //     gracefully (see the Err* sentinels), falling back to no QA rather than
 //     blocking. Reuse the caller's one-shot guards so a review fires at most
@@ -203,7 +205,7 @@ func runReviewTo(ctx context.Context, bin string, args []string, dir string, tim
 	cmd := exec.CommandContext(cctx, bin, args...)
 	cmd.Dir = dir // the review runs IN the worktree
 	stdout := &cappedBuffer{cap: maxCaptureBytes}
-	stderr := &cappedBuffer{cap: maxStderrBytes}
+	stderr := &tailBuffer{cap: maxStderrBytes}
 	cmd.Stdout = stdout
 	if display != nil {
 		cmd.Stdout = io.MultiWriter(stdout, display)
@@ -221,22 +223,30 @@ func runReviewTo(ctx context.Context, bin string, args []string, dir string, tim
 
 // classifyRunErr maps a raw exec result to a distinct sentinel. Deadline is
 // checked first because a killed process surfaces as "signal: killed", not as a
-// deadline error. Quota is checked next — over stderr, and over stdout ONLY when
-// stdout is a short limit line rather than a real findings body (isStdoutQuota)
-// — because coderabbit may print an "out of reviews" line to stdout and exit 0,
-// so a quota signal must be caught even on a clean run (before the runErr==nil
-// short-circuit) and must win over ErrAuth/ErrExit so the caller can fall
-// through to a fallback provider. Gating the stdout scan on shortness stops a
-// legitimate multi-KB review that merely mentions "rate limit"/"429" in its
-// prose from self-classifying as ErrQuota and being discarded. On a plain
-// nonzero exit, stderr is inspected for auth cues (→ ErrAuth, no stderr
-// surfaced) and otherwise surfaced through redactSecrets so an error can never
-// carry a key.
+// deadline error. Quota is checked next, over two DIFFERENT windows, because it
+// is the one class that can arrive on a CLEAN exit and it must win over
+// ErrAuth/ErrExit so the caller can fall through to a fallback provider:
+//
+//   - stdout, ONLY when it is a short limit line rather than a real findings
+//     body (isStdoutQuota) — coderabbit may print "out of reviews" to stdout and
+//     exit 0, so this is checked before the runErr==nil short-circuit. Gating on
+//     shortness stops a legitimate multi-KB review that merely mentions "rate
+//     limit"/"429" in its prose from self-classifying and being discarded.
+//   - stderr, ONLY on a FAILED run. This package no longer runs one known tool:
+//     the `custom-cli` provider points it at ARBITRARY review CLIs, and a tool
+//     that narrates its progress on stderr would otherwise have an ordinary
+//     review of quota-related code classified as ErrQuota — throwing away real
+//     findings AND burning the paid fallback. A process that exited 0 is not
+//     over quota. (internal/reviewagent gates the same way, for the same reason.)
+//
+// On a plain nonzero exit, stderr is inspected for auth cues (→ ErrAuth, no
+// stderr surfaced) and otherwise surfaced through redactSecrets so an error can
+// never carry a key.
 func classifyRunErr(runErr, ctxErr error, stderr, stdout string, timeout time.Duration) error {
 	if errors.Is(ctxErr, context.DeadlineExceeded) {
 		return fmt.Errorf("%w after %s", ErrTimeout, timeout)
 	}
-	if looksLikeQuotaError(stderr) || isStdoutQuota(stdout) {
+	if isStdoutQuota(stdout) || (runErr != nil && looksLikeQuotaError(stderr)) {
 		return ErrQuota // actionable class only; never echoes stdout/stderr
 	}
 	if runErr == nil {
@@ -280,11 +290,26 @@ func isStdoutQuota(stdout string) bool {
 }
 
 // looksLikeAuthError is a best-effort classifier: on a failed run, stderr that
-// mentions auth/login/unauthenticated almost certainly means coderabbit needs
-// `coderabbit auth login`.
+// reports an authentication problem almost certainly means the tool needs a
+// login (for coderabbit, `coderabbit auth login`).
+//
+// The cues are PHRASES, never the bare words "auth" or "login". Those two match
+// any review that so much as reads AuthController.php, and a `custom-cli` tool
+// may narrate its review on stderr — so a bare-substring cue turned an ordinary
+// nonzero exit during an auth-related review into ErrAuth, which is a graceful
+// skip that deliberately does NOT fall through to the fallback provider. Every
+// real message ("not logged in", "Invalid API key", "401 Unauthorized") still
+// matches on a phrase, and the stderr TAIL buffer means what is classified is
+// the END of a failed run, where a CLI puts its fatal error.
 func looksLikeAuthError(stderr string) bool {
 	l := strings.ToLower(stderr)
-	for _, kw := range []string{"unauthenticated", "unauthorized", "not logged in", "auth", "login", "credential"} {
+	for _, kw := range []string{
+		"unauthenticated", "unauthorized", "not logged in", "not authenticated",
+		"invalid api key", "missing api key", "no api key", "api key not",
+		"authentication", "authorization failed", "auth failed", "auth error",
+		"please log in", "please login", "auth login",
+		"invalid credential", "missing credential", "no credential", "credentials not",
+	} {
 		if strings.Contains(l, kw) {
 			return true
 		}
@@ -372,6 +397,41 @@ func trimPartialRune(s string) string {
 	}
 	return s
 }
+
+// tailBuffer keeps the LAST cap bytes written to it, discarding earlier ones,
+// while always accepting the whole write so a chatty child never blocks.
+//
+// It backs STDERR, where cappedBuffer's head-keeping is exactly wrong once the
+// tool is not necessarily coderabbit: a `custom-cli` may narrate its whole review
+// there, and a CLI's fatal error is the LAST thing it prints. A head cap threw
+// that error away and left the narration to be classified in its place. Keeping
+// the tail both stops the prose from reading as a quota/auth condition and makes
+// a real error message survive to reach the operator. STDOUT still keeps its
+// HEAD: there the findings are the payload, and a truncated review must keep its
+// most severe findings, which come first. (internal/reviewagent carries the same
+// pair, for the same reason.)
+type tailBuffer struct {
+	buf []byte
+	cap int
+}
+
+func (b *tailBuffer) Write(p []byte) (int, error) {
+	n := len(p)
+	if b.cap <= 0 {
+		return n, nil
+	}
+	if len(p) >= b.cap {
+		b.buf = append(b.buf[:0], p[len(p)-b.cap:]...)
+		return n, nil
+	}
+	if over := len(b.buf) + len(p) - b.cap; over > 0 {
+		b.buf = b.buf[over:]
+	}
+	b.buf = append(b.buf, p...)
+	return n, nil
+}
+
+func (b *tailBuffer) String() string { return string(b.buf) }
 
 // cappedBuffer accumulates at most cap bytes but keeps accepting (and
 // discarding) the rest, so a chatty child never blocks on a full pipe while
