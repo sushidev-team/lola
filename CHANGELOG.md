@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.2.12](https://github.com/sushidev-team/lola/compare/v0.2.11...v0.2.12) (2026-08-24)
+
+
+### Features
+
+* **agent:** fallback to another coding agent on usage limits + manual switching ([6b43a0d](https://github.com/sushidev-team/lola/commit/6b43a0dd79dfce55066c06e32402f6f5ec708f87))
+* **review:** make every review vendor a config slot ([bb397ab](https://github.com/sushidev-team/lola/commit/bb397ab911b87b7fda8daba696d21a443ad206cd))
+* **review:** make every review vendor a config slot ([3d43d01](https://github.com/sushidev-team/lola/commit/3d43d018a1d03e57600963a2214619673111c9a5))
+* **tmux:** add PaneProcs listing each pane's owning session name ([3214395](https://github.com/sushidev-team/lola/commit/3214395a1cabdad6a93597e6e9b8628fb460074c))
+
+
+### Bug Fixes
+
+* **agent:** CodeRabbit pass-1 fixes + doctor chain check + agent chip ([d7c5f59](https://github.com/sushidev-team/lola/commit/d7c5f5922f476c06f673a2ea5a9364af5681557e))
+* **agent:** kill a partially created pane when the switch launch fails ([8968821](https://github.com/sushidev-team/lola/commit/896882114875620927fed15f46aea7a37358cf85))
+* **agent:** redirect the opencode plugin's hook stdin from /dev/null ([ce2f7f4](https://github.com/sushidev-team/lola/commit/ce2f7f4e7b38e6c089198aba07eb3ff729eaac0a))
+* **agent:** resume opencode conversations on revive via --continue ([f01d114](https://github.com/sushidev-team/lola/commit/f01d1148b44157d08eaaa2e3446b2b979975b030))
+* **daemon:** spare shell-tab processes from the dev take-over port sweep ([25d5cb9](https://github.com/sushidev-team/lola/commit/25d5cb972f0471e554da9de40270b065fd7dc644))
+* **hook:** never read stdin when it is a TTY ([186c17a](https://github.com/sushidev-team/lola/commit/186c17a18792781323c0977cbbc7d6a8c2ef7a65))
+* **review:** carry the stderr fixes to the cli-family classifier ([a27f189](https://github.com/sushidev-team/lola/commit/a27f189a7fb4e2b367e2b62108a6e6150a758bd6))
+* **review:** fail closed on an unknown kind, serialize the pane tees ([2deb50e](https://github.com/sushidev-team/lola/commit/2deb50ede7d87ba613801fa5ce520f186829f712))
+* **review:** stop an agent's narration from being read as an error ([96b7e7b](https://github.com/sushidev-team/lola/commit/96b7e7be577afad3032fee8b0f13ea15c83e7146))
+* **runtime:** detect saved opencode sessions across both storage generations ([0fdc157](https://github.com/sushidev-team/lola/commit/0fdc157a443488c9788ddaec44e7856d268c6f3a))
+* **tmux:** KillSessionTree must tolerate a teardown raced by the group kill ([0f665c2](https://github.com/sushidev-team/lola/commit/0f665c2cfa767ae499ae58b5b22817babd43ea9f))
+
 ## [0.2.11](https://github.com/sushidev-team/lola/compare/v0.2.10...v0.2.11) (2026-08-20)
 
 
