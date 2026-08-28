@@ -1,0 +1,39 @@
+# Mobile app build output and dependencies.
+node_modules/
+dist/
+.DS_Store
+*.log
+
+# ---------------------------------------------------------------------------
+# The generated iOS project IS committed (mobile/ios/App/**) — it carries the
+# Xcode project, the SPM package manifest, the Info.plist and the app icons, and
+# regenerating it from scratch would throw away every hand-edit those need.
+# What is ignored below is everything `cap sync`, SPM and Xcode DERIVE from
+# sources that are already tracked.
+# ---------------------------------------------------------------------------
+
+# `cap sync` copies vite's dist/ here verbatim. Committing it would double every
+# asset and produce a diff on every build.
+ios/App/App/public/
+
+# Written by `cap sync` from capacitor.config.ts, which is tracked.
+ios/App/App/capacitor.config.json
+ios/App/App/config.xml
+
+# Cordova compatibility shims, regenerated per sync.
+ios/capacitor-cordova-ios-plugins/
+
+# Build products and per-developer editor state.
+ios/App/build/
+ios/App/output/
+ios/App/DerivedData/
+ios/App/Pods/
+ios/App/Podfile.lock
+**/*.xcworkspace/xcuserdata/
+**/xcuserdata/
+**/.swiftpm/
+**/*.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
+
+# CocoaPods is not used (Capacitor 8 defaults to SPM); an .xcworkspace here means
+# somebody ran `cap add ios --packagemanager CocoaPods` locally.
+ios/App/App.xcworkspace/

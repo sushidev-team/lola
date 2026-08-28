@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <!--
+      viewport-fit=cover lets the app paint under the notch and home indicator;
+      the safe areas are then paid back deliberately through the --spacing-safe-*
+      tokens in app.css rather than being left to the system.
+
+      maximum-scale/user-scalable pin the page against pinch-zoom. This is a
+      terminal in a WKWebView, not a web page: a pinch inside the pane is a
+      scroll gesture the terminal wants, and a zoomed viewport puts half the
+      agent's output off screen with no way back. Text size is adjustable inside
+      the app instead, which is where a terminal's font size belongs anyway.
+    -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
+    />
+    <!-- Both, so the WebView's own chrome follows whichever flavor is painted. -->
+    <meta name="color-scheme" content="dark light" />
+    <title>Lola</title>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

@@ -1,0 +1,185 @@
+// Where the bearer key lives, and — more importantly — where it does not.
+//
+// THE RULE: the key is never in this repository, never in a log line, never in a
+// URL, and never in `localStorage`. The first three are obvious; the fourth is
+// the one worth stating, because `localStorage` is the reflex and it is the
+// wrong tool here. It is plain, unencrypted, per-origin storage inside the app
+// container: readable by any code running in the WebView, backed up with the
+// app, and not protected by the device passcode. `theme-runtime.svelte.ts` uses
+// it for the last painted theme, which is exactly the class of thing it is for.
+// A shared secret is not.
+//
+// So the key goes to the native side, into the Keychain, through the same plugin
+// that owns the socket. That placement is not incidental either: the plugin is
+// the only component that needs the plaintext, so the key can be written once
+// and then referenced by NAME, and the WebView never has to hold it again.
+//
+// THE PLUGIN CONTRACT, which is the one thing here another agent owns. This
+// module reaches `LolaTransport` through the Capacitor global rather than
+// importing `lola-transport`, for two reasons: the plugin's `dist/` does not
+// exist until it is built, so a hard import breaks `vite build` for anyone who
+// has not built it; and a browser `npm run dev` session has no plugin at all and
+// must still be able to run the UI. The three methods it looks for are:
+//
+//   secretSet({ key: string, value: string }) -> {}
+//   secretGet({ key: string })                -> { value: string | null }
+//   secretDelete({ key: string })             -> {}
+//
+// where `key` is an endpoint id (`host:port`), so two daemons never share one
+// secret. If those names do not match what the plugin ships, this file is the
+// only place to change.
+//
+// AS OF M1 THE PLUGIN SHIPS NONE OF THEM. `LolaTransportPlugin.swift` declares
+// exactly four bridged methods — connect, disconnect, send, status — so the
+// probe below finds nothing and every key lives in the volatile map for the
+// life of the app run. That is a deliberate assembly decision rather than an
+// oversight: the Keychain half is perhaps eighty lines of Swift that cannot be
+// compiled anywhere in this workflow, and shipping uncompilable Swift would
+// cost the first reader their whole Xcode build rather than one retyped key.
+// The contract above is what a later change implements; nothing else here
+// moves when it does, and `isPersistent()` starts answering true on its own.
+//
+// WITHOUT the plugin the key is held in memory for the life of the app run and
+// nowhere else. That is deliberately worse ergonomically — the key is retyped on
+// every launch — and never worse for safety. A silent downgrade to localStorage
+// would be the opposite trade, so `isPersistent()` exists to let the UI say
+// which one is happening rather than letting the user assume.
+
+/** The subset of the native plugin this module needs. */
+interface SecretCapablePlugin {
+  secretSet?(o: { key: string; value: string }): Promise<unknown>;
+  secretGet?(o: { key: string }): Promise<{ value?: string | null }>;
+  secretDelete?(o: { key: string }): Promise<unknown>;
+}
+
+interface CapacitorGlobal {
+  Plugins?: { LolaTransport?: SecretCapablePlugin };
+}
+
+function plugin(): SecretCapablePlugin | undefined {
+  const cap = (globalThis as { Capacitor?: CapacitorGlobal }).Capacitor;
+  const p = cap?.Plugins?.LolaTransport;
+  if (!p) return undefined;
+  return typeof p.secretGet === "function" && typeof p.secretSet === "function" ? p : undefined;
+}
+
+/**
+ * Whether a stored key will survive the app being closed.
+ *
+ * The UI shows this, because "you will have to type this again next time" is a
+ * fact a user is entitled to before they decide how to store a secret.
+ */
+export function isPersistent(): boolean {
+  return plugin() !== undefined;
+}
+
+/** The in-memory fallback. Cleared when the app run ends, which is the point. */
+const volatile = new Map<string, string>();
+
+/**
+ * Store the key for one endpoint.
+ *
+ * Storing an empty value DELETES rather than writing an empty secret: an empty
+ * Keychain entry reads back as "there is a key, and it is wrong", which is the
+ * most confusing possible state at the connect screen.
+ */
+export async function storeKey(endpointId: string, key: string): Promise<void> {
+  if (key === "") {
+    await forgetKey(endpointId);
+    return;
+  }
+  const p = plugin();
+  if (p?.secretSet) {
+    try {
+      await p.secretSet({ key: endpointId, value: key });
+      return;
+    } catch {
+      // Fall through: a Keychain that refuses must not lose the running session.
+    }
+  }
+  volatile.set(endpointId, key);
+}
+
+/** Read back a stored key, or "" when there is none. Never throws. */
+export async function loadKey(endpointId: string): Promise<string> {
+  const p = plugin();
+  if (p?.secretGet) {
+    try {
+      const r = await p.secretGet({ key: endpointId });
+      if (typeof r?.value === "string" && r.value !== "") return r.value;
+    } catch {
+      /* fall through to the volatile copy */
+    }
+  }
+  return volatile.get(endpointId) ?? "";
+}
+
+/** Remove a stored key. Used by "Forget this daemon". Never throws. */
+export async function forgetKey(endpointId: string): Promise<void> {
+  volatile.delete(endpointId);
+  const p = plugin();
+  if (p?.secretDelete) {
+    try {
+      await p.secretDelete({ key: endpointId });
+    } catch {
+      /* nothing useful to report: the volatile copy is already gone */
+    }
+  }
+}
+
+/**
+ * A key rendered for the screen: its length only, never any of its characters.
+ *
+ * Even a prefix is too much. The connect screen is the one place a user might
+ * hand the phone to somebody, and a shoulder-visible prefix of a shared bearer
+ * secret is a real leak for a key that is typed once and never rotated.
+ */
+export function maskKey(key: string): string {
+  if (key === "") return "";
+  return "•".repeat(Math.min(key.length, 24));
+}
+
+/**
+ * Everything the connect screen needs to know about a NON-secret endpoint,
+ * which is the only part that is safe to persist in the WebView.
+ *
+ * The host, the port and the SPKI pin are all public: the pin is printed in the
+ * daemon's own startup log and is a hash of a public key. Keeping them in
+ * localStorage means a returning user types nothing but the key, and keeping
+ * them OUT of the Keychain keeps the secret store to exactly one item.
+ */
+export interface StoredEndpoint {
+  host: string;
+  port: number;
+  spkiPin: string;
+}
+
+const ENDPOINT_KEY = "lola.mobile.endpoint";
+
+export function loadEndpoint(): StoredEndpoint | null {
+  try {
+    const raw = globalThis.localStorage?.getItem(ENDPOINT_KEY);
+    if (!raw) return null;
+    const v = JSON.parse(raw) as Partial<StoredEndpoint>;
+    if (typeof v.host !== "string" || typeof v.spkiPin !== "string") return null;
+    return { host: v.host, port: typeof v.port === "number" ? v.port : 0, spkiPin: v.spkiPin };
+  } catch {
+    return null; // storage disabled, or something else wrote this key
+  }
+}
+
+export function saveEndpoint(e: StoredEndpoint): void {
+  try {
+    globalThis.localStorage?.setItem(ENDPOINT_KEY, JSON.stringify(e));
+  } catch {
+    /* a remembered address is not worth failing a connection over */
+  }
+}
+
+export function clearEndpoint(): void {
+  try {
+    globalThis.localStorage?.removeItem(ENDPOINT_KEY);
+  } catch {
+    /* nothing to do */
+  }
+}

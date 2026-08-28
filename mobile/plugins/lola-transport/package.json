@@ -1,0 +1,49 @@
+{
+  "name": "lola-transport",
+  "version": "0.1.0",
+  "description": "Capacitor plugin owning lola's raw TLS transport: the length-prefixed frame codec, the SPKI pin, the M1 bearer handshake, and batched frame delivery across the bridge.",
+  "private": true,
+  "license": "UNLICENSED",
+  "type": "module",
+  "main": "dist/esm/index.js",
+  "module": "dist/esm/index.js",
+  "types": "dist/esm/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/esm/index.d.ts",
+      "import": "./dist/esm/index.js",
+      "default": "./dist/esm/index.js"
+    }
+  },
+  "files": [
+    "dist/",
+    "ios/Sources",
+    "ios/Tests",
+    "Package.swift",
+    "LolaTransport.podspec"
+  ],
+  "scripts": {
+    "clean": "rm -rf dist",
+    "build": "npm run clean && tsc",
+    "watch": "tsc --watch",
+    "verify": "npm run build"
+  },
+  "peerDependencies": {
+    "@capacitor/core": ">=8.0.0"
+  },
+  "devDependencies": {
+    "@capacitor/core": "^8.5.0",
+    "typescript": "~5.9.0"
+  },
+  "capacitor": {
+    "ios": {
+      "src": "ios"
+    }
+  },
+  "keywords": [
+    "capacitor",
+    "plugin",
+    "ios",
+    "lola"
+  ]
+}

@@ -1,0 +1,130 @@
+/* ---------------------------------------------------------------------------
+   The mobile stylesheet.
+
+   The design tokens are NOT redefined here. desktop/frontend/src/app.css is
+   imported wholesale, which brings Tailwind v4, the xterm stylesheet, the
+   vendored Hack terminal face, the full Catppuccin token block, the five-step
+   type scale and the @utility set (panel, label, num, copy, hero-glyph). Every
+   shared component is written against those names, so a second copy of them
+   here would be a mirror that drifts — the same argument CLAUDE.md makes for
+   not forking theme.ts.
+
+   What follows the import is only what a phone needs and a Mac does not.
+--------------------------------------------------------------------------- */
+@import "../../desktop/frontend/src/app.css";
+
+/* ---------------------------------------------------------------------------
+   Tailwind v4 scans SOURCE TEXT for class names, and it has no idea this
+   project exists: the `@import "tailwindcss"` that generates the utilities sits
+   inside the desktop's stylesheet, so its automatic source detection is rooted
+   at desktop/frontend/src. Without the two directives below, every class used
+   only by a mobile file compiles to nothing, and every class used only by a
+   shared component would too if that detection ever narrows.
+
+   This is the single most likely silent failure in the whole port: there is no
+   error, no warning and no missing file — the app simply renders unstyled, and
+   it renders unstyled identically in the dev server and in the packaged app, so
+   there is nothing to diff against.
+--------------------------------------------------------------------------- */
+@source "./";
+@source "../../desktop/frontend/src/lib";
+
+@theme {
+  /* Safe areas. Tailwind v4 ships no safe-area utilities, so they are declared
+     as spacing tokens: `pb-safe-b`, `pt-safe-t` and friends then work like any
+     other spacing utility. env() resolves to 0px on a device without an inset,
+     so no fallback branch is needed.
+
+     They are the preferred form for a PLAIN inset (Connect.svelte's root uses
+     them). Two kinds of call site keep an inline `env()` on purpose: one that
+     ADDS to the inset, where the value is a `calc()` and a utility would only
+     hide the arithmetic, and AccessoryBar, which is written not to depend on
+     the surrounding shell having defined a spacing scale at all. */
+  --spacing-safe-t: env(safe-area-inset-top);
+  --spacing-safe-b: env(safe-area-inset-bottom);
+  --spacing-safe-l: env(safe-area-inset-left);
+  --spacing-safe-r: env(safe-area-inset-right);
+}
+
+/* ---------------------------------------------------------------------------
+   Touch behaviour.
+
+   The desktop stylesheet already sets `overflow: hidden` on body and hands
+   scrolling to the app's own regions, which is right here too. These add the
+   iOS-specific half.
+--------------------------------------------------------------------------- */
+html,
+body {
+  /* Kill the whole-document rubber band. The WebView is the app's frame, not a
+     page, and a bouncing frame reads as the UI coming loose from the screen.
+     capacitor.config.ts sets ios.scrollEnabled: false for the same reason;
+     both are needed, because that option governs the WKWebView's scroll view
+     and this governs the document inside it. */
+  overscroll-behavior: none;
+}
+
+/* This block MUST stay inside @layer base, and the reason is the whole of the
+   next paragraph.
+
+   Tailwind v4 emits every utility inside `@layer utilities` (see its own
+   index.css: `@layer utilities { @tailwind utilities }`). Under the cascade-
+   layers rule an UNLAYERED author declaration beats a layered one regardless of
+   specificity, so an unlayered `*` here would outrank `touch-none`, `touch-pan-y`
+   and every other touch utility in the app — including the one on the terminal
+   frame, whose whole job is stopping Safari from claiming a one-finger drag.
+   Once Safari claims it, preventDefault() in the touchmove handler is ignored
+   and the gesture arrives as touchcancel: the pane's drag-to-scroll, which is
+   the app's only way to see an agent's transcript, simply stops working. It is
+   invisible in a desktop browser because there is no soft keyboard and no
+   Safari gesture arbitration to lose to.
+
+   Declaring it in `base` puts it BEFORE `utilities` in the layer order, which
+   is exactly where a blanket default belongs. */
+@layer base {
+  * {
+    /* The grey flash WebKit paints over a tapped element. Every control in this
+       app already has a hover/active state of its own, and the system rectangle
+       lands on the wrong box for a card-shaped row. */
+    -webkit-tap-highlight-color: transparent;
+    /* No 300ms tap delay and no double-tap zoom, which would otherwise eat the
+       second tap of any quick interaction. */
+    touch-action: manipulation;
+  }
+}
+
+/* The terminal is the exception: it owns its own gestures, because a touch drag
+   inside a pane is a scroll request that has to be converted to lines and sent
+   to the daemon (xterm's wheel handler never fires on touch). Letting the
+   browser interpret those gestures would pan the pane locally against a screen
+   that is not scrollable.
+
+   Two class names, deliberately. `.term-pane` is MobileTerminal's own frame;
+   `.term-live` is the desktop LiveTerminal's, which the shim still keeps
+   reusable through `TermService.Attach`. Both rules are UNLAYERED, so they win
+   over the `*` above no matter which layer it ends up in — belt and braces for a
+   rule whose failure mode is a terminal that quietly stops scrolling. */
+.term-pane,
+.term-live {
+  touch-action: none;
+}
+
+/* ---------------------------------------------------------------------------
+   Tap targets.
+
+   The shared Button ladder tops out at a size drawn for a mouse. Rather than
+   adding a size to its class map — which would mean editing desktop/frontend,
+   which this project does not do — a mobile call site pairs a Button with this
+   utility. 44px is Apple's minimum, and the `!` is not optional: a plain
+   min-height class has the same specificity as the variant's own and the winner
+   would be decided by Tailwind's ordering in the compiled sheet rather than by
+   the class attribute (see the Button invariant in CLAUDE.md).
+--------------------------------------------------------------------------- */
+@utility tap {
+  min-height: 44px !important;
+  min-width: 44px !important;
+}
+
+/* A row that is a tap target without being square — list rows, menu items. */
+@utility tap-row {
+  min-height: 44px !important;
+}
