@@ -1079,6 +1079,47 @@ the default — a typo you cannot see is worse than a startup error. A config
 that never sets `[ui]` never grows the table on save, so the default stays a
 default instead of being frozen into your file.
 
+### `[remote]` (optional)
+
+**The phone listener, and it is off by default for what it grants rather than
+for what it costs.** Enabling it lets a paired mobile client read the session
+list, answer a parked agent and attach to a live pane. Say the consequence
+plainly: that phone can type arbitrary prose into an autonomous coding agent,
+and terminal write on a `-shell-N` tab is arbitrary code execution on this Mac
+with your `gh` token, SSH agent and login keychain in reach. A lost phone is
+answered by revoking the device from the desktop, not by a cautious default
+here.
+
+| Key | Type | Description |
+| --- | --- | --- |
+| `enabled` | bool | Gates the whole feature. Default `false`; an absent `[remote]` table means the same and is never written back on save. |
+| `bind` | string | `off` \| `localhost` \| `lan` \| `all`, or a literal IP address. Empty or absent uses `localhost`. |
+| `port` | int | TCP port. `0` (or absent) uses `7717`. |
+
+`bind` decides which interfaces are exposed, and the four keywords are not
+interchangeable. `localhost` is loopback only — what an SSH forward, a VPN or a
+tailnet wants, and the only mode that puts nothing on a network interface.
+`lan` binds the private interfaces (RFC1918 / ULA / link-local) whose names are
+not tunnels or virtual bridges; on a laptop that is **every network this machine
+ever joins**, conference WiFi included, so the daemon logs the bound interfaces
+by name at startup. `all` is `0.0.0.0` and is never a default. `off` binds
+nothing while keeping the rest of the table, which is how you pause the listener
+without losing your settings — so a caller must test both keys, not `enabled`
+alone.
+
+A hostname is **rejected**, not resolved: loading a config never makes a network
+call, so `bind` is either one of the four keywords or an IP literal. Validation
+is otherwise deliberately permissive — `enabled = true` with `bind = "off"` is a
+valid, documented state.
+
+Two things this table does not do yet. mDNS advertisement and push credentials
+are later milestones and have no keys here, because a key that quietly does
+nothing is worse than a missing one. And while the transport is still at its
+first milestone, the listener is compiled **only** into a binary built with the
+`lola_insecure` build tag, which also forces the bind to `localhost` whatever
+this table says and logs a warning on every accept; a release binary contains no
+listener at all and says so in the log when the table is enabled.
+
 ## The coding agent
 
 Each matched issue gets its own session — a git worktree plus a tmux pane

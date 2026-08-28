@@ -267,6 +267,7 @@ type Config struct {
 	CodeRabbit  CodeRabbitConfig  `toml:"coderabbit"`
 	Tmux        TmuxConfig        `toml:"tmux"`
 	UI          UIConfig          `toml:"ui"`
+	Remote      RemoteConfig      `toml:"remote"`
 
 	// ReviewProviders is the NEW canonical global review CATALOG (resolved from
 	// [[review.provider]]). Empty when the file uses the legacy [review]/
@@ -376,6 +377,7 @@ type fileConfig struct {
 	CodeRabbit  *fileCodeRabbitConfig  `toml:"coderabbit,omitempty"`
 	Tmux        *fileTmuxConfig        `toml:"tmux,omitempty"`
 	UI          *fileUIConfig          `toml:"ui,omitempty"`
+	Remote      *fileRemoteConfig      `toml:"remote,omitempty"`
 }
 
 // fileProject mirrors Project on disk. Its polling fields are inline; the
@@ -754,6 +756,7 @@ func (fc *fileConfig) config() *Config {
 		CodeRabbit:      resolveCodeRabbit(fc.CodeRabbit),
 		Tmux:            resolveTmux(fc.Tmux),
 		UI:              resolveUI(fc.UI),
+		Remote:          resolveRemote(fc.Remote),
 	}
 }
 
@@ -805,6 +808,7 @@ func (c *Config) file() *fileConfig {
 		CodeRabbit:  coderabbitFile(c.CodeRabbit),
 		Tmux:        tmuxFile(c.Tmux),
 		UI:          uiFile(c.UI),
+		Remote:      remoteFile(c.Remote),
 	}
 }
 

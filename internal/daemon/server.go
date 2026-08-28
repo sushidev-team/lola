@@ -621,8 +621,18 @@ func (d *Daemon) handleReload(ctx context.Context) error {
 		// keys go to the NEW one.
 		d.native = newNativeRuntime(nc, d.home, d.lolaBin, d.linearKey, d.nativeLogf)
 	}
+	// [remote] is compared exactly (config.RemoteConfig is comparable) so an
+	// unrelated reload never touches a live listener. Applied AFTER the unlock:
+	// rebinding loads the device identity and binds a socket, and doing that
+	// under the lock every tick and every socket command takes would stall the
+	// daemon for the length of a TLS listener's teardown. See reloadRemote for
+	// why a change is a full rebind rather than an in-place mutation.
+	remoteChanged := old.Remote != nc.Remote
 	d.mu.Unlock()
 
+	if remoteChanged {
+		d.reloadRemote()
+	}
 	d.syncWorkers(ctx)
 	d.logf("", "config reloaded")
 	return nil

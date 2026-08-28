@@ -450,6 +450,45 @@ endpoint = "https://api.linear.app/graphql"
 # theme = "catppuccin-mocha"   # catppuccin-latte | catppuccin-frappe | catppuccin-macchiato | catppuccin-mocha
 
 # ---------------------------------------------------------------------------
+# [remote] — the phone listener. OPTIONAL and DEFAULT OFF, and the default is
+# chosen for what enabling it GRANTS rather than for what it costs.
+#
+# Read this sentence before flipping the key: a paired phone can type arbitrary
+# prose into an autonomous coding agent, and at the higher capability tiers it
+# can trigger reviews, toggle dev servers and tear down worktrees. Terminal
+# write on a "-shell-N" tab is arbitrary code execution on this Mac, with your
+# gh token, SSH agent and login keychain in reach. Losing the phone is answered
+# by revoking the device from the desktop, not by a stingy default here.
+#
+# Omitting the whole table is zero behavior change: nothing binds, nothing
+# listens, and a later save will not grow the table.
+#
+# While the transport is at its first milestone the listener is compiled ONLY
+# into a binary built with the `lola_insecure` build tag, which additionally
+# forces the bind to localhost whatever this table says. A release binary has no
+# listener at all and logs that when this table is enabled, so enabling it there
+# is inert rather than silent.
+# ---------------------------------------------------------------------------
+# [remote]
+# enabled = false
+# # Which interfaces to bind. One of off | localhost | lan | all, or a literal
+# # IP address (a hostname is REJECTED rather than resolved — config loading
+# # never makes a network call).
+# #
+# #   off        bind nothing. Keeps the rest of the table, so it is the way to
+# #              pause the listener without losing your settings.
+# #   localhost  loopback only — what an SSH forward, a VPN or a tailnet wants,
+# #              and the only mode that puts nothing on a network interface.
+# #   lan        only private interfaces (RFC1918 / ULA / link-local) whose
+# #              names are not tunnels or virtual bridges. On a laptop this
+# #              means EVERY network this machine ever joins, conference WiFi
+# #              included. The bound interfaces are logged by name at startup.
+# #   all        0.0.0.0. Never a default.
+# bind = "localhost"
+# # TCP port. 0 uses the built-in default shown here.
+# port = 7717
+
+# ---------------------------------------------------------------------------
 # [[project]] — repository registry for the native runtime (one table per
 # repo). Every poll references a project by name; lola then creates a git
 # worktree per session under ~/.lola/worktrees/<project>/... and runs Claude
