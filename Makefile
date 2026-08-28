@@ -5,7 +5,7 @@ export GOCACHE := $(CURDIR)/.gocache
 # which sandboxed shells cannot write to.
 export GOFLAGS := -mod=mod -buildvcs=false
 
-.PHONY: build test vet fmt fmtcheck tidy check clean
+.PHONY: build test vet fmt fmtcheck tidy check clean remote-dev remote-info
 
 build:
 	go build -o lola .
@@ -39,3 +39,16 @@ check: fmtcheck build vet test
 
 clean:
 	rm -rf lola .gocache
+
+# --- mobile (milestone 1) ---------------------------------------------------
+#
+# The phone listener only exists in a build tagged lola_insecure, and the binary
+# that actually runs is the one on PATH rather than ./lola — so `make build`
+# alone can never bring it up. These delegate to one script that both this
+# Makefile and mobile/package.json call, so neither side owns the sequence.
+
+remote-dev:
+	@contrib/lola-remote-dev.sh
+
+remote-info:
+	@contrib/lola-remote-dev.sh --info
