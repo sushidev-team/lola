@@ -919,6 +919,23 @@ each of which owns exactly one external tool or concern behind an **exec seam**
 - **Fire once per transition.** Reactions and write-backs use persisted
   one-shot guards (`LastReactedStatus`, `WB*Done`, review's per-PR guard) so
   they don't re-fire on every 30s observer cycle.
+- **A FORCED review has to release EVERY per-PR one-shot in its way, not just
+  the pass guard.** A review PR carries TWO of them — `ReviewedPRs[kind]` (has
+  this kind reviewed this PR) and `PostedGitHubPRs[kind]` (has the github sink
+  settled for this PR). `cmd=review` ignores the first by calling
+  `runReviewChain` directly, so for a long time it left the second stamped: the
+  second review ran, its findings went to the worker, notify and Linear, and
+  `postGithubSink` returned on line one. The pass reported success and the PR
+  got nothing — only the FIRST review of a PR ever appeared on GitHub.
+  `handleReviewProvider` therefore calls `unstampGithubSettled` before the exec
+  (release BEFORE, so a crash mid-pass cannot leave the sink settled for
+  findings that were never posted). Two things to keep:
+  - `InlineReviewPRs[kind]` is deliberately NOT released. The threads the first
+    post created are still open on that PR, so the hand-off must keep telling
+    the worker to resolve them even when this run falls back to a plain comment.
+  - The release, like `unstampReviewed`, only clears a guard still pointing at
+    THAT PR number, so it can never undo a stamp another writer just made for a
+    newer PR.
 - **Untrusted output stays out of the control loop.** `brain` summaries and
   `review` findings are derived from attacker-influenceable context (PR diffs,
   CI logs, pane text). They may go to a human (notify + Linear comment) but the

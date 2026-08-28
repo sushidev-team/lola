@@ -1859,3 +1859,61 @@ func TestUnknownKindFailsClosed(t *testing.T) {
 		t.Errorf("worker got %v, want nothing", sentTexts(seams))
 	}
 }
+
+// A FORCED review (`lola review` / the app's Review button) must post to the PR
+// AGAIN, even though the github sink already settled that PR for this kind on
+// the first review. Without releasing the settle guard the second pass ran, the
+// findings reached the worker and Linear, and the PR silently got nothing.
+func TestHandleReviewForcedRepostsToGitHub(t *testing.T) {
+	d := newTestDaemon(t, reviewTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})
+	cli := cliDesc()
+	cli.Transports = config.TransportSet{config.TransportLola, config.TransportGitHub}
+	setProviders(d, cli)
+	(&fakeReactSeams{}).install(d)
+	fr := &fakeReview{findings: "FORCED-FINDING"}
+	fr.install(d)
+	fp := &fakePostPR{}
+	fp.install(d)
+
+	// PR #7 already reviewed AND already posted (both one-shots settled).
+	s := reactSess("FE-1", "review_pending", openPR(7, "MERGEABLE", "", "pass"))
+	s.AtPrompt = true
+	s.ReviewedPRs = map[string]int{"coderabbit-cli": 7}
+	s.PostedGitHubPRs = map[string]int{"coderabbit-cli": 7}
+	d.sessions.Upsert(s)
+
+	if _, err := d.handleReview(context.Background(), s.ID); err != nil {
+		t.Fatalf("handleReview: %v", err)
+	}
+	if fr.callCount() != 1 {
+		t.Fatalf("forced review must run the pass, got %d execs", fr.callCount())
+	}
+	if fp.count() != 1 {
+		t.Fatalf("a forced review must re-post to the PR, got %d posts", fp.count())
+	}
+	got, _ := d.sessions.Get(s.ID)
+	if got.PostedGitHubPRs["coderabbit-cli"] != 7 {
+		t.Errorf("the successful re-post must re-settle the guard, got %d", got.PostedGitHubPRs["coderabbit-cli"])
+	}
+}
+
+// The release is scoped to the PR the force names: a settle guard pointing at a
+// DIFFERENT PR is left alone.
+func TestUnstampGithubSettledOnlyClearsMatchingPR(t *testing.T) {
+	d := newTestDaemon(t, reviewTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})
+	s := reactSess("FE-1", "review_pending", openPR(9, "MERGEABLE", "", "pass"))
+	s.PostedGitHubPRs = map[string]int{"coderabbit-cli": 9}
+	d.sessions.Upsert(s)
+
+	d.unstampGithubSettled(s.ID, kindCoderabbitCLI, 7)
+	got, _ := d.sessions.Get(s.ID)
+	if got.PostedGitHubPRs["coderabbit-cli"] != 9 {
+		t.Errorf("a guard for another PR must survive, got %d", got.PostedGitHubPRs["coderabbit-cli"])
+	}
+
+	d.unstampGithubSettled(s.ID, kindCoderabbitCLI, 9)
+	got, _ = d.sessions.Get(s.ID)
+	if _, ok := got.PostedGitHubPRs["coderabbit-cli"]; ok {
+		t.Errorf("a matching guard must be released, got %v", got.PostedGitHubPRs)
+	}
+}

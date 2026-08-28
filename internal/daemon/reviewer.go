@@ -1352,3 +1352,26 @@ func (d *Daemon) stampGithubSettled(id string, k provKind, pr int) {
 	})
 	d.reviewSave()
 }
+
+// unstampGithubSettled releases the per-PR github settle guard so the NEXT route
+// of this kind's findings posts to the PR again. It is the forced-review
+// counterpart of unstampReviewed: `cmd=review` deliberately ignores the
+// once-per-PR pass guard, and without releasing this one too the re-run's
+// findings reached the worker and Linear while postGithubSink silently no-opped
+// — a second review that said it had been posted and never was.
+//
+// Like unstampReviewed it only clears a guard still pointing at pr, so it can
+// never undo a stamp another writer just made for a newer PR. InlineReviewPRs is
+// deliberately NOT cleared: the threads the first post created are still open on
+// that PR, so the hand-off must keep telling the worker to resolve them even if
+// this run falls back to a plain comment.
+func (d *Daemon) unstampGithubSettled(id string, k provKind, pr int) {
+	d.sessions.Update(id, func(cur *session.Session) bool {
+		if cur.PostedGitHubPRs == nil || cur.PostedGitHubPRs[string(k)] != pr {
+			return false
+		}
+		delete(cur.PostedGitHubPRs, string(k))
+		return true
+	})
+	d.reviewSave()
+}

@@ -146,6 +146,20 @@ func (d *Daemon) handleReviewProvider(ctx context.Context, sessionID, kind strin
 	// the auto-trigger). It runs on this socket-handler goroutine, under the
 	// caller's ctx and the client's own Timeout — a forced review deliberately
 	// does NOT queue behind the review worker.
+	//
+	// The pass guard is not the only per-PR one-shot in the way: the github sink
+	// keeps its OWN settle guard (PostedGitHubPRs[kind]) so the observer cadence
+	// cannot re-post. A forced re-review is an explicit human ask, so release it
+	// here too — otherwise the second review is routed to the worker and Linear
+	// while the PR silently gets nothing, which reads as "it said it posted and
+	// did not". Released BEFORE the exec so a crash mid-pass cannot leave the
+	// sink permanently settled for findings that were never posted.
+	if s.PR != nil && s.PR.Number > 0 {
+		d.unstampGithubSettled(s.ID, p.Kind, s.PR.Number)
+		if cur, ok := d.sessions.Get(s.ID); ok {
+			s = cur
+		}
+	}
 	res := d.runReviewChain(ctx, s, p)
 	switch {
 	case res.Skipped != "":
