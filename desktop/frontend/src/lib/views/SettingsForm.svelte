@@ -576,6 +576,47 @@
   );
   let connectTimer: ReturnType<typeof setInterval> | undefined;
 
+  // --- regenerating the key -------------------------------------------------
+  //
+  // Rolling the bearer key is milestone 1's ONLY revocation, and it is blunt:
+  // every paired phone loses access at once, because every paired phone holds
+  // the same key. The dialog says that plainly rather than offering it as
+  // routine maintenance — M2's per-device revocation is the precise version.
+  //
+  // It goes through the shared `confirm` store like every other irreversible
+  // action in this app, so a shortcut and a button ask the same way.
+  let regenBusy = $state(false);
+  let regenDone = $state("");
+
+  function askRegenerate() {
+    confirm.ask({
+      title: "Regenerate the phone key?",
+      body: "Every phone paired with this daemon loses access immediately.",
+      detail:
+        "Milestone 1 authenticates every phone with one shared key, so there is no way to revoke a single device. Each phone has to scan a new code afterwards.",
+      confirmLabel: "Regenerate",
+      onConfirm: () => void regenerateKey(),
+    });
+  }
+
+  async function regenerateKey() {
+    regenBusy = true;
+    connectErr = "";
+    regenDone = "";
+    try {
+      await ConfigService.RegenerateRemoteKey();
+      // Whatever is on screen describes the OLD key, so it is dropped rather
+      // than left looking valid — a stale code scans cleanly and is then
+      // refused, which from the phone is indistinguishable from a bad read.
+      hideConnect();
+      regenDone = "New key in place. The listener was restarted; press Show code for the new one.";
+    } catch (e) {
+      connectErr = String(e);
+    } finally {
+      regenBusy = false;
+    }
+  }
+
   function stopConnectTimer() {
     if (connectTimer !== undefined) clearInterval(connectTimer);
     connectTimer = undefined;
@@ -1114,6 +1155,20 @@
                 <Button variant="primary" size="sm" loading={connectBusy} onclick={revealConnect}>Show code</Button>
               {/if}
             </div>
+
+            <!-- Regenerating sits BESIDE the reveal rather than inside it: it is
+                 not a step in connecting a phone, it is the undo for having
+                 connected one. `ghost` keeps it quieter than Show code, which is
+                 the action someone actually came here for. -->
+            <div class="mt-2 flex items-center gap-3">
+              <Button size="sm" loading={regenBusy} onclick={askRegenerate}>Regenerate key</Button>
+              <span class="text-xs text-faint">
+                Milestone 1's only revocation — it disconnects every paired phone.
+              </span>
+            </div>
+            {#if regenDone}
+              <p class="copy mt-2 text-sm text-good">{regenDone}</p>
+            {/if}
 
             {#if connectErr}
               <p class="copy mt-3 text-sm text-bad">{connectErr}</p>

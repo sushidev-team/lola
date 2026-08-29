@@ -204,3 +204,100 @@ func TestListenerDialSkipsWhatItCannotSplit(t *testing.T) {
 		t.Fatalf("port = %d", port)
 	}
 }
+
+// The listener refusing and the listener failing to BIND are different
+// failures, and the app used to report the second whichever had happened. The
+// first time it mattered the cause was a missing bearer key — nothing had been
+// attempted against an address at all — and an operator was sent to the log to
+// look for a bind error that did not exist. So the recorded reason is reported.
+func TestPairBeginReportsWhyTheListenerRefused(t *testing.T) {
+	d := newRemoteTestDaemon(t)
+	d.cfg.Remote = config.RemoteConfig{Enabled: true, Bind: "localhost", Port: freePort(t)}
+	d.remoteErr = "no authorizer in this build: something specific went wrong"
+
+	got, err := d.handlePairBegin(context.Background())
+	if err != nil {
+		t.Fatalf("a refused listener must not be an error: %v", err)
+	}
+	if !strings.Contains(got.Problem, "no authorizer") {
+		t.Errorf("the recorded reason was not reported, got %q", got.Problem)
+	}
+	if strings.Contains(got.Problem, "could not bind") {
+		t.Errorf("the problem still guesses at a bind failure: %q", got.Problem)
+	}
+	if got.Code != "" || got.Key != "" {
+		t.Fatal("no listener means no code and no key")
+	}
+}
+
+// With no reason on record the answer says so, rather than inventing one. A
+// daemon still starting is the honest reading, and it is what the sentence says.
+func TestPairBeginSaysWhenItHasNoReason(t *testing.T) {
+	d := newRemoteTestDaemon(t)
+	d.cfg.Remote = config.RemoteConfig{Enabled: true, Bind: "localhost", Port: freePort(t)}
+
+	got, err := d.handlePairBegin(context.Background())
+	if err != nil {
+		t.Fatalf("pairBegin: %v", err)
+	}
+	if got.Problem == "" {
+		t.Fatal("expected a problem")
+	}
+	if strings.Contains(got.Problem, "could not bind") {
+		t.Errorf("guessed at a bind failure with nothing on record: %q", got.Problem)
+	}
+}
+
+// A listener that comes up must CLEAR any earlier reason, or the next failure
+// would be described with a stale one — worse than no reason at all.
+func TestStartRemoteClearsAPreviousReason(t *testing.T) {
+	t.Setenv(remote.InsecureKeyEnv, pairBeginTestKey)
+	d := newRemoteTestDaemon(t)
+	d.cfg.Remote = config.RemoteConfig{Enabled: true, Bind: "localhost", Port: freePort(t)}
+	d.remoteErr = "a stale reason from an earlier attempt"
+
+	fake := panebus.NewFake()
+	d.paneRegistry = func() *panebus.Registry { return fake.Registry() }
+	d.startRemote(context.Background())
+	t.Cleanup(d.stopRemote)
+
+	d.remoteMu.Lock()
+	left := d.remoteErr
+	d.remoteMu.Unlock()
+	if left != "" {
+		t.Errorf("a started listener left %q on record", left)
+	}
+}
+
+// Rolling the key is M1's only revocation, so the key on disk must actually
+// change and the listener must come back up around the new one — a command
+// that rolled the file and left the old key working would report a revocation
+// that had not happened.
+func TestRegenerateRemoteKeyRollsTheKeyAndRebuildsTheListener(t *testing.T) {
+	d := newRemoteTestDaemon(t)
+	d.cfg.Remote = config.RemoteConfig{Enabled: true, Bind: "localhost", Port: freePort(t)}
+	fake := panebus.NewFake()
+	d.paneRegistry = func() *panebus.Registry { return fake.Registry() }
+	d.startRemote(context.Background())
+	t.Cleanup(d.stopRemote)
+
+	before, err := d.handlePairBegin(context.Background())
+	if err != nil || before.Key == "" {
+		t.Fatalf("pairBegin before: %v (key %q)", err, before.Key)
+	}
+
+	if err := d.handleRegenerateRemoteKey(context.Background()); err != nil {
+		t.Fatalf("regenerate: %v", err)
+	}
+
+	after, err := d.handlePairBegin(context.Background())
+	if err != nil {
+		t.Fatalf("pairBegin after: %v", err)
+	}
+	if after.Key == "" {
+		t.Fatal("the listener did not come back up around a new key")
+	}
+	if after.Key == before.Key {
+		t.Fatal("the key did not change, so no phone was disconnected")
+	}
+}

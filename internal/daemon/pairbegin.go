@@ -49,6 +49,7 @@ func (d *Daemon) handlePairBegin(_ context.Context) (protocol.PairBeginData, err
 
 	d.remoteMu.Lock()
 	srv := d.remote
+	lastErr := d.remoteErr
 	d.remoteMu.Unlock()
 
 	if srv == nil {
@@ -59,8 +60,19 @@ func (d *Daemon) handlePairBegin(_ context.Context) (protocol.PairBeginData, err
 				Problem: "The phone listener is off. Enable [remote] and reload before connecting a phone.",
 			}, nil
 		}
+		if lastErr != "" {
+			// The REASON the listener refused, rather than a guess at one. An
+			// earlier version sent the operator to the log to find an address
+			// that could not be bound, which was wrong the first time it
+			// mattered: the cause was a missing bearer key, and no address had
+			// been attempted at all.
+			return protocol.PairBeginData{
+				Problem: "[remote] is enabled but the listener did not start: " + lastErr,
+			}, nil
+		}
 		return protocol.PairBeginData{
-			Problem: "[remote] is enabled but no listener came up. The daemon log says which address it could not bind.",
+			Problem: "[remote] is enabled but no listener came up, and the daemon recorded no reason — " +
+				"it may still be starting. The daemon log has the detail.",
 		}, nil
 	}
 

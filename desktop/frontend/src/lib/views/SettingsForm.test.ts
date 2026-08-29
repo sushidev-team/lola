@@ -60,6 +60,7 @@ const {
   SaveSettings,
   PrioritySortKeys,
   RemoteBinds,
+  RegenerateRemoteKey,
   ReviewKinds,
   Themes,
   SetTheme,
@@ -77,6 +78,7 @@ const {
   SaveSettings: vi.fn(),
   PrioritySortKeys: vi.fn(),
   RemoteBinds: vi.fn(),
+  RegenerateRemoteKey: vi.fn(),
   ReviewKinds: vi.fn(),
   Themes: vi.fn(),
   SetTheme: vi.fn(),
@@ -97,6 +99,7 @@ vi.mock("@bindings/desktop", () => ({
     SaveSettings: (dto: unknown) => SaveSettings(dto),
     PrioritySortKeys: () => PrioritySortKeys(),
     RemoteBinds: () => RemoteBinds(),
+    RegenerateRemoteKey: () => RegenerateRemoteKey(),
     ReviewKinds: () => ReviewKinds(),
     Themes: () => Themes(),
     SetTheme: (name: string) => SetTheme(name),
@@ -151,6 +154,7 @@ describe("SettingsForm", () => {
     WorkspaceLabels.mockReset().mockResolvedValue(workspaceLabels);
     PrioritySortKeys.mockReset().mockResolvedValue(["priority", "createdAt"]);
     RemoteBinds.mockReset().mockResolvedValue(["off", "localhost", "lan", "all"]);
+    RegenerateRemoteKey.mockReset().mockResolvedValue(undefined);
     ReviewKinds.mockReset().mockResolvedValue(reviewKinds.map((k) => ({ ...k })));
     Themes.mockReset().mockResolvedValue([...THEME_IDS]);
     SetTheme.mockReset().mockResolvedValue(undefined);
@@ -344,6 +348,54 @@ describe("SettingsForm", () => {
     await fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
     await waitFor(() => expect(SaveSettings).toHaveBeenCalledTimes(1));
     expect(SaveSettings.mock.calls[0][0]).toMatchObject({ remoteBind: "10.0.0.5" });
+  });
+
+  // Rolling the key is M1's only revocation and it disconnects every paired
+  // phone, so it must ASK first — the same shared confirm store every other
+  // irreversible action in this app goes through.
+  it("asks before regenerating the key, and does nothing if declined", async () => {
+    render(SettingsForm);
+    await screen.findByDisplayValue("60s");
+    await fireEvent.click(screen.getByRole("tab", { name: "Remote" }));
+
+    await fireEvent.click(await screen.findByRole("button", { name: /regenerate key/i }));
+    expect(RegenerateRemoteKey).not.toHaveBeenCalled();
+    expect(confirm.request).not.toBeNull();
+    // The dialog has to say what it costs, not just what it does.
+    expect(confirm.request?.body).toMatch(/every phone/i);
+
+    confirm.cancel();
+    expect(RegenerateRemoteKey).not.toHaveBeenCalled();
+  });
+
+  it("regenerates on confirm and drops the code that described the old key", async () => {
+    render(SettingsForm);
+    await screen.findByDisplayValue("60s");
+    await fireEvent.click(screen.getByRole("tab", { name: "Remote" }));
+
+    // Reveal a code first, so there is stale material on screen to drop.
+    await fireEvent.click(await screen.findByRole("button", { name: "Show code" }));
+    await waitFor(() => expect(ConnectCode).toHaveBeenCalled());
+
+    await fireEvent.click(screen.getByRole("button", { name: /regenerate key/i }));
+    confirm.accept();
+
+    await waitFor(() => expect(RegenerateRemoteKey).toHaveBeenCalledTimes(1));
+    // A stale code scans cleanly and is then refused, which from the phone is
+    // indistinguishable from a bad camera read — so it must not stay up.
+    await waitFor(() => expect(screen.getByRole("button", { name: "Show code" })).toBeInTheDocument());
+  });
+
+  it("reports a failed regeneration instead of claiming the key rolled", async () => {
+    RegenerateRemoteKey.mockRejectedValue(new Error("daemon unreachable"));
+    render(SettingsForm);
+    await screen.findByDisplayValue("60s");
+    await fireEvent.click(screen.getByRole("tab", { name: "Remote" }));
+
+    await fireEvent.click(await screen.findByRole("button", { name: /regenerate key/i }));
+    confirm.accept();
+
+    expect(await screen.findByText(/daemon unreachable/)).toBeInTheDocument();
   });
 
   it("saves the listener toggle and port", async () => {

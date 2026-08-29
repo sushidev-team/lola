@@ -121,6 +121,16 @@ func (d *Daemon) handle(ctx context.Context, req protocol.Request) protocol.Resp
 			return protocol.Response{OK: false, Error: err.Error()}
 		}
 		return dataResponse(data)
+	case "regenerateRemoteKey":
+		// Rolls M1's shared bearer key and rebuilds the listener, which is the
+		// only revocation this milestone has. Denied for every remote peer in
+		// internal/remote, so like pairBegin it reaches the unix socket only: a
+		// phone able to roll the key could lock its operator out while keeping
+		// the connection it already holds.
+		if err := d.handleRegenerateRemoteKey(ctx); err != nil {
+			return protocol.Response{OK: false, Error: err.Error()}
+		}
+		return protocol.Response{OK: true}
 	case "hookEvent":
 		return d.handleHookEvent(req)
 	case "kill":

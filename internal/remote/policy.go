@@ -38,19 +38,26 @@ const remoteCmdPrefix = "remote."
 //	                cost of listing them early is nothing and the cost of
 //	                forgetting one later is the whole threat model.
 //
+//	regenerateRemoteKey
+//	                rolls the shared bearer key, which is the ONLY revocation
+//	                M1 has. A phone able to roll it could lock the operator out
+//	                of their own daemon while keeping the connection it already
+//	                holds — the precise inversion of what revocation is for.
+//
 // kill is deliberately NOT here: it is reachable, with Force cleared by
 // normalizeRequest. Discarding a dirty worktree is the one gate teardown has,
 // so the FIELD is denied rather than the command.
 var deniedCommands = map[string]bool{
-	"stop":          true,
-	"reload":        true,
-	"renameProject": true,
-	"hookEvent":     true,
-	"pairBegin":     true,
-	"pairStatus":    true,
-	"pairConfirm":   true,
-	"devices":       true,
-	"revokeDevice":  true,
+	"stop":                true,
+	"reload":              true,
+	"renameProject":       true,
+	"hookEvent":           true,
+	"pairBegin":           true,
+	"pairStatus":          true,
+	"pairConfirm":         true,
+	"devices":             true,
+	"revokeDevice":        true,
+	"regenerateRemoteKey": true,
 }
 
 // CommandDenied reports whether cmd is refused for every remote peer

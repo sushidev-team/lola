@@ -182,10 +182,17 @@ func (d *Daemon) startRemote(ctx context.Context) {
 		// carrying on without a listener, which is the part an operator
 		// reading the log for "why can't my phone connect" needs.
 		d.logf("", "remote: not listening: %v", err)
+		// KEPT, so cmd=pairBegin reports the real reason instead of sending a
+		// human to the log for a bind failure that may not be one — the first
+		// time it mattered, the cause was a missing key and the UI said the
+		// address could not be bound. Safe to put in front of an operator:
+		// internal/remote is careful that no key ever reaches an error.
+		d.remoteErr = err.Error()
 		_ = reg.Close()
 		return
 	}
 	d.remote = srv
+	d.remoteErr = ""
 	d.panes = reg
 
 	var where []string

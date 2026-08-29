@@ -354,8 +354,14 @@ type Daemon struct {
 	// result itself and never lets the seam supply it, because identity is the
 	// one question only the daemon can answer (see resolvePaneName) and a test
 	// that provided its own gate would be proving nothing about the wiring.
+	// remoteErr is the last reason a listener did not come up, kept so
+	// cmd=pairBegin can REPORT it instead of the caller guessing. The desktop
+	// used to tell an operator to go read the log for an address it could not
+	// bind, which was a guess and was wrong the one time it mattered: the actual
+	// cause was a missing bearer key. It is cleared whenever a listener starts.
 	remoteMu     sync.Mutex
 	remote       *remote.Server
+	remoteErr    string
 	panes        *panebus.Registry
 	paneRegistry func() *panebus.Registry
 
