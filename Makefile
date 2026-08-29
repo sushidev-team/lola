@@ -5,7 +5,7 @@ export GOCACHE := $(CURDIR)/.gocache
 # which sandboxed shells cannot write to.
 export GOFLAGS := -mod=mod -buildvcs=false
 
-.PHONY: build test vet fmt fmtcheck tidy check clean remote-dev remote-info
+.PHONY: build test vet fmt fmtcheck tidy check clean mobile-dev mobile-info desktop-dev
 
 build:
 	go build -o lola .
@@ -47,8 +47,22 @@ clean:
 # alone can never bring it up. These delegate to one script that both this
 # Makefile and mobile/package.json call, so neither side owns the sequence.
 
-remote-dev:
-	@contrib/lola-remote-dev.sh
+mobile-dev:
+	@contrib/lola-mobile-dev.sh
 
-remote-info:
-	@contrib/lola-remote-dev.sh --info
+mobile-info:
+	@contrib/lola-mobile-dev.sh --info
+
+# The desktop app's dev loop. `wails3 task build` only refreshes the loose
+# bin/Lola, so `open bin/Lola.app` after one launches the OLD bundled binary and
+# every source change reads as a no-op; `wails3 dev` runs from source with the
+# Web Inspector attached, and regenerates desktop/frontend/bindings whenever a
+# bound Go service changes. Package the .app with `wails3 task package` from
+# desktop/ when you actually want a bundle.
+desktop-dev:
+	@command -v wails3 >/dev/null 2>&1 || { \
+		echo "wails3 not found. Install it with:"; \
+		echo "  go install github.com/wailsapp/wails/v3/cmd/wails3@latest"; \
+		echo "(note: a distinct binary from the v2 'wails')"; \
+		exit 1; }
+	cd desktop && wails3 dev

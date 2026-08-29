@@ -276,7 +276,7 @@ Sections 4.1 to 4.4 explain each step and why it exists. Once you have read them
 once, the whole sequence is one command, from either side of the project:
 
 ```sh
-make remote-dev            # from the repository root
+make mobile-dev            # from the repository root
 npm run daemon             # from mobile/, the same script
 ```
 
@@ -292,7 +292,7 @@ SPKI pin land in your terminal.
 To read the connect details again without restarting anything:
 
 ```sh
-make remote-info           # or: npm run daemon:info
+make mobile-info           # or: npm run daemon:info
 ```
 
 The script does **not** edit `~/.lola/config.toml`. If `[remote]` is missing or

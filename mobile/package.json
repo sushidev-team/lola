@@ -15,8 +15,8 @@
     "sync": "npm run build:plugin && npm run build && cap sync ios",
     "ios": "npm run sync && cap open ios",
     "build:plugin": "npm --prefix plugins/lola-transport run build",
-    "daemon": "../contrib/lola-remote-dev.sh",
-    "daemon:info": "../contrib/lola-remote-dev.sh --info",
+    "daemon": "../contrib/lola-mobile-dev.sh",
+    "daemon:info": "../contrib/lola-mobile-dev.sh --info",
     "ios:sim": "npm run sync && cap run ios --target=simulator"
   },
   "dependencies": {

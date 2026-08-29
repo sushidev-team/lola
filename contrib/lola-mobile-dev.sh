@@ -22,9 +22,9 @@
 # lets a human decide.
 #
 # Usage:
-#   contrib/lola-remote-dev.sh          install the tagged build, then run it
-#   contrib/lola-remote-dev.sh --info   print the connect details, run nothing
-#   contrib/lola-remote-dev.sh --key    print the bearer key only
+#   contrib/lola-mobile-dev.sh          install the tagged build, then run it
+#   contrib/lola-mobile-dev.sh --info   print the connect details, run nothing
+#   contrib/lola-mobile-dev.sh --key    print the bearer key only
 
 set -eu
 
@@ -33,7 +33,7 @@ home=${LOLA_HOME:-$HOME/.lola}
 keyfile=$home/remote-dev-key
 logfile=$home/daemon.log
 
-die() { printf 'lola-remote-dev: %s\n' "$1" >&2; exit 1; }
+die() { printf 'lola-mobile-dev: %s\n' "$1" >&2; exit 1; }
 
 # The key lives outside the repository and is 0600, because it is a bearer
 # credential: anything holding it can type into a live coding agent.
