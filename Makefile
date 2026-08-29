@@ -5,7 +5,7 @@ export GOCACHE := $(CURDIR)/.gocache
 # which sandboxed shells cannot write to.
 export GOFLAGS := -mod=mod -buildvcs=false
 
-.PHONY: build test vet fmt fmtcheck tidy check clean mobile-dev mobile-info mobile-sim desktop-dev
+.PHONY: build test vet fmt fmtcheck tidy check clean mobile-dev mobile-info mobile-sim mobile-device desktop-dev
 
 build:
 	go build -o lola .
@@ -59,6 +59,13 @@ mobile-info:
 # the first thing to try. LOLA_SIM picks a specific simulator; see the script.
 mobile-sim:
 	cd mobile && ./scripts/run-sim.sh
+
+# Build, install and launch on a PHYSICAL iPhone. Three things exist only on
+# hardware and all three matter here: the camera (so the QR scanner), the
+# local-network permission prompt, and a real network that can actually drop.
+# Needs a signing team once — the script says how. See mobile/README.md Â§7.
+mobile-device:
+	cd mobile && ./scripts/run-device.sh
 
 # The desktop app's dev loop. `wails3 task build` only refreshes the loose
 # bin/Lola, so `open bin/Lola.app` after one launches the OLD bundled binary and

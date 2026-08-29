@@ -37,3 +37,7 @@ ios/App/Podfile.lock
 # CocoaPods is not used (Capacitor 8 defaults to SPM); an .xcworkspace here means
 # somebody ran `cap add ios --packagemanager CocoaPods` locally.
 ios/App/App.xcworkspace/
+
+# Per-developer signing team for scripts/run-device.sh. A Team ID is personal
+# and ios/debug.xcconfig is tracked, so it lives here instead of there.
+ios/team.local
