@@ -48,25 +48,26 @@ fi
 
 if [ -n "${LOLA_DEVICE:-}" ]; then
 	udid=$LOLA_DEVICE
-	name=$(printf '%s\n' "$devices" | grep -i "$udid" | awk '{print $1}' | head -1)
+	name=$(printf '%s\n' "$devices" | awk -F'[[:space:]][[:space:]]+' -v u="$udid" '$3 == u { print $1; exit }')
 else
-	# Columns are: Name Hostname Identifier State Model. Take the first that is
-	# actually connected and is not a Watch — a paired Watch shows up here too
-	# and cannot run this app.
+	# devicectl prints a fixed-width table whose columns are separated by runs of
+	# two or more spaces: Name, Hostname, Identifier, State, Model. Split on the
+	# GUTTERS rather than on whitespace — several columns contain single spaces
+	# of their own ("Apple Bobsch", "iPhone 13 Pro (iPhone14,2)"), so counting
+	# fields finds the wrong column and silently reports no device.
+	#
+	# A paired Watch appears here too and cannot run this app, so it is excluded
+	# by model rather than by name: the name is whatever its owner chose.
 	row=$(printf '%s\n' "$devices" \
-		| grep -iv 'watch' \
-		| awk '$(NF-1) == "connected" || $(NF-1) == "available" { print }' \
-		| head -1)
+		| awk -F'[[:space:]][[:space:]]+' '$4 == "connected" && $5 !~ /^Watch/ { print; exit }')
 	[ -n "$row" ] || die "no connected iPhone.
 
 Connect it by cable, unlock it, and tap Trust if asked. Then, once per phone:
   Settings > Privacy & Security > Developer Mode > on (the phone restarts)
 
 Run './scripts/run-device.sh --list' to see what Xcode can currently see."
-	udid=$(printf '%s\n' "$row" | awk '{print $(NF-1)}')
-	# The identifier column is a UUID; find it positionally rather than by shape.
-	udid=$(printf '%s\n' "$row" | tr ' ' '\n' | grep -E '^[0-9A-Fa-f-]{36}$' | head -1)
-	name=$(printf '%s\n' "$row" | awk '{print $1}')
+	udid=$(printf '%s\n' "$row" | awk -F'[[:space:]][[:space:]]+' '{print $3}')
+	name=$(printf '%s\n' "$row" | awk -F'[[:space:]][[:space:]]+' '{print $1}')
 fi
 
 [ -n "$udid" ] || die "could not determine a device identifier; try LOLA_DEVICE=<udid>"
@@ -83,15 +84,30 @@ if [ -z "$team" ] && [ -f ios/team.local ]; then
 	team=$(tr -d ' \t\r\n' < ios/team.local)
 fi
 if [ -z "$team" ]; then
+	# Discover it instead of asking. An "Apple Development" identity in the
+	# keychain is by definition an iOS development certificate, and the
+	# parenthesised value in its name is the Team ID. "Developer ID Application"
+	# identities are deliberately NOT offered: those sign Mac software for
+	# distribution outside the App Store (this repo uses one to notarize the
+	# desktop app) and cannot sign an iOS device build.
+	teams=$(security find-identity -v -p codesigning 2>/dev/null \
+		| sed -n 's/.*"Apple Development: .*(\([A-Z0-9]\{10\}\))".*/\1/p' \
+		| sort -u)
+	count=$(printf '%s\n' "$teams" | grep -c . || true)
+	if [ "$count" = "1" ]; then
+		team=$teams
+		printf 'run-device: using the only Apple Development team on this Mac (%s).\n' "$team" >&2
+		printf "run-device: save it with: echo %s > ios/team.local\n" "$team" >&2
+	fi
+fi
+if [ -z "$team" ]; then
 	die "no signing team.
 
 A device build has to be signed and the team is personal to you, so it is not
-committed. Find it once:
+committed. If this Mac has more than one Apple Development team, pick the one
+whose account has this phone registered:
 
-  Open the project, select the App target, Signing & Capabilities, tick
-  'Automatically manage signing', pick your team, and read the Team ID:
-
-    npx cap open ios
+  security find-identity -v -p codesigning | grep 'Apple Development'
 
 Then save it (this file is gitignored):
 
