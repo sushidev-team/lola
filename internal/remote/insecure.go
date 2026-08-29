@@ -4,36 +4,86 @@ package remote
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/sushidev-team/lola/internal/protocol"
 )
 
 // M1's authentication, and everything about it is temporary by construction.
 //
-// There is no cryptography in M1: the peer proves itself with a bearer key read
-// from LOLA_REMOTE_INSECURE_KEY, which the operator also configures on the
-// phone. "Deleted, not disabled, in M2" is a promise enforced by memory, so it
-// is enforced by the compiler instead — this file only exists under
+// There is no cryptography in M1: the peer proves itself with a bearer key.
+// "Deleted, not disabled, in M2" is a promise enforced by memory, so it is
+// enforced by the compiler instead — this file only exists under
 // //go:build lola_insecure, and insecure_off.go is what a release binary gets.
 //
-// Two rails hold while the tag is active, and neither is optional:
+// The key is GENERATED AND PERSISTED rather than demanded from the environment.
+// An env-var-only key made the listener silently disappear on any restart that
+// did not carry it — which is every restart the TUI's ^r and the desktop app's
+// restart button perform, since neither inherits the shell that started the
+// first one. The failure then looked like a bind problem and was not one. So
+// the key lives at <Dir>/remote.key beside device.key, survives a restart, and
+// InsecureKeyEnv remains as an override for whoever wants to supply their own.
 //
-//   - Listen FORCES the bind to loopback whatever [remote].bind says. A shared
-//     bearer secret must never reach a network interface, and M1's stated goal
-//     — one phone on the same WiFi — is satisfied by a loopback bind plus an
-//     SSH forward, with no secret on the wire and no dependence on the network
-//     the laptop happens to be on.
+// Two rails hold while the tag is active:
+//
+//   - Listen FORCES the bind to loopback whatever [remote].bind says, UNLESS
+//     the operator ALSO sets LOLA_REMOTE_INSECURE_LAN — see InsecureLANEnv,
+//     which exists for physical-device testing and is the one documented hole
+//     in this rail. A shared secret must never reach a network interface by
+//     ACCIDENT; for the Simulator it never has to, since a Simulator shares the
+//     Mac's loopback and 127.0.0.1 puts nothing on the wire at all.
 //   - Every accept logs a warning. A daemon running this path should be
 //     impossible to forget about.
 
-// InsecureKeyEnv names the environment variable holding M1's bearer key. It is
-// read once at startup and never appears in argv (ps reads argv), in a log
-// line, or in an error.
+// InsecureKeyEnv names an environment variable that OVERRIDES the generated
+// key. It is read once at startup and never appears in argv (ps reads argv), in
+// a log line, or in an error.
 const InsecureKeyEnv = "LOLA_REMOTE_INSECURE_KEY"
+
+// InsecureLANEnv names the opt-in that lets this build bind somewhere other
+// than loopback. It exists for ONE reason: a physical phone cannot reach a
+// loopback-bound daemon, and the Simulator — which can, because it shares the
+// Mac's loopback — is not where a camera, the local-network permission prompt
+// or a real network partition can be tested.
+//
+// It is an environment variable rather than a config key on purpose. A config
+// key persists, and this must not: it is set by whoever starts the daemon, for
+// the length of a testing session, and it is gone when they stop. It is also
+// why this is not solved with a `socat` bridge, the tempting alternative — a
+// bridge from the LAN to loopback puts exactly the same secret on exactly the
+// same wire, while leaving the code claiming a loopback bind it no longer
+// effectively has. Relocating an exposure is not removing it, and a rail that
+// lies is worse than one with a documented hole.
+//
+// BOTH halves must be deliberate: this variable AND a [remote].bind naming
+// something other than loopback. Either alone changes nothing.
+//
+// This is scaffolding and it is deleted with the tag. M2 replaces the shared
+// key with per-device identities, mutual TLS and revocation, at which point
+// binding to a LAN is an ordinary thing to do and needs no opt-in at all.
+const InsecureLANEnv = "LOLA_REMOTE_INSECURE_LAN"
+
+// insecureKeyFile is the generated key's name, alongside device.key in the same
+// 0700 directory and with the same 0600 mode.
+const insecureKeyFile = "remote.key"
+
+// insecureLANAllowed reports whether the operator opened the bind rail.
+// Anything but an explicit affirmative reads as "no": a variable that is merely
+// PRESENT — exported empty by a shell profile, say — must not open a listener.
+func insecureLANAllowed() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(InsecureLANEnv))) {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
+}
 
 // insecureMinKeyLen is the shortest key this path accepts. There is no key
 // derivation and no rate limit on the handshake, so the whole of the secret's
@@ -62,36 +112,135 @@ type insecureHello struct {
 // gone.
 func Listen(ctx context.Context, opts Options) (*Server, error) {
 	logf := opts.logf()
-	auth, err := newAuthorizer(logf)
+	auth, err := newAuthorizer(opts.Dir, logf)
 	if err != nil {
 		return nil, err
 	}
 	if mode := opts.Bind; mode != "" && mode != "off" && mode != "localhost" {
-		logf("remote: WARNING bind %q is overridden to localhost: this build carries the insecure "+
-			"M1 bearer-key path (-tags lola_insecure) and must not put a shared secret on a network interface",
-			logSafe(mode))
-		opts.Bind = "localhost"
+		if insecureLANAllowed() {
+			// Both halves were deliberate: the config names a non-loopback bind
+			// AND the environment opts in. Neither alone reaches here.
+			logf("remote: WARNING bind %q is honoured because %s is set. The shared bearer key now "+
+				"crosses your network in the clear, and anything that can reach this port and guess "+
+				"the key can type into a running coding agent. Use it on a network you control, "+
+				"while you are testing, and not longer.", logSafe(mode), InsecureLANEnv)
+		} else {
+			logf("remote: WARNING bind %q is overridden to localhost: this build carries the insecure "+
+				"M1 bearer-key path (-tags lola_insecure) and must not put a shared secret on a network "+
+				"interface by accident. Set %s=1 to allow it anyway, which is how a physical phone "+
+				"reaches this daemon.", logSafe(mode), InsecureLANEnv)
+			opts.Bind = "localhost"
+		}
 	}
-	logf("remote: WARNING this daemon authenticates phones with a shared %s bearer key and no cryptography", InsecureKeyEnv)
+	logf("remote: WARNING this daemon authenticates phones with a shared bearer key and no cryptography")
 	return listen(ctx, opts, auth)
 }
 
-// newAuthorizer builds M1's bearer-key authorizer, or refuses when the
-// environment does not carry a usable key. The listener does not start without
-// it: an empty key that authenticated everyone would be strictly worse than no
-// listener at all.
-func newAuthorizer(logf func(string, ...any)) (Authorizer, error) {
-	key := os.Getenv(InsecureKeyEnv)
-	switch {
-	case key == "":
-		return nil, fmt.Errorf("%w: set %s to a random secret of at least %d characters",
-			ErrNoAuthorizer, InsecureKeyEnv, insecureMinKeyLen)
-	case len(key) < insecureMinKeyLen:
-		// The length, never the value.
-		return nil, fmt.Errorf("%w: %s is %d characters; at least %d are required",
-			ErrNoAuthorizer, InsecureKeyEnv, len(key), insecureMinKeyLen)
+// newAuthorizer builds M1's bearer-key authorizer.
+//
+// The key is resolved in one order and the order matters: an explicit
+// InsecureKeyEnv wins, so an operator who wants to supply their own still can
+// and nothing on disk overrides them; otherwise the generated key at
+// <dir>/remote.key is loaded, and if there is none, one is created. The
+// listener no longer refuses to start merely because nobody exported a
+// variable — that failure was silent, looked like a bind problem, and cost more
+// than it protected.
+func newAuthorizer(dir string, logf func(string, ...any)) (Authorizer, error) {
+	if key := os.Getenv(InsecureKeyEnv); key != "" {
+		if len(key) < insecureMinKeyLen {
+			// The length, never the value.
+			return nil, fmt.Errorf("%w: %s is %d characters; at least %d are required",
+				ErrNoAuthorizer, InsecureKeyEnv, len(key), insecureMinKeyLen)
+		}
+		return &insecureAuthorizer{key: []byte(key), logf: logf}, nil
+	}
+	key, err := loadOrCreateInsecureKey(dir, logf)
+	if err != nil {
+		return nil, err
 	}
 	return &insecureAuthorizer{key: []byte(key), logf: logf}, nil
+}
+
+// loadOrCreateInsecureKey reads <dir>/remote.key, creating it when absent.
+//
+// A key already on disk is returned whatever its length: it was generated here
+// at the right size, and refusing to start over a file an operator has edited
+// is worse than honouring it — the minimum exists to stop a WEAK key being
+// chosen deliberately, and this path chooses nothing.
+//
+// The write is temp+rename at 0600 inside the 0700 home, the same discipline
+// session.Store uses, so a crash mid-write cannot leave a truncated key that
+// authenticates nobody and cannot be told from a corrupted one.
+func loadOrCreateInsecureKey(dir string, logf func(string, ...any)) (string, error) {
+	if dir == "" {
+		return "", fmt.Errorf("%w: no lola home directory to keep a key in", ErrNoAuthorizer)
+	}
+	path := filepath.Join(dir, insecureKeyFile)
+	switch b, err := os.ReadFile(path); {
+	case err == nil:
+		if key := strings.TrimSpace(string(b)); key != "" {
+			return key, nil
+		}
+		// An empty file is not a key. Fall through and write a real one rather
+		// than authenticating everyone with "".
+	case !os.IsNotExist(err):
+		return "", fmt.Errorf("%w: reading %s: %w", ErrNoAuthorizer, insecureKeyFile, err)
+	}
+
+	raw := make([]byte, 16) // 32 hex characters, comfortably over the minimum
+	if _, err := rand.Read(raw); err != nil {
+		return "", fmt.Errorf("%w: generating a key: %w", ErrNoAuthorizer, err)
+	}
+	key := hex.EncodeToString(raw)
+
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", fmt.Errorf("%w: %w", ErrNoAuthorizer, err)
+	}
+	tmp, err := os.CreateTemp(dir, insecureKeyFile+".*")
+	if err != nil {
+		return "", fmt.Errorf("%w: %w", ErrNoAuthorizer, err)
+	}
+	defer os.Remove(tmp.Name())
+	if err := tmp.Chmod(0o600); err != nil {
+		tmp.Close()
+		return "", fmt.Errorf("%w: %w", ErrNoAuthorizer, err)
+	}
+	if _, err := tmp.WriteString(key); err != nil {
+		tmp.Close()
+		return "", fmt.Errorf("%w: %w", ErrNoAuthorizer, err)
+	}
+	if err := tmp.Close(); err != nil {
+		return "", fmt.Errorf("%w: %w", ErrNoAuthorizer, err)
+	}
+	if err := os.Rename(tmp.Name(), path); err != nil {
+		return "", fmt.Errorf("%w: %w", ErrNoAuthorizer, err)
+	}
+	// The path, never the value.
+	logf("remote: generated a new phone bearer key at %s", path)
+	return key, nil
+}
+
+// RegenerateInsecureKey replaces the stored key, invalidating every phone that
+// holds the old one. It is the closest thing M1 has to revocation, which is why
+// it exists before M2 brings the real one: a key that can never be rolled is a
+// key that is shared forever, including with whoever once borrowed the QR.
+//
+// It does NOT touch a listener that is already running — the caller restarts
+// the daemon, and the reload path rebuilds the authorizer — so a phone stays
+// connected until then. Saying otherwise would promise a cut-off this cannot
+// deliver.
+func RegenerateInsecureKey(dir string, logf func(string, ...any)) error {
+	if logf == nil {
+		logf = func(string, ...any) {}
+	}
+	if dir == "" {
+		return fmt.Errorf("%w: no lola home directory", ErrNoAuthorizer)
+	}
+	if err := os.Remove(filepath.Join(dir, insecureKeyFile)); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	_, err := loadOrCreateInsecureKey(dir, logf)
+	return err
 }
 
 // insecureAuthorizer authenticates one in-band hello per connection. It is

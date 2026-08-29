@@ -7,6 +7,8 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -70,29 +72,197 @@ func TestInsecureListenLeavesOffAlone(t *testing.T) {
 	}
 }
 
-// TestInsecureAuthorizerRequiresAUsableKey. An empty key that authenticated
-// everyone would be strictly worse than no listener, so the listener does not
-// start without one — and the refusal names the length, never the value.
-func TestInsecureAuthorizerRequiresAUsableKey(t *testing.T) {
-	cases := []struct{ name, key string }{
-		{"unset", ""},
-		{"too short", "hunter2"},
+// TestInsecureAuthorizerRejectsAShortOverride. An explicitly supplied key that
+// is too weak is refused, and the refusal names the length, never the value.
+// An UNSET variable is no longer an error — see the generation tests below.
+func TestInsecureAuthorizerRejectsAShortOverride(t *testing.T) {
+	t.Setenv(InsecureKeyEnv, "hunter2")
+	a, err := newAuthorizer(t.TempDir(), func(string, ...any) {})
+	if err == nil {
+		t.Fatal("a short key was accepted")
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Setenv(InsecureKeyEnv, tc.key)
-			a, err := newAuthorizer(func(string, ...any) {})
-			if err == nil {
-				t.Fatal("a short or missing key was accepted")
-			}
-			if a != nil {
-				t.Fatal("an authorizer was returned alongside the error")
-			}
-			if !errors.Is(err, ErrNoAuthorizer) {
-				t.Fatalf("got %v, want ErrNoAuthorizer", err)
-			}
-			if tc.key != "" && strings.Contains(err.Error(), tc.key) {
-				t.Errorf("the error repeated the key back: %v", err)
+	if a != nil {
+		t.Fatal("an authorizer was returned alongside the error")
+	}
+	if !errors.Is(err, ErrNoAuthorizer) {
+		t.Fatalf("got %v, want ErrNoAuthorizer", err)
+	}
+	if strings.Contains(err.Error(), "hunter2") {
+		t.Errorf("the error repeated the key back: %v", err)
+	}
+}
+
+// A missing key USED to stop the listener starting, which was silent, looked
+// like a bind failure, and happened on every restart that did not carry the
+// environment — which is every restart the TUI's ^r and the desktop app's
+// restart button perform. One is generated and persisted instead.
+func TestInsecureAuthorizerGeneratesAKeyWhenThereIsNone(t *testing.T) {
+	t.Setenv(InsecureKeyEnv, "")
+	dir := t.TempDir()
+
+	a, err := newAuthorizer(dir, func(string, ...any) {})
+	if err != nil {
+		t.Fatalf("newAuthorizer: %v", err)
+	}
+	if a == nil {
+		t.Fatal("no authorizer")
+	}
+
+	path := filepath.Join(dir, insecureKeyFile)
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("the key was not persisted: %v", err)
+	}
+	// 0600, the same discipline device.key gets.
+	if perm := fi.Mode().Perm(); perm != 0o600 {
+		t.Errorf("mode = %o, want 600", perm)
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(strings.TrimSpace(string(b))) < insecureMinKeyLen {
+		t.Error("the generated key is shorter than the minimum it exists to enforce")
+	}
+}
+
+// The whole point of persisting it: a restart authenticates the phone that was
+// already paired, instead of silently becoming a different daemon.
+func TestInsecureAuthorizerReusesTheStoredKey(t *testing.T) {
+	t.Setenv(InsecureKeyEnv, "")
+	dir := t.TempDir()
+
+	if _, err := newAuthorizer(dir, func(string, ...any) {}); err != nil {
+		t.Fatalf("first: %v", err)
+	}
+	first, err := os.ReadFile(filepath.Join(dir, insecureKeyFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := newAuthorizer(dir, func(string, ...any) {}); err != nil {
+		t.Fatalf("second: %v", err)
+	}
+	second, err := os.ReadFile(filepath.Join(dir, insecureKeyFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(first) != string(second) {
+		t.Error("the key changed across restarts, which unpairs every phone")
+	}
+}
+
+// An explicit key still wins, so an operator supplying their own is never
+// overridden by something already on disk.
+func TestInsecureAuthorizerPrefersTheEnvironmentOverride(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv(InsecureKeyEnv, "")
+	if _, err := newAuthorizer(dir, func(string, ...any) {}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	stored, err := os.ReadFile(filepath.Join(dir, insecureKeyFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	override := strings.Repeat("o", 32)
+	t.Setenv(InsecureKeyEnv, override)
+	a, err := newAuthorizer(dir, func(string, ...any) {})
+	if err != nil {
+		t.Fatalf("newAuthorizer: %v", err)
+	}
+	ia, ok := a.(*insecureAuthorizer)
+	if !ok {
+		t.Fatalf("got %T", a)
+	}
+	if string(ia.key) != override {
+		t.Error("the stored key won over an explicit override")
+	}
+	if after, _ := os.ReadFile(filepath.Join(dir, insecureKeyFile)); string(after) != string(stored) {
+		t.Error("an override rewrote the stored key")
+	}
+}
+
+// Regenerating is M1's stand-in for revocation: the old key must stop working.
+func TestRegenerateInsecureKeyReplacesIt(t *testing.T) {
+	t.Setenv(InsecureKeyEnv, "")
+	dir := t.TempDir()
+
+	if _, err := newAuthorizer(dir, func(string, ...any) {}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	before, err := os.ReadFile(filepath.Join(dir, insecureKeyFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := RegenerateInsecureKey(dir, nil); err != nil {
+		t.Fatalf("regenerate: %v", err)
+	}
+	after, err := os.ReadFile(filepath.Join(dir, insecureKeyFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(before) == string(after) {
+		t.Fatal("the key did not change, so no phone was invalidated")
+	}
+	if len(strings.TrimSpace(string(after))) < insecureMinKeyLen {
+		t.Error("the replacement is shorter than the minimum")
+	}
+}
+
+// The bind rail's hole is opened by TWO deliberate acts, and the test asserts
+// on the ADDRESSES actually bound rather than the mode string, for the same
+// reason the forcing test does.
+func TestInsecureListenHonoursTheBindWhenTheLANOptInIsSet(t *testing.T) {
+	t.Setenv(InsecureKeyEnv, strings.Repeat("k", 32))
+	t.Setenv(InsecureLANEnv, "1")
+
+	srv, err := Listen(context.Background(), Options{
+		Bind: "lan", Port: freePort(t), Dir: t.TempDir(), Handle: (&stubHandler{}).handle,
+	})
+	if err != nil {
+		t.Skipf("no usable private interface on this host: %v", err)
+	}
+	defer srv.Close()
+
+	addrs := srv.Addrs()
+	if len(addrs) == 0 {
+		t.Fatal("nothing was bound")
+	}
+	for _, ba := range addrs {
+		if loopbackAddr(ba.Addr) {
+			t.Errorf("bound %s; the opt-in should have honoured the LAN bind", ba.Addr)
+		}
+	}
+}
+
+// Half an opt-in is no opt-in: the variable alone, without a config that names
+// a non-loopback bind, changes nothing.
+func TestInsecureLANOptInAloneDoesNotWiden(t *testing.T) {
+	t.Setenv(InsecureKeyEnv, strings.Repeat("k", 32))
+	t.Setenv(InsecureLANEnv, "1")
+
+	srv, err := Listen(context.Background(), Options{
+		Bind: "localhost", Port: freePort(t), Dir: t.TempDir(), Handle: (&stubHandler{}).handle,
+	})
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer srv.Close()
+
+	for _, ba := range srv.Addrs() {
+		if !loopbackAddr(ba.Addr) {
+			t.Errorf("bound %s; a localhost bind must stay loopback", ba.Addr)
+		}
+	}
+}
+
+// And a value that is merely present must not count as consent.
+func TestInsecureLANOptInRequiresAnAffirmative(t *testing.T) {
+	for _, v := range []string{"", "0", "false", "no", "maybe", " "} {
+		t.Run("value="+v, func(t *testing.T) {
+			t.Setenv(InsecureLANEnv, v)
+			if insecureLANAllowed() {
+				t.Errorf("%q was read as consent", v)
 			}
 		})
 	}
@@ -104,7 +274,7 @@ func withInsecureAuth(t *testing.T, key string) func(*rig, *Options) {
 	t.Helper()
 	t.Setenv(InsecureKeyEnv, key)
 	return func(r *rig, _ *Options) {
-		a, err := newAuthorizer(r.log.logf)
+		a, err := newAuthorizer(t.TempDir(), r.log.logf)
 		if err != nil {
 			t.Fatalf("newAuthorizer: %v", err)
 		}

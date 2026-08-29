@@ -23,6 +23,7 @@
 #
 # Usage:
 #   contrib/lola-mobile-dev.sh          install the tagged build, then run it
+#   contrib/lola-mobile-dev.sh --lan    the same, but reachable from a real phone
 #   contrib/lola-mobile-dev.sh --info   print the connect details, run nothing
 #   contrib/lola-mobile-dev.sh --key    print the bearer key only
 
@@ -30,8 +31,14 @@ set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 home=${LOLA_HOME:-$HOME/.lola}
-keyfile=$home/remote-dev-key
+# The DAEMON owns this file: internal/remote generates it on first start, 0600,
+# and reuses it afterwards. This script only ever READS it, so the key it prints
+# is the one the listener is actually accepting. An earlier version kept its own
+# copy, which drifted the moment the daemon generated one and printed a key the
+# phone would be refused with.
+keyfile=$home/remote.key
 logfile=$home/daemon.log
+lan=
 
 die() { printf 'lola-mobile-dev: %s\n' "$1" >&2; exit 1; }
 
@@ -62,18 +69,13 @@ Read it in the desktop app instead: Settings -> Remote -> Show code.
 Or run this from a terminal outside any lola session."
 }
 
-# The key lives outside the repository and is 0600, because it is a bearer
-# credential: anything holding it can type into a live coding agent.
-ensure_key() {
-	[ -d "$home" ] || die "no $home — run lola once first"
-	if [ ! -f "$keyfile" ]; then
-		umask 077
-		# 32 hex characters, comfortably over internal/remote's 16-char minimum.
-		openssl rand -hex 16 > "$keyfile" || die "could not generate a key"
-		printf 'generated a new bearer key at %s\n' "$keyfile" >&2
+# Reading, never writing. A missing file means no daemon has started under this
+# home yet, which is worth reporting rather than papering over by inventing a
+# key the listener would reject.
+read_key() {
+	if [ -f "$keyfile" ]; then
+		tr -d ' \t\r\n' < "$keyfile"
 	fi
-	chmod 600 "$keyfile" 2>/dev/null || true
-	cat "$keyfile"
 }
 
 last_pin() {
@@ -85,22 +87,56 @@ last_pin() {
 case ${1:-} in
 --key)
 	refuse_in_session
-	ensure_key
+	read_key
 	exit 0
 	;;
 --info)
 	refuse_in_session
-	key=$(ensure_key)
+	key=$(read_key)
 	pin=$(last_pin)
-	printf '\n  host  127.0.0.1        (Simulator only — see mobile/README.md section 4.5 for a device)\n'
+	# The addresses the listener actually bound, rather than a guess: with the
+	# LAN opt-in off it is loopback and only a Simulator can reach it, and with
+	# it on the phone needs whichever private address the daemon chose.
+	addrs=$(sed -n 's/.*phone listener up on \(.*\) (SPKI pin.*/\1/p' "$logfile" 2>/dev/null | tail -1)
+	# A WILDCARD bind ("all") reports [::]:7717, which is not something anyone can
+	# type into a phone. Resolve it to an address that is actually reachable —
+	# loopback if it only bound loopback, otherwise this machine's private IPv4.
+	# This is also why "lan" is the better setting: it binds each private
+	# interface by name, so the log already says where to point the phone.
+	host=127.0.0.1
+	case $addrs in
+	*"[::]"* | *0.0.0.0*)
+		for i in en0 en1 en2; do
+			ip=$(ipconfig getifaddr "$i" 2>/dev/null) && [ -n "$ip" ] && host=$ip && break
+		done
+		;;
+	"") ;;
+	*)
+		# Take the first address and strip its port, keeping IPv6 brackets intact.
+		first=${addrs%%,*}
+		host=$(printf '%s' "$first" | sed 's/:[0-9]*$//')
+		;;
+	esac
+	printf '\n'
+	if [ -n "$addrs" ]; then
+		printf '  bound %s\n' "$addrs"
+	fi
+	printf '  host  %s\n' "$host"
 	printf '  port  7717             (or [remote].port)\n'
-	printf '  key   %s        (a bearer credential — see mobile/README.md)\n' "$key"
+	if [ -n "$key" ]; then
+		printf '  key   %s        (a bearer credential — see mobile/README.md)\n' "$key"
+	else
+		printf '  key   none yet — the daemon generates one at %s on first start\n' "$keyfile"
+	fi
 	if [ -n "$pin" ]; then
 		printf '  pin   %s\n\n' "$pin"
 	else
 		printf '  pin   unknown — start the daemon once; it prints the pin on the listener line\n\n'
 	fi
 	exit 0
+	;;
+--lan)
+	lan=1
 	;;
 esac
 
@@ -134,18 +170,29 @@ Something else on PATH is shadowing the build just installed."
 fi
 printf 'verified: %s carries the M1 listener\n' "$bin" >&2
 
-key=$(ensure_key)
-
 # --- run --------------------------------------------------------------------
-# Stopping first is the point of the script: a daemon already running was almost
-# certainly started without the key in its environment, and it would keep
-# refusing every connection while looking perfectly healthy.
+# Stopping first is the point of the script. A daemon already running was very
+# likely started by the TUI's ^r or the desktop app's restart button, neither of
+# which passes the LAN opt-in — so it is bound to loopback and a phone cannot
+# reach it, however healthy it looks.
 if lola status >/dev/null 2>&1; then
-	printf 'stopping the running daemon (it does not hold the bearer key)...\n' >&2
+	printf 'stopping the running daemon...\n' >&2
 	lola stop >/dev/null 2>&1 || true
 fi
 
-printf '\n  key   %s\n' "$key"
-printf '  The listener line below carries the SPKI pin. Both go in the app.\n\n'
+# The key is NOT passed in the environment any more: the daemon generates and
+# reuses its own, which is what makes it survive a restart this script did not
+# perform. Anyone who wants to supply their own still exports
+# LOLA_REMOTE_INSECURE_KEY themselves, and internal/remote prefers it.
+if [ -n "$lan" ]; then
+	printf '\n  Binding beyond loopback, so a physical phone can reach this daemon.\n' >&2
+	printf '  The bearer key crosses your network in the clear. Use a network you control.\n' >&2
+	printf '  [remote].bind decides WHICH interfaces; "lan" is narrower than "all".\n\n' >&2
+	exec env LOLA_REMOTE_INSECURE_LAN=1 lola run
+fi
 
-exec env LOLA_REMOTE_INSECURE_KEY="$key" lola run
+printf '\n  Bound to loopback, which a Simulator shares and a physical phone cannot\n' >&2
+printf '  reach. Use --lan for a real device.\n' >&2
+printf '  Connect details: make mobile-info, or the desktop app under Settings > Remote.\n\n' >&2
+
+exec lola run
