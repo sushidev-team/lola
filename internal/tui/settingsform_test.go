@@ -1844,3 +1844,73 @@ func TestSettingsFormRejectsAnEmptyGenericKind(t *testing.T) {
 		t.Error("a rejected save must not have written anything")
 	}
 }
+
+// --- [remote], the phone listener -------------------------------------------
+
+func TestSettingsFormSavesTheRemoteListener(t *testing.T) {
+	m := newTestRoot(t)
+	f := newSettingsForm(m.cfgPath, m.cfg)
+
+	f.field("remote_enabled").b = true
+	f.field("remote_bind").text = "lan"
+	f.field("remote_port").text = "7800"
+
+	if ev := f.save(); ev == settingsFormNone || f.err != "" {
+		t.Fatalf("save failed: ev=%v err=%q", ev, f.err)
+	}
+	reloaded, err := config.Load(m.cfgPath)
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if err := reloaded.Validate(); err != nil {
+		t.Fatalf("the saved config must validate: %v", err)
+	}
+	if got := reloaded.Remote; !got.Enabled || got.Bind != "lan" || got.Port != 7800 {
+		t.Errorf("remote = %+v, want enabled on lan:7800", got)
+	}
+}
+
+// The bind field is free text rather than a cycled enum precisely so an IP
+// literal survives. An enum could only offer the keywords, so saving any
+// unrelated tab would rewrite a configured literal to a keyword and rebind the
+// daemon to a different set of interfaces — silently.
+func TestSettingsFormKeepsARemoteBindLiteral(t *testing.T) {
+	m := newTestRoot(t)
+	m.cfg.Remote = config.RemoteConfig{Enabled: true, Bind: "192.168.1.20", Port: 7717}
+
+	f := newSettingsForm(m.cfgPath, m.cfg)
+	if got := f.field("remote_bind").text; got != "192.168.1.20" {
+		t.Fatalf("the form must load the literal verbatim, got %q", got)
+	}
+
+	// Change something on a DIFFERENT tab, which is the path that used to eat it.
+	f.field("brain_model").text = "sonnet"
+
+	if ev := f.save(); ev == settingsFormNone || f.err != "" {
+		t.Fatalf("save failed: ev=%v err=%q", ev, f.err)
+	}
+	reloaded, err := config.Load(m.cfgPath)
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if got := reloaded.Remote.Bind; got != "192.168.1.20" {
+		t.Errorf("bind = %q, want the literal preserved", got)
+	}
+}
+
+// A bind the daemon does not accept must be refused by the form, not written
+// out for the daemon to reject on its next load.
+func TestSettingsFormRejectsABadRemoteBind(t *testing.T) {
+	m := newTestRoot(t)
+	f := newSettingsForm(m.cfgPath, m.cfg)
+
+	f.field("remote_enabled").b = true
+	f.field("remote_bind").text = "marsmac.local" // a hostname is not resolvable offline
+
+	if ev := f.save(); ev != settingsFormNone {
+		t.Fatalf("save must refuse a hostname bind, got ev=%v", ev)
+	}
+	if f.err == "" {
+		t.Error("the form must say why it refused")
+	}
+}

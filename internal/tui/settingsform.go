@@ -76,6 +76,7 @@ const (
 	stBrain
 	stStatusAgent
 	stCodeRabbit
+	stRemote
 	stAppearance
 )
 
@@ -90,6 +91,7 @@ var settingsTabs = []struct {
 	{stBrain, "Brain"},
 	{stStatusAgent, "Interpreter"},
 	{stCodeRabbit, "Review"},
+	{stRemote, "Remote"},
 	{stAppearance, "Appearance"},
 }
 
@@ -287,6 +289,20 @@ func newSettingsForm(cfgPath string, cfg *config.Config) *settingsForm {
 			{key: "sa_maxcycle", tab: stStatusAgent, label: "Max per cycle", help: "Interpretations queued per 30s observer cycle. Must be >= 0.", kind: sfInt, text: itoa(sa.MaxPerCycle)},
 			{key: "sa_confidence", tab: stStatusAgent, label: "Min confidence", help: "0-1; judgements below this are discarded and the deterministic status stands.", kind: sfText, text: formatFloat(sa.MinConfidence)},
 			{key: "sa_transcript", tab: stStatusAgent, label: "Include transcript", help: "Also feed the agent's own transcript tail (more signal, more tokens).", kind: sfBool, b: sa.IncludeTranscript},
+
+			// [remote] — the phone listener. The desktop app grew this tab first;
+			// it lives here too because CLAUDE.md's rule is that a setting is
+			// reachable from BOTH surfaces, and because a machine running only the
+			// TUI is exactly the machine whose owner cannot reach the app's version.
+			{key: "remote_enabled", tab: stRemote, section: "[remote]", sectionNote: "TLS listener for the Lola mobile app", label: "Enabled", help: "Off by default, and the default is chosen for what enabling it GRANTS: a paired phone can read every session, watch any pane and type into a running agent.", kind: sfBool, b: cfg.Remote.Enabled},
+			// sfText, NOT sfEnum, and that is the whole point. bind accepts one of
+			// config.RemoteBinds OR an IP literal, and an enum can only cycle the
+			// keywords — so a configured literal would be silently rewritten to a
+			// keyword by the next save of any unrelated tab, rebinding the daemon
+			// to a different set of interfaces. Free text round-trips both, and
+			// config.Validate is what rejects a value neither form allows.
+			{key: "remote_bind", tab: stRemote, label: "Bind", help: "off | localhost | lan | all, or an IP literal (a hostname is rejected — resolving one would turn a config read into a network call). A lola_insecure build forces localhost whatever this says.", kind: sfText, text: cfg.Remote.BindMode()},
+			{key: "remote_port", tab: stRemote, label: "Port", help: "TCP port for the listener. 0 means " + itoa(config.DefaultRemotePort) + ".", kind: sfInt, text: itoa(cfg.Remote.ListenPort())},
 
 			// [ui] — presentation only; no daemon behavior reads it. The TUI paints
 			// from this flavor (applyTheme) and so does the desktop app, so the
@@ -1475,6 +1491,10 @@ func (f *settingsForm) save() settingsFormEvent {
 	if err != nil {
 		return settingsFormNone
 	}
+	remotePort, err := f.parseInt("remote_port")
+	if err != nil {
+		return settingsFormNone
+	}
 	interval, perr := time.ParseDuration(strings.TrimSpace(f.field("poll_interval").text))
 	if perr != nil {
 		f.err = "poll interval: " + perr.Error()
@@ -1499,6 +1519,7 @@ func (f *settingsForm) save() settingsFormEvent {
 	oldUI := c.UI
 	oldP := c.ReviewProviders
 	oldSA := c.StatusAgent
+	oldRem := c.Remote
 	oldLin := c.Linear
 
 	// The Linear key, if one was typed. This writes the KEYCHAIN before the
@@ -1543,6 +1564,10 @@ func (f *settingsForm) save() settingsFormEvent {
 	c.StatusAgent.MinConfidence = saConfidence
 	c.StatusAgent.IncludeTranscript = f.field("sa_transcript").b
 
+	c.Remote.Enabled = f.field("remote_enabled").b
+	c.Remote.Bind = strings.TrimSpace(f.field("remote_bind").text)
+	c.Remote.Port = remotePort
+
 	c.UI.Theme = strings.TrimSpace(f.field("ui_theme").text)
 
 	// The review provider catalog replaces the two legacy tables. In catalog
@@ -1558,6 +1583,7 @@ func (f *settingsForm) save() settingsFormEvent {
 		c.UI = oldUI
 		c.ReviewProviders = oldP
 		c.StatusAgent = oldSA
+		c.Remote = oldRem
 		c.Linear = oldLin
 		c.ResolveInheritance() // re-resolve projects against the restored defaults
 	}
