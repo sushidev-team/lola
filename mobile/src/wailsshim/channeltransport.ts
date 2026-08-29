@@ -83,6 +83,27 @@ export interface ChannelTransportOptions {
 
 type Listener<T> = (v: T) => void;
 
+/**
+ * The refusal inside a failure, when the failure IS one.
+ *
+ * A connection dies for two very different classes of reason and the UI has to
+ * tell them apart: the daemon answered and declined (a wrong bearer key, a
+ * version skew — `status.refusal`, which `diagnose` reads first and names
+ * precisely), or the socket simply did not work (`status.error`, which it can
+ * only describe in general terms). Both arrive here as an Error, so the one
+ * place that knows the difference is the type.
+ *
+ * Setting only `error` for a refusal is what made a mistyped access key render
+ * as "Not on <host>'s network" — the one failure with a one-field fix reported
+ * as the one with no fix at all.
+ */
+function refusalOf(err: Error | undefined): ConnectionStatus["refusal"] {
+  if (!(err instanceof WireRefusalError)) return undefined;
+  // minV/maxV travel too: they are the whole of the version-skew message, which
+  // is the one refusal that can name WHICH side has to be updated.
+  return { code: err.code, message: err.message, minV: err.minV, maxV: err.maxV };
+}
+
 function fanout<T>(set: Set<Listener<T>>, v: T, what: string): void {
   for (const l of [...set]) {
     try {
@@ -265,7 +286,14 @@ export class ChannelTransport implements Transport {
     try {
       channel = await this.opts.open(endpoint, opts);
     } catch (err) {
-      this.setStatus({ phase: "closed", endpoint, error: err as Error });
+      // `refusalOf` is what keeps "the daemon said no" from being rendered as
+      // "nothing answered". See its own comment.
+      this.setStatus({
+        phase: "closed",
+        endpoint,
+        error: err as Error,
+        refusal: refusalOf(err as Error),
+      });
       throw err;
     }
 
@@ -318,7 +346,12 @@ export class ChannelTransport implements Transport {
     for (const sub of this.subs.values()) sub.fail(refusal);
     this.subs.clear();
 
-    this.setStatus({ phase: "closed", endpoint: this.endpoint ?? undefined, error: err });
+    this.setStatus({
+      phase: "closed",
+      endpoint: this.endpoint ?? undefined,
+      error: err,
+      refusal: refusalOf(err),
+    });
     try {
       await ch?.close(err.message);
     } catch {

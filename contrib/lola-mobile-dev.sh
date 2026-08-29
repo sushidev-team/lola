@@ -35,6 +35,33 @@ logfile=$home/daemon.log
 
 die() { printf 'lola-mobile-dev: %s\n' "$1" >&2; exit 1; }
 
+# REFUSE TO PRINT THE KEY INTO A PANE LOLA READS.
+#
+# mobile/PLAN.md requires this of `lola pair` and gives the reason; it applies
+# to every command that prints the bearer key, which is these two. lola captures
+# its own tmux panes and ships the capture onward: internal/daemon's
+# `[statusagent]` hands a pane tail to a bounded `claude -p` whose instruction
+# opens "Standard input contains observed material about one session: a terminal
+# pane capture", and `[brain]` does the same with a 40-line tail. Both are
+# enabled in ordinary configurations. So an agent that runs `make mobile-info`
+# in its own session sends a credential that types into live coding agents to a
+# third-party model — and unlike an ordinary secret this one is not rotated,
+# not scoped and not revocable per device.
+#
+# The way out is the affordance this milestone added: the desktop app's
+# Settings -> Remote draws the same four values from the running listener, on a
+# surface with no pane to capture.
+refuse_in_session() {
+	[ -z "${LOLA_SESSION:-}" ] || die "refusing to print the bearer key inside a lola session.
+
+\$LOLA_SESSION is set, so this pane is captured by lola and its text is sent to
+the [brain] summarizer and the [statusagent] interpreter — a third-party model.
+The key types into live coding agents and cannot be revoked per device.
+
+Read it in the desktop app instead: Settings -> Remote -> Show code.
+Or run this from a terminal outside any lola session."
+}
+
 # The key lives outside the repository and is 0600, because it is a bearer
 # credential: anything holding it can type into a live coding agent.
 ensure_key() {
@@ -57,15 +84,17 @@ last_pin() {
 
 case ${1:-} in
 --key)
+	refuse_in_session
 	ensure_key
 	exit 0
 	;;
 --info)
+	refuse_in_session
 	key=$(ensure_key)
 	pin=$(last_pin)
 	printf '\n  host  127.0.0.1        (Simulator only — see mobile/README.md section 4.5 for a device)\n'
 	printf '  port  7717             (or [remote].port)\n'
-	printf '  key   %s\n' "$key"
+	printf '  key   %s        (a bearer credential — see mobile/README.md)\n' "$key"
 	if [ -n "$pin" ]; then
 		printf '  pin   %s\n\n' "$pin"
 	else

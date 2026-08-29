@@ -60,6 +60,14 @@ in `mobile/tsconfig.json`. Nothing under `desktop/` is written by this project.
   `ConfirmDialog` bound to the same `confirm` store when the first one lands.
 - **No config editing.** Every `ConfigService` write rejects with a named error.
 - **No push, no offline staleness banner, no aux pane picker, no Android.**
+- **No theme picker, and the phone is dark on purpose.** The desktop and the TUI
+  both paint from `[ui].theme`, `catppuccin-latte` included; the phone paints
+  from `theme-runtime`'s cached flavor and falls back to the compiled default,
+  because no remote command reads the Mac's `[ui].theme` and the phone's flavor
+  is the phone's. iOS light appearance therefore changes nothing here. That is a
+  stated shape rather than an omission: a terminal-centric surface held at
+  arm's length is a dark surface, and following the system would mean rendering
+  an agent's pane in a palette the agent's own colours were not chosen for.
 - **The bearer key is not persisted yet.** The iOS plugin ships four bridged
   methods (`connect`, `disconnect`, `send`, `status`) and no Keychain surface,
   so `mobile/src/lib/secretstore.ts` finds nothing to probe and keeps the key in
@@ -516,6 +524,206 @@ npx vitest run
 It is the only mechanical thing holding the Go, TypeScript and Swift views of
 the wire format together — there is no code generator between them. Go is the
 source of truth: if the Go test fails, fix the vector, never the package.
+
+### Driving the app without a camera
+
+The connect screen's fast path is a QR code the desktop app draws. The iOS
+Simulator has no camera and cannot be given one, so on the Simulator that path
+is dead: `LolaTransport.scanCapability()` reports
+`{ available: false, reason: "no_camera" }` there and the app hides the Scan
+button. That would leave an agent or a CI job with no way to put the app in
+front of a live daemon at all — which is what the development URL hand-off is
+for.
+
+**It is not the pairing mechanism, and it never becomes one.** PLAN.md, under
+*Pairing*, settles that the payload a human scans is an opaque `lola1.` token
+and deliberately not a URI, because a custom scheme cannot be claimed
+exclusively and the system camera would hand the secret to whichever app
+registered it. That argument holds here with more force, not less: M1's bearer
+key is longer-lived than M2's `qr_secret`. So the QR stays opaque, this is a
+separate scheme named `lola-dev`, and everything that turns a URL into a
+connection is compiled out unless the plugin package is built in its debug
+configuration. A release binary contains none of it — not the parser, not the
+observer, not even the name of the environment variable:
+
+```sh
+# Release: nothing. Debug: the observer, the parser and the log strings.
+nm -a Release-iphonesimulator/App.app/App | grep -c LolaDevLink
+strings -a Release-iphonesimulator/App.app/App | grep -c LOLA_DEV_LINK
+
+# The JAVASCRIPT half is not compiled out, and the audit has to cover it. Vite
+# has no configuration-conditional strip, so `src/lib/devlink.ts` ships in every
+# bundle; it is inert without the native emitter, but a regression that re-armed
+# the native side would pass an `nm`/`strings` pass that only looked at the
+# binary.
+grep -rc "dev-launch" Release-iphonesimulator/App.app/public/assets/*.js
+```
+
+Two things stay in a release build ON PURPOSE, and both are named here so
+nobody has to rediscover them. `Info.plist` still registers the `lola-dev`
+scheme, so another app can `canOpenURL("lola-dev://")` and learn Lola is
+installed — gating that needs a per-configuration build setting on the app
+target rather than a plist key, which is a change to the generated Xcode project
+and has not been made. And the JavaScript listener above still registers; with
+no native emitter it never fires.
+
+The app also shows a persistent banner while a connection that arrived this way
+is pending or up. A labelled test fixture is a tool; the same thing unlabelled
+is a back door.
+
+**The two routes are different doors, and the event says which.** `source` on
+the `devLink` event is `dev-url` for a link the OS router delivered and
+`dev-launch` for one this process was started with, and the app treats them
+differently on purpose:
+
+| `source`     | Arrives from                       | Who can send one              | What the app does           |
+| ------------ | ---------------------------------- | ----------------------------- | --------------------------- |
+| `dev-url`    | `simctl openurl`, Notes, Messages  | any app on the device         | fills the form, waits for a tap |
+| `dev-launch` | `SIMCTL_CHILD_LOLA_DEV_LINK`, argv | only whoever starts the app   | connects                    |
+
+The `connect` action takes `host`/`addr`, `port`, `pin`/`spkiPin`,
+`key`/`insecureKey` **or** `keyfile`, and optionally `pane` and `session`. The
+pin is required. `pane` names the tmux target to open once connected and
+`session` the session it belongs to (defaulting to `pane`); both are destinations
+rather than capabilities, since a link that never connects cannot use one.
+
+A routed URL may not dial because anybody can send one — that is PLAN.md's
+whole objection to URL-routed pairing, and importing it here after going to the
+trouble of avoiding it would be perverse. A launch environment is not that: it
+can only be set by the thing that STARTS the process, which on a device means a
+debugger and in CI means already owning the machine. Whoever can do that does
+not need this feature. `devLinkSource` in `src/lib/devlink.ts` makes the call
+and fails closed — anything but the exact string `dev-launch` is treated as a
+routed URL.
+
+**THE OS LOGS THE URL, SO THE KEY IN IT IS DISCLOSED.** This is a property of
+iOS, not of the plugin — the logging happens before the app runs, and there is
+nothing the app can do about it afterwards. All three URL forms are affected:
+
+| Form | What lands in the device's unified log |
+| --- | --- |
+| `simctl openurl` | `CoreSimulatorBridge: Opening URL (lola-dev://connect?…&key=…)` |
+| `SIMCTL_CHILD_LOLA_DEV_LINK` | the whole URL, inside the logged child environment dictionary |
+| `--lola-dev-link` | the whole URL, twice, inside the logged argument vector |
+
+That store is persistent (`…/Devices/<udid>/data/var/db/diagnostics`), survives
+relaunches, and is what `simctl diagnose` collects. The plugin's own logging is
+clean — `LolaLog` prints a host, a port and three booleans and never a
+credential — but the claim that matters is about the key, and the OS wins. **A
+key used with `key=` must be treated as disclosed**: rotate it, and
+`xcrun simctl erase` the simulator, before sharing a diagnose bundle.
+
+So do not use `key=`. Use `keyfile=`, which carries a NAME rather than a
+credential: the bytes are staged into the app's own container, read once and
+deleted. `scripts/dev-link.sh` does the whole sequence and never prints the key:
+
+```sh
+cd mobile
+./scripts/dev-link.sh                    # connect, land on the session list
+./scripts/dev-link.sh lola-nori-eng-42   # connect and open that pane
+```
+
+`LOLA_SIM` picks a simulator (default: the booted one), `LOLA_HOST` and
+`LOLA_PORT` the address. The pane argument is the other half of the same
+problem: the terminal screen is reachable only by tapping a session row, the
+Simulator has no gesture API, and its device window is absent from the
+accessibility tree — so without a deep link the app's central surface cannot be
+screenshotted or regression-tested by anything but a human. A pane name grants
+nothing; it is only useful to a link that already connected.
+
+**DO NOT RUN `make mobile-info` INSIDE A LOLA SESSION.** lola captures its own
+tmux panes and ships the capture onward — `[statusagent]` hands a pane tail to a
+bounded `claude -p`, and `[brain]` does the same with a 40-line tail — so a key
+printed into an agent's pane is sent to a third-party model. That key types into
+live coding agents and cannot be revoked per device. `--info` and `--key` refuse
+when `$LOLA_SESSION` is set for exactly this reason; read the values in the
+desktop app's **Settings → Remote** instead, which has no pane to capture.
+
+The three raw forms below still exist, and are what `dev-link.sh` builds on. Get
+the values from `make mobile-info` **in a terminal outside any lola session**:
+
+```sh
+UDID=95232C8C-8CA0-4E2C-B9AC-90141C11C5E2
+eval "$(cd /path/to/lola && make mobile-info | awk '{if($1=="key")print "KEY="$2; if($1=="pin")print "PIN="$2}')"
+LINK="lola-dev://connect?host=127.0.0.1&port=7717&pin=$PIN&key=$KEY"
+
+# 1. Headless, and what dev-link.sh uses. Cold-launches the app with the link in
+#    its environment, and CONNECTS on its own. No prompt, no tap. Spelled with
+#    key= here it puts the key in the log; dev-link.sh spells it keyfile=.
+SIMCTL_CHILD_LOLA_DEV_LINK="$LINK"   xcrun simctl launch "$UDID" dev.sushi.lola.mobile
+
+# 2. The same thing as an argument, for a launcher that passes argv rather than
+#    an environment. Two dashes: a single-dash argument is swallowed by
+#    UserDefaults' own parsing and would silently become a preference.
+xcrun simctl launch "$UDID" dev.sushi.lola.mobile --lola-dev-link "$LINK"
+
+# 3. The URL itself. Needs TWO human taps: one on the system's "Open in Lola?"
+#    confirmation, and one on Connect once the form is filled. See below.
+xcrun simctl openurl "$UDID" "$LINK"
+```
+
+**`simctl openurl` is not scriptable on iOS 26.** The system interposes an
+`Open in "Lola"?` confirmation on any custom-scheme open whose source it does
+not recognise, and `simctl` is exactly such a source. It appears whether or not
+the app is already in the foreground, it is drawn inside the simulated device
+rather than in a Mac window, and `simctl` has no gesture API — so there is
+nothing to click and nothing to automate. That is why forms 1 and 2 exist; they
+carry the identical string through the identical parser, and differ only in the
+`source` the event carries — which is the difference between filling the form and
+connecting. Use form 3 when a person is watching, or on a real device where the
+link arrives from Notes or Messages.
+
+Both were verified against a live daemon on 95232C8C: form 1 from a COLD-BOOTED
+simulator reaches the session list unattended, and the daemon logs
+`accepting 127.0.0.1:<port> over the insecure M1 bearer-key path`. The plugin's
+own line names the route it took:
+
+```sh
+xcrun simctl spawn "$UDID" log show --last 2m --info \
+  --predicate 'subsystem == "dev.sushi.lola.mobile"' --style compact
+# ... dev link accepted for 127.0.0.1:7717 via=dev-launch pin=true key=true pane=true
+```
+
+`--info` is not optional there: `LolaLog` writes at the info level, which
+`log show` omits by default — a missing line reads as "the link never arrived"
+when it merely was not printed.
+
+Confirm it landed without printing the key anywhere:
+
+```sh
+xcrun simctl spawn "$UDID" log stream --level debug \
+  --predicate 'subsystem == "dev.sushi.lola.mobile"'
+# dev link accepted for 127.0.0.1:7717 via=dev-launch pin=true key=true pane=false
+# dev link posted to the bridge
+```
+
+The two log lines are deliberately the whole diagnostic. The host and port are
+addresses rather than secrets, and the booleans distinguish the failures that
+otherwise look identical from outside — a link that parsed but reached no
+plugin, and one that reached the bridge and is waiting for the app to register a
+listener. **The plugin never logs the pin or the key.** That is a statement
+about the plugin only; see the table above for what the OS logs before the
+plugin is reached.
+
+The parser FAILS CLOSED, which is worth knowing before blaming the app:
+
+| URL | Result |
+| --- | --- |
+| a pin in base64url, padded or not | accepted, normalized to standard base64 |
+| a malformed or wrong-length pin | the whole link is rejected |
+| no pin | the whole link is rejected |
+| `keyfile` naming anything but a bare filename | the key is dropped; the form asks for one |
+| `port` outside 1..65535 | the whole link is rejected |
+| `pane` with anything but `[A-Za-z0-9._-]` | the pane is dropped; the app lands on the list |
+| any action but `connect` | ignored |
+
+An unusable pin and an ABSENT one now fail in the same place, which they did
+not: a malformed pin has always rejected the whole link, while a missing one was
+passed through to be caught by the connect form's validator. Both spellings of
+the same mistake belong at the same fence. The reason is that an unpinned
+connection accepts whatever certificate answers — the one genuinely dangerous
+state this transport has — so reaching it through a typo would make the pin
+decorative.
 
 ### What cannot run yet, and why
 

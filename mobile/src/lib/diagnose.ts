@@ -94,7 +94,12 @@ export function diagnose(input: DiagnoseInput): Diagnosis {
           title: "The daemon refused this key",
           detail:
             `${where} answered, so the address and the pin are right. The access key does not match.`,
-          hint: "Check LOLA_REMOTE_INSECURE_KEY in the environment the daemon was started from.",
+          // Names a place a person can go rather than an environment variable
+          // in a shell they may not have open — the same register the pin's
+          // message uses.
+          hint:
+            "Read the key again on the Mac: Lola’s settings, Remote — or `make mobile-info` " +
+            "in the lola checkout.",
           retryable: false,
         };
 

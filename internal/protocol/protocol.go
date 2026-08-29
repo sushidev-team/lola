@@ -102,8 +102,28 @@ import (
 // Response.Data = CodeRabbitData with a short outcome. Watch disabled / no open
 // PR yields a "skipped" CodeRabbitData (not an error); an unknown session or a gh
 // failure is an error.
+//
+// Cmd "pairBegin" asks for everything a phone needs to reach this daemon's
+// remote listener — addresses, port, SPKI pin and, in an M1 build, the bearer
+// key — as PairBeginData. It takes no arguments: the answer describes the
+// LISTENER THAT IS RUNNING, which is the whole point of asking the daemon
+// rather than reading a file. ~/.lola/remote-dev-key is only the live key when
+// the script that wrote it also started the daemon, and a desktop that rendered
+// a code from a stale file would produce a scan the daemon refuses with
+// "authenticate first" — indistinguishable from a bad camera read.
+//
+// It is refused for every REMOTE peer unconditionally (see internal/remote's
+// deniedCommands, which has listed it since before it existed): enrolment is a
+// local operation at the machine, and a phone that could ask for the key could
+// enrol a second device that survives revoking the first. Over the unix socket
+// it is answered, because anything that can open ~/.lola/lola.sock already
+// reaches cmd=answer and therefore already has more than the key grants.
+//
+// The handler is TAG-SPLIT. A release binary has no bearer-key path at all, so
+// it answers with an error naming that rather than an empty code; only a
+// -tags lola_insecure daemon can fill PairBeginData.Key.
 type Request struct {
-	Cmd    string `json:"cmd"` // stop|status|reload|enable|disable|pollOnce|sessions|projects|prs|hookEvent|kill|revive|pane|answer|review|coderabbit|resolveConflict|switchAgent|dev|devFreePort|open|renameProject
+	Cmd    string `json:"cmd"` // stop|status|reload|enable|disable|pollOnce|sessions|projects|prs|hookEvent|kill|revive|pane|answer|review|coderabbit|resolveConflict|switchAgent|dev|devFreePort|open|renameProject|pairBegin
 	Poll   string `json:"poll,omitempty"`
 	DryRun bool   `json:"dryRun,omitempty"`
 
@@ -705,4 +725,53 @@ type Match struct {
 	Title      string `json:"title"`
 	Action     string `json:"action"`           // spawned|would-spawn|skipped
 	Reason     string `json:"reason,omitempty"` // dedup-label|dedup-seen|in-flight|capped|error
+}
+
+// PairBeginData is Response.Data for cmd=pairBegin: how to reach this daemon's
+// phone listener, as facts rather than as a picture.
+//
+// Two shapes of the same thing, deliberately. Code is the opaque token a client
+// renders as a QR and the mobile app scans; the loose fields are the same
+// values as text, so a scan is a convenience and never the only way in — a
+// camera that will not focus, a phone with the permission denied, or a
+// Simulator with no camera at all must still be able to connect. Rendering is
+// the CLIENT's job (the desktop draws an SVG, `lola pair` prints half-blocks),
+// so the daemon ships a string and takes no QR dependency.
+//
+// EVERY field of this is a secret while Key is set, and the token especially:
+// it CONTAINS the key. It is never logged by the daemon, never placed in an
+// error, and a client must treat it the way it treats a password — revealed on
+// an explicit action, not left on a screen.
+type PairBeginData struct {
+	// Code is the scannable token (internal/remote.EncodeConnectCode). Empty
+	// when the daemon cannot answer, in which case Problem says why.
+	Code string `json:"code,omitempty"`
+
+	// Hosts is every address the listener actually bound, in bind order, and
+	// Port the port it took. Under -tags lola_insecure the bind is forced to
+	// loopback, so this is 127.0.0.1 and ::1 and a phone reaches them through a
+	// forward — a LAN address must never be printed here, because it is one the
+	// daemon cannot deliver.
+	Hosts []string `json:"hosts,omitempty"`
+	Port  int      `json:"port,omitempty"`
+
+	// Pin is the listener's SPKI pin: standard base64 with padding, byte for
+	// byte the value the startup log line carries.
+	Pin string `json:"pin,omitempty"`
+
+	// Key is M1's shared bearer key. Empty in any build without the
+	// lola_insecure path, where Problem names that as the reason.
+	Key string `json:"key,omitempty"`
+
+	// Insecure records that this code carries a shared bearer key with no
+	// device identity and no cryptography, so a client can say so beside it
+	// instead of a reader having to know which build produced it.
+	Insecure bool `json:"insecure,omitempty"`
+
+	// Problem names why there is no code, in one human sentence, when the
+	// daemon can answer the request but not fill it: the listener is not
+	// running, or this build has no way to authenticate a phone. It is a
+	// RENDERED STATE rather than an error so a client shows the reason in place
+	// of the code instead of a failed call with nothing to act on.
+	Problem string `json:"problem,omitempty"`
 }

@@ -4,6 +4,9 @@ import type {
   LolaConnectOptions,
   LolaConnectResult,
   LolaDisconnectOptions,
+  LolaScanCapabilityResult,
+  LolaScanOptions,
+  LolaScanResult,
   LolaSendOptions,
   LolaStatusResult,
   LolaTransportPlugin,
@@ -53,5 +56,21 @@ export class LolaTransportWeb extends WebPlugin implements LolaTransportPlugin {
       bytesIn: 0,
       bytesOut: 0,
     };
+  }
+
+  /**
+   * `unsupported` rather than `no_camera`: a browser may well have a camera,
+   * and saying it does not would send someone looking at their hardware. What
+   * is missing is the native scanner, and the caller's correct response is the
+   * same either way - do not draw the button.
+   */
+  async scanCapability(): Promise<LolaScanCapabilityResult> {
+    return { available: false, authorization: 'denied', reason: 'unsupported' };
+  }
+
+  async scanQR(_options?: LolaScanOptions): Promise<LolaScanResult> {
+    throw this.unavailable(
+      'LolaTransport has no scanner in a browser. Run on a device or simulator.',
+    );
   }
 }

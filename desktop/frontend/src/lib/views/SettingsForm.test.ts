@@ -68,6 +68,7 @@ const {
   LinearKeyStatus,
   SetLinearKey,
   ValidateLinearKey,
+  ConnectCode,
   setFlash,
   reload,
   closeOverlay,
@@ -84,6 +85,7 @@ const {
   LinearKeyStatus: vi.fn(),
   SetLinearKey: vi.fn(),
   ValidateLinearKey: vi.fn(),
+  ConnectCode: vi.fn(),
   setFlash: vi.fn(),
   reload: vi.fn(),
   closeOverlay: vi.fn(),
@@ -101,6 +103,7 @@ vi.mock("@bindings/desktop", () => ({
     LinearKeyStatus: () => LinearKeyStatus(),
     SetLinearKey: (k: string) => SetLinearKey(k),
     ValidateLinearKey: (k: string) => ValidateLinearKey(k),
+    ConnectCode: () => ConnectCode(),
   },
   LinearService: {
     WorkspaceLabels: () => WorkspaceLabels(),
@@ -160,6 +163,15 @@ describe("SettingsForm", () => {
     });
     SetLinearKey.mockReset().mockResolvedValue("key stored in the macOS Keychain (service lola-linear)");
     ValidateLinearKey.mockReset().mockResolvedValue(undefined);
+    ConnectCode.mockReset().mockResolvedValue({
+      code: "lola1.eyJhIjpbIjEyNy4wLjAuMSJdfQ",
+      hosts: ["127.0.0.1"],
+      port: 7717,
+      pin: "C4td4uyeJMSyxfoAsB3i98Kd6JhkpOTf3Oxipiq+sxI=",
+      key: "0123456789abcdef0123456789abcdef",
+      insecure: true,
+      problem: "",
+    });
     setFlash.mockReset();
     reload.mockReset().mockResolvedValue(undefined);
     closeOverlay.mockReset();
@@ -820,5 +832,47 @@ describe("SettingsForm", () => {
       await fireEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
       expect(closeOverlay).toHaveBeenCalled();
     });
+  });
+
+  // --- connecting a phone: the reveal is a bearer credential ----------------
+
+  it("hides a revealed connect code by itself after the reveal window", async () => {
+    // The exposure this bounds is the one the app can actually control: a code
+    // left up in a share, a recording, or in front of someone walking past. It
+    // used to stay on screen until a human pressed Hide, which for a credential
+    // with no TTL, no single use and no per-device revocation is the wrong
+    // default in the wrong direction.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      render(SettingsForm);
+      await screen.findByDisplayValue("60s");
+      await fireEvent.click(screen.getByRole("tab", { name: "Remote" }));
+      await fireEvent.click(screen.getByRole("button", { name: "Show code" }));
+
+      await waitFor(() => expect(ConnectCode).toHaveBeenCalled());
+      expect(await screen.findByText(/Hides in/)).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Hide" })).toBeInTheDocument();
+
+      await vi.advanceTimersByTimeAsync(91_000);
+      await waitFor(() =>
+        expect(screen.getByRole("button", { name: "Show code" })).toBeInTheDocument(),
+      );
+      expect(screen.queryByText(/Hides in/)).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("says the copy hands over the key, not just the code", async () => {
+    render(SettingsForm);
+    await screen.findByDisplayValue("60s");
+    await fireEvent.click(screen.getByRole("tab", { name: "Remote" }));
+    await fireEvent.click(screen.getByRole("button", { name: "Show code" }));
+    await waitFor(() => expect(ConnectCode).toHaveBeenCalled());
+    // The key row is still masked at this point, which used to imply the mask
+    // was a barrier to more than shoulder-surfing.
+    expect(await screen.findByRole("button", { name: /Copy code \(contains the key\)/ }))
+      .toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Show key" })).toBeInTheDocument();
   });
 });

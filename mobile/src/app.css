@@ -29,6 +29,86 @@
 @source "./";
 @source "../../desktop/frontend/src/lib";
 
+/* ---------------------------------------------------------------------------
+   The type scale, raised for a phone.
+
+   The desktop's scale is 13px base / 12px metadata / 18px ceiling, drawn for a
+   dense two-pane cockpit viewed at arm's length on a 27-inch display. Imported
+   unchanged it produces a screen that is legible and unmistakably WRONG: iOS
+   body text is 17pt, so at 13px every screen in this app reads as a Mac window
+   that somebody shrank, which is exactly the failure the port is trying not to
+   commit.
+
+   Raised rather than replaced. The five steps keep their relationships and
+   their roles, so every shared component still gets the hierarchy it was
+   written against — only the absolute sizes move, and they move together. 16px
+   rather than a full 17 because the components below are laid out for a denser
+   grid than UIKit's; this is the largest step that leaves SessionRow's counts
+   and badges on one line.
+
+   Overriding is the whole reason this block sits AFTER the desktop import:
+   Tailwind v4 merges `@theme` blocks and the later definition wins. `body`
+   reads `var(--text-base)` directly (desktop app.css), so the default size
+   follows from here with no class changes anywhere.
+--------------------------------------------------------------------------- */
+@theme {
+  /* Uppercase micro-labels. Weight and tracking are inherited from the
+     desktop's definition; only the size moves. */
+  --text-xs: 0.8125rem; /* 13px */
+  --text-xs--line-height: 1.0625rem;
+
+  /* Metadata, hints, field labels — the --color-faint tier. */
+  --text-sm: 0.875rem; /* 14px */
+  --text-sm--line-height: 1.1875rem;
+
+  /* THE DEFAULT, set on `body`. Field values, row text, button labels. */
+  --text-base: 1rem; /* 16px */
+  --text-base--line-height: 1.375rem;
+
+  /* Section titles. */
+  --text-lg: 1.125rem; /* 18px */
+  --text-lg--line-height: 1.5rem;
+
+  /* Inline view titles. */
+  --text-xl: 1.375rem; /* 22px */
+  --text-xl--line-height: 1.75rem;
+
+  /* The large title, and the ceiling. iOS draws a screen title at 34pt; both
+     screens here used to top out at 18–22px, which is what made them read as
+     web headings on a phone rather than as native screens. This is the one step
+     added for the phone rather than raised from the desktop's ladder. */
+  --text-2xl: 1.75rem; /* 28px */
+  --text-2xl--line-height: 2.125rem;
+
+  /* SPACING IS PINNED TO PX, and that is the other half of the Dynamic Type
+     change below. Tailwind's default `--spacing` is 0.25rem, so once the root
+     font size follows the user's text setting EVERY gap, pad, inset and icon
+     box would scale with it — reflowing a screen that is already tight and
+     fighting the terminal, which measures its own grid in px. Pinning it here
+     keeps the accessibility win on the type, where it belongs, and costs
+     nothing at the default size (0.25rem of 16px IS 4px). */
+  --spacing: 4px;
+}
+
+/* ---------------------------------------------------------------------------
+   Dynamic Type.
+
+   The steps above are rem, and this is what rem is measured against. The value
+   is written by `src/lib/dynamictype.ts`, which measures the system's own
+   `-apple-system-body` font — the only place WebKit exposes the setting, since
+   there is no media feature for it — and clamps the result. The fallback is the
+   designed base, so a browser session, a failed measurement and a default
+   device all render identically.
+
+   `text-size-adjust` is pinned so WebKit does not apply a second, independent
+   scaling on top of the first; without it the two multiply on a rotated phone.
+--------------------------------------------------------------------------- */
+html {
+  font-size: var(--lola-root-size, 16px);
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
 @theme {
   /* Safe areas. Tailwind v4 ships no safe-area utilities, so they are declared
      as spacing tokens: `pb-safe-b`, `pt-safe-t` and friends then work like any
@@ -45,6 +125,31 @@
   --spacing-safe-l: env(safe-area-inset-left);
   --spacing-safe-r: env(safe-area-inset-right);
 }
+
+/* ---------------------------------------------------------------------------
+   Yielding the top inset to a bar above the screens.
+
+   env(safe-area-inset-top) does not shrink for content below something else, so
+   when App.svelte draws the development-link banner above every screen, the
+   banner and the screen header underneath it would each reserve the full
+   status-bar height and the second one would be dead space. The banner
+   therefore pays the inset and sets `--lola-top-inset: 0px` on the container
+   holding the screens, and every screen spends
+
+       var(--lola-top-inset, env(safe-area-inset-top, 0px))
+
+   rather than env() directly.
+
+   IT HAS TO BE SPELLED OUT AT THE POINT OF USE, and that is not a style
+   preference. Putting the same var() inside the `--spacing-safe-t` theme token
+   — so that `pt-safe-t` would pick it up for free — compiles, looks right, and
+   does nothing: a custom property is substituted at COMPUTED-VALUE TIME on the
+   element it is DECLARED on, and `--spacing-safe-t` is declared on :root, where
+   `--lola-top-inset` is unset. The fallback is baked in there and inherits down
+   already resolved, so overriding the variable on a descendant can never reach
+   it. That version was built and screenshotted before the rule was remembered,
+   and the only symptom was an extra 59pt of nothing.
+--------------------------------------------------------------------------- */
 
 /* ---------------------------------------------------------------------------
    Touch behaviour.

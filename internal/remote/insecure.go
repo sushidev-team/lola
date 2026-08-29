@@ -149,3 +149,28 @@ func (a *insecureAuthorizer) Authenticate(ctx context.Context, hs *Handshake) (P
 func (a *insecureAuthorizer) AuthorizeFrame(context.Context, Peer, *protocol.Frame) error {
 	return nil
 }
+
+// InsecureKey returns M1's shared bearer key, or "" when this listener is not
+// authenticating with one.
+//
+// It exists for exactly one caller: the daemon's pairBegin handler, which puts
+// the key into a connect code so a phone can scan it instead of a human copying
+// it. That is a deliberate exception to this package's rule that the key never
+// leaves it, and it is bounded three ways. The method is tag-split, so an
+// untagged binary returns "" and physically cannot answer. The reply travels
+// over ~/.lola/lola.sock, which is srw------- inside a 0700 directory, and
+// anything that can read it already reaches cmd=answer — a strict superset of
+// what the key grants — so handing it back adds no privilege to that caller.
+// And the value still never reaches a log line, an error or argv: the rule that
+// changed is "no caller", not "no discipline".
+//
+// The type assertion is the honest test. Whether this listener authenticates
+// with a bearer key is a property of the authorizer it was built with, not of
+// the build tag alone, and a Server assembled some other way must answer "no".
+func (s *Server) InsecureKey() string {
+	a, ok := s.auth.(*insecureAuthorizer)
+	if !ok {
+		return ""
+	}
+	return string(a.key)
+}

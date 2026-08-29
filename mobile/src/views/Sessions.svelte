@@ -46,23 +46,43 @@
 <div class="flex h-full min-h-0 flex-col bg-canvas">
   <header
     class="flex shrink-0 items-center gap-2 border-b border-edge px-3 pb-2"
-    style="padding-top: calc(env(safe-area-inset-top, 0px) + 0.5rem)"
+    style="padding-top: calc(var(--lola-top-inset, env(safe-area-inset-top, 0px)) + 0.5rem)"
   >
     <div class="flex min-w-0 flex-col">
-      <span class="truncate text-lg text-ink">Sessions</span>
+      <!-- text-2xl is the phone's large-title step. -->
+      <span class="truncate text-2xl font-medium text-ink">Sessions</span>
       <span class="text-sm text-faint">
         {#if needsYou > 0}
           <span class="text-orange">{needsYou} need you</span> ·
         {/if}
-        {store.sessions.length} observed
+        <!-- "observed" is the daemon's observer-loop word and nothing in this
+             app teaches it; the noun it counts was missing as well. -->
+        {store.sessions.length}
+        {store.sessions.length === 1 ? "session" : "sessions"}
       </span>
     </div>
+    <!-- NEITHER CONTROL IS A UNICODE GLYPH ANY MORE, and the second one is why.
+         Disconnect was drawn as U+23FB, the power symbol, which universally
+         means "shut down" — on the one client PLAN.md forbids from ever
+         stopping the daemon ("a phone that stops the daemon severs the only
+         link it has back"). The two glyphs also came from different fallback
+         fonts, so they rendered at visibly different weights and heights. A
+         word says what this does; the refresh mark is a real vector at the same
+         stroke weight as everything else. -->
     <div class="ml-auto flex shrink-0 items-center gap-1">
-      <TouchButton icon aria-label="Refresh" loading={refreshing} onclick={refresh}>⟳</TouchButton>
-      <TouchButton icon aria-label="Disconnect" onclick={() => {
-        void connection.disconnect();
-        nav.toConnect();
-      }}>⏻</TouchButton>
+      <TouchButton icon aria-label="Refresh" loading={refreshing} onclick={refresh}>
+        <svg viewBox="0 0 24 24" class="size-5" fill="none" stroke="currentColor"
+          stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M20 12a8 8 0 1 1-2.34-5.66" />
+          <path d="M20 4v4.5h-4.5" />
+        </svg>
+      </TouchButton>
+      <TouchButton
+        onclick={() => {
+          void connection.disconnect();
+          nav.toConnect();
+        }}>Disconnect</TouchButton
+      >
     </div>
   </header>
 

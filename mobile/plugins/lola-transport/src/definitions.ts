@@ -36,6 +36,20 @@ export interface LolaTransportPlugin {
    * supplied); rejects with a `LolaFailureCode` in the error's `code` field
    * otherwise.
    *
+   * A rejection caused by a REFUSAL rather than a transport failure also
+   * carries the daemon's own `ErrPayload.code` — plus `minV`/`maxV` for a
+   * version skew — in the rejection's data. Capacitor nests that dictionary,
+   * so it arrives as `err.data.daemonCode`, not `err.daemonCode`.
+   *
+   * It is on the rejection rather than only on the `state` event because the
+   * two do NOT arrive in that order: the native side settles this call before
+   * it emits the event, and the two cross the bridge as separate evaluations,
+   * so a caller's catch block runs while the event is still in flight. Reading
+   * the event instead means putting a timer on every connect failure — and
+   * getting it wrong means a refused bearer key is reported as an unreachable
+   * host, which is the same screen as a wrong address and has a completely
+   * different fix.
+   *
    * Calling `connect` while a connection is open tears the old one down first.
    * Every connection gets a new `epoch`, and every event carries the epoch it
    * belongs to, so callbacks queued behind a teardown are recognisably stale.
@@ -60,6 +74,40 @@ export interface LolaTransportPlugin {
   status(): Promise<LolaStatusResult>;
 
   /**
+   * Whether a QR scan could succeed on this device right now, asked BEFORE a
+   * Scan button is drawn.
+   *
+   * The iOS Simulator is why this is a separate call rather than something to
+   * discover on a tap: it has no camera and cannot be given one, so every scan
+   * there fails, and a button that always fails reads as a broken feature
+   * instead of as a property of the machine. Hide or disable the control when
+   * `available` is false and say which of the reasons it is.
+   *
+   * Resolves; it never rejects. "You cannot scan here" is an answer.
+   */
+  scanCapability(): Promise<LolaScanCapabilityResult>;
+
+  /**
+   * Opens a full-screen camera scanner and resolves with the decoded string.
+   *
+   * The plugin does NOT interpret the payload. It returns exactly what the
+   * symbol carried, and the app decides whether that is a pairing token, a QR
+   * from some other product, or noise. Keeping the enrolment format out of the
+   * transport plugin is deliberate: the format is still being written, and a
+   * scanner that silently rejects an unfamiliar string is very hard to diagnose
+   * from a phone.
+   *
+   * Cancellation RESOLVES with `cancelled: true`. A human changing their mind
+   * is the ordinary way this ends, and putting it on the error channel makes
+   * every call site tell an expected outcome apart from a broken camera by
+   * reading a code - which is how it ends up rendered as a red banner.
+   *
+   * Rejects with a `LolaScanErrorCode` in the error's `code` field when a scan
+   * could not be attempted at all.
+   */
+  scanQR(options?: LolaScanOptions): Promise<LolaScanResult>;
+
+  /**
    * Batched inbound frames. Each element of `frames` is one complete JSON frame
    * body, in the order the daemon wrote it. Bodies are NOT parsed natively; the
    * listener parses them, which is what keeps one copy of the envelope.
@@ -73,6 +121,24 @@ export interface LolaTransportPlugin {
   addListener(
     eventName: 'state',
     listenerFunc: (event: LolaStateEvent) => void,
+  ): Promise<PluginListenerHandle>;
+
+  /**
+   * A connection handed to the app by a `lola-dev://connect?...` URL.
+   *
+   * DEVELOPMENT ONLY, and the app has an obligation attached to it. See
+   * `LolaDevLinkEvent`. This event does not exist in a release build: the whole
+   * path is compiled out unless the package is built in its debug
+   * configuration, so a listener registered here simply never fires.
+   *
+   * The event is RETAINED until a listener consumes it, because a cold launch
+   * delivers the URL while the WebView is still loading and an ordinary event
+   * would be posted to nobody. Register the listener during startup and the
+   * pending link arrives as soon as you do.
+   */
+  addListener(
+    eventName: 'devLink',
+    listenerFunc: (event: LolaDevLinkEvent) => void,
   ): Promise<PluginListenerHandle>;
 
   removeAllListeners(): Promise<void>;
@@ -277,6 +343,163 @@ export interface LolaStatusResult {
   framesOut: number;
   bytesIn: number;
   bytesOut: number;
+}
+
+export interface LolaScanOptions {
+  /**
+   * One line of guidance under the viewfinder. Defaults to a sentence naming
+   * the desktop app. Keep it short; it sits over a live camera image.
+   */
+  prompt?: string;
+}
+
+export interface LolaScanResult {
+  /** True when the human dismissed the scanner without scanning anything. */
+  cancelled: boolean;
+
+  /**
+   * The decoded string, exactly as the symbol carried it. Present only when
+   * `cancelled` is false.
+   *
+   * Treat it as untrusted input: anyone can print a QR code. Parse it, and
+   * refuse anything that is not the shape you expect.
+   */
+  value?: string;
+}
+
+/** Why a scan could not be attempted. Never a `LolaFailureCode`. */
+export type LolaScanErrorCode =
+  /**
+   * No capture device. The Simulator, always. Ask `scanCapability()` first so
+   * this never reaches a user as a tap that fails.
+   */
+  | 'no_camera'
+  /**
+   * Camera access was declined. iOS asks exactly once, so the only way back is
+   * Settings and the app has to say so rather than offering a retry that
+   * cannot prompt.
+   */
+  | 'camera_denied'
+  /** Camera access is disallowed by policy. There is no toggle to offer. */
+  | 'camera_restricted'
+  /** Nothing to present on, or the capture graph would not assemble. */
+  | 'unavailable';
+
+export interface LolaScanCapabilityResult {
+  /** False when scanning cannot work here. Hide or disable the control. */
+  available: boolean;
+
+  /**
+   * The camera authorization as iOS reports it. `notDetermined` counts as
+   * available: the prompt has not been shown, and hiding the button would
+   * guarantee it never is. The scanner requests access when it opens, which is
+   * the moment a human has expressed the intent that makes the prompt sensible.
+   */
+  authorization: 'notDetermined' | 'authorized' | 'denied' | 'restricted';
+
+  /**
+   * Set when `available` is false. `unsupported` is the web fallback, where
+   * there is no plugin at all rather than a device that happens to lack a
+   * camera.
+   */
+  reason?: 'no_camera' | 'denied' | 'restricted' | 'unsupported';
+}
+
+/**
+ * A connection handed over by a development URL, and the reason it is safe to
+ * have at all.
+ *
+ * `mobile/PLAN.md`, under Pairing, settles that the pairing payload is an
+ * opaque `lola1.` token and deliberately NOT a URI, because a custom scheme
+ * cannot be claimed exclusively and the system camera would hand the secret to
+ * whichever app registered it. That argument holds here with more force, not
+ * less: M1's bearer key is longer-lived than M2's `qr_secret`. So this is NOT
+ * the pairing mechanism and never becomes one. It is a testing affordance for
+ * the one case a camera cannot cover - an iOS Simulator, which has no camera -
+ * so that an agent or a CI job can put the app in front of a live daemon.
+ *
+ * Three things fence it, and the third one is yours:
+ *
+ *   1. the scheme is `lola-dev`, not the app's own scheme;
+ *   2. every line that turns a URL into a connection is compiled out of a
+ *      release build;
+ *   3. the app MUST show a persistent banner for as long as a connection that
+ *      arrived this way is up. That is what makes it a labelled test fixture
+ *      rather than a hidden back door. `source` is the flag to key it off -
+ *      hold it beside the connection and clear it when the connection ends.
+ *
+ * The fields are exactly the ones `connect` already takes from the form a human
+ * fills in; a development path that could reach settings the UI cannot would be
+ * a second, unreviewed way to configure the app.
+ */
+export interface LolaDevLinkEvent {
+  /**
+   * HOW the link arrived, which is the one fact that decides whether the app
+   * may act on it unattended. Both raise the banner; only one may connect.
+   *
+   * - `dev-url` — the OS URL router, on behalf of some app. ANY app on the
+   *   device can ask iOS to open one, which is exactly PLAN.md's objection to
+   *   URL-routed pairing, so the app fills its form and waits for a human.
+   * - `dev-launch` — this process's own launch environment or argv. Setting
+   *   either requires being the thing that STARTED the process: a debugger on
+   *   a device, `simctl` on a Simulator. Whoever can do that already owns the
+   *   machine and does not need this feature, so the app may connect on its
+   *   own — which is what makes the scriptable path scriptable at all, since
+   *   iOS 26 puts an untappable confirmation in front of the URL and `simctl`
+   *   has no gesture API.
+   */
+  source: 'dev-url' | 'dev-launch';
+
+  /** Never empty. Already rejected if it looks like a pasted URL. */
+  host: string;
+
+  /** Absent when the URL omitted it; treat that as `LOLA_DEFAULT_PORT`. */
+  port?: number;
+
+  /**
+   * Normalized to standard padded base64 - the spelling `SPKIPin.matches`
+   * compares and `DeviceKey.SPKIPin()` produces - whichever alphabet the URL
+   * used.
+   *
+   * ALWAYS PRESENT on a delivered event: a link with no pin, or with a pin that
+   * does not decode to 32 bytes, is rejected whole. An unpinned connection
+   * accepts whatever certificate answers, which is the one genuinely dangerous
+   * state this transport has, so both spellings of that mistake fail at the
+   * same fence. The field stays optional only because the payload type is
+   * shared with a future shape that may not carry one.
+   */
+  spkiPin?: string;
+
+  /**
+   * M1's bearer key. Length is NOT checked here; the app already refuses below
+   * `INSECURE_MIN_KEY_LEN` and can say so in the field.
+   *
+   * The URL may spell it `key=<the key>` or `keyfile=<a bare filename>`; the
+   * second is read out of the app's own Documents directory and deleted, and it
+   * exists because iOS writes the whole URL to the device's persistent unified
+   * log for every delivery route it has — `simctl openurl`, the launch
+   * environment and argv alike — before the app runs. A key spelled into the
+   * query string is therefore disclosed whatever the plugin does with it. Only
+   * a bare name is accepted: a separator, a parent reference or a leading dot
+   * is refused, so nothing outside this app's container can be opened.
+   */
+  insecureKey?: string;
+
+  /**
+   * A tmux pane to open once the connection is up, when the URL named one.
+   *
+   * It is a DESTINATION, not a capability: a link that never connects cannot
+   * use it, and the daemon re-resolves any pane name against its own session
+   * store before anything is exec'd. It exists because the terminal is the
+   * screen the whole app is a bet on and it was the only screen a reviewer
+   * could not photograph — it is reached solely by tapping a session row, the
+   * Simulator has no gesture API, and its device window is absent from the
+   * accessibility tree.
+   */
+  pane?: string;
+
+  /** The session `pane` belongs to. Defaults to `pane` when the URL omits it. */
+  session?: string;
 }
 
 /**

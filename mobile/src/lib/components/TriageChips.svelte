@@ -34,8 +34,16 @@
   });
 </script>
 
+<!-- WRAPS, and it used to scroll. Five fixed buckets plus All is a SET, not a
+     feed, and at 393pt the strip ended mid-word on "In review" with "Done"
+     entirely off-screen — which happened to be the only two buckets holding any
+     session, so every count a phone user could see read 0 above a list of two
+     rows. There was no scrollbar (scrollbar-width: none), no fade and no
+     chevron, so the accidental slice was the only hint anything was hidden.
+     Two rows of six chips is worse than one row of six that fits and better
+     than any amount of horizontal gesture. -->
 <div
-  class="flex shrink-0 gap-1.5 overflow-x-auto border-b border-edge px-3 py-2 [scrollbar-width:none]"
+  class="flex shrink-0 flex-wrap gap-1.5 border-b border-edge px-3 py-2"
   role="group"
   aria-label="Filter sessions"
 >

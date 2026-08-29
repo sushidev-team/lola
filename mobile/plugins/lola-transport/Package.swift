@@ -63,7 +63,29 @@ let package = Package(
                 .product(name: "Capacitor", package: "capacitor-swift-pm"),
                 .product(name: "Cordova", package: "capacitor-swift-pm")
             ],
-            path: "ios/Sources/LolaTransportPlugin"
+            path: "ios/Sources/LolaTransportPlugin",
+            // The development URL hand-off (`lola-dev://connect?...`) exists
+            // only where this is defined, and it is defined only for the debug
+            // configuration. See the header of LolaDevLink.swift for what it is
+            // and why it is fenced.
+            //
+            // It is an OWN condition rather than a reliance on `DEBUG` because
+            // Xcode's package-target settings are not the app target's: whether
+            // `SWIFT_ACTIVE_COMPILATION_CONDITIONS` reaches a dependency is a
+            // property of the integration, and a feature that silently vanishes
+            // from a debug build is worse than one that is absent on purpose.
+            // `.when(configuration: .debug)` is a fact of the manifest, so it
+            // travels with the package.
+            //
+            // It is also the ONLY condition. The gate used to read
+            // `#if LOLA_DEV_LINK || DEBUG`, on the theory that accepting DEBUG
+            // as well cost nothing — but CocoaPods defines DEBUG for its own
+            // Debug configuration, so that spare condition quietly armed the
+            // path under exactly the integration the podspec said it was absent
+            // from. One switch, named here, is what makes both comments true.
+            swiftSettings: [
+                .define("LOLA_DEV_LINK", .when(configuration: .debug))
+            ]
         ),
         .testTarget(
             name: "LolaTransportCoreTests",

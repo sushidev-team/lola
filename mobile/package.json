@@ -17,7 +17,7 @@
     "build:plugin": "npm --prefix plugins/lola-transport run build",
     "daemon": "../contrib/lola-mobile-dev.sh",
     "daemon:info": "../contrib/lola-mobile-dev.sh --info",
-    "ios:sim": "npm run sync && cap run ios --target=simulator"
+    "sim": "./scripts/run-sim.sh"
   },
   "dependencies": {
     "@capacitor/browser": "^8.0.0",

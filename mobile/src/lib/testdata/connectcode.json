@@ -1,0 +1,29 @@
+{
+  "note": "The M1 connect code, as ONE literal read by both ends of the hand-off. internal/remote/connectcode_test.go asserts that EncodeConnectCode produces `token` from `fields` and that DecodeConnectCode reads it back; mobile/src/lib/pairpayload.test.ts asserts that parsePairing reads the same `token` into the same values. THE GO SIDE IS THE SOURCE OF TRUTH: if the two disagree, this file and the TypeScript are wrong, never the daemon. The file exists because the desktop encodes this and the phone decodes it, in two languages, with no code generator between them — the exact shape of failure that otherwise surfaces on a device with a camera pointed at a square and no way to tell a wrong encoder from a dirty lens. Key ORDER inside `fields` is significant: encoding/json emits struct fields in declaration order and the token's bytes depend on it, so do not alphabetise. Neither the `key` nor the `pin` here is real; the key is 32 hex characters like the one contrib/lola-mobile-dev.sh generates, and the pin is a genuine SPKI hash from a throwaway identity.",
+  "token": "lola1.eyJ2IjoxLCJhZGRycyI6WyIxMjcuMC4wLjEiLCI6OjEiXSwicG9ydCI6NzcxNywicGluIjoiQzR0ZDR1eWVKTVN5eGZvQXNCM2k5OEtkNkpoa3BPVGYzT3hpcGlxK3N4ST0iLCJrZXkiOiIwMTIzNDU2Nzg5YWJjZGVmMDEyMzQ1Njc4OWFiY2RlZiJ9",
+  "fields": {
+    "v": 1,
+    "addrs": ["127.0.0.1", "::1"],
+    "port": 7717,
+    "pin": "C4td4uyeJMSyxfoAsB3i98Kd6JhkpOTf3Oxipiq+sxI=",
+    "key": "0123456789abcdef0123456789abcdef"
+  },
+  "dialHost": "127.0.0.1",
+  "refused": [
+    {
+      "name": "a different version",
+      "why": "M2's payload is a different blob behind the same scheme. The prefix digit is what lets each side say WHICH milestone it is looking at instead of reporting a corrupt scan.",
+      "token": "lola2.eyJ2IjoyLCJhZGRycyI6WyIxMjcuMC4wLjEiXSwicG9ydCI6NzcxNywicGluIjoiQzR0ZDR1eWVKTVN5eGZvQXNCM2k5OEtkNkpoa3BPVGYzT3hpcGlxK3N4ST0iLCJrZXkiOiIwMTIzNDU2Nzg5YWJjZGVmMDEyMzQ1Njc4OWFiY2RlZiJ9"
+    },
+    {
+      "name": "no prefix at all",
+      "why": "The commonest thing a camera meets by accident. Both sides must call it 'not a lola code' rather than trying to read it.",
+      "token": "https://example.com/not-a-code"
+    },
+    {
+      "name": "a body that is not base64",
+      "why": "A truncated or smeared scan. Reading past this is how a half-valid code connects somewhere unintended.",
+      "token": "lola1.!!!!not base64!!!!"
+    }
+  ]
+}

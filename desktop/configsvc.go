@@ -41,6 +41,17 @@ var storeLinearKey = secrets.StoreLinearAPIKey
 // the only secret-adjacent values any DTO carries. Nothing ever reads a secret
 // back out to the frontend — LinearKeyStatus reports where the key lives and
 // whether it resolves, never its value.
+//
+// ConnectCode is the ONE deliberate exception, and it is written down rather
+// than left as an inconsistency. It returns the phone listener's bearer key
+// because the key IS the thing being handed over — a QR nobody can read is not
+// a hand-off — and the exception costs nothing in privilege: the answer comes
+// over ~/.lola/lola.sock, which is srw------- inside a 0700 directory, and
+// anything that can open it already reaches cmd=answer, which types into a
+// running coding agent. What the exception does cost is EXPOSURE, so the rule
+// it replaces the write-only one with is narrower rather than absent: the value
+// is fetched only when a human asks for it, it is never logged or persisted on
+// this side, and the surface that renders it has a hide.
 type ConfigService struct{}
 
 func loadConfig() (*config.Config, string, error) {
@@ -914,6 +925,67 @@ func (s *ConfigService) LinearKeyStatus() LinearKeyStatusDTO {
 	}
 	out.Resolvable = true
 	return out
+}
+
+// ConnectCodeDTO is everything a phone needs to reach this machine's daemon:
+// the scannable token plus the same values as text.
+//
+// Both shapes, deliberately. Code is what the Remote tab renders as a QR; the
+// loose fields are what a human reads out when the camera will not focus, the
+// camera permission was denied, or the client is a Simulator with no camera at
+// all. A QR must be a convenience and never the only way in.
+//
+// Every field here is a secret while Key is set, and Code most of all — it
+// CONTAINS the key. Nothing on this side writes any of it to disk or to a log,
+// and the frontend keeps it behind an explicit reveal.
+type ConnectCodeDTO struct {
+	Code     string   `json:"code"`
+	Hosts    []string `json:"hosts"`
+	Port     int      `json:"port"`
+	Pin      string   `json:"pin"`
+	Key      string   `json:"key"`
+	Insecure bool     `json:"insecure"`
+
+	// Problem names why there is no code in one human sentence — the listener
+	// is off, or nothing bound — so the tab renders a reason in place of the
+	// code. It is a STATE rather than an error precisely because it is
+	// actionable; a build with no bearer-key path at all IS an error, and
+	// arrives as one.
+	Problem string `json:"problem"`
+}
+
+// ConnectCode asks the daemon for the phone listener's connect details
+// (cmd=pairBegin) so the Remote tab can hand them to a phone.
+//
+// It asks the DAEMON rather than reading ~/.lola/device.crt and
+// ~/.lola/remote-dev-key, and that is the whole point of the method existing.
+// Recomputing the pin here would mean calling remote.LoadOrCreateDeviceKey,
+// whose only exported form CREATES an identity when none is there — this
+// process would mint the daemon's TLS identity as a side effect of drawing a
+// settings tab, from the wrong process, even with [remote] disabled. And it
+// would answer about a FILE: the key file is the running daemon's key only when
+// the script that wrote it also started the daemon, so a code rendered from it
+// after a `lola run` from another shell produces a scan the daemon answers with
+// "authenticate first" — which, from the phone, is indistinguishable from a bad
+// camera read. The daemon holds the live value of both facts; only it can
+// answer.
+//
+// The timeout is the short one: pairBegin reads in-memory state and execs
+// nothing.
+func (s *ConfigService) ConnectCode() (ConnectCodeDTO, error) {
+	var data protocol.PairBeginData
+	if err := call(protocol.Request{Cmd: "pairBegin"}, 5*time.Second, &data); err != nil {
+		return ConnectCodeDTO{}, err
+	}
+	return ConnectCodeDTO{
+		Code:     data.Code,
+		Hosts:    data.Hosts,
+		Port:     data.Port,
+		Pin:      data.Pin,
+		Key:      data.Key,
+		Insecure: data.Insecure,
+		Problem:  data.Problem,
+	}, nil
 }
 
 // SetLinearKey stores a new Linear key and points config.toml at it. The key

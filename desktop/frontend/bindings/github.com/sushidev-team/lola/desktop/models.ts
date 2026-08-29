@@ -64,6 +64,37 @@ export interface CLIInstallDTO {
     "onPath": boolean;
 }
 
+/**
+ * ConnectCodeDTO is everything a phone needs to reach this machine's daemon:
+ * the scannable token plus the same values as text.
+ * 
+ * Both shapes, deliberately. Code is what the Remote tab renders as a QR; the
+ * loose fields are what a human reads out when the camera will not focus, the
+ * camera permission was denied, or the client is a Simulator with no camera at
+ * all. A QR must be a convenience and never the only way in.
+ * 
+ * Every field here is a secret while Key is set, and Code most of all — it
+ * CONTAINS the key. Nothing on this side writes any of it to disk or to a log,
+ * and the frontend keeps it behind an explicit reveal.
+ */
+export interface ConnectCodeDTO {
+    "code": string;
+    "hosts": string[] | null;
+    "port": number;
+    "pin": string;
+    "key": string;
+    "insecure": boolean;
+
+    /**
+     * Problem names why there is no code in one human sentence — the listener
+     * is off, or nothing bound — so the tab renders a reason in place of the
+     * code. It is a STATE rather than an error precisely because it is
+     * actionable; a build with no bearer-key path at all IS an error, and
+     * arrives as one.
+     */
+    "problem": string;
+}
+
 export interface DoctorReportDTO {
     "results": DoctorResultDTO[] | null;
     "summary": string;

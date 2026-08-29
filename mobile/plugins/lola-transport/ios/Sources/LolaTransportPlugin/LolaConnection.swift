@@ -334,7 +334,21 @@ final class LolaConnection {
             // Non-terminal by design: Network framework keeps retrying until
             // the path changes. The connect timeout is what turns a permanent
             // wait into a failure.
+            //
+            // WITH ONE EXCEPTION, and it is the commonest typo on the connect
+            // screen. A host that answers "connection refused" has been reached
+            // — something on that address ran the TCP stack and said no — so a
+            // path change is not going to alter the answer, and waiting the
+            // full connect budget out turns a mistyped port into eight seconds
+            // of "Connecting…" that reads as a hang. Every other waiting reason
+            // (no route yet, interface still coming up, the iOS local-network
+            // prompt) genuinely can resolve itself, and those keep the budget.
             lastWaitingError = error
+            if case .posix(let code) = error, code == .ECONNREFUSED {
+                let (failureCode, reason) = classify(error)
+                terminate(phase: .failed, code: failureCode, reason: reason)
+                return
+            }
             LolaLog.info("connection waiting: \(Self.shortDescription(of: error))")
         case .failed(let error):
             let (code, reason) = classify(error)
@@ -661,6 +675,15 @@ final class LolaConnection {
                 Failure(
                     code: code, reason: reason, daemonCode: daemonCode, minV: minV, maxV: maxV)))
 
+        // A phase and two error KINDS, which is exactly the vocabulary LolaLog
+        // permits and no more. It is here because the one failure this
+        // transport has that a user can fix in one field — a refused bearer key
+        // — was for a long time indistinguishable from a dead network at every
+        // layer above, and nothing on the device said which had happened.
+        LolaLog.info(
+            "connection \(newPhase.rawValue): \(code.rawValue)"
+                + (daemonCode.map { " daemon=\($0)" } ?? ""))
+
         emit(
             LolaConnectionEvent(
                 epoch: myEpoch,
@@ -711,6 +734,12 @@ final class LolaConnection {
             return (.pinMismatch, recorded)
         }
 
+        // NWError is non-frozen and the SDK keeps adding cases (`.wifiAware`
+        // arrived recently), so `swiftc` warns that this is not exhaustive.
+        // Enumerating the new case would pin this file to one SDK and fail to
+        // build on an older one, while `@unknown default` already handles it
+        // correctly at run time — so the warning is deliberate. Do not "fix" it
+        // by naming the case.
         switch error {
         case .tls(let status):
             return (.tls, "the TLS handshake failed (OSStatus \(status))")
@@ -759,6 +788,12 @@ final class LolaConnection {
     }
 
     private static func shortDescription(of error: NWError) -> String {
+        // NWError is non-frozen and the SDK keeps adding cases (`.wifiAware`
+        // arrived recently), so `swiftc` warns that this is not exhaustive.
+        // Enumerating the new case would pin this file to one SDK and fail to
+        // build on an older one, while `@unknown default` already handles it
+        // correctly at run time — so the warning is deliberate. Do not "fix" it
+        // by naming the case.
         switch error {
         case .posix(let code): return "POSIX \(code.rawValue)"
         case .dns(let status): return "DNS \(status)"
@@ -801,11 +836,11 @@ final class LolaConnection {
                 // and any validity window longer than 398 days, and this
                 // certificate is deliberately valid for ten years. The pin is
                 // the trust anchor.
-                guard let trust = sec_trust_copy_ref(trustRef)?.takeRetainedValue() else {
-                    pinBox.record(failure: "the peer presented no certificate chain")
-                    complete(false)
-                    return
-                }
+                // `sec_trust_copy_ref` is declared non-optional
+                // (`Unmanaged<SecTrust>`), so there is nothing to unwrap and no
+                // "no trust object" branch to write — the empty-chain guard
+                // below is the real check. Retained: copy_ref hands back +1.
+                let trust = sec_trust_copy_ref(trustRef).takeRetainedValue()
                 guard
                     let chain = SecTrustCopyCertificateChain(trust) as? [SecCertificate],
                     let leaf = chain.first

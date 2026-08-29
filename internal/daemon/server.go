@@ -111,6 +111,16 @@ func (d *Daemon) handle(ctx context.Context, req protocol.Request) protocol.Resp
 			return protocol.Response{OK: false, Error: err.Error()}
 		}
 		return dataResponse(data)
+	case "pairBegin":
+		// The reply CONTAINS a bearer key, so nothing on this path logs the
+		// request or the response — handleConn does not, and neither does this.
+		// internal/remote denies the command for every remote peer
+		// unconditionally, so adding the case here reaches the unix socket only.
+		data, err := d.handlePairBegin(ctx)
+		if err != nil {
+			return protocol.Response{OK: false, Error: err.Error()}
+		}
+		return dataResponse(data)
 	case "hookEvent":
 		return d.handleHookEvent(req)
 	case "kill":

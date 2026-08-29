@@ -21,4 +21,14 @@ Pod::Spec.new do |s|
   s.ios.deployment_target = '15.0'
   s.dependency 'Capacitor'
   s.swift_version = '5.9'
+  # No LOLA_DEV_LINK here on purpose. That condition gates the development URL
+  # hand-off, Package.swift defines it for the debug configuration only, and
+  # CocoaPods is the fallback integration that no development loop uses - so the
+  # affordance is simply absent under this path rather than half-present.
+  #
+  # That sentence is only true because the Swift gate is `#if LOLA_DEV_LINK`
+  # alone. It once read `#if LOLA_DEV_LINK || DEBUG`, and CocoaPods sets
+  # SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG for its Debug configuration by
+  # default - so this comment described a fence the code did not have. Do not
+  # re-add a DEBUG arm without deleting this paragraph.
 end

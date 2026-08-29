@@ -5,7 +5,7 @@ export GOCACHE := $(CURDIR)/.gocache
 # which sandboxed shells cannot write to.
 export GOFLAGS := -mod=mod -buildvcs=false
 
-.PHONY: build test vet fmt fmtcheck tidy check clean mobile-dev mobile-info desktop-dev
+.PHONY: build test vet fmt fmtcheck tidy check clean mobile-dev mobile-info mobile-sim desktop-dev
 
 build:
 	go build -o lola .
@@ -52,6 +52,13 @@ mobile-dev:
 
 mobile-info:
 	@contrib/lola-mobile-dev.sh --info
+
+# Build the app and launch it on an iOS Simulator without opening Xcode. The
+# Simulator shares the Mac's loopback, so a daemon bound to localhost is reached
+# at 127.0.0.1 with no forwarding — which is why this is the fastest loop and
+# the first thing to try. LOLA_SIM picks a specific simulator; see the script.
+mobile-sim:
+	cd mobile && ./scripts/run-sim.sh
 
 # The desktop app's dev loop. `wails3 task build` only refreshes the loose
 # bin/Lola, so `open bin/Lola.app` after one launches the OLD bundled binary and

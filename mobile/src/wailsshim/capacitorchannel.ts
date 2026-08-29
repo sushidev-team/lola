@@ -39,6 +39,7 @@ import {
   type Unsubscribe,
 } from "../wire";
 import { ChannelTransport } from "./channeltransport";
+import { refusalFromPluginError, stateError } from "./pluginerror";
 
 const encoder = new TextEncoder();
 
@@ -239,12 +240,6 @@ class PluginChannel implements FrameChannel {
   }
 }
 
-/** One line naming why a connection failed, never carrying key material. */
-function stateError(e: LolaStateEvent): Error {
-  const why = e.daemonCode ?? e.code ?? e.phase;
-  return new Error(e.reason ? `${why}: ${e.reason}` : String(why));
-}
-
 /** Open a plugin-backed channel for one endpoint. */
 export async function openPluginChannel(
   endpoint: Endpoint,
@@ -276,7 +271,13 @@ export async function openPluginChannel(
     });
   } catch (err) {
     channel.abandon(); // never came up; do not leave two listeners behind
-    throw err;
+    // A refusal the DAEMON spoke — a wrong bearer key, a version skew — is not
+    // a transport failure and must not be reported as one. The plugin puts the
+    // daemon's own code in the rejection's `data`, so it is readable here,
+    // synchronously; the matching `state` event is still a bridge hop behind at
+    // this instant and waiting for it would put a timer on every failure. See
+    // pluginerror.ts.
+    throw refusalFromPluginError(err) ?? err;
   }
 
   channel.bind(result.epoch);

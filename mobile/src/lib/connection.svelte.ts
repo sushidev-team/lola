@@ -44,7 +44,12 @@ import { loadEndpoint, loadKey, saveEndpoint, storeKey } from "./secretstore";
 
 export { INSECURE_MIN_KEY_LEN };
 
-class Connection {
+/**
+ * Exported for the bootstrap-race test only; the app uses the `connection`
+ * singleton below. A second instance in production would authenticate twice and
+ * hold two of the daemon's eight connection slots.
+ */
+export class Connection {
   /** The live transport phase, mirrored so the UI can read a rune. */
   phase = $state<ConnectionStatus["phase"]>("idle");
   /** The last involuntary failure, if any. */
@@ -80,8 +85,62 @@ class Connection {
   #transport: Transport | undefined;
   #offStatus: Unsubscribe | undefined;
 
+  /**
+   * Resolves the moment a Transport is adopted. See `#awaitTransport`.
+   *
+   * Built in the field initialiser rather than lazily, because the whole point
+   * is that a caller can arrive BEFORE the bootstrap does and still have
+   * something to wait on.
+   */
+  #transportArrived!: Promise<void>;
+  #announceTransport!: () => void;
+
   /** The transport, for the terminal screen's pane subscriptions. */
   get transport(): Transport | undefined {
+    return this.#transport;
+  }
+
+  constructor() {
+    this.#transportArrived = new Promise<void>((resolve) => {
+      this.#announceTransport = resolve;
+    });
+  }
+
+  /**
+   * Wait, briefly, for the bootstrap's Transport to arrive.
+   *
+   * THE RACE THIS EXISTS FOR. `main.ts` installs the transport through a
+   * DYNAMIC import (`await import("./wailsshim/capacitorchannel")`) and
+   * deliberately does not await it before mounting the app — a blocking import
+   * there turns a possible one-repaint theme flash into a guaranteed blank
+   * screen. That was harmless for as long as the only way to connect was a
+   * human typing four values into a form, which takes seconds. The hand-off
+   * paths are not that: a `dev-launch` link is retained by the plugin and
+   * replayed to the very first listener that registers, which is `onMount` —
+   * so the connect attempt can land while that dynamic import is still being
+   * read off disk.
+   *
+   * The symptom was not an error, which is what made it worth a fix rather than
+   * a comment. `connect()` failed with "no transport", and then `useTransport`
+   * arrived a tick later and `#adopt` overwrote `error` with the fresh
+   * transport's clean status — so the screen showed a filled form, no banner
+   * and no connection, on every cold boot and never on a warm one.
+   *
+   * Bounded, because "no transport" is a REAL state that must still be
+   * reportable: a browser `npm run dev` session has none and never will, and a
+   * device build whose plugin was not synced is in the same position. Waiting
+   * forever there would replace a clear sentence with a button that hangs.
+   */
+  async #awaitTransport(ms = 4000): Promise<Transport | undefined> {
+    if (this.#transport) return this.#transport;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([
+      this.#transportArrived,
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, ms);
+      }),
+    ]);
+    if (timer !== undefined) clearTimeout(timer);
     return this.#transport;
   }
 
@@ -92,6 +151,7 @@ class Connection {
    */
   useTransport(t: Transport): void {
     this.#offStatus?.();
+    this.#announceTransport();
     this.#transport = t;
     this.#adopt(t.status);
     this.#offStatus = t.onStatus((s) => this.#adopt(s));
@@ -136,7 +196,9 @@ class Connection {
     this.problems = validateDraft(draft, key, INSECURE_MIN_KEY_LEN);
     if (this.problems.length > 0) return false;
 
-    const t = this.#transport;
+    // Not `this.#transport` directly: a hand-off connects at launch, which can
+    // be before the bootstrap's dynamic import has resolved. See #awaitTransport.
+    const t = await this.#awaitTransport();
     if (!t) {
       this.phase = "closed";
       this.error = new Error(

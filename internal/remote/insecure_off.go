@@ -36,3 +36,12 @@ func Listen(_ context.Context, opts Options) (*Server, error) {
 func newAuthorizer(func(string, ...any)) (Authorizer, error) {
 	return nil, fmt.Errorf("%w: build with -tags lola_insecure for the M1 bearer-key path", ErrNoAuthorizer)
 }
+
+// InsecureKey returns "": this build has no bearer-key path, so there is no key
+// to hand out and no code here that could read one.
+//
+// The method exists in both builds so its one caller — the daemon's pairBegin
+// handler — compiles either way and refuses on the empty answer rather than
+// being tag-split around a missing symbol. See insecure.go for why a key is
+// ever returned at all.
+func (s *Server) InsecureKey() string { return "" }

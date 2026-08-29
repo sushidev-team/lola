@@ -44,10 +44,14 @@ mobile/plugins/lola-transport/
     HelloHandshake.swift        the M1 bearer frame and its reply classification
     JSONText.swift              Go-compatible JSON string escaping
     ConnectionState.swift       the phase/failure vocabulary and the bridge payload
-  ios/Sources/LolaTransportPlugin/        the socket and the bridge
+  ios/Sources/LolaTransportPlugin/        the socket, the camera and the bridge
     LolaConnection.swift        NWConnection, TLS, handshake, read loop, batching, teardown
     LolaTransportPlugin.swift   CAPPlugin: option parsing, resolve/reject, notifyListeners
     LolaLog.swift               logging, and the rule that nothing on the wire is logged
+    LolaQRScanner.swift         AVFoundation viewfinder; returns the decoded string, nothing more
+    LolaTransportPlugin+Scanner.swift   scanQR / scanCapability, bridge translation only
+    LolaDevLink.swift           the debug-only lola-dev:// parser; read its header first
+    LolaTransportPlugin+DevLink.swift   observes the URL, emits the retained `devLink` event
   ios/Tests/LolaTransportCoreTests/
     GoldenVectors.swift         loads mobile/src/wire/testdata/frames.json by relative path
     FrameCodecTests.swift       the twenty golden vectors, encode and decode
@@ -164,6 +168,25 @@ the device, the command and the outcome and explicitly never the payload,
 because `answer` carries prose a human typed at a phone. A client that logged
 the same frames would undo that at the other end, and an iOS log is readable by
 anyone with the device and a cable.
+
+**The scanner reads, it does not interpret.** `scanQR` returns the decoded
+string exactly as the symbol carried it; the plugin has no opinion about the
+enrolment format, and the app is expected to treat the result as untrusted —
+anyone can print a QR code. The decoded value is never logged, for the same
+reason the key is not: its whole purpose is to carry a secret. Ask
+`scanCapability()` before drawing a Scan button, because the Simulator has no
+camera and a control that always fails on tap reads as a broken feature.
+
+**The `lola-dev://` hand-off is compiled out of a release build.** It exists so
+that a Simulator, which cannot scan, can still be pointed at a live daemon by a
+script. `Package.swift` defines `LOLA_DEV_LINK` for the debug configuration and
+nowhere else, and the whole of `LolaDevLink.swift` sits behind it — down to the
+string constants, so `strings` over a shipped binary finds nothing to
+investigate. It is deliberately not `lola://` and deliberately not the pairing
+mechanism; the header of that file carries the argument in full, and
+`mobile/README.md` has the commands. The delivered event is stamped
+`source: "dev-url"` so the app can keep a banner up for as long as such a
+connection is alive.
 
 **The pin is the daemon's whole identity.** System trust evaluation is replaced
 entirely, because it cannot succeed: the certificate is self-signed, is in no

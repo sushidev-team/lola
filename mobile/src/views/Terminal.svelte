@@ -147,7 +147,7 @@
 <div class="flex h-full min-h-0 flex-col bg-canvas" style="padding-bottom: {keyboardInset}px">
   <header
     class="flex shrink-0 items-center gap-2 border-b border-edge px-2 pb-2"
-    style="padding-top: calc(env(safe-area-inset-top, 0px) + 0.5rem)"
+    style="padding-top: calc(var(--lola-top-inset, env(safe-area-inset-top, 0px)) + 0.5rem)"
   >
     <TouchButton icon aria-label="Back to sessions" onclick={onback}>‹</TouchButton>
     <div class="flex min-w-0 flex-col">

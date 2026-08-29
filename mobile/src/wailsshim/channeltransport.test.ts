@@ -338,3 +338,83 @@ describe("a subscribe that does not complete", () => {
     expect(ch.sent.filter((f) => f.type === "unsub")).toHaveLength(0);
   });
 });
+
+describe("a refusal that arrives instead of a channel", () => {
+  // The native plugin performs the bearer handshake itself, so a wrong key
+  // never reaches the frame layer: `connect` simply rejects. If that rejection
+  // only lands in `status.error`, `diagnose` finds no refusal, falls through to
+  // its silence branch and tells the user their phone is not on the Mac's
+  // network — with the address, the port and the pin all correct.
+
+  it("records a WireRefusalError from the channel factory as status.refusal", async () => {
+    const refusal = new WireRefusalError("denied", "the daemon refused the connection");
+    const t = new ChannelTransport({
+      open: async () => {
+        throw refusal;
+      },
+      handshake: "channel",
+    });
+
+    await expect(t.connect(endpoint)).rejects.toBe(refusal);
+    expect(t.status.phase).toBe("closed");
+    expect(t.status.refusal).toEqual({
+      code: "denied",
+      message: refusal.message,
+      minV: undefined,
+      maxV: undefined,
+    });
+  });
+
+  it("carries the version bounds through, so the skew can name a side", async () => {
+    const refusal = new WireRefusalError("unsupported_version", "v2..v3", undefined, 2, 3);
+    const t = new ChannelTransport({
+      open: async () => {
+        throw refusal;
+      },
+      handshake: "channel",
+    });
+    await expect(t.connect(endpoint)).rejects.toBe(refusal);
+    expect(t.status.refusal?.minV).toBe(2);
+    expect(t.status.refusal?.maxV).toBe(3);
+  });
+
+  it("leaves an ordinary transport failure without a refusal", async () => {
+    const boom = new Error("the connection timed out");
+    const t = new ChannelTransport({
+      open: async () => {
+        throw boom;
+      },
+      handshake: "channel",
+    });
+    await expect(t.connect(endpoint)).rejects.toBe(boom);
+    expect(t.status.error).toBe(boom);
+    expect(t.status.refusal).toBeUndefined();
+  });
+
+  it("records a refusal that closes an already-open connection", async () => {
+    // The other half of the same path: a refusal can also land AFTER connect
+    // resolved, as a plugin `state` event that becomes a close carrying the
+    // daemon's code. `FakeChannel.close` only ever produces a plain Error, so
+    // the close is driven directly here.
+    let onClose: ((err?: Error) => void) | undefined;
+    const ch = new FakeChannel();
+    const t = new ChannelTransport({
+      open: async () => ({
+        send: (f) => ch.send(f),
+        onFrame: (l) => ch.onFrame(l),
+        onClose: (l) => {
+          onClose = l;
+          return ch.onClose(l);
+        },
+        close: async () => ch.close(),
+      }),
+      handshake: "channel",
+    });
+    await t.connect(endpoint);
+    expect(t.status.phase).toBe("ready");
+
+    onClose?.(new WireRefusalError("denied", "the daemon refused the connection"));
+    expect(t.status.phase).toBe("closed");
+    expect(t.status.refusal?.code).toBe("denied");
+  });
+});

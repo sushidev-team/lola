@@ -21,7 +21,23 @@ public class LolaTransportPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "disconnect", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "send", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "status", returnType: CAPPluginReturnPromise),
+        // The hand-off half. `scanQR` and `scanCapability` live in
+        // LolaTransportPlugin+Scanner.swift; a method is bridged by being named
+        // here AND being `@objc` on this class, and an extension satisfies the
+        // second half, so a new one only ever adds a line to this array.
+        CAPPluginMethod(name: "scanQR", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "scanCapability", returnType: CAPPluginReturnPromise),
     ]
+
+    /// Capacitor calls this once, when the bridge finishes registering the
+    /// plugin. It is the earliest point at which `notifyListeners` has anywhere
+    /// to deliver to, and it is before the WebView has run any JavaScript,
+    /// which is exactly the window a cold-launch URL arrives in.
+    override public func load() {
+        super.load()
+        // A no-op in a release build. See LolaDevLink.swift.
+        startDevLinkObservation()
+    }
 
     /// Defaults, each mirroring a named constant on the daemon side rather than
     /// being chosen here. Where the two ends disagree about a bound, the
@@ -92,18 +108,34 @@ public class LolaTransportPlugin: CAPPlugin, CAPBridgedPlugin {
             case .failure(let failure):
                 // The failure code travels in the rejection's `code` field, so
                 // the app branches on a value rather than on the text of a
-                // message. `daemonCode` is folded into the message because
-                // Capacitor's rejection carries no room for a third field; the
-                // same information also arrives on the `state` event, in
-                // structured form, which is where a UI should read it.
+                // message.
+                //
+                // `daemonCode` TRAVELS STRUCTURED, in the rejection's data
+                // dictionary, and that is load-bearing rather than tidy.
+                // Capacitor merges that dictionary into the JS error object, so
+                // the app reads a field. It used to be folded into the message
+                // on the theory that the `state` event carried the structured
+                // copy anyway — but `terminate` settles this completion BEFORE
+                // it emits that event, and the two cross the bridge as separate
+                // evaluations, so at the instant the app's catch block runs the
+                // event provably has not arrived. The app therefore saw a
+                // transport code, no refusal, and reported a rejected bearer
+                // key as "not on this network": the one failure with a
+                // one-field fix, shown as the one with no fix.
+                //
+                // The message keeps its human suffix; nothing parses it.
                 var message = failure.reason
+                var data: [String: Any] = [:]
                 if let daemonCode = failure.daemonCode {
                     message += " [daemon: \(daemonCode)]"
+                    data["daemonCode"] = daemonCode
                 }
                 if let minV = failure.minV, let maxV = failure.maxV {
                     message += " [daemon speaks envelope v\(minV)..v\(maxV)]"
+                    data["minV"] = minV
+                    data["maxV"] = maxV
                 }
-                call.reject(message, failure.code.rawValue)
+                call.reject(message, failure.code.rawValue, nil, data.isEmpty ? nil : data)
             }
         }
     }

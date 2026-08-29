@@ -3,6 +3,7 @@
   import PrBadge from "$lib/components/PrBadge.svelte";
   import AgentActivity from "$lib/components/AgentActivity.svelte";
   import { reactionIsAlarm, reactionNote } from "$lib/reaction";
+  import { kanbanColumn } from "$lib/theme";
   import type { SessionInfo } from "$lib/store.svelte";
 
   // One session, as a phone row.
@@ -47,6 +48,16 @@
   // the reason this app exists, so it alone earns a rail on top of that; giving
   // one to the family would make four rows in five look urgent.
   const wanted = $derived(s.status === "needs_input");
+
+  // The Done column's statuses are TERMINAL — nothing is waiting on them — and
+  // the shared StatusPill draws `dead` as a saturated fill from the `bad`
+  // family. That is right in a wide desktop table where a dozen rows give it
+  // context; at 393pt with two rows on screen the loudest thing in the list was
+  // the row that needed nothing, while the session with a PR waiting wore a
+  // muted grey chip. The colour stays theme.ts's — it is the single source of
+  // the vocabulary and is pinned against Go — and only its WEIGHT is reduced
+  // here, so a fill that survives means "this wants you".
+  const settled = $derived(kanbanColumn(s.status) === "Done");
 </script>
 
 <button
@@ -61,7 +72,7 @@
     <span class="min-w-0 truncate font-medium text-ink">
       {s.issue || s.id.slice(0, 12)}
     </span>
-    <span class="ml-auto shrink-0">
+    <span class="ml-auto shrink-0 {settled ? 'opacity-55' : ''}">
       <!-- No `onResolve`: this is a read-only surface in M1, and the pill's
            hover-morph into a "resolve" action has no hover on a phone anyway.
            The conflict action is M4's, behind an explicit control. -->
@@ -89,9 +100,15 @@
     <span aria-hidden="true">·</span>
     <!-- `num` keeps the age from reflowing its neighbours on every push. -->
     <span class="num shrink-0">{s.age}</span>
-    <span class="ml-auto shrink-0">
-      <PrBadge session={s} status={s.status} />
-    </span>
+    <!-- Only when there IS a PR. PrBadge renders a bare em-dash otherwise,
+         which is unambiguous in a desktop table under a column header and is
+         just a mark in a phone row that has none. An absent PR is clearer as
+         absence. -->
+    {#if s.prNumber > 0}
+      <span class="ml-auto shrink-0">
+        <PrBadge session={s} status={s.status} />
+      </span>
+    {/if}
   </div>
 
   {#if note}
