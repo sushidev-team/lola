@@ -9,6 +9,9 @@ declare const process: { cwd(): string };
 
 // Fake settings returned by the mocked ConfigService.GetSettings().
 const fakeDto = {
+  remoteEnabled: false,
+  remoteBind: "localhost",
+  remotePort: 7717,
   globalCap: 5,
   concurrencyCap: 2,
   pollInterval: "60s",
@@ -56,6 +59,7 @@ const {
   GetSettings,
   SaveSettings,
   PrioritySortKeys,
+  RemoteBinds,
   ReviewKinds,
   Themes,
   SetTheme,
@@ -71,6 +75,7 @@ const {
   GetSettings: vi.fn(),
   SaveSettings: vi.fn(),
   PrioritySortKeys: vi.fn(),
+  RemoteBinds: vi.fn(),
   ReviewKinds: vi.fn(),
   Themes: vi.fn(),
   SetTheme: vi.fn(),
@@ -89,6 +94,7 @@ vi.mock("@bindings/desktop", () => ({
     GetSettings: () => GetSettings(),
     SaveSettings: (dto: unknown) => SaveSettings(dto),
     PrioritySortKeys: () => PrioritySortKeys(),
+    RemoteBinds: () => RemoteBinds(),
     ReviewKinds: () => ReviewKinds(),
     Themes: () => Themes(),
     SetTheme: (name: string) => SetTheme(name),
@@ -141,6 +147,7 @@ describe("SettingsForm", () => {
     SaveSettings.mockReset().mockResolvedValue(undefined);
     WorkspaceLabels.mockReset().mockResolvedValue(workspaceLabels);
     PrioritySortKeys.mockReset().mockResolvedValue(["priority", "createdAt"]);
+    RemoteBinds.mockReset().mockResolvedValue(["off", "localhost", "lan", "all"]);
     ReviewKinds.mockReset().mockResolvedValue(reviewKinds.map((k) => ({ ...k })));
     Themes.mockReset().mockResolvedValue([...THEME_IDS]);
     SetTheme.mockReset().mockResolvedValue(undefined);
@@ -177,7 +184,7 @@ describe("SettingsForm", () => {
     await screen.findByDisplayValue("60s");
     // The provider-catalog tab is "Review", not "CodeRabbit": it holds every
     // [[review.provider]] kind, claude-session included.
-    for (const t of ["Defaults", "Project defaults", "Notify", "Brain", "Review", "Appearance"]) {
+    for (const t of ["Defaults", "Project defaults", "Notify", "Brain", "Review", "Remote", "Appearance"]) {
       expect(screen.getByRole("tab", { name: t })).toBeInTheDocument();
     }
     // Off-tab content isn't mounted…
@@ -275,6 +282,70 @@ describe("SettingsForm", () => {
     await fireEvent.click(screen.getByRole("tab", { name: "Project defaults" }));
 
     expect(WorkspaceLabels).toHaveBeenCalledTimes(1);
+  });
+
+  // --- remote ([remote], the phone listener) --------------------------------
+  //
+  // bind is a keyword OR an IP literal, and the picker can only offer the
+  // keywords. These pin the half of that which is a data-loss bug rather than a
+  // cosmetic one: a configured literal must survive a save of any other tab.
+
+  it("offers the bind keywords the backend serves rather than a hardcoded list", async () => {
+    RemoteBinds.mockResolvedValue(["off", "localhost", "lan", "all", "invented"]);
+    render(SettingsForm);
+    await screen.findByDisplayValue("60s");
+    await fireEvent.click(screen.getByRole("tab", { name: "Remote" }));
+
+    await waitFor(() => expect(RemoteBinds).toHaveBeenCalled());
+    const sel = screen.getByLabelText("Bind") as HTMLSelectElement;
+    const opts = [...sel.options].map((o) => o.value);
+    expect(opts).toEqual(["off", "localhost", "lan", "all", "invented", "__literal"]);
+  });
+
+  it("keeps a configured IP literal instead of coercing it to a keyword", async () => {
+    GetSettings.mockResolvedValue({ ...fakeDto, remoteEnabled: true, remoteBind: "192.168.1.20" });
+    render(SettingsForm);
+    await screen.findByDisplayValue("60s");
+    await fireEvent.click(screen.getByRole("tab", { name: "Remote" }));
+
+    // The picker cannot show the literal, so the row hands over to a text input
+    // carrying the real value — it is never silently rewritten.
+    await waitFor(() => expect(RemoteBinds).toHaveBeenCalled());
+    expect(await screen.findByDisplayValue("192.168.1.20")).toBeInTheDocument();
+
+    await fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+    await waitFor(() => expect(SaveSettings).toHaveBeenCalledTimes(1));
+    expect(SaveSettings.mock.calls[0][0]).toMatchObject({ remoteBind: "192.168.1.20" });
+  });
+
+  it("switches to a literal on request and saves what was typed", async () => {
+    render(SettingsForm);
+    await screen.findByDisplayValue("60s");
+    await fireEvent.click(screen.getByRole("tab", { name: "Remote" }));
+    await waitFor(() => expect(RemoteBinds).toHaveBeenCalled());
+
+    await fireEvent.change(screen.getByLabelText("Bind"), { target: { value: "__literal" } });
+    await fireEvent.input(await screen.findByPlaceholderText("192.168.1.20"), {
+      target: { value: "10.0.0.5" },
+    });
+
+    await fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+    await waitFor(() => expect(SaveSettings).toHaveBeenCalledTimes(1));
+    expect(SaveSettings.mock.calls[0][0]).toMatchObject({ remoteBind: "10.0.0.5" });
+  });
+
+  it("saves the listener toggle and port", async () => {
+    render(SettingsForm);
+    await screen.findByDisplayValue("60s");
+    await fireEvent.click(screen.getByRole("tab", { name: "Remote" }));
+    await waitFor(() => expect(RemoteBinds).toHaveBeenCalled());
+
+    await fireEvent.click(screen.getByRole("checkbox", { name: "Enabled" }));
+    await fireEvent.input(screen.getByLabelText("Port"), { target: { value: "7800" } });
+
+    await fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+    await waitFor(() => expect(SaveSettings).toHaveBeenCalledTimes(1));
+    expect(SaveSettings.mock.calls[0][0]).toMatchObject({ remoteEnabled: true, remotePort: 7800 });
   });
 
   it("saves the dto with the list fields cleaned, flashes good, and closes the overlay", async () => {

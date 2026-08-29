@@ -122,6 +122,16 @@ type SettingsDTO struct {
 	StatusAgentMinConfidence     float64 `json:"statusAgentMinConfidence"`
 	StatusAgentIncludeTranscript bool    `json:"statusAgentIncludeTranscript"`
 
+	// [remote] — the phone listener (mobile/PLAN.md milestone 1). Three keys and
+	// no inheritance, because a listener is a property of the MACHINE rather than
+	// of a project. RemoteBind is either one of config.RemoteBinds or an IP
+	// literal, so the form must be able to round-trip a literal it cannot offer
+	// in a picker; coercing one back to a keyword on save would silently rebind
+	// the daemon to a different set of interfaces.
+	RemoteEnabled bool   `json:"remoteEnabled"`
+	RemoteBind    string `json:"remoteBind"`
+	RemotePort    int    `json:"remotePort"`
+
 	// ReviewProviders is the pluggable review catalog ([[review.provider]]),
 	// resolved to the EFFECTIVE set (the real catalog, or the entries synthesized
 	// from the legacy [review]/[coderabbit] tables). ReviewLegacy reports that the
@@ -169,6 +179,17 @@ type ReviewProviderDTO struct {
 // own keys, not a Linear concept — there is nothing to fetch from the API.
 func (s *ConfigService) PrioritySortKeys() []string {
 	return append([]string(nil), config.PrioritySortKeys...)
+}
+
+// RemoteBinds returns the [remote].bind keywords the daemon accepts, so the
+// settings form offers them instead of taking free text. Same posture as
+// PrioritySortKeys: MEMBERSHIP is the Go side's call, since config.Validate
+// rejects anything that is neither one of these nor an IP literal.
+//
+// The literal case is why the form cannot be a picker alone — see the comment
+// on SettingsDTO.RemoteBind.
+func (s *ConfigService) RemoteBinds() []string {
+	return append([]string(nil), config.RemoteBinds...)
 }
 
 // ReviewProviderKinds / TransportTokens expose the selectable catalog values so
@@ -343,6 +364,13 @@ func (s *ConfigService) GetSettings() (SettingsDTO, error) {
 		StatusAgentMinConfidence:     cfg.StatusAgent.MinConfidence,
 		StatusAgentIncludeTranscript: cfg.StatusAgent.IncludeTranscript,
 
+		// The EFFECTIVE values, not the raw ones: BindMode/ListenPort resolve ""
+		// and 0 to their defaults, so the form shows what the daemon would
+		// actually do rather than a blank that reads as "nothing".
+		RemoteEnabled: cfg.Remote.Enabled,
+		RemoteBind:    cfg.Remote.BindMode(),
+		RemotePort:    cfg.Remote.ListenPort(),
+
 		ReviewProviders: reviewProvidersDTO(cfg),
 		ReviewLegacy:    legacyReviewOnly(cfg),
 
@@ -389,6 +417,9 @@ func (s *ConfigService) SaveSettings(dto SettingsDTO) error {
 	cfg.StatusAgent.MaxPerCycle = dto.StatusAgentMaxPerCycle
 	cfg.StatusAgent.MinConfidence = dto.StatusAgentMinConfidence
 	cfg.StatusAgent.IncludeTranscript = dto.StatusAgentIncludeTranscript
+	cfg.Remote.Enabled = dto.RemoteEnabled
+	cfg.Remote.Bind = dto.RemoteBind
+	cfg.Remote.Port = dto.RemotePort
 	// Review catalog. While the legacy tables are still present (read-only in the
 	// UI), the provider array is not written back — editing it alongside the
 	// legacy tables would produce a mixed config, a hard validation error;

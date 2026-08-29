@@ -424,6 +424,18 @@ export interface SettingsDTO {
     "statusAgentIncludeTranscript": boolean;
 
     /**
+     * [remote] — the phone listener (mobile/PLAN.md milestone 1). Three keys and
+     * no inheritance, because a listener is a property of the MACHINE rather than
+     * of a project. RemoteBind is either one of config.RemoteBinds or an IP
+     * literal, so the form must be able to round-trip a literal it cannot offer
+     * in a picker; coercing one back to a keyword on save would silently rebind
+     * the daemon to a different set of interfaces.
+     */
+    "remoteEnabled": boolean;
+    "remoteBind": string;
+    "remotePort": number;
+
+    /**
      * ReviewProviders is the pluggable review catalog ([[review.provider]]),
      * resolved to the EFFECTIVE set (the real catalog, or the entries synthesized
      * from the legacy [review]/[coderabbit] tables). ReviewLegacy reports that the

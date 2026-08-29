@@ -52,6 +52,7 @@
     // catalog — every cli, watch AND agent kind — so naming
     // the tab after one provider hid the other two.
     { id: "review", label: "Review" },
+    { id: "remote", label: "Remote" },
     { id: "appearance", label: "Appearance" },
   ];
 
@@ -98,6 +99,59 @@
     if (!dto) return; // `d` in the markup is a template-local {@const}, not this scope
     const cur = dto.prioritySort ?? [];
     dto.prioritySort = cur.includes(k) ? cur.filter((x) => x !== k) : [...cur, k];
+  }
+
+  // --- remote ([remote], the phone listener) --------------------------------
+  //
+  // bind is either one of config.RemoteBinds or an IP LITERAL, so the picker
+  // alone cannot express every valid value. That is not a nicety: a form that
+  // offered only the keywords would rewrite a configured literal to a keyword on
+  // the next save of any unrelated tab, silently rebinding the daemon to a
+  // different set of interfaces. So a value the daemon accepts but the picker
+  // cannot offer switches the row to a text input instead of being coerced.
+  let remoteBinds = $state<string[]>([]);
+
+  async function loadRemoteBinds() {
+    if (remoteBinds.length) return;
+    try {
+      remoteBinds = (await ConfigService.RemoteBinds()) ?? [];
+    } catch {
+      remoteBinds = []; // the row falls back to plain text entry, never a dead end
+    }
+  }
+
+  // The sentinel is not a bind value; it only tells the Select to hand the row
+  // over to the text input.
+  const BIND_LITERAL = "__literal";
+
+  const BIND_HELP: Record<string, string> = {
+    off: "keep these settings, listen on nothing",
+    localhost: "loopback only — what a tunnel or an SSH forward wants",
+    lan: "private interfaces only, tunnels and bridges excluded",
+    all: "0.0.0.0, every interface",
+  };
+
+  // True when the persisted value is a literal the picker cannot show. Guarded
+  // on remoteBinds being loaded, so the row does not flip to text for a split
+  // second before the keywords arrive.
+  const bindIsLiteral = $derived(!!dto && remoteBinds.length > 0 && !remoteBinds.includes(dto.remoteBind));
+
+  // Set when the user picks "IP literal" for a value that is still a keyword —
+  // otherwise choosing it would immediately re-derive back to the picker.
+  let bindLiteralPinned = $state(false);
+  const bindShowsLiteral = $derived(bindIsLiteral || bindLiteralPinned);
+
+  function onBindChange(v: string) {
+    if (!dto) return;
+    if (v === BIND_LITERAL) {
+      bindLiteralPinned = true;
+      // Clear a keyword so the field is ready to type into; an existing literal
+      // is kept, since re-picking the same mode must not discard it.
+      if (remoteBinds.includes(dto.remoteBind)) dto.remoteBind = "";
+      return;
+    }
+    bindLiteralPinned = false;
+    dto.remoteBind = v;
   }
 
   async function loadWorkspaceLabels() {
@@ -224,6 +278,8 @@
       void loadKeyStatus();
     } else if (id === "review") {
       void loadReviewKinds();
+    } else if (id === "remote") {
+      void loadRemoteBinds();
     }
   }
 
@@ -857,6 +913,62 @@
               <span>Include transcript tail</span>
             </label>
           </div>
+        </section>
+      {:else if tab === "remote"}
+        <section>
+          {@render head("Remote")}
+          <p class="copy mb-3 text-sm text-faint">
+            The <span class="font-mono text-ink">[remote]</span> phone listener: the TLS socket the
+            <span class="text-ink">Lola</span> mobile app connects to. Off by default, and the default is chosen for what enabling
+            it <span class="text-ink">grants</span> rather than for what it costs — a paired device can read your sessions, watch any
+            pane and type arbitrary prose into a running coding agent.
+          </p>
+          <div class="space-y-2">
+            <label class="flex cursor-pointer items-center gap-2">
+              <Checkbox bind:checked={d.remoteEnabled} />
+              <span>Enabled</span>
+            </label>
+            <div class={rowCls}>
+              <span class="text-faint">Bind</span>
+              <span class="flex items-center gap-2">
+                <Select
+                  aria-label="Bind"
+                  value={bindShowsLiteral ? BIND_LITERAL : d.remoteBind}
+                  onchange={(e) => onBindChange(e.currentTarget.value)}>
+                  {#each remoteBinds as b (b)}<option value={b}>{b}</option>{/each}
+                  <option value={BIND_LITERAL}>IP literal…</option>
+                </Select>
+                {#if !bindShowsLiteral && BIND_HELP[d.remoteBind]}
+                  <span class="text-xs text-faint">{BIND_HELP[d.remoteBind]}</span>
+                {/if}
+              </span>
+            </div>
+            {#if bindShowsLiteral}
+              <label class={rowCls}>
+                <span class="text-faint">Address</span>
+                <input
+                  class="{inputCls} font-mono"
+                  type="text"
+                  placeholder="192.168.1.20"
+                  bind:value={d.remoteBind} />
+              </label>
+              <p class="copy text-xs text-faint">
+                An IP literal, not a hostname — a name cannot be resolved at config-load time without turning a config read into a
+                network call, so the daemon rejects one.
+              </p>
+            {/if}
+            <label class={rowCls}>
+              <span class="text-faint">Port</span>
+              <input class={inputCls} type="number" min="0" max="65535" bind:value={d.remotePort} />
+            </label>
+          </div>
+          <p class="copy mt-3 text-sm text-faint">
+            Milestone 1 only exists in a daemon built with <span class="font-mono text-ink">-tags lola_insecure</span>, and that build
+            <span class="text-ink"> forces the bind to loopback</span> whatever is set here, logging the override. A phone therefore
+            reaches it through a forward rather than directly — see <span class="font-mono text-ink">mobile/README.md</span>. Pairing,
+            device identities and revocation are milestone 2; until then authentication is a single bearer key from the daemon's
+            environment.
+          </p>
         </section>
       {:else if tab === "appearance"}
         <section>

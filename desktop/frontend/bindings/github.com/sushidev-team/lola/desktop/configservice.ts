@@ -130,6 +130,19 @@ export function PrioritySortKeys(): $CancellablePromise<string[] | null> {
 }
 
 /**
+ * RemoteBinds returns the [remote].bind keywords the daemon accepts, so the
+ * settings form offers them instead of taking free text. Same posture as
+ * PrioritySortKeys: MEMBERSHIP is the Go side's call, since config.Validate
+ * rejects anything that is neither one of these nor an IP literal.
+ * 
+ * The literal case is why the form cannot be a picker alone — see the comment
+ * on SettingsDTO.RemoteBind.
+ */
+export function RemoteBinds(): $CancellablePromise<string[] | null> {
+    return $Call.ByID(2477471539);
+}
+
+/**
  * RemoveGroup deletes the folder and files its members at the top level. It
  * never touches a project beyond that reference: a group is arrangement, so
  * deleting one must not be able to lose a project, its worktrees or its
