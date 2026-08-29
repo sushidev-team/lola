@@ -64,6 +64,14 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+	<!-- Required for the LAN case. iOS fires the local-network prompt on the first
+	     unicast to a private-range address, and an app without this string is denied
+	     WITHOUT ever prompting - which surfaces as an ordinary unreachable host, so
+	     it looks like a wrong address rather than a permission. It does not fire for
+	     loopback, so a Simulator run or a phone-side SSH forward never prompts.
+	     NSBonjourServices is deliberately absent: nothing browses until milestone 6. -->
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Lola connects to the lola daemon on your Mac over your local network.</string>
 	<key>UIViewControllerBasedStatusBarAppearance</key>
 	<true/>
 </dict>

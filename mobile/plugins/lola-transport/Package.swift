@@ -23,12 +23,24 @@
 
 import PackageDescription
 
+// The package name and the library product name must BOTH be "LolaTransport",
+// and neither is a free choice. `cap sync` derives that identifier from the npm
+// package name ("lola-transport") and writes
+//   .package(name: "LolaTransport", path: "../../../node_modules/lola-transport")
+//   .product(name: "LolaTransport", package: "LolaTransport")
+// into ios/App/CapApp-SPM/Package.swift, which is generated and must not be
+// hand-edited. A mismatch does not fail with "no such product": SwiftPM cannot
+// resolve the graph at all, so Xcode reports the APP's own product missing —
+// "Missing package product 'CapApp-SPM'" — which points at the wrong file
+// entirely. @capacitor/keyboard shows the same convention: package
+// CapacitorKeyboard, product CapacitorKeyboard, target KeyboardPlugin. The
+// TARGET names below are ours and stay descriptive.
 let package = Package(
-    name: "LolaTransportPlugin",
+    name: "LolaTransport",
     platforms: [.iOS(.v15)],
     products: [
         .library(
-            name: "LolaTransportPlugin",
+            name: "LolaTransport",
             targets: ["LolaTransportPlugin"]
         )
     ],
