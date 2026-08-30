@@ -5,6 +5,7 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"strings"
 	"testing"
 
@@ -299,5 +300,68 @@ func TestRegenerateRemoteKeyRollsTheKeyAndRebuildsTheListener(t *testing.T) {
 	}
 	if after.Key == before.Key {
 		t.Fatal("the key did not change, so no phone was disconnected")
+	}
+}
+
+// A wildcard bind reports 0.0.0.0 / [::], and neither can be dialled. Handing
+// one to a phone produces a code that scans perfectly and then times out — the
+// worst failure shape available, because it looks like every other network
+// problem. So the unspecified address is replaced by addresses that exist.
+func TestListenerDialReplacesAWildcardWithReachableAddresses(t *testing.T) {
+	for _, wildcard := range []string{"0.0.0.0:7717", "[::]:7717"} {
+		t.Run(wildcard, func(t *testing.T) {
+			hosts, port := listenerDial([]remote.BindAddr{{Addr: wildcard}})
+			if port != 7717 {
+				t.Fatalf("port = %d, want 7717", port)
+			}
+			if len(hosts) == 0 {
+				t.Fatal("a wildcard produced no dialable host at all")
+			}
+			for _, h := range hosts {
+				ip := net.ParseIP(h)
+				if ip == nil {
+					t.Errorf("host %q does not parse as an address", h)
+					continue
+				}
+				if ip.IsUnspecified() {
+					t.Errorf("host %q is still a wildcard", h)
+				}
+				if strings.Contains(h, "%") {
+					t.Errorf("host %q carries a zone, which names an interface on THIS machine", h)
+				}
+			}
+			// Loopback is always there, because a Simulator shares the Mac's
+			// loopback and is the one client for which it is correct.
+			found := false
+			for _, h := range hosts {
+				if h == "127.0.0.1" {
+					found = true
+				}
+			}
+			if !found {
+				t.Error("loopback was not offered, so a Simulator has nothing to dial")
+			}
+		})
+	}
+}
+
+// An explicit address is passed through untouched: the substitution is only for
+// the case where the bound address names nothing.
+func TestListenerDialLeavesExplicitAddressesAlone(t *testing.T) {
+	hosts, port := listenerDial([]remote.BindAddr{
+		{Addr: "192.168.20.3:7717"},
+		{Addr: "127.0.0.1:7717"},
+	})
+	if port != 7717 {
+		t.Fatalf("port = %d", port)
+	}
+	want := []string{"192.168.20.3", "127.0.0.1"}
+	if len(hosts) != len(want) {
+		t.Fatalf("hosts = %v, want %v", hosts, want)
+	}
+	for i := range want {
+		if hosts[i] != want[i] {
+			t.Errorf("hosts = %v, want %v (bind order is preserved)", hosts, want)
+		}
 	}
 }

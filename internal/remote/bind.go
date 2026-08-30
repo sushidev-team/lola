@@ -142,6 +142,39 @@ func resolveBind(mode string, port int, ifaces func() ([]NetIface, error)) ([]Bi
 	return []BindAddr{{Addr: net.JoinHostPort(ip.String(), p)}}, nil
 }
 
+// ReachableHosts returns the private addresses of this machine's real
+// interfaces — the same set bind = "lan" listens on — as bare hosts, no port.
+//
+// It exists because a WILDCARD bind tells a client nothing. bind = "all" binds
+// 0.0.0.0 and [::], and those are the addresses the listener reports back, so a
+// connect code assembled straight from them hands a phone "::" to dial. That is
+// not merely useless, it is indistinguishable from a working code until the
+// phone times out. Substituting this set is what the operator meant by "every
+// interface" in the first place.
+//
+// It FAILS OPEN, returning nil rather than an error: the caller is assembling a
+// connect code, and a code carrying fewer addresses is worth more than no code.
+// A zone-scoped IPv6 link-local (fe80::1%en0) names an interface on THIS
+// machine and means nothing on another device, so it is dropped here rather
+// than shipped for a client to puzzle over.
+func ReachableHosts() []string {
+	binds, err := lanBinds("0", systemIfaces)
+	if err != nil {
+		return nil
+	}
+	out := make([]string, 0, len(binds))
+	seen := map[string]bool{}
+	for _, ba := range binds {
+		host, _, err := net.SplitHostPort(ba.Addr)
+		if err != nil || host == "" || strings.Contains(host, "%") || seen[host] {
+			continue
+		}
+		seen[host] = true
+		out = append(out, host)
+	}
+	return out
+}
+
 // lanBinds selects the private addresses of real, up, non-tunnel interfaces.
 func lanBinds(port string, ifaces func() ([]NetIface, error)) ([]BindAddr, error) {
 	if ifaces == nil {

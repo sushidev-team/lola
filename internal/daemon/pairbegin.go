@@ -125,9 +125,20 @@ func (d *Daemon) handlePairBegin(_ context.Context) (protocol.PairBeginData, err
 // in bind order, without duplicates — and the port they were taken on.
 //
 // It reads what was BOUND rather than what was configured, which is what makes
-// the loopback rail visible instead of assumed: an M1 daemon overrides any
-// non-loopback bind, so the answer here is 127.0.0.1 and ::1 whatever [remote]
-// says, and a LAN address the daemon cannot deliver is never offered to a phone.
+// the loopback rail visible instead of assumed: an M1 daemon without the LAN
+// opt-in overrides any non-loopback bind, so the answer is 127.0.0.1 and ::1
+// whatever [remote] says, and an address the daemon cannot deliver is never
+// offered to a phone.
+//
+// A WILDCARD is the one thing it does not pass through. bind = "all" binds
+// 0.0.0.0 and [::], and neither can be dialled: handing a phone "::" produces a
+// code that scans perfectly and then times out, which is the worst failure
+// shape available because it looks like every other network problem. So an
+// unspecified address is REPLACED by the machine's own reachable addresses —
+// what "every interface" meant — with loopback appended, since a Simulator
+// shares the Mac's loopback and is the one client for which it is the right
+// answer. The phone's chooseAddress ranks loopback last, so ordering here only
+// has to put the routable ones in the list.
 //
 // An address it cannot split is DROPPED rather than passed through: the host is
 // about to be dialled by a client, and half of a host:port pair would fail with
@@ -139,9 +150,16 @@ func listenerDial(addrs []remote.BindAddr) ([]string, int) {
 	out := make([]string, 0, len(addrs))
 	seen := map[string]bool{}
 	port := 0
+	add := func(host string) {
+		if host == "" || seen[host] {
+			return
+		}
+		seen[host] = true
+		out = append(out, host)
+	}
 	for _, ba := range addrs {
 		host, p, err := net.SplitHostPort(ba.Addr)
-		if err != nil || host == "" || seen[host] {
+		if err != nil || host == "" {
 			continue
 		}
 		n, err := strconv.Atoi(p)
@@ -151,8 +169,16 @@ func listenerDial(addrs []remote.BindAddr) ([]string, int) {
 		if port == 0 {
 			port = n
 		}
-		seen[host] = true
-		out = append(out, host)
+		if ip := net.ParseIP(host); ip != nil && ip.IsUnspecified() {
+			for _, h := range remote.ReachableHosts() {
+				add(h)
+			}
+			// Loopback last and always, so a Simulator still has something to
+			// dial even on a machine with no private interface at all.
+			add("127.0.0.1")
+			continue
+		}
+		add(host)
 	}
 	return out, port
 }
