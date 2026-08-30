@@ -11,7 +11,7 @@
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
-import { Call as $Call, CancellablePromise as $CancellablePromise, Create as $Create } from "@wailsio/runtime";
+import { Call as $Call, CancellablePromise as $CancellablePromise } from "@wailsio/runtime";
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
@@ -35,9 +35,7 @@ import * as $models from "./models.js";
  * with nothing about the running app changing.
  */
 export function CheckForUpdates(force: boolean): $CancellablePromise<$models.UpdateInfoDTO> {
-    return $Call.ByID(670986527, force).then(($result: any) => {
-        return $$createType0($result);
-    });
+    return $Call.ByID(670986527, force);
 }
 
 /**
@@ -52,19 +50,15 @@ export function DownloadUpdate(url: string): $CancellablePromise<string> {
 /**
  * GetRecentReleases returns the newest published releases for a changelog view.
  */
-export function GetRecentReleases(count: number): $CancellablePromise<$models.ReleaseEntryDTO[]> {
-    return $Call.ByID(3960301741, count).then(($result: any) => {
-        return $$createType2($result);
-    });
+export function GetRecentReleases(count: number): $CancellablePromise<$models.ReleaseEntryDTO[] | null> {
+    return $Call.ByID(3960301741, count);
 }
 
 /**
  * GetUpdateSettings returns the persisted preferences.
  */
 export function GetUpdateSettings(): $CancellablePromise<$models.UpdateSettingsDTO> {
-    return $Call.ByID(1504430752).then(($result: any) => {
-        return $$createType3($result);
-    });
+    return $Call.ByID(1504430752);
 }
 
 /**
@@ -119,9 +113,3 @@ export function ShouldAutoCheck(): $CancellablePromise<boolean> {
 export function SkipVersion(v: string): $CancellablePromise<void> {
     return $Call.ByID(1865952185, v);
 }
-
-// Private type creation functions
-const $$createType0 = $models.UpdateInfoDTO.createFrom;
-const $$createType1 = $models.ReleaseEntryDTO.createFrom;
-const $$createType2 = $Create.Array($$createType1);
-const $$createType3 = $models.UpdateSettingsDTO.createFrom;
