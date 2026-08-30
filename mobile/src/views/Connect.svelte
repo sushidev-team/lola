@@ -189,7 +189,7 @@
       notice = null;
       // Always remember a hand-off: scan-once-then-retype-anyway is the exact
       // failure this feature exists to remove.
-      if (await connection.connect(next.draft, next.key, true)) {
+      if (await connection.connect(next.draft, next.key, true, next.alternates)) {
         // A scan is an ordinary connection and wears no banner; a launch link
         // is a development one and wears it for as long as it is up.
         pairing.devLinkActive = source === "launch";

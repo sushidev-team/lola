@@ -141,34 +141,72 @@ export function normalizePin(pin: string): string {
 }
 
 /**
- * The one address to dial, out of everything the daemon reported.
+ * Every address worth dialling, best first.
  *
  * Two rules, both learned from what the addresses actually look like. A
  * ZONE-SCOPED link-local (`fe80::1%en0`) names an interface on the MAC and
  * means nothing on a phone, so it is dropped rather than ranked. And a
  * loopback address is kept but ranked LAST: it is useless to a physical device
  * and exactly right for a Simulator, which shares the Mac's loopback — and
- * under the `lola_insecure` build the listener binds loopback only, so it is
- * routinely the only address there is.
+ * under the `lola_insecure` build without the LAN opt-in the listener binds
+ * loopback only, so it is routinely the only address there is.
+ *
+ * The whole LIST matters, not only its head. A Mac commonly has several private
+ * addresses at once — Wi-Fi, a wired dock, a VM bridge — and the daemon reports
+ * all of them because it cannot know which one the phone shares a network with.
+ * Only the phone can find that out, and it finds out by trying.
  */
-export function chooseAddress(addrs: readonly string[]): string {
+export function rankAddresses(addrs: readonly string[]): string[] {
   const clean = addrs
     .map((a) => (typeof a === "string" ? a.trim() : ""))
     .filter((a) => a !== "" && !a.includes("%"));
   const usable = clean.filter((a) => classifyHost(a) !== "invalid");
-  const routable = usable.filter((a) => classifyHost(a) !== "loopback");
-  return routable[0] ?? usable[0] ?? "";
+  const ordered = [
+    ...usable.filter((a) => classifyHost(a) !== "loopback"),
+    ...usable.filter((a) => classifyHost(a) === "loopback"),
+  ];
+  const seen = new Set<string>();
+  return ordered.filter((a) => {
+    if (seen.has(a)) return false;
+    seen.add(a);
+    return true;
+  });
 }
 
-/** The payload as the connect form holds it. The one conversion, used by both paths. */
-export function toDraft(p: PairPayload): { draft: EndpointDraft; key: string } {
+/**
+ * The one address to SHOW in the form, out of everything the daemon reported.
+ *
+ * The form has a single host field and a human has to read something, so this
+ * is the best candidate rather than the whole list. Connecting uses
+ * `rankAddresses` and tries them in turn — see Connection#connect — because the
+ * best guess and the one that actually routes are not always the same.
+ */
+export function chooseAddress(addrs: readonly string[]): string {
+  return rankAddresses(addrs)[0] ?? "";
+}
+
+/**
+ * The payload as the connect form holds it. The one conversion, used by both paths.
+ *
+ * `alternates` is every OTHER address the daemon offered, best first. The form
+ * shows one host because a human reads one, but connecting walks the whole list
+ * — the daemon lists several because it cannot know which of its networks the
+ * phone is on, and only the phone can find out. See Connection#connect.
+ */
+export function toDraft(p: PairPayload): {
+  draft: EndpointDraft;
+  key: string;
+  alternates: string[];
+} {
+  const ranked = rankAddresses(p.addrs);
   return {
     draft: {
-      host: chooseAddress(p.addrs),
+      host: ranked[0] ?? "",
       port: p.port > 0 ? String(p.port) : "",
       spkiPin: p.pin,
     },
     key: p.key,
+    alternates: ranked.slice(1),
   };
 }
 

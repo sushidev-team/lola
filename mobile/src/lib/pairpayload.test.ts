@@ -7,6 +7,7 @@ import {
   normalizePin,
   pairFailureMessage,
   parsePairing,
+  rankAddresses,
   toDraft,
   type PairFailure,
   type PairPayload,
@@ -120,6 +121,9 @@ describe("the shared connect-code vector", () => {
         spkiPin: vector.fields.pin,
       },
       key: vector.fields.key,
+      // Everything the daemon offered BESIDES the one shown, in rank order.
+      // Connection#connect walks these when the first host does not route.
+      alternates: rankAddresses(vector.fields.addrs).slice(1),
     });
   });
 
@@ -242,6 +246,7 @@ describe("toDraft", () => {
     expect(toDraft(p)).toEqual({
       draft: { host: "10.0.0.4", port: "7717", spkiPin: PIN },
       key: KEY,
+      alternates: [],
     });
   });
 

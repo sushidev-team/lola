@@ -192,7 +192,12 @@ export class Connection {
    * never touches the network — a form that dials before it checks turns a typo
    * into a ten-second timeout and a misleading network error.
    */
-  async connect(draft: EndpointDraft, key: string, remember: boolean): Promise<boolean> {
+  async connect(
+    draft: EndpointDraft,
+    key: string,
+    remember: boolean,
+    alternates: readonly string[] = [],
+  ): Promise<boolean> {
     this.problems = validateDraft(draft, key, INSECURE_MIN_KEY_LEN);
     if (this.problems.length > 0) return false;
 
@@ -209,37 +214,59 @@ export class Connection {
     }
 
     const port = parsePort(draft.port) ?? 0;
-    const endpoint: Endpoint = {
-      host: draft.host.trim(),
-      port,
-      spkiPin: draft.spkiPin.trim(),
-      insecureKey: key,
-    };
+    const pin = draft.spkiPin.trim();
 
-    // Show the target while connecting, so the failure sentence can name it even
-    // if the transport never reports a status at all.
-    this.host = endpoint.host;
-    this.port = port;
+    // THE HOST IS A GUESS; THE ALTERNATES ARE THE REST OF THE ANSWER.
+    //
+    // A Mac commonly has several private addresses at once — Wi-Fi, a wired
+    // dock, a VM bridge — and the daemon reports all of them because it cannot
+    // know which one the phone shares a network with. Committing to the first
+    // and reporting "unreachable" blames the network for what is really a
+    // guess, on a machine that already listed the alternatives.
+    const hosts = [draft.host.trim(), ...alternates.map((a) => a.trim())].filter(
+      (h, i, all) => h !== "" && all.indexOf(h) === i,
+    );
+
     this.busy = true;
-    this.error = null;
-    this.refusal = null;
-
     try {
-      await t.connect(endpoint);
-      if (remember) {
-        saveEndpoint({ host: endpoint.host, port, spkiPin: endpoint.spkiPin });
-        await storeKey(endpointId(endpoint.host, port), key);
-        this.hasStoredKey = true;
-      }
-      return true;
-    } catch (e) {
-      // The status listener has usually already recorded the real reason; this
-      // only fills in when the rejection came without one.
-      if (!this.refusal && !this.error) {
-        this.error = e instanceof Error ? e : new Error(String(e));
-      }
-      if (this.phase === "ready" || this.phase === "connecting" || this.phase === "handshaking") {
-        this.phase = "closed";
+      for (const host of hosts) {
+        const endpoint: Endpoint = { host, port, spkiPin: pin, insecureKey: key };
+
+        // Show the target while connecting, so the failure sentence can name it
+        // even if the transport never reports a status at all.
+        this.host = endpoint.host;
+        this.port = port;
+        this.error = null;
+        this.refusal = null;
+
+        try {
+          await t.connect(endpoint);
+          if (remember) {
+            // Remember the one that WORKED, not the one offered first —
+            // otherwise the next launch repeats the same failed guess and pays
+            // its timeout again.
+            saveEndpoint({ host: endpoint.host, port, spkiPin: endpoint.spkiPin });
+            await storeKey(endpointId(endpoint.host, port), key);
+            this.hasStoredKey = true;
+          }
+          return true;
+        } catch (e) {
+          // The status listener has usually already recorded the real reason;
+          // this only fills in when the rejection came without one.
+          if (!this.refusal && !this.error) {
+            this.error = e instanceof Error ? e : new Error(String(e));
+          }
+          if (this.phase === "ready" || this.phase === "connecting" || this.phase === "handshaking") {
+            this.phase = "closed";
+          }
+
+          // A REFUSAL ENDS IT. The daemon answered and said no — a wrong key, a
+          // pin that does not match its certificate — and every other address
+          // reaches the SAME daemon and gets the same answer. Walking the rest
+          // of the list would turn one clear "rejected" into several seconds of
+          // timeouts ending in "unreachable": slower, and wrong.
+          if (this.refusal) return false;
+        }
       }
       return false;
     } finally {

@@ -142,3 +142,88 @@ describe("a wrong access key, end to end", () => {
     expect(c.diagnosis.detail).toContain("2");
   });
 });
+
+// THE HOST IS A GUESS AND THE DAEMON SAID SO.
+//
+// A Mac commonly has several private addresses at once — Wi-Fi, a wired dock, a
+// VM bridge — and the daemon reports all of them because it cannot know which
+// one the phone shares a network with. Committing to the first and reporting
+// "unreachable" blames the network for what is really a guess, on a machine
+// that already listed the alternatives.
+describe("trying the addresses the daemon offered", () => {
+  it("falls through to an address that routes when the first does not", async () => {
+    const c = new Connection();
+    const t = fakeTransport();
+    t.connect.mockImplementation(async (e: Endpoint) => {
+      if (e.host !== "192.168.0.196") throw new Error("host is down");
+    });
+    c.useTransport(t);
+
+    const ok = await c.connect({ ...draft, host: "192.168.20.3" }, KEY, false, [
+      "192.168.0.196",
+      "127.0.0.1",
+    ]);
+
+    expect(ok).toBe(true);
+    expect(t.connect).toHaveBeenCalledTimes(2);
+    // The one that worked is the one the UI names, not the one first offered.
+    expect(c.host).toBe("192.168.0.196");
+  });
+
+  it("reports failure once every address has been tried", async () => {
+    const c = new Connection();
+    const t = fakeTransport();
+    t.connect.mockImplementation(async () => {
+      throw new Error("host is down");
+    });
+    c.useTransport(t);
+
+    const ok = await c.connect(draft, KEY, false, ["10.0.0.2", "10.0.0.3"]);
+
+    expect(ok).toBe(false);
+    expect(t.connect).toHaveBeenCalledTimes(3);
+    expect(c.busy).toBe(false);
+  });
+
+  it("stops at a refusal instead of walking the rest of the list", async () => {
+    // The daemon ANSWERED and said no — a wrong key, a pin that does not match
+    // its certificate — and every other address reaches the same daemon and
+    // gets the same answer. Continuing would turn one clear "rejected" into
+    // several seconds of timeouts ending in "unreachable": slower, and wrong.
+    //
+    // The refusal is pushed through the real status seam rather than assigned
+    // on the Connection, because that is how it actually arrives: the plugin
+    // reports a status before the connect promise rejects.
+    const c = new Connection();
+    let emit: ((s: ConnectionStatus) => void) | null = null;
+    const t = fakeTransport();
+    (t as unknown as { onStatus: Transport["onStatus"] }).onStatus = (fn) => {
+      emit = fn;
+      return () => {};
+    };
+    t.connect.mockImplementation(async () => {
+      emit?.({ phase: "closed", refusal: { code: "denied", message: "bad key" } });
+      throw new Error("refused");
+    });
+    c.useTransport(t);
+
+    const ok = await c.connect(draft, KEY, false, ["10.0.0.2", "10.0.0.3"]);
+
+    expect(ok).toBe(false);
+    expect(t.connect).toHaveBeenCalledTimes(1);
+    expect(c.refusal).not.toBeNull();
+  });
+
+  it("does not dial the same address twice when it is also an alternate", async () => {
+    const c = new Connection();
+    const t = fakeTransport();
+    t.connect.mockImplementation(async () => {
+      throw new Error("host is down");
+    });
+    c.useTransport(t);
+
+    await c.connect(draft, KEY, false, ["127.0.0.1", "10.0.0.2"]);
+
+    expect(t.connect).toHaveBeenCalledTimes(2);
+  });
+});
