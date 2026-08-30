@@ -5,7 +5,7 @@ export GOCACHE := $(CURDIR)/.gocache
 # which sandboxed shells cannot write to.
 export GOFLAGS := -mod=mod -buildvcs=false
 
-.PHONY: build test vet fmt fmtcheck tidy check clean mobile-dev mobile-info mobile-sim mobile-device desktop-dev
+.PHONY: build test vet fmt fmtcheck tidy check clean mobile-dev mobile-lan mobile-info mobile-sim mobile-device desktop-dev
 
 build:
 	go build -o lola .
@@ -49,6 +49,17 @@ clean:
 
 mobile-dev:
 	@contrib/lola-mobile-dev.sh
+
+# The same, but reachable from a PHYSICAL phone. A separate target rather than
+# `make mobile-dev --lan`, which cannot work: make claims a leading `--` for its
+# own options and never passes it through.
+#
+# It binds beyond loopback, so the shared bearer key crosses your network. The
+# daemon says so loudly on every start. Note that the TUI's ^r and the desktop
+# app's restart button do NOT carry the opt-in, so a restart from either drops
+# back to loopback and the phone silently loses its route — come back here.
+mobile-lan:
+	@contrib/lola-mobile-dev.sh --lan
 
 mobile-info:
 	@contrib/lola-mobile-dev.sh --info

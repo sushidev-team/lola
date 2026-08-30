@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"strings"
 
 	"github.com/sushidev-team/lola/internal/protocol"
 	"github.com/sushidev-team/lola/internal/remote"
@@ -176,6 +177,15 @@ func listenerDial(addrs []remote.BindAddr) ([]string, int) {
 			// Loopback last and always, so a Simulator still has something to
 			// dial even on a machine with no private interface at all.
 			add("127.0.0.1")
+			continue
+		}
+		// A ZONE-SCOPED address is dropped, not offered. "fe80::1%en0" names an
+		// interface on THIS machine; the zone is meaningless on the phone and
+		// the address without it is ambiguous. bind = "lan" binds them because
+		// they are real local addresses, and a Mac has many — so without this
+		// the connect code leads with a string no other device can dial, and
+		// the desktop shows it as THE address because it shows the first one.
+		if strings.Contains(host, "%") {
 			continue
 		}
 		add(host)

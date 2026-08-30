@@ -365,3 +365,30 @@ func TestListenerDialLeavesExplicitAddressesAlone(t *testing.T) {
 		}
 	}
 }
+
+// bind = "lan" binds every private address a Mac has, and on a laptop that
+// includes a pile of zone-scoped IPv6 link-locals (awdl0, llw0, a Thunderbolt
+// bridge). "fe80::1%en0" names an interface on THIS machine: the zone is
+// meaningless on a phone and the address without it is ambiguous. Offering them
+// is worse than useless, because the desktop shows the FIRST host as "the"
+// address and these sort ahead of the real one.
+func TestListenerDialDropsZoneScopedAddresses(t *testing.T) {
+	hosts, port := listenerDial([]remote.BindAddr{
+		{Addr: "[fe80::1039:82e4:1f75:4c96%en0]:7717"},
+		{Addr: "192.168.20.3:7717"},
+		{Addr: "[fe80::78a0:f6ff:fe89:f4d2%awdl0]:7717"},
+		{Addr: "127.0.0.1:7717"},
+	})
+	if port != 7717 {
+		t.Fatalf("port = %d", port)
+	}
+	want := []string{"192.168.20.3", "127.0.0.1"}
+	if len(hosts) != len(want) {
+		t.Fatalf("hosts = %v, want %v", hosts, want)
+	}
+	for i := range want {
+		if hosts[i] != want[i] {
+			t.Fatalf("hosts = %v, want %v", hosts, want)
+		}
+	}
+}
