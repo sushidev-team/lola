@@ -126,6 +126,17 @@ type Options struct {
 	// means DefaultHandlerGrace. See that constant for why the wait is bounded
 	// at all.
 	HandlerGrace time.Duration
+
+	// InsecureLAN carries [remote].insecure_lan to the milestone-1 listener,
+	// which is the only thing that reads it: without the lola_insecure tag
+	// there is no bind rail to open and the field is inert. See
+	// config.RemoteConfig.InsecureLAN for why the permission is a config key
+	// rather than the environment variable it started as.
+	//
+	// It lives on Options rather than being read from the environment inside
+	// insecure.go so the daemon owns the whole policy: one place decides, and a
+	// test sets a field instead of mutating process-wide state.
+	InsecureLAN bool
 }
 
 func (o Options) handlerGrace() time.Duration {

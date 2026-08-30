@@ -487,6 +487,18 @@ endpoint = "https://api.linear.app/graphql"
 # bind = "localhost"
 # # TCP port. 0 uses the built-in default shown here.
 # port = 7717
+#
+# insecure_lan: milestone 1 authenticates a phone with a single shared bearer
+# key, so it FORCES the bind to loopback and a physical phone cannot reach it.
+# A Simulator can — it shares the Mac's loopback — so this is only for a real
+# device. Turning it on honours `bind` above and puts that shared key on your
+# network in the clear: anything that can reach the port and guess the key can
+# type into a running coding agent. Two keys have to agree, so a config that
+# merely says bind = "lan" still binds loopback.
+#
+# It is deleted along with the whole insecure path in milestone 2, which gives
+# each device its own identity and makes a LAN bind unremarkable.
+# insecure_lan = false
 
 # ---------------------------------------------------------------------------
 # [[project]] — repository registry for the native runtime (one table per

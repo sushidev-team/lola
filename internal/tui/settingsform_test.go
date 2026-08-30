@@ -1854,6 +1854,7 @@ func TestSettingsFormSavesTheRemoteListener(t *testing.T) {
 	f.field("remote_enabled").b = true
 	f.field("remote_bind").text = "lan"
 	f.field("remote_port").text = "7800"
+	f.field("remote_insecure_lan").b = true
 
 	if ev := f.save(); ev == settingsFormNone || f.err != "" {
 		t.Fatalf("save failed: ev=%v err=%q", ev, f.err)
@@ -1865,8 +1866,8 @@ func TestSettingsFormSavesTheRemoteListener(t *testing.T) {
 	if err := reloaded.Validate(); err != nil {
 		t.Fatalf("the saved config must validate: %v", err)
 	}
-	if got := reloaded.Remote; !got.Enabled || got.Bind != "lan" || got.Port != 7800 {
-		t.Errorf("remote = %+v, want enabled on lan:7800", got)
+	if got := reloaded.Remote; !got.Enabled || got.Bind != "lan" || got.Port != 7800 || !got.InsecureLAN {
+		t.Errorf("remote = %+v, want enabled on lan:7800 with the LAN opt-in", got)
 	}
 }
 

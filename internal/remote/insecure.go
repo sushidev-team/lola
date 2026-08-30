@@ -47,37 +47,28 @@ import (
 // a log line, or in an error.
 const InsecureKeyEnv = "LOLA_REMOTE_INSECURE_KEY"
 
-// InsecureLANEnv names the opt-in that lets this build bind somewhere other
-// than loopback. It exists for ONE reason: a physical phone cannot reach a
-// loopback-bound daemon, and the Simulator — which can, because it shares the
-// Mac's loopback — is not where a camera, the local-network permission prompt
-// or a real network partition can be tested.
+// InsecureLANEnv names an environment variable that opens the bind rail for one
+// run, without touching config. [remote].insecure_lan is the normal way — see
+// config.RemoteConfig.InsecureLAN for why the permission has to persist — and
+// this remains for a one-off: a single `lola run` bound to the LAN, gone the
+// moment that process exits and leaving nothing behind to forget about.
 //
-// It is an environment variable rather than a config key on purpose. A config
-// key persists, and this must not: it is set by whoever starts the daemon, for
-// the length of a testing session, and it is gone when they stop. It is also
-// why this is not solved with a `socat` bridge, the tempting alternative — a
-// bridge from the LAN to loopback puts exactly the same secret on exactly the
-// same wire, while leaving the code claiming a loopback bind it no longer
-// effectively has. Relocating an exposure is not removing it, and a rail that
-// lies is worse than one with a documented hole.
-//
-// BOTH halves must be deliberate: this variable AND a [remote].bind naming
-// something other than loopback. Either alone changes nothing.
-//
-// This is scaffolding and it is deleted with the tag. M2 replaces the shared
-// key with per-device identities, mutual TLS and revocation, at which point
-// binding to a LAN is an ordinary thing to do and needs no opt-in at all.
+// Either source opens it, and both still require a [remote].bind naming
+// something other than loopback. Neither alone changes anything.
 const InsecureLANEnv = "LOLA_REMOTE_INSECURE_LAN"
 
 // insecureKeyFile is the generated key's name, alongside device.key in the same
 // 0700 directory and with the same 0600 mode.
 const insecureKeyFile = "remote.key"
 
-// insecureLANAllowed reports whether the operator opened the bind rail.
-// Anything but an explicit affirmative reads as "no": a variable that is merely
-// PRESENT — exported empty by a shell profile, say — must not open a listener.
-func insecureLANAllowed() bool {
+// insecureLANAllowed reports whether the bind rail was opened, by config or for
+// this run. Anything but an explicit affirmative in the environment reads as
+// "no": a variable that is merely PRESENT — exported empty by a shell profile,
+// say — must not open a listener.
+func insecureLANAllowed(opts Options) bool {
+	if opts.InsecureLAN {
+		return true
+	}
 	switch strings.ToLower(strings.TrimSpace(os.Getenv(InsecureLANEnv))) {
 	case "1", "true", "yes", "on":
 		return true
@@ -117,18 +108,18 @@ func Listen(ctx context.Context, opts Options) (*Server, error) {
 		return nil, err
 	}
 	if mode := opts.Bind; mode != "" && mode != "off" && mode != "localhost" {
-		if insecureLANAllowed() {
+		if insecureLANAllowed(opts) {
 			// Both halves were deliberate: the config names a non-loopback bind
-			// AND the environment opts in. Neither alone reaches here.
-			logf("remote: WARNING bind %q is honoured because %s is set. The shared bearer key now "+
-				"crosses your network in the clear, and anything that can reach this port and guess "+
-				"the key can type into a running coding agent. Use it on a network you control, "+
-				"while you are testing, and not longer.", logSafe(mode), InsecureLANEnv)
+			// AND the opt-in is set. Neither alone reaches here.
+			logf("remote: WARNING bind %q is honoured because remote.insecure_lan is set. The shared "+
+				"bearer key now crosses your network in the clear, and anything that can reach this "+
+				"port and guess the key can type into a running coding agent. Use it on a network you "+
+				"control, while you are testing, and not longer.", logSafe(mode))
 		} else {
 			logf("remote: WARNING bind %q is overridden to localhost: this build carries the insecure "+
 				"M1 bearer-key path (-tags lola_insecure) and must not put a shared secret on a network "+
-				"interface by accident. Set %s=1 to allow it anyway, which is how a physical phone "+
-				"reaches this daemon.", logSafe(mode), InsecureLANEnv)
+				"interface by accident. Set remote.insecure_lan = true to allow it, which is how a "+
+				"physical phone reaches this daemon.", logSafe(mode))
 			opts.Bind = "localhost"
 		}
 	}

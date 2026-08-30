@@ -169,12 +169,15 @@ func (d *Daemon) startRemote(ctx context.Context) {
 	reg.Resolve = d.resolvePaneName
 
 	srv, err := d.listenRemote(ctx, remote.Options{
-		Bind:   rc.BindMode(),
-		Port:   rc.ListenPort(),
-		Dir:    d.home,
-		Handle: d.handle,
-		Panes:  remotePanes{reg: reg, logf: d.remoteLogf},
-		Logf:   d.remoteLogf,
+		Bind: rc.BindMode(),
+		Port: rc.ListenPort(),
+		// Only the milestone-1 listener reads this; without the tag there is no
+		// bind rail to open. See config.RemoteConfig.InsecureLAN.
+		InsecureLAN: rc.InsecureLAN,
+		Dir:         d.home,
+		Handle:      d.handle,
+		Panes:       remotePanes{reg: reg, logf: d.remoteLogf},
+		Logf:        d.remoteLogf,
 	})
 	if err != nil {
 		// The refusal itself was logged where it was decided (a missing

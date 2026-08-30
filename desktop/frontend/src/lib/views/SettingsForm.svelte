@@ -1131,6 +1131,22 @@
               <span class="text-faint">Port</span>
               <input class={inputCls} type="number" min="0" max="65535" bind:value={d.remotePort} />
             </label>
+
+            <!-- The bind rail's one hole. Two keys have to agree — this AND a
+                 non-loopback bind — so a config that merely says "lan" still
+                 binds loopback. It is a config key rather than an environment
+                 variable because the daemon is normally started by the restart
+                 button a few inches from here, which cannot set one. -->
+            <label class="flex cursor-pointer items-start gap-2 pt-1">
+              <Checkbox bind:checked={d.remoteInsecureLan} />
+              <span>
+                <span>Allow a LAN bind</span>
+                <span class="mt-0.5 block text-xs text-faint">
+                  Milestone 1 forces the bind to loopback, which a physical phone cannot reach. This honours the bind
+                  above and puts the shared key on your network in the clear. The Simulator does not need it.
+                </span>
+              </span>
+            </label>
           </div>
           <div class="mt-4 border-t border-edge pt-4">
             <div class="flex items-center justify-between gap-3">

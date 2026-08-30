@@ -214,10 +214,10 @@ func TestRegenerateInsecureKeyReplacesIt(t *testing.T) {
 // reason the forcing test does.
 func TestInsecureListenHonoursTheBindWhenTheLANOptInIsSet(t *testing.T) {
 	t.Setenv(InsecureKeyEnv, strings.Repeat("k", 32))
-	t.Setenv(InsecureLANEnv, "1")
 
 	srv, err := Listen(context.Background(), Options{
-		Bind: "lan", Port: freePort(t), Dir: t.TempDir(), Handle: (&stubHandler{}).handle,
+		Bind: "lan", InsecureLAN: true, Port: freePort(t), Dir: t.TempDir(),
+		Handle: (&stubHandler{}).handle,
 	})
 	if err != nil {
 		t.Skipf("no usable private interface on this host: %v", err)
@@ -239,10 +239,9 @@ func TestInsecureListenHonoursTheBindWhenTheLANOptInIsSet(t *testing.T) {
 // a non-loopback bind, changes nothing.
 func TestInsecureLANOptInAloneDoesNotWiden(t *testing.T) {
 	t.Setenv(InsecureKeyEnv, strings.Repeat("k", 32))
-	t.Setenv(InsecureLANEnv, "1")
-
 	srv, err := Listen(context.Background(), Options{
-		Bind: "localhost", Port: freePort(t), Dir: t.TempDir(), Handle: (&stubHandler{}).handle,
+		Bind: "localhost", InsecureLAN: true, Port: freePort(t), Dir: t.TempDir(),
+		Handle: (&stubHandler{}).handle,
 	})
 	if err != nil {
 		t.Fatalf("listen: %v", err)
@@ -256,16 +255,29 @@ func TestInsecureLANOptInAloneDoesNotWiden(t *testing.T) {
 	}
 }
 
-// And a value that is merely present must not count as consent.
+// The config key is the normal path, and the environment variable remains for a
+// one-off run. A value that is merely PRESENT must not count as consent.
 func TestInsecureLANOptInRequiresAnAffirmative(t *testing.T) {
 	for _, v := range []string{"", "0", "false", "no", "maybe", " "} {
-		t.Run("value="+v, func(t *testing.T) {
+		t.Run("env="+v, func(t *testing.T) {
 			t.Setenv(InsecureLANEnv, v)
-			if insecureLANAllowed() {
+			if insecureLANAllowed(Options{}) {
 				t.Errorf("%q was read as consent", v)
 			}
 		})
 	}
+	t.Run("config key", func(t *testing.T) {
+		t.Setenv(InsecureLANEnv, "")
+		if !insecureLANAllowed(Options{InsecureLAN: true}) {
+			t.Error("remote.insecure_lan = true must open the rail")
+		}
+	})
+	t.Run("env override with no config key", func(t *testing.T) {
+		t.Setenv(InsecureLANEnv, "1")
+		if !insecureLANAllowed(Options{}) {
+			t.Error("the one-off environment override must still work")
+		}
+	})
 }
 
 // withInsecureAuth arms a rig with the REAL bearer-key authorizer, built

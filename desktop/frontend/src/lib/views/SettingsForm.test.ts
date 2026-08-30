@@ -11,6 +11,7 @@ declare const process: { cwd(): string };
 const fakeDto = {
   remoteEnabled: false,
   remoteBind: "localhost",
+  remoteInsecureLan: false,
   remotePort: 7717,
   globalCap: 5,
   concurrencyCap: 2,

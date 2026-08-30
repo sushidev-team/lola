@@ -78,6 +78,31 @@ type RemoteConfig struct {
 	Enabled bool   `toml:"enabled"`
 	Bind    string `toml:"bind"`
 	Port    int    `toml:"port"`
+
+	// InsecureLAN lets a milestone-1 daemon honour a non-loopback Bind instead
+	// of forcing loopback. It exists so a PHYSICAL phone can reach the daemon:
+	// a Simulator shares the Mac's loopback and never needs it, but a real
+	// device cannot reach 127.0.0.1 on another machine.
+	//
+	// It is a CONFIG KEY rather than an environment variable, and that was a
+	// correction. The first version read LOLA_REMOTE_INSECURE_LAN, reasoning
+	// that the permission should not persist — but the daemon is normally
+	// started by the TUI's ^r or the desktop app's restart button, and neither
+	// can set an environment variable. So the opt-in was lost on every restart
+	// and the listener silently dropped back to loopback, which presents as a
+	// phone that connected yesterday and cannot today. A permission nobody can
+	// grant through the UI that runs the daemon is not a safe default, it is an
+	// unusable one.
+	//
+	// What actually contains this is the BUILD TAG: none of the insecure path
+	// exists in a release binary, so the key is inert there. Within a
+	// lola_insecure build it still takes TWO deliberate keys — this one AND a
+	// Bind naming something other than loopback — so a config that merely says
+	// bind = "lan" still binds loopback.
+	//
+	// It is deleted with the rest of the tag. M2's per-device identities and
+	// mutual TLS make binding to a LAN an ordinary thing needing no opt-in.
+	InsecureLAN bool `toml:"insecure_lan"`
 }
 
 // BindMode returns the EFFECTIVE bind selector: [remote].bind when set, else
@@ -117,9 +142,10 @@ func (r RemoteConfig) Listens() bool {
 // so Save never grows a [remote] block on a config that never mentioned it.
 
 type fileRemoteConfig struct {
-	Enabled *bool   `toml:"enabled,omitempty"`
-	Bind    *string `toml:"bind,omitempty"`
-	Port    *int    `toml:"port,omitempty"`
+	Enabled     *bool   `toml:"enabled,omitempty"`
+	Bind        *string `toml:"bind,omitempty"`
+	Port        *int    `toml:"port,omitempty"`
+	InsecureLAN *bool   `toml:"insecure_lan,omitempty"`
 }
 
 // resolveRemote materializes the [remote] table. A nil (absent) mirror yields
@@ -144,6 +170,9 @@ func resolveRemote(fr *fileRemoteConfig) RemoteConfig {
 	if fr.Port != nil {
 		r.Port = *fr.Port
 	}
+	if fr.InsecureLAN != nil {
+		r.InsecureLAN = *fr.InsecureLAN
+	}
 	return r
 }
 
@@ -156,9 +185,10 @@ func remoteFile(r RemoteConfig) *fileRemoteConfig {
 		return nil
 	}
 	return &fileRemoteConfig{
-		Enabled: &r.Enabled,
-		Bind:    &r.Bind,
-		Port:    &r.Port,
+		Enabled:     &r.Enabled,
+		Bind:        &r.Bind,
+		Port:        &r.Port,
+		InsecureLAN: &r.InsecureLAN,
 	}
 }
 

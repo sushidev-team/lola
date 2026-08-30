@@ -18,7 +18,7 @@
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
-import { Call as $Call, CancellablePromise as $CancellablePromise } from "@wailsio/runtime";
+import { Call as $Call, CancellablePromise as $CancellablePromise, Create as $Create } from "@wailsio/runtime";
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
@@ -53,8 +53,10 @@ export function Capture(name: string, lines: number): $CancellablePromise<string
  * capture (session gone) is simply omitted from the map rather than failing the
  * whole batch.
  */
-export function CaptureMany(names: string[] | null, lines: number): $CancellablePromise<{ [_ in string]?: string } | null> {
-    return $Call.ByID(261382224, names, lines);
+export function CaptureMany(names: string[], lines: number): $CancellablePromise<{ [_ in string]?: string }> {
+    return $Call.ByID(261382224, names, lines).then(($result: any) => {
+        return $$createType0($result);
+    });
 }
 
 /**
@@ -143,8 +145,10 @@ export function Shell(shell: string, worktree: string): $CancellablePromise<stri
  * without either having to be told. An empty result (or a tmux error) simply
  * means no auxiliary sessions.
  */
-export function Shells(sessionID: string): $CancellablePromise<string[] | null> {
-    return $Call.ByID(3412002816, sessionID);
+export function Shells(sessionID: string): $CancellablePromise<string[]> {
+    return $Call.ByID(3412002816, sessionID).then(($result: any) => {
+        return $$createType1($result);
+    });
 }
 
 /**
@@ -156,3 +160,7 @@ export function Shells(sessionID: string): $CancellablePromise<string[] | null> 
 export function Write(name: string, data: string): $CancellablePromise<void> {
     return $Call.ByID(3287491394, name, data);
 }
+
+// Private type creation functions
+const $$createType0 = $Create.Map($Create.Any, $Create.Any);
+const $$createType1 = $Create.Array($Create.Any);
