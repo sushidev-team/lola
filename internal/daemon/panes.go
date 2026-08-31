@@ -232,3 +232,110 @@ func shellIndex(parent, name string) int {
 func sortByIndex(p []protocol.PaneInfo) {
 	sort.Slice(p, func(i, j int) bool { return p[i].Index < p[j].Index })
 }
+
+// maxPaneDim bounds a pin. A phone is not 10000 columns wide, and a window
+// resized to something absurd is a wedged agent rather than a small one — the
+// TUI redraws against whatever it is told.
+const maxPaneDim = 500
+
+// handlePaneClose closes ONE auxiliary pane of a session.
+//
+// The agent pane is refused, and that is the rule the whole command turns on:
+// the agent pane IS the session, so closing it would end the work and leave a
+// record pointing at nothing. Teardown is cmd=kill, which knows to take the
+// worktree and the branch too. A tab strip offering a close on the agent tab
+// would be offering a kill disguised as a tidy-up.
+//
+// The pane must belong to the named session. Without that check a device could
+// close another session's tab by naming it, which the identity gate on the
+// SUBSCRIBE path already prevents and which this path would otherwise reopen.
+//
+// It kills the session TREE, not the session: a shell can be holding a port
+// through a process that ignores SIGHUP, and `kill-session` alone would orphan
+// it onto pid 1 — the same reason teardown uses KillSessionTree everywhere.
+func (d *Daemon) handlePaneClose(ctx context.Context, a protocol.PaneCloseArgs) (protocol.PaneCloseData, error) {
+	s, ok := d.sessionByID(a.Session)
+	if !ok {
+		return protocol.PaneCloseData{}, fmt.Errorf("unknown session %q", a.Session)
+	}
+	parent := paneTarget(s)
+	if a.Pane == "" {
+		return protocol.PaneCloseData{}, fmt.Errorf("paneClose: no pane named")
+	}
+	if a.Pane == parent {
+		return protocol.PaneCloseData{}, fmt.Errorf(
+			"the agent pane cannot be closed; it is the session. Use kill to end the session")
+	}
+	if !d.paneBelongsTo(parent, a.Pane) {
+		return protocol.PaneCloseData{}, fmt.Errorf("pane %q does not belong to session %q", a.Pane, a.Session)
+	}
+
+	if err := d.tmuxClient().KillSessionTree(ctx, a.Pane); err != nil {
+		return protocol.PaneCloseData{}, fmt.Errorf("close %s: %w", a.Pane, err)
+	}
+	d.logf("", "remote: closed pane %s", a.Pane)
+	return protocol.PaneCloseData{Session: a.Session, Pane: a.Pane, Closed: true}, nil
+}
+
+// handlePaneResize pins a pane's window to a size, or releases it.
+//
+// This is the deliberate opposite of panebus's ignore-size attach, and both are
+// right. The fan-out must never reshape the developer's window as a side effect
+// of a phone subscribing; this reshapes it because a human explicitly asked, for
+// as long as they are looking at it. tmux runs window-size latest, so releasing
+// hands the size straight back to whatever clients remain attached.
+//
+// The agent pane is ALLOWED here, unlike close: resizing it is the entire point.
+func (d *Daemon) handlePaneResize(ctx context.Context, a protocol.PaneResizeArgs) (protocol.PaneResizeData, error) {
+	s, ok := d.sessionByID(a.Session)
+	if !ok {
+		return protocol.PaneResizeData{}, fmt.Errorf("unknown session %q", a.Session)
+	}
+	parent := paneTarget(s)
+	if a.Pane == "" {
+		return protocol.PaneResizeData{}, fmt.Errorf("paneResize: no pane named")
+	}
+	if a.Pane != parent && !d.paneBelongsTo(parent, a.Pane) {
+		return protocol.PaneResizeData{}, fmt.Errorf("pane %q does not belong to session %q", a.Pane, a.Session)
+	}
+
+	// A release is cols <= 0, and it must stay reachable even for nonsense
+	// dimensions: a client that pinned and then sent garbage should be able to
+	// undo it, so the bound REJECTS rather than clamping only on the pin path.
+	release := a.Cols <= 0 || a.Rows <= 0
+	if !release && (a.Cols > maxPaneDim || a.Rows > maxPaneDim) {
+		return protocol.PaneResizeData{}, fmt.Errorf(
+			"paneResize: %dx%d is out of range (max %d)", a.Cols, a.Rows, maxPaneDim)
+	}
+
+	cols, rows := a.Cols, a.Rows
+	if release {
+		cols, rows = 0, 0
+	}
+	if err := d.tmuxClient().SetWindowSize(ctx, a.Pane, cols, rows); err != nil {
+		return protocol.PaneResizeData{}, fmt.Errorf("resize %s: %w", a.Pane, err)
+	}
+	if release {
+		d.logf("", "remote: released the pinned size of %s", a.Pane)
+		return protocol.PaneResizeData{Session: a.Session, Pane: a.Pane, Pinned: false}, nil
+	}
+	d.logf("", "remote: pinned %s to %dx%d for a phone", a.Pane, cols, rows)
+	return protocol.PaneResizeData{
+		Session: a.Session, Pane: a.Pane, Pinned: true, Cols: cols, Rows: rows,
+	}, nil
+}
+
+// paneBelongsTo reports whether an auxiliary pane name is one of parent's.
+//
+// Anchored the same way shellIndex is, and for the same reason: "lola-fe-42" is
+// a prefix of "lola-fe-420-shell-1", so a bare prefix test would let one session
+// close or resize another's tab.
+func (d *Daemon) paneBelongsTo(parent, name string) bool {
+	if shellIndex(parent, name) > 0 {
+		return true
+	}
+	if devtab.Index(parent, name) > 0 {
+		return true
+	}
+	return name == parent+reviewSuffix
+}

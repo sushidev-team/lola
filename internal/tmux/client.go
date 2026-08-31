@@ -908,3 +908,40 @@ func chromeStatusRight(opts SessionChrome) string {
 	}
 	return opts.StatusRight + " | " + hint
 }
+
+// SetWindowSize pins a window to an explicit size, or releases it back to
+// whatever the attached clients ask for.
+//
+// This exists for ONE caller: the phone, which wants the pane it is looking at
+// sized to a phone while it looks at it. tmux sizes a window from its clients
+// (the server runs `window-size latest`, so the most recently active client
+// wins), which is why panebus attaches with `-f ignore-size` — a phone joining
+// the fan-out must not silently reshape the developer's 200-column view.
+// Pinning is the deliberate, temporary opposite of that, and it is scoped to
+// the moment the phone has the pane in front of it.
+//
+// cols == 0 RELEASES, and the release is two commands rather than one because
+// unsetting the option alone does nothing at all: tmux leaves the window at
+// whatever it was last told, so a phone that disconnected would leave the
+// desktop squashed forever. `resize-window -A` is what makes tmux recompute
+// from the clients that are actually attached. Both halves are verified against
+// tmux 3.7; do not drop the second one.
+//
+// Best-effort by design: a window that has gone away is not an error worth
+// failing a UI over, and the size is cosmetic. The caller logs and continues.
+func (c *Client) SetWindowSize(ctx context.Context, name string, cols, rows int) error {
+	target := "=" + name
+	if cols <= 0 || rows <= 0 {
+		if _, _, err := c.run(ctx, "set-option", "-w", "-t", target, "-u", "window-size"); err != nil {
+			return err
+		}
+		_, _, err := c.run(ctx, "resize-window", "-t", target, "-A")
+		return err
+	}
+	if _, _, err := c.run(ctx, "set-option", "-w", "-t", target, "window-size", "manual"); err != nil {
+		return err
+	}
+	_, _, err := c.run(ctx, "resize-window", "-t", target,
+		"-x", strconv.Itoa(cols), "-y", strconv.Itoa(rows))
+	return err
+}
