@@ -1073,6 +1073,30 @@ each of which owns exactly one external tool or concern behind an **exec seam**
 
 ## Testing conventions
 
+- **NEVER drive a UI with synthetic OS input.** No CGEvent posting, no
+  `osascript` clicks or keystrokes, no `cliclick`, no Accessibility-API driving,
+  and nothing that focuses a window or moves the real pointer. `simctl` has no
+  gesture API, and that absence is not a problem to route around: an agent that
+  reaches for system-wide input steals focus from whoever is at the machine, so
+  their next keystrokes land in the Simulator instead of their editor — and a
+  stray click has already leaked into an unrelated application's window. It is
+  unreliable as well as rude: CGEvents are silently dropped without a TCC grant,
+  so the usual outcome is disruption AND no test.
+  Verify a mobile change these ways instead, in this order:
+  - **Component tests.** `mobile/` and `desktop/frontend/` both run vitest with
+    @testing-library; `fireEvent` drives a real interaction with no device, no
+    pointer and no focus change. Behaviour belongs here.
+  - **`xcrun simctl io <udid> screenshot`** for what something LOOKS like. It is
+    read-only — takes no input, steals no focus. Then read the image.
+  - **A launch-environment deep link** to REACH a screen rather than tapping to
+    it: `SIMCTL_CHILD_LOLA_DEV_LINK=... xcrun simctl launch`, which carries an
+    optional pane target for exactly this purpose (`mobile/src/lib/devlink`). If
+    a screen is unreachable by link, ADD a link target; never add a tap.
+  - **A browser harness** at a phone viewport against `npm run dev` when a
+    gesture genuinely must be exercised. Same WebKit, no OS-level input.
+  If none of those can verify something, say so and leave it for a human on a
+  real device. An unverified claim is far cheaper than a hijacked machine.
+
 - 46 `_test.go` files; the daemon package is the densest. Inject fakes via the
   `Daemon` struct's seam fields and `linear.API` / `fake.go`. Use `$LOLA_HOME`
   (a `t.TempDir()`) to isolate all runtime state.

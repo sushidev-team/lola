@@ -131,6 +131,26 @@ func (d *Daemon) handle(ctx context.Context, req protocol.Request) protocol.Resp
 			return protocol.Response{OK: false, Error: err.Error()}
 		}
 		return protocol.Response{OK: true}
+	case "panes":
+		// Reachable remotely BY DESIGN: a phone that cannot enumerate panes
+		// cannot draw a tab strip. Read-only.
+		data, err := d.handlePanes(ctx, req.Session)
+		if err != nil {
+			return protocol.Response{OK: false, Error: err.Error()}
+		}
+		return dataResponse(data)
+	case "shellCreate":
+		// Also reachable remotely by design, and the most privileged thing on
+		// that surface: a shell in a worktree runs as the developer, with their
+		// gh token and SSH agent in reach. The operator decided phones get shell
+		// access (mobile/PLAN.md); M1 has no capability tiers, so every paired
+		// device has this. It is the first command that should sit behind the
+		// `shell` capability when M2 brings per-device identities.
+		data, err := d.handleShellCreate(ctx, req.Session)
+		if err != nil {
+			return protocol.Response{OK: false, Error: err.Error()}
+		}
+		return dataResponse(data)
 	case "hookEvent":
 		return d.handleHookEvent(req)
 	case "kill":

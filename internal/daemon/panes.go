@@ -1,0 +1,234 @@
+package daemon
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"sort"
+	"strconv"
+	"strings"
+
+	"github.com/sushidev-team/lola/internal/devtab"
+	"github.com/sushidev-team/lola/internal/lolaenv"
+	"github.com/sushidev-team/lola/internal/protocol"
+	"github.com/sushidev-team/lola/internal/session"
+)
+
+// The pane INVENTORY and shell creation, over the socket.
+//
+// The desktop app has had both since it was written, but as Wails services
+// (desktop/termsvc.go's Shells and Shell) that drive `tmux -L lola` on the same
+// machine. A phone cannot do that: it is a socket client with no tmux and no
+// filesystem, so anything it wants to know about panes, or wants created, has to
+// be a daemon command. These are those commands.
+//
+// They are deliberately NOT in internal/remote's deniedCommands. A phone that
+// cannot enumerate panes cannot draw a tab strip, and one that cannot create a
+// shell cannot do the thing the operator asked for. Both are reachable by any
+// paired device.
+//
+// Say plainly what shellCreate therefore is: a remote caller can start a shell
+// in a worktree, and a shell in a worktree runs as the developer with their gh
+// token, SSH agent and login keychain in reach. That is arbitrary code execution
+// on the machine, initiated from the phone. It is allowed because the operator
+// decided phones get shell access (mobile/PLAN.md, "Settled since drafting"),
+// and because M1 grants every paired device everything — there are no capability
+// tiers until M2 brings per-device identities. When those land this is the first
+// command that should sit behind the `shell` capability.
+
+// maxShellTabs bounds how many shells one session can accumulate.
+//
+// Not a resource limit — tmux would happily hold hundreds — but a mistake limit.
+// The create path is one socket call, so a client in a retry loop, or a human
+// with a stuck finger on a phone, can otherwise spawn shells until something
+// else falls over. Reaching it is a refusal with a reason rather than a silent
+// cap, because a tab strip that stops growing for no stated reason reads as a
+// broken button.
+const maxShellTabs = 16
+
+// paneKind names the ROLE of a pane, so a client can group and label a tab strip
+// without re-deriving the naming convention. The strings are the wire contract;
+// internal/runtime and internal/devtab own the names themselves.
+const (
+	paneKindAgent  = "agent"
+	paneKindShell  = "shell"
+	paneKindDev    = "dev"
+	paneKindReview = "review"
+)
+
+const (
+	shellInfix   = "-shell-"
+	reviewSuffix = "-review"
+)
+
+// handlePanes lists the panes that EXIST for a session, in the order a tab strip
+// should draw them: the agent first, then shells and dev tabs in index order,
+// then the review pane.
+//
+// It reads tmux rather than the session record, and that is the whole point.
+// Session.DevTabs is a cache the observer overwrites from the same facts, shell
+// tabs are recorded nowhere at all, and a strip drawn from a stale cache offers
+// tabs that are gone and hides ones that are there. The pane list is derived,
+// like DevActive and DevURLs before it, for the same reason.
+func (d *Daemon) handlePanes(ctx context.Context, sessionID string) (protocol.PanesData, error) {
+	s, ok := d.sessionByID(sessionID)
+	if !ok {
+		return protocol.PanesData{}, fmt.Errorf("unknown session %q", sessionID)
+	}
+	parent := paneTarget(s)
+
+	live, err := d.livePaneNames(ctx)
+	if err != nil {
+		return protocol.PanesData{}, err
+	}
+
+	out := protocol.PanesData{Session: sessionID}
+	var shells, devs []protocol.PaneInfo
+	for _, name := range live {
+		switch {
+		case name == parent:
+			out.Panes = append(out.Panes, protocol.PaneInfo{
+				Name: name, Kind: paneKindAgent, Label: "agent",
+			})
+		case strings.HasPrefix(name, parent+shellInfix):
+			if n := shellIndex(parent, name); n > 0 {
+				shells = append(shells, protocol.PaneInfo{
+					Name: name, Kind: paneKindShell, Index: n,
+					Label: "shell " + strconv.Itoa(n),
+				})
+			}
+		case devtab.Index(parent, name) > 0:
+			n := devtab.Index(parent, name)
+			devs = append(devs, protocol.PaneInfo{
+				Name: name, Kind: paneKindDev, Index: n,
+				Label: "dev " + strconv.Itoa(n),
+			})
+		case name == parent+reviewSuffix:
+			out.Review = protocol.PaneInfo{Name: name, Kind: paneKindReview, Label: "review"}
+		}
+	}
+
+	sortByIndex(shells)
+	sortByIndex(devs)
+	out.Panes = append(out.Panes, shells...)
+	out.Panes = append(out.Panes, devs...)
+	if out.Review.Name != "" {
+		out.Panes = append(out.Panes, out.Review)
+	}
+	// Whether another shell may be created, answered HERE rather than left for
+	// the client to infer from a count it would have to know the cap for.
+	out.CanCreateShell = len(shells) < maxShellTabs && s.Worktree != ""
+	return out, nil
+}
+
+// handleShellCreate starts a new shell tab for a session and returns its name,
+// which the caller then subscribes to like any other pane.
+//
+// The INDEX is allocated here, not by the caller. The desktop's TermService lets
+// its frontend own the name because both run in one process on one machine; two
+// phones and a desktop racing for "-shell-2" do not have that luxury, and the
+// daemon is the only place that can see all of them.
+func (d *Daemon) handleShellCreate(ctx context.Context, sessionID string) (protocol.ShellCreateData, error) {
+	s, ok := d.sessionByID(sessionID)
+	if !ok {
+		return protocol.ShellCreateData{}, fmt.Errorf("unknown session %q", sessionID)
+	}
+	parent := paneTarget(s)
+
+	// A shell is rooted in the worktree, so a session without one — a record
+	// whose checkout was already removed — has nowhere to start it. Refuse with
+	// the reason rather than creating a shell in whatever directory the daemon
+	// happens to be in, which would be a shell in the operator's repository.
+	if s.Worktree == "" {
+		return protocol.ShellCreateData{}, fmt.Errorf("session %q has no worktree", sessionID)
+	}
+	if fi, err := os.Stat(s.Worktree); err != nil || !fi.IsDir() {
+		return protocol.ShellCreateData{}, fmt.Errorf("worktree unavailable: %s", s.Worktree)
+	}
+
+	live, err := d.livePaneNames(ctx)
+	if err != nil {
+		return protocol.ShellCreateData{}, err
+	}
+	taken := map[int]bool{}
+	for _, name := range live {
+		if n := shellIndex(parent, name); n > 0 {
+			taken[n] = true
+		}
+	}
+	if len(taken) >= maxShellTabs {
+		return protocol.ShellCreateData{}, fmt.Errorf(
+			"session %q already has %d shells, which is the cap", sessionID, len(taken))
+	}
+	next := 1
+	for taken[next] {
+		next++
+	}
+	name := parent + shellInfix + strconv.Itoa(next)
+
+	cl := d.tmuxClient()
+	// lolaenv.ShellCommand rather than a bare login shell, the same line the
+	// agent pane and the desktop's shell tabs use: a plain shell silently lacks
+	// [[project]].env, which is the difference between a working tab and one
+	// where every command is subtly misconfigured.
+	//
+	// NewSession applies the scroll defaults first and retries them on a cold
+	// server, which matters here because a shell tab can be the session that
+	// starts one — see (*tmux.Client).ConfigureServer.
+	if err := cl.NewSession(ctx, name, s.Worktree, lolaenv.ShellCommand); err != nil {
+		return protocol.ShellCreateData{}, fmt.Errorf("new shell %s: %w", name, err)
+	}
+	d.logf("", "remote: created shell tab %s", name)
+	return protocol.ShellCreateData{Session: sessionID, Pane: name, Index: next}, nil
+}
+
+// livePaneNames lists every tmux session name on lola's own server.
+//
+// A missing server is an empty list, not an error: a daemon whose last session
+// ended has no tmux running, and a tab strip asking about it should render
+// nothing rather than an error banner.
+func (d *Daemon) livePaneNames(ctx context.Context) ([]string, error) {
+	sessions, err := d.tmuxClient().ListSessions(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(sessions))
+	for _, s := range sessions {
+		out = append(out, s.Name)
+	}
+	return out, nil
+}
+
+// sessionByID reads one session out of the store snapshot.
+func (d *Daemon) sessionByID(id string) (session.Session, bool) {
+	if id == "" {
+		return session.Session{}, false
+	}
+	for _, s := range d.sessions.Snapshot() {
+		if s.ID == id {
+			return s, true
+		}
+	}
+	return session.Session{}, false
+}
+
+// shellIndex returns the N of "<parent>-shell-N", or 0 when name is not one.
+//
+// Anchored on both ends via the numeric parse, for the reason the teardown
+// invariant gives: "lola-fe-42" is a prefix of "lola-fe-420-shell-1", so a
+// loose prefix test would claim another session's tab as this one's.
+func shellIndex(parent, name string) int {
+	rest, ok := strings.CutPrefix(name, parent+shellInfix)
+	if !ok || rest == "" {
+		return 0
+	}
+	n, err := strconv.Atoi(rest)
+	if err != nil || n <= 0 {
+		return 0
+	}
+	return n
+}
+
+func sortByIndex(p []protocol.PaneInfo) {
+	sort.Slice(p, func(i, j int) bool { return p[i].Index < p[j].Index })
+}

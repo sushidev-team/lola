@@ -727,6 +727,50 @@ type Match struct {
 	Reason     string `json:"reason,omitempty"` // dedup-label|dedup-seen|in-flight|capped|error
 }
 
+// PaneInfo is one pane of a session, as cmd=panes reports it.
+//
+// Kind is the ROLE — "agent", "shell", "dev" or "review" — so a client can group
+// and label a tab strip without re-deriving lola's naming convention, which
+// lives in internal/runtime and internal/devtab and is not a client's business.
+// Index is the N of a numbered tab and 0 for the agent and review panes.
+type PaneInfo struct {
+	Name  string `json:"name"`
+	Kind  string `json:"kind"`
+	Label string `json:"label"`
+	Index int    `json:"index,omitempty"`
+}
+
+// PanesData is Response.Data for cmd=panes: which panes EXIST for a session,
+// in the order a tab strip should draw them.
+//
+// It is derived from tmux on every call rather than read from the session
+// record, for the same reason DevActive and DevURLs are: Session.DevTabs is a
+// cache the observer overwrites, shell tabs are recorded nowhere at all, and a
+// strip drawn from a stale cache offers tabs that are gone while hiding ones
+// that are there.
+//
+// CanCreateShell is answered here rather than left for the client to infer from
+// a count whose cap it would have to know.
+type PanesData struct {
+	Session        string     `json:"session"`
+	Panes          []PaneInfo `json:"panes"`
+	Review         PaneInfo   `json:"review,omitempty"`
+	CanCreateShell bool       `json:"canCreateShell"`
+}
+
+// ShellCreateData is Response.Data for cmd=shellCreate: the pane that was
+// started, which the caller subscribes to like any other.
+//
+// The INDEX is allocated by the daemon, not asked for by the caller. The desktop
+// lets its own frontend own the name because both run in one process on one
+// machine; two phones and a desktop racing for "-shell-2" do not have that
+// luxury, and only the daemon sees all of them.
+type ShellCreateData struct {
+	Session string `json:"session"`
+	Pane    string `json:"pane"`
+	Index   int    `json:"index"`
+}
+
 // PairBeginData is Response.Data for cmd=pairBegin: how to reach this daemon's
 // phone listener, as facts rather than as a picture.
 //
