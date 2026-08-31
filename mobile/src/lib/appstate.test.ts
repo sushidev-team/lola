@@ -1,19 +1,28 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { installAppState } from "./appstate";
+import { installAppBackground, installAppState } from "./appstate";
 
 type Cb = (e: { active?: boolean }) => void;
 
 function installPlugin() {
-  let cb: Cb | undefined;
+  // EVERY listener, not the last one. The foreground and the background signals
+  // are two independent installs over the same plugin event, so a stub that kept
+  // one callback would let a real regression in either of them pass unseen.
+  const cbs: Cb[] = [];
   const remove = vi.fn();
   const p = {
     addListener: vi.fn(async (_event: string, fn: Cb) => {
-      cb = fn;
+      cbs.push(fn);
       return { remove };
     }),
   };
   (globalThis as { Capacitor?: unknown }).Capacitor = { Plugins: { LolaTransport: p } };
-  return { p, remove, fire: (active: boolean) => cb?.({ active }) };
+  return {
+    p,
+    remove,
+    fire: (active: boolean) => {
+      for (const cb of [...cbs]) cb({ active });
+    },
+  };
 }
 
 afterEach(() => {
@@ -89,5 +98,74 @@ describe("the foreground signal", () => {
     document.dispatchEvent(new Event("visibilitychange"));
     expect(onForeground).toHaveBeenCalledTimes(1);
     off();
+  });
+});
+
+// The other direction, which exists for exactly one caller: the pane size pin
+// hands a resized window back on every way out, and a phone going into a pocket
+// is one of them.
+describe("the background signal", () => {
+  it("fires on the way out and stays silent on the way in", async () => {
+    const plugin = installPlugin();
+    const onBackground = vi.fn();
+    const off = installAppBackground(onBackground);
+    await vi.waitFor(() => expect(plugin.p.addListener).toHaveBeenCalled());
+
+    plugin.fire(true);
+    expect(onBackground).not.toHaveBeenCalled();
+
+    plugin.fire(false);
+    expect(onBackground).toHaveBeenCalledTimes(1);
+    off();
+  });
+
+  it("stops after teardown", async () => {
+    const plugin = installPlugin();
+    const onBackground = vi.fn();
+    const off = installAppBackground(onBackground);
+    await vi.waitFor(() => expect(plugin.p.addListener).toHaveBeenCalled());
+    off();
+
+    plugin.fire(false);
+    expect(onBackground).not.toHaveBeenCalled();
+    expect(plugin.remove).toHaveBeenCalled();
+  });
+
+  it("still works with no plugin at all", () => {
+    // A browser dev session, or a plugin binary predating the event. Releasing
+    // a pin twice costs one no-op request; not releasing it squashes a window.
+    const onBackground = vi.fn();
+    const off = installAppBackground(onBackground);
+
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(onBackground).toHaveBeenCalledTimes(1);
+    off();
+  });
+
+  it("ignores a visibilitychange that is coming back", () => {
+    const onBackground = vi.fn();
+    const off = installAppBackground(onBackground);
+
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(onBackground).not.toHaveBeenCalled();
+    off();
+  });
+
+  it("does not disturb the foreground signal it sits beside", async () => {
+    const plugin = installPlugin();
+    const onForeground = vi.fn();
+    const onBackground = vi.fn();
+    const offFg = installAppState(onForeground);
+    const offBg = installAppBackground(onBackground);
+    await vi.waitFor(() => expect(plugin.p.addListener).toHaveBeenCalledTimes(2));
+
+    plugin.fire(false);
+    plugin.fire(true);
+    expect(onBackground).toHaveBeenCalledTimes(1);
+    expect(onForeground).toHaveBeenCalledTimes(1);
+    offFg();
+    offBg();
   });
 });

@@ -182,6 +182,36 @@ export function normalizePanesData(session: string, raw: RawPanesData | null | u
 }
 
 // ---------------------------------------------------------------------------
+// Closing a pane
+// ---------------------------------------------------------------------------
+
+/**
+ * The answer to `cmd=paneClose`. Mirrors `protocol.PaneCloseData`.
+ *
+ * `closed` is always true on the success path -- the daemon returns an error
+ * rather than `closed:false` for every refusal it has -- so it is a confirmation
+ * to log, never a branch to take. The interesting half of this command is its
+ * ERROR path, and there are three refusals a client must not paper over:
+ *
+ *   * the AGENT pane, which is the session itself. `handlePaneClose` refuses it
+ *     outright, so a strip must not offer a close on that tab at all: a control
+ *     whose only possible outcome is a refusal is worse than an absent one.
+ *   * a pane that belongs to another session, which is the check that stops one
+ *     device closing another session's tab by naming it.
+ *   * a tmux that would not take the kill.
+ *
+ * Each arrives as a `DaemonError` carrying the daemon's own sentence. Show it.
+ *
+ * There is no normalizer and none is needed: every field is a scalar and nothing
+ * here is rendered the way an empty pane name would be.
+ */
+export interface PaneCloseData {
+  session: string;
+  pane: string;
+  closed: boolean;
+}
+
+// ---------------------------------------------------------------------------
 // Pinning a pane to a phone's size
 // ---------------------------------------------------------------------------
 

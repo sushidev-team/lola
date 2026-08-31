@@ -54,6 +54,17 @@ class Nav {
    */
   sheet = $state<SheetName>("");
 
+  /**
+   * The pane whose long-press menu is open, for `sheet === "pane"`.
+   *
+   * It lives beside `sheet` rather than inside the tab strip for the reason
+   * `sheet` itself does: a menu only a long press can open is a menu no script
+   * can photograph, and the Simulator has no gesture API. With the pane named
+   * here, `?sheet=pane` reaches it. An empty value means "the pane the
+   * screen is attached to", so a link needs no second field to be useful.
+   */
+  menuPane = $state("");
+
   /** Open a sheet by name. */
   openSheet(name: SheetName): void {
     this.sheet = name;
@@ -73,6 +84,7 @@ class Nav {
     this.screen = "sessions";
     this.paneSession = "";
     this.pane = "";
+    this.menuPane = "";
     // A sheet belongs to the screen it was opened over. Leaving one set across
     // a navigation would pop the terminal's view settings open on the list, or
     // the list's filter sheet over a terminal — the sheets are per-screen and
@@ -91,6 +103,7 @@ class Nav {
   toTerminal(sessionId: string, pane: string): void {
     this.paneSession = sessionId;
     this.pane = pane;
+    this.menuPane = "";
     this.screen = "terminal";
     this.sheet = "";
   }

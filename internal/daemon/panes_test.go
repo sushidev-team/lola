@@ -172,3 +172,39 @@ func TestPaneResizeAllowsTheAgentPane(t *testing.T) {
 		t.Fatalf("the agent pane was refused as foreign: %v", err)
 	}
 }
+
+// Releasing a pane whose window is already gone is SUCCESS. The identity checks
+// validate by name rather than by liveness, so a release for a pane the user
+// just closed reaches tmux and is refused — and the client cannot tell that
+// apart from a release that genuinely did not land, so it warns that a pin is
+// stuck. That warning has to keep meaning something, and nothing is squashed
+// here: the window whose size was pinned no longer exists.
+func TestPaneResizeForgivesReleasingAGonePane(t *testing.T) {
+	d := newRemoteTestDaemon(t)
+	d.sessions.Upsert(session.Session{ID: "acc-6", Source: "native", TmuxName: "acc-6"})
+
+	// No tmux server in a test, so the pane is not live and the call fails —
+	// which is exactly the shape of releasing a closed pane.
+	got, err := d.handlePaneResize(t.Context(), protocol.PaneResizeArgs{
+		Session: "acc-6", Pane: "acc-6-shell-1", Cols: 0, Rows: 0,
+	})
+	if err != nil {
+		t.Fatalf("releasing a gone pane must succeed, got %v", err)
+	}
+	if got.Pinned {
+		t.Error("a release reported itself as a pin")
+	}
+}
+
+// A failed PIN still fails. Only the release path forgives, or the stuck-pin
+// warning would stop meaning anything.
+func TestPaneResizeStillFailsAPin(t *testing.T) {
+	d := newRemoteTestDaemon(t)
+	d.sessions.Upsert(session.Session{ID: "acc-7", Source: "native", TmuxName: "acc-7"})
+
+	if _, err := d.handlePaneResize(t.Context(), protocol.PaneResizeArgs{
+		Session: "acc-7", Pane: "acc-7-shell-1", Cols: 55, Rows: 34,
+	}); err == nil {
+		t.Fatal("a pin that could not be applied reported success")
+	}
+}

@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import { SHEETS, isSheetName } from "./sheets";
 
 describe("sheet vocabulary", () => {
-  it("names the three addressable sheets", () => {
-    expect([...SHEETS]).toEqual(["filter", "connection", "view"]);
+  it("names every addressable sheet", () => {
+    expect([...SHEETS]).toEqual(["filter", "connection", "view", "pane"]);
   });
 
   it("fails closed on anything else", () => {

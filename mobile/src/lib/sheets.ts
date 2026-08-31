@@ -20,7 +20,7 @@
 // the other.
 
 /** Every sheet that can be addressed by name. */
-export const SHEETS = ["filter", "connection", "view"] as const;
+export const SHEETS = ["filter", "connection", "view", "pane"] as const;
 
 /** An addressable sheet, or "" for none open. */
 export type SheetName = (typeof SHEETS)[number] | "";

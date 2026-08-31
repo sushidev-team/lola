@@ -44,6 +44,15 @@ g.ResizeObserver ??= NoopResizeObserver;
 // pinning.
 let attaches = true;
 
+/**
+ * Every pane-event listener the mounted terminal registered.
+ *
+ * Captured so a test can DELIVER an exit, which is the one fact this screen
+ * learns and the tab strip cannot: it arrives on the subscription, which only
+ * the screen holds. Reset per test in `beforeEach`.
+ */
+let paneListeners: ((e: unknown) => void)[] = [];
+
 /** The little of `PaneSubscription` that MobileTerminal.attach touches. */
 function fakeSubscription(pane: string) {
   return {
@@ -55,7 +64,10 @@ function fakeSubscription(pane: string) {
     write: async () => {},
     resize: async () => {},
     close: async () => {},
-    onEvent: () => () => {},
+    onEvent: (fn: (e: unknown) => void) => {
+      paneListeners.push(fn);
+      return () => {};
+    },
     onError: () => () => {},
   };
 }
@@ -90,6 +102,7 @@ function session(over: Partial<SessionInfo> = {}): SessionInfo {
 
 beforeEach(async () => {
   attaches = true;
+  paneListeners = [];
   replies = {};
   ch = new FakeChannel();
   ch.onSend = (f: Frame) => {
@@ -213,5 +226,89 @@ describe("Terminal header", () => {
     await waitFor(() =>
       expect(screen.queryByText('session "lola-fe-42" has no worktree')).toBeNull(),
     );
+  });
+});
+
+describe("Terminal keeping the tab strip honest", () => {
+  it("re-reads the pane inventory when the pane it is showing exits", async () => {
+    // THE SEAM, end to end. A shell that exits ends its tmux session -- shells
+    // get no `remain-on-exit`, only dev tabs do -- so `cmd=panes` stops listing
+    // it immediately, while the app used to fetch that list once per screen and
+    // never again. The exit arrives on the SUBSCRIPTION, which only this screen
+    // holds, so the screen bumps a counter and the strip does the asking. The
+    // strip's own half is covered in PaneTabs.test.ts; what is pinned here is
+    // that the screen actually passes the signal along.
+    store.sessions = [session()];
+    replies.panes = {
+      ok: true,
+      data: {
+        session: "lola-fe-42",
+        panes: [
+          { name: "lola-fe-42", kind: "agent", label: "agent" },
+          { name: "lola-fe-42-shell-1", kind: "shell", label: "shell 1", index: 1 },
+        ],
+        canCreateShell: true,
+      },
+    };
+    render(Terminal, { props: { onback: () => {} } });
+
+    await screen.findByRole("tab", { name: "shell 1" });
+    const before = ch.sent.filter((f) => f.type === "req" && f.cmd === "panes").length;
+    expect(before).toBe(1);
+    expect(paneListeners.length).toBeGreaterThan(0);
+
+    // The shell is gone from the daemon's answer from here on.
+    replies.panes = {
+      ok: true,
+      data: {
+        session: "lola-fe-42",
+        panes: [{ name: "lola-fe-42", kind: "agent", label: "agent" }],
+        canCreateShell: true,
+      },
+    };
+    // A real exit carries the final screen, and MobileTerminal PAINTS it before
+    // it latches `exited` -- so a `null` here throws inside the paint instead of
+    // exercising the wiring. Deliberately a 0x0 frame with no lines: any real
+    // geometry makes xterm resize and schedule an animation frame into a
+    // renderer jsdom has no canvas for, which surfaces as an unhandled error
+    // that has nothing to do with what is under test. `geometryChanged` is
+    // false for 0x0, so the paint is the erase sequence and nothing more.
+    const lastFrame = { cols: 0, rows: 0, cursorX: 0, cursorY: 0, exited: true };
+    // xterm SCHEDULES ITS REPAINT through requestAnimationFrame, and in jsdom
+    // that callback reaches a RenderService with no renderer behind it (there
+    // is no canvas) and throws asynchronously, long after this test's
+    // assertions. It is noise from the environment rather than a fault in the
+    // wiring, so the frame is dropped for exactly the span that paints. Every
+    // other test in this file mounts the terminal without ever writing to it,
+    // which is why none of them needed this.
+    const raf = globalThis.requestAnimationFrame;
+    globalThis.requestAnimationFrame = (() => 0) as typeof raf;
+    try {
+      for (const fn of paneListeners) fn({ kind: "exit", screen: lastFrame, seq: 1 });
+    } finally {
+      globalThis.requestAnimationFrame = raf;
+    }
+
+    await waitFor(() =>
+      expect(ch.sent.filter((f) => f.type === "req" && f.cmd === "panes")).toHaveLength(2),
+    );
+    await waitFor(() => expect(screen.queryByRole("tab", { name: "shell 1" })).toBeNull());
+  });
+
+  it("re-reads it when an attach is refused because the pane is already gone", async () => {
+    // `unknown_pane` on the subscribe says the same thing one moment earlier:
+    // the pane was gone before this screen ever asked for it. Matched on the
+    // daemon's own wire code, the same prefix `humanError` translates for the
+    // banner.
+    attaches = false;
+    store.sessions = [session()];
+    render(Terminal, { props: { onback: () => {} } });
+
+    await screen.findByRole("tab", { name: "agent" });
+    await waitFor(() =>
+      expect(ch.sent.filter((f) => f.type === "req" && f.cmd === "panes").length).toBeGreaterThan(1),
+    );
+    // ...and the banner still explains it in English, unchanged.
+    expect(await screen.findByText(/terminal is gone/i)).toBeInTheDocument();
   });
 });

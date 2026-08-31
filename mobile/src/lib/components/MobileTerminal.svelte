@@ -24,6 +24,7 @@
     touchDistance,
     touchMidpoint,
     visibleColumns,
+    visibleRows,
     wheelPixels,
     type Axis,
     type PanBox,
@@ -106,6 +107,15 @@
     rows: number;
     /** Columns actually on screen. Equal to `cols` when nothing is clipped. */
     shown: number;
+    /**
+     * Rows actually on screen, the mirror of `shown`.
+     *
+     * The pair is this phone's CAPACITY, which is a different number from
+     * `cols`/`rows` — those are the developer's grid, which this terminal
+     * renders whole and pans over. Only the capacity is worth pinning a window
+     * to; pinning the grid to itself is a no-op. See panepin.ts.
+     */
+    shownRows: number;
     /** The leftmost visible column, 1-based, so the header can say WHERE the
      *  window is rather than only how wide it is. */
     first: number;
@@ -149,6 +159,7 @@
 
   const panning = $derived(isPanning(box));
   const shown = $derived(visibleColumns(box, cols));
+  const shownRows = $derived(visibleRows(box, rows));
   /** The leftmost visible column, 1-based. See firstVisibleColumn. */
   const first = $derived(firstVisibleColumn(box, cols, pan.x));
   /** Height of the sliced bottom row, masked rather than drawn. */
@@ -171,6 +182,7 @@
       cols,
       rows,
       shown,
+      shownRows,
       first,
       panning,
       font: fontSize,

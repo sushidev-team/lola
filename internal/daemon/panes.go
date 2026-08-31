@@ -313,6 +313,23 @@ func (d *Daemon) handlePaneResize(ctx context.Context, a protocol.PaneResizeArgs
 		cols, rows = 0, 0
 	}
 	if err := d.tmuxClient().SetWindowSize(ctx, a.Pane, cols, rows); err != nil {
+		// A RELEASE OF A WINDOW THAT IS GONE IS SUCCESS, not failure. The checks
+		// above validate a pane by NAME, not by liveness, so releasing a pane
+		// the user has just closed reaches tmux and is refused — and the client
+		// cannot tell that apart from a release that genuinely did not land, so
+		// it raises its stuck-pin warning. That is a false alarm in the one
+		// place this feature has to be believed: nothing is squashed, because
+		// the window whose size was pinned no longer exists.
+		//
+		// Only a RELEASE forgives, and only when the pane is really absent. A
+		// failed pin still fails, and a release that failed for any other reason
+		// still fails, so the warning keeps meaning what it says. Liveness is
+		// checked AFTER the attempt rather than before, so a pane that dies
+		// between the two is forgiven instead of racing.
+		if release && !d.paneIsLive(ctx, a.Pane) {
+			d.logf("", "remote: %s is gone; its pinned size went with it", a.Pane)
+			return protocol.PaneResizeData{Session: a.Session, Pane: a.Pane, Pinned: false}, nil
+		}
 		return protocol.PaneResizeData{}, fmt.Errorf("resize %s: %w", a.Pane, err)
 	}
 	if release {
@@ -323,6 +340,26 @@ func (d *Daemon) handlePaneResize(ctx context.Context, a protocol.PaneResizeArgs
 	return protocol.PaneResizeData{
 		Session: a.Session, Pane: a.Pane, Pinned: true, Cols: cols, Rows: rows,
 	}, nil
+}
+
+// paneIsLive reports whether a tmux session of that exact name still exists.
+//
+// It exists for the release path in handlePaneResize and answers the narrow
+// question "is there still a window here to have a size". A tmux that cannot be
+// asked answers NO, which is the safe direction for its one caller: an
+// unanswerable tmux turns a forgiven release back into a reported failure, and
+// a reported failure is a warning rather than a silently squashed window.
+func (d *Daemon) paneIsLive(ctx context.Context, name string) bool {
+	live, err := d.livePaneNames(ctx)
+	if err != nil {
+		return false
+	}
+	for _, n := range live {
+		if n == name {
+			return true
+		}
+	}
+	return false
 }
 
 // paneBelongsTo reports whether an auxiliary pane name is one of parent's.

@@ -22,6 +22,7 @@ import {
   touchDistance,
   touchMidpoint,
   visibleColumns,
+  visibleRows,
   wheelPixels,
   type PanBox,
 } from "./viewport";
@@ -202,6 +203,33 @@ describe("the truncation chip", () => {
   it("answers zero rather than dividing by zero", () => {
     expect(visibleColumns({ ...wide, contentWidth: 0 }, 200)).toBe(0);
     expect(visibleColumns(wide, 0)).toBe(0);
+  });
+});
+
+// The other half of the same question, and the reason it exists: the size pin
+// names this phone's capacity as a PAIR, and until this there was a count for
+// the columns and only a pixel offcut for the rows.
+describe("visible rows", () => {
+  it("counts the rows actually on screen", () => {
+    // 700px of 50 rows is a 14px cell; a 480px window shows 34 of them.
+    expect(visibleRows(wide, 50)).toBe(34);
+  });
+
+  it("never claims more rows than the grid has", () => {
+    // A window taller than the content is not a view onto rows that do not
+    // exist, and a pin asking for them would hold a window open on blank lines.
+    expect(visibleRows(small, 10)).toBe(10);
+  });
+
+  it("answers zero rather than dividing by zero", () => {
+    expect(visibleRows({ ...wide, contentHeight: 0 }, 50)).toBe(0);
+    expect(visibleRows(wide, 0)).toBe(0);
+  });
+
+  it("never answers zero for a measured box, because zero is the release", () => {
+    // panepin.ts treats a zero as "let go", so a frame too short for one whole
+    // row must still report one rather than silently unpinning the pane.
+    expect(visibleRows({ ...wide, viewHeight: 3 }, 50)).toBe(1);
   });
 });
 

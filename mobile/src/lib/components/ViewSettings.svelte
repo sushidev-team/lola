@@ -11,6 +11,15 @@
     rows: number;
     /** Columns actually on screen. Equal to `cols` when nothing is clipped. */
     shown: number;
+    /**
+     * Rows actually on screen, the mirror of `shown`.
+     *
+     * Together the pair is what this phone can SHOW, which is a different thing
+     * from `cols`/`rows` — the grid the Mac is sending. Only the pair is worth
+     * naming in the size-pin caption below, because it is the size the Mac's own
+     * window would be squeezed to.
+     */
+    shownRows: number;
     /** The leftmost visible column, 1-based. */
     first: number;
     /**
@@ -87,6 +96,18 @@
     /** Toggle the fit-width zoom. Forwarded to MobileTerminal.toggleFit. */
     onfit,
     /**
+     * Whether the size pin is on: while the phone is looking at this pane, the
+     * pane's window ON THE MAC is held at the phone's size.
+     *
+     * OFF BY DEFAULT and never inferred. This is the one control in the app that
+     * changes what somebody else sees, so it is a preference a human turns on
+     * rather than a convenience the app decides for them. The screen owns the
+     * value and the lifecycle; this component only draws the switch.
+     */
+    pinned = false,
+    /** Turn the size pin on or off. */
+    onpin = (_on: boolean) => {},
+    /**
      * Fades and refuses every control. NOT wired to `exited` by the terminal
      * screen, and that is deliberate: a dead pane still has its last frame on
      * screen, and being able to enlarge that frame — or read how much of it is
@@ -109,6 +130,8 @@
     geom: ViewGeometry;
     onfont: (size: number) => void;
     onfit: () => void;
+    pinned?: boolean;
+    onpin?: (on: boolean) => void;
     disabled?: boolean;
     open?: boolean;
   } = $props();
@@ -125,6 +148,19 @@
   // a VoiceOver user learns the pane is clipped without opening anything.
   const triggerLabel = $derived(
     clipped ? `View settings. Showing columns ${range}` : "View settings",
+  );
+
+  /**
+   * The size the Mac's window would be squeezed to, in words, or "" before the
+   * pane has been measured.
+   *
+   * Stated rather than left to be discovered. "Resized to fit this phone" is an
+   * abstraction; "about 50 by 20" is the number a person can weigh against the
+   * 211-column grid named four lines above it, which is the whole point of
+   * putting this control in the same sheet as the column readout.
+   */
+  const pinSize = $derived(
+    geom.shown > 0 && geom.shownRows > 0 ? ` — about ${geom.shown} by ${geom.shownRows}` : "",
   );
 
   const atFloor = $derived(font <= FONT_MIN);
@@ -273,6 +309,67 @@
           onclick={() => onfont(stepFont(font, 1))}>A+</TouchButton
         >
       </div>
+    </section>
+
+    <div class="h-px bg-edge/60" aria-hidden="true"></div>
+
+    <!-- THE ONE CONTROL IN THIS APP THAT CHANGES SOMEBODY ELSE'S SCREEN.
+         Everything else in this sheet is a zoom on this phone, and the caption
+         four lines above says so in as many words. This is the exact opposite,
+         and the two sit close enough together to be confused, so the difference
+         is spelled out rather than implied: the section is titled for the MAC,
+         the switch is labelled for what happens THERE, and the sentence under it
+         names the cost in full — a narrow window for the developer and a redraw
+         of the agent's screen when it flips back.
+
+         It is deliberately not a tooltip and not a help icon. A control whose
+         cost is one tap away from being read is a control whose cost is not
+         read. -->
+    <section class="flex flex-col gap-2">
+      <span class="label text-faint">Pane size on the Mac</span>
+      <!-- `role="switch"` with `aria-checked` rather than the shared Button's
+           `selected`, which reports `aria-pressed`: a toggle that stays on until
+           it is turned off is a switch, and a switch that also claimed to be a
+           pressed button would be two conflicting states on one element.
+           `w-full!`/`justify-between!` carry the trailing `!` for the reason
+           CLAUDE.md gives — a plain utility ties with the size map's own and the
+           winner would be decided by the compiled sheet's order. The default
+           (non-icon) size sets no justify of its own, so nothing here is
+           fighting a `justify-center`. -->
+      <TouchButton
+        variant="secondary"
+        class="w-full! justify-between!"
+        role="switch"
+        aria-checked={pinned}
+        aria-label="Resize the Mac's pane to fit this phone"
+        {disabled}
+        onclick={() => onpin(!pinned)}
+      >
+        <span class="min-w-0 flex-1 truncate text-left">Resize the Mac's pane to fit</span>
+        <!-- The state is already on `aria-checked`; the word is for eyes only,
+             and announcing it twice makes the switch read as "off off". -->
+        <span class="num shrink-0 text-sm text-faint" aria-hidden="true">
+          {pinned ? "On" : "Off"}
+        </span>
+        <span
+          class="relative h-6 w-11 shrink-0 rounded-full transition-colors {pinned
+            ? 'bg-accent-fill'
+            : 'bg-edge'}"
+          aria-hidden="true"
+        >
+          <span
+            class="absolute top-0.5 h-5 w-5 rounded-full bg-ink transition-all {pinned
+              ? 'left-[1.375rem]'
+              : 'left-0.5'}"
+          ></span>
+        </span>
+      </TouchButton>
+      <span class="copy text-sm text-faint">
+        While you are looking at this pane, its window on the Mac is resized to
+        what this phone can show{pinSize}. Your own view of the session there is
+        that narrow meanwhile, and the agent's screen redraws when it flips back.
+        It is released as soon as you leave the pane.
+      </span>
     </section>
 
     <TouchButton wide onclick={close}>Done</TouchButton>

@@ -13,6 +13,15 @@
   import { openExternal } from "@mobile/lib/openurl";
   import { statusTone } from "@mobile/lib/statustone";
   import { loadFontSize } from "@mobile/lib/prefs";
+  import { installAppBackground } from "@mobile/lib/appstate";
+  import { connection } from "@mobile/lib/connection.svelte";
+  import {
+    PIN_STUCK_MESSAGE,
+    PanePin,
+    loadPinEnabled,
+    savePinEnabled,
+  } from "@mobile/lib/panepin";
+  import { DaemonService } from "@mobile/wailsshim";
 
   // The terminal screen: a live pane with a tab strip over it and the accessory
   // bar under it.
@@ -89,6 +98,7 @@
     cols: 0,
     rows: 0,
     shown: 0,
+    shownRows: 0,
     first: 1,
     panning: false,
     canFit: false,
@@ -99,7 +109,106 @@
   let error = $state("");
   /** A refused shell creation, in the daemon's own words. See PaneTabs. */
   let notice = $state("");
+  /**
+   * Bumped whenever this screen learns something the tab strip cannot: the pane
+   * stream reported an exit, or an attach was refused because the pane is gone.
+   *
+   * The strip owns the inventory and reloads it on its own for everything it can
+   * see (see PaneTabs). These two facts arrive on the SUBSCRIPTION, which only
+   * this screen holds, so they are handed over as one number rather than by
+   * giving the strip a second data source. A shell that exits ends its tmux
+   * session — shells get no `remain-on-exit` — so this is the moment the daemon
+   * stops listing it and the app has to ask again.
+   */
+  let paneRefresh = $state(0);
   let keyboardInset = $state(0);
+
+  // --- THE PANE SIZE PIN ----------------------------------------------------
+  //
+  // While this screen is looking at a pane, the pane's window ON THE MAC can be
+  // held at this phone's size, so a 200-column agent redraws at the ~50 columns
+  // a phone can show instead of being panned over. It is the one thing the app
+  // does that changes somebody else's screen, which is why the whole of it is
+  // opt-in, is labelled for the Mac rather than for the phone, and is released
+  // on every way out.
+  //
+  // THE LIFECYCLE LIVES HERE RATHER THAN IN MobileTerminal, and that is not a
+  // preference. The terminal is wrapped in `{#key nav.pane}`, so switching tabs
+  // DESTROYS it and builds another; a pin owned from inside would have to
+  // release from a component that is already being torn down while its
+  // replacement is already pinning, and the ordering that keeps two panes from
+  // being pinned at once could not be guaranteed across that boundary. This
+  // screen outlives every tab switch, so it is the only place that can own it.
+  // panepin.ts owns the serialisation, the breadcrumb and the release rules; it
+  // is given a way to send a request and a way to speak.
+
+  /** The toggle, remembered per device and OFF unless it was turned on. */
+  let pinEnabled = $state(loadPinEnabled());
+
+  /**
+   * What this phone can SHOW, which is the only size worth pinning to.
+   *
+   * NOT `geom.cols`/`geom.rows`, which are the grid the MAC is sending: pinning
+   * that window to its own dimensions is a request that changes nothing, and
+   * the toggle would look broken rather than wrong. `shown`/`shownRows` are the
+   * capacity — how much of that grid actually fits on this screen — and they are
+   * what the Mac's window has to become for the two to agree.
+   */
+  let capacity = $state({ cols: 0, rows: 0 });
+
+  const pin = new PanePin({
+    resize: (session, pane, cols, rows) => DaemonService.PaneResize(session, pane, cols, rows),
+    // Into the same dismissible banner a refused shell uses. `""` is the
+    // WITHDRAWAL — see PIN_STUCK_MESSAGE — and it is matched against that exact
+    // sentence rather than clearing whatever happens to be up, so a pin that
+    // resolves can never silently swallow a refusal the strip is reporting.
+    report: (m) => {
+      if (m !== "") {
+        notice = m;
+        return;
+      }
+      if (notice === PIN_STUCK_MESSAGE) notice = "";
+    },
+  });
+
+  function setPin(on: boolean) {
+    pinEnabled = on;
+    savePinEnabled(on);
+  }
+
+  // THE ONLY THING THAT EVER ASKS FOR A PIN. Every condition that makes one
+  // wrong is in this one expression, so there is no path that pins without
+  // passing through it and no second place to forget a case: the toggle is off,
+  // the socket is gone, the pane has died, or the box has not been measured yet
+  // — each of them yields `null`, which is the release.
+  $effect(() => {
+    const want =
+      pinEnabled &&
+      connection.ready &&
+      !exited &&
+      nav.paneSession !== "" &&
+      nav.pane !== "" &&
+      capacity.cols > 0 &&
+      capacity.rows > 0
+        ? { session: nav.paneSession, pane: nav.pane, cols: capacity.cols, rows: capacity.rows }
+        : null;
+    pin.want(want);
+  });
+
+  // A NEW SOCKET KNOWS NOTHING ABOUT WHAT THE OLD ONE SENT, so the intent is
+  // asserted again on the false -> true edge and any breadcrumb left by a
+  // release that never got out is swept. A PLAIN `let` rather than `$state`,
+  // for the reason MobileTerminal's own edge detector gives: an effect that
+  // both reads and writes the same rune re-invalidates itself forever.
+  let pinWasReady = connection.ready;
+  $effect(() => {
+    const ready = connection.ready;
+    const back = ready && !pinWasReady;
+    pinWasReady = ready;
+    if (!back) return;
+    void pin.reassert();
+    void pin.recover();
+  });
 
   // Read for the status text and the PR button in the header. Nothing on this
   // screen gates a keystroke on it.
@@ -114,11 +223,42 @@
   const hasPR = $derived(prNumber > 0 && prUrl !== "");
 
   let offKeyboard: (() => void) | undefined;
+  let offBackground: (() => void) | undefined;
   onMount(() => {
     offKeyboard = installKeyboardInset((px) => (keyboardInset = px));
+    // A PHONE GOING INTO A POCKET IS A WAY OUT TOO. The plugin closes the socket
+    // on the way into the background, so this release is racing a teardown that
+    // is already queued and will sometimes lose — see installAppBackground. It
+    // is sent anyway because it usually wins, and the breadcrumb below is what
+    // covers the times it does not.
+    offBackground = installAppBackground(() => void pin.release());
+    // Sweep a pin an earlier run or an earlier connection left behind. The pane
+    // this screen is about to pin is EXEMPTED, or reopening the same pane would
+    // release it and pin it again a moment later for nothing.
+    //
+    // ONLY WHEN THERE IS A SOCKET. A sweep with none cannot succeed, and its
+    // failure is reported — so an offline open would greet the user with a
+    // warning about a pin they can do nothing about, next to a banner already
+    // saying the Mac is unreachable. The edge below runs the same sweep the
+    // moment a connection arrives, so nothing is skipped, only deferred.
+    if (connection.ready) {
+      void pin.recover(
+        pinEnabled && nav.paneSession !== "" && nav.pane !== ""
+          ? { session: nav.paneSession, pane: nav.pane }
+          : null,
+      );
+    }
   });
   onDestroy(() => {
     offKeyboard?.();
+    offBackground?.();
+    // LEAVING THE SESSION VIEW IS THE COMMONEST WAY OUT, and this is it: App
+    // swaps this screen out on `onback`, which destroys it. Fire and forget —
+    // Svelte will not wait for a promise here, and the request only has to reach
+    // the socket. `release` is idempotent, so this costs nothing when the pin
+    // was already handed back by the tab switch or the pane's own exit.
+    pin.stop();
+    void pin.release();
   });
 
   /**
@@ -160,6 +300,13 @@
     exited = false;
     error = "";
     notice = "";
+    // THE PIN GOES BEFORE THE PANE DOES. Clearing the capacity makes the effect
+    // above ask for nothing, which releases the pane being left in the same
+    // step that stops wanting it — so the new pane is never pinned on top of the
+    // old one, and the stale measurement is never sent as the new pane's size.
+    // The replacement terminal reports its own capacity a frame later and the
+    // pin follows it.
+    capacity = { cols: 0, rows: 0 };
     nav.pane = pane;
   }
 
@@ -260,6 +407,8 @@
         bind:open={() => nav.sheet === "view", (v) => (v ? nav.openSheet("view") : nav.closeSheet())}
         onfont={setFont}
         onfit={() => termRef?.toggleFit()}
+        pinned={pinEnabled}
+        onpin={setPin}
       />
     </div>
   </header>
@@ -300,12 +449,32 @@
        so it pushes neither the pane nor the accessory bar off the screen, and
        the safe areas stay where they already were: the header pays the top
        inset, the screen pays the keyboard, the bar pays the home indicator. -->
+  <!-- `bind:menuPane` against `nav` rather than the strip's own local state,
+       through a function binding, for the reason ViewSettings' `bind:open` is
+       wired the same way: a menu only a long press can open is a menu no
+       screenshot can reach, and the Simulator has no gesture API. With the pane
+       named in `nav`, a development link asking for `sheet=pane` lands on
+       it. The getter falls back to the ATTACHED pane so such a link needs no
+       second field; the strip still works uncontrolled everywhere else. -->
   <PaneTabs
     session={nav.paneSession}
     active={nav.pane}
     panelId={PANE_PANEL_ID}
+    refreshKey={paneRefresh}
+    bind:menuPane={
+      () => (nav.sheet === "pane" ? nav.menuPane || nav.pane : ""),
+      (v) => {
+        if (v === "") {
+          nav.closeSheet();
+          return;
+        }
+        nav.menuPane = v;
+        nav.openSheet("pane");
+      }
+    }
     onselect={attach}
     onnotice={(m) => (notice = m)}
+    onpanes={(id, names) => void pin.forgetMissing(id, names)}
   />
 
   <!-- The region the tab strip controls. `role="tabpanel"` plus the id the
@@ -322,15 +491,33 @@
         pane={nav.pane}
         {transform}
         onsent={() => barRef?.consumeLatch()}
-        onexit={() => (exited = true)}
-        onerror={(m) => (error = m)}
+        onexit={() => {
+          exited = true;
+          // The pane's tmux session is gone, so the inventory that listed it is
+          // now wrong by exactly one tab.
+          paneRefresh++;
+        }}
+        onerror={(m) => {
+          error = m;
+          // An attach refused `unknown_pane` says the same thing one moment
+          // earlier: the pane was already gone before the subscribe. Matched on
+          // the daemon's own wire code, the same prefix `humanError` translates.
+          if (/^unknown_pane\b/.test(m)) paneRefresh++;
+        }}
         onstate={(st) => {
           modes = st.modes;
           font = st.font;
+          // Assigned only on a real change: this is read by the pin effect, and a
+          // fresh object every time would restart its settle timer on every
+          // state push and could starve the pin entirely.
+          if (capacity.cols !== st.shown || capacity.rows !== st.shownRows) {
+            capacity = { cols: st.shown, rows: st.shownRows };
+          }
           geom = {
             cols: st.cols,
             rows: st.rows,
             shown: st.shown,
+            shownRows: st.shownRows,
             first: st.first,
             panning: st.panning,
             canFit: st.canFit,

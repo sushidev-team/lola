@@ -59,6 +59,7 @@ function geometry(over: Partial<Record<string, number | boolean>> = {}) {
     cols: 0,
     rows: 0,
     shown: 0,
+    shownRows: 0,
     first: 1,
     panning: false,
     canFit: false,
@@ -69,8 +70,15 @@ function geometry(over: Partial<Record<string, number | boolean>> = {}) {
 }
 
 /** A clipped 211-column grid showing columns 44 to 86 — the real case. */
-const CLIPPED = geometry({ cols: 211, rows: 44, shown: 43, first: 44, panning: true });
-const WHOLE = geometry({ cols: 80, rows: 24, shown: 80, first: 1, panning: false });
+const CLIPPED = geometry({
+  cols: 211,
+  rows: 44,
+  shown: 43,
+  shownRows: 22,
+  first: 44,
+  panning: true,
+});
+const WHOLE = geometry({ cols: 80, rows: 24, shown: 80, shownRows: 24, first: 1, panning: false });
 
 function mount(props: Record<string, unknown> = {}) {
   return render(ViewSettings, {
@@ -350,5 +358,68 @@ describe("ViewSettings is addressable", () => {
     });
     expect(screen.getByRole("dialog", { name: "View settings" })).toBeTruthy();
     expect(screen.getByText(/44–101 of 211/)).toBeTruthy();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE SIZE PIN. It is the one control in this app that changes what somebody
+// else sees, so the two things worth pinning about it are that it starts off
+// and that its cost to the Mac is on the sheet rather than behind a tooltip.
+
+describe("ViewSettings size pin", () => {
+  it("draws a switch that is off unless the caller says otherwise", async () => {
+    mount();
+    await fireEvent.click(trigger());
+    const sw = screen.getByRole("switch", { name: "Resize the Mac's pane to fit this phone" });
+    expect(sw).toHaveAttribute("aria-checked", "false");
+    expect(sw).toHaveTextContent("Off");
+  });
+
+  it("reports the state with aria-checked once it is on", async () => {
+    mount({ pinned: true });
+    await fireEvent.click(trigger());
+    const sw = screen.getByRole("switch");
+    expect(sw).toHaveAttribute("aria-checked", "true");
+    expect(sw).toHaveTextContent("On");
+  });
+
+  it("asks for the opposite of what it currently is", async () => {
+    const onpin = vi.fn();
+    mount({ onpin });
+    await fireEvent.click(trigger());
+    await fireEvent.click(screen.getByRole("switch"));
+    expect(onpin).toHaveBeenLastCalledWith(true);
+
+    cleanup();
+    mount({ pinned: true, onpin });
+    await fireEvent.click(trigger());
+    await fireEvent.click(screen.getByRole("switch"));
+    expect(onpin).toHaveBeenLastCalledWith(false);
+  });
+
+  // The requirement in one test: the sheet has to say what this does to the
+  // MAC, not only what it does here. The fit-width caption four lines above it
+  // says the opposite thing ("a zoom on this phone only"), so the two must not
+  // be confusable.
+  it("names the cost to the Mac in plain words, on the sheet", async () => {
+    mount({ geom: CLIPPED });
+    await fireEvent.click(trigger());
+    expect(screen.getByText(/its window on the Mac is resized/i)).toBeInTheDocument();
+    expect(screen.getByText(/Your own view of the session there is/i)).toBeInTheDocument();
+    expect(screen.getByText(/redraws when it flips back/i)).toBeInTheDocument();
+    // ...and the size, so the cost is a number rather than an adjective.
+    expect(screen.getByText(/about 43 by 22/)).toBeInTheDocument();
+  });
+
+  it("claims no size before the pane has been measured", async () => {
+    mount({ geom: geometry() });
+    await fireEvent.click(trigger());
+    expect(screen.queryByText(/about/)).toBeNull();
+  });
+
+  it("is a 44pt target, and the caller can disable it with the rest", async () => {
+    mount({ disabled: false });
+    await fireEvent.click(trigger());
+    expect(screen.getByRole("switch").className).toContain("h-11!");
   });
 });

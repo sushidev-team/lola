@@ -100,3 +100,22 @@ export function releaseKey(g: KeyGesture): { gesture: KeyGesture; fire: boolean 
 export function cancelKey(g: KeyGesture): KeyGesture {
   return g.cancelled ? g : { ...g, cancelled: true };
 }
+
+/**
+ * How long a still finger holds before a tab strip opens its menu, in ms.
+ *
+ * REUSED HERE rather than given its own module because the hard part of a long
+ * press is the part this file already solved: a press that becomes a drag must
+ * scroll the strip and open nothing. The tab strip has exactly the accessory
+ * bar's geometry -- `overflow-x-auto` with wall-to-wall targets -- so a swipe
+ * necessarily begins on a tab, and `beginKey`/`moveKey`/`cancelKey` are the
+ * gate. Only the timer differs, and it is the whole difference between the two
+ * gestures: `KEY_COMMIT_MS` decides how soon a press COUNTS, this decides how
+ * long a press must be held to mean something else.
+ *
+ * 500ms matches iOS's own long press. It has to sit comfortably above
+ * KEY_COMMIT_MS or a tap and a hold would be telling the same story at the same
+ * moment, and comfortably below the point at which a person concludes nothing is
+ * going to happen and lifts.
+ */
+export const LONG_PRESS_MS = 500;

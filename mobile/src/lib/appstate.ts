@@ -108,3 +108,76 @@ export function installAppState(onForeground: () => void): () => void {
     }
   };
 }
+
+/**
+ * Call `onBackground` whenever the app leaves the foreground. Returns a
+ * teardown; never throws.
+ *
+ * THE MIRROR OF THE ABOVE, AND IT EXISTS FOR EXACTLY ONE CALLER: the pane size
+ * pin (see panepin.ts), which reshapes a window on somebody else's machine and
+ * must hand it back on every way out — including the way out that is a phone
+ * going into a pocket.
+ *
+ * `installAppState` deliberately ignores this direction, and the reason it gives
+ * is still right for what it does: the plugin has already closed the socket by
+ * then and a reconnect callback there would only race a teardown it cannot undo.
+ * A RELEASE is the opposite case. It is not recovering from the teardown, it is
+ * trying to get one last frame out ahead of it, and the plugin gives it the only
+ * chance it has — `onAppState(false)` is announced synchronously from
+ * `didEnterBackgroundNotification`, before the queued close runs.
+ *
+ * IT WILL SOMETIMES LOSE THAT RACE, and no amount of care here changes that: the
+ * signal crosses the bridge into the WebView and the write has to cross back,
+ * while the close is already queued. That is precisely why the pin also keeps a
+ * persisted breadcrumb and sweeps it on the way back in. This is the cheap half
+ * that usually works, not the guarantee.
+ *
+ * `visibilitychange` is wired for the same belt-and-braces reason as above and
+ * with the same caveat: it also fires for a share sheet or a system dialog, so
+ * this callback can be invoked for a moment the socket was never touched. It is
+ * safe only because releasing a pin twice costs one no-op request, which is the
+ * trade this whole feature is built on.
+ */
+export function installAppBackground(onBackground: () => void): () => void {
+  let live = true;
+  let handle: Handle | undefined;
+
+  void (async () => {
+    const p = plugin();
+    if (!p?.addListener) return;
+    try {
+      const h = await p.addListener("appState", (e) => {
+        if (!live) return;
+        if (e?.active === false) onBackground();
+      });
+      if (!live) {
+        try {
+          void h.remove();
+        } catch {
+          /* a handle that will not detach is not worth failing a screen over */
+        }
+      } else {
+        handle = h;
+      }
+    } catch {
+      /* an older plugin has no such event; visibilitychange still covers it */
+    }
+  })();
+
+  const onHidden = () => {
+    if (!live) return;
+    if (globalThis.document?.visibilityState !== "visible") onBackground();
+  };
+  globalThis.document?.addEventListener("visibilitychange", onHidden);
+
+  return () => {
+    if (!live) return;
+    live = false;
+    globalThis.document?.removeEventListener("visibilitychange", onHidden);
+    try {
+      void handle?.remove();
+    } catch {
+      /* nothing useful to do on teardown */
+    }
+  };
+}

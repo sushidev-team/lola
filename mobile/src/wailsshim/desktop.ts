@@ -27,7 +27,7 @@ import type * as P from "@bindings/internal/protocol";
 import { bridge } from "./bridge";
 import { unsupported } from "./errors";
 import { WireError, normalizePanesData } from "../wire";
-import type { PaneResizeData, PanesData, RawPanesData, ShellCreateData } from "../wire";
+import type { PaneCloseData, PaneResizeData, PanesData, RawPanesData, ShellCreateData } from "../wire";
 
 // ---------------------------------------------------------------------------
 // DaemonService
@@ -200,6 +200,32 @@ export namespace DaemonService {
    */
   export function ShellCreate(session: string): Promise<ShellCreateData> {
     return bridge.request<ShellCreateData>("DaemonService.ShellCreate", "shellCreate", { session });
+  }
+
+  /**
+   * FORWARDED: cmd=paneClose -- end one auxiliary pane of a session.
+   *
+   * THE AGENT PANE IS REFUSED by the daemon, and that refusal is a rule rather
+   * than a limitation: the agent pane IS the session, so closing it would end
+   * the work and leave a record pointing at nothing. Teardown is `cmd=kill`,
+   * which knows to take the worktree and the branch with it. A caller must not
+   * offer this on the agent tab and then relay the refusal -- it must not offer
+   * it at all.
+   *
+   * The daemon kills the session TREE, not the tmux session: a shell can be
+   * holding a port through a process that ignores SIGHUP, and `kill-session`
+   * alone would orphan it onto pid 1.
+   *
+   * A REFUSAL IS THE POINT OF THE ERROR PATH, exactly as it is for ShellCreate,
+   * so nothing here catches or rewraps it. See wire/panes.ts for the three
+   * refusals and why each one wants the daemon's own sentence.
+   *
+   * Note the ARGS ENVELOPE, described on PaneResize below.
+   */
+  export function PaneClose(session: string, pane: string): Promise<PaneCloseData> {
+    return bridge.request<PaneCloseData>("DaemonService.PaneClose", "paneClose", {
+      args: { session, pane },
+    });
   }
 
   /**
@@ -717,7 +743,7 @@ export namespace UpdateService {
 // imports `@mobile/wire`, which is where the vocabulary and its narrowing guard
 // live beside the comment explaining what to do with a kind this build has never
 // heard of.
-export type { PaneInfo, PaneKind, PanesData, ShellCreateData } from "../wire";
+export type { PaneCloseData, PaneInfo, PaneKind, PanesData, ShellCreateData } from "../wire";
 
 export type {
   CLIInfoDTO,

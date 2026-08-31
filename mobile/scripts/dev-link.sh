@@ -39,8 +39,18 @@
 #   LOLA_TRIAGE  a bucket to filter the list by: "Needs You", "Working",
 #                "Fixing", "In Review", "Done".
 #   LOLA_QUERY   a free-text search for the list.
-#   LOLA_SHEET   a sheet to open on arrival: filter | connection | view.
-#                "view" is the terminal's, so it wants a pane argument too.
+#   LOLA_SESSION the session the pane belongs to. Defaults to the pane itself,
+#                which is right for an AGENT pane (its tmux name IS the session
+#                id) and wrong for every other one: `cmd=panes` is asked about a
+#                SESSION, so linking straight to `...-shell-1` without this
+#                lands on a terminal with no tab strip at all.
+#   LOLA_SHEET   a sheet to open on arrival: filter | connection | view |
+#                pane. The last two are the terminal's, so they want a pane
+#                argument too. "pane" opens the long-press menu for the pane the
+#                link lands on -- rename and close -- which is otherwise
+#                reachable only by holding a tab for half a second. Names are
+#                matched case-insensitively, which is why every one of them is a
+#                single lowercase word.
 #
 # THE LAST THREE ARE WHY A SCREENSHOT OF THOSE SCREENS EXISTS AT ALL. The filter
 # overlay, the connection settings and the view settings each open only from a
@@ -112,13 +122,14 @@ urlencode() {
 
 link="lola-dev://connect?host=$host&port=$port&pin=$pin&keyfile=$staged"
 [ -z "$pane" ] || link="$link&pane=$pane"
+[ -z "${LOLA_SESSION:-}" ] || link="$link&session=$(urlencode "$LOLA_SESSION")"
 [ -z "${LOLA_TRIAGE:-}" ] || link="$link&triage=$(urlencode "$LOLA_TRIAGE")"
 [ -z "${LOLA_QUERY:-}" ] || link="$link&q=$(urlencode "$LOLA_QUERY")"
 [ -z "${LOLA_SHEET:-}" ] || link="$link&sheet=$(urlencode "$LOLA_SHEET")"
 
-printf 'dev-link: %s:%s pane=%s triage=%s query=%s sheet=%s (key staged in the app container, not in the URL)\n' \
-	"$host" "$port" "${pane:-none}" "${LOLA_TRIAGE:-none}" "${LOLA_QUERY:-none}" \
-	"${LOLA_SHEET:-none}" >&2
+printf 'dev-link: %s:%s pane=%s session=%s triage=%s query=%s sheet=%s (key staged in the app container, not in the URL)\n' \
+	"$host" "$port" "${pane:-none}" "${LOLA_SESSION:-${pane:-none}}" "${LOLA_TRIAGE:-none}" \
+	"${LOLA_QUERY:-none}" "${LOLA_SHEET:-none}" >&2
 
 xcrun simctl terminate "$udid" "$bundle" >/dev/null 2>&1 || true
 SIMCTL_CHILD_LOLA_DEV_LINK="$link" exec xcrun simctl launch "$udid" "$bundle"

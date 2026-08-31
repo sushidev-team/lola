@@ -354,3 +354,24 @@ export function partialRowHeight(panY: number, viewHeight: number, cellHeight: n
   // sliced glyph; masking it would eat a row that is fully drawn.
   return rest < 0.5 || cellHeight - rest < 0.5 ? 0 : rest;
 }
+
+/**
+ * How many of the grid's ROWS are actually on screen — the mirror of
+ * `visibleColumns`, and the other half of this phone's capacity.
+ *
+ * It exists for the size PIN (see panepin.ts), which is the one feature that
+ * has to state the phone's capacity as a pair. `partialRowHeight` already knew
+ * where the last full row ends, but it answers in pixels because its job is to
+ * mask an offcut; nothing exported a COUNT, so a pin could name its columns and
+ * had to guess its rows.
+ *
+ * Clamped to the grid at the top for the same reason `visibleColumns` is: a
+ * frame taller than the content is not a window onto more rows than exist, and
+ * a pin asking for them would resize somebody's window to hold blank lines.
+ */
+export function visibleRows(box: PanBox, rows: number): number {
+  if (box.contentHeight <= 0 || rows <= 0) return 0;
+  const cell = box.contentHeight / rows;
+  if (cell <= 0) return 0;
+  return Math.min(rows, Math.max(1, Math.floor(box.viewHeight / cell)));
+}
