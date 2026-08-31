@@ -36,6 +36,17 @@
 #   LOLA_HOST    the address the app dials. Defaults to 127.0.0.1, which the
 #                Simulator shares with the Mac.
 #   LOLA_PORT    defaults to 7717.
+#   LOLA_TRIAGE  a bucket to filter the list by: "Needs You", "Working",
+#                "Fixing", "In Review", "Done".
+#   LOLA_QUERY   a free-text search for the list.
+#   LOLA_SHEET   a sheet to open on arrival: filter | connection | view.
+#                "view" is the terminal's, so it wants a pane argument too.
+#
+# THE LAST THREE ARE WHY A SCREENSHOT OF THOSE SCREENS EXISTS AT ALL. The filter
+# overlay, the connection settings and the view settings each open only from a
+# tap, and `simctl` has no gesture API — so before they were addressable a
+# reviewer could run their tests and never see one of them. They are
+# destinations, not capabilities: each names somewhere one tap already goes.
 
 set -eu
 
@@ -85,11 +96,29 @@ staged=lola-dev-key
 umask 077
 printf '%s' "$key" > "$docs/$staged"
 
+# Percent-encode one query value. A bucket title has a space in it ("Needs
+# You") and a search term is whatever somebody types, so neither can go into a
+# URL raw. `od` rather than a here-string so this stays POSIX sh.
+urlencode() {
+	printf '%s' "$1" | od -An -tx1 -v | tr -d '\n' | tr -s ' ' '\n' | while read -r byte; do
+		[ -n "$byte" ] || continue
+		char=$(printf "\\x$byte")
+		case $char in
+			[a-zA-Z0-9._~-]) printf '%s' "$char" ;;
+			*) printf '%%%s' "$byte" ;;
+		esac
+	done
+}
+
 link="lola-dev://connect?host=$host&port=$port&pin=$pin&keyfile=$staged"
 [ -z "$pane" ] || link="$link&pane=$pane"
+[ -z "${LOLA_TRIAGE:-}" ] || link="$link&triage=$(urlencode "$LOLA_TRIAGE")"
+[ -z "${LOLA_QUERY:-}" ] || link="$link&q=$(urlencode "$LOLA_QUERY")"
+[ -z "${LOLA_SHEET:-}" ] || link="$link&sheet=$(urlencode "$LOLA_SHEET")"
 
-printf 'dev-link: %s:%s pane=%s (key staged in the app container, not in the URL)\n' \
-	"$host" "$port" "${pane:-none}" >&2
+printf 'dev-link: %s:%s pane=%s triage=%s query=%s sheet=%s (key staged in the app container, not in the URL)\n' \
+	"$host" "$port" "${pane:-none}" "${LOLA_TRIAGE:-none}" "${LOLA_QUERY:-none}" \
+	"${LOLA_SHEET:-none}" >&2
 
 xcrun simctl terminate "$udid" "$bundle" >/dev/null 2>&1 || true
 SIMCTL_CHILD_LOLA_DEV_LINK="$link" exec xcrun simctl launch "$udid" "$bundle"

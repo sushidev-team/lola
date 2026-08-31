@@ -158,7 +158,8 @@
   /** The size a fit-width zoom would land on, recomputed as the box moves. */
   const fit = $derived(fitWidth(box, fontSize));
   /** Whether there is a smaller size that would show more of the grid. False at
-   *  the 8-point floor, where the chip has nothing to offer and says so. */
+   *  the 8-point floor, where the view-settings popover has nothing to offer and
+   *  says so in a sentence rather than drawing a dead button. */
   const canFit = $derived(fitFrom === null && fit.size < fontSize);
 
   // One effect, reading everything the parent draws. It is the only channel
@@ -477,14 +478,21 @@
   /**
    * Zoom out until the whole grid fits across the screen, and back again.
    *
-   * DRIVEN FROM THE HEADER. It used to be a chip pinned over the pane's
-   * top-right corner, which was wrong twice: it permanently washed out the
-   * first line of live output on a phone (the grid is always clipped, so the
-   * chip was always up), and its tappable "fit"/"reset" state and its
-   * untappable "pan" state were drawn identically — same size, same colour,
-   * same background — so nothing said which one was a button. It is now a
-   * real control beside A-/A+, and the pane itself carries only a two-point
-   * position bar that covers no text.
+   * DRIVEN FROM THE VIEW-SETTINGS POPOVER. It has moved twice, and both moves
+   * are worth keeping written down because the second one undid a compromise
+   * rather than a mistake.
+   *
+   * It began as a chip pinned over the pane's top-right corner, which was wrong
+   * twice: it permanently washed out the first line of live output on a phone
+   * (the grid is always clipped, so the chip was always up), and its tappable
+   * "fit"/"reset" state and its untappable "pan" state were drawn identically —
+   * same size, same colour, same background — so nothing said which one was a
+   * button. It became a real control in the header beside A-/A+, which fixed
+   * both faults and cost the header: four settings controls and a settings
+   * subtitle above a screen whose only subject is the pane. It now lives in
+   * ViewSettings.svelte with the font controls and the column readout, behind
+   * one button. The pane itself still carries the two-point position bar, which
+   * covers no text and is the one clipping mark that needs no tap.
    *
    * THIS IS A ZOOM, NOT A RESIZE, and the distinction is the whole reason the
    * label says "fit" rather than "fit to phone". It scales this phone's own view
@@ -500,7 +508,9 @@
    * zoom-out is good for, and never for reading.
    *
    * At 200 columns even the floor does not fit, and that is not hidden — the
-   * chip keeps showing shown/cols, so it reads "120/200 cols" after the tap.
+   * popover keeps reporting the visible range, so it still reads "Columns
+   * 1-120 of 200" after the tap, and says in a sentence that the smallest text
+   * is already in use.
    */
   export function toggleFit() {
     // iOS raises the soft keyboard only for a focus a user action caused, so a
@@ -753,21 +763,40 @@
     ></div>
   {/if}
 
-  <!-- WHERE YOU ARE, while you are panning, and nowhere else.
-       The header carries the column RANGE in words; this is the same fact as a
-       shape, because a number read once at the top does not track a finger. It
-       is two points tall on the pane's own bottom edge, has no hit area, and
-       covers no text — which is the whole reason the truncation chip that used
-       to sit over the pane's top-right corner is now a control in the header:
-       it permanently washed out the first line of live output, and its
-       tappable and untappable states were drawn identically. -->
+  <!-- WHERE YOU ARE, whenever the grid is wider than the screen.
+       The view-settings popover carries the column RANGE in words; this is the
+       same fact as a shape, because a number behind a button does not track a
+       finger. It is two points tall on the pane's own bottom edge, has no hit
+       area, and covers no text — which is the whole reason the truncation chip
+       that used to sit over the pane's top-right corner is gone: it permanently
+       washed out the first line of live output, and its tappable and untappable
+       states were drawn identically.
+
+       IT IS ALSO THE ONLY CLIPPING MARK ON THE PANE ITSELF, now that the count
+       lives in a popover, so it is drawn whenever the grid is clipped and not
+       merely while a finger is down. A clipped agent pane and an agent that
+       stopped writing mid-line look identical, and this bar is the difference
+       seen without touching anything. The popover's trigger carries the other
+       half — a dot, and the range in its accessible name.
+
+       IT HAS TO BE SEEN TO DO THAT, and at its first size it was not. It was
+       two CSS points of `bg-faint/70` on `bg-edge/60` — measured off a device
+       screenshot at about 2.4:1, which is under the 3:1 floor a non-text
+       graphic needs — and at arm's length it read as the divider above the
+       accessory bar rather than as a position indicator. The alpha was the
+       whole problem: `faint` is a token the palette already walks to 3:1
+       against the ground (see catppuccin.ts's MUTED), and putting it behind a
+       70% alpha threw exactly that guarantee away. So the thumb is now the full
+       token, the track is the full `edge`, and the bar is twice as tall.
+       Four points is still a hairline that covers no text, which was the reason
+       the tappable truncation chip it replaced had to go. -->
   {#if panning && cols > 0}
     <div
-      class="pointer-events-none absolute right-0 bottom-0 left-0 h-0.5 bg-edge/60"
+      class="pointer-events-none absolute right-0 bottom-0 left-0 h-1 bg-edge"
       aria-hidden="true"
     >
       <div
-        class="h-full bg-faint/70"
+        class="h-full bg-faint"
         style="margin-left: {((first - 1) / cols) * 100}%; width: {(shown / cols) * 100}%"
       ></div>
     </div>

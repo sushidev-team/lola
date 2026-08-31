@@ -765,7 +765,40 @@ The parser FAILS CLOSED, which is worth knowing before blaming the app:
 | `keyfile` naming anything but a bare filename | the key is dropped; the form asks for one |
 | `port` outside 1..65535 | the whole link is rejected |
 | `pane` with anything but `[A-Za-z0-9._-]` | the pane is dropped; the app lands on the list |
+| `triage` naming no real bucket | the filter is dropped; the list is unfiltered |
+| `sheet` naming no real sheet | the sheet is dropped; nothing opens |
+| `triage` / `q` over 128 bytes, or carrying a control character | dropped |
 | any action but `connect` | ignored |
+
+### Where a link can land
+
+Beyond `pane` and `session`, a link may name the rest of a destination. These
+exist for one reason: the filter overlay, the connection settings and the
+terminal's view settings are reachable only by a TAP, `simctl` has no gesture
+API, and the Simulator's device window is absent from the accessibility tree —
+so those three screens could be unit-tested but never photographed, and a
+reviewer had to judge changes to them from test names alone.
+
+| parameter | what it does |
+| --- | --- |
+| `pane` / `session` | attach the terminal to a pane |
+| `triage` | filter the list to a bucket: `Needs You`, `Working`, `Fixing`, `In Review`, `Done` (matched case-insensitively) |
+| `q` (or `query`) | put a free-text search into the list |
+| `sheet` | open one sheet on arrival: `filter`, `connection`, or `view` (the terminal's view settings — only useful with a `pane`) |
+
+None of them is a capability. Every one names somewhere the person holding the
+phone could have reached with one tap, behind the same fence as `pane`: a
+destination is only useful to a link that already connected, the whole path is
+compiled out of a release build, and a connection that arrived this way wears
+the development banner for as long as it is up.
+
+```sh
+# The list, filtered, with the filter sheet open over it.
+LINK="lola-dev://connect?host=127.0.0.1&port=7717&pin=$PIN&key=$KEY&triage=Needs%20You&sheet=filter"
+
+# A terminal with the view settings open on its column readout.
+LINK="lola-dev://connect?host=127.0.0.1&port=7717&pin=$PIN&key=$KEY&pane=$PANE&sheet=view"
+```
 
 An unusable pin and an ABSENT one now fail in the same place, which they did
 not: a malformed pin has always rejected the whole link, while a missing one was

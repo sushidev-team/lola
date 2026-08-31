@@ -35,6 +35,33 @@ describe("navigation", () => {
   });
 });
 
+describe("nav sheets", () => {
+  it("opens and closes a sheet by name", () => {
+    nav.openSheet("filter");
+    expect(nav.sheet).toBe("filter");
+    nav.closeSheet();
+    expect(nav.sheet).toBe("");
+  });
+
+  it("closes whatever is open on every navigation", () => {
+    // A sheet belongs to the screen it was opened over. Carried across, the
+    // terminal's view settings would pop open on the list and the list's filter
+    // sheet over a terminal — and only the screen that draws one can close it,
+    // so the user would be stuck behind a modal nothing on screen owns.
+    nav.openSheet("view");
+    nav.toSessions();
+    expect(nav.sheet).toBe("");
+
+    nav.openSheet("filter");
+    nav.toTerminal("lola-fe-42", "lola-fe-42");
+    expect(nav.sheet).toBe("");
+
+    nav.openSheet("connection");
+    nav.toConnect();
+    expect(nav.sheet).toBe("");
+  });
+});
+
 describe("paneNameFor", () => {
   it("prefers the tmux name, as the daemon's own paneTarget does", () => {
     expect(paneNameFor({ id: "lola-fe-42", tmuxName: "lola-fe-42-x" })).toBe("lola-fe-42-x");

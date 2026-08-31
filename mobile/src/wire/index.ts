@@ -11,6 +11,7 @@
 // Swift — from drifting apart on a device where nothing can be debugged.
 
 export * from "./protocol";
+export * from "./panes";
 export * from "./codec";
 export * from "./correlator";
 export * from "./transport";

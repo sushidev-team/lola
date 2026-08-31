@@ -148,6 +148,55 @@
     if (connection.ready && nav.screen === "connect") nav.toSessions();
   });
 
+  // A LAUNCH LINK'S DESTINATION, HELD UNTIL THERE IS A CONNECTION TO APPLY IT
+  // TO. These two effects exist because the pane half of a development link was
+  // being lost, which made the terminal screen — the screen this whole app is a
+  // bet on — unreachable by link and therefore unscreenshottable, the single
+  // thing `DevLinkTarget` exists to prevent.
+  //
+  // WHAT ACTUALLY HAPPENS, measured on the Simulator rather than guessed at.
+  // The plugin accepts the link and posts it ("dev link accepted … via=
+  // dev-launch … pane=true" in the device log), the offer routes to the connect
+  // screen, and the connect screen's own dial then fails — the boot restore is
+  // already holding a connection to the same daemon, and the second attempt
+  // ends as "connection failed: network". `onconnected` never fires, so
+  // `landed` never runs, and the restore's connection carries on serving a
+  // session list with the target gone. Nothing on screen distinguishes that
+  // from a link that was never delivered.
+  //
+  // So the destination is REMEMBERED rather than consumed on arrival, and
+  // applied by whichever connection is actually live. The offer itself still
+  // travels its ordinary path untouched — this reads it, it does not drain it —
+  // so the connect screen, the credential handling and `devLinkActive` behave
+  // exactly as before.
+  //
+  // THE FENCE IS `launch`, AND IT IS THE ONLY ONE NEEDED. That is this
+  // process's own launch environment: setting it means having started the app,
+  // which is the same reason `devLinkSource` already lets that door dial on its
+  // own, while anything the OS URL router delivered stays `link` and is ignored
+  // here. A destination grants nothing beyond navigation — it names a pane, and
+  // a pane that does not exist on the connected daemon simply reports itself
+  // gone in the terminal's own banner. Deliberately NOT also matched against
+  // the live endpoint: the remembered endpoint is whichever address the app was
+  // first paired on (a LAN address as easily as loopback), so that comparison
+  // rejected the ordinary case and put the feature straight back where it was.
+  //
+  // No banner is set here, correctly: a connection restored from the Keychain
+  // did not arrive by link and must not claim that it did.
+  let linkTarget = $state<DevLinkTarget | null>(null);
+
+  $effect(() => {
+    const p = pairing.pending;
+    if (p?.source === "launch" && p.target) linkTarget = p.target;
+  });
+
+  $effect(() => {
+    const t = linkTarget;
+    if (!t || !connection.ready) return;
+    linkTarget = null;
+    applyTarget(t);
+  });
+
   // A hand-off can land at any moment — the OS delivers a URL whenever it
   // decides to, including during a cold launch and while the sessions list is
   // open — and only the connect screen knows how to apply one. Routing here
@@ -177,8 +226,32 @@
    */
   function landed(target?: DevLinkTarget | null): void {
     void store.refresh();
-    if (target) nav.toTerminal(target.session, target.pane);
+    if (target) applyTarget(target);
     else nav.toSessions();
+  }
+
+  /**
+   * Put the app where a development link asked for.
+   *
+   * A destination is four independent things and any of them may be absent: a
+   * pane, a triage bucket, a search, and a sheet. The ORDER here is the whole
+   * of the function: the filter is applied first because it describes the list
+   * rather than the navigation, then the screen is chosen (a pane means the
+   * terminal, no pane means the list), and only then is the sheet opened —
+   * because `toTerminal` and `toSessions` both clear it, a modal belonging to
+   * the screen it was opened over.
+   *
+   * Nothing here is a capability. Each field names somewhere the person holding
+   * the phone could have reached with one tap; what the link buys is that a
+   * SCRIPT can reach it too, which is the only way these screens can be
+   * photographed at all.
+   */
+  function applyTarget(t: DevLinkTarget): void {
+    if (t.triage) nav.triage = t.triage;
+    if (t.query) nav.query = t.query;
+    if (t.pane) nav.toTerminal(t.session, t.pane);
+    else nav.toSessions();
+    if (t.sheet) nav.openSheet(t.sheet);
   }
 
   // Derived rather than stored, so the banner cannot outlive the connection it

@@ -78,8 +78,13 @@
      along with `whitespace-nowrap`. Without those a flex scroller would squash
      the chips to their min-content width and wrap the labels inside them
      instead of overflowing, which is the failure this markup looks like it
-     should have. -->
-<div class="shrink-0 border-b border-edge" role="group" aria-label="Filter sessions">
+     should have.
+
+     NO BOTTOM RULE ANY MORE. The strip used to sit directly above the list, so
+     it needed a rule to say where the controls ended and the content began. It
+     now lives inside the filter sheet, where the sheet's own edge does that job
+     and a second rule only draws a line across the middle of a card. -->
+<div class="shrink-0" role="group" aria-label="Filter sessions">
   <div
     bind:this={strip}
     class="flex gap-1.5 overflow-x-auto overscroll-x-contain px-3 py-2 [scrollbar-width:none]"

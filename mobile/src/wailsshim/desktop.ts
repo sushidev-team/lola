@@ -26,7 +26,8 @@ import type * as M from "@bindings/desktop/models";
 import type * as P from "@bindings/internal/protocol";
 import { bridge } from "./bridge";
 import { unsupported } from "./errors";
-import { WireError } from "../wire";
+import { WireError, normalizePanesData } from "../wire";
+import type { PanesData, RawPanesData, ShellCreateData } from "../wire";
 
 // ---------------------------------------------------------------------------
 // DaemonService
@@ -150,6 +151,55 @@ export namespace DaemonService {
     return bridge.request<P.DevFreePortData>("DaemonService.DevFreePort", "devFreePort", {
       args: { session, port, pid },
     });
+  }
+
+  // --- panes and shell tabs -------------------------------------------------
+  //
+  // These two have NO DESKTOP COUNTERPART, which makes them the only methods in
+  // this file whose shape was not copied from a generated binding. The desktop
+  // does both in-process through `desktop/termsvc.go` (TermService.Shells and
+  // TermService.Shell), driving `tmux -L lola` on the machine it runs on. A
+  // phone has no tmux and no filesystem, so the daemon grew `cmd=panes` and
+  // `cmd=shellCreate` for it (internal/daemon/panes.go).
+  //
+  // They live on DaemonService rather than TermService on purpose: TermService
+  // mirrors the desktop's Wails service, whose Shells/Shell have a different
+  // shape and stay PLATFORM rejections below. A mobile tab strip calls THESE.
+
+  /**
+   * FORWARDED: cmd=panes — which panes exist for a session, in the order a tab
+   * strip should draw them.
+   *
+   * Derived from tmux on every call, so it is the live truth rather than a
+   * cache. The payload is normalized (`normalizePanesData`) because there is no
+   * generated `createFrom` here to do what it does for every other Data type:
+   * the daemon writes `"panes": null` for a session with no panes, and an absent
+   * review pane as a zero-valued struct rather than as an omitted field. See
+   * mobile/src/wire/panes.ts for both encoding details.
+   */
+  export async function Panes(session: string): Promise<PanesData> {
+    const d = await bridge.request<RawPanesData>("DaemonService.Panes", "panes", { session });
+    return normalizePanesData(session, d);
+  }
+
+  /**
+   * FORWARDED: cmd=shellCreate — start a new shell tab in the session's
+   * worktree and return the pane to subscribe to.
+   *
+   * The daemon allocates the index; a client must not invent a name, because
+   * two phones and a desktop can be racing for "-shell-2" and only the daemon
+   * sees all of them.
+   *
+   * A REFUSAL IS THE POINT OF THE ERROR PATH, so nothing here catches or
+   * rewraps it. The daemon answers `ok:false` with a sentence naming the reason
+   * — no worktree, a worktree that has been removed underneath the session, or
+   * the shell cap — and the correlator turns that into a `DaemonError` whose
+   * `message` IS that sentence. Show it. A generic "could not create shell"
+   * throws away the only part a user can act on, and a tab strip whose "+"
+   * stops working for no stated reason reads as a broken button.
+   */
+  export function ShellCreate(session: string): Promise<ShellCreateData> {
+    return bridge.request<ShellCreateData>("DaemonService.ShellCreate", "shellCreate", { session });
   }
 
   // --- opening work ---------------------------------------------------------
@@ -343,14 +393,19 @@ export namespace TermService {
   }
 
   /**
-   * PLATFORM. Listing a session's `<id>-shell-N` tabs means asking the tmux
-   * server, and the remote protocol has no command that does — the pane path
-   * can SUBSCRIBE to an aux pane by name but cannot enumerate one.
+   * PLATFORM, and it stays that way now that `cmd=panes` exists.
    *
-   * `terms.svelte.ts`'s `refresh()` already swallows this and keeps its
-   * last-known list, so a rejection here costs an empty tab bar rather than an
-   * error, which is the correct M1 behaviour: the mobile app attaches to the
-   * agent pane and does not manage shell tabs.
+   * The enumeration a phone needs is `DaemonService.Panes`, which answers with
+   * the WHOLE inventory — agent, shells, dev tabs, review — in strip order, and
+   * that is a different question from this one: `terms.svelte.ts` asks for a
+   * session's shell tabs only, as bare names, having already decided the desktop
+   * owns the naming. Answering it from `panes` would mean filtering the daemon's
+   * classification back down to a list of strings and then re-deriving the
+   * classification in the view, which is the thing `panes` exists to stop.
+   *
+   * `terms.svelte.ts`'s `refresh()` already swallows this rejection and keeps
+   * its last-known list, so it costs an empty desktop-style tab bar rather than
+   * an error. The mobile tab strip is a mobile view and calls Panes directly.
    */
   export function Shells(sessionID: string): Promise<string[] | null> {
     return unsupported(
@@ -359,9 +414,23 @@ export namespace TermService {
     );
   }
 
-  /** PLATFORM: creating a tmux session needs local process control. */
+  /**
+   * PLATFORM — because of its SIGNATURE, not its capability. A phone can start
+   * a shell on the Mac now; `DaemonService.ShellCreate` does it.
+   *
+   * This method cannot be the way, because it takes the shell's NAME and its
+   * worktree PATH from the caller: the desktop's frontend allocates
+   * "<id>-shell-N" itself, which is safe when one process on one machine is the
+   * only allocator and is a collision the moment two phones and a desktop are
+   * asking. `cmd=shellCreate` therefore allocates daemon-side and takes only a
+   * session id. Honouring this signature would mean sending a name the daemon
+   * would have to trust.
+   */
   export function Shell(shell: string, _worktree: string): Promise<string> {
-    return unsupported(`TermService.Shell(${shell})`, "a phone cannot start a shell on the Mac");
+    return unsupported(
+      `TermService.Shell(${shell})`,
+      "a shell name is allocated by the daemon, not by a client; use DaemonService.ShellCreate(session)",
+    );
   }
 
   /** PLATFORM: killing a tmux session needs local process control. */
@@ -605,6 +674,18 @@ export namespace UpdateService {
 // ---------------------------------------------------------------------------
 // The DTO types the generated barrel re-exports. Types only, erased at build.
 // ---------------------------------------------------------------------------
+
+// The three that are NOT generated: protocol.PanesData, protocol.PaneInfo and
+// protocol.ShellCreateData exist in Go but not in the checked-in bindings, so
+// they are mirrored by hand in mobile/src/wire/panes.ts. Re-exported here so a
+// caller of DaemonService.Panes can name its return type from the same module
+// it called, exactly as it can for every generated one.
+// The pane-kind CONSTANTS are deliberately not re-exported with them: this
+// module is the services module, and a mobile view that switches on a kind
+// imports `@mobile/wire`, which is where the vocabulary and its narrowing guard
+// live beside the comment explaining what to do with a kind this build has never
+// heard of.
+export type { PaneInfo, PaneKind, PanesData, ShellCreateData } from "../wire";
 
 export type {
   CLIInfoDTO,

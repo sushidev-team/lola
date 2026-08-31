@@ -141,6 +141,27 @@ public enum LolaDevLink {
         /// which is right for an agent's own pane (the daemon's `paneTarget`
         /// uses the tmux session name, which IS the session id in that case).
         public let session: String?
+        /// The triage bucket to filter the session list by, or nil.
+        ///
+        /// Passed through as TEXT rather than validated here, and that is
+        /// deliberate: the bucket vocabulary is derived from Go's
+        /// state.KanbanColumns through the shared theme.ts, and mirroring five
+        /// display titles into Swift would make this file a third copy of a
+        /// list the repository already keeps in exactly two. The app matches it
+        /// against the real list and ignores anything that does not match, so
+        /// the failure mode is an unfiltered list rather than an empty one.
+        public let triage: String?
+        /// The free-text search to apply to the session list, or nil.
+        public let query: String?
+        /// A sheet to open on arrival — the filter overlay, the connection
+        /// settings, or the terminal's view settings.
+        ///
+        /// Like `pane`, purely a DESTINATION: it opens something the user could
+        /// have opened by tapping, grants nothing, and is only reachable by a
+        /// link that already connected. It exists because those three surfaces
+        /// were the ones no screenshot could reach — `simctl` has no gesture
+        /// API — so a change to them could be tested but never seen.
+        public let sheet: String?
         /// Defaults to the RESTRICTIVE value, so a call site that forgets to
         /// say how a link arrived gets the door that only fills a form.
         public var arrival: Arrival = .url
@@ -151,7 +172,10 @@ public enum LolaDevLink {
             spkiPin: String?,
             insecureKey: String?,
             pane: String? = nil,
-            session: String? = nil
+            session: String? = nil,
+            triage: String? = nil,
+            query: String? = nil,
+            sheet: String? = nil
         ) {
             self.host = host
             self.port = port
@@ -159,6 +183,9 @@ public enum LolaDevLink {
             self.insecureKey = insecureKey
             self.pane = pane
             self.session = session
+            self.triage = triage
+            self.query = query
+            self.sheet = sheet
         }
     }
 
@@ -234,9 +261,24 @@ public enum LolaDevLink {
         let pane = value("pane").flatMap(sanitizedName)
         let session = value("session").flatMap(sanitizedName)
 
+        // The rest of the destination: which filter the list arrives under, and
+        // which sheet is open when it does. Same fence as `pane` — a
+        // destination is only useful to a link that already connected — and the
+        // same reason: these are the surfaces a script cannot otherwise reach,
+        // and a change nobody can photograph is a change nobody can review.
+        //
+        // `triage` and `q` take the TEXT sanitizer, not `sanitizedName`: a
+        // bucket title is "Needs you" and a search term is whatever somebody
+        // typed, so both contain spaces that the name sanitizer exists to
+        // refuse. `sheet` is a bare token and keeps the strict one.
+        let triage = value("triage").flatMap(sanitizedText)
+        let query = value("q", "query").flatMap(sanitizedText)
+        let sheet = value("sheet").flatMap(sanitizedName)?.lowercased()
+
         return Payload(
             host: host, port: port, spkiPin: pin, insecureKey: key,
-            pane: pane, session: session ?? pane)
+            pane: pane, session: session ?? pane,
+            triage: triage, query: query, sheet: sheet)
     }
 
     /// Reads a bearer key out of a file in the app's own Documents directory.
@@ -276,6 +318,22 @@ public enum LolaDevLink {
     /// A tmux target as the daemon spells one. The daemon re-resolves whatever
     /// arrives against its own session store before anything is exec'd, so this
     /// only has to be a plausible name rather than a trusted one.
+    /// A short piece of DISPLAY TEXT from a link: a triage bucket title, a
+    /// search term.
+    ///
+    /// Looser than `sanitizedName` because both of those legitimately contain
+    /// spaces, and stricter than "anything": control characters are refused
+    /// outright rather than stripped, because a value that has to be repaired
+    /// before use is a value that was not what the sender meant. The length cap
+    /// is the same 128 bytes — these become a filter and a header caption, not
+    /// a payload.
+    static func sanitizedText(_ raw: String) -> String? {
+        let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, text.utf8.count <= 128 else { return nil }
+        let hasControl = text.unicodeScalars.contains { CharacterSet.controlCharacters.contains($0) }
+        return hasControl ? nil : text
+    }
+
     static func sanitizedName(_ raw: String) -> String? {
         let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, text.utf8.count <= 128 else { return nil }

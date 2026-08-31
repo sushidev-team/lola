@@ -161,10 +161,13 @@ describe("devLinkTarget", () => {
   // does not land either. A pane in the launch link is what makes it
   // screenshottable by a script.
 
+  const NOWHERE = { pane: "", session: "", triage: "", query: "", sheet: "" };
+
   it("reads a pane and defaults the session to it", () => {
     // The daemon's own paneTarget uses the tmux session name, which IS the
     // session id for an agent's own pane — so one value is usually both.
     expect(devLinkTarget({ pane: "lola-fe-42" })).toEqual({
+      ...NOWHERE,
       pane: "lola-fe-42",
       session: "lola-fe-42",
     });
@@ -172,15 +175,63 @@ describe("devLinkTarget", () => {
 
   it("keeps an explicit session, for an aux pane", () => {
     expect(devLinkTarget({ pane: "lola-fe-42-shell-1", session: "lola-fe-42" })).toEqual({
+      ...NOWHERE,
       pane: "lola-fe-42-shell-1",
       session: "lola-fe-42",
     });
   });
 
-  it("is null when no pane was named, which lands on the list", () => {
+  it("is null when the link names no destination at all", () => {
     expect(devLinkTarget({ host: "127.0.0.1" })).toBeNull();
     expect(devLinkTarget({ pane: "   " })).toBeNull();
     expect(devLinkTarget(null)).toBeNull();
+  });
+
+  // The filter overlay, the connection settings and the terminal's view
+  // settings are reachable only by a tap, and a tap is the one thing the
+  // Simulator cannot be asked to perform — so those three screens could be
+  // tested but never photographed. These fields are what put them at the end of
+  // a link.
+
+  it("takes a filter with no pane, which lands on the list", () => {
+    expect(devLinkTarget({ triage: "Needs You" })).toEqual({
+      ...NOWHERE,
+      triage: "Needs You",
+    });
+  });
+
+  it("matches a triage bucket case-insensitively against the real vocabulary", () => {
+    // A bucket title is display text with a capital and a space; a link is
+    // typed on a command line. The list itself stays in theme.ts — spelling one
+    // into the plugin would be a third copy of it.
+    expect(devLinkTarget({ triage: "needs you" })?.triage).toBe("Needs You");
+    expect(devLinkTarget({ triage: "in review" })?.triage).toBe("In Review");
+  });
+
+  it("drops a triage bucket that is not one, rather than showing an empty list", () => {
+    // Handing an unmatched value to `triaged` would match no session at all, so
+    // the link would silently show nothing. Failing closed shows everything.
+    expect(devLinkTarget({ triage: "wharrgarbl" })).toBeNull();
+    expect(devLinkTarget({ pane: "lola-fe-42", triage: "wharrgarbl" })?.triage).toBe("");
+  });
+
+  it("carries a free-text query", () => {
+    expect(devLinkTarget({ query: "nori" })).toEqual({ ...NOWHERE, query: "nori" });
+  });
+
+  it("takes a sheet from the vocabulary and refuses anything else", () => {
+    expect(devLinkTarget({ sheet: "filter" })?.sheet).toBe("filter");
+    expect(devLinkTarget({ sheet: "Connection" })?.sheet).toBe("connection");
+    expect(devLinkTarget({ pane: "lola-fe-42", sheet: "view" })?.sheet).toBe("view");
+    // Fails closed: a sheet this build has never heard of opens nothing.
+    expect(devLinkTarget({ pane: "lola-fe-42", sheet: "wharrgarbl" })?.sheet).toBe("");
+    expect(devLinkTarget({ sheet: "wharrgarbl" })).toBeNull();
+  });
+
+  it("leaves the session empty when there is no pane to own it", () => {
+    // A session id with no pane names nothing that can be attached to, and
+    // carrying it would make `applyTarget` open a terminal on "".
+    expect(devLinkTarget({ session: "lola-fe-42", triage: "In Review" })?.session).toBe("");
   });
 
   it("reaches the listener beside the payload and the source", async () => {
@@ -203,7 +254,9 @@ describe("devLinkTarget", () => {
       insecureKey: "0123456789abcdef",
       pane: "lola-fe-42",
     });
-    expect(seen).toEqual([["launch", { pane: "lola-fe-42", session: "lola-fe-42" }]]);
+    expect(seen).toEqual([
+      ["launch", { ...NOWHERE, pane: "lola-fe-42", session: "lola-fe-42" }],
+    ]);
     off();
   });
 });

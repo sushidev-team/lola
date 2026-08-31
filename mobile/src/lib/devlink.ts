@@ -32,8 +32,10 @@
 // a URL; nobody can make this app connect without somebody looking at what it
 // is about to connect to.
 
+import { TRIAGE_FILTERS } from "$lib/filters";
 import { DEFAULT_REMOTE_PORT } from "./endpoint";
 import { normalizePin, type PairPayload, type PairSource } from "./pairpayload";
+import { isSheetName, type SheetName } from "./sheets";
 
 /** `LolaDevLinkEvent`, as much of it as this module reads. */
 export interface DevLinkEvent {
@@ -46,6 +48,12 @@ export interface DevLinkEvent {
   pane?: string;
   /** The session that pane belongs to. Defaults to `pane`. */
   session?: string;
+  /** A triage bucket to filter the session list by. See `DevLinkTarget`. */
+  triage?: string;
+  /** A free-text search to apply to the session list. */
+  query?: string;
+  /** A sheet to open on arrival: filter, connection or view. */
+  sheet?: string;
 }
 
 /**
@@ -62,10 +70,35 @@ export interface DevLinkEvent {
  * connected, so it rides inside the fence rather than widening it, and a routed
  * `link` still only fills the form — the target is applied by whichever connect
  * actually succeeded, exactly like the banner flag.
+ *
+ * IT COVERS MORE THAN A PANE NOW, for exactly the reason it covered a pane in
+ * the first place. The filter overlay, the connection settings and the
+ * terminal's view settings are each reachable only by a tap, and a tap is the
+ * one thing a Simulator cannot be asked to perform — so a review of those three
+ * screens had to be conducted from unit tests, with no picture of any of them.
+ * `triage`, `query` and `sheet` put them at the end of a link. Each is still
+ * only a place the person holding the phone could have gone by tapping: no
+ * credential, no command, nothing that is not already one gesture away.
  */
 export interface DevLinkTarget {
+  /** The pane to attach to, or "" to land on the session list. */
   pane: string;
+  /** The session that pane belongs to. "" when there is no pane. */
   session: string;
+  /**
+   * A triage bucket, already matched against the real vocabulary, or "".
+   *
+   * The list is `$lib/filters`'s TRIAGE_FILTERS, which is derived from
+   * theme.ts's KANBAN_COLUMNS, which is a port of Go's state.KanbanColumns.
+   * Matching HERE rather than in the plugin is what keeps the vocabulary in one
+   * place: a bucket title spelled into Swift would be a third copy of a list the
+   * repository deliberately keeps in two.
+   */
+  triage: string;
+  /** A free-text search for the list, or "". */
+  query: string;
+  /** A sheet to open once the destination is reached, or "". */
+  sheet: SheetName;
 }
 
 interface DevLinkCapablePlugin {
@@ -111,10 +144,39 @@ export function devLinkSource(e: DevLinkEvent | null | undefined): PairSource {
  * the offer instead.
  */
 export function devLinkTarget(e: DevLinkEvent | null | undefined): DevLinkTarget | null {
-  const pane = typeof e?.pane === "string" ? e.pane.trim() : "";
-  if (pane === "") return null;
-  const session = typeof e?.session === "string" ? e.session.trim() : "";
-  return { pane, session: session || pane };
+  const pane = text(e?.pane);
+  const session = text(e?.session);
+  const triage = matchTriage(text(e?.triage));
+  const query = text(e?.query);
+  const rawSheet = text(e?.sheet).toLowerCase();
+  const sheet: SheetName = isSheetName(rawSheet) ? rawSheet : "";
+
+  // A destination with nothing in it is not a destination. Every field is
+  // optional and independent — a link may ask only for a filter, only for a
+  // sheet, or for a pane with neither — so the emptiness test is over all of
+  // them rather than over `pane` alone, which is what it used to be.
+  if (pane === "" && triage === "" && query === "" && sheet === "") return null;
+
+  return { pane, session: pane === "" ? "" : session || pane, triage, query, sheet };
+}
+
+function text(v: unknown): string {
+  return typeof v === "string" ? v.trim() : "";
+}
+
+/**
+ * A triage bucket from a link, matched against the real list, or "".
+ *
+ * Case-insensitive because a bucket title is display text with a capital and a
+ * space ("Needs you") and a link is typed on a command line. FAILS CLOSED
+ * toward no filter: an unmatched value would otherwise be handed to `triaged`,
+ * which would match no session at all and show an empty list — a link that
+ * silently shows nothing is worse than one that silently filters nothing.
+ */
+function matchTriage(raw: string): string {
+  if (raw === "") return "";
+  const want = raw.toLowerCase();
+  return TRIAGE_FILTERS.find((t) => t.toLowerCase() === want) ?? "";
 }
 
 export function devLinkToPayload(e: DevLinkEvent | null | undefined): PairPayload | null {

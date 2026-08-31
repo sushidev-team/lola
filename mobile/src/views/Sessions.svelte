@@ -3,8 +3,9 @@
   import { triaged } from "$lib/filters";
   import { attentionCount } from "$lib/theme";
   import SessionRow from "@mobile/lib/components/SessionRow.svelte";
-  import TriageChips from "@mobile/lib/components/TriageChips.svelte";
   import TouchButton from "@mobile/lib/components/TouchButton.svelte";
+  import FilterSheet from "@mobile/lib/components/FilterSheet.svelte";
+  import ConnectionSheet from "@mobile/lib/components/ConnectionSheet.svelte";
   import { connection } from "@mobile/lib/connection.svelte";
   import { nav, paneNameFor } from "@mobile/lib/nav.svelte";
   import { searchSessions } from "@mobile/lib/search";
@@ -34,6 +35,25 @@
   );
   const needsYou = $derived(attentionCount(store.sessions));
 
+  const filtered = $derived(nav.triage !== "" || nav.query !== "");
+
+  /**
+   * The filter button's accessible name, and it changes with the filter.
+   *
+   * A dot is enough for a sighted user to know something is on; it says nothing
+   * about WHAT, and to VoiceOver it says nothing at all — `aria-hidden` decoration
+   * on a button whose name never moves. So the name carries the state. It is the
+   * one guarantee this control owes the list: a filtered list must never be
+   * mistakable for a short one, on either surface.
+   */
+  const filterLabel = $derived.by(() => {
+    if (!filtered) return "Filters";
+    const parts: string[] = [];
+    if (nav.triage) parts.push(`showing ${nav.triage}`);
+    if (nav.query) parts.push(`searching ${nav.query}`);
+    return `Filters active — ${parts.join(", ")}`;
+  });
+
   let keyboardInset = $state(0);
   let offKeyboard: (() => void) | undefined;
   onMount(() => {
@@ -43,38 +63,19 @@
     offKeyboard?.();
   });
 
-  /**
-   * DISCONNECTING AND FORGETTING ARE DIFFERENT, and the sheet exists so both
-   * are reachable.
-   *
-   * `disconnect()` sets a flag that lives as long as the process. The stored
-   * key does not: it is in the Keychain, and iOS reclaims a backgrounded app
-   * freely — so an explicit disconnect followed by a relaunch went straight
-   * back to an authenticated session list. The user's decision to leave was the
-   * one thing that was NOT durable, while the credential was.
-   *
-   * There was also no way to remove a key at all. `forgetKey` existed with a
-   * doc comment naming a control called "Forget this daemon" and had no call
-   * sites; every address that ever worked left a permanent item behind, and a
-   * key the daemon had since rolled sat there looking live.
-   */
-  let leaving = $state(false);
+  // WHICH SHEET IS OPEN LIVES IN `nav`, not here. It was two locals; naming the
+  // state is what lets a development link land on an open sheet, which is the
+  // only way those overlays can be photographed at all — the Simulator has no
+  // gesture API, so a screen reachable solely by a tap is a screen a reviewer
+  // must judge from unit tests. See lib/sheets.ts.
+  const settingsOpen = $derived(nav.sheet === "connection");
+  const filterOpen = $derived(nav.sheet === "filter");
 
   async function leave(forget: boolean) {
-    leaving = false;
+    nav.closeSheet();
     if (forget) await connection.forget();
     await connection.disconnect();
     nav.toConnect();
-  }
-
-  let refreshing = $state(false);
-  async function refresh() {
-    refreshing = true;
-    try {
-      await store.refresh();
-    } finally {
-      refreshing = false;
-    }
   }
 </script>
 
@@ -91,43 +92,107 @@
     <div class="flex min-w-0 flex-col">
       <!-- text-2xl is the phone's large-title step. -->
       <span class="truncate text-2xl font-medium text-ink">Sessions</span>
-      <span class="text-sm text-faint">
+      <!-- ONE LINE, CLIPPED. Everything after the count is user-supplied — a
+           triage name and, in quotes, whatever was typed into the search field
+           — and this span had no truncation while the title above it did. A
+           long search term wrapped and GREW the header, pushing the list down,
+           which is the opposite of what moving the filters behind a button was
+           for. The button's accessible name carries the same state in full, so
+           nothing is lost by clipping the visible copy. -->
+      <span class="truncate text-sm text-faint">
         {#if needsYou > 0}
           <span class="text-orange">{needsYou} need you</span> ·
         {/if}
         <!-- "observed" is the daemon's observer-loop word and nothing in this
-             app teaches it; the noun it counts was missing as well. -->
-        {store.sessions.length}
-        {store.sessions.length === 1 ? "session" : "sessions"}
-        <!-- THE ACTIVE FILTER IS NAMED HERE, not only on the chip. Six buckets
-             are wider than a phone, so the strip is always scrolled — and
-             scrolled to the far end, the one chip with a filled background is
-             off to the left and nothing on the screen says what the list below
-             is showing. The chip strip additionally scrolls its selection back
-             into view whenever the filter CHANGES; this covers the other half,
-             where the user scrolls away from a selection they already made. -->
+             app teaches it; the noun it counts was missing as well.
+
+             THE FILTERED COUNT NAMES BOTH NUMBERS. The chips and the search
+             field now live behind a button, so the only thing on screen saying
+             the list is cut is this line and the button's dot. "2 sessions"
+             over two rows is indistinguishable from a quiet morning; "2 of 7
+             sessions" is not, and it is the same promise the sheet's own tally
+             makes from the other side. -->
+        {#if filtered}
+          {rows.length} of {store.sessions.length}
+          {store.sessions.length === 1 ? "session" : "sessions"}
+        {:else}
+          {store.sessions.length}
+          {store.sessions.length === 1 ? "session" : "sessions"}
+        {/if}
+        <!-- THE ACTIVE FILTER IS NAMED HERE as well as on the button, because
+             the button can only carry a dot at this size. -->
         {#if nav.triage}
           · <span class="text-ink">{nav.triage}</span>
         {/if}
+        {#if nav.query}
+          · <span class="text-ink">“{nav.query}”</span>
+        {/if}
       </span>
     </div>
-    <!-- NEITHER CONTROL IS A UNICODE GLYPH ANY MORE, and the second one is why.
-         Disconnect was drawn as U+23FB, the power symbol, which universally
-         means "shut down" — on the one client PLAN.md forbids from ever
-         stopping the daemon ("a phone that stops the daemon severs the only
-         link it has back"). The two glyphs also came from different fallback
-         fonts, so they rendered at visibly different weights and heights. A
-         word says what this does; the refresh mark is a real vector at the same
-         stroke weight as everything else. -->
+
+    <!-- TWO ICONS, EACH WITH ONE SUBJECT. What was here before was a Refresh
+         mark and the word "Disconnect", and neither named what it acted on, so
+         both read as daemon controls — which this app has none of and must never
+         grow (PLAN.md: "a phone that stops the daemon severs the only link it
+         has back"). Refresh is gone outright: the list polls, and a manual
+         button beside a live list is an invitation to distrust the polling.
+         Disconnect moved into the settings sheet, where it can afford to name
+         the Mac it leaves. -->
     <div class="ml-auto flex shrink-0 items-center gap-1">
-      <TouchButton icon aria-label="Refresh" loading={refreshing} onclick={refresh}>
-        <svg viewBox="0 0 24 24" class="size-5" fill="none" stroke="currentColor"
-          stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <path d="M20 12a8 8 0 1 1-2.34-5.66" />
-          <path d="M20 4v4.5h-4.5" />
+      <TouchButton icon aria-label={filterLabel} onclick={() => nav.openSheet("filter")}>
+        <span class="relative inline-flex">
+          <svg
+            viewBox="0 0 24 24"
+            class="size-5"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.8"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <path d="M21 4H3l7.2 8.5V19l3.6 1.8v-8.3z" />
+          </svg>
+          {#if filtered}
+            <!-- Decoration only: the state it marks is already in the button's
+                 accessible name and in the subtitle above it. -->
+            <span
+              class="absolute -right-1.5 -top-1 size-2.5 rounded-full border border-canvas bg-accent"
+              aria-hidden="true"
+            ></span>
+          {/if}
+        </span>
+      </TouchButton>
+
+      <!-- A MAC, NOT A GEAR, and the name says which one. The sheet behind this
+           button is about the link to one machine — it says "Connected to
+           <host>" and its action is "Disconnect from <host>" — but a gear
+           beside a funnel on a screen titled "Sessions" reads as list or
+           display settings, so the control's subject only appeared after it was
+           opened. The glyph now states the subject (a computer) and the
+           accessible name states the instance, which is the half a sighted
+           user gets from the sheet and a VoiceOver user got from nowhere.
+           `connection.label` is the host, or "the daemon" before one is
+           known. -->
+      <TouchButton
+        icon
+        aria-label="Connection settings — connected to {connection.label}"
+        onclick={() => nav.openSheet("connection")}
+      >
+        <svg
+          viewBox="0 0 24 24"
+          class="size-5"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.7"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <rect x="2.5" y="4" width="19" height="12.5" rx="1.8" />
+          <path d="M9 20.5h6M12 16.5v4" />
         </svg>
       </TouchButton>
-      <TouchButton onclick={() => (leaving = true)}>Disconnect</TouchButton>
     </div>
   </header>
 
@@ -147,23 +212,6 @@
     </div>
   {/if}
 
-  <TriageChips bind:value={nav.triage} sessions={all} />
-
-  <div class="shrink-0 px-3 py-2">
-    <input
-      class="w-full rounded border border-edge bg-panel px-3 py-2.5 text-base text-ink outline-none
-             focus:border-accent placeholder:text-placeholder"
-      type="search"
-      inputmode="search"
-      autocapitalize="none"
-      autocorrect="off"
-      spellcheck="false"
-      aria-label="Search sessions"
-      placeholder="Filter by issue, title or project"
-      bind:value={nav.query}
-    />
-  </div>
-
   <div class="min-h-0 flex-1 overflow-y-auto overscroll-contain">
     {#each rows as s (s.id)}
       <SessionRow
@@ -179,7 +227,7 @@
       <div class="flex flex-col items-center gap-2 px-8 py-12 text-center">
         {#if !store.connected}
           <span class="text-faint">Connecting…</span>
-        {:else if nav.query || nav.triage}
+        {:else if filtered}
           <span class="text-faint">Nothing matches that filter.</span>
           <TouchButton
             onclick={() => {
@@ -198,54 +246,17 @@
     <div style="height: env(safe-area-inset-bottom, 0px)"></div>
   </div>
 </div>
-{#if leaving}
-  <!-- A plain overlay rather than the desktop's `confirm` store: that store and
-       its dialog live in the shared library, are keyboard-first, and this is
-       the only modal on the phone. `role="dialog"` with the backdrop as a
-       labelled dismiss target keeps it reachable without importing any of it. -->
-  <div class="fixed inset-0 z-50 flex flex-col justify-end bg-black/50 p-3">
-    <button
-      type="button"
-      class="absolute inset-0"
-      aria-label="Cancel"
-      onclick={() => (leaving = false)}
-    ></button>
-    <div
-      class="panel relative flex flex-col gap-3 p-4"
-      role="dialog"
-      aria-modal="true"
-      aria-label="Disconnect"
-      style="margin-bottom: env(safe-area-inset-bottom, 0px)"
-    >
-      <div class="flex flex-col gap-1">
-        <span class="text-ink">Disconnect from {connection.label}</span>
-        <span class="copy text-sm text-faint">
-          {#if connection.hasStoredKey}
-            This Mac stays remembered and the app reconnects on its own next time. Forgetting it
-            removes the access key from this phone's Keychain as well, and pairing has to be done
-            again.
-          {:else}
-            Nothing is stored for this Mac, so the next launch starts at the pairing screen.
-          {/if}
-        </span>
-      </div>
-      <TouchButton wide variant="secondary" onclick={() => void leave(false)}>
-        Disconnect
-      </TouchButton>
-      {#if connection.hasStoredKey}
-        <!-- `text-bad!` is not decoration and the `!` is not optional. The shared
-             Button's `danger` variant is `text-faint` at REST and only turns red
-             on hover — which on a phone never happens, so the destructive choice
-             rendered in exactly the same ink as "Disconnect" above it. The
-             trailing `!` is CLAUDE.md's documented rule: a plain `text-bad` has
-             the same specificity as the variant's `text-faint` and the winner
-             would be decided by Tailwind's order in the compiled sheet. -->
-        <TouchButton wide variant="danger" class="text-bad!" onclick={() => void leave(true)}>
-          Forget this Mac
-        </TouchButton>
-      {/if}
-      <TouchButton wide onclick={() => (leaving = false)}>Cancel</TouchButton>
-    </div>
-  </div>
+
+{#if filterOpen}
+  <FilterSheet
+    bind:triage={nav.triage}
+    bind:query={nav.query}
+    sessions={all}
+    matched={rows.length}
+    onclose={() => nav.closeSheet()}
+  />
 {/if}
 
+{#if settingsOpen}
+  <ConnectionSheet onleave={(forget) => void leave(forget)} onclose={() => nav.closeSheet()} />
+{/if}

@@ -14,6 +14,8 @@
 // KANBAN_COLUMNS, which is a port of Go's state.KanbanColumns(). A second
 // partition on the phone would be a third mirror of the same list.
 
+import type { SheetName } from "./sheets";
+
 export type Screen = "connect" | "sessions" | "terminal";
 
 class Nav {
@@ -35,14 +37,47 @@ class Nav {
   /** Free-text filter over issue key, title and project. */
   query = $state("");
 
+  /**
+   * Which sheet is open, or "".
+   *
+   * IT LIVES HERE RATHER THAN IN THE SCREEN that draws it, which is a change
+   * from three separate `let open = $state(false)` locals. The reason is not
+   * tidiness: a sheet only a tap can open is a sheet no script can reach, and
+   * the Simulator has no gesture API — so the filter overlay, the connection
+   * settings and the terminal's view settings were the three surfaces a
+   * reviewer could not photograph at all. Naming the open sheet makes it a
+   * place the app can be in, which a development link can then ask for (see
+   * devlink.ts). The screens still own the CONTENT; they no longer own the
+   * question of whether it is up.
+   *
+   * Only ever one at a time, which is already true of a modal.
+   */
+  sheet = $state<SheetName>("");
+
+  /** Open a sheet by name. */
+  openSheet(name: SheetName): void {
+    this.sheet = name;
+  }
+
+  /** Close whatever is open. Safe when nothing is. */
+  closeSheet(): void {
+    this.sheet = "";
+  }
+
   toConnect(): void {
     this.screen = "connect";
+    this.sheet = "";
   }
 
   toSessions(): void {
     this.screen = "sessions";
     this.paneSession = "";
     this.pane = "";
+    // A sheet belongs to the screen it was opened over. Leaving one set across
+    // a navigation would pop the terminal's view settings open on the list, or
+    // the list's filter sheet over a terminal — the sheets are per-screen and
+    // only the screen that draws one can close it.
+    this.sheet = "";
   }
 
   /**
@@ -57,6 +92,7 @@ class Nav {
     this.paneSession = sessionId;
     this.pane = pane;
     this.screen = "terminal";
+    this.sheet = "";
   }
 
   /** The one back action. Every screen except `connect` has exactly one parent. */
