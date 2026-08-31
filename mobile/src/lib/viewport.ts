@@ -308,3 +308,49 @@ export function visibleColumns(box: PanBox, cols: number): number {
   if (cell <= 0) return 0;
   return Math.min(cols, Math.max(1, Math.floor(box.viewWidth / cell)));
 }
+
+/**
+ * The FIRST grid column visible at a given horizontal pan, 1-based.
+ *
+ * WHY A RANGE AND NOT A COUNT. `visibleColumns` answers "how much of the grid is
+ * on screen", which is the truncation warning. It cannot answer "where am I",
+ * and on a 211-column grid seen 43 columns at a time that is five screens with
+ * nothing to distinguish them: the far left and the middle rendered identically,
+ * chip and header included. The pair (first, first + shown - 1) is the whole
+ * fix, and it is arithmetic rather than DOM so it is pinned here.
+ *
+ * Clamped into the grid at both ends, because `pan.x` is clamped against a box
+ * that is re-measured a frame later than the font that changed it.
+ */
+export function firstVisibleColumn(box: PanBox, cols: number, panX: number): number {
+  if (box.contentWidth <= 0 || cols <= 0) return 1;
+  const cell = box.contentWidth / cols;
+  if (cell <= 0) return 1;
+  const shown = visibleColumns(box, cols);
+  const first = Math.floor(Math.max(0, panX) / cell) + 1;
+  return Math.min(Math.max(1, first), Math.max(1, cols - shown + 1));
+}
+
+/**
+ * The height, in pixels, of the PARTIAL text row at the bottom of the viewport.
+ *
+ * The grid is a fixed number of rows at a fixed cell height and the frame is
+ * whatever is left over after the header and the accessory bar, so the two
+ * almost never divide. Opening the bar's second key row shrinks the frame by
+ * about 44 points and the last visible line is then cut horizontally THROUGH
+ * its glyphs — which reads as a rendering fault rather than as more content
+ * below.
+ *
+ * Masking that strip in the pane's own background turns a bisected line into an
+ * absent one, which is the truth. Returns 0 when the rows happen to divide
+ * evenly, and 0 for any unmeasured input, so the mask costs nothing until there
+ * is something to hide.
+ */
+export function partialRowHeight(panY: number, viewHeight: number, cellHeight: number): number {
+  if (!(cellHeight > 0) || !(viewHeight > 0)) return 0;
+  const bottom = Math.max(0, panY) + viewHeight;
+  const rest = bottom % cellHeight;
+  // A hair under a whole row is a rounding artefact of a fractional cell, not a
+  // sliced glyph; masking it would eat a row that is fully drawn.
+  return rest < 0.5 || cellHeight - rest < 0.5 ? 0 : rest;
+}

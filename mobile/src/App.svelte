@@ -106,11 +106,14 @@
       try {
         bootMessage = "Checking for a saved connection…";
         const prev = await connection.restore();
-        if (!prev || prev.key === "") return;
+        // Either half is a pairing: `key` for a Keychain that refused and left
+        // it in memory, `keyRef` for the ordinary case where the plugin holds
+        // it and the plaintext deliberately never crosses the bridge.
+        if (!prev || (prev.key === "" && prev.keyRef === "")) return;
         // Name the endpoint being dialled. A boot that hangs here is the case
         // where knowing WHICH daemon is unreachable is the whole diagnosis.
         bootMessage = `Connecting to ${prev.draft.host}:${prev.draft.port}…`;
-        if (await connection.connect(prev.draft, prev.key, false)) {
+        if (await connection.connect(prev.draft, prev.key, false, [], prev.keyRef)) {
           void store.refresh();
           nav.toSessions();
         } else if (connection.diagnosis.retryable) {

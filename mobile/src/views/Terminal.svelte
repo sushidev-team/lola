@@ -41,6 +41,29 @@
   let barRef = $state<ReturnType<typeof AccessoryBar> | undefined>();
 
   let modes = $state<TerminalModes>(DEFAULT_MODES);
+  /**
+   * The one sentence a dead pane gets, in English.
+   *
+   * `unknown_pane: pane is not available` is the daemon's own wire vocabulary
+   * and was rendered verbatim in a red banner. A person holding a phone cannot
+   * act on a protocol code, and the code is the least useful half of it: the
+   * fact is that this session's pane is gone, which is ordinary — a session was
+   * killed, or a worktree cleaned up — rather than an error in the app.
+   *
+   * Only the codes with a plain-English equivalent are translated. Anything
+   * else is shown as it came, because inventing a sentence for a failure lola
+   * does not recognize is how a diagnosable problem becomes an undiagnosable
+   * one.
+   */
+  function humanError(message: string): string {
+    if (/^unknown_pane\b/.test(message)) {
+      return "This session's terminal is gone. It was closed on the Mac, or the session was cleaned up.";
+    }
+    if (/^not connected\b/.test(message)) {
+      return "Not connected to the Mac.";
+    }
+    return message;
+  }
   // Seeded from the SAME source the terminal seeds itself from, rather than 0
   // or the bare default: the font buttons read this to decide whether they are
   // at a limit, so a 0 would draw "smaller" as disabled from the moment the
@@ -49,7 +72,16 @@
   // self-corrects on the terminal's first `onstate`; seeding it right just
   // means there is no frame where it is wrong.
   let font = $state(loadFontSize());
-  let geom = $state({ cols: 0, rows: 0, shown: 0, panning: false });
+  let geom = $state({
+    cols: 0,
+    rows: 0,
+    shown: 0,
+    first: 1,
+    panning: false,
+    canFit: false,
+    fitActive: false,
+    fitSize: 0,
+  });
   let exited = $state(false);
   let error = $state("");
   let keyboardInset = $state(0);
@@ -103,22 +135,54 @@
       <span class="truncate font-medium text-ink">
         {session?.issue || nav.paneSession}
       </span>
+      <!-- THE RANGE, NOT THE COUNT. `43/211x44` says how much is on screen and
+           nothing about where: five consecutive screens of a 211-column grid
+           read identically. `44-86 of 211` says where the window is, which is
+           the only question panning raises. It collapses to the plain grid size
+           when nothing is clipped. -->
       <span class="num truncate text-sm text-faint">
-        {geom.cols > 0 ? `${geom.shown}/${geom.cols}×${geom.rows}` : nav.pane}
+        {#if geom.cols > 0 && geom.panning}
+          {geom.first}–{Math.min(geom.cols, geom.first + geom.shown - 1)} of {geom.cols}×{geom.rows}
+        {:else if geom.cols > 0}
+          {geom.cols}×{geom.rows}
+        {:else if error}
+          <!-- The tmux name is a debugging handle, not a subtitle. With no grid
+               to report it was all this line had, so a screen whose whole point
+               is "this pane is gone" led with `lola-nori-app-nor-311`. -->
+          No terminal
+        {:else}
+          {nav.pane}
+        {/if}
       </span>
     </div>
     <div class="ml-auto flex shrink-0 items-center gap-1">
-      {#if session}<StatusPill status={session.status} />{/if}
+      {#if session && !exited}<StatusPill status={session.status} />{/if}
+      <!-- The fit-width zoom lives HERE rather than over the pane. As a chip
+           pinned to the pane's top-right corner it permanently covered the
+           first line of live output — a phone always clips a developer's grid,
+           so it was never not up — and it was drawn identically whether it was
+           a button or a caption. In the header it is unmistakably a control,
+           and it is hidden rather than disabled when there is no smaller size
+           to offer, because a dead control is worse than none. -->
+      {#if !exited && (geom.canFit || geom.fitActive)}
+        <TouchButton
+          icon
+          aria-label={geom.fitActive
+            ? "Back to the reading text size"
+            : `Zoom out to ${geom.fitSize} point text to see more of the grid. This changes only this phone's view; the pane keeps its size.`}
+          onclick={() => termRef?.toggleFit()}>{geom.fitActive ? "⤢" : "⤡"}</TouchButton
+        >
+      {/if}
       <TouchButton
         icon
         aria-label="Smaller text"
-        disabled={font <= FONT_MIN}
+        disabled={exited || font <= FONT_MIN}
         onclick={() => setFont(-1)}>A−</TouchButton
       >
       <TouchButton
         icon
         aria-label="Larger text"
-        disabled={font >= FONT_MAX}
+        disabled={exited || font >= FONT_MAX}
         onclick={() => setFont(1)}>A+</TouchButton
       >
     </div>
@@ -126,7 +190,7 @@
 
   {#if error}
     <div class="shrink-0 border-b border-bad/40 bg-bad/10 px-4 py-2 text-sm text-bad" role="status">
-      {error}
+      {humanError(error)}
     </div>
   {/if}
 
@@ -151,11 +215,30 @@
         onstate={(st) => {
           modes = st.modes;
           font = st.font;
-          geom = { cols: st.cols, rows: st.rows, shown: st.shown, panning: st.panning };
+          geom = {
+            cols: st.cols,
+            rows: st.rows,
+            shown: st.shown,
+            first: st.first,
+            panning: st.panning,
+            canFit: st.canFit,
+            fitActive: st.fitActive,
+            fitSize: st.fitSize,
+          };
         }}
       />
     {/key}
   </div>
 
-  <AccessoryBar bind:this={barRef} {modes} onsend={(bytes) => termRef?.send(bytes)} />
+  <!-- DEAD MEANS DEAD, and the bar has to say so. A full-strength row of keys
+       under a pane that cannot receive a byte is the app claiming an ability it
+       does not have; `disabled` fades it and refuses every press, including the
+       repeat. -->
+  <AccessoryBar
+    bind:this={barRef}
+    {modes}
+    disabled={exited || error !== ""}
+    raised={keyboardInset > 0}
+    onsend={(bytes) => termRef?.send(bytes)}
+  />
 </div>

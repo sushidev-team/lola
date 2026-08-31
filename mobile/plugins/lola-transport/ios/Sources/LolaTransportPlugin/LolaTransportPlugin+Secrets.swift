@@ -14,13 +14,38 @@ import LolaTransportCore
 /// the bridge exactly twice in its life: once when a human types or scans it,
 /// and once on each read at reconnect.
 ///
-/// A MISSING KEY RESOLVES, IT DOES NOT REJECT. `secretGet` answers
-/// `{ value: null }` when there is no item, because a first launch is not an
+/// A MISSING KEY RESOLVES, IT DOES NOT REJECT. `secretHas` answers
+/// `{ has: false }` when there is no item, because a first launch is not an
 /// error and a call site that has to read a code to tell "nothing stored yet"
 /// from "the keychain is broken" is a call site that renders the first one as a
 /// red banner. This is the same rule `scanQR` follows for cancellation.
 ///
-/// NOTHING HERE LOGS A VALUE, and no rejection message carries one. The
+/// -------------------------------------------------------------------------
+/// NOTHING HERE EVER RETURNS THE VALUE, AND THAT IS A FIX, NOT A STYLE.
+///
+/// This file used to expose `secretGet`, resolving `{ value: <the key> }` so
+/// the connect store could pass it to `connect`. It could not be made safe by
+/// being careful in this file, because the leak is one layer down: Capacitor's
+/// bridge logs every resolved payload —
+///
+///     let resultJson = result.jsonPayload()
+///     CAPLog.print("⚡️  TO JS", resultJson.prefix(256))
+///
+/// — so the bearer key was printed in cleartext to the app's console on every
+/// launch of every Debug build. That was verified on a simulator against the
+/// daemon's real `~/.lola/remote.key`, not reasoned about. `CAPLog` is off in a
+/// Release configuration, but Debug is the only configuration this project
+/// builds today, and the line reaches Xcode's console, `cap run ios`, the
+/// simulator run script, and anything pasted or screen-shared out of them.
+///
+/// So the read moved to the side that needs it: `connect` takes a `keyRef` (an
+/// endpoint id — an address, not a secret) and reads the Keychain in Swift.
+/// What is left here is the question the WebView actually has, which is whether
+/// a key exists at all. A boolean cannot leak a credential no matter what logs
+/// it.
+/// -------------------------------------------------------------------------
+///
+/// NOTHING HERE LOGS A VALUE either, and no rejection message carries one. The
 /// failures name an `OSStatus` and stop; see `LolaKeychain.describe`.
 extension LolaTransportPlugin {
 
@@ -54,8 +79,15 @@ extension LolaTransportPlugin {
         }
     }
 
-    /// Read one key back, or `null`.
-    @objc func secretGet(_ call: CAPPluginCall) {
+    /// Whether a key is stored for one endpoint. Never the key itself.
+    ///
+    /// A read failure answers `false` rather than rejecting. The caller's only
+    /// use for this is deciding whether to offer a reconnect or a form, and a
+    /// keychain that cannot be read is, for that purpose, one with nothing in
+    /// it — while a rejection would put a red banner in front of a user whose
+    /// remedy is to type the key they were going to have to type anyway. The
+    /// `OSStatus` is logged so the difference is still diagnosable.
+    @objc func secretHas(_ call: CAPPluginCall) {
         guard let account = call.getString("key"), !account.isEmpty else {
             call.reject("key is required", Self.keychainErrorCode)
             return
@@ -63,14 +95,14 @@ extension LolaTransportPlugin {
 
         switch LolaKeychain.read(account: account) {
         case .value(let value):
-            // The value crosses the bridge; it does not go anywhere else. There
-            // is no log line here on purpose, not even a length.
-            call.resolve(["value": value])
+            // The BOOLEAN crosses the bridge. The value does not, and must not:
+            // see the note at the top of this file.
+            call.resolve(["has": !value.isEmpty])
         case .missing:
-            call.resolve(["value": NSNull()])
+            call.resolve(["has": false])
         case .failed(let status):
             LolaLog.warn("keychain: read failed (OSStatus \(status))")
-            call.reject(LolaKeychain.describe(status), Self.keychainErrorCode)
+            call.resolve(["has": false])
         }
     }
 

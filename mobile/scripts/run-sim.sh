@@ -21,8 +21,15 @@
 # Note that a Simulator shares the Mac's loopback, so 127.0.0.1 in the connect
 # screen reaches a daemon bound to localhost with no forwarding at all. That is
 # why this is the first thing to try, and why it is the fastest loop.
+#
+# Safari's Web Inspector is enabled for these builds and only for these builds:
+# capacitor.config.ts reads LOLA_WEB_INSPECTOR at sync time, and it defaults off
+# so that a build carrying a durable Keychain credential does not ship with a
+# debugger attached by default. Set LOLA_WEB_INSPECTOR=0 to build without it.
 
 set -eu
+
+export LOLA_WEB_INSPECTOR="${LOLA_WEB_INSPECTOR:-1}"
 
 cd "$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 

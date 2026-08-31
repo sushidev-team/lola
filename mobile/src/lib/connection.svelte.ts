@@ -40,7 +40,15 @@ import type {
 import { INSECURE_MIN_KEY_LEN } from "@mobile/wire/protocol";
 import { diagnose, type Diagnosis } from "./diagnose";
 import { endpointId, parsePort, validateDraft, type EndpointDraft, type EndpointProblem } from "./endpoint";
-import { loadEndpoint, loadKey, saveEndpoint, storeKey } from "./secretstore";
+import {
+  clearEndpoint,
+  findKey,
+  forgetKey,
+  loadEndpoint,
+  saveEndpoint,
+  storeKey,
+  type KeyStorage,
+} from "./secretstore";
 
 export { INSECURE_MIN_KEY_LEN };
 
@@ -65,6 +73,17 @@ export class Connection {
   busy = $state(false);
   /** Whether a stored key was found for the remembered endpoint. */
   hasStoredKey = $state(false);
+  /**
+   * Where the key for the current endpoint actually ended up.
+   *
+   * Read by the connect screen's "Remember this Mac" caption, which used to be
+   * driven by `isPersistent()` — a statement about what the plugin CAN do, not
+   * about what this write DID. A refusing Keychain drops the key into an
+   * in-memory map, and the caption went on promising it would survive a
+   * relaunch. The fallback stays (losing the running session over a Keychain
+   * failure would be worse); the claim does not.
+   */
+  keyStorage = $state<KeyStorage>("none");
 
   /**
    * True while an AUTOMATIC reconnect is in flight, as opposed to `busy`, which
@@ -217,15 +236,26 @@ export class Connection {
    * localStorage; the key is in the Keychain and is only ever read here, into a
    * local, on the way to `connect`.
    */
-  async restore(): Promise<{ draft: EndpointDraft; key: string } | null> {
+  async restore(): Promise<{
+    draft: EndpointDraft;
+    key: string;
+    /** The Keychain account to read the key from, when it is not in `key`. */
+    keyRef: string;
+  } | null> {
     const saved = loadEndpoint();
     if (!saved) return null;
     const port = saved.port || 0;
-    const key = await loadKey(endpointId(saved.host, port));
-    this.hasStoredKey = key !== "";
+    const id = endpointId(saved.host, port);
+    const found = await findKey(id);
+    this.hasStoredKey = found.where !== "none";
+    this.keyStorage = found.where;
     return {
       draft: { host: saved.host, port: port ? String(port) : "", spkiPin: saved.spkiPin },
-      key,
+      // Empty for a Keychain-held key, and deliberately so: the plaintext has
+      // no way back across the bridge, because a resolved payload is logged.
+      // `keyRef` is how it is used instead. See secretstore.ts.
+      key: found.key,
+      keyRef: found.where === "keychain" ? id : "",
     };
   }
 
@@ -241,8 +271,17 @@ export class Connection {
     key: string,
     remember: boolean,
     alternates: readonly string[] = [],
+    /**
+     * The Keychain account holding the key, when the caller does not have the
+     * key itself. Supplied by `restore()` on every automatic reconnect; the
+     * plugin reads it natively. See secretstore.ts for why the plaintext is
+     * not passed back through the WebView.
+     */
+    keyRef = "",
   ): Promise<boolean> {
-    this.problems = validateDraft(draft, key, INSECURE_MIN_KEY_LEN);
+    // A key held natively is a key that IS there; validating a string the
+    // caller was deliberately not given would refuse every reconnect.
+    this.problems = validateDraft(draft, key, INSECURE_MIN_KEY_LEN, keyRef !== "");
     if (this.problems.length > 0) return false;
 
     // Any connect is a statement of intent to be connected, so it revokes an
@@ -279,7 +318,7 @@ export class Connection {
     this.busy = true;
     try {
       for (const host of hosts) {
-        const endpoint: Endpoint = { host, port, spkiPin: pin, insecureKey: key };
+        const endpoint: Endpoint = { host, port, spkiPin: pin, insecureKey: key, keyRef };
 
         // Show the target while connecting, so the failure sentence can name it
         // even if the transport never reports a status at all.
@@ -290,12 +329,16 @@ export class Connection {
 
         try {
           await t.connect(endpoint);
-          if (remember) {
+          if (remember && key !== "") {
             // Remember the one that WORKED, not the one offered first —
             // otherwise the next launch repeats the same failed guess and pays
             // its timeout again.
             saveEndpoint({ host: endpoint.host, port, spkiPin: endpoint.spkiPin });
-            await storeKey(endpointId(endpoint.host, port), key);
+            // The OUTCOME, not the attempt: a Keychain that refused leaves the
+            // key in memory for this run only, and the connect screen has to be
+            // able to say so rather than promising a persistence that did not
+            // happen.
+            this.keyStorage = await storeKey(endpointId(endpoint.host, port), key);
             this.hasStoredKey = true;
           }
           return true;
@@ -321,6 +364,29 @@ export class Connection {
     } finally {
       this.busy = false;
     }
+  }
+
+  /**
+   * Forget this Mac: the stored key AND the remembered address.
+   *
+   * The counterpart to `remember`, and for a long time there was none — the
+   * key had no deletion path reachable from any screen, so a credential, once
+   * stored, stayed on the device for the life of the install, one item per
+   * address that had ever worked. Disconnecting did not do it either: that
+   * sets a process-local flag which dies with the app, while the credential
+   * does not, so a cold launch after an explicit disconnect went straight back
+   * to an authenticated session list.
+   *
+   * Both halves go, and in that order: a key with no endpoint is unreachable
+   * clutter, and an endpoint with no key is what an unpaired-but-remembered
+   * Mac is supposed to look like.
+   */
+  async forget(): Promise<void> {
+    const id = endpointId(this.host, this.port);
+    await forgetKey(id);
+    clearEndpoint();
+    this.hasStoredKey = false;
+    this.keyStorage = "none";
   }
 
   /** Tear the connection down. Also the correct response to backgrounding. */
@@ -402,7 +468,7 @@ export class Connection {
     // No stored key is not a failure to report and not something to retry: it
     // is the ordinary state of a device that has never paired, or one whose key
     // was forgotten on purpose. The connect screen is already the right place.
-    if (!prev || prev.key === "") return false;
+    if (!prev || (prev.key === "" && prev.keyRef === "")) return false;
 
     // THE GATES AGAIN, because `restore()` awaited — it reads the Keychain
     // across the bridge — and the window it opens is a real one. iOS posts
@@ -418,10 +484,19 @@ export class Connection {
     this.reconnecting = true;
     let ok = false;
     try {
-      ok = await this.connect(prev.draft, prev.key, false);
+      ok = await this.connect(prev.draft, prev.key, false, [], prev.keyRef);
     } finally {
       this.reconnecting = false;
     }
+
+    // A KEY THE DAEMON REFUSES IS WORSE THAN NO KEY, so it does not survive
+    // the refusal. `regenerateRemoteKey` on the Mac rolls the secret and
+    // un-pairs every phone; without this the device kept a dead credential
+    // that no screen could reach, the ladder correctly stopped retrying, and
+    // the connect form came up prefilled with an address whose stored key was
+    // silently worthless. Only a refusal that NAMES the key does this — an
+    // unreachable daemon and a pin mismatch must not cost a pairing.
+    if (!ok && this.refusal?.code === "denied") await this.forget();
 
     if (ok) {
       this.#retryStep = 0;

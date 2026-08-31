@@ -9,11 +9,13 @@ import {
   accumulateScroll,
   clampFont,
   clampPan,
+  firstVisibleColumn,
   fitWidth,
   isPanning,
   lockAxis,
   panBy,
   panLimits,
+  partialRowHeight,
   pinchFont,
   stepFont,
   takeScroll,
@@ -239,5 +241,53 @@ describe("fit width", () => {
     const zero: PanBox = { contentWidth: 0, contentHeight: 0, viewWidth: 0, viewHeight: 0 };
     expect(fitWidth(zero, 99).size).toBe(FONT_MAX);
     expect(fitWidth(zero, Number.NaN).size).toBe(FONT_DEFAULT);
+  });
+});
+
+describe("firstVisibleColumn", () => {
+  // 211 columns of 8px in a 344px viewport: 43 columns on screen.
+  const box = { contentWidth: 1688, contentHeight: 748, viewWidth: 344, viewHeight: 600 };
+
+  it("is column 1 at the left edge", () => {
+    expect(firstVisibleColumn(box, 211, 0)).toBe(1);
+  });
+
+  it("advances one column per cell of pan", () => {
+    expect(firstVisibleColumn(box, 211, 8)).toBe(2);
+    expect(firstVisibleColumn(box, 211, 800)).toBe(101);
+  });
+
+  it("never reports a first column that would run the window past the grid", () => {
+    // Panned to the far right, the window is columns 169..211, not 212..254.
+    expect(firstVisibleColumn(box, 211, 99999)).toBe(211 - 43 + 1);
+  });
+
+  it("is 1 for an unmeasured box, rather than NaN", () => {
+    expect(firstVisibleColumn({ contentWidth: 0, contentHeight: 0, viewWidth: 0, viewHeight: 0 }, 211, 40)).toBe(1);
+    expect(firstVisibleColumn(box, 0, 40)).toBe(1);
+  });
+});
+
+describe("partialRowHeight", () => {
+  it("is the leftover when the rows do not divide the viewport", () => {
+    expect(partialRowHeight(0, 500, 17)).toBeCloseTo(500 % 17);
+  });
+
+  it("counts from the panned top, not from the grid's", () => {
+    expect(partialRowHeight(4, 500, 17)).toBeCloseTo(504 % 17);
+  });
+
+  it("is 0 when the rows divide evenly", () => {
+    expect(partialRowHeight(0, 510, 17)).toBe(0);
+    expect(partialRowHeight(34, 510, 17)).toBe(0);
+  });
+
+  it("ignores a sub-pixel remainder, which is a fractional cell rather than a sliced glyph", () => {
+    expect(partialRowHeight(0, 500.2, 100.04)).toBe(0);
+  });
+
+  it("is 0 for anything unmeasured", () => {
+    expect(partialRowHeight(0, 0, 17)).toBe(0);
+    expect(partialRowHeight(0, 500, 0)).toBe(0);
   });
 });

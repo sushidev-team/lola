@@ -29,10 +29,23 @@ const config: CapacitorConfig = {
     // a rubber-band bounce that reads as the terminal coming loose.
     scrollEnabled: false,
 
-    // Safari's Web Inspector is the only debugger available on a device, and
-    // the app ships to internal TestFlight testers rather than the App Store.
-    // Turn this off if that ever changes.
-    webContentsDebuggingEnabled: true,
+    // SAFARI'S WEB INSPECTOR IS OPT-IN NOW, and the bearer key is why.
+    //
+    // It is the only debugger available on a device, so it stays easy to get:
+    // `LOLA_WEB_INSPECTOR=1 npx cap sync ios` (the dev scripts set it). It is no
+    // longer the default, because what an attached inspector can reach changed:
+    // the key is now durable in the Keychain, so somebody with a stolen
+    // UNLOCKED phone, a Mac and a cable could previously attach the inspector
+    // and evaluate a plugin call to print the credential. The plugin no longer
+    // has a method that returns it (see LolaTransportPlugin+Secrets.swift), so
+    // that particular path is closed either way — but a debugger enabled by
+    // default on a build carrying a durable credential is not a default worth
+    // keeping for the convenience it buys.
+    //
+    // `cap sync` runs in Node, so this is read at sync time and baked into
+    // ios/App/App/capacitor.config.json. Changing it requires a re-sync, which
+    // is exactly the deliberate act it should be.
+    webContentsDebuggingEnabled: process.env.LOLA_WEB_INSPECTOR === "1",
   },
 
   plugins: {

@@ -86,6 +86,16 @@ export interface Endpoint {
    * with the whole bearer path.
    */
   insecureKey?: string;
+  /**
+   * The name a previously stored bearer key is filed under — an endpoint id
+   * (`host:port`). An ADDRESS, not a secret.
+   *
+   * Used instead of `insecureKey` on every launch after the first pairing: the
+   * native plugin reads the Keychain itself, so the plaintext never crosses the
+   * bridge — where Capacitor's own logging prints every resolved payload — and
+   * never sits in the WebView's heap. `insecureKey` wins when both are given.
+   */
+  keyRef?: string;
 }
 
 /**
@@ -248,6 +258,16 @@ export interface ConnectOptions {
   signal?: AbortSignal;
   /** Bounds TCP + TLS + pin + hello. Defaults to HANDSHAKE_TIMEOUT_MS. */
   timeoutMs?: number;
+  /**
+   * Accept whatever certificate the peer presents, with no pin.
+   *
+   * OPT-IN, ALWAYS, and never inferred from an empty `spkiPin`: an absent pin
+   * is exactly what a typo'd field or an unset config value looks like, and a
+   * security control that disappears on a typo is not a control. Nothing in the
+   * app sets this; it exists so that a deliberate unpinned dial is possible to
+   * write and impossible to reach by accident.
+   */
+  allowUnpinned?: boolean;
 }
 
 export interface TransportRequestOptions {

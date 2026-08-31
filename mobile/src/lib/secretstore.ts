@@ -22,12 +22,36 @@
 // must still be able to run the UI. The three methods it looks for are:
 //
 //   secretSet({ key: string, value: string }) -> {}
-//   secretGet({ key: string })                -> { value: string | null }
+//   secretHas({ key: string })                -> { has: boolean }
 //   secretDelete({ key: string })             -> {}
 //
 // where `key` is an endpoint id (`host:port`), so two daemons never share one
 // secret. If those names do not match what the plugin ships, this file is the
 // only place to change.
+//
+// -------------------------------------------------------------------------
+// THERE IS NO `secretGet`, AND THE MISSING ONE IS A FIX RATHER THAN A GAP.
+//
+// The obvious shape is a read: store the key, read it back next launch, hand it
+// to `connect`. It shipped that way and it leaked. Capacitor's bridge logs
+// every resolved payload — `CAPLog.print("TO JS", result.jsonPayload())` in
+// CapacitorBridge.swift — so `secretGet` resolving `{ value: <key> }` printed
+// the bearer key in cleartext to the app's console on every launch of every
+// Debug build. That was verified on a simulator against the daemon's own
+// `~/.lola/remote.key`, and Debug is the only configuration this project builds
+// today. A second, quieter cost came with it: the plaintext then sat in a JS
+// local, where an attached Safari Web Inspector — which this app ships with
+// enabled — could read it.
+//
+// The read therefore moved to the side that needs the plaintext. `connect`
+// takes a `keyRef` (an endpoint id, an address rather than a secret) and the
+// plugin reads the Keychain in Swift, on the same side that puts the key on the
+// wire. This module keeps the WRITE, the DELETE, and one boolean.
+//
+// The header at the top of this file promised exactly that — "the key can be
+// written once and then referenced by NAME, and the WebView never has to hold
+// it again" — and now it is true.
+// -------------------------------------------------------------------------
 //
 // -------------------------------------------------------------------------
 // THE PROBE READS `PluginHeaders`, NOT `Plugins`, AND THAT IS LOAD-BEARING.
@@ -65,7 +89,7 @@
 /** The subset of the native plugin this module needs. */
 interface SecretCapablePlugin {
   secretSet?(o: { key: string; value: string }): Promise<unknown>;
-  secretGet?(o: { key: string }): Promise<{ value?: string | null }>;
+  secretHas?(o: { key: string }): Promise<{ has?: boolean }>;
   secretDelete?(o: { key: string }): Promise<unknown>;
 }
 
@@ -82,7 +106,7 @@ interface CapacitorGlobal {
 }
 
 /** The three names that have to be present for a key to survive a relaunch. */
-const REQUIRED = ["secretSet", "secretGet", "secretDelete"] as const;
+const REQUIRED = ["secretSet", "secretHas", "secretDelete"] as const;
 
 /**
  * Whether the NATIVE plugin implements the secret store.
@@ -109,7 +133,7 @@ function plugin(): SecretCapablePlugin | undefined {
   const cap = (globalThis as { Capacitor?: CapacitorGlobal }).Capacitor;
   const p = cap?.Plugins?.LolaTransport;
   if (!p) return undefined;
-  return typeof p.secretGet === "function" && typeof p.secretSet === "function" ? p : undefined;
+  return typeof p.secretHas === "function" && typeof p.secretSet === "function" ? p : undefined;
 }
 
 /**
@@ -127,44 +151,81 @@ export function isPersistent(): boolean {
 const volatile = new Map<string, string>();
 
 /**
+ * Where a key ended up, which is NOT the same question as `isPersistent()`.
+ *
+ * `isPersistent()` answers from the plugin's method list: it says the app is
+ * capable of durable storage. It does not, and cannot, say that this particular
+ * write succeeded — a locked or refusing Keychain drops the key into the
+ * volatile map below and the connect screen went on promising the user it would
+ * survive a relaunch. That is the same class of lie the probe at the top of
+ * this file was rewritten to remove, one layer further in, so the WRITE reports
+ * its outcome too and the caption is driven by what happened rather than by
+ * what was possible.
+ */
+export type KeyStorage = "keychain" | "memory" | "none";
+
+/**
  * Store the key for one endpoint.
  *
  * Storing an empty value DELETES rather than writing an empty secret: an empty
  * Keychain entry reads back as "there is a key, and it is wrong", which is the
  * most confusing possible state at the connect screen.
  */
-export async function storeKey(endpointId: string, key: string): Promise<void> {
+export async function storeKey(endpointId: string, key: string): Promise<KeyStorage> {
   if (key === "") {
     await forgetKey(endpointId);
-    return;
+    return "none";
   }
   const p = plugin();
   if (p?.secretSet) {
     try {
       await p.secretSet({ key: endpointId, value: key });
-      return;
+      return "keychain";
     } catch {
       // Fall through: a Keychain that refuses must not lose the running session.
     }
   }
   volatile.set(endpointId, key);
+  return "memory";
 }
 
-/** Read back a stored key, or "" when there is none. Never throws. */
-export async function loadKey(endpointId: string): Promise<string> {
+/**
+ * Where a key for this endpoint actually is, if anywhere.
+ *
+ * "keychain" means the plugin holds it and it survives a relaunch; the caller
+ * must pass `keyRef` to `connect` rather than a key, because the plaintext
+ * deliberately has no way back across the bridge (see the header). "memory"
+ * means the Keychain refused and it is in this page's own map, good until the
+ * process dies. Never throws: an unreadable keychain is, for the purpose of
+ * choosing between a reconnect and a form, one with nothing in it.
+ */
+export async function findKey(
+  endpointId: string,
+): Promise<{ where: KeyStorage; key: string }> {
   const p = plugin();
-  if (p?.secretGet) {
+  if (p?.secretHas) {
     try {
-      const r = await p.secretGet({ key: endpointId });
-      if (typeof r?.value === "string" && r.value !== "") return r.value;
+      const r = await p.secretHas({ key: endpointId });
+      if (r?.has === true) return { where: "keychain", key: "" };
     } catch {
       /* fall through to the volatile copy */
     }
   }
-  return volatile.get(endpointId) ?? "";
+  const held = volatile.get(endpointId);
+  return held ? { where: "memory", key: held } : { where: "none", key: "" };
 }
 
-/** Remove a stored key. Used by "Forget this daemon". Never throws. */
+/**
+ * Remove a stored key. Never throws.
+ *
+ * Called from "Forget this Mac" on the disconnect confirmation, and whenever
+ * the daemon refuses the stored key outright. For a long time it was called
+ * from nowhere at all while its doc comment named a control that did not exist,
+ * which meant a key, once stored, could not be removed by any action available
+ * to the user: disconnecting set a process-local flag and left the credential
+ * in place, so the one durable thing on the device was the credential and the
+ * one volatile thing was the decision to stop using it.
+ */
 export async function forgetKey(endpointId: string): Promise<void> {
   volatile.delete(endpointId);
   const p = plugin();

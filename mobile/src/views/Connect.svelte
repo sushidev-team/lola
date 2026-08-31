@@ -55,6 +55,16 @@
   let draft = $state<EndpointDraft>({ host: "", port: "", spkiPin: "" });
   let key = $state("");
   let remember = $state(true);
+  /**
+   * The Keychain account holding a remembered key, when there is one.
+   *
+   * The key ITSELF is not read back: Capacitor's bridge logs every resolved
+   * payload, so a `secretGet` printed the bearer key to the console on every
+   * launch. The form therefore holds a reference and an empty field, and the
+   * plugin does the read. Typing in the field clears the reference — see
+   * `submit`.
+   */
+  let storedKeyRef = $state("");
   let restored = $state(false);
   let showKey = $state(false);
 
@@ -150,7 +160,13 @@
       // holding a screen in front of.
       if (!prev || handoff) return;
       draft = prev.draft;
+      // Empty whenever the plugin holds it, which is the normal case: the
+      // plaintext has no way back across the bridge (see secretstore.ts) and
+      // `storedKeyRef` is what is passed to `connect` instead. The field stays
+      // blank and the caption below says the key is remembered, so there is
+      // nothing to type unless the user wants to replace it.
       key = prev.key;
+      storedKeyRef = prev.keyRef;
       restored = true;
       manual = true; // show what is about to be dialled rather than hiding it
     })();
@@ -242,7 +258,11 @@
   async function submit(e: SubmitEvent): Promise<void> {
     e.preventDefault();
     notice = null;
-    if (await connection.connect(draft, key, remember)) {
+    // A key the user has typed WINS over the remembered one: that is what
+    // typing in a prefilled form means, and it is the only way to replace a key
+    // the daemon has rolled.
+    const ref = key === "" ? storedKeyRef : "";
+    if (await connection.connect(draft, key, remember, [], ref)) {
       // A link fills the form and waits here, so this is where a dev-URL
       // connection is actually established and where it gets labelled.
       pairing.devLinkActive = fromDevLink;
@@ -343,13 +363,26 @@
         </div>
       {/if}
 
-      {#if restored && !key && !isPersistent()}
+      {#if restored && !key && storedKeyRef}
+        <!-- THE REMEMBERED CASE HAD NOTHING TO SAY, which was the worse half of
+             this. The empty key field looks identical whether the key is in the
+             Keychain and about to be used, or genuinely absent — and only one of
+             those needs typing into. Naming where it is also puts the fact in
+             front of the person it concerns, at the moment they can act on it,
+             rather than only in a README. -->
+        <p class="copy text-sm text-faint">
+          This Mac is paired. The access key is in this phone's Keychain and is used
+          automatically — type one here only to replace it. “Forget this Mac”, on the
+          Disconnect sheet, removes it.
+        </p>
+      {:else if restored && !key && !isPersistent()}
         <!-- The one field nobody can guess is the one that is always empty on a
              cold launch, and nothing on screen said so: the address, port and
              pin all come back, the key does not, and a user who did not build
              this app has no way to know that is by design rather than a bug. -->
         <p class="copy text-sm text-faint">
-          This Mac was remembered. Only the access key is missing — it is never stored.
+          This Mac was remembered. Only the access key is missing — it is never stored on
+          this device.
         </p>
       {/if}
 
@@ -485,14 +518,32 @@
              until the app closes"), never the rule, so it read as a
              contradiction of its own label and left it unclear whether ticking
              the box did anything at all. -->
+        <!-- THIS CHECKBOX IS WHERE THE DECISION IS MADE, so the caption says
+             WHERE the key goes rather than only that it is kept. It is a bearer
+             credential for a daemon that can drive coding agents; a user
+             ticking this is entitled to know it lands in the Keychain, survives
+             standby and a relaunch, is readable once the phone has been
+             unlocked after a reboot, and comes off again with "Forget this
+             Mac".
+
+             The caption is driven by `connection.keyStorage` AFTER a connect
+             rather than by `isPersistent()` alone. That probe answers from the
+             plugin's method list — what the app CAN do — and a Keychain that
+             refuses the write leaves the key in memory for the run, which it
+             cannot know about. It promised persistence that had not happened. -->
         <span class="flex flex-col">
           <span class="text-ink">Remember this Mac</span>
           <span class="copy text-sm text-faint">
-            {#if isPersistent()}
-              Keeps its address, port, certificate pin and access key.
+            {#if connection.keyStorage === "memory"}
+              This phone's Keychain refused the key, so it is held only until the app closes and
+              has to be typed again next launch. Its address, port and pin are kept.
+            {:else if isPersistent()}
+              Keeps its address, port and certificate pin, and puts the access key in this
+              phone's Keychain — so it reconnects on its own after standby. Remove it later with
+              “Forget this Mac”.
             {:else}
-              Keeps its address, port and certificate pin. The access key is never stored and has
-              to be typed again each launch.
+              Keeps its address, port and certificate pin. The access key is never stored on this
+              device and has to be typed again each launch.
             {/if}
           </span>
         </span>

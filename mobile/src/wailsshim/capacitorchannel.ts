@@ -245,6 +245,21 @@ export async function openPluginChannel(
   endpoint: Endpoint,
   opts?: ConnectOptions,
 ): Promise<FrameChannel> {
+  // AN EMPTY PIN IS REFUSED HERE, BEFORE A SOCKET EXISTS.
+  //
+  // The pin is the whole of the server's identity on this transport: the
+  // certificate is self-signed, is in no trust store, and carries DNSNames
+  // ["lola"], so system evaluation cannot succeed against a LAN address even in
+  // principle. Dialling unpinned means writing the bearer key to whatever
+  // answers the address — which, on DHCP, can be a machine that inherited it.
+  // Accepting that has to be something a caller SAYS, not something that
+  // happens when a field is empty.
+  if (!endpoint.spkiPin && !opts?.allowUnpinned) {
+    throw new Error(
+      "lola: no certificate pin for this daemon. Paste the SPKI pin it logged at startup.",
+    );
+  }
+
   // Listeners FIRST, connect second. See the note on PluginChannel.epoch: the
   // plugin's socket is live before `connect` resolves here, and Capacitor
   // retains nothing for a listener that does not yet exist, so a refusal or a
@@ -257,16 +272,26 @@ export async function openPluginChannel(
     result = await LolaTransport.connect({
       host: endpoint.host,
       port: endpoint.port ?? DEFAULT_REMOTE_PORT,
-      spkiPin: endpoint.spkiPin || undefined,
-      // The pin is the whole of the server's identity: the certificate is
-      // self-signed, is in no trust store, and carries DNSNames ["lola"], so
-      // system evaluation cannot succeed against a LAN address even in
-      // principle. `allowUnpinned` is opt-in by design — an absent pin is
-      // exactly what a typo'd field looks like, and a control that disappears on
-      // a typo is not a control — so it is set only when the caller left the pin
-      // empty on purpose.
-      allowUnpinned: endpoint.spkiPin ? undefined : true,
+      spkiPin: endpoint.spkiPin,
+      // NOT DERIVED FROM THE PIN BEING EMPTY, and that is the whole point.
+      //
+      // The plugin refuses to dial without either a pin or an explicit
+      // `allowUnpinned`, and its own comment says why: "an omitted option is
+      // indistinguishable from a typo'd one, and a check that vanishes on a
+      // typo is not a check." This line used to read
+      // `allowUnpinned: endpoint.spkiPin ? undefined : true`, which reinstated
+      // exactly the vanishing it was written to prevent — any caller reaching
+      // here with a falsy pin got trust-anything TLS and handed the bearer key
+      // to whatever answered. `Endpoint.spkiPin` is a plain required `string`,
+      // so `""` satisfies the type, and the only thing holding it closed was a
+      // validator in another module on one of the paths in.
+      //
+      // So it is now a decision a caller has to state, and an empty pin is
+      // refused below, in the same module as the socket, where a second caller
+      // inherits the refusal instead of having to know about the validator.
+      allowUnpinned: opts?.allowUnpinned || undefined,
       insecureKey: endpoint.insecureKey || undefined,
+      keyRef: endpoint.keyRef || undefined,
       connectTimeoutMs: opts?.timeoutMs,
     });
   } catch (err) {

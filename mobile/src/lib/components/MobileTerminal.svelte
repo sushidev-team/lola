@@ -13,10 +13,12 @@
     NO_SCROLL,
     accumulateScroll,
     clampPan,
+    firstVisibleColumn,
     fitWidth,
     isPanning,
     lockAxis,
     panBy,
+    partialRowHeight,
     pinchFont,
     takeScroll,
     touchDistance,
@@ -104,8 +106,17 @@
     rows: number;
     /** Columns actually on screen. Equal to `cols` when nothing is clipped. */
     shown: number;
+    /** The leftmost visible column, 1-based, so the header can say WHERE the
+     *  window is rather than only how wide it is. */
+    first: number;
     panning: boolean;
     font: number;
+    /** Whether a smaller size would show more of the grid. */
+    canFit: boolean;
+    /** Whether a fit-width zoom is currently in effect. */
+    fitActive: boolean;
+    /** The size a fit would land on, for the control's label. */
+    fitSize: number;
   }
 
   // --- reactive surface the screen around this component reads ---------------
@@ -138,6 +149,12 @@
 
   const panning = $derived(isPanning(box));
   const shown = $derived(visibleColumns(box, cols));
+  /** The leftmost visible column, 1-based. See firstVisibleColumn. */
+  const first = $derived(firstVisibleColumn(box, cols, pan.x));
+  /** Height of the sliced bottom row, masked rather than drawn. */
+  const cutRow = $derived(
+    partialRowHeight(pan.y, box.viewHeight, rows > 0 ? box.contentHeight / rows : 0),
+  );
   /** The size a fit-width zoom would land on, recomputed as the box moves. */
   const fit = $derived(fitWidth(box, fontSize));
   /** Whether there is a smaller size that would show more of the grid. False at
@@ -148,7 +165,18 @@
   // out: no getter is exported for these, so the screen cannot read a stale
   // value by asking at the wrong moment.
   $effect(() => {
-    onstate?.({ modes, cols, rows, shown, panning, font: fontSize });
+    onstate?.({
+      modes,
+      cols,
+      rows,
+      shown,
+      first,
+      panning,
+      font: fontSize,
+      canFit,
+      fitActive: fitFrom !== null,
+      fitSize: fit.size,
+    });
   });
 
   export function setFont(size: number): void {
@@ -352,12 +380,19 @@
     // contradicting the pane underneath it is worse than no banner, because it
     // is the half a user checks first.
     onerror?.("");
+    // PAINT FIRST, THEN LISTEN, and the order is load-bearing.
+    //
+    // The subscription's acknowledgement IS the first resync, so it has already
+    // been and gone by the time this runs; `screen` is where it is read from.
+    // Everything that arrived AFTER it — tmux's initial paint of a freshly
+    // attached pane, which lands milliseconds later — was held by the
+    // subscription until a listener existed (see the replay buffer in
+    // channeltransport.ts) and is delivered by the `onEvent` below. Wiring the
+    // listener first would replay that paint and then overwrite it with this
+    // older screen, which is the same blank pane wearing a different hat.
+    if (sub.screen) paint(sub.screen);
     offEvent = sub.onEvent(handle);
     offError = sub.onError((e) => onerror?.(e.message));
-    // The first resync usually arrives before onEvent is wired, since it IS the
-    // subscribe's acknowledgement — so paint whatever the subscription already
-    // holds rather than waiting for a frame that has been and gone.
-    if (sub.screen) paint(sub.screen);
   }
 
   function handle(ev: PaneEvent) {
@@ -442,6 +477,15 @@
   /**
    * Zoom out until the whole grid fits across the screen, and back again.
    *
+   * DRIVEN FROM THE HEADER. It used to be a chip pinned over the pane's
+   * top-right corner, which was wrong twice: it permanently washed out the
+   * first line of live output on a phone (the grid is always clipped, so the
+   * chip was always up), and its tappable "fit"/"reset" state and its
+   * untappable "pan" state were drawn identically — same size, same colour,
+   * same background — so nothing said which one was a button. It is now a
+   * real control beside A-/A+, and the pane itself carries only a two-point
+   * position bar that covers no text.
+   *
    * THIS IS A ZOOM, NOT A RESIZE, and the distinction is the whole reason the
    * label says "fit" rather than "fit to phone". It scales this phone's own view
    * of a grid whose width belongs to the developer's tmux window; it sends
@@ -458,7 +502,7 @@
    * At 200 columns even the floor does not fit, and that is not hidden — the
    * chip keeps showing shown/cols, so it reads "120/200 cols" after the tap.
    */
-  function toggleFit() {
+  export function toggleFit() {
     // iOS raises the soft keyboard only for a focus a user action caused, so a
     // refocus is legal here (a click IS one) but must be conditional: tapping
     // this chip with the keyboard down must not summon it.
@@ -473,13 +517,6 @@
       fontSize = target.size;
     }
     if (refocus) term?.focus();
-  }
-
-  /** Keep a tap or a drag on the chip out of the pane's own gesture handling:
-   *  without this a tap focuses the terminal and raises the keyboard, and a drag
-   *  that starts on the chip pans the grid underneath it. */
-  function swallow(e: TouchEvent) {
-    e.stopPropagation();
   }
 
   function measure() {
@@ -700,32 +737,39 @@
     <div bind:this={host}></div>
   </div>
 
-  {#if panning || fitFrom !== null}
-    <!-- Truncation must never be a mystery: 55 of 200 columns with nothing said
-         looks exactly like an agent that stopped writing halfway across. The
-         count is the honest part and is shown in every state; the trailing word
-         is the ACTION a tap performs, so the chip never reads as a label that
-         happens to be tappable. -->
-    {#if canFit || fitFrom !== null}
-      <button
-        type="button"
-        class="absolute top-1 right-1 min-h-9 rounded bg-canvas/80 px-2 py-1 text-sm text-faint"
-        aria-label={fitFrom !== null
-          ? `Back to ${fitFrom} point text`
-          : `Zoom out to ${fit.size} point text to see ${fit.complete ? "the whole grid" : "more of it"}. This changes only this phone's view; the pane keeps its size.`}
-        onclick={toggleFit}
-        ontouchstart={swallow}
-        ontouchmove={swallow}
-        ontouchend={swallow}
-      >
-        {shown}/{cols} cols · {fitFrom !== null ? "reset" : "fit"}
-      </button>
-    {:else}
+  <!-- THE PARTIAL BOTTOM ROW IS MASKED, NOT DRAWN.
+       The grid is a fixed number of rows at a fixed cell height and the frame is
+       whatever the header and the accessory bar leave over, so the two almost
+       never divide. Opening the bar's second row shrinks the frame by about 44
+       points and the last line is then cut horizontally through its glyphs,
+       which reads as a rendering fault rather than as more content below.
+       Painting the offcut in the pane's own background makes it an absent line,
+       which is the truth. See partialRowHeight. -->
+  {#if cutRow > 0}
+    <div
+      class="pointer-events-none absolute right-0 bottom-0 left-0 bg-panel"
+      style="height: {cutRow}px"
+      aria-hidden="true"
+    ></div>
+  {/if}
+
+  <!-- WHERE YOU ARE, while you are panning, and nowhere else.
+       The header carries the column RANGE in words; this is the same fact as a
+       shape, because a number read once at the top does not track a finger. It
+       is two points tall on the pane's own bottom edge, has no hit area, and
+       covers no text — which is the whole reason the truncation chip that used
+       to sit over the pane's top-right corner is now a control in the header:
+       it permanently washed out the first line of live output, and its
+       tappable and untappable states were drawn identically. -->
+  {#if panning && cols > 0}
+    <div
+      class="pointer-events-none absolute right-0 bottom-0 left-0 h-0.5 bg-edge/60"
+      aria-hidden="true"
+    >
       <div
-        class="pointer-events-none absolute top-1 right-1 rounded bg-canvas/80 px-1.5 py-0.5 text-sm text-faint"
-      >
-        {shown}/{cols} cols · pan
-      </div>
-    {/if}
+        class="h-full bg-faint/70"
+        style="margin-left: {((first - 1) / cols) * 100}%; width: {(shown / cols) * 100}%"
+      ></div>
+    </div>
   {/if}
 </div>

@@ -28,6 +28,38 @@ export const FADE_PX = 24;
 // `scrollLeft` at the far end lands a fraction short of the maximum.
 const EPS = 1;
 
+/** Which edges of a horizontal scroller are hiding something. */
+export interface OverflowEdges {
+  left: boolean;
+  right: boolean;
+}
+
+/**
+ * The edges that are hiding content, as a pair of booleans.
+ *
+ * WHY THIS IS SEPARATE FROM THE MASK. A mask can only dim what it covers, so it
+ * says "there is more" ONLY when the clip happens to land on ink. A key row
+ * ends on clean key boundaries with 4pt gaps, and at rest the clip lands in a
+ * key's padding: measured on the device, the last visible key's glyph dimmed
+ * from luminance 215 to 179 and its 1px border from 51 to 36 against a 32
+ * background — which at arm's length is a complete, crisp key followed by
+ * nothing. Enter and Shift-Enter read as keys the app does not have. The chip
+ * strip fades correctly only because its clip happens to fall mid-word.
+ *
+ * So the mask stays (it is right when it lands on text) and this drives a real
+ * overlay drawn on the strip's own background, which cannot be defeated by
+ * where the boundary falls.
+ */
+export function overflowEdges(
+  scrollLeft: number,
+  clientWidth: number,
+  scrollWidth: number,
+): OverflowEdges {
+  const overflow = scrollWidth - clientWidth;
+  if (!(overflow > EPS)) return { left: false, right: false };
+  return { left: scrollLeft > EPS, right: scrollLeft < overflow - EPS };
+}
+
 /**
  * The `mask-image` for a horizontal scroller, or `""` when it needs none.
  *
@@ -63,10 +95,27 @@ export function edgeFadeMask(
  * Safari 15.4 and this bundle targets iOS 15.0 — a single property would fail
  * silently on the floor device, which is the one that cannot be checked.
  */
-export function overflowFade(node: HTMLElement, px: number = FADE_PX) {
-  let ramp = px;
+export interface FadeOptions {
+  px?: number;
+  /**
+   * Called whenever the overflowing edges change, so the caller can draw an
+   * overlay the mask cannot express. See `overflowEdges`.
+   */
+  onedges?: (e: OverflowEdges) => void;
+}
+
+export function overflowFade(node: HTMLElement, opts: number | FadeOptions = FADE_PX) {
+  let ramp = typeof opts === "number" ? opts : (opts.px ?? FADE_PX);
+  let onedges = typeof opts === "number" ? undefined : opts.onedges;
+  let last: OverflowEdges = { left: false, right: false };
 
   function apply() {
+    const edges = overflowEdges(node.scrollLeft, node.clientWidth, node.scrollWidth);
+    if (edges.left !== last.left || edges.right !== last.right) {
+      last = edges;
+      onedges?.(edges);
+    }
+
     const mask = edgeFadeMask(node.scrollLeft, node.clientWidth, node.scrollWidth, ramp);
     if (mask === "") {
       node.style.removeProperty("mask-image");
@@ -94,8 +143,9 @@ export function overflowFade(node: HTMLElement, px: number = FADE_PX) {
   apply();
 
   return {
-    update(next: number = FADE_PX) {
-      ramp = next;
+    update(next: number | FadeOptions = FADE_PX) {
+      ramp = typeof next === "number" ? next : (next.px ?? FADE_PX);
+      if (typeof next !== "number") onedges = next.onedges;
       apply();
     },
     destroy() {

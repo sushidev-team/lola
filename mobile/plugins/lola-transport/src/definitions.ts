@@ -129,14 +129,26 @@ export interface LolaTransportPlugin {
   secretSet(options: LolaSecretSetOptions): Promise<void>;
 
   /**
-   * Reads one secret back, or `null` when none is stored.
+   * Whether a secret is stored under a name. NEVER the secret itself.
    *
-   * A MISSING SECRET RESOLVES. "Nothing stored yet" is what a first launch
-   * looks like and is an answer, not a failure; making the caller read an error
-   * code to tell it apart from a broken keychain is how a fresh install ends up
-   * showing a red banner. Only a keychain that actually refused rejects.
+   * THERE IS NO `secretGet`, AND ITS ABSENCE IS THE POINT. One existed and
+   * resolved `{ value: <the bearer key> }`; Capacitor's bridge logs every
+   * resolved payload (`CAPLog.print("TO JS", result.jsonPayload())`), so the
+   * key was printed in cleartext to the app's console on every launch of every
+   * Debug build. No amount of care inside this plugin could fix that, because
+   * the leak is in the layer underneath it. The read therefore moved to the
+   * side that needs the plaintext: pass `keyRef` to `connect` and the native
+   * code reads the Keychain itself.
+   *
+   * What is left is the only question a WebView has — is this endpoint paired —
+   * and a boolean cannot leak a credential no matter what logs it.
+   *
+   * A MISSING SECRET RESOLVES `{ has: false }`, and so does a keychain that
+   * refused: the caller's only use for this is choosing between a reconnect and
+   * a form, and a rejection would put a red banner in front of a user whose
+   * remedy is to type the key anyway.
    */
-  secretGet(options: LolaSecretGetOptions): Promise<LolaSecretGetResult>;
+  secretHas(options: LolaSecretGetOptions): Promise<LolaSecretHasResult>;
 
   /**
    * Forgets one secret. IDEMPOTENT: deleting what is not there resolves, so
@@ -246,6 +258,22 @@ export interface LolaConnectOptions {
    * handshake is mutual TLS instead and an in-band hello would be denied.
    */
   insecureKey?: string;
+
+  /**
+   * The name a previously stored bearer key is filed under — an endpoint id
+   * such as `192.168.1.5:7717`. An ADDRESS, not a secret.
+   *
+   * Used instead of `insecureKey` on every launch after the first pairing. The
+   * native side reads the Keychain itself, so the plaintext never crosses the
+   * bridge (where Capacitor's own logging would print it) and never sits in the
+   * WebView's heap for an attached Web Inspector to read. `insecureKey` wins
+   * when both are supplied: a key a human has just typed is a deliberate
+   * override of whatever is remembered.
+   *
+   * A `keyRef` naming nothing stored is not an error — it is what an unpaired
+   * endpoint looks like — and the handshake then refuses for want of a key.
+   */
+  keyRef?: string;
 
   /** TCP + TLS establishment budget. Default 10000, mirroring the daemon. */
   connectTimeoutMs?: number;
@@ -396,9 +424,9 @@ export interface LolaSecretGetOptions {
   key: string;
 }
 
-export interface LolaSecretGetResult {
-  /** The stored secret, or `null` when there is none. */
-  value: string | null;
+export interface LolaSecretHasResult {
+  /** Whether a non-empty secret is stored under this name. */
+  has: boolean;
 }
 
 export interface LolaAppStateEvent {

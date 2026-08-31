@@ -154,6 +154,79 @@ describe("pane subscriptions", () => {
     expect(sub.lastSeq).toBe(1);
   });
 
+  it("replays frames that arrived before the first listener, in order", async () => {
+    // THE FIRST-OPEN BLANK PANE. `subscribe()` resolves on the daemon's
+    // acknowledging resync, and the caller only gets to call `onEvent` a
+    // microtask later. tmux's initial paint of a freshly attached pane lands as
+    // pty frames inside that hop; a plain fanout over an empty listener set
+    // discards them, and an idle agent writes nothing else for minutes — so the
+    // pane stays empty until something forces a repaint.
+    const { ch, sub } = await subscribed();
+    ch.deliver({ v: 1, type: FRAME_PTY, pane: PANE, seq: 2, payload: { data: "aGk=" } });
+    ch.deliver({ v: 1, type: FRAME_PTY, pane: PANE, seq: 3, payload: { data: "IXo=" } });
+
+    const events: PaneEvent[] = [];
+    sub.onEvent((e) => events.push(e));
+
+    const text = events.map((e) => new TextDecoder().decode((e as { data: Uint8Array }).data));
+    expect(text).toEqual(["hi", "!z"]);
+  });
+
+  it("replays only to the FIRST listener, so a second reader does not double-render", async () => {
+    const { ch, sub } = await subscribed();
+    ch.deliver({ v: 1, type: FRAME_PTY, pane: PANE, seq: 2, payload: { data: "aGk=" } });
+
+    const first: PaneEvent[] = [];
+    const second: PaneEvent[] = [];
+    sub.onEvent((e) => first.push(e));
+    sub.onEvent((e) => second.push(e));
+
+    expect(first).toHaveLength(1);
+    expect(second).toHaveLength(0);
+  });
+
+  it("does not replay the acknowledging resync — the caller reads it off `screen`", async () => {
+    const { sub } = await subscribed();
+    const events: PaneEvent[] = [];
+    sub.onEvent((e) => events.push(e));
+    expect(events).toHaveLength(0);
+    expect(sub.screen?.cols).toBe(120);
+  });
+
+  it("marks the replay torn when more arrived than the buffer holds", async () => {
+    // A screen torn down mid-attach is the only way to reach this. Dropping the
+    // oldest and announcing a gap makes the terminal re-subscribe, which is the
+    // defined recovery: a byte range cannot be replayed from halfway through an
+    // escape sequence.
+    const { ch, sub } = await subscribed();
+    for (let i = 0; i < 300; i++) {
+      ch.deliver({ v: 1, type: FRAME_PTY, pane: PANE, seq: 2 + i, payload: { data: "eA==" } });
+    }
+    const events: PaneEvent[] = [];
+    sub.onEvent((e) => events.push(e));
+    expect(events).toHaveLength(256);
+    expect(events[0]).toMatchObject({ kind: "output", gap: true });
+    expect(events[1]).toMatchObject({ kind: "output", gap: false });
+  });
+
+  it("replays a pane death that landed before the listener did", async () => {
+    // The ack is not replayed, but everything after it is — including the exit
+    // resync. A caller that never hears about it waits forever on a pane that
+    // will never write again.
+    const { ch, sub } = await subscribed();
+    ch.deliver({
+      v: 1,
+      type: FRAME_RESYNC,
+      pane: PANE,
+      seq: 2,
+      payload: { cols: 120, rows: 40, cursorX: 0, cursorY: 0, exited: true },
+    });
+    const events: PaneEvent[] = [];
+    sub.onEvent((e) => events.push(e));
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ kind: "exit" });
+  });
+
   it("refuses a pane name that fails the daemon's own shape gate", async () => {
     const { t } = await connected();
     await expect(t.subscribe("../etc/passwd")).rejects.toThrow(/not a lola pane name/);

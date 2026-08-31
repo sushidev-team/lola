@@ -23,7 +23,15 @@
 # it checks for each and says exactly what to do rather than failing in
 # xcodebuild's own words. See mobile/README.md section 7.
 
+# Safari's Web Inspector is enabled for these builds and only for these builds:
+# capacitor.config.ts reads LOLA_WEB_INSPECTOR at sync time and it defaults off,
+# so that a build carrying a durable Keychain credential does not ship with a
+# debugger attached by default. Set LOLA_WEB_INSPECTOR=0 to build without it.
+
 set -eu
+
+export LOLA_WEB_INSPECTOR="${LOLA_WEB_INSPECTOR:-1}"
+
 
 cd "$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 

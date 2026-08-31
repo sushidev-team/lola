@@ -34,8 +34,20 @@ public class LolaTransportPlugin: CAPPlugin, CAPBridgedPlugin {
         // here does not break the app - it silently makes the bearer key
         // survive only as long as the process, which is the bug this shipped to
         // fix. Do not rename them without changing that module.
+        //
+        // THERE IS NO `secretGet`, AND ITS ABSENCE IS THE POINT. It existed, it
+        // resolved `{ value: <the bearer key> }`, and Capacitor's own bridge
+        // logs every resolved payload — `CapacitorBridge.swift` does
+        // `CAPLog.print("TO JS", result.jsonPayload().prefix(256))` — so every
+        // launch of every Debug build printed the key in cleartext to the app's
+        // console. Verified on the simulator, not inferred. `secretHas` answers
+        // the only question the WebView actually has (is a key remembered for
+        // this endpoint), and `connect`'s `keyRef` lets the plugin read the
+        // value itself, so the plaintext never crosses the bridge on a
+        // reconnect and never sits in a JS local for an attached inspector to
+        // read.
         CAPPluginMethod(name: "secretSet", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "secretGet", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "secretHas", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "secretDelete", returnType: CAPPluginReturnPromise),
     ]
 
@@ -113,16 +125,34 @@ public class LolaTransportPlugin: CAPPlugin, CAPBridgedPlugin {
             return
         }
 
-        // The key is read out of the call and handed straight to the
-        // connection. It is never stored on the plugin, never written to
-        // UserDefaults, and never logged. Where it comes from before this point
-        // is the app's business; nothing about it is compiled in.
+        // THE KEY EITHER COMES IN OR IS FETCHED HERE; it is never handed back.
+        //
+        // `insecureKey` is the first-pairing path: a human has just typed or
+        // scanned it, so it has to cross the bridge once. `keyRef` is every
+        // launch after that — it names a Keychain account (an endpoint id such
+        // as "192.168.1.5:7717", which is an address, not a secret) and the
+        // plaintext is read on THIS side. That is what keeps the reconnect from
+        // printing the key into the console through Capacitor's own "TO JS"
+        // logging, and out of the WebView's heap entirely.
+        //
+        // A `keyRef` naming nothing is not an error here: an unpaired endpoint
+        // is a first launch, and the handshake below refuses an absent key with
+        // a message that says so.
+        var resolvedKey = nonEmpty(call.getString("insecureKey"))
+        if resolvedKey == nil, let ref = nonEmpty(call.getString("keyRef")) {
+            if case .value(let stored) = LolaKeychain.read(account: ref) {
+                resolvedKey = nonEmpty(stored)
+            }
+        }
+
+        // The key is handed straight to the connection. It is never stored on
+        // the plugin, never written to UserDefaults, and never logged.
         let config = LolaConnection.Config(
             host: host,
             port: UInt16(portValue),
             spkiPin: nonEmpty(call.getString("spkiPin")),
             allowUnpinned: call.getBool("allowUnpinned") ?? false,
-            insecureKey: nonEmpty(call.getString("insecureKey")),
+            insecureKey: resolvedKey,
             connectTimeoutMs: call.getInt("connectTimeoutMs") ?? Defaults.connectTimeoutMs,
             handshakeTimeoutMs: call.getInt("handshakeTimeoutMs") ?? Defaults.handshakeTimeoutMs,
             writeTimeoutMs: call.getInt("writeTimeoutMs") ?? Defaults.writeTimeoutMs,

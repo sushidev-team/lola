@@ -116,7 +116,21 @@ export interface EndpointProblem {
  * at connect time but a daemon that was never listening — a failure that looks
  * exactly like the wrong host.
  */
-export function validateDraft(draft: EndpointDraft, key: string, minKeyLen: number): EndpointProblem[] {
+export function validateDraft(
+  draft: EndpointDraft,
+  key: string,
+  minKeyLen: number,
+  /**
+   * A key is held natively and was deliberately not handed to this caller.
+   *
+   * The plaintext has no way back across the Capacitor bridge — a resolved
+   * payload is logged, so `secretGet` was removed — and the reconnect passes a
+   * `keyRef` instead. Validating the empty string it was given would refuse
+   * every automatic reconnect with "Enter the daemon's access key", on a phone
+   * that is correctly paired.
+   */
+  keyStored = false,
+): EndpointProblem[] {
   const out: EndpointProblem[] = [];
 
   const kind = classifyHost(draft.host);
@@ -141,7 +155,10 @@ export function validateDraft(draft: EndpointDraft, key: string, minKeyLen: numb
     });
   }
 
-  if (key.length === 0) {
+  if (keyStored && key.length === 0) {
+    // Nothing to check: the plugin holds it and the daemon is the only thing
+    // that can say whether it is still right.
+  } else if (key.length === 0) {
     out.push({ field: "key", message: "Enter the daemon's access key." });
   } else if (key.length < minKeyLen) {
     out.push({

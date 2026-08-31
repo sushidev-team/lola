@@ -8,7 +8,7 @@ import type {
   LolaScanOptions,
   LolaScanResult,
   LolaSecretGetOptions,
-  LolaSecretGetResult,
+  LolaSecretHasResult,
   LolaSecretSetOptions,
   LolaSendOptions,
   LolaStatusResult,
@@ -81,11 +81,11 @@ export class LolaTransportWeb extends WebPlugin implements LolaTransportPlugin {
   }
 
   /**
-   * Resolves `null` rather than throwing: "there is nothing stored" is the
+   * Resolves `false` rather than throwing: "there is nothing stored" is the
    * honest answer for a browser and is exactly what the caller does with it.
    */
-  async secretGet(_options: LolaSecretGetOptions): Promise<LolaSecretGetResult> {
-    return { value: null };
+  async secretHas(_options: LolaSecretGetOptions): Promise<LolaSecretHasResult> {
+    return { has: false };
   }
 
   async secretDelete(_options: LolaSecretGetOptions): Promise<void> {

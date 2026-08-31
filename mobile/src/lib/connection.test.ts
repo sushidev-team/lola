@@ -246,24 +246,35 @@ function rememberEndpoint() {
   globalThis.localStorage?.setItem("lola.mobile.endpoint", JSON.stringify(STORED));
 }
 
-/** A native secret store holding one key. See secretstore.test.ts. */
-function rememberKey(key = KEY) {
-  const values = new Map<string, string>([[`${STORED.host}:${STORED.port}`, key]]);
+/**
+ * A native secret store holding one key. See secretstore.test.ts.
+ *
+ * There is no `secretGet`: the plaintext deliberately has no way back across
+ * the bridge, because Capacitor logs every resolved payload. A reconnect passes
+ * the account NAME (`keyRef`) and the plugin reads the Keychain itself, which
+ * is why the assertions below check for a keyRef rather than for the key.
+ */
+function rememberKey() {
+  const stored = new Set<string>([`${STORED.host}:${STORED.port}`]);
+  const secretDelete = vi.fn(async ({ key }: { key: string }) => {
+    stored.delete(key);
+  });
   (globalThis as { Capacitor?: unknown }).Capacitor = {
     Plugins: {
       LolaTransport: {
         secretSet: vi.fn(async () => {}),
-        secretGet: vi.fn(async ({ key: k }: { key: string }) => ({ value: values.get(k) ?? null })),
-        secretDelete: vi.fn(async () => {}),
+        secretHas: vi.fn(async ({ key }: { key: string }) => ({ has: stored.has(key) })),
+        secretDelete,
       },
     },
     PluginHeaders: [
       {
         name: "LolaTransport",
-        methods: [{ name: "secretSet" }, { name: "secretGet" }, { name: "secretDelete" }],
+        methods: [{ name: "secretSet" }, { name: "secretHas" }, { name: "secretDelete" }],
       },
     ],
   };
+  return { secretDelete, stored };
 }
 
 function forget() {
@@ -283,12 +294,14 @@ describe("coming back from the background", () => {
 
     expect(await c.reconnect()).toBe(true);
     expect(t.connect).toHaveBeenCalledTimes(1);
-    // The endpoint that was remembered, and the key that was never on screen.
+    // The endpoint that was remembered, and a REFERENCE to the key rather than
+    // the key: the plaintext never crosses the bridge on a reconnect.
     expect(t.connect.mock.calls[0][0]).toMatchObject({
       host: STORED.host,
       port: STORED.port,
-      insecureKey: KEY,
+      keyRef: `${STORED.host}:${STORED.port}`,
     });
+    expect(t.connect.mock.calls[0][0].insecureKey).toBe("");
   });
 
   it("does nothing when the user disconnected on purpose", async () => {
@@ -416,6 +429,81 @@ describe("coming back from the background", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("WIPES a key the daemon refuses, so a dead credential is not kept", async () => {
+    // `regenerateRemoteKey` on the Mac rolls the secret and un-pairs every
+    // phone. Without this the device kept a credential no screen could reach:
+    // the ladder correctly stopped retrying, and the connect form then came up
+    // prefilled with an address whose stored key was silently worthless.
+    rememberEndpoint();
+    const { stored } = rememberKey();
+    const c = new Connection();
+
+    const refused = refusalFromPluginError({
+      code: "rejected",
+      reason: "refused",
+      data: { daemonCode: "denied" },
+    });
+    if (!refused) throw new Error("a denied bearer key must classify as a refusal");
+    const listeners: ((s: ConnectionStatus) => void)[] = [];
+    const t = fakeTransport();
+    t.onStatus = ((l: (s: ConnectionStatus) => void) => {
+      listeners.push(l);
+      return () => {};
+    }) as Transport["onStatus"];
+    t.connect.mockImplementation(async () => {
+      const s: ConnectionStatus = {
+        phase: "closed",
+        error: refused,
+        refusal: { code: refused.code, message: refused.message },
+      };
+      for (const l of listeners) l(s);
+      throw refused;
+    });
+    c.useTransport(t);
+
+    await c.reconnect();
+    expect(stored.size).toBe(0);
+    expect(c.hasStoredKey).toBe(false);
+    expect(globalThis.localStorage?.getItem("lola.mobile.endpoint")).toBeNull();
+  });
+
+  it("keeps the key when the daemon merely could not be reached", async () => {
+    // An off-network phone is the ordinary case and must never cost a pairing:
+    // only a refusal that NAMES the key wipes one.
+    rememberEndpoint();
+    const { stored } = rememberKey();
+    const c = new Connection();
+    const t = fakeTransport();
+    t.connect.mockRejectedValue(new Error("network is unreachable"));
+    c.useTransport(t);
+
+    await c.reconnect();
+    expect(stored.size).toBe(1);
+  });
+
+  it("forgets this Mac on request — the key AND the address", async () => {
+    // The counterpart to "Remember this Mac". For a long time there was none:
+    // the key had no deletion path reachable from any screen, and disconnecting
+    // set a process-local flag that died with the app while the credential did
+    // not — so a cold launch after an explicit disconnect went straight back to
+    // an authenticated session list.
+    rememberEndpoint();
+    const { stored } = rememberKey();
+    const c = new Connection();
+    const t = fakeTransport();
+    c.useTransport(t);
+    await c.reconnect();
+
+    await c.forget();
+    expect(stored.size).toBe(0);
+    expect(globalThis.localStorage?.getItem("lola.mobile.endpoint")).toBeNull();
+    expect(c.hasStoredKey).toBe(false);
+    // And with nothing remembered, a foreground event must not re-dial.
+    t.connect.mockClear();
+    expect(await c.reconnect()).toBe(false);
+    expect(t.connect).not.toHaveBeenCalled();
   });
 
   it("names the background as the reason rather than blaming the network", async () => {

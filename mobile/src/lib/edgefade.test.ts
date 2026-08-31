@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { FADE_PX, edgeFadeMask } from "./edgefade";
+import { FADE_PX, edgeFadeMask, overflowEdges } from "./edgefade";
 
 // The rule under test is "fade only what is actually hiding something". Every
 // case below is one of the four states a horizontal strip can be in, plus the
@@ -61,5 +61,27 @@ describe("edgeFadeMask", () => {
 
   it("defaults to the shared ramp width", () => {
     expect(edgeFadeMask(0, 360, 446)).toBe(edgeFadeMask(0, 360, 446, FADE_PX));
+  });
+});
+
+describe("overflowEdges", () => {
+  it("reports neither edge when the strip fits", () => {
+    expect(overflowEdges(0, 300, 300)).toEqual({ left: false, right: false });
+  });
+
+  it("reports the trailing edge at rest, which is where a key row lies", () => {
+    // The mask alone is not enough here: a key row's clip lands in a key's
+    // padding, so the fade has no ink to dim and the row reads as complete.
+    expect(overflowEdges(0, 300, 500)).toEqual({ left: false, right: true });
+  });
+
+  it("reports both edges mid-scroll and only the leading one at the far end", () => {
+    expect(overflowEdges(100, 300, 500)).toEqual({ left: true, right: true });
+    expect(overflowEdges(200, 300, 500)).toEqual({ left: true, right: false });
+  });
+
+  it("tolerates the sub-pixel slack a scroller that fits reports", () => {
+    expect(overflowEdges(0, 300, 300.4)).toEqual({ left: false, right: false });
+    expect(overflowEdges(199.6, 300, 500)).toEqual({ left: true, right: false });
   });
 });

@@ -8,6 +8,8 @@
   import { connection } from "@mobile/lib/connection.svelte";
   import { nav, paneNameFor } from "@mobile/lib/nav.svelte";
   import { searchSessions } from "@mobile/lib/search";
+  import { installKeyboardInset } from "@mobile/lib/keyboardinset";
+  import { onDestroy, onMount } from "svelte";
 
   // The session list. READ-ONLY in M1: it shows what is happening and opens a
   // terminal. The answer card, the control tiers and every mutating action are
@@ -32,6 +34,39 @@
   );
   const needsYou = $derived(attentionCount(store.sessions));
 
+  let keyboardInset = $state(0);
+  let offKeyboard: (() => void) | undefined;
+  onMount(() => {
+    offKeyboard = installKeyboardInset((px) => (keyboardInset = px));
+  });
+  onDestroy(() => {
+    offKeyboard?.();
+  });
+
+  /**
+   * DISCONNECTING AND FORGETTING ARE DIFFERENT, and the sheet exists so both
+   * are reachable.
+   *
+   * `disconnect()` sets a flag that lives as long as the process. The stored
+   * key does not: it is in the Keychain, and iOS reclaims a backgrounded app
+   * freely — so an explicit disconnect followed by a relaunch went straight
+   * back to an authenticated session list. The user's decision to leave was the
+   * one thing that was NOT durable, while the credential was.
+   *
+   * There was also no way to remove a key at all. `forgetKey` existed with a
+   * doc comment naming a control called "Forget this daemon" and had no call
+   * sites; every address that ever worked left a permanent item behind, and a
+   * key the daemon had since rolled sat there looking live.
+   */
+  let leaving = $state(false);
+
+  async function leave(forget: boolean) {
+    leaving = false;
+    if (forget) await connection.forget();
+    await connection.disconnect();
+    nav.toConnect();
+  }
+
   let refreshing = $state(false);
   async function refresh() {
     refreshing = true;
@@ -43,7 +78,12 @@
   }
 </script>
 
-<div class="flex h-full min-h-0 flex-col bg-canvas">
+<!-- The list pays back the soft keyboard's height, exactly as the terminal
+     screen does. `Keyboard.resize: KeyboardResize.None` means nothing else
+     will: with the filter field focused the keyboard covers the bottom of the
+     list, and a list with no content below the covered row cannot be scrolled
+     clear of it. -->
+<div class="flex h-full min-h-0 flex-col bg-canvas" style="padding-bottom: {keyboardInset}px">
   <header
     class="flex shrink-0 items-center gap-2 border-b border-edge px-3 pb-2"
     style="padding-top: calc(var(--lola-top-inset, env(safe-area-inset-top, 0px)) + 0.5rem)"
@@ -59,6 +99,16 @@
              app teaches it; the noun it counts was missing as well. -->
         {store.sessions.length}
         {store.sessions.length === 1 ? "session" : "sessions"}
+        <!-- THE ACTIVE FILTER IS NAMED HERE, not only on the chip. Six buckets
+             are wider than a phone, so the strip is always scrolled — and
+             scrolled to the far end, the one chip with a filled background is
+             off to the left and nothing on the screen says what the list below
+             is showing. The chip strip additionally scrolls its selection back
+             into view whenever the filter CHANGES; this covers the other half,
+             where the user scrolls away from a selection they already made. -->
+        {#if nav.triage}
+          · <span class="text-ink">{nav.triage}</span>
+        {/if}
       </span>
     </div>
     <!-- NEITHER CONTROL IS A UNICODE GLYPH ANY MORE, and the second one is why.
@@ -77,12 +127,7 @@
           <path d="M20 4v4.5h-4.5" />
         </svg>
       </TouchButton>
-      <TouchButton
-        onclick={() => {
-          void connection.disconnect();
-          nav.toConnect();
-        }}>Disconnect</TouchButton
-      >
+      <TouchButton onclick={() => (leaving = true)}>Disconnect</TouchButton>
     </div>
   </header>
 
@@ -153,3 +198,54 @@
     <div style="height: env(safe-area-inset-bottom, 0px)"></div>
   </div>
 </div>
+{#if leaving}
+  <!-- A plain overlay rather than the desktop's `confirm` store: that store and
+       its dialog live in the shared library, are keyboard-first, and this is
+       the only modal on the phone. `role="dialog"` with the backdrop as a
+       labelled dismiss target keeps it reachable without importing any of it. -->
+  <div class="fixed inset-0 z-50 flex flex-col justify-end bg-black/50 p-3">
+    <button
+      type="button"
+      class="absolute inset-0"
+      aria-label="Cancel"
+      onclick={() => (leaving = false)}
+    ></button>
+    <div
+      class="panel relative flex flex-col gap-3 p-4"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Disconnect"
+      style="margin-bottom: env(safe-area-inset-bottom, 0px)"
+    >
+      <div class="flex flex-col gap-1">
+        <span class="text-ink">Disconnect from {connection.label}</span>
+        <span class="copy text-sm text-faint">
+          {#if connection.hasStoredKey}
+            This Mac stays remembered and the app reconnects on its own next time. Forgetting it
+            removes the access key from this phone's Keychain as well, and pairing has to be done
+            again.
+          {:else}
+            Nothing is stored for this Mac, so the next launch starts at the pairing screen.
+          {/if}
+        </span>
+      </div>
+      <TouchButton wide variant="secondary" onclick={() => void leave(false)}>
+        Disconnect
+      </TouchButton>
+      {#if connection.hasStoredKey}
+        <!-- `text-bad!` is not decoration and the `!` is not optional. The shared
+             Button's `danger` variant is `text-faint` at REST and only turns red
+             on hover — which on a phone never happens, so the destructive choice
+             rendered in exactly the same ink as "Disconnect" above it. The
+             trailing `!` is CLAUDE.md's documented rule: a plain `text-bad` has
+             the same specificity as the variant's `text-faint` and the winner
+             would be decided by Tailwind's order in the compiled sheet. -->
+        <TouchButton wide variant="danger" class="text-bad!" onclick={() => void leave(true)}>
+          Forget this Mac
+        </TouchButton>
+      {/if}
+      <TouchButton wide onclick={() => (leaving = false)}>Cancel</TouchButton>
+    </div>
+  </div>
+{/if}
+

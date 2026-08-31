@@ -3,8 +3,8 @@ import {
   clearEndpoint,
   forgetKey,
   isPersistent,
+  findKey,
   loadEndpoint,
-  loadKey,
   maskKey,
   saveEndpoint,
   storeKey,
@@ -19,17 +19,17 @@ const ENDPOINT_KEY = "lola.mobile.endpoint";
  * `Plugins` proxy — is what the module asks. See the test below for what goes
  * wrong when the two are confused.
  */
-function headers(methods: string[] = ["secretSet", "secretGet", "secretDelete"]) {
+function headers(methods: string[] = ["secretSet", "secretHas", "secretDelete"]) {
   return [{ name: "LolaTransport", methods: methods.map((name) => ({ name })) }];
 }
 
-function installPlugin(available = ["secretSet", "secretGet", "secretDelete"]) {
+function installPlugin(available = ["secretSet", "secretHas", "secretDelete"]) {
   const store = new Map<string, string>();
   const p = {
     secretSet: vi.fn(async ({ key, value }: { key: string; value: string }) => {
       store.set(key, value);
     }),
-    secretGet: vi.fn(async ({ key }: { key: string }) => ({ value: store.get(key) ?? null })),
+    secretHas: vi.fn(async ({ key }: { key: string }) => ({ has: store.has(key) })),
     secretDelete: vi.fn(async ({ key }: { key: string }) => {
       store.delete(key);
     }),
@@ -83,7 +83,10 @@ describe("the bearer key", () => {
     await storeKey("10.0.0.1:7717", "0123456789abcdef");
     const dump = JSON.stringify({ ...globalThis.localStorage });
     expect(dump).not.toContain("0123456789abcdef");
-    expect(await loadKey("10.0.0.1:7717")).toBe("0123456789abcdef");
+    expect(await findKey("10.0.0.1:7717")).toEqual({
+      where: "memory",
+      key: "0123456789abcdef",
+    });
   });
 
   it("says honestly whether a key will survive a relaunch", () => {
@@ -95,7 +98,7 @@ describe("the bearer key", () => {
   it("is not fooled by Capacitor's method proxy", () => {
     // THE BUG THIS PINS, and it is the reason a phone came back from standby
     // asking to be paired again. `Capacitor.Plugins.X` is a Proxy whose `get`
-    // handler returns a function for ANY property, so `typeof p.secretGet ===
+    // handler returns a function for ANY property, so `typeof p.secretHas ===
     // "function"` is true against a plugin that has never implemented it. The
     // old probe therefore answered "yes, the key survives a relaunch" on a
     // build with no Keychain code at all: the write was rejected as not
@@ -109,7 +112,7 @@ describe("the bearer key", () => {
     // A JavaScript bundle newer than the native binary it is running against.
     // Partial support is not support: a key that can be written and not deleted
     // makes "forget this Mac" a lie.
-    installPlugin(["secretSet", "secretGet"]);
+    installPlugin(["secretSet", "secretHas"]);
     expect(isPersistent()).toBe(false);
   });
 
@@ -117,8 +120,8 @@ describe("the bearer key", () => {
     // The fallback has to still WORK, not just be reported. A browser dev
     // session must be able to connect for as long as the page lives.
     installProxyOnly();
-    await storeKey("a:1", "0123456789abcdef");
-    expect(await loadKey("a:1")).toBe("0123456789abcdef");
+    expect(await storeKey("a:1", "0123456789abcdef")).toBe("memory");
+    expect(await findKey("a:1")).toEqual({ where: "memory", key: "0123456789abcdef" });
     expect(JSON.stringify({ ...globalThis.localStorage })).not.toContain("0123456789abcdef");
   });
 
@@ -126,8 +129,11 @@ describe("the bearer key", () => {
     installPlugin();
     await storeKey("10.0.0.1:7717", "keyforthefirstmac");
     await storeKey("10.0.0.2:7717", "keyforsecondmacxx");
-    expect(await loadKey("10.0.0.1:7717")).toBe("keyforthefirstmac");
-    expect(await loadKey("10.0.0.2:7717")).toBe("keyforsecondmacxx");
+    // The KEY never comes back across the bridge — see the header — so what is
+    // asserted is that each endpoint is separately paired and that the plugin
+    // was asked about the right account.
+    expect(await findKey("10.0.0.1:7717")).toEqual({ where: "keychain", key: "" });
+    expect(await findKey("10.0.0.3:7717")).toEqual({ where: "none", key: "" });
   });
 
   it("deletes rather than storing an empty key", async () => {
@@ -137,7 +143,7 @@ describe("the bearer key", () => {
     await storeKey("a:1", "0123456789abcdef");
     await storeKey("a:1", "");
     expect(p.secretDelete).toHaveBeenCalledWith({ key: "a:1" });
-    expect(await loadKey("a:1")).toBe("");
+    expect(await findKey("a:1")).toEqual({ where: "none", key: "" });
   });
 
   it("keeps the session alive when the Keychain refuses", async () => {
@@ -145,26 +151,55 @@ describe("the bearer key", () => {
       Plugins: {
         LolaTransport: {
           secretSet: vi.fn().mockRejectedValue(new Error("locked")),
-          secretGet: vi.fn().mockRejectedValue(new Error("locked")),
+          secretHas: vi.fn().mockRejectedValue(new Error("locked")),
           secretDelete: vi.fn().mockRejectedValue(new Error("locked")),
         },
       },
       PluginHeaders: headers(),
     };
-    await storeKey("a:1", "0123456789abcdef");
-    expect(await loadKey("a:1")).toBe("0123456789abcdef");
+    // The fallback survives, and it REPORTS itself. `isPersistent()` answers
+    // from the plugin's method list and would still say "this key will survive a
+    // relaunch"; only the write knows that it did not, which is why the connect
+    // screen's caption is driven by this value and not by that probe.
+    expect(await storeKey("a:1", "0123456789abcdef")).toBe("memory");
+    expect(await findKey("a:1")).toEqual({ where: "memory", key: "0123456789abcdef" });
+  });
+
+  it("reports a successful Keychain write as durable", async () => {
+    installPlugin();
+    expect(await storeKey("a:1", "0123456789abcdef")).toBe("keychain");
   });
 
   it("forgets a key on request", async () => {
     installPlugin();
     await storeKey("a:1", "0123456789abcdef");
     await forgetKey("a:1");
-    expect(await loadKey("a:1")).toBe("");
+    expect(await findKey("a:1")).toEqual({ where: "none", key: "" });
+  });
+
+  it("forgets the in-memory copy too, so a fallback key is not left behind", async () => {
+    installProxyOnly();
+    await storeKey("a:1", "0123456789abcdef");
+    await forgetKey("a:1");
+    expect(await findKey("a:1")).toEqual({ where: "none", key: "" });
   });
 
   it("returns empty for an endpoint that was never stored", async () => {
     installPlugin();
-    expect(await loadKey("nothing:1")).toBe("");
+    expect(await findKey("nothing:1")).toEqual({ where: "none", key: "" });
+  });
+
+  it("NEVER returns the key across the bridge, even when one is stored", async () => {
+    // The leak this shape exists to close: `secretGet` resolved
+    // `{ value: <the key> }`, and Capacitor's bridge logs every resolved
+    // payload, so the bearer key was printed to the console on every launch of
+    // every Debug build. A boolean cannot leak a credential.
+    const { p } = installPlugin();
+    await storeKey("a:1", "0123456789abcdef");
+    const found = await findKey("a:1");
+    expect(found.key).toBe("");
+    expect(found.where).toBe("keychain");
+    expect(p).not.toHaveProperty("secretGet");
   });
 });
 

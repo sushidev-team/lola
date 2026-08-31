@@ -8,7 +8,7 @@
     type KeyModifiers,
     type TerminalModes,
   } from "@mobile/lib/keybytes";
-  import { overflowFade } from "@mobile/lib/edgefade";
+  import { overflowFade, type OverflowEdges } from "@mobile/lib/edgefade";
   import AccessoryKey from "./AccessoryKey.svelte";
 
   // The keyboard accessory bar: the feature that decides whether this app is
@@ -41,10 +41,30 @@
   let {
     /** The terminal's live modes. The arrows' encoding depends on DECCKM. */
     modes = DEFAULT_MODES,
+    /**
+     * Nothing can receive a byte: the pane died, or the connection is down.
+     *
+     * A full-strength row of keys under a pane that cannot take one is the app
+     * claiming an ability it does not have. The bar is faded and every key
+     * refuses, latches included — a latch that survived a dead pane would be
+     * consumed by the first keystroke after a reconnect.
+     */
+    disabled = false,
+    /**
+     * The soft keyboard is up, so the home-indicator inset is already paid.
+     *
+     * The screen pays the keyboard's height as bottom padding, and that height
+     * covers the home indicator too — so a bar that goes on adding
+     * `safe-area-inset-bottom` on top of it floats about 34 points clear of the
+     * keyboard, which reads as a rendering fault rather than as spacing.
+     */
+    raised = false,
     /** Send bytes to the pane. */
     onsend,
   }: {
     modes?: TerminalModes;
+    disabled?: boolean;
+    raised?: boolean;
     onsend: (bytes: string) => void;
   } = $props();
 
@@ -80,6 +100,23 @@
   const STRIP =
     "flex min-w-0 flex-1 gap-1 overflow-x-auto overscroll-x-contain py-1 [scrollbar-width:none]";
 
+  // THE MASK IS NOT ENOUGH ON A KEY ROW, and this is the second half.
+  //
+  // `overflowFade` dims the strip's trailing pixels, which says "there is more"
+  // only when the clip lands on ink. A key row ends on clean key boundaries with
+  // 4pt gaps, and at rest the clip lands in a key's PADDING: measured on the
+  // device, the last visible key's glyph dimmed from 215 to 179 and its 1px
+  // border from 51 to 36 against a 32 background — at arm's length, a complete
+  // key followed by nothing. Enter and Shift-Enter read as keys this app does
+  // not have, which is exactly the failure the fade was added to prevent.
+  //
+  // So each strip also gets an overlay drawn on the ROW, over the strip's own
+  // background, plus a chevron. It cannot be defeated by where the boundary
+  // falls, because it does not depend on there being a glyph underneath.
+  const NONE: OverflowEdges = { left: false, right: false };
+  let primaryEdges = $state<OverflowEdges>(NONE);
+  let secondaryEdges = $state<OverflowEdges>(NONE);
+
   let expanded = $state(false);
   let ctrl = $state(false);
   let alt = $state(false);
@@ -108,8 +145,16 @@
     return { ctrl, alt };
   }
 
-  /** Fire one key. Every press is sent; nothing on this screen refuses one. */
+  /**
+   * Fire one key.
+   *
+   * Nothing here refuses a press for being mid-turn — the live terminal is a
+   * human's own keyboard and deliberately bypasses lola's AtPrompt gate, which
+   * guards lola's OWN automation. The only refusal is a pane that cannot
+   * receive a byte at all.
+   */
   function press(key: BarKey) {
+    if (disabled) return;
     if (key.kind === "latch") {
       // A latch toggles and sends nothing. Tapping it twice cancels, which is
       // the only way to back out of a mis-tap without sending a key.
@@ -129,39 +174,48 @@
      depend on the shell's CSS defining a spacing scale it happens not to. -->
 <div
   class="shrink-0 border-t border-edge bg-panel"
-  style="padding-bottom: env(safe-area-inset-bottom, 0px)"
+  style="padding-bottom: {raised ? '0px' : 'env(safe-area-inset-bottom, 0px)'}"
 >
   {#if expanded}
-    <div class="flex items-center px-2 pt-1 pb-1">
-      <div class={STRIP} use:overflowFade>
+    <div class="relative flex items-center px-2 pt-1 pb-1">
+      <div
+        class={STRIP}
+        use:overflowFade={{ onedges: (e) => (secondaryEdges = e) }}
+      >
         {#each BAR_ROW_SECONDARY as key (key.id ?? key.value)}
           <AccessoryKey
             label={key.label}
             aria={key.aria}
             repeats={key.repeats}
             wide={key.label.length > 2}
+            {disabled}
             latched={key.kind === "latch" && (key.value === "ctrl" ? ctrl : alt)}
             onfire={() => press(key)}
           />
         {/each}
       </div>
+      {@render edges(secondaryEdges, false)}
     </div>
   {/if}
 
   <!-- The row's own vertical padding is 0 at the top: the strip carries `py-1`
        inside itself, and doubling it here would push the pane up for nothing. -->
-  <div class="flex items-center px-2 pb-1">
-    <div class={STRIP} use:overflowFade>
+  <div class="relative flex items-center px-2 pb-1">
+    <div class={STRIP} use:overflowFade={{ onedges: (e) => (primaryEdges = e) }}>
       {#each BAR_ROW_PRIMARY as key (key.id)}
         <AccessoryKey
           label={key.label}
           aria={key.aria}
           repeats={key.repeats}
           wide={key.label.length > 2}
+          {disabled}
           onfire={() => press(key)}
         />
       {/each}
     </div>
+    <!-- Inset on the right by the chevron button's width plus its gap, so the
+         overlay marks the STRIP's edge and not the row's. -->
+    {@render edges(primaryEdges, true)}
     <!-- OUTSIDE the strip, and that is the whole point of the split. It is the
          only way to reach row two, so a chevron that scrolled away with the keys
          would leave ctrl, alt and the four control chords unreachable on any
@@ -169,10 +223,12 @@
          and the `ml-1` gap replace the `gap-1` the strip owns. -->
     <button
       type="button"
+      {disabled}
       aria-label={expanded ? "Hide the second key row" : "Show the second key row"}
       aria-expanded={expanded}
       class="ml-1 flex h-10 min-w-10 shrink-0 touch-manipulation items-center justify-center
-             rounded-md border border-edge/60 bg-panel text-base text-faint select-none"
+             rounded-md border border-edge/60 bg-panel text-base text-faint select-none
+             disabled:opacity-40"
       onpointerdown={(e) => {
         e.preventDefault();
         expanded = !expanded;
@@ -182,3 +238,28 @@
     </button>
   </div>
 </div>
+{#snippet edges(e: OverflowEdges, inset: boolean)}
+  <!-- Painted on the row, above the strip, and never in the way: `inset-y-0`
+       with no hit area, so a swipe passes straight through to the scroller.
+       The chevron is the part that survives a clip landing on empty padding. -->
+  {#if e.left}
+    <div
+      class="pointer-events-none absolute inset-y-0 left-2 flex w-7 items-center justify-start
+             bg-gradient-to-r from-panel via-panel/80 to-transparent text-sm text-faint"
+      aria-hidden="true"
+    >
+      ‹
+    </div>
+  {/if}
+  {#if e.right}
+    <div
+      class="pointer-events-none absolute inset-y-0 flex w-7 items-center justify-end
+             bg-gradient-to-l from-panel via-panel/80 to-transparent text-sm text-faint
+             {inset ? 'right-13' : 'right-2'}"
+      aria-hidden="true"
+    >
+      ›
+    </div>
+  {/if}
+{/snippet}
+

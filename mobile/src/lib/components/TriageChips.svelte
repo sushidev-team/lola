@@ -25,6 +25,30 @@
     sessions: SessionInfo[];
   } = $props();
 
+  /**
+   * Keep the ACTIVE chip on screen.
+   *
+   * Six buckets are about 610 points of chips, so the strip is always scrolled
+   * on a phone — and scrolled to the end, the only chip with a filled
+   * background is off to the left, so nothing on the screen says what the list
+   * below is filtered to. The chip is scrolled back into view whenever the
+   * filter changes, which is the one moment it is certain the user wants to see
+   * it. Purely cosmetic: `scrollIntoView` is guarded because jsdom and an
+   * older WebView both lack the options overload.
+   */
+  let strip = $state<HTMLDivElement | undefined>();
+  $effect(() => {
+    const selected = value;
+    const el = strip?.querySelector<HTMLElement>("[data-triage-selected='true']");
+    if (!el || typeof el.scrollIntoView !== "function") return;
+    void selected;
+    try {
+      el.scrollIntoView({ block: "nearest", inline: "nearest" });
+    } catch {
+      /* an implementation without the options overload; the chip stays put */
+    }
+  });
+
   const counts = $derived.by(() => {
     const m: Record<string, number> = {};
     for (const s of sessions) {
@@ -57,15 +81,21 @@
      should have. -->
 <div class="shrink-0 border-b border-edge" role="group" aria-label="Filter sessions">
   <div
+    bind:this={strip}
     class="flex gap-1.5 overflow-x-auto overscroll-x-contain px-3 py-2 [scrollbar-width:none]"
     use:overflowFade
   >
-    <TouchButton selected={value === ""} onclick={() => (value = "")}>
+    <TouchButton
+      selected={value === ""}
+      data-triage-selected={value === ""}
+      onclick={() => (value = "")}
+    >
       All <span class="num text-sm opacity-70">{sessions.length}</span>
     </TouchButton>
     {#each TRIAGE_FILTERS as title (title)}
       <TouchButton
         selected={value === title}
+        data-triage-selected={value === title}
         onclick={() => (value = value === title ? "" : title)}
       >
         {title} <span class="num text-sm opacity-70">{counts[title] ?? 0}</span>

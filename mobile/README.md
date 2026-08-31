@@ -68,17 +68,57 @@ in `mobile/tsconfig.json`. Nothing under `desktop/` is written by this project.
   stated shape rather than an omission: a terminal-centric surface held at
   arm's length is a dark surface, and following the system would mean rendering
   an agent's pane in a palette the agent's own colours were not chosen for.
-- **The bearer key is not persisted yet.** The iOS plugin ships four bridged
-  methods (`connect`, `disconnect`, `send`, `status`) and no Keychain surface,
-  so `mobile/src/lib/secretstore.ts` finds nothing to probe and keeps the key in
-  memory for the life of the app run. The connect screen says so rather than
-  implying otherwise. Expect to retype the key on every launch.
+- **The bearer key IS persisted, and this is the one M1 shape worth reading
+  twice.** Ticking "Remember this Mac" writes the key to the iOS Keychain as a
+  generic-password item under the endpoint's `host:port`, with
+  `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`. Concretely: it survives
+  standby, a relaunch and iOS reclaiming the backgrounded app; it never reaches
+  iCloud Keychain, an encrypted backup or a restore onto new hardware (a new
+  phone always re-pairs); and it is readable by this app from the first unlock
+  after a reboot onward, which is what lets the app reconnect on its own with
+  nobody watching. `mobile/src/lib/secretstore.ts` still degrades to an
+  in-memory map if the Keychain refuses, and the connect screen then says the
+  key will have to be typed again rather than claiming otherwise.
+
+  The plaintext never comes back across the bridge. The plugin has no method
+  that returns it — `secretHas` answers a boolean and `connect` takes a
+  `keyRef` naming the Keychain account, so the native side does the read. That
+  is not tidiness: Capacitor's own bridge logs every resolved payload
+  (`CAPLog.print("TO JS", result.jsonPayload())`), so an earlier `secretGet`
+  printed the bearer key in cleartext to the app's console on every launch of
+  every Debug build.
+
+- **What that costs, stated plainly, because M1 has none of M2's mitigations.**
+  A stolen phone that is unlocked reconnects on its own and can type into live
+  coding agents. There is no per-device identity (the insecure listener labels
+  every peer `"insecure"`), no capability tier enforced per frame, no epoch
+  revocation, no device list on the Mac, no biometric gate and no audit line —
+  all of those are M2, and none of them exists yet. The only revocation M1 has
+  is regenerating the key on the Mac, which un-pairs **every** phone at once;
+  the phone's own copy then goes when the daemon refuses it, or when you use
+  **Forget this Mac** on the Disconnect sheet. Between the first unlock after a
+  reboot and the next reboot, anything with code execution inside this app's
+  container can read the item. If that trade is not one you want on a given
+  phone, leave "Remember this Mac" unticked — the key then lives only as long as
+  the app run, which is exactly what it did before.
+
+- **Disconnect and forget are different, and both are on the Disconnect sheet.**
+  Disconnect closes the socket for this run; the pairing survives, and the next
+  launch reconnects. "Forget this Mac" deletes the Keychain item and the
+  remembered address, so the next launch starts at the pairing screen.
 
 ### Two things that are wired but that only a device can prove
 
 Both are invisible in `npm run dev`, because a desktop browser has neither a
 soft keyboard nor Safari's gesture arbitration. Check them in the Web Inspector
 on the first device run rather than assuming them.
+
+Safari's Web Inspector is enabled by `scripts/run-sim.sh` and
+`scripts/run-device.sh`, which export `LOLA_WEB_INSPECTOR=1` before `cap sync`.
+It is **not** on by default any more: the config key reads that variable, so a
+build made by any other route ships without a debugger. That changed when the
+bearer key became durable — a build carrying a Keychain credential should not
+have an attachable inspector unless somebody asked for one.
 
 - **The keyboard inset.** `capacitor.config.ts` sets
   `Keyboard.resize: KeyboardResize.None` on purpose — letting the plugin resize
@@ -89,7 +129,12 @@ on the first device run rather than assuming them.
   populated by the package's own `registerPlugin` call and by nothing else — a
   probe that never imports the package finds nothing on a device either, and the
   failure is silent: the accessory bar just sits under the raised keyboard.
-  Confirm `keyboardWillShow` fires and the bar rises with the keyboard.
+  That failure has actually happened, which is why there is now a SECOND source:
+  `window.visualViewport`, which shrinks by exactly the keyboard's overlap under
+  `KeyboardResize.None` and needs no plugin at all. The two are combined by
+  `Math.max`, so whichever is working carries the inset and the other reports 0.
+  Confirm the bar rises with the keyboard; if it does not, neither source is
+  reporting and the Web Inspector is the place to find out which.
 - **`touch-action: none` on the pane.** The one-finger drag inside a terminal is
   a scroll RPC, not a browser pan, so Safari must not be allowed to claim the
   gesture — once it does, `preventDefault()` is ignored and the gesture arrives
@@ -609,7 +654,12 @@ nothing the app can do about it afterwards. All three URL forms are affected:
 That store is persistent (`…/Devices/<udid>/data/var/db/diagnostics`), survives
 relaunches, and is what `simctl diagnose` collects. The plugin's own logging is
 clean — `LolaLog` prints a host, a port and three booleans and never a
-credential — but the claim that matters is about the key, and the OS wins. **A
+credential — but two things underneath it are not the plugin's to control, and
+both have printed the key. The OS logs the launch URL, as above. Capacitor's
+bridge logs every resolved payload, which is why the plugin has no method that
+returns a secret at all (see `LolaTransportPlugin+Secrets.swift`); that half is
+fixed, and it is worth knowing it was ever true, because a build older than that
+change printed the key on every launch. **A
 key used with `key=` must be treated as disclosed**: rotate it, and
 `xcrun simctl erase` the simulator, before sharing a diagnose bundle.
 

@@ -128,6 +128,53 @@ class ChannelPaneSubscription implements PaneSubscription {
   private readonly events = new Set<Listener<PaneEvent>>();
   private readonly errors = new Set<Listener<WireRefusalError>>();
 
+  // EVENTS THAT ARRIVE BEFORE ANYONE IS LISTENING ARE HELD, NOT DROPPED.
+  //
+  // The window is small and it is unavoidable. `subscribe()` resolves on the
+  // daemon's acknowledging resync; the caller then gets control back through at
+  // least one microtask hop before it can call `onEvent`. tmux's initial paint
+  // of a freshly attached pane lands as `pty` frames a few milliseconds after
+  // that ack — squarely inside the hop — and `fanout` over an empty listener
+  // set is a silent discard. Those bytes cannot be re-requested: the bus has
+  // already handed them out, and an idle agent pane writes nothing else for
+  // minutes.
+  //
+  // That is the whole of the "first open of a session shows an empty pane, back
+  // out and re-enter and it is fine" bug. The second open is fine because the
+  // bus is still attached and its shadow emulator now holds a painted screen,
+  // so the ack alone is enough.
+  //
+  // So frames are buffered until the first listener arrives and then replayed
+  // in arrival order. `screen` is still maintained on the way past (it always
+  // was), so a caller that only reads the screen is unaffected.
+  private replay: PaneEvent[] | null = [];
+
+  /**
+   * The cap, and what happens at it.
+   *
+   * The real window is a handful of frames, so a buffer this size only fills
+   * when the caller never attached a listener at all — a screen torn down
+   * mid-attach. Dropping the oldest and marking the next delivery as a GAP is
+   * the same contract a bus overflow already has: a gap on a `pty` event makes
+   * the terminal re-subscribe, which is the defined recovery and the only
+   * honest one, because a byte range cannot be replayed from halfway through an
+   * escape sequence.
+   */
+  private static readonly REPLAY_MAX = 256;
+  private replayTorn = false;
+
+  /**
+   * Whether the acknowledging resync has been seen.
+   *
+   * The ack is the ONE frame that is deliberately not buffered. It is the
+   * subscription's own return value — every caller reads it off `screen` and
+   * paints from it — so replaying it would repaint the pane a second time and
+   * make the buffer's contents depend on whether the caller happened to read
+   * `screen` first. Everything that arrives AFTER it is stream, and stream is
+   * what must not be dropped.
+   */
+  private acked = false;
+
   constructor(
     pane: string,
     id: string,
@@ -139,7 +186,48 @@ class ChannelPaneSubscription implements PaneSubscription {
 
   onEvent(l: Listener<PaneEvent>): Unsubscribe {
     this.events.add(l);
+    this.drainReplay();
     return () => this.events.delete(l);
+  }
+
+  /**
+   * Hand the first listener everything that arrived before it existed, once.
+   *
+   * The buffer is discarded rather than kept for later listeners: a second
+   * listener is a second reader of a live stream, not a replay client, and
+   * replaying to it would double-render the pane.
+   */
+  private drainReplay(): void {
+    const held = this.replay;
+    if (held === null) return;
+    this.replay = null;
+    const torn = this.replayTorn;
+    this.replayTorn = false;
+    for (let i = 0; i < held.length; i++) {
+      const e = held[i];
+      // The tear is announced on the FIRST replayed event, because everything
+      // after it is contiguous with it; announcing it later would place the
+      // discontinuity where there is none.
+      fanout(this.events, torn && i === 0 && e.kind === "output" ? { ...e, gap: true } : e, "pane");
+    }
+  }
+
+  /**
+   * Deliver one event, or hold it until there is somebody to deliver it to.
+   *
+   * Every `fanout(this.events, …)` in this class goes through here. A direct
+   * fanout is the bug above.
+   */
+  private emit(e: PaneEvent): void {
+    if (this.replay === null) {
+      fanout(this.events, e, "pane");
+      return;
+    }
+    if (this.replay.length >= ChannelPaneSubscription.REPLAY_MAX) {
+      this.replay.shift();
+      this.replayTorn = true;
+    }
+    this.replay.push(e);
   }
 
   onError(l: Listener<WireRefusalError>): Unsubscribe {
@@ -154,8 +242,11 @@ class ChannelPaneSubscription implements PaneSubscription {
    * included. That is deliberate: the ack carries the first screen, and having
    * one place maintain `screen`/`lastSeq` means the state cannot depend on
    * whether a frame happened to be the one a pending `subscribe()` was waiting
-   * for. The ack's event is delivered to no listeners (nobody has subscribed
-   * yet at that point), which is harmless — `screen` is what the caller reads.
+   * for. The ack's own event reaches no listener directly — nobody has
+   * subscribed yet at that point — so it lands in the replay buffer with
+   * everything else and is delivered when the first listener arrives. A caller
+   * that paints from `screen` before wiring `onEvent` therefore sees the ack
+   * twice, which is idempotent: a resync is a full screen, not a delta.
    */
   handle(f: Frame): void {
     if (f.type === FRAME_RESYNC) {
@@ -163,6 +254,8 @@ class ChannelPaneSubscription implements PaneSubscription {
       const screen = (f.payload ?? {}) as ResyncPayload;
       this.screen = screen;
       if (typeof f.seq === "number" && f.seq > 0) this.lastSeq = f.seq;
+      const ack = !this.acked;
+      this.acked = true;
 
       if (screen.exited) {
         // A pane death arrives as a resync carrying `exited`, not as a distinct
@@ -172,7 +265,10 @@ class ChannelPaneSubscription implements PaneSubscription {
         // same reason.
         this.exited = true;
         this.owner.retire(this.pane);
-        fanout(this.events, { kind: "exit", screen, seq: this.lastSeq }, "pane");
+        // An exit is reported even when it is the ack: subscribing to a pane
+        // that has already died is the one case where the first screen is also
+        // the last, and a caller that never hears about it waits forever.
+        this.emit({ kind: "exit", screen, seq: this.lastSeq });
         return;
       }
 
@@ -181,11 +277,8 @@ class ChannelPaneSubscription implements PaneSubscription {
       // stays visible, then repairs itself with a fresh full screen. Repaint
       // and adopt the new sequence — only a gap arriving on a `pty` frame is
       // a reason to re-subscribe.
-      fanout(
-        this.events,
-        { kind: "resync", screen, seq: this.lastSeq, repaired: verdict === "repaired" },
-        "pane",
-      );
+      if (ack) return; // the caller reads it off `screen`; see `acked`
+      this.emit({ kind: "resync", screen, seq: this.lastSeq, repaired: verdict === "repaired" });
       return;
     }
 
@@ -196,11 +289,7 @@ class ChannelPaneSubscription implements PaneSubscription {
       // JSON null, so both "" and null are reachable and neither is malformed.
       const data = base64ToBytes(payload.data);
       if (typeof f.seq === "number" && f.seq > 0) this.lastSeq = f.seq;
-      fanout(
-        this.events,
-        { kind: "output", data, seq: this.lastSeq, gap: verdict === "torn" },
-        "pane",
-      );
+      this.emit({ kind: "output", data, seq: this.lastSeq, gap: verdict === "torn" });
       return;
     }
 
