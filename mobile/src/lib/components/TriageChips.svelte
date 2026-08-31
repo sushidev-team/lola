@@ -1,6 +1,7 @@
 <script lang="ts">
   import { TRIAGE_FILTERS } from "$lib/filters";
   import { kanbanColumn } from "$lib/theme";
+  import { overflowFade } from "@mobile/lib/edgefade";
   import TouchButton from "./TouchButton.svelte";
   import type { SessionInfo } from "$lib/store.svelte";
 
@@ -34,28 +35,41 @@
   });
 </script>
 
-<!-- WRAPS, and it used to scroll. Five fixed buckets plus All is a SET, not a
-     feed, and at 393pt the strip ended mid-word on "In review" with "Done"
-     entirely off-screen — which happened to be the only two buckets holding any
-     session, so every count a phone user could see read 0 above a list of two
-     rows. There was no scrollbar (scrollbar-width: none), no fade and no
-     chevron, so the accidental slice was the only hint anything was hidden.
-     Two rows of six chips is worse than one row of six that fits and better
-     than any amount of horizontal gesture. -->
-<div
-  class="flex shrink-0 flex-wrap gap-1.5 border-b border-edge px-3 py-2"
-  role="group"
-  aria-label="Filter sessions"
->
-  <TouchButton selected={value === ""} onclick={() => (value = "")}>
-    All <span class="num text-sm opacity-70">{sessions.length}</span>
-  </TouchButton>
-  {#each TRIAGE_FILTERS as title (title)}
-    <TouchButton
-      selected={value === title}
-      onclick={() => (value = value === title ? "" : title)}
-    >
-      {title} <span class="num text-sm opacity-70">{counts[title] ?? 0}</span>
+<!-- ONE ROW, and it scrolls. Six fixed buckets are about 610 points of chips,
+     so wrapping cost two or three stacked lines above a list that has none to
+     spare on a phone.
+
+     It scrolled once before and was reverted, and the reason is worth keeping:
+     with no scrollbar (scrollbar-width: none), no fade and no chevron the strip
+     simply ended mid-word on "In Review" with "Done" off-screen, and those
+     happened to be the only two buckets holding a session — so every count a
+     phone user could see read 0 above a list of two rows. An unselected chip is
+     a ghost Button, i.e. bare text with no border, so a sliced one reads as a
+     layout bug rather than as more content. `use:overflowFade` is what fixes
+     that and what makes one row honest: text that fades out continues, text
+     that is chopped is broken — and the fade is dropped at whichever end has
+     nothing left to hide, so the last chip is never dimmed for no reason.
+
+     `shrink-0` is not spelled here because Button's own base classes carry it
+     along with `whitespace-nowrap`. Without those a flex scroller would squash
+     the chips to their min-content width and wrap the labels inside them
+     instead of overflowing, which is the failure this markup looks like it
+     should have. -->
+<div class="shrink-0 border-b border-edge" role="group" aria-label="Filter sessions">
+  <div
+    class="flex gap-1.5 overflow-x-auto overscroll-x-contain px-3 py-2 [scrollbar-width:none]"
+    use:overflowFade
+  >
+    <TouchButton selected={value === ""} onclick={() => (value = "")}>
+      All <span class="num text-sm opacity-70">{sessions.length}</span>
     </TouchButton>
-  {/each}
+    {#each TRIAGE_FILTERS as title (title)}
+      <TouchButton
+        selected={value === title}
+        onclick={() => (value = value === title ? "" : title)}
+      >
+        {title} <span class="num text-sm opacity-70">{counts[title] ?? 0}</span>
+      </TouchButton>
+    {/each}
+  </div>
 </div>

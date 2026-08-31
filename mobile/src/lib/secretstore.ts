@@ -29,15 +29,32 @@
 // secret. If those names do not match what the plugin ships, this file is the
 // only place to change.
 //
-// AS OF M1 THE PLUGIN SHIPS NONE OF THEM. `LolaTransportPlugin.swift` declares
-// exactly four bridged methods — connect, disconnect, send, status — so the
-// probe below finds nothing and every key lives in the volatile map for the
-// life of the app run. That is a deliberate assembly decision rather than an
-// oversight: the Keychain half is perhaps eighty lines of Swift that cannot be
-// compiled anywhere in this workflow, and shipping uncompilable Swift would
-// cost the first reader their whole Xcode build rather than one retyped key.
-// The contract above is what a later change implements; nothing else here
-// moves when it does, and `isPersistent()` starts answering true on its own.
+// -------------------------------------------------------------------------
+// THE PROBE READS `PluginHeaders`, NOT `Plugins`, AND THAT IS LOAD-BEARING.
+//
+// `Capacitor.Plugins.LolaTransport` is a JavaScript `Proxy` created by
+// `registerPlugin`, and its `get` handler MANUFACTURES A FUNCTION FOR EVERY
+// PROPERTY NAME (see `createPluginMethodWrapper` in @capacitor/core). So
+// `typeof p.secretGet === "function"` is true for a method no build has ever
+// implemented, true in a desktop browser, and true against a plugin binary
+// older than this bundle. It is not a capability check; it is a check that
+// `registerPlugin` has run, which is a race against the dynamic import in
+// `main.ts` and nothing more.
+//
+// That mattered exactly as much as it sounds. The probe answered TRUE on a
+// device with no Keychain code in the plugin at all: `storeKey` called
+// `secretSet`, the bridge rejected it as not implemented, the catch below
+// dropped the key into the volatile map — and `isPersistent()` had already told
+// the connect screen the key would survive a relaunch. It did not. The phone
+// came back from standby with an empty credential and asked to be paired again,
+// which is also what a REVOKED device looks like.
+//
+// `Capacitor.PluginHeaders` is the list the NATIVE side injects, naming each
+// plugin and the methods it actually implements. It is absent in a browser,
+// present and honest on a device, and it shrinks when the plugin binary is
+// older than the JavaScript. It is the only thing here that can answer the
+// question this module is asking.
+// -------------------------------------------------------------------------
 //
 // WITHOUT the plugin the key is held in memory for the life of the app run and
 // nowhere else. That is deliberately worse ergonomically — the key is retyped on
@@ -52,11 +69,43 @@ interface SecretCapablePlugin {
   secretDelete?(o: { key: string }): Promise<unknown>;
 }
 
-interface CapacitorGlobal {
-  Plugins?: { LolaTransport?: SecretCapablePlugin };
+/** One entry of `Capacitor.PluginHeaders`, as much of it as this module reads. */
+interface PluginHeader {
+  name?: string;
+  methods?: readonly { name?: string }[];
 }
 
+interface CapacitorGlobal {
+  Plugins?: { LolaTransport?: SecretCapablePlugin };
+  /** Injected by the native bridge. Absent in a browser. See the header. */
+  PluginHeaders?: readonly PluginHeader[];
+}
+
+/** The three names that have to be present for a key to survive a relaunch. */
+const REQUIRED = ["secretSet", "secretGet", "secretDelete"] as const;
+
+/**
+ * Whether the NATIVE plugin implements the secret store.
+ *
+ * Asked of `PluginHeaders` and never of the `Plugins` proxy, which answers yes
+ * to everything — see the header. Fails closed: no headers, no entry for this
+ * plugin, or a method missing from its list all mean "hold the key in memory
+ * and say so".
+ */
+function nativeSecretStore(): boolean {
+  const cap = (globalThis as { Capacitor?: CapacitorGlobal }).Capacitor;
+  const header = cap?.PluginHeaders?.find((h) => h?.name === "LolaTransport");
+  if (!header?.methods) return false;
+  const names = new Set(header.methods.map((m) => m?.name));
+  return REQUIRED.every((n) => names.has(n));
+}
+
+/**
+ * The plugin object to call, once `nativeSecretStore` has said there is
+ * something behind it.
+ */
 function plugin(): SecretCapablePlugin | undefined {
+  if (!nativeSecretStore()) return undefined;
   const cap = (globalThis as { Capacitor?: CapacitorGlobal }).Capacitor;
   const p = cap?.Plugins?.LolaTransport;
   if (!p) return undefined;
@@ -67,7 +116,8 @@ function plugin(): SecretCapablePlugin | undefined {
  * Whether a stored key will survive the app being closed.
  *
  * The UI shows this, because "you will have to type this again next time" is a
- * fact a user is entitled to before they decide how to store a secret.
+ * fact a user is entitled to before they decide how to store a secret — and
+ * because the sentence is only worth printing if it is true in both directions.
  */
 export function isPersistent(): boolean {
   return plugin() !== undefined;

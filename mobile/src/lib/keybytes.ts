@@ -391,12 +391,6 @@ export interface BarKey {
   readonly aria: string;
   /** Whether holding the key repeats it. Arrows and backspace only. */
   readonly repeats?: boolean;
-  /**
-   * Exempt from the mid-turn "send anyway" confirmation. Interrupting is the
-   * legitimate mid-turn action, and putting friction in front of it would
-   * recreate exactly the uselessness that friction is trying to avoid.
-   */
-  readonly interrupt?: boolean;
 }
 
 /**
@@ -404,7 +398,7 @@ export interface BarKey {
  * Matches PLAN.md's accessory-bar layout.
  */
 export const BAR_ROW_PRIMARY: readonly BarKey[] = [
-  { kind: "key", id: "escape", label: "esc", aria: "Escape", interrupt: true },
+  { kind: "key", id: "escape", label: "esc", aria: "Escape" },
   { kind: "key", id: "tab", label: "tab", aria: "Tab" },
   { kind: "key", id: "shiftTab", label: "⇧tab", aria: "Shift Tab" },
   { kind: "key", id: "up", label: "↑", aria: "Up arrow", repeats: true },
@@ -422,7 +416,7 @@ export const BAR_ROW_PRIMARY: readonly BarKey[] = [
 export const BAR_ROW_SECONDARY: readonly BarKey[] = [
   { kind: "latch", value: "ctrl", label: "ctrl", aria: "Control modifier" },
   { kind: "latch", value: "alt", label: "alt", aria: "Alt modifier" },
-  { kind: "key", id: "ctrlC", label: "^C", aria: "Control C, interrupt", interrupt: true },
+  { kind: "key", id: "ctrlC", label: "^C", aria: "Control C, interrupt" },
   { kind: "key", id: "ctrlD", label: "^D", aria: "Control D, end of input" },
   { kind: "key", id: "ctrlZ", label: "^Z", aria: "Control Z, suspend" },
   { kind: "key", id: "ctrlR", label: "^R", aria: "Control R, search history" },

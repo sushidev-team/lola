@@ -108,6 +108,43 @@ export interface LolaTransportPlugin {
   scanQR(options?: LolaScanOptions): Promise<LolaScanResult>;
 
   /**
+   * Stores one secret under a caller-chosen name, replacing any previous value.
+   *
+   * The app files the M1 bearer key here under an endpoint id (`host:port`), so
+   * two daemons never share one secret. It is the ONLY durable home the key
+   * has: the WebView's `localStorage` is plain, unencrypted, per-origin storage
+   * inside the container, readable by any code running in the page and backed
+   * up with the app, and a shared secret does not belong there.
+   *
+   * On iOS this is a Keychain generic-password item with
+   * `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`: readable while the
+   * screen is locked, so an unattended reconnect works, and never synced to
+   * iCloud Keychain or carried into a device restore. There is deliberately no
+   * biometric gate — a key that needs a face to read cannot serve a reconnect,
+   * and a reconnect that asks for a face is one users switch off.
+   *
+   * Rejects with `code: 'keychain'`, carrying an `OSStatus` and nothing else.
+   * The value is never logged and never appears in an error.
+   */
+  secretSet(options: LolaSecretSetOptions): Promise<void>;
+
+  /**
+   * Reads one secret back, or `null` when none is stored.
+   *
+   * A MISSING SECRET RESOLVES. "Nothing stored yet" is what a first launch
+   * looks like and is an answer, not a failure; making the caller read an error
+   * code to tell it apart from a broken keychain is how a fresh install ends up
+   * showing a red banner. Only a keychain that actually refused rejects.
+   */
+  secretGet(options: LolaSecretGetOptions): Promise<LolaSecretGetResult>;
+
+  /**
+   * Forgets one secret. IDEMPOTENT: deleting what is not there resolves, so
+   * "forget this Mac" is safe to run twice.
+   */
+  secretDelete(options: LolaSecretGetOptions): Promise<void>;
+
+  /**
    * Batched inbound frames. Each element of `frames` is one complete JSON frame
    * body, in the order the daemon wrote it. Bodies are NOT parsed natively; the
    * listener parses them, which is what keeps one copy of the envelope.
@@ -121,6 +158,27 @@ export interface LolaTransportPlugin {
   addListener(
     eventName: 'state',
     listenerFunc: (event: LolaStateEvent) => void,
+  ): Promise<PluginListenerHandle>;
+
+  /**
+   * The APP's foreground/background transitions, as distinct from the socket's.
+   *
+   * `active: false` accompanies the deliberate teardown described under
+   * `LolaFailureCode.backgrounded`; `active: true` says the app is on its way
+   * back in and the connection the plugin closed is the app's to reopen.
+   *
+   * IT IS A REPORT, NOT AN ACTION. The plugin never reconnects on its own —
+   * only the app knows whether the user is looking at a terminal, at a cached
+   * list, or at the connect form having just chosen to disconnect — so a
+   * listener that ignores this event leaves the app exactly as it was: closed,
+   * and saying so.
+   *
+   * Registered at plugin load, so the first transition after launch is
+   * delivered even if nothing has ever connected.
+   */
+  addListener(
+    eventName: 'appState',
+    listenerFunc: (event: LolaAppStateEvent) => void,
   ): Promise<PluginListenerHandle>;
 
   /**
@@ -325,6 +383,27 @@ export interface LolaStateEvent {
    */
   minV?: number;
   maxV?: number;
+}
+
+export interface LolaSecretSetOptions {
+  /** The name to file it under. The app uses an endpoint id (`host:port`). */
+  key: string;
+  /** The secret. Never logged, never placed in a URL, never in an error. */
+  value: string;
+}
+
+export interface LolaSecretGetOptions {
+  key: string;
+}
+
+export interface LolaSecretGetResult {
+  /** The stored secret, or `null` when there is none. */
+  value: string | null;
+}
+
+export interface LolaAppStateEvent {
+  /** True on the way back to the foreground, false on the way out. */
+  active: boolean;
 }
 
 export interface LolaFramesEvent {

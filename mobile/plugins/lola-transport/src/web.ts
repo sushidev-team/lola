@@ -7,6 +7,9 @@ import type {
   LolaScanCapabilityResult,
   LolaScanOptions,
   LolaScanResult,
+  LolaSecretGetOptions,
+  LolaSecretGetResult,
+  LolaSecretSetOptions,
   LolaSendOptions,
   LolaStatusResult,
   LolaTransportPlugin,
@@ -56,6 +59,39 @@ export class LolaTransportWeb extends WebPlugin implements LolaTransportPlugin {
       bytesIn: 0,
       bytesOut: 0,
     };
+  }
+
+  /**
+   * There is no browser secret store worth the name, and this refuses rather
+   * than reaching for `localStorage`.
+   *
+   * That is the whole point of the refusal. `localStorage` is plain,
+   * unencrypted, per-origin storage that any script in the page can read; a
+   * silent downgrade to it would be strictly worse for safety while LOOKING
+   * like the feature works, which is the trade that must never be made
+   * quietly. `secretstore.ts` probes for these methods, finds them throwing
+   * here, and keeps the key in memory for the life of the page instead — worse
+   * ergonomically, never worse for safety — and `isPersistent()` reports which
+   * one is happening so the UI can say so.
+   */
+  async secretSet(_options: LolaSecretSetOptions): Promise<void> {
+    throw this.unavailable(
+      'LolaTransport has no secret store in a browser. Run on a device or simulator.',
+    );
+  }
+
+  /**
+   * Resolves `null` rather than throwing: "there is nothing stored" is the
+   * honest answer for a browser and is exactly what the caller does with it.
+   */
+  async secretGet(_options: LolaSecretGetOptions): Promise<LolaSecretGetResult> {
+    return { value: null };
+  }
+
+  async secretDelete(_options: LolaSecretGetOptions): Promise<void> {
+    throw this.unavailable(
+      'LolaTransport has no secret store in a browser. Run on a device or simulator.',
+    );
   }
 
   /**

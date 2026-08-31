@@ -9,6 +9,7 @@ import {
   accumulateScroll,
   clampFont,
   clampPan,
+  fitWidth,
   isPanning,
   lockAxis,
   panBy,
@@ -199,5 +200,44 @@ describe("the truncation chip", () => {
   it("answers zero rather than dividing by zero", () => {
     expect(visibleColumns({ ...wide, contentWidth: 0 }, 200)).toBe(0);
     expect(visibleColumns(wide, 0)).toBe(0);
+  });
+});
+
+describe("fit width", () => {
+  it("finds the size at which a wide grid fits, when one exists", () => {
+    // 100 columns at 12pt measures 800px in a 390px window; 390/800 of 12 is
+    // 5.85, which floors to 5 and is below the floor -- so this box is the one
+    // that CANNOT fit. A 40-column grid can.
+    const narrow: PanBox = { contentWidth: 640, contentHeight: 300, viewWidth: 390, viewHeight: 480 };
+    const r = fitWidth(narrow, 16);
+    expect(r.size).toBe(9); // floor(16 * 390/640) = 9
+    expect(r.complete).toBe(true);
+  });
+
+  it("floors rather than rounds, so it never claims a fit it does not have", () => {
+    // A round would give 10 here, which still overflows by a pixel.
+    const box: PanBox = { contentWidth: 640, contentHeight: 300, viewWidth: 399, viewHeight: 480 };
+    expect(fitWidth(box, 16).size).toBe(9); // floor(9.975), not round
+  });
+
+  it("reports INCOMPLETE for a 200-column grid, because no legible size fits", () => {
+    const r = fitWidth(wide, FONT_DEFAULT);
+    expect(r.size).toBe(FONT_MIN);
+    expect(r.complete).toBe(false);
+  });
+
+  it("is a no-op when the grid already fits", () => {
+    const r = fitWidth(small, FONT_DEFAULT);
+    expect(r).toEqual({ size: FONT_DEFAULT, complete: true });
+  });
+
+  it("has nothing to offer at the floor, which is how the chip knows to stay quiet", () => {
+    expect(fitWidth(wide, FONT_MIN).size).toBe(FONT_MIN);
+  });
+
+  it("clamps the size it is given and survives an unmeasured box", () => {
+    const zero: PanBox = { contentWidth: 0, contentHeight: 0, viewWidth: 0, viewHeight: 0 };
+    expect(fitWidth(zero, 99).size).toBe(FONT_MAX);
+    expect(fitWidth(zero, Number.NaN).size).toBe(FONT_DEFAULT);
   });
 });

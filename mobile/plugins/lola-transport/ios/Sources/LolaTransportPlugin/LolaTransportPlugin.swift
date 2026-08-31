@@ -27,6 +27,16 @@ public class LolaTransportPlugin: CAPPlugin, CAPBridgedPlugin {
         // second half, so a new one only ever adds a line to this array.
         CAPPluginMethod(name: "scanQR", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "scanCapability", returnType: CAPPluginReturnPromise),
+        // The secret store. Bodies live in LolaTransportPlugin+Secrets.swift,
+        // the SecItem calls themselves in LolaTransportCore.LolaKeychain.
+        // `secretstore.ts` PROBES for these three names before it uses them and
+        // degrades to an in-memory map when they are absent, so removing a line
+        // here does not break the app - it silently makes the bearer key
+        // survive only as long as the process, which is the bug this shipped to
+        // fix. Do not rename them without changing that module.
+        CAPPluginMethod(name: "secretSet", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "secretGet", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "secretDelete", returnType: CAPPluginReturnPromise),
     ]
 
     /// Capacitor calls this once, when the bridge finishes registering the
@@ -37,6 +47,19 @@ public class LolaTransportPlugin: CAPPlugin, CAPBridgedPlugin {
         super.load()
         // A no-op in a release build. See LolaDevLink.swift.
         startDevLinkObservation()
+
+        // Force the connection into existence NOW rather than on the first
+        // `connect` call. It is lazy because building a socket eagerly would be
+        // wasteful, but its INIT is what registers the app-lifecycle observers,
+        // and those have to be in place before the first background/foreground
+        // pair rather than before the first connection. A phone that is
+        // backgrounded while the app sits on the connect form would otherwise
+        // register them on the way back in, i.e. one notification too late, and
+        // the very first `appState` event would be missed.
+        //
+        // The cost is a DispatchQueue and two NotificationCenter tokens. No
+        // socket is opened here.
+        _ = connection
     }
 
     /// Defaults, each mirroring a named constant on the daemon side rather than
@@ -63,6 +86,18 @@ public class LolaTransportPlugin: CAPPlugin, CAPBridgedPlugin {
         }
         c.onState = { [weak self] event in
             self?.notifyListeners("state", data: event.payload())
+        }
+        // Relayed verbatim and acted on nowhere in Swift. See the note on
+        // `LolaConnection.onAppState`: the plugin reports, the app decides.
+        c.onAppState = { [weak self] active in
+            // A transition and nothing else, which is the whole of LolaLog's
+            // permitted vocabulary. It is here because the failure this feature
+            // fixes is invisible from the outside — a phone that came back from
+            // standby still disconnected looks identical whether the signal was
+            // never emitted, never delivered, or delivered and ignored — and
+            // these two lines are what tell those apart without a debugger.
+            LolaLog.info("app \(active ? "entered the foreground" : "entered the background")")
+            self?.notifyListeners("appState", data: ["active": active])
         }
         return c
     }()

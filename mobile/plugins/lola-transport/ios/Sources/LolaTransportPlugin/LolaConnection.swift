@@ -86,6 +86,22 @@ final class LolaConnection {
     /// Lifecycle transitions.
     var onState: ((LolaConnectionEvent) -> Void)?
 
+    /// The APP's foreground/background transitions, as opposed to the socket's.
+    ///
+    /// It is emitted from here rather than from the plugin because this is the
+    /// object that already observes those notifications and already tears the
+    /// connection down on one of them. Two independent observers could disagree
+    /// about the order — a foreground signal delivered before the background
+    /// teardown it is meant to undo would have the app reconnect and then close
+    /// the socket it just opened — and one observer cannot.
+    ///
+    /// The plugin relays this to JavaScript and does nothing else with it.
+    /// RECONNECTION POLICY IS NOT THE PLUGIN'S: it reports what happened and
+    /// stops, because only the app knows whether the user is looking at a
+    /// terminal, at a cached list, or at the connect form having just chosen to
+    /// disconnect.
+    var onAppState: ((Bool) -> Void)?
+
     private let queue = DispatchQueue(label: "dev.sushi.lola.transport.connection")
 
     /// The certificate check runs on its own queue rather than on the
@@ -703,12 +719,22 @@ final class LolaConnection {
 
     private func observeAppLifecycle() {
         #if canImport(UIKit)
-            let token = NotificationCenter.default.addObserver(
+            let center = NotificationCenter.default
+
+            let background = center.addObserver(
                 forName: UIApplication.didEnterBackgroundNotification,
                 object: nil,
                 queue: nil
             ) { [weak self] _ in
                 guard let self else { return }
+
+                // Announced OUTSIDE the `active` guard below, and without
+                // hopping queues. It is a statement about the APP, which is
+                // true whether or not a socket was open, and it mutates
+                // nothing; putting it behind the connection queue would only
+                // delay it behind whatever that queue is doing.
+                self.onAppState?(false)
+
                 // Posted on the main thread; every mutation belongs on the
                 // connection's queue.
                 self.queue.async {
@@ -718,7 +744,33 @@ final class LolaConnection {
                         reason: "the app entered the background")
                 }
             }
-            lifecycleObservers.append(token)
+            lifecycleObservers.append(background)
+
+            // THE OTHER HALF, and the reason a phone used to come back from
+            // standby asking to be paired again. Backgrounding closes the
+            // socket on purpose (see the type's header: an NWConnection has no
+            // background privileges and a suspended one lies about being
+            // usable), which was always meant to be paid back by the app
+            // reconnecting on the way in — except nothing ever told it that it
+            // was on the way in. The connection stayed closed, the failure
+            // sentence fell through to "not on this network", and a working
+            // phone on the right WiFi looked unreachable until the app was
+            // relaunched.
+            //
+            // `willEnterForeground` rather than `didBecomeActive`:
+            // `didBecomeActive` also fires when a system dialog or the app
+            // switcher is dismissed, which are moments the socket was never
+            // touched, and the reconnect would be a no-op the app has to gate
+            // anyway. This one fires once per actual return from the
+            // background.
+            let foreground = center.addObserver(
+                forName: UIApplication.willEnterForegroundNotification,
+                object: nil,
+                queue: nil
+            ) { [weak self] _ in
+                self?.onAppState?(true)
+            }
+            lifecycleObservers.append(foreground)
         #endif
     }
 

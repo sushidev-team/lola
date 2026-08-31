@@ -66,24 +66,68 @@ export class Connection {
   /** Whether a stored key was found for the remembered endpoint. */
   hasStoredKey = $state(false);
 
+  /**
+   * True while an AUTOMATIC reconnect is in flight, as opposed to `busy`, which
+   * is any connect including the one a human just tapped.
+   *
+   * The banner on the sessions list reads `diagnosis`, so without this a phone
+   * returning from standby spends the reconnect window telling its owner it is
+   * on the wrong network — the single most misleading sentence available, since
+   * the app is at that moment successfully dialling.
+   */
+  reconnecting = $state(false);
+
   /** How the endpoint is named in a sentence: the host, or a placeholder. */
   label = $derived(this.host || "the daemon");
 
   /** The one sentence the connect screen shows. */
   diagnosis = $derived<Diagnosis>(
-    diagnose({
-      phase: this.phase,
-      error: this.error,
-      refusal: this.refusal,
-      host: this.host,
-      label: this.label,
-    }),
+    this.reconnecting
+      ? {
+          kind: "unreachable",
+          title: `Reconnecting to ${this.label}`,
+          detail: "The connection was closed while the app was in the background.",
+          retryable: true,
+        }
+      : backgroundedDiagnosis(this.error, this.label) ??
+        diagnose({
+          phase: this.phase,
+          error: this.error,
+          refusal: this.refusal,
+          host: this.host,
+          label: this.label,
+        }),
   );
 
   ready = $derived(this.phase === "ready");
 
   #transport: Transport | undefined;
   #offStatus: Unsubscribe | undefined;
+
+  /**
+   * Set when a HUMAN disconnected, cleared by any connect.
+   *
+   * Without it, foregrounding the app while it sits on the connect screen —
+   * which is exactly where `disconnect()` leaves the user — would silently
+   * re-dial the daemon they had just chosen to leave. The flag is the whole
+   * difference between "the app dropped and came back" and "I left".
+   */
+  #userClosed = false;
+
+  #retryTimer: ReturnType<typeof setTimeout> | undefined;
+  #retryStep = 0;
+
+  /**
+   * The retry ladder, then silence.
+   *
+   * It is short and it ENDS, because the alternative is a phone that has been
+   * off its network for a day quietly opening a socket every few seconds
+   * against a daemon that allows eight of them. When it runs out the banner is
+   * already saying what is wrong and the pull-to-refresh and the next
+   * foreground both start a fresh ladder, so nothing is stuck — it just stops
+   * costing anything.
+   */
+  static readonly RETRY_DELAYS_MS: readonly number[] = [2000, 5000, 15000];
 
   /**
    * Resolves the moment a Transport is adopted. See `#awaitTransport`.
@@ -201,6 +245,11 @@ export class Connection {
     this.problems = validateDraft(draft, key, INSECURE_MIN_KEY_LEN);
     if (this.problems.length > 0) return false;
 
+    // Any connect is a statement of intent to be connected, so it revokes an
+    // earlier "I left". Placed after validation so a rejected form does not
+    // quietly re-arm the automatic reconnect.
+    this.#userClosed = false;
+
     // Not `this.#transport` directly: a hand-off connects at launch, which can
     // be before the bootstrap's dynamic import has resolved. See #awaitTransport.
     const t = await this.#awaitTransport();
@@ -276,12 +325,132 @@ export class Connection {
 
   /** Tear the connection down. Also the correct response to backgrounding. */
   async disconnect(reason = "user"): Promise<void> {
+    // Deliberate, so nothing automatic may undo it. See `#userClosed`.
+    this.#userClosed = true;
+    this.#cancelRetry();
     try {
       await this.#transport?.disconnect(reason);
     } catch {
       /* a disconnect that fails has still stopped being usable */
     }
     this.phase = "closed";
+  }
+
+  /**
+   * Re-establish the connection with no human action, using what was
+   * remembered. Returns true when the connection came back.
+   *
+   * WHAT THIS FIXES. Backgrounding closes the socket on purpose — the plugin's
+   * header explains why an `NWConnection` cannot survive suspension and why a
+   * socket that lies about being usable is worse than one that is honestly gone
+   * — and that was always meant to be paid back by the app reopening it. Until
+   * now nothing did, so a phone that went to sleep came back saying "not on
+   * this network" and, once iOS had reclaimed the process, on the pairing
+   * screen with the one field nobody can guess left empty.
+   *
+   * WHAT IT DELIBERATELY DOES NOT DO. It never walks the daemon's alternate
+   * addresses and never re-saves the endpoint: a remembered address that worked
+   * once is a fact, not a guess, and re-running the guessing walk on every
+   * foreground would spend a timeout per address before landing where it
+   * started. It never navigates, either — an off-network phone belongs on the
+   * last snapshot behind a banner, and the pairing screen is what REVOCATION
+   * looks like.
+   *
+   * SINGLE-FLIGHT. A foreground event and a `visibilitychange` describe the
+   * same moment and both call this; the phase gate makes the second one free.
+   */
+  async reconnect(): Promise<boolean> {
+    // A fresh trigger restarts the ladder rather than joining it partway.
+    this.#cancelRetry();
+    this.#retryStep = 0;
+    return this.#attemptReconnect();
+  }
+
+  /**
+   * Arm the retry ladder WITHOUT dialling now.
+   *
+   * For the caller that has just finished a failed attempt of its own — boot —
+   * and would otherwise pay a second full connect timeout immediately.
+   */
+  retryLater(): void {
+    if (this.#userClosed) return;
+    this.#cancelRetry();
+    this.#retryStep = 0;
+    this.#scheduleRetry();
+  }
+
+  /**
+   * True while a connection is up or on its way up.
+   *
+   * A method rather than an inline test at each call site so that the check
+   * reads `this.phase` fresh both times. TypeScript narrows a property across
+   * an `await`, so the second, post-restore copy of the same three comparisons
+   * was reported as unreachable — which is exactly the analysis that would make
+   * someone delete the guard that closes the race.
+   */
+  #inFlight(): boolean {
+    const p = this.phase;
+    return p === "ready" || p === "connecting" || p === "handshaking";
+  }
+
+  async #attemptReconnect(): Promise<boolean> {
+    if (this.#userClosed) return false;
+    if (this.busy || this.reconnecting) return false;
+    if (this.#inFlight()) return false;
+
+    const prev = await this.restore();
+    // No stored key is not a failure to report and not something to retry: it
+    // is the ordinary state of a device that has never paired, or one whose key
+    // was forgotten on purpose. The connect screen is already the right place.
+    if (!prev || prev.key === "") return false;
+
+    // THE GATES AGAIN, because `restore()` awaited — it reads the Keychain
+    // across the bridge — and the window it opens is a real one. iOS posts
+    // `willEnterForeground` during a COLD LAUNCH as well as on a resume (the
+    // device log shows it on every start), so this can be running beside
+    // App.svelte's boot dial rather than instead of it. `ChannelTransport`
+    // dedupes concurrent connects and would make that merely untidy rather than
+    // two sockets, but the untidiness is a second set of `busy`/host/port
+    // writes racing the first, and re-reading three booleans is cheaper than
+    // reasoning about it.
+    if (this.#userClosed || this.busy || this.#inFlight()) return false;
+
+    this.reconnecting = true;
+    let ok = false;
+    try {
+      ok = await this.connect(prev.draft, prev.key, false);
+    } finally {
+      this.reconnecting = false;
+    }
+
+    if (ok) {
+      this.#retryStep = 0;
+      return true;
+    }
+
+    // Only keep trying for a failure that retrying could plausibly fix. A
+    // refused key, a mismatched pin and a version skew all need a human, and
+    // dialling them again on a ladder just burns the daemon's connection slots
+    // while the banner already says what to do.
+    if (this.diagnosis.retryable) this.#scheduleRetry();
+    return false;
+  }
+
+  #scheduleRetry(): void {
+    const delay = Connection.RETRY_DELAYS_MS[this.#retryStep];
+    if (delay === undefined) return; // ladder exhausted; the banner stands
+    this.#retryStep += 1;
+    this.#retryTimer = setTimeout(() => {
+      this.#retryTimer = undefined;
+      void this.#attemptReconnect();
+    }, delay);
+  }
+
+  #cancelRetry(): void {
+    if (this.#retryTimer !== undefined) {
+      clearTimeout(this.#retryTimer);
+      this.#retryTimer = undefined;
+    }
   }
 
   /**
@@ -303,6 +472,31 @@ export class Connection {
     if (!t) return Promise.reject(new Error("not connected"));
     return t.request<T>(cmd, fields as never);
   }
+}
+
+/**
+ * The one failure `diagnose` cannot classify, because it is not a failure.
+ *
+ * The plugin closes the socket when the app is backgrounded and reports
+ * `code: 'backgrounded'`, which reaches here as an Error whose message begins
+ * with that word (see `stateError`). It matches none of `diagnose`'s TLS or
+ * refusal cues, so it fell through to the catch-all — "Not on <host>'s
+ * network", with a paragraph about WiFi, VPNs and a sleeping Mac. That sentence
+ * was shown to people whose network was perfect and whose phone had simply been
+ * in a pocket, and it is the reason this fix reads as a networking bug rather
+ * than a lifecycle one.
+ *
+ * Returns null for everything else, so `diagnose` keeps every branch it owns.
+ */
+function backgroundedDiagnosis(error: Error | null, label: string): Diagnosis | null {
+  if (!error || !/^backgrounded\b/.test(error.message)) return null;
+  return {
+    kind: "unreachable",
+    title: "Disconnected while in the background",
+    detail: `The connection to ${label} was closed when the app was suspended.`,
+    hint: "It reconnects on its own when the app comes back to the foreground.",
+    retryable: true,
+  };
 }
 
 export const connection = new Connection();

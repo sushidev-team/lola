@@ -55,8 +55,16 @@ if [ -z "$udid" ]; then
 fi
 
 # Read, never echo.
+# TWO NAMES, and the second one is now the usual case. This script predates the
+# daemon generating its own bearer key: back then `make mobile-dev` exported one
+# and wrote it to `remote-dev-key`, and that is still honoured for anyone who
+# has one. The daemon now generates and reuses `remote.key` instead — which is
+# what makes the key survive a restart this script did not perform — so a clean
+# machine has only that file, and the old path died telling the reader to run a
+# command that no longer produces what it names.
 keyfile=$home/remote-dev-key
-[ -f "$keyfile" ] || die "no $keyfile — run 'make mobile-dev' once to generate one"
+[ -f "$keyfile" ] || keyfile=$home/remote.key
+[ -f "$keyfile" ] || die "no $home/remote.key — start the daemon once, or run 'make mobile-dev'"
 key=$(cat "$keyfile")
 [ -n "$key" ] || die "$keyfile is empty"
 

@@ -118,6 +118,54 @@ export function stepFont(size: number, delta: number): number {
   return clampFont(size + delta);
 }
 
+/**
+ * The result of asking "make the whole grid fit across the screen".
+ *
+ * `complete` is the honest half. A 200-column grid on a 390-point phone needs
+ * roughly a 2-point cell, and FONT_MIN is 8, so for a wide grid there IS no size
+ * that fits and the answer is "8 points, and you are still panning". Reporting
+ * that as a plain size would let a caller label a button "fit" over a screen
+ * that is still two thirds off-stage.
+ */
+export interface FitWidth {
+  /** The size to use. Always inside [FONT_MIN, FONT_MAX]. */
+  size: number;
+  /** Whether the whole grid is actually on screen at that size. */
+  complete: boolean;
+}
+
+/**
+ * The font size at which the grid's full width would be visible.
+ *
+ * THIS IS A ZOOM AND NOTHING ELSE. It does not touch tmux, does not resize the
+ * pane, and cannot affect any other client — it scales the phone's own view of a
+ * grid whose width the daemon owns. The tmux-side "fit to phone" that PLAN.md
+ * describes (dropping `-f ignore-size` so the phone's dimensions drive the
+ * window) is a different, daemon-side feature; do not conflate the two, and do
+ * not label this one with its name.
+ *
+ * `box` is a real measurement of the grid as currently rendered at `current`
+ * points, so the cell width comes from the browser rather than from an assumed
+ * aspect ratio. Cell width is linear in font size, which makes the answer one
+ * multiplication — floored, because rounding up leaves it still overflowing by a
+ * pixel and the chip would then claim a fit that is not there.
+ */
+export function fitWidth(box: PanBox, current: number): FitWidth {
+  const size = clampFont(current);
+  if (
+    !Number.isFinite(box.contentWidth) ||
+    !Number.isFinite(box.viewWidth) ||
+    box.contentWidth <= 0 ||
+    box.viewWidth <= 0
+  ) {
+    return { size, complete: !isPanning(box) };
+  }
+  if (box.contentWidth <= box.viewWidth) return { size, complete: true };
+  const want = Math.floor(size * (box.viewWidth / box.contentWidth));
+  const next = clampFont(want);
+  return { size: next, complete: next <= want };
+}
+
 // ---------------------------------------------------------------------------
 // Scroll
 // ---------------------------------------------------------------------------

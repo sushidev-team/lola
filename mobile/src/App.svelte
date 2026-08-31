@@ -4,6 +4,7 @@
   import { appearance } from "$lib/theme-runtime.svelte";
   import { connection } from "@mobile/lib/connection.svelte";
   import { nav } from "@mobile/lib/nav.svelte";
+  import { installAppState } from "@mobile/lib/appstate";
   import { installDevLink, type DevLinkTarget } from "@mobile/lib/devlink";
   import { installDynamicType } from "@mobile/lib/dynamictype";
   import { pairing } from "@mobile/lib/pairing.svelte";
@@ -26,6 +27,15 @@
   // if the app cannot tell "your WiFi changed" from "this device was revoked",
   // neither can the person holding it. So a dropped connection stays where it
   // is, and only an explicit disconnect returns here.
+  //
+  // THAT RULE NOW HAS TEETH ON THE BOOT PATH TOO, which it did not before. A
+  // cold launch that has a remembered Mac and its key and simply cannot reach it
+  // used to fall through to the connect form — the pairing screen, for the one
+  // case that is definitionally not revocation. It goes to the session list
+  // instead, with the banner and the retry ladder running. The form is still
+  // where a REFUSAL lands, because a refused key, a mismatched pin and a version
+  // skew each need a human and a field; `diagnosis.retryable` is exactly that
+  // distinction and is what the boot branches on.
 
   // BOOT STATE. The restore path is asynchronous — the keychain, then a dial —
   // so until it answers the app cannot know whether it is heading for the
@@ -73,6 +83,18 @@
     // reports "connecting" rather than inventing an empty list.
     store.start();
 
+    // Coming back from the background. The plugin closes the socket on the way
+    // out — see appstate.ts — so something has to reopen it, and this is that
+    // something. It is registered here rather than on a screen because the app
+    // can be suspended from any of them, and the connection applies its own
+    // gates (an explicit disconnect, a connect already in flight, no stored
+    // key), so this callback is unconditional on purpose.
+    const offAppState = installAppState(() => {
+      void (async () => {
+        if (await connection.reconnect()) void store.refresh();
+      })();
+    });
+
     // If a previous run remembered an endpoint AND its key survived in the
     // keychain, go straight past the connect screen. Anything less than both
     // lands on the form with what is known already filled in.
@@ -91,6 +113,13 @@
         if (await connection.connect(prev.draft, prev.key, false)) {
           void store.refresh();
           nav.toSessions();
+        } else if (connection.diagnosis.retryable) {
+          // Unreachable, not refused: the credential is intact and the daemon
+          // is simply not answering right now. Show the list behind its banner
+          // and keep trying quietly — `retryLater` arms the ladder without
+          // paying a second connect timeout on top of the one just spent.
+          nav.toSessions();
+          connection.retryLater();
         }
       } finally {
         clearTimeout(ceiling);
@@ -100,6 +129,7 @@
 
     return () => {
       clearTimeout(ceiling);
+      offAppState();
       offDevLink();
       offType();
     };

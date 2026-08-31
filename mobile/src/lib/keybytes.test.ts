@@ -251,15 +251,6 @@ describe("the bar's own layout", () => {
     ]);
   });
 
-  it("keeps the two interrupts exempt from the mid-turn confirmation", () => {
-    // PLAN.md: "Ctrl-C and Escape are exempt, because interrupting is the
-    // legitimate mid-turn action". If this ever flips, the friction guard makes
-    // the app useless for the one thing it is carried for.
-    const all = [...BAR_ROW_PRIMARY, ...BAR_ROW_SECONDARY];
-    const exempt = all.filter((k) => k.interrupt).map((k) => k.id);
-    expect(exempt.sort()).toEqual(["ctrlC", "escape"]);
-  });
-
   it("marks only the keys worth repeating", () => {
     const all = [...BAR_ROW_PRIMARY, ...BAR_ROW_SECONDARY];
     const repeats = all.filter((k) => k.repeats).map((k) => k.id);

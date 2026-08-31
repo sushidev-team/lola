@@ -8,11 +8,12 @@
   import { DEFAULT_MODES, type TerminalModes } from "@mobile/lib/keybytes";
   import { openExternal } from "@mobile/lib/openurl";
   import { geometryChanged, resyncToBytes } from "@mobile/lib/resync";
+  import { loadFontSize, saveFontSize } from "@mobile/lib/prefs";
   import {
-    FONT_DEFAULT,
     NO_SCROLL,
     accumulateScroll,
     clampPan,
+    fitWidth,
     isPanning,
     lockAxis,
     panBy,
@@ -61,18 +62,11 @@
      */
     transform = (d: string) => d,
     /**
-     * Consulted before every byte leaves the app. Returning false drops the
-     * write; this is the mid-turn friction, and the terminal is only its
-     * enforcement point, never its policy.
-     */
-    guard = (_bytes: string) => true,
-    /**
-     * Called once for every write that actually reaches the PTY, and never for
-     * one the guard dropped. It exists so the accessory bar's latched modifier
-     * is consumed on the same path the byte took: `transform` only PEEKS at the
-     * latch, because consuming there would clear ctrl for a keystroke the guard
-     * then refused, and the user would have to latch again with nothing on
-     * screen explaining why.
+     * Called once for every write that actually reaches the PTY. It exists so
+     * the accessory bar's latched modifier is consumed on the same path the byte
+     * took: `transform` only PEEKS at the latch, because a latch consumed by the
+     * attempt rather than by the byte would clear ctrl for a keystroke that never
+     * left, with nothing on screen explaining why.
      */
     onsent,
     onexit,
@@ -81,9 +75,13 @@
   }: {
     pane: string;
     transform?: (data: string) => string;
-    guard?: (bytes: string) => boolean;
     onsent?: () => void;
     onexit?: () => void;
+    /**
+     * The CURRENT subscription error, latched by the screen into its banner.
+     * An empty string means there is none — sent on every successful attach,
+     * so a reconnect takes its own banner down. See the call site.
+     */
     onerror?: (message: string) => void;
     /**
      * Pushed whenever anything the surrounding screen draws changes: the live
@@ -117,7 +115,22 @@
   /** The grid the daemon is sending, for the truncation chip. */
   let cols = $state(0);
   let rows = $state(0);
-  let fontSize = $state(FONT_DEFAULT);
+  // SEEDED from storage, not assigned in onMount. boot() reads fontSize
+  // synchronously when it constructs the Terminal, so a restore one tick later
+  // would paint a frame at the default size and then jump — and xterm would
+  // re-measure its cell for nothing. loadFontSize clamps, so a value written by
+  // a build with a different range cannot render a terminal this build has no
+  // control able to reach.
+  let fontSize = $state(loadFontSize());
+  /**
+   * The reading size to come back to, while a fit-width zoom is in effect, or
+   * null when the current size IS the reading size.
+   *
+   * It is also what gets PERSISTED: a fit is a transient look at the whole grid,
+   * often at the 8-point floor, and remembering that as the reading size would
+   * mean every return to a terminal started out unreadable.
+   */
+  let fitFrom = $state<number | null>(null);
   let exited = $state(false);
   let attached = $state(false);
   let box = $state<PanBox>({ contentWidth: 0, contentHeight: 0, viewWidth: 0, viewHeight: 0 });
@@ -125,6 +138,11 @@
 
   const panning = $derived(isPanning(box));
   const shown = $derived(visibleColumns(box, cols));
+  /** The size a fit-width zoom would land on, recomputed as the box moves. */
+  const fit = $derived(fitWidth(box, fontSize));
+  /** Whether there is a smaller size that would show more of the grid. False at
+   *  the 8-point floor, where the chip has nothing to offer and says so. */
+  const canFit = $derived(fitFrom === null && fit.size < fontSize);
 
   // One effect, reading everything the parent draws. It is the only channel
   // out: no getter is exported for these, so the screen cannot read a stale
@@ -134,6 +152,9 @@
   });
 
   export function setFont(size: number): void {
+    // Same reasoning as the pinch: the A-/A+ buttons are the user choosing a
+    // size, so they end a fit instead of being reverted by it.
+    fitFrom = null;
     fontSize = size;
   }
   export function isAttached(): boolean {
@@ -154,12 +175,13 @@
    * reactions, review hand-offs, resolveConflict — typing into a mid-turn agent
    * and corrupting it. A human at a keyboard is the case it was never about, and
    * a phone that could not send Ctrl-C mid-turn would not be worth carrying.
-   * This is a stated exception, not an oversight, and the `guard` prop above is
-   * UI friction rather than a reinstatement of the gate.
+   * This is a stated exception, not an oversight. The screen above this one
+   * carried a client-side "send anyway" confirmation once and no longer does;
+   * that was UI friction in front of the same human, never a reinstatement of
+   * the gate, and nothing about the gate changed when it went.
    */
   export function send(bytes: string): void {
     if (bytes === "" || !sub || exited) return;
-    if (!guard(bytes)) return;
     onsent?.();
     void sub.write(bytes).catch(() => {});
   }
@@ -178,6 +200,11 @@
 
   let scroll: ScrollAccum = NO_SCROLL;
   let scrollTimer: ReturnType<typeof setTimeout> | undefined;
+
+  /** Long enough to swallow a pinch, short enough that a tap on ‹ back beats
+   *  nothing to the flush in onDestroy. */
+  const FONT_SAVE_DEBOUNCE_MS = 400;
+  let saveTimer: ReturnType<typeof setTimeout> | undefined;
 
   onMount(() => {
     void boot();
@@ -314,6 +341,17 @@
       return;
     }
     attached = true;
+    // A SUCCESSFUL ATTACH CLEARS THE LAST ERROR, and "" is how that is said.
+    //
+    // The screen latches whatever `onerror` last reported and shows it until
+    // something replaces it, which was correct while a dropped subscription
+    // stayed dropped. It stopped being correct the moment the reconnect above
+    // started re-attaching: backgrounding reports "connection_closed:
+    // backgrounded", the pane then comes back and repaints with live output,
+    // and the red banner above it still said the connection was gone. A banner
+    // contradicting the pane underneath it is worse than no banner, because it
+    // is the half a user checks first.
+    onerror?.("");
     offEvent = sub.onEvent(handle);
     offError = sub.onError((e) => onerror?.(e.message));
     // The first resync usually arrives before onEvent is wired, since it IS the
@@ -401,6 +439,49 @@
     return rows > 0 && box.contentHeight > 0 ? box.contentHeight / rows : 17;
   }
 
+  /**
+   * Zoom out until the whole grid fits across the screen, and back again.
+   *
+   * THIS IS A ZOOM, NOT A RESIZE, and the distinction is the whole reason the
+   * label says "fit" rather than "fit to phone". It scales this phone's own view
+   * of a grid whose width belongs to the developer's tmux window; it sends
+   * nothing, and it cannot narrow anybody else's screen. PLAN.md's "Fit to
+   * phone" is a different, daemon-side feature — dropping `-f ignore-size` so
+   * the phone's dimensions drive the tmux window, offered only when no other
+   * client is attached — and the daemon does not implement it: a `pty` resize
+   * frame is recorded and ignored today (internal/remote/pane.go), and
+   * internal/panebus exposes no Resize at all. Wiring a toggle to that frame
+   * would be a button that silently does nothing, so this is the honest half:
+   * useful for orientation on a wide grid, which is what PLAN.md already says a
+   * zoom-out is good for, and never for reading.
+   *
+   * At 200 columns even the floor does not fit, and that is not hidden — the
+   * chip keeps showing shown/cols, so it reads "120/200 cols" after the tap.
+   */
+  function toggleFit() {
+    // iOS raises the soft keyboard only for a focus a user action caused, so a
+    // refocus is legal here (a click IS one) but must be conditional: tapping
+    // this chip with the keyboard down must not summon it.
+    const refocus = !!host && host.contains(document.activeElement);
+    if (fitFrom !== null) {
+      fontSize = fitFrom;
+      fitFrom = null;
+    } else {
+      const target = fitWidth(box, fontSize);
+      if (target.size >= fontSize) return;
+      fitFrom = fontSize;
+      fontSize = target.size;
+    }
+    if (refocus) term?.focus();
+  }
+
+  /** Keep a tap or a drag on the chip out of the pane's own gesture handling:
+   *  without this a tap focuses the terminal and raises the keyboard, and a drag
+   *  that starts on the chip pans the grid underneath it. */
+  function swallow(e: TouchEvent) {
+    e.stopPropagation();
+  }
+
   function measure() {
     if (!frame || !inner) return;
     box = {
@@ -412,6 +493,19 @@
     pan = clampPan(pan, box);
   }
 
+  // Remember the size, on a trailing debounce.
+  //
+  // Debounced because a pinch mutates fontSize on every touchmove: a
+  // localStorage write per frame is a synchronous main-thread stall during the
+  // one gesture that has to stay smooth. onDestroy flushes it, which is the case
+  // that matters — the bug being fixed here is a size forgotten on navigation,
+  // and navigating away is exactly what happens inside the debounce window.
+  $effect(() => {
+    const size = fitFrom ?? fontSize;
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => saveFontSize(size), FONT_SAVE_DEBOUNCE_MS);
+  });
+
   // Re-measure whenever the font changes: the grid keeps its cols and rows and
   // changes its pixel size, so the pan limits move under the finger.
   $effect(() => {
@@ -420,6 +514,33 @@
       term.options.fontSize = size;
       requestAnimationFrame(measure);
     }
+  });
+
+  // A RECONNECT LEAVES THIS SCREEN HOLDING A DEAD SUBSCRIPTION, and only this
+  // component can notice.
+  //
+  // The socket is closed on the way into the background and reopened on the way
+  // back (see appstate.ts and Connection#reconnect). That reopen restores the
+  // session list, because the store polls — but a PaneSubscription is a
+  // server-side registration on a socket that no longer exists, so the terminal
+  // keeps its last painted screen forever and every keystroke goes nowhere. The
+  // pane is not gone and the daemon is not down; the app has simply not asked
+  // again.
+  //
+  // `resubscribe()` is the same recovery a dropped-frame gap already uses, so
+  // this adds a trigger rather than a mechanism. It fires only on the false ->
+  // true EDGE while this screen is attached, which is what keeps it from
+  // re-running on the ordinary `ready` that follows the first attach, and the
+  // `exited` check keeps it off a pane whose process is gone.
+  // A PLAIN `let`, not `$state`: this is an edge detector, and an effect that
+  // both reads and writes the same rune re-invalidates itself forever. An
+  // untracked local is read for free and written for free.
+  let wasReady = connection.ready;
+  $effect(() => {
+    const ready = connection.ready;
+    const back = ready && !wasReady;
+    wasReady = ready;
+    if (back && attached && !exited && !disposed) void resubscribe();
   });
 
   // Re-theme a live terminal. Assigning options.theme is sufficient AND
@@ -491,7 +612,13 @@
       const d = touchDistance(e.touches[0], e.touches[1]);
       if (pinchStart > 0) {
         const next = pinchFont(pinchBase, d / pinchStart);
-        if (next !== fontSize) fontSize = next;
+        if (next !== fontSize) {
+          // A pinch is the user choosing a size, so it ENDS a fit rather than
+          // being undone by it: leaving fitFrom set would make the chip offer to
+          // "reset" to a size the user has just deliberately left.
+          fitFrom = null;
+          fontSize = next;
+        }
       }
       const mid = touchMidpoint(e.touches[0], e.touches[1]);
       pan = panBy(pan, mid.x - last.x, mid.y - last.y, box);
@@ -540,6 +667,8 @@
     offError?.();
     ro?.disconnect();
     clearTimeout(scrollTimer);
+    clearTimeout(saveTimer);
+    saveFontSize(fitFrom ?? fontSize);
     void sub?.close().catch(() => {});
     term?.dispose();
   });
@@ -571,13 +700,32 @@
     <div bind:this={host}></div>
   </div>
 
-  {#if panning}
+  {#if panning || fitFrom !== null}
     <!-- Truncation must never be a mystery: 55 of 200 columns with nothing said
-         looks exactly like an agent that stopped writing halfway across. -->
-    <div
-      class="pointer-events-none absolute top-1 right-1 rounded bg-canvas/80 px-1.5 py-0.5 text-sm text-faint"
-    >
-      {shown}/{cols} cols · pan
-    </div>
+         looks exactly like an agent that stopped writing halfway across. The
+         count is the honest part and is shown in every state; the trailing word
+         is the ACTION a tap performs, so the chip never reads as a label that
+         happens to be tappable. -->
+    {#if canFit || fitFrom !== null}
+      <button
+        type="button"
+        class="absolute top-1 right-1 min-h-9 rounded bg-canvas/80 px-2 py-1 text-sm text-faint"
+        aria-label={fitFrom !== null
+          ? `Back to ${fitFrom} point text`
+          : `Zoom out to ${fit.size} point text to see ${fit.complete ? "the whole grid" : "more of it"}. This changes only this phone's view; the pane keeps its size.`}
+        onclick={toggleFit}
+        ontouchstart={swallow}
+        ontouchmove={swallow}
+        ontouchend={swallow}
+      >
+        {shown}/{cols} cols · {fitFrom !== null ? "reset" : "fit"}
+      </button>
+    {:else}
+      <div
+        class="pointer-events-none absolute top-1 right-1 rounded bg-canvas/80 px-1.5 py-0.5 text-sm text-faint"
+      >
+        {shown}/{cols} cols · pan
+      </div>
+    {/if}
   {/if}
 </div>

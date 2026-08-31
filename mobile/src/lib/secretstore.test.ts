@@ -12,7 +12,18 @@ import {
 
 const ENDPOINT_KEY = "lola.mobile.endpoint";
 
-function installPlugin() {
+/**
+ * The NATIVE plugin's method list, as the bridge injects it.
+ *
+ * Every fixture here has to supply one, because that list — and never the
+ * `Plugins` proxy — is what the module asks. See the test below for what goes
+ * wrong when the two are confused.
+ */
+function headers(methods: string[] = ["secretSet", "secretGet", "secretDelete"]) {
+  return [{ name: "LolaTransport", methods: methods.map((name) => ({ name })) }];
+}
+
+function installPlugin(available = ["secretSet", "secretGet", "secretDelete"]) {
   const store = new Map<string, string>();
   const p = {
     secretSet: vi.fn(async ({ key, value }: { key: string; value: string }) => {
@@ -23,8 +34,25 @@ function installPlugin() {
       store.delete(key);
     }),
   };
-  (globalThis as { Capacitor?: unknown }).Capacitor = { Plugins: { LolaTransport: p } };
+  (globalThis as { Capacitor?: unknown }).Capacitor = {
+    Plugins: { LolaTransport: p },
+    PluginHeaders: headers(available),
+  };
   return { p, store };
+}
+
+/**
+ * What a DESKTOP BROWSER, or any build whose plugin lacks the Keychain, really
+ * looks like: `registerPlugin` has run, so `Capacitor.Plugins.LolaTransport` is
+ * a Proxy that manufactures a function for every property name — and no native
+ * header exists to back any of them.
+ */
+function installProxyOnly() {
+  const p = new Proxy(
+    {},
+    { get: () => async () => ({}) },
+  ) as Record<string, unknown>;
+  (globalThis as { Capacitor?: unknown }).Capacitor = { Plugins: { LolaTransport: p } };
 }
 
 beforeEach(() => {
@@ -64,6 +92,36 @@ describe("the bearer key", () => {
     expect(isPersistent()).toBe(true);
   });
 
+  it("is not fooled by Capacitor's method proxy", () => {
+    // THE BUG THIS PINS, and it is the reason a phone came back from standby
+    // asking to be paired again. `Capacitor.Plugins.X` is a Proxy whose `get`
+    // handler returns a function for ANY property, so `typeof p.secretGet ===
+    // "function"` is true against a plugin that has never implemented it. The
+    // old probe therefore answered "yes, the key survives a relaunch" on a
+    // build with no Keychain code at all: the write was rejected as not
+    // implemented, the key fell into the volatile map, and the connect screen
+    // had already promised otherwise.
+    installProxyOnly();
+    expect(isPersistent()).toBe(false);
+  });
+
+  it("refuses a plugin that implements only some of the three", () => {
+    // A JavaScript bundle newer than the native binary it is running against.
+    // Partial support is not support: a key that can be written and not deleted
+    // makes "forget this Mac" a lie.
+    installPlugin(["secretSet", "secretGet"]);
+    expect(isPersistent()).toBe(false);
+  });
+
+  it("keeps the key in memory when there is no native store", async () => {
+    // The fallback has to still WORK, not just be reported. A browser dev
+    // session must be able to connect for as long as the page lives.
+    installProxyOnly();
+    await storeKey("a:1", "0123456789abcdef");
+    expect(await loadKey("a:1")).toBe("0123456789abcdef");
+    expect(JSON.stringify({ ...globalThis.localStorage })).not.toContain("0123456789abcdef");
+  });
+
   it("files each daemon's key separately", async () => {
     installPlugin();
     await storeKey("10.0.0.1:7717", "keyforthefirstmac");
@@ -88,8 +146,10 @@ describe("the bearer key", () => {
         LolaTransport: {
           secretSet: vi.fn().mockRejectedValue(new Error("locked")),
           secretGet: vi.fn().mockRejectedValue(new Error("locked")),
+          secretDelete: vi.fn().mockRejectedValue(new Error("locked")),
         },
       },
+      PluginHeaders: headers(),
     };
     await storeKey("a:1", "0123456789abcdef");
     expect(await loadKey("a:1")).toBe("0123456789abcdef");

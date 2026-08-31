@@ -8,34 +8,32 @@
   import { DEFAULT_MODES, isBracketedPaste, textBytes, type TerminalModes } from "@mobile/lib/keybytes";
   import { installKeyboardInset } from "@mobile/lib/keyboardinset";
   import { nav } from "@mobile/lib/nav.svelte";
-  import { FONT_DEFAULT, FONT_MAX, FONT_MIN, stepFont } from "@mobile/lib/viewport";
+  import { FONT_MAX, FONT_MIN, stepFont } from "@mobile/lib/viewport";
+  import { loadFontSize } from "@mobile/lib/prefs";
 
-  // The terminal screen: a live agent pane, the accessory bar under it, and the
-  // one piece of policy that does not belong in either.
+  // The terminal screen: a live agent pane with the accessory bar under it.
   //
-  // THE MID-TURN GUARD, and it is FRICTION rather than a gate. These two things
-  // are different and the distinction is written here so that nobody later
-  // deletes one believing it is the other:
+  // THIS SCREEN TYPES WHATEVER THE HUMAN TYPES. It carried a mid-turn
+  // confirmation once — a client-side banner asking "send anyway?" whenever the
+  // daemon's view of the pane said the agent was busy — and that has been
+  // removed because it fired constantly and was answered reflexively, which is
+  // the state in which a confirmation protects nobody.
+  //
+  // Removing it changed NOTHING on the daemon. The two are different things and
+  // the distinction is written here so nobody re-adds one believing it restores
+  // the other:
   //
   //   lola's AtPrompt gate stops lola's OWN automation — reactions, review
   //   hand-offs, resolveConflict — from typing into an agent mid-turn and
-  //   corrupting it. The live terminal deliberately bypasses it, because a human
-  //   at a keyboard is the case that gate was never about, and the desktop app
-  //   already works this way.
+  //   corrupting it. That gate is untouched and still guards every one of those
+  //   paths. The live terminal has always deliberately bypassed it (see
+  //   internal/protocol/frame.go on the pty write), because a human holding the
+  //   session is the case the gate was never about, and the desktop app works
+  //   the same way.
   //
-  //   This is a UI confirmation, in the client, for a reason specific to the
-  //   phone: the desktop human sees the full 200-column pane, while the phone
-  //   human sees roughly 55 columns of it with panning. Typing into a mid-turn
-  //   agent from a clipped view is materially more likely to be an accident than
-  //   doing it at the Mac, and the damage is exactly what the gate exists to
-  //   prevent.
-  //
-  // Escape and Ctrl-C are EXEMPT. Interrupting is the legitimate mid-turn
-  // action, and adding friction to it would recreate the uselessness the bypass
-  // exists to avoid. And the whole guard FAILS OPEN: an unknown session, an
-  // aux pane, a store that has not loaded — none of those may stop a person
-  // typing, because this is friction and friction that fires on a guess is just
-  // an obstacle.
+  //   What was removed was client-side friction, in this file, in front of that
+  //   same human. Ctrl-C and Escape were already exempt from it; now everything
+  //   is.
 
   let { onback }: { onback: () => void } = $props();
 
@@ -43,89 +41,40 @@
   let barRef = $state<ReturnType<typeof AccessoryBar> | undefined>();
 
   let modes = $state<TerminalModes>(DEFAULT_MODES);
-  // Seeded with the terminal's own default rather than 0: the font buttons read
-  // this to decide whether they are at a limit, and a 0 would draw "smaller" as
-  // disabled from the moment the screen opens until the first keystroke.
-  let font = $state(FONT_DEFAULT);
+  // Seeded from the SAME source the terminal seeds itself from, rather than 0
+  // or the bare default: the font buttons read this to decide whether they are
+  // at a limit, so a 0 would draw "smaller" as disabled from the moment the
+  // screen opens, and the plain default would mis-draw the limits for one tick
+  // for anyone whose remembered size is at the floor or the ceiling. It
+  // self-corrects on the terminal's first `onstate`; seeding it right just
+  // means there is no frame where it is wrong.
+  let font = $state(loadFontSize());
   let geom = $state({ cols: 0, rows: 0, shown: 0, panning: false });
   let exited = $state(false);
   let error = $state("");
   let keyboardInset = $state(0);
 
-  /** Set while a burst has been confirmed. Expires, so a session that goes back
-   *  to working is protected again without the user doing anything. */
-  let armedUntil = $state(0);
-  let asking = $state(false);
-
+  // Read for the status pill in the header only. Nothing on this screen gates a
+  // keystroke on it.
   const session = $derived(store.sessionById(nav.paneSession));
 
-  /**
-   * Whether the daemon's own view of this pane says a human is expected.
-   *
-   * `atPrompt` is the send-keys gate the daemon itself consults, and
-   * `waiting_input` is the pane classifier's waiting verdict. Either is enough.
-   * An unknown session answers TRUE, which is the fail-open half.
-   */
-  const paneWaiting = $derived(
-    !session || session.atPrompt === true || session.agentState === "waiting_input",
-  );
-
-  // `tick` exists only to make the expiry below recompute as the clock moves.
-  // Nothing reads its value.
-  let tick = $state(0);
-  const armed = $derived.by(() => {
-    void tick;
-    return paneWaiting || Date.now() < armedUntil;
-  });
-  const needsConfirm = $derived(!armed);
-
-  let ticker: ReturnType<typeof setInterval> | undefined;
   let offKeyboard: (() => void) | undefined;
   onMount(() => {
-    // A coarse poll rather than a timer per confirmation: the expiry only has to
-    // be about right, and a derived that re-reads the clock cannot go stale the
-    // way a scheduled reset can when the screen is backgrounded mid-window.
-    ticker = setInterval(() => (tick = Date.now()), 5000);
     offKeyboard = installKeyboardInset((px) => (keyboardInset = px));
   });
   onDestroy(() => {
-    clearInterval(ticker);
     offKeyboard?.();
   });
-
-  /**
-   * The one place a byte is allowed out. Returns false to drop it.
-   *
-   * The interrupts are recognised by their bytes rather than by which control
-   * sent them, so a hardware Ctrl-C through xterm's own key handling is exempt
-   * exactly as the bar's ^C key is.
-   */
-  function guard(bytes: string): boolean {
-    if (bytes === "\x1b" || bytes === "\x03") return true;
-    if (armed) return true;
-    asking = true;
-    return false;
-  }
-
-  function confirmSend() {
-    // Two minutes: long enough to answer a question and correct a typo, short
-    // enough that putting the phone down re-arms the guard.
-    armedUntil = Date.now() + 120_000;
-    asking = false;
-    termRef?.focus();
-  }
 
   /**
    * Apply a latched modifier to whatever the SOFT keyboard produced. The letters
    * only exist there, so a latch that worked for bar keys alone would make
    * "ctrl then a letter" — the commonest chord there is — impossible.
    *
-   * It PEEKS at the latch rather than consuming it. Consuming here would clear
-   * ctrl before `guard` had run, so latching ctrl and typing a letter while the
-   * mid-turn friction is up would drop the byte AND the latch, and after "Send
-   * anyway" the user would have to latch again with nothing saying why. The
-   * consume happens on the path that actually writes, in MobileTerminal.send,
-   * through `onsent` below. AccessoryBar.press has always worked this way round.
+   * It PEEKS at the latch rather than consuming it. The consume happens on the
+   * path that actually writes, in MobileTerminal.send, through `onsent` below,
+   * so the latch is cleared by the byte that used it and not by the attempt.
+   * AccessoryBar.press has always worked this way round.
    *
    * A BRACKETED PASTE is passed through untouched. xterm wraps a paste itself,
    * in CoreService, so the payload arriving here already begins with CSI 200~;
@@ -196,7 +145,6 @@
         bind:this={termRef}
         pane={nav.pane}
         {transform}
-        {guard}
         onsent={() => barRef?.consumeLatch()}
         onexit={() => (exited = true)}
         onerror={(m) => (error = m)}
@@ -209,27 +157,5 @@
     {/key}
   </div>
 
-  {#if asking}
-    <!-- The friction, and it is one tap. It names WHY, because "are you sure"
-         with no reason is a dialog people learn to dismiss without reading. -->
-    <div class="shrink-0 border-t border-warn/40 bg-warn/10 px-4 py-3">
-      <p class="copy mb-2 text-sm text-ink">
-        This agent is mid-turn, and you can only see {geom.shown} of its {geom.cols} columns.
-        Typing now may land in the middle of something.
-      </p>
-      <div class="flex gap-2">
-        <TouchButton variant="primary" onclick={confirmSend}>Send anyway</TouchButton>
-        <TouchButton onclick={() => (asking = false)}>Cancel</TouchButton>
-        <span class="ml-auto self-center text-sm text-faint">Esc and ^C always work</span>
-      </div>
-    </div>
-  {/if}
-
-  <AccessoryBar
-    bind:this={barRef}
-    {modes}
-    {needsConfirm}
-    onsend={(bytes) => termRef?.send(bytes)}
-    onconfirm={() => (asking = true)}
-  />
+  <AccessoryBar bind:this={barRef} {modes} onsend={(bytes) => termRef?.send(bytes)} />
 </div>

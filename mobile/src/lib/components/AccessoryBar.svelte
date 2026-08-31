@@ -8,6 +8,7 @@
     type KeyModifiers,
     type TerminalModes,
   } from "@mobile/lib/keybytes";
+  import { overflowFade } from "@mobile/lib/edgefade";
   import AccessoryKey from "./AccessoryKey.svelte";
 
   // The keyboard accessory bar: the feature that decides whether this app is
@@ -24,7 +25,8 @@
   // The layout is Termux's, which is what every serious mobile terminal
   // converges on and is the one whose mechanics are readable in source. Row one
   // is always up; row two collapses, because two permanent rows over a soft
-  // keyboard leave almost no pane visible on a 390-point screen.
+  // keyboard leave almost no pane visible on a 390-point screen. Both rows
+  // scroll sideways — see STRIP below.
   //
   // MODIFIERS LATCH. Tap ctrl, then c: the next ordinary keypress consumes the
   // modifier and clears it. A modifier you must hold is unusable one-handed on
@@ -41,19 +43,42 @@
     modes = DEFAULT_MODES,
     /** Send bytes to the pane. */
     onsend,
-    /**
-     * Non-empty while the app wants a deliberate confirmation before the first
-     * keystroke of a burst — the mid-turn friction described in PLAN.md. This
-     * component only asks; the parent decides.
-     */
-    needsConfirm = false,
-    onconfirm,
   }: {
     modes?: TerminalModes;
     onsend: (bytes: string) => void;
-    needsConfirm?: boolean;
-    onconfirm?: () => void;
   } = $props();
+
+  // BOTH ROWS SCROLL, and neither wraps. The primary row is nine keys wide —
+  // about 500 points with the disclosure — so on every shipping iPhone its tail
+  // ran off the screen with no scrollbar, no fade and nothing to grab: `body`
+  // is `overflow: hidden`, so the overflow was simply invisible. That cost the
+  // last two keys and, far worse, the chevron, which is the only way to open
+  // row two; ctrl, alt and the four control chords were unreachable on a phone.
+  //
+  // Three of these classes are load-bearing rather than decorative:
+  //
+  //   min-w-0    a flex item defaults to `min-width: auto`, which refuses to
+  //              shrink below its content — without it `overflow-x-auto` never
+  //              engages and the strip goes on overflowing its parent.
+  //   py-1       `overflow-x: auto` forces `overflow-y` to compute to `auto`,
+  //              so a 40pt key in a 40pt box has its pressed state and any
+  //              focus ring sliced off top and bottom, and a phantom vertical
+  //              scrollbar appears. `overflow-y: visible` is illegal in that
+  //              pairing and silently becomes `auto`; padding is the only fix.
+  //   overscroll-x-contain
+  //              a swipe past the last key must stay in the strip rather than
+  //              becoming the WebView's back gesture. The `overscroll-behavior:
+  //              none` in app.css governs the document, not this box.
+  //
+  // Horizontal padding stays on the ROW, never on the strip: WebKit drops the
+  // trailing padding of a horizontal scroll container, so `px-2` here would put
+  // the first key 8pt in and the last one hard against the clip edge.
+  //
+  // `use:overflowFade` is the other half and is not decoration. A key row ends
+  // on a clean key boundary, so an overflowing strip looks exactly like a strip
+  // that has no more keys — Enter and Shift-Enter simply appear not to exist.
+  const STRIP =
+    "flex min-w-0 flex-1 gap-1 overflow-x-auto overscroll-x-contain py-1 [scrollbar-width:none]";
 
   let expanded = $state(false);
   let ctrl = $state(false);
@@ -83,38 +108,19 @@
     return { ctrl, alt };
   }
 
-  /**
-   * Fire one key. Returns false when the press was REFUSED, which is what stops
-   * AccessoryKey arming an auto-repeat: holding the down arrow through the
-   * mid-turn banner would otherwise re-ask for confirmation every 80ms.
-   */
-  function press(key: BarKey): boolean {
+  /** Fire one key. Every press is sent; nothing on this screen refuses one. */
+  function press(key: BarKey) {
     if (key.kind === "latch") {
       // A latch toggles and sends nothing. Tapping it twice cancels, which is
       // the only way to back out of a mis-tap without sending a key.
       if (key.value === "ctrl") ctrl = !ctrl;
       else alt = !alt;
-      return true;
-    }
-
-    // The mid-turn guard, and it is FRICTION rather than a gate — see the
-    // terminal screen for the full statement. The interrupts are exempt because
-    // interrupting is the legitimate mid-turn action, and putting a
-    // confirmation in front of Ctrl-C would recreate exactly the uselessness the
-    // exemption exists to avoid.
-    //
-    // The latch is NOT consumed here: the press produced no bytes, so clearing
-    // ctrl would make the user latch it again after answering the confirmation,
-    // with nothing on screen saying why.
-    if (needsConfirm && !key.interrupt) {
-      onconfirm?.();
-      return false;
+      return;
     }
 
     const bytes = barKeyBytes(key, modes, mods);
     clearLatch();
     if (bytes !== "") onsend(bytes);
-    return true;
   }
 </script>
 
@@ -126,39 +132,46 @@
   style="padding-bottom: env(safe-area-inset-bottom, 0px)"
 >
   {#if expanded}
-    <!-- Row two scrolls horizontally: thirteen keys do not fit at 390 points and
-         shrinking them below a fingertip is worse than a scroll. -->
-    <div class="flex gap-1 overflow-x-auto px-2 pt-2 pb-1 [scrollbar-width:none]">
-      {#each BAR_ROW_SECONDARY as key (key.id ?? key.value)}
+    <div class="flex items-center px-2 pt-1 pb-1">
+      <div class={STRIP} use:overflowFade>
+        {#each BAR_ROW_SECONDARY as key (key.id ?? key.value)}
+          <AccessoryKey
+            label={key.label}
+            aria={key.aria}
+            repeats={key.repeats}
+            wide={key.label.length > 2}
+            latched={key.kind === "latch" && (key.value === "ctrl" ? ctrl : alt)}
+            onfire={() => press(key)}
+          />
+        {/each}
+      </div>
+    </div>
+  {/if}
+
+  <!-- The row's own vertical padding is 0 at the top: the strip carries `py-1`
+       inside itself, and doubling it here would push the pane up for nothing. -->
+  <div class="flex items-center px-2 pb-1">
+    <div class={STRIP} use:overflowFade>
+      {#each BAR_ROW_PRIMARY as key (key.id)}
         <AccessoryKey
           label={key.label}
           aria={key.aria}
           repeats={key.repeats}
           wide={key.label.length > 2}
-          latched={key.kind === "latch" && (key.value === "ctrl" ? ctrl : alt)}
           onfire={() => press(key)}
         />
       {/each}
     </div>
-  {/if}
-
-  <div class="flex items-center gap-1 px-2 pt-1 pb-2">
-    {#each BAR_ROW_PRIMARY as key (key.id)}
-      <AccessoryKey
-        label={key.label}
-        aria={key.aria}
-        repeats={key.repeats}
-        wide={key.label.length > 2}
-        onfire={() => press(key)}
-      />
-    {/each}
-    <!-- The disclosure is last so the keys start at the screen edge, where a
-         thumb reaches them. It is not an AccessoryKey: it sends no bytes. -->
+    <!-- OUTSIDE the strip, and that is the whole point of the split. It is the
+         only way to reach row two, so a chevron that scrolled away with the keys
+         would leave ctrl, alt and the four control chords unreachable on any
+         phone narrower than the primary row — which is every phone. `shrink-0`
+         and the `ml-1` gap replace the `gap-1` the strip owns. -->
     <button
       type="button"
       aria-label={expanded ? "Hide the second key row" : "Show the second key row"}
       aria-expanded={expanded}
-      class="ml-auto flex h-10 min-w-10 shrink-0 touch-manipulation items-center justify-center
+      class="ml-1 flex h-10 min-w-10 shrink-0 touch-manipulation items-center justify-center
              rounded-md border border-edge/60 bg-panel text-base text-faint select-none"
       onpointerdown={(e) => {
         e.preventDefault();

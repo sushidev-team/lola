@@ -139,11 +139,15 @@
       // two fields, and on a cold launch they race: the OS delivers a URL while
       // the WebView is still loading, so the payload can land first and this
       // resolves afterwards and overwrites it. That is not hypothetical. The
-      // key is NOT persistent in this build (the plugin has no secretSet, so
-      // `isPersistent()` is false and a remembered endpoint comes back with an
-      // empty key), which means the clobber replaces a working hand-off with a
-      // host and a blank credential — a link that fills the form correctly and
-      // then, one tick later, silently empties the one field nobody can guess.
+      // key comes back EMPTY wherever there is no native secret store — a
+      // browser dev session, or a plugin binary older than this bundle — which
+      // means the clobber replaces a working hand-off with a host and a blank
+      // credential: a link that fills the form correctly and then, one tick
+      // later, silently empties the one field nobody can guess. On a current
+      // device build the key does come back, and the race is then merely
+      // between two credentials rather than between one and nothing; the guard
+      // is right either way, because a hand-off names the daemon the user is
+      // holding a screen in front of.
       if (!prev || handoff) return;
       draft = prev.draft;
       key = prev.key;
