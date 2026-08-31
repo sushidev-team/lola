@@ -205,6 +205,38 @@ func (d *Daemon) startRemote(ctx context.Context) {
 	d.logf("", "remote: phone listener up on %s (SPKI pin %s)", strings.Join(where, ", "), srv.SPKIPin())
 }
 
+// reconcileRemoteBind rebinds the listener when the machine's addresses have
+// moved out from under it.
+//
+// A laptop changes networks, and the listener does not notice: it holds sockets
+// on addresses that no longer exist, nothing errors, nothing logs, and the
+// phone that connected yesterday cannot find the daemon today. `lola reload`
+// does not fix it either — handleReload only calls reloadRemote when [remote]
+// itself changed, and nothing about the config changed. The daemon has to
+// observe the drift, because it is the only thing that can.
+//
+// Called once per observe cycle. The check is one interface enumeration and a
+// set comparison, and it does nothing at all for the two common binds:
+// "localhost" resolves to the same loopback forever, and a wildcard never
+// drifts. Only "lan" moves, which is exactly the mode a phone needs.
+//
+// It reuses reloadRemote, so the rebind is the same stop-then-start every other
+// caller gets, on the shutdown context rather than an observe cycle's.
+func (d *Daemon) reconcileRemoteBind() {
+	d.remoteMu.Lock()
+	srv := d.remote
+	d.remoteMu.Unlock()
+	if srv == nil || !srv.BindDrifted() {
+		return
+	}
+
+	// Say what happened before doing it: a rebind drops every live connection,
+	// and an operator watching a phone disconnect deserves the reason in the
+	// log rather than a mystery.
+	d.logf("", "remote: the addresses this machine listens on have changed; rebinding the phone listener")
+	d.reloadRemote()
+}
+
 // stopRemote takes the listener down and is idempotent.
 //
 // The ORDER inside is the invariant. remote.Server.Close closes its listeners,

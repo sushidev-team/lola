@@ -87,6 +87,13 @@ func (d *Daemon) safeObserve(ctx context.Context) {
 // ctx is unbounded (WithoutCancel); every exec below carves its own
 // observeExecTimeout deadline from it.
 func (d *Daemon) observe(ctx context.Context) {
+	// Before the session work: has the machine moved? A laptop that changes
+	// networks leaves the phone listener bound to addresses that no longer
+	// exist — silently, and nothing else would ever notice, since reload only
+	// rebinds when [remote] changed and nothing about the config changes when
+	// the Wi-Fi does. One interface enumeration, and a no-op for every bind
+	// mode except "lan".
+	d.reconcileRemoteBind()
 	d.observeNative(ctx)
 }
 

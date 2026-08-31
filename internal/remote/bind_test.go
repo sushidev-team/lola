@@ -185,3 +185,86 @@ func TestLoopbackAddr(t *testing.T) {
 		}
 	}
 }
+
+// A laptop moves, and the listener does not notice: it holds sockets on
+// addresses the machine no longer has. Nothing errors and nothing logs, so the
+// phone that connected yesterday simply cannot find the daemon today. This is
+// the check that catches it.
+func TestSameAddrSet(t *testing.T) {
+	cases := []struct {
+		name string
+		a, b []BindAddr
+		want bool
+	}{
+		{"identical", []BindAddr{{Addr: "10.0.0.1:7717"}}, []BindAddr{{Addr: "10.0.0.1:7717"}}, true},
+		{
+			// Order follows interface enumeration and means nothing.
+			"same set, different order",
+			[]BindAddr{{Addr: "10.0.0.1:7717"}, {Addr: "10.0.0.2:7717"}},
+			[]BindAddr{{Addr: "10.0.0.2:7717"}, {Addr: "10.0.0.1:7717"}},
+			true,
+		},
+		{
+			// The interface an address was found on can change without the
+			// address changing, and a rebind for that alone would drop every
+			// live connection for nothing.
+			"same address, different interface",
+			[]BindAddr{{Addr: "10.0.0.1:7717", Iface: "en0"}},
+			[]BindAddr{{Addr: "10.0.0.1:7717", Iface: "en1"}},
+			true,
+		},
+		{"the machine moved", []BindAddr{{Addr: "192.168.10.159:7717"}}, []BindAddr{{Addr: "192.168.20.3:7717"}}, false},
+		{"one address gained", []BindAddr{{Addr: "10.0.0.1:7717"}, {Addr: "10.0.0.2:7717"}}, []BindAddr{{Addr: "10.0.0.1:7717"}}, false},
+		{"one address lost", []BindAddr{{Addr: "10.0.0.1:7717"}}, []BindAddr{{Addr: "10.0.0.1:7717"}, {Addr: "10.0.0.2:7717"}}, false},
+		{"both empty", nil, nil, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := sameAddrSet(tc.a, tc.b); got != tc.want {
+				t.Errorf("sameAddrSet = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// A listener bound to loopback must never report drift, however the machine's
+// networks change. This is what keeps the check from rebinding forever on the
+// insecure build, whose Listen rewrites a "lan" request to "localhost" before
+// binding — comparing against the CONFIGURED mode would drift on every call.
+func TestBindDriftedIsStableForLoopback(t *testing.T) {
+	s := &Server{opts: Options{Bind: "localhost", Port: 7717}}
+	var err error
+	if s.addrs, err = resolveBind("localhost", 7717, systemIfaces); err != nil {
+		t.Fatalf("resolveBind: %v", err)
+	}
+	for i := 0; i < 3; i++ {
+		if s.BindDrifted() {
+			t.Fatal("a loopback bind reported drift")
+		}
+	}
+}
+
+// Holding an address the machine no longer has IS drift.
+func TestBindDriftedNoticesAMovedMachine(t *testing.T) {
+	s := &Server{
+		opts:  Options{Bind: "localhost", Port: 7717},
+		addrs: []BindAddr{{Addr: "192.168.20.3:7717"}},
+	}
+	if !s.BindDrifted() {
+		t.Error("a listener holding an address the machine does not have reported no drift")
+	}
+}
+
+// A closed server, and one holding nothing, are not drift: there is nothing to
+// rebind and saying otherwise would have the observer restart it in a loop.
+func TestBindDriftedIgnoresAClosedOrEmptyServer(t *testing.T) {
+	closed := &Server{opts: Options{Bind: "lan", Port: 7717}, closed: true,
+		addrs: []BindAddr{{Addr: "192.168.20.3:7717"}}}
+	if closed.BindDrifted() {
+		t.Error("a closed server reported drift")
+	}
+	empty := &Server{opts: Options{Bind: "lan", Port: 7717}}
+	if empty.BindDrifted() {
+		t.Error("a server holding no addresses reported drift")
+	}
+}

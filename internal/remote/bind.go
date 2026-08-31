@@ -229,6 +229,70 @@ func excludedIface(name string) bool {
 	return false
 }
 
+// BindDrifted reports whether this server is holding addresses that no longer
+// match what its bind mode resolves to NOW.
+//
+// It exists because a laptop moves. The listener binds once at startup, and a
+// daemon that outlives a network change keeps sockets on addresses the machine
+// no longer has: nothing errors, nothing logs, and the phone that connected
+// yesterday simply cannot find it today. That is exactly how this was found —
+// a daemon bound to 192.168.20.3 on a Mac that had since become 192.168.10.159.
+//
+// It compares against the EFFECTIVE mode, s.opts.Bind, which is what was
+// actually bound rather than what config asked for. That distinction is the
+// whole reason this can be a simple comparison: the insecure build rewrites a
+// "lan" request to "localhost" before listening, so comparing against the
+// CONFIGURED mode would report drift on every single call and rebind forever.
+//
+// Two cases it deliberately does not catch, because catching them costs more
+// than they are worth. A wildcard bind ("all") never drifts and never needs to:
+// 0.0.0.0 keeps working across any address change. And an IP LITERAL that has
+// gone away still resolves to itself, so this reports no drift for a socket
+// that is genuinely dead — an operator who pins a literal has said which
+// address they mean, and guessing that they meant a different one is worse than
+// leaving it alone.
+//
+// An enumeration failure is NOT drift. Returning true there would tear down a
+// working listener because the machine briefly could not list its interfaces.
+func (s *Server) BindDrifted() bool {
+	s.mu.Lock()
+	closed := s.closed
+	held := append([]BindAddr(nil), s.addrs...)
+	s.mu.Unlock()
+	if closed || len(held) == 0 {
+		return false
+	}
+
+	want, err := resolveBind(s.opts.Bind, s.opts.Port, systemIfaces)
+	if err != nil {
+		// Includes ErrNoBindAddrs — "lan" with no private interface at all,
+		// which is a real change but one a rebind could not act on either.
+		return false
+	}
+	return !sameAddrSet(want, held)
+}
+
+// sameAddrSet compares two bind sets by ADDRESS, ignoring order and interface
+// name. Order follows interface enumeration and means nothing; the interface a
+// address was found on can change without the address changing, and a rebind
+// for that alone would drop every live connection for no gain.
+func sameAddrSet(a, b []BindAddr) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	seen := make(map[string]int, len(a))
+	for _, x := range a {
+		seen[x.Addr]++
+	}
+	for _, y := range b {
+		seen[y.Addr]--
+		if seen[y.Addr] < 0 {
+			return false
+		}
+	}
+	return true
+}
+
 // privateIP reports whether ip is on a network the operator plausibly meant by
 // "lan": RFC1918 and its IPv6 equivalents (ULA), plus link-local, which is what
 // a directly-cabled or AWDL-adjacent peer arrives on. Everything else —
