@@ -27,7 +27,7 @@ import type * as P from "@bindings/internal/protocol";
 import { bridge } from "./bridge";
 import { unsupported } from "./errors";
 import { WireError, normalizePanesData } from "../wire";
-import type { PanesData, RawPanesData, ShellCreateData } from "../wire";
+import type { PaneResizeData, PanesData, RawPanesData, ShellCreateData } from "../wire";
 
 // ---------------------------------------------------------------------------
 // DaemonService
@@ -200,6 +200,38 @@ export namespace DaemonService {
    */
   export function ShellCreate(session: string): Promise<ShellCreateData> {
     return bridge.request<ShellCreateData>("DaemonService.ShellCreate", "shellCreate", { session });
+  }
+
+  /**
+   * FORWARDED: cmd=paneResize — pin this pane's tmux window to an explicit size,
+   * or release it back to whatever clients remain attached.
+   *
+   * `cols <= 0` IS THE RELEASE, which is why `PaneResize(s, p, 0, 0)` is the
+   * undo rather than a separate command. The daemon rejects anything over 500
+   * in either dimension on the pin path and lets a nonsense release through, so
+   * a client that pinned badly can always get back out.
+   *
+   * THIS RESHAPES SOMEBODY ELSE'S SCREEN. The pane-byte fan-out deliberately
+   * cannot — `internal/panebus` attaches with `-f ignore-size` precisely so a
+   * phone joining a stream never narrows the developer's tmux window — and this
+   * command is the one sanctioned exception, for as long as a human is looking
+   * at the pane on a phone and not one moment longer. Nothing may call it except
+   * the pin lifecycle in `@mobile/lib/panepin`, which owns the release.
+   *
+   * Note the ARGS ENVELOPE. `panes` and `shellCreate` take flat fields; this one
+   * and `paneClose` take a nested `args` object, because their Go handlers are
+   * declared over `protocol.PaneResizeArgs` / `PaneCloseArgs` rather than over
+   * the request's own top-level fields.
+   */
+  export function PaneResize(
+    session: string,
+    pane: string,
+    cols: number,
+    rows: number,
+  ): Promise<PaneResizeData> {
+    return bridge.request<PaneResizeData>("DaemonService.PaneResize", "paneResize", {
+      args: { session, pane, cols, rows },
+    });
   }
 
   // --- opening work ---------------------------------------------------------

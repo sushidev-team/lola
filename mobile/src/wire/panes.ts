@@ -180,3 +180,29 @@ export function normalizePanesData(session: string, raw: RawPanesData | null | u
     canCreateShell: raw?.canCreateShell === true,
   };
 }
+
+// ---------------------------------------------------------------------------
+// Pinning a pane to a phone's size
+// ---------------------------------------------------------------------------
+
+/**
+ * The answer to `cmd=paneResize`. Mirrors `protocol.PaneResizeData`.
+ *
+ * `pinned` REPORTS WHICH WAY THE CALL WENT and is the only field worth reading
+ * for that. `cols`/`rows` are `json:",omitempty"` in Go, so a release answers
+ * with both absent and a client inferring the direction from their presence
+ * would read a release as a pin the moment tmux hands back a zero. The Go
+ * comment on the type says exactly this; it is repeated here because this is
+ * the side that would get it wrong.
+ *
+ * There is no normalizer for this shape and it needs none: every field is a
+ * scalar, an absent `cols` is genuinely "not reported", and nothing here is
+ * rendered as a tab the way an empty pane name would be.
+ */
+export interface PaneResizeData {
+  session: string;
+  pane: string;
+  pinned: boolean;
+  cols?: number;
+  rows?: number;
+}
