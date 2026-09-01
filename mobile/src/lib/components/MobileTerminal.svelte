@@ -13,6 +13,8 @@
     NO_SCROLL,
     accumulateScroll,
     clampPan,
+    cursorVisible,
+    followCursor,
     firstVisibleColumn,
     fitWidth,
     isPanning,
@@ -156,6 +158,11 @@
   let attached = $state(false);
   let box = $state<PanBox>({ contentWidth: 0, contentHeight: 0, viewWidth: 0, viewHeight: 0 });
   let pan = $state({ x: 0, y: 0 });
+  // Whether the cursor was visible before the write being applied — the follow
+  // rule's one input. A PLAIN `let`: it is read and written inside the write
+  // path, never rendered. Starts true so the bytes that follow an attach land
+  // on a view that is still where the paint put it.
+  let wasFollowing = true;
 
   const panning = $derived(isPanning(box));
   const shown = $derived(visibleColumns(box, cols));
@@ -432,7 +439,8 @@
       void resubscribe();
       return;
     }
-    term.write(ev.data);
+    noteFollowing();
+    term.write(ev.data, () => followCursorNow());
     syncModes();
   }
 
@@ -463,6 +471,11 @@
     term.write(resyncToBytes(screen), () => {
       syncModes();
       measure();
+      // A fresh screen is an alignment, not a follow: the pan may be anywhere
+      // (the origin on a first attach, wherever the user left it on a resync
+      // that changed the geometry) and the line being typed into is the one
+      // part of it that must be on screen.
+      followCursorNow(true);
     });
   }
 
@@ -550,6 +563,54 @@
       viewHeight: frame.clientHeight,
     };
     pan = clampPan(pan, box);
+  }
+
+  /**
+   * Where xterm says the cursor is, in grid cells.
+   *
+   * OPTIONAL ALL THE WAY DOWN, because a Terminal that has not opened against a
+   * real canvas has no buffer at all — which is every jsdom test, and would
+   * otherwise throw from inside the write callback and take the exit and
+   * release paths down with it. No buffer means no follow, which is the right
+   * answer rather than a workaround: there is nothing on screen to keep on it.
+   */
+  function cursorAt(): { x: number; y: number } | null {
+    const b = term?.buffer?.active;
+    if (!b) return null;
+    // Viewport-relative, which IS the grid row here: the scrollback is 0 and
+    // nothing scrolls xterm's own buffer — the history that matters is the
+    // daemon's, reached by the scroll RPC.
+    return { x: b.cursorX, y: b.cursorY };
+  }
+
+  /**
+   * Keep the line being typed into on screen.
+   *
+   * THE PAN STARTS AT THE TOP-LEFT AND THE PROMPT IS AT NEITHER. The grid is the
+   * developer's tmux window, commonly 251x51, and this component deliberately
+   * does not reflow it — so a phone opens a shell showing the top of a screen
+   * whose input line is below the bottom edge, and one finger up or down is the
+   * scrollback RPC rather than a pan. Reaching the cursor took a two-finger drag
+   * nobody guesses, which read as "the terminal is stuck at the top and will not
+   * scroll down".
+   *
+   * `force` is the initial alignment (a fresh screen, a grid that just changed
+   * size): go to the cursor wherever it is. Without it the follow is
+   * CONDITIONAL on the cursor having been visible before the write, so output
+   * arriving while the user is reading further up leaves their view alone and
+   * panning back to the cursor silently re-engages the follow.
+   */
+  function followCursorNow(force = false) {
+    const at = cursorAt();
+    if (!at) return;
+    if (!force && !wasFollowing) return;
+    pan = followCursor(pan, box, { cols, rows }, at);
+  }
+
+  /** Whether the cursor was on screen before the write now being applied. */
+  function noteFollowing() {
+    const at = cursorAt();
+    wasFollowing = at ? cursorVisible(pan, box, { cols, rows }, at) : true;
   }
 
   // Remember the size, on a trailing debounce.

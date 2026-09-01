@@ -220,7 +220,11 @@ export function accumulateScroll(
   deltaPixels: number,
   cellHeight: number,
 ): ScrollAccum {
-  if (!Number.isFinite(deltaPixels) || !Number.isFinite(cellHeight) || cellHeight <= 0) {
+  if (
+    !Number.isFinite(deltaPixels) ||
+    !Number.isFinite(cellHeight) ||
+    cellHeight <= 0
+  ) {
     return acc;
   }
   const pixels = acc.pixels + deltaPixels;
@@ -232,8 +236,14 @@ export function accumulateScroll(
  * Take whatever whole lines have accumulated, clamped, and leave the sub-line
  * remainder behind for the next event.
  */
-export function takeScroll(acc: ScrollAccum): { lines: number; rest: ScrollAccum } {
-  const clamped = Math.max(-MAX_SCROLL_LINES, Math.min(MAX_SCROLL_LINES, acc.lines));
+export function takeScroll(acc: ScrollAccum): {
+  lines: number;
+  rest: ScrollAccum;
+} {
+  const clamped = Math.max(
+    -MAX_SCROLL_LINES,
+    Math.min(MAX_SCROLL_LINES, acc.lines),
+  );
   return { lines: clamped, rest: { pixels: acc.pixels, lines: 0 } };
 }
 
@@ -244,7 +254,12 @@ export function takeScroll(acc: ScrollAccum): { lines: number; rest: ScrollAccum
  * measured in rows and DOM_DELTA_PAGE in screens, and a trackpad reports pixels.
  * A Magic Keyboard trackpad on an iPad reaches this; a finger never does.
  */
-export function wheelPixels(deltaY: number, deltaMode: number, cellHeight: number, rows: number): number {
+export function wheelPixels(
+  deltaY: number,
+  deltaMode: number,
+  cellHeight: number,
+  rows: number,
+): number {
   if (deltaMode === 1) return deltaY * cellHeight;
   if (deltaMode === 2) return deltaY * cellHeight * Math.max(1, rows);
   return deltaY;
@@ -322,7 +337,11 @@ export function visibleColumns(box: PanBox, cols: number): number {
  * Clamped into the grid at both ends, because `pan.x` is clamped against a box
  * that is re-measured a frame later than the font that changed it.
  */
-export function firstVisibleColumn(box: PanBox, cols: number, panX: number): number {
+export function firstVisibleColumn(
+  box: PanBox,
+  cols: number,
+  panX: number,
+): number {
   if (box.contentWidth <= 0 || cols <= 0) return 1;
   const cell = box.contentWidth / cols;
   if (cell <= 0) return 1;
@@ -346,7 +365,11 @@ export function firstVisibleColumn(box: PanBox, cols: number, panX: number): num
  * evenly, and 0 for any unmeasured input, so the mask costs nothing until there
  * is something to hide.
  */
-export function partialRowHeight(panY: number, viewHeight: number, cellHeight: number): number {
+export function partialRowHeight(
+  panY: number,
+  viewHeight: number,
+  cellHeight: number,
+): number {
   if (!(cellHeight > 0) || !(viewHeight > 0)) return 0;
   const bottom = Math.max(0, panY) + viewHeight;
   const rest = bottom % cellHeight;
@@ -374,4 +397,88 @@ export function visibleRows(box: PanBox, rows: number): number {
   const cell = box.contentHeight / rows;
   if (cell <= 0) return 0;
   return Math.min(rows, Math.max(1, Math.floor(box.viewHeight / cell)));
+}
+
+// ---------------------------------------------------------------------------
+// Following the cursor
+// ---------------------------------------------------------------------------
+
+/**
+ * Where the cursor's own cell sits in the content, in pixels.
+ *
+ * Rows and columns rather than pixels are what xterm reports, and the cell size
+ * is derived from the rendered grid exactly as `visibleRows` derives it — from
+ * `contentHeight / rows` — so a font change needs no separate bookkeeping here.
+ */
+function cursorCell(
+  box: PanBox,
+  grid: { cols: number; rows: number },
+  cursor: { x: number; y: number },
+): { left: number; top: number; width: number; height: number } | null {
+  if (grid.cols <= 0 || grid.rows <= 0) return null;
+  if (box.contentWidth <= 0 || box.contentHeight <= 0) return null;
+  const width = box.contentWidth / grid.cols;
+  const height = box.contentHeight / grid.rows;
+  if (!(width > 0) || !(height > 0)) return null;
+  return { left: cursor.x * width, top: cursor.y * height, width, height };
+}
+
+/**
+ * Whether the cursor's cell is inside the window right now.
+ *
+ * The question the follow rule asks BEFORE new output arrives: a view that was
+ * showing the cursor should keep showing it, and a view the user has panned
+ * away from should be left exactly where they put it. Answering "no" for a grid
+ * that has not been measured yet is the safe direction — nothing moves.
+ */
+export function cursorVisible(
+  pan: Pan,
+  box: PanBox,
+  grid: { cols: number; rows: number },
+  cursor: { x: number; y: number },
+): boolean {
+  const cell = cursorCell(box, grid, cursor);
+  if (!cell) return false;
+  return (
+    cell.top >= pan.y &&
+    cell.top + cell.height <= pan.y + box.viewHeight &&
+    cell.left >= pan.x &&
+    cell.left + cell.width <= pan.x + box.viewWidth
+  );
+}
+
+/**
+ * Move the window the least it can to put the cursor's cell inside it.
+ *
+ * WHY A PHONE NEEDS THIS AT ALL. The grid is the DEVELOPER'S tmux window — 251
+ * columns by 51 rows is an ordinary one — and this component deliberately does
+ * not reflow it (see MobileTerminal's header: fitting would discard three
+ * quarters of the agent's output). So the phone shows a window onto a much
+ * larger grid, and the pan starts at the origin, which is the TOP-LEFT. The
+ * prompt is at the other end. A shell therefore opened showing its first
+ * screenful with the line you type into somewhere below the bottom edge, and
+ * nothing routine brought it back: one finger up or down is the scrollback RPC,
+ * not a pan, so reaching the cursor took a two-finger drag nobody guesses.
+ *
+ * Scrolls into view rather than centring: a cursor below the window comes to
+ * the BOTTOM edge, one above it to the TOP edge, and one already inside moves
+ * nothing. That keeps as much context on screen as possible and makes the
+ * follow invisible while typing, which is when it runs most often.
+ */
+export function followCursor(
+  pan: Pan,
+  box: PanBox,
+  grid: { cols: number; rows: number },
+  cursor: { x: number; y: number },
+): Pan {
+  const cell = cursorCell(box, grid, cursor);
+  if (!cell) return pan;
+  let { x, y } = pan;
+  if (cell.top + cell.height > y + box.viewHeight)
+    y = cell.top + cell.height - box.viewHeight;
+  if (cell.top < y) y = cell.top;
+  if (cell.left + cell.width > x + box.viewWidth)
+    x = cell.left + cell.width - box.viewWidth;
+  if (cell.left < x) x = cell.left;
+  return clampPan({ x, y }, box);
 }

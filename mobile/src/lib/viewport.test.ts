@@ -1,18 +1,20 @@
 import { describe, it, expect } from "vitest";
 import {
+  accumulateScroll,
   AXIS_LOCK_SLOP,
+  clampFont,
+  clampPan,
+  cursorVisible,
+  firstVisibleColumn,
+  fitWidth,
+  followCursor,
   FONT_DEFAULT,
   FONT_MAX,
   FONT_MIN,
-  MAX_SCROLL_LINES,
-  NO_SCROLL,
-  accumulateScroll,
-  clampFont,
-  clampPan,
-  firstVisibleColumn,
-  fitWidth,
   isPanning,
   lockAxis,
+  MAX_SCROLL_LINES,
+  NO_SCROLL,
   panBy,
   panLimits,
   partialRowHeight,
@@ -28,9 +30,19 @@ import {
 } from "./viewport";
 
 // A 200-column pane on a phone: the case the whole module exists for.
-const wide: PanBox = { contentWidth: 1600, contentHeight: 700, viewWidth: 390, viewHeight: 480 };
+const wide: PanBox = {
+  contentWidth: 1600,
+  contentHeight: 700,
+  viewWidth: 390,
+  viewHeight: 480,
+};
 // A grid smaller than its window, which happens after a pinch out.
-const small: PanBox = { contentWidth: 300, contentHeight: 200, viewWidth: 390, viewHeight: 480 };
+const small: PanBox = {
+  contentWidth: 300,
+  contentHeight: 200,
+  viewWidth: 390,
+  viewHeight: 480,
+};
 
 describe("pan limits", () => {
   it("is the overflow on each axis", () => {
@@ -139,7 +151,9 @@ describe("scroll accumulation", () => {
   it("clamps to the daemon's own ceiling", () => {
     const { lines } = takeScroll({ pixels: 0, lines: 9000 });
     expect(lines).toBe(MAX_SCROLL_LINES);
-    expect(takeScroll({ pixels: 0, lines: -9000 }).lines).toBe(-MAX_SCROLL_LINES);
+    expect(takeScroll({ pixels: 0, lines: -9000 }).lines).toBe(
+      -MAX_SCROLL_LINES,
+    );
   });
 });
 
@@ -238,7 +252,12 @@ describe("fit width", () => {
     // 100 columns at 12pt measures 800px in a 390px window; 390/800 of 12 is
     // 5.85, which floors to 5 and is below the floor -- so this box is the one
     // that CANNOT fit. A 40-column grid can.
-    const narrow: PanBox = { contentWidth: 640, contentHeight: 300, viewWidth: 390, viewHeight: 480 };
+    const narrow: PanBox = {
+      contentWidth: 640,
+      contentHeight: 300,
+      viewWidth: 390,
+      viewHeight: 480,
+    };
     const r = fitWidth(narrow, 16);
     expect(r.size).toBe(9); // floor(16 * 390/640) = 9
     expect(r.complete).toBe(true);
@@ -246,7 +265,12 @@ describe("fit width", () => {
 
   it("floors rather than rounds, so it never claims a fit it does not have", () => {
     // A round would give 10 here, which still overflows by a pixel.
-    const box: PanBox = { contentWidth: 640, contentHeight: 300, viewWidth: 399, viewHeight: 480 };
+    const box: PanBox = {
+      contentWidth: 640,
+      contentHeight: 300,
+      viewWidth: 399,
+      viewHeight: 480,
+    };
     expect(fitWidth(box, 16).size).toBe(9); // floor(9.975), not round
   });
 
@@ -266,7 +290,12 @@ describe("fit width", () => {
   });
 
   it("clamps the size it is given and survives an unmeasured box", () => {
-    const zero: PanBox = { contentWidth: 0, contentHeight: 0, viewWidth: 0, viewHeight: 0 };
+    const zero: PanBox = {
+      contentWidth: 0,
+      contentHeight: 0,
+      viewWidth: 0,
+      viewHeight: 0,
+    };
     expect(fitWidth(zero, 99).size).toBe(FONT_MAX);
     expect(fitWidth(zero, Number.NaN).size).toBe(FONT_DEFAULT);
   });
@@ -274,7 +303,12 @@ describe("fit width", () => {
 
 describe("firstVisibleColumn", () => {
   // 211 columns of 8px in a 344px viewport: 43 columns on screen.
-  const box = { contentWidth: 1688, contentHeight: 748, viewWidth: 344, viewHeight: 600 };
+  const box = {
+    contentWidth: 1688,
+    contentHeight: 748,
+    viewWidth: 344,
+    viewHeight: 600,
+  };
 
   it("is column 1 at the left edge", () => {
     expect(firstVisibleColumn(box, 211, 0)).toBe(1);
@@ -291,7 +325,13 @@ describe("firstVisibleColumn", () => {
   });
 
   it("is 1 for an unmeasured box, rather than NaN", () => {
-    expect(firstVisibleColumn({ contentWidth: 0, contentHeight: 0, viewWidth: 0, viewHeight: 0 }, 211, 40)).toBe(1);
+    expect(
+      firstVisibleColumn(
+        { contentWidth: 0, contentHeight: 0, viewWidth: 0, viewHeight: 0 },
+        211,
+        40,
+      ),
+    ).toBe(1);
     expect(firstVisibleColumn(box, 0, 40)).toBe(1);
   });
 });
@@ -317,5 +357,85 @@ describe("partialRowHeight", () => {
   it("is 0 for anything unmeasured", () => {
     expect(partialRowHeight(0, 0, 17)).toBe(0);
     expect(partialRowHeight(0, 500, 0)).toBe(0);
+  });
+});
+
+describe("following the cursor", () => {
+  // A developer's tmux window through a phone-sized hole: 100x50 cells of
+  // 10x20px content behind a 200x200px window. Four columns and ten rows fit.
+  const box: PanBox = {
+    contentWidth: 1000,
+    contentHeight: 1000,
+    viewWidth: 200,
+    viewHeight: 200,
+  };
+  const grid = { cols: 100, rows: 50 };
+
+  it("moves nothing when the cursor is already inside the window", () => {
+    const pan = { x: 0, y: 0 };
+    expect(cursorVisible(pan, box, grid, { x: 3, y: 4 })).toBe(true);
+    expect(followCursor(pan, box, grid, { x: 3, y: 4 })).toEqual(pan);
+  });
+
+  it("brings a cursor below the window to the BOTTOM edge, not the middle", () => {
+    // Row 30 of 50 on a grid whose rows are 20px: the cell ends at 620, so the
+    // window's top lands at 420 and the cursor sits on its last visible row.
+    const got = followCursor({ x: 0, y: 0 }, box, grid, { x: 0, y: 30 });
+    expect(got).toEqual({ x: 0, y: 420 });
+    expect(cursorVisible(got, box, grid, { x: 0, y: 30 })).toBe(true);
+  });
+
+  it("brings a cursor above the window to the TOP edge", () => {
+    const got = followCursor({ x: 0, y: 600 }, box, grid, { x: 0, y: 5 });
+    expect(got).toEqual({ x: 0, y: 100 });
+  });
+
+  it("follows sideways too, which is what typing past the window does", () => {
+    // Column 40 of 100 on 10px cells: the cell ends at 410, so the window
+    // starts at 210.
+    const got = followCursor({ x: 0, y: 0 }, box, grid, { x: 40, y: 0 });
+    expect(got).toEqual({ x: 210, y: 0 });
+  });
+
+  it("never leaves the content, however far the cursor is asked for", () => {
+    const got = followCursor({ x: 0, y: 0 }, box, grid, { x: 99, y: 49 });
+    expect(got.x).toBeLessThanOrEqual(box.contentWidth - box.viewWidth);
+    expect(got.y).toBeLessThanOrEqual(box.contentHeight - box.viewHeight);
+  });
+
+  it("reports NOT visible for an unmeasured grid, so nothing is moved on faith", () => {
+    const empty: PanBox = {
+      contentWidth: 0,
+      contentHeight: 0,
+      viewWidth: 200,
+      viewHeight: 200,
+    };
+    expect(cursorVisible({ x: 0, y: 0 }, empty, grid, { x: 0, y: 0 })).toBe(
+      false,
+    );
+    expect(followCursor({ x: 7, y: 9 }, empty, grid, { x: 0, y: 0 })).toEqual({
+      x: 7,
+      y: 9,
+    });
+    expect(
+      cursorVisible({ x: 0, y: 0 }, box, { cols: 0, rows: 0 }, { x: 0, y: 0 }),
+    ).toBe(false);
+  });
+
+  it("is not fooled by content smaller than the window", () => {
+    // A grid that fits entirely: the pan has nowhere to go and the cursor is
+    // visible wherever it is.
+    const small: PanBox = {
+      contentWidth: 100,
+      contentHeight: 100,
+      viewWidth: 200,
+      viewHeight: 200,
+    };
+    const g = { cols: 10, rows: 10 };
+    expect(followCursor({ x: 0, y: 0 }, small, g, { x: 9, y: 9 })).toEqual({
+      x: 0,
+      y: 0,
+    });
+    expect(cursorVisible({ x: 0, y: 0 }, small, g, { x: 9, y: 9 })).toBe(true);
   });
 });
