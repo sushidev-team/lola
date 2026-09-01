@@ -1072,18 +1072,18 @@ func TestSetWindowSizePin(t *testing.T) {
 		t.Fatalf("SetWindowSize: %v", err)
 	}
 	got := loggedArgs(t, argsLog)
-	want := "-L lola set-option -w -t =lola-fe-42 window-size manual\n" +
-		"-L lola resize-window -t =lola-fe-42 -x 50 -y 20"
+	want := "-L lola set-option -w -t =lola-fe-42: window-size manual\n" +
+		"-L lola resize-window -t =lola-fe-42: -x 50 -y 20"
 	if got != want {
 		t.Fatalf("pin sent:\n%s\nwant:\n%s", got, want)
 	}
 }
 
-// TestSetWindowSizeReleaseUnsetsThenRecomputes pins the invariant that unsetting
-// window-size does NOT resize anything: tmux leaves the window at whatever it
-// was last told, so `resize-window -A` is what hands the size back to the
-// clients still attached. Dropping the second command leaves a developer's
-// window squashed after a phone disconnects.
+// TestSetWindowSizeRelease pins BOTH commands and their ORDER. Unsetting
+// window-size resizes nothing (tmux leaves the window at whatever it was last
+// told), and `resize-window -A` re-sets window-size to manual — so recomputing
+// second would leave the window pinned again, ignoring every client that
+// attaches afterwards.
 func TestSetWindowSizeRelease(t *testing.T) {
 	bin, argsLog := scriptedTmux(t, nil)
 	c := &Client{Bin: bin}
@@ -1091,8 +1091,8 @@ func TestSetWindowSizeRelease(t *testing.T) {
 		t.Fatalf("SetWindowSize: %v", err)
 	}
 	got := loggedArgs(t, argsLog)
-	want := "-L lola set-option -w -t =lola-fe-42 -u window-size\n" +
-		"-L lola resize-window -t =lola-fe-42 -A"
+	want := "-L lola resize-window -t =lola-fe-42: -A\n" +
+		"-L lola set-option -w -t =lola-fe-42: -u window-size"
 	if got != want {
 		t.Fatalf("release sent:\n%s\nwant:\n%s", got, want)
 	}
@@ -1114,11 +1114,74 @@ func TestSetWindowSizeFailedPinUndoesItself(t *testing.T) {
 		t.Fatal("a failed resize must still be reported as an error")
 	}
 	got := loggedArgs(t, argsLog)
-	want := "-L lola set-option -w -t =lola-fe-42 window-size manual\n" +
-		"-L lola resize-window -t =lola-fe-42 -x 50 -y 20\n" +
-		"-L lola set-option -w -t =lola-fe-42 -u window-size\n" +
-		"-L lola resize-window -t =lola-fe-42 -A"
+	want := "-L lola set-option -w -t =lola-fe-42: window-size manual\n" +
+		"-L lola resize-window -t =lola-fe-42: -x 50 -y 20\n" +
+		"-L lola resize-window -t =lola-fe-42: -A\n" +
+		"-L lola set-option -w -t =lola-fe-42: -u window-size"
 	if got != want {
 		t.Fatalf("failed pin sent:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// TestSetWindowSizeAgainstRealTmux drives an ACTUAL tmux server, because the
+// argv tests above cannot see the bug this feature actually had.
+//
+// `window-size` is a window option and `resize-window` takes a target-WINDOW,
+// where "=name" means an exact WINDOW-name match — and windows are named after
+// the command they run. So every call answered `no such window: =<session>`,
+// the pin never resized anything on any machine, and three tests asserting the
+// argv passed the whole time. Only tmux itself knows its target grammar.
+//
+// Isolated and cheap: its own -L socket, torn down at the end, skipped where
+// tmux is not installed. Nothing here touches lola's server or the user's.
+func TestSetWindowSizeAgainstRealTmux(t *testing.T) {
+	bin, err := exec.LookPath("tmux")
+	if err != nil {
+		t.Skip("tmux is not installed")
+	}
+	socket := fmt.Sprintf("lolatest-%d-%d", os.Getpid(), time.Now().UnixNano())
+	c := &Client{Bin: bin, SocketName: socket, Dir: t.TempDir()}
+	ctx := context.Background()
+	t.Cleanup(func() {
+		_, _, _ = c.run(context.Background(), "kill-server")
+	})
+
+	const name = "sizetest"
+	if _, _, err := c.run(ctx, "new-session", "-d", "-s", name, "-x", "120", "-y", "40", "sh"); err != nil {
+		t.Skipf("this environment cannot start a tmux server: %v", err)
+	}
+
+	size := func() string {
+		t.Helper()
+		out, _, err := c.run(ctx, "list-windows", "-t", "="+name+":",
+			"-F", "#{window_width}x#{window_height}")
+		if err != nil {
+			t.Fatalf("list-windows: %v", err)
+		}
+		return strings.TrimSpace(out)
+	}
+	if got := size(); got != "120x40" {
+		t.Fatalf("the fixture window is %s, want 120x40", got)
+	}
+
+	if err := c.SetWindowSize(ctx, name, 50, 20); err != nil {
+		t.Fatalf("pin: %v", err)
+	}
+	if got := size(); got != "50x20" {
+		t.Fatalf("after the pin the window is %s, want 50x20", got)
+	}
+
+	if err := c.SetWindowSize(ctx, name, 0, 0); err != nil {
+		t.Fatalf("release: %v", err)
+	}
+	// What it releases TO is tmux's business — with no client attached it picks
+	// its own default — so the assertion is that the pin is gone, which is the
+	// option rather than the number.
+	opt, _, err := c.run(ctx, "show-options", "-w", "-t", "="+name+":", "window-size")
+	if err != nil {
+		t.Fatalf("show-options: %v", err)
+	}
+	if strings.Contains(opt, "manual") {
+		t.Fatalf("window-size is still pinned after a release: %q", opt)
 	}
 }

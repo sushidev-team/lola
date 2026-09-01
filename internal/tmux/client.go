@@ -909,6 +909,31 @@ func chromeStatusRight(opts SessionChrome) string {
 	return opts.StatusRight + " | " + hint
 }
 
+// releaseWindowSize hands a window's size back to the clients attached to it.
+//
+// TWO COMMANDS, IN THIS ORDER, and both halves of that sentence were paid for:
+//
+//   - Unsetting `window-size` alone does nothing visible. tmux leaves the
+//     window at whatever it was last told, so a phone that pinned and walked
+//     away would leave the developer squashed until something else resized it.
+//     `resize-window -A` is what makes tmux recompute from the clients that are
+//     actually attached.
+//   - `resize-window -A` SETS `window-size manual` on the window (verified on
+//     tmux 3.7c). Unsetting first and recomputing second therefore ends with
+//     the option pinned again — the size looked right at that instant, and the
+//     window then ignored every client that attached afterwards, which is the
+//     stuck-pin failure this whole path exists to prevent, arriving quietly.
+//
+// So: recompute, THEN unset. The option's absence is the actual release; the
+// recompute is what makes it visible now.
+func (c *Client) releaseWindowSize(ctx context.Context, target string) error {
+	if _, _, err := c.run(ctx, "resize-window", "-t", target, "-A"); err != nil {
+		return err
+	}
+	_, _, err := c.run(ctx, "set-option", "-w", "-t", target, "-u", "window-size")
+	return err
+}
+
 // SetWindowSize pins a window to an explicit size, or releases it back to
 // whatever the attached clients ask for.
 //
@@ -930,13 +955,18 @@ func chromeStatusRight(opts SessionChrome) string {
 // Best-effort by design: a window that has gone away is not an error worth
 // failing a UI over, and the size is cosmetic. The caller logs and continues.
 func (c *Client) SetWindowSize(ctx context.Context, name string, cols, rows int) error {
-	target := "=" + name
+	// A target-WINDOW, not the bare session name — the same trap KeepDeadPane
+	// documents, and the one that made this feature do nothing at all.
+	//
+	// `window-size` is a window option and `resize-window` takes a window, so
+	// "=name" is read as an exact WINDOW-name match rather than a session one.
+	// Windows are named after the command they run ("zsh", "claude"), so every
+	// call answered `no such window: =<session>` and the pin never touched a
+	// window in its life — while argv-level tests, which is all a fake tmux can
+	// check, passed. "=name:" is the session matched exactly, current window.
+	target := "=" + name + ":"
 	if cols <= 0 || rows <= 0 {
-		if _, _, err := c.run(ctx, "set-option", "-w", "-t", target, "-u", "window-size"); err != nil {
-			return err
-		}
-		_, _, err := c.run(ctx, "resize-window", "-t", target, "-A")
-		return err
+		return c.releaseWindowSize(ctx, target)
 	}
 	if _, _, err := c.run(ctx, "set-option", "-w", "-t", target, "window-size", "manual"); err != nil {
 		return err
@@ -958,8 +988,7 @@ func (c *Client) SetWindowSize(ctx context.Context, name string, cols, rows int)
 		// is already being handed the error that matters, and the undo is the
 		// same pair of commands the release path uses, for the same reason —
 		// unsetting the option does not resize anything by itself.
-		_, _, _ = c.run(ctx, "set-option", "-w", "-t", target, "-u", "window-size")
-		_, _, _ = c.run(ctx, "resize-window", "-t", target, "-A")
+		_ = c.releaseWindowSize(ctx, target)
 		return err
 	}
 	return nil
