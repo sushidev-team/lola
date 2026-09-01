@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach } from "vitest";
-import { render, screen, cleanup } from "@testing-library/svelte";
+import { describe, it, expect, beforeEach, vi } from "vitest";
+import { render, screen, cleanup, fireEvent } from "@testing-library/svelte";
 import SessionsTable from "./SessionsTable.svelte";
 import { store, type SessionInfo } from "$lib/store.svelte";
 import { nav } from "$lib/nav.svelte";
@@ -71,9 +71,9 @@ describe("SessionsTable empty states", () => {
 
 // The agent axis used to hang off the status pill as theme.ts's two-letter
 // glyphs — "review ·wk" — which reads as a typo unless you already know the
-// vocabulary. It moved to <AgentActivity> as a live pulse plus plain language.
-// theme.ts still exports agentBadge (it is a pinned port of the TUI's theme.go),
-// so nothing stops a future edit from rendering it again; these pin it out.
+// vocabulary. The pill IS the agent axis now, and <AgentActivity> carries the
+// liveness pulse plus whatever prose the session has about itself. agentBadge
+// and its showAgentBadge gate are deleted; these pin the glyphs out for good.
 describe("SessionsTable agent activity", () => {
   beforeEach(() => {
     cleanup();
@@ -154,5 +154,100 @@ describe("SessionsTable column alignment", () => {
     store.sessions = [fakeSession()];
     render(SessionsTable);
     expect(screen.queryByText("Reacting")).not.toBeInTheDocument();
+  });
+});
+
+// EVERY session the attention predicate is true for gets a marker. It used to be
+// needs_input alone, which left the three delivery regressions — a red build,
+// requested changes, a conflicting branch — with no mark on any surface in the
+// app, even though they had been in the attention set from the beginning.
+describe("SessionsTable attention markers", () => {
+  beforeEach(() => {
+    cleanup();
+    store.connected = true;
+    store.alive = true;
+    store.sessions = [];
+    nav.scoped = false;
+    nav.project = "";
+    nav.selectedId = "";
+    nav.triage = "";
+  });
+
+  function markers(container: HTMLElement): HTMLElement[] {
+    return [...container.querySelectorAll("tbody td:first-child span")].filter(
+      (el) => el.textContent === "!",
+    ) as HTMLElement[];
+  }
+
+  it("marks a blocked agent", () => {
+    store.sessions = [fakeSession({ agentState: "waiting_input", delivery: "none" })];
+    const { container } = render(SessionsTable);
+    expect(markers(container)).toHaveLength(1);
+  });
+
+  it("marks a red build even though the agent is happily working", () => {
+    store.sessions = [fakeSession({ agentState: "working", delivery: "ci_failed" })];
+    const { container } = render(SessionsTable);
+    expect(markers(container)).toHaveLength(1);
+  });
+
+  it("marks requested changes and a conflicting branch too", () => {
+    store.sessions = [
+      fakeSession({ id: "a", issue: "ENG-1", agentState: "working", delivery: "changes_requested" }),
+      fakeSession({ id: "b", issue: "ENG-2", agentState: "idle", delivery: "merge_conflict" }),
+    ];
+    const { container } = render(SessionsTable);
+    expect(markers(container)).toHaveLength(2);
+  });
+
+  it("colours the two halves differently — you answer one and fix the other", () => {
+    store.sessions = [
+      fakeSession({ id: "a", issue: "ENG-1", agentState: "waiting_input", delivery: "none" }),
+      fakeSession({ id: "b", issue: "ENG-2", agentState: "working", delivery: "ci_failed" }),
+    ];
+    const { container } = render(SessionsTable);
+    const cls = markers(container).map((el) => el.className);
+    expect(cls).toContain("text-warn");
+    expect(cls).toContain("text-bad");
+  });
+
+  it("leaves a quiet session unmarked", () => {
+    store.sessions = [fakeSession({ agentState: "idle", delivery: "review_pending" })];
+    const { container } = render(SessionsTable);
+    expect(markers(container)).toHaveLength(0);
+  });
+});
+
+// The PR number was the most-pointed-at string in the app and a control on no
+// surface at all: opening a PR needed the detail panel, the context menu, or
+// knowing that `o` is bound.
+describe("SessionsTable PR link", () => {
+  beforeEach(() => {
+    cleanup();
+    store.connected = true;
+    store.alive = true;
+    store.sessions = [];
+    nav.scoped = false;
+    nav.project = "";
+    nav.selectedId = "";
+    nav.triage = "";
+  });
+
+  it("opens the pull request without also selecting the row", async () => {
+    const openURL = vi.spyOn(store, "openURL").mockResolvedValue(undefined);
+    store.sessions = [
+      fakeSession({ prNumber: 42, prUrl: "https://github.com/acme/eng/pull/42", delivery: "draft" }),
+    ];
+    render(SessionsTable);
+    await fireEvent.click(screen.getByRole("button", { name: "#42" }));
+    expect(openURL).toHaveBeenCalledWith("https://github.com/acme/eng/pull/42");
+    expect(nav.selectedId).toBe("");
+    openURL.mockRestore();
+  });
+
+  it("states the delivery state beside the number", () => {
+    store.sessions = [fakeSession({ prNumber: 42, prUrl: "u", delivery: "ci_failed" })];
+    render(SessionsTable);
+    expect(screen.getByText(/ci failed/)).toBeInTheDocument();
   });
 });

@@ -3,6 +3,7 @@ package session
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -622,5 +623,94 @@ func TestSetAgentStateClearsNotificationOnLeavingWaitingInput(t *testing.T) {
 	}
 	if s.InputReason != "" {
 		t.Errorf("InputReason = %q, want cleared", s.InputReason)
+	}
+}
+
+// Nudged is the DISPLAY-ONLY breadcrumb for "the agent's own 60s idle nudge
+// fired while this session sat idle". It must survive a re-assert of idle (the
+// nudge repeats, and the observer re-asserts the axis every cycle) and must
+// die the moment the axis moves — otherwise a working session keeps claiming
+// somebody is being waited on, which is exactly the false-needs_input the
+// two-axis split exists to remove.
+func TestSetAgentStateClearsNudgedOnLeavingIdle(t *testing.T) {
+	now := time.Now()
+	var s Session
+	s.SetAgentState(state.AgentIdle, "", now)
+	s.Nudged = true
+
+	// The axis did not move: the breadcrumb is still current.
+	s.SetAgentState(state.AgentIdle, "", now.Add(time.Second))
+	if !s.Nudged {
+		t.Fatal("a no-op idle re-assert must not clear Nudged")
+	}
+	// And the axis must NOT have been pushed to waiting_input by the nudge.
+	if s.AgentState != state.AgentIdle || s.Status != "idle" {
+		t.Fatalf("a nudged session must stay idle: axis=%q status=%q", s.AgentState, s.Status)
+	}
+
+	s.SetAgentState(state.AgentWorking, state.SourceHook, now.Add(2*time.Second))
+	if s.Nudged {
+		t.Error("Nudged must be cleared once the agent leaves idle")
+	}
+
+	// Every other exit from idle clears it too, including a dying pane.
+	for _, a := range []state.AgentState{
+		state.AgentWaitingInput, state.AgentExited, state.AgentDead,
+	} {
+		var s Session
+		s.SetAgentState(state.AgentIdle, "", now)
+		s.Nudged = true
+		s.SetAgentState(a, "", now.Add(time.Second))
+		if s.Nudged {
+			t.Errorf("Nudged survived idle -> %q", a)
+		}
+	}
+}
+
+// Both new display/retry fields must round-trip through the snapshot: Nudged
+// so a restart does not lose the breadcrumb mid-idle, CleanupFailures so the
+// merged-cleanup back-off does not reset to zero every time the daemon
+// restarts (which would make it unbounded again).
+func TestNudgedAndCleanupFailuresRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	st := NewStore(dir)
+	st.Upsert(Session{
+		ID:              "p-1",
+		Source:          "native",
+		Nudged:          true,
+		CleanupFailures: 3,
+	})
+	if err := st.Save(); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	got, ok := NewStore(dir).Get("p-1")
+	if !ok {
+		t.Fatal("session missing after reload")
+	}
+	if !got.Nudged {
+		t.Error("Nudged did not survive the snapshot")
+	}
+	if got.CleanupFailures != 3 {
+		t.Errorf("CleanupFailures = %d, want 3", got.CleanupFailures)
+	}
+
+	// Both are omitempty, so a zero-valued session must not write either key —
+	// the snapshot is read by humans debugging it, and a wall of false keys is
+	// what omitempty is for.
+	zero := filepath.Join(t.TempDir())
+	st2 := NewStore(zero)
+	st2.Upsert(Session{ID: "p-2", Source: "native"})
+	if err := st2.Save(); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	raw, err := os.ReadFile(filepath.Join(zero, "sessions.json"))
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	for _, key := range []string{`"nudged"`, `"cleanup_failures"`} {
+		if strings.Contains(string(raw), key) {
+			t.Errorf("zero-valued session wrote %s", key)
+		}
 	}
 }

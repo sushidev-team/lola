@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/sushidev-team/lola/internal/agent"
+	"github.com/sushidev-team/lola/internal/agentlog"
 	"github.com/sushidev-team/lola/internal/attention"
 	"github.com/sushidev-team/lola/internal/linear"
 	"github.com/sushidev-team/lola/internal/scm"
@@ -47,6 +48,21 @@ const observeExecTimeout = 10 * time.Second
 // sessionRetention: sessions not observed for this long age out of the store
 // (a session that stops being upserted — a killed native runner — ages out).
 const sessionRetention = 24 * time.Hour
+
+// transcripts is the observer's rendering-INDEPENDENT second opinion on the
+// agent axis: internal/agentlog reads the coding agent's own JSONL transcript
+// (whose path every claude hook already reports onto Session.TranscriptPath)
+// and says whether a turn is in flight. See agentReconcile for where its
+// verdict sits in the precedence, and the agentlog package doc for why the
+// pane alone is not a safe sole corroborator.
+//
+// It is a package-level var rather than a Daemon field only because it is a
+// pure cache: keyed by ABSOLUTE path, holding no config and no lifecycle, with
+// its own mutex. Two Daemons in one process (the tests) therefore share it
+// harmlessly — every entry is validated against the file's own size and mtime
+// before it is used, so the worst a shared entry can do is be discarded. Move
+// it onto the Daemon the day it acquires either of those two properties.
+var transcripts = agentlog.NewReader()
 
 // observeLoop runs observation cycles every observeInterval (plus one
 // immediately at startup so the TUI has data right away) until shutdown.
@@ -102,11 +118,14 @@ func (d *Daemon) observe(ctx context.Context) {
 // via runtime.Alive (native sessions ARE tmux sessions, so TmuxName is the
 // session ID), PR state via the session's repo (recorded at spawn from the
 // poll's project, config.Project.Repo; the project registry is the fallback
-// for adopted records), and status via nativeStatus. A dead pane whose PR is
-// not merged becomes "dead"; a stale needs_input just stays needs_input —
-// P2 never auto-kills, no matter how old. Settled terminal records (dead, or
-// merged with the pane gone) are not re-written, so their LastSeen freezes
-// and sessionRetention ages them out of the store. Each record is written via
+// for adopted records), and the two AXES: the delivery axis from those PR
+// facts (DeriveDelivery) and the agent axis from liveness, the hooks already
+// merged into the record, the pane classifier and tmux's own activity stamp
+// (agentReconcile). A pane that is gone forces the agent axis to dead; a
+// session parked on a human just stays parked — the observer never auto-kills,
+// no matter how old. Settled terminal records (a dead pane, or a merged PR
+// whose pane is gone) are not re-written, so their LastSeen freezes and
+// sessionRetention ages them out of the store. Each record is written via
 // Store.Update (atomic read-modify-write), never a stale-snapshot Upsert —
 // hook events land concurrently and must not be erased.
 func (d *Daemon) observeNative(ctx context.Context) {
@@ -266,10 +285,18 @@ func (d *Daemon) observeNative(ctx context.Context) {
 		// pure reads of the (attacker-influenceable) text and are never executed or
 		// trusted; the capture reuses the observer exec budget and aborts on
 		// shutdown via the bounded ctx.
+		// The pane is no longer the SOLE corroborator: the transcript read below
+		// is a second, rendering-independent opinion for exactly the cases where
+		// the pane's cues are weakest. See agentReconcile for the precedence.
 		paneClassified := false
 		var paneAct attention.Activity
 		var paneQuestion bool
+		transcriptSays := agentlog.Unknown
 		if alive {
+			// Classify against the session's coding-agent cues (claude|codex|
+			// opencode); an empty/legacy Agent parses to Claude, byte-identical
+			// to before.
+			k := agent.Parse(s.Agent)
 			cctx, cancel := context.WithTimeout(ctx, observeExecTimeout)
 			text, err := d.paneTail(cctx, paneTarget(s), observePaneLines)
 			cancel()
@@ -277,14 +304,35 @@ func (d *Daemon) observeNative(ctx context.Context) {
 				d.logf("", "observe: pane capture for native %s failed (treating as unknown): %v", s.ID, err)
 				paneAct = attention.ActivityUnknown
 			} else {
-				// Classify against the session's coding-agent cues (claude|codex|
-				// opencode); an empty/legacy Agent parses to Claude, byte-identical
-				// to before.
-				k := agent.Parse(s.Agent)
 				paneAct = attention.Classify(text, k)
 				_, paneQuestion = attention.Parse(text, k)
 			}
 			paneClassified = true
+
+			// The rendering-INDEPENDENT corroborator, read beside the pane and
+			// consulted by agentReconcile only where the pane's evidence is weak.
+			// Three gates, each load-bearing:
+			//   - ONLY CLAUDE writes a transcript. TranscriptPath is populated
+			//     exclusively from claude-code hook payloads, so a codex/opencode
+			//     session must not even stat a file; internal/agentlog is a
+			//     stdlib-only leaf and cannot make this check itself.
+			//   - Only a LIVE pane is read. A dead pane is terminal for the agent
+			//     axis (the branch below sets AgentDead outright), so the answer
+			//     could not be used — and a killed session's transcript would go
+			//     on claiming a tool was in flight for workingClaimMaxAge.
+			//   - No exec deadline wraps it, unlike every gh/tmux call on this
+			//     loop, because there is nothing to bound: os.Stat and one
+			//     ReadAt on a local file take no context, and wrapping a
+			//     page-cache read in a goroutine to time-box it would leak the
+			//     goroutine in the pathological case instead of fixing it. The
+			//     WORK is bounded instead (one stat; at most 64KB read, and only
+			//     when the file grew), and the path is always the local
+			//     ~/.claude/projects/… the agent itself reported — the same
+			//     assumption statusagentwire.go's tailFile already makes on this
+			//     same loop.
+			if k == agent.Claude {
+				transcriptSays = transcripts.Verdict(s.TranscriptPath, time.Now())
+			}
 		}
 
 		// Merge this cycle's facts as ONE atomic read-modify-write. The execs
@@ -299,7 +347,7 @@ func (d *Daemon) observeNative(ctx context.Context) {
 		prFetchAttempted := s.Branch != "" && repo != ""
 		becameDead, applied, titleBackfilled := false, false, false
 		updated, known := d.sessions.Update(s.ID, func(cur *session.Session) bool {
-			prevStatus := cur.Status
+			prevAgent := cur.AgentState
 			if backfillTitle != "" && cur.Title == "" {
 				cur.Title = backfillTitle
 				titleBackfilled = true
@@ -343,7 +391,7 @@ func (d *Daemon) observeNative(ctx context.Context) {
 					cur.TouchActivity(state.SourceTmuxActivity, tmuxActivity)
 				}
 				if paneClassified {
-					agentChanged = agentReconcile(cur, paneAct, paneQuestion, now)
+					agentChanged = agentReconcile(cur, paneAct, paneQuestion, transcriptSays, now)
 				}
 			}
 
@@ -354,7 +402,14 @@ func (d *Daemon) observeNative(ctx context.Context) {
 				// mutation on a false return).
 				return titleBackfilled
 			}
-			becameDead = cur.Status == "dead" && prevStatus != "dead"
+			// The anomaly worth a log line is the AGENT axis going dead while
+			// the PR is still in play; a pane that disappears after its PR
+			// merged is the normal close-out (react's merged cleanup killed
+			// it). Read off the rolled-up status that exclusion was implicit —
+			// Rollup only returns "dead" when the delivery axis is not merged —
+			// so it is stated here now that nothing else reads the rollup.
+			becameDead = cur.AgentState == state.AgentDead && prevAgent != state.AgentDead &&
+				cur.Delivery != state.DeliveryMerged
 			if cur.TmuxName == "" {
 				cur.TmuxName = cur.ID
 			}
@@ -450,13 +505,28 @@ func (d *Daemon) observeManualShell(s session.Session, alive bool) bool {
 }
 
 // agentReconcile is the working-vs-waiting authority for the AGENT axis: it
-// adjusts a live session's AgentState using the pane classification and
-// upholds the invariant that "working" requires POSITIVE evidence of
-// activity. It runs pre- AND post-PR — the delivery axis owns the post-PR
-// rollup regardless, so pane evidence never fights PR facts; it just keeps
-// the agent axis truthful underneath. Returns whether the axis changed.
+// adjusts a live session's AgentState using the pane classification, the
+// agent's own transcript, and the invariant that "working" requires POSITIVE
+// evidence of activity. It runs pre- AND post-PR — the delivery axis owns the
+// post-PR rollup regardless, so pane evidence never fights PR facts; it just
+// keeps the agent axis truthful underneath. Returns whether the axis changed.
 //
-// Precedence (documented, non-flapping):
+// # Two corroborators, and why the second one exists
+//
+// attention.Classify used to be the ONLY corroborator, and it is a MIRROR OF
+// CLAUDE-CODE'S RENDERING — nine of its cues carry an explicit "Fragility:"
+// note saying a reworded build slips past them, and two such rewordings have
+// each cost a debugging session (the U+00A0-padded caret; the always-drawn
+// composer — see CLAUDE.md). The failure mode is the bad one: no error, no log
+// line, a load-bearing gate silently disabled.
+//
+// agentlog reads the agent's OWN transcript instead (internal/agentlog), which
+// is a fact about its conversation state rather than about how it paints a
+// terminal this month. It is a second opinion, never a replacement — it cannot
+// see the screen at all, so it slots in BELOW every pane outcome that carries
+// positive evidence and ABOVE the two that do not.
+//
+// # Precedence (documented, non-flapping)
 //
 //   - Exited / shell / orphaned sessions are not pane-owned: the pane of an
 //     exited agent is a plain shell and must not resurrect any state.
@@ -467,34 +537,71 @@ func (d *Daemon) observeManualShell(s session.Session, alive bool) bool {
 //     someone presses a key, and the session holds a concurrency slot meanwhile.
 //     AtPrompt is closed (and marked verified): the pane is live evidence that
 //     the gate a Stop hook opened moments earlier now points at a dialog, which
-//     is exactly the state no send-keys path may type into.
+//     is exactly the state no send-keys path may type into. The transcript
+//     CANNOT see a modal — nothing is written when one opens — so it never gets
+//     a vote here.
+//   - ActivityQuotaLimited, same reasoning: a usage-limit banner is a fact
+//     about the screen with no transcript record behind it.
 //   - ActivityWorking is positive proof of work: the axis becomes working and
 //     LastActivityAt is stamped, trusted even over a STALE hook-set
-//     waiting_input (the agent has provably resumed). This is the only
-//     upgrade back to working from the pane.
-//   - ActivityWaiting is a definite "input box at rest, no spinner" cue.
-//     Pre-PR (delivery none) it means blocked-on-a-human regardless of a
-//     visible question — an agent resting WITHOUT having produced a PR is
-//     waiting for the human either way (unchanged from the pre-axis rule).
-//     Post-PR it needs an answerable question to mean blocked (routine
-//     post-PR idling must not escalate); without one the axis just settles
-//     to idle — truthful underneath, while the rollup still shows the
-//     delivery state. AtPrompt is closed on the blocked outcomes only: a
-//     bare resting prompt post-PR is exactly where a Stop hook legitimately
-//     opened the send-keys gate.
+//     waiting_input (the agent has provably resumed). A live pane working cue
+//     outranks the transcript, and in practice the two agree.
+//   - ActivityWaiting WITH an answerable question is positive evidence of a
+//     block, and it outranks the transcript deliberately. A permission prompt
+//     is the case that forces this: claude-code writes the assistant record
+//     carrying the tool_use and THEN asks for approval, so the transcript
+//     reads "a tool is in flight" for the entire time the agent sits waiting
+//     for a human. The screen is the only witness to that, exactly as with a
+//     modal.
+//   - ActivityWaiting with NOTHING to answer is the WEAK cue — the composer is
+//     drawn at all times, so this outcome is really "no live working cue was
+//     recognized", which is precisely what a rendering change breaks. Here the
+//     transcript votes first: a turn it says is in flight makes the axis
+//     working. Otherwise the pane's reading stands and the axis settles to idle
+//     with AtPrompt OPEN. The delivery axis does not enter into it — it is a
+//     fact about the PR, not evidence about the agent. (It used to: pre-PR a
+//     resting composer meant needs_input unconditionally, so idle was
+//     unreachable for a session's whole pre-PR life and every finished turn
+//     read as "Needs You".) The idle outcome may also RELEASE a waiting_input
+//     park this same pane authority could have made — a stale InputQuestion,
+//     the "" the old rule minted, or the idle nudge — but never one backed by
+//     positive block evidence (InputPermission / InputDialog /
+//     InputQuotaLimited), and neither may the transcript promotion.
 //   - ActivityUnknown does NOT derive working/waiting from the pane — the
 //     hook-driven axis stands, so a very recent hook always wins over an
-//     ambiguous pane. The one exception is the anti-false-working guard.
+//     ambiguous pane. The transcript refines the anti-false-working guard
+//     below, and nothing else.
 //
-// Anti-false-working guard (ActivityUnknown only): a working/starting axis
-// with no positive activity for longer than staleWorkingThreshold, which the
-// pane cannot confirm, must stop asserting work — it downgrades to
-// waiting_input when a question/prompt is visible, else to idle. It never
-// fires before the threshold (no flapping). An axis that has never recorded
-// activity (LastActivityAt zero — an adopted session before its first
-// heartbeat) starts the staleness clock from now instead of downgrading on
-// first sight.
-func agentReconcile(cur *session.Session, act attention.Activity, hasQuestion bool, now time.Time) bool {
+// # Anti-false-working guard (ActivityUnknown only)
+//
+// A working/starting axis with no positive activity for longer than
+// staleWorkingThreshold, which the pane cannot confirm, must stop asserting
+// work — it downgrades to waiting_input when a question/prompt is visible, else
+// to idle. It never fires before the threshold (no flapping). An axis that has
+// never recorded activity (LastActivityAt zero — an adopted session before its
+// first heartbeat) starts the staleness clock from now instead of downgrading
+// on first sight. The transcript adjusts it in both directions:
+//
+//   - A transcript that says WORKING re-stamps LastActivityAt and the guard
+//     stands down. This is the single biggest win of reading the file at all: a
+//     dispatched tool writes nothing until it returns, so an agent 20 minutes
+//     into a test suite has no hook, no tmux activity and nothing recognizable
+//     on screen — and used to be downgraded out of "working" after 45 seconds.
+//     agentlog expires that claim itself (workingClaimMaxAge) so an agent that
+//     died mid-tool still lands here eventually.
+//   - A transcript that says IDLE lets the downgrade happen NOW instead of
+//     after the threshold: the agent's own file recording that the turn stopped
+//     is better evidence than waiting out a timer. It does NOT open AtPrompt —
+//     the pane is unreadable, and no send-keys gate may be opened by a signal
+//     that cannot see the screen.
+//
+// Deliberately absent: the transcript never promotes an idle or waiting_input
+// axis to working while the pane is Unknown. It may only SUSTAIN work already
+// believed to be underway. A promotion there would have no screen evidence
+// behind it at all, and the permission-prompt shape above (a tool_use record
+// with a human-blocking dialog on a pane lola could not read) is exactly the
+// case it would get wrong.
+func agentReconcile(cur *session.Session, act attention.Activity, hasQuestion bool, tv agentlog.Verdict, now time.Time) bool {
 	switch cur.AgentState {
 	case state.AgentExited, state.AgentShell, state.AgentOrphaned:
 		return false // not pane-owned
@@ -522,30 +629,103 @@ func agentReconcile(cur *session.Session, act attention.Activity, hasQuestion bo
 		cur.AtPromptVerified = true // live positive evidence: the gate state is current
 		return cur.SetAgentState(state.AgentWorking, state.SourcePane, now)
 	case attention.ActivityWaiting:
-		if hasQuestion || cur.Delivery == state.DeliveryNone {
+		if hasQuestion {
+			// An ANSWERABLE question is on screen: the agent is genuinely
+			// blocked on a human. Close the gate — a send here would answer the
+			// question with the wrong text. Outranks the transcript, which shows
+			// a permission prompt as an in-flight tool call (see the precedence
+			// note above).
 			cur.AtPrompt = false
 			cur.AtPromptVerified = true
 			changed := cur.SetAgentState(state.AgentWaitingInput, "", now)
-			if hasQuestion {
-				cur.InputReason = state.InputQuestion
-			}
+			cur.InputReason = state.InputQuestion
 			return changed
 		}
-		if cur.AgentState == state.AgentWorking || cur.AgentState == state.AgentStarting {
-			return cur.SetAgentState(state.AgentIdle, "", now)
+		// A resting composer with NOTHING to answer is IDLE, whatever the
+		// delivery axis says. This used to read `hasQuestion || cur.Delivery ==
+		// state.DeliveryNone`, i.e. pre-PR a resting composer meant needs_input
+		// UNCONDITIONALLY — which made AgentIdle unreachable for the entire
+		// pre-PR life of a session and turned every finished turn into "Needs
+		// You". Combined with the idle-nudge hook (see server.go) that one rule
+		// produced ~90% of the measured needs_input population. The delivery
+		// axis is a fact about the PR, never evidence about what the agent is
+		// doing, so it has no business deciding this.
+		switch cur.AgentState {
+		case state.AgentWaitingInput:
+			// A pane read may RELEASE a park it could itself have made, but it
+			// must never overrule positive evidence of a real block: a modal, a
+			// y/n approval and a usage-limit banner are all states where the
+			// composer can look at rest while nothing can proceed, and demoting
+			// them to idle would hand a send-keys path a gate it must not have.
+			// The transcript promotion below sits BEHIND this check for the same
+			// reason, and needs it more: a pending permission prompt is a
+			// tool_use record in the file, so without this an approval dialog
+			// whose question attention.Parse failed to recognize would read as
+			// "working" and stop surfacing as needing a human.
+			switch cur.InputReason {
+			case state.InputPermission, state.InputDialog, state.InputQuotaLimited:
+				return false
+			}
+			// Everything else may leave: InputIdleNotify (the nudge — a record
+			// parked by a pre-change daemon, or carried across a restart, must
+			// be able to get out or it is stuck on "Needs You" forever),
+			// InputQuestion (pane-derived, and THIS pane read is the same
+			// authority one cycle fresher — the question is no longer on
+			// screen), and "" (what the old rule above minted for every pre-PR
+			// resting pane, so it is the bulk of the records this fixes).
+		case state.AgentWorking, state.AgentStarting, state.AgentIdle:
+			// The ordinary path. AgentIdle is listed so an already-idle session
+			// still gets its gate re-opened below: the observer parks sessions
+			// on idle WITHOUT AtPrompt (a stale working axis over an unreadable
+			// pane), and those were unreachable by every send-keys path forever.
+		default:
+			return false
 		}
-		return false
+		if tv == agentlog.Working {
+			// The screen says "resting composer, nothing to answer" and the
+			// agent's own transcript says a turn is in flight. The transcript
+			// wins, because THIS is the cue that breaks: claude-code draws its
+			// composer mid-turn too, so this outcome means only "no live working
+			// cue was recognized" — the exact state a reworded status line
+			// produces. Closing AtPrompt is the safe direction either way: a
+			// mistaken working axis costs a delayed status, while leaving the
+			// gate open on a streaming agent lets a send-keys path type into a
+			// mid-turn pane.
+			cur.AtPrompt = false
+			cur.AtPromptVerified = true
+			return cur.SetAgentState(state.AgentWorking, state.SourceTranscript, now)
+		}
+		// A resting composer is live positive evidence that the gate is open —
+		// the same fact the "stop" hook asserts, observed directly. Every
+		// send-keys path still re-proves it against a fresh pane capture
+		// (handoffPromptProof) before typing, so this only makes a session a
+		// CANDIDATE.
+		cur.AtPrompt = true
+		cur.AtPromptVerified = true
+		return cur.SetAgentState(state.AgentIdle, "", now)
 	default: // ActivityUnknown: keep the hook-driven axis, subject to the guard.
 		if cur.AgentState != state.AgentWorking && cur.AgentState != state.AgentStarting {
+			return false
+		}
+		if tv == agentlog.Working {
+			// The transcript proves the turn is still in flight, so the guard
+			// has nothing to correct: re-stamp the activity anchor and leave the
+			// axis alone. Checked before the zero-LastActivityAt grace because
+			// it is strictly better evidence than "we have never heard anything,
+			// give it one cycle".
+			cur.TouchActivity(state.SourceTranscript, now)
 			return false
 		}
 		if cur.LastActivityAt.IsZero() {
 			cur.TouchActivity("", now) // start the clock; grace this cycle
 			return false
 		}
-		if now.Sub(cur.LastActivityAt) <= staleWorkingThreshold {
+		if tv != agentlog.Idle && now.Sub(cur.LastActivityAt) <= staleWorkingThreshold {
 			return false // still within the activity window: trust the hook
 		}
+		// Either the window lapsed with nothing to confirm the work, or the
+		// transcript positively recorded the turn ending — which is better
+		// evidence than the timer and needs no further wait.
 		cur.AtPrompt = false
 		if hasQuestion {
 			changed := cur.SetAgentState(state.AgentWaitingInput, "", now)

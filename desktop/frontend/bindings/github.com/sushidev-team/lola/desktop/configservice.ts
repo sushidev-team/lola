@@ -29,7 +29,7 @@
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
-import { Call as $Call, CancellablePromise as $CancellablePromise, Create as $Create } from "@wailsio/runtime";
+import { Call as $Call, CancellablePromise as $CancellablePromise } from "@wailsio/runtime";
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
@@ -76,9 +76,7 @@ export function ConfigExists(): $CancellablePromise<boolean> {
  * nothing.
  */
 export function ConnectCode(): $CancellablePromise<$models.ConnectCodeDTO> {
-    return $Call.ByID(3664447846).then(($result: any) => {
-        return $$createType0($result);
-    });
+    return $Call.ByID(3664447846);
 }
 
 /**
@@ -87,15 +85,11 @@ export function ConnectCode(): $CancellablePromise<$models.ConnectCodeDTO> {
  * up whatever shared setup [defaults] already carries.
  */
 export function GetProject(name: string): $CancellablePromise<$models.ProjectFormDTO> {
-    return $Call.ByID(3485741446, name).then(($result: any) => {
-        return $$createType1($result);
-    });
+    return $Call.ByID(3485741446, name);
 }
 
 export function GetSettings(): $CancellablePromise<$models.SettingsDTO> {
-    return $Call.ByID(2761787168).then(($result: any) => {
-        return $$createType2($result);
-    });
+    return $Call.ByID(2761787168);
 }
 
 /**
@@ -123,9 +117,7 @@ export function GetTheme(): $CancellablePromise<string> {
  * app and the TUI propose the same identity for the same folder.
  */
 export function InspectPath(path: string): $CancellablePromise<$models.PathInfoDTO> {
-    return $Call.ByID(1398059134, path).then(($result: any) => {
-        return $$createType3($result);
-    });
+    return $Call.ByID(1398059134, path);
 }
 
 /**
@@ -138,9 +130,7 @@ export function InspectPath(path: string): $CancellablePromise<$models.PathInfoD
  * the app is supposed to surface.
  */
 export function LinearKeyStatus(): $CancellablePromise<$models.LinearKeyStatusDTO> {
-    return $Call.ByID(1592524511).then(($result: any) => {
-        return $$createType4($result);
-    });
+    return $Call.ByID(1592524511);
 }
 
 /**
@@ -170,10 +160,8 @@ export function PickFolder(start: string): $CancellablePromise<string> {
  * settings form can offer them instead of taking free text. These are LOLA's
  * own keys, not a Linear concept — there is nothing to fetch from the API.
  */
-export function PrioritySortKeys(): $CancellablePromise<string[]> {
-    return $Call.ByID(3393829323).then(($result: any) => {
-        return $$createType5($result);
-    });
+export function PrioritySortKeys(): $CancellablePromise<string[] | null> {
+    return $Call.ByID(3393829323);
 }
 
 /**
@@ -209,10 +197,8 @@ export function RegenerateRemoteKey(): $CancellablePromise<void> {
  * The literal case is why the form cannot be a picker alone — see the comment
  * on SettingsDTO.RemoteBind.
  */
-export function RemoteBinds(): $CancellablePromise<string[]> {
-    return $Call.ByID(2477471539).then(($result: any) => {
-        return $$createType5($result);
-    });
+export function RemoteBinds(): $CancellablePromise<string[] | null> {
+    return $Call.ByID(2477471539);
 }
 
 /**
@@ -244,20 +230,16 @@ export function RenameGroup(name: string, label: string): $CancellablePromise<vo
  * ReviewKinds returns one descriptor per selectable provider kind, in the order
  * the form should offer them.
  */
-export function ReviewKinds(): $CancellablePromise<$models.ReviewKindDTO[]> {
-    return $Call.ByID(1023667510).then(($result: any) => {
-        return $$createType7($result);
-    });
+export function ReviewKinds(): $CancellablePromise<$models.ReviewKindDTO[] | null> {
+    return $Call.ByID(1023667510);
 }
 
 /**
  * ReviewProviderKinds / TransportTokens expose the selectable catalog values so
  * the frontend renders its pickers without hardcoding them.
  */
-export function ReviewProviderKinds(): $CancellablePromise<string[]> {
-    return $Call.ByID(3055606205).then(($result: any) => {
-        return $$createType5($result);
-    });
+export function ReviewProviderKinds(): $CancellablePromise<string[] | null> {
+    return $Call.ByID(3055606205);
 }
 
 export function SaveProject(dto: $models.ProjectFormDTO): $CancellablePromise<void> {
@@ -328,9 +310,7 @@ export function SetTheme(name: string): $CancellablePromise<void> {
  * project, and sets the caps/interval. The key itself is never written to config.
  */
 export function Setup(dto: $models.SetupDTO): $CancellablePromise<$models.SetupResultDTO> {
-    return $Call.ByID(3057086516, dto).then(($result: any) => {
-        return $$createType8($result);
-    });
+    return $Call.ByID(3057086516, dto);
 }
 
 /**
@@ -339,16 +319,12 @@ export function Setup(dto: $models.SetupDTO): $CancellablePromise<$models.SetupR
  * sync and start writing configs the daemon rejects. Same precedent as
  * PrioritySortKeys above.
  */
-export function Themes(): $CancellablePromise<string[]> {
-    return $Call.ByID(2762792109).then(($result: any) => {
-        return $$createType5($result);
-    });
+export function Themes(): $CancellablePromise<string[] | null> {
+    return $Call.ByID(2762792109);
 }
 
-export function TransportTokens(): $CancellablePromise<string[]> {
-    return $Call.ByID(2864709098).then(($result: any) => {
-        return $$createType5($result);
-    });
+export function TransportTokens(): $CancellablePromise<string[] | null> {
+    return $Call.ByID(2864709098);
 }
 
 /**
@@ -358,14 +334,3 @@ export function TransportTokens(): $CancellablePromise<string[]> {
 export function ValidateLinearKey(key: string): $CancellablePromise<void> {
     return $Call.ByID(2105802151, key);
 }
-
-// Private type creation functions
-const $$createType0 = $models.ConnectCodeDTO.createFrom;
-const $$createType1 = $models.ProjectFormDTO.createFrom;
-const $$createType2 = $models.SettingsDTO.createFrom;
-const $$createType3 = $models.PathInfoDTO.createFrom;
-const $$createType4 = $models.LinearKeyStatusDTO.createFrom;
-const $$createType5 = $Create.Array($Create.Any);
-const $$createType6 = $models.ReviewKindDTO.createFrom;
-const $$createType7 = $Create.Array($$createType6);
-const $$createType8 = $models.SetupResultDTO.createFrom;

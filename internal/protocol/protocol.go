@@ -259,7 +259,7 @@ type SessionInfo struct {
 	StatusSince      time.Time `json:"statusSince,omitzero"`       // when the rolled-up Status last changed
 	AgentStateSince  time.Time `json:"agentStateSince,omitzero"`   // when the agent axis last changed
 	LastActivityAt   time.Time `json:"lastActivityAt,omitzero"`    // last POSITIVE evidence of work
-	ActivitySource   string    `json:"activitySource,omitempty"`   // hook|pane|tmux_activity
+	ActivitySource   string    `json:"activitySource,omitempty"`   // hook|pane|tmux_activity|transcript
 	PRObservedAt     time.Time `json:"prObservedAt,omitzero"`      // last successful gh PR fetch
 	PRStale          bool      `json:"prStale,omitempty"`          // PR facts are ≥3 failed fetches old
 	AtPrompt         bool      `json:"atPrompt,omitempty"`         // agent idle at its prompt (send-keys gate open)
@@ -413,7 +413,7 @@ type PrRow struct {
 	Checks      string `json:"checks"` // pass|fail|pending|none
 	Review      string `json:"review"`
 	URL         string `json:"url"`
-	Status      string `json:"status"`      // scm.DeriveStatus vocabulary
+	Status      string `json:"status"`      // state.DeliveryState vocabulary (daemon.openPRStatus)
 	AlreadyOpen bool   `json:"alreadyOpen"` // a lola session already holds this branch
 }
 

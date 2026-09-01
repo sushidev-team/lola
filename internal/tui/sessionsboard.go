@@ -244,9 +244,9 @@ func (m *rootModel) filterBar() string {
 }
 
 // kanbanColumnLines builds one column's lines: a bold title with its count,
-// then two lines per card (issue with marker, then a status-badge/PR/reacting
-// meta line). The selected card gets a "›" + reverse; an unselected needs_input
-// card a warn "!" so the human's queue is visible column-wide.
+// then two lines per card (issue with marker, then an agent-badge + PR-chip meta
+// line). The selected card gets a "›" + reverse; an unselected card whose agent
+// is blocked on a human a warn "!" so the queue is visible column-wide.
 func (m *rootModel) kanbanColumnLines(c KanbanColumn, sess []protocol.SessionInfo, w int, selID string) []string {
 	// Header: bold title + count badge, then a faint rule the column's width so
 	// each column reads as a distinct region even when empty.
@@ -269,7 +269,7 @@ func (m *rootModel) kanbanColumnLines(c KanbanColumn, sess []protocol.SessionInf
 		case si.ID == selID:
 			marker = "› "
 			issue = selStyle.Render(issue)
-		case si.Status == "needs_input":
+		case waitingOnHuman(si):
 			marker = warnText.Render("! ")
 		}
 		out = append(out, marker+issue)
@@ -279,12 +279,13 @@ func (m *rootModel) kanbanColumnLines(c KanbanColumn, sess []protocol.SessionInf
 			out = append(out, "  "+faintText.Render(truncPlain(si.Title, w-2)))
 		}
 
-		d := statusDisplay(si.Status)
+		d := sessionDisplay(si)
 		meta := d.Style.Render(d.Badge)
-		// PR badge ("#229 ✓") on any card with a PR — the number plus the checks
-		// glyph, scannable at a glance and never gated on status/review state. The
-		// reacting label is deliberately omitted here: at column width it clips
-		// mid-word; it stays legible in the List lens and the Detail panel.
+		// The PR chip ("#229 ⚠mc ✗ci") beside the agent badge, so a card shows both
+		// axes: what the agent is doing AND where its PR stands. Never gated on
+		// status/review state. The reacting label is deliberately omitted here: at
+		// column width it clips mid-word; it stays legible in the List lens and the
+		// Detail panel.
 		if pr := prBadge(si); pr != "" {
 			meta += " " + pr
 		}
@@ -312,10 +313,10 @@ func (m *rootModel) kanbanNarrow(cols []KanbanColumn, groups map[string][]protoc
 			switch {
 			case si.ID == selID:
 				marker = "› "
-			case si.Status == "needs_input":
+			case waitingOnHuman(si):
 				marker = warnText.Render("! ")
 			}
-			d := statusDisplay(si.Status)
+			d := sessionDisplay(si)
 			b.WriteString(previewLine(marker+si.Issue+" "+d.Style.Render(d.Badge), width) + "\n")
 		}
 	}

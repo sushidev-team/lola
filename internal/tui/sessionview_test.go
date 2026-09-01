@@ -91,7 +91,9 @@ func TestApply(t *testing.T) {
 		{"text over issue", Filter{Text: "eng-200"}, []string{"2"}},
 		{"text over branch", Filter{Text: "auth"}, []string{"1", "3"}},
 		{"text over project", Filter{Text: "api"}, []string{"2", "4"}},
-		{"text over status", Filter{Text: "ci_failed"}, []string{"3"}},
+		{"text over the legacy status word", Filter{Text: "ci_failed"}, []string{"3"}},
+		// The Display word too, so "/needs you" finds what the pill actually says.
+		{"text over the display word", Filter{Text: "needs you"}, []string{"2"}},
 		{"text case-insensitive", Filter{Text: "AUTH"}, []string{"1", "3"}},
 		{"text no match", Filter{Text: "zzz"}, nil},
 		{"attention only", Filter{AttentionOnly: true}, []string{"2", "3"}},
@@ -138,30 +140,50 @@ func TestAttentionCount(t *testing.T) {
 // allStatuses is the full derived status vocabulary the views must handle.
 var allStatuses = state.AllStatuses()
 
-func TestKanbanColumnsUniqueKeysAndStatuses(t *testing.T) {
+func TestKanbanColumnsUniqueKeys(t *testing.T) {
+	// Columns no longer carry a status set — membership is a function of the axis
+	// PAIR (state.KanbanKeyFor) — so what is left to pin is that the keys are
+	// unique and that every key the bucketing can produce is a real column.
 	seenKey := map[string]bool{}
-	seenStatus := map[string]string{}
 	for _, col := range KanbanColumns() {
 		if seenKey[col.Key] {
 			t.Errorf("duplicate column key %q", col.Key)
 		}
+		if col.Title == "" {
+			t.Errorf("column %q has no title", col.Key)
+		}
 		seenKey[col.Key] = true
-		for _, s := range col.Statuses {
-			if prev, ok := seenStatus[s]; ok {
-				t.Errorf("status %q in two columns (%q and %q)", s, prev, col.Key)
-			}
-			seenStatus[s] = col.Key
+	}
+	if !seenKey[kanbanFallbackKey] {
+		t.Errorf("fallback key %q is not a real column", kanbanFallbackKey)
+	}
+	for _, si := range everyAxisPair() {
+		if !seenKey[kanbanKeyFor(si)] {
+			t.Errorf("kanbanKeyFor(%s/%s) = %q, not a column key",
+				si.AgentState, si.Delivery, kanbanKeyFor(si))
 		}
 	}
 }
 
-func TestGroupKanbanEveryStatusExactlyOneColumn(t *testing.T) {
-	// One session per status; each must appear in exactly one column, and the
-	// grouping must not drop or duplicate any session.
-	in := make([]protocol.SessionInfo, len(allStatuses))
-	for i, s := range allStatuses {
-		in[i] = protocol.SessionInfo{ID: s, Status: s}
+// everyAxisPair is one session per (AgentState, DeliveryState) combination —
+// the whole space the pair-based tables classify, including the pairs the old
+// collapsed vocabulary could not name (a working agent under a red build, an
+// exited agent over an approved PR).
+func everyAxisPair() []protocol.SessionInfo {
+	agents := []string{"starting", "working", "waiting_input", "idle", "exited", "dead", "shell", "orphaned"}
+	deliveries := []string{"none", "draft", "ci_pending", "ci_failed", "merge_conflict",
+		"changes_requested", "review_pending", "approved", "merged", "closed"}
+	out := make([]protocol.SessionInfo, 0, len(agents)*len(deliveries))
+	for _, a := range agents {
+		for _, d := range deliveries {
+			out = append(out, protocol.SessionInfo{ID: a + "/" + d, AgentState: a, Delivery: d})
+		}
 	}
+	return out
+}
+
+func TestGroupKanbanEverySessionExactlyOneColumn(t *testing.T) {
+	in := everyAxisPair()
 	groups := GroupKanban(in)
 
 	// Every column key from KanbanColumns is present (even if empty).
@@ -176,54 +198,191 @@ func TestGroupKanbanEveryStatusExactlyOneColumn(t *testing.T) {
 	for _, sessions := range groups {
 		total += len(sessions)
 		for _, s := range sessions {
-			placed[s.Status]++
+			placed[s.ID]++
 		}
 	}
-	if total != len(allStatuses) {
-		t.Errorf("GroupKanban placed %d sessions, want %d", total, len(allStatuses))
+	if total != len(in) {
+		t.Errorf("GroupKanban placed %d sessions, want %d", total, len(in))
 	}
-	for _, s := range allStatuses {
-		if placed[s] != 1 {
-			t.Errorf("status %q placed %d times, want exactly 1", s, placed[s])
-		}
-	}
-
-	// Unknown statuses land in the fallback (Working) column; closed is real
-	// vocabulary now and belongs in Done.
-	for _, s := range []string{"totally_made_up", "shell", "orphaned"} {
-		if got := kanbanKeyForStatus(s); got != kanbanFallbackKey {
-			t.Errorf("kanbanKeyForStatus(%q) = %q, want fallback %q", s, got, kanbanFallbackKey)
-		}
-	}
-	if got := kanbanKeyForStatus("closed"); got != "done" {
-		t.Errorf(`kanbanKeyForStatus("closed") = %q, want done`, got)
-	}
-}
-
-func TestStatusDisplayReusesStyleAndHasBadge(t *testing.T) {
-	for _, s := range allStatuses {
-		d := statusDisplay(s)
-		if d.Badge == "" {
-			t.Errorf("statusDisplay(%q) empty badge", s)
-		}
-		if len(d.Badge) > 2 {
-			t.Errorf("statusDisplay(%q) badge %q longer than 2 chars", s, d.Badge)
-		}
-		// Style must be exactly what statusStyle yields (no divergence).
-		if d.Style.GetForeground() != statusStyle(s).GetForeground() {
-			t.Errorf("statusDisplay(%q) style diverged from statusStyle", s)
+	for _, s := range in {
+		if placed[s.ID] != 1 {
+			t.Errorf("session %q placed %d times, want exactly 1", s.ID, placed[s.ID])
 		}
 	}
 }
 
-// inputReasonLabel: "quota_limited" renders as the human phrase "usage limit"
-// rather than its misleading de-underscored form; everything else de-underscores.
+// A record from a daemon older than the axis split carries only the rolled-up
+// Status; axesOf backfills both axes from it, so the whole legacy vocabulary
+// still buckets, sorts and colors. This is the compatibility floor — the TUI is
+// a client of whatever daemon happens to be running.
+func TestLegacyStatusBackfillsBothAxes(t *testing.T) {
+	cases := map[string]struct {
+		agent    state.AgentState
+		delivery state.DeliveryState
+		column   string
+	}{
+		"working":           {state.AgentWorking, state.DeliveryNone, "working"},
+		"idle":              {state.AgentIdle, state.DeliveryNone, "working"},
+		"needs_input":       {state.AgentWaitingInput, state.DeliveryNone, "needs"},
+		"session_ended":     {state.AgentExited, state.DeliveryNone, "done"},
+		"dead":              {state.AgentDead, state.DeliveryNone, "done"},
+		"shell":             {state.AgentShell, state.DeliveryNone, "working"},
+		"orphaned":          {state.AgentOrphaned, state.DeliveryNone, "working"},
+		"draft":             {state.AgentIdle, state.DeliveryDraft, "working"},
+		"ci_pending":        {state.AgentIdle, state.DeliveryCIPending, "working"},
+		"ci_failed":         {state.AgentIdle, state.DeliveryCIFailed, "fixing"},
+		"merge_conflict":    {state.AgentIdle, state.DeliveryMergeConflict, "fixing"},
+		"changes_requested": {state.AgentIdle, state.DeliveryChangesRequested, "fixing"},
+		"review_pending":    {state.AgentIdle, state.DeliveryReviewPending, "review"},
+		"approved":          {state.AgentIdle, state.DeliveryApproved, "review"},
+		"merged":            {state.AgentIdle, state.DeliveryMerged, "done"},
+		"closed":            {state.AgentIdle, state.DeliveryClosed, "done"},
+	}
+	for _, status := range allStatuses {
+		want, ok := cases[status]
+		if !ok {
+			t.Fatalf("the rolled-up vocabulary grew a word this test does not pin: %q", status)
+		}
+		si := protocol.SessionInfo{ID: status, Status: status}
+		a, d := axesOf(si)
+		if a != want.agent || d != want.delivery {
+			t.Errorf("axesOf(%q) = (%q, %q), want (%q, %q)", status, a, d, want.agent, want.delivery)
+		}
+		if got := kanbanKeyFor(si); got != want.column {
+			t.Errorf("kanbanKeyFor(%q) = %q, want %q", status, got, want.column)
+		}
+	}
+	// A live daemon's explicit axes always win over the rolled-up word — the
+	// backfill is a fallback, never an override.
+	a, d := axesOf(protocol.SessionInfo{Status: "ci_pending", AgentState: "working", Delivery: "ci_failed"})
+	if a != state.AgentWorking || d != state.DeliveryCIFailed {
+		t.Errorf("explicit axes = (%q, %q), want (working, ci_failed)", a, d)
+	}
+}
+
+// A word the vocabulary has not caught up to must read as a LIVE session, not a
+// dead one — hiding an unrecognized agent from the views built to surface it is
+// the one failure mode that costs work.
+func TestUnknownStateFallsBackToLive(t *testing.T) {
+	si := protocol.SessionInfo{ID: "x", AgentState: "totally_made_up"}
+	if got := displayOf(si); got != state.DisplayWorking {
+		t.Errorf("displayOf(unknown agent) = %q, want %q", got, state.DisplayWorking)
+	}
+	if got := kanbanKeyFor(si); got != kanbanFallbackKey {
+		t.Errorf("kanbanKeyFor(unknown) = %q, want fallback %q", got, kanbanFallbackKey)
+	}
+	if got := kanbanKeyFor(protocol.SessionInfo{Status: "totally_made_up"}); got != kanbanFallbackKey {
+		t.Errorf("kanbanKeyFor(unknown legacy status) = %q, want fallback %q", got, kanbanFallbackKey)
+	}
+}
+
+func TestSessionDisplayReusesStyleAndHasBadge(t *testing.T) {
+	seen := map[string]state.Display{}
+	for _, d := range state.AllDisplays() {
+		si := protocol.SessionInfo{AgentState: agentStateFor(d)}
+		got := sessionDisplay(si)
+		if got.Badge == "" {
+			t.Errorf("sessionDisplay(%q) empty badge", d)
+		}
+		if len([]rune(got.Badge)) > 2 {
+			t.Errorf("sessionDisplay(%q) badge %q longer than 2 chars", d, got.Badge)
+		}
+		if prev, dup := seen[got.Badge]; dup {
+			t.Errorf("badge %q shared by %q and %q", got.Badge, prev, d)
+		}
+		seen[got.Badge] = d
+		// Style must be exactly what displayStyle yields (no divergence).
+		if got.Style.GetForeground() != displayStyle(d).GetForeground() {
+			t.Errorf("sessionDisplay(%q) style diverged from displayStyle", d)
+		}
+	}
+}
+
+// agentStateFor is the inverse of state.DisplayFor for the pill values that
+// have a single obvious agent word — enough to drive a wire record in a test.
+func agentStateFor(d state.Display) string {
+	switch d {
+	case state.DisplayIdle:
+		return "idle"
+	case state.DisplayNeedsYou:
+		return "waiting_input"
+	case state.DisplayGone:
+		return "dead"
+	case state.DisplayShell:
+		return "shell"
+	case state.DisplayOrphaned:
+		return "orphaned"
+	}
+	return "working"
+}
+
+// The two attention questions are DIFFERENT, and the UI asks each in its own
+// place: waitingOnHuman ("is this session asking ME something", the "!" marker
+// and the n/N jump) is the agent axis alone; needsHuman ("does a human have to
+// look at this", the triage count and the attention filter) is the predicate
+// over both axes.
+func TestAttentionPredicatesAreDistinct(t *testing.T) {
+	redBuild := protocol.SessionInfo{AgentState: "working", Delivery: "ci_failed"}
+	if waitingOnHuman(redBuild) {
+		t.Error("a working agent under a red build is not waiting at a prompt")
+	}
+	if !needsHuman(redBuild) {
+		t.Error("a red build needs a human")
+	}
+	blocked := protocol.SessionInfo{AgentState: "waiting_input", Delivery: "review_pending"}
+	if !waitingOnHuman(blocked) || !needsHuman(blocked) {
+		t.Error("a blocked agent is both waiting and needing a human")
+	}
+	quiet := protocol.SessionInfo{AgentState: "idle", Delivery: "review_pending"}
+	if waitingOnHuman(quiet) || needsHuman(quiet) {
+		t.Error("an idle agent parked on a reviewer needs nothing")
+	}
+}
+
+// answerable mirrors internal/daemon/answer.go's gate exactly: the affordance
+// and the daemon must not disagree, in either direction.
+func TestAnswerableMirrorsTheDaemonGate(t *testing.T) {
+	cases := []struct {
+		name string
+		si   protocol.SessionInfo
+		want bool
+	}{
+		{"question", protocol.SessionInfo{AgentState: "waiting_input", InputReason: "question"}, true},
+		{"permission", protocol.SessionInfo{AgentState: "waiting_input", InputReason: "permission_prompt"}, true},
+		{"legacy reasonless block", protocol.SessionInfo{AgentState: "waiting_input"}, true},
+		{"modal swallows prose", protocol.SessionInfo{AgentState: "waiting_input", InputReason: "dialog"}, false},
+		{"quota cannot act on a reply", protocol.SessionInfo{AgentState: "waiting_input", InputReason: "quota_limited"}, false},
+		// The case the old string gate refused: a finished turn resting at its
+		// prompt is now AgentIdle, and it is exactly where a human wants to reply.
+		{"idle at its prompt", protocol.SessionInfo{AgentState: "idle", AtPrompt: true}, true},
+		{"idle, gate closed", protocol.SessionInfo{AgentState: "idle"}, false},
+		{"mid-turn", protocol.SessionInfo{AgentState: "working", AtPrompt: true}, false},
+		{"gone", protocol.SessionInfo{AgentState: "dead", AtPrompt: true}, false},
+		// A legacy record: the backfill makes needs_input answerable, as before.
+		{"legacy needs_input", protocol.SessionInfo{Status: "needs_input"}, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := answerable(c.si); got != c.want {
+				t.Errorf("answerable = %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
+// inputReasonLabel rides inside the needs_you pill, so it is kept short and the
+// misleading identifiers get a human phrase ("quota_limited" reads like a
+// dashboard state, "permission_prompt" says twice what "permission" says once);
+// everything else de-underscores, and "" stays empty so a reasonless block
+// renders a bare pill.
 func TestInputReasonLabel(t *testing.T) {
 	cases := map[string]string{
 		"quota_limited":     "usage limit",
-		"permission_prompt": "permission prompt",
-		"idle_notification": "idle notification",
+		"permission_prompt": "permission",
+		"idle_notification": "idle nudge",
+		"question":          "question",
 		"some_future_word":  "some future word",
+		"":                  "",
 	}
 	for in, want := range cases {
 		if got := inputReasonLabel(in); got != want {

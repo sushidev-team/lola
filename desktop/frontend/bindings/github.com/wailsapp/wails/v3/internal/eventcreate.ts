@@ -6,28 +6,4 @@
 // @ts-ignore: Unused imports
 import { Create as $Create } from "@wailsio/runtime";
 
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment
-// @ts-ignore: Unused imports
-import * as main$0 from "../../../../sushidev-team/lola/desktop/models.js";
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment
-// @ts-ignore: Unused imports
-import * as protocol$0 from "../../../../sushidev-team/lola/internal/protocol/models.js";
-
-function configure() {
-    Object.freeze(Object.assign($Create.Events, {
-        "daemon:projects": $$createType0,
-        "daemon:pusherr": $$createType1,
-        "daemon:sessions": $$createType2,
-        "daemon:status": $$createType3,
-        "update:download-progress": $$createType4,
-    }));
-}
-
-// Private type creation functions
-const $$createType0 = protocol$0.ProjectsData.createFrom;
-const $$createType1 = main$0.PushErrDTO.createFrom;
-const $$createType2 = protocol$0.SessionsData.createFrom;
-const $$createType3 = protocol$0.StatusData.createFrom;
-const $$createType4 = main$0.UpdateProgressDTO.createFrom;
-
-configure();
+Object.freeze($Create.Events);

@@ -44,17 +44,26 @@ func Budget(pollCap, globalCap, liveCounted int) int {
 }
 
 // NativeLiveCounted returns how many native sessions in sessions (a session
-// store snapshot) currently occupy an agent slot (state.HoldsSlot — the ONE
-// slot classification; merge_conflict counts there, a deliberate change from
-// the pre-axis table, because the reaction engine is actively re-prompting
-// that agent to rebase). It is a tick's liveCounted:
+// store snapshot) currently occupy an agent slot (state.HoldsSlot over the two
+// AXES — the ONE slot classification; merge_conflict counts there, a deliberate
+// change from the pre-axis table, because the reaction engine is actively
+// re-prompting that agent to rebase). It is a tick's liveCounted:
 //
 //	budget = Budget(pollCap, globalCap, NativeLiveCounted(store))
 //	       = min(pollCap, globalCap − NativeLiveCounted(store))
+//
+// The record's axes are ensured first: a pre-axis snapshot record read straight
+// off disk carries only the collapsed status, and an unset agent axis would
+// read as an unknown (i.e. live) agent and over-count the budget. EnsureAxes is
+// a no-op on the axis-bearing records the observer writes.
 func NativeLiveCounted(sessions []session.Session) int {
 	n := 0
 	for _, s := range sessions {
-		if s.Source == "native" && state.HoldsSlot(s.Status) {
+		if s.Source != "native" {
+			continue
+		}
+		s.EnsureAxes()
+		if state.HoldsSlot(s.AgentState, s.Delivery) {
 			n++
 		}
 	}
@@ -324,7 +333,7 @@ func (d *Daemon) tick(ctx context.Context, name string, dryRun bool) (protocol.P
 	if p.DedupMode == "state" {
 		stateLive = map[string]bool{}
 		for _, s := range d.sessions.Snapshot() {
-			if s.Source == "native" && s.Issue != "" && nativeSessionPresent(s.Status) {
+			if s.Source == "native" && s.Issue != "" && nativeSessionPresent(s) {
 				stateLive[s.Issue] = true
 			}
 		}

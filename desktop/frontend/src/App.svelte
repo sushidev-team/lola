@@ -7,6 +7,7 @@
   import { terms } from "$lib/terms.svelte";
   import { triaged } from "$lib/filters";
   import { isChord } from "$lib/keys";
+  import { displayFor } from "$lib/theme";
   import { reflowGridRows } from "$lib/reflow";
   import Sidebar from "$lib/components/Sidebar.svelte";
   import MainTopBar from "$lib/components/MainTopBar.svelte";
@@ -108,7 +109,14 @@
     nav.select(rows[i].id);
   }
 
-  // Jump to the next/prev session parked on a human (needs_input), wrapping.
+  // Jump to the next/prev session parked on a human, wrapping.
+  //
+  // The AGENT axis only, deliberately narrower than `attention`: this shortcut
+  // means "take me to the thing that is blocked waiting for me to type", and a
+  // red CI is not that — it is work to schedule, not a prompt to answer.
+  // Broadening it would make ⇧-tabbing through the queue land on rows with
+  // nothing to answer. `displayFor` rather than a raw compare so a future agent
+  // state that maps to needs_you is included for free.
   function jumpNeedsInput(dir: number) {
     const rows = cockpitRows();
     const len = rows.length;
@@ -117,7 +125,7 @@
     if (start < 0) start = 0;
     for (let n = 1; n <= len; n++) {
       const r = rows[(((start + dir * n) % len) + len) % len];
-      if (r.status === "needs_input") {
+      if (displayFor(r.agentState) === "needs_you") {
         nav.select(r.id);
         return;
       }

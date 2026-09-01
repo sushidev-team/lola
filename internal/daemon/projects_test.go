@@ -52,7 +52,12 @@ func TestProjectsDataRollup(t *testing.T) {
 	d.sessions.Upsert(lin("s3", "alpha", "ci_failed"))   // live + ciRed
 	d.sessions.Upsert(lin("s4", "alpha", "merged"))      // not counted
 	withPR := lin("s6", "alpha", "working")
-	withPR.PR = &scm.PR{State: "OPEN", Number: 5}
+	// Checks PENDING on purpose. The counters read the two AXES now, and the
+	// delivery axis is DERIVED from these facts rather than taken from the
+	// fixture's status word — an OPEN PR with no facts at all derives to
+	// review_pending, which is PARKED and holds no slot. Stating the checks
+	// makes the fixture mean what its comment says.
+	withPR.PR = &scm.PR{State: "OPEN", Number: 5, ChecksState: "pending"}
 	d.sessions.Upsert(withPR) // live + openPR
 	d.sessions.Upsert(session.Session{ID: "s5", Source: "native", Kind: session.KindPR, Agentless: true, Project: "beta", Status: "shell"})
 

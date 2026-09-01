@@ -48,15 +48,15 @@ var (
 	// Status pills. Urgent + broken states get a SOLID fill (dark text) so the
 	// human-in-the-loop queue leaps off the table; active/parked states get a
 	// dark TINT (bright-enough text) so they read without shouting.
-	pillUrgentBg = "#e0a54a" // solid amber — needs_input
+	pillUrgentBg = "#e0a54a" // solid amber — needs_you (the one urgent pill)
 	pillUrgentFg = "#17110a"
-	pillBrokenBg = "#d1707a" // solid rose  — ci_failed / changes_requested / merge_conflict
+	pillBrokenBg = "#d1707a" // solid rose  — regressed delivery (kept for the desktop's mirrored tokens)
 	pillBrokenFg = "#180b0d"
-	pillWorkBg   = "#22384f" // tint — working / ci_pending / draft
+	pillWorkBg   = "#22384f" // tint — a live agent turn (working)
 	pillWorkFg   = "#84b6ea"
-	pillDoneBg   = "#1f3a2e" // tint — approved / pr_open
+	pillDoneBg   = "#1f3a2e" // tint — approved (kept for the desktop's mirrored tokens)
 	pillDoneFg   = "#74cf97"
-	pillGreyBg   = "#2a323d" // tint — review_pending
+	pillGreyBg   = "#2a323d" // tint — a resting agent (idle)
 	pillGreyFg   = "#aab4c0"
 )
 

@@ -15,6 +15,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/sushidev-team/lola/internal/agent"
 	"github.com/sushidev-team/lola/internal/protocol"
+	"github.com/sushidev-team/lola/internal/state"
 	"github.com/sushidev-team/lola/internal/tmux"
 )
 
@@ -60,11 +61,48 @@ func rebuildSessionStyles() {
 	prLineStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(colMagenta))
 }
 
-// statusStyle maps a derived session status (scm.DeriveStatus / AO attention
-// states / native runtime states) to its display style: working=blue,
-// failures=red, approved=green, attention=orange, dead=red background,
-// merged/session_ended/idle=dim; anything else unstyled.
-func statusStyle(status string) lipgloss.Style {
+// displayStyle colors the PRIMARY axis (the agent pill and its Board badge):
+// working=blue, needs_you=orange, orphaned=warn (an adoption anomaly worth
+// noticing but not a queue entry), and the quiet/terminal rest dim. The
+// delivery story is NOT folded in here — it has its own color scale
+// (deliveryStyle) on its own chip, which is the whole point of the split.
+func displayStyle(d state.Display) lipgloss.Style {
+	switch d {
+	case state.DisplayWorking:
+		return statusBlue
+	case state.DisplayNeedsYou:
+		return statusOrange
+	case state.DisplayOrphaned:
+		return warnText
+	}
+	// idle / gone / shell: quiet.
+	return faintText
+}
+
+// deliveryStyle colors the SECONDARY axis (the PR chip): the regressed states
+// red, the finished ones green, CI in flight amber, everything parked or
+// pre-flight dim. Unlike displayStyle it is keyed on facts about the PR alone,
+// so a red chip beside a blue pill reads exactly as it should — the agent is
+// working, the build is broken.
+func deliveryStyle(d state.DeliveryState) lipgloss.Style {
+	switch d {
+	case state.DeliveryCIFailed, state.DeliveryChangesRequested, state.DeliveryMergeConflict:
+		return badText
+	case state.DeliveryApproved, state.DeliveryMerged:
+		return goodText
+	case state.DeliveryCIPending:
+		return warnText
+	}
+	// none / draft / review_pending / closed.
+	return faintText
+}
+
+// legacyStatusStyle colors a ROLLED-UP status word. It survives for exactly one
+// consumer — the activity feed, whose protocol.Event carries from/to as the
+// legacy 16-word vocabulary (a transition is a historical fact about the rollup,
+// not a live pair we could re-derive). Everything that renders a LIVE session
+// goes through displayStyle/deliveryStyle instead; do not add a caller here.
+func legacyStatusStyle(status string) lipgloss.Style {
 	switch status {
 	case "working":
 		return statusBlue
@@ -133,23 +171,62 @@ func checksGlyph(checks string) string {
 }
 
 // reviewGlyph is the compact review-decision mark appended to a PR badge: an
-// approval ✓rev (green) or a change request ✗rev (red). The neutral
-// awaiting/required state renders nothing (the REACTING column already carries
-// "awaiting review"), keeping the row badge brief.
+// approval ✓rev (green), a change request ✗rev (red), or a review still
+// OUTSTANDING ⧗rev (dim).
+//
+// That last case used to render nothing, on the reasoning that the REACTING
+// column already said "awaiting review". It cannot stay silent now: the pill no
+// longer carries review_pending — it carries what the AGENT is doing — so
+// without a mark the single most common PR state in the whole system ("parked
+// on a reviewer") would be the one state the chip never names. It is drawn dim
+// rather than amber because waiting on a human reviewer is a normal, patient
+// state, not a failure.
 func reviewGlyph(review string) string {
 	switch review {
 	case "APPROVED":
 		return goodText.Render("✓rev")
 	case "CHANGES_REQUESTED":
 		return badText.Render("✗rev")
+	case "REVIEW_REQUIRED":
+		return faintText.Render("⧗rev")
 	}
 	return ""
 }
 
-// prBadge is the scannable PR summary for ANY session that has a PR: "#229 ✓
-// ✓rev" — the number, the checks glyph, and the brief review mark. Deliberately
-// NOT gated on Status/review state (only on hasPR). Returns "" when there is no
-// PR so callers render a placeholder (list row) or omit it (kanban).
+// deliveryGlyph is the compact mark for the delivery-axis facts that the checks
+// and review glyphs CANNOT express. It is deliberately a small set: ci_failed,
+// ci_pending, changes_requested, approved and review_pending are all already
+// spoken for by checksGlyph/reviewGlyph, and marking them twice would make the
+// chip longer without saying anything new. What is left is the PR's own
+// lifecycle — still a draft, conflicting with its base, merged, closed — none of
+// which is a check or a review decision.
+func deliveryGlyph(d state.DeliveryState) string {
+	switch d {
+	case state.DeliveryDraft:
+		return faintText.Render("df")
+	case state.DeliveryMergeConflict:
+		return badText.Render("⚠mc")
+	case state.DeliveryMerged:
+		return goodText.Render("✓mg")
+	case state.DeliveryClosed:
+		return faintText.Render("✕")
+	}
+	return ""
+}
+
+// prBadge is the SECONDARY chip: the whole delivery axis in one scannable cell
+// beside the primary pill — "#229 ⚠mc ✗ci", "#231 ⧗rev", "#204 ✓mg". Its job is
+// to make the PR story visible WITHOUT stealing the pill, which now belongs to
+// the agent axis; before the split, a session's PR state and its agent state had
+// to compete for one word and the PR always won.
+//
+// Deliberately NOT gated on Status/review state (only on hasPR), so a PR is
+// unmissable from the moment it opens. Returns "" when there is no PR so callers
+// render a placeholder (list row) or omit it (kanban).
+//
+// merged and closed stop the chip: a terminal PR's checks and review decision
+// are history, and trailing them behind "✓mg" reads as live facts about work
+// that is over.
 func prBadge(si protocol.SessionInfo) string {
 	if !hasPR(si) {
 		return ""
@@ -157,6 +234,13 @@ func prBadge(si protocol.SessionInfo) string {
 	out := "PR"
 	if si.PRNumber > 0 {
 		out = fmt.Sprintf("#%d", si.PRNumber)
+	}
+	_, d := axesOf(si)
+	if g := deliveryGlyph(d); g != "" {
+		out += " " + g
+	}
+	if d == state.DeliveryMerged || d == state.DeliveryClosed {
+		return out
 	}
 	if g := checksGlyph(si.Checks); g != "" {
 		out += " " + g
@@ -805,11 +889,12 @@ func (m *rootModel) updateSessions(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	case "R":
 		// Revive a dead session: relaunch its agent on the kept worktree. Only
-		// meaningful when the pane is gone (dead / session_ended); on any other
-		// status it flashes a hint and stays put (the daemon refuses a live one).
-		// No confirmation — revive is non-destructive, unlike the "x" kill.
+		// meaningful when no agent is running any more — the primary axis reads
+		// "gone", which is exactly what AgentDead and AgentExited collapse to; on
+		// any other display it flashes a hint and stays put (the daemon refuses a
+		// live one). No confirmation — revive is non-destructive, unlike "x" kill.
 		if sel := s.selected(); sel != nil {
-			if sel.Status != "dead" && sel.Status != "session_ended" {
+			if displayOf(*sel) != state.DisplayGone {
 				s.flash, s.flashGood = "revive is only available for a dead session", false
 				return m, nil
 			}
@@ -903,18 +988,21 @@ func (m *rootModel) updateOpen(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 // startAnswer opens the inline answer card for the selected session. It is only
-// meaningful on a needs_input session whose pane we have already parsed into a
-// question; anything else flashes a hint and stays put (never sends).
+// meaningful where a human's typed reply can actually land — the SAME gate the
+// daemon applies (answerable, mirroring internal/daemon/answer.go), not the old
+// `Status == "needs_input"` string test, which both refused a finished turn
+// resting at its prompt and accepted a modal that swallows prose. Anything else
+// flashes a hint and stays put (never sends).
 func (m *rootModel) startAnswer() (tea.Model, tea.Cmd) {
 	s := &m.sessions
 	sel := s.selected()
-	if sel == nil || sel.Status != "needs_input" {
-		s.flash, s.flashGood = "answer is only available while a session waits for input", false
+	if sel == nil || !answerable(*sel) {
+		s.flash, s.flashGood = "answer is only available while a session is parked at its prompt", false
 		return m, nil
 	}
 	// We need a fresh pane read to render the card, but NOT a recognized question:
 	// the parser is deliberately fallible (a scrolled-away prompt, an unenumerated
-	// format), yet the session is genuinely needs_input and the daemon accepts a
+	// format), yet the session is genuinely parked and the daemon accepts a
 	// free-form answer for it. When there is no parsed question (or only a
 	// choice-less/non-free-form parse), fall through to a free-form card so a human
 	// can always answer in place rather than being forced to attach.
@@ -932,8 +1020,8 @@ func (m *rootModel) startAnswer() (tea.Model, tea.Cmd) {
 // updateAnswer drives the open answer card. A choice prompt is a pick-list
 // (arrows/j/k move, enter sends the highlighted Key, a matching digit/letter
 // sends that Key directly); a free-form prompt accumulates typed runes and
-// sends on enter. esc cancels without sending. The daemon still re-checks
-// needs_input, so a stale send is refused there, not here.
+// sends on enter. esc cancels without sending. The daemon still re-checks the
+// axis gate AND re-reads the pane, so a stale send is refused there, not here.
 func (m *rootModel) updateAnswer(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	s := &m.sessions
 	pd := s.paneData
@@ -1003,7 +1091,7 @@ func (m *rootModel) startSwitchAgent() (tea.Model, tea.Cmd) {
 	if sel == nil {
 		return m, nil
 	}
-	if sel.Status == "shell" {
+	if a, _ := axesOf(*sel); a == state.AgentShell {
 		s.flash, s.flashGood = "no agent to switch on a shell session", false
 		return m, nil
 	}
@@ -1053,8 +1141,11 @@ func (m *rootModel) updateSwitchAgent(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 // jumpNeedsInput moves the cursor to the next (dir=+1) or previous (dir=-1)
-// session, wrapping, whose status is needs_input — so "who needs me" is one
-// keypress away (n forward, N back). Refetches the pane for the new selection.
+// session, wrapping, whose AGENT is blocked on a person — so "who needs me" is
+// one keypress away (n forward, N back). It keys on the agent axis alone
+// (waitingOnHuman), not the wider attention predicate: a red build needs a human
+// too, but it does not need one HERE, at a prompt, right now. Refetches the pane
+// for the new selection.
 func (m *rootModel) jumpNeedsInput(dir int) (tea.Model, tea.Cmd) {
 	s := &m.sessions
 	if s.data == nil || len(s.data.Sessions) == 0 {
@@ -1063,7 +1154,7 @@ func (m *rootModel) jumpNeedsInput(dir int) (tea.Model, tea.Cmd) {
 	n := len(s.data.Sessions)
 	for off := 1; off <= n; off++ {
 		i := ((s.cursor+dir*off)%n + n) % n
-		if s.data.Sessions[i].Status == "needs_input" {
+		if waitingOnHuman(s.data.Sessions[i]) {
 			if i == s.cursor {
 				return m, nil // already on the only one
 			}
@@ -1136,9 +1227,14 @@ func (m *rootModel) sessionDetail() string {
 	}
 	if sel.TmuxName != "" {
 		fresh := s.previewFor == sel.ID
-		needsInput := sel.Status == "needs_input"
+		// The "attention" header and the answer card below share ONE condition,
+		// and it is the daemon's own answer gate — a card offered where lola would
+		// refuse to type is a dead affordance, and the old `Status == "needs_input"`
+		// test was both (it refused a finished turn resting at its prompt and
+		// offered a card over a modal that swallows prose).
+		canAnswer := answerable(*sel)
 		header := tblHeader.Render("preview")
-		if needsInput {
+		if canAnswer {
 			header = statusOrange.Render("attention")
 		}
 		mode := "compact"
@@ -1181,7 +1277,7 @@ func (m *rootModel) sessionDetail() string {
 		// choices/free-form field; when the parser missed the prompt we still open
 		// a free-form card once the human arms it (s.answering), so a parse miss
 		// never blocks answering in place.
-		if needsInput && fresh && s.paneData != nil &&
+		if canAnswer && fresh && s.paneData != nil &&
 			(s.paneData.HasQuestion || (s.answering && s.answerFor == sel.ID)) {
 			b.WriteString(m.attentionCard())
 		}
@@ -1208,7 +1304,14 @@ func (m *rootModel) sessionDetail() string {
 	fmt.Fprintf(&b, "issue:    %s\n", dash(sel.Issue))
 	fmt.Fprintf(&b, "branch:   %s\n", dash(sel.Branch))
 	fmt.Fprintf(&b, "worktree: %s\n", dash(sel.Worktree))
-	fmt.Fprintf(&b, "status:   %s\n", statusStyle(sel.Status).Render(sel.Status))
+	// BOTH axes, side by side: the primary pill says what the agent is doing, the
+	// PR chip where the delivery stands. Rendering only one of them here is what
+	// the whole axis split exists to stop.
+	statusLine := statusPillFor(*sel)
+	if chip := prBadge(*sel); chip != "" {
+		statusLine += " " + chip
+	}
+	fmt.Fprintf(&b, "status:   %s\n", statusLine)
 	if line := agentDetailLine(*sel); line != "" {
 		b.WriteString(faintText.Render(line) + "\n")
 	}
@@ -1226,11 +1329,13 @@ func (m *rootModel) sessionDetail() string {
 		fmt.Fprintf(&b, "reacting: %s\n", reactingStyle(sel.Reacting).Render(sel.Reacting))
 	}
 	if len(sel.DevCommands) > 0 {
-		state := faintText.Render("off (D to run here)")
+		// Named devLine, not `state`: this file imports internal/state now, and a
+		// local of that name shadows the package for the rest of the function.
+		devLine := faintText.Render("off (D to run here)")
 		if sel.DevActive {
-			state = goodText.Render("● " + strings.Join(sel.DevCommands, " · "))
+			devLine = goodText.Render("● " + strings.Join(sel.DevCommands, " · "))
 		}
-		fmt.Fprintf(&b, "dev:      %s\n", state)
+		fmt.Fprintf(&b, "dev:      %s\n", devLine)
 		// The address the dev server actually took — scraped from its pane by
 		// the daemon, because the port MOVES (8000 taken means 8001) and the
 		// line that says so scrolled away minutes ago. A terminal makes it

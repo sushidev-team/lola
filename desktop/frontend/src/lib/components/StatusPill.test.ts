@@ -54,3 +54,84 @@ describe("StatusPill conflict action", () => {
     expect(rowClick).not.toHaveBeenCalled();
   });
 });
+
+// The pill is the AGENT axis now. Before the split it carried the rolled-up
+// status, which meant the runner was invisible behind every delivery word once
+// a PR existed — and 90% of the `needs_input` it did surface came from the
+// coding agent's 60s idle nudge rather than from a question.
+describe("StatusPill agent axis", () => {
+  beforeEach(() => cleanup());
+
+  it("says what the AGENT is doing, not what the PR is doing", () => {
+    render(StatusPill, { agentState: "working", delivery: "review_pending", status: "review_pending" });
+    expect(screen.getByText("working")).toBeInTheDocument();
+    expect(screen.queryByText("review")).not.toBeInTheDocument();
+  });
+
+  it("reads 'idle' for a resting agent instead of the old 'needs you'", () => {
+    render(StatusPill, { agentState: "idle", delivery: "none", status: "idle" });
+    expect(screen.getByText("idle")).toBeInTheDocument();
+  });
+
+  it("collapses exited and dead into one word", () => {
+    render(StatusPill, { agentState: "exited", delivery: "draft", status: "draft" });
+    expect(screen.getByText("gone")).toBeInTheDocument();
+  });
+
+  it("falls back to the rolled-up status when the session carries no axes", () => {
+    // A daemon predating the split sends neither axis, and displayFor("")
+    // answers "working" by design — which would draw a parked PR as a live
+    // agent. With the rollup word in hand the pre-axis pill is what it was.
+    render(StatusPill, { status: "review_pending" });
+    expect(screen.getByText("review")).toBeInTheDocument();
+  });
+});
+
+// "needs you" is a status; "needs you · permission prompt" is an instruction.
+// inputReason was on the wire and read by nothing in the app, so the only way to
+// learn what was being asked was to open the terminal.
+describe("StatusPill input reason", () => {
+  beforeEach(() => cleanup());
+
+  it("names WHY the agent is blocked", () => {
+    render(StatusPill, { agentState: "waiting_input", inputReason: "permission_prompt" });
+    expect(screen.getByText("needs you")).toBeInTheDocument();
+    expect(screen.getByText(/permission prompt/)).toBeInTheDocument();
+  });
+
+  it("stays silent about the idle nudge, which is no longer a reason", () => {
+    render(StatusPill, { agentState: "waiting_input", inputReason: "idle_notification" });
+    expect(screen.getByText("needs you")).toBeInTheDocument();
+    expect(screen.queryByText(/idle/)).not.toBeInTheDocument();
+  });
+
+  it("never prints a reason under a pill that is not 'needs you'", () => {
+    // The daemon leaves inputReason set on records it has since moved off
+    // waiting_input, so gating on the reason alone prints a stale explanation.
+    render(StatusPill, { agentState: "working", inputReason: "question" });
+    expect(screen.queryByText(/question/)).not.toBeInTheDocument();
+  });
+});
+
+// The conflict action moved to the DELIVERY axis, because the pill's own word is
+// now "working" on exactly the session worth offering the merge to.
+describe("StatusPill conflict action follows the delivery axis", () => {
+  beforeEach(() => cleanup());
+
+  it("offers resolve on a working agent whose branch conflicts", () => {
+    render(StatusPill, {
+      agentState: "working",
+      delivery: "merge_conflict",
+      onResolve: () => {},
+      resolveBranch: "develop",
+    });
+    const btn = screen.getByRole("button");
+    expect(btn).toHaveTextContent("working");
+    expect(btn).toHaveTextContent("resolve");
+  });
+
+  it("does not offer it when only the AGENT word looks alarming", () => {
+    render(StatusPill, { agentState: "waiting_input", delivery: "ci_failed", onResolve: () => {} });
+    expect(screen.queryByRole("button")).not.toBeInTheDocument();
+  });
+});

@@ -13,7 +13,7 @@
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
-import { Call as $Call, CancellablePromise as $CancellablePromise, Create as $Create } from "@wailsio/runtime";
+import { Call as $Call, CancellablePromise as $CancellablePromise } from "@wailsio/runtime";
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
@@ -23,18 +23,14 @@ import * as $models from "./models.js";
  * TeamMeta fetches everything the poll form's dependent pickers need for a team.
  */
 export function TeamMeta(teamID: string, refresh: boolean): $CancellablePromise<$models.LinearTeamMeta> {
-    return $Call.ByID(1141327068, teamID, refresh).then(($result: any) => {
-        return $$createType0($result);
-    });
+    return $Call.ByID(1141327068, teamID, refresh);
 }
 
 /**
  * Teams lists the workspace's teams for the top-level picker.
  */
-export function Teams(): $CancellablePromise<$models.LinearTeam[]> {
-    return $Call.ByID(1325983846).then(($result: any) => {
-        return $$createType2($result);
-    });
+export function Teams(): $CancellablePromise<$models.LinearTeam[] | null> {
+    return $Call.ByID(1325983846);
 }
 
 /**
@@ -46,15 +42,6 @@ export function Teams(): $CancellablePromise<$models.LinearTeam[]> {
  * label cannot match issues outside its own team. Per-project label pickers
  * keep using TeamMeta, where a team label is the right answer.
  */
-export function WorkspaceLabels(): $CancellablePromise<$models.LinearOption[]> {
-    return $Call.ByID(107212890).then(($result: any) => {
-        return $$createType4($result);
-    });
+export function WorkspaceLabels(): $CancellablePromise<$models.LinearOption[] | null> {
+    return $Call.ByID(107212890);
 }
-
-// Private type creation functions
-const $$createType0 = $models.LinearTeamMeta.createFrom;
-const $$createType1 = $models.LinearTeam.createFrom;
-const $$createType2 = $Create.Array($$createType1);
-const $$createType3 = $models.LinearOption.createFrom;
-const $$createType4 = $Create.Array($$createType3);

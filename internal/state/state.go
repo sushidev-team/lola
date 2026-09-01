@@ -8,12 +8,18 @@
 //   - DeliveryState — where the pull request stands (draft, CI red, awaiting
 //     review, merged …). Owned solely by observed gh facts.
 //
-// Rollup composes the two axes into the legacy one-string status that the
-// wire protocol, counting tables, reactions, and both UIs key by. It is the
-// ONLY producer of that vocabulary; nothing else may mint a status string.
-// The consumer tables (tables.go) are likewise the only slot/attention/
-// notability classifications — the previous four divergent copies in
-// daemon/tui are gone.
+// display.go holds the two-axis presentation (the Display pill vocabulary) and
+// every consumer table — HoldsSlot, Present, Attention, SortRank, KanbanKeyFor.
+// All of them take the PAIR, and they are the ONLY slot/attention/column
+// classifications in lola: the four divergent copies that used to live in
+// daemon/tui are gone, and so are the string-keyed shims that replaced them
+// during the migration.
+//
+// Rollup (rollup.go) composes the two axes back into the legacy one-string
+// status, and is the ONLY producer of that vocabulary — nothing else may mint a
+// status string. It is now a WIRE shim: protocol.SessionInfo.status must keep
+// carrying the historical words for the mobile companion, and nothing in the
+// daemon or the desktop classifies by them any more.
 //
 // This package is a leaf: stdlib + internal/scm (itself a pure gh-facts leaf)
 // only. It must not import config/session/daemon/tui.
@@ -87,6 +93,14 @@ const (
 	SourceHook         ActivitySource = "hook"
 	SourcePane         ActivitySource = "pane"
 	SourceTmuxActivity ActivitySource = "tmux_activity"
+	// SourceTranscript is the coding agent's OWN transcript (internal/agentlog)
+	// rather than the rendered pane. It is a separate word from SourcePane on
+	// purpose: the two corroborators fail in completely different ways — a pane
+	// verdict goes wrong when claude-code changes its rendering, a transcript
+	// verdict when the JSONL schema or the file's location moves — so a stamp
+	// attributed to the wrong one sends the next person debugging it to the
+	// component that had nothing to do with the answer.
+	SourceTranscript ActivitySource = "transcript"
 )
 
 // ClassifyNotification maps a Notification hook's message/type to an
@@ -117,6 +131,12 @@ func FromLegacy(status string, delivery DeliveryState) (AgentState, DeliveryStat
 	case "session_ended":
 		return AgentExited, delivery
 	case "dead", "no_pr":
+		// "no_pr" is not part of any live vocabulary and never will be — it is
+		// what a P1-era daemon (scm.DeriveStatus, before the axis split) wrote
+		// into sessions.json for a dead pane with no PR. This function is the
+		// READ side of the snapshot migration, so it has to keep recognizing
+		// the words that are actually on disk; AllStatuses is the write side
+		// and asserts this one stays out of it (TestVocabularyClosed).
 		return AgentDead, delivery
 	case "shell":
 		return AgentShell, delivery

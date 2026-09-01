@@ -1083,10 +1083,12 @@ func (d *Daemon) adoptNativeSessions(ctx context.Context) {
 			*cur = s
 			return true
 		})
-		switch adopted.Status {
-		case "dead":
+		// Both anomalies live on the AGENT axis; reading them off the rolled-up
+		// status hid an orphan behind any PR state its record still carried.
+		switch adopted.AgentState {
+		case state.AgentDead:
 			d.logf("", "adopt: %s has a worktree but no tmux session (dead; reconcile may revert its issue)", adopted.ID)
-		case "orphaned":
+		case state.AgentOrphaned:
 			d.logf("", "adopt: %s is a lola tmux session without a worktree (orphaned; kill candidate)", adopted.ID)
 		}
 	}

@@ -8,20 +8,99 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/protocol"
+	"github.com/sushidev-team/lola/internal/state"
 )
 
-// Every status pill shows its word as a padded chip (leading/trailing space) so
-// the STATUS column aligns regardless of fill. (Color/fill is a runtime concern:
-// lipgloss renders without SGR under the no-TTY test profile.)
-func TestStatusPill(t *testing.T) {
-	for _, status := range []string{"needs_input", "ci_failed", "changes_requested", "working", "approved", "review_pending", "merged"} {
-		p := stripANSI(statusPill(status))
-		if !strings.Contains(p, statusLabel(status)) {
-			t.Errorf("pill for %q missing the status label: %q", status, p)
+// Every PRIMARY pill shows its word as a padded chip (leading/trailing space) so
+// the STATUS column aligns regardless of fill, and the six Display values render
+// six distinct labels — the pill is the agent axis, so it must never collapse two
+// agent states into one word. (Color/fill is a runtime concern: lipgloss renders
+// without SGR under the no-TTY test profile.)
+func TestDisplayPill(t *testing.T) {
+	seen := map[string]state.Display{}
+	for _, d := range state.AllDisplays() {
+		p := stripANSI(displayPill(d, ""))
+		if !strings.Contains(p, displayLabel(d)) {
+			t.Errorf("pill for %q missing its label: %q", d, p)
 		}
 		if !strings.HasPrefix(p, " ") || !strings.HasSuffix(p, " ") {
-			t.Errorf("pill for %q must be a padded chip: %q", status, p)
+			t.Errorf("pill for %q must be a padded chip: %q", d, p)
 		}
+		if prev, dup := seen[p]; dup {
+			t.Errorf("pill for %q renders identically to %q: %q", d, prev, p)
+		}
+		seen[p] = d
+	}
+}
+
+// The needs_you pill carries WHY it is blocked, which is what makes it
+// actionable rather than merely alarming; no other pill takes a reason.
+func TestDisplayPillCarriesTheInputReason(t *testing.T) {
+	cases := map[string]string{
+		"permission_prompt": "permission",
+		"question":          "question",
+		"dialog":            "dialog",
+		"quota_limited":     "usage limit",
+	}
+	for reason, want := range cases {
+		got := stripANSI(displayPill(state.DisplayNeedsYou, reason))
+		if !strings.Contains(got, "needs you: "+want) {
+			t.Errorf("needs_you pill for reason %q = %q, want the %q qualifier", reason, got, want)
+		}
+	}
+	// No reason on the record (a legacy pane-derived block): the bare pill.
+	if got := stripANSI(displayPill(state.DisplayNeedsYou, "")); !strings.Contains(got, "needs you") || strings.Contains(got, ":") {
+		t.Errorf("reasonless needs_you pill = %q, want a bare label", got)
+	}
+	// A reason on any other state is ignored — only needs_you is blocked on one.
+	if got := stripANSI(displayPill(state.DisplayWorking, "permission_prompt")); strings.Contains(got, "permission") {
+		t.Errorf("working pill must not carry an input reason: %q", got)
+	}
+}
+
+// The whole point of the split, end to end: the STATUS column shows what the
+// AGENT is doing and the PR column shows where the DELIVERY stands, at the same
+// time, on the same row. Under the old rollup each of these rows collapsed to
+// the delivery word and the agent axis was simply not on screen.
+func TestSessionsBodyShowsBothAxes(t *testing.T) {
+	m := newTestRoot(t)
+	m.sessions.data = &protocol.SessionsData{Sessions: []protocol.SessionInfo{
+		// A live agent typing away while its build is red: the row must say both.
+		{ID: "1", Issue: "ENG-1", Project: "web", Status: "ci_failed",
+			AgentState: "working", Delivery: "ci_failed", PRNumber: 11, Checks: "fail"},
+		// A finished turn parked on a reviewer — the case the 60s idle nudge used
+		// to mint as needs_input 90% of the time.
+		{ID: "2", Issue: "ENG-2", Project: "web", Status: "review_pending",
+			AgentState: "idle", Delivery: "review_pending", PRNumber: 12, Review: "REVIEW_REQUIRED"},
+		// An agent that exited over an open PR: the rollup showed the PR only.
+		{ID: "3", Issue: "ENG-3", Project: "web", Status: "ci_pending",
+			AgentState: "exited", Delivery: "ci_pending", PRNumber: 13, Checks: "pending"},
+		// Blocked on a human, and the pill says what for.
+		{ID: "4", Issue: "ENG-4", Project: "web", Status: "needs_input",
+			AgentState: "waiting_input", InputReason: "permission_prompt", Delivery: "none"},
+	}}
+	m.sessions.selID = "1"
+
+	body := stripANSI(strings.Join(m.sessionsBody(140, 12), "\n"))
+	for _, want := range []string{
+		"working", "#11", "✗ci", // agent live, build red
+		"idle", "#12", "⧗rev", // turn done, parked on a reviewer
+		"gone", "#13", "⧗", // agent exited, CI still running
+		"needs you: permission", // blocked, and why
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("sessions body must carry %q:\n%s", want, body)
+		}
+	}
+	// The "!" queue marker belongs to the blocked agent alone — a red build is
+	// flagged by its own chip, not by borrowing the prompt queue.
+	for _, line := range strings.Split(body, "\n") {
+		if strings.Contains(line, "ENG-1") && strings.Contains(line, "!") {
+			t.Errorf("a working agent under a red build must not carry the ! marker:\n%s", line)
+		}
+	}
+	if !strings.Contains(body, "! ENG-4") && !strings.Contains(body, "!  ENG-4") {
+		t.Errorf("the blocked session must carry the ! marker:\n%s", body)
 	}
 }
 

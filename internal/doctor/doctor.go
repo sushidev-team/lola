@@ -2,7 +2,9 @@
 // plain data so the CLI (`lola doctor`) and the TUI can render them however
 // they like — this package never prints. It probes the native runtime's
 // external tools (tmux, git, claude, gh), the Linear API key, the daemon
-// socket, and the config (validity + per-project repos).
+// socket, and the config (validity + per-project repos) — plus the one fact a
+// checking process cannot see for itself, the daemon's tripped status
+// interpreter (statusagent.go).
 //
 // Secret discipline: the Linear API key value is NEVER placed in a Result
 // (or anywhere else). The key check reports only where the key was found —
@@ -43,6 +45,10 @@ const (
 	checkRepaired  = "config repairs"
 	checkMigration = "migration"
 	checkFallback  = "agent fallback"
+	// checkStatusAgent is reported ONLY when the daemon's status interpreter
+	// has tripped its circuit breaker (statusagent.go) — there is no healthy
+	// row for it.
+	checkStatusAgent = "status interpreter"
 )
 
 // defaultServerSessions is the seam over tmux.DefaultServerSessions so the
@@ -130,6 +136,12 @@ func Check(ctx context.Context, cfg *config.Config) Report {
 	add(ghResult())
 	add(lolaCLIResult())
 	add(migrationResult(ctx))
+	// Daemon-process runtime facts the checking process cannot see for itself,
+	// read from the breadcrumb the daemon leaves (statusagent.go). Independent
+	// of cfg, so it sits above the cfg == nil early return.
+	if res, ok := statusAgentResult(); ok {
+		add(res)
+	}
 
 	if cfg == nil {
 		add(Result{

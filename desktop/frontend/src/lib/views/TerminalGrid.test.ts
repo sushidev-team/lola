@@ -119,3 +119,57 @@ describe("TerminalGrid tab strip", () => {
     expect(nav.focusedTerm).toBe("");
   });
 });
+
+// The grid is the lens you sit and WATCH a build from, and it was the one lens
+// that never told you a PR existed — let alone that its CI had gone red.
+describe("TerminalGrid PR chip", () => {
+  beforeEach(() => {
+    cleanup();
+    store.connected = true;
+    store.alive = true;
+    nav.scoped = false;
+    nav.project = "";
+    nav.selectedId = "";
+    nav.focusedTerm = "";
+    nav.lens = "grid";
+    nav.returnLens = "";
+    shells.mockResolvedValue([]);
+  });
+
+  it("shows the PR and its delivery state on the tile", () => {
+    store.sessions = [
+      fakeSession({ prNumber: 42, prUrl: "https://github.com/acme/eng/pull/42", delivery: "ci_failed" }),
+    ];
+    render(TerminalGrid);
+    expect(screen.getByText("#42")).toBeInTheDocument();
+    expect(screen.getByText(/ci failed/)).toBeInTheDocument();
+  });
+
+  it("shows nothing where there is no PR", () => {
+    store.sessions = [fakeSession({ prNumber: 0 })];
+    render(TerminalGrid);
+    expect(screen.queryByText("—")).not.toBeInTheDocument();
+  });
+
+  it("opens the PR without also opening the terminal underneath", async () => {
+    const openURL = vi.spyOn(store, "openURL").mockResolvedValue(undefined);
+    store.sessions = [
+      fakeSession({ prNumber: 42, prUrl: "https://github.com/acme/eng/pull/42", delivery: "draft" }),
+    ];
+    render(TerminalGrid);
+    await fireEvent.click(screen.getByRole("button", { name: "#42" }));
+    expect(openURL).toHaveBeenCalledWith("https://github.com/acme/eng/pull/42");
+    expect(nav.focusedTerm).toBe("");
+    openURL.mockRestore();
+  });
+
+  it("names the AGENT axis on the tile, not the PR's", () => {
+    // The tile's pill used to be the rolled-up status, so a session whose agent
+    // was mid-turn under an open PR read as its delivery state and nothing else.
+    store.sessions = [
+      fakeSession({ agentState: "working", delivery: "review_pending", status: "review_pending" }),
+    ];
+    render(TerminalGrid);
+    expect(screen.getByText("working")).toBeInTheDocument();
+  });
+});

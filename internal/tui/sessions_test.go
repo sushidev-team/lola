@@ -10,6 +10,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/sushidev-team/lola/internal/protocol"
+	"github.com/sushidev-team/lola/internal/state"
 )
 
 func cannedSessions() *protocol.SessionsData {
@@ -155,7 +156,109 @@ func TestPRBadgeChecksGlyphs(t *testing.T) {
 	}
 }
 
-func TestStatusStyleMapping(t *testing.T) {
+// The chip is the SECONDARY axis in full: the delivery-only lifecycle marks the
+// checks/review glyphs cannot express, the outstanding-review mark that used to
+// render nothing, and nothing stale trailing a terminal PR.
+func TestPRBadgeCarriesTheDeliveryAxis(t *testing.T) {
+	cases := []struct {
+		name string
+		si   protocol.SessionInfo
+		want []string
+		not  []string
+	}{
+		{
+			name: "draft",
+			si:   protocol.SessionInfo{PRNumber: 7, Delivery: "draft"},
+			want: []string{"#7", "df"},
+		},
+		{
+			name: "conflict beside a red build",
+			si:   protocol.SessionInfo{PRNumber: 7, Delivery: "merge_conflict", Checks: "fail"},
+			want: []string{"#7", "⚠mc", "✗ci"},
+		},
+		{
+			// The most common PR state in the system: parked on a reviewer. The
+			// pill cannot say it any more, so the chip must.
+			name: "review outstanding",
+			si:   protocol.SessionInfo{PRNumber: 7, Delivery: "review_pending", Review: "REVIEW_REQUIRED"},
+			want: []string{"#7", "⧗rev"},
+		},
+		{
+			name: "merged drops stale checks/review",
+			si:   protocol.SessionInfo{PRNumber: 7, Delivery: "merged", Checks: "pass", Review: "APPROVED"},
+			want: []string{"#7", "✓mg"},
+			not:  []string{"✓rev"},
+		},
+		{
+			name: "closed drops stale checks/review",
+			si:   protocol.SessionInfo{PRNumber: 7, Delivery: "closed", Checks: "fail"},
+			want: []string{"#7", "✕"},
+			not:  []string{"✗ci"},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := stripANSI(prBadge(c.si))
+			for _, w := range c.want {
+				if !strings.Contains(got, w) {
+					t.Errorf("prBadge = %q, want %q in it", got, w)
+				}
+			}
+			for _, n := range c.not {
+				if strings.Contains(got, n) {
+					t.Errorf("prBadge = %q, must not carry %q", got, n)
+				}
+			}
+		})
+	}
+}
+
+func TestDisplayStyleMapping(t *testing.T) {
+	// The PRIMARY axis: one color per Display value, and NOTHING about the PR.
+	cases := map[state.Display]color.Color{
+		state.DisplayWorking:  lipgloss.Color(colBlue),
+		state.DisplayNeedsYou: lipgloss.Color(colOrange),
+		state.DisplayOrphaned: lipgloss.Color(colWarn),
+		state.DisplayIdle:     lipgloss.Color(colFaint),
+		state.DisplayGone:     lipgloss.Color(colFaint),
+		state.DisplayShell:    lipgloss.Color(colFaint),
+	}
+	for d, want := range cases {
+		if got := displayStyle(d).GetForeground(); got != want {
+			t.Errorf("displayStyle(%q) foreground = %v, want %v", d, got, want)
+		}
+	}
+	// A red build must NOT recolor the pill — that would re-collapse the axes.
+	// The delivery color lives on the chip's own scale.
+	working := protocol.SessionInfo{AgentState: "working", Delivery: "ci_failed"}
+	if got := sessionDisplay(working).Style.GetForeground(); got != lipgloss.Color(colBlue) {
+		t.Errorf("a working agent under a red build must stay blue, got %v", got)
+	}
+}
+
+func TestDeliveryStyleMapping(t *testing.T) {
+	cases := map[state.DeliveryState]color.Color{
+		state.DeliveryCIFailed:         lipgloss.Color(colBad),
+		state.DeliveryChangesRequested: lipgloss.Color(colBad),
+		state.DeliveryMergeConflict:    lipgloss.Color(colBad),
+		state.DeliveryApproved:         lipgloss.Color(colGood),
+		state.DeliveryMerged:           lipgloss.Color(colGood),
+		state.DeliveryCIPending:        lipgloss.Color(colWarn),
+		state.DeliveryDraft:            lipgloss.Color(colFaint),
+		state.DeliveryReviewPending:    lipgloss.Color(colFaint),
+		state.DeliveryClosed:           lipgloss.Color(colFaint),
+		state.DeliveryNone:             lipgloss.Color(colFaint),
+	}
+	for d, want := range cases {
+		if got := deliveryStyle(d).GetForeground(); got != want {
+			t.Errorf("deliveryStyle(%q) foreground = %v, want %v", d, got, want)
+		}
+	}
+}
+
+// legacyStatusStyle survives for the activity feed alone (its events carry the
+// rolled-up vocabulary), so its old mapping must not drift.
+func TestLegacyStatusStyleMapping(t *testing.T) {
 	cases := []struct {
 		status string
 		fg     color.Color
@@ -168,21 +271,21 @@ func TestStatusStyleMapping(t *testing.T) {
 		{"needs_input", lipgloss.Color(colOrange)},
 	}
 	for _, c := range cases {
-		if got := statusStyle(c.status).GetForeground(); got != c.fg {
-			t.Errorf("statusStyle(%q) foreground = %v, want %v", c.status, got, c.fg)
+		if got := legacyStatusStyle(c.status).GetForeground(); got != c.fg {
+			t.Errorf("legacyStatusStyle(%q) foreground = %v, want %v", c.status, got, c.fg)
 		}
 	}
 	// The quiet/terminal states render in the muted palette foreground.
 	for _, dim := range []string{"merged", "session_ended", "idle", "closed", "shell", "orphaned"} {
-		if got := statusStyle(dim).GetForeground(); got != lipgloss.Color(colFaint) {
-			t.Errorf("statusStyle(%q) foreground = %v, want faint %v", dim, got, colFaint)
+		if got := legacyStatusStyle(dim).GetForeground(); got != lipgloss.Color(colFaint) {
+			t.Errorf("legacyStatusStyle(%q) foreground = %v, want faint %v", dim, got, colFaint)
 		}
 	}
-	if bg := statusStyle("dead").GetBackground(); bg != lipgloss.Color(colBad) {
-		t.Errorf("statusStyle(dead) background = %v, want red (%s)", bg, colBad)
+	if bg := legacyStatusStyle("dead").GetBackground(); bg != lipgloss.Color(colBad) {
+		t.Errorf("legacyStatusStyle(dead) background = %v, want red (%s)", bg, colBad)
 	}
-	if fg := statusStyle("review_pending").GetForeground(); fg != (lipgloss.NoColor{}) {
-		t.Errorf("statusStyle(review_pending) foreground = %v, want none", fg)
+	if fg := legacyStatusStyle("review_pending").GetForeground(); fg != (lipgloss.NoColor{}) {
+		t.Errorf("legacyStatusStyle(review_pending) foreground = %v, want none", fg)
 	}
 }
 
@@ -793,13 +896,61 @@ func TestNoAnswerAffordanceWhenNotNeedsInput(t *testing.T) {
 
 	_, cmd := m.Update(keyMsg("a"))
 	if m.sessions.answering {
-		t.Error("a must not arm on a non-needs_input session")
+		t.Error("a must not arm on a mid-turn session")
 	}
 	if cmd != nil {
 		t.Error("a on a working session must not dispatch a command")
 	}
-	if !strings.Contains(m.sessions.flash, "waits for input") {
+	if !strings.Contains(m.sessions.flash, "parked at its prompt") {
 		t.Errorf("flash should explain answer is unavailable, got %q", m.sessions.flash)
+	}
+}
+
+// The affordance follows the DAEMON's gate, not the rolled-up word. A finished
+// turn resting at its prompt (AgentIdle + AtPrompt) is the session a human most
+// wants to reply to, and the old `Status == "needs_input"` check refused it —
+// while a modal, which swallows typed prose, sailed straight through. Both
+// directions are pinned here because a disagreement between the key and the
+// daemon is the one failure a user cannot diagnose.
+func TestAnswerAffordanceFollowsTheAxisGate(t *testing.T) {
+	arm := func(t *testing.T, mutate func(*protocol.SessionInfo)) *rootModel {
+		t.Helper()
+		m := newTestRoot(t)
+		si := protocol.SessionInfo{
+			ID: "s1", Project: "web", Issue: "ENG-1", Status: "working",
+			TmuxName: "t-s1", Source: "native",
+		}
+		mutate(&si)
+		m.sessions.data = &protocol.SessionsData{Sessions: []protocol.SessionInfo{si}}
+		m.sessions.cursor, m.sessions.selID = 0, "s1"
+		m.sessions.paneData = &protocol.PaneData{Text: "prompt\n"}
+		m.sessions.preview, m.sessions.previewFor = "prompt", "s1"
+		m.Update(keyMsg("a"))
+		return m
+	}
+
+	m := arm(t, func(si *protocol.SessionInfo) {
+		si.AgentState, si.AtPrompt = "idle", true
+	})
+	if !m.sessions.answering {
+		t.Errorf("a must arm on an idle session parked at its prompt (flash %q)", m.sessions.flash)
+	}
+	if !strings.Contains(m.viewString(), "attention") {
+		t.Error("an answerable session must get the attention header")
+	}
+
+	m = arm(t, func(si *protocol.SessionInfo) {
+		si.Status, si.AgentState, si.InputReason = "needs_input", "waiting_input", "dialog"
+	})
+	if m.sessions.answering {
+		t.Error("a must NOT arm over a modal dialog — the widget swallows typed prose")
+	}
+
+	m = arm(t, func(si *protocol.SessionInfo) {
+		si.Status, si.AgentState, si.InputReason = "needs_input", "waiting_input", "quota_limited"
+	})
+	if m.sessions.answering {
+		t.Error("a must NOT arm on a usage-limited session — it cannot act on the reply")
 	}
 }
 

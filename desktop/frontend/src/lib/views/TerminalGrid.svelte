@@ -10,6 +10,7 @@
   import SnapshotTile from "$lib/components/SnapshotTile.svelte";
   import SessionsEmpty from "$lib/components/SessionsEmpty.svelte";
   import StatusPill from "$lib/components/StatusPill.svelte";
+  import PrBadge from "$lib/components/PrBadge.svelte";
   import LivePulse from "$lib/components/LivePulse.svelte";
   import Button from "$lib/components/Button.svelte";
 
@@ -150,6 +151,10 @@
           sessionMenu.open(s.id, e);
         }}
         onkeydown={(e) => {
+          // Only the tile's OWN keypresses open it. The header carries real
+          // controls now (the tab strip, the PR link), and a bubbled Enter from
+          // one of those would activate the control AND open the terminal.
+          if (e.target !== e.currentTarget) return;
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();
             openTile(s.id);
@@ -168,7 +173,21 @@
           <span class="ml-auto flex shrink-0 items-center gap-2">
             <span class="truncate text-sm text-faint">{store.displayNameFor(s.project)}</span>
             <LivePulse agentState={s.agentState} />
-            <StatusPill status={s.status} interpreted={s.interpretedState} />
+            <StatusPill
+              agentState={s.agentState}
+              inputReason={s.inputReason}
+              delivery={s.delivery}
+              status={s.status}
+              interpreted={s.interpretedState}
+            />
+            <!-- The tiles had no PR surface at all: the one lens you sit and
+                 watch a build from was the one that never told you a PR existed,
+                 let alone that its CI had gone red. The tile is a click-to-open
+                 <div role="button">, not a <button>, so the badge may render the
+                 real control (PrBadge stops the click from reaching the tile). -->
+            {#if s.prNumber > 0}
+              <PrBadge session={s} delivery={s.delivery} onOpen={() => store.openURL(s.prUrl)} />
+            {/if}
             <span class="text-sm text-faint opacity-0 transition-opacity group-hover:opacity-100" aria-hidden="true"
               >⛶</span
             >

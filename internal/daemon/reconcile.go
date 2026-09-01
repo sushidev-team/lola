@@ -60,7 +60,7 @@ func (d *Daemon) reconcile(ctx context.Context) {
 
 	counted := map[string]bool{} // Linear identifier -> has a counted session
 	for _, s := range d.sessions.Snapshot() {
-		if s.Source == "native" && s.Issue != "" && nativeSessionPresent(s.Status) {
+		if s.Source == "native" && s.Issue != "" && nativeSessionPresent(s) {
 			counted[s.Issue] = true
 		}
 	}
@@ -92,16 +92,23 @@ func (d *Daemon) reconcile(ctx context.Context) {
 	}
 }
 
-// nativeSessionPresent reports whether a native session's status still
-// accounts for its issue in the orphan reconciliation (state.Present). The
-// set is deliberately WIDER than the budget's NativeLiveCounted — a parked
-// session (approved, review_pending, …) holds no agent slot but must still
-// shield its issue from an orphan revert: its pane is alive and its work is
-// delivered. "closed" no longer shields (a change from the pre-axis table):
-// the work was explicitly rejected, so the issue must become revertable
-// instead of being shielded forever by a lingering pane.
-func nativeSessionPresent(status string) bool {
-	return state.Present(status)
+// nativeSessionPresent reports whether a native session still accounts for its
+// issue in the orphan reconciliation (state.Present over the two AXES). The set
+// is deliberately WIDER than the budget's NativeLiveCounted — a parked session
+// (approved, review_pending, …) holds no agent slot but must still shield its
+// issue from an orphan revert: its pane is alive and its work is delivered. A
+// closed PR no longer shields (a change from the pre-axis table): the work was
+// explicitly rejected, so the issue must become revertable instead of being
+// shielded forever by a lingering pane.
+//
+// Taking the SESSION rather than its rolled-up status is what lets the shield
+// see both reasons a session is gone: the rollup ranks merged over a dead pane
+// and any open PR over an exited agent, so a session whose agent had ended kept
+// shielding its issue behind the PR's delivery word. EnsureAxes covers a
+// pre-axis snapshot record; it is a no-op on everything the observer writes.
+func nativeSessionPresent(s session.Session) bool {
+	s.EnsureAxes()
+	return state.Present(s.AgentState, s.Delivery)
 }
 
 // nativeSessionForIssue returns the stored native session working on the

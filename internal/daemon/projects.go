@@ -96,18 +96,25 @@ func (d *Daemon) projectsData(_ context.Context) protocol.ProjectsData {
 			info.LastError = cfgErr
 		}
 		// Session rollups from the snapshot store (never re-derived, never execs).
+		// Counted off the two AXES, not the collapsed status: the rollup ranks a
+		// waiting agent over every PR state, so a session blocked on a human
+		// while its build was red counted once (NeedsYou) and its red CI went
+		// unreported. The two counters are now independent by construction —
+		// NeedsYou is the agent axis, CIRed the delivery axis — and a session
+		// can legitimately appear in both.
 		for _, s := range snap {
 			if s.Source != "native" || s.Project != m.p.Name {
 				continue
 			}
+			s.EnsureAxes() // no-op on observer-written records; covers a legacy snapshot
 			info.Sessions++
-			if state.HoldsSlot(s.Status) {
+			if state.HoldsSlot(s.AgentState, s.Delivery) {
 				info.LiveCounted++
 			}
-			switch s.Status {
-			case "needs_input":
+			if s.AgentState == state.AgentWaitingInput {
 				info.NeedsYou++
-			case "ci_failed":
+			}
+			if s.Delivery == state.DeliveryCIFailed {
 				info.CIRed++
 			}
 			if s.PR != nil && strings.EqualFold(s.PR.State, "OPEN") {

@@ -803,15 +803,23 @@ func handoffStash(s session.Session, p reviewProvider, findings string) string {
 //     classic gate; the send CONSUMES it.
 //
 //   - parked on an IDLE notification — AgentWaitingInput with InputIdleNotify.
-//     Claude Code emits that notification a minute or so after Stop, and
-//     handling it closes AtPrompt ("waiting on a human: never send-keys"). But
-//     the agent is provably sitting at its own prompt — this is the exact state
-//     handleAnswer types a human's reply into — so a review hand-off is just as
-//     safe there. Without this case a hand-off deferred at PR-open (the worker
-//     is virtually always mid-turn then: it just pushed) could only ever land in
-//     the narrow window between the Stop hook and that notification, which the
-//     30s observer cadence almost always misses. Findings then sat in
+//     Claude Code emits that notification a minute or so after Stop, and the
+//     daemon USED TO handle it by parking the axis on waiting_input and closing
+//     AtPrompt ("waiting on a human: never send-keys") — which is what this case
+//     was written for. Without it a hand-off deferred at PR-open (the worker is
+//     virtually always mid-turn then: it just pushed) could only land in the
+//     narrow window between the Stop hook and that notification, which the 30s
+//     observer cadence almost always misses; findings then sat in
 //     PendingHandoffs forever.
+//
+//     A CURRENT daemon no longer mints this pair: server.go classifies the bare
+//     nudge as idleness, parks the axis on AgentIdle and OPENS AtPrompt, so the
+//     same session now qualifies through the first or third case instead. The
+//     clause stays because the pair is still on DISK — every snapshot written by
+//     a pre-split daemon carries it, and those records are loaded verbatim after
+//     a restart (FromLegacy backfills axes, never an InputReason). Deleting it
+//     would strand exactly the sessions this case was added to rescue, on the
+//     one cycle where nobody would think to look.
 //
 //   - RESTING on a pane-derived idle — AgentIdle with the AtPrompt gate closed.
 //     The observer's pane reconcile parks a session there in two ways (a pane
