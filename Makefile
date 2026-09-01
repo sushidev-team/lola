@@ -5,7 +5,7 @@ export GOCACHE := $(CURDIR)/.gocache
 # which sandboxed shells cannot write to.
 export GOFLAGS := -mod=mod -buildvcs=false
 
-.PHONY: build test vet fmt fmtcheck tidy check clean mobile-dev mobile-lan mobile-info mobile-sim mobile-device desktop-dev
+.PHONY: build test vet fmt fmtcheck tidy check clean daemon mobile-dev mobile-lan mobile-info mobile-sim mobile-device desktop-dev
 
 build:
 	go build -o lola .
@@ -63,6 +63,23 @@ mobile-lan:
 
 mobile-info:
 	@contrib/lola-mobile-dev.sh --info
+
+# Refresh the daemon this machine actually runs, from COMMITTED HEAD, and leave
+# it LAN-reachable for a phone. This is the target to reach for when a phone
+# build has a command the running daemon does not: the daemon never hot-reloads
+# its own binary, and `make build` writes ./lola, which nothing ever executes.
+#
+# It differs from mobile-lan in ONE way: the source. mobile-lan installs the
+# WORKING TREE, which is right when the change you are testing is uncommitted
+# and wrong when somebody else's half-finished work is sitting beside it. This
+# builds `git archive HEAD`, so only committed code reaches the operator's
+# daemon. Run mobile-lan when you want your own uncommitted change tested.
+#
+# Runs in the FOREGROUND, like mobile-lan: the daemon logs to this terminal and
+# ^C stops it.
+daemon:
+	@contrib/lola-mobile-dev.sh --lan --head
+
 
 # Build the app and launch it on an iOS Simulator without opening Xcode. The
 # Simulator shares the Mac's loopback, so a daemon bound to localhost is reached

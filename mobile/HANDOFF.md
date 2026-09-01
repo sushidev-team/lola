@@ -21,12 +21,22 @@ out to N subscribers), `internal/protocol` (the wire types) and
 
 ## Environment traps
 
-**Another agent is editing this working tree.** During this session a second
-agent was refactoring `internal/state`, `internal/tui` and
-`desktop/frontend/src/lib`, and added `internal/agentlog` and
-`internal/state/display.go`. Never `git add -A`; stage explicit paths, or you
-will commit somebody's half-finished refactor. Check `git status` before every
-commit and assume anything you did not write belongs to someone else.
+**A second agent was editing this working tree, and one commit paid for it.**
+While milestone 1 was being built, another agent refactored `internal/state`,
+`internal/tui` and `desktop/frontend/src/lib` and added `internal/agentlog`,
+`internal/state/display.go` and the doctor's breaker report. That work has since
+been committed and the tree is one agent's again — but `c96b62f` was made while
+it was not, and it swept in a `internal/daemon/server.go` that wrote a
+`session.Nudged` field the same commit did not carry. HEAD stopped compiling and
+nobody noticed for two commits, because the WORKING tree had the field and every
+local build was green.
+
+Two habits follow from that, and they are cheap:
+
+- Stage explicit paths, never `git add -A`, whenever anyone else may be working
+  here.
+- Check that the COMMIT compiles, not just the tree:
+  `T=$(mktemp -d) && git archive HEAD | tar -x -C "$T" && go build -C "$T" ./...`
 
 **The daemon binary must be built with `-tags lola_insecure`.** Without the tag
 there is no phone listener at all, and the failure is quiet: the desktop's
@@ -35,11 +45,18 @@ listens on 7717. Worse, `make build` alone never reaches the running daemon —
 the TUI's `^r`, the desktop app's restart button and a hand-started `lola run`
 all resolve `lola` from `PATH`, normally `$GOPATH/bin/lola`. Use:
 
-    make mobile-lan      # installs the tagged build and runs it, LAN-reachable
+    make daemon          # installs the tagged build of committed HEAD, LAN-reachable
+    make mobile-lan      # the same, but from the WORKING TREE
     make mobile-info     # host, port, key and SPKI pin of the RUNNING listener
 
+Use `make daemon` unless the change you are testing is uncommitted: it builds
+`git archive HEAD`, so nothing half-finished beside it reaches the operator's
+daemon. `make mobile-lan` installs the working tree, which is what you want
+while iterating on your own change and nothing else.
+
 `make mobile-dev --lan` does not work and never did: `make` claims a leading
-`--` for its own options.
+`--` for its own options. The script's flags do combine, so
+`contrib/lola-mobile-dev.sh --lan --head` is what `make daemon` runs.
 
 If the installed binary is ever replaced by an untagged one, rebuild from
 **committed HEAD** rather than the working tree, so you do not ship another
@@ -115,6 +132,26 @@ name, not liveness, so releasing a just-closed pane reaches tmux and is refused
 — which a client cannot distinguish from a release that did not land. Only
 releases forgive, and only when the pane is genuinely absent, so the stuck-pin
 warning keeps meaning something.
+
+**A refused PIN, by contrast, means the window was never touched — and both
+halves have to hold that up.** `SetWindowSize` sets `window-size manual` and
+then resizes, and the option alone already stops tmux recomputing the window
+from its clients, so a resize that fails after it leaves the window pinned with
+nobody holding the pin. It therefore undoes its own option before returning the
+error. That is what lets `mobile/src/lib/panepin.ts` treat a `DaemonError` — a
+refusal the daemon actually answered — as proof that nothing landed and stop
+believing it holds the pane. Every other failure (a timeout, a dead socket) is
+still assumed to have landed, because that is the direction that costs a
+redundant release rather than somebody's squashed window.
+
+This was found the way these things are: a phone running a build newer than the
+daemon it talked to. Every `cmd=paneResize` came back `unknown cmd`, so nothing
+was ever pinned — and the app raised the stuck-pin banner anyway, in the one
+situation where it could not be true. A daemon that predates a command answers
+plainly; check what the running one actually carries before debugging the
+client:
+
+    printf '{"cmd":"paneResize","args":{"session":"x","pane":"x","cols":80,"rows":24}}\n' | nc -U ~/.lola/lola.sock
 
 ## What is verified, and what is not
 

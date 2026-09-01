@@ -24,6 +24,7 @@
 # Usage:
 #   contrib/lola-mobile-dev.sh          install the tagged build, then run it
 #   contrib/lola-mobile-dev.sh --lan    the same, but reachable from a real phone
+#   contrib/lola-mobile-dev.sh --head   build from committed HEAD, not the working tree
 #   contrib/lola-mobile-dev.sh --info   print the connect details, run nothing
 #   contrib/lola-mobile-dev.sh --key    print the bearer key only
 
@@ -39,6 +40,7 @@ home=${LOLA_HOME:-$HOME/.lola}
 keyfile=$home/remote.key
 logfile=$home/daemon.log
 lan=
+head=
 
 die() { printf 'lola-mobile-dev: %s\n' "$1" >&2; exit 1; }
 
@@ -84,61 +86,72 @@ last_pin() {
 	sed -n 's/.*(SPKI pin \([^)]*\)).*/\1/p' "$logfile" | tail -1
 }
 
-case ${1:-} in
---key)
-	refuse_in_session
-	read_key
-	exit 0
-	;;
---info)
-	refuse_in_session
-	key=$(read_key)
-	pin=$(last_pin)
-	# The addresses the listener actually bound, rather than a guess: with the
-	# LAN opt-in off it is loopback and only a Simulator can reach it, and with
-	# it on the phone needs whichever private address the daemon chose.
-	addrs=$(sed -n 's/.*phone listener up on \(.*\) (SPKI pin.*/\1/p' "$logfile" 2>/dev/null | tail -1)
-	# A WILDCARD bind ("all") reports [::]:7717, which is not something anyone can
-	# type into a phone. Resolve it to an address that is actually reachable —
-	# loopback if it only bound loopback, otherwise this machine's private IPv4.
-	# This is also why "lan" is the better setting: it binds each private
-	# interface by name, so the log already says where to point the phone.
-	host=127.0.0.1
-	case $addrs in
-	*"[::]"* | *0.0.0.0*)
-		for i in en0 en1 en2; do
-			ip=$(ipconfig getifaddr "$i" 2>/dev/null) && [ -n "$ip" ] && host=$ip && break
-		done
+# Flags COMBINE, which is why this is a loop rather than a single-argument
+# case: `--lan --head` is the ordinary way to refresh an operator's daemon.
+while [ $# -gt 0 ]; do
+	case $1 in
+	--key)
+		refuse_in_session
+		read_key
+		exit 0
 		;;
-	"") ;;
+	--info)
+		refuse_in_session
+		key=$(read_key)
+		pin=$(last_pin)
+		# The addresses the listener actually bound, rather than a guess: with the
+		# LAN opt-in off it is loopback and only a Simulator can reach it, and with
+		# it on the phone needs whichever private address the daemon chose.
+		addrs=$(sed -n 's/.*phone listener up on \(.*\) (SPKI pin.*/\1/p' "$logfile" 2>/dev/null | tail -1)
+		# A WILDCARD bind ("all") reports [::]:7717, which is not something anyone can
+		# type into a phone. Resolve it to an address that is actually reachable —
+		# loopback if it only bound loopback, otherwise this machine's private IPv4.
+		# This is also why "lan" is the better setting: it binds each private
+		# interface by name, so the log already says where to point the phone.
+		host=127.0.0.1
+		case $addrs in
+		*"[::]"* | *0.0.0.0*)
+			for i in en0 en1 en2; do
+				ip=$(ipconfig getifaddr "$i" 2>/dev/null) && [ -n "$ip" ] && host=$ip && break
+			done
+			;;
+		"") ;;
+		*)
+			# Take the first address and strip its port, keeping IPv6 brackets intact.
+			first=${addrs%%,*}
+			host=$(printf '%s' "$first" | sed 's/:[0-9]*$//')
+			;;
+		esac
+		printf '\n'
+		if [ -n "$addrs" ]; then
+			printf '  bound %s\n' "$addrs"
+		fi
+		printf '  host  %s\n' "$host"
+		printf '  port  7717             (or [remote].port)\n'
+		if [ -n "$key" ]; then
+			printf '  key   %s        (a bearer credential — see mobile/README.md)\n' "$key"
+		else
+			printf '  key   none yet — the daemon generates one at %s on first start\n' "$keyfile"
+		fi
+		if [ -n "$pin" ]; then
+			printf '  pin   %s\n\n' "$pin"
+		else
+			printf '  pin   unknown — start the daemon once; it prints the pin on the listener line\n\n'
+		fi
+		exit 0
+		;;
+	--lan)
+		lan=1
+		;;
+	--head)
+		head=1
+		;;
 	*)
-		# Take the first address and strip its port, keeping IPv6 brackets intact.
-		first=${addrs%%,*}
-		host=$(printf '%s' "$first" | sed 's/:[0-9]*$//')
+		die "unknown option $1 (--lan, --head, --info, --key)"
 		;;
 	esac
-	printf '\n'
-	if [ -n "$addrs" ]; then
-		printf '  bound %s\n' "$addrs"
-	fi
-	printf '  host  %s\n' "$host"
-	printf '  port  7717             (or [remote].port)\n'
-	if [ -n "$key" ]; then
-		printf '  key   %s        (a bearer credential — see mobile/README.md)\n' "$key"
-	else
-		printf '  key   none yet — the daemon generates one at %s on first start\n' "$keyfile"
-	fi
-	if [ -n "$pin" ]; then
-		printf '  pin   %s\n\n' "$pin"
-	else
-		printf '  pin   unknown — start the daemon once; it prints the pin on the listener line\n\n'
-	fi
-	exit 0
-	;;
---lan)
-	lan=1
-	;;
-esac
+	shift
+done
 
 # --- config -----------------------------------------------------------------
 cfg=$home/config.toml
@@ -159,9 +172,40 @@ if ! sed -n '/^[[:space:]]*\[remote\]/,/^[[:space:]]*\[[^r]/p' "$cfg" | grep -q 
 fi
 
 # --- build ------------------------------------------------------------------
-printf 'installing the lola_insecure build...\n' >&2
-GOCACHE=$root/.gocache GOFLAGS='-mod=mod -buildvcs=false' \
-	go install -tags lola_insecure "$root" || die "go install failed"
+#
+# --head BUILDS THE COMMITTED TREE, not the working one, and that is the whole
+# reason it exists. This repository is routinely edited by more than one agent
+# at a time, so the working tree can hold somebody else's half-finished
+# refactor — and the daemon this script installs is the operator's real one.
+# `git archive HEAD` cannot pick up an uncommitted or untracked file, so what
+# lands in $GOBIN is exactly what is committed.
+#
+# The output is written to a temp file and MOVED into place rather than built
+# straight over the target: a rename is atomic and leaves any still-running
+# daemon holding its old inode, which is the property the rest of this repo's
+# tooling already relies on.
+if [ -n "$head" ]; then
+	printf 'installing the lola_insecure build from committed HEAD...\n' >&2
+	command -v git >/dev/null 2>&1 || die "--head needs git"
+	gobin=$(go env GOBIN)
+	[ -n "$gobin" ] || gobin=$(go env GOPATH)/bin
+	[ -d "$gobin" ] || die "no Go bin directory at $gobin"
+	src=$(mktemp -d) || die "could not make a temp directory"
+	git -C "$root" archive HEAD | tar -x -C "$src" ||
+		{ rm -rf "$src"; die "could not export HEAD"; }
+	GOCACHE=$root/.gocache GOFLAGS='-mod=mod -buildvcs=false' \
+		go build -C "$src" -tags lola_insecure -o "$src/lola" . ||
+		{ rm -rf "$src"; die "committed HEAD does not build.
+The working tree may compile where HEAD does not — a commit that swept in a
+file another agent had not finished will do exactly this. Fix the commit, or
+run this script without --head to install the working tree instead."; }
+	mv "$src/lola" "$gobin/lola" || { rm -rf "$src"; die "could not install into $gobin"; }
+	rm -rf "$src"
+else
+	printf 'installing the lola_insecure build...\n' >&2
+	GOCACHE=$root/.gocache GOFLAGS='-mod=mod -buildvcs=false' \
+		go install -tags lola_insecure "$root" || die "go install failed"
+fi
 
 bin=$(command -v lola) || die "lola is not on PATH after go install — check \$GOPATH/bin is in PATH"
 if ! go tool nm "$bin" 2>/dev/null | grep -q insecureAuthorizer; then
