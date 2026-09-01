@@ -941,7 +941,26 @@ func (c *Client) SetWindowSize(ctx context.Context, name string, cols, rows int)
 	if _, _, err := c.run(ctx, "set-option", "-w", "-t", target, "window-size", "manual"); err != nil {
 		return err
 	}
-	_, _, err := c.run(ctx, "resize-window", "-t", target,
-		"-x", strconv.Itoa(cols), "-y", strconv.Itoa(rows))
-	return err
+	if _, _, err := c.run(ctx, "resize-window", "-t", target,
+		"-x", strconv.Itoa(cols), "-y", strconv.Itoa(rows)); err != nil {
+		// A PIN THAT FAILS HALFWAY UNDOES ITSELF, so that a caller told "the pin
+		// was refused" can believe nothing is pinned.
+		//
+		// The two commands are not atomic: setting `window-size manual` alone
+		// already stops tmux recomputing the window from its attached clients,
+		// so a resize that fails after it leaves the window frozen at whatever
+		// size it happened to have — pinned, with nobody holding the pin. The
+		// phone's release lifecycle (mobile/src/lib/panepin.ts) reads a refusal
+		// the daemon actually ANSWERED as proof that nothing landed and stops
+		// tracking the pane, which is only safe because of these two lines.
+		//
+		// Best-effort, and the failure is deliberately not reported: the caller
+		// is already being handed the error that matters, and the undo is the
+		// same pair of commands the release path uses, for the same reason —
+		// unsetting the option does not resize anything by itself.
+		_, _, _ = c.run(ctx, "set-option", "-w", "-t", target, "-u", "window-size")
+		_, _, _ = c.run(ctx, "resize-window", "-t", target, "-A")
+		return err
+	}
+	return nil
 }

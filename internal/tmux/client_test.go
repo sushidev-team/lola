@@ -1035,3 +1035,90 @@ exit 0`
 		t.Fatal("a kill-session failure on a live session must be an error")
 	}
 }
+
+// scriptedTmux installs a fake tmux whose exit code depends on its argv: it
+// fails whenever every string in failOn appears on the command line, and
+// succeeds otherwise. fakeTmux cannot express this, and the pin path needs it —
+// its whole question is what happens when the SECOND of two commands fails.
+func scriptedTmux(t *testing.T, failOn []string) (bin, argsLog string) {
+	t.Helper()
+	dir := t.TempDir()
+	bin = filepath.Join(dir, "tmux")
+	argsLog = filepath.Join(dir, "args.log")
+	var b strings.Builder
+	b.WriteString("#!/bin/sh\n")
+	b.WriteString("echo \"$@\" >> " + argsLog + "\n")
+	if len(failOn) > 0 {
+		b.WriteString("all=\"$*\"\n")
+		b.WriteString("fail=1\n")
+		for _, needle := range failOn {
+			b.WriteString("case \"$all\" in *" + needle + "*) ;; *) fail=0 ;; esac\n")
+		}
+		b.WriteString("[ \"$fail\" = 1 ] && exit 1\n")
+	}
+	b.WriteString("exit 0\n")
+	if err := os.WriteFile(bin, []byte(b.String()), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return bin, argsLog
+}
+
+// TestSetWindowSizePinsWithTwoCommands pins the option and then resizes. The
+// option alone changes nothing on screen, so both halves have to be sent.
+func TestSetWindowSizePin(t *testing.T) {
+	bin, argsLog := scriptedTmux(t, nil)
+	c := &Client{Bin: bin}
+	if err := c.SetWindowSize(context.Background(), "lola-fe-42", 50, 20); err != nil {
+		t.Fatalf("SetWindowSize: %v", err)
+	}
+	got := loggedArgs(t, argsLog)
+	want := "-L lola set-option -w -t =lola-fe-42 window-size manual\n" +
+		"-L lola resize-window -t =lola-fe-42 -x 50 -y 20"
+	if got != want {
+		t.Fatalf("pin sent:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// TestSetWindowSizeReleaseUnsetsThenRecomputes pins the invariant that unsetting
+// window-size does NOT resize anything: tmux leaves the window at whatever it
+// was last told, so `resize-window -A` is what hands the size back to the
+// clients still attached. Dropping the second command leaves a developer's
+// window squashed after a phone disconnects.
+func TestSetWindowSizeRelease(t *testing.T) {
+	bin, argsLog := scriptedTmux(t, nil)
+	c := &Client{Bin: bin}
+	if err := c.SetWindowSize(context.Background(), "lola-fe-42", 0, 0); err != nil {
+		t.Fatalf("SetWindowSize: %v", err)
+	}
+	got := loggedArgs(t, argsLog)
+	want := "-L lola set-option -w -t =lola-fe-42 -u window-size\n" +
+		"-L lola resize-window -t =lola-fe-42 -A"
+	if got != want {
+		t.Fatalf("release sent:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// TestSetWindowSizeFailedPinUndoesItself is the guarantee the phone's release
+// lifecycle rests on: a pin whose resize fails must leave NOTHING pinned, so a
+// refusal the daemon answered means the window is untouched.
+//
+// Without the undo, `window-size manual` is left set on a window nobody is
+// holding — frozen at its current size, no longer following its attached
+// clients — and the phone, having been told the pin failed, would never release
+// it.
+func TestSetWindowSizeFailedPinUndoesItself(t *testing.T) {
+	// Fail only the pinning resize (the one carrying -x), never the undo's -A.
+	bin, argsLog := scriptedTmux(t, []string{"resize-window", "-x"})
+	c := &Client{Bin: bin}
+	if err := c.SetWindowSize(context.Background(), "lola-fe-42", 50, 20); err == nil {
+		t.Fatal("a failed resize must still be reported as an error")
+	}
+	got := loggedArgs(t, argsLog)
+	want := "-L lola set-option -w -t =lola-fe-42 window-size manual\n" +
+		"-L lola resize-window -t =lola-fe-42 -x 50 -y 20\n" +
+		"-L lola set-option -w -t =lola-fe-42 -u window-size\n" +
+		"-L lola resize-window -t =lola-fe-42 -A"
+	if got != want {
+		t.Fatalf("failed pin sent:\n%s\nwant:\n%s", got, want)
+	}
+}

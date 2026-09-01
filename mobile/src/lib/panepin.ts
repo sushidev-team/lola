@@ -41,7 +41,7 @@
 // NO DOM, NO RUNES, NO TRANSPORT. The resize call arrives as a seam, so the
 // whole lifecycle — including every release path — is exercisable in Node.
 
-import type { PaneResizeData } from "@mobile/wire";
+import { DaemonError, type PaneResizeData } from "@mobile/wire";
 
 // ---------------------------------------------------------------------------
 // Bounds and vocabulary
@@ -199,7 +199,11 @@ export function savePinnedPanes(rs: readonly PinRecord[]): void {
     }
     globalThis.localStorage?.setItem(
       CRUMB_KEY,
-      JSON.stringify(rs.slice(0, PIN_CRUMB_MAX).map((r) => ({ session: r.session, pane: r.pane }))),
+      JSON.stringify(
+        rs
+          .slice(0, PIN_CRUMB_MAX)
+          .map((r) => ({ session: r.session, pane: r.pane })),
+      ),
     );
   } catch {
     /* a breadcrumb that cannot be written costs the recovery, not the app */
@@ -564,12 +568,18 @@ export class PanePin {
         this.#held.some((h) => samePane(h, want)) &&
         this.#sent.cols === want.cols &&
         this.#sent.rows === want.rows;
-      if (!settled) await this.#send(want.session, want.pane, want.cols, want.rows);
+      if (!settled)
+        await this.#send(want.session, want.pane, want.cols, want.rows);
       this.#reportState(want);
     });
   }
 
-  async #send(session: string, pane: string, cols: number, rows: number): Promise<void> {
+  async #send(
+    session: string,
+    pane: string,
+    cols: number,
+    rows: number,
+  ): Promise<void> {
     const releasing = cols <= 0 || rows <= 0;
 
     // THE BREADCRUMB IS WRITTEN BEFORE THE REQUEST, never after. Between the two
@@ -578,13 +588,43 @@ export class PanePin {
     if (!releasing) this.#hold({ session, pane });
 
     try {
-      await this.#resize(session, pane, releasing ? 0 : cols, releasing ? 0 : rows);
-    } catch {
-      // Either way the pane stays HELD. A release that failed leaves a window
-      // squashed as far as anyone here knows, and a pin whose request threw may
-      // still have been applied — the same asymmetry in both directions, and
-      // the reason a stray record is only ever retired by a release that
-      // resolved or by `forgetMissing`.
+      await this.#resize(
+        session,
+        pane,
+        releasing ? 0 : cols,
+        releasing ? 0 : rows,
+      );
+    } catch (err) {
+      // A PIN THE DAEMON ITSELF REFUSED DID NOT LAND, and that is the one
+      // failure this class can retire instead of remembering.
+      //
+      // `DaemonError` means a daemon answered `ok: false` — it received the
+      // request, decided against it, and said so. Every way it can decide
+      // against a PIN leaves the window untouched: an unknown command (a daemon
+      // older than this feature), a session or pane it does not recognise, a
+      // size out of range, or a tmux failure, which undoes its own half-applied
+      // option before answering (see SetWindowSize in internal/tmux/client.go).
+      // So holding the pane afterwards records a pin that does not exist.
+      //
+      // That was not academic. Against a daemon predating `cmd=paneResize`
+      // every pin was refused and every release refused with it, so the pane
+      // stayed held forever and the app told its user a developer's window was
+      // squashed on a Mac where nothing had ever been resized — the stuck-pin
+      // warning firing in the one situation where it could not be true, which
+      // is exactly how a warning stops being read.
+      //
+      // EVERY OTHER FAILURE STILL HOLDS, and the asymmetry is deliberate. A
+      // request that timed out, or died with the socket, may well have been
+      // applied on the way; assuming it was costs a redundant release, while
+      // assuming it was not costs somebody else's window. A failed RELEASE
+      // holds for the same reason, DaemonError included: the daemon already
+      // forgives a release of a pane that is genuinely gone, so a refusal here
+      // is a pin that may still be in place.
+      if (!releasing && err instanceof DaemonError) {
+        this.#drop({ session, pane });
+        this.#dirty = true;
+        return;
+      }
       this.#dirty = true;
       if (!releasing) this.#sent = { cols, rows };
       return;

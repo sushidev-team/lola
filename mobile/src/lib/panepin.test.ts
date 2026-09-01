@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import { DaemonError } from "@mobile/wire";
 import {
   PIN_MAX_DIM,
   PIN_STUCK_MESSAGE,
@@ -24,14 +25,28 @@ import {
 
 /** A recording seam in the shape of DaemonService.PaneResize. */
 function seam() {
-  const calls: { session: string; pane: string; cols: number; rows: number }[] = [];
+  const calls: { session: string; pane: string; cols: number; rows: number }[] =
+    [];
   let fail = false;
+  /**
+   * When set, failures are refusals the DAEMON answered rather than requests
+   * that never arrived. The two mean opposite things to the pin — see the
+   * `#send` catch — so the seam has to be able to stage both.
+   */
+  let refuse = false;
+  let refusal = "";
   /** Per-request refusal, for the case where ONE call fails and the next does not. */
   let failIf: (pane: string, cols: number) => boolean = () => false;
   return {
     calls,
     failFrom(on: boolean) {
       fail = on;
+    },
+    /** Fail the way a daemon that answered `ok: false` fails. */
+    refuseFrom(on: boolean, message = 'unknown cmd "paneResize"') {
+      fail = on;
+      refuse = on;
+      refusal = message;
     },
     /** Fail only the calls this predicate picks. Cleared by passing nothing. */
     failWhen(fn?: (pane: string, cols: number) => boolean) {
@@ -44,11 +59,17 @@ function seam() {
     pins() {
       return calls.filter((c) => c.cols > 0);
     },
-    resize: vi.fn(async (session: string, pane: string, cols: number, rows: number) => {
-      calls.push({ session, pane, cols, rows });
-      if (fail || failIf(pane, cols)) throw new Error("not connected");
-      return { session, pane, pinned: cols > 0, cols, rows };
-    }),
+    resize: vi.fn(
+      async (session: string, pane: string, cols: number, rows: number) => {
+        calls.push({ session, pane, cols, rows });
+        if (fail || failIf(pane, cols)) {
+          throw refuse
+            ? new DaemonError("paneResize", refusal)
+            : new Error("not connected");
+        }
+        return { session, pane, pinned: cols > 0, cols, rows };
+      },
+    ),
   };
 }
 
@@ -103,7 +124,9 @@ describe("the toggle preference", () => {
       expect(loadPinEnabled()).toBe(false);
       expect(loadPinnedPanes()).toEqual([]);
       expect(() => savePinEnabled(true)).not.toThrow();
-      expect(() => savePinnedPanes([{ session: "s", pane: "p" }])).not.toThrow();
+      expect(() =>
+        savePinnedPanes([{ session: "s", pane: "p" }]),
+      ).not.toThrow();
       expect(() => clearPinState()).not.toThrow();
     } finally {
       if (real) Object.defineProperty(globalThis, "localStorage", real);
@@ -142,7 +165,10 @@ describe("the breadcrumb", () => {
   });
 
   it("drops a half-formed record rather than naming an empty pane", () => {
-    globalThis.localStorage?.setItem("lola.mobile.pinnedPane", JSON.stringify({ session: "s" }));
+    globalThis.localStorage?.setItem(
+      "lola.mobile.pinnedPane",
+      JSON.stringify({ session: "s" }),
+    );
     expect(loadPinnedPanes()).toEqual([]);
     globalThis.localStorage?.setItem("lola.mobile.pinnedPane", "not json");
     expect(loadPinnedPanes()).toEqual([]);
@@ -160,7 +186,9 @@ describe("pinning", () => {
   it("sends the phone's own size, not the Mac's grid", async () => {
     const { s, pin } = make();
     await pin.set(target({ cols: 50, rows: 20 }));
-    expect(s.calls).toEqual([{ session: "lola-fe-42", pane: "lola-fe-42", cols: 50, rows: 20 }]);
+    expect(s.calls).toEqual([
+      { session: "lola-fe-42", pane: "lola-fe-42", cols: 50, rows: 20 },
+    ]);
   });
 
   it("records the breadcrumb BEFORE the request, so a kill mid-flight is recoverable", async () => {
@@ -174,7 +202,9 @@ describe("pinning", () => {
       },
     });
     await pin.set(target());
-    expect(crumbAtRequest).toEqual([{ session: "lola-fe-42", pane: "lola-fe-42" }]);
+    expect(crumbAtRequest).toEqual([
+      { session: "lola-fe-42", pane: "lola-fe-42" },
+    ]);
   });
 
   it("does not re-send a pin that is already in force", async () => {
@@ -274,7 +304,10 @@ describe("release paths", () => {
     for (const c of s.calls) {
       if (c.cols > 0) held.add(c.pane);
       else held.delete(c.pane);
-      expect(held.size, `two panes pinned after ${c.pane}:${c.cols}`).toBeLessThanOrEqual(1);
+      expect(
+        held.size,
+        `two panes pinned after ${c.pane}:${c.cols}`,
+      ).toBeLessThanOrEqual(1);
     }
     expect([...held]).toEqual(["lola-fe-42-review"]);
   });
@@ -324,7 +357,9 @@ describe("a release that cannot be sent", () => {
     await pin.set(target());
     s.failFrom(true);
     await pin.release();
-    expect(loadPinnedPanes()).toEqual([{ session: "lola-fe-42", pane: "lola-fe-42" }]);
+    expect(loadPinnedPanes()).toEqual([
+      { session: "lola-fe-42", pane: "lola-fe-42" },
+    ]);
     expect(pin.held()).toHaveLength(1);
   });
 
@@ -353,6 +388,80 @@ describe("a release that cannot be sent", () => {
     await pin.release();
     expect(s.releases()).toHaveLength(1);
     expect(loadPinnedPanes()).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+describe("a pin the daemon refused", () => {
+  // The opposite of the case above, and the distinction is what the daemon
+  // ANSWERED. A request that threw on the way out may have been applied; a
+  // request the daemon received and declined was not. Every refusal on the pin
+  // path leaves the window untouched — an unknown command, an unknown session
+  // or pane, a size out of range, and a tmux failure, which undoes its own
+  // half-applied option before answering (internal/tmux/client.go).
+
+  it("is not believed held, because it never landed", async () => {
+    const { s, pin } = make();
+    s.refuseFrom(true);
+    await pin.set(target());
+    expect(pin.held()).toEqual([]);
+    expect(loadPinnedPanes()).toEqual([]);
+  });
+
+  it("does not warn about a window that was never resized", async () => {
+    // The bug this exists for, end to end: a phone newer than the daemon it is
+    // talking to. `cmd=paneResize` came back "unknown cmd", so nothing on the
+    // Mac was ever pinned — and the app told its user a developer's window was
+    // still squashed, which is the one situation where the warning cannot be
+    // true.
+    const report = vi.fn();
+    const { s, pin } = make({ report });
+    s.refuseFrom(true);
+    await pin.set(target());
+    await pin.release();
+    expect(report).not.toHaveBeenCalledWith(PIN_STUCK_MESSAGE);
+    expect(pin.held()).toEqual([]);
+  });
+
+  it("spends no release on a pane the daemon never pinned", async () => {
+    const { s, pin } = make();
+    s.refuseFrom(true);
+    await pin.set(target());
+    s.refuseFrom(false);
+    await pin.release();
+    expect(s.releases()).toHaveLength(0);
+  });
+
+  it("still pins the next pane, so one refusal does not disable the feature", async () => {
+    const { s, pin } = make();
+    s.refuseFrom(true);
+    await pin.set(target());
+    s.refuseFrom(false);
+    await pin.set(target({ pane: "lola-fe-42-shell-1" }));
+    expect(s.pins().map((c) => c.pane)).toEqual([
+      "lola-fe-42",
+      "lola-fe-42-shell-1",
+    ]);
+    expect(pin.held()).toEqual([
+      { session: "lola-fe-42", pane: "lola-fe-42-shell-1" },
+    ]);
+  });
+
+  it("keeps holding a RELEASE the daemon refused, which may still be in force", async () => {
+    // A refused release is the opposite case: the daemon already forgives a
+    // release of a pane that is genuinely gone, so a refusal here describes a
+    // pin that may well still be holding somebody's window.
+    const report = vi.fn();
+    const { s, pin } = make({ report });
+    await pin.set(target());
+    s.refuseFrom(true);
+    await pin.release();
+    expect(pin.held()).toEqual([{ session: "lola-fe-42", pane: "lola-fe-42" }]);
+    expect(loadPinnedPanes()).toEqual([
+      { session: "lola-fe-42", pane: "lola-fe-42" },
+    ]);
+    expect(report).toHaveBeenLastCalledWith(PIN_STUCK_MESSAGE);
   });
 });
 
@@ -459,7 +568,12 @@ describe("a stray pin: a release that failed while another pane took the pin", (
     s.failFrom(false);
     await pin.release();
     expect(pin.held()).toEqual([]);
-    expect(s.releases().map((c) => c.pane).filter((n) => n === A.pane)).toHaveLength(2);
+    expect(
+      s
+        .releases()
+        .map((c) => c.pane)
+        .filter((n) => n === A.pane),
+    ).toHaveLength(2);
   });
 });
 
@@ -518,7 +632,9 @@ describe("retiring a record for a pane that no longer exists", () => {
     await p2.recover();
     expect(p2.held()).toHaveLength(1);
     await p2.forgetMissing("lola-fe-42", []);
-    expect(p2.held()).toEqual([{ session: "lola-api-7", pane: "lola-api-7-shell-3" }]);
+    expect(p2.held()).toEqual([
+      { session: "lola-api-7", pane: "lola-api-7-shell-3" },
+    ]);
   });
 
   it("ignores an empty session, which names nothing", async () => {
@@ -543,7 +659,9 @@ describe("recover merging rather than replacing", () => {
     expect(s.releases()).toEqual([
       { session: "lola-fe-42", pane: "lola-fe-42-shell-9", cols: 0, rows: 0 },
     ]);
-    expect(loadPinnedPanes()).toEqual([{ session: "lola-fe-42", pane: "lola-fe-42" }]);
+    expect(loadPinnedPanes()).toEqual([
+      { session: "lola-fe-42", pane: "lola-fe-42" },
+    ]);
   });
 });
 
