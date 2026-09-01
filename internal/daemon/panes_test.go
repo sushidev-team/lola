@@ -208,3 +208,74 @@ func TestPaneResizeStillFailsAPin(t *testing.T) {
 		t.Fatal("a pin that could not be applied reported success")
 	}
 }
+
+// A release whose SESSION is gone is success, for the same reason a release of
+// a gone pane is: there is no window left to hand back.
+//
+// This is the shape a breadcrumb takes after a day in a pocket — the session
+// was killed, the daemon restarted — and refusing it is unfalsifiable from the
+// client, which cannot tell "I refuse" from "the release did not land". It
+// therefore keeps believing it holds the pane and warns about a squashed window
+// on every screen it opens, forever.
+func TestPaneResizeForgivesReleasingAGoneSession(t *testing.T) {
+	d := newRemoteTestDaemon(t)
+
+	got, err := d.handlePaneResize(t.Context(), protocol.PaneResizeArgs{
+		Session: "acc-gone", Pane: "acc-gone-shell-1", Cols: 0, Rows: 0,
+	})
+	if err != nil {
+		t.Fatalf("releasing a pane of a gone session must succeed, got %v", err)
+	}
+	if got.Pinned {
+		t.Error("a release reported itself as a pin")
+	}
+}
+
+// The same for a pane name that does not belong to the session it was sent
+// with: if no such tmux session is alive, nothing is being resized, so the
+// release states a fact rather than touching anything.
+func TestPaneResizeForgivesReleasingAnUnrelatedGonePane(t *testing.T) {
+	d := newRemoteTestDaemon(t)
+	d.sessions.Upsert(session.Session{ID: "acc-8", Source: "native", TmuxName: "acc-8"})
+
+	if _, err := d.handlePaneResize(t.Context(), protocol.PaneResizeArgs{
+		Session: "acc-8", Pane: "someone-elses-42-shell-1", Cols: 0, Rows: 0,
+	}); err != nil {
+		t.Fatalf("releasing a gone pane must succeed, got %v", err)
+	}
+}
+
+// A PIN is never forgiven, whatever is missing. Only releases forgive, or the
+// stuck-pin warning stops meaning anything — and a pin that silently reported
+// success would leave a client believing a window it never resized is its own.
+func TestPaneResizePinIsNeverForgiven(t *testing.T) {
+	d := newRemoteTestDaemon(t)
+	d.sessions.Upsert(session.Session{ID: "acc-9", Source: "native", TmuxName: "acc-9"})
+
+	if _, err := d.handlePaneResize(t.Context(), protocol.PaneResizeArgs{
+		Session: "gone", Pane: "gone-shell-1", Cols: 50, Rows: 20,
+	}); err == nil {
+		t.Fatal("a pin for an unknown session reported success")
+	}
+	if _, err := d.handlePaneResize(t.Context(), protocol.PaneResizeArgs{
+		Session: "acc-9", Pane: "someone-elses-42-shell-1", Cols: 50, Rows: 20,
+	}); err == nil {
+		t.Fatal("a pin for another session's pane reported success")
+	}
+}
+
+// An empty pane name is refused in both directions: there is nothing to check
+// identity against, and a release that named nothing would be answered "yes,
+// released" — retiring a breadcrumb that still describes a real pinned window.
+func TestPaneResizeRefusesAnEmptyPaneName(t *testing.T) {
+	d := newRemoteTestDaemon(t)
+	d.sessions.Upsert(session.Session{ID: "acc-10", Source: "native", TmuxName: "acc-10"})
+
+	for _, cols := range []int{0, 50} {
+		if _, err := d.handlePaneResize(t.Context(), protocol.PaneResizeArgs{
+			Session: "acc-10", Pane: "", Cols: cols, Rows: 20,
+		}); err == nil {
+			t.Fatalf("an empty pane name was accepted (cols=%d)", cols)
+		}
+	}
+}

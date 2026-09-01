@@ -287,22 +287,57 @@ func (d *Daemon) handlePaneClose(ctx context.Context, a protocol.PaneCloseArgs) 
 //
 // The agent pane is ALLOWED here, unlike close: resizing it is the entire point.
 func (d *Daemon) handlePaneResize(ctx context.Context, a protocol.PaneResizeArgs) (protocol.PaneResizeData, error) {
-	s, ok := d.sessionByID(a.Session)
-	if !ok {
-		return protocol.PaneResizeData{}, fmt.Errorf("unknown session %q", a.Session)
-	}
-	parent := paneTarget(s)
-	if a.Pane == "" {
-		return protocol.PaneResizeData{}, fmt.Errorf("paneResize: no pane named")
-	}
-	if a.Pane != parent && !d.paneBelongsTo(parent, a.Pane) {
-		return protocol.PaneResizeData{}, fmt.Errorf("pane %q does not belong to session %q", a.Pane, a.Session)
-	}
-
 	// A release is cols <= 0, and it must stay reachable even for nonsense
 	// dimensions: a client that pinned and then sent garbage should be able to
 	// undo it, so the bound REJECTS rather than clamping only on the pin path.
+	// Decided FIRST because the identity checks below forgive a release.
 	release := a.Cols <= 0 || a.Rows <= 0
+
+	if a.Pane == "" {
+		return protocol.PaneResizeData{}, fmt.Errorf("paneResize: no pane named")
+	}
+
+	// A RELEASE OF SOMETHING THAT NO LONGER EXISTS IS SUCCESS, and that has to
+	// cover the SESSION being gone, not just the pane.
+	//
+	// The client releases from a breadcrumb it persisted before the pin went
+	// out, so it routinely names a pane after everything around it has moved
+	// on: the session was killed, the daemon restarted, the phone was in a
+	// pocket for a day. A hard refusal there is unfalsifiable from the client
+	// side — it cannot tell "I refuse" from "the release did not land" — so it
+	// keeps believing it holds the pane, keeps the breadcrumb, and warns about
+	// a squashed window on every screen it opens, forever. That is not
+	// theoretical: it is what a phone did after talking to a daemon too old to
+	// know cmd=paneResize.
+	//
+	// Liveness is what makes forgiving safe. A pane name that is not a live
+	// tmux session holds no size, so answering "released" states a fact. A pane
+	// that IS live still gets the full identity gate — an unknown session or a
+	// name outside this session's own tabs must never resize somebody else's
+	// window, which is the whole point of the check.
+	forgive := func() (protocol.PaneResizeData, bool) {
+		if !release || d.paneIsLive(ctx, a.Pane) {
+			return protocol.PaneResizeData{}, false
+		}
+		d.logf("", "remote: %s is gone; its pinned size went with it", a.Pane)
+		return protocol.PaneResizeData{Session: a.Session, Pane: a.Pane, Pinned: false}, true
+	}
+
+	s, ok := d.sessionByID(a.Session)
+	if !ok {
+		if data, forgiven := forgive(); forgiven {
+			return data, nil
+		}
+		return protocol.PaneResizeData{}, fmt.Errorf("unknown session %q", a.Session)
+	}
+	parent := paneTarget(s)
+	if a.Pane != parent && !d.paneBelongsTo(parent, a.Pane) {
+		if data, forgiven := forgive(); forgiven {
+			return data, nil
+		}
+		return protocol.PaneResizeData{}, fmt.Errorf("pane %q does not belong to session %q", a.Pane, a.Session)
+	}
+
 	if !release && (a.Cols > maxPaneDim || a.Rows > maxPaneDim) {
 		return protocol.PaneResizeData{}, fmt.Errorf(
 			"paneResize: %dx%d is out of range (max %d)", a.Cols, a.Rows, maxPaneDim)
@@ -326,9 +361,8 @@ func (d *Daemon) handlePaneResize(ctx context.Context, a protocol.PaneResizeArgs
 		// still fails, so the warning keeps meaning what it says. Liveness is
 		// checked AFTER the attempt rather than before, so a pane that dies
 		// between the two is forgiven instead of racing.
-		if release && !d.paneIsLive(ctx, a.Pane) {
-			d.logf("", "remote: %s is gone; its pinned size went with it", a.Pane)
-			return protocol.PaneResizeData{Session: a.Session, Pane: a.Pane, Pinned: false}, nil
+		if data, forgiven := forgive(); forgiven {
+			return data, nil
 		}
 		return protocol.PaneResizeData{}, fmt.Errorf("resize %s: %w", a.Pane, err)
 	}
