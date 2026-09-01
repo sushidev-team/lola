@@ -18,6 +18,8 @@
   import {
     PIN_STUCK_MESSAGE,
     PanePin,
+    forgetOwnShell,
+    isOwnShell,
     loadPinEnabled,
     savePinEnabled,
   } from "@mobile/lib/panepin";
@@ -146,6 +148,28 @@
   let pinEnabled = $state(loadPinEnabled());
 
   /**
+   * The pin is ALSO on for a shell this phone started, whatever the toggle says.
+   *
+   * The toggle defaults to off because pinning reshapes somebody else's screen:
+   * an agent pane belongs to the work and a developer may be watching it on the
+   * Mac. A shell the phone created has none of that history — nothing on the
+   * Mac is looking at it, and its tmux window is born at whatever size tmux
+   * picks, so it opens as a prompt on row 0 with a void beneath. Sizing that
+   * one to the phone takes nothing from anybody, and it is the difference
+   * between a shell tab that behaves like a terminal and one that does not.
+   *
+   * Read through `paneEpoch` so it re-evaluates when the pane changes and when
+   * the switch is used; localStorage is not reactive on its own.
+   */
+  let paneEpoch = $state(0);
+  const autoPin = $derived.by(() => {
+    void paneEpoch;
+    return isOwnShell(nav.pane);
+  });
+  /** What the pin actually does, and what the switch shows. */
+  const pinActive = $derived(pinEnabled || autoPin);
+
+  /**
    * What this phone can SHOW, which is the only size worth pinning to.
    *
    * NOT `geom.cols`/`geom.rows`, which are the grid the MAC is sending: pinning
@@ -174,6 +198,11 @@
   function setPin(on: boolean) {
     pinEnabled = on;
     savePinEnabled(on);
+    // Turning it OFF has to reach the auto-pin too, or the switch would be a
+    // lie: this pane would keep pinning itself and the control would look like
+    // it had flipped back on by itself.
+    if (!on) forgetOwnShell(nav.pane);
+    paneEpoch++;
   }
 
   // THE ONLY THING THAT EVER ASKS FOR A PIN. Every condition that makes one
@@ -183,7 +212,7 @@
   // — each of them yields `null`, which is the release.
   $effect(() => {
     const want =
-      pinEnabled &&
+      pinActive &&
       connection.ready &&
       !exited &&
       nav.paneSession !== "" &&
@@ -243,7 +272,7 @@
     // moment a connection arrives, so nothing is skipped, only deferred.
     if (connection.ready) {
       void pin.recover(
-        pinEnabled && nav.paneSession !== "" && nav.pane !== ""
+        pinActive && nav.paneSession !== "" && nav.pane !== ""
           ? { session: nav.paneSession, pane: nav.pane }
           : null,
       );
@@ -407,7 +436,7 @@
         bind:open={() => nav.sheet === "view", (v) => (v ? nav.openSheet("view") : nav.closeSheet())}
         onfont={setFont}
         onfit={() => termRef?.toggleFit()}
-        pinned={pinEnabled}
+        pinned={pinActive}
         onpin={setPin}
       />
     </div>

@@ -138,6 +138,88 @@ export function savePinEnabled(on: boolean): void {
 }
 
 /**
+ * Panes this device STARTED, which are pinned without anyone asking.
+ *
+ * WHY A SHELL IS DIFFERENT FROM AN AGENT PANE. The pin reshapes somebody else's
+ * screen, which is why it is a deliberate, per-device toggle that defaults to
+ * off: an agent pane belongs to the work, a developer may be watching it on the
+ * Mac, and narrowing it to phone width without being asked is rude at best. A
+ * shell the PHONE created has none of that history. It exists because somebody
+ * tapped `+` on a phone, nothing on the Mac is looking at it, and its tmux
+ * window is born at whatever size tmux picks — commonly 157x37 — so it opens
+ * showing a prompt on row 0 with a void beneath it and no obvious way to make
+ * it behave like a terminal. Sizing that one to the phone takes nothing from
+ * anybody.
+ *
+ * Stored per DEVICE and by pane NAME, because that is the only identity a pane
+ * has (see the hand-off: a tmux session name is a pane's identity, and a rename
+ * is a local label). Bounded, oldest dropped, and validated on read like every
+ * other key here — a hand-edited value must not be able to make this phone pin
+ * panes it never created.
+ */
+const OWN_SHELLS_KEY = "lola.mobile.ownShells";
+
+/** How many self-started shells are remembered. Oldest is dropped. */
+export const OWN_SHELLS_MAX = 64;
+
+/** Every pane this device started, oldest first. */
+export function loadOwnShells(): string[] {
+  try {
+    const raw = globalThis.localStorage?.getItem(OWN_SHELLS_KEY);
+    if (!raw) return [];
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    const out: string[] = [];
+    for (const item of parsed) {
+      if (typeof item !== "string" || item === "") continue;
+      if (out.includes(item)) continue;
+      out.push(item);
+      if (out.length >= OWN_SHELLS_MAX) break;
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+/** Remember that this device started `pane`. Idempotent. */
+export function rememberOwnShell(pane: string): void {
+  if (pane === "") return;
+  const all = loadOwnShells();
+  if (all.includes(pane)) return;
+  const next = [...all, pane].slice(-OWN_SHELLS_MAX);
+  try {
+    globalThis.localStorage?.setItem(OWN_SHELLS_KEY, JSON.stringify(next));
+  } catch {
+    /* a convenience is not worth failing a screen over */
+  }
+}
+
+/**
+ * Forget one — the pane was closed, or the user turned its pin off.
+ *
+ * Turning the pin off has to reach this list or the switch would be a lie: the
+ * next visit would pin the pane again and the toggle would appear to have
+ * flipped itself back on.
+ */
+export function forgetOwnShell(pane: string): void {
+  const all = loadOwnShells();
+  const kept = all.filter((p) => p !== pane);
+  if (kept.length === all.length) return;
+  try {
+    if (kept.length === 0) globalThis.localStorage?.removeItem(OWN_SHELLS_KEY);
+    else globalThis.localStorage?.setItem(OWN_SHELLS_KEY, JSON.stringify(kept));
+  } catch {
+    /* as above */
+  }
+}
+
+/** Whether this device started that pane, and should size it to itself. */
+export function isOwnShell(pane: string): boolean {
+  return pane !== "" && loadOwnShells().includes(pane);
+}
+
+/**
  * How many outstanding pins the breadcrumb will hold.
  *
  * There is no legitimate way to reach it: a stray record is only ever created
@@ -240,6 +322,7 @@ export function dropPinnedPane(r: PinRecord): void {
 export function clearPinState(): void {
   savePinEnabled(false);
   savePinnedPanes([]);
+  for (const pane of loadOwnShells()) forgetOwnShell(pane);
 }
 
 // ---------------------------------------------------------------------------

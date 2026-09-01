@@ -8,6 +8,7 @@
   import { overflowFade, type OverflowEdges } from "@mobile/lib/edgefade";
   import { LONG_PRESS_MS, beginKey, cancelKey, moveKey, type KeyGesture } from "@mobile/lib/keygesture";
   import { loadPaneLabels, prunePaneLabels, savePaneLabel } from "@mobile/lib/prefs";
+  import { forgetOwnShell, rememberOwnShell } from "@mobile/lib/panepin";
 
   // The tab strip over one session's panes: agent, shells, dev tabs, review.
   //
@@ -527,6 +528,11 @@
     creating = true;
     try {
       const d = await DaemonService.ShellCreate(session);
+      // A shell THIS phone started is sized to this phone from the moment it
+      // opens (see rememberOwnShell). Recorded here rather than on the terminal
+      // screen because this is the only place that knows the pane was created
+      // rather than merely visited.
+      rememberOwnShell(d.pane);
       onnotice?.("");
       await load(session);
       onselect(d.pane);
@@ -560,6 +566,9 @@
     closing = p.name;
     try {
       await DaemonService.PaneClose(session, p.name);
+      // The pane is gone, so nothing should keep sizing it — and a later shell
+      // that happens to take the same index is not this one.
+      forgetOwnShell(p.name);
       onnotice?.("");
       menuPane = "";
       await load(session);

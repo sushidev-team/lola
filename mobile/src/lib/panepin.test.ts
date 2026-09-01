@@ -1,12 +1,17 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { DaemonError } from "@mobile/wire";
 import {
+  OWN_SHELLS_MAX,
   PIN_MAX_DIM,
   PIN_STUCK_MESSAGE,
   PanePin,
   clearPinState,
+  forgetOwnShell,
+  isOwnShell,
+  loadOwnShells,
   loadPinEnabled,
   loadPinnedPanes,
+  rememberOwnShell,
   savePinEnabled,
   savePinnedPanes,
   type PinTarget,
@@ -736,5 +741,68 @@ describe("the settle window", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+describe("shells this device started", () => {
+  // The pin defaults to off because it reshapes somebody else's screen. A shell
+  // the PHONE created is the exception: nothing on the Mac is looking at it, and
+  // its tmux window is born at a size that puts the prompt on row 0 with a void
+  // beneath it.
+
+  it("is not an own shell until one is recorded", () => {
+    expect(isOwnShell("lola-fe-42-shell-1")).toBe(false);
+    expect(loadOwnShells()).toEqual([]);
+  });
+
+  it("remembers one, idempotently", () => {
+    rememberOwnShell("lola-fe-42-shell-1");
+    rememberOwnShell("lola-fe-42-shell-1");
+    expect(loadOwnShells()).toEqual(["lola-fe-42-shell-1"]);
+    expect(isOwnShell("lola-fe-42-shell-1")).toBe(true);
+  });
+
+  it("forgets one without touching the others", () => {
+    rememberOwnShell("a-shell-1");
+    rememberOwnShell("b-shell-2");
+    forgetOwnShell("a-shell-1");
+    expect(loadOwnShells()).toEqual(["b-shell-2"]);
+  });
+
+  it("never claims a pane it did not record", () => {
+    rememberOwnShell("lola-fe-42-shell-1");
+    // The prefix trap the daemon's own matching is anchored against.
+    expect(isOwnShell("lola-fe-420-shell-1")).toBe(false);
+    expect(isOwnShell("")).toBe(false);
+  });
+
+  it("is bounded, dropping the oldest", () => {
+    for (let i = 0; i < OWN_SHELLS_MAX + 5; i++)
+      rememberOwnShell(`s-shell-${i}`);
+    const all = loadOwnShells();
+    expect(all).toHaveLength(OWN_SHELLS_MAX);
+    expect(all).not.toContain("s-shell-0");
+    expect(all).toContain(`s-shell-${OWN_SHELLS_MAX + 4}`);
+  });
+
+  it("reads a hand-edited value as nothing, so it cannot be made to pin", () => {
+    globalThis.localStorage?.setItem(
+      "lola.mobile.ownShells",
+      '{"not":"an array"}',
+    );
+    expect(loadOwnShells()).toEqual([]);
+    globalThis.localStorage?.setItem(
+      "lola.mobile.ownShells",
+      '["ok-shell-1", 7, "", null]',
+    );
+    expect(loadOwnShells()).toEqual(["ok-shell-1"]);
+  });
+
+  it("is cleared with the rest of the pin state", () => {
+    rememberOwnShell("lola-fe-42-shell-1");
+    clearPinState();
+    expect(loadOwnShells()).toEqual([]);
   });
 });
