@@ -292,7 +292,7 @@ export interface PrRow {
     "url": string;
 
     /**
-     * scm.DeriveStatus vocabulary
+     * state.DeliveryState vocabulary (daemon.openPRStatus)
      */
     "status": string;
 
@@ -557,7 +557,7 @@ export interface SessionInfo {
     "lastActivityAt"?: string;
 
     /**
-     * hook|pane|tmux_activity
+     * hook|pane|tmux_activity|transcript
      */
     "activitySource"?: string;
 
