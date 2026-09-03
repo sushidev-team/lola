@@ -91,12 +91,12 @@ func TestArgs(t *testing.T) {
 	got, err := Args(Service{
 		Instance: "lola on marvin",
 		Port:     7717,
-		TXT:      map[string]string{TXTVersion: Version, TXTPin: "abc="},
+		TXT:      map[string]string{TXTVersion: Version},
 	})
 	if err != nil {
 		t.Fatalf("Args: %v", err)
 	}
-	want := []string{"-R", "lola on marvin", "_lola._tcp", "local", "7717", "pin=abc=", "v=1"}
+	want := []string{"-R", "lola on marvin", "_lola._tcp", "local", "7717", "v=1"}
 	if strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Fatalf("argv:\n got %v\nwant %v", got, want)
 	}
@@ -120,7 +120,7 @@ func TestArgsSanitizes(t *testing.T) {
 	got, err := Args(Service{
 		Instance: "lola\x07 on\nmarvin ",
 		Port:     7717,
-		TXT:      map[string]string{TXTPin: "ab\x00c"},
+		TXT:      map[string]string{"k": "ab\x00c"},
 	})
 	if err != nil {
 		t.Fatalf("Args: %v", err)
@@ -128,7 +128,7 @@ func TestArgsSanitizes(t *testing.T) {
 	if got[1] != "lola onmarvin" {
 		t.Fatalf("instance = %q", got[1])
 	}
-	if got[5] != "pin=abc" {
+	if got[5] != "k=abc" {
 		t.Fatalf("txt = %q", got[5])
 	}
 }

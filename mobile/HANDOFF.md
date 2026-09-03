@@ -67,10 +67,14 @@ agent's in-progress work into the operator's daemon:
       go build -tags lola_insecure -o "$T/lola" .
 
 **The phone can now FIND the daemon, and that is separate from trusting it.**
-The daemon advertises `_lola._tcp` on the local network with `dns-sd`
-(`internal/mdns`, started and withdrawn with the listener), publishing its port
-and its SPKI pin in a TXT record — never the bearer key, which everything on the
-network could read. The phone browses with `NWBrowser`
+With `[remote].advertise = true` — OFF by default, because `_lola._tcp` tells
+every peer on the network that this machine runs coding agents and accepts
+remote control — the daemon advertises with `dns-sd` (`internal/mdns`, started
+and withdrawn with the listener). It publishes the port and a protocol version
+and NOTHING else: no pin, no hostname, no session names, and an instance name
+that is the constant `lola`. Those are stable cross-network correlators for one
+laptop, and `mobile/PLAN.md`'s M6 section argues it in full — the first
+implementation broke all three halves of that rule and had to be corrected. The phone browses with `NWBrowser`
 (`LolaDiscovery.swift`, `src/lib/discovery.ts`) only after every address it
 already knows has failed, because a remembered address that still works costs
 one connect while a browse costs a fixed couple of seconds.

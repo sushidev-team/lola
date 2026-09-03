@@ -17,12 +17,25 @@
 // what most of this file is about: `dns-sd -R` holds the registration for as
 // long as it runs and withdraws it when it exits.
 //
-// WHAT IS ADVERTISED, AND WHAT IS NOT. The service type, the port, and a TXT
-// record carrying the SPKI pin and a protocol version. The pin is PUBLIC — the
-// daemon logs it at startup and it is in the connect code — and publishing it
-// is what lets a phone reject an impostor before opening a socket. The BEARER
-// KEY is never advertised, never in argv, and never in a TXT record; anything
-// on the network can read both.
+// WHAT IS ADVERTISED, AND IT IS AS LITTLE AS POSSIBLE. The service type, the
+// port, and a TXT record carrying the protocol version and NOTHING ELSE.
+//
+// That restraint is a decision mobile/PLAN.md argues, not a conservative
+// reflex. `_lola._tcp` on a shared network already announces "this machine runs
+// autonomous coding agents and accepts remote control" to every peer on it; a
+// TXT record adds whatever it carries to that announcement, permanently and to
+// everyone. So no SPKI prefix, no device ids, no hostname, no session or
+// project names — an SPKI pin or a hostname is a STABLE CROSS-NETWORK
+// CORRELATOR for one operator's laptop, which is precisely the thing a phone
+// roaming between home, office and a coffee shop should not be broadcasting.
+// The instance name is likewise not derived from anything identifying.
+//
+// The BEARER KEY is never advertised, never in argv, and never in a TXT record.
+//
+// The cost of saying so little is that a browsing phone cannot pre-filter by
+// pin and must open a socket to learn whether a service is its daemon. That is
+// the right trade: the pinned TLS handshake was always the thing that decided,
+// and one wasted handshake is cheaper than a permanent broadcast identifier.
 //
 // A FAILURE HERE IS NEVER FATAL. No dns-sd, a refused registration, a child
 // that dies — each costs discovery and nothing else, because the stored
@@ -55,15 +68,24 @@ const Domain = "local"
 // TXT keys. Short, because a TXT record is size-limited and these travel in
 // every announcement.
 const (
-	// TXTPin carries the listener's SPKI pin, so a browsing phone can drop an
-	// impostor before it opens a socket. Public by design.
-	TXTPin = "pin"
 	// TXTVersion is the discovery contract's version, not the wire protocol's.
+	// It is the ONLY key this ever publishes — see the header for why.
 	TXTVersion = "v"
 )
 
 // Version is the current value of the version TXT key.
 const Version = "1"
+
+// DefaultInstance is the advertised instance name.
+//
+// Deliberately not derived from the hostname, the user, or anything else about
+// this machine: an instance name is broadcast on every network the laptop
+// joins, and a name that identifies the machine is the correlator this package
+// refuses to publish in a TXT record. Two lola daemons on one network is not a
+// conflict to solve here — mDNS appends " (2)" itself — and a phone tells them
+// apart by which one its pin authenticates, which is the only answer that was
+// ever trustworthy.
+const DefaultInstance = "lola"
 
 // restartDelay is how long the supervisor waits before restarting a child that
 // exited. Long enough that a permanently failing dns-sd cannot spin, short

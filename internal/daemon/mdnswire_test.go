@@ -7,6 +7,7 @@ package daemon
 
 import (
 	"context"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -19,13 +20,14 @@ import (
 	"github.com/sushidev-team/lola/internal/remote"
 )
 
-// The listener is advertised on the local network, and the advertisement says
-// exactly two things a phone needs and nothing it must not learn.
+// The advertisement carries the port and a version, and NOTHING that identifies
+// this machine.
 //
-// A phone's credentials — the bearer key and the SPKI pin — name the DAEMON,
-// not an address, so the only thing that goes stale when a laptop changes
-// network is where to dial. Discovery closes that gap. The bearer key must
-// never be in it: a TXT record is readable by everything on the network.
+// mobile/PLAN.md argues the restraint: `_lola._tcp` already announces "this
+// machine runs autonomous coding agents and accepts remote control" to every
+// peer on the network, and an SPKI pin or a hostname in a TXT record is a
+// stable cross-network correlator for one operator's laptop. The bearer key is
+// a separate and absolute rule — a TXT record is readable by everything.
 func TestStartRemoteAdvertisesTheListener(t *testing.T) {
 	t.Setenv(remote.InsecureKeyEnv, pairBeginTestKey)
 
@@ -39,7 +41,7 @@ func TestStartRemoteAdvertisesTheListener(t *testing.T) {
 		return stubMDNS{ctx: ctx}, nil
 	}
 	port := freePort(t)
-	d.cfg.Remote = config.RemoteConfig{Enabled: true, Bind: "localhost", Port: port}
+	d.cfg.Remote = config.RemoteConfig{Enabled: true, Bind: "localhost", Port: port, Advertise: true}
 	fake := panebus.NewFake()
 	d.paneRegistry = func() *panebus.Registry { return fake.Registry() }
 
@@ -73,12 +75,51 @@ func TestStartRemoteAdvertisesTheListener(t *testing.T) {
 	if !strings.Contains(joined, strconv.Itoa(port)) {
 		t.Errorf("the bound port is not advertised: %q", joined)
 	}
-	if !strings.Contains(joined, mdns.TXTPin+"="+d.remote.SPKIPin()) {
-		t.Errorf("the SPKI pin is not advertised: %q", joined)
+	if !strings.Contains(joined, mdns.TXTVersion+"="+mdns.Version) {
+		t.Errorf("the protocol version is not advertised: %q", joined)
 	}
-	// THE ONE THING THAT MUST NEVER BE THERE.
+
+	// THE THINGS THAT MUST NEVER BE THERE.
 	if strings.Contains(joined, pairBeginTestKey) {
 		t.Fatal("the bearer key reached a network advertisement")
+	}
+	if strings.Contains(joined, d.remote.SPKIPin()) {
+		t.Error("the SPKI pin reached a network advertisement: a cross-network correlator")
+	}
+	if host, err := os.Hostname(); err == nil && host != "" {
+		base := strings.TrimSuffix(host, ".local")
+		if base != "" && strings.Contains(joined, base) {
+			t.Errorf("the hostname reached a network advertisement: %q", joined)
+		}
+	}
+}
+
+// Advertising is OPT-IN. `_lola._tcp` on a shared network is a disclosure about
+// what this machine is, so a daemon that was not asked to advertise must be
+// silent — and a listener still comes up either way.
+func TestStartRemoteDoesNotAdvertiseUnlessAsked(t *testing.T) {
+	t.Setenv(remote.InsecureKeyEnv, pairBeginTestKey)
+
+	started := make(chan struct{}, 4)
+	d := newRemoteTestDaemon(t)
+	d.mdnsStart = func(ctx context.Context, _ string, _ []string) (mdns.Process, error) {
+		started <- struct{}{}
+		return stubMDNS{ctx: ctx}, nil
+	}
+	d.cfg.Remote = config.RemoteConfig{Enabled: true, Bind: "localhost", Port: freePort(t)}
+	fake := panebus.NewFake()
+	d.paneRegistry = func() *panebus.Registry { return fake.Registry() }
+
+	d.startRemote(context.Background())
+	t.Cleanup(d.stopRemote)
+	if d.remote == nil {
+		t.Fatal("the listener must come up whether or not it is advertised")
+	}
+
+	select {
+	case <-started:
+		t.Fatal("a daemon that was not asked to advertise did so anyway")
+	case <-time.After(200 * time.Millisecond):
 	}
 }
 
@@ -96,7 +137,9 @@ func TestStopRemoteWithdrawsTheAdvertisement(t *testing.T) {
 		}()
 		return stubMDNS{ctx: ctx}, nil
 	}
-	d.cfg.Remote = config.RemoteConfig{Enabled: true, Bind: "localhost", Port: freePort(t)}
+	d.cfg.Remote = config.RemoteConfig{
+		Enabled: true, Bind: "localhost", Port: freePort(t), Advertise: true,
+	}
 	fake := panebus.NewFake()
 	d.paneRegistry = func() *panebus.Registry { return fake.Registry() }
 

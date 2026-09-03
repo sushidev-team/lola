@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"regexp"
 	"strings"
 	"sync"
@@ -208,7 +207,8 @@ func (d *Daemon) startRemote(ctx context.Context) {
 	d.startAdvertiserLocked(srv)
 }
 
-// startAdvertiserLocked publishes the listener on the local network.
+// startAdvertiserLocked publishes the listener on the local network, when the
+// operator has asked for it.
 //
 // WHAT IT BUYS. The bearer key and the SPKI pin identify the DAEMON, not an
 // address, so a paired phone already has everything it needs on any network —
@@ -217,41 +217,44 @@ func (d *Daemon) startRemote(ctx context.Context) {
 // office. A phone that can BROWSE finds the daemon wherever it is, with the
 // same credentials and no re-pairing.
 //
-// WHAT IT PUBLISHES. The port, and the SPKI pin in a TXT record. The pin is
-// public — it is in the connect code and in the log line above — and publishing
-// it is what lets a phone reject an impostor advertising the same service
-// before it opens a socket. The BEARER KEY is never advertised: everything on
-// the network can read a TXT record.
+// OFF UNLESS ASKED FOR ([remote].advertise), because it is a DISCLOSURE.
+// `_lola._tcp` announces "this machine runs autonomous coding agents and
+// accepts remote control" to every peer on the network, which is a thing to
+// opt into on purpose rather than a convenience to switch on for everyone.
+//
+// WHAT IT PUBLISHES: the port, and a protocol version. Nothing else — no pin,
+// no hostname, no session names. The instance name is not derived from anything
+// identifying either. See internal/mdns's header: an SPKI pin or a hostname in
+// a TXT record is a stable cross-network correlator for one laptop, which is
+// exactly what a phone roaming between networks must not broadcast.
 //
 // DISCOVERY IS A HINT, NOT AN AUTHORITY. Anyone on the network can advertise
-// "_lola._tcp"; the pin is what decides trust, exactly as it does for a stored
-// address. So this failing costs nothing that matters, and the advertiser is
-// built to fail quietly (no dns-sd, a refused registration) rather than take a
-// working listener down with it.
+// this service type; the pinned TLS handshake is what decides trust, exactly as
+// it does for a stored address. So this failing costs nothing that matters, and
+// the advertiser is built to fail quietly (no dns-sd, a refused registration)
+// rather than take a working listener down with it.
 //
 // Caller holds remoteMu; the advertiser's lifetime is the listener's, and
 // stopRemote takes it down with the same lock held.
 func (d *Daemon) startAdvertiserLocked(srv *remote.Server) {
+	d.mu.Lock()
+	on := d.cfg.Remote.Advertise
+	d.mu.Unlock()
+	if !on {
+		return
+	}
 	if d.advertiser == nil {
 		d.advertiser = mdns.New("", d.mdnsStart, func(f string, v ...any) { d.logf("", f, v...) })
 	}
-	host, err := os.Hostname()
-	if err != nil || strings.TrimSpace(host) == "" {
-		host = "this Mac"
-	}
-	// A hostname is commonly "marvin.local"; the suffix is noise in a picker.
-	host = strings.TrimSuffix(host, ".local")
-
 	if err := d.advertiser.Start(mdns.Service{
-		Instance: "lola on " + host,
+		Instance: mdns.DefaultInstance,
 		Port:     srv.Port(),
-		TXT: map[string]string{
-			mdns.TXTPin:     srv.SPKIPin(),
-			mdns.TXTVersion: mdns.Version,
-		},
+		TXT:      map[string]string{mdns.TXTVersion: mdns.Version},
 	}); err != nil {
 		d.logf("", "remote: not advertising on the local network: %v", err)
+		return
 	}
+	d.logf("", "remote: advertising %s on the local network", mdns.ServiceType)
 }
 
 // stopAdvertiserLocked withdraws the registration. Caller holds remoteMu.

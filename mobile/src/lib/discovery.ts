@@ -10,10 +10,15 @@
 // A RESULT IS A CANDIDATE, NEVER AN AUTHORITY. Anything on a network can
 // advertise `_lola._tcp`, so nothing here is trusted for having been found: the
 // pinned TLS handshake is what decides, exactly as it does for a typed address.
-// The advertised pin is used ONLY to drop an obvious mismatch before a socket
-// is opened — a cheap courtesy, not the check. A service advertising no pin at
-// all is kept for the same reason: an older daemon is not an impostor, and the
-// handshake will judge it either way.
+//
+// IN PRACTICE NO DAEMON PUBLISHES A PIN, and that is deliberate on the other
+// side: an SPKI pin in a TXT record is a stable cross-network correlator for
+// one laptop, so `internal/mdns` publishes a protocol version and nothing else
+// (mobile/PLAN.md argues it in full). The pin comparison below is therefore
+// almost always a no-op — it is kept because it costs nothing, it drops an
+// obvious mismatch without a socket if a future daemon ever does publish one,
+// and a filter that admits everything is the correct behaviour when there is
+// nothing to filter on. The handshake was always the thing that decided.
 //
 // THE PLUGIN CONTRACT, reached through the Capacitor global rather than an
 // import, for the two reasons scan.ts gives: the plugin's `dist/` does not

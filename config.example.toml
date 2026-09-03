@@ -499,6 +499,23 @@ endpoint = "https://api.linear.app/graphql"
 # It is deleted along with the whole insecure path in milestone 2, which gives
 # each device its own identity and makes a LAN bind unremarkable.
 # insecure_lan = false
+#
+# advertise: publish this listener on the local network with mDNS, so a paired
+# phone finds this Mac on a network whose addresses it has never seen. The key
+# and the pin already work anywhere — only the address goes stale, which is why
+# a phone paired at home cannot reach the same Mac at the office.
+#
+# OFF by default because it is a DISCLOSURE, not a convenience: `_lola._tcp`
+# tells every peer on the network that this machine runs autonomous coding
+# agents and accepts remote control. What is published is the port and a
+# protocol version, and deliberately nothing else — no pin, no hostname, no
+# session names — because those are stable identifiers for one laptop across
+# every network it joins.
+#
+# It stays an optimisation: the addresses a phone already has are tried first,
+# so a network that blocks multicast (many corporate and guest WiFis do) costs
+# nothing. Requires the `dns-sd` tool, which every Mac ships.
+# advertise = false
 
 # ---------------------------------------------------------------------------
 # [[project]] — repository registry for the native runtime (one table per

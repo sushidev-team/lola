@@ -30,11 +30,13 @@ import (
 // that build forces the bind to localhost whatever this table says — is enforced
 // at RUNTIME in internal/remote, which logs the override, not here.
 //
-// Keys this table deliberately does NOT have yet: `advertise` (mDNS) and
-// [remote.push] (APNs) belong to later milestones, and this repo rejects keys
-// that quietly do nothing — the same rule that makes an unknown priority_sort
-// key an error. BurntSushi/toml ignores unknown keys, so a config written ahead
-// of the daemon still loads.
+// Keys this table deliberately does NOT have yet: [remote.push] (APNs) belongs
+// to a later milestone, and this repo rejects keys that quietly do nothing —
+// the same rule that makes an unknown priority_sort key an error.
+// BurntSushi/toml ignores unknown keys, so a config written ahead of the daemon
+// still loads. (`advertise` arrived early, ahead of its milestone, because a
+// stale address list is what breaks a phone that changes network — see the
+// field's own comment.)
 
 const (
 	// DefaultRemotePort is the TCP port the listener binds when [remote].port is
@@ -103,6 +105,21 @@ type RemoteConfig struct {
 	// It is deleted with the rest of the tag. M2's per-device identities and
 	// mutual TLS make binding to a LAN an ordinary thing needing no opt-in.
 	InsecureLAN bool `toml:"insecure_lan"`
+
+	// Advertise publishes the listener on the local network with mDNS
+	// (internal/mdns), so a paired phone finds this Mac on a network whose
+	// addresses it has never seen. OFF unless asked for, and that default is a
+	// decision mobile/PLAN.md argues rather than a conservative reflex:
+	// `_lola._tcp` on a shared network announces "this machine runs autonomous
+	// coding agents and accepts remote control" to every peer on it. Turning it
+	// on is a DISCLOSURE, not a convenience.
+	//
+	// What it buys is reconnection, not pairing. The connect code carries the
+	// addresses this machine had at pairing time, so a phone paired at home
+	// finds nothing at the office; the key and the pin already work anywhere.
+	// Discovery stays an OPTIMISATION — the stored addresses are tried first and
+	// still work — which is why a network that blocks multicast costs nothing.
+	Advertise bool `toml:"advertise"`
 }
 
 // BindMode returns the EFFECTIVE bind selector: [remote].bind when set, else
