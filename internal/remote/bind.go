@@ -51,7 +51,24 @@ var ErrNoBindAddrs = errors.New("remote: no interface matched the bind mode")
 // serves this machine's own hotspot (ap). Binding a listener to any of them
 // exposes it to a different population than the operator had in mind when they
 // wrote "lan".
-var excludedIfacePrefixes = []string{"utun", "tun", "tap", "bridge", "docker", "vmenet", "ap"}
+//
+// awdl and llw are there for a different reason, and it is the one that cost a
+// debugging session. They are Apple Wireless Direct Link — AirDrop, AirPlay,
+// Sidecar, Continuity — and macOS ROTATES the MAC they derive their link-local
+// address from, for privacy, every few minutes:
+//
+//	fe80::f481:d9ff:feef:e70f%awdl0   10:10
+//	fe80::d029:d5ff:fec3:6e6a%awdl0   10:15
+//	fe80::e82f:f2ff:fe5e:2816%awdl0   10:53
+//
+// Each rotation is an address change, BindDrifted reports drift, and the
+// rebind that follows drops every live connection — 234 of them in one
+// afternoon's log, each one a phone told the daemon had gone away. Nothing was
+// gained by binding them in the first place: AWDL is Apple's peer-to-peer
+// stack, and its zone-scoped address is not something another device can dial.
+var excludedIfacePrefixes = []string{
+	"utun", "tun", "tap", "bridge", "docker", "vmenet", "ap", "awdl", "llw",
+}
 
 // BindAddr is one address the listener will bind, with the interface it came
 // from so the startup log can name it. Iface is "" for the modes that name an

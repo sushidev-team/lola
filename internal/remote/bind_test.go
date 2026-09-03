@@ -112,6 +112,8 @@ func TestLanSkipsTunnelsVirtualBridgesAndPublicAddresses(t *testing.T) {
 			{Name: "docker0", Flags: net.FlagUp, IPs: []net.IP{net.ParseIP("172.17.0.1")}},
 			{Name: "vmenet0", Flags: net.FlagUp, IPs: []net.IP{net.ParseIP("192.168.70.1")}},
 			{Name: "ap1", Flags: net.FlagUp, IPs: []net.IP{net.ParseIP("192.168.2.1")}},
+			{Name: "awdl0", Flags: net.FlagUp, IPs: []net.IP{net.ParseIP("fe80::f481:d9ff:feef:e70f")}},
+			{Name: "llw0", Flags: net.FlagUp, IPs: []net.IP{net.ParseIP("fe80::f481:d9ff:feef:e70f")}},
 		}, nil
 	}
 	got, err := resolveBind("lan", 7717, ifaces)
@@ -266,5 +268,47 @@ func TestBindDriftedIgnoresAClosedOrEmptyServer(t *testing.T) {
 	empty := &Server{opts: Options{Bind: "lan", Port: 7717}}
 	if empty.BindDrifted() {
 		t.Error("a server holding no addresses reported drift")
+	}
+}
+
+// TestLanIgnoresAWDLsRotatingAddress is the churn this cost before awdl and llw
+// were excluded.
+//
+// Apple Wireless Direct Link — AirDrop, AirPlay, Sidecar — derives its
+// link-local address from a MAC that macOS rotates for privacy every few
+// minutes. Each rotation is an address change, so BindDrifted reported drift
+// and the rebind that followed dropped every live connection: a phone told, all
+// afternoon, that the daemon had gone away. Nothing was gained by binding it —
+// AWDL is a peer-to-peer stack whose zone-scoped address no other device can
+// dial.
+func TestLanIgnoresAWDLsRotatingAddress(t *testing.T) {
+	before := func() ([]NetIface, error) {
+		return []NetIface{
+			{Name: "en0", Flags: net.FlagUp, IPs: []net.IP{net.ParseIP("192.168.1.20")}},
+			{Name: "awdl0", Flags: net.FlagUp, IPs: []net.IP{net.ParseIP("fe80::f481:d9ff:feef:e70f")}},
+			{Name: "llw0", Flags: net.FlagUp, IPs: []net.IP{net.ParseIP("fe80::f481:d9ff:feef:e70f")}},
+		}, nil
+	}
+	after := func() ([]NetIface, error) {
+		return []NetIface{
+			{Name: "en0", Flags: net.FlagUp, IPs: []net.IP{net.ParseIP("192.168.1.20")}},
+			{Name: "awdl0", Flags: net.FlagUp, IPs: []net.IP{net.ParseIP("fe80::d029:d5ff:fec3:6e6a")}},
+			{Name: "llw0", Flags: net.FlagUp, IPs: []net.IP{net.ParseIP("fe80::e82f:f2ff:fe5e:2816")}},
+		}, nil
+	}
+	a, err := resolveBind("lan", 7717, before)
+	if err != nil {
+		t.Fatalf("resolveBind before: %v", err)
+	}
+	b, err := resolveBind("lan", 7717, after)
+	if err != nil {
+		t.Fatalf("resolveBind after: %v", err)
+	}
+	if !sameAddrSet(a, b) {
+		t.Fatalf("a rotated AWDL address changed the bind set:\n before %v\n after  %v", a, b)
+	}
+	want := []BindAddr{{Addr: "192.168.1.20:7717", Iface: "en0"}}
+	if !reflect.DeepEqual(a, want) {
+		t.Errorf("got %v, want only the real interface %v", a, want)
 	}
 }
