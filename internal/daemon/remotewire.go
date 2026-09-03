@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"regexp"
 	"strings"
 	"sync"
 
+	"github.com/sushidev-team/lola/internal/mdns"
 	"github.com/sushidev-team/lola/internal/panebus"
 	"github.com/sushidev-team/lola/internal/remote"
 )
@@ -203,6 +205,61 @@ func (d *Daemon) startRemote(ctx context.Context) {
 		where = append(where, ba.Addr)
 	}
 	d.logf("", "remote: phone listener up on %s (SPKI pin %s)", strings.Join(where, ", "), srv.SPKIPin())
+	d.startAdvertiserLocked(srv)
+}
+
+// startAdvertiserLocked publishes the listener on the local network.
+//
+// WHAT IT BUYS. The bearer key and the SPKI pin identify the DAEMON, not an
+// address, so a paired phone already has everything it needs on any network —
+// except where to dial. The connect code carries the addresses this machine had
+// at pairing time, which is why a phone paired at home finds nothing at the
+// office. A phone that can BROWSE finds the daemon wherever it is, with the
+// same credentials and no re-pairing.
+//
+// WHAT IT PUBLISHES. The port, and the SPKI pin in a TXT record. The pin is
+// public — it is in the connect code and in the log line above — and publishing
+// it is what lets a phone reject an impostor advertising the same service
+// before it opens a socket. The BEARER KEY is never advertised: everything on
+// the network can read a TXT record.
+//
+// DISCOVERY IS A HINT, NOT AN AUTHORITY. Anyone on the network can advertise
+// "_lola._tcp"; the pin is what decides trust, exactly as it does for a stored
+// address. So this failing costs nothing that matters, and the advertiser is
+// built to fail quietly (no dns-sd, a refused registration) rather than take a
+// working listener down with it.
+//
+// Caller holds remoteMu; the advertiser's lifetime is the listener's, and
+// stopRemote takes it down with the same lock held.
+func (d *Daemon) startAdvertiserLocked(srv *remote.Server) {
+	if d.advertiser == nil {
+		d.advertiser = mdns.New("", d.mdnsStart, func(f string, v ...any) { d.logf("", f, v...) })
+	}
+	host, err := os.Hostname()
+	if err != nil || strings.TrimSpace(host) == "" {
+		host = "this Mac"
+	}
+	// A hostname is commonly "marvin.local"; the suffix is noise in a picker.
+	host = strings.TrimSuffix(host, ".local")
+
+	if err := d.advertiser.Start(mdns.Service{
+		Instance: "lola on " + host,
+		Port:     srv.Port(),
+		TXT: map[string]string{
+			mdns.TXTPin:     srv.SPKIPin(),
+			mdns.TXTVersion: mdns.Version,
+		},
+	}); err != nil {
+		d.logf("", "remote: not advertising on the local network: %v", err)
+	}
+}
+
+// stopAdvertiserLocked withdraws the registration. Caller holds remoteMu.
+func (d *Daemon) stopAdvertiserLocked() {
+	if d.advertiser == nil {
+		return
+	}
+	d.advertiser.Stop()
 }
 
 // reconcileRemoteBind rebinds the listener when the machine's addresses have
@@ -254,6 +311,9 @@ func (d *Daemon) stopRemote() {
 	d.remoteMu.Lock()
 	srv, reg := d.remote, d.panes
 	d.remote, d.panes = nil, nil
+	// Withdrawn BEFORE the listener closes: an advertisement outliving its
+	// socket points every browsing phone at a port that refuses.
+	d.stopAdvertiserLocked()
 	d.remoteMu.Unlock()
 
 	if srv != nil {

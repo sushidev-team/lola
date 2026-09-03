@@ -26,6 +26,7 @@ import (
 	"github.com/sushidev-team/lola/internal/brain"
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/linear"
+	"github.com/sushidev-team/lola/internal/mdns"
 	"github.com/sushidev-team/lola/internal/notify"
 	"github.com/sushidev-team/lola/internal/panebus"
 	"github.com/sushidev-team/lola/internal/portproc"
@@ -364,6 +365,15 @@ type Daemon struct {
 	remoteErr    string
 	panes        *panebus.Registry
 	paneRegistry func() *panebus.Registry
+	// advertiser publishes the listener on the local network (internal/mdns),
+	// so a phone finds this Mac by name instead of by an address that changes
+	// with every network. Held under remoteMu with the listener because its
+	// lifetime is exactly the listener's: a rebind replaces both. nil until the
+	// first listener comes up, and nil forever on a build with no listener.
+	advertiser *mdns.Advertiser
+	// mdnsStart is internal/mdns's exec seam, for tests that must not spawn
+	// dns-sd. nil uses the real one.
+	mdnsStart mdns.Starter
 
 	// Socket-initiated tick work (pollOnce) is tracked separately from the
 	// worker/reconcile goroutines so graceful shutdown can drain it too.

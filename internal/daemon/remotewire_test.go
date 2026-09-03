@@ -14,6 +14,7 @@ import (
 
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/linear"
+	"github.com/sushidev-team/lola/internal/mdns"
 	"github.com/sushidev-team/lola/internal/panebus"
 	"github.com/sushidev-team/lola/internal/remote"
 	"github.com/sushidev-team/lola/internal/session"
@@ -238,7 +239,23 @@ func newRemoteTestDaemon(t *testing.T) *Daemon {
 	t.Helper()
 	home := t.TempDir()
 	t.Setenv("LOLA_HOME", home)
-	return newDaemon(remoteTestConfig(), &linear.Fake{}, log.New(io.Discard, "", 0), home)
+	d := newDaemon(remoteTestConfig(), &linear.Fake{}, log.New(io.Discard, "", 0), home)
+	// NO REAL dns-sd. A listener started in a test would otherwise advertise
+	// this service on whatever network the machine running the suite is on,
+	// which is both a side effect outside the test and a process to leak.
+	d.mdnsStart = func(ctx context.Context, _ string, _ []string) (mdns.Process, error) {
+		return stubMDNS{ctx: ctx}, nil
+	}
+	return d
+}
+
+// stubMDNS is a registration that lives until its context is cancelled, which
+// is what the real child does.
+type stubMDNS struct{ ctx context.Context }
+
+func (p stubMDNS) Wait() error {
+	<-p.ctx.Done()
+	return p.ctx.Err()
 }
 
 // newLoggingRemoteDaemon is newRemoteTestDaemon with the daemon log captured,

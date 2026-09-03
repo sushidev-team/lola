@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strconv"
 	"sync"
 	"time"
 
@@ -288,6 +289,27 @@ func (s *Server) Addrs() []BindAddr {
 	out := make([]BindAddr, len(s.addrs))
 	copy(out, s.addrs)
 	return out
+}
+
+// Port reports the TCP port the listener is actually on.
+//
+// Read from a BOUND address rather than from the options, because the two can
+// differ — a port of 0 asks the kernel to pick one — and the advertiser must
+// publish the port a phone can dial, not the one that was requested. Falls back
+// to the requested port when nothing is bound, which is the only value left to
+// state.
+func (s *Server) Port() int {
+	s.mu.Lock()
+	addrs := append([]BindAddr(nil), s.addrs...)
+	s.mu.Unlock()
+	for _, ba := range addrs {
+		if _, port, err := net.SplitHostPort(ba.Addr); err == nil {
+			if n, err := strconv.Atoi(port); err == nil && n > 0 {
+				return n
+			}
+		}
+	}
+	return s.opts.Port
 }
 
 // SPKIPin is the base64 SHA-256 of this daemon's public key: the value a client
