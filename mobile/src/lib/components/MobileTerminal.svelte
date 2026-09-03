@@ -12,6 +12,7 @@
   import {
     NO_SCROLL,
     accumulateScroll,
+    capacityCells,
     clampPan,
     cursorVisible,
     followCursor,
@@ -118,6 +119,15 @@
      * to; pinning the grid to itself is a no-op. See panepin.ts.
      */
     shownRows: number;
+    /**
+     * What this phone could show if the grid were sized to it: the number to
+     * PIN to. Different from `shown`/`shownRows`, which are clamped to the
+     * current grid because they describe what is on screen — pinning to a
+     * clamped number makes the next measurement depend on the last pin, which
+     * walks a window one row at a time instead of resizing it once.
+     */
+    capCols: number;
+    capRows: number;
     /** The leftmost visible column, 1-based, so the header can say WHERE the
      *  window is rather than only how wide it is. */
     first: number;
@@ -167,6 +177,12 @@
   const panning = $derived(isPanning(box));
   const shown = $derived(visibleColumns(box, cols));
   const shownRows = $derived(visibleRows(box, rows));
+  /**
+   * What this phone could show if the grid were sized to it. UNCLAMPED, unlike
+   * `shown`/`shownRows` — see capacityCells for the staircase that clamping it
+   * produced.
+   */
+  const capacity = $derived(capacityCells(box, { cols, rows }));
   /** The leftmost visible column, 1-based. See firstVisibleColumn. */
   const first = $derived(firstVisibleColumn(box, cols, pan.x));
   /** Height of the sliced bottom row, masked rather than drawn. */
@@ -190,6 +206,8 @@
       rows,
       shown,
       shownRows,
+      capCols: capacity.cols,
+      capRows: capacity.rows,
       first,
       panning,
       font: fontSize,

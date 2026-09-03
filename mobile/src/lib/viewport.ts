@@ -306,6 +306,50 @@ export function touchMidpoint(
 }
 
 /**
+ * What this phone could show if the grid were sized to it — the number to PIN a
+ * window to, and the one thing here that must not be clamped to the grid.
+ *
+ * WHY IT IS SEPARATE FROM `visibleRows`/`visibleColumns`. Those answer "how much
+ * of the CURRENT grid is on screen", which is a display question, and they clamp
+ * to the grid because a window onto more rows than exist is not a thing to
+ * report. The PIN asks a different question — "what should the grid become" —
+ * and answering it with a clamped number makes the pin's input depend on the
+ * pin's own output.
+ *
+ * That is not theoretical; it is the staircase this function was written to end.
+ * A phone whose viewport fits 41 rows, pinning a 25-row pane, measured
+ * `min(25, 41) = 25`, pinned 25, and could then only ever ask for one more row
+ * than the grid it had just created — climbing 25, 26, 27 … 41 over twenty
+ * seconds, each step reflowing the shell on the Mac and marching the prompt
+ * down the screen a line at a time. Columns never did this, because a phone
+ * shows FEWER columns than the grid has, so the clamp was inactive and the
+ * first measurement was already right.
+ *
+ * Unclamped, this is a fixed function of the viewport and the cell size: the
+ * same answer before and after the resize it asks for, so the pin converges in
+ * one step and stays there.
+ *
+ * The cell size is derived from the rendered grid (`contentWidth / cols`), which
+ * is stable because it is font metrics — the same reason `cellHeight()` in
+ * MobileTerminal derives it that way rather than measuring a row.
+ */
+export function capacityCells(
+  box: PanBox,
+  grid: { cols: number; rows: number },
+): { cols: number; rows: number } {
+  if (grid.cols <= 0 || grid.rows <= 0) return { cols: 0, rows: 0 };
+  if (box.contentWidth <= 0 || box.contentHeight <= 0)
+    return { cols: 0, rows: 0 };
+  const cellW = box.contentWidth / grid.cols;
+  const cellH = box.contentHeight / grid.rows;
+  if (!(cellW > 0) || !(cellH > 0)) return { cols: 0, rows: 0 };
+  return {
+    cols: Math.max(1, Math.floor(box.viewWidth / cellW)),
+    rows: Math.max(1, Math.floor(box.viewHeight / cellH)),
+  };
+}
+
+/**
  * Whether the visible window is narrower than the grid, i.e. whether the "N cols
  * · panning" chip should be shown.
  *

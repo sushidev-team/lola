@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   accumulateScroll,
   AXIS_LOCK_SLOP,
+  capacityCells,
   clampFont,
   clampPan,
   cursorVisible,
@@ -437,5 +438,75 @@ describe("following the cursor", () => {
       y: 0,
     });
     expect(cursorVisible({ x: 0, y: 0 }, small, g, { x: 9, y: 9 })).toBe(true);
+  });
+});
+
+describe("the capacity to pin to", () => {
+  // 100x50 cells of 10x20px behind a 200x200px window: four columns and ten
+  // rows fit.
+  const box: PanBox = {
+    contentWidth: 1000,
+    contentHeight: 1000,
+    viewWidth: 200,
+    viewHeight: 200,
+  };
+
+  it("answers what the VIEWPORT holds, not what the grid has", () => {
+    expect(capacityCells(box, { cols: 100, rows: 50 })).toEqual({
+      cols: 20,
+      rows: 10,
+    });
+  });
+
+  it("is the same answer before and after the resize it asks for", () => {
+    // THE STAIRCASE TEST. `visibleRows` clamps to the grid, so a 25-row pane on
+    // a phone that fits 41 could only ever ask for one row more than it had
+    // just created — climbing one row per pin, reflowing the shell on the Mac
+    // every step. The pin's target must not depend on the pin's own result.
+    const before: PanBox = {
+      contentWidth: 1000,
+      contentHeight: 500, // a 25-row grid at 20px
+      viewWidth: 200,
+      viewHeight: 820, // room for 41
+    };
+    const asked = capacityCells(before, { cols: 100, rows: 25 });
+    expect(asked.rows).toBe(41);
+
+    // The grid becomes what was asked for; the answer must not move.
+    const after: PanBox = { ...before, contentHeight: 41 * 20 };
+    expect(capacityCells(after, { cols: 100, rows: 41 }).rows).toBe(41);
+
+    // What the old, clamped reading would have said at each step.
+    expect(visibleRows(before, 25)).toBe(25);
+  });
+
+  it("never asks for less than one cell", () => {
+    const tiny: PanBox = {
+      contentWidth: 1000,
+      contentHeight: 1000,
+      viewWidth: 4,
+      viewHeight: 4,
+    };
+    expect(capacityCells(tiny, { cols: 100, rows: 50 })).toEqual({
+      cols: 1,
+      rows: 1,
+    });
+  });
+
+  it("answers zero for an unmeasured box, which is the RELEASE encoding upstream", () => {
+    const empty: PanBox = {
+      contentWidth: 0,
+      contentHeight: 0,
+      viewWidth: 200,
+      viewHeight: 200,
+    };
+    expect(capacityCells(empty, { cols: 100, rows: 50 })).toEqual({
+      cols: 0,
+      rows: 0,
+    });
+    expect(capacityCells(box, { cols: 0, rows: 0 })).toEqual({
+      cols: 0,
+      rows: 0,
+    });
   });
 });

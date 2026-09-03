@@ -540,8 +540,12 @@
           // Assigned only on a real change: this is read by the pin effect, and a
           // fresh object every time would restart its settle timer on every
           // state push and could starve the pin entirely.
-          if (capacity.cols !== st.shown || capacity.rows !== st.shownRows) {
-            capacity = { cols: st.shown, rows: st.shownRows };
+          // THE UNCLAMPED CAPACITY, not `shown`/`shownRows`. Those are clamped
+          // to the current grid, so pinning to them makes each pin's target
+          // depend on the previous pin's result — which climbed a shell one row
+          // per pin, over twenty seconds, reflowing it on the Mac every time.
+          if (capacity.cols !== st.capCols || capacity.rows !== st.capRows) {
+            capacity = { cols: st.capCols, rows: st.capRows };
           }
           geom = {
             cols: st.cols,
