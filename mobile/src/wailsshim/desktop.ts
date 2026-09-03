@@ -27,7 +27,13 @@ import type * as P from "@bindings/internal/protocol";
 import { bridge } from "./bridge";
 import { unsupported } from "./errors";
 import { WireError, normalizePanesData } from "../wire";
-import type { PaneCloseData, PaneResizeData, PanesData, RawPanesData, ShellCreateData } from "../wire";
+import type {
+  PaneCloseData,
+  PaneResizeData,
+  PanesData,
+  RawPanesData,
+  ShellCreateData,
+} from "../wire";
 
 // ---------------------------------------------------------------------------
 // DaemonService
@@ -64,7 +70,10 @@ export namespace DaemonService {
 
   /** FORWARDED: cmd=pane. */
   export function Pane(session: string, lines: number): Promise<P.PaneData> {
-    return bridge.request<P.PaneData>("DaemonService.Pane", "pane", { session, lines });
+    return bridge.request<P.PaneData>("DaemonService.Pane", "pane", {
+      session,
+      lines,
+    });
   }
 
   /** FORWARDED: cmd=prs. */
@@ -75,7 +84,10 @@ export namespace DaemonService {
   }
 
   /** FORWARDED: cmd=tickets. */
-  export function Tickets(project: string, scope: string): Promise<P.TicketsData> {
+  export function Tickets(
+    project: string,
+    scope: string,
+  ): Promise<P.TicketsData> {
     return bridge.request<P.TicketsData>("DaemonService.Tickets", "tickets", {
       args: { project, scope },
     });
@@ -85,7 +97,10 @@ export namespace DaemonService {
 
   /** FORWARDED: cmd=answer. Refused daemon-side unless the session is idle. */
   export function Answer(session: string, text: string): Promise<void> {
-    return bridge.request<void>("DaemonService.Answer", "answer", { session, text });
+    return bridge.request<void>("DaemonService.Answer", "answer", {
+      session,
+      text,
+    });
   }
 
   /**
@@ -107,26 +122,42 @@ export namespace DaemonService {
         ),
       );
     }
-    return bridge.request<P.KillData>("DaemonService.Kill", "kill", { session });
+    return bridge.request<P.KillData>("DaemonService.Kill", "kill", {
+      session,
+    });
   }
 
   /** FORWARDED: cmd=revive. */
   export function Revive(session: string): Promise<P.ReviveData> {
-    return bridge.request<P.ReviveData>("DaemonService.Revive", "revive", { session });
+    return bridge.request<P.ReviveData>("DaemonService.Revive", "revive", {
+      session,
+    });
   }
 
   /** FORWARDED: cmd=review. */
-  export function Review(session: string, provider: string): Promise<P.ReviewData> {
-    return bridge.request<P.ReviewData>("DaemonService.Review", "review", { session, provider });
+  export function Review(
+    session: string,
+    provider: string,
+  ): Promise<P.ReviewData> {
+    return bridge.request<P.ReviewData>("DaemonService.Review", "review", {
+      session,
+      provider,
+    });
   }
 
   /** FORWARDED: cmd=coderabbit. */
   export function CodeRabbit(session: string): Promise<P.CodeRabbitData> {
-    return bridge.request<P.CodeRabbitData>("DaemonService.CodeRabbit", "coderabbit", { session });
+    return bridge.request<P.CodeRabbitData>(
+      "DaemonService.CodeRabbit",
+      "coderabbit",
+      { session },
+    );
   }
 
   /** FORWARDED: cmd=resolveConflict. */
-  export function ResolveConflict(session: string): Promise<P.ResolveConflictData> {
+  export function ResolveConflict(
+    session: string,
+  ): Promise<P.ResolveConflictData> {
     return bridge.request<P.ResolveConflictData>(
       "DaemonService.ResolveConflict",
       "resolveConflict",
@@ -135,22 +166,38 @@ export namespace DaemonService {
   }
 
   /** FORWARDED: cmd=switchAgent. */
-  export function SwitchAgent(a: P.SwitchAgentArgs): Promise<P.SwitchAgentData> {
-    return bridge.request<P.SwitchAgentData>("DaemonService.SwitchAgent", "switchAgent", {
-      args: a,
-    });
+  export function SwitchAgent(
+    a: P.SwitchAgentArgs,
+  ): Promise<P.SwitchAgentData> {
+    return bridge.request<P.SwitchAgentData>(
+      "DaemonService.SwitchAgent",
+      "switchAgent",
+      {
+        args: a,
+      },
+    );
   }
 
   /** FORWARDED: cmd=dev. */
   export function Dev(session: string, on: boolean): Promise<P.DevData> {
-    return bridge.request<P.DevData>("DaemonService.Dev", "dev", { args: { session, on } });
+    return bridge.request<P.DevData>("DaemonService.Dev", "dev", {
+      args: { session, on },
+    });
   }
 
   /** FORWARDED: cmd=devFreePort. */
-  export function DevFreePort(session: string, port: number, pid: number): Promise<P.DevFreePortData> {
-    return bridge.request<P.DevFreePortData>("DaemonService.DevFreePort", "devFreePort", {
-      args: { session, port, pid },
-    });
+  export function DevFreePort(
+    session: string,
+    port: number,
+    pid: number,
+  ): Promise<P.DevFreePortData> {
+    return bridge.request<P.DevFreePortData>(
+      "DaemonService.DevFreePort",
+      "devFreePort",
+      {
+        args: { session, port, pid },
+      },
+    );
   }
 
   // --- panes and shell tabs -------------------------------------------------
@@ -178,7 +225,11 @@ export namespace DaemonService {
    * mobile/src/wire/panes.ts for both encoding details.
    */
   export async function Panes(session: string): Promise<PanesData> {
-    const d = await bridge.request<RawPanesData>("DaemonService.Panes", "panes", { session });
+    const d = await bridge.request<RawPanesData>(
+      "DaemonService.Panes",
+      "panes",
+      { session },
+    );
     return normalizePanesData(session, d);
   }
 
@@ -198,8 +249,26 @@ export namespace DaemonService {
    * throws away the only part a user can act on, and a tab strip whose "+"
    * stops working for no stated reason reads as a broken button.
    */
-  export function ShellCreate(session: string): Promise<ShellCreateData> {
-    return bridge.request<ShellCreateData>("DaemonService.ShellCreate", "shellCreate", { session });
+  export function ShellCreate(
+    session: string,
+    cols = 0,
+    rows = 0,
+  ): Promise<ShellCreateData> {
+    // The SIZE is this phone's capacity, and it is what stops a new shell tab
+    // reflowing itself in front of the user. tmux gives an unattached session
+    // 157x37 or so, so a tab created without one was pinned a moment later and
+    // visibly redrew line by line for several seconds. The daemon creates the
+    // window at this size instead, and ignores anything <= 0 or out of range —
+    // so an unmeasured screen simply gets the old behaviour.
+    const size = cols > 0 && rows > 0 ? { cols, rows } : {};
+    return bridge.request<ShellCreateData>(
+      "DaemonService.ShellCreate",
+      "shellCreate",
+      {
+        session,
+        ...size,
+      },
+    );
   }
 
   /**
@@ -222,10 +291,17 @@ export namespace DaemonService {
    *
    * Note the ARGS ENVELOPE, described on PaneResize below.
    */
-  export function PaneClose(session: string, pane: string): Promise<PaneCloseData> {
-    return bridge.request<PaneCloseData>("DaemonService.PaneClose", "paneClose", {
-      args: { session, pane },
-    });
+  export function PaneClose(
+    session: string,
+    pane: string,
+  ): Promise<PaneCloseData> {
+    return bridge.request<PaneCloseData>(
+      "DaemonService.PaneClose",
+      "paneClose",
+      {
+        args: { session, pane },
+      },
+    );
   }
 
   /**
@@ -255,31 +331,48 @@ export namespace DaemonService {
     cols: number,
     rows: number,
   ): Promise<PaneResizeData> {
-    return bridge.request<PaneResizeData>("DaemonService.PaneResize", "paneResize", {
-      args: { session, pane, cols, rows },
-    });
+    return bridge.request<PaneResizeData>(
+      "DaemonService.PaneResize",
+      "paneResize",
+      {
+        args: { session, pane, cols, rows },
+      },
+    );
   }
 
   // --- opening work ---------------------------------------------------------
 
   /** FORWARDED: cmd=open. */
   export function Open(project: string, ref: string): Promise<P.OpenData> {
-    return bridge.request<P.OpenData>("DaemonService.Open", "open", { project, ref });
+    return bridge.request<P.OpenData>("DaemonService.Open", "open", {
+      project,
+      ref,
+    });
   }
 
   /** FORWARDED: cmd=openManual. */
   export function OpenManual(a: P.OpenManualArgs): Promise<P.OpenData> {
-    return bridge.request<P.OpenData>("DaemonService.OpenManual", "openManual", { args: a });
+    return bridge.request<P.OpenData>(
+      "DaemonService.OpenManual",
+      "openManual",
+      { args: a },
+    );
   }
 
   /** FORWARDED: cmd=openPr. */
   export function OpenPR(a: P.OpenPrArgs): Promise<P.OpenData> {
-    return bridge.request<P.OpenData>("DaemonService.OpenPR", "openPr", { args: a });
+    return bridge.request<P.OpenData>("DaemonService.OpenPR", "openPr", {
+      args: a,
+    });
   }
 
   /** FORWARDED: cmd=openTicket. */
   export function OpenTicket(a: P.OpenTicketArgs): Promise<P.OpenData> {
-    return bridge.request<P.OpenData>("DaemonService.OpenTicket", "openTicket", { args: a });
+    return bridge.request<P.OpenData>(
+      "DaemonService.OpenTicket",
+      "openTicket",
+      { args: a },
+    );
   }
 
   /**
@@ -294,7 +387,9 @@ export namespace DaemonService {
    * (in a WKWebView it replaces the app's own view).
    */
   export function OpenURL(url: string): Promise<void> {
-    return bridge.request<void>("DaemonService.OpenURL", "openURL", { args: { url } });
+    return bridge.request<void>("DaemonService.OpenURL", "openURL", {
+      args: { url },
+    });
   }
 
   // --- polls ----------------------------------------------------------------
@@ -310,8 +405,15 @@ export namespace DaemonService {
   }
 
   /** FORWARDED: cmd=pollOnce. */
-  export function PollOnce(poll: string, dryRun: boolean): Promise<P.PollOnceData> {
-    return bridge.request<P.PollOnceData>("DaemonService.PollOnce", "pollOnce", { poll, dryRun });
+  export function PollOnce(
+    poll: string,
+    dryRun: boolean,
+  ): Promise<P.PollOnceData> {
+    return bridge.request<P.PollOnceData>(
+      "DaemonService.PollOnce",
+      "pollOnce",
+      { poll, dryRun },
+    );
   }
 
   /**
@@ -327,7 +429,10 @@ export namespace DaemonService {
   }
 
   /** PLATFORM: `renameProject` is on the same denial list, for the same reason. */
-  export function RenameProject(_from: string, _to: string): Promise<P.RenameProjectData> {
+  export function RenameProject(
+    _from: string,
+    _to: string,
+  ): Promise<P.RenameProjectData> {
     return unsupported(
       "DaemonService.RenameProject",
       "the daemon refuses `renameProject` from a remote client; rename from the Mac",
@@ -338,27 +443,42 @@ export namespace DaemonService {
 
   /** PLATFORM: the daemon is a process on another machine. */
   export function StartDaemon(): Promise<void> {
-    return unsupported("DaemonService.StartDaemon", "the daemon runs on the Mac and cannot be started from a phone");
+    return unsupported(
+      "DaemonService.StartDaemon",
+      "the daemon runs on the Mac and cannot be started from a phone",
+    );
   }
 
   /** PLATFORM. `stop` is also on the daemon's denial list. */
   export function StopDaemon(): Promise<void> {
-    return unsupported("DaemonService.StopDaemon", "the daemon refuses `stop` from a remote client");
+    return unsupported(
+      "DaemonService.StopDaemon",
+      "the daemon refuses `stop` from a remote client",
+    );
   }
 
   /** PLATFORM: a restart would need a daemon-side command that does not exist. */
   export function RestartDaemon(): Promise<void> {
-    return unsupported("DaemonService.RestartDaemon", "the daemon runs on the Mac and cannot be restarted from a phone");
+    return unsupported(
+      "DaemonService.RestartDaemon",
+      "the daemon runs on the Mac and cannot be restarted from a phone",
+    );
   }
 
   /** PLATFORM: reports the CLI binary on the local filesystem. */
   export function CLIInfo(): Promise<M.CLIInfoDTO> {
-    return unsupported("DaemonService.CLIInfo", "there is no lola CLI on a phone");
+    return unsupported(
+      "DaemonService.CLIInfo",
+      "there is no lola CLI on a phone",
+    );
   }
 
   /** PLATFORM: symlinks the bundled CLI onto the local PATH. */
   export function InstallCLI(): Promise<M.CLIInstallDTO> {
-    return unsupported("DaemonService.InstallCLI", "there is no PATH on a phone to install a CLI onto");
+    return unsupported(
+      "DaemonService.InstallCLI",
+      "there is no PATH on a phone to install a CLI onto",
+    );
   }
 }
 
@@ -371,7 +491,11 @@ export namespace TermService {
    * FORWARDED: a pane subscription, republished on `pty:<name>`.
    * Returns the stream id (the pane name), as the desktop's does.
    */
-  export function Attach(name: string, cols: number, rows: number): Promise<string> {
+  export function Attach(
+    name: string,
+    cols: number,
+    rows: number,
+  ): Promise<string> {
     return bridge.attachPane(name, cols, rows);
   }
 
@@ -395,7 +519,11 @@ export namespace TermService {
    * reflowing. Sent anyway so the daemon has the client's geometry the moment
    * it starts acting on it.
    */
-  export function Resize(name: string, cols: number, rows: number): Promise<void> {
+  export function Resize(
+    name: string,
+    cols: number,
+    rows: number,
+  ): Promise<void> {
     const sub = bridge.paneSubscription(name);
     if (!sub) return Promise.resolve();
     return sub.resize(cols, rows);
@@ -493,7 +621,10 @@ export namespace TermService {
 
   /** PLATFORM: killing a tmux session needs local process control. */
   export function CloseShell(shell: string): Promise<void> {
-    return unsupported(`TermService.CloseShell(${shell})`, "a phone cannot kill a tmux session on the Mac");
+    return unsupported(
+      `TermService.CloseShell(${shell})`,
+      "a phone cannot kill a tmux session on the Mac",
+    );
   }
 
   /**
@@ -539,7 +670,10 @@ export namespace ConfigService {
 
   /** PLATFORM: `[ui].theme` lives in config.toml on the Mac. */
   export function Themes(): Promise<string[] | null> {
-    return unsupported("ConfigService.Themes", "config.toml is not readable from a phone");
+    return unsupported(
+      "ConfigService.Themes",
+      "config.toml is not readable from a phone",
+    );
   }
 
   const CONFIG_REASON =
@@ -578,7 +712,10 @@ export namespace ConfigService {
     return unsupported("ConfigService.RemoveGroup", CONFIG_REASON);
   }
   /** PLATFORM. */
-  export function SetGroupCollapsed(_name: string, _collapsed: boolean): Promise<void> {
+  export function SetGroupCollapsed(
+    _name: string,
+    _collapsed: boolean,
+  ): Promise<void> {
     return unsupported("ConfigService.SetGroupCollapsed", CONFIG_REASON);
   }
   /**
@@ -592,7 +729,10 @@ export namespace ConfigService {
   }
   /** PLATFORM. */
   export function InspectPath(path: string): Promise<M.PathInfoDTO> {
-    return unsupported(`ConfigService.InspectPath(${path})`, "a phone cannot read the Mac's filesystem");
+    return unsupported(
+      `ConfigService.InspectPath(${path})`,
+      "a phone cannot read the Mac's filesystem",
+    );
   }
   /** PLATFORM. */
   export function PrioritySortKeys(): Promise<string[] | null> {
@@ -666,7 +806,10 @@ export namespace LinearService {
     return unsupported("LinearService.Teams", LINEAR_REASON);
   }
   /** PLATFORM. */
-  export function TeamMeta(teamID: string, _refresh: boolean): Promise<M.LinearTeamMeta> {
+  export function TeamMeta(
+    teamID: string,
+    _refresh: boolean,
+  ): Promise<M.LinearTeamMeta> {
     return unsupported(`LinearService.TeamMeta(${teamID})`, LINEAR_REASON);
   }
   /** PLATFORM. */
@@ -687,7 +830,10 @@ export namespace DoctorService {
    * one: it needs a daemon-side command that reports its own health.
    */
   export function Run(): Promise<M.DoctorReportDTO> {
-    return unsupported("DoctorService.Run", "the doctor probes the local machine; a phone has nothing to probe");
+    return unsupported(
+      "DoctorService.Run",
+      "the doctor probes the local machine; a phone has nothing to probe",
+    );
   }
 }
 
@@ -743,7 +889,13 @@ export namespace UpdateService {
 // imports `@mobile/wire`, which is where the vocabulary and its narrowing guard
 // live beside the comment explaining what to do with a kind this build has never
 // heard of.
-export type { PaneCloseData, PaneInfo, PaneKind, PanesData, ShellCreateData } from "../wire";
+export type {
+  PaneCloseData,
+  PaneInfo,
+  PaneKind,
+  PanesData,
+  ShellCreateData,
+} from "../wire";
 
 export type {
   CLIInfoDTO,

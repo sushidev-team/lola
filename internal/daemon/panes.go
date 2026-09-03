@@ -128,7 +128,13 @@ func (d *Daemon) handlePanes(ctx context.Context, sessionID string) (protocol.Pa
 // its frontend own the name because both run in one process on one machine; two
 // phones and a desktop racing for "-shell-2" do not have that luxury, and the
 // daemon is the only place that can see all of them.
-func (d *Daemon) handleShellCreate(ctx context.Context, sessionID string) (protocol.ShellCreateData, error) {
+// cols and rows are the size the ASKING CLIENT can show, or 0 for tmux's own
+// default. A phone sends its own capacity so the window is born the right size:
+// created at tmux's 157x37 and pinned a moment later, the tab reflowed visibly,
+// redrawing itself line by line for several seconds. Clamped like every other
+// dimension on this surface — a nonsense value falls back to the default rather
+// than being refused, because the shell is what was asked for.
+func (d *Daemon) handleShellCreate(ctx context.Context, sessionID string, cols, rows int) (protocol.ShellCreateData, error) {
 	s, ok := d.sessionByID(sessionID)
 	if !ok {
 		return protocol.ShellCreateData{}, fmt.Errorf("unknown session %q", sessionID)
@@ -175,7 +181,10 @@ func (d *Daemon) handleShellCreate(ctx context.Context, sessionID string) (proto
 	// NewSession applies the scroll defaults first and retries them on a cold
 	// server, which matters here because a shell tab can be the session that
 	// starts one — see (*tmux.Client).ConfigureServer.
-	if err := cl.NewSession(ctx, name, s.Worktree, lolaenv.ShellCommand); err != nil {
+	if cols < 1 || rows < 1 || cols > maxPaneDim || rows > maxPaneDim {
+		cols, rows = 0, 0
+	}
+	if err := cl.NewSessionSized(ctx, name, s.Worktree, lolaenv.ShellCommand, cols, rows); err != nil {
 		return protocol.ShellCreateData{}, fmt.Errorf("new shell %s: %w", name, err)
 	}
 	d.logf("", "remote: created shell tab %s", name)

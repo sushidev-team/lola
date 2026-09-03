@@ -1185,3 +1185,31 @@ func TestSetWindowSizeAgainstRealTmux(t *testing.T) {
 		t.Fatalf("window-size is still pinned after a release: %q", opt)
 	}
 }
+
+// A size, when the caller has one: the phone's shell tabs, so the window is
+// born at the phone's capacity instead of tmux's 157x37 and then reflowed.
+func TestNewSessionSizedPassesTheSize(t *testing.T) {
+	bin, argsLog := scriptedTmux(t, nil)
+	c := &Client{Bin: bin}
+	if err := c.NewSessionSized(context.Background(), "s", "/tmp", "sh -l", 50, 20); err != nil {
+		t.Fatalf("NewSessionSized: %v", err)
+	}
+	if got := loggedArgs(t, argsLog); !strings.Contains(got, "-x 50 -y 20") {
+		t.Fatalf("size not sent:\n%s", got)
+	}
+}
+
+// Zero means tmux's own default, and NewSession is exactly that case — the
+// agent panes, dev tabs and review panes must keep the size they have always
+// had.
+func TestNewSessionSendsNoSizeByDefault(t *testing.T) {
+	bin, argsLog := scriptedTmux(t, nil)
+	c := &Client{Bin: bin}
+	if err := c.NewSession(context.Background(), "s", "/tmp", "sh -l"); err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	got := loggedArgs(t, argsLog)
+	if strings.Contains(got, "-x ") || strings.Contains(got, "-y ") {
+		t.Fatalf("an unsized session carried a size:\n%s", got)
+	}
+}

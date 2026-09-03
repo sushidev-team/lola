@@ -116,7 +116,13 @@ describe("PaneTabs", () => {
     // re-sorts is a client that disagrees with the Mac about which tab is
     // which.
     replies.panes = { ok: true, data: inventory() };
-    render(PaneTabs, { props: { session: "lola-fe-42", active: "lola-fe-42", onselect: () => {} } });
+    render(PaneTabs, {
+      props: {
+        session: "lola-fe-42",
+        active: "lola-fe-42",
+        onselect: () => {},
+      },
+    });
 
     const tabs = await screen.findAllByRole("tab");
     expect(tabs.map((t) => t.textContent?.trim())).toEqual([
@@ -137,7 +143,10 @@ describe("PaneTabs", () => {
 
     const shell1 = await screen.findByRole("tab", { name: "shell 1" });
     expect(shell1).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByRole("tab", { name: "agent" })).toHaveAttribute("aria-selected", "false");
+    expect(screen.getByRole("tab", { name: "agent" })).toHaveAttribute(
+      "aria-selected",
+      "false",
+    );
 
     await fireEvent.click(screen.getByRole("tab", { name: "review" }));
     expect(onselect).toHaveBeenCalledWith("lola-fe-42-review");
@@ -159,10 +168,19 @@ describe("PaneTabs", () => {
         canCreateShell: true,
       },
     };
-    render(PaneTabs, { props: { session: "lola-fe-42", active: "lola-fe-42", onselect: () => {} } });
+    render(PaneTabs, {
+      props: {
+        session: "lola-fe-42",
+        active: "lola-fe-42",
+        onselect: () => {},
+      },
+    });
 
     const tabs = await screen.findAllByRole("tab");
-    expect(tabs.map((t) => t.textContent?.trim())).toEqual(["agent", "audit 1"]);
+    expect(tabs.map((t) => t.textContent?.trim())).toEqual([
+      "agent",
+      "audit 1",
+    ]);
   });
 
   it("sends cmd=shellCreate with the session and attaches the pane the daemon named", async () => {
@@ -174,18 +192,87 @@ describe("PaneTabs", () => {
       data: { session: "lola-fe-42", pane: "lola-fe-42-shell-3", index: 3 },
     };
     const onselect = vi.fn();
-    render(PaneTabs, { props: { session: "lola-fe-42", active: "lola-fe-42", onselect } });
+    render(PaneTabs, {
+      props: { session: "lola-fe-42", active: "lola-fe-42", onselect },
+    });
 
     await screen.findByRole("tab", { name: "agent" });
     await fireEvent.click(screen.getByRole("button", { name: "New shell" }));
 
-    await waitFor(() => expect(onselect).toHaveBeenCalledWith("lola-fe-42-shell-3"));
+    await waitFor(() =>
+      expect(onselect).toHaveBeenCalledWith("lola-fe-42-shell-3"),
+    );
 
     const created = reqs().filter((f) => f.cmd === "shellCreate");
     expect(created).toHaveLength(1);
-    expect(created[0].payload).toEqual({ cmd: "shellCreate", session: "lola-fe-42" });
+    expect(created[0].payload).toEqual({
+      cmd: "shellCreate",
+      session: "lola-fe-42",
+    });
     // No pane name on the wire, in any shape. This is the whole rule.
     expect(JSON.stringify(created[0].payload)).not.toContain("shell-3");
+  });
+
+  it("sends the phone's own size, so the shell is born at it rather than reflowed", async () => {
+    // tmux gives an unattached session about 157x37. A tab created at that size
+    // and pinned a moment later redraws itself line by line in front of the
+    // user for several seconds; created at the phone's capacity there is
+    // nothing to redraw.
+    replies.panes = { ok: true, data: inventory() };
+    replies.shellCreate = {
+      ok: true,
+      data: { session: "lola-fe-42", pane: "lola-fe-42-shell-3", index: 3 },
+    };
+    render(PaneTabs, {
+      props: {
+        session: "lola-fe-42",
+        active: "lola-fe-42",
+        capacity: { cols: 52, rows: 24 },
+        onselect: () => {},
+      },
+    });
+
+    await screen.findByRole("tab", { name: "agent" });
+    await fireEvent.click(screen.getByRole("button", { name: "New shell" }));
+
+    await waitFor(() =>
+      expect(reqs().some((f) => f.cmd === "shellCreate")).toBe(true),
+    );
+    const created = reqs().filter((f) => f.cmd === "shellCreate");
+    expect(created[0].payload).toEqual({
+      cmd: "shellCreate",
+      session: "lola-fe-42",
+      cols: 52,
+      rows: 24,
+    });
+  });
+
+  it("omits a size it does not have, which is the daemon's old behaviour", async () => {
+    replies.panes = { ok: true, data: inventory() };
+    replies.shellCreate = {
+      ok: true,
+      data: { session: "lola-fe-42", pane: "lola-fe-42-shell-3", index: 3 },
+    };
+    render(PaneTabs, {
+      props: {
+        session: "lola-fe-42",
+        active: "lola-fe-42",
+        capacity: { cols: 0, rows: 0 },
+        onselect: () => {},
+      },
+    });
+
+    await screen.findByRole("tab", { name: "agent" });
+    await fireEvent.click(screen.getByRole("button", { name: "New shell" }));
+
+    await waitFor(() =>
+      expect(reqs().some((f) => f.cmd === "shellCreate")).toBe(true),
+    );
+    const created = reqs().filter((f) => f.cmd === "shellCreate");
+    expect(created[0].payload).toEqual({
+      cmd: "shellCreate",
+      session: "lola-fe-42",
+    });
   });
 
   it("reloads the inventory after a shell is created", async () => {
@@ -196,13 +283,21 @@ describe("PaneTabs", () => {
       ok: true,
       data: { session: "lola-fe-42", pane: "lola-fe-42-shell-3", index: 3 },
     };
-    render(PaneTabs, { props: { session: "lola-fe-42", active: "lola-fe-42", onselect: () => {} } });
+    render(PaneTabs, {
+      props: {
+        session: "lola-fe-42",
+        active: "lola-fe-42",
+        onselect: () => {},
+      },
+    });
 
     await screen.findByRole("tab", { name: "agent" });
     expect(reqs().filter((f) => f.cmd === "panes")).toHaveLength(1);
 
     await fireEvent.click(screen.getByRole("button", { name: "New shell" }));
-    await waitFor(() => expect(reqs().filter((f) => f.cmd === "panes")).toHaveLength(2));
+    await waitFor(() =>
+      expect(reqs().filter((f) => f.cmd === "panes")).toHaveLength(2),
+    );
   });
 
   it("marks the + busy while the create is in flight, without fading it", async () => {
@@ -226,7 +321,13 @@ describe("PaneTabs", () => {
       }
       answerImmediately(f, c);
     };
-    render(PaneTabs, { props: { session: "lola-fe-42", active: "lola-fe-42", onselect: () => {} } });
+    render(PaneTabs, {
+      props: {
+        session: "lola-fe-42",
+        active: "lola-fe-42",
+        onselect: () => {},
+      },
+    });
 
     await screen.findByRole("tab", { name: "agent" });
     const plus = screen.getByRole("button", { name: "New shell" });
@@ -251,7 +352,12 @@ describe("PaneTabs", () => {
     };
     const onnotice = vi.fn();
     render(PaneTabs, {
-      props: { session: "lola-fe-42", active: "lola-fe-42", onselect: () => {}, onnotice },
+      props: {
+        session: "lola-fe-42",
+        active: "lola-fe-42",
+        onselect: () => {},
+        onnotice,
+      },
     });
 
     await screen.findByRole("tab", { name: "agent" });
@@ -269,12 +375,22 @@ describe("PaneTabs", () => {
     // missing worktree into it, so the accessible name names both rather than
     // guessing — and never re-derives the answer from a count.
     replies.panes = { ok: true, data: inventory(false) };
-    render(PaneTabs, { props: { session: "lola-fe-42", active: "lola-fe-42", onselect: () => {} } });
+    render(PaneTabs, {
+      props: {
+        session: "lola-fe-42",
+        active: "lola-fe-42",
+        onselect: () => {},
+      },
+    });
 
     await screen.findByRole("tab", { name: "agent" });
-    const plus = screen.getByRole("button", { name: /not available for this session/i });
+    const plus = screen.getByRole("button", {
+      name: /not available for this session/i,
+    });
     expect(plus).toBeDisabled();
-    expect(plus).toHaveAccessibleName(/no worktree, or it has reached the shell limit/i);
+    expect(plus).toHaveAccessibleName(
+      /no worktree, or it has reached the shell limit/i,
+    );
 
     await fireEvent.click(plus);
     expect(reqs().some((f) => f.cmd === "shellCreate")).toBe(false);
@@ -288,9 +404,17 @@ describe("PaneTabs", () => {
     // for a strip that could not exist. It is a fixable misconfiguration, so it
     // gets a sentence.
     replies.panes = { ok: false, error: 'unknown cmd "panes"' };
-    render(PaneTabs, { props: { session: "lola-fe-42", active: "lola-fe-42", onselect: () => {} } });
+    render(PaneTabs, {
+      props: {
+        session: "lola-fe-42",
+        active: "lola-fe-42",
+        onselect: () => {},
+      },
+    });
 
-    expect(await screen.findByText(/newer lola on the Mac/i)).toBeInTheDocument();
+    expect(
+      await screen.findByText(/newer lola on the Mac/i),
+    ).toBeInTheDocument();
     // No tabs to draw, and no live "+" either: cmd=shellCreate shipped in the
     // same commit, so a daemon that refuses one refuses the other. A button
     // whose only possible outcome is a second refusal is worse than a disabled
@@ -304,10 +428,21 @@ describe("PaneTabs", () => {
     // A session that is gone is already stated by the terminal's own banner,
     // and a second sentence about it in the tab row is noise. Only the
     // capability gap draws.
-    replies.panes = { ok: false, error: 'unknown_pane: session "lola-fe-42" is not available' };
-    render(PaneTabs, { props: { session: "lola-fe-42", active: "lola-fe-42", onselect: () => {} } });
+    replies.panes = {
+      ok: false,
+      error: 'unknown_pane: session "lola-fe-42" is not available',
+    };
+    render(PaneTabs, {
+      props: {
+        session: "lola-fe-42",
+        active: "lola-fe-42",
+        onselect: () => {},
+      },
+    });
 
-    await waitFor(() => expect(reqs().some((f) => f.cmd === "panes")).toBe(true));
+    await waitFor(() =>
+      expect(reqs().some((f) => f.cmd === "panes")).toBe(true),
+    );
     expect(screen.queryByRole("tablist")).toBeNull();
     expect(screen.queryByRole("button")).toBeNull();
     expect(screen.queryByText(/newer lola/i)).toBeNull();
@@ -321,7 +456,11 @@ describe("PaneTabs", () => {
     replies.panes = { ok: true, data: inventory() };
     const picked: string[] = [];
     const { rerender } = render(PaneTabs, {
-      props: { session: "lola-fe-42", active: "lola-fe-42", onselect: (p: string) => picked.push(p) },
+      props: {
+        session: "lola-fe-42",
+        active: "lola-fe-42",
+        onselect: (p: string) => picked.push(p),
+      },
     });
 
     const agent = await screen.findByRole("tab", { name: "agent" });
@@ -339,10 +478,14 @@ describe("PaneTabs", () => {
       active: "lola-fe-42-shell-1",
       onselect: (p: string) => picked.push(p),
     });
-    await fireEvent.keyDown(screen.getByRole("tab", { name: "shell 1" }), { key: "End" });
+    await fireEvent.keyDown(screen.getByRole("tab", { name: "shell 1" }), {
+      key: "End",
+    });
     expect(picked[picked.length - 1]).toBe("lola-fe-42-review");
 
-    await fireEvent.keyDown(screen.getByRole("tab", { name: "shell 1" }), { key: "Home" });
+    await fireEvent.keyDown(screen.getByRole("tab", { name: "shell 1" }), {
+      key: "Home",
+    });
     expect(picked[picked.length - 1]).toBe("lola-fe-42");
   });
 
@@ -353,7 +496,11 @@ describe("PaneTabs", () => {
     replies.panes = { ok: true, data: inventory() };
     const picked: string[] = [];
     render(PaneTabs, {
-      props: { session: "lola-fe-42", active: "lola-fe-42", onselect: (p: string) => picked.push(p) },
+      props: {
+        session: "lola-fe-42",
+        active: "lola-fe-42",
+        onselect: (p: string) => picked.push(p),
+      },
     });
 
     const agent = await screen.findByRole("tab", { name: "agent" });
@@ -385,7 +532,13 @@ describe("PaneTabs", () => {
     // the last item of a scrolling strip is unreachable exactly when the strip
     // is long enough to need it.
     replies.panes = { ok: true, data: inventory() };
-    render(PaneTabs, { props: { session: "lola-fe-42", active: "lola-fe-42", onselect: () => {} } });
+    render(PaneTabs, {
+      props: {
+        session: "lola-fe-42",
+        active: "lola-fe-42",
+        onselect: () => {},
+      },
+    });
 
     const plus = await screen.findByRole("button", { name: "New shell" });
     expect(screen.getByRole("tablist").contains(plus)).toBe(false);
@@ -394,10 +547,17 @@ describe("PaneTabs", () => {
   it("asks about the session it was given, and re-asks when that changes", async () => {
     replies.panes = { ok: true, data: inventory() };
     const { rerender } = render(PaneTabs, {
-      props: { session: "lola-fe-42", active: "lola-fe-42", onselect: () => {} },
+      props: {
+        session: "lola-fe-42",
+        active: "lola-fe-42",
+        onselect: () => {},
+      },
     });
     await screen.findByRole("tab", { name: "agent" });
-    expect(reqs()[reqs().length - 1].payload).toEqual({ cmd: "panes", session: "lola-fe-42" });
+    expect(reqs()[reqs().length - 1].payload).toEqual({
+      cmd: "panes",
+      session: "lola-fe-42",
+    });
 
     replies.panes = {
       ok: true,
@@ -407,10 +567,18 @@ describe("PaneTabs", () => {
         canCreateShell: true,
       },
     };
-    await rerender({ session: "lola-be-7", active: "lola-be-7", onselect: () => {} });
+    await rerender({
+      session: "lola-be-7",
+      active: "lola-be-7",
+      onselect: () => {},
+    });
 
     await waitFor(() =>
-      expect(reqs().filter((f) => f.cmd === "panes").map((f) => f.payload)).toContainEqual({
+      expect(
+        reqs()
+          .filter((f) => f.cmd === "panes")
+          .map((f) => f.payload),
+      ).toContainEqual({
         cmd: "panes",
         session: "lola-be-7",
       }),
@@ -453,8 +621,12 @@ describe("PaneTabs keeping up with panes that go", () => {
     replies.panes = { ok: true, data: withoutShell1() };
     await bump();
 
-    await waitFor(() => expect(reqs().filter((f) => f.cmd === "panes")).toHaveLength(2));
-    await waitFor(() => expect(screen.queryByRole("tab", { name: "shell 1" })).toBeNull());
+    await waitFor(() =>
+      expect(reqs().filter((f) => f.cmd === "panes")).toHaveLength(2),
+    );
+    await waitFor(() =>
+      expect(screen.queryByRole("tab", { name: "shell 1" })).toBeNull(),
+    );
   });
 
   it("does NOT poll", async () => {
@@ -478,7 +650,9 @@ describe("PaneTabs keeping up with panes that go", () => {
     // position -- same index, clamped -- so losing the second of several shells
     // lands on the shell that is now second, not at the far end of the strip.
     replies.panes = { ok: true, data: inventory() };
-    const { component } = render(PaneTabsHarness, { props: { pane: "lola-fe-42-shell-1" } });
+    const { component } = render(PaneTabsHarness, {
+      props: { pane: "lola-fe-42-shell-1" },
+    });
     await screen.findByRole("tab", { name: "shell 1" });
     expect(component.selected).toEqual([]);
 
@@ -486,14 +660,21 @@ describe("PaneTabs keeping up with panes that go", () => {
     await bump();
 
     // "shell 1" sat at index 1; index 1 of what is left is "shell 2".
-    await waitFor(() => expect(component.selected).toEqual(["lola-fe-42-shell-2"]));
     await waitFor(() =>
-      expect(component.notices).toContain("That pane closed. Showing shell 2 instead."),
+      expect(component.selected).toEqual(["lola-fe-42-shell-2"]),
+    );
+    await waitFor(() =>
+      expect(component.notices).toContain(
+        "That pane closed. Showing shell 2 instead.",
+      ),
     );
     // ...and the strip agrees, because the harness moved `active` the way the
     // screen's `attach` does.
     await waitFor(() =>
-      expect(screen.getByRole("tab", { name: "shell 2" })).toHaveAttribute("aria-selected", "true"),
+      expect(screen.getByRole("tab", { name: "shell 2" })).toHaveAttribute(
+        "aria-selected",
+        "true",
+      ),
     );
   });
 
@@ -506,7 +687,9 @@ describe("PaneTabs keeping up with panes that go", () => {
     replies.panes = { ok: true, data: withoutShell1() };
     await bump();
 
-    await waitFor(() => expect(screen.queryByRole("tab", { name: "shell 1" })).toBeNull());
+    await waitFor(() =>
+      expect(screen.queryByRole("tab", { name: "shell 1" })).toBeNull(),
+    );
     expect(component.selected).toEqual([]);
   });
 
@@ -537,8 +720,11 @@ describe("PaneTabs keeping up with panes that go", () => {
     // squashed. This strip is the only thing that asks.
     replies.panes = { ok: true, data: inventory() };
     const h = render(PaneTabsHarness);
-    const inv = (h.component as unknown as { inventories: { session: string; names: string[] }[] })
-      .inventories;
+    const inv = (
+      h.component as unknown as {
+        inventories: { session: string; names: string[] }[];
+      }
+    ).inventories;
     await screen.findByRole("tab", { name: "shell 1" });
     expect(inv).toEqual([
       {
@@ -566,14 +752,19 @@ describe("PaneTabs keeping up with panes that go", () => {
     // squashed with no record.
     replies.panes = { ok: true, data: inventory() };
     const h = render(PaneTabsHarness);
-    const inv = (h.component as unknown as { inventories: { session: string; names: string[] }[] })
-      .inventories;
+    const inv = (
+      h.component as unknown as {
+        inventories: { session: string; names: string[] }[];
+      }
+    ).inventories;
     await screen.findByRole("tab", { name: "shell 1" });
     expect(inv).toHaveLength(1);
 
     replies.panes = { ok: false, error: "no such session" };
     await bump();
-    await waitFor(() => expect(reqs().filter((f) => f.cmd === "panes")).toHaveLength(2));
+    await waitFor(() =>
+      expect(reqs().filter((f) => f.cmd === "panes")).toHaveLength(2),
+    );
     expect(inv).toHaveLength(1);
   });
 
@@ -592,8 +783,11 @@ describe("PaneTabs keeping up with panes that go", () => {
       held.push(f);
     };
     const h = render(PaneTabsHarness);
-    const inv = (h.component as unknown as { inventories: { session: string; names: string[] }[] })
-      .inventories;
+    const inv = (
+      h.component as unknown as {
+        inventories: { session: string; names: string[] }[];
+      }
+    ).inventories;
 
     await waitFor(() => expect(held).toHaveLength(1));
     await bump();
@@ -606,7 +800,9 @@ describe("PaneTabs keeping up with panes that go", () => {
       id: held[1]!.id,
       payload: { ok: true, data: withoutShell1() },
     });
-    await waitFor(() => expect(screen.queryByRole("tab", { name: "shell 1" })).toBeNull());
+    await waitFor(() =>
+      expect(screen.queryByRole("tab", { name: "shell 1" })).toBeNull(),
+    );
 
     // ...and the older one lands afterwards, still listing it.
     ch.deliver({
@@ -628,13 +824,17 @@ describe("PaneTabs keeping up with panes that go", () => {
     // it as empty would move a user off a perfectly live pane because the
     // socket hiccupped.
     replies.panes = { ok: true, data: inventory() };
-    const { component } = render(PaneTabsHarness, { props: { pane: "lola-fe-42-shell-1" } });
+    const { component } = render(PaneTabsHarness, {
+      props: { pane: "lola-fe-42-shell-1" },
+    });
     await screen.findByRole("tab", { name: "shell 1" });
 
     replies.panes = { ok: false, error: "not connected" };
     await bump();
 
-    await waitFor(() => expect(reqs().filter((f) => f.cmd === "panes")).toHaveLength(2));
+    await waitFor(() =>
+      expect(reqs().filter((f) => f.cmd === "panes")).toHaveLength(2),
+    );
     expect(component.selected).toEqual([]);
   });
 });
@@ -653,7 +853,13 @@ describe("PaneTabs long-press menu", () => {
 
   it("opens the menu for the tab that was held", async () => {
     replies.panes = { ok: true, data: inventory() };
-    render(PaneTabs, { props: { session: "lola-fe-42", active: "lola-fe-42", onselect: () => {} } });
+    render(PaneTabs, {
+      props: {
+        session: "lola-fe-42",
+        active: "lola-fe-42",
+        onselect: () => {},
+      },
+    });
 
     await longPress(await screen.findByRole("tab", { name: "shell 2" }));
 
@@ -671,7 +877,13 @@ describe("PaneTabs long-press menu", () => {
     // hard way -- a drag begun on its ^Z key suspended a live Claude Code
     // session -- and its 8px gate is reused rather than a second one written.
     replies.panes = { ok: true, data: inventory() };
-    render(PaneTabs, { props: { session: "lola-fe-42", active: "lola-fe-42", onselect: () => {} } });
+    render(PaneTabs, {
+      props: {
+        session: "lola-fe-42",
+        active: "lola-fe-42",
+        onselect: () => {},
+      },
+    });
 
     const tab = await screen.findByRole("tab", { name: "shell 2" });
     await pointer(tab, "pointerdown", 20, 20);
@@ -686,7 +898,13 @@ describe("PaneTabs long-press menu", () => {
     // A finger on glass is never perfectly still, and a gate that fired on
     // jitter would make the menu unreachable for anybody but a robot.
     replies.panes = { ok: true, data: inventory() };
-    render(PaneTabs, { props: { session: "lola-fe-42", active: "lola-fe-42", onselect: () => {} } });
+    render(PaneTabs, {
+      props: {
+        session: "lola-fe-42",
+        active: "lola-fe-42",
+        onselect: () => {},
+      },
+    });
 
     const tab = await screen.findByRole("tab", { name: "shell 2" });
     await pointer(tab, "pointerdown", 20, 20);
@@ -701,7 +919,9 @@ describe("PaneTabs long-press menu", () => {
     // would open the menu AND attach the pane behind it.
     replies.panes = { ok: true, data: inventory() };
     const onselect = vi.fn();
-    render(PaneTabs, { props: { session: "lola-fe-42", active: "lola-fe-42", onselect } });
+    render(PaneTabs, {
+      props: { session: "lola-fe-42", active: "lola-fe-42", onselect },
+    });
 
     const tab = await screen.findByRole("tab", { name: "shell 2" });
     await longPress(tab);
@@ -714,7 +934,9 @@ describe("PaneTabs long-press menu", () => {
   it("lets an ordinary tap through unchanged", async () => {
     replies.panes = { ok: true, data: inventory() };
     const onselect = vi.fn();
-    render(PaneTabs, { props: { session: "lola-fe-42", active: "lola-fe-42", onselect } });
+    render(PaneTabs, {
+      props: { session: "lola-fe-42", active: "lola-fe-42", onselect },
+    });
 
     const tab = await screen.findByRole("tab", { name: "shell 2" });
     await pointer(tab, "pointerdown", 20, 20);
@@ -732,11 +954,15 @@ describe("PaneTabs long-press menu", () => {
     // genuine tap.
     replies.panes = { ok: true, data: inventory() };
     const onselect = vi.fn();
-    render(PaneTabs, { props: { session: "lola-fe-42", active: "lola-fe-42", onselect } });
+    render(PaneTabs, {
+      props: { session: "lola-fe-42", active: "lola-fe-42", onselect },
+    });
 
     const tab = await screen.findByRole("tab", { name: "shell 2" });
     await longPress(tab);
-    await fireEvent.click(await screen.findByRole("button", { name: "Close the pane menu" }));
+    await fireEvent.click(
+      await screen.findByRole("button", { name: "Close the pane menu" }),
+    );
 
     await pointer(tab, "pointerdown", 20, 20);
     await pointer(tab, "pointerup", 20, 20);
@@ -751,7 +977,9 @@ describe("PaneTabs long-press menu", () => {
     // lift SELECTED the tab whose menu it had just opened.
     replies.panes = { ok: true, data: inventory() };
     const onselect = vi.fn();
-    render(PaneTabs, { props: { session: "lola-fe-42", active: "lola-fe-42", onselect } });
+    render(PaneTabs, {
+      props: { session: "lola-fe-42", active: "lola-fe-42", onselect },
+    });
 
     const held = await screen.findByRole("tab", { name: "shell 2" });
     await pointer(held, "pointerdown", 20, 20, { isPrimary: true });
@@ -778,7 +1006,9 @@ describe("PaneTabs long-press menu", () => {
     // so the first keystroke after any long press went nowhere.
     replies.panes = { ok: true, data: inventory() };
     const onselect = vi.fn();
-    render(PaneTabs, { props: { session: "lola-fe-42", active: "lola-fe-42", onselect } });
+    render(PaneTabs, {
+      props: { session: "lola-fe-42", active: "lola-fe-42", onselect },
+    });
 
     const tab = await screen.findByRole("tab", { name: "shell 2" });
     await longPress(tab);
@@ -800,7 +1030,12 @@ describe("PaneTabs long-press menu", () => {
     const h = render(PaneTabsHarness);
     const menu = (h.component as unknown as { menu: { pane: string } }).menu;
 
-    await pointer(await screen.findByRole("tab", { name: "shell 2" }), "pointerdown", 20, 20);
+    await pointer(
+      await screen.findByRole("tab", { name: "shell 2" }),
+      "pointerdown",
+      20,
+      20,
+    );
     h.unmount();
     await vi.advanceTimersByTimeAsync(LONG_PRESS_MS + 50);
 
@@ -809,11 +1044,19 @@ describe("PaneTabs long-press menu", () => {
 
   it("opens from the keyboard too, which cannot make a long press at all", async () => {
     replies.panes = { ok: true, data: inventory() };
-    render(PaneTabs, { props: { session: "lola-fe-42", active: "lola-fe-42", onselect: () => {} } });
+    render(PaneTabs, {
+      props: {
+        session: "lola-fe-42",
+        active: "lola-fe-42",
+        onselect: () => {},
+      },
+    });
 
     const agent = await screen.findByRole("tab", { name: "agent" });
     await fireEvent.keyDown(agent, { key: "ContextMenu" });
-    expect(await screen.findByRole("dialog")).toHaveAccessibleName("Options for agent");
+    expect(await screen.findByRole("dialog")).toHaveAccessibleName(
+      "Options for agent",
+    );
   });
 });
 
@@ -837,13 +1080,23 @@ describe("PaneTabs closing a pane", () => {
       ok: true,
       data: { session: "lola-fe-42", pane: "lola-fe-42-shell-1", closed: true },
     };
-    render(PaneTabs, { props: { session: "lola-fe-42", active: "lola-fe-42", onselect: () => {} } });
+    render(PaneTabs, {
+      props: {
+        session: "lola-fe-42",
+        active: "lola-fe-42",
+        onselect: () => {},
+      },
+    });
 
     await longPress(await screen.findByRole("tab", { name: "shell 1" }));
     replies.panes = { ok: true, data: withoutShell1() };
-    await fireEvent.click(await screen.findByRole("button", { name: "Close this pane" }));
+    await fireEvent.click(
+      await screen.findByRole("button", { name: "Close this pane" }),
+    );
 
-    await waitFor(() => expect(reqs().some((f) => f.cmd === "paneClose")).toBe(true));
+    await waitFor(() =>
+      expect(reqs().some((f) => f.cmd === "paneClose")).toBe(true),
+    );
     const sent = reqs().filter((f) => f.cmd === "paneClose");
     expect(sent).toHaveLength(1);
     expect(sent[0].payload).toEqual({
@@ -851,8 +1104,12 @@ describe("PaneTabs closing a pane", () => {
       args: { session: "lola-fe-42", pane: "lola-fe-42-shell-1" },
     });
 
-    await waitFor(() => expect(reqs().filter((f) => f.cmd === "panes")).toHaveLength(2));
-    await waitFor(() => expect(screen.queryByRole("tab", { name: "shell 1" })).toBeNull());
+    await waitFor(() =>
+      expect(reqs().filter((f) => f.cmd === "panes")).toHaveLength(2),
+    );
+    await waitFor(() =>
+      expect(screen.queryByRole("tab", { name: "shell 1" })).toBeNull(),
+    );
     // The menu cannot outlive the tab it was about.
     expect(screen.queryByRole("dialog")).toBeNull();
   });
@@ -863,12 +1120,20 @@ describe("PaneTabs closing a pane", () => {
     // at nothing. A control whose only possible outcome is a refusal is worse
     // than an absent one, so the button is not drawn at all.
     replies.panes = { ok: true, data: inventory() };
-    render(PaneTabs, { props: { session: "lola-fe-42", active: "lola-fe-42", onselect: () => {} } });
+    render(PaneTabs, {
+      props: {
+        session: "lola-fe-42",
+        active: "lola-fe-42",
+        onselect: () => {},
+      },
+    });
 
     await longPress(await screen.findByRole("tab", { name: "agent" }));
 
     await screen.findByRole("dialog");
-    expect(screen.queryByRole("button", { name: "Close this pane" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Close this pane" }),
+    ).toBeNull();
     expect(screen.getByText(/cannot be closed here/i)).toBeInTheDocument();
     expect(screen.getByText(/lola kill/)).toBeInTheDocument();
   });
@@ -880,10 +1145,18 @@ describe("PaneTabs closing a pane", () => {
     // CLAUDE.md states: a plain `text-bad` ties with the variant's own
     // `text-faint` and the winner would be whatever order Tailwind compiled.
     replies.panes = { ok: true, data: inventory() };
-    render(PaneTabs, { props: { session: "lola-fe-42", active: "lola-fe-42", onselect: () => {} } });
+    render(PaneTabs, {
+      props: {
+        session: "lola-fe-42",
+        active: "lola-fe-42",
+        onselect: () => {},
+      },
+    });
 
     await longPress(await screen.findByRole("tab", { name: "shell 1" }));
-    const close = await screen.findByRole("button", { name: "Close this pane" });
+    const close = await screen.findByRole("button", {
+      name: "Close this pane",
+    });
     expect(close.className).toContain("text-bad!");
   });
 
@@ -902,10 +1175,18 @@ describe("PaneTabs closing a pane", () => {
         canCreateShell: true,
       },
     };
-    render(PaneTabs, { props: { session: "lola-fe-42", active: "lola-fe-42", onselect: () => {} } });
+    render(PaneTabs, {
+      props: {
+        session: "lola-fe-42",
+        active: "lola-fe-42",
+        onselect: () => {},
+      },
+    });
 
     await longPress(await screen.findByRole("tab", { name: "audit 1" }));
-    expect(await screen.findByRole("button", { name: "Close this pane" })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("button", { name: "Close this pane" }),
+    ).toBeInTheDocument();
   });
 
   it("surfaces a refusal in the daemon's own words", async () => {
@@ -914,15 +1195,23 @@ describe("PaneTabs closing a pane", () => {
     replies.panes = { ok: true, data: inventory() };
     replies.paneClose = {
       ok: false,
-      error: 'pane "lola-fe-42-shell-1" does not belong to session "lola-fe-42"',
+      error:
+        'pane "lola-fe-42-shell-1" does not belong to session "lola-fe-42"',
     };
     const onnotice = vi.fn();
     render(PaneTabs, {
-      props: { session: "lola-fe-42", active: "lola-fe-42", onselect: () => {}, onnotice },
+      props: {
+        session: "lola-fe-42",
+        active: "lola-fe-42",
+        onselect: () => {},
+        onnotice,
+      },
     });
 
     await longPress(await screen.findByRole("tab", { name: "shell 1" }));
-    await fireEvent.click(await screen.findByRole("button", { name: "Close this pane" }));
+    await fireEvent.click(
+      await screen.findByRole("button", { name: "Close this pane" }),
+    );
 
     await waitFor(() =>
       expect(onnotice).toHaveBeenCalledWith(
@@ -942,15 +1231,26 @@ describe("PaneTabs closing a pane", () => {
     const onselect = vi.fn();
     const onnotice = vi.fn();
     render(PaneTabs, {
-      props: { session: "lola-fe-42", active: "lola-fe-42-shell-1", onselect, onnotice },
+      props: {
+        session: "lola-fe-42",
+        active: "lola-fe-42-shell-1",
+        onselect,
+        onnotice,
+      },
     });
 
     await longPress(await screen.findByRole("tab", { name: "shell 1" }));
     replies.panes = { ok: true, data: withoutShell1() };
-    await fireEvent.click(await screen.findByRole("button", { name: "Close this pane" }));
+    await fireEvent.click(
+      await screen.findByRole("button", { name: "Close this pane" }),
+    );
 
-    await waitFor(() => expect(onselect).toHaveBeenCalledWith("lola-fe-42-shell-2"));
-    expect(onnotice).not.toHaveBeenCalledWith(expect.stringContaining("That pane closed"));
+    await waitFor(() =>
+      expect(onselect).toHaveBeenCalledWith("lola-fe-42-shell-2"),
+    );
+    expect(onnotice).not.toHaveBeenCalledWith(
+      expect.stringContaining("That pane closed"),
+    );
   });
 });
 
@@ -969,13 +1269,21 @@ describe("PaneTabs renaming a tab", () => {
     // both, because the nickname is this phone's and the label is what anybody
     // at the Mac can see.
     replies.panes = { ok: true, data: inventory() };
-    render(PaneTabs, { props: { session: "lola-fe-42", active: "lola-fe-42", onselect: () => {} } });
+    render(PaneTabs, {
+      props: {
+        session: "lola-fe-42",
+        active: "lola-fe-42",
+        onselect: () => {},
+      },
+    });
 
     await longPress(await screen.findByRole("tab", { name: "shell 2" }));
     await fireEvent.input(screen.getByLabelText(/Name for this pane/i), {
       target: { value: "notes" },
     });
-    await fireEvent.click(screen.getByRole("button", { name: "Save the name" }));
+    await fireEvent.click(
+      screen.getByRole("button", { name: "Save the name" }),
+    );
 
     const tab = await screen.findByRole("tab", { name: "notes (shell 2)" });
     expect(tab.textContent?.trim()).toBe("notes");
@@ -988,7 +1296,13 @@ describe("PaneTabs renaming a tab", () => {
   it("shows a nickname that was stored before this mount", async () => {
     savePaneLabel("lola-fe-42-shell-2", "notes");
     replies.panes = { ok: true, data: inventory() };
-    render(PaneTabs, { props: { session: "lola-fe-42", active: "lola-fe-42", onselect: () => {} } });
+    render(PaneTabs, {
+      props: {
+        session: "lola-fe-42",
+        active: "lola-fe-42",
+        onselect: () => {},
+      },
+    });
 
     const tabs = await screen.findAllByRole("tab");
     expect(tabs.map((t) => t.textContent?.trim())).toEqual([
@@ -1003,10 +1317,20 @@ describe("PaneTabs renaming a tab", () => {
   it("gives the tab its daemon name back", async () => {
     savePaneLabel("lola-fe-42-shell-2", "notes");
     replies.panes = { ok: true, data: inventory() };
-    render(PaneTabs, { props: { session: "lola-fe-42", active: "lola-fe-42", onselect: () => {} } });
+    render(PaneTabs, {
+      props: {
+        session: "lola-fe-42",
+        active: "lola-fe-42",
+        onselect: () => {},
+      },
+    });
 
-    await longPress(await screen.findByRole("tab", { name: "notes (shell 2)" }));
-    await fireEvent.click(await screen.findByRole("button", { name: "Use the default name" }));
+    await longPress(
+      await screen.findByRole("tab", { name: "notes (shell 2)" }),
+    );
+    await fireEvent.click(
+      await screen.findByRole("button", { name: "Use the default name" }),
+    );
 
     await screen.findByRole("tab", { name: "shell 2" });
     expect(loadPaneLabels()).toEqual({});
@@ -1014,13 +1338,23 @@ describe("PaneTabs renaming a tab", () => {
 
   it("offers no undo on a tab that was never renamed", async () => {
     replies.panes = { ok: true, data: inventory() };
-    render(PaneTabs, { props: { session: "lola-fe-42", active: "lola-fe-42", onselect: () => {} } });
+    render(PaneTabs, {
+      props: {
+        session: "lola-fe-42",
+        active: "lola-fe-42",
+        onselect: () => {},
+      },
+    });
 
     await longPress(await screen.findByRole("tab", { name: "shell 2" }));
     await screen.findByRole("dialog");
-    expect(screen.queryByRole("button", { name: "Use the default name" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Use the default name" }),
+    ).toBeNull();
     // And nothing to save until something is typed.
-    expect(screen.getByRole("button", { name: "Save the name" })).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Save the name" }),
+    ).toBeDisabled();
   });
 
   it("FORGETS a nickname when its pane disappears", async () => {

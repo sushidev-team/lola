@@ -490,6 +490,7 @@
     active={nav.pane}
     panelId={PANE_PANEL_ID}
     refreshKey={paneRefresh}
+    {capacity}
     bind:menuPane={
       () => (nav.sheet === "pane" ? nav.menuPane || nav.pane : ""),
       (v) => {

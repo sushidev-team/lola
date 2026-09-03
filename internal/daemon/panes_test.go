@@ -56,7 +56,7 @@ func TestPanesRefusesAnUnknownSession(t *testing.T) {
 	if _, err := d.handlePanes(t.Context(), "nope"); err == nil {
 		t.Fatal("an unknown session was accepted")
 	}
-	if _, err := d.handleShellCreate(t.Context(), "nope"); err == nil {
+	if _, err := d.handleShellCreate(t.Context(), "nope", 0, 0); err == nil {
 		t.Fatal("a shell was created for an unknown session")
 	}
 }
@@ -69,7 +69,7 @@ func TestShellCreateRefusesWithoutAWorktree(t *testing.T) {
 	s := session.Session{ID: "acc-1", Source: "native", TmuxName: "acc-1", Worktree: ""}
 	d.sessions.Upsert(s)
 
-	_, err := d.handleShellCreate(t.Context(), "acc-1")
+	_, err := d.handleShellCreate(t.Context(), "acc-1", 0, 0)
 	if err == nil {
 		t.Fatal("a shell was created for a session with no worktree")
 	}
@@ -85,7 +85,7 @@ func TestShellCreateRefusesAMissingWorktree(t *testing.T) {
 	s := session.Session{ID: "acc-2", Source: "native", TmuxName: "acc-2", Worktree: t.TempDir() + "/gone"}
 	d.sessions.Upsert(s)
 
-	if _, err := d.handleShellCreate(t.Context(), "acc-2"); err == nil {
+	if _, err := d.handleShellCreate(t.Context(), "acc-2", 0, 0); err == nil {
 		t.Fatal("a shell was created in a worktree that does not exist")
 	}
 }

@@ -90,6 +90,14 @@
      */
     refreshKey = 0,
     /**
+     * What the phone can SHOW, in cells. Passed straight to `cmd=shellCreate`
+     * so a shell this device starts is BORN at the phone's size rather than
+     * being reflowed into it a moment later — the difference between a tab that
+     * appears and one that redraws itself line by line for several seconds.
+     * `{cols: 0, rows: 0}` (an unmeasured screen) means tmux's own default.
+     */
+    capacity = { cols: 0, rows: 0 },
+    /**
      * The pane whose menu is open, or "". Bindable so the screen can put it in
      * `nav` — a menu only a long press can open is a menu no screenshot can
      * reach, and the Simulator has no gesture API. It works uncontrolled too.
@@ -129,6 +137,7 @@
     active: string;
     panelId?: string;
     refreshKey?: number;
+    capacity?: { cols: number; rows: number };
     menuPane?: string;
     onselect: (pane: string) => void;
     onnotice?: (message: string) => void;
@@ -527,7 +536,7 @@
     if (creating || !canCreateShell) return;
     creating = true;
     try {
-      const d = await DaemonService.ShellCreate(session);
+      const d = await DaemonService.ShellCreate(session, capacity.cols, capacity.rows);
       // A shell THIS phone started is sized to this phone from the moment it
       // opens (see rememberOwnShell). Recorded here rather than on the terminal
       // screen because this is the only place that knows the pane was created

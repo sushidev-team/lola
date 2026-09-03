@@ -518,9 +518,23 @@ func (c *Client) ConfigureServer(ctx context.Context) error {
 // keep it — precisely the "cannot scroll" symptom. The retry lands once the
 // session exists; current tmux grows the pane's history to match.
 func (c *Client) NewSession(ctx context.Context, name, dir, command string) error {
+	return c.NewSessionSized(ctx, name, dir, command, 0, 0)
+}
+
+// NewSessionSized is NewSession with an explicit initial window size; 0 for
+// either dimension means tmux's own default. See the size note inside.
+func (c *Client) NewSessionSized(ctx context.Context, name, dir, command string, cols, rows int) error {
 	// Best-effort: a scroll default must never fail a spawn.
 	coldServer := c.ConfigureServer(ctx) != nil
 	args := []string{"new-session", "-d", "-s", name, "-c", dir}
+	// A size, when the caller knows one. tmux picks 80x24 for a session with no
+	// attached client, and the phone's shell tabs are the one caller that knows
+	// better before the window exists — being born right is the difference
+	// between a tab that appears and one that visibly reflows itself for
+	// several seconds afterwards.
+	if cols > 0 && rows > 0 {
+		args = append(args, "-x", strconv.Itoa(cols), "-y", strconv.Itoa(rows))
+	}
 	if command != "" {
 		args = append(args, command)
 	}

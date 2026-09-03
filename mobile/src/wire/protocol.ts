@@ -143,7 +143,9 @@ export function clientAcceptsFrame(t: string): boolean {
  * there is no v0.
  */
 export function supportedFrameVersion(v: number): boolean {
-  return Number.isInteger(v) && v >= FRAME_VERSION_MIN && v <= FRAME_VERSION_CURRENT;
+  return (
+    Number.isInteger(v) && v >= FRAME_VERSION_MIN && v <= FRAME_VERSION_CURRENT
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -264,9 +266,7 @@ export const PTY_ACTION_SCROLL = "scroll";
 export const PTY_ACTION_RESIZE = "resize";
 
 export type PTYAction =
-  | typeof PTY_ACTION_WRITE
-  | typeof PTY_ACTION_SCROLL
-  | typeof PTY_ACTION_RESIZE;
+  typeof PTY_ACTION_WRITE | typeof PTY_ACTION_SCROLL | typeof PTY_ACTION_RESIZE;
 
 /**
  * A client action on a subscribed pane.
@@ -400,6 +400,9 @@ export interface RequestFields {
   event?: string;
   detail?: string;
   text?: string;
+  /** The size the asking client can show, for cmd=shellCreate. */
+  cols?: number;
+  rows?: number;
   lines?: number;
   /** Typed argument payload for the project-centric commands. */
   args?: unknown;
@@ -508,7 +511,8 @@ export function commandDenied(cmd: string): boolean {
  *
  * A pane name is `SessionInfo.tmuxName || SessionInfo.id`.
  */
-export const PANE_NAME_RE = /^lola-[A-Za-z0-9._-]+(?:-shell-\d+|-review|-dev-\d+)?$/;
+export const PANE_NAME_RE =
+  /^lola-[A-Za-z0-9._-]+(?:-shell-\d+|-review|-dev-\d+)?$/;
 
 /**
  * The longest pane name that may reach a frame.
@@ -589,7 +593,13 @@ export const WRITE_TIMEOUT_MS = 15_000;
  * placed in a URL.
  */
 export function helloFrame(id: string, key: string): Frame {
-  return { v: FRAME_VERSION_CURRENT, type: FRAME_REQ, id, cmd: HELLO_CMD, payload: { key } };
+  return {
+    v: FRAME_VERSION_CURRENT,
+    type: FRAME_REQ,
+    id,
+    cmd: HELLO_CMD,
+    payload: { key },
+  };
 }
 
 /**
@@ -600,7 +610,10 @@ export function helloFrame(id: string, key: string): Frame {
  * order, so reproducing the daemon's bytes means reproducing the order. A spread
  * of a caller-built object would emit whatever order the caller happened to type.
  */
-export function requestPayload(cmd: string, fields: RequestFields = {}): Record<string, unknown> {
+export function requestPayload(
+  cmd: string,
+  fields: RequestFields = {},
+): Record<string, unknown> {
   const p: Record<string, unknown> = { cmd }; // no omitempty on Cmd
   if (fields.poll) p.poll = fields.poll;
   if (fields.dryRun) p.dryRun = true;
@@ -613,6 +626,10 @@ export function requestPayload(cmd: string, fields: RequestFields = {}): Record<
   // Hook is deliberately absent: cmd=hookEvent is denied for every remote peer.
   // Force is deliberately absent: normalizeRequest clears it unconditionally.
   if (fields.text) p.text = fields.text;
+  // Cols/Rows precede Lines, as they do in the Go struct — this function
+  // reproduces encoding/json's declaration order, not a spread.
+  if (fields.cols) p.cols = Math.trunc(fields.cols);
+  if (fields.rows) p.rows = Math.trunc(fields.rows);
   if (fields.lines) p.lines = Math.trunc(fields.lines);
   if (fields.args !== undefined && fields.args !== null) p.args = fields.args;
   return p;
@@ -623,7 +640,11 @@ export function requestPayload(cmd: string, fields: RequestFields = {}): Record<
  * that is what the daemon's own round trip produces; the envelope's copy is the
  * one that is authorized and the one that overwrites the payload's.
  */
-export function requestFrame(id: string, cmd: string, fields: RequestFields = {}): Frame {
+export function requestFrame(
+  id: string,
+  cmd: string,
+  fields: RequestFields = {},
+): Frame {
   return {
     v: FRAME_VERSION_CURRENT,
     type: FRAME_REQ,
@@ -634,7 +655,11 @@ export function requestFrame(id: string, cmd: string, fields: RequestFields = {}
 }
 
 /** A `sub` frame. `cols`/`rows` are advisory; omit them and the daemon does not care. */
-export function subFrame(id: string, pane: string, viewport?: SubPayload): Frame {
+export function subFrame(
+  id: string,
+  pane: string,
+  viewport?: SubPayload,
+): Frame {
   const f: Frame = { v: FRAME_VERSION_CURRENT, type: FRAME_SUB, id, pane };
   if (viewport && (viewport.cols || viewport.rows)) f.payload = viewport;
   return f;
@@ -650,7 +675,11 @@ export function unsubFrame(pane: string): Frame {
 }
 
 /** A `pty` write frame. `data` is base64 of the raw bytes. */
-export function ptyWriteFrame(pane: string, dataBase64: string, id?: string): Frame {
+export function ptyWriteFrame(
+  pane: string,
+  dataBase64: string,
+  id?: string,
+): Frame {
   const f: Frame = { v: FRAME_VERSION_CURRENT, type: FRAME_PTY, pane };
   if (id) f.id = id;
   // `PTYInputPayload.Data` is `json:"data,omitempty"`, so an empty payload is
@@ -658,7 +687,9 @@ export function ptyWriteFrame(pane: string, dataBase64: string, id?: string): Fr
   // builder in this file reproduces omitempty exactly, because the golden
   // vectors compare BYTES: a field written where Go would drop it is a drift
   // that only shows up the day someone pins the frame in question.
-  f.payload = dataBase64 ? { action: PTY_ACTION_WRITE, data: dataBase64 } : { action: PTY_ACTION_WRITE };
+  f.payload = dataBase64
+    ? { action: PTY_ACTION_WRITE, data: dataBase64 }
+    : { action: PTY_ACTION_WRITE };
   return f;
 }
 
@@ -668,7 +699,11 @@ export function ptyWriteFrame(pane: string, dataBase64: string, id?: string): Fr
  * `up := lines > 0`. The value is clamped to `MAX_SCROLL_LINES`, matching what
  * the daemon will do with it anyway.
  */
-export function ptyScrollFrame(pane: string, lines: number, id?: string): Frame {
+export function ptyScrollFrame(
+  pane: string,
+  lines: number,
+  id?: string,
+): Frame {
   const n = Math.trunc(lines);
   const clamped = Math.max(-MAX_SCROLL_LINES, Math.min(MAX_SCROLL_LINES, n));
   const f: Frame = { v: FRAME_VERSION_CURRENT, type: FRAME_PTY, pane };
@@ -676,7 +711,9 @@ export function ptyScrollFrame(pane: string, lines: number, id?: string): Frame 
   // `Lines` is `json:"lines,omitempty"`. A zero scroll is a no-op the daemon
   // ignores, and the caller already returns early on one; the omission keeps the
   // bytes identical to what Go would write for the same struct.
-  f.payload = clamped ? { action: PTY_ACTION_SCROLL, lines: clamped } : { action: PTY_ACTION_SCROLL };
+  f.payload = clamped
+    ? { action: PTY_ACTION_SCROLL, lines: clamped }
+    : { action: PTY_ACTION_SCROLL };
   return f;
 }
 
@@ -685,12 +722,19 @@ export function ptyScrollFrame(pane: string, lines: number, id?: string): Frame 
  * daemon has an honest record of the subscriber's viewport, not because anything
  * will change.
  */
-export function ptyResizeFrame(pane: string, cols: number, rows: number, id?: string): Frame {
+export function ptyResizeFrame(
+  pane: string,
+  cols: number,
+  rows: number,
+  id?: string,
+): Frame {
   const f: Frame = { v: FRAME_VERSION_CURRENT, type: FRAME_PTY, pane };
   if (id) f.id = id;
   // `Cols` and `Rows` are both `json:"...,omitempty"`, and they are omitted
   // independently: a zero column count with a real row count writes only rows.
-  const payload: { action: string; cols?: number; rows?: number } = { action: PTY_ACTION_RESIZE };
+  const payload: { action: string; cols?: number; rows?: number } = {
+    action: PTY_ACTION_RESIZE,
+  };
   const c = Math.trunc(cols);
   const r = Math.trunc(rows);
   if (c) payload.cols = c;

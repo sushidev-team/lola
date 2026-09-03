@@ -154,6 +154,20 @@ type Request struct {
 	// session's pane (send-keys appends Enter).
 	Text string `json:"text,omitempty"`
 
+	// Cols and Rows optionally state the size the CLIENT can show, for
+	// cmd=shellCreate: the tmux session is created at that size instead of
+	// tmux's default.
+	//
+	// It exists so a phone's shell tab does not have to be REFLOWED into shape
+	// after the fact. Created at tmux's own size a shell is typically 157x37,
+	// so a phone pinned it a moment later and the tab visibly redrew itself
+	// line by line for several seconds. Born at the right size there is nothing
+	// to redraw. Both are ignored unless positive, and clamped like every other
+	// dimension on this surface, so a client that does not send them (or sends
+	// nonsense) gets exactly the old behaviour.
+	Cols int `json:"cols,omitempty"`
+	Rows int `json:"rows,omitempty"`
+
 	// Lines optionally bounds cmd=pane's capture to the last N rendered rows of
 	// the target pane; 0 means the daemon's default (~40).
 	Lines int `json:"lines,omitempty"`
