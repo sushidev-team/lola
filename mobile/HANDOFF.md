@@ -66,6 +66,27 @@ agent's in-progress work into the operator's daemon:
       GOCACHE=<repo>/.gocache GOFLAGS='-mod=mod -buildvcs=false' \
       go build -tags lola_insecure -o "$T/lola" .
 
+**The phone can now FIND the daemon, and that is separate from trusting it.**
+The daemon advertises `_lola._tcp` on the local network with `dns-sd`
+(`internal/mdns`, started and withdrawn with the listener), publishing its port
+and its SPKI pin in a TXT record — never the bearer key, which everything on the
+network could read. The phone browses with `NWBrowser`
+(`LolaDiscovery.swift`, `src/lib/discovery.ts`) only after every address it
+already knows has failed, because a remembered address that still works costs
+one connect while a browse costs a fixed couple of seconds.
+
+Two properties are worth keeping:
+
+- **A discovered address is a candidate, not an authority.** Anything on a
+  network can advertise that service type. The pinned TLS handshake decides, as
+  it does for a typed address; comparing the advertised pin only saves a doomed
+  socket.
+- **Nothing about discovery is an error path.** No `dns-sd`, a declined
+  local-network permission, a network that blocks multicast, an empty browse —
+  all of them mean "no candidates", and the stored addresses are still tried.
+  `NSBonjourServices` must list `_lola._tcp` or iOS returns no results without
+  an error, which reads as a daemon that is not advertising.
+
 **Reaching the daemon from a phone needs two config keys, not one.**
 `[remote].bind = "lan"` and `[remote].insecure_lan = true`. Either alone binds
 loopback. The pairing was originally an environment variable and that was wrong:

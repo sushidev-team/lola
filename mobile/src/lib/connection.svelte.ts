@@ -38,8 +38,15 @@ import type {
   Viewport,
 } from "@mobile/wire";
 import { INSECURE_MIN_KEY_LEN } from "@mobile/wire/protocol";
+import { canDiscover, candidates, discover, type Candidate } from "./discovery";
 import { diagnose, type Diagnosis } from "./diagnose";
-import { endpointId, parsePort, validateDraft, type EndpointDraft, type EndpointProblem } from "./endpoint";
+import {
+  endpointId,
+  parsePort,
+  validateDraft,
+  type EndpointDraft,
+  type EndpointProblem,
+} from "./endpoint";
 import {
   clearEndpoint,
   findKey,
@@ -105,17 +112,18 @@ export class Connection {
       ? {
           kind: "unreachable",
           title: `Reconnecting to ${this.label}`,
-          detail: "The connection was closed while the app was in the background.",
+          detail:
+            "The connection was closed while the app was in the background.",
           retryable: true,
         }
-      : backgroundedDiagnosis(this.error, this.label) ??
-        diagnose({
-          phase: this.phase,
-          error: this.error,
-          refusal: this.refusal,
-          host: this.host,
-          label: this.label,
-        }),
+      : (backgroundedDiagnosis(this.error, this.label) ??
+          diagnose({
+            phase: this.phase,
+            error: this.error,
+            refusal: this.refusal,
+            host: this.host,
+            label: this.label,
+          })),
   );
 
   ready = $derived(this.phase === "ready");
@@ -250,7 +258,11 @@ export class Connection {
     this.hasStoredKey = found.where !== "none";
     this.keyStorage = found.where;
     return {
-      draft: { host: saved.host, port: port ? String(port) : "", spkiPin: saved.spkiPin },
+      draft: {
+        host: saved.host,
+        port: port ? String(port) : "",
+        spkiPin: saved.spkiPin,
+      },
       // Empty for a Keychain-held key, and deliberately so: the plaintext has
       // no way back across the bridge, because a resolved payload is logged.
       // `keyRef` is how it is used instead. See secretstore.ts.
@@ -281,7 +293,12 @@ export class Connection {
   ): Promise<boolean> {
     // A key held natively is a key that IS there; validating a string the
     // caller was deliberately not given would refuse every reconnect.
-    this.problems = validateDraft(draft, key, INSECURE_MIN_KEY_LEN, keyRef !== "");
+    this.problems = validateDraft(
+      draft,
+      key,
+      INSECURE_MIN_KEY_LEN,
+      keyRef !== "",
+    );
     if (this.problems.length > 0) return false;
 
     // Any connect is a statement of intent to be connected, so it revokes an
@@ -311,19 +328,41 @@ export class Connection {
     // know which one the phone shares a network with. Committing to the first
     // and reporting "unreachable" blames the network for what is really a
     // guess, on a machine that already listed the alternatives.
-    const hosts = [draft.host.trim(), ...alternates.map((a) => a.trim())].filter(
-      (h, i, all) => h !== "" && all.indexOf(h) === i,
-    );
+    const hosts = [
+      draft.host.trim(),
+      ...alternates.map((a) => a.trim()),
+    ].filter((h, i, all) => h !== "" && all.indexOf(h) === i);
 
     this.busy = true;
     try {
-      for (const host of hosts) {
-        const endpoint: Endpoint = { host, port, spkiPin: pin, insecureKey: key, keyRef };
+      // The addresses that were OFFERED, then the ones this network can be
+      // ASKED for. See #discovered: browsing costs a couple of seconds and is
+      // only worth paying once everything already known has failed.
+      let attempts: { host: string; port: number }[] = hosts.map((h) => ({
+        host: h,
+        port,
+      }));
+      let browsed = false;
+
+      for (let i = 0; i < attempts.length; i++) {
+        const { host, port: hostPort } = attempts[i];
+        if (i === attempts.length - 1 && !browsed) {
+          browsed = true;
+          const extra = await this.#discovered(pin, hosts);
+          attempts = [...attempts, ...extra];
+        }
+        const endpoint: Endpoint = {
+          host,
+          port: hostPort,
+          spkiPin: pin,
+          insecureKey: key,
+          keyRef,
+        };
 
         // Show the target while connecting, so the failure sentence can name it
         // even if the transport never reports a status at all.
         this.host = endpoint.host;
-        this.port = port;
+        this.port = hostPort;
         this.error = null;
         this.refusal = null;
 
@@ -333,12 +372,19 @@ export class Connection {
             // Remember the one that WORKED, not the one offered first —
             // otherwise the next launch repeats the same failed guess and pays
             // its timeout again.
-            saveEndpoint({ host: endpoint.host, port, spkiPin: endpoint.spkiPin });
+            saveEndpoint({
+              host: endpoint.host,
+              port: hostPort,
+              spkiPin: endpoint.spkiPin,
+            });
             // The OUTCOME, not the attempt: a Keychain that refused leaves the
             // key in memory for this run only, and the connect screen has to be
             // able to say so rather than promising a persistence that did not
             // happen.
-            this.keyStorage = await storeKey(endpointId(endpoint.host, port), key);
+            this.keyStorage = await storeKey(
+              endpointId(endpoint.host, hostPort),
+              key,
+            );
             this.hasStoredKey = true;
           }
           return true;
@@ -348,7 +394,11 @@ export class Connection {
           if (!this.refusal && !this.error) {
             this.error = e instanceof Error ? e : new Error(String(e));
           }
-          if (this.phase === "ready" || this.phase === "connecting" || this.phase === "handshaking") {
+          if (
+            this.phase === "ready" ||
+            this.phase === "connecting" ||
+            this.phase === "handshaking"
+          ) {
             this.phase = "closed";
           }
 
@@ -363,6 +413,38 @@ export class Connection {
       return false;
     } finally {
       this.busy = false;
+    }
+  }
+
+  /**
+   * Ask the network where this daemon is, once every known address has failed.
+   *
+   * WHY IT IS LAST RATHER THAN FIRST. A remembered address that still works is
+   * the common case and costs one connect; browsing costs a fixed couple of
+   * seconds whatever the answer. So discovery is what happens when the answer
+   * this phone already had turns out to be stale — a Mac at the office instead
+   * of at home, a new DHCP lease, a hotspot — which is exactly when a couple of
+   * seconds is cheaper than the alternative of a human retyping an address.
+   *
+   * A CANDIDATE IS NOT TRUSTED FOR BEING FOUND. Anything on a network can
+   * advertise the service; the pin decides, in the same handshake that decides
+   * for a typed address. `candidates` only drops a service whose ADVERTISED pin
+   * already disagrees, which saves a doomed socket rather than providing any
+   * security of its own.
+   *
+   * Failure is silent by construction: no plugin, a declined local-network
+   * permission and a network without multicast all mean "no candidates", and
+   * the caller has already tried everything else.
+   */
+  async #discovered(
+    pin: string,
+    known: readonly string[],
+  ): Promise<Candidate[]> {
+    if (!canDiscover()) return [];
+    try {
+      return candidates(await discover(), pin, known);
+    } catch {
+      return [];
     }
   }
 
@@ -542,7 +624,10 @@ export class Connection {
 
   /** Send one command. The store normally does this through the shim; the
    *  terminal screen uses it for the pane classification it needs. */
-  request<T = unknown>(cmd: string, fields?: Record<string, unknown>): Promise<T> {
+  request<T = unknown>(
+    cmd: string,
+    fields?: Record<string, unknown>,
+  ): Promise<T> {
     const t = this.#transport;
     if (!t) return Promise.reject(new Error("not connected"));
     return t.request<T>(cmd, fields as never);
@@ -563,7 +648,10 @@ export class Connection {
  *
  * Returns null for everything else, so `diagnose` keeps every branch it owns.
  */
-function backgroundedDiagnosis(error: Error | null, label: string): Diagnosis | null {
+function backgroundedDiagnosis(
+  error: Error | null,
+  label: string,
+): Diagnosis | null {
   if (!error || !/^backgrounded\b/.test(error.message)) return null;
   return {
     kind: "unreachable",

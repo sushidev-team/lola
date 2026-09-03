@@ -27,6 +27,12 @@ public class LolaTransportPlugin: CAPPlugin, CAPBridgedPlugin {
         // second half, so a new one only ever adds a line to this array.
         CAPPluginMethod(name: "scanQR", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "scanCapability", returnType: CAPPluginReturnPromise),
+        // Local-network discovery, so a paired phone finds the same Mac on a
+        // network whose addresses it has never seen. Body in
+        // LolaTransportPlugin+Discovery.swift; it RESOLVES with an empty list
+        // where there is nothing to find, because the stored addresses are
+        // still the fallback and a network without multicast is not an error.
+        CAPPluginMethod(name: "discover", returnType: CAPPluginReturnPromise),
         // The secret store. Bodies live in LolaTransportPlugin+Secrets.swift,
         // the SecItem calls themselves in LolaTransportCore.LolaKeychain.
         // `secretstore.ts` PROBES for these three names before it uses them and

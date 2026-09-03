@@ -68,10 +68,20 @@
 	     unicast to a private-range address, and an app without this string is denied
 	     WITHOUT ever prompting - which surfaces as an ordinary unreachable host, so
 	     it looks like a wrong address rather than a permission. It does not fire for
-	     loopback, so a Simulator run or a phone-side SSH forward never prompts.
-	     NSBonjourServices is deliberately absent: nothing browses until milestone 6. -->
+	     loopback, so a Simulator run or a phone-side SSH forward never prompts. -->
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Lola connects to the lola daemon on your Mac over your local network.</string>
+	<!-- The service the daemon advertises (internal/mdns.ServiceType), so this app
+	     may BROWSE for it. iOS refuses an unlisted service type silently: NWBrowser
+	     reports no results rather than an error, which reads as "the Mac is not
+	     advertising" and sends someone to debug the daemon. It must stay byte-identical
+	     to the Go constant. Browsing is what lets a paired phone find the same Mac on a
+	     network whose addresses it has never seen - the key and the pin already work
+	     anywhere, only the address goes stale. -->
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_lola._tcp</string>
+	</array>
 	<!-- Required to scan the pairing QR code the lola desktop app draws. iOS
 	     refuses camera access outright, without ever prompting, when this string is
 	     missing, so its absence looks like a broken scanner rather than a missing
