@@ -4,6 +4,7 @@ package daemon
 
 import (
 	"context"
+	"os"
 	"strings"
 	"testing"
 
@@ -37,6 +38,15 @@ func TestPairBeginRefusesWithoutTheInsecureBuildTag(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "lola_insecure") {
 		t.Errorf("the refusal should name the build tag, got %q", err)
+	}
+	// AND WHICH DAEMON ANSWERED. "this binary" is the one thing the reader
+	// cannot see: the running daemon is rarely the one its operator last built.
+	// A stray `go run .` — whose executable is a temp file under /var/folders —
+	// produced this refusal on a machine whose PATH binary was correctly
+	// tagged, and the message was true and unactionable.
+	exe, eerr := os.Executable()
+	if eerr == nil && exe != "" && !strings.Contains(err.Error(), exe) {
+		t.Errorf("the refusal should name the running binary %q, got %q", exe, err)
 	}
 }
 

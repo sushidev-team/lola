@@ -5,6 +5,7 @@ package daemon
 import (
 	"context"
 	"errors"
+	"os"
 
 	"github.com/sushidev-team/lola/internal/protocol"
 )
@@ -27,8 +28,22 @@ import (
 // state the operator can fix in the app: no configuration change produces a
 // code from this binary. The sentence names the build flag so a reader learns
 // the way out in one place, the way listenRemote's refusal does.
+//
+// IT NAMES THE BINARY THAT ANSWERED, because "this binary" is the one thing the
+// reader cannot see. The refusal is a property of how the RUNNING daemon was
+// built, and the daemon a machine is running is rarely the one its operator
+// last built: a `lola run` resolved from PATH, an app or TUI restart that
+// re-execs whatever started it, a stray `go run .` whose executable is a temp
+// file under /var/folders. That last one produced this exact message on a
+// machine whose PATH binary was correctly tagged — the message was true, and
+// unactionable, because nothing said which daemon was speaking.
 func (d *Daemon) handlePairBegin(_ context.Context) (protocol.PairBeginData, error) {
+	where := ""
+	if exe, err := os.Executable(); err == nil && exe != "" {
+		where = " The daemon answering is " + exe + "; rebuild and restart it (make daemon-dev)."
+	}
 	return protocol.PairBeginData{}, errors.New(
 		"this binary cannot hand out a connect code: M1 authenticates a phone with the insecure " +
-			"LOLA_REMOTE_INSECURE_KEY bearer key, and that path is compiled only with -tags lola_insecure")
+			"LOLA_REMOTE_INSECURE_KEY bearer key, and that path is compiled only with -tags lola_insecure." +
+			where)
 }
