@@ -163,6 +163,7 @@ type fileRemoteConfig struct {
 	Bind        *string `toml:"bind,omitempty"`
 	Port        *int    `toml:"port,omitempty"`
 	InsecureLAN *bool   `toml:"insecure_lan,omitempty"`
+	Advertise   *bool   `toml:"advertise,omitempty"`
 }
 
 // resolveRemote materializes the [remote] table. A nil (absent) mirror yields
@@ -190,6 +191,9 @@ func resolveRemote(fr *fileRemoteConfig) RemoteConfig {
 	if fr.InsecureLAN != nil {
 		r.InsecureLAN = *fr.InsecureLAN
 	}
+	if fr.Advertise != nil {
+		r.Advertise = *fr.Advertise
+	}
 	return r
 }
 
@@ -206,6 +210,7 @@ func remoteFile(r RemoteConfig) *fileRemoteConfig {
 		Bind:        &r.Bind,
 		Port:        &r.Port,
 		InsecureLAN: &r.InsecureLAN,
+		Advertise:   &r.Advertise,
 	}
 }
 

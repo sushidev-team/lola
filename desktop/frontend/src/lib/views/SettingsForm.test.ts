@@ -12,6 +12,7 @@ const fakeDto = {
   remoteEnabled: false,
   remoteBind: "localhost",
   remoteInsecureLan: false,
+  remoteAdvertise: false,
   remotePort: 7717,
   globalCap: 5,
   concurrencyCap: 2,
@@ -317,6 +318,25 @@ describe("SettingsForm", () => {
     const sel = screen.getByLabelText("Bind") as HTMLSelectElement;
     const opts = [...sel.options].map((o) => o.value);
     expect(opts).toEqual(["off", "localhost", "lan", "all", "invented", "__literal"]);
+  });
+
+  it("carries the local-network advertisement, which is off until it is asked for", async () => {
+    // A DISCLOSURE rather than a convenience: the service announces that this
+    // machine runs coding agents and accepts remote control. It is reachable
+    // from this form because the alternative is hand-editing config.toml —
+    // which is where it lived when it shipped, and nobody found it.
+    GetSettings.mockResolvedValue({ ...fakeDto, remoteEnabled: true });
+    render(SettingsForm);
+    await screen.findByDisplayValue("60s");
+    await fireEvent.click(screen.getByRole("tab", { name: "Remote" }));
+
+    const box = await screen.findByLabelText(/Advertise on the local network/i);
+    expect(box).not.toBeChecked();
+
+    await fireEvent.click(box);
+    await fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+    await waitFor(() => expect(SaveSettings).toHaveBeenCalledTimes(1));
+    expect(SaveSettings.mock.calls[0][0]).toMatchObject({ remoteAdvertise: true });
   });
 
   it("keeps a configured IP literal instead of coercing it to a keyword", async () => {

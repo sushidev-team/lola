@@ -199,3 +199,56 @@ func TestRemoteValidationIsBuildTagIndependent(t *testing.T) {
 		}
 	}
 }
+
+// A key that is not in the on-disk mirror does not survive a save, and nothing
+// says so: Load reads it, the daemon uses it, Save drops it, and the next Load
+// reads the default back. That is how `advertise` shipped — settable in both
+// settings forms, gone by the next reload.
+func TestRemoteAdvertiseRoundTrips(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+
+	cfg := Config{Remote: RemoteConfig{Enabled: true, Bind: "lan", Port: 7717, Advertise: true}}
+	if err := cfg.Save(path); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	got, err := Load(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if !got.Remote.Advertise {
+		t.Fatal("advertise did not survive save/load")
+	}
+
+	// And an explicit false is preserved rather than being read as "unset".
+	cfg.Remote.Advertise = false
+	if err := cfg.Save(path); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	got, err = Load(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if got.Remote.Advertise {
+		t.Error("advertise came back on after being turned off")
+	}
+}
+
+// The default is OFF, and it is a decision rather than a reflex: the service
+// announces that this machine runs coding agents and accepts remote control to
+// every peer on the network. A [remote] table that never mentions the key must
+// therefore resolve to false.
+func TestRemoteAdvertiseDefaultsOff(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(path, []byte("[remote]\n  enabled = true\n  bind = \"lan\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if got.Remote.Advertise {
+		t.Error("a table that never mentions advertise resolved to on")
+	}
+}

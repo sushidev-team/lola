@@ -307,6 +307,12 @@ func newSettingsForm(cfgPath string, cfg *config.Config) *settingsForm {
 			// non-loopback bind — so a config that merely says "lan" still
 			// binds loopback.
 			{key: "remote_insecure_lan", tab: stRemote, label: "Allow LAN bind", help: "Milestone 1 forces the bind to loopback, which a physical phone cannot reach. Turning this on honours the bind above and puts the shared bearer key on your network in the clear. A Simulator does not need it.", kind: sfBool, b: cfg.Remote.InsecureLAN},
+			// A DISCLOSURE rather than a convenience, which is why it is off by
+			// default and says so: the service announces what this machine is to
+			// every peer on the network. What it buys is RECONNECTION — the key
+			// and the pin already work anywhere, and only the address a phone
+			// stored at pairing time goes stale.
+			{key: "remote_advertise", tab: stRemote, label: "Advertise on the network", help: "Publish this listener with mDNS so a paired phone finds this Mac on a network whose addresses it has never seen (home, office, hotspot) without re-pairing. It announces that this machine runs coding agents and accepts remote control, to every peer on the network; the record itself carries a version and nothing else. Needs dns-sd, which every Mac ships.", kind: sfBool, b: cfg.Remote.Advertise},
 
 			// [ui] — presentation only; no daemon behavior reads it. The TUI paints
 			// from this flavor (applyTheme) and so does the desktop app, so the
@@ -1572,6 +1578,7 @@ func (f *settingsForm) save() settingsFormEvent {
 	c.Remote.Bind = strings.TrimSpace(f.field("remote_bind").text)
 	c.Remote.Port = remotePort
 	c.Remote.InsecureLAN = f.field("remote_insecure_lan").b
+	c.Remote.Advertise = f.field("remote_advertise").b
 
 	c.UI.Theme = strings.TrimSpace(f.field("ui_theme").text)
 

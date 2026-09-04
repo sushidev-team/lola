@@ -143,6 +143,7 @@ type SettingsDTO struct {
 	RemoteBind        string `json:"remoteBind"`
 	RemotePort        int    `json:"remotePort"`
 	RemoteInsecureLAN bool   `json:"remoteInsecureLan"`
+	RemoteAdvertise   bool   `json:"remoteAdvertise"`
 
 	// ReviewProviders is the pluggable review catalog ([[review.provider]]),
 	// resolved to the EFFECTIVE set (the real catalog, or the entries synthesized
@@ -383,6 +384,7 @@ func (s *ConfigService) GetSettings() (SettingsDTO, error) {
 		RemoteBind:        cfg.Remote.BindMode(),
 		RemotePort:        cfg.Remote.ListenPort(),
 		RemoteInsecureLAN: cfg.Remote.InsecureLAN,
+		RemoteAdvertise:   cfg.Remote.Advertise,
 
 		ReviewProviders: reviewProvidersDTO(cfg),
 		ReviewLegacy:    legacyReviewOnly(cfg),
@@ -434,6 +436,7 @@ func (s *ConfigService) SaveSettings(dto SettingsDTO) error {
 	cfg.Remote.Bind = dto.RemoteBind
 	cfg.Remote.Port = dto.RemotePort
 	cfg.Remote.InsecureLAN = dto.RemoteInsecureLAN
+	cfg.Remote.Advertise = dto.RemoteAdvertise
 	// Review catalog. While the legacy tables are still present (read-only in the
 	// UI), the provider array is not written back — editing it alongside the
 	// legacy tables would produce a mixed config, a hard validation error;

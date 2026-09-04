@@ -466,6 +466,7 @@ export interface SettingsDTO {
     "remoteBind": string;
     "remotePort": number;
     "remoteInsecureLan": boolean;
+    "remoteAdvertise": boolean;
 
     /**
      * ReviewProviders is the pluggable review catalog ([[review.provider]]),

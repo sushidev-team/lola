@@ -1147,6 +1147,24 @@
                 </span>
               </span>
             </label>
+
+            <!-- A DISCLOSURE rather than a convenience, which is why it is off
+                 by default and why the copy leads with what it announces. What
+                 it buys is RECONNECTION, not pairing: the key and the pin
+                 already work on any network, and only the address the phone
+                 stored at pairing time goes stale. -->
+            <label class="flex cursor-pointer items-start gap-2 pt-1">
+              <Checkbox bind:checked={d.remoteAdvertise} />
+              <span>
+                <span>Advertise on the local network</span>
+                <span class="mt-0.5 block text-xs text-faint">
+                  Lets a paired phone find this Mac on a network whose addresses it has never seen — home, the office, a
+                  hotspot — without re-pairing. It announces to every peer on the network that this machine runs coding
+                  agents and accepts remote control; the announcement itself carries a version and nothing else, no
+                  hostname and no key.
+                </span>
+              </span>
+            </label>
           </div>
           <div class="mt-4 border-t border-edge pt-4">
             <div class="flex items-center justify-between gap-3">
