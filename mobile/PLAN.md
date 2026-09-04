@@ -501,6 +501,93 @@ The first implementation violated all three halves of that paragraph — it publ
 
 **Done when:** an Android phone pairs and answers an agent; an Android phone with the screen off for thirty minutes still receives a push and reconnects on tap; **a network with client isolation still pairs from the QR** (verified on an AP with client isolation explicitly enabled, or a guest SSID that has it on by default — named, because "a network with client isolation" is not a test setup); and a launchd-agent daemon on macOS 15 either works or says which of the two denials it hit.
 
+### M7 — The dev-server tunnel
+
+**Ships:** the app an agent is building, opened on the phone, with no change to
+any repository and nothing new exposed to the network. A session's dev servers
+already announce themselves — `internal/devurl` reads the addresses the dev tabs
+print and `SessionInfo.devUrls` carries them — and today those addresses are
+useless from a phone, because `php artisan serve` binds `127.0.0.1` and vite
+binds `[::1]`. Typing the Mac's LAN address does not help: measured on the
+operator's machine, `php 127.0.0.1:8000`, `node [::1]:5173`, `node [::1]:5174`,
+and only two unrelated servers on `*:3000`/`*:4000` were reachable at all.
+
+**The alternative this rejects, and why.** Binding those servers to `0.0.0.0`
+(`--host`, `--host=0.0.0.0`) works today, costs no code, and is the wrong
+default: it publishes a half-built application — with whatever auth it has so
+far, while an autonomous agent is writing to it — to every peer on the network,
+on a laptop that joins conference and office SSIDs. Centralizing the same thing
+in the daemon (a LAN listener that proxies to the loopback port) is the same
+exposure with better ergonomics, so it is rejected for the same reason.
+
+**The shape.** The phone already holds an authenticated, pinned TLS connection.
+The tunnel is stream frames on it, and a local listener on the PHONE, so the
+WebView loads `http://127.0.0.1:<port>` where `127.0.0.1` is the phone itself.
+Nothing new listens on the Mac, and the tunnel inherits the bearer key, the SPKI
+pin and — with discovery — reachability from any network the daemon is on.
+
+| frame | direction | payload |
+|-------|-----------|---------|
+| `tunOpen` | client → daemon | `{stream, session, url}` — open a stream to ONE of that session's advertised dev addresses |
+| `tunData` | both | `{stream, data}` — raw bytes, base64 as everything else on this wire is |
+| `tunClose` | both | `{stream, reason}` |
+
+Raw TCP rather than an HTTP proxy, because vite's HMR is a WebSocket and an
+HTTP-aware proxy would have to special-case the upgrade; a byte pipe carries it
+without knowing what it is.
+
+**The rails, in order of how much damage each prevents.**
+
+- **The target comes from the daemon's own list, never from the client.**
+  `tunOpen` names a URL by VALUE and the daemon matches it against the
+  `Session.DevURLs` it derived itself; a mismatch is refused. Without this the
+  phone is a SOCKS proxy into the Mac's loopback, which is where Postgres,
+  Redis, every other project's dev server and lola's own unix socket live. This
+  is the rail; everything below is defence in depth.
+- **Loopback only.** After matching, the address must be `127.0.0.0/8` or `::1`.
+  A dev command that printed a LAN address needs no tunnel and does not get one.
+- **Bounded.** A cap on concurrent streams per connection and on bytes buffered
+  per stream (backpressure by not reading), plus an idle timeout, so a phone
+  that walks out of range cannot pin file descriptors on the Mac.
+- **Lifetime is the session's, not the app's.** Streams close with the
+  connection, when the session stops being the ACTIVE one, and when the dev tabs
+  change — the URLs are re-derived on every observe cycle (`markDev` clears them
+  on any tab change), and a stream to an address no longer listed is closed
+  rather than left pointing at whatever took the port.
+- **No listener on the Mac's LAN interfaces, ever.** That is the whole
+  difference from the rejected alternative, and it is a property of the design
+  rather than a setting.
+
+**The phone half.** `LolaTunnel` opens one `NWListener` on `127.0.0.1` per
+mapped URL and multiplexes accepted connections over the existing transport. It
+tries to bind THE SAME PORT NUMBER the Mac's server used, falling back to an
+ephemeral one: an app that emits absolute URLs, or a dev server that checks
+`Origin`, is right far more often when the port matches, and `127.0.0.1:8000`
+reads as the same thing the developer sees on their Mac.
+
+**The UI, and the one thing it must not blur.** The ACTIVE session's URLs are
+mapped automatically — on `cmd=dev` activation and for a session already active
+when the app connects — because making a session active from a phone is only
+useful if what it starts is then reachable. One button per session, a dropdown
+when there is more than one address (there routinely is: the app and the
+bundler print separate URLs). It must not look like the existing `openURL`
+action, which opens a link on the MAC: same gesture, opposite machine, and a
+user who confuses them opens Safari on an unattended desktop in another room.
+
+**Honest limits.** A framework that hard-codes an absolute base URL to a port
+the phone could not reproduce will still be wrong. An HTTPS dev server tunnels
+fine but its certificate names the Mac's loopback, so the phone shows a warning.
+Off-network use (discovery, a VPN) pays the developer's own uplink for every
+asset. And this is not a relay: nothing is hosted, the bytes cross the same
+socket the session list does, so a phone with no route to the daemon has none to
+the dev server either.
+
+**Done when:** a phone opens the Laravel app of an active session at
+`127.0.0.1:8000` with no change to that repository; vite's HMR updates the page
+without a reload (the WebSocket survives); making a different session active
+moves the mapping and closes the old streams; and killing the dev tabs closes
+the tunnel rather than leaving a page that hangs.
+
 ## Open questions
 
 These need a human decision and are not the plan's to make.
