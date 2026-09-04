@@ -217,6 +217,12 @@ func (d *Daemon) observeNative(ctx context.Context) {
 	if aliveByName != nil && d.reconcileDevTabs(ctx, aliveByName) {
 		touched = true
 	}
+	// AFTER the dev state is derived, and on every cycle rather than on change:
+	// a forward is a live listener, so what matters is that it agrees with the
+	// facts now — a listener that died, or a session that quietly stopped being
+	// active, is corrected here. Idempotent, so a cycle with nothing to do opens
+	// and closes nothing.
+	d.syncDevForwards()
 	interpretQueued := 0
 	d.mu.Lock()
 	interpretPerCycle := d.cfg.StatusAgent.MaxPerCycle

@@ -375,6 +375,16 @@ type Daemon struct {
 	// dns-sd. nil uses the real one.
 	mdnsStart mdns.Starter
 
+	// forwards are the live dev-server forwards, keyed by session and target
+	// (internal/daemon/devforwardwire.go). They exist only while a session is
+	// the ACTIVE one and only when [remote].dev_forward is set. forwardOpen and
+	// forwardHosts are the seams tests use so no listener is opened and no
+	// interface is enumerated.
+	forwardMu    sync.Mutex
+	forwards     map[devForwardKey]liveForward
+	forwardOpen  func(host, target string) (string, io.Closer, error)
+	forwardHosts func() []string
+
 	// Socket-initiated tick work (pollOnce) is tracked separately from the
 	// worker/reconcile goroutines so graceful shutdown can drain it too.
 	shutMu   sync.Mutex
@@ -661,6 +671,10 @@ func Run(ctx context.Context) error {
 	// still streaming when the drain starts hangs shutdown until the phone
 	// happens to disconnect.
 	d.stopRemote()
+	// Before the worker drain: a forward holds accepted connections open for as
+	// long as a browser keeps them, which is exactly the unbounded wait the
+	// drain below is not built for.
+	d.stopDevForwards()
 	d.stopAllWorkers()
 	d.wg.Wait()
 	d.drainConnWork()

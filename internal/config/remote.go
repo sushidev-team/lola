@@ -120,6 +120,25 @@ type RemoteConfig struct {
 	// Discovery stays an OPTIMISATION — the stored addresses are tried first and
 	// still work — which is why a network that blocks multicast costs nothing.
 	Advertise bool `toml:"advertise"`
+
+	// DevForward republishes an ACTIVE session's dev servers on the local
+	// network, so a phone can open the app an agent is building
+	// (internal/daemon/devforwardwire.go). OFF unless asked for, for the same
+	// reason Advertise is: it puts something on a network.
+	//
+	// What it replaces is worse. A dev server binds loopback by default, so the
+	// advice every framework gives is `--host 0.0.0.0` — which publishes a
+	// half-built application, with whatever auth it has so far and an agent
+	// actively writing to it, permanently, on a well-known port, on every
+	// network the laptop joins. A forward is one random high port, on one
+	// private interface, that exists only while the session is active and only
+	// for an address lola itself discovered.
+	//
+	// It is still an exposure: anything on that network can reach the dev server
+	// while a forward is up. mobile/PLAN.md's M7 tunnel is what removes it
+	// entirely, by carrying the same bytes over the phone's already
+	// authenticated connection.
+	DevForward bool `toml:"dev_forward"`
 }
 
 // BindMode returns the EFFECTIVE bind selector: [remote].bind when set, else
@@ -164,6 +183,7 @@ type fileRemoteConfig struct {
 	Port        *int    `toml:"port,omitempty"`
 	InsecureLAN *bool   `toml:"insecure_lan,omitempty"`
 	Advertise   *bool   `toml:"advertise,omitempty"`
+	DevForward  *bool   `toml:"dev_forward,omitempty"`
 }
 
 // resolveRemote materializes the [remote] table. A nil (absent) mirror yields
@@ -194,6 +214,9 @@ func resolveRemote(fr *fileRemoteConfig) RemoteConfig {
 	if fr.Advertise != nil {
 		r.Advertise = *fr.Advertise
 	}
+	if fr.DevForward != nil {
+		r.DevForward = *fr.DevForward
+	}
 	return r
 }
 
@@ -211,6 +234,7 @@ func remoteFile(r RemoteConfig) *fileRemoteConfig {
 		Port:        &r.Port,
 		InsecureLAN: &r.InsecureLAN,
 		Advertise:   &r.Advertise,
+		DevForward:  &r.DevForward,
 	}
 }
 

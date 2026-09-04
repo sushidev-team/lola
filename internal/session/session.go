@@ -141,6 +141,12 @@ type Session struct {
 	// breadcrumb without moving the axis is what lets a UI say "idle, and it
 	// has been asking for you" while the control loop correctly reads idle.
 	// Cleared by SetAgentState the moment the axis leaves AgentIdle.
+	// DevForwards are the local-network addresses this session's dev servers are
+	// currently published at (internal/daemon/devforwardwire.go). DERIVED, like
+	// DevActive and DevURLs: written by the sync pass from live listeners, and
+	// meaningless across a restart because the listeners do not survive one.
+	DevForwards []string `json:"-"`
+
 	Nudged bool `json:"nudged,omitempty"`
 
 	// TranscriptPath is the agent's own transcript file as reported by its

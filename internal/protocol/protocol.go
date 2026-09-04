@@ -321,9 +321,15 @@ type SessionInfo struct {
 	// DevClash is set while a dev tab of this session is dead BECAUSE another
 	// process holds the port it wanted — the one dev failure lola can name and
 	// offer to undo (cmd=devFreePort). nil whenever the tabs are healthy.
+	// DevForwards are those same servers republished on the local network, so a
+	// phone can open them: the loopback addresses above are unreachable from
+	// anything but this machine. Present only while the session is ACTIVE and
+	// only when [remote].dev_forward is set, and each one ends with the tabs it
+	// belongs to. Empty is the normal state.
 	DevActive   bool          `json:"devActive,omitempty"`
 	DevCommands []string      `json:"devCommands,omitempty"`
 	DevURLs     []string      `json:"devUrls,omitempty"`
+	DevForwards []string      `json:"devForwards,omitempty"`
 	DevClash    *DevClashInfo `json:"devClash,omitempty"`
 
 	// Reaction-engine posture (PLAN P3), flattened so the TUI renders reaction

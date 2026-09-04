@@ -586,6 +586,7 @@ func (d *Daemon) sessionsData() protocol.SessionsData {
 			DevActive:   s.DevActive,
 			DevCommands: devCommands[s.Project],
 			DevURLs:     s.DevURLs,
+			DevForwards: s.DevForwards,
 		}
 		if c := s.DevClash; c != nil {
 			si.DevClash = &protocol.DevClashInfo{

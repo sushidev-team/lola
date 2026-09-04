@@ -516,6 +516,23 @@ endpoint = "https://api.linear.app/graphql"
 # so a network that blocks multicast (many corporate and guest WiFis do) costs
 # nothing. Requires the `dns-sd` tool, which every Mac ships.
 # advertise = false
+#
+# dev_forward: republish an ACTIVE session's dev servers on the local network,
+# so a phone can open the app an agent is building. Their addresses are already
+# known (lola reads what the dev tabs print) and useless from anywhere else:
+# `php artisan serve` binds 127.0.0.1 and vite binds [::1].
+#
+# OFF by default because it puts something on a network. What it replaces is
+# worse, which is the argument for having it at all: the advice every framework
+# gives is `--host 0.0.0.0`, publishing a half-built application — with whatever
+# auth it has so far, while an agent is writing to it — permanently, on a
+# well-known port, on every network the laptop joins. A forward is one random
+# high port on one private interface, for one address lola discovered itself,
+# and it ends when the session stops being active.
+#
+# It is still an exposure: anything on that network can reach the dev server
+# while a forward is up. Use it on a network you control.
+# dev_forward = false
 
 # ---------------------------------------------------------------------------
 # [[project]] — repository registry for the native runtime (one table per
