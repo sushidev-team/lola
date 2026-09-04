@@ -291,6 +291,16 @@ func (s *Server) Addrs() []BindAddr {
 	return out
 }
 
+// liveConns reports how many peers are connected right now.
+//
+// Read by BindDrifted, which must not tear a listener down over an address
+// APPEARING while somebody is streaming a pane through it.
+func (s *Server) liveConns() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.conns)
+}
+
 // Port reports the TCP port the listener is actually on.
 //
 // Read from a BOUND address rather than from the options, because the two can

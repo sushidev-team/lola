@@ -286,7 +286,45 @@ func (s *Server) BindDrifted() bool {
 		// which is a real change but one a rebind could not act on either.
 		return false
 	}
-	return !sameAddrSet(want, held)
+	if sameAddrSet(want, held) {
+		return false
+	}
+
+	// AN ADDITIVE CHANGE IS NOT DRIFT WHILE SOMEBODY IS CONNECTED.
+	//
+	// A rebind drops every live connection, so it has to be worth that. Losing
+	// a bound address is: the socket a phone is using may be the one that went
+	// away, and nothing else will notice. GAINING one is not — every address
+	// that worked a moment ago still works, and the new one matters only to a
+	// client that is not connected yet.
+	//
+	// The distinction is not academic. Plugging an iPhone into this Mac creates
+	// interfaces (en23, en27, …), each arriving with its own address, and every
+	// one of those arrivals used to tear down the listener — disconnecting the
+	// phone that had just been plugged in, mid-session, reported by the app as a
+	// daemon that had crashed.
+	//
+	// With no connections there is nothing to protect, so any difference
+	// rebinds and the listener stays current for the next phone to arrive.
+	if s.liveConns() > 0 && !lostAny(want, held) {
+		return false
+	}
+	return true
+}
+
+// lostAny reports whether any HELD address is missing from want — the half of a
+// change that actually costs reachability.
+func lostAny(want, held []BindAddr) bool {
+	have := make(map[string]bool, len(want))
+	for _, w := range want {
+		have[w.Addr] = true
+	}
+	for _, h := range held {
+		if !have[h.Addr] {
+			return true
+		}
+	}
+	return false
 }
 
 // sameAddrSet compares two bind sets by ADDRESS, ignoring order and interface
@@ -316,6 +354,15 @@ func sameAddrSet(a, b []BindAddr) bool {
 // including a globally routable address handed out by an ISP — is refused,
 // because "lan" must never resolve to a public listener by accident.
 func privateIP(ip net.IP) bool {
+	// A SELF-ASSIGNED IPv4 (169.254/16) is what an interface gets when DHCP
+	// FAILED. Nothing is reachable there, and worse, those addresses appear and
+	// disappear as interfaces come and go — plugging a phone in by USB creates
+	// one — which BindDrifted then reads as the machine having moved. Every
+	// such flap used to rebind the listener and drop the connection of the very
+	// phone that was just plugged in.
+	if v4 := ip.To4(); v4 != nil && v4[0] == 169 && v4[1] == 254 {
+		return false
+	}
 	if ip == nil || ip.IsUnspecified() || ip.IsLoopback() || ip.IsMulticast() {
 		return false
 	}

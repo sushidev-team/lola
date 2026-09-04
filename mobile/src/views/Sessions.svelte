@@ -200,9 +200,25 @@
     <!-- PLAN.md: an off-network phone must say so in one line naming the actual
          reason, and must never be shown the pairing screen — that is what
          revocation looks like, and the two have to stay distinguishable. -->
-    <div class="shrink-0 border-b border-warn/40 bg-warn/10 px-4 py-2" role="status">
-      <span class="text-sm text-warn">{connection.diagnosis.title}.</span>
-      <span class="text-sm text-faint"> Showing the last snapshot.</span>
+    <div class="flex shrink-0 items-center gap-2 border-b border-warn/40 bg-warn/10 px-4 py-2" role="status">
+      <span class="min-w-0 flex-1">
+        <span class="text-sm text-warn">{connection.diagnosis.title}.</span>
+        <span class="text-sm text-faint"> Showing the last snapshot.</span>
+      </span>
+      <!-- RECONNECT, HERE, because this banner is where a person finds out.
+           The ladder retries on its own and on every foreground, but its next
+           attempt can be a minute away and the app gave no way to say "now" —
+           so the only recovery anyone found was force-quitting the app, which
+           is a worse version of the same request. Disabled while an attempt is
+           in flight, so a second tap cannot restart the ladder underneath the
+           first. -->
+      <TouchButton
+        class="shrink-0 px-2!"
+        disabled={connection.busy || connection.reconnecting}
+        onclick={() => void connection.reconnect()}
+      >
+        {connection.busy || connection.reconnecting ? "Connecting…" : "Reconnect"}
+      </TouchButton>
     </div>
   {:else if !store.alive}
     <div class="shrink-0 border-b border-bad/40 bg-bad/10 px-4 py-2" role="status">

@@ -312,3 +312,39 @@ func TestLanIgnoresAWDLsRotatingAddress(t *testing.T) {
 		t.Errorf("got %v, want only the real interface %v", a, want)
 	}
 }
+
+// A self-assigned IPv4 (169.254/16) is what an interface gets when DHCP failed:
+// nothing is reachable there, and those addresses appear and vanish as
+// interfaces do — plugging a phone in by USB creates one — which BindDrifted
+// then reads as the machine having moved.
+func TestLanSkipsSelfAssignedIPv4(t *testing.T) {
+	ifaces := func() ([]NetIface, error) {
+		return []NetIface{
+			{Name: "en0", Flags: net.FlagUp, IPs: []net.IP{net.ParseIP("192.168.20.3")}},
+			{Name: "en28", Flags: net.FlagUp, IPs: []net.IP{net.ParseIP("169.254.159.133")}},
+		}, nil
+	}
+	got, err := resolveBind("lan", 7717, ifaces)
+	if err != nil {
+		t.Fatalf("resolveBind: %v", err)
+	}
+	want := []BindAddr{{Addr: "192.168.20.3:7717", Iface: "en0"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got %v, want %v", got, want)
+	}
+}
+
+// lostAny is the half of a change that costs reachability: a HELD address that
+// is no longer there.
+func TestLostAny(t *testing.T) {
+	held := []BindAddr{{Addr: "192.168.20.3:7717"}, {Addr: "10.0.4.21:7717"}}
+	if lostAny([]BindAddr{{Addr: "192.168.20.3:7717"}, {Addr: "10.0.4.21:7717"}, {Addr: "192.168.0.196:7717"}}, held) {
+		t.Error("an ADDED address was reported as a loss")
+	}
+	if !lostAny([]BindAddr{{Addr: "192.168.20.3:7717"}}, held) {
+		t.Error("a removed address was not reported")
+	}
+	if lostAny(held, nil) {
+		t.Error("holding nothing cannot lose anything")
+	}
+}

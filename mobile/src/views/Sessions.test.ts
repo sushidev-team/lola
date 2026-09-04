@@ -32,7 +32,12 @@ function s(over: Partial<SessionInfo> = {}): SessionInfo {
 beforeEach(() => {
   store.sessions = [
     s({ id: "a", issue: "NOR-401", status: "needs_input" }),
-    s({ id: "b", issue: "NOR-329", status: "review_pending", title: "Template library" }),
+    s({
+      id: "b",
+      issue: "NOR-329",
+      status: "review_pending",
+      title: "Template library",
+    }),
     s({ id: "c", issue: "NOR-311", status: "dead", title: "" }),
   ];
   store.alive = true;
@@ -61,7 +66,9 @@ describe("Sessions header", () => {
     // "Disconnect" is no longer a bare word in the header; the settings icon is
     // what stands there, and it says which kind of settings.
     expect(screen.queryByRole("button", { name: "Disconnect" })).toBeNull();
-    expect(screen.getByRole("button", { name: /^Connection settings/ })).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: /^Connection settings/ }),
+    ).toBeTruthy();
     expect(screen.getByRole("button", { name: "Filters" })).toBeTruthy();
   });
 
@@ -72,7 +79,9 @@ describe("Sessions header", () => {
     // is the half a VoiceOver user got from nothing at all.
     render(Sessions);
     expect(
-      screen.getByRole("button", { name: "Connection settings — connected to 192.168.1.20" }),
+      screen.getByRole("button", {
+        name: "Connection settings — connected to 192.168.1.20",
+      }),
     ).toBeTruthy();
   });
 
@@ -81,7 +90,8 @@ describe("Sessions header", () => {
     // in quotes. It had no truncation while the title above it did, so a long
     // search term wrapped and GREW the header — pushing down the list that
     // moving the filters behind a button was supposed to give room to.
-    nav.query = "a search term long enough to wrap the header on any phone ever sold";
+    nav.query =
+      "a search term long enough to wrap the header on any phone ever sold";
     render(Sessions);
     const summary = screen.getByText(/of 3 sessions/);
     expect(summary.className).toContain("truncate");
@@ -122,7 +132,9 @@ describe("Sessions header", () => {
 
     // The name carries the state for anyone who cannot see the dot...
     expect(
-      screen.getByRole("button", { name: "Filters active — showing Needs You" }),
+      screen.getByRole("button", {
+        name: "Filters active — showing Needs You",
+      }),
     ).toBeTruthy();
     // ...and the subtitle names BOTH numbers, which is the guarantee: one row
     // under "1 of 3 sessions" can never be mistaken for a quiet morning.
@@ -138,7 +150,9 @@ describe("Sessions header", () => {
     await fireEvent.click(screen.getByRole("button", { name: "Done" }));
 
     expect(
-      screen.getByRole("button", { name: "Filters active — searching NOR-329" }),
+      screen.getByRole("button", {
+        name: "Filters active — searching NOR-329",
+      }),
     ).toBeTruthy();
     expect(screen.getByText(/1 of 3 sessions/)).toBeTruthy();
   });
@@ -148,8 +162,12 @@ describe("Sessions header", () => {
     nav.query = "NOR";
     render(Sessions);
 
-    await fireEvent.click(screen.getByRole("button", { name: /^Filters active/ }));
-    await fireEvent.click(screen.getByRole("button", { name: "Clear filters" }));
+    await fireEvent.click(
+      screen.getByRole("button", { name: /^Filters active/ }),
+    );
+    await fireEvent.click(
+      screen.getByRole("button", { name: "Clear filters" }),
+    );
 
     expect(nav.triage).toBe("");
     expect(nav.query).toBe("");
@@ -173,14 +191,18 @@ describe("Sessions sheets are addressable", () => {
   it("opens the connection settings when nav says so", () => {
     nav.sheet = "connection";
     render(Sessions);
-    expect(screen.getByRole("dialog", { name: "Connection settings" })).toBeTruthy();
+    expect(
+      screen.getByRole("dialog", { name: "Connection settings" }),
+    ).toBeTruthy();
   });
 });
 
 describe("Sessions settings menu", () => {
   it("reaches Disconnect, and the control names the Mac it leaves", async () => {
     render(Sessions);
-    await fireEvent.click(screen.getByRole("button", { name: /^Connection settings/ }));
+    await fireEvent.click(
+      screen.getByRole("button", { name: /^Connection settings/ }),
+    );
 
     const sheet = screen.getByRole("dialog", { name: "Connection settings" });
     expect(sheet).toBeTruthy();
@@ -189,16 +211,24 @@ describe("Sessions settings menu", () => {
     expect(
       screen.getByRole("button", { name: "Disconnect from 192.168.1.20" }),
     ).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Forget this Mac" })).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Forget this Mac" }),
+    ).toBeTruthy();
   });
 
   it("disconnects and returns to the pairing screen", async () => {
-    const disconnect = vi.spyOn(connection, "disconnect").mockResolvedValue(undefined);
+    const disconnect = vi
+      .spyOn(connection, "disconnect")
+      .mockResolvedValue(undefined);
     const forget = vi.spyOn(connection, "forget").mockResolvedValue(undefined);
 
     render(Sessions);
-    await fireEvent.click(screen.getByRole("button", { name: /^Connection settings/ }));
-    await fireEvent.click(screen.getByRole("button", { name: "Disconnect from 192.168.1.20" }));
+    await fireEvent.click(
+      screen.getByRole("button", { name: /^Connection settings/ }),
+    );
+    await fireEvent.click(
+      screen.getByRole("button", { name: "Disconnect from 192.168.1.20" }),
+    );
 
     expect(disconnect).toHaveBeenCalledTimes(1);
     expect(forget).not.toHaveBeenCalled();
@@ -215,20 +245,73 @@ describe("Sessions settings menu", () => {
     });
 
     render(Sessions);
-    await fireEvent.click(screen.getByRole("button", { name: /^Connection settings/ }));
-    await fireEvent.click(screen.getByRole("button", { name: "Forget this Mac" }));
+    await fireEvent.click(
+      screen.getByRole("button", { name: /^Connection settings/ }),
+    );
+    await fireEvent.click(
+      screen.getByRole("button", { name: "Forget this Mac" }),
+    );
 
     expect(calls).toEqual(["forget", "disconnect"]);
   });
 
   it("closes without leaving", async () => {
-    const disconnect = vi.spyOn(connection, "disconnect").mockResolvedValue(undefined);
+    const disconnect = vi
+      .spyOn(connection, "disconnect")
+      .mockResolvedValue(undefined);
     render(Sessions);
 
-    await fireEvent.click(screen.getByRole("button", { name: /^Connection settings/ }));
+    await fireEvent.click(
+      screen.getByRole("button", { name: /^Connection settings/ }),
+    );
     await fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
 
-    expect(screen.queryByRole("dialog", { name: "Connection settings" })).toBeNull();
+    expect(
+      screen.queryByRole("dialog", { name: "Connection settings" }),
+    ).toBeNull();
     expect(disconnect).not.toHaveBeenCalled();
+  });
+});
+
+describe("the offline banner", () => {
+  // A phone off the daemon's network sits behind this banner with the last
+  // snapshot. The retry ladder runs on its own and on every foreground, but its
+  // next attempt can be a minute away — and until this button existed the only
+  // way to say "now" was to force-quit the app.
+  it("offers a reconnect while the connection is down", async () => {
+    connection.phase = "closed";
+    connection.busy = false;
+    connection.reconnecting = false;
+    const spy = vi.spyOn(connection, "reconnect").mockResolvedValue(true);
+
+    render(Sessions, { props: { onopen: () => {} } });
+    const btn = await screen.findByRole("button", { name: "Reconnect" });
+    await fireEvent.click(btn);
+
+    expect(spy).toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  it("says it is working, and is disabled, while an attempt is in flight", async () => {
+    // DISABLED rather than "the click does nothing": jsdom dispatches a click on
+    // a disabled button, which a real browser suppresses, so asserting the
+    // handler was not called would pass for the wrong reason on a device and
+    // fail here.
+    connection.phase = "closed";
+    connection.reconnecting = true;
+
+    render(Sessions, { props: { onopen: () => {} } });
+    const btn = await screen.findByRole("button", { name: "Connecting…" });
+    expect(btn).toBeDisabled();
+
+    connection.reconnecting = false;
+  });
+
+  it("is absent once the connection is up", async () => {
+    connection.phase = "ready";
+    connection.reconnecting = false;
+    render(Sessions, { props: { onopen: () => {} } });
+    await screen.findByRole("button", { name: /Connection settings/ });
+    expect(screen.queryByRole("button", { name: /reconnect/i })).toBeNull();
   });
 });
