@@ -134,3 +134,68 @@ describe("openExternal", () => {
     await expect(openExternal("", noPlugin)).resolves.toBe(false);
   });
 });
+
+describe("the system browser, which is tried first", () => {
+  const plugin =
+    (open: (o: { url: string }) => Promise<unknown>): BrowserLoader =>
+    async () => ({
+      open,
+    });
+
+  // It goes first because the in-app one resolved WITHOUT PRESENTING anything
+  // for a private-network http address — success reported, no browser shown.
+  // UIApplication.open returns the system's own answer instead.
+  function nativePlugin(openURL: (o: { url: string }) => Promise<unknown>) {
+    (globalThis as { Capacitor?: unknown }).Capacitor = {
+      Plugins: { LolaTransport: { openURL } },
+    };
+  }
+
+  afterEach(() => {
+    delete (globalThis as { Capacitor?: unknown }).Capacitor;
+  });
+
+  it("is preferred over the in-app browser", async () => {
+    const native = vi.fn().mockResolvedValue({ opened: true });
+    nativePlugin(native);
+    const inApp = vi.fn().mockResolvedValue(undefined);
+
+    await expect(
+      openExternal("http://192.168.20.3:65497", plugin(inApp)),
+    ).resolves.toBe(true);
+    expect(native).toHaveBeenCalledWith({ url: "http://192.168.20.3:65497" });
+    expect(inApp).not.toHaveBeenCalled();
+  });
+
+  it("falls through to the in-app browser when the system declines", async () => {
+    // `opened: false` is an ANSWER — the phone would not take the link — and the
+    // ladder continues rather than reporting failure on the first rung.
+    nativePlugin(
+      vi.fn().mockResolvedValue({ opened: false, reason: "declined" }),
+    );
+    const inApp = vi.fn().mockResolvedValue(undefined);
+
+    await expect(
+      openExternal("http://192.168.20.3:65497", plugin(inApp)),
+    ).resolves.toBe(true);
+    expect(inApp).toHaveBeenCalled();
+  });
+
+  it("falls through when the plugin method throws", async () => {
+    nativePlugin(vi.fn().mockRejectedValue(new Error("no")));
+    const inApp = vi.fn().mockResolvedValue(undefined);
+
+    await expect(
+      openExternal("https://example.com", plugin(inApp)),
+    ).resolves.toBe(true);
+    expect(inApp).toHaveBeenCalled();
+  });
+
+  it("is skipped entirely in a browser session, where there is no plugin", async () => {
+    const inApp = vi.fn().mockResolvedValue(undefined);
+    await expect(
+      openExternal("https://example.com", plugin(inApp)),
+    ).resolves.toBe(true);
+    expect(inApp).toHaveBeenCalled();
+  });
+});

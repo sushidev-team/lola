@@ -21,14 +21,22 @@
 // INSIDE the app, which is not a browser and has no way back. So the opener is,
 // in order of preference:
 //
+//   0. This app's OWN plugin method, `LolaTransport.openURL`, which calls
+//      UIApplication.open and hands the URL to the real Safari app.
+//
+//      It is first because the one below FAILED SILENTLY on exactly the links
+//      this app most needs to open: a dev server at http://192.168.20.3:65497,
+//      where `Browser.open` resolved, reported success, and presented nothing.
+//      A promise that resolves while nothing happens is the worst failure
+//      available — every layer above it reports success — so the opener that
+//      returns the system's own answer goes first.
 //   1. Capacitor's Browser plugin. It is a real dependency of this project, and
 //      it is reached through a DYNAMIC IMPORT rather than through
 //      `Capacitor.Plugins.Browser`: that global is populated by a
 //      `registerPlugin("Browser")` call in JavaScript, so a probe that never
 //      imports the package finds nothing on a device as surely as in a browser.
-//      On iOS it presents an SFSafariViewController — a real browser chrome with
-//      a Done button back to the app, which is exactly the "way back" the plain
-//      window opener does not have.
+//      On iOS it presents an SFSafariViewController — in-app Safari with a Done
+//      button, which is nicer for a PR link and is kept for that reason.
 //   2. `window.open(url, "_system")`. Capacitor's WKUIDelegate treats a
 //      navigation with no target frame as a hand-off to the system browser.
 //   3. `window.open(url, "_blank")`, which is what a plain `npm run dev` in a
@@ -54,6 +62,29 @@ export function isOpenable(url: string): boolean {
   } catch {
     return false; // not a URL at all
   }
+}
+
+/** The shape this module needs from this app's own plugin, if it is there. */
+interface NativeOpener {
+  openURL(options: {
+    url: string;
+  }): Promise<{ opened?: boolean; reason?: string } | undefined>;
+}
+
+/**
+ * This app's plugin, when running on a device.
+ *
+ * Reached through the Capacitor global rather than an import, for the reason
+ * scan.ts and discovery.ts give: the plugin's `dist/` does not exist until it
+ * is built, and a browser dev session has no plugin at all and must still
+ * render the UI.
+ */
+function nativeOpener(): NativeOpener | undefined {
+  const cap = (
+    globalThis as { Capacitor?: { Plugins?: { LolaTransport?: NativeOpener } } }
+  ).Capacitor;
+  const p = cap?.Plugins?.LolaTransport;
+  return typeof p?.openURL === "function" ? p : undefined;
 }
 
 /** The shape this module needs from a Capacitor Browser plugin, if one exists. */
@@ -117,6 +148,19 @@ export async function openExternal(
   load: BrowserLoader = loadBrowser,
 ): Promise<boolean> {
   if (!isOpenable(url)) return false;
+
+  // THE SYSTEM BROWSER FIRST. See the header: the in-app one resolved without
+  // presenting anything for a private-network http address, which is precisely
+  // the link this app exists to open.
+  const native = nativeOpener();
+  if (native) {
+    try {
+      const r = await native.openURL({ url });
+      if (r?.opened === true) return true;
+    } catch {
+      // Fall through: a plugin that refused is not the end of the ladder.
+    }
+  }
 
   let browser: Browserish | undefined;
   try {

@@ -33,6 +33,11 @@ public class LolaTransportPlugin: CAPPlugin, CAPBridgedPlugin {
         // where there is nothing to find, because the stored addresses are
         // still the fallback and a network without multicast is not an error.
         CAPPluginMethod(name: "discover", returnType: CAPPluginReturnPromise),
+        // The phone's browser. Body in LolaTransportPlugin+Open.swift, and it
+        // exists because @capacitor/browser's SFSafariViewController resolved
+        // without presenting anything for a plain-http address on a private
+        // network — success reported, no browser shown, nothing to debug.
+        CAPPluginMethod(name: "openURL", returnType: CAPPluginReturnPromise),
         // The secret store. Bodies live in LolaTransportPlugin+Secrets.swift,
         // the SecItem calls themselves in LolaTransportCore.LolaKeychain.
         // `secretstore.ts` PROBES for these three names before it uses them and
