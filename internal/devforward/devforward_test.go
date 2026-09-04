@@ -226,3 +226,93 @@ func TestAConnectionToADeadTargetIsClosed(t *testing.T) {
 		}
 	}
 }
+
+// A dev server on IPv6 loopback: vite binds [::1] and php binds 127.0.0.1, so a
+// forward that collapsed "localhost" to one family answered "connection reset"
+// for half of them — which is exactly what a phone saw.
+func TestForwardReachesAnIPv6OnlyServer(t *testing.T) {
+	ln, err := net.Listen("tcp6", "[::1]:0")
+	if err != nil {
+		t.Skip("no IPv6 loopback on this machine")
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() { defer c.Close(); _, _ = io.Copy(c, c) }()
+		}
+	}()
+
+	_, port, err := net.SplitHostPort(ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Dialed by NAME, which is what makes it dual-stack.
+	f, err := Open("127.0.0.1", net.JoinHostPort("localhost", port))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = f.Close() })
+
+	c, err := net.Dial("tcp", f.Addr)
+	if err != nil {
+		t.Fatalf("dial the forward: %v", err)
+	}
+	defer c.Close()
+	if _, err := c.Write([]byte("v6\n")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_ = c.SetReadDeadline(time.Now().Add(5 * time.Second))
+	got, err := bufio.NewReader(c).ReadString('\n')
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if got != "v6\n" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+// The name is accepted at Open; the guarantee is enforced on the CONNECTION, so
+// a "localhost" that resolved off-box carries no bytes.
+func TestARemoteAnswerIsDroppedEvenForAnAcceptedName(t *testing.T) {
+	if _, err := Open("127.0.0.1", "localhost:8000"); err != nil {
+		t.Fatalf("localhost must be accepted at Open: %v", err)
+	}
+	// The guard itself, against a peer that is not loopback.
+	srv, err := net.Listen("tcp", "0.0.0.0:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Close()
+	host, err := nonLoopbackHost()
+	if err != nil {
+		t.Skip("no non-loopback address on this machine")
+	}
+	_, port, _ := net.SplitHostPort(srv.Addr().String())
+	c, err := net.DialTimeout("tcp", net.JoinHostPort(host, port), 2*time.Second)
+	if err != nil {
+		t.Skipf("cannot reach this machine's own LAN address: %v", err)
+	}
+	defer c.Close()
+	if remoteIsLoopback(c) {
+		t.Fatal("a non-loopback peer was reported as loopback")
+	}
+}
+
+func nonLoopbackHost() (string, error) {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return "", err
+	}
+	for _, a := range addrs {
+		ipn, ok := a.(*net.IPNet)
+		if !ok || ipn.IP.IsLoopback() || ipn.IP.To4() == nil {
+			continue
+		}
+		return ipn.IP.String(), nil
+	}
+	return "", errors.New("none")
+}

@@ -38,6 +38,7 @@ import (
 	"io"
 	"net"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -115,6 +116,15 @@ func checkLoopback(target string) error {
 	if n, err := strconv.Atoi(port); err != nil || n < 1 || n > 65535 {
 		return fmt.Errorf("devforward: %q has no usable port", target)
 	}
+	// "localhost" is accepted as the ONE name and NOT resolved here, so the dial
+	// below is dual-stack: vite binds [::1] and php binds 127.0.0.1, and a
+	// forward that had already collapsed the name to one family reached only
+	// half of them. Resolving it here and dialing the literal would also be the
+	// wrong shape — the check would be a lookup whose answer can change before
+	// the dial. The guarantee is enforced on the CONNECTION instead, in pipe.
+	if strings.EqualFold(host, "localhost") {
+		return nil
+	}
 	ip := net.ParseIP(host)
 	if ip == nil || !ip.IsLoopback() {
 		return fmt.Errorf("%w: %q", ErrNotLoopback, host)
@@ -170,6 +180,18 @@ func (f *Forward) pipe(client net.Conn) {
 	}
 	defer server.Close()
 
+	// THE LOOPBACK GUARANTEE, ON THE CONNECTION THAT WAS ACTUALLY MADE.
+	//
+	// checkLoopback passes "localhost" through without resolving it, so that the
+	// dial above is dual-stack — vite binds [::1] and php binds 127.0.0.1, and a
+	// name collapsed to one family reaches only half of them. That leaves the
+	// theoretical hole of a hosts file pointing localhost somewhere else, and
+	// this closes it against the peer that answered rather than against a name
+	// that was checked earlier.
+	if !remoteIsLoopback(server) {
+		return
+	}
+
 	// Closed when EITHER direction ends, so a half-closed connection does not
 	// leave the other goroutine parked on a read forever.
 	done := make(chan struct{}, 2)
@@ -194,4 +216,17 @@ func (f *Forward) Close() error {
 	})
 	f.wg.Wait()
 	return err
+}
+
+// remoteIsLoopback reports whether a connection actually landed on this host.
+//
+// The address of the PEER, not of the name that was dialed: it is the one fact
+// that cannot be stale by the time the bytes flow.
+func remoteIsLoopback(c net.Conn) bool {
+	host, _, err := net.SplitHostPort(c.RemoteAddr().String())
+	if err != nil {
+		return false
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }

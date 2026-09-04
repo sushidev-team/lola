@@ -220,9 +220,12 @@ func TestLocalhostIsForwardedAndOtherNamesAreNot(t *testing.T) {
 
 	d.syncDevForwards()
 
+	// The NAME is kept, not collapsed to 127.0.0.1: the dial has to be
+	// dual-stack because vite binds [::1] while php binds 127.0.0.1. Sorted by
+	// target, so the uppercase form leads.
 	want := []string{
-		"192.168.20.3 -> 127.0.0.1:5175",
-		"192.168.20.3 -> 127.0.0.1:5176",
+		"192.168.20.3 -> LOCALHOST:5176",
+		"192.168.20.3 -> localhost:5175",
 	}
 	if len(f.opened) != len(want) {
 		t.Fatalf("opened %v, want %v", f.opened, want)

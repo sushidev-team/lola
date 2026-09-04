@@ -265,12 +265,16 @@ func loopbackTarget(raw string) (string, bool) {
 	// internal/devurl carries that through verbatim, so refusing the name meant
 	// a session's bundler was silently the one address that never appeared —
 	// which reads as a broken feature rather than as a rule being enforced.
-	if strings.EqualFold(host, "localhost") {
-		host = "127.0.0.1"
-	}
-	ip := net.ParseIP(host)
-	if ip == nil || !ip.IsLoopback() {
-		return "", false
+	// "localhost" is kept AS THE NAME rather than rewritten to 127.0.0.1, so the
+	// dial is dual-stack: vite binds [::1] while php binds 127.0.0.1, and
+	// collapsing the name to one family made the bundler's forward answer
+	// "connection reset" while the app's worked. internal/devforward enforces
+	// the loopback guarantee on the connection that results.
+	if !strings.EqualFold(host, "localhost") {
+		ip := net.ParseIP(host)
+		if ip == nil || !ip.IsLoopback() {
+			return "", false
+		}
 	}
 	port := u.Port()
 	if port == "" {
