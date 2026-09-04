@@ -208,6 +208,20 @@ type StatusData struct {
 	RuntimeErr string       `json:"runtimeErr,omitempty"`
 	LinearOK   bool         `json:"linearOk"`
 	Polls      []PollStatus `json:"polls"`
+
+	// Host is this machine's name, for a client that has to say WHICH daemon it
+	// is talking about. A phone reaches the same Mac on a different address at
+	// home and at the office — that is the point of discovery — so an address
+	// is a poor name for it and a stale one is worse: "connecting to
+	// 192.168.10.160" describes a network, not the machine somebody left work
+	// running on.
+	//
+	// It travels on an AUTHENTICATED answer, never in the mDNS advertisement,
+	// and the difference is deliberate. A hostname in a TXT record is a stable
+	// cross-network correlator broadcast to every peer (internal/mdns says so
+	// at length); telling an already-paired device the name of the machine it
+	// is holding a session list from discloses nothing it does not have.
+	Host string `json:"host,omitempty"`
 }
 
 type PollStatus struct {

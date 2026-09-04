@@ -39,6 +39,13 @@ import type {
 } from "@mobile/wire";
 import { INSECURE_MIN_KEY_LEN } from "@mobile/wire/protocol";
 import { canDiscover, candidates, discover, type Candidate } from "./discovery";
+import {
+  daemonLabel,
+  forgetDaemonName,
+  hasCustomName,
+  learnDaemonName,
+  renameDaemon,
+} from "./daemonname";
 import { diagnose, type Diagnosis } from "./diagnose";
 import {
   endpointId,
@@ -103,8 +110,54 @@ export class Connection {
    */
   reconnecting = $state(false);
 
-  /** How the endpoint is named in a sentence: the host, or a placeholder. */
-  label = $derived(this.host || "the daemon");
+  /**
+   * Bumped whenever a stored name changes, so `label` re-derives.
+   *
+   * localStorage is not reactive and the names live there (per endpoint, beside
+   * the Keychain entry's own id). A counter is the whole subscription.
+   */
+  nameEpoch = $state(0);
+
+  /**
+   * How the endpoint is named in a sentence.
+   *
+   * THE MACHINE, NOT THE ADDRESS. A phone that can browse for the daemon
+   * reaches the same Mac on a different address at home and at the office, so
+   * an address names a network rather than the machine — and after a move it
+   * names a network that is not there. The chain is the user's own name, then
+   * the one the daemon reported for itself, then the address, then a phrase;
+   * every link can be absent and each fallback still names something true.
+   */
+  label = $derived.by(() => {
+    void this.nameEpoch;
+    return daemonLabel(endpointId(this.host, this.port), this.host);
+  });
+
+  /** Whether this daemon has been renamed here, so a form can offer to undo. */
+  renamed = $derived.by(() => {
+    void this.nameEpoch;
+    return hasCustomName(endpointId(this.host, this.port));
+  });
+
+  /** Rename the daemon on this device; "" restores the name it reports itself. */
+  rename(name: string): void {
+    renameDaemon(endpointId(this.host, this.port), name);
+    this.nameEpoch++;
+  }
+
+  /**
+   * Record the name the daemon reports for itself (`cmd=status` → `host`).
+   *
+   * Called with whatever the status answer carried, including "", which is
+   * ignored rather than stored — a daemon too old to send one must not erase a
+   * name already learned.
+   */
+  learnName(host: string): void {
+    const id = endpointId(this.host, this.port);
+    const before = daemonLabel(id, this.host);
+    learnDaemonName(id, host);
+    if (daemonLabel(id, this.host) !== before) this.nameEpoch++;
+  }
 
   /** The one sentence the connect screen shows. */
   diagnosis = $derived<Diagnosis>(
@@ -466,6 +519,11 @@ export class Connection {
   async forget(): Promise<void> {
     const id = endpointId(this.host, this.port);
     await forgetKey(id);
+    // The names go with it: a name for a Mac this phone is no longer paired
+    // with is clutter, and a stale one would greet the next pairing of the same
+    // address with somebody else's label.
+    forgetDaemonName(id);
+    this.nameEpoch++;
     clearEndpoint();
     this.hasStoredKey = false;
     this.keyStorage = "none";

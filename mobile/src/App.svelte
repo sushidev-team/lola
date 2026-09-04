@@ -3,6 +3,8 @@
   import { store } from "$lib/store.svelte";
   import { appearance } from "$lib/theme-runtime.svelte";
   import { connection } from "@mobile/lib/connection.svelte";
+  import { daemonLabel } from "@mobile/lib/daemonname";
+  import { DEFAULT_REMOTE_PORT, endpointId, parsePort } from "@mobile/lib/endpoint";
   import { nav } from "@mobile/lib/nav.svelte";
   import { installAppState } from "@mobile/lib/appstate";
   import { installDevLink, type DevLinkTarget } from "@mobile/lib/devlink";
@@ -110,9 +112,15 @@
         // it in memory, `keyRef` for the ordinary case where the plugin holds
         // it and the plaintext deliberately never crosses the bridge.
         if (!prev || (prev.key === "" && prev.keyRef === "")) return;
-        // Name the endpoint being dialled. A boot that hangs here is the case
-        // where knowing WHICH daemon is unreachable is the whole diagnosis.
-        bootMessage = `Connecting to ${prev.draft.host}:${prev.draft.port}…`;
+        // Name the MACHINE being dialled, not the address. A boot that hangs
+        // here is exactly the case where knowing WHICH Mac is unreachable is
+        // the whole diagnosis — and the address is the half that changes
+        // between home and the office, so it is only the fallback.
+        const bootPort = parsePort(prev.draft.port) ?? DEFAULT_REMOTE_PORT;
+        bootMessage = `Connecting to ${daemonLabel(
+          endpointId(prev.draft.host, bootPort),
+          `${prev.draft.host}:${bootPort}`,
+        )}…`;
         if (await connection.connect(prev.draft, prev.key, false, [], prev.keyRef)) {
           void store.refresh();
           nav.toSessions();
@@ -211,6 +219,16 @@
   // ignored.
   $effect(() => {
     if (pairing.pending) booting = false;
+  });
+
+  // THE DAEMON NAMES ITSELF, and this is where the app hears it. `cmd=status`
+  // carries the machine's hostname on an authenticated answer (never in the
+  // mDNS advertisement, which deliberately carries no hostname at all), so the
+  // app can say "connecting to marvin" rather than naming an address that
+  // changes with every network. A person's own rename still wins over it.
+  $effect(() => {
+    const host = store.status?.host ?? "";
+    if (host !== "") connection.learnName(host);
   });
 
   /**

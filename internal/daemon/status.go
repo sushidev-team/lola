@@ -2,6 +2,8 @@ package daemon
 
 import (
 	"context"
+	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -95,6 +97,7 @@ func (d *Daemon) statusData(ctx context.Context) protocol.StatusData {
 		RuntimeErr: runtimeErr,
 		LinearOK:   linOK,
 		Polls:      make([]protocol.PollStatus, 0, len(polls)),
+		Host:       machineName(),
 	}
 	for _, p := range polls {
 		ps := d.status.get(p.name)
@@ -107,4 +110,19 @@ func (d *Daemon) statusData(ctx context.Context) protocol.StatusData {
 		sd.Polls = append(sd.Polls, ps)
 	}
 	return sd
+}
+
+// machineName is what a client calls this Mac.
+//
+// The ".local" suffix is trimmed because it is mDNS plumbing rather than part
+// of the name anyone gave the machine, and a UI that says "connected to
+// marvin" reads better than one saying "marvin.local". An unavailable or empty
+// hostname answers "" and every caller falls back to naming the address, which
+// is what they did before this field existed.
+func machineName() string {
+	host, err := os.Hostname()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(host), ".local"))
 }

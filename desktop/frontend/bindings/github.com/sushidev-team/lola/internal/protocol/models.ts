@@ -688,6 +688,18 @@ export interface StatusData {
     "runtimeErr"?: string;
     "linearOk": boolean;
     "polls": PollStatus[] | null;
+
+    /**
+     * Host is this machine's name, for a client that has to say WHICH daemon it
+     * is talking about. A phone reaches the same Mac on a different address at
+     * home and at the office — that is the point of discovery — so an address is
+     * a poor name for it and a stale one is worse.
+     *
+     * It travels on an AUTHENTICATED answer, never in the mDNS advertisement,
+     * where a hostname would be a stable cross-network correlator broadcast to
+     * every peer.
+     */
+    "host"?: string;
 }
 
 /**

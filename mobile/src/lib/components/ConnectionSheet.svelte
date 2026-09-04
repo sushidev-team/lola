@@ -2,6 +2,7 @@
   import Sheet from "./Sheet.svelte";
   import TouchButton from "./TouchButton.svelte";
   import { connection } from "@mobile/lib/connection.svelte";
+  import { NAME_MAX } from "@mobile/lib/daemonname";
 
   /**
    * The settings menu behind the header's gear.
@@ -22,6 +23,29 @@
    */
 
   let { onleave, onclose }: { onleave: (forget: boolean) => void; onclose: () => void } = $props();
+
+  /**
+   * The rename, drafted locally and committed on submit.
+   *
+   * NAMING THE MAC IS THE POINT OF THIS SHEET NOW. Discovery means the same
+   * machine answers on a different address at home and at the office, so an
+   * address names a network rather than the thing somebody left work running
+   * on. The daemon reports its own hostname and that is the default; this row
+   * exists because a hostname is frequently neither chosen nor readable —
+   * "Martins-MacBook-Pro" is a fine machine name and a poor label, and somebody
+   * with two Macs wants "work" and "home".
+   *
+   * EMPTYING IT IS THE UNDO, not a way to have no name: the field falls back to
+   * the daemon's own name, which is why the placeholder shows that name rather
+   * than being a hint about typing.
+   */
+  let draft = $state(connection.renamed ? connection.label : "");
+
+  function commit(e: Event): void {
+    e.preventDefault();
+    connection.rename(draft);
+    draft = connection.renamed ? connection.label : "";
+  }
 </script>
 
 <!-- The backdrop keeps Sheet's default "Close" rather than being named "Cancel"
@@ -41,6 +65,32 @@
       {/if}
     </span>
   </div>
+
+  <!-- A form, so the keyboard's Return commits it: a bare input in a sheet is
+       one a phone can only leave by dismissing, and a rename that needs a
+       separate Save button read as two decisions rather than one. -->
+  <form class="flex flex-col gap-1" onsubmit={commit}>
+    <label class="flex flex-col gap-1">
+      <span class="text-sm text-faint">Name for this Mac</span>
+      <input
+        class="w-full rounded-md border border-edge bg-panel px-3 py-2 text-ink"
+        type="text"
+        autocapitalize="words"
+        autocorrect="off"
+        spellcheck="false"
+        maxlength={NAME_MAX}
+        placeholder={connection.label}
+        bind:value={draft} />
+    </label>
+    <span class="copy text-xs text-faint">
+      {#if connection.renamed}
+        Shown wherever this app names the Mac. Clear it to go back to the name the daemon reports.
+      {:else}
+        Shown wherever this app names the Mac. Left empty, it uses the name the daemon reports for
+        itself.
+      {/if}
+    </span>
+  </form>
 
   <!-- THE BUTTON NAMES WHAT IT LEAVES. "Disconnect" alone was the original bug
        in a header, and it is no better in a menu — a control whose subject the
