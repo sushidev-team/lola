@@ -162,6 +162,38 @@ public enum LolaDevLink {
         /// were the ones no screenshot could reach — `simctl` has no gesture
         /// API — so a change to them could be tested but never seen.
         public let sheet: String?
+        /// Which of the bottom bar's four destinations to land on, or nil.
+        ///
+        /// Passed through as a bare token and matched in the app against `TABS`
+        /// in nav.svelte.ts, exactly as `triage` is matched against the real
+        /// bucket list: the vocabulary belongs where the state lives, and four
+        /// spellings copied into Swift would be one more list to keep in step.
+        ///
+        /// It is here for the reason `pane` and `sheet` are. Activity, Projects
+        /// and Settings are reachable only by tapping the tab bar, and a tap is
+        /// the one thing the Simulator cannot be asked to perform — so without
+        /// this field three of the app's screens can be unit-tested and never
+        /// photographed, which is the exact hole the pane field was added to
+        /// close for the terminal.
+        public let tab: String?
+        /// A project NAME for the Projects tab to drill into, or nil.
+        ///
+        /// Passed through as text and resolved in the app against the projects
+        /// the daemon pushed. There is no list to match it against here and
+        /// there could not be: the projects are whatever `config.toml` on that
+        /// Mac says. A name that does not resolve is a state the detail screen
+        /// already draws, naming the string it was given.
+        public let project: String?
+        /// A picker to open over that project's detail — `prs` or `tickets` —
+        /// or nil.
+        ///
+        /// A bare token like `sheet` and `tab`, matched in the app against
+        /// `PROJECT_PICKS` in nav.svelte.ts. It is here for the reason `pane` is:
+        /// the pull-request and issue lists sit two taps deep, and a tap is the
+        /// one thing the Simulator cannot be asked to perform, so without this
+        /// field they are two screens that can be unit-tested and never
+        /// photographed.
+        public let pick: String?
         /// Defaults to the RESTRICTIVE value, so a call site that forgets to
         /// say how a link arrived gets the door that only fills a form.
         public var arrival: Arrival = .url
@@ -175,7 +207,10 @@ public enum LolaDevLink {
             session: String? = nil,
             triage: String? = nil,
             query: String? = nil,
-            sheet: String? = nil
+            sheet: String? = nil,
+            tab: String? = nil,
+            project: String? = nil,
+            pick: String? = nil
         ) {
             self.host = host
             self.port = port
@@ -186,6 +221,9 @@ public enum LolaDevLink {
             self.triage = triage
             self.query = query
             self.sheet = sheet
+            self.tab = tab
+            self.project = project
+            self.pick = pick
         }
     }
 
@@ -270,15 +308,26 @@ public enum LolaDevLink {
         // `triage` and `q` take the TEXT sanitizer, not `sanitizedName`: a
         // bucket title is "Needs you" and a search term is whatever somebody
         // typed, so both contain spaces that the name sanitizer exists to
-        // refuse. `sheet` is a bare token and keeps the strict one.
+        // refuse. `sheet` and `tab` are bare tokens and keep the strict one,
+        // lowercased so a link typed as "Activity" still names the screen.
         let triage = value("triage").flatMap(sanitizedText)
         let query = value("q", "query").flatMap(sanitizedText)
         let sheet = value("sheet").flatMap(sanitizedName)?.lowercased()
+        let tab = value("tab").flatMap(sanitizedName)?.lowercased()
+
+        // The Projects tab's own depth. `project` takes the NAME sanitizer
+        // rather than the text one: a project's `Name` is its identity in the
+        // repository — a path segment, a tmux prefix, a session id prefix — so
+        // it is already a slug and anything with a space in it is not one.
+        // `pick` is a bare token, lowercased like `sheet` and `tab`.
+        let project = value("project").flatMap(sanitizedName)
+        let pick = value("pick").flatMap(sanitizedName)?.lowercased()
 
         return Payload(
             host: host, port: port, spkiPin: pin, insecureKey: key,
             pane: pane, session: session ?? pane,
-            triage: triage, query: query, sheet: sheet)
+            triage: triage, query: query, sheet: sheet, tab: tab,
+            project: project, pick: pick)
     }
 
     /// Reads a bearer key out of a file in the app's own Documents directory.

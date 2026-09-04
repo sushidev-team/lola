@@ -161,7 +161,16 @@ describe("devLinkTarget", () => {
   // does not land either. A pane in the launch link is what makes it
   // screenshottable by a script.
 
-  const NOWHERE = { pane: "", session: "", triage: "", query: "", sheet: "" };
+  const NOWHERE = {
+    pane: "",
+    session: "",
+    triage: "",
+    query: "",
+    sheet: "",
+    tab: "",
+    project: "",
+    pick: "",
+  };
 
   it("reads a pane and defaults the session to it", () => {
     // The daemon's own paneTarget uses the tmux session name, which IS the
@@ -221,11 +230,60 @@ describe("devLinkTarget", () => {
 
   it("takes a sheet from the vocabulary and refuses anything else", () => {
     expect(devLinkTarget({ sheet: "filter" })?.sheet).toBe("filter");
-    expect(devLinkTarget({ sheet: "Connection" })?.sheet).toBe("connection");
-    expect(devLinkTarget({ pane: "lola-fe-42", sheet: "view" })?.sheet).toBe("view");
+    expect(devLinkTarget({ sheet: "Menu" })?.sheet).toBe("menu"); // case-folded
+    expect(devLinkTarget({ pane: "lola-fe-42", sheet: "menu" })?.sheet).toBe("menu");
     // Fails closed: a sheet this build has never heard of opens nothing.
     expect(devLinkTarget({ pane: "lola-fe-42", sheet: "wharrgarbl" })?.sheet).toBe("");
     expect(devLinkTarget({ sheet: "wharrgarbl" })).toBeNull();
+  });
+
+  it("takes a tab from the vocabulary and refuses anything else", () => {
+    // Activity, Projects and Settings are reachable only by tapping the bottom
+    // bar, so without this field they are three screens a script cannot
+    // photograph — the same hole `pane` was added to close for the terminal.
+    expect(devLinkTarget({ tab: "activity" })?.tab).toBe("activity");
+    // Lowercased first, because a link is typed by hand and "Projects" is what
+    // somebody writes when they are naming the screen rather than the token.
+    expect(devLinkTarget({ tab: "Projects" })?.tab).toBe("projects");
+    // Fails closed: a tab this build has never heard of leaves the current one
+    // alone rather than landing somewhere unexpected.
+    expect(devLinkTarget({ pane: "lola-fe-42", tab: "wharrgarbl" })?.tab).toBe("");
+    expect(devLinkTarget({ tab: "wharrgarbl" })).toBeNull();
+  });
+
+  it("takes a project name as written, because there is no list to match it against", () => {
+    // Every other narrowed field here has a vocabulary; this one does not. The
+    // projects are whatever config.toml on that Mac says, the push carrying
+    // them has not landed when a launch link is applied, and a name that turns
+    // out not to exist is a real state the detail screen draws by name. So it
+    // is trimmed and carried, and the screen is what reports the miss.
+    expect(devLinkTarget({ project: "nori-app" })).toEqual({
+      ...NOWHERE,
+      project: "nori-app",
+    });
+    expect(devLinkTarget({ project: "  nori-app  " })?.project).toBe("nori-app");
+    expect(devLinkTarget({ project: "   " })).toBeNull();
+  });
+
+  it("takes a picker from the vocabulary and refuses anything else", () => {
+    // The pull-request and issue lists sit two taps deep — a project row, then
+    // an action — so without this field they are two more screens a script can
+    // test and never photograph.
+    expect(devLinkTarget({ project: "nori-app", pick: "prs" })?.pick).toBe("prs");
+    // Lowercased first: the vocabulary is lowercase and a link is typed by hand.
+    expect(devLinkTarget({ project: "nori-app", pick: "Tickets" })?.pick).toBe("tickets");
+    // Fails closed: a picker this build has never heard of opens nothing, and
+    // the detail underneath it still shows.
+    expect(devLinkTarget({ project: "nori-app", pick: "wharrgarbl" })?.pick).toBe("");
+    expect(devLinkTarget({ pick: "wharrgarbl" })).toBeNull();
+  });
+
+  it("carries a picker with no project, and lets the shell decide", () => {
+    // Deliberately not refused here. A pick is a valid picker name; what it
+    // lacks is something to open over, and App.svelte routes the Projects tab
+    // by depth with the project outermost — so this lands on the project list
+    // rather than on a picker that could only ask the daemon about "".
+    expect(devLinkTarget({ pick: "prs" })).toEqual({ ...NOWHERE, pick: "prs" });
   });
 
   it("leaves the session empty when there is no pane to own it", () => {

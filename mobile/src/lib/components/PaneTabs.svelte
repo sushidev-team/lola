@@ -612,16 +612,27 @@
   const NEEDS_NEWER_DAEMON =
     "New shells need a newer lola on the Mac. Update and restart it there, then reopen this session.";
 
-  // Same three load-bearing classes as the accessory bar's key rows, for the
-  // same reasons: `min-w-0` so a flex child may shrink below its content and
-  // `overflow-x-auto` can engage at all, `py-1` because `overflow-x: auto`
-  // forces `overflow-y` to compute to `auto` and would otherwise slice the
-  // tabs' pressed state, and `overscroll-x-contain` so a swipe past the last
-  // tab stays in the strip instead of becoming the WebView's back gesture.
-  // Horizontal padding stays on the ROW: WebKit drops a horizontal scroller's
-  // trailing padding, so `px-2` here would put the last tab against the clip.
+  // Two of the accessory bar's three load-bearing classes, for the same
+  // reasons: `min-w-0` so a flex child may shrink below its content and
+  // `overflow-x-auto` can engage at all, and `overscroll-x-contain` so a swipe
+  // past the last tab stays in the strip instead of becoming the WebView's back
+  // gesture. Horizontal padding stays on the ROW: WebKit drops a horizontal
+  // scroller's trailing padding, so `pl-3` here would put the last tab against
+  // the clip.
+  //
+  // THE THIRD ONE — `py-1` — IS GONE, and the reason it can be is the redesign's
+  // shape. `overflow-x: auto` forces `overflow-y` to compute to `auto`, so
+  // anything taller than the strip is sliced; the padding existed to keep the
+  // tabs' own painted background off that edge. The tab is now a TRANSPARENT
+  // 44-point box with the painted chip inset inside it (see the button below),
+  // so it is exactly the height of the strip and there is nothing left to slice.
+  // Keeping the padding would have made the row 52 points against the design's
+  // 44 — a whole key row's worth of the pane, for nothing.
+  //
+  // `gap-1.5` and the odd paddings are the design's, spelled as literals
+  // (rule 4).
   const STRIP =
-    "flex min-w-0 flex-1 gap-1 overflow-x-auto overscroll-x-contain py-1 [scrollbar-width:none]";
+    "flex h-full min-w-0 flex-1 items-center gap-1.5 overflow-x-auto overscroll-x-contain [scrollbar-width:none]";
 </script>
 
 <!-- Nothing to draw until the inventory has answered. An empty strip that fills
@@ -629,7 +640,17 @@
      is the capability gap, which would otherwise be an absence with no
      explanation anywhere. -->
 {#if panes.length > 0 || unsupported}
-  <div class="relative flex shrink-0 items-center border-b border-edge bg-panel px-2">
+  <!-- `h-11` is the design's strip height AND the tap-target floor at once,
+       which is what lets the padding go (see STRIP). `border-edge-soft` because
+       every list hairline in the redesign is the soft token; plain `edge` is the
+       panel border and is visibly heavier than this rule wants to be.
+
+       `bg-canvas` rather than the old `bg-panel`: the strip is part of the
+       screen's own chrome now, not a raised surface, and the context card
+       directly beneath it is `bg-panel` — two panels stacked with only a
+       hairline between them read as one box that has been ruled, which is the
+       opposite of what the card is for. -->
+  <div class="relative flex h-11 shrink-0 items-center border-b border-edge-soft bg-canvas pr-2 pl-3">
     {#if unsupported}
       <!-- The strip's place, holding the reason it is not a strip. Faint and
            one line, because it is a note about the Mac rather than an error in
@@ -665,7 +686,27 @@
 
                `aria-haspopup="dialog"` because holding the tab opens one, and
                `-webkit-touch-callout` so WebKit's own text callout does not
-               race the sheet to the same gesture. -->
+               race the sheet to the same gesture.
+
+               THE BUTTON IS THE TARGET AND THE SPAN INSIDE IT IS THE CHIP, and
+               the split is what reconciles two numbers that disagree. The design
+               draws a 31-point chip (`py-[7px]` around a 13px label) inside a
+               44-point strip; the brief's rule 3 asks for a 44-point target.
+               Both are satisfied by painting nothing on the button — it is a
+               transparent `h-full` box in a `h-11` strip — and putting the
+               ground, the radius and the design's padding on the span. It is
+               the same move <MetaPill> makes for its own tappable case, and the
+               same reason: inflating the chip to 44 would make a tab the tallest
+               thing on a screen whose subject is the pane below it.
+
+               THE ACTIVE TAB IS `bg-sel`, NOT THE OLD `bg-accent-fill`. The
+               accent chip is the app's "one per surface" emphasis and this
+               screen already spends it on the back chevron and the "+"; a third
+               use on a tab that is merely the one you are looking at made the
+               strip the loudest thing above the terminal. The 5-point dot is
+               what the design gives it instead — the same mark <StatusChip>
+               leads with, so "selected" is stated by a mark rather than by a
+               colour that means something else elsewhere. -->
           <button
             type="button"
             role="tab"
@@ -675,12 +716,8 @@
             aria-haspopup="dialog"
             data-pane-selected={on}
             tabindex={on ? 0 : -1}
-            class="flex h-11 shrink-0 touch-manipulation items-center justify-center rounded-md
-                   px-3 text-base whitespace-nowrap transition-colors select-none
-                   [-webkit-touch-callout:none]
-                   {on
-              ? 'bg-accent-fill font-medium text-accent-ink'
-              : 'text-faint active:bg-sel'}"
+            class="group flex h-full min-w-11 shrink-0 touch-manipulation items-center
+                   justify-center whitespace-nowrap select-none [-webkit-touch-callout:none]"
             onclick={() => {
               // CONSUMED, not merely read. It is cleared by the next press as
               // well (a menu dismissed on the sheet's backdrop never produces
@@ -703,7 +740,21 @@
             oncontextmenu={(e) => e.preventDefault()}
             onkeydown={(e) => onkeydown(e, p)}
           >
-            {displayName(p)}
+            <span
+              class="flex items-center gap-1.5 rounded-lg px-[11px] py-[7px] text-base
+                     font-medium transition-colors
+                     {on ? 'bg-sel text-ink' : 'text-faint group-active:bg-sel'}"
+            >
+              {#if on}
+                <!-- `bg-current`, so the dot is the chip's own foreground by
+                     construction and cannot drift from it. aria-hidden: the tab
+                     already reports `aria-selected`, and a mark that repeats an
+                     ARIA state in text is read twice. -->
+                <span class="h-[5px] w-[5px] shrink-0 rounded-full bg-current" aria-hidden="true"
+                ></span>
+              {/if}
+              {displayName(p)}
+            </span>
           </button>
         {/each}
       </div>
@@ -747,15 +798,25 @@
          button, which is an ordinary action outside the tablist. It was
          hand-rolled anyway and re-stated four things the shared control already
          owns: the 44pt square, the disabled fade, the in-flight spinner, and the
-         rule that a working control must not wear the 40% of a dead one. -->
+         rule that a working control must not wear the 40% of a dead one.
+
+         `variant="bare"` and an accent foreground, where it used to be
+         `secondary` — an outlined box. The design draws the "+" as a bare
+         accent glyph, and the outline was there to keep it findable against a
+         strip of outlined-looking tabs that no longer exist. The overrides all
+         carry the trailing `!` because each of them ties on specificity with one
+         of the size map's or the variant's own (CLAUDE.md's Button invariant);
+         `w-auto!` undoes `icon`'s square so the glyph gets the design's
+         horizontal padding while `min-w-11!` keeps the 44-point floor. -->
     <TouchButton
       icon
-      variant="secondary"
+      variant="bare"
       loading={creating}
       disabled={!canCreateShell}
       aria-label={canCreateShell ? "New shell" : unsupported ? NEEDS_NEWER_DAEMON : CANNOT_CREATE}
       title={canCreateShell ? "New shell" : unsupported ? NEEDS_NEWER_DAEMON : CANNOT_CREATE}
-      class="ml-1 text-base! select-none"
+      class="ml-1 h-11! w-auto! min-w-11! px-[11px]! text-base! font-semibold text-accent!
+             select-none"
       onclick={createShell}
     >
       <!-- The glyph steps aside while the spinner is up, which is what the

@@ -30,55 +30,87 @@
 @source "../../desktop/frontend/src/lib";
 
 /* ---------------------------------------------------------------------------
-   The type scale, raised for a phone.
+   The type scale, and the colour tokens a phone needs on top of the shared set.
 
-   The desktop's scale is 13px base / 12px metadata / 18px ceiling, drawn for a
-   dense two-pane cockpit viewed at arm's length on a 27-inch display. Imported
-   unchanged it produces a screen that is legible and unmistakably WRONG: iOS
-   body text is 17pt, so at 13px every screen in this app reads as a Mac window
-   that somebody shrank, which is exactly the failure the port is trying not to
-   commit.
+   THE SCALE IS THE DESIGN'S, not a scaled copy of the desktop's. An earlier
+   version of this file raised the desktop ladder wholesale — 16px base, on the
+   argument that iOS body text is 17pt and anything smaller reads as a shrunken
+   Mac window. The Figma file (Lola / Mobile Redesign) answers that argument
+   directly and goes the other way: its screens are DENSE on purpose, because
+   this app's job is to show as many sessions as will fit and then get out of the
+   way, and its largest body size is 15px. Enlarging a design drawn at 15/13/11
+   does not make it more legible, it makes it a different design with two rows
+   on screen instead of six.
 
-   Raised rather than replaced. The five steps keep their relationships and
-   their roles, so every shared component still gets the hierarchy it was
-   written against — only the absolute sizes move, and they move together. 16px
-   rather than a full 17 because the components below are laid out for a denser
-   grid than UIKit's; this is the largest step that leaves SessionRow's counts
-   and badges on one line.
+   So the sizes below are the Figma text styles, verbatim:
+
+     m/2xl · 28/34 large title   Inter Bold      28/34  -0.018em   --text-2xl
+     m/base-semi · title         Inter SemiBold  15/20  -0.010em   --text-lg
+     m/xs-med · row              Inter Medium    13/17   0         --text-base
+     m/xs · body                 Inter Regular   12/16   0         --text-body
+     m/2xs · meta                Inter Regular   11/15   0         --text-sm
+     m/2xs-caps · label          Inter Bold      10/12   0.070em   --text-xs
+
+   THE LADDER'S ROLES ARE UNCHANGED, which is what keeps the shared components
+   rendering sensibly here: the desktop's `--text-xs` is already its uppercase
+   micro-label step (600 weight, 0.06em tracking), `--text-sm` its metadata tier,
+   `--text-lg` its 15/20 semibold title. Only the absolute sizes move, and they
+   move to the design's. `--text-lg` in particular lands back on the desktop's
+   own 15/20 — the two surfaces agree about a card title and always did.
+
+   `--text-body` IS THE ONE ADDITION, and it is forced. The design uses SIX
+   sizes and Tailwind's ladder here has five rungs plus the large title; 12px
+   prose and 13px row text are genuinely different tiers in it (the activity
+   sentence under a card's heading is 12, the heading of a compact row is 13),
+   so one of them needs a name outside the ladder. Prose gets it, because the
+   ladder's `base` must stay the DEFAULT — `body` reads `var(--text-base)`.
 
    Overriding is the whole reason this block sits AFTER the desktop import:
-   Tailwind v4 merges `@theme` blocks and the later definition wins. `body`
-   reads `var(--text-base)` directly (desktop app.css), so the default size
-   follows from here with no class changes anywhere.
+   Tailwind v4 merges `@theme` blocks and the later definition wins.
 --------------------------------------------------------------------------- */
 @theme {
-  /* Uppercase micro-labels. Weight and tracking are inherited from the
-     desktop's definition; only the size moves. */
-  --text-xs: 0.8125rem; /* 13px */
-  --text-xs--line-height: 1.0625rem;
+  /* Uppercase micro-labels: section headings, status chips, the caps rules on a
+     card. Bold and widely tracked, so 10px stays a label and not fine print. */
+  --text-xs: 0.625rem; /* 10px */
+  --text-xs--line-height: 0.75rem; /* 12px */
+  --text-xs--font-weight: 700;
+  --text-xs--letter-spacing: 0.07em;
 
-  /* Metadata, hints, field labels — the --color-faint tier. */
-  --text-sm: 0.875rem; /* 14px */
-  --text-sm--line-height: 1.1875rem;
+  /* Metadata: issue keys, ages, project names, status words, PR numbers, key
+     legends — the --color-faint tier, and the most repeated size in the app. */
+  --text-sm: 0.6875rem; /* 11px */
+  --text-sm--line-height: 0.9375rem; /* 15px */
 
-  /* THE DEFAULT, set on `body`. Field values, row text, button labels. */
-  --text-base: 1rem; /* 16px */
-  --text-base--line-height: 1.375rem;
+  /* Prose. The agent's activity sentence, the interpreter's headline, a hint
+     under a field: text that is read rather than scanned. Outside the ladder on
+     purpose — see the note above. */
+  --text-body: 0.75rem; /* 12px */
+  --text-body--line-height: 1rem; /* 16px */
 
-  /* Section titles. */
-  --text-lg: 1.125rem; /* 18px */
-  --text-lg--line-height: 1.5rem;
+  /* THE DEFAULT, set on `body`. Compact row titles, chip labels, pane tabs,
+     button text, field values. */
+  --text-base: 0.8125rem; /* 13px */
+  --text-base--line-height: 1.0625rem; /* 17px */
 
-  /* Inline view titles. */
+  /* Card and section titles: the hero card's heading, a settings group. */
+  --text-lg: 0.9375rem; /* 15px */
+  --text-lg--line-height: 1.25rem; /* 20px */
+  --text-lg--font-weight: 600;
+  --text-lg--letter-spacing: -0.01em;
+
+  /* An inline view title. The design has no step here — its screens jump
+     straight from the card title to the large title — so this keeps the rung
+     the sheets and the connect screen were built against. */
   --text-xl: 1.375rem; /* 22px */
-  --text-xl--line-height: 1.75rem;
+  --text-xl--line-height: 1.75rem; /* 28px */
+  --text-xl--font-weight: 600;
+  --text-xl--letter-spacing: -0.01em;
 
-  /* The large title, and the ceiling. iOS draws a screen title at 34pt; both
-     screens here used to top out at 18–22px, which is what made them read as
-     web headings on a phone rather than as native screens. This is the one step
-     added for the phone rather than raised from the desktop's ladder. */
+  /* The large title, and the ceiling: one per screen, at the top. */
   --text-2xl: 1.75rem; /* 28px */
-  --text-2xl--line-height: 2.125rem;
+  --text-2xl--line-height: 2.125rem; /* 34px */
+  --text-2xl--font-weight: 700;
+  --text-2xl--letter-spacing: -0.018em;
 
   /* SPACING IS PINNED TO PX, and that is the other half of the Dynamic Type
      change below. Tailwind's default `--spacing` is 0.25rem, so once the root
@@ -88,6 +120,58 @@
      keeps the accessibility win on the type, where it belongs, and costs
      nothing at the default size (0.25rem of 16px IS 4px). */
   --spacing: 4px;
+
+  /* -------------------------------------------------------------------------
+     The seven colours the phone design names that the shared set does not.
+
+     These are STATIC FALLBACKS in the compiled sheet, and they are macchiato's
+     because that is the flavor the design was drawn in. The live values are
+     written onto the root element at runtime by src/lib/mobiletokens.ts, which
+     derives every one of them from the ACTIVE flavor — so `[ui].theme` repaints
+     these along with the shared tokens and latte does not get a black tab bar.
+     Declaring them here is what makes `bg-crust`, `text-subtext`,
+     `border-edge-soft` and friends exist as utilities at all: Tailwind v4 emits
+     a utility per `--color-*` name in a `@theme` block, and a name that only
+     ever appears in a setProperty() call compiles to nothing.
+  ------------------------------------------------------------------------- */
+
+  /* The chrome ground: tab bar, accessory bar. One step below `canvas`. */
+  --color-crust: #11111b;
+
+  /* Prose, between `ink` and `faint` — Catppuccin `subtext1`. */
+  --color-subtext: #bac2de;
+
+  /* List hairlines and card borders: softer than `edge`, which reads as a
+     panel border. */
+  --color-edge-soft: #2b2b3c;
+
+  /* The two soft status-chip grounds and their labels. */
+  --color-pill-urgent-soft: #4e3f42;
+  --color-pill-urgent-soft-fg: #fab387;
+  --color-pill-broken-soft: #4d3649;
+  --color-pill-broken-soft-fg: #f38ba8;
+}
+
+/* ---------------------------------------------------------------------------
+   iOS ZOOMS A FOCUSED INPUT WHOSE TEXT IS UNDER 16px, and the scale above put
+   every field under it.
+
+   That behaviour is not a preference and cannot be turned off without disabling
+   pinch-zoom for the whole document, which is an accessibility regression traded
+   for a cosmetic one. The fix is to keep the CONTROLS at the threshold while the
+   chrome around them follows the design: a form field is not dense-list content
+   and 16px is a perfectly ordinary size for one on a phone.
+
+   `!important` is not needed — nothing sets a size on these elements — but the
+   rule must stay in `base` so any deliberate `text-*` utility at a call site
+   still wins. See the layer note further down for why that matters here.
+--------------------------------------------------------------------------- */
+@layer base {
+  input,
+  textarea,
+  select {
+    font-size: 16px;
+  }
 }
 
 /* ---------------------------------------------------------------------------

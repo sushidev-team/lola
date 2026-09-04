@@ -1,18 +1,28 @@
 <script lang="ts">
   import { onDestroy, onMount } from "svelte";
-  import { statusLabel } from "$lib/theme";
   import { store } from "$lib/store.svelte";
+  import { statusLabel } from "$lib/theme";
+  import { statusTone } from "@mobile/lib/statustone";
   import AccessoryBar from "@mobile/lib/components/AccessoryBar.svelte";
+  import ContextCard from "@mobile/lib/components/ContextCard.svelte";
+  import MetaPill from "@mobile/lib/components/MetaPill.svelte";
   import MobileTerminal from "@mobile/lib/components/MobileTerminal.svelte";
   import PaneTabs from "@mobile/lib/components/PaneTabs.svelte";
+  import Sheet from "@mobile/lib/components/Sheet.svelte";
   import TouchButton from "@mobile/lib/components/TouchButton.svelte";
-  import ViewSettings, { type ViewGeometry } from "@mobile/lib/components/ViewSettings.svelte";
+  import ViewSettings, {
+    viewClippingNotice,
+    viewIsClipped,
+    type ViewGeometry,
+  } from "@mobile/lib/components/ViewSettings.svelte";
   import DevLinksSheet from "@mobile/lib/components/DevLinksSheet.svelte";
+  import BackIcon from "@mobile/lib/icons/BackIcon.svelte";
+  import BranchIcon from "@mobile/lib/icons/BranchIcon.svelte";
+  import OverflowIcon from "@mobile/lib/icons/OverflowIcon.svelte";
   import { DEFAULT_MODES, isBracketedPaste, textBytes, type TerminalModes } from "@mobile/lib/keybytes";
   import { installKeyboardInset } from "@mobile/lib/keyboardinset";
   import { nav } from "@mobile/lib/nav.svelte";
   import { openExternal } from "@mobile/lib/openurl";
-  import { statusTone } from "@mobile/lib/statustone";
   import { loadFontSize } from "@mobile/lib/prefs";
   import { installAppBackground } from "@mobile/lib/appstate";
   import { connection } from "@mobile/lib/connection.svelte";
@@ -253,6 +263,94 @@
   const hasPR = $derived(prNumber > 0 && prUrl !== "");
 
   /**
+   * What the header row leads with, and the line under it.
+   *
+   * THE ISSUE KEY LEADS HERE, WHICH IS THE OPPOSITE OF THE LIST. Both list
+   * components argue at length that the title has to lead a ROW — a list of
+   * NOR-401 / NOR-329 / NOR-311 is a list of three things you cannot tell
+   * apart. That argument is about telling sessions apart, and on this screen
+   * there is only one: the question a person opening a terminal is answering is
+   * "which ticket am I in", they arrived by tapping a title they have just
+   * read, and the key is the handle they will quote in a commit or a comment. So
+   * the key is the identity and the title is the subtitle, which is also what
+   * the design draws.
+   *
+   * The fallback is the session id rather than the pane name, so a record the
+   * list has not caught up with still names something a person can act on. The
+   * pane name is a debugging handle and lives in the tab strip and its menu.
+   */
+  const issueKey = $derived(session?.issue || nav.paneSession);
+  /**
+   * ONE TRUNCATED LINE, and empty is a perfectly good answer. `title` is "" for
+   * older and adopted records, and a header that filled the gap with the tmux
+   * name would lead a screen whose subject is a ticket with
+   * `lola-nori-app-nor-311`.
+   */
+  const subtitle = $derived(session?.title ?? "");
+
+  /**
+   * The overflow menu.
+   *
+   * A NAMED `nav` SHEET, like the other three this screen can put up. It landed
+   * as a plain local on the argument that `sheets.ts`'s vocabulary is for
+   * surfaces a gesture cannot reach — the view settings, the pane menu's long
+   * press — and that an ordinary tap on a 44-point button is not that case.
+   * That reads the rule one step too narrowly: what a name buys is a
+   * development link, and a link is how a SCRIPT reaches a surface at all. The
+   * Simulator can no more tap a button than it can long-press a tab, so this
+   * menu — which now holds most of this screen's actions — was the one overlay
+   * in the app that could be unit-tested and never photographed.
+   *
+   * Naming it also deletes work: `nav.toSessions()` and `nav.toTab()` already
+   * close whatever sheet is up, because a sheet belongs to the screen it was
+   * opened over, so leaving the terminal can no longer strand this one open.
+   */
+  const menuOpen = $derived(nav.sheet === "menu");
+
+  /**
+   * Whether the grid is wider than the screen, and the sentence that says so.
+   *
+   * BOTH FROM ViewSettings' MODULE, never re-derived here. The sections that
+   * report the clipping now live inside the session sheet, so the button that
+   * opens that sheet is the only always-visible sign of it — and a second copy
+   * of the rule here is exactly how the mark and the readout would come to
+   * disagree. See `viewClippingNotice` for why the guarantee matters at all.
+   */
+  const clipped = $derived(viewIsClipped(geom));
+  const menuLabel = $derived.by(() => {
+    const notice = viewClippingNotice(geom);
+    return notice ? `Session actions. ${notice}` : "Session actions";
+  });
+
+  /**
+   * The status word under the issue key, and the status it is drawn for.
+   *
+   * THE ERROR WINS IT, and it has to. The status describes the SESSION and the
+   * banner below describes the PANE, and a reader sees one screen: with the
+   * status drawn unconditionally, a live session whose aux pane had been closed
+   * on the Mac printed "needs you" directly above "This session's terminal is
+   * gone". That contradiction is the exact confusion `humanError` exists to
+   * remove, so the word and the sentence agree by construction.
+   *
+   * NOTHING IS DRAWN ONCE THE PANE HAS EXITED: "This session ended" is already
+   * the banner immediately below, and the store's status word lags a dead pane
+   * by up to an observer cycle — so the one moment it is most likely to be wrong
+   * is the one moment something else is already stating the truth.
+   *
+   * `statusFor` is what colours it. "no terminal" is not a status the shared
+   * vocabulary names, and asking `statusTone` for one would answer the faint
+   * default — which is the right answer here anyway, since the banner beneath is
+   * already coloured and this is a statement about what is missing rather than a
+   * second alarm about it.
+   */
+  const statusFor = $derived(error ? "" : (session?.status ?? ""));
+  const statusWord = $derived.by(() => {
+    if (error) return "no terminal";
+    if (!session || exited) return "";
+    return statusLabel(session.status);
+  });
+
+  /**
    * The session's dev servers, as THIS PHONE can reach them.
    *
    * `devForwards`, not `devUrls`. The latter are what the Mac sees —
@@ -310,6 +408,12 @@
    * open the asset server instead of the app about half the time.
    */
   async function openDev() {
+    // THE MENU CLOSES FIRST, WHICHEVER BRANCH THIS TAKES. Both of them put
+    // something in front of the user that the menu would otherwise be sitting
+    // on top of: the link sheet is a second modal, and a failed open writes into
+    // the banner under the header, which the sheet covers. `Sheet` is not
+    // stacked anywhere else in this app and there is no z-order story for two.
+    nav.closeSheet();
     if (devLinks.length === 1) {
       await openLink(devLinks[0].url);
       return;
@@ -428,135 +532,164 @@
    * settles this and openurl.ts is the module that exists for it.
    */
   function openPR() {
+    nav.closeSheet();
     void openExternal(prUrl);
   }
 </script>
 
 <div class="flex h-full min-h-0 flex-col bg-canvas" style="padding-bottom: {keyboardInset}px">
+  <!-- THE HEADER IS TWO LINES AND ONE OF THEM IS A SENTENCE. It used to be a
+       single row carrying, from left to right: a back chevron, the issue key
+       over a status word, a Dev toggle, a dev-links button, a PR button and the
+       view-settings trigger — six controls and two facts on a 393-point line.
+       Everything shrank to fit, so the identity of the session read smaller than
+       the row of grey glyphs beside it, and the two controls a person actually
+       reaches for on a phone (open the PR, open the dev server) were the two
+       narrowest.
+
+       The redesign splits it: the top row is IDENTITY — who this is, how it is
+       doing, whether it has a PR — and the actions move behind the overflow
+       button into a sheet, where they get full-width rows and their real names
+       instead of a 16-point glyph. `px-3` rather than the old `px-2` is the
+       design's; the top padding still adds to the safe-area inset rather than
+       replacing it, for the reason app.css spells out about --lola-top-inset.
+
+       `8px` rather than `0.5rem`, which is the same thing only at the default
+       text size. app.css pins spacing to px so that Dynamic Type scales the
+       TYPE and not the layout; in rem this one padding would grow to ~11.5px at
+       the largest setting, taking three points off the pane on the screen with
+       the least room to give and leaving this header disagreeing with the four
+       tab screens, which all write theirs as a px literal. -->
+  <!-- NO BOTTOM RULE ON THIS HEADER. The pane-tab strip 44 points below draws
+       its own, and the design has exactly one hairline between the header and
+       the pane — two of them boxed the identity row into a band of its own,
+       which reads as a toolbar rather than as the top of one screen. -->
   <header
-    class="flex shrink-0 items-center gap-2 border-b border-edge px-2 pb-2"
-    style="padding-top: calc(var(--lola-top-inset, env(safe-area-inset-top, 0px)) + 0.5rem)"
+    class="flex shrink-0 flex-col gap-0.5 px-3 pb-2"
+    style="padding-top: calc(var(--lola-top-inset, env(safe-area-inset-top, 0px)) + 8px)"
   >
-    <TouchButton icon aria-label="Back to sessions" onclick={onback}>‹</TouchButton>
-    <div class="flex min-w-0 flex-col">
-      <span class="truncate font-medium text-ink">
-        {session?.issue || nav.paneSession}
-      </span>
-      <span class="num flex min-w-0 items-center gap-1 truncate text-sm text-faint">
-        <!-- THE STATUS, WOVEN IN rather than worn as a badge. It is the same
-             word and the same colour the sessions list and the desktop use —
-             `$lib/theme`'s statusLabel + statusText, which are the port of Go's
-             internal/state vocabulary that desktop/state_parity_test.go pins —
-             at the weight of a caption instead of a filled pill. A pill up here
-             competed with the title for the eye and told a person who has just
-             tapped into a session something they already knew.
+    <div class="flex items-center gap-2">
+      <!-- `text-accent!` with the trailing `!` because a plain `text-accent`
+           ties with the ghost variant's own `text-faint` and the winner would be
+           decided by Tailwind's order in the compiled sheet (CLAUDE.md's Button
+           invariant). Back is the one control on this screen that is always
+           there and always safe, which is what earns it the accent. -->
+      <TouchButton icon aria-label="Back to sessions" class="text-accent!" onclick={onback}>
+        <BackIcon />
+      </TouchButton>
 
-             THE GRID READOUT THAT USED TO LIVE HERE IS NOT GONE, it moved into
-             the view-settings popover, whose trigger carries the column range
-             in its accessible name and wears a dot whenever the pane is
-             clipped. That number is the only signal that a line stops at the
-             screen edge rather than because the agent stopped writing, so it
-             was moved rather than dropped. -->
-        {#if error}
-          <!-- THE ERROR WINS, and it has to. This branch used to come second,
-               behind `session && !exited` — and a session the list still knows
-               about ALWAYS takes that branch, so the fallback was very nearly
-               dead code and the subtitle could contradict the banner directly
-               beneath it: "working" printed over "This session's terminal is
-               gone" whenever a live session's aux pane had been closed on the
-               Mac. That contradiction is the exact confusion humanError exists
-               to remove, so the sentence below and the word up here now agree
-               by construction.
+      <!-- THE ONE ITEM ALLOWED TO GIVE WAY. Everything else on this line is
+           fixed-width and cannot truncate — a chip and a badge are
+           `whitespace-nowrap` by construction and a 44-point button is a floor,
+           not a preference — so at the narrowest phone widths and at large
+           Dynamic Type sizes the key is what shortens. That is the right
+           casualty: the full title is on the line directly beneath it, and a
+           clipped button is a control a person cannot reach. -->
+      <span class="num min-w-0 truncate text-base font-medium text-ink">{issueKey}</span>
 
-               The tmux name is a debugging handle, not a subtitle. With nothing
-               else to report it was all this line had, so a screen whose whole
-               point is "this pane is gone" led with `lola-nori-app-nor-311`. -->
-          <span class="truncate">No terminal</span>
-        {:else if session && !exited}
-          <span class="shrink-0 {statusTone(session.status)}">{statusLabel(session.status)}</span>
-        {:else}
-          <span class="truncate">{nav.pane}</span>
+      <span class="flex-1"></span>
+
+      {#if prNumber > 0}
+        <!-- THE BADGE IS THE WAY TO THE PR, and it is the only one. It was a
+             statement with the action parked in the sheet — a number you could
+             read and not press, two taps from the page it names — which is the
+             wrong shape for the thing this session exists to produce. Pressing
+             the number that says "#352" and landing on #352 is what a person
+             expects of it, so the sheet's "Open pull request" row is gone rather
+             than kept as a second door onto the same page.
+
+             IT IS A STATEMENT WHEN IT CANNOT BE A DOOR. `prNumber > 0` with an
+             empty `prUrl` is a real state — the number and the address come from
+             the same gh fetch and can arrive apart — so the badge still DRAWS on
+             the number alone and only becomes pressable once there is somewhere
+             to go. A button that opens nothing is worse than a fact.
+
+             <MetaPill> makes an `onclick` badge a transparent 44-point button
+             around the chip rather than growing the chip itself, so the row's
+             height is unchanged. The name is spelled out because "#352" alone is
+             announced as a loose number belonging to nothing.
+
+             The colour comes from the CHECKS rather than the delivery word,
+             exactly as on the hero card: a red number is the fastest way to see
+             that the PR that exists is not the PR you wanted. -->
+        <MetaPill
+          tone={session?.checks === "fail" ? "bad" : "magenta"}
+          onclick={hasPR ? openPR : undefined}
+          ariaLabel="Open pull request #{prNumber} in the browser"
+        >
+          {#snippet leading()}<BranchIcon />{/snippet}
+          {#if !hasPR}<span class="sr-only">Pull request&nbsp;</span>{/if}#{prNumber}
+        </MetaPill>
+      {/if}
+
+      <!-- ONE BUTTON, WHERE THERE WERE TWO. The header used to carry a view-
+           settings glyph beside this one — 88 points of controls on the screen
+           with the least of it to give, on a row where the ISSUE KEY was the
+           only item allowed to shorten. The key is what says which session this
+           is; a second glyph is not worth its first character. So the view
+           settings became the first section of this sheet, and this button opens
+           all of it.
+
+           IT INHERITS THE CLIPPING GUARANTEE ALONG WITH THE SECTIONS. A phone
+           shows roughly 55 of a developer's 200 columns, and a pane clipped at
+           column 55 looks exactly like an agent that stopped writing mid-line —
+           so the old trigger wore a dot and carried the live column range in its
+           name. Both facts come from ViewSettings' own module (`viewIsClipped`,
+           `viewClippingNotice`), which is what stops the button and the readout
+           inside it from ever disagreeing. Dropping either half here would
+           silently undo the reason that component exists.
+
+           `relative` for the dot, appended after the shared Button's classes,
+           which set no positioning — so no `!`, unlike the geometry overrides. -->
+      <TouchButton
+        icon
+        aria-label={menuLabel}
+        aria-haspopup="dialog"
+        aria-expanded={menuOpen}
+        class="relative text-subtext!"
+        onclick={() => nav.openSheet("menu")}
+      >
+        <OverflowIcon />
+        {#if clipped}
+          <!-- `warn` rather than `bad`: a clipped pane is not an error, it is
+               the normal state of a 200-column grid on a phone. It is the state
+               a reader has to know about before believing the right-hand edge of
+               what they can see. -->
+          <span
+            class="pointer-events-none absolute top-1.5 right-1.5 h-2 w-2 rounded-full bg-warn ring-2 ring-canvas"
+            aria-hidden="true"
+          ></span>
         {/if}
-      </span>
+      </TouchButton>
     </div>
-    <div class="ml-auto flex shrink-0 items-center gap-1">
-      <!-- THE ACTIVATE CONTROL, drawn only for a project that has dev commands.
-           It is what makes the link button below reachable from a phone at all:
-           before this, a session could only be activated from the Mac. -->
-      {#if canDev}
-        <TouchButton
-          aria-label={devActive
-            ? "Stop this session's dev commands"
-            : "Run this session's dev commands here"}
-          aria-pressed={devActive}
-          class="gap-1! px-2!"
-          disabled={devBusy}
-          onclick={toggleDev}
-        >
-          <span class={devActive ? "text-good" : "text-faint"} aria-hidden="true">●</span>
-          <span class="text-sm">Dev</span>
-        </TouchButton>
-      {/if}
-      <!-- ONLY WHILE THE SESSION IS ACTIVE and its servers are published. Like
-           the PR button below, absent rather than dead: a control that does
-           nothing for most of a session's life teaches people not to look
-           here. -->
-      {#if devLinks.length > 0}
-        <TouchButton
-          aria-label={devLinks.length === 1
-            ? `Open the dev server at ${devLinks[0].from} on this phone`
-            : `Open one of ${devLinks.length} dev server links on this phone`}
-          class="gap-1! px-2!"
-          onclick={openDev}
-        >
-          <svg viewBox="0 0 16 16" class="size-4 shrink-0" fill="currentColor" aria-hidden="true">
-            <path
-              d="M7.775 3.275a.75.75 0 0 0 1.06 1.06l1.25-1.25a2 2 0 1 1 2.83 2.83l-2.5 2.5a2 2 0 0 1-2.83 0 .75.75 0 0 0-1.06 1.06 3.5 3.5 0 0 0 4.95 0l2.5-2.5a3.5 3.5 0 0 0-4.95-4.95l-1.25 1.25Zm-4.69 9.64a2 2 0 0 1 0-2.83l2.5-2.5a2 2 0 0 1 2.83 0 .75.75 0 0 0 1.06-1.06 3.5 3.5 0 0 0-4.95 0l-2.5 2.5a3.5 3.5 0 0 0 4.95 4.95l1.25-1.25a.75.75 0 0 0-1.06-1.06l-1.25 1.25a2 2 0 0 1-2.83 0Z"
-            />
-          </svg>
-          {#if devLinks.length > 1}
-            <span class="num text-sm">{devLinks.length}</span>
-          {/if}
-        </TouchButton>
-      {/if}
-      <!-- ONLY WHEN THERE IS A PR. An always-drawn button that is dead for most
-           of a session's life teaches people not to look at that corner. -->
-      {#if hasPR}
-        <TouchButton
-          aria-label="Open pull request #{prNumber} in the browser"
-          class="gap-1! px-2!"
-          onclick={openPR}
-        >
-          <svg viewBox="0 0 16 16" class="size-4 shrink-0" fill="currentColor" aria-hidden="true">
-            <path
-              d="M1.5 3.25a2.25 2.25 0 1 1 3 2.122v5.256a2.251 2.251 0 1 1-1.5 0V5.372A2.25 2.25 0 0 1 1.5 3.25Zm5.677-.177L9.573.677A.25.25 0 0 1 10 .854V2.5h1A2.5 2.5 0 0 1 13.5 5v5.628a2.251 2.251 0 1 1-1.5 0V5a1 1 0 0 0-1-1h-1v1.646a.25.25 0 0 1-.427.177L7.177 3.427a.25.25 0 0 1 0-.354ZM3.75 2.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Zm0 9.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Zm8.25.75a.75.75 0 1 0 1.5 0 .75.75 0 0 0-1.5 0Z"
-            />
-          </svg>
-          <span class="num text-sm">#{prNumber}</span>
-        </TouchButton>
-      {/if}
-      <!-- The fit-width toggle and A−/A+ used to sit here as three loose
-           controls. They are inside this one, unchanged; see ViewSettings for
-           why the column readout had to go with them and what replaces it in
-           the header. Deliberately NOT disabled on `exited`: a dead pane still
-           has its last frame on screen, and enlarging that frame or reading how
-           much of it is off to the right is the one thing left worth doing. -->
-      <!-- `bind:open` against `nav.sheet` rather than the component's own local
-           state, through a function binding. The sheet is a place the app can
-           be in, which is what lets a development link land with it open — the
-           column readout inside it could not otherwise be photographed at all,
-           since nothing but a tap opens it and the Simulator has no gesture
-           API. The component still works uncontrolled everywhere else. -->
-      <ViewSettings
-        {font}
-        {geom}
-        bind:open={() => nav.sheet === "view", (v) => (v ? nav.openSheet("view") : nav.closeSheet())}
-        onfont={setFont}
-        onfit={() => termRef?.toggleFit()}
-        pinned={pinActive}
-        onpin={setPin}
-      />
-    </div>
+
+    <!-- ONE LINE, TRUNCATED, and no clamp. The card in the list gives a title two
+         lines because it is asking the reader to choose; here they have already
+         chosen, and every row this header takes comes off the pane.
+
+         THE STATUS IS A WORD ON THIS LINE, NOT A CHIP ON THE ONE ABOVE. It used
+         to be a <StatusChip> between the issue key and the spacer, which put a
+         filled badge — up to 126 points of it for "waiting for you" — in the
+         middle of the row whose remaining space the key was competing for. Here
+         it costs a word, and it costs the key nothing.
+
+         It is deliberately the same shape the COMPACT ROW in the list uses: the
+         status word in its own tone, leading a line of quieter facts, from
+         `statusTone` + `$lib/theme`'s statusLabel. A reader tapping a row now
+         sees the same two things in the same order one screen further in.
+
+         `shrink-0` on the word and `truncate` on the title: the status is three
+         words at most and is the reason the line exists, while the title is free
+         text and is the only thing here that can be long. -->
+    {#if statusWord || subtitle}
+      <div class="flex min-w-0 items-center gap-1.5 text-sm">
+        {#if statusWord}
+          <span class="shrink-0 {statusTone(statusFor)}">{statusWord}</span>
+          {#if subtitle}<span class="shrink-0 text-edge" aria-hidden="true">·</span>{/if}
+        {/if}
+        {#if subtitle}<span class="min-w-0 truncate text-faint">{subtitle}</span>{/if}
+      </div>
+    {/if}
   </header>
 
   {#if error}
@@ -623,6 +756,14 @@
     onnotice={(m) => (notice = m)}
     onpanes={(id, names) => void pin.forgetMissing(id, names)}
   />
+
+  <!-- WHAT THE AGENT IS DOING, between the strip and the pane it labels.
+       Renders nothing at all — not an empty card — when the session has neither
+       an activity line nor a fact worth a chip, which is most sessions most of
+       the time; see ContextCard for why an empty box above a terminal is worse
+       than the space it takes. `session` may be undefined while the list has
+       not caught up with the pane, which is the same nothing. -->
+  <ContextCard {session} />
 
   <!-- The region the tab strip controls. `role="tabpanel"` plus the id the
        strip points `aria-controls` at is what turns two adjacent widgets into
@@ -692,6 +833,115 @@
     onsend={(bytes) => termRef?.send(bytes)}
   />
 </div>
+
+{#if menuOpen}
+  <!-- THE ACTIONS THAT USED TO BE GLYPHS IN THE HEADER, with their names back.
+       Nothing about any of them changed — the same handlers, the same
+       accessible names, the same absent-rather-than-disabled rule — only the
+       address. Each is still drawn ONLY when it can do something: a control that
+       is dead for most of a session's life teaches people not to look at that
+       corner, and a menu of dead rows teaches them not to open the menu.
+
+       The app's one modal shape, so this sheet gets Escape, the dismissible
+       backdrop and the Dynamic Type height cap from Sheet.svelte rather than a
+       fifth copy of them. -->
+  <Sheet
+    label="Session actions"
+    dismissLabel="Close the session menu"
+    onclose={() => nav.closeSheet()}
+  >
+    <!-- THE VIEW SETTINGS LEAD, because they are the reason this sheet is opened
+         most often: a text size and a column readout are adjusted while reading,
+         while the dev toggle and the PR link are things a person does once. They
+         had their own header button and their own sheet until the header ran out
+         of room for both glyphs — see the note on the trigger above.
+
+         `ondone` closes this sheet, and only "Fit the width" spends it: that
+         control changes what is on screen BEHIND the sheet, so leaving it up
+         hides the thing just asked for. Everything else here is adjusted and
+         re-adjusted with the sheet open, which is the whole reason A− / A+ are
+         worth having in a sheet at all. -->
+    <ViewSettings
+      {font}
+      {geom}
+      onfont={setFont}
+      onfit={() => termRef?.toggleFit()}
+      pinned={pinActive}
+      onpin={setPin}
+      ondone={() => nav.closeSheet()}
+    />
+
+    <div class="h-px bg-edge/60" aria-hidden="true"></div>
+
+    {#if canDev}
+      <!-- IT IS A MOVE, NOT A TOGGLE, and the sheet is where that can finally be
+           said: only one session per project may run the dev commands (they bind
+           ports), so starting these STOPS another session's servers — and that
+           session is not on screen. The glyph in the header had no room for the
+           sentence and the aria-label carried it alone, which meant it reached
+           VoiceOver users and nobody else.
+
+           The label text is the sheet's; the ACCESSIBLE NAME is deliberately the
+           header button's, word for word, so the control is the same control to
+           anything that was addressing it before. -->
+      <section class="flex flex-col gap-2">
+        <span class="label text-faint">Dev servers</span>
+        <TouchButton
+          wide
+          variant="secondary"
+          aria-label={devActive
+            ? "Stop this session's dev commands"
+            : "Run this session's dev commands here"}
+          aria-pressed={devActive}
+          loading={devBusy}
+          onclick={toggleDev}
+        >
+          <!-- Hidden while the spinner is up: the shared Button asks a call site
+               that draws its own state glyph to step aside, because the spinner
+               takes that slot and two marks fight over one. -->
+          {#if !devBusy}
+            <span class={devActive ? "text-good" : "text-faint"} aria-hidden="true">●</span>
+          {/if}
+          {devActive ? "Stop the dev commands" : "Run the dev commands here"}
+        </TouchButton>
+        {#if devLinks.length > 0}
+          <TouchButton
+            wide
+            aria-label={devLinks.length === 1
+              ? `Open the dev server at ${devLinks[0].from} on this phone`
+              : `Open one of ${devLinks.length} dev server links on this phone`}
+            onclick={openDev}
+          >
+            {devLinks.length === 1 ? "Open the dev server" : `Open a dev server (${devLinks.length})`}
+          </TouchButton>
+        {/if}
+        <!-- KEPT, AND SHORTENED TO ONE LINE. The rest of this sheet's captions
+             are gone; this one states a consequence that happens to a session
+             which is not on screen, so a reader cannot discover it from the
+             control. Two sentences became one. -->
+        <span class="copy text-sm text-faint">
+          Starting these stops another session's servers.
+        </span>
+      </section>
+    {:else if devLinks.length > 0}
+      <!-- A session can publish addresses without this app being able to offer
+           the toggle: `devCommands` is the project's configured list and an
+           older daemon does not ship it. The link is still worth having. -->
+      <TouchButton
+        wide
+        variant="secondary"
+        aria-label={devLinks.length === 1
+          ? `Open the dev server at ${devLinks[0].from} on this phone`
+          : `Open one of ${devLinks.length} dev server links on this phone`}
+        onclick={openDev}
+      >
+        {devLinks.length === 1 ? "Open the dev server" : `Open a dev server (${devLinks.length})`}
+      </TouchButton>
+    {/if}
+
+    <TouchButton wide onclick={() => nav.closeSheet()}>Done</TouchButton>
+  </Sheet>
+{/if}
 
 {#if devSheet}
   <DevLinksSheet

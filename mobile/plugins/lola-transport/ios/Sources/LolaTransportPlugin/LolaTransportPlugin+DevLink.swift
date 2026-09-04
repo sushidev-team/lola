@@ -39,13 +39,21 @@ extension LolaTransportPlugin {
         if let pane = payload.pane { data["pane"] = pane }
         if let session = payload.session { data["session"] = session }
         // The rest of the destination, for the same reason and behind the same
-        // fence: which filter the list arrives under, and which sheet is open
-        // when it does. Three surfaces — the filter overlay, the connection
-        // settings and the terminal's view settings — are reachable only by a
-        // tap, which is the one thing a Simulator cannot be asked to perform.
+        // fence: which filter the list arrives under, which tab is showing, and
+        // which sheet is open when it does. Every one of those surfaces — the
+        // three tab screens beyond the session list, the filter overlay, the
+        // connection settings, the terminal's view settings and its session
+        // menu — is reachable only by a tap, which is the one thing a Simulator
+        // cannot be asked to perform.
         if let triage = payload.triage { data["triage"] = triage }
         if let query = payload.query { data["query"] = query }
         if let sheet = payload.sheet { data["sheet"] = sheet }
+        if let tab = payload.tab { data["tab"] = tab }
+        // And the Projects tab's own depth: which project is drilled into and
+        // which picker is open over it. Two more taps deep than the tab itself,
+        // and therefore two more screens no script could otherwise reach.
+        if let project = payload.project { data["project"] = project }
+        if let pick = payload.pick { data["pick"] = pick }
 
         // Retained until consumed. A cold launch delivers the URL while the
         // WebView is still loading, so an ordinary event would be posted to no

@@ -35,6 +35,7 @@
 import { TRIAGE_FILTERS } from "$lib/filters";
 import { DEFAULT_REMOTE_PORT } from "./endpoint";
 import { normalizePin, type PairPayload, type PairSource } from "./pairpayload";
+import { isProjectPick, isTab, type ProjectPick, type Tab } from "./nav.svelte";
 import { isSheetName, type SheetName } from "./sheets";
 
 /** `LolaDevLinkEvent`, as much of it as this module reads. */
@@ -52,8 +53,14 @@ export interface DevLinkEvent {
   triage?: string;
   /** A free-text search to apply to the session list. */
   query?: string;
-  /** A sheet to open on arrival: filter, connection or view. */
+  /** A sheet to open on arrival: filter, connection, view, pane or menu. */
   sheet?: string;
+  /** Which of the bottom bar's four destinations to land on. */
+  tab?: string;
+  /** A project NAME for the Projects tab to drill into. */
+  project?: string;
+  /** A picker to open over that project's detail: `prs` or `tickets`. */
+  pick?: string;
 }
 
 /**
@@ -72,12 +79,14 @@ export interface DevLinkEvent {
  * actually succeeded, exactly like the banner flag.
  *
  * IT COVERS MORE THAN A PANE NOW, for exactly the reason it covered a pane in
- * the first place. The filter overlay, the connection settings and the
- * terminal's view settings are each reachable only by a tap, and a tap is the
- * one thing a Simulator cannot be asked to perform — so a review of those three
- * screens had to be conducted from unit tests, with no picture of any of them.
- * `triage`, `query` and `sheet` put them at the end of a link. Each is still
- * only a place the person holding the phone could have gone by tapping: no
+ * the first place. The filter overlay, the connection settings, the terminal's
+ * view settings and its session menu are each reachable only by a tap, and so
+ * are the Activity, Projects and Settings tabs, a project's detail behind a row
+ * on one of them, and the two pickers behind that — and a tap is the one thing
+ * a Simulator cannot be asked to perform, so a review of any of them had to be
+ * conducted from unit tests with no picture at all. `triage`, `query`, `sheet`,
+ * `tab`, `project` and `pick` put them at the end of a link. Each is still only
+ * a place the person holding the phone could have gone by tapping: no
  * credential, no command, nothing that is not already one gesture away.
  */
 export interface DevLinkTarget {
@@ -99,6 +108,60 @@ export interface DevLinkTarget {
   query: string;
   /** A sheet to open once the destination is reached, or "". */
   sheet: SheetName;
+  /**
+   * Which bottom-bar destination to land on, already matched against the real
+   * vocabulary, or "".
+   *
+   * IT EXISTS FOR THE SAME REASON `pane` DOES. Activity, Projects and Settings
+   * are reachable only by tapping the tab bar, and a tap is the one thing the
+   * Simulator cannot be asked to perform — so all three were screens a reviewer
+   * could test but never photograph, which is precisely the hole `DevLinkTarget`
+   * was introduced to close for the terminal. Adding the field is what makes
+   * `?tab=activity` reach them.
+   *
+   * The list is `TABS` in nav.svelte.ts, matched with its own `isTab`, exactly
+   * as `sheet` is matched with `isSheetName`. That module owns the vocabulary
+   * because the tab is state that lives on `nav`; importing the guard from here
+   * is what its own comment asks for, and it costs nothing — a frozen array and
+   * a type guard, even out of a runes module.
+   *
+   * It grants nothing. A tab is one thumb-press away for whoever is holding the
+   * phone; the link only lets a script press it.
+   */
+  tab: Tab | "";
+  /**
+   * A project NAME for the Projects tab to drill into, or "".
+   *
+   * DELIBERATELY NOT MATCHED AGAINST ANYTHING, unlike every other narrowed
+   * field here. There is no vocabulary to match it against: the projects are
+   * whatever `config.toml` on that Mac says, they arrive on a push that has not
+   * landed when a launch link is applied, and a name that turns out not to
+   * exist is a real state the detail screen already draws ("Project not found",
+   * naming the string). Refusing here would trade that honest screen for a link
+   * that silently shows the list.
+   *
+   * `Name` is identity in this repository — the path segment, the session id
+   * prefix, the value every session carries in its `project` field — so the
+   * name is what a link carries, exactly as the Projects list passes it to
+   * `nav.toProject`.
+   */
+  project: string;
+  /**
+   * A picker to open over that project's detail, or "".
+   *
+   * Matched with nav's own `isProjectPick`, the same way `sheet` is matched
+   * with `isSheetName`: a picker is a place the app can BE, so a link must be
+   * able to name one, and an unrecognised name must open nothing rather than
+   * something unexpected.
+   *
+   * A picker with no `project` reaches the shell and opens nothing — App.svelte
+   * routes the Projects tab by depth and a project is the outer of the two — so
+   * the pair is carried as written and the routing is the single place that
+   * decides. Same fence as everything else here: a picker is two taps away for
+   * whoever is holding the phone, and the pull-request and issue lists were
+   * otherwise two more screens no script could photograph.
+   */
+  pick: ProjectPick;
 }
 
 interface DevLinkCapablePlugin {
@@ -150,14 +213,44 @@ export function devLinkTarget(e: DevLinkEvent | null | undefined): DevLinkTarget
   const query = text(e?.query);
   const rawSheet = text(e?.sheet).toLowerCase();
   const sheet: SheetName = isSheetName(rawSheet) ? rawSheet : "";
+  // Lowercased before matching for the reason `sheet` is: a link is typed on a
+  // command line, the vocabulary is lowercase already, and "Activity" is what
+  // somebody writes when they are naming the screen rather than the token.
+  const rawTab = text(e?.tab).toLowerCase();
+  const tab: Tab | "" = isTab(rawTab) ? rawTab : "";
+  const project = text(e?.project);
+  // Lowercased before matching for the same reason `sheet` and `tab` are: the
+  // vocabulary is lowercase and a link is typed by hand.
+  const rawPick = text(e?.pick).toLowerCase();
+  const pick: ProjectPick = isProjectPick(rawPick) ? rawPick : "";
 
   // A destination with nothing in it is not a destination. Every field is
   // optional and independent — a link may ask only for a filter, only for a
-  // sheet, or for a pane with neither — so the emptiness test is over all of
-  // them rather than over `pane` alone, which is what it used to be.
-  if (pane === "" && triage === "" && query === "" && sheet === "") return null;
+  // tab, only for a sheet, or for a pane with none of them — so the emptiness
+  // test is over all of them rather than over `pane` alone, which is what it
+  // used to be.
+  if (
+    pane === "" &&
+    triage === "" &&
+    query === "" &&
+    sheet === "" &&
+    tab === "" &&
+    project === "" &&
+    pick === ""
+  ) {
+    return null;
+  }
 
-  return { pane, session: pane === "" ? "" : session || pane, triage, query, sheet };
+  return {
+    pane,
+    session: pane === "" ? "" : session || pane,
+    triage,
+    query,
+    sheet,
+    tab,
+    project,
+    pick,
+  };
 }
 
 function text(v: unknown): string {

@@ -1,8 +1,9 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { nav, paneNameFor } from "./nav.svelte";
+import { isTab, nav, paneNameFor, TABS } from "./nav.svelte";
 
 beforeEach(() => {
   nav.toConnect();
+  nav.tab = "sessions";
   nav.triage = "";
   nav.query = "";
 });
@@ -45,10 +46,10 @@ describe("nav sheets", () => {
 
   it("closes whatever is open on every navigation", () => {
     // A sheet belongs to the screen it was opened over. Carried across, the
-    // terminal's view settings would pop open on the list and the list's filter
+    // terminal's session menu would pop open on the list and the list's filter
     // sheet over a terminal — and only the screen that draws one can close it,
     // so the user would be stuck behind a modal nothing on screen owns.
-    nav.openSheet("view");
+    nav.openSheet("menu");
     nav.toSessions();
     expect(nav.sheet).toBe("");
 
@@ -56,9 +57,72 @@ describe("nav sheets", () => {
     nav.toTerminal("lola-fe-42", "lola-fe-42");
     expect(nav.sheet).toBe("");
 
-    nav.openSheet("connection");
+    nav.openSheet("pane");
     nav.toConnect();
     expect(nav.sheet).toBe("");
+  });
+});
+
+describe("nav tabs", () => {
+  it("starts on the sessions tab", () => {
+    expect(nav.tab).toBe("sessions");
+  });
+
+  it("switches to a tab and shows the tab shell", () => {
+    nav.toTab("projects");
+    expect(nav.tab).toBe("projects");
+    expect(nav.screen).toBe("sessions");
+  });
+
+  it("closes a sheet on the way, like every other navigation", () => {
+    nav.openSheet("filter");
+    nav.toTab("settings");
+    expect(nav.sheet).toBe("");
+  });
+
+  it("keeps the tab when a terminal is opened over it and closed again", () => {
+    // The terminal is a SCREEN pushed over a tab, not a fifth tab: it is
+    // full-screen, it belongs to one session rather than to a section of the
+    // app, and leaving it has to put you back where you came from.
+    nav.toTab("activity");
+    nav.toTerminal("lola-fe-42", "lola-fe-42");
+    expect(nav.screen).toBe("terminal");
+    expect(nav.tab).toBe("activity");
+
+    nav.back();
+    expect(nav.screen).toBe("sessions");
+    expect(nav.tab).toBe("activity");
+  });
+
+  it("keeps the tab across a disconnect and a return", () => {
+    // `toSessions` deliberately does not reset it — see its comment. A reset
+    // would drop somebody who opened a pane from Projects onto the list.
+    nav.toTab("settings");
+    nav.toConnect();
+    nav.toSessions();
+    expect(nav.tab).toBe("settings");
+  });
+
+  it("leaves the pane attached, because moving tabs is not leaving a terminal", () => {
+    nav.toTerminal("lola-fe-42", "lola-fe-42");
+    nav.toTab("projects");
+    expect(nav.pane).toBe("lola-fe-42");
+    expect(nav.paneSession).toBe("lola-fe-42");
+  });
+});
+
+describe("isTab", () => {
+  it("accepts every name the bar draws", () => {
+    for (const t of TABS) expect(isTab(t)).toBe(true);
+  });
+
+  it("fails closed on anything else", () => {
+    // A typo, a tab a later build added, a value from a link written against a
+    // different version of the app: none of them is a tab, and the caller
+    // leaves the current one alone rather than landing somewhere unexpected.
+    expect(isTab("terminal")).toBe(false);
+    expect(isTab("Sessions")).toBe(false);
+    expect(isTab("")).toBe(false);
   });
 });
 

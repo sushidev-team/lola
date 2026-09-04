@@ -36,14 +36,53 @@
     /** The size a fit would land on, for the control's label. */
     fitSize: number;
   }
+
+  /**
+   * Is the grid WIDER THAN THE SCREEN — i.e. do lines continue past the right
+   * edge?
+   *
+   * Exported because the fact is now needed in two places that must not
+   * disagree: this sheet's readout, and the header button that opens it. See
+   * `viewClippingNotice`.
+   */
+  export function viewIsClipped(geom: ViewGeometry): boolean {
+    return geom.cols > 0 && geom.panning;
+  }
+
+  /** The visible column range in words: "44–86 of 211". */
+  export function viewColumnRange(geom: ViewGeometry): string {
+    const last = Math.min(geom.cols, geom.first + Math.max(0, geom.shown - 1));
+    return `${geom.first}–${last} of ${geom.cols}`;
+  }
+
+  /**
+   * The clipping, as a sentence for an accessible name — or "" when nothing is
+   * clipped.
+   *
+   * THIS IS THE LOAD-BEARING EXPORT, and the reason this component gave up its
+   * own trigger rather than its guarantee. A phone shows roughly 55 of a
+   * developer's 200 columns, and a pane clipped at column 55 looks EXACTLY like
+   * an agent that stopped writing mid-line. The old trigger carried this in its
+   * name and wore a dot, so a clipped pane was announced and marked without the
+   * sheet being opened; the header now has ONE button where it had two, and that
+   * button carries both. A caller that opens this sheet without spending the
+   * sentence has silently dropped the guarantee.
+   */
+  export function viewClippingNotice(geom: ViewGeometry): string {
+    return viewIsClipped(geom) ? `Showing columns ${viewColumnRange(geom)}` : "";
+  }
 </script>
 
 <script lang="ts">
-  import Sheet from "./Sheet.svelte";
   import TouchButton from "./TouchButton.svelte";
   import { FONT_MAX, FONT_MIN, stepFont } from "@mobile/lib/viewport";
 
-  // The terminal screen's view settings, behind one button.
+  // The terminal screen's view settings: what is on screen, the text size, and
+  // the one control that changes the Mac.
+  //
+  // A SHEET BODY, not a sheet and not a button. See the note above the markup
+  // for why the trigger and the <Sheet> wrapper were both removed, and what
+  // carries the clipping guarantee in their place.
   //
   // WHAT THIS REPLACED, AND WHY IT IS NOT A DELETION. The terminal header used
   // to carry four controls — a fit-width toggle, A− and A+, and a subtitle
@@ -67,17 +106,11 @@
   //     (MobileTerminal), which is the shape of the same fact and tracks a
   //     finger while the number cannot.
   //
-  // ESCAPE IS NOT HANDLED HERE. It used to be, as a `svelte:window` listener
-  // guarded on `open` — but that made this the only sheet in the app a hardware
-  // keyboard could dismiss. It moved into Sheet.svelte, which every sheet
-  // mounts and which is only in the tree while one is open, so the guard went
-  // with it.
-  //
-  // A BOTTOM SHEET, NOT AN ANCHORED POPOVER. The trigger sits in the header's
-  // top-right corner, which is the one part of a phone screen a thumb cannot
-  // reach; a menu hanging off it would be unusable one-handed. The sheet is the
-  // shape this app already uses for the disconnect confirmation, so it is a
-  // reuse of an established pattern rather than a second modal idiom.
+  // ESCAPE, THE BACKDROP AND THE HEIGHT CAP ARE THE PARENT SHEET'S. This file
+  // used to mount its own <Sheet> and, before that, its own `svelte:window`
+  // Escape listener; both are gone, in that order, and for the same reason each
+  // time — one copy of the modal behaviour, in Sheet.svelte, mounted by whoever
+  // owns the modal. That owner is now the terminal screen's session sheet.
 
   let {
     /** The terminal's current font size, in points. */
@@ -115,16 +148,13 @@
      */
     disabled = false,
     /**
-     * Whether the sheet is up.
+     * Dismiss the sheet these sections are in.
      *
-     * BINDABLE, with an internal default, so the component works both ways: on
-     * its own it opens and closes itself, and the terminal screen binds it to
-     * `nav.sheet` so the sheet has a NAME and a development link can land with
-     * it open. That matters more than it sounds — this popover holds the column
-     * readout, and until it was addressable no screenshot of that readout could
-     * be taken at all, since the Simulator offers no way to tap the trigger.
+     * Used by exactly one control — "Fit the width", which changes what is on
+     * screen behind the sheet and so has nothing left to show once it has run.
+     * Every other control here is adjusted and re-adjusted with the sheet open.
      */
-    open = $bindable(false),
+    ondone = () => {},
   }: {
     font: number;
     geom: ViewGeometry;
@@ -133,22 +163,13 @@
     pinned?: boolean;
     onpin?: (on: boolean) => void;
     disabled?: boolean;
-    open?: boolean;
+    ondone?: () => void;
   } = $props();
 
-  /** The grid is wider than the screen. */
-  const clipped = $derived(geom.cols > 0 && geom.panning);
-  /** The rightmost visible column, 1-based and inside the grid. */
-  const last = $derived(Math.min(geom.cols, geom.first + Math.max(0, geom.shown - 1)));
-  /** The range in words, reused by the trigger's name and the sheet's readout. */
-  const range = $derived(`${geom.first}–${last} of ${geom.cols}`);
-
-  // THE TRIGGER SAYS WHAT IS WRONG, not what the button is. "View settings" is
-  // the affordance; the clipping is the news, and a name that carries it means
-  // a VoiceOver user learns the pane is clipped without opening anything.
-  const triggerLabel = $derived(
-    clipped ? `View settings. Showing columns ${range}` : "View settings",
-  );
+  // Both from the module block, so the readout below and the header button that
+  // opens it can never disagree about whether the pane is clipped.
+  const clipped = $derived(viewIsClipped(geom));
+  const range = $derived(viewColumnRange(geom));
 
   /**
    * The size the Mac's window would be squeezed to, in words, or "" before the
@@ -168,116 +189,35 @@
   /** Whether there is a fit action to offer at all. */
   const hasFit = $derived(geom.canFit || geom.fitActive);
 
-  function close() {
-    open = false;
-  }
 </script>
 
-<!-- `relative` so the clipped dot can be positioned inside the button. It is
-     appended after the shared Button's own classes, which set no positioning,
-     so no `!` is needed here — unlike the geometry overrides in TouchButton. -->
-<TouchButton
-  icon
-  class="relative"
-  aria-label={triggerLabel}
-  aria-haspopup="dialog"
-  aria-expanded={open}
-  {disabled}
-  onclick={() => (open = true)}
->
-  <svg
-    viewBox="0 0 16 16"
-    width="18"
-    height="18"
-    fill="none"
-    stroke="currentColor"
-    stroke-width="1.5"
-    stroke-linecap="round"
-    aria-hidden="true"
-  >
-    <path d="M2 4.5h3M8 4.5h6M2 11.5h6M11 11.5h3" />
-    <circle cx="6.5" cy="4.5" r="1.6" />
-    <circle cx="9.5" cy="11.5" r="1.6" />
-  </svg>
-  {#if clipped}
-    <!-- The always-on clipping mark. `warn` rather than `bad` because a clipped
-         pane is not an error — it is the normal state of a 200-column grid on a
-         phone — but it is the state a reader has to know about before believing
-         the right-hand edge of what they can see. -->
-    <span
-      class="pointer-events-none absolute top-1.5 right-1.5 h-2 w-2 rounded-full bg-warn ring-2 ring-canvas"
-      aria-hidden="true"
-    ></span>
-  {/if}
-</TouchButton>
+<!-- SECTIONS, NOT A SHEET, AND NO TRIGGER OF ITS OWN. Both were removed in the
+     same change and for one reason: the terminal header carried a settings glyph
+     and a menu glyph side by side, 88 points of chrome on the screen with the
+     least of it to spare, and the issue key — the one thing that says WHICH
+     session this is — was the item giving way to fit them. There is now one
+     button, it opens the session sheet, and these sections are the first thing
+     in it.
 
-{#if open}
-  <!-- The app's one modal shape, shared with the settings and filter sheets. It
-       is worth taking rather than keeping the inline copy this component was
-       written with: Sheet caps its own height and scrolls, which is what keeps
-       the Done button reachable at the largest Dynamic Type size — a sheet this
-       long overflows the viewport there and hides its own dismiss control. -->
-  <Sheet label="View settings" dismissLabel="Close view settings" onclose={close}>
-    <!-- What is on screen, and the action that changes it. -->
-    <section class="flex flex-col gap-2">
-      <span class="label text-faint">Visible</span>
-      {#if geom.cols > 0}
-        <span class="num text-ink">
-          {#if clipped}
-            Columns {range}
-          {:else}
-            All {geom.cols} columns
-          {/if}
-        </span>
-        <span class="num text-sm text-faint">{geom.rows} rows</span>
-        {#if clipped}
-          <!-- The sentence the number is shorthand for. Without it the reader
-               has to already know that a phone pans over a grid it cannot
-               shrink, which is exactly the thing a person who has just seen a
-               line stop halfway does not know. -->
-          <span class="copy text-sm text-faint">
-            The pane is wider than the screen, so lines continue past the right
-            edge. Drag sideways to follow them.
-          </span>
-        {/if}
-      {:else}
-        <span class="text-faint">No grid yet.</span>
-      {/if}
+     What that costs, and how it is paid: the old trigger was more than a way in.
+     It wore a dot and carried the live column range in its name whenever the
+     pane was clipped, which is the only always-visible sign that a line stopped
+     at the screen edge rather than because the agent stopped writing. Burying
+     that would have defeated the reason this component exists. So the facts are
+     exported from the module block above (`viewIsClipped`,
+     `viewClippingNotice`) and the single header button wears both. -->
+    <!-- NO "VISIBLE" SECTION. It reported the column range, the row count and a
+         sentence explaining that a phone pans over a grid it cannot shrink —
+         three lines of readout in a sheet whose other two sections are controls.
+         The FACT it carried has not gone anywhere: the header button still wears
+         the warn dot and still states the live range in its accessible name (see
+         `viewClippingNotice`), and the pane draws its own position bar along its
+         bottom edge. Those are both always visible, which the readout never was.
 
-      {#if geom.cols > 0 && hasFit}
-        <TouchButton
-          wide
-          variant="secondary"
-          {disabled}
-          onclick={() => {
-            onfit();
-            close();
-          }}
-        >
-          {geom.fitActive ? "Back to the reading size" : `Fit the width (${geom.fitSize} pt)`}
-        </TouchButton>
-        <span class="copy text-sm text-faint">
-          A zoom on this phone only. The pane keeps its size on the Mac, and no
-          other client sees a change.
-        </span>
-      {:else if clipped && atFloor}
-        <!-- At the 8-point floor with a grid still wider than the screen there
-             is no fit to offer, and a disabled button offering one anyway is
-             worse than a sentence. See viewport.ts's FitWidth.complete.
-             GATED ON THE FLOOR, not merely on the absence of a fit: `canFit`
-             is also false for a moment before the pane has been measured, and
-             telling a reader at 12 points that they are already at the
-             smallest text is a plain lie about a control they can still
-             use. -->
-        <span class="copy text-sm text-faint">
-          Already at the smallest text, and the grid is still wider than the
-          screen.
-        </span>
-      {/if}
-    </section>
-
-    <div class="h-px bg-edge/60" aria-hidden="true"></div>
-
+         The FIT survived it, and moved here. It is a zoom — it changes the text
+         size and nothing else — so it belongs beside A− and A+ rather than under
+         a heading about what is on screen, and putting it there is what let the
+         readout go without taking a control with it. -->
     <section class="flex flex-col gap-2">
       <span class="label text-faint">Text size</span>
       <!-- `secondary`, not the header's `ghost`. In a header a quiet glyph
@@ -309,22 +249,53 @@
           onclick={() => onfont(stepFont(font, 1))}>A+</TouchButton
         >
       </div>
+
+      {#if geom.cols > 0 && hasFit}
+        <!-- `ondone` because this one changes what is on screen BEHIND the
+             sheet, so leaving the sheet up hides the thing just asked for. The
+             two buttons above are pressed repeatedly and must not. -->
+        <TouchButton
+          wide
+          variant="secondary"
+          {disabled}
+          onclick={() => {
+            onfit();
+            ondone();
+          }}
+        >
+          {geom.fitActive ? "Back to the reading size" : `Fit the width (${geom.fitSize} pt)`}
+        </TouchButton>
+      {:else if clipped && atFloor}
+        <!-- At the 8-point floor with a grid still wider than the screen there
+             is no fit to offer, and a disabled button offering one anyway is
+             worse than a sentence. See viewport.ts's FitWidth.complete.
+             GATED ON THE FLOOR, not merely on the absence of a fit: `canFit`
+             is also false for a moment before the pane has been measured, and
+             telling a reader at 12 points that they are already at the
+             smallest text is a plain lie about a control they can still
+             use. -->
+        <span class="copy text-sm text-faint">Already at the smallest text.</span>
+      {/if}
     </section>
 
     <div class="h-px bg-edge/60" aria-hidden="true"></div>
 
-    <!-- THE ONE CONTROL IN THIS APP THAT CHANGES SOMEBODY ELSE'S SCREEN.
-         Everything else in this sheet is a zoom on this phone, and the caption
-         four lines above says so in as many words. This is the exact opposite,
-         and the two sit close enough together to be confused, so the difference
-         is spelled out rather than implied: the section is titled for the MAC,
-         the switch is labelled for what happens THERE, and the sentence under it
-         names the cost in full — a narrow window for the developer and a redraw
-         of the agent's screen when it flips back.
+    <!-- THE ONE CONTROL IN THIS APP THAT CHANGES SOMEBODY ELSE'S SCREEN, and the
+         only one in this sheet that still keeps a caption.
+         
+         Everything else here is a zoom on this phone and now says so by being
+         obvious rather than by being explained — the paragraphs under the fit
+         and the column readout are gone. This one is the exact opposite of a
+         local zoom and cannot be inferred from its own label, so the difference
+         stays spelled out: the section is titled for the MAC, the switch is
+         labelled for what happens THERE, and one line names the cost.
 
-         It is deliberately not a tooltip and not a help icon. A control whose
-         cost is one tap away from being read is a control whose cost is not
-         read. -->
+         SHORTENED, NOT DROPPED. It used to run four lines. What it may not lose
+         is that somebody else's window narrows and that it lets go on its own —
+         the first is the cost and the second is what stops a reader thinking
+         they have broken something permanently. A control whose cost is one tap
+         away from being read is a control whose cost is not read, which is why
+         this is not a tooltip and not a help icon. -->
     <section class="flex flex-col gap-2">
       <span class="label text-faint">Pane size on the Mac</span>
       <!-- `role="switch"` with `aria-checked` rather than the shared Button's
@@ -365,13 +336,10 @@
         </span>
       </TouchButton>
       <span class="copy text-sm text-faint">
-        While you are looking at this pane, its window on the Mac is resized to
-        what this phone can show{pinSize}. Your own view of the session there is
-        that narrow meanwhile, and the agent's screen redraws when it flips back.
-        It is released as soon as you leave the pane.
+        Narrows the window on the Mac{pinSize} while you are on this pane.
+        Released when you leave.
       </span>
     </section>
 
-    <TouchButton wide onclick={close}>Done</TouchButton>
-  </Sheet>
-{/if}
+    <!-- NO "Done" HERE. The sheet these sections sit in owns its own dismiss, and
+         a second one two rows above it would be two ways to close one sheet. -->

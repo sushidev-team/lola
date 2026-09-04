@@ -767,24 +767,33 @@ The parser FAILS CLOSED, which is worth knowing before blaming the app:
 | `pane` with anything but `[A-Za-z0-9._-]` | the pane is dropped; the app lands on the list |
 | `triage` naming no real bucket | the filter is dropped; the list is unfiltered |
 | `sheet` naming no real sheet | the sheet is dropped; nothing opens |
+| `tab` naming no real tab | the tab is dropped; the app lands on whichever it was on |
+| `pick` naming no real picker | the picker is dropped; the project's detail shows underneath it |
+| `pick` with no `project` | nothing opens; the Projects tab shows its list, because a picker has nothing to sit over |
+| `project` naming nothing configured | carried as written; the detail says so by name, which is the honest answer |
 | `triage` / `q` over 128 bytes, or carrying a control character | dropped |
 | any action but `connect` | ignored |
 
 ### Where a link can land
 
 Beyond `pane` and `session`, a link may name the rest of a destination. These
-exist for one reason: the filter overlay, the connection settings and the
-terminal's view settings are reachable only by a TAP, `simctl` has no gesture
-API, and the Simulator's device window is absent from the accessibility tree —
-so those three screens could be unit-tested but never photographed, and a
-reviewer had to judge changes to them from test names alone.
+exist for one reason: the Activity, Projects and Settings tabs, a project's
+detail and the two pickers behind it, the filter overlay, the connection
+settings, the terminal's view settings and its session
+menu are reachable only by a TAP, `simctl` has no gesture API, and the
+Simulator's device window is absent from the accessibility tree — so every one
+of those screens could be unit-tested but never photographed, and a reviewer had
+to judge changes to them from test names alone.
 
 | parameter | what it does |
 | --- | --- |
 | `pane` / `session` | attach the terminal to a pane |
 | `triage` | filter the list to a bucket: `Needs You`, `Working`, `Fixing`, `In Review`, `Done` (matched case-insensitively) |
 | `q` (or `query`) | put a free-text search into the list |
-| `sheet` | open one sheet on arrival: `filter`, `connection`, or `view` (the terminal's view settings — only useful with a `pane`) |
+| `sheet` | open one sheet on arrival: `filter`, `pane`, or `menu` (the last two belong to the terminal and are only useful with a `pane`). The Mac's own settings are not a sheet — they are the Settings tab, reached with `tab=settings` |
+| `tab` | land on one of the bottom bar's destinations: `sessions`, `activity`, `projects`, `settings` (matched case-insensitively) |
+| `project` | drill the Projects tab into one project, by its `Name` — the identity in `config.toml`, not its label. Implies `tab=projects` unless a tab is named |
+| `pick` | open a picker over that project's detail: `prs` or `tickets`. Needs a `project` to sit over |
 
 None of them is a capability. Every one names somewhere the person holding the
 phone could have reached with one tap, behind the same fence as `pane`: a
@@ -796,8 +805,18 @@ the development banner for as long as it is up.
 # The list, filtered, with the filter sheet open over it.
 LINK="lola-dev://connect?host=127.0.0.1&port=7717&pin=$PIN&key=$KEY&triage=Needs%20You&sheet=filter"
 
-# A terminal with the view settings open on its column readout.
-LINK="lola-dev://connect?host=127.0.0.1&port=7717&pin=$PIN&key=$KEY&pane=$PANE&sheet=view"
+# The activity feed, which no tap a script can perform would otherwise reach.
+LINK="lola-dev://connect?host=127.0.0.1&port=7717&pin=$PIN&key=$KEY&tab=activity"
+
+# A terminal with its session sheet open — which is also where the view settings
+# and the column readout now live — over the tab you come back out to.
+LINK="lola-dev://connect?host=127.0.0.1&port=7717&pin=$PIN&key=$KEY&pane=$PANE&sheet=menu&tab=projects"
+
+# A project's detail, two taps deep behind a row on the Projects tab.
+LINK="lola-dev://connect?host=127.0.0.1&port=7717&pin=$PIN&key=$KEY&project=nori-app"
+
+# ...and the pull-request picker open over it, which is three.
+LINK="lola-dev://connect?host=127.0.0.1&port=7717&pin=$PIN&key=$KEY&project=nori-app&pick=prs"
 ```
 
 An unusable pin and an ABSENT one now fail in the same place, which they did
@@ -839,6 +858,35 @@ decorative.
   every deadline all need a device.
 
 ---
+
+### Looking at the design without a Mac in reach
+
+`preview.html` is a development-only page that mounts the redesign's parts —
+the hero card, the compact row, the section headings, the filter rail, the tab
+bar, the detail chrome — on a 390-point ground with fabricated sessions. It
+never opens a socket, so it works with no daemon, no pairing and no device.
+
+```sh
+cd mobile
+npm run dev
+# then open http://localhost:<port>/preview.html
+# ?theme=catppuccin-latte  (or -frappe, -mocha) to check a flavor
+```
+
+It exists because the acceptance criterion for the redesign is visual and the
+unit suite deliberately is not: the component tests pin what each part DECIDES
+(which status earns the card's rail, whether an absent PR draws a badge) and
+leave the transcribed geometry to the Figma frame, and jsdom has neither layout
+nor a stylesheet, so nothing in `npm test` would notice a card whose padding
+compiled to nothing. The `?theme=` switch is the other half: `crust` is darker
+than `base` on the three dark flavors and LIGHTER on latte, so a token that was
+hard-coded rather than derived looks perfect in the flavor the design was drawn
+in and paints a black slab across the bottom of the light one.
+
+It is not a screen, and it is not shipped — `vite build` builds `index.html`
+alone, so nothing here reaches `dist/`. To photograph a real screen, use a
+development link (section 3), which can name a tab, a pane, a filter and a
+sheet precisely so that every surface is reachable without a tap.
 
 ## 6. Troubleshooting
 

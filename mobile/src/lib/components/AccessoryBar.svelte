@@ -97,8 +97,14 @@
   // `use:overflowFade` is the other half and is not decoration. A key row ends
   // on a clean key boundary, so an overflowing strip looks exactly like a strip
   // that has no more keys — Enter and Shift-Enter simply appear not to exist.
+  //
+  // `gap-[5px]` is the design's and is an arbitrary value on purpose: the brief
+  // says not to round the odd numbers to the 4px scale, and at this size the
+  // extra point is the difference between nine keys reading as nine and reading
+  // as a ruled strip. It has to stay a literal for the reason every class here
+  // does — Tailwind scans source text (rule 4).
   const STRIP =
-    "flex min-w-0 flex-1 gap-1 overflow-x-auto overscroll-x-contain py-1 [scrollbar-width:none]";
+    "flex min-w-0 flex-1 gap-[5px] overflow-x-auto overscroll-x-contain py-1 [scrollbar-width:none]";
 
   // THE MASK IS NOT ENOUGH ON A KEY ROW, and this is the second half.
   //
@@ -171,13 +177,24 @@
 
 <!-- The bar sits above the soft keyboard and pays back the home-indicator inset
      itself. env() inline rather than a Tailwind token: this component must not
-     depend on the shell's CSS defining a spacing scale it happens not to. -->
+     depend on the shell's CSS defining a spacing scale it happens not to.
+
+     `bg-crust`, one step BELOW the canvas, is what the design spends on fixed
+     chrome — this bar and the tab bar are the two surfaces that are always
+     there and are never the subject. It also does the other half of the work
+     AccessoryKey describes: the keys are now filled with `sel`, and a keycap is
+     only legible as a keycap when the deck it sits in is darker than it is.
+     `edge-soft` for the rule, because every hairline in the redesign is the
+     soft token and plain `edge` reads as a panel border at this weight. -->
 <div
-  class="shrink-0 border-t border-edge bg-panel"
+  class="shrink-0 border-t border-edge-soft bg-crust"
   style="padding-bottom: {raised ? '0px' : 'env(safe-area-inset-bottom, 0px)'}"
 >
   {#if expanded}
-    <div class="relative flex items-center px-2 pt-1 pb-1">
+    <!-- No `pt-1` here: STRIP already carries `py-1`, and stacking the two put
+         four extra points above the second row that the primary row does not
+         have — the exact doubling the note beside STRIP says it avoids. -->
+    <div class="relative flex items-center pr-2 pb-1 pl-2.5">
       <div
         class={STRIP}
         use:overflowFade={{ onedges: (e) => (secondaryEdges = e) }}
@@ -200,7 +217,7 @@
 
   <!-- The row's own vertical padding is 0 at the top: the strip carries `py-1`
        inside itself, and doubling it here would push the pane up for nothing. -->
-  <div class="relative flex items-center px-2 pb-1">
+  <div class="relative flex items-center pr-2 pb-1 pl-2.5">
     <div class={STRIP} use:overflowFade={{ onedges: (e) => (primaryEdges = e) }}>
       {#each BAR_ROW_PRIMARY as key (key.id)}
         <AccessoryKey
@@ -226,8 +243,9 @@
       {disabled}
       aria-label={expanded ? "Hide the second key row" : "Show the second key row"}
       aria-expanded={expanded}
-      class="ml-1 flex h-10 min-w-10 shrink-0 touch-manipulation items-center justify-center
-             rounded-md border border-edge/60 bg-panel text-base text-faint select-none
+      class="relative ml-1 flex h-10 min-w-10 shrink-0 touch-manipulation items-center
+             justify-center rounded-[7px] bg-sel text-base text-subtext select-none
+             before:absolute before:-inset-0.5 before:content-['']
              disabled:opacity-40"
       onpointerdown={(e) => {
         e.preventDefault();
@@ -241,11 +259,18 @@
 {#snippet edges(e: OverflowEdges, inset: boolean)}
   <!-- Painted on the row, above the strip, and never in the way: `inset-y-0`
        with no hit area, so a swipe passes straight through to the scroller.
-       The chevron is the part that survives a clip landing on empty padding. -->
+       The chevron is the part that survives a clip landing on empty padding.
+
+       THE GRADIENT MUST NAME THE BAR'S OWN GROUND, which is why it moved from
+       `panel` to `crust` with it. A mask fading to a colour the surface is not
+       does not fade at all — it draws a pale band over the last key and looks
+       like a rendering fault rather than like an edge. Anyone changing the bar's
+       background has to change these two with it; there is no way to say "the
+       parent's colour" in a Tailwind gradient. -->
   {#if e.left}
     <div
-      class="pointer-events-none absolute inset-y-0 left-2 flex w-7 items-center justify-start
-             bg-gradient-to-r from-panel via-panel/80 to-transparent text-sm text-faint"
+      class="pointer-events-none absolute inset-y-0 left-2.5 flex w-7 items-center justify-start
+             bg-gradient-to-r from-crust via-crust/80 to-transparent text-sm text-faint"
       aria-hidden="true"
     >
       ‹
@@ -254,7 +279,7 @@
   {#if e.right}
     <div
       class="pointer-events-none absolute inset-y-0 flex w-7 items-center justify-end
-             bg-gradient-to-l from-panel via-panel/80 to-transparent text-sm text-faint
+             bg-gradient-to-l from-crust via-crust/80 to-transparent text-sm text-faint
              {inset ? 'right-13' : 'right-2'}"
       aria-hidden="true"
     >

@@ -9,13 +9,22 @@
   import { installAppState } from "@mobile/lib/appstate";
   import { installDevLink, type DevLinkTarget } from "@mobile/lib/devlink";
   import { installDynamicType } from "@mobile/lib/dynamictype";
+  import { applyMobileTokens } from "@mobile/lib/mobiletokens";
   import { pairing } from "@mobile/lib/pairing.svelte";
+  import TabBar from "@mobile/lib/components/TabBar.svelte";
+  import Activity from "@mobile/views/Activity.svelte";
   import Connect from "@mobile/views/Connect.svelte";
+  import ProjectDetail from "@mobile/views/ProjectDetail.svelte";
+  import Projects from "@mobile/views/Projects.svelte";
+  import PRPicker from "@mobile/views/PRPicker.svelte";
   import Sessions from "@mobile/views/Sessions.svelte";
+  import Settings from "@mobile/views/Settings.svelte";
   import Splash from "@mobile/views/Splash.svelte";
   import Terminal from "@mobile/views/Terminal.svelte";
+  import TicketPicker from "@mobile/views/TicketPicker.svelte";
 
-  // The whole app: three screens and the rules for moving between them.
+  // The whole app: three screens, four tabs, and the rules for moving between
+  // them.
   //
   // DELIBERATELY NOT the desktop's App.svelte. That file is a keyboard router
   // and a macOS menu bridge — bare keys for actions, Cmd chords delegated to
@@ -251,13 +260,17 @@
   /**
    * Put the app where a development link asked for.
    *
-   * A destination is four independent things and any of them may be absent: a
-   * pane, a triage bucket, a search, and a sheet. The ORDER here is the whole
-   * of the function: the filter is applied first because it describes the list
-   * rather than the navigation, then the screen is chosen (a pane means the
-   * terminal, no pane means the list), and only then is the sheet opened —
-   * because `toTerminal` and `toSessions` both clear it, a modal belonging to
-   * the screen it was opened over.
+   * A destination is several independent things and any of them may be absent:
+   * a pane, a triage bucket, a search, a tab, a project, a picker and a sheet.
+   * The ORDER here is the whole of the function, and it runs outside-in: the
+   * filter is applied first because it describes the list rather than the
+   * navigation, then the tab and the project — which say what is UNDER
+   * everything else — then the screen is chosen (a pane means the terminal, no
+   * pane means the tab shell), and only then are the things opened OVER it: the
+   * picker, then the sheet. The sheet is last because `toTerminal` and
+   * `toSessions` both clear it, a modal belonging to the screen it was opened
+   * over; the picker survives them, because it belongs to the Projects tab's
+   * own depth rather than to a screen.
    *
    * Nothing here is a capability. Each field names somewhere the person holding
    * the phone could have reached with one tap; what the link buys is that a
@@ -267,15 +280,84 @@
   function applyTarget(t: DevLinkTarget): void {
     if (t.triage) nav.triage = t.triage;
     if (t.query) nav.query = t.query;
+
+    // THE TAB IS SET BEFORE THE SCREEN, and directly rather than through
+    // `nav.toTab`, because the screen decision is the two lines below it: the
+    // tab says which of the four destinations is UNDER whatever happens next,
+    // and a link that names both a pane and a tab means "open this terminal,
+    // and put me on that tab when I come back out".
+    //
+    // A filter with no tab of its own lands on the sessions list, because a
+    // triage bucket and a search are statements ABOUT that list — applying one
+    // while some other tab is showing would filter a screen nobody can see.
+    // `t.tab` is already narrowed to the vocabulary by devlink.ts, which
+    // matches it with nav's own `isTab` exactly as it matches a sheet name with
+    // `isSheetName`. An unrecognised value arrives here as "" and the tab is
+    // left alone, which is what every other field in a link does.
+    if (t.tab) nav.tab = t.tab;
+    else if (t.project) nav.tab = "projects";
+    else if (t.triage || t.query) nav.tab = "sessions";
+
+    // A PROJECT IS A DEPTH INSIDE THE PROJECTS TAB, not a screen of its own, so
+    // it is written straight onto `nav` beside the tab rather than through
+    // `nav.toProject` — that helper forces the tab and clears the picker, which
+    // is right for a row being tapped and wrong for a link that may have asked
+    // for both a project and the picker over it. Like every other field here it
+    // is only applied when the link named one, so a link that names none leaves
+    // whatever depth the app was already at alone.
+    if (t.project) nav.project = t.project;
+
     if (t.pane) nav.toTerminal(t.session, t.pane);
     else nav.toSessions();
+    // The picker before the sheet, and both after the screen: a picker is a
+    // place, a sheet is a modal over one. Neither `toTerminal` nor `toSessions`
+    // touches `pick`, which is what lets a link name a pane AND a picker — open
+    // this terminal, and land on that picker when you come back out — exactly
+    // as it can already name a pane and a tab.
+    if (t.pick) nav.toPick(t.pick);
     if (t.sheet) nav.openSheet(t.sheet);
   }
+
+
+  // THE PHONE'S OWN TOKENS, repainted with the flavor.
+  //
+  // `appearance` writes the shared token set (theme-runtime's applyFlavor) and
+  // knows nothing about the seven names this app adds on top of it — the tab
+  // bar's ground, the prose tier, the hairline, the soft chip fills. They are
+  // derived from the SAME `Flavor` object, so they are written here, from an
+  // effect that re-runs whenever it changes: on boot, on a settings change, and
+  // on the daemon answering `GetTheme` after a cached first paint.
+  //
+  // The static values compiled into app.css cover the gap before this runs, so
+  // there is no flash — they are macchiato's, the flavor the design was drawn
+  // in, and a mocha default only differs by a few points of ground.
+  $effect(() => {
+    applyMobileTokens(appearance.flavor);
+  });
 
   // Derived rather than stored, so the banner cannot outlive the connection it
   // describes: a dropped link connection stops rendering it without anything
   // having to remember to clear a flag.
   const devBanner = $derived(pairing.devLinkActive && connection.ready);
+
+  /**
+   * Is the bottom bar drawn?
+   *
+   * ONLY ON THE TAB SHELL, which is exactly the three exclusions the bar needs
+   * and no more: the splash is `booting`, the connect form is
+   * `screen === "connect"`, and a terminal is `screen === "terminal"` — full
+   * screen by design, with its own accessory bar in the space a tab bar would
+   * want and every touch inside the pane already spoken for.
+   *
+   * DELIBERATELY NOT `connection.ready`. "A connection exists" is tempting and
+   * wrong: this app stays on the last snapshot behind a banner when the network
+   * goes (PLAN.md — an off-network phone must never be shown the pairing
+   * screen), so gating on readiness would make the whole bottom bar vanish the
+   * moment WiFi dropped, stranding somebody on the Activity tab with no way
+   * back to the sessions list. Being on the tab shell at all already means a
+   * connection was made; whether it is up right now is what the banner says.
+   */
+  const showTabBar = $derived(!booting && nav.screen === "sessions");
 </script>
 
 <!-- h-dvh, not h-screen: the dynamic viewport unit is the one that accounts for
@@ -306,8 +388,48 @@
     <Connect onconnected={landed} />
   {:else if nav.screen === "terminal"}
     <Terminal onback={() => nav.toSessions()} />
+  {:else if nav.tab === "activity"}
+    <Activity />
+  {:else if nav.tab === "projects"}
+    <!-- THE PROJECTS TAB STACKS: a list, a project's detail drilled into from
+         it, and a picker opened over that detail. All three are the same tab —
+         the bar stays drawn and stays lit — which is why they are a depth here
+         rather than three members of `Screen`; nav.svelte.ts's `project`
+         comment argues that at length, and `nav.back()` unwinds this stack in
+         the same order.
+
+         THE PROJECT IS TESTED FIRST, OUTERMOST, even though the picker is
+         deeper. Both pickers read `nav.project` themselves and would ask the
+         daemon about "" without it, so a `pick` that somehow arrived without a
+         project — a development link naming only one, say — falls back to the
+         list rather than to a picker that can only fail. Depth still decides
+         between the remaining two. -->
+    {#if nav.project === ""}
+      <Projects />
+    {:else if nav.pick === "prs"}
+      <PRPicker />
+    {:else if nav.pick === "tickets"}
+      <TicketPicker />
+    {:else}
+      <ProjectDetail />
+    {/if}
+  {:else if nav.tab === "settings"}
+    <Settings />
   {:else}
+    <!-- The default arm rather than an explicit `nav.tab === "sessions"` test,
+         so a tab this build has not caught up to still renders the list instead
+         of a blank screen. Same fail-toward-something rule theme.ts's own
+         `displayFor` takes for an unknown state. -->
     <Sessions />
   {/if}
   </div>
+  <!-- BELOW the screen container, as a sibling: the bar is chrome, not part of
+       any screen, and every screen above it is already `h-full` inside a flex
+       column. Drawing it inside would make each of the four views responsible
+       for leaving room for it, which is four places to get the home indicator
+       wrong instead of one. It pays the bottom inset itself for the same
+       reason. -->
+  {#if showTabBar}
+    <TabBar />
+  {/if}
 </div>

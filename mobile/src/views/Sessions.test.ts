@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/svelte";
+import { fireEvent, render, screen, within } from "@testing-library/svelte";
 import Sessions from "./Sessions.svelte";
 import { store } from "$lib/store.svelte";
 import { connection } from "@mobile/lib/connection.svelte";
@@ -42,6 +42,9 @@ beforeEach(() => {
   ];
   store.alive = true;
   store.connected = true;
+  // The header names the Mac from `cmd=status`, falling back to
+  // connection.label. Null here, so the fallback is what the header tests see.
+  store.status = null;
   connection.phase = "ready";
   connection.host = "192.168.1.20";
   connection.hasStoredKey = true;
@@ -61,40 +64,53 @@ describe("Sessions header", () => {
     expect(screen.queryByRole("button", { name: /refresh/i })).toBeNull();
   });
 
-  it("offers exactly two header controls, each naming its own subject", () => {
+  it("offers exactly one header control, and it names its own subject", () => {
     render(Sessions);
-    // "Disconnect" is no longer a bare word in the header; the settings icon is
-    // what stands there, and it says which kind of settings.
+    // Two, until the Mac button went to the Settings tab. "Disconnect" was a
+    // bare word in this header before that, which is the original bug both
+    // moves were undoing: a control whose subject a reader has to infer.
     expect(screen.queryByRole("button", { name: "Disconnect" })).toBeNull();
-    expect(
-      screen.getByRole("button", { name: /^Connection settings/ }),
-    ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /^Connection settings/ })).toBeNull();
     expect(screen.getByRole("button", { name: "Filters" })).toBeTruthy();
   });
 
-  it("names the Mac in the settings control, before it is opened", () => {
-    // A gear beside a funnel reads as list or display settings, so the subject
-    // of this control only became visible once the sheet was open — "Connected
-    // to <host>" is in there and nowhere else. The name carries it now, which
-    // is the half a VoiceOver user got from nothing at all.
+  it("keeps the header's summary to one line", () => {
+    // A header that GROWS pushes down the list it heads, which is the opposite
+    // of what the redesign gave this screen the room for. The free text on this
+    // line used to be the search term; the rail took the bucket name and the
+    // sheet kept the term, so what is left that can be arbitrarily long is the
+    // name the daemon reports for itself — which crosses a network and is only
+    // bounded at 40 characters.
+    store.status = {
+      runtimeOk: true,
+      linearOk: true,
+      polls: null,
+      host: "a-machine-name-long-enough-to-wrap-any-phone-header",
+    } as unknown as (typeof store)["status"];
     render(Sessions);
-    expect(
-      screen.getByRole("button", {
-        name: "Connection settings — connected to 192.168.1.20",
-      }),
-    ).toBeTruthy();
+    const summary = screen.getByText(/3 sessions/);
+    expect(summary.className).toContain("truncate");
   });
 
-  it("keeps the header's filter summary to one line", () => {
-    // The subtitle concatenates a count, a bucket title and the raw search term
-    // in quotes. It had no truncation while the title above it did, so a long
-    // search term wrapped and GREW the header — pushing down the list that
-    // moving the filters behind a button was supposed to give room to.
-    nav.query =
-      "a search term long enough to wrap the header on any phone ever sold";
+  it("names the daemon, preferring what it calls itself", () => {
+    // Two sources and a documented order: the daemon's own answer to
+    // `cmd=status` first, the connection's label — the address, or a name typed
+    // on this phone — while that answer has not arrived.
+    store.status = {
+      runtimeOk: true,
+      linearOk: true,
+      polls: null,
+      host: "marvin",
+    } as unknown as (typeof store)["status"];
     render(Sessions);
-    const summary = screen.getByText(/of 3 sessions/);
-    expect(summary.className).toContain("truncate");
+    expect(screen.getByText("marvin")).toBeTruthy();
+  });
+
+  it("falls back to the connection's label, with no dangling separator", () => {
+    render(Sessions);
+    // `connection.host` is the fixture's address, so that is what a daemon too
+    // old to name itself leaves on the line.
+    expect(screen.getByText("192.168.1.20")).toBeTruthy();
   });
 
   it("opens and closes the filter overlay", async () => {
@@ -114,7 +130,18 @@ describe("Sessions header", () => {
     expect(screen.getByText("Template library")).toBeTruthy();
 
     await fireEvent.click(screen.getByRole("button", { name: "Filters" }));
-    await fireEvent.click(screen.getByRole("button", { name: /^Needs You/ }));
+    // SCOPED TO THE SHEET, because the same bucket chip now exists twice on
+    // screen: once in the always-visible <FilterRail> under the header, and
+    // once inside this overlay, which still renders <TriageChips>. Both are
+    // bound to `nav.triage` so they can never disagree, but an unscoped query
+    // matches two buttons and fails. See the note in Sessions.svelte: the
+    // sheet's copy is the redundant one.
+    await fireEvent.click(
+      within(screen.getByRole("dialog", { name: "Filters" })).getByRole(
+        "button",
+        { name: /^Needs You/ },
+      ),
+    );
 
     expect(nav.triage).toBe("Needs You");
     expect(screen.getByText("Email ingest")).toBeTruthy();
@@ -127,8 +154,11 @@ describe("Sessions header", () => {
     expect(screen.getByText(/3 sessions/)).toBeTruthy();
 
     await fireEvent.click(screen.getByRole("button", { name: "Filters" }));
-    await fireEvent.click(screen.getByRole("button", { name: /^Needs You/ }));
-    await fireEvent.click(screen.getByRole("button", { name: "Done" }));
+    const sheet = screen.getByRole("dialog", { name: "Filters" });
+    await fireEvent.click(
+      within(sheet).getByRole("button", { name: /^Needs You/ }),
+    );
+    await fireEvent.click(within(sheet).getByRole("button", { name: "Done" }));
 
     // The name carries the state for anyone who cannot see the dot...
     expect(
@@ -188,90 +218,21 @@ describe("Sessions sheets are addressable", () => {
     expect(screen.getByRole("dialog", { name: "Filters" })).toBeTruthy();
   });
 
-  it("opens the connection settings when nav says so", () => {
-    nav.sheet = "connection";
+  it("has no connection control of its own any more", () => {
+    // The header used to carry a Mac button opening a sheet with the
+    // connected-to line, disconnect, forget and the nickname — a second door
+    // onto what the Settings tab already held, kept in step by hand. Both are
+    // gone; the tab is the one place a machine is managed.
     render(Sessions);
-    expect(
-      screen.getByRole("dialog", { name: "Connection settings" }),
-    ).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /^Connection settings/ })).toBeNull();
+    expect(screen.queryByRole("dialog", { name: "Connection settings" })).toBeNull();
   });
 });
 
-describe("Sessions settings menu", () => {
-  it("reaches Disconnect, and the control names the Mac it leaves", async () => {
-    render(Sessions);
-    await fireEvent.click(
-      screen.getByRole("button", { name: /^Connection settings/ }),
-    );
-
-    const sheet = screen.getByRole("dialog", { name: "Connection settings" });
-    expect(sheet).toBeTruthy();
-    // Not a bare "Disconnect": the ambiguity about what these controls act on is
-    // the bug this screen was fixing, and a menu does not cure it on its own.
-    expect(
-      screen.getByRole("button", { name: "Disconnect from 192.168.1.20" }),
-    ).toBeTruthy();
-    expect(
-      screen.getByRole("button", { name: "Forget this Mac" }),
-    ).toBeTruthy();
-  });
-
-  it("disconnects and returns to the pairing screen", async () => {
-    const disconnect = vi
-      .spyOn(connection, "disconnect")
-      .mockResolvedValue(undefined);
-    const forget = vi.spyOn(connection, "forget").mockResolvedValue(undefined);
-
-    render(Sessions);
-    await fireEvent.click(
-      screen.getByRole("button", { name: /^Connection settings/ }),
-    );
-    await fireEvent.click(
-      screen.getByRole("button", { name: "Disconnect from 192.168.1.20" }),
-    );
-
-    expect(disconnect).toHaveBeenCalledTimes(1);
-    expect(forget).not.toHaveBeenCalled();
-    expect(nav.screen).toBe("connect");
-  });
-
-  it("forgetting removes the key before it disconnects", async () => {
-    const calls: string[] = [];
-    vi.spyOn(connection, "disconnect").mockImplementation(async () => {
-      calls.push("disconnect");
-    });
-    vi.spyOn(connection, "forget").mockImplementation(async () => {
-      calls.push("forget");
-    });
-
-    render(Sessions);
-    await fireEvent.click(
-      screen.getByRole("button", { name: /^Connection settings/ }),
-    );
-    await fireEvent.click(
-      screen.getByRole("button", { name: "Forget this Mac" }),
-    );
-
-    expect(calls).toEqual(["forget", "disconnect"]);
-  });
-
-  it("closes without leaving", async () => {
-    const disconnect = vi
-      .spyOn(connection, "disconnect")
-      .mockResolvedValue(undefined);
-    render(Sessions);
-
-    await fireEvent.click(
-      screen.getByRole("button", { name: /^Connection settings/ }),
-    );
-    await fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-
-    expect(
-      screen.queryByRole("dialog", { name: "Connection settings" }),
-    ).toBeNull();
-    expect(disconnect).not.toHaveBeenCalled();
-  });
-});
+// The Mac's own controls — disconnect, forget, the nickname — used to live in a
+// sheet behind this header and are asserted in Settings.test.ts now. The header
+// button and the sheet were both removed rather than shared: a Settings TAB is a
+// place, and a place does not need a shortcut from another screen's header.
 
 describe("the offline banner", () => {
   // A phone off the daemon's network sits behind this banner with the last
@@ -311,7 +272,130 @@ describe("the offline banner", () => {
     connection.phase = "ready";
     connection.reconnecting = false;
     render(Sessions);
-    await screen.findByRole("button", { name: /Connection settings/ });
+    // Waits on the FILTER button, which is the header's only control now that
+    // the Mac's moved to the Settings tab — it is a proxy for "the header has
+    // rendered", nothing more.
+    await screen.findByRole("button", { name: "Filters" });
     expect(screen.queryByRole("button", { name: /reconnect/i })).toBeNull();
+  });
+});
+
+describe("the list is partitioned", () => {
+  // The screen's one structural change: a flat, attention-first run became a
+  // run of sections. What is asserted here is only what THIS file decides —
+  // which sections exist, in what order, and which shape a row takes. The
+  // membership rule itself belongs to `$lib/filters` and is pinned against Go
+  // by desktop/state_parity_test.go; re-asserting it here would be a third,
+  // staler copy of a partition the repository deliberately keeps in two.
+
+  /** Every section heading on screen, in document order, whitespace-collapsed. */
+  function headings(): string[] {
+    return screen
+      .getAllByRole("heading", { level: 2 })
+      .map((h) => h.textContent!.replace(/\s+/g, " ").trim());
+  }
+
+  /**
+   * Which shape a session was drawn as.
+   *
+   * `rounded-xl` is the hero card's panel and the only element on this screen
+   * that takes it; the compact row is a bare button with a bottom hairline. The
+   * classes are the discriminator because neither component exposes anything
+   * else to ask — and both are transcribed geometry, so a test that spelled out
+   * their paddings would just be a staler copy of the mock.
+   */
+  function shapeOf(name: RegExp): "card" | "row" {
+    const btn = screen.getByRole("button", { name });
+    return btn.querySelector(".rounded-xl") ? "card" : "row";
+  }
+
+  it("draws a section per non-empty bucket, in the design's order", () => {
+    // Fixing before Working, which is NOT the kanban board's left-to-right: a
+    // session whose delivered work regressed is nearer to needing a person than
+    // one quietly mid-turn, and that is the order sortRank already puts them in.
+    store.sessions = [
+      s({ id: "a", issue: "NOR-401", status: "needs_input" }),
+      s({ id: "b", issue: "NOR-402", status: "ci_failed", title: "Broken" }),
+      s({ id: "c", issue: "NOR-403", status: "working", title: "Busy" }),
+      s({ id: "d", issue: "NOR-404", status: "review_pending", title: "Parked" }),
+      s({ id: "e", issue: "NOR-405", status: "merged", title: "Shipped" }),
+    ];
+    render(Sessions);
+
+    expect(headings()).toEqual([
+      "Needs You 1",
+      "Fixing 1",
+      "Working 1",
+      "In Review 1",
+      "Done 1",
+    ]);
+  });
+
+  it("draws no heading for a bucket that holds nothing", () => {
+    // A section for an empty bucket is a heading over a gap, and with five
+    // buckets that is most of a phone screen spent on absence. The rail's chips
+    // are where a zero is worth stating.
+    store.sessions = [
+      s({ id: "a", issue: "NOR-401", status: "needs_input" }),
+      s({ id: "b", issue: "NOR-402", status: "needs_input", title: "Second" }),
+    ];
+    render(Sessions);
+
+    expect(headings()).toEqual(["Needs You 2"]);
+  });
+
+  it("shows one bucket and its heading when the rail selects one", () => {
+    nav.triage = "In Review";
+    render(Sessions);
+
+    expect(headings()).toEqual(["In Review 1"]);
+    expect(screen.getByText("Template library")).toBeTruthy();
+    expect(screen.queryByText("Email ingest")).toBeNull();
+  });
+
+  it("gives a session a human is blocked on the hero card", () => {
+    render(Sessions);
+    expect(shapeOf(/Email ingest/)).toBe("card");
+  });
+
+  it("gives everything else the compact row", () => {
+    // Two rows rather than one: `review_pending` is parked on somebody else and
+    // `dead` is over, and neither is a state a card's worth of screen buys
+    // anything for.
+    render(Sessions);
+    expect(shapeOf(/Template library/)).toBe("row");
+    expect(shapeOf(/NOR-311/)).toBe("row");
+  });
+
+  it("cards the broken family too, not just needs_input", () => {
+    // `attention` spans both reasons a human is needed — blocked on a person,
+    // or the delivered work regressed. Only the RAIL on the card narrows to
+    // needs_input; the shape does not.
+    store.sessions = [
+      s({ id: "a", issue: "NOR-402", status: "ci_failed", title: "Broken" }),
+    ];
+    render(Sessions);
+    expect(shapeOf(/Broken/)).toBe("card");
+  });
+
+  it("reads the axes when the daemon sends them", () => {
+    // The rolled-up status word is the FALLBACK. A daemon that sends both axes
+    // is answered from those, which is the whole point of the split: a working
+    // agent over a red build is `working` in one word and "needs a person" in
+    // two.
+    store.sessions = [
+      s({
+        id: "a",
+        issue: "NOR-402",
+        status: "working",
+        title: "Red build",
+        agentState: "working",
+        delivery: "ci_failed",
+      }),
+    ];
+    render(Sessions);
+
+    expect(headings()).toEqual(["Fixing 1"]);
+    expect(shapeOf(/Red build/)).toBe("card");
   });
 });

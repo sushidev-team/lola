@@ -155,9 +155,51 @@ async function mount() {
   return r;
 }
 
-/** Turn the toggle on through the popover, exactly as a person would. */
+/**
+ * THE CLIPPING SIGNAL, ON THE ONE BUTTON THAT SURVIVED THE MERGE.
+ *
+ * This file is where these live because it is the one that MOCKS XTERM and
+ * serves a 200-column screen, so the grid is genuinely wider than the phone.
+ * Terminal.test.ts reports no geometry, where the same assertions would pass
+ * against zeros and prove nothing.
+ *
+ * The requirement itself is older than the merge: a phone shows roughly 55 of a
+ * developer's 200 columns, and a pane clipped at column 55 looks exactly like an
+ * agent that stopped writing mid-line. It used to ride the view-settings
+ * trigger; that button is gone, and the guarantee had to survive it.
+ */
+describe("the clipping signal", () => {
+  it("names the visible range on the session button, unopened", async () => {
+    await mount();
+    await waitFor(() => {
+      const button = screen.getByRole("button", { name: /^Session actions/ });
+      expect(button.getAttribute("aria-label")).toMatch(/Showing columns \d+–\d+ of \d+/);
+    });
+  });
+
+  it("marks that button while the grid is clipped", async () => {
+    await mount();
+    // `warn`, not `bad`: a clipped pane is the normal state of a 200-column grid
+    // on a phone, and the dot says so without claiming an error.
+    await waitFor(() => {
+      const button = screen.getByRole("button", { name: /^Session actions/ });
+      expect(button.querySelector(".bg-warn")).not.toBeNull();
+    });
+  });
+
+});
+
+/**
+ * Turn the toggle on through the sheet, exactly as a person would.
+ *
+ * ONE BUTTON, where this used to open a second. The view settings had their own
+ * header glyph beside the session menu's until the two were merged — the header
+ * had 88 points of controls on the row where the issue key was the only item
+ * allowed to shorten — so the switch now lives in the session sheet's first
+ * section and "Session actions" is the way in.
+ */
 async function enablePin() {
-  await fireEvent.click(screen.getByRole("button", { name: /^View settings/ }));
+  await fireEvent.click(screen.getByRole("button", { name: /^Session actions/ }));
   await fireEvent.click(screen.getByRole("switch"));
   await fireEvent.click(screen.getByRole("button", { name: "Done" }));
 }
@@ -240,7 +282,7 @@ describe("the toggle", () => {
 
   it("reads as a switch, off, with a name that says what it does to the Mac", async () => {
     await mount();
-    await fireEvent.click(screen.getByRole("button", { name: /^View settings/ }));
+    await fireEvent.click(screen.getByRole("button", { name: /^Session actions/ }));
     const sw = screen.getByRole("switch", { name: "Resize the Mac's pane to fit this phone" });
     expect(sw).toHaveAttribute("aria-checked", "false");
     // 44pt, like every other control on this screen.
@@ -249,9 +291,9 @@ describe("the toggle", () => {
 
   it("states the cost to the Mac in the sheet itself, not behind a tooltip", async () => {
     await mount();
-    await fireEvent.click(screen.getByRole("button", { name: /^View settings/ }));
-    expect(screen.getByText(/its window on the Mac is resized/i)).toBeInTheDocument();
-    expect(screen.getByText(/redraws when it flips back/i)).toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("button", { name: /^Session actions/ }));
+    expect(screen.getByText(/Narrows the window on the Mac/i)).toBeInTheDocument();
+    expect(screen.getByText(/Released when you leave/i)).toBeInTheDocument();
     // ...and names the size the Mac's window would be squeezed to.
     expect(screen.getByText(new RegExp(`about ${PIN_COLS} by ${PIN_ROWS}`))).toBeInTheDocument();
   });
@@ -301,7 +343,7 @@ describe("pinning on focus", () => {
     await mount();
     await enablePin();
     await sawResizes(1);
-    await fireEvent.click(screen.getByRole("button", { name: /^View settings/ }));
+    await fireEvent.click(screen.getByRole("button", { name: /^Session actions/ }));
     await fireEvent.click(screen.getByRole("switch"));
     await waitFor(() => expect(releases()).toHaveLength(1));
     expect(releases()[0]).toMatchObject({ pane: "lola-fe-42", cols: 0, rows: 0 });

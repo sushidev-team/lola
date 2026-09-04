@@ -4,13 +4,29 @@
   import TriageChips from "./TriageChips.svelte";
   import type { SessionInfo } from "$lib/store.svelte";
 
-  // The search field and the triage chips, moved off the list.
+  // The search field and the triage chips.
   //
-  // WHY THEY MOVED. Together they took two full rows at the top of a phone
-  // screen — roughly a fifth of the visible height — above a list that on a
-  // normal day holds three sessions. Filtering is something you do occasionally;
-  // reading the list is what the screen is for, and the controls for the rare
-  // action were permanently crowding out the common one.
+  // THIS SHEET NOW HOLDS ONE CONTROL THE LIST ALSO DRAWS, and that is a
+  // deliberate overlap rather than something nobody noticed. The comment here
+  // used to argue that BOTH controls had moved off the screen because together
+  // they took roughly a fifth of a phone's height above a list that on a normal
+  // day holds three sessions. Half of that argument survived the redesign and
+  // half of it did not: the SEARCH field is still the rare action and still
+  // belongs behind a button, but the buckets became what the list is ARRANGED
+  // by — every row now sits under a section heading naming its bucket — so
+  // <FilterRail> puts them back on the screen permanently as a table of
+  // contents. See its own header for that reasoning.
+  //
+  // THE CHIPS STAY HERE ANYWAY, for one reason: this sheet's backdrop covers
+  // the rail. Somebody who opened it to type a search and then wants a
+  // different bucket would otherwise have to dismiss it, tap a chip and reopen
+  // — and the tally directly above ("2 of 7") is only honest if both halves of
+  // the filter can be reached from where it is drawn. The two surfaces are
+  // bound to the same `nav` fields, so they cannot disagree; what they cost is
+  // that a test asking for a chip by name has to say WHICH surface it means
+  // (Sessions.test.ts scopes those queries to this dialog). A human may
+  // reasonably decide the sheet should become search-only; the brief is silent
+  // on it, so the working control was kept.
   //
   // THE FILTER STAYS LIVE while the sheet is open. There is no Apply step and
   // no local draft: `triage` and `query` are bound straight through to nav, so
@@ -54,8 +70,16 @@
     </span>
   </div>
 
+  <!-- NO `text-base` HERE, and that is not an oversight. app.css pins every
+       input to 16px inside `@layer base`, because iOS zooms the page when a
+       field under 16px takes focus and the only way to refuse that is to
+       disable pinch-zoom for the whole document — an accessibility regression
+       traded for a cosmetic one. A `text-base` utility OUTRANKS a base layer
+       (Tailwind emits utilities in `@layer utilities`, which wins), so writing
+       the row size here silently put the zoom back on the one field in this app
+       a person actually types into. -->
   <input
-    class="w-full rounded border border-edge bg-canvas px-3 py-2.5 text-base text-ink outline-none
+    class="w-full rounded border border-edge bg-canvas px-3 py-2.5 text-ink outline-none
            focus:border-accent placeholder:text-placeholder"
     type="search"
     inputmode="search"

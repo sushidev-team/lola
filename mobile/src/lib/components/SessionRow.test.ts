@@ -5,13 +5,14 @@ import type { SessionInfo } from "$lib/store.svelte";
 
 // The row's WEIGHT, as behaviour rather than as a screenshot.
 //
-// Two of the three things asserted here are negative — the issue key must not
-// lead the row, the status must not be a filled pill — and a negative is exactly
-// what a screenshot cannot pin. The third is the one that matters most: the
-// words and the colours still come from `$lib/theme`, the port of Go's
-// internal/state vocabulary. A phone-side re-spelling would be a third mirror of
-// a list desktop/state_parity_test.go keeps in exactly two, so these tests name
-// the shared classes literally.
+// Most of what is asserted here is NEGATIVE — the issue key must not lead the
+// row, the status must not be a filled pill, an attention row must not draw a
+// rail of its own — and a negative is exactly what a screenshot cannot pin. The
+// one positive is the one that matters most: the words and the colours still
+// come from `$lib/theme`, the port of Go's internal/state vocabulary. A
+// phone-side re-spelling would be a third mirror of a list
+// desktop/state_parity_test.go keeps in exactly two, so these tests name the
+// shared classes literally.
 
 function session(over: Partial<SessionInfo> = {}): SessionInfo {
   return {
@@ -94,6 +95,19 @@ describe("SessionRow", () => {
     // theme.ts's bad family, at reduced weight because nothing is waiting on it.
     expect(word!.className).toContain("text-bad");
     expect(word!.className).toContain("opacity-55");
+
+    // The design dims the whole row, not just the word: the title steps from
+    // `ink` down to the meta tier, which is what makes a settled row read as
+    // finished rather than merely quiet.
+    const heading = container.querySelector(".line-clamp-2")!;
+    expect(heading.className).toContain("text-faint");
+    expect(heading.className).not.toContain("text-ink");
+  });
+
+  it("keeps the title at the heading's ink while anything is still waiting", () => {
+    const { container } = mount({ status: "working" });
+    const heading = container.querySelector(".line-clamp-2")!;
+    expect(heading.className).toContain("text-ink");
   });
 
   it("promotes the issue key to the heading when there is no title, and does not repeat it", () => {
@@ -105,6 +119,27 @@ describe("SessionRow", () => {
     // Exactly one occurrence in the whole row.
     const hits = container.textContent!.match(/NOR-401/g) ?? [];
     expect(hits).toHaveLength(1);
+  });
+
+  it("draws no attention rail of its own, for any status", () => {
+    // This row used to carry ONE emphasis — a two-point orange border down the
+    // left edge of a `needs_input` session, with the left padding widened to
+    // absorb it. A session that needs a human now renders as a <SessionCard>
+    // instead, so the treatment moved wholesale; leaving the rail here would
+    // give the same state two different shapes on one screen. It is asserted
+    // over the whole attention family, because the rail's own comment argued
+    // that only `needs_input` deserved one and a future edit could reasonably
+    // reach for the family instead.
+    for (const status of ["needs_input", "ci_failed", "changes_requested", "merge_conflict"]) {
+      const { container, unmount } = mount({ status });
+      const row = container.querySelector("button")!;
+      expect(row.className).not.toContain("border-l");
+      // The hairline underneath is the redesign's soft token, not an opacity of
+      // the panel border approximating it by hand.
+      expect(row.className).toContain("border-edge-soft");
+      expect(row.className).not.toContain("border-edge/40");
+      unmount();
+    }
   });
 
   it("marks the interpreter's disagreement as an approximation", () => {

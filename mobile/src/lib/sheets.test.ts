@@ -3,7 +3,12 @@ import { SHEETS, isSheetName } from "./sheets";
 
 describe("sheet vocabulary", () => {
   it("names every addressable sheet", () => {
-    expect([...SHEETS]).toEqual(["filter", "connection", "view", "pane"]);
+    // The list is pinned rather than merely non-empty because its whole value
+    // is that a development link can address each entry: a sheet dropped from
+    // it still opens by tap and silently stops being photographable, which is
+    // the failure this vocabulary exists to prevent and the one nothing else
+    // would catch.
+    expect([...SHEETS]).toEqual(["filter", "pane", "menu"]);
   });
 
   it("fails closed on anything else", () => {

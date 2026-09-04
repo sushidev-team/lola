@@ -40,6 +40,24 @@
   // rather than an action in a layout, it must not fade or take focus, and its
   // pressed state is driven by pointer capture rather than by :hover, which does
   // not exist here. Everything else in the app that is an action IS a Button.
+  //
+  // THE KEYCAP IS 40 POINTS AND ITS TARGET IS 44, WHICH ARE NOT THE SAME BOX.
+  // The Figma draws the key as `px-[9px] py-2` around an 11px legend, which
+  // comes to 31 points — below Apple's minimum for anything a finger has to
+  // hit, and this is the densest row of targets in the app, nine keys wide with
+  // 5-point gaps. So the horizontal padding, the radius, the ground and the type
+  // are the design's, and the height becomes `h-10` with the vertical padding
+  // dropped (a fixed height plus `items-center` centres the legend exactly as
+  // the padding did).
+  //
+  // 40 IS THE DRAWN HEIGHT, NOT THE TAP TARGET. An earlier version stopped at 40
+  // and argued that the bar sits on the soft keyboard so every point it takes
+  // comes out of the pane — true, and it still left the app's densest control
+  // row four points under the floor rule 3 states without qualification. The
+  // fix costs no layout at all: `before:` paints an invisible 2-point skirt on
+  // every side, so the HIT area is 44x44 while the keycap, the bar height and
+  // the pane are untouched. Two points is under the 5-point gap between keys,
+  // so no two skirts overlap and no key can steal its neighbour's press.
 
   let {
     label,
@@ -140,17 +158,38 @@
   }
 </script>
 
+<!-- THE GROUND MOVED FROM `panel` TO `sel`, AND THE BORDER IS GONE WITH IT.
+     The key used to be a panel-coloured cell with a hairline around it, drawn
+     against a panel-coloured bar — so the border was the only thing separating
+     one key from the next, and at arm's length a row of them read as one ruled
+     strip rather than as nine targets. The design fills the key instead and
+     drops the bar a step to `crust`, which is the same trick a physical
+     keyboard uses: the keycap is lighter than the deck it sits in. Two
+     consequences to keep:
+
+       * the PRESSED state had to move up rather than down. It was `bg-sel` over
+         `bg-panel`, which is now the resting state, so a press would have been
+         invisible; `bg-edge` with `text-ink` is the next step in the same
+         surface ramp and reads as a key going in.
+       * the latched state keeps `bg-accent-fill` and loses its `border-accent`.
+         The fill is what says "held" and the border was reinforcing it against
+         a ground it now no longer needs to fight.
+
+     `text-subtext` rather than `text-ink`: the legends are the quietest text in
+     the app on purpose — they name keys a person already knows how to use, and
+     nine of them at full contrast under a live pane compete with the pane. -->
 <button
   type="button"
   {disabled}
   aria-label={aria}
   aria-pressed={latched ? true : undefined}
-  class="flex h-10 shrink-0 touch-manipulation items-center justify-center rounded-md
-         border border-edge/60 font-mono text-base transition-colors select-none
+  class="relative flex h-10 shrink-0 touch-manipulation items-center justify-center
+         rounded-[7px] px-[9px] font-mono text-sm font-medium transition-colors select-none
+         before:absolute before:-inset-0.5 before:content-['']
          disabled:opacity-40
-         {wide ? 'min-w-14 px-2.5' : 'min-w-10 px-1.5'}
-         {latched ? 'border-accent bg-accent-fill text-accent-ink' : 'bg-panel text-ink'}
-         {held ? 'bg-sel' : ''}"
+         {wide ? 'min-w-14' : 'min-w-10'}
+         {latched ? 'bg-accent-fill text-accent-ink' : 'bg-sel text-subtext'}
+         {held ? 'bg-edge text-ink' : ''}"
   onpointerdown={down}
   onpointermove={move}
   onpointerup={up}
