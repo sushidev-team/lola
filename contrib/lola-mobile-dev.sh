@@ -25,6 +25,8 @@
 #   contrib/lola-mobile-dev.sh          install the tagged build, then run it
 #   contrib/lola-mobile-dev.sh --lan    the same, but reachable from a real phone
 #   contrib/lola-mobile-dev.sh --head   build from committed HEAD, not the working tree
+#   contrib/lola-mobile-dev.sh --build-only
+#                                       install the build and stop there, running nothing
 #   contrib/lola-mobile-dev.sh --info   print the connect details, run nothing
 #   contrib/lola-mobile-dev.sh --key    print the bearer key only
 
@@ -41,6 +43,7 @@ keyfile=$home/remote.key
 logfile=$home/daemon.log
 lan=
 head=
+build_only=
 
 die() { printf 'lola-mobile-dev: %s\n' "$1" >&2; exit 1; }
 
@@ -146,18 +149,29 @@ while [ $# -gt 0 ]; do
 	--head)
 		head=1
 		;;
+	--build-only)
+		build_only=1
+		;;
 	*)
-		die "unknown option $1 (--lan, --head, --info, --key)"
+		die "unknown option $1 (--lan, --head, --build-only, --info, --key)"
 		;;
 	esac
 	shift
 done
 
 # --- config -----------------------------------------------------------------
+#
+# Every check here is about the daemon this script is about to RUN — whether it
+# will listen, and on what. --build-only runs nothing, so it must not fail over
+# a configuration it is not going to use: installing a binary is useful on a
+# machine that has not set up [remote] at all.
 cfg=$home/config.toml
-if [ ! -f "$cfg" ]; then
+if [ -n "$build_only" ]; then
+	:
+elif [ ! -f "$cfg" ]; then
 	die "no $cfg"
 fi
+if [ -z "$build_only" ]; then
 if ! grep -q '^[[:space:]]*\[remote\]' "$cfg"; then
 	die "no [remote] table in $cfg — add:
 
@@ -169,6 +183,8 @@ if ! grep -q '^[[:space:]]*\[remote\]' "$cfg"; then
 fi
 if ! sed -n '/^[[:space:]]*\[remote\]/,/^[[:space:]]*\[[^r]/p' "$cfg" | grep -q '^[[:space:]]*enabled[[:space:]]*=[[:space:]]*true'; then
 	die "[remote] is present in $cfg but not enabled = true"
+fi
+
 fi
 
 # --- build ------------------------------------------------------------------
@@ -213,6 +229,24 @@ if ! go tool nm "$bin" 2>/dev/null | grep -q insecureAuthorizer; then
 Something else on PATH is shadowing the build just installed."
 fi
 printf 'verified: %s carries the M1 listener\n' "$bin" >&2
+
+# --- build only ---------------------------------------------------------------
+#
+# Stops here on purpose, and says what is still true: the daemon that is running
+# right now is the one that was already running. Replacing the FILE does not
+# change a running process — it keeps the inode it started with — so a build
+# without a restart is a no-op from the outside, which is exactly the trap that
+# costs a debugging session (see CLAUDE.md, "make build alone never reaches the
+# running daemon").
+if [ -n "$build_only" ]; then
+	printf '\n  Installed, and NOT started.\n' >&2
+	if lola status >/dev/null 2>&1; then
+		printf '  A daemon is still running on the OLD binary — a running process keeps\n' >&2
+		printf '  the inode it started with, so this build is not live until it restarts.\n' >&2
+	fi
+	printf '  Start it with: make daemon-dev\n\n' >&2
+	exit 0
+fi
 
 # --- run --------------------------------------------------------------------
 # Stopping first is the point of the script. A daemon already running was very

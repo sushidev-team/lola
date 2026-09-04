@@ -5,7 +5,7 @@ export GOCACHE := $(CURDIR)/.gocache
 # which sandboxed shells cannot write to.
 export GOFLAGS := -mod=mod -buildvcs=false
 
-.PHONY: build test vet fmt fmtcheck tidy check clean daemon mobile-dev mobile-lan mobile-info mobile-sim mobile-device desktop-dev
+.PHONY: build test vet fmt fmtcheck tidy check clean daemon daemon-dev mobile-dev mobile-lan mobile-info mobile-sim mobile-device desktop-dev
 
 build:
 	go build -o lola .
@@ -64,20 +64,33 @@ mobile-lan:
 mobile-info:
 	@contrib/lola-mobile-dev.sh --info
 
-# Refresh the daemon this machine actually runs, from COMMITTED HEAD, and leave
-# it LAN-reachable for a phone. This is the target to reach for when a phone
-# build has a command the running daemon does not: the daemon never hot-reloads
-# its own binary, and `make build` writes ./lola, which nothing ever executes.
+# Install the daemon binary this machine runs, from COMMITTED HEAD. Builds and
+# stops there — nothing is started and a daemon already running is left alone.
 #
-# It differs from mobile-lan in ONE way: the source. mobile-lan installs the
-# WORKING TREE, which is right when the change you are testing is uncommitted
-# and wrong when somebody else's half-finished work is sitting beside it. This
-# builds `git archive HEAD`, so only committed code reaches the operator's
-# daemon. Run mobile-lan when you want your own uncommitted change tested.
+# It exists because `make build` writes ./lola, which nothing ever executes: the
+# TUI's ^r, the desktop app's restart button and a hand-started `lola run` all
+# resolve `lola` from PATH. So this installs where those look, with the
+# lola_insecure tag the phone listener only exists under.
 #
-# Runs in the FOREGROUND, like mobile-lan: the daemon logs to this terminal and
-# ^C stops it.
+# The SOURCE is what separates it from mobile-lan, which installs the WORKING
+# TREE — right when the change being tested is uncommitted, wrong when somebody
+# else's half-finished work is sitting beside it. This builds `git archive
+# HEAD`, so only committed code reaches the operator's daemon.
+#
+# Note that a running daemon keeps the inode it started with, so this build is
+# not live until it restarts: `make daemon-dev`, the TUI's ^r, or the app's
+# restart button.
 daemon:
+	@contrib/lola-mobile-dev.sh --head --build-only
+
+# The same build, then RUN it, LAN-reachable for a phone. The daemon logs to
+# this terminal and ^C stops it — the `-dev` suffix means the same thing here as
+# in desktop-dev and mobile-dev.
+#
+# It stops whatever is already running first, which is the point: a daemon
+# started by the TUI or the app carries no LAN opt-in, so it is bound to
+# loopback and a phone cannot reach it however healthy it looks.
+daemon-dev:
 	@contrib/lola-mobile-dev.sh --lan --head
 
 

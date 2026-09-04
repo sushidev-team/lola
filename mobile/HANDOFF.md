@@ -45,14 +45,20 @@ listens on 7717. Worse, `make build` alone never reaches the running daemon —
 the TUI's `^r`, the desktop app's restart button and a hand-started `lola run`
 all resolve `lola` from `PATH`, normally `$GOPATH/bin/lola`. Use:
 
-    make daemon          # installs the tagged build of committed HEAD, LAN-reachable
-    make mobile-lan      # the same, but from the WORKING TREE
+    make daemon          # install the tagged build of committed HEAD, start nothing
+    make daemon-dev      # the same build, then RUN it LAN-reachable (foreground)
+    make mobile-lan      # like daemon-dev, but built from the WORKING TREE
     make mobile-info     # host, port, key and SPKI pin of the RUNNING listener
 
-Use `make daemon` unless the change you are testing is uncommitted: it builds
-`git archive HEAD`, so nothing half-finished beside it reaches the operator's
-daemon. `make mobile-lan` installs the working tree, which is what you want
-while iterating on your own change and nothing else.
+`daemon` builds and stops there, leaving a running daemon alone — which is only
+useful together with the knowledge that the running one keeps the inode it
+started with, so the new binary is not live until something restarts it (^r in
+the TUI, the app's restart button, or `daemon-dev`). `daemon-dev` builds and
+runs, stopping whatever was running first.
+
+Both build `git archive HEAD`, so nothing half-finished beside them reaches the
+operator's daemon. `make mobile-lan` installs the WORKING TREE instead, which is
+what you want while iterating on your own uncommitted change.
 
 `make mobile-dev --lan` does not work and never did: `make` claims a leading
 `--` for its own options. The script's flags do combine, so
