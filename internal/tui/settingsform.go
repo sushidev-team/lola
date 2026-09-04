@@ -313,6 +313,12 @@ func newSettingsForm(cfgPath string, cfg *config.Config) *settingsForm {
 			// and the pin already work anywhere, and only the address a phone
 			// stored at pairing time goes stale.
 			{key: "remote_advertise", tab: stRemote, label: "Advertise on the network", help: "Publish this listener with mDNS so a paired phone finds this Mac on a network whose addresses it has never seen (home, office, hotspot) without re-pairing. It announces that this machine runs coding agents and accepts remote control, to every peer on the network; the record itself carries a version and nothing else. Needs dns-sd, which every Mac ships.", kind: sfBool, b: cfg.Remote.Advertise},
+			// The dev servers of the ACTIVE session, republished. Off by default
+			// for the same reason as the two above, and worth having because the
+			// alternative — `--host 0.0.0.0` in every project — is permanent,
+			// well-known and unconditional where this is temporary, random and
+			// scoped to one address.
+			{key: "remote_dev_forward", tab: stRemote, label: "Publish dev servers", help: "Republish the ACTIVE session's dev servers (which bind 127.0.0.1 and are unreachable from a phone) on one private interface, on a random port, for as long as that session stays active. Anything on that network can reach them while it is up.", kind: sfBool, b: cfg.Remote.DevForward},
 
 			// [ui] — presentation only; no daemon behavior reads it. The TUI paints
 			// from this flavor (applyTheme) and so does the desktop app, so the
@@ -1579,6 +1585,7 @@ func (f *settingsForm) save() settingsFormEvent {
 	c.Remote.Port = remotePort
 	c.Remote.InsecureLAN = f.field("remote_insecure_lan").b
 	c.Remote.Advertise = f.field("remote_advertise").b
+	c.Remote.DevForward = f.field("remote_dev_forward").b
 
 	c.UI.Theme = strings.TrimSpace(f.field("ui_theme").text)
 

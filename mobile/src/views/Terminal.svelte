@@ -7,6 +7,7 @@
   import PaneTabs from "@mobile/lib/components/PaneTabs.svelte";
   import TouchButton from "@mobile/lib/components/TouchButton.svelte";
   import ViewSettings, { type ViewGeometry } from "@mobile/lib/components/ViewSettings.svelte";
+  import DevLinksSheet from "@mobile/lib/components/DevLinksSheet.svelte";
   import { DEFAULT_MODES, isBracketedPaste, textBytes, type TerminalModes } from "@mobile/lib/keybytes";
   import { installKeyboardInset } from "@mobile/lib/keyboardinset";
   import { nav } from "@mobile/lib/nav.svelte";
@@ -251,6 +252,34 @@
   const prNumber = $derived(session?.prNumber ?? 0);
   const hasPR = $derived(prNumber > 0 && prUrl !== "");
 
+  /**
+   * The session's dev servers, as THIS PHONE can reach them.
+   *
+   * `devForwards`, not `devUrls`. The latter are what the Mac sees —
+   * `http://127.0.0.1:8000` — and on a phone that address is the phone's own
+   * loopback, which reaches nothing. The daemon republishes them on a private
+   * interface while the session is ACTIVE, and only when [remote].dev_forward
+   * is set, so an empty list is the ordinary state and the button is absent
+   * rather than dead.
+   */
+  const devLinks = $derived(session?.devForwards ?? []);
+  let devSheet = $state(false);
+
+  /**
+   * One address opens straight away; several open the sheet.
+   *
+   * A session's dev commands print more than one address as a rule — an app and
+   * a bundler — so picking is the interaction, and a button that guessed would
+   * open the asset server instead of the app about half the time.
+   */
+  function openDev() {
+    if (devLinks.length === 1) {
+      void openExternal(devLinks[0]);
+      return;
+    }
+    devSheet = true;
+  }
+
   let offKeyboard: (() => void) | undefined;
   let offBackground: (() => void) | undefined;
   onMount(() => {
@@ -402,6 +431,28 @@
       </span>
     </div>
     <div class="ml-auto flex shrink-0 items-center gap-1">
+      <!-- ONLY WHILE THE SESSION IS ACTIVE and its servers are published. Like
+           the PR button below, absent rather than dead: a control that does
+           nothing for most of a session's life teaches people not to look
+           here. -->
+      {#if devLinks.length > 0}
+        <TouchButton
+          aria-label={devLinks.length === 1
+            ? `Open the dev server at ${devLinks[0]} on this phone`
+            : `Open one of ${devLinks.length} dev server links on this phone`}
+          class="gap-1! px-2!"
+          onclick={openDev}
+        >
+          <svg viewBox="0 0 16 16" class="size-4 shrink-0" fill="currentColor" aria-hidden="true">
+            <path
+              d="M7.775 3.275a.75.75 0 0 0 1.06 1.06l1.25-1.25a2 2 0 1 1 2.83 2.83l-2.5 2.5a2 2 0 0 1-2.83 0 .75.75 0 0 0-1.06 1.06 3.5 3.5 0 0 0 4.95 0l2.5-2.5a3.5 3.5 0 0 0-4.95-4.95l-1.25 1.25Zm-4.69 9.64a2 2 0 0 1 0-2.83l2.5-2.5a2 2 0 0 1 2.83 0 .75.75 0 0 0 1.06-1.06 3.5 3.5 0 0 0-4.95 0l-2.5 2.5a3.5 3.5 0 0 0 4.95 4.95l1.25-1.25a.75.75 0 0 0-1.06-1.06l-1.25 1.25a2 2 0 0 1-2.83 0Z"
+            />
+          </svg>
+          {#if devLinks.length > 1}
+            <span class="num text-sm">{devLinks.length}</span>
+          {/if}
+        </TouchButton>
+      {/if}
       <!-- ONLY WHEN THERE IS A PR. An always-drawn button that is dead for most
            of a session's life teaches people not to look at that corner. -->
       {#if hasPR}
@@ -575,3 +626,14 @@
     onsend={(bytes) => termRef?.send(bytes)}
   />
 </div>
+
+{#if devSheet}
+  <DevLinksSheet
+    urls={devLinks}
+    onopen={(url) => {
+      devSheet = false;
+      void openExternal(url);
+    }}
+    onclose={() => (devSheet = false)}
+  />
+{/if}

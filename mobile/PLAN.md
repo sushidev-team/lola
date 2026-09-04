@@ -503,6 +503,25 @@ The first implementation violated all three halves of that paragraph — it publ
 
 ### M7 — The dev-server tunnel
 
+> **Shipped first, as the ninety per cent: the LAN forward.**
+> `[remote].dev_forward` (`internal/devforward`, `internal/daemon/devforwardwire.go`)
+> republishes an ACTIVE session's loopback dev servers on one private interface,
+> on a random high port, for as long as that session stays active. It reaches
+> the same goal — the app an agent is building, opened on a phone, with no
+> change to any repository — for about a tenth of the work and no new wire
+> vocabulary, and the UI it needs (the button, the several-addresses sheet, the
+> `devForwards` field) is the UI the tunnel below needs.
+>
+> **What it does not fix, which is what the tunnel is for.** The forward is an
+> exposure: anything on that network can reach the dev server while it is up.
+> It also only works while the phone is on the same network, so discovery
+> reaching the daemon from the office does not extend to the app. And the
+> honest comparison is not "tunnel versus nothing" but "tunnel versus a narrow,
+> temporary, random-port forward" — which is a much smaller gap than the one
+> against `--host 0.0.0.0`, and the reason this milestone is worth doing only
+> when a network you do not control is in play.
+
+
 **Ships:** the app an agent is building, opened on the phone, with no change to
 any repository and nothing new exposed to the network. A session's dev servers
 already announce themselves — `internal/devurl` reads the addresses the dev tabs

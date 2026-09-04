@@ -467,6 +467,7 @@ export interface SettingsDTO {
     "remotePort": number;
     "remoteInsecureLan": boolean;
     "remoteAdvertise": boolean;
+    "remoteDevForward": boolean;
 
     /**
      * ReviewProviders is the pluggable review catalog ([[review.provider]]),

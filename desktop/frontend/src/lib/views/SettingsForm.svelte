@@ -1165,6 +1165,23 @@
                 </span>
               </span>
             </label>
+
+            <!-- The ACTIVE session's dev servers, republished. Off by default
+                 like the two above, and worth having because the alternative is
+                 `--host 0.0.0.0` in every project: permanent, well-known and on
+                 every network, where this is temporary, random and scoped to
+                 one address lola discovered itself. -->
+            <label class="flex cursor-pointer items-start gap-2 pt-1">
+              <Checkbox bind:checked={d.remoteDevForward} />
+              <span>
+                <span>Publish dev servers of the active session</span>
+                <span class="mt-0.5 block text-xs text-faint">
+                  A dev server binds 127.0.0.1, so a phone cannot reach it. This republishes the
+                  active session's on one private interface, on a random port, until that session
+                  stops being active. Anything on that network can reach them while it is up.
+                </span>
+              </span>
+            </label>
           </div>
           <div class="mt-4 border-t border-edge pt-4">
             <div class="flex items-center justify-between gap-3">

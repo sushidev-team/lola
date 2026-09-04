@@ -633,10 +633,16 @@ export interface SessionInfo {
      * DevClash is set while a dev tab of this session is dead BECAUSE another
      * process holds the port it wanted — the one dev failure lola can name and
      * offer to undo (cmd=devFreePort). nil whenever the tabs are healthy.
+     * DevForwards are those same servers republished on the local network, so a
+     * phone can open them: the loopback addresses above are unreachable from
+     * anything but this machine. Present only while the session is ACTIVE and
+     * only when [remote].dev_forward is set, and each one ends with the tabs it
+     * belongs to. Empty is the normal state.
      */
     "devActive"?: boolean;
     "devCommands"?: string[] | null;
     "devUrls"?: string[] | null;
+    "devForwards"?: string[] | null;
     "devClash"?: DevClashInfo | null;
 
     /**
@@ -692,12 +698,16 @@ export interface StatusData {
     /**
      * Host is this machine's name, for a client that has to say WHICH daemon it
      * is talking about. A phone reaches the same Mac on a different address at
-     * home and at the office — that is the point of discovery — so an address is
-     * a poor name for it and a stale one is worse.
-     *
+     * home and at the office — that is the point of discovery — so an address
+     * is a poor name for it and a stale one is worse: "connecting to
+     * 192.168.10.160" describes a network, not the machine somebody left work
+     * running on.
+     * 
      * It travels on an AUTHENTICATED answer, never in the mDNS advertisement,
-     * where a hostname would be a stable cross-network correlator broadcast to
-     * every peer.
+     * and the difference is deliberate. A hostname in a TXT record is a stable
+     * cross-network correlator broadcast to every peer (internal/mdns says so
+     * at length); telling an already-paired device the name of the machine it
+     * is holding a session list from discloses nothing it does not have.
      */
     "host"?: string;
 }
