@@ -1,4 +1,5 @@
 <script lang="ts">
+  import type { DevForward } from "@bindings/internal/protocol/models";
   import Sheet from "./Sheet.svelte";
   import TouchButton from "./TouchButton.svelte";
 
@@ -23,25 +24,26 @@
    * "on this phone" out loud for that reason.
    */
   let {
-    urls,
+    forwards,
     onopen,
     onclose,
-  }: { urls: readonly string[]; onopen: (url: string) => void; onclose: () => void } = $props();
+  }: {
+    forwards: readonly DevForward[];
+    onopen: (url: string) => void;
+    onclose: () => void;
+  } = $props();
 
   /**
-   * What to call one address.
+   * What to call one address: THE ORIGINAL, always.
    *
-   * The PORT is the whole label: a person recognises "8000" as the Laravel app
-   * and "5173" as vite, and the host is the same for all of them, so leading
-   * with it would put the one identical part first on every row.
+   * The forward's own port is allocated by the kernel — 65497 identifies
+   * nothing and changes on every restart. The address a developer knows is the
+   * one the server printed: 8000 is the Laravel app, 5175 is vite. Leading with
+   * the forward made every row look the same and turned choosing into a guess,
+   * which with an app and a bundler is a coin flip.
    */
-  function label(url: string): string {
-    try {
-      const u = new URL(url);
-      return u.port ? `Port ${u.port}` : u.hostname;
-    } catch {
-      return url;
-    }
+  function label(f: DevForward): string {
+    return f.from || f.url;
   }
 </script>
 
@@ -51,11 +53,14 @@
     they are reachable only while this session is the active one.
   </p>
 
-  {#each urls as url (url)}
-    <TouchButton wide variant="secondary" onclick={() => onopen(url)}>
+  {#each forwards as f (f.url)}
+    <TouchButton wide variant="secondary" onclick={() => onopen(f.url)}>
       <span class="flex min-w-0 flex-col items-start">
-        <span>{label(url)}</span>
-        <span class="num truncate text-xs text-faint">{url}</span>
+        <!-- The original first, because it is the one that names the thing. -->
+        <span class="num">{label(f)}</span>
+        <!-- And where it actually goes, because a person checking WHICH machine
+             this reaches has nothing else to read it from. -->
+        <span class="num truncate text-xs text-faint">via {f.url}</span>
       </span>
     </TouchButton>
   {/each}

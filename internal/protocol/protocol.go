@@ -329,7 +329,7 @@ type SessionInfo struct {
 	DevActive   bool          `json:"devActive,omitempty"`
 	DevCommands []string      `json:"devCommands,omitempty"`
 	DevURLs     []string      `json:"devUrls,omitempty"`
-	DevForwards []string      `json:"devForwards,omitempty"`
+	DevForwards []DevForward  `json:"devForwards,omitempty"`
 	DevClash    *DevClashInfo `json:"devClash,omitempty"`
 
 	// Reaction-engine posture (PLAN P3), flattened so the TUI renders reaction
@@ -591,6 +591,21 @@ type DevData struct {
 	Commands []string `json:"commands,omitempty"`
 	Stopped  string   `json:"stopped,omitempty"`
 	Message  string   `json:"message,omitempty"`
+}
+
+// DevForward is one dev server republished on the local network: where a phone
+// goes, and which loopback address it is.
+//
+// BOTH, because the forward's port is allocated by the kernel and means nothing
+// to anybody — "192.168.20.3:65497" identifies no application. The address the
+// developer knows is the ORIGINAL: 8000 is the Laravel app, 5175 is vite. A
+// client showing only the forward makes its user guess which link is which,
+// which with an app and a bundler is a coin flip.
+type DevForward struct {
+	// URL is the address to open, on the network the daemon is on.
+	URL string `json:"url"`
+	// From is the loopback address it publishes ("127.0.0.1:8000").
+	From string `json:"from"`
 }
 
 // DevClashInfo is why a dev tab is dead when the reason is a port another

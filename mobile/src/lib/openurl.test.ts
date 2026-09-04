@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { isOpenable, openExternal, resetBrowserCache, type BrowserLoader } from "./openurl";
+import {
+  isOpenable,
+  openExternal,
+  resetBrowserCache,
+  type BrowserLoader,
+} from "./openurl";
 
 describe("the scheme guard", () => {
   it("allows http and https", () => {
@@ -30,9 +35,11 @@ describe("openExternal", () => {
   // which would make "there is no plugin here" untestable, and would make the
   // result depend on whether node_modules happened to be installed.
   const noPlugin: BrowserLoader = async () => undefined;
-  const plugin = (open: (o: { url: string }) => Promise<unknown>): BrowserLoader => async () => ({
-    open,
-  });
+  const plugin =
+    (open: (o: { url: string }) => Promise<unknown>): BrowserLoader =>
+    async () => ({
+      open,
+    });
 
   afterEach(() => {
     delete (globalThis as { Capacitor?: unknown }).Capacitor;
@@ -65,7 +72,11 @@ describe("openExternal", () => {
     const open = vi.fn();
     vi.stubGlobal("open", open);
     await openExternal("http://127.0.0.1:8000", noPlugin);
-    expect(open).toHaveBeenCalledWith("http://127.0.0.1:8000", "_system", "noopener");
+    expect(open).toHaveBeenCalledWith(
+      "http://127.0.0.1:8000",
+      "_system",
+      "noopener",
+    );
     expect(open).toHaveBeenCalledTimes(1);
   });
 
@@ -73,18 +84,25 @@ describe("openExternal", () => {
     // A desktop browser, which is what `npm run dev` runs in, knows nothing
     // about "_system" and returns null for it. The header promised this step for
     // a while before the code had it.
-    const open = vi.fn((_u: string, target?: string) => (target === "_system" ? null : {}));
+    const open = vi.fn((_u: string, target?: string) =>
+      target === "_system" ? null : {},
+    );
     vi.stubGlobal("open", open);
     await openExternal("https://example.com", noPlugin);
     expect(open.mock.calls.map((c) => c[1])).toEqual(["_system", "_blank"]);
   });
 
   it("swallows a failing plugin rather than rejecting into xterm's link handler", async () => {
+    // It falls through to the window opener, which HERE succeeds — so the
+    // answer is true. What is asserted is that nothing rejected.
     const open = vi.fn();
     vi.stubGlobal("open", open);
     await expect(
-      openExternal("https://example.com", plugin(vi.fn().mockRejectedValue(new Error("no")))),
-    ).resolves.toBeUndefined();
+      openExternal(
+        "https://example.com",
+        plugin(vi.fn().mockRejectedValue(new Error("no"))),
+      ),
+    ).resolves.toBe(true);
     expect(open).toHaveBeenCalled();
   });
 
@@ -95,12 +113,24 @@ describe("openExternal", () => {
       openExternal("https://example.com", async () => {
         throw new Error("no bundler");
       }),
-    ).resolves.toBeUndefined();
+    ).resolves.toBe(true);
     expect(open).toHaveBeenCalled();
   });
 
   it("does not throw when the shell has no window opener either", async () => {
+    // AND SAYS SO. A button whose only job is to open something has to be able
+    // to report that it could not — silence is what "it shows, but nothing
+    // happens on click" is made of.
     vi.stubGlobal("open", undefined);
-    await expect(openExternal("https://example.com", noPlugin)).resolves.toBeUndefined();
+    await expect(openExternal("https://example.com", noPlugin)).resolves.toBe(
+      false,
+    );
+  });
+
+  it("answers false for a URL it refuses to open", async () => {
+    await expect(openExternal("javascript:alert(1)", noPlugin)).resolves.toBe(
+      false,
+    );
+    await expect(openExternal("", noPlugin)).resolves.toBe(false);
   });
 });

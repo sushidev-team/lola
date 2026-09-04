@@ -36,6 +36,7 @@ import (
 	"strings"
 
 	"github.com/sushidev-team/lola/internal/devforward"
+	"github.com/sushidev-team/lola/internal/protocol"
 	"github.com/sushidev-team/lola/internal/remote"
 	"github.com/sushidev-team/lola/internal/session"
 )
@@ -179,17 +180,24 @@ func (d *Daemon) openForward(host, target string) (string, io.Closer, error) {
 // publishForwardURLs writes what is live onto the session records, so every
 // client sees the same list. Caller holds forwardMu.
 func (d *Daemon) publishForwardURLs() {
-	bySession := map[string][]string{}
+	bySession := map[string][]session.DevForward{}
 	for key, fwd := range d.forwards {
-		bySession[key.session] = append(bySession[key.session], "http://"+fwd.addr)
+		bySession[key.session] = append(bySession[key.session], session.DevForward{
+			URL:  "http://" + fwd.addr,
+			From: fwd.target,
+		})
 	}
 	for id := range bySession {
-		sort.Strings(bySession[id])
+		// By the ORIGINAL address, so the order a person sees follows the ports
+		// they know rather than whatever the kernel handed out.
+		sort.Slice(bySession[id], func(i, j int) bool {
+			return bySession[id][i].From < bySession[id][j].From
+		})
 	}
 	for _, s := range d.sessions.Snapshot() {
 		urls := bySession[s.ID]
 		d.sessions.Update(s.ID, func(rec *session.Session) bool {
-			if equalStrings(rec.DevForwards, urls) {
+			if equalForwards(rec.DevForwards, urls) {
 				return false
 			}
 			rec.DevForwards = urls
@@ -198,7 +206,7 @@ func (d *Daemon) publishForwardURLs() {
 	}
 }
 
-func equalStrings(a, b []string) bool {
+func equalForwards(a, b []session.DevForward) bool {
 	if len(a) != len(b) {
 		return false
 	}
@@ -298,5 +306,17 @@ func (d *Daemon) devForwardsFor(sessionID string) []string {
 		}
 	}
 	sort.Strings(out)
+	return out
+}
+
+// devForwardInfos maps the record's pairs onto the wire's.
+func devForwardInfos(in []session.DevForward) []protocol.DevForward {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]protocol.DevForward, 0, len(in))
+	for _, f := range in {
+		out = append(out, protocol.DevForward{URL: f.URL, From: f.From})
+	}
 	return out
 }

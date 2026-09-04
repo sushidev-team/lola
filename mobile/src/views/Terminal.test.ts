@@ -221,12 +221,17 @@ describe("Terminal header", () => {
 
   it("names the single published address on the link button", async () => {
     store.sessions = [
-      session({ devActive: true, devForwards: ["http://192.168.20.3:52889"] }),
+      session({
+        devActive: true,
+        devForwards: [
+          { url: "http://192.168.20.3:52889", from: "127.0.0.1:8000" },
+        ],
+      }),
     ];
     render(Terminal, { props: { onback: () => {} } });
 
     const btn = await screen.findByRole("button", {
-      name: "Open the dev server at http://192.168.20.3:52889 on this phone",
+      name: "Open the dev server at 127.0.0.1:8000 on this phone",
     });
     expect(btn).toBeInTheDocument();
   });
@@ -237,7 +242,10 @@ describe("Terminal header", () => {
     store.sessions = [
       session({
         devActive: true,
-        devForwards: ["http://192.168.20.3:52889", "http://192.168.20.3:41005"],
+        devForwards: [
+          { url: "http://192.168.20.3:52889", from: "127.0.0.1:8000" },
+          { url: "http://192.168.20.3:41005", from: "127.0.0.1:5175" },
+        ],
       }),
     ];
     render(Terminal, { props: { onback: () => {} } });

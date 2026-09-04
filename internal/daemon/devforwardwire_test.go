@@ -71,9 +71,19 @@ func TestForwardsPublishAnActiveSessionsLoopbackURLs(t *testing.T) {
 		t.Fatalf("published %v, want two URLs", got)
 	}
 	// And they reach the wire, which is how a phone learns about them.
-	s, _ := d.sessions.Get("acc-1")
-	if len(s.DevForwards) != 2 {
-		t.Errorf("session record carries %v", s.DevForwards)
+	rec, _ := d.sessions.Get("acc-1")
+	if len(rec.DevForwards) != 2 {
+		t.Fatalf("session record carries %v", rec.DevForwards)
+	}
+	// BOTH ADDRESSES. The forward's port is kernel-allocated and identifies
+	// nothing; the original is what tells the app from the bundler.
+	if rec.DevForwards[0].From != "127.0.0.1:5173" || rec.DevForwards[1].From != "127.0.0.1:8000" {
+		t.Errorf("the originals are missing or misordered: %+v", rec.DevForwards)
+	}
+	for _, f := range rec.DevForwards {
+		if f.URL == "" {
+			t.Errorf("a forward with no address to open: %+v", f)
+		}
 	}
 }
 

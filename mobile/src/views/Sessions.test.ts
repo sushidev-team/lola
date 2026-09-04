@@ -284,7 +284,7 @@ describe("the offline banner", () => {
     connection.reconnecting = false;
     const spy = vi.spyOn(connection, "reconnect").mockResolvedValue(true);
 
-    render(Sessions, { props: { onopen: () => {} } });
+    render(Sessions);
     const btn = await screen.findByRole("button", { name: "Reconnect" });
     await fireEvent.click(btn);
 
@@ -300,7 +300,7 @@ describe("the offline banner", () => {
     connection.phase = "closed";
     connection.reconnecting = true;
 
-    render(Sessions, { props: { onopen: () => {} } });
+    render(Sessions);
     const btn = await screen.findByRole("button", { name: "Connecting…" });
     expect(btn).toBeDisabled();
 
@@ -310,7 +310,7 @@ describe("the offline banner", () => {
   it("is absent once the connection is up", async () => {
     connection.phase = "ready";
     connection.reconnecting = false;
-    render(Sessions, { props: { onopen: () => {} } });
+    render(Sessions);
     await screen.findByRole("button", { name: /Connection settings/ });
     expect(screen.queryByRole("button", { name: /reconnect/i })).toBeNull();
   });

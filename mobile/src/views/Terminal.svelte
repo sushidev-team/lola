@@ -309,12 +309,24 @@
    * a bundler — so picking is the interaction, and a button that guessed would
    * open the asset server instead of the app about half the time.
    */
-  function openDev() {
+  async function openDev() {
     if (devLinks.length === 1) {
-      void openExternal(devLinks[0]);
+      await openLink(devLinks[0].url);
       return;
     }
     devSheet = true;
+  }
+
+  /**
+   * Hand one address to the phone's browser, and SAY SO IF IT DID NOT OPEN.
+   *
+   * A button whose entire purpose is to open something must report that it
+   * could not — silence is what "it shows, but nothing happens on click" is
+   * made of, and it is indistinguishable from a broken feature.
+   */
+  async function openLink(url: string) {
+    if (await openExternal(url)) return;
+    error = `Could not open ${url}. No browser accepted the link.`;
   }
 
   let offKeyboard: (() => void) | undefined;
@@ -492,7 +504,7 @@
       {#if devLinks.length > 0}
         <TouchButton
           aria-label={devLinks.length === 1
-            ? `Open the dev server at ${devLinks[0]} on this phone`
+            ? `Open the dev server at ${devLinks[0].from} on this phone`
             : `Open one of ${devLinks.length} dev server links on this phone`}
           class="gap-1! px-2!"
           onclick={openDev}
@@ -683,10 +695,10 @@
 
 {#if devSheet}
   <DevLinksSheet
-    urls={devLinks}
+    forwards={devLinks}
     onopen={(url) => {
       devSheet = false;
-      void openExternal(url);
+      void openLink(url);
     }}
     onclose={() => (devSheet = false)}
   />

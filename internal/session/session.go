@@ -39,6 +39,15 @@ const (
 	KindManual Kind = "manual"
 )
 
+// DevForward is one dev server republished on the local network: the address a
+// phone opens, and the loopback address it publishes. Both, because the
+// forward's port is kernel-allocated and identifies nothing — 8000 is the app
+// and 5175 is the bundler, and only the original says which is which.
+type DevForward struct {
+	URL  string
+	From string
+}
+
 // Session is one observed agent session, regardless of who spawned it.
 type Session struct {
 	ID      string `json:"id"`
@@ -145,7 +154,7 @@ type Session struct {
 	// currently published at (internal/daemon/devforwardwire.go). DERIVED, like
 	// DevActive and DevURLs: written by the sync pass from live listeners, and
 	// meaningless across a restart because the listeners do not survive one.
-	DevForwards []string `json:"-"`
+	DevForwards []DevForward `json:"-"`
 
 	Nudged bool `json:"nudged,omitempty"`
 

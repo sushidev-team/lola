@@ -81,7 +81,9 @@ let cached: Promise<Browserish | undefined> | undefined;
 export const loadBrowser: BrowserLoader = () => {
   cached ??= (async () => {
     try {
-      const mod = (await import("@capacitor/browser")) as { Browser?: Browserish };
+      const mod = (await import("@capacitor/browser")) as {
+        Browser?: Browserish;
+      };
       if (typeof mod?.Browser?.open === "function") return mod.Browser;
     } catch {
       // Not installed, or a bundler that could not resolve it.
@@ -99,14 +101,22 @@ export function resetBrowserCache(): void {
 }
 
 /**
- * Open a URL outside the app, or do nothing.
+ * Open a URL outside the app. Never throws; ANSWERS whether it opened.
  *
- * Never throws and never reports failure to the caller: this is invoked from
- * xterm's link handler, where the alternative to silence is an unhandled
- * rejection from a click on a log line.
+ * The answer was added because silence is the wrong report for a BUTTON. A
+ * terminal link that cannot be opened may fail quietly — the alternative there
+ * is an unhandled rejection from a tap on a log line, and the user did not
+ * necessarily mean to open anything. A control whose entire purpose is to open
+ * something must say when it could not, or the app looks broken in a way
+ * nobody can describe: "it shows, but nothing happens on click".
+ *
+ * Callers that do not care may still ignore the result.
  */
-export async function openExternal(url: string, load: BrowserLoader = loadBrowser): Promise<void> {
-  if (!isOpenable(url)) return;
+export async function openExternal(
+  url: string,
+  load: BrowserLoader = loadBrowser,
+): Promise<boolean> {
+  if (!isOpenable(url)) return false;
 
   let browser: Browserish | undefined;
   try {
@@ -117,23 +127,26 @@ export async function openExternal(url: string, load: BrowserLoader = loadBrowse
   if (browser) {
     try {
       await browser.open({ url });
-      return;
+      return true;
     } catch {
       // fall through to the window opener
     }
   }
 
-  const w = globalThis as { open?: (u: string, t?: string, f?: string) => unknown };
-  if (typeof w.open !== "function") return;
+  const w = globalThis as {
+    open?: (u: string, t?: string, f?: string) => unknown;
+  };
+  if (typeof w.open !== "function") return false;
   for (const target of ["_system", "_blank"]) {
     try {
       const opened = w.open(url, target, "noopener");
       // A shell that does not know the target returns null (a blocked or
       // unrecognised popup). `undefined` is what Capacitor's own delegate hands
       // back for a hand-off it took, so only an explicit null is a failure.
-      if (opened !== null) return;
+      if (opened !== null) return true;
     } catch {
       // Try the next target; a dead link must not take the terminal down.
     }
   }
+  return false;
 }

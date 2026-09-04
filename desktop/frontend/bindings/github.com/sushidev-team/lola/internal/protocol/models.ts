@@ -30,6 +30,19 @@ export interface CodeRabbitData {
  * integer; see internal/portclash) — Proc and Dir come from lsof, Command from
  * config.
  */
+/**
+ * DevForward is one dev server republished on the local network: where a phone
+ * goes, and which loopback address it is. BOTH, because the forward's port is
+ * kernel-allocated and identifies nothing — 8000 is the app and 5175 is the
+ * bundler, and only the original says which is which.
+ */
+export interface DevForward {
+    /** The address to open, on the network the daemon is on. */
+    "url": string;
+    /** The loopback address it publishes ("127.0.0.1:8000"). */
+    "from": string;
+}
+
 export interface DevClashInfo {
     "tab": string;
     "command"?: string;
@@ -642,7 +655,7 @@ export interface SessionInfo {
     "devActive"?: boolean;
     "devCommands"?: string[] | null;
     "devUrls"?: string[] | null;
-    "devForwards"?: string[] | null;
+    "devForwards"?: DevForward[] | null;
     "devClash"?: DevClashInfo | null;
 
     /**
