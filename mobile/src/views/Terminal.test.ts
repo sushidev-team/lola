@@ -85,7 +85,10 @@ vi.mock("@mobile/lib/connection.svelte", () => ({
 }));
 
 let ch: FakeChannel;
-let replies: Record<string, { ok: true; data: unknown } | { ok: false; error: string }>;
+let replies: Record<
+  string,
+  { ok: true; data: unknown } | { ok: false; error: string }
+>;
 
 /** A session record with only the fields this screen reads. */
 function session(over: Partial<SessionInfo> = {}): SessionInfo {
@@ -155,12 +158,97 @@ describe("Terminal header", () => {
 
   it("draws a PR button naming the number when there is one", async () => {
     store.sessions = [
-      session({ prNumber: 401, prUrl: "https://github.com/acme/nori/pull/401" }),
+      session({
+        prNumber: 401,
+        prUrl: "https://github.com/acme/nori/pull/401",
+      }),
     ];
     render(Terminal, { props: { onback: () => {} } });
 
-    const btn = await screen.findByRole("button", { name: "Open pull request #401 in the browser" });
+    const btn = await screen.findByRole("button", {
+      name: "Open pull request #401 in the browser",
+    });
     expect(btn).toBeInTheDocument();
+  });
+
+  it("draws no Dev control for a project with no dev commands", async () => {
+    // Absent rather than dead: a control that can never do anything teaches
+    // people not to look at that corner.
+    store.sessions = [session({ devCommands: [] })];
+    render(Terminal, { props: { onback: () => {} } });
+
+    await screen.findByRole("tab", { name: "agent" });
+    expect(screen.queryByRole("button", { name: /dev commands/i })).toBeNull();
+  });
+
+  it("offers to RUN the dev commands when the project has them", async () => {
+    store.sessions = [session({ devCommands: ["npm run dev"] })];
+    render(Terminal, { props: { onback: () => {} } });
+
+    const btn = await screen.findByRole("button", {
+      name: "Run this session's dev commands here",
+    });
+    expect(btn).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("offers to STOP them when this session is the active one", async () => {
+    store.sessions = [
+      session({ devCommands: ["npm run dev"], devActive: true }),
+    ];
+    render(Terminal, { props: { onback: () => {} } });
+
+    const btn = await screen.findByRole("button", {
+      name: "Stop this session's dev commands",
+    });
+    expect(btn).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("draws no link button until the daemon publishes an address", async () => {
+    // devUrls alone are the MAC's loopback addresses; on a phone they reach
+    // nothing, so only devForwards may draw this.
+    store.sessions = [
+      session({
+        devActive: true,
+        devUrls: ["http://127.0.0.1:8000"],
+        devForwards: [],
+      }),
+    ];
+    render(Terminal, { props: { onback: () => {} } });
+
+    await screen.findByRole("tab", { name: "agent" });
+    expect(screen.queryByRole("button", { name: /dev server/i })).toBeNull();
+  });
+
+  it("names the single published address on the link button", async () => {
+    store.sessions = [
+      session({ devActive: true, devForwards: ["http://192.168.20.3:52889"] }),
+    ];
+    render(Terminal, { props: { onback: () => {} } });
+
+    const btn = await screen.findByRole("button", {
+      name: "Open the dev server at http://192.168.20.3:52889 on this phone",
+    });
+    expect(btn).toBeInTheDocument();
+  });
+
+  it("opens a sheet when several addresses are published, which is the normal case", async () => {
+    // An app and a bundler print separate URLs; a button that guessed would
+    // open the asset server about half the time.
+    store.sessions = [
+      session({
+        devActive: true,
+        devForwards: ["http://192.168.20.3:52889", "http://192.168.20.3:41005"],
+      }),
+    ];
+    render(Terminal, { props: { onback: () => {} } });
+
+    const btn = await screen.findByRole("button", {
+      name: "Open one of 2 dev server links on this phone",
+    });
+    await fireEvent.click(btn);
+    expect(
+      await screen.findByRole("dialog", { name: "Dev server links" }),
+    ).toBeTruthy();
   });
 
   it("states the session status as text, in the shared vocabulary", async () => {
@@ -212,19 +300,26 @@ describe("Terminal header", () => {
     // reads. The sentence travels intact from the daemon through PaneTabs to
     // here — a generic "could not start a shell" would throw away the only half
     // anyone can act on.
-    replies.shellCreate = { ok: false, error: 'session "lola-fe-42" has no worktree' };
+    replies.shellCreate = {
+      ok: false,
+      error: 'session "lola-fe-42" has no worktree',
+    };
     store.sessions = [session()];
     render(Terminal, { props: { onback: () => {} } });
 
     await screen.findByRole("tab", { name: "agent" });
     await fireEvent.click(screen.getByRole("button", { name: "New shell" }));
 
-    const banner = await screen.findByText('session "lola-fe-42" has no worktree');
+    const banner = await screen.findByText(
+      'session "lola-fe-42" has no worktree',
+    );
     expect(banner).toBeInTheDocument();
 
     await fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
     await waitFor(() =>
-      expect(screen.queryByText('session "lola-fe-42" has no worktree')).toBeNull(),
+      expect(
+        screen.queryByText('session "lola-fe-42" has no worktree'),
+      ).toBeNull(),
     );
   });
 });
@@ -245,7 +340,12 @@ describe("Terminal keeping the tab strip honest", () => {
         session: "lola-fe-42",
         panes: [
           { name: "lola-fe-42", kind: "agent", label: "agent" },
-          { name: "lola-fe-42-shell-1", kind: "shell", label: "shell 1", index: 1 },
+          {
+            name: "lola-fe-42-shell-1",
+            kind: "shell",
+            label: "shell 1",
+            index: 1,
+          },
         ],
         canCreateShell: true,
       },
@@ -253,7 +353,9 @@ describe("Terminal keeping the tab strip honest", () => {
     render(Terminal, { props: { onback: () => {} } });
 
     await screen.findByRole("tab", { name: "shell 1" });
-    const before = ch.sent.filter((f) => f.type === "req" && f.cmd === "panes").length;
+    const before = ch.sent.filter(
+      (f) => f.type === "req" && f.cmd === "panes",
+    ).length;
     expect(before).toBe(1);
     expect(paneListeners.length).toBeGreaterThan(0);
 
@@ -273,7 +375,13 @@ describe("Terminal keeping the tab strip honest", () => {
     // renderer jsdom has no canvas for, which surfaces as an unhandled error
     // that has nothing to do with what is under test. `geometryChanged` is
     // false for 0x0, so the paint is the erase sequence and nothing more.
-    const lastFrame = { cols: 0, rows: 0, cursorX: 0, cursorY: 0, exited: true };
+    const lastFrame = {
+      cols: 0,
+      rows: 0,
+      cursorX: 0,
+      cursorY: 0,
+      exited: true,
+    };
     // xterm SCHEDULES ITS REPAINT through requestAnimationFrame, and in jsdom
     // that callback reaches a RenderService with no renderer behind it (there
     // is no canvas) and throws asynchronously, long after this test's
@@ -284,15 +392,20 @@ describe("Terminal keeping the tab strip honest", () => {
     const raf = globalThis.requestAnimationFrame;
     globalThis.requestAnimationFrame = (() => 0) as typeof raf;
     try {
-      for (const fn of paneListeners) fn({ kind: "exit", screen: lastFrame, seq: 1 });
+      for (const fn of paneListeners)
+        fn({ kind: "exit", screen: lastFrame, seq: 1 });
     } finally {
       globalThis.requestAnimationFrame = raf;
     }
 
     await waitFor(() =>
-      expect(ch.sent.filter((f) => f.type === "req" && f.cmd === "panes")).toHaveLength(2),
+      expect(
+        ch.sent.filter((f) => f.type === "req" && f.cmd === "panes"),
+      ).toHaveLength(2),
     );
-    await waitFor(() => expect(screen.queryByRole("tab", { name: "shell 1" })).toBeNull());
+    await waitFor(() =>
+      expect(screen.queryByRole("tab", { name: "shell 1" })).toBeNull(),
+    );
   });
 
   it("re-reads it when an attach is refused because the pane is already gone", async () => {
@@ -306,7 +419,9 @@ describe("Terminal keeping the tab strip honest", () => {
 
     await screen.findByRole("tab", { name: "agent" });
     await waitFor(() =>
-      expect(ch.sent.filter((f) => f.type === "req" && f.cmd === "panes").length).toBeGreaterThan(1),
+      expect(
+        ch.sent.filter((f) => f.type === "req" && f.cmd === "panes").length,
+      ).toBeGreaterThan(1),
     );
     // ...and the banner still explains it in English, unchanged.
     expect(await screen.findByText(/terminal is gone/i)).toBeInTheDocument();

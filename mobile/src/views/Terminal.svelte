@@ -266,6 +266,43 @@
   let devSheet = $state(false);
 
   /**
+   * Whether this session can run dev commands at all, and whether it is the one
+   * doing so.
+   *
+   * `devCommands` is its project's configured list; a session whose project has
+   * none can never be activated, so the control is absent rather than dead.
+   */
+  const canDev = $derived((session?.devCommands ?? []).length > 0);
+  const devActive = $derived(session?.devActive === true);
+  let devBusy = $state(false);
+
+  /**
+   * Start or stop this session's dev commands.
+   *
+   * IT IS A MOVE, NOT A TOGGLE, and the confirmation says so: only one session
+   * per project may run them (they bind ports), so activating this one STOPS
+   * another's servers. That is a heavier thing than it looks from a phone,
+   * where the session that loses its dev tabs is not on screen.
+   *
+   * The flag lives here rather than in the store because the daemon answers
+   * only when tmux has finished, which is seconds — long enough that a second
+   * tap would send a second move.
+   */
+  async function toggleDev() {
+    const id = nav.paneSession;
+    if (devBusy || id === "") return;
+    devBusy = true;
+    try {
+      await DaemonService.Dev(id, !devActive);
+      await store.refresh();
+    } catch (e) {
+      error = e instanceof Error && e.message ? e.message : "Could not change the dev commands.";
+    } finally {
+      devBusy = false;
+    }
+  }
+
+  /**
    * One address opens straight away; several open the sheet.
    *
    * A session's dev commands print more than one address as a rule — an app and
@@ -431,6 +468,23 @@
       </span>
     </div>
     <div class="ml-auto flex shrink-0 items-center gap-1">
+      <!-- THE ACTIVATE CONTROL, drawn only for a project that has dev commands.
+           It is what makes the link button below reachable from a phone at all:
+           before this, a session could only be activated from the Mac. -->
+      {#if canDev}
+        <TouchButton
+          aria-label={devActive
+            ? "Stop this session's dev commands"
+            : "Run this session's dev commands here"}
+          aria-pressed={devActive}
+          class="gap-1! px-2!"
+          disabled={devBusy}
+          onclick={toggleDev}
+        >
+          <span class={devActive ? "text-good" : "text-faint"} aria-hidden="true">●</span>
+          <span class="text-sm">Dev</span>
+        </TouchButton>
+      {/if}
       <!-- ONLY WHILE THE SESSION IS ACTIVE and its servers are published. Like
            the PR button below, absent rather than dead: a control that does
            nothing for most of a session's life teaches people not to look

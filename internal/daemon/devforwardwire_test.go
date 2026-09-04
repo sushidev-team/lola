@@ -195,6 +195,35 @@ func TestOnlyLoopbackTargetsAreForwarded(t *testing.T) {
 	}
 }
 
+// vite prints "Local: http://localhost:5175/" and internal/devurl carries the
+// NAME through, so refusing every name meant the bundler was silently the one
+// address that never appeared. localhost is the single exception, resolved here
+// rather than at dial time; any other name would make the check a DNS lookup
+// whose answer can change before the dial.
+func TestLocalhostIsForwardedAndOtherNamesAreNot(t *testing.T) {
+	d, f := newForwardDaemon(t, true)
+	d.sessions.Upsert(activeSession("acc-10",
+		"http://localhost:5175",
+		"http://LOCALHOST:5176",
+		"http://db.internal:5432",
+	))
+
+	d.syncDevForwards()
+
+	want := []string{
+		"192.168.20.3 -> 127.0.0.1:5175",
+		"192.168.20.3 -> 127.0.0.1:5176",
+	}
+	if len(f.opened) != len(want) {
+		t.Fatalf("opened %v, want %v", f.opened, want)
+	}
+	for i, w := range want {
+		if f.opened[i] != w {
+			t.Errorf("opened[%d] = %q, want %q", i, f.opened[i], w)
+		}
+	}
+}
+
 // A machine with no private address has nowhere to publish, and that is not an
 // error: the dev servers still work on the Mac itself.
 func TestNoPrivateAddressPublishesNothing(t *testing.T) {

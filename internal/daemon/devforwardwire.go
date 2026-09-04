@@ -247,6 +247,19 @@ func loopbackTarget(raw string) (string, bool) {
 		return "", false
 	}
 	host := u.Hostname()
+	// "localhost" is accepted as the ONE name, and resolved here rather than at
+	// dial time. Every other name is refused: resolving it would make this check
+	// a DNS lookup whose answer can change between the check and the dial, which
+	// is the shape of every TOCTOU bug, and a name that resolves off-box would
+	// turn a forward into a proxy for another machine.
+	//
+	// It is not an edge case. vite prints "Local: http://localhost:5175/" and
+	// internal/devurl carries that through verbatim, so refusing the name meant
+	// a session's bundler was silently the one address that never appeared —
+	// which reads as a broken feature rather than as a rule being enforced.
+	if strings.EqualFold(host, "localhost") {
+		host = "127.0.0.1"
+	}
 	ip := net.ParseIP(host)
 	if ip == nil || !ip.IsLoopback() {
 		return "", false
