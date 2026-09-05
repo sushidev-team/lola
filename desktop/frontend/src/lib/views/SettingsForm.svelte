@@ -2,6 +2,7 @@
   import { onMount, onDestroy } from "svelte";
   import Modal from "$lib/components/Modal.svelte";
   import Tabs from "$lib/components/Tabs.svelte";
+  import HelpText from "$lib/components/HelpText.svelte";
   import Button from "$lib/components/Button.svelte";
   import Checkbox from "$lib/components/Checkbox.svelte";
   import PresetInput from "$lib/components/PresetInput.svelte";
@@ -125,10 +126,10 @@
   const BIND_LITERAL = "__literal";
 
   const BIND_HELP: Record<string, string> = {
-    off: "keep these settings, listen on nothing",
-    localhost: "loopback only — what a tunnel or an SSH forward wants",
-    lan: "private interfaces only, tunnels and bridges excluded",
-    all: "0.0.0.0, every interface",
+    off: "No listener",
+    localhost: "This Mac only",
+    lan: "Private network",
+    all: "All interfaces",
   };
 
   // True when the persisted value is a literal the picker cannot show. Guarded
@@ -754,7 +755,7 @@
      when the workspace labels couldn't be loaded or there are none. -->
 {#snippet labelRow(caption: string, current: string, onChange: (v: string) => void)}
   {#if wsReady}
-    {@render selectRow(caption, current, wsLabels ?? [], onChange, "(none)", "workspace label — valid across every team")}
+    {@render selectRow(caption, current, wsLabels ?? [], onChange, "(none)", "Workspace label only.")}
   {:else}
     <div class={rowTopCls}>
       <span class="text-faint">{caption}</span>
@@ -766,7 +767,7 @@
           placeholder="workspace label UUID"
           oninput={(e) => onChange(e.currentTarget.value)}
         />
-        <span class={hintCls}>workspace label — valid across every team</span>
+        <span class={hintCls}>Workspace label only.</span>
       </span>
     </div>
   {/if}
@@ -790,7 +791,7 @@
       {#if tab === "defaults"}
         <section>
           {@render head("General")}
-          <p class="copy mb-4 text-sm text-faint">Choose the coding agent and how many sessions can run at once. Projects can override their agent and limit.</p>
+          <div class="copy mb-4 text-sm text-faint"><HelpText label="session limits" summary="Agent and session limits." detail="Choose the coding agent and how many sessions can run at once. Projects can override their agent and limit." /></div>
           <div class="space-y-2">
             <label class={rowCls}>
               <span class="text-faint">Total running agents</span>
@@ -826,10 +827,7 @@
       {:else if tab === "linear"}
         <section>
           {@render head("Linear")}
-          <p class="copy mb-3 text-sm text-faint">
-            lola reads every issue through this key. It is stored in the macOS Keychain and never written to
-            <span class="font-mono text-sm">config.toml</span> — only the name of its source is.
-          </p>
+          <HelpText label="Linear key storage" summary="Stored in Keychain." detail="Lola uses this key to read Linear issues. The key stays in macOS Keychain; config stores only its source name." />
 
           <div class="mb-4 rounded-lg border border-edge bg-canvas px-3 py-2.5">
             {#if !keyStatus}
@@ -859,7 +857,7 @@
                   bind:value={keyInput}
                   oninput={() => (keyMsg = "")}
                 />
-                <span class={hintCls}>Personal API key from Linear → Settings → Security &amp; access → API keys.</span>
+                <HelpText label="creating a Linear key" summary="Personal API key." detail="In Linear, open Settings → Security &amp; access → API keys." />
               </span>
             </div>
             <div class={rowCls}>
@@ -889,17 +887,13 @@
 
           <!-- Saved on its own, not by the overlay's Save: the key is a secret and
                must not ride along on an unrelated form commit (see saveKey). -->
-          <p class="copy mt-4 text-sm text-faint">
-            The key saves immediately — the overlay's Save button does not carry it.
-          </p>
+          <HelpText label="saving the Linear key" summary="Save key applies immediately." detail="The main Save button saves settings only. Use Save key to store or replace your Linear credential." />
         </section>
       {:else if tab === "project"}
         <section>
           {@render head("Project defaults")}
-          <p class="copy mb-3 text-sm text-faint">
-            Shared settings for all projects. Override them in an individual project when needed.
-            Shared labels must be workspace labels so they work across teams.
-          </p>
+          <div class="copy mb-3 text-sm text-faint"><HelpText label="project defaults" summary="Defaults for all projects." detail="Shared settings for all projects. Override them in an individual project when needed.
+            Shared labels must be workspace labels so they work across teams." /></div>
           <div class="space-y-2">
             <h4 class="mb-3 text-ink">Worktree setup</h4>
             <div class={rowCls}>
@@ -939,7 +933,7 @@
                       </label>
                     {/each}
                   </div>
-                  <span class={hintCls}>workspace labels — valid across every team</span>
+                  <span class={hintCls}>Workspace labels only.</span>
                 </span>
               </div>
             {:else}
@@ -948,7 +942,7 @@
                 d.matchLabels,
                 (v) => { d.matchLabels = v; },
                 "one UUID per line",
-                "workspace labels — valid across every team",
+                "Workspace labels only.",
               )}
             {/if}
 
@@ -989,9 +983,7 @@
                       </Button>
                     {/each}
                   </div>
-                  <span class={hintCls}>
-                    the number is the tie-break order — click to add or remove; empty means priority, then createdAt
-                  </span>
+                  <HelpText label="priority order" summary="Click to order." detail="Numbers show the tie-break order. Click a key to add or remove it. Empty uses priority, then creation time." />
                 </span>
               </div>
             {:else}
@@ -1017,7 +1009,7 @@
               <span class="text-faint">Slack webhook env</span>
               <div>
                 <input class={inputCls} type="text" placeholder="LOLA_SLACK_WEBHOOK" bind:value={d.slackWebhookEnv} />
-                <span class={hintCls}>Slack webhook env VAR NAME — never the URL.</span>
+                <span class={hintCls}>Variable name, not URL.</span>
               </div>
             </label>
           </div>
@@ -1025,7 +1017,7 @@
       {:else if tab === "brain"}
         <section>
           {@render head("Summaries")}
-          <p class="copy mb-3 text-sm text-faint">Use Claude to summarize sessions that need attention or are approved. Summaries use additional tokens.</p>
+          <div class="copy mb-3 text-sm text-faint"><HelpText label="summaries" summary="AI summaries · uses tokens." detail="Use Claude to summarize sessions that need attention or are approved. Summaries use additional tokens." /></div>
           <div class="space-y-2">
             <label class="flex cursor-pointer items-center gap-2">
               <Checkbox bind:checked={d.brainEnabled} />
@@ -1056,9 +1048,7 @@
       {:else if tab === "interpreter"}
         <section>
           {@render head("Status interpretation")}
-          <p class="copy mb-3 text-sm text-faint">
-            Use Claude to add a status estimate and short headline to each session. This changes only the display and uses additional tokens.
-          </p>
+          <div class="copy mb-3 text-sm text-faint"><HelpText label="status interpretation" summary="AI status estimates · uses tokens." detail="Use Claude to add a status estimate and short headline to each session. This changes only the display and uses additional tokens." /></div>
           <div class="space-y-2">
             <label class="flex cursor-pointer items-center gap-2">
               <Checkbox bind:checked={d.statusAgentEnabled} />
@@ -1099,9 +1089,7 @@
       {:else if tab === "remote"}
         <section>
           {@render head("Phone access")}
-          <p class="copy mb-3 text-sm text-faint">
-            Connect the Lola mobile app to this Mac. Paired phones can read sessions, watch terminals and send messages to your coding agents.
-          </p>
+          <div class="copy mb-3 text-sm text-faint"><HelpText label="phone access" summary="Connect the mobile app." detail="Connect the Lola mobile app to this Mac. Paired phones can read sessions, watch terminals and send messages to your coding agents." /></div>
           <div class="space-y-2">
             <label class="flex cursor-pointer items-center gap-2">
               <Checkbox bind:checked={d.remoteEnabled} />
@@ -1109,7 +1097,7 @@
             </label>
             <div class={rowCls}>
               <span class="text-faint">Bind</span>
-              <span class="flex items-center gap-2">
+              <span class="grid gap-1">
                 <Select
                   aria-label="Bind"
                   value={bindShowsLiteral ? BIND_LITERAL : d.remoteBind}
@@ -1131,10 +1119,8 @@
                   placeholder="192.168.1.20"
                   bind:value={d.remoteBind} />
               </label>
-              <p class="copy text-xs text-faint">
-                An IP literal, not a hostname — a name cannot be resolved at config-load time without turning a config read into a
-                network call, so the daemon rejects one.
-              </p>
+              <div class="copy text-xs text-faint"><HelpText label="bind address" summary="IP address, not hostname." detail="An IP literal, not a hostname — a name cannot be resolved at config-load time without turning a config read into a
+                network call, so the daemon rejects one." /></div>
             {/if}
             <label class={rowCls}>
               <span class="text-faint">Port</span>
@@ -1146,60 +1132,45 @@
                  binds loopback. It is a config key rather than an environment
                  variable because the daemon is normally started by the restart
                  button a few inches from here, which cannot set one. -->
-            <label class="flex cursor-pointer items-start gap-2 pt-1">
-              <Checkbox bind:checked={d.remoteInsecureLan} />
-              <span>
+            <div class="pt-1">
+              <label class="flex cursor-pointer items-center gap-2">
+                <Checkbox bind:checked={d.remoteInsecureLan} />
                 <span>Allow a LAN bind</span>
-                <span class="mt-0.5 block text-xs text-faint">
-                  Milestone 1 forces the bind to loopback, which a physical phone cannot reach. This honours the bind
-                  above and puts the shared key on your network in the clear. The Simulator does not need it.
-                </span>
-              </span>
-            </label>
+              </label>
+              <div class="ml-6"><HelpText label="Allow a LAN bind" summary="Shared key sent unencrypted." detail="Allows a physical phone to reach the configured network address. This development mode sends the shared key in the clear. The Simulator does not need it." /></div>
+            </div>
 
             <!-- A DISCLOSURE rather than a convenience, which is why it is off
                  by default and why the copy leads with what it announces. What
                  it buys is RECONNECTION, not pairing: the key and the pin
                  already work on any network, and only the address the phone
                  stored at pairing time goes stale. -->
-            <label class="flex cursor-pointer items-start gap-2 pt-1">
-              <Checkbox bind:checked={d.remoteAdvertise} />
-              <span>
+            <div class="pt-1">
+              <label class="flex cursor-pointer items-center gap-2">
+                <Checkbox bind:checked={d.remoteAdvertise} />
                 <span>Advertise on the local network</span>
-                <span class="mt-0.5 block text-xs text-faint">
-                  Lets a paired phone find this Mac on a network whose addresses it has never seen — home, the office, a
-                  hotspot — without re-pairing. It announces to every peer on the network that this machine runs coding
-                  agents and accepts remote control; the announcement itself carries a version and nothing else, no
-                  hostname and no key.
-                </span>
-              </span>
-            </label>
+              </label>
+              <div class="ml-6"><HelpText label="Advertise on the local network" summary="Let paired phones find this Mac." detail="Announces remote-control availability to nearby devices so paired phones can reconnect on new networks. The announcement contains a version, but no hostname or access key." /></div>
+            </div>
 
             <!-- The ACTIVE session's dev servers, republished. Off by default
                  like the two above, and worth having because the alternative is
                  `--host 0.0.0.0` in every project: permanent, well-known and on
                  every network, where this is temporary, random and scoped to
                  one address lola discovered itself. -->
-            <label class="flex cursor-pointer items-start gap-2 pt-1">
-              <Checkbox bind:checked={d.remoteDevForward} />
-              <span>
+            <div class="pt-1">
+              <label class="flex cursor-pointer items-center gap-2">
+                <Checkbox bind:checked={d.remoteDevForward} />
                 <span>Publish dev servers of the active session</span>
-                <span class="mt-0.5 block text-xs text-faint">
-                  A dev server binds 127.0.0.1, so a phone cannot reach it. This republishes the
-                  active session's on one private interface, on a random port, until that session
-                  stops being active. Anything on that network can reach them while it is up.
-                </span>
-              </span>
-            </label>
+              </label>
+              <div class="ml-6"><HelpText label="Publish dev servers of the active session" summary="Dev servers accessible on your network." detail="Shares the active session’s local dev servers on one private interface and a temporary port. Anyone on that network can reach them while the session is active." /></div>
+            </div>
           </div>
           <div class="mt-4 border-t border-edge pt-4">
             <div class="flex items-center justify-between gap-3">
               <div>
                 <h4 class="text-ink">Connect a phone</h4>
-                <p class="copy text-sm text-faint">
-                  Everything the app needs, from the listener that is actually running — so a stale key file or an
-                  older log line cannot send the phone somewhere that refuses it.
-                </p>
+                <div class="copy text-sm text-faint"><HelpText label="connect code" summary="Scan with the mobile app." detail="The code contains the running listener’s address and credentials. Save connection settings before generating a code." /></div>
               </div>
               {#if connect || connectErr}
                 <div class="flex shrink-0 items-center gap-2">
@@ -1222,9 +1193,7 @@
                  the action someone actually came here for. -->
             <div class="mt-2 flex items-center gap-3">
               <Button size="sm" loading={regenBusy} onclick={askRegenerate}>Regenerate key</Button>
-              <span class="text-xs text-faint">
-                Disconnects every paired phone. Reconnect them using the new code.
-              </span>
+              <HelpText label="regenerating the key" summary="Disconnects all phones." detail="Reconnect each phone using the new code." />
             </div>
             {#if regenDone}
               <p class="copy mt-2 text-sm text-good">{regenDone}</p>
@@ -1235,13 +1204,8 @@
             {:else if connect && connect.problem}
               <p class="copy mt-3 text-sm text-warn">{connect.problem}</p>
             {:else if connect}
-              <p class="copy mt-3 text-sm text-warn">
-                This is a secret. The code carries the access key, so anything that can read it off your screen — a
-                share, a recording, someone walking past — can drive your coding agents. It hides itself after 90
-                seconds; press Show code again if the phone was not ready.
-                <span class="text-ink">Copying puts the key on the clipboard</span>, which every app on this Mac can
-                read and which Universal Clipboard syncs to your other devices — copy something else afterwards.
-              </p>
+              <HelpText label="code privacy" summary="Secret code · hides after 90s."
+                detail="Anyone with this code can control your coding agents. Copying also puts the access key on the clipboard, which may sync to your other devices. Copy something else afterward." />
               <div class="mt-3 flex flex-wrap items-start gap-4">
                 <QRCode value={connect.code} size={228} label="Connect code" />
                 <div class="min-w-[16rem] flex-1 space-y-1">
@@ -1269,16 +1233,10 @@
                 </div>
               </div>
               {#if connect.hosts && connect.hosts.length > 1}
-                <p class="copy mt-3 text-xs text-faint">
-                  Also bound on <span class="font-mono text-ink">{connect.hosts.slice(1).join(", ")}</span>. The code
-                  carries every one of them, so the app can fall back without being told again.
-                </p>
+                <HelpText label="additional addresses" summary="Fallback addresses included." detail={connect.hosts.slice(1).join(", ")} />
               {/if}
               {#if connect.insecure}
-                <p class="copy mt-2 text-xs text-faint">
-                  Milestone 1: one shared key, no device identity and no way to revoke a single phone. Rotate it by
-                  restarting the daemon with a new <span class="font-mono text-ink">LOLA_REMOTE_INSECURE_KEY</span>.
-                </p>
+                <HelpText label="shared-key access" summary="One key for all phones." detail="Individual phones cannot be revoked separately. Regenerate the key to disconnect them all." />
               {/if}
             {/if}
           </div>
@@ -1288,9 +1246,7 @@
       {:else if tab === "appearance"}
         <section>
           {@render head("Appearance")}
-          <p class="copy mb-3 text-sm text-faint">
-            Preview a theme for the app and terminals. Save to keep it, or cancel to restore your current theme.
-          </p>
+          <div class="copy mb-3 text-sm text-faint"><HelpText label="theme preview" summary="Preview a theme." detail="Preview a theme for the app and terminals. Save to keep it, or cancel to restore your current theme." /></div>
           <!-- Grid, not flex: WKWebView does not stretch a flex child inside a
                flex column, so a flex layout that fills correctly in Chrome
                collapses to content width in the packaged .app. -->
@@ -1383,7 +1339,7 @@
                     <span class="text-faint">Base flag</span>
                     <PresetInput label="Base flag" value={p.baseFlag} options={BASE_FLAGS} disabled={d.reviewLegacy} onChange={(v) => { p.baseFlag = v; }} />
                   </div>
-                  <span class={hintCls}>Flag the PR's base branch is passed with. Empty passes no base at all.</span>
+                  <HelpText label="base flag" summary="Empty skips the base argument." detail="This flag passes the PR’s base branch to the review command." />
                 {/if}
                 {#if agentOf(p.provider)}
                   <div class={rowCls}>
@@ -1490,10 +1446,8 @@
           {#if !d.reviewLegacy && providers().length === 0}
             <div class="rounded border border-edge/60 px-3 py-3">
               <p class="text-ink">No review pass configured.</p>
-              <p class="copy mt-1 text-sm text-faint">
-                A provider runs a QA pass over each pull request and routes its findings back — to the worker agent, the PR, or
-                the Linear issue. Add one below to turn reviews on.
-              </p>
+              <div class="copy mt-1 text-sm text-faint"><HelpText label="review providers" summary="Add a provider to enable reviews." detail="A provider runs a QA pass over each pull request and routes its findings back — to the worker agent, the PR, or
+                the Linear issue. Add one below to turn reviews on." /></div>
             </div>
           {/if}
 

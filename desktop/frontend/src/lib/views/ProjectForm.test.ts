@@ -375,7 +375,8 @@ describe("ProjectForm", () => {
         expect(inspectPath).toHaveBeenCalledWith("/tmp/web");
         expect(screen.getByLabelText("Repo")).toHaveValue("acme/web");
       });
-      expect(screen.getByText(/detected from the checkout/)).toBeInTheDocument();
+      await fireEvent.click(screen.getByRole("button", { name: "More about Repo" }));
+      expect(screen.getByRole("note")).toHaveTextContent("detected from the checkout");
     });
 
     it("never overwrites a repo the user already set", async () => {

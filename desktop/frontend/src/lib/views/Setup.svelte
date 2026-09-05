@@ -3,6 +3,7 @@
   import { store } from "$lib/store.svelte";
   import PresetInput from "$lib/components/PresetInput.svelte";
   import { POLL_INTERVALS } from "$lib/settingPresets";
+  import HelpText from "$lib/components/HelpText.svelte";
   import Button from "$lib/components/Button.svelte";
 
   // First-run wizard: writes config.toml (Linear key → Keychain, one project,
@@ -124,7 +125,7 @@
 <div class="flex h-full items-center justify-center overflow-auto p-6">
   <div class="w-full max-w-lg">
     <h1 class="mb-1 text-xl text-ink">Welcome to lola</h1>
-    <p class="copy mb-5 text-sm text-faint">Connect Linear and choose your first repository. You can adjust settings later.</p>
+    <p class="copy mb-5 text-sm text-faint">Connect Linear. Choose a repository.</p>
 
     <div class="space-y-4 rounded-xl border border-edge bg-panel p-5">
       <!-- Linear key -->
@@ -145,7 +146,7 @@
         </div>
         {#if keyState === "ok"}<p class="mt-1 text-sm text-good">✓ {keyMsg}</p>{/if}
         {#if keyState === "bad"}<p class="mt-1 text-sm text-bad">✗ {keyMsg}</p>{/if}
-        <p class="mt-1 text-sm text-faint">Stored in the macOS Keychain — never written to config.</p>
+        <p class="mt-1 text-sm text-faint">Stored in macOS Keychain.</p>
       </div>
 
       <!-- Project -->
@@ -166,7 +167,7 @@
         {#if inspectedPath === projectPath.trim() && isRepo === false}
           <p class="mt-1 text-sm text-warn">Not a git checkout — worktrees fork from this repository.</p>
         {:else}
-          <p class="mt-1 text-sm text-faint">Choosing a folder detects your project details automatically.</p>
+          <p class="mt-1 text-sm text-faint">Project details detected automatically.</p>
         {/if}
       </div>
       <details class="border-t border-edge pt-3">
@@ -193,7 +194,7 @@
 
       <details class="border-t border-edge pt-3">
         <summary class="cursor-pointer text-faint">Performance settings</summary>
-        <p class="my-3 text-sm text-faint">Start with 2 agents per project, 4 in total, checking Linear every minute.</p>
+        <HelpText label="performance defaults" summary="2 per project · 4 total · every minute." detail="These are the initial session limits and polling frequency. You can change them later in General settings." />
         <div class="grid grid-cols-3 gap-3">
           <label class="block">
             <span class="mb-1 block label text-faint">Per project</span>

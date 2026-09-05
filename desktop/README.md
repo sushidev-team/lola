@@ -57,7 +57,8 @@ limits retain their bounded number controls.
 
 General settings are grouped under Workspace, Connections and Automation. Its
 sidebar and content scroll independently, with Save and errors always outside
-the scrolling content. The
+the scrolling content. Help stays brief; click the ⓘ button for a floating help popover. Click outside or press Escape
+to close the popover without closing settings. The
 project editor separates General, Worktree setup, Issue pickup and Linear
 updates. Old links to the Labels tab still open the combined Issue pickup page.
 

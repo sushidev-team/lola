@@ -483,6 +483,20 @@ describe("SettingsForm", () => {
     ]);
   });
 
+  it("opens phone help without changing the checkbox or dirtying settings", async () => {
+    render(SettingsForm);
+    await fireEvent.click(await screen.findByRole("tab", { name: "Phone access" }));
+    const box = screen.getByRole("checkbox", { name: "Allow a LAN bind" });
+    expect(box).not.toBeChecked();
+    expect(screen.queryByRole("note")).not.toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("button", { name: "More about Allow a LAN bind" }));
+    expect(screen.getByRole("note")).toHaveTextContent("shared key in the clear");
+    expect(box).not.toBeChecked();
+    await fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(closeOverlay).toHaveBeenCalled();
+    expect(confirm.request).toBeNull();
+  });
+
   it("carries the local-network advertisement, which is off until it is asked for", async () => {
     // A DISCLOSURE rather than a convenience: the service announces that this
     // machine runs coding agents and accepts remote control. It is reachable
@@ -493,7 +507,7 @@ describe("SettingsForm", () => {
     await screen.findByDisplayValue("60s");
     await fireEvent.click(screen.getByRole("tab", { name: "Phone access" }));
 
-    const box = await screen.findByLabelText(/Advertise on the local network/i);
+    const box = await screen.findByRole("checkbox", { name: "Advertise on the local network" });
     expect(box).not.toBeChecked();
 
     await fireEvent.click(box);
@@ -685,7 +699,7 @@ describe("SettingsForm", () => {
       await screen.findByRole("button", { name: /createdAt/ }),
     );
     await fireEvent.click(
-      await screen.findByRole("button", { name: /priority/ }),
+      await screen.findByRole("button", { name: /priority highest/ }),
     );
 
     await fireEvent.click(screen.getByRole("button", { name: /^save$/i }));

@@ -8,6 +8,7 @@
   import { deepEqual } from "$lib/deepEqual";
   import Modal from "$lib/components/Modal.svelte";
   import Tabs from "$lib/components/Tabs.svelte";
+  import HelpText from "$lib/components/HelpText.svelte";
   import Button from "$lib/components/Button.svelte";
   import Checkbox from "$lib/components/Checkbox.svelte";
   import PresetInput from "$lib/components/PresetInput.svelte";
@@ -488,7 +489,7 @@
         }}
         onblur={() => onBlur?.()}
       />
-      {#if hint}<span class={hintCls}>{hint}</span>{/if}
+      {#if hint}<HelpText label={caption} summary={hint.length <= 45 ? hint : ""} detail={hint.length > 45 ? hint : ""} />{/if}
     </span>
   </div>
 {/snippet}
@@ -516,7 +517,7 @@
           onChange(splitLines(e.currentTarget.value));
         }}
       ></textarea>
-      {#if hint}<span class={hintCls}>{hint}</span>{/if}
+      {#if hint}<HelpText label={caption} summary={hint.length <= 45 ? hint : ""} detail={hint.length > 45 ? hint : ""} />{/if}
     </span>
   </div>
 {/snippet}
@@ -612,7 +613,7 @@
     <Tabs tabs={TABS} active={tab} onSelect={(id) => (tab = id)} />
 
     {#if tab === "repo"}
-      <p class="copy mb-4 text-sm text-faint">Choose a repository, then check the detected details. Configure automatic issue pickup separately.</p>
+      <p class="copy mb-4 text-sm text-faint">Repository and agent.</p>
       <div class="space-y-2">
         {@render textRow(
           "Label",
@@ -651,9 +652,9 @@
               {#if pathInfo && pathInfo.path === d.path.trim() && !pathInfo.isRepo}
                 <span class="text-warn">not a git checkout — worktrees fork from this repository</span>
               {:else if pathInfo?.isRepo}
-                the label, id, repo and default branch below came from this checkout
+                Detected from checkout.
               {:else}
-                the repository this project's worktrees fork from
+                Source checkout.
               {/if}
             </span>
           </span>
@@ -679,8 +680,8 @@
               onFocus={() => void inspect(d.path)} placeholder="main" />
             <span class={hintCls}>
               {branches.length
-                ? "choose a branch from the checkout, or enter a custom branch"
-                : "worktrees fork from this branch"}
+                ? "Choose a branch or Custom."
+                : "Base for new worktrees."}
             </span>
           </span>
         </div>
@@ -717,7 +718,7 @@
         </details>
       </div>
     {:else if tab === "worktree"}
-      <p class="copy mb-4 text-sm text-faint">Prepare each agent’s checkout and choose how to run the app locally. Leave inherited settings as they are unless this project needs something different.</p>
+      <p class="copy mb-4 text-sm text-faint">Checkout preparation and local testing.</p>
       <div class="space-y-2">
         <div class={rowCls}>
           <span class={labelCls}>Branch prefix</span>
@@ -824,7 +825,7 @@
           <span class={labelCls}>Concurrency cap</span>
           <span>
             <input type="number" min="0" class="{inputCls} num w-24" aria-label="Concurrency cap" bind:value={d.concurrencyCap} />
-            <span class={hintCls}>0 uses the [defaults] cap</span>
+            <span class={hintCls}>0 uses the default.</span>
           </span>
         </div>
         <h3 class="border-t border-edge pt-4 text-ink">Labels and repeat pickup</h3>
@@ -860,12 +861,10 @@
           "(none)",
           "onSentSetLabel",
         )}
-        <p class="copy pt-1 text-sm text-faint">
-          Label UUIDs are team-scoped — changing the team above clears the ones this project overrides.
-        </p>
+        <HelpText label="team labels" summary="Labels follow the team." detail="Changing the team clears this project’s label overrides. Inherited workspace labels stay unchanged." />
       </div>
     {:else if tab === "writeback"}
-      <p class="copy mb-4 text-sm text-faint">Choose which Linear states and comments Lola updates as work progresses. Leave a state empty to keep it unchanged.</p>
+      <p class="copy mb-4 text-sm text-faint">Optional updates. Empty leaves states unchanged.</p>
       <div class="space-y-2">
         {@render idRow("On-spawn state", d.onSpawnStateId, meta?.states ?? null, (v) => { d.onSpawnStateId = v; }, "(none)")}
         {@render boolRow("Comment on spawn", d.commentOnSpawn, () => { d.commentOnSpawn = !d.commentOnSpawn; })}
