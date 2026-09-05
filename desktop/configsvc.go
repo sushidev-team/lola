@@ -41,6 +41,17 @@ var storeLinearKey = secrets.StoreLinearAPIKey
 // the only secret-adjacent values any DTO carries. Nothing ever reads a secret
 // back out to the frontend — LinearKeyStatus reports where the key lives and
 // whether it resolves, never its value.
+//
+// ConnectCode is the ONE deliberate exception, and it is written down rather
+// than left as an inconsistency. It returns the phone listener's bearer key
+// because the key IS the thing being handed over — a QR nobody can read is not
+// a hand-off — and the exception costs nothing in privilege: the answer comes
+// over ~/.lola/lola.sock, which is srw------- inside a 0700 directory, and
+// anything that can open it already reaches cmd=answer, which types into a
+// running coding agent. What the exception does cost is EXPOSURE, so the rule
+// it replaces the write-only one with is narrower rather than absent: the value
+// is fetched only when a human asks for it, it is never logged or persisted on
+// this side, and the surface that renders it has a hide.
 type ConfigService struct{}
 
 func loadConfig() (*config.Config, string, error) {
@@ -122,6 +133,19 @@ type SettingsDTO struct {
 	StatusAgentMinConfidence     float64 `json:"statusAgentMinConfidence"`
 	StatusAgentIncludeTranscript bool    `json:"statusAgentIncludeTranscript"`
 
+	// [remote] — the phone listener (mobile/PLAN.md milestone 1). Three keys and
+	// no inheritance, because a listener is a property of the MACHINE rather than
+	// of a project. RemoteBind is either one of config.RemoteBinds or an IP
+	// literal, so the form must be able to round-trip a literal it cannot offer
+	// in a picker; coercing one back to a keyword on save would silently rebind
+	// the daemon to a different set of interfaces.
+	RemoteEnabled     bool   `json:"remoteEnabled"`
+	RemoteBind        string `json:"remoteBind"`
+	RemotePort        int    `json:"remotePort"`
+	RemoteInsecureLAN bool   `json:"remoteInsecureLan"`
+	RemoteAdvertise   bool   `json:"remoteAdvertise"`
+	RemoteDevForward  bool   `json:"remoteDevForward"`
+
 	// ReviewProviders is the pluggable review catalog ([[review.provider]]),
 	// resolved to the EFFECTIVE set (the real catalog, or the entries synthesized
 	// from the legacy [review]/[coderabbit] tables). ReviewLegacy reports that the
@@ -169,6 +193,17 @@ type ReviewProviderDTO struct {
 // own keys, not a Linear concept — there is nothing to fetch from the API.
 func (s *ConfigService) PrioritySortKeys() []string {
 	return append([]string(nil), config.PrioritySortKeys...)
+}
+
+// RemoteBinds returns the [remote].bind keywords the daemon accepts, so the
+// settings form offers them instead of taking free text. Same posture as
+// PrioritySortKeys: MEMBERSHIP is the Go side's call, since config.Validate
+// rejects anything that is neither one of these nor an IP literal.
+//
+// The literal case is why the form cannot be a picker alone — see the comment
+// on SettingsDTO.RemoteBind.
+func (s *ConfigService) RemoteBinds() []string {
+	return append([]string(nil), config.RemoteBinds...)
 }
 
 // ReviewProviderKinds / TransportTokens expose the selectable catalog values so
@@ -343,6 +378,16 @@ func (s *ConfigService) GetSettings() (SettingsDTO, error) {
 		StatusAgentMinConfidence:     cfg.StatusAgent.MinConfidence,
 		StatusAgentIncludeTranscript: cfg.StatusAgent.IncludeTranscript,
 
+		// The EFFECTIVE values, not the raw ones: BindMode/ListenPort resolve ""
+		// and 0 to their defaults, so the form shows what the daemon would
+		// actually do rather than a blank that reads as "nothing".
+		RemoteEnabled:     cfg.Remote.Enabled,
+		RemoteBind:        cfg.Remote.BindMode(),
+		RemotePort:        cfg.Remote.ListenPort(),
+		RemoteInsecureLAN: cfg.Remote.InsecureLAN,
+		RemoteAdvertise:   cfg.Remote.Advertise,
+		RemoteDevForward:  cfg.Remote.DevForward,
+
 		ReviewProviders: reviewProvidersDTO(cfg),
 		ReviewLegacy:    legacyReviewOnly(cfg),
 
@@ -389,6 +434,12 @@ func (s *ConfigService) SaveSettings(dto SettingsDTO) error {
 	cfg.StatusAgent.MaxPerCycle = dto.StatusAgentMaxPerCycle
 	cfg.StatusAgent.MinConfidence = dto.StatusAgentMinConfidence
 	cfg.StatusAgent.IncludeTranscript = dto.StatusAgentIncludeTranscript
+	cfg.Remote.Enabled = dto.RemoteEnabled
+	cfg.Remote.Bind = dto.RemoteBind
+	cfg.Remote.Port = dto.RemotePort
+	cfg.Remote.InsecureLAN = dto.RemoteInsecureLAN
+	cfg.Remote.Advertise = dto.RemoteAdvertise
+	cfg.Remote.DevForward = dto.RemoteDevForward
 	// Review catalog. While the legacy tables are still present (read-only in the
 	// UI), the provider array is not written back — editing it alongside the
 	// legacy tables would produce a mixed config, a hard validation error;
@@ -883,6 +934,89 @@ func (s *ConfigService) LinearKeyStatus() LinearKeyStatusDTO {
 	}
 	out.Resolvable = true
 	return out
+}
+
+// ConnectCodeDTO is everything a phone needs to reach this machine's daemon:
+// the scannable token plus the same values as text.
+//
+// Both shapes, deliberately. Code is what the Remote tab renders as a QR; the
+// loose fields are what a human reads out when the camera will not focus, the
+// camera permission was denied, or the client is a Simulator with no camera at
+// all. A QR must be a convenience and never the only way in.
+//
+// Every field here is a secret while Key is set, and Code most of all — it
+// CONTAINS the key. Nothing on this side writes any of it to disk or to a log,
+// and the frontend keeps it behind an explicit reveal.
+type ConnectCodeDTO struct {
+	Code     string   `json:"code"`
+	Hosts    []string `json:"hosts"`
+	Port     int      `json:"port"`
+	Pin      string   `json:"pin"`
+	Key      string   `json:"key"`
+	Insecure bool     `json:"insecure"`
+
+	// Problem names why there is no code in one human sentence — the listener
+	// is off, or nothing bound — so the tab renders a reason in place of the
+	// code. It is a STATE rather than an error precisely because it is
+	// actionable; a build with no bearer-key path at all IS an error, and
+	// arrives as one.
+	Problem string `json:"problem"`
+}
+
+// ConnectCode asks the daemon for the phone listener's connect details
+// (cmd=pairBegin) so the Remote tab can hand them to a phone.
+//
+// It asks the DAEMON rather than reading ~/.lola/device.crt and
+// ~/.lola/remote-dev-key, and that is the whole point of the method existing.
+// Recomputing the pin here would mean calling remote.LoadOrCreateDeviceKey,
+// whose only exported form CREATES an identity when none is there — this
+// process would mint the daemon's TLS identity as a side effect of drawing a
+// settings tab, from the wrong process, even with [remote] disabled. And it
+// would answer about a FILE: the key file is the running daemon's key only when
+// the script that wrote it also started the daemon, so a code rendered from it
+// after a `lola run` from another shell produces a scan the daemon answers with
+// "authenticate first" — which, from the phone, is indistinguishable from a bad
+// camera read. The daemon holds the live value of both facts; only it can
+// answer.
+//
+// The timeout is the short one: pairBegin reads in-memory state and execs
+// nothing.
+func (s *ConfigService) ConnectCode() (ConnectCodeDTO, error) {
+	var data protocol.PairBeginData
+	if err := call(protocol.Request{Cmd: "pairBegin"}, 5*time.Second, &data); err != nil {
+		return ConnectCodeDTO{}, err
+	}
+	return ConnectCodeDTO{
+		Code:     data.Code,
+		Hosts:    data.Hosts,
+		Port:     data.Port,
+		Pin:      data.Pin,
+		Key:      data.Key,
+		Insecure: data.Insecure,
+		Problem:  data.Problem,
+	}, nil
+}
+
+// RegenerateRemoteKey rolls the phone listener's shared bearer key
+// (cmd=regenerateRemoteKey) and returns once the listener has been rebuilt
+// around the new one.
+//
+// It is milestone 1's ONLY revocation, and it is blunt: every paired phone
+// loses access at once, because every paired phone holds the same key. The UI
+// says so before it asks, rather than offering it as routine maintenance —
+// milestone 2's per-device revocation is the precise version, and this command
+// disappears with the rest of the insecure path.
+//
+// Like ConnectCode this asks the daemon rather than writing the file here.
+// Deleting a key file from this process would roll the value on disk and leave
+// the RUNNING listener authenticating with the old one, so the app would report
+// a revocation that had not happened — the single worst outcome for a control
+// whose entire purpose is to stop a key working.
+//
+// The timeout is longer than ConnectCode's because the daemon tears the
+// listener down and binds a new one, which closes live connections.
+func (s *ConfigService) RegenerateRemoteKey() error {
+	return call(protocol.Request{Cmd: "regenerateRemoteKey"}, 15*time.Second, nil)
 }
 
 // SetLinearKey stores a new Linear key and points config.toml at it. The key

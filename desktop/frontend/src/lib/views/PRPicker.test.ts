@@ -13,7 +13,7 @@ const prs = [
     checks: "pass",
     review: "APPROVED",
     url: "https://example.test/pr/12",
-    status: "pr_open",
+    status: "approved",
     alreadyOpen: false,
   },
   {

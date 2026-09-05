@@ -39,6 +39,15 @@ const (
 	KindManual Kind = "manual"
 )
 
+// DevForward is one dev server republished on the local network: the address a
+// phone opens, and the loopback address it publishes. Both, because the
+// forward's port is kernel-allocated and identifies nothing — 8000 is the app
+// and 5175 is the bundler, and only the original says which is which.
+type DevForward struct {
+	URL  string
+	From string
+}
+
 // Session is one observed agent session, regardless of who spawned it.
 type Session struct {
 	ID      string `json:"id"`
@@ -127,6 +136,28 @@ type Session struct {
 	// hook — rendered agent output: display only, never executed, never fed
 	// back to any agent.
 	LastNotification string `json:"last_notification,omitempty"`
+
+	// Nudged records that the agent's own "waiting for your input"
+	// notification fired while the session sat idle. It is a DISPLAY-ONLY
+	// breadcrumb: the axis stays AgentIdle (see internal/daemon/server.go),
+	// because that nudge means "the turn ended and nobody looked", not "the
+	// agent asked a question".
+	//
+	// It exists because that one signal minted 90% of the old needs_input
+	// population — 412 of 458 transitions in the measured history, on a 60s
+	// period, which is also where about half of all status churn came from
+	// (see the numbers at the top of internal/state/display.go). Keeping the
+	// breadcrumb without moving the axis is what lets a UI say "idle, and it
+	// has been asking for you" while the control loop correctly reads idle.
+	// Cleared by SetAgentState the moment the axis leaves AgentIdle.
+	// DevForwards are the local-network addresses this session's dev servers are
+	// currently published at (internal/daemon/devforwardwire.go). DERIVED, like
+	// DevActive and DevURLs: written by the sync pass from live listeners, and
+	// meaningless across a restart because the listeners do not survive one.
+	DevForwards []DevForward `json:"-"`
+
+	Nudged bool `json:"nudged,omitempty"`
+
 	// TranscriptPath is the agent's own transcript file as reported by its
 	// hooks (Claude Code hands the JSONL path on every event).
 	TranscriptPath string `json:"transcript_path,omitempty"`
@@ -239,6 +270,16 @@ type Session struct {
 	// off to the notifier/human. Stays true until checks pass and reset it, so
 	// an escalated session is never re-prompted in a loop.
 	Escalated bool `json:"escalated,omitempty"`
+
+	// CleanupFailures counts CONSECUTIVE failed merged-cleanup attempts (the
+	// react path's runtime.Kill after a PR merges; see
+	// internal/daemon/reactions.go, which keeps the store entry so the next
+	// cycle retries). The retry is otherwise unbounded and silent: a worktree
+	// that can never be removed — a dirty checkout, a wedged tmux, a missing
+	// binary — is re-attempted every 30s forever, logging the same line and
+	// telling nobody. The counter is what lets the retry back off and become
+	// visible instead. Reset on a successful cleanup.
+	CleanupFailures int `json:"cleanup_failures,omitempty"`
 
 	// AtPrompt is the send-keys SAFETY GATE: true only when the agent is idle
 	// at its input prompt (set by the Claude Code Stop hook), cleared the
@@ -413,8 +454,8 @@ func (s *Session) migrateReviewState() {
 // asserts work thereby restarts the anti-false-working clock, which is what
 // structurally fixes the old revive/answer bug (they set "working" without
 // activity evidence and were downgraded 45s later). Leaving waiting_input
-// clears InputReason; a stopped turn clears CurrentTool. Returns whether the
-// axis changed.
+// clears InputReason; a stopped turn clears CurrentTool; leaving idle clears
+// the Nudged breadcrumb. Returns whether the axis changed.
 func (s *Session) SetAgentState(a state.AgentState, src state.ActivitySource, now time.Time) bool {
 	changed := s.AgentState != a
 	if changed {
@@ -433,6 +474,15 @@ func (s *Session) SetAgentState(a state.AgentState, src state.ActivitySource, no
 		}
 		if a != state.AgentWorking && a != state.AgentStarting {
 			s.CurrentTool = ""
+		}
+		if a != state.AgentIdle {
+			// Nudged describes an IDLE session the agent has been nagging
+			// about ("waiting for your input" with nobody looking). The
+			// moment the axis moves — the human answered, the agent resumed,
+			// the pane died — the breadcrumb is history, exactly as
+			// LastNotification is above. Leaving it set would make a working
+			// session keep claiming it is being waited on.
+			s.Nudged = false
 		}
 	}
 	if a == state.AgentWorking || a == state.AgentStarting {
@@ -513,9 +563,9 @@ func (s *Session) migrateAxes() {
 	s.StatusSince = s.LastSeen
 	s.AtPromptVerified = true
 	// Deliberately NOT recomputing Status here: a legacy record whose stored
-	// status disagrees with the rollup (possible only for the unreachable
-	// "no_pr"/"pr_open" words) keeps what it displayed; the first live cycle
-	// re-derives everything.
+	// status disagrees with the rollup (possible only for "no_pr", the P1-era
+	// word for a dead pane with no PR — see FromLegacy) keeps what it
+	// displayed; the first live cycle re-derives everything.
 }
 
 // EffectiveKind resolves the session's Kind, failing CLOSED so an unstamped,

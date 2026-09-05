@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/sushidev-team/lola/internal/config"
+	"github.com/sushidev-team/lola/internal/protocol"
 )
 
 // writeTestConfig isolates $LOLA_HOME to a temp dir and seeds a minimal VALID
@@ -783,5 +785,115 @@ func TestSetProjectLayoutRefusesStaleLayouts(t *testing.T) {
 				t.Fatalf("config was mutated: %+v", cfg.Projects)
 			}
 		})
+	}
+}
+
+// --- ConnectCode -----------------------------------------------------------
+
+// TestConnectCodeFields. The whole reason this is a
+// socket round trip rather than a read of ~/.lola is that only the daemon knows
+// what its LIVE listener bound and which key it authenticates with; a DTO that
+// dropped a field would put the operator back to copying it by hand.
+func TestConnectCodeFields(t *testing.T) {
+	want := protocol.PairBeginData{
+		Code:     "lola-insecure1.abc",
+		Hosts:    []string{"127.0.0.1", "::1"},
+		Port:     7717,
+		Pin:      "C4td4uyeJMSyxfoAsB3i98Kd6JhkpOTf3Oxipiq+sxI=",
+		Key:      "0123456789abcdef0123456789abcdef",
+		Insecure: true,
+	}
+	f := startFakeDaemon(t, func(req protocol.Request) protocol.Response {
+		if req.Cmd != "pairBegin" {
+			t.Errorf("cmd = %q, want pairBegin", req.Cmd)
+		}
+		raw, err := json.Marshal(want)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		return protocol.Response{OK: true, Data: raw}
+	})
+
+	got, err := (&ConfigService{}).ConnectCode()
+	if err != nil {
+		t.Fatalf("ConnectCode: %v", err)
+	}
+	if got.Code != want.Code || got.Port != want.Port || got.Pin != want.Pin || got.Key != want.Key {
+		t.Fatalf("ConnectCode dropped a field: %+v", got)
+	}
+	if !got.Insecure {
+		t.Error("the insecure flag must survive: it is what the UI says out loud")
+	}
+	if strings.Join(got.Hosts, ",") != "127.0.0.1,::1" {
+		t.Fatalf("hosts = %v", got.Hosts)
+	}
+	if reqs := f.requests(); len(reqs) != 1 {
+		t.Fatalf("expected exactly one request, got %d", len(reqs))
+	}
+}
+
+// TestConnectCodeSendsNoArgs: pairBegin describes the running listener and
+// takes nothing. A field sent here would be one a future handler could read.
+func TestConnectCodeSendsNoArgs(t *testing.T) {
+	f := startFakeDaemon(t, func(protocol.Request) protocol.Response {
+		raw, _ := json.Marshal(protocol.PairBeginData{Problem: "off"})
+		return protocol.Response{OK: true, Data: raw}
+	})
+	if _, err := (&ConfigService{}).ConnectCode(); err != nil {
+		t.Fatalf("ConnectCode: %v", err)
+	}
+	req := f.requests()[0]
+	if len(req.Args) != 0 || req.Session != "" || req.Project != "" || req.Text != "" {
+		t.Fatalf("pairBegin carried arguments: %+v", req)
+	}
+}
+
+// TestConnectCodeProblemIsAState rather than as an error, because "the
+// listener is off" is something the operator fixes on the tab they are looking
+// at.
+func TestConnectCodeProblemIsAState(t *testing.T) {
+	startFakeDaemon(t, func(protocol.Request) protocol.Response {
+		raw, _ := json.Marshal(protocol.PairBeginData{
+			Problem: "The phone listener is off. Enable [remote] and reload before connecting a phone.",
+		})
+		return protocol.Response{OK: true, Data: raw}
+	})
+	got, err := (&ConfigService{}).ConnectCode()
+	if err != nil {
+		t.Fatalf("a problem must not be an error: %v", err)
+	}
+	if got.Problem == "" {
+		t.Fatal("the problem did not survive")
+	}
+	if got.Code != "" || got.Key != "" {
+		t.Fatal("a problem must carry neither a code nor a key")
+	}
+}
+
+// TestConnectCodeRefusalReaches. A release daemon answers pairBegin
+// with an error naming the build tag, and the UI must show that rather than an
+// empty panel.
+func TestConnectCodeRefusalReaches(t *testing.T) {
+	startFakeDaemon(t, func(protocol.Request) protocol.Response {
+		return protocol.Response{OK: false, Error: "this binary cannot hand out a connect code: ... -tags lola_insecure"}
+	})
+	got, err := (&ConfigService{}).ConnectCode()
+	if err == nil {
+		t.Fatal("expected the daemon's refusal")
+	}
+	if !strings.Contains(err.Error(), "lola_insecure") {
+		t.Errorf("the refusal should reach the caller verbatim, got %q", err)
+	}
+	if got.Code != "" {
+		t.Error("a refusal carries no code")
+	}
+}
+
+// TestConnectCodeNeedsADaemon, with the app's own "daemon down"
+// error rather than a raw dial failure.
+func TestConnectCodeNeedsADaemon(t *testing.T) {
+	t.Setenv("LOLA_HOME", t.TempDir()) // no socket in it
+	if _, err := (&ConfigService{}).ConnectCode(); err == nil {
+		t.Fatal("expected a failure with no daemon")
 	}
 }

@@ -19,6 +19,7 @@ export {
 export type {
     CLIInfoDTO,
     CLIInstallDTO,
+    ConnectCodeDTO,
     DoctorReportDTO,
     DoctorResultDTO,
     GroupDTO,

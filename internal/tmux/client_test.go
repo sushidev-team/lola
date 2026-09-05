@@ -1035,3 +1035,181 @@ exit 0`
 		t.Fatal("a kill-session failure on a live session must be an error")
 	}
 }
+
+// scriptedTmux installs a fake tmux whose exit code depends on its argv: it
+// fails whenever every string in failOn appears on the command line, and
+// succeeds otherwise. fakeTmux cannot express this, and the pin path needs it —
+// its whole question is what happens when the SECOND of two commands fails.
+func scriptedTmux(t *testing.T, failOn []string) (bin, argsLog string) {
+	t.Helper()
+	dir := t.TempDir()
+	bin = filepath.Join(dir, "tmux")
+	argsLog = filepath.Join(dir, "args.log")
+	var b strings.Builder
+	b.WriteString("#!/bin/sh\n")
+	b.WriteString("echo \"$@\" >> " + argsLog + "\n")
+	if len(failOn) > 0 {
+		b.WriteString("all=\"$*\"\n")
+		b.WriteString("fail=1\n")
+		for _, needle := range failOn {
+			b.WriteString("case \"$all\" in *" + needle + "*) ;; *) fail=0 ;; esac\n")
+		}
+		b.WriteString("[ \"$fail\" = 1 ] && exit 1\n")
+	}
+	b.WriteString("exit 0\n")
+	if err := os.WriteFile(bin, []byte(b.String()), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return bin, argsLog
+}
+
+// TestSetWindowSizePinsWithTwoCommands pins the option and then resizes. The
+// option alone changes nothing on screen, so both halves have to be sent.
+func TestSetWindowSizePin(t *testing.T) {
+	bin, argsLog := scriptedTmux(t, nil)
+	c := &Client{Bin: bin}
+	if err := c.SetWindowSize(context.Background(), "lola-fe-42", 50, 20); err != nil {
+		t.Fatalf("SetWindowSize: %v", err)
+	}
+	got := loggedArgs(t, argsLog)
+	want := "-L lola set-option -w -t =lola-fe-42: window-size manual\n" +
+		"-L lola resize-window -t =lola-fe-42: -x 50 -y 20"
+	if got != want {
+		t.Fatalf("pin sent:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// TestSetWindowSizeRelease pins BOTH commands and their ORDER. Unsetting
+// window-size resizes nothing (tmux leaves the window at whatever it was last
+// told), and `resize-window -A` re-sets window-size to manual — so recomputing
+// second would leave the window pinned again, ignoring every client that
+// attaches afterwards.
+func TestSetWindowSizeRelease(t *testing.T) {
+	bin, argsLog := scriptedTmux(t, nil)
+	c := &Client{Bin: bin}
+	if err := c.SetWindowSize(context.Background(), "lola-fe-42", 0, 0); err != nil {
+		t.Fatalf("SetWindowSize: %v", err)
+	}
+	got := loggedArgs(t, argsLog)
+	want := "-L lola resize-window -t =lola-fe-42: -A\n" +
+		"-L lola set-option -w -t =lola-fe-42: -u window-size"
+	if got != want {
+		t.Fatalf("release sent:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// TestSetWindowSizeFailedPinUndoesItself is the guarantee the phone's release
+// lifecycle rests on: a pin whose resize fails must leave NOTHING pinned, so a
+// refusal the daemon answered means the window is untouched.
+//
+// Without the undo, `window-size manual` is left set on a window nobody is
+// holding — frozen at its current size, no longer following its attached
+// clients — and the phone, having been told the pin failed, would never release
+// it.
+func TestSetWindowSizeFailedPinUndoesItself(t *testing.T) {
+	// Fail only the pinning resize (the one carrying -x), never the undo's -A.
+	bin, argsLog := scriptedTmux(t, []string{"resize-window", "-x"})
+	c := &Client{Bin: bin}
+	if err := c.SetWindowSize(context.Background(), "lola-fe-42", 50, 20); err == nil {
+		t.Fatal("a failed resize must still be reported as an error")
+	}
+	got := loggedArgs(t, argsLog)
+	want := "-L lola set-option -w -t =lola-fe-42: window-size manual\n" +
+		"-L lola resize-window -t =lola-fe-42: -x 50 -y 20\n" +
+		"-L lola resize-window -t =lola-fe-42: -A\n" +
+		"-L lola set-option -w -t =lola-fe-42: -u window-size"
+	if got != want {
+		t.Fatalf("failed pin sent:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// TestSetWindowSizeAgainstRealTmux drives an ACTUAL tmux server, because the
+// argv tests above cannot see the bug this feature actually had.
+//
+// `window-size` is a window option and `resize-window` takes a target-WINDOW,
+// where "=name" means an exact WINDOW-name match — and windows are named after
+// the command they run. So every call answered `no such window: =<session>`,
+// the pin never resized anything on any machine, and three tests asserting the
+// argv passed the whole time. Only tmux itself knows its target grammar.
+//
+// Isolated and cheap: its own -L socket, torn down at the end, skipped where
+// tmux is not installed. Nothing here touches lola's server or the user's.
+func TestSetWindowSizeAgainstRealTmux(t *testing.T) {
+	bin, err := exec.LookPath("tmux")
+	if err != nil {
+		t.Skip("tmux is not installed")
+	}
+	socket := fmt.Sprintf("lolatest-%d-%d", os.Getpid(), time.Now().UnixNano())
+	c := &Client{Bin: bin, SocketName: socket, Dir: t.TempDir()}
+	ctx := context.Background()
+	t.Cleanup(func() {
+		_, _, _ = c.run(context.Background(), "kill-server")
+	})
+
+	const name = "sizetest"
+	if _, _, err := c.run(ctx, "new-session", "-d", "-s", name, "-x", "120", "-y", "40", "sh"); err != nil {
+		t.Skipf("this environment cannot start a tmux server: %v", err)
+	}
+
+	size := func() string {
+		t.Helper()
+		out, _, err := c.run(ctx, "list-windows", "-t", "="+name+":",
+			"-F", "#{window_width}x#{window_height}")
+		if err != nil {
+			t.Fatalf("list-windows: %v", err)
+		}
+		return strings.TrimSpace(out)
+	}
+	if got := size(); got != "120x40" {
+		t.Fatalf("the fixture window is %s, want 120x40", got)
+	}
+
+	if err := c.SetWindowSize(ctx, name, 50, 20); err != nil {
+		t.Fatalf("pin: %v", err)
+	}
+	if got := size(); got != "50x20" {
+		t.Fatalf("after the pin the window is %s, want 50x20", got)
+	}
+
+	if err := c.SetWindowSize(ctx, name, 0, 0); err != nil {
+		t.Fatalf("release: %v", err)
+	}
+	// What it releases TO is tmux's business — with no client attached it picks
+	// its own default — so the assertion is that the pin is gone, which is the
+	// option rather than the number.
+	opt, _, err := c.run(ctx, "show-options", "-w", "-t", "="+name+":", "window-size")
+	if err != nil {
+		t.Fatalf("show-options: %v", err)
+	}
+	if strings.Contains(opt, "manual") {
+		t.Fatalf("window-size is still pinned after a release: %q", opt)
+	}
+}
+
+// A size, when the caller has one: the phone's shell tabs, so the window is
+// born at the phone's capacity instead of tmux's 157x37 and then reflowed.
+func TestNewSessionSizedPassesTheSize(t *testing.T) {
+	bin, argsLog := scriptedTmux(t, nil)
+	c := &Client{Bin: bin}
+	if err := c.NewSessionSized(context.Background(), "s", "/tmp", "sh -l", 50, 20); err != nil {
+		t.Fatalf("NewSessionSized: %v", err)
+	}
+	if got := loggedArgs(t, argsLog); !strings.Contains(got, "-x 50 -y 20") {
+		t.Fatalf("size not sent:\n%s", got)
+	}
+}
+
+// Zero means tmux's own default, and NewSession is exactly that case — the
+// agent panes, dev tabs and review panes must keep the size they have always
+// had.
+func TestNewSessionSendsNoSizeByDefault(t *testing.T) {
+	bin, argsLog := scriptedTmux(t, nil)
+	c := &Client{Bin: bin}
+	if err := c.NewSession(context.Background(), "s", "/tmp", "sh -l"); err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	got := loggedArgs(t, argsLog)
+	if strings.Contains(got, "-x ") || strings.Contains(got, "-y ") {
+		t.Fatalf("an unsized session carried a size:\n%s", got)
+	}
+}

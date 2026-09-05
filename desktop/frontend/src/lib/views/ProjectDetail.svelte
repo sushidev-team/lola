@@ -220,7 +220,14 @@
                 <span class="shrink-0 font-mono text-sm text-faint">{s.issue || "—"}</span>
                 <span class="min-w-0 flex-1 truncate text-ink">{s.title || s.branch || "(untitled)"}</span>
                 <LivePulse agentState={s.agentState} />
-                <StatusPill status={s.status} />
+                <StatusPill
+                  agentState={s.agentState}
+                  inputReason={s.inputReason}
+                  delivery={s.delivery}
+                  status={s.status}
+                />
+                <!-- Plain, not a PrBadge with onOpen: this row IS a <button>,
+                     and a nested button is not parseable. -->
                 {#if s.prNumber > 0}<span class="num shrink-0 text-sm text-magenta">#{s.prNumber}</span>{/if}
               </button>
             {/each}

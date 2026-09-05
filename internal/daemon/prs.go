@@ -11,6 +11,7 @@ import (
 
 	"github.com/sushidev-team/lola/internal/protocol"
 	"github.com/sushidev-team/lola/internal/scm"
+	"github.com/sushidev-team/lola/internal/session"
 	"github.com/sushidev-team/lola/internal/state"
 )
 
@@ -88,7 +89,7 @@ func (d *Daemon) handlePrs(ctx context.Context, raw json.RawMessage) (protocol.P
 	// can grey those rows.
 	held := map[string]bool{}
 	for _, s := range d.sessions.Snapshot() {
-		if s.Source == "native" && s.Branch != "" && isLiveStatus(s.Status) {
+		if s.Source == "native" && s.Branch != "" && isLiveSession(s) {
 			held[s.Branch] = true
 		}
 	}
@@ -167,12 +168,24 @@ func (d *Daemon) cachedOpenPRs(ctx context.Context, repo string, refresh bool, f
 	return e.prs, e.fetchedAt, nil
 }
 
-// isLiveStatus reports whether a session status means the branch is actively
-// held (so the PR picker greys it). Terminal states free the branch.
-func isLiveStatus(status string) bool {
-	switch status {
-	case "dead", "session_ended", "merged", "closed", "":
-		return false
-	}
-	return true
+// isLiveSession reports whether a session still actively HOLDS its branch (and
+// its Linear issue — tickets.go asks the same question), so the PR / ticket
+// pickers can grey that row. Terminal states free the claim.
+//
+// It is state.Present — the reconcile shield's classification, which already
+// answers "is an agent still running and was its PR not rejected" — plus the
+// merged exclusion the pickers need on top: with [reactions.merged] auto off,
+// a merged session's record lingers, and its branch is emphatically not still
+// held. Reading the two AXES rather than the collapsed status is what makes it
+// honest in the case the pickers actually hit: Rollup ranks a waiting agent
+// above every PR state, so a session blocked on a human over a merged or
+// closed PR read as live and greyed a row anybody was free to take.
+//
+// EnsureAxes covers a pre-axis snapshot record. It seeds an unstamped record
+// to idle/none, i.e. LIVE — the old string form answered false for an empty
+// status, but both call sites already require a branch or an issue UUID, which
+// an unstamped record does not have.
+func isLiveSession(s session.Session) bool {
+	s.EnsureAxes()
+	return state.Present(s.AgentState, s.Delivery) && s.Delivery != state.DeliveryMerged
 }

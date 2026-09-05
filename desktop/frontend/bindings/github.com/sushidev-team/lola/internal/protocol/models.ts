@@ -30,6 +30,19 @@ export interface CodeRabbitData {
  * integer; see internal/portclash) — Proc and Dir come from lsof, Command from
  * config.
  */
+/**
+ * DevForward is one dev server republished on the local network: where a phone
+ * goes, and which loopback address it is. BOTH, because the forward's port is
+ * kernel-allocated and identifies nothing — 8000 is the app and 5175 is the
+ * bundler, and only the original says which is which.
+ */
+export interface DevForward {
+    /** The address to open, on the network the daemon is on. */
+    "url": string;
+    /** The loopback address it publishes ("127.0.0.1:8000"). */
+    "from": string;
+}
+
 export interface DevClashInfo {
     "tab": string;
     "command"?: string;
@@ -292,7 +305,7 @@ export interface PrRow {
     "url": string;
 
     /**
-     * scm.DeriveStatus vocabulary
+     * state.DeliveryState vocabulary (daemon.openPRStatus)
      */
     "status": string;
 
@@ -557,7 +570,7 @@ export interface SessionInfo {
     "lastActivityAt"?: string;
 
     /**
-     * hook|pane|tmux_activity
+     * hook|pane|tmux_activity|transcript
      */
     "activitySource"?: string;
 
@@ -633,10 +646,16 @@ export interface SessionInfo {
      * DevClash is set while a dev tab of this session is dead BECAUSE another
      * process holds the port it wanted — the one dev failure lola can name and
      * offer to undo (cmd=devFreePort). nil whenever the tabs are healthy.
+     * DevForwards are those same servers republished on the local network, so a
+     * phone can open them: the loopback addresses above are unreachable from
+     * anything but this machine. Present only while the session is ACTIVE and
+     * only when [remote].dev_forward is set, and each one ends with the tabs it
+     * belongs to. Empty is the normal state.
      */
     "devActive"?: boolean;
     "devCommands"?: string[] | null;
     "devUrls"?: string[] | null;
+    "devForwards"?: DevForward[] | null;
     "devClash"?: DevClashInfo | null;
 
     /**
@@ -688,6 +707,22 @@ export interface StatusData {
     "runtimeErr"?: string;
     "linearOk": boolean;
     "polls": PollStatus[] | null;
+
+    /**
+     * Host is this machine's name, for a client that has to say WHICH daemon it
+     * is talking about. A phone reaches the same Mac on a different address at
+     * home and at the office — that is the point of discovery — so an address
+     * is a poor name for it and a stale one is worse: "connecting to
+     * 192.168.10.160" describes a network, not the machine somebody left work
+     * running on.
+     * 
+     * It travels on an AUTHENTICATED answer, never in the mDNS advertisement,
+     * and the difference is deliberate. A hostname in a TXT record is a stable
+     * cross-network correlator broadcast to every peer (internal/mdns says so
+     * at length); telling an already-paired device the name of the machine it
+     * is holding a session list from discloses nothing it does not have.
+     */
+    "host"?: string;
 }
 
 /**

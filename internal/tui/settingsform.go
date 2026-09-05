@@ -76,6 +76,7 @@ const (
 	stBrain
 	stStatusAgent
 	stCodeRabbit
+	stRemote
 	stAppearance
 )
 
@@ -90,6 +91,7 @@ var settingsTabs = []struct {
 	{stBrain, "Brain"},
 	{stStatusAgent, "Interpreter"},
 	{stCodeRabbit, "Review"},
+	{stRemote, "Remote"},
 	{stAppearance, "Appearance"},
 }
 
@@ -287,6 +289,36 @@ func newSettingsForm(cfgPath string, cfg *config.Config) *settingsForm {
 			{key: "sa_maxcycle", tab: stStatusAgent, label: "Max per cycle", help: "Interpretations queued per 30s observer cycle. Must be >= 0.", kind: sfInt, text: itoa(sa.MaxPerCycle)},
 			{key: "sa_confidence", tab: stStatusAgent, label: "Min confidence", help: "0-1; judgements below this are discarded and the deterministic status stands.", kind: sfText, text: formatFloat(sa.MinConfidence)},
 			{key: "sa_transcript", tab: stStatusAgent, label: "Include transcript", help: "Also feed the agent's own transcript tail (more signal, more tokens).", kind: sfBool, b: sa.IncludeTranscript},
+
+			// [remote] — the phone listener. The desktop app grew this tab first;
+			// it lives here too because CLAUDE.md's rule is that a setting is
+			// reachable from BOTH surfaces, and because a machine running only the
+			// TUI is exactly the machine whose owner cannot reach the app's version.
+			{key: "remote_enabled", tab: stRemote, section: "[remote]", sectionNote: "TLS listener for the Lola mobile app", label: "Enabled", help: "Off by default, and the default is chosen for what enabling it GRANTS: a paired phone can read every session, watch any pane and type into a running agent.", kind: sfBool, b: cfg.Remote.Enabled},
+			// sfText, NOT sfEnum, and that is the whole point. bind accepts one of
+			// config.RemoteBinds OR an IP literal, and an enum can only cycle the
+			// keywords — so a configured literal would be silently rewritten to a
+			// keyword by the next save of any unrelated tab, rebinding the daemon
+			// to a different set of interfaces. Free text round-trips both, and
+			// config.Validate is what rejects a value neither form allows.
+			{key: "remote_bind", tab: stRemote, label: "Bind", help: "off | localhost | lan | all, or an IP literal (a hostname is rejected — resolving one would turn a config read into a network call). A lola_insecure build forces localhost whatever this says.", kind: sfText, text: cfg.Remote.BindMode()},
+			{key: "remote_port", tab: stRemote, label: "Port", help: "TCP port for the listener. 0 means " + itoa(config.DefaultRemotePort) + ".", kind: sfInt, text: itoa(cfg.Remote.ListenPort())},
+			// The bind rail's one hole. Two keys have to agree — this AND a
+			// non-loopback bind — so a config that merely says "lan" still
+			// binds loopback.
+			{key: "remote_insecure_lan", tab: stRemote, label: "Allow LAN bind", help: "Milestone 1 forces the bind to loopback, which a physical phone cannot reach. Turning this on honours the bind above and puts the shared bearer key on your network in the clear. A Simulator does not need it.", kind: sfBool, b: cfg.Remote.InsecureLAN},
+			// A DISCLOSURE rather than a convenience, which is why it is off by
+			// default and says so: the service announces what this machine is to
+			// every peer on the network. What it buys is RECONNECTION — the key
+			// and the pin already work anywhere, and only the address a phone
+			// stored at pairing time goes stale.
+			{key: "remote_advertise", tab: stRemote, label: "Advertise on the network", help: "Publish this listener with mDNS so a paired phone finds this Mac on a network whose addresses it has never seen (home, office, hotspot) without re-pairing. It announces that this machine runs coding agents and accepts remote control, to every peer on the network; the record itself carries a version and nothing else. Needs dns-sd, which every Mac ships.", kind: sfBool, b: cfg.Remote.Advertise},
+			// The dev servers of the ACTIVE session, republished. Off by default
+			// for the same reason as the two above, and worth having because the
+			// alternative — `--host 0.0.0.0` in every project — is permanent,
+			// well-known and unconditional where this is temporary, random and
+			// scoped to one address.
+			{key: "remote_dev_forward", tab: stRemote, label: "Publish dev servers", help: "Republish the ACTIVE session's dev servers (which bind 127.0.0.1 and are unreachable from a phone) on one private interface, on a random port, for as long as that session stays active. Anything on that network can reach them while it is up.", kind: sfBool, b: cfg.Remote.DevForward},
 
 			// [ui] — presentation only; no daemon behavior reads it. The TUI paints
 			// from this flavor (applyTheme) and so does the desktop app, so the
@@ -1475,6 +1507,10 @@ func (f *settingsForm) save() settingsFormEvent {
 	if err != nil {
 		return settingsFormNone
 	}
+	remotePort, err := f.parseInt("remote_port")
+	if err != nil {
+		return settingsFormNone
+	}
 	interval, perr := time.ParseDuration(strings.TrimSpace(f.field("poll_interval").text))
 	if perr != nil {
 		f.err = "poll interval: " + perr.Error()
@@ -1499,6 +1535,7 @@ func (f *settingsForm) save() settingsFormEvent {
 	oldUI := c.UI
 	oldP := c.ReviewProviders
 	oldSA := c.StatusAgent
+	oldRem := c.Remote
 	oldLin := c.Linear
 
 	// The Linear key, if one was typed. This writes the KEYCHAIN before the
@@ -1543,6 +1580,13 @@ func (f *settingsForm) save() settingsFormEvent {
 	c.StatusAgent.MinConfidence = saConfidence
 	c.StatusAgent.IncludeTranscript = f.field("sa_transcript").b
 
+	c.Remote.Enabled = f.field("remote_enabled").b
+	c.Remote.Bind = strings.TrimSpace(f.field("remote_bind").text)
+	c.Remote.Port = remotePort
+	c.Remote.InsecureLAN = f.field("remote_insecure_lan").b
+	c.Remote.Advertise = f.field("remote_advertise").b
+	c.Remote.DevForward = f.field("remote_dev_forward").b
+
 	c.UI.Theme = strings.TrimSpace(f.field("ui_theme").text)
 
 	// The review provider catalog replaces the two legacy tables. In catalog
@@ -1558,6 +1602,7 @@ func (f *settingsForm) save() settingsFormEvent {
 		c.UI = oldUI
 		c.ReviewProviders = oldP
 		c.StatusAgent = oldSA
+		c.Remote = oldRem
 		c.Linear = oldLin
 		c.ResolveInheritance() // re-resolve projects against the restored defaults
 	}

@@ -155,7 +155,11 @@ func (d *Daemon) escalationSummary(ctx context.Context, s session.Session) strin
 func (d *Daemon) gatherEscalationContext(ctx context.Context, s session.Session) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Coding-agent session %s (issue %s) has been handed off after automatic recovery failed.\n", s.ID, issueLabel(s))
-	fmt.Fprintf(&b, "Derived status: %s\n", s.Status)
+	// BOTH axes, not the rolled-up word. The rollup ranks a waiting agent above
+	// every PR state, so an escalated session that had stopped to ask something
+	// described itself to the summarizer as "needs_input" — hiding the red CI
+	// that is the entire reason this summary is being written.
+	fmt.Fprintf(&b, "Agent state: %s\nPR delivery state: %s\n", s.AgentState, s.Delivery)
 	if s.PR != nil {
 		fmt.Fprintf(&b, "PR #%d state=%s checks=%s review=%s mergeable=%s\n",
 			s.PR.Number, s.PR.State, s.PR.ChecksState, s.PR.ReviewDecision, s.PR.Mergeable)

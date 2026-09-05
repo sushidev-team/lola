@@ -163,7 +163,10 @@ func (m *rootModel) detailStripBox(w, h int) []string {
 			if s.PRNumber > 0 {
 				pr = fmt.Sprintf("#%d", s.PRNumber)
 			}
-			line := fmt.Sprintf("%-10s %-22s %-14s %s", issue, truncPlain(s.Title, 22), s.Status, pr)
+			// The primary axis word, never the raw rolled-up identifier: this list
+			// used to print "changes_requested" straight into the panel.
+			line := fmt.Sprintf("%-10s %-22s %-10s %s", issue, truncPlain(s.Title, 22),
+				displayLabel(displayOf(s)), pr)
 			body = append(body, previewLine(line, w-4))
 		}
 	}

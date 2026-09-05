@@ -24,6 +24,7 @@ import (
 	"github.com/sushidev-team/lola/internal/devtab"
 	"github.com/sushidev-team/lola/internal/lolaenv"
 	"github.com/sushidev-team/lola/internal/protocol"
+	"github.com/sushidev-team/lola/internal/state"
 	"github.com/sushidev-team/lola/internal/vtterm"
 )
 
@@ -64,7 +65,8 @@ func (m *rootModel) scheduleAgentSync() tea.Cmd {
 // activeTabTmux resolves the SELECTED session's active tab to the tmux session
 // the embed should attach to: a shell name for a shell tab, else the agent's own
 // tmux session. ok is false when there is nothing live to show — no selection, or
-// the agent tab of a dead/terminal session.
+// the agent tab of a session whose agent is gone (exited or dead, which is
+// exactly what the primary axis collapses to as DisplayGone).
 func (m *rootModel) activeTabTmux() (name string, kind int, ok bool) {
 	sel := m.sessions.selected()
 	if sel == nil {
@@ -74,7 +76,7 @@ func (m *rootModel) activeTabTmux() (name string, kind int, ok bool) {
 	if tab := m.embedTab[sel.ID]; tab >= 1 && tab <= len(names) {
 		return names[tab-1], termShell, true
 	}
-	if sel.TmuxName != "" && sel.Status != "dead" && sel.Status != "session_ended" {
+	if sel.TmuxName != "" && displayOf(*sel) != state.DisplayGone {
 		return sel.TmuxName, termAgent, true
 	}
 	return "", termAgent, false

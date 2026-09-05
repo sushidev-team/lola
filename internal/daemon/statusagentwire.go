@@ -34,9 +34,11 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/sushidev-team/lola/internal/config"
+	"github.com/sushidev-team/lola/internal/doctor"
 	"github.com/sushidev-team/lola/internal/session"
 	"github.com/sushidev-team/lola/internal/state"
 	"github.com/sushidev-team/lola/internal/statusagent"
@@ -59,6 +61,29 @@ const (
 	// transcriptTailBytes bounds the transcript tail fed when
 	// include_transcript is on.
 	transcriptTailBytes = 4 * 1024
+
+	// --- circuit breaker (see interpretBreaker) --------------------------
+	//
+	// interpretBreakerThreshold is how many CONSECUTIVE failed interpretations
+	// disable the interpreter. Five, because a single transient failure
+	// (a timeout on a busy machine, one rate-limited call) is normal and a
+	// standing one is not: the failure mode this exists for — a claude that
+	// exits 1 on every headless call until a human accepts new terms, an
+	// expired login, a `bin` that no longer runs — fails 5 times in a row
+	// within minutes, while nothing healthy does.
+	interpretBreakerThreshold = 5
+	// interpretBreakerCooldown is how long a tripped breaker refuses work
+	// before it spends ONE half-open probe, so a transient outage heals itself
+	// without a restart. Half an hour is chosen against the cost of being
+	// wrong in either direction: too short and a permanently broken
+	// interpreter is back to burning a call every few minutes, too long and a
+	// user who has just fixed their auth waits for no reason. A probe failure
+	// re-trips and restarts the wait.
+	interpretBreakerCooldown = 30 * time.Minute
+	// interpretBreakerReasonRunes clips the retained failure reason. It is
+	// rendered CLI/agent output (see sanitizeInterpretReason) and its only
+	// destinations are one log line and one doctor row.
+	interpretBreakerReasonRunes = 240
 )
 
 // buildStatusAgent constructs the interpreter client, or nil when
@@ -85,6 +110,15 @@ func buildStatusAgent(sc config.StatusAgentConfig) *statusagent.Client {
 // under the STORE lock and must not take d.mu (lock order is d.mu → store) —
 // can gate cheaply.
 func (d *Daemon) setStatusAgentLocked(sc config.StatusAgentConfig) {
+	// Re-arm the circuit breaker FIRST, on every path. This runs at daemon
+	// start and on every reload, which is exactly the set of moments where the
+	// thing that was failing may have been fixed (a re-auth, a new bin, a
+	// different model) or the feature turned off — and it is why the breaker
+	// needs no persistence: a restart clears it by construction.
+	d.interpretBreakerFor().reset()
+	if err := doctor.ClearStatusAgentBreaker(); err != nil {
+		d.logf("", "statusagent: clear breaker state: %v", err)
+	}
 	d.statusAgent = buildStatusAgent(sc)
 	if d.statusAgent == nil {
 		d.interpretSeam = nil
@@ -107,11 +141,214 @@ func firstNonEmpty(a, b string) string {
 	return b
 }
 
+// --- the interpreter's circuit breaker -------------------------------------
+//
+// The interpreter costs a `claude -p` call per attempt and produces NOTHING
+// when it fails: a failed interpretation writes no overlay, so the only sign is
+// a log line — and unlike a failed review or spawn, no human is waiting on the
+// result to notice its absence. That combination is how one machine ran 132
+// straight failed interpretations (one per ambiguous session per
+// min_interval_seconds, forever) against a claude that exited 1 on every
+// headless call until a human accepted updated terms, with a 100% failure rate
+// and not one thing in the UI to say so.
+//
+// So consecutive failures now disable it: at interpretBreakerThreshold in a
+// row the breaker TRIPS and the interpreter stops both queueing and exec'ing.
+// Any success closes it. After interpretBreakerCooldown it goes HALF-OPEN and
+// lets exactly one probe through — a success re-enables the feature, a failure
+// re-trips and restarts the wait — so an outage that ends heals itself.
+//
+// Two rails hold the design together:
+//
+//   - The breaker is per-daemon-PROCESS state and is never persisted. A
+//     restart (and a reload — the operator may have just fixed the binary or
+//     the auth) re-arms it, and nothing is ever written to config.toml: lola
+//     must not turn a user's feature off on their behalf. The breadcrumb the
+//     trip leaves for `lola doctor` (internal/doctor) is a REPORT, not the
+//     state of record; the daemon never reads it back.
+//   - The trip is logged ONCE, at the moment it happens. Announcing it per
+//     attempt would reproduce the noise the breaker exists to end.
+//
+// It lives in a registry keyed by its Daemon rather than in a Daemon field so
+// that the whole mechanism — state, policy, the one log line and the doctor
+// breadcrumb — is readable in this one file; the key is the pointer, so two
+// daemons (and two tests) can never share a breaker.
+type interpretBreaker struct {
+	mu sync.Mutex
+	// fails counts CONSECUTIVE failures; any success zeroes it.
+	fails int
+	// trippedAt is zero while the breaker is closed.
+	trippedAt time.Time
+	// reason is the last failure, already sanitized and clipped.
+	reason string
+	// probing marks a half-open probe in flight, so the cooldown buys exactly
+	// one call and not one per queued session.
+	probing bool
+}
+
+var interpretBreakers sync.Map // *Daemon -> *interpretBreaker
+
+// interpretBreakerFor returns (creating on first use) this daemon's breaker.
+func (d *Daemon) interpretBreakerFor() *interpretBreaker {
+	if v, ok := interpretBreakers.Load(d); ok {
+		return v.(*interpretBreaker)
+	}
+	v, _ := interpretBreakers.LoadOrStore(d, &interpretBreaker{})
+	return v.(*interpretBreaker)
+}
+
+// blocked is the cheap read-only gate: is the breaker refusing work right now?
+// It NEVER mutates, so it is safe to call from the queueing path — a caller
+// that merely asks must not consume the half-open probe, which the caller that
+// actually execs (begin) claims instead.
+func (b *interpretBreaker) blocked(now time.Time) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.trippedAt.IsZero() {
+		return false
+	}
+	if b.probing {
+		return true // the one probe this cooldown buys is already out
+	}
+	return now.Before(b.trippedAt.Add(interpretBreakerCooldown))
+}
+
+// begin claims the right to run ONE interpretation, called immediately before
+// the exec. A closed breaker always allows; a tripped one allows only the
+// half-open probe, and marks it so nothing else slips through beside it. Every
+// true MUST be resolved by exactly one succeed/fail.
+func (b *interpretBreaker) begin(now time.Time) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.trippedAt.IsZero() {
+		return true
+	}
+	if b.probing || now.Before(b.trippedAt.Add(interpretBreakerCooldown)) {
+		return false
+	}
+	b.probing = true
+	return true
+}
+
+// succeed closes the breaker and reports whether it had been open, so the
+// caller can log the recovery exactly once.
+func (b *interpretBreaker) succeed() (recovered bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	recovered = !b.trippedAt.IsZero()
+	b.fails, b.trippedAt, b.reason, b.probing = 0, time.Time{}, "", false
+	return recovered
+}
+
+// fail records one failure. It returns the report to hand the doctor while the
+// breaker is open (nil while it is still closed and merely counting), and
+// whether THIS failure is the one that tripped it — the single moment the trip
+// may be logged.
+func (b *interpretBreaker) fail(reason string, now time.Time) (*doctor.StatusAgentBreaker, bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.fails++
+	b.reason = reason
+	wasProbe := b.probing
+	b.probing = false
+	switch {
+	case wasProbe:
+		// The half-open probe failed: re-trip and restart the cooldown. Not a
+		// NEW trip — the operator was told once already.
+		b.trippedAt = now
+	case !b.trippedAt.IsZero():
+		// Already open (an interpretation that was in flight when it tripped).
+	case b.fails >= interpretBreakerThreshold:
+		b.trippedAt = now
+		return b.reportLocked(), true
+	default:
+		return nil, false
+	}
+	return b.reportLocked(), false
+}
+
+// reset re-arms the breaker. Caller: setStatusAgentLocked, i.e. daemon start
+// and every config reload.
+func (b *interpretBreaker) reset() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.fails, b.trippedAt, b.reason, b.probing = 0, time.Time{}, "", false
+}
+
+// reportLocked snapshots the open breaker for internal/doctor. Caller holds mu;
+// the pid is stamped by the writer.
+func (b *interpretBreaker) reportLocked() *doctor.StatusAgentBreaker {
+	return &doctor.StatusAgentBreaker{
+		Failures:  b.fails,
+		Reason:    b.reason,
+		TrippedAt: b.trippedAt,
+		RetryAt:   b.trippedAt.Add(interpretBreakerCooldown),
+	}
+}
+
+// noteInterpretFailure feeds one failed interpretation to the breaker, logs the
+// trip (once), and refreshes the doctor breadcrumb while it stays open. Called
+// OUTSIDE the breaker's lock — logging and file I/O never run under it.
+func (d *Daemon) noteInterpretFailure(err error) {
+	rep, tripped := d.interpretBreakerFor().fail(sanitizeInterpretReason(err), time.Now())
+	if rep == nil {
+		return // still closed, just counting
+	}
+	if tripped {
+		d.logf("", "statusagent: interpreter DISABLED after %d consecutive failures: %s — one retry at %s (a daemon restart or a config reload re-arms it)",
+			rep.Failures, rep.Reason, rep.RetryAt.Format("15:04"))
+	}
+	if werr := doctor.ReportStatusAgentBreaker(*rep); werr != nil {
+		d.logf("", "statusagent: record breaker state: %v", werr)
+	}
+}
+
+// noteInterpretSuccess closes the breaker and clears the breadcrumb. Silent
+// unless it actually recovered something.
+func (d *Daemon) noteInterpretSuccess() {
+	if !d.interpretBreakerFor().succeed() {
+		return
+	}
+	d.logf("", "statusagent: interpreter re-enabled after a successful interpretation")
+	if err := doctor.ClearStatusAgentBreaker(); err != nil {
+		d.logf("", "statusagent: clear breaker state: %v", err)
+	}
+}
+
+// sanitizeInterpretReason renders one interpreter error into a single safe
+// line. The error body is CLI/agent output (claude's stderr tail rides along in
+// statusagent.ErrNonZeroExit), so it gets the same treatment as any other
+// untrusted text lola retains: ANSI sequences and control characters stripped
+// (sanitizeAgentText), whitespace folded to one line, and a hard rune clip. It
+// is never executed, never handed to an agent, and never interpolated into
+// argv — its only readers are one log line and one doctor row.
+func sanitizeInterpretReason(err error) string {
+	if err == nil {
+		return ""
+	}
+	out := strings.Join(strings.Fields(sanitizeAgentText(err.Error())), " ")
+	if r := []rune(out); len(r) > interpretBreakerReasonRunes {
+		out = string(r[:interpretBreakerReasonRunes-1]) + "…"
+	}
+	return out
+}
+
 // maybeQueueInterpret enqueues a session for interpretation without ever
 // blocking (a full queue drops; a later cycle re-queues). Safe under any lock:
-// it only reads an atomic and performs a non-blocking channel send.
+// it reads an atomic, takes the breaker's LEAF mutex (which never takes
+// another), and performs a non-blocking channel send.
+//
+// The breaker is checked here and not only at the exec so a tripped
+// interpreter stops paying for the queue's downstream work too — chiefly the
+// bounded capture-pane exec interpretOne runs per candidate session. blocked()
+// never mutates, so asking here cannot consume the half-open probe: once the
+// cooldown has elapsed this lets the session through and interpretOne's begin()
+// claims the probe.
 func (d *Daemon) maybeQueueInterpret(id string) bool {
 	if id == "" || !d.interpretOn.Load() {
+		return false
+	}
+	if d.interpretBreakerFor().blocked(time.Now()) {
 		return false
 	}
 	select {
@@ -193,6 +430,12 @@ func (d *Daemon) interpretOne(ctx context.Context, id string) {
 	case state.AgentDead, state.AgentExited, state.AgentShell, state.AgentOrphaned:
 		return
 	}
+	if d.interpretBreakerFor().blocked(time.Now()) {
+		// Tripped: spend nothing at all — not the pane capture, not the
+		// transcript read. Checked again (as begin) right before the exec,
+		// because the gather below is unbounded in wall-clock terms.
+		return
+	}
 	if ivl := time.Duration(sc.MinIntervalSeconds) * time.Second; ivl > 0 &&
 		!s.LastInterpretedAt.IsZero() && time.Since(s.LastInterpretedAt) < ivl {
 		return // debounced; a later trigger retries
@@ -244,10 +487,20 @@ func (d *Daemon) interpretOne(ctx context.Context, id string) {
 		return
 	}
 
+	// Claim the call. A closed breaker always allows; a tripped one allows only
+	// the single half-open probe, and every true returned here is resolved by
+	// exactly one noteInterpretFailure/noteInterpretSuccess below.
+	if !d.interpretBreakerFor().begin(time.Now()) {
+		return
+	}
 	raw, err := seam(ctx, buildInterpretContext(s, pane, events, transcript))
 	now = time.Now()
 	if err != nil {
+		// Still logged per failure — but the breaker now bounds how many
+		// failures there can be, which is what turns 132 log lines nobody read
+		// into five plus a doctor row.
 		d.logf("", "statusagent: interpret %s failed: %v", id, err)
+		d.noteInterpretFailure(err)
 		d.sessions.Update(id, func(cur *session.Session) bool {
 			// Stamp the attempt AND the hash: an input that errors must not be
 			// retried every cycle until it actually changes.
@@ -259,7 +512,15 @@ func (d *Daemon) interpretOne(ctx context.Context, id string) {
 	}
 	interp, perr := statusagent.Parse(raw)
 	if perr != nil {
+		// Unparsable output counts as a failure: the call cost the same and
+		// produced the same nothing as a nonzero exit, and a claude that
+		// prints a banner instead of JSON on every call is exactly as dead as
+		// one that exits 1. An "unknown" judgement is NOT a failure — that is
+		// the interpreter working, answering the question it was asked.
 		d.logf("", "statusagent: interpret %s unparsable: %v", id, perr)
+		d.noteInterpretFailure(perr)
+	} else {
+		d.noteInterpretSuccess()
 	}
 	d.sessions.Update(id, func(cur *session.Session) bool {
 		// DISPLAY-ONLY write-back: overlay + cost fields, nothing else — never

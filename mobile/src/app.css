@@ -1,0 +1,319 @@
+/* ---------------------------------------------------------------------------
+   The mobile stylesheet.
+
+   The design tokens are NOT redefined here. desktop/frontend/src/app.css is
+   imported wholesale, which brings Tailwind v4, the xterm stylesheet, the
+   vendored Hack terminal face, the full Catppuccin token block, the five-step
+   type scale and the @utility set (panel, label, num, copy, hero-glyph). Every
+   shared component is written against those names, so a second copy of them
+   here would be a mirror that drifts — the same argument CLAUDE.md makes for
+   not forking theme.ts.
+
+   What follows the import is only what a phone needs and a Mac does not.
+--------------------------------------------------------------------------- */
+@import "../../desktop/frontend/src/app.css";
+
+/* ---------------------------------------------------------------------------
+   Tailwind v4 scans SOURCE TEXT for class names, and it has no idea this
+   project exists: the `@import "tailwindcss"` that generates the utilities sits
+   inside the desktop's stylesheet, so its automatic source detection is rooted
+   at desktop/frontend/src. Without the two directives below, every class used
+   only by a mobile file compiles to nothing, and every class used only by a
+   shared component would too if that detection ever narrows.
+
+   This is the single most likely silent failure in the whole port: there is no
+   error, no warning and no missing file — the app simply renders unstyled, and
+   it renders unstyled identically in the dev server and in the packaged app, so
+   there is nothing to diff against.
+--------------------------------------------------------------------------- */
+@source "./";
+@source "../../desktop/frontend/src/lib";
+
+/* ---------------------------------------------------------------------------
+   The type scale, and the colour tokens a phone needs on top of the shared set.
+
+   THE SCALE IS THE DESIGN'S, not a scaled copy of the desktop's. An earlier
+   version of this file raised the desktop ladder wholesale — 16px base, on the
+   argument that iOS body text is 17pt and anything smaller reads as a shrunken
+   Mac window. The Figma file (Lola / Mobile Redesign) answers that argument
+   directly and goes the other way: its screens are DENSE on purpose, because
+   this app's job is to show as many sessions as will fit and then get out of the
+   way, and its largest body size is 15px. Enlarging a design drawn at 15/13/11
+   does not make it more legible, it makes it a different design with two rows
+   on screen instead of six.
+
+   So the sizes below are the Figma text styles, verbatim:
+
+     m/2xl · 28/34 large title   Inter Bold      28/34  -0.018em   --text-2xl
+     m/base-semi · title         Inter SemiBold  15/20  -0.010em   --text-lg
+     m/xs-med · row              Inter Medium    13/17   0         --text-base
+     m/xs · body                 Inter Regular   12/16   0         --text-body
+     m/2xs · meta                Inter Regular   11/15   0         --text-sm
+     m/2xs-caps · label          Inter Bold      10/12   0.070em   --text-xs
+
+   THE LADDER'S ROLES ARE UNCHANGED, which is what keeps the shared components
+   rendering sensibly here: the desktop's `--text-xs` is already its uppercase
+   micro-label step (600 weight, 0.06em tracking), `--text-sm` its metadata tier,
+   `--text-lg` its 15/20 semibold title. Only the absolute sizes move, and they
+   move to the design's. `--text-lg` in particular lands back on the desktop's
+   own 15/20 — the two surfaces agree about a card title and always did.
+
+   `--text-body` IS THE ONE ADDITION, and it is forced. The design uses SIX
+   sizes and Tailwind's ladder here has five rungs plus the large title; 12px
+   prose and 13px row text are genuinely different tiers in it (the activity
+   sentence under a card's heading is 12, the heading of a compact row is 13),
+   so one of them needs a name outside the ladder. Prose gets it, because the
+   ladder's `base` must stay the DEFAULT — `body` reads `var(--text-base)`.
+
+   Overriding is the whole reason this block sits AFTER the desktop import:
+   Tailwind v4 merges `@theme` blocks and the later definition wins.
+--------------------------------------------------------------------------- */
+@theme {
+  /* Uppercase micro-labels: section headings, status chips, the caps rules on a
+     card. Bold and widely tracked, so 10px stays a label and not fine print. */
+  --text-xs: 0.625rem; /* 10px */
+  --text-xs--line-height: 0.75rem; /* 12px */
+  --text-xs--font-weight: 700;
+  --text-xs--letter-spacing: 0.07em;
+
+  /* Metadata: issue keys, ages, project names, status words, PR numbers, key
+     legends — the --color-faint tier, and the most repeated size in the app. */
+  --text-sm: 0.6875rem; /* 11px */
+  --text-sm--line-height: 0.9375rem; /* 15px */
+
+  /* Prose. The agent's activity sentence, the interpreter's headline, a hint
+     under a field: text that is read rather than scanned. Outside the ladder on
+     purpose — see the note above. */
+  --text-body: 0.75rem; /* 12px */
+  --text-body--line-height: 1rem; /* 16px */
+
+  /* THE DEFAULT, set on `body`. Compact row titles, chip labels, pane tabs,
+     button text, field values. */
+  --text-base: 0.8125rem; /* 13px */
+  --text-base--line-height: 1.0625rem; /* 17px */
+
+  /* Card and section titles: the hero card's heading, a settings group. */
+  --text-lg: 0.9375rem; /* 15px */
+  --text-lg--line-height: 1.25rem; /* 20px */
+  --text-lg--font-weight: 600;
+  --text-lg--letter-spacing: -0.01em;
+
+  /* An inline view title. The design has no step here — its screens jump
+     straight from the card title to the large title — so this keeps the rung
+     the sheets and the connect screen were built against. */
+  --text-xl: 1.375rem; /* 22px */
+  --text-xl--line-height: 1.75rem; /* 28px */
+  --text-xl--font-weight: 600;
+  --text-xl--letter-spacing: -0.01em;
+
+  /* The large title, and the ceiling: one per screen, at the top. */
+  --text-2xl: 1.75rem; /* 28px */
+  --text-2xl--line-height: 2.125rem; /* 34px */
+  --text-2xl--font-weight: 700;
+  --text-2xl--letter-spacing: -0.018em;
+
+  /* SPACING IS PINNED TO PX, and that is the other half of the Dynamic Type
+     change below. Tailwind's default `--spacing` is 0.25rem, so once the root
+     font size follows the user's text setting EVERY gap, pad, inset and icon
+     box would scale with it — reflowing a screen that is already tight and
+     fighting the terminal, which measures its own grid in px. Pinning it here
+     keeps the accessibility win on the type, where it belongs, and costs
+     nothing at the default size (0.25rem of 16px IS 4px). */
+  --spacing: 4px;
+
+  /* -------------------------------------------------------------------------
+     The seven colours the phone design names that the shared set does not.
+
+     These are STATIC FALLBACKS in the compiled sheet, and they are macchiato's
+     because that is the flavor the design was drawn in. The live values are
+     written onto the root element at runtime by src/lib/mobiletokens.ts, which
+     derives every one of them from the ACTIVE flavor — so `[ui].theme` repaints
+     these along with the shared tokens and latte does not get a black tab bar.
+     Declaring them here is what makes `bg-crust`, `text-subtext`,
+     `border-edge-soft` and friends exist as utilities at all: Tailwind v4 emits
+     a utility per `--color-*` name in a `@theme` block, and a name that only
+     ever appears in a setProperty() call compiles to nothing.
+  ------------------------------------------------------------------------- */
+
+  /* The chrome ground: tab bar, accessory bar. One step below `canvas`. */
+  --color-crust: #11111b;
+
+  /* Prose, between `ink` and `faint` — Catppuccin `subtext1`. */
+  --color-subtext: #bac2de;
+
+  /* List hairlines and card borders: softer than `edge`, which reads as a
+     panel border. */
+  --color-edge-soft: #2b2b3c;
+
+  /* The two soft status-chip grounds and their labels. */
+  --color-pill-urgent-soft: #4e3f42;
+  --color-pill-urgent-soft-fg: #fab387;
+  --color-pill-broken-soft: #4d3649;
+  --color-pill-broken-soft-fg: #f38ba8;
+}
+
+/* ---------------------------------------------------------------------------
+   iOS ZOOMS A FOCUSED INPUT WHOSE TEXT IS UNDER 16px, and the scale above put
+   every field under it.
+
+   That behaviour is not a preference and cannot be turned off without disabling
+   pinch-zoom for the whole document, which is an accessibility regression traded
+   for a cosmetic one. The fix is to keep the CONTROLS at the threshold while the
+   chrome around them follows the design: a form field is not dense-list content
+   and 16px is a perfectly ordinary size for one on a phone.
+
+   `!important` is not needed — nothing sets a size on these elements — but the
+   rule must stay in `base` so any deliberate `text-*` utility at a call site
+   still wins. See the layer note further down for why that matters here.
+--------------------------------------------------------------------------- */
+@layer base {
+  input,
+  textarea,
+  select {
+    font-size: 16px;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Dynamic Type.
+
+   The steps above are rem, and this is what rem is measured against. The value
+   is written by `src/lib/dynamictype.ts`, which measures the system's own
+   `-apple-system-body` font — the only place WebKit exposes the setting, since
+   there is no media feature for it — and clamps the result. The fallback is the
+   designed base, so a browser session, a failed measurement and a default
+   device all render identically.
+
+   `text-size-adjust` is pinned so WebKit does not apply a second, independent
+   scaling on top of the first; without it the two multiply on a rotated phone.
+--------------------------------------------------------------------------- */
+html {
+  font-size: var(--lola-root-size, 16px);
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+@theme {
+  /* Safe areas. Tailwind v4 ships no safe-area utilities, so they are declared
+     as spacing tokens: `pb-safe-b`, `pt-safe-t` and friends then work like any
+     other spacing utility. env() resolves to 0px on a device without an inset,
+     so no fallback branch is needed.
+
+     They are the preferred form for a PLAIN inset (Connect.svelte's root uses
+     them). Two kinds of call site keep an inline `env()` on purpose: one that
+     ADDS to the inset, where the value is a `calc()` and a utility would only
+     hide the arithmetic, and AccessoryBar, which is written not to depend on
+     the surrounding shell having defined a spacing scale at all. */
+  --spacing-safe-t: env(safe-area-inset-top);
+  --spacing-safe-b: env(safe-area-inset-bottom);
+  --spacing-safe-l: env(safe-area-inset-left);
+  --spacing-safe-r: env(safe-area-inset-right);
+}
+
+/* ---------------------------------------------------------------------------
+   Yielding the top inset to a bar above the screens.
+
+   env(safe-area-inset-top) does not shrink for content below something else, so
+   when App.svelte draws the development-link banner above every screen, the
+   banner and the screen header underneath it would each reserve the full
+   status-bar height and the second one would be dead space. The banner
+   therefore pays the inset and sets `--lola-top-inset: 0px` on the container
+   holding the screens, and every screen spends
+
+       var(--lola-top-inset, env(safe-area-inset-top, 0px))
+
+   rather than env() directly.
+
+   IT HAS TO BE SPELLED OUT AT THE POINT OF USE, and that is not a style
+   preference. Putting the same var() inside the `--spacing-safe-t` theme token
+   — so that `pt-safe-t` would pick it up for free — compiles, looks right, and
+   does nothing: a custom property is substituted at COMPUTED-VALUE TIME on the
+   element it is DECLARED on, and `--spacing-safe-t` is declared on :root, where
+   `--lola-top-inset` is unset. The fallback is baked in there and inherits down
+   already resolved, so overriding the variable on a descendant can never reach
+   it. That version was built and screenshotted before the rule was remembered,
+   and the only symptom was an extra 59pt of nothing.
+--------------------------------------------------------------------------- */
+
+/* ---------------------------------------------------------------------------
+   Touch behaviour.
+
+   The desktop stylesheet already sets `overflow: hidden` on body and hands
+   scrolling to the app's own regions, which is right here too. These add the
+   iOS-specific half.
+--------------------------------------------------------------------------- */
+html,
+body {
+  /* Kill the whole-document rubber band. The WebView is the app's frame, not a
+     page, and a bouncing frame reads as the UI coming loose from the screen.
+     capacitor.config.ts sets ios.scrollEnabled: false for the same reason;
+     both are needed, because that option governs the WKWebView's scroll view
+     and this governs the document inside it. */
+  overscroll-behavior: none;
+}
+
+/* This block MUST stay inside @layer base, and the reason is the whole of the
+   next paragraph.
+
+   Tailwind v4 emits every utility inside `@layer utilities` (see its own
+   index.css: `@layer utilities { @tailwind utilities }`). Under the cascade-
+   layers rule an UNLAYERED author declaration beats a layered one regardless of
+   specificity, so an unlayered `*` here would outrank `touch-none`, `touch-pan-y`
+   and every other touch utility in the app — including the one on the terminal
+   frame, whose whole job is stopping Safari from claiming a one-finger drag.
+   Once Safari claims it, preventDefault() in the touchmove handler is ignored
+   and the gesture arrives as touchcancel: the pane's drag-to-scroll, which is
+   the app's only way to see an agent's transcript, simply stops working. It is
+   invisible in a desktop browser because there is no soft keyboard and no
+   Safari gesture arbitration to lose to.
+
+   Declaring it in `base` puts it BEFORE `utilities` in the layer order, which
+   is exactly where a blanket default belongs. */
+@layer base {
+  * {
+    /* The grey flash WebKit paints over a tapped element. Every control in this
+       app already has a hover/active state of its own, and the system rectangle
+       lands on the wrong box for a card-shaped row. */
+    -webkit-tap-highlight-color: transparent;
+    /* No 300ms tap delay and no double-tap zoom, which would otherwise eat the
+       second tap of any quick interaction. */
+    touch-action: manipulation;
+  }
+}
+
+/* The terminal is the exception: it owns its own gestures, because a touch drag
+   inside a pane is a scroll request that has to be converted to lines and sent
+   to the daemon (xterm's wheel handler never fires on touch). Letting the
+   browser interpret those gestures would pan the pane locally against a screen
+   that is not scrollable.
+
+   Two class names, deliberately. `.term-pane` is MobileTerminal's own frame;
+   `.term-live` is the desktop LiveTerminal's, which the shim still keeps
+   reusable through `TermService.Attach`. Both rules are UNLAYERED, so they win
+   over the `*` above no matter which layer it ends up in — belt and braces for a
+   rule whose failure mode is a terminal that quietly stops scrolling. */
+.term-pane,
+.term-live {
+  touch-action: none;
+}
+
+/* ---------------------------------------------------------------------------
+   Tap targets.
+
+   The shared Button ladder tops out at a size drawn for a mouse. Rather than
+   adding a size to its class map — which would mean editing desktop/frontend,
+   which this project does not do — a mobile call site pairs a Button with this
+   utility. 44px is Apple's minimum, and the `!` is not optional: a plain
+   min-height class has the same specificity as the variant's own and the winner
+   would be decided by Tailwind's ordering in the compiled sheet rather than by
+   the class attribute (see the Button invariant in CLAUDE.md).
+--------------------------------------------------------------------------- */
+@utility tap {
+  min-height: 44px !important;
+  min-width: 44px !important;
+}
+
+/* A row that is a tap target without being square — list rows, menu items. */
+@utility tap-row {
+  min-height: 44px !important;
+}

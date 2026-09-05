@@ -18,7 +18,7 @@ import type {
   OpenPrArgs,
   OpenTicketArgs as ProtocolOpenTicketArgs,
 } from "@bindings/internal/protocol";
-import { sortRank } from "./theme";
+import { legacySortRank, sortRank } from "./theme";
 import { displayName } from "./slug";
 import { confirm } from "./confirm.svelte";
 
@@ -34,13 +34,25 @@ type OpenTicketArgs = ProtocolOpenTicketArgs;
 
 type Flash = { text: string; kind: "good" | "warn" | "bad" } | null;
 
+/**
+ * The session's sort tier, over BOTH axes (state.SortRank).
+ *
+ * Falls back to the collapsed status word when the record carries no agent axis
+ * — a daemon predating the split, or a snapshot written by one. Both axes are
+ * optional on the wire, and `sortRank("", "")` answers 4 for every one of them,
+ * which would flatten a whole push into one indistinguishable tier.
+ */
+function rankOf(s: SessionInfo): number {
+  return s.agentState ? sortRank(s.agentState, s.delivery ?? "") : legacySortRank(s.status ?? "");
+}
+
 /** Stable session sort: attention first (sortRank), then project, then issue. */
 export function sortSessions(list: SessionInfo[]): SessionInfo[] {
   // Coalesce every field the comparator touches: an older daemon can omit a
   // field (→ undefined over the bridge), and a thrown comparator would leave the
   // whole list unsorted/blank.
   return [...list].sort((a, b) => {
-    const r = sortRank(a.status ?? "") - sortRank(b.status ?? "");
+    const r = rankOf(a) - rankOf(b);
     if (r !== 0) return r;
     const p = (a.project ?? "").localeCompare(b.project ?? "");
     if (p !== 0) return p;

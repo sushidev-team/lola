@@ -36,6 +36,7 @@ import (
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/linear"
 	"github.com/sushidev-team/lola/internal/session"
+	"github.com/sushidev-team/lola/internal/state"
 )
 
 // wbGuard names the one-shot guard a write-back transition stamps.
@@ -226,7 +227,12 @@ func (d *Daemon) writeBack(ctx context.Context, s session.Session) {
 		return
 	}
 	prOpen := s.PR != nil && strings.EqualFold(s.PR.State, "OPEN")
-	merged := s.Status == "merged"
+	// Read off the DELIVERY axis, like every other PR-driven decision in the
+	// daemon. Rollup ranks merged first, so this is the same set of sessions
+	// the collapsed word selected — the point is that nothing here has to know
+	// that ranking, and a later rollup change cannot silently move the
+	// write-back.
+	merged := s.Delivery == state.DeliveryMerged
 	if !((prOpen && !s.WBPRDone) || (merged && !s.WBMergedDone)) {
 		return // nothing to transition, or already done
 	}

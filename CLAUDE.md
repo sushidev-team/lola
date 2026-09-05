@@ -132,11 +132,17 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   ORTHOGONAL axes: `AgentState` (what the agent itself does — hooks + pane +
   tmux liveness own it, PR facts never mask it) × `DeliveryState` (where the
   PR stands — gh facts only, via `DeriveDelivery` with UNKNOWN-mergeable
-  hysteresis). `Rollup(a, d)` is the ONLY producer of the legacy one-string
-  status; the consumer tables (`HoldsSlot`, `Present`, `Notable`,
-  `NeedsAttention`, `SortRank`, `KanbanColumns`) are the only slot/attention
-  classifications — the desktop's `theme.ts` mirrors them and
-  `desktop/state_parity_test.go` pins the two byte-identical.
+  hysteresis). The consumer tables all take the axis PAIR and live in
+  `display.go` — `DisplayFor` (the primary pill vocabulary), `Attention`,
+  `HoldsSlot`, `Present`, `SortRank`, `KanbanKeyFor` — and they are the only
+  slot/attention/column classifications in lola; the desktop's `theme.ts`
+  mirrors them and `desktop/state_parity_test.go` pins the two vocabularies
+  (`AllDisplays`, `AllStatuses`) and the column keys/titles. `Rollup(a, d)` is
+  the ONLY producer of the legacy one-string status and is now a WIRE SHIM:
+  `protocol.SessionInfo.status` must keep carrying the historical 16 words for
+  `mobile/`, and nothing in the daemon or the desktop classifies by them. The
+  one string-keyed classifier left is `Notable`, which filters a RECORDED
+  from→to transition for the activity feed.
 - `internal/session` — pure data: the `Session` model + JSON snapshot `Store`
   (atomic temp+rename). No exec. Holds the two axes + freshness stamps, the
   derived rollup `Status` (written ONLY by the `SetAgentState`/`SetDelivery`
@@ -376,19 +382,84 @@ each of which owns exactly one external tool or concern behind an **exec seam**
 - **Dispatch order is load-bearing.** Record in-flight + write seen *before*
   spawning, so a crash mid-spawn can't double-dispatch. Upsert the session into
   the store immediately so the next `Budget` call counts it.
-- **Status is two axes; `state.Rollup` is its only producer.** `AgentState`
-  (hooks + pane + tmux liveness) and `DeliveryState` (gh facts) live side by
-  side on the `Session`; the rolled-up `Status` string is derived from them by
-  the `SetAgentState`/`SetDelivery` mutators — writing `Status` directly is a
-  bug (the axes and the rollup drift). Post-PR the delivery axis owns the
-  rollup while the agent axis stays truthful underneath (that split is what
-  killed the old hook↔observer status flap). `state.FromLegacy` backfills axes
-  for pre-axis snapshots on load/Upsert, so legacy records keep working.
+- **The two axes are no longer collapsed for display; `state.Rollup` survives
+  only as the legacy WIRE SHIM.** `AgentState` (hooks + pane + transcript +
+  tmux liveness) and `DeliveryState` (gh facts) still live side by side on the
+  `Session`, and the rolled-up `Status` string is still derived from them by the
+  `SetAgentState`/`SetDelivery` mutators — writing `Status` directly is still a
+  bug. What changed is that NOTHING classifies by that string any more. It
+  collapsed the agent axis INTO the delivery axis, and 20MB of one machine's
+  `daemon.log` measured what that cost: 458 transitions into `needs_input`, 412
+  of them (90%) minted by the coding agent's own 60s "waiting for your input"
+  nudge rather than by a question — only 45 were real permission prompts — and
+  `needs_input`↔`review_pending` flapping 264 times (plus 97 against
+  `ci_pending`), about 52% of ALL status churn, median dwell exactly 60s. Post-PR
+  the rollup returned the DELIVERY word for both `AgentWorking` and `AgentIdle`,
+  so the agent axis was invisible except through the one word that was 90% false.
+  The model now is:
+  - **The agent axis is the PRIMARY pill**, reduced to the smaller `Display`
+    vocabulary (`state.DisplayFor`): working | idle | needs_you | gone | shell |
+    orphaned. `starting` collapses into working (a spawn that has not heartbeat
+    yet is still a running agent, and a pill that flickers for one cycle is
+    noise); `exited`/`dead` collapse into gone (that distinction matters to
+    teardown, not to a human reading a pill). PR facts NEVER mask it.
+  - **The delivery axis is the SECONDARY chip**, unchanged and unreduced — the
+    PR badge beside the pill. A row can now say "working" and "✗ci" at once,
+    which the single word could not.
+  - **"Does a human need to look at this" is a PREDICATE over both**
+    (`state.Attention`), not a value either axis can hold. That is the whole
+    fix for the flap: the old vocabulary had to spend a *word* on attention, so
+    a parked reviewer and a real question fought over the same slot.
+  - **`state.DisplayFor`'s unknown case answers `working`**, matching
+    `KanbanFallbackKey` and the TS port: a state the vocabulary has not caught
+    up to is most likely a live agent, and rendering one as "gone" hides it from
+    the very views built to surface it.
+  - The consumer tables ALL take the pair and all live in
+    `internal/state/display.go` — `Attention`, `HoldsSlot`, `Present`,
+    `SortRank`, `KanbanKeyFor`. There is no string-keyed slot, attention or
+    column classification left anywhere in lola.
+  - **`Rollup`'s only remaining job is `protocol.SessionInfo.status`**, which
+    must keep carrying the historical 16 words because `mobile/` reads them
+    (`statusLabel`/`statusText`/`kanbanColumn`/`triaged`/`attentionCount`/
+    `TRIAGE_FILTERS` in the shared `desktop/frontend/src/lib`, consumed through
+    a vite alias). Do not "finish the job" by deleting it. The daemon's own
+    remaining `s.Status` reads are all ABOUT the rollup rather than classifying
+    by it — the hook change-detection log, the `[statusagent]` supersession
+    hash, and `events.go`, whose `state.Notable` is the one string-keyed
+    classifier left because its input is a RECORDED `from→to` transition (two
+    historical words, not a live pair anything can re-read).
+  - `state.FromLegacy` still backfills axes for pre-axis snapshots on
+    load/Upsert, so records on disk keep working — including ones a pre-split
+    daemon wrote, which is why `handoffDeliverable` still admits
+    `AgentWaitingInput + InputIdleNotify` that no current daemon mints.
+  - The desktop's `theme.ts` mirrors all of it and `desktop/state_parity_test.go`
+    pins BOTH vocabularies (`AllDisplays`, `AllStatuses`) plus the kanban column
+    keys and titles. **Column MEMBERSHIP is no longer cross-pinned** — it became
+    a function of the pair, so `KanbanColumn` lost the status set the test used
+    to compare — and each side now only guards its own port of `KanbanKeyFor`
+    (`internal/state/display_test.go`, `theme.test.ts`). A self-consistent change
+    to one port will not be caught; re-read the other when you touch either.
+  - **A live pre-PR agent holds a concurrency slot whatever it is doing** —
+    working, idle, or waiting on a human. That is a deliberate change from the
+    pre-axis string table, which excluded `idle`, and it is forced by the
+    display change above: `idle` used to be a ≤60-second waypoint on the way to
+    `needs_input` (which did count), so excluding it was survivable. Now that
+    the nudge parks a session on idle permanently, the old table would have let
+    such a session hold no slot forever and dispatch would have spawned straight
+    past the cap. See the `liveCounted` invariant below for the cap math.
 - **`liveCounted` comes from the session store snapshot**, never a local
-  counter. Only slot-occupying rolled-up statuses count (`state.HoldsSlot`:
-  `working`, `needs_input`, `draft`, `ci_failed`, `changes_requested`,
-  `ci_pending`, `merge_conflict`); parked-for-review and terminal statuses
-  don't, so held PRs don't stall pickup.
+  counter, and `state.HoldsSlot(agentState, delivery)` is the ONE slot
+  classification. The cap counts RUNNERS: a session holds a slot while its
+  agent process is alive (anything but dead / exited / shell / orphaned) AND
+  its PR is neither parked on a human (`review_pending`, `approved`) nor
+  terminal (`merged`, `closed`), so held PRs never stall pickup. A live agent
+  with NO PR holds its slot whatever it is doing — working, idle, or waiting on
+  a human. That last case is a deliberate change from the pre-axis string
+  table, which excluded `idle`: it was survivable only while the coding agent's
+  own 60s idle nudge turned every such session into `needs_input` (which did
+  count) within a minute, and once that nudge stopped minting `needs_input` an
+  idle pre-PR session would have held no slot forever and dispatch would have
+  spawned straight past the cap.
 - **Fail CLOSED on unknowns.** The reconcile orphan-revert skips whenever the
   open-PR check can't answer (no repo, gh error) — better a stuck label than
   lost work.
@@ -916,6 +987,34 @@ each of which owns exactly one external tool or concern behind an **exec seam**
     PR. Without that release a single timeout locked the PR out of review
     forever — the bug that made the feature look dead. A real answer (findings
     or clean) and a graceful skip (auth / exit error) stay final.
+- **Every reaction dispatches off the DELIVERY axis, never the rollup.**
+  `react` switches on `s.Delivery` (merged → ci_failed → merge_conflict →
+  changes_requested → approved → closed, in that order), and each reaction's
+  own atomic re-check under the store lock does the same. It has to: `Rollup`
+  ranks a waiting agent above every PR state, so a permission prompt mid-fix
+  used to hide the red CI, the requested changes or the conflict the engine
+  exists to act on — and 90% of that waiting population was the coding agent's
+  own 60s idle nudge, so it hid them most of the time. `merge_conflict` was
+  carved out of the rollup for exactly that reason long before the rest.
+  Consequences:
+  - `resetReactionGuards` has NO agent-axis special case. It used to bail out
+    on `Status == "needs_input"` to stop a permission prompt from zeroing the
+    CI retry streak, clearing `Escalated` and dropping `LastReactedStatus`
+    (which would re-prompt and re-escalate the agent every time it returned to
+    its prompt). The mask is gone at the source: such a session now reaches
+    `reactCIFailed`, which keeps its own guards, and the default branch is
+    reachable only for delivery ∈ {none, draft, ci_pending, review_pending} —
+    i.e. the PR demonstrably left every reacted state.
+  - A DEAD pane is checked explicitly, right below `merged`, and falls through
+    to the guard reset. `Rollup` rule 2 ("a dead pane forces dead") used to
+    deliver that for free; restating it is not a new policy but the same one,
+    and it is load-bearing because `SetAgentState` does NOT close `AtPrompt`
+    when a pane dies — without it the engine would consume that stale gate,
+    stamp the one-shot guard and send-keys into a tmux session that is gone.
+    `merged` stays ABOVE it: `Kill` stops tmux before it touches git, so every
+    cleanup retry after the first attempt is by definition a dead session.
+  - `reactingLabel` (the REACTING column) reads the same axis, or it goes blank
+    for exactly the sessions that most need explaining.
 - **Fire once per transition.** Reactions and write-backs use persisted
   one-shot guards (`LastReactedStatus`, `WB*Done`, review's per-PR guard) so
   they don't re-fire on every 30s observer cycle.
@@ -1072,6 +1171,30 @@ each of which owns exactly one external tool or concern behind an **exec seam**
     "reflexive ctrl+c throws away the whole form".
 
 ## Testing conventions
+
+- **NEVER drive a UI with synthetic OS input.** No CGEvent posting, no
+  `osascript` clicks or keystrokes, no `cliclick`, no Accessibility-API driving,
+  and nothing that focuses a window or moves the real pointer. `simctl` has no
+  gesture API, and that absence is not a problem to route around: an agent that
+  reaches for system-wide input steals focus from whoever is at the machine, so
+  their next keystrokes land in the Simulator instead of their editor — and a
+  stray click has already leaked into an unrelated application's window. It is
+  unreliable as well as rude: CGEvents are silently dropped without a TCC grant,
+  so the usual outcome is disruption AND no test.
+  Verify a mobile change these ways instead, in this order:
+  - **Component tests.** `mobile/` and `desktop/frontend/` both run vitest with
+    @testing-library; `fireEvent` drives a real interaction with no device, no
+    pointer and no focus change. Behaviour belongs here.
+  - **`xcrun simctl io <udid> screenshot`** for what something LOOKS like. It is
+    read-only — takes no input, steals no focus. Then read the image.
+  - **A launch-environment deep link** to REACH a screen rather than tapping to
+    it: `SIMCTL_CHILD_LOLA_DEV_LINK=... xcrun simctl launch`, which carries an
+    optional pane target for exactly this purpose (`mobile/src/lib/devlink`). If
+    a screen is unreachable by link, ADD a link target; never add a tap.
+  - **A browser harness** at a phone viewport against `npm run dev` when a
+    gesture genuinely must be exercised. Same WebKit, no OS-level input.
+  If none of those can verify something, say so and leave it for a human on a
+  real device. An unverified claim is far cheaper than a hijacked machine.
 
 - 46 `_test.go` files; the daemon package is the densest. Inject fakes via the
   `Daemon` struct's seam fields and `linear.API` / `fake.go`. Use `$LOLA_HOME`

@@ -5,6 +5,7 @@
   import Button from "$lib/components/Button.svelte";
   import Checkbox from "$lib/components/Checkbox.svelte";
   import Select from "$lib/components/Select.svelte";
+  import QRCode from "$lib/components/QRCode.svelte";
   import { store } from "$lib/store.svelte";
   import { nav } from "$lib/nav.svelte";
   import { confirm } from "$lib/confirm.svelte";
@@ -12,7 +13,7 @@
   import { deepEqual } from "$lib/deepEqual";
   import { ConfigService, LinearService } from "@bindings/desktop";
   import type { ReviewKindDTO } from "@bindings/desktop";
-  import type { SettingsDTO, LinearOption, LinearKeyStatusDTO } from "@bindings/desktop/models";
+  import type { SettingsDTO, LinearOption, LinearKeyStatusDTO, ConnectCodeDTO } from "@bindings/desktop/models";
   import { linesToText, splitLines, cleanLines } from "$lib/lines";
   import { appearance, FLAVORS, THEME_IDS, type ThemeId } from "$lib/theme-runtime.svelte";
 
@@ -52,6 +53,7 @@
     // catalog — every cli, watch AND agent kind — so naming
     // the tab after one provider hid the other two.
     { id: "review", label: "Review" },
+    { id: "remote", label: "Remote" },
     { id: "appearance", label: "Appearance" },
   ];
 
@@ -98,6 +100,59 @@
     if (!dto) return; // `d` in the markup is a template-local {@const}, not this scope
     const cur = dto.prioritySort ?? [];
     dto.prioritySort = cur.includes(k) ? cur.filter((x) => x !== k) : [...cur, k];
+  }
+
+  // --- remote ([remote], the phone listener) --------------------------------
+  //
+  // bind is either one of config.RemoteBinds or an IP LITERAL, so the picker
+  // alone cannot express every valid value. That is not a nicety: a form that
+  // offered only the keywords would rewrite a configured literal to a keyword on
+  // the next save of any unrelated tab, silently rebinding the daemon to a
+  // different set of interfaces. So a value the daemon accepts but the picker
+  // cannot offer switches the row to a text input instead of being coerced.
+  let remoteBinds = $state<string[]>([]);
+
+  async function loadRemoteBinds() {
+    if (remoteBinds.length) return;
+    try {
+      remoteBinds = (await ConfigService.RemoteBinds()) ?? [];
+    } catch {
+      remoteBinds = []; // the row falls back to plain text entry, never a dead end
+    }
+  }
+
+  // The sentinel is not a bind value; it only tells the Select to hand the row
+  // over to the text input.
+  const BIND_LITERAL = "__literal";
+
+  const BIND_HELP: Record<string, string> = {
+    off: "keep these settings, listen on nothing",
+    localhost: "loopback only — what a tunnel or an SSH forward wants",
+    lan: "private interfaces only, tunnels and bridges excluded",
+    all: "0.0.0.0, every interface",
+  };
+
+  // True when the persisted value is a literal the picker cannot show. Guarded
+  // on remoteBinds being loaded, so the row does not flip to text for a split
+  // second before the keywords arrive.
+  const bindIsLiteral = $derived(!!dto && remoteBinds.length > 0 && !remoteBinds.includes(dto.remoteBind));
+
+  // Set when the user picks "IP literal" for a value that is still a keyword —
+  // otherwise choosing it would immediately re-derive back to the picker.
+  let bindLiteralPinned = $state(false);
+  const bindShowsLiteral = $derived(bindIsLiteral || bindLiteralPinned);
+
+  function onBindChange(v: string) {
+    if (!dto) return;
+    if (v === BIND_LITERAL) {
+      bindLiteralPinned = true;
+      // Clear a keyword so the field is ready to type into; an existing literal
+      // is kept, since re-picking the same mode must not discard it.
+      if (remoteBinds.includes(dto.remoteBind)) dto.remoteBind = "";
+      return;
+    }
+    bindLiteralPinned = false;
+    dto.remoteBind = v;
   }
 
   async function loadWorkspaceLabels() {
@@ -224,6 +279,8 @@
       void loadKeyStatus();
     } else if (id === "review") {
       void loadReviewKinds();
+    } else if (id === "remote") {
+      void loadRemoteBinds();
     }
   }
 
@@ -472,6 +529,162 @@
     }
   }
 
+  // --- connecting a phone (cmd=pairBegin) -----------------------------------
+  //
+  // The four values this hands over used to be copied by hand out of a log line
+  // and a key file, which is four chances to transpose a character into a
+  // failure that looks exactly like a wrong host. The daemon knows all four
+  // about the listener it is actually running, so the app asks it and draws a
+  // code.
+  //
+  // The whole thing is treated as a secret, because it is one: the code
+  // CONTAINS the bearer key. So it is fetched only when a human presses the
+  // button (never on tab open), it is held in memory and never persisted, the
+  // key's characters need a second explicit press on top of that, and it is
+  // dropped on hide, on leaving the tab and on closing the overlay. What that
+  // buys is the thing an app can actually control — a code left on a screen, in
+  // a screen share, or in a window someone walked past.
+  let connect = $state<ConnectCodeDTO | null>(null);
+  let connectBusy = $state(false);
+  let connectErr = $state("");
+  let connectKeyShown = $state(false);
+  let copied = $state("");
+
+  /**
+   * How long a revealed code stays on screen.
+   *
+   * IT IS A CLOCK BECAUSE THE THING ON SCREEN IS A BEARER CREDENTIAL. Every
+   * other control here is right — nothing is fetched on tab open, the reveal
+   * takes a press, the key's characters take a second one, and it is dropped on
+   * hide, on leaving the tab and on closing the overlay — but all of that
+   * bounded the exposure to "until a human remembers". M2 bounds the equivalent
+   * window to 90 seconds precisely because a displayed credential is a bearer
+   * credential, and M1's is strictly longer-lived: no TTL, not single-use,
+   * never zeroed. So the one thing this app can actually control — a code left
+   * up in a share, a recording, or in front of someone walking past — gets the
+   * same 90 seconds.
+   *
+   * Re-revealing costs one socket round trip: cmd=pairBegin reads in-memory
+   * state, execs nothing and is idempotent.
+   */
+  const CONNECT_REVEAL_MS = 90_000;
+
+  let connectUntil = $state(0);
+  let connectNow = $state(0);
+  const connectLeft = $derived(
+    connectUntil > 0 ? Math.max(0, Math.ceil((connectUntil - connectNow) / 1000)) : 0,
+  );
+  let connectTimer: ReturnType<typeof setInterval> | undefined;
+
+  // --- regenerating the key -------------------------------------------------
+  //
+  // Rolling the bearer key is milestone 1's ONLY revocation, and it is blunt:
+  // every paired phone loses access at once, because every paired phone holds
+  // the same key. The dialog says that plainly rather than offering it as
+  // routine maintenance — M2's per-device revocation is the precise version.
+  //
+  // It goes through the shared `confirm` store like every other irreversible
+  // action in this app, so a shortcut and a button ask the same way.
+  let regenBusy = $state(false);
+  let regenDone = $state("");
+
+  function askRegenerate() {
+    confirm.ask({
+      title: "Regenerate the phone key?",
+      body: "Every phone paired with this daemon loses access immediately.",
+      detail:
+        "Milestone 1 authenticates every phone with one shared key, so there is no way to revoke a single device. Each phone has to scan a new code afterwards.",
+      confirmLabel: "Regenerate",
+      onConfirm: () => void regenerateKey(),
+    });
+  }
+
+  async function regenerateKey() {
+    regenBusy = true;
+    connectErr = "";
+    regenDone = "";
+    try {
+      await ConfigService.RegenerateRemoteKey();
+      // Whatever is on screen describes the OLD key, so it is dropped rather
+      // than left looking valid — a stale code scans cleanly and is then
+      // refused, which from the phone is indistinguishable from a bad read.
+      hideConnect();
+      regenDone = "New key in place. The listener was restarted; press Show code for the new one.";
+    } catch (e) {
+      connectErr = String(e);
+    } finally {
+      regenBusy = false;
+    }
+  }
+
+  function stopConnectTimer() {
+    if (connectTimer !== undefined) clearInterval(connectTimer);
+    connectTimer = undefined;
+  }
+
+  async function revealConnect() {
+    connectBusy = true;
+    connectErr = "";
+    try {
+      connect = await ConfigService.ConnectCode();
+      // Only a code that is actually on screen runs a clock. A `problem` answer
+      // carries no key, and an error carries nothing at all.
+      if (connect?.code) {
+        connectNow = Date.now();
+        connectUntil = connectNow + CONNECT_REVEAL_MS;
+        stopConnectTimer();
+        connectTimer = setInterval(() => {
+          connectNow = Date.now();
+          if (connectNow >= connectUntil) hideConnect();
+        }, 1000);
+      }
+    } catch (e) {
+      connect = null;
+      connectErr = String(e);
+    } finally {
+      connectBusy = false;
+    }
+  }
+
+  function hideConnect() {
+    stopConnectTimer();
+    connectUntil = 0;
+    connect = null;
+    connectErr = "";
+    connectKeyShown = false;
+    copied = "";
+  }
+
+  async function copyConnect(what: string, value: string) {
+    try {
+      await navigator.clipboard.writeText(value);
+      copied = what;
+      // A one-shot confirmation, not a lasting state: the point is to say the
+      // press registered, and a "copied" that stays on screen stops meaning
+      // anything after the second field.
+      setTimeout(() => {
+        if (copied === what) copied = "";
+      }, 1500);
+    } catch {
+      copied = "";
+    }
+  }
+
+  /** The first host is the one the code tells a phone to dial. */
+  const connectHost = $derived(connect?.hosts?.[0] ?? "");
+
+  // Leaving the tab drops it. Without this the code survives behind whatever
+  // tab is opened next and comes back on screen when Remote is opened again —
+  // a reveal nobody performed.
+  $effect(() => {
+    if (tab !== "remote" && connect) hideConnect();
+  });
+
+  // The overlay is mounted inside an {#if} in App.svelte, so closing it really
+  // does destroy this component — but an interval outlives a component that
+  // forgot to clear it, and this one calls hideConnect() on a $state.
+  $effect(() => stopConnectTimer);
+
   async function migrateReview() {
     try {
       await ConfigService.MigrateReview();
@@ -492,6 +705,19 @@
        hierarchy upside down. This is the one place in the settings overlay that
        must out-rank the content under it. `label` stays for per-field captions. -->
   <h3 class="mb-2 text-lg text-ink">{label}</h3>
+{/snippet}
+
+{#snippet connectRow(caption: string, shown: string, value: string)}
+  <!-- `shown` and `value` are separate so the key can be masked on screen and
+       still copy in full: a row that copies its own dots is worse than no copy
+       button, and one that reveals to copy defeats the mask. -->
+  <div class="grid grid-cols-[7rem_1fr_auto] items-center gap-2">
+    <span class="text-sm text-faint">{caption}</span>
+    <span class="truncate font-mono text-sm text-ink" title={caption}>{shown}</span>
+    <Button size="xs" onclick={() => copyConnect(caption, value)}>
+      {copied === caption ? "Copied" : "Copy"}
+    </Button>
+  </div>
 {/snippet}
 
 {#snippet areaRow(caption: string, value: string[] | null, onChange: (v: string[]) => void, placeholder = "", hint = "")}
@@ -857,6 +1083,204 @@
               <span>Include transcript tail</span>
             </label>
           </div>
+        </section>
+      {:else if tab === "remote"}
+        <section>
+          {@render head("Remote")}
+          <p class="copy mb-3 text-sm text-faint">
+            The <span class="font-mono text-ink">[remote]</span> phone listener: the TLS socket the
+            <span class="text-ink">Lola</span> mobile app connects to. Off by default, and the default is chosen for what enabling
+            it <span class="text-ink">grants</span> rather than for what it costs — a paired device can read your sessions, watch any
+            pane and type arbitrary prose into a running coding agent.
+          </p>
+          <div class="space-y-2">
+            <label class="flex cursor-pointer items-center gap-2">
+              <Checkbox bind:checked={d.remoteEnabled} />
+              <span>Enabled</span>
+            </label>
+            <div class={rowCls}>
+              <span class="text-faint">Bind</span>
+              <span class="flex items-center gap-2">
+                <Select
+                  aria-label="Bind"
+                  value={bindShowsLiteral ? BIND_LITERAL : d.remoteBind}
+                  onchange={(e) => onBindChange(e.currentTarget.value)}>
+                  {#each remoteBinds as b (b)}<option value={b}>{b}</option>{/each}
+                  <option value={BIND_LITERAL}>IP literal…</option>
+                </Select>
+                {#if !bindShowsLiteral && BIND_HELP[d.remoteBind]}
+                  <span class="text-xs text-faint">{BIND_HELP[d.remoteBind]}</span>
+                {/if}
+              </span>
+            </div>
+            {#if bindShowsLiteral}
+              <label class={rowCls}>
+                <span class="text-faint">Address</span>
+                <input
+                  class="{inputCls} font-mono"
+                  type="text"
+                  placeholder="192.168.1.20"
+                  bind:value={d.remoteBind} />
+              </label>
+              <p class="copy text-xs text-faint">
+                An IP literal, not a hostname — a name cannot be resolved at config-load time without turning a config read into a
+                network call, so the daemon rejects one.
+              </p>
+            {/if}
+            <label class={rowCls}>
+              <span class="text-faint">Port</span>
+              <input class={inputCls} type="number" min="0" max="65535" bind:value={d.remotePort} />
+            </label>
+
+            <!-- The bind rail's one hole. Two keys have to agree — this AND a
+                 non-loopback bind — so a config that merely says "lan" still
+                 binds loopback. It is a config key rather than an environment
+                 variable because the daemon is normally started by the restart
+                 button a few inches from here, which cannot set one. -->
+            <label class="flex cursor-pointer items-start gap-2 pt-1">
+              <Checkbox bind:checked={d.remoteInsecureLan} />
+              <span>
+                <span>Allow a LAN bind</span>
+                <span class="mt-0.5 block text-xs text-faint">
+                  Milestone 1 forces the bind to loopback, which a physical phone cannot reach. This honours the bind
+                  above and puts the shared key on your network in the clear. The Simulator does not need it.
+                </span>
+              </span>
+            </label>
+
+            <!-- A DISCLOSURE rather than a convenience, which is why it is off
+                 by default and why the copy leads with what it announces. What
+                 it buys is RECONNECTION, not pairing: the key and the pin
+                 already work on any network, and only the address the phone
+                 stored at pairing time goes stale. -->
+            <label class="flex cursor-pointer items-start gap-2 pt-1">
+              <Checkbox bind:checked={d.remoteAdvertise} />
+              <span>
+                <span>Advertise on the local network</span>
+                <span class="mt-0.5 block text-xs text-faint">
+                  Lets a paired phone find this Mac on a network whose addresses it has never seen — home, the office, a
+                  hotspot — without re-pairing. It announces to every peer on the network that this machine runs coding
+                  agents and accepts remote control; the announcement itself carries a version and nothing else, no
+                  hostname and no key.
+                </span>
+              </span>
+            </label>
+
+            <!-- The ACTIVE session's dev servers, republished. Off by default
+                 like the two above, and worth having because the alternative is
+                 `--host 0.0.0.0` in every project: permanent, well-known and on
+                 every network, where this is temporary, random and scoped to
+                 one address lola discovered itself. -->
+            <label class="flex cursor-pointer items-start gap-2 pt-1">
+              <Checkbox bind:checked={d.remoteDevForward} />
+              <span>
+                <span>Publish dev servers of the active session</span>
+                <span class="mt-0.5 block text-xs text-faint">
+                  A dev server binds 127.0.0.1, so a phone cannot reach it. This republishes the
+                  active session's on one private interface, on a random port, until that session
+                  stops being active. Anything on that network can reach them while it is up.
+                </span>
+              </span>
+            </label>
+          </div>
+          <div class="mt-4 border-t border-edge pt-4">
+            <div class="flex items-center justify-between gap-3">
+              <div>
+                <h4 class="text-ink">Connect a phone</h4>
+                <p class="copy text-sm text-faint">
+                  Everything the app needs, from the listener that is actually running — so a stale key file or an
+                  older log line cannot send the phone somewhere that refuses it.
+                </p>
+              </div>
+              {#if connect || connectErr}
+                <div class="flex shrink-0 items-center gap-2">
+                  {#if connectLeft > 0}
+                    <!-- Says the clock exists, so the reveal disappearing is a
+                         rule rather than a glitch. `num` keeps the countdown
+                         from reflowing the button beside it. -->
+                    <span class="num text-sm text-faint">Hides in {connectLeft}s</span>
+                  {/if}
+                  <Button size="sm" onclick={hideConnect}>Hide</Button>
+                </div>
+              {:else}
+                <Button variant="primary" size="sm" loading={connectBusy} onclick={revealConnect}>Show code</Button>
+              {/if}
+            </div>
+
+            <!-- Regenerating sits BESIDE the reveal rather than inside it: it is
+                 not a step in connecting a phone, it is the undo for having
+                 connected one. `ghost` keeps it quieter than Show code, which is
+                 the action someone actually came here for. -->
+            <div class="mt-2 flex items-center gap-3">
+              <Button size="sm" loading={regenBusy} onclick={askRegenerate}>Regenerate key</Button>
+              <span class="text-xs text-faint">
+                Milestone 1's only revocation — it disconnects every paired phone.
+              </span>
+            </div>
+            {#if regenDone}
+              <p class="copy mt-2 text-sm text-good">{regenDone}</p>
+            {/if}
+
+            {#if connectErr}
+              <p class="copy mt-3 text-sm text-bad">{connectErr}</p>
+            {:else if connect && connect.problem}
+              <p class="copy mt-3 text-sm text-warn">{connect.problem}</p>
+            {:else if connect}
+              <p class="copy mt-3 text-sm text-warn">
+                This is a secret. The code carries the access key, so anything that can read it off your screen — a
+                share, a recording, someone walking past — can drive your coding agents. It hides itself after 90
+                seconds; press Show code again if the phone was not ready.
+                <span class="text-ink">Copying puts the key on the clipboard</span>, which every app on this Mac can
+                read and which Universal Clipboard syncs to your other devices — copy something else afterwards.
+              </p>
+              <div class="mt-3 flex flex-wrap items-start gap-4">
+                <QRCode value={connect.code} size={228} label="Connect code" />
+                <div class="min-w-[16rem] flex-1 space-y-1">
+                  {@render connectRow("Address", connectHost, connectHost)}
+                  {@render connectRow("Port", String(connect.port), String(connect.port))}
+                  {@render connectRow("SPKI pin", connect.pin, connect.pin)}
+                  {@render connectRow(
+                    "Access key",
+                    connectKeyShown ? connect.key : "•".repeat(Math.min(connect.key.length, 32)),
+                    connect.key,
+                  )}
+                  <div class="flex flex-wrap gap-2 pt-2">
+                    <Button size="sm" onclick={() => (connectKeyShown = !connectKeyShown)}>
+                      {connectKeyShown ? "Hide key" : "Show key"}
+                    </Button>
+                    <!-- The label names what it hands over. The code CONTAINS
+                         the key, so a button reading "Copy code" beside a key
+                         row still drawn as dots implied the mask was a barrier
+                         to more than shoulder-surfing. It is not: the copy is
+                         the whole credential. -->
+                    <Button size="sm" onclick={() => copyConnect("code", connect?.code ?? "")}>
+                      {copied === "code" ? "Copied" : "Copy code (contains the key)"}
+                    </Button>
+                  </div>
+                </div>
+              </div>
+              {#if connect.hosts && connect.hosts.length > 1}
+                <p class="copy mt-3 text-xs text-faint">
+                  Also bound on <span class="font-mono text-ink">{connect.hosts.slice(1).join(", ")}</span>. The code
+                  carries every one of them, so the app can fall back without being told again.
+                </p>
+              {/if}
+              {#if connect.insecure}
+                <p class="copy mt-2 text-xs text-faint">
+                  Milestone 1: one shared key, no device identity and no way to revoke a single phone. Rotate it by
+                  restarting the daemon with a new <span class="font-mono text-ink">LOLA_REMOTE_INSECURE_KEY</span>.
+                </p>
+              {/if}
+            {/if}
+          </div>
+
+          <p class="copy mt-3 text-sm text-faint">
+            Milestone 1 only exists in a daemon built with <span class="font-mono text-ink">-tags lola_insecure</span>, and that build
+            <span class="text-ink"> forces the bind to loopback</span> whatever is set here, logging the override. A phone therefore
+            reaches it through a forward rather than directly — see <span class="font-mono text-ink">mobile/README.md</span>. Pairing,
+            device identities and revocation are milestone 2; until then authentication is a single bearer key from the daemon's
+            environment.
+          </p>
         </section>
       {:else if tab === "appearance"}
         <section>

@@ -111,6 +111,71 @@ func (d *Daemon) handle(ctx context.Context, req protocol.Request) protocol.Resp
 			return protocol.Response{OK: false, Error: err.Error()}
 		}
 		return dataResponse(data)
+	case "pairBegin":
+		// The reply CONTAINS a bearer key, so nothing on this path logs the
+		// request or the response — handleConn does not, and neither does this.
+		// internal/remote denies the command for every remote peer
+		// unconditionally, so adding the case here reaches the unix socket only.
+		data, err := d.handlePairBegin(ctx)
+		if err != nil {
+			return protocol.Response{OK: false, Error: err.Error()}
+		}
+		return dataResponse(data)
+	case "regenerateRemoteKey":
+		// Rolls M1's shared bearer key and rebuilds the listener, which is the
+		// only revocation this milestone has. Denied for every remote peer in
+		// internal/remote, so like pairBegin it reaches the unix socket only: a
+		// phone able to roll the key could lock its operator out while keeping
+		// the connection it already holds.
+		if err := d.handleRegenerateRemoteKey(ctx); err != nil {
+			return protocol.Response{OK: false, Error: err.Error()}
+		}
+		return protocol.Response{OK: true}
+	case "panes":
+		// Reachable remotely BY DESIGN: a phone that cannot enumerate panes
+		// cannot draw a tab strip. Read-only.
+		data, err := d.handlePanes(ctx, req.Session)
+		if err != nil {
+			return protocol.Response{OK: false, Error: err.Error()}
+		}
+		return dataResponse(data)
+	case "shellCreate":
+		// Also reachable remotely by design, and the most privileged thing on
+		// that surface: a shell in a worktree runs as the developer, with their
+		// gh token and SSH agent in reach. The operator decided phones get shell
+		// access (mobile/PLAN.md); M1 has no capability tiers, so every paired
+		// device has this. It is the first command that should sit behind the
+		// `shell` capability when M2 brings per-device identities.
+		data, err := d.handleShellCreate(ctx, req.Session, req.Cols, req.Rows)
+		if err != nil {
+			return protocol.Response{OK: false, Error: err.Error()}
+		}
+		return dataResponse(data)
+	case "paneClose":
+		// Closes ONE auxiliary pane. The agent pane is refused by the handler:
+		// it IS the session, and a close on it would be a kill in disguise.
+		var a protocol.PaneCloseArgs
+		if err := json.Unmarshal(req.Args, &a); err != nil {
+			return protocol.Response{OK: false, Error: "paneClose: bad args: " + err.Error()}
+		}
+		data, err := d.handlePaneClose(ctx, a)
+		if err != nil {
+			return protocol.Response{OK: false, Error: err.Error()}
+		}
+		return dataResponse(data)
+	case "paneResize":
+		// Pins a pane's window to a phone's size while a phone is looking at it,
+		// and releases it after. The deliberate opposite of panebus's
+		// ignore-size attach — see protocol.PaneResizeArgs for why both are right.
+		var a protocol.PaneResizeArgs
+		if err := json.Unmarshal(req.Args, &a); err != nil {
+			return protocol.Response{OK: false, Error: "paneResize: bad args: " + err.Error()}
+		}
+		data, err := d.handlePaneResize(ctx, a)
+		if err != nil {
+			return protocol.Response{OK: false, Error: err.Error()}
+		}
+		return dataResponse(data)
 	case "hookEvent":
 		return d.handleHookEvent(req)
 	case "kill":
@@ -249,7 +314,11 @@ func (d *Daemon) handle(ctx context.Context, req protocol.Request) protocol.Resp
 //
 //	stop         → status "idle"           turn done; the observer's PR check
 //	                                       may promote it later (ci_*, …)
-//	notification → status "needs_input"    permission prompt / waiting on a human
+//	notification → SPLIT on the reason     a permission prompt parks the agent
+//	                                       on waiting_input; the idle "waiting
+//	                                       for your input" nudge means the turn
+//	                                       ENDED unread, so it parks on idle +
+//	                                       the Nudged breadcrumb (see below)
 //	session_end  → status "session_ended"  the claude process terminated
 //	tool_use     → LastSeen touch only     liveness heartbeat; no status change
 //	                                       unless currently "idle", which a new
@@ -258,10 +327,12 @@ func (d *Daemon) handle(ctx context.Context, req protocol.Request) protocol.Resp
 //	                                       including a human attach nudge), when
 //	                                       currently idle / needs_input
 //
-// AtPrompt (PLAN P3 send-keys safety gate) is maintained alongside status: only
-// "stop" sets it (the agent is idle at its input prompt and safe to send-keys
-// into); every other event — a new tool_use, a notification the human must
-// answer, session end, or a user_prompt that STARTS a turn — CLEARS it, so the
+// AtPrompt (PLAN P3 send-keys safety gate) is maintained alongside status. Two
+// events SET it, and both assert the same fact — the agent is resting at its own
+// composer: "stop" (the turn just ended) and a notification classified as the
+// idle nudge (the turn ended ~60s ago and nobody looked). Every other event — a
+// new tool_use, a notification the human must actually answer, session end, or a
+// user_prompt that STARTS a turn — CLEARS it, so the
 // reaction engine never types into a busy or human-blocked pane. user_prompt is
 // the turn-START clear: without it a human-initiated attach turn whose reply is
 // text-only (no PostToolUse) would leave AtPrompt stale-true for the whole turn
@@ -306,15 +377,50 @@ func (d *Daemon) handleHookEvent(req protocol.Request) protocol.Response {
 			sess.AtPrompt = true // idle at the prompt: safe to send-keys into
 			sess.AtPromptVerified = true
 		case "notification":
-			sess.SetAgentState(state.AgentWaitingInput, "", now)
-			// The message finally says WHY: a permission prompt reads
-			// differently from an idle "waiting for your input" nudge.
-			sess.InputReason = state.ClassifyNotification(payload.Message, payload.Reason)
+			// The message finally says WHY, and the two reasons are OPPOSITE
+			// facts about the agent — so they must not land on the same axis
+			// value. A permission prompt is a real block: the turn cannot
+			// continue until a human approves it. The idle nudge is claude-code
+			// nagging that a FINISHED turn has gone unread for ~60s; the agent
+			// is sitting at its own composer with nothing to ask.
+			//
+			// Treating both as waiting_input is what made needs_input useless.
+			// In a measured 20MB daemon.log, 412 of 458 needs_input transitions
+			// (90%) were minted by this one nudge and only 45 were permission
+			// prompts — and because nothing demotes waiting_input except a NEW
+			// turn (user_prompt / an ActivityWorking pane), a session that
+			// merely finished its work and was not looked at stayed "Needs You"
+			// forever. Worse, the nudge fires on a 60s period against a 30s
+			// observer, so needs_input and the delivery word took turns owning
+			// the rollup: 264 needs_input↔review_pending flips, ~52% of all
+			// state churn, median dwell exactly 60s.
+			//
+			// So the nudge parks the axis on IDLE and leaves a display-only
+			// breadcrumb (Session.Nudged) for a UI that wants to say "idle, and
+			// it has been asking for you". AtPrompt is OPENED, not closed: the
+			// nudge is positive evidence the agent is parked at its own prompt,
+			// which is exactly what "stop" asserts a minute earlier — and the
+			// gate had been closed here purely because the axis said
+			// waiting_input. Every send-keys path still re-proves it against a
+			// live pane before typing a byte.
+			reason := state.ClassifyNotification(payload.Message, payload.Reason)
+			if reason == state.InputIdleNotify {
+				sess.SetAgentState(state.AgentIdle, "", now)
+				sess.Nudged = true
+				sess.AtPrompt = true // parked at its own composer: safe to send-keys
+				sess.AtPromptVerified = true
+			} else {
+				sess.SetAgentState(state.AgentWaitingInput, "", now)
+				sess.InputReason = reason
+				sess.AtPrompt = false // blocked on a human's approval: never send-keys
+				sess.AtPromptVerified = true
+			}
+			// Recorded for DISPLAY in both branches, and only AFTER the axis
+			// move: SetAgentState clears LastNotification whenever it leaves
+			// waiting_input, which the idle branch above always does.
 			if payload.Message != "" {
 				sess.LastNotification = payload.Message
 			}
-			sess.AtPrompt = false // waiting on a human: never send-keys
-			sess.AtPromptVerified = true
 		case "session_end":
 			sess.SetAgentState(state.AgentExited, "", now)
 			sess.AtPrompt = false
@@ -462,7 +568,7 @@ func (d *Daemon) sessionsData() protocol.SessionsData {
 			Age:       formatAge(now.Sub(s.FirstSeen)),
 			CIRetries: s.CIRetries,
 			Escalated: s.Escalated,
-			Reacting:  reactingLabel(s.Status, s.CIRetries, s.Escalated, ciBudget),
+			Reacting:  reactingLabel(s.Delivery, s.CIRetries, s.Escalated, ciBudget),
 
 			AgentState:       string(s.AgentState),
 			Delivery:         string(s.Delivery),
@@ -480,6 +586,7 @@ func (d *Daemon) sessionsData() protocol.SessionsData {
 			DevActive:   s.DevActive,
 			DevCommands: devCommands[s.Project],
 			DevURLs:     s.DevURLs,
+			DevForwards: devForwardInfos(s.DevForwards),
 		}
 		if c := s.DevClash; c != nil {
 			si.DevClash = &protocol.DevClashInfo{
@@ -519,28 +626,34 @@ func (d *Daemon) sessionsData() protocol.SessionsData {
 }
 
 // reactingLabel summarizes the reaction engine's current posture for a session
-// into a short human label for the TUI, derived purely from the persisted
-// reaction state (status + CIRetries + Escalated) plus the configured ci_failed
+// into a short human label, derived purely from the persisted reaction state
+// (the DELIVERY axis + CIRetries + Escalated) plus the configured ci_failed
 // retry budget (the "N/M" denominator). "" means there is no reaction posture
-// worth surfacing beyond the STATUS column; the label never re-states the raw
-// status verbatim. Escalated wins over everything: it is set only while CI is
-// still failing and the session has been handed to a human.
-func reactingLabel(status string, ciRetries int, escalated bool, ciBudget int) string {
+// worth surfacing beyond the status pill; the label never re-states the pill
+// verbatim. Escalated wins over everything: it is set only while CI is still
+// failing and the session has been handed to a human.
+//
+// It reads the SAME axis the engine dispatches on (see react), and it has to:
+// derived from the rolled-up status it went silent for exactly the sessions
+// that most needed it explained, because a live agent waiting on a human
+// outranks every PR state in Rollup — so a session mid ci-retry showed "ci
+// retry 1/2" only while its agent happened not to be at a prompt.
+func reactingLabel(d state.DeliveryState, ciRetries int, escalated bool, ciBudget int) string {
 	switch {
 	case escalated:
 		return "escalated"
-	case status == "ci_failed":
+	case d == state.DeliveryCIFailed:
 		return fmt.Sprintf("ci retry %d/%d", ciRetries, ciBudget)
-	case status == "ci_pending" && ciRetries > 0:
+	case d == state.DeliveryCIPending && ciRetries > 0:
 		// A recovery prompt is in flight and CI is re-running.
 		return fmt.Sprintf("ci retry %d/%d", ciRetries, ciBudget)
-	case status == "changes_requested":
+	case d == state.DeliveryChangesRequested:
 		return "addressing review"
-	case status == "merge_conflict":
+	case d == state.DeliveryMergeConflict:
 		return "rebasing"
-	case status == "approved":
+	case d == state.DeliveryApproved:
 		return "ready to merge"
-	case status == "review_pending":
+	case d == state.DeliveryReviewPending:
 		return "awaiting review"
 	}
 	return ""
@@ -621,8 +734,18 @@ func (d *Daemon) handleReload(ctx context.Context) error {
 		// keys go to the NEW one.
 		d.native = newNativeRuntime(nc, d.home, d.lolaBin, d.linearKey, d.nativeLogf)
 	}
+	// [remote] is compared exactly (config.RemoteConfig is comparable) so an
+	// unrelated reload never touches a live listener. Applied AFTER the unlock:
+	// rebinding loads the device identity and binds a socket, and doing that
+	// under the lock every tick and every socket command takes would stall the
+	// daemon for the length of a TLS listener's teardown. See reloadRemote for
+	// why a change is a full rebind rather than an in-place mutation.
+	remoteChanged := old.Remote != nc.Remote
 	d.mu.Unlock()
 
+	if remoteChanged {
+		d.reloadRemote()
+	}
 	d.syncWorkers(ctx)
 	d.logf("", "config reloaded")
 	return nil

@@ -13,6 +13,17 @@
  * the only secret-adjacent values any DTO carries. Nothing ever reads a secret
  * back out to the frontend — LinearKeyStatus reports where the key lives and
  * whether it resolves, never its value.
+ * 
+ * ConnectCode is the ONE deliberate exception, and it is written down rather
+ * than left as an inconsistency. It returns the phone listener's bearer key
+ * because the key IS the thing being handed over — a QR nobody can read is not
+ * a hand-off — and the exception costs nothing in privilege: the answer comes
+ * over ~/.lola/lola.sock, which is srw------- inside a 0700 directory, and
+ * anything that can open it already reaches cmd=answer, which types into a
+ * running coding agent. What the exception does cost is EXPOSURE, so the rule
+ * it replaces the write-only one with is narrower rather than absent: the value
+ * is fetched only when a human asks for it, it is never logged or persisted on
+ * this side, and the surface that renders it has a hide.
  * @module
  */
 
@@ -42,6 +53,30 @@ export function AddGroup(label: string): $CancellablePromise<string> {
  */
 export function ConfigExists(): $CancellablePromise<boolean> {
     return $Call.ByID(1455498937);
+}
+
+/**
+ * ConnectCode asks the daemon for the phone listener's connect details
+ * (cmd=pairBegin) so the Remote tab can hand them to a phone.
+ * 
+ * It asks the DAEMON rather than reading ~/.lola/device.crt and
+ * ~/.lola/remote-dev-key, and that is the whole point of the method existing.
+ * Recomputing the pin here would mean calling remote.LoadOrCreateDeviceKey,
+ * whose only exported form CREATES an identity when none is there — this
+ * process would mint the daemon's TLS identity as a side effect of drawing a
+ * settings tab, from the wrong process, even with [remote] disabled. And it
+ * would answer about a FILE: the key file is the running daemon's key only when
+ * the script that wrote it also started the daemon, so a code rendered from it
+ * after a `lola run` from another shell produces a scan the daemon answers with
+ * "authenticate first" — which, from the phone, is indistinguishable from a bad
+ * camera read. The daemon holds the live value of both facts; only it can
+ * answer.
+ * 
+ * The timeout is the short one: pairBegin reads in-memory state and execs
+ * nothing.
+ */
+export function ConnectCode(): $CancellablePromise<$models.ConnectCodeDTO> {
+    return $Call.ByID(3664447846);
 }
 
 /**
@@ -127,6 +162,43 @@ export function PickFolder(start: string): $CancellablePromise<string> {
  */
 export function PrioritySortKeys(): $CancellablePromise<string[] | null> {
     return $Call.ByID(3393829323);
+}
+
+/**
+ * RegenerateRemoteKey rolls the phone listener's shared bearer key
+ * (cmd=regenerateRemoteKey) and returns once the listener has been rebuilt
+ * around the new one.
+ * 
+ * It is milestone 1's ONLY revocation, and it is blunt: every paired phone
+ * loses access at once, because every paired phone holds the same key. The UI
+ * says so before it asks, rather than offering it as routine maintenance —
+ * milestone 2's per-device revocation is the precise version, and this command
+ * disappears with the rest of the insecure path.
+ * 
+ * Like ConnectCode this asks the daemon rather than writing the file here.
+ * Deleting a key file from this process would roll the value on disk and leave
+ * the RUNNING listener authenticating with the old one, so the app would report
+ * a revocation that had not happened — the single worst outcome for a control
+ * whose entire purpose is to stop a key working.
+ * 
+ * The timeout is longer than ConnectCode's because the daemon tears the
+ * listener down and binds a new one, which closes live connections.
+ */
+export function RegenerateRemoteKey(): $CancellablePromise<void> {
+    return $Call.ByID(1981404586);
+}
+
+/**
+ * RemoteBinds returns the [remote].bind keywords the daemon accepts, so the
+ * settings form offers them instead of taking free text. Same posture as
+ * PrioritySortKeys: MEMBERSHIP is the Go side's call, since config.Validate
+ * rejects anything that is neither one of these nor an IP literal.
+ * 
+ * The literal case is why the form cannot be a picker alone — see the comment
+ * on SettingsDTO.RemoteBind.
+ */
+export function RemoteBinds(): $CancellablePromise<string[] | null> {
+    return $Call.ByID(2477471539);
 }
 
 /**

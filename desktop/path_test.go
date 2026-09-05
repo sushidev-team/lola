@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // stubLoginShellPATH replaces the login-shell probe for the duration of a test,
@@ -114,6 +115,22 @@ func TestEnsurePATHIsIdempotent(t *testing.T) {
 // The probe reads its answer from a SENTINEL, not from "the output": login rc
 // files print banners, and a PATH assembled from someone's shell greeting would
 // be handed straight to exec.
+// widenPathProbe lifts the probe's startup budget for a test that spawns a real
+// shell and asserts on what it answered.
+//
+// The production bound is 3 seconds because it runs at app startup and a wedged
+// profile must not hold the window. Under `go test ./...` this process is one
+// of many spawning children at once, and a probe that misses the deadline
+// reports "" — indistinguishable from a shell that printed no sentinel, so the
+// test fails claiming the sentinel was not found. The bound is not what is
+// under test here; the parsing is.
+func widenPathProbe(t *testing.T) {
+	t.Helper()
+	prev := pathProbeTimeout
+	pathProbeTimeout = 60 * time.Second
+	t.Cleanup(func() { pathProbeTimeout = prev })
+}
+
 func TestLoginShellPATHIgnoresBanners(t *testing.T) {
 	sh := filepath.Join(t.TempDir(), "noisyshell")
 	script := "#!/bin/sh\n" +
@@ -124,6 +141,7 @@ func TestLoginShellPATHIgnoresBanners(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("SHELL", sh)
+	widenPathProbe(t)
 
 	got := loginShellPATH()
 	if got != "/from/profile:/usr/bin" {

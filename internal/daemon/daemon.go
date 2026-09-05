@@ -26,8 +26,11 @@ import (
 	"github.com/sushidev-team/lola/internal/brain"
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/linear"
+	"github.com/sushidev-team/lola/internal/mdns"
 	"github.com/sushidev-team/lola/internal/notify"
+	"github.com/sushidev-team/lola/internal/panebus"
 	"github.com/sushidev-team/lola/internal/portproc"
+	"github.com/sushidev-team/lola/internal/remote"
 	"github.com/sushidev-team/lola/internal/runtime"
 	"github.com/sushidev-team/lola/internal/scm"
 	"github.com/sushidev-team/lola/internal/secrets"
@@ -329,6 +332,59 @@ type Daemon struct {
 	// (the same discipline as the old AO-down rule). Overridable in tests.
 	runtimeHealth func(binary string) error
 
+	// Remote phone listener ([remote], remotewire.go). remote is the TLS
+	// listener a paired mobile client speaks the protocol.Frame envelope to,
+	// and panes is the pane-attach registry it subscribes through. Both are nil
+	// until startRemote binds one, which only ever happens when the [remote]
+	// table says to listen AND this binary was built with the M1 -tags
+	// lola_insecure path — see remotelisten.go and its untagged companion.
+	//
+	// They have their OWN mutex rather than living under d.mu, for two reasons.
+	// Binding a socket and loading the device identity are I/O, and d.mu is the
+	// lock every tick, every observe cycle and every socket command takes; and
+	// handleReload holds d.mu while it swaps the config, so a rebind driven
+	// from there has to happen after that unlock or the daemon stalls for the
+	// length of a TLS listener's teardown.
+	//
+	// LOCK ORDER is remoteMu -> d.mu and never the reverse: startRemote reads
+	// the config under d.mu, RELEASES it, and only then takes remoteMu, under
+	// which it may take d.mu again to build a tmux client.
+	//
+	// paneRegistry is the construction seam: it returns a Registry with its
+	// tmux/vtterm seams already filled. startRemote installs Resolve on the
+	// result itself and never lets the seam supply it, because identity is the
+	// one question only the daemon can answer (see resolvePaneName) and a test
+	// that provided its own gate would be proving nothing about the wiring.
+	// remoteErr is the last reason a listener did not come up, kept so
+	// cmd=pairBegin can REPORT it instead of the caller guessing. The desktop
+	// used to tell an operator to go read the log for an address it could not
+	// bind, which was a guess and was wrong the one time it mattered: the actual
+	// cause was a missing bearer key. It is cleared whenever a listener starts.
+	remoteMu     sync.Mutex
+	remote       *remote.Server
+	remoteErr    string
+	panes        *panebus.Registry
+	paneRegistry func() *panebus.Registry
+	// advertiser publishes the listener on the local network (internal/mdns),
+	// so a phone finds this Mac by name instead of by an address that changes
+	// with every network. Held under remoteMu with the listener because its
+	// lifetime is exactly the listener's: a rebind replaces both. nil until the
+	// first listener comes up, and nil forever on a build with no listener.
+	advertiser *mdns.Advertiser
+	// mdnsStart is internal/mdns's exec seam, for tests that must not spawn
+	// dns-sd. nil uses the real one.
+	mdnsStart mdns.Starter
+
+	// forwards are the live dev-server forwards, keyed by session and target
+	// (internal/daemon/devforwardwire.go). They exist only while a session is
+	// the ACTIVE one and only when [remote].dev_forward is set. forwardOpen and
+	// forwardHosts are the seams tests use so no listener is opened and no
+	// interface is enumerated.
+	forwardMu    sync.Mutex
+	forwards     map[devForwardKey]liveForward
+	forwardOpen  func(host, target string) (string, io.Closer, error)
+	forwardHosts func() []string
+
 	// Socket-initiated tick work (pollOnce) is tracked separately from the
 	// worker/reconcile goroutines so graceful shutdown can drain it too.
 	shutMu   sync.Mutex
@@ -586,6 +642,15 @@ func Run(ctx context.Context) error {
 	d.wg.Add(1)
 	go d.reviewLoop(ctx)
 
+	// The phone listener ([remote], remotewire.go). Same posture as the two
+	// workers above: the CANCELLABLE run context, because everything it does is
+	// read-only fan-out or a request already in flight. It binds nothing unless
+	// the table asks for one AND this build carries an authenticator, and a
+	// failure to bind is logged rather than fatal — a daemon that will not
+	// start because a port is taken is strictly worse than one that polls
+	// without a phone attached.
+	d.startRemote(ctx)
+
 	go d.serve(ctx, ln)
 
 	logger.Printf("daemon started (socket %s)", sock)
@@ -598,6 +663,18 @@ func Run(ctx context.Context) error {
 	// Native tmux sessions are deliberately NOT killed here: the tmux server
 	// owns them and they survive lola restarts by design — the next daemon
 	// re-adopts them (adoptNativeSessions).
+	// The remote listener goes FIRST and finishes its own work: it closes its
+	// listeners, then every live connection and pane stream, and only then
+	// waits for its own goroutines. That ordering is the invariant — drainConnWork
+	// below is an UNBOUNDED Wait built for bounded socket work, and a phone
+	// holding a pane stream open for hours is the opposite of that, so anything
+	// still streaming when the drain starts hangs shutdown until the phone
+	// happens to disconnect.
+	d.stopRemote()
+	// Before the worker drain: a forward holds accepted connections open for as
+	// long as a browser keeps them, which is exactly the unbounded wait the
+	// drain below is not built for.
+	d.stopDevForwards()
 	d.stopAllWorkers()
 	d.wg.Wait()
 	d.drainConnWork()
@@ -1030,10 +1107,12 @@ func (d *Daemon) adoptNativeSessions(ctx context.Context) {
 			*cur = s
 			return true
 		})
-		switch adopted.Status {
-		case "dead":
+		// Both anomalies live on the AGENT axis; reading them off the rolled-up
+		// status hid an orphan behind any PR state its record still carried.
+		switch adopted.AgentState {
+		case state.AgentDead:
 			d.logf("", "adopt: %s has a worktree but no tmux session (dead; reconcile may revert its issue)", adopted.ID)
-		case "orphaned":
+		case state.AgentOrphaned:
 			d.logf("", "adopt: %s is a lola tmux session without a worktree (orphaned; kill candidate)", adopted.ID)
 		}
 	}

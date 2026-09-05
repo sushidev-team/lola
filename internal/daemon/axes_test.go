@@ -238,9 +238,18 @@ func TestReactClosedNotifiesOnceAndUnshields(t *testing.T) {
 		t.Errorf("closed must notify once, got %d", seams.noteCount())
 	}
 
-	// And a closed session no longer accounts for its issue in reconcile.
-	if nativeSessionPresent("closed") {
+	// And a closed session no longer accounts for its issue in reconcile —
+	// whatever its agent is doing, which is the point of asking the axes: the
+	// agent here is idle at its prompt and the rollup would have said "closed"
+	// anyway, but a waiting one would have masked it.
+	if nativeSessionPresent(got) {
 		t.Error("closed must not shield its issue from the orphan revert")
+	}
+	if nativeSessionPresent(session.Session{
+		AgentState: state.AgentWaitingInput,
+		Delivery:   state.DeliveryClosed,
+	}) {
+		t.Error("a closed PR must not shield its issue behind a waiting agent")
 	}
 }
 
@@ -354,15 +363,24 @@ func TestHookPayloadIngestion(t *testing.T) {
 		t.Fatal("leaving working must clear CurrentTool")
 	}
 
-	// A bare idle-notification classifies as idle_notification.
+	// A bare idle-notification is the agent's own 60s nudge, NOT a question:
+	// it parks the session IDLE and records the nudge on Nudged instead of
+	// minting a waiting_input with reason idle_notification. That one rule was
+	// 90% of the measured needs_input population.
 	d.handleHookEvent(protocol.Request{Cmd: "hookEvent", Session: s.ID, Event: "user_prompt"})
 	d.handleHookEvent(protocol.Request{
 		Cmd: "hookEvent", Session: s.ID, Event: "notification",
 		Hook: &protocol.HookPayload{Message: "Claude is waiting for your input"},
 	})
 	got = getSess(t, d, s.ID)
-	if got.InputReason != state.InputIdleNotify {
-		t.Fatalf("InputReason = %q, want idle_notification", got.InputReason)
+	if got.AgentState != state.AgentIdle {
+		t.Fatalf("AgentState = %q, want idle after the agent's own nudge", got.AgentState)
+	}
+	if !got.Nudged {
+		t.Fatal("Nudged not recorded for an idle-notification")
+	}
+	if got.InputReason != "" {
+		t.Fatalf("InputReason = %q, want empty — the nudge is not a block", got.InputReason)
 	}
 
 	// Nil payload: still a full transition, no field noise.

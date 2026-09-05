@@ -102,8 +102,28 @@ import (
 // Response.Data = CodeRabbitData with a short outcome. Watch disabled / no open
 // PR yields a "skipped" CodeRabbitData (not an error); an unknown session or a gh
 // failure is an error.
+//
+// Cmd "pairBegin" asks for everything a phone needs to reach this daemon's
+// remote listener — addresses, port, SPKI pin and, in an M1 build, the bearer
+// key — as PairBeginData. It takes no arguments: the answer describes the
+// LISTENER THAT IS RUNNING, which is the whole point of asking the daemon
+// rather than reading a file. ~/.lola/remote-dev-key is only the live key when
+// the script that wrote it also started the daemon, and a desktop that rendered
+// a code from a stale file would produce a scan the daemon refuses with
+// "authenticate first" — indistinguishable from a bad camera read.
+//
+// It is refused for every REMOTE peer unconditionally (see internal/remote's
+// deniedCommands, which has listed it since before it existed): enrolment is a
+// local operation at the machine, and a phone that could ask for the key could
+// enrol a second device that survives revoking the first. Over the unix socket
+// it is answered, because anything that can open ~/.lola/lola.sock already
+// reaches cmd=answer and therefore already has more than the key grants.
+//
+// The handler is TAG-SPLIT. A release binary has no bearer-key path at all, so
+// it answers with an error naming that rather than an empty code; only a
+// -tags lola_insecure daemon can fill PairBeginData.Key.
 type Request struct {
-	Cmd    string `json:"cmd"` // stop|status|reload|enable|disable|pollOnce|sessions|projects|prs|hookEvent|kill|revive|pane|answer|review|coderabbit|resolveConflict|switchAgent|dev|devFreePort|open|renameProject
+	Cmd    string `json:"cmd"` // stop|status|reload|enable|disable|pollOnce|sessions|projects|prs|hookEvent|kill|revive|pane|answer|review|coderabbit|resolveConflict|switchAgent|dev|devFreePort|open|renameProject|pairBegin
 	Poll   string `json:"poll,omitempty"`
 	DryRun bool   `json:"dryRun,omitempty"`
 
@@ -133,6 +153,20 @@ type Request struct {
 	// Text is the human's answer for cmd=answer — typed verbatim into the
 	// session's pane (send-keys appends Enter).
 	Text string `json:"text,omitempty"`
+
+	// Cols and Rows optionally state the size the CLIENT can show, for
+	// cmd=shellCreate: the tmux session is created at that size instead of
+	// tmux's default.
+	//
+	// It exists so a phone's shell tab does not have to be REFLOWED into shape
+	// after the fact. Created at tmux's own size a shell is typically 157x37,
+	// so a phone pinned it a moment later and the tab visibly redrew itself
+	// line by line for several seconds. Born at the right size there is nothing
+	// to redraw. Both are ignored unless positive, and clamped like every other
+	// dimension on this surface, so a client that does not send them (or sends
+	// nonsense) gets exactly the old behaviour.
+	Cols int `json:"cols,omitempty"`
+	Rows int `json:"rows,omitempty"`
 
 	// Lines optionally bounds cmd=pane's capture to the last N rendered rows of
 	// the target pane; 0 means the daemon's default (~40).
@@ -174,6 +208,20 @@ type StatusData struct {
 	RuntimeErr string       `json:"runtimeErr,omitempty"`
 	LinearOK   bool         `json:"linearOk"`
 	Polls      []PollStatus `json:"polls"`
+
+	// Host is this machine's name, for a client that has to say WHICH daemon it
+	// is talking about. A phone reaches the same Mac on a different address at
+	// home and at the office — that is the point of discovery — so an address
+	// is a poor name for it and a stale one is worse: "connecting to
+	// 192.168.10.160" describes a network, not the machine somebody left work
+	// running on.
+	//
+	// It travels on an AUTHENTICATED answer, never in the mDNS advertisement,
+	// and the difference is deliberate. A hostname in a TXT record is a stable
+	// cross-network correlator broadcast to every peer (internal/mdns says so
+	// at length); telling an already-paired device the name of the machine it
+	// is holding a session list from discloses nothing it does not have.
+	Host string `json:"host,omitempty"`
 }
 
 type PollStatus struct {
@@ -239,7 +287,7 @@ type SessionInfo struct {
 	StatusSince      time.Time `json:"statusSince,omitzero"`       // when the rolled-up Status last changed
 	AgentStateSince  time.Time `json:"agentStateSince,omitzero"`   // when the agent axis last changed
 	LastActivityAt   time.Time `json:"lastActivityAt,omitzero"`    // last POSITIVE evidence of work
-	ActivitySource   string    `json:"activitySource,omitempty"`   // hook|pane|tmux_activity
+	ActivitySource   string    `json:"activitySource,omitempty"`   // hook|pane|tmux_activity|transcript
 	PRObservedAt     time.Time `json:"prObservedAt,omitzero"`      // last successful gh PR fetch
 	PRStale          bool      `json:"prStale,omitempty"`          // PR facts are ≥3 failed fetches old
 	AtPrompt         bool      `json:"atPrompt,omitempty"`         // agent idle at its prompt (send-keys gate open)
@@ -273,9 +321,15 @@ type SessionInfo struct {
 	// DevClash is set while a dev tab of this session is dead BECAUSE another
 	// process holds the port it wanted — the one dev failure lola can name and
 	// offer to undo (cmd=devFreePort). nil whenever the tabs are healthy.
+	// DevForwards are those same servers republished on the local network, so a
+	// phone can open them: the loopback addresses above are unreachable from
+	// anything but this machine. Present only while the session is ACTIVE and
+	// only when [remote].dev_forward is set, and each one ends with the tabs it
+	// belongs to. Empty is the normal state.
 	DevActive   bool          `json:"devActive,omitempty"`
 	DevCommands []string      `json:"devCommands,omitempty"`
 	DevURLs     []string      `json:"devUrls,omitempty"`
+	DevForwards []DevForward  `json:"devForwards,omitempty"`
 	DevClash    *DevClashInfo `json:"devClash,omitempty"`
 
 	// Reaction-engine posture (PLAN P3), flattened so the TUI renders reaction
@@ -393,7 +447,7 @@ type PrRow struct {
 	Checks      string `json:"checks"` // pass|fail|pending|none
 	Review      string `json:"review"`
 	URL         string `json:"url"`
-	Status      string `json:"status"`      // scm.DeriveStatus vocabulary
+	Status      string `json:"status"`      // state.DeliveryState vocabulary (daemon.openPRStatus)
 	AlreadyOpen bool   `json:"alreadyOpen"` // a lola session already holds this branch
 }
 
@@ -537,6 +591,21 @@ type DevData struct {
 	Commands []string `json:"commands,omitempty"`
 	Stopped  string   `json:"stopped,omitempty"`
 	Message  string   `json:"message,omitempty"`
+}
+
+// DevForward is one dev server republished on the local network: where a phone
+// goes, and which loopback address it is.
+//
+// BOTH, because the forward's port is allocated by the kernel and means nothing
+// to anybody — "192.168.20.3:65497" identifies no application. The address the
+// developer knows is the ORIGINAL: 8000 is the Laravel app, 5175 is vite. A
+// client showing only the forward makes its user guess which link is which,
+// which with an app and a bundler is a coin flip.
+type DevForward struct {
+	// URL is the address to open, on the network the daemon is on.
+	URL string `json:"url"`
+	// From is the loopback address it publishes ("127.0.0.1:8000").
+	From string `json:"from"`
 }
 
 // DevClashInfo is why a dev tab is dead when the reason is a port another
@@ -705,4 +774,97 @@ type Match struct {
 	Title      string `json:"title"`
 	Action     string `json:"action"`           // spawned|would-spawn|skipped
 	Reason     string `json:"reason,omitempty"` // dedup-label|dedup-seen|in-flight|capped|error
+}
+
+// PaneInfo is one pane of a session, as cmd=panes reports it.
+//
+// Kind is the ROLE — "agent", "shell", "dev" or "review" — so a client can group
+// and label a tab strip without re-deriving lola's naming convention, which
+// lives in internal/runtime and internal/devtab and is not a client's business.
+// Index is the N of a numbered tab and 0 for the agent and review panes.
+type PaneInfo struct {
+	Name  string `json:"name"`
+	Kind  string `json:"kind"`
+	Label string `json:"label"`
+	Index int    `json:"index,omitempty"`
+}
+
+// PanesData is Response.Data for cmd=panes: which panes EXIST for a session,
+// in the order a tab strip should draw them.
+//
+// It is derived from tmux on every call rather than read from the session
+// record, for the same reason DevActive and DevURLs are: Session.DevTabs is a
+// cache the observer overwrites, shell tabs are recorded nowhere at all, and a
+// strip drawn from a stale cache offers tabs that are gone while hiding ones
+// that are there.
+//
+// CanCreateShell is answered here rather than left for the client to infer from
+// a count whose cap it would have to know.
+type PanesData struct {
+	Session        string     `json:"session"`
+	Panes          []PaneInfo `json:"panes"`
+	Review         PaneInfo   `json:"review,omitempty"`
+	CanCreateShell bool       `json:"canCreateShell"`
+}
+
+// ShellCreateData is Response.Data for cmd=shellCreate: the pane that was
+// started, which the caller subscribes to like any other.
+//
+// The INDEX is allocated by the daemon, not asked for by the caller. The desktop
+// lets its own frontend own the name because both run in one process on one
+// machine; two phones and a desktop racing for "-shell-2" do not have that
+// luxury, and only the daemon sees all of them.
+type ShellCreateData struct {
+	Session string `json:"session"`
+	Pane    string `json:"pane"`
+	Index   int    `json:"index"`
+}
+
+// PairBeginData is Response.Data for cmd=pairBegin: how to reach this daemon's
+// phone listener, as facts rather than as a picture.
+//
+// Two shapes of the same thing, deliberately. Code is the opaque token a client
+// renders as a QR and the mobile app scans; the loose fields are the same
+// values as text, so a scan is a convenience and never the only way in — a
+// camera that will not focus, a phone with the permission denied, or a
+// Simulator with no camera at all must still be able to connect. Rendering is
+// the CLIENT's job (the desktop draws an SVG, `lola pair` prints half-blocks),
+// so the daemon ships a string and takes no QR dependency.
+//
+// EVERY field of this is a secret while Key is set, and the token especially:
+// it CONTAINS the key. It is never logged by the daemon, never placed in an
+// error, and a client must treat it the way it treats a password — revealed on
+// an explicit action, not left on a screen.
+type PairBeginData struct {
+	// Code is the scannable token (internal/remote.EncodeConnectCode). Empty
+	// when the daemon cannot answer, in which case Problem says why.
+	Code string `json:"code,omitempty"`
+
+	// Hosts is every address the listener actually bound, in bind order, and
+	// Port the port it took. Under -tags lola_insecure the bind is forced to
+	// loopback, so this is 127.0.0.1 and ::1 and a phone reaches them through a
+	// forward — a LAN address must never be printed here, because it is one the
+	// daemon cannot deliver.
+	Hosts []string `json:"hosts,omitempty"`
+	Port  int      `json:"port,omitempty"`
+
+	// Pin is the listener's SPKI pin: standard base64 with padding, byte for
+	// byte the value the startup log line carries.
+	Pin string `json:"pin,omitempty"`
+
+	// Key is M1's shared bearer key. Empty in any build without the
+	// lola_insecure path, where Problem names that as the reason.
+	Key string `json:"key,omitempty"`
+
+	// Insecure records that this code carries a shared bearer key with no
+	// device identity and no cryptography, so a client can say so beside it
+	// instead of a reader having to know which build produced it.
+	Insecure bool `json:"insecure,omitempty"`
+
+	// Problem names why there is no code, in one human sentence, when the
+	// daemon can answer the request but not fill it: the listener is not
+	// running, or this build has no way to authenticate a phone. It is a
+	// RENDERED STATE rather than an error so a client shows the reason in place
+	// of the code instead of a failed call with nothing to act on.
+	Problem string `json:"problem,omitempty"`
 }

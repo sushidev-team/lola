@@ -74,7 +74,7 @@ func (d *Daemon) handleTickets(ctx context.Context, a protocol.TicketsArgs) (pro
 	// Which issues a live session already holds (dedup hint for the picker).
 	held := map[string]bool{}
 	for _, s := range d.sessions.Snapshot() {
-		if s.IssueUUID != "" && isLiveStatus(s.Status) {
+		if s.IssueUUID != "" && isLiveSession(s) {
 			held[s.IssueUUID] = true
 		}
 	}

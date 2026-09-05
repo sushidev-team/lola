@@ -14,12 +14,14 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/linear"
 	"github.com/sushidev-team/lola/internal/notify"
 	"github.com/sushidev-team/lola/internal/scm"
 	"github.com/sushidev-team/lola/internal/session"
+	"github.com/sushidev-team/lola/internal/state"
 	"github.com/sushidev-team/lola/internal/worktree"
 )
 
@@ -263,11 +265,337 @@ func TestReactMergedRetriesOnError(t *testing.T) {
 		t.Error("a failed merged cleanup must not notify (nothing was cleaned)")
 	}
 
-	// Next cycle retries the still-merged session.
-	got, _ := d.sessions.Get(s.ID)
+	// A LATER cycle retries the still-merged session. "Later" is now literal:
+	// the retry is spaced by cleanupBackoff off the delivery anchor, so the test
+	// rewinds that anchor rather than relying on back-to-back cycles (which is
+	// exactly the hammering this schedule exists to stop — see
+	// TestMergedCleanupBacksOffBetweenAttempts for the other half).
+	got := ageMergedAnchor(t, d, s.ID, 24*time.Hour)
 	d.react(context.Background(), got)
 	if len(nat.killCalls()) != 2 {
 		t.Errorf("want the retry's second kill attempt, got %d", len(nat.killCalls()))
+	}
+}
+
+// --- merged cleanup: bounded, backed-off retry --------------------------------
+//
+// The unbounded version of this loop was found in a real 20MB daemon.log: 1971
+// retries across 19 sessions, 1953 of them for ONE session over ~16 hours, each
+// logging the same `git worktree remove … exit status 255` line and notifying
+// nobody. These tests pin the three properties that replaced it — the failures
+// are counted, the attempts are spaced, and the give-up is loud — plus the one
+// property that must NOT change: a dirty worktree is still never forced.
+
+// ageMergedAnchor rewinds the stored session's delivery anchor (DeliverySince —
+// the moment its PR became merged), which is what cleanupRetryDue measures the
+// backoff schedule from. It returns the updated record, which is what a test
+// hands to react (the observer likewise reacts on the CURRENT record, not on a
+// caller's stale copy).
+func ageMergedAnchor(t *testing.T, d *Daemon, id string, age time.Duration) session.Session {
+	t.Helper()
+	got, ok := d.sessions.Update(id, func(cur *session.Session) bool {
+		cur.DeliverySince = time.Now().Add(-age)
+		return true
+	})
+	if !ok {
+		t.Fatalf("session %s is not in the store", id)
+	}
+	return got
+}
+
+// failCleanupCycle runs one merged-cleanup attempt with the schedule rewound far
+// enough that the backoff can never be what suppressed it — so a missing Kill
+// call in these tests always means the ATTEMPT BUDGET stopped it.
+func failCleanupCycle(t *testing.T, d *Daemon, id string) {
+	t.Helper()
+	d.react(context.Background(), ageMergedAnchor(t, d, id, 24*time.Hour))
+}
+
+// mergedFailingCleanup wires a daemon whose merged cleanup always fails with a
+// non-dirty error — the shape of the real incident.
+func mergedFailingCleanup(t *testing.T) (*Daemon, *fakeNative, *fakeReactSeams, session.Session) {
+	t.Helper()
+	nat := &fakeNative{killErr: errors.New("git worktree remove: exit status 255: error: failed to delete")}
+	d := newTestDaemon(t, reactTestConfig(nativePoll("p1")), &linear.Fake{}, nat)
+	seams := &fakeReactSeams{}
+	seams.install(d)
+
+	pr := openPR(7, "MERGEABLE", "APPROVED", "pass")
+	pr.State = "MERGED"
+	s := reactSess("FE-1", "merged", pr)
+	d.sessions.Upsert(s)
+	d.inflight.Add(s.IssueUUID, s.Issue)
+	return d, nat, seams, s
+}
+
+// Consecutive failures accumulate on the record (they are what the backoff and
+// the give-up are both keyed off), the entry is kept for the retry, and nothing
+// is reported to the operator while the budget still has room.
+func TestMergedCleanupFailuresAccumulate(t *testing.T) {
+	d, nat, seams, s := mergedFailingCleanup(t)
+
+	for i := 1; i <= 3; i++ {
+		failCleanupCycle(t, d, s.ID)
+		got, ok := d.sessions.Get(s.ID)
+		if !ok {
+			t.Fatalf("attempt %d: a failed cleanup must keep the store entry for the retry", i)
+		}
+		if got.CleanupFailures != i {
+			t.Fatalf("after attempt %d, CleanupFailures = %d, want %d", i, got.CleanupFailures, i)
+		}
+	}
+	if n := len(nat.killCalls()); n != 3 {
+		t.Errorf("want 3 kill attempts, got %d", n)
+	}
+	for i, c := range nat.killCalls() {
+		if c.force {
+			t.Errorf("attempt %d passed force=true; a merged cleanup must never force", i+1)
+		}
+	}
+	if seams.noteCount() != 0 {
+		t.Errorf("a retry inside the budget must not notify, got %d note(s)", seams.noteCount())
+	}
+}
+
+// Back-to-back cycles do NOT re-attempt: after a failure the next attempt is
+// owed cleanupBackoff, measured from the delivery anchor. This is the property
+// whose absence produced ~1953 attempts for one session.
+func TestMergedCleanupBacksOffBetweenAttempts(t *testing.T) {
+	d, nat, _, s := mergedFailingCleanup(t)
+
+	// First attempt: no failures yet, so it is always due.
+	got, _ := d.sessions.Get(s.ID)
+	d.react(context.Background(), got)
+	if n := len(nat.killCalls()); n != 1 {
+		t.Fatalf("want the first attempt, got %d kill call(s)", n)
+	}
+
+	// The observer's next cycle. One failure owes nothing (the free retry), so
+	// this one still runs — the contract the merged cleanup has always had.
+	got, _ = d.sessions.Get(s.ID)
+	d.react(context.Background(), got)
+	if n := len(nat.killCalls()); n != 2 {
+		t.Fatalf("the first retry must still run on the next cycle, got %d kill call(s)", n)
+	}
+
+	// From the SECOND failure the wait bites: the anchor is seconds old and
+	// cleanupBackoffTotal(2) is a full observer cadence, so nothing is attempted
+	// and — the part that matters — the skipped cycle is not counted as a
+	// failure either.
+	got, _ = d.sessions.Get(s.ID)
+	d.react(context.Background(), got)
+	if n := len(nat.killCalls()); n != 2 {
+		t.Fatalf("a cycle inside the backoff window must not re-attempt, got %d kill call(s)", n)
+	}
+	if got, _ := d.sessions.Get(s.ID); got.CleanupFailures != 2 {
+		t.Errorf("a skipped cycle must not count as a failure: CleanupFailures = %d, want 2", got.CleanupFailures)
+	}
+
+	// Rewind just past that wait: due again.
+	d.react(context.Background(), ageMergedAnchor(t, d, s.ID, cleanupBackoffTotal(2)+time.Second))
+	if n := len(nat.killCalls()); n != 3 {
+		t.Fatalf("want the next attempt once the wait elapsed, got %d kill call(s)", n)
+	}
+
+	// Three failures owe cleanupBackoffTotal(3) from the anchor, and the anchor
+	// is only just past the two-failure mark — so the next cycle waits again.
+	got, _ = d.sessions.Get(s.ID)
+	d.react(context.Background(), got)
+	if n := len(nat.killCalls()); n != 3 {
+		t.Errorf("the wait must grow with the failure count, got %d kill call(s)", n)
+	}
+}
+
+// After maxCleanupAttempts the engine STOPS and says so exactly once: one Action
+// notification naming the session and the last error, and no further attempts —
+// but the record stays, because it is the only thing pointing at the worktree
+// that still needs a hand.
+func TestMergedCleanupGivesUpAndNotifiesOnce(t *testing.T) {
+	d, nat, seams, s := mergedFailingCleanup(t)
+
+	for i := 0; i < maxCleanupAttempts; i++ {
+		failCleanupCycle(t, d, s.ID)
+	}
+	if n := len(nat.killCalls()); n != maxCleanupAttempts {
+		t.Fatalf("want %d attempts before giving up, got %d", maxCleanupAttempts, n)
+	}
+	got, ok := d.sessions.Get(s.ID)
+	if !ok {
+		t.Fatal("a given-up cleanup must KEEP the store entry so the failure stays visible")
+	}
+	if got.CleanupFailures != maxCleanupAttempts {
+		t.Errorf("CleanupFailures = %d, want %d", got.CleanupFailures, maxCleanupAttempts)
+	}
+
+	notes := seams.notesByPriority(notify.Action)
+	if len(notes) != 1 {
+		t.Fatalf("want exactly one Action notification at the give-up moment, got %d (%+v)", len(notes), seams.notes)
+	}
+	if !strings.Contains(notes[0].Body, s.Issue) {
+		t.Errorf("give-up notification must name the session, got %q", notes[0].Body)
+	}
+	if !strings.Contains(notes[0].Body, "exit status 255") {
+		t.Errorf("give-up notification must carry the last error, got %q", notes[0].Body)
+	}
+
+	// Every later cycle is inert: no attempt, no second notification, and the
+	// record is still there.
+	for i := 0; i < 3; i++ {
+		failCleanupCycle(t, d, s.ID)
+	}
+	if n := len(nat.killCalls()); n != maxCleanupAttempts {
+		t.Errorf("a given-up cleanup must not attempt again, got %d kill call(s)", n)
+	}
+	if seams.noteCount() != 1 {
+		t.Errorf("the give-up must notify ONCE, got %d note(s)", seams.noteCount())
+	}
+	if _, ok := d.sessions.Get(s.ID); !ok {
+		t.Error("the record must survive every post-give-up cycle")
+	}
+}
+
+// A given-up session keeps being re-stamped, so the observer's retention prune
+// (which runs AFTER react in the same cycle) can never age out the record that
+// carries the problem. Without this the pane is already dead, nothing else
+// re-writes the record, and 24h later the stranded worktree has no trace left
+// in the store at all.
+func TestMergedCleanupGiveUpKeepsRecordFresh(t *testing.T) {
+	d, nat, _, s := mergedFailingCleanup(t)
+	for i := 0; i < maxCleanupAttempts; i++ {
+		failCleanupCycle(t, d, s.ID)
+	}
+	before, ok := d.sessions.Get(s.ID)
+	if !ok {
+		t.Fatal("record missing after give-up")
+	}
+	kills := len(nat.killCalls())
+
+	d.react(context.Background(), before)
+
+	after, ok := d.sessions.Get(s.ID)
+	if !ok {
+		t.Fatal("a post-give-up cycle must keep the record")
+	}
+	if !after.LastSeen.After(before.LastSeen) {
+		t.Errorf("LastSeen must be re-stamped so the retention prune cannot drop the record: %v -> %v",
+			before.LastSeen, after.LastSeen)
+	}
+	if len(nat.killCalls()) != kills {
+		t.Error("the keep-alive must not run a cleanup attempt")
+	}
+}
+
+// The dirty-worktree refusal is untouched by the retry bound: whatever the
+// failure count, force is never passed, and a cleanup that reaches ErrDirty
+// still keeps the checkout and drops the record.
+func TestMergedCleanupNeverForcesAfterFailures(t *testing.T) {
+	d, nat, seams, s := mergedFailingCleanup(t)
+
+	failCleanupCycle(t, d, s.ID)
+	failCleanupCycle(t, d, s.ID)
+	nat.killErr = worktree.ErrDirty
+	failCleanupCycle(t, d, s.ID)
+
+	for i, c := range nat.killCalls() {
+		if c.force {
+			t.Errorf("attempt %d passed force=true; a dirty worktree must never be force-removed", i+1)
+		}
+	}
+	if _, ok := d.sessions.Get(s.ID); ok {
+		t.Error("a dirty outcome still drops the store entry, however many attempts preceded it")
+	}
+	info := seams.notesByPriority(notify.Info)
+	if len(info) != 1 || !strings.Contains(info[0].Body, "kept") {
+		t.Errorf("want one Info note saying the worktree was kept, got %+v", info)
+	}
+	if len(seams.notesByPriority(notify.Action)) != 0 {
+		t.Error("a dirty outcome inside the budget must not fire the give-up notification")
+	}
+}
+
+// The schedule itself: one observer cycle after the first failure, doubling,
+// capped — and a first attempt that is always due.
+func TestCleanupBackoffSchedule(t *testing.T) {
+	if got := cleanupBackoff(0); got != 0 {
+		t.Errorf("cleanupBackoff(0) = %v, want 0 (the first attempt is immediate)", got)
+	}
+	if got := cleanupBackoff(1); got != 0 {
+		t.Errorf("cleanupBackoff(1) = %v, want 0 — one free retry on the next observer cycle", got)
+	}
+	if got := cleanupBackoff(2); got != observeInterval {
+		t.Errorf("cleanupBackoff(2) = %v, want the observer cadence %v", got, observeInterval)
+	}
+	if got, want := cleanupBackoff(3), 2*observeInterval; got != want {
+		t.Errorf("cleanupBackoff(3) = %v, want %v", got, want)
+	}
+	if got := cleanupBackoff(maxCleanupAttempts); got != cleanupBackoffCap {
+		t.Errorf("cleanupBackoff(%d) = %v, want the cap %v", maxCleanupAttempts, got, cleanupBackoffCap)
+	}
+	prev := time.Duration(0)
+	for i := 1; i <= maxCleanupAttempts; i++ {
+		d := cleanupBackoff(i)
+		if d < prev || d > cleanupBackoffCap {
+			t.Fatalf("cleanupBackoff(%d) = %v breaks monotonic-and-capped (prev %v, cap %v)", i, d, prev, cleanupBackoffCap)
+		}
+		prev = d
+	}
+	// The cumulative schedule is clamped, so a corrupted counter cannot push the
+	// next attempt arbitrarily far out (or spin the loop that computes it).
+	if got, want := cleanupBackoffTotal(1_000_000), cleanupBackoffTotal(maxCleanupAttempts); got != want {
+		t.Errorf("cleanupBackoffTotal is not clamped: %v vs %v", got, want)
+	}
+}
+
+func TestCleanupRetryDue(t *testing.T) {
+	now := time.Now()
+
+	// No failures yet: always due, anchor or not.
+	if !cleanupRetryDue(session.Session{}, now) {
+		t.Error("the first cleanup attempt must always be due")
+	}
+	// No anchor: fail OPEN — retry as the unbounded loop did; the attempt
+	// budget is what stops such a record.
+	if !cleanupRetryDue(session.Session{CleanupFailures: 3}, now) {
+		t.Error("an anchorless record must fail open and retry")
+	}
+
+	// One failure owes nothing: the free retry runs on the next cycle.
+	if !cleanupRetryDue(session.Session{CleanupFailures: 1, DeliverySince: now}, now) {
+		t.Error("the first retry must be due on the next cycle")
+	}
+
+	s := session.Session{CleanupFailures: 2, DeliverySince: now.Add(-cleanupBackoffTotal(2) + time.Second)}
+	if cleanupRetryDue(s, now) {
+		t.Error("an attempt inside the backoff window must not be due")
+	}
+	s.DeliverySince = now.Add(-cleanupBackoffTotal(2) - time.Second)
+	if !cleanupRetryDue(s, now) {
+		t.Error("an attempt past the backoff window must be due")
+	}
+}
+
+// The streak is per merged EPISODE: a session that stops being merged (a
+// reopened PR) starts its next cleanup with a full budget rather than inheriting
+// a spent one. This is the only partial progress the engine can observe — a
+// successful or dirty cleanup drops the record outright.
+func TestResetReactionGuardsClearsCleanupStreak(t *testing.T) {
+	d := newTestDaemon(t, reactTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})
+	seams := &fakeReactSeams{}
+	seams.install(d)
+
+	s := nativeSess("FE-4", "working")
+	s.CleanupFailures = 5
+	d.sessions.Upsert(s)
+
+	got, _ := d.sessions.Get(s.ID)
+	d.react(context.Background(), got)
+
+	after, ok := d.sessions.Get(s.ID)
+	if !ok {
+		t.Fatal("session missing")
+	}
+	if after.CleanupFailures != 0 {
+		t.Errorf("CleanupFailures = %d, want 0 once the session is no longer merged", after.CleanupFailures)
 	}
 }
 
@@ -524,13 +852,20 @@ func TestReactSanitizesControlBytesBeforeSend(t *testing.T) {
 	}
 }
 
-// --- needs_input masks a red PR: reaction guards must survive the excursion ---
+// --- a waiting agent no longer hides the PR ----------------------------------
+//
+// react dispatches on the DELIVERY axis, so an agent blocked on a human is
+// simply orthogonal to where its PR stands. Two halves are pinned here: the
+// guards a red or changes-requested PR already stamped survive the excursion
+// (they always had to — the old code bought that with an explicit
+// `Status == "needs_input"` bail-out in resetReactionGuards), and the reaction
+// itself still REACHES the engine, which under the rollup it could not.
 
-// An escalated ci_failed session that transiently shows needs_input (a
-// permission prompt while the PR is still red) must keep its CIRetries streak,
-// Escalated backstop, and one-shot LastReactedStatus guard — otherwise every
-// needs_input excursion re-arms the retry budget and re-escalates forever.
-func TestReactNeedsInputDoesNotResetCIStreak(t *testing.T) {
+// An escalated ci_failed session whose agent is also waiting on a human must
+// keep its CIRetries streak, Escalated backstop, and one-shot LastReactedStatus
+// guard — otherwise every excursion re-arms the retry budget and re-escalates
+// forever.
+func TestReactWaitingAgentDoesNotResetCIStreak(t *testing.T) {
 	d := newTestDaemon(t, reactTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})
 	seams := &fakeReactSeams{failing: "LOGS"}
 	seams.install(d)
@@ -546,22 +881,22 @@ func TestReactNeedsInputDoesNotResetCIStreak(t *testing.T) {
 
 	got, _ := d.sessions.Get(s.ID)
 	if got.CIRetries != config.DefaultCIRetries {
-		t.Errorf("CIRetries reset during needs_input mask: got %d, want %d", got.CIRetries, config.DefaultCIRetries)
+		t.Errorf("CIRetries reset while the agent waited: got %d, want %d", got.CIRetries, config.DefaultCIRetries)
 	}
 	if !got.Escalated {
-		t.Error("Escalated cleared during needs_input mask — escalation backstop defeated")
+		t.Error("Escalated cleared while the agent waited — escalation backstop defeated")
 	}
 	if got.LastReactedStatus != "ci_failed" {
-		t.Errorf("LastReactedStatus cleared during needs_input mask: got %q", got.LastReactedStatus)
+		t.Errorf("LastReactedStatus cleared while the agent waited: got %q", got.LastReactedStatus)
 	}
 	if len(seams.sendCalls()) != 0 {
-		t.Error("needs_input must not send-keys")
+		t.Error("an escalated session must not send-keys")
 	}
 }
 
-// The same mask must not clear the one-shot guard for a review/rebase send,
-// which would re-send the feedback when the agent returns to its prompt.
-func TestReactNeedsInputPreservesChangesRequestedGuard(t *testing.T) {
+// The same excursion must not clear the one-shot guard for a review/rebase
+// send, which would re-send the feedback when the agent returns to its prompt.
+func TestReactWaitingAgentPreservesChangesRequestedGuard(t *testing.T) {
 	d := newTestDaemon(t, reactTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})
 	seams := &fakeReactSeams{review: "REVIEW"}
 	seams.install(d)
@@ -574,8 +909,98 @@ func TestReactNeedsInputPreservesChangesRequestedGuard(t *testing.T) {
 
 	got, _ := d.sessions.Get(s.ID)
 	if got.LastReactedStatus != "changes_requested" {
-		t.Errorf("changes_requested guard cleared during needs_input mask: got %q", got.LastReactedStatus)
+		t.Errorf("changes_requested guard cleared while the agent waited: got %q", got.LastReactedStatus)
 	}
+}
+
+// A DEAD pane still suppresses everything but the merged cleanup. The rollup
+// used to deliver that for free (rule 2 collapsed every non-merged dead session
+// to "dead"); react restates it, because SetAgentState leaves AtPrompt open
+// when a pane dies and the send path would otherwise consume that gate and type
+// into a tmux session that is not there.
+func TestReactDeadPaneSuppressesDeliveryReactions(t *testing.T) {
+	d := newTestDaemon(t, reactTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})
+	seams := &fakeReactSeams{failing: "LOGS", review: "REVIEW"}
+	seams.install(d)
+
+	for _, pr := range []*scm.PR{
+		openPR(11, "MERGEABLE", "", "fail"),              // ci_failed
+		openPR(12, "CONFLICTING", "", "pass"),            // merge_conflict
+		openPR(13, "MERGEABLE", "CHANGES_REQUESTED", ""), // changes_requested
+		openPR(14, "MERGEABLE", "APPROVED", "pass"),      // approved
+		{Number: 15, State: "CLOSED", URL: "u"},          // closed
+	} {
+		s := reactSess("FE-1", "dead", pr)
+		s.AgentState = state.AgentDead
+		s.AtPrompt = true // the stale gate a dying pane leaves behind
+		s.AtPromptVerified = true
+		d.sessions.Upsert(s)
+
+		d.react(context.Background(), s)
+
+		if n := len(seams.sendCalls()); n != 0 {
+			t.Fatalf("PR #%d: dead pane must never be typed into, got %d sends", pr.Number, n)
+		}
+		if n := seams.noteCount(); n != 0 {
+			t.Fatalf("PR #%d: dead pane must not notify, got %d notes", pr.Number, n)
+		}
+		got, _ := d.sessions.Get(s.ID)
+		if got.LastReactedStatus != "" || got.PendingReaction != "" {
+			t.Fatalf("PR #%d: guards stamped for a dead pane: reacted=%q pending=%q",
+				pr.Number, got.LastReactedStatus, got.PendingReaction)
+		}
+	}
+}
+
+// The other half: a waiting agent no longer SUPPRESSES the reaction. Under the
+// rolled-up status these two sessions read "needs_input", fell into react's
+// default branch, and the engine never saw the PR at all — the approved PR was
+// never announced and the red one was never queued. Both now dispatch off the
+// delivery axis.
+func TestReactWaitingAgentDoesNotSuppressTheDeliveryReaction(t *testing.T) {
+	t.Run("approved is still announced", func(t *testing.T) {
+		d := newTestDaemon(t, reactTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})
+		seams := &fakeReactSeams{}
+		seams.install(d)
+
+		s := reactSess("FE-1", "needs_input", openPR(7, "MERGEABLE", "APPROVED", "pass"))
+		d.sessions.Upsert(s)
+		if got := state.Rollup(state.AgentWaitingInput, state.DeliveryApproved); got != "needs_input" {
+			t.Fatalf("precondition: Rollup = %q, want needs_input", got)
+		}
+
+		d.react(context.Background(), s)
+
+		if n := len(seams.notesByPriority(notify.Action)); n != 1 {
+			t.Fatalf("want one approved notification, got %d", n)
+		}
+		got, _ := d.sessions.Get(s.ID)
+		if got.LastReactedStatus != "approved" {
+			t.Errorf("LastReactedStatus = %q, want approved", got.LastReactedStatus)
+		}
+	})
+
+	t.Run("ci_failed is deferred, not dropped", func(t *testing.T) {
+		d := newTestDaemon(t, reactTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})
+		seams := &fakeReactSeams{failing: "LOGS"}
+		seams.install(d)
+
+		// Waiting on a human, so the send-keys gate is shut: the reaction must
+		// be RECORDED as pending for a later cycle rather than silently lost.
+		s := reactSess("FE-2", "needs_input", openPR(8, "MERGEABLE", "", "fail"))
+		s.AtPrompt = false
+		d.sessions.Upsert(s)
+
+		d.react(context.Background(), s)
+
+		got, _ := d.sessions.Get(s.ID)
+		if got.PendingReaction != "ci_failed" {
+			t.Errorf("PendingReaction = %q, want ci_failed (deferred, not dropped)", got.PendingReaction)
+		}
+		if len(seams.sendCalls()) != 0 {
+			t.Error("a mid-turn agent must never be typed into")
+		}
+	})
 }
 
 // --- one-shot guards reset when the session leaves a reacted state ------------
@@ -594,9 +1019,11 @@ func TestReactCIFailedResetsGuardAcrossRetryLoop(t *testing.T) {
 	d.react(context.Background(), s) // send #1
 
 	// Agent pushes: CI re-runs → ci_pending. The guard must clear; retries kept.
+	// Moved on the DELIVERY axis, which is what react dispatches on — writing
+	// Status directly is a bug (the axes and the rollup drift) and the engine
+	// would not see it at all.
 	d.sessions.Update(s.ID, func(cur *session.Session) bool {
-		cur.Status = "ci_pending"
-		return true
+		return cur.SetDelivery(state.DeliveryCIPending, time.Now())
 	})
 	got, _ := d.sessions.Get(s.ID)
 	d.react(context.Background(), got)
@@ -610,7 +1037,7 @@ func TestReactCIFailedResetsGuardAcrossRetryLoop(t *testing.T) {
 
 	// Re-failure at the prompt → send #2, CIRetries → 2.
 	d.sessions.Update(s.ID, func(cur *session.Session) bool {
-		cur.Status = "ci_failed"
+		cur.SetDelivery(state.DeliveryCIFailed, time.Now())
 		cur.AtPrompt = true
 		return true
 	})

@@ -2,8 +2,8 @@
   import { store, scopedSessions } from "$lib/store.svelte";
   import { nav } from "$lib/nav.svelte";
   import { sessionMenu } from "$lib/sessionmenu.svelte";
-  import { triaged } from "$lib/filters";
-  import { KANBAN_COLUMNS, statusBadge, statusText } from "$lib/theme";
+  import { triaged, triageOf } from "$lib/filters";
+  import { KANBAN_COLUMNS, attention, displayFor, displayLabel, displayText } from "$lib/theme";
   import PrBadge from "./PrBadge.svelte";
   import SessionsEmpty from "./SessionsEmpty.svelte";
 
@@ -13,10 +13,15 @@
   // the same partition (TRIAGE_FILTERS is derived from KANBAN_COLUMNS), so an
   // active filter simply leaves the other columns empty.
   const rows = $derived(triaged(scopedSessions(store.sessions, nav.scoped, nav.project), nav.triage));
+  // Membership is a function of BOTH axes (state.KanbanKeyFor), not of a list of
+  // collapsed status words: a column set could not express "working agent, red
+  // CI" landing in Fixing while its agent axis stays visible on the card.
+  // `triageOf` is the same predicate the sidebar filter and the list use, so an
+  // active filter still simply leaves the other columns empty.
   const cols = $derived(
     KANBAN_COLUMNS.map((c) => ({
       title: c.title,
-      items: rows.filter((s) => c.statuses.includes(s.status)),
+      items: rows.filter((s) => triageOf(s) === c.title),
     })),
   );
 </script>
@@ -66,16 +71,31 @@
                    Selection still tints the key, since that is the row's stable
                    identifier and the title colour is already spent. -->
               <div class="flex items-center gap-1.5 text-sm">
-                {#if s.status === "needs_input" && !sel}<span class="text-warn">!</span>{/if}
+                <!-- The marker covers the WHOLE attention predicate. It used to
+                     fire on needs_input alone, which left the three delivery
+                     regressions — red CI, requested changes, a conflict — with no
+                     mark on any surface even though they were in the attention
+                     set from the start. -->
+                {#if attention(s.agentState, s.delivery) && !sel}<span
+                    class={s.agentState === "waiting_input" ? "text-warn" : "text-bad"}>!</span
+                  >{/if}
                 <span class="num" class:text-accent-ink={sel} class:text-faint={!sel}
                   >{s.issue || s.id.slice(0, 8)}</span
                 >
-                <!-- `label`, not mono: a status badge is a word, not an
-                     identifier, and mono is reserved for identifiers. -->
-                <span class="label ml-auto {statusText(s.status)}">{statusBadge(s.status)}</span>
+                <!-- The AGENT axis, in words. It was the two-letter status glyph
+                     ("!x", "rv") ported from the TUI, where a column is precious;
+                     a card is not a column, and the Display vocabulary is six
+                     words long, so it fits as itself.
+                     `label`, not mono: a state is a word, not an identifier. -->
+                <span class="label ml-auto {displayText(displayFor(s.agentState))}"
+                  >{displayLabel(displayFor(s.agentState))}</span
+                >
               </div>
               {#if s.title}<div class="truncate text-ink">{s.title}</div>{/if}
-              <div class="mt-0.5"><PrBadge session={s} status={s.status} /></div>
+              <!-- No `onOpen`: this card IS a <button>, and a nested button is
+                   not parseable — the parser closes the outer one and the card
+                   stops being clickable. -->
+              <div class="mt-0.5"><PrBadge session={s} delivery={s.delivery} status={s.status} /></div>
             </button>
           {/each}
         </div>

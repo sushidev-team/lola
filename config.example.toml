@@ -450,6 +450,91 @@ endpoint = "https://api.linear.app/graphql"
 # theme = "catppuccin-mocha"   # catppuccin-latte | catppuccin-frappe | catppuccin-macchiato | catppuccin-mocha
 
 # ---------------------------------------------------------------------------
+# [remote] — the phone listener. OPTIONAL and DEFAULT OFF, and the default is
+# chosen for what enabling it GRANTS rather than for what it costs.
+#
+# Read this sentence before flipping the key: a paired phone can type arbitrary
+# prose into an autonomous coding agent, and at the higher capability tiers it
+# can trigger reviews, toggle dev servers and tear down worktrees. Terminal
+# write on a "-shell-N" tab is arbitrary code execution on this Mac, with your
+# gh token, SSH agent and login keychain in reach. Losing the phone is answered
+# by revoking the device from the desktop, not by a stingy default here.
+#
+# Omitting the whole table is zero behavior change: nothing binds, nothing
+# listens, and a later save will not grow the table.
+#
+# While the transport is at its first milestone the listener is compiled ONLY
+# into a binary built with the `lola_insecure` build tag, which additionally
+# forces the bind to localhost whatever this table says. A release binary has no
+# listener at all and logs that when this table is enabled, so enabling it there
+# is inert rather than silent.
+# ---------------------------------------------------------------------------
+# [remote]
+# enabled = false
+# # Which interfaces to bind. One of off | localhost | lan | all, or a literal
+# # IP address (a hostname is REJECTED rather than resolved — config loading
+# # never makes a network call).
+# #
+# #   off        bind nothing. Keeps the rest of the table, so it is the way to
+# #              pause the listener without losing your settings.
+# #   localhost  loopback only — what an SSH forward, a VPN or a tailnet wants,
+# #              and the only mode that puts nothing on a network interface.
+# #   lan        only private interfaces (RFC1918 / ULA / link-local) whose
+# #              names are not tunnels or virtual bridges. On a laptop this
+# #              means EVERY network this machine ever joins, conference WiFi
+# #              included. The bound interfaces are logged by name at startup.
+# #   all        0.0.0.0. Never a default.
+# bind = "localhost"
+# # TCP port. 0 uses the built-in default shown here.
+# port = 7717
+#
+# insecure_lan: milestone 1 authenticates a phone with a single shared bearer
+# key, so it FORCES the bind to loopback and a physical phone cannot reach it.
+# A Simulator can — it shares the Mac's loopback — so this is only for a real
+# device. Turning it on honours `bind` above and puts that shared key on your
+# network in the clear: anything that can reach the port and guess the key can
+# type into a running coding agent. Two keys have to agree, so a config that
+# merely says bind = "lan" still binds loopback.
+#
+# It is deleted along with the whole insecure path in milestone 2, which gives
+# each device its own identity and makes a LAN bind unremarkable.
+# insecure_lan = false
+#
+# advertise: publish this listener on the local network with mDNS, so a paired
+# phone finds this Mac on a network whose addresses it has never seen. The key
+# and the pin already work anywhere — only the address goes stale, which is why
+# a phone paired at home cannot reach the same Mac at the office.
+#
+# OFF by default because it is a DISCLOSURE, not a convenience: `_lola._tcp`
+# tells every peer on the network that this machine runs autonomous coding
+# agents and accepts remote control. What is published is the port and a
+# protocol version, and deliberately nothing else — no pin, no hostname, no
+# session names — because those are stable identifiers for one laptop across
+# every network it joins.
+#
+# It stays an optimisation: the addresses a phone already has are tried first,
+# so a network that blocks multicast (many corporate and guest WiFis do) costs
+# nothing. Requires the `dns-sd` tool, which every Mac ships.
+# advertise = false
+#
+# dev_forward: republish an ACTIVE session's dev servers on the local network,
+# so a phone can open the app an agent is building. Their addresses are already
+# known (lola reads what the dev tabs print) and useless from anywhere else:
+# `php artisan serve` binds 127.0.0.1 and vite binds [::1].
+#
+# OFF by default because it puts something on a network. What it replaces is
+# worse, which is the argument for having it at all: the advice every framework
+# gives is `--host 0.0.0.0`, publishing a half-built application — with whatever
+# auth it has so far, while an agent is writing to it — permanently, on a
+# well-known port, on every network the laptop joins. A forward is one random
+# high port on one private interface, for one address lola discovered itself,
+# and it ends when the session stops being active.
+#
+# It is still an exposure: anything on that network can reach the dev server
+# while a forward is up. Use it on a network you control.
+# dev_forward = false
+
+# ---------------------------------------------------------------------------
 # [[project]] — repository registry for the native runtime (one table per
 # repo). Every poll references a project by name; lola then creates a git
 # worktree per session under ~/.lola/worktrees/<project>/... and runs Claude

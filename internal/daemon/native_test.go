@@ -26,6 +26,7 @@ import (
 	"github.com/sushidev-team/lola/internal/runtime"
 	"github.com/sushidev-team/lola/internal/scm"
 	"github.com/sushidev-team/lola/internal/session"
+	"github.com/sushidev-team/lola/internal/state"
 )
 
 // fakeNative is a hermetic NativeAPI: no git, tmux, or claude is ever executed.
@@ -402,21 +403,26 @@ func TestTickNativeUnknownProjectFailsWithoutStateMutation(t *testing.T) {
 
 func TestNativeLiveCounted(t *testing.T) {
 	sessions := []session.Session{
-		nativeSess("FE-1", "working"),                 // counts
-		nativeSess("FE-2", "needs_input"),             // counts
-		nativeSess("FE-3", "ci_failed"),               // counts
-		nativeSess("FE-4", "changes_requested"),       // counts
-		nativeSess("FE-5", "ci_pending"),              // counts
-		nativeSess("FE-11", "draft"),                  // counts: agent still iterating on its draft PR
+		nativeSess("FE-1", "working"),           // counts
+		nativeSess("FE-2", "needs_input"),       // counts
+		nativeSess("FE-3", "ci_failed"),         // counts
+		nativeSess("FE-4", "changes_requested"), // counts
+		nativeSess("FE-5", "ci_pending"),        // counts
+		nativeSess("FE-11", "draft"),            // counts: agent still iterating on its draft PR
+		// Counts, and this is the DELIBERATE change from the pre-axis table:
+		// a live agent between turns with no PR still owns its runner, and the
+		// cap counts runners. It used to be excluded, which was survivable only
+		// while the agent's 60s idle nudge turned every such session into
+		// needs_input (which did count) within a minute. See state.HoldsSlot.
+		nativeSess("FE-10", "idle"),
 		nativeSess("FE-6", "approved"),                // parked: no slot
 		nativeSess("FE-7", "review_pending"),          // parked: no slot
 		nativeSess("FE-8", "merged"),                  // done: no slot
 		nativeSess("FE-9", "dead"),                    // dead: no slot
-		nativeSess("FE-10", "idle"),                   // between turns: no slot
 		{ID: "ao-1", Source: "ao", Status: "working"}, // non-native source: never
 	}
-	if got := NativeLiveCounted(sessions); got != 6 {
-		t.Errorf("NativeLiveCounted = %d, want 6 (slot-occupying states incl. draft)", got)
+	if got := NativeLiveCounted(sessions); got != 7 {
+		t.Errorf("NativeLiveCounted = %d, want 7 (slot-occupying states incl. draft and pre-PR idle)", got)
 	}
 	if got := NativeLiveCounted(nil); got != 0 {
 		t.Errorf("NativeLiveCounted(nil) = %d, want 0", got)
@@ -482,7 +488,11 @@ func TestHandleHookEventStatusTransitions(t *testing.T) {
 		event, before, after string
 	}{
 		{"stop", "working", "idle"},
-		{"notification", "working", "needs_input"},
+		// A notification with no classifiable reason is the agent's own idle
+		// nudge, and an idle nudge is idleness — see server.go's split. Only a
+		// permission/approval notification still parks on needs_input, which
+		// TestHookPayloadIngestion covers (it needs a Hook payload to say so).
+		{"notification", "working", "idle"},
 		{"session_end", "working", "session_ended"},
 		{"tool_use", "idle", "working"},           // heartbeat promotes idle back to working
 		{"user_prompt", "idle", "working"},        // turn start on an idle agent
@@ -691,7 +701,15 @@ func TestObserveNativePreservesConcurrentHookNeedsInput(t *testing.T) {
 	// fires while the observer is "inside" its gh exec, i.e. after the cycle's
 	// snapshot was taken.
 	d.prForBranch = func(ctx context.Context, repo, branch string) (*scm.PR, error) {
-		resp := d.handleHookEvent(protocol.Request{Cmd: "hookEvent", Session: s.ID, Event: "notification"})
+		// A PERMISSION notification, not a bare one: a bare notification is the
+		// agent's own idle nudge and now parks the session idle, which would
+		// make this test assert nothing about survival. A permission prompt is
+		// the real block, and it is also the InputReason the observer's pane
+		// reconcile is forbidden to demote.
+		resp := d.handleHookEvent(protocol.Request{
+			Cmd: "hookEvent", Session: s.ID, Event: "notification",
+			Hook: &protocol.HookPayload{Message: "Claude needs your permission to use Bash"},
+		})
 		if !resp.OK {
 			t.Errorf("hookEvent mid-cycle failed: %+v", resp)
 		}
@@ -767,34 +785,56 @@ func TestSessionsDataIncludesSourceAndWorktree(t *testing.T) {
 	}
 }
 
-// reactingLabel is the pure derivation the TUI renders; the retry budget (M in
-// "N/M") comes from the ci_failed reaction config.
+// reactingLabel is the pure derivation the UIs render, off the DELIVERY axis —
+// the same axis react dispatches on, so the label and the engine can never
+// disagree. The retry budget (M in "N/M") comes from the ci_failed reaction
+// config.
 func TestReactingLabel(t *testing.T) {
 	const budget = 2
 	cases := []struct {
 		name      string
-		status    string
+		delivery  state.DeliveryState
 		ciRetries int
 		escalated bool
 		want      string
 	}{
-		{"plain working session", "working", 0, false, ""},
-		{"ci failed, no retry yet", "ci_failed", 0, false, "ci retry 0/2"},
-		{"ci failed, mid retry", "ci_failed", 1, false, "ci retry 1/2"},
-		{"ci pending after a retry send", "ci_pending", 1, false, "ci retry 1/2"},
-		{"ci pending, no retry in flight", "ci_pending", 0, false, ""},
-		{"escalated wins over ci_failed", "ci_failed", 2, true, "escalated"},
-		{"changes requested", "changes_requested", 0, false, "addressing review"},
-		{"merge conflict", "merge_conflict", 0, false, "rebasing"},
-		{"approved and green", "approved", 0, false, "ready to merge"},
-		{"green, awaiting a reviewer", "review_pending", 0, false, "awaiting review"},
-		{"merged is not a posture", "merged", 0, false, ""},
+		{"pre-PR session", state.DeliveryNone, 0, false, ""},
+		{"draft is not a posture", state.DeliveryDraft, 0, false, ""},
+		{"ci failed, no retry yet", state.DeliveryCIFailed, 0, false, "ci retry 0/2"},
+		{"ci failed, mid retry", state.DeliveryCIFailed, 1, false, "ci retry 1/2"},
+		{"ci pending after a retry send", state.DeliveryCIPending, 1, false, "ci retry 1/2"},
+		{"ci pending, no retry in flight", state.DeliveryCIPending, 0, false, ""},
+		{"escalated wins over ci_failed", state.DeliveryCIFailed, 2, true, "escalated"},
+		{"changes requested", state.DeliveryChangesRequested, 0, false, "addressing review"},
+		{"merge conflict", state.DeliveryMergeConflict, 0, false, "rebasing"},
+		{"approved and green", state.DeliveryApproved, 0, false, "ready to merge"},
+		{"green, awaiting a reviewer", state.DeliveryReviewPending, 0, false, "awaiting review"},
+		{"merged is not a posture", state.DeliveryMerged, 0, false, ""},
 	}
 	for _, c := range cases {
-		if got := reactingLabel(c.status, c.ciRetries, c.escalated, budget); got != c.want {
+		if got := reactingLabel(c.delivery, c.ciRetries, c.escalated, budget); got != c.want {
 			t.Errorf("%s: reactingLabel(%q, %d, %v) = %q, want %q",
-				c.name, c.status, c.ciRetries, c.escalated, got, c.want)
+				c.name, c.delivery, c.ciRetries, c.escalated, got, c.want)
 		}
+	}
+}
+
+// The posture survives a WAITING agent, which is the whole reason it moved off
+// the rolled-up status: Rollup ranks waiting_input above every PR state, so a
+// session mid ci-retry that stopped to ask a question used to render a blank
+// REACTING column — exactly when a human most needed to know a retry was
+// already in flight.
+func TestReactingLabelSurvivesAWaitingAgent(t *testing.T) {
+	s := session.Session{
+		AgentState: state.AgentWaitingInput,
+		Delivery:   state.DeliveryCIFailed,
+		CIRetries:  1,
+	}
+	if got := state.Rollup(s.AgentState, s.Delivery); got != "needs_input" {
+		t.Fatalf("precondition: Rollup = %q, want needs_input", got)
+	}
+	if got := reactingLabel(s.Delivery, s.CIRetries, s.Escalated, 2); got != "ci retry 1/2" {
+		t.Errorf("reactingLabel = %q, want \"ci retry 1/2\"", got)
 	}
 }
 

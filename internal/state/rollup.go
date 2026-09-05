@@ -1,8 +1,17 @@
 package state
 
 // Rollup composes the two axes into the legacy one-string status. It is the
-// ONLY producer of that vocabulary — every stored Session.Status, wire
-// status, counting table, and reaction key goes through here.
+// ONLY producer of that vocabulary — nothing else may mint a status string.
+//
+// LEGACY WIRE SHIM. Rollup no longer describes how lola thinks about a
+// session: collapsing the agent axis into the delivery axis is exactly what
+// display.go exists to undo (see the measurements at the top of that file —
+// 90% of the needs_input population was a 60s idle nudge, and post-PR the
+// agent axis vanished entirely). Its ONE remaining job is
+// protocol.SessionInfo.status, which mobile/ still reads and which therefore
+// must keep carrying the historical 16-word vocabulary byte for byte. The
+// in-repo consumers move to the pair-based tables in display.go; this function
+// stays until the wire field can be retired, and its output must not change.
 //
 // Priority order, chosen to be behavior-compatible with the old
 // nativeStatus + DeriveStatus composition (each rule cites the old behavior

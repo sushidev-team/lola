@@ -3,12 +3,45 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/sushidev-team/lola/internal/linear"
 	"github.com/sushidev-team/lola/internal/protocol"
+	"github.com/sushidev-team/lola/internal/session"
+	"github.com/sushidev-team/lola/internal/state"
 )
+
+// restingPane is a claude-code composer at rest — what handoffPromptProof must
+// see before handleAnswer types a byte. It mirrors observer_pane_test.go's
+// paneWaiting; every accepting test below installs it as the paneTail seam,
+// because the pane proof is now part of the gate rather than an afterthought.
+const restingPane = "╭──────────────────────────────────────────────╮\n" +
+	"│ >                                              │\n" +
+	"╰──────────────────────────────────────────────╯\n" +
+	"  ? for shortcuts\n"
+
+// answerDaemon seeds one session and wires the two seams every answer touches:
+// a paneTail returning `pane` (empty string ⇒ a capture FAILURE, so the proof
+// fails closed) and a sendKeys recorder.
+func answerDaemon(t *testing.T, s session.Session, pane string) (*Daemon, *[]sendKeysCall) {
+	t.Helper()
+	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})
+	d.sessions.Upsert(s)
+	d.paneTail = func(context.Context, string, int) (string, error) {
+		if pane == "" {
+			return "", errors.New("capture-pane: no server running")
+		}
+		return pane, nil
+	}
+	sends := &[]sendKeysCall{}
+	d.sendKeys = func(_ context.Context, name, text string) error {
+		*sends = append(*sends, sendKeysCall{name, text})
+		return nil
+	}
+	return d, sends
+}
 
 // A canned needs_input pane: a claude-code numbered select rendered in a box,
 // exactly what capture-pane -e returns. Used to assert handlePane's parse.
@@ -20,30 +53,143 @@ const cannedMenuPane = "\x1b[2m⏺ Ready for your call.\x1b[0m\n" +
 	"╰────────────────────────────────────────────────────────╯\n"
 
 // handleAnswer must refuse any session that is not provably parked at its input
-// prompt (status != needs_input) and MUST NOT send-keys — typing into a
-// mid-turn agent corrupts it. Even an idle session at the prompt (AtPrompt true,
-// safe for the reaction engine) is refused: only an explicit needs_input
-// authorizes a human answer.
-func TestHandleAnswerRefusesUnlessNeedsInput(t *testing.T) {
-	for _, status := range []string{"working", "idle", "ci_failed", "session_ended"} {
+// prompt, and MUST NOT send-keys — typing into a mid-turn agent corrupts it.
+// The gate is now the AXES, not the rolled-up status string, so the cases split
+// three ways.
+//
+// A working agent and a dead one are refused outright; a session parked on a
+// delivery word (ci_failed) with the send-keys gate closed is refused too — the
+// PR axis says nothing about whether the composer is at rest.
+func TestHandleAnswerRefusesUnlessParkedAtPrompt(t *testing.T) {
+	for _, status := range []string{"working", "ci_failed", "session_ended"} {
 		t.Run(status, func(t *testing.T) {
-			d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})
 			s := nativeSess("FE-1", status)
-			s.AtPrompt = status == "idle" // idle is "at prompt" yet still not answerable
-			d.sessions.Upsert(s)
-
-			sends := 0
-			d.sendKeys = func(context.Context, string, string) error { sends++; return nil }
+			d, sends := answerDaemon(t, s, restingPane) // even a resting pane cannot save it
 
 			err := d.handleAnswer(context.Background(), s.ID, "2")
-			if err == nil || !strings.Contains(err.Error(), "not waiting for input") {
-				t.Fatalf("handleAnswer(status %q) = %v, want a 'not waiting for input' refusal", status, err)
+			if err == nil {
+				t.Fatalf("handleAnswer(status %q) = nil, want a refusal", status)
 			}
-			if sends != 0 {
-				t.Errorf("refused answer must not send-keys, got %d send(s)", sends)
+			if len(*sends) != 0 {
+				t.Errorf("refused answer must not send-keys, got %d send(s)", len(*sends))
 			}
 			if got, _ := d.sessions.Get(s.ID); got.Status != status {
 				t.Errorf("refused answer must not change status, got %q want %q", got.Status, status)
+			}
+		})
+	}
+}
+
+// The two reasons that are REFUSED even though the axis says waiting_input, and
+// this is the load-bearing half of the new gate: a modal SWALLOWS typed prose
+// and reads the submit Enter as an answer to its own widget, and a
+// quota-limited agent cannot take another turn until its quota resets, so the
+// reply lands in a pane that will never act on it. Both rules are already
+// documented in CLAUDE.md; this is the first path to enforce them for a human's
+// answer. The refusal must NAME the condition — the caller is a person waiting
+// for their reply to appear.
+func TestHandleAnswerRefusesDialogAndQuotaBlocks(t *testing.T) {
+	for _, c := range []struct {
+		reason  state.InputReason
+		wantMsg string
+	}{
+		{state.InputDialog, "modal dialog"},
+		{state.InputQuotaLimited, "usage limit"},
+	} {
+		t.Run(string(c.reason), func(t *testing.T) {
+			s := nativeSess("FE-1", "needs_input")
+			s.AgentState = state.AgentWaitingInput
+			s.InputReason = c.reason
+			d, sends := answerDaemon(t, s, restingPane)
+
+			err := d.handleAnswer(context.Background(), s.ID, "yes please")
+			if err == nil || !strings.Contains(err.Error(), c.wantMsg) {
+				t.Fatalf("handleAnswer(%s) = %v, want a refusal naming %q", c.reason, err, c.wantMsg)
+			}
+			if len(*sends) != 0 {
+				t.Errorf("a %s block must never be typed into, got %d send(s)", c.reason, len(*sends))
+			}
+		})
+	}
+}
+
+// THE FLAP FIX's user-visible half: after the notification split and the pane
+// rule, a finished turn is correctly AgentIdle with the gate open — which is
+// EXACTLY the session a human most wants to reply to. The old
+// `Status != "needs_input"` string gate refused it.
+func TestHandleAnswerAcceptsIdleAtPrompt(t *testing.T) {
+	s := nativeSess("FE-1", "idle")
+	s.AgentState = state.AgentIdle
+	s.AtPrompt = true
+	s.Nudged = true // the idle nudge parked it here
+	d, sends := answerDaemon(t, s, restingPane)
+
+	if err := d.handleAnswer(context.Background(), s.ID, "carry on"); err != nil {
+		t.Fatalf("handleAnswer on an idle session at its prompt: %v", err)
+	}
+	if len(*sends) != 1 || (*sends)[0] != (sendKeysCall{s.TmuxName, "carry on"}) {
+		t.Fatalf("send-keys = %+v, want one {%q, \"carry on\"}", *sends, s.TmuxName)
+	}
+	after := getSess(t, d, s.ID)
+	if after.AgentState != state.AgentWorking {
+		t.Errorf("AgentState = %q, want working — the agent is resuming", after.AgentState)
+	}
+	if after.AtPrompt {
+		t.Error("answer must consume the gate so the reaction engine cannot also send-keys")
+	}
+	if after.Nudged {
+		t.Error("Nudged must be cleared when the axis leaves idle")
+	}
+}
+
+// An idle session whose gate is CLOSED (the observer parks one there when a
+// stale working axis meets an unreadable pane) is refused: nothing has proved
+// the composer is at rest.
+func TestHandleAnswerRefusesIdleWithClosedGate(t *testing.T) {
+	s := nativeSess("FE-1", "idle")
+	s.AgentState = state.AgentIdle
+	s.AtPrompt = false
+	d, sends := answerDaemon(t, s, restingPane)
+
+	err := d.handleAnswer(context.Background(), s.ID, "hi")
+	if err == nil || !strings.Contains(err.Error(), "not parked at its prompt") {
+		t.Fatalf("handleAnswer = %v, want a refusal naming the closed gate", err)
+	}
+	if len(*sends) != 0 {
+		t.Errorf("refused answer must not send-keys, got %d", len(*sends))
+	}
+}
+
+// The PANE PROOF, which the record alone can never substitute for: a session may
+// look perfectly answerable and still have a modal over its composer, because
+// claude-code ends a turn (Stop hook → AtPrompt) and THEN puts the dialog up.
+// handleAnswer reuses handoffPromptProof for exactly this, and — like
+// cmd=resolveConflict, and unlike the reaction engine — it REFUSES rather than
+// defers: a human is watching for the reply to land.
+func TestHandleAnswerRequiresLivePaneProof(t *testing.T) {
+	for _, c := range []struct{ name, pane string }{
+		{"captureFails", ""},           // answerDaemon turns "" into a capture error
+		{"paneIsBusy", paneWorking},    // a live working cue: the turn resumed
+		{"paneIsAModal", paneModal},    // ActivityBlocked over a composer that reported AtPrompt
+		{"paneIsUnknown", paneUnknown}, // no cue either way: fail closed
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := nativeSess("FE-1", "needs_input")
+			s.AgentState = state.AgentWaitingInput
+			s.InputReason = state.InputQuestion
+			s.AtPrompt = true
+			s.AtPromptVerified = true // a cached hook verdict must NOT short-circuit the proof
+			d, sends := answerDaemon(t, s, c.pane)
+
+			err := d.handleAnswer(context.Background(), s.ID, "1")
+			if err == nil || !strings.Contains(err.Error(), "not resting at its prompt") {
+				t.Fatalf("handleAnswer = %v, want a refusal on the failed pane proof", err)
+			}
+			if len(*sends) != 0 {
+				t.Errorf("a failed pane proof must never send-keys, got %d", len(*sends))
+			}
+			if got := getSess(t, d, s.ID); got.AgentState != state.AgentWaitingInput {
+				t.Errorf("a refused answer must not move the axis, got %q", got.AgentState)
 			}
 		})
 	}
@@ -53,24 +199,17 @@ func TestHandleAnswerRefusesUnlessNeedsInput(t *testing.T) {
 // the session flips AtPrompt=false / status "working" so the reaction engine
 // won't also type into it and the TUI shows the agent resuming.
 func TestHandleAnswerSendsWhenNeedsInputAndFlipsToWorking(t *testing.T) {
-	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})
 	s := nativeSess("FE-1", "needs_input")
-	s.AtPrompt = false
-	d.sessions.Upsert(s)
-
-	var got sendKeysCall
-	sends := 0
-	d.sendKeys = func(_ context.Context, name, text string) error {
-		got = sendKeysCall{name, text}
-		sends++
-		return nil
-	}
+	s.AgentState = state.AgentWaitingInput
+	s.InputReason = state.InputQuestion
+	s.AtPrompt = false // a pending question closes the gate; the pane proof is what admits it
+	d, sends := answerDaemon(t, s, restingPane)
 
 	if err := d.handleAnswer(context.Background(), s.ID, "2"); err != nil {
 		t.Fatalf("handleAnswer: %v", err)
 	}
-	if sends != 1 || got != (sendKeysCall{s.TmuxName, "2"}) {
-		t.Errorf("send-keys = %+v (n=%d), want one {%q, 2}", got, sends, s.TmuxName)
+	if len(*sends) != 1 || (*sends)[0] != (sendKeysCall{s.TmuxName, "2"}) {
+		t.Errorf("send-keys = %+v, want one {%q, 2}", *sends, s.TmuxName)
 	}
 	after, ok := d.sessions.Get(s.ID)
 	if !ok {
@@ -92,13 +231,10 @@ func TestHandleAnswerSendsWhenNeedsInputAndFlipsToWorking(t *testing.T) {
 // exactly as the reaction path does, so only the transport's explicit trailing
 // Enter submits.
 func TestHandleAnswerSanitizesEmbeddedControlBytes(t *testing.T) {
-	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})
 	s := nativeSess("FE-1", "needs_input")
-	s.AtPrompt = false
-	d.sessions.Upsert(s)
-
-	var got string
-	d.sendKeys = func(_ context.Context, _, text string) error { got = text; return nil }
+	s.AgentState = state.AgentWaitingInput
+	s.InputReason = state.InputQuestion
+	d, sends := answerDaemon(t, s, restingPane)
 
 	// CR (the submit vector), a bell (C0), and an ANSI SGR sequence, around
 	// preserved LF/TAB content.
@@ -106,6 +242,7 @@ func TestHandleAnswerSanitizesEmbeddedControlBytes(t *testing.T) {
 	if err := d.handleAnswer(context.Background(), s.ID, raw); err != nil {
 		t.Fatalf("handleAnswer: %v", err)
 	}
+	got := (*sends)[0].text
 	if strings.ContainsRune(got, '\r') {
 		t.Errorf("sent payload %q still carries a CR — a second submit can reach a mid-turn agent", got)
 	}

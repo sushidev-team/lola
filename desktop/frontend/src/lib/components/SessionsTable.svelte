@@ -3,7 +3,7 @@
   import { nav } from "$lib/nav.svelte";
   import { sessionMenu } from "$lib/sessionmenu.svelte";
   import { triaged } from "$lib/filters";
-  import { isAttention } from "$lib/theme";
+  import { attention } from "$lib/theme";
   import { reactionNote, reactionIsAlarm } from "$lib/reaction";
   import StatusPill from "./StatusPill.svelte";
   import AgentActivity from "./AgentActivity.svelte";
@@ -88,9 +88,21 @@
             sessionMenu.open(s.id, e);
           }}
         >
+          <!-- The attention marker covers the WHOLE predicate, not just a
+               blocked agent. ci_failed / changes_requested / merge_conflict were
+               in the attention set from the start and had no marker on any
+               surface, so the three states that mean "your delivered work
+               regressed" were the only urgent ones a scan of the list could not
+               find. Two colours because the two halves are answered differently:
+               orange (the pill's own) when the AGENT is waiting on you, red when
+               the DELIVERY regressed. -->
           <td class="py-1.5 pl-2 text-center align-middle">
             {#if sel}<span class="font-medium text-accent-ink">›</span>
-            {:else if isAttention(s.status) && s.status === "needs_input"}<span class="text-warn">!</span>{/if}
+            {:else if attention(s.agentState, s.delivery)}<span
+                class={s.agentState === "waiting_input" ? "text-warn" : "text-bad"}
+                title={s.agentState === "waiting_input" ? "the agent is waiting on you" : "this PR needs a fix"}
+                >!</span
+              >{/if}
           </td>
           <!-- The row's ONE 500: the issue key is what the row is about. -->
           <td class="py-1.5 pr-2 align-middle font-medium whitespace-nowrap" class:text-accent-ink={sel}>{s.issue || s.id.slice(0, 8)}</td>
@@ -145,12 +157,16 @@
                two informative postures survive the filter — see $lib/reaction. -->
           <td class="py-1.5 pr-2 align-middle">
             <span class="inline-flex items-center gap-1.5">
-              <!-- The pill is also the ACTION on a conflicting session: it morphs
-                   to "resolve" under the cursor and hands the merge to the
-                   session's agent. Only here — the grid's tiles are
-                   pointer-events-none inside a click-to-open tile, and the
-                   project panel's rows are themselves <button>s. -->
+              <!-- The pill is the AGENT axis; the PR column beside it is the
+                   delivery axis. It is also the ACTION on a session whose branch
+                   conflicts: it morphs to "resolve" under the cursor and hands
+                   the merge to the session's agent. Only here — the grid's tiles
+                   are click-to-open, and the project panel's rows are themselves
+                   <button>s. -->
               <StatusPill
+                agentState={s.agentState}
+                inputReason={s.inputReason}
+                delivery={s.delivery}
                 status={s.status}
                 interpreted={s.interpretedState}
                 resolveBranch={store.defaultBranchFor(s.project)}
@@ -166,7 +182,11 @@
               {/if}
             </span>
           </td>
-          <td class="py-1.5 pr-2 align-middle"><PrBadge session={s} status={s.status} /></td>
+          <!-- The PR number is a control here: a <td> is not inside a button,
+               so the badge may render one (see PrBadge's onOpen). -->
+          <td class="py-1.5 pr-2 align-middle"
+            ><PrBadge session={s} delivery={s.delivery} status={s.status} onOpen={() => store.openURL(s.prUrl)} /></td
+          >
           <!-- `num` — the age reflows on every 30s observer push otherwise. -->
           <td class="num py-1.5 pr-2 text-right align-middle text-sm whitespace-nowrap text-faint">{s.age}</td>
         </tr>

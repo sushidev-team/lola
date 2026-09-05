@@ -1,8 +1,8 @@
 <script lang="ts">
   import { store, scopedSessions } from "$lib/store.svelte";
   import { nav } from "$lib/nav.svelte";
-  import { TRIAGE_FILTERS, matchesTriage } from "$lib/filters";
-  import { KANBAN_COLUMNS, statusText } from "$lib/theme";
+  import { TRIAGE_FILTERS, matchesTriageFor } from "$lib/filters";
+  import { KANBAN_COLUMNS, kanbanDotText } from "$lib/theme";
   import NavRow from "./NavRow.svelte";
 
   // The four proportional meters became six clickable, counted rows: a meter
@@ -16,15 +16,19 @@
 
   const counts = $derived.by(() => {
     const m: Record<string, number> = {};
-    for (const f of TRIAGE_FILTERS) m[f] = rows.filter((s) => matchesTriage(s.status, f)).length;
+    // The two-axis predicate, i.e. the one the list and the board use. A count
+    // derived from the collapsed status word would disagree with the list it
+    // describes for exactly the sessions the axis split exists to separate.
+    for (const f of TRIAGE_FILTERS) m[f] = rows.filter((s) => matchesTriageFor(s, f)).length;
     return m;
   });
 
-  // The bucket dot borrows its colour from the bucket's own first status, so it
-  // can never disagree with the pill/table colours theme.ts hands out.
+  // The dot's colour comes from theme.ts by column KEY. It used to be derived
+  // from "the column's first status", which stopped being expressible the moment
+  // a column became a predicate over two axes rather than a list of words.
   function dotCls(title: string): string {
     const c = KANBAN_COLUMNS.find((k) => k.title === title);
-    return c ? statusText(c.statuses[0]) : "text-faint";
+    return c ? kanbanDotText(c.key) : "text-faint";
   }
 </script>
 

@@ -1,0 +1,259 @@
+{
+  "note": "Golden wire vectors for the lola remote protocol. Each case names a frame, gives its decoded JSON value, and gives the EXACT bytes that value has on the wire: a 4-byte big-endian length prefix followed by the UTF-8 JSON body, as hex. Two test suites read this one file. internal/protocol/goldenvectors_test.go decodes each `frame` into a protocol.Frame, writes it with protocol.FrameWriter, and asserts the bytes match. mobile/src/wire/codec.test.ts encodes each `frame` with the TypeScript encoder and asserts the same. THE GO SIDE IS THE SOURCE OF TRUTH: if the two disagree, the vector and the TypeScript are wrong, never the daemon. Cross-language wire bugs are otherwise found on a device, at the worst time, with no debugger. Key ORDER inside each frame and each payload is significant, because encoding/json emits struct fields in declaration order and both encoders reproduce it; do not alphabetise this file.",
+  "cases": [
+    {
+      "name": "req_sessions",
+      "why": "The plainest client-to-daemon frame. `cmd` appears on the envelope AND in the payload because protocol.Request.Cmd carries no omitempty; the envelope's copy is the one authorization reads, and remote.normalizeRequest overwrites the payload's from it.",
+      "frame": { "v": 1, "type": "req", "id": "r1", "cmd": "sessions", "payload": { "cmd": "sessions" } },
+      "hex": "0000004c7b2276223a312c2274797065223a22726571222c226964223a227231222c22636d64223a2273657373696f6e73222c227061796c6f6164223a7b22636d64223a2273657373696f6e73227d7d"
+    },
+    {
+      "name": "req_answer_with_text",
+      "why": "Request fields in protocol.Request's declaration order: session precedes text. Prose a human typed at a phone, which is the most sensitive thing this command carries and the reason the daemon's audit line never logs a payload.",
+      "frame": {
+        "v": 1,
+        "type": "req",
+        "id": "r2",
+        "cmd": "answer",
+        "payload": { "cmd": "answer", "session": "lola-fe-42", "text": "yes, ship it" }
+      },
+      "hex": "000000757b2276223a312c2274797065223a22726571222c226964223a227232222c22636d64223a22616e73776572222c227061796c6f6164223a7b22636d64223a22616e73776572222c2273657373696f6e223a226c6f6c612d66652d3432222c2274657874223a227965732c2073686970206974227d7d"
+    },
+    {
+      "name": "req_hello_bearer",
+      "why": "M1's in-band handshake: the FIRST frame on a connection, a req with cmd remote.hello whose payload is NOT a protocol.Request but a bare {key}. The value here is a placeholder of the minimum length; a real key is a runtime value and never appears in this repository.",
+      "frame": {
+        "v": 1,
+        "type": "req",
+        "id": "h1",
+        "cmd": "remote.hello",
+        "payload": { "key": "replace-me-with-a-real-key" }
+      },
+      "hex": "000000627b2276223a312c2274797065223a22726571222c226964223a226831222c22636d64223a2272656d6f74652e68656c6c6f222c227061796c6f6164223a7b226b6579223a227265706c6163652d6d652d776974682d612d7265616c2d6b6579227d7d"
+    },
+    {
+      "name": "resp_ok",
+      "why": "The daemon's reply, correlated by id. Response.OK carries no omitempty so `ok` is always present; Error and Data are dropped when empty.",
+      "frame": {
+        "v": 1,
+        "type": "resp",
+        "id": "r1",
+        "payload": { "ok": true, "data": { "sessions": [] } }
+      },
+      "hex": "0000004c7b2276223a312c2274797065223a2272657370222c226964223a227231222c227061796c6f6164223a7b226f6b223a747275652c2264617461223a7b2273657373696f6e73223a5b5d7d7d7d"
+    },
+    {
+      "name": "resp_application_error",
+      "why": "An ok:false Response is an APPLICATION failure, not a protocol refusal, and it arrives as an ordinary resp rather than an err frame. The client must reject on it all the same.",
+      "frame": {
+        "v": 1,
+        "type": "resp",
+        "id": "r9",
+        "payload": { "ok": false, "error": "unknown session" }
+      },
+      "hex": "000000507b2276223a312c2274797065223a2272657370222c226964223a227239222c227061796c6f6164223a7b226f6b223a66616c73652c226572726f72223a22756e6b6e6f776e2073657373696f6e227d7d"
+    },
+    {
+      "name": "sub_with_viewport",
+      "why": "Subscribe. cols/rows are ADVISORY: the bus attaches at the tmux window size and the client pans. The acknowledgement is the first resync on this id; there is no other ack.",
+      "frame": {
+        "v": 1,
+        "type": "sub",
+        "id": "s1",
+        "pane": "lola-fe-42",
+        "payload": { "cols": 100, "rows": 40 }
+      },
+      "hex": "000000537b2276223a312c2274797065223a22737562222c226964223a227331222c2270616e65223a226c6f6c612d66652d3432222c227061796c6f6164223a7b22636f6c73223a3130302c22726f7773223a34307d7d"
+    },
+    {
+      "name": "unsub_no_payload",
+      "why": "Unsubscribe carries no payload and no id, and receives NO acknowledgement of any kind. A client that waits for a reply to one waits forever.",
+      "frame": { "v": 1, "type": "unsub", "pane": "lola-fe-42" },
+      "hex": "0000002a7b2276223a312c2274797065223a22756e737562222c2270616e65223a226c6f6c612d66652d3432227d"
+    },
+    {
+      "name": "resync_cursor_visible",
+      "why": "The subscription ack and the first screen. cursorHidden is ABSENT, which is the positive case: the caret is visible. Lines keep their SGR escapes verbatim and trailing blank rows are already trimmed, so lines.length may be less than rows.",
+      "frame": {
+        "v": 1,
+        "type": "resync",
+        "id": "s1",
+        "pane": "lola-fe-42",
+        "seq": 1,
+        "payload": {
+          "cols": 120,
+          "rows": 40,
+          "lines": ["\u001b[1mready\u001b[0m", "❯ "],
+          "cursorX": 2,
+          "cursorY": 1,
+          "altScreen": true
+        }
+      },
+      "hex": "000000b27b2276223a312c2274797065223a22726573796e63222c226964223a227331222c2270616e65223a226c6f6c612d66652d3432222c22736571223a312c227061796c6f6164223a7b22636f6c73223a3132302c22726f7773223a34302c226c696e6573223a5b225c75303031625b316d72656164795c75303031625b306d222c22e29daf20225d2c22637572736f7258223a322c22637572736f7259223a312c22616c7453637265656e223a747275657d7d"
+    },
+    {
+      "name": "resync_cursor_hidden",
+      "why": "The cursor-visibility field in its NEGATIVE sense. cursorHidden:true means DECTCEM has hidden the caret. A client that inverts this paints no caret on every pane, which reads as an agent that is not waiting for input when it is. The pane is an auxiliary shell tab, which resolves through the daemon's parent lookup.",
+      "frame": {
+        "v": 1,
+        "type": "resync",
+        "id": "s2",
+        "pane": "lola-fe-42-shell-1",
+        "seq": 7,
+        "payload": {
+          "cols": 80,
+          "rows": 24,
+          "lines": ["✻ Cogitated for 24m 46s"],
+          "cursorX": 0,
+          "cursorY": 0,
+          "cursorHidden": true
+        }
+      },
+      "hex": "000000b77b2276223a312c2274797065223a22726573796e63222c226964223a227332222c2270616e65223a226c6f6c612d66652d34322d7368656c6c2d31222c22736571223a372c227061796c6f6164223a7b22636f6c73223a38302c22726f7773223a32342c226c696e6573223a5b22e29cbb20436f6769746174656420666f722032346d20343673225d2c22637572736f7258223a302c22637572736f7259223a302c22637572736f7248696464656e223a747275657d7d"
+    },
+    {
+      "name": "resync_exit_without_screen",
+      "why": "A pane death. exited:true is terminal and the stream ends after it. cols/rows/cursorX/cursorY carry no omitempty, so they are written as zeros even when there is no final screen at all.",
+      "frame": {
+        "v": 1,
+        "type": "resync",
+        "id": "s1",
+        "pane": "lola-fe-42",
+        "seq": 42,
+        "payload": { "cols": 0, "rows": 0, "cursorX": 0, "cursorY": 0, "exited": true }
+      },
+      "hex": "000000827b2276223a312c2274797065223a22726573796e63222c226964223a227331222c2270616e65223a226c6f6c612d66652d3432222c22736571223a34322c227061796c6f6164223a7b22636f6c73223a302c22726f7773223a302c22637572736f7258223a302c22637572736f7259223a302c22657869746564223a747275657d7d"
+    },
+    {
+      "name": "resync_html_escaped_lines",
+      "why": "Pins the one place a naive JSON.stringify diverges from encoding/json: Go escapes <, > and & as \\u003c, \\u003e and \\u0026 in every string, and does it a second time when a RawMessage payload is compacted into the envelope. An agent echoing a shell command produces all three.",
+      "frame": {
+        "v": 1,
+        "type": "resync",
+        "id": "s3",
+        "pane": "lola-fe-42-review",
+        "seq": 2,
+        "payload": {
+          "cols": 80,
+          "rows": 3,
+          "lines": ["$ grep -n 'a && b' <file> | wc -l", "if x < y & y > z"],
+          "cursorX": 0,
+          "cursorY": 2
+        }
+      },
+      "hex": "000000df7b2276223a312c2274797065223a22726573796e63222c226964223a227333222c2270616e65223a226c6f6c612d66652d34322d726576696577222c22736571223a322c227061796c6f6164223a7b22636f6c73223a38302c22726f7773223a332c226c696e6573223a5b22242067726570202d6e202761205c75303032365c7530303236206227205c753030336366696c655c7530303365207c207763202d6c222c2269662078205c75303033632079205c75303032362079205c7530303365207a225d2c22637572736f7258223a302c22637572736f7259223a327d7d"
+    },
+    {
+      "name": "pty_output_with_seq",
+      "why": "Pane output. Data is a Go []byte, so the wire form is standard base64 with padding; these are the bytes 1b 5b 5a 00 ff. seq is per pane, shared with resync, starts at 1, and comes from the bus VERBATIM including frames it dropped, which is the only way a gap is visible.",
+      "frame": {
+        "v": 1,
+        "type": "pty",
+        "pane": "lola-fe-42",
+        "seq": 9,
+        "payload": { "data": "G1taAP8=" }
+      },
+      "hex": "0000004e7b2276223a312c2274797065223a22707479222c2270616e65223a226c6f6c612d66652d3432222c22736571223a392c227061796c6f6164223a7b2264617461223a22473174614150383d227d7d"
+    },
+    {
+      "name": "pty_output_empty_string",
+      "why": "PTYOutputPayload.Data carries NO omitempty, so the field is written even when there is nothing in it. An empty numbered flush is not a gap and must not be mistaken for a malformed frame.",
+      "frame": {
+        "v": 1,
+        "type": "pty",
+        "pane": "lola-fe-42",
+        "seq": 10,
+        "payload": { "data": "" }
+      },
+      "hex": "000000477b2276223a312c2274797065223a22707479222c2270616e65223a226c6f6c612d66652d3432222c22736571223a31302c227061796c6f6164223a7b2264617461223a22227d7d"
+    },
+    {
+      "name": "pty_output_null_data",
+      "why": "The same field for a NIL slice rather than an empty one: encoding/json writes null, not \"\". Handing null to a base64 decoder throws, so this shape has to be tolerated explicitly. The production bus guards against emitting it, but the wire format permits it and a client must not be the thing that breaks.",
+      "frame": {
+        "v": 1,
+        "type": "pty",
+        "pane": "lola-fe-42",
+        "seq": 11,
+        "payload": { "data": null }
+      },
+      "hex": "000000497b2276223a312c2274797065223a22707479222c2270616e65223a226c6f6c612d66652d3432222c22736571223a31312c227061796c6f6164223a7b2264617461223a6e756c6c7d7d"
+    },
+    {
+      "name": "pty_write",
+      "why": "A keystroke: the bytes 79 0d, \"y\" then a carriage return. Raw bytes into an interactive process on the developer's Mac, authorized by the SUBSCRIPTION rather than by a command tier, and deliberately bypassing the AtPrompt idle gate.",
+      "frame": {
+        "v": 1,
+        "type": "pty",
+        "id": "w3",
+        "pane": "lola-fe-42",
+        "payload": { "action": "write", "data": "eQ0=" }
+      },
+      "hex": "0000005d7b2276223a312c2274797065223a22707479222c226964223a227733222c2270616e65223a226c6f6c612d66652d3432222c227061796c6f6164223a7b22616374696f6e223a227772697465222c2264617461223a226551303d227d7d"
+    },
+    {
+      "name": "pty_scroll_back",
+      "why": "POSITIVE lines scrolls BACK into history, negative scrolls forward again \u2014 tmux.ScrollPane opens with `up := lines > 0`, which is the opposite of a browser wheel delta. The client must never synthesize wheel bytes itself: the daemon chooses between the program's own transcript and tmux copy mode, and an agent on the alternate screen has no tmux scrollback at all.",
+      "frame": {
+        "v": 1,
+        "type": "pty",
+        "pane": "lola-fe-42",
+        "payload": { "action": "scroll", "lines": 10 }
+      },
+      "hex": "000000517b2276223a312c2274797065223a22707479222c2270616e65223a226c6f6c612d66652d3432222c227061796c6f6164223a7b22616374696f6e223a227363726f6c6c222c226c696e6573223a31307d7d"
+    },
+    {
+      "name": "pty_resize",
+      "why": "Recorded and IGNORED in M1. Sent so the daemon's record of the subscriber's viewport is honest, not because the developer's tmux window will change.",
+      "frame": {
+        "v": 1,
+        "type": "pty",
+        "id": "z1",
+        "pane": "lola-fe-42",
+        "payload": { "action": "resize", "cols": 55, "rows": 34 }
+      },
+      "hex": "000000647b2276223a312c2274797065223a22707479222c226964223a227a31222c2270616e65223a226c6f6c612d66652d3432222c227061796c6f6164223a7b22616374696f6e223a22726573697a65222c22636f6c73223a35352c22726f7773223a33347d7d"
+    },
+    {
+      "name": "err_unknown_pane",
+      "why": "A pane refusal echoes the pane name. unknown_pane covers four distinct daemon-side conditions on purpose so that a refusal cannot enumerate which sessions exist; a client treats them all as re-fetch the session list.",
+      "frame": {
+        "v": 1,
+        "type": "err",
+        "id": "s1",
+        "pane": "lola-fe-42",
+        "payload": { "code": "unknown_pane", "message": "pane is not available" }
+      },
+      "hex": "000000767b2276223a312c2274797065223a22657272222c226964223a227331222c2270616e65223a226c6f6c612d66652d3432222c227061796c6f6164223a7b22636f6465223a22756e6b6e6f776e5f70616e65222c226d657373616765223a2270616e65206973206e6f7420617661696c61626c65227d7d"
+    },
+    {
+      "name": "err_unsupported_version",
+      "why": "The one frame a peer that understands nothing else about this build must still be able to read, which is why ErrPayload's field layout is frozen at v=1 forever. It carries the DAEMON's own bounds so the client can name which side is behind rather than showing a connect error.",
+      "frame": {
+        "v": 1,
+        "type": "err",
+        "id": "c7",
+        "payload": {
+          "code": "unsupported_version",
+          "message": "daemon speaks envelope v1",
+          "minV": 1,
+          "maxV": 1
+        }
+      },
+      "hex": "0000007f7b2276223a312c2274797065223a22657272222c226964223a226337222c227061796c6f6164223a7b22636f6465223a22756e737570706f727465645f76657273696f6e222c226d657373616765223a226461656d6f6e20737065616b7320656e76656c6f7065207631222c226d696e56223a312c226d617856223a317d7d"
+    },
+    {
+      "name": "err_no_correlation_id",
+      "why": "A refusal that belongs to no request: a length prefix that could not be honoured has no frame to answer on. It is written best effort and the connection then closes, so a client must surface it as a connection-level event rather than looking for a pending id.",
+      "frame": {
+        "v": 1,
+        "type": "err",
+        "payload": {
+          "code": "frame_too_large",
+          "message": "frame exceeds the maximum frame size"
+        }
+      },
+      "hex": "0000006a7b2276223a312c2274797065223a22657272222c227061796c6f6164223a7b22636f6465223a226672616d655f746f6f5f6c61726765222c226d657373616765223a226672616d65206578636565647320746865206d6178696d756d206672616d652073697a65227d7d"
+    }
+  ]
+}

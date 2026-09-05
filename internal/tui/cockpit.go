@@ -396,13 +396,16 @@ func (m *rootModel) detailTitle() string {
 	if sel.Project != "" {
 		extra += " · " + m.projLabel(sel.Project)
 	}
+	// Both axes in the title, primary first: what the agent is doing, then where
+	// its PR stands. It used to render EITHER the PR or a raw rolled-up status
+	// identifier ("ci_pending"), so the agent axis was unreachable the moment a PR
+	// existed — the exact collapse the split removes.
+	extra += " · " + displayLabel(displayOf(*sel))
 	if sel.PRNumber > 0 {
 		extra += fmt.Sprintf(" · #%d", sel.PRNumber)
 		if sel.Checks != "" {
 			extra += " " + sel.Checks
 		}
-	} else if sel.Status != "" {
-		extra += " · " + sel.Status
 	}
 	if m.embedFocused {
 		if m.embedSelect {
@@ -462,7 +465,10 @@ func (m *rootModel) sessionsBody(w, h int) []string {
 	for i, si := range list {
 		marker := " "
 		issue := si.Issue
-		if si.Status == "needs_input" {
+		// "!" means the AGENT is blocked on this human, right now, at a prompt.
+		// Regressed delivery needs a human too, but it says so on its own chip
+		// (prBadge's red glyphs) rather than borrowing the queue marker.
+		if waitingOnHuman(si) {
 			marker = warnText.Render("!")
 		}
 		if si.ID == selID {
@@ -697,7 +703,7 @@ func (m *rootModel) triageBody(w int) []string {
 	need := AttentionCount(sess)
 	work, ready, fix := 0, 0, 0
 	for _, x := range sess {
-		switch sortRank(x.Status) {
+		switch sortRank(x) {
 		case 1:
 			fix++
 		case 2:
@@ -914,7 +920,9 @@ func (m *rootModel) keybar(w int) string {
 	} else {
 		keys = []string{"↑↓ move", "enter focus", "tab → projects", "/ filter", "x kill"}
 		if sel := s.selected(); sel != nil {
-			if sel.Status == "needs_input" {
+			// Offered on exactly the sessions the daemon would accept a reply for
+			// (answerable) — the affordance and the gate must not disagree.
+			if answerable(*sel) {
 				keys = append(keys, "a answer")
 			}
 			if sel.Worktree != "" {
@@ -1059,8 +1067,17 @@ func eventPhrase(from, to string) string {
 		return "ended"
 	case "dead":
 		return "died"
+	case "idle":
+		return "idle"
+	case "shell":
+		return "shell opened"
+	case "orphaned":
+		return "orphaned"
 	default:
-		return to
+		// Never the raw word: an unmapped future status would otherwise render as
+		// a bare identifier in the feed. statusLabel de-underscores whatever it
+		// does not know, which is the same floor every other label has.
+		return statusLabel(to)
 	}
 }
 
@@ -1087,7 +1104,7 @@ func (m *rootModel) activityBody(w, h int) []string {
 		if key == "" {
 			key = shortID(e.ID)
 		}
-		phrase := statusStyle(e.To).Render(eventPhrase(e.From, e.To))
+		phrase := legacyStatusStyle(e.To).Render(eventPhrase(e.From, e.To))
 		line := boxTitle.Render(key) + " " + phrase
 		if e.Ago != "" {
 			line += faintText.Render(" · " + e.Ago)

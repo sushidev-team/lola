@@ -342,7 +342,13 @@ func newSessionMenu(app *application.App, menu *application.Menu) {
 // pathProbeTimeout bounds the login-shell PATH probe. A shell with a heavy rc
 // can take a moment; anything past this is a wedged profile we must not block
 // app startup on, and the static fallbacks below still apply.
-const pathProbeTimeout = 3 * time.Second
+//
+// A var rather than a const so the tests that drive the REAL probe can widen
+// it. They spawn an actual shell, and 3 seconds is a startup budget, not a
+// safe margin on a machine running the whole test suite at once — the probe
+// then times out, reports "" like any other failure, and a test asserting on
+// its answer fails for reasons that have nothing to do with the code.
+var pathProbeTimeout = 3 * time.Second
 
 // pathSentinel brackets the PATH the probe asks for. Login rc files print
 // banners, version notices and `motd` to stdout, so reading "the output" would

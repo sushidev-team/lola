@@ -518,9 +518,23 @@ func (c *Client) ConfigureServer(ctx context.Context) error {
 // keep it — precisely the "cannot scroll" symptom. The retry lands once the
 // session exists; current tmux grows the pane's history to match.
 func (c *Client) NewSession(ctx context.Context, name, dir, command string) error {
+	return c.NewSessionSized(ctx, name, dir, command, 0, 0)
+}
+
+// NewSessionSized is NewSession with an explicit initial window size; 0 for
+// either dimension means tmux's own default. See the size note inside.
+func (c *Client) NewSessionSized(ctx context.Context, name, dir, command string, cols, rows int) error {
 	// Best-effort: a scroll default must never fail a spawn.
 	coldServer := c.ConfigureServer(ctx) != nil
 	args := []string{"new-session", "-d", "-s", name, "-c", dir}
+	// A size, when the caller knows one. tmux picks 80x24 for a session with no
+	// attached client, and the phone's shell tabs are the one caller that knows
+	// better before the window exists — being born right is the difference
+	// between a tab that appears and one that visibly reflows itself for
+	// several seconds afterwards.
+	if cols > 0 && rows > 0 {
+		args = append(args, "-x", strconv.Itoa(cols), "-y", strconv.Itoa(rows))
+	}
 	if command != "" {
 		args = append(args, command)
 	}
@@ -907,4 +921,89 @@ func chromeStatusRight(opts SessionChrome) string {
 		return hint
 	}
 	return opts.StatusRight + " | " + hint
+}
+
+// releaseWindowSize hands a window's size back to the clients attached to it.
+//
+// TWO COMMANDS, IN THIS ORDER, and both halves of that sentence were paid for:
+//
+//   - Unsetting `window-size` alone does nothing visible. tmux leaves the
+//     window at whatever it was last told, so a phone that pinned and walked
+//     away would leave the developer squashed until something else resized it.
+//     `resize-window -A` is what makes tmux recompute from the clients that are
+//     actually attached.
+//   - `resize-window -A` SETS `window-size manual` on the window (verified on
+//     tmux 3.7c). Unsetting first and recomputing second therefore ends with
+//     the option pinned again — the size looked right at that instant, and the
+//     window then ignored every client that attached afterwards, which is the
+//     stuck-pin failure this whole path exists to prevent, arriving quietly.
+//
+// So: recompute, THEN unset. The option's absence is the actual release; the
+// recompute is what makes it visible now.
+func (c *Client) releaseWindowSize(ctx context.Context, target string) error {
+	if _, _, err := c.run(ctx, "resize-window", "-t", target, "-A"); err != nil {
+		return err
+	}
+	_, _, err := c.run(ctx, "set-option", "-w", "-t", target, "-u", "window-size")
+	return err
+}
+
+// SetWindowSize pins a window to an explicit size, or releases it back to
+// whatever the attached clients ask for.
+//
+// This exists for ONE caller: the phone, which wants the pane it is looking at
+// sized to a phone while it looks at it. tmux sizes a window from its clients
+// (the server runs `window-size latest`, so the most recently active client
+// wins), which is why panebus attaches with `-f ignore-size` — a phone joining
+// the fan-out must not silently reshape the developer's 200-column view.
+// Pinning is the deliberate, temporary opposite of that, and it is scoped to
+// the moment the phone has the pane in front of it.
+//
+// cols == 0 RELEASES, and the release is two commands rather than one because
+// unsetting the option alone does nothing at all: tmux leaves the window at
+// whatever it was last told, so a phone that disconnected would leave the
+// desktop squashed forever. `resize-window -A` is what makes tmux recompute
+// from the clients that are actually attached. Both halves are verified against
+// tmux 3.7; do not drop the second one.
+//
+// Best-effort by design: a window that has gone away is not an error worth
+// failing a UI over, and the size is cosmetic. The caller logs and continues.
+func (c *Client) SetWindowSize(ctx context.Context, name string, cols, rows int) error {
+	// A target-WINDOW, not the bare session name — the same trap KeepDeadPane
+	// documents, and the one that made this feature do nothing at all.
+	//
+	// `window-size` is a window option and `resize-window` takes a window, so
+	// "=name" is read as an exact WINDOW-name match rather than a session one.
+	// Windows are named after the command they run ("zsh", "claude"), so every
+	// call answered `no such window: =<session>` and the pin never touched a
+	// window in its life — while argv-level tests, which is all a fake tmux can
+	// check, passed. "=name:" is the session matched exactly, current window.
+	target := "=" + name + ":"
+	if cols <= 0 || rows <= 0 {
+		return c.releaseWindowSize(ctx, target)
+	}
+	if _, _, err := c.run(ctx, "set-option", "-w", "-t", target, "window-size", "manual"); err != nil {
+		return err
+	}
+	if _, _, err := c.run(ctx, "resize-window", "-t", target,
+		"-x", strconv.Itoa(cols), "-y", strconv.Itoa(rows)); err != nil {
+		// A PIN THAT FAILS HALFWAY UNDOES ITSELF, so that a caller told "the pin
+		// was refused" can believe nothing is pinned.
+		//
+		// The two commands are not atomic: setting `window-size manual` alone
+		// already stops tmux recomputing the window from its attached clients,
+		// so a resize that fails after it leaves the window frozen at whatever
+		// size it happened to have — pinned, with nobody holding the pin. The
+		// phone's release lifecycle (mobile/src/lib/panepin.ts) reads a refusal
+		// the daemon actually ANSWERED as proof that nothing landed and stops
+		// tracking the pane, which is only safe because of these two lines.
+		//
+		// Best-effort, and the failure is deliberately not reported: the caller
+		// is already being handed the error that matters, and the undo is the
+		// same pair of commands the release path uses, for the same reason —
+		// unsetting the option does not resize anything by itself.
+		_ = c.releaseWindowSize(ctx, target)
+		return err
+	}
+	return nil
 }
