@@ -73,7 +73,7 @@ The settings cleanup keeps the configuration format and saved values intact:
 | Team, project, cycle, assignee, states and labels | Together define issue pickup; one project tab. |
 | Deduplication, shared labels and priority order | Preserve existing dispatch workflows; project/shared defaults. |
 | Linear state updates and comments | Optional workflow automation; Linear updates. |
-| Reviews | Provider-specific settings remain because CLI, agent and bot reviews have different requirements. |
+| Reviews | Compact provider cards group run settings and findings. Timeout, live viewing and fallback order are under Advanced settings; disabled cards retain their configuration. |
 | Summaries and status interpretation | Optional AI features; tuning appears only when enabled and survives disabling. |
 | Linear credentials, notifications, phone access and themes | Separate connections and presentation choices; grouped navigation. |
 

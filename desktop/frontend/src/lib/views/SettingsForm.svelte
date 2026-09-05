@@ -385,6 +385,13 @@
   const kindIds = () => reviewKinds.map((k) => k.kind);
   const kindMeta = (kind: string) => reviewKinds.find((k) => k.kind === kind);
   const kindLabel = (kind: string) => kindMeta(kind)?.label ?? kind;
+  // Presentation names only; the backend still owns kind membership and fields.
+  const PROVIDER_NAMES: Record<string, string> = {
+    "claude-session": "Claude", "codex-session": "Codex", "opencode-session": "OpenCode",
+    "coderabbit-cli": "CodeRabbit CLI", "custom-cli": "Custom CLI",
+    "coderabbit-watch": "CodeRabbit bot", "bot-watch": "Review bot",
+  };
+  const providerName = (kind: string) => PROVIDER_NAMES[kind] ?? kindLabel(kind).split(" — ")[0];
   const TRANSPORTS = ["lola", "github", "linear"];
   // Copies of internal/config's resolve-time defaults, used ONLY to seed a
   // newly-added provider (the backend re-applies them on load either way).
@@ -1308,136 +1315,121 @@
           {/if}
 
           {#each reviewKinds.length ? providers() : [] as p (p.provider)}
-            <section class="border-t border-edge/40 pt-4 first:border-t-0 first:pt-0" class:opacity-60={d.reviewLegacy}>
-              {@render head(kindLabel(p.provider))}
-              <div class="space-y-2">
-                <div class="flex items-center justify-between">
-                  <label class="flex cursor-pointer items-center gap-2">
-                    <Checkbox disabled={d.reviewLegacy} bind:checked={p.enabled} />
-                    <span>Enabled</span>
-                  </label>
-                  {#if !d.reviewLegacy}
-                    <Button variant="danger" onclick={() => removeProvider(p.provider)}>Remove</Button>
-                  {/if}
+            <section aria-label={`${providerName(p.provider)} review`} class="overflow-hidden rounded-lg border border-edge" class:opacity-60={d.reviewLegacy}>
+              <header class="flex items-center gap-3 bg-canvas/40 px-4 py-3">
+                <div class="min-w-0 flex-1">
+                  <h3 class="text-base font-medium text-ink">{providerName(p.provider)}</h3>
+                  <span class="text-xs text-faint">{isWatch(p.provider) ? "PR comments" : isCLI(p.provider) ? "CLI review" : "Agent review"}</span>
                 </div>
-
-                <!-- Which fields a kind has comes from its backend descriptor
-                     (cli / agent / watch), never from its name, so a new kind is
-                     drawn correctly without a case of its own here. -->
-                {#if isCLI(p.provider)}
-                  <label class={rowCls}>
-                    <span class="text-faint">Command{needsCommand(p.provider) ? " *" : ""}</span>
-                    <input
-                      class={inputCls}
-                      type="text"
-                      placeholder={needsCommand(p.provider) ? "required, e.g. greptile review --plain" : "coderabbit review"}
-                      disabled={d.reviewLegacy}
-                      bind:value={p.command}
-                    />
-                  </label>
-                  <div class={rowCls}>
-                    <span class="text-faint">Base flag</span>
-                    <PresetInput label="Base flag" value={p.baseFlag} options={BASE_FLAGS} disabled={d.reviewLegacy} onChange={(v) => { p.baseFlag = v; }} />
-                  </div>
-                  <HelpText label="base flag" summary="Empty skips the base argument." detail="This flag passes the PR’s base branch to the review command." />
+                <label class="flex cursor-pointer items-center gap-2">
+                  <Checkbox disabled={d.reviewLegacy} bind:checked={p.enabled} />
+                  <span>{p.enabled ? "Enabled" : "Disabled"}</span>
+                </label>
+                {#if !d.reviewLegacy}
+                  <Button variant="danger" size="xs" onclick={() => removeProvider(p.provider)}>Remove</Button>
                 {/if}
-                {#if agentOf(p.provider)}
-                  <div class={rowCls}>
-                    <span class="text-faint">Model</span>
-                    <PresetInput label="Model" value={p.model} options={modelsFor(agentOf(p.provider))}
-                      disabled={d.reviewLegacy} onChange={(v) => { p.model = v; }}
-                      placeholder={agentOf(p.provider) === "opencode" ? "provider/model" : "Model ID or alias"} />
-                  </div>
-                {/if}
-                {#if isWatch(p.provider)}
-                  <label class={rowCls}>
-                    <span class="text-faint">Author{needsAuthor(p.provider) ? " *" : ""}</span>
-                    <input
-                      class={inputCls}
-                      type="text"
-                      placeholder={needsAuthor(p.provider) ? "required, e.g. greptile" : "coderabbitai"}
-                      disabled={d.reviewLegacy}
-                      bind:value={p.author}
-                    />
-                  </label>
-                {:else}
-                  <label class={rowCls}>
-                    <span class="text-faint">Timeout (s)</span>
-                    <input class={inputCls} type="number" min="0" disabled={d.reviewLegacy} bind:value={p.timeoutSeconds} />
-                  </label>
-                {/if}
+              </header>
 
-                <div class="flex flex-wrap gap-x-6 gap-y-2 pt-1">
-                  {#if !isWatch(p.provider)}
-                    <label class="flex cursor-pointer items-center gap-2">
-                      <Checkbox disabled={d.reviewLegacy} bind:checked={p.onPrOpen} />
-                      <span>On PR open</span>
-                    </label>
-                  {/if}
-                  <label class="flex cursor-pointer items-center gap-2">
-                    <Checkbox disabled={d.reviewLegacy} bind:checked={p.notify} />
-                    <span>Notify</span>
-                  </label>
-                  <label class="flex cursor-pointer items-center gap-2">
-                    <Checkbox disabled={d.reviewLegacy} bind:checked={p.sendToAgent} />
-                    <span>Send to agent</span>
-                  </label>
-                  {#if !isWatch(p.provider)}
-                    <!-- The pass runs in its own "<session>-review" tmux session,
-                         so it shows up as a Review tab beside the shells. -->
-                    <label class="flex cursor-pointer items-center gap-2">
-                      <Checkbox disabled={d.reviewLegacy} bind:checked={p.visible} />
-                      <span>Watch it run</span>
-                    </label>
-                  {/if}
-                </div>
-
-                <div class={rowTopCls}>
-                  <span class="text-faint">Share findings</span>
-                  <div class="flex flex-wrap gap-x-6 gap-y-2">
-                    {#each transportsFor(p.provider) as t}
-                      <label class="flex cursor-pointer items-center gap-2">
-                        <Checkbox
-                          disabled={d.reviewLegacy || t === "lola"}
-                          checked={(p.transports ?? []).includes(t)}
-                          onchange={(e) => toggleTransport(p, t, (e.currentTarget as HTMLInputElement).checked)} />
-                        <span>{t}{t === "lola" ? " (always)" : ""}</span>
+              {#if p.enabled || d.reviewLegacy}
+                <div class="space-y-4 p-4">
+                  <div class="space-y-3">
+                    {#if isCLI(p.provider)}
+                      <label class="grid gap-1.5">
+                        <span class="text-faint">Command{needsCommand(p.provider) ? " *" : ""}</span>
+                        <input class={inputCls} type="text" disabled={d.reviewLegacy} bind:value={p.command}
+                          placeholder={needsCommand(p.provider) ? "greptile review --plain" : "coderabbit review"} />
                       </label>
-                    {/each}
+                    {/if}
+                    {#if agentOf(p.provider)}
+                      <div class="grid gap-1.5">
+                        <span class="text-faint">Model</span>
+                        <PresetInput label="Model" value={p.model} options={modelsFor(agentOf(p.provider))}
+                          disabled={d.reviewLegacy} onChange={(v) => { p.model = v; }}
+                          placeholder={agentOf(p.provider) === "opencode" ? "provider/model" : "Model ID or alias"} />
+                      </div>
+                    {/if}
+                    {#if isWatch(p.provider)}
+                      <label class="grid gap-1.5">
+                        <span class="text-faint">Author{needsAuthor(p.provider) ? " *" : ""}</span>
+                        <input class={inputCls} type="text" disabled={d.reviewLegacy} bind:value={p.author}
+                          placeholder={needsAuthor(p.provider) ? "GitHub bot username" : "coderabbitai"} />
+                      </label>
+                    {:else}
+                      <label class="flex cursor-pointer items-center gap-2">
+                        <Checkbox disabled={d.reviewLegacy} bind:checked={p.onPrOpen} />
+                        <span>On PR open</span>
+                      </label>
+                    {/if}
                   </div>
-                </div>
 
-                <!-- Only the github transport has two shapes, so the choice
-                     appears only once it is selected. Inline posts one anchored,
-                     resolvable thread per finding (and asks the worker to close
-                     the ones it fixes); off posts a single flat comment. -->
-                {#if !isWatch(p.provider) && (p.transports ?? []).includes("github")}
-                  <div class={rowTopCls}>
-                    <span class="text-faint">GitHub shape</span>
-                    <label class="flex cursor-pointer items-center gap-2">
-                      <Checkbox disabled={d.reviewLegacy} bind:checked={p.githubInline} />
-                      <span>Inline PR threads (resolvable)</span>
-                    </label>
-                  </div>
-                {/if}
-
-                {#if !isWatch(p.provider)}
-                  <div class={rowTopCls}>
-                    <span class="text-faint">Fallback</span>
-                    <div class="flex flex-wrap gap-x-6 gap-y-2">
-                      {#each fallbackFor(p.provider) as k}
+                  <div class="space-y-3 border-t border-edge pt-3">
+                    <div class="flex items-center justify-between gap-2">
+                      <h4 class="font-medium text-ink">Findings</h4>
+                      <HelpText label="review findings" summary="Always in Lola." detail="Every review appears in Lola. Choose whether to notify you, send findings to the coding agent, or publish them elsewhere." />
+                    </div>
+                    <div class="grid grid-cols-2 gap-x-4 gap-y-2">
+                      <label class="flex cursor-pointer items-center gap-2">
+                        <Checkbox disabled={d.reviewLegacy} bind:checked={p.sendToAgent} />
+                        <span>Send to agent</span>
+                      </label>
+                      <label class="flex cursor-pointer items-center gap-2">
+                        <Checkbox disabled={d.reviewLegacy} bind:checked={p.notify} />
+                        <span>Notify me</span>
+                      </label>
+                      {#each transportsFor(p.provider).filter((t) => t !== "lola") as t}
                         <label class="flex cursor-pointer items-center gap-2">
-                          <Checkbox
-                            disabled={d.reviewLegacy}
-                            checked={(p.fallback ?? []).includes(k)}
-                            onchange={(e) => toggleFallback(p, k, (e.currentTarget as HTMLInputElement).checked)} />
-                          <span>{k}</span>
+                          <Checkbox disabled={d.reviewLegacy} checked={(p.transports ?? []).includes(t)}
+                            onchange={(e) => toggleTransport(p, t, (e.currentTarget as HTMLInputElement).checked)} />
+                          <span>{t === "github" ? "GitHub" : "Linear"}</span>
                         </label>
                       {/each}
                     </div>
+                    {#if !isWatch(p.provider) && (p.transports ?? []).includes("github")}
+                      <label class="ml-6 flex cursor-pointer items-center gap-2 text-sm text-faint">
+                        <Checkbox disabled={d.reviewLegacy} bind:checked={p.githubInline} />
+                        <span>Inline PR threads</span>
+                      </label>
+                    {/if}
                   </div>
-                {/if}
-              </div>
+
+                  {#if !isWatch(p.provider)}
+                    <details class="border-t border-edge pt-3">
+                      <summary class="cursor-pointer text-sm text-faint">Advanced settings</summary>
+                      <div class="mt-3 space-y-3">
+                        <label class="grid grid-cols-[1fr_8rem] items-center gap-3">
+                          <span class="text-faint">Timeout (s)</span>
+                          <input class={inputCls} type="number" min="0" disabled={d.reviewLegacy} bind:value={p.timeoutSeconds} />
+                        </label>
+                        <label class="flex cursor-pointer items-center gap-2">
+                          <Checkbox disabled={d.reviewLegacy} bind:checked={p.visible} />
+                          <span>Watch it run</span>
+                        </label>
+                        {#if isCLI(p.provider)}
+                          <div class="grid gap-1.5">
+                            <span class="text-faint">Base flag</span>
+                            <PresetInput label="Base flag" value={p.baseFlag} options={BASE_FLAGS} disabled={d.reviewLegacy} onChange={(v) => { p.baseFlag = v; }} />
+                          </div>
+                        {/if}
+                        <div class="space-y-2">
+                          <HelpText label="fallback reviewers" summary="Fallback reviewers" detail="If this reviewer cannot complete a pass, try the selected reviewers in numbered order. Click to remove and re-add a reviewer to change its order." />
+                          <div class="grid grid-cols-2 gap-x-4 gap-y-2">
+                            {#each fallbackFor(p.provider) as k}
+                              <label class="flex cursor-pointer items-center gap-2">
+                                <Checkbox disabled={d.reviewLegacy} checked={(p.fallback ?? []).includes(k)}
+                                  onchange={(e) => toggleFallback(p, k, (e.currentTarget as HTMLInputElement).checked)} />
+                                <span>{providerName(k)}</span>
+                                {#if (p.fallback ?? []).includes(k)}
+                                  <span class="num text-xs text-faint">{p.fallback.indexOf(k) + 1}</span>
+                                {/if}
+                              </label>
+                            {/each}
+                          </div>
+                        </div>
+                      </div>
+                    </details>
+                  {/if}
+                </div>
+              {/if}
             </section>
           {/each}
 
@@ -1455,7 +1447,7 @@
             <div class="flex flex-wrap items-center gap-2 border-t border-edge/40 pt-4">
               <span class="text-sm text-faint">Add provider:</span>
               {#each missingKinds() as k}
-                <Button variant="secondary" class="whitespace-normal! text-left" title={kindLabel(k)} onclick={() => addProvider(k)}>{kindLabel(k)}</Button>
+                <Button variant="secondary" class="whitespace-normal! text-left" title={kindLabel(k)} onclick={() => addProvider(k)}>{providerName(k)}</Button>
               {/each}
             </div>
           {/if}

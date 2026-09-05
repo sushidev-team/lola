@@ -333,7 +333,7 @@ describe("SettingsForm", () => {
     await waitFor(() => expect(ReviewKinds).toHaveBeenCalled());
     for (const k of reviewKinds) {
       expect(
-        await screen.findByRole("button", { name: k.label }),
+        await screen.findByRole("button", { name: ({ "claude-session": "Claude", "codex-session": "Codex", "opencode-session": "OpenCode", "coderabbit-cli": "CodeRabbit CLI", "custom-cli": "Custom CLI", "coderabbit-watch": "CodeRabbit bot", "bot-watch": "Review bot" } as Record<string, string>)[k.kind] }),
       ).toBeInTheDocument();
     }
   });
@@ -722,6 +722,28 @@ describe("SettingsForm", () => {
     expect(await screen.findByLabelText("Priority sort")).toBeInTheDocument();
   });
 
+  it("collapses disabled review cards without losing their configuration", async () => {
+    const provider = {
+      provider: "claude-session", enabled: false, onPrOpen: false,
+      model: "private/model", timeoutSeconds: 420, transports: ["lola", "github"],
+      githubInline: false, notify: false, sendToAgent: false, visible: false,
+      fallback: ["codex-session"],
+    };
+    GetSettings.mockResolvedValue({ ...fakeDto, reviewProviders: [provider] });
+    render(SettingsForm);
+    await fireEvent.click(await screen.findByRole("tab", { name: "Review" }));
+    const card = within(await screen.findByRole("region", { name: "Claude review" }));
+    expect(card.queryByLabelText("Model")).not.toBeInTheDocument();
+    await fireEvent.click(card.getByRole("checkbox", { name: "Disabled" }));
+    expect(card.getByLabelText("Custom Model")).toHaveValue("private/model");
+    expect(card.getByText("Advanced settings").closest("details")).not.toHaveAttribute("open");
+    await fireEvent.click(card.getByRole("checkbox", { name: "Enabled" }));
+    expect(card.queryByLabelText("Model")).not.toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(SaveSettings).toHaveBeenCalled());
+    expect(SaveSettings.mock.calls.at(-1)?.[0].reviewProviders).toEqual([provider]);
+  });
+
   // The github transport is the only sink with two shapes, so the choice between
   // them appears only once github is actually selected — and defaults to the
   // resolvable-threads one.
@@ -734,7 +756,7 @@ describe("SettingsForm", () => {
       await screen.findByDisplayValue("60s");
       await fireEvent.click(screen.getByRole("tab", { name: "Review" }));
       await fireEvent.click(
-        screen.getByRole("button", { name: reviewKinds.find((k) => k.kind === "claude-session")!.label }),
+        screen.getByRole("button", { name: "Claude" }),
       );
     }
 
@@ -742,13 +764,13 @@ describe("SettingsForm", () => {
       await openClaudeProvider();
       expect(inlineBox()).not.toBeInTheDocument();
 
-      await fireEvent.click(screen.getByRole("checkbox", { name: /^github$/ }));
+      await fireEvent.click(screen.getByRole("checkbox", { name: /^GitHub$/ }));
       expect(inlineBox()).toBeChecked();
     });
 
     it("saves the opt-out back to the provider", async () => {
       await openClaudeProvider();
-      await fireEvent.click(screen.getByRole("checkbox", { name: /^github$/ }));
+      await fireEvent.click(screen.getByRole("checkbox", { name: /^GitHub$/ }));
       await fireEvent.click(inlineBox()!);
 
       await fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
