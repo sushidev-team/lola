@@ -1,0 +1,1388 @@
+# AGENTS.md
+
+This file provides guidance to Codex (Codex.ai/code) when working with code in this repository.
+
+## What lola is
+
+`lola` is a single Go binary that watches Linear for issues matching a filter
+(team → project → cycle → workflow state → labels → assignee) and spawns its
+**own** coding-agent session for each match: a git worktree, a tmux session, and
+Codex running inside it. It then observes the resulting PR/CI via `gh` and
+can react (re-prompt the agent, notify, clean up).
+
+The coding agent is **pluggable** — `Codex` (default) | `codex` | `opencode`,
+set via `[defaults].agent` with a per-`[[project]].agent` override — with full
+lifecycle-callback parity. So is the REVIEW system: the `[[review.provider]]`
+catalog has seven kinds in three swappable families (agent / cli / bot-watch), so
+which agent reviews, which CLI reviews, and whose GitHub review is relayed are
+all config. Beware the **two distinct** uses of "Codex": (1) the pluggable
+coding agent spawned per issue (above), versus (2) lola-internal helpers that
+always shell `Codex -p` regardless of that setting — the `[brain]` summarizer
+(`internal/brain`) and `[statusagent]`. A review provider is a THIRD thing: it
+names its own agent per provider (`codex-session` runs codex) and follows neither
+the session's `agent` setting nor brain's hardcoded Codex.
+
+One binary, two roles:
+- `lola run` — the daemon. Lifecycle is **TUI-managed by default**: the TUI
+  silently spawns a detached `lola run` on open if the socket is dead, and
+  `^r`/`^x` restart/stop it (restart re-execs the current binary, so the newest
+  build comes up — the dev loop). `internal/tui/daemonctl.go` owns this. Set
+  `[defaults].manage_daemon = false` to hand the lifecycle to launchd
+  `KeepAlive` instead — the two owners must not both run.
+- `lola` / `lola tui` — the Bubble Tea TUI client
+- every other subcommand is a thin socket client that talks to the daemon over
+  the unix socket `~/.lola/lola.sock` (newline-delimited JSON, `internal/protocol`)
+
+Config (`~/.lola/config.toml`) is the single source of truth; the TUI edits it,
+then sends `reload`. History: through P0–P2 lola was a thin trigger into a
+separate Agent Orchestrator (AO) via an `ao spawn` bridge; that bridge is
+**removed** — lola is native-only now. Some code/comments still carry `Source:
+"ao"` / `AOStatus` fields for back-compat, and `agent-rules.md` marks every rule
+that changed with **[changed from AO bridge]**.
+
+## Build / test
+
+Use the Makefile — it sets a repo-local `GOCACHE` (`.gocache/`) and
+`GOFLAGS=-mod=mod -buildvcs=false` so builds work in sandboxed shells that can
+only write inside the repo. Do not run bare `go build`/`go test` in a sandbox;
+they try to write the global build cache and VCS stat cache and fail.
+
+```sh
+make build          # -> ./lola
+make vet
+make test           # go test ./...
+make check          # build + vet + test
+make tidy           # GOPROXY=off go mod tidy (deps already pinned in go.mod)
+```
+
+Run a single test:
+```sh
+go test ./internal/daemon -run TestDispatch -v      # inside Makefile env
+GOCACHE=$PWD/.gocache GOFLAGS='-mod=mod -buildvcs=false' go test ./internal/daemon -run TestDispatch -v
+```
+
+Go 1.24+ (repo builds under 1.26). Deps: `cobra` (CLI), `bubbletea` + `lipgloss`
+(TUI), `BurntSushi/toml` (config). Everything else is stdlib + exec seams.
+
+### `make build` alone never reaches the running daemon
+
+`make build` writes `./lola` in the repo. The daemon on this machine is started
+from **`$GOPATH/bin/lola`** (the TUI's `^r` re-execs the current binary, the
+app's restart button and a hand-started `lola run` resolve it from `PATH`), so a
+change is only live after:
+
+```sh
+make build && GOCACHE=$PWD/.gocache GOFLAGS='-mod=mod -buildvcs=false' go install .
+```
+
+...followed by a daemon restart — the daemon does not hot-reload its own binary.
+Two traps that both cost a debugging session already:
+
+- **Replacing the file does not change the running process.** `go install` writes
+  a NEW inode; the old process keeps the one it started with, so `ls -l` on the
+  binary says "new" while the daemon is still running last week's code. What the
+  process is ACTUALLY executing:
+  `lsof -p <pid> | awk '$4=="txt"'` — compare that inode with
+  `stat -f '%i %N' $(command -v lola)`.
+- **A feature can be missing without a single error line.** A daemon predating a
+  command answers `unknown cmd "<x>"`, but one predating a *derivation* (dev
+  URLs, a new observer pass) simply never writes the field and logs nothing.
+  Before debugging the code, confirm the running image has it —
+  `go tool nm $(command -v lola) | grep <symbol>`, or
+  `go tool objdump -s '<caller>' $(command -v lola) | grep <callee>` to prove the
+  call site is wired, not just linked in.
+
+## Architecture map
+
+The daemon (`internal/daemon`) is the heart; it composes the leaf packages,
+each of which owns exactly one external tool or concern behind an **exec seam**
+(a swappable function/interface) so tests never touch the real tmux/git/gh/Codex:
+
+- `internal/config` — owns `config.toml`: schema, defaults, atomic
+  (temp+rename, 0600) persistence, and **static** validation only. `Home()`
+  honors `$LOLA_HOME` (every runtime path derives from it; tests set it).
+  Path-exists / is-a-git-repo checks live in the runtime layer, NOT here. Also
+  owns the `[defaults]` → `[[project]]` **inheritance layer** — see the
+  invariant below before touching `Project` or `Defaults`.
+- `internal/linear` — Linear GraphQL client (`API` interface + `fake.go` for
+  tests). Paginated queries, exponential backoff on 429/5xx, filter built from
+  the poll's mode fields. All IDs are Linear **UUIDs** passed as variables.
+- `internal/runtime` (`Native`) — the session launcher: `Spawn` (worktree →
+  symlinks → `post_create` → tmux `Codex --settings`), `Adopt` (re-adopt
+  survivors after a restart; reports zombies, never kills), `Kill`. Composes
+  `worktree` + `tmux` + `hook`; talks to git/tmux/Codex only through them.
+- `internal/worktree` — per-session git worktrees under
+  `~/.lola/worktrees/<project>/<session>/`. `Remove` refuses a dirty worktree
+  (`ErrDirty`) unless forced, and guards the project's main checkout;
+  `DeleteBranch` is the branch-only half for a checkout that is already gone
+  (it prunes stale worktree registrations first, or git refuses the delete).
+- `internal/tmux` — thin tmux CLI adapter on lola's **own** server
+  (`tmux -L lola`), isolated from the user's default tmux. Session targets use
+  the `=` exact-match prefix.
+- `internal/hook` + `lola hook <event>` (hidden subcommand) — the callback path
+  from Codex lifecycle hooks back into the daemon. `hook.SettingsJSON`
+  generates per-session `--settings` wiring Stop/Notification/SessionEnd/
+  PostToolUse/UserPromptSubmit to `lola hook`, which posts to the socket. This
+  path is on the agent's critical path: bounded 2s, always exits 0 — a broken
+  lola must never wedge or fail an agent's turn.
+- `internal/scm` — GitHub PR/CI observation via `gh`. Ships FACTS only (PR
+  state, checks rollup, mergeability) — status derivation moved to
+  `internal/state`, which sits above it (scm must never import state).
+- `internal/state` — THE status vocabulary, single home. A session is two
+  ORTHOGONAL axes: `AgentState` (what the agent itself does — hooks + pane +
+  tmux liveness own it, PR facts never mask it) × `DeliveryState` (where the
+  PR stands — gh facts only, via `DeriveDelivery` with UNKNOWN-mergeable
+  hysteresis). The consumer tables all take the axis PAIR and live in
+  `display.go` — `DisplayFor` (the primary pill vocabulary), `Attention`,
+  `HoldsSlot`, `Present`, `SortRank`, `KanbanKeyFor` — and they are the only
+  slot/attention/column classifications in lola; the desktop's `theme.ts`
+  mirrors them and `desktop/state_parity_test.go` pins the two vocabularies
+  (`AllDisplays`, `AllStatuses`) and the column keys/titles. `Rollup(a, d)` is
+  the ONLY producer of the legacy one-string status and is now a WIRE SHIM:
+  `protocol.SessionInfo.status` must keep carrying the historical 16 words for
+  `mobile/`, and nothing in the daemon or the desktop classifies by them. The
+  one string-keyed classifier left is `Notable`, which filters a RECORDED
+  from→to transition for the activity feed.
+- `internal/session` — pure data: the `Session` model + JSON snapshot `Store`
+  (atomic temp+rename). No exec. Holds the two axes + freshness stamps, the
+  derived rollup `Status` (written ONLY by the `SetAgentState`/`SetDelivery`
+  mutators), PR state, the persisted one-shot guards for reactions (P3) and
+  write-back (P4), and the display-only `[statusagent]` overlay fields.
+- `internal/reviewagent` — the AGENT-family review pass: ONE bounded, READ-ONLY
+  headless review by Codex | codex | opencode (`Client.Agent` picks; the argv per
+  agent lives in `internal/agent.ReviewArgs`). Wears `internal/review.Client`'s
+  signature so the flexible-review chain drives cli, watch and every agent behind
+  one uniform pass seam — the instruction, the diff on STDIN, the caps and the
+  Err* sentinels are identical across agents. NOT `internal/brain`: brain's
+  summary must never reach the worker, while these findings do (sanitized +
+  idle-gated).
+- `internal/statusagent` — the OPT-IN status interpreter: one bounded
+  `Codex -p` per interpretation (default `--model sonnet`) judging what an
+  agent is ACTUALLY doing from pane/events/PR context. Output is parsed,
+  whitelisted, clamped — and DISPLAY-ONLY (see the invariant below).
+- `internal/agent` — the pluggable coding-agent leaf (stdlib + regexp only; must
+  NOT import config/session/hook/runtime/attention): the `Codex`|`codex`|
+  `opencode` kind enum, per-kind launch argv (`LaunchArgs`), the REVIEW argv
+  (`ReviewArgs`/`ReviewStreamArgs` — a very different, READ-ONLY posture from the
+  unattended worker launch), the callback-config bodies (codex `config.toml`,
+  opencode plugin JS), and `ParseCodexNotify`.
+  `internal/runtime` writes the right callback artifact at spawn; the health-gate
+  checks the resolved binary; `config.AgentForProject` resolves
+  project→defaults→`Codex`. `internal/attention` imports it for agent-aware
+  pane classification.
+- `internal/devtab` — the naming convention for a session's DEV tabs
+  (`<sessionID>-dev-<n>`, 1-based into `[[project]].dev_commands`). A stdlib leaf
+  for the same reason `internal/lolaenv` is one: the daemon creates the tabs,
+  `internal/runtime` must recognize them as auxiliary sessions, and both the TUI
+  and the app discover them as terminal tabs — none of which may import the
+  others.
+- `internal/proctree` — the ONE place lola signals a process it did not start:
+  the machine's process table (`ps`) plus whole-process-GROUP termination
+  (SIGTERM → grace → SIGKILL → settle). It exists because a process group is not
+  the whole story — a descendant that left the group (Codex's Bash tool
+  puts every command in its own) is unreachable by a group kill and is exactly
+  what keeps a port bound. Both `internal/tmux`'s `KillSessionTree` and the
+  daemon's dev sweep use it, which is why it is a stdlib leaf and not part of
+  either.
+- `internal/devurl` — pure text: scores the LOCAL testing URLs a dev command
+  printed into its pane and ranks the app's above the bundler's. It cannot be a
+  lookup table (lola does not know what `dev_commands` runs or what port it
+  settled on — the port MOVING is the whole point), so the CUE around the URL
+  decides: "Server running on", a `[server]` label, "Local:". Only http(s) on a
+  loopback host is ever returned, because the result is handed to an opener and
+  pane text is untrusted.
+- `internal/portproc` — one lsof question: which processes hold a LISTENING TCP
+  port, and from which working directory. The directory is the point — lola
+  cannot know what port `dev_commands` bind, so a stray dev server is found by
+  where it runs, not by its port (see the ACTIVE-session invariant). Fails open:
+  no lsof, or output it cannot parse, reports nothing rather than a guess.
+- `internal/portclash` — pure text, the mirror image of `internal/devurl`: did a
+  DEAD dev tab die because its port was taken, and which port was it? Every
+  server words that failure differently (`bind: address already in use`,
+  `EADDRINUSE`, `Port 9245 is in use`, `port is already allocated`), so the cue
+  is the phrase plus the address beside it. The ONLY thing it ever returns is an
+  integer in 1..65535 — the caller asks lsof about that port and offers a human a
+  kill button, so a number is the whole safe surface to carry out of untrusted
+  pane text. Fails closed on a wording it does not know or a message that names
+  no port.
+- `internal/gitrepo` — reads a checkout with LOCAL git only (no network, no
+  `gh`): `Detect` resolves the GitHub `owner/name` from its remotes (upstream,
+  then origin), `Branches` the fork-from candidates, and `Inspect` gathers root
+  + repo + default branch + branches in ONE pass — the call behind the project
+  forms' folder-pick autofill. Deliberately NOT in `internal/scm` (gh-only) or
+  `internal/config` (never execs). **Fails closed**: every unknown returns the
+  zero value, because an empty repo merely disables the open-PR check while a
+  wrong one would make `gh pr list --repo` answer about someone else's
+  repository.
+- `internal/secrets` / `internal/notify` / `internal/brain` / `internal/review`
+  / `internal/attention` / `internal/doctor` — Linear key resolution
+  (keychain→env), best-effort desktop/Slack notify, opt-in headless-Codex
+  summarizer, opt-in CodeRabbit QA pass, pane→answerable-question heuristic
+  parser (agent-aware), structured health checks.
+- `internal/reviewmd` — presentation-only leaf (stdlib): renders a provider's
+  plain findings into the GitHub Markdown posted on the PR — as one comment
+  (`Render`) or split into anchored, resolvable review threads plus a summary
+  (`RenderInline`). Two callers, both in `internal/daemon` (`postGithubSink` /
+  `postGithubInline`); see the invariant below.
+- `internal/diffanchor` — pure text leaf: which `(path, line)` pairs of a unified
+  diff may carry a GitHub inline review comment (RIGHT side, added + context
+  lines, `Nearest` for the bounded snap). It exists because the reviews endpoint
+  is ATOMIC — one comment on a line outside the diff rejects the whole review —
+  so the diff decides before anything is posted. It cannot live in `scm` (which
+  never parses) or `reviewmd` (which never execs); it fails open toward FEWER
+  anchors, never a wrong one.
+- `internal/tui` — the interactive poll manager + sessions view, AND the plain
+  socket client (`Send`/`Logs`) reused by the CLI subcommands.
+- `main.go` — cobra wiring only; each subcommand marshals a `protocol.Request`
+  and calls `tui.Send`, except `run` (daemon) and `tui` (TUI).
+
+### Daemon internals (`internal/daemon`, split by concern)
+
+- `daemon.go` — the `Daemon` struct and its many exec seams (see the struct's
+  field comments — every `func(...)` field is a test injection point), worker
+  goroutine management, reload diffing.
+- `dispatch.go` — one tick: health-gate → resolve key/cycle → query → drop
+  in-flight/dedup → sort by `priority_sort` → take `Budget(pollCap, globalCap,
+  liveCounted)` → per issue: **mark in-flight+seen FIRST, then spawn**, then
+  (label mode, success only) re-read labels fresh and flip.
+- `observer.go` — read-only ~30s loop: ONE `tmux ls` per cycle (liveness +
+  `#{session_activity}`, the sustain-only activity signal), gh PR facts onto
+  the DELIVERY axis (failed fetches counted → `PRStale` on the wire, facts
+  never invented), pane classification onto the AGENT axis pre- AND post-PR
+  (`agentReconcile`) — into the `session.Store` snapshot; the `sessions`
+  socket command serves the cache (a client request never execs gh/tmux).
+  Contains the anti-false-working guard (`staleWorkingThreshold`).
+- `reactions.go` — P3 engine acting on derived status changes. Also owns
+  `ensurePromptVerified`, the pre-send pane check for an adoption-carried
+  (unverified) AtPrompt gate.
+- `statusagentwire.go` — the `[statusagent]` interpreter's worker/triggers/
+  cost controls and `displayOverlay`, the overlay's ONE consumer.
+- `dev.go` — the per-project ACTIVE session: `[[project]].dev_commands` running
+  in `<id>-dev-N` tabs, plus the observer's `reconcileDevTabs` derivation. See
+  the invariant below.
+- `reconcile.go` — ~5m pass reverting orphaned issues (labeled-sent but no
+  counted session and no open PR after `orphanTimeout`).
+- `writeback.go` — P4 Linear state transitions + comments.
+- `state.go` — the per-poll `seen` store and in-flight set.
+
+## Non-obvious invariants (read before changing daemon code)
+
+- **A `Project` field holds the RESOLVED value; `Inherits` says where it came
+  from.** `[defaults]` carries a fallback for each inheritable `[[project]]` key
+  (`match_labels`, `match_mode`, `on_sent_set_label`, `blocked_label_id`,
+  `dedup_mode`, `priority_sort`, `symlinks`, `post_create`, `env`). Rather than
+  making those fields pointers — which would have broken ~50 downstream reads in
+  daemon/runtime/linear — `Load` RESOLVES them into the plain field and records
+  the source in a `config.ProjectInherits` bitmap. So daemon code just reads
+  `p.MatchLabels` and gets the effective value; only the config UIs consult
+  `p.Inherits`. Consequences to preserve:
+  - `Save` writes an inheritable key **only** when the project overrides it, so
+    an inherited value is never frozen into the file. Mutating `p.MatchLabels`
+    without clearing `p.Inherits.MatchLabels` **silently discards the write** —
+    that is the trap. Both form layers go through an explicit override step.
+  - The bitmap's **zero value means "fully explicit"**, matching a hand-built
+    `config.Project` literal. Never flip that polarity: every construction site
+    (tests, both UIs) would start silently inheriting.
+  - The on-disk mirror (`fileProject`) uses **pointers** so an absent key
+    ("inherit") stays distinct from `key = []` ("override to nothing"). A nil
+    slice through that pointer is omitted, an empty non-nil slice is written.
+  - `ResolveInheritance` is idempotent and canonicalizing; `Load`, `Validate`
+    and `Save` all call it, which is what makes save/load an identity.
+  - `agent` / `concurrency_cap` / `branch_prefix` are deliberately NOT in the
+    bitmap: zero has always meant "fall back" for them and
+    `AgentForProject` / `EffectiveCap` / `BranchPrefixForProject` already
+    resolve project → `[defaults]` → hard default at read time.
+- **A project has two names: `Name` is identity, `Label` is display.** `Name` is
+  a path segment (`worktrees/<name>/`, `state/<name>.seen`) and the prefix of
+  every session id — which is also the tmux session name — so ~11 call sites
+  re-derive worktree paths from `cfg.ProjectByName(s.Project).Name` rather than
+  reading `session.Worktree`. `Label` is free text nothing keys by. Consequences:
+  - Render `p.DisplayName()` / `cfg.DisplayNameFor(id)` in UIs; use `Name` only
+    for paths, tmux and protocol name fields. Never render a bare `p.Name`.
+  - `config.Slug` is the ONE place a label becomes an id (`SlugTyping` is its
+    non-trimming half, for live typing — trimming mid-keystroke makes a hyphen
+    impossible to enter). `internal/runtime`'s own `slugify` is for git refs and
+    stays independent.
+  - Slug shape is a UI rule, NOT validation — pre-`label` configs hold names like
+    `"Okane"` and must keep loading. The TUI form only canonicalizes a name a
+    human actually typed (`idEdited`), because re-slugging an untouched legacy
+    name would turn an ordinary save into a rename.
+  - A `Name` change is `cmd=renameProject`, daemon-only and **idle-only**
+    (`internal/daemon/renameproject.go`): it refuses while any session or
+    worktree still carries the old name, then renames the config entry, carries
+    the `.seen` file over and reloads. Do not "helpfully" extend it to live
+    sessions without also moving worktrees + `git worktree repair` + tmux renames.
+- **The project panel is ONE list in which a FOLDER is a row, and the whole
+  arrangement is display-only.** Three config facts describe it, and nothing in
+  the daemon, runtime or dispatch path reads any of them: `[[project]].group`
+  files a project into a `[[group]]`, the `[[project]]` array's ORDER is the
+  order rows are drawn (the TUI's list is the same array, so a drag in the app
+  reorders it too), and each `[[group]]`'s `position` is its index among the
+  top-level rows. Consequences:
+  - `[[group]]` is a TABLE rather than a bare string on the project, and carries
+    its own `position`, because an EMPTY folder must exist and be placeable — the
+    app creates it (`+` → New group) and projects are dragged in after. A folder
+    derived from its members could be neither.
+  - A dangling `group` reference is REPAIRED to "" with a notice, never rejected
+    (`sanitizeGroups`, reached from `ResolveInheritance` so Load, Validate and
+    Save canonicalize identically; notices are appended once, on the load path).
+    Getting arrangement wrong must never take a working config down.
+  - `group` is deliberately NOT in the `[defaults]` inheritance bitmap: an
+    inherited group would file every project that forgot to override it under
+    one folder.
+  - The app sends the WHOLE arrangement (`ConfigService.SetProjectLayout`), and
+    it FAILS CLOSED — the payload must be an exact permutation of the configured
+    projects and groups or nothing is written. A drag is computed against a
+    snapshot that may be a reload behind; applying it loosely would resurrect a
+    project that was just removed. A refused layout costs one drag.
+  - The project FORM has no group field on purpose. Filing a project is done by
+    dragging its row onto a folder, and a second place to set it would let a
+    stale form move a project nobody dragged — so `SaveProject` leaves
+    `Project.Group` untouched. The pointer-free equivalents are on the focused
+    row: `⌥↑`/`⌥↓` move it, `⌥→` files it into the nearest folder, `⌥←` takes it
+    back out. Keep them, or the feature is mouse-only.
+  - The drag is POINTER events, not HTML5 drag-and-drop (WKWebView differs from
+    the dev server's Chrome), and every decision it makes — rows, gaps, the
+    folder row's into-band — lives in
+    `desktop/frontend/src/lib/sidebarlayout.ts`, which has no DOM, so it is
+    testable. `buildRows`/`toLayout` round-trip: rebuilding from the positions
+    written reproduces the same list.
+- **Adding a project starts at the FOLDER, and every derived field is
+  FILL-ONLY.** The checkout is the one value nothing else can be derived
+  without, so a new project opens straight into a picker — the native chooser in
+  the app (`ConfigService.PickFolder`), `internal/tui/dirpicker.go` in the TUI
+  (a listing marks git checkouts, and `enter` on one TAKES it rather than
+  descending). One `gitrepo.Inspect` then fills `path` (the checkout ROOT, so
+  picking a subdirectory still configures the repo), `label`/`name`
+  (`config.LabelFromPath` → `Slug`, which round-trips back to the folder name),
+  `repo` and `default_branch`. Rules:
+  - A fill NEVER overwrites a human's value — only an empty field, or one this
+    form itself wrote (`repoAuto`/`branchAuto`). Typing or pasting clears those
+    flags, so a late answer cannot land on top of a decision.
+  - Identity (`label`/`name`) is suggested for a NEW project ONLY: filling an
+    existing project's empty label would write a `label` key nobody asked for on
+    the next save, and its `default_branch` is a decision, not a placeholder.
+  - The answer is matched against the CURRENT path before anything is applied; a
+    result for a path the user has since changed is dropped, or the form would
+    describe a repository it no longer names.
+  - The app runs the pass on OPEN without filling (branch list + checkout status
+    only) — an untouched form must not come up dirty; the TUI rebases its
+    baseline for the same reason.
+- **`[defaults]` label keys must be WORKSPACE labels, and that is a UI rule, not
+  a validation one.** Linear has team labels (scoped to one team) and workspace
+  labels (`IssueLabel.team == null`, valid everywhere). A `[defaults]` label is
+  inherited by projects on any team, so only a workspace label is coherent —
+  `linear.WorkspaceLabels` fetches exactly those and both settings screens offer
+  only them. `Validate` does NOT check this: whether a UUID is team- or
+  workspace-scoped is unknowable offline, and an earlier cross-team rejection
+  here blocked the correct configuration. Do not reinstate it.
+- **Health-gate every dispatch.** If `tmux`/`git`/`Codex` aren't all resolvable
+  or the poll's `[[project]]` doesn't resolve: skip the tick, record `lastError`
+  in status, and mutate **nothing** (no seen, no labels, no in-flight).
+- **Dispatch order is load-bearing.** Record in-flight + write seen *before*
+  spawning, so a crash mid-spawn can't double-dispatch. Upsert the session into
+  the store immediately so the next `Budget` call counts it.
+- **The two axes are no longer collapsed for display; `state.Rollup` survives
+  only as the legacy WIRE SHIM.** `AgentState` (hooks + pane + transcript +
+  tmux liveness) and `DeliveryState` (gh facts) still live side by side on the
+  `Session`, and the rolled-up `Status` string is still derived from them by the
+  `SetAgentState`/`SetDelivery` mutators — writing `Status` directly is still a
+  bug. What changed is that NOTHING classifies by that string any more. It
+  collapsed the agent axis INTO the delivery axis, and 20MB of one machine's
+  `daemon.log` measured what that cost: 458 transitions into `needs_input`, 412
+  of them (90%) minted by the coding agent's own 60s "waiting for your input"
+  nudge rather than by a question — only 45 were real permission prompts — and
+  `needs_input`↔`review_pending` flapping 264 times (plus 97 against
+  `ci_pending`), about 52% of ALL status churn, median dwell exactly 60s. Post-PR
+  the rollup returned the DELIVERY word for both `AgentWorking` and `AgentIdle`,
+  so the agent axis was invisible except through the one word that was 90% false.
+  The model now is:
+  - **The agent axis is the PRIMARY pill**, reduced to the smaller `Display`
+    vocabulary (`state.DisplayFor`): working | idle | needs_you | gone | shell |
+    orphaned. `starting` collapses into working (a spawn that has not heartbeat
+    yet is still a running agent, and a pill that flickers for one cycle is
+    noise); `exited`/`dead` collapse into gone (that distinction matters to
+    teardown, not to a human reading a pill). PR facts NEVER mask it.
+  - **The delivery axis is the SECONDARY chip**, unchanged and unreduced — the
+    PR badge beside the pill. A row can now say "working" and "✗ci" at once,
+    which the single word could not.
+  - **"Does a human need to look at this" is a PREDICATE over both**
+    (`state.Attention`), not a value either axis can hold. That is the whole
+    fix for the flap: the old vocabulary had to spend a *word* on attention, so
+    a parked reviewer and a real question fought over the same slot.
+  - **`state.DisplayFor`'s unknown case answers `working`**, matching
+    `KanbanFallbackKey` and the TS port: a state the vocabulary has not caught
+    up to is most likely a live agent, and rendering one as "gone" hides it from
+    the very views built to surface it.
+  - The consumer tables ALL take the pair and all live in
+    `internal/state/display.go` — `Attention`, `HoldsSlot`, `Present`,
+    `SortRank`, `KanbanKeyFor`. There is no string-keyed slot, attention or
+    column classification left anywhere in lola.
+  - **`Rollup`'s only remaining job is `protocol.SessionInfo.status`**, which
+    must keep carrying the historical 16 words because `mobile/` reads them
+    (`statusLabel`/`statusText`/`kanbanColumn`/`triaged`/`attentionCount`/
+    `TRIAGE_FILTERS` in the shared `desktop/frontend/src/lib`, consumed through
+    a vite alias). Do not "finish the job" by deleting it. The daemon's own
+    remaining `s.Status` reads are all ABOUT the rollup rather than classifying
+    by it — the hook change-detection log, the `[statusagent]` supersession
+    hash, and `events.go`, whose `state.Notable` is the one string-keyed
+    classifier left because its input is a RECORDED `from→to` transition (two
+    historical words, not a live pair anything can re-read).
+  - `state.FromLegacy` still backfills axes for pre-axis snapshots on
+    load/Upsert, so records on disk keep working — including ones a pre-split
+    daemon wrote, which is why `handoffDeliverable` still admits
+    `AgentWaitingInput + InputIdleNotify` that no current daemon mints.
+  - The desktop's `theme.ts` mirrors all of it and `desktop/state_parity_test.go`
+    pins BOTH vocabularies (`AllDisplays`, `AllStatuses`) plus the kanban column
+    keys and titles. **Column MEMBERSHIP is no longer cross-pinned** — it became
+    a function of the pair, so `KanbanColumn` lost the status set the test used
+    to compare — and each side now only guards its own port of `KanbanKeyFor`
+    (`internal/state/display_test.go`, `theme.test.ts`). A self-consistent change
+    to one port will not be caught; re-read the other when you touch either.
+  - **A live pre-PR agent holds a concurrency slot whatever it is doing** —
+    working, idle, or waiting on a human. That is a deliberate change from the
+    pre-axis string table, which excluded `idle`, and it is forced by the
+    display change above: `idle` used to be a ≤60-second waypoint on the way to
+    `needs_input` (which did count), so excluding it was survivable. Now that
+    the nudge parks a session on idle permanently, the old table would have let
+    such a session hold no slot forever and dispatch would have spawned straight
+    past the cap. See the `liveCounted` invariant below for the cap math.
+- **`liveCounted` comes from the session store snapshot**, never a local
+  counter, and `state.HoldsSlot(agentState, delivery)` is the ONE slot
+  classification. The cap counts RUNNERS: a session holds a slot while its
+  agent process is alive (anything but dead / exited / shell / orphaned) AND
+  its PR is neither parked on a human (`review_pending`, `approved`) nor
+  terminal (`merged`, `closed`), so held PRs never stall pickup. A live agent
+  with NO PR holds its slot whatever it is doing — working, idle, or waiting on
+  a human. That last case is a deliberate change from the pre-axis string
+  table, which excluded `idle`: it was survivable only while the coding agent's
+  own 60s idle nudge turned every such session into `needs_input` (which did
+  count) within a minute, and once that nudge stopped minting `needs_input` an
+  idle pre-PR session would have held no slot forever and dispatch would have
+  spawned straight past the cap.
+- **Fail CLOSED on unknowns.** The reconcile orphan-revert skips whenever the
+  open-PR check can't answer (no repo, gh error) — better a stuck label than
+  lost work.
+- **Send-keys safety (reactions/review).** Typing into a live agent mid-turn
+  corrupts it. Every path that types goes through the `AtPrompt` idle gate
+  (consumed atomically via `Store.Update`); a non-idle session has its reaction
+  **deferred**, never forced. Payloads are sanitized (control chars stripped)
+  and are **never** run as a command. A gate carried across a daemon restart is
+  UNVERIFIED (`AtPromptVerified=false` from adoption) and must pass
+  `ensurePromptVerified` (live hook or a waiting pane) before the first send —
+  ambiguity fails closed (defer). The **review hand-off** uses a deliberately
+  wider gate, `handoffDeliverable`: `AtPrompt` **or** parked on an idle
+  notification (`AgentWaitingInput` + `InputIdleNotify`), the same state
+  `handleAnswer` types a human's reply into. `InputPermission` stays excluded —
+  prose typed at a y/n approval answers the wrong question. Without the wider
+  gate the feature was dead: findings deferred at PR-open (the worker has just
+  pushed, so it is essentially always mid-turn) could only land in the sliver
+  between the Stop hook and Codex's idle notification, which closes
+  `AtPrompt` — the 30s observer cadence missed it every time and stashes piled
+  up in `PendingHandoffs` unread. Two consequences: the Stop hook flushes
+  immediately (`flushHandoffsOnStop`, async + drain-group registered, because a
+  hook must never block a turn), and `flushReviewHandoffs` stops after ONE
+  delivery per pass — an idle-notify delivery consumes no `AtPrompt`, so
+  without that stop several kinds would type into the same prompt back-to-back.
+  A delivered hand-off sets `AgentWorking` (as `handleAnswer` does), which is
+  what closes the wider gate against a re-send. The gate admits a THIRD state:
+  a session the observer's pane reconcile parked on `AgentIdle` (both of its
+  paths close `AtPrompt` and neither opens a notification, so such a session was
+  permanently unreachable). And whichever of the three admits it, the gate is
+  only a candidate filter — `handoffPromptProof` → `paneWaitingNow` must capture
+  the pane and classify it `ActivityWaiting` before ONE byte is typed. It never
+  short-circuits on `AtPromptVerified`, for ANY of them: a hook verdict is
+  evidence about the moment the hook fired, not about now, and that gap is where
+  this broke. Codex ends a turn (Stop hook → `AtPrompt` +
+  `AtPromptVerified`) and THEN covers the pane with a modal setup dialog; the
+  short-circuit answered "verified" from the hook, the findings were typed into
+  the dialog, the gate was consumed and the stash dropped — four PRs' reviews
+  logged as `handed feedback to the worker` and read by nobody. A capture
+  failure or any non-waiting classification (including a modal's
+  `ActivityBlocked`) defers. One bounded tmux exec per delivery is the price.
+  The MANUAL conflict resolution (`cmd=resolveConflict`,
+  `internal/daemon/resolveconflict.go` — the status pill's hover-morph and the
+  context menu's "Resolve conflicts") types through the same wide gate plus the
+  same pane proof, with two deliberate differences: it REFUSES instead of
+  deferring (the caller is a human watching a button, and a send that lands
+  minutes later with no further sign of it is worse than an honest "not now"),
+  and it does not read `LastReactedStatus` as an entry condition — a second click
+  is intent — while still STAMPING it, so the automatic reaction cannot pile a
+  rebase prompt on top of the merge just asked for. Its text is lola's own and
+  names the project's `default_branch` (a MERGE, matching what the tooltip
+  promises), rather than reusing `[reactions].merge_conflict.message`.
+- **A CARET is not proof of idleness, and the pane classifier is a Codex
+  RENDERING mirror — re-verify it against a live pane.** Every send-keys gate
+  bottoms out in `attention.Classify`, so a rendering detail lola no longer
+  recognizes silently disables the whole feature rather than erroring. Two such
+  details are load-bearing today and both were learned from NOR-373, where a
+  review deferred as "mid-turn" for 15 minutes until a human pasted it by hand:
+  - The composer caret is padded with **U+00A0**, not a space (`❯ `), and
+    Go's `\s` is ASCII-only. Every caret pattern missed it, `ActivityWaiting`
+    became UNREACHABLE for Codex sessions, and the review hand-off, the reaction
+    engine and the answer path all failed closed forever. `stripANSI` therefore
+    folds Unicode `Zs` to a plain space, once, for every downstream pattern.
+  - The composer is drawn at **ALL times**, mid-turn included, and this build
+    prints no `esc to interrupt` — so a resting caret no longer means the turn
+    ended, and the LIVE status line is the only discriminator: gerund + ellipsis
+    + a running timer (`✻ Harmonizing… (5m 58s · ↓ 17.9k tokens)`) while
+    streaming, past tense without either (`✻ Cogitated for 24m 46s`) once
+    finished. Hence `hasLiveWorkingCue`, checked BEFORE the waiting cue, while
+    the weak cues (a frozen token meter, a leftover spinner frame, codex's
+    `Working 4m 07s`) still lose to a resting prompt — a completed status line
+    keeps those on screen, and reading them as activity is the old sticky
+    false-`working` bug.
+  Also note the frame is plain `─` RULES, no corners, so `boxBorderRe` never
+  fires for Codex and the `❯` caret carries the whole waiting classification.
+- **A MODAL is not a prompt, and `attention` is the one place that knows.**
+  Codex interrupts a session with keypress-driven overlays (the auto-mode
+  setup wizard and its siblings). Typed prose is swallowed by the widget and the
+  submit Enter answers the dialog, so a modal is the exact opposite of a resting
+  composer — yet it draws a `❯` on its focused row, which read as a caret. Hence
+  `attention.ActivityBlocked`, returned by `Classify` BEFORE every other cue
+  (an overlay owns the screen; the status line behind it is frozen). Rules:
+  - The cue is the full-width `▔` overlay RULE (`modalOverlayRe`), deliberately
+    NOT the `Esc to cancel` footer — that footer also renders under the
+    AskUserQuestion picker, a genuine answerable question that must keep
+    classifying `ActivityWaiting` so it still surfaces as needs_input.
+  - `agentReconcile` maps Blocked → `AgentWaitingInput` + `InputDialog`,
+    regardless of the delivery axis: unlike a bare resting prompt post-PR this
+    is not routine idling — nothing advances until a human presses a key, and
+    the session holds a concurrency slot meanwhile.
+  - Every send-keys path gets Blocked for free by failing closed on
+    "not `ActivityWaiting`". Don't add a Blocked case that types.
+  - PREVENTION is separate and lives in `hook.SettingsJSON`: `modalSkills`
+    writes `skillOverrides: {"auto-mode-setup": "off"}` into the per-session
+    `--settings` file (Codex's flagSettings source is always merged, so
+    the user's own settings stay untouched). Keep BOTH halves — Codex
+    ships dialogs faster than that list can track them, and the classifier is
+    what catches the ones it doesn't know.
+- **There are TWO scrollbacks, and `tmux.ScrollPane` is the one place that picks
+  between them.** An agent runs FULL-SCREEN, i.e. on the alternate screen, where
+  tmux keeps **no scrollback at all**: `#{history_size}` is 0 and copy mode opens
+  on an empty history reading `[0/0]`, whatever `history-limit` says. Such a
+  program keeps its own transcript and asks for the wheel itself
+  (`#{mouse_any_flag}`). A plain shell asks for nothing and its history IS
+  tmux's. So the pane is asked first — the same test tmux's own wheel binding
+  makes (`if -F '#{?pane_in_mode,1,#{mouse_any_flag}}' 'send -M' 'copy-mode
+  -e'`) — and the scroll goes either to the PROGRAM (an SGR wheel sequence
+  written with `send-keys -l`) or to COPY MODE (`copy-mode -e` + `send-keys -X
+  scroll-up`). Getting this wrong is not a degraded scroll, it is no scroll:
+  copy mode on an agent pane shows `[0/0]` and moves nothing. The rules:
+  - Neither route needs `[tmux].mouse`. The wheel bytes go to the PANE, not
+    through tmux's mouse handling — that option only decides whether tmux itself
+    consumes the events of a REAL mouse, which costs selection and hands clicks
+    to the program. Both surfaces therefore scroll with it off.
+  - Both surfaces call the same method: the app intercepts the wheel in
+    `LiveTerminal.svelte` → `TermService.Scroll`, the TUI in `forwardWheel`.
+    Neither may re-derive the routing; the TUI's old "write SGR into the tmux
+    CLIENT" needed `mouse on` and is exactly what broke when the option was
+    finally honoured as written.
+  - The app's custom wheel handler ALWAYS returns false. xterm's own alt-screen
+    fallback converts the wheel into cursor keys (`Terminal.ts:808`), which walks
+    the AGENT's input history instead of scrolling anything — that is the
+    "terminal is not scrollable" bug as users actually meet it.
+  - An unanswerable pane FAILS TOWARD COPY MODE: it is most likely gone, and copy
+    mode is the half that cannot type into a program by mistake.
+  - Copy mode is a property of the PANE, so it outlives the wheel that entered
+    it: `TermService.Write` leaves it before the first keystroke after a scroll
+    (typing snaps to the bottom, as in any terminal), `Detach` leaves it on
+    teardown, and `tmux.SendKeys` cancels it before every daemon-side send — keys
+    delivered to a scrolled-back pane are read as copy-mode COMMANDS and the
+    payload is silently lost. Only INPUT is affected: `capture-pane` keeps
+    returning the live bottom of the pane while it is scrolled back, so pane
+    classification, the observer and the grid snapshots need no changes.
+  - **Shift+Enter is a LINE BREAK, and BOTH surfaces have to encode it
+    themselves.** Neither xterm nor bubbletea consults shift for Enter — xterm's
+    `Keyboard.ts` sends a bare CR unless ALT is held, and `keyToBytes` read only
+    `k.Code` — so shift+enter reached the coding agent as an ordinary Enter and
+    sent the message half-written. The byte pair an agent inserts a newline for
+    is meta+Enter, `ESC CR` (what ⌥Enter already produced, and what Codex
+    Code's own `/terminal-setup` teaches a native terminal to send). So
+    `LiveTerminal.svelte`'s custom key handler writes `\x1b\r` straight to the
+    PTY and SWALLOWS the event — fixing it up in `onData` is impossible, the
+    modifier is gone by then — and `internal/tui/terminal.go` emits the same
+    pair on `tea.ModShift`. tmux is NOT involved: `ESC CR` passes through
+    untouched, and no `extended-keys` option is needed because nothing upstream
+    sends CSI-u. The TUI half is only REACHABLE when the outer terminal encodes
+    the modifier (kitty/CSI-u — bubbletea v2 requests disambiguation by
+    default); Terminal.app folds it into a plain CR and nothing in lola can tell
+    the difference. The app half always works.
+  - `(*tmux.Client).ConfigureServer` is the ONE place lola sets a GLOBAL (`-g`)
+    tmux option, and `NewSession` calls it on every create — TWICE when the first
+    call failed, because a COLD server cannot be configured at all: there is
+    nothing to set an option on, and tmux cannot pre-start one (`start-server` on
+    an empty socket brings a server up and lets it exit again in the same
+    breath). Without that retry the first session after a reboot keeps tmux's
+    2000-line default for its whole life. `desktop/termsvc.go`'s `Shell` repeats
+    the pattern, since a session whose agent pane died takes the server with it.
+    That is deliberate:
+    `history-limit` is read when a PANE is created (so it must precede
+    new-session and can never be applied retroactively), and every lola session —
+    agent, `-shell-N`, `-dev-N`, `-review` — has to agree, or scrolling works in
+    one tab and not the next. Isolation still holds: it is lola's own `-L` server.
+    Every session-CREATING caller must build its client through
+    `config.TmuxClient`, or its next spawn resets the server to the default
+    `scrollback` and silently discards the operator's. `mouse` is written in BOTH
+    states, so `[tmux].mouse` is the whole truth about it and a machine whose
+    `~/.tmux.conf` says `mouse on` cannot hand tmux the clicks in a lola pane —
+    the cost is that a spawn resets what the TUI's `ensureTmuxMouse` turned on
+    for its own wheel forwarding. Options tmux has dropped
+    (`alternate-scroll`, gone in 3.5) do not belong in it: they only log an
+    "invalid option" advisory on every spawn — check a new one against a real
+    tmux before adding it.
+- **Teardown is THREE things, and each has its own fail-closed rule.**
+  `runtime.Kill` (the merged-cleanup path and `lola kill`) takes down: (1) the
+  agent's tmux session AND its auxiliary sessions — `<id>-shell-N` tabs, the
+  `<id>-review` pane and the `<id>-dev-N` dev tabs are SEPARATE tmux sessions, so
+  killing only the agent left them running against a worktree about to be deleted
+  (and, for a dev tab, a port still bound); (2) the worktree, dirty-
+  safe (`ErrDirty` unless forced); (3) the local branch, but only when
+  `Session.OwnsBranch()` (a `pr` session's Branch is UPSTREAM — deleting it
+  destroys someone else's ref). Rules that hold it together:
+  - EVERY session — the agent's own and each aux one — goes down through
+    `tmux.KillSessionTree`, not `KillSession`. `kill-session` only hangs the pane
+    process up, and anything that ignores SIGHUP — a dev tab's `php artisan
+    serve`, a server started by hand in a shell tab — survives as an orphan of
+    pid 1 still holding its port. It degrades to a plain `KillSession` whenever
+    the pane pid cannot be resolved, so a tab is always torn down.
+  - `KillSessionTree` signals the pane's process group **and every group its
+    ppid TREE spans** (`internal/proctree`). The group alone is not enough:
+    Codex's Bash tool puts each command it runs in its OWN process group
+    (so it can time one out without touching the agent), so a `php artisan serve
+    --port=8000` the AGENT started is invisible to a group kill of its own pane
+    and outlives the whole session — holding the port against a worktree
+    teardown is about to delete. All groups share ONE grace window (SIGTERM,
+    then SIGKILL, then a short settle), because per-group grace would multiply
+    the wait by a user waiting on a port.
+  - The aux sweep is BEST-EFFORT: a tmux that cannot answer logs and continues,
+    because these are display surfaces and the caller retries the whole cleanup
+    on error — a stuck shell tab must never block a worktree removal forever.
+  - Matching is `parent + ^(-shell-\d+|-review|-dev-\d+)$`, anchored at BOTH ends:
+    `lola-fe-42` is a prefix of `lola-fe-420-shell-1`, and a loose suffix test
+    made one session's teardown kill a live sibling's tab.
+  - A missing worktree directory no longer ends teardown early — it deletes the
+    branch anyway (`worktree.DeleteBranch`), because a session whose checkout
+    was already gone otherwise left its branch behind forever.
+  - A DIRTY worktree keeps both the checkout and its branch. That is the whole
+    gate: uncommitted work is the one thing teardown never discards.
+- **The ACTIVE session is DERIVED from tmux, never remembered.** Only one session
+  per project may run `[[project]].dev_commands` (they bind ports), so `cmd=dev`
+  is a MOVE: `internal/daemon/dev.go` kills the previous holder's `<id>-dev-N`
+  tabs *before* starting its own, or "address already in use" is all the new tab
+  ever says. Rules that hold it together:
+  - `Session.DevActive`/`DevTabs` are a CACHE the toggle writes for an instant
+    UI, and `reconcileDevTabs` (one per observe cycle) overwrites them from the
+    tmux facts. Persisted intent would drift the moment a tab was closed, a
+    command crashed, or the daemon restarted; derivation cannot.
+  - A `dev_commands` entry is a SHELL LINE, and `lolaenv.CommandLine` only
+    `exec`s it when it is a SIMPLE command. `exec` takes one command, so
+    prefixing it onto `cd desktop && wails3 dev` binds it to `cd` — under macOS's
+    /bin/sh (bash 3.2) that is a silent exit 0 with the real command never
+    started, i.e. a dev tab that dies instantly and says nothing. A pipeline, an
+    `&&` chain, a redirect or a builtin head therefore runs unprefixed; the
+    wrapper `sh` waits for the command and exits with it, so `#{pane_dead}` still
+    fires at the right moment and only the "pane pid IS the command" property is
+    lost. The classifier is deliberately conservative (`commandSeparators`,
+    `shellWordBreakers`): a false "not simple" costs an optimization, a false
+    "simple" eats the command line.
+  - The tabs carry `remain-on-exit`, so a crashed dev server keeps its pane and
+    its error message — which means the session's EXISTENCE proves nothing and
+    liveness is `#{pane_dead}` (`tmux.DeadPanes`, one `list-panes -a` per cycle,
+    and only in a cycle whose `tmux ls` actually showed a dev tab).
+  - A failed dead-pane probe changes NOTHING: a false "off" invites a restart
+    that kills a healthy server, a false "on" hides one that is gone.
+  - Stopping discovers by LISTING, not by the configured command count, so a tab
+    left over from a longer `dev_commands` list is still torn down — and it goes
+    through `KillSessionTree`, because `composer dev` spawns the process that
+    actually holds the port and that process ignores SIGHUP. Killing only the
+    tmux session left it orphaned on pid 1, so the session taking over started on
+    8001 and the feature had moved the problem instead of solving it.
+  - Killing the previous holder's TABS is not enough, so activation also SWEEPS
+    (`sweepPortSquatters`). The agent working in a worktree starts servers of its
+    own — `php artisan serve --port=8000`, to look at the page it just changed —
+    and those are neither a tmux session nor part of any pane's process group
+    (see the teardown invariant), so they outlive everything and the session
+    taking over silently serves :8001 from the wrong checkout. lola cannot find
+    such a process BY port (the port lives inside `composer dev`, not in config),
+    so it finds it by WHERE it runs: `internal/portproc` (lsof) lists listening
+    sockets with each owner's cwd, and anything listening from inside
+    `~/.lola/worktrees/<project>/` goes down with its groups. Its rails, in
+    order of how much damage each prevents: only that directory is ever swept
+    (a server in the project's own checkout is the user's, not lola's); a group
+    that owns a LIVE tmux pane — or the tmux server above it — is never
+    signalled (every agent's cwd IS its worktree, so without this the sweep
+    would kill the worker mid-turn); and it FAILS CLOSED, because no lsof, no
+    `ps` and no pane list each cost the protect set.
+  - The session's local ADDRESS is derived the same way and from the same place:
+    `scanDevURLs` reads the dev tabs' scrollback once the tabs are up, ranks
+    what it finds with `internal/devurl`, and puts it on `Session.DevURLs` →
+    `SessionInfo.devUrls` → a clickable chip in the app / a `serves:` line in the
+    TUI. Three rules keep it cheap and honest: it reads a pane only while
+    nothing is known or right after the tab set changed (the address does not
+    move on its own), it spends at most `devURLAttempts` reads per tab set so a
+    `--watch` tab that never prints one stops costing a 2000-line capture every
+    cycle, and `markDev` CLEARS the addresses on any change — a link to a server
+    that is gone is worse than no link. The app opens it through the daemon
+    (`cmd=openURL`, http(s)-only), never `window.open`: the address came out of
+    terminal text.
+  - The address is found by TWO readers, and the fast one is the toggle's. A
+    server prints its address a second or two after its tab exists — the one
+    moment where the observer's 30s cadence is far too slow, since a human is
+    watching that tab come up — so activation starts `startDevURLWatch`: a
+    background poll of its OWN tabs (short `devURLWatchLines` tail, every
+    `devURLWatchEvery`, bounded by `devURLWatchWindow`) that stops at the first
+    address. It re-reads the session record every pass and gives up the moment
+    the tabs stop, change count or are taken over — the toggle is a MOVE, so a
+    watch outlives its own tabs — and it runs on the SHUTDOWN-CANCELLABLE
+    context, not a shielded one, because an aborted read costs only a link the
+    observer finds a cycle later. `scanDevURLs` stays as that fallback: nothing
+    depends on the watch succeeding.
+  - A port the sweep may NOT reclaim becomes a QUESTION, never an action
+    (`internal/daemon/devclash.go`, `cmd=devFreePort`). The sweep only touches
+    `~/.lola/worktrees/<project>/`, so the common real-world clash — a
+    `npm run dev` the human started in their own checkout — kills the dev tab and
+    explains nothing: the command prints one line and exits, and `wails3 dev` or
+    `vite` clears the screen on the way out, so the tab reads as "dead, no reason
+    given". So a dead tab is read ONCE (`internal/portclash` → a port number,
+    nothing else), lsof names the holder, and the result rides `SessionInfo`
+    to a banner in the app / a `clash:` line + `F` in the TUI. Its rails:
+    - Detection is one-shot per DEATH (`devClashChecked`, re-armed when the tab
+      lives again): a dead pane never changes, so a second read learns nothing
+      and would cost a capture plus an lsof every cycle forever.
+    - lsof is asked only when the pane actually said a port was taken, and a
+      holder that cannot be resolved records NOTHING — the finding's only use is
+      offering to kill something.
+    - The kill is a human's answer to a dialog, and the daemon re-verifies at
+      that moment: session + port + pid must match the record AND that pid must
+      STILL hold that port (pids are reused, and the gap to a click is
+      unbounded). A group owning a live tmux pane is refused outright, as in the
+      sweep, and no ps / no tmux means no kill.
+    - The clash is DERIVED like `DevActive`/`DevURLs`: `markDev` drops it on any
+      tab change, because it describes tabs that no longer exist.
+  - `dev_commands` is deliberately NOT a `[defaults]` key (see the inheritance
+    invariant): a dev command belongs to one repository, and an inherited one
+    would start the wrong stack in every project that forgot to override it.
+- **A review PASS runs in its own tmux session, and the pane is a DISPLAY.** With
+  `visible = true` (the per-provider default) a pass runs as the hidden
+  `lola review-run` inside `<sessionID>-review` on lola's tmux server, beside the
+  worker and the `-shell-N` tabs (`internal/daemon/reviewvisible.go`). Rules that
+  hold it together:
+  - The daemon NEVER parses the pane (it wraps, scrolls, is overwritten). The
+    child writes findings + an outcome class into
+    `~/.lola/cache/review/<session>/` (`internal/reviewrun`), and
+    `Status.Err()` maps that class back onto the SAME `Err*` sentinels a direct
+    exec returns — so transports, fallback chain and retry budget cannot tell a
+    visible pass from a direct one.
+  - A visible Codex pass uses `--output-format stream-json --verbose` and
+    renders the events to plain lines (`internal/reviewagent/stream.go`),
+    because a plain `-p` review prints NOTHING until it finishes — a blank pane
+    for ten minutes is not a progress display. The findings still come from the
+    terminal `result` event, byte-identical to the plain pass.
+  - The pane HOLDS after the pass (the child blocks forever) so the output stays
+    readable; the next pass for that session replaces the whole tmux session and
+    `lola kill` takes it down. Because it outlives its pass, adoption must not
+    see it as an orphan: `runtime.IsAuxSession` covers it, and Adopt drops it
+    only when its PARENT session is live beside it (a manual session on a branch
+    ending in `-review` would otherwise vanish).
+  - Everything degrades to the direct exec — no tmux, no session id, a tmux that
+    refuses the session. A pane that cannot open must never cost a review.
+- **The github sink is the ONLY review sink that reshapes the findings, and
+  GitHub's sanitizer sets the whole design budget.** A comment body is
+  sanitized server-side: CSS, `<style>` and the `style` attribute are stripped,
+  so a PR comment can be STRUCTURED but never styled. `internal/reviewmd` (pure,
+  dependency-free) spends the five things that survive — an ALERT callout
+  (`> [!CAUTION]` / `[!WARNING]` / `[!NOTE]`, the only real colour available,
+  its level DERIVED from the worst severity), emoji, bold, code spans and links
+  — on a tally line over one COLLAPSED `<details>` per finding, each location
+  linked to `blob/<session branch>/<path>#L<line>`. A `<details>` renders as a
+  bare disclosure triangle with no box of its own; do not add markup trying to
+  give it one. `postGithubSink` is its one caller; the worker hand-off, the
+  notification and the Linear comment keep the raw text byte for byte.
+- **The INLINE github shape is the plain comment plus anchors, and the plain
+  comment stays the floor.** With `github_inline = true` (the default) the same
+  findings go up as ONE `event: COMMENT` review — a summary body plus one
+  anchored thread per finding (`internal/daemon/reviewinline.go`) — because only a
+  review THREAD gets GitHub's reply box and "Resolve conversation" button, which
+  is the entire point: the worker can close what it fixed. Its rails, in order of
+  how much damage each prevents:
+  - The endpoint is ATOMIC: one comment on a line outside the PR's diff rejects
+    the WHOLE review with 422. So the diff is fetched first
+    (`scm.PRReviewTarget` — head sha + unified diff in one call), `diffanchor`
+    decides what may be anchored, and a finding whose line is not there stays in
+    the summary body. NEVER post an anchor the diff did not confirm.
+  - Everything degrades to `postGithubSink`'s plain comment — nil seams, an
+    unreadable diff, nothing anchorable, 403/422. The ONE case that does not is a
+    TRANSIENT gh failure: it leaves the settle guard unstamped and returns "done"
+    so the next cycle retries the INLINE post, because silently flattening a
+    review over a 502 would make the shape depend on the weather.
+  - An anchor may SNAP up to `inlineAnchorWindow` (3) lines to reach the diff —
+    the review instruction asks for the smallest line carrying the defect, which
+    is routinely a context line just outside a hunk — and a snapped thread states
+    the reported location in its own body. A comment sitting on a line it is not
+    about, with nothing saying so, is worse than one in the summary.
+  - The summary's tally counts EVERY finding, threads included, and names how many
+    could not be anchored: the PR must never show fewer findings than the review
+    produced.
+  - `neutralizeBotTriggers` applies to EVERY body, thread bodies included — the
+    "@coderabbitai in a finding must never start a new CodeRabbit run" guarantee
+    is per-body, not per-post.
+  - The worker instruction (`inlineThreadNote`) is DERIVED at send time from
+    `Session.InlineReviewPRs[kind] == PR.Number`, not stashed: a hand-off is
+    usually delivered long after the post that created the threads, often after a
+    restart. It is lola's OWN text, appended AFTER the untrusted findings, and it
+    is silent unless the threads exist for exactly this PR — a fallback comment
+    must never tell an agent to resolve conversations that are not there.
+- **Closing the threads is part of the pipeline, and the note's STRENGTH is what
+  keeps it honest.** Fixed code with a dozen open conversations reads as an
+  untouched PR, so every path that hands PR feedback to a worker ends with lola's
+  own close-the-loop instruction: fix, commit, push, THEN reply to each thread
+  you addressed and resolve it — never before the push, never one you did not
+  address. Two notes carry it and the difference is evidence, not tone:
+  - `inlineThreadNote` (`reviewinline.go`) ASSERTS the threads exist, because
+    `InlineReviewPRs[kind] == PR.Number` proves lola posted them.
+  - `prThreadNote` is the CONDITIONAL one for feedback whose threads lola did not
+    post — the coderabbit-watch pointer (the bot's own inline comments), a run
+    whose inline post fell back to a plain comment, and the `changes_requested`
+    reaction (a human reviewer's threads). Nothing there proves a thread is open,
+    so it says "may also be open", hands over the listing command as the source
+    of truth, and states that an empty list is nothing to close.
+  Both are derived from the repo slug + PR number only, both are appended AFTER
+  the untrusted feedback so nothing in it can rewrite the instruction, and both
+  return "" unless the PR and an `owner/name` repo can be named exactly. The gh
+  recipe itself (`threadWorkflow`: list → reply → `resolveReviewThread`) is
+  shared, and it is what makes the ask actionable — no agent guesses that
+  mutation on its own. The other reactions (`ci_failed`, `merge_conflict`) relay
+  no threads and stay silent about them.
+- **Every review VENDOR is a config slot, and the daemon names only the kinds it
+  must match on.** The `[[review.provider]]` catalog holds seven kinds in three
+  FAMILIES — agent (`Codex-session`|`codex-session`|`opencode-session`), cli
+  (`coderabbit-cli`|`custom-cli`) and watch (`coderabbit-watch`|`bot-watch`) — and
+  the point of the split is that swapping the tool is configuration, not code.
+  What holds it together:
+  - **Each agent gets its OWN kind rather than one kind with an `agent =` field.**
+    At most one provider per kind is allowed (guards key by kind), so a shared
+    kind would make "Codex primary, codex fallback" — the headline case —
+    impossible to express.
+  - Dispatch switches on the config-side FAMILY (`config.ReviewAgentFor` /
+    `IsCLIKind` / `IsWatchKind`), never on a list of kind names, and the per-kind
+    exec seams live in ONE map (`d.passRuns`). Adding a kind therefore touches
+    neither a daemon field, nor a seam switch case, nor a test hook. The daemon
+    still names `coderabbit-cli`/`coderabbit-watch` (the legacy guard keys) and
+    `kindClaudeSession`, and nothing else may join them.
+  - Kind-dependent DEFAULTS are applied from `applyKindDefaults` once the kind is
+    known and BEFORE the explicit keys overlay. A `bot-watch` deliberately gets
+    NO author default: inheriting CodeRabbit's login would make the two watch
+    kinds silently identical, so an enabled one with no `author` — like an
+    enabled `custom-cli` with no `command` — is a validation error instead.
+  - Labels are per PROVIDER, not per kind name (`labelsFor` takes the
+    DESCRIPTOR), because a generic watch is named by its configured `author`.
+    That author reaches a notification title, a Linear comment and the worker's
+    pane, so it is sanitized to login characters and clipped (`botDisplayName`)
+    first — it is config, not findings, but it is still interpolated into text
+    lola generates.
+  - The @-mention defuse generalizes with it: `neutralizeWatchedBots` covers
+    `@coderabbit*` UNCONDITIONALLY (the historical guarantee) plus every ENABLED
+    watch's author, case-insensitively, on every body — a bot that reads its own
+    mention as a command would otherwise start a fresh run off lola's own post.
+  - Both UIs GENERATE their provider editors from `config.ReviewProviderKinds()`
+    (the TUI directly, the app through `ConfigService.ReviewKinds()`), so a new
+    kind is offered by both with no UI edit. The frontend's one remaining
+    hardcoded copy is a test fixture, pinned against the Go list by a parity test.
+- **A review tool's STDERR is its narration, so BOTH classifiers read its TAIL
+  and only on failure.** codex and opencode print their whole review to stderr
+  (that is what makes a visible pass watchable), and `custom-cli` points
+  `internal/review` at arbitrary tools that may do the same. That breaks the two
+  assumptions the quota/auth classifiers were built on when the only callers were
+  Codex and coderabbit. `internal/review` and `internal/reviewagent` therefore
+  carry the SAME three rules — they are independent leaves with independent
+  copies, so a fix to one is only half a fix:
+  - The quota scan over stderr runs ONLY when the process actually failed. A
+    clean run's stderr is prose, and scanning it unconditionally made an ordinary
+    review of any code that mentions quotas or rate limits — this repository,
+    say — self-classify as `ErrQuota`: real findings discarded AND the paid
+    fallback burned. The stdout half keeps its own shortness gate for the
+    limit-line-with-exit-0 case, which is the shape coderabbit actually has.
+  - stderr is retained by a **tailBuffer**, not the head-keeping `cappedBuffer`
+    that stdout uses. A CLI's fatal error is the LAST thing it prints, so a head
+    cap threw the error away and classified the narration instead. stdout still
+    keeps its head — there the payload is the findings, most severe first.
+  - The auth cues are PHRASES, never bare `auth` / `login`, which match any
+    review that so much as reads `AuthController.php`.
+  A kind that names nothing FAILS CLOSED for the same family of reason — an
+  UNKNOWN kind included, since every family predicate is false for one and it
+  would otherwise resolve to the coderabbit binary:
+  `Validate` rejects it, but validation is not fatal at startup (it only holds
+  polls), and both empty values fall back to CodeRabbit downstream — an empty
+  `command` resolves to the coderabbit binary and an empty watch `author` to
+  `"coderabbitai"`. So `setReviewProvidersLocked` disables such a provider and
+  names it in the startup warning; a provider pointed at another vendor must
+  never silently run CodeRabbit.
+- **A review REPORTS; it never writes — and that is enforced by the argv.** An
+  agent-family pass runs `internal/agent.ReviewArgs`, which launches each agent in
+  its most restrictive non-interactive posture: Codex's headless defaults (no
+  `--permission-mode`), codex's `--sandbox read-only` (`codex exec` hardcodes
+  "never ask", so the sandbox IS the guard — `--ask-for-approval` is a TUI-only
+  flag), and opencode with NO `--auto` (a non-interactive opencode already denies
+  the blocking `question` permission). This is the deliberate opposite of the
+  unattended worker launch above, and it is what stops a prompt injection in the
+  diff from turning the reviewer into a writer. Two more consequences:
+  - The prompt is POSITIONAL for codex and opencode and must stay LAST — both
+    append piped stdin to it, and a flag after it is read as part of the prompt.
+    The diff never touches argv for any agent.
+  - The VISIBLE pass narrates per agent: Codex prints nothing until it finishes
+    (hence `--output-format stream-json` + lola's renderer), while codex and
+    opencode narrate on STDERR and have it teed to the pane. Both reach the child
+    as PIPES, never a TTY — which is exactly what makes codex and opencode print
+    their answer to stdout at all; each suppresses that copy when it detects an
+    interactive terminal.
+- **The review instruction's FORMAT block is a CONTRACT with `reviewmd`, and its
+  fields are split by AUDIENCE.** `reviewagent`'s review prompt asks for
+  `**Grade:** impact=… confidence=… effort=…` (three fixed enums) + `**Gist:**`
+  (one sentence) + `**Fix:** `(one sentence) + `**Detail:**` (≤4 sentences),
+  because nobody reads four prose paragraphs per finding on a PR. The renderer
+  puts Gist, then Fix, then the Grade chips (`<kbd>impact: high</kbd>` — `<kbd>`
+  is the only allowlisted element GitHub draws as a bordered chip rather than as
+  more code) inside ONE BLOCKQUOTE, and folds Detail — plus any field it does
+  not know — behind a NESTED `<details>` outside it. The blockquote is
+  load-bearing, not decoration: four flush blocks at equal weight read as debris
+  between findings, and its left rail is the only containment a sanitized
+  comment can express. Every line of the quote (including the blank ones, as a
+  bare `>`) must carry the prefix or GitHub ends the quote mid-body.
+  Consequences:
+  - The grade vocabulary is a WHITELIST (`gradeVocab`), and unknown axes/values
+    are dropped, not rendered: findings are model output and a chip reads as a
+    fact. Chip order is fixed by `gradeOrder`, not by what the model wrote.
+  - Renaming a field in the prompt without changing the renderer silently
+    degrades every review to the pass-through path — hence
+    `TestReviewInstructionPinsTheGradedShape` in `internal/reviewagent`.
+  - The FOLD is presentation, not redaction: the worker agent, notify and Linear
+    still get every field raw, Detail included.
+  - A body carrying neither Grade nor Gist (a `coderabbit-cli` pass, a
+    pre-graded snapshot) is passed through verbatim, so old shapes still post.
+  Rules: it FAILS OPEN — anything it cannot parse (a `coderabbit-cli` plain-text
+  pass, a provider that ignored the format block) is posted verbatim under a
+  plain `###` heading, so a formatter can never eat a review; and a location is
+  linked ONLY when the repo is `owner/name`, the ref is URL-safe and the
+  location is a plain `path:line` (a wrong link would point a reader at someone
+  else's file). Its summary line is HTML-escaped with `<code>` spans rebuilt
+  from the backticks (inline Markdown inside `<summary>` is not reliably
+  rendered). It self-bounds to
+  `reviewmd.MaxBytes` (15KB) UNDER `scm.postCommentMaxBytes` (16KB) so the
+  head-clip there can never land mid-`<details>`; over budget it drops detail
+  bodies, never findings.
+- **A review PASS never runs on the observe loop.** An agent-family pass
+  reads the PR's files, so a real PR takes 7–13 minutes; run inline it stalled
+  tmux liveness, PR facts and reactions for every other session for that long,
+  which is why its timeout could not simply be raised. The observer calls
+  `queueReviewProviders` (watch shapes still poll inline — one bounded `gh`
+  call) and `internal/daemon/reviewworker.go`'s single worker drains the queue
+  one pass at a time on the cancellable run context. Two consequences:
+  - The agent family's default `timeout_seconds` is 900
+    (`DefaultClaudeReviewTimeoutSeconds`), not the shared 300. At 300 every pass
+    on a medium PR died on the deadline.
+  - The once-per-PR guard is still stamped BEFORE the exec (crash safety), but
+    an outcome that never ANSWERED (timeout / quota / nothing available) now
+    releases it via `noteReviewOutcome` for up to `reviewMaxAttempts` tries per
+    PR. Without that release a single timeout locked the PR out of review
+    forever — the bug that made the feature look dead. A real answer (findings
+    or clean) and a graceful skip (auth / exit error) stay final.
+- **Every reaction dispatches off the DELIVERY axis, never the rollup.**
+  `react` switches on `s.Delivery` (merged → ci_failed → merge_conflict →
+  changes_requested → approved → closed, in that order), and each reaction's
+  own atomic re-check under the store lock does the same. It has to: `Rollup`
+  ranks a waiting agent above every PR state, so a permission prompt mid-fix
+  used to hide the red CI, the requested changes or the conflict the engine
+  exists to act on — and 90% of that waiting population was the coding agent's
+  own 60s idle nudge, so it hid them most of the time. `merge_conflict` was
+  carved out of the rollup for exactly that reason long before the rest.
+  Consequences:
+  - `resetReactionGuards` has NO agent-axis special case. It used to bail out
+    on `Status == "needs_input"` to stop a permission prompt from zeroing the
+    CI retry streak, clearing `Escalated` and dropping `LastReactedStatus`
+    (which would re-prompt and re-escalate the agent every time it returned to
+    its prompt). The mask is gone at the source: such a session now reaches
+    `reactCIFailed`, which keeps its own guards, and the default branch is
+    reachable only for delivery ∈ {none, draft, ci_pending, review_pending} —
+    i.e. the PR demonstrably left every reacted state.
+  - A DEAD pane is checked explicitly, right below `merged`, and falls through
+    to the guard reset. `Rollup` rule 2 ("a dead pane forces dead") used to
+    deliver that for free; restating it is not a new policy but the same one,
+    and it is load-bearing because `SetAgentState` does NOT close `AtPrompt`
+    when a pane dies — without it the engine would consume that stale gate,
+    stamp the one-shot guard and send-keys into a tmux session that is gone.
+    `merged` stays ABOVE it: `Kill` stops tmux before it touches git, so every
+    cleanup retry after the first attempt is by definition a dead session.
+  - `reactingLabel` (the REACTING column) reads the same axis, or it goes blank
+    for exactly the sessions that most need explaining.
+- **Fire once per transition.** Reactions and write-backs use persisted
+  one-shot guards (`LastReactedStatus`, `WB*Done`, review's per-PR guard) so
+  they don't re-fire on every 30s observer cycle.
+- **A FORCED review has to release EVERY per-PR one-shot in its way, not just
+  the pass guard.** A review PR carries TWO of them — `ReviewedPRs[kind]` (has
+  this kind reviewed this PR) and `PostedGitHubPRs[kind]` (has the github sink
+  settled for this PR). `cmd=review` ignores the first by calling
+  `runReviewChain` directly, so for a long time it left the second stamped: the
+  second review ran, its findings went to the worker, notify and Linear, and
+  `postGithubSink` returned on line one. The pass reported success and the PR
+  got nothing — only the FIRST review of a PR ever appeared on GitHub.
+  `handleReviewProvider` therefore calls `unstampGithubSettled` before the exec
+  (release BEFORE, so a crash mid-pass cannot leave the sink settled for
+  findings that were never posted). Two things to keep:
+  - `InlineReviewPRs[kind]` is deliberately NOT released. The threads the first
+    post created are still open on that PR, so the hand-off must keep telling
+    the worker to resolve them even when this run falls back to a plain comment.
+  - The release, like `unstampReviewed`, only clears a guard still pointing at
+    THAT PR number, so it can never undo a stamp another writer just made for a
+    newer PR.
+- **Untrusted output stays out of the control loop.** `brain` summaries and
+  `review` findings are derived from attacker-influenceable context (PR diffs,
+  CI logs, pane text). They may go to a human (notify + Linear comment) but the
+  brain summary must **never** be fed back to the worker agent; review findings
+  reach the worker only through the sanitize + idle gate. The `[statusagent]`
+  interpreter is stricter still: its parsed judgement reaches ONLY the wire's
+  display fields (`displayOverlay` in `statusagentwire.go` is the one reader)
+  — never `Status`, the axes, `AtPrompt`, dispatch counting, reactions,
+  write-back, answer gating, or send-keys. Adding a reader of the overlay
+  fields anywhere in the control loop breaks the design.
+- **Shutdown-shielded loops.** The observer and reconcile loops run on
+  `context.WithoutCancel` and are panic-guarded, with a per-exec deadline on
+  every gh/tmux call so a wedged external process can't hang graceful shutdown
+  at `d.wg.Wait()`. Spawn is bounded by `nativeSpawnTimeout` for the same
+  reason. Preserve these when adding an exec call to those paths.
+- **Secret discipline.** The Linear key and Slack webhook URL never live in
+  `config.toml`, never appear in argv, a log line, or a returned error. Follow
+  the existing pattern (resolve from keychain/env by *name*; sanitize
+  `*url.Error`) when touching those packages. The Linear key is the one secret
+  with a WRITE path in the settings UIs — it was previously settable only in the
+  setup wizards, so a hand-written config could never gain one and rotating a
+  key meant editing the Keychain by hand, while a keyless daemon fails every
+  poll. Its rails:
+  - Write-only, and NOT a form field. `ConfigService.SetLinearKey` (app) and the
+    TUI's `sfSecret` field write straight to the keychain; the key is
+    deliberately kept off `SettingsDTO` / the cfg write, for the reasons `[ui]`
+    is (see the comment above `Themes`) plus one of its own — a whole-form
+    commit would carry a secret through every unrelated save, and a validation
+    failure on another tab would silently drop the key just typed.
+  - Nothing reads a key back. `LinearKeyStatus` / `linearKeyHelp` resolve one
+    only to learn WHETHER it resolves, and report the source's name.
+  - Both surfaces mask it and clear the field after a successful store — the
+    TUI's pane in particular is captured by lola's own attention parser.
+  - A keychain failure still leaves a WORKING config (`api_key_env` by name) and
+    says so, because the user then has to export it themselves.
+- **`[ui].theme` paints BOTH surfaces, and the TUI palette is a `var` block.**
+  `internal/tui/catppuccin.go` is a Go port of `desktop/frontend/src/lib/
+  catppuccin.ts` — the same four flavors, the same contrast-walking token math —
+  so the TUI and the app derive identical semantic colors from one identifier and
+  `catppuccin-latte` genuinely lightens the TUI. Consequences:
+  - `internal/tui/theme.go`'s palette is `var`, not `const`, because `applyTheme`
+    repaints it. It is SEEDED with the historical navy values so a test that
+    never calls `applyTheme` is unaffected.
+  - A `var` reassignment does NOT update a `lipgloss.Style` built at init. Every
+    package-level style derived from the palette must be declared bare and
+    (re)built inside a `rebuildXStyles()` that `rebuildStyles()` calls — **adding
+    a new palette-derived style without registering it there means it silently
+    keeps the previous flavor's colors.**
+  - `applyTheme` is called on load (`Run`) and on every reload/settings save, so
+    the flavor applies without a restart. Unknown/empty id → the default flavor.
+  - Both settings UIs write the key (TUI `S` → Appearance, app → Appearance); the
+    app additionally live-previews. Keep the Go `config.UIThemes` list and the TS
+    `THEME_IDS` list identical — `Validate` rejects anything outside the Go one.
+- **Every action in the app is `<Button>`; every popover row is `<MenuItem>`.**
+  `desktop/frontend/src/lib/components/Button.svelte` owns the whole ladder —
+  sizes `xs`/`sm`/`md`, variants `ghost` (the default: transparent at rest, a
+  `bg-sel` chip on hover, Linear's shape) / `accent` / `secondary` / `primary` /
+  `danger` / `danger-solid`, plus `selected` for segmented controls, `icon` for
+  square glyph buttons, `block` for full-width rows and `loading` for an action
+  in flight. Do not hand-roll `rounded … px-… hover:text-…` at a call site
+  again. Consequences:
+  - `loading` DISABLES the button — these actions are not idempotent, and the
+    dev toggle in particular stops another session's servers — but overrides the
+    disabled fade with `!`, because a control that is working must not wear the
+    40% of one that is dead. The in-flight flag belongs in the STORE, not in the
+    button: the dev toggle has three triggers (row button, context menu, `D`)
+    and a local flag would leave two of them looking inert. A call site that
+    draws its own state glyph hides it while loading — the spinner takes that
+    slot.
+  - Every class in it is a LITERAL in the module-level maps. Tailwind scans
+    source text, so a composed `` `bg-${x}` `` compiles to nothing.
+  - Hover rules are `enabled:hover:`, never bare `hover:` — CSS still matches
+    `:hover` on a disabled button, so a plain rule lights up a dead control.
+  - **Recolouring a variant needs Tailwind's trailing `!`** (`class="text-warn!"`).
+    A plain `text-warn` has the same specificity as the variant's `text-faint`
+    and the winner is decided by Tailwind's order in the compiled sheet, not by
+    the class attribute — the same trap applies to any width/border/gap override.
+  - Five things stay hand-rolled ON PURPOSE, each commented where it lives: the
+    `role="tab"` strip (`Tabs.svelte`), the theme swatches (drawn in their own
+    flavor's colours), the `[defaults]` inherit chip (caption-sized, not a
+    control), the card-shaped rows (project actions, kanban cards, nav rows), and
+    the terminal tab chip (`SessionEmbed.svelte`) — one chip holding TWO buttons
+    (label + close ×), so the wrapper paints the background and both buttons run
+    `variant="bare"`; with the chip on the label, hovering the × dropped it.
+  - Labels are **Sentence case** — "Open PR", "Trigger review", "CodeRabbit". The
+    app was all-lowercase, which read as prose rather than as controls. Tests
+    assert these strings; `getByRole("menuitem", { name })`, not `getByText`,
+    because a MenuItem wraps its label beside an aria-hidden glyph.
+- **No form control in the app is drawn by the OS.** A bare
+  `<input type="checkbox">` and a bare `<select>` are painted by AppKit, so their
+  box, tick, caret and focus ring follow the user's macOS version rather than
+  this repo — two machines on the SAME build showed visibly different config
+  forms (macOS 26's Liquid Glass controls against the older flat ones), which is
+  a difference no screenshot can be debugged from. `Checkbox.svelte` and
+  `Select.svelte` own those two; `input[type="number"]`'s stepper is killed in
+  `app.css` (arrow keys still step). Rules:
+  - The tick and the caret are real sibling `<svg>` elements in `currentColor`,
+    never an `::after` on the input: WebKit does not reliably render
+    pseudo-elements on form controls, so that version works in `wails3 dev`
+    (Chrome) and disappears in the packaged app — the exact divergence these
+    components exist to remove.
+  - `class` on either component lands on the WRAPPER, not the control, so a
+    row-level fade (`ghost()`'s `opacity-55`, `has-[:disabled]:opacity-40`) dims
+    the tick/caret WITH the box instead of leaving it floating at full strength.
+  - What stays native ON PURPOSE: the `<select>` popup (an AppKit menu outside
+    the web view — re-drawing it means re-implementing keyboard nav, type-ahead
+    and a11y) and the textarea resize grabber. `color-scheme`, written per flavor
+    by `theme-runtime`, is the one lever over the popup and it is enough.
+  - `Controls.test.ts` greps every `.svelte` file for a raw `type="checkbox"` /
+    `<select` and fails on one, because a raw control looks perfectly fine on
+    whichever macOS the author happened to be running.
+- **Destructive actions confirm, and the key that does the destructive thing is
+  the SHIFTED one.** On both project lists (TUI home and the cockpit rail) `x`
+  stops polling (reversible) and `X` removes the `[[project]]` from config; `n`
+  and `a` both open the new-project form on both. They previously disagreed —
+  same key, reversible on one screen and destructive on the other. In the desktop
+  app every irreversible action routes through the single `confirm` store
+  (`desktop/frontend/src/lib/confirm.svelte.ts`) and its one `ConfirmDialog`, so
+  a shortcut and a button ask the same way; don't add a second bespoke dialog.
+  The dev toggle is `D` in BOTH surfaces for two reasons: bare `d` is already the
+  doctor overlay in each, and activating a session stops another session's
+  running processes — heavy enough for the shifted key even though it is not
+  destructive.
+- **Both TUI config forms guard unsaved edits, and the guard has a hole only a
+  gate can close.** `formModel` and `settingsForm` each keep a `baseline`
+  snapshot; `esc` on a dirty form arms `confirmDiscard` (y/n) instead of
+  cancelling. Two things to preserve when touching them:
+  - `rebase()` must be called after **every async fill** (repo auto-detection,
+    Linear team/label loads). Those are not human edits, and without the rebase
+    an untouched form starts claiming unsaved changes.
+  - `ctrl+c` is handled at the TOP of `rootModel.Update`, *ahead* of the form
+    routing, so the discard prompt can never see it. It is explicitly gated on
+    `m.form == nil && m.settings == nil`. Removing that gate silently restores
+    "reflexive ctrl+c throws away the whole form".
+
+## Testing conventions
+
+- **NEVER drive a UI with synthetic OS input.** No CGEvent posting, no
+  `osascript` clicks or keystrokes, no `cliclick`, no Accessibility-API driving,
+  and nothing that focuses a window or moves the real pointer. `simctl` has no
+  gesture API, and that absence is not a problem to route around: an agent that
+  reaches for system-wide input steals focus from whoever is at the machine, so
+  their next keystrokes land in the Simulator instead of their editor — and a
+  stray click has already leaked into an unrelated application's window. It is
+  unreliable as well as rude: CGEvents are silently dropped without a TCC grant,
+  so the usual outcome is disruption AND no test.
+  Verify a mobile change these ways instead, in this order:
+  - **Component tests.** `mobile/` and `desktop/frontend/` both run vitest with
+    @testing-library; `fireEvent` drives a real interaction with no device, no
+    pointer and no focus change. Behaviour belongs here.
+  - **`xcrun simctl io <udid> screenshot`** for what something LOOKS like. It is
+    read-only — takes no input, steals no focus. Then read the image.
+  - **A launch-environment deep link** to REACH a screen rather than tapping to
+    it: `SIMCTL_CHILD_LOLA_DEV_LINK=... xcrun simctl launch`, which carries an
+    optional pane target for exactly this purpose (`mobile/src/lib/devlink`). If
+    a screen is unreachable by link, ADD a link target; never add a tap.
+  - **A browser harness** at a phone viewport against `npm run dev` when a
+    gesture genuinely must be exercised. Same WebKit, no OS-level input.
+  If none of those can verify something, say so and leave it for a human on a
+  real device. An unverified claim is far cheaper than a hijacked machine.
+
+- 46 `_test.go` files; the daemon package is the densest. Inject fakes via the
+  `Daemon` struct's seam fields and `linear.API` / `fake.go`. Use `$LOLA_HOME`
+  (a `t.TempDir()`) to isolate all runtime state.
+- Definition of done for a daemon change (per `agent-rules.md`): cover filter
+  construction per mode, pagination, `Budget` math, both dedup modes incl. seen
+  pruning, cross-poll dedup, labelIds delta, identifier-vs-UUID usage, and the
+  native lifecycle (spawn+rollback, adopt classification, store-driven
+  `liveCounted`, fail-closed reconcile revert).
+
+## Desktop app (`desktop/`)
+
+`desktop/` is **Lola**, the native macOS app (Wails 3 + Svelte 5 runes +
+Tailwind v4 + xterm.js) that mirrors the TUI's flight-deck plus a live
+terminal-grid overview. It is a **package inside this Go module** (not a separate
+module) precisely so it can reuse `internal/protocol`, `internal/config`,
+`internal/doctor`, `internal/linear`, `internal/secrets` — Go's `internal/` rule
+forbids that from a sibling module. It is a **client of the same daemon socket**
+the TUI uses; it never embeds the daemon, and it drives `tmux -L lola` directly
+for terminal streaming. Six bound Wails services: `DaemonService` (every
+protocol command + daemon start/stop/restart), `TermService` (capture-pane
+snapshots for the grid + a live `tmux attach` PTY for the focused terminal),
+`ConfigService` (read/write config.toml + first-run setup), `DoctorService`,
+`LinearService` (team metadata for the cascading pickers), `UpdateService`
+(GitHub-Releases self-update — see the update gotcha below). Note there is ONE
+project form, not a project form plus a poll form: a project IS the poll unit,
+so repository setup / filter / labels / write-back are TABS of a single overlay
+(same in the TUI — `internal/tui/form.go`, which absorbed the old
+`projectform.go`). Requires the
+`wails3` CLI (`go install github.com/wailsapp/wails/v3/cmd/wails3@latest`), a
+distinct binary from the v2 `wails`. See `desktop/README.md`.
+
+**Gotchas (learned the hard way — don't rediscover them):**
+
+- **`wails3 task build` only rebuilds the loose `bin/Lola`. The `.app`
+  bundle is a copy made by `wails3 task package`.** So `open bin/Lola.app`
+  after a `build` launches the *old* bundled binary — every source change looks
+  like a no-op. **Iterate with `wails3 dev`** (live source, Web Inspector);
+  `wails3 task package` when you want the `.app`.
+- **The Dock/Finder/Cmd-Tab label comes from the `.app` DIRECTORY name, not the
+  plist.** macOS honours `CFBundleDisplayName` only when it matches the on-disk
+  bundle filename case-insensitively; otherwise the filename wins (which is why
+  the Dock used to read `lola-desktop.dev` even though `CFBundleName` was
+  `lola`). So `desktop/Taskfile.yml`'s `APP_NAME: "Lola"` is the load-bearing
+  value: it names `bin/Lola`, `bin/Lola.app` and `bin/dev/Lola.app`, and
+  `build/darwin/Info*.plist`'s `CFBundleExecutable` must stay in lockstep with it
+  (the bundle task copies `bin/{{.APP_NAME}}` into `Contents/MacOS/`; a mismatch
+  makes the bundle unlaunchable). `.github/workflows/build.yml`'s `APP_PATH` must
+  match too — sign/notarize/staple/DMG all read it. The dev bundle is
+  `bin/dev/Lola.app`, not `bin/Lola.dev.app`, for the same reason. Never touch
+  `CFBundleIdentifier` (`dev.sushi.lola.desktop`) — changing it resets TCC grants
+  and orphans Dock tiles. Everything else stays lowercase `lola`: the CLI, the
+  socket, `~/.lola`, `tmux -L lola`, Go module paths, the DMG asset name.
+- **WebKit ≠ Chrome for flex.** The production WKWebView does **not** stretch a
+  `display:flex` child inside a flex **column** (it collapses to content width);
+  Chrome does, so it looks fine in a browser and broken in the app. Use **CSS
+  grid** for fill-the-parent layouts (grid cells stretch reliably), or an
+  explicit width — never rely on `align-items:stretch` for a flex-container child
+  in a column. Verify layout in the actual `.app`, not just Chrome.
+- **The app SHIPS the CLI, and `desktop/lolabin.go` owns which one runs.** The
+  app is a client: it starts a daemon by exec'ing `lola run` and cannot re-exec
+  itself the way the TUI does. The DMG used to carry only the `.app`, so a fresh
+  install died in the first-run wizard on "lola binary not found on PATH". The
+  bundle now carries the CLI at `Contents/Resources/bin/lola`
+  (`build/darwin/Taskfile.yml`'s `build:cli` → `create:app:bundle`; the path is
+  pinned against `bundledRelPath` by a parity test). Resolution order is
+  `$LOLA_BIN` → `PATH` → bundled, and **PATH stays ahead on purpose** — a
+  developer's `go install` build is the dev loop below, and preferring the
+  shipped copy would make `go install` look like a no-op. Consequences:
+  - The bundled copy is the FLOOR, so the two can disagree in version;
+    `DaemonService.CLIInfo` reports both and the doctor overlay flags the skew
+    rather than leaving it to be debugged as a missing feature.
+  - `InstallCLI` SYMLINKS (never copies) the bundled binary onto PATH, so the
+    updater's bundle swap carries the CLI with it. It refuses to replace
+    anything that is not a symlink into a `.app` — a hand-installed CLI is not
+    ours to overwrite.
+  - Only `lola` is vendored. `tmux` must NOT be: `tmux -L lola` is a
+    client/server pair shared with the CLI, and mixing builds hits a
+    protocol-version mismatch. `git`/`gh`/the coding agent are the user's own
+    installs (auth, subscriptions) — hence the PATH work below.
+- **`ensurePATH` probes the LOGIN SHELL, not a fixed list.** A Finder-launched
+  `.app` inherits `/usr/bin:/bin:/usr/sbin:/sbin`, and the old two-entry
+  Homebrew list could not find a `Codex` installed through a version manager
+  (mise/asdf/fnm/volta) or a `lola` in `~/go/bin`. It now runs `$SHELL -l -c`
+  once at startup, bounded, reading its answer from a SENTINEL rather than from
+  "the output" — login rc files print banners, and a PATH assembled from
+  someone's shell greeting would be handed straight to exec. A failed probe
+  falls back to the static list, which is a superset of the old behaviour.
+- **The daemon does not hot-reload its own binary.** After `make build`, a
+  still-running `lola run` keeps the old code — a daemon predating a command
+  answers `unknown cmd "<x>"` (e.g. `projects`). Restart it (TUI `^r`, the app's
+  restart button, or stop+respawn) to pick up the new binary — and note that the
+  restart resolves `$GOPATH/bin/lola`, NOT the repo's `./lola`, so a `make build`
+  without a `go install` restarts onto the same old code (see "`make build` alone
+  never reaches the running daemon" above, including how to check what the
+  process is really executing). The desktop store
+  therefore uses `Promise.allSettled` so one unknown command can't blank the rest
+  of the UI. (`setsid` is Linux-only; on macOS detach with `nohup … & disown`.)
+- **Bare keys are the frontend's; ⌘ chords are the macOS menu's — never both.**
+  Every shortcut in `App.svelte`'s `onKey` is an UNMODIFIED key, so it bails on
+  `isChord` (`lib/keys.ts`: meta/ctrl/alt, never shift — `V`/`G`/`N`/`S`/`R`/`P`
+  are real bindings). Without that, ⌘C ran a review instead of Copy and ⌘X asked
+  to kill a session. Modifier shortcuts therefore live in the **Session menu**
+  (`installAppMenu` / `newSessionMenu` in `desktop/main.go`), which emits
+  `app:session-action` for the frontend to apply to its selection — the backend
+  cannot know it. Two consequences: AppKit dispatches a menu accelerator BEFORE
+  the WKWebView, so those chords work even while a live terminal holds the
+  keyboard (a JS handler there never fires — xterm's textarea reads as "typing"),
+  and a duplicate accelerator silently shadows, which is why `Force Reload` was
+  moved off ⌘⇧R to ⌥⌘R. Adding one: keep it Cmd-based (Ctrl/Alt belong to
+  tmux/zellij inside the pane), avoid every Edit-menu chord and ⌘⌫ (delete-to-
+  line-start in a text field), and list it in `HelpOverlay.svelte`.
+- Fonts: the terminals + mono UI use bundled **JetBrains Mono**
+  (`@fontsource/jetbrains-mono`, imported in `main.ts`); xterm re-fits on
+  `document.fonts.ready` so cell metrics match once it loads.
+- **A clickable URL in a terminal is xterm's job, not the multiplexer's, and it
+  must NOT use `window.open`.** xterm ships no link handling by default, which
+  is why a printed `http://127.0.0.1:8000` was dead text — nothing to do with
+  tmux (see the `multiplexer-choice` decision: lola stays on tmux). Both link
+  kinds are wired in `LiveTerminal.svelte`: `WebLinksAddon` for plain-text URLs
+  and `term.options.linkHandler` for OSC 8 hyperlinks. Both call
+  `store.openURL`, which asks the DAEMON (`cmd=openURL`) — that is where the
+  http(s)-only guard lives, and terminal text is untrusted (a log line can print
+  `file://` or `javascript:`). `window.open` in a WKWebView would open the page
+  *inside* the app, which is not a browser. Caveat worth knowing before
+  debugging a "dead" link: with `[tmux].mouse = true` (off by default) tmux
+  grabs mouse events, so clicks go to tmux and never reach xterm.
+- **App icon is icns-only — do NOT re-add `CFBundleIconName` / `Assets.car`.**
+  On macOS 26 (Tahoe) the Dock prefers the Liquid Glass `Assets.car` icon
+  whenever `CFBundleIconName` is set, and Wails' generated `Assets.car` drops
+  the art into Apple's inset icon-grid ([wails#4163](https://github.com/wailsapp/wails/issues/4163)),
+  so the tile floats visibly smaller than neighboring icons. We deliberately
+  ship **only** a full-bleed `icons.icns` (Tahoe masks it to the system radius
+  and it fills the Dock slot): `build/Taskfile.yml`'s `generate:icons` omits
+  `-iconcomposerinput`/`-macassetdir`, `build/darwin/make-icns.sh` rebuilds the
+  icns from `darwin/appicon-rounded.png` with `sips`+`iconutil` (full-bleed
+  squircle, no Wails "Big Sur tray"), and `CFBundleIconName` is stripped from
+  both `Info.plist`s. `build/appicon.svg` is the canonical master (the figure
+  is placed to fill the tile; the viewBox bounds the overflow). The unused
+  `build/appicon.icon/` Icon Composer source is kept only in case Liquid Glass
+  is revisited — re-enabling it reintroduces the float.
+- **Self-update assumes a PUBLIC repo — no separate releases repo.**
+  `UpdateService` (`desktop/updatesvc.go` + the pure `desktop/internal/update`
+  leaf) checks `GET /repos/sushidev-team/lola/releases/latest` **anonymously**
+  and installs the attached universal DMG by mounting it, `ditto`-staging the new
+  bundle, and running a detached script that swaps the `.app` after the app quits.
+  Anonymous only works because the repo is public — making it private again 404s
+  the check (rize-reporting needs a `*-releases` mirror precisely because ITS
+  source repo is private; lola must not copy that). The compiled `main.version`
+  (default `"dev"`, injected via `-ldflags -X main.version=` in
+  `build/darwin/Taskfile.yml`'s production branch, passed `VERSION=<tag>` by the
+  `desktop` job in `.github/workflows/build.yml`) is the checker's "current"
+  version; a non-semver value (`dev`) means "always offer the release". Update
+  cadence/skip live in `~/.lola/desktop-update.json`, NOT `config.toml` — the
+  daemon and TUI never read them. The `desktop` job in `.github/workflows/build.yml`
+  needs the Apple signing secrets (same names as rize) or it fails while the CLI
+  release still succeeds; a notarized DMG is what keeps Gatekeeper quiet on the
+  auto-installed swap. Two rules follow from the DMG arriving AFTER the release:
+  - **"A newer version exists" and "there is a build to install" are separate
+    facts, and the UI must not merge them.** The release is published the moment
+    release-please merges; its signed+notarized DMG is attached minutes later by
+    the `desktop` job — and never, if that job fails. The store keeps
+    `available` (newer version) apart from `installable` (`available` + a
+    `downloadURL`), because folding the asset check into `available` told
+    everyone on the previous version "✓ you're up to date" for the whole window
+    — silently, and permanently after a failed signing job. Without a build,
+    `UpdateOverlay` names the version and offers the release page.
+  - **A manual check must be able to answer differently.** `Checker` caches the
+    release for `CacheDuration` (1h) per app run, so "Check again" was a no-op
+    against exactly the answer that goes stale first (the DMG landing on an
+    already-published release). `CheckForUpdates(force)` clears that cache, every
+    manual check passes `force`, and opening the overlay always re-checks rather
+    than reusing what the launch auto-check saw.
+- **Releases are release-please, not manual `v*` tags.** `.github/workflows/
+  release-please.yml` maintains a release PR from Conventional Commits; merging
+  it tags the repo + creates the GitHub Release, then calls the reusable
+  `build.yml` (goreleaser CLI archives + the signed desktop DMG). A
+  release-please tag does NOT fire a `push: tags` workflow (GitHub blocks that
+  recursion), which is why `build.yml` is invoked via `uses:`, not a tag trigger.
+  goreleaser runs `changelog.disable` + `release.mode: append` so it uploads
+  artifacts onto the release-please-authored release WITHOUT clobbering its
+  notes. Version lives in `.release-please-manifest.json`; `release-please-config.json`
+  also bumps `desktop/build/config.yml`'s `info.version`.
+
+## Reference docs
+
+- `README.md` — user-facing: full command list, config reference (every
+  `[section]` and key), runtime layout, launchd install, secrets.
+- `config.example.toml` — complete commented config.
+- `agent-rules.md` — the build spec / rule list (with AO-bridge deltas).
+- `SPEC.md` / `PLAN.md` — original spec and phased roadmap (P0–P9).
