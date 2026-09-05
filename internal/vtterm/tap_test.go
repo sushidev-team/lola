@@ -14,7 +14,9 @@ import (
 // property, not about the plumbing.
 
 func TestTapSeesOutputTheEmulatorHasAlreadyModelled(t *testing.T) {
-	term, err := New(exec.Command("sh", "-c", "printf 'tapped-line\\n'"), 40, 6)
+	// New starts the reader immediately. Hold the child until the tap is
+	// installed: output consumed before registration is intentionally not replayed.
+	term, err := New(exec.Command("sh", "-c", "read -r _; printf 'tapped-line\\n'"), 40, 6)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -27,6 +29,7 @@ func TestTapSeesOutputTheEmulatorHasAlreadyModelled(t *testing.T) {
 		got = append(got, p...)
 		mu.Unlock()
 	})
+	term.Write([]byte("\r")) // release the child only after registration
 
 	ok := waitUntil(t, term, 2*time.Second, func() bool {
 		mu.Lock()
