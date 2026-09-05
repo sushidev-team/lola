@@ -501,11 +501,12 @@
   hint = "",
   onBlur: (() => void) | null = null,
 )}
+  {@const fieldId = `${formId}-${caption.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`}
   <div class={rowCls}>
-    {@render cap(caption, k, hint, `${formId}-${caption}`)}
+    {@render cap(caption, k, hint, fieldId)}
     <span>
       <input
-        id={`${formId}-${caption}`}
+        id={fieldId}
         spellcheck="false"
         class="{inputCls} font-mono {inheritedStyle(k)} {readonly ? 'cursor-not-allowed text-faint' : ''}"
         aria-label={caption}
@@ -530,14 +531,15 @@
   hint = "",
   k: InheritKey | null = null,
 )}
+  {@const fieldId = `${formId}-${caption.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`}
   <div class={rowTopCls}>
-    {@render cap(caption, k, hint, `${formId}-${caption}`)}
+    {@render cap(caption, k, hint, fieldId)}
     <span>
       <textarea
-        id={`${formId}-${caption}`}
+        id={fieldId}
         class="{inputCls} block resize-y font-mono {inheritedStyle(k)}"
         aria-label={caption}
-        aria-describedby={ENTRY_FORMAT[caption] ? `${formId}-${caption}-format` : undefined}
+        aria-describedby={ENTRY_FORMAT[caption] ? `${fieldId}-format` : undefined}
         rows="3"
         spellcheck="false"
         {placeholder}
@@ -547,7 +549,7 @@
           onChange(splitLines(e.currentTarget.value));
         }}
       ></textarea>
-      {#if ENTRY_FORMAT[caption]}<span id={`${formId}-${caption}-format`} class={hintCls}>{ENTRY_FORMAT[caption]}</span>{/if}
+      {#if ENTRY_FORMAT[caption]}<span id={`${fieldId}-format`} class={hintCls}>{ENTRY_FORMAT[caption]}</span>{/if}
     </span>
   </div>
 {/snippet}

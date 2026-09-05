@@ -1164,7 +1164,7 @@ model settings, MCP servers, skills, and other user configuration.
 reviewer to approve Git writes and network commands that the old `never`
 approval policy rejected. It does not blindly approve every action: policy
 denials can still require a human. See [Codex Auto-review](https://learn.chatgpt.com/docs/sandboxing/auto-review).
-Lola also grants each coding session write access to its repository's shared
+Lola also grants each Codex coding session write access to its repository's shared
 Git metadata directory using `--add-dir`. It resolves the directory from the
 current worktree at launch and resume, so fetching, committing and merging
 branches work even when the main checkout lives outside the workspace. No

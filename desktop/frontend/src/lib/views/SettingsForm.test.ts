@@ -470,6 +470,7 @@ describe("SettingsForm", () => {
       await screen.findByText(/Couldn’t load workspace labels/),
     ).toBeInTheDocument();
     expect(screen.getByLabelText("Blocked label").tagName).toBe("INPUT");
+    expect(screen.getByLabelText("Match labels")).toHaveAccessibleDescription("One UUID per line.");
     expect(screen.getByLabelText("Match labels")).toHaveValue("lab-1"); // the textarea escape hatch
   });
 
@@ -788,7 +789,13 @@ describe("SettingsForm", () => {
     expect(card.queryByLabelText("Model")).not.toBeInTheDocument();
     await fireEvent.click(card.getByRole("checkbox", { name: "Disabled" }));
     expect(card.getByLabelText("Custom Model")).toHaveValue("private/model");
-    expect(card.getByText("Advanced settings").closest("details")).not.toHaveAttribute("open");
+    const advanced = card.getByRole("button", { name: "Advanced settings" });
+    expect(advanced).toHaveAttribute("aria-expanded", "false");
+    const advancedPanel = document.getElementById(advanced.getAttribute("aria-controls")!)!;
+    expect(advancedPanel).not.toBeVisible();
+    await fireEvent.click(advanced);
+    expect(advanced).toHaveAttribute("aria-expanded", "true");
+    expect(advancedPanel).toBeVisible();
     await fireEvent.click(card.getByRole("checkbox", { name: "Enabled" }));
     expect(card.queryByLabelText("Model")).not.toBeInTheDocument();
     await fireEvent.click(screen.getByRole("button", { name: "Save" }));

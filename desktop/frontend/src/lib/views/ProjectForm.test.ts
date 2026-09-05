@@ -430,14 +430,16 @@ describe("ProjectForm", () => {
   });
 
   it("keeps format hints visible and retains hidden label settings across pickup modes", async () => {
+    getProject.mockResolvedValue({ ...sampleDto(), onSentSetLabel: "lab-1", inherits: { ...sampleDto().inherits, onSentSetLabel: false } });
     render(ProjectForm);
     await fireEvent.click(await screen.findByRole("tab", { name: "Worktree setup" }));
     expect(screen.getByLabelText("Env")).toHaveAccessibleDescription("KEY=value, one per line.");
+    expect(screen.getByLabelText("Dev commands")).toHaveAccessibleDescription("One command per line.");
     await fireEvent.click(screen.getByRole("tab", { name: "Issue pickup" }));
     await fireEvent.change(screen.getByLabelText("Repeat pickup"), { target: { value: "seen" } });
     expect(screen.queryByLabelText("After pickup label")).not.toBeInTheDocument();
     await fireEvent.change(screen.getByLabelText("Repeat pickup"), { target: { value: "label" } });
-    expect(screen.getByLabelText("After pickup label")).toHaveValue(sampleDto().onSentSetLabel);
+    expect(screen.getByLabelText("After pickup label")).toHaveValue("lab-1");
   });
 
   // One InspectPath pass fills the whole Repo tab: the folder is the only thing

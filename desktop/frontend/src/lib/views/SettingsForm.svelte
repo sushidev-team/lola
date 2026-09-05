@@ -3,6 +3,7 @@
   import Modal from "$lib/components/Modal.svelte";
   import Tabs from "$lib/components/Tabs.svelte";
   import HelpText from "$lib/components/HelpText.svelte";
+  import Disclosure from "$lib/components/Disclosure.svelte";
   import Button from "$lib/components/Button.svelte";
   import CheckboxOptions from "$lib/components/CheckboxOptions.svelte";
   import { PICKUP_FIELDS, LABEL_MATCHING, REPEAT_PICKUP, ENTRY_FORMAT } from "$lib/settingsFields";
@@ -739,24 +740,25 @@
 {/snippet}
 
 {#snippet areaRow(caption: string, value: string[] | null, onChange: (v: string[]) => void, placeholder = "", hint = "")}
+  {@const fieldId = `${formId}-${caption.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`}
   <div class={rowTopCls}>
     <span class="flex items-center gap-1.5 text-faint">
-      <label for={`${formId}-${caption}`}>{caption}</label>
+      <label for={fieldId}>{caption}</label>
       {#if hint && !hint.startsWith("one ")}<HelpText label={caption} detail={hint} />{/if}
     </span>
     <span>
       <textarea
-        id={`${formId}-${caption}`}
+        id={fieldId}
         class="{inputCls} block resize-y font-mono"
         aria-label={caption}
-        aria-describedby={ENTRY_FORMAT[caption] ? `${formId}-${caption}-format` : undefined}
+        aria-describedby={ENTRY_FORMAT[caption] ? `${fieldId}-format` : undefined}
         rows="3"
         spellcheck="false"
         {placeholder}
         value={linesToText(value)}
         oninput={(e) => onChange(splitLines(e.currentTarget.value))}
       ></textarea>
-      {#if ENTRY_FORMAT[caption]}<span id={`${formId}-${caption}-format`} class={hintCls}>{ENTRY_FORMAT[caption]}</span>{/if}
+      {#if ENTRY_FORMAT[caption]}<span id={`${fieldId}-format`} class={hintCls}>{ENTRY_FORMAT[caption]}</span>{/if}
     </span>
   </div>
 {/snippet}
@@ -1075,15 +1077,14 @@
                 d.statusAgentBin = statusBinaries.get(value) ?? "";
               }}
               onModelChange={(value) => { d.statusAgentModel = value; }} />
-            <details class="border-t border-edge pt-3">
-              <summary class="cursor-pointer text-faint">Executable override</summary>
+            <Disclosure label="Executable override">
               <div class="mt-3 {rowCls}">
                 <span class="text-faint">Binary</span>
                 <PresetInput label="Binary" value={d.statusAgentBin}
                   options={[{ value: "", label: `Default (${d.statusAgentAgent || "claude"} on PATH)` }, { value: d.statusAgentAgent || "claude", label: d.statusAgentAgent || "claude" }]}
                   onChange={(v) => { d.statusAgentBin = v; }} placeholder={`/path/to/${d.statusAgentAgent || "claude"}`} />
               </div>
-            </details>
+            </Disclosure>
             <label class={rowCls}>
               <span class="text-faint">Timeout (s)</span>
               <input class={inputCls} type="number" min="0" bind:value={d.statusAgentTimeout} />
@@ -1403,8 +1404,7 @@
                   </div>
 
                   {#if !isWatch(p.provider)}
-                    <details class="border-t border-edge pt-3">
-                      <summary class="cursor-pointer text-sm text-faint">Advanced settings</summary>
+                    <Disclosure label="Advanced settings">
                       <div class="mt-3 space-y-3">
                         <label class="grid grid-cols-[1fr_8rem] items-center gap-3">
                           <span class="text-faint">Timeout (s)</span>
@@ -1436,7 +1436,7 @@
                           </div>
                         </div>
                       </div>
-                    </details>
+                    </Disclosure>
                   {/if}
                 </div>
               {/if}

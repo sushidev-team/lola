@@ -5,9 +5,9 @@ max_score: 40
 na_heuristics: 
 p0_count: 0
 p1_count: 1
-target_identity: "file:/Users/martin/.lola/worktrees/lola/lola-lola-sushi-584/desktop/frontend/src/lib/views/SettingsForm.svelte"
+target_identity: "file:desktop/frontend/src/lib/views/SettingsForm.svelte"
 target_fingerprint: "sha256:058656c8c0328cebe3dc5423c3a6bd4f68cea4d606eb1f06a5c91e7fde0e5c31"
-target_path: /Users/martin/.lola/worktrees/lola/lola-lola-sushi-584/desktop/frontend/src/lib/views/SettingsForm.svelte
+target_path: desktop/frontend/src/lib/views/SettingsForm.svelte
 timestamp: 2026-09-05T08-23-44Z
 slug: desktop-frontend-src-lib-views-settingsform-svelte
 closed: true
@@ -20,6 +20,7 @@ Scope: SettingsForm.svelte, ProjectForm.svelte, and shared control source. No cu
 Design specificity: Clearly Lola-specific. Folder-derived setup, inherited defaults and Linear lifecycle grouping suit an operator tool. Preserve this direction; improve consistency and feedback.
 
 Provisional health: 26/40 — Acceptable.
+
 | Heuristic | Score /4 | Finding |
 |---|---:|---|
 | System status | 3 | Loading visible; errors lack live announcements |
