@@ -1,5 +1,72 @@
 # Changelog
 
+## [0.2.13](https://github.com/sushidev-team/lola/compare/v0.2.12...v0.2.13) (2026-09-05)
+
+
+### Features
+
+* **daemon:** add cmd=paneClose and cmd=paneResize for the phone's tab strip ([c96b62f](https://github.com/sushidev-team/lola/commit/c96b62f5cec557a1c8baf4760bb93879ec122664))
+* **daemon:** add cmd=panes and cmd=shellCreate for the phone's tab strip ([09713c3](https://github.com/sushidev-team/lola/commit/09713c36be70a7a18656bcf98f4eb40e69945bb9))
+* **daemon:** let cmd=shellCreate be told the size to create the shell at ([5c56e2e](https://github.com/sushidev-team/lola/commit/5c56e2e82d15d91813c8c1603dc09ba797c39458))
+* **daemon:** publish an active session's dev servers on the local network ([44a9e0a](https://github.com/sushidev-team/lola/commit/44a9e0a327fd83aca9b4056e865f8bbadd0f9ce3))
+* **desktop:** add a Remote tab to settings for the phone listener ([d214aa6](https://github.com/sushidev-team/lola/commit/d214aa6d99e999ac48d78dc79c681d64735b1f24))
+* **desktop:** simplify setup and organize project settings ([edc074f](https://github.com/sushidev-team/lola/commit/edc074fe2ccffcbbd5c87ce029ffb544afa7d9eb))
+* **mobile:** a shell this phone started is sized to this phone ([bc3c4ca](https://github.com/sushidev-team/lola/commit/bc3c4caedb1d0fd558bfcbbcb5217d3d701c6928))
+* **mobile:** add the M1 iOS client — Capacitor shell, wire client, LolaTransport ([c3befc1](https://github.com/sushidev-team/lola/commit/c3befc1d6d8a04500397073d5307031ce8577cb5))
+* **mobile:** client wire and shim for paneClose and paneResize ([f29b0f1](https://github.com/sushidev-team/lola/commit/f29b0f1480a3413d3435d3b5c4e1c484ae3ea37d))
+* **mobile:** drop dead tabs, long-press close and rename, pin the pane while focused ([fb9f886](https://github.com/sushidev-team/lola/commit/fb9f8868203a5505c1f898099baa59fdffe8e287))
+* **mobile:** find the Mac on a network this phone has never seen ([78cf490](https://github.com/sushidev-team/lola/commit/78cf490356e6a2e659d3774de274622ee27e26fe))
+* **mobile:** milestone 1 — iOS companion app, its daemon transport, and local-network discovery ([60cb3e1](https://github.com/sushidev-team/lola/commit/60cb3e14e2f73552f32714815f863974739a76be))
+* **mobile:** name the Mac, not the address it happens to be at ([41cff9c](https://github.com/sushidev-team/lola/commit/41cff9c4138ceb75a3b093723a2b79ae792219a0))
+* **mobile:** open an active session's dev servers from the phone ([293952d](https://github.com/sushidev-team/lola/commit/293952d0b7eef68dfabe4034733562c0e6530ed9))
+* **mobile:** pair by QR from the desktop, add a scriptable connect path, icon and launch screen ([9deefdc](https://github.com/sushidev-team/lola/commit/9deefdc7957dbe8a62340f6b64d04f67ae95db78))
+* **mobile:** persist the key in the Keychain, reconnect on foreground, scrollable strips ([6df7809](https://github.com/sushidev-team/lola/commit/6df7809d1e8ad7ebd8c4a1d6d06da6ec749e7851))
+* **mobile:** redesign the app against the Figma frames, and give it four tabs ([10cc7e6](https://github.com/sushidev-team/lola/commit/10cc7e6a84b6531f5ee19a13b89cf0eff78b975c))
+* **mobile:** settings menu, filter sheet, pane tabs, PR button and a view popover ([019a07e](https://github.com/sushidev-team/lola/commit/019a07eee1daa585d6ba7c960ba8c8e49239ca0c))
+* **mobile:** try every address the daemon offered, and stop at a refusal ([8ff8d0d](https://github.com/sushidev-team/lola/commit/8ff8d0deb7f1c8b0d5d0f98886e3c4e1fa2bb574))
+* **remote:** add the M1 byte pipe for the mobile companion app ([39c538d](https://github.com/sushidev-team/lola/commit/39c538da331983e49d55a910c7366fe844d58573))
+* **remote:** advertise the phone listener on the local network ([7ed8cf0](https://github.com/sushidev-team/lola/commit/7ed8cf06b8fbca517b6423ce3c7f997fcff9840d))
+* **remote:** generate and persist the phone bearer key, add a LAN opt-in ([c79d352](https://github.com/sushidev-team/lola/commit/c79d35221eb07c8ccd90644db12e87482f246369))
+* **remote:** make the LAN opt-in a config key instead of an environment variable ([4dccf29](https://github.com/sushidev-team/lola/commit/4dccf2912758f15abb58dbec5a6d7773393ec23c))
+* **remote:** regenerate the phone key from settings, and report why a listener refused ([6ceea0a](https://github.com/sushidev-team/lola/commit/6ceea0aa16d6d6fbd178427bdb27b81752469272))
+* **settings:** add preset selectors and independent sidebar scrolling ([4012b0a](https://github.com/sushidev-team/lola/commit/4012b0a4fda6972a3abfc1dd6fbc5d60737005be))
+* **settings:** organize review providers into compact cards ([4c67459](https://github.com/sushidev-team/lola/commit/4c67459abd2b8445893b1b1aca59700a110805a3))
+* **settings:** put the local-network advertisement in both settings forms ([b71b9df](https://github.com/sushidev-team/lola/commit/b71b9df417a14bbfed558d92f6ed4840fd5e5525))
+* **settings:** shorten hints and show details in help popovers ([76cf87d](https://github.com/sushidev-team/lola/commit/76cf87de2d06b5146d027d2090b2cc6ad6177113))
+* **settings:** simplify forms and support interpreter providers ([c567306](https://github.com/sushidev-team/lola/commit/c567306dc804ac2dc49b1d75186d8c1ab5bbd25a))
+* simplify setup and grant Codex worktree Git access ([58a9086](https://github.com/sushidev-team/lola/commit/58a9086eb4eba51d72b377415c5affcc3b63dc90))
+* **state:** make the agent axis the primary pill and attention a predicate over both ([15c4837](https://github.com/sushidev-team/lola/commit/15c48379b90aba7904578775415307732d02e0ab))
+* **tui:** add the Remote tab to settings for the phone listener ([a35f83a](https://github.com/sushidev-team/lola/commit/a35f83a76ca2e8a5991b6d43febe9667ad206d7c))
+
+
+### Bug Fixes
+
+* added agents.md ([b89c3ab](https://github.com/sushidev-team/lola/commit/b89c3ab7224a56fcca02fa2651689912d1d72fa6))
+* address setup and settings review feedback ([887c273](https://github.com/sushidev-team/lola/commit/887c273eea57bf834d5cdb0a6c4485babbb27089))
+* **codex:** enable autonomous approval review ([1765a7c](https://github.com/sushidev-team/lola/commit/1765a7c6e68dd83315c4977998bd28830ee7d53e))
+* **daemon:** let a release forgive a session that is gone, not just a pane ([9b3ca21](https://github.com/sushidev-team/lola/commit/9b3ca21f66b7f7ff1d26c177e1bd1739c191d5dc))
+* **daemon:** name the binary that refused to hand out a connect code ([8e23d67](https://github.com/sushidev-team/lola/commit/8e23d67dd0077e8025f9bcf724a32843dbe500a2))
+* **devforward:** dial localhost dual-stack, and check loopback on the connection ([a11c735](https://github.com/sushidev-team/lola/commit/a11c735443446f8a6cd22db87fced8307b57b96b))
+* **mobile:** activate a session from the phone, and forward the localhost URLs ([b564fd0](https://github.com/sushidev-team/lola/commit/b564fd0c2253b30ac97ccca538e4a0027c09da59))
+* **mobile:** apply the review pass on the Keychain and scrollable strips ([240a81b](https://github.com/sushidev-team/lola/commit/240a81bf0fa1574e394246067296aadd158c5211))
+* **mobile:** keep the line you are typing into on screen ([e180ca2](https://github.com/sushidev-team/lola/commit/e180ca245243d53f19e3b73f2e7466724133a5fe))
+* **mobile:** name a forward by the address it publishes, and report a link that would not open ([9bea9c5](https://github.com/sushidev-team/lola/commit/9bea9c5c2c11be4cb8c8ecfb974e1ff8f5f0335b))
+* **mobile:** name the SPM package LolaTransport so Xcode can resolve it ([bf35c1a](https://github.com/sushidev-team/lola/commit/bf35c1a491af677f635014512a78d763c39f79c6))
+* **mobile:** open links with UIApplication, not in-app Safari ([7af9952](https://github.com/sushidev-team/lola/commit/7af9952cf40cbce70b5d84cf524cc83a3486fa63))
+* **mobile:** parse devicectl columns by gutter, and discover the signing team ([4ac105a](https://github.com/sushidev-team/lola/commit/4ac105aba204a0e7076a218d448f5768cbf970a2))
+* **mobile:** pin to the phone's capacity, not to what fits the current grid ([313614b](https://github.com/sushidev-team/lola/commit/313614b7acdabef3eb9842cab70f701cf67ccdf7))
+* **pin:** a refused pin leaves nothing pinned, and nothing believing it is ([4d2bceb](https://github.com/sushidev-team/lola/commit/4d2bceb4430d2587862c6008a77b000acb6acd12))
+* **remote:** do not drop a live phone when an address APPEARS ([c090c8e](https://github.com/sushidev-team/lola/commit/c090c8eeb31bb9c1a952675452e4c894e9702525))
+* **remote:** drop zone-scoped addresses from the connect code, add make mobile-lan ([7c681df](https://github.com/sushidev-team/lola/commit/7c681df770b935457ed2a197489b33d32d8467b2))
+* **remote:** make the advertisement opt-in and anonymous, as PLAN.md requires ([cfd55fb](https://github.com/sushidev-team/lola/commit/cfd55fbce8a7ec9569972031b2983581d08c0f4a))
+* **remote:** put dialable addresses in the connect code, never a wildcard ([63d8947](https://github.com/sushidev-team/lola/commit/63d894734528f5b1aec6d8446c2cb2a70adc039b))
+* **remote:** rebind the phone listener when the machine changes networks ([fd5620a](https://github.com/sushidev-team/lola/commit/fd5620aef7a9162f207a4121fc3ad1670ebe2ded))
+* **remote:** stop rebinding every time AirDrop rotates its address ([831273c](https://github.com/sushidev-team/lola/commit/831273c0554fd1bda2913d7ebc9204273b05209c))
+* **review:** let a forced review post to the PR again ([ac41a17](https://github.com/sushidev-team/lola/commit/ac41a17acf61d10d6fafd2a420f1e0b04a90a097))
+* **runtime:** grant Codex access to shared worktree git metadata ([3b57539](https://github.com/sushidev-team/lola/commit/3b575395cd338ad352fcfd2f93bb22294e3ac4da))
+* **settings:** repair accessible hints and review inconsistencies ([f664f59](https://github.com/sushidev-team/lola/commit/f664f59221832a5269ac13ea5f26b07ed55c3589))
+* **tmux:** the size pin never resized a window, and the release un-released it ([55fb0e2](https://github.com/sushidev-team/lola/commit/55fb0e26ab5d991a0d845f2aa7bf7d14a6c2781f))
+
 ## [0.2.12](https://github.com/sushidev-team/lola/compare/v0.2.11...v0.2.12) (2026-08-24)
 
 
