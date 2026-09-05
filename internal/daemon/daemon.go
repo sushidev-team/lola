@@ -462,8 +462,8 @@ func newDaemon(cfg *config.Config, lin linear.API, logger *log.Logger, home stri
 // healthy when tmux is available, git resolves, and the dispatching context's
 // coding-agent binary is on PATH. The caller resolves that binary from the
 // agent kind (claude|codex|opencode); an empty binary falls back to "claude"
-// so a probe with no resolved agent behaves exactly as before. Only LookPath
-// probes — nothing is exec'd.
+// so a probe with no resolved agent behaves exactly as before. Codex also
+// requires verified auto-approval support, cached until the binary changes.
 func checkRuntimeHealth(binary string) error {
 	if binary == "" {
 		binary = "claude"
@@ -474,8 +474,12 @@ func checkRuntimeHealth(binary string) error {
 	if _, err := exec.LookPath("git"); err != nil {
 		return errors.New("missing git")
 	}
-	if _, err := exec.LookPath(binary); err != nil {
+	path, err := exec.LookPath(binary)
+	if err != nil {
 		return fmt.Errorf("missing %s", binary)
+	}
+	if binary == "codex" {
+		return checkCodexCapability(path)
 	}
 	return nil
 }

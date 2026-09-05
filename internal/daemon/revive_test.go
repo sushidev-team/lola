@@ -2,6 +2,9 @@ package daemon
 
 import (
 	"context"
+	"errors"
+	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/sushidev-team/lola/internal/linear"
@@ -60,5 +63,37 @@ func TestHandleReviveUnknownSession(t *testing.T) {
 	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})
 	if _, err := d.handleRevive(context.Background(), "does-not-exist"); err == nil {
 		t.Fatal("handleRevive must error on an unknown session")
+	}
+}
+
+func TestHandleReviveUnsupportedCodexLeavesSessionUnchanged(t *testing.T) {
+	nat := &fakeNative{}
+	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, nat)
+	s := nativeSess("FE-3", "dead")
+	s.Agent = "codex"
+	s.IssueUUID = "uuid-fe-3"
+	d.sessions.Upsert(s)
+	before, _ := d.sessions.Get(s.ID)
+	var checked string
+	d.runtimeHealth = func(binary string) error {
+		checked = binary
+		return errors.New("Codex does not support --approve-for-me; upgrade Codex CLI")
+	}
+	data, err := d.handleRevive(context.Background(), s.ID)
+	if err == nil || !strings.Contains(err.Error(), "upgrade Codex CLI") || data.Revived {
+		t.Fatalf("unsupported Codex must fail revive: %+v, %v", data, err)
+	}
+	if checked != "codex" {
+		t.Fatalf("health check used %q, want persisted session agent codex", checked)
+	}
+	if calls := nat.reviveCalls(); len(calls) != 0 {
+		t.Fatalf("unsupported Codex must not launch: %v", calls)
+	}
+	after, ok := d.sessions.Get(s.ID)
+	if !ok || !reflect.DeepEqual(before, after) {
+		t.Fatalf("failed health check must preserve the session: before=%+v after=%+v", before, after)
+	}
+	if d.inflight.Has(s.IssueUUID) {
+		t.Fatal("failed health check must not establish an in-flight claim")
 	}
 }

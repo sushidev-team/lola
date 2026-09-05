@@ -1,7 +1,7 @@
 // Package doctor runs lola's structured health checks and returns them as
 // plain data so the CLI (`lola doctor`) and the TUI can render them however
 // they like — this package never prints. It probes the native runtime's
-// external tools (tmux, git, claude, gh), the Linear API key, the daemon
+// external tools (tmux, git, the configured agents, gh), the Linear API key, the daemon
 // socket, and the config (validity + per-project repos) — plus the one fact a
 // checking process cannot see for itself, the daemon's tripped status
 // interpreter (statusagent.go).
@@ -55,8 +55,7 @@ const (
 // migration check is testable without a real default tmux server.
 var defaultServerSessions = tmux.DefaultServerSessions
 
-// execTimeout bounds every subprocess a check runs (only `claude --version`
-// today); LookPath probes never exec.
+// execTimeout bounds each agent version probe; LookPath probes never exec.
 const execTimeout = 5 * time.Second
 
 // socketTimeout bounds the daemon-socket dial. The daemon may legitimately be
@@ -106,14 +105,14 @@ func (r Report) Summary() string {
 }
 
 // RuntimeResults returns the subset of results covering the native runtime's
-// mandatory tools (tmux, git, claude) — the same trio daemon.checkRuntimeHealth
-// gates spawning on. Renderers (and, later, the daemon) can reuse this to show
+// mandatory tools (tmux, git, configured coding agents), matching the tools
+// daemon.checkRuntimeHealth gates spawning on. Renderers (and, later, the daemon) can reuse this to show
 // "why can't lola spawn" without re-probing.
 func RuntimeResults(r Report) []Result {
 	var out []Result
 	for _, res := range r.Results {
 		switch res.Name {
-		case checkTmux, checkGit, checkClaude:
+		case checkTmux, checkGit, checkClaude, "codex", "opencode":
 			out = append(out, res)
 		}
 	}
@@ -128,11 +127,16 @@ func Check(ctx context.Context, cfg *config.Config) Report {
 	var r Report
 	add := func(res Result) { r.Results = append(r.Results, res) }
 
-	// Native runtime tools. Presence is a bare PATH lookup; only claude is
-	// exec'd (for its version), under the 5s bound.
+	// Native runtime tools. Each configured coding agent gets a bounded
+	// version probe. Optional helpers have separate non-critical checks.
 	add(lookPathResult(checkTmux, true))
 	add(lookPathResult(checkGit, true))
-	add(claudeResult(ctx))
+	for _, res := range agentResults(ctx, cfg) {
+		add(res)
+	}
+	for _, res := range helperResults(cfg) {
+		add(res)
+	}
 	add(ghResult())
 	add(lolaCLIResult())
 	add(migrationResult(ctx))
@@ -200,25 +204,94 @@ func lolaCLIResult() Result {
 	return Result{Name: checkLolaCLI, OK: true, Critical: false, Detail: path}
 }
 
-// claudeResult resolves claude and, when present, appends the first line of
-// `claude --version` (bounded by execTimeout). A version-exec failure does not
-// fail the check — presence on PATH is what matters.
-func claudeResult(ctx context.Context) Result {
-	res := lookPathResult(checkClaude, true)
+// agentResults checks the default worker and each project's effective worker,
+// once per binary. A config that has not loaded retains the legacy default.
+func agentResults(ctx context.Context, cfg *config.Config) []Result {
+	kinds := []agent.Kind{agent.Claude}
+	if cfg != nil {
+		kinds[0] = agent.Parse(cfg.Defaults.Agent)
+		for _, p := range cfg.Projects {
+			k := agent.Parse(cfg.AgentForProject(p.Name))
+			if !slices.Contains(kinds, k) {
+				kinds = append(kinds, k)
+			}
+		}
+	}
+	out := make([]Result, 0, len(kinds))
+	for _, k := range kinds {
+		out = append(out, agentResult(ctx, k))
+	}
+	return out
+}
+
+// agentResult appends a bounded --version probe. A version-exec failure does
+// not fail the check: dispatch requires presence on PATH.
+func agentResult(ctx context.Context, k agent.Kind) Result {
+	bin := k.Binary()
+	res := lookPathResult(bin, true)
 	if !res.OK {
 		return res
 	}
+	if k == agent.Codex {
+		if err := CheckCodexAutoApproval(ctx, bin); err != nil {
+			res.OK = false
+			res.Detail = err.Error()
+			return res
+		}
+	}
 	cctx, cancel := context.WithTimeout(ctx, execTimeout)
 	defer cancel()
-	out, err := exec.CommandContext(cctx, "claude", "--version").Output()
+	out, err := exec.CommandContext(cctx, bin, "--version").Output()
 	if err != nil {
-		res.Detail = res.Detail + " (version unavailable)"
+		res.Detail += " (version unavailable)"
 		return res
 	}
 	if line := firstLine(out); line != "" {
-		res.Detail = res.Detail + " (" + line + ")"
+		res.Detail += " (" + line + ")"
 	}
 	return res
+}
+
+// CheckCodexAutoApproval verifies the installed CLI supports Lola's autonomous
+// launch mode. A failed probe must not fall back to bypassing approvals.
+func CheckCodexAutoApproval(ctx context.Context, binary string) error {
+	cctx, cancel := context.WithTimeout(ctx, execTimeout)
+	defer cancel()
+	out, err := exec.CommandContext(cctx, binary, "--help").Output()
+	if err != nil {
+		return fmt.Errorf("cannot verify Codex auto-approval support: %w", err)
+	}
+	if !strings.Contains(string(out), "--approve-for-me") {
+		return fmt.Errorf("Codex does not support --approve-for-me; upgrade Codex CLI before starting autonomous sessions")
+	}
+	return nil
+}
+
+// helperResults keeps optional Claude helpers and independently configured
+// review agents visible without making them prerequisites for worker dispatch.
+func helperResults(cfg *config.Config) []Result {
+	if cfg == nil {
+		return nil
+	}
+	var out []Result
+	add := func(name, binary string) {
+		res := lookPathResult(binary, false)
+		res.Name = name
+		res.Detail = binary + ": " + res.Detail
+		out = append(out, res)
+	}
+	if cfg.Brain.Enabled {
+		add("brain agent", "claude")
+	}
+	if cfg.StatusAgent.Enabled {
+		add("status agent", "claude")
+	}
+	for _, p := range cfg.EffectiveReviewProviders() {
+		if k, ok := config.ReviewAgentFor(string(p.Provider)); p.Enabled && ok {
+			add("review agent ("+string(p.Provider)+")", agent.Parse(k).Binary())
+		}
+	}
+	return out
 }
 
 // ghResult reports gh presence. gh is only needed to reconcile PR checks, so a

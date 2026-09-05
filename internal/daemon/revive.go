@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/sushidev-team/lola/internal/agent"
 	"github.com/sushidev-team/lola/internal/protocol"
 	"github.com/sushidev-team/lola/internal/session"
 	"github.com/sushidev-team/lola/internal/state"
@@ -54,6 +55,13 @@ func (d *Daemon) handleRevive(ctx context.Context, sessionID string) (protocol.R
 
 	if nat.Alive(ctx, s) {
 		return protocol.ReviveData{}, fmt.Errorf("session %s is already running — nothing to revive", sessionID)
+	}
+
+	// Revive uses the session's persisted worker, which may differ from the
+	// project's current default. Reject unavailable/unsupported agents before
+	// launching or re-establishing any session and dispatch state.
+	if err := d.runtimeHealth(agent.Parse(s.Agent).Binary()); err != nil {
+		return protocol.ReviveData{}, fmt.Errorf("runtime unavailable: %w", err)
 	}
 
 	revived, err := nat.Revive(ctx, s)

@@ -286,7 +286,7 @@ func coderabbitCmd() *cobra.Command {
 //     normalized event and write the payload to stdin.
 //   - The opencode plugin (OpenCodePluginJS) also calls it directly with a
 //     normalized event ("stop"/"notification"/"tool_use") and empty stdin.
-//   - Codex's `notify` (CodexConfigTOML) calls `lola hook codex-notify
+//   - Codex's per-process `notify` override calls `lola hook codex-notify
 //     '<json>'`, passing its payload as the NEXT argv element, not stdin; we
 //     translate it via agent.ParseCodexNotify and skip unknown notify types.
 //
@@ -366,7 +366,7 @@ func capHookField(s string) string {
 // coming, so post immediately with an empty payload. Claude's path is
 // unaffected — it pipes JSON on stdin (a pipe, not a char device) and closes
 // it after. Codex is covered too: its payload arrives as argv
-// (CodexConfigTOML), and stdin there is whatever codex hands the notify
+// (set by the runtime), and stdin there is whatever codex hands the notify
 // program, so reading it was always pointless.
 func hookPayload(r io.Reader) protocol.HookPayload {
 	if f, ok := r.(*os.File); ok {

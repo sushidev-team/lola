@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -396,9 +397,9 @@ func TestSpawnChromeFailureIsAdvisoryOnly(t *testing.T) {
 // The claude path stays byte-identical to the legacy behavior (a claude spawn
 // still writes .lola/settings.json and no CODEX_HOME).
 func TestSpawnPerAgentLaunchAndArtifacts(t *testing.T) {
-	// A deterministic (empty) codex source so the codex case never links the
-	// developer's real ~/.codex/auth.json into a temp worktree.
-	t.Setenv("CODEX_HOME", t.TempDir())
+	// A deterministic Codex home for the launch environment assertions.
+	userHome := t.TempDir()
+	t.Setenv("CODEX_HOME", userHome)
 
 	id := "lola-nori-eng-42"
 	cases := []struct {
@@ -407,7 +408,7 @@ func TestSpawnPerAgentLaunchAndArtifacts(t *testing.T) {
 		execFrag string // substring the launch line must contain (binary + args)
 	}{
 		{"claude", agent.Claude, "exec /usr/local/bin/claude --settings .lola/settings.json "},
-		{"codex", agent.Codex, "exec codex --ask-for-approval never --sandbox workspace-write "},
+		{"codex", agent.Codex, "exec codex -c "},
 		{"opencode", agent.OpenCode, "exec opencode --prompt "},
 	}
 	for _, c := range cases {
@@ -449,10 +450,7 @@ func TestSpawnPerAgentLaunchAndArtifacts(t *testing.T) {
 				assertAbsent(t, codexCfg)
 				assertAbsent(t, filepath.Join(dir, ".opencode"))
 			case agent.Codex:
-				if got := readFile(t, codexCfg); got != string(agent.CodexConfigTOML(f.n.LolaBin)) {
-					t.Errorf("codex config.toml = %s, want CodexConfigTOML", got)
-				}
-				assertMode(t, codexCfg, 0o600)
+				assertAbsent(t, codexCfg) // user configuration is read from its real home
 				assertAbsent(t, settings) // no claude artifact for codex
 			case agent.OpenCode:
 				if got := readFile(t, plugin); got != string(agent.OpenCodePluginJS(f.n.LolaBin)) {
@@ -462,10 +460,9 @@ func TestSpawnPerAgentLaunchAndArtifacts(t *testing.T) {
 				assertAbsent(t, settings) // no claude artifact for opencode
 			}
 
-			// CODEX_HOME is exported for codex only, pointing at the per-session
-			// .lola/codex; other kinds never carry it.
+			// CODEX_HOME is exported for codex only, preserving the user home.
 			env := readFile(t, filepath.Join(dir, ".lola", "env"))
-			codexHome := filepath.Join(dir, ".lola", "codex")
+			codexHome := userHome
 			if c.kind == agent.Codex {
 				want := "CODEX_HOME=" + shQuote(codexHome) + "\n"
 				if !strings.Contains(env, want) {
@@ -516,58 +513,46 @@ func TestSpawnResolvesPerProjectAgentOverride(t *testing.T) {
 	}
 }
 
-// TestSpawnCodexLinksExistingAuth: when the user has a real codex login
-// (auth.json under $CODEX_HOME), Spawn symlinks it into the per-session
-// CODEX_HOME so `codex` stays authenticated.
-func TestSpawnCodexLinksExistingAuth(t *testing.T) {
+// A normal user config (including model/MCP) and authentication remain in their
+// original home. Spawn neither copies nor overwrites them, and overrides notify
+// only for the launched process.
+func TestSpawnCodexUsesExistingUserHome(t *testing.T) {
 	userHome := t.TempDir()
-	src := filepath.Join(userHome, "auth.json")
-	if err := os.WriteFile(src, []byte(`{"token":"x"}`), 0o600); err != nil {
-		t.Fatal(err)
+	configBody := "model = \"custom-model\"\nnotify = [\"old-notifier\"]\n[mcp_servers.example]\ncommand = \"example-mcp\"\n"
+	for name, body := range map[string]string{"config.toml": configBody, "auth.json": `{"token":"x"}`} {
+		if err := os.WriteFile(filepath.Join(userHome, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
 	t.Setenv("CODEX_HOME", userHome)
-
 	f := newFixture(t, "", "")
 	f.n.Cfg.Defaults.Agent = "codex"
 	if _, err := f.n.Spawn(context.Background(), f.p, issueENG42(), ""); err != nil {
 		t.Fatalf("Spawn: %v", err)
 	}
-	link := filepath.Join(f.root, "nori", "lola-nori-eng-42", ".lola", "codex", "auth.json")
-	target, err := os.Readlink(link)
-	if err != nil {
-		t.Fatalf("auth.json must be a symlink to the user's login: %v", err)
+	dir := filepath.Join(f.root, "nori", "lola-nori-eng-42")
+	if got := readFile(t, filepath.Join(dir, ".lola", "env")); !strings.Contains(got, "CODEX_HOME="+shQuote(userHome)+"\n") {
+		t.Error("spawn did not retain the user's Codex home")
 	}
-	if target != src {
-		t.Errorf("auth.json -> %q, want %q", target, src)
+	if got := readFile(t, filepath.Join(userHome, "config.toml")); got != configBody {
+		t.Error("spawn changed the user's Codex config")
+	}
+	assertAbsent(t, filepath.Join(dir, ".lola", "codex"))
+	if !strings.Contains(loggedArgs(t, f.tmuxLog), "codex-notify") {
+		t.Error("spawn must override notify for its own process")
 	}
 }
 
-// TestSpawnCodexWithoutAuthSourceStillSpawns: an absent codex login is not an
-// error — no auth.json symlink is created, the config.toml is still written,
-// and the session launches (API-key users authenticate via OPENAI_API_KEY).
+// An absent Codex login remains a valid spawn; normal CLI authentication errors
+// are handled by the agent rather than inventing an incomplete private home.
 func TestSpawnCodexWithoutAuthSourceStillSpawns(t *testing.T) {
-	t.Setenv("CODEX_HOME", t.TempDir()) // empty: no auth.json to link
-
+	t.Setenv("CODEX_HOME", t.TempDir())
 	f := newFixture(t, "", "")
 	f.n.Cfg.Defaults.Agent = "codex"
-	got, err := f.n.Spawn(context.Background(), f.p, issueENG42(), "")
-	if err != nil {
+	if _, err := f.n.Spawn(context.Background(), f.p, issueENG42(), ""); err != nil {
 		t.Fatalf("Spawn must succeed without a codex login: %v", err)
 	}
-	if got.Status != "working" {
-		t.Errorf("Status = %q, want %q", got.Status, "working")
-	}
-	dir := filepath.Join(f.root, "nori", "lola-nori-eng-42")
-	if _, err := os.Lstat(filepath.Join(dir, ".lola", "codex", "auth.json")); !os.IsNotExist(err) {
-		t.Errorf("no auth.json symlink may be created when the source is absent (err=%v)", err)
-	}
-	// The config.toml was still written and the session launched.
-	if _, err := os.Stat(filepath.Join(dir, ".lola", "codex", "config.toml")); err != nil {
-		t.Errorf("codex config.toml must be written: %v", err)
-	}
-	if !strings.Contains(loggedArgs(t, f.tmuxLog), "new-session -d -s lola-nori-eng-42") {
-		t.Errorf("codex session must launch without a login:\n%s", loggedArgs(t, f.tmuxLog))
-	}
+	assertAbsent(t, filepath.Join(f.root, "nori", "lola-nori-eng-42", ".lola", "codex"))
 }
 
 func TestSpawnUsesLinearBranchName(t *testing.T) {
@@ -1221,12 +1206,32 @@ func TestLaunchCommandQuoting(t *testing.T) {
 func TestLaunchCommandPerAgent(t *testing.T) {
 	id := "lola-nori-eng-42"
 	// ClaudeBin must be IGNORED for non-claude kinds — they use their own binary.
-	n := &Native{ClaudeBin: "/should/not/be/used/claude"}
+	n := &Native{ClaudeBin: "/should/not/be/used/claude", LolaBin: "/a path/with 'quotes'/lola"}
 	esc := `'\''You are lola session ` + id + `. Read .lola/prompt.md in the current directory first; it contains your task briefing.'\''`
 
-	wantCodex := "exec sh -c 'set -a; . ./.lola/env; set +a; exec codex --ask-for-approval never --sandbox workspace-write " + esc + "'"
-	if got := n.launchCommand(id, agent.Codex, false); got != wantCodex {
-		t.Errorf("codex launchCommand:\n%s\nwant:\n%s", got, wantCodex)
+	// Execute a fake Codex to verify the actual shell quoting of notify JSON.
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, ".lola"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".lola", "env"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "codex"), []byte("#!/bin/sh\nprintf '%s\\n' \"$@\"\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("sh", "-c", n.launchCommand(id, agent.Codex, false))
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"))
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotArgs := strings.Split(strings.TrimSuffix(string(out), "\n"), "\n")
+	notify, _ := json.Marshal([]string{n.LolaBin, "hook", "codex-notify"})
+	wantArgs := append([]string{"-c", "notify=" + string(notify)}, agent.LaunchArgs(agent.Codex, defaultLaunchPrompt(id))...)
+	if !reflect.DeepEqual(gotArgs, wantArgs) {
+		t.Errorf("codex argv = %q, want %q", gotArgs, wantArgs)
 	}
 
 	wantOpenCode := "exec sh -c 'set -a; . ./.lola/env; set +a; exec opencode --prompt " + esc + " --auto'"
@@ -1741,5 +1746,119 @@ func TestIsAuxSession(t *testing.T) {
 		if got := IsAuxSession(tc.name); got != tc.aux {
 			t.Errorf("IsAuxSession(%q) = %v, want %v", tc.name, got, tc.aux)
 		}
+	}
+}
+
+func TestReviveCodexSelectsOnlyWorktreeHistory(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		history  string
+		matching bool
+		resume   bool
+	}{
+		{"empty", "", false, false},
+		{"shared matching", "shared", true, true},
+		{"project home", "shared", true, true},
+		{"shared unrelated", "shared", false, false},
+		{"legacy matching", "legacy", true, true},
+		{"legacy unrelated", "legacy", false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t, "", "")
+			home := t.TempDir()
+			t.Setenv("CODEX_HOME", home)
+			if tc.name == "project home" {
+				home = t.TempDir()
+				f.n.Cfg.Projects[0].Env = map[string]string{"CODEX_HOME": home}
+			}
+			id := "lola-nori-eng-42"
+			dir := filepath.Join(f.root, "nori", id)
+			legacy := filepath.Join(dir, lolaDir, "codex")
+			if err := os.MkdirAll(legacy, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			originalEnv := "LOLA_SESSION=" + id + "\nLINEAR_API_KEY='retained secret'\nMULTILINE='value\nCODEX_HOME=embedded text'\nCODEX_HOME=" + shQuote(legacy) + "\n"
+			if err := os.WriteFile(filepath.Join(dir, lolaDir, "env"), []byte(originalEnv), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if tc.history != "" {
+				recordHome := home
+				if tc.history == "legacy" {
+					recordHome = legacy
+				}
+				folder := filepath.Join(recordHome, "sessions", "2026", "09", "05")
+				if err := os.MkdirAll(folder, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				cwd := dir
+				if !tc.matching {
+					cwd = filepath.Join(f.root, "another-session")
+				}
+				meta, _ := json.Marshal(map[string]any{"type": "session_meta", "payload": map[string]string{"cwd": cwd, "source": "cli"}})
+				if err := os.WriteFile(filepath.Join(folder, "rollout-example.jsonl"), append(meta, '\n'), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			s := session.Session{ID: id, Project: "nori", Issue: "ENG-42", Agent: "codex"}
+			if _, err := f.n.Revive(context.Background(), s); err != nil {
+				t.Fatal(err)
+			}
+			calls := loggedArgs(t, f.tmuxLog)
+			if got := strings.Contains(calls, "resume --last"); got != tc.resume {
+				t.Errorf("resume = %v, want %v: %s", got, tc.resume, calls)
+			}
+			wantHome := home
+			if tc.history == "legacy" && tc.matching {
+				wantHome = legacy
+			}
+			env := readFile(t, filepath.Join(dir, lolaDir, "env"))
+			if !strings.Contains(env, "CODEX_HOME="+shQuote(wantHome)+"\n") ||
+				!strings.HasPrefix(env, originalEnv) {
+				t.Error("revive must select the proper home and preserve other environment assignments")
+			}
+		})
+	}
+}
+
+func TestUserCodexHomeDefaultsToUserConfiguration(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("CODEX_HOME", "")
+	if got := userCodexHome(); got != filepath.Join(home, ".codex") {
+		t.Errorf("home = %q", got)
+	}
+}
+
+func TestCodexResumeIgnoresNonInteractiveHistory(t *testing.T) {
+	for _, source := range []string{`"exec"`, `{"subagent":{"other":"review"}}`, `null`} {
+		t.Run(source, func(t *testing.T) {
+			home := t.TempDir()
+			if err := os.Mkdir(filepath.Join(home, "sessions"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			body := `{"type":"session_meta","payload":{"cwd":"/worktree","source":` + source + `}}` + "\n"
+			if err := os.WriteFile(filepath.Join(home, "sessions", "review.jsonl"), []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if codexHasSession(context.Background(), home, "/worktree") {
+				t.Fatal("noninteractive history must not enable resume --last")
+			}
+		})
+	}
+}
+
+func TestCodexResumeProbeHonorsCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	home := t.TempDir()
+	if err := os.Mkdir(filepath.Join(home, "sessions"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"type":"session_meta","payload":{"cwd":"/worktree","source":"cli"}}` + "\n"
+	if err := os.WriteFile(filepath.Join(home, "sessions", "rollout.jsonl"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if codexHasSession(ctx, home, "/worktree") {
+		t.Fatal("canceled probe must not enable resume")
 	}
 }

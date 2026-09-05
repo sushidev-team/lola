@@ -21,11 +21,12 @@ global_cap = 4
 #   claude   — Claude Code (default). Lifecycle callbacks via a generated
 #              .lola/settings.json hooks file (Stop / Notification / SessionEnd /
 #              PostToolUse / UserPromptSubmit) posted to `lola hook`.
-#   codex    — OpenAI Codex CLI. Runs unattended (--ask-for-approval never,
-#              --sandbox workspace-write). Lifecycle callbacks via its `notify`
-#              config key: lola sets CODEX_HOME=<worktree>/.lola/codex, writes
-#              that config.toml, and best-effort symlinks your existing
-#              ~/.codex/auth.json so a prior `codex login` still works.
+#   codex    — OpenAI Codex CLI with --approve-for-me (automatic approval
+#              review inside the workspace-write sandbox). Requires a CLI that
+#              supports that flag; policy denials can still need human input.
+#              Uses your normal CODEX_HOME (or ~/.codex), preserving auth,
+#              model, MCP and skills. A per-process notify override routes
+#              lifecycle callbacks to lola without modifying your config.
 #   opencode — sst/opencode. Runs unattended (--auto). Lifecycle callbacks via an
 #              in-process plugin lola writes to <worktree>/.opencode/plugins/.
 # The configured agent's binary must be on PATH — the daemon health-gate checks

@@ -94,11 +94,11 @@ func (k Kind) Binary() string {
 //     Reads the per-session hook wiring from the lola-managed settings file
 //     (hook.SettingsJSON) so the project's own settings stay untouched; the
 //     prompt is positional.
-//   - Codex:    --ask-for-approval never --sandbox workspace-write <prompt>
-//     `never` approvals + `workspace-write` sandbox let Codex edit the worktree
-//     and run commands without pausing for confirmation; the prompt is
-//     positional. Callbacks come from the `notify` key in its config.toml
-//     (CodexConfigTOML), not from these flags.
+//   - Codex:    --approve-for-me <prompt>
+//     Automatic approval review keeps the workspace-write sandbox and routes
+//     escalation requests (including Git writes and network) to Codex's reviewer.
+//     Unlike `never`, it can approve work beyond the sandbox. Denied actions
+//     remain denied. The runtime adds a per-process `notify` override.
 //   - OpenCode: --prompt <prompt> --auto
 //     `--prompt` seeds the first turn; `--auto` auto-approves every permission
 //     that is not explicitly denied so it runs unattended. Callbacks come from
@@ -108,7 +108,7 @@ func (k Kind) Binary() string {
 func LaunchArgs(k Kind, promptArg string) []string {
 	switch k {
 	case Codex:
-		return []string{"--ask-for-approval", "never", "--sandbox", "workspace-write", promptArg}
+		return []string{"--approve-for-me", promptArg}
 	case OpenCode:
 		return []string{"--prompt", promptArg, "--auto"}
 	default:
@@ -131,50 +131,21 @@ func LaunchArgs(k Kind, promptArg string) []string {
 //     upstream (anomalyco/opencode#8850), and the resumed transcript already
 //     carries the task context.
 //
-// Codex deliberately falls back to a fresh launch identical to LaunchArgs: its
-// `resume` subcommand's flag composition with `--ask-for-approval`/`--sandbox`
-// is unverified, so revival still restarts it on the kept worktree, just
-// without conversation continuity. The caller decides WHETHER to resume (an
-// agent that died before recording anything has nothing to continue); this
-// only shapes the argv once that decision is made.
+// Codex uses `resume --last --approve-for-me`, retaining cwd filtering so a
+// shared CODEX_HOME never resumes another worktree's conversation. The caller
+// decides WHETHER to resume (an agent that died before recording anything has
+// nothing to continue); this only shapes the argv once that decision is made.
 func LaunchArgsResume(k Kind, promptArg string) []string {
 	switch k {
 	case Claude:
 		return []string{"--settings", ".lola/settings.json", "--continue"}
 	case OpenCode:
 		return []string{"--continue", "--auto"}
+	case Codex:
+		return []string{"resume", "--last", "--approve-for-me"}
 	default:
 		return LaunchArgs(k, promptArg)
 	}
-}
-
-// CodexConfigTOML returns the body of a Codex `config.toml` (written under a
-// per-session CODEX_HOME) that routes Codex's lifecycle notifications back to
-// the lola daemon. Codex runs the `notify` program with a single JSON payload
-// appended as the last argv element:
-//
-//	<lolaBin> hook codex-notify '<jsonPayload>'
-//
-// The `notify` array is emitted as the very first line: in TOML a top-level key
-// must precede any [table] header, and this file has none, but keeping it first
-// makes that invariant obvious and lets callers assert it cheaply.
-func CodexConfigTOML(lolaBin string) []byte {
-	// json.Marshal of a []string is valid TOML: an array of double-quoted
-	// basic strings with the same escape rules, so the path is safely quoted.
-	arr, _ := json.Marshal([]string{lolaBin, "hook", "codex-notify"})
-
-	var b strings.Builder
-	b.WriteString("notify = ")
-	b.Write(arr)
-	b.WriteByte('\n')
-	b.WriteByte('\n')
-	b.WriteString("# Written by lola. `notify` routes Codex turn-complete/approval\n")
-	b.WriteString("# events back to the daemon; it must stay a top-level key above any\n")
-	b.WriteString("# [table]. Codex invokes it with the event JSON as the last argument:\n")
-	b.WriteString("#   ")
-	b.WriteString(lolaBin)
-	b.WriteString(" hook codex-notify '<jsonPayload>'\n")
-	return []byte(b.String())
 }
 
 // OpenCodePluginJS returns the body of an OpenCode plugin (written to

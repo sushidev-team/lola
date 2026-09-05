@@ -20,7 +20,7 @@ PR/CI state via `gh`.
 each session can instead run the **OpenAI Codex CLI** (`codex`) or **opencode**
 (`opencode`) — set globally in `[defaults].agent` and overridable per repository
 with `[[project]].agent` (`claude` | `codex` | `opencode`, default `claude`).
-All three get full lifecycle-callback parity; see
+All three have agent-specific lifecycle callbacks; see
 [The coding agent](#the-coding-agent) for how each one is launched and wired.
 
 One binary, two roles:
@@ -1123,13 +1123,13 @@ listener at all and says so in the log when the table is enabled.
 ## The coding agent
 
 Each matched issue gets its own session — a git worktree plus a tmux pane
-running a coding agent. **Which agent lola launches is configurable**, with full
-lifecycle-callback parity across all three:
+running a coding agent. **Which agent lola launches is configurable**, with
+agent-specific lifecycle callbacks:
 
 | Kind | Binary | Launched as | Lifecycle callbacks |
 | --- | --- | --- | --- |
 | `claude` (default) | `claude` | `claude --settings .lola/settings.json <prompt>` | Claude Code hooks: lola writes `.lola/settings.json` wiring Stop / Notification / SessionEnd / PostToolUse / UserPromptSubmit to `lola hook`. |
-| `codex` | `codex` | `codex --ask-for-approval never --sandbox workspace-write <prompt>` (unattended) | Codex `notify`: lola sets `CODEX_HOME=<worktree>/.lola/codex` and writes its `config.toml` with `notify = ["lola", "hook", "codex-notify"]`; codex invokes that with a JSON payload on each turn-complete / approval-request, normalized to `stop` / `notification`. |
+| `codex` | `codex` | `codex --approve-for-me <prompt>` | A per-process `-c notify=["/absolute/path/to/lola", "hook", "codex-notify"]` override routes notifications back to this session while preserving the normal Codex home and configuration. |
 | `opencode` | `opencode` | `opencode --prompt <prompt> --auto` (unattended) | opencode plugin: lola writes `<worktree>/.opencode/plugins/lola-hook.js`, an in-process plugin that shells `lola hook <event>` on `session.idle` (→ `stop`), `permission.asked` (→ `notification`), and `tool.execute.after` (→ `tool_use`). |
 
 Set the agent globally in `[defaults].agent` and override it per repository with
@@ -1138,10 +1138,10 @@ configs are unchanged. The daemon **health-gate checks the configured agent's
 binary** (not always `claude`) before every dispatch, and `lola doctor` reports
 whether it is on `PATH`.
 
-**Callback artifacts are per-session and git-excluded.** claude's
-`.lola/settings.json` and codex's `.lola/codex/` live under the already-excluded
-`.lola/` directory; for opencode sessions lola also excludes `.opencode/` from
-the worktree. `LOLA_SESSION` is exported into the pane so every callback path
+**Callback artifacts are per-session and git-excluded.** Claude's
+`.lola/settings.json` lives under the already-excluded `.lola/` directory;
+for opencode sessions lola also excludes `.opencode/` from the worktree. Codex
+gets its callback through argv, without modifying the user's config. `LOLA_SESSION` is exported into the pane so every callback path
 attributes the event to the right session.
 
 **Pane-scraping backstop.** Independently of the callbacks, lola classifies each
@@ -1153,13 +1153,29 @@ are identical across all three agents.
 
 **Provider auth is inherited from the daemon/pane environment**, never stored in
 `config.toml`: `ANTHROPIC_API_KEY` (claude) or `OPENAI_API_KEY` (codex), or an
-existing CLI login — `~/.claude`, `codex login` (whose `auth.json` lola
-best-effort symlinks into the isolated `CODEX_HOME`), or `opencode auth`.
+existing CLI login — `~/.claude`, `codex login`, or `opencode auth`. New Codex
+sessions use the daemon's `CODEX_HOME` (or `~/.codex`), preserving authentication,
+model settings, MCP servers, skills, and other user configuration.
 
-**Distinct from lola's internal helpers.** The `[brain]` summarizer, `[review]`,
-and `[coderabbit]` features always shell out to `claude -p` regardless of this
-setting — they are lola-internal helpers, **not** the coding agent, and never
-change with the agent choice.
+**Codex automatic approvals.** Coding sessions require a Codex CLI whose
+`--help` advertises `--approve-for-me` (verified with 0.153.2). This enables
+`workspace-write` with automatic review of escalation requests, allowing the
+reviewer to approve Git writes and network commands that the old `never`
+approval policy rejected. It does not blindly approve every action: policy
+denials can still require a human. See [Codex Auto-review](https://learn.chatgpt.com/docs/sandboxing/auto-review).
+Read-only review providers do not enable automatic approvals. An older CLI
+must be upgraded; lola never falls back to bypassing the sandbox.
+
+Codex revival resumes the most recent saved conversation for the same worktree;
+without recorded history it starts from the task briefing. Legacy sessions with
+history in `.lola/codex` retain that home when revived. Codex pane classification
+and turn-complete notifications are supported, but structured inline question
+extraction and transcript-based activity detection remain Claude-specific.
+
+**Distinct from lola's internal helpers.** The `[brain]` summarizer and
+`[statusagent]` interpreter still use `claude -p` independently of the worker
+choice. Disable them for an installation without Claude. Reviews have their own
+provider catalog: select `codex-session` to use Codex for review as well.
 
 ### Agent fallback (usage limits)
 

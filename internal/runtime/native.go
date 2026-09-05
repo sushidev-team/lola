@@ -15,7 +15,9 @@
 package runtime
 
 import (
+	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -110,7 +112,7 @@ func reviewPaneParent(name string) (string, bool) {
 
 // lolaDir is the runtime scratch directory inside each worktree, holding
 // prompt.md, env, and the per-agent callback artifact(s) (Claude's
-// settings.json, or Codex's codex/ home). It is excluded via the worktree's
+// settings.json). It is excluded via the worktree's
 // git info/exclude, never via the repository's .gitignore.
 const lolaDir = ".lola"
 
@@ -317,15 +319,14 @@ func (n *Native) Spawn(ctx context.Context, p config.Project, issue linear.Issue
 		return fail("write prompt.md", err)
 	}
 	// Per-agent lifecycle-callback artifact(s): claude's .lola/settings.json,
-	// codex's .lola/codex/config.toml (+ best-effort auth symlink), or
-	// opencode's .opencode/plugins/lola-hook.js. All land under .lola/ or the
+	// or opencode's .opencode/plugins/lola-hook.js. All land under .lola/ or the
 	// just-excluded .opencode/, so they share the other .lola files' rollback
 	// disposition (a clean worktree is removed wholesale, a dirty one is kept).
 	if err := n.writeAgentArtifacts(dir, kind); err != nil {
 		return fail("write agent artifacts", err)
 	}
 	// The env file carries the Linear API key, project env, and (for codex) the
-	// per-session CODEX_HOME; it is 0600 and must be in place BEFORE the launch
+	// user CODEX_HOME; it is 0600 and must be in place BEFORE the launch
 	// sources it. Written last of the .lola files so a rollback that keeps a
 	// dirty worktree keeps it too (0600, in the kept dir — same disposition as
 	// the other .lola artifacts).
@@ -696,6 +697,10 @@ func (n *Native) launchCommandPrompt(id string, kind agent.Kind, prompt string, 
 	if resume {
 		args = agent.LaunchArgsResume(kind, prompt)
 	}
+	if kind == agent.Codex {
+		notify, _ := json.Marshal([]string{n.LolaBin, "hook", "codex-notify"})
+		args = append([]string{"-c", "notify=" + string(notify)}, args...)
+	}
 	posix := "set -a; . ./" + lolaDir + "/env; set +a; exec " + shQuote(bin)
 	for _, arg := range args {
 		posix += " " + shQuote(arg)
@@ -708,11 +713,8 @@ func (n *Native) launchCommandPrompt(id string, kind agent.Kind, prompt string, 
 //
 //   - Claude:   .lola/settings.json = hook.SettingsJSON(LolaBin) — the hook
 //     wiring Claude Code reads via `--settings`.
-//   - Codex:    .lola/codex/config.toml = agent.CodexConfigTOML(LolaBin), a
-//     per-session CODEX_HOME whose `notify` key routes codex events to `lola
-//     hook codex-notify`, plus a best-effort auth.json symlink to the user's
-//     real codex login so `codex login` survives (absent source is not an
-//     error — API-key users authenticate via OPENAI_API_KEY from the pane env).
+//   - Codex: no config artifact; launchCommand supplies a per-process notify
+//     override while retaining the user's normal CODEX_HOME configuration.
 //   - OpenCode: .opencode/plugins/lola-hook.js = agent.OpenCodePluginJS(LolaBin),
 //     the in-process plugin opencode auto-loads that shells `lola hook` on its
 //     lifecycle events.
@@ -723,30 +725,12 @@ func (n *Native) launchCommandPrompt(id string, kind agent.Kind, prompt string, 
 func (n *Native) writeAgentArtifacts(dir string, kind agent.Kind) error {
 	switch kind {
 	case agent.Codex:
-		return n.writeCodexArtifacts(dir)
+		return nil // notify is overridden on argv; never rewrite the user's config
 	case agent.OpenCode:
 		return os.WriteFile(openCodePluginPath(dir), agent.OpenCodePluginJS(n.LolaBin), 0o600)
 	default: // Claude
 		return os.WriteFile(filepath.Join(dir, lolaDir, "settings.json"), hook.SettingsJSON(n.LolaBin), 0o600)
 	}
-}
-
-// writeCodexArtifacts writes the codex per-session CODEX_HOME under
-// <dir>/.lola/codex: config.toml (with the notify wiring) and a best-effort
-// auth.json symlink to the user's existing codex login. The symlink is
-// advisory — an absent source is skipped silently, so a codex run with no
-// prior `codex login` still launches (it authenticates via OPENAI_API_KEY
-// inherited from the pane env).
-func (n *Native) writeCodexArtifacts(dir string) error {
-	codexHome := filepath.Join(dir, lolaDir, "codex")
-	if err := os.MkdirAll(codexHome, 0o700); err != nil {
-		return err
-	}
-	if err := os.WriteFile(filepath.Join(codexHome, "config.toml"), agent.CodexConfigTOML(n.LolaBin), 0o600); err != nil {
-		return err
-	}
-	linkCodexAuth(codexHome)
-	return nil
 }
 
 // openCodePluginPath returns the plugin file path for an opencode session's
@@ -758,52 +742,111 @@ func openCodePluginPath(dir string) string {
 	return filepath.Join(pluginsDir, "lola-hook.js")
 }
 
-// linkCodexAuth best-effort symlinks the user's real codex auth.json into the
-// per-session CODEX_HOME so an existing `codex login` carries over. It never
-// returns an error: a missing source (API-key users) or a symlink failure is
-// silently skipped — a codex session must launch regardless.
-func linkCodexAuth(codexHome string) {
-	src := userCodexAuth()
-	if src == "" {
-		return
-	}
-	if _, err := os.Stat(src); err != nil {
-		return // no existing login to carry over
-	}
-	_ = os.Symlink(src, filepath.Join(codexHome, "auth.json"))
-}
-
-// userCodexAuth resolves the path to the user's real codex auth.json: under
-// $CODEX_HOME when set, else ~/.codex/auth.json. Returns "" when no home can be
-// determined (the caller then skips the symlink).
-func userCodexAuth() string {
+// userCodexHome preserves the same configuration/auth/skills home that a normal
+// Codex terminal uses. Export it explicitly because the tmux server may have
+// started with a different environment from the daemon.
+func userCodexHome() string {
 	if h := os.Getenv("CODEX_HOME"); h != "" {
-		return filepath.Join(h, "auth.json")
+		return h
 	}
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
 		return ""
 	}
-	return filepath.Join(home, ".codex", "auth.json")
+	return filepath.Join(home, ".codex")
+}
+
+// codexHasSession matches a rollout's first session_meta record against this
+// worktree before enabling resume --last. Another worktree's history must never
+// make an empty session take over an unrelated conversation. Malformed or
+// unreadable records fail closed to a fresh launch.
+func codexHasSession(ctx context.Context, home, dir string) bool {
+	if home == "" {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	found := false
+	_ = filepath.WalkDir(filepath.Join(home, "sessions"), func(path string, entry fs.DirEntry, err error) error {
+		if ctx.Err() != nil {
+			return fs.SkipAll
+		}
+		if err != nil || entry.IsDir() || !strings.HasSuffix(entry.Name(), ".jsonl") {
+			return nil
+		}
+		f, err := os.Open(path)
+		if err != nil {
+			return nil
+		}
+		scanner := bufio.NewScanner(f)
+		scanner.Buffer(make([]byte, 4096), 1024*1024) // first line may include lengthy base instructions
+		var meta struct {
+			Type    string `json:"type"`
+			Payload struct {
+				Cwd    string `json:"cwd"`
+				Source string `json:"source"`
+			} `json:"payload"`
+		}
+		if scanner.Scan() && json.Unmarshal(scanner.Bytes(), &meta) == nil &&
+			meta.Type == "session_meta" && meta.Payload.Source == "cli" && filepath.Clean(meta.Payload.Cwd) == filepath.Clean(dir) {
+			found = true
+		}
+		_ = f.Close()
+		if found {
+			return fs.SkipAll
+		}
+		return nil
+	})
+	return found
+}
+
+// reviveCodexHome retains old isolated homes when they carry this worktree's
+// conversation. Otherwise move the session to the normal user home, preserving
+// every other assignment in the generated env file.
+func reviveCodexHome(ctx context.Context, dir, home string) (string, error) {
+	legacy := filepath.Join(dir, lolaDir, "codex")
+	if codexHasSession(ctx, legacy, dir) {
+		home = legacy
+	}
+	path := filepath.Join(dir, lolaDir, "env")
+	body, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	if home == "" {
+		return "", errors.New("cannot determine Codex home")
+	}
+	// Append a final assignment instead of parsing shell source: project env
+	// values may contain quoted newlines that resemble another assignment.
+	override := "CODEX_HOME=" + shQuote(home) + "\n"
+	if strings.HasSuffix(string(body), "\n"+override) || string(body) == override {
+		return home, nil
+	}
+	if len(body) > 0 && body[len(body)-1] != '\n' {
+		body = append(body, '\n')
+	}
+	body = append(body, override...)
+	return home, os.WriteFile(path, body, 0o600)
 }
 
 // envFile renders <dir>/.lola/env: shell-sourceable NAME=value assignments the
 // launch command sources under `set -a`. Each value is single-quoted via
 // shQuote so nothing needs a shell-safe shape, and the file is written 0600 and
 // MUST never be logged — it may hold the Linear API key. It carries, in this
-// order: LOLA_SESSION (not secret); for a codex session, CODEX_HOME pointing at
-// the per-session <dir>/.lola/codex (so codex reads the lola-written config.toml
-// and notify wiring, not the user's real home); LINEAR_API_KEY, only when a
-// LinearKey provider is set and returns a non-empty key (a rotated key is picked
+// order: LOLA_SESSION (not secret); for a codex session, the user's CODEX_HOME
+// (notify is overridden per process, leaving user configuration untouched);
+// LINEAR_API_KEY, only when a LinearKey provider is set and returns a non-empty key (a rotated key is picked
 // up on the next spawn because the provider is called here, each spawn); and
 // every [[project]].env pair in sorted order (the same variables Prepare gives
 // post_create commands — the agent session sees them too). dir is the absolute
-// worktree path, so CODEX_HOME is absolute and resolves regardless of cwd.
+// worktree path.
 func (n *Native) envFile(p config.Project, id, dir string, kind agent.Kind) []byte {
 	var b strings.Builder
 	fmt.Fprintf(&b, "LOLA_SESSION=%s\n", shQuote(id))
 	if kind == agent.Codex {
-		fmt.Fprintf(&b, "CODEX_HOME=%s\n", shQuote(filepath.Join(dir, lolaDir, "codex")))
+		if home := userCodexHome(); home != "" {
+			fmt.Fprintf(&b, "CODEX_HOME=%s\n", shQuote(home))
+		}
 	}
 	if n.LinearKey != nil {
 		if key := n.LinearKey(); key != "" {
@@ -1149,9 +1192,9 @@ func (n *Native) Alive(ctx context.Context, s session.Session) bool {
 // Revive re-creates the tmux agent session for a session whose pane died but
 // whose worktree survives (dead sessions keep their worktree for inspection).
 // It reuses the existing worktree and its .lola artifacts (prompt, settings,
-// env) exactly as the original spawn left them and relaunches the agent in
+// env) and relaunches the agent in
 // place: when the agent is Claude and it wrote a transcript before dying, or
-// opencode and it saved a session, the pane comes back with `--continue` and
+// opencode/Codex and it saved a session, the pane comes back in resume mode and
 // resumes the prior conversation (launchCommand resume=true); otherwise it
 // launches fresh on the same worktree — the case for a session that died so
 // fast it never recorded anything (an empty --continue would just error and
@@ -1170,6 +1213,17 @@ func (n *Native) Revive(ctx context.Context, s session.Session) (session.Session
 	kind := agent.Parse(s.Agent)
 	resume := (kind == agent.Claude && claudeHasTranscript(dir)) ||
 		(kind == agent.OpenCode && opencodeHasSession(ctx, dir))
+	if kind == agent.Codex {
+		home := userCodexHome()
+		if p := n.Cfg.ProjectByName(s.Project); p != nil && p.Env["CODEX_HOME"] != "" {
+			home = p.Env["CODEX_HOME"]
+		}
+		home, err := reviveCodexHome(ctx, dir, home)
+		if err != nil {
+			return session.Session{}, fmt.Errorf("runtime: revive %s: codex environment: %w", id, err)
+		}
+		resume = codexHasSession(ctx, home, dir)
+	}
 	if err := n.Tmux.NewSession(ctx, id, dir, n.launchCommand(id, kind, resume)); err != nil {
 		return session.Session{}, fmt.Errorf("runtime: revive %s: %w", id, err)
 	}

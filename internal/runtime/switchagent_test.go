@@ -70,9 +70,7 @@ func TestSwitchAgentHappyPath(t *testing.T) {
 		}
 	}
 
-	if _, err := os.Stat(filepath.Join(dir, ".lola", "codex", "config.toml")); err != nil {
-		t.Errorf("codex artifacts not written: %v", err)
-	}
+	assertAbsent(t, filepath.Join(dir, ".lola", "codex", "config.toml"))
 	env, err := os.ReadFile(filepath.Join(dir, ".lola", "env"))
 	if err != nil {
 		t.Fatalf("read env: %v", err)

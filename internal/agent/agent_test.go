@@ -6,8 +6,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-
-	"github.com/BurntSushi/toml"
 )
 
 func TestValid(t *testing.T) {
@@ -110,7 +108,7 @@ func TestLaunchArgs(t *testing.T) {
 		want []string
 	}{
 		{Claude, []string{"--settings", ".lola/settings.json", prompt}},
-		{Codex, []string{"--ask-for-approval", "never", "--sandbox", "workspace-write", prompt}},
+		{Codex, []string{"--approve-for-me", prompt}},
 		{OpenCode, []string{"--prompt", prompt, "--auto"}},
 		// Unknown kinds are treated as Claude.
 		{Kind("bogus"), []string{"--settings", ".lola/settings.json", prompt}},
@@ -151,10 +149,27 @@ func TestLaunchArgsResume(t *testing.T) {
 			t.Error("opencode resume must not pass --prompt (broken with --continue upstream)")
 		}
 	}
-	// Codex has no verified headless resume, so it falls back to a fresh
-	// launch — revival still restarts it, just without continuity.
-	if got := LaunchArgsResume(Codex, "PROMPT"); !reflect.DeepEqual(got, LaunchArgs(Codex, "PROMPT")) {
-		t.Errorf("LaunchArgsResume(codex) = %v, want LaunchArgs fallback %v", got, LaunchArgs(Codex, "PROMPT"))
+	// --last keeps cwd filtering; --all could select another worktree's task.
+	if got := LaunchArgsResume(Codex, "PROMPT"); !reflect.DeepEqual(got, []string{"resume", "--last", "--approve-for-me"}) {
+		t.Errorf("LaunchArgsResume(codex) = %v, want cwd-filtered auto-review resume", got)
+	}
+}
+
+func TestCodexAutoReviewOnlyForWorkers(t *testing.T) {
+	for _, args := range [][]string{LaunchArgs(Codex, "task"), LaunchArgsResume(Codex, "task")} {
+		if !slices.Contains(args, "--approve-for-me") {
+			t.Fatalf("worker must automatically review escalations: %v", args)
+		}
+		for _, forbidden := range []string{"never", "--yolo", "--dangerously-bypass-approvals-and-sandbox", "danger-full-access", "--all"} {
+			if slices.Contains(args, forbidden) {
+				t.Errorf("worker disables review or isolation with %q: %v", forbidden, args)
+			}
+		}
+	}
+	for _, args := range [][]string{ReviewArgs(Codex, "review", ""), ReviewStreamArgs(Codex, "review", "")} {
+		if slices.Contains(args, "--approve-for-me") || !slices.Contains(args, "read-only") {
+			t.Errorf("review must retain its read-only posture: %v", args)
+		}
 	}
 }
 
@@ -166,55 +181,6 @@ func TestLaunchArgsPromptIsLastForPositionalAgents(t *testing.T) {
 		if args[len(args)-1] != "P" {
 			t.Errorf("Kind(%q): prompt not last argv element: %v", k, args)
 		}
-	}
-}
-
-func TestCodexConfigTOML(t *testing.T) {
-	const bin = "/usr/local/bin/lola"
-	body := string(CodexConfigTOML(bin))
-
-	// The notify array must be the very first line.
-	firstLine := body
-	if i := strings.IndexByte(body, '\n'); i >= 0 {
-		firstLine = body[:i]
-	}
-	if !strings.HasPrefix(firstLine, "notify = [") {
-		t.Errorf("first line = %q, want it to start the notify array", firstLine)
-	}
-
-	// It must be valid TOML and decode notify as the expected argv, top-level.
-	var decoded struct {
-		Notify []string `toml:"notify"`
-	}
-	if _, err := toml.Decode(body, &decoded); err != nil {
-		t.Fatalf("CodexConfigTOML is not valid TOML: %v\n%s", err, body)
-	}
-	want := []string{bin, "hook", "codex-notify"}
-	if !reflect.DeepEqual(decoded.Notify, want) {
-		t.Errorf("notify = %v, want %v", decoded.Notify, want)
-	}
-
-	// No [table] header may appear before notify (TOML requires top-level keys
-	// first, and lola asserts it explicitly).
-	notifyIdx := strings.Index(body, "notify")
-	tableIdx := strings.Index(body, "\n[")
-	if tableIdx >= 0 && tableIdx < notifyIdx {
-		t.Errorf("a [table] header precedes notify:\n%s", body)
-	}
-}
-
-func TestCodexConfigTOMLQuotesUnsafePath(t *testing.T) {
-	const bin = `/Users/me/My "Tools"/lola`
-	body := string(CodexConfigTOML(bin))
-
-	var decoded struct {
-		Notify []string `toml:"notify"`
-	}
-	if _, err := toml.Decode(body, &decoded); err != nil {
-		t.Fatalf("CodexConfigTOML with unsafe path is not valid TOML: %v\n%s", err, body)
-	}
-	if len(decoded.Notify) != 3 || decoded.Notify[0] != bin {
-		t.Errorf("notify[0] = %q, want %q (full: %v)", decoded.Notify[0], bin, decoded.Notify)
 	}
 }
 

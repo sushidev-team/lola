@@ -574,3 +574,73 @@ func TestFallbackResults(t *testing.T) {
 		}
 	})
 }
+
+func TestCheckCodexOnlyWorkers(t *testing.T) {
+	dir := pathWith(t, "tmux", "git", "gh")
+	fakeBin(t, dir, "codex", `case "$1" in --help) echo --approve-for-me;; --version) echo 'codex-cli 0.153.2';; esac`)
+	t.Setenv("LOLA_HOME", t.TempDir())
+	cfg := &config.Config{Defaults: config.Defaults{GlobalCap: 1, Agent: "codex"}}
+	r := Check(context.Background(), cfg)
+	if !r.OK() {
+		t.Fatalf("Codex-only installation should be healthy: %+v", r)
+	}
+	if res := result(t, r, "codex"); !res.OK || !res.Critical || !strings.Contains(res.Detail, "0.153.2") {
+		t.Fatalf("Codex result: %+v", res)
+	}
+	for _, res := range r.Results {
+		if res.Name == checkClaude {
+			t.Fatal("Codex-only workers must not require Claude")
+		}
+	}
+	if got := RuntimeResults(r); len(got) != 3 || got[2].Name != "codex" {
+		t.Fatalf("runtime checks: %+v", got)
+	}
+}
+
+func TestConfiguredAgentOverridesAndHelpers(t *testing.T) {
+	dir := pathWith(t, "codex")
+	fakeBin(t, dir, "codex", `echo --approve-for-me`)
+	cfg := &config.Config{
+		Defaults:        config.Defaults{Agent: "codex"},
+		Projects:        []config.Project{{Name: "a", Agent: "opencode"}, {Name: "b", Agent: "codex"}},
+		Brain:           config.BrainConfig{Enabled: true},
+		StatusAgent:     config.StatusAgentConfig{Enabled: true},
+		ReviewProviders: []config.ReviewProvider{{Provider: "claude-session", Enabled: true}, {Provider: "codex-session", Enabled: true}},
+	}
+	r := Report{Results: agentResults(context.Background(), cfg)}
+	if len(r.Results) != 2 || result(t, r, "opencode").OK || !result(t, r, "opencode").Critical {
+		t.Fatalf("overrides must be checked once: %+v", r)
+	}
+	r.Results = helperResults(cfg)
+	for _, name := range []string{"brain agent", "status agent", "review agent (claude-session)"} {
+		if res := result(t, r, name); res.OK || res.Critical || !strings.Contains(res.Detail, "claude") {
+			t.Errorf("missing Claude helper must warn: %+v", res)
+		}
+	}
+	if !result(t, r, "review agent (codex-session)").OK || !r.OK() {
+		t.Fatalf("optional helpers must not block worker dispatch: %+v", r)
+	}
+}
+
+func TestCodexAutoApprovalCapability(t *testing.T) {
+	for _, tc := range []struct {
+		name, body string
+		ok         bool
+	}{
+		{"supported", "echo --approve-for-me", true},
+		{"old", "echo --full-auto", false},
+		{"failed", "exit 1", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := pathWith(t)
+			fakeBin(t, dir, "codex", tc.body)
+			r := agentResults(context.Background(), &config.Config{Defaults: config.Defaults{Agent: "codex"}})[0]
+			if r.OK != tc.ok || !r.Critical {
+				t.Fatalf("capability gate: %+v", r)
+			}
+			if tc.name == "old" && !strings.Contains(r.Detail, "upgrade Codex CLI") {
+				t.Fatalf("missing upgrade instruction: %+v", r)
+			}
+		})
+	}
+}
