@@ -5,6 +5,7 @@ export type {
     CodeRabbitData,
     DevClashInfo,
     DevData,
+    DevForward,
     DevFreePortData,
     Event,
     GroupInfo,
