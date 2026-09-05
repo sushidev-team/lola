@@ -1345,3 +1345,18 @@ describe("SettingsForm", () => {
     ).toBeInTheDocument();
   });
 });
+
+
+it("exposes the polling disclosure state and toggles its panel", async () => {
+  render(SettingsForm);
+  const toggle = await screen.findByRole("button", { name: "Polling frequency" });
+  const panel = document.getElementById(toggle.getAttribute("aria-controls")!)!;
+  expect(toggle).toHaveAttribute("aria-expanded", "false");
+  expect(panel).not.toBeVisible();
+  await fireEvent.click(toggle);
+  expect(toggle).toHaveAttribute("aria-expanded", "true");
+  expect(panel).toBeVisible();
+  await fireEvent.click(toggle);
+  expect(toggle).toHaveAttribute("aria-expanded", "false");
+  expect(panel).not.toBeVisible();
+});

@@ -61,6 +61,45 @@ describe("first-run setup", () => {
     expect(screen.getByLabelText("GitHub repo")).toHaveValue("");
   });
 
+  it.each(["uninspected", "non-repository", "failed", "changed"])("blocks setup for a %s path", async (kind) => {
+    render(Setup);
+    await fireEvent.input(screen.getByLabelText("Linear API key"), { target: { value: "test-key" } });
+    await fireEvent.click(screen.getByRole("button", { name: "Choose folder…" }));
+    const start = screen.getByRole("button", { name: "Start Lola" });
+    await waitFor(() => expect(start).toBeEnabled());
+    const path = screen.getByLabelText("Project path");
+    if (kind === "uninspected" || kind === "changed") {
+      await fireEvent.input(path, { target: { value: kind === "changed" ? "" : "/code/new" } });
+    } else {
+      if (kind === "failed") inspect.mockRejectedValueOnce(new Error("Inspection failed"));
+      else inspect.mockResolvedValueOnce({ ...info(), isRepo: false });
+      await fireEvent.blur(path);
+      if (kind === "failed") await screen.findByText(/Inspection failed/);
+      else await screen.findByText(/Not a git checkout/);
+    }
+    expect(start).toBeDisabled();
+    await fireEvent.click(start);
+    expect(setup).not.toHaveBeenCalled();
+  });
+
+  it("keeps setup disabled during a new inspection and ignores its stale success", async () => {
+    render(Setup);
+    await fireEvent.input(screen.getByLabelText("Linear API key"), { target: { value: "test-key" } });
+    await fireEvent.click(screen.getByRole("button", { name: "Choose folder…" }));
+    const start = screen.getByRole("button", { name: "Start Lola" });
+    await waitFor(() => expect(start).toBeEnabled());
+    let resolve!: (value: ReturnType<typeof info>) => void;
+    inspect.mockImplementationOnce(() => new Promise((done) => { resolve = done; }));
+    const path = screen.getByLabelText("Project path");
+    await fireEvent.blur(path);
+    expect(start).toBeDisabled();
+    await fireEvent.input(path, { target: { value: "/code/new" } });
+    resolve(info());
+    await waitFor(() => expect(start).toBeDisabled());
+    await fireEvent.click(start);
+    expect(setup).not.toHaveBeenCalled();
+  });
+
   it("does not mark a changed key valid when an earlier validation finishes", async () => {
     let resolve!: () => void;
     validate.mockImplementationOnce(() => new Promise<void>((done) => { resolve = done; }));

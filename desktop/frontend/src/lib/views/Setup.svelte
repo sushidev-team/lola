@@ -35,7 +35,7 @@
   // later is visible now — every worktree forks from this repository.
   let isRepo = $state<boolean | null>(null);
 
-  const canSubmit = $derived(key.trim() !== "" && projectName.trim() !== "" && projectPath.trim() !== "" && !picking && !inspecting && !submitting);
+  const canSubmit = $derived(key.trim() !== "" && projectName.trim() !== "" && projectPath.trim() !== "" && inspectedPath === projectPath.trim() && isRepo === true && !picking && !inspecting && !submitting);
 
   /**
    * One folder pick fills the rest of the project block: name, GitHub repo and
@@ -60,6 +60,10 @@
   async function inspectFolder() {
     const path = projectPath.trim();
     const request = ++inspection;
+    inspectedPath = "";
+    isRepo = null;
+    branches = [];
+    error = "";
     if (!path) { inspecting = false; return; }
     inspecting = true;
     try {

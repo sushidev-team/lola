@@ -1260,7 +1260,9 @@ func TestLaunchCommandPerAgent(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "git"), []byte("#!/bin/sh\nexit 1\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if out, err := cmd.Output(); err == nil || len(out) != 0 {
+	failedCmd := exec.Command("sh", "-c", n.launchCommand(id, agent.Codex, true))
+	failedCmd.Dir, failedCmd.Env = cmd.Dir, cmd.Env
+	if out, err := failedCmd.Output(); err == nil || len(out) != 0 {
 		t.Fatalf("failed git lookup launched codex: output=%q err=%v", out, err)
 	}
 

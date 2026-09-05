@@ -300,6 +300,7 @@
   const inputCls =
     "w-full rounded border border-edge bg-canvas px-2 py-1.5 text-ink outline-none focus:border-accent placeholder:text-placeholder";
   const formId = $props.id();
+  let pollingOpen = $state(false);
   const rowCls = "settings-field grid min-w-0 grid-cols-[11rem_minmax(0,1fr)] items-baseline gap-3";
   const rowTopCls = "settings-field grid min-w-0 grid-cols-[11rem_minmax(0,1fr)] items-start gap-3";
   const hintCls = "mt-1 block text-sm text-faint";
@@ -834,15 +835,17 @@
             </label>
             <AgentModelFields provider={d.agent || "claude"} providerLabel="Default agent" rowClass={rowCls}
               onProviderChange={(value) => { d.agent = value; }} />
-            <details class="border-t border-edge pt-3">
-              <summary class="cursor-pointer text-faint">Polling frequency</summary>
-              <div class="mt-3">
-            <div class={rowCls}>
-              <span class="text-faint">Poll interval</span>
-              <PresetInput label="Poll interval" value={d.pollInterval} options={POLL_INTERVALS} onChange={(v) => { d.pollInterval = v; }} />
-            </div>
+            <div class="border-t border-edge pt-3">
+              <Button aria-expanded={pollingOpen} aria-controls={`${formId}-polling-frequency`} onclick={() => { pollingOpen = !pollingOpen; }}>
+                <span aria-hidden="true">{pollingOpen ? "▾" : "▸"}</span>Polling frequency
+              </Button>
+              <div id={`${formId}-polling-frequency`} class="mt-3" hidden={!pollingOpen}>
+                <div class={rowCls}>
+                  <span class="text-faint">Poll interval</span>
+                  <PresetInput label="Poll interval" value={d.pollInterval} options={POLL_INTERVALS} onChange={(v) => { d.pollInterval = v; }} />
+                </div>
               </div>
-            </details>
+            </div>
           </div>
         </section>
       {:else if tab === "linear"}
