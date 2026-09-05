@@ -4,6 +4,8 @@
   import Tabs from "$lib/components/Tabs.svelte";
   import Button from "$lib/components/Button.svelte";
   import Checkbox from "$lib/components/Checkbox.svelte";
+  import PresetInput from "$lib/components/PresetInput.svelte";
+  import { CLAUDE_MODELS, modelsFor, POLL_INTERVALS, BRANCH_PREFIXES, CLAUDE_BINARIES, BASE_FLAGS } from "$lib/settingPresets";
   import Select from "$lib/components/Select.svelte";
   import QRCode from "$lib/components/QRCode.svelte";
   import { store } from "$lib/store.svelte";
@@ -770,19 +772,21 @@
   {/if}
 {/snippet}
 
-<Modal title="Settings" onClose={requestClose} width="880px">
+<Modal title="Settings" onClose={requestClose} width="880px" bodyClass="grid h-[65vh] grid-rows-[minmax(0,1fr)] overflow-hidden">
   {#if loading}
     <div class="py-10 text-center text-faint">loading settings…</div>
   {:else if loadError}
     <div class="py-10 text-center text-bad">{loadError}</div>
   {:else if dto}
     {@const d = dto}
-    <div class="grid grid-cols-[10.5rem_minmax(0,1fr)] gap-6">
-    <Tabs tabs={TABS} active={tab} onSelect={selectTab} vertical />
+    <div class="grid min-h-0 grid-cols-[11.5rem_minmax(0,1fr)] overflow-hidden">
+    <nav aria-label="Settings sections" class="min-h-0 overflow-y-auto overscroll-contain border-r border-edge p-4">
+      <Tabs tabs={TABS} active={tab} onSelect={selectTab} vertical />
+    </nav>
 
     <!-- No size class: every field caption, control and option inherits the
          13px base. Only the faint explanations and micro-labels step down. -->
-    <div>
+    <div role="region" aria-label="Settings content" class="min-h-0 min-w-0 overflow-y-auto overscroll-contain p-4">
       {#if tab === "defaults"}
         <section>
           {@render head("General")}
@@ -811,10 +815,10 @@
             <details class="border-t border-edge pt-3">
               <summary class="cursor-pointer text-faint">Polling frequency</summary>
               <div class="mt-3">
-            <label class={rowCls}>
+            <div class={rowCls}>
               <span class="text-faint">Poll interval</span>
-              <input class={inputCls} type="text" placeholder="60s" bind:value={d.pollInterval} />
-            </label>
+              <PresetInput label="Poll interval" value={d.pollInterval} options={POLL_INTERVALS} onChange={(v) => { d.pollInterval = v; }} />
+            </div>
               </div>
             </details>
           </div>
@@ -898,10 +902,10 @@
           </p>
           <div class="space-y-2">
             <h4 class="mb-3 text-ink">Worktree setup</h4>
-            <label class={rowCls}>
+            <div class={rowCls}>
               <span class="text-faint">Branch prefix</span>
-              <input class="{inputCls} font-mono" type="text" placeholder="lola/" bind:value={d.branchPrefix} />
-            </label>
+              <PresetInput label="Branch prefix" value={d.branchPrefix} options={BRANCH_PREFIXES} onChange={(v) => { d.branchPrefix = v; }} />
+            </div>
             {@render areaRow("Symlinks", d.symlinks, (v) => { d.symlinks = v; }, ".env\nnode_modules", "one path per line")}
             {@render areaRow("Post-create", d.postCreate, (v) => { d.postCreate = v; }, "npm install", "one command per line")}
             {@render areaRow("Env", d.env, (v) => { d.env = v; }, "KEY=value", "one KEY=value per line")}
@@ -1028,10 +1032,10 @@
               <span>Enabled</span>
             </label>
             {#if d.brainEnabled}
-            <label class={rowCls}>
+            <div class={rowCls}>
               <span class="text-faint">Model</span>
-              <input class={inputCls} type="text" placeholder="claude-…" bind:value={d.brainModel} />
-            </label>
+              <PresetInput label="Model" value={d.brainModel} options={CLAUDE_MODELS} onChange={(v) => { d.brainModel = v; }} />
+            </div>
             <label class={rowCls}>
               <span class="text-faint">Timeout (s)</span>
               <input class={inputCls} type="number" min="0" bind:value={d.brainTimeout} />
@@ -1061,14 +1065,14 @@
               <span>Enabled</span>
             </label>
             {#if d.statusAgentEnabled}
-            <label class={rowCls}>
+            <div class={rowCls}>
               <span class="text-faint">Binary</span>
-              <input class={inputCls} type="text" placeholder="claude (via PATH)" bind:value={d.statusAgentBin} />
-            </label>
-            <label class={rowCls}>
+              <PresetInput label="Binary" value={d.statusAgentBin} options={CLAUDE_BINARIES} onChange={(v) => { d.statusAgentBin = v; }} placeholder="/path/to/claude" />
+            </div>
+            <div class={rowCls}>
               <span class="text-faint">Model</span>
-              <input class={inputCls} type="text" placeholder="sonnet" bind:value={d.statusAgentModel} />
-            </label>
+              <PresetInput label="Model" value={d.statusAgentModel} options={CLAUDE_MODELS} onChange={(v) => { d.statusAgentModel = v; }} />
+            </div>
             <label class={rowCls}>
               <span class="text-faint">Timeout (s)</span>
               <input class={inputCls} type="number" min="0" bind:value={d.statusAgentTimeout} />
@@ -1375,23 +1379,19 @@
                       bind:value={p.command}
                     />
                   </label>
-                  <label class={rowCls}>
+                  <div class={rowCls}>
                     <span class="text-faint">Base flag</span>
-                    <input class={inputCls} type="text" placeholder="--base" disabled={d.reviewLegacy} bind:value={p.baseFlag} />
-                  </label>
+                    <PresetInput label="Base flag" value={p.baseFlag} options={BASE_FLAGS} disabled={d.reviewLegacy} onChange={(v) => { p.baseFlag = v; }} />
+                  </div>
                   <span class={hintCls}>Flag the PR's base branch is passed with. Empty passes no base at all.</span>
                 {/if}
                 {#if agentOf(p.provider)}
-                  <label class={rowCls}>
+                  <div class={rowCls}>
                     <span class="text-faint">Model</span>
-                    <input
-                      class={inputCls}
-                      type="text"
-                      placeholder={agentOf(p.provider) === "opencode" ? "(default) — provider/model" : `(${agentOf(p.provider)} default)`}
-                      disabled={d.reviewLegacy}
-                      bind:value={p.model}
-                    />
-                  </label>
+                    <PresetInput label="Model" value={p.model} options={modelsFor(agentOf(p.provider))}
+                      disabled={d.reviewLegacy} onChange={(v) => { p.model = v; }}
+                      placeholder={agentOf(p.provider) === "opencode" ? "provider/model" : "Model ID or alias"} />
+                  </div>
                 {/if}
                 {#if isWatch(p.provider)}
                   <label class={rowCls}>
@@ -1511,17 +1511,17 @@
     </div>
   {/if}
 
+  {#snippet footer()}
   <!-- The save error, inline and above the footer where it can't hide behind the
        backdrop. A Go error can be long and multi-line, so it wraps rather than
        truncating and stays selectable; dismissable, and cleared on the next save. -->
   {#if saveErr}
-    <div class="mt-3 flex items-start gap-2 rounded border border-bad/40 bg-bad/10 px-3 py-2 text-sm text-bad">
+    <div class="mb-3 flex max-h-32 items-start gap-2 overflow-auto rounded border border-bad/40 bg-bad/10 px-3 py-2 text-sm text-bad">
       <span class="min-w-0 flex-1 font-mono break-words whitespace-pre-wrap select-text">{saveErr}</span>
       <Button variant="danger" size="xs" icon aria-label="dismiss error" onclick={() => (saveErr = "")}>✕</Button>
     </div>
   {/if}
 
-  {#snippet footer()}
     <div class="flex items-center justify-end gap-2">
       <Button size="md" onclick={requestClose}>Cancel</Button>
       <Button variant="primary" size="md" onclick={save} disabled={saving || loading || !dto}>

@@ -37,14 +37,14 @@ describe("first-run setup", () => {
     render(Setup);
     await fireEvent.click(screen.getByRole("button", { name: "Choose folder…" }));
     await waitFor(() => expect(screen.getByLabelText("GitHub repo")).toHaveValue("acme/app"));
-    const details = screen.getByLabelText("Default branch").closest("details")!;
+    const details = screen.getByLabelText("Custom Default branch").closest("details")!;
     details.open = true;
-    await fireEvent.input(screen.getByLabelText("Default branch"), { target: { value: "main" } });
+    await fireEvent.input(screen.getByLabelText("Custom Default branch"), { target: { value: "main" } });
     pick.mockResolvedValue("/code/other");
     inspect.mockResolvedValue({ ...info("/code/other"), repo: "acme/other", defaultBranch: "release" });
     await fireEvent.click(screen.getByRole("button", { name: "Choose folder…" }));
     await waitFor(() => expect(screen.getByLabelText("GitHub repo")).toHaveValue("acme/other"));
-    expect(screen.getByLabelText("Default branch")).toHaveValue("main");
+    expect(screen.getByLabelText("Custom Default branch")).toHaveValue("main");
   });
 
   it("drops late inspection results after the path changes", async () => {

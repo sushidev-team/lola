@@ -1,6 +1,8 @@
 <script lang="ts">
   import { ConfigService } from "@bindings/desktop";
   import { store } from "$lib/store.svelte";
+  import PresetInput from "$lib/components/PresetInput.svelte";
+  import { POLL_INTERVALS } from "$lib/settingPresets";
   import Button from "$lib/components/Button.svelte";
 
   // First-run wizard: writes config.toml (Linear key → Keychain, one project,
@@ -14,6 +16,7 @@
   let projectPath = $state("");
   let repo = $state("");
   let branch = $state("main");
+  let branches = $state<string[]>([]);
   let concurrencyCap = $state(2);
   let globalCap = $state(4);
   let pollInterval = $state("60s");
@@ -64,6 +67,7 @@
       projectPath = info.path || path;
       inspectedPath = projectPath;
       isRepo = info.isRepo;
+      branches = info.branches ?? [];
       if (nameAuto || !projectName.trim()) projectName = info.suggestedLabel || info.suggestedId || "";
       if (repoAuto || !repo.trim()) repo = info.repo || "";
       if (branchAuto || !branch.trim()) branch = info.defaultBranch || "main";
@@ -173,10 +177,11 @@
               <span class="mb-1 block label text-faint">Project name</span>
               <input class="w-full rounded border border-edge bg-canvas px-2 py-1.5 text-ink outline-none focus:border-accent placeholder:text-placeholder" placeholder="my-app" bind:value={projectName} oninput={() => (nameAuto = false)} />
             </label>
-            <label class="block">
+            <div class="block">
               <span class="mb-1 block label text-faint">Default branch</span>
-              <input class="w-full rounded border border-edge bg-canvas px-2 py-1.5 text-ink outline-none focus:border-accent" bind:value={branch} oninput={() => (branchAuto = false)} />
-            </label>
+              <PresetInput label="Default branch" value={branch} options={branches.map((value) => ({ value, label: value }))}
+              onChange={(v) => { branch = v; branchAuto = false; }} placeholder="main" />
+            </div>
           </div>
           <label class="block">
             <span class="mb-1 block label text-faint">GitHub repo</span>
@@ -198,10 +203,10 @@
             <span class="mb-1 block label text-faint">Total agents</span>
             <input type="number" min="1" class="w-full rounded border border-edge bg-canvas num px-2 py-1.5 text-ink outline-none focus:border-accent" bind:value={globalCap} />
           </label>
-          <label class="block">
+          <div class="block">
             <span class="mb-1 block label text-faint">Poll interval</span>
-            <input class="w-full rounded border border-edge bg-canvas px-2 py-1.5 text-ink outline-none focus:border-accent" bind:value={pollInterval} />
-          </label>
+            <PresetInput label="Poll interval" value={pollInterval} options={POLL_INTERVALS} onChange={(v) => { pollInterval = v; }} />
+          </div>
         </div>
 
       </details>

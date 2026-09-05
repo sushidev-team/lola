@@ -181,7 +181,7 @@ describe("ProjectForm", () => {
     expect(screen.getByText("project: acme")).toBeInTheDocument();
     expect(screen.queryByLabelText("Branch prefix")).not.toBeInTheDocument();
     await fireEvent.click(screen.getByRole("tab", { name: "Worktree setup" }));
-    expect(screen.getByLabelText("Branch prefix")).toHaveValue("acme/");
+    expect(screen.getByLabelText("Custom Branch prefix")).toHaveValue("acme/");
     // Every tab of the merged overlay is reachable.
     for (const t of ["General", "Worktree setup", "Issue pickup", "Linear updates"]) {
       expect(screen.getByRole("tab", { name: t })).toBeInTheDocument();
@@ -440,7 +440,7 @@ describe("ProjectForm", () => {
       expect(screen.getByLabelText("Label")).toHaveValue("Nori App");
       expect(screen.getByLabelText("ID")).toHaveValue("nori-app");
       expect(screen.getByLabelText("Repo")).toHaveValue("acme/nori-app");
-      expect(screen.getByLabelText("Default branch")).toHaveValue("develop");
+      expect(screen.getByLabelText("Default branch")).toHaveDisplayValue("develop");
     });
 
     it("does not open the chooser for an existing project", async () => {
@@ -459,7 +459,7 @@ describe("ProjectForm", () => {
       const path = await screen.findByLabelText("Path");
       await fireEvent.blur(path);
       await waitFor(() => expect(inspectPath).toHaveBeenCalled());
-      expect(screen.getByLabelText("Default branch")).toHaveValue("release");
+      expect(screen.getByLabelText("Custom Default branch")).toHaveValue("release");
       expect(screen.getByLabelText("Label")).toHaveValue("");
     });
   });
@@ -476,9 +476,8 @@ describe("ProjectForm", () => {
 
       await waitFor(() => expect(inspectPath).toHaveBeenCalledWith("/tmp/web"));
       await waitFor(() => {
-        const list = document.getElementById("lola-branches");
-        const values = Array.from(list?.querySelectorAll("option") ?? []).map((o) => o.value);
-        expect(values).toEqual(["main", "develop"]);
+        const labels = Array.from(branch.querySelectorAll("option")).map((o) => o.textContent);
+        expect(labels).toEqual(["main", "develop", "Custom…"]);
       });
     });
 
@@ -489,8 +488,9 @@ describe("ProjectForm", () => {
 
       const branch = await screen.findByLabelText("Default branch");
       await fireEvent.focus(branch);
-      await fireEvent.input(branch, { target: { value: "trunk" } });
-      expect(branch).toHaveValue("trunk");
+      const custom = screen.getByLabelText("Custom Default branch");
+      await fireEvent.input(custom, { target: { value: "trunk" } });
+      expect(custom).toHaveValue("trunk");
     });
   });
 

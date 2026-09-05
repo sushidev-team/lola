@@ -10,6 +10,8 @@
   import Tabs from "$lib/components/Tabs.svelte";
   import Button from "$lib/components/Button.svelte";
   import Checkbox from "$lib/components/Checkbox.svelte";
+  import PresetInput from "$lib/components/PresetInput.svelte";
+  import { BRANCH_PREFIXES } from "$lib/settingPresets";
   import Select from "$lib/components/Select.svelte";
   import { ConfigService, DaemonService, LinearService } from "@bindings/desktop";
   import { slug, slugTyping, displayName } from "$lib/slug";
@@ -93,7 +95,7 @@
   let idAuto = $state(false);
 
   // The checkout's branches, offered as suggestions on Default branch. A
-  // datalist keeps the input free text, so a path that is not a checkout — or a
+  // custom option keeps the input free text, so a path that is not a checkout — or a
   // branch that does not exist yet — is never a dead end.
   let branches = $state<string[]>([]);
 
@@ -667,25 +669,17 @@
             ? "detected from the checkout — verify it if this is a fork"
             : "for PR checks; empty disables them",
         )}
-        <!-- default branch: suggestions from the checkout, still free text -->
+        <!-- Branch options come from the checkout; custom values are preserved. -->
         <div class={rowCls}>
           {@render cap("Default branch", null)}
           <span>
-            <input
-              class="{inputCls} font-mono"
-              aria-label="Default branch"
-              list="lola-branches"
-              placeholder="main"
-              value={d.defaultBranch}
-              oninput={(e) => { d.defaultBranch = e.currentTarget.value; branchAuto = false; }}
-              onfocus={() => void inspect(d.path)}
-            />
-            <datalist id="lola-branches">
-              {#each branches as b (b)}<option value={b}></option>{/each}
-            </datalist>
+            <PresetInput label="Default branch" value={d.defaultBranch}
+              options={branches.map((value) => ({ value, label: value }))}
+              onChange={(v) => { d.defaultBranch = v; branchAuto = false; }}
+              onFocus={() => void inspect(d.path)} placeholder="main" />
             <span class={hintCls}>
               {branches.length
-                ? "branches from the checkout — or type one"
+                ? "choose a branch from the checkout, or enter a custom branch"
                 : "worktrees fork from this branch"}
             </span>
           </span>
@@ -725,7 +719,11 @@
     {:else if tab === "worktree"}
       <p class="copy mb-4 text-sm text-faint">Prepare each agent’s checkout and choose how to run the app locally. Leave inherited settings as they are unless this project needs something different.</p>
       <div class="space-y-2">
-        {@render textRow("Branch prefix", d.branchPrefix, (v) => { d.branchPrefix = v; }, "lola/", null, false, "empty inherits the [defaults] prefix")}
+        <div class={rowCls}>
+          <span class={labelCls}>Branch prefix</span>
+          <PresetInput label="Branch prefix" value={d.branchPrefix} options={BRANCH_PREFIXES}
+            onChange={(v) => { d.branchPrefix = v; }} placeholder="lola/" />
+        </div>
 
         {@render areaRow(
           "Symlinks",

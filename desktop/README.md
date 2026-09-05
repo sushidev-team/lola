@@ -46,7 +46,18 @@ First-run setup needs a Linear key and a repository folder. Project details are
 filled from the checkout; expand **Project details** to correct them. Agent
 limits and polling frequency use the existing defaults and are optional here.
 
-General settings are grouped under Workspace, Connections and Automation. The
+Model, polling, executable, branch-prefix and review base-flag fields offer
+presets plus a Custom option. Existing values outside the preset list remain
+editable and are never replaced on load. Branch options come from the checkout.
+Claude aliases follow the installed provider's model selection; Codex model
+suggestions are dated in `settingPresets.ts`. OpenCode keeps the agent-default
+and custom choices because its configured provider catalog varies by machine.
+Secrets, shell commands and environment variables remain free text, and numeric
+limits retain their bounded number controls.
+
+General settings are grouped under Workspace, Connections and Automation. Its
+sidebar and content scroll independently, with Save and errors always outside
+the scrolling content. The
 project editor separates General, Worktree setup, Issue pickup and Linear
 updates. Old links to the Labels tab still open the combined Issue pickup page.
 

@@ -285,7 +285,7 @@ describe("SettingsForm", () => {
     await fireEvent.click(await screen.findByRole("tab", { name: "Summaries" }));
     expect(screen.queryByLabelText("Model")).not.toBeInTheDocument();
     await fireEvent.click(screen.getByRole("checkbox", { name: "Enabled" }));
-    expect(screen.getByLabelText("Model")).toHaveValue("claude-x");
+    expect(screen.getByLabelText("Custom Model")).toHaveValue("claude-x");
     await fireEvent.click(screen.getByRole("checkbox", { name: "Enabled" }));
     await fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(SaveSettings).toHaveBeenCalled());
@@ -1027,7 +1027,7 @@ describe("SettingsForm", () => {
     it("prompts before discarding an edited form and does NOT close until confirmed", async () => {
       render(SettingsForm);
       const poll = await screen.findByDisplayValue("60s");
-      await fireEvent.input(poll, { target: { value: "30s" } });
+      await fireEvent.change(poll, { target: { value: "0" } });
 
       await fireEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
 
@@ -1039,7 +1039,7 @@ describe("SettingsForm", () => {
     it("closes once the discard is confirmed", async () => {
       render(SettingsForm);
       const poll = await screen.findByDisplayValue("60s");
-      await fireEvent.input(poll, { target: { value: "30s" } });
+      await fireEvent.change(poll, { target: { value: "0" } });
 
       await fireEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
       confirm.accept(); // the dialog's "Discard" button
