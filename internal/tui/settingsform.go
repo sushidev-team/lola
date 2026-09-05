@@ -281,9 +281,9 @@ func newSettingsForm(cfgPath string, cfg *config.Config) *settingsForm {
 			// [statusagent] — the DISPLAY-ONLY status interpreter: a small claude
 			// pass that judges what each agent is actually doing (headline + an
 			// interpreted agent-state overlay). Never enters the control loop.
-			{key: "sa_enabled", tab: stStatusAgent, section: "[statusagent]", sectionNote: "claude status interpretation for the session list", label: "Enabled", help: "Opt-in interpreter: pane + events + PR facts → what the agent is REALLY doing. Display only.", kind: sfBool, b: sa.Enabled},
-			{key: "sa_bin", tab: stStatusAgent, label: "Binary", help: "claude executable; empty resolves \"claude\" via PATH (pin absolute for launchd).", kind: sfText, text: sa.Bin},
-			{key: "sa_model", tab: stStatusAgent, label: "Model", help: "claude --model per interpretation; the recommended default is \"sonnet\"; empty = claude's default.", kind: sfText, text: sa.Model},
+			{key: "sa_enabled", tab: stStatusAgent, section: "[statusagent]", sectionNote: "status interpretation for the session list", label: "Enabled", help: "Opt-in interpreter: pane + events + PR facts → what the agent is REALLY doing. Display only.", kind: sfBool, b: sa.Enabled},
+			{key: "sa_bin", tab: stStatusAgent, label: "Binary", help: "Executable override for the configured interpreter agent; empty uses PATH.", kind: sfText, text: sa.Bin},
+			{key: "sa_model", tab: stStatusAgent, label: "Model", help: "Model for the configured interpreter agent; empty uses its default.", kind: sfText, text: sa.Model},
 			{key: "sa_timeout", tab: stStatusAgent, label: "Timeout seconds", help: "Hard cap per interpretation call. Must be >= 0.", kind: sfInt, text: itoa(sa.TimeoutSeconds)},
 			{key: "sa_interval", tab: stStatusAgent, label: "Min interval seconds", help: "Per-session debounce between interpretation attempts. Must be >= 0.", kind: sfInt, text: itoa(sa.MinIntervalSeconds)},
 			{key: "sa_maxcycle", tab: stStatusAgent, label: "Max per cycle", help: "Interpretations queued per 30s observer cycle. Must be >= 0.", kind: sfInt, text: itoa(sa.MaxPerCycle)},

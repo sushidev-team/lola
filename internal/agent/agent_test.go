@@ -440,3 +440,16 @@ func TestReviewHelpersNormalizeAlike(t *testing.T) {
 		}
 	}
 }
+
+func TestInterpretArgsWithoutCheckout(t *testing.T) {
+	for _, kind := range Kinds {
+		args := InterpretArgs(kind, "instruction", "model")
+		if kind == Codex {
+			if !slices.Contains(args, "--skip-git-repo-check") || !slices.Contains(args, "read-only") || args[len(args)-1] != "instruction" {
+				t.Fatalf("Codex context-only args: %v", args)
+			}
+		} else if !slices.Equal(args, ReviewArgs(kind, "instruction", "model")) {
+			t.Fatalf("%s changed the headless posture: %v", kind, args)
+		}
+	}
+}

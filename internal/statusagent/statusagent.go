@@ -1,5 +1,5 @@
 // Package statusagent is Lola's bounded, opt-in status INTERPRETER: a small
-// headless-claude pass (default `--model sonnet`, user-configurable bin/model
+// headless agent pass (Claude by default, configurable agent/bin/model
 // via [statusagent]) that reads one session's observed material — pane tail,
 // recent lifecycle events, PR facts, optionally the agent's transcript tail —
 // and emits a structured judgement: what the agent is actually doing, a
@@ -9,7 +9,7 @@
 //
 //   - OPT-IN. Callers gate every use behind [statusagent].enabled (default
 //     false). A disabled interpreter is simply never constructed.
-//   - READ-ONLY + BOUNDED. One `claude -p` invocation per interpretation with
+//   - READ-ONLY + BOUNDED. One headless invocation per interpretation with
 //     a hard timeout (default 60s), a size-capped context (~12KB) on STDIN,
 //     and a bounded stdout read (~8KB). No loops, no retries.
 //   - UNTRUSTED, DISPLAY-ONLY. The context is attacker-influenceable (pane
@@ -22,7 +22,7 @@
 //     fails to parse is dropped entirely.
 //
 // Auth is inherited, never managed here (same posture as brain): the child
-// claude runs with the daemon's environment; this package never reads, sets,
+// agent runs with the daemon's environment; this package never reads, sets,
 // or logs a key.
 package statusagent
 
@@ -35,12 +35,11 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/sushidev-team/lola/internal/agent"
 )
 
 const (
-	// defaultBin is the claude executable resolved via PATH when Client.Bin
-	// is empty. launchd contexts should set an absolute path.
-	defaultBin = "claude"
 	// defaultTimeout bounds a single Interpret call when Client.Timeout == 0.
 	// Interpretations are small (a screenful of context, one JSON line out);
 	// brain's 120s is for whole diffs.
@@ -55,7 +54,7 @@ const (
 	truncMarker = "\n…[truncated]"
 )
 
-// Instruction is the fixed `-p` prompt. It lives HERE, next to Parse, because
+// Instruction is the fixed interpreter prompt. It lives HERE, next to Parse, because
 // the output contract and the parser are one unit and must evolve together.
 // The data-not-instructions framing mirrors internal/reviewagent: stdin is
 // evidence to classify, never instructions to follow.
@@ -79,7 +78,9 @@ var (
 // Client runs bounded headless interpretations. The zero value is usable and
 // resolves "claude" via PATH with a 60s timeout and claude's default model.
 type Client struct {
-	// Bin is the claude executable; empty resolves "claude" via PATH.
+	// Agent selects the headless CLI; empty preserves Claude behavior.
+	Agent agent.Kind
+	// Bin overrides the selected agent executable; empty resolves it via PATH.
 	// Config-exposed ([statusagent].bin) so launchd installs can pin a path.
 	Bin string
 	// Model, when non-empty, is passed as `--model <m>` (the config default is
@@ -93,7 +94,7 @@ func (c *Client) bin() string {
 	if c.Bin != "" {
 		return c.Bin
 	}
-	return defaultBin
+	return agent.Parse(string(c.Agent)).Binary()
 }
 
 func (c *Client) timeout() time.Duration {
@@ -109,37 +110,34 @@ func (c *Client) Available() bool {
 	return err == nil
 }
 
-// Interpret runs `<bin> -p <Instruction> --output-format text` (plus
-// `--model <Model>` when set), delivering contextText on STDIN — never on
+// Interpret uses the selected agent's bounded headless argv with an optional
+// model override, delivering contextText on STDIN — never on
 // argv. It returns the RAW trimmed stdout (callers must Parse it; the raw
 // string is never displayed), or ErrNotFound / ErrTimeout / ErrNonZeroExit.
 // Exactly one attempt, hard timeout, no retries.
 func (c *Client) Interpret(ctx context.Context, contextText string) (string, error) {
-	out, err := runClaude(ctx, c.bin(), c.Model, Instruction, capContext(contextText, maxContextBytes), c.timeout())
+	out, err := runAgent(ctx, agent.Parse(string(c.Agent)), c.bin(), c.Model, Instruction, capContext(contextText, maxContextBytes), c.timeout())
 	if err != nil {
 		return "", err
 	}
 	return strings.TrimSpace(out), nil
 }
 
-// runClaude is the exec seam (identical shape to internal/brain's). Tests
-// override it to assert bin/model/instruction/stdin/timeout without running
-// claude.
-var runClaude = func(ctx context.Context, bin, model, instruction, stdin string, timeout time.Duration) (string, error) {
+// runAgent is the exec seam. Tests assert agent/bin/model/instruction/stdin/timeout
+// without launching a real CLI. Reuse the review invocation posture: Codex is
+// sandboxed read-only; OpenCode inherits its own non-interactive permissions.
+var runAgent = func(ctx context.Context, kind agent.Kind, bin, model, instruction, stdin string, timeout time.Duration) (string, error) {
 	cctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	args := []string{"-p", instruction, "--output-format", "text"}
-	if model != "" {
-		args = append(args, "--model", model)
-	}
+	args := agent.InterpretArgs(kind, instruction, model)
 	cmd := exec.CommandContext(cctx, bin, args...)
 	cmd.Stdin = strings.NewReader(stdin) // context on stdin, never argv
 	stdout := &cappedBuffer{cap: maxOutputBytes}
 	stderr := &cappedBuffer{cap: maxStderrBytes}
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
-	// cmd.Env left nil: the child inherits the daemon env (claude auth).
+	// cmd.Env left nil: the child inherits the daemon env (agent auth).
 
 	err := cmd.Run()
 	if e := classifyRunErr(err, cctx.Err(), stderr.String(), timeout); e != nil {

@@ -280,6 +280,16 @@ func ReviewArgs(k Kind, instruction, model string) []string {
 	}
 }
 
+// InterpretArgs uses the review posture for context-only status interpretation.
+// The daemon may start outside a checkout, so Codex must not require a git repo.
+func InterpretArgs(k Kind, instruction, model string) []string {
+	args := ReviewArgs(k, instruction, model)
+	if Parse(string(k)) == Codex {
+		args = append(args[:len(args)-1], "--skip-git-repo-check", instruction)
+	}
+	return args
+}
+
 // ReviewStreamArgs is ReviewArgs for a VISIBLE review — one run in a tmux pane a
 // human watches. Only Claude needs a different argv: a plain `claude -p` prints
 // NOTHING until it finishes, so the visible pass asks for the stream-json event

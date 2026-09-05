@@ -284,7 +284,11 @@ func helperResults(cfg *config.Config) []Result {
 		add("brain agent", "claude")
 	}
 	if cfg.StatusAgent.Enabled {
-		add("status agent", "claude")
+		binary := cfg.StatusAgent.Bin
+		if binary == "" {
+			binary = agent.Parse(cfg.StatusAgent.Agent).Binary()
+		}
+		add("status agent", binary)
 	}
 	for _, p := range cfg.EffectiveReviewProviders() {
 		if k, ok := config.ReviewAgentFor(string(p.Provider)); p.Enabled && ok {

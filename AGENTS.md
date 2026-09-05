@@ -17,8 +17,9 @@ catalog has seven kinds in three swappable families (agent / cli / bot-watch), s
 which agent reviews, which CLI reviews, and whose GitHub review is relayed are
 all config. Beware the **two distinct** uses of "Codex": (1) the pluggable
 coding agent spawned per issue (above), versus (2) lola-internal helpers that
-always shell `Codex -p` regardless of that setting — the `[brain]` summarizer
-(`internal/brain`) and `[statusagent]`. A review provider is a THIRD thing: it
+use their own settings independently of that choice: the `[brain]` summarizer
+(`internal/brain`) remains Claude-only, while `[statusagent].agent` selects
+Claude (default), Codex, or OpenCode. A review provider is a THIRD thing: it
 names its own agent per provider (`codex-session` runs codex) and follows neither
 the session's `agent` setting nor brain's hardcoded Codex.
 
@@ -157,8 +158,8 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   summary must never reach the worker, while these findings do (sanitized +
   idle-gated).
 - `internal/statusagent` — the OPT-IN status interpreter: one bounded
-  `Codex -p` per interpretation (default `--model sonnet`) judging what an
-  agent is ACTUALLY doing from pane/events/PR context. Output is parsed,
+  headless agent call per interpretation (`[statusagent].agent`; default Claude
+  with `--model sonnet`) judging what an agent is ACTUALLY doing from pane/events/PR context. Output is parsed,
   whitelisted, clamped — and DISPLAY-ONLY (see the invariant below).
 - `internal/agent` — the pluggable coding-agent leaf (stdlib + regexp only; must
   NOT import config/session/hook/runtime/attention): the `Codex`|`codex`|

@@ -1,12 +1,15 @@
 <script lang="ts">
-  import { onMount, onDestroy } from "svelte";
+  import { onMount, onDestroy, tick } from "svelte";
   import Modal from "$lib/components/Modal.svelte";
   import Tabs from "$lib/components/Tabs.svelte";
   import HelpText from "$lib/components/HelpText.svelte";
   import Button from "$lib/components/Button.svelte";
+  import CheckboxOptions from "$lib/components/CheckboxOptions.svelte";
+  import { PICKUP_FIELDS, LABEL_MATCHING, REPEAT_PICKUP, ENTRY_FORMAT } from "$lib/settingsFields";
   import Checkbox from "$lib/components/Checkbox.svelte";
+  import AgentModelFields from "$lib/components/AgentModelFields.svelte";
   import PresetInput from "$lib/components/PresetInput.svelte";
-  import { CLAUDE_MODELS, modelsFor, POLL_INTERVALS, BRANCH_PREFIXES, CLAUDE_BINARIES, BASE_FLAGS } from "$lib/settingPresets";
+  import { POLL_INTERVALS, BRANCH_PREFIXES, BASE_FLAGS } from "$lib/settingPresets";
   import Select from "$lib/components/Select.svelte";
   import QRCode from "$lib/components/QRCode.svelte";
   import { store } from "$lib/store.svelte";
@@ -27,6 +30,8 @@
   let loading = $state(true);
   let loadError = $state("");
   let saving = $state(false);
+  const globalCapError = $derived(dto && (!Number.isInteger(dto.globalCap) || dto.globalCap < 1) ? "Enter a whole number of at least 1." : "");
+  const projectCapError = $derived(dto && (!Number.isInteger(dto.concurrencyCap) || dto.concurrencyCap < 0) ? "Enter a whole number of 0 or more." : "");
   // A rejected SaveSettings used to surface only as a footer flash — behind this
   // backdrop, truncated, gone in 4s — so it read like a save that just didn't
   // close. Held here and shown inline instead; cleared on the next attempt.
@@ -155,8 +160,9 @@
     dto.remoteBind = v;
   }
 
-  async function loadWorkspaceLabels() {
-    if (wsRequested) return;
+  async function loadWorkspaceLabels(retry = false) {
+    if (wsLoading || (wsRequested && !retry)) return;
+    wsErr = "";
     wsRequested = true;
     wsLoading = true;
     try {
@@ -289,18 +295,16 @@
     lazyLoadFor(id);
   }
 
-  const AGENTS = ["claude", "codex", "opencode"];
+  const statusBinaries = new Map<string, string>();
 
   const inputCls =
     "w-full rounded border border-edge bg-canvas px-2 py-1.5 text-ink outline-none focus:border-accent placeholder:text-placeholder";
-  const rowCls = "grid grid-cols-[11rem_1fr] items-center gap-3";
-  const rowTopCls = "grid grid-cols-[11rem_1fr] items-start gap-3";
+  const formId = $props.id();
+  const rowCls = "settings-field grid min-w-0 grid-cols-[11rem_minmax(0,1fr)] items-baseline gap-3";
+  const rowTopCls = "settings-field grid min-w-0 grid-cols-[11rem_minmax(0,1fr)] items-start gap-3";
   const hintCls = "mt-1 block text-sm text-faint";
 
-  function toggleId(arr: string[] | null, id: string): string[] {
-    const a = arr ?? [];
-    return a.includes(id) ? a.filter((x) => x !== id) : [...a, id];
-  }
+
 
   onMount(async () => {
     try {
@@ -318,7 +322,13 @@
   });
 
   async function save() {
-    if (!dto) return;
+    if (!dto || saving) return;
+    if (globalCapError || projectCapError) {
+      tab = "defaults";
+      await tick();
+      document.getElementById(`${formId}-${globalCapError ? "global" : "project"}-cap`)?.focus();
+      return;
+    }
     saving = true;
     saveErr = "";
     try {
@@ -729,28 +739,34 @@
 
 {#snippet areaRow(caption: string, value: string[] | null, onChange: (v: string[]) => void, placeholder = "", hint = "")}
   <div class={rowTopCls}>
-    <span class="text-faint">{caption}</span>
+    <span class="flex items-center gap-1.5 text-faint">
+      <label for={`${formId}-${caption}`}>{caption}</label>
+      {#if hint && !hint.startsWith("one ")}<HelpText label={caption} detail={hint} />{/if}
+    </span>
     <span>
       <textarea
-        class="{inputCls} resize-y font-mono"
+        id={`${formId}-${caption}`}
+        class="{inputCls} block resize-y font-mono"
         aria-label={caption}
+        aria-describedby={ENTRY_FORMAT[caption] ? `${formId}-${caption}-format` : undefined}
         rows="3"
         spellcheck="false"
         {placeholder}
         value={linesToText(value)}
         oninput={(e) => onChange(splitLines(e.currentTarget.value))}
       ></textarea>
-      {#if hint}<span class={hintCls}>{hint}</span>{/if}
+      {#if ENTRY_FORMAT[caption]}<span id={`${formId}-${caption}-format`} class={hintCls}>{ENTRY_FORMAT[caption]}</span>{/if}
     </span>
   </div>
 {/snippet}
 
 {#snippet selectRow(caption: string, current: string, options: LinearOption[], onChange: (v: string) => void, anyLabel = "", hint = "")}
-  <div class={hint ? rowTopCls : rowCls}>
+  <div class={rowCls}>
     <span class="text-faint">{caption}</span>
     <span>
       <Select aria-label={caption} value={current} onchange={(e) => onChange(e.currentTarget.value)}>
         {#if anyLabel}<option value="">{anyLabel}</option>{/if}
+        {#if current && !options.some((o) => o.id === current)}<option value={current}>{current} (current value)</option>{/if}
         {#each options as o (o.id)}<option value={o.id}>{o.label}</option>{/each}
       </Select>
       {#if hint}<span class={hintCls}>{hint}</span>{/if}
@@ -787,8 +803,8 @@
     <div class="py-10 text-center text-bad">{loadError}</div>
   {:else if dto}
     {@const d = dto}
-    <div class="grid min-h-0 grid-cols-[11.5rem_minmax(0,1fr)] overflow-hidden">
-    <nav aria-label="Settings sections" class="min-h-0 overflow-y-auto overscroll-contain border-r border-edge p-4">
+    <div class="settings-layout grid min-h-0 grid-cols-[11.5rem_minmax(0,1fr)] overflow-hidden">
+    <nav aria-label="Settings sections" class="settings-nav min-h-0 overflow-y-auto overscroll-contain border-r border-edge p-4">
       <Tabs tabs={TABS} active={tab} onSelect={selectTab} vertical />
     </nav>
 
@@ -798,28 +814,26 @@
       {#if tab === "defaults"}
         <section>
           {@render head("General")}
-          <div class="copy mb-4 text-sm text-faint"><HelpText label="session limits" summary="Agent and session limits." detail="Choose the coding agent and how many sessions can run at once. Projects can override their agent and limit." /></div>
+          <div class="copy mb-4 text-sm text-faint"><HelpText label="session limits" summary="Workspace limit and project defaults." detail="Choose the coding agent and how many sessions can run at once. Projects can override their agent and limit." /></div>
           <div class="space-y-2">
             <label class={rowCls}>
               <span class="text-faint">Total running agents</span>
-              <input class={inputCls} type="number" min="0" bind:value={d.globalCap} />
+              <span>
+                <input id={`${formId}-global-cap`} aria-label="Total running agents" class={inputCls} type="number" min="1" step="1" bind:value={d.globalCap}
+                  aria-invalid={!!globalCapError} aria-describedby={`${formId}-global-cap-help`} />
+                <span id={`${formId}-global-cap-help`} class={hintCls} aria-live="polite">{globalCapError || "Maximum across all projects."}</span>
+              </span>
             </label>
             <label class={rowCls}>
               <span class="text-faint">Agents per project</span>
-              <input class={inputCls} type="number" min="0" bind:value={d.concurrencyCap} />
+              <span>
+                <input id={`${formId}-project-cap`} aria-label="Agents per project" class={inputCls} type="number" min="0" step="1" bind:value={d.concurrencyCap}
+                  aria-invalid={!!projectCapError} aria-describedby={`${formId}-project-cap-help`} />
+                <span id={`${formId}-project-cap-help`} class={hintCls} aria-live="polite">{projectCapError || (d.concurrencyCap === 0 ? "Set a limit in each project." : "Default limit. Projects can override it.")}</span>
+              </span>
             </label>
-            <div class={rowCls}>
-              <span class="text-faint">Agent</span>
-              <!-- Segmented control: a hairline rail with a 2px gutter, so the
-                   selected chip is a rounded button INSIDE it rather than a
-                   flush-cut segment. Same shape as every other segmented control
-                   in the app (lens picker, scope picker, agent/shell). -->
-              <div class="inline-flex w-fit items-center gap-0.5 rounded-md border border-edge p-0.5">
-                {#each AGENTS as a (a)}
-                  <Button selected={d.agent === a} onclick={() => { d.agent = a; }}>{a}</Button>
-                {/each}
-              </div>
-            </div>
+            <AgentModelFields provider={d.agent || "claude"} providerLabel="Default agent" rowClass={rowCls}
+              onProviderChange={(value) => { d.agent = value; }} />
             <details class="border-t border-edge pt-3">
               <summary class="cursor-pointer text-faint">Polling frequency</summary>
               <div class="mt-3">
@@ -913,11 +927,13 @@
 
             <h4 class="border-t border-edge pt-4 text-ink">Issue pickup</h4>
             {#if wsLoading}
-              <p class="text-sm text-faint">loading workspace labels…</p>
+              <p role="status" class="text-sm text-faint">Loading workspace labels…</p>
             {:else if wsErr}
-              <p class="rounded border border-warn/40 bg-warn/10 px-3 py-2 text-sm text-warn">
-                couldn't load workspace labels ({wsErr}) — enter the UUIDs by hand below
-              </p>
+              <div role="alert" class="rounded border border-warn/40 bg-warn/10 px-3 py-2 text-sm text-warn">
+                <p>Couldn’t load workspace labels. Retry or enter IDs manually below.</p>
+                <HelpText label="workspace labels error" detail={wsErr} />
+                <Button size="sm" onclick={() => void loadWorkspaceLabels(true)}>Retry workspace labels</Button>
+              </div>
             {:else if wsLabels && wsLabels.length === 0}
               <p class="rounded border border-edge bg-canvas px-3 py-2 text-sm text-faint">
                 This workspace has no organisation-level labels. A shared default is inherited by projects on any team, so it should be one —
@@ -929,17 +945,8 @@
               <div class={rowTopCls}>
                 <span class="text-faint">Match labels</span>
                 <span>
-                  <div class="max-h-36 space-y-1 overflow-auto rounded border border-edge p-2">
-                    {#each wsLabels ?? [] as o (o.id)}
-                      <label class="flex items-center gap-2 text-ink">
-                        <Checkbox
-                          checked={(d.matchLabels ?? []).includes(o.id)}
-                          onchange={() => { d.matchLabels = toggleId(d.matchLabels, o.id); }}
-                        />
-                        <span class="truncate">{o.label}</span>
-                      </label>
-                    {/each}
-                  </div>
+                  <CheckboxOptions label="Match labels" options={wsLabels ?? []} selected={d.matchLabels}
+                    onChange={(value) => { d.matchLabels = value; }} />
                   <span class={hintCls}>Workspace labels only.</span>
                 </span>
               </div>
@@ -954,29 +961,27 @@
             {/if}
 
             {@render selectRow(
-              "Match mode",
+              PICKUP_FIELDS.matchMode,
               d.matchMode,
-              [
-                { id: "any", label: "any label" },
-                { id: "all", label: "all labels" },
-              ],
+              LABEL_MATCHING,
               (v) => { d.matchMode = v; },
             )}
             {@render selectRow(
-              "Dedup mode",
+              PICKUP_FIELDS.dedupMode,
               d.dedupMode,
-              [
-                { id: "label", label: "label (flip a label on send)" },
-                { id: "seen", label: "seen (remember dispatched)" },
-                { id: "state", label: "state (Linear workflow state)" },
-              ],
+              REPEAT_PICKUP,
               (v) => { d.dedupMode = v; },
             )}
-            {@render labelRow("On-sent set label", d.onSentSetLabel, (v) => { d.onSentSetLabel = v; })}
+            {#if d.dedupMode === "label"}
+              {@render labelRow(PICKUP_FIELDS.onSentSetLabel, d.onSentSetLabel, (v) => { d.onSentSetLabel = v; })}
+            {/if}
             {@render labelRow("Blocked label", d.blockedLabelId, (v) => { d.blockedLabelId = v; })}
             {#if sortKeys.length}
               <div class={rowTopCls}>
-                <span class="text-faint">Priority sort</span>
+                <span class="flex items-center gap-1.5 text-faint">
+                  <span>Priority sort</span>
+                  <HelpText label="priority order" detail="Numbers show the tie-break order. Click a key to add or remove it. Empty uses priority, then creation time." />
+                </span>
                 <span>
                   <div class="space-y-1 rounded border border-edge p-2">
                     {#each sortKeys as k (k)}
@@ -985,12 +990,12 @@
                         <span
                           class="w-4 shrink-0 text-center font-mono {rank >= 0 ? 'text-accent-ink' : 'text-faint/40'}"
                         >{rank >= 0 ? rank + 1 : "·"}</span>
-                        <span>{k}</span>
+                        <span>{k === "createdAt" ? "Creation time" : k === "priority" ? "Priority" : k}</span>
                         <span class="text-faint">{SORT_KEY_HELP[k] ?? ""}</span>
                       </Button>
                     {/each}
                   </div>
-                  <HelpText label="priority order" summary="Click to order." detail="Numbers show the tie-break order. Click a key to add or remove it. Empty uses priority, then creation time." />
+                  <span class={hintCls}>Click to order.</span>
                 </span>
               </div>
             {:else}
@@ -1031,10 +1036,8 @@
               <span>Enabled</span>
             </label>
             {#if d.brainEnabled}
-            <div class={rowCls}>
-              <span class="text-faint">Model</span>
-              <PresetInput label="Model" value={d.brainModel} options={CLAUDE_MODELS} onChange={(v) => { d.brainModel = v; }} />
-            </div>
+            <AgentModelFields provider="claude" model={d.brainModel} rowClass={rowCls}
+              onModelChange={(value) => { d.brainModel = value; }} />
             <label class={rowCls}>
               <span class="text-faint">Timeout (s)</span>
               <input class={inputCls} type="number" min="0" bind:value={d.brainTimeout} />
@@ -1055,21 +1058,29 @@
       {:else if tab === "interpreter"}
         <section>
           {@render head("Status interpretation")}
-          <div class="copy mb-3 text-sm text-faint"><HelpText label="status interpretation" summary="AI status estimates · uses tokens." detail="Use Claude to add a status estimate and short headline to each session. This changes only the display and uses additional tokens." /></div>
+          <div class="copy mb-3 text-sm text-faint"><HelpText label="status interpretation" summary="AI status estimates · uses tokens." detail="Use the selected agent to add a status estimate and short headline to each session. This changes only the display and uses additional tokens." /></div>
           <div class="space-y-2">
             <label class="flex cursor-pointer items-center gap-2">
               <Checkbox bind:checked={d.statusAgentEnabled} />
               <span>Enabled</span>
             </label>
             {#if d.statusAgentEnabled}
-            <div class={rowCls}>
-              <span class="text-faint">Binary</span>
-              <PresetInput label="Binary" value={d.statusAgentBin} options={CLAUDE_BINARIES} onChange={(v) => { d.statusAgentBin = v; }} placeholder="/path/to/claude" />
-            </div>
-            <div class={rowCls}>
-              <span class="text-faint">Model</span>
-              <PresetInput label="Model" value={d.statusAgentModel} options={CLAUDE_MODELS} onChange={(v) => { d.statusAgentModel = v; }} />
-            </div>
+            <AgentModelFields provider={d.statusAgentAgent || "claude"} model={d.statusAgentModel ?? ""} rowClass={rowCls}
+              onProviderChange={(value) => {
+                statusBinaries.set(d.statusAgentAgent || "claude", d.statusAgentBin);
+                d.statusAgentAgent = value;
+                d.statusAgentBin = statusBinaries.get(value) ?? "";
+              }}
+              onModelChange={(value) => { d.statusAgentModel = value; }} />
+            <details class="border-t border-edge pt-3">
+              <summary class="cursor-pointer text-faint">Executable override</summary>
+              <div class="mt-3 {rowCls}">
+                <span class="text-faint">Binary</span>
+                <PresetInput label="Binary" value={d.statusAgentBin}
+                  options={[{ value: "", label: `Default (${d.statusAgentAgent || "claude"} on PATH)` }, { value: d.statusAgentAgent || "claude", label: d.statusAgentAgent || "claude" }]}
+                  onChange={(v) => { d.statusAgentBin = v; }} placeholder={`/path/to/${d.statusAgentAgent || "claude"}`} />
+              </div>
+            </details>
             <label class={rowCls}>
               <span class="text-faint">Timeout (s)</span>
               <input class={inputCls} type="number" min="0" bind:value={d.statusAgentTimeout} />
@@ -1341,12 +1352,8 @@
                       </label>
                     {/if}
                     {#if agentOf(p.provider)}
-                      <div class="grid gap-1.5">
-                        <span class="text-faint">Model</span>
-                        <PresetInput label="Model" value={p.model} options={modelsFor(agentOf(p.provider))}
-                          disabled={d.reviewLegacy} onChange={(v) => { p.model = v; }}
-                          placeholder={agentOf(p.provider) === "opencode" ? "provider/model" : "Model ID or alias"} />
-                      </div>
+                      <AgentModelFields provider={agentOf(p.provider)} model={p.model} disabled={d.reviewLegacy}
+                        onModelChange={(value) => { p.model = value; }} />
                     {/if}
                     {#if isWatch(p.provider)}
                       <label class="grid gap-1.5">
@@ -1462,7 +1469,7 @@
        backdrop. A Go error can be long and multi-line, so it wraps rather than
        truncating and stays selectable; dismissable, and cleared on the next save. -->
   {#if saveErr}
-    <div class="mb-3 flex max-h-32 items-start gap-2 overflow-auto rounded border border-bad/40 bg-bad/10 px-3 py-2 text-sm text-bad">
+    <div role="alert" class="mb-3 flex max-h-32 items-start gap-2 overflow-auto rounded border border-bad/40 bg-bad/10 px-3 py-2 text-sm text-bad">
       <span class="min-w-0 flex-1 font-mono break-words whitespace-pre-wrap select-text">{saveErr}</span>
       <Button variant="danger" size="xs" icon aria-label="dismiss error" onclick={() => (saveErr = "")}>✕</Button>
     </div>
@@ -1476,3 +1483,13 @@
     </div>
   {/snippet}
 </Modal>
+
+<style>
+  @media (max-width: 760px) {
+    :global(.settings-field) { grid-template-columns: minmax(0, 1fr); gap: 0.375rem; }
+  }
+  @media (max-width: 540px) {
+    .settings-layout { grid-template-columns: minmax(0, 1fr); overflow-y: auto; }
+    .settings-nav { max-height: 10rem; border-right: 0; border-bottom: 1px solid var(--color-edge); }
+  }
+</style>

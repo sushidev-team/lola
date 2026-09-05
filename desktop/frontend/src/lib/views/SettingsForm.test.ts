@@ -299,9 +299,28 @@ describe("SettingsForm", () => {
       "aria-selected",
       "true",
     );
-    // the active agent segment reflects the loaded value
-    const codex = screen.getByRole("button", { name: "codex" });
-    expect(codex.className).toContain("text-accent-ink");
+    // The shared provider selector reflects the loaded default.
+    expect(screen.getByLabelText("Default agent")).toHaveValue("codex");
+  });
+
+  it("switches status providers with their own model and executable drafts", async () => {
+    GetSettings.mockResolvedValue({ ...fakeDto, statusAgentEnabled: true, statusAgentIncludeTranscript: false, statusAgentAgent: "", statusAgentBin: "/opt/claude", statusAgentModel: "sonnet" });
+    render(SettingsForm);
+    await fireEvent.click(await screen.findByRole("tab", { name: "Status interpretation" }));
+    expect(screen.getByLabelText("Provider")).toHaveValue("claude");
+    await fireEvent.change(screen.getByLabelText("Provider"), { target: { value: "codex" } });
+    expect(screen.getByRole("option", { name: "GPT-6 Astra" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "Sonnet — balanced" })).not.toBeInTheDocument();
+    await fireEvent.change(screen.getByLabelText("Model"), { target: { value: "custom" } });
+    await fireEvent.input(screen.getByLabelText("Custom Model"), { target: { value: "my-codex-model" } });
+    await fireEvent.change(screen.getByLabelText("Provider"), { target: { value: "claude" } });
+    expect(screen.getByLabelText("Custom Binary")).toHaveValue("/opt/claude");
+    expect(screen.getByLabelText("Model")).toHaveDisplayValue("Sonnet — balanced");
+    await fireEvent.change(screen.getByLabelText("Provider"), { target: { value: "codex" } });
+    expect(screen.getByLabelText("Custom Model")).toHaveValue("my-codex-model");
+    await fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+    await waitFor(() => expect(SaveSettings).toHaveBeenCalledTimes(1));
+    expect(SaveSettings.mock.calls[0][0]).toMatchObject({ statusAgentAgent: "codex", statusAgentModel: "my-codex-model", statusAgentBin: "" });
   });
 
   it("tabs the sections instead of stacking them", async () => {
@@ -352,6 +371,39 @@ describe("SettingsForm", () => {
     }
   });
 
+  it("validates General limits before saving and focuses the invalid field", async () => {
+    render(SettingsForm);
+    const total = await screen.findByLabelText("Total running agents");
+    for (const value of ["0", "1.5", ""]) {
+      await fireEvent.input(total, { target: { value } });
+      await fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+      expect(SaveSettings).not.toHaveBeenCalled();
+      expect(total).toHaveAttribute("aria-invalid", "true");
+      expect(total).toHaveFocus();
+    }
+    await fireEvent.input(total, { target: { value: "6" } });
+    await fireEvent.input(screen.getByLabelText("Agents per project"), { target: { value: "0" } });
+    expect(screen.getByText("Set a limit in each project.")).toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+    await waitFor(() => expect(SaveSettings).toHaveBeenCalledTimes(1));
+    expect(SaveSettings.mock.calls[0][0]).toMatchObject({ globalCap: 6, concurrencyCap: 0 });
+  });
+
+  it("retries workspace labels and preserves IDs entered during failure", async () => {
+    WorkspaceLabels.mockRejectedValueOnce(new Error("offline"));
+    render(SettingsForm);
+    await fireEvent.click(await screen.findByRole("tab", { name: "Project defaults" }));
+    await screen.findByRole("button", { name: "Retry workspace labels" });
+    await fireEvent.input(screen.getByLabelText("Blocked label"), { target: { value: "manual-label" } });
+    await fireEvent.click(screen.getByRole("button", { name: "Retry workspace labels" }));
+    await screen.findByRole("checkbox", { name: "agent" });
+    expect(screen.getByLabelText("Blocked label")).toHaveValue("manual-label");
+    expect(WorkspaceLabels).toHaveBeenCalledTimes(2);
+    await fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+    await waitFor(() => expect(SaveSettings).toHaveBeenCalledTimes(1));
+    expect(SaveSettings.mock.calls[0][0].blockedLabelId).toBe("manual-label");
+  });
+
   it("offers workspace-label pickers for all three [defaults] label keys", async () => {
     render(SettingsForm);
     await screen.findByDisplayValue("60s");
@@ -372,7 +424,7 @@ describe("SettingsForm", () => {
     ).toBeChecked();
     expect(screen.getByRole("checkbox", { name: "blocked" })).not.toBeChecked();
     // …and the two single-select keys are real selects, with a "(none)" option.
-    for (const caption of ["On-sent set label", "Blocked label"]) {
+    for (const caption of ["After pickup label", "Blocked label"]) {
       const el = screen.getByLabelText(caption);
       expect(el.tagName).toBe("SELECT");
       expect(
@@ -415,7 +467,7 @@ describe("SettingsForm", () => {
     );
 
     expect(
-      await screen.findByText(/couldn't load workspace labels.*no api key/),
+      await screen.findByText(/Couldn’t load workspace labels/),
     ).toBeInTheDocument();
     expect(screen.getByLabelText("Blocked label").tagName).toBe("INPUT");
     expect(screen.getByLabelText("Match labels")).toHaveValue("lab-1"); // the textarea escape hatch
@@ -433,7 +485,7 @@ describe("SettingsForm", () => {
     expect(
       await screen.findByText(/no organisation-level labels/),
     ).toBeInTheDocument();
-    expect(screen.getByLabelText("On-sent set label").tagName).toBe("INPUT");
+    expect(screen.getByLabelText("After pickup label").tagName).toBe("INPUT");
   });
 
   it("loads the workspace labels once, not on every visit to the tab", async () => {
@@ -696,10 +748,10 @@ describe("SettingsForm", () => {
     await waitFor(() => expect(PrioritySortKeys).toHaveBeenCalled());
     // Click createdAt first, then priority — the reverse of the default.
     await fireEvent.click(
-      await screen.findByRole("button", { name: /createdAt/ }),
+      await screen.findByRole("button", { name: /Creation time/ }),
     );
     await fireEvent.click(
-      await screen.findByRole("button", { name: /priority highest/ }),
+      await screen.findByRole("button", { name: /Priority highest/ }),
     );
 
     await fireEvent.click(screen.getByRole("button", { name: /^save$/i }));

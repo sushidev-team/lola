@@ -702,8 +702,8 @@ deliberately opt-in. `lola doctor` reports whether `claude` is on `PATH`.
 
 ### `[statusagent]` (optional, off by default)
 
-The **status interpreter**: a small bounded `claude -p` pass (default
-`--model sonnet`) that reads one session's observed material — its tmux pane
+The **status interpreter**: a small bounded pass using Claude, Codex, or
+OpenCode (default: Claude with `--model sonnet`) that reads one session's observed material — its tmux pane
 tail, recent status transitions, PR facts, optionally the agent's own
 transcript tail — and judges what the agent is **actually** doing. The result
 shows up as a one-line **headline** ("rewriting the auth middleware tests")
@@ -716,8 +716,9 @@ deterministic pipeline cannot see at all.
 | Key | Type | Description |
 | --- | --- | --- |
 | `enabled` | bool | Master switch. Default `false`; an absent table is also off. |
-| `bin` | string | The claude executable; empty resolves `claude` via `PATH` (pin an absolute path for launchd). |
-| `model` | string | Passed as `--model`. Unset key defaults to `sonnet`; explicitly `""` uses claude's default model. |
+| `agent` | string | Interpreter agent: `claude`, `codex`, or `opencode`. Empty or omitted uses Claude, independently of the worker agent. |
+| `bin` | string | Executable override; empty resolves the selected agent via `PATH` (pin an absolute path for launchd). |
+| `model` | string | Passed as `--model`. Unset uses `sonnet` for Claude and the agent default for Codex/OpenCode. Explicitly `""` uses the selected agent’s default. |
 | `timeout_seconds` | int | Hard cap per interpretation. Must be `>= 0`. Default `60`. |
 | `min_interval_seconds` | int | Per-session debounce between interpretation attempts. Default `120`. |
 | `max_per_cycle` | int | Interpretations queued per 30s observer cycle. Default `2`. |
@@ -1178,10 +1179,10 @@ history in `.lola/codex` retain that home when revived. Codex pane classificatio
 and turn-complete notifications are supported, but structured inline question
 extraction and transcript-based activity detection remain Claude-specific.
 
-**Distinct from lola's internal helpers.** The `[brain]` summarizer and
-`[statusagent]` interpreter still use `claude -p` independently of the worker
-choice. Disable them for an installation without Claude. Reviews have their own
-provider catalog: select `codex-session` to use Codex for review as well.
+**Distinct from lola's internal helpers.** The `[brain]` summarizer still uses
+`claude -p`; disable it for an installation without Claude. The `[statusagent]`
+interpreter chooses its own `agent` independently of the worker. Reviews have
+their own provider catalog: select `codex-session` to use Codex for review as well.
 
 ### Agent fallback (usage limits)
 
