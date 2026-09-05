@@ -179,23 +179,33 @@ describe("ProjectForm", () => {
     expect(getProject).toHaveBeenCalledWith("acme");
     expect(await screen.findByLabelText("Path")).toHaveValue("/Users/me/code/acme");
     expect(screen.getByText("project: acme")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Branch prefix")).not.toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("tab", { name: "Worktree setup" }));
     expect(screen.getByLabelText("Branch prefix")).toHaveValue("acme/");
     // Every tab of the merged overlay is reachable.
-    for (const t of ["Repo", "Filter", "Labels", "Write-back"]) {
+    for (const t of ["General", "Worktree setup", "Issue pickup", "Linear updates"]) {
       expect(screen.getByRole("tab", { name: t })).toBeInTheDocument();
     }
+  });
+
+  it("keeps old label links working and shows labels beside the team filter", async () => {
+    nav.overlayTab = "labels";
+    render(ProjectForm);
+    expect(await screen.findByRole("tab", { name: "Issue pickup" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByLabelText("Team")).toBeInTheDocument();
+    expect(screen.getByText("Match labels")).toBeInTheDocument();
   });
 
   it("honours a deep link to a tab (nav.overlayTab)", async () => {
     nav.overlayTab = "filter";
     render(ProjectForm);
-    expect(await screen.findByRole("tab", { name: "Filter" })).toHaveAttribute("aria-selected", "true");
+    expect(await screen.findByRole("tab", { name: "Issue pickup" })).toHaveAttribute("aria-selected", "true");
   });
 
   it("loads team metadata and renders workflow states as checkboxes, pre-checked from the DTO", async () => {
     render(ProjectForm);
     await waitFor(() => expect(teamMetaFn).toHaveBeenCalledWith("team-uuid-1", false));
-    await fireEvent.click(screen.getByRole("tab", { name: "Filter" }));
+    await fireEvent.click(screen.getByRole("tab", { name: "Issue pickup" }));
 
     const todo = (await screen.findByRole("checkbox", { name: "Todo" })) as HTMLInputElement;
     const doing = screen.getByRole("checkbox", { name: "Doing" }) as HTMLInputElement;
@@ -205,8 +215,8 @@ describe("ProjectForm", () => {
 
   it("toggling a state and saving sends the cleaned DTO via SaveProject", async () => {
     render(ProjectForm);
-    await screen.findByRole("tab", { name: "Repo" }); // the form is loaded
-    await fireEvent.click(screen.getByRole("tab", { name: "Filter" }));
+    await screen.findByRole("tab", { name: "General" }); // the form is loaded
+    await fireEvent.click(screen.getByRole("tab", { name: "Issue pickup" }));
 
     const doing = (await screen.findByRole("checkbox", { name: "Doing" })) as HTMLInputElement;
     await fireEvent.click(doing); // add state-2
@@ -228,8 +238,8 @@ describe("ProjectForm", () => {
     teamsFn.mockRejectedValueOnce(new Error("no api key"));
     teamMetaFn.mockRejectedValueOnce(new Error("no api key"));
     render(ProjectForm);
-    await screen.findByRole("tab", { name: "Repo" }); // the form is loaded
-    await fireEvent.click(screen.getByRole("tab", { name: "Filter" }));
+    await screen.findByRole("tab", { name: "General" }); // the form is loaded
+    await fireEvent.click(screen.getByRole("tab", { name: "Issue pickup" }));
 
     // With no team list the team field is a raw text input holding the UUID.
     await waitFor(() => expect(screen.getByLabelText("Team")).toHaveValue("team-uuid-1"));
@@ -237,8 +247,8 @@ describe("ProjectForm", () => {
 
   it("clears the team-scoped IDs when the team changes, but leaves inherited ones alone", async () => {
     render(ProjectForm);
-    await screen.findByRole("tab", { name: "Repo" }); // the form is loaded
-    await fireEvent.click(screen.getByRole("tab", { name: "Filter" }));
+    await screen.findByRole("tab", { name: "General" }); // the form is loaded
+    await fireEvent.click(screen.getByRole("tab", { name: "Issue pickup" }));
 
     const team = await screen.findByLabelText("Team");
     await fireEvent.change(team, { target: { value: "team-uuid-2" } });
@@ -262,6 +272,7 @@ describe("ProjectForm", () => {
 
   it("ghosts an inherited field and chips it 'inherited'", async () => {
     render(ProjectForm);
+    await fireEvent.click(await screen.findByRole("tab", { name: "Worktree setup" }));
     const symlinks = await screen.findByLabelText("Symlinks");
     expect(symlinks.className).toContain("opacity-55");
     expect(within(rowOf(symlinks)).getByRole("button", { name: "Inherited" })).toBeInTheDocument();
@@ -274,6 +285,7 @@ describe("ProjectForm", () => {
 
   it("edits dev_commands as a plain per-project list — no inherit chip", async () => {
     render(ProjectForm);
+    await fireEvent.click(await screen.findByRole("tab", { name: "Worktree setup" }));
     const dev = await screen.findByLabelText("Dev commands");
     // dev_commands has no [defaults] counterpart on purpose, so the row carries
     // neither the ghost nor an Inherited/Override chip.
@@ -290,6 +302,7 @@ describe("ProjectForm", () => {
 
   it("promotes an inherited field to an override when it is edited", async () => {
     render(ProjectForm);
+    await fireEvent.click(await screen.findByRole("tab", { name: "Worktree setup" }));
     const symlinks = await screen.findByLabelText("Symlinks");
 
     await fireEvent.input(symlinks, { target: { value: "own-link" } });
@@ -306,6 +319,7 @@ describe("ProjectForm", () => {
 
   it("promotes an inherited field when its chip is clicked", async () => {
     render(ProjectForm);
+    await fireEvent.click(await screen.findByRole("tab", { name: "Worktree setup" }));
     const symlinks = await screen.findByLabelText("Symlinks");
 
     await fireEvent.click(within(rowOf(symlinks)).getByRole("button", { name: "Inherited" }));
@@ -315,6 +329,7 @@ describe("ProjectForm", () => {
 
   it("reverting an override refills the control from [defaults]", async () => {
     render(ProjectForm);
+    await fireEvent.click(await screen.findByRole("tab", { name: "Worktree setup" }));
     const postCreate = await screen.findByLabelText("Post-create");
     expect(postCreate).toHaveValue("npm ci");
 
@@ -335,6 +350,7 @@ describe("ProjectForm", () => {
   it("still reverts when [defaults] can't be read, keeping the shown value", async () => {
     getSettings.mockRejectedValueOnce(new Error("no config"));
     render(ProjectForm);
+    await fireEvent.click(await screen.findByRole("tab", { name: "Worktree setup" }));
     const postCreate = await screen.findByLabelText("Post-create");
 
     await fireEvent.click(within(rowOf(postCreate)).getByRole("button", { name: "Override" }));

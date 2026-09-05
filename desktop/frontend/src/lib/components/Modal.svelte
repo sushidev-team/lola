@@ -24,9 +24,16 @@
   function focusables(): HTMLElement[] {
     return Array.from(
       dialog.querySelectorAll<HTMLElement>(
-        'a[href],button:not([disabled]),input:not([disabled]),textarea:not([disabled]),select:not([disabled]),[tabindex]:not([tabindex="-1"])',
+        'summary,a[href],button:not([disabled]),input:not([disabled]),textarea:not([disabled]),select:not([disabled]),[tabindex]:not([tabindex="-1"])',
       ),
-    );
+    ).filter((el) => {
+      let ancestor = el.parentElement;
+      while (ancestor && ancestor !== dialog) {
+        if (ancestor instanceof HTMLDetailsElement && !ancestor.open && ancestor.querySelector("summary") !== el) return false;
+        ancestor = ancestor.parentElement;
+      }
+      return true;
+    });
   }
 
   onMount(() => {

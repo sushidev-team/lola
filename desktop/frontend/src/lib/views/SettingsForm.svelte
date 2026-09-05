@@ -43,18 +43,15 @@
   }
 
   const TABS = [
-    { id: "defaults", label: "Defaults" },
-    { id: "linear", label: "Linear" },
-    { id: "project", label: "Project defaults" },
-    { id: "notify", label: "Notify" },
-    { id: "brain", label: "Brain" },
-    { id: "interpreter", label: "Interpreter" },
-    // "Review", not "CodeRabbit": the body is the whole [[review.provider]]
-    // catalog — every cli, watch AND agent kind — so naming
-    // the tab after one provider hid the other two.
-    { id: "review", label: "Review" },
-    { id: "remote", label: "Remote" },
-    { id: "appearance", label: "Appearance" },
+    { id: "defaults", label: "General", group: "Workspace" },
+    { id: "project", label: "Project defaults", group: "Workspace" },
+    { id: "appearance", label: "Appearance", group: "Workspace" },
+    { id: "linear", label: "Linear", group: "Connections" },
+    { id: "notify", label: "Notifications", group: "Connections" },
+    { id: "remote", label: "Phone access", group: "Connections" },
+    { id: "review", label: "Review", group: "Automation" },
+    { id: "brain", label: "Summaries", group: "Automation" },
+    { id: "interpreter", label: "Status interpretation", group: "Automation" },
   ];
 
   // Every tab body is an explicit `{:else if tab === …}` branch with no catch-all,
@@ -773,33 +770,31 @@
   {/if}
 {/snippet}
 
-<Modal title="settings" onClose={requestClose} width="640px">
+<Modal title="Settings" onClose={requestClose} width="880px">
   {#if loading}
     <div class="py-10 text-center text-faint">loading settings…</div>
   {:else if loadError}
     <div class="py-10 text-center text-bad">{loadError}</div>
   {:else if dto}
     {@const d = dto}
-    <Tabs tabs={TABS} active={tab} onSelect={selectTab} />
+    <div class="grid grid-cols-[10.5rem_minmax(0,1fr)] gap-6">
+    <Tabs tabs={TABS} active={tab} onSelect={selectTab} vertical />
 
     <!-- No size class: every field caption, control and option inherits the
          13px base. Only the faint explanations and micro-labels step down. -->
     <div>
       {#if tab === "defaults"}
         <section>
-          {@render head("Defaults")}
+          {@render head("General")}
+          <p class="copy mb-4 text-sm text-faint">Choose the coding agent and how many sessions can run at once. Projects can override their agent and limit.</p>
           <div class="space-y-2">
             <label class={rowCls}>
-              <span class="text-faint">Global cap</span>
+              <span class="text-faint">Total running agents</span>
               <input class={inputCls} type="number" min="0" bind:value={d.globalCap} />
             </label>
             <label class={rowCls}>
-              <span class="text-faint">Concurrency cap</span>
+              <span class="text-faint">Agents per project</span>
               <input class={inputCls} type="number" min="0" bind:value={d.concurrencyCap} />
-            </label>
-            <label class={rowCls}>
-              <span class="text-faint">Poll interval</span>
-              <input class={inputCls} type="text" placeholder="60s" bind:value={d.pollInterval} />
             </label>
             <div class={rowCls}>
               <span class="text-faint">Agent</span>
@@ -813,6 +808,15 @@
                 {/each}
               </div>
             </div>
+            <details class="border-t border-edge pt-3">
+              <summary class="cursor-pointer text-faint">Polling frequency</summary>
+              <div class="mt-3">
+            <label class={rowCls}>
+              <span class="text-faint">Poll interval</span>
+              <input class={inputCls} type="text" placeholder="60s" bind:value={d.pollInterval} />
+            </label>
+              </div>
+            </details>
           </div>
         </section>
       {:else if tab === "linear"}
@@ -889,11 +893,11 @@
         <section>
           {@render head("Project defaults")}
           <p class="copy mb-3 text-sm text-faint">
-            Every [[project]] that omits one of these keys inherits it. The project editor shows an inherited value ghosted. The label fields
-            offer <span class="text-ink">workspace</span> labels, which apply across every team — a project's own pickers offer that project's
-            team labels instead.
+            Shared settings for all projects. Override them in an individual project when needed.
+            Shared labels must be workspace labels so they work across teams.
           </p>
           <div class="space-y-2">
+            <h4 class="mb-3 text-ink">Worktree setup</h4>
             <label class={rowCls}>
               <span class="text-faint">Branch prefix</span>
               <input class="{inputCls} font-mono" type="text" placeholder="lola/" bind:value={d.branchPrefix} />
@@ -902,6 +906,7 @@
             {@render areaRow("Post-create", d.postCreate, (v) => { d.postCreate = v; }, "npm install", "one command per line")}
             {@render areaRow("Env", d.env, (v) => { d.env = v; }, "KEY=value", "one KEY=value per line")}
 
+            <h4 class="border-t border-edge pt-4 text-ink">Issue pickup</h4>
             {#if wsLoading}
               <p class="text-sm text-faint">loading workspace labels…</p>
             {:else if wsErr}
@@ -998,7 +1003,7 @@
         </section>
       {:else if tab === "notify"}
         <section>
-          {@render head("Notify")}
+          {@render head("Notifications")}
           <div class="space-y-2">
             <label class="flex cursor-pointer items-center gap-2">
               <Checkbox bind:checked={d.notifyDesktop} />
@@ -1015,12 +1020,14 @@
         </section>
       {:else if tab === "brain"}
         <section>
-          {@render head("Brain")}
+          {@render head("Summaries")}
+          <p class="copy mb-3 text-sm text-faint">Use Claude to summarize sessions that need attention or are approved. Summaries use additional tokens.</p>
           <div class="space-y-2">
             <label class="flex cursor-pointer items-center gap-2">
               <Checkbox bind:checked={d.brainEnabled} />
               <span>Enabled</span>
             </label>
+            {#if d.brainEnabled}
             <label class={rowCls}>
               <span class="text-faint">Model</span>
               <input class={inputCls} type="text" placeholder="claude-…" bind:value={d.brainModel} />
@@ -1039,21 +1046,21 @@
                 <span>Summarize on approved</span>
               </label>
             </div>
+            {/if}
           </div>
         </section>
       {:else if tab === "interpreter"}
         <section>
-          {@render head("Interpreter")}
+          {@render head("Status interpretation")}
           <p class="copy mb-3 text-sm text-faint">
-            The <span class="font-mono text-ink">[statusagent]</span> status interpreter: a small bounded claude pass that judges what
-            each agent is <span class="text-ink">actually</span> doing (an "≈" overlay + one-line headline in the session list).
-            Display only — it can never change the real status or type into an agent. Each interpretation spends tokens.
+            Use Claude to add a status estimate and short headline to each session. This changes only the display and uses additional tokens.
           </p>
           <div class="space-y-2">
             <label class="flex cursor-pointer items-center gap-2">
               <Checkbox bind:checked={d.statusAgentEnabled} />
               <span>Enabled</span>
             </label>
+            {#if d.statusAgentEnabled}
             <label class={rowCls}>
               <span class="text-faint">Binary</span>
               <input class={inputCls} type="text" placeholder="claude (via PATH)" bind:value={d.statusAgentBin} />
@@ -1082,16 +1089,14 @@
               <Checkbox bind:checked={d.statusAgentIncludeTranscript} />
               <span>Include transcript tail</span>
             </label>
+            {/if}
           </div>
         </section>
       {:else if tab === "remote"}
         <section>
-          {@render head("Remote")}
+          {@render head("Phone access")}
           <p class="copy mb-3 text-sm text-faint">
-            The <span class="font-mono text-ink">[remote]</span> phone listener: the TLS socket the
-            <span class="text-ink">Lola</span> mobile app connects to. Off by default, and the default is chosen for what enabling
-            it <span class="text-ink">grants</span> rather than for what it costs — a paired device can read your sessions, watch any
-            pane and type arbitrary prose into a running coding agent.
+            Connect the Lola mobile app to this Mac. Paired phones can read sessions, watch terminals and send messages to your coding agents.
           </p>
           <div class="space-y-2">
             <label class="flex cursor-pointer items-center gap-2">
@@ -1214,7 +1219,7 @@
             <div class="mt-2 flex items-center gap-3">
               <Button size="sm" loading={regenBusy} onclick={askRegenerate}>Regenerate key</Button>
               <span class="text-xs text-faint">
-                Milestone 1's only revocation — it disconnects every paired phone.
+                Disconnects every paired phone. Reconnect them using the new code.
               </span>
             </div>
             {#if regenDone}
@@ -1274,21 +1279,13 @@
             {/if}
           </div>
 
-          <p class="copy mt-3 text-sm text-faint">
-            Milestone 1 only exists in a daemon built with <span class="font-mono text-ink">-tags lola_insecure</span>, and that build
-            <span class="text-ink"> forces the bind to loopback</span> whatever is set here, logging the override. A phone therefore
-            reaches it through a forward rather than directly — see <span class="font-mono text-ink">mobile/README.md</span>. Pairing,
-            device identities and revocation are milestone 2; until then authentication is a single bearer key from the daemon's
-            environment.
-          </p>
+
         </section>
       {:else if tab === "appearance"}
         <section>
           {@render head("Appearance")}
           <p class="copy mb-3 text-sm text-faint">
-            Sets <span class="font-mono text-ink">[ui].theme</span>, which colours the app chrome and every terminal from one palette.
-            Picking a flavor <span class="text-ink">previews it immediately</span>; save writes it to config.toml, cancel puts the old one
-            back.
+            Preview a theme for the app and terminals. Save to keep it, or cancel to restore your current theme.
           </p>
           <!-- Grid, not flex: WKWebView does not stretch a flex child inside a
                flex column, so a flex layout that fills correctly in Chrome
@@ -1440,7 +1437,7 @@
                 </div>
 
                 <div class={rowTopCls}>
-                  <span class="text-faint">Transports</span>
+                  <span class="text-faint">Share findings</span>
                   <div class="flex flex-wrap gap-x-6 gap-y-2">
                     {#each transportsFor(p.provider) as t}
                       <label class="flex cursor-pointer items-center gap-2">
@@ -1504,12 +1501,13 @@
             <div class="flex flex-wrap items-center gap-2 border-t border-edge/40 pt-4">
               <span class="text-sm text-faint">Add provider:</span>
               {#each missingKinds() as k}
-                <Button variant="secondary" title={kindLabel(k)} onclick={() => addProvider(k)}>{k}</Button>
+                <Button variant="secondary" class="whitespace-normal! text-left" title={kindLabel(k)} onclick={() => addProvider(k)}>{kindLabel(k)}</Button>
               {/each}
             </div>
           {/if}
         </div>
       {/if}
+    </div>
     </div>
   {/if}
 

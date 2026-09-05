@@ -26,10 +26,10 @@
   // A project IS the poll unit, so this one overlay covers the whole
   // [[project]] table: repo setup, the Linear filter, labels and write-back.
   const TABS = [
-    { id: "repo", label: "Repo" },
-    { id: "filter", label: "Filter" },
-    { id: "labels", label: "Labels" },
-    { id: "writeback", label: "Write-back" },
+    { id: "repo", label: "General" },
+    { id: "worktree", label: "Worktree setup" },
+    { id: "filter", label: "Issue pickup" },
+    { id: "writeback", label: "Linear updates" },
   ];
 
   // The [defaults]-inheritable keys, mirroring config.ProjectInherits. A set bit
@@ -60,7 +60,7 @@
   // close. Held here and shown inline instead; cleared on the next attempt.
   let saveErr = $state("");
   let confirmRemove = $state(false);
-  let tab = $state(nav.overlayTab || "repo");
+  let tab = $state(nav.overlayTab === "labels" ? "filter" : TABS.some((t) => t.id === nav.overlayTab) ? nav.overlayTab : "repo");
 
   // The DTO exactly as it was loaded, so a close can tell real edits from an
   // untouched form and only prompt to discard when something changed. Snapshotted
@@ -610,6 +610,7 @@
     <Tabs tabs={TABS} active={tab} onSelect={(id) => (tab = id)} />
 
     {#if tab === "repo"}
+      <p class="copy mb-4 text-sm text-faint">Choose a repository, then check the detected details. Configure automatic issue pickup separately.</p>
       <div class="space-y-2">
         {@render textRow(
           "Label",
@@ -624,22 +625,6 @@
           null,
           false,
           "shown everywhere in the app; rename it any time",
-        )}
-        {@render textRow(
-          "ID",
-          d.name,
-          (v) => {
-            // slugTyping, not slug: trimming mid-typing would eat the hyphen the
-            // moment it is typed, making "nori-app" impossible to enter.
-            d.name = slugTyping(v);
-            idAuto = false;
-          },
-          "nori-app",
-          null,
-          false,
-          renaming
-            ? `rename ${origName} → ${slug(d.name)} · needs no live sessions`
-            : "path segment + tmux name prefix; changing it is a rename",
         )}
         <!-- The folder is the FIRST decision and everything below is derived
              from it, so the chooser sits on the row rather than in a menu. The
@@ -705,8 +690,6 @@
             </span>
           </span>
         </div>
-        {@render textRow("Branch prefix", d.branchPrefix, (v) => { d.branchPrefix = v; }, "lola/", null, false, "empty inherits the [defaults] prefix")}
-
         <!-- agent: "" already means inherit, so no bitmap entry -->
         <div class={rowCls}>
           <span class={labelCls}>Agent</span>
@@ -716,6 +699,33 @@
             {/each}
           </span>
         </div>
+
+        <details class="border-t border-edge pt-3">
+          <summary class="cursor-pointer text-faint">Advanced identity</summary>
+          <div class="mt-3">
+        {@render textRow(
+          "ID",
+          d.name,
+          (v) => {
+            // slugTyping, not slug: trimming mid-typing would eat the hyphen the
+            // moment it is typed, making "nori-app" impossible to enter.
+            d.name = slugTyping(v);
+            idAuto = false;
+          },
+          "nori-app",
+          null,
+          false,
+          renaming
+            ? `rename ${origName} → ${slug(d.name)} · needs no live sessions`
+            : "path segment + tmux name prefix; changing it is a rename",
+        )}
+          </div>
+        </details>
+      </div>
+    {:else if tab === "worktree"}
+      <p class="copy mb-4 text-sm text-faint">Prepare each agent’s checkout and choose how to run the app locally. Leave inherited settings as they are unless this project needs something different.</p>
+      <div class="space-y-2">
+        {@render textRow("Branch prefix", d.branchPrefix, (v) => { d.branchPrefix = v; }, "lola/", null, false, "empty inherits the [defaults] prefix")}
 
         {@render areaRow(
           "Symlinks",
@@ -819,9 +829,7 @@
             <span class={hintCls}>0 uses the [defaults] cap</span>
           </span>
         </div>
-      </div>
-    {:else if tab === "labels"}
-      <div class="space-y-2">
+        <h3 class="border-t border-edge pt-4 text-ink">Labels and repeat pickup</h3>
         {@render multiRow("Match labels", d.matchLabels, meta?.labels ?? null, (v) => { d.matchLabels = v; }, "matchLabels")}
         {@render idRow(
           "Match mode",
@@ -855,10 +863,11 @@
           "onSentSetLabel",
         )}
         <p class="copy pt-1 text-sm text-faint">
-          Label UUIDs are team-scoped — changing the team on the Filter tab clears the ones this project overrides.
+          Label UUIDs are team-scoped — changing the team above clears the ones this project overrides.
         </p>
       </div>
-    {:else}
+    {:else if tab === "writeback"}
+      <p class="copy mb-4 text-sm text-faint">Choose which Linear states and comments Lola updates as work progresses. Leave a state empty to keep it unchanged.</p>
       <div class="space-y-2">
         {@render idRow("On-spawn state", d.onSpawnStateId, meta?.states ?? null, (v) => { d.onSpawnStateId = v; }, "(none)")}
         {@render boolRow("Comment on spawn", d.commentOnSpawn, () => { d.commentOnSpawn = !d.commentOnSpawn; })}

@@ -28,6 +28,7 @@ const fakeDto = {
   agent: "codex",
   notifyDesktop: true,
   slackWebhookEnv: "LOLA_SLACK",
+  statusAgentEnabled: false,
   brainEnabled: false,
   brainModel: "claude-x",
   brainTimeout: 30,
@@ -265,10 +266,36 @@ describe("SettingsForm", () => {
     appearance.paint();
   });
 
+  it("supports vertical keyboard navigation without dirtying settings", async () => {
+    render(SettingsForm);
+    const general = await screen.findByRole("tab", { name: "General" });
+    expect(screen.getByRole("tablist")).toHaveAttribute("aria-orientation", "vertical");
+    await fireEvent.keyDown(general, { key: "ArrowDown" });
+    const project = screen.getByRole("tab", { name: "Project defaults" });
+    expect(project).toHaveFocus();
+    expect(project).toHaveAttribute("aria-selected", "true");
+    await fireEvent.keyDown(project, { key: "End" });
+    expect(screen.getByRole("tab", { name: "Status interpretation" })).toHaveFocus();
+    await fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(closeOverlay).toHaveBeenCalled();
+  });
+
+  it("preserves summary tuning while the feature is disabled", async () => {
+    render(SettingsForm);
+    await fireEvent.click(await screen.findByRole("tab", { name: "Summaries" }));
+    expect(screen.queryByLabelText("Model")).not.toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("checkbox", { name: "Enabled" }));
+    expect(screen.getByLabelText("Model")).toHaveValue("claude-x");
+    await fireEvent.click(screen.getByRole("checkbox", { name: "Enabled" }));
+    await fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(SaveSettings).toHaveBeenCalled());
+    expect(SaveSettings.mock.calls[0][0]).toMatchObject({ brainEnabled: false, brainModel: "claude-x", brainTimeout: 30 });
+  });
+
   it("loads settings on mount and binds fields on the Defaults tab", async () => {
     render(SettingsForm);
     expect(await screen.findByDisplayValue("60s")).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "Defaults" })).toHaveAttribute(
+    expect(screen.getByRole("tab", { name: "General" })).toHaveAttribute(
       "aria-selected",
       "true",
     );
@@ -283,12 +310,12 @@ describe("SettingsForm", () => {
     // The provider-catalog tab is "Review", not "CodeRabbit": it holds every
     // [[review.provider]] kind, claude-session included.
     for (const t of [
-      "Defaults",
+      "General",
       "Project defaults",
-      "Notify",
-      "Brain",
+      "Notifications",
+      "Summaries",
       "Review",
-      "Remote",
+      "Phone access",
       "Appearance",
     ]) {
       expect(screen.getByRole("tab", { name: t })).toBeInTheDocument();
@@ -306,7 +333,7 @@ describe("SettingsForm", () => {
     await waitFor(() => expect(ReviewKinds).toHaveBeenCalled());
     for (const k of reviewKinds) {
       expect(
-        await screen.findByRole("button", { name: k.kind }),
+        await screen.findByRole("button", { name: k.label }),
       ).toBeInTheDocument();
     }
   });
@@ -316,7 +343,7 @@ describe("SettingsForm", () => {
     try {
       render(SettingsForm);
       expect(await screen.findByDisplayValue("60s")).toBeInTheDocument();
-      expect(screen.getByRole("tab", { name: "Defaults" })).toHaveAttribute(
+      expect(screen.getByRole("tab", { name: "General" })).toHaveAttribute(
         "aria-selected",
         "true",
       );
@@ -417,7 +444,7 @@ describe("SettingsForm", () => {
       screen.getByRole("tab", { name: "Project defaults" }),
     );
     await waitFor(() => expect(WorkspaceLabels).toHaveBeenCalledTimes(1));
-    await fireEvent.click(screen.getByRole("tab", { name: "Notify" }));
+    await fireEvent.click(screen.getByRole("tab", { name: "Notifications" }));
     await fireEvent.click(
       screen.getByRole("tab", { name: "Project defaults" }),
     );
@@ -441,7 +468,7 @@ describe("SettingsForm", () => {
     ]);
     render(SettingsForm);
     await screen.findByDisplayValue("60s");
-    await fireEvent.click(screen.getByRole("tab", { name: "Remote" }));
+    await fireEvent.click(screen.getByRole("tab", { name: "Phone access" }));
 
     await waitFor(() => expect(RemoteBinds).toHaveBeenCalled());
     const sel = screen.getByLabelText("Bind") as HTMLSelectElement;
@@ -464,7 +491,7 @@ describe("SettingsForm", () => {
     GetSettings.mockResolvedValue({ ...fakeDto, remoteEnabled: true });
     render(SettingsForm);
     await screen.findByDisplayValue("60s");
-    await fireEvent.click(screen.getByRole("tab", { name: "Remote" }));
+    await fireEvent.click(screen.getByRole("tab", { name: "Phone access" }));
 
     const box = await screen.findByLabelText(/Advertise on the local network/i);
     expect(box).not.toBeChecked();
@@ -485,7 +512,7 @@ describe("SettingsForm", () => {
     });
     render(SettingsForm);
     await screen.findByDisplayValue("60s");
-    await fireEvent.click(screen.getByRole("tab", { name: "Remote" }));
+    await fireEvent.click(screen.getByRole("tab", { name: "Phone access" }));
 
     // The picker cannot show the literal, so the row hands over to a text input
     // carrying the real value — it is never silently rewritten.
@@ -502,7 +529,7 @@ describe("SettingsForm", () => {
   it("switches to a literal on request and saves what was typed", async () => {
     render(SettingsForm);
     await screen.findByDisplayValue("60s");
-    await fireEvent.click(screen.getByRole("tab", { name: "Remote" }));
+    await fireEvent.click(screen.getByRole("tab", { name: "Phone access" }));
     await waitFor(() => expect(RemoteBinds).toHaveBeenCalled());
 
     await fireEvent.change(screen.getByLabelText("Bind"), {
@@ -525,7 +552,7 @@ describe("SettingsForm", () => {
   it("asks before regenerating the key, and does nothing if declined", async () => {
     render(SettingsForm);
     await screen.findByDisplayValue("60s");
-    await fireEvent.click(screen.getByRole("tab", { name: "Remote" }));
+    await fireEvent.click(screen.getByRole("tab", { name: "Phone access" }));
 
     await fireEvent.click(
       await screen.findByRole("button", { name: /regenerate key/i }),
@@ -542,7 +569,7 @@ describe("SettingsForm", () => {
   it("regenerates on confirm and drops the code that described the old key", async () => {
     render(SettingsForm);
     await screen.findByDisplayValue("60s");
-    await fireEvent.click(screen.getByRole("tab", { name: "Remote" }));
+    await fireEvent.click(screen.getByRole("tab", { name: "Phone access" }));
 
     // Reveal a code first, so there is stale material on screen to drop.
     await fireEvent.click(
@@ -569,7 +596,7 @@ describe("SettingsForm", () => {
     RegenerateRemoteKey.mockRejectedValue(new Error("daemon unreachable"));
     render(SettingsForm);
     await screen.findByDisplayValue("60s");
-    await fireEvent.click(screen.getByRole("tab", { name: "Remote" }));
+    await fireEvent.click(screen.getByRole("tab", { name: "Phone access" }));
 
     await fireEvent.click(
       await screen.findByRole("button", { name: /regenerate key/i }),
@@ -582,7 +609,7 @@ describe("SettingsForm", () => {
   it("saves the listener toggle and port", async () => {
     render(SettingsForm);
     await screen.findByDisplayValue("60s");
-    await fireEvent.click(screen.getByRole("tab", { name: "Remote" }));
+    await fireEvent.click(screen.getByRole("tab", { name: "Phone access" }));
     await waitFor(() => expect(RemoteBinds).toHaveBeenCalled());
 
     await fireEvent.click(screen.getByRole("checkbox", { name: "Enabled" }));
@@ -693,7 +720,7 @@ describe("SettingsForm", () => {
       await screen.findByDisplayValue("60s");
       await fireEvent.click(screen.getByRole("tab", { name: "Review" }));
       await fireEvent.click(
-        screen.getByRole("button", { name: "claude-session" }),
+        screen.getByRole("button", { name: reviewKinds.find((k) => k.kind === "claude-session")!.label }),
       );
     }
 
@@ -1193,7 +1220,7 @@ describe("SettingsForm", () => {
     try {
       render(SettingsForm);
       await screen.findByDisplayValue("60s");
-      await fireEvent.click(screen.getByRole("tab", { name: "Remote" }));
+      await fireEvent.click(screen.getByRole("tab", { name: "Phone access" }));
       await fireEvent.click(screen.getByRole("button", { name: "Show code" }));
 
       await waitFor(() => expect(ConnectCode).toHaveBeenCalled());
@@ -1215,7 +1242,7 @@ describe("SettingsForm", () => {
   it("says the copy hands over the key, not just the code", async () => {
     render(SettingsForm);
     await screen.findByDisplayValue("60s");
-    await fireEvent.click(screen.getByRole("tab", { name: "Remote" }));
+    await fireEvent.click(screen.getByRole("tab", { name: "Phone access" }));
     await fireEvent.click(screen.getByRole("button", { name: "Show code" }));
     await waitFor(() => expect(ConnectCode).toHaveBeenCalled());
     // The key row is still masked at this point, which used to imply the mask
