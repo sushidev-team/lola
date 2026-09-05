@@ -408,7 +408,7 @@ func TestSpawnPerAgentLaunchAndArtifacts(t *testing.T) {
 		execFrag string // substring the launch line must contain (binary + args)
 	}{
 		{"claude", agent.Claude, "exec /usr/local/bin/claude --settings .lola/settings.json "},
-		{"codex", agent.Codex, "exec codex -c "},
+		{"codex", agent.Codex, "exec codex --add-dir "},
 		{"opencode", agent.OpenCode, "exec opencode --prompt "},
 	}
 	for _, c := range cases {
@@ -1220,6 +1220,14 @@ func TestLaunchCommandPerAgent(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "codex"), []byte("#!/bin/sh\nprintf '%s\\n' \"$@\"\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
+	commonDir := filepath.Join(dir, "shared 'git' $(touch injected)")
+	if err := os.MkdirAll(commonDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	gitScript := "#!/bin/sh\n[ \"$*\" = 'rev-parse --path-format=absolute --git-common-dir' ] || exit 2\nprintf '%s\\n' " + shQuote(commonDir) + "\n"
+	if err := os.WriteFile(filepath.Join(dir, "git"), []byte(gitScript), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	cmd := exec.Command("sh", "-c", n.launchCommand(id, agent.Codex, false))
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"))
@@ -1229,9 +1237,33 @@ func TestLaunchCommandPerAgent(t *testing.T) {
 	}
 	gotArgs := strings.Split(strings.TrimSuffix(string(out), "\n"), "\n")
 	notify, _ := json.Marshal([]string{n.LolaBin, "hook", "codex-notify"})
-	wantArgs := append([]string{"-c", "notify=" + string(notify)}, agent.LaunchArgs(agent.Codex, defaultLaunchPrompt(id))...)
+	wantArgs := append([]string{"--add-dir", commonDir, "-c", "notify=" + string(notify)}, agent.LaunchArgs(agent.Codex, defaultLaunchPrompt(id))...)
 	if !reflect.DeepEqual(gotArgs, wantArgs) {
 		t.Errorf("codex argv = %q, want %q", gotArgs, wantArgs)
+	}
+
+	// Reviving a prior conversation gets the same per-worktree grant.
+	cmd = exec.Command("sh", "-c", n.launchCommand(id, agent.Codex, true))
+	cmd.Dir, cmd.Env = dir, append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"))
+	out, err = cmd.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantResume := append([]string{"--add-dir", commonDir, "-c", "notify=" + string(notify)}, agent.LaunchArgsResume(agent.Codex, "")...)
+	if got := strings.Split(strings.TrimSuffix(string(out), "\n"), "\n"); !reflect.DeepEqual(got, wantResume) {
+		t.Fatalf("resume argv = %q, want %q", got, wantResume)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "injected")); !os.IsNotExist(err) {
+		t.Fatal("git directory was interpreted as shell code")
+	}
+	// An unresolved repository must not turn into a broad or empty grant.
+	if err := os.WriteFile(filepath.Join(dir, "git"), []byte("#!/bin/sh\nexit 1\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	failedCmd := exec.Command("sh", "-c", n.launchCommand(id, agent.Codex, true))
+	failedCmd.Dir, failedCmd.Env = cmd.Dir, cmd.Env
+	if out, err := failedCmd.Output(); err == nil || len(out) != 0 {
+		t.Fatalf("failed git lookup launched codex: output=%q err=%v", out, err)
 	}
 
 	wantOpenCode := "exec sh -c 'set -a; . ./.lola/env; set +a; exec opencode --prompt " + esc + " --auto'"

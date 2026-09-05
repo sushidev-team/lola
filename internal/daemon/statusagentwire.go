@@ -37,6 +37,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/sushidev-team/lola/internal/agent"
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/doctor"
 	"github.com/sushidev-team/lola/internal/session"
@@ -93,7 +94,7 @@ func buildStatusAgent(sc config.StatusAgentConfig) *statusagent.Client {
 	if !sc.Enabled {
 		return nil
 	}
-	cl := &statusagent.Client{Bin: sc.Bin, Model: sc.Model}
+	cl := &statusagent.Client{Agent: agent.Parse(sc.Agent), Bin: sc.Bin, Model: sc.Model}
 	if sc.TimeoutSeconds > 0 {
 		cl.Timeout = time.Duration(sc.TimeoutSeconds) * time.Second
 	}
@@ -125,7 +126,7 @@ func (d *Daemon) setStatusAgentLocked(sc config.StatusAgentConfig) {
 		d.interpretOn.Store(false)
 		if sc.Enabled {
 			d.statusAgentWarn.Do(func() {
-				d.logf("", "statusagent: enabled but %q is not on PATH — interpretations disabled", firstNonEmpty(sc.Bin, "claude"))
+				d.logf("", "statusagent: enabled but %q is not on PATH — interpretations disabled", firstNonEmpty(sc.Bin, agent.Parse(sc.Agent).Binary()))
 			})
 		}
 		return

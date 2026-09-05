@@ -178,7 +178,7 @@ endpoint = "https://api.linear.app/graphql"
 
 # ---------------------------------------------------------------------------
 # [statusagent] — OPTIONAL, OFF BY DEFAULT. The status INTERPRETER: a small
-# bounded `claude -p` pass that reads one session's pane tail, recent lifecycle
+# bounded headless agent pass that reads one session's pane tail, recent lifecycle
 # events, and PR facts, and judges what the agent is ACTUALLY doing — an
 # interpreted agent-state overlay plus a one-line headline ("rewriting the auth
 # middleware tests") shown in the TUI and the desktop app. Display only: it can
@@ -193,12 +193,13 @@ endpoint = "https://api.linear.app/graphql"
 # (same pane/facts hash) skips the call entirely — a quiet fleet costs ~0.
 #
 # Omit this whole section to keep the interpreter OFF — zero behavior change.
-# The values shown below are the built-in defaults once enabled.
+# This example uses the selected agent's default model.
 # ---------------------------------------------------------------------------
 # [statusagent]
 # enabled = true                 # master switch; false (and an absent table) = off
-# bin = ""                       # claude executable; "" resolves "claude" via PATH (pin absolute for launchd)
-# model = "sonnet"               # --model per call; explicitly "" = claude's default model
+# agent = "claude"               # claude | codex | opencode, independent of the worker
+# bin = ""                       # executable override; empty uses the selected agent on PATH
+# model = ""                     # selected agent default; use "sonnet" for Claude Sonnet
 # timeout_seconds = 60           # hard cap per interpretation; must be >= 0
 # min_interval_seconds = 120     # per-session debounce between interpretation attempts
 # max_per_cycle = 2              # interpretations queued per 30s observer cycle

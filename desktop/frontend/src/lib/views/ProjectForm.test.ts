@@ -1,4 +1,5 @@
 import { render, screen, fireEvent, waitFor, within, cleanup } from "@testing-library/svelte";
+import { tick } from "svelte";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // Mock the bindings (never a live daemon/Linear). vi.hoisted so the fns exist
@@ -179,23 +180,59 @@ describe("ProjectForm", () => {
     expect(getProject).toHaveBeenCalledWith("acme");
     expect(await screen.findByLabelText("Path")).toHaveValue("/Users/me/code/acme");
     expect(screen.getByText("project: acme")).toBeInTheDocument();
-    expect(screen.getByLabelText("Branch prefix")).toHaveValue("acme/");
+    expect(screen.queryByLabelText("Branch prefix")).not.toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("tab", { name: "Worktree setup" }));
+    expect(screen.getByLabelText("Custom Branch prefix")).toHaveValue("acme/");
     // Every tab of the merged overlay is reachable.
-    for (const t of ["Repo", "Filter", "Labels", "Write-back"]) {
+    for (const t of ["General", "Worktree setup", "Issue pickup", "Linear updates"]) {
       expect(screen.getByRole("tab", { name: t })).toBeInTheDocument();
     }
+  });
+
+  it("saves explicit defaults for agent and concurrency", async () => {
+    render(ProjectForm);
+    await fireEvent.change(await screen.findByLabelText("Agent"), { target: { value: "" } });
+    await fireEvent.click(screen.getByRole("tab", { name: "Issue pickup" }));
+    await fireEvent.change(screen.getByLabelText("Concurrency"), { target: { value: "default" } });
+    expect(screen.queryByLabelText("Concurrency cap")).not.toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+    await waitFor(() => expect(saveProject).toHaveBeenCalledTimes(1));
+    expect(saveProject.mock.calls[0][0]).toMatchObject({ agent: "", concurrencyCap: 0 });
+  });
+
+  it("keeps a custom limit editable while cleared and rejects invalid limits", async () => {
+    render(ProjectForm);
+    await fireEvent.click(await screen.findByRole("tab", { name: "Issue pickup" }));
+    const cap = screen.getByLabelText("Concurrency cap");
+    for (const value of ["", "0", "1.5"]) {
+      await fireEvent.input(cap, { target: { value } });
+      expect(screen.getByLabelText("Concurrency cap")).toBe(cap);
+      expect(screen.getByRole("button", { name: /^save$/i })).toBeDisabled();
+    }
+    await fireEvent.input(cap, { target: { value: "7" } });
+    await fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+    await waitFor(() => expect(saveProject).toHaveBeenCalledTimes(1));
+    expect(saveProject.mock.calls[0][0].concurrencyCap).toBe(7);
+  });
+
+  it("keeps old label links working and shows labels beside the team filter", async () => {
+    nav.overlayTab = "labels";
+    render(ProjectForm);
+    expect(await screen.findByRole("tab", { name: "Issue pickup" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByLabelText("Team")).toBeInTheDocument();
+    expect(screen.getByText("Match labels")).toBeInTheDocument();
   });
 
   it("honours a deep link to a tab (nav.overlayTab)", async () => {
     nav.overlayTab = "filter";
     render(ProjectForm);
-    expect(await screen.findByRole("tab", { name: "Filter" })).toHaveAttribute("aria-selected", "true");
+    expect(await screen.findByRole("tab", { name: "Issue pickup" })).toHaveAttribute("aria-selected", "true");
   });
 
   it("loads team metadata and renders workflow states as checkboxes, pre-checked from the DTO", async () => {
     render(ProjectForm);
     await waitFor(() => expect(teamMetaFn).toHaveBeenCalledWith("team-uuid-1", false));
-    await fireEvent.click(screen.getByRole("tab", { name: "Filter" }));
+    await fireEvent.click(screen.getByRole("tab", { name: "Issue pickup" }));
 
     const todo = (await screen.findByRole("checkbox", { name: "Todo" })) as HTMLInputElement;
     const doing = screen.getByRole("checkbox", { name: "Doing" }) as HTMLInputElement;
@@ -205,8 +242,8 @@ describe("ProjectForm", () => {
 
   it("toggling a state and saving sends the cleaned DTO via SaveProject", async () => {
     render(ProjectForm);
-    await screen.findByRole("tab", { name: "Repo" }); // the form is loaded
-    await fireEvent.click(screen.getByRole("tab", { name: "Filter" }));
+    await screen.findByRole("tab", { name: "General" }); // the form is loaded
+    await fireEvent.click(screen.getByRole("tab", { name: "Issue pickup" }));
 
     const doing = (await screen.findByRole("checkbox", { name: "Doing" })) as HTMLInputElement;
     await fireEvent.click(doing); // add state-2
@@ -228,8 +265,8 @@ describe("ProjectForm", () => {
     teamsFn.mockRejectedValueOnce(new Error("no api key"));
     teamMetaFn.mockRejectedValueOnce(new Error("no api key"));
     render(ProjectForm);
-    await screen.findByRole("tab", { name: "Repo" }); // the form is loaded
-    await fireEvent.click(screen.getByRole("tab", { name: "Filter" }));
+    await screen.findByRole("tab", { name: "General" }); // the form is loaded
+    await fireEvent.click(screen.getByRole("tab", { name: "Issue pickup" }));
 
     // With no team list the team field is a raw text input holding the UUID.
     await waitFor(() => expect(screen.getByLabelText("Team")).toHaveValue("team-uuid-1"));
@@ -237,8 +274,8 @@ describe("ProjectForm", () => {
 
   it("clears the team-scoped IDs when the team changes, but leaves inherited ones alone", async () => {
     render(ProjectForm);
-    await screen.findByRole("tab", { name: "Repo" }); // the form is loaded
-    await fireEvent.click(screen.getByRole("tab", { name: "Filter" }));
+    await screen.findByRole("tab", { name: "General" }); // the form is loaded
+    await fireEvent.click(screen.getByRole("tab", { name: "Issue pickup" }));
 
     const team = await screen.findByLabelText("Team");
     await fireEvent.change(team, { target: { value: "team-uuid-2" } });
@@ -260,26 +297,28 @@ describe("ProjectForm", () => {
     expect(arg.inherits.matchLabels).toBe(true);
   });
 
-  it("ghosts an inherited field and chips it 'inherited'", async () => {
+  it("marks an inherited field and offers an explicit customization action", async () => {
     render(ProjectForm);
+    await fireEvent.click(await screen.findByRole("tab", { name: "Worktree setup" }));
     const symlinks = await screen.findByLabelText("Symlinks");
-    expect(symlinks.className).toContain("opacity-55");
-    expect(within(rowOf(symlinks)).getByRole("button", { name: "Inherited" })).toBeInTheDocument();
+    expect(symlinks.className).toContain("border-dashed");
+    expect(within(rowOf(symlinks)).getByRole("button", { name: /^Customize / })).toBeInTheDocument();
 
     // An overridden neighbour on the same tab chips the other way.
     const postCreate = screen.getByLabelText("Post-create");
-    expect(postCreate.className).not.toContain("opacity-55");
-    expect(within(rowOf(postCreate)).getByRole("button", { name: "Override" })).toBeInTheDocument();
+    expect(postCreate.className).not.toContain("border-dashed");
+    expect(within(rowOf(postCreate)).getByRole("button", { name: /^Use default for / })).toBeInTheDocument();
   });
 
   it("edits dev_commands as a plain per-project list — no inherit chip", async () => {
     render(ProjectForm);
+    await fireEvent.click(await screen.findByRole("tab", { name: "Worktree setup" }));
     const dev = await screen.findByLabelText("Dev commands");
     // dev_commands has no [defaults] counterpart on purpose, so the row carries
     // neither the ghost nor an Inherited/Override chip.
-    expect(dev.className).not.toContain("opacity-55");
-    expect(within(rowOf(dev)).queryByRole("button", { name: "Inherited" })).not.toBeInTheDocument();
-    expect(within(rowOf(dev)).queryByRole("button", { name: "Override" })).not.toBeInTheDocument();
+    expect(dev.className).not.toContain("border-dashed");
+    expect(within(rowOf(dev)).queryByRole("button", { name: /^Customize / })).not.toBeInTheDocument();
+    expect(within(rowOf(dev)).queryByRole("button", { name: /^Use default for / })).not.toBeInTheDocument();
 
     await fireEvent.input(dev, { target: { value: "composer dev\nnpm run dev" } });
     await fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
@@ -290,12 +329,13 @@ describe("ProjectForm", () => {
 
   it("promotes an inherited field to an override when it is edited", async () => {
     render(ProjectForm);
+    await fireEvent.click(await screen.findByRole("tab", { name: "Worktree setup" }));
     const symlinks = await screen.findByLabelText("Symlinks");
 
     await fireEvent.input(symlinks, { target: { value: "own-link" } });
 
-    expect(within(rowOf(symlinks)).getByRole("button", { name: "Override" })).toBeInTheDocument();
-    expect(symlinks.className).not.toContain("opacity-55");
+    expect(within(rowOf(symlinks)).getByRole("button", { name: /^Use default for / })).toBeInTheDocument();
+    expect(symlinks.className).not.toContain("border-dashed");
 
     await fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
     await waitFor(() => expect(saveProject).toHaveBeenCalledTimes(1));
@@ -304,26 +344,28 @@ describe("ProjectForm", () => {
     expect(arg.symlinks).toEqual(["own-link"]);
   });
 
-  it("promotes an inherited field when its chip is clicked", async () => {
+  it("promotes an inherited field when Customize is clicked", async () => {
     render(ProjectForm);
+    await fireEvent.click(await screen.findByRole("tab", { name: "Worktree setup" }));
     const symlinks = await screen.findByLabelText("Symlinks");
 
-    await fireEvent.click(within(rowOf(symlinks)).getByRole("button", { name: "Inherited" }));
+    await fireEvent.click(within(rowOf(symlinks)).getByRole("button", { name: /^Customize / }));
 
-    expect(within(rowOf(symlinks)).getByRole("button", { name: "Override" })).toBeInTheDocument();
+    expect(within(rowOf(symlinks)).getByRole("button", { name: /^Use default for / })).toBeInTheDocument();
   });
 
   it("reverting an override refills the control from [defaults]", async () => {
     render(ProjectForm);
+    await fireEvent.click(await screen.findByRole("tab", { name: "Worktree setup" }));
     const postCreate = await screen.findByLabelText("Post-create");
     expect(postCreate).toHaveValue("npm ci");
 
-    await fireEvent.click(within(rowOf(postCreate)).getByRole("button", { name: "Override" }));
+    await fireEvent.click(within(rowOf(postCreate)).getByRole("button", { name: /^Use default for / }));
 
-    // The ghost now shows what [defaults] will actually apply.
+    // The field now shows what defaults will actually apply.
     expect(postCreate).toHaveValue("make setup\nmake build");
-    expect(postCreate.className).toContain("opacity-55");
-    expect(within(rowOf(postCreate)).getByRole("button", { name: "Inherited" })).toBeInTheDocument();
+    expect(postCreate.className).toContain("border-dashed");
+    expect(within(rowOf(postCreate)).getByRole("button", { name: /^Customize / })).toBeInTheDocument();
 
     await fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
     await waitFor(() => expect(saveProject).toHaveBeenCalledTimes(1));
@@ -335,12 +377,69 @@ describe("ProjectForm", () => {
   it("still reverts when [defaults] can't be read, keeping the shown value", async () => {
     getSettings.mockRejectedValueOnce(new Error("no config"));
     render(ProjectForm);
+    await fireEvent.click(await screen.findByRole("tab", { name: "Worktree setup" }));
     const postCreate = await screen.findByLabelText("Post-create");
 
-    await fireEvent.click(within(rowOf(postCreate)).getByRole("button", { name: "Override" }));
+    await fireEvent.click(within(rowOf(postCreate)).getByRole("button", { name: /^Use default for / }));
 
-    expect(within(rowOf(postCreate)).getByRole("button", { name: "Inherited" })).toBeInTheDocument();
+    expect(within(rowOf(postCreate)).getByRole("button", { name: /^Customize / })).toBeInTheDocument();
     expect(postCreate).toHaveValue("npm ci");
+  });
+
+  it("restores a custom draft after comparing it with defaults", async () => {
+    render(ProjectForm);
+    await fireEvent.click(await screen.findByRole("tab", { name: "Worktree setup" }));
+    const input = screen.getByLabelText("Post-create");
+    await fireEvent.input(input, { target: { value: "composer install\nnpm ci" } });
+    await fireEvent.click(screen.getByRole("button", { name: "Use default for Post-create" }));
+    expect(input).toHaveValue("make setup\nmake build");
+    await fireEvent.click(screen.getByRole("button", { name: "Customize Post-create" }));
+    expect(input).toHaveValue("composer install\nnpm ci");
+    await fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+    await waitFor(() => expect(saveProject).toHaveBeenCalledTimes(1));
+    expect(saveProject.mock.calls[0][0]).toMatchObject({ postCreate: ["composer install", "npm ci"], inherits: { postCreate: false } });
+  });
+
+  it("retries team metadata without losing manual IDs or selections", async () => {
+    teamMetaFn.mockRejectedValueOnce(new Error("offline"));
+    render(ProjectForm);
+    await fireEvent.click(await screen.findByRole("tab", { name: "Issue pickup" }));
+    await screen.findByRole("button", { name: "Retry team options" });
+    await fireEvent.input(screen.getByLabelText("Project"), { target: { value: "manual-project" } });
+    await fireEvent.click(screen.getByRole("button", { name: "Retry team options" }));
+    await screen.findByRole("checkbox", { name: "Todo" });
+    expect(screen.getByLabelText("Project")).toHaveValue("manual-project");
+    await fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+    await waitFor(() => expect(saveProject).toHaveBeenCalledTimes(1));
+    expect(saveProject.mock.calls[0][0]).toMatchObject({ projectId: "manual-project", stateIds: ["state-1"] });
+  });
+
+  it("ignores an old team's response after switching teams", async () => {
+    let resolveOld!: (value: typeof meta) => void;
+    teamMetaFn.mockImplementationOnce(() => new Promise((resolve) => { resolveOld = resolve; }));
+    teamMetaFn.mockResolvedValue({ ...meta, states: [{ id: "ops-state", label: "Ops ready" }] });
+    render(ProjectForm);
+    await fireEvent.click(await screen.findByRole("tab", { name: "Issue pickup" }));
+    await waitFor(() => expect(teamMetaFn).toHaveBeenCalledTimes(1));
+    await fireEvent.change(screen.getByLabelText("Team"), { target: { value: "team-uuid-2" } });
+    await screen.findByRole("checkbox", { name: "Ops ready" });
+    resolveOld(meta);
+    await tick();
+    await waitFor(() => expect(screen.queryByRole("checkbox", { name: "Todo" })).not.toBeInTheDocument());
+    expect(screen.getByRole("checkbox", { name: "Ops ready" })).toBeInTheDocument();
+  });
+
+  it("keeps format hints visible and retains hidden label settings across pickup modes", async () => {
+    getProject.mockResolvedValue({ ...sampleDto(), onSentSetLabel: "lab-1", inherits: { ...sampleDto().inherits, onSentSetLabel: false } });
+    render(ProjectForm);
+    await fireEvent.click(await screen.findByRole("tab", { name: "Worktree setup" }));
+    expect(screen.getByLabelText("Env")).toHaveAccessibleDescription("KEY=value, one per line.");
+    expect(screen.getByLabelText("Dev commands")).toHaveAccessibleDescription("One command per line.");
+    await fireEvent.click(screen.getByRole("tab", { name: "Issue pickup" }));
+    await fireEvent.change(screen.getByLabelText("Repeat pickup"), { target: { value: "seen" } });
+    expect(screen.queryByLabelText("After pickup label")).not.toBeInTheDocument();
+    await fireEvent.change(screen.getByLabelText("Repeat pickup"), { target: { value: "label" } });
+    expect(screen.getByLabelText("After pickup label")).toHaveValue("lab-1");
   });
 
   // One InspectPath pass fills the whole Repo tab: the folder is the only thing
@@ -359,7 +458,8 @@ describe("ProjectForm", () => {
         expect(inspectPath).toHaveBeenCalledWith("/tmp/web");
         expect(screen.getByLabelText("Repo")).toHaveValue("acme/web");
       });
-      expect(screen.getByText(/detected from the checkout/)).toBeInTheDocument();
+      await fireEvent.click(screen.getByRole("button", { name: "More about Repo" }));
+      expect(screen.getByRole("note")).toHaveTextContent("detected from the checkout");
     });
 
     it("never overwrites a repo the user already set", async () => {
@@ -424,7 +524,7 @@ describe("ProjectForm", () => {
       expect(screen.getByLabelText("Label")).toHaveValue("Nori App");
       expect(screen.getByLabelText("ID")).toHaveValue("nori-app");
       expect(screen.getByLabelText("Repo")).toHaveValue("acme/nori-app");
-      expect(screen.getByLabelText("Default branch")).toHaveValue("develop");
+      expect(screen.getByLabelText("Default branch")).toHaveDisplayValue("develop");
     });
 
     it("does not open the chooser for an existing project", async () => {
@@ -443,7 +543,7 @@ describe("ProjectForm", () => {
       const path = await screen.findByLabelText("Path");
       await fireEvent.blur(path);
       await waitFor(() => expect(inspectPath).toHaveBeenCalled());
-      expect(screen.getByLabelText("Default branch")).toHaveValue("release");
+      expect(screen.getByLabelText("Custom Default branch")).toHaveValue("release");
       expect(screen.getByLabelText("Label")).toHaveValue("");
     });
   });
@@ -460,9 +560,8 @@ describe("ProjectForm", () => {
 
       await waitFor(() => expect(inspectPath).toHaveBeenCalledWith("/tmp/web"));
       await waitFor(() => {
-        const list = document.getElementById("lola-branches");
-        const values = Array.from(list?.querySelectorAll("option") ?? []).map((o) => o.value);
-        expect(values).toEqual(["main", "develop"]);
+        const labels = Array.from(branch.querySelectorAll("option")).map((o) => o.textContent);
+        expect(labels).toEqual(["main", "develop", "Custom…"]);
       });
     });
 
@@ -473,8 +572,9 @@ describe("ProjectForm", () => {
 
       const branch = await screen.findByLabelText("Default branch");
       await fireEvent.focus(branch);
-      await fireEvent.input(branch, { target: { value: "trunk" } });
-      expect(branch).toHaveValue("trunk");
+      const custom = screen.getByLabelText("Custom Default branch");
+      await fireEvent.input(custom, { target: { value: "trunk" } });
+      expect(custom).toHaveValue("trunk");
     });
   });
 

@@ -28,6 +28,7 @@ const fakeDto = {
   agent: "codex",
   notifyDesktop: true,
   slackWebhookEnv: "LOLA_SLACK",
+  statusAgentEnabled: false,
   brainEnabled: false,
   brainModel: "claude-x",
   brainTimeout: 30,
@@ -265,16 +266,61 @@ describe("SettingsForm", () => {
     appearance.paint();
   });
 
+  it("supports vertical keyboard navigation without dirtying settings", async () => {
+    render(SettingsForm);
+    const general = await screen.findByRole("tab", { name: "General" });
+    expect(screen.getByRole("tablist")).toHaveAttribute("aria-orientation", "vertical");
+    await fireEvent.keyDown(general, { key: "ArrowDown" });
+    const project = screen.getByRole("tab", { name: "Project defaults" });
+    expect(project).toHaveFocus();
+    expect(project).toHaveAttribute("aria-selected", "true");
+    await fireEvent.keyDown(project, { key: "End" });
+    expect(screen.getByRole("tab", { name: "Status interpretation" })).toHaveFocus();
+    await fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(closeOverlay).toHaveBeenCalled();
+  });
+
+  it("preserves summary tuning while the feature is disabled", async () => {
+    render(SettingsForm);
+    await fireEvent.click(await screen.findByRole("tab", { name: "Summaries" }));
+    expect(screen.queryByLabelText("Model")).not.toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("checkbox", { name: "Enabled" }));
+    expect(screen.getByLabelText("Custom Model")).toHaveValue("claude-x");
+    await fireEvent.click(screen.getByRole("checkbox", { name: "Enabled" }));
+    await fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(SaveSettings).toHaveBeenCalled());
+    expect(SaveSettings.mock.calls[0][0]).toMatchObject({ brainEnabled: false, brainModel: "claude-x", brainTimeout: 30 });
+  });
+
   it("loads settings on mount and binds fields on the Defaults tab", async () => {
     render(SettingsForm);
     expect(await screen.findByDisplayValue("60s")).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "Defaults" })).toHaveAttribute(
+    expect(screen.getByRole("tab", { name: "General" })).toHaveAttribute(
       "aria-selected",
       "true",
     );
-    // the active agent segment reflects the loaded value
-    const codex = screen.getByRole("button", { name: "codex" });
-    expect(codex.className).toContain("text-accent-ink");
+    // The shared provider selector reflects the loaded default.
+    expect(screen.getByLabelText("Default agent")).toHaveValue("codex");
+  });
+
+  it("switches status providers with their own model and executable drafts", async () => {
+    GetSettings.mockResolvedValue({ ...fakeDto, statusAgentEnabled: true, statusAgentIncludeTranscript: false, statusAgentAgent: "", statusAgentBin: "/opt/claude", statusAgentModel: "sonnet" });
+    render(SettingsForm);
+    await fireEvent.click(await screen.findByRole("tab", { name: "Status interpretation" }));
+    expect(screen.getByLabelText("Provider")).toHaveValue("claude");
+    await fireEvent.change(screen.getByLabelText("Provider"), { target: { value: "codex" } });
+    expect(screen.getByRole("option", { name: "GPT-6 Astra" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "Sonnet — balanced" })).not.toBeInTheDocument();
+    await fireEvent.change(screen.getByLabelText("Model"), { target: { value: "custom" } });
+    await fireEvent.input(screen.getByLabelText("Custom Model"), { target: { value: "my-codex-model" } });
+    await fireEvent.change(screen.getByLabelText("Provider"), { target: { value: "claude" } });
+    expect(screen.getByLabelText("Custom Binary")).toHaveValue("/opt/claude");
+    expect(screen.getByLabelText("Model")).toHaveDisplayValue("Sonnet — balanced");
+    await fireEvent.change(screen.getByLabelText("Provider"), { target: { value: "codex" } });
+    expect(screen.getByLabelText("Custom Model")).toHaveValue("my-codex-model");
+    await fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+    await waitFor(() => expect(SaveSettings).toHaveBeenCalledTimes(1));
+    expect(SaveSettings.mock.calls[0][0]).toMatchObject({ statusAgentAgent: "codex", statusAgentModel: "my-codex-model", statusAgentBin: "" });
   });
 
   it("tabs the sections instead of stacking them", async () => {
@@ -283,12 +329,12 @@ describe("SettingsForm", () => {
     // The provider-catalog tab is "Review", not "CodeRabbit": it holds every
     // [[review.provider]] kind, claude-session included.
     for (const t of [
-      "Defaults",
+      "General",
       "Project defaults",
-      "Notify",
-      "Brain",
+      "Notifications",
+      "Summaries",
       "Review",
-      "Remote",
+      "Phone access",
       "Appearance",
     ]) {
       expect(screen.getByRole("tab", { name: t })).toBeInTheDocument();
@@ -306,7 +352,7 @@ describe("SettingsForm", () => {
     await waitFor(() => expect(ReviewKinds).toHaveBeenCalled());
     for (const k of reviewKinds) {
       expect(
-        await screen.findByRole("button", { name: k.kind }),
+        await screen.findByRole("button", { name: ({ "claude-session": "Claude", "codex-session": "Codex", "opencode-session": "OpenCode", "coderabbit-cli": "CodeRabbit CLI", "custom-cli": "Custom CLI", "coderabbit-watch": "CodeRabbit bot", "bot-watch": "Review bot" } as Record<string, string>)[k.kind] }),
       ).toBeInTheDocument();
     }
   });
@@ -316,13 +362,46 @@ describe("SettingsForm", () => {
     try {
       render(SettingsForm);
       expect(await screen.findByDisplayValue("60s")).toBeInTheDocument();
-      expect(screen.getByRole("tab", { name: "Defaults" })).toHaveAttribute(
+      expect(screen.getByRole("tab", { name: "General" })).toHaveAttribute(
         "aria-selected",
         "true",
       );
     } finally {
       nav.overlayTab = "";
     }
+  });
+
+  it("validates General limits before saving and focuses the invalid field", async () => {
+    render(SettingsForm);
+    const total = await screen.findByLabelText("Total running agents");
+    for (const value of ["0", "1.5", ""]) {
+      await fireEvent.input(total, { target: { value } });
+      await fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+      expect(SaveSettings).not.toHaveBeenCalled();
+      expect(total).toHaveAttribute("aria-invalid", "true");
+      expect(total).toHaveFocus();
+    }
+    await fireEvent.input(total, { target: { value: "6" } });
+    await fireEvent.input(screen.getByLabelText("Agents per project"), { target: { value: "0" } });
+    expect(screen.getByText("Set a limit in each project.")).toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+    await waitFor(() => expect(SaveSettings).toHaveBeenCalledTimes(1));
+    expect(SaveSettings.mock.calls[0][0]).toMatchObject({ globalCap: 6, concurrencyCap: 0 });
+  });
+
+  it("retries workspace labels and preserves IDs entered during failure", async () => {
+    WorkspaceLabels.mockRejectedValueOnce(new Error("offline"));
+    render(SettingsForm);
+    await fireEvent.click(await screen.findByRole("tab", { name: "Project defaults" }));
+    await screen.findByRole("button", { name: "Retry workspace labels" });
+    await fireEvent.input(screen.getByLabelText("Blocked label"), { target: { value: "manual-label" } });
+    await fireEvent.click(screen.getByRole("button", { name: "Retry workspace labels" }));
+    await screen.findByRole("checkbox", { name: "agent" });
+    expect(screen.getByLabelText("Blocked label")).toHaveValue("manual-label");
+    expect(WorkspaceLabels).toHaveBeenCalledTimes(2);
+    await fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+    await waitFor(() => expect(SaveSettings).toHaveBeenCalledTimes(1));
+    expect(SaveSettings.mock.calls[0][0].blockedLabelId).toBe("manual-label");
   });
 
   it("offers workspace-label pickers for all three [defaults] label keys", async () => {
@@ -345,7 +424,7 @@ describe("SettingsForm", () => {
     ).toBeChecked();
     expect(screen.getByRole("checkbox", { name: "blocked" })).not.toBeChecked();
     // …and the two single-select keys are real selects, with a "(none)" option.
-    for (const caption of ["On-sent set label", "Blocked label"]) {
+    for (const caption of ["After pickup label", "Blocked label"]) {
       const el = screen.getByLabelText(caption);
       expect(el.tagName).toBe("SELECT");
       expect(
@@ -388,9 +467,10 @@ describe("SettingsForm", () => {
     );
 
     expect(
-      await screen.findByText(/couldn't load workspace labels.*no api key/),
+      await screen.findByText(/Couldn’t load workspace labels/),
     ).toBeInTheDocument();
     expect(screen.getByLabelText("Blocked label").tagName).toBe("INPUT");
+    expect(screen.getByLabelText("Match labels")).toHaveAccessibleDescription("One UUID per line.");
     expect(screen.getByLabelText("Match labels")).toHaveValue("lab-1"); // the textarea escape hatch
   });
 
@@ -406,7 +486,7 @@ describe("SettingsForm", () => {
     expect(
       await screen.findByText(/no organisation-level labels/),
     ).toBeInTheDocument();
-    expect(screen.getByLabelText("On-sent set label").tagName).toBe("INPUT");
+    expect(screen.getByLabelText("After pickup label").tagName).toBe("INPUT");
   });
 
   it("loads the workspace labels once, not on every visit to the tab", async () => {
@@ -417,7 +497,7 @@ describe("SettingsForm", () => {
       screen.getByRole("tab", { name: "Project defaults" }),
     );
     await waitFor(() => expect(WorkspaceLabels).toHaveBeenCalledTimes(1));
-    await fireEvent.click(screen.getByRole("tab", { name: "Notify" }));
+    await fireEvent.click(screen.getByRole("tab", { name: "Notifications" }));
     await fireEvent.click(
       screen.getByRole("tab", { name: "Project defaults" }),
     );
@@ -441,7 +521,7 @@ describe("SettingsForm", () => {
     ]);
     render(SettingsForm);
     await screen.findByDisplayValue("60s");
-    await fireEvent.click(screen.getByRole("tab", { name: "Remote" }));
+    await fireEvent.click(screen.getByRole("tab", { name: "Phone access" }));
 
     await waitFor(() => expect(RemoteBinds).toHaveBeenCalled());
     const sel = screen.getByLabelText("Bind") as HTMLSelectElement;
@@ -456,6 +536,20 @@ describe("SettingsForm", () => {
     ]);
   });
 
+  it("opens phone help without changing the checkbox or dirtying settings", async () => {
+    render(SettingsForm);
+    await fireEvent.click(await screen.findByRole("tab", { name: "Phone access" }));
+    const box = screen.getByRole("checkbox", { name: "Allow a LAN bind" });
+    expect(box).not.toBeChecked();
+    expect(screen.queryByRole("note")).not.toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("button", { name: "More about Allow a LAN bind" }));
+    expect(screen.getByRole("note")).toHaveTextContent("shared key in the clear");
+    expect(box).not.toBeChecked();
+    await fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(closeOverlay).toHaveBeenCalled();
+    expect(confirm.request).toBeNull();
+  });
+
   it("carries the local-network advertisement, which is off until it is asked for", async () => {
     // A DISCLOSURE rather than a convenience: the service announces that this
     // machine runs coding agents and accepts remote control. It is reachable
@@ -464,9 +558,9 @@ describe("SettingsForm", () => {
     GetSettings.mockResolvedValue({ ...fakeDto, remoteEnabled: true });
     render(SettingsForm);
     await screen.findByDisplayValue("60s");
-    await fireEvent.click(screen.getByRole("tab", { name: "Remote" }));
+    await fireEvent.click(screen.getByRole("tab", { name: "Phone access" }));
 
-    const box = await screen.findByLabelText(/Advertise on the local network/i);
+    const box = await screen.findByRole("checkbox", { name: "Advertise on the local network" });
     expect(box).not.toBeChecked();
 
     await fireEvent.click(box);
@@ -485,7 +579,7 @@ describe("SettingsForm", () => {
     });
     render(SettingsForm);
     await screen.findByDisplayValue("60s");
-    await fireEvent.click(screen.getByRole("tab", { name: "Remote" }));
+    await fireEvent.click(screen.getByRole("tab", { name: "Phone access" }));
 
     // The picker cannot show the literal, so the row hands over to a text input
     // carrying the real value — it is never silently rewritten.
@@ -502,7 +596,7 @@ describe("SettingsForm", () => {
   it("switches to a literal on request and saves what was typed", async () => {
     render(SettingsForm);
     await screen.findByDisplayValue("60s");
-    await fireEvent.click(screen.getByRole("tab", { name: "Remote" }));
+    await fireEvent.click(screen.getByRole("tab", { name: "Phone access" }));
     await waitFor(() => expect(RemoteBinds).toHaveBeenCalled());
 
     await fireEvent.change(screen.getByLabelText("Bind"), {
@@ -525,7 +619,7 @@ describe("SettingsForm", () => {
   it("asks before regenerating the key, and does nothing if declined", async () => {
     render(SettingsForm);
     await screen.findByDisplayValue("60s");
-    await fireEvent.click(screen.getByRole("tab", { name: "Remote" }));
+    await fireEvent.click(screen.getByRole("tab", { name: "Phone access" }));
 
     await fireEvent.click(
       await screen.findByRole("button", { name: /regenerate key/i }),
@@ -542,7 +636,7 @@ describe("SettingsForm", () => {
   it("regenerates on confirm and drops the code that described the old key", async () => {
     render(SettingsForm);
     await screen.findByDisplayValue("60s");
-    await fireEvent.click(screen.getByRole("tab", { name: "Remote" }));
+    await fireEvent.click(screen.getByRole("tab", { name: "Phone access" }));
 
     // Reveal a code first, so there is stale material on screen to drop.
     await fireEvent.click(
@@ -569,7 +663,7 @@ describe("SettingsForm", () => {
     RegenerateRemoteKey.mockRejectedValue(new Error("daemon unreachable"));
     render(SettingsForm);
     await screen.findByDisplayValue("60s");
-    await fireEvent.click(screen.getByRole("tab", { name: "Remote" }));
+    await fireEvent.click(screen.getByRole("tab", { name: "Phone access" }));
 
     await fireEvent.click(
       await screen.findByRole("button", { name: /regenerate key/i }),
@@ -582,7 +676,7 @@ describe("SettingsForm", () => {
   it("saves the listener toggle and port", async () => {
     render(SettingsForm);
     await screen.findByDisplayValue("60s");
-    await fireEvent.click(screen.getByRole("tab", { name: "Remote" }));
+    await fireEvent.click(screen.getByRole("tab", { name: "Phone access" }));
     await waitFor(() => expect(RemoteBinds).toHaveBeenCalled());
 
     await fireEvent.click(screen.getByRole("checkbox", { name: "Enabled" }));
@@ -655,10 +749,10 @@ describe("SettingsForm", () => {
     await waitFor(() => expect(PrioritySortKeys).toHaveBeenCalled());
     // Click createdAt first, then priority — the reverse of the default.
     await fireEvent.click(
-      await screen.findByRole("button", { name: /createdAt/ }),
+      await screen.findByRole("button", { name: /Creation time/ }),
     );
     await fireEvent.click(
-      await screen.findByRole("button", { name: /priority/ }),
+      await screen.findByRole("button", { name: /Priority highest/ }),
     );
 
     await fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
@@ -681,6 +775,34 @@ describe("SettingsForm", () => {
     expect(await screen.findByLabelText("Priority sort")).toBeInTheDocument();
   });
 
+  it("collapses disabled review cards without losing their configuration", async () => {
+    const provider = {
+      provider: "claude-session", enabled: false, onPrOpen: false,
+      model: "private/model", timeoutSeconds: 420, transports: ["lola", "github"],
+      githubInline: false, notify: false, sendToAgent: false, visible: false,
+      fallback: ["codex-session"],
+    };
+    GetSettings.mockResolvedValue({ ...fakeDto, reviewProviders: [provider] });
+    render(SettingsForm);
+    await fireEvent.click(await screen.findByRole("tab", { name: "Review" }));
+    const card = within(await screen.findByRole("region", { name: "Claude review" }));
+    expect(card.queryByLabelText("Model")).not.toBeInTheDocument();
+    await fireEvent.click(card.getByRole("checkbox", { name: "Disabled" }));
+    expect(card.getByLabelText("Custom Model")).toHaveValue("private/model");
+    const advanced = card.getByRole("button", { name: "Advanced settings" });
+    expect(advanced).toHaveAttribute("aria-expanded", "false");
+    const advancedPanel = document.getElementById(advanced.getAttribute("aria-controls")!)!;
+    expect(advancedPanel).not.toBeVisible();
+    await fireEvent.click(advanced);
+    expect(advanced).toHaveAttribute("aria-expanded", "true");
+    expect(advancedPanel).toBeVisible();
+    await fireEvent.click(card.getByRole("checkbox", { name: "Enabled" }));
+    expect(card.queryByLabelText("Model")).not.toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(SaveSettings).toHaveBeenCalled());
+    expect(SaveSettings.mock.calls.at(-1)?.[0].reviewProviders).toEqual([provider]);
+  });
+
   // The github transport is the only sink with two shapes, so the choice between
   // them appears only once github is actually selected — and defaults to the
   // resolvable-threads one.
@@ -693,7 +815,7 @@ describe("SettingsForm", () => {
       await screen.findByDisplayValue("60s");
       await fireEvent.click(screen.getByRole("tab", { name: "Review" }));
       await fireEvent.click(
-        screen.getByRole("button", { name: "claude-session" }),
+        screen.getByRole("button", { name: "Claude" }),
       );
     }
 
@@ -701,13 +823,13 @@ describe("SettingsForm", () => {
       await openClaudeProvider();
       expect(inlineBox()).not.toBeInTheDocument();
 
-      await fireEvent.click(screen.getByRole("checkbox", { name: /^github$/ }));
+      await fireEvent.click(screen.getByRole("checkbox", { name: /^GitHub$/ }));
       expect(inlineBox()).toBeChecked();
     });
 
     it("saves the opt-out back to the provider", async () => {
       await openClaudeProvider();
-      await fireEvent.click(screen.getByRole("checkbox", { name: /^github$/ }));
+      await fireEvent.click(screen.getByRole("checkbox", { name: /^GitHub$/ }));
       await fireEvent.click(inlineBox()!);
 
       await fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
@@ -1000,7 +1122,7 @@ describe("SettingsForm", () => {
     it("prompts before discarding an edited form and does NOT close until confirmed", async () => {
       render(SettingsForm);
       const poll = await screen.findByDisplayValue("60s");
-      await fireEvent.input(poll, { target: { value: "30s" } });
+      await fireEvent.change(poll, { target: { value: "0" } });
 
       await fireEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
 
@@ -1012,7 +1134,7 @@ describe("SettingsForm", () => {
     it("closes once the discard is confirmed", async () => {
       render(SettingsForm);
       const poll = await screen.findByDisplayValue("60s");
-      await fireEvent.input(poll, { target: { value: "30s" } });
+      await fireEvent.change(poll, { target: { value: "0" } });
 
       await fireEvent.click(screen.getByRole("button", { name: /^cancel$/i }));
       confirm.accept(); // the dialog's "Discard" button
@@ -1193,7 +1315,7 @@ describe("SettingsForm", () => {
     try {
       render(SettingsForm);
       await screen.findByDisplayValue("60s");
-      await fireEvent.click(screen.getByRole("tab", { name: "Remote" }));
+      await fireEvent.click(screen.getByRole("tab", { name: "Phone access" }));
       await fireEvent.click(screen.getByRole("button", { name: "Show code" }));
 
       await waitFor(() => expect(ConnectCode).toHaveBeenCalled());
@@ -1215,7 +1337,7 @@ describe("SettingsForm", () => {
   it("says the copy hands over the key, not just the code", async () => {
     render(SettingsForm);
     await screen.findByDisplayValue("60s");
-    await fireEvent.click(screen.getByRole("tab", { name: "Remote" }));
+    await fireEvent.click(screen.getByRole("tab", { name: "Phone access" }));
     await fireEvent.click(screen.getByRole("button", { name: "Show code" }));
     await waitFor(() => expect(ConnectCode).toHaveBeenCalled());
     // The key row is still masked at this point, which used to imply the mask
@@ -1229,4 +1351,19 @@ describe("SettingsForm", () => {
       screen.getByRole("button", { name: "Show key" }),
     ).toBeInTheDocument();
   });
+});
+
+
+it("exposes the polling disclosure state and toggles its panel", async () => {
+  render(SettingsForm);
+  const toggle = await screen.findByRole("button", { name: "Polling frequency" });
+  const panel = document.getElementById(toggle.getAttribute("aria-controls")!)!;
+  expect(toggle).toHaveAttribute("aria-expanded", "false");
+  expect(panel).not.toBeVisible();
+  await fireEvent.click(toggle);
+  expect(toggle).toHaveAttribute("aria-expanded", "true");
+  expect(panel).toBeVisible();
+  await fireEvent.click(toggle);
+  expect(toggle).toHaveAttribute("aria-expanded", "false");
+  expect(panel).not.toBeVisible();
 });

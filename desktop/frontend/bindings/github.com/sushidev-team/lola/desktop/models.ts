@@ -446,6 +446,7 @@ export interface SettingsDTO {
      * [statusagent] — the display-only status interpreter.
      */
     "statusAgentEnabled": boolean;
+    "statusAgentAgent": string;
     "statusAgentBin": string;
     "statusAgentModel": string;
     "statusAgentTimeout": number;

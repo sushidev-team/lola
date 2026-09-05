@@ -125,6 +125,7 @@ type SettingsDTO struct {
 
 	// [statusagent] — the display-only status interpreter.
 	StatusAgentEnabled           bool    `json:"statusAgentEnabled"`
+	StatusAgentAgent             string  `json:"statusAgentAgent"`
 	StatusAgentBin               string  `json:"statusAgentBin"`
 	StatusAgentModel             string  `json:"statusAgentModel"`
 	StatusAgentTimeout           int     `json:"statusAgentTimeout"`
@@ -370,6 +371,7 @@ func (s *ConfigService) GetSettings() (SettingsDTO, error) {
 		BrainSummarizeApproved:   cfg.Brain.SummarizeApproved,
 
 		StatusAgentEnabled:           cfg.StatusAgent.Enabled,
+		StatusAgentAgent:             cfg.StatusAgent.Agent,
 		StatusAgentBin:               cfg.StatusAgent.Bin,
 		StatusAgentModel:             cfg.StatusAgent.Model,
 		StatusAgentTimeout:           cfg.StatusAgent.TimeoutSeconds,
@@ -427,6 +429,7 @@ func (s *ConfigService) SaveSettings(dto SettingsDTO) error {
 	cfg.Brain.SummarizeEscalation = dto.BrainSummarizeEscalation
 	cfg.Brain.SummarizeApproved = dto.BrainSummarizeApproved
 	cfg.StatusAgent.Enabled = dto.StatusAgentEnabled
+	cfg.StatusAgent.Agent = dto.StatusAgentAgent
 	cfg.StatusAgent.Bin = dto.StatusAgentBin
 	cfg.StatusAgent.Model = dto.StatusAgentModel
 	cfg.StatusAgent.TimeoutSeconds = dto.StatusAgentTimeout
