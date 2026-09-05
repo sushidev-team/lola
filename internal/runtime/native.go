@@ -701,7 +701,19 @@ func (n *Native) launchCommandPrompt(id string, kind agent.Kind, prompt string, 
 		notify, _ := json.Marshal([]string{n.LolaBin, "hook", "codex-notify"})
 		args = append([]string{"-c", "notify=" + string(notify)}, args...)
 	}
-	posix := "set -a; . ./" + lolaDir + "/env; set +a; exec " + shQuote(bin)
+	posix := "set -a; . ./" + lolaDir + "/env; set +a; "
+	if kind == agent.Codex {
+		// tmux starts this shell in the session worktree. Ask git there so
+		// linked worktrees, separate git dirs and moved checkouts all resolve
+		// correctly. Quote the result as one argv value, never shell code.
+		// The shared metadata holds objects/refs AND the worktree's index;
+		// workspace-write alone cannot fetch, commit or merge without it.
+		posix += `lola_git_common_dir=$(git rev-parse --path-format=absolute --git-common-dir) && test -n "$lola_git_common_dir" && test -d "$lola_git_common_dir" || exit 1; `
+	}
+	posix += "exec " + shQuote(bin)
+	if kind == agent.Codex {
+		posix += ` --add-dir "$lola_git_common_dir"`
+	}
 	for _, arg := range args {
 		posix += " " + shQuote(arg)
 	}
