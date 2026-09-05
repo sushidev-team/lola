@@ -40,6 +40,46 @@ desktop/
 The app is a package **inside** the lola Go module (not a separate module) so it
 can reuse `internal/protocol`, `internal/config`, `internal/doctor`, etc.
 
+## Setup and settings
+
+First-run setup needs a Linear key and a repository folder. Project details are
+filled from the checkout; expand **Project details** to correct them. Agent
+limits and polling frequency use the existing defaults and are optional here.
+
+Model, polling, executable, branch-prefix and review base-flag fields offer
+presets plus a Custom option. Existing values outside the preset list remain
+editable and are never replaced on load. Branch options come from the checkout.
+Claude aliases follow the installed provider's model selection; Codex model
+suggestions are dated in `settingPresets.ts`. OpenCode keeps the agent-default
+and custom choices because its configured provider catalog varies by machine.
+Secrets, shell commands and environment variables remain free text, and numeric
+limits retain their bounded number controls.
+
+General settings are grouped under Workspace, Connections and Automation. Its
+sidebar and content scroll independently, with Save and errors always outside
+the scrolling content. Help stays brief; click the ⓘ button for a floating help popover. Click outside or press Escape
+to close the popover without closing settings. The
+project editor separates General, Worktree setup, Issue pickup and Linear
+updates. Old links to the Labels tab still open the combined Issue pickup page.
+
+The settings cleanup keeps the configuration format and saved values intact:
+
+| Settings | Why they remain / where to find them |
+| --- | --- |
+| Coding agent and session limits | Control which tool runs and resource use; General. |
+| Polling frequency | Useful for rate/latency tuning; collapsed under General. |
+| Project identity and repository | Folder-derived details; the internal ID is under Advanced identity. |
+| Scripts, symlinks, environment and dev commands | Necessary for reproducible checkouts and local testing; Worktree setup. |
+| Team, project, cycle, assignee, states and labels | Together define issue pickup; one project tab. |
+| Deduplication, shared labels and priority order | Preserve existing dispatch workflows; project/shared defaults. |
+| Linear state updates and comments | Optional workflow automation; Linear updates. |
+| Reviews | Compact provider cards group run settings and findings. Timeout, live viewing and fallback order are under Advanced settings; disabled cards retain their configuration. |
+| Summaries and status interpretation | Optional AI features; tuning appears only when enabled and survives disabling. |
+| Linear credentials, notifications, phone access and themes | Separate connections and presentation choices; grouped navigation. |
+
+This removes redundant first-run decisions and implementation-oriented prose
+without removing supported workflows or rewriting advanced settings on save.
+
 ## Develop
 
 ```sh

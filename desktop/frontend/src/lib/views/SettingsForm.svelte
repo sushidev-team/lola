@@ -1,9 +1,16 @@
 <script lang="ts">
-  import { onMount, onDestroy } from "svelte";
+  import { onMount, onDestroy, tick } from "svelte";
   import Modal from "$lib/components/Modal.svelte";
   import Tabs from "$lib/components/Tabs.svelte";
+  import HelpText from "$lib/components/HelpText.svelte";
+  import Disclosure from "$lib/components/Disclosure.svelte";
   import Button from "$lib/components/Button.svelte";
+  import CheckboxOptions from "$lib/components/CheckboxOptions.svelte";
+  import { PICKUP_FIELDS, LABEL_MATCHING, REPEAT_PICKUP, ENTRY_FORMAT } from "$lib/settingsFields";
   import Checkbox from "$lib/components/Checkbox.svelte";
+  import AgentModelFields from "$lib/components/AgentModelFields.svelte";
+  import PresetInput from "$lib/components/PresetInput.svelte";
+  import { POLL_INTERVALS, BRANCH_PREFIXES, BASE_FLAGS } from "$lib/settingPresets";
   import Select from "$lib/components/Select.svelte";
   import QRCode from "$lib/components/QRCode.svelte";
   import { store } from "$lib/store.svelte";
@@ -24,6 +31,8 @@
   let loading = $state(true);
   let loadError = $state("");
   let saving = $state(false);
+  const globalCapError = $derived(dto && (!Number.isInteger(dto.globalCap) || dto.globalCap < 1) ? "Enter a whole number of at least 1." : "");
+  const projectCapError = $derived(dto && (!Number.isInteger(dto.concurrencyCap) || dto.concurrencyCap < 0) ? "Enter a whole number of 0 or more." : "");
   // A rejected SaveSettings used to surface only as a footer flash — behind this
   // backdrop, truncated, gone in 4s — so it read like a save that just didn't
   // close. Held here and shown inline instead; cleared on the next attempt.
@@ -43,18 +52,15 @@
   }
 
   const TABS = [
-    { id: "defaults", label: "Defaults" },
-    { id: "linear", label: "Linear" },
-    { id: "project", label: "Project defaults" },
-    { id: "notify", label: "Notify" },
-    { id: "brain", label: "Brain" },
-    { id: "interpreter", label: "Interpreter" },
-    // "Review", not "CodeRabbit": the body is the whole [[review.provider]]
-    // catalog — every cli, watch AND agent kind — so naming
-    // the tab after one provider hid the other two.
-    { id: "review", label: "Review" },
-    { id: "remote", label: "Remote" },
-    { id: "appearance", label: "Appearance" },
+    { id: "defaults", label: "General", group: "Workspace" },
+    { id: "project", label: "Project defaults", group: "Workspace" },
+    { id: "appearance", label: "Appearance", group: "Workspace" },
+    { id: "linear", label: "Linear", group: "Connections" },
+    { id: "notify", label: "Notifications", group: "Connections" },
+    { id: "remote", label: "Phone access", group: "Connections" },
+    { id: "review", label: "Review", group: "Automation" },
+    { id: "brain", label: "Summaries", group: "Automation" },
+    { id: "interpreter", label: "Status interpretation", group: "Automation" },
   ];
 
   // Every tab body is an explicit `{:else if tab === …}` branch with no catch-all,
@@ -126,10 +132,10 @@
   const BIND_LITERAL = "__literal";
 
   const BIND_HELP: Record<string, string> = {
-    off: "keep these settings, listen on nothing",
-    localhost: "loopback only — what a tunnel or an SSH forward wants",
-    lan: "private interfaces only, tunnels and bridges excluded",
-    all: "0.0.0.0, every interface",
+    off: "No listener",
+    localhost: "This Mac only",
+    lan: "Private network",
+    all: "All interfaces",
   };
 
   // True when the persisted value is a literal the picker cannot show. Guarded
@@ -155,8 +161,9 @@
     dto.remoteBind = v;
   }
 
-  async function loadWorkspaceLabels() {
-    if (wsRequested) return;
+  async function loadWorkspaceLabels(retry = false) {
+    if (wsLoading || (wsRequested && !retry)) return;
+    wsErr = "";
     wsRequested = true;
     wsLoading = true;
     try {
@@ -289,18 +296,17 @@
     lazyLoadFor(id);
   }
 
-  const AGENTS = ["claude", "codex", "opencode"];
+  const statusBinaries = new Map<string, string>();
 
   const inputCls =
     "w-full rounded border border-edge bg-canvas px-2 py-1.5 text-ink outline-none focus:border-accent placeholder:text-placeholder";
-  const rowCls = "grid grid-cols-[11rem_1fr] items-center gap-3";
-  const rowTopCls = "grid grid-cols-[11rem_1fr] items-start gap-3";
+  const formId = $props.id();
+  let pollingOpen = $state(false);
+  const rowCls = "settings-field grid min-w-0 grid-cols-[11rem_minmax(0,1fr)] items-baseline gap-3";
+  const rowTopCls = "settings-field grid min-w-0 grid-cols-[11rem_minmax(0,1fr)] items-start gap-3";
   const hintCls = "mt-1 block text-sm text-faint";
 
-  function toggleId(arr: string[] | null, id: string): string[] {
-    const a = arr ?? [];
-    return a.includes(id) ? a.filter((x) => x !== id) : [...a, id];
-  }
+
 
   onMount(async () => {
     try {
@@ -318,7 +324,13 @@
   });
 
   async function save() {
-    if (!dto) return;
+    if (!dto || saving) return;
+    if (globalCapError || projectCapError) {
+      tab = "defaults";
+      await tick();
+      document.getElementById(`${formId}-${globalCapError ? "global" : "project"}-cap`)?.focus();
+      return;
+    }
     saving = true;
     saveErr = "";
     try {
@@ -385,6 +397,13 @@
   const kindIds = () => reviewKinds.map((k) => k.kind);
   const kindMeta = (kind: string) => reviewKinds.find((k) => k.kind === kind);
   const kindLabel = (kind: string) => kindMeta(kind)?.label ?? kind;
+  // Presentation names only; the backend still owns kind membership and fields.
+  const PROVIDER_NAMES: Record<string, string> = {
+    "claude-session": "Claude", "codex-session": "Codex", "opencode-session": "OpenCode",
+    "coderabbit-cli": "CodeRabbit CLI", "custom-cli": "Custom CLI",
+    "coderabbit-watch": "CodeRabbit bot", "bot-watch": "Review bot",
+  };
+  const providerName = (kind: string) => PROVIDER_NAMES[kind] ?? kindLabel(kind).split(" — ")[0];
   const TRANSPORTS = ["lola", "github", "linear"];
   // Copies of internal/config's resolve-time defaults, used ONLY to seed a
   // newly-added provider (the backend re-applies them on load either way).
@@ -721,29 +740,36 @@
 {/snippet}
 
 {#snippet areaRow(caption: string, value: string[] | null, onChange: (v: string[]) => void, placeholder = "", hint = "")}
+  {@const fieldId = `${formId}-${caption.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`}
   <div class={rowTopCls}>
-    <span class="text-faint">{caption}</span>
+    <span class="flex items-center gap-1.5 text-faint">
+      <label for={fieldId}>{caption}</label>
+      {#if hint && !hint.startsWith("one ")}<HelpText label={caption} detail={hint} />{/if}
+    </span>
     <span>
       <textarea
-        class="{inputCls} resize-y font-mono"
+        id={fieldId}
+        class="{inputCls} block resize-y font-mono"
         aria-label={caption}
+        aria-describedby={ENTRY_FORMAT[caption] ? `${fieldId}-format` : undefined}
         rows="3"
         spellcheck="false"
         {placeholder}
         value={linesToText(value)}
         oninput={(e) => onChange(splitLines(e.currentTarget.value))}
       ></textarea>
-      {#if hint}<span class={hintCls}>{hint}</span>{/if}
+      {#if ENTRY_FORMAT[caption]}<span id={`${fieldId}-format`} class={hintCls}>{ENTRY_FORMAT[caption]}</span>{/if}
     </span>
   </div>
 {/snippet}
 
 {#snippet selectRow(caption: string, current: string, options: LinearOption[], onChange: (v: string) => void, anyLabel = "", hint = "")}
-  <div class={hint ? rowTopCls : rowCls}>
+  <div class={rowCls}>
     <span class="text-faint">{caption}</span>
     <span>
       <Select aria-label={caption} value={current} onchange={(e) => onChange(e.currentTarget.value)}>
         {#if anyLabel}<option value="">{anyLabel}</option>{/if}
+        {#if current && !options.some((o) => o.id === current)}<option value={current}>{current} (current value)</option>{/if}
         {#each options as o (o.id)}<option value={o.id}>{o.label}</option>{/each}
       </Select>
       {#if hint}<span class={hintCls}>{hint}</span>{/if}
@@ -755,7 +781,7 @@
      when the workspace labels couldn't be loaded or there are none. -->
 {#snippet labelRow(caption: string, current: string, onChange: (v: string) => void)}
   {#if wsReady}
-    {@render selectRow(caption, current, wsLabels ?? [], onChange, "(none)", "workspace label — valid across every team")}
+    {@render selectRow(caption, current, wsLabels ?? [], onChange, "(none)", "Workspace label only.")}
   {:else}
     <div class={rowTopCls}>
       <span class="text-faint">{caption}</span>
@@ -767,50 +793,59 @@
           placeholder="workspace label UUID"
           oninput={(e) => onChange(e.currentTarget.value)}
         />
-        <span class={hintCls}>workspace label — valid across every team</span>
+        <span class={hintCls}>Workspace label only.</span>
       </span>
     </div>
   {/if}
 {/snippet}
 
-<Modal title="settings" onClose={requestClose} width="640px">
+<Modal title="Settings" onClose={requestClose} width="880px" bodyClass="grid h-[65vh] grid-rows-[minmax(0,1fr)] overflow-hidden">
   {#if loading}
     <div class="py-10 text-center text-faint">loading settings…</div>
   {:else if loadError}
     <div class="py-10 text-center text-bad">{loadError}</div>
   {:else if dto}
     {@const d = dto}
-    <Tabs tabs={TABS} active={tab} onSelect={selectTab} />
+    <div class="settings-layout grid min-h-0 grid-cols-[11.5rem_minmax(0,1fr)] overflow-hidden">
+    <nav aria-label="Settings sections" class="settings-nav min-h-0 overflow-y-auto overscroll-contain border-r border-edge p-4">
+      <Tabs tabs={TABS} active={tab} onSelect={selectTab} vertical />
+    </nav>
 
     <!-- No size class: every field caption, control and option inherits the
          13px base. Only the faint explanations and micro-labels step down. -->
-    <div>
+    <div role="region" aria-label="Settings content" class="min-h-0 min-w-0 overflow-y-auto overscroll-contain p-4">
       {#if tab === "defaults"}
         <section>
-          {@render head("Defaults")}
+          {@render head("General")}
+          <div class="copy mb-4 text-sm text-faint"><HelpText label="session limits" summary="Workspace limit and project defaults." detail="Choose the coding agent and how many sessions can run at once. Projects can override their agent and limit." /></div>
           <div class="space-y-2">
             <label class={rowCls}>
-              <span class="text-faint">Global cap</span>
-              <input class={inputCls} type="number" min="0" bind:value={d.globalCap} />
+              <span class="text-faint">Total running agents</span>
+              <span>
+                <input id={`${formId}-global-cap`} aria-label="Total running agents" class={inputCls} type="number" min="1" step="1" bind:value={d.globalCap}
+                  aria-invalid={!!globalCapError} aria-describedby={`${formId}-global-cap-help`} />
+                <span id={`${formId}-global-cap-help`} class={hintCls} aria-live="polite">{globalCapError || "Maximum across all projects."}</span>
+              </span>
             </label>
             <label class={rowCls}>
-              <span class="text-faint">Concurrency cap</span>
-              <input class={inputCls} type="number" min="0" bind:value={d.concurrencyCap} />
+              <span class="text-faint">Agents per project</span>
+              <span>
+                <input id={`${formId}-project-cap`} aria-label="Agents per project" class={inputCls} type="number" min="0" step="1" bind:value={d.concurrencyCap}
+                  aria-invalid={!!projectCapError} aria-describedby={`${formId}-project-cap-help`} />
+                <span id={`${formId}-project-cap-help`} class={hintCls} aria-live="polite">{projectCapError || (d.concurrencyCap === 0 ? "Set a limit in each project." : "Default limit. Projects can override it.")}</span>
+              </span>
             </label>
-            <label class={rowCls}>
-              <span class="text-faint">Poll interval</span>
-              <input class={inputCls} type="text" placeholder="60s" bind:value={d.pollInterval} />
-            </label>
-            <div class={rowCls}>
-              <span class="text-faint">Agent</span>
-              <!-- Segmented control: a hairline rail with a 2px gutter, so the
-                   selected chip is a rounded button INSIDE it rather than a
-                   flush-cut segment. Same shape as every other segmented control
-                   in the app (lens picker, scope picker, agent/shell). -->
-              <div class="inline-flex w-fit items-center gap-0.5 rounded-md border border-edge p-0.5">
-                {#each AGENTS as a (a)}
-                  <Button selected={d.agent === a} onclick={() => { d.agent = a; }}>{a}</Button>
-                {/each}
+            <AgentModelFields provider={d.agent || "claude"} providerLabel="Default agent" rowClass={rowCls}
+              onProviderChange={(value) => { d.agent = value; }} />
+            <div class="border-t border-edge pt-3">
+              <Button aria-expanded={pollingOpen} aria-controls={`${formId}-polling-frequency`} onclick={() => { pollingOpen = !pollingOpen; }}>
+                <span aria-hidden="true">{pollingOpen ? "▾" : "▸"}</span>Polling frequency
+              </Button>
+              <div id={`${formId}-polling-frequency`} class="mt-3" hidden={!pollingOpen}>
+                <div class={rowCls}>
+                  <span class="text-faint">Poll interval</span>
+                  <PresetInput label="Poll interval" value={d.pollInterval} options={POLL_INTERVALS} onChange={(v) => { d.pollInterval = v; }} />
+                </div>
               </div>
             </div>
           </div>
@@ -818,10 +853,7 @@
       {:else if tab === "linear"}
         <section>
           {@render head("Linear")}
-          <p class="copy mb-3 text-sm text-faint">
-            lola reads every issue through this key. It is stored in the macOS Keychain and never written to
-            <span class="font-mono text-sm">config.toml</span> — only the name of its source is.
-          </p>
+          <HelpText label="Linear key storage" summary="Stored in Keychain." detail="Lola uses this key to read Linear issues. The key stays in macOS Keychain; config stores only its source name." />
 
           <div class="mb-4 rounded-lg border border-edge bg-canvas px-3 py-2.5">
             {#if !keyStatus}
@@ -851,7 +883,7 @@
                   bind:value={keyInput}
                   oninput={() => (keyMsg = "")}
                 />
-                <span class={hintCls}>Personal API key from Linear → Settings → Security &amp; access → API keys.</span>
+                <HelpText label="creating a Linear key" summary="Personal API key." detail="In Linear, open Settings → Security &amp; access → API keys." />
               </span>
             </div>
             <div class={rowCls}>
@@ -881,33 +913,32 @@
 
           <!-- Saved on its own, not by the overlay's Save: the key is a secret and
                must not ride along on an unrelated form commit (see saveKey). -->
-          <p class="copy mt-4 text-sm text-faint">
-            The key saves immediately — the overlay's Save button does not carry it.
-          </p>
+          <HelpText label="saving the Linear key" summary="Save key applies immediately." detail="The main Save button saves settings only. Use Save key to store or replace your Linear credential." />
         </section>
       {:else if tab === "project"}
         <section>
           {@render head("Project defaults")}
-          <p class="copy mb-3 text-sm text-faint">
-            Every [[project]] that omits one of these keys inherits it. The project editor shows an inherited value ghosted. The label fields
-            offer <span class="text-ink">workspace</span> labels, which apply across every team — a project's own pickers offer that project's
-            team labels instead.
-          </p>
+          <div class="copy mb-3 text-sm text-faint"><HelpText label="project defaults" summary="Defaults for all projects." detail="Shared settings for all projects. Override them in an individual project when needed.
+            Shared labels must be workspace labels so they work across teams." /></div>
           <div class="space-y-2">
-            <label class={rowCls}>
+            <h4 class="mb-3 text-ink">Worktree setup</h4>
+            <div class={rowCls}>
               <span class="text-faint">Branch prefix</span>
-              <input class="{inputCls} font-mono" type="text" placeholder="lola/" bind:value={d.branchPrefix} />
-            </label>
+              <PresetInput label="Branch prefix" value={d.branchPrefix} options={BRANCH_PREFIXES} onChange={(v) => { d.branchPrefix = v; }} />
+            </div>
             {@render areaRow("Symlinks", d.symlinks, (v) => { d.symlinks = v; }, ".env\nnode_modules", "one path per line")}
             {@render areaRow("Post-create", d.postCreate, (v) => { d.postCreate = v; }, "npm install", "one command per line")}
             {@render areaRow("Env", d.env, (v) => { d.env = v; }, "KEY=value", "one KEY=value per line")}
 
+            <h4 class="border-t border-edge pt-4 text-ink">Issue pickup</h4>
             {#if wsLoading}
-              <p class="text-sm text-faint">loading workspace labels…</p>
+              <p role="status" class="text-sm text-faint">Loading workspace labels…</p>
             {:else if wsErr}
-              <p class="rounded border border-warn/40 bg-warn/10 px-3 py-2 text-sm text-warn">
-                couldn't load workspace labels ({wsErr}) — enter the UUIDs by hand below
-              </p>
+              <div role="alert" class="rounded border border-warn/40 bg-warn/10 px-3 py-2 text-sm text-warn">
+                <p>Couldn’t load workspace labels. Retry or enter IDs manually below.</p>
+                <HelpText label="workspace labels error" detail={wsErr} />
+                <Button size="sm" onclick={() => void loadWorkspaceLabels(true)}>Retry workspace labels</Button>
+              </div>
             {:else if wsLabels && wsLabels.length === 0}
               <p class="rounded border border-edge bg-canvas px-3 py-2 text-sm text-faint">
                 This workspace has no organisation-level labels. A shared default is inherited by projects on any team, so it should be one —
@@ -919,18 +950,9 @@
               <div class={rowTopCls}>
                 <span class="text-faint">Match labels</span>
                 <span>
-                  <div class="max-h-36 space-y-1 overflow-auto rounded border border-edge p-2">
-                    {#each wsLabels ?? [] as o (o.id)}
-                      <label class="flex items-center gap-2 text-ink">
-                        <Checkbox
-                          checked={(d.matchLabels ?? []).includes(o.id)}
-                          onchange={() => { d.matchLabels = toggleId(d.matchLabels, o.id); }}
-                        />
-                        <span class="truncate">{o.label}</span>
-                      </label>
-                    {/each}
-                  </div>
-                  <span class={hintCls}>workspace labels — valid across every team</span>
+                  <CheckboxOptions label="Match labels" options={wsLabels ?? []} selected={d.matchLabels}
+                    onChange={(value) => { d.matchLabels = value; }} />
+                  <span class={hintCls}>Workspace labels only.</span>
                 </span>
               </div>
             {:else}
@@ -939,34 +961,32 @@
                 d.matchLabels,
                 (v) => { d.matchLabels = v; },
                 "one UUID per line",
-                "workspace labels — valid across every team",
+                "Workspace labels only.",
               )}
             {/if}
 
             {@render selectRow(
-              "Match mode",
+              PICKUP_FIELDS.matchMode,
               d.matchMode,
-              [
-                { id: "any", label: "any label" },
-                { id: "all", label: "all labels" },
-              ],
+              LABEL_MATCHING,
               (v) => { d.matchMode = v; },
             )}
             {@render selectRow(
-              "Dedup mode",
+              PICKUP_FIELDS.dedupMode,
               d.dedupMode,
-              [
-                { id: "label", label: "label (flip a label on send)" },
-                { id: "seen", label: "seen (remember dispatched)" },
-                { id: "state", label: "state (Linear workflow state)" },
-              ],
+              REPEAT_PICKUP,
               (v) => { d.dedupMode = v; },
             )}
-            {@render labelRow("On-sent set label", d.onSentSetLabel, (v) => { d.onSentSetLabel = v; })}
+            {#if d.dedupMode === "label"}
+              {@render labelRow(PICKUP_FIELDS.onSentSetLabel, d.onSentSetLabel, (v) => { d.onSentSetLabel = v; })}
+            {/if}
             {@render labelRow("Blocked label", d.blockedLabelId, (v) => { d.blockedLabelId = v; })}
             {#if sortKeys.length}
               <div class={rowTopCls}>
-                <span class="text-faint">Priority sort</span>
+                <span class="flex items-center gap-1.5 text-faint">
+                  <span>Priority sort</span>
+                  <HelpText label="priority order" detail="Numbers show the tie-break order. Click a key to add or remove it. Empty uses priority, then creation time." />
+                </span>
                 <span>
                   <div class="space-y-1 rounded border border-edge p-2">
                     {#each sortKeys as k (k)}
@@ -975,14 +995,12 @@
                         <span
                           class="w-4 shrink-0 text-center font-mono {rank >= 0 ? 'text-accent-ink' : 'text-faint/40'}"
                         >{rank >= 0 ? rank + 1 : "·"}</span>
-                        <span>{k}</span>
+                        <span>{k === "createdAt" ? "Creation time" : k === "priority" ? "Priority" : k}</span>
                         <span class="text-faint">{SORT_KEY_HELP[k] ?? ""}</span>
                       </Button>
                     {/each}
                   </div>
-                  <span class={hintCls}>
-                    the number is the tie-break order — click to add or remove; empty means priority, then createdAt
-                  </span>
+                  <span class={hintCls}>Click to order.</span>
                 </span>
               </div>
             {:else}
@@ -998,7 +1016,7 @@
         </section>
       {:else if tab === "notify"}
         <section>
-          {@render head("Notify")}
+          {@render head("Notifications")}
           <div class="space-y-2">
             <label class="flex cursor-pointer items-center gap-2">
               <Checkbox bind:checked={d.notifyDesktop} />
@@ -1008,23 +1026,23 @@
               <span class="text-faint">Slack webhook env</span>
               <div>
                 <input class={inputCls} type="text" placeholder="LOLA_SLACK_WEBHOOK" bind:value={d.slackWebhookEnv} />
-                <span class={hintCls}>Slack webhook env VAR NAME — never the URL.</span>
+                <span class={hintCls}>Variable name, not URL.</span>
               </div>
             </label>
           </div>
         </section>
       {:else if tab === "brain"}
         <section>
-          {@render head("Brain")}
+          {@render head("Summaries")}
+          <div class="copy mb-3 text-sm text-faint"><HelpText label="summaries" summary="AI summaries · uses tokens." detail="Use Claude to summarize sessions that need attention or are approved. Summaries use additional tokens." /></div>
           <div class="space-y-2">
             <label class="flex cursor-pointer items-center gap-2">
               <Checkbox bind:checked={d.brainEnabled} />
               <span>Enabled</span>
             </label>
-            <label class={rowCls}>
-              <span class="text-faint">Model</span>
-              <input class={inputCls} type="text" placeholder="claude-…" bind:value={d.brainModel} />
-            </label>
+            {#if d.brainEnabled}
+            <AgentModelFields provider="claude" model={d.brainModel} rowClass={rowCls}
+              onModelChange={(value) => { d.brainModel = value; }} />
             <label class={rowCls}>
               <span class="text-faint">Timeout (s)</span>
               <input class={inputCls} type="number" min="0" bind:value={d.brainTimeout} />
@@ -1039,29 +1057,34 @@
                 <span>Summarize on approved</span>
               </label>
             </div>
+            {/if}
           </div>
         </section>
       {:else if tab === "interpreter"}
         <section>
-          {@render head("Interpreter")}
-          <p class="copy mb-3 text-sm text-faint">
-            The <span class="font-mono text-ink">[statusagent]</span> status interpreter: a small bounded claude pass that judges what
-            each agent is <span class="text-ink">actually</span> doing (an "≈" overlay + one-line headline in the session list).
-            Display only — it can never change the real status or type into an agent. Each interpretation spends tokens.
-          </p>
+          {@render head("Status interpretation")}
+          <div class="copy mb-3 text-sm text-faint"><HelpText label="status interpretation" summary="AI status estimates · uses tokens." detail="Use the selected agent to add a status estimate and short headline to each session. This changes only the display and uses additional tokens." /></div>
           <div class="space-y-2">
             <label class="flex cursor-pointer items-center gap-2">
               <Checkbox bind:checked={d.statusAgentEnabled} />
               <span>Enabled</span>
             </label>
-            <label class={rowCls}>
-              <span class="text-faint">Binary</span>
-              <input class={inputCls} type="text" placeholder="claude (via PATH)" bind:value={d.statusAgentBin} />
-            </label>
-            <label class={rowCls}>
-              <span class="text-faint">Model</span>
-              <input class={inputCls} type="text" placeholder="sonnet" bind:value={d.statusAgentModel} />
-            </label>
+            {#if d.statusAgentEnabled}
+            <AgentModelFields provider={d.statusAgentAgent || "claude"} model={d.statusAgentModel ?? ""} rowClass={rowCls}
+              onProviderChange={(value) => {
+                statusBinaries.set(d.statusAgentAgent || "claude", d.statusAgentBin);
+                d.statusAgentAgent = value;
+                d.statusAgentBin = statusBinaries.get(value) ?? "";
+              }}
+              onModelChange={(value) => { d.statusAgentModel = value; }} />
+            <Disclosure label="Executable override">
+              <div class="mt-3 {rowCls}">
+                <span class="text-faint">Binary</span>
+                <PresetInput label="Binary" value={d.statusAgentBin}
+                  options={[{ value: "", label: `Default (${d.statusAgentAgent || "claude"} on PATH)` }, { value: d.statusAgentAgent || "claude", label: d.statusAgentAgent || "claude" }]}
+                  onChange={(v) => { d.statusAgentBin = v; }} placeholder={`/path/to/${d.statusAgentAgent || "claude"}`} />
+              </div>
+            </Disclosure>
             <label class={rowCls}>
               <span class="text-faint">Timeout (s)</span>
               <input class={inputCls} type="number" min="0" bind:value={d.statusAgentTimeout} />
@@ -1082,17 +1105,13 @@
               <Checkbox bind:checked={d.statusAgentIncludeTranscript} />
               <span>Include transcript tail</span>
             </label>
+            {/if}
           </div>
         </section>
       {:else if tab === "remote"}
         <section>
-          {@render head("Remote")}
-          <p class="copy mb-3 text-sm text-faint">
-            The <span class="font-mono text-ink">[remote]</span> phone listener: the TLS socket the
-            <span class="text-ink">Lola</span> mobile app connects to. Off by default, and the default is chosen for what enabling
-            it <span class="text-ink">grants</span> rather than for what it costs — a paired device can read your sessions, watch any
-            pane and type arbitrary prose into a running coding agent.
-          </p>
+          {@render head("Phone access")}
+          <div class="copy mb-3 text-sm text-faint"><HelpText label="phone access" summary="Connect the mobile app." detail="Connect the Lola mobile app to this Mac. Paired phones can read sessions, watch terminals and send messages to your coding agents." /></div>
           <div class="space-y-2">
             <label class="flex cursor-pointer items-center gap-2">
               <Checkbox bind:checked={d.remoteEnabled} />
@@ -1100,7 +1119,7 @@
             </label>
             <div class={rowCls}>
               <span class="text-faint">Bind</span>
-              <span class="flex items-center gap-2">
+              <span class="grid gap-1">
                 <Select
                   aria-label="Bind"
                   value={bindShowsLiteral ? BIND_LITERAL : d.remoteBind}
@@ -1122,10 +1141,8 @@
                   placeholder="192.168.1.20"
                   bind:value={d.remoteBind} />
               </label>
-              <p class="copy text-xs text-faint">
-                An IP literal, not a hostname — a name cannot be resolved at config-load time without turning a config read into a
-                network call, so the daemon rejects one.
-              </p>
+              <div class="copy text-xs text-faint"><HelpText label="bind address" summary="IP address, not hostname." detail="An IP literal, not a hostname — a name cannot be resolved at config-load time without turning a config read into a
+                network call, so the daemon rejects one." /></div>
             {/if}
             <label class={rowCls}>
               <span class="text-faint">Port</span>
@@ -1137,60 +1154,45 @@
                  binds loopback. It is a config key rather than an environment
                  variable because the daemon is normally started by the restart
                  button a few inches from here, which cannot set one. -->
-            <label class="flex cursor-pointer items-start gap-2 pt-1">
-              <Checkbox bind:checked={d.remoteInsecureLan} />
-              <span>
+            <div class="pt-1">
+              <label class="flex cursor-pointer items-center gap-2">
+                <Checkbox bind:checked={d.remoteInsecureLan} />
                 <span>Allow a LAN bind</span>
-                <span class="mt-0.5 block text-xs text-faint">
-                  Milestone 1 forces the bind to loopback, which a physical phone cannot reach. This honours the bind
-                  above and puts the shared key on your network in the clear. The Simulator does not need it.
-                </span>
-              </span>
-            </label>
+              </label>
+              <div class="ml-6"><HelpText label="Allow a LAN bind" summary="Shared key sent unencrypted." detail="Allows a physical phone to reach the configured network address. This development mode sends the shared key in the clear. The Simulator does not need it." /></div>
+            </div>
 
             <!-- A DISCLOSURE rather than a convenience, which is why it is off
                  by default and why the copy leads with what it announces. What
                  it buys is RECONNECTION, not pairing: the key and the pin
                  already work on any network, and only the address the phone
                  stored at pairing time goes stale. -->
-            <label class="flex cursor-pointer items-start gap-2 pt-1">
-              <Checkbox bind:checked={d.remoteAdvertise} />
-              <span>
+            <div class="pt-1">
+              <label class="flex cursor-pointer items-center gap-2">
+                <Checkbox bind:checked={d.remoteAdvertise} />
                 <span>Advertise on the local network</span>
-                <span class="mt-0.5 block text-xs text-faint">
-                  Lets a paired phone find this Mac on a network whose addresses it has never seen — home, the office, a
-                  hotspot — without re-pairing. It announces to every peer on the network that this machine runs coding
-                  agents and accepts remote control; the announcement itself carries a version and nothing else, no
-                  hostname and no key.
-                </span>
-              </span>
-            </label>
+              </label>
+              <div class="ml-6"><HelpText label="Advertise on the local network" summary="Let paired phones find this Mac." detail="Announces remote-control availability to nearby devices so paired phones can reconnect on new networks. The announcement contains a version, but no hostname or access key." /></div>
+            </div>
 
             <!-- The ACTIVE session's dev servers, republished. Off by default
                  like the two above, and worth having because the alternative is
                  `--host 0.0.0.0` in every project: permanent, well-known and on
                  every network, where this is temporary, random and scoped to
                  one address lola discovered itself. -->
-            <label class="flex cursor-pointer items-start gap-2 pt-1">
-              <Checkbox bind:checked={d.remoteDevForward} />
-              <span>
+            <div class="pt-1">
+              <label class="flex cursor-pointer items-center gap-2">
+                <Checkbox bind:checked={d.remoteDevForward} />
                 <span>Publish dev servers of the active session</span>
-                <span class="mt-0.5 block text-xs text-faint">
-                  A dev server binds 127.0.0.1, so a phone cannot reach it. This republishes the
-                  active session's on one private interface, on a random port, until that session
-                  stops being active. Anything on that network can reach them while it is up.
-                </span>
-              </span>
-            </label>
+              </label>
+              <div class="ml-6"><HelpText label="Publish dev servers of the active session" summary="Dev servers accessible on your network." detail="Shares the active session’s local dev servers on one private interface and a temporary port. Anyone on that network can reach them while the session is active." /></div>
+            </div>
           </div>
           <div class="mt-4 border-t border-edge pt-4">
             <div class="flex items-center justify-between gap-3">
               <div>
                 <h4 class="text-ink">Connect a phone</h4>
-                <p class="copy text-sm text-faint">
-                  Everything the app needs, from the listener that is actually running — so a stale key file or an
-                  older log line cannot send the phone somewhere that refuses it.
-                </p>
+                <div class="copy text-sm text-faint"><HelpText label="connect code" summary="Scan with the mobile app." detail="The code contains the running listener’s address and credentials. Save connection settings before generating a code." /></div>
               </div>
               {#if connect || connectErr}
                 <div class="flex shrink-0 items-center gap-2">
@@ -1213,9 +1215,7 @@
                  the action someone actually came here for. -->
             <div class="mt-2 flex items-center gap-3">
               <Button size="sm" loading={regenBusy} onclick={askRegenerate}>Regenerate key</Button>
-              <span class="text-xs text-faint">
-                Milestone 1's only revocation — it disconnects every paired phone.
-              </span>
+              <HelpText label="regenerating the key" summary="Disconnects all phones." detail="Reconnect each phone using the new code." />
             </div>
             {#if regenDone}
               <p class="copy mt-2 text-sm text-good">{regenDone}</p>
@@ -1226,13 +1226,8 @@
             {:else if connect && connect.problem}
               <p class="copy mt-3 text-sm text-warn">{connect.problem}</p>
             {:else if connect}
-              <p class="copy mt-3 text-sm text-warn">
-                This is a secret. The code carries the access key, so anything that can read it off your screen — a
-                share, a recording, someone walking past — can drive your coding agents. It hides itself after 90
-                seconds; press Show code again if the phone was not ready.
-                <span class="text-ink">Copying puts the key on the clipboard</span>, which every app on this Mac can
-                read and which Universal Clipboard syncs to your other devices — copy something else afterwards.
-              </p>
+              <HelpText label="code privacy" summary="Secret code · hides after 90s."
+                detail="Anyone with this code can control your coding agents. Copying also puts the access key on the clipboard, which may sync to your other devices. Copy something else afterward." />
               <div class="mt-3 flex flex-wrap items-start gap-4">
                 <QRCode value={connect.code} size={228} label="Connect code" />
                 <div class="min-w-[16rem] flex-1 space-y-1">
@@ -1260,36 +1255,20 @@
                 </div>
               </div>
               {#if connect.hosts && connect.hosts.length > 1}
-                <p class="copy mt-3 text-xs text-faint">
-                  Also bound on <span class="font-mono text-ink">{connect.hosts.slice(1).join(", ")}</span>. The code
-                  carries every one of them, so the app can fall back without being told again.
-                </p>
+                <HelpText label="additional addresses" summary="Fallback addresses included." detail={connect.hosts.slice(1).join(", ")} />
               {/if}
               {#if connect.insecure}
-                <p class="copy mt-2 text-xs text-faint">
-                  Milestone 1: one shared key, no device identity and no way to revoke a single phone. Rotate it by
-                  restarting the daemon with a new <span class="font-mono text-ink">LOLA_REMOTE_INSECURE_KEY</span>.
-                </p>
+                <HelpText label="shared-key access" summary="One key for all phones." detail="Individual phones cannot be revoked separately. Regenerate the key to disconnect them all." />
               {/if}
             {/if}
           </div>
 
-          <p class="copy mt-3 text-sm text-faint">
-            Milestone 1 only exists in a daemon built with <span class="font-mono text-ink">-tags lola_insecure</span>, and that build
-            <span class="text-ink"> forces the bind to loopback</span> whatever is set here, logging the override. A phone therefore
-            reaches it through a forward rather than directly — see <span class="font-mono text-ink">mobile/README.md</span>. Pairing,
-            device identities and revocation are milestone 2; until then authentication is a single bearer key from the daemon's
-            environment.
-          </p>
+
         </section>
       {:else if tab === "appearance"}
         <section>
           {@render head("Appearance")}
-          <p class="copy mb-3 text-sm text-faint">
-            Sets <span class="font-mono text-ink">[ui].theme</span>, which colours the app chrome and every terminal from one palette.
-            Picking a flavor <span class="text-ink">previews it immediately</span>; save writes it to config.toml, cancel puts the old one
-            back.
-          </p>
+          <div class="copy mb-3 text-sm text-faint"><HelpText label="theme preview" summary="Preview a theme." detail="Preview a theme for the app and terminals. Save to keep it, or cancel to restore your current theme." /></div>
           <!-- Grid, not flex: WKWebView does not stretch a flex child inside a
                flex column, so a flex layout that fills correctly in Chrome
                collapses to content width in the packaged .app. -->
@@ -1351,140 +1330,116 @@
           {/if}
 
           {#each reviewKinds.length ? providers() : [] as p (p.provider)}
-            <section class="border-t border-edge/40 pt-4 first:border-t-0 first:pt-0" class:opacity-60={d.reviewLegacy}>
-              {@render head(kindLabel(p.provider))}
-              <div class="space-y-2">
-                <div class="flex items-center justify-between">
-                  <label class="flex cursor-pointer items-center gap-2">
-                    <Checkbox disabled={d.reviewLegacy} bind:checked={p.enabled} />
-                    <span>Enabled</span>
-                  </label>
-                  {#if !d.reviewLegacy}
-                    <Button variant="danger" onclick={() => removeProvider(p.provider)}>Remove</Button>
-                  {/if}
+            <section aria-label={`${providerName(p.provider)} review`} class="overflow-hidden rounded-lg border border-edge" class:opacity-60={d.reviewLegacy}>
+              <header class="flex items-center gap-3 bg-canvas/40 px-4 py-3">
+                <div class="min-w-0 flex-1">
+                  <h3 class="text-base font-medium text-ink">{providerName(p.provider)}</h3>
+                  <span class="text-xs text-faint">{isWatch(p.provider) ? "PR comments" : isCLI(p.provider) ? "CLI review" : "Agent review"}</span>
                 </div>
-
-                <!-- Which fields a kind has comes from its backend descriptor
-                     (cli / agent / watch), never from its name, so a new kind is
-                     drawn correctly without a case of its own here. -->
-                {#if isCLI(p.provider)}
-                  <label class={rowCls}>
-                    <span class="text-faint">Command{needsCommand(p.provider) ? " *" : ""}</span>
-                    <input
-                      class={inputCls}
-                      type="text"
-                      placeholder={needsCommand(p.provider) ? "required, e.g. greptile review --plain" : "coderabbit review"}
-                      disabled={d.reviewLegacy}
-                      bind:value={p.command}
-                    />
-                  </label>
-                  <label class={rowCls}>
-                    <span class="text-faint">Base flag</span>
-                    <input class={inputCls} type="text" placeholder="--base" disabled={d.reviewLegacy} bind:value={p.baseFlag} />
-                  </label>
-                  <span class={hintCls}>Flag the PR's base branch is passed with. Empty passes no base at all.</span>
+                <label class="flex cursor-pointer items-center gap-2">
+                  <Checkbox disabled={d.reviewLegacy} bind:checked={p.enabled} />
+                  <span>{p.enabled ? "Enabled" : "Disabled"}</span>
+                </label>
+                {#if !d.reviewLegacy}
+                  <Button variant="danger" size="xs" onclick={() => removeProvider(p.provider)}>Remove</Button>
                 {/if}
-                {#if agentOf(p.provider)}
-                  <label class={rowCls}>
-                    <span class="text-faint">Model</span>
-                    <input
-                      class={inputCls}
-                      type="text"
-                      placeholder={agentOf(p.provider) === "opencode" ? "(default) — provider/model" : `(${agentOf(p.provider)} default)`}
-                      disabled={d.reviewLegacy}
-                      bind:value={p.model}
-                    />
-                  </label>
-                {/if}
-                {#if isWatch(p.provider)}
-                  <label class={rowCls}>
-                    <span class="text-faint">Author{needsAuthor(p.provider) ? " *" : ""}</span>
-                    <input
-                      class={inputCls}
-                      type="text"
-                      placeholder={needsAuthor(p.provider) ? "required, e.g. greptile" : "coderabbitai"}
-                      disabled={d.reviewLegacy}
-                      bind:value={p.author}
-                    />
-                  </label>
-                {:else}
-                  <label class={rowCls}>
-                    <span class="text-faint">Timeout (s)</span>
-                    <input class={inputCls} type="number" min="0" disabled={d.reviewLegacy} bind:value={p.timeoutSeconds} />
-                  </label>
-                {/if}
+              </header>
 
-                <div class="flex flex-wrap gap-x-6 gap-y-2 pt-1">
-                  {#if !isWatch(p.provider)}
-                    <label class="flex cursor-pointer items-center gap-2">
-                      <Checkbox disabled={d.reviewLegacy} bind:checked={p.onPrOpen} />
-                      <span>On PR open</span>
-                    </label>
-                  {/if}
-                  <label class="flex cursor-pointer items-center gap-2">
-                    <Checkbox disabled={d.reviewLegacy} bind:checked={p.notify} />
-                    <span>Notify</span>
-                  </label>
-                  <label class="flex cursor-pointer items-center gap-2">
-                    <Checkbox disabled={d.reviewLegacy} bind:checked={p.sendToAgent} />
-                    <span>Send to agent</span>
-                  </label>
-                  {#if !isWatch(p.provider)}
-                    <!-- The pass runs in its own "<session>-review" tmux session,
-                         so it shows up as a Review tab beside the shells. -->
-                    <label class="flex cursor-pointer items-center gap-2">
-                      <Checkbox disabled={d.reviewLegacy} bind:checked={p.visible} />
-                      <span>Watch it run</span>
-                    </label>
-                  {/if}
-                </div>
-
-                <div class={rowTopCls}>
-                  <span class="text-faint">Transports</span>
-                  <div class="flex flex-wrap gap-x-6 gap-y-2">
-                    {#each transportsFor(p.provider) as t}
-                      <label class="flex cursor-pointer items-center gap-2">
-                        <Checkbox
-                          disabled={d.reviewLegacy || t === "lola"}
-                          checked={(p.transports ?? []).includes(t)}
-                          onchange={(e) => toggleTransport(p, t, (e.currentTarget as HTMLInputElement).checked)} />
-                        <span>{t}{t === "lola" ? " (always)" : ""}</span>
+              {#if p.enabled || d.reviewLegacy}
+                <div class="space-y-4 p-4">
+                  <div class="space-y-3">
+                    {#if isCLI(p.provider)}
+                      <label class="grid gap-1.5">
+                        <span class="text-faint">Command{needsCommand(p.provider) ? " *" : ""}</span>
+                        <input class={inputCls} type="text" disabled={d.reviewLegacy} bind:value={p.command}
+                          placeholder={needsCommand(p.provider) ? "greptile review --plain" : "coderabbit review"} />
                       </label>
-                    {/each}
+                    {/if}
+                    {#if agentOf(p.provider)}
+                      <AgentModelFields provider={agentOf(p.provider)} model={p.model} disabled={d.reviewLegacy}
+                        onModelChange={(value) => { p.model = value; }} />
+                    {/if}
+                    {#if isWatch(p.provider)}
+                      <label class="grid gap-1.5">
+                        <span class="text-faint">Author{needsAuthor(p.provider) ? " *" : ""}</span>
+                        <input class={inputCls} type="text" disabled={d.reviewLegacy} bind:value={p.author}
+                          placeholder={needsAuthor(p.provider) ? "GitHub bot username" : "coderabbitai"} />
+                      </label>
+                    {:else}
+                      <label class="flex cursor-pointer items-center gap-2">
+                        <Checkbox disabled={d.reviewLegacy} bind:checked={p.onPrOpen} />
+                        <span>On PR open</span>
+                      </label>
+                    {/if}
                   </div>
-                </div>
 
-                <!-- Only the github transport has two shapes, so the choice
-                     appears only once it is selected. Inline posts one anchored,
-                     resolvable thread per finding (and asks the worker to close
-                     the ones it fixes); off posts a single flat comment. -->
-                {#if !isWatch(p.provider) && (p.transports ?? []).includes("github")}
-                  <div class={rowTopCls}>
-                    <span class="text-faint">GitHub shape</span>
-                    <label class="flex cursor-pointer items-center gap-2">
-                      <Checkbox disabled={d.reviewLegacy} bind:checked={p.githubInline} />
-                      <span>Inline PR threads (resolvable)</span>
-                    </label>
-                  </div>
-                {/if}
-
-                {#if !isWatch(p.provider)}
-                  <div class={rowTopCls}>
-                    <span class="text-faint">Fallback</span>
-                    <div class="flex flex-wrap gap-x-6 gap-y-2">
-                      {#each fallbackFor(p.provider) as k}
+                  <div class="space-y-3 border-t border-edge pt-3">
+                    <div class="flex items-center justify-between gap-2">
+                      <h4 class="font-medium text-ink">Findings</h4>
+                      <HelpText label="review findings" summary="Always in Lola." detail="Every review appears in Lola. Choose whether to notify you, send findings to the coding agent, or publish them elsewhere." />
+                    </div>
+                    <div class="grid grid-cols-2 gap-x-4 gap-y-2">
+                      <label class="flex cursor-pointer items-center gap-2">
+                        <Checkbox disabled={d.reviewLegacy} bind:checked={p.sendToAgent} />
+                        <span>Send to agent</span>
+                      </label>
+                      <label class="flex cursor-pointer items-center gap-2">
+                        <Checkbox disabled={d.reviewLegacy} bind:checked={p.notify} />
+                        <span>Notify me</span>
+                      </label>
+                      {#each transportsFor(p.provider).filter((t) => t !== "lola") as t}
                         <label class="flex cursor-pointer items-center gap-2">
-                          <Checkbox
-                            disabled={d.reviewLegacy}
-                            checked={(p.fallback ?? []).includes(k)}
-                            onchange={(e) => toggleFallback(p, k, (e.currentTarget as HTMLInputElement).checked)} />
-                          <span>{k}</span>
+                          <Checkbox disabled={d.reviewLegacy} checked={(p.transports ?? []).includes(t)}
+                            onchange={(e) => toggleTransport(p, t, (e.currentTarget as HTMLInputElement).checked)} />
+                          <span>{t === "github" ? "GitHub" : "Linear"}</span>
                         </label>
                       {/each}
                     </div>
+                    {#if !isWatch(p.provider) && (p.transports ?? []).includes("github")}
+                      <label class="ml-6 flex cursor-pointer items-center gap-2 text-sm text-faint">
+                        <Checkbox disabled={d.reviewLegacy} bind:checked={p.githubInline} />
+                        <span>Inline PR threads</span>
+                      </label>
+                    {/if}
                   </div>
-                {/if}
-              </div>
+
+                  {#if !isWatch(p.provider)}
+                    <Disclosure label="Advanced settings">
+                      <div class="mt-3 space-y-3">
+                        <label class="grid grid-cols-[1fr_8rem] items-center gap-3">
+                          <span class="text-faint">Timeout (s)</span>
+                          <input class={inputCls} type="number" min="0" disabled={d.reviewLegacy} bind:value={p.timeoutSeconds} />
+                        </label>
+                        <label class="flex cursor-pointer items-center gap-2">
+                          <Checkbox disabled={d.reviewLegacy} bind:checked={p.visible} />
+                          <span>Watch it run</span>
+                        </label>
+                        {#if isCLI(p.provider)}
+                          <div class="grid gap-1.5">
+                            <span class="text-faint">Base flag</span>
+                            <PresetInput label="Base flag" value={p.baseFlag} options={BASE_FLAGS} disabled={d.reviewLegacy} onChange={(v) => { p.baseFlag = v; }} />
+                          </div>
+                        {/if}
+                        <div class="space-y-2">
+                          <HelpText label="fallback reviewers" summary="Fallback reviewers" detail="If this reviewer cannot complete a pass, try the selected reviewers in numbered order. Click to remove and re-add a reviewer to change its order." />
+                          <div class="grid grid-cols-2 gap-x-4 gap-y-2">
+                            {#each fallbackFor(p.provider) as k}
+                              <label class="flex cursor-pointer items-center gap-2">
+                                <Checkbox disabled={d.reviewLegacy} checked={(p.fallback ?? []).includes(k)}
+                                  onchange={(e) => toggleFallback(p, k, (e.currentTarget as HTMLInputElement).checked)} />
+                                <span>{providerName(k)}</span>
+                                {#if (p.fallback ?? []).includes(k)}
+                                  <span class="num text-xs text-faint">{p.fallback.indexOf(k) + 1}</span>
+                                {/if}
+                              </label>
+                            {/each}
+                          </div>
+                        </div>
+                      </div>
+                    </Disclosure>
+                  {/if}
+                </div>
+              {/if}
             </section>
           {/each}
 
@@ -1493,10 +1448,8 @@
           {#if !d.reviewLegacy && providers().length === 0}
             <div class="rounded border border-edge/60 px-3 py-3">
               <p class="text-ink">No review pass configured.</p>
-              <p class="copy mt-1 text-sm text-faint">
-                A provider runs a QA pass over each pull request and routes its findings back — to the worker agent, the PR, or
-                the Linear issue. Add one below to turn reviews on.
-              </p>
+              <div class="copy mt-1 text-sm text-faint"><HelpText label="review providers" summary="Add a provider to enable reviews." detail="A provider runs a QA pass over each pull request and routes its findings back — to the worker agent, the PR, or
+                the Linear issue. Add one below to turn reviews on." /></div>
             </div>
           {/if}
 
@@ -1504,26 +1457,27 @@
             <div class="flex flex-wrap items-center gap-2 border-t border-edge/40 pt-4">
               <span class="text-sm text-faint">Add provider:</span>
               {#each missingKinds() as k}
-                <Button variant="secondary" title={kindLabel(k)} onclick={() => addProvider(k)}>{k}</Button>
+                <Button variant="secondary" class="whitespace-normal! text-left" title={kindLabel(k)} onclick={() => addProvider(k)}>{providerName(k)}</Button>
               {/each}
             </div>
           {/if}
         </div>
       {/if}
     </div>
+    </div>
   {/if}
 
+  {#snippet footer()}
   <!-- The save error, inline and above the footer where it can't hide behind the
        backdrop. A Go error can be long and multi-line, so it wraps rather than
        truncating and stays selectable; dismissable, and cleared on the next save. -->
   {#if saveErr}
-    <div class="mt-3 flex items-start gap-2 rounded border border-bad/40 bg-bad/10 px-3 py-2 text-sm text-bad">
+    <div role="alert" class="mb-3 flex max-h-32 items-start gap-2 overflow-auto rounded border border-bad/40 bg-bad/10 px-3 py-2 text-sm text-bad">
       <span class="min-w-0 flex-1 font-mono break-words whitespace-pre-wrap select-text">{saveErr}</span>
       <Button variant="danger" size="xs" icon aria-label="dismiss error" onclick={() => (saveErr = "")}>✕</Button>
     </div>
   {/if}
 
-  {#snippet footer()}
     <div class="flex items-center justify-end gap-2">
       <Button size="md" onclick={requestClose}>Cancel</Button>
       <Button variant="primary" size="md" onclick={save} disabled={saving || loading || !dto}>
@@ -1532,3 +1486,13 @@
     </div>
   {/snippet}
 </Modal>
+
+<style>
+  @media (max-width: 760px) {
+    :global(.settings-field) { grid-template-columns: minmax(0, 1fr); gap: 0.375rem; }
+  }
+  @media (max-width: 540px) {
+    .settings-layout { grid-template-columns: minmax(0, 1fr); overflow-y: auto; }
+    .settings-nav { max-height: 10rem; border-right: 0; border-bottom: 1px solid var(--color-edge); }
+  }
+</style>

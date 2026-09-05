@@ -3,7 +3,10 @@ package statusagent
 import (
 	"context"
 	"errors"
+	"github.com/sushidev-team/lola/internal/agent"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -12,12 +15,12 @@ import (
 // The exec seam receives the right argv shape: instruction on -p, context on
 // STDIN (never argv), model only when set, the configured timeout.
 func TestInterpretArgvAndStdin(t *testing.T) {
-	orig := runClaude
-	t.Cleanup(func() { runClaude = orig })
+	orig := runAgent
+	t.Cleanup(func() { runAgent = orig })
 
 	var gotBin, gotModel, gotInstr, gotStdin string
 	var gotTimeout time.Duration
-	runClaude = func(ctx context.Context, bin, model, instruction, stdin string, timeout time.Duration) (string, error) {
+	runAgent = func(ctx context.Context, kind agent.Kind, bin, model, instruction, stdin string, timeout time.Duration) (string, error) {
 		gotBin, gotModel, gotInstr, gotStdin, gotTimeout = bin, model, instruction, stdin, timeout
 		return `{"agent_state":"working","headline":"x","waiting_on":"","confidence":0.9}`, nil
 	}
@@ -45,10 +48,10 @@ func TestInterpretArgvAndStdin(t *testing.T) {
 }
 
 func TestInterpretCapsContext(t *testing.T) {
-	orig := runClaude
-	t.Cleanup(func() { runClaude = orig })
+	orig := runAgent
+	t.Cleanup(func() { runAgent = orig })
 	var gotStdin string
-	runClaude = func(ctx context.Context, bin, model, instruction, stdin string, timeout time.Duration) (string, error) {
+	runAgent = func(ctx context.Context, kind agent.Kind, bin, model, instruction, stdin string, timeout time.Duration) (string, error) {
 		gotStdin = stdin
 		return "{}", nil
 	}
@@ -167,5 +170,44 @@ func TestParseCapsRunes(t *testing.T) {
 	}
 	if !strings.HasSuffix(got.Headline, "…") {
 		t.Error("capped headline must end with an ellipsis")
+	}
+}
+
+func TestInterpretUsesSelectedProvider(t *testing.T) {
+	original := runAgent
+	t.Cleanup(func() { runAgent = original })
+	for _, kind := range agent.Kinds {
+		runAgent = func(ctx context.Context, got agent.Kind, bin, model, instruction, stdin string, timeout time.Duration) (string, error) {
+			if got != kind || bin != kind.Binary() || model != "custom-model" || stdin != "pane data" {
+				t.Fatalf("got %s %s %s %s", got, bin, model, stdin)
+			}
+			return "{}", nil
+		}
+		if _, err := (&Client{Agent: kind, Model: "custom-model"}).Interpret(context.Background(), "pane data"); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestProviderExecutableReceivesHeadlessArguments(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), "fake-agent")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\nprintf '%s\\n' \"$@\"\ncat\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		kind   agent.Kind
+		prefix string
+	}{
+		{agent.Claude, "-p\n"},
+		{agent.Codex, "exec\n--sandbox\nread-only\n--model\ncustom-model\n"},
+		{agent.OpenCode, "run\n--model\ncustom-model\n"},
+	} {
+		out, err := (&Client{Agent: tc.kind, Bin: bin, Model: "custom-model"}).Interpret(context.Background(), "OBSERVED DATA")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.HasPrefix(out, tc.prefix) || !strings.Contains(out, Instruction) || !strings.HasSuffix(out, "OBSERVED DATA") {
+			t.Fatalf("%s command/context mismatch: %s", tc.kind, out)
+		}
 	}
 }
