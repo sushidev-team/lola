@@ -12,6 +12,7 @@
   //
   // Layout is CSS grid, not flex, throughout: the production WKWebView does not
   // stretch a flex child inside a flex column (see CLAUDE.md, "WebKit ≠ Chrome").
+  import { untrack } from "svelte";
   import { DaemonService } from "@bindings/desktop";
   import type { DiffData, DiffFile } from "@bindings/internal/protocol";
   import { store } from "$lib/store.svelte";
@@ -43,6 +44,13 @@
   let error = $state("");
   let loading = $state(false);
 
+  // The reload must follow the session ID's VALUE, not the prop: the parent
+  // passes `session.id`, so reading the prop subscribes to the whole session
+  // object, which every daemon push replaces — the diff then blanked and
+  // reloaded about once a second. A $derived re-notifies only when the string
+  // actually changes.
+  const id = $derived(sessionId);
+
   // Every load gets a sequence number and only the LATEST may land: the
   // selection can move while git runs, and two Refreshes of the same session
   // can finish out of order.
@@ -51,7 +59,7 @@
     const my = ++seq;
     loading = true;
     try {
-      const d = await DaemonService.Diff(sessionId);
+      const d = await DaemonService.Diff(id);
       if (my !== seq) return;
       data = d;
       error = "";
@@ -64,11 +72,13 @@
   }
 
   $effect(() => {
-    sessionId; // reload on selection change
+    id; // reload on selection change
     data = null;
     error = "";
     sel = null;
-    void load();
+    // Untracked: load() runs synchronously up to its first await, and anything
+    // it reads there would become a dependency of THIS effect.
+    untrack(() => void load());
   });
 
   const files = $derived<DiffFile[]>(data?.files ?? []);
