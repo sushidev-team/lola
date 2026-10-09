@@ -16,6 +16,7 @@
   import MenuItem from "./MenuItem.svelte";
   import DevClashBanner from "./DevClashBanner.svelte";
   import SidePanel from "./SidePanel.svelte";
+  import PlanGateBanner from "./PlanGateBanner.svelte";
 
   // `focused` = the expanded full-cockpit view ("minimize" toggle); otherwise the
   // compact detail panel. The two used to differ in terminal font size as well —
@@ -396,6 +397,7 @@
          to is exactly where the answer is NOT (the command clears the screen on
          its way out). Absent whenever the tabs are healthy. -->
     <DevClashBanner {session} />
+    <PlanGateBanner {session} />
 
     <!-- Terminal tabs. Shown when a shell is open or the panel is focused/big:
          the agent tab, one tab per shell (drag to sort, "×" on hover to close),

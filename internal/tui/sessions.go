@@ -1389,6 +1389,12 @@ func (m *rootModel) sessionDetail() string {
 	for _, line := range boardLines(*sel, 100) {
 		b.WriteString(line + "\n")
 	}
+	for _, line := range planGateLines(*sel, 100) {
+		b.WriteString(line + "\n")
+	}
+	if sel.LinearAgentURL != "" {
+		b.WriteString(faintText.Render("linear:   "+truncPlain(sel.LinearAgentURL, 100)) + "\n")
+	}
 	if sel.PRStale {
 		b.WriteString(statusOrange.Render("⚠ PR facts stale — gh has been failing") + "\n")
 	}

@@ -158,3 +158,38 @@ func boardLines(si protocol.SessionInfo, w int) []string {
 	}
 	return out
 }
+
+// planGateLines is the detail card's plan-approval block ([[project]].
+// require_plan): the gate, and for a submitted plan its first lines plus the
+// two commands that answer it. The plan is the agent's text — shown, never
+// interpreted. nil when the session has no gate.
+func planGateLines(si protocol.SessionInfo, w int) []string {
+	p := si.Plan
+	if p == nil {
+		return nil
+	}
+	w = max(w, 20)
+	switch p.Gate {
+	case "submitted":
+		out := []string{warnText.Render(truncPlain(fmt.Sprintf("gate:     plan awaiting approval (round %d)", max(p.Round, 1)), w))}
+		lines := strings.Split(strings.TrimSpace(p.Text), "\n")
+		for i, l := range lines {
+			if i == 8 {
+				out = append(out, faintText.Render(fmt.Sprintf("  … %d more line(s)", len(lines)-i)))
+				break
+			}
+			out = append(out, "  "+truncPlain(l, w-2))
+		}
+		out = append(out, faintText.Render(truncPlain("  approve: lola plan approve "+si.ID+"   changes: lola plan reject "+si.ID+" <comment>", w)))
+		return out
+	case "planning":
+		line := "gate:     planning — edits blocked until a plan is approved"
+		if p.Feedback != "" {
+			line += " · last feedback: " + p.Feedback
+		}
+		return []string{faintText.Render(truncPlain(line, w))}
+	case "approved":
+		return []string{faintText.Render("gate:     plan approved")}
+	}
+	return nil
+}

@@ -100,6 +100,7 @@ func (d *Daemon) statusData(ctx context.Context) protocol.StatusData {
 		Host:       machineName(),
 		Usage:      d.usageStatus(time.Now()),
 	}
+	sd.LinearAgent = d.linearAgentStatus()
 	for _, p := range polls {
 		ps := d.status.get(p.name)
 		ps.Name = p.name

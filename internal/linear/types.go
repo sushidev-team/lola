@@ -45,4 +45,9 @@ type Issue struct {
 	Assignee   string
 	LabelIDs   []string
 	LabelNames []string // parallel to LabelIDs, display only
+	// TeamID / ProjectID are filled only by the agent-session query: they route
+	// a delegated issue to the [[project]] whose team (and Linear project
+	// filter) it belongs to. The poll query never reads them.
+	TeamID    string
+	ProjectID string
 }

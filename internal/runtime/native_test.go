@@ -1894,3 +1894,34 @@ func TestCodexResumeProbeHonorsCancellation(t *testing.T) {
 		t.Fatal("canceled probe must not enable resume")
 	}
 }
+
+// TestSpawnRequirePlanGatesAndBriefs: a require_plan project's session is born
+// at PlanGate=planning and its prompt.md teaches `lola plan submit`; an ungated
+// project gets neither.
+func TestSpawnRequirePlanGatesAndBriefs(t *testing.T) {
+	f := newFixture(t, "", "")
+	f.p.RequirePlan = true
+	s, err := f.n.Spawn(context.Background(), f.p, issueENG42(), "")
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	if s.PlanGate != session.PlanPlanning {
+		t.Fatalf("gate = %q, want planning", s.PlanGate)
+	}
+	prompt := readFile(t, filepath.Join(f.root, "nori", "lola-nori-eng-42", ".lola", "prompt.md"))
+	if !strings.Contains(prompt, "## Plan approval") || !strings.Contains(prompt, " plan submit <<'EOF'") {
+		t.Fatalf("prompt.md must carry the plan briefing:\n%s", prompt)
+	}
+
+	g := newFixture(t, "", "")
+	s, err = g.n.Spawn(context.Background(), g.p, issueENG42(), "")
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	if s.PlanGate != session.PlanNone {
+		t.Fatalf("an ungated project must not gate: %q", s.PlanGate)
+	}
+	if p := readFile(t, filepath.Join(g.root, "nori", "lola-nori-eng-42", ".lola", "prompt.md")); strings.Contains(p, "Plan approval") {
+		t.Fatal("an ungated project must not get the plan briefing")
+	}
+}

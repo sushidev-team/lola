@@ -33,6 +33,11 @@ const remoteCmdPrefix = "remote."
 //	agentReport     the agent's own self-report channel, same in-pane origin
 //	                as hookEvent. Display-only, but a forged report would put
 //	                words in a live agent's mouth on every surface.
+//	planSubmit /    the agent's plan and the edit-gate query of the plan
+//	planGate        approval gate: in-pane origin like agentReport. A forged
+//	                submission would put a plan nobody wrote in front of the
+//	                approver. (planDecide — the HUMAN verdict — is not on
+//	                this floor; it is audited like answer.)
 //	pairBegin       enrolment and revocation are LOCAL operations at the
 //	pairStatus      machine. A paired phone that could enrol would let a thief
 //	pairConfirm     add a device that survives revoking the first; one that
@@ -56,6 +61,8 @@ var deniedCommands = map[string]bool{
 	"renameProject":       true,
 	"hookEvent":           true,
 	"agentReport":         true,
+	"planSubmit":          true,
+	"planGate":            true,
 	"pairBegin":           true,
 	"pairStatus":          true,
 	"pairConfirm":         true,
@@ -90,6 +97,7 @@ func CommandDenied(cmd string) bool {
 // CHANGES something is audited, and the line never carries the payload.
 var mutatingCommands = map[string]bool{
 	"answer":          true,
+	"planDecide":      true,
 	"resolveConflict": true,
 	"kill":            true,
 	"revive":          true,

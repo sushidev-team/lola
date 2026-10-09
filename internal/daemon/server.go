@@ -180,6 +180,12 @@ func (d *Daemon) handle(ctx context.Context, req protocol.Request) protocol.Resp
 		return d.handleHookEvent(req)
 	case "agentReport":
 		return d.handleAgentReport(req)
+	case "planSubmit":
+		return d.handlePlanSubmit(req)
+	case "planDecide":
+		return d.handlePlanDecide(ctx, req)
+	case "planGate":
+		return d.handlePlanGate(req)
 	case "kill":
 		data, err := d.handleKill(ctx, req.Session, req.Force)
 		if err != nil {
@@ -559,7 +565,12 @@ func (d *Daemon) flushHandoffsOnStop(id string) {
 			}
 		}()
 		// Background, not the request context: the connection's context dies with
-		// the hook reply, which lands long before a send-keys can finish.
+		// the hook reply, which lands long before a send-keys can finish. Queued
+		// notices (plan verdicts, Linear replies) go first; one typed message per
+		// resting prompt, so a delivered notice leaves the hand-off for later.
+		if d.flushAgentNotices(context.Background(), id) {
+			return
+		}
 		d.flushReviewHandoffs(context.Background(), id)
 	}()
 }
@@ -683,6 +694,8 @@ func (d *Daemon) sessionsData() protocol.SessionsData {
 		if s.MergeQueuePos > 0 {
 			si.MergeQueue = &protocol.MergeQueueInfo{Position: s.MergeQueuePos, Step: s.MergeQueueStep}
 		}
+		si.Plan = planInfo(s)
+		si.LinearAgentURL = d.agentSessionURL(s.AgentSessionID)
 		out.Sessions = append(out.Sessions, si)
 	}
 	out.Events = d.eventFeed(now)

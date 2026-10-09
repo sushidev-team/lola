@@ -331,7 +331,11 @@ func (n *Native) Spawn(ctx context.Context, p config.Project, issue linear.Issue
 	}
 	ctxKey := contextKeyFor(issue.Identifier, id)
 	ctxDir := n.setupContext(dir, p.Name, ctxKey)
-	if err := os.WriteFile(filepath.Join(dir, lolaDir, "prompt.md"), n.withReportBriefing(withContextBriefing(promptMD(p, issue, branch), ctxDir)), 0o600); err != nil {
+	prompt := n.withReportBriefing(withContextBriefing(promptMD(p, issue, branch), ctxDir))
+	if p.RequirePlan {
+		prompt = n.withPlanBriefing(prompt)
+	}
+	if err := os.WriteFile(filepath.Join(dir, lolaDir, "prompt.md"), prompt, 0o600); err != nil {
 		return fail("write prompt.md", err)
 	}
 	// Per-agent lifecycle-callback artifact(s): claude's .lola/settings.json,
@@ -363,7 +367,12 @@ func (n *Native) Spawn(ctx context.Context, p config.Project, issue linear.Issue
 		n.Logf("session %s: status-bar styling failed (cosmetic, session is up): %v", id, err)
 	}
 
+	gate := session.PlanNone
+	if p.RequirePlan {
+		gate = session.PlanPlanning
+	}
 	return withAgentState(session.Session{
+		PlanGate:   gate,
 		ID:         id,
 		Source:     "native",
 		Kind:       session.KindLinear,
@@ -954,6 +963,32 @@ func (n *Native) withReportBriefing(prompt []byte) []byte {
 	// behind a `check … pass`; saying so up front is what makes an honest agent
 	// run the suite in a shape whose exit status is its own.
 	b.WriteString("\nA `check … pass` is compared with the commands you actually ran: report one only after running that check, and run it unpiped (`go test ./...`, not `go test ./... | tail`) so its exit status is visible. A claim with no matching run is flagged to the humans.\n")
+	return []byte(b.String())
+}
+
+// withPlanBriefing appends the plan-approval section for a project with
+// require_plan: plan first, submit, stop, wait. For claude the PreToolUse hook
+// enforces it (file edits are denied until approval); for codex/opencode this
+// section IS the gate, which is why it is explicit about what not to do.
+func (n *Native) withPlanBriefing(prompt []byte) []byte {
+	bin := "lola"
+	if n.LolaBin != "" {
+		bin = shQuote(n.LolaBin)
+	}
+	var b strings.Builder
+	b.Write(prompt)
+	if len(prompt) > 0 && prompt[len(prompt)-1] != '\n' {
+		b.WriteByte('\n')
+	}
+	b.WriteString("\n## Plan approval (required before coding)\n\n")
+	b.WriteString("This project requires a human to approve your plan BEFORE you change anything. Until you are told it is approved:\n\n")
+	b.WriteString("- Work read-only: read the issue, explore the code, run read-only commands. Do not edit, create or delete files, and do not commit.\n")
+	b.WriteString("- Write a concise implementation plan in Markdown: the approach, the files you expect to touch, risks, and how you will test it.\n")
+	b.WriteString("- Submit it, then END YOUR TURN and wait:\n\n")
+	b.WriteString("```sh\n")
+	b.WriteString(bin + " plan submit <<'EOF'\n## Approach\n...\nEOF\n")
+	b.WriteString("```\n\n")
+	b.WriteString("You will receive a message when the plan is approved (then implement it) or with the reviewer's feedback (then revise and submit again). File-edit tools are blocked while the plan is pending.\n")
 	return []byte(b.String())
 }
 

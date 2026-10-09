@@ -436,6 +436,12 @@ type Daemon struct {
 	shutMu   sync.Mutex
 	draining bool
 	connWg   sync.WaitGroup
+
+	// agent is the native Linear agent's loop state ([linear_agent],
+	// linearagent.go); always non-nil, idle while the table is disabled.
+	agent *linearAgentRuntime
+	// agentWebhookSecret overrides the webhook signing-secret lookup (tests).
+	agentWebhookSecret func(config.LinearAgentConfig) (string, error)
 }
 
 func newDaemon(cfg *config.Config, lin linear.API, logger *log.Logger, home string) *Daemon {
@@ -455,6 +461,7 @@ func newDaemon(cfg *config.Config, lin linear.API, logger *log.Logger, home stri
 
 		hookWarned: map[string]bool{},
 		ckptLocks:  map[string]*sync.Mutex{},
+		agent:      newLinearAgentRuntime(),
 	}
 	d.spend = newSpendState(home, func(f string, a ...any) { d.logf("", f, a...) })
 	// Feed the activity ring from every status transition the store commits
@@ -715,6 +722,13 @@ func Run(ctx context.Context) error {
 	// start because a port is taken is strictly worse than one that polls
 	// without a phone attached.
 	d.startRemote(ctx)
+
+	// The native Linear agent ([linear_agent], linearagent.go). The loop always
+	// runs and idles while the table is disabled, so a reload can turn it on;
+	// the optional webhook doorbell binds at startup only.
+	d.wg.Add(1)
+	go d.linearAgentLoop(ctx)
+	d.startLinearAgentWebhook(ctx)
 
 	go d.serve(ctx, ln)
 

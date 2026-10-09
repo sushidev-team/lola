@@ -462,7 +462,9 @@ func (d *Daemon) observeNative(ctx context.Context) {
 			// Flush any hand-off deferred because the worker was mid-turn, once it is
 			// idle at its prompt again (re-reads the record itself; one delivered
 			// per cycle since a send consumes AtPrompt).
-			d.flushReviewHandoffs(ctx, s.ID)
+			if !d.flushAgentNotices(ctx, s.ID) {
+				d.flushReviewHandoffs(ctx, s.ID)
+			}
 			// Status interpreter, ambiguous-state sweep: a session whose
 			// deterministic story is thin (waiting on a human, unreadable pane,
 			// long-quiet "working") queues an interpretation — capped per cycle,
