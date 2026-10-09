@@ -24,6 +24,7 @@ export type {
     DoctorResultDTO,
     GroupDTO,
     InheritsDTO,
+    LinearAgentSecretsDTO,
     LinearKeyStatusDTO,
     LinearOption,
     LinearTeam,

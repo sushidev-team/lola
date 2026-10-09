@@ -135,6 +135,17 @@ export interface InheritsDTO {
     "blockedLabelId": boolean;
     "dedupMode": boolean;
     "prioritySort": boolean;
+    "requirePlan": boolean;
+}
+
+/**
+ * LinearAgentSecretsDTO says which of the Linear agent's credentials resolve,
+ * by NAME only — like LinearKeyStatus, nothing here carries a value.
+ */
+export interface LinearAgentSecretsDTO {
+    "clientSecret": boolean;
+    "token": boolean;
+    "webhookSecret": boolean;
 }
 
 /**
@@ -274,6 +285,11 @@ export interface ProjectFormDTO {
     "commentOnMerged": boolean;
     "commentOnBlocked": boolean;
     "prRequiresChecks": boolean;
+
+    /**
+     * RequirePlan is the plan-approval gate (inheritable, like dedup_mode).
+     */
+    "requirePlan": boolean;
     "inherits": InheritsDTO;
     "isNew": boolean;
 }
@@ -471,6 +487,22 @@ export interface SettingsDTO {
     "remoteDevForward": boolean;
 
     /**
+     * [linear_agent] — lola as a native Linear agent. Only the keys a human
+     * edits; the secret SOURCES (keychain service / env names) are preserved
+     * from the file, and the secrets themselves are written by
+     * SetLinearAgentSecret / `lola linear-agent login`, never through this DTO.
+     */
+    "linearAgentEnabled": boolean;
+    "linearAgentClientId": string;
+
+    /**
+     * duration string, e.g. "15s"
+     */
+    "linearAgentPollInterval": string;
+    "linearAgentRedirectPort": number;
+    "linearAgentWebhookListen": string;
+
+    /**
      * ReviewProviders is the pluggable review catalog ([[review.provider]]),
      * resolved to the EFFECTIVE set (the real catalog, or the entries synthesized
      * from the legacy [review]/[coderabbit] tables). ReviewLegacy reports that the
@@ -498,6 +530,7 @@ export interface SettingsDTO {
     "blockedLabelId": string;
     "dedupMode": string;
     "prioritySort": string[] | null;
+    "requirePlan": boolean;
 }
 
 export interface SetupDTO {

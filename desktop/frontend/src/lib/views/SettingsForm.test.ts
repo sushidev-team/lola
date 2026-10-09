@@ -81,6 +81,8 @@ const {
   SetLinearKey,
   ValidateLinearKey,
   ConnectCode,
+  LinearAgentSecrets,
+  SetLinearAgentSecret,
   setFlash,
   reload,
   closeOverlay,
@@ -99,6 +101,8 @@ const {
   SetLinearKey: vi.fn(),
   ValidateLinearKey: vi.fn(),
   ConnectCode: vi.fn(),
+  LinearAgentSecrets: vi.fn(),
+  SetLinearAgentSecret: vi.fn(),
   setFlash: vi.fn(),
   reload: vi.fn(),
   closeOverlay: vi.fn(),
@@ -118,6 +122,8 @@ vi.mock("@bindings/desktop", () => ({
     SetLinearKey: (k: string) => SetLinearKey(k),
     ValidateLinearKey: (k: string) => ValidateLinearKey(k),
     ConnectCode: () => ConnectCode(),
+    LinearAgentSecrets: () => LinearAgentSecrets(),
+    SetLinearAgentSecret: (k: string, v: string) => SetLinearAgentSecret(k, v),
   },
   LinearService: {
     WorkspaceLabels: () => WorkspaceLabels(),
@@ -290,6 +296,41 @@ describe("SettingsForm", () => {
     await fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(SaveSettings).toHaveBeenCalled());
     expect(SaveSettings.mock.calls[0][0]).toMatchObject({ brainEnabled: false, brainModel: "claude-x", brainTimeout: 30 });
+  });
+
+  it("saves the plan-approval default from Project defaults", async () => {
+    render(SettingsForm);
+    await fireEvent.click(await screen.findByRole("tab", { name: "Project defaults" }));
+    await fireEvent.click(screen.getByRole("checkbox", { name: "Require plan" }));
+    await fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(SaveSettings).toHaveBeenCalled());
+    expect(SaveSettings.mock.calls[0][0]).toMatchObject({ requirePlan: true });
+  });
+
+  it("edits the Linear agent and stores its secrets write-only", async () => {
+    LinearAgentSecrets.mockReset().mockResolvedValue({ clientSecret: false, token: false, webhookSecret: false });
+    SetLinearAgentSecret.mockReset().mockResolvedValue(undefined);
+    GetSettings.mockResolvedValue({ ...fakeDto, linearAgentEnabled: false, linearAgentClientId: "", linearAgentPollInterval: "", linearAgentRedirectPort: 0, linearAgentWebhookListen: "" });
+    render(SettingsForm);
+    await fireEvent.click(await screen.findByRole("tab", { name: "Linear agent" }));
+    expect(await screen.findByText(/Not installed/)).toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("checkbox", { name: "Enabled" }));
+    expect(screen.getByRole("alert")).toHaveTextContent("client ID is required");
+    await fireEvent.input(screen.getByPlaceholderText("OAuth application client id"), { target: { value: "cid" } });
+
+    const secret = screen.getByLabelText("Client secret");
+    await fireEvent.input(secret, { target: { value: "s3cret" } });
+    const saves = screen.getAllByRole("button", { name: "Save" });
+    await fireEvent.click(saves[0]); // the secret row's Save, not the overlay's
+    await waitFor(() => expect(SetLinearAgentSecret).toHaveBeenCalledWith("client", "s3cret"));
+    await waitFor(() => expect(secret).toHaveValue(""));
+    expect(SaveSettings).not.toHaveBeenCalled(); // a secret never rides the form
+
+    await fireEvent.click(saves[saves.length - 1]);
+    await waitFor(() => expect(SaveSettings).toHaveBeenCalled());
+    const sent = SaveSettings.mock.calls[0][0];
+    expect(sent).toMatchObject({ linearAgentEnabled: true, linearAgentClientId: "cid" });
+    expect(JSON.stringify(sent)).not.toContain("s3cret");
   });
 
   it("loads settings on mount and binds fields on the Defaults tab", async () => {
