@@ -32,6 +32,10 @@ type fakeCheckpoints struct {
 	state    int
 	restored []int
 	recorded chan string
+	// inRestore, when set, is closed once Restore has started and Restore then
+	// blocks until release is closed — to observe what runs concurrently.
+	inRestore chan struct{}
+	release   chan struct{}
 }
 
 func (f *fakeCheckpoints) Record(_ context.Context, _, _, label string) (checkpoint.Checkpoint, bool, error) {
@@ -74,6 +78,10 @@ func (f *fakeCheckpoints) Restore(ctx context.Context, dir, s string, seq int) (
 	if _, _, err := f.Get(ctx, dir, s, seq); err != nil {
 		return checkpoint.Checkpoint{}, err
 	}
+	if f.inRestore != nil {
+		close(f.inRestore)
+		<-f.release
+	}
 	f.mu.Lock()
 	f.state++
 	f.mu.Unlock()
@@ -92,6 +100,8 @@ func ckptSess(t *testing.T, d *Daemon, ident string, a state.AgentState) session
 	s.Worktree = t.TempDir()
 	s.SetAgentState(a, "", time.Now())
 	d.sessions.Upsert(s)
+	// A resting pane unless a test says otherwise: restore demands one.
+	d.paneTail = func(context.Context, string, int) (string, error) { return paneWaiting, nil }
 	got, _ := d.sessions.Get(s.ID)
 	return got
 }
@@ -326,5 +336,74 @@ func TestCheckpointAcceptanceRealGit(t *testing.T) {
 	// dedupe names it as the undo instead of minting a duplicate.
 	if res.Safety != 3 {
 		t.Errorf("safety checkpoint = #%d, want #3", res.Safety)
+	}
+}
+
+// The axis can be stale: a live agent whose pane is not visibly resting is
+// refused, while a gone agent (nothing left to edit files) needs no pane.
+func TestRestoreDemandsALiveRestingPane(t *testing.T) {
+	d := newTestDaemon(t, conflictConfig(), &linear.Fake{}, &fakeNative{})
+	ck := &fakeCheckpoints{}
+	d.checkpoints = ck
+	ctx := context.Background()
+	ck.Record(ctx, "", "", "turn 1")
+
+	idle := ckptSess(t, d, "CK-10", state.AgentIdle)
+	d.paneTail = func(context.Context, string, int) (string, error) { return "✻ Harmonizing… (5m 58s · ↓ 17.9k tokens)\n", nil }
+	if _, err := d.handleRestoreCheckpoint(ctx, protocol.CheckpointArgs{Session: idle.ID, Seq: 1}); err == nil {
+		t.Fatal("restored under an agent whose pane shows a running turn")
+	}
+	d.paneTail = func(context.Context, string, int) (string, error) { return "", errors.New("no pane") }
+	gone := ckptSess(t, d, "CK-11", state.AgentDead)
+	d.paneTail = func(context.Context, string, int) (string, error) { return "", errors.New("no pane") }
+	if _, err := d.handleRestoreCheckpoint(ctx, protocol.CheckpointArgs{Session: gone.ID, Seq: 1}); err != nil {
+		t.Fatalf("a dead agent's worktree must be restorable: %v", err)
+	}
+	if len(ck.restored) != 1 {
+		t.Errorf("restored = %v", ck.restored)
+	}
+}
+
+// Nothing may type into the agent while its files are being replaced: a send
+// that arrives mid-restore waits, and goes out once the restore is done.
+func TestSendsWaitOutARestore(t *testing.T) {
+	d := newTestDaemon(t, conflictConfig(), &linear.Fake{}, &fakeNative{})
+	ck := &fakeCheckpoints{inRestore: make(chan struct{}), release: make(chan struct{})}
+	d.checkpoints = ck
+	ctx := context.Background()
+	ck.Record(ctx, "", "", "turn 1")
+	s := ckptSess(t, d, "CK-12", state.AgentIdle)
+
+	// The send records whether the restore had already finished when it ran;
+	// ck.restored is appended inside Restore, i.e. while the gate is held.
+	restoredAtSend := make(chan int, 1)
+	d.sendKeys = func(context.Context, string, string) error {
+		ck.mu.Lock()
+		restoredAtSend <- len(ck.restored)
+		ck.mu.Unlock()
+		return nil
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := d.handleRestoreCheckpoint(ctx, protocol.CheckpointArgs{Session: s.ID, Seq: 1})
+		done <- err
+	}()
+	<-ck.inRestore
+	sent := make(chan error, 1)
+	go func() { sent <- d.typeToAgent(ctx, s.ID, s.TmuxName, "hello", time.Second) }()
+	select {
+	case <-sent:
+		t.Fatal("a send went through while the restore was replacing files")
+	case <-time.After(150 * time.Millisecond):
+	}
+	close(ck.release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-sent; err != nil {
+		t.Fatalf("the queued send failed (its timeout must start after the wait): %v", err)
+	}
+	if n := <-restoredAtSend; n != 1 {
+		t.Errorf("the send ran with %d restores finished, want it after the restore", n)
 	}
 }

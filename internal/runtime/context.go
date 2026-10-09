@@ -162,10 +162,11 @@ func contextEntries(dir string) []string {
 	return names
 }
 
-// Checkpointer is the slice of internal/checkpoint the launcher needs: laying
-// a checkpoint into a fork's fresh worktree, and dropping a session's refs.
-// checkpoint.Git satisfies it.
+// Checkpointer is the slice of internal/checkpoint the launcher needs: the
+// pre-launch baseline, laying a checkpoint into a fork's fresh worktree, and
+// dropping a session's refs. checkpoint.Git satisfies it.
 type Checkpointer interface {
+	Record(ctx context.Context, dir, session, label string) (checkpoint.Checkpoint, bool, error)
 	Apply(ctx context.Context, dir, tree string) error
 	Prune(ctx context.Context, dir, session string) error
 }
@@ -236,6 +237,24 @@ func (n *Native) ForkAgent(ctx context.Context, p config.Project, f ForkSpec) (s
 		Agent:      string(kind),
 		ContextKey: key,
 	}, state.AgentStarting), nil
+}
+
+// BaselineLabel labels the checkpoint recorded just before an agent launches.
+const BaselineLabel = "start"
+
+// recordBaseline snapshots a freshly prepared worktree as the session's first
+// checkpoint, BEFORE the agent starts — so turn 1 is undoable for every agent
+// kind. (codex and opencode emit no turn-START hook, so the daemon's
+// user_prompt baseline never fires for them.) Called after every .lola write
+// and exclusion, so nothing of lola's is captured. Best-effort: a failure is
+// logged and the launch goes on.
+func (n *Native) recordBaseline(ctx context.Context, dir, id string) {
+	if n.Checkpoints == nil {
+		return
+	}
+	if _, _, err := n.Checkpoints.Record(ctx, dir, id, BaselineLabel); err != nil && n.Logf != nil {
+		n.Logf("session %s: baseline checkpoint: %v", id, err)
+	}
 }
 
 // pruneCheckpoints drops every checkpoint ref recorded under id. Called when a

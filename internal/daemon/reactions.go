@@ -743,9 +743,7 @@ func (d *Daemon) reactSendAgent(ctx context.Context, s session.Session, key, tem
 	// AtPrompt is already consumed; the send now happens exactly once. A tmux
 	// failure is logged but not rolled back — the guard stays set so we do not
 	// spam the agent, and a genuine later transition re-reacts.
-	sctx, cancel := context.WithTimeout(ctx, reactExecTimeout)
-	defer cancel()
-	if err := d.sendKeys(sctx, tmuxName, msg); err != nil {
+	if err := d.typeToAgent(ctx, s.ID, tmuxName, msg, reactExecTimeout); err != nil {
 		d.logf("", "react: send-keys (%s) to %s failed: %v", key, s.ID, err)
 		return
 	}

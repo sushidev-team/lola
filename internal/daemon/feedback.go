@@ -202,9 +202,7 @@ func (d *Daemon) deliverFeedback(ctx context.Context, id string) bool {
 		return false
 	}
 
-	sctx, cancel := context.WithTimeout(ctx, reactExecTimeout)
-	defer cancel()
-	if err := d.sendKeys(sctx, tmuxName, feedbackMessage(text)); err != nil {
+	if err := d.typeToAgent(ctx, id, tmuxName, feedbackMessage(text), reactExecTimeout); err != nil {
 		// Unlike a review hand-off (which other sinks also received), this text
 		// exists nowhere else: put it back in front of anything queued since.
 		d.sessions.Update(id, func(cur *session.Session) bool {

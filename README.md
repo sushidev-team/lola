@@ -1271,8 +1271,8 @@ snapshots its whole worktree — committed, uncommitted and untracked work, neve
 ignored files or `.lola/` — as a commit object kept on a ref under
 `refs/lola/checkpoints/<session>/`, **not** on the session's branch, so the
 branch, the PR and every push are untouched. A turn that changed nothing records
-nothing, and the first turn START records a `start` baseline so even turn 1 can
-be undone. Each session keeps its newest 100; the refs are deleted when the
+nothing, and a `start` baseline is recorded just before the agent launches, so
+even turn 1 can be undone (claude, codex and opencode alike). Each session keeps its newest 100; the refs are deleted when the
 session is torn down with its worktree.
 
 In the app, the **Checkpoints** tab (or **Checkpoints** in the session menu)
@@ -1283,7 +1283,9 @@ checkpoint against it). Then:
   branch stay put — commits made since stay in history and show up as
   uncommitted edits that undo them. The current state is saved as a new
   checkpoint first, so a restore is itself one click to undo. Refused while the
-  agent is mid-turn. The agent still remembers the discarded changes: tell it.
+  agent is mid-turn (nothing is typed into the agent while a restore runs), and
+  refused when it would overwrite an ignored file no checkpoint could bring
+  back. The agent still remembers the discarded changes: tell it.
 - **Fork…** starts a new agent session from that checkpoint on its own branch
   (`<branch>-fork-<n>`), holding the checkpoint's files as uncommitted work and
   briefed as a fork. The original session keeps running untouched.

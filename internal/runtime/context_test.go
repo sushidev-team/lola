@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/sushidev-team/lola/internal/checkpoint"
 	"github.com/sushidev-team/lola/internal/session"
 )
 
@@ -15,7 +16,13 @@ import (
 type fakeCheckpoints struct {
 	applied  []string // dir + " " + tree
 	pruned   []string // dir + " " + session
+	recorded []string // session + " " + label
 	applyErr error
+}
+
+func (f *fakeCheckpoints) Record(_ context.Context, _, s, label string) (checkpoint.Checkpoint, bool, error) {
+	f.recorded = append(f.recorded, s+" "+label)
+	return checkpoint.Checkpoint{Seq: len(f.recorded), Label: label}, true, nil
 }
 
 func (f *fakeCheckpoints) Apply(_ context.Context, dir, tree string) error {
@@ -67,6 +74,9 @@ func TestSpawnSharesContextFolderAcrossRespawns(t *testing.T) {
 	}
 	if len(ck.pruned) != 1 || ck.pruned[0] != first.Worktree+" "+first.ID {
 		t.Errorf("fresh spawn must prune stale checkpoint refs for its id, pruned = %v", ck.pruned)
+	}
+	if len(ck.recorded) != 1 || ck.recorded[0] != first.ID+" start" {
+		t.Errorf("spawn must record the pre-launch baseline, recorded = %v", ck.recorded)
 	}
 
 	// The first session writes notes through the link.
@@ -137,6 +147,10 @@ func TestForkAgentLaysCheckpointAndInheritsContext(t *testing.T) {
 	if len(ck.applied) != 1 || ck.applied[0] != got.Worktree+" tree456" {
 		t.Errorf("applied = %v", ck.applied)
 	}
+	// The fork's own history starts at the state it was forked from — any agent kind.
+	if len(ck.recorded) != 1 || ck.recorded[0] != spec.SessionID+" start" {
+		t.Errorf("fork must record its baseline before launch, recorded = %v", ck.recorded)
+	}
 	if !strings.Contains(loggedArgs(t, f.gitLog), "worktree add -b lola/eng-42-fork-3 "+got.Worktree+" abc123") {
 		t.Errorf("fork must branch at the checkpoint's HEAD; git calls:\n%s", loggedArgs(t, f.gitLog))
 	}
@@ -161,5 +175,20 @@ func TestForkAgentRefusesWithoutCheckpointsAndRollsBackOnApplyFailure(t *testing
 	}
 	if strings.Contains(loggedArgs(t, f2.tmuxLog), "new-session") {
 		t.Error("an agent was launched on a fork whose checkpoint never landed")
+	}
+}
+
+// codex (and opencode) emit no turn-START hook, so the baseline must come from
+// the launcher itself — or their turn 1 could never be undone.
+func TestSpawnRecordsBaselineForCodex(t *testing.T) {
+	f := newFixture(t, "", "")
+	ck := &fakeCheckpoints{}
+	f.n.Checkpoints = ck
+	got, err := f.n.Spawn(context.Background(), f.p, issueENG42(), "codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Agent != "codex" || len(ck.recorded) != 1 || ck.recorded[0] != got.ID+" "+BaselineLabel {
+		t.Errorf("agent %q, recorded = %v", got.Agent, ck.recorded)
 	}
 }

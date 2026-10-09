@@ -228,3 +228,42 @@ func TestCleanLabel(t *testing.T) {
 		t.Error("empty label")
 	}
 }
+
+// An ignored file the restore would overwrite is never captured by the safety
+// checkpoint, so the restore must refuse rather than destroy it.
+func TestRestoreRefusesToClobberIgnoredFiles(t *testing.T) {
+	dir, git := repo(t)
+	ctx := context.Background()
+	g := Git{}
+	write(t, dir, "conf.txt", "v1\n")
+	git("add", "conf.txt")
+	git("commit", "-q", "-m", "track conf")
+	if _, _, err := g.Record(ctx, dir, "s", "turn 1"); err != nil {
+		t.Fatal(err)
+	}
+	// Later the file is untracked and ignored, and gets local-only contents.
+	git("rm", "-q", "--cached", "conf.txt")
+	write(t, dir, ".gitignore", "ignored.txt\nconf.txt\n")
+	write(t, dir, "conf.txt", "precious local value\n")
+
+	if _, err := g.Restore(ctx, dir, "s", 1); !errors.Is(err, ErrWouldClobber) || !strings.Contains(err.Error(), "conf.txt") {
+		t.Fatalf("err = %v, want ErrWouldClobber naming conf.txt", err)
+	}
+	if read(t, dir, "conf.txt") != "precious local value\n" {
+		t.Error("the ignored file was overwritten")
+	}
+	if read(t, dir, ".gitignore") != "ignored.txt\nconf.txt\n" {
+		t.Error("a refused restore still moved files")
+	}
+}
+
+func TestBlocked(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "f", "x")
+	write(t, dir, "d/g", "x")
+	for p, want := range map[string]bool{"f": true, "f/sub": true, "d": true, "d/g": true, "d/new": false, "nope/x": false} {
+		if got := blocked(dir, p); got != want {
+			t.Errorf("blocked(%q) = %v, want %v", p, got, want)
+		}
+	}
+}

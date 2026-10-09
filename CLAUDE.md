@@ -1015,8 +1015,11 @@ each of which owns exactly one external tool or concern behind an **exec seam**
 - **A turn checkpoint is a REF, never a commit on the branch, and only a
   RESTORE may touch the real index.** The Stop hook records one per turn
   (`recordCheckpointAsync`, off the hook's critical path, on the conn drain
-  group); the first `user_prompt` records a `start` baseline so turn 1 is
-  undoable. Rules that hold it together:
+  group). The `start` baseline that makes turn 1 undoable is recorded by the
+  RUNTIME just before every agent launch (`recordBaseline`) — codex and
+  opencode emit no turn-start hook, so a hook-driven baseline never fired for
+  them; the first `user_prompt` is only a fallback for older sessions. Rules
+  that hold it together:
   - `Snapshot` stages into a TEMPORARY index seeded from a copy of the real one
     (`GIT_INDEX_FILE`), then `write-tree` + `commit-tree` + `update-ref`. The
     real index and every branch stay untouched, so recording is safe while the
@@ -1036,8 +1039,18 @@ each of which owns exactly one external tool or concern behind an **exec seam**
     "before restore" checkpoint is the undo), points the real index at that
     snapshot so the reset knows every current file, `read-tree --reset -u`s the
     target and resets the index to HEAD. HEAD never moves, so pushed history is
-    never rewritten. It is refused while the agent is mid-turn, and every
-    checkpoint operation on a session is serialized by `ckptLock`.
+    never rewritten. It REFUSES (`ErrWouldClobber`) when the target would
+    overwrite a path that exists on disk but is not in the safety snapshot —
+    an ignored file, which no checkpoint can bring back.
+  - A restore holds the session's SEND GATE exclusively (`sendGate`), and every
+    send-keys path goes through `typeToAgent`, which holds it shared. Without it
+    a hand-off, queued feedback, a reaction or an answer could start a turn
+    after the idle check and the agent would edit files mid-replacement. Under
+    both locks the restore re-reads the axis AND, for a live agent, demands a
+    resting pane (`paneWaitingNow`); a gone agent needs no proof. A send queued
+    behind a restore WAITS (its timeout starts after the wait), it is not lost.
+    New send paths must use `typeToAgent`, never `d.sendKeys` directly.
+    Checkpoint operations on a session are also serialized by `ckptLock`.
   - `.lola/` is excluded, so neither the scratch files nor the shared context
     folder are captured or rolled back.
   - A fork (`runtime.ForkAgent`) cuts its branch at the checkpoint's HEAD with

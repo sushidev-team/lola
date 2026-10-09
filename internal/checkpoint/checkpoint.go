@@ -71,6 +71,10 @@ type Git struct {
 // ErrNotFound is returned for a sequence number the session has no checkpoint for.
 var ErrNotFound = errors.New("no such checkpoint")
 
+// ErrWouldClobber is returned when a restore would overwrite files no
+// checkpoint holds (ignored files), so it could not be undone.
+var ErrWouldClobber = errors.New("restore would overwrite ignored files that no checkpoint can bring back")
+
 // identity pins the snapshot commit's author/committer: a machine without
 // user.name/user.email configured would otherwise fail commit-tree, and the
 // checkpoint is lola's, not the human's.
@@ -265,6 +269,19 @@ func (g Git) Restore(ctx context.Context, dir, session string, seq int) (safety 
 	if err != nil {
 		return Checkpoint{}, fmt.Errorf("checkpoint: save current state first: %w", err)
 	}
+	// A snapshot never holds IGNORED files (`add -A` skips them), so a target
+	// path that exists on disk now but is not in the safety snapshot is a file
+	// the reset would overwrite with no way back. Refuse before anything moves.
+	if clobbered, err := g.uncaptured(ctx, dir, safety.Tree, target.Tree); err != nil {
+		return safety, fmt.Errorf("checkpoint: restore #%d: %w", seq, err)
+	} else if len(clobbered) > 0 {
+		shown := clobbered
+		if len(shown) > 5 {
+			shown = append(shown[:5:5], fmt.Sprintf("… and %d more", len(clobbered)-5))
+		}
+		return safety, fmt.Errorf("%w: %s — move them out of the way first",
+			ErrWouldClobber, strings.Join(shown, ", "))
+	}
 	// Point the real index at the current snapshot, so the reset below knows
 	// every file that exists now — untracked ones included — and removes the
 	// ones the target lacks.
@@ -275,6 +292,46 @@ func (g Git) Restore(ctx context.Context, dir, session string, seq int) (safety 
 		return safety, fmt.Errorf("checkpoint: restore #%d (the previous state is checkpoint #%d): %w", seq, safety.Seq, err)
 	}
 	return safety, nil
+}
+
+// uncaptured lists the paths the target tree ADDS relative to the current
+// snapshot that nonetheless exist on disk now — or whose parent exists as a
+// non-directory — i.e. ignored files and directories a restore would overwrite
+// or remove although no checkpoint holds them.
+func (g Git) uncaptured(ctx context.Context, dir, current, target string) ([]string, error) {
+	out, err := g.exec(ctx, dir, nil, "diff", "--name-only", "-z", "--no-renames", "--diff-filter=A", current, target, "--")
+	if err != nil {
+		return nil, err
+	}
+	var hit []string
+	for p := range strings.SplitSeq(out, "\x00") {
+		if p == "" {
+			continue
+		}
+		if blocked(dir, p) {
+			hit = append(hit, p)
+		}
+	}
+	return hit, nil
+}
+
+// blocked reports whether writing the file p (slash-separated, relative to dir)
+// would destroy something on disk: p itself exists, or one of its parents is a
+// non-directory.
+func blocked(dir, p string) bool {
+	parts := strings.Split(p, "/")
+	cur := dir
+	for i, part := range parts {
+		cur = filepath.Join(cur, part)
+		fi, err := os.Lstat(cur)
+		if err != nil {
+			return false
+		}
+		if i == len(parts)-1 || !fi.IsDir() {
+			return true
+		}
+	}
+	return false
 }
 
 // Apply rewrites the worktree at dir to tree, deleting files the current index

@@ -59,9 +59,10 @@ var _ checkpointStore = checkpoint.Git{}
 const checkpointTimeout = 90 * time.Second
 
 // Labels. "start" is the state before the first turn, so even turn 1 can be
-// rolled back; "turn N" is the state a turn ended in.
+// rolled back — the runtime records it before every launch (any agent kind);
+// "turn N" is the state a turn ended in.
 const (
-	ckptLabelStart = "start"
+	ckptLabelStart = runtime.BaselineLabel
 	ckptLabelTurn  = "turn "
 )
 
@@ -79,10 +80,38 @@ func (d *Daemon) ckptLock(id string) *sync.Mutex {
 	return mu
 }
 
+// sendGate is session id's send gate (see Daemon.sendGates).
+func (d *Daemon) sendGate(id string) *sync.RWMutex {
+	d.ckptMu.Lock()
+	defer d.ckptMu.Unlock()
+	if d.sendGates == nil {
+		d.sendGates = map[string]*sync.RWMutex{}
+	}
+	g, ok := d.sendGates[id]
+	if !ok {
+		g = &sync.RWMutex{}
+		d.sendGates[id] = g
+	}
+	return g
+}
+
+// typeToAgent is the ONE way the daemon types into a session's agent pane: it
+// waits out a restore of that session's worktree (sendGate), then sends with
+// its own timeout — taken AFTER the wait, so a send queued behind a restore is
+// delayed, never timed out and lost.
+func (d *Daemon) typeToAgent(ctx context.Context, id, target, text string, timeout time.Duration) error {
+	g := d.sendGate(id)
+	g.RLock()
+	defer g.RUnlock()
+	sctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	return d.sendKeys(sctx, target, text)
+}
+
 // recordCheckpointAsync records a checkpoint for a hook event without holding
 // up the hook's reply. event is "stop" (a turn ended) or "user_prompt" (a turn
-// starts — recorded only as the session's very first checkpoint, the baseline
-// that lets turn 1 be undone).
+// starts — recorded only as the session's very first checkpoint: a FALLBACK
+// baseline for a session launched before the runtime recorded one itself).
 func (d *Daemon) recordCheckpointAsync(id, event string) {
 	if id == "" || d.checkpoints == nil || !d.beginConnWork() {
 		return
@@ -171,6 +200,19 @@ func midTurn(s session.Session) bool {
 	return s.AgentState == state.AgentWorking || s.AgentState == state.AgentStarting
 }
 
+// liveAgent reports whether s has an agent process that could still act on
+// its worktree: anything but gone (dead / exited), a shell, or orphaned.
+func liveAgent(s session.Session) bool {
+	if s.IsAgentless() {
+		return false
+	}
+	switch state.DisplayFor(s.AgentState) {
+	case state.DisplayGone, state.DisplayShell, state.DisplayOrphaned:
+		return false
+	}
+	return true
+}
+
 // handleCheckpoints serves cmd=checkpoints. Read-only.
 func (d *Daemon) handleCheckpoints(ctx context.Context, id string) (protocol.CheckpointsData, error) {
 	s, err := d.checkpointSession(id)
@@ -233,14 +275,33 @@ func (d *Daemon) handleRestoreCheckpoint(ctx context.Context, a protocol.Checkpo
 	mu := d.ckptLock(s.ID)
 	mu.Lock()
 	defer mu.Unlock()
-	// Re-read under the lock: the agent may have started a turn while this
-	// request waited behind a Stop-hook record.
-	if cur, ok := d.sessions.Get(s.ID); ok && midTurn(cur) {
+	// Hold the send gate EXCLUSIVELY for the whole restore: a review hand-off,
+	// queued feedback, a reaction or an answer would otherwise start a turn
+	// after the idle check below and let the agent edit files while they are
+	// being replaced — edits no checkpoint would hold. Sends that arrive now
+	// wait and go out after the restore.
+	gate := d.sendGate(s.ID)
+	gate.Lock()
+	defer gate.Unlock()
+	// Re-read under both locks: the agent may have started a turn while this
+	// request waited (a send that was in flight has finished by now).
+	cur, ok := d.sessions.Get(s.ID)
+	if !ok {
+		return protocol.RestoreCheckpointData{}, fmt.Errorf("unknown session %s", s.ID)
+	}
+	if midTurn(cur) {
 		return protocol.RestoreCheckpointData{}, fmt.Errorf(
 			"%s is mid-turn — wait for the agent to finish (or stop it) before restoring", s.ID)
 	}
 	cctx, cancel := context.WithTimeout(ctx, checkpointTimeout)
 	defer cancel()
+	// The axis is the agent's last REPORT; a live agent must also be visibly
+	// resting in its pane right now (the same proof every send path demands).
+	// A gone agent cannot edit anything and needs no proof.
+	if liveAgent(cur) && !d.paneWaitingNow(cctx, cur) {
+		return protocol.RestoreCheckpointData{}, fmt.Errorf(
+			"%s's agent is not visibly resting at its prompt — wait for it to finish (or stop it) before restoring", s.ID)
+	}
 	safety, err := d.checkpoints.Restore(cctx, s.Worktree, s.ID, a.Seq)
 	if err != nil {
 		return protocol.RestoreCheckpointData{}, err

@@ -343,6 +343,7 @@ func (n *Native) Spawn(ctx context.Context, p config.Project, issue linear.Issue
 		return fail("write env", err)
 	}
 
+	n.recordBaseline(ctx, dir, id)
 	if err := n.Tmux.NewSession(ctx, id, dir, n.launchCommand(id, kind, false)); err != nil {
 		return session.Session{}, n.rollbackTmux(ctx, p, id, dir, branch, "start tmux session", err)
 	}
@@ -553,6 +554,7 @@ func (n *Native) finishAgentLaunch(ctx context.Context, p config.Project, id, di
 	if err := os.WriteFile(filepath.Join(dir, lolaDir, "env"), n.envFile(p, id, dir, kind), 0o600); err != nil {
 		return rb("write env", err)
 	}
+	n.recordBaseline(ctx, dir, id)
 	if err := n.Tmux.NewSession(ctx, id, dir, n.launchCommand(id, kind, false)); err != nil {
 		if n.Tmux.Has(ctx, id) {
 			_ = n.Tmux.KillSession(ctx, id)

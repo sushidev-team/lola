@@ -193,6 +193,10 @@ type Daemon struct {
 	commitDiff  func(ctx context.Context, dir, from, to string) (gitdiff.Result, error)
 	ckptMu      sync.Mutex
 	ckptLocks   map[string]*sync.Mutex
+	// sendGates is the per-session SEND GATE (typeToAgent): every send-keys
+	// into an agent holds it shared, a checkpoint restore holds it exclusively,
+	// so nothing can start the agent while its files are being replaced.
+	sendGates map[string]*sync.RWMutex
 
 	// listTmuxSessions lists every session on lola's tmux server in ONE exec —
 	// the observer's per-cycle liveness + #{session_activity} source (replacing
