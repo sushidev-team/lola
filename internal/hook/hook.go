@@ -136,6 +136,93 @@ func Report(argv []string) error {
 	return nil
 }
 
+// request sends one request for the session named by $LOLA_SESSION and decodes
+// the daemon's reply into out (nil to ignore data), bounded by postTimeout.
+// Unreachable-daemon failures wrap ErrNoDaemon, exactly like Report.
+func request(cmd string, args any, out any) error {
+	session := os.Getenv("LOLA_SESSION")
+	if session == "" {
+		return fmt.Errorf("%w: not a lola session ($LOLA_SESSION unset)", ErrNoDaemon)
+	}
+	home, err := config.Home()
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrNoDaemon, err)
+	}
+	req := protocol.Request{Cmd: cmd, Session: session}
+	if args != nil {
+		raw, err := json.Marshal(args)
+		if err != nil {
+			return err
+		}
+		req.Args = raw
+	}
+	raw, err := json.Marshal(req)
+	if err != nil {
+		return err
+	}
+	deadline := time.Now().Add(postTimeout)
+	d := net.Dialer{Deadline: deadline}
+	conn, err := d.Dial("unix", filepath.Join(home, "lola.sock"))
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrNoDaemon, err)
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(deadline)
+	if _, err := conn.Write(append(raw, '\n')); err != nil {
+		return fmt.Errorf("%w: %v", ErrNoDaemon, err)
+	}
+	line, err := bufio.NewReader(conn).ReadString('\n')
+	if err != nil {
+		return fmt.Errorf("%w: no reply: %v", ErrNoDaemon, err)
+	}
+	var resp protocol.Response
+	if err := json.Unmarshal([]byte(line), &resp); err != nil {
+		return fmt.Errorf("%w: bad reply: %v", ErrNoDaemon, err)
+	}
+	if !resp.OK {
+		if strings.HasPrefix(resp.Error, "unknown cmd") {
+			return fmt.Errorf("%w: %s", ErrNoDaemon, resp.Error)
+		}
+		return errors.New(resp.Error)
+	}
+	if out != nil && len(resp.Data) > 0 {
+		return json.Unmarshal(resp.Data, out)
+	}
+	return nil
+}
+
+// SubmitPlan hands the agent's plan to the daemon (cmd=planSubmit).
+func SubmitPlan(plan string) error {
+	return request("planSubmit", protocol.PlanSubmitArgs{Plan: plan}, nil)
+}
+
+// PlanGate asks whether this session may edit files (cmd=planGate). Any
+// failure to reach the daemon returns an ErrNoDaemon-wrapped error, and the
+// caller then ALLOWS the edit: the hook must never wedge a turn on a dead lola.
+func PlanGate() (protocol.PlanGateData, error) {
+	var d protocol.PlanGateData
+	err := request("planGate", nil, &d)
+	return d, err
+}
+
+// PreToolUseDeny is the Claude Code PreToolUse hook output that denies the
+// tool call and tells the model why.
+func PreToolUseDeny(reason string) []byte {
+	out, _ := json.Marshal(map[string]any{
+		"hookSpecificOutput": map[string]any{
+			"hookEventName":            "PreToolUse",
+			"permissionDecision":       "deny",
+			"permissionDecisionReason": reason,
+		},
+	})
+	return append(out, '\n')
+}
+
+// planGatedTools are the claude tools the plan gate blocks: every file-WRITING
+// tool. Bash is deliberately not in the list (it is how the agent investigates
+// and submits the plan); the briefing forbids writing through it.
+const planGatedTools = "Edit|Write|MultiEdit|NotebookEdit"
+
 // Claude Code settings shapes for SettingsJSON. Struct (not map) so the JSON
 // key order is deterministic and golden-testable.
 type hookSpec struct {
@@ -157,6 +244,7 @@ type settingsFile struct {
 		SessionEnd       []matcherEntry `json:"SessionEnd"`
 		PostToolUse      []matcherEntry `json:"PostToolUse"`
 		UserPromptSubmit []matcherEntry `json:"UserPromptSubmit"`
+		PreToolUse       []matcherEntry `json:"PreToolUse"`
 	} `json:"hooks"`
 	SkillOverrides map[string]string `json:"skillOverrides,omitempty"`
 	StatusLine     *statusLineSpec   `json:"statusLine,omitempty"`
@@ -197,6 +285,8 @@ var modalSkills = map[string]string{
 //	SessionEnd       → <lolaBin> hook session_end
 //	PostToolUse      → <lolaBin> hook tool_use     (async: the liveness heartbeat
 //	                                                never wakes or blocks the agent)
+//	PreToolUse       → <lolaBin> hook pre_tool_use (file-edit tools only: the
+//	                                                plan-approval gate's deny)
 //	UserPromptSubmit → <lolaBin> hook user_prompt  (turn START: clears the
 //	                                                AtPrompt send-keys gate so a
 //	                                                human-initiated attach turn —
@@ -238,6 +328,17 @@ func SettingsJSON(lolaBin string) []byte {
 	// Synchronous (not async): AtPrompt must be reliably cleared at turn start,
 	// before the agent produces any output the reaction engine might race.
 	s.Hooks.UserPromptSubmit = entry("user_prompt", false)
+	// The plan-approval gate: synchronous, because its stdout DECIDES the tool
+	// call. Wired into every session (an ungated one is answered "allowed" in
+	// one socket round trip) so the gate needs no per-project settings variant.
+	s.Hooks.PreToolUse = []matcherEntry{{
+		Matcher: planGatedTools,
+		Hooks: []hookSpec{{
+			Type:    "command",
+			Command: bin + " hook pre_tool_use",
+			Timeout: 10,
+		}},
+	}}
 	s.SkillOverrides = modalSkills
 	s.StatusLine = &statusLineSpec{Type: "command", Command: bin + " " + statusLineSelf}
 
