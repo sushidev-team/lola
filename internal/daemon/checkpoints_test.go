@@ -349,11 +349,12 @@ func TestRestoreDemandsALiveRestingPane(t *testing.T) {
 	ck.Record(ctx, "", "", "turn 1")
 
 	idle := ckptSess(t, d, "CK-10", state.AgentIdle)
-	d.paneTail = func(context.Context, string, int) (string, error) { return "✻ Harmonizing… (5m 58s · ↓ 17.9k tokens)\n", nil }
+	d.paneTail = func(context.Context, string, int) (string, error) {
+		return "✻ Harmonizing… (5m 58s · ↓ 17.9k tokens)\n", nil
+	}
 	if _, err := d.handleRestoreCheckpoint(ctx, protocol.CheckpointArgs{Session: idle.ID, Seq: 1}); err == nil {
 		t.Fatal("restored under an agent whose pane shows a running turn")
 	}
-	d.paneTail = func(context.Context, string, int) (string, error) { return "", errors.New("no pane") }
 	gone := ckptSess(t, d, "CK-11", state.AgentDead)
 	d.paneTail = func(context.Context, string, int) (string, error) { return "", errors.New("no pane") }
 	if _, err := d.handleRestoreCheckpoint(ctx, protocol.CheckpointArgs{Session: gone.ID, Seq: 1}); err != nil {
