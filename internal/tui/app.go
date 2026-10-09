@@ -95,6 +95,10 @@ type rootModel struct {
 	// the essentials. esc / '?' close it. Purely presentational — no scroll state.
 	showHelp bool
 
+	// diff is the full-screen diff overlay ("f"): read a session's changes and
+	// send line comments to its agent (diffview.go).
+	diff diffModel
+
 	// daemonOp is the in-flight lifecycle transition ("starting"/"stopping"/
 	// "restarting"), shown in the message line while a ^r/^x/auto-start op runs;
 	// cleared when its daemonOpMsg arrives. Only set in self-managed mode.
@@ -117,6 +121,10 @@ func (m *rootModel) routePaste(content string) (tea.Model, tea.Cmd) {
 		return m.handleEmbedPaste(content)
 	}
 	switch {
+	case m.diff.open:
+		if m.diff.input != diffInputNone {
+			m.diff.inputBuf += pasteInline(content)
+		}
 	case m.form != nil:
 		m.form.paste(content)
 	case m.settings != nil:
@@ -350,6 +358,19 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case paneMsg:
 		m.handlePaneMsg(v)
 		return m, nil
+	case diffLoadedMsg:
+		if v.session == m.diff.session {
+			m.diff.loading = false
+			if v.err != nil {
+				m.diff.err = v.err.Error()
+			} else {
+				m.diff.err = ""
+				m.diff.setData(v.data)
+			}
+		}
+		return m, nil
+	case feedbackDoneMsg:
+		return m, m.handleFeedbackDone(v)
 	case answerDoneMsg:
 		// Surface the daemon's verdict: a green "answer sent", or the verbatim
 		// refusal/dial error. Then refresh the list and pane so the resumed
@@ -480,6 +501,12 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// swallows every keystroke; esc / '?' / q close it. It never coexists with the
 	// editors above (you can only open it when '?' actually reaches a view), so
 	// this gate is safe to sit ahead of the settings/doctor/form routing.
+	if m.diff.open {
+		if _, ok := msg.(tea.KeyPressMsg); ok {
+			return m.updateDiff(msg)
+		}
+	}
+
 	if m.showHelp {
 		if k, ok := msg.(tea.KeyPressMsg); ok {
 			switch k.String() {
@@ -666,6 +693,9 @@ func (m *rootModel) View() tea.View {
 }
 
 func (m *rootModel) viewString() string {
+	if m.diff.open {
+		return m.diffView()
+	}
 	if m.showHelp {
 		return m.helpModal()
 	}

@@ -224,6 +224,11 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   (`Render`) or split into anchored, resolvable review threads plus a summary
   (`RenderInline`). Two callers, both in `internal/daemon` (`postGithubSink` /
   `postGithubInline`); see the invariant below.
+- `internal/gitdiff` — LOCAL git only: a worktree against its merge-base with
+  the base branch (`origin/<base>` first, then `<base>`), uncommitted and
+  untracked work included, split per file and capped at a file boundary. Behind
+  `cmd=diff` (`internal/daemon/feedback.go`) for the diff viewer. Not `scm`
+  (gh-only) and not `diffanchor` (which reads a PR's diff, not a worktree).
 - `internal/diffanchor` — pure text leaf: which `(path, line)` pairs of a unified
   diff may carry a GitHub inline review comment (RIGHT side, added + context
   lines, `Nearest` for the bounded snap). It exists because the reviews endpoint
@@ -987,6 +992,19 @@ each of which owns exactly one external tool or concern behind an **exec seam**
     PR. Without that release a single timeout locked the PR out of review
     forever — the bug that made the feature look dead. A real answer (findings
     or clean) and a graceful skip (auth / exit error) stay final.
+- **Diff-viewer feedback DEFERS, it never refuses and never forces.**
+  `cmd=feedback` (`internal/daemon/feedback.go`) is a human's line comments
+  rendered into one `path:line`-anchored message. Every batch is APPENDED to
+  `Session.PendingFeedback` first and then delivered through exactly the review
+  hand-off's gate — `handoffDeliverable` plus `paneWaitingNow`, sanitized at send
+  time — by whichever comes first: the request itself, the Stop hook or the
+  observer (`flushReviewHandoffs` tries it BEFORE any provider stash, and it
+  counts as that pass's one delivery). It differs from `resolveConflict` on
+  purpose: a review a human spent minutes writing must not be lost to "the agent
+  was busy". A failed send-keys RE-QUEUES the text (it exists nowhere else,
+  unlike a review hand-off), and it is kept apart from `PendingHandoffs` because
+  that map is keyed by provider kind and a stash for an unconfigured kind is
+  skipped.
 - **Every reaction dispatches off the DELIVERY axis, never the rollup.**
   `react` switches on `s.Delivery` (merged → ci_failed → merge_conflict →
   changes_requested → approved → closed, in that order), and each reaction's

@@ -1236,6 +1236,31 @@ lola runs these sessions on its **own tmux server** (`tmux -L lola`, or your
 to or detaching from a lola session never touches your own tmux sessions,
 options, or key bindings.
 
+## Reviewing a session's diff
+
+Press **`f`** on a session (TUI and app), or pick **Review diff** from the app's
+session menu, to read what it changed: its worktree against the merge-base with
+the project's `default_branch`, so commits `main` gained since the fork never
+show up as if the agent reverted them — and uncommitted and untracked work is
+included, because most of an agent's work is not committed yet.
+
+- **App** — a **Diff** tab beside the terminal tabs: a file tree, unified or
+  split hunks, light syntax colouring. Click a line number (shift-click for a
+  range) to write a comment; comments queue under their line and survive an app
+  restart. **Send to agent** ships the batch.
+- **TUI** — a full-screen overlay: `j`/`k` move, `[`/`]` jump files, `c`
+  comments on the line under the cursor, `n` adds a free note, `u` drops the last
+  comment, `s` sends, `r` re-reads the worktree.
+
+A batch reaches the agent as **one message**, each comment anchored as
+`path:line` (a comment on a removed line names the base version's line) with the
+quoted code. It goes through the same gate as a review hand-off: sanitized, and
+typed only when the agent's pane shows a resting prompt **right now**. A
+mid-turn agent is never typed into — the batch is **queued** and delivered the
+moment it stops (the Stop hook, or the next observe cycle), and a second batch
+sent meanwhile is appended, not lost. Works the same for claude, codex and
+opencode sessions.
+
 ## Secrets
 
 The Linear API key is resolved at dispatch time, keychain first, then

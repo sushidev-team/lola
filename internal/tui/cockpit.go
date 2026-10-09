@@ -223,6 +223,7 @@ func (m *rootModel) helpModal() string {
 		row("< / >", "prev / next terminal tab"),
 		row("w", "close shell tab"),
 		row("a", "answer input"),
+		row("f", "diff · comment, send to agent"),
 		row("A", "switch agent"),
 		row("x", "kill session"),
 		row("o", "open PR"),
