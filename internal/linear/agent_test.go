@@ -165,3 +165,39 @@ func TestOAuthTokenExpired(t *testing.T) {
 		t.Fatal("within skew counts as expired")
 	}
 }
+
+// Both agent queries follow the connection cursor instead of stopping at the
+// first page.
+func TestAgentQueriesPaginate(t *testing.T) {
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		calls++
+		after, _ := body["variables"].(map[string]any)["after"].(string)
+		q := body["query"].(string)
+		switch {
+		case strings.Contains(q, "agentSessions") && after == "":
+			io.WriteString(w, `{"data":{"agentSessions":{"nodes":[{"id":"s1","status":"active","createdAt":"x"}],"pageInfo":{"hasNextPage":true,"endCursor":"c1"}}}}`)
+		case strings.Contains(q, "agentSessions"):
+			io.WriteString(w, `{"data":{"agentSessions":{"nodes":[{"id":"s2","status":"pending","createdAt":"x"}],"pageInfo":{"hasNextPage":false,"endCursor":"c2"}}}}`)
+		case after == "":
+			io.WriteString(w, `{"data":{"agentActivities":{"nodes":[{"id":"a","createdAt":"2","content":{"body":"b"}}],"pageInfo":{"hasNextPage":true,"endCursor":"p1"}}}}`)
+		default:
+			io.WriteString(w, `{"data":{"agentActivities":{"nodes":[{"id":"b","createdAt":"1","content":{"body":"a"}}],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}`)
+		}
+	}))
+	defer srv.Close()
+	c := NewBearer(srv.URL, "t")
+	ss, err := c.AgentSessions(context.Background())
+	if err != nil || len(ss) != 2 || ss[1].ID != "s2" {
+		t.Fatalf("sessions = %+v, %v", ss, err)
+	}
+	ps, err := c.AgentPrompts(context.Background(), "s1", "")
+	if err != nil || len(ps) != 2 || ps[0].Body != "a" {
+		t.Fatalf("prompts = %+v, %v", ps, err)
+	}
+	if calls != 4 {
+		t.Fatalf("calls = %d, want 4", calls)
+	}
+}

@@ -18,6 +18,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1161,6 +1162,18 @@ func (d *Daemon) adoptNativeSessions(ctx context.Context) {
 				s.InterpretedForAgentState = prev.InterpretedForAgentState
 				s.LastInterpretedAt = prev.LastInterpretedAt
 				s.LastInterpretedHash = prev.LastInterpretedHash
+				// The plan gate is CONTROL state the scan cannot see: dropping it
+				// would unlock edits on an unapproved plan. The Linear agent binding,
+				// its mirror watermark and queued notices ride along for the same
+				// reason (an unbound session is never mirrored or relayed again).
+				s.PlanGate = prev.PlanGate
+				s.Plan = prev.Plan
+				s.PlanRound = prev.PlanRound
+				s.PlanFeedback = prev.PlanFeedback
+				s.PlanSubmittedAt = prev.PlanSubmittedAt
+				s.AgentSessionID = prev.AgentSessionID
+				s.AgentMirror = prev.AgentMirror
+				s.PendingNotices = slices.Clone(prev.PendingNotices)
 				// Flexible-review fire-once guards (PLAN §3.2): carry the four kind-keyed
 				// maps forward, NOT the legacy scalars. prev came through Store.load, which
 				// runs migrateReviewState, so its maps are already authoritative (any old

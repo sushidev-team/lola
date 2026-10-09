@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
+	"github.com/sushidev-team/lola/internal/linear"
 	"github.com/sushidev-team/lola/internal/protocol"
 	"github.com/sushidev-team/lola/internal/session"
 	"github.com/sushidev-team/lola/internal/state"
@@ -188,5 +191,63 @@ func TestSanitizePlanClips(t *testing.T) {
 	}
 	if !strings.Contains(sanitizePlan("a\n\tb"), "a\n\tb") {
 		t.Fatal("newlines and tabs must survive")
+	}
+}
+
+// A daemon restart must not drop the plan gate (that would unlock edits on an
+// unapproved plan) or the Linear agent binding: runtime.Adopt rebuilds records
+// from tmux, which knows neither.
+func TestAdoptCarriesPlanGateAndAgentBinding(t *testing.T) {
+	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, nil)
+	prior := nativeSess("FE-1", "idle")
+	prior.PlanGate, prior.Plan, prior.PlanRound = session.PlanSubmitted, "the plan", 2
+	prior.AgentSessionID = "as-1"
+	prior.AgentMirror = session.AgentMirror{PromptCursor: "c", PlanRound: 2}
+	prior.PendingNotices = []string{"queued"}
+	d.sessions.Upsert(prior)
+
+	scanned := nativeSess("FE-1", "working") // what a tmux scan reconstructs
+	d.native = &fakeNative{adopted: []session.Session{scanned}}
+	d.adoptNativeSessions(context.Background())
+
+	got, _ := d.sessions.Get(prior.ID)
+	if got.PlanGate != session.PlanSubmitted || got.Plan != "the plan" || got.PlanRound != 2 {
+		t.Fatalf("plan gate lost across adoption: %+v", got)
+	}
+	if got.AgentSessionID != "as-1" || got.AgentMirror.PromptCursor != "c" || len(got.PendingNotices) != 1 {
+		t.Fatalf("agent binding lost across adoption: %+v", got)
+	}
+	if !gateBlocked(t, d, prior.ID) {
+		t.Fatal("an adopted submitted plan must still block edits")
+	}
+}
+
+// Concurrent flushes deliver exactly ONE notice per resting prompt: the
+// dequeue closes the whole gate (AtPrompt AND the idle axis) atomically.
+func TestNoticeFlushIsAtomicAcrossConcurrentCallers(t *testing.T) {
+	s := gatedSession(session.PlanNone)
+	s.AtPrompt = false // idle without AtPrompt — the case noticeDeliverable still admits
+	s.PendingNotices = []string{"one", "two"}
+	d, _ := planDaemon(t, s)
+	var mu sync.Mutex
+	var sends []string
+	d.sendKeys = func(_ context.Context, _ string, text string) error {
+		time.Sleep(20 * time.Millisecond) // a slow multi-line send
+		mu.Lock()
+		sends = append(sends, text)
+		mu.Unlock()
+		return nil
+	}
+	var wg sync.WaitGroup
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() { defer wg.Done(); d.flushAgentNotices(context.Background(), s.ID) }()
+	}
+	wg.Wait()
+	if len(sends) != 1 {
+		t.Fatalf("one resting prompt must receive exactly one notice, got %q", sends)
+	}
+	if cur, _ := d.sessions.Get(s.ID); len(cur.PendingNotices) != 1 || cur.AgentState != state.AgentWorking {
+		t.Fatalf("after delivery: %+v / %s", cur.PendingNotices, cur.AgentState)
 	}
 }

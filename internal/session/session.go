@@ -71,8 +71,11 @@ type AgentMirror struct {
 	Delivery string `json:"delivery,omitempty"`
 	// NeedsYou is whether the "the agent is waiting on you" elicitation is out.
 	NeedsYou bool `json:"needs_you,omitempty"`
-	// PlanRound is the plan submission last posted for approval.
-	PlanRound int `json:"plan_round,omitempty"`
+	// PlanRound is the plan submission last posted for approval, and
+	// PlanPostedAt when it was posted: only a human prompt written AFTER that
+	// moment can be the verdict on it.
+	PlanRound    int       `json:"plan_round,omitempty"`
+	PlanPostedAt time.Time `json:"plan_posted_at,omitzero"`
 	// Done marks the final response (merged/closed/gone) as sent.
 	Done bool `json:"done,omitempty"`
 }

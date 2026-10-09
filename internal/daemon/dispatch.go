@@ -312,13 +312,20 @@ func (d *Daemon) tick(ctx context.Context, name string, dryRun bool) (protocol.P
 	d.setLinearOK(true)
 	// Zero matches is also exactly what a filter naming a label or state Linear
 	// no longer knows looks like — Linear answers such a query with nothing
-	// rather than an error. Resolve the references only then (a filter that
-	// matched something cannot be unmatchable), so the common tick pays nothing.
+	// rather than an error. Resolve the references then (a filter that matched
+	// something cannot be unmatchable). The label-mode on-sent label is the
+	// exception: it is a WRITE-BACK reference, so a dead one still lets the
+	// filter match and only fails at the post-spawn flip — check it on every
+	// label-mode tick (the reference cache keeps that to one lookup per refTTL)
+	// and keep only the write-back verdicts when issues did match.
 	var refIssues []string
-	if len(issues) == 0 {
+	switch {
+	case len(issues) == 0:
 		refIssues = d.filterRefProblems(ctx, api, name, p, now)
-		res.Problems = refIssues
+	case p.DedupMode == "label" && p.OnSentSetLabel != "":
+		refIssues = writeBackRefProblems(d.filterRefProblems(ctx, api, name, p, now))
 	}
+	res.Problems = refIssues
 
 	seen, err := d.seen.load(name)
 	if err != nil {

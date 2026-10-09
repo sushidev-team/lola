@@ -81,6 +81,9 @@ func (d *Daemon) handlePlanSubmit(req protocol.Request) protocol.Response {
 	if plan == "" {
 		return protocol.Response{OK: false, Error: "planSubmit: the plan is empty — pass it on stdin or as a file argument"}
 	}
+	if _, ok := d.sessions.Get(req.Session); !ok {
+		return protocol.Response{OK: false, Error: "planSubmit: unknown session " + req.Session}
+	}
 	now := time.Now()
 	if !d.reports.allow(req.Session, now) {
 		return protocol.Response{OK: false, Error: errReportRateLimited.Error()}
@@ -301,7 +304,12 @@ func (d *Daemon) flushAgentNotices(ctx context.Context, id string) bool {
 		if len(cur.PendingNotices) == 0 {
 			cur.PendingNotices = nil
 		}
+		// Close the WHOLE gate in the same atomic step: noticeDeliverable also
+		// admits AgentIdle without AtPrompt, so clearing AtPrompt alone would let
+		// a concurrent flush (observer, Stop hook, another async flush) dequeue a
+		// second notice into the same prompt while this send is still typing.
 		cur.AtPrompt = false
+		cur.SetAgentState(state.AgentWorking, "", time.Now())
 		tmuxName = cur.TmuxName
 		return true
 	})
@@ -315,10 +323,6 @@ func (d *Daemon) flushAgentNotices(ctx context.Context, id string) bool {
 		d.logf("", "notice: send-keys to %s failed: %v", id, err)
 		return false
 	}
-	d.sessions.Update(id, func(cur *session.Session) bool {
-		cur.SetAgentState(state.AgentWorking, "", time.Now())
-		return true
-	})
 	if err := d.sessions.Save(); err != nil {
 		d.logf("", "notice: persist sessions: %v", err)
 	}

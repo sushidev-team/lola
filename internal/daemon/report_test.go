@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -161,5 +162,27 @@ func TestClaimAuditFlagsTestsClaimedWithoutARun(t *testing.T) {
 	d.sessions.Update(s.ID, func(sess *session.Session) bool { sess.Agent = "codex"; return true })
 	if bi := board(); len(bi.Mismatches) != 0 {
 		t.Fatalf("non-claude session must not be audited from a transcript: %+v", bi)
+	}
+}
+
+// The limiter never keeps one entry per session id forever: unknown ids are
+// refused before it, and idle windows are swept once the map grows.
+func TestReportLimiterIsBounded(t *testing.T) {
+	var l reportLimiter
+	now := time.Now()
+	for i := 0; i < reportSweepAt+50; i++ {
+		l.allow(fmt.Sprintf("s%d", i), now)
+	}
+	l.allow("fresh", now.Add(2*reportWindow))
+	if len(l.hits) > 2 {
+		t.Fatalf("idle sessions not swept: %d entries", len(l.hits))
+	}
+
+	d := newTestDaemon(t, testConfig(labelPoll("p1")), &linear.Fake{}, &fakeNative{})
+	if r := d.handleAgentReport(protocol.Request{Session: "nope", Args: json.RawMessage(`{"argv":["note","x"]}`)}); r.OK {
+		t.Fatal("an unknown session must be refused")
+	}
+	if len(d.reports.hits) != 0 {
+		t.Fatalf("an unknown session got a limiter entry: %v", d.reports.hits)
 	}
 }
