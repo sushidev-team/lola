@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func saveReload(t *testing.T, c *Config) (*Config, string) {
@@ -109,5 +110,17 @@ require_plan = false
 	c2.ResolveInheritance()
 	if c2.ProjectByName("lit").RequirePlan {
 		t.Fatal("a literal project must not silently inherit")
+	}
+}
+
+func TestLinearAgentNormalized(t *testing.T) {
+	if got := (LinearAgentConfig{PollInterval: time.Minute, TokenKeychain: "x"}).Normalized(); got != (LinearAgentConfig{}) {
+		t.Fatalf("an unconfigured table must collapse to zero, got %+v", got)
+	}
+	got := LinearAgentConfig{Enabled: true, ClientID: "c", ClientSecretEnv: "MY_SECRET", PollInterval: time.Second}.Normalized()
+	if got.TokenKeychain != DefaultLinearAgentTokenKeychain || got.ClientSecretKeychain != "" ||
+		got.WebhookSecretKeychain != DefaultLinearAgentWebhookKeychain || got.RedirectPort != DefaultLinearAgentRedirectPort ||
+		got.PollInterval != MinLinearAgentPollInterval {
+		t.Fatalf("normalized = %+v", got)
 	}
 }

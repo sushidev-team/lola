@@ -196,3 +196,40 @@ func (c *Config) validateLinearAgent() []error {
 	}
 	return errs
 }
+
+// Configured reports whether a human has put anything into the table — the
+// keys a settings form edits. A table with none of them carries nothing worth
+// writing.
+func (a LinearAgentConfig) Configured() bool {
+	return a.Enabled || a.ClientID != "" || a.WebhookListen != ""
+}
+
+// Normalized is the table a settings form should save: an unconfigured table
+// collapses to the zero value (so a save never grows [linear_agent] on a
+// config that never used it), and a configured one gets the defaults Load
+// would have resolved for every source and number a form leaves blank — a
+// table built in memory never went through resolveLinearAgent.
+func (a LinearAgentConfig) Normalized() LinearAgentConfig {
+	if !a.Configured() {
+		return LinearAgentConfig{}
+	}
+	if a.TokenKeychain == "" {
+		a.TokenKeychain = DefaultLinearAgentTokenKeychain
+	}
+	if a.ClientSecretKeychain == "" && a.ClientSecretEnv == "" {
+		a.ClientSecretKeychain = DefaultLinearAgentSecretKeychain
+	}
+	if a.WebhookSecretKeychain == "" && a.WebhookSecretEnv == "" {
+		a.WebhookSecretKeychain = DefaultLinearAgentWebhookKeychain
+	}
+	if a.RedirectPort == 0 {
+		a.RedirectPort = DefaultLinearAgentRedirectPort
+	}
+	if a.PollInterval == 0 {
+		a.PollInterval = DefaultLinearAgentPollInterval
+	}
+	if a.PollInterval < MinLinearAgentPollInterval {
+		a.PollInterval = MinLinearAgentPollInterval
+	}
+	return a
+}

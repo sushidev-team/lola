@@ -1284,7 +1284,14 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   fails OPEN on an unreachable daemon, like every hook. Bash writes and
   codex/opencode are covered by the briefing only — documented, not hidden.
   Verdicts reach the agent as queued notices (never typed mid-turn); approving
-  from `planning` waives the gate. `planSubmit` / `planGate` are on remote's
+  from `planning` waives the gate. Both project forms expose it as an
+  inheritable toggle (the first BOOLEAN inheritable key: toggling it while
+  inherited promotes it, like typing into an inherited text field), and the
+  app's `SaveProject` now carries over the `Inherits` bits its form does not
+  surface (`review`, `agent_fallback`) instead of zeroing them. The settings
+  screens edit `[linear_agent]` through `LinearAgentConfig.Normalized` (an
+  untouched table stays absent; secret SOURCES are preserved) and store the
+  agent's secrets write-only, like the Linear key. `planSubmit` / `planGate` are on remote's
   denied floor (in-pane origin, like `agentReport`); `planDecide` is audited.
 - **Untrusted output stays out of the control loop.** `brain` summaries and
   `review` findings are derived from attacker-influenceable context (PR diffs,

@@ -117,6 +117,7 @@ func agentDaemon(t *testing.T, projects ...config.Project) (*Daemon, *fakeAgentA
 	d := newTestDaemon(t, cfg, &linear.Fake{}, nat)
 	api := newFakeAgentAPI()
 	d.agent.apiOverride = api
+	t.Cleanup(d.connWg.Wait) // async notice flushes and Linear posts finish first
 	return d, api, nat
 }
 

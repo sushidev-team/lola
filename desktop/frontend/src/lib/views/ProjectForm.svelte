@@ -50,6 +50,7 @@
     "blockedLabelId",
     "dedupMode",
     "prioritySort",
+    "requirePlan",
   ] as const;
   type InheritKey = (typeof INHERIT_KEYS)[number];
 
@@ -196,7 +197,7 @@
   /** Any edit of an inherited field promotes it to a project-level override. */
   // Drafts are presentation state, never persisted. Comparing with defaults
   // must not erase commands or environment variables the user just entered.
-  const overrideDrafts = new Map<InheritKey, string | string[] | null>();
+  const overrideDrafts = new Map<InheritKey, string | string[] | boolean | null>();
   function promote(k: InheritKey, restoreDraft = false) {
     if (!f || !f.inherits[k]) return;
     if (restoreDraft && overrideDrafts.has(k)) {
@@ -242,6 +243,9 @@
         break;
       case "dedupMode":
         f.dedupMode = d.dedupMode;
+        break;
+      case "requirePlan":
+        f.requirePlan = !!d.requirePlan;
         break;
       case "prioritySort":
         break; // not surfaced by this form; the bit is passed through on save
@@ -615,6 +619,18 @@
   {/if}
 {/snippet}
 
+<!-- A boolean [defaults]-inheritable key: ticking it while inherited promotes
+     it to a project override, exactly like typing into an inherited text row. -->
+{#snippet inheritBoolRow(caption: string, k: InheritKey, checked: boolean, onToggle: () => void, hint = "", help = "")}
+  <div class={rowCls}>
+    {@render cap(caption, k, help)}
+    <label class="flex items-center gap-2 text-ink {inherited(k) ? 'opacity-70' : ''}">
+      <Checkbox {checked} onchange={() => { promote(k); onToggle(); }} aria-label={caption} />
+      {#if hint}<span class="text-faint">{hint}</span>{/if}
+    </label>
+  </div>
+{/snippet}
+
 {#snippet boolRow(caption: string, checked: boolean, onToggle: () => void, hint = "")}
   <div class={rowCls}>
     <span class={labelCls}>{caption}</span>
@@ -807,6 +823,17 @@
           </div>
         {/snippet}
         {@render section("Automatic pickup", pickup)}
+        {#snippet planGate()}
+          {@render inheritBoolRow(
+            "Require plan",
+            "requirePlan",
+            !!d.requirePlan,
+            () => { d.requirePlan = !d.requirePlan; },
+            "approve a plan before the agent edits files",
+            "The agent investigates read-only and submits a plan; it may edit files only once a human approves it — in the app, with `lola plan approve`, or in the Linear agent session.",
+          )}
+        {/snippet}
+        {@render section("Plan approval", planGate)}
         {#snippet filters()}
           <!-- Team drives every dependent picker. -->
           <div class={rowCls}>

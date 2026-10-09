@@ -21,6 +21,15 @@ func gatedSession(gate session.PlanGate) session.Session {
 	}
 }
 
+// planDaemon is answerDaemon plus a cleanup that waits for the async notice
+// flush decidePlan starts, so it never writes into a removed TempDir.
+func planDaemon(t *testing.T, s session.Session) (*Daemon, *[]sendKeysCall) {
+	t.Helper()
+	d, sends := answerDaemon(t, s, restingPane)
+	t.Cleanup(d.connWg.Wait)
+	return d, sends
+}
+
 func submit(d *Daemon, id, plan string) protocol.Response {
 	args, _ := json.Marshal(protocol.PlanSubmitArgs{Plan: plan})
 	return d.handlePlanSubmit(protocol.Request{Cmd: "planSubmit", Session: id, Args: args})
@@ -37,7 +46,7 @@ func gateBlocked(t *testing.T, d *Daemon, id string) bool {
 }
 
 func TestPlanSubmitRefusedWithoutGate(t *testing.T) {
-	d, _ := answerDaemon(t, gatedSession(session.PlanNone), restingPane)
+	d, _ := planDaemon(t, gatedSession(session.PlanNone))
 	if r := submit(d, "p1-eng-1", "do it"); r.OK || !strings.Contains(r.Error, "no plan-approval gate") {
 		t.Fatalf("submit without a gate = %+v", r)
 	}
@@ -50,7 +59,7 @@ func TestPlanSubmitRefusedWithoutGate(t *testing.T) {
 }
 
 func TestPlanGateLifecycle(t *testing.T) {
-	d, sends := answerDaemon(t, gatedSession(session.PlanPlanning), restingPane)
+	d, sends := planDaemon(t, gatedSession(session.PlanPlanning))
 	if !gateBlocked(t, d, "p1-eng-1") {
 		t.Fatal("planning must block edits")
 	}
@@ -119,7 +128,7 @@ func TestPlanGateLifecycle(t *testing.T) {
 func TestPlanNoticeWaitsForRestingPrompt(t *testing.T) {
 	s := gatedSession(session.PlanSubmitted)
 	s.AgentState, s.AtPrompt = state.AgentWorking, false
-	d, sends := answerDaemon(t, s, restingPane)
+	d, sends := planDaemon(t, s)
 	if err := d.decidePlan(context.Background(), s.ID, true, "", "lola"); err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +152,7 @@ func TestPlanNoticeWaitsForRestingPrompt(t *testing.T) {
 
 // Approving straight from planning waives the gate.
 func TestPlanApproveWaivesFromPlanning(t *testing.T) {
-	d, sends := answerDaemon(t, gatedSession(session.PlanPlanning), restingPane)
+	d, sends := planDaemon(t, gatedSession(session.PlanPlanning))
 	if err := d.decidePlan(context.Background(), "p1-eng-1", false, "x", "lola"); err == nil {
 		t.Fatal("requesting changes before any plan must be refused")
 	}

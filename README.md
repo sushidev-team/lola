@@ -1286,6 +1286,11 @@ an error activity saying so.
 | `webhook_listen` | string | Optional `IP:port` for the webhook doorbell (see below). Empty = off. |
 | `webhook_secret_keychain` / `webhook_secret_env` | string | The webhook signing secret. Default service `lola-linear-agent-webhook-secret`. |
 
+Every key above except the secret sources is also editable in the settings
+screens — the app's **Settings → Linear agent** tab (which also stores the client
+and webhook secrets in the Keychain, write-only) and the TUI's `S` → **Linear**
+tab. The OAuth install itself stays a terminal step (`lola linear-agent login`).
+
 Setup: create an OAuth application in Linear (Settings → API), enable it for
 agents and the *agent session events* webhook category if you use one, register
 the redirect URI, then:
@@ -1325,7 +1330,9 @@ already working on binds to that session instead of spawning a second one.
 
 ### Plan approval (`require_plan`)
 
-With `require_plan = true` (per project, inheritable from `[defaults]`) every
+With `require_plan = true` (per project, inheritable from `[defaults]`; set it
+in the project form's **Issue pickup** / TUI **Filter** tab, or as a default
+under **Project defaults** in either settings screen) every
 issue-dispatched session **plans before it codes**. Its briefing tells the agent
 to investigate read-only, submit a plan with `lola plan submit`, and stop. lola
 posts the plan — the session view's banner in the app, the TUI detail panel, the

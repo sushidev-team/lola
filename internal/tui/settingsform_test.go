@@ -1921,3 +1921,81 @@ func TestSettingsFormRejectsABadRemoteBind(t *testing.T) {
 		t.Error("the form must say why it refused")
 	}
 }
+
+// --- [linear_agent] + require_plan -----------------------------------------
+
+// An untouched form grows neither key, and writes no agent secret.
+func TestSettingsFormLinearAgentUntouchedWritesNothing(t *testing.T) {
+	m := newTestRoot(t)
+	var stored []string
+	orig := storeAgentSecret
+	storeAgentSecret = func(service, v string) error { stored = append(stored, service); return nil }
+	t.Cleanup(func() { storeAgentSecret = orig })
+	f := newSettingsForm(m.cfgPath, m.cfg)
+	if ev := f.save(); ev != settingsFormSaved {
+		t.Fatalf("save = %v, err=%q", ev, f.err)
+	}
+	data, _ := os.ReadFile(m.cfgPath)
+	// (The fixture's projects are explicit literals, so each writes its own
+	// require_plan = false — that is the zero-bitmap rule, not the form.)
+	if strings.Contains(string(data), "linear_agent") {
+		t.Fatalf("untouched form grew [linear_agent]:\n%s", data)
+	}
+	if len(stored) != 0 {
+		t.Fatalf("no secret typed, but stored %v", stored)
+	}
+}
+
+func TestSettingsFormLinearAgentAndRequirePlanSave(t *testing.T) {
+	m := newTestRoot(t)
+	got := map[string]string{}
+	orig := storeAgentSecret
+	storeAgentSecret = func(service, v string) error { got[service] = v; return nil }
+	t.Cleanup(func() { storeAgentSecret = orig })
+
+	f := newSettingsForm(m.cfgPath, m.cfg)
+	f.field("la_enabled").b = true
+	f.field("la_client_id").text = " cid "
+	f.field("la_poll").text = "30s"
+	f.field("la_client_secret").text = "s3cret"
+	f.field("def_require_plan").b = true
+	if ev := f.save(); ev != settingsFormSaved {
+		t.Fatalf("save = %v, err=%q", ev, f.err)
+	}
+	if got[config.DefaultLinearAgentSecretKeychain] != "s3cret" || len(got) != 1 {
+		t.Fatalf("keychain writes = %v", got)
+	}
+	if f.field("la_client_secret").text != "" {
+		t.Fatal("a stored secret must be cleared from the form")
+	}
+	data, _ := os.ReadFile(m.cfgPath)
+	if strings.Contains(string(data), "s3cret") {
+		t.Fatalf("the secret leaked into config.toml:\n%s", data)
+	}
+	c, err := config.Load(m.cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := c.LinearAgent
+	if !a.Enabled || a.ClientID != "cid" || a.PollInterval != 30*time.Second || !c.Defaults.RequirePlan {
+		t.Fatalf("saved = %+v / require_plan %v", a, c.Defaults.RequirePlan)
+	}
+}
+
+// Enabling the agent without a client id is a validation error, rolled back.
+func TestSettingsFormLinearAgentNeedsClientID(t *testing.T) {
+	m := newTestRoot(t)
+	f := newSettingsForm(m.cfgPath, m.cfg)
+	f.field("la_enabled").b = true
+	if ev := f.save(); ev == settingsFormSaved || !strings.Contains(f.err, "client_id") {
+		t.Fatalf("save = %v, err=%q", ev, f.err)
+	}
+	if f.cfg.LinearAgent.Enabled {
+		t.Fatal("a rejected save must roll the table back")
+	}
+	f.field("la_poll").text = "soon"
+	f.field("la_client_id").text = "c"
+	if ev := f.save(); ev == settingsFormSaved || !strings.Contains(f.err, "poll interval") {
+		t.Fatalf("a bad duration must be refused: %v %q", ev, f.err)
+	}
+}
