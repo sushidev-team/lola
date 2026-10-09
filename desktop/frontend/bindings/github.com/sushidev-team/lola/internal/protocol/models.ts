@@ -96,6 +96,39 @@ export interface DevFreePortData {
 }
 
 /**
+ * DiffData is Response.Data for cmd=diff: the session's worktree compared with
+ * the merge-base of its branch and the project's default_branch, uncommitted
+ * and untracked changes included (internal/gitdiff). Base is the ref the
+ * merge-base was taken against ("origin/main"), MergeBase its sha. Each file's
+ * Patch is its unified diff from the first "@@" on; a file past the per-file
+ * cap carries TooLarge and no Patch, and Truncated says later files were
+ * dropped to keep the reply bounded.
+ */
+export interface DiffData {
+    "session": string;
+    "base": string;
+    "mergeBase": string;
+    "files": DiffFile[] | null;
+    "truncated"?: boolean;
+}
+
+/**
+ * DiffFile is one changed file of a DiffData. Status is added|modified|
+ * deleted|renamed; OldPath is set on a rename.
+ */
+export interface DiffFile {
+    "path": string;
+    "oldPath"?: string;
+    "status": string;
+    "additions": number;
+    "deletions": number;
+    "binary"?: boolean;
+    "untracked"?: boolean;
+    "tooLarge"?: boolean;
+    "patch"?: string;
+}
+
+/**
  * Event is one session status transition surfaced in the activity feed,
  * flattened to render-ready strings so the TUI needs no scm/session imports.
  * From is the prior derived status ("" means the session was just spawned); To
@@ -117,6 +150,50 @@ export interface Event {
     "from": string;
     "to": string;
     "ago": string;
+}
+
+/**
+ * FeedbackArgs is the argument payload for cmd=feedback: a HUMAN's review of
+ * the session's diff, delivered to its coding agent as ONE message. Comments
+ * are line comments (Path + Line, optionally a range up to EndLine, on the new
+ * side unless Side is "old"); Note is free text not tied to a line. At least
+ * one of the two must carry text.
+ */
+export interface FeedbackArgs {
+    "session": string;
+    "comments"?: FeedbackComment[] | null;
+    "note"?: string;
+}
+
+/**
+ * FeedbackComment is one line comment. Quote optionally carries the commented
+ * line(s) as the human saw them, so the agent can find the spot even after the
+ * file has moved on; it is clipped by the daemon.
+ */
+export interface FeedbackComment {
+    "path": string;
+    "line": number;
+    "endLine"?: number;
+
+    /**
+     * "new" (default) | "old" — "old" means a removed line
+     */
+    "side"?: string;
+    "quote"?: string;
+    "body": string;
+}
+
+/**
+ * FeedbackData is Response.Data for cmd=feedback. Delivered is true when the
+ * message was typed into the agent's pane now; otherwise it is Queued (the
+ * agent was mid-turn, or its pane did not show a resting prompt) and the daemon
+ * delivers it on the first cycle the pane is verifiably waiting. Message is the
+ * short human-readable outcome.
+ */
+export interface FeedbackData {
+    "delivered": boolean;
+    "queued": boolean;
+    "message"?: string;
 }
 
 /**
@@ -666,6 +743,13 @@ export interface SessionInfo {
     "devUrls"?: string[] | null;
     "devForwards"?: DevForward[] | null;
     "devClash"?: DevClashInfo | null;
+
+    /**
+     * FeedbackPending is true while a human's diff-viewer feedback
+     * (cmd=feedback) is queued for this session's agent, waiting for the pane to
+     * be verifiably resting at its prompt.
+     */
+    "feedbackPending"?: boolean;
 
     /**
      * Reaction-engine posture (PLAN P3), flattened so the TUI renders reaction

@@ -129,6 +129,29 @@ func (s *DaemonService) ResolveConflict(session string) (protocol.ResolveConflic
 	return d, err
 }
 
+// Diff returns the session's changes for the diff tab: its worktree against
+// the merge-base with the project's default_branch, uncommitted and untracked
+// work included. Read-only.
+func (s *DaemonService) Diff(session string) (protocol.DiffData, error) {
+	var d protocol.DiffData
+	err := call(protocol.Request{Cmd: "diff", Session: session}, shortTimeout*3, &d)
+	return d, err
+}
+
+// SendFeedback delivers a batch of line comments (plus an optional note) to the
+// session's coding agent as one message. The daemon types it only into a pane
+// verifiably resting at its prompt; otherwise it is queued and delivered later
+// (FeedbackData.Queued) — never typed mid-turn.
+func (s *DaemonService) SendFeedback(args protocol.FeedbackArgs) (protocol.FeedbackData, error) {
+	raw, err := json.Marshal(args)
+	if err != nil {
+		return protocol.FeedbackData{}, err
+	}
+	var d protocol.FeedbackData
+	err = call(protocol.Request{Cmd: "feedback", Args: raw}, shortTimeout, &d)
+	return d, err
+}
+
 // Dev moves the project's dev processes ([[project]].dev_commands) onto one
 // session, or stops them. Activating is a MOVE: the daemon first kills the tabs
 // of whichever session of that project held them, so the ports are free before
