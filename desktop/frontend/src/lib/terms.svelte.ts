@@ -13,6 +13,11 @@ import { store } from "./store.svelte";
 /** The agent pane's tab key (a sentinel; every other tab is a shell tmux name). */
 export const AGENT = "agent";
 
+/** The diff tab's key: the session's changes against its base branch, where a
+ * human leaves line comments for the agent (DiffView). A sentinel like AGENT —
+ * it is not a tmux session, so it is never discovered and never closed. */
+export const DIFF = "diff";
+
 /** Suffix of a session's REVIEW pane ("<id>-review"). The daemon opens it for a
  * visible review pass and holds it open afterwards so the findings stay
  * readable; the app only discovers it (TermService.Shells returns it last) and
@@ -168,19 +173,27 @@ class Terms {
     if (Object.keys(next).length !== Object.keys(cur).length) this.setNames(id, next);
   }
 
-  /** The tab session `id` shows: AGENT, or a shell name — never a stale/closed one. */
+  /** The tab session `id` shows: AGENT, DIFF, or a shell name — never a stale/closed one. */
   activeTab(id: string): string {
     const a = this.active.get(id) ?? AGENT;
-    return a !== AGENT && !this.shellsFor(id).includes(a) ? AGENT : a;
+    return a !== AGENT && a !== DIFF && !this.shellsFor(id).includes(a) ? AGENT : a;
   }
 
   /** Switch tabs. Ignores a shell name that isn't open. */
   select(id: string, tab: string) {
-    if (tab !== AGENT && !this.shellsFor(id).includes(tab)) return;
+    if (tab !== AGENT && tab !== DIFF && !this.shellsFor(id).includes(tab)) return;
     this.active.set(id, tab);
   }
 
-  /** Cycle the active tab across [agent, …shells], wrapping. dir +1 next, -1 prev. */
+  /** Toggle the diff tab: open it, or go back to the agent when it is showing. */
+  toggleDiff(id: string) {
+    this.active.set(id, this.activeTab(id) === DIFF ? AGENT : DIFF);
+  }
+
+  /** Cycle the active tab across [agent, …shells], wrapping. dir +1 next, -1 prev.
+   * The diff tab is not in the ring — it is a view, not a terminal, and is
+   * reached by its own tab, "f" and the session menu; cycling off it starts at
+   * the agent. */
   cycleTab(id: string, dir: number) {
     const tabs = [AGENT, ...this.shellsFor(id)];
     if (tabs.length <= 1) return; // only the agent — nothing to switch to
@@ -199,7 +212,7 @@ class Terms {
       this.shells.set(id, names);
       this.dropNames(id, names);
       const a = this.active.get(id);
-      if (a && a !== AGENT && !names.includes(a)) this.active.set(id, names.at(-1) ?? AGENT);
+      if (a && a !== AGENT && a !== DIFF && !names.includes(a)) this.active.set(id, names.at(-1) ?? AGENT);
     } catch {
       /* keep last-known */
     }

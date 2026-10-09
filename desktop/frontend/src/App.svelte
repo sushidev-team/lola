@@ -169,6 +169,11 @@
         // grid lens, which has no embed.
         if (sel && nav.lens !== "grid") terms.newShell(sel.id, sel.worktree);
         return true;
+      case "f":
+        // The diff tab ("files changed"): toggles between it and the agent. Lives
+        // in the detail embed, so the grid lens has nothing to show it in.
+        if (sel && nav.lens !== "grid") terms.toggleDiff(sel.id);
+        return true;
       // '<' / '>' switch terminal tabs. Both the shifted glyph and the unshifted
       // ',' / '.' on the same key are bound, so it works with or without Shift and
       // on layouts (German) where '[' / ']' need Option and never arrive.

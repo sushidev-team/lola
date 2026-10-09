@@ -79,6 +79,15 @@ export function DevFreePort(session: string, port: number, pid: number): $Cancel
     return $Call.ByID(3893206393, session, port, pid);
 }
 
+/**
+ * Diff returns the session's changes for the diff tab: its worktree against
+ * the merge-base with the project's default_branch, uncommitted and untracked
+ * work included. Read-only.
+ */
+export function Diff(session: string): $CancellablePromise<protocol$0.DiffData> {
+    return $Call.ByID(1560242150, session);
+}
+
 export function Disable(poll: string): $CancellablePromise<void> {
     return $Call.ByID(3917859687, poll);
 }
@@ -226,6 +235,16 @@ export function Review(session: string, provider: string): $CancellablePromise<p
  */
 export function Revive(session: string): $CancellablePromise<protocol$0.ReviveData> {
     return $Call.ByID(325633556, session);
+}
+
+/**
+ * SendFeedback delivers a batch of line comments (plus an optional note) to the
+ * session's coding agent as one message. The daemon types it only into a pane
+ * verifiably resting at its prompt; otherwise it is queued and delivered later
+ * (FeedbackData.Queued) — never typed mid-turn.
+ */
+export function SendFeedback(args: protocol$0.FeedbackArgs): $CancellablePromise<protocol$0.FeedbackData> {
+    return $Call.ByID(2310802896, args);
 }
 
 /**

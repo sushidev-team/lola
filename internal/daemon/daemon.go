@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/sushidev-team/lola/internal/gitdiff"
 	"io"
 	"log"
 	"net"
@@ -176,6 +177,11 @@ type Daemon struct {
 	brainSummarize func(ctx context.Context, instruction, contextText string) (string, error)
 	paneTail       func(ctx context.Context, tmuxName string, lines int) (string, error)
 	prDiff         func(ctx context.Context, repo string, pr int) (string, error)
+
+	// worktreeDiff reads a session's local changes for the diff viewer
+	// (cmd=diff, feedback.go): the worktree against its merge-base with the
+	// project's default branch. Local git only; tests install a fake.
+	worktreeDiff func(ctx context.Context, dir, base string) (gitdiff.Result, error)
 
 	// listTmuxSessions lists every session on lola's tmux server in ONE exec —
 	// the observer's per-cycle liveness + #{session_activity} source (replacing
@@ -457,6 +463,7 @@ func newDaemon(cfg *config.Config, lin linear.API, logger *log.Logger, home stri
 		return d.tmuxClient().CapturePane(ctx, tmuxName, lines)
 	}
 	d.prDiff = scmc.PRDiff
+	d.worktreeDiff = gitdiff.Diff
 	// A no-op notifier until Run/reload resolves the [notify] config; keeps the
 	// engine free of nil checks. notify.New always returns a non-nil Notifier.
 	d.notifier = notify.New(notify.NotifyConfig{})
@@ -1099,6 +1106,7 @@ func (d *Daemon) adoptNativeSessions(ctx context.Context) {
 				s.ReviewedPRs = prev.ReviewedPRs
 				s.ReviewWatermarks = prev.ReviewWatermarks
 				s.PendingHandoffs = prev.PendingHandoffs
+				s.PendingFeedback = prev.PendingFeedback
 				s.PostedGitHubPRs = prev.PostedGitHubPRs
 				if len(s.RemovedLabels) == 0 {
 					s.RemovedLabels = prev.RemovedLabels

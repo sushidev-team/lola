@@ -6,7 +6,7 @@
   import { sessionMenu } from "$lib/sessionmenu.svelte";
   import { store, type SessionInfo } from "$lib/store.svelte";
   import { nav } from "$lib/nav.svelte";
-  import { terms } from "$lib/terms.svelte";
+  import { terms, DIFF } from "$lib/terms.svelte";
   import MenuItem from "./MenuItem.svelte";
 
   const req = $derived(sessionMenu.request);
@@ -45,6 +45,14 @@
     nav.select(s.id);
     terms.newShell(s.id, s.worktree);
   }
+
+  // Same move as addShell: the diff lives in the detail embed, which the grid
+  // lens does not render.
+  function openDiff(s: SessionInfo) {
+    if (nav.lens === "grid") nav.setLens("list");
+    nav.select(s.id);
+    terms.select(s.id, DIFF);
+  }
 </script>
 
 {#if req && session}
@@ -76,6 +84,12 @@
       disabled={!session.worktree}
       title={session.worktree ? "open a shell in the worktree" : "session has no worktree"}
       onclick={() => run((s) => addShell(s))}>Add shell</MenuItem
+    >
+    <MenuItem
+      icon="±"
+      disabled={!session.worktree}
+      title={session.worktree ? "review the changes and send line comments to the agent" : "session has no worktree"}
+      onclick={() => run((s) => openDiff(s))}>Review diff</MenuItem
     >
     {#if session.devCommands?.length}
       <!-- The project's dev processes run in ONE session at a time, so this is a

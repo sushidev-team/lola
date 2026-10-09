@@ -30,6 +30,7 @@
       keys: [
         ["s · ⌘T", "new worktree shell"],
         ["D", "run dev here · one session per project"],
+        ["f", "diff · comment on lines, send to the agent"],
         ["< / >", "prev / next terminal tab"],
         ["x · ⌘⇧K", "kill session"],
         ["o · ⌘⇧O", "open PR in browser"],

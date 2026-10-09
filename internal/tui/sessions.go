@@ -921,6 +921,10 @@ func (m *rootModel) updateSessions(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// blocked/broken sessions. Re-pin selection if it fell out of view.
 		s.filter.AttentionOnly = !s.filter.AttentionOnly
 		return m, m.reselectVisible()
+	case "f":
+		// The diff overlay: read what the session changed and send line comments
+		// to its agent (diffview.go). Same key as the app's Diff tab.
+		return m.openDiff()
 	case "a":
 		return m.startAnswer()
 	case "A":

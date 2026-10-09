@@ -2,9 +2,11 @@
   import { flip } from "svelte/animate";
   import { store } from "$lib/store.svelte";
   import { nav } from "$lib/nav.svelte";
-  import { terms, AGENT } from "$lib/terms.svelte";
+  import { terms, AGENT, DIFF } from "$lib/terms.svelte";
+  import { feedback } from "$lib/feedback.svelte";
   import { devUrlLabel, MAX_URL_CHIPS } from "$lib/devurl";
   import LiveTerminal from "./LiveTerminal.svelte";
+  import DiffView from "./DiffView.svelte";
   import Button from "./Button.svelte";
   import MenuItem from "./MenuItem.svelte";
   import DevClashBanner from "./DevClashBanner.svelte";
@@ -32,14 +34,19 @@
   // reachable there without the "s" shortcut.
   const shells = $derived(session ? terms.shellsFor(session.id) : []);
   const activeTab = $derived(session ? terms.activeTab(session.id) : AGENT);
-  const showTabs = $derived(!!session && (shells.length > 0 || focused));
+  // The diff tab keeps the bar up too: it was reached by "f" or the menu, and the
+  // way back to the agent must be on screen.
+  const showTabs = $derived(!!session && (shells.length > 0 || focused || activeTab === DIFF));
 
   // The tmux name the LiveTerminal attaches to for the active tab. Keying the
   // terminal on this (below) swaps agent ⇄ shell by re-attaching — the same
   // proven remount the selection change already does, never a live DOM toggle. A
   // shell tab IS its tmux name; the agent tab resolves to the session's pane.
-  const activeName = $derived(!session ? "" : activeTab === AGENT ? session.tmuxName : activeTab);
-  const activeIsShell = $derived(activeTab !== AGENT);
+  const activeName = $derived(
+    !session || activeTab === DIFF ? "" : activeTab === AGENT ? session.tmuxName : activeTab,
+  );
+  const activeIsShell = $derived(activeTab !== AGENT && activeTab !== DIFF);
+  const draftCount = $derived(session ? feedback.count(session.id) : 0);
 
   // Picking a tab BY HAND focuses the terminal it selects, so typing lands in the
   // agent's input immediately — clicking "agent" while a shell tab was open used
@@ -416,6 +423,19 @@
           >
             Agent
           </button>
+          <!-- The diff tab: same cell, no ×. It is a view, not a tmux session.
+               The count is the comments queued but not yet sent. -->
+          <button
+            type="button"
+            aria-pressed={activeTab === DIFF}
+            title="the session's changes — comment on lines and send them to the agent (f)"
+            class="h-8 shrink-0 border-r border-edge/40 px-3.5 transition-colors {activeTab === DIFF
+              ? 'bg-sel font-medium text-ink hover:bg-[color-mix(in_srgb,var(--color-sel)_55%,var(--color-edge))]'
+              : 'text-faint hover:bg-sel/50 hover:text-ink'}"
+            onclick={() => selectTab(session.id, DIFF)}
+          >
+            Diff{#if draftCount > 0}<span class="ml-1.5 text-sm text-accent-ink">{draftCount}</span>{/if}
+          </button>
           {#each shells as sh, i (sh)}
             <!-- The tab is ONE chip containing two controls, so the wrapper — not
                  the label button — paints the background and the text colour, and
@@ -606,6 +626,13 @@
         ? 'grid-cols-[minmax(0,1fr)_auto]'
         : 'grid-cols-[minmax(0,1fr)]'}"
     >
+      {#if activeTab === DIFF}
+        <!-- The diff fills the same grid cell the terminal would (grid, not a
+             flex child — see the WKWebView note above). -->
+        <div class="grid min-h-0">
+          <DiffView sessionId={session.id} />
+        </div>
+      {:else}
       <div class="min-h-0 bg-panel p-4">
         {#if activeName}
           <!-- Keyed on the active tab's tmux name, which already carries the session
@@ -627,6 +654,7 @@
           <div class="flex h-full items-center justify-center text-faint">no tmux session (dead)</div>
         {/if}
       </div>
+      {/if}
       {#if showBoard}<BoardPanel {session} />{/if}
     </div>
   </div>

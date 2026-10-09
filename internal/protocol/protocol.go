@@ -94,6 +94,21 @@ import (
 // watching a button. The reply is ResolveConflictData naming the branch asked
 // for.
 //
+// Cmd "diff" returns the session's changes for the in-app diff viewer as
+// DiffData: its worktree against the merge-base with the project's
+// default_branch, uncommitted and untracked work included. Read-only (one
+// bounded local git run, no network); an unknown session, a session with no
+// worktree, or no merge-base is an error.
+//
+// Cmd "feedback" delivers a HUMAN's diff review to the session's coding agent:
+// Args is FeedbackArgs (line comments with path:line context, plus an optional
+// free note), rendered by the daemon into ONE message. It goes through the same
+// send-keys safety as a review hand-off — sanitized, the wide idle gate AND a
+// live pane classified as waiting — and, unlike resolveConflict, it DEFERS
+// rather than refuses: a mid-turn agent gets the message queued (appended to
+// anything already queued) and delivered on the first cycle its pane is
+// verifiably resting. The reply is FeedbackData saying which happened.
+//
 // Cmd "coderabbit" FORCES the [coderabbit] PR-comment WATCH for one session now,
 // ignoring the LastCodeRabbitAt watermark: Session names the target. The daemon
 // polls the session's open PR (one `gh pr view`) for CodeRabbit-app comments and
@@ -123,7 +138,7 @@ import (
 // it answers with an error naming that rather than an empty code; only a
 // -tags lola_insecure daemon can fill PairBeginData.Key.
 type Request struct {
-	Cmd    string `json:"cmd"` // stop|status|reload|enable|disable|pollOnce|sessions|projects|prs|hookEvent|kill|revive|pane|answer|review|coderabbit|resolveConflict|switchAgent|dev|devFreePort|open|renameProject|pairBegin|agentReport
+	Cmd    string `json:"cmd"` // stop|status|reload|enable|disable|pollOnce|sessions|projects|prs|hookEvent|kill|revive|pane|answer|review|coderabbit|resolveConflict|feedback|diff|switchAgent|dev|devFreePort|open|renameProject|pairBegin|agentReport
 	Poll   string `json:"poll,omitempty"`
 	DryRun bool   `json:"dryRun,omitempty"`
 
@@ -337,6 +352,11 @@ type SessionInfo struct {
 	// own words, beside — never instead of — the axes above, and fade it as
 	// Board.UpdatedAt ages (agents forget to report).
 	Board *BoardInfo `json:"board,omitempty"`
+
+	// FeedbackPending is true while a human's diff-viewer feedback
+	// (cmd=feedback) is queued for this session's agent, waiting for the pane to
+	// be verifiably resting at its prompt.
+	FeedbackPending bool `json:"feedbackPending,omitempty"`
 
 	// Reaction-engine posture (PLAN P3), flattened so the TUI renders reaction
 	// state without importing internal/session or re-deriving it.
@@ -712,6 +732,69 @@ type DevFreePortData struct {
 type ResolveConflictData struct {
 	Branch  string `json:"branch"`
 	Message string `json:"message,omitempty"`
+}
+
+// DiffData is Response.Data for cmd=diff: the session's worktree compared with
+// the merge-base of its branch and the project's default_branch, uncommitted
+// and untracked changes included (internal/gitdiff). Base is the ref the
+// merge-base was taken against ("origin/main"), MergeBase its sha. Each file's
+// Patch is its unified diff from the first "@@" on; a file past the per-file
+// cap carries TooLarge and no Patch, and Truncated says later files were
+// dropped to keep the reply bounded.
+type DiffData struct {
+	Session   string     `json:"session"`
+	Base      string     `json:"base"`
+	MergeBase string     `json:"mergeBase"`
+	Files     []DiffFile `json:"files"`
+	Truncated bool       `json:"truncated,omitempty"`
+}
+
+// DiffFile is one changed file of a DiffData. Status is added|modified|
+// deleted|renamed; OldPath is set on a rename.
+type DiffFile struct {
+	Path      string `json:"path"`
+	OldPath   string `json:"oldPath,omitempty"`
+	Status    string `json:"status"`
+	Additions int    `json:"additions"`
+	Deletions int    `json:"deletions"`
+	Binary    bool   `json:"binary,omitempty"`
+	Untracked bool   `json:"untracked,omitempty"`
+	TooLarge  bool   `json:"tooLarge,omitempty"`
+	Patch     string `json:"patch,omitempty"`
+}
+
+// FeedbackArgs is the argument payload for cmd=feedback: a HUMAN's review of
+// the session's diff, delivered to its coding agent as ONE message. Comments
+// are line comments (Path + Line, optionally a range up to EndLine, on the new
+// side unless Side is "old"); Note is free text not tied to a line. At least
+// one of the two must carry text.
+type FeedbackArgs struct {
+	Session  string            `json:"session"`
+	Comments []FeedbackComment `json:"comments,omitempty"`
+	Note     string            `json:"note,omitempty"`
+}
+
+// FeedbackComment is one line comment. Quote optionally carries the commented
+// line(s) as the human saw them, so the agent can find the spot even after the
+// file has moved on; it is clipped by the daemon.
+type FeedbackComment struct {
+	Path    string `json:"path"`
+	Line    int    `json:"line"`
+	EndLine int    `json:"endLine,omitempty"`
+	Side    string `json:"side,omitempty"` // "new" (default) | "old" — "old" means a removed line
+	Quote   string `json:"quote,omitempty"`
+	Body    string `json:"body"`
+}
+
+// FeedbackData is Response.Data for cmd=feedback. Delivered is true when the
+// message was typed into the agent's pane now; otherwise it is Queued (the
+// agent was mid-turn, or its pane did not show a resting prompt) and the daemon
+// delivers it on the first cycle the pane is verifiably waiting. Message is the
+// short human-readable outcome.
+type FeedbackData struct {
+	Delivered bool   `json:"delivered"`
+	Queued    bool   `json:"queued"`
+	Message   string `json:"message,omitempty"`
 }
 
 // SwitchAgentArgs is the argument payload for cmd=switchAgent: replace the

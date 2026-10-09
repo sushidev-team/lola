@@ -276,6 +276,22 @@ func (d *Daemon) handle(ctx context.Context, req protocol.Request) protocol.Resp
 			return protocol.Response{OK: false, Error: err.Error()}
 		}
 		return dataResponse(data)
+	case "diff":
+		data, err := d.handleDiff(ctx, req.Session)
+		if err != nil {
+			return protocol.Response{OK: false, Error: err.Error()}
+		}
+		return dataResponse(data)
+	case "feedback":
+		var a protocol.FeedbackArgs
+		if err := json.Unmarshal(req.Args, &a); err != nil {
+			return protocol.Response{OK: false, Error: "feedback: bad args: " + err.Error()}
+		}
+		data, err := d.handleFeedback(ctx, a)
+		if err != nil {
+			return protocol.Response{OK: false, Error: err.Error()}
+		}
+		return dataResponse(data)
 	case "switchAgent":
 		var a protocol.SwitchAgentArgs
 		if err := json.Unmarshal(req.Args, &a); err != nil {
@@ -589,6 +605,8 @@ func (d *Daemon) sessionsData() protocol.SessionsData {
 			DevCommands: devCommands[s.Project],
 			DevURLs:     s.DevURLs,
 			DevForwards: devForwardInfos(s.DevForwards),
+
+			FeedbackPending: s.PendingFeedback != "",
 		}
 		if c := s.DevClash; c != nil {
 			si.DevClash = &protocol.DevClashInfo{
