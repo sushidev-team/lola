@@ -953,6 +953,10 @@ func (d *Daemon) sendHandoffToAgent(ctx context.Context, s session.Session, p re
 		if cur.PendingHandoffs != nil {
 			delete(cur.PendingHandoffs, string(p.Kind)) // consumed
 		}
+		// Claim the prompt atomically (see deliverFeedback): AgentIdle passes
+		// handoffDeliverable with AtPrompt cleared, so without this a concurrent
+		// flush could type a second message into the same prompt mid-send.
+		cur.SetAgentState(state.AgentWorking, "", time.Now())
 		tmuxName = cur.TmuxName
 		sent = true
 		return true
@@ -970,16 +974,12 @@ func (d *Daemon) sendHandoffToAgent(ctx context.Context, s session.Session, p re
 		d.logf("", "review: %s (%s) send-keys of hand-off failed: %v", s.ID, p.Kind, err)
 		return false
 	}
-	// The agent is resuming: promote the axis back to working, exactly as
-	// handleAnswer does after a human's reply. SetAgentState stamps
+	// The axis was promoted to working when the gate was consumed above, exactly
+	// as handleAnswer does after a human's reply. SetAgentState stamps
 	// LastActivityAt, so the anti-false-working guard grants the full grace
 	// window even for agents that emit no user_prompt hook (codex/opencode) —
-	// and, since the idle-notify parking is now cleared, the widened gate above
-	// cannot re-deliver on the next cycle.
-	d.sessions.Update(s.ID, func(cur *session.Session) bool {
-		cur.SetAgentState(state.AgentWorking, "", time.Now())
-		return true
-	})
+	// and, since the idle-notify parking is cleared, the widened gate cannot
+	// re-deliver on the next cycle.
 	d.reviewSave()
 	d.logf("", "review: %s (%s) handed feedback to the worker", s.ID, p.Kind)
 	return true

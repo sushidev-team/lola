@@ -10,10 +10,12 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sushidev-team/lola/internal/gitdiff"
 	"github.com/sushidev-team/lola/internal/linear"
 	"github.com/sushidev-team/lola/internal/protocol"
+	"github.com/sushidev-team/lola/internal/session"
 	"github.com/sushidev-team/lola/internal/state"
 )
 
@@ -238,5 +240,31 @@ func TestFeedbackSanitizesTheMessage(t *testing.T) {
 	}
 	if !strings.Contains(msg, "a.go:3 (removed line(s)") {
 		t.Errorf("old-side comment must be marked as a removed line:\n%s", msg)
+	}
+}
+
+// The delivery CLAIMS the prompt atomically: once the gate is consumed the
+// session no longer passes handoffDeliverable, so a concurrent flush cannot
+// type a second message into the same prompt while this send is in flight.
+func TestFeedbackClaimsThePromptBeforeTyping(t *testing.T) {
+	d := newTestDaemon(t, conflictConfig(), &linear.Fake{}, &fakeNative{})
+	seams := &fakeReactSeams{}
+	seams.install(d)
+	id := feedbackSess(t, d, "FE-10", "claude")
+	d.sessions.Update(id, func(cur *session.Session) bool {
+		cur.SetAgentState(state.AgentIdle, "", time.Now()) // passes the gate with AtPrompt cleared too
+		return true
+	})
+	var gateDuringSend bool
+	d.sendKeys = func(_ context.Context, _, _ string) error {
+		cur, _ := d.sessions.Get(id)
+		gateDuringSend = handoffDeliverable(cur)
+		return nil
+	}
+	if _, err := d.handleFeedback(context.Background(), oneComment(id)); err != nil {
+		t.Fatal(err)
+	}
+	if gateDuringSend {
+		t.Error("the idle gate must already be closed while the send is in flight")
 	}
 }

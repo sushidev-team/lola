@@ -88,6 +88,20 @@ describe("buildTree", () => {
   });
 });
 
+describe("buildTree keys", () => {
+  // Same-named directories at the same depth under different parents used to
+  // share a render key, and Svelte throws each_key_duplicate on that.
+  it("gives every node a unique key", () => {
+    const flat = flattenTree(
+      buildTree(["client/index.ts", "client/components/Button.ts", "server/index.ts", "server/components/Button.ts"]),
+    );
+    const keys = flat.map((n) => n.key);
+    expect(new Set(keys).size).toBe(keys.length);
+    expect(keys).toContain("dir:client/components");
+    expect(keys).toContain("dir:server/components");
+  });
+});
+
 describe("tokenize", () => {
   it("colours keywords, strings, numbers and trailing comments", () => {
     const toks = tokenize('return "a // not a comment", 42 // done', langOf("x.go"));

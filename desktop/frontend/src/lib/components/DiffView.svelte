@@ -43,19 +43,23 @@
   let error = $state("");
   let loading = $state(false);
 
+  // Every load gets a sequence number and only the LATEST may land: the
+  // selection can move while git runs, and two Refreshes of the same session
+  // can finish out of order.
+  let seq = 0;
   async function load() {
-    const id = sessionId;
+    const my = ++seq;
     loading = true;
     try {
-      const d = await DaemonService.Diff(id);
-      if (id !== sessionId) return; // the selection moved while git ran
+      const d = await DaemonService.Diff(sessionId);
+      if (my !== seq) return;
       data = d;
       error = "";
     } catch (err) {
-      if (id !== sessionId) return;
+      if (my !== seq) return;
       error = String(err);
     } finally {
-      if (id === sessionId) loading = false;
+      if (my === seq) loading = false;
     }
   }
 
@@ -263,7 +267,7 @@
   {:else}
     <div class="grid min-h-0 grid-cols-[minmax(10rem,16rem)_1fr]">
       <nav class="min-h-0 overflow-auto border-r border-edge/60 py-1 text-sm" aria-label="changed files">
-        {#each tree as n (n.path || `${n.depth}:${n.name}`)}
+        {#each tree as n (n.key)}
           {#if n.path}
             {@const f = files.find((x) => x.path === n.path)}
             <button

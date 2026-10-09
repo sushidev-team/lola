@@ -130,6 +130,11 @@ export type TreeNode = {
   name: string;
   /** Full path for a file; "" for a directory. */
   path: string;
+  /** Unique identity for rendering: the full path of the file or directory
+   * ("dir:" prefixed, so a directory can never collide with a file). Two
+   * directories may share a name and a depth ("client/components",
+   * "server/components"), so neither may be keyed on those alone. */
+  key: string;
   depth: number;
   children: TreeNode[];
 };
@@ -150,7 +155,7 @@ export function buildTree(paths: string[]): TreeNode[] {
     }
     d.files.push(p);
   }
-  const walk = (d: Dir, depth: number): TreeNode[] => {
+  const walk = (d: Dir, depth: number, prefix: string): TreeNode[] => {
     const out: TreeNode[] = [];
     for (const name of [...d.dirs.keys()].sort()) {
       let label = name;
@@ -160,14 +165,15 @@ export function buildTree(paths: string[]): TreeNode[] {
         label += "/" + only;
         sub = next;
       }
-      out.push({ name: label, path: "", depth, children: walk(sub, depth + 1) });
+      const full = prefix + label;
+      out.push({ name: label, path: "", key: `dir:${full}`, depth, children: walk(sub, depth + 1, full + "/") });
     }
     for (const f of [...d.files].sort()) {
-      out.push({ name: f.slice(f.lastIndexOf("/") + 1), path: f, depth, children: [] });
+      out.push({ name: f.slice(f.lastIndexOf("/") + 1), path: f, key: f, depth, children: [] });
     }
     return out;
   };
-  return walk(root, 0);
+  return walk(root, 0, "");
 }
 
 /** Depth-first flattening of a tree into the rows the file list draws. */

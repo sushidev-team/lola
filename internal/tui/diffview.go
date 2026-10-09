@@ -68,6 +68,10 @@ type feedbackDoneMsg struct {
 	session string
 	data    protocol.FeedbackData
 	err     error
+	// sent is the batch the request carried. Only it is cleared on success:
+	// drafts and note edits made while the request was in flight were never
+	// sent, and must survive it.
+	sent protocol.FeedbackArgs
 }
 
 func diffCmd(id string) tea.Cmd {
@@ -89,22 +93,25 @@ func diffCmd(id string) tea.Cmd {
 
 func feedbackCmd(args protocol.FeedbackArgs) tea.Cmd {
 	return func() tea.Msg {
+		done := feedbackDoneMsg{session: args.Session, sent: args}
 		raw, err := json.Marshal(args)
 		if err != nil {
-			return feedbackDoneMsg{session: args.Session, err: err}
+			done.err = err
+			return done
 		}
 		resp, err := requestFn(protocol.Request{Cmd: "feedback", Args: raw})
 		if err != nil {
-			return feedbackDoneMsg{session: args.Session, err: err}
+			done.err = err
+			return done
 		}
 		if !resp.OK {
-			return feedbackDoneMsg{session: args.Session, err: fmt.Errorf("%s", resp.Error)}
+			done.err = fmt.Errorf("%s", resp.Error)
+			return done
 		}
-		var d protocol.FeedbackData
-		if err := json.Unmarshal(resp.Data, &d); err != nil {
-			return feedbackDoneMsg{session: args.Session, err: err}
+		if err := json.Unmarshal(resp.Data, &done.data); err != nil {
+			done.err = err
 		}
-		return feedbackDoneMsg{session: args.Session, data: d}
+		return done
 	}
 }
 
@@ -220,6 +227,12 @@ func (m *rootModel) updateDiff(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case "n":
 		d.input, d.inputBuf = diffInputNote, d.notes[d.session]
 	case "u":
+		if d.sending {
+			// The in-flight batch was snapshotted; dropping one of its comments
+			// now would make "what was sent" and "what is left" disagree.
+			d.flash, d.flashOK = "wait for the send to finish", false
+			return m, nil
+		}
 		if ds := d.drafts[d.session]; len(ds) > 0 {
 			d.drafts[d.session] = ds[:len(ds)-1]
 			d.flash, d.flashOK = "removed the last comment", true
@@ -286,8 +299,17 @@ func (m *rootModel) handleFeedbackDone(v feedbackDoneMsg) tea.Cmd {
 		d.flash, d.flashOK = v.err.Error(), false
 		return nil
 	}
-	delete(d.drafts, v.session)
-	delete(d.notes, v.session)
+	// Drafts only grow by appending while a send is in flight ("u" is refused
+	// then), so the sent ones are exactly the first len(sent) — the rest were
+	// written during the request and stay queued.
+	if ds := d.drafts[v.session]; len(ds) > len(v.sent.Comments) {
+		d.drafts[v.session] = append([]protocol.FeedbackComment(nil), ds[len(v.sent.Comments):]...)
+	} else {
+		delete(d.drafts, v.session)
+	}
+	if d.notes[v.session] == v.sent.Note {
+		delete(d.notes, v.session)
+	}
 	if v.data.Delivered {
 		d.flash, d.flashOK = "feedback sent to the agent", true
 	} else {
@@ -411,6 +433,7 @@ func (d *diffModel) renderRow(i, w int, drafts map[string]int) string {
 		if f != nil && f.OldPath != "" {
 			name = f.OldPath + " → " + f.Path
 		}
+		name = termSafe(name)
 		// Built at render time rather than as a package style: it is palette
 		// derived, and a package-level one would need registering in
 		// rebuildStyles to follow a flavor change.
@@ -436,17 +459,18 @@ func (d *diffModel) renderRow(i, w int, drafts map[string]int) string {
 		return fmt.Sprintf("%4d", n)
 	}
 	gutter := faintText.Render(num(l.OldLine) + " " + num(l.NewLine) + " ")
+	body := termSafe(l.Text)
 	var text string
 	switch l.Kind {
 	case '+':
-		text = goodText.Render("+" + l.Text)
+		text = goodText.Render("+" + body)
 	case '-':
-		text = badText.Render("-" + l.Text)
+		text = badText.Render("-" + body)
 	case '@', '\\':
-		text = faintText.Render(l.Text)
+		text = faintText.Render(body)
 		gutter = ""
 	default:
-		text = " " + l.Text
+		text = " " + body
 	}
 	mark := ""
 	side, n := "new", l.NewLine
@@ -456,7 +480,7 @@ func (d *diffModel) renderRow(i, w int, drafts map[string]int) string {
 	if c := drafts[fmt.Sprintf("%s\x00%s\x00%d", r.file, side, n)]; c > 0 && n > 0 {
 		mark = warnText.Render(fmt.Sprintf(" ✎%d", c))
 	}
-	return truncateANSI(cursor+gutter+strings.ReplaceAll(text, "\t", "    ")+mark, w)
+	return truncateANSI(cursor+gutter+text+mark, w)
 }
 
 func (d *diffModel) fileByPath(p string) *protocol.DiffFile {
@@ -482,4 +506,32 @@ func (s *sessionsModel) byID(id string) *protocol.SessionInfo {
 		}
 	}
 	return nil
+}
+
+// termSafe makes file content and paths printable in the TUI: the diff is
+// whatever the agent wrote, and a raw ESC or other control byte in it would be
+// interpreted by the user's terminal (cursor moves, title changes, OSC 52
+// clipboard writes) instead of being shown. Tabs expand; every other C0/C1
+// control and DEL is replaced with a visible placeholder.
+func termSafe(s string) string {
+	return strings.Map(func(r rune) rune {
+		switch {
+		case r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f):
+			return '�'
+		}
+		return r
+	}, strings.ReplaceAll(s, "\t", "    "))
+}
+
+// pasteJoined keeps EVERY line of a paste for the single-line comment and note
+// inputs, joined with spaces — pasteInline keeps only the first line, which
+// silently dropped the rest of a pasted review comment.
+func pasteJoined(s string) string {
+	var parts []string
+	for _, l := range pasteLines(s) {
+		if t := strings.TrimSpace(sanitizePasteLine(l)); t != "" {
+			parts = append(parts, t)
+		}
+	}
+	return strings.Join(parts, " ")
 }

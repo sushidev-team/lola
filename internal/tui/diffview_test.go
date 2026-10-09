@@ -114,3 +114,47 @@ func TestDiffOverlayRefusesCommentOnAHeader(t *testing.T) {
 		t.Error("a file header is not a commentable line")
 	}
 }
+
+// Comments and note edits made while a send is in flight were never sent, so
+// a successful reply must not delete them.
+func TestDiffOverlayKeepsDraftsWrittenDuringASend(t *testing.T) {
+	m := openTestDiff(t)
+	for range 4 {
+		m.Update(keyMsg("j"))
+	}
+	addComment := func(text string) {
+		m.Update(keyMsg("c"))
+		for _, r := range text {
+			m.Update(keyMsg(string(r)))
+		}
+		m.Update(keyMsg("enter"))
+	}
+	addComment("first")
+	fakeRequest(t, nil, mustData(t, protocol.FeedbackData{Delivered: true}), nil)
+	_, cmd := m.Update(keyMsg("s"))
+	addComment("second")  // written while the request is in flight
+	m.Update(keyMsg("u")) // refused mid-send: it would desync the snapshot
+	m.Update(cmd())
+	ds := m.diff.drafts["s1"]
+	if len(ds) != 1 || ds[0].Body != "second" {
+		t.Errorf("want only the unsent comment left, got %+v", ds)
+	}
+}
+
+func TestDiffOverlayNeutralizesControlBytes(t *testing.T) {
+	m := openTestDiff(t)
+	evil := cannedDiff
+	evil.Files = []protocol.DiffFile{{Path: "a\x1b]0;pwn\x07.go", Status: "added", Additions: 1,
+		Patch: "@@ -0,0 +1 @@\n+\x1b]52;c;ZXZpbA==\x07ok\n"}}
+	m.Update(diffLoadedMsg{session: "s1", data: &evil})
+	v := m.viewString()
+	if strings.Contains(v, "\x1b]") || strings.Contains(v, "\x07") {
+		t.Errorf("file content reached the terminal as an escape sequence: %q", v)
+	}
+}
+
+func TestPasteJoinedKeepsEveryLine(t *testing.T) {
+	if got := pasteJoined("first line\n\nsecond\r\nthird"); got != "first line second third" {
+		t.Errorf("pasteJoined = %q", got)
+	}
+}

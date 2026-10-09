@@ -123,7 +123,7 @@ func (m *rootModel) routePaste(content string) (tea.Model, tea.Cmd) {
 	switch {
 	case m.diff.open:
 		if m.diff.input != diffInputNone {
-			m.diff.inputBuf += pasteInline(content)
+			m.diff.inputBuf += pasteJoined(content)
 		}
 	case m.form != nil:
 		m.form.paste(content)

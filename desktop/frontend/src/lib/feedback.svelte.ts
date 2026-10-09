@@ -111,10 +111,19 @@ class Feedback {
       quote: d.quote,
       body: d.body,
     }));
+    // The composer stays usable while the request travels, so remember exactly
+    // what went out: only that is cleared on success. A comment added, or a
+    // note edited, during the request was never sent and must survive it.
+    const sentKeys = new Set(this.draftsFor(id).map((d) => d.key));
+    const sentNote = this.noteFor(id);
     this.sending.set(id, true);
     try {
-      const r = await DaemonService.SendFeedback({ session: id, comments, note: this.noteFor(id) });
-      this.clear(id);
+      const r = await DaemonService.SendFeedback({ session: id, comments, note: sentNote });
+      const rest = this.draftsFor(id).filter((d) => !sentKeys.has(d.key));
+      if (rest.length) this.drafts.set(id, rest);
+      else this.drafts.delete(id);
+      if (this.noteFor(id) === sentNote) this.notes.delete(id);
+      this.save();
       store.setFlash(
         r?.delivered ? "feedback sent to the agent" : "feedback queued — it is sent when the agent is at its prompt",
         r?.delivered ? "good" : "warn",

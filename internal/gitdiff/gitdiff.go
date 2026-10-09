@@ -133,7 +133,9 @@ func (d Differ) Diff(ctx context.Context, dir, base string) (Result, error) {
 	files := SplitPatch(string(out))
 
 	if u, err := run(ctx, bin, dir, "ls-files", "--others", "--exclude-standard", "-z"); err == nil {
-		files = append(files, untrackedFiles(dir, u)...)
+		untracked, more := untrackedFiles(dir, u)
+		files = append(files, untracked...)
+		res.Truncated = more // past MaxUntracked: say so, never drop files silently
 	}
 
 	budget := MaxPatchBytes
@@ -176,15 +178,15 @@ func runGit(ctx context.Context, bin, dir string, args ...string) ([]byte, error
 // untrackedFiles renders each untracked path (NUL-separated, as `ls-files -z`
 // prints them) as an all-added file read straight from disk. A file is read
 // only when it is a regular file INSIDE dir — a symlink is listed but never
-// followed, since its target can be anywhere on the machine.
-func untrackedFiles(dir string, z []byte) []File {
-	var out []File
+// followed, since its target can be anywhere on the machine. more reports that
+// files past MaxUntracked were left out.
+func untrackedFiles(dir string, z []byte) (out []File, more bool) {
 	for _, p := range strings.Split(string(z), "\x00") {
 		if p == "" {
 			continue
 		}
 		if len(out) == MaxUntracked {
-			break
+			return out, true
 		}
 		f := File{Path: p, Status: "added", Untracked: true}
 		full := filepath.Join(dir, filepath.FromSlash(p))
@@ -204,7 +206,7 @@ func untrackedFiles(dir string, z []byte) []File {
 		}
 		out = append(out, f)
 	}
-	return out
+	return out, false
 }
 
 // addedPatch renders a new file's content as a single all-"+" hunk.

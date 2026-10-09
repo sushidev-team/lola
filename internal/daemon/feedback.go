@@ -181,6 +181,13 @@ func (d *Daemon) deliverFeedback(ctx context.Context, id string) bool {
 		}
 		text, cur.PendingFeedback = cur.PendingFeedback, ""
 		cur.AtPrompt = false
+		// CLAIM the prompt in the same atomic step: handoffDeliverable admits
+		// AgentIdle whatever AtPrompt says, so clearing AtPrompt alone left the
+		// gate open, and a concurrent flush (the Stop hook's and the observer's
+		// run side by side) could type a review hand-off into the same prompt
+		// while this send was still in flight. AgentWorking closes every case of
+		// the gate; the next lifecycle hook corrects it to the real state.
+		cur.SetAgentState(state.AgentWorking, "", time.Now())
 		tmuxName = cur.TmuxName
 		return true
 	})
@@ -205,12 +212,6 @@ func (d *Daemon) deliverFeedback(ctx context.Context, id string) bool {
 		d.logf("", "feedback: %s send-keys failed (re-queued): %v", id, err)
 		return false
 	}
-	// The agent is resuming. AgentWorking also closes the wide gate against a
-	// second delivery, as the review hand-off and handleAnswer do.
-	d.sessions.Update(id, func(cur *session.Session) bool {
-		cur.SetAgentState(state.AgentWorking, "", time.Now())
-		return true
-	})
 	if err := d.sessions.Save(); err != nil {
 		d.logf("", "feedback: persist sessions: %v", err)
 	}

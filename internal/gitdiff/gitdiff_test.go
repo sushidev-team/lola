@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -207,5 +208,33 @@ func TestDiffRealRepo(t *testing.T) {
 	n := byPath["new.txt"]
 	if !n.Untracked || n.Status != "added" || n.Additions != 1 {
 		t.Errorf("new.txt = %+v", n)
+	}
+}
+
+func TestUntrackedOverflowIsDisclosed(t *testing.T) {
+	dir := t.TempDir()
+	var z strings.Builder
+	for i := range MaxUntracked + 1 {
+		name := "f" + strconv.Itoa(i)
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("x\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		z.WriteString(name + "\x00")
+	}
+	d := Differ{run: func(_ context.Context, _, _ string, args ...string) ([]byte, error) {
+		switch args[0] {
+		case "merge-base":
+			return []byte("abc\n"), nil
+		case "ls-files":
+			return []byte(z.String()), nil
+		}
+		return nil, nil
+	}}
+	res, err := d.Diff(context.Background(), dir, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Files) != MaxUntracked || !res.Truncated {
+		t.Errorf("files=%d truncated=%v, want %d and true", len(res.Files), res.Truncated, MaxUntracked)
 	}
 }

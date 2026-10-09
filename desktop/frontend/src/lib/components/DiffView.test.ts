@@ -94,6 +94,34 @@ describe("DiffView", () => {
     expect(feedback.count("s1")).toBe(1);
   });
 
+  // Comments written while the request travels were never sent: a successful
+  // reply must clear only the batch that went out.
+  it("keeps drafts added while a send is in flight", async () => {
+    let resolve!: (v: unknown) => void;
+    SendFeedback.mockReturnValue(new Promise((r) => (resolve = r)));
+    feedback.add("s1", { path: "a.go", side: "new", line: 1, endLine: 1, quote: "", body: "sent" });
+    feedback.setNote("s1", "note v1");
+    const sending = feedback.send("s1");
+    feedback.add("s1", { path: "a.go", side: "new", line: 2, endLine: 2, quote: "", body: "late" });
+    feedback.setNote("s1", "note v2");
+    resolve({ delivered: true, queued: false });
+    await sending;
+    expect(feedback.draftsFor("s1").map((d) => d.body)).toEqual(["late"]);
+    expect(feedback.noteFor("s1")).toBe("note v2");
+  });
+
+  // Two Refreshes can finish out of order; only the latest may land.
+  it("ignores a stale diff response", async () => {
+    let first!: (v: unknown) => void;
+    Diff.mockReturnValueOnce(new Promise((r) => (first = r))).mockResolvedValueOnce({ ...DATA, base: "origin/new" });
+    render(DiffView, { sessionId: "s1" });
+    await fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    expect(await screen.findByText("origin/new")).toBeInTheDocument();
+    first({ ...DATA, base: "origin/stale" });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(screen.queryByText("origin/stale")).not.toBeInTheDocument();
+  });
+
   it("has nothing to send until something is written", async () => {
     render(DiffView, { sessionId: "s1" });
     await screen.findByText("origin/main");
