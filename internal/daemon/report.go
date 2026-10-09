@@ -36,6 +36,9 @@ type reportLimiter struct {
 	hits map[string][]time.Time
 }
 
+// reportSweepAt is the map size past which allow prunes idle sessions.
+const reportSweepAt = 256
+
 func (l *reportLimiter) allow(id string, now time.Time) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -43,6 +46,15 @@ func (l *reportLimiter) allow(id string, now time.Time) bool {
 		l.hits = map[string][]time.Time{}
 	}
 	cut := now.Add(-reportWindow)
+	// Bound the map: drop every session whose window has emptied once it grows,
+	// so ids from finished sessions do not accumulate for the daemon's lifetime.
+	if len(l.hits) > reportSweepAt {
+		for k, v := range l.hits {
+			if len(v) == 0 || !v[len(v)-1].After(cut) {
+				delete(l.hits, k)
+			}
+		}
+	}
 	h := l.hits[id]
 	i := 0
 	for i < len(h) && h[i].Before(cut) {
@@ -74,6 +86,11 @@ func (d *Daemon) handleAgentReport(req protocol.Request) protocol.Response {
 	}
 	if req.Session == "" {
 		return protocol.Response{OK: false, Error: "agentReport: no session ($LOLA_SESSION unset)"}
+	}
+	// Unknown sessions are refused BEFORE the limiter, so an arbitrary id never
+	// gets a limiter entry.
+	if _, ok := d.sessions.Get(req.Session); !ok {
+		return protocol.Response{OK: false, Error: "agentReport: unknown session " + req.Session}
 	}
 	now := time.Now()
 	if !d.reports.allow(req.Session, now) {

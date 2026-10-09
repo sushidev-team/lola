@@ -170,9 +170,13 @@ func loadConfig() (*config.Config, error) {
 func readSecretLine(r io.Reader) (string, error) {
 	if f, ok := r.(*os.File); ok {
 		if fi, err := f.Stat(); err == nil && fi.Mode()&os.ModeCharDevice != 0 {
-			if err := exec.Command("stty", "-echo").Run(); err == nil {
-				defer func() { _ = exec.Command("stty", "echo").Run() }()
+			// stty acts on ITS stdin, so it must be handed the terminal itself —
+			// an unset Stdin is /dev/null and the call fails. A terminal whose
+			// echo cannot be turned off is refused: the secret would be printed.
+			if err := stty(f, "-echo"); err != nil {
+				return "", errors.New("cannot hide terminal input; pipe the secret instead: `pbpaste | lola linear-agent set-secret <kind>`")
 			}
+			defer func() { _ = stty(f, "echo") }()
 		}
 	}
 	b, err := io.ReadAll(io.LimitReader(lineReader{r}, 8<<10))
@@ -184,6 +188,12 @@ func readSecretLine(r io.Reader) (string, error) {
 		return "", errors.New("empty secret")
 	}
 	return s, nil
+}
+
+func stty(tty *os.File, arg string) error {
+	cmd := exec.Command("stty", arg)
+	cmd.Stdin = tty
+	return cmd.Run()
 }
 
 // lineReader stops at the first newline so an interactive paste returns.
@@ -237,27 +247,42 @@ func linearAgentLogin(c *cobra.Command) error {
 		err  error
 	}
 	done := make(chan result, 1)
-	srv := &http.Server{ReadHeaderTimeout: 10 * time.Second, Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/callback" {
-			http.NotFound(w, r)
-			return
-		}
-		q := r.URL.Query()
-		switch {
-		case q.Get("state") != state:
-			http.Error(w, "state mismatch — start `lola linear-agent login` again", http.StatusBadRequest)
-			done <- result{err: errors.New("OAuth state mismatch")}
-		case q.Get("error") != "":
-			http.Error(w, "authorization was not granted", http.StatusBadRequest)
-			done <- result{err: errors.New("authorization was not granted")}
-		case q.Get("code") == "":
-			http.Error(w, "no authorization code", http.StatusBadRequest)
-			done <- result{err: errors.New("no authorization code in callback")}
+	// Never block a handler on the result: only the first outcome is read, and a
+	// browser retry or reload must not stall shutdown waiting on a full channel.
+	finish := func(r result) {
+		select {
+		case done <- r:
 		default:
-			fmt.Fprintln(w, "lola is installed as a Linear agent. You can close this tab.")
-			done <- result{code: q.Get("code")}
 		}
-	})}
+	}
+	srv := &http.Server{
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      10 * time.Second,
+		IdleTimeout:       10 * time.Second,
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/callback" {
+				http.NotFound(w, r)
+				return
+			}
+			q := r.URL.Query()
+			switch {
+			case q.Get("state") != state:
+				// Not ours (any local page can hit this port): refuse it without
+				// ending the login a real callback may still complete.
+				http.Error(w, "state mismatch", http.StatusBadRequest)
+			case q.Get("error") != "":
+				http.Error(w, "authorization was not granted", http.StatusBadRequest)
+				finish(result{err: errors.New("authorization was not granted")})
+			case q.Get("code") == "":
+				http.Error(w, "no authorization code", http.StatusBadRequest)
+				finish(result{err: errors.New("no authorization code in callback")})
+			default:
+				fmt.Fprintln(w, "lola is installed as a Linear agent. You can close this tab.")
+				finish(result{code: q.Get("code")})
+			}
+		}),
+	}
 	go func() { _ = srv.Serve(ln) }()
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)

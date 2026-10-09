@@ -87,6 +87,7 @@ type agentLedgerEntry struct {
 // linearAgentRuntime is the loop's state, all behind mu.
 type linearAgentRuntime struct {
 	mu        sync.Mutex
+	refreshMu sync.Mutex // serializes token refreshes (rotation makes them exclusive)
 	api       linear.AgentAPI
 	token     linear.OAuthToken
 	viewerID  string
@@ -256,7 +257,7 @@ func (d *Daemon) linearAgentCycle(ctx context.Context) time.Duration {
 	cancel()
 	if err != nil && isAuthErr(err) {
 		// An expired/revoked access token: refresh once and retry.
-		if api, err = d.refreshAgentAPI(ctx, cfg, endpoint); err == nil {
+		if api, err = d.refreshAgentAPI(ctx, cfg, endpoint, api); err == nil {
 			cctx, cancel = context.WithTimeout(ctx, agentExecTimeout)
 			sessions, err = api.AgentSessions(cctx)
 			cancel()
@@ -308,16 +309,33 @@ func (d *Daemon) ensureAgentAPI(ctx context.Context, cfg config.LinearAgentConfi
 		}
 		return api, nil
 	}
-	if ra.api != nil && !ra.token.Expired(ra.now(), time.Minute) {
-		api := ra.api
+	if api := ra.liveAPILocked(); api != nil {
 		ra.mu.Unlock()
 		return api, nil
 	}
 	ra.mu.Unlock()
 
-	tok, err := ra.loadToken(cfg)
-	if err != nil {
-		return nil, err
+	// One refresher at a time: Linear ROTATES the refresh token, so two
+	// concurrent refreshes with the same one (the loop and an async post) make
+	// one fail — and a reused refresh token may revoke the whole family.
+	ra.refreshMu.Lock()
+	defer ra.refreshMu.Unlock()
+	ra.mu.Lock()
+	if api := ra.liveAPILocked(); api != nil { // someone refreshed while we waited
+		ra.mu.Unlock()
+		return api, nil
+	}
+	tok := ra.token
+	ra.mu.Unlock()
+	// The IN-MEMORY token is the newest one: after a rotation whose keychain
+	// write failed (no keychain, a write error), storage still holds the refresh
+	// token Linear already invalidated. Storage is read only when memory is empty.
+	if tok.AccessToken == "" {
+		loaded, err := ra.loadToken(cfg)
+		if err != nil {
+			return nil, err
+		}
+		tok = loaded
 	}
 	if tok.Expired(ra.now(), time.Minute) {
 		return d.refreshWith(ctx, cfg, endpoint, tok)
@@ -325,13 +343,32 @@ func (d *Daemon) ensureAgentAPI(ctx context.Context, cfg config.LinearAgentConfi
 	return d.installAgentToken(ctx, endpoint, tok), nil
 }
 
-// refreshAgentAPI forces a token refresh (after a 401).
-func (d *Daemon) refreshAgentAPI(ctx context.Context, cfg config.LinearAgentConfig, endpoint string) (linear.AgentAPI, error) {
+// liveAPILocked is the cached client while its token is still valid. ra.mu held.
+func (ra *linearAgentRuntime) liveAPILocked() linear.AgentAPI {
+	if ra.api != nil && !ra.token.Expired(ra.now(), time.Minute) {
+		return ra.api
+	}
+	return nil
+}
+
+// refreshAgentAPI forces a token refresh after stale was rejected (a 401).
+// When another caller already replaced stale meanwhile, that client is used
+// instead of refreshing again.
+func (d *Daemon) refreshAgentAPI(ctx context.Context, cfg config.LinearAgentConfig, endpoint string, stale linear.AgentAPI) (linear.AgentAPI, error) {
 	ra := d.agent
 	ra.mu.Lock()
 	if ra.apiOverride != nil {
 		ra.mu.Unlock()
 		return nil, errors.New("linear agent: token rejected")
+	}
+	ra.mu.Unlock()
+	ra.refreshMu.Lock()
+	defer ra.refreshMu.Unlock()
+	ra.mu.Lock()
+	if ra.api != nil && ra.api != stale {
+		api := ra.api
+		ra.mu.Unlock()
+		return api, nil
 	}
 	tok := ra.token
 	ra.mu.Unlock()
@@ -357,8 +394,9 @@ func (d *Daemon) refreshWith(ctx context.Context, cfg config.LinearAgentConfig, 
 		return nil, fmt.Errorf("linear agent: token refresh failed: %w", err)
 	}
 	if err := ra.storeToken(cfg, fresh); err != nil {
-		// The fresh token still works for this run; the next start will need a
-		// login if the old refresh token was rotated away.
+		// The fresh token stays in memory and keeps refreshing for this run
+		// (ensureAgentAPI prefers it); only the next START needs a login, once
+		// the stored refresh token has been rotated away.
 		d.logf("", "linear agent: could not persist the refreshed token: %v", err)
 	}
 	return d.installAgentToken(ctx, endpoint, fresh), nil
@@ -441,19 +479,32 @@ func (d *Daemon) considerAgentSession(ctx context.Context, api linear.AgentAPI, 
 		return
 	}
 
-	// Concurrency cap: queue (and say so once) rather than spawn past it.
+	// Concurrency cap: queue (and say so once) rather than spawn past it. The
+	// check runs again inside openTicket's critical section (admit below); this
+	// early one only avoids a claim when the cap is plainly full.
 	d.mu.Lock()
 	pollCap := d.cfg.EffectiveCap(&p)
 	globalCap := d.cfg.Defaults.GlobalCap
 	agentBin := agent.Parse(d.cfg.AgentForProject(p.Name)).Binary()
 	health := d.runtimeHealth
 	d.mu.Unlock()
-	if Budget(pollCap, globalCap, NativeLiveCounted(d.sessions.Snapshot())) <= 0 {
+	hasSlot := func() error {
+		if Budget(pollCap, globalCap, NativeLiveCounted(d.sessions.Snapshot())) <= 0 {
+			return errCapped
+		}
+		return nil
+	}
+	queue := func() {
 		if !known {
 			ra.record(as.ID, "queued", "")
 			d.postAgentActivity(ctx, api, as.ID, linear.Thought("Queued — lola is at its concurrency cap. I'll start as soon as a slot frees up.", false))
 			d.logf("", "linear agent: %s queued (capped)", is.Identifier)
+		} else {
+			ra.record(as.ID, "queued", "")
 		}
+	}
+	if hasSlot() != nil {
+		queue()
 		return
 	}
 	if health != nil {
@@ -470,9 +521,14 @@ func (d *Daemon) considerAgentSession(ctx context.Context, api linear.AgentAPI, 
 	// Crash guard: the ledger says "spawning" BEFORE the spawn is attempted.
 	ra.record(as.ID, "spawning", "")
 	ra.saveLedger(d.home, d.logf)
-	od, err := d.handleOpenTicket(ctx, protocol.OpenTicketArgs{
+	od, err := d.openTicket(ctx, protocol.OpenTicketArgs{
 		Project: p.Name, Identifier: is.Identifier, UUID: is.ID, Title: is.Title, Branch: is.BranchName,
-	})
+	}, hasSlot)
+	if errors.Is(err, errCapped) {
+		queue() // lost the race for the last slot: back to the queue, not rejected
+		ra.saveLedger(d.home, d.logf)
+		return
+	}
 	if err != nil {
 		// A concurrent claim (a tick spawning the same issue right now) binds on
 		// the next cycle once the session exists; any other failure is final for
@@ -609,7 +665,7 @@ func (d *Daemon) handleAgentPrompt(ctx context.Context, api linear.AgentAPI, id 
 	if body == "" {
 		return
 	}
-	if cur.PlanGate == session.PlanSubmitted {
+	if planVerdictFor(cur, p) {
 		approve := approveWords[strings.ToLower(strings.Trim(body, " .!"))]
 		comment := body
 		if strings.EqualFold(body, planOptionChanges) {
@@ -639,6 +695,19 @@ func (d *Daemon) handleAgentPrompt(ctx context.Context, api linear.AgentAPI, id 
 	}
 	d.postAgentActivity(ctx, api, cur.AgentSessionID, linear.Thought("Passing that to the agent.", true))
 	d.flushAgentNoticesAsync(id)
+}
+
+// planVerdictFor reports whether a prompt is a verdict on the CURRENT plan: a
+// plan is waiting, this exact round was posted into the Agent Session, and the
+// human wrote the prompt after it was posted. Anything else — a "yes" sent
+// before the plan existed, a reply to an earlier round — is relayed to the
+// agent as an ordinary message. An unparseable timestamp fails closed.
+func planVerdictFor(s session.Session, p linear.AgentPrompt) bool {
+	if s.PlanGate != session.PlanSubmitted || s.AgentMirror.PlanRound != s.PlanRound || s.AgentMirror.PlanPostedAt.IsZero() {
+		return false
+	}
+	at, err := time.Parse(time.RFC3339Nano, p.CreatedAt)
+	return err == nil && at.After(s.AgentMirror.PlanPostedAt)
 }
 
 // mirrorAgentSession streams what changed since the last pass.
@@ -679,6 +748,7 @@ func (d *Daemon) mirrorAgentSession(ctx context.Context, api linear.AgentAPI, s 
 			s.PlanRound, planOptionApprove, clipBody(s.Plan, agentMaxBody))
 		if d.postAgentActivity(ctx, api, asID, linear.Elicitation(body, planOptionApprove, planOptionChanges)) {
 			next.PlanRound = s.PlanRound
+			next.PlanPostedAt = d.agent.now()
 		}
 	}
 	// The PR as the session's external link.

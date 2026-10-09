@@ -287,10 +287,14 @@ func TestLinearAgentPlanApprovalFromLinear(t *testing.T) {
 	}
 
 	// The agent's own activity must be ignored; the human's "Approve" decides.
+	later := func(s int) string {
+		return time.Now().Add(time.Duration(s) * time.Second).UTC().Format(time.RFC3339Nano)
+	}
+	approvedAt := later(2)
 	api.mu.Lock()
 	api.prompts["as-5"] = []linear.AgentPrompt{
-		{ID: "p0", Body: "approve", UserID: "agent-user", CreatedAt: "2026-01-01T00:00:00Z"},
-		{ID: "p1", Body: "Approve", UserID: "human", CreatedAt: "2026-01-01T00:00:01Z"},
+		{ID: "p0", Body: "approve", UserID: "agent-user", CreatedAt: later(1)},
+		{ID: "p1", Body: "Approve", UserID: "human", CreatedAt: approvedAt},
 	}
 	api.mu.Unlock()
 	d.linearAgentCycle(context.Background())
@@ -298,7 +302,7 @@ func TestLinearAgentPlanApprovalFromLinear(t *testing.T) {
 	if cur.PlanGate != session.PlanApproved {
 		t.Fatalf("gate = %s", cur.PlanGate)
 	}
-	if cur.AgentMirror.PromptCursor != "2026-01-01T00:00:01Z" {
+	if cur.AgentMirror.PromptCursor != approvedAt {
 		t.Fatalf("cursor = %q", cur.AgentMirror.PromptCursor)
 	}
 	d.connWg.Wait() // decidePlan delivers asynchronously
@@ -422,5 +426,110 @@ func TestLinearWebhookDoorbell(t *testing.T) {
 	d.agentWebhookSecret = func(config.LinearAgentConfig) (string, error) { return "", fmt.Errorf("none") }
 	if code := post(fresh, sign(fresh)); code != http.StatusServiceUnavailable || drain() {
 		t.Fatalf("no secret must refuse every delivery: %d", code)
+	}
+}
+
+// A "yes" written BEFORE the current plan was posted to Linear must not
+// approve it: it is relayed to the agent as an ordinary message.
+func TestLinearAgentStaleReplyDoesNotDecidePlan(t *testing.T) {
+	p := config.Project{Name: "app", Path: "/tmp/app", TeamID: "team-1"}
+	d, api, _ := agentDaemon(t, p)
+	s := gatedSession(session.PlanSubmitted)
+	s.ID, s.Project, s.Issue, s.TmuxName = "app-eng-8", "app", "ENG-8", "app-eng-8"
+	s.Plan, s.PlanRound, s.AgentSessionID = "plan", 1, "as-8"
+	d.sessions.Upsert(s)
+	d.paneTail = func(context.Context, string, int) (string, error) { return "✻ Thinking… (3s)\n", nil }
+	api.prompts["as-8"] = []linear.AgentPrompt{{ID: "old", Body: "yes", UserID: "human", CreatedAt: "2020-01-01T00:00:00Z"}}
+
+	d.linearAgentCycle(context.Background()) // relays BEFORE the plan is mirrored
+	d.linearAgentCycle(context.Background())
+	cur, _ := d.sessions.Get("app-eng-8")
+	if cur.PlanGate != session.PlanSubmitted {
+		t.Fatalf("a stale reply decided the plan: %s", cur.PlanGate)
+	}
+	if len(cur.PendingNotices) != 1 || !strings.Contains(cur.PendingNotices[0], "yes") {
+		t.Fatalf("the stale reply must be relayed as a message: %+v", cur.PendingNotices)
+	}
+	if !planVerdictFor(cur, linear.AgentPrompt{CreatedAt: time.Now().Add(time.Minute).UTC().Format(time.RFC3339Nano)}) {
+		t.Fatal("a reply after the post must count as the verdict")
+	}
+	if planVerdictFor(cur, linear.AgentPrompt{CreatedAt: "not a time"}) {
+		t.Fatal("an unparseable timestamp must fail closed")
+	}
+}
+
+// The cap is re-checked inside the dispatch critical section: a slot taken
+// between the loop's early check and the spawn queues the delegation instead
+// of spawning past the cap.
+func TestLinearAgentRechecksCapBeforeSpawn(t *testing.T) {
+	p := config.Project{Name: "app", Path: "/tmp/app", TeamID: "team-1"}
+	d, api, nat := agentDaemon(t, p)
+	d.cfg.Defaults.GlobalCap = 1
+	api.sessions = []linear.AgentSession{pendingSession("as-9", "ENG-9", "team-1")}
+	// The health check runs after the early cap check: a concurrent poll fills
+	// the last slot right there.
+	d.runtimeHealth = func(string) error {
+		d.sessions.Upsert(session.Session{ID: "app-eng-1", Source: "native", Project: "app", Issue: "ENG-1",
+			AgentState: state.AgentWorking, Delivery: state.DeliveryNone})
+		return nil
+	}
+	d.linearAgentCycle(context.Background())
+	if len(nat.spawnCalls()) != 0 {
+		t.Fatalf("spawned past the cap: %+v", nat.spawnCalls())
+	}
+	if !strings.Contains(api.bodies("as-9"), "Queued") {
+		t.Fatalf("must be queued, got:\n%s", api.bodies("as-9"))
+	}
+	if d.inflight.Has("uuid-ENG-9") {
+		t.Fatal("a refused admit must release its in-flight claim")
+	}
+}
+
+// When the rotated token cannot be persisted, the NEXT refresh must use the
+// in-memory refresh token (storage holds one Linear already invalidated), and
+// concurrent callers refresh once, not once each.
+func TestLinearAgentRefreshUsesInMemoryTokenAndIsExclusive(t *testing.T) {
+	d, _, _ := agentDaemon(t, config.Project{Name: "app", Path: "/tmp/app", TeamID: "team-1"})
+	d.agent.apiOverride = nil
+	now := time.Now()
+	d.agent.now = func() time.Time { return now }
+	var mu sync.Mutex
+	var used []string
+	n := 0
+	d.agent.loadToken = func(config.LinearAgentConfig) (linear.OAuthToken, error) {
+		return linear.OAuthToken{AccessToken: "a0", RefreshToken: "r0", ExpiresAt: now.Add(-time.Hour)}, nil
+	}
+	d.agent.storeToken = func(config.LinearAgentConfig, linear.OAuthToken) error { return fmt.Errorf("no keychain") }
+	d.agent.refresh = func(_ context.Context, _ config.LinearAgentConfig, rt string) (linear.OAuthToken, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		used = append(used, rt)
+		n++
+		time.Sleep(5 * time.Millisecond)
+		return linear.OAuthToken{AccessToken: fmt.Sprintf("a%d", n), RefreshToken: fmt.Sprintf("r%d", n), ExpiresAt: now.Add(time.Hour)}, nil
+	}
+	d.agent.newAPI = func(_, _ string) linear.AgentAPI { return newFakeAgentAPI() }
+
+	var wg sync.WaitGroup
+	for i := 0; i < 3; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := d.ensureAgentAPI(context.Background(), d.cfg.LinearAgent, ""); err != nil {
+				t.Error(err)
+			}
+		}()
+	}
+	wg.Wait()
+	if len(used) != 1 || used[0] != "r0" {
+		t.Fatalf("concurrent callers must refresh once with r0, got %v", used)
+	}
+
+	now = now.Add(2 * time.Hour) // the refreshed token expires
+	if _, err := d.ensureAgentAPI(context.Background(), d.cfg.LinearAgent, ""); err != nil {
+		t.Fatal(err)
+	}
+	if len(used) != 2 || used[1] != "r1" {
+		t.Fatalf("the second refresh must use the in-memory rotated token r1, got %v", used)
 	}
 }
