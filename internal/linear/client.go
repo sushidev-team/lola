@@ -14,7 +14,10 @@ import (
 type Client struct {
 	Endpoint string
 	apiKey   string
-	http     *http.Client
+	// bearer marks an OAuth access token (the Linear agent's app token), sent as
+	// "Bearer <token>"; a personal API key goes out raw.
+	bearer bool
+	http   *http.Client
 
 	// backoff knobs, overridable in tests
 	maxRetries int
@@ -31,6 +34,13 @@ func New(endpoint, apiKey string) *Client {
 		baseDelay:  time.Second,
 		sleep:      sleepCtx,
 	}
+}
+
+// NewBearer is New for an OAuth access token (the Linear agent app actor).
+func NewBearer(endpoint, token string) *Client {
+	c := New(endpoint, token)
+	c.bearer = true
+	return c
 }
 
 func sleepCtx(ctx context.Context, d time.Duration) error {
@@ -82,7 +92,11 @@ func (c *Client) doOnce(ctx context.Context, body []byte, out any) (retry bool, 
 	if err != nil {
 		return false, err
 	}
-	req.Header.Set("Authorization", c.apiKey) // NOTE: raw key, not "Bearer"
+	if c.bearer {
+		req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	} else {
+		req.Header.Set("Authorization", c.apiKey) // NOTE: raw key, not "Bearer"
+	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.http.Do(req)

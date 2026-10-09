@@ -19,6 +19,7 @@
   import PrBadge from "./PrBadge.svelte";
   import { appLabel, appState, appPr } from "$lib/stackapps";
   import SidePanel from "./SidePanel.svelte";
+  import PlanGateBanner from "./PlanGateBanner.svelte";
 
   // `focused` = the expanded full-cockpit view ("minimize" toggle); otherwise the
   // compact detail panel. The two used to differ in terminal font size as well —
@@ -423,6 +424,7 @@
          to is exactly where the answer is NOT (the command clears the screen on
          its way out). Absent whenever the tabs are healthy. -->
     <DevClashBanner {session} />
+    <PlanGateBanner {session} />
 
     <!-- A STACK session spans several repositories: one compact chip per app,
          in the stack's member order — its PR (the number opens it), or whether
