@@ -253,6 +253,18 @@ func newSettingsForm(cfgPath string, cfg *config.Config) *settingsForm {
 			// every poll.
 			{key: "linear_key", tab: stLinear, section: "[linear]", sectionNote: "API key (stored in the macOS Keychain)", label: "API key", help: linearKeyHelp(cfg), kind: sfSecret},
 
+			// [linear_agent] — lola as a native Linear agent. The secret SOURCES
+			// stay whatever the file names; the two secrets are write-only fields
+			// stored straight to the Keychain on save, like the API key above. The
+			// OAuth install is a browser flow: `lola linear-agent login`.
+			{key: "la_enabled", tab: stLinear, section: "[linear_agent]", sectionNote: "delegate / @mention lola in Linear", label: "Enabled", help: "Treat a delegation or @mention of lola in Linear as a dispatch trigger (no labels needed; the issue's team picks the project), stream progress into the Agent Session and relay replies. Install first: lola linear-agent login.", kind: sfBool, b: cfg.LinearAgent.Enabled},
+			{key: "la_client_id", tab: stLinear, label: "Client ID", help: "The OAuth application's client id (public). Required while enabled.", kind: sfText, text: cfg.LinearAgent.ClientID},
+			{key: "la_poll", tab: stLinear, label: "Poll interval", help: "How often lola asks Linear for new Agent Sessions and replies, e.g. 15s (minimum 5s). Empty uses 15s.", kind: sfText, text: durationText(cfg.LinearAgent.PollInterval)},
+			{key: "la_redirect_port", tab: stLinear, label: "Callback port", help: "Loopback port of the login callback; register http://localhost:<port>/callback on the OAuth app. 0 means " + itoa(config.DefaultLinearAgentRedirectPort) + ".", kind: sfInt, text: itoa(cfg.LinearAgent.RedirectPort)},
+			{key: "la_webhook", tab: stLinear, label: "Webhook listen", help: "Optional IP:port for the webhook doorbell behind your own tunnel. A signed delivery only makes lola poll now. Needs a daemon restart to take effect.", kind: sfText, text: cfg.LinearAgent.WebhookListen},
+			{key: "la_client_secret", tab: stLinear, label: "Client secret", help: "The OAuth app's client secret — typed here it is stored in the macOS Keychain on save and never written to config.toml. " + agentSecretHelp(cfg, "client"), kind: sfSecret},
+			{key: "la_webhook_secret", tab: stLinear, label: "Webhook secret", help: "The webhook signing secret — stored in the Keychain on save. Only needed with a webhook. " + agentSecretHelp(cfg, "webhook"), kind: sfSecret},
+
 			// [defaults] — the per-project fallbacks. Same TOML table, but every
 			// key here is the value a [[project]] gets when it omits its own, so
 			// shared setup is written once (see config.ProjectInherits).
@@ -265,6 +277,7 @@ func newSettingsForm(cfgPath string, cfg *config.Config) *settingsForm {
 			{key: "def_on_sent_set_label", tab: stProjectDefaults, label: "On-sent set label", help: "Workspace label flipped onto an issue once its session is dispatched (label dedup mode)." + wsLabelHelp, kind: sfText, wsPick: true, text: d.OnSentSetLabel},
 			{key: "def_blocked_label_id", tab: stProjectDefaults, label: "Blocked label", help: "Workspace label applied when a session escalates and needs a human." + wsLabelHelp, kind: sfText, wsPick: true, text: d.BlockedLabelID},
 			{key: "def_dedup_mode", tab: stProjectDefaults, label: "Dedup mode", help: "How an already-dispatched issue is remembered: label (flip a Linear label), seen (local store), state (workflow state). space/enter cycles; unset falls back to \"seen\".", kind: sfEnum, options: dedupModeOptions, text: d.DedupMode},
+			{key: "def_require_plan", tab: stProjectDefaults, label: "Require plan", help: "Plan-approval gate: the agent investigates read-only, submits a plan (lola plan submit) and may edit files only once a human approves it.", kind: sfBool, b: d.RequirePlan},
 			{key: "def_priority_sort", tab: stProjectDefaults, label: "Priority sort", help: "Tie-break chain for ranking the issues a tick matched, applied in order (priority = highest first, createdAt = oldest first). enter picks the keys; ORDER matters. Unset sorts by priority, then createdAt.", kind: sfList, sortPick: true, lines: append([]string(nil), d.PrioritySort...)},
 
 			// [notify]
@@ -1511,6 +1524,17 @@ func (f *settingsForm) save() settingsFormEvent {
 	if err != nil {
 		return settingsFormNone
 	}
+	laPort, err := f.parseInt("la_redirect_port")
+	if err != nil {
+		return settingsFormNone
+	}
+	var laPoll time.Duration
+	if v := strings.TrimSpace(f.field("la_poll").text); v != "" {
+		if laPoll, err = time.ParseDuration(v); err != nil {
+			f.err = "Linear agent poll interval: " + err.Error()
+			return settingsFormNone
+		}
+	}
 	interval, perr := time.ParseDuration(strings.TrimSpace(f.field("poll_interval").text))
 	if perr != nil {
 		f.err = "poll interval: " + perr.Error()
@@ -1537,6 +1561,7 @@ func (f *settingsForm) save() settingsFormEvent {
 	oldSA := c.StatusAgent
 	oldRem := c.Remote
 	oldLin := c.Linear
+	oldLA := c.LinearAgent
 
 	// The Linear key, if one was typed. This writes the KEYCHAIN before the
 	// config is validated, which is deliberate and safe in that order: a stored
@@ -1561,6 +1586,7 @@ func (f *settingsForm) save() settingsFormEvent {
 	c.Defaults.BlockedLabelID = strings.TrimSpace(f.field("def_blocked_label_id").text)
 	c.Defaults.DedupMode = f.field("def_dedup_mode").text
 	c.Defaults.PrioritySort = trimDropEmpty(f.field("def_priority_sort").lines)
+	c.Defaults.RequirePlan = f.field("def_require_plan").b
 
 	c.Notify.Desktop = f.field("notify_desktop").b
 	c.Notify.SlackWebhookEnv = strings.TrimSpace(f.field("slack_webhook_env").text)
@@ -1587,6 +1613,14 @@ func (f *settingsForm) save() settingsFormEvent {
 	c.Remote.Advertise = f.field("remote_advertise").b
 	c.Remote.DevForward = f.field("remote_dev_forward").b
 
+	la := c.LinearAgent
+	la.Enabled = f.field("la_enabled").b
+	la.ClientID = strings.TrimSpace(f.field("la_client_id").text)
+	la.PollInterval = laPoll
+	la.RedirectPort = laPort
+	la.WebhookListen = strings.TrimSpace(f.field("la_webhook").text)
+	c.LinearAgent = la.Normalized()
+
 	c.UI.Theme = strings.TrimSpace(f.field("ui_theme").text)
 
 	// The review provider catalog replaces the two legacy tables. In catalog
@@ -1604,6 +1638,7 @@ func (f *settingsForm) save() settingsFormEvent {
 		c.StatusAgent = oldSA
 		c.Remote = oldRem
 		c.Linear = oldLin
+		c.LinearAgent = oldLA
 		c.ResolveInheritance() // re-resolve projects against the restored defaults
 	}
 	if err := c.Validate(); err != nil {
@@ -1616,11 +1651,68 @@ func (f *settingsForm) save() settingsFormEvent {
 		f.err = "save failed: " + err.Error()
 		return settingsFormNone
 	}
+	// The agent's secrets go to the Keychain only once the config they belong
+	// to is saved; a failure is reported, the rest of the save stands.
+	for _, sec := range []struct{ key, kind string }{{"la_client_secret", "client"}, {"la_webhook_secret", "webhook"}} {
+		v := strings.TrimSpace(f.field(sec.key).text)
+		if v == "" {
+			continue
+		}
+		if err := storeAgentSecret(agentSecretService(c.LinearAgent, sec.kind), v); err != nil {
+			keyMsg = strings.TrimSpace(keyMsg + " — " + sec.kind + " secret not stored: " + err.Error())
+		} else {
+			keyMsg = strings.TrimSpace(keyMsg + " " + sec.kind + " secret stored in the Keychain.")
+		}
+		f.field(sec.key).text = ""
+	}
 	// Drop the typed key as soon as it is committed: the form is discarded on
 	// save anyway, but a secret should not outlive its use even by one frame.
 	f.field("linear_key").text = ""
 	f.savedNote = keyMsg
 	return settingsFormSaved
+}
+
+// storeAgentSecret is the keychain-write seam for the Linear agent's secrets.
+var storeAgentSecret = secrets.Store
+
+// agentSecretService names the keychain service a Linear agent secret is
+// stored under: the config's own, else the default.
+func agentSecretService(a config.LinearAgentConfig, kind string) string {
+	if kind == "webhook" {
+		if a.WebhookSecretKeychain != "" {
+			return a.WebhookSecretKeychain
+		}
+		return config.DefaultLinearAgentWebhookKeychain
+	}
+	if a.ClientSecretKeychain != "" {
+		return a.ClientSecretKeychain
+	}
+	return config.DefaultLinearAgentSecretKeychain
+}
+
+// agentSecretHelp says whether that secret currently resolves — never its
+// value.
+func agentSecretHelp(cfg *config.Config, kind string) string {
+	a := cfg.LinearAgent
+	if !a.Configured() {
+		return "" // nothing configured yet: no keychain probe for a form that may never use it
+	}
+	kc, env := agentSecretService(a, kind), a.ClientSecretEnv
+	if kind == "webhook" {
+		env = a.WebhookSecretEnv
+	}
+	if _, err := secrets.Resolve(kind+" secret", kc, env); err != nil {
+		return "Currently: not stored."
+	}
+	return "Currently: stored."
+}
+
+// durationText renders a duration for a text field, "" for zero.
+func durationText(d time.Duration) string {
+	if d == 0 {
+		return ""
+	}
+	return d.String()
 }
 
 // storeLinearKey is the exec seam over the keychain write, so tests exercise
