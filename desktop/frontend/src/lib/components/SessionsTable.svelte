@@ -3,13 +3,14 @@
   import { nav } from "$lib/nav.svelte";
   import { sessionMenu } from "$lib/sessionmenu.svelte";
   import { triaged } from "$lib/filters";
-  import { attention } from "$lib/theme";
-  import { reactionNote, reactionIsAlarm } from "$lib/reaction";
-  import StatusPill from "./StatusPill.svelte";
+  import { displayFor, inputReasonLabel } from "$lib/theme";
   import AgentActivity from "./AgentActivity.svelte";
-  import PrBadge from "./PrBadge.svelte";
+  import AgentGlyph from "./AgentGlyph.svelte";
+  import StageChip from "./StageChip.svelte";
   import BoardChip from "./BoardChip.svelte";
+  import Button from "./Button.svelte";
   import SessionsEmpty from "./SessionsEmpty.svelte";
+  import { chipRelevant } from "$lib/board";
 
   let { dense = false }: { dense?: boolean } = $props();
 
@@ -23,19 +24,32 @@
   // movement walks a different list than the one the table renders.
   const rows = $derived(triaged(scopedSessions(store.sessions, nav.scoped, nav.project), nav.triage));
 
-  // Activity gets its own column once there is genuinely room for it, and rides
-  // under the title below that. This is a matchMedia query rather than a pair of
-  // `hidden 2xl:table-cell` / `2xl:hidden` copies on purpose: the CSS version
-  // renders BOTH into every row and lets the stylesheet hide one, which doubles
-  // the markup per row and puts the same sentence in the DOM twice. `display:none`
-  // does keep the hidden copy out of the accessibility tree, so it was not a
-  // correctness bug — but one element that moves is simpler than two that
-  // alternate, and it means a query for the text finds exactly one node.
-  // The Plan column (the agent's self-report, BoardChip) exists only while some
-  // listed session has reported — a fleet that never does keeps every column
-  // width it had.
-  const anyBoard = $derived(rows.some((s) => !!s.board));
+  // The row reads left to right as one sentence about the session:
+  //
+  //   [glyph] ISSUE  Title / activity  Project  [#PR  Stage chip]  Age
+  //
+  // The AGENT axis is an icon in the leading column (AgentGlyph): only a
+  // working agent moves, every other state is a distinct static shape, and the
+  // word lives in its tooltip. That column used to hold the selection caret and
+  // an attention "!", but the selected row already has its band, and attention
+  // now shows where it belongs — an orange glyph when the agent waits on you, a
+  // red chip when the delivery regressed.
+  //
+  // The Status cell holds the DELIVERY axis as ONE lifecycle chip ($lib/stage),
+  // with lola's reaction posture folded into its wording ("CI failing · needs
+  // you" instead of "× ci failed" + "escalated"). The PR number comes FIRST in a
+  // fixed-width slot, grey and monospaced like any identifier, so every chip
+  // starts at the same x. Before a PR exists, the agent's own plan chip stands in
+  // (chipRelevant): the plan is the progress until a PR supersedes it. An agent
+  // waiting on you adds a "Needs you" chip naming what it is asking.
 
+  // Activity gets its own column once there is genuinely room for it, and rides
+  // under the title below that — so a wide window keeps single-line rows. This
+  // is a matchMedia query rather than a pair of `hidden 2xl:table-cell` /
+  // `2xl:hidden` copies on purpose: the CSS version renders BOTH into every row
+  // and lets the stylesheet hide one, which doubles the markup per row and puts
+  // the same sentence in the DOM twice. One element that moves is simpler than
+  // two that alternate, and a query for the text finds exactly one node.
   const WIDE = "(min-width: 1536px)";
   let wide = $state(false);
   $effect(() => {
@@ -63,21 +77,18 @@
       <tr class="label text-left text-faint">
         <th class="w-4 py-2 pl-2"></th>
         <th class="py-2 pr-2">Issue</th>
-        {#if !dense}
-          <th class="py-2 pr-2">Title</th>
-          {#if wide}<th class="py-2 pr-2">Activity</th>{/if}
-        {/if}
+        {#if !dense}<th class="py-2 pr-2">Title</th>{/if}
+        {#if !dense && wide}<th class="py-2 pr-2">Activity</th>{/if}
         <th class="py-2 pr-2">Project</th>
         <th class="py-2 pr-2">Status</th>
-        {#if anyBoard}<th class="py-2 pr-2">Plan</th>{/if}
-        <th class="py-2 pr-2">PR</th>
         <th class="py-2 pr-2 text-right">Age</th>
       </tr>
     </thead>
     <tbody>
       {#each rows as s (s.id)}
         {@const sel = nav.selectedId === s.id}
-        {@const note = reactionNote(s.reacting)}
+        {@const needsYou = !!s.agentState && displayFor(s.agentState) === "needs_you"}
+        {@const reason = needsYou ? inputReasonLabel(s.inputReason) : ""}
         <!-- The separator is on the CELLS, not the row. The table is
              `border-separate`, and in the separated-borders model the UA must
              ignore border properties on rows — the `border-b` that used to sit
@@ -95,21 +106,13 @@
             sessionMenu.open(s.id, e);
           }}
         >
-          <!-- The attention marker covers the WHOLE predicate, not just a
-               blocked agent. ci_failed / changes_requested / merge_conflict were
-               in the attention set from the start and had no marker on any
-               surface, so the three states that mean "your delivered work
-               regressed" were the only urgent ones a scan of the list could not
-               find. Two colours because the two halves are answered differently:
-               orange (the pill's own) when the AGENT is waiting on you, red when
-               the DELIVERY regressed. -->
           <td class="py-1.5 pl-2 text-center align-middle">
-            {#if sel}<span class="font-medium text-accent-ink">›</span>
-            {:else if attention(s.agentState, s.delivery)}<span
-                class={s.agentState === "waiting_input" ? "text-warn" : "text-bad"}
-                title={s.agentState === "waiting_input" ? "the agent is waiting on you" : "this PR needs a fix"}
-                >!</span
-              >{/if}
+            <AgentGlyph
+              agentState={s.agentState}
+              inputReason={s.inputReason}
+              status={s.status}
+              interpreted={s.interpretedState}
+            />
           </td>
           <!-- The row's ONE 500: the issue key is what the row is about. -->
           <td class="py-1.5 pr-2 align-middle font-medium whitespace-nowrap" class:text-accent-ink={sel}>{s.issue || s.id.slice(0, 8)}</td>
@@ -142,11 +145,11 @@
                    scanner needs to see the literal. -->
               <div class="flex flex-col justify-center {wide ? '' : 'min-h-[34px]'}">
                 <div class="truncate text-ink">{s.title}</div>
-                {#if !wide}<AgentActivity session={s} />{/if}
+                {#if !wide}<AgentActivity session={s} pulse={false} />{/if}
               </div>
             </td>
             {#if wide}
-              <td class="max-w-[24rem] py-1.5 pr-2 align-middle"><AgentActivity session={s} /></td>
+              <td class="max-w-[24rem] py-1.5 pr-2 align-middle"><AgentActivity session={s} pulse={false} /></td>
             {/if}
           {/if}
           <!-- The dot marks the session running this project's dev_commands.
@@ -158,45 +161,46 @@
                 title="running this project's dev commands">●</span
               >{/if}
           </td>
-          <!-- The reaction posture rides WITH the status instead of in a column
-               of its own: it is a qualifier on that status ("ci failed, and lola
-               has spent 1 of 2 auto-retries"), not an independent axis. Only the
-               two informative postures survive the filter — see $lib/reaction. -->
           <td class="py-1.5 pr-2 align-middle">
-            <span class="inline-flex items-center gap-1.5">
-              <!-- The pill is the AGENT axis; the PR column beside it is the
-                   delivery axis. It is also the ACTION on a session whose branch
-                   conflicts: it morphs to "resolve" under the cursor and hands
-                   the merge to the session's agent. Only here — the grid's tiles
-                   are click-to-open, and the project panel's rows are themselves
-                   <button>s. -->
-              <StatusPill
-                agentState={s.agentState}
-                inputReason={s.inputReason}
-                delivery={s.delivery}
-                status={s.status}
-                interpreted={s.interpretedState}
-                resolveBranch={store.defaultBranchFor(s.project)}
-                onResolve={() => store.resolveConflict(s.id)}
-              />
-              {#if note}
+            <span class="inline-flex items-center gap-2 whitespace-nowrap">
+              <!-- Fixed width (room for "#9999"), present on every row, so the
+                   chips beside it line up down the column. The number opens the
+                   PR: a <td> is not inside a button, so it may be a control. -->
+              <span class="num inline-block w-[3.25rem] text-sm text-faint">
+                {#if s.prNumber > 0}
+                  {#if s.prUrl}
+                    <Button
+                      variant="bare"
+                      size="xs"
+                      title="open pull request #{s.prNumber}"
+                      class="num h-auto! rounded! px-0! py-0! text-faint! underline-offset-2 enabled:hover:text-ink! enabled:hover:underline"
+                      onclick={(e: MouseEvent) => {
+                        e.stopPropagation();
+                        store.openURL(s.prUrl);
+                      }}>#{s.prNumber}</Button
+                    >
+                  {:else}#{s.prNumber}{/if}
+                {/if}
+              </span>
+              {#if s.prNumber > 0}
+                <StageChip
+                  delivery={s.delivery}
+                  reacting={s.reacting}
+                  resolveBranch={store.defaultBranchFor(s.project)}
+                  onResolve={() => store.resolveConflict(s.id)}
+                />
+              {:else if chipRelevant(s.board, s.prNumber)}
+                <BoardChip session={s} />
+              {/if}
+              {#if needsYou}
                 <span
-                  class="num whitespace-nowrap text-sm {reactionIsAlarm(note) ? 'text-bad' : 'text-faint'}"
-                  title={reactionIsAlarm(note)
-                    ? "lola has spent its CI retry budget — this needs a human"
-                    : "lola is re-prompting the agent to fix CI"}>{note}</span
+                  class="inline-flex items-center gap-1.5 rounded-full bg-orange/12 px-2 py-[1px] text-sm font-medium whitespace-nowrap text-orange"
+                  title="the agent is waiting on you"
+                  >Needs you{#if reason}<span class="font-normal opacity-80">· {reason}</span>{/if}</span
                 >
               {/if}
             </span>
           </td>
-          <!-- After Status, before PR: the agent's own report qualifies what the
-               agent is doing; it is not the delivery axis beside it. -->
-          {#if anyBoard}<td class="py-1.5 pr-2 align-middle"><BoardChip session={s} /></td>{/if}
-          <!-- The PR number is a control here: a <td> is not inside a button,
-               so the badge may render one (see PrBadge's onOpen). -->
-          <td class="py-1.5 pr-2 align-middle"
-            ><PrBadge session={s} delivery={s.delivery} status={s.status} onOpen={() => store.openURL(s.prUrl)} /></td
-          >
           <!-- `num` — the age reflows on every 30s observer push otherwise. -->
           <td class="num py-1.5 pr-2 text-right align-middle text-sm whitespace-nowrap text-faint">{s.age}</td>
         </tr>

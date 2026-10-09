@@ -21,9 +21,11 @@
   // The text is UNTRUSTED, display-only ([statusagent] / the agent's own
   // notification): it is "≈"-marked exactly like the interpreted pill and never
   // styled as fact. Nothing here feeds the control loop.
-  let { session }: { session: SessionInfo } = $props();
+  // `pulse={false}` where the row already animates the agent axis itself (the
+  // desktop list's AgentGlyph): two moving marks a few pixels apart is noise.
+  let { session, pulse = true }: { session: SessionInfo; pulse?: boolean } = $props();
 
-  const live = $derived(session.agentState === "working" || session.agentState === "starting");
+  const live = $derived(pulse && (session.agentState === "working" || session.agentState === "starting"));
 
   // The interpreter's headline, or — failing that — the agent's own last
   // notification. The daemon clears lastNotification on any transition off
@@ -41,7 +43,7 @@
 
 {#if live || text || blocked || current}
   <div class="flex min-w-0 items-center gap-1.5 text-sm">
-    <LivePulse agentState={session.agentState} />
+    {#if pulse}<LivePulse agentState={session.agentState} />{/if}
     {#if blocked}
       <span class="truncate text-orange" title="the agent reports it is blocked">⏸ {blocked}</span>
     {:else if text}

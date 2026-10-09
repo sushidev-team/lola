@@ -6,6 +6,7 @@
   import { KANBAN_COLUMNS, attention, displayFor, displayLabel, displayText } from "$lib/theme";
   import PrBadge from "./PrBadge.svelte";
   import BoardChip from "./BoardChip.svelte";
+  import { chipRelevant } from "$lib/board";
   import SessionsEmpty from "./SessionsEmpty.svelte";
 
   // Reads the store directly (leaf component) — the Cockpit view can't pass live
@@ -98,9 +99,10 @@
                    stops being clickable. -->
               <div class="mt-0.5 flex items-center gap-2">
                 <PrBadge session={s} delivery={s.delivery} status={s.status} />
-                <!-- The agent's self-reported progress. BoardChip renders no
-                     <button> (the card already is one). -->
-                {#if s.board}<span class="ml-auto"><BoardChip session={s} /></span>{/if}
+                <!-- The agent's self-reported progress, until a PR supersedes it
+                     (chipRelevant). BoardChip renders no <button> (the card
+                     already is one). -->
+                {#if chipRelevant(s.board, s.prNumber)}<span class="ml-auto"><BoardChip session={s} /></span>{/if}
               </div>
             </button>
           {/each}

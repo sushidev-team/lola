@@ -1,8 +1,7 @@
 <script lang="ts">
-  import { scale } from "svelte/transition";
-  import { backOut } from "svelte/easing";
   import type { SessionInfo } from "$lib/store.svelte";
-  import { boardStale, phaseChip, progressText, CHECK_GLYPH, CHECK_TEXT } from "$lib/board";
+  import { boardStale, phaseChip, phaseDot, progressText, checkKind, CHECK_WORD, agoShort } from "$lib/board";
+  import BoardMarker from "./BoardMarker.svelte";
 
   // The session view's sidebar: the agent's whole self-report — phase, progress,
   // blocker, plan, checks, note — beside its live terminal. SessionEmbed renders
@@ -18,6 +17,9 @@
   const stale = $derived(boardStale(b));
   const todos = $derived(b?.todos ?? []);
   const checks = $derived(b?.checks ?? []);
+  const passing = $derived(checks.filter((c) => c.state === "pass").length);
+  const failing = $derived(checks.some((c) => c.state === "fail"));
+  const blockedFor = $derived(agoShort(b?.blockedAt));
 
   // Motion means "this is happening now", so it runs only while BOTH are true:
   // the agent axis says the runner is mid-turn (a FACT, from hooks and the pane)
@@ -27,6 +29,13 @@
   const live = $derived(!stale && (session.agentState === "working" || session.agentState === "starting"));
 </script>
 
+{#snippet heading(text: string, aside: string = "", asideCls: string = "text-faint")}
+  <div class="mb-2 flex items-baseline gap-2">
+    <span class="label text-faint">{text}</span>
+    {#if aside}<span class="num ml-auto text-sm {asideCls}">{aside}</span>{/if}
+  </div>
+{/snippet}
+
 {#if b}
   <aside
     class="flex h-full min-h-0 w-72 flex-col overflow-y-auto border-l border-edge/60 bg-canvas"
@@ -35,24 +44,37 @@
     <div class="flex items-center gap-2 border-b border-edge/60 px-3 py-2">
       <span class="label text-faint">Agent report</span>
       {#if b.phase}
-        <span class="rounded px-1.5 py-[1px] text-sm {phaseChip(b.phase)}">{b.phase}</span>
+        <!-- A dot of the phase's own colour inside the chip, so the stage reads
+             at a glance before the word does. -->
+        <span class="inline-flex items-center gap-1.5 rounded-full px-2 py-[1px] text-sm {phaseChip(b.phase)}">
+          <span class="h-1.5 w-1.5 rounded-full {phaseDot(b.phase)}" class:breathe-dot={live} aria-hidden="true"></span>
+          {b.phase}
+        </span>
       {/if}
       {#if b.updatedAgo}
         <span
-          class="ml-auto text-sm text-faint"
+          class="num ml-auto text-sm text-faint"
           class:text-warn={stale}
-          title={stale ? "this report is old — the agent may have moved on" : ""}>{b.updatedAgo} ago</span
+          title={stale ? "this report is old — the agent may have moved on" : "when the agent last reported"}
+          >{b.updatedAgo} ago</span
         >
       {/if}
     </div>
 
-    <div class="flex flex-col gap-4 px-3 py-3 transition-opacity duration-500" class:opacity-60={stale}>
+    <div class="flex flex-col gap-5 px-3 py-3.5 transition-opacity duration-500" class:opacity-60={stale}>
       {#if b.blocked}
         <!-- Orange is the app's "you are needed" colour (the needs-you pill). It
-             is still the agent's claim, so it is worded as one. -->
-        <div class="rounded-md border border-orange/50 bg-orange/10 px-2.5 py-2">
-          <div class="label mb-0.5 text-orange">Blocked</div>
-          <div class="selectable text-ink">{b.blocked}</div>
+             is still the agent's claim, so it is worded as one — and it says how
+             long, which is the part that tells a human how much it matters. -->
+        <div class="flex gap-2.5 rounded-lg border border-orange/40 bg-orange/10 px-2.5 py-2.5" role="status">
+          <BoardMarker kind="blocked" />
+          <div class="min-w-0">
+            <div class="flex items-baseline gap-1.5">
+              <span class="font-medium text-orange">Blocked</span>
+              {#if blockedFor}<span class="num text-sm text-orange/70">· {blockedFor === "now" ? "just now" : `${blockedFor}`}</span>{/if}
+            </div>
+            <div class="selectable mt-0.5 break-words text-ink">{b.blocked}</div>
+          </div>
         </div>
       {/if}
 
@@ -62,10 +84,10 @@
                heading, and two "Plan"s stacked read as a rendering glitch. -->
           <div class="mb-1.5 flex items-baseline gap-2 text-sm">
             <span class="truncate text-faint">{b.progressLabel || "Progress"}</span>
-            <span class="num ml-auto text-ink">{progressText(b)}</span>
+            <span class="num ml-auto font-medium text-ink">{progressText(b)}</span>
           </div>
           <div
-            class="h-1.5 overflow-hidden rounded-full bg-edge/70"
+            class="h-2 overflow-hidden rounded-full bg-edge/60"
             role="progressbar"
             aria-label="reported progress"
             aria-valuemin="0"
@@ -84,57 +106,30 @@
 
       {#if todos.length}
         <div>
-          <div class="label mb-2 text-faint">Plan</div>
-          <!-- A timeline: one 16px marker per item on a hairline rail. The marker
-               is DRAWN at a fixed size, not typed — the old ✓ ▸ · glyphs came from
-               three different fonts at three different sizes, which is why the
-               pending dots read as specks next to the check. -->
+          {@render heading("Plan")}
+          <!-- A timeline: one marker per item on a hairline rail, which turns
+               green behind each finished step. -->
           <ol class="flex flex-col">
             {#each todos as t, i (i)}
               {@const last = i === todos.length - 1}
-              <li class="relative flex items-start gap-2.5 pb-2.5 last:pb-0">
+              <li class="relative flex items-start gap-2.5 pb-3 last:pb-0">
                 {#if !last}
                   <span
-                    class="absolute top-[18px] bottom-0 left-[7.5px] w-px transition-colors duration-500 {t.state ===
-                    'done'
+                    class="absolute top-[19px] bottom-[3px] left-[7.5px] w-px transition-colors duration-500 {t.state === 'done'
                       ? 'bg-good/50'
                       : 'bg-edge/60'}"
                     aria-hidden="true"
                   ></span>
                 {/if}
-                <span class="relative mt-[1px] flex h-4 w-4 shrink-0 items-center justify-center" aria-hidden="true">
-                  {#if t.state === "done"}
-                    <span
-                      class="flex h-4 w-4 items-center justify-center rounded-full bg-good/20 text-good"
-                      in:scale={{ start: 0.4, duration: 260, easing: backOut }}
-                    >
-                      <svg
-                        viewBox="0 0 16 16"
-                        class="h-2.5 w-2.5"
-                        fill="none"
-                        stroke="currentColor"
-                        stroke-width="2.4"
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                      >
-                        <path d="M3.5 8.5l3 3 6-7" />
-                      </svg>
-                    </span>
-                  {:else if t.state === "active"}
-                    {#if live}<span class="ripple absolute inset-0 rounded-full border border-accent"></span>{/if}
-                    <span class="flex h-4 w-4 items-center justify-center rounded-full border-[1.5px] border-accent">
-                      <span class="h-1.5 w-1.5 rounded-full bg-accent" class:breathe={live}></span>
-                    </span>
-                  {:else}
-                    <span class="h-3 w-3 rounded-full border-[1.5px] border-edge"></span>
-                  {/if}
+                <span class="mt-[1px]">
+                  <BoardMarker kind={t.state === "done" ? "done" : t.state === "active" ? "active" : "pending"} {live} />
                 </span>
                 <span
-                  class="selectable min-w-0 transition-colors duration-500 {t.state === 'done'
+                  class="selectable min-w-0 break-words transition-colors duration-500 {t.state === 'done'
                     ? 'text-faint line-through decoration-edge'
                     : t.state === 'active'
                       ? 'font-medium text-ink'
-                      : 'text-ink/80'}">{t.text}</span
+                      : 'text-ink/75'}">{t.text}</span
                 >
                 <span class="sr-only">({t.state})</span>
               </li>
@@ -145,18 +140,42 @@
 
       {#if checks.length}
         <div>
-          <div class="label mb-1.5 text-faint" title="checks the agent says it ran locally — not CI">Local checks</div>
-          <ul class="flex flex-col gap-1">
+          <!-- The tally names the worst news first: one red check outweighs any
+               number of green ones. -->
+          {@render heading(
+            "Local checks",
+            failing ? "failing" : `${passing}/${checks.length} passed`,
+            failing ? "text-bad" : passing === checks.length ? "text-good" : "text-faint",
+          )}
+          <!-- Each check is a row of its own with the summary on a SECOND line
+               that wraps: a summary like "demo suites 118/118, vitest 178/178" is
+               the evidence, and truncating it to "vitest 178/…" hid exactly the
+               numbers that make the claim checkable. Titled "local" because it is
+               what the agent says it ran — not CI, which is a gh fact. -->
+          <ul class="flex flex-col gap-1.5">
             {#each checks as c (c.name)}
-              <li class="flex items-baseline gap-2">
-                <span
-                  class="w-4 shrink-0 text-center {CHECK_TEXT[c.state] ?? 'text-faint'}"
-                  class:breathe-text={c.state === "running" && live}
-                  aria-hidden="true">{CHECK_GLYPH[c.state] ?? "·"}</span
-                >
-                <span class="text-ink">{c.name}</span>
-                {#if c.summary}<span class="selectable num ml-auto truncate text-sm text-faint">{c.summary}</span>{/if}
-                <span class="sr-only">({c.state})</span>
+              {@const kind = checkKind(c.state)}
+              <li
+                class="flex items-start gap-2.5 rounded-md border px-2.5 py-2 {kind === 'fail'
+                  ? 'border-bad/35 bg-bad/5'
+                  : 'border-edge/50 bg-panel/40'}"
+              >
+                <span class="mt-[1px]"><BoardMarker {kind} {live} /></span>
+                <div class="min-w-0 flex-1">
+                  <div class="flex items-baseline gap-2">
+                    <span class="truncate font-medium text-ink">{c.name}</span>
+                    <span
+                      class="ml-auto shrink-0 text-sm {kind === 'pass'
+                        ? 'text-good'
+                        : kind === 'fail'
+                          ? 'text-bad'
+                          : 'text-info'}">{CHECK_WORD[kind]}</span
+                    >
+                  </div>
+                  {#if c.summary}
+                    <div class="selectable num mt-0.5 text-sm break-words text-faint">{c.summary}</div>
+                  {/if}
+                </div>
               </li>
             {/each}
           </ul>
@@ -165,8 +184,11 @@
 
       {#if b.note}
         <div>
-          <div class="label mb-0.5 text-faint">Note</div>
-          <div class="selectable text-sm text-ink">{b.note}</div>
+          {@render heading("Note")}
+          <!-- A quote rail rather than bare text: a note is the agent speaking in
+               its own words, and the rail sets it apart from the labelled facts
+               above without the weight of a box. -->
+          <div class="selectable border-l-2 border-accent/50 pl-2.5 break-words text-ink">{b.note}</div>
         </div>
       {/if}
     </div>
@@ -174,51 +196,17 @@
 {/if}
 
 <style>
-  /* All motion here is slow and low-amplitude on purpose: it sits beside a live
+  /* Motion here is slow and low-amplitude on purpose: it sits beside a live
      terminal that is already moving, and must read as a heartbeat, not as
-     something asking to be clicked. Under prefers-reduced-motion app.css stops it
-     and every marker keeps its static shape, so no meaning rides on motion. */
-
-  /* The active item's core breathes... */
-  .breathe {
-    animation: breathe 2.4s ease-in-out infinite;
+     something asking to be clicked. The markers' own motion lives in
+     BoardMarker. */
+  .breathe-dot {
+    animation: breathe-dot 2.4s ease-in-out infinite;
   }
-  @keyframes breathe {
+  @keyframes breathe-dot {
     0%,
     100% {
-      transform: scale(0.7);
-      opacity: 0.65;
-    }
-    50% {
-      transform: scale(1);
-      opacity: 1;
-    }
-  }
-
-  /* ...and a ring leaves it on the same beat, fading as it grows. */
-  .ripple {
-    animation: ripple 2.4s ease-out infinite;
-  }
-  @keyframes ripple {
-    0% {
-      transform: scale(1);
-      opacity: 0.45;
-    }
-    70%,
-    100% {
-      transform: scale(1.9);
-      opacity: 0;
-    }
-  }
-
-  /* A "running" check glyph. */
-  .breathe-text {
-    animation: fade 1.8s ease-in-out infinite;
-  }
-  @keyframes fade {
-    0%,
-    100% {
-      opacity: 0.4;
+      opacity: 0.55;
     }
     50% {
       opacity: 1;
@@ -230,12 +218,7 @@
   .shimmer {
     position: absolute;
     inset: 0;
-    background: linear-gradient(
-      90deg,
-      transparent 0%,
-      color-mix(in srgb, white 35%, transparent) 50%,
-      transparent 100%
-    );
+    background: linear-gradient(90deg, transparent 0%, color-mix(in srgb, white 35%, transparent) 50%, transparent 100%);
     transform: translateX(-100%);
     animation: shimmer 2.8s ease-in-out infinite;
   }

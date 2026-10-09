@@ -5,7 +5,7 @@ import BoardPanel from "./BoardPanel.svelte";
 import AgentActivity from "./AgentActivity.svelte";
 import type { SessionInfo } from "$lib/store.svelte";
 import type { BoardInfo } from "$lib/board";
-import { boardStale, hasChip, progressText, BOARD_STALE_MS } from "$lib/board";
+import { boardStale, hasChip, chipRelevant, progressText, BOARD_STALE_MS } from "$lib/board";
 
 const fresh = () => new Date().toISOString();
 
@@ -28,6 +28,12 @@ describe("board helpers", () => {
   it("counts a plan-derived bar and a percentage differently", () => {
     expect(progressText(board({ progressDerived: true, done: 2, total: 5, percent: 40 }))).toBe("2/5");
     expect(progressText(board({ percent: 60 }))).toBe("60%");
+  });
+
+  it("drops the plan chip once a PR exists, but never a blocker", () => {
+    expect(chipRelevant(board({ hasProgress: true, percent: 100 }), 0)).toBe(true);
+    expect(chipRelevant(board({ hasProgress: true, percent: 100 }), 7)).toBe(false);
+    expect(chipRelevant(board({ blocked: "need a key" }), 7)).toBe(true);
   });
 
   it("has no chip for a board that only carries a note", () => {

@@ -48,13 +48,47 @@ export function hasChip(b: BoardInfo | null | undefined): b is BoardInfo {
   return !!b && (!!b.blocked || !!b.hasProgress || !!b.phase);
 }
 
-export const CHECK_GLYPH: Record<string, string> = {
-  pass: "✓",
-  fail: "✗",
-  running: "…",
+// Whether a compact surface (list row, kanban card) should still draw the chip.
+// The plan is the agent's road TO a pull request: once one exists, the PR badge
+// is the more advanced — and factual — answer to "how far along is this", and a
+// finished 5/5 bar beside it only repeats the past. A blocker is the exception:
+// it is the one part of the report a human must act on, at any stage.
+export function chipRelevant(b: BoardInfo | null | undefined, prNumber: number): b is BoardInfo {
+  return hasChip(b) && (!!b.blocked || !(prNumber > 0));
+}
+
+// A check's state as a BoardMarker kind and as words. Unknown states (a daemon
+// newer than this build) read as running: still in flight, never a false pass.
+export function checkKind(state: string): "pass" | "fail" | "running" {
+  return state === "pass" || state === "fail" ? state : "running";
+}
+export const CHECK_WORD: Record<string, string> = { pass: "passed", fail: "failed", running: "running" };
+
+// Phase → the dot inside the phase chip. Literal classes, same reason as above.
+const PHASE_DOT: Record<string, string> = {
+  planning: "bg-faint",
+  investigating: "bg-magenta",
+  implementing: "bg-info",
+  testing: "bg-warn",
+  reviewing: "bg-accent",
+  polishing: "bg-accent",
+  done: "bg-good",
 };
-export const CHECK_TEXT: Record<string, string> = {
-  pass: "text-good",
-  fail: "text-bad",
-  running: "text-faint",
-};
+
+export function phaseDot(phase: string): string {
+  return PHASE_DOT[phase] ?? "bg-faint";
+}
+
+// A compact "how long ago" for a wire timestamp ("", "now", "4m", "2h", "3d").
+// Client-side because blockedAt has no daemon-formatted twin, and a blocker's
+// age is the part that tells a human how long the agent has been waiting.
+export function agoShort(iso: string | undefined, now: number = Date.now()): string {
+  if (!iso) return "";
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return "";
+  const s = Math.max(0, Math.round((now - t) / 1000));
+  if (s < 60) return "now";
+  if (s < 3600) return `${Math.floor(s / 60)}m`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h`;
+  return `${Math.floor(s / 86400)}d`;
+}
