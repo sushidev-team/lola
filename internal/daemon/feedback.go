@@ -33,6 +33,7 @@ import (
 	"time"
 
 	"github.com/sushidev-team/lola/internal/config"
+	"github.com/sushidev-team/lola/internal/gitdiff"
 	"github.com/sushidev-team/lola/internal/protocol"
 	"github.com/sushidev-team/lola/internal/session"
 	"github.com/sushidev-team/lola/internal/state"
@@ -83,10 +84,16 @@ func (d *Daemon) handleDiff(ctx context.Context, sessionID string) (protocol.Dif
 	if err != nil {
 		return protocol.DiffData{}, fmt.Errorf("diff %s: %w", sessionID, err)
 	}
+	return diffData(s.ID, res.Base, res.MergeBase, res), nil
+}
+
+// diffData maps a gitdiff result onto the wire. base and mergeBase are what
+// the client shows the diff is against.
+func diffData(id, base, mergeBase string, res gitdiff.Result) protocol.DiffData {
 	out := protocol.DiffData{
-		Session:   s.ID,
-		Base:      res.Base,
-		MergeBase: res.MergeBase,
+		Session:   id,
+		Base:      base,
+		MergeBase: mergeBase,
 		Files:     make([]protocol.DiffFile, 0, len(res.Files)),
 		Truncated: res.Truncated,
 	}
@@ -103,7 +110,7 @@ func (d *Daemon) handleDiff(ctx context.Context, sessionID string) (protocol.Dif
 			Patch:     f.Patch,
 		})
 	}
-	return out, nil
+	return out
 }
 
 // handleFeedback serves cmd=feedback: queue the human's batch on the session,

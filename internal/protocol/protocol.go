@@ -109,6 +109,29 @@ import (
 // anything already queued) and delivered on the first cycle its pane is
 // verifiably resting. The reply is FeedbackData saying which happened.
 //
+// Cmd "checkpoints" lists a session's TURN CHECKPOINTS as CheckpointsData:
+// snapshots of its whole worktree (uncommitted and untracked work included) the
+// daemon records when the agent's turn ends, kept on refs under
+// refs/lola/checkpoints/<session>/ rather than as commits on the branch. Session
+// names the target. Read-only.
+//
+// Cmd "checkpointDiff" returns what one turn changed as DiffData: Args is a
+// CheckpointArgs naming the session and the checkpoint's Seq; the diff is the
+// previous checkpoint (or, for the oldest, the HEAD it was taken on) against
+// this one. Read-only.
+//
+// Cmd "restoreCheckpoint" makes the session's worktree match a checkpoint
+// (Args: CheckpointArgs). The current state is recorded first as a new
+// checkpoint, so a restore is itself undoable; only FILES move — HEAD and the
+// branch stay put, so later commits show up as uncommitted edits that undo
+// them. Refused while the agent is mid-turn. The reply is RestoreCheckpointData.
+//
+// Cmd "forkCheckpoint" starts a NEW agent session from a checkpoint (Args:
+// CheckpointArgs, Agent optionally overriding the coding agent): a fresh
+// worktree on a new lola-owned branch cut at the checkpoint's HEAD, holding the
+// checkpoint's files as uncommitted work, briefed as a fork and sharing the
+// parent's .lola/context folder. The parent is untouched. The reply is OpenData.
+//
 // Cmd "coderabbit" FORCES the [coderabbit] PR-comment WATCH for one session now,
 // ignoring the LastCodeRabbitAt watermark: Session names the target. The daemon
 // polls the session's open PR (one `gh pr view`) for CodeRabbit-app comments and
@@ -795,6 +818,45 @@ type FeedbackData struct {
 	Delivered bool   `json:"delivered"`
 	Queued    bool   `json:"queued"`
 	Message   string `json:"message,omitempty"`
+}
+
+// CheckpointArgs is the argument payload for cmd=checkpointDiff,
+// restoreCheckpoint and forkCheckpoint. Seq names the checkpoint by its
+// per-session sequence number — never a ref or sha, so a client can only reach
+// the session's own checkpoints. Agent is forkCheckpoint's optional coding-agent
+// override ("" = the parent session's agent).
+type CheckpointArgs struct {
+	Session string `json:"session"`
+	Seq     int    `json:"seq"`
+	Agent   string `json:"agent,omitempty"`
+}
+
+// CheckpointInfo is one turn checkpoint. Head is the commit the session's
+// branch was on when it was taken; SHA is the snapshot itself.
+type CheckpointInfo struct {
+	Seq     int       `json:"seq"`
+	SHA     string    `json:"sha"`
+	Head    string    `json:"head"`
+	Label   string    `json:"label"`
+	Created time.Time `json:"created"`
+}
+
+// CheckpointsData is Response.Data for cmd=checkpoints, oldest first.
+// Restorable is false while the agent is mid-turn (restore is refused then);
+// it is a hint for the UI, the daemon re-checks on the request.
+type CheckpointsData struct {
+	Session     string           `json:"session"`
+	Checkpoints []CheckpointInfo `json:"checkpoints"`
+	Restorable  bool             `json:"restorable"`
+}
+
+// RestoreCheckpointData is Response.Data for cmd=restoreCheckpoint. Safety is
+// the checkpoint holding the state from just before the restore — restoring it
+// undoes the restore.
+type RestoreCheckpointData struct {
+	Seq     int    `json:"seq"`
+	Safety  int    `json:"safety"`
+	Message string `json:"message,omitempty"`
 }
 
 // SwitchAgentArgs is the argument payload for cmd=switchAgent: replace the

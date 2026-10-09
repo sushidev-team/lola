@@ -142,6 +142,7 @@ protocol-version mismatch.
 | `lola kill <session> [--force]` | Terminate a session's agent (tmux) **and its shell/review tabs**, then clean up after it. A **clean** worktree is removed along with the local branch it was on, and the issue's slot is freed (so it can re-dispatch if it still matches); a **dirty** one (uncommitted changes) keeps both the checkout and the branch for inspection and the command exits nonzero — rerun with `--force` to remove it anyway. The agent is always stopped first, even when the worktree is kept. |
 | `lola revive <session>` | Inverse of `kill`: relaunch a **dead** session's agent on the worktree that was kept for inspection. Claude and opencode resume their prior conversation (`--continue`) when they recorded one before dying, otherwise the agent restarts fresh on the same worktree. Refused if the session is still running. Use when a pane died to a transient fault (instant launch failure, crashed agent, machine sleep) rather than re-dispatching from scratch. |
 | `lola switch-agent <session> <kind>` | Replace a session's coding agent with a different kind (`claude`\|`codex`\|`opencode`) on the **same worktree and branch** — the manual half of the agent fallback (see [Agent fallback](#agent-fallback-usage-limits)). The old pane is stopped (shell/dev/review tabs survive), a `.lola/handoff.md` briefing is written for the new agent, and the new agent launches on it. Refused for an unknown session, a shell session, the kind already running, or a kind whose binary is not on `PATH`. |
+| `lola checkpoint list\|diff\|restore\|fork <session> [n]` | The CLI face of [turn checkpoints](#turn-checkpoints-restore-and-fork): `list` the session's per-turn snapshots, `diff` what the turn ending in checkpoint `n` changed, `restore` the worktree's files to it (undoable; refused while the agent is mid-turn), or `fork` a new agent session from it on its own branch (`--agent` to pick a different coding agent). |
 | `lola answer <session> <text>` | Deliver a human's inline reply to a session parked for input. Refused unless the session's derived status is `needs_input` (the one moment the agent is provably idle at its prompt), so a reply can never corrupt a mid-turn agent. |
 | `lola review <session> [--provider kind]` | Force a **pass-shape** review provider now, ignoring the once-per-PR guard, and route its findings per its transports. With no `--provider` it forces the primary enabled pass provider; `--provider <kind>` picks one explicitly (any pass kind: `coderabbit-cli`, `custom-cli`, `claude-session`, `codex-session`, `opencode-session`). Skipped (not an error) when no such provider is enabled or its tool is unavailable. |
 | `lola coderabbit <session>` | Back-compat alias that forces the **watch-shape** provider now (`coderabbit-watch`) — poll the session's open PR for CodeRabbit (GitHub-app) comments, ignoring the watermark, and route any found (notify / worker / Linear per config). Skipped (not an error) when the watch is disabled or the session has no open PR. |
@@ -174,6 +175,7 @@ environment variable — tests rely on this):
 | `state/<project>.seen` | Per-project seen-issue state |
 | `state/sessions.json` | Native session store (status, PR, worktree, tmux target) |
 | `worktrees/<project>/<session>/` | Per-session git worktree |
+| `context/<project>/<key>/` | Shared context folder, linked into every session as `.lola/context` (key = the lowercased issue, or the session ID for manual/PR sessions). Survives teardown on purpose; delete it by hand when an issue is done. |
 | `cache/linear-<team>.json` | Cached Linear metadata for the TUI forms |
 
 ## Configuration reference
@@ -1261,6 +1263,42 @@ mid-turn agent is never typed into — the batch is **queued** and delivered the
 moment it stops (the Stop hook, or the next observe cycle), and a second batch
 sent meanwhile is appended, not lost. Works the same for claude, codex and
 opencode sessions.
+
+## Turn checkpoints: restore and fork
+
+Every time a session's coding agent **ends a turn** (the Stop hook), lola
+snapshots its whole worktree — committed, uncommitted and untracked work, never
+ignored files or `.lola/` — as a commit object kept on a ref under
+`refs/lola/checkpoints/<session>/`, **not** on the session's branch, so the
+branch, the PR and every push are untouched. A turn that changed nothing records
+nothing, and the first turn START records a `start` baseline so even turn 1 can
+be undone. Each session keeps its newest 100; the refs are deleted when the
+session is torn down with its worktree.
+
+In the app, the **Checkpoints** tab (or **Checkpoints** in the session menu)
+lists them newest first; pick one to read what that turn changed (the previous
+checkpoint against it). Then:
+
+- **Restore…** puts the worktree's FILES back to that checkpoint. HEAD and the
+  branch stay put — commits made since stay in history and show up as
+  uncommitted edits that undo them. The current state is saved as a new
+  checkpoint first, so a restore is itself one click to undo. Refused while the
+  agent is mid-turn. The agent still remembers the discarded changes: tell it.
+- **Fork…** starts a new agent session from that checkpoint on its own branch
+  (`<branch>-fork-<n>`), holding the checkpoint's files as uncommitted work and
+  briefed as a fork. The original session keeps running untouched.
+
+`lola checkpoint list|diff|restore|fork` does the same from a shell.
+
+### The shared context folder
+
+Every agent session gets `.lola/context/`: a notes folder that lives OUTSIDE the
+worktree at `~/.lola/context/<project>/<key>/` and is linked in, so it survives
+the worktree. Every re-spawn of the same issue (`-r2`, `-r3`, …) and every fork
+gets the same folder, and `.lola/prompt.md` names what earlier sessions left
+there and asks the agent to keep `notes.md` current. It is git-ignored (all of
+`.lola/` is), so nothing in it is ever committed — and it is not part of a
+checkpoint, so a restore never rolls notes back.
 
 ## Secrets
 

@@ -235,6 +235,12 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   untracked work included, split per file and capped at a file boundary. Behind
   `cmd=diff` (`internal/daemon/feedback.go`) for the diff viewer. Not `scm`
   (gh-only) and not `diffanchor` (which reads a PR's diff, not a worktree).
+  `Between` diffs two commits — a turn checkpoint against the previous one.
+- `internal/checkpoint` — LOCAL git only: per-turn worktree SNAPSHOTS
+  (`Record`/`List`/`Get`/`Restore`/`Apply`/`Prune`) as commit objects on
+  `refs/lola/checkpoints/<session>/<seq>`, never on a branch. Behind
+  `internal/daemon/checkpoints.go` and `runtime.Native.Checkpoints` (fork +
+  pruning). See the invariant below.
 - `internal/diffanchor` — pure text leaf: which `(path, line)` pairs of a unified
   diff may carry a GitHub inline review comment (RIGHT side, added + context
   lines, `Nearest` for the bounded snap). It exists because the reviews endpoint
@@ -1006,6 +1012,47 @@ each of which owns exactly one external tool or concern behind an **exec seam**
     PR. Without that release a single timeout locked the PR out of review
     forever — the bug that made the feature look dead. A real answer (findings
     or clean) and a graceful skip (auth / exit error) stay final.
+- **A turn checkpoint is a REF, never a commit on the branch, and only a
+  RESTORE may touch the real index.** The Stop hook records one per turn
+  (`recordCheckpointAsync`, off the hook's critical path, on the conn drain
+  group); the first `user_prompt` records a `start` baseline so turn 1 is
+  undoable. Rules that hold it together:
+  - `Snapshot` stages into a TEMPORARY index seeded from a copy of the real one
+    (`GIT_INDEX_FILE`), then `write-tree` + `commit-tree` + `update-ref`. The
+    real index and every branch stay untouched, so recording is safe while the
+    agent keeps working. `git stash create` is not a substitute: it drops
+    untracked files, which are exactly what a rollback must remove.
+  - `commit-tree` runs with `--no-gpg-sign` and a fixed lola identity: a user's
+    `commit.gpgSign` (1Password, a hardware key) otherwise prompts or fails on
+    every turn, and a machine without `user.email` cannot commit at all.
+  - Refs live in the repo's COMMON ref store, so the session ID is in the ref
+    name, `validSession` keeps it a single safe segment, and the wire names a
+    checkpoint by its per-session `Seq` only — a client can never reach another
+    session's refs or an arbitrary object. A fresh worktree for an ID prunes
+    that ID's leftover refs (a session must not inherit a dead one's history);
+    teardown prunes them after a successful removal and KEEPS them when a dirty
+    worktree is kept.
+  - `Restore` moves FILES only: it records the current state first (the
+    "before restore" checkpoint is the undo), points the real index at that
+    snapshot so the reset knows every current file, `read-tree --reset -u`s the
+    target and resets the index to HEAD. HEAD never moves, so pushed history is
+    never rewritten. It is refused while the agent is mid-turn, and every
+    checkpoint operation on a session is serialized by `ckptLock`.
+  - `.lola/` is excluded, so neither the scratch files nor the shared context
+    folder are captured or rolled back.
+  - A fork (`runtime.ForkAgent`) cuts its branch at the checkpoint's HEAD with
+    `worktree.CreateAt` (verbatim commit — never through `CreateFrom`'s
+    `origin/<base>` lookup), lays the checkpoint's tree over it as uncommitted
+    work, and inherits the parent's `ContextKey`. It is a manual-kind session:
+    no `Issue`, so it never counts against the issue in dispatch/reconcile.
+- **The shared context folder lives OUTSIDE the worktree.**
+  `~/.lola/context/<project>/<key>/` is symlinked in as `.lola/context`, so
+  `git worktree remove` deletes the link and never the notes. The key is
+  `Session.ContextKey` (recorded, carried across adoption, inherited by forks),
+  else the lowercased issue, else the session ID (`runtime.ContextKey`). Linking
+  is BEST-EFFORT — a failure logs and the briefing omits the section; notes must
+  never cost a spawn. Nothing deletes the folder automatically, and
+  `renameProject` moves `context/<old>` with the `.seen` file.
 - **Diff-viewer feedback DEFERS, it never refuses and never forces.**
   `cmd=feedback` (`internal/daemon/feedback.go`) is a human's line comments
   rendered into one `path:line`-anchored message. Every batch is APPENDED to

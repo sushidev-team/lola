@@ -2,11 +2,12 @@
   import { flip } from "svelte/animate";
   import { store } from "$lib/store.svelte";
   import { nav } from "$lib/nav.svelte";
-  import { terms, AGENT, DIFF } from "$lib/terms.svelte";
+  import { terms, AGENT, DIFF, CHECKPOINTS, isViewTab } from "$lib/terms.svelte";
   import { feedback } from "$lib/feedback.svelte";
   import { devUrlLabel, MAX_URL_CHIPS } from "$lib/devurl";
   import LiveTerminal from "./LiveTerminal.svelte";
   import DiffView from "./DiffView.svelte";
+  import CheckpointsView from "./CheckpointsView.svelte";
   import Button from "./Button.svelte";
   import MenuItem from "./MenuItem.svelte";
   import DevClashBanner from "./DevClashBanner.svelte";
@@ -34,18 +35,18 @@
   // reachable there without the "s" shortcut.
   const shells = $derived(session ? terms.shellsFor(session.id) : []);
   const activeTab = $derived(session ? terms.activeTab(session.id) : AGENT);
-  // The diff tab keeps the bar up too: it was reached by "f" or the menu, and the
-  // way back to the agent must be on screen.
-  const showTabs = $derived(!!session && (shells.length > 0 || focused || activeTab === DIFF));
+  // A view tab (diff, checkpoints) keeps the bar up too: it was reached by a key
+  // or the menu, and the way back to the agent must be on screen.
+  const showTabs = $derived(!!session && (shells.length > 0 || focused || isViewTab(activeTab)));
 
   // The tmux name the LiveTerminal attaches to for the active tab. Keying the
   // terminal on this (below) swaps agent ⇄ shell by re-attaching — the same
   // proven remount the selection change already does, never a live DOM toggle. A
   // shell tab IS its tmux name; the agent tab resolves to the session's pane.
   const activeName = $derived(
-    !session || activeTab === DIFF ? "" : activeTab === AGENT ? session.tmuxName : activeTab,
+    !session || isViewTab(activeTab) ? "" : activeTab === AGENT ? session.tmuxName : activeTab,
   );
-  const activeIsShell = $derived(activeTab !== AGENT && activeTab !== DIFF);
+  const activeIsShell = $derived(activeTab !== AGENT && !isViewTab(activeTab));
   const draftCount = $derived(session ? feedback.count(session.id) : 0);
 
   // Picking a tab BY HAND focuses the terminal it selects, so typing lands in the
@@ -436,6 +437,18 @@
           >
             Diff{#if draftCount > 0}<span class="ml-1.5 text-sm text-accent-ink">{draftCount}</span>{/if}
           </button>
+          <!-- The checkpoints tab: same cell, no ×. One snapshot per agent turn. -->
+          <button
+            type="button"
+            aria-pressed={activeTab === CHECKPOINTS}
+            title="one snapshot per agent turn — see what a turn changed, restore it, or fork from it"
+            class="h-8 shrink-0 border-r border-edge/40 px-3.5 transition-colors {activeTab === CHECKPOINTS
+              ? 'bg-sel font-medium text-ink hover:bg-[color-mix(in_srgb,var(--color-sel)_55%,var(--color-edge))]'
+              : 'text-faint hover:bg-sel/50 hover:text-ink'}"
+            onclick={() => selectTab(session.id, CHECKPOINTS)}
+          >
+            Checkpoints
+          </button>
           {#each shells as sh, i (sh)}
             <!-- The tab is ONE chip containing two controls, so the wrapper — not
                  the label button — paints the background and the text colour, and
@@ -631,6 +644,10 @@
              flex child — see the WKWebView note above). -->
         <div class="grid min-h-0">
           <DiffView sessionId={session.id} />
+        </div>
+      {:else if activeTab === CHECKPOINTS}
+        <div class="grid min-h-0">
+          <CheckpointsView sessionId={session.id} />
         </div>
       {:else}
       <div class="min-h-0 bg-panel p-4">

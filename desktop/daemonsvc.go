@@ -152,6 +152,42 @@ func (s *DaemonService) SendFeedback(args protocol.FeedbackArgs) (protocol.Feedb
 	return d, err
 }
 
+// Checkpoints lists the session's turn checkpoints, oldest first: the worktree
+// snapshot the daemon records each time the agent ends a turn.
+func (s *DaemonService) Checkpoints(session string) (protocol.CheckpointsData, error) {
+	var d protocol.CheckpointsData
+	err := call(protocol.Request{Cmd: "checkpoints", Session: session}, shortTimeout*3, &d)
+	return d, err
+}
+
+// CheckpointDiff returns what the turn ending in checkpoint seq changed: the
+// previous checkpoint against this one. Read-only.
+func (s *DaemonService) CheckpointDiff(session string, seq int) (protocol.DiffData, error) {
+	args, _ := json.Marshal(protocol.CheckpointArgs{Session: session, Seq: seq})
+	var d protocol.DiffData
+	err := call(protocol.Request{Cmd: "checkpointDiff", Args: args}, shortTimeout*3, &d)
+	return d, err
+}
+
+// RestoreCheckpoint puts the session's worktree files back to checkpoint seq.
+// The daemon records the current state as a new checkpoint first (the reply's
+// Safety), so the restore is undoable; it refuses while the agent is mid-turn.
+func (s *DaemonService) RestoreCheckpoint(session string, seq int) (protocol.RestoreCheckpointData, error) {
+	args, _ := json.Marshal(protocol.CheckpointArgs{Session: session, Seq: seq})
+	var d protocol.RestoreCheckpointData
+	err := call(protocol.Request{Cmd: "restoreCheckpoint", Args: args}, longTimeout, &d)
+	return d, err
+}
+
+// ForkCheckpoint starts a NEW agent session from checkpoint seq on its own
+// branch; agentKind "" keeps the parent's coding agent.
+func (s *DaemonService) ForkCheckpoint(session string, seq int, agentKind string) (protocol.OpenData, error) {
+	args, _ := json.Marshal(protocol.CheckpointArgs{Session: session, Seq: seq, Agent: agentKind})
+	var d protocol.OpenData
+	err := call(protocol.Request{Cmd: "forkCheckpoint", Args: args}, longTimeout, &d)
+	return d, err
+}
+
 // Dev moves the project's dev processes ([[project]].dev_commands) onto one
 // session, or stops them. Activating is a MOVE: the daemon first kills the tabs
 // of whichever session of that project held them, so the ports are free before

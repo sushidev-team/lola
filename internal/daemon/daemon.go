@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/sushidev-team/lola/internal/checkpoint"
 	"github.com/sushidev-team/lola/internal/gitdiff"
 	"io"
 	"log"
@@ -57,6 +58,7 @@ type NativeAPI interface {
 	Kill(ctx context.Context, s session.Session, removeWorktree, force bool) error
 	Alive(ctx context.Context, s session.Session) bool
 	Revive(ctx context.Context, s session.Session) (session.Session, error)
+	ForkAgent(ctx context.Context, p config.Project, f runtime.ForkSpec) (session.Session, error)
 }
 
 var _ NativeAPI = (*runtime.Native)(nil)
@@ -182,6 +184,15 @@ type Daemon struct {
 	// (cmd=diff, feedback.go): the worktree against its merge-base with the
 	// project's default branch. Local git only; tests install a fake.
 	worktreeDiff func(ctx context.Context, dir, base string) (gitdiff.Result, error)
+
+	// checkpoints records, lists and restores a session's per-turn worktree
+	// snapshots (checkpoints.go); commitDiff diffs two of them. Local git only;
+	// tests install fakes. ckptLocks serializes checkpoint work PER SESSION so a
+	// Stop-hook record never interleaves with a restore of the same worktree.
+	checkpoints checkpointStore
+	commitDiff  func(ctx context.Context, dir, from, to string) (gitdiff.Result, error)
+	ckptMu      sync.Mutex
+	ckptLocks   map[string]*sync.Mutex
 
 	// listTmuxSessions lists every session on lola's tmux server in ONE exec —
 	// the observer's per-cycle liveness + #{session_activity} source (replacing
@@ -420,6 +431,7 @@ func newDaemon(cfg *config.Config, lin linear.API, logger *log.Logger, home stri
 		events:   newEventLog(eventLogCap),
 
 		hookWarned: map[string]bool{},
+		ckptLocks:  map[string]*sync.Mutex{},
 	}
 	// Feed the activity ring from every status transition the store commits
 	// (the spawn birth is recorded separately at the dispatch site).
@@ -464,6 +476,8 @@ func newDaemon(cfg *config.Config, lin linear.API, logger *log.Logger, home stri
 	}
 	d.prDiff = scmc.PRDiff
 	d.worktreeDiff = gitdiff.Diff
+	d.checkpoints = checkpoint.Git{}
+	d.commitDiff = gitdiff.Between
 	// A no-op notifier until Run/reload resolves the [notify] config; keeps the
 	// engine free of nil checks. notify.New always returns a non-nil Notifier.
 	d.notifier = notify.New(notify.NotifyConfig{})
@@ -962,13 +976,14 @@ func (d *Daemon) tmuxClient() *tmux.Client {
 // best-effort styling advisories (status-bar chrome) into the daemon log.
 func newNativeRuntime(cfg *config.Config, home, lolaBin string, linearKey func() string, logf func(string, ...any)) *runtime.Native {
 	return &runtime.Native{
-		Cfg:       cfg,
-		WT:        &worktree.Manager{Root: filepath.Join(home, "worktrees")},
-		Tmux:      cfg.TmuxClient("tmux", home),
-		LolaBin:   lolaBin,
-		Home:      home,
-		LinearKey: linearKey,
-		Logf:      logf,
+		Cfg:         cfg,
+		WT:          &worktree.Manager{Root: filepath.Join(home, "worktrees")},
+		Tmux:        cfg.TmuxClient("tmux", home),
+		LolaBin:     lolaBin,
+		Home:        home,
+		LinearKey:   linearKey,
+		Logf:        logf,
+		Checkpoints: checkpoint.Git{},
 	}
 }
 
@@ -1107,6 +1122,9 @@ func (d *Daemon) adoptNativeSessions(ctx context.Context) {
 				s.ReviewWatermarks = prev.ReviewWatermarks
 				s.PendingHandoffs = prev.PendingHandoffs
 				s.PendingFeedback = prev.PendingFeedback
+				if s.ContextKey == "" {
+					s.ContextKey = prev.ContextKey
+				}
 				s.PostedGitHubPRs = prev.PostedGitHubPRs
 				if len(s.RemovedLabels) == 0 {
 					s.RemovedLabels = prev.RemovedLabels

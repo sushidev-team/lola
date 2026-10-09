@@ -153,6 +153,12 @@ type Native struct {
 	// launches. A styling failure only logs; the spawn always succeeds. nil
 	// silences these advisories (tests, or callers that don't care).
 	Logf func(format string, args ...any)
+	// Checkpoints is the turn-checkpoint store (internal/checkpoint): ForkAgent
+	// lays a checkpoint into the fork's worktree through it, and a session's
+	// refs are pruned through it when its ID gets a fresh worktree and on
+	// teardown. nil disables both (ForkAgent then refuses) — tests that never
+	// fork leave it unset so no git runs outside the WT seam.
+	Checkpoints Checkpointer
 }
 
 // SessionID returns the BASE native session identifier for an issue:
@@ -290,6 +296,7 @@ func (n *Native) Spawn(ctx context.Context, p config.Project, issue linear.Issue
 	if err != nil {
 		return session.Session{}, fmt.Errorf("runtime: spawn %s: %w", id, err)
 	}
+	n.pruneCheckpoints(ctx, dir, id) // a fresh session starts with no history
 	// Render [[project]].env against this session BEFORE anything reads it —
 	// Prepare hands it to post_create, envFile writes it into the pane.
 	p = expandProjectEnv(p, EnvVars{Session: id, Issue: issue.Identifier, Branch: branch, Project: p.Name, Worktree: dir})
@@ -315,7 +322,9 @@ func (n *Native) Spawn(ctx context.Context, p config.Project, issue linear.Issue
 	if err := os.MkdirAll(filepath.Join(dir, lolaDir), 0o700); err != nil {
 		return fail("create "+lolaDir, err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, lolaDir, "prompt.md"), n.withReportBriefing(promptMD(p, issue, branch)), 0o600); err != nil {
+	ctxKey := contextKeyFor(issue.Identifier, id)
+	ctxDir := n.setupContext(dir, p.Name, ctxKey)
+	if err := os.WriteFile(filepath.Join(dir, lolaDir, "prompt.md"), n.withReportBriefing(withContextBriefing(promptMD(p, issue, branch), ctxDir)), 0o600); err != nil {
 		return fail("write prompt.md", err)
 	}
 	// Per-agent lifecycle-callback artifact(s): claude's .lola/settings.json,
@@ -347,18 +356,19 @@ func (n *Native) Spawn(ctx context.Context, p config.Project, issue linear.Issue
 	}
 
 	return withAgentState(session.Session{
-		ID:        id,
-		Source:    "native",
-		Kind:      session.KindLinear,
-		Project:   p.Name,
-		Issue:     issue.Identifier,
-		Title:     issue.Title,
-		IssueUUID: issue.ID,
-		Branch:    branch,
-		Repo:      p.Repo,
-		Worktree:  dir,
-		TmuxName:  id,
-		Agent:     string(kind),
+		ID:         id,
+		Source:     "native",
+		Kind:       session.KindLinear,
+		Project:    p.Name,
+		Issue:      issue.Identifier,
+		Title:      issue.Title,
+		IssueUUID:  issue.ID,
+		Branch:     branch,
+		Repo:       p.Repo,
+		Worktree:   dir,
+		TmuxName:   id,
+		Agent:      string(kind),
+		ContextKey: ctxKey,
 	}, state.AgentStarting), nil
 }
 
@@ -501,10 +511,12 @@ func (n *Native) OpenManual(ctx context.Context, p config.Project, sessionID, br
 // session (as opposed to a shell): prepare the worktree, write the .lola
 // artifacts (the given prompt, the per-agent lifecycle callbacks, and the 0600
 // env with the Linear key + project env), start the agent in tmux, and brand
-// the pane. dir must be a freshly created worktree. On any step failure it rolls
-// the worktree back (force=false, so a dirty checkout is kept for inspection) —
-// deleting the branch only when ownsBranch — and returns the wrapped error.
-func (n *Native) finishAgentLaunch(ctx context.Context, p config.Project, id, dir, branch string, kind agent.Kind, ownsBranch bool, prompt string) error {
+// the pane. dir must be a freshly created worktree. ctxKey names the shared
+// context folder linked in as .lola/context (see setupContext). On any step
+// failure it rolls the worktree back (force=false, so a dirty checkout is kept
+// for inspection) — deleting the branch only when ownsBranch — and returns the
+// wrapped error.
+func (n *Native) finishAgentLaunch(ctx context.Context, p config.Project, id, dir, branch string, kind agent.Kind, ownsBranch bool, ctxKey, prompt string) error {
 	p = expandProjectEnv(p, EnvVars{Session: id, Branch: branch, Project: p.Name, Worktree: dir})
 	rb := func(step string, cause error) error {
 		delBranch := ""
@@ -530,7 +542,9 @@ func (n *Native) finishAgentLaunch(ctx context.Context, p config.Project, id, di
 	if err := os.MkdirAll(filepath.Join(dir, lolaDir), 0o700); err != nil {
 		return rb("create "+lolaDir, err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, lolaDir, "prompt.md"), n.withReportBriefing([]byte(prompt)), 0o600); err != nil {
+	n.pruneCheckpoints(ctx, dir, id) // a fresh session starts with no history
+	ctxDir := n.setupContext(dir, p.Name, ctxKey)
+	if err := os.WriteFile(filepath.Join(dir, lolaDir, "prompt.md"), n.withReportBriefing(withContextBriefing([]byte(prompt), ctxDir)), 0o600); err != nil {
 		return rb("write prompt.md", err)
 	}
 	if err := n.writeAgentArtifacts(dir, kind); err != nil {
@@ -565,20 +579,21 @@ func (n *Native) OpenPRAgent(ctx context.Context, p config.Project, sessionID, b
 		return session.Session{}, fmt.Errorf("runtime: open pr agent %s: %w", sessionID, err)
 	}
 	kind := n.resolveKind(p.Name, agentOverride)
-	if err := n.finishAgentLaunch(ctx, p, sessionID, dir, branch, kind, false /* pr: upstream branch, not owned */, prompt); err != nil {
+	if err := n.finishAgentLaunch(ctx, p, sessionID, dir, branch, kind, false /* pr: upstream branch, not owned */, sessionID, prompt); err != nil {
 		return session.Session{}, err
 	}
 	return withAgentState(session.Session{
-		ID:       sessionID,
-		Source:   "native",
-		Kind:     session.KindPR,
-		Project:  p.Name,
-		Title:    "PR: " + branch,
-		Branch:   branch,
-		Repo:     p.Repo,
-		Worktree: dir,
-		TmuxName: sessionID,
-		Agent:    string(kind),
+		ID:         sessionID,
+		Source:     "native",
+		Kind:       session.KindPR,
+		Project:    p.Name,
+		Title:      "PR: " + branch,
+		Branch:     branch,
+		Repo:       p.Repo,
+		Worktree:   dir,
+		TmuxName:   sessionID,
+		Agent:      string(kind),
+		ContextKey: sessionID,
 	}, state.AgentStarting), nil
 }
 
@@ -594,20 +609,21 @@ func (n *Native) OpenManualAgent(ctx context.Context, p config.Project, sessionI
 		return session.Session{}, fmt.Errorf("runtime: open manual agent %s: %w", sessionID, err)
 	}
 	kind := n.resolveKind(p.Name, agentOverride)
-	if err := n.finishAgentLaunch(ctx, p, sessionID, dir, branch, kind, true /* manual: lola-owned branch */, prompt); err != nil {
+	if err := n.finishAgentLaunch(ctx, p, sessionID, dir, branch, kind, true /* manual: lola-owned branch */, sessionID, prompt); err != nil {
 		return session.Session{}, err
 	}
 	return withAgentState(session.Session{
-		ID:       sessionID,
-		Source:   "native",
-		Kind:     session.KindManual,
-		Project:  p.Name,
-		Title:    "manual: " + branch,
-		Branch:   branch,
-		Repo:     p.Repo,
-		Worktree: dir,
-		TmuxName: sessionID,
-		Agent:    string(kind),
+		ID:         sessionID,
+		Source:     "native",
+		Kind:       session.KindManual,
+		Project:    p.Name,
+		Title:      "manual: " + branch,
+		Branch:     branch,
+		Repo:       p.Repo,
+		Worktree:   dir,
+		TmuxName:   sessionID,
+		Agent:      string(kind),
+		ContextKey: sessionID,
 	}, state.AgentStarting), nil
 }
 
@@ -1167,11 +1183,17 @@ func (n *Native) Kill(ctx context.Context, s session.Session, removeWorktree, fo
 		if branch != "" && n.Logf != nil {
 			n.Logf("session %s: worktree already gone; deleted local branch %s", s.ID, branch)
 		}
+		n.pruneCheckpoints(ctx, p.Path, s.ID)
 		return nil
 	}
 	if err := n.WT.Remove(ctx, *p, dir, branch, force); err != nil {
 		return fmt.Errorf("runtime: kill %s: %w", s.ID, err)
 	}
+	// The checkpoints go with the worktree they snapshot. A DIRTY worktree that
+	// Remove kept returned above, and keeps them: the work is still there to
+	// roll back. The shared context folder is deliberately NOT removed — it
+	// exists to outlive this session.
+	n.pruneCheckpoints(ctx, p.Path, s.ID)
 	return nil
 }
 

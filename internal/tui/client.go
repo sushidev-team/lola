@@ -155,7 +155,25 @@ func Send(raw string) error {
 		} else {
 			fmt.Println("ok")
 		}
-	case "open":
+	case "checkpoints":
+		var d protocol.CheckpointsData
+		if err := json.Unmarshal(resp.Data, &d); err != nil {
+			return fmt.Errorf("bad checkpoints data: %w", err)
+		}
+		fmt.Print(renderCheckpoints(&d))
+	case "checkpointDiff":
+		var d protocol.DiffData
+		if err := json.Unmarshal(resp.Data, &d); err != nil {
+			return fmt.Errorf("bad diff data: %w", err)
+		}
+		fmt.Print(renderDiffText(&d))
+	case "restoreCheckpoint":
+		var d protocol.RestoreCheckpointData
+		if err := json.Unmarshal(resp.Data, &d); err != nil {
+			return fmt.Errorf("bad restore data: %w", err)
+		}
+		fmt.Println(d.Message)
+	case "open", "forkCheckpoint":
 		var d protocol.OpenData
 		if err := json.Unmarshal(resp.Data, &d); err != nil {
 			return fmt.Errorf("bad open data: %w", err)
@@ -169,6 +187,46 @@ func Send(raw string) error {
 		fmt.Println("ok")
 	}
 	return nil
+}
+
+// renderCheckpoints prints a session's checkpoints, newest last.
+func renderCheckpoints(d *protocol.CheckpointsData) string {
+	if len(d.Checkpoints) == 0 {
+		return "no checkpoints yet — one is recorded each time the agent ends a turn\n"
+	}
+	var b strings.Builder
+	for _, c := range d.Checkpoints {
+		fmt.Fprintf(&b, "#%-4d %s  %-8.8s  %s\n", c.Seq, c.Created.Local().Format("2006-01-02 15:04:05"), c.SHA, c.Label)
+	}
+	if !d.Restorable {
+		b.WriteString("(the agent is mid-turn — restore is refused until it finishes)\n")
+	}
+	return b.String()
+}
+
+// renderDiffText prints a DiffData as a plain unified diff.
+func renderDiffText(d *protocol.DiffData) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "against %s (%.8s), %d file(s)\n", d.Base, d.MergeBase, len(d.Files))
+	for _, f := range d.Files {
+		old := f.OldPath
+		if old == "" {
+			old = f.Path
+		}
+		fmt.Fprintf(&b, "--- a/%s\n+++ b/%s\n", old, f.Path)
+		switch {
+		case f.Binary:
+			b.WriteString("(binary file)\n")
+		case f.TooLarge:
+			b.WriteString("(diff too large to show)\n")
+		default:
+			b.WriteString(f.Patch)
+		}
+	}
+	if d.Truncated {
+		b.WriteString("(truncated — too large to show in full)\n")
+	}
+	return b.String()
 }
 
 func renderStatus(d *protocol.StatusData) string {
