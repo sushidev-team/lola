@@ -1014,7 +1014,14 @@ func (d *Daemon) deferHandoff(id string, k provKind, stash string) {
 // on the idle-notify path several kinds would otherwise all type into the same
 // prompt back-to-back. Called every observer cycle AND straight off the Stop
 // hook (see hookEvent), which is what closes the window the cadence used to miss.
+//
+// A HUMAN's queued diff feedback (feedback.go) goes first and counts as that
+// pass's one delivery: a person waited for it, and a review provider's findings
+// will still be there next cycle.
 func (d *Daemon) flushReviewHandoffs(ctx context.Context, id string) {
+	if d.deliverFeedback(ctx, id) {
+		return
+	}
 	s, ok := d.sessions.Get(id)
 	if !ok || len(s.PendingHandoffs) == 0 || !handoffDeliverable(s) {
 		return

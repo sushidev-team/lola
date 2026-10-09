@@ -366,6 +366,15 @@ type Session struct {
 	// providers' hand-offs never clobber each other.
 	PendingHandoffs map[string]string `json:"pending_handoffs,omitempty"`
 
+	// PendingFeedback is a HUMAN's diff-viewer feedback (cmd=feedback), already
+	// rendered into the message the agent will read, that could not be typed yet
+	// because the pane was not verifiably resting at its prompt. A second batch
+	// sent before delivery is APPENDED, never replaces the first. Delivered (and
+	// cleared) through the same sanitize + idle gate + pane proof as
+	// PendingHandoffs; kept apart from that map because it has no review
+	// provider behind it and must survive one being reconfigured.
+	PendingFeedback string `json:"pending_feedback,omitempty"`
+
 	// PostedGitHubPRs maps a provider kind -> the PR number the github transport
 	// has SETTLED (a successful post OR a permanent gh failure). Per-PR settle
 	// guard so the github sink no-ops for a kind/PR it has already settled and a
