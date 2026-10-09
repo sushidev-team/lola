@@ -78,6 +78,64 @@ func Post(event string, p protocol.HookPayload) error {
 	return nil
 }
 
+// ErrNoDaemon wraps every failure to REACH the daemon from Report (no session
+// env, no socket, a timeout) as opposed to the daemon answering "no". The CLI
+// treats the two differently: an unreachable daemon must not fail an agent's
+// command — a report is never worth derailing a turn over — while a rejected
+// report is shown so the agent can correct its call.
+var ErrNoDaemon = errors.New("lola daemon unreachable")
+
+// Report sends one `lola report` argv for the session named by $LOLA_SESSION
+// (cmd=agentReport) and waits — within the same postTimeout bound as Post — for
+// the daemon's verdict. Validation happens daemon-side (internal/board), so a
+// non-nil error that is not ErrNoDaemon is the daemon's own usage message.
+func Report(argv []string) error {
+	session := os.Getenv("LOLA_SESSION")
+	if session == "" {
+		return fmt.Errorf("%w: not a lola session ($LOLA_SESSION unset)", ErrNoDaemon)
+	}
+	home, err := config.Home()
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrNoDaemon, err)
+	}
+	args, err := json.Marshal(protocol.ReportArgs{Argv: argv})
+	if err != nil {
+		return err
+	}
+	raw, err := json.Marshal(protocol.Request{Cmd: "agentReport", Session: session, Args: args})
+	if err != nil {
+		return err
+	}
+	deadline := time.Now().Add(postTimeout)
+	d := net.Dialer{Deadline: deadline}
+	conn, err := d.Dial("unix", filepath.Join(home, "lola.sock"))
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrNoDaemon, err)
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(deadline)
+	if _, err := conn.Write(append(raw, '\n')); err != nil {
+		return fmt.Errorf("%w: %v", ErrNoDaemon, err)
+	}
+	line, err := bufio.NewReader(conn).ReadString('\n')
+	if err != nil {
+		return fmt.Errorf("%w: no reply: %v", ErrNoDaemon, err)
+	}
+	var resp protocol.Response
+	if err := json.Unmarshal([]byte(line), &resp); err != nil {
+		return fmt.Errorf("%w: bad reply: %v", ErrNoDaemon, err)
+	}
+	if !resp.OK {
+		// A daemon predating the command answers `unknown cmd`; that is the
+		// same "nobody to report to" as a dead socket, not the agent's fault.
+		if strings.HasPrefix(resp.Error, "unknown cmd") {
+			return fmt.Errorf("%w: %s", ErrNoDaemon, resp.Error)
+		}
+		return errors.New(resp.Error)
+	}
+	return nil
+}
+
 // Claude Code settings shapes for SettingsJSON. Struct (not map) so the JSON
 // key order is deterministic and golden-testable.
 type hookSpec struct {

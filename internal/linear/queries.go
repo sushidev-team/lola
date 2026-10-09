@@ -97,6 +97,50 @@ func (c *Client) WorkspaceLabels(ctx context.Context) ([]Label, error) {
 	}
 }
 
+// FilterRefs looks up the given label and state IDs in ONE query. Archived
+// labels are excluded on purpose: an archived label no longer appears on the
+// issue picker, so a filter naming one is as stale as one naming a deleted
+// label. Empty inputs skip their half of the query.
+func (c *Client) FilterRefs(ctx context.Context, labelIDs, stateIDs []string) (labels, states []Ref, err error) {
+	if len(labelIDs) == 0 && len(stateIDs) == 0 {
+		return nil, nil, nil
+	}
+	const q = `query($l:[ID!], $s:[ID!]){
+		issueLabels(filter:{id:{in:$l}}, first:250){ nodes{ id name team{ id } } }
+		workflowStates(filter:{id:{in:$s}}, first:250){ nodes{ id name team{ id } } } }`
+	type node struct {
+		ID, Name string
+		Team     *struct{ ID string }
+	}
+	var r struct {
+		IssueLabels    struct{ Nodes []node }
+		WorkflowStates struct{ Nodes []node }
+	}
+	// An empty `in` list matches nothing, which is exactly "nothing to check".
+	l, s := labelIDs, stateIDs
+	if l == nil {
+		l = []string{}
+	}
+	if s == nil {
+		s = []string{}
+	}
+	if err := c.do(ctx, q, map[string]any{"l": l, "s": s}, &r); err != nil {
+		return nil, nil, err
+	}
+	conv := func(ns []node) []Ref {
+		out := make([]Ref, 0, len(ns))
+		for _, n := range ns {
+			ref := Ref{ID: n.ID, Name: n.Name}
+			if n.Team != nil {
+				ref.TeamID = n.Team.ID
+			}
+			out = append(out, ref)
+		}
+		return out
+	}
+	return conv(r.IssueLabels.Nodes), conv(r.WorkflowStates.Nodes), nil
+}
+
 func (c *Client) Members(ctx context.Context, teamID string) ([]User, error) {
 	const q = `query($t:String!){ team(id:$t){ members{ nodes{ id name email active } } } }`
 	var r struct {

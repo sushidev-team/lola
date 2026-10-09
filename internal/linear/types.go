@@ -11,6 +11,13 @@ type State struct {
 	ID, Name, Type string
 	Position       float64
 }
+
+// Ref is a label or workflow state as FilterRefs reports it: its name and the
+// team that owns it ("" for a workspace label, which every team can use).
+type Ref struct {
+	ID, Name, TeamID string
+}
+
 type Label struct {
 	ID, Name, Color string
 	Parent          *Label

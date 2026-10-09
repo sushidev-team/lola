@@ -178,6 +178,8 @@ func (d *Daemon) handle(ctx context.Context, req protocol.Request) protocol.Resp
 		return dataResponse(data)
 	case "hookEvent":
 		return d.handleHookEvent(req)
+	case "agentReport":
+		return d.handleAgentReport(req)
 	case "kill":
 		data, err := d.handleKill(ctx, req.Session, req.Force)
 		if err != nil {
@@ -619,6 +621,8 @@ func (d *Daemon) sessionsData() protocol.SessionsData {
 			si.WaitingOn = waitingOn
 			si.HeadlineAgo = formatAge(now.Sub(at))
 		}
+		// The agent's own report — display-only, like the overlay above.
+		si.Board = boardInfo(s.Board, now)
 		out.Sessions = append(out.Sessions, si)
 	}
 	out.Events = d.eventFeed(now)

@@ -304,6 +304,15 @@ func (d *Daemon) tick(ctx context.Context, name string, dryRun bool) (protocol.P
 		return linFail("query issues", err)
 	}
 	d.setLinearOK(true)
+	// Zero matches is also exactly what a filter naming a label or state Linear
+	// no longer knows looks like — Linear answers such a query with nothing
+	// rather than an error. Resolve the references only then (a filter that
+	// matched something cannot be unmatchable), so the common tick pays nothing.
+	var refIssues []string
+	if len(issues) == 0 {
+		refIssues = d.filterRefProblems(ctx, api, name, p, now)
+		res.Problems = refIssues
+	}
 
 	seen, err := d.seen.load(name)
 	if err != nil {
@@ -536,7 +545,13 @@ func (d *Daemon) tick(ctx context.Context, name string, dryRun bool) (protocol.P
 	d.logf(name, "tick: matched=%d spawned=%d capped=%d errors=%d%s",
 		len(issues), spawned, capped, errored, map[bool]string{true: " (dry-run)", false: ""}[dryRun])
 	if !dryRun {
-		d.status.setError(name, lastSpawnErr) // clears the error on a clean tick
+		// A spawn failure is the more urgent of the two; otherwise an
+		// unmatchable filter is reported, and a clean tick clears the error.
+		msg := lastSpawnErr
+		if msg == "" {
+			msg = refError(refIssues)
+		}
+		d.status.setError(name, msg)
 	}
 	return res, nil
 }

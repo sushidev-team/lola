@@ -10,6 +10,12 @@
   let query = $state("");
   const searchable = $derived(options.length > 8);
   const visible = $derived(options.filter((option) => !searchable || option.label.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())));
+  // Selected ids Linear no longer offers — a deleted label, or an org label that
+  // was moved to team level and came back with a NEW id. They still sit in the
+  // config and still filter (a dead label under match_mode=all matches nothing),
+  // so they must be visible and removable: a list drawn only from the options
+  // hid them, and saving on top of one silently kept the poll broken.
+  const stale = $derived((selected ?? []).filter((id) => !options.some((o) => o.id === id)));
 </script>
 
 <div class="min-w-0 space-y-1.5">
@@ -18,6 +24,12 @@
       class="w-full min-w-0 rounded border border-edge bg-canvas px-2 py-1.5 text-ink outline-none focus:border-accent placeholder:text-placeholder" />
   {/if}
   <div role="group" aria-label={label} class="max-h-36 space-y-1 overflow-auto rounded border border-edge p-2">
+    {#each stale as id (id)}
+      <label class="flex cursor-pointer items-start gap-2 text-bad" title={id}>
+        <Checkbox checked onchange={() => onChange((selected ?? []).filter((x) => x !== id))} />
+        <span class="min-w-0 break-words">Unknown {id.slice(0, 8)}… — no longer in Linear, untick to remove</span>
+      </label>
+    {/each}
     {#each visible as option (option.id)}
       <label class="flex cursor-pointer items-start gap-2 text-ink">
         <Checkbox checked={(selected ?? []).includes(option.id)} onchange={() => {

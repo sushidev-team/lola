@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/spf13/cobra"
 	"github.com/sushidev-team/lola/internal/agent"
+	"github.com/sushidev-team/lola/internal/board"
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/daemon"
 	"github.com/sushidev-team/lola/internal/doctor"
@@ -71,6 +73,7 @@ func main() {
 		doctorCmd(),
 		setupCmd(),
 		hookCmd(),
+		reportCmd(),
 		reviewRunCmd(),
 	)
 
@@ -331,6 +334,44 @@ func hookCmd() *cobra.Command {
 				fmt.Fprintln(c.ErrOrStderr(), "lola hook:", err)
 			}
 			return nil
+		},
+	}
+}
+
+// reportCmd is the coding agent's self-report channel: `lola report <verb>
+// [args]` updates the session's board (todo list, phase, progress, blocker,
+// note, checks) shown in the app and the TUI. The verbs are parsed and
+// validated by the DAEMON (internal/board), so this only forwards argv.
+//
+// Exit status follows from who the caller is — an agent, mid-turn:
+//   - the daemon REJECTED the report (bad verb, bad index): exit 1 with its
+//     usage message, so the agent learns the right call;
+//   - the daemon could not be REACHED (not a lola session, dead socket, an old
+//     daemon): a one-line stderr note and exit 0, because a progress report is
+//     never worth failing the command an agent chained it onto.
+//
+// DisableFlagParsing so a todo text starting with "-" is a todo, not a flag.
+func reportCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:                "report <verb> [args]",
+		Short:              "Report the agent's own progress to lola (todo, phase, progress, blocked, note, check)",
+		Long:               board.Usage,
+		DisableFlagParsing: true,
+		RunE: func(c *cobra.Command, args []string) error {
+			if len(args) == 0 || args[0] == "-h" || args[0] == "--help" || args[0] == "help" {
+				fmt.Fprintln(c.OutOrStdout(), board.Usage)
+				return nil
+			}
+			err := hook.Report(args)
+			switch {
+			case err == nil:
+				return nil
+			case errors.Is(err, hook.ErrNoDaemon):
+				fmt.Fprintln(c.ErrOrStderr(), "lola report: not delivered:", err)
+				return nil
+			default:
+				return err
+			}
 		},
 	}
 }

@@ -8,6 +8,7 @@
   import StatusPill from "./StatusPill.svelte";
   import AgentActivity from "./AgentActivity.svelte";
   import PrBadge from "./PrBadge.svelte";
+  import BoardChip from "./BoardChip.svelte";
   import SessionsEmpty from "./SessionsEmpty.svelte";
 
   let { dense = false }: { dense?: boolean } = $props();
@@ -30,6 +31,11 @@
   // does keep the hidden copy out of the accessibility tree, so it was not a
   // correctness bug — but one element that moves is simpler than two that
   // alternate, and it means a query for the text finds exactly one node.
+  // The Plan column (the agent's self-report, BoardChip) exists only while some
+  // listed session has reported — a fleet that never does keeps every column
+  // width it had.
+  const anyBoard = $derived(rows.some((s) => !!s.board));
+
   const WIDE = "(min-width: 1536px)";
   let wide = $state(false);
   $effect(() => {
@@ -63,6 +69,7 @@
         {/if}
         <th class="py-2 pr-2">Project</th>
         <th class="py-2 pr-2">Status</th>
+        {#if anyBoard}<th class="py-2 pr-2">Plan</th>{/if}
         <th class="py-2 pr-2">PR</th>
         <th class="py-2 pr-2 text-right">Age</th>
       </tr>
@@ -182,6 +189,9 @@
               {/if}
             </span>
           </td>
+          <!-- After Status, before PR: the agent's own report qualifies what the
+               agent is doing; it is not the delivery axis beside it. -->
+          {#if anyBoard}<td class="py-1.5 pr-2 align-middle"><BoardChip session={s} /></td>{/if}
           <!-- The PR number is a control here: a <td> is not inside a button,
                so the badge may render one (see PrBadge's onOpen). -->
           <td class="py-1.5 pr-2 align-middle"

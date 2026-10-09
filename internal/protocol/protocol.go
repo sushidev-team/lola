@@ -123,7 +123,7 @@ import (
 // it answers with an error naming that rather than an empty code; only a
 // -tags lola_insecure daemon can fill PairBeginData.Key.
 type Request struct {
-	Cmd    string `json:"cmd"` // stop|status|reload|enable|disable|pollOnce|sessions|projects|prs|hookEvent|kill|revive|pane|answer|review|coderabbit|resolveConflict|switchAgent|dev|devFreePort|open|renameProject|pairBegin
+	Cmd    string `json:"cmd"` // stop|status|reload|enable|disable|pollOnce|sessions|projects|prs|hookEvent|kill|revive|pane|answer|review|coderabbit|resolveConflict|switchAgent|dev|devFreePort|open|renameProject|pairBegin|agentReport
 	Poll   string `json:"poll,omitempty"`
 	DryRun bool   `json:"dryRun,omitempty"`
 
@@ -332,6 +332,12 @@ type SessionInfo struct {
 	DevForwards []DevForward  `json:"devForwards,omitempty"`
 	DevClash    *DevClashInfo `json:"devClash,omitempty"`
 
+	// Board is the agent's self-reported progress (`lola report …`), nil when
+	// it has reported nothing. A CLAIM, not a fact: render it as the agent's
+	// own words, beside — never instead of — the axes above, and fade it as
+	// Board.UpdatedAt ages (agents forget to report).
+	Board *BoardInfo `json:"board,omitempty"`
+
 	// Reaction-engine posture (PLAN P3), flattened so the TUI renders reaction
 	// state without importing internal/session or re-deriving it.
 	CIRetries int  `json:"ciRetries"` // ci_failed recovery attempts already spent on the current failing streak
@@ -341,6 +347,51 @@ type SessionInfo struct {
 	// STATUS) | "ci retry 1/2" | "escalated" | "awaiting review" |
 	// "addressing review" | "rebasing" | "ready to merge".
 	Reacting string `json:"reacting"`
+}
+
+// BoardInfo is internal/board.Board flattened for rendering. Every string was
+// sanitized daemon-side (one line, no control characters, clipped), so a client
+// renders it as text verbatim — but as text only, never as markup or a link.
+type BoardInfo struct {
+	Phase string      `json:"phase,omitempty"` // planning|investigating|implementing|testing|reviewing|polishing|done
+	Todos []BoardTodo `json:"todos,omitempty"`
+	// Percent is the bar to draw (0–100) when HasProgress: the agent's explicit
+	// value, or done/total of Todos when ProgressDerived.
+	HasProgress     bool         `json:"hasProgress,omitempty"`
+	Percent         int          `json:"percent"`
+	ProgressDerived bool         `json:"progressDerived,omitempty"`
+	ProgressLabel   string       `json:"progressLabel,omitempty"`
+	Done            int          `json:"done"`
+	Total           int          `json:"total"`
+	Current         string       `json:"current,omitempty"` // the active todo's text
+	Blocked         string       `json:"blocked,omitempty"` // what the agent says it needs from a human
+	BlockedAt       time.Time    `json:"blockedAt,omitzero"`
+	Note            string       `json:"note,omitempty"`
+	Checks          []BoardCheck `json:"checks,omitempty"`
+	UpdatedAt       time.Time    `json:"updatedAt,omitzero"`
+	UpdatedAgo      string       `json:"updatedAgo,omitempty"` // formatted age of UpdatedAt, e.g. "2m"
+}
+
+// BoardTodo is one plan item: State is pending|active|done.
+type BoardTodo struct {
+	Text  string `json:"text"`
+	State string `json:"state"`
+}
+
+// BoardCheck is one check the agent says it ran locally: State is
+// pass|fail|running. Not CI — that is Checks on the session, a gh fact.
+type BoardCheck struct {
+	Name    string `json:"name"`
+	State   string `json:"state"`
+	Summary string `json:"summary,omitempty"`
+}
+
+// ReportArgs is the argument payload for cmd=agentReport: the argv typed after
+// `lola report`, parsed and validated DAEMON-side (internal/board.Apply) so the
+// trust boundary is the daemon, not whichever lola binary the pane runs. The
+// session is Request.Session ($LOLA_SESSION).
+type ReportArgs struct {
+	Argv []string `json:"argv"`
 }
 
 // ProjectsData is Response.Data for cmd=projects: the daemon's cached view of
@@ -766,6 +817,10 @@ type PollOnceData struct {
 	Poll    string  `json:"poll"`
 	DryRun  bool    `json:"dryRun"`
 	Matches []Match `json:"matches"`
+	// Problems names filter references Linear no longer knows (a deleted
+	// label, a state of another team) that make the poll unable to match
+	// anything. Empty on a healthy poll.
+	Problems []string `json:"problems,omitempty"`
 }
 
 // Match describes one matched issue and what the tick did (or would do) with it.
