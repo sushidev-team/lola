@@ -113,60 +113,82 @@ func (c *Client) AgentViewer(ctx context.Context) (User, error) {
 	return c.Viewer(ctx)
 }
 
-// AgentSessions returns the most recently updated sessions of this agent
-// (one page — the loop only cares about new and live ones, and a session it
-// already handled is remembered by id). Pending sessions are the dispatch
-// triggers; the rest let the loop notice a session it lost track of.
+// agentMaxPages bounds one cycle's session reads (50 per page). Sessions come
+// newest first, so the pages walked cover every recently active session —
+// enough for a queued delegation to be reconsidered for days — without an
+// unbounded scan of the agent's whole history on every poll.
+const agentMaxPages = 6
+
+// AgentSessions returns this agent's sessions, most recently updated first,
+// following the connection cursor for up to agentMaxPages pages. Pending
+// sessions are the dispatch triggers; queued ones are reconsidered from here.
 func (c *Client) AgentSessions(ctx context.Context) ([]AgentSession, error) {
-	const q = `query{ agentSessions(first:50, orderBy:updatedAt){ nodes{
-		id status createdAt url
-		issue{ id identifier title branchName priority createdAt
-			team{ id } project{ id } } } } }`
-	var r struct {
-		AgentSessions struct {
-			Nodes []struct {
-				ID, Status, CreatedAt string
-				URL                   *string
-				Issue                 *struct {
-					ID, Identifier, Title, BranchName, CreatedAt string
-					Priority                                     float64
-					Team                                         *struct{ ID string }
-					Project                                      *struct{ ID string }
+	const q = `query($after: String){ agentSessions(first:50, after:$after, orderBy:updatedAt){
+		nodes{ id status createdAt url
+			issue{ id identifier title branchName priority createdAt
+				team{ id } project{ id } } }
+		pageInfo{ hasNextPage endCursor } } }`
+	var (
+		out   []AgentSession
+		after any
+	)
+	for page := 0; page < agentMaxPages; page++ {
+		var r struct {
+			AgentSessions struct {
+				Nodes []struct {
+					ID, Status, CreatedAt string
+					URL                   *string
+					Issue                 *struct {
+						ID, Identifier, Title, BranchName, CreatedAt string
+						Priority                                     float64
+						Team                                         *struct{ ID string }
+						Project                                      *struct{ ID string }
+					}
+				}
+				PageInfo struct {
+					HasNextPage bool
+					EndCursor   string
 				}
 			}
 		}
-	}
-	if err := c.do(ctx, q, nil, &r); err != nil {
-		return nil, err
-	}
-	out := make([]AgentSession, 0, len(r.AgentSessions.Nodes))
-	for _, n := range r.AgentSessions.Nodes {
-		s := AgentSession{ID: n.ID, Status: n.Status, CreatedAt: n.CreatedAt}
-		if n.URL != nil {
-			s.URL = *n.URL
+		if err := c.do(ctx, q, map[string]any{"after": after}, &r); err != nil {
+			return nil, err
 		}
-		if n.Issue != nil {
-			is := &Issue{ID: n.Issue.ID, Identifier: n.Issue.Identifier, Title: n.Issue.Title,
-				BranchName: n.Issue.BranchName, Priority: n.Issue.Priority, CreatedAt: n.Issue.CreatedAt}
-			if n.Issue.Team != nil {
-				is.TeamID = n.Issue.Team.ID
+		for _, n := range r.AgentSessions.Nodes {
+			s := AgentSession{ID: n.ID, Status: n.Status, CreatedAt: n.CreatedAt}
+			if n.URL != nil {
+				s.URL = *n.URL
 			}
-			if n.Issue.Project != nil {
-				is.ProjectID = n.Issue.Project.ID
+			if n.Issue != nil {
+				is := &Issue{ID: n.Issue.ID, Identifier: n.Issue.Identifier, Title: n.Issue.Title,
+					BranchName: n.Issue.BranchName, Priority: n.Issue.Priority, CreatedAt: n.Issue.CreatedAt}
+				if n.Issue.Team != nil {
+					is.TeamID = n.Issue.Team.ID
+				}
+				if n.Issue.Project != nil {
+					is.ProjectID = n.Issue.Project.ID
+				}
+				s.Issue = is
 			}
-			s.Issue = is
+			out = append(out, s)
 		}
-		out = append(out, s)
+		if !r.AgentSessions.PageInfo.HasNextPage || r.AgentSessions.PageInfo.EndCursor == "" {
+			break
+		}
+		after = r.AgentSessions.PageInfo.EndCursor
 	}
 	return out, nil
 }
 
 // AgentPrompts returns the human prompt activities of one session created
-// strictly after afterISO (all of them when it is empty), oldest first.
+// strictly after afterISO (all of them when it is empty), oldest first. It
+// follows the cursor to the end, so the caller's watermark never advances past
+// a prompt it was not shown.
 func (c *Client) AgentPrompts(ctx context.Context, sessionID, afterISO string) ([]AgentPrompt, error) {
-	const q = `query($f: AgentActivityFilter){ agentActivities(filter:$f, first:50, orderBy:createdAt){ nodes{
-		id createdAt signal user{ id }
-		content{ ... on AgentActivityPromptContent { body } } } } }`
+	const q = `query($f: AgentActivityFilter, $after: String){ agentActivities(filter:$f, first:50, after:$after, orderBy:createdAt){
+		nodes{ id createdAt signal user{ id }
+			content{ ... on AgentActivityPromptContent { body } } }
+		pageInfo{ hasNextPage endCursor } } }`
 	f := map[string]any{
 		"agentSessionId": map[string]any{"eq": sessionID},
 		"type":           map[string]any{"eq": "prompt"},
@@ -174,29 +196,45 @@ func (c *Client) AgentPrompts(ctx context.Context, sessionID, afterISO string) (
 	if afterISO != "" {
 		f["createdAt"] = map[string]any{"gt": afterISO}
 	}
-	var r struct {
-		AgentActivities struct {
-			Nodes []struct {
-				ID, CreatedAt string
-				Signal        *string
-				User          *struct{ ID string }
-				Content       struct{ Body string }
+	var (
+		out   []AgentPrompt
+		after any
+	)
+	for page := 0; ; page++ {
+		if page == agentMaxPages*4 {
+			return nil, fmt.Errorf("agent prompts: more than %d pages since the watermark", page)
+		}
+		var r struct {
+			AgentActivities struct {
+				Nodes []struct {
+					ID, CreatedAt string
+					Signal        *string
+					User          *struct{ ID string }
+					Content       struct{ Body string }
+				}
+				PageInfo struct {
+					HasNextPage bool
+					EndCursor   string
+				}
 			}
 		}
-	}
-	if err := c.do(ctx, q, map[string]any{"f": f}, &r); err != nil {
-		return nil, err
-	}
-	out := make([]AgentPrompt, 0, len(r.AgentActivities.Nodes))
-	for _, n := range r.AgentActivities.Nodes {
-		p := AgentPrompt{ID: n.ID, Body: n.Content.Body, CreatedAt: n.CreatedAt}
-		if n.Signal != nil {
-			p.Signal = *n.Signal
+		if err := c.do(ctx, q, map[string]any{"f": f, "after": after}, &r); err != nil {
+			return nil, err
 		}
-		if n.User != nil {
-			p.UserID = n.User.ID
+		for _, n := range r.AgentActivities.Nodes {
+			p := AgentPrompt{ID: n.ID, Body: n.Content.Body, CreatedAt: n.CreatedAt}
+			if n.Signal != nil {
+				p.Signal = *n.Signal
+			}
+			if n.User != nil {
+				p.UserID = n.User.ID
+			}
+			out = append(out, p)
 		}
-		out = append(out, p)
+		if !r.AgentActivities.PageInfo.HasNextPage || r.AgentActivities.PageInfo.EndCursor == "" {
+			break
+		}
+		after = r.AgentActivities.PageInfo.EndCursor
 	}
 	// Deliver in the order the human wrote them, whichever direction the API
 	// paginated.
