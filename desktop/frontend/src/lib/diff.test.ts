@@ -93,10 +93,18 @@ describe("buildTree keys", () => {
   // share a render key, and Svelte throws each_key_duplicate on that.
   it("gives every node a unique key", () => {
     const flat = flattenTree(
-      buildTree(["client/index.ts", "client/components/Button.ts", "server/index.ts", "server/components/Button.ts"]),
+      buildTree([
+        "client/index.ts",
+        "client/components/Button.ts",
+        "server/index.ts",
+        "server/components/Button.ts",
+        "dir:client", // a root FILE whose name is the client directory's key
+      ]),
     );
     const keys = flat.map((n) => n.key);
     expect(new Set(keys).size).toBe(keys.length);
+    expect(keys).toContain("dir:client");
+    expect(keys).toContain("file:dir:client");
     expect(keys).toContain("dir:client/components");
     expect(keys).toContain("dir:server/components");
   });
