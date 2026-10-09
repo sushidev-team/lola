@@ -156,6 +156,12 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   Err* sentinels are identical across agents. NOT `internal/brain`: brain's
   summary must never reach the worker, while these findings do (sanitized +
   idle-gated).
+- `internal/board` — the agent's OWN progress report (stdlib leaf): the
+  `lola report <verb>` vocabulary (todo / phase / progress / blocked / note /
+  check / clear), `Apply` (pure, never mutates its input, sanitizes + caps
+  every string and list), and the `Board` the session store holds. The verbs
+  are parsed DAEMON-side (`cmd=agentReport`, `internal/daemon/report.go`), so
+  the trust boundary is the daemon, not whichever lola binary a pane runs.
 - `internal/statusagent` — the OPT-IN status interpreter: one bounded
   `claude -p` per interpretation (default `--model sonnet`) judging what an
   agent is ACTUALLY doing from pane/events/PR context. Output is parsed,
@@ -465,6 +471,14 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   count) within a minute, and once that nudge stopped minting `needs_input` an
   idle pre-PR session would have held no slot forever and dispatch would have
   spawned straight past the cap.
+- **A dead filter reference is reported, never silent.** Linear answers a
+  filter naming a deleted label/state (or one moved to another team — the
+  org→team move of the `agent/*` labels minted NEW ids) with zero issues, not
+  an error. So a zero-match tick resolves the poll's match labels, states and
+  `on_sent_set_label` (`linear.FilterRefs`, cached `refTTL` per poll, key =
+  the ids) and an unmatchable one becomes the poll's `LastError`
+  (`internal/daemon/filterrefs.go`). It fails OPEN (a lookup error reports
+  nothing) and never changes what is dispatched.
 - **Fail CLOSED on unknowns.** The reconcile orphan-revert skips whenever the
   open-PR check can't answer (no repo, gh error) — better a stuck label than
   lost work.
@@ -1053,6 +1067,17 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   - The release, like `unstampReviewed`, only clears a guard still pointing at
     THAT PR number, so it can never undo a stamp another writer just made for a
     newer PR.
+- **The agent's self-report (`Session.Board`) is a CLAIM, and display-only.**
+  Agents publish it with `lola report …` (taught by the "Progress reporting"
+  section `withReportBriefing` appends to every agent's `.lola/prompt.md`).
+  `handleAgentReport` writes `Session.Board` and NOTHING else — no axis, no
+  freshness stamp, no `AtPrompt`, no guard — and `boardInfo` in `sessionsData`
+  is its one reader. A report is not even activity evidence: a reporting loop
+  must never keep a stuck session looking alive. A reported blocker is shown
+  (orange, ahead of the interpreter's headline) but feeds neither `Attention`
+  nor triage. `agentReport` is in remote's `deniedCommands` like `hookEvent`,
+  rate-limited per session, and its CLI exits 0 when the daemon is unreachable
+  so a report never fails the command an agent chained it onto.
 - **Untrusted output stays out of the control loop.** `brain` summaries and
   `review` findings are derived from attacker-influenceable context (PR diffs,
   CI logs, pane text). They may go to a human (notify + Linear comment) but the

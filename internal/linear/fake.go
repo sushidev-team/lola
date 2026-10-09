@@ -57,6 +57,10 @@ type Fake struct {
 	// UUID, so tests can assert the exact transition target.
 	StateByIssue map[string]string
 
+	// RefsFunc backs FilterRefs. nil means "every ID exists, workspace-scoped"
+	// so fixtures that predate the reference check never trip it.
+	RefsFunc func(labelIDs, stateIDs []string) (labels, states []Ref, err error)
+
 	// Errs injects an error per method name.
 	Errs map[string]error
 
@@ -137,6 +141,24 @@ func (f *Fake) States(ctx context.Context, teamID string) ([]State, error) {
 		return nil, err
 	}
 	return slices.Clone(f.StatesByTeam[teamID]), nil
+}
+
+func (f *Fake) FilterRefs(ctx context.Context, labelIDs, stateIDs []string) (labels, states []Ref, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.record("FilterRefs", slices.Clone(labelIDs), slices.Clone(stateIDs)); err != nil {
+		return nil, nil, err
+	}
+	if f.RefsFunc != nil {
+		return f.RefsFunc(labelIDs, stateIDs)
+	}
+	for _, id := range labelIDs {
+		labels = append(labels, Ref{ID: id, Name: id})
+	}
+	for _, id := range stateIDs {
+		states = append(states, Ref{ID: id, Name: id})
+	}
+	return labels, states, nil
 }
 
 func (f *Fake) WorkspaceLabels(ctx context.Context) ([]Label, error) {

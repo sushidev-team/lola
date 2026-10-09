@@ -24,3 +24,19 @@ it("keeps short lists simple and removes only the chosen selection", async () =>
   await fireEvent.click(screen.getByRole("checkbox", { name: "Todo" }));
   expect(onChange).toHaveBeenCalledWith(["other"]);
 });
+
+it("shows a selected id Linear no longer offers, and lets it be removed", async () => {
+  // The org→team label move: the config still names the old org label, which
+  // the picker cannot list. Hidden, it could never be unticked.
+  const onChange = vi.fn();
+  render(CheckboxOptions, {
+    label: "Match labels",
+    options: [{ id: "new-ready", label: "agent-ready" }],
+    selected: ["13ad06f0-dead", "new-ready"],
+    onChange,
+  });
+  const dead = screen.getByRole("checkbox", { name: /Unknown 13ad06f0… — no longer in Linear/ });
+  expect(dead).toBeChecked();
+  await fireEvent.click(dead);
+  expect(onChange).toHaveBeenCalledWith(["new-ready"]);
+});

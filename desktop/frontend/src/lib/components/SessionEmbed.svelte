@@ -10,6 +10,7 @@
   import Button from "./Button.svelte";
   import MenuItem from "./MenuItem.svelte";
   import DevClashBanner from "./DevClashBanner.svelte";
+  import BoardPanel from "./BoardPanel.svelte";
 
   // `focused` = the expanded full-cockpit view ("minimize" toggle); otherwise the
   // compact detail panel. The two used to differ in terminal font size as well —
@@ -201,6 +202,29 @@
     return () => clearInterval(poll);
   });
 
+  // The agent-report sidebar (BoardPanel). Present only while the agent has
+  // reported something; the toggle hides it for every session at once and is
+  // remembered per viewer — a layout preference, so browser storage is the right
+  // home, and a storage that throws simply means "shown".
+  const BOARD_PREF = "lola.boardPanel";
+  let boardHidden = $state(readBoardPref());
+  function readBoardPref(): boolean {
+    try {
+      return localStorage.getItem(BOARD_PREF) === "hidden";
+    } catch {
+      return false;
+    }
+  }
+  function toggleBoard() {
+    boardHidden = !boardHidden;
+    try {
+      localStorage.setItem(BOARD_PREF, boardHidden ? "hidden" : "shown");
+    } catch {
+      // per-viewer convenience only
+    }
+  }
+  const showBoard = $derived(!!session?.board && !boardHidden);
+
   const canRevive = $derived(session && (session.status === "dead" || session.status === "session_ended"));
 </script>
 
@@ -281,6 +305,20 @@
           >
             {#if !store.devPending[session.id]}<span aria-hidden="true">{session.devActive ? "●" : "○"}</span>{/if}
             Active
+          </Button>
+        {/if}
+        {#if session.board}
+          <!-- Shows/hides the agent-report sidebar. `selected` while it is open,
+               the same segmented look as Active beside it. -->
+          <Button
+            size="xs"
+            selected={!boardHidden}
+            title={boardHidden ? "show the agent's report" : "hide the agent's report"}
+            aria-pressed={!boardHidden}
+            onclick={toggleBoard}
+          >
+            {#if session.board.blocked}<span class="text-orange" aria-hidden="true">⏸</span>{/if}
+            Report
           </Button>
         {/if}
         {#if session.prNumber > 0}
@@ -577,34 +615,47 @@
          agent reads is genuinely the colour surrounding it. There is no fontSize
          prop any more: the old `focused ? 14 : 12` broke the cell arithmetic
          (see TERM_FONT). -->
-    {#if activeTab === DIFF}
-      <!-- A grid cell, not a bare flex child: WKWebView does not stretch a flex
-           child's width inside a flex column, and the diff must fill the pane. -->
-      <div class="grid min-h-0 w-full flex-1">
-        <DiffView sessionId={session.id} />
-      </div>
-    {:else}
-    <div class="min-h-0 flex-1 bg-panel p-4">
-      {#if activeName}
-        <!-- Keyed on the active tab's tmux name, which already carries the session
-             identity: switching agent ⇄ shell (or moving the selection) re-attaches
-             by remounting. Keyed on the NAME, not a focus flag — with one cell size
-             for every terminal, focus changes nothing here, and rebuilding on it
-             would drop the scrollback every time the panel expanded. -->
-        {#key activeName}
-          <LiveTerminal
-            name={activeName}
-            webgl
-            interactive
-            autofocus={pickedTab || activeIsShell || focused}
-            onExit={activeIsShell ? () => terms.shellExited(session.id, activeName) : undefined}
-            onEscapeFocus={focused ? () => nav.toggleFocusTerm(session.id) : undefined}
-          />
-        {/key}
+    <!-- The terminal and, when the agent has reported, its sidebar. A GRID, not
+         a flex row: WKWebView does not reliably stretch a flex child of this
+         flex column (see CLAUDE.md), and grid cells always fill. minmax(0,1fr)
+         lets the terminal shrink below its content width instead of pushing the
+         sidebar off the window. No stacking context is introduced here — an
+         `isolate`/`z-0` around the WebGL canvas blanks it in WKWebView. -->
+    <div
+      class="grid min-h-0 w-full flex-1 grid-rows-[minmax(0,1fr)] {showBoard
+        ? 'grid-cols-[minmax(0,1fr)_auto]'
+        : 'grid-cols-[minmax(0,1fr)]'}"
+    >
+      {#if activeTab === DIFF}
+        <!-- The diff fills the same grid cell the terminal would (grid, not a
+             flex child — see the WKWebView note above). -->
+        <div class="grid min-h-0">
+          <DiffView sessionId={session.id} />
+        </div>
       {:else}
-        <div class="flex h-full items-center justify-center text-faint">no tmux session (dead)</div>
+      <div class="min-h-0 bg-panel p-4">
+        {#if activeName}
+          <!-- Keyed on the active tab's tmux name, which already carries the session
+               identity: switching agent ⇄ shell (or moving the selection) re-attaches
+               by remounting. Keyed on the NAME, not a focus flag — with one cell size
+               for every terminal, focus changes nothing here, and rebuilding on it
+               would drop the scrollback every time the panel expanded. -->
+          {#key activeName}
+            <LiveTerminal
+              name={activeName}
+              webgl
+              interactive
+              autofocus={pickedTab || activeIsShell || focused}
+              onExit={activeIsShell ? () => terms.shellExited(session.id, activeName) : undefined}
+              onEscapeFocus={focused ? () => nav.toggleFocusTerm(session.id) : undefined}
+            />
+          {/key}
+        {:else}
+          <div class="flex h-full items-center justify-center text-faint">no tmux session (dead)</div>
+        {/if}
+      </div>
       {/if}
+      {#if showBoard}<BoardPanel {session} />{/if}
     </div>
-    {/if}
   </div>
 {/if}

@@ -289,7 +289,13 @@ func (m *rootModel) kanbanColumnLines(c KanbanColumn, sess []protocol.SessionInf
 		if pr := prBadge(si); pr != "" {
 			meta += " " + pr
 		}
-		out = append(out, "  "+meta, "")
+		out = append(out, "  "+meta)
+		// The agent's self-reported progress on its own line: beside the badges
+		// it would clip at column width.
+		if chip := boardChip(si); chip != "" {
+			out = append(out, "  "+chip)
+		}
+		out = append(out, "")
 	}
 	return out
 }

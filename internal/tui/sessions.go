@@ -1325,6 +1325,12 @@ func (m *rootModel) sessionDetail() string {
 	if sel.LastNotification != "" {
 		b.WriteString(faintText.Render("note:     "+truncPlain(sel.LastNotification, 100)) + "\n")
 	}
+	// The agent's own report, right under the axes it must never replace.
+	// detailBody clips each line to the panel; 100 is the same soft cap the
+	// other prose lines here use.
+	for _, line := range boardLines(*sel, 100) {
+		b.WriteString(line + "\n")
+	}
 	if sel.PRStale {
 		b.WriteString(statusOrange.Render("⚠ PR facts stale — gh has been failing") + "\n")
 	}

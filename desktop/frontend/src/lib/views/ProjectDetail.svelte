@@ -139,6 +139,16 @@
           {#if !project.agentOk && project.agentErr}
             <div class="mt-2 text-sm text-bad">agent not ready: {project.agentErr} — launch verbs disabled</div>
           {/if}
+          <!-- The poll's last error, IN WORDS. The sidebar dot and the home
+               table's "⚠ err" only say that something is wrong; a poll whose
+               filter names a label Linear no longer knows ticks "healthily" and
+               matches nothing, and this sentence is the only place that says so. -->
+          {#if project.lastError}
+            <div class="mt-2 rounded-md border border-bad/40 bg-bad/10 px-2.5 py-1.5 text-sm" role="alert">
+              <span class="font-medium text-bad">Poll error</span>
+              <span class="selectable text-ink">{project.lastError}</span>
+            </div>
+          {/if}
         {:else}
           <div class="text-sm text-faint">
             project <span class="font-mono text-ink">{nav.project || "(none)"}</span> not found{store.alive

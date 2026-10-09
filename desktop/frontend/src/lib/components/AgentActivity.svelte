@@ -21,26 +21,40 @@
   // The text is UNTRUSTED, display-only ([statusagent] / the agent's own
   // notification): it is "≈"-marked exactly like the interpreted pill and never
   // styled as fact. Nothing here feeds the control loop.
-  let { session }: { session: SessionInfo } = $props();
+  // `pulse={false}` where the row already animates the agent axis itself (the
+  // desktop list's AgentGlyph): two moving marks a few pixels apart is noise.
+  let { session, pulse = true }: { session: SessionInfo; pulse?: boolean } = $props();
 
-  const live = $derived(session.agentState === "working" || session.agentState === "starting");
+  const live = $derived(pulse && (session.agentState === "working" || session.agentState === "starting"));
 
   // The interpreter's headline, or — failing that — the agent's own last
   // notification. The daemon clears lastNotification on any transition off
   // waiting_input, so this is never a stale sentence about a turn that ended.
   const text = $derived(session.headline || session.lastNotification || "");
+
+  // The agent's OWN report (`lola report`) fills the line when nothing above
+  // has a sentence: a reported blocker first — it is the one part a human must
+  // act on, so it also outranks the interpreter's guess — else the plan item it
+  // says it is on. Also the agent's claim, so it is never styled as fact: the
+  // blocker carries "⏸", and the plan item rides bare beside the pulse dot.
+  const blocked = $derived(session.board?.blocked || "");
+  const current = $derived(session.board?.current || "");
 </script>
 
-{#if live || text}
+{#if live || text || blocked || current}
   <div class="flex min-w-0 items-center gap-1.5 text-sm">
-    <LivePulse agentState={session.agentState} />
-    {#if text}
+    {#if pulse}<LivePulse agentState={session.agentState} />{/if}
+    {#if blocked}
+      <span class="truncate text-orange" title="the agent reports it is blocked">⏸ {blocked}</span>
+    {:else if text}
       <!-- The interpreter's headline reads as a live-progress note, not a
            warning, so it carries the pulse dot's `info` blue. Orange is spoken
            for by "you are needed" — the pill's own colour. -->
       <span class="truncate {session.headline ? 'text-info' : 'text-faint'}"
         >{session.headline ? `≈ ${text}` : text}</span
       >
+    {:else if current}
+      <span class="truncate text-faint" title="the plan item the agent reports it is on">{current}</span>
     {/if}
   </div>
 {/if}

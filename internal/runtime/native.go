@@ -315,7 +315,7 @@ func (n *Native) Spawn(ctx context.Context, p config.Project, issue linear.Issue
 	if err := os.MkdirAll(filepath.Join(dir, lolaDir), 0o700); err != nil {
 		return fail("create "+lolaDir, err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, lolaDir, "prompt.md"), promptMD(p, issue, branch), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, lolaDir, "prompt.md"), n.withReportBriefing(promptMD(p, issue, branch)), 0o600); err != nil {
 		return fail("write prompt.md", err)
 	}
 	// Per-agent lifecycle-callback artifact(s): claude's .lola/settings.json,
@@ -530,7 +530,7 @@ func (n *Native) finishAgentLaunch(ctx context.Context, p config.Project, id, di
 	if err := os.MkdirAll(filepath.Join(dir, lolaDir), 0o700); err != nil {
 		return rb("create "+lolaDir, err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, lolaDir, "prompt.md"), []byte(prompt), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, lolaDir, "prompt.md"), n.withReportBriefing([]byte(prompt)), 0o600); err != nil {
 		return rb("write prompt.md", err)
 	}
 	if err := n.writeAgentArtifacts(dir, kind); err != nil {
@@ -893,6 +893,38 @@ func promptMD(p config.Project, issue linear.Issue, branch string) []byte {
 	fmt.Fprintf(&b, "- You are in a dedicated git worktree on branch `%s`; commit your work here and never switch branches.\n", branch)
 	fmt.Fprintf(&b, "- When the work is done, push the branch and open a pull request against `%s`.\n", p.DefaultBranch)
 	b.WriteString("- Never merge the pull request yourself; a human reviews and merges.\n")
+	return []byte(b.String())
+}
+
+// withReportBriefing appends the progress-reporting section to a prompt.md
+// body. Every AGENT launch gets it (Spawn and finishAgentLaunch; Revive and
+// SwitchAgent reuse the file), so a session's board works whichever agent kind
+// and whichever entry point started it — `lola report` is a plain shell
+// command, which is what gives claude, codex and opencode parity for free.
+//
+// Kept short on purpose: it is read on every launch, and the cadence advice is
+// what keeps the agent from spending a tool call per keystroke on it.
+func (n *Native) withReportBriefing(prompt []byte) []byte {
+	bin := "lola"
+	if n.LolaBin != "" {
+		bin = shQuote(n.LolaBin)
+	}
+	var b strings.Builder
+	b.Write(prompt)
+	if len(prompt) > 0 && prompt[len(prompt)-1] != '\n' {
+		b.WriteByte('\n')
+	}
+	b.WriteString("\n## Progress reporting\n\n")
+	b.WriteString("Humans watch this session in lola's dashboard. Keep its board current with `" + bin + " report` (a shell command; it never fails your turn):\n\n")
+	b.WriteString("```sh\n")
+	b.WriteString(bin + " report todo set \"Read the issue\" \"Implement X\" \"Add tests\" \"Open the PR\"   # your plan, once you have one\n")
+	b.WriteString(bin + " report todo done 2           # finishing an item advances to the next one\n")
+	b.WriteString(bin + " report phase implementing    # planning|investigating|implementing|testing|reviewing|polishing|done\n")
+	b.WriteString(bin + " report check tests pass \"142/142\"   # a check you ran locally (pass|fail|running)\n")
+	b.WriteString(bin + " report blocked \"need the staging API key\"   # then: " + bin + " report unblocked\n")
+	b.WriteString(bin + " report note \"waiting on the migration to finish\"\n")
+	b.WriteString("```\n\n")
+	b.WriteString("Report on meaningful changes only — a new plan, a finished item, a phase change, a check result, a blocker. Not every step. `" + bin + " report --help` lists every verb. Being blocked on a decision only a human can make is worth reporting even mid-turn.\n")
 	return []byte(b.String())
 }
 

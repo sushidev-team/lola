@@ -497,6 +497,16 @@ func (m *rootModel) sessionsBody(w, h int) []string {
 			reactingStyle(si.Reacting).Render(dash(si.Reacting)), dash(si.Age),
 		}
 	}
+	// PLAN column — the agent's self-reported progress (`lola report`) — only
+	// when at least one listed session has reported, so a fleet that never does
+	// keeps every column it had. Inserted after STATUS: it qualifies what the
+	// agent is doing, it is not the delivery axis beside it.
+	if anyBoard(list) {
+		headers = insAt(headers, 4, "PLAN")
+		for i, si := range list {
+			rows[i] = insAt(rows[i], 4, dash(boardChip(si)))
+		}
+	}
 	colw := colWidths(headers, rows)
 
 	// Adaptive TITLE column (after ISSUE): so a session is identifiable by what
@@ -1021,6 +1031,16 @@ func (m *rootModel) kanbanBodyAt(width, height int) []string {
 		lines = lines[:height]
 	}
 	return lines
+}
+
+// anyBoard reports whether any session in list carries a self-report.
+func anyBoard(list []protocol.SessionInfo) bool {
+	for _, si := range list {
+		if si.Board != nil {
+			return true
+		}
+	}
+	return false
 }
 
 // insAt returns s with v spliced in at index i (0 <= i <= len(s)), leaving the

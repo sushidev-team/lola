@@ -1001,12 +1001,14 @@ func (f *formModel) openPicker(cur fieldID) tea.Cmd {
 			opts = append(opts, pickOpt{s.ID, s.Name + " [" + s.Type + "]"})
 		}
 		selected = f.poll.StateIDs
+		opts = f.withSelectedExtras(opts, selected, f.stateName)
 	case fLabels:
 		multi, title = true, "Trigger labels"
 		for _, l := range f.meta.Labels {
 			opts = append(opts, pickOpt{l.ID, labelDisplay(l)})
 		}
 		selected = f.poll.MatchLabels
+		opts = f.withSelectedExtras(opts, selected, f.labelName)
 	case fMatchMode:
 		title = "Label match mode"
 		opts = []pickOpt{{"any", "any"}, {"all", "all"}}
@@ -1934,6 +1936,26 @@ func (f *formModel) display(fd fieldID) string {
 		return "[ Save ]"
 	}
 	return ""
+}
+
+// withSelectedExtras appends every selected id the option list does not carry,
+// so the picker can neither hide it nor — since applyPick rebuilds the
+// selection from the options — silently drop it on confirm. A workspace label
+// resolves to its name via name (the workspace-label cache); anything name can
+// only render as a short id is one Linear no longer knows (deleted, or an org
+// label moved to team level, which mints a new id), and says so.
+func (f *formModel) withSelectedExtras(opts []pickOpt, selected []string, name func(string) string) []pickOpt {
+	for _, id := range selected {
+		if id == "" || slices.ContainsFunc(opts, func(o pickOpt) bool { return o.id == id }) {
+			continue
+		}
+		label := name(id)
+		if label == shortID(id) {
+			label = "unknown " + label + " — no longer in Linear, untick to remove"
+		}
+		opts = append(opts, pickOpt{id, label})
+	}
+	return opts
 }
 
 func (f *formModel) joinNames(ids []string, name func(string) string) string {

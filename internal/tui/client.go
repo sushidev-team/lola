@@ -200,6 +200,12 @@ func renderMatches(d *protocol.PollOnceData) string {
 		mode = " (dry-run)"
 	}
 	fmt.Fprintf(&b, "poll %s%s: %d match(es)\n\n", d.Poll, mode, len(d.Matches))
+	for _, pr := range d.Problems {
+		b.WriteString(badText.Render("✗ "+pr) + "\n")
+	}
+	if len(d.Problems) > 0 {
+		b.WriteString("\n")
+	}
 	rows := make([][]string, 0, len(d.Matches))
 	for _, m := range d.Matches {
 		rows = append(rows, []string{m.Identifier, m.Title, m.Action, m.Reason})

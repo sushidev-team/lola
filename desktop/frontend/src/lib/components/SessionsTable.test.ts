@@ -157,11 +157,11 @@ describe("SessionsTable column alignment", () => {
   });
 });
 
-// EVERY session the attention predicate is true for gets a marker. It used to be
-// needs_input alone, which left the three delivery regressions — a red build,
-// requested changes, a conflicting branch — with no mark on any surface in the
-// app, even though they had been in the attention set from the beginning.
-describe("SessionsTable attention markers", () => {
+// The agent axis is an icon in the leading column, and attention shows where it
+// belongs: an orange glyph + "Needs you" chip when the agent waits on a human, a
+// red lifecycle chip when the delivered work regressed. Every state the
+// attention predicate covers must still be visibly marked.
+describe("SessionsTable agent glyph and attention", () => {
   beforeEach(() => {
     cleanup();
     store.connected = true;
@@ -173,48 +173,65 @@ describe("SessionsTable attention markers", () => {
     nav.triage = "";
   });
 
-  function markers(container: HTMLElement): HTMLElement[] {
-    return [...container.querySelectorAll("tbody td:first-child span")].filter(
-      (el) => el.textContent === "!",
-    ) as HTMLElement[];
-  }
+  const glyph = (c: HTMLElement) => c.querySelector("tbody tr:first-child td:first-child") as HTMLElement;
+  const status = (c: HTMLElement) => c.querySelectorAll("tbody tr:first-child td")[4] as HTMLElement;
 
-  it("marks a blocked agent", () => {
-    store.sessions = [fakeSession({ agentState: "waiting_input", delivery: "none" })];
+  it("animates only a working agent", () => {
+    store.sessions = [fakeSession({ agentState: "working" })];
     const { container } = render(SessionsTable);
-    expect(markers(container)).toHaveLength(1);
+    expect(glyph(container).querySelector(".spin")).not.toBeNull();
+    cleanup();
+    store.sessions = [fakeSession({ agentState: "idle" })];
+    const r = render(SessionsTable);
+    expect(glyph(r.container).querySelector(".spin")).toBeNull();
+    expect(glyph(r.container).textContent).toContain("idle");
   });
 
-  it("marks a red build even though the agent is happily working", () => {
-    store.sessions = [fakeSession({ agentState: "working", delivery: "ci_failed" })];
+  it("names a blocked agent and what it is asking", () => {
+    store.sessions = [fakeSession({ agentState: "waiting_input", inputReason: "permission_prompt", delivery: "none" })];
     const { container } = render(SessionsTable);
-    expect(markers(container)).toHaveLength(1);
+    expect(glyph(container).querySelector(".bg-orange")).not.toBeNull();
+    expect(status(container).textContent).toContain("Needs you");
+    expect(status(container).textContent).toContain("permission prompt");
   });
 
-  it("marks requested changes and a conflicting branch too", () => {
+  it("marks a red build in red even though the agent is happily working", () => {
+    store.sessions = [fakeSession({ agentState: "working", prNumber: 7, delivery: "ci_failed" })];
+    const { container } = render(SessionsTable);
+    expect(screen.getByText("CI failing").closest(".text-bad")).not.toBeNull();
+    expect(status(container).textContent).not.toContain("Needs you");
+  });
+
+  it("folds lola's reaction posture into the chip's wording", () => {
     store.sessions = [
-      fakeSession({ id: "a", issue: "ENG-1", agentState: "working", delivery: "changes_requested" }),
-      fakeSession({ id: "b", issue: "ENG-2", agentState: "idle", delivery: "merge_conflict" }),
+      fakeSession({ id: "a", issue: "ENG-1", prNumber: 7, delivery: "ci_failed", reacting: "escalated" }),
+      fakeSession({ id: "b", issue: "ENG-2", prNumber: 8, delivery: "ci_failed", reacting: "ci retry 1/2" }),
     ];
-    const { container } = render(SessionsTable);
-    expect(markers(container)).toHaveLength(2);
+    render(SessionsTable);
+    expect(screen.getByText("CI failing · needs you").closest(".text-bad")).not.toBeNull();
+    expect(screen.getByText("CI failing · ci retry 1/2").closest(".text-warn")).not.toBeNull();
+    expect(screen.queryByText("escalated")).not.toBeInTheDocument();
   });
 
-  it("colours the two halves differently — you answer one and fix the other", () => {
+  it("marks requested changes and a conflicting branch, and the conflict resolves on click", async () => {
+    const resolve = vi.spyOn(store, "resolveConflict").mockResolvedValue(undefined as never);
     store.sessions = [
-      fakeSession({ id: "a", issue: "ENG-1", agentState: "waiting_input", delivery: "none" }),
-      fakeSession({ id: "b", issue: "ENG-2", agentState: "working", delivery: "ci_failed" }),
+      fakeSession({ id: "a", issue: "ENG-1", agentState: "working", prNumber: 7, delivery: "changes_requested" }),
+      fakeSession({ id: "b", issue: "ENG-2", agentState: "idle", prNumber: 8, delivery: "merge_conflict" }),
     ];
-    const { container } = render(SessionsTable);
-    const cls = markers(container).map((el) => el.className);
-    expect(cls).toContain("text-warn");
-    expect(cls).toContain("text-bad");
+    render(SessionsTable);
+    expect(screen.getByText("Changes requested").closest(".text-orange")).not.toBeNull();
+    await fireEvent.click(screen.getByText("Merge conflict").closest("button")!);
+    expect(resolve).toHaveBeenCalledWith("b");
+    expect(nav.selectedId).toBe("");
+    resolve.mockRestore();
   });
 
-  it("leaves a quiet session unmarked", () => {
-    store.sessions = [fakeSession({ agentState: "idle", delivery: "review_pending" })];
+  it("leaves a quiet session unalarmed", () => {
+    store.sessions = [fakeSession({ agentState: "idle", prNumber: 7, delivery: "review_pending" })];
     const { container } = render(SessionsTable);
-    expect(markers(container)).toHaveLength(0);
+    expect(screen.getByText("Awaiting review")).toBeInTheDocument();
+    expect(status(container).querySelector(".text-bad, .text-orange")).toBeNull();
   });
 });
 
@@ -248,6 +265,51 @@ describe("SessionsTable PR link", () => {
   it("states the delivery state beside the number", () => {
     store.sessions = [fakeSession({ prNumber: 42, prUrl: "u", delivery: "ci_failed" })];
     render(SessionsTable);
-    expect(screen.getByText(/ci failed/)).toBeInTheDocument();
+    expect(screen.getByText("CI failing")).toBeInTheDocument();
+  });
+});
+
+// Status, Plan, PR and Activity used to be four columns answering one question.
+// They are one Status cell now: a fixed-width grey PR number, then ONE lifecycle
+// chip — or, before a PR exists, the agent's own plan chip.
+describe("SessionsTable lifecycle chip", () => {
+  beforeEach(() => {
+    cleanup();
+    store.connected = true;
+    store.alive = true;
+    store.sessions = [];
+    nav.scoped = false;
+    nav.project = "";
+    nav.selectedId = "";
+    nav.triage = "";
+  });
+
+  const plan = { percent: 40, done: 2, total: 5, hasProgress: true, progressDerived: true, updatedAt: new Date().toISOString() };
+  const progressCell = (c: HTMLElement) => c.querySelectorAll("tbody tr:first-child td")[4];
+
+  it("has one Status column, and no PR, Plan, Progress or Activity column", () => {
+    store.sessions = [fakeSession({ prNumber: 7, checks: "pass" })];
+    const { container } = render(SessionsTable);
+    const heads = [...container.querySelectorAll("thead th")].map((th) => th.textContent?.trim());
+    expect(heads).toEqual(["", "Issue", "Title", "Project", "Status", "Age"]);
+  });
+
+  it("shows the agent's plan before there is a PR", () => {
+    store.sessions = [fakeSession({ prNumber: 0, board: plan } as never)];
+    const { container } = render(SessionsTable);
+    expect(progressCell(container).querySelector('[role="progressbar"]')).not.toBeNull();
+  });
+
+  it("lets the PR supersede the plan once it exists", () => {
+    store.sessions = [fakeSession({ prNumber: 7, checks: "pass", board: plan } as never)];
+    const { container } = render(SessionsTable);
+    expect(progressCell(container).textContent).toContain("#7");
+    expect(progressCell(container).querySelector('[role="progressbar"]')).toBeNull();
+  });
+
+  it("draws no em-dash placeholder when there is nothing to show", () => {
+    store.sessions = [fakeSession({ prNumber: 0 })];
+    const { container } = render(SessionsTable);
+    expect(progressCell(container).textContent?.trim()).toBe("");
   });
 });

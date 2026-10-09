@@ -30,6 +30,9 @@ const remoteCmdPrefix = "remote."
 //	                pane; one with "session_end" forges an exited axis and
 //	                drives the reaction engine. Nothing about this path is
 //	                remote by design.
+//	agentReport     the agent's own self-report channel, same in-pane origin
+//	                as hookEvent. Display-only, but a forged report would put
+//	                words in a live agent's mouth on every surface.
 //	pairBegin       enrolment and revocation are LOCAL operations at the
 //	pairStatus      machine. A paired phone that could enrol would let a thief
 //	pairConfirm     add a device that survives revoking the first; one that
@@ -52,6 +55,7 @@ var deniedCommands = map[string]bool{
 	"reload":              true,
 	"renameProject":       true,
 	"hookEvent":           true,
+	"agentReport":         true,
 	"pairBegin":           true,
 	"pairStatus":          true,
 	"pairConfirm":         true,

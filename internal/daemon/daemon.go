@@ -114,6 +114,12 @@ type Daemon struct {
 	hookWarnMu sync.Mutex
 	hookWarned map[string]bool
 
+	// reports rate-limits `lola report` per session (see report.go).
+	reports reportLimiter
+
+	// refs caches each poll's stale-filter-reference verdict (filterrefs.go).
+	refs refCache
+
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 

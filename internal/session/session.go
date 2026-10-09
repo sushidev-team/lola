@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/sushidev-team/lola/internal/board"
 	"github.com/sushidev-team/lola/internal/scm"
 	"github.com/sushidev-team/lola/internal/state"
 )
@@ -221,6 +222,13 @@ type Session struct {
 	// unchanged session skip the LLM call entirely.
 	LastInterpretedAt   time.Time `json:"last_interpreted_at,omitempty"`
 	LastInterpretedHash string    `json:"last_interpreted_hash,omitempty"`
+
+	// Board is the agent's OWN progress report (`lola report …`): plan, phase,
+	// progress, blocker, note, self-run checks. DISPLAY ONLY, like the overlay
+	// above — it is the agent's claim about itself, steerable by whatever it
+	// read, so sessionsData is its one reader. Nothing in the control loop
+	// (axes, slots, reactions, write-back, send-keys gates) may consult it.
+	Board board.Board `json:"board,omitzero"`
 
 	// RemovedLabels are the match-label UUIDs the post-spawn label flip
 	// actually stripped from this issue (the trigger labels it carried at

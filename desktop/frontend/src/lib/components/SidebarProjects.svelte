@@ -348,7 +348,11 @@
     glyphCls={d.cls}
     dim={d.faint}
     {active}
-    title={clears ? "clear the project filter" : "scope the cockpit to this project"}
+    title={p.lastError
+      ? `poll error: ${p.lastError}`
+      : clears
+        ? "clear the project filter"
+        : "scope the cockpit to this project"}
     onclick={() => openProject(p.name)}
     onkeydown={(e) => nudgeProject(e, p.name, group, index)}
   >
