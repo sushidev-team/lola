@@ -227,6 +227,10 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   persisted per-day `Ledger` (`~/.lola/state/usage.json`) the budget reads.
   A session's directory is its WORKTREE's `~/.claude/projects` slug, so the
   worker, its subagents and every review pass run there are one figure.
+- `internal/quota` — the agents' SUBSCRIPTION limits (stdlib leaf): claude's
+  `rate_limits` as recorded by `lola hook statusline` (`RecordClaude`, in
+  `~/.lola/state/quota-claude.json`) and codex's from the tail of its newest
+  session log (`LatestCodex`). Snapshots, clamped, with reset times.
 - `internal/sysload` — machine load for the `[load]` hold (stdlib leaf): the
   1-min load average and the OS's own free-memory percentage; unknown is -1.
 - `internal/secrets` / `internal/notify` / `internal/brain` / `internal/review`
@@ -422,6 +426,14 @@ each of which owns exactly one external tool or concern behind an **exec seam**
     already runs in the worktree and is counted with the session.
   - A load value the OS will not report holds NOTHING (fail open): a wrong
     "busy" is a machine that silently never dispatches.
+  - The subscription limits are DISPLAY-ONLY (no hold reads them), and the
+    claude half exists only because the status line is the one place Claude
+    Code exposes them. `hook.SettingsJSON` therefore OWNS the status line of
+    every lola claude session, and `hook.StatusLine` must keep passing through
+    to the user's own command (project local → project → user settings, same
+    stdin, bounded, process group killed) — ALWAYS, even when recording fails,
+    and never to a command that is itself `lola hook statusline`. Dropping the
+    pass-through silently breaks whatever the user's status line feeds.
 - **Health-gate every dispatch.** If `tmux`/`git`/`claude` aren't all resolvable
   or the poll's `[[project]]` doesn't resolve: skip the tick, record `lastError`
   in status, and mutate **nothing** (no seen, no labels, no in-flight).

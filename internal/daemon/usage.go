@@ -13,6 +13,7 @@ import (
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/notify"
 	"github.com/sushidev-team/lola/internal/protocol"
+	"github.com/sushidev-team/lola/internal/quota"
 	"github.com/sushidev-team/lola/internal/session"
 	"github.com/sushidev-team/lola/internal/sysload"
 	"github.com/sushidev-team/lola/internal/usage"
@@ -59,6 +60,10 @@ type spendState struct {
 	load *protocol.LoadInfo
 	// sample is the machine-load probe seam (sysload.Read in production).
 	sample func(context.Context) sysload.Sample
+	// quotas is the last read of the agents' subscription limits;
+	// codexHome is where codex keeps its logs ("" = never look).
+	quotas    []protocol.QuotaInfo
+	codexHome string
 }
 
 func newSpendState(home string, logf func(string, ...any)) *spendState {
@@ -79,6 +84,7 @@ func newSpendState(home string, logf func(string, ...any)) *spendState {
 		bySession: map[string]protocol.UsageInfo{},
 		notified:  map[string]string{},
 		sample:    sysload.Read,
+		codexHome: quota.CodexHome(),
 	}
 }
 
@@ -224,6 +230,11 @@ func (d *Daemon) usagePass(ctx context.Context, now time.Time) {
 		d.logf("", "usage: persist ledger: %v", saveErr)
 	}
 
+	quotas := readQuotas(quota.ClaudePath(d.home), sp.codexHome, now)
+	sp.mu.Lock()
+	sp.quotas = quotas
+	sp.mu.Unlock()
+
 	d.mu.Lock()
 	lim := d.cfg.Load
 	d.mu.Unlock()
@@ -235,6 +246,32 @@ func (d *Daemon) usagePass(ctx context.Context, now time.Time) {
 		sp.mu.Unlock()
 	}
 	d.notifyBudgets(ctx, today)
+}
+
+// readQuotas reads each agent's last observed subscription limits, dropping
+// windows that have already reset. Local file reads only: the claude figures
+// are what `lola hook statusline` recorded, the codex ones the tail of its
+// newest session log.
+func readQuotas(claudePath, codexHome string, now time.Time) []protocol.QuotaInfo {
+	var out []protocol.QuotaInfo
+	add := func(agent string, s quota.Snapshot) {
+		s, ok := s.Live(now)
+		if !ok {
+			return
+		}
+		qi := protocol.QuotaInfo{Agent: agent, Plan: s.Plan, At: s.At}
+		for _, w := range s.Windows {
+			qi.Windows = append(qi.Windows, protocol.QuotaWindow{Label: w.Label, UsedPercent: w.UsedPercent, ResetsAt: w.ResetsAt})
+		}
+		out = append(out, qi)
+	}
+	if s, err := quota.ReadClaude(claudePath); err == nil {
+		add("claude", s)
+	}
+	if s, ok := quota.LatestCodex(codexHome); ok {
+		add("codex", s)
+	}
+	return out
 }
 
 // history is what a live session is ranked against: every FINISHED session in
@@ -392,9 +429,10 @@ func (d *Daemon) usageStatus(now time.Time) *protocol.UsageStatus {
 		l := *d.spend.load
 		load = &l
 	}
+	quotas := append([]protocol.QuotaInfo(nil), d.spend.quotas...)
 	d.spend.mu.Unlock()
 
-	us := &protocol.UsageStatus{Day: today, Tokens: all.Tokens(), Weighted: all.Weighted(), TodayUSD: all.CostUSD, Load: load}
+	us := &protocol.UsageStatus{Day: today, Tokens: all.Tokens(), Weighted: all.Weighted(), TodayUSD: all.CostUSD, Load: load, Quotas: quotas}
 	budgets := map[string]int64{}
 	for _, b := range limits {
 		if b.project == "" {

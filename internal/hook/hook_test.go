@@ -81,6 +81,10 @@ const settingsGolden = `{
   },
   "skillOverrides": {
     "auto-mode-setup": "off"
+  },
+  "statusLine": {
+    "type": "command",
+    "command": "/usr/local/bin/lola hook statusline"
   }
 }
 `

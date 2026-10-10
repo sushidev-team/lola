@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { UsageInfo } from "@bindings/internal/protocol";
-import { budgetPercent, fmtTokens, fmtUSD, rankText, spendLabel, spendLevel, spendTitle, usageLabel, usageTitle } from "./usage";
+import { budgetPercent, headerLabel, headerLevel, headerTitle, quotaLabel, untilShort, fmtTokens, fmtUSD, rankText, spendLabel, spendLevel, spendTitle, usageLabel, usageTitle } from "./usage";
 
 const info = (o: Partial<UsageInfo> = {}): UsageInfo => ({
   tokens: 46_700_420,
@@ -49,5 +49,43 @@ describe("usage formatting", () => {
     });
     expect(title).toContain("p: 3.0M — 25% of 4.0M");
     expect(title).toContain("Dispatch held — machine busy");
+  });
+});
+
+describe("subscription limits", () => {
+  const now = Date.parse("2026-10-10T10:00:00Z");
+  const claude = {
+    agent: "claude",
+    at: "2026-10-10T09:48:00Z",
+    windows: [
+      { label: "5h", usedPercent: 42.4, resetsAt: "2026-10-10T12:10:00Z" },
+      { label: "7d", usedPercent: 18, resetsAt: "2026-10-13T14:00:00Z" },
+    ],
+  };
+  const codex = { agent: "codex", plan: "pro", at: "2026-10-10T08:14:34Z", windows: [{ label: "7d", usedPercent: 4, resetsAt: "2026-10-15T20:29:36Z" }] };
+  const base = { day: "2026-10-10", tokens: 46_700_000, weighted: 0, todayUsd: 3 };
+
+  it("leads the header with the limits, falling back to tokens", () => {
+    expect(quotaLabel(claude)).toBe("Claude 5h 42% · 7d 18%");
+    expect(headerLabel({ ...base, quotas: [claude, codex] })).toBe("Claude 5h 42% · 7d 18% · Codex 7d 4%");
+    expect(headerLabel({ ...base, quotas: [codex], weighted: 50, budgetTokens: 100 })).toBe("Codex 7d 4% · 50% of budget");
+    expect(headerLabel(base)).toBe("46.7M today");
+  });
+
+  it("grades by the fullest limit or the budget", () => {
+    expect(headerLevel({ ...base, quotas: [claude] })).toBe("ok");
+    const full = { ...claude, windows: [{ ...claude.windows[0], usedPercent: 85 }] };
+    expect(headerLevel({ ...base, quotas: [full] })).toBe("near");
+    expect(headerLevel({ ...base, quotas: [claude], weighted: 100, budgetTokens: 100 })).toBe("over");
+  });
+
+  it("explains resets and freshness in the tooltip", () => {
+    expect(untilShort("2026-10-10T12:10:00Z", now)).toBe("in 2h 10m");
+    expect(untilShort("2026-10-09T12:10:00Z", now)).toBe("");
+    const t = headerTitle({ ...base, quotas: [claude, codex] }, now);
+    expect(t).toContain("Claude — as of 12m ago");
+    expect(t).toContain("5h: 42% used, resets in 2h 10m");
+    expect(t).toContain("Codex (pro)");
+    expect(t).toContain("Tokens 2026-10-10: 46.7M");
   });
 });

@@ -279,6 +279,27 @@ type UsageStatus struct {
 	Projects     []ProjectSpend `json:"projects,omitempty"`
 	// Load is the last [load] sample; nil when [load] is off.
 	Load *LoadInfo `json:"load,omitempty"`
+	// Quotas is how much of each coding agent's SUBSCRIPTION limits is used
+	// (internal/quota), one entry per agent lola could read — claude via the
+	// status line, codex via its session logs. Empty when neither reported.
+	Quotas []QuotaInfo `json:"quotas,omitempty"`
+}
+
+// QuotaInfo is one agent's subscription limits as last observed. At is when
+// they were observed: a snapshot is only as fresh as that agent's last turn.
+type QuotaInfo struct {
+	Agent   string        `json:"agent"` // "claude" | "codex"
+	Plan    string        `json:"plan,omitempty"`
+	At      time.Time     `json:"at"`
+	Windows []QuotaWindow `json:"windows"`
+}
+
+// QuotaWindow is one rate-limit window: "5h", "7d", or "spend" (a gateway's
+// spend limit). Windows whose reset has passed are never sent.
+type QuotaWindow struct {
+	Label       string    `json:"label"`
+	UsedPercent float64   `json:"usedPercent"`
+	ResetsAt    time.Time `json:"resetsAt"`
 }
 
 // ProjectSpend is one project's usage today against its own limit.

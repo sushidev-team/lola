@@ -5,7 +5,8 @@
 // ranking against the user's own finished sessions (a 4-step bar glyph), plus a
 // flame while it burns tokens faster than past sessions ever did. Mirrors
 // internal/tui/usage.go.
-import type { UsageInfo, UsageStatus } from "@bindings/internal/protocol";
+import type { QuotaInfo, UsageInfo, UsageStatus } from "@bindings/internal/protocol";
+import { agoShort } from "./board";
 
 /** Compact dollars: cents below $100, whole dollars above. */
 export function fmtUSD(v: number): string {
@@ -89,4 +90,68 @@ export function spendTitle(u: UsageStatus): string {
   }
   if (u.load?.busy) lines.push(`Dispatch held — ${u.load.busy}`);
   return lines.join("\n");
+}
+
+// ---- subscription limits (internal/quota) ---------------------------------
+// The header leads with how much of each agent's SUBSCRIPTION is used — the
+// number a subscriber actually budgets by — and falls back to today's tokens
+// only when no agent has reported one (an API-key user, or nothing ran yet).
+
+const AGENT_NAMES: Record<string, string> = { claude: "Claude", codex: "Codex" };
+
+/** "Claude 5h 42% · 7d 18%". */
+export function quotaLabel(q: QuotaInfo): string {
+  const name = AGENT_NAMES[q.agent] ?? q.agent;
+  return `${name} ${(q.windows ?? []).map((w) => `${w.label} ${Math.round(w.usedPercent)}%`).join(" · ")}`;
+}
+
+/** The fullest window across every agent; -1 with none. */
+export function quotaMax(qs: QuotaInfo[] | null | undefined): number {
+  let m = -1;
+  for (const q of qs ?? []) for (const w of q.windows ?? []) m = Math.max(m, w.usedPercent);
+  return m;
+}
+
+/** A compact "in 2h 10m" / "in 3d 4h" until iso; "" when unknown or past. */
+export function untilShort(iso: string, now: number = Date.now()): string {
+  const t = Date.parse(iso);
+  if (Number.isNaN(t) || t <= now) return "";
+  const m = Math.round((t - now) / 60000);
+  if (m < 60) return `in ${m}m`;
+  if (m < 1440) return `in ${Math.floor(m / 60)}h ${m % 60}m`;
+  return `in ${Math.floor(m / 1440)}d ${Math.floor((m % 1440) / 60)}h`;
+}
+
+/** Tooltip lines for one agent: each window with its reset, and how fresh. */
+export function quotaTitle(q: QuotaInfo, now: number = Date.now()): string {
+  const name = AGENT_NAMES[q.agent] ?? q.agent;
+  const ago = agoShort(q.at, now);
+  const head = `${name}${q.plan ? ` (${q.plan})` : ""} — as of ${ago === "now" ? "just now" : `${ago} ago`}`;
+  const lines = (q.windows ?? []).map((w) => {
+    const reset = untilShort(w.resetsAt, now);
+    return `  ${w.label}: ${Math.round(w.usedPercent)}% used${reset ? `, resets ${reset}` : ""}`;
+  });
+  return [head, ...lines].join("\n");
+}
+
+/** The header chip: subscription limits when known, else today's tokens; a budget always shows. */
+export function headerLabel(u: UsageStatus): string {
+  if (!u.quotas?.length) return spendLabel(u);
+  const pct = budgetPercent(u.weighted, u.budgetTokens);
+  return u.quotas.map(quotaLabel).join(" · ") + (pct >= 0 ? ` · ${pct}% of budget` : "");
+}
+
+/** The header chip's level: the worse of the fullest limit and the budget. */
+export function headerLevel(u: UsageStatus): SpendLevel {
+  const m = quotaMax(u.quotas);
+  const q: SpendLevel = m >= 95 ? "over" : m >= 80 ? "near" : "ok";
+  const b = spendLevel(u);
+  return q === "over" || b === "over" ? "over" : q === "near" || b === "near" ? "near" : "ok";
+}
+
+/** Its tooltip: the limits first, then today's tokens and budgets. */
+export function headerTitle(u: UsageStatus, now: number = Date.now()): string {
+  const parts = (u.quotas ?? []).map((q) => quotaTitle(q, now));
+  parts.push(spendTitle(u));
+  return parts.join("\n\n");
 }

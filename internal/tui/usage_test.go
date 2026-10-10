@@ -3,6 +3,7 @@ package tui
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sushidev-team/lola/internal/protocol"
 )
@@ -54,6 +55,26 @@ func TestSpendVital(t *testing.T) {
 		Projects: []protocol.ProjectSpend{{Name: "p", Tokens: 3_000_000, Weighted: 1_000_000, BudgetTokens: 4_000_000}},
 		Load:     &protocol.LoadInfo{Load1: -1, CPUs: 8, FreeMemPercent: 40}})
 	for _, want := range []string{"tokens 2026-10-09: 3.0M (1.0M weighted, ~$3.00 at list price) — no limit", "p: 3.0M (1.0M weighted) — 25% of 4.0M", "load: unknown · memory 40% free"} {
+		if !strings.Contains(sum, want) {
+			t.Errorf("summary = %q, want %q", sum, want)
+		}
+	}
+}
+
+func TestQuotaVital(t *testing.T) {
+	now := time.Now()
+	qs := []protocol.QuotaInfo{
+		{Agent: "claude", At: now.Add(-12 * time.Minute), Windows: []protocol.QuotaWindow{
+			{Label: "5h", UsedPercent: 42.4, ResetsAt: now.Add(2*time.Hour + 10*time.Minute)},
+			{Label: "7d", UsedPercent: 18}}},
+		{Agent: "codex", Plan: "pro", At: now, Windows: []protocol.QuotaWindow{{Label: "7d", UsedPercent: 4}}},
+	}
+	got := spendVital(&protocol.StatusData{Usage: &protocol.UsageStatus{Tokens: 1, Quotas: qs}})
+	if got != "claude 5h 42% 7d 18% · codex 7d 4%" {
+		t.Errorf("vital = %q, want the limits instead of today's tokens", got)
+	}
+	sum := spendSummary(&protocol.UsageStatus{Day: "d", Quotas: qs})
+	for _, want := range []string{"claude limits, as of 12m ago: 5h 42% (resets in 2h10m) · 7d 18%", "codex (pro) limits"} {
 		if !strings.Contains(sum, want) {
 			t.Errorf("summary = %q, want %q", sum, want)
 		}

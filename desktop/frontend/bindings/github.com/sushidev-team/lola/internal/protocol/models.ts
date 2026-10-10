@@ -595,6 +595,30 @@ export interface PrsData {
 }
 
 /**
+ * QuotaInfo is one agent's subscription limits as last observed. At is when
+ * they were observed: a snapshot is only as fresh as that agent's last turn.
+ */
+export interface QuotaInfo {
+    /**
+     * "claude" | "codex"
+     */
+    "agent": string;
+    "plan"?: string;
+    "at": string;
+    "windows": QuotaWindow[] | null;
+}
+
+/**
+ * QuotaWindow is one rate-limit window: "5h", "7d", or "spend" (a gateway's
+ * spend limit). Windows whose reset has passed are never sent.
+ */
+export interface QuotaWindow {
+    "label": string;
+    "usedPercent": number;
+    "resetsAt": string;
+}
+
+/**
  * RenameProjectData is Response.Data for cmd=renameProject. Message is a short
  * human-readable outcome; Blockers names the live sessions that made the daemon
  * refuse (empty on success), so the client can tell the human exactly what to
@@ -1046,4 +1070,11 @@ export interface UsageStatus {
      * Load is the last [load] sample; nil when [load] is off.
      */
     "load"?: LoadInfo | null;
+
+    /**
+     * Quotas is how much of each coding agent's SUBSCRIPTION limits is used
+     * (internal/quota), one entry per agent lola could read — claude via the
+     * status line, codex via its session logs. Empty when neither reported.
+     */
+    "quotas"?: QuotaInfo[] | null;
 }

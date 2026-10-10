@@ -3,7 +3,7 @@
   import { nav } from "$lib/nav.svelte";
   import { triaged } from "$lib/filters";
   import Button from "./Button.svelte";
-  import { spendLabel, spendLevel, spendTitle } from "$lib/usage";
+  import { headerLabel, headerLevel, headerTitle } from "$lib/usage";
 
   // The main column's 44px context header. It replaces the old full-width vitals
   // bar: it starts at the SIDEBAR's right edge, not the window's, so together
@@ -57,14 +57,15 @@
       : "daemon health unknown",
   );
 
-  // Today's tokens across every project and lola's helpers, against
-  // [budget].daily_tokens. Quiet grey until 80% of the limit, warn from there, bad
-  // once reached — and bad while [load] holds dispatch, since in both cases new
-  // tickets are silently waiting and the tooltip says why.
+  // The agents' SUBSCRIPTION limits (Claude 5h/7d, Codex 7d) when any agent has
+  // reported them, else today's tokens; plus the share of [budget].daily_tokens.
+  // Quiet grey until 80% (of a limit or the budget), warn from there, bad from
+  // 95% of a limit or once the budget is reached — and bad while [load] holds
+  // dispatch, since new tickets are then silently waiting and the tooltip says why.
   const spend = $derived(store.status?.usage ?? null);
   const spendCls = $derived.by(() => {
     if (!spend) return "";
-    const level = spendLevel(spend);
+    const level = headerLevel(spend);
     if (level === "over" || spend.load?.busy) return "text-bad";
     return level === "near" ? "text-warn" : "text-faint";
   });
@@ -153,8 +154,8 @@
 
   <span class="ml-auto flex shrink-0 items-center gap-2">
     {#if spend}
-      <span class="num text-sm whitespace-nowrap {spendCls}" title={spendTitle(spend)}
-        >{spendLabel(spend)}{#if spend.load?.busy}<span class="ml-1.5">· load busy</span>{/if}</span
+      <span class="num text-sm whitespace-nowrap {spendCls}" title={headerTitle(spend)}
+        >{headerLabel(spend)}{#if spend.load?.busy}<span class="ml-1.5">· load busy</span>{/if}</span
       >
     {/if}
     <!-- Daemon alarm, ONLY while the sidebar is collapsed. <SidebarStatus> is the

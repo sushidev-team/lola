@@ -309,6 +309,13 @@ func hookCmd() *cobra.Command {
 			if len(args) > 0 {
 				event = args[0]
 			}
+			// The status line (Claude Code only): record the subscription
+			// limits and print the user's own status line. Needs no session
+			// and never touches the socket.
+			if event == "statusline" {
+				hook.StatusLine(c.InOrStdin(), c.OutOrStdout())
+				return nil
+			}
 			// Codex delivers its notify payload as the next argv element, not
 			// stdin. Normalize it; an unknown notify type maps to "" — ignore
 			// it and exit 0 without touching the daemon.

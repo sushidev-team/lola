@@ -33,6 +33,8 @@ export type {
     ProjectSpend,
     ProjectsData,
     PrsData,
+    QuotaInfo,
+    QuotaWindow,
     RenameProjectData,
     ResolveConflictData,
     ReviewData,

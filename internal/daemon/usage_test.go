@@ -13,6 +13,7 @@ import (
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/linear"
 	"github.com/sushidev-team/lola/internal/notify"
+	"github.com/sushidev-team/lola/internal/quota"
 	"github.com/sushidev-team/lola/internal/session"
 	"github.com/sushidev-team/lola/internal/sysload"
 	"github.com/sushidev-team/lola/internal/usage"
@@ -50,6 +51,7 @@ func spendFixture(t *testing.T, cfg *config.Config) (*Daemon, *linear.Fake, *fak
 	nat := &fakeNative{}
 	d := newTestDaemon(t, cfg, fake, nat)
 	d.spend.root = t.TempDir()
+	d.spend.codexHome = ""
 	d.spend.sample = func(context.Context) sysload.Sample { return sysload.Sample{Load1: 0.1, CPUs: 8, FreeMemPercent: 80} }
 	return d, fake, nat
 }
@@ -238,6 +240,24 @@ func TestUsagePassRanksAgainstFinishedSessionsAndFlagsBurn(t *testing.T) {
 	}
 	if !u.Burning || u.TokensPerHour <= 0 {
 		t.Fatalf("burn = %+v, want burning", u)
+	}
+}
+
+func TestUsageStatusCarriesLiveQuotas(t *testing.T) {
+	cfg := testConfig(labelPoll("p1"))
+	d, _, _ := spendFixture(t, cfg)
+	now := time.Now()
+	err := quota.RecordClaude(quota.ClaudePath(d.home), quota.Snapshot{At: now, Windows: []quota.Window{
+		{Label: "5h", UsedPercent: 42, ResetsAt: now.Add(time.Hour)},
+		{Label: "7d", UsedPercent: 90, ResetsAt: now.Add(-time.Minute)}, // already reset
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.usagePass(context.Background(), now)
+	q := d.usageStatus(now).Quotas
+	if len(q) != 1 || q[0].Agent != "claude" || len(q[0].Windows) != 1 || q[0].Windows[0].UsedPercent != 42 {
+		t.Fatalf("quotas = %+v, want claude 5h only (the reset 7d window dropped)", q)
 	}
 }
 

@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/sushidev-team/lola/internal/protocol"
 )
@@ -104,17 +105,61 @@ func budgetPercent(used, budget int64) int {
 	return int(100 * used / budget)
 }
 
-// spendVital is the vitals-bar segment for today's usage and the load hold:
-// "today 46.7M", plus "· 38% of budget" when a [budget] limit is set — orange
+// quotaPercent renders one limit window, orange from 80%, red from 95%.
+func quotaPercent(w protocol.QuotaWindow) string {
+	text := fmt.Sprintf("%s %.0f%%", w.Label, w.UsedPercent)
+	switch {
+	case w.UsedPercent >= 95:
+		return badText.Render(text)
+	case w.UsedPercent >= 80:
+		return statusOrange.Render(text)
+	}
+	return text
+}
+
+// quotaVital is "claude 5h 42% 7d 18% · codex 7d 4%"; "" when no agent has
+// reported its subscription limits.
+func quotaVital(qs []protocol.QuotaInfo) string {
+	parts := make([]string, 0, len(qs))
+	for _, q := range qs {
+		ws := make([]string, 0, len(q.Windows))
+		for _, w := range q.Windows {
+			ws = append(ws, quotaPercent(w))
+		}
+		parts = append(parts, q.Agent+" "+strings.Join(ws, " "))
+	}
+	return strings.Join(parts, " · ")
+}
+
+// shortDuration renders a positive duration as 45m, 2h10m, 3d4h.
+func shortDuration(d time.Duration) string {
+	m := int(d.Round(time.Minute).Minutes())
+	switch {
+	case m < 60:
+		return fmt.Sprintf("%dm", m)
+	case m < 1440:
+		return fmt.Sprintf("%dh%02dm", m/60, m%60)
+	default:
+		return fmt.Sprintf("%dd%dh", m/1440, (m%1440)/60)
+	}
+}
+
+// spendVital is the vitals-bar segment for usage and the load hold. It leads
+// with the agents' SUBSCRIPTION limits ("claude 5h 42% 7d 18% · codex 7d 4%")
+// when any agent reported them — the number a subscriber budgets by — else
+// "today 46.7M". Then "· 38% of budget" when a [budget] limit is set — orange
 // from 80%, red once reached — and a red "load busy" while [load] holds
 // dispatch. The budget is a PERCENTAGE because it counts weighted tokens, a
-// different number from the raw count beside it. "" on an older daemon.
+// different number from the raw count. "" on an older daemon.
 func spendVital(st *protocol.StatusData) string {
 	if st == nil || st.Usage == nil {
 		return ""
 	}
 	u := st.Usage
 	text := "today " + fmtTokens(u.Tokens)
+	if q := quotaVital(u.Quotas); q != "" {
+		text = q
+	}
 	if pct := budgetPercent(u.Weighted, u.BudgetTokens); pct >= 0 {
 		b := fmt.Sprintf("· %d%% of budget", pct)
 		switch {
@@ -141,6 +186,22 @@ func spendSummary(u *protocol.UsageStatus) string {
 	budget := "no limit"
 	if pct := budgetPercent(u.Weighted, u.BudgetTokens); pct >= 0 {
 		budget = fmt.Sprintf("%d%% of the %s limit", pct, fmtTokens(u.BudgetTokens))
+	}
+	now := time.Now()
+	for _, q := range u.Quotas {
+		head := q.Agent
+		if q.Plan != "" {
+			head += " (" + q.Plan + ")"
+		}
+		ws := make([]string, 0, len(q.Windows))
+		for _, w := range q.Windows {
+			ww := quotaPercent(w)
+			if d := w.ResetsAt.Sub(now); !w.ResetsAt.IsZero() && d > 0 {
+				ww += " (resets in " + shortDuration(d) + ")"
+			}
+			ws = append(ws, ww)
+		}
+		fmt.Fprintf(&b, "%s limits, as of %s ago: %s\n", head, shortDuration(max(now.Sub(q.At), 0)), strings.Join(ws, " · "))
 	}
 	fmt.Fprintf(&b, "tokens %s: %s (%s weighted, ~%s at list price) — %s\n",
 		u.Day, fmtTokens(u.Tokens), fmtTokens(u.Weighted), fmtUSD(u.TodayUSD), budget)
