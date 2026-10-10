@@ -2,8 +2,10 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -64,8 +66,13 @@ type spendState struct {
 	// codexHome is where codex keeps its logs ("" = never look).
 	quotas    []protocol.QuotaInfo
 	codexHome string
-	// codex sums codex session logs that ran in lola's worktrees.
-	codex *usage.CodexScanner
+	// codex sums codex session logs that ran in lola's worktrees; opencode
+	// the messages of opencode's database (opencodeDB, "" = never look) and
+	// opencodeErr the last query failure, logged once rather than per pass.
+	codex       *usage.CodexScanner
+	opencode    *usage.OpencodeScanner
+	opencodeDB  string
+	opencodeErr string
 }
 
 func newSpendState(home string, logf func(string, ...any)) *spendState {
@@ -78,16 +85,18 @@ func newSpendState(home string, logf func(string, ...any)) *spendState {
 		logf("usage ledger unreadable, starting empty: %v", err)
 	}
 	return &spendState{
-		scanner:   usage.NewScanner(),
-		ledger:    ledger,
-		path:      path,
-		root:      usage.ProjectsRoot(),
-		helpers:   filepath.Join(home, "helpers"),
-		bySession: map[string]protocol.UsageInfo{},
-		notified:  map[string]string{},
-		sample:    sysload.Read,
-		codexHome: quota.CodexHome(),
-		codex:     usage.NewCodexScanner(filepath.Join(home, "worktrees")),
+		scanner:    usage.NewScanner(),
+		ledger:     ledger,
+		path:       path,
+		root:       usage.ProjectsRoot(),
+		helpers:    filepath.Join(home, "helpers"),
+		bySession:  map[string]protocol.UsageInfo{},
+		notified:   map[string]string{},
+		sample:     sysload.Read,
+		codexHome:  quota.CodexHome(),
+		codex:      usage.NewCodexScanner(filepath.Join(home, "worktrees")),
+		opencode:   usage.NewOpencodeScanner(filepath.Join(home, "worktrees")),
+		opencodeDB: usage.OpencodeDB(),
 	}
 }
 
@@ -160,11 +169,12 @@ func (d *Daemon) usagePass(ctx context.Context, now time.Time) {
 	today := now.Format(usage.DayFormat)
 	snap := d.sessions.Snapshot()
 
-	// codex logs are read before taking the lock: they are not keyed by
-	// directory, so one pass over the newest logs serves every session.
+	// codex logs and opencode's database are read before taking the lock:
+	// neither is keyed by directory, so one pass serves every session.
 	if sp.codexHome != "" {
 		sp.codex.Scan(filepath.Join(sp.codexHome, "sessions"))
 	}
+	d.scanOpencode(ctx, now)
 
 	sp.mu.Lock()
 	changed := false
@@ -200,11 +210,13 @@ func (d *Daemon) usagePass(ctx context.Context, now time.Time) {
 		dir := usageDir(sp.root, d.home, s)
 		days := scan(dir, s.ID)
 		recent := sp.scanner.Recent(dir, burnFrom)
-		// A session's codex usage is every codex log that ran in its
-		// worktree: a codex worker, and any codex-session review pass.
+		// A session's codex and opencode usage is everything either ran in
+		// its worktree: the worker, and any codex/opencode review pass.
 		if wt := sessionWorktree(d.home, s); wt != "" {
 			days = usage.MergeDays(days, sp.codex.For(wt))
+			days = usage.MergeDays(days, sp.opencode.For(wt))
 			recent.Add(sp.codex.Recent(wt, burnFrom))
+			recent.Add(sp.opencode.Recent(wt, burnFrom))
 		}
 		if len(days) == 0 {
 			continue
@@ -296,6 +308,25 @@ func readQuotas(claudePath, codexHome string, now time.Time) []protocol.QuotaInf
 		add("codex", s)
 	}
 	return out
+}
+
+// scanOpencode reads opencode's new messages. A machine without the sqlite3
+// CLI simply has no opencode figure; any other failure is logged once per
+// distinct error, not every minute.
+func (d *Daemon) scanOpencode(ctx context.Context, now time.Time) {
+	sp := d.spend
+	if sp.opencodeDB == "" {
+		return
+	}
+	err := sp.opencode.Scan(ctx, sp.opencodeDB, now)
+	msg := ""
+	if err != nil && !errors.Is(err, exec.ErrNotFound) {
+		msg = err.Error()
+	}
+	if msg != "" && msg != sp.opencodeErr {
+		d.logf("", "usage: %s", msg)
+	}
+	sp.opencodeErr = msg
 }
 
 // sessionWorktree is s's worktree directory: the persisted one, else the

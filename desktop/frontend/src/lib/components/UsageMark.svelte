@@ -5,13 +5,16 @@
   // currentColor rather than "▅" / "🔥" text: the font decides how a block
   // character sits on the baseline, and an emoji ignores the theme entirely.
   import type { UsageInfo } from "@bindings/internal/protocol";
-  import { usageLabel, usageLevel, usageTitle } from "$lib/usage";
+  import { usageLabel, usageLevel } from "$lib/usage";
+  import HoverCard from "./HoverCard.svelte";
+  import UsageCard from "./UsageCard.svelte";
 
   let { usage, class: cls = "" }: { usage: UsageInfo; class?: string } = $props();
   const level = $derived(usageLevel(usage));
 </script>
 
-<span class="num inline-flex items-center gap-1 whitespace-nowrap {cls}" title={usageTitle(usage)}>
+<HoverCard class="num inline-flex items-center gap-1 whitespace-nowrap outline-none {cls}">
+  {#snippet card()}<UsageCard {usage} />{/snippet}
   {usageLabel(usage)}
   <svg
     class="shrink-0 {level === 3 ? 'text-orange' : ''}"
@@ -33,4 +36,4 @@
       />
     </svg>
   {/if}
-</span>
+</HoverCard>

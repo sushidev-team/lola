@@ -53,6 +53,7 @@ func spendFixture(t *testing.T, cfg *config.Config) (*Daemon, *linear.Fake, *fak
 	d.spend.root = t.TempDir()
 	d.spend.codexHome = ""
 	d.spend.codex = usage.NewCodexScanner(filepath.Join(d.home, "worktrees"))
+	d.spend.opencodeDB = ""
 	d.spend.sample = func(context.Context) sysload.Sample { return sysload.Sample{Load1: 0.1, CPUs: 8, FreeMemPercent: 80} }
 	return d, fake, nat
 }
@@ -286,6 +287,26 @@ func TestUsagePassCountsCodexLogsInTheWorktree(t *testing.T) {
 	}
 	if st := d.usageStatus(now); st.Tokens != 1050 {
 		t.Errorf("day total = %d, want only lola's codex log", st.Tokens)
+	}
+}
+
+func TestUsagePassCountsOpencodeMessagesInTheWorktree(t *testing.T) {
+	cfg := testConfig(labelPoll("p1"))
+	d, _, _ := spendFixture(t, cfg)
+	now := time.Now()
+	wt := filepath.Join(d.home, "worktrees", "p1", "p1-1")
+	d.spend.opencodeDB = filepath.Join(t.TempDir(), "opencode.db")
+	writeFile(t, d.spend.opencodeDB, "")
+	d.spend.opencode = usage.NewOpencodeScanner(filepath.Join(d.home, "worktrees"))
+	d.spend.opencode.RunSQL = func(context.Context, string, string) ([]byte, error) {
+		ms := strconv.FormatInt(now.Add(-time.Minute).UnixMilli(), 10)
+		return []byte(`[{"id":"m","dir":"` + wt + `","created":` + ms + `,"updated":` + ms + `,"i":500,"o":40,"r":10,"cr":2000,"cw":0,"cost":0}]`), nil
+	}
+	d.sessions.Upsert(session.Session{ID: "p1-1", Source: "native", Project: "p1", Agent: "opencode"})
+	d.usagePass(context.Background(), now)
+	u := d.sessionUsage("p1-1")
+	if u == nil || u.Tokens != 2550 || u.Agent != "opencode" {
+		t.Fatalf("opencode usage = %+v, want 2550 tokens", u)
 	}
 }
 

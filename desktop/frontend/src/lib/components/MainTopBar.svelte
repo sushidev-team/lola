@@ -3,7 +3,9 @@
   import { nav } from "$lib/nav.svelte";
   import { triaged } from "$lib/filters";
   import Button from "./Button.svelte";
-  import { headerLabel, headerLevel, headerTitle } from "$lib/usage";
+  import { headerLabel, headerLevel } from "$lib/usage";
+  import HoverCard from "./HoverCard.svelte";
+  import SpendCard from "./SpendCard.svelte";
 
   // The main column's 44px context header. It replaces the old full-width vitals
   // bar: it starts at the SIDEBAR's right edge, not the window's, so together
@@ -154,9 +156,10 @@
 
   <span class="ml-auto flex shrink-0 items-center gap-2">
     {#if spend}
-      <span class="num text-sm whitespace-nowrap {spendCls}" title={headerTitle(spend)}
-        >{headerLabel(spend)}{#if spend.load?.busy}<span class="ml-1.5">· load busy</span>{/if}</span
-      >
+      <HoverCard class="num text-sm whitespace-nowrap outline-none {spendCls}">
+        {#snippet card()}<SpendCard usage={spend} />{/snippet}
+        {headerLabel(spend)}{#if spend.load?.busy}<span class="ml-1.5">· load busy</span>{/if}
+      </HoverCard>
     {/if}
     <!-- Daemon alarm, ONLY while the sidebar is collapsed. <SidebarStatus> is the
          permanent home for liveness, but it lives inside the collapsible <aside>,

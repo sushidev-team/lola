@@ -28,8 +28,9 @@ const (
 
 // Scale is how one agent's sessions are weighed and ranked. Sessions are only
 // ever ranked against sessions of the SAME agent: claude is weighed by list
-// price, codex — whose models lola has no price for — by weighted tokens, and
-// the two numbers are not comparable.
+// price; codex and opencode — whose models lola has no price for (opencode's
+// own cost is 0 for every free or subscription model) — by weighted tokens.
+// The two numbers are not comparable.
 type Scale struct {
 	// Weight is the ranking measure of a total.
 	Weight func(Totals) float64
@@ -50,9 +51,9 @@ var ClaudeScale = Scale{
 	BurnFallback: 20,
 }
 
-// CodexScale weighs by Weighted tokens; the steps are set to land near
+// TokenScale weighs by Weighted tokens; the steps are set to land near
 // ClaudeScale's at a mid-size model's input price.
-var CodexScale = Scale{
+var TokenScale = Scale{
 	Weight:       func(t Totals) float64 { return float64(t.Weighted()) },
 	Levels:       [3]float64{2e6, 6e6, 15e6},
 	BurnFloor:    1.5e6,
@@ -61,10 +62,10 @@ var CodexScale = Scale{
 
 // ScaleFor is agent's scale ("" is legacy claude).
 func ScaleFor(agent string) Scale {
-	if agent == "codex" {
-		return CodexScale
+	if agent == "" || agent == "claude" {
+		return ClaudeScale
 	}
-	return ClaudeScale
+	return TokenScale
 }
 
 // burnMinSlots is how much active time a finished session needs before its

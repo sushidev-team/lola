@@ -1,10 +1,12 @@
 package usage
 
 import (
+	"context"
 	"math"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -297,5 +299,47 @@ func TestCodexScannerAttributesByCwdAndCountsDeltas(t *testing.T) {
 func TestScaleForPicksPerAgent(t *testing.T) {
 	if ScaleFor("codex").Weight(Totals{Output: 1}) != 5 || ScaleFor("").Weight(Totals{CostUSD: 2}) != 2 {
 		t.Fatal("codex weighs tokens, claude weighs list price")
+	}
+}
+
+func TestOpencodeScannerReplacesByIDAndFiltersByDir(t *testing.T) {
+	db := filepath.Join(t.TempDir(), "opencode.db")
+	writeLines(t, db, "") // only has to exist
+	prefix := "/h/.lola/worktrees"
+	at := time.Date(2026, 10, 10, 10, 0, 0, 0, time.Local)
+	ms := func(m int) string { return itoa(at.Add(time.Duration(m) * time.Minute).UnixMilli()) }
+	var queries []string
+	reply := `[{"id":"a","dir":"/h/.lola/worktrees/p/p-1","created":` + ms(0) + `,"updated":` + ms(0) + `,"i":100,"o":10,"r":5,"cr":1000,"cw":0,"cost":0.5},
+{"id":"x","dir":"/h/.lola/worktrees-not/p","created":` + ms(0) + `,"updated":` + ms(0) + `,"i":9999,"o":0,"r":0,"cr":0,"cw":0,"cost":0}]`
+	o := NewOpencodeScanner(prefix)
+	o.RunSQL = func(_ context.Context, _, q string) ([]byte, error) {
+		queries = append(queries, q)
+		return []byte(reply), nil
+	}
+	if err := o.Scan(context.Background(), db, at.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	got := Sum(o.For("/h/.lola/worktrees/p/p-1"))
+	if got.Input != 100 || got.Output != 15 || got.CacheRead != 1000 || got.CostUSD != 0.5 || got.Slots != 1 {
+		t.Fatalf("first = %+v", got)
+	}
+	if !strings.Contains(queries[0], "= '/h/.lola/worktrees/'") || !strings.Contains(queries[0], "time_updated > 0") {
+		t.Fatalf("query must select lola's worktrees from the start:\n%s", queries[0])
+	}
+	// The same message re-read with final counts REPLACES, never adds; the
+	// next query starts from the watermark minus the margin.
+	reply = `[{"id":"a","dir":"/h/.lola/worktrees/p/p-1","created":` + ms(0) + `,"updated":` + ms(1) + `,"i":200,"o":20,"r":0,"cr":1000,"cw":0,"cost":1}]`
+	_ = o.Scan(context.Background(), db, at.Add(time.Hour))
+	if got := Sum(o.For("/h/.lola/worktrees/p/p-1")); got.Input != 200 || got.Output != 20 {
+		t.Fatalf("replaced = %+v", got)
+	}
+	if want := "time_updated > " + itoa(at.Add(-2*time.Minute).UnixMilli()); !strings.Contains(queries[1], want) {
+		t.Fatalf("second query lacks %q:\n%s", want, queries[1])
+	}
+	if err := o.Scan(context.Background(), filepath.Join(t.TempDir(), "none.db"), at); err != nil || len(queries) != 2 {
+		t.Fatal("a missing database is not an error and runs no query")
+	}
+	if sqlString("it's") != "'it''s'" {
+		t.Fatal("quote escaping")
 	}
 }

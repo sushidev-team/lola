@@ -25,7 +25,7 @@ import (
 //
 // codex logs carry no price lola trusts (the model ids are not in the price
 // table), so CostUSD stays 0: codex usage is tokens only, and is ranked
-// against other codex sessions by Weighted tokens (CodexScale).
+// against other codex sessions by Weighted tokens (TokenScale).
 //
 // Only logs whose cwd lies under the scanner's prefix (lola's worktrees) are
 // read past their first line — a user's own codex work is none of lola's

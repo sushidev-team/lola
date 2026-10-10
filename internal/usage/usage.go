@@ -31,8 +31,8 @@
 //
 // Codex keeps its logs by date rather than by directory; codex.go attributes
 // them to a worktree by the cwd each log records, tokens only (no price).
-// opencode is not read yet, so a session running it reports no figure (absent,
-// not zero) — a gap documented rather than guessed at.
+// opencode keeps a SQLite database; opencode.go reads it through the sqlite3
+// CLI and attributes each message by its session's directory.
 //
 // Stdlib-only leaf: no lola imports, so the daemon, the TUI and the desktop app
 // can all use it.

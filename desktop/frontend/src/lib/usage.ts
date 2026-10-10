@@ -6,7 +6,6 @@
 // flame while it burns tokens faster than past sessions ever did. Mirrors
 // internal/tui/usage.go.
 import type { QuotaInfo, UsageInfo, UsageStatus } from "@bindings/internal/protocol";
-import { agoShort } from "./board";
 
 /** Compact dollars: cents below $100, whole dollars above. */
 export function fmtUSD(v: number): string {
@@ -39,13 +38,46 @@ export function usageLabel(u: UsageInfo | null | undefined): string {
   return u ? fmtTokens(u.tokens) : "";
 }
 
-/** The tooltip that spells a session's figure out. */
-export function usageTitle(u: UsageInfo): string {
-  const lines = [`${fmtTokens(u.tokens)} tokens (${fmtTokens(u.todayTokens)} today)`, rankText(u)];
-  // codex has no list price lola trusts, so it shows tokens only.
-  if (u.totalUsd > 0) lines.push(`~${fmtUSD(u.totalUsd)} at list price`);
-  if (u.burning) lines.push(`Burning ${fmtTokens(u.tokensPerHour ?? 0)} tokens/h — faster than 90% of your sessions`);
-  return lines.join("\n");
+/** The hover card's headline: "48.2M tokens". */
+export function usageHeadline(u: UsageInfo): string {
+  return `${fmtTokens(u.tokens)} tokens`;
+}
+
+export interface UsageRow {
+  label: string;
+  value: string;
+  note?: string;
+  tone?: "hot";
+}
+
+const AGENT_LABEL: Record<string, string> = { claude: "Claude", codex: "Codex", opencode: "OpenCode" };
+
+/**
+ * The hover card's rows. Every field is optional on the wire — an older
+ * daemon sends none of the newer ones — so a missing value drops its row
+ * rather than rendering "undefined".
+ */
+export function usageRows(u: UsageInfo): UsageRow[] {
+  const rows: UsageRow[] = [];
+  if (typeof u.todayTokens === "number") rows.push({ label: "Today", value: fmtTokens(u.todayTokens) });
+  if (u.of) {
+    const kind = u.agent && u.agent !== "claude" ? `${AGENT_LABEL[u.agent] ?? u.agent} ` : "";
+    rows.push({
+      label: "Size",
+      value: `heavier than ${Math.round(u.percentile ?? 0)}%`,
+      note: `of your last ${u.of} ${kind}sessions`,
+      tone: usageLevel(u) === 3 ? "hot" : undefined,
+    });
+  } else {
+    rows.push({ label: "Size", value: LEVEL_WORDS[usageLevel(u)], note: "· too little history to compare", tone: usageLevel(u) === 3 ? "hot" : undefined });
+  }
+  if (u.burning) {
+    rows.push({ label: "Burning", value: `${fmtTokens(u.tokensPerHour ?? 0)} tokens/h`, note: "faster than 90% of your sessions", tone: "hot" });
+  }
+  // codex has no price lola trusts, and opencode's is 0 for free models.
+  if (u.totalUsd > 0) rows.push({ label: "Estimate", value: `~${fmtUSD(u.totalUsd)}`, note: u.agent === "opencode" ? "opencode's own price" : "at list price" });
+  if (u.agent) rows.push({ label: "Agent", value: AGENT_LABEL[u.agent] ?? u.agent });
+  return rows;
 }
 
 /** used/budget as a whole percentage; -1 without a budget. */
@@ -71,24 +103,6 @@ export function spendLevel(u: UsageStatus): SpendLevel {
 export function spendLabel(u: UsageStatus): string {
   const pct = budgetPercent(u.weighted, u.budgetTokens);
   return `${fmtTokens(u.tokens)} today${pct >= 0 ? ` · ${pct}% of budget` : ""}`;
-}
-
-/** Its tooltip: per-project usage and limits, and why dispatch is held. */
-export function spendTitle(u: UsageStatus): string {
-  const lines = [
-    `Tokens ${u.day}: ${fmtTokens(u.tokens)} (${fmtTokens(u.weighted)} weighted, ~${fmtUSD(u.todayUsd)} at list price)`,
-  ];
-  lines.push(
-    u.budgetTokens
-      ? `Daily limit ${fmtTokens(u.budgetTokens)} weighted tokens (budget.daily_tokens)`
-      : "No daily limit",
-  );
-  for (const p of u.projects ?? []) {
-    const pct = budgetPercent(p.weighted, p.budgetTokens);
-    lines.push(`${p.name}: ${fmtTokens(p.tokens)}${pct >= 0 ? ` — ${pct}% of ${fmtTokens(p.budgetTokens ?? 0)}` : ""}`);
-  }
-  if (u.load?.busy) lines.push(`Dispatch held — ${u.load.busy}`);
-  return lines.join("\n");
 }
 
 // ---- subscription limits (internal/quota) ---------------------------------
@@ -121,18 +135,6 @@ export function untilShort(iso: string, now: number = Date.now()): string {
   return `in ${Math.floor(m / 1440)}d ${Math.floor((m % 1440) / 60)}h`;
 }
 
-/** Tooltip lines for one agent: each window with its reset, and how fresh. */
-export function quotaTitle(q: QuotaInfo, now: number = Date.now()): string {
-  const name = AGENT_NAMES[q.agent] ?? q.agent;
-  const ago = agoShort(q.at, now);
-  const head = `${name}${q.plan ? ` (${q.plan})` : ""} — as of ${ago === "now" ? "just now" : `${ago} ago`}`;
-  const lines = (q.windows ?? []).map((w) => {
-    const reset = untilShort(w.resetsAt, now);
-    return `  ${w.label}: ${Math.round(w.usedPercent)}% used${reset ? `, resets ${reset}` : ""}`;
-  });
-  return [head, ...lines].join("\n");
-}
-
 /** The header chip: subscription limits when known, else today's tokens; a budget always shows. */
 export function headerLabel(u: UsageStatus): string {
   if (!u.quotas?.length) return spendLabel(u);
@@ -146,11 +148,4 @@ export function headerLevel(u: UsageStatus): SpendLevel {
   const q: SpendLevel = m >= 95 ? "over" : m >= 80 ? "near" : "ok";
   const b = spendLevel(u);
   return q === "over" || b === "over" ? "over" : q === "near" || b === "near" ? "near" : "ok";
-}
-
-/** Its tooltip: the limits first, then today's tokens and budgets. */
-export function headerTitle(u: UsageStatus, now: number = Date.now()): string {
-  const parts = (u.quotas ?? []).map((q) => quotaTitle(q, now));
-  parts.push(spendTitle(u));
-  return parts.join("\n\n");
 }

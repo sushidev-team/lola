@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { UsageInfo } from "@bindings/internal/protocol";
-import { budgetPercent, headerLabel, headerLevel, headerTitle, quotaLabel, untilShort, fmtTokens, fmtUSD, rankText, spendLabel, spendLevel, spendTitle, usageLabel, usageTitle } from "./usage";
+import { budgetPercent, headerLabel, headerLevel, quotaLabel, untilShort, fmtTokens, fmtUSD, rankText, spendLabel, spendLevel, usageHeadline, usageLabel, usageRows } from "./usage";
 
 const info = (o: Partial<UsageInfo> = {}): UsageInfo => ({
   tokens: 46_700_420,
@@ -28,12 +28,22 @@ describe("usage formatting", () => {
   it("says the rank in words, against history or the fallback", () => {
     expect(rankText(info({ percentile: 82, of: 40 }))).toBe("heavier than 82% of your last 40 sessions");
     expect(rankText(info({ level: 3 }))).toContain("very heavy (too little history");
-    const t = usageTitle(info({ burning: true, tokensPerHour: 12_300_000 }));
-    expect(t).toContain("~$18.33 at list price");
-    expect(t).toContain("Burning 12.3M tokens/h");
-    const codex = usageTitle(info({ agent: "codex", totalUsd: 0, percentile: 50, of: 12 }));
-    expect(codex).toContain("of your last 12 codex sessions");
-    expect(codex).not.toContain("$");
+    expect(usageHeadline(info())).toBe("46.7M tokens");
+    const rows = usageRows(info({ burning: true, tokensPerHour: 12_300_000, percentile: 82, of: 40 }));
+    expect(rows.map((r) => r.label)).toEqual(["Today", "Size", "Burning", "Estimate"]);
+    expect(rows[1]).toMatchObject({ value: "heavier than 82%", note: "of your last 40 sessions" });
+    expect(rows[2]).toMatchObject({ value: "12.3M tokens/h", tone: "hot" });
+    expect(rows[3]).toMatchObject({ value: "~$18.33", note: "at list price" });
+    const codex = usageRows(info({ agent: "codex", totalUsd: 0, percentile: 50, of: 12 }));
+    expect(codex.find((r) => r.label === "Size")?.note).toBe("of your last 12 Codex sessions");
+    expect(codex.some((r) => r.label === "Estimate")).toBe(false);
+  });
+
+  it("drops rows an older daemon does not send, never rendering undefined", () => {
+    const old = { tokens: 48_200_000, totalUsd: 20.97, todayUsd: 1 } as unknown as UsageInfo;
+    const rows = usageRows(old);
+    expect(rows.map((r) => r.label)).toEqual(["Size", "Estimate"]);
+    expect(JSON.stringify(rows)).not.toContain("undefined");
   });
 
   it("grades today's weighted usage against the limit", () => {
@@ -44,14 +54,6 @@ describe("usage formatting", () => {
     expect(spendLevel({ ...base, weighted: 100, budgetTokens: 100 })).toBe("over");
     expect(spendLabel({ ...base, weighted: 38, budgetTokens: 100 })).toBe("46.7M today · 38% of budget");
     expect(spendLabel({ ...base, weighted: 38 })).toBe("46.7M today");
-    const title = spendTitle({
-      ...base,
-      weighted: 1_000_000,
-      projects: [{ name: "p", tokens: 3_000_000, weighted: 1_000_000, budgetTokens: 4_000_000 }],
-      load: { load1: 20, cpus: 8, freeMemPercent: 50, busy: "machine busy: load 20" },
-    });
-    expect(title).toContain("p: 3.0M — 25% of 4.0M");
-    expect(title).toContain("Dispatch held — machine busy");
   });
 });
 
@@ -82,13 +84,8 @@ describe("subscription limits", () => {
     expect(headerLevel({ ...base, quotas: [claude], weighted: 100, budgetTokens: 100 })).toBe("over");
   });
 
-  it("explains resets and freshness in the tooltip", () => {
+  it("formats the time until a reset", () => {
     expect(untilShort("2026-10-10T12:10:00Z", now)).toBe("in 2h 10m");
     expect(untilShort("2026-10-09T12:10:00Z", now)).toBe("");
-    const t = headerTitle({ ...base, quotas: [claude, codex] }, now);
-    expect(t).toContain("Claude — as of 12m ago");
-    expect(t).toContain("5h: 42% used, resets in 2h 10m");
-    expect(t).toContain("Codex (pro)");
-    expect(t).toContain("Tokens 2026-10-10: 46.7M");
   });
 });

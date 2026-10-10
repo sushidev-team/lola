@@ -1069,12 +1069,17 @@ every review pass:
 - **claude:** `~/.claude/projects/<worktree>/…jsonl`;
 - **codex:** `~/.codex/sessions/…/rollout-*.jsonl`, attributed by the cwd each
   log records. Only logs that ran in a lola worktree are read. codex shows
-  tokens only — lola has no list price for its models — and is ranked against
-  other codex sessions, never against claude ones.
+  tokens only — lola has no list price for its models;
+- **opencode:** its SQLite database (`~/.local/share/opencode/opencode.db`, or
+  under `$XDG_DATA_HOME`), attributed by each session's directory and read
+  through the `sqlite3` CLI in read-only mode (macOS ships it; without it,
+  opencode simply shows no figure). The `~$` shown is opencode's own price.
 
-The `[brain]` / `[statusagent]` helpers run in `~/.lola/helpers` so their usage
-is counted too (globally, against no project). opencode sessions report no
-figure — lola cannot read its logs yet — which is shown as blank, not `0`.
+codex and opencode sessions are ranked against sessions of their own agent,
+never against claude ones (their weights are different units). The `[brain]` /
+`[statusagent]` helpers run in `~/.lola/helpers` so their usage is counted too
+(globally, against no project). A session with no readable log yet shows a
+blank, not `0`.
 
 **Per session** (a **Tokens** column + the detail header in the app, a `TOKENS`
 column + `tokens:` line in the TUI) lola shows:
