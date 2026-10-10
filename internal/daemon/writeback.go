@@ -241,6 +241,12 @@ func (d *Daemon) writeBack(ctx context.Context, s session.Session) {
 		return
 	}
 	needPR := prOpen && !s.WBPRDone && (p.OnPRStateID != "" || p.CommentOnPR)
+	if needPR && s.InBestOfRace() {
+		// One of N best-of attempts nobody has picked yet (bestof.go): its draft
+		// PR is a candidate, not the delivery. WBPRDone stays unset, so the
+		// attempt that is kept transitions the issue on the cycle after the pick.
+		needPR = false
+	}
 	if needPR && p.PRRequiresChecks && !prPassedChecks(s) {
 		// The poll wants "In Review" gated on a valid PR (open, not draft, checks
 		// green), and this PR has not passed yet: defer. WBPRDone stays unset so a

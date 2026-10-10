@@ -123,7 +123,15 @@
             />
           </td>
           <!-- The row's ONE 500: the issue key is what the row is about. -->
-          <td class="py-1.5 pr-2 align-middle font-medium whitespace-nowrap" class:text-accent-ink={sel}>{s.issue || s.id.slice(0, 8)}</td>
+          <td class="py-1.5 pr-2 align-middle font-medium whitespace-nowrap" class:text-accent-ink={sel}
+            >{s.issue || s.id.slice(0, 8)}{#if s.bestOf}<span
+                class="num ml-1 text-sm font-normal {s.bestOf.winner ? 'text-good' : 'text-warn'}"
+                title={s.bestOf.winner
+                  ? "the kept best-of attempt"
+                  : `best-of attempt ${s.bestOf.attempt} of ${s.bestOf.of}${s.model ? ` · ${s.agent}@${s.model}` : ""} — right-click to compare`}
+                >{s.bestOf.winner ? "✓" : `★${s.bestOf.attempt}/${s.bestOf.of}`}</span
+              >{/if}</td
+          >
           {#if !dense}
             <!-- Primary too, so it reads `text-ink` at the base size; the tier
                  below it is size + colour (12px faint), never faint alone.

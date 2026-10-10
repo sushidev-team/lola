@@ -69,6 +69,7 @@ func main() {
 		broadcastCmd(),
 		reviewCmd(),
 		planCmd(),
+		bestofCmd(),
 		switchAgentCmd(),
 		checkpointCmd(),
 		coderabbitCmd(),

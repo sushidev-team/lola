@@ -44,6 +44,30 @@ export function Answer(session: string, text: string): $CancellablePromise<void>
 }
 
 /**
+ * BestOf starts an issue as a best-of group; agents "" uses [best_of].agents.
+ */
+export function BestOf(a: protocol$0.BestOfArgs): $CancellablePromise<protocol$0.BestOfData> {
+    return $Call.ByID(207487662, a);
+}
+
+/**
+ * BestOfCompare returns every attempt of the best-of group the session belongs
+ * to, side by side (read-only; one bounded local git diff per attempt).
+ */
+export function BestOfCompare(session: string): $CancellablePromise<protocol$0.BestOfCompareData> {
+    return $Call.ByID(65229141, session);
+}
+
+/**
+ * BestOfPick keeps one best-of attempt: its draft PR is marked ready, every
+ * other attempt's PR is closed and its session torn down (a dirty worktree is
+ * kept).
+ */
+export function BestOfPick(session: string): $CancellablePromise<protocol$0.BestOfPickData> {
+    return $Call.ByID(3218095, session);
+}
+
+/**
  * Broadcast sends one message to every live coding agent of a project. Agents
  * resting at their prompt get it now; busy ones get it queued and delivered
  * when idle. The reply names both groups so the UI can show the split. Long

@@ -512,6 +512,14 @@ class Store {
       (r) => r?.message || `forked ${id} at checkpoint #${seq}`,
     );
   }
+  // Best-of: keep one attempt. The daemon's sentence names what happened to the
+  // others (removed, or kept because of uncommitted work).
+  bestOfPick(id: string) {
+    return this.act(
+      () => DaemonService.BestOfPick(id),
+      (r) => r?.message || `kept ${id}`,
+    );
+  }
   switchAgent(id: string, kind: string) {
     return this.act(
       () => DaemonService.SwitchAgent({ session: id, agent: kind }),

@@ -491,6 +491,15 @@ func (m *rootModel) sessionsBody(w, h int) []string {
 		if len(si.Overlaps) > 0 {
 			pr += " " + warnText.Render("⚠ovl")
 		}
+		// "★2/3" is a best-of attempt still racing (compare + keep one with
+		// `lola bestof compare <issue>`), "★✓" the attempt that was kept.
+		if b := si.BestOf; b != nil {
+			if b.Winner {
+				pr += " " + goodText.Render("★✓")
+			} else {
+				pr += " " + warnText.Render(fmt.Sprintf("★%d/%d", b.Attempt, b.Of))
+			}
+		}
 		if si.Title != "" {
 			anyTitle = true
 		}

@@ -147,6 +147,9 @@ protocol-version mismatch.
 | `lola broadcast <project> <text>` | Send ONE message to every live coding agent of a project ("rebase on main", "stop touching X"). Each copy goes through the same idle gate + pane proof as diff feedback: agents resting at their prompt get it now, busy ones get it queued and delivered when they are idle — never forced. Prints the delivered/deferred split. Also `b` on the TUI's project lists and **Broadcast** on a project's page in the app. |
 | `lola review <session> [--provider kind]` | Force a **pass-shape** review provider now, ignoring the once-per-PR guard, and route its findings per its transports. With no `--provider` it forces the primary enabled pass provider; `--provider <kind>` picks one explicitly (any pass kind: `coderabbit-cli`, `custom-cli`, `claude-session`, `codex-session`, `opencode-session`). Skipped (not an error) when no such provider is enabled or its tool is unavailable. |
 | `lola plan <issue> [--apply] [--project name] [--file path]` | Decompose a large Linear issue into dependent sub-issues. Without `--apply`: one bounded headless claude proposes 2–8 ordered steps, which are printed and saved to `~/.lola/plans/<issue>.json` — **nothing is created**. Review or edit that file, then `--apply` creates each step as a sub-issue (placed so the project's poll matches it) and links every dependency as a Linear "blocked by" relation. See [Decomposing a large issue](#decomposing-a-large-issue). |
+| `lola bestof start <issue> [--agents mix] [--project name]` | Run ONE issue as several independent attempts — different coding agents or models — each on its own sibling branch opening a DRAFT PR. The mix is `<agent>[@<model>][:<count>]`, comma-separated (`claude:2`, `claude@opus,codex@gpt-5-codex`); default `[best_of].agents`. Every attempt counts against the caps and the budget. See [Best-of-N](#best-of-n-several-attempts-one-winner). |
+| `lola bestof compare <issue\|group\|session> [--json]` | Every attempt of a best-of group side by side: agent/model, state, PR + CI, review findings, diff size, tokens — with a ★ suggestion (a hint, never acted on). |
+| `lola bestof pick <session>` | Keep one attempt: its draft PR is marked ready, every other attempt's PR is closed (branch kept) and its session torn down; a worktree with uncommitted changes is kept. |
 | `lola coderabbit <session>` | Back-compat alias that forces the **watch-shape** provider now (`coderabbit-watch`) — poll the session's open PR for CodeRabbit (GitHub-app) comments, ignoring the watermark, and route any found (notify / worker / Linear per config). Skipped (not an error) when the watch is disabled or the session has no open PR. |
 | `lola reload` | Re-read `config.toml`; the daemon diffs projects and starts/stops poll goroutines without disturbing unaffected ones |
 | `lola logs [name] [-f]` | Tail `~/.lola/daemon.log`, optionally filtered to one project (by name); `-f`/`--follow` to stream |
@@ -705,6 +708,17 @@ Independently of the queue, lola flags sessions of the same project whose
 worktrees change the **same files** (local git only, every observe cycle) — a
 `⚠ovl` marker / "Overlaps" chip on both rows — so a collision is visible before
 either PR conflicts. That warning is display-only.
+
+### `[best_of]` (optional)
+
+Best-of-N dispatch: a poll match that ALSO carries `label` is spawned as the
+`agents` mix — several attempts on sibling branches — instead of one agent. See
+[Best-of-N](#best-of-n-several-attempts-one-winner).
+
+| Key | Type | Description |
+| --- | --- | --- |
+| `label` | string | Trigger label UUID. Like every `[defaults]` label it should be a WORKSPACE label (it applies to every project's poll). Empty/absent = no label trigger; `lola bestof start` still works. |
+| `agents` | []string | The mix, one `<agent>[@<model>][:<count>]` entry each — e.g. `["claude:2", "codex@gpt-5-codex"]`. 2–6 attempts. Default `["claude:2"]`. A count after the LAST colon, so a model carrying a colon needs an explicit count (`claude@…-v1:0:1`). |
 
 ### `[brain]` (optional, off by default)
 
@@ -1616,6 +1630,37 @@ From then on the ordinary ticks do the work: a step with no blockers
 dispatches right away, and each later step waits (`blocked-by <ID>` in
 `lola poll <project> --once --dry-run`) until its blockers are done or their PRs are
 merged.
+
+## Best-of-N: several attempts, one winner
+
+Some issues are worth solving more than once. Best-of-N runs one issue as
+several **independent attempts** — different coding agents, or one agent on
+different models — and lets a human keep the best one.
+
+- **Start** it with `lola bestof start SUSHI-42 --agents claude:2,codex`, or
+  label the issue with `[best_of].label` and let the poll pick it up. Each
+  attempt is a full session (`lola-<project>-sushi-42-b<k>`, branch
+  `<branch>-b<k>`), told in its briefing that it is attempt k of N and to open
+  its PR as a **draft** titled `[best-of k/N]`. A model is passed to the agent's
+  own flag (`--model` for claude and opencode, `-c model=…` for codex) and kept
+  across a revive.
+- **Every attempt counts**: a poll charges the group N slots of its budget and
+  dispatches it only when all N fit; `lola bestof start` refuses past
+  `global_cap`; both honour the spend/load hold, and every agent of the mix is
+  health-checked before anything starts. The issue itself is deduped once —
+  one in-flight claim, one label flip, one spawn write-back.
+- While the attempts race, their PR-open Linear write-back is **held**, so N
+  draft PRs do not each move the issue to "In Review". CI, reactions and the
+  review providers run on every attempt as usual — that is what gets compared.
+- **Compare** with `lola bestof compare SUSHI-42` (or right-click an attempt in
+  the app → *Compare attempts*): state, PR + CI, review findings for the current
+  PR, diff size against the merge-base, tokens. The ★ is a suggestion — CI
+  first, then fewer blocker/major findings, then the smaller diff.
+- **Pick** with `lola bestof pick <session>` (or *Keep* in the app). The kept
+  PR is marked ready for review and takes over the issue's Linear write-back;
+  every other attempt's PR is **closed with its branch kept**, and its session
+  is torn down by the ordinary dirty-safe teardown — a worktree with uncommitted
+  changes is kept (agent stopped) for a human to look at.
 
 ## History
 

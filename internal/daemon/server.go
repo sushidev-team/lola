@@ -249,6 +249,36 @@ func (d *Daemon) handle(ctx context.Context, req protocol.Request) protocol.Resp
 			return protocol.Response{OK: false, Error: err.Error()}
 		}
 		return dataResponse(data)
+	case "bestOf":
+		var a protocol.BestOfArgs
+		if err := json.Unmarshal(req.Args, &a); err != nil {
+			return protocol.Response{OK: false, Error: "bestOf: bad args: " + err.Error()}
+		}
+		data, err := d.handleBestOf(ctx, a)
+		if err != nil {
+			return protocol.Response{OK: false, Error: err.Error()}
+		}
+		return dataResponse(data)
+	case "bestOfCompare":
+		var a protocol.BestOfCompareArgs
+		if err := json.Unmarshal(req.Args, &a); err != nil {
+			return protocol.Response{OK: false, Error: "bestOfCompare: bad args: " + err.Error()}
+		}
+		data, err := d.handleBestOfCompare(ctx, a)
+		if err != nil {
+			return protocol.Response{OK: false, Error: err.Error()}
+		}
+		return dataResponse(data)
+	case "bestOfPick":
+		var a protocol.BestOfPickArgs
+		if err := json.Unmarshal(req.Args, &a); err != nil {
+			return protocol.Response{OK: false, Error: "bestOfPick: bad args: " + err.Error()}
+		}
+		data, err := d.handleBestOfPick(ctx, a)
+		if err != nil {
+			return protocol.Response{OK: false, Error: err.Error()}
+		}
+		return dataResponse(data)
 	case "planApply":
 		var a protocol.PlanApplyArgs
 		if err := json.Unmarshal(req.Args, &a); err != nil {
@@ -715,6 +745,10 @@ func (d *Daemon) sessionsData() protocol.SessionsData {
 		}
 		if s.MergeQueuePos > 0 {
 			si.MergeQueue = &protocol.MergeQueueInfo{Position: s.MergeQueuePos, Step: s.MergeQueueStep}
+		}
+		si.Model = s.Model
+		if s.BestOf != "" {
+			si.BestOf = &protocol.BestOfInfo{Group: s.BestOf, Attempt: s.Attempt, Of: s.Attempts, Winner: s.BestOfWinner}
 		}
 		out.Sessions = append(out.Sessions, si)
 	}

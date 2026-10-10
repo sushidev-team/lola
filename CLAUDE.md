@@ -175,6 +175,10 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   only depend on EARLIER steps, so a valid plan is acyclic by construction.
   It never touches Linear; `internal/daemon/plan.go` does, and only on
   `cmd=planApply` — see the invariant below.
+- `internal/bestof` — the pure half of best-of-N (stdlib + `agent`): the MIX
+  vocabulary `<agent>[@<model>][:<count>]` (`ParseMix`, 2..`MaxAttempts`) shared
+  by `[best_of].agents`, `lola bestof start --agents` and `cmd=bestOf`, and
+  `Suggest`, the display-only ranking behind the compare view's ★.
 - `internal/statusagent` — the OPT-IN status interpreter: one bounded
   `claude -p` per interpretation (default `--model sonnet`) judging what an
   agent is ACTUALLY doing from pane/events/PR context. Output is parsed,
@@ -313,6 +317,9 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   through `typeAtRestingPrompt` when it is behind the default branch, else a
   merge pinned with `--match-head-commit` after a fresh re-read. Every unknown
   holds the queue; `MergeQueueGuard` is the persisted one-shot per head commit.
+- `bestof.go` — best-of-N: `cmd=bestOf` (start), `cmd=bestOfCompare`
+  (read-only), `cmd=bestOfPick`, plus `spawnIssue`, the one spawn path dispatch
+  uses for both a single issue and a group. See the invariant below.
 - `reconcile.go` — ~5m pass reverting orphaned issues (labeled-sent but no
   counted session and no open PR after `orphanTimeout`).
 - `writeback.go` — P4 Linear state transitions + comments.
@@ -567,6 +574,34 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   every candidate skip it writes no seen entry, so the issue re-qualifies on
   the first tick after its blockers land. "Merged" counts because the Linear
   write-back to done may lag the merge or not be configured.
+- **A best-of group is N sessions on ONE issue, and only the pick ends it.**
+  (`internal/daemon/bestof.go`.) Each attempt is a full session with a `-b<k>`
+  ID/branch suffix (`runtime.SpawnWith`; `issueFromSessionID` strips it like
+  `-r<n>`), carrying `Session.BestOf/Attempt/Attempts` and its worker `Model`
+  (`agent.LaunchModelArgs`, PREPENDED to the launch argv, repeated by Revive).
+  Rules that hold it together:
+  - Every attempt COUNTS: dispatch charges `len(mix)` budget and spawns the group
+    only when it fits whole; `cmd=bestOf` refuses past `global_cap`; both honour
+    `dispatchHold`; every distinct agent of the mix passes the health gate
+    BEFORE anything is mutated.
+  - The ISSUE is deduped once — one in-flight claim, one seen entry, one label
+    flip (its `RemovedLabels` recorded on every attempt), one spawn write-back.
+    A group with some attempts failed to spawn is still a dispatched issue.
+  - Until the pick an attempt is IN THE RACE (`Session.InBestOfRace`): its
+    PR-open write-back is held, so N draft PRs never each move the issue. The
+    kept one's fires on the next cycle (its `WBPRDone` was never stamped).
+  - The pick stamps `BestOfWinner` FIRST (a crash mid-pick keeps the decision
+    and a second pick is refused), marks the kept PR ready, CLOSES the others'
+    PRs (branch kept — closing is reversible) and tears losers down through the
+    plain dirty-safe `runtime.Kill`. A loser's teardown must NOT free the
+    in-flight claim or call `clearLabelDispatch` — the winner still works the
+    issue — and `clearLabelDispatch` itself bails while a sibling is present,
+    so a manual `lola kill` of one attempt cannot strip the label either.
+  - Reconcile checks EVERY recorded branch of an issue for an open PR before
+    calling it an orphan (`nativeSessionsForIssue`).
+  - The compare view's review column comes from `Session.ReviewTallies`
+    (`reviewmd.Count` of each answered pass, keyed by kind, filtered to the
+    CURRENT PR) and the ★ from `bestof.Suggest` — both DISPLAY-ONLY.
 - **A plan is created only by a human's `--apply`, and is PLACED, not routed.**
   `cmd=plan` creates nothing; `cmd=planApply` re-validates the steps and
   creates them as sub-issues whose team/project/cycle/assignee/state/labels are
