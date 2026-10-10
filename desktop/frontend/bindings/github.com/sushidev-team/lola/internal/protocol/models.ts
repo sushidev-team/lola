@@ -330,17 +330,6 @@ export interface KillData {
 }
 
 /**
- * LoadInfo is a machine-load sample; -1 marks a value the OS did not report.
- * Busy is the hold reason ("" when dispatch is not held by load).
- */
-export interface LoadInfo {
-    "load1": number;
-    "cpus": number;
-    "freeMemPercent": number;
-    "busy"?: string;
-}
-
-/**
  * LinearAgentStatus is the Linear agent loop's health, on cmd=status.
  */
 export interface LinearAgentStatus {
@@ -358,6 +347,17 @@ export interface LinearAgentStatus {
      * the doorbell's listen address, "" when off
      */
     "webhook"?: string;
+}
+
+/**
+ * LoadInfo is a machine-load sample; -1 marks a value the OS did not report.
+ * Busy is the hold reason ("" when dispatch is not held by load).
+ */
+export interface LoadInfo {
+    "load1": number;
+    "cpus": number;
+    "freeMemPercent": number;
+    "busy"?: string;
 }
 
 /**
