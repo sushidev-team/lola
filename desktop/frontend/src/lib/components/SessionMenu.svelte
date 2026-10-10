@@ -7,6 +7,7 @@
   import { store, type SessionInfo } from "$lib/store.svelte";
   import { nav } from "$lib/nav.svelte";
   import { terms, DIFF } from "$lib/terms.svelte";
+  import { sidePanel, CHECKPOINTS_TAB } from "$lib/sidepanel.svelte";
   import MenuItem from "./MenuItem.svelte";
 
   const req = $derived(sessionMenu.request);
@@ -46,12 +47,19 @@
     terms.newShell(s.id, s.worktree);
   }
 
-  // Same move as addShell: the diff lives in the detail embed, which the grid
-  // lens does not render.
-  function openDiff(s: SessionInfo) {
+  // Same move as addShell: the diff tab and the sidebar live in the detail embed,
+  // which the grid lens does not render.
+  function openView(s: SessionInfo, tab: string) {
     if (nav.lens === "grid") nav.setLens("list");
     nav.select(s.id);
-    terms.select(s.id, DIFF);
+    terms.select(s.id, tab);
+  }
+
+  // Checkpoints are a tab of the sidebar, not of the terminal strip.
+  function openCheckpoints(s: SessionInfo) {
+    if (nav.lens === "grid") nav.setLens("list");
+    nav.select(s.id);
+    sidePanel.show(CHECKPOINTS_TAB);
   }
 </script>
 
@@ -89,7 +97,13 @@
       icon="±"
       disabled={!session.worktree}
       title={session.worktree ? "review the changes and send line comments to the agent" : "session has no worktree"}
-      onclick={() => run((s) => openDiff(s))}>Review diff</MenuItem
+      onclick={() => run((s) => openView(s, DIFF))}>Review diff</MenuItem
+    >
+    <MenuItem
+      icon="↺"
+      disabled={!session.worktree}
+      title={session.worktree ? "per-turn snapshots — restore a bad turn or fork from one" : "session has no worktree"}
+      onclick={() => run((s) => openCheckpoints(s))}>Checkpoints</MenuItem
     >
     {#if session.devCommands?.length}
       <!-- The project's dev processes run in ONE session at a time, so this is a

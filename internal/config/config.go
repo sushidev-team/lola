@@ -141,6 +141,14 @@ type Project struct {
 	// stack in every project that forgot to override it.
 	DevCommands []string `toml:"dev_commands,omitempty"`
 
+	// DailyBudgetTokens caps this project's usage per local day, in WEIGHTED
+	// tokens (see [budget] and usage.Totals.Weighted). Once today's usage
+	// reaches it, the project dispatches nothing new until tomorrow; live
+	// sessions are never touched. 0 = no project limit. Not a [defaults] key:
+	// a budget is a decision about one project, and an inherited one would
+	// silently apply to every project.
+	DailyBudgetTokens int64 `toml:"daily_budget_tokens,omitempty"`
+
 	// --- Linear polling (optional) -----------------------------------------
 	// The project polls Linear only when TeamID is set; Enabled toggles it
 	// on/off (pause). TeamID also binds the on-demand ticket picker, so a
@@ -269,6 +277,8 @@ type Config struct {
 	Tmux        TmuxConfig        `toml:"tmux"`
 	UI          UIConfig          `toml:"ui"`
 	Remote      RemoteConfig      `toml:"remote"`
+	Budget      BudgetConfig      `toml:"budget"`
+	Load        LoadConfig        `toml:"load"`
 
 	// ReviewProviders is the NEW canonical global review CATALOG (resolved from
 	// [[review.provider]]). Empty when the file uses the legacy [review]/
@@ -380,6 +390,8 @@ type fileConfig struct {
 	Tmux        *fileTmuxConfig        `toml:"tmux,omitempty"`
 	UI          *fileUIConfig          `toml:"ui,omitempty"`
 	Remote      *fileRemoteConfig      `toml:"remote,omitempty"`
+	Budget      *BudgetConfig          `toml:"budget,omitempty"`
+	Load        *LoadConfig            `toml:"load,omitempty"`
 }
 
 // fileProject mirrors Project on disk. Its polling fields are inline; the
@@ -408,7 +420,8 @@ type fileProject struct {
 	Env           *map[string]string `toml:"env,omitempty"`
 	// DevCommands is a PLAIN slice, not a pointer: it is not inheritable, so
 	// absent and empty mean the same thing (no dev tabs for this project).
-	DevCommands []string `toml:"dev_commands,omitempty"`
+	DevCommands       []string `toml:"dev_commands,omitempty"`
+	DailyBudgetTokens int64    `toml:"daily_budget_tokens,omitempty"`
 
 	Enabled        bool      `toml:"enabled,omitempty"`
 	TeamID         string    `toml:"team_id,omitempty"`
@@ -555,34 +568,35 @@ func projectFromFile(fp fileProject) Project {
 	agentFallback, hasAgentFallback := deref(fp.AgentFallback)
 
 	return Project{
-		Name:           fp.Name,
-		Label:          fp.Label,
-		Group:          fp.Group,
-		Path:           fp.Path,
-		Repo:           fp.Repo,
-		DefaultBranch:  fp.DefaultBranch,
-		BranchPrefix:   fp.BranchPrefix,
-		Agent:          fp.Agent,
-		AgentFallback:  agentFallback,
-		PostCreate:     postCreate,
-		Symlinks:       symlinks,
-		Env:            env,
-		DevCommands:    fp.DevCommands,
-		Enabled:        fp.Enabled,
-		TeamID:         fp.TeamID,
-		ProjectID:      fp.ProjectID,
-		CycleMode:      fp.CycleMode,
-		CycleID:        fp.CycleID,
-		StateIDs:       fp.StateIDs,
-		MatchLabels:    matchLabels,
-		MatchMode:      matchMode,
-		AssigneeMode:   fp.AssigneeMode,
-		AssigneeUserID: fp.AssigneeUserID,
-		ConcurrencyCap: fp.ConcurrencyCap,
-		PrioritySort:   prioritySort,
-		DedupMode:      dedupMode,
-		OnSentSetLabel: onSentSetLabel,
-		Review:         review,
+		Name:              fp.Name,
+		Label:             fp.Label,
+		Group:             fp.Group,
+		Path:              fp.Path,
+		Repo:              fp.Repo,
+		DefaultBranch:     fp.DefaultBranch,
+		BranchPrefix:      fp.BranchPrefix,
+		Agent:             fp.Agent,
+		AgentFallback:     agentFallback,
+		PostCreate:        postCreate,
+		Symlinks:          symlinks,
+		Env:               env,
+		DevCommands:       fp.DevCommands,
+		DailyBudgetTokens: fp.DailyBudgetTokens,
+		Enabled:           fp.Enabled,
+		TeamID:            fp.TeamID,
+		ProjectID:         fp.ProjectID,
+		CycleMode:         fp.CycleMode,
+		CycleID:           fp.CycleID,
+		StateIDs:          fp.StateIDs,
+		MatchLabels:       matchLabels,
+		MatchMode:         matchMode,
+		AssigneeMode:      fp.AssigneeMode,
+		AssigneeUserID:    fp.AssigneeUserID,
+		ConcurrencyCap:    fp.ConcurrencyCap,
+		PrioritySort:      prioritySort,
+		DedupMode:         dedupMode,
+		OnSentSetLabel:    onSentSetLabel,
+		Review:            review,
 
 		Inherits: ProjectInherits{
 			PostCreate:     !hasPostCreate,
@@ -618,34 +632,35 @@ func projectToFile(p Project) fileProject {
 	set := func(inherits bool) bool { return !inherits }
 	o := p.Inherits
 	return fileProject{
-		Name:           p.Name,
-		Label:          p.Label,
-		Group:          p.Group,
-		Path:           p.Path,
-		Repo:           p.Repo,
-		DefaultBranch:  p.DefaultBranch,
-		BranchPrefix:   p.BranchPrefix,
-		Agent:          p.Agent,
-		AgentFallback:  ptr(p.AgentFallback, set(o.AgentFallback)),
-		PostCreate:     ptr(p.PostCreate, set(o.PostCreate)),
-		Symlinks:       ptr(p.Symlinks, set(o.Symlinks)),
-		Env:            ptr(p.Env, set(o.Env)),
-		DevCommands:    p.DevCommands,
-		Enabled:        p.Enabled,
-		TeamID:         p.TeamID,
-		ProjectID:      p.ProjectID,
-		CycleMode:      p.CycleMode,
-		CycleID:        p.CycleID,
-		StateIDs:       p.StateIDs,
-		MatchLabels:    ptr(p.MatchLabels, set(o.MatchLabels)),
-		MatchMode:      ptr(p.MatchMode, set(o.MatchMode)),
-		AssigneeMode:   p.AssigneeMode,
-		AssigneeUserID: p.AssigneeUserID,
-		ConcurrencyCap: p.ConcurrencyCap,
-		PrioritySort:   ptr(p.PrioritySort, set(o.PrioritySort)),
-		DedupMode:      ptr(p.DedupMode, set(o.DedupMode)),
-		OnSentSetLabel: ptr(p.OnSentSetLabel, set(o.OnSentSetLabel)),
-		Review:         ptr(p.Review, set(o.Review)),
+		Name:              p.Name,
+		Label:             p.Label,
+		Group:             p.Group,
+		Path:              p.Path,
+		Repo:              p.Repo,
+		DefaultBranch:     p.DefaultBranch,
+		BranchPrefix:      p.BranchPrefix,
+		Agent:             p.Agent,
+		AgentFallback:     ptr(p.AgentFallback, set(o.AgentFallback)),
+		PostCreate:        ptr(p.PostCreate, set(o.PostCreate)),
+		Symlinks:          ptr(p.Symlinks, set(o.Symlinks)),
+		Env:               ptr(p.Env, set(o.Env)),
+		DevCommands:       p.DevCommands,
+		DailyBudgetTokens: p.DailyBudgetTokens,
+		Enabled:           p.Enabled,
+		TeamID:            p.TeamID,
+		ProjectID:         p.ProjectID,
+		CycleMode:         p.CycleMode,
+		CycleID:           p.CycleID,
+		StateIDs:          p.StateIDs,
+		MatchLabels:       ptr(p.MatchLabels, set(o.MatchLabels)),
+		MatchMode:         ptr(p.MatchMode, set(o.MatchMode)),
+		AssigneeMode:      p.AssigneeMode,
+		AssigneeUserID:    p.AssigneeUserID,
+		ConcurrencyCap:    p.ConcurrencyCap,
+		PrioritySort:      ptr(p.PrioritySort, set(o.PrioritySort)),
+		DedupMode:         ptr(p.DedupMode, set(o.DedupMode)),
+		OnSentSetLabel:    ptr(p.OnSentSetLabel, set(o.OnSentSetLabel)),
+		Review:            ptr(p.Review, set(o.Review)),
 
 		OnSpawnStateID:   p.OnSpawnStateID,
 		OnPRStateID:      p.OnPRStateID,
@@ -760,6 +775,8 @@ func (fc *fileConfig) config() *Config {
 		Tmux:            resolveTmux(fc.Tmux),
 		UI:              resolveUI(fc.UI),
 		Remote:          resolveRemote(fc.Remote),
+		Budget:          tableOf(fc.Budget),
+		Load:            tableOf(fc.Load),
 	}
 }
 
@@ -813,6 +830,8 @@ func (c *Config) file() *fileConfig {
 		Tmux:        tmuxFile(c.Tmux),
 		UI:          uiFile(c.UI),
 		Remote:      remoteFile(c.Remote),
+		Budget:      nonZero(c.Budget),
+		Load:        nonZero(c.Load),
 	}
 }
 

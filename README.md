@@ -142,6 +142,7 @@ protocol-version mismatch.
 | `lola kill <session> [--force]` | Terminate a session's agent (tmux) **and its shell/review tabs**, then clean up after it. A **clean** worktree is removed along with the local branch it was on, and the issue's slot is freed (so it can re-dispatch if it still matches); a **dirty** one (uncommitted changes) keeps both the checkout and the branch for inspection and the command exits nonzero — rerun with `--force` to remove it anyway. The agent is always stopped first, even when the worktree is kept. |
 | `lola revive <session>` | Inverse of `kill`: relaunch a **dead** session's agent on the worktree that was kept for inspection. Claude and opencode resume their prior conversation (`--continue`) when they recorded one before dying, otherwise the agent restarts fresh on the same worktree. Refused if the session is still running. Use when a pane died to a transient fault (instant launch failure, crashed agent, machine sleep) rather than re-dispatching from scratch. |
 | `lola switch-agent <session> <kind>` | Replace a session's coding agent with a different kind (`claude`\|`codex`\|`opencode`) on the **same worktree and branch** — the manual half of the agent fallback (see [Agent fallback](#agent-fallback-usage-limits)). The old pane is stopped (shell/dev/review tabs survive), a `.lola/handoff.md` briefing is written for the new agent, and the new agent launches on it. Refused for an unknown session, a shell session, the kind already running, or a kind whose binary is not on `PATH`. |
+| `lola checkpoint list\|diff\|restore\|fork <session> [n]` | The CLI face of [turn checkpoints](#turn-checkpoints-restore-and-fork): `list` the session's per-turn snapshots, `diff` what the turn ending in checkpoint `n` changed, `restore` the worktree's files to it (undoable; refused while the agent is mid-turn), or `fork` a new agent session from it on its own branch (`--agent` to pick a different coding agent). |
 | `lola answer <session> <text>` | Deliver a human's inline reply to a session parked for input. Refused unless the session's derived status is `needs_input` (the one moment the agent is provably idle at its prompt), so a reply can never corrupt a mid-turn agent. |
 | `lola review <session> [--provider kind]` | Force a **pass-shape** review provider now, ignoring the once-per-PR guard, and route its findings per its transports. With no `--provider` it forces the primary enabled pass provider; `--provider <kind>` picks one explicitly (any pass kind: `coderabbit-cli`, `custom-cli`, `claude-session`, `codex-session`, `opencode-session`). Skipped (not an error) when no such provider is enabled or its tool is unavailable. |
 | `lola coderabbit <session>` | Back-compat alias that forces the **watch-shape** provider now (`coderabbit-watch`) — poll the session's open PR for CodeRabbit (GitHub-app) comments, ignoring the watermark, and route any found (notify / worker / Linear per config). Skipped (not an error) when the watch is disabled or the session has no open PR. |
@@ -174,6 +175,7 @@ environment variable — tests rely on this):
 | `state/<project>.seen` | Per-project seen-issue state |
 | `state/sessions.json` | Native session store (status, PR, worktree, tmux target) |
 | `worktrees/<project>/<session>/` | Per-session git worktree |
+| `context/<project>/<key>/` | Shared context folder, linked into every session as `.lola/context` (key = the lowercased issue, or the session ID for manual/PR sessions). Survives teardown on purpose; delete it by hand when an issue is done. |
 | `cache/linear-<team>.json` | Cached Linear metadata for the TUI forms |
 
 ## Configuration reference
@@ -296,6 +298,7 @@ runtime layer, not on config load.
 | `branch_prefix` | string | Prefix prepended to a session's derived branch name (e.g. `"feat/"` yields `feat/eng-42`). Empty inherits `[defaults].branch_prefix`, then `"lola/"`. |
 | `post_create` | string array | Commands run inside a fresh worktree before the agent starts (e.g. `composer install`). Any failure blocks the session with a clear status — never a half-started agent. Omit to inherit `[defaults].post_create`. |
 | `dev_commands` | string array | Long-running dev processes for this repository, e.g. `["composer dev", "npm run dev"]`. They run only in the project's **active** session — one session at a time, each command in its own terminal tab — see [The active session](#the-active-session). Deliberately **not** inheritable from `[defaults]`: a dev command belongs to one repository. |
+| `daily_budget_tokens` | int | This project's daily limit in **weighted** tokens (see [`[budget]`](#budget-optional)). Once today's usage reaches it the project dispatches nothing new until tomorrow; running sessions are untouched. `0`/absent = no project limit. Not inheritable from `[defaults]`. |
 | `symlinks` | string array | Files symlinked from the main checkout into each worktree, e.g. `[".env"]`. Beware: a shared `.env` usually means every worktree talks to the same database. Omit to inherit `[defaults].symlinks`. |
 | `env` | table of strings | Extra environment variables exported into each session (`[project.env]`); the agent pane, shell tabs and the `post_create` commands all see them. Values may reference the session — see [Per-session env values](#per-session-env-values). Omit to inherit `[defaults].env`. |
 | `agent` | `"claude"` \| `"codex"` \| `"opencode"` | Coding agent for sessions spawned into this repo, overriding `[defaults].agent`. Empty/omitted inherits the global default (ultimately `claude`). See [The coding agent](#the-coding-agent). |
@@ -1094,6 +1097,102 @@ view. `mouse` is a separate choice about who consumes the events of a **real**
 mouse: with it on, tmux takes clicks and drags, which costs text selection in
 the app's terminals.
 
+### `[budget]` (optional)
+
+Daily limits on how many **tokens** lola's agents use, and the usage figures
+behind them. lola reads each session's token usage from the coding agents' own
+logs, covering everything run in its worktree — the worker, its subagents and
+every review pass:
+
+- **claude:** `~/.claude/projects/<worktree>/…jsonl`;
+- **codex:** `~/.codex/sessions/…/rollout-*.jsonl`, attributed by the cwd each
+  log records. Only logs that ran in a lola worktree are read. codex shows
+  tokens only — lola has no list price for its models;
+- **opencode:** its SQLite database (`~/.local/share/opencode/opencode.db`, or
+  under `$XDG_DATA_HOME`), attributed by each session's directory and read
+  through the `sqlite3` CLI in read-only mode (macOS ships it; without it,
+  opencode simply shows no figure). The `~$` shown is opencode's own price.
+
+codex and opencode sessions are ranked against sessions of their own agent,
+never against claude ones (their weights are different units). The `[brain]` /
+`[statusagent]` helpers run in `~/.lola/helpers` so their usage is counted too
+(globally, against no project). A session with no readable log yet shows a
+blank, not `0`.
+
+**Per session** (a **Tokens** column + the detail header in the app, a `TOKENS`
+column + `tokens:` line in the TUI) lola shows:
+
+- the raw token count, cache traffic included (`46.7M`);
+- a **4-step size glyph** ranking the session against your own *finished*
+  sessions of the same agent from the last 35 days — below the median, p50–75, p75–90, top 10% (the
+  top step is orange). The tooltip says it in words ("heavier than 92% of your
+  last 40 sessions"). Ranking is by list-price weight, not raw tokens, because
+  a subscription limit is spent faster by output and bigger models and barely
+  by cache reads. With fewer than 10 finished sessions, fixed thresholds stand
+  in;
+- a **flame** while the session uses tokens faster (over the last ~30 minutes)
+  than 90% of your past sessions did on average per active hour — the early
+  warning for a runaway, before its total is large.
+
+The list-price dollar estimate appears only in tooltips / the detail line, as
+`~$`: a subscription pays nothing per token.
+
+**Today's total** shows in the app's top bar, the TUI's vitals bar and
+`lola status`, with the budget as a **percentage**. Day totals are kept in
+`~/.lola/state/usage.json`, so a torn-down session still counts toward today.
+
+**Subscription limits** lead the header when known — `Claude 5h 42% · 7d 18% ·
+Codex 7d 4%` in the app's top bar and the TUI's vitals bar, with reset times in
+the tooltip / `lola status` — because that is what a subscriber budgets by.
+Neither agent has an API for it, so lola reads it where each already appears:
+
+- **Claude Code** passes `rate_limits` only to its status-line command. lola
+  therefore sets the status line in each session's own `--settings` to
+  `lola hook statusline`, which records the figures and then runs **your own**
+  status-line command (project `.claude/settings.local.json`, then
+  `.claude/settings.json`, then `~/.claude/settings.json`) with the same stdin
+  and prints its output, so a lola pane shows your status line unchanged. Your
+  command is bounded to 5 seconds per redraw. Only subscribers get the figures;
+  an API-key user sees today's tokens instead.
+- **Codex** writes `rate_limits` into every session log
+  (`~/.codex/sessions/…/rollout-*.jsonl`); lola reads the newest.
+
+Both are as fresh as that agent's last turn (the tooltip says how old), and a
+window whose reset has passed is dropped.
+
+Budgets count **weighted** tokens — each token weighted by its list-price ratio
+to input, the same for every model: output 5×, cache write 1.25×, cache read
+0.1×. Most raw tokens are cache reads (a long session re-reading its own
+context), and a limit counted in raw tokens would be spent mostly by the
+cheapest traffic there is. `lola status` prints both numbers.
+
+| Key | Type | Description |
+| --- | --- | --- |
+| `daily_tokens` | int | Global daily limit in weighted tokens, across every project plus lola's helpers (local calendar day). `0`/absent = no limit. |
+| `notify` | bool | Send one notification per limit per day when usage first reaches it. Default `false`. |
+
+When a limit is reached, the affected polls **hold** exactly like the runtime
+health gate: the tick is skipped, the reason (`dispatch held: daily token budget
+reached: 212.4M of 200.0M weighted tokens used today …`) becomes the poll's
+`LastError`, and nothing is mutated — no seen entry, no label flip, and
+**never** a live session. Usage is scanned once a minute, so a limit is enforced
+up to a minute late.
+
+### `[load]` (optional)
+
+Holds new dispatch while **this machine** is saturated, on top of the slot cap —
+a slot is one agent, not one agent's `cargo build`. Same hold contract as
+`[budget]`, with the measured value in the reason (`machine busy: load 14.20 on
+8 CPUs (1.78/CPU) is above load.max_load_per_cpu 1.50`).
+
+| Key | Type | Description |
+| --- | --- | --- |
+| `max_load_per_cpu` | float | Hold while the 1-minute load average ÷ CPU count is above this (`1.0` = every core busy). `0`/absent = off. |
+| `min_free_memory_percent` | float | Hold while the OS reports less free memory than this percentage (macOS `kern.memorystatus_level`, Linux `MemAvailable`). `0`/absent = off. |
+
+A value the OS will not report holds **nothing** — a wrong "busy" would mean a
+machine that silently never dispatches.
+
 ### `[ui]` (optional)
 
 **Appearance only** — nothing the daemon does reads this table, so omitting it
@@ -1297,6 +1396,48 @@ mid-turn agent is never typed into — the batch is **queued** and delivered the
 moment it stops (the Stop hook, or the next observe cycle), and a second batch
 sent meanwhile is appended, not lost. Works the same for claude, codex and
 opencode sessions.
+
+## Turn checkpoints: restore and fork
+
+Every time a session's coding agent **ends a turn** (the Stop hook), lola
+snapshots its whole worktree — committed, uncommitted and untracked work, never
+ignored files or `.lola/` — as a commit object kept on a ref under
+`refs/lola/checkpoints/<session>/`, **not** on the session's branch, so the
+branch, the PR and every push are untouched. A turn that changed nothing records
+nothing, and a `start` baseline is recorded just before a new session's first
+agent launch, so even turn 1 can be undone (claude, codex and opencode alike). Each session keeps its newest 100; the refs are deleted when the
+session is torn down with its worktree.
+
+In the app they are a tab of the session sidebar, beside the agent's report
+(**Info** toggles the sidebar; **Checkpoints** in the session menu opens that
+tab). The list runs newest first; pick one to read what that turn changed (the
+previous checkpoint against it) in the main pane — **Close** or the **Agent**
+tab goes back to the terminal. Then:
+
+- **Restore…** puts the worktree's FILES back to that checkpoint. HEAD and the
+  branch stay put — commits made since stay in history and show up as
+  uncommitted edits that undo them. The current state is saved as a new
+  checkpoint first, so a restore is itself one click to undo. Refused while the
+  agent is mid-turn (nothing is typed into the agent while a restore runs), and
+  refused when it would overwrite an ignored file no checkpoint could bring
+  back. The agent still remembers the discarded changes: tell it.
+- **Fork…** starts a new agent session from that checkpoint on its own branch
+  (`<branch>-fork-<n>`), holding the checkpoint's files as uncommitted work and
+  briefed as a fork. The original session keeps running untouched.
+
+`lola checkpoint list|diff|restore|fork` does the same from a shell.
+
+### The shared context folder
+
+Every agent session gets `.lola/context/` when its setup succeeds: a notes
+folder that lives OUTSIDE the worktree at `~/.lola/context/<project>/<key>/` and
+is linked in, so it survives the worktree. Linking is best-effort — if it fails,
+the session still starts, without the folder, and its briefing leaves the
+section out. Every re-spawn of the same issue (`-r2`, `-r3`, …) and every fork
+gets the same folder, and `.lola/prompt.md` names what earlier sessions left
+there and asks the agent to keep `notes.md` current. It is git-ignored (all of
+`.lola/` is), so nothing in it is ever committed — and it is not part of a
+checkpoint, so a restore never rolls notes back.
 
 ## Secrets
 

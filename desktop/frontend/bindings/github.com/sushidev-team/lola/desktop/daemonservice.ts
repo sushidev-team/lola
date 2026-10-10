@@ -52,6 +52,22 @@ export function CLIInfo(): $CancellablePromise<$models.CLIInfoDTO> {
 }
 
 /**
+ * CheckpointDiff returns what the turn ending in checkpoint seq changed: the
+ * previous checkpoint against this one. Read-only.
+ */
+export function CheckpointDiff(session: string, seq: number): $CancellablePromise<protocol$0.DiffData> {
+    return $Call.ByID(3558083024, session, seq);
+}
+
+/**
+ * Checkpoints lists the session's turn checkpoints, oldest first: the worktree
+ * snapshot the daemon records each time the agent ends a turn.
+ */
+export function Checkpoints(session: string): $CancellablePromise<protocol$0.CheckpointsData> {
+    return $Call.ByID(4102282240, session);
+}
+
+/**
  * CodeRabbit forces the PR-comment watch for one session now (the coderabbit-watch alias).
  */
 export function CodeRabbit(session: string): $CancellablePromise<protocol$0.CodeRabbitData> {
@@ -97,6 +113,14 @@ export function Disable(poll: string): $CancellablePromise<void> {
  */
 export function Enable(poll: string): $CancellablePromise<void> {
     return $Call.ByID(948893506, poll);
+}
+
+/**
+ * ForkCheckpoint starts a NEW agent session from checkpoint seq on its own
+ * branch; agentKind "" keeps the parent's coding agent.
+ */
+export function ForkCheckpoint(session: string, seq: number, agentKind: string): $CancellablePromise<protocol$0.OpenData> {
+    return $Call.ByID(460527567, session, seq, agentKind);
 }
 
 /**
@@ -218,6 +242,15 @@ export function ResolveConflict(session: string): $CancellablePromise<protocol$0
  */
 export function RestartDaemon(): $CancellablePromise<void> {
     return $Call.ByID(1780015196);
+}
+
+/**
+ * RestoreCheckpoint puts the session's worktree files back to checkpoint seq.
+ * The daemon records the current state as a new checkpoint first (the reply's
+ * Safety), so the restore is undoable; it refuses while the agent is mid-turn.
+ */
+export function RestoreCheckpoint(session: string, seq: number): $CancellablePromise<protocol$0.RestoreCheckpointData> {
+    return $Call.ByID(21321943, session, seq);
 }
 
 /**

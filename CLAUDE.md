@@ -226,6 +226,21 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   zero value, because an empty repo merely disables the open-PR check while a
   wrong one would make `gh pr list --repo` answer about someone else's
   repository.
+- `internal/usage` — token usage (stdlib leaf): sums the `message.usage`
+  numbers of claude-code's transcripts (plus codex's `token_count` deltas,
+  `CodexScanner`, and opencode's messages, `OpencodeScanner`) per local day
+  and per 10-minute slot
+  (`Scanner`, incremental by file offset, dedup by message id), prices them at
+  list price for RANKING only (`RankAmong`, `BurnThreshold`), plus the
+  persisted per-day `Ledger` (`~/.lola/state/usage.json`) the budget reads.
+  A session's directory is its WORKTREE's `~/.claude/projects` slug, so the
+  worker, its subagents and every review pass run there are one figure.
+- `internal/quota` — the agents' SUBSCRIPTION limits (stdlib leaf): claude's
+  `rate_limits` as recorded by `lola hook statusline` (`RecordClaude`, in
+  `~/.lola/state/quota-claude.json`) and codex's from the tail of its newest
+  session log (`LatestCodex`). Snapshots, clamped, with reset times.
+- `internal/sysload` — machine load for the `[load]` hold (stdlib leaf): the
+  1-min load average and the OS's own free-memory percentage; unknown is -1.
 - `internal/secrets` / `internal/notify` / `internal/brain` / `internal/review`
   / `internal/attention` / `internal/doctor` — Linear key resolution
   (keychain→env), best-effort desktop/Slack notify, opt-in headless-claude
@@ -241,6 +256,12 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   untracked work included, split per file and capped at a file boundary. Behind
   `cmd=diff` (`internal/daemon/feedback.go`) for the diff viewer. Not `scm`
   (gh-only) and not `diffanchor` (which reads a PR's diff, not a worktree).
+  `Between` diffs two commits — a turn checkpoint against the previous one.
+- `internal/checkpoint` — LOCAL git only: per-turn worktree SNAPSHOTS
+  (`Record`/`List`/`Get`/`Restore`/`Apply`/`Prune`) as commit objects on
+  `refs/lola/checkpoints/<session>/<seq>`, never on a branch. Behind
+  `internal/daemon/checkpoints.go` and `runtime.Native.Checkpoints` (fork +
+  pruning). See the invariant below.
 - `internal/diffanchor` — pure text leaf: which `(path, line)` pairs of a unified
   diff may carry a GitHub inline review comment (RIGHT side, added + context
   lines, `Nearest` for the bounded snap). It exists because the reviews endpoint
@@ -401,6 +422,52 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   only them. `Validate` does NOT check this: whether a UUID is team- or
   workspace-scoped is unknowable offline, and an earlier cross-team rejection
   here blocked the correct configuration. Do not reinstate it.
+- **Spend and load HOLD dispatch; they never touch a session.** `dispatchHold`
+  (`internal/daemon/usage.go`) runs right after the health gate with the same
+  contract — skip the tick, `dispatch held: <why>` as `LastError`, mutate
+  nothing. Rules that keep it honest:
+  - The UIs show TOKENS, not dollars (a subscription pays nothing per token);
+    the list-price estimate appears only in tooltips as `~$`. An absent
+    `Usage` means UNKNOWN (no log yet) and renders blank, never `0`.
+  - codex usage comes from its DATE-keyed logs, attributed by the cwd in
+    each log's `session_meta` (`usage.CodexScanner`; logs outside
+    `~/.lola/worktrees` are never read past line one). It carries NO price —
+    lola has none for codex models — so a codex session is ranked on its own
+    `Scale` (weighted tokens) against codex history only. Never mix the
+    agents in one ranking: their weights are different units.
+  - opencode usage comes from its SQLite database through the `sqlite3` CLI
+    (`usage.OpencodeScanner`, `-readonly`, query on STDIN, bounded): only
+    sessions whose directory lies under `~/.lola/worktrees` are selected,
+    only numbers leave the query (`json_extract`), and a message is REPLACED
+    by id so one still streaming is never double-counted. No CLI = no figure
+    (fail open). Its `CostUSD` is opencode's own price, and it ranks on the
+    token scale like codex.
+  - Three different measures, each for its own job: RAW tokens are displayed;
+    WEIGHTED tokens (`Totals.Weighted`, model-independent price ratios) are
+    what a budget counts, so cache reads do not exhaust it; list-price
+    `CostUSD` RANKS a session (size glyph + flame), because bigger models eat
+    a subscription limit faster. The UIs show a budget as a PERCENTAGE, never
+    beside the raw count as if they were the same unit.
+  - A session is ranked against FINISHED sessions only (the ledger minus the
+    live set and the helpers): ranking against live ones would make a lone
+    session always "max" and shift every row whenever one spawns.
+  - The ledger REPLACES each (day, source) entry with the scanner's absolute
+    total, so rescans are idempotent and a torn-down session keeps counting.
+  - `TranscriptPath` from a hook is only trusted when it lies directly under
+    the claude projects root; anything else falls back to the worktree slug.
+  - `[brain]`/`[statusagent]` run with cwd `~/.lola/helpers` so their spend
+    lands in one slug (`helperSource`, global only). The review AGENT family
+    already runs in the worktree and is counted with the session.
+  - A load value the OS will not report holds NOTHING (fail open): a wrong
+    "busy" is a machine that silently never dispatches.
+  - The subscription limits are DISPLAY-ONLY (no hold reads them), and the
+    claude half exists only because the status line is the one place Claude
+    Code exposes them. `hook.SettingsJSON` therefore OWNS the status line of
+    every lola claude session, and `hook.StatusLine` must keep passing through
+    to the user's own command (project local → project → user settings, same
+    stdin, bounded, process group killed) — ALWAYS, even when recording fails,
+    and never to a command that is itself `lola hook statusline`. Dropping the
+    pass-through silently breaks whatever the user's status line feeds.
 - **Health-gate every dispatch.** If `tmux`/`git`/`claude` aren't all resolvable
   or the poll's `[[project]]` doesn't resolve: skip the tick, record `lastError`
   in status, and mutate **nothing** (no seen, no labels, no in-flight).
@@ -1020,6 +1087,63 @@ each of which owns exactly one external tool or concern behind an **exec seam**
     PR. Without that release a single timeout locked the PR out of review
     forever — the bug that made the feature look dead. A real answer (findings
     or clean) and a graceful skip (auth / exit error) stay final.
+- **A turn checkpoint is a REF, never a commit on the branch, and recording
+  one never touches a real index.** Only two operations write one: a RESTORE
+  (the parent session's own index) and a FORK's `Apply` (the NEW fork
+  worktree's index, never the parent's). The Stop hook records one per turn
+  (`recordCheckpointAsync`, off the hook's critical path, on the conn drain
+  group). The `start` baseline that makes turn 1 undoable is recorded by the
+  RUNTIME just before a new session's first agent launch — spawn and fork,
+  not revive or switch-agent (`recordBaseline`) — because codex and opencode
+  emit no turn-start hook, so a hook-driven baseline never fired for them. A
+  `user_prompt` still records the baseline whenever a session has none yet
+  (older sessions, or a baseline that failed). Rules that hold it together:
+  - `Snapshot` stages into a TEMPORARY index seeded from a copy of the real one
+    (`GIT_INDEX_FILE`), then `write-tree` + `commit-tree` + `update-ref`. The
+    real index and every branch stay untouched, so recording is safe while the
+    agent keeps working. `git stash create` is not a substitute: it drops
+    untracked files, which are exactly what a rollback must remove.
+  - `commit-tree` runs with `--no-gpg-sign` and a fixed lola identity: a user's
+    `commit.gpgSign` (1Password, a hardware key) otherwise prompts or fails on
+    every turn, and a machine without `user.email` cannot commit at all.
+  - Refs live in the repo's COMMON ref store, so the session ID is in the ref
+    name, `validSession` keeps it a single safe segment, and the wire names a
+    checkpoint by its per-session `Seq` only — a client can never reach another
+    session's refs or an arbitrary object. A fresh worktree for an ID prunes
+    that ID's leftover refs (a session must not inherit a dead one's history);
+    teardown prunes them after a successful removal and KEEPS them when a dirty
+    worktree is kept.
+  - `Restore` moves FILES only: it records the current state first (the
+    "before restore" checkpoint is the undo), points the real index at that
+    snapshot so the reset knows every current file, `read-tree --reset -u`s the
+    target and resets the index to HEAD. HEAD never moves, so pushed history is
+    never rewritten. It REFUSES (`ErrWouldClobber`) when the target would
+    overwrite a path that exists on disk but is not in the safety snapshot —
+    an ignored file, which no checkpoint can bring back.
+  - A restore holds the session's SEND GATE exclusively (`sendGate`), and every
+    send-keys path goes through `typeToAgent`, which holds it shared. Without it
+    a hand-off, queued feedback, a reaction or an answer could start a turn
+    after the idle check and the agent would edit files mid-replacement. Under
+    both locks the restore re-reads the axis AND, for a live agent, demands a
+    resting pane (`paneWaitingNow`); a gone agent needs no proof. A send queued
+    behind a restore WAITS (its timeout starts after the wait), it is not lost.
+    New send paths must use `typeToAgent`, never `d.sendKeys` directly.
+    Checkpoint operations on a session are also serialized by `ckptLock`.
+  - `.lola/` is excluded, so neither the scratch files nor the shared context
+    folder are captured or rolled back.
+  - A fork (`runtime.ForkAgent`) cuts its branch at the checkpoint's HEAD with
+    `worktree.CreateAt` (verbatim commit — never through `CreateFrom`'s
+    `origin/<base>` lookup), lays the checkpoint's tree over it as uncommitted
+    work, and inherits the parent's `ContextKey`. It is a manual-kind session:
+    no `Issue`, so it never counts against the issue in dispatch/reconcile.
+- **The shared context folder lives OUTSIDE the worktree.**
+  `~/.lola/context/<project>/<key>/` is symlinked in as `.lola/context`, so
+  `git worktree remove` deletes the link and never the notes. The key is
+  `Session.ContextKey` (recorded, carried across adoption, inherited by forks),
+  else the lowercased issue, else the session ID (`runtime.ContextKey`). Linking
+  is BEST-EFFORT — a failure logs and the briefing omits the section; notes must
+  never cost a spawn. Nothing deletes the folder automatically, and
+  `renameProject` moves `context/<old>` with the `.seen` file.
 - **Diff-viewer feedback DEFERS, it never refuses and never forces.**
   `cmd=feedback` (`internal/daemon/feedback.go`) is a human's line comments
   rendered into one `path:line`-anchored message. Every batch is APPENDED to

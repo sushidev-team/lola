@@ -142,9 +142,9 @@ func (d *Daemon) typeAtRestingPrompt(ctx context.Context, s session.Session, msg
 		tmuxName = paneTarget(s)
 	}
 
-	sctx, cancel := context.WithTimeout(ctx, reactExecTimeout)
-	defer cancel()
-	if err := d.sendKeys(sctx, tmuxName, msg); err != nil {
+	// typeToAgent holds the per-session send gate, so a checkpoint restore in
+	// flight can never have this request typed into the worktree it is replacing.
+	if err := d.typeToAgent(ctx, s.ID, tmuxName, msg, reactExecTimeout); err != nil {
 		return err
 	}
 	if err := d.sessions.Save(); err != nil {

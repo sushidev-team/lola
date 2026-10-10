@@ -109,6 +109,29 @@ import (
 // anything already queued) and delivered on the first cycle its pane is
 // verifiably resting. The reply is FeedbackData saying which happened.
 //
+// Cmd "checkpoints" lists a session's TURN CHECKPOINTS as CheckpointsData:
+// snapshots of its whole worktree (uncommitted and untracked work included) the
+// daemon records when the agent's turn ends, kept on refs under
+// refs/lola/checkpoints/<session>/ rather than as commits on the branch. Session
+// names the target. Read-only.
+//
+// Cmd "checkpointDiff" returns what one turn changed as DiffData: Args is a
+// CheckpointArgs naming the session and the checkpoint's Seq; the diff is the
+// previous checkpoint (or, for the oldest, the HEAD it was taken on) against
+// this one. Read-only.
+//
+// Cmd "restoreCheckpoint" makes the session's worktree match a checkpoint
+// (Args: CheckpointArgs). The current state is recorded first as a new
+// checkpoint, so a restore is itself undoable; only FILES move — HEAD and the
+// branch stay put, so later commits show up as uncommitted edits that undo
+// them. Refused while the agent is mid-turn. The reply is RestoreCheckpointData.
+//
+// Cmd "forkCheckpoint" starts a NEW agent session from a checkpoint (Args:
+// CheckpointArgs, Agent optionally overriding the coding agent): a fresh
+// worktree on a new lola-owned branch cut at the checkpoint's HEAD, holding the
+// checkpoint's files as uncommitted work, briefed as a fork and sharing the
+// parent's .lola/context folder. The parent is untouched. The reply is OpenData.
+//
 // Cmd "coderabbit" FORCES the [coderabbit] PR-comment WATCH for one session now,
 // ignoring the LastCodeRabbitAt watermark: Session names the target. The daemon
 // polls the session's open PR (one `gh pr view`) for CodeRabbit-app comments and
@@ -237,6 +260,90 @@ type StatusData struct {
 	// at length); telling an already-paired device the name of the machine it
 	// is holding a session list from discloses nothing it does not have.
 	Host string `json:"host,omitempty"`
+
+	// Usage is today's token usage against the configured budgets, plus
+	// the last machine-load sample when [load] is on. nil on an older daemon.
+	Usage *UsageStatus `json:"usage,omitempty"`
+}
+
+// UsageInfo is one session's usage over every claude AND codex run in its
+// worktree (worker, subagents, review passes). Tokens are RAW (cache traffic included):
+// the number the UIs show. The *USD figures are the list-price ESTIMATE, kept
+// for tooltips — a subscription user pays nothing per token.
+//
+// Level/Percentile/Of rank the session against the user's own finished
+// sessions (internal/usage.RankAmong): Level is the 4-step size glyph
+// (0 light … 3 top 10%), Percentile the share of history lighter than it, Of
+// the history size — 0 when fixed thresholds decided Level instead. Burning
+// flags a session using tokens faster now than 90% of past sessions ever did;
+// TokensPerHour is that current rate (raw tokens, last ~30 minutes).
+type UsageInfo struct {
+	// Agent is whose scale ranked it ("claude" | "codex"). A codex figure has
+	// no list price (TotalUSD/TodayUSD stay 0) and is ranked against codex
+	// sessions only, by weighted tokens.
+	Agent         string  `json:"agent,omitempty"`
+	Tokens        int64   `json:"tokens"`
+	TodayTokens   int64   `json:"todayTokens"`
+	TotalUSD      float64 `json:"totalUsd"`
+	TodayUSD      float64 `json:"todayUsd"`
+	Level         int     `json:"level"`
+	Percentile    float64 `json:"percentile,omitempty"`
+	Of            int     `json:"of,omitempty"`
+	Burning       bool    `json:"burning,omitempty"`
+	TokensPerHour int64   `json:"tokensPerHour,omitempty"`
+}
+
+// UsageStatus is cmd=status's usage + load summary for one local day. Tokens
+// is raw (what the UIs show); Weighted is what a budget counts
+// (usage.Totals.Weighted) and BudgetTokens its global limit (0 = none).
+// TodayUSD is the list-price estimate, for tooltips only.
+type UsageStatus struct {
+	Day          string         `json:"day"` // local YYYY-MM-DD the totals are for
+	Tokens       int64          `json:"tokens"`
+	Weighted     int64          `json:"weighted"`
+	TodayUSD     float64        `json:"todayUsd"`
+	BudgetTokens int64          `json:"budgetTokens,omitempty"`
+	Projects     []ProjectSpend `json:"projects,omitempty"`
+	// Load is the last [load] sample; nil when [load] is off.
+	Load *LoadInfo `json:"load,omitempty"`
+	// Quotas is how much of each coding agent's SUBSCRIPTION limits is used
+	// (internal/quota), one entry per agent lola could read — claude via the
+	// status line, codex via its session logs. Empty when neither reported.
+	Quotas []QuotaInfo `json:"quotas,omitempty"`
+}
+
+// QuotaInfo is one agent's subscription limits as last observed. At is when
+// they were observed: a snapshot is only as fresh as that agent's last turn.
+type QuotaInfo struct {
+	Agent   string        `json:"agent"` // "claude" | "codex"
+	Plan    string        `json:"plan,omitempty"`
+	At      time.Time     `json:"at"`
+	Windows []QuotaWindow `json:"windows"`
+}
+
+// QuotaWindow is one rate-limit window: "5h", "7d", or "spend" (a gateway's
+// spend limit). Windows whose reset has passed are never sent.
+type QuotaWindow struct {
+	Label       string    `json:"label"`
+	UsedPercent float64   `json:"usedPercent"`
+	ResetsAt    time.Time `json:"resetsAt"`
+}
+
+// ProjectSpend is one project's usage today against its own limit.
+type ProjectSpend struct {
+	Name         string `json:"name"`
+	Tokens       int64  `json:"tokens"`
+	Weighted     int64  `json:"weighted"`
+	BudgetTokens int64  `json:"budgetTokens,omitempty"`
+}
+
+// LoadInfo is a machine-load sample; -1 marks a value the OS did not report.
+// Busy is the hold reason ("" when dispatch is not held by load).
+type LoadInfo struct {
+	Load1          float64 `json:"load1"`
+	CPUs           int     `json:"cpus"`
+	FreeMemPercent float64 `json:"freeMemPercent"`
+	Busy           string  `json:"busy,omitempty"`
 }
 
 type PollStatus struct {
@@ -368,6 +475,11 @@ type SessionInfo struct {
 	// (cmd=feedback) is queued for this session's agent, waiting for the pane to
 	// be verifiably resting at its prompt.
 	FeedbackPending bool `json:"feedbackPending,omitempty"`
+
+	// Usage is this session's token usage (internal/usage), nil when nothing
+	// is known yet — no transcript written, or an agent whose logs lola cannot
+	// read (codex, opencode). Absent is "unknown", never zero.
+	Usage *UsageInfo `json:"usage,omitempty"`
 
 	// Reaction-engine posture (PLAN P3), flattened so the TUI renders reaction
 	// state without importing internal/session or re-deriving it.
@@ -841,6 +953,45 @@ type FeedbackData struct {
 	Delivered bool   `json:"delivered"`
 	Queued    bool   `json:"queued"`
 	Message   string `json:"message,omitempty"`
+}
+
+// CheckpointArgs is the argument payload for cmd=checkpointDiff,
+// restoreCheckpoint and forkCheckpoint. Seq names the checkpoint by its
+// per-session sequence number — never a ref or sha, so a client can only reach
+// the session's own checkpoints. Agent is forkCheckpoint's optional coding-agent
+// override ("" = the parent session's agent).
+type CheckpointArgs struct {
+	Session string `json:"session"`
+	Seq     int    `json:"seq"`
+	Agent   string `json:"agent,omitempty"`
+}
+
+// CheckpointInfo is one turn checkpoint. Head is the commit the session's
+// branch was on when it was taken; SHA is the snapshot itself.
+type CheckpointInfo struct {
+	Seq     int       `json:"seq"`
+	SHA     string    `json:"sha"`
+	Head    string    `json:"head"`
+	Label   string    `json:"label"`
+	Created time.Time `json:"created"`
+}
+
+// CheckpointsData is Response.Data for cmd=checkpoints, oldest first.
+// Restorable is false while the agent is mid-turn (restore is refused then);
+// it is a hint for the UI, the daemon re-checks on the request.
+type CheckpointsData struct {
+	Session     string           `json:"session"`
+	Checkpoints []CheckpointInfo `json:"checkpoints"`
+	Restorable  bool             `json:"restorable"`
+}
+
+// RestoreCheckpointData is Response.Data for cmd=restoreCheckpoint. Safety is
+// the checkpoint holding the state from just before the restore — restoring it
+// undoes the restore.
+type RestoreCheckpointData struct {
+	Seq     int    `json:"seq"`
+	Safety  int    `json:"safety"`
+	Message string `json:"message,omitempty"`
 }
 
 // SwitchAgentArgs is the argument payload for cmd=switchAgent: replace the

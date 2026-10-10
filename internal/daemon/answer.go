@@ -168,8 +168,6 @@ func (d *Daemon) handleAnswer(ctx context.Context, sessionID, text string) error
 		return fmt.Errorf("session %s is not resting at its prompt right now — lola will not type into a mid-turn agent; try again when it is idle", sessionID)
 	}
 
-	cctx, cancel := context.WithTimeout(ctx, answerExecTimeout)
-	defer cancel()
 	// The human's answer is verbatim operator input (CLI args, or a TUI card that
 	// accepts bracketed pastes), so it can carry an embedded CR — which the
 	// send-keys transport types as an INDISTINGUISHABLE submit, submitting the
@@ -178,7 +176,7 @@ func (d *Daemon) handleAnswer(ctx context.Context, sessionID, text string) error
 	// through sanitizeAgentText (as the reaction path does) so only the explicit
 	// trailing Enter submits. Choice keys are already safe (constrained to
 	// [0-9A-Za-z] by the parser).
-	if err := d.sendKeys(cctx, paneTarget(s), sanitizeAgentText(text)); err != nil {
+	if err := d.typeToAgent(ctx, sessionID, paneTarget(s), sanitizeAgentText(text), answerExecTimeout); err != nil {
 		return fmt.Errorf("send answer to %s: %w", sessionID, err)
 	}
 

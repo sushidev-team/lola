@@ -51,6 +51,9 @@ type fakeNative struct {
 	prAgentErr     error // returned from OpenPRAgent
 	manualAgents   []nativeAgentCall
 	manualAgentErr error // returned from OpenManualAgent
+	forks          []runtime.ForkSpec
+	forkErr        error           // returned from ForkAgent
+	takenBranches  map[string]bool // SlotTaken answers true for these branches
 	switches       []nativeSwitchCall
 	switchErr      error // returned from SwitchAgent
 }
@@ -175,6 +178,24 @@ func (f *fakeNative) OpenManualAgent(ctx context.Context, p config.Project, id, 
 		return session.Session{}, err
 	}
 	return session.Session{ID: id, Source: "native", Kind: session.KindManual, Project: p.Name, Branch: branch, Repo: p.Repo, TmuxName: id, Status: "working", Agent: "claude"}, nil
+}
+
+func (f *fakeNative) ForkAgent(ctx context.Context, p config.Project, spec runtime.ForkSpec) (session.Session, error) {
+	f.mu.Lock()
+	f.forks = append(f.forks, spec)
+	err := f.forkErr
+	f.mu.Unlock()
+	if err != nil {
+		return session.Session{}, err
+	}
+	return session.Session{ID: spec.SessionID, Source: "native", Kind: session.KindManual, Project: p.Name, Title: spec.Title,
+		Branch: spec.Branch, Repo: p.Repo, TmuxName: spec.SessionID, Status: "working", Agent: "claude", ContextKey: spec.ContextKey}, nil
+}
+
+func (f *fakeNative) SlotTaken(_ context.Context, _ config.Project, _, branch string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.takenBranches[branch], nil
 }
 
 func (f *fakeNative) prAgentCalls() []nativeAgentCall {

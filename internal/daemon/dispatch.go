@@ -268,6 +268,12 @@ func (d *Daemon) tick(ctx context.Context, name string, dryRun bool) (protocol.P
 	if nat == nil {
 		return fail("native runtime unavailable", nil)
 	}
+	// 1b. Spend + load gate (usage.go), same contract as the health check: a
+	// reached daily budget or a saturated machine skips the tick, names why in
+	// LastError, and touches nothing — live sessions keep running.
+	if msg := d.dispatchHold(ctx, project.Name, now); msg != "" {
+		return fail("dispatch held: "+msg, nil)
+	}
 
 	// 2. Linear client (key resolved at startup; retried here if missing).
 	api, err := d.ensureLinear()

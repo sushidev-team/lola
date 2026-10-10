@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -67,6 +68,7 @@ func main() {
 		answerCmd(),
 		reviewCmd(),
 		switchAgentCmd(),
+		checkpointCmd(),
 		coderabbitCmd(),
 		configCmd(),
 		logsCmd(),
@@ -237,6 +239,75 @@ func switchAgentCmd() *cobra.Command {
 	}
 }
 
+// checkpointCmd is `lola checkpoint list|diff|restore|fork`: the CLI face of
+// turn checkpoints — the worktree snapshot the daemon records every time a
+// session's agent ends a turn. Restore puts the files back (the current state is
+// kept as a new checkpoint first, so it is undoable); fork starts a new agent
+// session from one.
+func checkpointCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "checkpoint",
+		Short: "List, inspect, restore or fork from a session's turn checkpoints",
+	}
+	send := func(name, session string, seq int, agentKind string) error {
+		args, err := json.Marshal(protocol.CheckpointArgs{Session: session, Seq: seq, Agent: agentKind})
+		if err != nil {
+			return err
+		}
+		raw, err := json.Marshal(protocol.Request{Cmd: name, Args: args})
+		if err != nil {
+			return err
+		}
+		return tui.Send(string(raw))
+	}
+	seqArg := func(s string) (int, error) {
+		n, err := strconv.Atoi(strings.TrimPrefix(s, "#"))
+		if err != nil || n < 1 {
+			return 0, fmt.Errorf("checkpoint number must be a positive integer, got %q", s)
+		}
+		return n, nil
+	}
+	cmd.AddCommand(&cobra.Command{
+		Use: "list <session>", Short: "List a session's checkpoints, oldest first", Args: cobra.ExactArgs(1),
+		RunE: func(c *cobra.Command, a []string) error {
+			raw, err := json.Marshal(protocol.Request{Cmd: "checkpoints", Session: a[0]})
+			if err != nil {
+				return err
+			}
+			return tui.Send(string(raw))
+		},
+	})
+	for _, sub := range []struct{ use, short, cmd string }{
+		{"diff <session> <n>", "Show what the turn ending in checkpoint n changed", "checkpointDiff"},
+		{"restore <session> <n>", "Restore the worktree's files to checkpoint n (undoable; refused mid-turn)", "restoreCheckpoint"},
+	} {
+		cmd.AddCommand(&cobra.Command{
+			Use: sub.use, Short: sub.short, Args: cobra.ExactArgs(2),
+			RunE: func(c *cobra.Command, a []string) error {
+				n, err := seqArg(a[1])
+				if err != nil {
+					return err
+				}
+				return send(sub.cmd, a[0], n, "")
+			},
+		})
+	}
+	var agentKind string
+	fork := &cobra.Command{
+		Use: "fork <session> <n>", Short: "Start a new agent session from checkpoint n on its own branch", Args: cobra.ExactArgs(2),
+		RunE: func(c *cobra.Command, a []string) error {
+			n, err := seqArg(a[1])
+			if err != nil {
+				return err
+			}
+			return send("forkCheckpoint", a[0], n, agentKind)
+		},
+	}
+	fork.Flags().StringVar(&agentKind, "agent", "", "coding agent for the fork (claude|codex|opencode); default: the parent's")
+	cmd.AddCommand(fork)
+	return cmd
+}
+
 // reviewCmd forces the P9 QA review pass for one session now (`lola review
 // <session>`): it runs a bounded CodeRabbit review of the session's worktree,
 // ignoring the once-per-PR guard, and routes the findings (human notification +
@@ -308,6 +379,13 @@ func hookCmd() *cobra.Command {
 			event := ""
 			if len(args) > 0 {
 				event = args[0]
+			}
+			// The status line (Claude Code only): record the subscription
+			// limits and print the user's own status line. Needs no session
+			// and never touches the socket.
+			if event == "statusline" {
+				hook.StatusLine(c.InOrStdin(), c.OutOrStdout())
+				return nil
 			}
 			// Codex delivers its notify payload as the next argv element, not
 			// stdin. Normalize it; an unknown notify type maps to "" — ignore

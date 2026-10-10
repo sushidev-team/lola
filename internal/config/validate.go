@@ -275,6 +275,7 @@ func (c *Config) Validate() error {
 	errs = append(errs, c.validateReviewProviders()...)
 	errs = append(errs, c.validateProjectReview()...)
 	errs = append(errs, c.validateUI()...)
+	errs = append(errs, c.validateLimits()...)
 	errs = append(errs, c.validateRemote()...)
 
 	return errors.Join(errs...)

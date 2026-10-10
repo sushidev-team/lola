@@ -113,6 +113,46 @@ func (d Differ) Diff(ctx context.Context, dir, base string) (Result, error) {
 		res.Truncated = more // past MaxUntracked: say so, never drop files silently
 	}
 
+	capFiles(&res, files)
+	return res, nil
+}
+
+// Between returns the changes from commit from to commit to — two snapshots,
+// not a worktree, so nothing untracked or uncommitted is involved. It is the
+// data behind a turn checkpoint's diff (what one turn changed: the previous
+// checkpoint against this one). Both must be commit-ish object names the
+// caller resolved itself; Result.Base and Result.MergeBase both report from.
+func (d Differ) Between(ctx context.Context, dir, from, to string) (Result, error) {
+	if strings.TrimSpace(dir) == "" {
+		return Result{}, errors.New("no worktree")
+	}
+	for _, ref := range []string{from, to} {
+		if ref == "" || strings.HasPrefix(ref, "-") {
+			return Result{}, fmt.Errorf("invalid commit %q", ref)
+		}
+	}
+	run := d.run
+	if run == nil {
+		run = runGit
+	}
+	bin := d.GitBin
+	if bin == "" {
+		bin = "git"
+	}
+	out, err := run(ctx, bin, dir, "-c", "core.quotepath=off", "diff", "--no-color", "--no-ext-diff",
+		"--no-textconv", "-M", "--unified=3", from, to, "--")
+	if err != nil {
+		return Result{}, fmt.Errorf("git diff: %w", err)
+	}
+	res := Result{Base: from, MergeBase: from}
+	capFiles(&res, SplitPatch(string(out)))
+	return res, nil
+}
+
+// capFiles applies the patch caps to files and appends what fits to res.Files,
+// cutting at a FILE boundary and flagging res.Truncated when the budget runs
+// out. res.Files is never nil afterwards, so it marshals as [] rather than null.
+func capFiles(res *Result, files []File) {
 	budget := MaxPatchBytes
 	for i := range files {
 		f := &files[i]
@@ -129,7 +169,6 @@ func (d Differ) Diff(ctx context.Context, dir, base string) (Result, error) {
 	if res.Files == nil {
 		res.Files = []File{}
 	}
-	return res, nil
 }
 
 // ChangedFiles returns just the PATHS the worktree at dir has changed relative
@@ -230,6 +269,11 @@ func (d Differ) mergeBase(ctx context.Context, dir, base string) (ref, sha strin
 // Diff is the package-level convenience for the default differ.
 func Diff(ctx context.Context, dir, base string) (Result, error) {
 	return Differ{}.Diff(ctx, dir, base)
+}
+
+// Between is the package-level convenience for the default differ.
+func Between(ctx context.Context, dir, from, to string) (Result, error) {
+	return Differ{}.Between(ctx, dir, from, to)
 }
 
 func runGit(ctx context.Context, bin, dir string, args ...string) ([]byte, error) {

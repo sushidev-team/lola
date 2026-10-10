@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/sushidev-team/lola/internal/checkpoint"
 	"github.com/sushidev-team/lola/internal/gitdiff"
 	"io"
 	"log"
@@ -57,6 +58,8 @@ type NativeAPI interface {
 	Kill(ctx context.Context, s session.Session, removeWorktree, force bool) error
 	Alive(ctx context.Context, s session.Session) bool
 	Revive(ctx context.Context, s session.Session) (session.Session, error)
+	ForkAgent(ctx context.Context, p config.Project, f runtime.ForkSpec) (session.Session, error)
+	SlotTaken(ctx context.Context, p config.Project, id, branch string) (bool, error)
 }
 
 var _ NativeAPI = (*runtime.Native)(nil)
@@ -74,6 +77,10 @@ type worker struct {
 type Daemon struct {
 	log  *log.Logger
 	home string
+
+	// spend is the usage ledger, per-session spend cache and [load] sample
+	// (usage.go). Its own lock; never held while taking mu.
+	spend *spendState
 
 	mu       sync.Mutex
 	cfg      *config.Config
@@ -182,6 +189,19 @@ type Daemon struct {
 	// (cmd=diff, feedback.go): the worktree against its merge-base with the
 	// project's default branch. Local git only; tests install a fake.
 	worktreeDiff func(ctx context.Context, dir, base string) (gitdiff.Result, error)
+
+	// checkpoints records, lists and restores a session's per-turn worktree
+	// snapshots (checkpoints.go); commitDiff diffs two of them. Local git only;
+	// tests install fakes. ckptLocks serializes checkpoint work PER SESSION so a
+	// Stop-hook record never interleaves with a restore of the same worktree.
+	checkpoints checkpointStore
+	commitDiff  func(ctx context.Context, dir, from, to string) (gitdiff.Result, error)
+	ckptMu      sync.Mutex
+	ckptLocks   map[string]*sync.Mutex
+	// sendGates is the per-session SEND GATE (typeToAgent): every send-keys
+	// into an agent holds it shared, a checkpoint restore holds it exclusively,
+	// so nothing can start the agent while its files are being replaced.
+	sendGates map[string]*sync.RWMutex
 
 	// changedFiles lists the paths a worktree changed against its merge-base
 	// with the default branch — the observer's per-cycle input to cross-session
@@ -434,7 +454,9 @@ func newDaemon(cfg *config.Config, lin linear.API, logger *log.Logger, home stri
 		events:   newEventLog(eventLogCap),
 
 		hookWarned: map[string]bool{},
+		ckptLocks:  map[string]*sync.Mutex{},
 	}
+	d.spend = newSpendState(home, func(f string, a ...any) { d.logf("", f, a...) })
 	// Feed the activity ring from every status transition the store commits
 	// (the spawn birth is recorded separately at the dispatch site).
 	d.sessions.OnTransition(func(from string, s session.Session) {
@@ -478,6 +500,8 @@ func newDaemon(cfg *config.Config, lin linear.API, logger *log.Logger, home stri
 	}
 	d.prDiff = scmc.PRDiff
 	d.worktreeDiff = gitdiff.Diff
+	d.checkpoints = checkpoint.Git{}
+	d.commitDiff = gitdiff.Between
 	d.changedFiles = gitdiff.Differ{}.ChangedFiles
 	d.overlapWarned = map[string]string{}
 	d.behindBy = scmc.BehindBy
@@ -663,6 +687,12 @@ func Run(ctx context.Context) error {
 
 	d.wg.Add(1)
 	go d.observeLoop(ctx)
+
+	// Spend scan (usage.go): local file reads only, so it shares the observer's
+	// shielding needs with none of its exec deadlines; the CANCELLABLE context
+	// is enough, since an aborted pass loses nothing the next one won't redo.
+	d.wg.Add(1)
+	go d.usageLoop(ctx)
 
 	// Status interpreter worker ([statusagent], statusagentwire.go). On the
 	// CANCELLABLE run context, deliberately not shutdown-shielded: an
@@ -980,13 +1010,14 @@ func (d *Daemon) tmuxClient() *tmux.Client {
 // best-effort styling advisories (status-bar chrome) into the daemon log.
 func newNativeRuntime(cfg *config.Config, home, lolaBin string, linearKey func() string, logf func(string, ...any)) *runtime.Native {
 	return &runtime.Native{
-		Cfg:       cfg,
-		WT:        &worktree.Manager{Root: filepath.Join(home, "worktrees")},
-		Tmux:      cfg.TmuxClient("tmux", home),
-		LolaBin:   lolaBin,
-		Home:      home,
-		LinearKey: linearKey,
-		Logf:      logf,
+		Cfg:         cfg,
+		WT:          &worktree.Manager{Root: filepath.Join(home, "worktrees")},
+		Tmux:        cfg.TmuxClient("tmux", home),
+		LolaBin:     lolaBin,
+		Home:        home,
+		LinearKey:   linearKey,
+		Logf:        logf,
+		Checkpoints: checkpoint.Git{},
 	}
 }
 
@@ -1125,6 +1156,9 @@ func (d *Daemon) adoptNativeSessions(ctx context.Context) {
 				s.ReviewWatermarks = prev.ReviewWatermarks
 				s.PendingHandoffs = prev.PendingHandoffs
 				s.PendingFeedback = prev.PendingFeedback
+				if s.ContextKey == "" {
+					s.ContextKey = prev.ContextKey
+				}
 				s.PostedGitHubPRs = prev.PostedGitHubPRs
 				if len(s.RemovedLabels) == 0 {
 					s.RemovedLabels = prev.RemovedLabels

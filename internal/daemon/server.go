@@ -292,6 +292,33 @@ func (d *Daemon) handle(ctx context.Context, req protocol.Request) protocol.Resp
 			return protocol.Response{OK: false, Error: err.Error()}
 		}
 		return dataResponse(data)
+	case "checkpoints":
+		data, err := d.handleCheckpoints(ctx, req.Session)
+		if err != nil {
+			return protocol.Response{OK: false, Error: err.Error()}
+		}
+		return dataResponse(data)
+	case "checkpointDiff", "restoreCheckpoint", "forkCheckpoint":
+		var a protocol.CheckpointArgs
+		if err := json.Unmarshal(req.Args, &a); err != nil {
+			return protocol.Response{OK: false, Error: req.Cmd + ": bad args: " + err.Error()}
+		}
+		var (
+			data any
+			err  error
+		)
+		switch req.Cmd {
+		case "checkpointDiff":
+			data, err = d.handleCheckpointDiff(ctx, a)
+		case "restoreCheckpoint":
+			data, err = d.handleRestoreCheckpoint(ctx, a)
+		default:
+			data, err = d.handleForkCheckpoint(ctx, a)
+		}
+		if err != nil {
+			return protocol.Response{OK: false, Error: err.Error()}
+		}
+		return dataResponse(data)
 	case "switchAgent":
 		var a protocol.SwitchAgentArgs
 		if err := json.Unmarshal(req.Args, &a); err != nil {
@@ -498,6 +525,12 @@ func (d *Daemon) handleHookEvent(req protocol.Request) protocol.Response {
 	if req.Event == "stop" {
 		d.flushHandoffsOnStop(req.Session)
 	}
+	// Turn checkpoints (checkpoints.go): the state every turn ENDED in, plus a
+	// baseline the first time a turn STARTS so turn 1 can be undone too. Async —
+	// a snapshot hashes files and must never hold up the agent's hook.
+	if req.Event == "stop" || req.Event == "user_prompt" {
+		d.recordCheckpointAsync(req.Session, req.Event)
+	}
 	return ok
 }
 
@@ -607,6 +640,7 @@ func (d *Daemon) sessionsData() protocol.SessionsData {
 			DevForwards: devForwardInfos(s.DevForwards),
 
 			FeedbackPending: s.PendingFeedback != "",
+			Usage:           d.sessionUsage(s.ID),
 		}
 		if c := s.DevClash; c != nil {
 			si.DevClash = &protocol.DevClashInfo{

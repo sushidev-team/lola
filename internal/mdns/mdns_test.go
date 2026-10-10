@@ -204,12 +204,24 @@ func TestAFailedLaunchIsReportedOnceAndNeverFatal(t *testing.T) {
 	if err := a.Start(Service{Instance: "lola", Port: 7717}); err != nil {
 		t.Fatalf("Start must not fail when dns-sd is missing: %v", err)
 	}
+	logged := func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(lines)
+	}
+	// The recorder signals a launch BEFORE start returns its error, and the
+	// supervisor logs only after that, so reading the log right after the
+	// first launch races it. Wait for the line, then for a RETRY — the
+	// failure repeating is what "reported once" is about.
 	r.waitForLaunch(t)
-	mu.Lock()
-	n := len(lines)
-	mu.Unlock()
-	if n != 1 {
-		t.Fatalf("logged %d lines for one failure, want 1", n)
+	deadline := time.Now().Add(2 * time.Second)
+	for logged() == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	r.waitForLaunch(t)
+	r.waitForLaunch(t)
+	if n := logged(); n != 1 {
+		t.Fatalf("logged %d lines for a failure that repeated, want 1", n)
 	}
 }
 

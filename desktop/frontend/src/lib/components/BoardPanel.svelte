@@ -3,10 +3,10 @@
   import { boardStale, phaseChip, phaseDot, progressText, checkKind, CHECK_WORD, agoShort, EVIDENCE_TAG } from "$lib/board";
   import BoardMarker from "./BoardMarker.svelte";
 
-  // The session view's sidebar: the agent's whole self-report — phase, progress,
-  // blocker, plan, checks, note — beside its live terminal. SessionEmbed renders
-  // it only when the agent has reported something, so a session that never does
-  // keeps the full-width terminal.
+  // The session sidebar's Report tab (SidePanel): the agent's whole
+  // self-report — phase, progress, blocker, plan, checks, note — beside its live
+  // terminal. SidePanel offers the tab only when the agent has reported
+  // something.
   //
   // Everything here is the agent's own CLAIM ("Agent report" says so in the
   // header), and it fades once stale. The facts — the status pill and the PR
@@ -37,10 +37,8 @@
 {/snippet}
 
 {#if b}
-  <aside
-    class="flex h-full min-h-0 w-72 flex-col overflow-y-auto border-l border-edge/60 bg-canvas"
-    aria-label="Agent report"
-  >
+  <!-- The sidebar's Report tab; SidePanel owns the column, its width and scroll. -->
+  <section class="flex flex-col" aria-label="Agent report">
     <div class="flex items-center gap-2 border-b border-edge/60 px-3 py-2">
       <span class="label text-faint">Agent report</span>
       {#if b.phase}
@@ -212,7 +210,7 @@
         </div>
       {/if}
     </div>
-  </aside>
+  </section>
 {/if}
 
 <style>

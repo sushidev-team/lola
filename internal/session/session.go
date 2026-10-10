@@ -400,6 +400,14 @@ type Session struct {
 	// provider behind it and must survive one being reconfigured.
 	PendingFeedback string `json:"pending_feedback,omitempty"`
 
+	// ContextKey names the session's SHARED CONTEXT FOLDER,
+	// ~/.lola/context/<project>/<key>/, linked into the worktree as
+	// .lola/context (runtime.ContextKey). Recorded rather than re-derived because
+	// a fork inherits its parent's key: a re-spawn of the same issue derives the
+	// same key on its own, a fork could not. Empty on records written before the
+	// folder existed; runtime.ContextKey then falls back to the derivation.
+	ContextKey string `json:"context_key,omitempty"`
+
 	// PostedGitHubPRs maps a provider kind -> the PR number the github transport
 	// has SETTLED (a successful post OR a permanent gh failure). Per-PR settle
 	// guard so the github sink no-ops for a kind/PR it has already settled and a
