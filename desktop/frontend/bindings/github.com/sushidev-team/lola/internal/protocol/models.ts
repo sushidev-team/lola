@@ -80,6 +80,29 @@ export interface BoardTodo {
 }
 
 /**
+ * CheckpointInfo is one turn checkpoint. Head is the commit the session's
+ * branch was on when it was taken; SHA is the snapshot itself.
+ */
+export interface CheckpointInfo {
+    "seq": number;
+    "sha": string;
+    "head": string;
+    "label": string;
+    "created": string;
+}
+
+/**
+ * CheckpointsData is Response.Data for cmd=checkpoints, oldest first.
+ * Restorable is false while the agent is mid-turn (restore is refused then);
+ * it is a hint for the UI, the daemon re-checks on the request.
+ */
+export interface CheckpointsData {
+    "session": string;
+    "checkpoints": CheckpointInfo[] | null;
+    "restorable": boolean;
+}
+
+/**
  * CodeRabbitData is Response.Data for cmd=coderabbit: the outcome of a forced
  * PR-comment watch poll, flattened to render-ready fields for the CLI. Message is
  * the short human-readable line the CLI prints. Ran reports whether the poll ran
@@ -656,6 +679,17 @@ export interface RenameProjectData {
  */
 export interface ResolveConflictData {
     "branch": string;
+    "message"?: string;
+}
+
+/**
+ * RestoreCheckpointData is Response.Data for cmd=restoreCheckpoint. Safety is
+ * the checkpoint holding the state from just before the restore — restoring it
+ * undoes the restore.
+ */
+export interface RestoreCheckpointData {
+    "seq": number;
+    "safety": number;
     "message"?: string;
 }
 

@@ -147,7 +147,7 @@ func TestSpawnHappyPathFullSequence(t *testing.T) {
 		IssueUUID: "uuid-42", Branch: "lola/eng-42", Repo: "owner/nori",
 		Worktree: dir,
 		TmuxName: id, Status: "working", Agent: "claude",
-		AgentState: state.AgentStarting,
+		AgentState: state.AgentStarting, ContextKey: "eng-42",
 	}
 	if !reflect.DeepEqual(stripAxisStamps(got), want) {
 		t.Errorf("session = %+v\nwant      %+v", got, want)

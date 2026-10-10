@@ -18,6 +18,17 @@ export const AGENT = "agent";
  * it is not a tmux session, so it is never discovered and never closed. */
 export const DIFF = "diff";
 
+/** The checkpoint diff's key: what the turn behind the checkpoint selected in
+ * the sidebar changed (CheckpointsView). A view sentinel like DIFF, but it has
+ * no button in the tab strip — the sidebar's Checkpoints list opens it. */
+export const CHECKPOINTS = "checkpoints";
+
+/** A view tab (DIFF, CHECKPOINTS) is not a terminal: never discovered from
+ * tmux, never closed, never in the tab-cycling ring. */
+export function isViewTab(tab: string): boolean {
+  return tab === DIFF || tab === CHECKPOINTS;
+}
+
 /** Suffix of a session's REVIEW pane ("<id>-review"). The daemon opens it for a
  * visible review pass and holds it open afterwards so the findings stay
  * readable; the app only discovers it (TermService.Shells returns it last) and
@@ -173,15 +184,15 @@ class Terms {
     if (Object.keys(next).length !== Object.keys(cur).length) this.setNames(id, next);
   }
 
-  /** The tab session `id` shows: AGENT, DIFF, or a shell name — never a stale/closed one. */
+  /** The tab session `id` shows: AGENT, a view tab, or a shell name — never a stale/closed one. */
   activeTab(id: string): string {
     const a = this.active.get(id) ?? AGENT;
-    return a !== AGENT && a !== DIFF && !this.shellsFor(id).includes(a) ? AGENT : a;
+    return a !== AGENT && !isViewTab(a) && !this.shellsFor(id).includes(a) ? AGENT : a;
   }
 
   /** Switch tabs. Ignores a shell name that isn't open. */
   select(id: string, tab: string) {
-    if (tab !== AGENT && tab !== DIFF && !this.shellsFor(id).includes(tab)) return;
+    if (tab !== AGENT && !isViewTab(tab) && !this.shellsFor(id).includes(tab)) return;
     this.active.set(id, tab);
   }
 
@@ -212,7 +223,7 @@ class Terms {
       this.shells.set(id, names);
       this.dropNames(id, names);
       const a = this.active.get(id);
-      if (a && a !== AGENT && a !== DIFF && !names.includes(a)) this.active.set(id, names.at(-1) ?? AGENT);
+      if (a && a !== AGENT && !isViewTab(a) && !names.includes(a)) this.active.set(id, names.at(-1) ?? AGENT);
     } catch {
       /* keep last-known */
     }

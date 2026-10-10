@@ -87,7 +87,7 @@ describe("BoardPanel", () => {
         }),
       ),
     });
-    expect(screen.getByRole("complementary", { name: "Agent report" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Agent report" })).toBeInTheDocument();
     expect(screen.getByText("testing")).toBeInTheDocument();
     expect(screen.getByText("need the staging key")).toBeInTheDocument();
     expect(screen.getByText("build it")).toBeInTheDocument();

@@ -104,9 +104,7 @@ func (d *Daemon) handleResolveConflict(ctx context.Context, sessionID string) (p
 	}
 
 	msg := resolveConflictMessage(s, base)
-	sctx, cancel := context.WithTimeout(ctx, reactExecTimeout)
-	defer cancel()
-	if err := d.sendKeys(sctx, tmuxName, msg); err != nil {
+	if err := d.typeToAgent(ctx, sessionID, tmuxName, msg, reactExecTimeout); err != nil {
 		return protocol.ResolveConflictData{}, fmt.Errorf("send conflict-resolution request to %s: %w", sessionID, err)
 	}
 	if err := d.sessions.Save(); err != nil {

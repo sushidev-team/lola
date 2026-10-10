@@ -486,6 +486,20 @@ class Store {
   openTicket(a: OpenTicketArgs) {
     return this.act(() => DaemonService.OpenTicket(a), `started ${a.identifier}`);
   }
+  // Turn checkpoints. Both flash the daemon's own sentence: it names the
+  // checkpoint that now holds the pre-restore state, which is the undo.
+  restoreCheckpoint(id: string, seq: number) {
+    return this.act(
+      () => DaemonService.RestoreCheckpoint(id, seq),
+      (r) => r?.message || `restored checkpoint #${seq}`,
+    );
+  }
+  forkCheckpoint(id: string, seq: number, agentKind = "") {
+    return this.act(
+      () => DaemonService.ForkCheckpoint(id, seq, agentKind),
+      (r) => r?.message || `forked ${id} at checkpoint #${seq}`,
+    );
+  }
   switchAgent(id: string, kind: string) {
     return this.act(
       () => DaemonService.SwitchAgent({ session: id, agent: kind }),

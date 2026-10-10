@@ -1,17 +1,21 @@
 <script lang="ts">
+  import { untrack } from "svelte";
   import { flip } from "svelte/animate";
   import { store } from "$lib/store.svelte";
   import { nav } from "$lib/nav.svelte";
-  import { terms, AGENT, DIFF } from "$lib/terms.svelte";
+  import { terms, AGENT, DIFF, CHECKPOINTS, isViewTab } from "$lib/terms.svelte";
+  import { sidePanel, CHECKPOINTS_TAB } from "$lib/sidepanel.svelte";
+  import { checkpoints } from "$lib/checkpoints.svelte";
   import { feedback } from "$lib/feedback.svelte";
   import { devUrlLabel, MAX_URL_CHIPS } from "$lib/devurl";
   import UsageMark from "./UsageMark.svelte";
   import LiveTerminal from "./LiveTerminal.svelte";
   import DiffView from "./DiffView.svelte";
+  import CheckpointsView from "./CheckpointsView.svelte";
   import Button from "./Button.svelte";
   import MenuItem from "./MenuItem.svelte";
   import DevClashBanner from "./DevClashBanner.svelte";
-  import BoardPanel from "./BoardPanel.svelte";
+  import SidePanel from "./SidePanel.svelte";
 
   // `focused` = the expanded full-cockpit view ("minimize" toggle); otherwise the
   // compact detail panel. The two used to differ in terminal font size as well —
@@ -35,18 +39,18 @@
   // reachable there without the "s" shortcut.
   const shells = $derived(session ? terms.shellsFor(session.id) : []);
   const activeTab = $derived(session ? terms.activeTab(session.id) : AGENT);
-  // The diff tab keeps the bar up too: it was reached by "f" or the menu, and the
-  // way back to the agent must be on screen.
-  const showTabs = $derived(!!session && (shells.length > 0 || focused || activeTab === DIFF));
+  // A view tab (diff, checkpoints) keeps the bar up too: it was reached by a key,
+  // the menu or a sidebar row, and the way back to the agent must be on screen.
+  const showTabs = $derived(!!session && (shells.length > 0 || focused || isViewTab(activeTab)));
 
   // The tmux name the LiveTerminal attaches to for the active tab. Keying the
   // terminal on this (below) swaps agent ⇄ shell by re-attaching — the same
   // proven remount the selection change already does, never a live DOM toggle. A
   // shell tab IS its tmux name; the agent tab resolves to the session's pane.
   const activeName = $derived(
-    !session || activeTab === DIFF ? "" : activeTab === AGENT ? session.tmuxName : activeTab,
+    !session || isViewTab(activeTab) ? "" : activeTab === AGENT ? session.tmuxName : activeTab,
   );
-  const activeIsShell = $derived(activeTab !== AGENT && activeTab !== DIFF);
+  const activeIsShell = $derived(activeTab !== AGENT && !isViewTab(activeTab));
   const draftCount = $derived(session ? feedback.count(session.id) : 0);
 
   // Picking a tab BY HAND focuses the terminal it selects, so typing lands in the
@@ -203,28 +207,25 @@
     return () => clearInterval(poll);
   });
 
-  // The agent-report sidebar (BoardPanel). Present only while the agent has
-  // reported something; the toggle hides it for every session at once and is
-  // remembered per viewer — a layout preference, so browser storage is the right
-  // home, and a storage that throws simply means "shown".
-  const BOARD_PREF = "lola.boardPanel";
-  let boardHidden = $state(readBoardPref());
-  function readBoardPref(): boolean {
-    try {
-      return localStorage.getItem(BOARD_PREF) === "hidden";
-    } catch {
-      return false;
-    }
-  }
-  function toggleBoard() {
-    boardHidden = !boardHidden;
-    try {
-      localStorage.setItem(BOARD_PREF, boardHidden ? "hidden" : "shown");
-    } catch {
-      // per-viewer convenience only
-    }
-  }
-  const showBoard = $derived(!!session?.board && !boardHidden);
+  // The sidebar (SidePanel): the agent's report and the turn checkpoints, each a
+  // tab of it. It appears once there is something to put in it — a report, a
+  // checkpoint, or the checkpoints tab asked for by hand (the menu) — and the
+  // Info toggle hides it for every session at once ($lib/sidepanel).
+  const sessionKey = $derived(session?.id ?? "");
+  const hasWorktree = $derived(!!session?.worktree);
+  // A turn ending is what records a checkpoint, and it shows up as the agent
+  // axis moving — reload the list on that, not on every daemon push.
+  const agentState = $derived(session?.agentState ?? "");
+  $effect(() => {
+    const id = sessionKey;
+    agentState;
+    if (id && hasWorktree) untrack(() => void checkpoints.load(id));
+  });
+  const ckptCount = $derived(sessionKey ? checkpoints.of(sessionKey).list.length : 0);
+  const sideContent = $derived(
+    !!session?.board || (hasWorktree && (ckptCount > 0 || sidePanel.tab === CHECKPOINTS_TAB)),
+  );
+  const showSide = $derived(sideContent && !sidePanel.hidden);
 
   const canRevive = $derived(session && (session.status === "dead" || session.status === "session_ended"));
 </script>
@@ -314,18 +315,18 @@
             Active
           </Button>
         {/if}
-        {#if session.board}
-          <!-- Shows/hides the agent-report sidebar. `selected` while it is open,
-               the same segmented look as Active beside it. -->
+        {#if sideContent}
+          <!-- Shows/hides the sidebar (report + checkpoints). `selected` while it
+               is open, the same segmented look as Active beside it. -->
           <Button
             size="xs"
-            selected={!boardHidden}
-            title={boardHidden ? "show the agent's report" : "hide the agent's report"}
-            aria-pressed={!boardHidden}
-            onclick={toggleBoard}
+            selected={!sidePanel.hidden}
+            title={sidePanel.hidden ? "show the agent's report and the turn checkpoints" : "hide the sidebar"}
+            aria-pressed={!sidePanel.hidden}
+            onclick={() => sidePanel.toggle()}
           >
-            {#if session.board.blocked}<span class="text-orange" aria-hidden="true">⏸</span>{/if}
-            Report
+            {#if session.board?.blocked}<span class="text-orange" aria-hidden="true">⏸</span>{/if}
+            Info
           </Button>
         {/if}
         {#if session.prNumber > 0}
@@ -629,7 +630,7 @@
          sidebar off the window. No stacking context is introduced here — an
          `isolate`/`z-0` around the WebGL canvas blanks it in WKWebView. -->
     <div
-      class="grid min-h-0 w-full flex-1 grid-rows-[minmax(0,1fr)] {showBoard
+      class="grid min-h-0 w-full flex-1 grid-rows-[minmax(0,1fr)] {showSide
         ? 'grid-cols-[minmax(0,1fr)_auto]'
         : 'grid-cols-[minmax(0,1fr)]'}"
     >
@@ -638,6 +639,10 @@
              flex child — see the WKWebView note above). -->
         <div class="grid min-h-0">
           <DiffView sessionId={session.id} />
+        </div>
+      {:else if activeTab === CHECKPOINTS}
+        <div class="grid min-h-0">
+          <CheckpointsView sessionId={session.id} />
         </div>
       {:else}
       <div class="min-h-0 bg-panel p-4">
@@ -662,7 +667,7 @@
         {/if}
       </div>
       {/if}
-      {#if showBoard}<BoardPanel {session} />{/if}
+      {#if showSide}<SidePanel {session} />{/if}
     </div>
   </div>
 {/if}

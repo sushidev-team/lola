@@ -91,31 +91,58 @@ func (m *Manager) Create(ctx context.Context, p config.Project, sessionID, branc
 // exist). An empty base defaults to p.DefaultBranch, so Create delegates here
 // unchanged. Used by the manual-worktree flow to branch off a chosen base.
 func (m *Manager) CreateFrom(ctx context.Context, p config.Project, sessionID, branch, base string) (string, error) {
-	if m.Root == "" {
-		return "", errors.New("worktree: Root not set")
-	}
-	if err := validSegment(p.Name); err != nil {
-		return "", fmt.Errorf("worktree: project name: %w", err)
-	}
-	if err := validSegment(sessionID); err != nil {
-		return "", fmt.Errorf("worktree: session id: %w", err)
-	}
-	if branch == "" {
-		return "", errors.New("worktree: branch must not be empty")
+	if err := m.validCreate(p, sessionID, branch); err != nil {
+		return "", err
 	}
 	if base == "" {
 		base = p.DefaultBranch
 	}
+	return m.createAt(ctx, p, sessionID, branch, func() string {
+		if _, _, err := m.git(ctx, "-C", p.Path, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/"+base); err != nil {
+			return base
+		}
+		return "origin/" + base
+	})
+}
+
+// CreateAt is Create with the new branch cut at an exact COMMIT (a full sha),
+// taken verbatim — no origin/ lookup. Used to fork a session from a turn
+// checkpoint, whose HEAD is a commit, not a branch.
+func (m *Manager) CreateAt(ctx context.Context, p config.Project, sessionID, branch, commit string) (string, error) {
+	if commit == "" || strings.HasPrefix(commit, "-") {
+		return "", fmt.Errorf("worktree: invalid start commit %q", commit)
+	}
+	if err := m.validCreate(p, sessionID, branch); err != nil {
+		return "", err
+	}
+	return m.createAt(ctx, p, sessionID, branch, func() string { return commit })
+}
+
+func (m *Manager) validCreate(p config.Project, sessionID, branch string) error {
+	if m.Root == "" {
+		return errors.New("worktree: Root not set")
+	}
+	if err := validSegment(p.Name); err != nil {
+		return fmt.Errorf("worktree: project name: %w", err)
+	}
+	if err := validSegment(sessionID); err != nil {
+		return fmt.Errorf("worktree: session id: %w", err)
+	}
+	if branch == "" {
+		return errors.New("worktree: branch must not be empty")
+	}
+	return nil
+}
+
+// createAt runs `worktree add -b branch` at the commit-ish start resolves to.
+// start is called only after the directory checks pass, so a refused create
+// never execs the lookup.
+func (m *Manager) createAt(ctx context.Context, p config.Project, sessionID, branch string, start func() string) (string, error) {
 	dir := filepath.Join(m.Root, p.Name, sessionID)
 	if err := m.ensureCleanDir(ctx, p, dir); err != nil {
 		return "", err
 	}
-
-	start := "origin/" + base
-	if _, _, err := m.git(ctx, "-C", p.Path, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/"+base); err != nil {
-		start = base
-	}
-	if _, _, err := m.git(ctx, "-C", p.Path, "worktree", "add", "-b", branch, dir, start); err != nil {
+	if _, _, err := m.git(ctx, "-C", p.Path, "worktree", "add", "-b", branch, dir, start()); err != nil {
 		return "", err
 	}
 	return dir, nil
