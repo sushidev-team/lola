@@ -177,6 +177,21 @@ endpoint = "https://api.linear.app/graphql"
 # summarize_approved = true      # summarize an approved+green PR before a human merges
 
 # ---------------------------------------------------------------------------
+# [merge_queue] — OPTIONAL, OFF BY DEFAULT. lola's LOCAL merge queue: approved +
+# green PRs of lola's own sessions are merged ONE AT A TIME per repository
+# (oldest PR first). Before each lands, lola checks the head already contains
+# the default branch; if it does not, the session's agent is asked to merge the
+# default branch in and push, and the PR lands once CI is green again. It fails
+# CLOSED: stale PR facts, an unknown mergeability, a PR into another base, or no
+# CI checks at all hold the queue instead of merging. A PR whose approval
+# GitHub dismisses on that sync push leaves the queue until it is re-approved.
+# ---------------------------------------------------------------------------
+# [merge_queue]
+# enabled = true            # master switch; false (and an absent table) = off
+# method = "squash"         # squash | merge | rebase (passed to `gh pr merge`)
+# allow_no_checks = false   # true only for a repo that runs no CI at all
+
+# ---------------------------------------------------------------------------
 # [statusagent] — OPTIONAL, OFF BY DEFAULT. The status INTERPRETER: a small
 # bounded headless agent pass that reads one session's pane tail, recent lifecycle
 # events, and PR facts, and judges what the agent is ACTUALLY doing — an

@@ -271,6 +271,14 @@ each of which owns exactly one external tool or concern behind an **exec seam**
 - `dev.go` — the per-project ACTIVE session: `[[project]].dev_commands` running
   in `<id>-dev-N` tabs, plus the observer's `reconcileDevTabs` derivation. See
   the invariant below.
+- `overlap.go` — per-cycle, local-git-only detection of sessions of one project
+  changing the same files (`gitdiff.ChangedFiles`); derived onto
+  `Session.Overlaps` (not persisted) and DISPLAY-ONLY.
+- `mergequeue.go` — the opt-in `[merge_queue]`: per repository, only the HEAD
+  (oldest approved, non-failing PR lola owns) is acted on — a sync request
+  through `typeAtRestingPrompt` when it is behind the default branch, else a
+  merge pinned with `--match-head-commit` after a fresh re-read. Every unknown
+  holds the queue; `MergeQueueGuard` is the persisted one-shot per head commit.
 - `reconcile.go` — ~5m pass reverting orphaned issues (labeled-sent but no
   counted session and no open PR after `orphanTimeout`).
 - `writeback.go` — P4 Linear state transitions + comments.

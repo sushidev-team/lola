@@ -44,6 +44,11 @@ type PR struct {
 	Mergeable      string `json:"mergeable"`       // MERGEABLE | CONFLICTING | UNKNOWN
 	ReviewDecision string `json:"review_decision"` // APPROVED | CHANGES_REQUESTED | REVIEW_REQUIRED | ""
 	ChecksState    string `json:"checks_state"`    // pass | fail | pending | none
+	// HeadSHA / BaseRef pin WHICH commit the facts above describe and what the
+	// PR merges into. The merge queue needs both: it merges only the exact head
+	// it judged (`--match-head-commit`), and only into the default branch.
+	HeadSHA string `json:"head_sha,omitempty"`
+	BaseRef string `json:"base_ref,omitempty"`
 }
 
 // Client shells out to the gh CLI. GhBin is the binary to invoke; empty means
@@ -71,6 +76,8 @@ type prRow struct {
 	Mergeable         string        `json:"mergeable"`
 	ReviewDecision    string        `json:"reviewDecision"`
 	StatusCheckRollup []rollupEntry `json:"statusCheckRollup"`
+	HeadRefOid        string        `json:"headRefOid"`
+	BaseRefName       string        `json:"baseRefName"`
 }
 
 // rollupEntry accepts both statusCheckRollup shapes: StatusContext carries
@@ -93,7 +100,7 @@ func (c *Client) PRForBranch(ctx context.Context, repo, branch string) (*PR, err
 	}
 	out, err := exec.CommandContext(ctx, bin, "pr", "list",
 		"--repo", repo, "--head", branch, "--state", "all", "--limit", "1",
-		"--json", "number,url,state,isDraft,mergeable,reviewDecision,statusCheckRollup",
+		"--json", "number,url,state,isDraft,mergeable,reviewDecision,statusCheckRollup,headRefOid,baseRefName",
 	).Output()
 	if err != nil {
 		var ee *exec.ExitError
@@ -119,6 +126,8 @@ func (c *Client) PRForBranch(ctx context.Context, repo, branch string) (*PR, err
 		Mergeable:      r.Mergeable,
 		ReviewDecision: r.ReviewDecision,
 		ChecksState:    checksState(r.StatusCheckRollup),
+		HeadSHA:        r.HeadRefOid,
+		BaseRef:        r.BaseRefName,
 	}, nil
 }
 

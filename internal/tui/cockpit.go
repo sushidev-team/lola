@@ -481,6 +481,15 @@ func (m *rootModel) sessionsBody(w, h int) []string {
 		if pr == "" {
 			pr = "-"
 		}
+		// Cross-session markers ride the PR cell rather than taking columns:
+		// "q1" is the session's place in the merge queue, "⚠ovl" says another
+		// session of the project edits the same files (details: the panel).
+		if q := si.MergeQueue; q != nil {
+			pr += fmt.Sprintf(" q%d", q.Position)
+		}
+		if len(si.Overlaps) > 0 {
+			pr += " " + warnText.Render("⚠ovl")
+		}
 		if si.Title != "" {
 			anyTitle = true
 		}

@@ -67,9 +67,49 @@ func (d *Daemon) handleResolveConflict(ctx context.Context, sessionID string) (p
 		base = config.DefaultBranchName
 	}
 
-	if !handoffDeliverable(s) || !d.handoffPromptProof(ctx, s) {
+	err := d.typeAtRestingPrompt(ctx, s, resolveConflictMessage(s, base), func(cur *session.Session) {
+		// Stamp the automatic reaction's one-shot guard: this IS the reaction for
+		// this entry into merge_conflict, just triggered by hand.
+		cur.LastReactedStatus = "merge_conflict"
+		cur.PendingReaction = ""
+	})
+	switch {
+	case errors.Is(err, errNotResting):
 		return protocol.ResolveConflictData{}, fmt.Errorf(
 			"session %s is not resting at its prompt — lola will not type into a mid-turn agent; try again when it is idle", sessionID)
+	case errors.Is(err, errLeftPrompt):
+		return protocol.ResolveConflictData{}, fmt.Errorf("session %s left its prompt before the request could be sent", sessionID)
+	case err != nil:
+		return protocol.ResolveConflictData{}, fmt.Errorf("send conflict-resolution request to %s: %w", sessionID, err)
+	}
+	d.logf("", "resolveConflict: %s — asked the agent to merge %s and resolve the conflicts", s.ID, base)
+
+	return protocol.ResolveConflictData{
+		Branch:  base,
+		Message: fmt.Sprintf("asked the agent to merge %s and resolve the conflicts", base),
+	}, nil
+}
+
+var (
+	// errNotResting: the agent is not provably at its prompt; nothing was typed.
+	errNotResting = errors.New("agent is not resting at its prompt")
+	// errLeftPrompt: the gate closed between the proof and the consume.
+	errLeftPrompt = errors.New("agent left its prompt before the send")
+)
+
+// typeAtRestingPrompt is the shared send path for lola-authored instructions
+// that a human or the merge queue asks for right now (resolveConflict, the
+// queue's sync request): the wide idle gate PLUS live pane proof, an atomic
+// consume of that gate, then exactly one send. stamp runs inside the consume,
+// under the store lock, so the caller's one-shot guard lands atomically with
+// it. Nothing is ever typed unless the consume won.
+//
+// errNotResting / errLeftPrompt mean nothing was typed. Any other error is a
+// failed send AFTER the gate was consumed — not rolled back, like every other
+// send path, so a broken pane is not re-prompted every cycle.
+func (d *Daemon) typeAtRestingPrompt(ctx context.Context, s session.Session, msg string, stamp func(cur *session.Session)) error {
+	if !handoffDeliverable(s) || !d.handoffPromptProof(ctx, s) {
+		return errNotResting
 	}
 
 	// Consume the gate atomically, exactly as reactSendAgent does: the copy above
@@ -84,10 +124,9 @@ func (d *Daemon) handleResolveConflict(ctx context.Context, sessionID string) (p
 			return false
 		}
 		cur.AtPrompt = false
-		// Stamp the automatic reaction's one-shot guard: this IS the reaction for
-		// this entry into merge_conflict, just triggered by hand.
-		cur.LastReactedStatus = "merge_conflict"
-		cur.PendingReaction = ""
+		if stamp != nil {
+			stamp(cur)
+		}
 		// The agent is about to work, and AgentWorking is also what closes the
 		// wide idle gate against a second delivery (as handleAnswer and the review
 		// hand-off do). The next lifecycle hook corrects this to the real state.
@@ -97,27 +136,21 @@ func (d *Daemon) handleResolveConflict(ctx context.Context, sessionID string) (p
 		return true
 	})
 	if !sent {
-		return protocol.ResolveConflictData{}, fmt.Errorf("session %s left its prompt before the request could be sent", sessionID)
+		return errLeftPrompt
 	}
 	if tmuxName == "" {
 		tmuxName = paneTarget(s)
 	}
 
-	msg := resolveConflictMessage(s, base)
 	sctx, cancel := context.WithTimeout(ctx, reactExecTimeout)
 	defer cancel()
 	if err := d.sendKeys(sctx, tmuxName, msg); err != nil {
-		return protocol.ResolveConflictData{}, fmt.Errorf("send conflict-resolution request to %s: %w", sessionID, err)
+		return err
 	}
 	if err := d.sessions.Save(); err != nil {
-		d.logf("", "resolveConflict: persist sessions: %v", err)
+		d.logf("", "persist sessions after send to %s: %v", s.ID, err)
 	}
-	d.logf("", "resolveConflict: %s — asked the agent to merge %s and resolve the conflicts", s.ID, base)
-
-	return protocol.ResolveConflictData{
-		Branch:  base,
-		Message: fmt.Sprintf("asked the agent to merge %s and resolve the conflicts", base),
-	}, nil
+	return nil
 }
 
 // resolveConflictMessage is the instruction typed into the agent. It is lola's

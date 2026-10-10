@@ -206,6 +206,23 @@ type Session struct {
 	// Derived (see internal/daemon/dev.go), nil whenever the tabs are healthy.
 	DevClash *DevClash `json:"dev_clash,omitempty"`
 
+	// Overlaps are the OTHER live sessions of the same project whose changes
+	// touch the same files as this one (internal/daemon/overlap.go), so two
+	// agents editing one file are flagged before either PR conflicts. DERIVED
+	// every observe cycle from local git and never persisted: after a restart
+	// the first cycle recomputes it. Display-only — nothing in the control loop
+	// reads it.
+	Overlaps []Overlap `json:"-"`
+
+	// MergeQueue is the [merge_queue] posture (internal/daemon/mergequeue.go).
+	// MergeQueueGuard is the PERSISTED one-shot: which action the queue already
+	// took for which head commit, so a 30s cycle never re-sends the sync prompt
+	// or re-issues a merge for the same commit (a new push re-arms it).
+	// MergeQueuePos / MergeQueueStep are DERIVED for display each cycle.
+	MergeQueueGuard *MergeQueueGuard `json:"merge_queue_guard,omitempty"`
+	MergeQueuePos   int              `json:"-"`
+	MergeQueueStep  string           `json:"-"`
+
 	// ---- [statusagent] interpreter overlay (DISPLAY ONLY). These fields are
 	// untrusted LLM output derived from attacker-influenceable pane text:
 	// they overlay the DISPLAYED agent axis in sessionsData and nothing else.
@@ -412,6 +429,26 @@ type Session struct {
 // record is dropped the moment the tabs change (internal/daemon/dev.go). PID is
 // therefore evidence, never a licence — the kill path re-checks that this pid
 // still holds this port before signalling anything, because pids are reused.
+// Overlap is one other session touching the same files (Session.Overlaps).
+// Files is sorted and capped by the daemon; More counts what the cap left out.
+type Overlap struct {
+	Session string
+	Issue   string
+	Files   []string
+	More    int
+}
+
+// MergeQueueGuard records the merge queue's last action on this session's PR.
+// Action is "sync" (asked the agent to merge the default branch in), "merge"
+// (the merge was issued) or "failed" (GitHub refused the merge); HeadSHA is the
+// PR head it was taken for.
+type MergeQueueGuard struct {
+	Action  string    `json:"action"`
+	HeadSHA string    `json:"head_sha"`
+	At      time.Time `json:"at"`
+	Note    string    `json:"note,omitempty"`
+}
+
 type DevClash struct {
 	// Tab is the tmux session of the dev tab that died ("<id>-dev-2"), and
 	// Command the [[project]].dev_commands entry it was running (config text,

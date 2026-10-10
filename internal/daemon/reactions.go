@@ -575,6 +575,9 @@ func (d *Daemon) reactApproved(ctx context.Context, s session.Session, notifier 
 	}
 	d.reactSave()
 	body := fmt.Sprintf("%s is approved and green — ready to merge", issueLabel(s))
+	if d.mergeQueueOn() && queueMember(s) {
+		body = fmt.Sprintf("%s is approved and green — queued in lola's merge queue", issueLabel(s))
+	}
 	// Brain (PLAN P5.25): replace the generic approved body with a bounded,
 	// one-shot claude risk summary of the PR diff. Fires once per entry into
 	// "approved" (inside the LastReactedStatus guard consumed above). The diff is

@@ -641,6 +641,14 @@ func (d *Daemon) sessionsData() protocol.SessionsData {
 		}
 		// The agent's own report — display-only, like the overlay above.
 		si.Board = boardInfo(s.Board, now)
+		for _, o := range s.Overlaps {
+			si.Overlaps = append(si.Overlaps, protocol.SessionOverlap{
+				Session: o.Session, Issue: o.Issue, Files: slices.Clone(o.Files), More: o.More,
+			})
+		}
+		if s.MergeQueuePos > 0 {
+			si.MergeQueue = &protocol.MergeQueueInfo{Position: s.MergeQueuePos, Step: s.MergeQueueStep}
+		}
 		out.Sessions = append(out.Sessions, si)
 	}
 	out.Events = d.eventFeed(now)

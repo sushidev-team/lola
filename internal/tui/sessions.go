@@ -1217,6 +1217,61 @@ func devClashLines(sel protocol.SessionInfo) []string {
 	return lines
 }
 
+// overlapLines warns that other sessions of the same project are editing the
+// same files — the collision a merge_conflict reaction would otherwise report
+// only after both PRs were built on it. One line per other session, naming at
+// most three shared paths.
+func overlapLines(sel protocol.SessionInfo) []string {
+	var lines []string
+	for i, o := range sel.Overlaps {
+		who := o.Issue
+		if who == "" {
+			who = o.Session
+		}
+		files := o.Files
+		extra := o.More
+		if len(files) > 3 {
+			extra += len(files) - 3
+			files = files[:3]
+		}
+		list := strings.Join(files, ", ")
+		if extra > 0 {
+			list += fmt.Sprintf(" +%d", extra)
+		}
+		label := "overlap:  "
+		if i > 0 {
+			label = "          "
+		}
+		lines = append(lines, statusOrange.Render(label+"⚠ "+who+" also edits "+truncPlain(list, 80)))
+	}
+	return lines
+}
+
+// mergeQueueLine renders the [merge_queue] posture, "" when not queued.
+func mergeQueueLine(sel protocol.SessionInfo) string {
+	q := sel.MergeQueue
+	if q == nil {
+		return ""
+	}
+	text := map[string]string{
+		"queued":   "waiting behind earlier PRs",
+		"waiting":  "next — waiting for CI / GitHub",
+		"syncing":  "next — agent merging the default branch in",
+		"merging":  "next — merge issued",
+		"conflict": "next — conflicts with the default branch",
+		"blocked":  "next — held (facts the queue cannot judge)",
+		"failed":   "next — GitHub refused the merge",
+	}[q.Step]
+	if text == "" {
+		text = q.Step
+	}
+	line := fmt.Sprintf("queue:    #%d %s", q.Position, text)
+	if q.Step == "conflict" || q.Step == "blocked" || q.Step == "failed" {
+		return statusOrange.Render(line)
+	}
+	return line
+}
+
 func (m *rootModel) sessionDetail() string {
 	s := &m.sessions
 	sel := s.selected()
@@ -1337,6 +1392,12 @@ func (m *rootModel) sessionDetail() string {
 	fmt.Fprintf(&b, "review:   %s\n", dash(sel.Review))
 	if sel.Reacting != "" {
 		fmt.Fprintf(&b, "reacting: %s\n", reactingStyle(sel.Reacting).Render(sel.Reacting))
+	}
+	if line := mergeQueueLine(*sel); line != "" {
+		b.WriteString(line + "\n")
+	}
+	for _, line := range overlapLines(*sel) {
+		b.WriteString(line + "\n")
 	}
 	if len(sel.DevCommands) > 0 {
 		// Named devLine, not `state`: this file imports internal/state now, and a
