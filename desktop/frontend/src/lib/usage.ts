@@ -110,7 +110,18 @@ export function spendLabel(u: UsageStatus): string {
 // number a subscriber actually budgets by — and falls back to today's tokens
 // only when no agent has reported one (an API-key user, or nothing ran yet).
 
-const AGENT_NAMES: Record<string, string> = { claude: "Claude", codex: "Codex" };
+export const AGENT_NAMES: Record<string, string> = { claude: "Claude", codex: "Codex" };
+
+/** A limit window's colour step: warn from 80%, bad from 95%. */
+export function quotaTone(p: number): "ok" | "warn" | "bad" {
+  return p >= 95 ? "bad" : p >= 80 ? "warn" : "ok";
+}
+
+/** The text beside the bars: the budget share, "" without a budget. */
+export function budgetLabel(u: UsageStatus): string {
+  const pct = budgetPercent(u.weighted, u.budgetTokens);
+  return pct >= 0 ? `${pct}% of budget` : "";
+}
 
 /** "Claude 5h 42% · 7d 18%". */
 export function quotaLabel(q: QuotaInfo): string {

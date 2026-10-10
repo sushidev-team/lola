@@ -74,7 +74,7 @@ func TestQuotaVital(t *testing.T) {
 		{Agent: "codex", Plan: "pro", At: now, Windows: []protocol.QuotaWindow{{Label: "7d", UsedPercent: 4}}},
 	}
 	got := spendVital(&protocol.StatusData{Usage: &protocol.UsageStatus{Tokens: 1, Quotas: qs}})
-	if got != "claude 5h 42% 7d 18% · codex 7d 4%" {
+	if got := stripANSI(got); got != "claude 5h ▰▰▱▱▱ 42% 7d ▰▱▱▱▱ 18% · codex 7d ▰▱▱▱▱ 4%" {
 		t.Errorf("vital = %q, want the limits instead of today's tokens", got)
 	}
 	sum := spendSummary(&protocol.UsageStatus{Day: "d", Quotas: qs})

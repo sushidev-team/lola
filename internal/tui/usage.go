@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -124,14 +125,34 @@ func quotaPercent(w protocol.QuotaWindow) string {
 	return text
 }
 
-// quotaVital is "claude 5h 42% 7d 18% · codex 7d 4%"; "" when no agent has
-// reported its subscription limits.
+// quotaBarCells is the width of a limit bar in the vitals bar.
+const quotaBarCells = 5
+
+// quotaBar is a limit window as a small progress bar: "5h ▰▰▱▱▱ 42%", the
+// filled cells toned like quotaPercent.
+func quotaBar(w protocol.QuotaWindow) string {
+	filled := int(math.Round(math.Min(math.Max(w.UsedPercent, 0), 100) / 100 * quotaBarCells))
+	if filled == 0 && w.UsedPercent > 0 {
+		filled = 1 // any use shows: an empty bar reads as "nothing used"
+	}
+	on := strings.Repeat("▰", filled)
+	switch {
+	case w.UsedPercent >= 95:
+		on = badText.Render(on)
+	case w.UsedPercent >= 80:
+		on = statusOrange.Render(on)
+	}
+	return fmt.Sprintf("%s %s%s %.0f%%", w.Label, on, faintText.Render(strings.Repeat("▱", quotaBarCells-filled)), w.UsedPercent)
+}
+
+// quotaVital is "claude 5h ▰▰▱▱▱ 42% 7d ▰▱▱▱▱ 18% · codex 7d ▰▱▱▱▱ 4%"; ""
+// when no agent has reported its subscription limits.
 func quotaVital(qs []protocol.QuotaInfo) string {
 	parts := make([]string, 0, len(qs))
 	for _, q := range qs {
 		ws := make([]string, 0, len(q.Windows))
 		for _, w := range q.Windows {
-			ws = append(ws, quotaPercent(w))
+			ws = append(ws, quotaBar(w))
 		}
 		parts = append(parts, q.Agent+" "+strings.Join(ws, " "))
 	}

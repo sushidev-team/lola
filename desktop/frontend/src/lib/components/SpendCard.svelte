@@ -4,11 +4,11 @@
   // budget and per-project usage, and why dispatch is held.
   import type { UsageStatus } from "@bindings/internal/protocol";
   import { agoShort } from "$lib/board";
-  import { budgetPercent, fmtTokens, fmtUSD, untilShort } from "$lib/usage";
+  import { AGENT_NAMES, budgetPercent, fmtTokens, fmtUSD, quotaTone, untilShort } from "$lib/usage";
 
   let { usage }: { usage: UsageStatus } = $props();
-  const names: Record<string, string> = { claude: "Claude", codex: "Codex" };
-  const meter = (p: number) => (p >= 95 ? "bg-bad" : p >= 80 ? "bg-warn" : "bg-accent");
+  const meterFill = { ok: "bg-accent", warn: "bg-warn", bad: "bg-bad" } as const;
+  const meter = (p: number) => meterFill[quotaTone(p)];
   const budget = $derived(budgetPercent(usage.weighted, usage.budgetTokens));
   const fresh = (iso: string) => {
     const a = agoShort(iso);
@@ -20,7 +20,7 @@
   {#each usage.quotas ?? [] as q (q.agent)}
     <section>
       <div class="mb-1 flex items-baseline justify-between gap-3">
-        <span class="font-medium text-ink">{names[q.agent] ?? q.agent}{#if q.plan}<span class="ml-1.5 text-faint">{q.plan}</span>{/if}</span>
+        <span class="font-medium text-ink">{AGENT_NAMES[q.agent] ?? q.agent}{#if q.plan}<span class="ml-1.5 text-faint">{q.plan}</span>{/if}</span>
         <span class="text-xs text-faint">{fresh(q.at)}</span>
       </div>
       {#each q.windows ?? [] as w (w.label)}

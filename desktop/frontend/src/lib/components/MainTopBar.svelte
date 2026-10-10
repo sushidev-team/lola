@@ -3,7 +3,8 @@
   import { nav } from "$lib/nav.svelte";
   import { triaged } from "$lib/filters";
   import Button from "./Button.svelte";
-  import { headerLabel, headerLevel } from "$lib/usage";
+  import { budgetLabel, headerLabel, headerLevel } from "$lib/usage";
+  import QuotaBars from "./QuotaBars.svelte";
   import HoverCard from "./HoverCard.svelte";
   import SpendCard from "./SpendCard.svelte";
 
@@ -156,9 +157,15 @@
 
   <span class="ml-auto flex shrink-0 items-center gap-2">
     {#if spend}
-      <HoverCard class="num text-sm whitespace-nowrap outline-none {spendCls}">
+      <HoverCard class="num inline-flex items-center text-sm whitespace-nowrap outline-none {spendCls}">
         {#snippet card()}<SpendCard usage={spend} />{/snippet}
-        {headerLabel(spend)}{#if spend.load?.busy}<span class="ml-1.5">· load busy</span>{/if}
+        {#if spend.quotas?.length}
+          <!-- Limits as bars; each bar carries its own tone, so the wrapper's
+               colour only reaches the budget and load text beside them. -->
+          <QuotaBars quotas={spend.quotas} />{#if budgetLabel(spend)}<span class="ml-2">· {budgetLabel(spend)}</span>{/if}
+        {:else}
+          {headerLabel(spend)}
+        {/if}{#if spend.load?.busy}<span class="ml-1.5">· load busy</span>{/if}
       </HoverCard>
     {/if}
     <!-- Daemon alarm, ONLY while the sidebar is collapsed. <SidebarStatus> is the
