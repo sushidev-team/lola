@@ -432,3 +432,20 @@ func Logs(poll string, follow bool) error {
 		}
 	}
 }
+
+// Request sends one request to the daemon and returns its Data payload, or the
+// daemon's error. For CLI subcommands that act on the reply themselves instead
+// of letting Send print it.
+func Request(req protocol.Request) (json.RawMessage, error) {
+	resp, err := request(req)
+	if err != nil {
+		return nil, err
+	}
+	if !resp.OK {
+		if resp.Error == "" {
+			return nil, errors.New("daemon reported failure")
+		}
+		return nil, errors.New(resp.Error)
+	}
+	return resp.Data, nil
+}

@@ -238,6 +238,26 @@ func (d *Daemon) handle(ctx context.Context, req protocol.Request) protocol.Resp
 			return protocol.Response{OK: false, Error: err.Error()}
 		}
 		return dataResponse(data)
+	case "plan":
+		var a protocol.PlanArgs
+		if err := json.Unmarshal(req.Args, &a); err != nil {
+			return protocol.Response{OK: false, Error: "plan: bad args: " + err.Error()}
+		}
+		data, err := d.handlePlan(ctx, a)
+		if err != nil {
+			return protocol.Response{OK: false, Error: err.Error()}
+		}
+		return dataResponse(data)
+	case "planApply":
+		var a protocol.PlanApplyArgs
+		if err := json.Unmarshal(req.Args, &a); err != nil {
+			return protocol.Response{OK: false, Error: "planApply: bad args: " + err.Error()}
+		}
+		data, err := d.handlePlanApply(ctx, a)
+		if err != nil {
+			return protocol.Response{OK: false, Error: err.Error()}
+		}
+		return dataResponse(data)
 	case "openURL":
 		var a protocol.OpenURLArgs
 		if err := json.Unmarshal(req.Args, &a); err != nil {

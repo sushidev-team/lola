@@ -157,12 +157,17 @@ func (c *Client) MatchingIssues(ctx context.Context, p config.Project, activeCyc
 	// The state/assignee/estimate/updatedAt fields are for the pickers (a human
 	// choosing an issue); dispatch ignores them. They ride the SAME query because
 	// they are plain scalars on a node already being fetched — a second round trip
-	// per tick would cost far more than they do.
+	// per tick would cost far more than they do. The relations and children ride
+	// it for DISPATCH: they decide whether an issue is eligible yet (blocked-by
+	// relations, open sub-issues). Capped at 50 each; an issue blocked by more
+	// than that is not a shape lola plans for.
 	const q = `query($filter: IssueFilter, $after: String){
 		issues(filter:$filter, first:100, after:$after){
 			nodes{ id identifier title branchName priority createdAt updatedAt estimate
 				state{ name type } assignee{ displayName name }
-				labels{ nodes{ id name } } }
+				labels{ nodes{ id name } }
+				inverseRelations(first:50){ nodes{ type issue{ id identifier state{ type } } } }
+				children(first:50){ nodes{ state{ type } } } }
 			pageInfo{ hasNextPage endCursor } } }`
 
 	filter := BuildIssueFilter(p, activeCycleID, viewerID)
@@ -186,6 +191,20 @@ func (c *Client) MatchingIssues(ctx context.Context, p config.Project, activeCyc
 					State      *struct{ Name, Type string }
 					Assignee   *struct{ DisplayName, Name string }
 					Labels     struct{ Nodes []struct{ ID, Name string } }
+					// inverseRelations are the relations naming THIS issue as
+					// the related one: type "blocks" means .Issue blocks it.
+					InverseRelations struct {
+						Nodes []struct {
+							Type  string
+							Issue *struct {
+								ID, Identifier string
+								State          *struct{ Type string }
+							}
+						}
+					}
+					Children struct {
+						Nodes []struct{ State *struct{ Type string } }
+					}
 				}
 				PageInfo struct {
 					HasNextPage bool
@@ -221,6 +240,21 @@ func (c *Client) MatchingIssues(ctx context.Context, p config.Project, activeCyc
 			for _, l := range n.Labels.Nodes {
 				iss.LabelIDs = append(iss.LabelIDs, l.ID)
 				iss.LabelNames = append(iss.LabelNames, l.Name)
+			}
+			for _, r := range n.InverseRelations.Nodes {
+				if r.Type != "blocks" || r.Issue == nil {
+					continue
+				}
+				b := Blocker{ID: r.Issue.ID, Identifier: r.Issue.Identifier}
+				if r.Issue.State != nil {
+					b.StateType = r.Issue.State.Type
+				}
+				iss.BlockedBy = append(iss.BlockedBy, b)
+			}
+			for _, c := range n.Children.Nodes {
+				if c.State == nil || !StateFinished(c.State.Type) {
+					iss.OpenChildren++
+				}
 			}
 			out = append(out, iss)
 		}

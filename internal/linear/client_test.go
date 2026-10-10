@@ -254,3 +254,51 @@ func TestAuthFailureNotRetried(t *testing.T) {
 		t.Errorf("sleep hook invoked %d times on 401, want 0", len(*slept))
 	}
 }
+
+func TestMatchingIssuesReadsBlockersAndOpenChildren(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"data":{"issues":{"nodes":[{"id":"u1","identifier":"FE-1",
+			"labels":{"nodes":[]},
+			"inverseRelations":{"nodes":[
+				{"type":"blocks","issue":{"id":"u0","identifier":"FE-0","state":{"type":"started"}}},
+				{"type":"related","issue":{"id":"u9","identifier":"FE-9","state":{"type":"started"}}}]},
+			"children":{"nodes":[{"state":{"type":"completed"}},{"state":{"type":"unstarted"}},{"state":{"type":"canceled"}}]}}],
+			"pageInfo":{"hasNextPage":false}}}}`))
+	}))
+	defer srv.Close()
+	c, _ := fastClient(srv)
+	issues, err := c.MatchingIssues(context.Background(), basePoll(), "", "")
+	if err != nil {
+		t.Fatalf("MatchingIssues: %v", err)
+	}
+	is := issues[0]
+	if len(is.BlockedBy) != 1 || is.BlockedBy[0] != (Blocker{ID: "u0", Identifier: "FE-0", StateType: "started"}) {
+		t.Errorf("BlockedBy = %+v, want only the blocks relation", is.BlockedBy)
+	}
+	if is.OpenChildren != 1 {
+		t.Errorf("OpenChildren = %d, want 1", is.OpenChildren)
+	}
+}
+
+func TestCreateIssueOmitsEmptyFields(t *testing.T) {
+	var got gqlRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = decodeRequest(t, r)
+		w.Write([]byte(`{"data":{"issueCreate":{"success":true,"issue":{"id":"u5","identifier":"FE-5"}}}}`))
+	}))
+	defer srv.Close()
+	c, _ := fastClient(srv)
+	id, ident, err := c.CreateIssue(context.Background(), IssueCreate{TeamID: "t", ParentID: "p", Title: "x", LabelIDs: []string{"l"}})
+	if err != nil || id != "u5" || ident != "FE-5" {
+		t.Fatalf("CreateIssue = %q %q %v", id, ident, err)
+	}
+	input := got.Variables["input"].(map[string]any)
+	for _, k := range []string{"projectId", "cycleId", "stateId", "assigneeId", "description"} {
+		if _, ok := input[k]; ok {
+			t.Errorf("empty %s must be omitted, input = %v", k, input)
+		}
+	}
+	if input["parentId"] != "p" || input["teamId"] != "t" {
+		t.Errorf("input = %v", input)
+	}
+}

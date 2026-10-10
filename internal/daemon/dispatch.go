@@ -184,6 +184,49 @@ func PruneSeen(seen map[string]time.Time, matched map[string]bool, dedupMode str
 	return out
 }
 
+// mergedIssues returns the identifiers of issues whose lola session saw its PR
+// merged, from a session store snapshot.
+func mergedIssues(sessions []session.Session) map[string]bool {
+	out := map[string]bool{}
+	for _, s := range sessions {
+		if s.Issue == "" {
+			continue
+		}
+		s.EnsureAxes()
+		if s.Delivery == state.DeliveryMerged {
+			out[s.Issue] = true
+		}
+	}
+	return out
+}
+
+// dependencyHold returns why is may not be dispatched yet, or "" when it is
+// eligible. Two things hold an issue back:
+//
+//   - an unfinished blocker: a "blocked by" relation whose issue is neither in
+//     a completed/canceled state nor merged (per merged, keyed by identifier);
+//   - open sub-issues: its work was decomposed (see `lola plan`), so the
+//     children are what gets dispatched, not the parent.
+//
+// Like every other skip it writes nothing: the issue simply re-qualifies on
+// the first tick after its blockers land.
+func dependencyHold(is linear.Issue, merged map[string]bool) string {
+	var waiting []string
+	for _, b := range is.BlockedBy {
+		if b.Finished() || merged[b.Identifier] {
+			continue
+		}
+		waiting = append(waiting, b.Identifier)
+	}
+	if len(waiting) > 0 {
+		return "blocked-by " + strings.Join(waiting, ",")
+	}
+	if is.OpenChildren > 0 {
+		return fmt.Sprintf("sub-issues open (%d)", is.OpenChildren)
+	}
+	return ""
+}
+
 // isAuthErr classifies Linear client errors: the client wraps 401/403 as
 // "linear auth failed: http NNN".
 func isAuthErr(err error) bool {
@@ -353,6 +396,10 @@ func (d *Daemon) tick(ctx context.Context, name string, dryRun bool) (protocol.P
 			}
 		}
 	}
+	// Dependencies: an issue waits while a blocker is unfinished. "Finished"
+	// is the blocker's Linear state OR a merged PR lola itself observed — the
+	// write-back to done may lag the merge, or not be configured at all.
+	merged := mergedIssues(d.sessions.Snapshot())
 	var candidates []linear.Issue
 	for _, is := range issues {
 		if d.inflight.Has(is.ID) {
@@ -387,6 +434,10 @@ func (d *Daemon) tick(ctx context.Context, name string, dryRun bool) (protocol.P
 				skip(is, "dedup-label")
 				continue
 			}
+		}
+		if reason := dependencyHold(is, merged); reason != "" {
+			skip(is, reason)
+			continue
 		}
 		candidates = append(candidates, is)
 	}

@@ -183,7 +183,10 @@ type Daemon struct {
 	brain          *brain.Client
 	brainSummarize func(ctx context.Context, instruction, contextText string) (string, error)
 	paneTail       func(ctx context.Context, tmuxName string, lines int) (string, error)
-	prDiff         func(ctx context.Context, repo string, pr int) (string, error)
+	// planSummarize overrides the `lola plan` planner's claude exec in tests;
+	// nil builds a bounded claude per call (see planSummarizer in plan.go).
+	planSummarize func(ctx context.Context, instruction, contextText string) (string, error)
+	prDiff        func(ctx context.Context, repo string, pr int) (string, error)
 
 	// worktreeDiff reads a session's local changes for the diff viewer
 	// (cmd=diff, feedback.go): the worktree against its merge-base with the
