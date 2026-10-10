@@ -82,8 +82,8 @@ global_cap = 4
 # rejected rather than silently ignored.
 # priority_sort = ["priority", "createdAt"]
 # require_plan: the plan-approval gate. A gated session must submit a plan
-# (`lola plan submit`) and wait for a human to approve it — in the app, with
-# `lola plan approve`, or in the Linear agent session — before it may edit files.
+# (`lola plan-gate submit`) and wait for a human to approve it — in the app, with
+# `lola plan-gate approve`, or in the Linear agent session — before it may edit files.
 # require_plan = false
 #
 # [defaults.env]

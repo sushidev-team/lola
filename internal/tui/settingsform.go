@@ -277,7 +277,7 @@ func newSettingsForm(cfgPath string, cfg *config.Config) *settingsForm {
 			{key: "def_on_sent_set_label", tab: stProjectDefaults, label: "On-sent set label", help: "Workspace label flipped onto an issue once its session is dispatched (label dedup mode)." + wsLabelHelp, kind: sfText, wsPick: true, text: d.OnSentSetLabel},
 			{key: "def_blocked_label_id", tab: stProjectDefaults, label: "Blocked label", help: "Workspace label applied when a session escalates and needs a human." + wsLabelHelp, kind: sfText, wsPick: true, text: d.BlockedLabelID},
 			{key: "def_dedup_mode", tab: stProjectDefaults, label: "Dedup mode", help: "How an already-dispatched issue is remembered: label (flip a Linear label), seen (local store), state (workflow state). space/enter cycles; unset falls back to \"seen\".", kind: sfEnum, options: dedupModeOptions, text: d.DedupMode},
-			{key: "def_require_plan", tab: stProjectDefaults, label: "Require plan", help: "Plan-approval gate: the agent investigates read-only, submits a plan (lola plan submit) and may edit files only once a human approves it.", kind: sfBool, b: d.RequirePlan},
+			{key: "def_require_plan", tab: stProjectDefaults, label: "Require plan", help: "Plan-approval gate: the agent investigates read-only, submits a plan (lola plan-gate submit) and may edit files only once a human approves it.", kind: sfBool, b: d.RequirePlan},
 			{key: "def_priority_sort", tab: stProjectDefaults, label: "Priority sort", help: "Tie-break chain for ranking the issues a tick matched, applied in order (priority = highest first, createdAt = oldest first). enter picks the keys; ORDER matters. Unset sorts by priority, then createdAt.", kind: sfList, sortPick: true, lines: append([]string(nil), d.PrioritySort...)},
 
 			// [notify]

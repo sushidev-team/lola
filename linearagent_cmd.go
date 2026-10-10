@@ -26,14 +26,17 @@ import (
 	"github.com/sushidev-team/lola/internal/tui"
 )
 
-// planCmd is the plan-approval gate's CLI ([[project]].require_plan):
+// planGateCmd is the plan-approval gate's CLI ([[project]].require_plan):
 //
-//	lola plan submit [file]              the AGENT hands in its plan (stdin by default)
-//	lola plan approve <session>          a human approves (or waives the gate)
-//	lola plan reject <session> <comment> a human sends it back with feedback
-func planCmd() *cobra.Command {
+//	lola plan-gate submit [file]              the AGENT hands in its plan (stdin by default)
+//	lola plan-gate approve <session>          a human approves (or waives the gate)
+//	lola plan-gate reject <session> <comment> a human sends it back with feedback
+//
+// It is `plan-gate`, not `plan`: `lola plan <issue>` is the orchestrator's
+// decomposition pass (plancmd.go), an unrelated feature.
+func planGateCmd() *cobra.Command {
 	root := &cobra.Command{
-		Use:   "plan",
+		Use:   "plan-gate",
 		Short: "Plan-approval gate: submit a plan (agent), approve or reject it (human)",
 	}
 	root.AddCommand(

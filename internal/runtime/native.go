@@ -1077,7 +1077,7 @@ func (n *Native) withPlanBriefing(prompt []byte) []byte {
 	b.WriteString("- Write a concise implementation plan in Markdown: the approach, the files you expect to touch, risks, and how you will test it.\n")
 	b.WriteString("- Submit it, then END YOUR TURN and wait:\n\n")
 	b.WriteString("```sh\n")
-	b.WriteString(bin + " plan submit <<'EOF'\n## Approach\n...\nEOF\n")
+	b.WriteString(bin + " plan-gate submit <<'EOF'\n## Approach\n...\nEOF\n")
 	b.WriteString("```\n\n")
 	b.WriteString("You will receive a message when the plan is approved (then implement it) or with the reviewer's feedback (then revise and submit again). File-edit tools are blocked while the plan is pending.\n")
 	return []byte(b.String())

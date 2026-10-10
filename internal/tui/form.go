@@ -1659,7 +1659,7 @@ func fieldHelp(fd fieldID) string {
 	case fOnPRState:
 		return "Workflow state when the agent's PR is ready (e.g. In Review). (none) = no move."
 	case fRequirePlan:
-		return "enter toggles · on = the agent submits a plan (lola plan submit) and may edit files only after a human approves it. ctrl-o inherits [defaults].require_plan."
+		return "enter toggles · on = the agent submits a plan (lola plan-gate submit) and may edit files only after a human approves it. ctrl-o inherits [defaults].require_plan."
 	case fPRRequiresChecks:
 		return "enter toggles · on = wait for a valid PR (open, not draft, all CI/CodeRabbit checks green); off = flip the moment the PR opens."
 	case fCommentOnPR:

@@ -154,8 +154,8 @@ protocol-version mismatch.
 | `lola reload` | Re-read `config.toml`; the daemon diffs projects and starts/stops poll goroutines without disturbing unaffected ones |
 | `lola logs [name] [-f]` | Tail `~/.lola/daemon.log`, optionally filtered to one project (by name); `-f`/`--follow` to stream |
 | `lola report <verb> [args]` | **Run by the coding agent, inside its session**, to publish its own progress: `todo set\|add\|start\|done\|undo\|remove\|clear`, `phase <planning\|investigating\|implementing\|testing\|reviewing\|polishing\|done>`, `progress <0-100\|done/total> [label]`, `blocked <reason>` / `unblocked`, `note <text>`, `check <name> <pass\|fail\|running> [summary]`, `clear`. Every agent's `.lola/prompt.md` teaches it. Shown as the session view's **Report** sidebar, a **Plan** column in the list, a chip on board cards and a `plan:` block in the TUI. Display-only: it is the agent's claim about itself and never drives status, slots, reactions or send-keys. A `check <test\|lint\|build…> pass` claim is **audited**: for claude sessions lola reads the agent's own transcript for a matching command run before the claim (and its exit status), and compares it with the PR's CI — a claim the evidence does not back shows as **Unverified claim** (app) / `⚠ unverified` (TUI). The audit is display-only too. A rejected report exits 1 with the usage error; an unreachable daemon exits 0, so a report never fails the agent's command. `lola report --help` lists every verb. |
-| `lola plan submit [file]` | **Run by the coding agent** in a `require_plan` session: hands in its plan (stdin, or a file) for human approval. See [Plan approval](#plan-approval-require_plan). |
-| `lola plan approve <session>` / `lola plan reject <session> <comment>` | A human's verdict on a submitted plan. `approve` unlocks coding (and, before any plan arrives, waives the gate); `reject` needs a comment, which is typed to the agent so it re-plans. The same decision is offered in the app's session view and in the Linear agent session. |
+| `lola plan-gate submit [file]` | **Run by the coding agent** in a `require_plan` session: hands in its plan (stdin, or a file) for human approval. See [Plan approval](#plan-approval-require_plan). |
+| `lola plan-gate approve <session>` / `lola plan-gate reject <session> <comment>` | A human's verdict on a submitted plan. `approve` unlocks coding (and, before any plan arrives, waives the gate); `reject` needs a comment, which is typed to the agent so it re-plans. The same decision is offered in the app's session view and in the Linear agent session. |
 | `lola linear-agent login` | Install lola as a **Linear agent** in your workspace (OAuth, `actor=app`): opens the browser, takes the callback on `localhost`, and stores the tokens in the Keychain. See [`[linear_agent]`](#linear_agent-optional). |
 | `lola linear-agent set-secret <client\|webhook>` | Store the OAuth app's client secret or the webhook signing secret in the Keychain (read from stdin, never argv). |
 | `lola linear-agent status` | The agent loop's status (connected, acting as whom, last poll, last error) — also part of `lola status`. |
@@ -1364,11 +1364,11 @@ With `require_plan = true` (per project, inheritable from `[defaults]`; set it
 in the project form's **Issue pickup** / TUI **Filter** tab, or as a default
 under **Project defaults** in either settings screen) every
 issue-dispatched session **plans before it codes**. Its briefing tells the agent
-to investigate read-only, submit a plan with `lola plan submit`, and stop. lola
+to investigate read-only, submit a plan with `lola plan-gate submit`, and stop. lola
 posts the plan — the session view's banner in the app, the TUI detail panel, the
 Linear agent session when there is one — and waits:
 
-- **Approve** (app, `lola plan approve`, or "Approve" in Linear) unlocks coding;
+- **Approve** (app, `lola plan-gate approve`, or "Approve" in Linear) unlocks coding;
   lola types the approval into the agent at its next resting prompt.
 - **Request changes** with a comment sends the agent back to planning with that
   feedback; it resubmits.

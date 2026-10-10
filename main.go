@@ -79,7 +79,7 @@ func main() {
 		setupCmd(),
 		hookCmd(),
 		reportCmd(),
-		planCmd(),
+		planGateCmd(),
 		linearAgentCmd(),
 		reviewRunCmd(),
 	)

@@ -1898,7 +1898,7 @@ func TestCodexResumeProbeHonorsCancellation(t *testing.T) {
 }
 
 // TestSpawnRequirePlanGatesAndBriefs: a require_plan project's session is born
-// at PlanGate=planning and its prompt.md teaches `lola plan submit`; an ungated
+// at PlanGate=planning and its prompt.md teaches `lola plan-gate submit`; an ungated
 // project gets neither.
 func TestSpawnRequirePlanGatesAndBriefs(t *testing.T) {
 	f := newFixture(t, "", "")
@@ -1911,7 +1911,7 @@ func TestSpawnRequirePlanGatesAndBriefs(t *testing.T) {
 		t.Fatalf("gate = %q, want planning", s.PlanGate)
 	}
 	prompt := readFile(t, filepath.Join(f.root, "nori", "lola-nori-eng-42", ".lola", "prompt.md"))
-	if !strings.Contains(prompt, "## Plan approval") || !strings.Contains(prompt, " plan submit <<'EOF'") {
+	if !strings.Contains(prompt, "## Plan approval") || !strings.Contains(prompt, " plan-gate submit <<'EOF'") {
 		t.Fatalf("prompt.md must carry the plan briefing:\n%s", prompt)
 	}
 
