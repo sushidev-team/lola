@@ -296,6 +296,7 @@ runtime layer, not on config load.
 | `branch_prefix` | string | Prefix prepended to a session's derived branch name (e.g. `"feat/"` yields `feat/eng-42`). Empty inherits `[defaults].branch_prefix`, then `"lola/"`. |
 | `post_create` | string array | Commands run inside a fresh worktree before the agent starts (e.g. `composer install`). Any failure blocks the session with a clear status — never a half-started agent. Omit to inherit `[defaults].post_create`. |
 | `dev_commands` | string array | Long-running dev processes for this repository, e.g. `["composer dev", "npm run dev"]`. They run only in the project's **active** session — one session at a time, each command in its own terminal tab — see [The active session](#the-active-session). Deliberately **not** inheritable from `[defaults]`: a dev command belongs to one repository. |
+| `daily_budget_tokens` | int | This project's daily limit in **weighted** tokens (see [`[budget]`](#budget-optional)). Once today's usage reaches it the project dispatches nothing new until tomorrow; running sessions are untouched. `0`/absent = no project limit. Not inheritable from `[defaults]`. |
 | `symlinks` | string array | Files symlinked from the main checkout into each worktree, e.g. `[".env"]`. Beware: a shared `.env` usually means every worktree talks to the same database. Omit to inherit `[defaults].symlinks`. |
 | `env` | table of strings | Extra environment variables exported into each session (`[project.env]`); the agent pane, shell tabs and the `post_create` commands all see them. Values may reference the session — see [Per-session env values](#per-session-env-values). Omit to inherit `[defaults].env`. |
 | `agent` | `"claude"` \| `"codex"` \| `"opencode"` | Coding agent for sessions spawned into this repo, overriding `[defaults].agent`. Empty/omitted inherits the global default (ultimately `claude`). See [The coding agent](#the-coding-agent). |
@@ -1057,6 +1058,102 @@ right one; typing (or closing the terminal) returns a copy-mode pane to the live
 view. `mouse` is a separate choice about who consumes the events of a **real**
 mouse: with it on, tmux takes clicks and drags, which costs text selection in
 the app's terminals.
+
+### `[budget]` (optional)
+
+Daily limits on how many **tokens** lola's agents use, and the usage figures
+behind them. lola reads each session's token usage from the coding agents' own
+logs, covering everything run in its worktree — the worker, its subagents and
+every review pass:
+
+- **claude:** `~/.claude/projects/<worktree>/…jsonl`;
+- **codex:** `~/.codex/sessions/…/rollout-*.jsonl`, attributed by the cwd each
+  log records. Only logs that ran in a lola worktree are read. codex shows
+  tokens only — lola has no list price for its models;
+- **opencode:** its SQLite database (`~/.local/share/opencode/opencode.db`, or
+  under `$XDG_DATA_HOME`), attributed by each session's directory and read
+  through the `sqlite3` CLI in read-only mode (macOS ships it; without it,
+  opencode simply shows no figure). The `~$` shown is opencode's own price.
+
+codex and opencode sessions are ranked against sessions of their own agent,
+never against claude ones (their weights are different units). The `[brain]` /
+`[statusagent]` helpers run in `~/.lola/helpers` so their usage is counted too
+(globally, against no project). A session with no readable log yet shows a
+blank, not `0`.
+
+**Per session** (a **Tokens** column + the detail header in the app, a `TOKENS`
+column + `tokens:` line in the TUI) lola shows:
+
+- the raw token count, cache traffic included (`46.7M`);
+- a **4-step size glyph** ranking the session against your own *finished*
+  sessions of the same agent from the last 35 days — below the median, p50–75, p75–90, top 10% (the
+  top step is orange). The tooltip says it in words ("heavier than 92% of your
+  last 40 sessions"). Ranking is by list-price weight, not raw tokens, because
+  a subscription limit is spent faster by output and bigger models and barely
+  by cache reads. With fewer than 10 finished sessions, fixed thresholds stand
+  in;
+- a **flame** while the session uses tokens faster (over the last ~30 minutes)
+  than 90% of your past sessions did on average per active hour — the early
+  warning for a runaway, before its total is large.
+
+The list-price dollar estimate appears only in tooltips / the detail line, as
+`~$`: a subscription pays nothing per token.
+
+**Today's total** shows in the app's top bar, the TUI's vitals bar and
+`lola status`, with the budget as a **percentage**. Day totals are kept in
+`~/.lola/state/usage.json`, so a torn-down session still counts toward today.
+
+**Subscription limits** lead the header when known — `Claude 5h 42% · 7d 18% ·
+Codex 7d 4%` in the app's top bar and the TUI's vitals bar, with reset times in
+the tooltip / `lola status` — because that is what a subscriber budgets by.
+Neither agent has an API for it, so lola reads it where each already appears:
+
+- **Claude Code** passes `rate_limits` only to its status-line command. lola
+  therefore sets the status line in each session's own `--settings` to
+  `lola hook statusline`, which records the figures and then runs **your own**
+  status-line command (project `.claude/settings.local.json`, then
+  `.claude/settings.json`, then `~/.claude/settings.json`) with the same stdin
+  and prints its output, so a lola pane shows your status line unchanged. Your
+  command is bounded to 5 seconds per redraw. Only subscribers get the figures;
+  an API-key user sees today's tokens instead.
+- **Codex** writes `rate_limits` into every session log
+  (`~/.codex/sessions/…/rollout-*.jsonl`); lola reads the newest.
+
+Both are as fresh as that agent's last turn (the tooltip says how old), and a
+window whose reset has passed is dropped.
+
+Budgets count **weighted** tokens — each token weighted by its list-price ratio
+to input, the same for every model: output 5×, cache write 1.25×, cache read
+0.1×. Most raw tokens are cache reads (a long session re-reading its own
+context), and a limit counted in raw tokens would be spent mostly by the
+cheapest traffic there is. `lola status` prints both numbers.
+
+| Key | Type | Description |
+| --- | --- | --- |
+| `daily_tokens` | int | Global daily limit in weighted tokens, across every project plus lola's helpers (local calendar day). `0`/absent = no limit. |
+| `notify` | bool | Send one notification per limit per day when usage first reaches it. Default `false`. |
+
+When a limit is reached, the affected polls **hold** exactly like the runtime
+health gate: the tick is skipped, the reason (`dispatch held: daily token budget
+reached: 212.4M of 200.0M weighted tokens used today …`) becomes the poll's
+`LastError`, and nothing is mutated — no seen entry, no label flip, and
+**never** a live session. Usage is scanned once a minute, so a limit is enforced
+up to a minute late.
+
+### `[load]` (optional)
+
+Holds new dispatch while **this machine** is saturated, on top of the slot cap —
+a slot is one agent, not one agent's `cargo build`. Same hold contract as
+`[budget]`, with the measured value in the reason (`machine busy: load 14.20 on
+8 CPUs (1.78/CPU) is above load.max_load_per_cpu 1.50`).
+
+| Key | Type | Description |
+| --- | --- | --- |
+| `max_load_per_cpu` | float | Hold while the 1-minute load average ÷ CPU count is above this (`1.0` = every core busy). `0`/absent = off. |
+| `min_free_memory_percent` | float | Hold while the OS reports less free memory than this percentage (macOS `kern.memorystatus_level`, Linux `MemAvailable`). `0`/absent = off. |
+
+A value the OS will not report holds **nothing** — a wrong "busy" would mean a
+machine that silently never dispatches.
 
 ### `[ui]` (optional)
 

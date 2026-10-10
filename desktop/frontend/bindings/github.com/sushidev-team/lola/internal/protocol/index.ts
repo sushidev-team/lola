@@ -18,6 +18,7 @@ export type {
     FeedbackData,
     GroupInfo,
     KillData,
+    LoadInfo,
     Match,
     OpenData,
     OpenManualArgs,
@@ -29,8 +30,11 @@ export type {
     PollStatus,
     PrRow,
     ProjectInfo,
+    ProjectSpend,
     ProjectsData,
     PrsData,
+    QuotaInfo,
+    QuotaWindow,
     RenameProjectData,
     ResolveConflictData,
     ReviewData,
@@ -41,5 +45,7 @@ export type {
     SwitchAgentArgs,
     SwitchAgentData,
     TicketRow,
-    TicketsData
+    TicketsData,
+    UsageInfo,
+    UsageStatus
 } from "./models.js";

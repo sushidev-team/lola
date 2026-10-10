@@ -88,6 +88,11 @@ type Client struct {
 	Model string
 	// Timeout bounds one Interpret call; 0 means defaultTimeout.
 	Timeout time.Duration
+	// Dir is the working directory the run starts in; "" inherits the
+	// daemon's. lola points it at a fixed directory of its own so claude-code
+	// files every helper transcript under ONE ~/.claude/projects slug, which
+	// is how internal/usage attributes this spend (see daemon/usage.go).
+	Dir string
 }
 
 func (c *Client) bin() string {
@@ -116,7 +121,7 @@ func (c *Client) Available() bool {
 // string is never displayed), or ErrNotFound / ErrTimeout / ErrNonZeroExit.
 // Exactly one attempt, hard timeout, no retries.
 func (c *Client) Interpret(ctx context.Context, contextText string) (string, error) {
-	out, err := runAgent(ctx, agent.Parse(string(c.Agent)), c.bin(), c.Model, Instruction, capContext(contextText, maxContextBytes), c.timeout())
+	out, err := runAgent(ctx, agent.Parse(string(c.Agent)), c.bin(), c.Dir, c.Model, Instruction, capContext(contextText, maxContextBytes), c.timeout())
 	if err != nil {
 		return "", err
 	}
@@ -126,12 +131,13 @@ func (c *Client) Interpret(ctx context.Context, contextText string) (string, err
 // runAgent is the exec seam. Tests assert agent/bin/model/instruction/stdin/timeout
 // without launching a real CLI. Reuse the review invocation posture: Codex is
 // sandboxed read-only; OpenCode inherits its own non-interactive permissions.
-var runAgent = func(ctx context.Context, kind agent.Kind, bin, model, instruction, stdin string, timeout time.Duration) (string, error) {
+var runAgent = func(ctx context.Context, kind agent.Kind, bin, dir, model, instruction, stdin string, timeout time.Duration) (string, error) {
 	cctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	args := agent.InterpretArgs(kind, instruction, model)
 	cmd := exec.CommandContext(cctx, bin, args...)
+	cmd.Dir = dir
 	cmd.Stdin = strings.NewReader(stdin) // context on stdin, never argv
 	stdout := &cappedBuffer{cap: maxOutputBytes}
 	stderr := &cappedBuffer{cap: maxStderrBytes}

@@ -307,6 +307,17 @@ export interface KillData {
 }
 
 /**
+ * LoadInfo is a machine-load sample; -1 marks a value the OS did not report.
+ * Busy is the hold reason ("" when dispatch is not held by load).
+ */
+export interface LoadInfo {
+    "load1": number;
+    "cpus": number;
+    "freeMemPercent": number;
+    "busy"?: string;
+}
+
+/**
  * Match describes one matched issue and what the tick did (or would do) with it.
  */
 export interface Match {
@@ -550,6 +561,16 @@ export interface ProjectInfo {
 }
 
 /**
+ * ProjectSpend is one project's usage today against its own limit.
+ */
+export interface ProjectSpend {
+    "name": string;
+    "tokens": number;
+    "weighted": number;
+    "budgetTokens"?: number;
+}
+
+/**
  * ProjectsData is Response.Data for cmd=projects: the daemon's cached view of
  * every configured [[project]] decorated with live status. Like cmd=sessions it
  * is served from in-memory snapshots (config + status tracker + session store)
@@ -588,6 +609,30 @@ export interface PrsData {
      * served past its TTL (a refresh is running/failed)
      */
     "stale": boolean;
+}
+
+/**
+ * QuotaInfo is one agent's subscription limits as last observed. At is when
+ * they were observed: a snapshot is only as fresh as that agent's last turn.
+ */
+export interface QuotaInfo {
+    /**
+     * "claude" | "codex"
+     */
+    "agent": string;
+    "plan"?: string;
+    "at": string;
+    "windows": QuotaWindow[] | null;
+}
+
+/**
+ * QuotaWindow is one rate-limit window: "5h", "7d", or "spend" (a gateway's
+ * spend limit). Windows whose reset has passed are never sent.
+ */
+export interface QuotaWindow {
+    "label": string;
+    "usedPercent": number;
+    "resetsAt": string;
 }
 
 /**
@@ -845,6 +890,13 @@ export interface SessionInfo {
     "feedbackPending"?: boolean;
 
     /**
+     * Usage is this session's token usage (internal/usage), nil when nothing
+     * is known yet — no transcript written, or an agent whose logs lola cannot
+     * read (codex, opencode). Absent is "unknown", never zero.
+     */
+    "usage"?: UsageInfo | null;
+
+    /**
      * Reaction-engine posture (PLAN P3), flattened so the TUI renders reaction
      * state without importing internal/session or re-deriving it.
      * ci_failed recovery attempts already spent on the current failing streak
@@ -909,6 +961,12 @@ export interface StatusData {
      * is holding a session list from discloses nothing it does not have.
      */
     "host"?: string;
+
+    /**
+     * Usage is today's token usage against the configured budgets, plus
+     * the last machine-load sample when [load] is on. nil on an older daemon.
+     */
+    "usage"?: UsageStatus | null;
 }
 
 /**
@@ -981,4 +1039,65 @@ export interface TicketsData {
     "teamName"?: string;
     "teamKey"?: string;
     "issues": TicketRow[] | null;
+}
+
+/**
+ * UsageInfo is one session's usage over every claude AND codex run in its
+ * worktree (worker, subagents, review passes). Tokens are RAW (cache traffic included):
+ * the number the UIs show. The *USD figures are the list-price ESTIMATE, kept
+ * for tooltips — a subscription user pays nothing per token.
+ * 
+ * Level/Percentile/Of rank the session against the user's own finished
+ * sessions (internal/usage.RankAmong): Level is the 4-step size glyph
+ * (0 light … 3 top 10%), Percentile the share of history lighter than it, Of
+ * the history size — 0 when fixed thresholds decided Level instead. Burning
+ * flags a session using tokens faster now than 90% of past sessions ever did;
+ * TokensPerHour is that current rate (raw tokens, last ~30 minutes).
+ */
+export interface UsageInfo {
+    /**
+     * Agent is whose scale ranked it ("claude" | "codex"). A codex figure has
+     * no list price (TotalUSD/TodayUSD stay 0) and is ranked against codex
+     * sessions only, by weighted tokens.
+     */
+    "agent"?: string;
+    "tokens": number;
+    "todayTokens": number;
+    "totalUsd": number;
+    "todayUsd": number;
+    "level": number;
+    "percentile"?: number;
+    "of"?: number;
+    "burning"?: boolean;
+    "tokensPerHour"?: number;
+}
+
+/**
+ * UsageStatus is cmd=status's usage + load summary for one local day. Tokens
+ * is raw (what the UIs show); Weighted is what a budget counts
+ * (usage.Totals.Weighted) and BudgetTokens its global limit (0 = none).
+ * TodayUSD is the list-price estimate, for tooltips only.
+ */
+export interface UsageStatus {
+    /**
+     * local YYYY-MM-DD the totals are for
+     */
+    "day": string;
+    "tokens": number;
+    "weighted": number;
+    "todayUsd": number;
+    "budgetTokens"?: number;
+    "projects"?: ProjectSpend[] | null;
+
+    /**
+     * Load is the last [load] sample; nil when [load] is off.
+     */
+    "load"?: LoadInfo | null;
+
+    /**
+     * Quotas is how much of each coding agent's SUBSCRIPTION limits is used
+     * (internal/quota), one entry per agent lola could read — claude via the
+     * status line, codex via its session logs. Empty when neither reported.
+     */
+    "quotas"?: QuotaInfo[] | null;
 }

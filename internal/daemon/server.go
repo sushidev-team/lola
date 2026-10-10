@@ -607,6 +607,7 @@ func (d *Daemon) sessionsData() protocol.SessionsData {
 			DevForwards: devForwardInfos(s.DevForwards),
 
 			FeedbackPending: s.PendingFeedback != "",
+			Usage:           d.sessionUsage(s.ID),
 		}
 		if c := s.DevClash; c != nil {
 			si.DevClash = &protocol.DevClashInfo{

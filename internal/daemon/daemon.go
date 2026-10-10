@@ -75,6 +75,10 @@ type Daemon struct {
 	log  *log.Logger
 	home string
 
+	// spend is the usage ledger, per-session spend cache and [load] sample
+	// (usage.go). Its own lock; never held while taking mu.
+	spend *spendState
+
 	mu       sync.Mutex
 	cfg      *config.Config
 	cfgErr   string     // non-empty = cfg failed validation; polls are held
@@ -421,6 +425,7 @@ func newDaemon(cfg *config.Config, lin linear.API, logger *log.Logger, home stri
 
 		hookWarned: map[string]bool{},
 	}
+	d.spend = newSpendState(home, func(f string, a ...any) { d.logf("", f, a...) })
 	// Feed the activity ring from every status transition the store commits
 	// (the spawn birth is recorded separately at the dispatch site).
 	d.sessions.OnTransition(func(from string, s session.Session) {
@@ -645,6 +650,12 @@ func Run(ctx context.Context) error {
 
 	d.wg.Add(1)
 	go d.observeLoop(ctx)
+
+	// Spend scan (usage.go): local file reads only, so it shares the observer's
+	// shielding needs with none of its exec deadlines; the CANCELLABLE context
+	// is enough, since an aborted pass loses nothing the next one won't redo.
+	d.wg.Add(1)
+	go d.usageLoop(ctx)
 
 	// Status interpreter worker ([statusagent], statusagentwire.go). On the
 	// CANCELLABLE run context, deliberately not shutdown-shielded: an

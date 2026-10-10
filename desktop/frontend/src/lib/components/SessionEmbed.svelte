@@ -5,6 +5,7 @@
   import { terms, AGENT, DIFF } from "$lib/terms.svelte";
   import { feedback } from "$lib/feedback.svelte";
   import { devUrlLabel, MAX_URL_CHIPS } from "$lib/devurl";
+  import UsageMark from "./UsageMark.svelte";
   import LiveTerminal from "./LiveTerminal.svelte";
   import DiffView from "./DiffView.svelte";
   import Button from "./Button.svelte";
@@ -260,6 +261,12 @@
         <span class="inline-flex items-center whitespace-nowrap rounded bg-pill-grey px-1.5 py-[1px] text-sm text-pill-grey-fg">
           {(session.agent || "claude").toLowerCase()}
         </span>
+      {/if}
+      <!-- Token usage (internal/usage): every claude run in this worktree — the
+           worker, its subagents, the review passes. Absent when lola cannot read
+           the agent's logs. -->
+      {#if session.usage}
+        <UsageMark usage={session.usage} class="text-sm text-faint" />
       {/if}
       <!-- The dev server's own address, scraped from its pane by the daemon
            (internal/devurl). It is here rather than in the terminal because the

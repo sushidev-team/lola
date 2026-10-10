@@ -507,6 +507,16 @@ func (m *rootModel) sessionsBody(w, h int) []string {
 			rows[i] = insAt(rows[i], 4, dash(boardChip(si)))
 		}
 	}
+	// TOKENS — the session's usage, size glyph and burn flame — before AGE,
+	// only when some listed session has a figure (codex/opencode-only fleets
+	// keep their columns).
+	if anyUsage(list) {
+		at := len(headers) - 1
+		headers = insAt(headers, at, "TOKENS")
+		for i, si := range list {
+			rows[i] = insAt(rows[i], at, costCell(si))
+		}
+	}
 	colw := colWidths(headers, rows)
 
 	// Adaptive TITLE column (after ISSUE): so a session is identifiable by what
@@ -819,6 +829,9 @@ func (m *rootModel) vitalsBar(w int) string {
 	parts = append(parts, needStr, fmt.Sprintf("sessions %d", nSess), fmt.Sprintf("projects %d", len(m.cfg.Projects)))
 	if len(polling) > 0 {
 		parts = append(parts, fmt.Sprintf("polls %d/%d", en, len(polling)))
+	}
+	if sv := spendVital(st); sv != "" {
+		parts = append(parts, sv)
 	}
 
 	brand := lipgloss.NewStyle().Bold(true).Render("lola")
