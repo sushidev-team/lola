@@ -20,7 +20,7 @@ func TestInterpretArgvAndStdin(t *testing.T) {
 
 	var gotBin, gotModel, gotInstr, gotStdin string
 	var gotTimeout time.Duration
-	runAgent = func(ctx context.Context, kind agent.Kind, bin, model, instruction, stdin string, timeout time.Duration) (string, error) {
+	runAgent = func(ctx context.Context, kind agent.Kind, bin, dir, model, instruction, stdin string, timeout time.Duration) (string, error) {
 		gotBin, gotModel, gotInstr, gotStdin, gotTimeout = bin, model, instruction, stdin, timeout
 		return `{"agent_state":"working","headline":"x","waiting_on":"","confidence":0.9}`, nil
 	}
@@ -51,7 +51,7 @@ func TestInterpretCapsContext(t *testing.T) {
 	orig := runAgent
 	t.Cleanup(func() { runAgent = orig })
 	var gotStdin string
-	runAgent = func(ctx context.Context, kind agent.Kind, bin, model, instruction, stdin string, timeout time.Duration) (string, error) {
+	runAgent = func(ctx context.Context, kind agent.Kind, bin, dir, model, instruction, stdin string, timeout time.Duration) (string, error) {
 		gotStdin = stdin
 		return "{}", nil
 	}
@@ -177,7 +177,7 @@ func TestInterpretUsesSelectedProvider(t *testing.T) {
 	original := runAgent
 	t.Cleanup(func() { runAgent = original })
 	for _, kind := range agent.Kinds {
-		runAgent = func(ctx context.Context, got agent.Kind, bin, model, instruction, stdin string, timeout time.Duration) (string, error) {
+		runAgent = func(ctx context.Context, got agent.Kind, bin, dir, model, instruction, stdin string, timeout time.Duration) (string, error) {
 			if got != kind || bin != kind.Binary() || model != "custom-model" || stdin != "pane data" {
 				t.Fatalf("got %s %s %s %s", got, bin, model, stdin)
 			}

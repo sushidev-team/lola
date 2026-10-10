@@ -220,6 +220,14 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   zero value, because an empty repo merely disables the open-PR check while a
   wrong one would make `gh pr list --repo` answer about someone else's
   repository.
+- `internal/usage` — ESTIMATED spend (stdlib leaf): sums the `message.usage`
+  numbers of claude-code's transcripts per local day at list price
+  (`Scanner`, incremental by file offset, dedup by message id), plus the
+  persisted per-day `Ledger` (`~/.lola/state/usage.json`) the budget reads.
+  A session's directory is its WORKTREE's `~/.claude/projects` slug, so the
+  worker, its subagents and every review pass run there are one figure.
+- `internal/sysload` — machine load for the `[load]` hold (stdlib leaf): the
+  1-min load average and the OS's own free-memory percentage; unknown is -1.
 - `internal/secrets` / `internal/notify` / `internal/brain` / `internal/review`
   / `internal/attention` / `internal/doctor` — Linear key resolution
   (keychain→env), best-effort desktop/Slack notify, opt-in headless-claude
@@ -387,6 +395,22 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   only them. `Validate` does NOT check this: whether a UUID is team- or
   workspace-scoped is unknowable offline, and an earlier cross-team rejection
   here blocked the correct configuration. Do not reinstate it.
+- **Spend and load HOLD dispatch; they never touch a session.** `dispatchHold`
+  (`internal/daemon/usage.go`) runs right after the health gate with the same
+  contract — skip the tick, `dispatch held: <why>` as `LastError`, mutate
+  nothing. Rules that keep it honest:
+  - Every figure is an ESTIMATE (list price from transcripts) and every UI
+    marks it with `~`; an absent `Usage` means UNKNOWN (no transcript, or
+    codex/opencode) and renders blank, never `$0`.
+  - The ledger REPLACES each (day, source) entry with the scanner's absolute
+    total, so rescans are idempotent and a torn-down session keeps counting.
+  - `TranscriptPath` from a hook is only trusted when it lies directly under
+    the claude projects root; anything else falls back to the worktree slug.
+  - `[brain]`/`[statusagent]` run with cwd `~/.lola/helpers` so their spend
+    lands in one slug (`helperSource`, global only). The review AGENT family
+    already runs in the worktree and is counted with the session.
+  - A load value the OS will not report holds NOTHING (fail open): a wrong
+    "busy" is a machine that silently never dispatches.
 - **Health-gate every dispatch.** If `tmux`/`git`/`claude` aren't all resolvable
   or the poll's `[[project]]` doesn't resolve: skip the tick, record `lastError`
   in status, and mutate **nothing** (no seen, no labels, no in-flight).

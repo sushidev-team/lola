@@ -55,7 +55,7 @@ func buildBrain(bc config.BrainConfig) *brain.Client {
 	if !bc.Enabled {
 		return nil
 	}
-	cl := &brain.Client{Model: bc.Model}
+	cl := &brain.Client{Model: bc.Model, Dir: helperWorkDir()}
 	if bc.TimeoutSeconds > 0 {
 		cl.Timeout = time.Duration(bc.TimeoutSeconds) * time.Second
 	}

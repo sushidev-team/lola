@@ -141,6 +141,13 @@ type Project struct {
 	// stack in every project that forgot to override it.
 	DevCommands []string `toml:"dev_commands,omitempty"`
 
+	// DailyBudgetUSD caps this project's ESTIMATED spend per local day (see
+	// [budget] and internal/usage). Once today's spend reaches it, the project
+	// dispatches nothing new until tomorrow; live sessions are never touched.
+	// 0 = no project limit. Not a [defaults] key: a budget is a decision about
+	// one project, and an inherited one would silently apply to every project.
+	DailyBudgetUSD float64 `toml:"daily_budget_usd,omitempty"`
+
 	// --- Linear polling (optional) -----------------------------------------
 	// The project polls Linear only when TeamID is set; Enabled toggles it
 	// on/off (pause). TeamID also binds the on-demand ticket picker, so a
@@ -268,6 +275,8 @@ type Config struct {
 	Tmux        TmuxConfig        `toml:"tmux"`
 	UI          UIConfig          `toml:"ui"`
 	Remote      RemoteConfig      `toml:"remote"`
+	Budget      BudgetConfig      `toml:"budget"`
+	Load        LoadConfig        `toml:"load"`
 
 	// ReviewProviders is the NEW canonical global review CATALOG (resolved from
 	// [[review.provider]]). Empty when the file uses the legacy [review]/
@@ -378,6 +387,8 @@ type fileConfig struct {
 	Tmux        *fileTmuxConfig        `toml:"tmux,omitempty"`
 	UI          *fileUIConfig          `toml:"ui,omitempty"`
 	Remote      *fileRemoteConfig      `toml:"remote,omitempty"`
+	Budget      *BudgetConfig          `toml:"budget,omitempty"`
+	Load        *LoadConfig            `toml:"load,omitempty"`
 }
 
 // fileProject mirrors Project on disk. Its polling fields are inline; the
@@ -406,7 +417,8 @@ type fileProject struct {
 	Env           *map[string]string `toml:"env,omitempty"`
 	// DevCommands is a PLAIN slice, not a pointer: it is not inheritable, so
 	// absent and empty mean the same thing (no dev tabs for this project).
-	DevCommands []string `toml:"dev_commands,omitempty"`
+	DevCommands    []string `toml:"dev_commands,omitempty"`
+	DailyBudgetUSD float64  `toml:"daily_budget_usd,omitempty"`
 
 	Enabled        bool      `toml:"enabled,omitempty"`
 	TeamID         string    `toml:"team_id,omitempty"`
@@ -566,6 +578,7 @@ func projectFromFile(fp fileProject) Project {
 		Symlinks:       symlinks,
 		Env:            env,
 		DevCommands:    fp.DevCommands,
+		DailyBudgetUSD: fp.DailyBudgetUSD,
 		Enabled:        fp.Enabled,
 		TeamID:         fp.TeamID,
 		ProjectID:      fp.ProjectID,
@@ -629,6 +642,7 @@ func projectToFile(p Project) fileProject {
 		Symlinks:       ptr(p.Symlinks, set(o.Symlinks)),
 		Env:            ptr(p.Env, set(o.Env)),
 		DevCommands:    p.DevCommands,
+		DailyBudgetUSD: p.DailyBudgetUSD,
 		Enabled:        p.Enabled,
 		TeamID:         p.TeamID,
 		ProjectID:      p.ProjectID,
@@ -757,6 +771,8 @@ func (fc *fileConfig) config() *Config {
 		Tmux:            resolveTmux(fc.Tmux),
 		UI:              resolveUI(fc.UI),
 		Remote:          resolveRemote(fc.Remote),
+		Budget:          tableOf(fc.Budget),
+		Load:            tableOf(fc.Load),
 	}
 }
 
@@ -809,6 +825,8 @@ func (c *Config) file() *fileConfig {
 		Tmux:        tmuxFile(c.Tmux),
 		UI:          uiFile(c.UI),
 		Remote:      remoteFile(c.Remote),
+		Budget:      nonZero(c.Budget),
+		Load:        nonZero(c.Load),
 	}
 }
 

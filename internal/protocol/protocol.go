@@ -237,6 +237,47 @@ type StatusData struct {
 	// at length); telling an already-paired device the name of the machine it
 	// is holding a session list from discloses nothing it does not have.
 	Host string `json:"host,omitempty"`
+
+	// Usage is today's estimated spend against the configured budgets, plus
+	// the last machine-load sample when [load] is on. nil on an older daemon.
+	Usage *UsageStatus `json:"usage,omitempty"`
+}
+
+// UsageInfo is one session's estimated spend: TotalUSD over every claude run
+// in its worktree (worker, subagents, review passes), TodayUSD the part spent
+// today (local time), Tokens every token billed including cache traffic.
+type UsageInfo struct {
+	TotalUSD float64 `json:"totalUsd"`
+	TodayUSD float64 `json:"todayUsd"`
+	Tokens   int64   `json:"tokens"`
+}
+
+// UsageStatus is cmd=status's spend + load summary. Every *USD figure is an
+// ESTIMATE at list price. A budget of 0 means no limit is configured.
+type UsageStatus struct {
+	Day       string         `json:"day"` // local YYYY-MM-DD the totals are for
+	TodayUSD  float64        `json:"todayUsd"`
+	Tokens    int64          `json:"tokens"`
+	BudgetUSD float64        `json:"budgetUsd,omitempty"`
+	Projects  []ProjectSpend `json:"projects,omitempty"`
+	// Load is the last [load] sample; nil when [load] is off.
+	Load *LoadInfo `json:"load,omitempty"`
+}
+
+// ProjectSpend is one project's spend today against its own limit.
+type ProjectSpend struct {
+	Name      string  `json:"name"`
+	TodayUSD  float64 `json:"todayUsd"`
+	BudgetUSD float64 `json:"budgetUsd,omitempty"`
+}
+
+// LoadInfo is a machine-load sample; -1 marks a value the OS did not report.
+// Busy is the hold reason ("" when dispatch is not held by load).
+type LoadInfo struct {
+	Load1          float64 `json:"load1"`
+	CPUs           int     `json:"cpus"`
+	FreeMemPercent float64 `json:"freeMemPercent"`
+	Busy           string  `json:"busy,omitempty"`
 }
 
 type PollStatus struct {
@@ -357,6 +398,11 @@ type SessionInfo struct {
 	// (cmd=feedback) is queued for this session's agent, waiting for the pane to
 	// be verifiably resting at its prompt.
 	FeedbackPending bool `json:"feedbackPending,omitempty"`
+
+	// Usage is this session's ESTIMATED spend (internal/usage), nil when
+	// nothing is known yet — no transcript written, or an agent whose logs
+	// lola cannot read (codex, opencode). Absent is "unknown", never "$0".
+	Usage *UsageInfo `json:"usage,omitempty"`
 
 	// Reaction-engine posture (PLAN P3), flattened so the TUI renders reaction
 	// state without importing internal/session or re-deriving it.

@@ -94,7 +94,7 @@ func buildStatusAgent(sc config.StatusAgentConfig) *statusagent.Client {
 	if !sc.Enabled {
 		return nil
 	}
-	cl := &statusagent.Client{Agent: agent.Parse(sc.Agent), Bin: sc.Bin, Model: sc.Model}
+	cl := &statusagent.Client{Agent: agent.Parse(sc.Agent), Bin: sc.Bin, Model: sc.Model, Dir: helperWorkDir()}
 	if sc.TimeoutSeconds > 0 {
 		cl.Timeout = time.Duration(sc.TimeoutSeconds) * time.Second
 	}

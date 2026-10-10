@@ -79,6 +79,11 @@ type Client struct {
 	Model string
 	// Timeout bounds one Summarize call; 0 means defaultTimeout.
 	Timeout time.Duration
+	// Dir is the working directory the run starts in; "" inherits the
+	// daemon's. lola points it at a fixed directory of its own so claude-code
+	// files every helper transcript under ONE ~/.claude/projects slug, which
+	// is how internal/usage attributes this spend (see daemon/usage.go).
+	Dir string
 }
 
 func (c *Client) bin() string {
@@ -110,7 +115,7 @@ func (c *Client) Available() bool {
 // ErrNotFound / ErrTimeout / ErrNonZeroExit on failure. It makes exactly one
 // attempt with a hard timeout; it never retries.
 func (c *Client) Summarize(ctx context.Context, instruction, contextText string) (string, error) {
-	out, err := runClaude(ctx, c.bin(), c.Model, instruction, capContext(contextText, maxContextBytes), c.timeout())
+	out, err := runClaude(ctx, c.bin(), c.Dir, c.Model, instruction, capContext(contextText, maxContextBytes), c.timeout())
 	if err != nil {
 		return "", err
 	}
@@ -125,11 +130,12 @@ func (c *Client) Summarize(ctx context.Context, instruction, contextText string)
 // The `model` parameter is threaded through the seam deliberately: it is the
 // only way an optional `--model` can reach the real argv, since this is a
 // package-level var with no access to the Client value.
-var runClaude = func(ctx context.Context, bin, model, instruction, stdin string, timeout time.Duration) (string, error) {
+var runClaude = func(ctx context.Context, bin, dir, model, instruction, stdin string, timeout time.Duration) (string, error) {
 	cctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	cmd := exec.CommandContext(cctx, bin, buildArgs(model, instruction)...)
+	cmd.Dir = dir
 	cmd.Stdin = strings.NewReader(stdin) // context on stdin, never argv
 	stdout := &cappedBuffer{cap: maxOutputBytes}
 	stderr := &cappedBuffer{cap: maxStderrBytes}

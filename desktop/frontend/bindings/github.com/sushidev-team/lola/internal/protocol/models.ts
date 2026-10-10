@@ -290,6 +290,17 @@ export interface KillData {
 }
 
 /**
+ * LoadInfo is a machine-load sample; -1 marks a value the OS did not report.
+ * Busy is the hold reason ("" when dispatch is not held by load).
+ */
+export interface LoadInfo {
+    "load1": number;
+    "cpus": number;
+    "freeMemPercent": number;
+    "busy"?: string;
+}
+
+/**
  * Match describes one matched issue and what the tick did (or would do) with it.
  */
 export interface Match {
@@ -530,6 +541,15 @@ export interface ProjectInfo {
     "needsYou": number;
     "ciRed": number;
     "openPrs": number;
+}
+
+/**
+ * ProjectSpend is one project's spend today against its own limit.
+ */
+export interface ProjectSpend {
+    "name": string;
+    "todayUsd": number;
+    "budgetUsd"?: number;
 }
 
 /**
@@ -828,6 +848,13 @@ export interface SessionInfo {
     "feedbackPending"?: boolean;
 
     /**
+     * Usage is this session's ESTIMATED spend (internal/usage), nil when
+     * nothing is known yet — no transcript written, or an agent whose logs
+     * lola cannot read (codex, opencode). Absent is "unknown", never "$0".
+     */
+    "usage"?: UsageInfo | null;
+
+    /**
      * Reaction-engine posture (PLAN P3), flattened so the TUI renders reaction
      * state without importing internal/session or re-deriving it.
      * ci_failed recovery attempts already spent on the current failing streak
@@ -892,6 +919,12 @@ export interface StatusData {
      * is holding a session list from discloses nothing it does not have.
      */
     "host"?: string;
+
+    /**
+     * Usage is today's estimated spend against the configured budgets, plus
+     * the last machine-load sample when [load] is on. nil on an older daemon.
+     */
+    "usage"?: UsageStatus | null;
 }
 
 /**
@@ -964,4 +997,35 @@ export interface TicketsData {
     "teamName"?: string;
     "teamKey"?: string;
     "issues": TicketRow[] | null;
+}
+
+/**
+ * UsageInfo is one session's estimated spend: TotalUSD over every claude run
+ * in its worktree (worker, subagents, review passes), TodayUSD the part spent
+ * today (local time), Tokens every token billed including cache traffic.
+ */
+export interface UsageInfo {
+    "totalUsd": number;
+    "todayUsd": number;
+    "tokens": number;
+}
+
+/**
+ * UsageStatus is cmd=status's spend + load summary. Every *USD figure is an
+ * ESTIMATE at list price. A budget of 0 means no limit is configured.
+ */
+export interface UsageStatus {
+    /**
+     * local YYYY-MM-DD the totals are for
+     */
+    "day": string;
+    "todayUsd": number;
+    "tokens": number;
+    "budgetUsd"?: number;
+    "projects"?: ProjectSpend[] | null;
+
+    /**
+     * Load is the last [load] sample; nil when [load] is off.
+     */
+    "load"?: LoadInfo | null;
 }

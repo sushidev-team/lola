@@ -437,6 +437,25 @@ endpoint = "https://api.linear.app/graphql"
 #                         # Written to lola's server in either state, so this key decides it, not ~/.tmux.conf.
 
 # ---------------------------------------------------------------------------
+# [budget] — OPTIONAL daily spend limits. Spend is ESTIMATED from the coding
+# agent's own transcripts (claude only) at list price — a subscription pays
+# nothing per token. Reaching a limit HOLDS new dispatch (the tick is skipped
+# and the reason shown as the poll's error); running sessions are never
+# touched. Per-project limits are [[project]].daily_budget_usd. 0 = no limit.
+# ---------------------------------------------------------------------------
+# [budget]
+# daily_usd = 50.0        # global limit across all projects + lola's helpers, per local day
+# notify = true           # notify once per limit per day when it is reached
+
+# ---------------------------------------------------------------------------
+# [load] — OPTIONAL machine-load hold on top of the slot cap: no new dispatch
+# while this machine is saturated. A value the OS does not report holds nothing.
+# ---------------------------------------------------------------------------
+# [load]
+# max_load_per_cpu = 1.5          # 1-minute load average ÷ CPU count; 0 = off
+# min_free_memory_percent = 10    # free memory as the OS reports it; 0 = off
+
+# ---------------------------------------------------------------------------
 # [ui] — OPTIONAL appearance. Presentation only: nothing the daemon does reads
 # this, so omitting the whole section is zero behavior change. The theme sets
 # lola-desktop's app chrome, its terminal colors and the ANSI palette used to
@@ -590,6 +609,8 @@ dev_commands = [
   "npm run dev",
   # "cd desktop && wails3 dev",
 ]
+# Daily limit on THIS project's estimated spend (see [budget]); 0 = none.
+# daily_budget_usd = 20.0
 # Files symlinked from the main checkout into each worktree.
 # CAVEAT: symlinking .env means every worktree talks to the SAME database
 # (and caches, queues, ...) as the main checkout — concurrent sessions can

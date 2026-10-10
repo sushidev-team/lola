@@ -1250,6 +1250,9 @@ func (m *rootModel) sessionDetail() string {
 		if sel.Worktree != "" {
 			b.WriteString(faintText.Render("worktree: "+sel.Worktree) + "\n")
 		}
+		if line := usageDetailLine(*sel); line != "" {
+			b.WriteString(faintText.Render(line) + "\n")
+		}
 		// The agent axis, truthful even under an open PR: what the agent itself
 		// is doing, why it waits, which tool the turn runs, activity freshness.
 		if line := agentDetailLine(*sel); line != "" {
@@ -1356,6 +1359,9 @@ func (m *rootModel) sessionDetail() string {
 		for _, line := range devClashLines(*sel) {
 			b.WriteString(line + "\n")
 		}
+	}
+	if line := usageDetailLine(*sel); line != "" {
+		b.WriteString(line + "\n")
 	}
 	fmt.Fprintf(&b, "age:      %s\n", dash(sel.Age))
 	return b.String()

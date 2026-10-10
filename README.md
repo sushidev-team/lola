@@ -296,6 +296,7 @@ runtime layer, not on config load.
 | `branch_prefix` | string | Prefix prepended to a session's derived branch name (e.g. `"feat/"` yields `feat/eng-42`). Empty inherits `[defaults].branch_prefix`, then `"lola/"`. |
 | `post_create` | string array | Commands run inside a fresh worktree before the agent starts (e.g. `composer install`). Any failure blocks the session with a clear status — never a half-started agent. Omit to inherit `[defaults].post_create`. |
 | `dev_commands` | string array | Long-running dev processes for this repository, e.g. `["composer dev", "npm run dev"]`. They run only in the project's **active** session — one session at a time, each command in its own terminal tab — see [The active session](#the-active-session). Deliberately **not** inheritable from `[defaults]`: a dev command belongs to one repository. |
+| `daily_budget_usd` | float | This project's daily limit on **estimated** spend (see [`[budget]`](#budget-optional)). Once today's spend reaches it the project dispatches nothing new until tomorrow; running sessions are untouched. `0`/absent = no project limit. Not inheritable from `[defaults]`. |
 | `symlinks` | string array | Files symlinked from the main checkout into each worktree, e.g. `[".env"]`. Beware: a shared `.env` usually means every worktree talks to the same database. Omit to inherit `[defaults].symlinks`. |
 | `env` | table of strings | Extra environment variables exported into each session (`[project.env]`); the agent pane, shell tabs and the `post_create` commands all see them. Values may reference the session — see [Per-session env values](#per-session-env-values). Omit to inherit `[defaults].env`. |
 | `agent` | `"claude"` \| `"codex"` \| `"opencode"` | Coding agent for sessions spawned into this repo, overriding `[defaults].agent`. Empty/omitted inherits the global default (ultimately `claude`). See [The coding agent](#the-coding-agent). |
@@ -1057,6 +1058,48 @@ right one; typing (or closing the terminal) returns a copy-mode pane to the live
 view. `mouse` is a separate choice about who consumes the events of a **real**
 mouse: with it on, tmux takes clicks and drags, which costs text selection in
 the app's terminals.
+
+### `[budget]` (optional)
+
+Daily limits on what lola's agents **spend**, and the spend figures behind them.
+lola reads each session's token usage from the coding agent's own transcripts
+(`~/.claude/projects/<worktree>/…jsonl` — the worker, its subagents and every
+review pass run in its worktree) and prices it at **list price** per model, so
+every figure is an **estimate**: a subscription pays nothing per token. The
+`[brain]` / `[statusagent]` helpers run in `~/.lola/helpers` so their spend is
+counted too (globally, against no project). codex and opencode sessions report
+no figure — lola cannot read their logs yet — which is shown as blank, not `$0`.
+
+Spend shows per session (a **Cost** column + the detail header in the app, a
+`COST` column + `cost:` line in the TUI) and as today's total (the app's top bar,
+the TUI's vitals bar, `lola status`). Day totals are kept in
+`~/.lola/state/usage.json`, so a torn-down session still counts toward today.
+
+| Key | Type | Description |
+| --- | --- | --- |
+| `daily_usd` | float | Global daily limit across every project plus lola's helpers, in USD (local calendar day). `0`/absent = no limit. |
+| `notify` | bool | Send one notification per limit per day when spend first reaches it. Default `false`. |
+
+When a limit is reached, the affected polls **hold** exactly like the runtime
+health gate: the tick is skipped, the reason (`dispatch held: daily budget
+reached: ~$51.20 of $50.00 …`) becomes the poll's `LastError`, and nothing is
+mutated — no seen entry, no label flip, and **never** a live session. Spend is
+scanned once a minute, so a limit is enforced up to a minute late.
+
+### `[load]` (optional)
+
+Holds new dispatch while **this machine** is saturated, on top of the slot cap —
+a slot is one agent, not one agent's `cargo build`. Same hold contract as
+`[budget]`, with the measured value in the reason (`machine busy: load 14.20 on
+8 CPUs (1.78/CPU) is above load.max_load_per_cpu 1.50`).
+
+| Key | Type | Description |
+| --- | --- | --- |
+| `max_load_per_cpu` | float | Hold while the 1-minute load average ÷ CPU count is above this (`1.0` = every core busy). `0`/absent = off. |
+| `min_free_memory_percent` | float | Hold while the OS reports less free memory than this percentage (macOS `kern.memorystatus_level`, Linux `MemAvailable`). `0`/absent = off. |
+
+A value the OS will not report holds **nothing** — a wrong "busy" would mean a
+machine that silently never dispatches.
 
 ### `[ui]` (optional)
 
