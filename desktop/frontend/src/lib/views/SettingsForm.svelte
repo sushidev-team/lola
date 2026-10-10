@@ -20,7 +20,13 @@
   import { deepEqual } from "$lib/deepEqual";
   import { ConfigService, LinearService } from "@bindings/desktop";
   import type { ReviewKindDTO } from "@bindings/desktop";
-  import type { SettingsDTO, LinearOption, LinearKeyStatusDTO, ConnectCodeDTO } from "@bindings/desktop/models";
+  import type {
+    SettingsDTO,
+    LinearOption,
+    LinearKeyStatusDTO,
+    ConnectCodeDTO,
+    LinearAgentSecretsDTO,
+  } from "@bindings/desktop/models";
   import { linesToText, splitLines, cleanLines } from "$lib/lines";
   import { appearance, FLAVORS, THEME_IDS, type ThemeId } from "$lib/theme-runtime.svelte";
 
@@ -56,6 +62,7 @@
     { id: "project", label: "Project defaults", group: "Workspace" },
     { id: "appearance", label: "Appearance", group: "Workspace" },
     { id: "linear", label: "Linear", group: "Connections" },
+    { id: "linearAgent", label: "Linear agent", group: "Connections" },
     { id: "notify", label: "Notifications", group: "Connections" },
     { id: "remote", label: "Phone access", group: "Connections" },
     { id: "review", label: "Review", group: "Automation" },
@@ -284,6 +291,8 @@
       void loadThemes();
     } else if (id === "linear") {
       void loadKeyStatus();
+    } else if (id === "linearAgent") {
+      void loadAgentSecrets();
     } else if (id === "review") {
       void loadReviewKinds();
     } else if (id === "remote") {
@@ -498,6 +507,42 @@
   let keyBusy = $state<"" | "validating" | "saving">("");
   let keyMsg = $state("");
   let keyMsgKind = $state<"good" | "bad">("good");
+
+  // The Linear agent's secrets follow the Linear key's rules: never a DTO field,
+  // write-only (SetLinearAgentSecret), and the status says only WHETHER each
+  // resolves. The OAuth install itself is a browser flow the CLI drives.
+  let agentSecrets = $state<LinearAgentSecretsDTO | null>(null);
+  let agentSecretInput = $state({ client: "", webhook: "" });
+  let agentSecretBusy = $state("");
+  let agentSecretMsg = $state("");
+  let agentSecretKind = $state<"good" | "bad">("good");
+
+  async function loadAgentSecrets() {
+    try {
+      agentSecrets = await ConfigService.LinearAgentSecrets();
+    } catch {
+      agentSecrets = null;
+    }
+  }
+
+  async function saveAgentSecret(kind: "client" | "webhook") {
+    const value = agentSecretInput[kind].trim();
+    if (!value) return;
+    agentSecretBusy = kind;
+    agentSecretMsg = "";
+    try {
+      await ConfigService.SetLinearAgentSecret(kind, value);
+      agentSecretInput[kind] = ""; // never leave a live secret in the DOM
+      agentSecretMsg = kind === "client" ? "Client secret stored in the Keychain." : "Webhook secret stored in the Keychain.";
+      agentSecretKind = "good";
+      await loadAgentSecrets();
+    } catch (e) {
+      agentSecretMsg = String(e);
+      agentSecretKind = "bad";
+    } finally {
+      agentSecretBusy = "";
+    }
+  }
 
   async function loadKeyStatus() {
     try {
@@ -915,6 +960,70 @@
                must not ride along on an unrelated form commit (see saveKey). -->
           <HelpText label="saving the Linear key" summary="Save key applies immediately." detail="The main Save button saves settings only. Use Save key to store or replace your Linear credential." />
         </section>
+      {:else if tab === "linearAgent"}
+        <section>
+          {@render head("Linear agent")}
+          <div class="copy mb-3 text-sm text-faint"><HelpText label="Linear agent" summary="Delegate issues to lola in Linear." detail="Installed as a Linear agent, lola can be assigned, delegated to or @mentioned. Each delegation starts a session — no labels needed — and its progress, PR and questions show up in the issue. The issue's team picks the project." /></div>
+          <div class="space-y-2">
+            <label class="flex cursor-pointer items-center gap-2">
+              <Checkbox checked={!!d.linearAgentEnabled} onchange={() => { d.linearAgentEnabled = !d.linearAgentEnabled; }} />
+              <span>Enabled</span>
+            </label>
+            <label class={rowCls}>
+              <span class="text-faint">Client ID</span>
+              <input class="{inputCls} font-mono" type="text" autocomplete="off" spellcheck="false"
+                placeholder="OAuth application client id" bind:value={d.linearAgentClientId} />
+            </label>
+            {#if d.linearAgentEnabled && !(d.linearAgentClientId ?? "").trim()}
+              <div class={rowCls}><span></span><span role="alert" class="text-sm text-warn">A client ID is required while the agent is enabled.</span></div>
+            {/if}
+            <label class={rowCls}>
+              <span class="text-faint">Poll interval</span>
+              <input class="{inputCls} font-mono" type="text" placeholder="15s" bind:value={d.linearAgentPollInterval} />
+            </label>
+            <label class={rowCls}>
+              <span class="text-faint">Callback port</span>
+              <span>
+                <input class="{inputCls} num" type="number" min="0" max="65535" placeholder="8790" bind:value={d.linearAgentRedirectPort} />
+                <span class={hintCls}>Register http://localhost:{d.linearAgentRedirectPort || 8790}/callback on the OAuth app.</span>
+              </span>
+            </label>
+            <label class={rowCls}>
+              <span class="text-faint">Webhook listen</span>
+              <span>
+                <input class="{inputCls} font-mono" type="text" placeholder="127.0.0.1:8789 (optional)" bind:value={d.linearAgentWebhookListen} />
+                <span class={hintCls}>Optional. A signed delivery only makes lola poll now. Restart the daemon after changing it.</span>
+              </span>
+            </label>
+
+            <h4 class="border-t border-edge pt-4 text-ink">Credentials</h4>
+            <div class="rounded-lg border border-edge bg-canvas px-3 py-2.5 text-sm">
+              {#if !agentSecrets}
+                <span class="text-faint">Checking…</span>
+              {:else}
+                <span class="block {agentSecrets.token ? 'text-good' : 'text-warn'}">{agentSecrets.token ? "✓ Installed in Linear (token stored)" : "▲ Not installed — run lola linear-agent login"}</span>
+                <span class="block {agentSecrets.clientSecret ? 'text-good' : 'text-warn'}">{agentSecrets.clientSecret ? "✓ Client secret stored" : "▲ No client secret"}</span>
+                <span class="block {agentSecrets.webhookSecret ? 'text-good' : 'text-faint'}">{agentSecrets.webhookSecret ? "✓ Webhook secret stored" : "· No webhook secret (only needed with a webhook)"}</span>
+              {/if}
+            </div>
+            {#each [["client", "Client secret"], ["webhook", "Webhook secret"]] as [kind, caption] (kind)}
+              {@const k = kind as "client" | "webhook"}
+              <div class={rowCls}>
+                <span class="text-faint">{caption}</span>
+                <span class="flex items-center gap-2">
+                  <input class="{inputCls} font-mono" type="password" autocomplete="off" aria-label={caption}
+                    placeholder="paste to replace" bind:value={agentSecretInput[k]} oninput={() => (agentSecretMsg = "")} />
+                  <Button variant="secondary" disabled={!agentSecretInput[k].trim() || agentSecretBusy !== ""}
+                    loading={agentSecretBusy === k} onclick={() => saveAgentSecret(k)}>Save</Button>
+                </span>
+              </div>
+            {/each}
+            {#if agentSecretMsg}
+              <p class="text-sm {agentSecretKind === 'good' ? 'text-good' : 'text-bad'}">{agentSecretMsg}</p>
+            {/if}
+            <HelpText label="installing the Linear agent" summary="Install from the terminal." detail="Create an OAuth application in Linear (Settings → API), enable it for agents, store its client secret here, then run `lola linear-agent login` — a workspace admin approves the install in the browser. Secrets save immediately; the main Save button saves the other settings." />
+          </div>
+        </section>
       {:else if tab === "project"}
         <section>
           {@render head("Project defaults")}
@@ -929,6 +1038,17 @@
             {@render areaRow("Symlinks", d.symlinks, (v) => { d.symlinks = v; }, ".env\nnode_modules", "one path per line")}
             {@render areaRow("Post-create", d.postCreate, (v) => { d.postCreate = v; }, "npm install", "one command per line")}
             {@render areaRow("Env", d.env, (v) => { d.env = v; }, "KEY=value", "one KEY=value per line")}
+
+            <h4 class="border-t border-edge pt-4 text-ink">Plan approval</h4>
+            <div class={rowCls}>
+              <span class="text-faint">Require plan</span>
+              <span>
+                <label class="flex cursor-pointer items-center gap-2">
+                  <Checkbox checked={!!d.requirePlan} onchange={() => { d.requirePlan = !d.requirePlan; }} aria-label="Require plan" />
+                  <span>Approve a plan before the agent edits files</span>
+                </label>
+              </span>
+            </div>
 
             <h4 class="border-t border-edge pt-4 text-ink">Issue pickup</h4>
             {#if wsLoading}

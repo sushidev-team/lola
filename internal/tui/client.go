@@ -251,6 +251,21 @@ func renderStatus(d *protocol.StatusData) string {
 	if s := spendSummary(d.Usage); s != "" {
 		b.WriteString("\n" + s)
 	}
+	if a := d.LinearAgent; a != nil {
+		state := yesNoStyled(a.Connected, "connected", "not connected")
+		fmt.Fprintf(&b, "\nlinear agent: %s", state)
+		if a.AgentName != "" {
+			fmt.Fprintf(&b, " as %s", a.AgentName)
+		}
+		fmt.Fprintf(&b, "   last poll: %s", fmtAgo(a.LastPoll))
+		if a.Webhook != "" {
+			fmt.Fprintf(&b, "   webhook: %s", a.Webhook)
+		}
+		b.WriteString("\n")
+		if a.LastError != "" {
+			b.WriteString(badText.Render("✗ "+a.LastError) + "\n")
+		}
+	}
 	return b.String()
 }
 

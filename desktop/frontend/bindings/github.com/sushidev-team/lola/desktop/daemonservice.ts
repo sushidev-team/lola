@@ -75,6 +75,15 @@ export function CodeRabbit(session: string): $CancellablePromise<protocol$0.Code
 }
 
 /**
+ * DecidePlan records a human's verdict on a session's submitted plan (the
+ * require_plan gate): approve unlocks coding (or waives the gate before a plan
+ * arrives); approve=false with a comment sends the agent back to re-plan.
+ */
+export function DecidePlan(session: string, approve: boolean, comment: string): $CancellablePromise<void> {
+    return $Call.ByID(75185858, session, approve, comment);
+}
+
+/**
  * Dev moves the project's dev processes ([[project]].dev_commands) onto one
  * session, or stops them. Activating is a MOVE: the daemon first kills the tabs
  * of whichever session of that project held them, so the ports are free before

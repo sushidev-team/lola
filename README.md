@@ -149,6 +149,11 @@ protocol-version mismatch.
 | `lola reload` | Re-read `config.toml`; the daemon diffs projects and starts/stops poll goroutines without disturbing unaffected ones |
 | `lola logs [name] [-f]` | Tail `~/.lola/daemon.log`, optionally filtered to one project (by name); `-f`/`--follow` to stream |
 | `lola report <verb> [args]` | **Run by the coding agent, inside its session**, to publish its own progress: `todo set\|add\|start\|done\|undo\|remove\|clear`, `phase <planning\|investigating\|implementing\|testing\|reviewing\|polishing\|done>`, `progress <0-100\|done/total> [label]`, `blocked <reason>` / `unblocked`, `note <text>`, `check <name> <pass\|fail\|running> [summary]`, `clear`. Every agent's `.lola/prompt.md` teaches it. Shown as the session view's **Report** sidebar, a **Plan** column in the list, a chip on board cards and a `plan:` block in the TUI. Display-only: it is the agent's claim about itself and never drives status, slots, reactions or send-keys. A `check <test\|lint\|build…> pass` claim is **audited**: for claude sessions lola reads the agent's own transcript for a matching command run before the claim (and its exit status), and compares it with the PR's CI — a claim the evidence does not back shows as **Unverified claim** (app) / `⚠ unverified` (TUI). The audit is display-only too. A rejected report exits 1 with the usage error; an unreachable daemon exits 0, so a report never fails the agent's command. `lola report --help` lists every verb. |
+| `lola plan submit [file]` | **Run by the coding agent** in a `require_plan` session: hands in its plan (stdin, or a file) for human approval. See [Plan approval](#plan-approval-require_plan). |
+| `lola plan approve <session>` / `lola plan reject <session> <comment>` | A human's verdict on a submitted plan. `approve` unlocks coding (and, before any plan arrives, waives the gate); `reject` needs a comment, which is typed to the agent so it re-plans. The same decision is offered in the app's session view and in the Linear agent session. |
+| `lola linear-agent login` | Install lola as a **Linear agent** in your workspace (OAuth, `actor=app`): opens the browser, takes the callback on `localhost`, and stores the tokens in the Keychain. See [`[linear_agent]`](#linear_agent-optional). |
+| `lola linear-agent set-secret <client\|webhook>` | Store the OAuth app's client secret or the webhook signing secret in the Keychain (read from stdin, never argv). |
+| `lola linear-agent status` | The agent loop's status (connected, acting as whom, last poll, last error) — also part of `lola status`. |
 
 `lola hook <event>` also exists but is **internal and hidden**: the generated
 Claude Code settings wire the agent's lifecycle hooks (Stop / Notification /
@@ -217,6 +222,7 @@ overrides it.
 | `on_sent_set_label` | string (UUID) | `[[project]].on_sent_set_label` |
 | `blocked_label_id` | string (UUID) | `[[project]].blocked_label_id` |
 | `priority_sort` | string array | `[[project]].priority_sort`. Ultimate default `["priority", "createdAt"]`. See [Priority sort](#priority-sort). |
+| `require_plan` | bool | `[[project]].require_plan` — plan-approval gate. Default `false`. See [Plan approval](#plan-approval-require_plan). |
 
 Inheritance is decided by **key presence, not by value**:
 
@@ -1256,6 +1262,92 @@ first milestone, the listener is compiled **only** into a binary built with the
 `lola_insecure` build tag, which also forces the bind to `localhost` whatever
 this table says and logs a warning on every accept; a release binary contains no
 listener at all and says so in the log when the table is enabled.
+
+### `[linear_agent]` (optional)
+
+**lola as a native Linear agent.** Installed as an OAuth app actor, lola shows up
+in Linear's assignee / delegate pickers and can be @mentioned. Delegating an
+issue to it — or mentioning it on one — opens a Linear **Agent Session**, and
+lola treats a new session as a dispatch trigger alongside the label/state
+filters: **no label setup needed**. The issue's team (and Linear project, when a
+`[[project]]` sets `project_id`) picks which `[[project]]` it spawns into; a
+team-wide project is the fallback, and an issue on a team no project covers gets
+an error activity saying so.
+
+| Key | Type | Description |
+| --- | --- | --- |
+| `enabled` | bool | Gates the whole feature. Default `false`; an absent table means the same. |
+| `client_id` | string | The OAuth app's client id (public, so it may live here). Required when enabled. |
+| `client_secret_keychain` / `client_secret_env` | string | Where the client secret resolves from (Keychain service, then env var). Default service `lola-linear-agent-client-secret`. Used by `login` and token refresh only. |
+| `token_keychain` | string | Keychain service holding the OAuth tokens. Default `lola-linear-agent`. (Env fallback: `LOLA_LINEAR_AGENT_TOKEN`.) |
+| `redirect_port` | int | Loopback port of the login callback. Default `8790`; register `http://localhost:8790/callback` on the OAuth app. |
+| `poll_interval` | duration | How often the loop asks Linear for new sessions and replies. Default `15s`, minimum `5s`. |
+| `webhook_listen` | string | Optional `IP:port` for the webhook doorbell (see below). Empty = off. |
+| `webhook_secret_keychain` / `webhook_secret_env` | string | The webhook signing secret. Default service `lola-linear-agent-webhook-secret`. |
+
+Every key above except the secret sources is also editable in the settings
+screens — the app's **Settings → Linear agent** tab (which also stores the client
+and webhook secrets in the Keychain, write-only) and the TUI's `S` → **Linear**
+tab. The OAuth install itself stays a terminal step (`lola linear-agent login`).
+
+Setup: create an OAuth application in Linear (Settings → API), enable it for
+agents and the *agent session events* webhook category if you use one, register
+the redirect URI, then:
+
+```sh
+lola linear-agent set-secret client   # paste the client secret
+lola linear-agent login               # an admin approves the install
+# config.toml: [linear_agent] enabled = true, client_id = "…"
+lola reload
+```
+
+What lands in the Agent Session, one activity per **change**: an
+acknowledgement with the session and branch; the agent's `lola report` todos as
+the session **plan** checklist; its phase, blocker and note; a plan waiting for
+approval (with **Approve** / **Request changes**); the PR as the session's
+external link; CI, review and merge state; a "waiting for input" elicitation
+when the agent stops for a human; and a final response on merge or close.
+
+**Replies come back.** A human's message in the session is the plan verdict
+while a plan is pending (`approve`, `lgtm`, `yes`, … approve; anything else is
+change feedback), and otherwise is typed into the agent at its next resting
+prompt — through the same idle gate and pane check every lola send uses, never
+mid-turn. A `stop` signal is acknowledged but does not kill the session; that
+stays a decision made in lola.
+
+**Polling, with an optional doorbell.** Linear pushes webhooks only to a public
+HTTPS URL, which a laptop does not have, so the loop polls. If you run a tunnel
+(cloudflared, tailscale funnel) to `webhook_listen`, a delivery whose
+`Linear-Signature` HMAC verifies — and whose timestamp is under a minute old —
+rings the loop so it polls immediately. The payload is never used for routing:
+the poll stays the only source of truth, so a replayed delivery costs one extra
+poll at most. The listener binds at daemon start; changing it needs a restart.
+
+Dispatch respects the concurrency cap: a delegation over the cap is answered
+"Queued" and started when a slot frees. A delegation for an issue lola is
+already working on binds to that session instead of spawning a second one.
+
+### Plan approval (`require_plan`)
+
+With `require_plan = true` (per project, inheritable from `[defaults]`; set it
+in the project form's **Issue pickup** / TUI **Filter** tab, or as a default
+under **Project defaults** in either settings screen) every
+issue-dispatched session **plans before it codes**. Its briefing tells the agent
+to investigate read-only, submit a plan with `lola plan submit`, and stop. lola
+posts the plan — the session view's banner in the app, the TUI detail panel, the
+Linear agent session when there is one — and waits:
+
+- **Approve** (app, `lola plan approve`, or "Approve" in Linear) unlocks coding;
+  lola types the approval into the agent at its next resting prompt.
+- **Request changes** with a comment sends the agent back to planning with that
+  feedback; it resubmits.
+
+Enforcement: for Claude, a `PreToolUse` hook denies the file-edit tools (`Edit`,
+`Write`, `MultiEdit`, `NotebookEdit`) while the plan is pending. It fails
+**open** if the daemon is unreachable (a broken lola must never wedge a turn),
+and it does not cover writes made through `Bash`. Codex and opencode have no
+such hook, so for them the briefing is the gate. Approving before any plan
+arrives waives the gate (the app's "Skip plan").
 
 ## The coding agent
 

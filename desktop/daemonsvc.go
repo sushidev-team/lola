@@ -87,6 +87,14 @@ func (s *DaemonService) Answer(session, text string) error {
 	return call(protocol.Request{Cmd: "answer", Session: session, Text: text}, shortTimeout, nil)
 }
 
+// DecidePlan records a human's verdict on a session's submitted plan (the
+// require_plan gate): approve unlocks coding (or waives the gate before a plan
+// arrives); approve=false with a comment sends the agent back to re-plan.
+func (s *DaemonService) DecidePlan(session string, approve bool, comment string) error {
+	args, _ := json.Marshal(protocol.PlanDecideArgs{Approve: approve, Comment: comment})
+	return call(protocol.Request{Cmd: "planDecide", Session: session, Args: args}, shortTimeout, nil)
+}
+
 // Kill tears a session down. A dirty worktree is kept unless force is set.
 func (s *DaemonService) Kill(session string, force bool) (protocol.KillData, error) {
 	var d protocol.KillData

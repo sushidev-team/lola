@@ -161,7 +161,7 @@ import (
 // it answers with an error naming that rather than an empty code; only a
 // -tags lola_insecure daemon can fill PairBeginData.Key.
 type Request struct {
-	Cmd    string `json:"cmd"` // stop|status|reload|enable|disable|pollOnce|sessions|projects|prs|hookEvent|kill|revive|pane|answer|review|coderabbit|resolveConflict|feedback|diff|switchAgent|dev|devFreePort|open|renameProject|pairBegin|agentReport
+	Cmd    string `json:"cmd"` // stop|status|reload|enable|disable|pollOnce|sessions|projects|prs|hookEvent|kill|revive|pane|answer|review|coderabbit|resolveConflict|feedback|diff|switchAgent|dev|devFreePort|open|renameProject|pairBegin|agentReport|planSubmit|planDecide|planGate
 	Poll   string `json:"poll,omitempty"`
 	DryRun bool   `json:"dryRun,omitempty"`
 
@@ -264,6 +264,10 @@ type StatusData struct {
 	// Usage is today's token usage against the configured budgets, plus
 	// the last machine-load sample when [load] is on. nil on an older daemon.
 	Usage *UsageStatus `json:"usage,omitempty"`
+
+	// LinearAgent is the native Linear agent's loop status, nil when
+	// [linear_agent] is not enabled.
+	LinearAgent *LinearAgentStatus `json:"linearAgent,omitempty"`
 }
 
 // UsageInfo is one session's usage over every claude AND codex run in its
@@ -480,6 +484,14 @@ type SessionInfo struct {
 	// is known yet — no transcript written, or an agent whose logs lola cannot
 	// read (codex, opencode). Absent is "unknown", never zero.
 	Usage *UsageInfo `json:"usage,omitempty"`
+	// Plan is the plan-approval gate ([[project]].require_plan), nil when the
+	// session has none. Unlike Board it is CONTROL state: Gate=submitted means a
+	// human decision is what the agent is waiting for, and the app/TUI offer
+	// approve / request-changes on it (cmd=planDecide).
+	Plan *PlanInfo `json:"plan,omitempty"`
+	// LinearAgentURL is the Linear Agent Session this session is bound to
+	// (delegated / @mentioned in Linear), "" when none. A link a human may open.
+	LinearAgentURL string `json:"linearAgentUrl,omitempty"`
 
 	// Reaction-engine posture (PLAN P3), flattened so the TUI renders reaction
 	// state without importing internal/session or re-deriving it.
@@ -538,6 +550,47 @@ type BoardCheck struct {
 	// transcript). EvidenceNote is lola's own sentence explaining it.
 	Evidence     string `json:"evidence,omitempty"`
 	EvidenceNote string `json:"evidenceNote,omitempty"`
+}
+
+// PlanInfo is a session's plan gate flattened for rendering. Text is the
+// agent's submitted plan (UNTRUSTED agent output — render as text/markdown, never
+// as HTML or a command); Feedback is the human's last rejection comment.
+type PlanInfo struct {
+	Gate        string    `json:"gate"` // planning|submitted|approved
+	Text        string    `json:"text,omitempty"`
+	Round       int       `json:"round,omitempty"`
+	Feedback    string    `json:"feedback,omitempty"`
+	SubmittedAt time.Time `json:"submittedAt,omitzero"`
+}
+
+// PlanSubmitArgs is cmd=planSubmit's payload: the agent's plan (from
+// `lola plan submit`, session = $LOLA_SESSION).
+type PlanSubmitArgs struct {
+	Plan string `json:"plan"`
+}
+
+// PlanDecideArgs is cmd=planDecide's payload: a HUMAN's verdict on the
+// submitted plan. Approve=false with Comment sends the agent back to re-plan.
+type PlanDecideArgs struct {
+	Approve bool   `json:"approve"`
+	Comment string `json:"comment,omitempty"`
+}
+
+// PlanGateData is Response.Data for cmd=planGate — what the PreToolUse hook
+// asks before a file edit. Blocked=true denies the edit with Reason.
+type PlanGateData struct {
+	Blocked bool   `json:"blocked"`
+	Reason  string `json:"reason,omitempty"`
+}
+
+// LinearAgentStatus is the Linear agent loop's health, on cmd=status.
+type LinearAgentStatus struct {
+	Enabled   bool      `json:"enabled"`
+	Connected bool      `json:"connected"` // the last poll reached Linear with a valid token
+	AgentName string    `json:"agentName,omitempty"`
+	LastPoll  time.Time `json:"lastPoll,omitzero"`
+	LastError string    `json:"lastError,omitempty"`
+	Webhook   string    `json:"webhook,omitempty"` // the doorbell's listen address, "" when off
 }
 
 // ReportArgs is the argument payload for cmd=agentReport: the argv typed after

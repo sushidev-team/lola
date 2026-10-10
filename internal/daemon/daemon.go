@@ -18,6 +18,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -436,6 +437,12 @@ type Daemon struct {
 	shutMu   sync.Mutex
 	draining bool
 	connWg   sync.WaitGroup
+
+	// agent is the native Linear agent's loop state ([linear_agent],
+	// linearagent.go); always non-nil, idle while the table is disabled.
+	agent *linearAgentRuntime
+	// agentWebhookSecret overrides the webhook signing-secret lookup (tests).
+	agentWebhookSecret func(config.LinearAgentConfig) (string, error)
 }
 
 func newDaemon(cfg *config.Config, lin linear.API, logger *log.Logger, home string) *Daemon {
@@ -455,6 +462,7 @@ func newDaemon(cfg *config.Config, lin linear.API, logger *log.Logger, home stri
 
 		hookWarned: map[string]bool{},
 		ckptLocks:  map[string]*sync.Mutex{},
+		agent:      newLinearAgentRuntime(),
 	}
 	d.spend = newSpendState(home, func(f string, a ...any) { d.logf("", f, a...) })
 	// Feed the activity ring from every status transition the store commits
@@ -715,6 +723,13 @@ func Run(ctx context.Context) error {
 	// start because a port is taken is strictly worse than one that polls
 	// without a phone attached.
 	d.startRemote(ctx)
+
+	// The native Linear agent ([linear_agent], linearagent.go). The loop always
+	// runs and idles while the table is disabled, so a reload can turn it on;
+	// the optional webhook doorbell binds at startup only.
+	d.wg.Add(1)
+	go d.linearAgentLoop(ctx)
+	d.startLinearAgentWebhook(ctx)
 
 	go d.serve(ctx, ln)
 
@@ -1147,6 +1162,18 @@ func (d *Daemon) adoptNativeSessions(ctx context.Context) {
 				s.InterpretedForAgentState = prev.InterpretedForAgentState
 				s.LastInterpretedAt = prev.LastInterpretedAt
 				s.LastInterpretedHash = prev.LastInterpretedHash
+				// The plan gate is CONTROL state the scan cannot see: dropping it
+				// would unlock edits on an unapproved plan. The Linear agent binding,
+				// its mirror watermark and queued notices ride along for the same
+				// reason (an unbound session is never mirrored or relayed again).
+				s.PlanGate = prev.PlanGate
+				s.Plan = prev.Plan
+				s.PlanRound = prev.PlanRound
+				s.PlanFeedback = prev.PlanFeedback
+				s.PlanSubmittedAt = prev.PlanSubmittedAt
+				s.AgentSessionID = prev.AgentSessionID
+				s.AgentMirror = prev.AgentMirror
+				s.PendingNotices = slices.Clone(prev.PendingNotices)
 				// Flexible-review fire-once guards (PLAN §3.2): carry the four kind-keyed
 				// maps forward, NOT the legacy scalars. prev came through Store.load, which
 				// runs migrateReviewState, so its maps are already authoritative (any old

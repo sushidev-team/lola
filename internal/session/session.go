@@ -40,6 +40,46 @@ const (
 	KindManual Kind = "manual"
 )
 
+// PlanGate is a session's plan-approval state; see Session.PlanGate.
+type PlanGate string
+
+const (
+	PlanNone      PlanGate = ""
+	PlanPlanning  PlanGate = "planning"
+	PlanSubmitted PlanGate = "submitted"
+	PlanApproved  PlanGate = "approved"
+)
+
+// Blocks reports whether the gate still forbids the agent from editing files.
+func (g PlanGate) Blocks() bool { return g == PlanPlanning || g == PlanSubmitted }
+
+// AgentMirror records what has been streamed into a Linear Agent Session.
+type AgentMirror struct {
+	// PromptCursor is the createdAt of the newest human prompt already handled.
+	PromptCursor string `json:"prompt_cursor,omitempty"`
+	// Started marks the acknowledgement activity sent after spawn/bind.
+	Started bool `json:"started,omitempty"`
+	// PlanHash fingerprints the board's todo list last sent as the Linear plan.
+	PlanHash string `json:"plan_hash,omitempty"`
+	// Phase / Blocked / Note are the board fields last sent as thoughts.
+	Phase   string `json:"phase,omitempty"`
+	Blocked string `json:"blocked,omitempty"`
+	Note    string `json:"note,omitempty"`
+	// PRURL is the PR link last set as the session's external URL.
+	PRURL string `json:"pr_url,omitempty"`
+	// Delivery is the delivery state last reported (CI / review / merge).
+	Delivery string `json:"delivery,omitempty"`
+	// NeedsYou is whether the "the agent is waiting on you" elicitation is out.
+	NeedsYou bool `json:"needs_you,omitempty"`
+	// PlanRound is the plan submission last posted for approval, and
+	// PlanPostedAt when it was posted: only a human prompt written AFTER that
+	// moment can be the verdict on it.
+	PlanRound    int       `json:"plan_round,omitempty"`
+	PlanPostedAt time.Time `json:"plan_posted_at,omitzero"`
+	// Done marks the final response (merged/closed/gone) as sent.
+	Done bool `json:"done,omitempty"`
+}
+
 // DevForward is one dev server republished on the local network: the address a
 // phone opens, and the loopback address it publishes. Both, because the
 // forward's port is kernel-allocated and identifies nothing — 8000 is the app
@@ -246,6 +286,35 @@ type Session struct {
 	// read, so sessionsData is its one reader. Nothing in the control loop
 	// (axes, slots, reactions, write-back, send-keys gates) may consult it.
 	Board board.Board `json:"board,omitzero"`
+
+	// AgentSessionID binds this session to a Linear Agent Session (the native
+	// agent integration, internal/daemon/linearagent.go): set when the session
+	// was dispatched by a delegation/@mention, or when one arrived for an issue
+	// already running here. "" = no Linear agent session; nothing is mirrored.
+	AgentSessionID string `json:"agent_session_id,omitempty"`
+	// AgentMirror is what has already been streamed into that Agent Session, so
+	// a 15s loop emits an activity per CHANGE rather than per cycle, across
+	// daemon restarts. Bookkeeping only — never read by the control loop.
+	AgentMirror AgentMirror `json:"agent_mirror,omitzero"`
+
+	// PlanGate is the plan-approval gate ([[project]].require_plan): "" (no
+	// gate), planning (the agent must submit a plan), submitted (a plan waits
+	// for a human), approved (coding allowed). It is CONTROL state, set only by
+	// the runtime at spawn and by the plan handlers (internal/daemon/plangate.go)
+	// — never by anything the agent's own report claims.
+	PlanGate PlanGate `json:"plan_gate,omitempty"`
+	// Plan is the last submitted plan text (UNTRUSTED agent output, shown to a
+	// human, never fed back as control). PlanRound counts submissions;
+	// PlanFeedback is the human's last rejection comment.
+	Plan            string    `json:"plan,omitempty"`
+	PlanRound       int       `json:"plan_round,omitempty"`
+	PlanFeedback    string    `json:"plan_feedback,omitempty"`
+	PlanSubmittedAt time.Time `json:"plan_submitted_at,omitzero"`
+	// PendingNotices are messages waiting to be TYPED into the agent once it
+	// rests at its prompt: lola's own plan-gate verdicts and humans' replies
+	// relayed from the Linear agent session. Delivered oldest first, one per
+	// flush, through the hand-off gate + pane proof (flushAgentNotices).
+	PendingNotices []string `json:"pending_notices,omitempty"`
 
 	// RemovedLabels are the match-label UUIDs the post-spawn label flip
 	// actually stripped from this issue (the trigger labels it carried at

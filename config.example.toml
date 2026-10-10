@@ -81,6 +81,10 @@ global_cap = 4
 # "createdAt" (oldest first). The order IS the value. An unknown key is
 # rejected rather than silently ignored.
 # priority_sort = ["priority", "createdAt"]
+# require_plan: the plan-approval gate. A gated session must submit a plan
+# (`lola plan submit`) and wait for a human to approve it — in the app, with
+# `lola plan approve`, or in the Linear agent session — before it may edit files.
+# require_plan = false
 #
 # [defaults.env]
 # APP_ENV = "local"
@@ -485,6 +489,29 @@ endpoint = "https://api.linear.app/graphql"
 # ---------------------------------------------------------------------------
 # [ui]
 # theme = "catppuccin-mocha"   # catppuccin-latte | catppuccin-frappe | catppuccin-macchiato | catppuccin-mocha
+
+# ---------------------------------------------------------------------------
+# [linear_agent] — lola as a NATIVE LINEAR AGENT. OPTIONAL and DEFAULT OFF.
+#
+# Installed as an OAuth app actor, lola can be assigned / delegated to /
+# @mentioned in Linear. Each delegation opens an Agent Session, which lola treats
+# as a dispatch trigger (no label setup: the issue's team picks the [[project]]),
+# then streams progress into it and relays replies back to the agent.
+#
+# No secret lives here. Store them in the Keychain:
+#   lola linear-agent set-secret client    # the OAuth app's client secret
+#   lola linear-agent login                # installs the app, stores the tokens
+# ---------------------------------------------------------------------------
+# [linear_agent]
+# enabled = true
+# client_id = "your_oauth_app_client_id"
+# # Register http://localhost:<redirect_port>/callback on the OAuth app.
+# redirect_port = 8790
+# poll_interval = "15s"
+# # Optional webhook DOORBELL for operators who run a tunnel: a signed delivery
+# # only makes the loop poll now; it is never trusted as data.
+# # webhook_listen = "127.0.0.1:8789"
+# # (lola linear-agent set-secret webhook)
 
 # ---------------------------------------------------------------------------
 # [remote] — the phone listener. OPTIONAL and DEFAULT OFF, and the default is

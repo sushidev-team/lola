@@ -14,6 +14,7 @@
   import SessionsEmpty from "./SessionsEmpty.svelte";
   import { chipRelevant } from "$lib/board";
   import UsageMark from "./UsageMark.svelte";
+  import { planStage, STAGE_CHIP, STAGE_DOT } from "$lib/stage";
 
   let { dense = false }: { dense?: boolean } = $props();
 
@@ -196,6 +197,15 @@
                   resolveBranch={store.defaultBranchFor(s.project)}
                   onResolve={() => store.resolveConflict(s.id)}
                 />
+              {:else if planStage(s.plan?.gate)}
+                {@const ps = planStage(s.plan?.gate)!}
+                <span
+                  class="inline-flex items-center gap-1.5 rounded-full px-2 py-[1px] text-sm whitespace-nowrap {STAGE_CHIP[ps.tone]}"
+                  title={ps.hint}
+                >
+                  <span class="h-1.5 w-1.5 shrink-0 rounded-full {STAGE_DOT[ps.tone]}" aria-hidden="true"></span>
+                  {ps.label}
+                </span>
               {:else if chipRelevant(s.board, s.prNumber)}
                 <BoardChip session={s} />
               {/if}

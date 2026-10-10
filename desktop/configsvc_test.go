@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/protocol"
@@ -895,5 +896,87 @@ func TestConnectCodeNeedsADaemon(t *testing.T) {
 	t.Setenv("LOLA_HOME", t.TempDir()) // no socket in it
 	if _, err := (&ConfigService{}).ConnectCode(); err == nil {
 		t.Fatal("expected a failure with no daemon")
+	}
+}
+
+// [defaults].require_plan and the [linear_agent] keys round-trip through the
+// settings form; an untouched table is never grown, and the secret SOURCES the
+// file names survive a save the form knows nothing about.
+func TestSaveSettingsRequirePlanAndLinearAgent(t *testing.T) {
+	path := writeTestConfig(t, minimalConfig)
+	s := &ConfigService{}
+	dto, err := s.GetSettings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SaveSettings(dto); err != nil {
+		t.Fatal(err)
+	}
+	if data, _ := os.ReadFile(path); strings.Contains(string(data), "linear_agent") || strings.Contains(string(data), "require_plan") {
+		t.Fatalf("an untouched form must not grow keys:\n%s", data)
+	}
+
+	dto.RequirePlan = true
+	dto.LinearAgentEnabled = true
+	dto.LinearAgentClientID = " cid "
+	dto.LinearAgentPollInterval = "30s"
+	if err := s.SaveSettings(dto); err != nil {
+		t.Fatal(err)
+	}
+	cfg, _, err := loadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := cfg.LinearAgent
+	if !cfg.Defaults.RequirePlan || !a.Enabled || a.ClientID != "cid" || a.PollInterval != 30*time.Second ||
+		a.TokenKeychain != config.DefaultLinearAgentTokenKeychain || a.RedirectPort != config.DefaultLinearAgentRedirectPort {
+		t.Fatalf("saved = %+v / require_plan %v", a, cfg.Defaults.RequirePlan)
+	}
+
+	// A hand-written secret source is preserved by the next form save.
+	writeTestConfig(t, minimalConfig+"\n[linear_agent]\nenabled = true\nclient_id = \"c\"\nclient_secret_env = \"MY_SECRET\"\nclient_secret_keychain = \"\"\n")
+	dto, _ = s.GetSettings()
+	if err := s.SaveSettings(dto); err != nil {
+		t.Fatal(err)
+	}
+	cfg, _, _ = loadConfig()
+	if cfg.LinearAgent.ClientSecretEnv != "MY_SECRET" || cfg.LinearAgent.ClientSecretKeychain != "" {
+		t.Fatalf("secret source changed: %+v", cfg.LinearAgent)
+	}
+	if err := s.SetLinearAgentSecret("bogus", "x"); err == nil {
+		t.Fatal("an unknown secret kind must be refused")
+	}
+}
+
+// require_plan is inheritable in the project form, and a save keeps the
+// inherit bits the form does not surface.
+func TestSaveProjectRequirePlanInheritance(t *testing.T) {
+	path := writeTestConfig(t, minimalConfig+"require_plan = true\n\n[[project]]\nname = \"p\"\npath = \"/tmp/p\"\nreview = []\n")
+	s := &ConfigService{}
+	dto, err := s.GetProject("p")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !dto.RequirePlan || !dto.Inherits.RequirePlan {
+		t.Fatalf("inherited = %v / bit %v", dto.RequirePlan, dto.Inherits.RequirePlan)
+	}
+	if err := s.SaveProject(dto); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(path)
+	if strings.Count(string(data), "require_plan") != 1 {
+		t.Fatalf("an inherited require_plan must not be frozen into the project:\n%s", data)
+	}
+	if !strings.Contains(string(data), "review = []") {
+		t.Fatalf("an explicit review override must survive a form save:\n%s", data)
+	}
+
+	dto.RequirePlan, dto.Inherits.RequirePlan = false, false
+	if err := s.SaveProject(dto); err != nil {
+		t.Fatal(err)
+	}
+	cfg, _, _ := loadConfig()
+	if p := cfg.ProjectByName("p"); p.RequirePlan || p.Inherits.RequirePlan {
+		t.Fatalf("override not saved: %v / %v", p.RequirePlan, p.Inherits.RequirePlan)
 	}
 }

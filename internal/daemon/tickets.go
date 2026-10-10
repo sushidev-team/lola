@@ -211,6 +211,18 @@ func ticketPriorityRank(p float64) int {
 // A non-polling project skips seen/labels/write-back — the in-flight claim plus
 // the live session are its only guard (and a re-pickup after teardown is fine).
 func (d *Daemon) handleOpenTicket(ctx context.Context, a protocol.OpenTicketArgs) (protocol.OpenData, error) {
+	return d.openTicket(ctx, a, nil)
+}
+
+// errCapped is what an admit check returns when the concurrency cap is full.
+var errCapped = errors.New("at the concurrency cap")
+
+// openTicket is handleOpenTicket with an optional admit check, run INSIDE the
+// dispatch critical section — after the project's tick mutex and the in-flight
+// claim, immediately before the spawn. The Linear agent loop passes a budget
+// check there: checked any earlier, a poll tick spawning under the same mutex
+// could fill the last slot between the check and this spawn.
+func (d *Daemon) openTicket(ctx context.Context, a protocol.OpenTicketArgs, admit func() error) (protocol.OpenData, error) {
 	project := strings.TrimSpace(a.Project)
 	identifier := strings.TrimSpace(a.Identifier)
 	uuid := strings.TrimSpace(a.UUID)
@@ -279,6 +291,13 @@ func (d *Daemon) handleOpenTicket(ctx context.Context, a protocol.OpenTicketArgs
 	// (1) Atomic in-flight claim.
 	if !d.inflight.Claim(uuid, identifier) {
 		return protocol.OpenData{}, fmt.Errorf("%s is already being worked on — check sessions", identifier)
+	}
+
+	if admit != nil {
+		if err := admit(); err != nil {
+			d.inflight.Remove(uuid)
+			return protocol.OpenData{}, err
+		}
 	}
 
 	// (2) Persist seen BEFORE the spawn for a polling project (crash guard),
