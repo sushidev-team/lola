@@ -3,6 +3,7 @@ import { render, screen, cleanup } from "@testing-library/svelte";
 import BoardChip from "./BoardChip.svelte";
 import BoardPanel from "./BoardPanel.svelte";
 import AgentActivity from "./AgentActivity.svelte";
+import ClaimFlag from "./ClaimFlag.svelte";
 import type { SessionInfo } from "$lib/store.svelte";
 import type { BoardInfo } from "$lib/board";
 import { boardStale, hasChip, chipRelevant, progressText, BOARD_STALE_MS } from "$lib/board";
@@ -141,5 +142,39 @@ describe("BoardPanel motion", () => {
     const old = { ...plan(), updatedAt: new Date(Date.now() - 60 * 60 * 1000).toISOString() };
     const { container } = render(BoardPanel, { session: sess(old, { agentState: "working" }) });
     expect(container.querySelector(".breathe, .ripple, .shimmer")).toBeNull();
+  });
+});
+
+describe("claim audit", () => {
+  beforeEach(() => cleanup());
+
+  const unverified = () =>
+    board({
+      checks: [
+        {
+          name: "tests",
+          state: "pass",
+          evidence: "unverified",
+          evidenceNote: "no test command ran before the claim",
+        },
+      ],
+      mismatches: ['"tests" claimed pass, but no test command ran before the claim'],
+    });
+
+  it("flags a row whose claim the evidence does not back, even with a PR open", () => {
+    render(ClaimFlag, { session: sess(unverified(), { prNumber: 7 }) });
+    expect(screen.getByText("Unverified claim")).toBeInTheDocument();
+  });
+
+  it("stays silent when nothing disagrees", () => {
+    const { container } = render(ClaimFlag, { session: sess(board({ checks: [{ name: "tests", state: "pass" }] })) });
+    expect(container.textContent?.trim()).toBe("");
+  });
+
+  it("names the mismatch and tags the check in the sidebar", () => {
+    render(BoardPanel, { session: sess(unverified()) });
+    expect(screen.getByText("Claim not backed by evidence")).toBeInTheDocument();
+    expect(screen.getByText('"tests" claimed pass, but no test command ran before the claim')).toBeInTheDocument();
+    expect(screen.getByText("· no run found")).toBeInTheDocument();
   });
 });

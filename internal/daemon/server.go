@@ -640,7 +640,7 @@ func (d *Daemon) sessionsData() protocol.SessionsData {
 			si.HeadlineAgo = formatAge(now.Sub(at))
 		}
 		// The agent's own report — display-only, like the overlay above.
-		si.Board = boardInfo(s.Board, now)
+		si.Board = boardInfo(s.Board, auditClaims(s), now)
 		for _, o := range s.Overlaps {
 			si.Overlaps = append(si.Overlaps, protocol.SessionOverlap{
 				Session: o.Session, Issue: o.Issue, Files: slices.Clone(o.Files), More: o.More,

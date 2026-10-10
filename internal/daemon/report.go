@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/sushidev-team/lola/internal/board"
+	"github.com/sushidev-team/lola/internal/claimaudit"
 	"github.com/sushidev-team/lola/internal/protocol"
 	"github.com/sushidev-team/lola/internal/session"
 )
@@ -101,8 +102,9 @@ func (d *Daemon) handleAgentReport(req protocol.Request) protocol.Response {
 }
 
 // boardInfo flattens a session's board for the wire, nil when nothing was
-// reported.
-func boardInfo(b board.Board, now time.Time) *protocol.BoardInfo {
+// reported. audit is the board's claim audit (claimaudit.go), carried beside
+// the claims it judges — display-only, like everything else here.
+func boardInfo(b board.Board, audit claimaudit.Result, now time.Time) *protocol.BoardInfo {
 	if b.Empty() {
 		return nil
 	}
@@ -128,7 +130,12 @@ func boardInfo(b board.Board, now time.Time) *protocol.BoardInfo {
 		bi.Todos = append(bi.Todos, protocol.BoardTodo{Text: t.Text, State: string(t.State)})
 	}
 	for _, c := range b.Checks {
-		bi.Checks = append(bi.Checks, protocol.BoardCheck{Name: c.Name, State: string(c.State), Summary: c.Summary})
+		bc := protocol.BoardCheck{Name: c.Name, State: string(c.State), Summary: c.Summary}
+		if fd, ok := audit.Checks[c.Name]; ok {
+			bc.Evidence, bc.EvidenceNote = string(fd.Verdict), fd.Note
+		}
+		bi.Checks = append(bi.Checks, bc)
 	}
+	bi.Mismatches = audit.Warnings
 	return bi
 }

@@ -23,6 +23,15 @@ func boardStale(b *protocol.BoardInfo) bool {
 	return b.UpdatedAt.IsZero() || time.Since(b.UpdatedAt) > boardStaleAfter
 }
 
+// evidenceTag is a check's claim-audit verdict as a word; "" (not audited, or
+// a verdict from a newer daemon) adds nothing. Mirrors the app's EVIDENCE_TAG.
+var evidenceTag = map[string]string{
+	"verified":     "verified",
+	"ran":          "ran",
+	"unverified":   "no run found",
+	"contradicted": "last run failed",
+}
+
 // boardMeter draws a cells-wide progress bar from a 0–100 percentage.
 func boardMeter(pct, cells int) string {
 	pct = max(0, min(100, pct))
@@ -40,6 +49,11 @@ func boardChip(si protocol.SessionInfo) string {
 	}
 	if b.Blocked != "" {
 		return warnText.Render("⏸ blocked")
+	}
+	// The claim audit outranks the plan: a "tests pass" the evidence does not
+	// back is the next thing a human should look at (internal/claimaudit).
+	if len(b.Mismatches) > 0 {
+		return warnText.Render("⚠ unverified")
 	}
 	if !b.HasProgress {
 		if b.Phase != "" {
@@ -95,6 +109,11 @@ func boardLines(si protocol.SessionInfo, w int) []string {
 	if b.Blocked != "" {
 		out = append(out, warnText.Render(truncPlain("  ⏸ blocked: "+b.Blocked, w)))
 	}
+	// lola's own words (the claim audit), never faded with the report: the
+	// evidence is current even when the claim is old.
+	for _, m := range b.Mismatches {
+		out = append(out, warnText.Render(truncPlain("  ⚠ "+m, w)))
+	}
 	for _, t := range b.Todos {
 		var glyph string
 		switch t.State {
@@ -122,6 +141,9 @@ func boardLines(si protocol.SessionInfo, w int) []string {
 			p := c.Name
 			if c.Summary != "" {
 				p += " " + c.Summary
+			}
+			if tag := evidenceTag[c.Evidence]; tag != "" {
+				p += " (" + tag + ")"
 			}
 			switch c.State {
 			case "pass":

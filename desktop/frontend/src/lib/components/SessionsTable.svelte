@@ -8,6 +8,7 @@
   import AgentGlyph from "./AgentGlyph.svelte";
   import StageChip from "./StageChip.svelte";
   import BoardChip from "./BoardChip.svelte";
+  import ClaimFlag from "./ClaimFlag.svelte";
   import CrossSessionChips from "./CrossSessionChips.svelte";
   import Button from "./Button.svelte";
   import SessionsEmpty from "./SessionsEmpty.svelte";
@@ -193,6 +194,7 @@
               {:else if chipRelevant(s.board, s.prNumber)}
                 <BoardChip session={s} />
               {/if}
+              <ClaimFlag session={s} />
               <CrossSessionChips session={s} />
               {#if needsYou}
                 <span

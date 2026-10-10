@@ -9,6 +9,15 @@ export interface BoardCheck {
     "name": string;
     "state": string;
     "summary"?: string;
+
+    /**
+     * Evidence is the claim audit's verdict on a PASS claim: verified | ran |
+     * unverified | contradicted; "" when the check was not audited (not a
+     * pass, a name naming no test/lint/build category, or no readable
+     * transcript). EvidenceNote is lola's own sentence explaining it.
+     */
+    "evidence"?: string;
+    "evidenceNote"?: string;
 }
 
 /**
@@ -52,6 +61,14 @@ export interface BoardInfo {
      * formatted age of UpdatedAt, e.g. "2m"
      */
     "updatedAgo"?: string;
+
+    /**
+     * Mismatches are lola's own one-line warnings where a claim above
+     * disagrees with the facts (internal/claimaudit): a "tests pass" check with
+     * no test command in the agent's transcript, a failing last run, a failing
+     * PR CI. Display-only; empty when nothing disagrees or nothing is known.
+     */
+    "mismatches"?: string[] | null;
 }
 
 /**

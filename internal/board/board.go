@@ -91,6 +91,10 @@ type Check struct {
 	Name    string     `json:"name"`
 	State   CheckState `json:"state"`
 	Summary string     `json:"summary,omitempty"`
+	// At is when this check was last reported. internal/claimaudit compares a
+	// pass claim with the runs the transcript shows BEFORE it; zero (a record
+	// written before the field existed) means "any run counts".
+	At time.Time `json:"at,omitzero"`
 }
 
 // Board is a session's self-report. The zero value is "nothing reported".
@@ -233,7 +237,7 @@ func Apply(b Board, argv []string, now time.Time) (Board, error) {
 			return b, usage("note needs text")
 		}
 	case "check":
-		err = nb.applyCheck(args)
+		err = nb.applyCheck(args, now)
 	case "clear", "reset":
 		nb = Board{}
 	default:
@@ -418,7 +422,7 @@ func parsePercent(v string) (int, error) {
 
 func clampPct(n int) int { return max(0, min(100, n)) }
 
-func (b *Board) applyCheck(args []string) error {
+func (b *Board) applyCheck(args []string, now time.Time) error {
 	if len(args) >= 1 && strings.EqualFold(strings.TrimSpace(args[0]), "clear") {
 		if len(args) == 1 {
 			b.Checks = nil
@@ -445,7 +449,7 @@ func (b *Board) applyCheck(args []string) error {
 	if name == "" {
 		return usage("check needs a name")
 	}
-	c := Check{Name: name, State: st, Summary: clip(joinArgs(args[2:]), MaxTextRunes)}
+	c := Check{Name: name, State: st, Summary: clip(joinArgs(args[2:]), MaxTextRunes), At: now}
 	if i := slices.IndexFunc(b.Checks, func(x Check) bool { return strings.EqualFold(x.Name, name) }); i >= 0 {
 		b.Checks[i] = c
 		return nil

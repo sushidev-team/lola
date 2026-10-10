@@ -162,6 +162,12 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   every string and list), and the `Board` the session store holds. The verbs
   are parsed DAEMON-side (`cmd=agentReport`, `internal/daemon/report.go`), so
   the trust boundary is the daemon, not whichever lola binary a pane runs.
+- `internal/claimaudit` — the board's deterministic second opinion (stdlib +
+  `board`): an INCREMENTAL scan of Claude Code's JSONL transcript for the shell
+  commands it actually ran, classified as test / lint / build runners and paired
+  with their tool result's `is_error`, then compared with each `check <name>
+  pass` claim (a run before the claim? did the last one fail?) and with the PR's
+  CI rollup. See the board invariant below — the result is display-only.
 - `internal/statusagent` — the OPT-IN status interpreter: one bounded
   `claude -p` per interpretation (default `--model sonnet`) judging what an
   agent is ACTUALLY doing from pane/events/PR context. Output is parsed,
@@ -1086,6 +1092,25 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   nor triage. `agentReport` is in remote's `deniedCommands` like `hookEvent`,
   rate-limited per session, and its CLI exits 0 when the daemon is unreachable
   so a report never fails the command an agent chained it onto.
+  - **The claim AUDIT is display-only too** (`internal/daemon/claimaudit.go`,
+    SUSHI-622). The observer advances `claimaudit.Scanner` once per cycle for
+    claude sessions whose board makes a `check … pass` claim naming a test /
+    lint / build category; `sessionsData` judges from that cache (no I/O) and
+    ships `BoardCheck.evidence` + `BoardInfo.mismatches` — the "Unverified
+    claim" chip in the app, `⚠ unverified` in the TUI. Nothing else reads it.
+    Rules: only command lines and `is_error` are decoded, nothing from the
+    transcript is ever rendered; a warning needs a FULLY read transcript (an
+    incomplete scan, a codex/opencode session, an unknown check name all audit
+    to nothing); and a run counts as passed/failed only when the line's exit
+    status is its own — after a pipe, `;`, `||` or `&` it is merely "ran",
+    which is why the agent briefing asks for unpiped runs. The line's
+    STRUCTURE decides what its status proves (`claimaudit.Hit`): a zero exit of
+    an `&&` chain passes every link, a failure is pinned on a runner only when
+    nothing before or after it could have failed instead, anything after an
+    `||` is not even "ran" (it may never have started), and a here-doc body is
+    text, not commands. A claim whose deciding run fell out of the bounded
+    ledger abstains rather than reading as "nothing ran". A subagent's runs
+    live in its own transcript and are not seen.
 - **Untrusted output stays out of the control loop.** `brain` summaries and
   `review` findings are derived from attacker-influenceable context (PR diffs,
   CI logs, pane text). They may go to a human (notify + Linear comment) but the
