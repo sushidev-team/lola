@@ -18,9 +18,9 @@ export const AGENT = "agent";
  * it is not a tmux session, so it is never discovered and never closed. */
 export const DIFF = "diff";
 
-/** The checkpoints tab's key: the session's per-turn worktree snapshots, where
- * a human reads what one turn changed and restores or forks from it
- * (CheckpointsView). A view sentinel like DIFF. */
+/** The checkpoint diff's key: what the turn behind the checkpoint selected in
+ * the sidebar changed (CheckpointsView). A view sentinel like DIFF, but it has
+ * no button in the tab strip — the sidebar's Checkpoints list opens it. */
 export const CHECKPOINTS = "checkpoints";
 
 /** A view tab (DIFF, CHECKPOINTS) is not a terminal: never discovered from

@@ -1372,9 +1372,11 @@ nothing, and a `start` baseline is recorded just before the agent launches, so
 even turn 1 can be undone (claude, codex and opencode alike). Each session keeps its newest 100; the refs are deleted when the
 session is torn down with its worktree.
 
-In the app, the **Checkpoints** tab (or **Checkpoints** in the session menu)
-lists them newest first; pick one to read what that turn changed (the previous
-checkpoint against it). Then:
+In the app they are a tab of the session sidebar, beside the agent's report
+(**Info** toggles the sidebar; **Checkpoints** in the session menu opens that
+tab). The list runs newest first; pick one to read what that turn changed (the
+previous checkpoint against it) in the main pane — **Close** or the **Agent**
+tab goes back to the terminal. Then:
 
 - **Restore…** puts the worktree's FILES back to that checkpoint. HEAD and the
   branch stay put — commits made since stay in history and show up as

@@ -8,6 +8,8 @@ import type { ProjectInfo } from "@bindings/internal/protocol";
 import { nav } from "$lib/nav.svelte";
 import { sessionMenu } from "$lib/sessionmenu.svelte";
 import { confirm } from "$lib/confirm.svelte";
+import { sidePanel, REPORT, CHECKPOINTS_TAB } from "$lib/sidepanel.svelte";
+import { terms, AGENT } from "$lib/terms.svelte";
 
 vi.mock("@xterm/xterm", () => ({
   Terminal: class {
@@ -112,6 +114,18 @@ describe("SessionMenu", () => {
     sessionMenu.request = { id: "acme-eng-1", x: 10, y: 10 };
     render(SessionMenu);
     expect(screen.getByRole("menuitem", { name: "Add shell" })).toBeDisabled();
+  });
+
+  it("opens checkpoints in the sidebar, not as a terminal-strip tab", async () => {
+    sidePanel.select(REPORT);
+    if (!sidePanel.hidden) sidePanel.toggle();
+    sessionMenu.request = { id: "acme-eng-1", x: 10, y: 10 };
+    render(SessionMenu);
+    await fireEvent.click(screen.getByRole("menuitem", { name: "Checkpoints" }));
+    expect(nav.selectedId).toBe("acme-eng-1");
+    expect(sidePanel.tab).toBe(CHECKPOINTS_TAB);
+    expect(sidePanel.hidden).toBe(false);
+    expect(terms.activeTab("acme-eng-1")).toBe(AGENT);
   });
 
   it("shows open PR and revive only when the session state warrants them", () => {
