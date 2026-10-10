@@ -138,12 +138,25 @@ func (g Git) Snapshot(ctx context.Context, dir string) (tree, head string, err e
 	tmpPath := tmp.Name()
 	defer os.Remove(tmpPath)
 	seeded := false
+	var srcMod time.Time
 	if src, err := os.Open(idx); err == nil {
 		_, cerr := io.Copy(tmp, src)
+		if fi, err := src.Stat(); err == nil {
+			srcMod = fi.ModTime()
+		}
 		src.Close()
 		seeded = cerr == nil
 	}
 	tmp.Close()
+	if seeded && !srcMod.IsZero() {
+		// The copy must keep the index's mtime. git's racy-entry check re-hashes
+		// any file modified no earlier than the index was written; a fresh mtime
+		// on the copy defeats it, so a same-size edit made in the same second as
+		// the last index write would be trusted by stat and left out of the tree.
+		if err := os.Chtimes(tmpPath, srcMod, srcMod); err != nil {
+			return "", "", fmt.Errorf("checkpoint: temp index: %w", err)
+		}
+	}
 	if !seeded {
 		// An empty file is not a valid index; a missing one is an empty index.
 		os.Remove(tmpPath)

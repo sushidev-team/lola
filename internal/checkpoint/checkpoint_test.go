@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 )
 
 // repo builds a real repository with one commit and .lola/ excluded the way the
@@ -66,6 +67,37 @@ func read(t *testing.T, dir, name string) string {
 		return "<missing>"
 	}
 	return string(b)
+}
+
+// TestSnapshotSeesARacyEdit pins the racy-git case behind a flaky checkpoint:
+// a same-size edit whose stat matches the index entry, made in the same second
+// the index was written. git re-hashes such an entry only because the index's
+// mtime is not newer than the file's, so the temp index copy must keep that
+// mtime. Timestamps are pinned and ctime is ignored, so this fails every time
+// the copy gets a fresh mtime, not one run in ten.
+func TestSnapshotSeesARacyEdit(t *testing.T) {
+	dir, git := repo(t)
+	git("config", "core.trustctime", "false")
+	at := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	touch := func(name string) {
+		t.Helper()
+		if err := os.Chtimes(filepath.Join(dir, name), at, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	touch("a.txt")
+	git("add", "a.txt") // the index entry records a.txt at `at`, size 3
+	write(t, dir, "a.txt", "a2\n")
+	touch("a.txt")
+	touch(".git/index")
+
+	tree, _, err := Git{}.Snapshot(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := git("cat-file", "-p", tree+":a.txt"); got != "a2" {
+		t.Fatalf("snapshot a.txt = %q, want the edited %q", got, "a2")
+	}
 }
 
 func TestRecordDedupesAndListsInOrder(t *testing.T) {
