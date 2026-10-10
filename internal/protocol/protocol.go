@@ -390,6 +390,11 @@ type BoardInfo struct {
 	Checks          []BoardCheck `json:"checks,omitempty"`
 	UpdatedAt       time.Time    `json:"updatedAt,omitzero"`
 	UpdatedAgo      string       `json:"updatedAgo,omitempty"` // formatted age of UpdatedAt, e.g. "2m"
+	// Mismatches are lola's own one-line warnings where a claim above
+	// disagrees with the facts (internal/claimaudit): a "tests pass" check with
+	// no test command in the agent's transcript, a failing last run, a failing
+	// PR CI. Display-only; empty when nothing disagrees or nothing is known.
+	Mismatches []string `json:"mismatches,omitempty"`
 }
 
 // BoardTodo is one plan item: State is pending|active|done.
@@ -404,6 +409,12 @@ type BoardCheck struct {
 	Name    string `json:"name"`
 	State   string `json:"state"`
 	Summary string `json:"summary,omitempty"`
+	// Evidence is the claim audit's verdict on a PASS claim: verified | ran |
+	// unverified | contradicted; "" when the check was not audited (not a
+	// pass, a name naming no test/lint/build category, or no readable
+	// transcript). EvidenceNote is lola's own sentence explaining it.
+	Evidence     string `json:"evidence,omitempty"`
+	EvidenceNote string `json:"evidenceNote,omitempty"`
 }
 
 // ReportArgs is the argument payload for cmd=agentReport: the argv typed after

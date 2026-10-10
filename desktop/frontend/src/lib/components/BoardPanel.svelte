@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { SessionInfo } from "$lib/store.svelte";
-  import { boardStale, phaseChip, phaseDot, progressText, checkKind, CHECK_WORD, agoShort } from "$lib/board";
+  import { boardStale, phaseChip, phaseDot, progressText, checkKind, CHECK_WORD, agoShort, EVIDENCE_TAG } from "$lib/board";
   import BoardMarker from "./BoardMarker.svelte";
 
   // The session view's sidebar: the agent's whole self-report — phase, progress,
@@ -75,6 +75,19 @@
             </div>
             <div class="selectable mt-0.5 break-words text-ink">{b.blocked}</div>
           </div>
+        </div>
+      {/if}
+
+      {#if b.mismatches?.length}
+        <!-- lola's OWN words, not the agent's: the claim audit found a claim
+             below that the evidence does not back (no matching command in the
+             transcript, a failing last run, failing CI). Warn-yellow, not the
+             blocker's orange: it is a doubt to check, not a request to act. -->
+        <div class="flex flex-col gap-1 rounded-lg border border-warn/40 bg-warn/10 px-2.5 py-2.5" role="status">
+          <span class="font-medium text-warn">Claim not backed by evidence</span>
+          {#each b.mismatches as m, i (i)}
+            <div class="selectable text-sm break-words text-ink">{m}</div>
+          {/each}
         </div>
       {/if}
 
@@ -171,6 +184,13 @@
                           ? 'text-bad'
                           : 'text-info'}">{CHECK_WORD[kind]}</span
                     >
+                    {#if c.evidence && EVIDENCE_TAG[c.evidence]}
+                      <span
+                        class="shrink-0 text-sm {EVIDENCE_TAG[c.evidence].cls}"
+                        title={c.evidenceNote ?? ""}
+                        >· {EVIDENCE_TAG[c.evidence].word}</span
+                      >
+                    {/if}
                   </div>
                   {#if c.summary}
                     <div class="selectable num mt-0.5 text-sm break-words text-faint">{c.summary}</div>

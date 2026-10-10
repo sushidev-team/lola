@@ -6,6 +6,7 @@
   import { KANBAN_COLUMNS, attention, displayFor, displayLabel, displayText } from "$lib/theme";
   import PrBadge from "./PrBadge.svelte";
   import BoardChip from "./BoardChip.svelte";
+  import ClaimFlag from "./ClaimFlag.svelte";
   import { chipRelevant } from "$lib/board";
   import SessionsEmpty from "./SessionsEmpty.svelte";
 
@@ -103,6 +104,7 @@
                      (chipRelevant). BoardChip renders no <button> (the card
                      already is one). -->
                 {#if chipRelevant(s.board, s.prNumber)}<span class="ml-auto"><BoardChip session={s} /></span>{/if}
+                <ClaimFlag session={s} />
               </div>
             </button>
           {/each}

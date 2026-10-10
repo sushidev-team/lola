@@ -37,3 +37,22 @@ func TestBoardLines(t *testing.T) {
 		}
 	}
 }
+
+// The claim audit (SUSHI-622): a mismatch outranks the plan in the chip, and the
+// detail card names it plus each audited check's verdict.
+func TestBoardClaimAudit(t *testing.T) {
+	si := protocol.SessionInfo{Board: &protocol.BoardInfo{
+		HasProgress: true, Percent: 100, UpdatedAt: time.Now(),
+		Checks:     []protocol.BoardCheck{{Name: "tests", State: "pass", Evidence: "unverified"}},
+		Mismatches: []string{`"tests" claimed pass, but no test command ran before the claim`},
+	}}
+	if got := stripANSI(boardChip(si)); got != "⚠ unverified" {
+		t.Fatalf("chip = %q", got)
+	}
+	got := stripANSI(strings.Join(boardLines(si, 120), "\n"))
+	for _, want := range []string{`⚠ "tests" claimed pass, but no test command ran`, "✓ tests (no run found)"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in:\n%s", want, got)
+		}
+	}
+}

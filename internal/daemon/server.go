@@ -640,7 +640,7 @@ func (d *Daemon) sessionsData() protocol.SessionsData {
 			si.HeadlineAgo = formatAge(now.Sub(at))
 		}
 		// The agent's own report — display-only, like the overlay above.
-		si.Board = boardInfo(s.Board, now)
+		si.Board = boardInfo(s.Board, auditClaims(s), now)
 		out.Sessions = append(out.Sessions, si)
 	}
 	out.Events = d.eventFeed(now)
