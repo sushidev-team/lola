@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { UsageInfo } from "@bindings/internal/protocol";
-import { budgetPercent, headerLabel, headerLevel, quotaLabel, untilShort, fmtTokens, fmtUSD, rankText, spendLabel, spendLevel, usageHeadline, usageLabel, usageRows } from "./usage";
+import { budgetPercent, durationShort, headerLabel, headerLevel, paceNote, quotaLabel, untilShort, windowMinutes, windowName, windowPace, fmtTokens, fmtUSD, rankText, spendLabel, spendLevel, usageHeadline, usageLabel, usageRows } from "./usage";
 
 const info = (o: Partial<UsageInfo> = {}): UsageInfo => ({
   tokens: 46_700_420,
@@ -77,11 +77,37 @@ describe("subscription limits", () => {
     expect(headerLabel(base)).toBe("46.7M today");
   });
 
-  it("grades by the fullest limit or the budget", () => {
-    expect(headerLevel({ ...base, quotas: [claude] })).toBe("ok");
+  it("grades by the worst limit's pace or the budget", () => {
+    expect(headerLevel({ ...base, quotas: [claude] }, now)).toBe("ok");
     const full = { ...claude, windows: [{ ...claude.windows[0], usedPercent: 85 }] };
-    expect(headerLevel({ ...base, quotas: [full] })).toBe("near");
-    expect(headerLevel({ ...base, quotas: [claude], weighted: 100, budgetTokens: 100 })).toBe("over");
+    expect(headerLevel({ ...base, quotas: [full] }, now)).toBe("near");
+    expect(headerLevel({ ...base, quotas: [claude], weighted: 100, budgetTokens: 100 }, now)).toBe("over");
+  });
+
+  it("judges a window by pace, not only by how full it is", () => {
+    expect(windowMinutes("5h")).toBe(300);
+    expect(windowMinutes("7d")).toBe(10080);
+    expect(windowMinutes("spend")).toBeNull();
+    expect([windowName("5h"), windowName("7d"), windowName("spend")]).toEqual(["5-hour", "Weekly", "Spend limit"]);
+    const day = 86_400_000;
+    // Weekly window, 1 day in (resets in 6 days).
+    const early = { label: "7d", usedPercent: 30, resetsAt: new Date(now + 6 * day).toISOString() };
+    const p1 = windowPace(early, now);
+    expect(p1.elapsed).toBeCloseTo(1 / 7);
+    expect(p1.tone).toBe("warn"); // 30% after 1/7 of the week runs out on day 4
+    expect(paceNote(p1)).toBe("full in ~2d 8h at this pace");
+    // Same 30%, 6 days in: comfortably on track.
+    const late = { ...early, resetsAt: new Date(now + day).toISOString() };
+    const p2 = windowPace(late, now);
+    expect(p2.tone).toBe("ok");
+    expect(paceNote(p2)).toBe("on pace for ~35%");
+    // Too early in a window to project.
+    const fresh = { ...early, resetsAt: new Date(now + 7 * day - 3_600_000).toISOString() };
+    expect(windowPace(fresh, now)).toMatchObject({ projected: null, tone: "ok" });
+    expect(paceNote(windowPace(fresh, now))).toBe("");
+    // No length known: falls back to fullness alone.
+    expect(windowPace({ label: "spend", usedPercent: 96, resetsAt: "" }, now).tone).toBe("bad");
+    expect(durationShort(90 * 60_000)).toBe("1h 30m");
   });
 
   it("formats the time until a reset", () => {

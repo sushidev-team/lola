@@ -5,7 +5,7 @@
 // ranking against the user's own finished sessions (a 4-step bar glyph), plus a
 // flame while it burns tokens faster than past sessions ever did. Mirrors
 // internal/tui/usage.go.
-import type { QuotaInfo, UsageInfo, UsageStatus } from "@bindings/internal/protocol";
+import type { QuotaInfo, QuotaWindow, UsageInfo, UsageStatus } from "@bindings/internal/protocol";
 
 /** Compact dollars: cents below $100, whole dollars above. */
 export function fmtUSD(v: number): string {
@@ -112,11 +112,6 @@ export function spendLabel(u: UsageStatus): string {
 
 export const AGENT_NAMES: Record<string, string> = { claude: "Claude", codex: "Codex" };
 
-/** A limit window's colour step: warn from 80%, bad from 95%. */
-export function quotaTone(p: number): "ok" | "warn" | "bad" {
-  return p >= 95 ? "bad" : p >= 80 ? "warn" : "ok";
-}
-
 /** The text beside the bars: the budget share, "" without a budget. */
 export function budgetLabel(u: UsageStatus): string {
   const pct = budgetPercent(u.weighted, u.budgetTokens);
@@ -129,21 +124,11 @@ export function quotaLabel(q: QuotaInfo): string {
   return `${name} ${(q.windows ?? []).map((w) => `${w.label} ${Math.round(w.usedPercent)}%`).join(" · ")}`;
 }
 
-/** The fullest window across every agent; -1 with none. */
-export function quotaMax(qs: QuotaInfo[] | null | undefined): number {
-  let m = -1;
-  for (const q of qs ?? []) for (const w of q.windows ?? []) m = Math.max(m, w.usedPercent);
-  return m;
-}
-
 /** A compact "in 2h 10m" / "in 3d 4h" until iso; "" when unknown or past. */
 export function untilShort(iso: string, now: number = Date.now()): string {
   const t = Date.parse(iso);
   if (Number.isNaN(t) || t <= now) return "";
-  const m = Math.round((t - now) / 60000);
-  if (m < 60) return `in ${m}m`;
-  if (m < 1440) return `in ${Math.floor(m / 60)}h ${m % 60}m`;
-  return `in ${Math.floor(m / 1440)}d ${Math.floor((m % 1440) / 60)}h`;
+  return `in ${durationShort(t - now)}`;
 }
 
 /** The header chip: subscription limits when known, else today's tokens; a budget always shows. */
@@ -153,10 +138,85 @@ export function headerLabel(u: UsageStatus): string {
   return u.quotas.map(quotaLabel).join(" · ") + (pct >= 0 ? ` · ${pct}% of budget` : "");
 }
 
-/** The header chip's level: the worse of the fullest limit and the budget. */
-export function headerLevel(u: UsageStatus): SpendLevel {
-  const m = quotaMax(u.quotas);
-  const q: SpendLevel = m >= 95 ? "over" : m >= 80 ? "near" : "ok";
+/** The header chip's level: the worse of the worst limit (by pace) and the budget. */
+export function headerLevel(u: UsageStatus, now: number = Date.now()): SpendLevel {
+  let q: SpendLevel = "ok";
+  for (const x of u.quotas ?? [])
+    for (const w of x.windows ?? []) {
+      const t = windowPace(w, now).tone;
+      if (t === "bad") q = "over";
+      else if (t === "warn" && q === "ok") q = "near";
+    }
   const b = spendLevel(u);
   return q === "over" || b === "over" ? "over" : q === "near" || b === "near" ? "near" : "ok";
+}
+
+// ---- pace -----------------------------------------------------------------
+// A percentage alone misleads: 30% of a weekly limit one day in is a problem,
+// 30% six days in is not. So each window is also judged by PACE — usage
+// against the share of the window already elapsed — and projected to its
+// reset. The tone then reads "will this run out before it resets?", not
+// merely "is it nearly full?".
+
+/** A window label's length in minutes ("5h" → 300, "7d" → 10080); null if unknown. */
+export function windowMinutes(label: string): number | null {
+  const m = /^(\d+)([mhd])$/.exec(label);
+  if (!m) return null;
+  return Number(m[1]) * ({ m: 1, h: 60, d: 1440 } as const)[m[2] as "m" | "h" | "d"];
+}
+
+/** A human name for a window: "5h" → "5-hour", "7d" → "Weekly". */
+export function windowName(label: string): string {
+  const named: Record<string, string> = { "7d": "Weekly", "1d": "Daily", "30d": "Monthly", spend: "Spend limit" };
+  if (named[label]) return named[label];
+  const m = /^(\d+)([mhd])$/.exec(label);
+  return m ? `${m[1]}-${{ m: "minute", h: "hour", d: "day" }[m[2] as "m" | "h" | "d"]}` : label;
+}
+
+export interface Pace {
+  /** Share of the window already elapsed, 0..1; null when unknown. */
+  elapsed: number | null;
+  /** Usage projected to the reset at the current pace; null too early to tell. */
+  projected: number | null;
+  /** Time until the limit is hit at the current pace, ms; null unless before the reset. */
+  fullIn: number | null;
+  tone: "ok" | "warn" | "bad";
+}
+
+/** Below this share of a window elapsed, a projection is noise. */
+const MIN_ELAPSED = 0.1;
+
+export function windowPace(w: QuotaWindow, now: number = Date.now()): Pace {
+  const mins = windowMinutes(w.label);
+  const reset = Date.parse(w.resetsAt);
+  let elapsed: number | null = null;
+  let projected: number | null = null;
+  let fullIn: number | null = null;
+  if (mins && !Number.isNaN(reset)) {
+    const len = mins * 60000;
+    elapsed = Math.min(1, Math.max(0, (now - (reset - len)) / len));
+    if (elapsed >= MIN_ELAPSED && w.usedPercent > 0) {
+      projected = w.usedPercent / elapsed;
+      const rate = w.usedPercent / (elapsed * len); // % per ms
+      const t = (100 - w.usedPercent) / rate;
+      if (w.usedPercent < 100 && now + t < reset) fullIn = t;
+    }
+  }
+  const tone = w.usedPercent >= 95 ? "bad" : w.usedPercent >= 80 || fullIn !== null ? "warn" : "ok";
+  return { elapsed, projected, fullIn, tone };
+}
+
+/** A compact duration: "45m", "2h 10m", "3d 4h". */
+export function durationShort(ms: number): string {
+  const m = Math.max(0, Math.round(ms / 60000));
+  if (m < 60) return `${m}m`;
+  if (m < 1440) return `${Math.floor(m / 60)}h ${m % 60}m`;
+  return `${Math.floor(m / 1440)}d ${Math.floor((m % 1440) / 60)}h`;
+}
+
+/** The card's pace note: "full in ~2d 3h at this pace" or "on pace for ~18%". */
+export function paceNote(p: Pace): string {
+  if (p.fullIn !== null) return `full in ~${durationShort(p.fullIn)} at this pace`;
+  if (p.projected !== null) return `on pace for ~${Math.round(p.projected)}%`;
+  return "";
 }
