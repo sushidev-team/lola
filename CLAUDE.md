@@ -220,9 +220,10 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   zero value, because an empty repo merely disables the open-PR check while a
   wrong one would make `gh pr list --repo` answer about someone else's
   repository.
-- `internal/usage` — ESTIMATED spend (stdlib leaf): sums the `message.usage`
-  numbers of claude-code's transcripts per local day at list price
-  (`Scanner`, incremental by file offset, dedup by message id), plus the
+- `internal/usage` — token usage (stdlib leaf): sums the `message.usage`
+  numbers of claude-code's transcripts per local day and per 10-minute slot
+  (`Scanner`, incremental by file offset, dedup by message id), prices them at
+  list price for RANKING only (`RankAmong`, `BurnThreshold`), plus the
   persisted per-day `Ledger` (`~/.lola/state/usage.json`) the budget reads.
   A session's directory is its WORKTREE's `~/.claude/projects` slug, so the
   worker, its subagents and every review pass run there are one figure.
@@ -399,9 +400,19 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   (`internal/daemon/usage.go`) runs right after the health gate with the same
   contract — skip the tick, `dispatch held: <why>` as `LastError`, mutate
   nothing. Rules that keep it honest:
-  - Every figure is an ESTIMATE (list price from transcripts) and every UI
-    marks it with `~`; an absent `Usage` means UNKNOWN (no transcript, or
-    codex/opencode) and renders blank, never `$0`.
+  - The UIs show TOKENS, not dollars (a subscription pays nothing per token);
+    the list-price estimate appears only in tooltips as `~$`. An absent
+    `Usage` means UNKNOWN (no transcript, or codex/opencode) and renders
+    blank, never `0`.
+  - Three different measures, each for its own job: RAW tokens are displayed;
+    WEIGHTED tokens (`Totals.Weighted`, model-independent price ratios) are
+    what a budget counts, so cache reads do not exhaust it; list-price
+    `CostUSD` RANKS a session (size glyph + flame), because bigger models eat
+    a subscription limit faster. The UIs show a budget as a PERCENTAGE, never
+    beside the raw count as if they were the same unit.
+  - A session is ranked against FINISHED sessions only (the ledger minus the
+    live set and the helpers): ranking against live ones would make a lone
+    session always "max" and shift every row whenever one spawns.
   - The ledger REPLACES each (day, source) entry with the scanner's absolute
     total, so rescans are idempotent and a torn-down session keeps counting.
   - `TranscriptPath` from a hook is only trusted when it lies directly under

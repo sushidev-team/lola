@@ -58,21 +58,21 @@ func today() string { return time.Now().Format(usage.DayFormat) }
 
 func TestTickHeldByGlobalBudget(t *testing.T) {
 	cfg := testConfig(labelPoll("p1"))
-	cfg.Budget.DailyUSD = 5
+	cfg.Budget.DailyTokens = 5_000_000
 	d, fake, nat := spendFixture(t, cfg)
-	// Spend recorded by a session of ANOTHER project still counts globally,
+	// Usage recorded by a session of ANOTHER project still counts globally,
 	// and so do lola's own helpers.
-	d.spend.ledger.Set(today(), "other-1", "other", usage.Totals{CostUSD: 4})
-	d.spend.ledger.Set(today(), helperSource, "", usage.Totals{CostUSD: 1})
-	assertHeldTick(t, d, fake, nat, "budget.daily_usd")
+	d.spend.ledger.Set(today(), "other-1", "other", usage.Totals{Input: 4_000_000})
+	d.spend.ledger.Set(today(), helperSource, "", usage.Totals{Output: 200_000}) // weighs 1M
+	assertHeldTick(t, d, fake, nat, "budget.daily_tokens")
 }
 
 func TestTickHeldByProjectBudgetOnlyForThatProject(t *testing.T) {
 	cfg := testConfig(labelPoll("p1"), labelPoll("p2"))
-	cfg.Projects[0].DailyBudgetUSD = 2
+	cfg.Projects[0].DailyBudgetTokens = 2_000_000
 	d, fake, nat := spendFixture(t, cfg)
-	d.spend.ledger.Set(today(), "p1-1", "p1", usage.Totals{CostUSD: 2.5})
-	assertHeldTick(t, d, fake, nat, "daily_budget_usd")
+	d.spend.ledger.Set(today(), "p1-1", "p1", usage.Totals{Input: 2_500_000})
+	assertHeldTick(t, d, fake, nat, "daily_budget_tokens")
 
 	// p2 has no limit of its own and there is no global one: it dispatches.
 	if _, err := d.tick(context.Background(), "p2", false); err != nil {
@@ -85,9 +85,9 @@ func TestTickHeldByProjectBudgetOnlyForThatProject(t *testing.T) {
 
 func TestTickBudgetIgnoresYesterday(t *testing.T) {
 	cfg := testConfig(labelPoll("p1"))
-	cfg.Budget.DailyUSD = 1
+	cfg.Budget.DailyTokens = 1_000
 	d, _, nat := spendFixture(t, cfg)
-	d.spend.ledger.Set(time.Now().AddDate(0, 0, -1).Format(usage.DayFormat), "p1-1", "p1", usage.Totals{CostUSD: 100})
+	d.spend.ledger.Set(time.Now().AddDate(0, 0, -1).Format(usage.DayFormat), "p1-1", "p1", usage.Totals{Input: 1_000_000})
 	if _, err := d.tick(context.Background(), "p1", false); err != nil {
 		t.Fatalf("tick: %v", err)
 	}
@@ -145,15 +145,15 @@ func TestUsagePassAttributesSessionsAndHelpers(t *testing.T) {
 	d.usagePass(context.Background(), now)
 
 	u := d.sessionUsage("p1-1")
-	if u == nil || u.TotalUSD < 19.99 || u.TotalUSD > 20.01 || u.TodayUSD != u.TotalUSD || u.Tokens != 2_000_000 {
-		t.Fatalf("session usage = %+v, want $20 today", u)
+	if u == nil || u.Tokens != 2_000_000 || u.TodayTokens != 2_000_000 || u.TotalUSD < 19.99 || u.TotalUSD > 20.01 {
+		t.Fatalf("session usage = %+v, want 2M tokens (~$20) today", u)
 	}
 	st := d.usageStatus(now)
-	if st.TodayUSD < 20.99 || st.TodayUSD > 21.01 {
-		t.Errorf("today total = %v, want $21 (session + helpers)", st.TodayUSD)
+	if st.Tokens != 2_100_000 || st.Weighted != 10_500_000 {
+		t.Errorf("today = %d tokens / %d weighted, want 2.1M / 10.5M (session + helpers)", st.Tokens, st.Weighted)
 	}
-	if len(st.Projects) != 1 || st.Projects[0].Name != "p1" || st.Projects[0].TodayUSD > 20.01 {
-		t.Errorf("projects = %+v, want only p1 at $20 (helpers belong to no project)", st.Projects)
+	if len(st.Projects) != 1 || st.Projects[0].Name != "p1" || st.Projects[0].Tokens != 2_000_000 {
+		t.Errorf("projects = %+v, want only p1 at 2M (helpers belong to no project)", st.Projects)
 	}
 
 	// The ledger outlives the session: tear it down, reload from disk.
@@ -163,8 +163,8 @@ func TestUsagePassAttributesSessionsAndHelpers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if all, _ := back.Day(today()); all.CostUSD < 20.99 {
-		t.Errorf("persisted day total = %v, want the removed session still counted", all.CostUSD)
+	if all, _ := back.Day(today()); all.Tokens() != 2_100_000 {
+		t.Errorf("persisted day total = %d, want the removed session still counted", all.Tokens())
 	}
 	if d.sessionUsage("p1-1") != nil {
 		t.Error("a removed session must drop out of the per-session cache")
@@ -189,15 +189,55 @@ func TestUsageDirTrustsOnlyTranscriptsUnderRoot(t *testing.T) {
 
 func TestBudgetNotifyFiresOncePerDay(t *testing.T) {
 	cfg := testConfig(labelPoll("p1"))
-	cfg.Budget = config.BudgetConfig{DailyUSD: 1, Notify: true}
+	cfg.Budget = config.BudgetConfig{DailyTokens: 1_000, Notify: true}
 	d, _, _ := spendFixture(t, cfg)
 	rec := &recordingNotifier{}
 	d.notifier = rec
-	d.spend.ledger.Set(today(), "p1-1", "p1", usage.Totals{CostUSD: 2})
+	d.spend.ledger.Set(today(), "p1-1", "p1", usage.Totals{Input: 2_000})
 	d.notifyBudgets(context.Background(), today())
 	d.notifyBudgets(context.Background(), today())
 	if n := len(rec.notes()); n != 1 {
 		t.Fatalf("notifications = %d, want exactly 1", n)
+	}
+}
+
+func TestTickBudgetCountsWeightedNotRawTokens(t *testing.T) {
+	cfg := testConfig(labelPoll("p1"))
+	cfg.Budget.DailyTokens = 5_000_000
+	d, _, nat := spendFixture(t, cfg)
+	// 40M raw tokens of cache reads weigh only 4M: under the limit.
+	d.spend.ledger.Set(today(), "p1-1", "p1", usage.Totals{CacheRead: 40_000_000})
+	if _, err := d.tick(context.Background(), "p1", false); err != nil {
+		t.Fatalf("cache reads must not exhaust a weighted budget: %v", err)
+	}
+	if len(nat.spawnCalls()) != 1 {
+		t.Fatalf("spawns = %v", nat.spawnCalls())
+	}
+}
+
+func TestUsagePassRanksAgainstFinishedSessionsAndFlagsBurn(t *testing.T) {
+	cfg := testConfig(labelPoll("p1"))
+	d, _, _ := spendFixture(t, cfg)
+	now := time.Now()
+	// Ten finished sessions, each ~$1 over six active windows (=$1/active h).
+	for i := 0; i < 10; i++ {
+		d.spend.ledger.Set(now.AddDate(0, 0, -2).Format(usage.DayFormat), "old-"+strconv.Itoa(i), "p1",
+			usage.Totals{Output: 100_000, CostUSD: 1, Slots: 6})
+	}
+	s := session.Session{ID: "p1-1", Source: "native", Project: "p1"}
+	d.sessions.Upsert(s)
+	dir := usage.SlugDir(d.spend.root, filepath.Join(d.home, "worktrees", "p1", "p1-1"))
+	// $10 of sonnet output in the last few minutes: top of the history and far
+	// above the $5/h burn floor.
+	writeFile(t, filepath.Join(dir, "a.jsonl"), transcriptLine("m1", now.Add(-2*time.Minute), 1_000_000))
+
+	d.usagePass(context.Background(), now)
+	u := d.sessionUsage("p1-1")
+	if u == nil || u.Level != usage.LevelTop || u.Of != 10 || u.Percentile != 100 {
+		t.Fatalf("rank = %+v, want top of 10 finished sessions", u)
+	}
+	if !u.Burning || u.TokensPerHour <= 0 {
+		t.Fatalf("burn = %+v, want burning", u)
 	}
 }
 

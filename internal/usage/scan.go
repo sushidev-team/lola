@@ -24,6 +24,12 @@ const DayFormat = "2006-01-02"
 // deeper is not a transcript lola needs to sum.
 const maxDepth = 3
 
+// SlotDuration is the granularity of a directory's usage TIMELINE: the window
+// Totals.Slots counts and Recent sums. Ten minutes is short enough for a burn
+// rate to react within one window and long enough that a session pausing for a
+// tool run is not counted as idle.
+const SlotDuration = 10 * time.Minute
+
 // ProjectsRoot is where claude-code keeps transcripts: $CLAUDE_CONFIG_DIR/projects
 // when that is set, else ~/.claude/projects. "" when no home dir resolves.
 func ProjectsRoot() string {
@@ -74,6 +80,9 @@ type dirState struct {
 	// session copies history into a new file with the original ids.
 	seen map[string]struct{}
 	days map[string]Totals
+	// slots is the timeline: usage per SlotDuration window (unix seconds /
+	// SlotDuration), the source of Recent and of each day's Slots count.
+	slots map[int64]Totals
 }
 
 type fileState struct {
@@ -104,7 +113,7 @@ func (s *Scanner) ScanDir(dir string) (map[string]Totals, error) {
 }
 
 func newDirState() *dirState {
-	return &dirState{files: map[string]*fileState{}, seen: map[string]struct{}{}, days: map[string]Totals{}}
+	return &dirState{files: map[string]*fileState{}, seen: map[string]struct{}{}, days: map[string]Totals{}, slots: map[int64]Totals{}}
 }
 
 func (s *Scanner) walk(dir string, st *dirState) error {
@@ -218,14 +227,42 @@ func readFrom(path string, offset int64, mod time.Time, st *dirState) int64 {
 			hour = min(u.CacheCreation.Hour, u.CacheWrite)
 		}
 		t.CostUSD = cost(rec.Message.Model, t, hour, u.Speed == "fast")
-		day := mod.Local().Format(DayFormat)
+		at := mod
 		if ts, err := time.Parse(time.RFC3339Nano, rec.Timestamp); err == nil {
-			day = ts.Local().Format(DayFormat)
+			at = ts
+		}
+		day := at.Local().Format(DayFormat)
+		slot := at.Unix() / int64(SlotDuration/time.Second)
+		sl, active := st.slots[slot]
+		sl.Add(t)
+		st.slots[slot] = sl
+		if !active {
+			t.Slots = 1 // the first record in a window opens it for its day
 		}
 		cur := st.days[day]
 		cur.Add(t)
 		st.days[day] = cur
 	}
+}
+
+// Recent sums dir's usage in the windows that END after since — the input of a
+// burn rate. The window containing since counts whole, so a 30-minute look-back
+// spans three to four windows. Zero for a directory never scanned.
+func (s *Scanner) Recent(dir string, since time.Time) Totals {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var t Totals
+	st := s.dirs[dir]
+	if st == nil {
+		return t
+	}
+	from := since.Unix() / int64(SlotDuration/time.Second)
+	for k, v := range st.slots {
+		if k >= from {
+			t.Add(v)
+		}
+	}
+	return t
 }
 
 // Retain forgets every directory not in keep, so the scanner's memory follows

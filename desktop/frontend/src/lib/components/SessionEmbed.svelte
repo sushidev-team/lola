@@ -5,7 +5,7 @@
   import { terms, AGENT, DIFF } from "$lib/terms.svelte";
   import { feedback } from "$lib/feedback.svelte";
   import { devUrlLabel, MAX_URL_CHIPS } from "$lib/devurl";
-  import { costLabel, costTitle } from "$lib/usage";
+  import UsageMark from "./UsageMark.svelte";
   import LiveTerminal from "./LiveTerminal.svelte";
   import DiffView from "./DiffView.svelte";
   import Button from "./Button.svelte";
@@ -262,11 +262,11 @@
           {(session.agent || "claude").toLowerCase()}
         </span>
       {/if}
-      <!-- Estimated spend (internal/usage): every claude run in this worktree —
-           the worker, its subagents, the review passes. An estimate at list
-           price, hence the "~"; absent when lola cannot read the agent's logs. -->
+      <!-- Token usage (internal/usage): every claude run in this worktree — the
+           worker, its subagents, the review passes. Absent when lola cannot read
+           the agent's logs. -->
       {#if session.usage}
-        <span class="num whitespace-nowrap text-sm text-faint" title={costTitle(session.usage)}>{costLabel(session.usage)}</span>
+        <UsageMark usage={session.usage} class="text-sm text-faint" />
       {/if}
       <!-- The dev server's own address, scraped from its pane by the daemon
            (internal/devurl). It is here rather than in the terminal because the

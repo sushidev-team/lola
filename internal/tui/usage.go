@@ -7,9 +7,17 @@ import (
 	"github.com/sushidev-team/lola/internal/protocol"
 )
 
-// Spend rendering (internal/usage on the daemon side). Every figure is an
-// ESTIMATE at list price, so each one carries a "~" — a subscription user pays
-// nothing per token, and a bare "$18.33" would read as a bill.
+// Usage rendering (internal/usage on the daemon side). The figure shown is
+// TOKENS: a subscription user pays nothing per token, so a dollar amount would
+// read as a bill nobody is sent. The list-price estimate survives only as a
+// "~$" aside in the detail line. How HEAVY a session is comes from the daemon's
+// ranking against the user's own finished sessions, drawn as a 4-step glyph,
+// plus a flame while it burns tokens faster than past sessions ever did.
+
+// levelGlyphs are the size glyph's four steps (usage.LevelLight … LevelTop).
+var levelGlyphs = [4]string{"▁", "▃", "▅", "█"}
+
+const flame = "🔥"
 
 // fmtUSD renders a dollar figure compactly: cents below $100, whole dollars above.
 func fmtUSD(v float64) string {
@@ -31,16 +39,31 @@ func fmtTokens(n int64) string {
 	}
 }
 
-// costCell is the sessions table's COST cell: the session's whole spend, "-"
-// when nothing is known (no transcript yet, or an agent lola cannot read).
-func costCell(si protocol.SessionInfo) string {
-	if si.Usage == nil {
-		return "-"
+// levelGlyph is u's size glyph, orange for the top step.
+func levelGlyph(u *protocol.UsageInfo) string {
+	g := levelGlyphs[max(0, min(u.Level, len(levelGlyphs)-1))]
+	if u.Level >= len(levelGlyphs)-1 {
+		return statusOrange.Render(g)
 	}
-	return "~" + fmtUSD(si.Usage.TotalUSD)
+	return g
 }
 
-// anyUsage reports whether a COST column has anything to show, so a fleet
+// costCell is the sessions table's TOKENS cell: "46.7M ▅" plus the flame while
+// burning, "-" when nothing is known (no transcript yet, or an agent lola
+// cannot read).
+func costCell(si protocol.SessionInfo) string {
+	u := si.Usage
+	if u == nil {
+		return "-"
+	}
+	cell := fmtTokens(u.Tokens) + " " + levelGlyph(u)
+	if u.Burning {
+		cell += flame
+	}
+	return cell
+}
+
+// anyUsage reports whether a TOKENS column has anything to show, so a fleet
 // running only codex/opencode keeps the columns it had.
 func anyUsage(list []protocol.SessionInfo) bool {
 	for _, si := range list {
@@ -51,33 +74,56 @@ func anyUsage(list []protocol.SessionInfo) bool {
 	return false
 }
 
-// usageDetailLine is the detail panel's cost line, "" when nothing is known.
+// rankText says in words what the glyph shows.
+func rankText(u *protocol.UsageInfo) string {
+	if u.Of == 0 {
+		return [4]string{"light", "moderate", "heavy", "very heavy"}[max(0, min(u.Level, 3))] + " (too little history to compare yet)"
+	}
+	return fmt.Sprintf("heavier than %.0f%% of your last %d sessions", u.Percentile, u.Of)
+}
+
+// usageDetailLine is the detail panel's usage line, "" when nothing is known.
 func usageDetailLine(si protocol.SessionInfo) string {
 	u := si.Usage
 	if u == nil {
 		return ""
 	}
-	return fmt.Sprintf("cost:     ~%s total · ~%s today · %s tokens (estimate)",
-		fmtUSD(u.TotalUSD), fmtUSD(u.TodayUSD), fmtTokens(u.Tokens))
+	line := fmt.Sprintf("tokens:   %s %s (%s today) · %s · ~%s at list price",
+		fmtTokens(u.Tokens), levelGlyph(u), fmtTokens(u.TodayTokens), rankText(u), fmtUSD(u.TotalUSD))
+	if u.Burning {
+		line += " · " + flame + " " + statusOrange.Render(fmt.Sprintf("burning %s tokens/h", fmtTokens(u.TokensPerHour)))
+	}
+	return line
 }
 
-// spendVital is the vitals-bar segment for today's spend and the load hold:
-// "today ~$12.34 / $50", orange from 80% of the budget, red once reached, and
-// a red "load busy" while [load] holds dispatch. "" on an older daemon.
+// budgetPercent is used/budget as a whole percentage; -1 without a budget.
+func budgetPercent(used, budget int64) int {
+	if budget <= 0 {
+		return -1
+	}
+	return int(100 * used / budget)
+}
+
+// spendVital is the vitals-bar segment for today's usage and the load hold:
+// "today 46.7M", plus "· 38% of budget" when a [budget] limit is set — orange
+// from 80%, red once reached — and a red "load busy" while [load] holds
+// dispatch. The budget is a PERCENTAGE because it counts weighted tokens, a
+// different number from the raw count beside it. "" on an older daemon.
 func spendVital(st *protocol.StatusData) string {
 	if st == nil || st.Usage == nil {
 		return ""
 	}
 	u := st.Usage
-	text := "today ~" + fmtUSD(u.TodayUSD)
-	if u.BudgetUSD > 0 {
-		text += " / " + fmtUSD(u.BudgetUSD)
-	}
-	switch {
-	case u.BudgetUSD > 0 && u.TodayUSD >= u.BudgetUSD:
-		text = badText.Render(text + " budget reached")
-	case u.BudgetUSD > 0 && u.TodayUSD >= 0.8*u.BudgetUSD:
-		text = statusOrange.Render(text)
+	text := "today " + fmtTokens(u.Tokens)
+	if pct := budgetPercent(u.Weighted, u.BudgetTokens); pct >= 0 {
+		b := fmt.Sprintf("· %d%% of budget", pct)
+		switch {
+		case pct >= 100:
+			b = badText.Render(b + " (dispatch held)")
+		case pct >= 80:
+			b = statusOrange.Render(b)
+		}
+		text += " " + b
 	}
 	if u.Load != nil && u.Load.Busy != "" {
 		text += " " + badText.Render("load busy")
@@ -85,22 +131,23 @@ func spendVital(st *protocol.StatusData) string {
 	return text
 }
 
-// spendSummary is `lola status`'s spend block: today's total against the
-// global limit, each project with spend or a limit, and the load sample.
+// spendSummary is `lola status`'s usage block: today's tokens against the
+// global limit, each project with usage or a limit, and the load sample.
 func spendSummary(u *protocol.UsageStatus) string {
 	if u == nil {
 		return ""
 	}
 	var b strings.Builder
 	budget := "no limit"
-	if u.BudgetUSD > 0 {
-		budget = "limit " + fmtUSD(u.BudgetUSD)
+	if pct := budgetPercent(u.Weighted, u.BudgetTokens); pct >= 0 {
+		budget = fmt.Sprintf("%d%% of the %s limit", pct, fmtTokens(u.BudgetTokens))
 	}
-	fmt.Fprintf(&b, "spend %s: ~%s (%s tokens, estimate) — %s\n", u.Day, fmtUSD(u.TodayUSD), fmtTokens(u.Tokens), budget)
+	fmt.Fprintf(&b, "tokens %s: %s (%s weighted, ~%s at list price) — %s\n",
+		u.Day, fmtTokens(u.Tokens), fmtTokens(u.Weighted), fmtUSD(u.TodayUSD), budget)
 	for _, p := range u.Projects {
-		line := fmt.Sprintf("  %s: ~%s", p.Name, fmtUSD(p.TodayUSD))
-		if p.BudgetUSD > 0 {
-			line += " / " + fmtUSD(p.BudgetUSD)
+		line := fmt.Sprintf("  %s: %s (%s weighted)", p.Name, fmtTokens(p.Tokens), fmtTokens(p.Weighted))
+		if pct := budgetPercent(p.Weighted, p.BudgetTokens); pct >= 0 {
+			line += fmt.Sprintf(" — %d%% of %s", pct, fmtTokens(p.BudgetTokens))
 		}
 		b.WriteString(line + "\n")
 	}

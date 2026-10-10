@@ -507,11 +507,12 @@ func (m *rootModel) sessionsBody(w, h int) []string {
 			rows[i] = insAt(rows[i], 4, dash(boardChip(si)))
 		}
 	}
-	// COST — the session's estimated spend — before AGE, only when some listed
-	// session has a figure (codex/opencode-only fleets keep their columns).
+	// TOKENS — the session's usage, size glyph and burn flame — before AGE,
+	// only when some listed session has a figure (codex/opencode-only fleets
+	// keep their columns).
 	if anyUsage(list) {
 		at := len(headers) - 1
-		headers = insAt(headers, at, "COST")
+		headers = insAt(headers, at, "TOKENS")
 		for i, si := range list {
 			rows[i] = insAt(rows[i], at, costCell(si))
 		}

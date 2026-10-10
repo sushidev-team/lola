@@ -18,8 +18,9 @@ import (
 	"github.com/sushidev-team/lola/internal/usage"
 )
 
-// Spend + load: the ESTIMATED cost of what lola's agents run (internal/usage),
-// the daily budgets that hold dispatch once it is reached, and the [load] hold
+// Usage + load: the tokens lola's agents use (internal/usage), how heavy each
+// session is against the user's own history, the daily token budgets that hold
+// dispatch once reached, and the [load] hold
 // on a machine that is already saturated. All three only ever decide whether a
 // tick may START something; nothing here touches a live session.
 //
@@ -29,8 +30,8 @@ import (
 // only — no exec — and every later pass reads just the bytes appended since.
 
 const (
-	// usageInterval paces the spend scan. A budget is therefore enforced up to
-	// one interval late, which at list prices is cents, not dollars.
+	// usageInterval paces the usage scan. A budget is therefore enforced up to
+	// one interval late — one minute of usage, a rounding error on a day.
 	usageInterval = time.Minute
 
 	// helperSource is the ledger key for lola's own claude helpers ([brain],
@@ -173,18 +174,45 @@ func (d *Daemon) usagePass(ctx context.Context, now time.Time) {
 		}
 		return days
 	}
+	type live struct {
+		days   map[string]usage.Totals
+		recent usage.Totals
+	}
+	lives := map[string]live{}
+	burnFrom := now.Add(-usage.BurnWindow).Truncate(usage.SlotDuration)
 	for _, s := range snap {
-		days := scan(usageDir(sp.root, d.home, s), s.ID, s.Project)
+		dir := usageDir(sp.root, d.home, s)
+		days := scan(dir, s.ID, s.Project)
 		if len(days) == 0 {
 			continue
 		}
-		total := usage.Sum(days)
-		infos[s.ID] = protocol.UsageInfo{TotalUSD: total.CostUSD, TodayUSD: days[today].CostUSD, Tokens: total.Tokens()}
+		lives[s.ID] = live{days: days, recent: sp.scanner.Recent(dir, burnFrom)}
 	}
 	scan(usage.SlugDir(sp.root, sp.helpers), helperSource, "")
 	sp.scanner.Retain(keep)
 	if sp.ledger.Prune(now, usage.KeepDays) {
 		changed = true
+	}
+	weights, rates := history(sp.ledger, snap)
+	burnAt := usage.BurnThreshold(rates)
+	hours := now.Sub(burnFrom).Hours()
+	for id, l := range lives {
+		total := usage.Sum(l.days)
+		rank := usage.RankAmong(total.CostUSD, weights)
+		info := protocol.UsageInfo{
+			Tokens:      total.Tokens(),
+			TodayTokens: l.days[today].Tokens(),
+			TotalUSD:    total.CostUSD,
+			TodayUSD:    l.days[today].CostUSD,
+			Level:       rank.Level,
+			Percentile:  rank.Percentile,
+			Of:          rank.Of,
+		}
+		if hours > 0 && l.recent.CostUSD/hours >= burnAt {
+			info.Burning = true
+			info.TokensPerHour = int64(float64(l.recent.Tokens()) / hours)
+		}
+		infos[id] = info
 	}
 	sp.bySession = infos
 	var saveErr error
@@ -209,6 +237,27 @@ func (d *Daemon) usagePass(ctx context.Context, now time.Time) {
 	d.notifyBudgets(ctx, today)
 }
 
+// history is what a live session is ranked against: every FINISHED session in
+// the ledger (live ones would rank against themselves, and a fleet spawned
+// together would push each other down), never lola's helpers. weights are
+// whole-session list-price weights, rates their per-active-hour averages.
+func history(l *usage.Ledger, snap []session.Session) (weights, rates []float64) {
+	liveIDs := make(map[string]bool, len(snap))
+	for _, s := range snap {
+		liveIDs[s.ID] = true
+	}
+	for src, e := range l.BySource() {
+		if src == helperSource || liveIDs[src] || e.CostUSD <= 0 {
+			continue
+		}
+		weights = append(weights, e.CostUSD)
+		if r := usage.HourlyRate(e.Totals); r > 0 {
+			rates = append(rates, r)
+		}
+	}
+	return weights, rates
+}
+
 // sampleLoad reads the machine and records the sample for cmd=status,
 // returning the hold reason ("" = not busy, or nothing known).
 func (d *Daemon) sampleLoad(ctx context.Context, lim config.LoadConfig) string {
@@ -220,30 +269,45 @@ func (d *Daemon) sampleLoad(ctx context.Context, lim config.LoadConfig) string {
 	return busy
 }
 
-// budgetLimit is one configured limit and what has been spent against it.
+// budgetLimit is one configured limit and what has been used against it, both
+// in weighted tokens (usage.Totals.Weighted).
 type budgetLimit struct {
 	project string // "" = the global limit
-	budget  float64
-	spent   float64
+	budget  int64
+	used    int64
 }
 
-func (b budgetLimit) reached() bool { return b.budget > 0 && b.spent >= b.budget }
+func (b budgetLimit) reached() bool { return b.budget > 0 && b.used >= b.budget }
 
 func (b budgetLimit) message() string {
-	if b.project == "" {
-		return fmt.Sprintf("daily budget reached: ~$%.2f of $%.2f spent today (budget.daily_usd); new dispatch resumes tomorrow or when the limit is raised", b.spent, b.budget)
+	key, what := "budget.daily_tokens", "daily token budget"
+	if b.project != "" {
+		key, what = "daily_budget_tokens", "project daily token budget"
 	}
-	return fmt.Sprintf("project daily budget reached: ~$%.2f of $%.2f spent today (daily_budget_usd); new dispatch resumes tomorrow or when the limit is raised", b.spent, b.budget)
+	return fmt.Sprintf("%s reached: %s of %s weighted tokens used today (%s); new dispatch resumes tomorrow or when the limit is raised",
+		what, fmtTokens(b.used), fmtTokens(b.budget), key)
+}
+
+// fmtTokens renders a token count as 950, 12.3k, 4.5M.
+func fmtTokens(n int64) string {
+	switch {
+	case n >= 1_000_000:
+		return fmt.Sprintf("%.1fM", float64(n)/1e6)
+	case n >= 1_000:
+		return fmt.Sprintf("%.1fk", float64(n)/1e3)
+	default:
+		return fmt.Sprintf("%d", n)
+	}
 }
 
 // budgetLimits reports the global limit and every project limit for today.
 func (d *Daemon) budgetLimits(today string) []budgetLimit {
 	d.mu.Lock()
-	global := d.cfg.Budget.DailyUSD
-	projects := map[string]float64{}
+	global := d.cfg.Budget.DailyTokens
+	projects := map[string]int64{}
 	for _, p := range d.cfg.Projects {
-		if p.DailyBudgetUSD > 0 {
-			projects[p.Name] = p.DailyBudgetUSD
+		if p.DailyBudgetTokens > 0 {
+			projects[p.Name] = p.DailyBudgetTokens
 		}
 	}
 	d.mu.Unlock()
@@ -252,9 +316,9 @@ func (d *Daemon) budgetLimits(today string) []budgetLimit {
 	all, by := d.spend.ledger.Day(today)
 	d.spend.mu.Unlock()
 
-	out := []budgetLimit{{budget: global, spent: all.CostUSD}}
+	out := []budgetLimit{{budget: global, used: all.Weighted()}}
 	for name, b := range projects {
-		out = append(out, budgetLimit{project: name, budget: b, spent: by[name].CostUSD})
+		out = append(out, budgetLimit{project: name, budget: b, used: by[name].Weighted()})
 	}
 	return out
 }
@@ -301,9 +365,9 @@ func (d *Daemon) notifyBudgets(ctx context.Context, today string) {
 		if fired {
 			continue
 		}
-		title := "Daily budget reached"
+		title := "Daily token budget reached"
 		if b.project != "" {
-			title = "Daily budget reached: " + d.displayName(b.project)
+			title = "Daily token budget reached: " + d.displayName(b.project)
 		}
 		notifier.Notify(ctx, notify.Note{Title: title, Body: b.message(), Priority: notify.Action})
 		d.logf(b.project, "%s", b.message())
@@ -330,21 +394,21 @@ func (d *Daemon) usageStatus(now time.Time) *protocol.UsageStatus {
 	}
 	d.spend.mu.Unlock()
 
-	us := &protocol.UsageStatus{Day: today, TodayUSD: all.CostUSD, Tokens: all.Tokens(), Load: load}
-	budgets := map[string]float64{}
+	us := &protocol.UsageStatus{Day: today, Tokens: all.Tokens(), Weighted: all.Weighted(), TodayUSD: all.CostUSD, Load: load}
+	budgets := map[string]int64{}
 	for _, b := range limits {
 		if b.project == "" {
-			us.BudgetUSD = b.budget
+			us.BudgetTokens = b.budget
 		} else {
 			budgets[b.project] = b.budget
 		}
 	}
 	for name, t := range by {
-		us.Projects = append(us.Projects, protocol.ProjectSpend{Name: name, TodayUSD: t.CostUSD, BudgetUSD: budgets[name]})
+		us.Projects = append(us.Projects, protocol.ProjectSpend{Name: name, Tokens: t.Tokens(), Weighted: t.Weighted(), BudgetTokens: budgets[name]})
 		delete(budgets, name)
 	}
-	for name, b := range budgets { // a limited project that spent nothing yet
-		us.Projects = append(us.Projects, protocol.ProjectSpend{Name: name, BudgetUSD: b})
+	for name, b := range budgets { // a limited project that used nothing yet
+		us.Projects = append(us.Projects, protocol.ProjectSpend{Name: name, BudgetTokens: b})
 	}
 	sort.Slice(us.Projects, func(i, j int) bool { return us.Projects[i].Name < us.Projects[j].Name })
 	return us

@@ -238,37 +238,55 @@ type StatusData struct {
 	// is holding a session list from discloses nothing it does not have.
 	Host string `json:"host,omitempty"`
 
-	// Usage is today's estimated spend against the configured budgets, plus
+	// Usage is today's token usage against the configured budgets, plus
 	// the last machine-load sample when [load] is on. nil on an older daemon.
 	Usage *UsageStatus `json:"usage,omitempty"`
 }
 
-// UsageInfo is one session's estimated spend: TotalUSD over every claude run
-// in its worktree (worker, subagents, review passes), TodayUSD the part spent
-// today (local time), Tokens every token billed including cache traffic.
+// UsageInfo is one session's usage over every claude run in its worktree
+// (worker, subagents, review passes). Tokens are RAW (cache traffic included):
+// the number the UIs show. The *USD figures are the list-price ESTIMATE, kept
+// for tooltips — a subscription user pays nothing per token.
+//
+// Level/Percentile/Of rank the session against the user's own finished
+// sessions (internal/usage.RankAmong): Level is the 4-step size glyph
+// (0 light … 3 top 10%), Percentile the share of history lighter than it, Of
+// the history size — 0 when fixed thresholds decided Level instead. Burning
+// flags a session using tokens faster now than 90% of past sessions ever did;
+// TokensPerHour is that current rate (raw tokens, last ~30 minutes).
 type UsageInfo struct {
-	TotalUSD float64 `json:"totalUsd"`
-	TodayUSD float64 `json:"todayUsd"`
-	Tokens   int64   `json:"tokens"`
+	Tokens        int64   `json:"tokens"`
+	TodayTokens   int64   `json:"todayTokens"`
+	TotalUSD      float64 `json:"totalUsd"`
+	TodayUSD      float64 `json:"todayUsd"`
+	Level         int     `json:"level"`
+	Percentile    float64 `json:"percentile,omitempty"`
+	Of            int     `json:"of,omitempty"`
+	Burning       bool    `json:"burning,omitempty"`
+	TokensPerHour int64   `json:"tokensPerHour,omitempty"`
 }
 
-// UsageStatus is cmd=status's spend + load summary. Every *USD figure is an
-// ESTIMATE at list price. A budget of 0 means no limit is configured.
+// UsageStatus is cmd=status's usage + load summary for one local day. Tokens
+// is raw (what the UIs show); Weighted is what a budget counts
+// (usage.Totals.Weighted) and BudgetTokens its global limit (0 = none).
+// TodayUSD is the list-price estimate, for tooltips only.
 type UsageStatus struct {
-	Day       string         `json:"day"` // local YYYY-MM-DD the totals are for
-	TodayUSD  float64        `json:"todayUsd"`
-	Tokens    int64          `json:"tokens"`
-	BudgetUSD float64        `json:"budgetUsd,omitempty"`
-	Projects  []ProjectSpend `json:"projects,omitempty"`
+	Day          string         `json:"day"` // local YYYY-MM-DD the totals are for
+	Tokens       int64          `json:"tokens"`
+	Weighted     int64          `json:"weighted"`
+	TodayUSD     float64        `json:"todayUsd"`
+	BudgetTokens int64          `json:"budgetTokens,omitempty"`
+	Projects     []ProjectSpend `json:"projects,omitempty"`
 	// Load is the last [load] sample; nil when [load] is off.
 	Load *LoadInfo `json:"load,omitempty"`
 }
 
-// ProjectSpend is one project's spend today against its own limit.
+// ProjectSpend is one project's usage today against its own limit.
 type ProjectSpend struct {
-	Name      string  `json:"name"`
-	TodayUSD  float64 `json:"todayUsd"`
-	BudgetUSD float64 `json:"budgetUsd,omitempty"`
+	Name         string `json:"name"`
+	Tokens       int64  `json:"tokens"`
+	Weighted     int64  `json:"weighted"`
+	BudgetTokens int64  `json:"budgetTokens,omitempty"`
 }
 
 // LoadInfo is a machine-load sample; -1 marks a value the OS did not report.
@@ -399,9 +417,9 @@ type SessionInfo struct {
 	// be verifiably resting at its prompt.
 	FeedbackPending bool `json:"feedbackPending,omitempty"`
 
-	// Usage is this session's ESTIMATED spend (internal/usage), nil when
-	// nothing is known yet — no transcript written, or an agent whose logs
-	// lola cannot read (codex, opencode). Absent is "unknown", never "$0".
+	// Usage is this session's token usage (internal/usage), nil when nothing
+	// is known yet — no transcript written, or an agent whose logs lola cannot
+	// read (codex, opencode). Absent is "unknown", never zero.
 	Usage *UsageInfo `json:"usage,omitempty"`
 
 	// Reaction-engine posture (PLAN P3), flattened so the TUI renders reaction

@@ -11,7 +11,7 @@
   import Button from "./Button.svelte";
   import SessionsEmpty from "./SessionsEmpty.svelte";
   import { chipRelevant } from "$lib/board";
-  import { costLabel, costTitle } from "$lib/usage";
+  import UsageMark from "./UsageMark.svelte";
 
   let { dense = false }: { dense?: boolean } = $props();
 
@@ -24,8 +24,8 @@
   // SessionsKanban, TerminalGrid, App's cockpitRows) — otherwise arrow-key
   // movement walks a different list than the one the table renders.
   const rows = $derived(triaged(scopedSessions(store.sessions, nav.scoped, nav.project), nav.triage));
-  // The Cost column (estimated spend) appears only once some listed session has
-  // a figure, so a fleet running only codex/opencode keeps its columns.
+  // The Tokens column appears only once some listed session has a figure, so a
+  // fleet running only codex/opencode keeps its columns.
   const anyCost = $derived(rows.some((s) => !!s.usage));
 
   // The row reads left to right as one sentence about the session:
@@ -207,11 +207,12 @@
             </span>
           </td>
           {#if anyCost}
-            <!-- An estimate at list price, hence the "~" (lib/usage.ts); an
-                 unknown figure is blank rather than "$0". -->
+            <!-- Tokens + size glyph + burn flame (UsageMark); an unknown figure
+                 is blank rather than "0". -->
             <td
-              class="num py-1.5 pr-2 text-right align-middle text-sm whitespace-nowrap text-faint"
-              title={s.usage ? costTitle(s.usage) : "no spend recorded for this agent"}>{costLabel(s.usage)}</td
+              class="py-1.5 pr-2 text-right align-middle text-sm whitespace-nowrap text-faint"
+              title={s.usage ? undefined : "no usage recorded for this agent"}
+              >{#if s.usage}<UsageMark usage={s.usage} />{/if}</td
             >
           {/if}
           <!-- `num` — the age reflows on every 30s observer push otherwise. -->

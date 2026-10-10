@@ -14,7 +14,7 @@ func TestBudgetAndLoadRoundTrip(t *testing.T) {
 global_cap = 3
 
 [budget]
-daily_usd = 25.5
+daily_tokens = 250_000_000
 notify = true
 
 [load]
@@ -24,7 +24,7 @@ min_free_memory_percent = 10
 [[project]]
 name = "p"
 path = "/tmp/p"
-daily_budget_usd = 7
+daily_budget_tokens = 7_000_000
 `
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
@@ -33,10 +33,10 @@ daily_budget_usd = 7
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Budget != (BudgetConfig{DailyUSD: 25.5, Notify: true}) || c.Load != (LoadConfig{MaxLoadPerCPU: 1.5, MinFreeMemoryPercent: 10}) {
+	if c.Budget != (BudgetConfig{DailyTokens: 250_000_000, Notify: true}) || c.Load != (LoadConfig{MaxLoadPerCPU: 1.5, MinFreeMemoryPercent: 10}) {
 		t.Fatalf("loaded budget=%+v load=%+v", c.Budget, c.Load)
 	}
-	if got := c.ProjectBudget("p"); got != 7 {
+	if got := c.ProjectBudget("p"); got != 7_000_000 {
 		t.Fatalf("project budget = %v", got)
 	}
 	if err := c.Validate(); err != nil {
@@ -49,7 +49,7 @@ daily_budget_usd = 7
 	if err != nil {
 		t.Fatal(err)
 	}
-	if back.Budget != c.Budget || back.Load != c.Load || back.ProjectBudget("p") != 7 {
+	if back.Budget != c.Budget || back.Load != c.Load || back.ProjectBudget("p") != 7_000_000 {
 		t.Fatalf("round trip lost values: %+v %+v", back.Budget, back.Load)
 	}
 }
@@ -62,18 +62,18 @@ func TestZeroLimitsAreNotWritten(t *testing.T) {
 		t.Fatal(err)
 	}
 	data, _ := os.ReadFile(path)
-	if s := string(data); strings.Contains(s, "[budget]") || strings.Contains(s, "[load]") || strings.Contains(s, "daily_budget_usd") {
+	if s := string(data); strings.Contains(s, "[budget]") || strings.Contains(s, "[load]") || strings.Contains(s, "daily_budget_tokens") {
 		t.Fatalf("a fresh config must persist no limit tables:\n%s", s)
 	}
 }
 
 func TestValidateLimits(t *testing.T) {
 	c := &Config{Defaults: Defaults{GlobalCap: 1}}
-	c.Budget.DailyUSD = -1
+	c.Budget.DailyTokens = -1
 	c.Load.MinFreeMemoryPercent = 100
-	c.Projects = []Project{{Name: "p", Path: "/p", DailyBudgetUSD: -2}}
+	c.Projects = []Project{{Name: "p", Path: "/p", DailyBudgetTokens: -2}}
 	err := c.Validate()
-	for _, want := range []string{"budget.daily_usd", "min_free_memory_percent", "daily_budget_usd"} {
+	for _, want := range []string{"budget.daily_tokens", "min_free_memory_percent", "daily_budget_tokens"} {
 		if err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("validate = %v, want it to mention %s", err, want)
 		}

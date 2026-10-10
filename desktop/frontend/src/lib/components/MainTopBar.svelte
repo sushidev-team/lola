@@ -57,8 +57,8 @@
       : "daemon health unknown",
   );
 
-  // Today's estimated spend across every project and lola's helpers, against
-  // [budget].daily_usd. Quiet grey until 80% of the limit, warn from there, bad
+  // Today's tokens across every project and lola's helpers, against
+  // [budget].daily_tokens. Quiet grey until 80% of the limit, warn from there, bad
   // once reached — and bad while [load] holds dispatch, since in both cases new
   // tickets are silently waiting and the tooltip says why.
   const spend = $derived(store.status?.usage ?? null);

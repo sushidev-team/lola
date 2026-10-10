@@ -48,6 +48,9 @@ type Totals struct {
 	CacheRead  int64   `json:"cache_read,omitempty"`
 	CacheWrite int64   `json:"cache_write,omitempty"`
 	CostUSD    float64 `json:"cost_usd,omitempty"`
+	// Slots counts the distinct SlotDuration windows that saw any usage: a
+	// session's ACTIVE time, which is what turns a total into a burn rate.
+	Slots int `json:"slots,omitempty"`
 }
 
 // Add accumulates o into t.
@@ -57,10 +60,21 @@ func (t *Totals) Add(o Totals) {
 	t.CacheRead += o.CacheRead
 	t.CacheWrite += o.CacheWrite
 	t.CostUSD += o.CostUSD
+	t.Slots += o.Slots
 }
 
 // Tokens is every token billed, cache traffic included.
 func (t Totals) Tokens() int64 { return t.Input + t.Output + t.CacheRead + t.CacheWrite }
+
+// Weighted is the token count a BUDGET is measured in: input-equivalent
+// tokens, each kind weighted by its list-price ratio to input, the same for
+// every model (output 5×, cache write 1.25×, cache read 0.1×). Raw Tokens is
+// what the UIs show, but most of it is cache reads — a long session re-reading
+// its context — and a limit counted in raw tokens would be spent mostly by the
+// cheapest traffic there is.
+func (t Totals) Weighted() int64 {
+	return t.Input + 5*t.Output + t.CacheWrite*5/4 + t.CacheRead/10
+}
 
 // IsZero reports whether nothing was recorded.
 func (t Totals) IsZero() bool { return t == Totals{} }

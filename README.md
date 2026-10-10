@@ -296,7 +296,7 @@ runtime layer, not on config load.
 | `branch_prefix` | string | Prefix prepended to a session's derived branch name (e.g. `"feat/"` yields `feat/eng-42`). Empty inherits `[defaults].branch_prefix`, then `"lola/"`. |
 | `post_create` | string array | Commands run inside a fresh worktree before the agent starts (e.g. `composer install`). Any failure blocks the session with a clear status — never a half-started agent. Omit to inherit `[defaults].post_create`. |
 | `dev_commands` | string array | Long-running dev processes for this repository, e.g. `["composer dev", "npm run dev"]`. They run only in the project's **active** session — one session at a time, each command in its own terminal tab — see [The active session](#the-active-session). Deliberately **not** inheritable from `[defaults]`: a dev command belongs to one repository. |
-| `daily_budget_usd` | float | This project's daily limit on **estimated** spend (see [`[budget]`](#budget-optional)). Once today's spend reaches it the project dispatches nothing new until tomorrow; running sessions are untouched. `0`/absent = no project limit. Not inheritable from `[defaults]`. |
+| `daily_budget_tokens` | int | This project's daily limit in **weighted** tokens (see [`[budget]`](#budget-optional)). Once today's usage reaches it the project dispatches nothing new until tomorrow; running sessions are untouched. `0`/absent = no project limit. Not inheritable from `[defaults]`. |
 | `symlinks` | string array | Files symlinked from the main checkout into each worktree, e.g. `[".env"]`. Beware: a shared `.env` usually means every worktree talks to the same database. Omit to inherit `[defaults].symlinks`. |
 | `env` | table of strings | Extra environment variables exported into each session (`[project.env]`); the agent pane, shell tabs and the `post_create` commands all see them. Values may reference the session — see [Per-session env values](#per-session-env-values). Omit to inherit `[defaults].env`. |
 | `agent` | `"claude"` \| `"codex"` \| `"opencode"` | Coding agent for sessions spawned into this repo, overriding `[defaults].agent`. Empty/omitted inherits the global default (ultimately `claude`). See [The coding agent](#the-coding-agent). |
@@ -1061,30 +1061,53 @@ the app's terminals.
 
 ### `[budget]` (optional)
 
-Daily limits on what lola's agents **spend**, and the spend figures behind them.
-lola reads each session's token usage from the coding agent's own transcripts
-(`~/.claude/projects/<worktree>/…jsonl` — the worker, its subagents and every
-review pass run in its worktree) and prices it at **list price** per model, so
-every figure is an **estimate**: a subscription pays nothing per token. The
-`[brain]` / `[statusagent]` helpers run in `~/.lola/helpers` so their spend is
-counted too (globally, against no project). codex and opencode sessions report
-no figure — lola cannot read their logs yet — which is shown as blank, not `$0`.
+Daily limits on how many **tokens** lola's agents use, and the usage figures
+behind them. lola reads each session's token usage from the coding agent's own
+transcripts (`~/.claude/projects/<worktree>/…jsonl` — the worker, its subagents
+and every review pass run in its worktree). The `[brain]` / `[statusagent]`
+helpers run in `~/.lola/helpers` so their usage is counted too (globally,
+against no project). codex and opencode sessions report no figure — lola cannot
+read their logs yet — which is shown as blank, not `0`.
 
-Spend shows per session (a **Cost** column + the detail header in the app, a
-`COST` column + `cost:` line in the TUI) and as today's total (the app's top bar,
-the TUI's vitals bar, `lola status`). Day totals are kept in
+**Per session** (a **Tokens** column + the detail header in the app, a `TOKENS`
+column + `tokens:` line in the TUI) lola shows:
+
+- the raw token count, cache traffic included (`46.7M`);
+- a **4-step size glyph** ranking the session against your own *finished*
+  sessions of the last 35 days — below the median, p50–75, p75–90, top 10% (the
+  top step is orange). The tooltip says it in words ("heavier than 92% of your
+  last 40 sessions"). Ranking is by list-price weight, not raw tokens, because
+  a subscription limit is spent faster by output and bigger models and barely
+  by cache reads. With fewer than 10 finished sessions, fixed thresholds stand
+  in;
+- a **flame** while the session uses tokens faster (over the last ~30 minutes)
+  than 90% of your past sessions did on average per active hour — the early
+  warning for a runaway, before its total is large.
+
+The list-price dollar estimate appears only in tooltips / the detail line, as
+`~$`: a subscription pays nothing per token.
+
+**Today's total** shows in the app's top bar, the TUI's vitals bar and
+`lola status`, with the budget as a **percentage**. Day totals are kept in
 `~/.lola/state/usage.json`, so a torn-down session still counts toward today.
+
+Budgets count **weighted** tokens — each token weighted by its list-price ratio
+to input, the same for every model: output 5×, cache write 1.25×, cache read
+0.1×. Most raw tokens are cache reads (a long session re-reading its own
+context), and a limit counted in raw tokens would be spent mostly by the
+cheapest traffic there is. `lola status` prints both numbers.
 
 | Key | Type | Description |
 | --- | --- | --- |
-| `daily_usd` | float | Global daily limit across every project plus lola's helpers, in USD (local calendar day). `0`/absent = no limit. |
-| `notify` | bool | Send one notification per limit per day when spend first reaches it. Default `false`. |
+| `daily_tokens` | int | Global daily limit in weighted tokens, across every project plus lola's helpers (local calendar day). `0`/absent = no limit. |
+| `notify` | bool | Send one notification per limit per day when usage first reaches it. Default `false`. |
 
 When a limit is reached, the affected polls **hold** exactly like the runtime
-health gate: the tick is skipped, the reason (`dispatch held: daily budget
-reached: ~$51.20 of $50.00 …`) becomes the poll's `LastError`, and nothing is
-mutated — no seen entry, no label flip, and **never** a live session. Spend is
-scanned once a minute, so a limit is enforced up to a minute late.
+health gate: the tick is skipped, the reason (`dispatch held: daily token budget
+reached: 212.4M of 200.0M weighted tokens used today …`) becomes the poll's
+`LastError`, and nothing is mutated — no seen entry, no label flip, and
+**never** a live session. Usage is scanned once a minute, so a limit is enforced
+up to a minute late.
 
 ### `[load]` (optional)
 

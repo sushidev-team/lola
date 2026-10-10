@@ -18,16 +18,19 @@ import (
 
 // BudgetConfig is the [budget] table.
 //
-//   - DailyUSD is the GLOBAL daily limit on ESTIMATED spend (internal/usage:
-//     token counts from the agents' transcripts at list price), across every
-//     project plus lola's own helpers (brain, statusagent). A local calendar
-//     day; the count resets at midnight. 0 = no global limit. Per-project
-//     limits are [[project]].daily_budget_usd.
+//   - DailyTokens is the GLOBAL daily limit, across every project plus lola's
+//     own helpers (brain, statusagent), in WEIGHTED tokens (internal/usage:
+//     the agents' transcripts, each token weighted by its list-price ratio to
+//     input — output 5×, cache write 1.25×, cache read 0.1×). Weighted because
+//     most raw tokens are cheap cache reads; a limit in raw tokens would be
+//     spent mostly by a long session re-reading its own context. A local
+//     calendar day; the count resets at midnight. 0 = no global limit.
+//     Per-project limits are [[project]].daily_budget_tokens.
 //   - Notify sends one notification per limit per day when spend first reaches
 //     it, so a held dispatch is not discovered only by reading a status line.
 type BudgetConfig struct {
-	DailyUSD float64 `toml:"daily_usd,omitempty"`
-	Notify   bool    `toml:"notify,omitempty"`
+	DailyTokens int64 `toml:"daily_tokens,omitempty"`
+	Notify      bool  `toml:"notify,omitempty"`
 }
 
 // LoadConfig is the [load] table — a machine-load hold on top of the slot cap,
@@ -51,9 +54,9 @@ type LoadConfig struct {
 func (l LoadConfig) Enabled() bool { return l.MaxLoadPerCPU > 0 || l.MinFreeMemoryPercent > 0 }
 
 // ProjectBudget is name's daily limit (0 = none).
-func (c *Config) ProjectBudget(name string) float64 {
+func (c *Config) ProjectBudget(name string) int64 {
 	if p := c.ProjectByName(name); p != nil {
-		return p.DailyBudgetUSD
+		return p.DailyBudgetTokens
 	}
 	return 0
 }
@@ -61,8 +64,8 @@ func (c *Config) ProjectBudget(name string) float64 {
 func (c *Config) validateLimits() []error {
 	var errs []error
 	bad := func(v float64) bool { return v < 0 || math.IsNaN(v) || math.IsInf(v, 0) }
-	if bad(c.Budget.DailyUSD) {
-		errs = append(errs, errors.New("budget.daily_usd must be >= 0 (0 = no limit)"))
+	if c.Budget.DailyTokens < 0 {
+		errs = append(errs, errors.New("budget.daily_tokens must be >= 0 (0 = no limit)"))
 	}
 	if bad(c.Load.MaxLoadPerCPU) {
 		errs = append(errs, errors.New("load.max_load_per_cpu must be >= 0 (0 = off)"))
@@ -71,8 +74,8 @@ func (c *Config) validateLimits() []error {
 		errs = append(errs, errors.New("load.min_free_memory_percent must be in [0, 100) (0 = off)"))
 	}
 	for _, p := range c.Projects {
-		if bad(p.DailyBudgetUSD) {
-			errs = append(errs, fmt.Errorf("project %q: daily_budget_usd must be >= 0 (0 = no limit)", p.Name))
+		if p.DailyBudgetTokens < 0 {
+			errs = append(errs, fmt.Errorf("project %q: daily_budget_tokens must be >= 0 (0 = no limit)", p.Name))
 		}
 	}
 	return errs

@@ -189,3 +189,65 @@ func TestLedgerPrune(t *testing.T) {
 		t.Fatalf("days = %v", l.Days)
 	}
 }
+
+func TestWeightedDiscountsCacheReads(t *testing.T) {
+	if got := (Totals{Input: 100, Output: 10, CacheWrite: 40, CacheRead: 1000}).Weighted(); got != 100+50+50+100 {
+		t.Fatalf("weighted = %d", got)
+	}
+}
+
+func TestScanCountsActiveSlotsAndRecent(t *testing.T) {
+	dir := t.TempDir()
+	base := time.Date(2026, 10, 8, 12, 0, 0, 0, time.Local)
+	at := func(m int) string { return base.Add(time.Duration(m) * time.Minute).UTC().Format(time.RFC3339Nano) }
+	writeLines(t, filepath.Join(dir, "s.jsonl"),
+		line("a", "claude-sonnet-5-5", at(1), 0, 100_000, 0, 0),
+		line("b", "claude-sonnet-5-5", at(2), 0, 100_000, 0, 0), // same window
+		line("c", "claude-sonnet-5-5", at(25), 0, 100_000, 0, 0),
+		line("d", "claude-sonnet-5-5", at(55), 0, 100_000, 0, 0),
+	)
+	s := NewScanner()
+	days, err := s.ScanDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := days[base.Format(DayFormat)].Slots; got != 3 {
+		t.Fatalf("slots = %d, want 3 distinct windows", got)
+	}
+	if got := s.Recent(dir, base.Add(50*time.Minute)); got.Output != 100_000 {
+		t.Fatalf("recent = %+v, want only the last record", got)
+	}
+}
+
+func TestRankAmong(t *testing.T) {
+	if r := RankAmong(12, nil); r.Of != 0 || r.Level != LevelHeavy {
+		t.Fatalf("fallback rank = %+v, want heavy by threshold", r)
+	}
+	hist := []float64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
+	cases := map[float64]int{0.5: LevelLight, 6.5: LevelNormal, 8.5: LevelHeavy, 50: LevelTop}
+	for w, want := range cases {
+		if r := RankAmong(w, hist); r.Level != want || r.Of != 10 {
+			t.Errorf("RankAmong(%v) = %+v, want level %d", w, r, want)
+		}
+	}
+}
+
+func TestBurnThreshold(t *testing.T) {
+	if got := BurnThreshold([]float64{1}); got != burnFallback {
+		t.Fatalf("thin history = %v", got)
+	}
+	rates := []float64{1, 1, 1, 1, 1, 1, 1, 1, 1, 1}
+	if got := BurnThreshold(rates); got != burnFloor {
+		t.Fatalf("quiet history must clamp to the floor, got %v", got)
+	}
+	rates[9] = 40
+	if got := BurnThreshold(rates); got != 40 {
+		t.Fatalf("p90 = %v", got)
+	}
+	if HourlyRate(Totals{CostUSD: 10, Slots: 2}) != 0 {
+		t.Fatal("too short a session must have no rate")
+	}
+	if got := HourlyRate(Totals{CostUSD: 10, Slots: 6}); !near(got, 10) {
+		t.Fatalf("rate = %v, want $10 per active hour", got)
+	}
+}

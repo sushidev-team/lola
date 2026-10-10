@@ -437,14 +437,15 @@ endpoint = "https://api.linear.app/graphql"
 #                         # Written to lola's server in either state, so this key decides it, not ~/.tmux.conf.
 
 # ---------------------------------------------------------------------------
-# [budget] — OPTIONAL daily spend limits. Spend is ESTIMATED from the coding
-# agent's own transcripts (claude only) at list price — a subscription pays
-# nothing per token. Reaching a limit HOLDS new dispatch (the tick is skipped
-# and the reason shown as the poll's error); running sessions are never
-# touched. Per-project limits are [[project]].daily_budget_usd. 0 = no limit.
+# [budget] — OPTIONAL daily token limits, read from the coding agent's own
+# transcripts (claude only). Counted in WEIGHTED tokens — output 5x, cache
+# write 1.25x, cache read 0.1x — so cheap cache reads do not eat the limit.
+# Reaching a limit HOLDS new dispatch (the tick is skipped and the reason shown
+# as the poll's error); running sessions are never touched. Per-project limits
+# are [[project]].daily_budget_tokens. 0 = no limit.
 # ---------------------------------------------------------------------------
 # [budget]
-# daily_usd = 50.0        # global limit across all projects + lola's helpers, per local day
+# daily_tokens = 200_000_000   # global limit across all projects + lola's helpers, per local day
 # notify = true           # notify once per limit per day when it is reached
 
 # ---------------------------------------------------------------------------
@@ -609,8 +610,8 @@ dev_commands = [
   "npm run dev",
   # "cd desktop && wails3 dev",
 ]
-# Daily limit on THIS project's estimated spend (see [budget]); 0 = none.
-# daily_budget_usd = 20.0
+# Daily limit on THIS project's weighted tokens (see [budget]); 0 = none.
+# daily_budget_tokens = 50_000_000
 # Files symlinked from the main checkout into each worktree.
 # CAVEAT: symlinking .env means every worktree talks to the SAME database
 # (and caches, queues, ...) as the main checkout — concurrent sessions can
