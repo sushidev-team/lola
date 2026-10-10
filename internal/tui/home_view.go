@@ -166,6 +166,8 @@ func (m *rootModel) homeMessage(w int) string {
 		return previewLine(badText.Render(fmt.Sprintf("REMOVE project %q from config? (y/n)", m.projLabel(h.removeTarget))), w)
 	case h.adding:
 		return previewLine(warnText.Render("new project name: ")+h.addInput+"_"+faintText.Render("  · enter create · esc cancel"), w)
+	case h.broadcasting:
+		return previewLine(warnText.Render("broadcast to "+m.projLabel(h.bcastTarget)+"'s agents: ")+h.bcastInput+"_", w)
 	case h.flash != "":
 		if h.flashGood {
 			return previewLine(goodText.Render(h.flash), w)
@@ -188,6 +190,8 @@ func (m *rootModel) homeKeybar(w int) string {
 		return previewLine(faintText.Render("type to filter · enter apply · esc clear"), w)
 	case h.adding:
 		return previewLine(faintText.Render("type a name · enter create · esc cancel"), w)
+	case h.broadcasting:
+		return previewLine(faintText.Render("type a message · enter send to every live agent (busy ones get it when idle) · esc cancel"), w)
 	case h.confirmStop:
 		return previewLine(warnText.Render("y")+faintText.Render(" stop polling · ")+warnText.Render("n")+faintText.Render(" cancel"), w)
 	case h.confirmRemove:
@@ -195,7 +199,7 @@ func (m *rootModel) homeKeybar(w int) string {
 	}
 	// 'x' stops polling and 'X' removes, matching the cockpit rail — the two used
 	// to be the same key with different meanings on the two project lists.
-	keys := []string{"↑↓ move", "enter open", "s sessions", "n add", "e edit", "space poll", "x stop", "X remove", "/ filter", "esc back"}
+	keys := []string{"↑↓ move", "enter open", "s sessions", "n add", "e edit", "space poll", "b broadcast", "x stop", "X remove", "/ filter", "esc back"}
 	keys = append(keys, "S settings")
 	if m.manageDaemon() && m.home.data == nil {
 		keys = append(keys, "^r start daemon") // urgent while the daemon is down

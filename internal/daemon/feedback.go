@@ -168,8 +168,31 @@ func (d *Daemon) handleFeedback(ctx context.Context, a protocol.FeedbackArgs) (p
 // agent is provably resting there, and reports whether it did. Every "no"
 // leaves the queue untouched for a later attempt.
 func (d *Daemon) deliverFeedback(ctx context.Context, id string) bool {
+	return d.deliverQueued(ctx, id, queuedText{
+		name:  "feedback",
+		field: func(s *session.Session) *string { return &s.PendingFeedback },
+		wrap:  feedbackMessage,
+		done:  "delivered the human's diff review to the agent",
+	})
+}
+
+// queuedText names one HUMAN-written queue on the session record (diff
+// feedback, a project broadcast) for deliverQueued: which field holds it, how
+// the queued text is wrapped into the message the agent reads, and what to log.
+type queuedText struct {
+	name  string
+	field func(*session.Session) *string
+	wrap  func(string) string
+	done  string
+}
+
+// deliverQueued types one queue into the session's pane when the agent is
+// provably resting there, and reports whether it did. Every "no" leaves the
+// queue untouched for a later attempt; a failed send re-queues the text, since
+// it exists nowhere else.
+func (d *Daemon) deliverQueued(ctx context.Context, id string, q queuedText) bool {
 	s, ok := d.sessions.Get(id)
-	if !ok || s.PendingFeedback == "" || s.TmuxName == "" || !handoffDeliverable(s) {
+	if !ok || *q.field(&s) == "" || s.TmuxName == "" || !handoffDeliverable(s) {
 		return false
 	}
 	if !d.paneWaitingNow(ctx, s) {
@@ -183,10 +206,11 @@ func (d *Daemon) deliverFeedback(ctx context.Context, id string) bool {
 		tmuxName string
 	)
 	d.sessions.Update(id, func(cur *session.Session) bool {
-		if !handoffDeliverable(*cur) || cur.PendingFeedback == "" {
+		f := q.field(cur)
+		if !handoffDeliverable(*cur) || *f == "" {
 			return false
 		}
-		text, cur.PendingFeedback = cur.PendingFeedback, ""
+		text, *f = *f, ""
 		cur.AtPrompt = false
 		// CLAIM the prompt in the same atomic step: handoffDeliverable admits
 		// AgentIdle whatever AtPrompt says, so clearing AtPrompt alone left the
@@ -202,25 +226,26 @@ func (d *Daemon) deliverFeedback(ctx context.Context, id string) bool {
 		return false
 	}
 
-	if err := d.typeToAgent(ctx, id, tmuxName, feedbackMessage(text), reactExecTimeout); err != nil {
+	if err := d.typeToAgent(ctx, id, tmuxName, q.wrap(text), reactExecTimeout); err != nil {
 		// Unlike a review hand-off (which other sinks also received), this text
 		// exists nowhere else: put it back in front of anything queued since.
 		d.sessions.Update(id, func(cur *session.Session) bool {
-			if cur.PendingFeedback != "" {
-				cur.PendingFeedback = text + "\n\n" + cur.PendingFeedback
+			f := q.field(cur)
+			if *f != "" {
+				*f = text + "\n\n" + *f
 			} else {
-				cur.PendingFeedback = text
+				*f = text
 			}
 			return true
 		})
 		_ = d.sessions.Save()
-		d.logf("", "feedback: %s send-keys failed (re-queued): %v", id, err)
+		d.logf("", "%s: %s send-keys failed (re-queued): %v", q.name, id, err)
 		return false
 	}
 	if err := d.sessions.Save(); err != nil {
-		d.logf("", "feedback: persist sessions: %v", err)
+		d.logf("", "%s: persist sessions: %v", q.name, err)
 	}
-	d.logf("", "feedback: %s delivered the human's diff review to the agent", id)
+	d.logf("", "%s: %s %s", q.name, id, q.done)
 	return true
 }
 

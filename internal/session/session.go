@@ -400,6 +400,14 @@ type Session struct {
 	// provider behind it and must survive one being reconfigured.
 	PendingFeedback string `json:"pending_feedback,omitempty"`
 
+	// PendingBroadcast is a HUMAN's project-wide message (cmd=broadcast) that
+	// could not be typed yet because the pane was not verifiably resting at its
+	// prompt. Later broadcasts are APPENDED. Delivered (and cleared) through the
+	// same sanitize + idle gate + pane proof as PendingFeedback, and kept apart
+	// from it because the agent is told something different about where each
+	// came from.
+	PendingBroadcast string `json:"pending_broadcast,omitempty"`
+
 	// ContextKey names the session's SHARED CONTEXT FOLDER,
 	// ~/.lola/context/<project>/<key>/, linked into the worktree as
 	// .lola/context (runtime.ContextKey). Recorded rather than re-derived because

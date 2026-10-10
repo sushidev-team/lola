@@ -80,6 +80,28 @@ export interface BoardTodo {
 }
 
 /**
+ * BroadcastArgs is the argument payload for cmd=broadcast. Project is the
+ * project's Name (its id, not its display label).
+ */
+export interface BroadcastArgs {
+    "project": string;
+    "message": string;
+}
+
+/**
+ * BroadcastData is Response.Data for cmd=broadcast: the session ids the message
+ * was typed into now (Delivered), the ones that have it queued until their
+ * agent is back at its prompt (Queued), and the ones whose queue was already
+ * full (Skipped). Message is the short human-readable outcome.
+ */
+export interface BroadcastData {
+    "delivered": string[] | null;
+    "queued": string[] | null;
+    "skipped"?: string[] | null;
+    "message"?: string;
+}
+
+/**
  * CheckpointInfo is one turn checkpoint. Head is the commit the session's
  * branch was on when it was taken; SHA is the snapshot itself.
  */

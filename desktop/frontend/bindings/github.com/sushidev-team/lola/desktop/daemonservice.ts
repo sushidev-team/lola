@@ -44,6 +44,16 @@ export function Answer(session: string, text: string): $CancellablePromise<void>
 }
 
 /**
+ * Broadcast sends one message to every live coding agent of a project. Agents
+ * resting at their prompt get it now; busy ones get it queued and delivered
+ * when idle. The reply names both groups so the UI can show the split. Long
+ * timeout: the daemon reads (and may type into) one pane per live session.
+ */
+export function Broadcast(args: protocol$0.BroadcastArgs): $CancellablePromise<protocol$0.BroadcastData> {
+    return $Call.ByID(2789386200, args);
+}
+
+/**
  * CLIInfo resolves the CLI and probes versions. Never errors: a machine with no
  * CLI at all is a state the UI has to render, not an exception.
  */

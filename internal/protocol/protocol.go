@@ -109,6 +109,13 @@ import (
 // anything already queued) and delivered on the first cycle its pane is
 // verifiably resting. The reply is FeedbackData saying which happened.
 //
+// Cmd "broadcast" sends ONE human message to every LIVE coding agent of a
+// project (Args: BroadcastArgs) — sessions with an agent process alive and a PR
+// that is not merged or closed. Each copy goes through the same send-keys
+// safety as cmd=feedback and DEFERS the same way: an agent not verifiably
+// resting at its prompt gets it queued and delivered when it comes back. The
+// reply is BroadcastData naming the delivered and deferred sessions.
+//
 // Cmd "checkpoints" lists a session's TURN CHECKPOINTS as CheckpointsData:
 // snapshots of its whole worktree (uncommitted and untracked work included) the
 // daemon records when the agent's turn ends, kept on refs under
@@ -1004,6 +1011,24 @@ type FeedbackData struct {
 	Delivered bool   `json:"delivered"`
 	Queued    bool   `json:"queued"`
 	Message   string `json:"message,omitempty"`
+}
+
+// BroadcastArgs is the argument payload for cmd=broadcast. Project is the
+// project's Name (its id, not its display label).
+type BroadcastArgs struct {
+	Project string `json:"project"`
+	Message string `json:"message"`
+}
+
+// BroadcastData is Response.Data for cmd=broadcast: the session ids the message
+// was typed into now (Delivered), the ones that have it queued until their
+// agent is back at its prompt (Queued), and the ones whose queue was already
+// full (Skipped). Message is the short human-readable outcome.
+type BroadcastData struct {
+	Delivered []string `json:"delivered"`
+	Queued    []string `json:"queued"`
+	Skipped   []string `json:"skipped,omitempty"`
+	Message   string   `json:"message,omitempty"`
 }
 
 // CheckpointArgs is the argument payload for cmd=checkpointDiff,

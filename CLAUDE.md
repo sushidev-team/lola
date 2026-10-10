@@ -1181,6 +1181,11 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   unlike a review hand-off), and it is kept apart from `PendingHandoffs` because
   that map is keyed by provider kind and a stash for an unconfigured kind is
   skipped.
+  `cmd=broadcast` (`internal/daemon/broadcast.go`) is the same queue fanned
+  out over a project's LIVE agents (`broadcastTarget`): its own
+  `Session.PendingBroadcast` field (the agent is told a different origin),
+  the same `deliverQueued` gate, and flushed right after feedback in the same
+  one-delivery-per-pass slot.
 - **Every reaction dispatches off the DELIVERY axis, never the rollup.**
   `react` switches on `s.Delivery` (merged → ci_failed → merge_conflict →
   changes_requested → approved → closed, in that order), and each reaction's

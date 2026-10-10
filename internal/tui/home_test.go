@@ -244,3 +244,39 @@ func TestHomeTogglePolling(t *testing.T) {
 		t.Errorf("space should pause the project's polling, got %+v", p)
 	}
 }
+
+// 'b' opens the broadcast prompt for the selected project; enter sends ONE
+// cmd=broadcast naming it, and the reply's delivered/deferred split flashes.
+func TestHomeBroadcast(t *testing.T) {
+	m := homeRoot(t)
+	m.home.selName = "nori-app"
+	m.home.repin(m.cfg)
+
+	m.Update(keyMsg("b"))
+	if !m.home.broadcasting {
+		t.Fatal("'b' should open the broadcast prompt")
+	}
+	for _, r := range "rebase on main" {
+		m.Update(keyMsg(string(r)))
+	}
+	var got []protocol.Request
+	fakeRequest(t, &got, mustData(t, protocol.BroadcastData{
+		Delivered: []string{"a"}, Queued: []string{"b"},
+		Message: "delivered to 1, deferred for 1 (sent when idle)",
+	}), nil)
+	_, cmd := m.Update(keyMsg("enter"))
+	if m.home.broadcasting || cmd == nil {
+		t.Fatal("enter should close the prompt and send")
+	}
+	m.Update(cmd())
+
+	if len(got) != 1 || got[0].Cmd != "broadcast" {
+		t.Fatalf("requests = %+v, want one cmd=broadcast", got)
+	}
+	if s := string(got[0].Args); !strings.Contains(s, `"project":"nori-app"`) || !strings.Contains(s, `"message":"rebase on main"`) {
+		t.Errorf("args = %s", s)
+	}
+	if !strings.Contains(m.home.flash, "delivered to 1, deferred for 1") {
+		t.Errorf("flash = %q, want the delivered/deferred split", m.home.flash)
+	}
+}

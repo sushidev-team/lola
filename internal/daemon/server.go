@@ -312,6 +312,16 @@ func (d *Daemon) handle(ctx context.Context, req protocol.Request) protocol.Resp
 			return protocol.Response{OK: false, Error: err.Error()}
 		}
 		return dataResponse(data)
+	case "broadcast":
+		var a protocol.BroadcastArgs
+		if err := json.Unmarshal(req.Args, &a); err != nil {
+			return protocol.Response{OK: false, Error: "broadcast: bad args: " + err.Error()}
+		}
+		data, err := d.handleBroadcast(ctx, a)
+		if err != nil {
+			return protocol.Response{OK: false, Error: err.Error()}
+		}
+		return dataResponse(data)
 	case "checkpoints":
 		data, err := d.handleCheckpoints(ctx, req.Session)
 		if err != nil {

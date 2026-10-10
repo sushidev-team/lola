@@ -371,6 +371,8 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case feedbackDoneMsg:
 		return m, m.handleFeedbackDone(v)
+	case broadcastDoneMsg:
+		return m, m.handleBroadcastDone(v)
 	case answerDoneMsg:
 		// Surface the daemon's verdict: a green "answer sent", or the verbatim
 		// refusal/dial error. Then refresh the list and pane so the resumed
@@ -825,6 +827,15 @@ func (m *rootModel) listKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		// the same binding the projects screen uses.
 		if p := m.selectedRailProject(); p != nil {
 			m.home.confirmRemove, m.home.removeTarget = true, p.Name
+			m.view = viewHome
+			m.home.repin(m.cfg)
+			return m, fetchProjectsCmd
+		}
+	case "b":
+		// Broadcast to the project's live agents. The prompt lives on the
+		// projects screen (where its outcome flashes), as 'X' does.
+		if p := m.selectedRailProject(); p != nil {
+			m.home.broadcasting, m.home.bcastTarget, m.home.bcastInput = true, p.Name, ""
 			m.view = viewHome
 			m.home.repin(m.cfg)
 			return m, fetchProjectsCmd

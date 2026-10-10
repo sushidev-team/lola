@@ -152,6 +152,20 @@ func (s *DaemonService) SendFeedback(args protocol.FeedbackArgs) (protocol.Feedb
 	return d, err
 }
 
+// Broadcast sends one message to every live coding agent of a project. Agents
+// resting at their prompt get it now; busy ones get it queued and delivered
+// when idle. The reply names both groups so the UI can show the split. Long
+// timeout: the daemon reads (and may type into) one pane per live session.
+func (s *DaemonService) Broadcast(args protocol.BroadcastArgs) (protocol.BroadcastData, error) {
+	raw, err := json.Marshal(args)
+	if err != nil {
+		return protocol.BroadcastData{}, err
+	}
+	var d protocol.BroadcastData
+	err = call(protocol.Request{Cmd: "broadcast", Args: raw}, longTimeout, &d)
+	return d, err
+}
+
 // Checkpoints lists the session's turn checkpoints, oldest first: the worktree
 // snapshot the daemon records each time the agent ends a turn.
 func (s *DaemonService) Checkpoints(session string) (protocol.CheckpointsData, error) {

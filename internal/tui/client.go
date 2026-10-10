@@ -173,6 +173,12 @@ func Send(raw string) error {
 			return fmt.Errorf("bad restore data: %w", err)
 		}
 		fmt.Println(d.Message)
+	case "broadcast":
+		var d protocol.BroadcastData
+		if err := json.Unmarshal(resp.Data, &d); err != nil {
+			return fmt.Errorf("bad broadcast data: %w", err)
+		}
+		fmt.Print(renderBroadcast(&d))
 	case "open", "forkCheckpoint":
 		var d protocol.OpenData
 		if err := json.Unmarshal(resp.Data, &d); err != nil {
@@ -187,6 +193,22 @@ func Send(raw string) error {
 		fmt.Println("ok")
 	}
 	return nil
+}
+
+// renderBroadcast prints a broadcast's outcome: the summary line, then which
+// sessions got it now and which will get it when their agent is idle.
+func renderBroadcast(d *protocol.BroadcastData) string {
+	var b strings.Builder
+	b.WriteString(d.Message + "\n")
+	for _, g := range []struct {
+		label string
+		ids   []string
+	}{{"delivered", d.Delivered}, {"deferred", d.Queued}, {"skipped", d.Skipped}} {
+		if len(g.ids) > 0 {
+			fmt.Fprintf(&b, "  %-9s %s\n", g.label+":", strings.Join(g.ids, ", "))
+		}
+	}
+	return b.String()
 }
 
 // renderCheckpoints prints a session's checkpoints, newest last.
