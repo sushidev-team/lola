@@ -1,5 +1,44 @@
 # Changelog
 
+## [0.2.14](https://github.com/sushidev-team/lola/compare/v0.2.13...v0.2.14) (2026-10-10)
+
+
+### Features
+
+* agent self-reports (lola report) and stale Linear filter detection ([fd62921](https://github.com/sushidev-team/lola/commit/fd62921620b5d669456b8b3753888872c49e1f24))
+* audit agent check claims against transcript evidence ([a4a756d](https://github.com/sushidev-team/lola/commit/a4a756d4a042988e432cc97ce6101f320b91c97d))
+* audit agent check claims against transcript evidence ([7492fff](https://github.com/sushidev-team/lola/commit/7492fff750d3f63d14c7df8015ba2410b9f92c37))
+* cost tracking, daily budgets and load-aware dispatch ([fea2a2e](https://github.com/sushidev-team/lola/commit/fea2a2e81f5f1789c1ef962014f0f40fb98260c7))
+* count codex sessions' tokens too ([17598c6](https://github.com/sushidev-team/lola/commit/17598c6112be8be43ec57952d8c94533c41171f0))
+* count opencode tokens; styled hover cards for usage ([ebeb09b](https://github.com/sushidev-team/lola/commit/ebeb09b48cde26623b074da2604c39fb21de9d70))
+* cross-session overlap warnings and opt-in local merge queue ([21e03aa](https://github.com/sushidev-team/lola/commit/21e03aa325a1950ee571aa048164aed8951eb8f6))
+* cross-session overlap warnings and opt-in local merge queue ([ec35d02](https://github.com/sushidev-team/lola/commit/ec35d02e98503a9653a2b0f7fe817945480964d9))
+* **daemon:** diff and feedback commands for the in-app diff viewer ([359ea62](https://github.com/sushidev-team/lola/commit/359ea62c055db7deeaad85aa6803baa6ead40c81))
+* **desktop:** agent glyph + lifecycle chip in the session list ([060ea61](https://github.com/sushidev-team/lola/commit/060ea6137da4a669ce70f66793485f9c96be780e))
+* **desktop:** diff tab with line comments sent to the agent ([88b0765](https://github.com/sushidev-team/lola/commit/88b0765a31afd2d2bc9bc50ff121e6101f625443))
+* **desktop:** move checkpoints into the session sidebar ([f833e56](https://github.com/sushidev-team/lola/commit/f833e56f42ac5e588f706152f311dfa1ab3a8926))
+* **desktop:** replace menu bar label with monochrome Lola icon ([c7794fe](https://github.com/sushidev-team/lola/commit/c7794fe27a2a04c2d1afa33d7c4a8e11b8a669ae))
+* in-app diff viewer with line comments sent to the agent ([48b704f](https://github.com/sushidev-team/lola/commit/48b704f81aca29b604c3732c64af6670848edef0))
+* pace-aware limit bars and a structured usage card ([cf3df18](https://github.com/sushidev-team/lola/commit/cf3df1873ca74bb56c36dd54a9e8619d3a151ae3))
+* show claude and codex subscription limits in the header ([f6fe0e3](https://github.com/sushidev-team/lola/commit/f6fe0e32109dcd1d6e622c2dc91fa04522ab408e))
+* show subscription limits as progress bars ([38fb595](https://github.com/sushidev-team/lola/commit/38fb5956cdd9feaa6f602bf746b15a7a2dea1971))
+* show tokens with a history-ranked size glyph and burn flame ([73ec047](https://github.com/sushidev-team/lola/commit/73ec047743b118bacf50142f7a80aae6fd38c306))
+* token usage, subscription limits, daily token budgets and load-aware dispatch ([0fa52e8](https://github.com/sushidev-team/lola/commit/0fa52e8d641a1986aac9af115b6153f39b374a79))
+* **tui:** diff overlay with line comments and notes sent to the agent ([530946d](https://github.com/sushidev-team/lola/commit/530946d40d6f3607e6826b3ca37c73b9dc241be5))
+* turn checkpoints, fork-from-here, and a shared context folder ([f3db360](https://github.com/sushidev-team/lola/commit/f3db3602aeb349b753970910c4d0618b179b7bf0))
+* turn checkpoints, fork-from-here, and a shared context folder ([726f4b3](https://github.com/sushidev-team/lola/commit/726f4b3d676a5052a60fdcbf7ba17af18a1779a4))
+
+
+### Bug Fixes
+
+* address diff-viewer review findings ([11eaab9](https://github.com/sushidev-team/lola/commit/11eaab95c19d4d322dc05b6d99b5b9f412fa84d8))
+* **checkpoint:** keep the index mtime on the snapshot's temp index ([9574a2b](https://github.com/sushidev-team/lola/commit/9574a2b192532807e1b5d5c41b5cf6f3e3dca1b3))
+* **claimaudit:** judge a run by the shell structure around it ([43ecebd](https://github.com/sushidev-team/lola/commit/43ecebdf7a4b3c73211b376f182bd824407f397e))
+* **desktop:** prefix file-tree file keys so a file named dir:x cannot collide ([62a499e](https://github.com/sushidev-team/lola/commit/62a499e872a25f26f87187e829fa82c8bf97ed71))
+* **desktop:** stop the diff tab reloading on every session push ([d8ffdf8](https://github.com/sushidev-team/lola/commit/d8ffdf82878c073549cb98f98a9fc68c3499938a))
+* harden checkpoint restore failure and fork slot selection ([bb21d09](https://github.com/sushidev-team/lola/commit/bb21d095e95a1f58cc094cd4b1ca537a7e470ce9))
+* make checkpoint restore safe and baseline every agent kind ([77b3c30](https://github.com/sushidev-team/lola/commit/77b3c304b255e050a4377a76ed934b412d4efe6f))
+
 ## [0.2.13](https://github.com/sushidev-team/lola/compare/v0.2.12...v0.2.13) (2026-09-05)
 
 
