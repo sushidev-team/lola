@@ -98,6 +98,7 @@ func (d *Daemon) statusData(ctx context.Context) protocol.StatusData {
 		LinearOK:   linOK,
 		Polls:      make([]protocol.PollStatus, 0, len(polls)),
 		Host:       machineName(),
+		Usage:      d.usageStatus(time.Now()),
 	}
 	for _, p := range polls {
 		ps := d.status.get(p.name)

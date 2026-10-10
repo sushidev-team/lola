@@ -162,6 +162,12 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   every string and list), and the `Board` the session store holds. The verbs
   are parsed DAEMON-side (`cmd=agentReport`, `internal/daemon/report.go`), so
   the trust boundary is the daemon, not whichever lola binary a pane runs.
+- `internal/claimaudit` — the board's deterministic second opinion (stdlib +
+  `board`): an INCREMENTAL scan of Claude Code's JSONL transcript for the shell
+  commands it actually ran, classified as test / lint / build runners and paired
+  with their tool result's `is_error`, then compared with each `check <name>
+  pass` claim (a run before the claim? did the last one fail?) and with the PR's
+  CI rollup. See the board invariant below — the result is display-only.
 - `internal/statusagent` — the OPT-IN status interpreter: one bounded
   `claude -p` per interpretation (default `--model sonnet`) judging what an
   agent is ACTUALLY doing from pane/events/PR context. Output is parsed,
@@ -220,6 +226,21 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   zero value, because an empty repo merely disables the open-PR check while a
   wrong one would make `gh pr list --repo` answer about someone else's
   repository.
+- `internal/usage` — token usage (stdlib leaf): sums the `message.usage`
+  numbers of claude-code's transcripts (plus codex's `token_count` deltas,
+  `CodexScanner`, and opencode's messages, `OpencodeScanner`) per local day
+  and per 10-minute slot
+  (`Scanner`, incremental by file offset, dedup by message id), prices them at
+  list price for RANKING only (`RankAmong`, `BurnThreshold`), plus the
+  persisted per-day `Ledger` (`~/.lola/state/usage.json`) the budget reads.
+  A session's directory is its WORKTREE's `~/.claude/projects` slug, so the
+  worker, its subagents and every review pass run there are one figure.
+- `internal/quota` — the agents' SUBSCRIPTION limits (stdlib leaf): claude's
+  `rate_limits` as recorded by `lola hook statusline` (`RecordClaude`, in
+  `~/.lola/state/quota-claude.json`) and codex's from the tail of its newest
+  session log (`LatestCodex`). Snapshots, clamped, with reset times.
+- `internal/sysload` — machine load for the `[load]` hold (stdlib leaf): the
+  1-min load average and the OS's own free-memory percentage; unknown is -1.
 - `internal/secrets` / `internal/notify` / `internal/brain` / `internal/review`
   / `internal/attention` / `internal/doctor` — Linear key resolution
   (keychain→env), best-effort desktop/Slack notify, opt-in headless-claude
@@ -393,6 +414,52 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   only them. `Validate` does NOT check this: whether a UUID is team- or
   workspace-scoped is unknowable offline, and an earlier cross-team rejection
   here blocked the correct configuration. Do not reinstate it.
+- **Spend and load HOLD dispatch; they never touch a session.** `dispatchHold`
+  (`internal/daemon/usage.go`) runs right after the health gate with the same
+  contract — skip the tick, `dispatch held: <why>` as `LastError`, mutate
+  nothing. Rules that keep it honest:
+  - The UIs show TOKENS, not dollars (a subscription pays nothing per token);
+    the list-price estimate appears only in tooltips as `~$`. An absent
+    `Usage` means UNKNOWN (no log yet) and renders blank, never `0`.
+  - codex usage comes from its DATE-keyed logs, attributed by the cwd in
+    each log's `session_meta` (`usage.CodexScanner`; logs outside
+    `~/.lola/worktrees` are never read past line one). It carries NO price —
+    lola has none for codex models — so a codex session is ranked on its own
+    `Scale` (weighted tokens) against codex history only. Never mix the
+    agents in one ranking: their weights are different units.
+  - opencode usage comes from its SQLite database through the `sqlite3` CLI
+    (`usage.OpencodeScanner`, `-readonly`, query on STDIN, bounded): only
+    sessions whose directory lies under `~/.lola/worktrees` are selected,
+    only numbers leave the query (`json_extract`), and a message is REPLACED
+    by id so one still streaming is never double-counted. No CLI = no figure
+    (fail open). Its `CostUSD` is opencode's own price, and it ranks on the
+    token scale like codex.
+  - Three different measures, each for its own job: RAW tokens are displayed;
+    WEIGHTED tokens (`Totals.Weighted`, model-independent price ratios) are
+    what a budget counts, so cache reads do not exhaust it; list-price
+    `CostUSD` RANKS a session (size glyph + flame), because bigger models eat
+    a subscription limit faster. The UIs show a budget as a PERCENTAGE, never
+    beside the raw count as if they were the same unit.
+  - A session is ranked against FINISHED sessions only (the ledger minus the
+    live set and the helpers): ranking against live ones would make a lone
+    session always "max" and shift every row whenever one spawns.
+  - The ledger REPLACES each (day, source) entry with the scanner's absolute
+    total, so rescans are idempotent and a torn-down session keeps counting.
+  - `TranscriptPath` from a hook is only trusted when it lies directly under
+    the claude projects root; anything else falls back to the worktree slug.
+  - `[brain]`/`[statusagent]` run with cwd `~/.lola/helpers` so their spend
+    lands in one slug (`helperSource`, global only). The review AGENT family
+    already runs in the worktree and is counted with the session.
+  - A load value the OS will not report holds NOTHING (fail open): a wrong
+    "busy" is a machine that silently never dispatches.
+  - The subscription limits are DISPLAY-ONLY (no hold reads them), and the
+    claude half exists only because the status line is the one place Claude
+    Code exposes them. `hook.SettingsJSON` therefore OWNS the status line of
+    every lola claude session, and `hook.StatusLine` must keep passing through
+    to the user's own command (project local → project → user settings, same
+    stdin, bounded, process group killed) — ALWAYS, even when recording fails,
+    and never to a command that is itself `lola hook statusline`. Dropping the
+    pass-through silently breaks whatever the user's status line feeds.
 - **Health-gate every dispatch.** If `tmux`/`git`/`claude` aren't all resolvable
   or the poll's `[[project]]` doesn't resolve: skip the tick, record `lastError`
   in status, and mutate **nothing** (no seen, no labels, no in-flight).
@@ -1138,6 +1205,25 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   nor triage. `agentReport` is in remote's `deniedCommands` like `hookEvent`,
   rate-limited per session, and its CLI exits 0 when the daemon is unreachable
   so a report never fails the command an agent chained it onto.
+  - **The claim AUDIT is display-only too** (`internal/daemon/claimaudit.go`,
+    SUSHI-622). The observer advances `claimaudit.Scanner` once per cycle for
+    claude sessions whose board makes a `check … pass` claim naming a test /
+    lint / build category; `sessionsData` judges from that cache (no I/O) and
+    ships `BoardCheck.evidence` + `BoardInfo.mismatches` — the "Unverified
+    claim" chip in the app, `⚠ unverified` in the TUI. Nothing else reads it.
+    Rules: only command lines and `is_error` are decoded, nothing from the
+    transcript is ever rendered; a warning needs a FULLY read transcript (an
+    incomplete scan, a codex/opencode session, an unknown check name all audit
+    to nothing); and a run counts as passed/failed only when the line's exit
+    status is its own — after a pipe, `;`, `||` or `&` it is merely "ran",
+    which is why the agent briefing asks for unpiped runs. The line's
+    STRUCTURE decides what its status proves (`claimaudit.Hit`): a zero exit of
+    an `&&` chain passes every link, a failure is pinned on a runner only when
+    nothing before or after it could have failed instead, anything after an
+    `||` is not even "ran" (it may never have started), and a here-doc body is
+    text, not commands. A claim whose deciding run fell out of the bounded
+    ledger abstains rather than reading as "nothing ran". A subagent's runs
+    live in its own transcript and are not seen.
 - **Untrusted output stays out of the control loop.** `brain` summaries and
   `review` findings are derived from attacker-influenceable context (PR diffs,
   CI logs, pane text). They may go to a human (notify + Linear comment) but the

@@ -3,6 +3,10 @@
   import { nav } from "$lib/nav.svelte";
   import { triaged } from "$lib/filters";
   import Button from "./Button.svelte";
+  import { budgetLabel, headerLabel, headerLevel } from "$lib/usage";
+  import QuotaBars from "./QuotaBars.svelte";
+  import HoverCard from "./HoverCard.svelte";
+  import SpendCard from "./SpendCard.svelte";
 
   // The main column's 44px context header. It replaces the old full-width vitals
   // bar: it starts at the SIDEBAR's right edge, not the window's, so together
@@ -55,6 +59,19 @@
       ? `runtime ${store.status.runtimeOk ? "✓" : "✗"} · linear ${store.status.linearOk ? "✓" : "✗"}`
       : "daemon health unknown",
   );
+
+  // The agents' SUBSCRIPTION limits (Claude 5h/7d, Codex 7d) when any agent has
+  // reported them, else today's tokens; plus the share of [budget].daily_tokens.
+  // Quiet grey until 80% (of a limit or the budget), warn from there, bad from
+  // 95% of a limit or once the budget is reached — and bad while [load] holds
+  // dispatch, since new tickets are then silently waiting and the tooltip says why.
+  const spend = $derived(store.status?.usage ?? null);
+  const spendCls = $derived.by(() => {
+    if (!spend) return "";
+    const level = headerLevel(spend);
+    if (level === "over" || spend.load?.busy) return "text-bad";
+    return level === "near" ? "text-warn" : "text-faint";
+  });
 
   // The lens picker draws its three glyphs as SVG rather than as the box-drawing
   // characters it used to spend (≡ ▤ ▦). Those are text: the font sets their
@@ -139,6 +156,18 @@
   </nav>
 
   <span class="ml-auto flex shrink-0 items-center gap-2">
+    {#if spend}
+      <HoverCard class="num inline-flex items-center text-sm whitespace-nowrap outline-none {spendCls}">
+        {#snippet card()}<SpendCard usage={spend} />{/snippet}
+        {#if spend.quotas?.length}
+          <!-- Limits as bars; each bar carries its own tone, so the wrapper's
+               colour only reaches the budget and load text beside them. -->
+          <QuotaBars quotas={spend.quotas} />{#if budgetLabel(spend)}<span class="ml-2">· {budgetLabel(spend)}</span>{/if}
+        {:else}
+          {headerLabel(spend)}
+        {/if}{#if spend.load?.busy}<span class="ml-1.5">· load busy</span>{/if}
+      </HoverCard>
+    {/if}
     <!-- Daemon alarm, ONLY while the sidebar is collapsed. <SidebarStatus> is the
          permanent home for liveness, but it lives inside the collapsible <aside>,
          and `sidebarOpen` persists to localStorage — so with the sidebar hidden a

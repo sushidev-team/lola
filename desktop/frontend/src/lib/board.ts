@@ -92,3 +92,20 @@ export function agoShort(iso: string | undefined, now: number = Date.now()): str
   if (s < 86400) return `${Math.floor(s / 3600)}h`;
   return `${Math.floor(s / 86400)}d`;
 }
+
+// The claim audit (internal/claimaudit): lola's own comparison of the board's
+// pass claims with the agent's transcript and the PR's CI. Display-only like
+// the board — a mismatch is a warning for a human, never an input to
+// attention(), sorting or triage. `mismatches` are lola-authored sentences.
+export function hasMismatch(b: BoardInfo | null | undefined): b is BoardInfo {
+  return !!b?.mismatches?.length;
+}
+
+// A check's audit verdict as a short tag, "" when there is nothing worth saying
+// (not audited, or an unknown verdict from a daemon newer than this build).
+export const EVIDENCE_TAG: Record<string, { word: string; cls: string }> = {
+  verified: { word: "verified", cls: "text-good" },
+  ran: { word: "ran", cls: "text-faint" },
+  unverified: { word: "no run found", cls: "text-warn" },
+  contradicted: { word: "last run failed", cls: "text-bad" },
+};

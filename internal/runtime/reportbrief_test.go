@@ -16,6 +16,9 @@ func TestWithReportBriefing(t *testing.T) {
 	if !strings.Contains(got, `'/opt/my tools/lola' report todo set`) {
 		t.Fatalf("briefing must name the quoted lola binary:\n%s", got)
 	}
+	if !strings.Contains(got, "compared with the commands you actually ran") {
+		t.Fatalf("briefing must say check claims are audited:\n%s", got)
+	}
 	if got := string((&Native{}).withReportBriefing(nil)); !strings.Contains(got, "`lola report`") {
 		t.Fatalf("no LolaBin falls back to PATH lookup:\n%s", got)
 	}

@@ -159,6 +159,12 @@ type settingsFile struct {
 		UserPromptSubmit []matcherEntry `json:"UserPromptSubmit"`
 	} `json:"hooks"`
 	SkillOverrides map[string]string `json:"skillOverrides,omitempty"`
+	StatusLine     *statusLineSpec   `json:"statusLine,omitempty"`
+}
+
+type statusLineSpec struct {
+	Type    string `json:"type"`
+	Command string `json:"command"`
 }
 
 // modalSkills are the Claude Code skills that interrupt a session with a MODAL
@@ -201,6 +207,11 @@ var modalSkills = map[string]string{
 // Each hook has an explicit 10s timeout. Hook commands run with the pane's
 // environment, so the exported LOLA_SESSION is visible to `lola hook`.
 //
+// The status line is `<lolaBin> hook statusline` (statusline.go): the only
+// place Claude Code hands out the subscription limits, recorded for the
+// app/TUI header and then passed through to the user's own status-line
+// command, so the pane looks unchanged.
+//
 // It also carries the modalSkills overrides, which suppress the interactive
 // dialogs an unattended worker can never answer. `--settings` lands in Claude
 // Code's flagSettings source, which is always merged, so the overrides apply
@@ -228,6 +239,7 @@ func SettingsJSON(lolaBin string) []byte {
 	// before the agent produces any output the reaction engine might race.
 	s.Hooks.UserPromptSubmit = entry("user_prompt", false)
 	s.SkillOverrides = modalSkills
+	s.StatusLine = &statusLineSpec{Type: "command", Command: bin + " " + statusLineSelf}
 
 	out, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {

@@ -3,12 +3,15 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/sushidev-team/lola/internal/linear"
 	"github.com/sushidev-team/lola/internal/protocol"
+	"github.com/sushidev-team/lola/internal/session"
 )
 
 func reportReq(t *testing.T, id string, argv ...string) protocol.Request {
@@ -104,5 +107,59 @@ func TestReportLimiter(t *testing.T) {
 	}
 	if !l.allow("a", now.Add(reportWindow+time.Second)) {
 		t.Fatal("window never slides")
+	}
+}
+
+// SUSHI-622 acceptance: a session that reports passing tests without having run
+// any shows a warning on the wire — and the audit, like the board, moves no
+// control state.
+func TestClaimAuditFlagsTestsClaimedWithoutARun(t *testing.T) {
+	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})
+	path := filepath.Join(t.TempDir(), "transcript.jsonl")
+	// One Bash call, and it is not a test run.
+	lines := `{"type":"assistant","timestamp":"2026-10-09T12:00:00Z","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"git status"}}]}}
+{"type":"user","timestamp":"2026-10-09T12:00:01Z","message":{"content":[{"type":"tool_result","tool_use_id":"t1","is_error":false,"content":"clean"}]}}
+`
+	if err := os.WriteFile(path, []byte(lines), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := nativeSess("FE-2", "working")
+	s.TranscriptPath = path
+	d.sessions.Upsert(s)
+	if resp := d.handle(context.Background(), reportReq(t, s.ID, "check", "tests", "pass", "all", "green")); !resp.OK {
+		t.Fatalf("report: %s", resp.Error)
+	}
+	before, _ := d.sessions.Get(s.ID)
+
+	board := func() *protocol.BoardInfo {
+		for _, si := range d.sessionsData().Sessions {
+			if si.ID == s.ID {
+				return si.Board
+			}
+		}
+		return nil
+	}
+	// Not yet scanned: nothing is known, so nothing is claimed to be wrong.
+	if bi := board(); len(bi.Mismatches) != 0 || bi.Checks[0].Evidence != "" {
+		t.Fatalf("unscanned transcript must audit to nothing: %+v", bi)
+	}
+
+	scanClaimEvidence(d.sessions.Snapshot())
+	bi := board()
+	if len(bi.Mismatches) != 1 || !strings.Contains(bi.Mismatches[0], "no test command ran") ||
+		bi.Checks[0].Evidence != "unverified" {
+		t.Fatalf("claim without a run must be flagged: %+v", bi)
+	}
+	after, _ := d.sessions.Get(s.ID)
+	if after.AgentState != before.AgentState || after.Delivery != before.Delivery || after.Status != before.Status ||
+		after.AtPrompt != before.AtPrompt {
+		t.Fatalf("the audit moved control state:\nbefore %+v\nafter  %+v", before, after)
+	}
+
+	// A codex session's transcript path (none is ever recorded, but be sure)
+	// is not read: the audit stays silent rather than guessing.
+	d.sessions.Update(s.ID, func(sess *session.Session) bool { sess.Agent = "codex"; return true })
+	if bi := board(); len(bi.Mismatches) != 0 {
+		t.Fatalf("non-claude session must not be audited from a transcript: %+v", bi)
 	}
 }

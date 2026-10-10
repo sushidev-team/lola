@@ -260,6 +260,90 @@ type StatusData struct {
 	// at length); telling an already-paired device the name of the machine it
 	// is holding a session list from discloses nothing it does not have.
 	Host string `json:"host,omitempty"`
+
+	// Usage is today's token usage against the configured budgets, plus
+	// the last machine-load sample when [load] is on. nil on an older daemon.
+	Usage *UsageStatus `json:"usage,omitempty"`
+}
+
+// UsageInfo is one session's usage over every claude AND codex run in its
+// worktree (worker, subagents, review passes). Tokens are RAW (cache traffic included):
+// the number the UIs show. The *USD figures are the list-price ESTIMATE, kept
+// for tooltips — a subscription user pays nothing per token.
+//
+// Level/Percentile/Of rank the session against the user's own finished
+// sessions (internal/usage.RankAmong): Level is the 4-step size glyph
+// (0 light … 3 top 10%), Percentile the share of history lighter than it, Of
+// the history size — 0 when fixed thresholds decided Level instead. Burning
+// flags a session using tokens faster now than 90% of past sessions ever did;
+// TokensPerHour is that current rate (raw tokens, last ~30 minutes).
+type UsageInfo struct {
+	// Agent is whose scale ranked it ("claude" | "codex"). A codex figure has
+	// no list price (TotalUSD/TodayUSD stay 0) and is ranked against codex
+	// sessions only, by weighted tokens.
+	Agent         string  `json:"agent,omitempty"`
+	Tokens        int64   `json:"tokens"`
+	TodayTokens   int64   `json:"todayTokens"`
+	TotalUSD      float64 `json:"totalUsd"`
+	TodayUSD      float64 `json:"todayUsd"`
+	Level         int     `json:"level"`
+	Percentile    float64 `json:"percentile,omitempty"`
+	Of            int     `json:"of,omitempty"`
+	Burning       bool    `json:"burning,omitempty"`
+	TokensPerHour int64   `json:"tokensPerHour,omitempty"`
+}
+
+// UsageStatus is cmd=status's usage + load summary for one local day. Tokens
+// is raw (what the UIs show); Weighted is what a budget counts
+// (usage.Totals.Weighted) and BudgetTokens its global limit (0 = none).
+// TodayUSD is the list-price estimate, for tooltips only.
+type UsageStatus struct {
+	Day          string         `json:"day"` // local YYYY-MM-DD the totals are for
+	Tokens       int64          `json:"tokens"`
+	Weighted     int64          `json:"weighted"`
+	TodayUSD     float64        `json:"todayUsd"`
+	BudgetTokens int64          `json:"budgetTokens,omitempty"`
+	Projects     []ProjectSpend `json:"projects,omitempty"`
+	// Load is the last [load] sample; nil when [load] is off.
+	Load *LoadInfo `json:"load,omitempty"`
+	// Quotas is how much of each coding agent's SUBSCRIPTION limits is used
+	// (internal/quota), one entry per agent lola could read — claude via the
+	// status line, codex via its session logs. Empty when neither reported.
+	Quotas []QuotaInfo `json:"quotas,omitempty"`
+}
+
+// QuotaInfo is one agent's subscription limits as last observed. At is when
+// they were observed: a snapshot is only as fresh as that agent's last turn.
+type QuotaInfo struct {
+	Agent   string        `json:"agent"` // "claude" | "codex"
+	Plan    string        `json:"plan,omitempty"`
+	At      time.Time     `json:"at"`
+	Windows []QuotaWindow `json:"windows"`
+}
+
+// QuotaWindow is one rate-limit window: "5h", "7d", or "spend" (a gateway's
+// spend limit). Windows whose reset has passed are never sent.
+type QuotaWindow struct {
+	Label       string    `json:"label"`
+	UsedPercent float64   `json:"usedPercent"`
+	ResetsAt    time.Time `json:"resetsAt"`
+}
+
+// ProjectSpend is one project's usage today against its own limit.
+type ProjectSpend struct {
+	Name         string `json:"name"`
+	Tokens       int64  `json:"tokens"`
+	Weighted     int64  `json:"weighted"`
+	BudgetTokens int64  `json:"budgetTokens,omitempty"`
+}
+
+// LoadInfo is a machine-load sample; -1 marks a value the OS did not report.
+// Busy is the hold reason ("" when dispatch is not held by load).
+type LoadInfo struct {
+	Load1          float64 `json:"load1"`
+	CPUs           int     `json:"cpus"`
+	FreeMemPercent float64 `json:"freeMemPercent"`
+	Busy           string  `json:"busy,omitempty"`
 }
 
 type PollStatus struct {
@@ -381,6 +465,11 @@ type SessionInfo struct {
 	// be verifiably resting at its prompt.
 	FeedbackPending bool `json:"feedbackPending,omitempty"`
 
+	// Usage is this session's token usage (internal/usage), nil when nothing
+	// is known yet — no transcript written, or an agent whose logs lola cannot
+	// read (codex, opencode). Absent is "unknown", never zero.
+	Usage *UsageInfo `json:"usage,omitempty"`
+
 	// Reaction-engine posture (PLAN P3), flattened so the TUI renders reaction
 	// state without importing internal/session or re-deriving it.
 	CIRetries int  `json:"ciRetries"` // ci_failed recovery attempts already spent on the current failing streak
@@ -413,6 +502,11 @@ type BoardInfo struct {
 	Checks          []BoardCheck `json:"checks,omitempty"`
 	UpdatedAt       time.Time    `json:"updatedAt,omitzero"`
 	UpdatedAgo      string       `json:"updatedAgo,omitempty"` // formatted age of UpdatedAt, e.g. "2m"
+	// Mismatches are lola's own one-line warnings where a claim above
+	// disagrees with the facts (internal/claimaudit): a "tests pass" check with
+	// no test command in the agent's transcript, a failing last run, a failing
+	// PR CI. Display-only; empty when nothing disagrees or nothing is known.
+	Mismatches []string `json:"mismatches,omitempty"`
 }
 
 // BoardTodo is one plan item: State is pending|active|done.
@@ -427,6 +521,12 @@ type BoardCheck struct {
 	Name    string `json:"name"`
 	State   string `json:"state"`
 	Summary string `json:"summary,omitempty"`
+	// Evidence is the claim audit's verdict on a PASS claim: verified | ran |
+	// unverified | contradicted; "" when the check was not audited (not a
+	// pass, a name naming no test/lint/build category, or no readable
+	// transcript). EvidenceNote is lola's own sentence explaining it.
+	Evidence     string `json:"evidence,omitempty"`
+	EvidenceNote string `json:"evidenceNote,omitempty"`
 }
 
 // ReportArgs is the argument payload for cmd=agentReport: the argv typed after

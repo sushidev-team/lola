@@ -248,6 +248,9 @@ func renderStatus(d *protocol.StatusData) string {
 		})
 	}
 	b.WriteString(renderTable([]string{"POLL", "ENABLED", "LAST RUN", "LAST SPAWN", "RUNNING", "ERROR"}, rows))
+	if s := spendSummary(d.Usage); s != "" {
+		b.WriteString("\n" + s)
+	}
 	return b.String()
 }
 
