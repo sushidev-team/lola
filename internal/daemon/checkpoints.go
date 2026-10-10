@@ -368,8 +368,18 @@ func (d *Daemon) handleForkCheckpoint(ctx context.Context, a protocol.Checkpoint
 			branch = fmt.Sprintf("%s-%d", stem, k)
 		}
 		id = runtime.ManualSessionID(p.Name, branch)
+		// A slot is free only when no session record, no leftover worktree and
+		// no local branch claims it — an older fork killed with its worktree kept
+		// leaves both behind, and reusing them would fail the fork or adopt
+		// someone else's branch.
 		if _, taken := d.sessions.Get(id); !taken {
-			break
+			onDisk, err := nat.SlotTaken(ctx, *p, id, branch)
+			if err != nil {
+				return protocol.OpenData{}, fmt.Errorf("fork: check %s: %w", branch, err)
+			}
+			if !onDisk {
+				break
+			}
 		}
 		id = ""
 	}

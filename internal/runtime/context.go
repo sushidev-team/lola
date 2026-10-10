@@ -196,12 +196,12 @@ func (n *Native) ForkAgent(ctx context.Context, p config.Project, f ForkSpec) (s
 	if f.SessionID == "" || f.Branch == "" || f.Head == "" || f.Tree == "" {
 		return session.Session{}, errors.New("runtime: fork: session id, branch and checkpoint required")
 	}
+	if n.Checkpoints == nil {
+		return session.Session{}, errors.New("runtime: fork: checkpoints unavailable")
+	}
 	dir, err := n.WT.CreateAt(ctx, p, f.SessionID, f.Branch, f.Head)
 	if err != nil {
 		return session.Session{}, fmt.Errorf("runtime: fork %s: %w", f.SessionID, err)
-	}
-	if n.Checkpoints == nil {
-		return session.Session{}, errors.New("runtime: fork: checkpoints unavailable")
 	}
 	if err := n.Checkpoints.Apply(ctx, dir, f.Tree); err != nil {
 		if rmErr := n.WT.Remove(ctx, p, dir, f.Branch, true); rmErr != nil {

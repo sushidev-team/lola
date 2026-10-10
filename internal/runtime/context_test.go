@@ -168,6 +168,9 @@ func TestForkAgentRefusesWithoutCheckpointsAndRollsBackOnApplyFailure(t *testing
 	if _, err := f.n.ForkAgent(context.Background(), f.p, spec); err == nil {
 		t.Error("ForkAgent without a checkpoint store must refuse")
 	}
+	if strings.Contains(loggedArgs(t, f.gitLog), "worktree add") {
+		t.Error("ForkAgent without a checkpoint store created a worktree before refusing")
+	}
 	f2 := newFixture(t, "", "")
 	f2.n.Checkpoints = &fakeCheckpoints{applyErr: errors.New("boom")}
 	if _, err := f2.n.ForkAgent(context.Background(), f2.p, spec); err == nil || !strings.Contains(err.Error(), "rolled back") {

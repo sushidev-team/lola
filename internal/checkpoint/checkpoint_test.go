@@ -267,3 +267,32 @@ func TestBlocked(t *testing.T) {
 		}
 	}
 }
+
+// A restore that fails after the index was pointed at the safety snapshot puts
+// the index back on HEAD — even when the request's context is already gone —
+// so the agent is not left with every file staged.
+func TestRestoreFailureResetsTheIndex(t *testing.T) {
+	dir, git := repo(t)
+	ctx := context.Background()
+	if _, _, err := (Git{}).Record(ctx, dir, "s", "start"); err != nil {
+		t.Fatal(err)
+	}
+	write(t, dir, "new.txt", "turn\n")
+	rctx, cancel := context.WithCancel(ctx)
+	g := Git{run: func(c context.Context, bin, d string, env []string, args ...string) ([]byte, error) {
+		if len(args) > 1 && args[0] == "read-tree" && args[1] == "--reset" {
+			cancel() // the request goes away mid-restore
+			return nil, errors.New("boom")
+		}
+		return runGit(c, bin, d, env, args...)
+	}}
+	if _, err := g.Restore(rctx, dir, "s", 1); err == nil || !strings.Contains(err.Error(), "boom") {
+		t.Fatalf("err = %v", err)
+	}
+	if staged := git("diff", "--cached", "--name-only"); staged != "" {
+		t.Errorf("index left staged after a failed restore: %q", staged)
+	}
+	if got := git("status", "--porcelain", "--", "new.txt"); got != "?? new.txt" {
+		t.Errorf("new.txt = %q, want untracked again", got)
+	}
+}

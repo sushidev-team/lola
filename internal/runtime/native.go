@@ -230,21 +230,28 @@ func (n *Native) freeSessionSlot(ctx context.Context, p config.Project, baseID, 
 			suffix := "-r" + strconv.Itoa(attempt)
 			id, branch = baseID+suffix, baseBranch+suffix
 		}
-		if _, err := os.Stat(filepath.Join(n.WT.Root, p.Name, id)); err == nil {
-			continue // a previous attempt's worktree is still on disk
-		} else if !errors.Is(err, fs.ErrNotExist) {
-			return "", "", err
-		}
-		exists, err := n.WT.BranchExists(ctx, p, branch)
+		taken, err := n.SlotTaken(ctx, p, id, branch)
 		if err != nil {
 			return "", "", err
 		}
-		if exists {
-			continue // the branch survived (e.g. a manual worktree remove)
+		if !taken {
+			return id, branch, nil
 		}
-		return id, branch, nil
 	}
 	return "", "", fmt.Errorf("no free session slot after %d attempts — clean up old %s* worktrees and branches", maxSpawnAttempts, baseID)
+}
+
+// SlotTaken reports whether (id, branch) collides with something on disk: a
+// worktree directory for id (a dead session's is kept for inspection) or a
+// local branch (it survives a manual `git worktree remove`). A session record
+// under id is the caller's to check — the runtime keeps no session store.
+func (n *Native) SlotTaken(ctx context.Context, p config.Project, id, branch string) (bool, error) {
+	if _, err := os.Stat(filepath.Join(n.WT.Root, p.Name, id)); err == nil {
+		return true, nil
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return false, err
+	}
+	return n.WT.BranchExists(ctx, p, branch)
 }
 
 // resolveKind picks the agent kind for a launch: an explicit per-spawn

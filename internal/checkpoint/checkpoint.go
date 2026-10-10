@@ -46,6 +46,9 @@ const RefPrefix = "refs/lola/checkpoints/"
 // an agent that runs hundreds of turns must not pin hundreds of trees forever.
 const MaxPerSession = 100
 
+// resetTimeout bounds the index cleanup after a failed restore.
+const resetTimeout = 10 * time.Second
+
 // subjectPrefix opens every checkpoint commit's message; the rest is the label.
 const subjectPrefix = "lola checkpoint: "
 
@@ -289,6 +292,14 @@ func (g Git) Restore(ctx context.Context, dir, session string, seq int) (safety 
 		return safety, fmt.Errorf("checkpoint: restore #%d: %w", seq, err)
 	}
 	if err := g.Apply(ctx, dir, target.Tree); err != nil {
+		// The index now holds the safety snapshot — every file staged, untracked
+		// ones included. Put it back on HEAD so a failed restore does not leave
+		// the agent a staging area nobody made; the files were not replaced (or
+		// the safety checkpoint brings them back). On a context that outlives a
+		// cancelled request, bounded on its own.
+		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), resetTimeout)
+		_, _ = g.exec(rctx, dir, nil, "reset", "-q")
+		cancel()
 		return safety, fmt.Errorf("checkpoint: restore #%d (the previous state is checkpoint #%d): %w", seq, safety.Seq, err)
 	}
 	return safety, nil

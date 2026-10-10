@@ -267,6 +267,16 @@ func TestForkStartsANamedAgentSessionFromTheCheckpoint(t *testing.T) {
 	if got := nat.forks[1].Branch; got != "lola/ck-7-fork-2-2" {
 		t.Errorf("second fork branch = %q", got)
 	}
+	// A slot whose branch or worktree outlived its session record (an older fork
+	// killed with its worktree kept) is skipped, not reused.
+	nat.takenBranches = map[string]bool{"lola/ck-7-fork-1": true}
+	ck.Record(ctx, "", "", "turn 2") // seq 3; fork #1 instead
+	if _, err := d.handleForkCheckpoint(ctx, protocol.CheckpointArgs{Session: parent.ID, Seq: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if got := nat.forks[2].Branch; got != "lola/ck-7-fork-1-2" {
+		t.Errorf("fork past a leftover branch = %q, want the next slot", got)
+	}
 	if _, err := d.handleForkCheckpoint(ctx, protocol.CheckpointArgs{Session: parent.ID, Seq: 2, Agent: "bogus"}); err == nil {
 		t.Error("an unknown agent override was accepted")
 	}

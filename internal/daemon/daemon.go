@@ -59,6 +59,7 @@ type NativeAPI interface {
 	Alive(ctx context.Context, s session.Session) bool
 	Revive(ctx context.Context, s session.Session) (session.Session, error)
 	ForkAgent(ctx context.Context, p config.Project, f runtime.ForkSpec) (session.Session, error)
+	SlotTaken(ctx context.Context, p config.Project, id, branch string) (bool, error)
 }
 
 var _ NativeAPI = (*runtime.Native)(nil)
