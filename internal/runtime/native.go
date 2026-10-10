@@ -925,6 +925,10 @@ func (n *Native) withReportBriefing(prompt []byte) []byte {
 	b.WriteString(bin + " report note \"waiting on the migration to finish\"\n")
 	b.WriteString("```\n\n")
 	b.WriteString("Report on meaningful changes only — a new plan, a finished item, a phase change, a check result, a blocker. Not every step. `" + bin + " report --help` lists every verb. Being blocked on a decision only a human can make is worth reporting even mid-turn.\n")
+	// The claim audit (internal/claimaudit) reads the transcript for the run
+	// behind a `check … pass`; saying so up front is what makes an honest agent
+	// run the suite in a shape whose exit status is its own.
+	b.WriteString("\nA `check … pass` is compared with the commands you actually ran: report one only after running that check, and run it unpiped (`go test ./...`, not `go test ./... | tail`) so its exit status is visible. A claim with no matching run is flagged to the humans.\n")
 	return []byte(b.String())
 }
 

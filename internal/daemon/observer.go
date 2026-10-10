@@ -223,6 +223,9 @@ func (d *Daemon) observeNative(ctx context.Context) {
 	// active, is corrected here. Idempotent, so a cycle with nothing to do opens
 	// and closes nothing.
 	d.syncDevForwards()
+	// Advance the claim-audit transcript scan (claimaudit.go): read-only,
+	// bounded per file, display-only result.
+	scanClaimEvidence(d.sessions.Snapshot())
 	interpretQueued := 0
 	d.mu.Lock()
 	interpretPerCycle := d.cfg.StatusAgent.MaxPerCycle
