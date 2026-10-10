@@ -1095,7 +1095,13 @@ each of which owns exactly one external tool or concern behind an **exec seam**
     incomplete scan, a codex/opencode session, an unknown check name all audit
     to nothing); and a run counts as passed/failed only when the line's exit
     status is its own — after a pipe, `;`, `||` or `&` it is merely "ran",
-    which is why the agent briefing asks for unpiped runs. A subagent's runs
+    which is why the agent briefing asks for unpiped runs. The line's
+    STRUCTURE decides what its status proves (`claimaudit.Hit`): a zero exit of
+    an `&&` chain passes every link, a failure is pinned on a runner only when
+    nothing before or after it could have failed instead, anything after an
+    `||` is not even "ran" (it may never have started), and a here-doc body is
+    text, not commands. A claim whose deciding run fell out of the bounded
+    ledger abstains rather than reading as "nothing ran". A subagent's runs
     live in its own transcript and are not seen.
 - **Untrusted output stays out of the control loop.** `brain` summaries and
   `review` findings are derived from attacker-influenceable context (PR diffs,

@@ -78,15 +78,81 @@ func CategoryForCheck(name string) Category {
 	return ""
 }
 
-// Hit is one verification command found in a shell line.
+// Hit is one verification command found in a shell line, with where it sits
+// in the line's control structure. A line's exit status is only evidence about
+// a command when the structure says so: `go test ./... | tail` exits with
+// tail's status, `go test ./... && false` fails after a passing test run, and
+// `true || go test ./...` never runs the tests at all. Resolve turns a hit plus
+// the tool result into an outcome, or into no evidence.
 type Hit struct {
 	Cat Category
-	// Trusted reports whether the shell line's exit status is the command's
-	// own: it is followed by nothing or only by `&&` links. Behind a pipe, a
-	// `;`, an `||` or a `&` the line's status belongs to something else (`go
-	// test ./... | tail` exits with tail's status), so the run counts as RAN
-	// but neither as passed nor as failed.
-	Trusted bool
+	// gated: an `&&` link before it in its and-or list, so it ran only if
+	// that predecessor succeeded (a bare `cd` does not count).
+	gated bool
+	// own: it is the last command of its pipeline, so the pipeline's status
+	// is its own.
+	own bool
+	// tail: its pipeline is the last of its and-or list.
+	tail bool
+	// orAfter: an `||` follows it in its list, which can mask its failure.
+	orAfter bool
+	// final: its list is the line's last one and not backgrounded, so the
+	// line's exit status is that list's.
+	final bool
+}
+
+// outcome is what one hit proves given the line's error flag; ok is false
+// when it proves nothing — not even that the command ran.
+func (h Hit) outcome(isErr, background bool) (o Outcome, ok bool) {
+	switch {
+	case background || !h.final || h.orAfter:
+		// The line's status is not this list's (or `||` can swallow it):
+		// it ran if nothing gated it, result unknown.
+		return Unknown, !h.gated
+	case !isErr:
+		// A zero status from a pure `&&` list: every link ran and succeeded.
+		if h.own {
+			return Passed, true
+		}
+		return Unknown, true
+	case h.own && h.tail && !h.gated:
+		// Nothing before it could have failed instead, nothing after it ran.
+		return Failed, true
+	default:
+		// Some link failed, and it may not be this one — or this one may
+		// never have started.
+		return Unknown, !h.gated
+	}
+}
+
+// Result of one line for one category.
+type CatOutcome struct {
+	Cat     Category
+	Outcome Outcome
+}
+
+// Resolve turns a line's hits and its tool result into one outcome per
+// category it proves anything about. When a category appears more than once,
+// a failure outranks a pass, which outranks a bare run.
+func Resolve(hits []Hit, isErr, background bool) []CatOutcome {
+	rank := map[Outcome]int{Unknown: 0, Passed: 1, Failed: 2}
+	var out []CatOutcome
+	idx := map[Category]int{}
+	for _, h := range hits {
+		o, ok := h.outcome(isErr, background)
+		if !ok {
+			continue
+		}
+		if i, seen := idx[h.Cat]; seen {
+			if rank[o] > rank[out[i].Outcome] {
+				out[i].Outcome = o
+			}
+			continue
+		}
+		idx[h.Cat] = len(out)
+		out = append(out, CatOutcome{h.Cat, o})
+	}
+	return out
 }
 
 // segment is one simple command of a shell line plus the operator after it.
@@ -96,15 +162,21 @@ type segment struct {
 }
 
 // splitShell cuts a shell line into simple commands at top-level control
-// operators, honouring quotes and backslash escapes. It is a scanner, not a
-// shell parser: subshells and here-docs are read as plain text, which can only
-// cost a missed hit (no warning) — never a hit that was not typed.
+// operators, honouring quotes and backslash escapes. A here-doc's BODY is
+// skipped: it is text handed to a command, not commands (`cat <<EOF` with
+// `go test ./...` inside runs no tests). It is a scanner, not a shell parser:
+// subshells and command substitutions are read as plain text.
 func splitShell(line string) []segment {
 	var out []segment
 	var b strings.Builder
 	var quote rune
 	esc := false
 	rs := []rune(line)
+	type heredoc struct {
+		delim string
+		dash  bool // <<- strips leading tabs from the closing line
+	}
+	var docs []heredoc
 	flush := func(sep string) {
 		out = append(out, segment{text: strings.TrimSpace(b.String()), sep: sep})
 		b.Reset()
@@ -144,6 +216,50 @@ func splitShell(line string) []segment {
 			i++
 		case r == '|':
 			flush("|")
+		case r == '<' && next == '<' && (i+2 >= len(rs) || rs[i+2] != '<'):
+			// A here-doc operator: record its delimiter, keep the text.
+			j := i + 2
+			d := heredoc{}
+			if j < len(rs) && rs[j] == '-' {
+				d.dash = true
+				j++
+			}
+			for j < len(rs) && (rs[j] == ' ' || rs[j] == '\t') {
+				j++
+			}
+			var w strings.Builder
+			for j < len(rs) && !strings.ContainsRune(" \t\n;&|<>()", rs[j]) {
+				if rs[j] != '\'' && rs[j] != '"' && rs[j] != '\\' {
+					w.WriteRune(rs[j])
+				}
+				j++
+			}
+			b.WriteString(string(rs[i:j]))
+			i = j - 1
+			if w.Len() > 0 {
+				d.delim = w.String()
+				docs = append(docs, d)
+			}
+		case r == '\n' && len(docs) > 0:
+			flush("\n")
+			// Skip each pending body through its closing line.
+			for _, d := range docs {
+				for i+1 < len(rs) {
+					end := i + 1
+					for end < len(rs) && rs[end] != '\n' {
+						end++
+					}
+					ln := string(rs[i+1 : end])
+					i = end
+					if d.dash {
+						ln = strings.TrimLeft(ln, "\t")
+					}
+					if ln == d.delim {
+						break
+					}
+				}
+			}
+			docs = nil
 		case r == ';' || r == '\n':
 			flush(string(r))
 		case r == '&' && next == '>':
@@ -230,58 +346,83 @@ var targetCats = map[string][]Category{
 	"build": {Build}, "all": {Build}, "compile": {Build},
 }
 
-// Classify reports every verification command in one shell line. A category
-// appears at most once; when it appears in several segments the TRUSTED one
-// wins, so `go test ./... && go test -race ./...` is still a trusted run.
+// Classify reports every verification command in one shell line, with its
+// place in the line's structure (see Hit). A command after an `||` in its
+// and-or list is dropped outright: whether it ran depends on a status nothing
+// records.
 func Classify(line string) []Hit {
-	segs := splitShell(line)
-	found := map[Category]bool{} // value: trusted
-	var order []Category
-	for i, sg := range segs {
-		if sg.text == "" {
-			continue
-		}
-		// The line's status is the runner's only while every operator from
-		// here to the last real command is `&&`. A trailing `;` or newline
-		// closes the line harmlessly; a trailing `&` backgrounds the runner.
-		trusted := true
-		for j := i; j < len(segs); j++ {
-			if segs[j].sep == "&" {
-				trusted = false
-				break
-			}
-			if isLastNonEmpty(segs, j) {
-				break
-			}
-			if segs[j].sep != "&&" {
-				trusted = false
-				break
-			}
-		}
-		for _, c := range classifySimple(normalize(sg.text)) {
-			if prev, ok := found[c]; !ok {
-				order = append(order, c)
-				found[c] = trusted
-			} else if trusted && !prev {
-				found[c] = true
-			}
-		}
+	type pipe []string
+	type list struct {
+		pipes []pipe
+		ops   []string // ops[i] links pipes[i] and pipes[i+1]: "&&" or "||"
+		bg    bool
 	}
-	out := make([]Hit, 0, len(order))
-	for _, c := range order {
-		out = append(out, Hit{Cat: c, Trusted: found[c]})
+	var lists []list
+	var cur list
+	var p pipe
+	for _, sg := range splitShell(line) {
+		if sg.text != "" {
+			p = append(p, sg.text)
+		}
+		switch sg.sep {
+		case "|":
+			continue
+		case "&&", "||":
+			if len(p) > 0 {
+				cur.pipes = append(cur.pipes, p)
+				cur.ops = append(cur.ops, sg.sep)
+			}
+		default: // ";", "\n", "&", end of line
+			if len(p) > 0 {
+				cur.pipes = append(cur.pipes, p)
+			}
+			if len(cur.pipes) > 0 {
+				// A dangling operator (`a &&` then newline) links nothing.
+				cur.ops = cur.ops[:len(cur.pipes)-1]
+				cur.bg = sg.sep == "&"
+				lists = append(lists, cur)
+			}
+			cur = list{}
+		}
+		p = nil
+	}
+
+	var out []Hit
+	for li, l := range lists {
+		for pi, pp := range l.pipes {
+			if slices.Contains(l.ops[:pi], "||") {
+				continue
+			}
+			gated := false
+			for _, prev := range l.pipes[:pi] {
+				gated = gated || !isCD(prev)
+			}
+			for ci, cmd := range pp {
+				for _, c := range classifySimple(normalize(cmd)) {
+					out = append(out, Hit{
+						Cat:     c,
+						gated:   gated,
+						own:     ci == len(pp)-1,
+						tail:    pi == len(l.pipes)-1,
+						orAfter: slices.Contains(l.ops[pi:], "||"),
+						final:   li == len(lists)-1 && !l.bg,
+					})
+				}
+			}
+		}
 	}
 	return out
 }
 
-// isLastNonEmpty reports whether no non-empty segment follows segs[i].
-func isLastNonEmpty(segs []segment, i int) bool {
-	for _, s := range segs[i+1:] {
-		if s.text != "" {
-			return false
-		}
+// isCD reports whether a pipeline only changes directory. `cd dir && go test`
+// is the usual way to run a check in a subdirectory, and a cd that fails is
+// rare enough not to cost every such run its outcome.
+func isCD(p []string) bool {
+	if len(p) != 1 {
+		return false
 	}
-	return true
+	f := strings.Fields(normalize(p[0]))
+	return len(f) > 0 && (f[0] == "cd" || f[0] == "pushd")
 }
 
 func classifySimple(cmd string) []Category {

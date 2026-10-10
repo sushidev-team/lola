@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"maps"
 	"os"
 	"sync"
 	"time"
@@ -29,9 +30,13 @@ type Run struct {
 
 // Ledger is what a transcript shows was run, per category, oldest first.
 // Complete is true once the whole file has been read; an incomplete ledger
-// must not be used to claim that something did NOT run.
+// must not be used to claim that something did NOT run. Evicted holds, per
+// category, the newest run dropped by the maxRunsPerCat bound: every run older
+// than Runs[cat][0] is gone, so a claim older than that cannot be judged as
+// "nothing ran".
 type Ledger struct {
 	Runs     map[Category][]Run
+	Evicted  map[Category]Run
 	Complete bool
 }
 
@@ -57,6 +62,7 @@ type fileState struct {
 	skipping bool // inside a line longer than maxScanBytes; discard to its newline
 	pending  map[string]pendingRun
 	runs     map[Category][]Run
+	evicted  map[Category]Run
 	complete bool
 }
 
@@ -92,7 +98,7 @@ func (s *Scanner) Scan(path string) {
 	}
 	st := s.files[path]
 	if st == nil || !os.SameFile(st.info, info) || info.Size() < st.offset {
-		st = &fileState{pending: map[string]pendingRun{}, runs: map[Category][]Run{}}
+		st = &fileState{pending: map[string]pendingRun{}, runs: map[Category][]Run{}, evicted: map[Category]Run{}}
 		s.files[path] = st
 	}
 	st.info = info
@@ -140,7 +146,7 @@ func (s *Scanner) Ledger(path string) (Ledger, bool) {
 	if st == nil {
 		return Ledger{}, false
 	}
-	l := Ledger{Runs: make(map[Category][]Run, len(st.runs)), Complete: st.complete}
+	l := Ledger{Runs: make(map[Category][]Run, len(st.runs)), Evicted: maps.Clone(st.evicted), Complete: st.complete}
 	for c, rs := range st.runs {
 		l.Runs[c] = append([]Run(nil), rs...)
 	}
@@ -222,19 +228,13 @@ func (st *fileState) line(line []byte) {
 			}
 			delete(st.pending, b.ToolUseID)
 			at := rec.Timestamp
-			for _, h := range p.hits {
-				o := Unknown
-				if h.Trusted && !p.background {
-					o = Passed
-					if b.IsError {
-						o = Failed
-					}
-				}
-				rs := append(st.runs[h.Cat], Run{At: at, Outcome: o})
+			for _, co := range Resolve(p.hits, b.IsError, p.background) {
+				rs := append(st.runs[co.Cat], Run{At: at, Outcome: co.Outcome})
 				if len(rs) > maxRunsPerCat {
+					st.evicted[co.Cat] = rs[len(rs)-maxRunsPerCat-1]
 					rs = rs[len(rs)-maxRunsPerCat:]
 				}
-				st.runs[h.Cat] = rs
+				st.runs[co.Cat] = rs
 			}
 		}
 	}

@@ -26,50 +26,74 @@ func TestCategoryForCheck(t *testing.T) {
 	}
 }
 
+// resolved renders what a line proves for a zero and a non-zero exit, e.g.
+// "test=passed" / "test=failed"; "" means no evidence at all.
+func resolved(line string, isErr bool) string {
+	names := map[Outcome]string{Unknown: "ran", Passed: "passed", Failed: "failed"}
+	var parts []string
+	for _, co := range Resolve(Classify(line), isErr, false) {
+		parts = append(parts, string(co.Cat)+"="+names[co.Outcome])
+	}
+	return strings.Join(parts, " ")
+}
+
 func TestClassify(t *testing.T) {
-	type hit = Hit
 	cases := []struct {
-		line string
-		want []Hit
+		line     string
+		ok, fail string // what a zero / non-zero exit proves
 	}{
-		{"go test ./...", []hit{{Test, true}}},
-		{"GOCACHE=$PWD/.gocache GOFLAGS='-mod=mod -buildvcs=false' go test ./internal/daemon -run X -v", []hit{{Test, true}}},
-		{"cd desktop/frontend && npm test", []hit{{Test, true}}},
-		{"cd desktop/frontend && npx vitest run src/lib", []hit{{Test, true}}},
-		{"npm run test:unit -- --reporter=dot", []hit{{Test, true}}},
-		{"php artisan test --filter Foo", []hit{{Test, true}}},
-		{"./vendor/bin/pest", []hit{{Test, true}}},
-		{"python -m pytest -q", []hit{{Test, true}}},
-		{"make test", []hit{{Test, true}}},
-		{"make -C desktop test", []hit{{Test, true}}},
-		{"make check", []hit{{Build, true}, {Lint, true}, {Test, true}}},
-		{"make build && make vet", []hit{{Build, true}, {Lint, true}}},
+		{"go test ./...", "test=passed", "test=failed"},
+		{"GOCACHE=$PWD/.gocache GOFLAGS='-mod=mod -buildvcs=false' go test ./internal/daemon -run X -v", "test=passed", "test=failed"},
+		{"cd desktop/frontend && npm test", "test=passed", "test=failed"},
+		{"cd desktop/frontend && npx vitest run src/lib", "test=passed", "test=failed"},
+		{"npm run test:unit -- --reporter=dot", "test=passed", "test=failed"},
+		{"php artisan test --filter Foo", "test=passed", "test=failed"},
+		{"./vendor/bin/pest", "test=passed", "test=failed"},
+		{"python -m pytest -q", "test=passed", "test=failed"},
+		{"make test", "test=passed", "test=failed"},
+		{"make -C desktop test", "test=passed", "test=failed"},
+		{"make check", "build=passed lint=passed test=passed", "build=failed lint=failed test=failed"},
+		{"time go test ./...", "test=passed", "test=failed"},
+		{"(cd sub && go test ./...)", "test=passed", "test=failed"},
+		{"go vet ./...", "lint=passed", "lint=failed"},
+		{"npm run lint", "lint=passed", "lint=failed"},
+		{"go build ./...", "build=passed", "build=failed"},
+		// A zero status from an && chain proves every link passed; a failure
+		// may belong to any of them, and a gated link may never have run.
+		{"make build && make vet", "build=passed lint=passed", "build=ran"},
+		{"go test ./... && false", "test=passed", "test=ran"},
+		{"make build && go test ./...", "build=passed test=passed", "build=ran"},
 		// The line's exit status is not the runner's.
-		{"go test ./... | tail -20", []hit{{Test, false}}},
-		{"go test ./... 2>&1 | tail -20", []hit{{Test, false}}},
-		{"go test ./... ; echo done", []hit{{Test, false}}},
-		{"go test ./... || true", []hit{{Test, false}}},
-		{"go test ./... &", []hit{{Test, false}}},
+		{"go test ./... | tail -20", "test=ran", "test=ran"},
+		{"go test ./... 2>&1 | tail -20", "test=ran", "test=ran"},
+		{"go test ./... ; echo done", "test=ran", "test=ran"},
+		{"go test ./... || true", "test=ran", "test=ran"},
+		{"go test ./... &", "test=ran", "test=ran"},
+		{"make build && go test ./... | tail", "build=passed test=ran", "build=ran"},
+		// After || it may never have run at all.
+		{"true || go test ./...", "", ""},
+		{"go build ./... || go test ./...", "build=ran", "build=ran"},
 		// A trailing ; or newline closes the line harmlessly.
-		{"go test ./...;", []hit{{Test, true}}},
-		{"go test ./...\n", []hit{{Test, true}}},
-		// A trusted repetition wins over an untrusted one.
-		{"go test ./... | tail; go test ./...", []hit{{Test, true}}},
+		{"go test ./...;", "test=passed", "test=failed"},
+		{"go test ./...\n", "test=passed", "test=failed"},
+		// Repetitions: a failure outranks a pass, a pass a bare run.
+		{"go test ./... | tail; go test ./...", "test=passed", "test=failed"},
 		// Mentions are not runs.
-		{`grep -rn "go test" docs`, nil},
-		{`echo "make test"`, nil},
-		{"git commit -m 'run go test'", nil},
-		{"cat internal/claimaudit/classify.go", nil},
-		{"go vet ./...", []hit{{Lint, true}}},
-		{"npm run lint", []hit{{Lint, true}}},
-		{"go build ./...", []hit{{Build, true}}},
-		{"time go test ./...", []hit{{Test, true}}},
-		{"(cd sub && go test ./...)", []hit{{Test, true}}},
+		{`grep -rn "go test" docs`, "", ""},
+		{`echo "make test"`, "", ""},
+		{"git commit -m 'run go test'", "", ""},
+		{"cat internal/claimaudit/classify.go", "", ""},
+		// A here-doc body is text, not commands.
+		{"cat > notes.md <<'EOF'\ngo test ./...\nEOF", "", ""},
+		{"cat <<-EOF > x\n\tmake test\n\tEOF\ngo vet ./...", "lint=passed", "lint=failed"},
+		{"git commit -F - <<EOF\nfix: run go test\nEOF", "", ""},
 	}
 	for _, c := range cases {
-		got := Classify(c.line)
-		if fmt.Sprint(got) != fmt.Sprint(c.want) {
-			t.Errorf("Classify(%q) = %v, want %v", c.line, got, c.want)
+		if got := resolved(c.line, false); got != c.ok {
+			t.Errorf("%q exit 0 = %q, want %q", c.line, got, c.ok)
+		}
+		if got := resolved(c.line, true); got != c.fail {
+			t.Errorf("%q exit 1 = %q, want %q", c.line, got, c.fail)
 		}
 	}
 }
@@ -245,5 +269,45 @@ func TestAcceptanceClaimWithoutRun(t *testing.T) {
 	r := Audit(b, Facts{Ledger: &l})
 	if len(r.Warnings) != 1 || !strings.Contains(r.Warnings[0], "no test command ran") {
 		t.Fatalf("warnings = %v", r.Warnings)
+	}
+}
+
+// A claim whose supporting run was evicted by the per-category bound is not
+// turned into "nothing ran" by newer runs after it.
+func TestEvictedEvidenceAbstains(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "t.jsonl")
+	tr := &transcript{at: time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)}
+	passAt := tr.bash("go test ./...", false, false)
+	claimAt := passAt.Add(time.Minute)
+	tr.at = claimAt.Add(time.Minute)
+	for range maxRunsPerCat {
+		tr.bash("go test ./...", false, false)
+	}
+	write(t, path, tr.b.String())
+	s := NewScanner()
+	s.Scan(path)
+	l, _ := s.Ledger(path)
+	b := board.Board{Checks: []board.Check{{Name: "tests", State: board.CheckPass, At: claimAt}}}
+	r := Audit(b, Facts{Ledger: &l})
+	if fd := r.Checks["tests"]; fd.Verdict != Verified || len(r.Warnings) != 0 {
+		t.Fatalf("newest evicted run before the claim decides: %+v %v", fd, r.Warnings)
+	}
+
+	// Two evicted runs before the claim, then the newest evicted one is after
+	// it: the run that decides is unknowable, so nothing is said.
+	tr2 := &transcript{at: time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)}
+	tr2.bash("go test ./...", true, false)
+	claim2 := tr2.at.Add(time.Minute)
+	tr2.at = claim2.Add(time.Minute)
+	for range maxRunsPerCat + 1 {
+		tr2.bash("go test ./...", false, false)
+	}
+	write(t, path, tr2.b.String())
+	s2 := NewScanner()
+	s2.Scan(path)
+	l2, _ := s2.Ledger(path)
+	b.Checks[0].At = claim2
+	if r := Audit(b, Facts{Ledger: &l2}); len(r.Checks) != 0 || len(r.Warnings) != 0 {
+		t.Fatalf("an unknowable latest run must abstain: %+v", r)
 	}
 }

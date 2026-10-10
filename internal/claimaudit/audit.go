@@ -72,7 +72,10 @@ func Audit(b board.Board, f Facts) Result {
 		if f.Ledger == nil || !f.Ledger.Complete {
 			continue
 		}
-		fd := judge(c, cat, f.Ledger.Runs[cat])
+		fd, ok := judge(c, cat, f.Ledger.Runs[cat], f.Ledger.Evicted)
+		if !ok {
+			continue
+		}
 		if r.Checks == nil {
 			r.Checks = map[string]Finding{}
 		}
@@ -92,13 +95,25 @@ func Audit(b board.Board, f Facts) Result {
 	return r
 }
 
-func judge(c board.Check, cat Category, runs []Run) Finding {
-	fd := Finding{Check: c.Name}
+// judge finds the latest run of cat before the claim. ok is false when that
+// run was evicted from the ledger and cannot be known.
+func judge(c board.Check, cat Category, runs []Run, evicted map[Category]Run) (fd Finding, ok bool) {
+	fd = Finding{Check: c.Name}
+	before := func(r Run) bool { return c.At.IsZero() || !r.At.After(c.At.Add(claimSlack)) }
 	var last *Run
 	for i := range runs {
-		if c.At.IsZero() || !runs[i].At.After(c.At.Add(claimSlack)) {
+		if before(runs[i]) {
 			last = &runs[i]
 		}
+	}
+	if ev, had := evicted[cat]; last == nil && had {
+		// Every evicted run is older than every retained one, so the newest
+		// evicted run is the latest before the claim — if it IS before the
+		// claim. If not, an older evicted one may be, and its outcome is gone.
+		if !before(ev) {
+			return fd, false
+		}
+		last = &ev
 	}
 	switch {
 	case last == nil:
@@ -114,5 +129,5 @@ func judge(c board.Check, cat Category, runs []Run) Finding {
 		fd.Verdict = Ran
 		fd.Note = fmt.Sprintf("a %s command ran, but its exit status was masked (pipe, ;, background)", cat)
 	}
-	return fd
+	return fd, true
 }
