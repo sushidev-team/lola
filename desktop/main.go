@@ -35,6 +35,12 @@ func fixHiDPIOnReady(win *application.WebviewWindow) {
 //go:embed all:frontend/dist
 var assets embed.FS
 
+// trayIcon includes the runner and flowing hair, rasterized at 4x for Retina.
+// Native template rendering matches the actual menu bar's foreground contrast.
+//
+//go:embed build/trayicon.png
+var trayIcon []byte
+
 // version is the compiled-in app version, injected at build time via
 // -ldflags "-X main.version=<tag>" (see build/darwin/Taskfile.yml and the
 // release workflow). The "dev" default marks an un-tagged local build; the
@@ -187,7 +193,7 @@ func main() {
 // hidden window.
 func newStatusBarMenu(app *application.App, win application.Window) {
 	tray := app.SystemTray.New()
-	tray.SetLabel("Lola")
+	tray.SetTemplateIcon(trayIcon)
 	tray.SetTooltip("Lola — coding-agent orchestrator")
 
 	menu := app.Menu.New()
