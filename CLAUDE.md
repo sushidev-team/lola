@@ -168,6 +168,13 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   with their tool result's `is_error`, then compared with each `check <name>
   pass` claim (a run before the claim? did the last one fail?) and with the PR's
   CI rollup. See the board invariant below — the result is display-only.
+- `internal/planner` — the decomposition half of `lola plan`: one bounded
+  `claude -p` (through `brain.Client`, NOT gated on `[brain].enabled` — the
+  command is the opt-in) splits an issue into ordered steps, and `Validate`
+  is the daemon's gate on every plan it is handed, edited or not. A step may
+  only depend on EARLIER steps, so a valid plan is acyclic by construction.
+  It never touches Linear; `internal/daemon/plan.go` does, and only on
+  `cmd=planApply` — see the invariant below.
 - `internal/statusagent` — the OPT-IN status interpreter: one bounded
   `claude -p` per interpretation (default `--model sonnet`) judging what an
   agent is ACTUALLY doing from pane/events/PR context. Output is parsed,
@@ -544,6 +551,23 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   count) within a minute, and once that nudge stopped minting `needs_input` an
   idle pre-PR session would have held no slot forever and dispatch would have
   spawned straight past the cap.
+- **Dependencies hold dispatch; they never write.** `dependencyHold`
+  (`dispatch.go`) skips an issue whose Linear "blocked by" relations
+  (`Issue.BlockedBy`, fetched in the same `MatchingIssues` query) include one
+  that is neither completed/canceled nor MERGED in the session store, and an
+  issue with open sub-issues (`OpenChildren` — its work was decomposed). Like
+  every candidate skip it writes no seen entry, so the issue re-qualifies on
+  the first tick after its blockers land. "Merged" counts because the Linear
+  write-back to done may lag the merge or not be configured.
+- **A plan is created only by a human's `--apply`, and is PLACED, not routed.**
+  `cmd=plan` creates nothing; `cmd=planApply` re-validates the steps and
+  creates them as sub-issues whose team/project/cycle/assignee/state/labels are
+  the INVERSE of the poll's filter (`subIssuePlacement` mirrors
+  `linear.BuildIssueFilter` field by field). There is no planner dispatch path:
+  the ordinary tick picks the sub-issues up and `dependencyHold` orders them.
+  Change the filter builder and the placement together. A parent with any
+  sub-issue is refused (the double-apply guard), and partial creation is
+  reported by identifier — Linear has no transaction to roll it back.
 - **A dead filter reference is reported, never silent.** Linear answers a
   filter naming a deleted label/state (or one moved to another team — the
   org→team move of the `agent/*` labels minted NEW ids) with zero issues, not

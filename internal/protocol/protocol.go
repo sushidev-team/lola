@@ -157,11 +157,24 @@ import (
 // it is answered, because anything that can open ~/.lola/lola.sock already
 // reaches cmd=answer and therefore already has more than the key grants.
 //
+// Cmd "plan" runs the orchestrator's PLANNING pass on one Linear issue: Args is
+// PlanArgs naming it (identifier or UUID). The daemon runs one bounded headless
+// claude that splits the issue into ordered sub-issues with dependencies and
+// replies PlanData. It CREATES NOTHING: the plan is a proposal for a human.
+//
+// Cmd "planApply" is that human's confirmation: Args is PlanApplyArgs carrying
+// the (possibly edited) steps. The daemon re-validates them, creates each step
+// as a Linear sub-issue of the parent — placed so the project's poll matches it
+// — and records every dependency as a "blocks" relation. Dispatch then holds a
+// sub-issue until its blockers are done or merged, and holds the parent while
+// any sub-issue is open. A parent that already has sub-issues is refused. The
+// reply is PlanApplyData.
+//
 // The handler is TAG-SPLIT. A release binary has no bearer-key path at all, so
 // it answers with an error naming that rather than an empty code; only a
 // -tags lola_insecure daemon can fill PairBeginData.Key.
 type Request struct {
-	Cmd    string `json:"cmd"` // stop|status|reload|enable|disable|pollOnce|sessions|projects|prs|hookEvent|kill|revive|pane|answer|review|coderabbit|resolveConflict|feedback|diff|switchAgent|dev|devFreePort|open|renameProject|pairBegin|agentReport
+	Cmd    string `json:"cmd"` // stop|status|reload|enable|disable|pollOnce|sessions|projects|prs|hookEvent|kill|revive|pane|answer|review|coderabbit|resolveConflict|feedback|diff|switchAgent|dev|devFreePort|open|renameProject|pairBegin|agentReport|plan|planApply
 	Poll   string `json:"poll,omitempty"`
 	DryRun bool   `json:"dryRun,omitempty"`
 
@@ -907,6 +920,44 @@ type FeedbackComment struct {
 	Side    string `json:"side,omitempty"` // "new" (default) | "old" — "old" means a removed line
 	Quote   string `json:"quote,omitempty"`
 	Body    string `json:"body"`
+}
+
+// PlanArgs is the argument payload for cmd=plan.
+type PlanArgs struct {
+	Issue string `json:"issue"` // identifier (FE-231) or UUID
+}
+
+// PlanStep is one proposed sub-issue. BlockedBy names the 1-based numbers of
+// EARLIER steps that must be finished before this one may be dispatched.
+type PlanStep struct {
+	Title       string `json:"title"`
+	Description string `json:"description,omitempty"`
+	BlockedBy   []int  `json:"blockedBy,omitempty"`
+}
+
+// PlanData is Response.Data for cmd=plan: the proposal for Issue.
+type PlanData struct {
+	Issue string     `json:"issue"` // the parent's identifier
+	Title string     `json:"title"`
+	Steps []PlanStep `json:"steps"`
+}
+
+// PlanApplyArgs is the argument payload for cmd=planApply. Project optionally
+// names the [[project]] whose poll should pick the sub-issues up; "" means the
+// one project configured on the parent's Linear team (ambiguity is an error).
+type PlanApplyArgs struct {
+	Issue   string     `json:"issue"`
+	Project string     `json:"project,omitempty"`
+	Steps   []PlanStep `json:"steps"`
+}
+
+// PlanApplyData is Response.Data for cmd=planApply: the created sub-issues'
+// identifiers in step order.
+type PlanApplyData struct {
+	Parent  string   `json:"parent"`
+	Project string   `json:"project"`
+	Created []string `json:"created"`
+	Message string   `json:"message,omitempty"`
 }
 
 // FeedbackData is Response.Data for cmd=feedback. Delivered is true when the

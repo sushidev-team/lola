@@ -45,4 +45,49 @@ type Issue struct {
 	Assignee   string
 	LabelIDs   []string
 	LabelNames []string // parallel to LabelIDs, display only
+	// BlockedBy lists the issues Linear records as BLOCKING this one (the
+	// inverse side of a "blocks" relation), each with its current state type.
+	// OpenChildren counts sub-issues not yet completed or canceled. Dispatch
+	// reads both: an issue whose blockers are unfinished, or whose work has
+	// been decomposed into open sub-issues, is not eligible yet.
+	BlockedBy    []Blocker
+	OpenChildren int
+}
+
+// Blocker is one issue blocking another, as dispatch needs it: who it is and
+// whether its workflow state is finished (StateType completed|canceled).
+type Blocker struct {
+	ID, Identifier, StateType string
+}
+
+// Finished reports whether the blocker's workflow state no longer holds the
+// blocked issue back: done, or canceled (a canceled dependency will never
+// land, so waiting on it would park the dependent forever).
+func (b Blocker) Finished() bool {
+	return StateFinished(b.StateType)
+}
+
+// StateFinished reports whether a workflow state TYPE is terminal.
+func StateFinished(stateType string) bool {
+	return stateType == "completed" || stateType == "canceled"
+}
+
+// IssueDetail is one issue read in full for the planning pass: its text (the
+// planner's input) and the placement fields its sub-issues inherit.
+type IssueDetail struct {
+	ID, Identifier, Title, Description string
+	TeamID, ProjectID, CycleID         string
+	StateID, AssigneeID                string
+	LabelIDs                           []string
+	// Children counts ALL existing sub-issues, finished or not: applying a plan
+	// to an issue that already has some would duplicate the decomposition.
+	Children int
+}
+
+// IssueCreate is the input for CreateIssue. Empty fields are omitted, so
+// Linear applies the team's defaults (e.g. the initial workflow state).
+type IssueCreate struct {
+	TeamID, ProjectID, CycleID, StateID, AssigneeID, ParentID string
+	Title, Description                                        string
+	LabelIDs                                                  []string
 }
