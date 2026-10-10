@@ -26,4 +26,11 @@ type API interface {
 	SetIssueLabels(ctx context.Context, issueUUID string, labelIDs []string) error
 	CreateComment(ctx context.Context, issueUUID, body string) error
 	SetIssueState(ctx context.Context, issueUUID, stateID string) error
+	// IssueDetail reads one issue by UUID or identifier (FE-231) for the
+	// planning pass.
+	IssueDetail(ctx context.Context, idOrIdentifier string) (IssueDetail, error)
+	// CreateIssue creates an issue and returns its UUID and identifier.
+	CreateIssue(ctx context.Context, in IssueCreate) (id, identifier string, err error)
+	// CreateBlocksRelation records that blockerUUID blocks blockedUUID.
+	CreateBlocksRelation(ctx context.Context, blockerUUID, blockedUUID string) error
 }

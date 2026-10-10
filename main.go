@@ -67,6 +67,7 @@ func main() {
 		reviveCmd(),
 		answerCmd(),
 		reviewCmd(),
+		planCmd(),
 		switchAgentCmd(),
 		checkpointCmd(),
 		coderabbitCmd(),

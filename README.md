@@ -145,6 +145,7 @@ protocol-version mismatch.
 | `lola checkpoint list\|diff\|restore\|fork <session> [n]` | The CLI face of [turn checkpoints](#turn-checkpoints-restore-and-fork): `list` the session's per-turn snapshots, `diff` what the turn ending in checkpoint `n` changed, `restore` the worktree's files to it (undoable; refused while the agent is mid-turn), or `fork` a new agent session from it on its own branch (`--agent` to pick a different coding agent). |
 | `lola answer <session> <text>` | Deliver a human's inline reply to a session parked for input. Refused unless the session's derived status is `needs_input` (the one moment the agent is provably idle at its prompt), so a reply can never corrupt a mid-turn agent. |
 | `lola review <session> [--provider kind]` | Force a **pass-shape** review provider now, ignoring the once-per-PR guard, and route its findings per its transports. With no `--provider` it forces the primary enabled pass provider; `--provider <kind>` picks one explicitly (any pass kind: `coderabbit-cli`, `custom-cli`, `claude-session`, `codex-session`, `opencode-session`). Skipped (not an error) when no such provider is enabled or its tool is unavailable. |
+| `lola plan <issue> [--apply] [--project name] [--file path]` | Decompose a large Linear issue into dependent sub-issues. Without `--apply`: one bounded headless claude proposes 2–8 ordered steps, which are printed and saved to `~/.lola/plans/<issue>.json` — **nothing is created**. Review or edit that file, then `--apply` creates each step as a sub-issue (placed so the project's poll matches it) and links every dependency as a Linear "blocked by" relation. See [Decomposing a large issue](#decomposing-a-large-issue). |
 | `lola coderabbit <session>` | Back-compat alias that forces the **watch-shape** provider now (`coderabbit-watch`) — poll the session's open PR for CodeRabbit (GitHub-app) comments, ignoring the watermark, and route any found (notify / worker / Linear per config). Skipped (not an error) when the watch is disabled or the session has no open PR. |
 | `lola reload` | Re-read `config.toml`; the daemon diffs projects and starts/stops poll goroutines without disturbing unaffected ones |
 | `lola logs [name] [-f]` | Tail `~/.lola/daemon.log`, optionally filtered to one project (by name); `-f`/`--follow` to stream |
@@ -176,6 +177,7 @@ environment variable — tests rely on this):
 | `state/sessions.json` | Native session store (status, PR, worktree, tmux target) |
 | `worktrees/<project>/<session>/` | Per-session git worktree |
 | `context/<project>/<key>/` | Shared context folder, linked into every session as `.lola/context` (key = the lowercased issue, or the session ID for manual/PR sessions). Survives teardown on purpose; delete it by hand when an issue is done. |
+| `plans/<issue>.json` | `lola plan` proposals awaiting review / `--apply` |
 | `cache/linear-<team>.json` | Cached Linear metadata for the TUI forms |
 
 ## Configuration reference
@@ -1547,7 +1549,11 @@ For each polling project (`team_id` set and `enabled`), every `poll_interval`:
    the team's active cycle now.
 3. Query matching issues (paginated, 100 per page, until exhausted).
 4. Drop issues already in-flight in another polling project, then apply this
-   project's dedup mode.
+   project's dedup mode. Then hold back issues that are not eligible yet: one
+   with a "blocked by" relation to an issue that is neither completed/canceled
+   in Linear nor merged under lola, and one with open sub-issues (its work
+   lives in them). A held issue is skipped without being marked seen, so it
+   dispatches on the first tick after its blockers land.
 5. Sort by `priority_sort`, take up to
    `min(concurrency_cap, global_cap − live counted native sessions)`.
 6. Per issue: record it as in-flight/seen **first**, then spawn the native
@@ -1566,6 +1572,35 @@ orphan timeout (default 15 min), so lost work re-queues instead of vanishing.
 
 Failures ("runtime unavailable", "Linear auth failed", label write failed) are
 always surfaced in `lola status` and the log — never silently swallowed.
+
+## Decomposing a large issue
+
+`lola plan SUSHI-42` is the orchestrator pass: it splits one issue too big
+for a single agent into ordered sub-issues that lola then dispatches in
+dependency order.
+
+1. `lola plan SUSHI-42` reads the issue and runs ONE bounded `claude -p`
+   (4-minute limit, `[brain].model` if set; it does not need `[brain].enabled`).
+   It prints the proposed steps — title, description, and which earlier steps
+   each one waits for — and saves them to `~/.lola/plans/SUSHI-42.json`.
+   Nothing is written to Linear.
+2. Read it. Edit the file if needed: a step may only be blocked by EARLIER
+   steps (`"blockedBy": [1, 2]`), which keeps the plan acyclic.
+3. `lola plan SUSHI-42 --apply` creates the steps as sub-issues of SUSHI-42
+   and records each dependency as a "blocks" relation. Each sub-issue is placed
+   so the project's poll matches it: its team, `project_id`, cycle
+   (`cycle_mode`), assignee (`assignee_mode`), state (`state_ids`) and every
+   `match_labels` entry come from the poll's filter; anything the filter leaves
+   open is inherited from the parent. The project is the one polling the
+   issue's team, or `--project <name>` when several do. In label/seen dedup the
+   parent's trigger labels are removed so it never dispatches itself. An issue
+   that already has sub-issues is refused, so a second `--apply` cannot create
+   a duplicate set.
+
+From then on the ordinary ticks do the work: a step with no blockers
+dispatches right away, and each later step waits (`blocked-by <ID>` in
+`lola poll <project> --once --dry-run`) until its blockers are done or their PRs are
+merged.
 
 ## History
 
