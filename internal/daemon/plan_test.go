@@ -3,7 +3,9 @@ package daemon
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -163,6 +165,31 @@ func TestHandlePlanApplyCreatesSubIssuesAndRelations(t *testing.T) {
 	if !reflect.DeepEqual(fake.Relations, wantRel) {
 		t.Errorf("relations = %v, want %v", fake.Relations, wantRel)
 	}
+	// No step may match the poll before its blockers are linked: each one is
+	// linked right after creation, and a blocked step gets its trigger label
+	// only after its links exist.
+	wantCalls := []string{
+		"IssueDetail",
+		"CreateIssue",
+		"CreateIssue", "CreateBlocksRelation", "SetIssueLabels",
+		"CreateIssue", "CreateBlocksRelation", "CreateBlocksRelation", "SetIssueLabels",
+		"SetIssueLabels", // the parent's trigger label, below
+	}
+	if got := fake.CallNames(); !reflect.DeepEqual(got, wantCalls) {
+		t.Errorf("calls = %v, want %v", got, wantCalls)
+	}
+	if !slices.Contains(fake.Created[0].LabelIDs, "lbl-trigger") {
+		t.Errorf("unblocked step 1 labels = %v, want the trigger label", fake.Created[0].LabelIDs)
+	}
+	for i := 1; i < 3; i++ {
+		if slices.Contains(fake.Created[i].LabelIDs, "lbl-trigger") {
+			t.Errorf("blocked step %d created with the trigger label: %v", i+1, fake.Created[i].LabelIDs)
+		}
+		id := fmt.Sprintf("created-uuid-%d", i+1)
+		if got := fake.LabelIDsByIssue[id]; !slices.Contains(got, "lbl-trigger") {
+			t.Errorf("blocked step %d labels after linking = %v, want the trigger label", i+1, got)
+		}
+	}
 	// The parent's trigger label is dropped so it never dispatches itself.
 	if got := fake.LabelIDsByIssue["uuid-FE-10"]; !reflect.DeepEqual(got, []string{"lbl-area"}) {
 		t.Errorf("parent labels = %v, want [lbl-area]", got)
@@ -210,8 +237,16 @@ func TestHandlePlanApplyReportsPartialCreation(t *testing.T) {
 	d := newTestDaemon(t, testConfig(labelPoll("p1")), fake, &fakeNative{})
 	fake.Errs = map[string]error{"CreateBlocksRelation": errors.New("boom")}
 	_, err := d.handlePlanApply(context.Background(), protocol.PlanApplyArgs{Issue: "FE-10", Steps: applySteps()})
-	if err == nil || !strings.Contains(err.Error(), "already created: NEW-1, NEW-2, NEW-3") {
+	if err == nil || !strings.Contains(err.Error(), "already created: NEW-1, NEW-2)") {
 		t.Errorf("err = %v, want it to name the issues already created", err)
+	}
+	// Creation stops at the first failed link, and the unlinked step never got
+	// its trigger label, so it cannot dispatch unblocked.
+	if len(fake.Created) != 2 {
+		t.Errorf("created %d step(s), want 2", len(fake.Created))
+	}
+	if got := fake.LabelIDsByIssue["created-uuid-2"]; got != nil {
+		t.Errorf("unlinked step 2 got labels %v", got)
 	}
 }
 

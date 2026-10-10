@@ -158,9 +158,19 @@ func (d *Daemon) handlePlanApply(ctx context.Context, a protocol.PlanApplyArgs) 
 		}
 		return res, d.linearErr(stage, err)
 	}
+	// A created step is visible to the poll at once, so it must never match the
+	// filter before its blockers are linked: a tick in that gap would dispatch it
+	// unblocked. Each step is therefore linked right after it is created (its
+	// blockers are earlier steps, so they exist), and a blocked step is created
+	// WITHOUT the trigger labels, which are added only once its links exist. A
+	// failure part-way leaves such a step unlabeled — undispatchable, not early.
 	for i, s := range steps {
 		in := tmpl
 		in.LabelIDs = slices.Clone(tmpl.LabelIDs)
+		gated := len(s.BlockedBy) > 0 && len(p.MatchLabels) > 0
+		if gated {
+			in.LabelIDs = ApplyLabelDelta(tmpl.LabelIDs, p.MatchLabels, nil)
+		}
 		in.Title = s.Title
 		in.Description = stepDescription(s, i+1, len(steps), parent.Identifier)
 		id, ident, err := api.CreateIssue(cctx, in)
@@ -169,11 +179,14 @@ func (d *Daemon) handlePlanApply(ctx context.Context, a protocol.PlanApplyArgs) 
 		}
 		ids = append(ids, id)
 		res.Created = append(res.Created, ident)
-	}
-	for i, s := range steps {
 		for _, b := range s.BlockedBy {
-			if err := api.CreateBlocksRelation(cctx, ids[b-1], ids[i]); err != nil {
-				return partial(fmt.Sprintf("link %s blocked by %s", res.Created[i], res.Created[b-1]), err)
+			if err := api.CreateBlocksRelation(cctx, ids[b-1], id); err != nil {
+				return partial(fmt.Sprintf("link %s blocked by %s", ident, res.Created[b-1]), err)
+			}
+		}
+		if gated {
+			if err := api.SetIssueLabels(cctx, id, tmpl.LabelIDs); err != nil {
+				return partial(fmt.Sprintf("add trigger labels to %s", ident), err)
 			}
 		}
 	}
