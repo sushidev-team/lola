@@ -9,6 +9,7 @@
   import StageChip from "./StageChip.svelte";
   import BoardChip from "./BoardChip.svelte";
   import ClaimFlag from "./ClaimFlag.svelte";
+  import CrossSessionChips from "./CrossSessionChips.svelte";
   import Button from "./Button.svelte";
   import SessionsEmpty from "./SessionsEmpty.svelte";
   import { chipRelevant } from "$lib/board";
@@ -199,6 +200,7 @@
                 <BoardChip session={s} />
               {/if}
               <ClaimFlag session={s} />
+              <CrossSessionChips session={s} />
               {#if needsYou}
                 <span
                   class="inline-flex items-center gap-1.5 rounded-full bg-orange/12 px-2 py-[1px] text-sm font-medium whitespace-nowrap text-orange"

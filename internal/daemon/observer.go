@@ -475,6 +475,12 @@ func (d *Daemon) observeNative(ctx context.Context) {
 			}
 		}
 	}
+	// Cross-session passes, AFTER every record carries this cycle's facts.
+	// Overlap detection is local git only and display-only; the merge queue is
+	// off unless [merge_queue].enabled, and then judges each repository's head
+	// against the PR facts just fetched (it persists its own guards).
+	d.reconcileOverlaps(ctx)
+	d.runMergeQueue(ctx)
 	if !touched {
 		return
 	}

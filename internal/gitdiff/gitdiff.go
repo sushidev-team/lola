@@ -28,6 +28,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -89,38 +90,12 @@ var ErrNoBase = errors.New("no merge-base with the base branch")
 // checkout last pulled and is routinely stale, then falls back to the local
 // branch.
 func (d Differ) Diff(ctx context.Context, dir, base string) (Result, error) {
-	if strings.TrimSpace(dir) == "" {
-		return Result{}, errors.New("no worktree")
+	run, bin := d.exec()
+	ref, sha, err := d.mergeBase(ctx, dir, base)
+	if err != nil {
+		return Result{}, err
 	}
-	if base == "" || strings.HasPrefix(base, "-") {
-		return Result{}, fmt.Errorf("invalid base branch %q", base)
-	}
-	run := d.run
-	if run == nil {
-		run = runGit
-	}
-	bin := d.GitBin
-	if bin == "" {
-		bin = "git"
-	}
-
-	var res Result
-	for _, ref := range []string{"origin/" + base, base} {
-		out, err := run(ctx, bin, dir, "merge-base", "HEAD", ref)
-		if err != nil {
-			if ctx.Err() != nil {
-				return Result{}, ctx.Err()
-			}
-			continue
-		}
-		if sha := strings.TrimSpace(string(out)); sha != "" {
-			res.Base, res.MergeBase = ref, sha
-			break
-		}
-	}
-	if res.MergeBase == "" {
-		return Result{}, fmt.Errorf("%w %q", ErrNoBase, base)
-	}
+	res := Result{Base: ref, MergeBase: sha}
 
 	// --no-ext-diff / --no-color / --no-textconv: the raw text, whatever the
 	// user's git config says. -M finds renames, so a moved file is one entry
@@ -194,6 +169,101 @@ func capFiles(res *Result, files []File) {
 	if res.Files == nil {
 		res.Files = []File{}
 	}
+}
+
+// ChangedFiles returns just the PATHS the worktree at dir has changed relative
+// to its merge-base with base — committed, staged, unstaged and untracked, the
+// same set Diff covers — sorted and de-duplicated. A rename contributes BOTH
+// its old and its new path: either side can collide with another branch.
+//
+// It is the cheap half of Diff, for a caller that asks every observe cycle
+// (cross-session overlap detection): `--name-only` reads no file content and
+// renders no patch, and untracked files are listed, never read. Local git
+// only, like everything here.
+func (d Differ) ChangedFiles(ctx context.Context, dir, base string) ([]string, error) {
+	run, bin := d.exec()
+	_, sha, err := d.mergeBase(ctx, dir, base)
+	if err != nil {
+		return nil, err
+	}
+	// -z: NUL-separated, so a path with a newline or a quote is one entry and
+	// is never C-quoted. --name-status (not --name-only) because only it names
+	// both sides of a rename: "R100\x00old\x00new\x00".
+	out, err := run(ctx, bin, dir, "diff", "--no-color", "--no-ext-diff", "-M", "--name-status", "-z", sha, "--")
+	if err != nil {
+		return nil, fmt.Errorf("git diff --name-status: %w", err)
+	}
+	seen := map[string]bool{}
+	fields := strings.Split(string(out), "\x00")
+	for i := 0; i < len(fields); i++ {
+		status := fields[i]
+		if status == "" {
+			continue
+		}
+		n := 1
+		if status[0] == 'R' || status[0] == 'C' {
+			n = 2
+		}
+		for j := 0; j < n && i+1 < len(fields); j++ {
+			i++
+			if p := fields[i]; p != "" {
+				seen[p] = true
+			}
+		}
+	}
+	if u, err := run(ctx, bin, dir, "ls-files", "--others", "--exclude-standard", "-z"); err == nil {
+		for _, p := range strings.Split(string(u), "\x00") {
+			if p != "" {
+				seen[p] = true
+			}
+		}
+	} else if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	files := make([]string, 0, len(seen))
+	for p := range seen {
+		files = append(files, p)
+	}
+	sort.Strings(files)
+	return files, nil
+}
+
+// exec resolves the exec seam and the git binary.
+func (d Differ) exec() (func(ctx context.Context, bin, dir string, args ...string) ([]byte, error), string) {
+	run := d.run
+	if run == nil {
+		run = runGit
+	}
+	bin := d.GitBin
+	if bin == "" {
+		bin = "git"
+	}
+	return run, bin
+}
+
+// mergeBase resolves the commit the worktree at dir forked from: the
+// merge-base of HEAD with origin/<base>, else with the local <base>.
+func (d Differ) mergeBase(ctx context.Context, dir, base string) (ref, sha string, err error) {
+	if strings.TrimSpace(dir) == "" {
+		return "", "", errors.New("no worktree")
+	}
+	if base == "" || strings.HasPrefix(base, "-") {
+		return "", "", fmt.Errorf("invalid base branch %q", base)
+	}
+	run, bin := d.exec()
+	for _, ref := range []string{"origin/" + base, base} {
+		out, err := run(ctx, bin, dir, "merge-base", "HEAD", ref)
+		if err != nil {
+			if ctx.Err() != nil {
+				return "", "", ctx.Err()
+			}
+			continue
+		}
+		if sha := strings.TrimSpace(string(out)); sha != "" {
+			return ref, sha, nil
+		}
+	}
+	return "", "", fmt.Errorf("%w %q", ErrNoBase, base)
 }
 
 // Diff is the package-level convenience for the default differ.

@@ -203,6 +203,20 @@ type Daemon struct {
 	// so nothing can start the agent while its files are being replaced.
 	sendGates map[string]*sync.RWMutex
 
+	// changedFiles lists the paths a worktree changed against its merge-base
+	// with the default branch — the observer's per-cycle input to cross-session
+	// overlap detection (overlap.go). Local git only; tests install a fake.
+	// overlapWarned holds the last error logged per session so a broken
+	// worktree logs once, not every 30s; touched by the observe loop only.
+	changedFiles  func(ctx context.Context, dir, base string) ([]string, error)
+	overlapWarned map[string]string
+
+	// Merge-queue seams (mergequeue.go): how far a PR head is behind its base,
+	// and the merge itself, pinned to the head the queue judged. Both default
+	// to scm.Client; tests install fakes.
+	behindBy func(ctx context.Context, repo, base, headSHA string) (int, error)
+	mergePR  func(ctx context.Context, repo string, pr int, method, headSHA string) error
+
 	// listTmuxSessions lists every session on lola's tmux server in ONE exec —
 	// the observer's per-cycle liveness + #{session_activity} source (replacing
 	// N per-session has-session probes). nil (tests without the seam) makes the
@@ -488,6 +502,10 @@ func newDaemon(cfg *config.Config, lin linear.API, logger *log.Logger, home stri
 	d.worktreeDiff = gitdiff.Diff
 	d.checkpoints = checkpoint.Git{}
 	d.commitDiff = gitdiff.Between
+	d.changedFiles = gitdiff.Differ{}.ChangedFiles
+	d.overlapWarned = map[string]string{}
+	d.behindBy = scmc.BehindBy
+	d.mergePR = scmc.MergePR
 	// A no-op notifier until Run/reload resolves the [notify] config; keeps the
 	// engine free of nil checks. notify.New always returns a non-nil Notifier.
 	d.notifier = notify.New(notify.NotifyConfig{})

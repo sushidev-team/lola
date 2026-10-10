@@ -359,6 +359,23 @@ export interface Match {
 }
 
 /**
+ * MergeQueueInfo is a session's merge-queue posture. Position is 1-based within
+ * its repository (1 = next to land). Step is one of:
+ * 
+ * 	queued      waiting behind an earlier PR
+ * 	waiting_ci  next, checks still running
+ * 	syncing     next, asked its agent to merge the default branch in
+ * 	merging     next, the merge was issued
+ * 	conflict    next, conflicting with the default branch (merge_conflict reaction)
+ * 	blocked     next, but something the queue cannot judge (fails closed)
+ * 	failed      next, GitHub refused the merge for this head
+ */
+export interface MergeQueueInfo {
+    "position": number;
+    "step": string;
+}
+
+/**
  * OpenData is Response.Data for cmd=open: a branch/PR manually checked out into
  * a throwaway DETACHED worktree with a plain shell (no coding agent), for running
  * and testing a PR. SessionID is the created session's ID (and its tmux target),
@@ -909,6 +926,21 @@ export interface SessionInfo {
     "devClash"?: DevClashInfo | null;
 
     /**
+     * Overlaps names the OTHER live sessions of the same project whose changes
+     * touch the same files as this one — computed each observe cycle from local
+     * git (worktree vs. the merge-base with the default branch), so two agents
+     * editing one file are flagged BEFORE either PR conflicts. Display-only: a
+     * hint for a human, never an input to dispatch, reactions or the queue.
+     */
+    "overlaps"?: SessionOverlap[] | null;
+
+    /**
+     * MergeQueue is this session's place in the [merge_queue], nil when the
+     * queue is off or the PR is not in it.
+     */
+    "mergeQueue"?: MergeQueueInfo | null;
+
+    /**
      * Board is the agent's self-reported progress (`lola report …`), nil when
      * it has reported nothing. A CLAIM, not a fact: render it as the agent's
      * own words, beside — never instead of — the axes above, and fade it as
@@ -949,6 +981,17 @@ export interface SessionInfo {
      * "addressing review" | "rebasing" | "ready to merge".
      */
     "reacting": string;
+}
+
+/**
+ * SessionOverlap is one other session editing the same files. Files is sorted
+ * and capped (More counts the rest); paths are repo-relative as git prints them.
+ */
+export interface SessionOverlap {
+    "session": string;
+    "issue"?: string;
+    "files": string[] | null;
+    "more"?: number;
 }
 
 /**

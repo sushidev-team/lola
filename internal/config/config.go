@@ -270,6 +270,7 @@ type Config struct {
 	Reactions   ReactionsConfig   `toml:"reactions"`
 	Notify      NotifyConfig      `toml:"notify"`
 	Brain       BrainConfig       `toml:"brain"`
+	MergeQueue  MergeQueueConfig  `toml:"merge_queue"`
 	StatusAgent StatusAgentConfig `toml:"statusagent"`
 	Review      ReviewConfig      `toml:"review"`
 	CodeRabbit  CodeRabbitConfig  `toml:"coderabbit"`
@@ -382,6 +383,7 @@ type fileConfig struct {
 	Reactions   *fileReactionsConfig   `toml:"reactions,omitempty"`
 	Notify      *fileNotifyConfig      `toml:"notify,omitempty"`
 	Brain       *fileBrainConfig       `toml:"brain,omitempty"`
+	MergeQueue  *fileMergeQueueConfig  `toml:"merge_queue,omitempty"`
 	StatusAgent *fileStatusAgentConfig `toml:"statusagent,omitempty"`
 	Review      *fileReviewConfig      `toml:"review,omitempty"`
 	CodeRabbit  *fileCodeRabbitConfig  `toml:"coderabbit,omitempty"`
@@ -765,6 +767,7 @@ func (fc *fileConfig) config() *Config {
 		Reactions:       resolveReactions(fc.Reactions),
 		Notify:          resolveNotify(fc.Notify),
 		Brain:           resolveBrain(fc.Brain),
+		MergeQueue:      resolveMergeQueue(fc.MergeQueue),
 		StatusAgent:     resolveStatusAgent(fc.StatusAgent),
 		Review:          resolveReview(fc.Review),
 		ReviewProviders: resolveReviewProviders(reviewProviderEntries(fc.Review)),
@@ -820,6 +823,7 @@ func (c *Config) file() *fileConfig {
 		Reactions:   reactionsFile(c.Reactions),
 		Notify:      notifyFile(c.Notify),
 		Brain:       brainFile(c.Brain),
+		MergeQueue:  mergeQueueFile(c.MergeQueue),
 		StatusAgent: statusAgentFile(c.StatusAgent),
 		Review:      c.reviewMirror(),
 		CodeRabbit:  coderabbitFile(c.CodeRabbit),

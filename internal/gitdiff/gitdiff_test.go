@@ -211,6 +211,64 @@ func TestDiffRealRepo(t *testing.T) {
 	}
 }
 
+// TestChangedFilesRealRepo: the cheap path list covers committed, uncommitted
+// and untracked work, names BOTH sides of a rename, and — like Diff — leaves
+// out what main gained after the fork.
+func TestChangedFilesRealRepo(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not on PATH")
+	}
+	dir := t.TempDir()
+	git := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+		cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t",
+			"GIT_COMMITTER_EMAIL=t@t", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	write := func(name, body string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	git("init", "-q", "-b", "main")
+	write("a.txt", "one\ntwo\n")
+	write("old name.txt", "a fairly long body so the rename is detected\nline two\nline three\n")
+	git("add", ".")
+	git("commit", "-qm", "base")
+	git("checkout", "-qb", "feature")
+	write("a.txt", "one\nTWO\n")
+	git("mv", "old name.txt", "new name.txt")
+	git("commit", "-qam", "feature work")
+	git("checkout", "-q", "main")
+	write("main-only.txt", "later\n")
+	git("add", ".")
+	git("commit", "-qm", "main moved on")
+	git("checkout", "-q", "feature")
+	write("b.txt", "fresh\n") // untracked
+
+	got, err := Differ{}.ChangedFiles(context.Background(), dir, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"a.txt", "b.txt", "new name.txt", "old name.txt"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("ChangedFiles = %q, want %q", got, want)
+	}
+}
+
+func TestChangedFilesNoBase(t *testing.T) {
+	d := Differ{run: func(context.Context, string, string, ...string) ([]byte, error) {
+		return nil, errors.New("exit status 1")
+	}}
+	if _, err := d.ChangedFiles(context.Background(), "/wt", "main"); !errors.Is(err, ErrNoBase) {
+		t.Fatalf("err = %v, want ErrNoBase", err)
+	}
+}
+
 func TestUntrackedOverflowIsDisclosed(t *testing.T) {
 	dir := t.TempDir()
 	var z strings.Builder

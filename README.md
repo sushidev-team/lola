@@ -667,6 +667,42 @@ Routing priorities and their defaults:
 Priorities you omit under `[notify.routing]` keep their default channels; set a
 priority to `[]` to route it nowhere.
 
+### `[merge_queue]` (optional, off by default)
+
+lola's local merge queue. When enabled, approved + green PRs of lola's own
+sessions are merged **one at a time per repository**, oldest PR first. Each
+observe cycle only the head of each repository's queue is acted on:
+
+1. If its head commit does not yet contain the tip of the default branch
+   (GitHub's compare API, `behind_by > 0`), the session's agent is asked —
+   once per head commit, only when it is provably resting at its prompt — to
+   merge the default branch in and push.
+2. CI re-runs on that push; once checks pass, GitHub reports `MERGEABLE` and the
+   head is up to date, lola re-reads the PR and merges it with
+   `gh pr merge --<method> --match-head-commit <sha>`, so a push in between makes
+   GitHub refuse rather than land untested code.
+3. A conflicting head is left to the `merge_conflict` reaction; the queue holds
+   behind it.
+
+| Key | Type | Description |
+| --- | --- | --- |
+| `enabled` | bool | Master switch. Default `false`; an absent table is also off. |
+| `method` | string | `squash` (default), `merge` or `rebase`. |
+| `allow_no_checks` | bool | Let a PR with no CI checks land. Default `false`: right after a push GitHub can report no checks simply because none have registered yet. |
+
+It **fails closed**: stale PR facts, an `UNKNOWN` mergeability, a compare call
+that cannot answer, a PR targeting another base, or a project that left config
+hold the queue and take no action. A merge GitHub refuses (branch protection,
+a missing required check) is recorded, notified once and retried after ten
+minutes or on a new push. PRs of sessions opened on an existing branch (`lola open`) are never merged —
+lola does not own those branches. If the repository dismisses stale approvals
+on push, a synced PR leaves the queue until a human re-approves it.
+
+Independently of the queue, lola flags sessions of the same project whose
+worktrees change the **same files** (local git only, every observe cycle) — a
+`⚠ovl` marker / "Overlaps" chip on both rows — so a collision is visible before
+either PR conflicts. That warning is display-only.
+
 ### `[brain]` (optional, off by default)
 
 The P5 orchestrator brain: when enabled, lola makes a single headless
