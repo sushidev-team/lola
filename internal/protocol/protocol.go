@@ -655,7 +655,7 @@ type PlanInfo struct {
 }
 
 // PlanSubmitArgs is cmd=planSubmit's payload: the agent's plan (from
-// `lola plan submit`, session = $LOLA_SESSION).
+// `lola plan-gate submit`, session = $LOLA_SESSION).
 type PlanSubmitArgs struct {
 	Plan string `json:"plan"`
 }

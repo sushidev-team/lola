@@ -244,7 +244,7 @@ type Project struct {
 	// --- Plan gate (optional) ----------------------------------------------
 	// RequirePlan makes every issue-dispatched session of this project PLAN
 	// before it codes: the briefing tells the agent to investigate read-only and
-	// submit a plan (`lola plan submit`), lola posts it (app, TUI, and the Linear
+	// submit a plan (`lola plan-gate submit`), lola posts it (app, TUI, and the Linear
 	// agent session when there is one) and blocks the file-edit tools until a
 	// human approves; a rejection with a comment sends the agent back to
 	// re-plan. Inheritable from [defaults].require_plan; the resolved value

@@ -182,7 +182,7 @@ func planGateLines(si protocol.SessionInfo, w int) []string {
 			}
 			out = append(out, "  "+truncPlain(l, w-2))
 		}
-		out = append(out, faintText.Render(truncPlain("  approve: lola plan approve "+si.ID+"   changes: lola plan reject "+si.ID+" <comment>", w)))
+		out = append(out, faintText.Render(truncPlain("  approve: lola plan-gate approve "+si.ID+"   changes: lola plan-gate reject "+si.ID+" <comment>", w)))
 		return out
 	case "planning":
 		line := "gate:     planning — edits blocked until a plan is approved"

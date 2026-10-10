@@ -1050,7 +1050,7 @@
             !!d.requirePlan,
             () => { d.requirePlan = !d.requirePlan; },
             "approve a plan before the agent edits files",
-            "The agent investigates read-only and submits a plan; it may edit files only once a human approves it — in the app, with `lola plan approve`, or in the Linear agent session.",
+            "The agent investigates read-only and submits a plan; it may edit files only once a human approves it — in the app, with `lola plan-gate approve`, or in the Linear agent session.",
           )}
         {/snippet}
         {@render section("Plan approval", planGate)}

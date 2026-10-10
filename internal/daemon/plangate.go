@@ -19,7 +19,7 @@ import (
 // The PLAN-APPROVAL GATE ([[project]].require_plan). A gated session is born
 // with PlanGate=planning (the runtime sets it at spawn and adds a "Plan
 // approval" section to the briefing); the agent investigates, submits a plan
-// with `lola plan submit` (cmd=planSubmit → submitted) and stops; a HUMAN
+// with `lola plan-gate submit` (cmd=planSubmit → submitted) and stops; a HUMAN
 // approves (→ approved, coding unlocked) or requests changes with a comment
 // (→ planning again, the comment relayed). Three properties hold it together:
 //
@@ -47,7 +47,7 @@ const maxPendingNotices = 20
 // Plan-gate messages typed into the agent. lola's own text.
 const (
 	planApprovedNotice = "Your plan was approved by a human reviewer. The file-edit tools are unlocked — implement the plan now, following the rest of your briefing in .lola/prompt.md."
-	planRejectedNotice = "Your plan was NOT approved. Reviewer feedback: %s\n\nRevise the plan to address this, then submit it again with `lola plan submit` and stop. Do not edit files yet."
+	planRejectedNotice = "Your plan was NOT approved. Reviewer feedback: %s\n\nRevise the plan to address this, then submit it again with `lola plan-gate submit` and stop. Do not edit files yet."
 	planWaivedNotice   = "A human waived the plan-approval step for this session. The file-edit tools are unlocked — go ahead and implement, following the rest of your briefing in .lola/prompt.md."
 )
 
@@ -246,7 +246,7 @@ func (d *Daemon) handlePlanGate(req protocol.Request) protocol.Response {
 		if s.PlanGate == session.PlanSubmitted {
 			data.Reason = "lola plan gate: your plan is waiting for human approval. Do not edit files — end your turn and wait; you will be told when it is approved or what to change."
 		} else {
-			data.Reason = "lola plan gate: this session must have its plan approved before editing files. Investigate read-only, submit your plan with `lola plan submit`, then end your turn and wait."
+			data.Reason = "lola plan gate: this session must have its plan approved before editing files. Investigate read-only, submit your plan with `lola plan-gate submit`, then end your turn and wait."
 		}
 	}
 	return dataResponse(data)

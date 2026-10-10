@@ -1491,7 +1491,8 @@ each of which owns exactly one external tool or concern behind an **exec seam**
     or 401 and the rotated pair is written back. `linear.OAuthClient` errors name
     only the HTTP status and a whitelisted OAuth error word, never a body.
 - **The plan gate is CONTROL state, enforced by a hook that fails open.**
-  `Session.PlanGate` (planning → submitted → approved) is set by the runtime at
+  Not to be confused with `lola plan` / `plan.go` (issue decomposition): the
+  gate's CLI is `lola plan-gate submit|approve|reject`. `Session.PlanGate` (planning → submitted → approved) is set by the runtime at
   spawn (`[[project]].require_plan`, inheritable — a bool in the `Inherits`
   bitmap with a `*bool` file mirror) and moved ONLY by `plangate.go`; the agent's
   board never moves it. claude's per-session settings carry a synchronous
