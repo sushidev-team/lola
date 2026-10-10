@@ -1368,8 +1368,8 @@ snapshots its whole worktree — committed, uncommitted and untracked work, neve
 ignored files or `.lola/` — as a commit object kept on a ref under
 `refs/lola/checkpoints/<session>/`, **not** on the session's branch, so the
 branch, the PR and every push are untouched. A turn that changed nothing records
-nothing, and a `start` baseline is recorded just before the agent launches, so
-even turn 1 can be undone (claude, codex and opencode alike). Each session keeps its newest 100; the refs are deleted when the
+nothing, and a `start` baseline is recorded just before a new session's first
+agent launch, so even turn 1 can be undone (claude, codex and opencode alike). Each session keeps its newest 100; the refs are deleted when the
 session is torn down with its worktree.
 
 In the app they are a tab of the session sidebar, beside the agent's report
@@ -1393,9 +1393,11 @@ tab goes back to the terminal. Then:
 
 ### The shared context folder
 
-Every agent session gets `.lola/context/`: a notes folder that lives OUTSIDE the
-worktree at `~/.lola/context/<project>/<key>/` and is linked in, so it survives
-the worktree. Every re-spawn of the same issue (`-r2`, `-r3`, …) and every fork
+Every agent session gets `.lola/context/` when its setup succeeds: a notes
+folder that lives OUTSIDE the worktree at `~/.lola/context/<project>/<key>/` and
+is linked in, so it survives the worktree. Linking is best-effort — if it fails,
+the session still starts, without the folder, and its briefing leaves the
+section out. Every re-spawn of the same issue (`-r2`, `-r3`, …) and every fork
 gets the same folder, and `.lola/prompt.md` names what earlier sessions left
 there and asks the agent to keep `notes.md` current. It is git-ignored (all of
 `.lola/` is), so nothing in it is ever committed — and it is not part of a

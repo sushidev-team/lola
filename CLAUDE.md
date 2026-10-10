@@ -1079,14 +1079,17 @@ each of which owns exactly one external tool or concern behind an **exec seam**
     PR. Without that release a single timeout locked the PR out of review
     forever — the bug that made the feature look dead. A real answer (findings
     or clean) and a graceful skip (auth / exit error) stay final.
-- **A turn checkpoint is a REF, never a commit on the branch, and only a
-  RESTORE may touch the real index.** The Stop hook records one per turn
+- **A turn checkpoint is a REF, never a commit on the branch, and recording
+  one never touches a real index.** Only two operations write one: a RESTORE
+  (the parent session's own index) and a FORK's `Apply` (the NEW fork
+  worktree's index, never the parent's). The Stop hook records one per turn
   (`recordCheckpointAsync`, off the hook's critical path, on the conn drain
   group). The `start` baseline that makes turn 1 undoable is recorded by the
-  RUNTIME just before every agent launch (`recordBaseline`) — codex and
-  opencode emit no turn-start hook, so a hook-driven baseline never fired for
-  them; the first `user_prompt` is only a fallback for older sessions. Rules
-  that hold it together:
+  RUNTIME just before a new session's first agent launch — spawn and fork,
+  not revive or switch-agent (`recordBaseline`) — because codex and opencode
+  emit no turn-start hook, so a hook-driven baseline never fired for them. A
+  `user_prompt` still records the baseline whenever a session has none yet
+  (older sessions, or a baseline that failed). Rules that hold it together:
   - `Snapshot` stages into a TEMPORARY index seeded from a copy of the real one
     (`GIT_INDEX_FILE`), then `write-tree` + `commit-tree` + `update-ref`. The
     real index and every branch stay untouched, so recording is safe while the

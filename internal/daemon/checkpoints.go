@@ -59,7 +59,8 @@ var _ checkpointStore = checkpoint.Git{}
 const checkpointTimeout = 90 * time.Second
 
 // Labels. "start" is the state before the first turn, so even turn 1 can be
-// rolled back — the runtime records it before every launch (any agent kind);
+// rolled back — the runtime records it before a new session's first launch
+// (any agent kind), and a user_prompt records it when none exists yet;
 // "turn N" is the state a turn ended in.
 const (
 	ckptLabelStart = runtime.BaselineLabel
