@@ -80,7 +80,11 @@ func rankText(u *protocol.UsageInfo) string {
 	if u.Of == 0 {
 		return [4]string{"light", "moderate", "heavy", "very heavy"}[max(0, min(u.Level, 3))] + " (too little history to compare yet)"
 	}
-	return fmt.Sprintf("heavier than %.0f%% of your last %d sessions", u.Percentile, u.Of)
+	kind := ""
+	if u.Agent == "codex" {
+		kind = "codex " // ranked against codex sessions only
+	}
+	return fmt.Sprintf("heavier than %.0f%% of your last %d %ssessions", u.Percentile, u.Of, kind)
 }
 
 // usageDetailLine is the detail panel's usage line, "" when nothing is known.
@@ -89,8 +93,11 @@ func usageDetailLine(si protocol.SessionInfo) string {
 	if u == nil {
 		return ""
 	}
-	line := fmt.Sprintf("tokens:   %s %s (%s today) · %s · ~%s at list price",
-		fmtTokens(u.Tokens), levelGlyph(u), fmtTokens(u.TodayTokens), rankText(u), fmtUSD(u.TotalUSD))
+	line := fmt.Sprintf("tokens:   %s %s (%s today) · %s",
+		fmtTokens(u.Tokens), levelGlyph(u), fmtTokens(u.TodayTokens), rankText(u))
+	if u.TotalUSD > 0 { // codex has no list price lola trusts
+		line += " · ~" + fmtUSD(u.TotalUSD) + " at list price"
+	}
 	if u.Burning {
 		line += " · " + flame + " " + statusOrange.Render(fmt.Sprintf("burning %s tokens/h", fmtTokens(u.TokensPerHour)))
 	}

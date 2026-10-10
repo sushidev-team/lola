@@ -30,7 +30,8 @@ const LEVEL_WORDS = ["light", "moderate", "heavy", "very heavy"];
 /** The rank in words: against history, or the fallback's word without it. */
 export function rankText(u: UsageInfo): string {
   if (!u.of) return `${LEVEL_WORDS[usageLevel(u)]} (too little history to compare yet)`;
-  return `heavier than ${Math.round(u.percentile ?? 0)}% of your last ${u.of} sessions`;
+  const kind = u.agent === "codex" ? "codex " : ""; // ranked against codex sessions only
+  return `heavier than ${Math.round(u.percentile ?? 0)}% of your last ${u.of} ${kind}sessions`;
 }
 
 /** A session's token label; "" when nothing is known (absent is unknown, not 0). */
@@ -40,11 +41,9 @@ export function usageLabel(u: UsageInfo | null | undefined): string {
 
 /** The tooltip that spells a session's figure out. */
 export function usageTitle(u: UsageInfo): string {
-  const lines = [
-    `${fmtTokens(u.tokens)} tokens (${fmtTokens(u.todayTokens)} today)`,
-    rankText(u),
-    `~${fmtUSD(u.totalUsd)} at list price`,
-  ];
+  const lines = [`${fmtTokens(u.tokens)} tokens (${fmtTokens(u.todayTokens)} today)`, rankText(u)];
+  // codex has no list price lola trusts, so it shows tokens only.
+  if (u.totalUsd > 0) lines.push(`~${fmtUSD(u.totalUsd)} at list price`);
   if (u.burning) lines.push(`Burning ${fmtTokens(u.tokensPerHour ?? 0)} tokens/h — faster than 90% of your sessions`);
   return lines.join("\n");
 }

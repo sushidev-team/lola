@@ -150,15 +150,15 @@ func TestSlugDir(t *testing.T) {
 
 func TestLedgerSetIsIdempotentAndSums(t *testing.T) {
 	l := &Ledger{}
-	if !l.Set("2026-10-09", "s1", "p", Totals{CostUSD: 1}) {
+	if !l.Set("2026-10-09", "s1", Entry{Project: "p", Totals: Totals{CostUSD: 1}}) {
 		t.Fatal("first set must change")
 	}
-	if l.Set("2026-10-09", "s1", "p", Totals{CostUSD: 1}) {
+	if l.Set("2026-10-09", "s1", Entry{Project: "p", Totals: Totals{CostUSD: 1}}) {
 		t.Fatal("same value must not change")
 	}
-	l.Set("2026-10-09", "s1", "p", Totals{CostUSD: 2}) // replaces, never adds
-	l.Set("2026-10-09", "s2", "q", Totals{CostUSD: 3})
-	l.Set("2026-10-09", "helpers", "", Totals{CostUSD: 0.5})
+	l.Set("2026-10-09", "s1", Entry{Project: "p", Totals: Totals{CostUSD: 2}}) // replaces, never adds
+	l.Set("2026-10-09", "s2", Entry{Project: "q", Totals: Totals{CostUSD: 3}})
+	l.Set("2026-10-09", "helpers", Entry{Project: "", Totals: Totals{CostUSD: 0.5}})
 	all, by := l.Day("2026-10-09")
 	if !near(all.CostUSD, 5.5) || !near(by["p"].CostUSD, 2) || !near(by["q"].CostUSD, 3) || len(by) != 2 {
 		t.Fatalf("day = %+v %+v", all, by)
@@ -180,8 +180,8 @@ func TestLedgerSetIsIdempotentAndSums(t *testing.T) {
 func TestLedgerPrune(t *testing.T) {
 	now := time.Date(2026, 10, 9, 12, 0, 0, 0, time.Local)
 	l := &Ledger{}
-	l.Set("2026-08-01", "s", "", Totals{CostUSD: 1})
-	l.Set("2026-10-01", "s", "", Totals{CostUSD: 1})
+	l.Set("2026-08-01", "s", Entry{Project: "", Totals: Totals{CostUSD: 1}})
+	l.Set("2026-10-01", "s", Entry{Project: "", Totals: Totals{CostUSD: 1}})
 	if !l.Prune(now, KeepDays) {
 		t.Fatal("old day must be pruned")
 	}
@@ -220,34 +220,82 @@ func TestScanCountsActiveSlotsAndRecent(t *testing.T) {
 }
 
 func TestRankAmong(t *testing.T) {
-	if r := RankAmong(12, nil); r.Of != 0 || r.Level != LevelHeavy {
+	if r := RankAmong(12, nil, ClaudeScale); r.Of != 0 || r.Level != LevelHeavy {
 		t.Fatalf("fallback rank = %+v, want heavy by threshold", r)
 	}
 	hist := []float64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
 	cases := map[float64]int{0.5: LevelLight, 6.5: LevelNormal, 8.5: LevelHeavy, 50: LevelTop}
 	for w, want := range cases {
-		if r := RankAmong(w, hist); r.Level != want || r.Of != 10 {
+		if r := RankAmong(w, hist, ClaudeScale); r.Level != want || r.Of != 10 {
 			t.Errorf("RankAmong(%v) = %+v, want level %d", w, r, want)
 		}
 	}
 }
 
 func TestBurnThreshold(t *testing.T) {
-	if got := BurnThreshold([]float64{1}); got != burnFallback {
+	if got := BurnThreshold([]float64{1}, ClaudeScale); got != ClaudeScale.BurnFallback {
 		t.Fatalf("thin history = %v", got)
 	}
 	rates := []float64{1, 1, 1, 1, 1, 1, 1, 1, 1, 1}
-	if got := BurnThreshold(rates); got != burnFloor {
+	if got := BurnThreshold(rates, ClaudeScale); got != ClaudeScale.BurnFloor {
 		t.Fatalf("quiet history must clamp to the floor, got %v", got)
 	}
 	rates[9] = 40
-	if got := BurnThreshold(rates); got != 40 {
+	if got := BurnThreshold(rates, ClaudeScale); got != 40 {
 		t.Fatalf("p90 = %v", got)
 	}
-	if HourlyRate(Totals{CostUSD: 10, Slots: 2}) != 0 {
+	if HourlyRate(Totals{CostUSD: 10, Slots: 2}, ClaudeScale) != 0 {
 		t.Fatal("too short a session must have no rate")
 	}
-	if got := HourlyRate(Totals{CostUSD: 10, Slots: 6}); !near(got, 10) {
+	if got := HourlyRate(Totals{CostUSD: 10, Slots: 6}, ClaudeScale); !near(got, 10) {
 		t.Fatalf("rate = %v, want $10 per active hour", got)
+	}
+}
+
+func TestCodexScannerAttributesByCwdAndCountsDeltas(t *testing.T) {
+	root := t.TempDir()
+	prefix := filepath.Join(root, "worktrees")
+	wt := filepath.Join(prefix, "p", "p-1")
+	day := filepath.Join(root, "sessions", "2026", "10", "10")
+	at := time.Date(2026, 10, 10, 10, 0, 0, 0, time.Local)
+	ev := func(min int, in, cached, out int64) string {
+		return `{"timestamp":"` + at.Add(time.Duration(min)*time.Minute).UTC().Format(time.RFC3339Nano) +
+			`","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":` +
+			itoa(in) + `,"cached_input_tokens":` + itoa(cached) + `,"output_tokens":` + itoa(out) + `}}}}`
+	}
+	log := filepath.Join(day, "rollout-a.jsonl")
+	writeLines(t, log,
+		`{"type":"session_meta","payload":{"cwd":"`+wt+`"}}`,
+		ev(1, 1000, 600, 50),
+		ev(2, 1000, 600, 50), // re-emitted: adds nothing
+		`{"type":"event_msg","payload":{"type":"token_count","info":null}}`,
+	)
+	writeLines(t, filepath.Join(day, "rollout-b.jsonl"),
+		`{"type":"session_meta","payload":{"cwd":"/home/me/own-project"}}`, ev(1, 5_000_000, 0, 0))
+
+	c := NewCodexScanner(prefix)
+	c.Scan(filepath.Join(root, "sessions"))
+	got := Sum(c.For(filepath.Join(prefix, "p", "p-1")))
+	if got.Input != 400 || got.CacheRead != 600 || got.Output != 50 || got.Slots != 1 {
+		t.Fatalf("first scan = %+v", got)
+	}
+	// Appended later: only the delta counts, and the outside log never does.
+	writeLines(t, log, ev(25, 3000, 2000, 150))
+	c.Scan(filepath.Join(root, "sessions"))
+	got = Sum(c.For(wt))
+	if got.Input != 1000 || got.CacheRead != 2000 || got.Output != 150 || got.Slots != 2 {
+		t.Fatalf("incremental = %+v", got)
+	}
+	if r := c.Recent(wt, at.Add(20*time.Minute)); r.Output != 100 {
+		t.Fatalf("recent = %+v, want only the last delta", r)
+	}
+	if len(c.For(filepath.Join(prefix, "p", "p-2"))) != 0 {
+		t.Fatal("another worktree must see nothing")
+	}
+}
+
+func TestScaleForPicksPerAgent(t *testing.T) {
+	if ScaleFor("codex").Weight(Totals{Output: 1}) != 5 || ScaleFor("").Weight(Totals{CostUSD: 2}) != 2 {
+		t.Fatal("codex weighs tokens, claude weighs list price")
 	}
 }

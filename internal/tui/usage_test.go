@@ -30,6 +30,10 @@ func TestUsageRendering(t *testing.T) {
 	if got := usageDetailLine(si); !strings.Contains(got, "burning 12.3M tokens/h") {
 		t.Errorf("burning detail = %q", got)
 	}
+	codex := usageDetailLine(protocol.SessionInfo{Usage: &protocol.UsageInfo{Agent: "codex", Tokens: 5, Percentile: 50, Of: 12}})
+	if !strings.Contains(codex, "of your last 12 codex sessions") || strings.Contains(codex, "$") {
+		t.Errorf("codex detail = %q, want a codex-only rank and no price", codex)
+	}
 	si.Usage = &protocol.UsageInfo{Tokens: 10, Level: 0}
 	if got := usageDetailLine(si); !strings.Contains(got, "too little history") {
 		t.Errorf("fallback detail = %q", got)

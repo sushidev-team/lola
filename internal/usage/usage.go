@@ -27,11 +27,12 @@
 // every UI, and a model this table does not know is priced by family keyword
 // (or at zero) rather than failing the scan: tokens are still counted.
 //
-// # Only claude writes these files
+// # Other agents
 //
-// Codex and opencode keep differently shaped logs outside the worktree slug, so
-// a session running them reports no spend (an absent figure, not $0). That gap
-// is documented rather than guessed at.
+// Codex keeps its logs by date rather than by directory; codex.go attributes
+// them to a worktree by the cwd each log records, tokens only (no price).
+// opencode is not read yet, so a session running it reports no figure (absent,
+// not zero) — a gap documented rather than guessed at.
 //
 // Stdlib-only leaf: no lola imports, so the daemon, the TUI and the desktop app
 // can all use it.

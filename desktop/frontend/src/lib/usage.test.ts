@@ -31,6 +31,9 @@ describe("usage formatting", () => {
     const t = usageTitle(info({ burning: true, tokensPerHour: 12_300_000 }));
     expect(t).toContain("~$18.33 at list price");
     expect(t).toContain("Burning 12.3M tokens/h");
+    const codex = usageTitle(info({ agent: "codex", totalUsd: 0, percentile: 50, of: 12 }));
+    expect(codex).toContain("of your last 12 codex sessions");
+    expect(codex).not.toContain("$");
   });
 
   it("grades today's weighted usage against the limit", () => {

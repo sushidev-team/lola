@@ -24,8 +24,11 @@ type Ledger struct {
 
 // Entry is one source's spend on one day, with the project it counts against
 // ("" for lola's helpers, which count only against the global budget).
+// Agent is the session's coding agent ("" = claude), which picks the Scale it
+// is ranked on.
 type Entry struct {
 	Project string `json:"project,omitempty"`
+	Agent   string `json:"agent,omitempty"`
 	Totals
 }
 
@@ -79,8 +82,8 @@ func (l *Ledger) Save(path string) error {
 	return os.Rename(tmp.Name(), path)
 }
 
-// Set records source's absolute spend for day, reporting whether it changed.
-func (l *Ledger) Set(day, source, project string, t Totals) bool {
+// Set records source's absolute usage for day, reporting whether it changed.
+func (l *Ledger) Set(day, source string, e Entry) bool {
 	if l.Days == nil {
 		l.Days = map[string]map[string]Entry{}
 	}
@@ -89,7 +92,6 @@ func (l *Ledger) Set(day, source, project string, t Totals) bool {
 		m = map[string]Entry{}
 		l.Days[day] = m
 	}
-	e := Entry{Project: project, Totals: t}
 	if m[source] == e {
 		return false
 	}

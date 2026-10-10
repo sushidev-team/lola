@@ -221,7 +221,8 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   wrong one would make `gh pr list --repo` answer about someone else's
   repository.
 - `internal/usage` — token usage (stdlib leaf): sums the `message.usage`
-  numbers of claude-code's transcripts per local day and per 10-minute slot
+  numbers of claude-code's transcripts (and codex's `token_count` deltas,
+  `CodexScanner`) per local day and per 10-minute slot
   (`Scanner`, incremental by file offset, dedup by message id), prices them at
   list price for RANKING only (`RankAmong`, `BurnThreshold`), plus the
   persisted per-day `Ledger` (`~/.lola/state/usage.json`) the budget reads.
@@ -406,8 +407,14 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   nothing. Rules that keep it honest:
   - The UIs show TOKENS, not dollars (a subscription pays nothing per token);
     the list-price estimate appears only in tooltips as `~$`. An absent
-    `Usage` means UNKNOWN (no transcript, or codex/opencode) and renders
-    blank, never `0`.
+    `Usage` means UNKNOWN (no log yet, or opencode) and renders blank,
+    never `0`.
+  - codex usage comes from its DATE-keyed logs, attributed by the cwd in
+    each log's `session_meta` (`usage.CodexScanner`; logs outside
+    `~/.lola/worktrees` are never read past line one). It carries NO price —
+    lola has none for codex models — so a codex session is ranked on its own
+    `Scale` (weighted tokens) against codex history only. Never mix the two
+    agents in one ranking: their weights are different units.
   - Three different measures, each for its own job: RAW tokens are displayed;
     WEIGHTED tokens (`Totals.Weighted`, model-independent price ratios) are
     what a budget counts, so cache reads do not exhaust it; list-price

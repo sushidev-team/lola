@@ -64,6 +64,8 @@ type spendState struct {
 	// codexHome is where codex keeps its logs ("" = never look).
 	quotas    []protocol.QuotaInfo
 	codexHome string
+	// codex sums codex session logs that ran in lola's worktrees.
+	codex *usage.CodexScanner
 }
 
 func newSpendState(home string, logf func(string, ...any)) *spendState {
@@ -85,6 +87,7 @@ func newSpendState(home string, logf func(string, ...any)) *spendState {
 		notified:  map[string]string{},
 		sample:    sysload.Read,
 		codexHome: quota.CodexHome(),
+		codex:     usage.NewCodexScanner(filepath.Join(home, "worktrees")),
 	}
 }
 
@@ -121,10 +124,7 @@ func usageDir(root, home string, s session.Session) string {
 			return dir
 		}
 	}
-	if s.Source != "native" || s.Project == "" || s.ID == "" {
-		return ""
-	}
-	return usage.SlugDir(root, filepath.Join(home, "worktrees", s.Project, s.ID))
+	return usage.SlugDir(root, sessionWorktree(home, s))
 }
 
 func (d *Daemon) usageLoop(ctx context.Context) {
@@ -160,11 +160,25 @@ func (d *Daemon) usagePass(ctx context.Context, now time.Time) {
 	today := now.Format(usage.DayFormat)
 	snap := d.sessions.Snapshot()
 
+	// codex logs are read before taking the lock: they are not keyed by
+	// directory, so one pass over the newest logs serves every session.
+	if sp.codexHome != "" {
+		sp.codex.Scan(filepath.Join(sp.codexHome, "sessions"))
+	}
+
 	sp.mu.Lock()
 	changed := false
 	keep := map[string]bool{}
 	infos := make(map[string]protocol.UsageInfo, len(snap))
-	scan := func(dir, source, project string) map[string]usage.Totals {
+	record := func(source string, e usage.Entry, days map[string]usage.Totals) {
+		for day, t := range days {
+			e.Totals = t
+			if sp.ledger.Set(day, source, e) {
+				changed = true
+			}
+		}
+	}
+	scan := func(dir, source string) map[string]usage.Totals {
 		if dir == "" || keep[dir] {
 			return nil
 		}
@@ -173,14 +187,10 @@ func (d *Daemon) usagePass(ctx context.Context, now time.Time) {
 		if err != nil {
 			d.logf("", "usage: scan %s: %v", source, err)
 		}
-		for day, t := range days {
-			if sp.ledger.Set(day, source, project, t) {
-				changed = true
-			}
-		}
 		return days
 	}
 	type live struct {
+		agent  string
 		days   map[string]usage.Totals
 		recent usage.Totals
 	}
@@ -188,24 +198,38 @@ func (d *Daemon) usagePass(ctx context.Context, now time.Time) {
 	burnFrom := now.Add(-usage.BurnWindow).Truncate(usage.SlotDuration)
 	for _, s := range snap {
 		dir := usageDir(sp.root, d.home, s)
-		days := scan(dir, s.ID, s.Project)
+		days := scan(dir, s.ID)
+		recent := sp.scanner.Recent(dir, burnFrom)
+		// A session's codex usage is every codex log that ran in its
+		// worktree: a codex worker, and any codex-session review pass.
+		if wt := sessionWorktree(d.home, s); wt != "" {
+			days = usage.MergeDays(days, sp.codex.For(wt))
+			recent.Add(sp.codex.Recent(wt, burnFrom))
+		}
 		if len(days) == 0 {
 			continue
 		}
-		lives[s.ID] = live{days: days, recent: sp.scanner.Recent(dir, burnFrom)}
+		agent := s.Agent
+		if agent == "" {
+			agent = "claude"
+		}
+		record(s.ID, usage.Entry{Project: s.Project, Agent: agent}, days)
+		lives[s.ID] = live{agent: agent, days: days, recent: recent}
 	}
-	scan(usage.SlugDir(sp.root, sp.helpers), helperSource, "")
+	record(helperSource, usage.Entry{}, scan(usage.SlugDir(sp.root, sp.helpers), helperSource))
 	sp.scanner.Retain(keep)
 	if sp.ledger.Prune(now, usage.KeepDays) {
 		changed = true
 	}
-	weights, rates := history(sp.ledger, snap)
-	burnAt := usage.BurnThreshold(rates)
+	hist := history(sp.ledger, snap)
 	hours := now.Sub(burnFrom).Hours()
 	for id, l := range lives {
+		sc := usage.ScaleFor(l.agent)
+		h := hist[l.agent]
 		total := usage.Sum(l.days)
-		rank := usage.RankAmong(total.CostUSD, weights)
+		rank := usage.RankAmong(sc.Weight(total), h.weights, sc)
 		info := protocol.UsageInfo{
+			Agent:       l.agent,
 			Tokens:      total.Tokens(),
 			TodayTokens: l.days[today].Tokens(),
 			TotalUSD:    total.CostUSD,
@@ -214,7 +238,7 @@ func (d *Daemon) usagePass(ctx context.Context, now time.Time) {
 			Percentile:  rank.Percentile,
 			Of:          rank.Of,
 		}
-		if hours > 0 && l.recent.CostUSD/hours >= burnAt {
+		if hours > 0 && sc.Weight(l.recent)/hours >= usage.BurnThreshold(h.rates, sc) {
 			info.Burning = true
 			info.TokensPerHour = int64(float64(l.recent.Tokens()) / hours)
 		}
@@ -274,25 +298,49 @@ func readQuotas(claudePath, codexHome string, now time.Time) []protocol.QuotaInf
 	return out
 }
 
-// history is what a live session is ranked against: every FINISHED session in
-// the ledger (live ones would rank against themselves, and a fleet spawned
-// together would push each other down), never lola's helpers. weights are
-// whole-session list-price weights, rates their per-active-hour averages.
-func history(l *usage.Ledger, snap []session.Session) (weights, rates []float64) {
+// sessionWorktree is s's worktree directory: the persisted one, else the
+// path lola derives for a native session. "" when neither is known.
+func sessionWorktree(home string, s session.Session) string {
+	if s.Worktree != "" {
+		return s.Worktree
+	}
+	if s.Source != "native" || s.Project == "" || s.ID == "" {
+		return ""
+	}
+	return filepath.Join(home, "worktrees", s.Project, s.ID)
+}
+
+// agentHistory is one agent's finished sessions on its own Scale: whole-session
+// weights, and the per-active-hour averages of those active long enough.
+type agentHistory struct{ weights, rates []float64 }
+
+// history is what a live session is ranked against, per agent: every FINISHED
+// session in the ledger (live ones would rank against themselves, and a fleet
+// spawned together would push each other down), never lola's helpers.
+func history(l *usage.Ledger, snap []session.Session) map[string]agentHistory {
 	liveIDs := make(map[string]bool, len(snap))
 	for _, s := range snap {
 		liveIDs[s.ID] = true
 	}
+	out := map[string]agentHistory{}
 	for src, e := range l.BySource() {
-		if src == helperSource || liveIDs[src] || e.CostUSD <= 0 {
+		agent := e.Agent
+		if agent == "" {
+			agent = "claude"
+		}
+		sc := usage.ScaleFor(agent)
+		w := sc.Weight(e.Totals)
+		if src == helperSource || liveIDs[src] || w <= 0 {
 			continue
 		}
-		weights = append(weights, e.CostUSD)
-		if r := usage.HourlyRate(e.Totals); r > 0 {
-			rates = append(rates, r)
+		h := out[agent]
+		h.weights = append(h.weights, w)
+		if r := usage.HourlyRate(e.Totals, sc); r > 0 {
+			h.rates = append(h.rates, r)
 		}
+		out[agent] = h
 	}
-	return weights, rates
+	return out
 }
 
 // sampleLoad reads the machine and records the sample for cmd=status,

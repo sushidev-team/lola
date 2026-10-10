@@ -243,8 +243,8 @@ type StatusData struct {
 	Usage *UsageStatus `json:"usage,omitempty"`
 }
 
-// UsageInfo is one session's usage over every claude run in its worktree
-// (worker, subagents, review passes). Tokens are RAW (cache traffic included):
+// UsageInfo is one session's usage over every claude AND codex run in its
+// worktree (worker, subagents, review passes). Tokens are RAW (cache traffic included):
 // the number the UIs show. The *USD figures are the list-price ESTIMATE, kept
 // for tooltips — a subscription user pays nothing per token.
 //
@@ -255,6 +255,10 @@ type StatusData struct {
 // flags a session using tokens faster now than 90% of past sessions ever did;
 // TokensPerHour is that current rate (raw tokens, last ~30 minutes).
 type UsageInfo struct {
+	// Agent is whose scale ranked it ("claude" | "codex"). A codex figure has
+	// no list price (TotalUSD/TodayUSD stay 0) and is ranked against codex
+	// sessions only, by weighted tokens.
+	Agent         string  `json:"agent,omitempty"`
 	Tokens        int64   `json:"tokens"`
 	TodayTokens   int64   `json:"todayTokens"`
 	TotalUSD      float64 `json:"totalUsd"`

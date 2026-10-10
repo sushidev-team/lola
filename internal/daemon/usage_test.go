@@ -52,6 +52,7 @@ func spendFixture(t *testing.T, cfg *config.Config) (*Daemon, *linear.Fake, *fak
 	d := newTestDaemon(t, cfg, fake, nat)
 	d.spend.root = t.TempDir()
 	d.spend.codexHome = ""
+	d.spend.codex = usage.NewCodexScanner(filepath.Join(d.home, "worktrees"))
 	d.spend.sample = func(context.Context) sysload.Sample { return sysload.Sample{Load1: 0.1, CPUs: 8, FreeMemPercent: 80} }
 	return d, fake, nat
 }
@@ -64,8 +65,8 @@ func TestTickHeldByGlobalBudget(t *testing.T) {
 	d, fake, nat := spendFixture(t, cfg)
 	// Usage recorded by a session of ANOTHER project still counts globally,
 	// and so do lola's own helpers.
-	d.spend.ledger.Set(today(), "other-1", "other", usage.Totals{Input: 4_000_000})
-	d.spend.ledger.Set(today(), helperSource, "", usage.Totals{Output: 200_000}) // weighs 1M
+	d.spend.ledger.Set(today(), "other-1", usage.Entry{Project: "other", Totals: usage.Totals{Input: 4_000_000}})
+	d.spend.ledger.Set(today(), helperSource, usage.Entry{Project: "", Totals: usage.Totals{Output: 200_000}}) // weighs 1M
 	assertHeldTick(t, d, fake, nat, "budget.daily_tokens")
 }
 
@@ -73,7 +74,7 @@ func TestTickHeldByProjectBudgetOnlyForThatProject(t *testing.T) {
 	cfg := testConfig(labelPoll("p1"), labelPoll("p2"))
 	cfg.Projects[0].DailyBudgetTokens = 2_000_000
 	d, fake, nat := spendFixture(t, cfg)
-	d.spend.ledger.Set(today(), "p1-1", "p1", usage.Totals{Input: 2_500_000})
+	d.spend.ledger.Set(today(), "p1-1", usage.Entry{Project: "p1", Totals: usage.Totals{Input: 2_500_000}})
 	assertHeldTick(t, d, fake, nat, "daily_budget_tokens")
 
 	// p2 has no limit of its own and there is no global one: it dispatches.
@@ -89,7 +90,7 @@ func TestTickBudgetIgnoresYesterday(t *testing.T) {
 	cfg := testConfig(labelPoll("p1"))
 	cfg.Budget.DailyTokens = 1_000
 	d, _, nat := spendFixture(t, cfg)
-	d.spend.ledger.Set(time.Now().AddDate(0, 0, -1).Format(usage.DayFormat), "p1-1", "p1", usage.Totals{Input: 1_000_000})
+	d.spend.ledger.Set(time.Now().AddDate(0, 0, -1).Format(usage.DayFormat), "p1-1", usage.Entry{Project: "p1", Totals: usage.Totals{Input: 1_000_000}})
 	if _, err := d.tick(context.Background(), "p1", false); err != nil {
 		t.Fatalf("tick: %v", err)
 	}
@@ -195,7 +196,7 @@ func TestBudgetNotifyFiresOncePerDay(t *testing.T) {
 	d, _, _ := spendFixture(t, cfg)
 	rec := &recordingNotifier{}
 	d.notifier = rec
-	d.spend.ledger.Set(today(), "p1-1", "p1", usage.Totals{Input: 2_000})
+	d.spend.ledger.Set(today(), "p1-1", usage.Entry{Project: "p1", Totals: usage.Totals{Input: 2_000}})
 	d.notifyBudgets(context.Background(), today())
 	d.notifyBudgets(context.Background(), today())
 	if n := len(rec.notes()); n != 1 {
@@ -208,7 +209,7 @@ func TestTickBudgetCountsWeightedNotRawTokens(t *testing.T) {
 	cfg.Budget.DailyTokens = 5_000_000
 	d, _, nat := spendFixture(t, cfg)
 	// 40M raw tokens of cache reads weigh only 4M: under the limit.
-	d.spend.ledger.Set(today(), "p1-1", "p1", usage.Totals{CacheRead: 40_000_000})
+	d.spend.ledger.Set(today(), "p1-1", usage.Entry{Project: "p1", Totals: usage.Totals{CacheRead: 40_000_000}})
 	if _, err := d.tick(context.Background(), "p1", false); err != nil {
 		t.Fatalf("cache reads must not exhaust a weighted budget: %v", err)
 	}
@@ -223,8 +224,8 @@ func TestUsagePassRanksAgainstFinishedSessionsAndFlagsBurn(t *testing.T) {
 	now := time.Now()
 	// Ten finished sessions, each ~$1 over six active windows (=$1/active h).
 	for i := 0; i < 10; i++ {
-		d.spend.ledger.Set(now.AddDate(0, 0, -2).Format(usage.DayFormat), "old-"+strconv.Itoa(i), "p1",
-			usage.Totals{Output: 100_000, CostUSD: 1, Slots: 6})
+		d.spend.ledger.Set(now.AddDate(0, 0, -2).Format(usage.DayFormat), "old-"+strconv.Itoa(i),
+			usage.Entry{Project: "p1", Totals: usage.Totals{Output: 100_000, CostUSD: 1, Slots: 6}})
 	}
 	s := session.Session{ID: "p1-1", Source: "native", Project: "p1"}
 	d.sessions.Upsert(s)
@@ -258,6 +259,33 @@ func TestUsageStatusCarriesLiveQuotas(t *testing.T) {
 	q := d.usageStatus(now).Quotas
 	if len(q) != 1 || q[0].Agent != "claude" || len(q[0].Windows) != 1 || q[0].Windows[0].UsedPercent != 42 {
 		t.Fatalf("quotas = %+v, want claude 5h only (the reset 7d window dropped)", q)
+	}
+}
+
+func TestUsagePassCountsCodexLogsInTheWorktree(t *testing.T) {
+	cfg := testConfig(labelPoll("p1"))
+	d, _, _ := spendFixture(t, cfg)
+	d.spend.codexHome = t.TempDir()
+	now := time.Now()
+	wt := filepath.Join(d.home, "worktrees", "p1", "p1-1")
+	d.sessions.Upsert(session.Session{ID: "p1-1", Source: "native", Project: "p1", Agent: "codex"})
+	ts := now.Add(-time.Minute).UTC().Format(time.RFC3339Nano)
+	logDir := filepath.Join(d.spend.codexHome, "sessions", now.Format("2006"), now.Format("01"), now.Format("02"))
+	writeFile(t, filepath.Join(logDir, "rollout-a.jsonl"),
+		`{"type":"session_meta","payload":{"cwd":"`+wt+`"}}`+"\n"+
+			`{"timestamp":"`+ts+`","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1000,"cached_input_tokens":600,"output_tokens":50}}}}`+"\n")
+	// A codex log from the user's own work, outside lola's worktrees.
+	writeFile(t, filepath.Join(logDir, "rollout-b.jsonl"),
+		`{"type":"session_meta","payload":{"cwd":"/elsewhere"}}`+"\n"+
+			`{"timestamp":"`+ts+`","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":9999999,"cached_input_tokens":0,"output_tokens":0}}}}`+"\n")
+
+	d.usagePass(context.Background(), now)
+	u := d.sessionUsage("p1-1")
+	if u == nil || u.Tokens != 1050 || u.Agent != "codex" || u.TotalUSD != 0 {
+		t.Fatalf("codex usage = %+v, want 1050 tokens, no price", u)
+	}
+	if st := d.usageStatus(now); st.Tokens != 1050 {
+		t.Errorf("day total = %d, want only lola's codex log", st.Tokens)
 	}
 }
 

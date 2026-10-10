@@ -1062,19 +1062,26 @@ the app's terminals.
 ### `[budget]` (optional)
 
 Daily limits on how many **tokens** lola's agents use, and the usage figures
-behind them. lola reads each session's token usage from the coding agent's own
-transcripts (`~/.claude/projects/<worktree>/…jsonl` — the worker, its subagents
-and every review pass run in its worktree). The `[brain]` / `[statusagent]`
-helpers run in `~/.lola/helpers` so their usage is counted too (globally,
-against no project). codex and opencode sessions report no figure — lola cannot
-read their logs yet — which is shown as blank, not `0`.
+behind them. lola reads each session's token usage from the coding agents' own
+logs, covering everything run in its worktree — the worker, its subagents and
+every review pass:
+
+- **claude:** `~/.claude/projects/<worktree>/…jsonl`;
+- **codex:** `~/.codex/sessions/…/rollout-*.jsonl`, attributed by the cwd each
+  log records. Only logs that ran in a lola worktree are read. codex shows
+  tokens only — lola has no list price for its models — and is ranked against
+  other codex sessions, never against claude ones.
+
+The `[brain]` / `[statusagent]` helpers run in `~/.lola/helpers` so their usage
+is counted too (globally, against no project). opencode sessions report no
+figure — lola cannot read its logs yet — which is shown as blank, not `0`.
 
 **Per session** (a **Tokens** column + the detail header in the app, a `TOKENS`
 column + `tokens:` line in the TUI) lola shows:
 
 - the raw token count, cache traffic included (`46.7M`);
 - a **4-step size glyph** ranking the session against your own *finished*
-  sessions of the last 35 days — below the median, p50–75, p75–90, top 10% (the
+  sessions of the same agent from the last 35 days — below the median, p50–75, p75–90, top 10% (the
   top step is orange). The tooltip says it in words ("heavier than 92% of your
   last 40 sessions"). Ranking is by list-price weight, not raw tokens, because
   a subscription limit is spent faster by output and bigger models and barely
