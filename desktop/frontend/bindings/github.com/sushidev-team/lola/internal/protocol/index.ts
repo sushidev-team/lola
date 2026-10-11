@@ -5,6 +5,8 @@ export type {
     BoardCheck,
     BoardInfo,
     BoardTodo,
+    BroadcastArgs,
+    BroadcastData,
     CheckpointInfo,
     CheckpointsData,
     CodeRabbitData,

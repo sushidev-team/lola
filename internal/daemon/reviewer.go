@@ -1015,9 +1015,10 @@ func (d *Daemon) deferHandoff(id string, k provKind, stash string) {
 //
 // A HUMAN's queued diff feedback (feedback.go) goes first and counts as that
 // pass's one delivery: a person waited for it, and a review provider's findings
-// will still be there next cycle.
+// will still be there next cycle. A queued project broadcast (broadcast.go) is
+// the same kind of human message and comes right after it.
 func (d *Daemon) flushReviewHandoffs(ctx context.Context, id string) {
-	if d.deliverFeedback(ctx, id) {
+	if d.deliverFeedback(ctx, id) || d.deliverBroadcast(ctx, id) {
 		return
 	}
 	s, ok := d.sessions.Get(id)

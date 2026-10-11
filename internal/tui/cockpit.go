@@ -239,6 +239,7 @@ func (m *rootModel) helpModal() string {
 		row("n / a", "new project"),
 		row("s", "project's sessions"),
 		row("space", "toggle polling"),
+		row("b", "broadcast to its agents"),
 		row("x", "stop polling"),
 		row("X", "remove project"),
 		row("/", "filter projects"),

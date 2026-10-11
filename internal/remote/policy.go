@@ -106,6 +106,7 @@ var mutatingCommands = map[string]bool{
 	"openManual":      true,
 	"openTicket":      true,
 	"openURL":         true,
+	"broadcast":       true,
 }
 
 // auditable reports whether a remote command's use is worth a log line.

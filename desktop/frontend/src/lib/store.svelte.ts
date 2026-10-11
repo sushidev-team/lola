@@ -477,6 +477,18 @@ class Store {
   open(project: string, ref: string) {
     return this.act(() => DaemonService.Open(project, ref), `opened ${ref}`);
   }
+  /**
+   * Send one message to every live agent of a project. The daemon types it into
+   * the agents resting at their prompt and queues it for the busy ones, which get
+   * it when idle; the flash is its delivered/deferred split. Resolves to
+   * undefined on failure (the error is flashed).
+   */
+  broadcast(project: string, message: string) {
+    return this.act(
+      () => DaemonService.Broadcast({ project, message }),
+      (r) => `broadcast: ${r?.message || "sent"}`,
+    );
+  }
   openManual(a: OpenManualArgs) {
     return this.act(() => DaemonService.OpenManual(a), `started ${a.branch}`);
   }
