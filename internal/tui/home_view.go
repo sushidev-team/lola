@@ -8,6 +8,7 @@ import (
 
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/protocol"
+	"github.com/sushidev-team/lola/internal/timefmt"
 )
 
 // homeView renders the project-list landing screen to a full frame.
@@ -214,20 +215,10 @@ func compactPath(p string) string {
 	return p
 }
 
-// shortAgo renders a compact "2m"/"3h"/"5d" since t, or "—" for the zero time.
+// shortAgo renders a fluid age or calendar date, or "—" for the zero time.
 func shortAgo(t time.Time) string {
 	if t.IsZero() {
 		return faintText.Render("—")
 	}
-	d := time.Since(t)
-	switch {
-	case d < time.Minute:
-		return "just now"
-	case d < time.Hour:
-		return fmt.Sprintf("%dm", int(d.Minutes()))
-	case d < 24*time.Hour:
-		return fmt.Sprintf("%dh", int(d.Hours()))
-	default:
-		return fmt.Sprintf("%dd", int(d.Hours()/24))
-	}
+	return timefmt.Short(t, time.Now())
 }

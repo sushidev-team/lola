@@ -211,12 +211,12 @@ describe("PRPicker", () => {
     expect(screen.queryByText(/Cached list from/)).toBeNull();
     // The age is still stated — freshness is a fact on every list, not only a
     // stale one.
-    expect(screen.getByText(/5s ago/)).toBeTruthy();
+    expect(screen.getByText(/just now/)).toBeTruthy();
     fresh.unmount();
 
     replies.prs = { ok: true, data: prsData([pr()], { stale: true, ageSeconds: 240 }) };
     render(PRPicker);
-    expect(await screen.findByText(/Cached list from 4m ago/)).toBeTruthy();
+    expect(await screen.findByText(/Cached list from/)).toHaveTextContent("Cached list from 4m ago");
   });
 
   it("re-asks with refresh set, which is what bypasses the TTL", async () => {

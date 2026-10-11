@@ -779,6 +779,7 @@ func TestObserveNativeRepoFallsBackToProjectRegistry(t *testing.T) {
 func TestSessionsDataIncludesSourceAndWorktree(t *testing.T) {
 	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})
 	native := nativeSess("FE-1", "working")
+	native.FirstSeen = time.Now().Add(-5*time.Hour - 4*time.Minute)
 	d.sessions.Upsert(native)
 	d.sessions.Upsert(session.Session{ID: "ao-1", Source: "ao", Project: "proj", Issue: "FE-9", Status: "working"})
 
@@ -790,6 +791,9 @@ func TestSessionsDataIncludesSourceAndWorktree(t *testing.T) {
 	n, ok := byID[native.ID]
 	if !ok {
 		t.Fatalf("native session missing from reply: %+v", data.Sessions)
+	}
+	if !n.FirstSeen.Equal(native.FirstSeen) || n.Age != "5h" {
+		t.Errorf("session age = %q at %v, want 5h at %v", n.Age, n.FirstSeen, native.FirstSeen)
 	}
 	if n.Source != "native" {
 		t.Errorf("native source = %q, want native", n.Source)

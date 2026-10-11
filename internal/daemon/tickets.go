@@ -14,6 +14,7 @@ import (
 	"github.com/sushidev-team/lola/internal/linear"
 	"github.com/sushidev-team/lola/internal/protocol"
 	"github.com/sushidev-team/lola/internal/session"
+	"github.com/sushidev-team/lola/internal/timefmt"
 )
 
 // ticketsExecTimeout bounds the Linear query a cmd=tickets fetch runs.
@@ -146,7 +147,7 @@ func ticketAge(stamp string, now time.Time) string {
 	if err != nil {
 		return ""
 	}
-	return formatAgo(now.Sub(t))
+	return timefmt.Short(t, now)
 }
 
 // ticketStateRank orders the workflow-state TYPES the way a person picking work

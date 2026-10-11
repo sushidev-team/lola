@@ -1149,7 +1149,9 @@ func (m *rootModel) activityBody(w, h int) []string {
 		}
 		phrase := legacyStatusStyle(e.To).Render(eventPhrase(e.From, e.To))
 		line := boxTitle.Render(key) + " " + phrase
-		if e.Ago != "" {
+		if !e.At.IsZero() {
+			line += faintText.Render(" · " + shortAgo(e.At))
+		} else if e.Ago != "" {
 			line += faintText.Render(" · " + e.Ago)
 		}
 		out = append(out, truncateANSI(line, w))

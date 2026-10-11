@@ -241,7 +241,7 @@ func spendSummary(u *protocol.UsageStatus) string {
 			}
 			ws = append(ws, ww)
 		}
-		fmt.Fprintf(&b, "%s limits, as of %s ago: %s\n", head, shortDuration(max(now.Sub(q.At), 0)), strings.Join(ws, " · "))
+		fmt.Fprintf(&b, "%s limits, as of %s: %s\n", head, fmtAgo(q.At), strings.Join(ws, " · "))
 		if q.Stale {
 			fmt.Fprintf(&b, "  stale: %s\n", q.Detail)
 		}

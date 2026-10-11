@@ -4,9 +4,10 @@
   import { nav } from "$lib/nav.svelte";
   import type { PrRow, PrsData } from "@bindings/internal/protocol";
   import Button from "$lib/components/Button.svelte";
-  import { agoPhrase } from "$lib/time";
+  import TimeAgo from "$lib/components/TimeAgo.svelte";
 
   let data = $state<PrsData | null>(null);
+  let snapshotAt = $state<number | undefined>();
   let loading = $state(true);
   let error = $state<string | null>(null);
   let filter = $state("");
@@ -29,6 +30,7 @@
     error = null;
     try {
       data = await store.prs(nav.project, refresh);
+      snapshotAt = Date.now() - data.ageSeconds * 1000;
     } catch (e) {
       error = String(e);
     } finally {
@@ -101,7 +103,7 @@
     <Button icon title="back to project" aria-label="Back to project" onclick={() => nav.goDetail(nav.project)}>←</Button>
     {#if data}
       <span class="num text-sm text-faint">
-        {data.prs?.length ?? 0} open · {agoPhrase(Date.now() - data.ageSeconds * 1000)}{data.stale ? " · stale" : ""}
+        {data.prs?.length ?? 0} open · <TimeAgo at={snapshotAt} hint="PR list fetched" />{data.stale ? " · stale" : ""}
       </span>
     {/if}
     <input

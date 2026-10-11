@@ -300,7 +300,7 @@ func agentDetailLine(si protocol.SessionInfo) string {
 		parts = append(parts, "tool "+si.CurrentTool)
 	}
 	if !si.LastActivityAt.IsZero() {
-		parts = append(parts, "active "+shortAgo(si.LastActivityAt)+" ago")
+		parts = append(parts, "active "+fmtAgo(si.LastActivityAt))
 	}
 	return "agent:    " + strings.Join(parts, " · ")
 }
@@ -335,7 +335,9 @@ func interpretedLines(si protocol.SessionInfo) []string {
 		return nil
 	}
 	head := "≈ " + si.Headline
-	if si.HeadlineAgo != "" {
+	if !si.HeadlineAt.IsZero() {
+		head += " (" + fmtAgo(si.HeadlineAt) + ")"
+	} else if si.HeadlineAgo != "" {
 		head += " (" + si.HeadlineAgo + " ago)"
 	}
 	out := []string{head}

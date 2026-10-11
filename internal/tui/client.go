@@ -20,6 +20,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/protocol"
+	"github.com/sushidev-team/lola/internal/timefmt"
 )
 
 var errDaemonDown = errors.New("daemon not running (start with: lola run)")
@@ -336,20 +337,7 @@ func fmtAgo(t time.Time) string {
 	if t.IsZero() {
 		return "-"
 	}
-	d := time.Since(t)
-	if d < 0 {
-		d = 0
-	}
-	switch {
-	case d < time.Minute:
-		return fmt.Sprintf("%ds ago", int(d.Seconds()))
-	case d < time.Hour:
-		return fmt.Sprintf("%dm ago", int(d.Minutes()))
-	case d < 24*time.Hour:
-		return fmt.Sprintf("%dh ago", int(d.Hours()))
-	default:
-		return t.Local().Format("2006-01-02 15:04")
-	}
+	return timefmt.Phrase(t, time.Now())
 }
 
 // Logs prints daemon.log lines, filtered to lines containing "[<poll>]" when

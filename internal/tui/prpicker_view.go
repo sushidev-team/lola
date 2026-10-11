@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/sushidev-team/lola/internal/protocol"
 )
@@ -27,7 +28,7 @@ func (m *rootModel) prPickerLines() []string {
 	crumb := faintText.Render("lola ▸ "+p.project+" ▸ ") + "open PRs"
 	right := ""
 	if p.data != nil {
-		freshness := fmt.Sprintf("%d open · %ds ago", len(p.data.PRs), p.data.AgeSeconds)
+		freshness := fmt.Sprintf("%d open · %s", len(p.data.PRs), fmtAgo(time.Now().Add(-time.Duration(p.data.AgeSeconds)*time.Second)))
 		if p.data.Stale {
 			freshness += " · " + warnText.Render("stale")
 		}

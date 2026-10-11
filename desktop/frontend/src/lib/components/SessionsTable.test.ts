@@ -58,6 +58,15 @@ describe("SessionsTable empty states", () => {
     expect(screen.queryByText("connecting…")).not.toBeInTheDocument();
   });
 
+  it("uses the original observation time instead of the daemon's old age string", () => {
+    store.connected = true;
+    store.alive = true;
+    store.sessions = [fakeSession({ firstSeen: new Date(Date.now() - (5 * 60 + 4) * 60_000).toISOString(), age: "5h04m" })];
+    render(SessionsTable);
+    expect(screen.getByText("5h")).toBeInTheDocument();
+    expect(screen.queryByText("5h04m")).not.toBeInTheDocument();
+  });
+
   it("renders rows and no empty state when there are sessions", () => {
     store.connected = true;
     store.alive = true;

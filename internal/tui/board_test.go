@@ -25,7 +25,7 @@ func TestBoardChip(t *testing.T) {
 
 func TestBoardLines(t *testing.T) {
 	si := protocol.SessionInfo{Board: &protocol.BoardInfo{
-		Phase: "testing", Done: 1, Total: 2, UpdatedAgo: "3m", UpdatedAt: time.Now(),
+		Phase: "testing", Done: 1, Total: 2, UpdatedAgo: "3m", UpdatedAt: time.Now().Add(-3 * time.Minute),
 		Todos:  []protocol.BoardTodo{{Text: "build", State: "done"}, {Text: "test", State: "active"}},
 		Checks: []protocol.BoardCheck{{Name: "lint", State: "fail", Summary: "3"}},
 		Note:   "almost there",

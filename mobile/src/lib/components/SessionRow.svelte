@@ -1,4 +1,5 @@
 <script lang="ts">
+  import TimeAgo from "$lib/components/TimeAgo.svelte";
   import LivePulse from "$lib/components/LivePulse.svelte";
   import PrBadge from "$lib/components/PrBadge.svelte";
   import { reactionIsAlarm, reactionNote } from "$lib/reaction";
@@ -194,7 +195,7 @@
          left of the second one.
 
          `num` keeps the age from reflowing its neighbours on every push. -->
-    <span class="num ml-auto shrink-0">{s.age}</span>
+    <TimeAgo at={s.firstSeen} ago={false} hint="First observed" fallback={s.age} class="ml-auto shrink-0" />
     <!-- Only when there IS a PR. PrBadge renders a bare em-dash otherwise,
          which is unambiguous in a desktop table under a column header and is
          just a mark in a phone row that has none. An absent PR is clearer as

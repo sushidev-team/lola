@@ -19,6 +19,7 @@ import (
 	"github.com/sushidev-team/lola/internal/protocol"
 	"github.com/sushidev-team/lola/internal/session"
 	"github.com/sushidev-team/lola/internal/state"
+	"github.com/sushidev-team/lola/internal/timefmt"
 )
 
 // serve runs the accept loop until the listener is closed at shutdown.
@@ -636,7 +637,8 @@ func (d *Daemon) sessionsData() protocol.SessionsData {
 			Status:    s.Status,
 			TmuxName:  s.TmuxName,
 			Source:    s.Source,
-			Age:       formatAge(now.Sub(s.FirstSeen)),
+			Age:       timefmt.Short(s.FirstSeen, now),
+			FirstSeen: s.FirstSeen,
 			CIRetries: s.CIRetries,
 			Escalated: s.Escalated,
 			Reacting:  reactingLabel(s.Delivery, s.CIRetries, s.Escalated, ciBudget),
@@ -744,31 +746,12 @@ func reactingLabel(d state.DeliveryState, ciRetries int, escalated bool, ciBudge
 	return ""
 }
 
-// formatAge renders a duration TUI-compactly: "42s", "12m", "3h05m", "2d14h".
-func formatAge(d time.Duration) string {
-	if d < 0 {
-		d = 0
-	}
-	switch {
-	case d < time.Minute:
-		return fmt.Sprintf("%ds", int(d.Seconds()))
-	case d < time.Hour:
-		return fmt.Sprintf("%dm", int(d.Minutes()))
-	case d < 24*time.Hour:
-		return fmt.Sprintf("%dh%02dm", int(d.Hours()), int(d.Minutes())%60)
-	default:
-		days := int(d.Hours()) / 24
-		return fmt.Sprintf("%dd%dh", days, int(d.Hours())%24)
-	}
-}
-
 // formatAgo is the "how long ago" of a POINT in time, as concise as the age
 // allows: "<1m", "5m", "3h", "2d" — one unit, never the remainder. Callers
-// append "ago". It is the Go half of the desktop's fluidAgo (lib/time.ts),
-// which renders the same units live and shows the exact time on hover; a
-// minute count inside an hours-old stamp ("10h51m") is precision nobody reads.
-// formatAge stays for DURATIONS (how long a session has run), where the
-// remainder is part of the answer.
+// append "ago". A minute count inside an hours-old stamp ("10h51m") is
+// precision nobody reads.
+// Kept for legacy wire fields whose consumers append "ago". New consumers
+// should use the raw timestamp with timefmt or the frontend TimeAgo component.
 func formatAgo(d time.Duration) string {
 	switch {
 	case d < time.Minute:

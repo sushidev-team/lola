@@ -416,7 +416,9 @@ type SessionInfo struct {
 	TmuxName string `json:"tmuxName"` // "" when no tmux session correlates
 	Source   string `json:"source"`   // always "native"; kept for wire compat with pre-P3 clients
 	Worktree string `json:"worktree"` // native runtime: the session's git worktree dir; "" otherwise
-	Age      string `json:"age"`      // human duration since first observed, e.g. "2h05m"
+	Age      string `json:"age"`      // concise age since first observed, e.g. "2h" or "Oct 4"
+
+	FirstSeen time.Time `json:"firstSeen,omitzero"` // raw session age origin for live client formatting
 
 	// The two state axes underneath Status (see internal/state), with raw
 	// freshness timestamps so a client can render a live "ago" between
@@ -742,7 +744,7 @@ type TicketRow struct {
 	Assignee  string   `json:"assignee,omitempty"`
 	Labels    []string `json:"labels,omitempty"`
 	Estimate  float64  `json:"estimate,omitempty"`
-	// Updated is a pre-formatted age since the issue last changed ("2h05m"),
+	// Updated is a pre-formatted age since the issue last changed ("2h" or "Oct 4"),
 	// formatted daemon-side exactly like SessionInfo.Age so both surfaces read
 	// the same and neither has to parse a timestamp.
 	Updated     string `json:"updated,omitempty"`

@@ -816,9 +816,12 @@ export interface SessionInfo {
     "worktree": string;
 
     /**
-     * human duration since first observed, e.g. "2h05m"
+     * concise age since first observed, e.g. "2h" or "Oct 4"
      */
     "age": string;
+
+    /** Raw session age origin for live client formatting. */
+    "firstSeen"?: string;
 
     /**
      * The two state axes underneath Status (see internal/state), with raw
@@ -1110,7 +1113,7 @@ export interface TicketRow {
     "estimate"?: number;
 
     /**
-     * Updated is a pre-formatted age since the issue last changed ("2h05m"),
+     * Updated is a pre-formatted age since the issue last changed ("2h" or "Oct 4"),
      * formatted daemon-side exactly like SessionInfo.Age so both surfaces read
      * the same and neither has to parse a timestamp.
      */

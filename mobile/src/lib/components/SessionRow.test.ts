@@ -42,6 +42,12 @@ function mount(over: Partial<SessionInfo> = {}) {
 }
 
 describe("SessionRow", () => {
+  it("formats the session origin with the shared fluid timestamp", () => {
+    mount({ firstSeen: new Date(Date.now() - (5 * 60 + 4) * 60_000).toISOString(), age: "5h04m" });
+    expect(screen.getByText("5h")).toBeTruthy();
+    expect(screen.queryByText("5h04m")).toBeNull();
+  });
+
   it("leads with the title and demotes the issue key into the meta line", () => {
     const { container } = mount();
 

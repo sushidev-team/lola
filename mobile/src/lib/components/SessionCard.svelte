@@ -1,4 +1,5 @@
 <script lang="ts">
+  import TimeAgo from "$lib/components/TimeAgo.svelte";
   import StatusChip from "./StatusChip.svelte";
   import MetaPill from "./MetaPill.svelte";
   import AiGlyph from "@mobile/lib/icons/AiGlyph.svelte";
@@ -166,7 +167,7 @@
       <span class="flex-1"></span>
       <!-- `num` is tabular figures: the age is rewritten on every observer push
            and a proportional "1" would nudge the chips beside it each time. -->
-      <span class="num shrink-0 text-sm font-medium text-faint">{s.age}</span>
+      <TimeAgo at={s.firstSeen} ago={false} hint="First observed" fallback={s.age} class="shrink-0 text-sm font-medium text-faint" />
     </div>
 
     <!-- TWO LINES, NOT ONE TRUNCATED ONE. At 390 points a single line of an

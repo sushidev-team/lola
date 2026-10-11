@@ -95,7 +95,9 @@ func boardLines(si protocol.SessionInfo, w int) []string {
 	if b.Total > 0 {
 		head = append(head, fmt.Sprintf("%d/%d done", b.Done, b.Total))
 	}
-	if b.UpdatedAgo != "" {
+	if !b.UpdatedAt.IsZero() {
+		head = append(head, "reported "+fmtAgo(b.UpdatedAt))
+	} else if b.UpdatedAgo != "" {
 		head = append(head, "reported "+b.UpdatedAgo+" ago")
 	}
 	out := []string{"plan:     " + text(truncPlain(strings.Join(head, " · "), w-10))}

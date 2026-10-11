@@ -1,4 +1,5 @@
 <script lang="ts">
+  import TimeAgo from "$lib/components/TimeAgo.svelte";
   import MetaPill from "./MetaPill.svelte";
   import AiGlyph from "@mobile/lib/icons/AiGlyph.svelte";
   import { inputReasonLabel } from "$lib/theme";
@@ -70,13 +71,13 @@
   /**
    * The judgement's age, and ONLY the judgement's.
    *
-   * `headlineAgo` is the freshness of the interpreter's sentence, so it is
+   * `headlineAt` is the time of the interpreter's sentence, so it is
    * printed only beside that sentence. `SessionInfo.age` is a different fact
    * entirely — how long the session has existed — and putting it here under a
    * "2m ago" shape would read as "this is what the agent said two minutes ago"
    * about a session that has simply been running for two minutes.
    */
-  const stamp = $derived(s?.headline && s.headlineAgo ? `${s.headlineAgo} ago` : "");
+  const stamp = $derived(s?.headline && (s.headlineAt || s.headlineAgo));
 
   /**
    * One fact chip: its text, its foreground and its ground.
@@ -210,7 +211,7 @@
             <!-- `num` for the same reason every age in this app carries it: the
                  stamp is rewritten on every observer push, and a proportional
                  "1" would nudge the chips beside it each time one arrived. -->
-            <span class="num ml-auto shrink-0 text-sm text-faint">{stamp}</span>
+            <TimeAgo at={s?.headlineAt} fallback={s?.headlineAgo ? `${s.headlineAgo} ago` : ""} hint="Status interpreted" class="ml-auto shrink-0 text-sm text-faint" />
           {/if}
         </div>
       {/if}

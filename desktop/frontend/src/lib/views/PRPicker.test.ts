@@ -70,7 +70,7 @@ describe("PRPicker", () => {
     // empty author renders as an em dash
     expect(screen.getByText("—")).toBeInTheDocument();
     // freshness header
-    expect(screen.getByText(/2 open · just now/)).toBeInTheDocument();
+    expect(screen.getByText("just now").parentElement).toHaveTextContent("2 open · just now");
     // draft suffix
     expect(screen.getByText("[draft]")).toBeInTheDocument();
   });

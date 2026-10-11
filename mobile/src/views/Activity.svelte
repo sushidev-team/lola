@@ -1,4 +1,5 @@
 <script lang="ts">
+  import TimeAgo from "$lib/components/TimeAgo.svelte";
   import { store } from "$lib/store.svelte";
   import { eventPhrase, statusText } from "$lib/theme";
 
@@ -114,7 +115,7 @@
               <!-- `num` is tabular figures: every age is rewritten on each push,
                    and proportional digits would nudge the column on all of
                    them. -->
-              <span class="num shrink-0 text-faint">{ev.ago}</span>
+              <TimeAgo at={ev.at} ago={false} fallback={ev.ago} class="shrink-0 text-faint" />
             </div>
           </li>
         {/each}

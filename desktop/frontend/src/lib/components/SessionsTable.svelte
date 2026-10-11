@@ -1,4 +1,5 @@
 <script lang="ts">
+  import TimeAgo from "$lib/components/TimeAgo.svelte";
   import { store, scopedSessions } from "$lib/store.svelte";
   import { nav } from "$lib/nav.svelte";
   import { sessionMenu } from "$lib/sessionmenu.svelte";
@@ -220,7 +221,7 @@
             >
           {/if}
           <!-- `num` — the age reflows on every 30s observer push otherwise. -->
-          <td class="num py-1.5 pr-2 text-right align-middle text-sm whitespace-nowrap text-faint">{s.age}</td>
+          <td class="num py-1.5 pr-2 text-right align-middle text-sm whitespace-nowrap text-faint"><TimeAgo at={s.firstSeen} ago={false} hint="First observed" fallback={s.age} /></td>
         </tr>
       {/each}
     </tbody>

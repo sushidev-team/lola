@@ -1,4 +1,5 @@
 <script lang="ts">
+  import TimeAgo from "$lib/components/TimeAgo.svelte";
   import { onMount } from "svelte";
   import type { PrRow, PrsData } from "@bindings/internal/protocol";
   import { store } from "$lib/store.svelte";
@@ -62,6 +63,7 @@
   const repoMissing = $derived(info !== undefined && !info.repoConfigured);
 
   let data = $state<PrsData | null>(null);
+  let snapshotAt = $state<number | undefined>();
   let loading = $state(true);
   /** The daemon's sentence for a list that could not be fetched. */
   let error = $state("");
@@ -74,23 +76,6 @@
   // null slice — so the coalesce is not defensive noise.
   const rows = $derived(data?.prs ?? []);
 
-  /**
-   * How old the served snapshot is, in words.
-   *
-   * The desktop prints raw seconds ("312s ago") because it sits beside a
-   * refresh button someone is already looking at. On a phone this line is read
-   * at a glance and is the only thing saying whether the list can be trusted,
-   * and "5m ago" is a judgement a person can make while "312s ago" is
-   * arithmetic. Rounded DOWN at every step: a snapshot claimed younger than it
-   * is would be the same lie the `stale` flag exists to prevent.
-   */
-  function agePhrase(seconds: number): string {
-    const s = Math.max(0, Math.trunc(seconds));
-    if (s < 60) return `${s}s ago`;
-    if (s < 3600) return `${Math.floor(s / 60)}m ago`;
-    return `${Math.floor(s / 3600)}h ago`;
-  }
-
   // repo · count · age. The repo is the one thing here that names WHERE these
   // PRs come from, and a picker that does not say so is one config mistake away
   // from listing a different team's work.
@@ -99,7 +84,6 @@
     const parts: string[] = [];
     if (data.repo) parts.push(data.repo);
     parts.push(rows.length === 1 ? "1 open" : `${rows.length} open`);
-    parts.push(agePhrase(data.ageSeconds));
     return parts.join(" · ");
   });
 
@@ -116,6 +100,7 @@
     error = "";
     try {
       data = await store.prs(project, refresh);
+      snapshotAt = Date.now() - data.ageSeconds * 1000;
     } catch (e) {
       // The daemon's own sentence, verbatim: it distinguishes "no repo
       // configured", "unknown project" and a gh failure, and this app has no
@@ -228,7 +213,7 @@
     <!-- ONE line, truncated: repo · count · age. The `num` run keeps the age
          from reflowing the line each time it is redrawn. -->
     {#if freshness}
-      <span class="num truncate text-sm text-faint">{freshness}</span>
+      <span class="num truncate text-sm text-faint">{freshness} · <TimeAgo at={snapshotAt} hint="PR list fetched" /></span>
     {:else}
       <span class="truncate text-sm text-faint">{store.displayNameFor(project)}</span>
     {/if}
@@ -246,7 +231,7 @@
       role="status"
     >
       <span class="min-w-0 flex-1">
-        Cached list from {agePhrase(data.ageSeconds)} — the Mac has not refreshed it.
+        Cached list from <TimeAgo at={snapshotAt} hint="PR list fetched" /> — the Mac has not refreshed it.
       </span>
       <TouchButton {loading} class="text-warn!" onclick={() => load(true)}>Refresh</TouchButton>
     </div>
@@ -318,7 +303,7 @@
       <div class="flex flex-col items-center gap-2 px-8 py-12 text-center">
         <span class="text-lg text-ink">No open pull requests</span>
         <span class="copy text-body text-faint">
-          {data?.repo || store.displayNameFor(project)} had none {data ? agePhrase(data.ageSeconds) : ""}.
+          {data?.repo || store.displayNameFor(project)} had none <TimeAgo at={snapshotAt} hint="PR list fetched" />.
         </span>
         <TouchButton wide variant="primary" {loading} onclick={() => load(true)}>
           Refresh

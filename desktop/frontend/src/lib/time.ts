@@ -7,9 +7,9 @@
 //   older     "Mar 4"       — a count of days stops meaning anything
 //   other yr  "Mar 4, 2025"
 //
-// The daemon's formatAgo (internal/daemon/server.go) emits the same units for
-// clients that only get the string (mobile, TUI); TimeAgo.svelte renders this
-// one live and puts the exact moment (exactTime) in a hover card.
+// internal/timefmt mirrors these thresholds for Go clients. TimeAgo.svelte
+// renders this one live on desktop and mobile and puts the exact moment
+// (exactTime) in a hover card.
 
 const MIN = 60_000;
 const HOUR = 60 * MIN;

@@ -12,6 +12,7 @@
     ago = true,
     prefix = "",
     hint = "",
+    fallback = "",
     class: cls = "",
   }: {
     /** ISO string, epoch ms or Date. Unknown renders nothing. */
@@ -22,6 +23,8 @@
     prefix?: string;
     /** A line above the exact time in the hover card. */
     hint?: string;
+    /** Preformatted label from an older daemon without a raw timestamp. */
+    fallback?: string;
     class?: string;
   } = $props();
 
@@ -56,4 +59,6 @@
     {/snippet}
     {prefix}{text}
   </HoverCard>
+{:else if fallback}
+  <span class="num whitespace-nowrap {cls}">{prefix}{fallback}</span>
 {/if}
