@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.2.15](https://github.com/sushidev-team/lola/compare/v0.2.14...v0.2.15) (2026-10-11)
+
+
+### Features
+
+* **desktop:** always offer the session sidebar; icon view controls ([60a5978](https://github.com/sushidev-team/lola/commit/60a5978d4c789af0aec9742b914298cd0c336e71))
+* **desktop:** fluid relative times with the exact time on hover ([2d88bb3](https://github.com/sushidev-team/lola/commit/2d88bb39c8d9d80191fce78d1d9a03cd7a752490))
+
+
+### Bug Fixes
+
+* **runtime:** never wire sessions to a deleted lola binary ([210cabd](https://github.com/sushidev-team/lola/commit/210cabd65aaaad7dbd22e99597871c63c734d259))
+
 ## [0.2.14](https://github.com/sushidev-team/lola/compare/v0.2.13...v0.2.14) (2026-10-10)
 
 
