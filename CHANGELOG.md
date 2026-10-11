@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.2.16](https://github.com/sushidev-team/lola/compare/v0.2.15...v0.2.16) (2026-10-11)
+
+
+### Features
+
+* **bestof:** run several agents/models on one issue and keep a winner ([fd6cd8c](https://github.com/sushidev-team/lola/commit/fd6cd8c9f0458ed071352ef91f962e8e117a4c3d))
+* **bestof:** run several agents/models on one issue and keep a winner ([ea14c4c](https://github.com/sushidev-team/lola/commit/ea14c4cdd21332df4a0a99d4000e3320aae27dbf))
+* **broadcast:** send one message to every live agent of a project ([fa94fb8](https://github.com/sushidev-team/lola/commit/fa94fb852407017e0212895a6002983ad867d5ca))
+
+
+### Bug Fixes
+
+* **bestof:** address review — serialize picks, re-check cap under the claim, surface partial failures ([9d6b4f0](https://github.com/sushidev-team/lola/commit/9d6b4f0d4de0d46700dca2c32e83e5e5410de07d))
+* **broadcast:** bound the immediate delivery pass so a large project cannot outlast the client ([18a9e16](https://github.com/sushidev-team/lola/commit/18a9e16b6733837cf093919f07790eacfbfd9c9f))
+* **daemon:** defer automatic prompts while human input is present ([030e942](https://github.com/sushidev-team/lola/commit/030e94287e96edfcc8000dbed798f0cfedea28b3))
+* **desktop:** simplify session overlap indicators ([21eca74](https://github.com/sushidev-team/lola/commit/21eca7470d274e177bdacf6f70aa1efcce734220))
+* **quota:** poll Claude usage when status-line data is missing ([4567139](https://github.com/sushidev-team/lola/commit/456713984b594513aaf7e3d815913eaa14b9d00a))
+* **ui:** use consistent fluid timestamps across the app ([4cf5ed5](https://github.com/sushidev-team/lola/commit/4cf5ed51d5f0f788f671d76fc3a4e79c9d63edd2))
+
 ## [0.2.15](https://github.com/sushidev-team/lola/compare/v0.2.14...v0.2.15) (2026-10-11)
 
 
