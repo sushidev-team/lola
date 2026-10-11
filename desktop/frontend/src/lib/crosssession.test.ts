@@ -28,7 +28,7 @@ describe("overlapChip", () => {
     const c = overlapChip([{ session: "p1-fe-2", issue: "FE-2", files: ["app/user.go"] }]);
     expect(c?.label).toBe("Overlaps FE-2");
     expect(c?.tone).toBe("warn");
-    expect(c?.hint).toContain("FE-2: app/user.go");
+    expect(c?.hint).toBe("FE-2: app/user.go");
   });
 
   it("summarizes several sessions and counts what it left out", () => {
@@ -38,7 +38,6 @@ describe("overlapChip", () => {
       { session: "p1-fe-3", issue: "", files: ["a"] },
     ]);
     expect(c?.label).toBe("Overlaps 2 sessions");
-    expect(c?.hint).toContain("FE-2: a, b, c, d, e +5 more");
-    expect(c?.hint).toContain("p1-fe-3: a");
+    expect(c?.hint).toBe("FE-2: a, b +8 files\np1-fe-3: a");
   });
 });

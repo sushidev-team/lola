@@ -12,6 +12,7 @@ export interface Chip {
   label: string;
   tone: StageTone;
   hint: string;
+  overlaps?: { session: string; files: string[]; more: number }[];
 }
 
 const QUEUE_STEPS: Record<string, { label: string; tone: StageTone; hint: string }> = {
@@ -42,16 +43,23 @@ export function mergeQueueChip(q: MergeQueueInfo | null | undefined): Chip | nul
 /** The overlap chip, or null when no other session edits the same files. */
 export function overlapChip(overlaps: SessionOverlap[] | null | undefined): Chip | null {
   if (!overlaps?.length) return null;
-  const lines = overlaps.map((o) => {
+  const rows = overlaps.map((o) => {
     const files = o.files ?? [];
-    const more = (o.more ?? 0) + Math.max(0, files.length - 5);
-    const shown = files.slice(0, 5).join(", ") + (more > 0 ? ` +${more} more` : "");
-    return `${o.issue || o.session}: ${shown}`;
+    return {
+      session: o.issue || o.session,
+      files: files.slice(0, 2),
+      more: (o.more ?? 0) + Math.max(0, files.length - 2),
+    };
+  });
+  const lines = rows.map(({ session, files, more }) => {
+    const shown = files.join(", ") + (more > 0 ? ` +${more} ${more === 1 ? "file" : "files"}` : "");
+    return `${session}: ${shown}`;
   });
   const who = overlaps.length === 1 ? overlaps[0].issue || overlaps[0].session : `${overlaps.length} sessions`;
   return {
     label: `Overlaps ${who}`,
     tone: "warn",
-    hint: `Another session of this project edits the same files — merging both will likely conflict.\n${lines.join("\n")}`,
+    hint: lines.join("\n"),
+    overlaps: rows,
   };
 }
