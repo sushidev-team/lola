@@ -5,6 +5,7 @@
   import { store } from "$lib/store.svelte";
   import Modal from "$lib/components/Modal.svelte";
   import Button from "$lib/components/Button.svelte";
+  import TimeAgo from "$lib/components/TimeAgo.svelte";
 
   // Open with a FRESH check every time, not just when nothing was loaded yet.
   // Opening this overlay is the one unambiguous "is there something new?" — and
@@ -25,12 +26,6 @@
       i++;
     }
     return `${v.toFixed(v < 10 && i > 0 ? 1 : 0)} ${units[i]}`;
-  }
-
-  function fmtDate(iso: string): string {
-    if (!iso) return "";
-    const d = new Date(iso);
-    return isNaN(d.getTime()) ? "" : d.toLocaleDateString();
   }
 
   // Prefer the per-version changelog (current < v <= latest); fall back to the
@@ -85,7 +80,7 @@
              being offered is the one thing this dialog is about. -->
         <span class="text-xl text-accent-ink">v{updates.info?.latestVersion}</span>
         {#if updates.info?.publishedAt}
-          <span class="ml-auto text-sm text-faint">{fmtDate(updates.info.publishedAt)}</span>
+          <TimeAgo at={updates.info.publishedAt} hint="Published" class="ml-auto text-sm text-faint" />
         {/if}
       </div>
 

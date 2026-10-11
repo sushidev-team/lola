@@ -393,6 +393,9 @@ type Event struct {
 	From  string `json:"from"`
 	To    string `json:"to"`
 	Ago   string `json:"ago"`
+	// At is the transition's own time, so a client can keep Ago live between
+	// refreshes and show the exact moment on hover. Absent on an older daemon.
+	At time.Time `json:"at,omitzero"`
 }
 
 // SessionInfo is one observed session, flattened to render-ready strings and
@@ -435,10 +438,11 @@ type SessionInfo struct {
 	// renders it verbatim or not at all. InterpretedState is set ONLY when the
 	// interpreter DISAGREES with agentState (render with an "approx" marker);
 	// Headline ships whenever a valid judgement exists.
-	InterpretedState string `json:"interpretedState,omitempty"` // working|waiting_input|idle|stuck; "" = no override
-	Headline         string `json:"headline,omitempty"`         // one line: what the agent is doing right now
-	WaitingOn        string `json:"waitingOn,omitempty"`        // what the agent needs, when blocked
-	HeadlineAgo      string `json:"headlineAgo,omitempty"`      // formatted age of the judgement, e.g. "2m"
+	InterpretedState string    `json:"interpretedState,omitempty"` // working|waiting_input|idle|stuck; "" = no override
+	Headline         string    `json:"headline,omitempty"`         // one line: what the agent is doing right now
+	WaitingOn        string    `json:"waitingOn,omitempty"`        // what the agent needs, when blocked
+	HeadlineAgo      string    `json:"headlineAgo,omitempty"`      // formatted age of the judgement, e.g. "2m"
+	HeadlineAt       time.Time `json:"headlineAt,omitzero"`        // when that judgement was made
 
 	// Dev processes ([[project]].dev_commands). DevActive is true while this
 	// session holds them — derived from live tmux facts each observe cycle, so a

@@ -9,7 +9,7 @@
   //   TODAY — the day's tokens as the headline, the budget, and each project's
   //   share as a bar against the day's total; a dispatch hold last.
   import type { UsageStatus } from "@bindings/internal/protocol";
-  import { agoShort } from "$lib/board";
+  import { agoPhrase } from "$lib/time";
   import { AGENT_NAMES, budgetPercent, fmtTokens, fmtUSD, paceNote, untilShort, windowName, windowPace } from "$lib/usage";
 
   let { usage }: { usage: UsageStatus } = $props();
@@ -18,8 +18,8 @@
   const budget = $derived(budgetPercent(usage.weighted, usage.budgetTokens));
   const projects = $derived([...(usage.projects ?? [])].sort((a, b) => b.tokens - a.tokens));
   const fresh = (iso: string) => {
-    const a = agoShort(iso);
-    return a === "now" ? "updated just now" : a ? `updated ${a} ago` : "";
+    const a = agoPhrase(iso);
+    return a ? `updated ${a}` : "";
   };
 </script>
 

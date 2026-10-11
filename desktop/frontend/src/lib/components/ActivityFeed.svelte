@@ -1,6 +1,7 @@
 <script lang="ts">
   import { store } from "$lib/store.svelte";
   import { eventPhrase, statusText } from "$lib/theme";
+  import TimeAgo from "./TimeAgo.svelte";
 
   // The ONLY reader of store.activity anywhere in the app. store.setActivity
   // defers its write to a macrotask so it lands in a separate flush from
@@ -18,7 +19,11 @@
       <li class="flex min-w-0 items-baseline gap-1.5">
         <span class="shrink-0 font-medium text-ink">{ev.issue || ev.id.slice(0, 6)}</span>
         <span class="truncate {statusText(ev.to)}">{eventPhrase(ev.from, ev.to)}</span>
-        <span class="num ml-auto shrink-0 pl-1 text-faint">{ev.ago}</span>
+        {#if ev.at}
+          <TimeAgo at={ev.at} ago={false} class="ml-auto shrink-0 pl-1 text-faint" />
+        {:else}
+          <span class="num ml-auto shrink-0 pl-1 text-faint">{ev.ago}</span>
+        {/if}
       </li>
     {/each}
   </ul>

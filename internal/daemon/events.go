@@ -114,7 +114,7 @@ func (d *Daemon) eventsFor(id string, n int, now time.Time) []string {
 		if from == "" {
 			from = "spawned"
 		}
-		out = append(out, from+"→"+e.to+" ("+formatAge(now.Sub(e.at))+" ago)")
+		out = append(out, from+"→"+e.to+" ("+formatAgo(now.Sub(e.at))+" ago)")
 	}
 	return out
 }
@@ -136,7 +136,8 @@ func (d *Daemon) eventFeed(now time.Time) []protocol.Event {
 			Title: e.title,
 			From:  e.from,
 			To:    e.to,
-			Ago:   formatAge(now.Sub(e.at)),
+			Ago:   formatAgo(now.Sub(e.at)),
+			At:    e.at,
 		})
 	}
 	return out

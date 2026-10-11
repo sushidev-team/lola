@@ -4,6 +4,7 @@
   import { nav } from "$lib/nav.svelte";
   import type { PrRow, PrsData } from "@bindings/internal/protocol";
   import Button from "$lib/components/Button.svelte";
+  import { agoPhrase } from "$lib/time";
 
   let data = $state<PrsData | null>(null);
   let loading = $state(true);
@@ -100,7 +101,7 @@
     <Button icon title="back to project" aria-label="Back to project" onclick={() => nav.goDetail(nav.project)}>←</Button>
     {#if data}
       <span class="num text-sm text-faint">
-        {data.prs?.length ?? 0} open · {data.ageSeconds}s ago{data.stale ? " · stale" : ""}
+        {data.prs?.length ?? 0} open · {agoPhrase(Date.now() - data.ageSeconds * 1000)}{data.stale ? " · stale" : ""}
       </span>
     {/if}
     <input

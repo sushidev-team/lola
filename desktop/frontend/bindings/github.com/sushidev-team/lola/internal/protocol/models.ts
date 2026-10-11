@@ -251,6 +251,12 @@ export interface Event {
     "from": string;
     "to": string;
     "ago": string;
+
+    /**
+     * At is the transition's own time, so a client can keep Ago live between
+     * refreshes and show the exact moment on hover. Absent on an older daemon.
+     */
+    "at"?: string;
 }
 
 /**
@@ -895,6 +901,11 @@ export interface SessionInfo {
      * formatted age of the judgement, e.g. "2m"
      */
     "headlineAgo"?: string;
+
+    /**
+     * when that judgement was made
+     */
+    "headlineAt"?: string;
 
     /**
      * Dev processes ([[project]].dev_commands). DevActive is true while this

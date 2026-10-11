@@ -691,7 +691,8 @@ func (d *Daemon) sessionsData() protocol.SessionsData {
 			si.InterpretedState = istate
 			si.Headline = headline
 			si.WaitingOn = waitingOn
-			si.HeadlineAgo = formatAge(now.Sub(at))
+			si.HeadlineAgo = formatAgo(now.Sub(at))
+			si.HeadlineAt = at
 		}
 		// The agent's own report — display-only, like the overlay above.
 		si.Board = boardInfo(s.Board, auditClaims(s), now)
@@ -758,6 +759,26 @@ func formatAge(d time.Duration) string {
 	default:
 		days := int(d.Hours()) / 24
 		return fmt.Sprintf("%dd%dh", days, int(d.Hours())%24)
+	}
+}
+
+// formatAgo is the "how long ago" of a POINT in time, as concise as the age
+// allows: "<1m", "5m", "3h", "2d" — one unit, never the remainder. Callers
+// append "ago". It is the Go half of the desktop's fluidAgo (lib/time.ts),
+// which renders the same units live and shows the exact time on hover; a
+// minute count inside an hours-old stamp ("10h51m") is precision nobody reads.
+// formatAge stays for DURATIONS (how long a session has run), where the
+// remainder is part of the answer.
+func formatAgo(d time.Duration) string {
+	switch {
+	case d < time.Minute:
+		return "<1m"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh", int(d.Hours()))
+	default:
+		return fmt.Sprintf("%dd", int(d.Hours())/24)
 	}
 }
 

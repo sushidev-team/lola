@@ -146,7 +146,7 @@ func ticketAge(stamp string, now time.Time) string {
 	if err != nil {
 		return ""
 	}
-	return formatAge(now.Sub(t))
+	return formatAgo(now.Sub(t))
 }
 
 // ticketStateRank orders the workflow-state TYPES the way a person picking work

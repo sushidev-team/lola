@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { agoPhrase } from "$lib/time";
   import type { SessionInfo } from "$lib/store.svelte";
   import { boardStale, hasChip, phaseChip, phaseDot, progressText } from "$lib/board";
   import BoardMarker from "./BoardMarker.svelte";
@@ -22,7 +23,7 @@
   const tip = $derived(
     !b
       ? ""
-      : [b.phase, b.current ? `now: ${b.current}` : "", b.updatedAgo ? `reported ${b.updatedAgo} ago` : ""]
+      : [b.phase, b.current ? `now: ${b.current}` : "", b.updatedAt ? `reported ${agoPhrase(b.updatedAt)}` : ""]
           .filter(Boolean)
           .join(" · "),
   );

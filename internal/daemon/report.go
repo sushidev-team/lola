@@ -124,7 +124,7 @@ func boardInfo(b board.Board, audit claimaudit.Result, now time.Time) *protocol.
 		UpdatedAt:       b.UpdatedAt,
 	}
 	if !b.UpdatedAt.IsZero() {
-		bi.UpdatedAgo = formatAge(now.Sub(b.UpdatedAt))
+		bi.UpdatedAgo = formatAgo(now.Sub(b.UpdatedAt))
 	}
 	for _, t := range b.Todos {
 		bi.Todos = append(bi.Todos, protocol.BoardTodo{Text: t.Text, State: string(t.State)})

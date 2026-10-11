@@ -94,8 +94,3 @@ class Checkpoints {
 
 export const checkpoints = new Checkpoints();
 
-/** A checkpoint's wall-clock time, or "" for an unparsable stamp. */
-export function checkpointTime(iso: string): string {
-  const d = new Date(iso);
-  return isNaN(d.getTime()) ? "" : d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-}

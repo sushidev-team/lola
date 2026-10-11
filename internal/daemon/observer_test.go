@@ -192,4 +192,18 @@ func TestFormatAge(t *testing.T) {
 			t.Errorf("formatAge(%v) = %q, want %q", c.d, got, c.want)
 		}
 	}
+	for _, c := range []struct {
+		d    time.Duration
+		want string
+	}{
+		{-time.Second, "<1m"},
+		{59 * time.Second, "<1m"},
+		{5 * time.Minute, "5m"},
+		{10*time.Hour + 51*time.Minute, "10h"},
+		{50 * time.Hour, "2d"},
+	} {
+		if got := formatAgo(c.d); got != c.want {
+			t.Errorf("formatAgo(%v) = %q, want %q", c.d, got, c.want)
+		}
+	}
 }

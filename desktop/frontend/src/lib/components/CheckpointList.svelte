@@ -10,7 +10,8 @@
   // the current state as a new checkpoint first, so it is undoable; the daemon
   // refuses it mid-turn and `restorable` says so before anyone clicks.
   import type { CheckpointInfo } from "@bindings/internal/protocol";
-  import { checkpoints, checkpointTime } from "$lib/checkpoints.svelte";
+  import { checkpoints } from "$lib/checkpoints.svelte";
+  import TimeAgo from "./TimeAgo.svelte";
   import { terms, CHECKPOINTS } from "$lib/terms.svelte";
   import { nav } from "$lib/nav.svelte";
   import Button from "./Button.svelte";
@@ -85,7 +86,7 @@
             >
             <span class="num block text-sm text-faint">#{c.seq} · <span class="font-mono">{c.sha.slice(0, 7)}</span></span>
           </span>
-          <span class="num text-sm text-faint">{checkpointTime(c.created)}</span>
+          <TimeAgo at={c.created} class="text-sm text-faint" />
         </button>
         {#if sel}
           <div class="flex flex-wrap items-center gap-1 pt-1 pb-2 pl-7">

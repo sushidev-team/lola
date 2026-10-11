@@ -220,7 +220,7 @@ func TestHandleTicketsEnrichesAndOrders(t *testing.T) {
 	if r.Assignee != "Ada" || !slices.Equal(r.Labels, []string{"bug", "api"}) || r.Estimate != 3 {
 		t.Errorf("assignee/labels/estimate must ride the row, got %q %v %v", r.Assignee, r.Labels, r.Estimate)
 	}
-	if r.Updated != "3d0h" {
+	if r.Updated != "3d" {
 		t.Errorf("Updated must be a formatted age, got %q", r.Updated)
 	}
 
@@ -246,7 +246,7 @@ func TestTicketAgeFailsClosed(t *testing.T) {
 			t.Errorf("ticketAge(%q) = %q, want empty", stamp, got)
 		}
 	}
-	if got := ticketAge(now.Add(-2*time.Hour).UTC().Format(time.RFC3339), now); got != "2h00m" {
+	if got := ticketAge(now.Add(-2*time.Hour).UTC().Format(time.RFC3339), now); got != "2h" {
 		t.Errorf("ticketAge(2h ago) = %q", got)
 	}
 }

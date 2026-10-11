@@ -7,6 +7,7 @@
 // or any action. Its strings arrive sanitized (one line, no control characters),
 // and are rendered as TEXT — never as markup, never as a link.
 
+import { fluidAgo } from "./time";
 import type { BoardInfo } from "@bindings/internal/protocol";
 
 export type { BoardInfo };
@@ -79,18 +80,11 @@ export function phaseDot(phase: string): string {
   return PHASE_DOT[phase] ?? "bg-faint";
 }
 
-// A compact "how long ago" for a wire timestamp ("", "now", "4m", "2h", "3d").
-// Client-side because blockedAt has no daemon-formatted twin, and a blocker's
-// age is the part that tells a human how long the agent has been waiting.
+// A compact "how long ago" for a wire timestamp ("", "now", "4m", "2h", "3d",
+// "Mar 4") — lib/time.ts's fluidAgo. Prefer <TimeAgo> where a live label with
+// a hover card fits; this is for text that is composed into a sentence.
 export function agoShort(iso: string | undefined, now: number = Date.now()): string {
-  if (!iso) return "";
-  const t = Date.parse(iso);
-  if (Number.isNaN(t)) return "";
-  const s = Math.max(0, Math.round((now - t) / 1000));
-  if (s < 60) return "now";
-  if (s < 3600) return `${Math.floor(s / 60)}m`;
-  if (s < 86400) return `${Math.floor(s / 3600)}h`;
-  return `${Math.floor(s / 86400)}d`;
+  return fluidAgo(iso, now).text;
 }
 
 // The claim audit (internal/claimaudit): lola's own comparison of the board's
