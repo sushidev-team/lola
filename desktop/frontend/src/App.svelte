@@ -23,6 +23,7 @@
   import ProjectForm from "$lib/views/ProjectForm.svelte";
   import UpdateOverlay from "$lib/views/UpdateOverlay.svelte";
   import HelpOverlay from "$lib/views/HelpOverlay.svelte";
+  import BestOfOverlay from "$lib/views/BestOfOverlay.svelte";
   import ConfirmDialog from "$lib/components/ConfirmDialog.svelte";
   import SessionMenu from "$lib/components/SessionMenu.svelte";
   import { confirm } from "$lib/confirm.svelte";
@@ -391,6 +392,8 @@
   <UpdateOverlay />
 {:else if nav.overlay === "help"}
   <HelpOverlay />
+{:else if nav.overlay === "bestof"}
+  <BestOfOverlay />
 {/if}
 <ConfirmDialog />
 <SessionMenu />

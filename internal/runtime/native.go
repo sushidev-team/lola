@@ -218,6 +218,12 @@ const adoptChromeTimeout = 15 * time.Second
 // lowercased identifier can never end in "-r<digits>" itself.
 var attemptSuffixRe = regexp.MustCompile(`-r\d+$`)
 
+// bestOfSuffixRe matches the best-of attempt suffix ("-b1", "-b2", …) that
+// SpawnWith puts on each sibling's base ID and branch, BEFORE any retry
+// suffix: "lola-web-eng-42-b2-r2". Like "-r<n>" it cannot end a lowercased
+// Linear identifier.
+var bestOfSuffixRe = regexp.MustCompile(`-b\d+$`)
+
 // freeSessionSlot returns the first (session ID, branch) pair that does not
 // collide with leftovers of earlier attempts for the same issue: attempt 1 is
 // the deterministic (baseID, baseBranch) pair, retries append "-r<n>" to
@@ -283,6 +289,30 @@ func (n *Native) resolveKind(project, override string) agent.Kind {
 // up, the worktree is removed only when clean (force=false; a dirty worktree
 // is kept for inspection) — and the returned error says what was left behind.
 func (n *Native) Spawn(ctx context.Context, p config.Project, issue linear.Issue, agentOverride string) (session.Session, error) {
+	return n.SpawnWith(ctx, p, issue, SpawnOpts{Agent: agentOverride})
+}
+
+// SpawnOpts are the per-spawn choices beyond the issue itself.
+//
+//   - Agent overrides the coding agent ("" = project → [defaults] → claude).
+//   - Model pins the worker model (agent.LaunchModelArgs; "" = the agent's own
+//     default). Recorded on the session so a revive relaunches it.
+//   - Group/Attempt/Of make the spawn ONE ATTEMPT of a best-of-N group: the
+//     session ID and branch get a "-b<attempt>" suffix (so the N siblings
+//     never collide with each other or with a plain dispatch of the issue),
+//     the briefing tells the agent it is attempt k of N and to open its PR as
+//     a DRAFT, and the record carries the group. Group "" is a plain spawn.
+type SpawnOpts struct {
+	Agent   string
+	Model   string
+	Group   string
+	Attempt int
+	Of      int
+}
+
+// SpawnWith is Spawn with explicit SpawnOpts.
+func (n *Native) SpawnWith(ctx context.Context, p config.Project, issue linear.Issue, o SpawnOpts) (session.Session, error) {
+	agentOverride := o.Agent
 	if issue.Identifier == "" {
 		return session.Session{}, errors.New("runtime: spawn: issue has no identifier")
 	}
@@ -297,6 +327,11 @@ func (n *Native) Spawn(ctx context.Context, p config.Project, issue linear.Issue
 	baseBranch := issue.BranchName
 	if baseBranch == "" {
 		baseBranch = n.Cfg.BranchPrefixForProject(p.Name) + strings.ToLower(issue.Identifier)
+	}
+	bestOf := o.Group != "" && o.Attempt > 0
+	if bestOf {
+		suffix := "-b" + strconv.Itoa(o.Attempt)
+		baseID, baseBranch = baseID+suffix, baseBranch+suffix
 	}
 	id, branch, err := n.freeSessionSlot(ctx, p, baseID, baseBranch)
 	if err != nil {
@@ -335,7 +370,11 @@ func (n *Native) Spawn(ctx context.Context, p config.Project, issue linear.Issue
 	}
 	ctxKey := contextKeyFor(issue.Identifier, id)
 	ctxDir := n.setupContext(dir, p.Name, ctxKey)
-	if err := os.WriteFile(filepath.Join(dir, lolaDir, "prompt.md"), n.withReportBriefing(withContextBriefing(promptMD(p, issue, branch), ctxDir)), 0o600); err != nil {
+	brief := promptMD(p, issue, branch)
+	if bestOf {
+		brief = withBestOfBriefing(brief, o.Attempt, o.Of)
+	}
+	if err := os.WriteFile(filepath.Join(dir, lolaDir, "prompt.md"), n.withReportBriefing(withContextBriefing(brief, ctxDir)), 0o600); err != nil {
 		return fail("write prompt.md", err)
 	}
 	// Per-agent lifecycle-callback artifact(s): claude's .lola/settings.json,
@@ -354,8 +393,12 @@ func (n *Native) Spawn(ctx context.Context, p config.Project, issue linear.Issue
 		return fail("write env", err)
 	}
 
+	model := ""
+	if agent.ValidModel(o.Model) {
+		model = o.Model
+	}
 	n.recordBaseline(ctx, dir, id)
-	if err := n.Tmux.NewSession(ctx, id, dir, n.launchCommand(id, kind, false)); err != nil {
+	if err := n.Tmux.NewSession(ctx, id, dir, n.launchLine(id, kind, defaultLaunchPrompt(id), model, false)); err != nil {
 		return session.Session{}, n.rollbackTmux(ctx, p, id, dir, branch, "start tmux session", err)
 	}
 
@@ -381,7 +424,41 @@ func (n *Native) Spawn(ctx context.Context, p config.Project, issue linear.Issue
 		TmuxName:   id,
 		Agent:      string(kind),
 		ContextKey: ctxKey,
+		Model:      model,
+		BestOf:     groupIf(bestOf, o.Group),
+		Attempt:    intIf(bestOf, o.Attempt),
+		Attempts:   intIf(bestOf, o.Of),
 	}, state.AgentStarting), nil
+}
+
+func groupIf(ok bool, g string) string {
+	if ok {
+		return g
+	}
+	return ""
+}
+
+func intIf(ok bool, v int) int {
+	if ok {
+		return v
+	}
+	return 0
+}
+
+// withBestOfBriefing appends the best-of section to a prompt.md body: the
+// agent is one of several working the same issue independently, and a human
+// compares the results and keeps ONE. The draft PR is what makes that
+// comparison possible without N PRs asking for review at once — CI and the
+// review providers still run on a draft — and the title tag keeps the
+// siblings apart on GitHub. The pick marks the kept one ready.
+func withBestOfBriefing(prompt []byte, attempt, of int) []byte {
+	var b strings.Builder
+	b.Write(prompt)
+	fmt.Fprintf(&b, "\n## Best-of-%d attempt\n\n", of)
+	fmt.Fprintf(&b, "You are attempt %d of %d: other agents are working on this same issue independently, each on its own branch, and a human will compare the results and keep one. Do not look for, coordinate with, or copy from the other attempts — solve it your own way.\n\n", attempt, of)
+	fmt.Fprintf(&b, "- Open your pull request as a **draft** (`gh pr create --draft`) and prefix its title with `[best-of %d/%d]`. lola marks the chosen one ready for review.\n", attempt, of)
+	b.WriteString("- Keep the change focused: the comparison weighs CI, review findings and diff size.\n")
+	return []byte(b.String())
 }
 
 // Open checks out an EXISTING branch or PR of project p into a throwaway
@@ -705,7 +782,7 @@ func manualEnvFile(p config.Project) []byte {
 // prompt. Spawn always passes false; only Revive passes true, and only after
 // confirming there is a transcript to continue.
 func (n *Native) launchCommand(id string, kind agent.Kind, resume bool) string {
-	return n.launchCommandPrompt(id, kind, defaultLaunchPrompt(id), resume)
+	return n.launchLine(id, kind, defaultLaunchPrompt(id), "", resume)
 }
 
 // defaultLaunchPrompt is the fresh-spawn first-turn prompt: point the agent at
@@ -718,6 +795,13 @@ func defaultLaunchPrompt(id string) string {
 // the caller — a takeover spawn (SwitchAgent) points the new agent at
 // .lola/handoff.md first, then .lola/prompt.md.
 func (n *Native) launchCommandPrompt(id string, kind agent.Kind, prompt string, resume bool) string {
+	return n.launchLine(id, kind, prompt, "", resume)
+}
+
+// launchLine is the one builder behind every agent launch: launchCommandPrompt
+// plus an optional worker MODEL override (agent.LaunchModelArgs; "" = the
+// agent's default), which a best-of attempt carries and a revive repeats.
+func (n *Native) launchLine(id string, kind agent.Kind, prompt, model string, resume bool) string {
 	bin := kind.Binary()
 	if kind == agent.Claude && n.ClaudeBin != "" {
 		bin = n.ClaudeBin
@@ -726,6 +810,9 @@ func (n *Native) launchCommandPrompt(id string, kind agent.Kind, prompt string, 
 	if resume {
 		args = agent.LaunchArgsResume(kind, prompt)
 	}
+	// Prepended, so it never follows a positional prompt and precedes codex's
+	// `resume` subcommand.
+	args = append(agent.LaunchModelArgs(kind, model), args...)
 	if kind == agent.Codex {
 		notify, _ := json.Marshal([]string{n.lolaBin(), "hook", "codex-notify"})
 		args = append([]string{"-c", "notify=" + string(notify)}, args...)
@@ -1307,7 +1394,7 @@ func (n *Native) Revive(ctx context.Context, s session.Session) (session.Session
 		}
 		resume = codexHasSession(ctx, home, dir)
 	}
-	if err := n.Tmux.NewSession(ctx, id, dir, n.launchCommand(id, kind, resume)); err != nil {
+	if err := n.Tmux.NewSession(ctx, id, dir, n.launchLine(id, kind, defaultLaunchPrompt(id), s.Model, resume)); err != nil {
 		return session.Session{}, fmt.Errorf("runtime: revive %s: %w", id, err)
 	}
 	// Best-effort chrome, exactly as Spawn: a styling hiccup never loses the
@@ -1426,6 +1513,7 @@ func issueFromSessionID(id, project string) string {
 		return "" // a manual (`lola open`) session has no Linear issue
 	}
 	rest = attemptSuffixRe.ReplaceAllString(rest, "")
+	rest = bestOfSuffixRe.ReplaceAllString(rest, "")
 	if rest == "" {
 		return ""
 	}

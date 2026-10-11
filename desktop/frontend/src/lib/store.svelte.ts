@@ -512,6 +512,25 @@ class Store {
       (r) => r?.message || `forked ${id} at checkpoint #${seq}`,
     );
   }
+  // Best-of: keep one attempt. The daemon's sentence names what happened to the
+  // others (removed, or kept because of uncommitted work). A pick that stands
+  // with failed steps (a PR left draft or open) is a WARNING, not a success —
+  // the overlay lists the steps (bestOf.problems) so it outlives the flash.
+  async bestOfPick(id: string) {
+    try {
+      const r = await DaemonService.BestOfPick(id);
+      const n = r?.problems?.length ?? 0;
+      this.setFlash(
+        n > 0 ? `${r?.message || `kept ${id}`} — ${n} step(s) need you` : r?.message || `kept ${id}`,
+        n > 0 ? "warn" : "good",
+      );
+      void this.refresh();
+      return r;
+    } catch (err) {
+      this.setFlash(String(err), "bad");
+      return undefined;
+    }
+  }
   switchAgent(id: string, kind: string) {
     return this.act(
       () => DaemonService.SwitchAgent({ session: id, agent: kind }),

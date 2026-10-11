@@ -126,6 +126,9 @@ func (n *Native) SwitchAgent(ctx context.Context, s session.Session, kind agent.
 
 	switched := s
 	switched.Agent = string(kind)
+	// A model override names a model of the OLD agent; the new one runs on its
+	// own default (the launch above passed none).
+	switched.Model = ""
 	// The fresh pane must not accept sends until its first hook proves it
 	// idle; the carried gate belongs to the dead agent.
 	switched.AtPrompt = false

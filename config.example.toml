@@ -192,6 +192,21 @@ endpoint = "https://api.linear.app/graphql"
 # allow_no_checks = false   # true only for a repo that runs no CI at all
 
 # ---------------------------------------------------------------------------
+# [best_of] — OPTIONAL. Best-of-N: run several coding agents/models on ONE
+# issue, each on its own sibling branch opening a DRAFT PR, then compare them
+# (`lola bestof compare <issue>`) and keep one (`lola bestof pick <session>`):
+# the kept PR is marked ready, the others are closed (branches kept) and their
+# sessions torn down (a worktree with uncommitted changes is kept). Every
+# attempt counts against the concurrency caps and the budget.
+#
+# A poll match that ALSO carries `label` (a WORKSPACE label UUID) starts a
+# group on its own; `lola bestof start <issue>` works with or without it.
+# ---------------------------------------------------------------------------
+# [best_of]
+# label = "<workspace-label-uuid>"            # "" / absent = no label trigger
+# agents = ["claude:2", "codex@gpt-5-codex"]  # <agent>[@<model>][:<count>], 2–6 attempts; default ["claude:2"]
+
+# ---------------------------------------------------------------------------
 # [statusagent] — OPTIONAL, OFF BY DEFAULT. The status INTERPRETER: a small
 # bounded headless agent pass that reads one session's pane tail, recent lifecycle
 # events, and PR facts, and judges what the agent is ACTUALLY doing — an

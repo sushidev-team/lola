@@ -50,6 +50,7 @@ import (
 // parameters carry a per-spawn agent-kind choice ("" = resolve from config).
 type NativeAPI interface {
 	Spawn(ctx context.Context, p config.Project, issue linear.Issue, agentOverride string) (session.Session, error)
+	SpawnWith(ctx context.Context, p config.Project, issue linear.Issue, o runtime.SpawnOpts) (session.Session, error)
 	Open(ctx context.Context, p config.Project, sessionID, ref, branch string) (session.Session, error)
 	OpenManual(ctx context.Context, p config.Project, sessionID, branch, base string) (session.Session, error)
 	OpenPRAgent(ctx context.Context, p config.Project, sessionID, branch, prompt, agentOverride string) (session.Session, error)
@@ -220,6 +221,18 @@ type Daemon struct {
 	// to scm.Client; tests install fakes.
 	behindBy func(ctx context.Context, repo, base, headSHA string) (int, error)
 	mergePR  func(ctx context.Context, repo string, pr int, method, headSHA string) error
+
+	// Best-of seams (bestof.go): a worktree's change size for the compare view
+	// (local git), and the pick's two gh writes — the kept PR out of draft, a
+	// discarded attempt's PR closed (branch kept). Default to gitdiff /
+	// scm.Client; tests install fakes.
+	worktreeStat func(ctx context.Context, dir, base string) (gitdiff.Stat, error)
+	markPRReady  func(ctx context.Context, repo string, pr int) error
+	closePR      func(ctx context.Context, repo string, pr int, comment string) error
+	// bestOfPickMu serializes cmd=bestOfPick so one group can never get two
+	// winners (a pick is rare and human-driven; one lock for all groups is
+	// enough).
+	bestOfPickMu sync.Mutex
 
 	// listTmuxSessions lists every session on lola's tmux server in ONE exec —
 	// the observer's per-cycle liveness + #{session_activity} source (replacing
@@ -510,6 +523,9 @@ func newDaemon(cfg *config.Config, lin linear.API, logger *log.Logger, home stri
 	d.overlapWarned = map[string]string{}
 	d.behindBy = scmc.BehindBy
 	d.mergePR = scmc.MergePR
+	d.worktreeStat = gitdiff.Differ{}.Stat
+	d.markPRReady = scmc.MarkPRReady
+	d.closePR = scmc.ClosePR
 	// A no-op notifier until Run/reload resolves the [notify] config; keeps the
 	// engine free of nil checks. notify.New always returns a non-nil Notifier.
 	d.notifier = notify.New(notify.NotifyConfig{})

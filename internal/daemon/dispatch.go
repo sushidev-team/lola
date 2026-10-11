@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/sushidev-team/lola/internal/agent"
+	"github.com/sushidev-team/lola/internal/bestof"
 	"github.com/sushidev-team/lola/internal/linear"
 	"github.com/sushidev-team/lola/internal/protocol"
 	"github.com/sushidev-team/lola/internal/session"
@@ -267,6 +268,15 @@ func (d *Daemon) tick(ctx context.Context, name string, dryRun bool) (protocol.P
 	// [defaults].agent → "claude"): the health gate must confirm THAT binary
 	// is on PATH, not always "claude". Resolved under the config lock.
 	agentBin := agent.Parse(d.cfg.AgentForProject(p.Name)).Binary()
+	// Best-of trigger (bestof.go): an issue carrying [best_of].label spawns the
+	// configured mix instead of one agent. Resolved once per tick.
+	bestOfCfg := d.cfg.BestOf
+	bestOfCfg.Agents = slices.Clone(bestOfCfg.Agents)
+	var bestOfMix []bestof.Attempt
+	var bestOfErr error
+	if bestOfCfg.Label != "" {
+		bestOfMix, bestOfErr = d.cfg.BestOfMix()
+	}
 	d.mu.Unlock()
 
 	now := time.Now()
@@ -469,15 +479,36 @@ func (d *Daemon) tick(ctx context.Context, name string, dryRun bool) (protocol.P
 	lastSpawnErr := ""
 	for _, is := range candidates {
 		m := protocol.Match{Identifier: is.Identifier, Title: is.Title}
-		if spawned >= budget {
+		// A best-of issue costs one slot PER ATTEMPT, and the whole group must
+		// fit: a partial group would compare fewer attempts than configured
+		// while still burning the cap.
+		mix := d.bestOfMixForIssue(bestOfCfg, bestOfMix, bestOfErr, name, is)
+		cost := max(len(mix), 1)
+		if spawned+cost > budget {
 			capped++
 			m.Action, m.Reason = "skipped", "capped"
+			if len(mix) > 0 {
+				m.Reason = fmt.Sprintf("capped (best-of needs %d)", cost)
+			}
 			res.Matches = append(res.Matches, m)
 			continue
 		}
+		// Every agent of the mix must pass the same health gate the tick ran
+		// for the project's own agent — before anything is mutated.
+		if len(mix) > 0 {
+			if err := d.bestOfHealth(mix); err != nil {
+				d.logf(name, "best-of: %s skipped, runtime unavailable: %v", is.Identifier, err)
+				m.Action, m.Reason = "skipped", "best-of runtime unavailable"
+				res.Matches = append(res.Matches, m)
+				continue
+			}
+		}
 		if dryRun {
-			spawned++
+			spawned += cost
 			m.Action = "would-spawn"
+			if len(mix) > 0 {
+				m.Reason = fmt.Sprintf("best-of %d", cost)
+			}
 			res.Matches = append(res.Matches, m)
 			continue
 		}
@@ -511,27 +542,17 @@ func (d *Daemon) tick(ctx context.Context, name string, dryRun bool) (protocol.P
 		// post_create + tmux): see nativeSpawnTimeout — user-supplied
 		// commands run in here and the shielded tick context alone could
 		// never abort them.
+		//
+		// spawnIssue stamps each session with the poll's repo (PR checks run
+		// against it, falling back to the project's — config.PollRepo) and the
+		// owning poll (so lifecycle write-back resolves THIS poll's P4 config),
+		// upserts it and records its birth in the activity feed. A best-of
+		// issue spawns one session per attempt; it fails only when NONE spawned.
 		spawnTarget := "project " + project.Name
-		cctx, cancel := context.WithTimeout(ctx, nativeSpawnTimeout)
-		sess, spawnErr := nat.Spawn(cctx, project, is, "")
-		cancel()
+		spawnedSess, _, spawnErr := d.spawnIssue(ctx, nat, project, is, "", mix, pollRepo, name)
+		var sess session.Session
 		if spawnErr == nil {
-			if pollRepo != "" {
-				// PR checks run against the poll's repo, falling back to the
-				// project's (config.PollRepo) — stamp it on the record so the
-				// observer looks in the right place.
-				sess.Repo = pollRepo
-			}
-			// Stamp the owning poll so later lifecycle write-back (PR-open,
-			// merged, blocked) can resolve THIS poll's P4 config (PLAN P4).
-			sess.PollName = name
-			d.sessions.Upsert(sess)
-			// Record the birth in the activity feed. Spawn enters via Upsert,
-			// which has no transition callback, so record it explicitly (from "").
-			d.recordSessionEvent("", sess)
-			if serr := d.sessions.Save(); serr != nil {
-				d.logf(name, "persist sessions after native spawn of %s: %v", is.Identifier, serr)
-			}
+			sess = spawnedSess[0]
 		}
 		if spawnErr != nil {
 			// Drop the in-flight claim. In label mode the seen entry stays
@@ -553,7 +574,7 @@ func (d *Daemon) tick(ctx context.Context, name string, dryRun bool) (protocol.P
 			res.Matches = append(res.Matches, m)
 			continue
 		}
-		spawned++
+		spawned += cost
 		d.status.setLastSpawn(name, time.Now())
 		d.logf(name, "spawned %s into %s", is.Identifier, spawnTarget)
 		m.Action = "spawned"
@@ -579,16 +600,10 @@ func (d *Daemon) tick(ctx context.Context, name string, dryRun bool) (protocol.P
 				d.logf(name, "label flip for %s failed (seen guards dedup): %v", is.Identifier, err)
 				continue
 			}
-			// Persist the stripped set on the session record (atomic RMW so a
-			// concurrent observer update is not clobbered) for the orphan revert.
-			if _, ok := d.sessions.Update(sess.ID, func(s *session.Session) bool {
-				s.RemovedLabels = removed
-				return true
-			}); ok {
-				if serr := d.sessions.Save(); serr != nil {
-					d.logf(name, "persist removed labels for %s: %v", is.Identifier, serr)
-				}
-			}
+			// Persist the stripped set on every spawned session record (atomic
+			// RMW so a concurrent observer update is not clobbered) for the
+			// orphan revert.
+			d.setRemovedLabels(spawnedSess, removed)
 		}
 
 		// (d) P4 Linear write-back on spawn (all dedup modes): move the issue to

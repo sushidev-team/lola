@@ -1388,8 +1388,10 @@ func TestIssueFromSessionID(t *testing.T) {
 	cases := []struct{ id, project, want string }{
 		{"lola-nori-eng-42", "nori", "ENG-42"},
 		{"lola-my-app-eng-7", "my-app", "ENG-7"},
-		{"lola-nori-eng-42-r2", "nori", "ENG-42"},  // retry suffix stripped
-		{"lola-nori-eng-42-r10", "nori", "ENG-42"}, // multi-digit attempt
+		{"lola-nori-eng-42-r2", "nori", "ENG-42"},    // retry suffix stripped
+		{"lola-nori-eng-42-r10", "nori", "ENG-42"},   // multi-digit attempt
+		{"lola-nori-eng-42-b2", "nori", "ENG-42"},    // best-of attempt suffix
+		{"lola-nori-eng-42-b3-r2", "nori", "ENG-42"}, // best-of attempt, retried
 		{"lola-nori-eng-42", "other", ""},
 		{"lola-nori-eng-42", "", ""},
 		{"unrelated", "nori", ""},

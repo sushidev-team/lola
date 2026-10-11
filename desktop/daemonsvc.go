@@ -202,6 +202,33 @@ func (s *DaemonService) ForkCheckpoint(session string, seq int, agentKind string
 	return d, err
 }
 
+// BestOfCompare returns every attempt of the best-of group the session belongs
+// to, side by side (read-only; one bounded local git diff per attempt).
+func (s *DaemonService) BestOfCompare(session string) (protocol.BestOfCompareData, error) {
+	args, _ := json.Marshal(protocol.BestOfCompareArgs{Session: session})
+	var d protocol.BestOfCompareData
+	err := call(protocol.Request{Cmd: "bestOfCompare", Args: args}, shortTimeout*3, &d)
+	return d, err
+}
+
+// BestOfPick keeps one best-of attempt: its draft PR is marked ready, every
+// other attempt's PR is closed and its session torn down (a dirty worktree is
+// kept).
+func (s *DaemonService) BestOfPick(session string) (protocol.BestOfPickData, error) {
+	args, _ := json.Marshal(protocol.BestOfPickArgs{Session: session})
+	var d protocol.BestOfPickData
+	err := call(protocol.Request{Cmd: "bestOfPick", Args: args}, longTimeout, &d)
+	return d, err
+}
+
+// BestOf starts an issue as a best-of group; agents "" uses [best_of].agents.
+func (s *DaemonService) BestOf(a protocol.BestOfArgs) (protocol.BestOfData, error) {
+	args, _ := json.Marshal(a)
+	var d protocol.BestOfData
+	err := call(protocol.Request{Cmd: "bestOf", Args: args}, longTimeout, &d)
+	return d, err
+}
+
 // Dev moves the project's dev processes ([[project]].dev_commands) onto one
 // session, or stops them. Activating is a MOVE: the daemon first kills the tabs
 // of whichever session of that project held them, so the ports are free before

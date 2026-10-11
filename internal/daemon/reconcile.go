@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -114,15 +115,34 @@ func nativeSessionPresent(s session.Session) bool {
 // nativeSessionForIssue returns the stored native session working on the
 // Linear identifier, or ok=false when none is on record.
 func (d *Daemon) nativeSessionForIssue(identifier string) (session.Session, bool) {
-	if identifier == "" {
-		return session.Session{}, false
-	}
-	for _, s := range d.sessions.Snapshot() {
-		if s.Source == "native" && s.Issue == identifier {
-			return s, true
-		}
+	if all := d.nativeSessionsForIssue(identifier); len(all) > 0 {
+		return all[0], true
 	}
 	return session.Session{}, false
+}
+
+// nativeSessionsForIssue returns every stored native session working on the
+// Linear identifier (several for a best-of group), the kept attempt first.
+func (d *Daemon) nativeSessionsForIssue(identifier string) []session.Session {
+	if identifier == "" {
+		return nil
+	}
+	var out []session.Session
+	for _, s := range d.sessions.Snapshot() {
+		if s.Source == "native" && s.Issue == identifier {
+			out = append(out, s)
+		}
+	}
+	slices.SortStableFunc(out, func(a, b session.Session) int {
+		switch {
+		case a.BestOfWinner == b.BestOfWinner:
+			return 0
+		case a.BestOfWinner:
+			return -1
+		}
+		return 1
+	})
+	return out
 }
 
 func (d *Daemon) reconcilePoll(ctx context.Context, api linear.API, p config.Project, counted map[string]bool, now time.Time) {
@@ -188,29 +208,50 @@ func (d *Daemon) reconcilePoll(ctx context.Context, api linear.API, p config.Pro
 		// branch name, and the PR lives in the project's repo (recorded on the
 		// session at spawn). Fall back to the poll's repo (or its project's,
 		// via PollRepo) when no session is on record.
-		branch, repo := is.BranchName, pollRepo
+		//
+		// A best-of issue has one session (and one branch) per attempt, and ANY
+		// of them holding an open PR means the issue delivered — so every
+		// recorded branch is checked, not just the first.
+		type prTarget struct{ branch, repo string }
+		var targets []prTarget
 		var natSess *session.Session
-		if s, ok := d.nativeSessionForIssue(is.Identifier); ok {
-			natSess = &s
+		for _, s := range d.nativeSessionsForIssue(is.Identifier) {
+			if natSess == nil {
+				natSess = &s
+			}
+			t := prTarget{is.BranchName, pollRepo}
 			if s.Branch != "" {
-				branch = s.Branch
+				t.branch = s.Branch
 			}
 			if s.Repo != "" {
-				repo = s.Repo
+				t.repo = s.Repo
 			}
+			targets = append(targets, t)
 		}
-		if branch != "" {
-			open, err := d.openPR(ctx, repo, branch)
+		if len(targets) == 0 {
+			targets = []prTarget{{is.BranchName, pollRepo}}
+		}
+		delivered, unknown := false, false
+		for _, t := range targets {
+			if t.branch == "" {
+				continue
+			}
+			open, err := d.openPR(ctx, t.repo, t.branch)
 			if err != nil {
 				// Cannot determine PR state: fail CLOSED. The SPEC only
 				// allows the revert when there is provably no open PR —
 				// reverting a held-for-review issue would re-spawn it.
 				d.logf(p.Name, "reconcile: PR check for %s failed, skipping revert: %v", is.Identifier, err)
-				continue
+				unknown = true
+				break
 			}
 			if open {
-				continue // the runner delivered a PR; not an orphan
+				delivered = true
+				break
 			}
+		}
+		if unknown || delivered {
+			continue // could not tell, or the runner delivered a PR; not an orphan
 		}
 
 		current, err := api.IssueLabelIDs(ctx, is.ID)

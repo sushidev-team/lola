@@ -636,6 +636,7 @@ func (d *Daemon) runReviewChain(ctx context.Context, s session.Session, p review
 			if k != p.Kind {
 				d.logf("", "review: %s primary %s could not answer; fallback %s reviewed PR #%d", s.ID, p.Kind, k, prNum)
 			}
+			d.recordReviewTally(s.ID, string(p.Kind), prNum, findings)
 			d.routeFindings(ctx, s, p, findings)
 			return reviewResult{Ran: true, Findings: strings.TrimSpace(findings)}
 		}
