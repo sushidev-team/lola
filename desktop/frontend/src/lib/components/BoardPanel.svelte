@@ -1,12 +1,12 @@
 <script lang="ts">
   import type { SessionInfo } from "$lib/store.svelte";
-  import { boardStale, phaseChip, phaseDot, progressText, checkKind, CHECK_WORD, agoShort, EVIDENCE_TAG } from "$lib/board";
+  import { boardStale, phaseChip, phaseDot, progressText, checkKind, CHECK_WORD, EVIDENCE_TAG } from "$lib/board";
   import BoardMarker from "./BoardMarker.svelte";
+  import TimeAgo from "./TimeAgo.svelte";
 
   // The session sidebar's Report tab (SidePanel): the agent's whole
   // self-report — phase, progress, blocker, plan, checks, note — beside its live
-  // terminal. SidePanel offers the tab only when the agent has reported
-  // something.
+  // terminal. The tab is always there; before the first report it says so.
   //
   // Everything here is the agent's own CLAIM ("Agent report" says so in the
   // header), and it fades once stale. The facts — the status pill and the PR
@@ -19,7 +19,6 @@
   const checks = $derived(b?.checks ?? []);
   const passing = $derived(checks.filter((c) => c.state === "pass").length);
   const failing = $derived(checks.some((c) => c.state === "fail"));
-  const blockedFor = $derived(agoShort(b?.blockedAt));
 
   // Motion means "this is happening now", so it runs only while BOTH are true:
   // the agent axis says the runner is mid-turn (a FACT, from hooks and the pane)
@@ -49,14 +48,11 @@
           {b.phase}
         </span>
       {/if}
-      {#if b.updatedAgo}
-        <span
-          class="num ml-auto text-sm text-faint"
-          class:text-warn={stale}
-          title={stale ? "this report is old — the agent may have moved on" : "when the agent last reported"}
-          >{b.updatedAgo} ago</span
-        >
-      {/if}
+      <TimeAgo
+        at={b.updatedAt}
+        class="ml-auto text-sm {stale ? 'text-warn' : 'text-faint'}"
+        hint={stale ? "This report is old — the agent may have moved on" : "When the agent last reported"}
+      />
     </div>
 
     <div class="flex flex-col gap-5 px-3 py-3.5 transition-opacity duration-500" class:opacity-60={stale}>
@@ -69,7 +65,7 @@
           <div class="min-w-0">
             <div class="flex items-baseline gap-1.5">
               <span class="font-medium text-orange">Blocked</span>
-              {#if blockedFor}<span class="num text-sm text-orange/70">· {blockedFor === "now" ? "just now" : `${blockedFor}`}</span>{/if}
+              <TimeAgo at={b.blockedAt} ago={false} prefix="· " hint="Blocked since" class="text-sm text-orange/70" />
             </div>
             <div class="selectable mt-0.5 break-words text-ink">{b.blocked}</div>
           </div>
@@ -210,6 +206,14 @@
         </div>
       {/if}
     </div>
+  </section>
+{:else}
+  <!-- The sidebar is always available now, so a session that has not reported
+       yet (or whose hooks cannot reach the daemon) says so instead of leaving an
+       empty column that reads as broken. -->
+  <section class="flex flex-col gap-1.5 px-3 py-3.5 text-sm text-faint" aria-label="Agent report">
+    <span class="label">Agent report</span>
+    <p>Nothing reported yet. The agent publishes its plan and progress here with <code>lola report</code>.</p>
   </section>
 {/if}
 

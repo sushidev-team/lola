@@ -4,7 +4,7 @@
   import { store } from "$lib/store.svelte";
   import { nav } from "$lib/nav.svelte";
   import { terms, AGENT, DIFF, CHECKPOINTS, isViewTab } from "$lib/terms.svelte";
-  import { sidePanel, CHECKPOINTS_TAB } from "$lib/sidepanel.svelte";
+  import { sidePanel } from "$lib/sidepanel.svelte";
   import { checkpoints } from "$lib/checkpoints.svelte";
   import { feedback } from "$lib/feedback.svelte";
   import { devUrlLabel, MAX_URL_CHIPS } from "$lib/devurl";
@@ -208,9 +208,10 @@
   });
 
   // The sidebar (SidePanel): the agent's report and the turn checkpoints, each a
-  // tab of it. It appears once there is something to put in it — a report, a
-  // checkpoint, or the checkpoints tab asked for by hand (the menu) — and the
-  // Info toggle hides it for every session at once ($lib/sidepanel).
+  // tab of it. It is ALWAYS available — gating it on content made the toggle
+  // vanish exactly when something was wrong (a session whose hooks cannot reach
+  // the daemon reports nothing and records no checkpoints) — and the icon
+  // toggle beside Focus hides it for every session at once ($lib/sidepanel).
   const sessionKey = $derived(session?.id ?? "");
   const hasWorktree = $derived(!!session?.worktree);
   // A turn ending is what records a checkpoint, and it shows up as the agent
@@ -221,11 +222,7 @@
     agentState;
     if (id && hasWorktree) untrack(() => void checkpoints.load(id));
   });
-  const ckptCount = $derived(sessionKey ? checkpoints.of(sessionKey).list.length : 0);
-  const sideContent = $derived(
-    !!session?.board || (hasWorktree && (ckptCount > 0 || sidePanel.tab === CHECKPOINTS_TAB)),
-  );
-  const showSide = $derived(sideContent && !sidePanel.hidden);
+  const showSide = $derived(!sidePanel.hidden);
 
   const canRevive = $derived(session && (session.status === "dead" || session.status === "session_ended"));
 </script>
@@ -315,24 +312,9 @@
             Active
           </Button>
         {/if}
-        {#if sideContent}
-          <!-- Shows/hides the sidebar (report + checkpoints). `selected` while it
-               is open, the same segmented look as Active beside it. -->
-          <Button
-            size="xs"
-            selected={!sidePanel.hidden}
-            title={sidePanel.hidden ? "show the agent's report and the turn checkpoints" : "hide the sidebar"}
-            aria-pressed={!sidePanel.hidden}
-            onclick={() => sidePanel.toggle()}
-          >
-            {#if session.board?.blocked}<span class="text-orange" aria-hidden="true">⏸</span>{/if}
-            Info
-          </Button>
-        {/if}
         {#if session.prNumber > 0}
           <Button size="xs" onclick={() => store.openURL(session.prUrl)}>Open PR <span aria-hidden="true">↗</span></Button>
         {/if}
-        <Button size="xs" onclick={() => store.coderabbit(session.id)}>CodeRabbit</Button>
         <Button size="xs" onclick={() => store.review(session.id)}>Review</Button>
         {#if canRevive}
           <Button variant="accent" size="xs" onclick={() => store.revive(session.id)}>Revive</Button>
@@ -370,23 +352,54 @@
             />
           </svg>
         </Button>
-        <!-- A rule, not a gap: Kill and Focus now share a row, and the one that
-             ends a session must not sit a stone's throw from the one that merely
-             makes it bigger. -->
+        <!-- A rule, not a gap: everything left of it ACTS on the session (text
+             buttons), everything right of it only changes the LAYOUT (an icon
+             pair) — and the one that ends a session must not sit a stone's throw
+             from the one that merely makes it bigger. -->
         <span class="mx-0.5 h-4 w-px shrink-0 bg-edge/60" aria-hidden="true"></span>
-        {#if focused}
-          <!-- The chord is spelled out, not just tooltipped: while this terminal
-               has focus every other key goes to the agent, so this is the only
-               way back to the cockpit without reaching for the mouse. -->
-          <span class="text-sm text-faint">⌃Q back</span>
-          <Button variant="primary" size="xs" title="exit fullscreen (Ctrl-Q)" onclick={() => nav.toggleFocusTerm(session.id)}>
-            <span aria-hidden="true">⤢</span> Minimize
-          </Button>
-        {:else}
-          <Button variant="secondary" size="xs" title="expand to fullscreen" onclick={() => nav.toggleFocusTerm(session.id)}>
-            <span aria-hidden="true">⛶</span> Focus
-          </Button>
-        {/if}
+        <!-- Focus/Minimize: icon-only like the sidebar toggle beside it, and DRAWN
+             rather than typed (⛶/⤢ fall back to an emoji font in WebKit — see the
+             skull above). `selected` while fullscreen. -->
+        <Button
+          size="xs"
+          icon
+          selected={focused}
+          title={focused ? "exit fullscreen (Ctrl-Q)" : "expand to fullscreen"}
+          aria-label={focused ? "Minimize" : "Focus"}
+          aria-pressed={focused}
+          onclick={() => nav.toggleFocusTerm(session.id)}
+        >
+          <svg viewBox="0 0 24 24" class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            {#if focused}
+              <path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5" />
+            {:else}
+              <path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" />
+            {/if}
+          </svg>
+        </Button>
+        <!-- Shows/hides the sidebar (report + checkpoints) — always offered, and
+             LAST because it controls the column at this edge. A drawn icon (a
+             window with its right pane marked), `selected` while open; an orange
+             dot carries "the agent says it is blocked" while the panel is shut. -->
+        <Button
+          size="xs"
+          icon
+          selected={!sidePanel.hidden}
+          title={sidePanel.hidden ? "show the agent's report and the turn checkpoints" : "hide the sidebar"}
+          aria-label="Toggle sidebar"
+          aria-pressed={!sidePanel.hidden}
+          onclick={() => sidePanel.toggle()}
+          class="relative"
+        >
+          <svg viewBox="0 0 24 24" class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
+            <rect x="3" y="4.5" width="18" height="15" rx="2.5" />
+            <path d="M15 4.5v15" />
+            <path d="M17.5 8.5h1M17.5 11.5h1" stroke-linecap="round" />
+          </svg>
+          {#if session.board?.blocked && sidePanel.hidden}
+            <span class="absolute right-0.5 top-0.5 h-1.5 w-1.5 rounded-full bg-orange" aria-hidden="true"></span>
+          {/if}
+        </Button>
       </span>
     </div>
 

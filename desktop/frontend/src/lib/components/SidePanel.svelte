@@ -17,7 +17,7 @@
 
   const count = $derived(checkpoints.of(session.id).list.length);
   const tabs = $derived([
-    ...(session.board ? [{ id: REPORT, label: session.board.blocked ? "Report ⏸" : "Report" }] : []),
+    { id: REPORT, label: session.board?.blocked ? "Report ⏸" : "Report" },
     ...(session.worktree ? [{ id: CHECKPOINTS_TAB, label: count ? `Checkpoints ${count}` : "Checkpoints" }] : []),
   ]);
   // The remembered tab when this session has it, else whichever it does have.

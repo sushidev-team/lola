@@ -101,9 +101,10 @@ describe("BoardPanel", () => {
     expect(screen.getByText("<b>bold</b>")).toBeInTheDocument();
   });
 
-  it("is absent without a board", () => {
+  it("says nothing was reported yet without a board", () => {
     render(BoardPanel, { session: sess() });
-    expect(screen.queryByRole("complementary")).not.toBeInTheDocument();
+    expect(screen.getByText(/Nothing reported yet/)).toBeInTheDocument();
+    expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
   });
 });
 
