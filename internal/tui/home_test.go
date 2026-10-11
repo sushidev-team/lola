@@ -5,6 +5,8 @@ import (
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
+
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/protocol"
 )
@@ -256,9 +258,10 @@ func TestHomeBroadcast(t *testing.T) {
 	if !m.home.broadcasting {
 		t.Fatal("'b' should open the broadcast prompt")
 	}
-	for _, r := range "rebase on main" {
+	for _, r := range "rebase on " {
 		m.Update(keyMsg(string(r)))
 	}
+	m.Update(tea.PasteMsg{Content: "main"}) // a pasted message lands in the prompt too
 	var got []protocol.Request
 	fakeRequest(t, &got, mustData(t, protocol.BroadcastData{
 		Delivered: []string{"a"}, Queued: []string{"b"},

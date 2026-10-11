@@ -135,6 +135,8 @@ func (m *rootModel) routePaste(content string) (tea.Model, tea.Cmd) {
 		m.detail.wtBranch += pasteInline(content)
 	case m.view == viewHome && m.home.adding:
 		m.home.addInput += pasteInline(content)
+	case m.view == viewHome && m.home.broadcasting:
+		m.home.bcastInput += pasteInline(content)
 	case m.view == viewHome && m.home.filtering:
 		m.home.filter += pasteInline(content)
 		m.home.repin(m.cfg)
@@ -328,9 +330,9 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, statusTick()
 		}
 		cmds := []tea.Cmd{fetchStatusCmd, statusTick()}
-		// Refresh the project decoration every tick unless the home filter/add
-		// prompt is mid-edit (a reflow would fight the input).
-		if !m.home.filtering && !m.home.adding {
+		// Refresh the project decoration every tick unless a home prompt
+		// (filter/add/broadcast) is mid-edit (a reflow would fight the input).
+		if !m.home.filtering && !m.home.adding && !m.home.broadcasting {
 			cmds = append(cmds, fetchProjectsCmd)
 		}
 		// Sessions are always on screen in the cockpit, so refresh them every
