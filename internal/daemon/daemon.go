@@ -32,6 +32,7 @@ import (
 	"github.com/sushidev-team/lola/internal/notify"
 	"github.com/sushidev-team/lola/internal/panebus"
 	"github.com/sushidev-team/lola/internal/portproc"
+	"github.com/sushidev-team/lola/internal/quota"
 	"github.com/sushidev-team/lola/internal/remote"
 	"github.com/sushidev-team/lola/internal/runtime"
 	"github.com/sushidev-team/lola/internal/scm"
@@ -570,6 +571,7 @@ func Run(ctx context.Context) error {
 		return err
 	}
 	d := newDaemon(cfg, nil, logger, home)
+	d.spend.claude = quota.NewClaudePoller(filepath.Join(home, "state", "quota-claude-api.json"), nil)
 
 	// Native runtime (PLAN P2): lola's own worktree+tmux+claude spawner. The
 	// generated per-session Claude Code settings wire the lifecycle hooks to

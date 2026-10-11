@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -18,6 +19,33 @@ import (
 	"github.com/sushidev-team/lola/internal/sysload"
 	"github.com/sushidev-team/lola/internal/usage"
 )
+
+func TestUsagePassPollsClaudeAndReportsUnavailable(t *testing.T) {
+	d, _, _ := spendFixture(t, testConfig(labelPoll("p1")))
+	now := time.Now()
+	calls := 0
+	d.spend.claude = quota.NewClaudePoller("", func(context.Context, time.Time) (quota.Snapshot, error) {
+		calls++
+		if calls == 1 {
+			return quota.Snapshot{}, errors.New("login expired")
+		}
+		return quota.Snapshot{At: now.Add(5 * time.Minute), Windows: []quota.Window{{Label: "7d", UsedPercent: 25, ResetsAt: now.Add(time.Hour)}}}, nil
+	})
+	d.usagePass(context.Background(), now)
+	q := d.usageStatus(now).Quotas
+	if len(q) != 1 || q[0].Agent != "claude" || len(q[0].Windows) != 0 || q[0].Detail != "login expired" {
+		t.Fatalf("unavailable = %+v", q)
+	}
+	d.usagePass(context.Background(), now.Add(time.Minute))
+	if calls != 1 {
+		t.Fatal("minute scan must not bypass quota backoff")
+	}
+	d.usagePass(context.Background(), now.Add(5*time.Minute))
+	q = d.usageStatus(now).Quotas
+	if len(q) != 1 || len(q[0].Windows) != 1 || q[0].Windows[0].UsedPercent != 25 || q[0].Stale || q[0].Detail != "" {
+		t.Fatalf("recovered = %+v", q)
+	}
+}
 
 // assertHeldTick runs one tick and checks the health-gate contract: an error
 // naming want, no Linear call, no spawn, no in-flight claim, no seen file, and

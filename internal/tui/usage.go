@@ -150,11 +150,19 @@ func quotaBar(w protocol.QuotaWindow) string {
 func quotaVital(qs []protocol.QuotaInfo) string {
 	parts := make([]string, 0, len(qs))
 	for _, q := range qs {
+		if len(q.Windows) == 0 {
+			parts = append(parts, q.Agent+" usage unavailable")
+			continue
+		}
 		ws := make([]string, 0, len(q.Windows))
 		for _, w := range q.Windows {
 			ws = append(ws, quotaBar(w))
 		}
-		parts = append(parts, q.Agent+" "+strings.Join(ws, " "))
+		text := q.Agent + " " + strings.Join(ws, " ")
+		if q.Stale {
+			text += " (stale)"
+		}
+		parts = append(parts, text)
 	}
 	return strings.Join(parts, " · ")
 }
@@ -218,6 +226,10 @@ func spendSummary(u *protocol.UsageStatus) string {
 	now := time.Now()
 	for _, q := range u.Quotas {
 		head := q.Agent
+		if len(q.Windows) == 0 {
+			fmt.Fprintf(&b, "%s usage unavailable: %s\n", head, q.Detail)
+			continue
+		}
 		if q.Plan != "" {
 			head += " (" + q.Plan + ")"
 		}
@@ -230,6 +242,9 @@ func spendSummary(u *protocol.UsageStatus) string {
 			ws = append(ws, ww)
 		}
 		fmt.Fprintf(&b, "%s limits, as of %s ago: %s\n", head, shortDuration(max(now.Sub(q.At), 0)), strings.Join(ws, " · "))
+		if q.Stale {
+			fmt.Fprintf(&b, "  stale: %s\n", q.Detail)
+		}
 	}
 	fmt.Fprintf(&b, "tokens %s: %s (%s weighted, ~%s at list price) — %s\n",
 		u.Day, fmtTokens(u.Tokens), fmtTokens(u.Weighted), fmtUSD(u.TodayUSD), budget)

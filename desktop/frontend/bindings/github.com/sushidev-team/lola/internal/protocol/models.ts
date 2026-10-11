@@ -659,7 +659,7 @@ export interface PrsData {
 
 /**
  * QuotaInfo is one agent's subscription limits as last observed. At is when
- * they were observed: a snapshot is only as fresh as that agent's last turn.
+ * they were observed, via a hook, session log, or subscription usage poll.
  */
 export interface QuotaInfo {
     /**
@@ -669,6 +669,12 @@ export interface QuotaInfo {
     "plan"?: string;
     "at": string;
     "windows": QuotaWindow[] | null;
+    "stale"?: boolean;
+
+    /**
+     * safe, human-readable refresh failure
+     */
+    "detail"?: string;
 }
 
 /**
@@ -1184,8 +1190,7 @@ export interface UsageStatus {
 
     /**
      * Quotas is how much of each coding agent's SUBSCRIPTION limits is used
-     * (internal/quota), one entry per agent lola could read — claude via the
-     * status line, codex via its session logs. Empty when neither reported.
+     * (internal/quota). Claude includes availability when no figures are known.
      */
     "quotas"?: QuotaInfo[] | null;
 }

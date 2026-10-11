@@ -34,8 +34,10 @@
               {AGENT_NAMES[q.agent] ?? q.agent}
               {#if q.plan}<span class="ml-1 rounded bg-sel px-1.5 py-px text-sm font-normal text-faint">{q.plan}</span>{/if}
             </span>
-            <span class="text-sm text-faint">{fresh(q.at)}</span>
+            <span class="text-sm text-faint">{q.stale && q.windows?.length ? 'stale · ' : ''}{fresh(q.at)}</span>
           </div>
+          {#if !q.windows?.length}<p class="text-sm text-faint">Usage unavailable</p>{/if}
+          {#if q.detail}<p class="text-sm text-faint">{q.detail}</p>{/if}
           {#each q.windows ?? [] as w (w.label)}
             {@const p = windowPace(w)}
             <div class="flex flex-col gap-1">

@@ -29,8 +29,9 @@ import (
 //
 // The usage pass runs on its own minute loop rather than inside the observer:
 // a first scan of a long session reads megabytes of transcript, and the
-// observer's tmux/gh cadence must never wait on that. It is local file I/O
-// only — no exec — and every later pass reads just the bytes appended since.
+// observer's tmux/gh cadence must never wait on that. Transcript scans are local
+// incremental reads; the Claude quota fallback also performs a bounded credential
+// lookup and HTTP request outside the spend lock, at most once per five minutes.
 
 const (
 	// usageInterval paces the usage scan. A budget is therefore enforced up to
@@ -65,6 +66,7 @@ type spendState struct {
 	// quotas is the last read of the agents' subscription limits;
 	// codexHome is where codex keeps its logs ("" = never look).
 	quotas    []protocol.QuotaInfo
+	claude    *quota.ClaudePoller // production only; tests inject a fetch seam
 	codexHome string
 	// codex sums codex session logs that ran in lola's worktrees; opencode
 	// the messages of opencode's database (opencodeDB, "" = never look) and
@@ -267,6 +269,18 @@ func (d *Daemon) usagePass(ctx context.Context, now time.Time) {
 	}
 
 	quotas := readQuotas(quota.ClaudePath(d.home), sp.codexHome, now)
+	if sp.claude != nil {
+		hook, _ := quota.ReadClaude(quota.ClaudePath(d.home))
+		s, stale, detail := sp.claude.Refresh(ctx, hook, now)
+		q := quotaInfo("claude", s)
+		q.Stale, q.Detail = stale, detail
+		// Always carry availability, even when neither source has any figures.
+		if len(quotas) > 0 && quotas[0].Agent == "claude" {
+			quotas[0] = q
+		} else {
+			quotas = append([]protocol.QuotaInfo{q}, quotas...)
+		}
+	}
 	sp.mu.Lock()
 	sp.quotas = quotas
 	sp.mu.Unlock()
@@ -295,11 +309,7 @@ func readQuotas(claudePath, codexHome string, now time.Time) []protocol.QuotaInf
 		if !ok {
 			return
 		}
-		qi := protocol.QuotaInfo{Agent: agent, Plan: s.Plan, At: s.At}
-		for _, w := range s.Windows {
-			qi.Windows = append(qi.Windows, protocol.QuotaWindow{Label: w.Label, UsedPercent: w.UsedPercent, ResetsAt: w.ResetsAt})
-		}
-		out = append(out, qi)
+		out = append(out, quotaInfo(agent, s))
 	}
 	if s, err := quota.ReadClaude(claudePath); err == nil {
 		add("claude", s)
@@ -308,6 +318,14 @@ func readQuotas(claudePath, codexHome string, now time.Time) []protocol.QuotaInf
 		add("codex", s)
 	}
 	return out
+}
+
+func quotaInfo(agent string, s quota.Snapshot) protocol.QuotaInfo {
+	q := protocol.QuotaInfo{Agent: agent, Plan: s.Plan, At: s.At, Windows: []protocol.QuotaWindow{}}
+	for _, w := range s.Windows {
+		q.Windows = append(q.Windows, protocol.QuotaWindow{Label: w.Label, UsedPercent: w.UsedPercent, ResetsAt: w.ResetsAt})
+	}
+	return q
 }
 
 // scanOpencode reads opencode's new messages. A machine without the sqlite3

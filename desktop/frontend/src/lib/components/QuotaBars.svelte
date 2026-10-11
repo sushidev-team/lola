@@ -17,12 +17,16 @@
     {@const name = AGENT_NAMES[q.agent] ?? q.agent}
     <span class="inline-flex items-center gap-1.5">
       <span class="text-faint">{name}</span>
+      {#if !q.windows?.length}
+        <span class="text-faint">unavailable</span>
+      {:else}
+      {#if q.stale}<span class="text-faint">stale</span>{/if}
       <span class="flex w-12 flex-col justify-center gap-[3px]">
         {#each q.windows ?? [] as w (w.label)}
           <span
             class="block h-1 overflow-hidden rounded-full bg-sel"
             role="meter"
-            aria-label="{name} {windowName(w.label)} limit"
+            aria-label="{name} {windowName(w.label)} limit{q.stale ? ' (stale)' : ''}"
             aria-valuemin="0"
             aria-valuemax="100"
             aria-valuenow={Math.round(w.usedPercent)}
@@ -34,6 +38,7 @@
           </span>
         {/each}
       </span>
+      {/if}
     </span>
   {/each}
 </span>

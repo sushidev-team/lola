@@ -121,7 +121,8 @@ export function budgetLabel(u: UsageStatus): string {
 /** "Claude 5h 42% · 7d 18%". */
 export function quotaLabel(q: QuotaInfo): string {
   const name = AGENT_NAMES[q.agent] ?? q.agent;
-  return `${name} ${(q.windows ?? []).map((w) => `${w.label} ${Math.round(w.usedPercent)}%`).join(" · ")}`;
+  if (!q.windows?.length) return `${name} usage unavailable`;
+  return `${name} ${q.windows.map((w) => `${w.label} ${Math.round(w.usedPercent)}%`).join(" · ")}${q.stale ? ' (stale)' : ''}`;
 }
 
 /** A compact "in 2h 10m" / "in 3d 4h" until iso; "" when unknown or past. */

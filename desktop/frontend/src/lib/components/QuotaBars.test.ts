@@ -6,6 +6,18 @@ import { budgetLabel } from "$lib/usage";
 afterEach(cleanup);
 
 describe("QuotaBars", () => {
+  it("keeps unavailable Claude visible without implying zero usage", () => {
+    render(QuotaBars, { quotas: [{ agent: "claude", at: "", windows: [], stale: true, detail: "Login expired" }] });
+    expect(screen.getByText("Claude")).toBeInTheDocument();
+    expect(screen.getByText("unavailable")).toBeInTheDocument();
+    expect(screen.queryByRole("meter")).not.toBeInTheDocument();
+  });
+
+  it("labels retained readings as stale", () => {
+    render(QuotaBars, { quotas: [{ agent: "claude", at: "", stale: true, windows: [{ label: "7d", usedPercent: 25, resetsAt: "" }] }] });
+    expect(screen.getByText("stale")).toBeInTheDocument();
+    expect(screen.getByRole("meter", { name: "Claude Weekly limit (stale)" })).toHaveAttribute("aria-valuenow", "25");
+  });
   it("draws one unlabelled meter per limit window, stacked per agent", () => {
     render(QuotaBars, {
       quotas: [

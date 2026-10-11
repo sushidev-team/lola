@@ -320,18 +320,19 @@ type UsageStatus struct {
 	// Load is the last [load] sample; nil when [load] is off.
 	Load *LoadInfo `json:"load,omitempty"`
 	// Quotas is how much of each coding agent's SUBSCRIPTION limits is used
-	// (internal/quota), one entry per agent lola could read — claude via the
-	// status line, codex via its session logs. Empty when neither reported.
+	// (internal/quota). Claude includes availability when no figures are known.
 	Quotas []QuotaInfo `json:"quotas,omitempty"`
 }
 
 // QuotaInfo is one agent's subscription limits as last observed. At is when
-// they were observed: a snapshot is only as fresh as that agent's last turn.
+// they were observed, via a hook, session log, or subscription usage poll.
 type QuotaInfo struct {
 	Agent   string        `json:"agent"` // "claude" | "codex"
 	Plan    string        `json:"plan,omitempty"`
 	At      time.Time     `json:"at"`
 	Windows []QuotaWindow `json:"windows"`
+	Stale   bool          `json:"stale,omitempty"`
+	Detail  string        `json:"detail,omitempty"` // safe, human-readable refresh failure
 }
 
 // QuotaWindow is one rate-limit window: "5h", "7d", or "spend" (a gateway's

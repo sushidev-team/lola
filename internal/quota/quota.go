@@ -1,7 +1,6 @@
 // Package quota reads how much of the user's SUBSCRIPTION limits the coding
 // agents have used — the number a subscriber actually budgets by, since a
-// subscription pays nothing per token. Neither agent offers an API for it, so
-// each is read from the one place it already appears:
+// subscription pays nothing per token. Sources:
 //
 //   - claude: Claude Code hands `rate_limits.five_hour` / `seven_day`
 //     (used_percentage + resets_at) to the STATUS-LINE command on stdin, and
@@ -9,6 +8,8 @@
 //     own status line in each session's --settings (`lola hook statusline`),
 //     which records the figures (RecordClaude) and then runs the user's own
 //     status-line command with the same stdin, so the pane looks unchanged.
+//     When that payload is absent or stale, ClaudePoller reads the undocumented
+//     OAuth usage endpoint. Credentials stay local and Claude owns their refresh.
 //   - codex: every `token_count` event in a codex session log
 //     (~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl) carries a `rate_limits`
 //     block; LatestCodex reads the newest one.

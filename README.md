@@ -1146,7 +1146,7 @@ The list-price dollar estimate appears only in tooltips / the detail line, as
 **Subscription limits** lead the header when known — `Claude 5h 42% · 7d 18% ·
 Codex 7d 4%` in the app's top bar and the TUI's vitals bar, with reset times in
 the tooltip / `lola status` — because that is what a subscriber budgets by.
-Neither agent has an API for it, so lola reads it where each already appears:
+Lola combines locally reported figures with a Claude subscription usage poll:
 
 - **Claude Code** passes `rate_limits` only to its status-line command. lola
   therefore sets the status line in each session's own `--settings` to
@@ -1154,13 +1154,27 @@ Neither agent has an API for it, so lola reads it where each already appears:
   status-line command (project `.claude/settings.local.json`, then
   `.claude/settings.json`, then `~/.claude/settings.json`) with the same stdin
   and prints its output, so a lola pane shows your status line unchanged. Your
-  command is bounded to 5 seconds per redraw. Only subscribers get the figures;
-  an API-key user sees today's tokens instead.
+  command is bounded to 5 seconds per redraw. Claude sometimes omits these
+  figures even for subscribers. When the reading is missing or five minutes
+  old, the daemon calls the undocumented `api.anthropic.com/api/oauth/usage`
+  endpoint, once for the whole account. It reads the existing macOS
+  `Claude Code-credentials` keychain entry, falling back to
+  `~/.claude/.credentials.json`; a custom `CLAUDE_CONFIG_DIR` uses only its own
+  `.credentials.json`. Lola never refreshes or modifies login credentials.
+  Requests have a ten-second total deadline. Failures back off from five
+  minutes to one hour, respecting longer `Retry-After` delays (up to a day).
+  API snapshots persist in `~/.lola/state/quota-claude-api.json`; only usage
+  figures and timestamps are saved. This endpoint is not a public API and
+  may change or refuse requests.
 - **Codex** writes `rate_limits` into every session log
   (`~/.codex/sessions/…/rollout-*.jsonl`); lola reads the newest.
 
-Both are as fresh as that agent's last turn (the tooltip says how old), and a
-window whose reset has passed is dropped.
+The tooltip says when figures were observed. Failed Claude refreshes keep the
+last live reading marked **stale**, with the reason in the tooltip and
+`lola status`. Without a reading, Claude shows **unavailable**, never 0%.
+If the login expired, open Claude Code to let it refresh the credentials.
+Windows whose reset has passed are dropped. Quota polling is display-only;
+its failures never interrupt agents or hold dispatch.
 
 Budgets count **weighted** tokens — each token weighted by its list-price ratio
 to input, the same for every model: output 5×, cache write 1.25×, cache read
