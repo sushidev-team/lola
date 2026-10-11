@@ -28,6 +28,7 @@ package daemon
 import (
 	"context"
 	"fmt"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -35,6 +36,7 @@ import (
 
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/reviewrun"
+	"github.com/sushidev-team/lola/internal/runtime"
 )
 
 const (
@@ -80,6 +82,10 @@ func (d *Daemon) runInReviewPane(ctx context.Context, cp config.ReviewProvider, 
 	d.mu.Lock()
 	home, lolaBin := d.home, d.lolaBin
 	d.mu.Unlock()
+	if lolaBin != "" {
+		// Re-resolved per pass, like a spawn: the startup path may be gone.
+		lolaBin = runtime.ResolveLolaBin(lolaBin, filepath.Join(home, "worktrees"), exec.LookPath, nil)
+	}
 	tm := d.tmuxClient()
 	if tm == nil || !tm.Available() || lolaBin == "" {
 		return "", nil, false

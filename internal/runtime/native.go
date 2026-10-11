@@ -131,6 +131,10 @@ type Native struct {
 	// LolaBin is the absolute path to the lola binary; the generated Claude
 	// Code settings wire lifecycle hooks to `<LolaBin> hook <event>`.
 	LolaBin string
+	// ResolveLolaBin, when set, re-resolves the binary at every launch (see
+	// ResolveLolaBin in lolabin.go): LolaBin is what the daemon started from,
+	// and that file may be gone by the time a session spawns. Nil = LolaBin.
+	ResolveLolaBin func() string
 	// Home is the lola runtime directory (config.Home()), recorded for
 	// diagnostics/state paths; session state itself lives in the caller's
 	// session.Store.
@@ -723,7 +727,7 @@ func (n *Native) launchCommandPrompt(id string, kind agent.Kind, prompt string, 
 		args = agent.LaunchArgsResume(kind, prompt)
 	}
 	if kind == agent.Codex {
-		notify, _ := json.Marshal([]string{n.LolaBin, "hook", "codex-notify"})
+		notify, _ := json.Marshal([]string{n.lolaBin(), "hook", "codex-notify"})
 		args = append([]string{"-c", "notify=" + string(notify)}, args...)
 	}
 	posix := "set -a; . ./" + lolaDir + "/env; set +a; "
@@ -764,9 +768,9 @@ func (n *Native) writeAgentArtifacts(dir string, kind agent.Kind) error {
 	case agent.Codex:
 		return nil // notify is overridden on argv; never rewrite the user's config
 	case agent.OpenCode:
-		return os.WriteFile(openCodePluginPath(dir), agent.OpenCodePluginJS(n.LolaBin), 0o600)
+		return os.WriteFile(openCodePluginPath(dir), agent.OpenCodePluginJS(n.lolaBin()), 0o600)
 	default: // Claude
-		return os.WriteFile(filepath.Join(dir, lolaDir, "settings.json"), hook.SettingsJSON(n.LolaBin), 0o600)
+		return os.WriteFile(filepath.Join(dir, lolaDir, "settings.json"), hook.SettingsJSON(n.lolaBin()), 0o600)
 	}
 }
 
@@ -931,8 +935,8 @@ func promptMD(p config.Project, issue linear.Issue, branch string) []byte {
 // what keeps the agent from spending a tool call per keystroke on it.
 func (n *Native) withReportBriefing(prompt []byte) []byte {
 	bin := "lola"
-	if n.LolaBin != "" {
-		bin = shQuote(n.LolaBin)
+	if lb := n.lolaBin(); lb != "" && lb != "lola" {
+		bin = shQuote(lb)
 	}
 	var b strings.Builder
 	b.Write(prompt)

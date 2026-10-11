@@ -579,6 +579,13 @@ func Run(ctx context.Context) error {
 		logger.Printf("resolve lola binary (session hooks fall back to PATH lookup): %v", err)
 		lolaBin = "lola"
 	}
+	// os.Executable names a path, not the running image: a daemon started from
+	// a session worktree's build keeps running after that worktree (and its
+	// binary) is deleted. Never hand such a path to sessions or review panes.
+	if stable := runtime.ResolveLolaBin(lolaBin, filepath.Join(home, "worktrees"), exec.LookPath, nil); stable != lolaBin {
+		logger.Printf("lola binary %q is gone or inside a worktree; sessions use %q (restart the daemon from it to run that build)", lolaBin, stable)
+		lolaBin = stable
+	}
 	d.lolaBin = lolaBin
 	d.native = newNativeRuntime(cfg, home, lolaBin, d.linearKey, d.nativeLogf)
 	// One `tmux ls` per observe cycle answers liveness for EVERY session (and
@@ -1013,10 +1020,13 @@ func (d *Daemon) tmuxClient() *tmux.Client {
 // best-effort styling advisories (status-bar chrome) into the daemon log.
 func newNativeRuntime(cfg *config.Config, home, lolaBin string, linearKey func() string, logf func(string, ...any)) *runtime.Native {
 	return &runtime.Native{
-		Cfg:         cfg,
-		WT:          &worktree.Manager{Root: filepath.Join(home, "worktrees")},
-		Tmux:        cfg.TmuxClient("tmux", home),
-		LolaBin:     lolaBin,
+		Cfg:     cfg,
+		WT:      &worktree.Manager{Root: filepath.Join(home, "worktrees")},
+		Tmux:    cfg.TmuxClient("tmux", home),
+		LolaBin: lolaBin,
+		ResolveLolaBin: func() string {
+			return runtime.ResolveLolaBin(lolaBin, filepath.Join(home, "worktrees"), exec.LookPath, nil)
+		},
 		Home:        home,
 		LinearKey:   linearKey,
 		Logf:        logf,
