@@ -162,3 +162,33 @@ func TestBroadcastSanitizesTheMessage(t *testing.T) {
 		t.Errorf("sends = %+v, want one sanitized send", calls)
 	}
 }
+
+// Past the delivery budget nothing more is typed in the request: the rest stay
+// queued for the next flush, so a broadcast to many agents cannot outlast the
+// client's deadline — and nothing is lost.
+func TestBroadcastBudgetLeavesTheRestQueued(t *testing.T) {
+	d := newTestDaemon(t, conflictConfig(), &linear.Fake{}, &fakeNative{})
+	seams := &fakeReactSeams{}
+	seams.install(d)
+	a := feedbackSess(t, d, "FE-1", "claude")
+	b := feedbackSess(t, d, "FE-2", "claude")
+
+	old := broadcastDeliverBudget
+	broadcastDeliverBudget = 0
+	t.Cleanup(func() { broadcastDeliverBudget = old })
+
+	data, err := d.handleBroadcast(context.Background(), protocol.BroadcastArgs{Project: "p1", Message: "rebase on main"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(data.Delivered) != 0 || strings.Join(data.Queued, ",") != strings.Join(sortedIDs(a, b), ",") {
+		t.Errorf("delivered=%v queued=%v, want none delivered and both queued", data.Delivered, data.Queued)
+	}
+	if n := len(seams.sendCalls()); n != 0 {
+		t.Errorf("want no sends past the budget, got %d", n)
+	}
+	d.flushReviewHandoffs(context.Background(), a)
+	if got, _ := d.sessions.Get(a); got.PendingBroadcast != "" {
+		t.Errorf("flush must deliver the queued broadcast, got %q", got.PendingBroadcast)
+	}
+}

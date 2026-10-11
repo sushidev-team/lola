@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/sushidev-team/lola/internal/protocol"
@@ -33,6 +34,16 @@ import (
 // so it is kept to an instruction, not a document — and it is refused rather
 // than clipped, because a silently truncated instruction is a different one.
 const broadcastMaxRunes = 4000
+
+// broadcastDeliverBudget bounds the IMMEDIATE delivery attempts of one
+// broadcast. Each attempt is a pane read plus a send bounded by
+// reactExecTimeout, so across many agents with a slow tmux a sequential pass
+// could outlast the client's request deadline. Once the budget is spent the
+// remaining sessions are left queued, which is safe: the text is already
+// persisted and the Stop hook or the observer delivers it. The budget is
+// checked BEFORE each attempt rather than set on ctx, because cancelling a
+// send mid-way could leave a partial message typed into the pane.
+var broadcastDeliverBudget = 60 * time.Second
 
 // handleBroadcast serves cmd=broadcast: queue the message on every live agent
 // session of the project, then try to deliver each right away.
@@ -97,11 +108,13 @@ func (d *Daemon) handleBroadcast(ctx context.Context, a protocol.BroadcastArgs) 
 	}
 
 	// Deliver what can be delivered now. Each send is gated per session, so a
-	// busy agent costs one pane read and keeps its copy queued.
+	// busy agent costs one pane read and keeps its copy queued; past the budget
+	// the rest stay queued for the next flush.
 	pending := out.Queued
 	out.Queued = []string{}
+	deadline := time.Now().Add(broadcastDeliverBudget)
 	for _, id := range pending {
-		if d.deliverBroadcast(ctx, id) {
+		if time.Now().Before(deadline) && d.deliverBroadcast(ctx, id) {
 			out.Delivered = append(out.Delivered, id)
 		} else {
 			out.Queued = append(out.Queued, id)
