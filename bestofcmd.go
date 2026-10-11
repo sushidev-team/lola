@@ -60,6 +60,11 @@ func bestofStartCmd() *cobra.Command {
 			for _, f := range d.Failed {
 				fmt.Fprintln(w, "  failed:", f)
 			}
+			if n := len(d.Failed); n > 0 {
+				// The group runs, but smaller than asked: a script must be able
+				// to tell from the exit status.
+				return fmt.Errorf("%d best-of attempt(s) failed to spawn", n)
+			}
 			return nil
 		},
 	}
@@ -92,15 +97,17 @@ func bestofCompareCmd() *cobra.Command {
 	return cmd
 }
 
-// requestCompare resolves target as a session id (lola-…), an issue
-// identifier (letters-digits), or else a group id.
+// requestCompare resolves target as an issue identifier (letters-digits), a
+// session id (lola-…), or else a group id.
 func requestCompare(target string) (protocol.BestOfCompareData, error) {
 	var a protocol.BestOfCompareArgs
+	// Issue first: a team keyed "LOLA" makes "lola-123" an issue, and a session
+	// id always has more dash-separated parts than an identifier.
 	switch {
-	case strings.HasPrefix(target, "lola-"):
-		a.Session = target
 	case looksLikeIssue(target):
 		a.Issue = target
+	case strings.HasPrefix(target, "lola-"):
+		a.Session = target
 	default:
 		a.Group = target
 	}
@@ -232,6 +239,10 @@ func bestofPickCmd() *cobra.Command {
 			fmt.Fprintln(w, d.Message)
 			for _, p := range d.Problems {
 				fmt.Fprintln(w, "  !", p)
+			}
+			if n := len(d.Problems); n > 0 {
+				// The pick stands; these steps did not (a PR left draft or open).
+				return fmt.Errorf("pick kept %s, but %d step(s) failed", d.Winner, n)
 			}
 			return nil
 		},

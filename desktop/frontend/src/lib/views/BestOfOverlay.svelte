@@ -20,8 +20,9 @@
 
   // The attempts keep moving (CI lands, a review answers) while the overlay is
   // open, so it re-reads on the same cadence the observer refreshes facts.
-  const timer = setInterval(() => void bestOf.load(), 15_000);
-  onDestroy(() => clearInterval(timer));
+  // Chained, not an interval: the next read starts only after the last settled.
+  const stop = bestOf.poll(15_000);
+  onDestroy(stop);
 
   function who(a: { agent: string; model?: string }): string {
     return a.model ? `${a.agent}@${a.model}` : a.agent;
@@ -147,7 +148,9 @@
       </tbody>
     </table>
     <p class="mt-3 text-faint">
-      {#if picked}
+      {#if picked && bestOf.problems.length}
+        Kept {picked}, but some steps did not complete — finish them by hand:
+      {:else if picked}
         Kept {picked}. The other attempts were closed and torn down.
       {:else if d.suggested}
         ★ is a suggestion (CI, then review findings, then diff size). Keeping an attempt marks its PR ready, closes
@@ -156,5 +159,10 @@
         No attempt has an open PR yet. Each one opens a draft PR when it is done.
       {/if}
     </p>
+    {#if bestOf.problems.length}
+      <ul class="mt-1 list-disc pl-5 text-warn">
+        {#each bestOf.problems as p (p)}<li>{p}</li>{/each}
+      </ul>
+    {/if}
   {/if}
 </Modal>

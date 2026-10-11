@@ -229,6 +229,10 @@ type Daemon struct {
 	worktreeStat func(ctx context.Context, dir, base string) (gitdiff.Stat, error)
 	markPRReady  func(ctx context.Context, repo string, pr int) error
 	closePR      func(ctx context.Context, repo string, pr int, comment string) error
+	// bestOfPickMu serializes cmd=bestOfPick so one group can never get two
+	// winners (a pick is rare and human-driven; one lock for all groups is
+	// enough).
+	bestOfPickMu sync.Mutex
 
 	// listTmuxSessions lists every session on lola's tmux server in ONE exec —
 	// the observer's per-cycle liveness + #{session_activity} source (replacing

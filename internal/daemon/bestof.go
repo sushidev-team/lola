@@ -54,6 +54,7 @@ import (
 	"github.com/sushidev-team/lola/internal/runtime"
 	"github.com/sushidev-team/lola/internal/session"
 	"github.com/sushidev-team/lola/internal/state"
+	"github.com/sushidev-team/lola/internal/timefmt"
 	"github.com/sushidev-team/lola/internal/worktree"
 )
 
@@ -221,15 +222,25 @@ func (d *Daemon) handleBestOf(ctx context.Context, a protocol.BestOfArgs) (proto
 	if msg := d.dispatchHold(ctx, proj.Name, time.Now()); msg != "" {
 		return protocol.BestOfData{}, errors.New("dispatch held: " + msg)
 	}
-	for _, s := range d.sessions.Snapshot() {
-		if s.Source == "native" && s.Issue == detail.Identifier && nativeSessionPresent(s) {
-			return protocol.BestOfData{}, fmt.Errorf("%s is already being worked on by %s — kill it first or compare its group", detail.Identifier, s.ID)
+	// Checked here to refuse fast, and AGAIN below once the tick mutex and the
+	// in-flight claim are held: a tick spawning in between must not let the
+	// group overshoot global_cap or double up on the issue.
+	slotCheck := func() error {
+		snap := d.sessions.Snapshot()
+		for _, s := range snap {
+			if s.Source == "native" && s.Issue == detail.Identifier && nativeSessionPresent(s) {
+				return fmt.Errorf("%s is already being worked on by %s — kill it first or compare its group", detail.Identifier, s.ID)
+			}
 		}
+		if globalCap > 0 {
+			if live := NativeLiveCounted(snap); live+len(mix) > globalCap {
+				return fmt.Errorf("best-of needs %d slot(s) but only %d of global_cap=%d are free", len(mix), max(globalCap-live, 0), globalCap)
+			}
+		}
+		return nil
 	}
-	if globalCap > 0 {
-		if live := NativeLiveCounted(d.sessions.Snapshot()); live+len(mix) > globalCap {
-			return protocol.BestOfData{}, fmt.Errorf("best-of needs %d slot(s) but only %d of global_cap=%d are free", len(mix), max(globalCap-live, 0), globalCap)
-		}
+	if err := slotCheck(); err != nil {
+		return protocol.BestOfData{}, err
 	}
 
 	if !d.beginConnWork() {
@@ -246,6 +257,10 @@ func (d *Daemon) handleBestOf(ctx context.Context, a protocol.BestOfArgs) (proto
 	}
 	if !d.inflight.Claim(detail.ID, detail.Identifier) {
 		return protocol.BestOfData{}, fmt.Errorf("%s is already being worked on — check sessions", detail.Identifier)
+	}
+	if err := slotCheck(); err != nil {
+		d.inflight.Remove(detail.ID)
+		return protocol.BestOfData{}, err
 	}
 	if polls && proj.DedupMode != "state" {
 		seen, _ := d.seen.load(name)
@@ -419,7 +434,7 @@ func (d *Daemon) handleBestOfCompare(ctx context.Context, a protocol.BestOfCompa
 			Delivery: string(s.Delivery),
 			Review:   reviewTallyFor(s),
 			Usage:    d.sessionUsage(s.ID),
-			Age:      formatAge(now.Sub(s.FirstSeen)),
+			Age:      timefmt.Short(s.FirstSeen, now),
 			Winner:   s.BestOfWinner,
 		}
 		if s.PR != nil && s.PR.Number > 0 {
@@ -456,6 +471,11 @@ func (d *Daemon) handleBestOfPick(ctx context.Context, a protocol.BestOfPickArgs
 	if id == "" {
 		return protocol.BestOfPickData{}, errors.New("bestOfPick: session required")
 	}
+	// One pick at a time, held across the winner check, the stamp and the
+	// teardown: two concurrent picks of one group would otherwise both pass the
+	// check, stamp two winners and tear down each other's.
+	d.bestOfPickMu.Lock()
+	defer d.bestOfPickMu.Unlock()
 	group, sessions, err := d.bestOfGroup("", "", id)
 	if err != nil {
 		return protocol.BestOfPickData{}, err

@@ -17,12 +17,15 @@ class BestOf {
   error = $state("");
   /** A pick is in flight. */
   busy = $state(false);
+  /** Steps the last pick could not complete (a PR left draft/open, a teardown). */
+  problems = $state<string[]>([]);
   private gen = 0;
 
   open(id: string) {
     this.session = id;
     this.data = null;
     this.error = "";
+    this.problems = [];
     nav.openOverlay("bestof");
     void this.load();
   }
@@ -31,6 +34,25 @@ class BestOf {
     this.session = "";
     this.data = null;
     nav.closeOverlay();
+  }
+
+  /**
+   * Re-read every `everyMs` until stopped, starting the next read only once the
+   * previous one has SETTLED: a comparison can outlast the interval, and a newer
+   * read would discard the older answer — every time, if each one is slow.
+   */
+  poll(everyMs: number): () => void {
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const tick = async () => {
+      await this.load();
+      if (!stopped) timer = setTimeout(tick, everyMs);
+    };
+    timer = setTimeout(tick, everyMs);
+    return () => {
+      stopped = true;
+      clearTimeout(timer);
+    };
   }
 
   async load() {
@@ -69,7 +91,10 @@ class BestOf {
         this.busy = true;
         const r = await store.bestOfPick(id);
         this.busy = false;
-        if (r) await this.load();
+        if (r) {
+          this.problems = r.problems ?? [];
+          await this.load();
+        }
       },
     });
   }

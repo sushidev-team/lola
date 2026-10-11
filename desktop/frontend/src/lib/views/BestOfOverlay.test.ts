@@ -120,4 +120,21 @@ describe("BestOfOverlay", () => {
     await screen.findByText(/Kept lola-web-fe-5-b2/);
     expect(screen.queryByRole("button", { name: "Keep" })).toBeNull();
   });
+
+  it("lists the steps a pick could not complete instead of claiming success", async () => {
+    BestOfPick.mockResolvedValue({
+      winner: "lola-web-fe-5-b2",
+      message: "kept lola-web-fe-5-b2",
+      problems: ["could not close PR #13 of lola-web-fe-5-b3: HTTP 502"],
+    });
+    bestOf.open("lola-web-fe-5-b1");
+    render(BestOfOverlay);
+    await screen.findByText("claude@opus");
+    await fireEvent.click(screen.getAllByRole("button", { name: "Keep" })[1]);
+    BestOfCompare.mockResolvedValue({ ...GROUP, picked: "lola-web-fe-5-b2" });
+    confirm.accept();
+    expect(await screen.findByText(/could not close PR #13/)).toBeInTheDocument();
+    expect(await screen.findByText(/some steps did not complete/)).toBeInTheDocument();
+    expect(screen.queryByText(/were closed and torn down/)).toBeNull();
+  });
 });

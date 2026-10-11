@@ -10,7 +10,7 @@ import (
 
 func TestLooksLikeIssue(t *testing.T) {
 	for s, want := range map[string]bool{
-		"FE-231": true, "sushi-623": true, "fe-5-l3xk2": false, "lola-p1-fe-5-b1": false, "FE": false, "-1": false,
+		"FE-231": true, "sushi-623": true, "lola-123": true, "fe-5-l3xk2": false, "lola-p1-fe-5-b1": false, "FE": false, "-1": false,
 	} {
 		if got := looksLikeIssue(s); got != want {
 			t.Errorf("looksLikeIssue(%q) = %v, want %v", s, got, want)

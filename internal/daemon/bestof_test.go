@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/gitdiff"
@@ -417,5 +418,71 @@ func TestRecordReviewTally(t *testing.T) {
 	got := reviewTallyFor(cur)
 	if want := (&protocol.BestOfReviewTally{Passes: 2, Blocker: 1, Major: 1}); !reflect.DeepEqual(got, want) {
 		t.Errorf("tally = %+v, want %+v", got, want)
+	}
+}
+
+// Two picks of one group racing each other: exactly one wins, and the loser
+// is refused rather than stamping a second winner.
+func TestBestOfPickIsSerialized(t *testing.T) {
+	d := newTestDaemon(t, testConfig(labelPoll("p1")), &linear.Fake{}, &fakeNative{})
+	g := seedGroup(d)
+	(&prWrites{}).install(d)
+
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+	for i, id := range []string{g[0].ID, g[1].ID} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, errs[i] = d.handleBestOfPick(context.Background(), protocol.BestOfPickArgs{Session: id})
+		}()
+	}
+	wg.Wait()
+	if (errs[0] == nil) == (errs[1] == nil) {
+		t.Fatalf("errs = %v, want exactly one pick to succeed", errs)
+	}
+	winners := 0
+	for _, s := range d.sessions.Snapshot() {
+		if s.BestOfWinner {
+			winners++
+		}
+	}
+	if winners != 1 {
+		t.Errorf("winners = %d, want 1", winners)
+	}
+}
+
+// The cap is re-checked once the tick mutex and the in-flight claim are held:
+// sessions a concurrent tick spawns after the first check still refuse the
+// group, and the claim is released.
+func TestHandleBestOfRechecksCapUnderClaim(t *testing.T) {
+	fake := &linear.Fake{Details: []linear.IssueDetail{bestOfDetail("FE-9")}}
+	cfg := testConfig(labelPoll("p1"))
+	cfg.Defaults.GlobalCap = 2
+	d := newTestDaemon(t, cfg, fake, &fakeNative{})
+
+	mu := d.tickMutex("p1") // a tick is running
+	mu.Lock()
+	done := make(chan error, 1)
+	go func() {
+		_, err := d.handleBestOf(context.Background(), protocol.BestOfArgs{Issue: "FE-9", Agents: "claude:2"})
+		done <- err
+	}()
+	// Let the start pass its first check and block on the tick mutex, then let
+	// the "tick" spawn a session before releasing it.
+	deadline := time.Now().Add(2 * time.Second)
+	for !slices.Contains(fake.CallNames(), "IssueDetail") && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	time.Sleep(50 * time.Millisecond)
+	d.sessions.Upsert(nativeSess("FE-1", "working"))
+	mu.Unlock()
+
+	err := <-done
+	if err == nil || !strings.Contains(err.Error(), "global_cap") {
+		t.Fatalf("err = %v, want a global_cap refusal from the re-check", err)
+	}
+	if d.inflight.Has("uuid-FE-9") {
+		t.Error("a refused start must release its claim")
 	}
 }
