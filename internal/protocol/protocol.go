@@ -109,6 +109,13 @@ import (
 // anything already queued) and delivered on the first cycle its pane is
 // verifiably resting. The reply is FeedbackData saying which happened.
 //
+// Cmd "broadcast" sends ONE human message to every LIVE coding agent of a
+// project (Args: BroadcastArgs) — sessions with an agent process alive and a PR
+// that is not merged or closed. Each copy goes through the same send-keys
+// safety as cmd=feedback and DEFERS the same way: an agent not verifiably
+// resting at its prompt gets it queued and delivered when it comes back. The
+// reply is BroadcastData naming the delivered and deferred sessions.
+//
 // Cmd "checkpoints" lists a session's TURN CHECKPOINTS as CheckpointsData:
 // snapshots of its whole worktree (uncommitted and untracked work included) the
 // daemon records when the agent's turn ends, kept on refs under
@@ -510,6 +517,21 @@ type SessionInfo struct {
 	// STATUS) | "ci retry 1/2" | "escalated" | "awaiting review" |
 	// "addressing review" | "rebasing" | "ready to merge".
 	Reacting string `json:"reacting"`
+
+	// Model is the worker model override the agent runs on, "" = its default.
+	Model string `json:"model,omitempty"`
+	// BestOf is set while this session is one attempt of a best-of-N group
+	// (cmd=bestOf), nil for an ordinary session.
+	BestOf *BestOfInfo `json:"bestOf,omitempty"`
+}
+
+// BestOfInfo places a session in its best-of-N group. Winner is set on the
+// attempt a human kept; until then the attempts are racing.
+type BestOfInfo struct {
+	Group   string `json:"group"`
+	Attempt int    `json:"attempt"`
+	Of      int    `json:"of"`
+	Winner  bool   `json:"winner,omitempty"`
 }
 
 // BoardInfo is internal/board.Board flattened for rendering. Every string was
@@ -964,6 +986,111 @@ type FeedbackComment struct {
 	Body    string `json:"body"`
 }
 
+// BestOfArgs is the argument payload for cmd=bestOf: start ONE Linear issue
+// as several attempts on sibling branches. Issue is an identifier (FE-231) or a
+// UUID; Project names the [[project]] to run it in ("" = the one project
+// configured on the issue's Linear team). Agents is a mix in
+// internal/bestof's comma form ("claude:2,codex@gpt-5-codex"); "" uses
+// [best_of].agents.
+type BestOfArgs struct {
+	Issue   string `json:"issue"`
+	Project string `json:"project,omitempty"`
+	Agents  string `json:"agents,omitempty"`
+}
+
+// BestOfData is Response.Data for cmd=bestOf: the group and the sessions it
+// spawned, in attempt order. Failed lists attempts that could not spawn (the
+// others keep running — a group may be smaller than asked).
+type BestOfData struct {
+	Group    string   `json:"group"`
+	Issue    string   `json:"issue"`
+	Sessions []string `json:"sessions"`
+	Failed   []string `json:"failed,omitempty"`
+	Message  string   `json:"message,omitempty"`
+}
+
+// BestOfCompareArgs is the argument payload for cmd=bestOfCompare. Either a
+// Group, or an Issue identifier (its most recent group), or a Session (the
+// group that session belongs to).
+type BestOfCompareArgs struct {
+	Group   string `json:"group,omitempty"`
+	Issue   string `json:"issue,omitempty"`
+	Session string `json:"session,omitempty"`
+}
+
+// BestOfCompareData is Response.Data for cmd=bestOfCompare: every attempt of
+// one group side by side. Suggested is the session internal/bestof.Suggest
+// ranks first ("" when no attempt has an open PR yet) — a HINT for the human,
+// never acted on.
+type BestOfCompareData struct {
+	Group     string          `json:"group"`
+	Issue     string          `json:"issue"`
+	Title     string          `json:"title,omitempty"`
+	Project   string          `json:"project"`
+	Attempts  []BestOfAttempt `json:"attempts"`
+	Suggested string          `json:"suggested,omitempty"`
+	Picked    string          `json:"picked,omitempty"`
+}
+
+// BestOfAttempt is one attempt's facts for the compare view. Display is the
+// primary pill (state.DisplayFor), Delivery the PR chip. Files/Additions/
+// Deletions are local git against the merge-base (DiffError says why they are
+// missing). Review is nil until a review pass answered for the current PR.
+type BestOfAttempt struct {
+	Session   string             `json:"session"`
+	Attempt   int                `json:"attempt"`
+	Agent     string             `json:"agent"`
+	Model     string             `json:"model,omitempty"`
+	Branch    string             `json:"branch"`
+	Display   string             `json:"display"`
+	Delivery  string             `json:"delivery,omitempty"`
+	PRNumber  int                `json:"prNumber,omitempty"`
+	PRURL     string             `json:"prUrl,omitempty"`
+	PRState   string             `json:"prState,omitempty"`
+	Draft     bool               `json:"draft,omitempty"`
+	Checks    string             `json:"checks,omitempty"`
+	Files     int                `json:"files"`
+	Additions int                `json:"additions"`
+	Deletions int                `json:"deletions"`
+	DiffError string             `json:"diffError,omitempty"`
+	Review    *BestOfReviewTally `json:"review,omitempty"`
+	Usage     *UsageInfo         `json:"usage,omitempty"`
+	Age       string             `json:"age,omitempty"`
+	Winner    bool               `json:"winner,omitempty"`
+}
+
+// BestOfReviewTally sums the findings of every review pass that answered for
+// the attempt's current PR. Passes is how many did; all-zero counts with
+// Passes > 0 is a clean review.
+type BestOfReviewTally struct {
+	Passes  int `json:"passes"`
+	Blocker int `json:"blocker"`
+	Major   int `json:"major"`
+	Minor   int `json:"minor"`
+	Other   int `json:"other"`
+}
+
+// BestOfPickArgs is the argument payload for cmd=bestOfPick: keep Session,
+// discard every other attempt of its group.
+type BestOfPickArgs struct {
+	Session string `json:"session"`
+}
+
+// BestOfPickData is Response.Data for cmd=bestOfPick. Removed are discarded
+// attempts fully torn down; Kept are ones whose worktree had uncommitted work
+// and was KEPT (agent stopped, worktree on disk — dirty-safe teardown); Closed
+// are the PR numbers closed. Problems are best-effort steps that failed (a gh
+// close, the ready flip) — the pick itself still stands.
+type BestOfPickData struct {
+	Winner   string   `json:"winner"`
+	PR       int      `json:"pr,omitempty"`
+	Removed  []string `json:"removed,omitempty"`
+	Kept     []string `json:"kept,omitempty"`
+	Closed   []int    `json:"closed,omitempty"`
+	Problems []string `json:"problems,omitempty"`
+	Message  string   `json:"message"`
+}
+
 // PlanArgs is the argument payload for cmd=plan.
 type PlanArgs struct {
 	Issue string `json:"issue"` // identifier (FE-231) or UUID
@@ -1011,6 +1138,24 @@ type FeedbackData struct {
 	Delivered bool   `json:"delivered"`
 	Queued    bool   `json:"queued"`
 	Message   string `json:"message,omitempty"`
+}
+
+// BroadcastArgs is the argument payload for cmd=broadcast. Project is the
+// project's Name (its id, not its display label).
+type BroadcastArgs struct {
+	Project string `json:"project"`
+	Message string `json:"message"`
+}
+
+// BroadcastData is Response.Data for cmd=broadcast: the session ids the message
+// was typed into now (Delivered), the ones that have it queued until their
+// agent is back at its prompt (Queued), and the ones whose queue was already
+// full (Skipped). Message is the short human-readable outcome.
+type BroadcastData struct {
+	Delivered []string `json:"delivered"`
+	Queued    []string `json:"queued"`
+	Skipped   []string `json:"skipped,omitempty"`
+	Message   string   `json:"message,omitempty"`
 }
 
 // CheckpointArgs is the argument payload for cmd=checkpointDiff,

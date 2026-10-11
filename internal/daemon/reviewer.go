@@ -636,6 +636,7 @@ func (d *Daemon) runReviewChain(ctx context.Context, s session.Session, p review
 			if k != p.Kind {
 				d.logf("", "review: %s primary %s could not answer; fallback %s reviewed PR #%d", s.ID, p.Kind, k, prNum)
 			}
+			d.recordReviewTally(s.ID, string(p.Kind), prNum, findings)
 			d.routeFindings(ctx, s, p, findings)
 			return reviewResult{Ran: true, Findings: strings.TrimSpace(findings)}
 		}
@@ -1020,9 +1021,10 @@ func (d *Daemon) deferHandoff(id string, k provKind, stash string) {
 //
 // A HUMAN's queued diff feedback (feedback.go) goes first and counts as that
 // pass's one delivery: a person waited for it, and a review provider's findings
-// will still be there next cycle.
+// will still be there next cycle. A queued project broadcast (broadcast.go) is
+// the same kind of human message and comes right after it.
 func (d *Daemon) flushReviewHandoffs(ctx context.Context, id string) {
-	if d.deliverFeedback(ctx, id) {
+	if d.deliverFeedback(ctx, id) || d.deliverBroadcast(ctx, id) {
 		return
 	}
 	s, ok := d.sessions.Get(id)

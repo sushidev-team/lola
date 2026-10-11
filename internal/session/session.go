@@ -404,6 +404,14 @@ type Session struct {
 	// Cleared on the next successful prompt proof; also deduplicates notices.
 	AutomationDeferredReason string `json:"automation_deferred_reason,omitempty"`
 
+	// PendingBroadcast is a HUMAN's project-wide message (cmd=broadcast) that
+	// could not be typed yet because the pane was not verifiably resting at its
+	// prompt. Later broadcasts are APPENDED. Delivered (and cleared) through the
+	// same sanitize + idle gate + pane proof as PendingFeedback, and kept apart
+	// from it because the agent is told something different about where each
+	// came from.
+	PendingBroadcast string `json:"pending_broadcast,omitempty"`
+
 	// ContextKey names the session's SHARED CONTEXT FOLDER,
 	// ~/.lola/context/<project>/<key>/, linked into the worktree as
 	// .lola/context (runtime.ContextKey). Recorded rather than re-derived because
@@ -426,7 +434,43 @@ type Session struct {
 	// daemon restart — so the fact has to persist. A github post that fell back to
 	// a plain comment leaves no entry, which is what keeps the instruction honest.
 	InlineReviewPRs map[string]int `json:"inline_review_prs,omitempty"`
+
+	// Model is the worker model override the agent was launched with ("" = the
+	// agent's own default). Persisted because a revive must relaunch the SAME
+	// model: a best-of attempt on opus that comes back on the default would no
+	// longer be the attempt it is compared as.
+	Model string `json:"model,omitempty"`
+
+	// BestOf is the best-of-N GROUP this session is one attempt of ("" = an
+	// ordinary session). Attempt is its 1-based place in the group, Attempts the
+	// group's size at spawn. BestOfWinner is set on the one attempt a human
+	// kept (cmd=bestOfPick); until then every attempt is IN THE RACE, which
+	// holds back its PR-open Linear write-back so N draft PRs do not each move
+	// the issue and comment on it. See internal/daemon/bestof.go.
+	BestOf       string `json:"best_of,omitempty"`
+	Attempt      int    `json:"attempt,omitempty"`
+	Attempts     int    `json:"attempts,omitempty"`
+	BestOfWinner bool   `json:"best_of_winner,omitempty"`
+
+	// ReviewTallies maps a review provider kind -> the severity tally of its
+	// last ANSWERED pass, for the PR it reviewed. DISPLAY-ONLY: the best-of
+	// compare view reads it, nothing in the control loop does.
+	ReviewTallies map[string]ReviewTally `json:"review_tallies,omitempty"`
 }
+
+// ReviewTally is one review pass's findings counted by severity
+// (reviewmd.Count). A clean pass is a tally of zeros for its PR.
+type ReviewTally struct {
+	PR      int       `json:"pr"`
+	Blocker int       `json:"blocker,omitempty"`
+	Major   int       `json:"major,omitempty"`
+	Minor   int       `json:"minor,omitempty"`
+	Other   int       `json:"other,omitempty"`
+	At      time.Time `json:"at"`
+}
+
+// InBestOfRace reports whether s is a best-of attempt nobody has picked yet.
+func (s Session) InBestOfRace() bool { return s.BestOf != "" && !s.BestOfWinner }
 
 // DevClash is a dev tab that died because its port was already taken, together
 // with the process holding it.

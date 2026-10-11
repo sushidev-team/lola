@@ -66,8 +66,10 @@ func main() {
 		killCmd(),
 		reviveCmd(),
 		answerCmd(),
+		broadcastCmd(),
 		reviewCmd(),
 		planCmd(),
+		bestofCmd(),
 		switchAgentCmd(),
 		checkpointCmd(),
 		coderabbitCmd(),
@@ -207,6 +209,29 @@ func answerCmd() *cobra.Command {
 		Args:  cobra.MinimumNArgs(2),
 		RunE: func(c *cobra.Command, a []string) error {
 			raw, err := json.Marshal(protocol.Request{Cmd: "answer", Session: a[0], Text: strings.Join(a[1:], " ")})
+			if err != nil {
+				return err
+			}
+			return tui.Send(string(raw))
+		},
+	}
+}
+
+// broadcastCmd sends one message to every live coding agent of a project
+// (`lola broadcast <project> <text...>`) — "rebase on main", "stop touching X".
+// Agents resting at their prompt get it now; busy ones get it queued and
+// delivered when they are idle. Send prints the delivered/deferred split.
+func broadcastCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "broadcast <project> <text...>",
+		Short: "Send one message to every live agent of a project (busy ones get it when idle)",
+		Args:  cobra.MinimumNArgs(2),
+		RunE: func(c *cobra.Command, a []string) error {
+			args, err := json.Marshal(protocol.BroadcastArgs{Project: a[0], Message: strings.Join(a[1:], " ")})
+			if err != nil {
+				return err
+			}
+			raw, err := json.Marshal(protocol.Request{Cmd: "broadcast", Args: args})
 			if err != nil {
 				return err
 			}

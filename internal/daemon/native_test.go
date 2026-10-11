@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -56,6 +57,8 @@ type fakeNative struct {
 	takenBranches  map[string]bool // SlotTaken answers true for these branches
 	switches       []nativeSwitchCall
 	switchErr      error // returned from SwitchAgent
+	spawnOpts      []runtime.SpawnOpts
+	attemptErr     map[int]error // SpawnWith: a best-of attempt (1-based) that fails
 }
 
 type nativeSpawnCall struct{ project, identifier, agentKind string }
@@ -77,6 +80,42 @@ type nativeSwitchCall struct{ sessionID, kind, reason string }
 var _ NativeAPI = (*fakeNative)(nil)
 
 func (f *fakeNative) Spawn(ctx context.Context, p config.Project, is linear.Issue, agentOverride string) (session.Session, error) {
+	return f.SpawnWith(ctx, p, is, runtime.SpawnOpts{Agent: agentOverride})
+}
+
+func (f *fakeNative) SpawnWith(ctx context.Context, p config.Project, is linear.Issue, o runtime.SpawnOpts) (session.Session, error) {
+	sess, err := f.spawn(ctx, p, is, o.Agent)
+	f.mu.Lock()
+	f.spawnOpts = append(f.spawnOpts, o)
+	aerr := f.attemptErr[o.Attempt]
+	f.mu.Unlock()
+	if err != nil {
+		return sess, err
+	}
+	if o.Group != "" && o.Attempt > 0 {
+		if aerr != nil {
+			return session.Session{}, aerr
+		}
+		suffix := "-b" + strconv.Itoa(o.Attempt)
+		sess.ID += suffix
+		sess.TmuxName = sess.ID
+		sess.Branch += suffix
+		sess.BestOf, sess.Attempt, sess.Attempts = o.Group, o.Attempt, o.Of
+	}
+	sess.Model = o.Model
+	if o.Agent != "" {
+		sess.Agent = o.Agent
+	}
+	return sess, nil
+}
+
+func (f *fakeNative) spawnOptsCalls() []runtime.SpawnOpts {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.spawnOpts)
+}
+
+func (f *fakeNative) spawn(ctx context.Context, p config.Project, is linear.Issue, agentOverride string) (session.Session, error) {
 	f.mu.Lock()
 	f.spawns = append(f.spawns, nativeSpawnCall{p.Name, is.Identifier, agentOverride})
 	_, f.spawnDeadline = ctx.Deadline()

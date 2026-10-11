@@ -152,6 +152,20 @@ func (s *DaemonService) SendFeedback(args protocol.FeedbackArgs) (protocol.Feedb
 	return d, err
 }
 
+// Broadcast sends one message to every live coding agent of a project. Agents
+// resting at their prompt get it now; busy ones get it queued and delivered
+// when idle. The reply names both groups so the UI can show the split. Long
+// timeout: the daemon reads (and may type into) one pane per live session.
+func (s *DaemonService) Broadcast(args protocol.BroadcastArgs) (protocol.BroadcastData, error) {
+	raw, err := json.Marshal(args)
+	if err != nil {
+		return protocol.BroadcastData{}, err
+	}
+	var d protocol.BroadcastData
+	err = call(protocol.Request{Cmd: "broadcast", Args: raw}, longTimeout, &d)
+	return d, err
+}
+
 // Checkpoints lists the session's turn checkpoints, oldest first: the worktree
 // snapshot the daemon records each time the agent ends a turn.
 func (s *DaemonService) Checkpoints(session string) (protocol.CheckpointsData, error) {
@@ -185,6 +199,33 @@ func (s *DaemonService) ForkCheckpoint(session string, seq int, agentKind string
 	args, _ := json.Marshal(protocol.CheckpointArgs{Session: session, Seq: seq, Agent: agentKind})
 	var d protocol.OpenData
 	err := call(protocol.Request{Cmd: "forkCheckpoint", Args: args}, longTimeout, &d)
+	return d, err
+}
+
+// BestOfCompare returns every attempt of the best-of group the session belongs
+// to, side by side (read-only; one bounded local git diff per attempt).
+func (s *DaemonService) BestOfCompare(session string) (protocol.BestOfCompareData, error) {
+	args, _ := json.Marshal(protocol.BestOfCompareArgs{Session: session})
+	var d protocol.BestOfCompareData
+	err := call(protocol.Request{Cmd: "bestOfCompare", Args: args}, shortTimeout*3, &d)
+	return d, err
+}
+
+// BestOfPick keeps one best-of attempt: its draft PR is marked ready, every
+// other attempt's PR is closed and its session torn down (a dirty worktree is
+// kept).
+func (s *DaemonService) BestOfPick(session string) (protocol.BestOfPickData, error) {
+	args, _ := json.Marshal(protocol.BestOfPickArgs{Session: session})
+	var d protocol.BestOfPickData
+	err := call(protocol.Request{Cmd: "bestOfPick", Args: args}, longTimeout, &d)
+	return d, err
+}
+
+// BestOf starts an issue as a best-of group; agents "" uses [best_of].agents.
+func (s *DaemonService) BestOf(a protocol.BestOfArgs) (protocol.BestOfData, error) {
+	args, _ := json.Marshal(a)
+	var d protocol.BestOfData
+	err := call(protocol.Request{Cmd: "bestOf", Args: args}, longTimeout, &d)
 	return d, err
 }
 

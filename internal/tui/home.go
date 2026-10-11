@@ -34,6 +34,13 @@ type homeModel struct {
 	adding   bool // inline "new project" name prompt
 	addInput string
 
+	// broadcasting is the inline prompt for 'b': one message to every live
+	// agent of bcastTarget (cmd=broadcast). Busy agents get it when idle, and
+	// the flash reports the delivered/deferred split.
+	broadcasting bool
+	bcastTarget  string
+	bcastInput   string
+
 	// Two separate confirmations, because the two actions are not the same kind
 	// of thing: stopping polling is reversible from the project form, removing
 	// drops the [[project]] from config. They used to share the key 'x' with the
@@ -179,6 +186,9 @@ func (m *rootModel) updateHome(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if h.adding {
 		return m.updateHomeAdd(k)
 	}
+	if h.broadcasting {
+		return m.updateHomeBroadcast(k)
+	}
 	if h.confirmStop {
 		h.confirmStop = false
 		if s := k.String(); s == "y" || s == "Y" {
@@ -259,6 +269,10 @@ func (m *rootModel) updateHome(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if p := h.selectedProject(m.cfg); p != nil {
 			h.confirmRemove, h.removeTarget = true, p.Name
 		}
+	case "b":
+		if p := h.selectedProject(m.cfg); p != nil {
+			h.broadcasting, h.bcastTarget, h.bcastInput = true, p.Name, ""
+		}
 	case "space":
 		return m, m.homeTogglePoll()
 	case "/":
@@ -335,6 +349,73 @@ func (m *rootModel) updateHomeAdd(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return m, nil
+}
+
+// updateHomeBroadcast edits the inline broadcast prompt; enter sends it.
+func (m *rootModel) updateHomeBroadcast(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	h := &m.home
+	switch k.String() {
+	case "esc":
+		h.broadcasting, h.bcastInput = false, ""
+	case "enter":
+		msg := strings.TrimSpace(h.bcastInput)
+		target := h.bcastTarget
+		h.broadcasting, h.bcastInput = false, ""
+		if msg == "" {
+			return m, nil
+		}
+		h.flash, h.flashGood = "broadcasting to "+m.projLabel(target)+"…", true
+		return m, broadcastCmd(target, msg)
+	case "backspace":
+		if r := []rune(h.bcastInput); len(r) > 0 {
+			h.bcastInput = string(r[:len(r)-1])
+		}
+	default:
+		if k.Text != "" {
+			h.bcastInput += k.Text
+		}
+	}
+	return m, nil
+}
+
+// broadcastDoneMsg carries cmd=broadcast's outcome back to the projects screen.
+type broadcastDoneMsg struct {
+	project string
+	data    protocol.BroadcastData
+	err     error
+}
+
+func broadcastCmd(project, message string) tea.Cmd {
+	return func() tea.Msg {
+		done := broadcastDoneMsg{project: project}
+		raw, err := json.Marshal(protocol.BroadcastArgs{Project: project, Message: message})
+		if err != nil {
+			done.err = err
+			return done
+		}
+		resp, err := requestFn(protocol.Request{Cmd: "broadcast", Args: raw})
+		if err != nil {
+			done.err = err
+			return done
+		}
+		if !resp.OK {
+			done.err = fmt.Errorf("%s", resp.Error)
+			return done
+		}
+		if err := json.Unmarshal(resp.Data, &done.data); err != nil {
+			done.err = err
+		}
+		return done
+	}
+}
+
+func (m *rootModel) handleBroadcastDone(v broadcastDoneMsg) tea.Cmd {
+	if v.err != nil {
+		m.home.flash, m.home.flashGood = "broadcast failed: "+v.err.Error(), false
+		return nil
+	}
+	m.home.flash, m.home.flashGood = "broadcast to "+m.projLabel(v.project)+": "+v.data.Message, len(v.data.Skipped) == 0
+	return fetchSessionsCmd
 }
 
 // openProjectScope enters the cockpit filtered to one project's sessions. (Once

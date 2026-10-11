@@ -135,6 +135,8 @@ func (m *rootModel) routePaste(content string) (tea.Model, tea.Cmd) {
 		m.detail.wtBranch += pasteInline(content)
 	case m.view == viewHome && m.home.adding:
 		m.home.addInput += pasteInline(content)
+	case m.view == viewHome && m.home.broadcasting:
+		m.home.bcastInput += pasteInline(content)
 	case m.view == viewHome && m.home.filtering:
 		m.home.filter += pasteInline(content)
 		m.home.repin(m.cfg)
@@ -328,9 +330,9 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, statusTick()
 		}
 		cmds := []tea.Cmd{fetchStatusCmd, statusTick()}
-		// Refresh the project decoration every tick unless the home filter/add
-		// prompt is mid-edit (a reflow would fight the input).
-		if !m.home.filtering && !m.home.adding {
+		// Refresh the project decoration every tick unless a home prompt
+		// (filter/add/broadcast) is mid-edit (a reflow would fight the input).
+		if !m.home.filtering && !m.home.adding && !m.home.broadcasting {
 			cmds = append(cmds, fetchProjectsCmd)
 		}
 		// Sessions are always on screen in the cockpit, so refresh them every
@@ -371,6 +373,8 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case feedbackDoneMsg:
 		return m, m.handleFeedbackDone(v)
+	case broadcastDoneMsg:
+		return m, m.handleBroadcastDone(v)
 	case answerDoneMsg:
 		// Surface the daemon's verdict: a green "answer sent", or the verbatim
 		// refusal/dial error. Then refresh the list and pane so the resumed
@@ -825,6 +829,15 @@ func (m *rootModel) listKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		// the same binding the projects screen uses.
 		if p := m.selectedRailProject(); p != nil {
 			m.home.confirmRemove, m.home.removeTarget = true, p.Name
+			m.view = viewHome
+			m.home.repin(m.cfg)
+			return m, fetchProjectsCmd
+		}
+	case "b":
+		// Broadcast to the project's live agents. The prompt lives on the
+		// projects screen (where its outcome flashes), as 'X' does.
+		if p := m.selectedRailProject(); p != nil {
+			m.home.broadcasting, m.home.bcastTarget, m.home.bcastInput = true, p.Name, ""
 			m.view = viewHome
 			m.home.repin(m.cfg)
 			return m, fetchProjectsCmd

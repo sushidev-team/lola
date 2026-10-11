@@ -8,6 +8,7 @@
   import { nav } from "$lib/nav.svelte";
   import { terms, DIFF } from "$lib/terms.svelte";
   import { sidePanel, CHECKPOINTS_TAB } from "$lib/sidepanel.svelte";
+  import { bestOf } from "$lib/bestof.svelte";
   import MenuItem from "./MenuItem.svelte";
 
   const req = $derived(sessionMenu.request);
@@ -131,6 +132,18 @@
         onclick={() => run((s) => store.resolveConflict(s.id))}
       >
         Resolve conflicts
+      </MenuItem>
+    {/if}
+    {#if session.bestOf}
+      <!-- One attempt of a best-of group: the comparison is where the race ends
+           (keep one, discard the rest), so it gets the accent until a pick. -->
+      <MenuItem
+        icon="★"
+        variant={session.bestOf.winner ? "default" : "accent"}
+        title="compare this issue's best-of attempts side by side and keep one"
+        onclick={() => run((s) => bestOf.open(s.id))}
+      >
+        Compare attempts ({session.bestOf.attempt}/{session.bestOf.of})
       </MenuItem>
     {/if}
     <MenuItem icon="◈" title="force a QA review pass now" onclick={() => run((s) => store.review(s.id))}>

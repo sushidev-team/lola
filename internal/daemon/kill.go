@@ -136,6 +136,13 @@ func (d *Daemon) clearLabelDispatch(ctx context.Context, s session.Session) {
 	if s.IssueUUID == "" {
 		return
 	}
+	// A best-of sibling still working the same issue owns the dispatch: killing
+	// one attempt must not strip the label out from under the others.
+	for _, o := range d.sessions.Snapshot() {
+		if o.ID != s.ID && o.Source == "native" && o.IssueUUID == s.IssueUUID && nativeSessionPresent(o) {
+			return
+		}
+	}
 	// Label-mode polls for this session's project whose set_label the kill
 	// should clear. A session records no poll name, so project scope is the
 	// available key; multiple such polls are handled together.

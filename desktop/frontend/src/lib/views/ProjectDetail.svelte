@@ -17,6 +17,14 @@
   let useAgent = $state(true);
   let selectedAgent = $state("");
 
+  // Inline "broadcast" prompt: one message to every live agent of the project.
+  let broadcastOpen = $state(false);
+  let broadcastText = $state("");
+  let broadcasting = $state(false);
+  // The last reply, shown under the prompt so the delivered/deferred split
+  // outlives the flash.
+  let broadcastResult = $state("");
+
   // No local back()/breadcrumb any more — MainTopBar owns both for every view.
 
   async function startWorktree() {
@@ -36,6 +44,20 @@
     branch = "";
     selectedAgent = "";
     nav.goCockpit(nav.project);
+  }
+
+  async function sendBroadcast() {
+    const msg = broadcastText.trim();
+    if (!msg || broadcasting) return;
+    broadcasting = true;
+    try {
+      const r = await store.broadcast(nav.project, msg);
+      if (r === undefined) return; // failed: keep the text so it can be retried
+      broadcastResult = r.message || "";
+      broadcastText = "";
+    } finally {
+      broadcasting = false;
+    }
   }
 
   function openSession(id: string) {
@@ -74,6 +96,16 @@
       desc: "branch off and open a fresh worktree (agent or shell)",
       enabled: true,
       run: () => (worktreeOpen = !worktreeOpen),
+    },
+    {
+      key: "B",
+      label: "Broadcast",
+      desc: "send one message to every live agent — busy ones get it when idle",
+      enabled: true,
+      run: () => {
+        broadcastOpen = !broadcastOpen;
+        broadcastResult = "";
+      },
     },
     {
       key: "L",
@@ -207,6 +239,33 @@
                   Start <span aria-hidden="true">›</span>
                 </Button>
                 <Button size="md" onclick={() => (worktreeOpen = false)}>Cancel</Button>
+              </div>
+            {/if}
+            {#if a.key === "B" && broadcastOpen}
+              <div class="mt-1.5 ml-8 flex flex-col gap-2 rounded-[10px] border border-edge/60 bg-panel/60 p-2">
+                <textarea
+                  class="min-h-16 w-full rounded border border-edge bg-canvas px-2 py-1.5 text-sm text-ink outline-none focus:border-accent placeholder:text-placeholder"
+                  placeholder="e.g. rebase on main before you push…"
+                  aria-label="Broadcast message"
+                  maxlength="4000"
+                  bind:value={broadcastText}
+                  onkeydown={(e) => e.key === "Enter" && e.metaKey && sendBroadcast()}
+                ></textarea>
+                <div class="flex flex-wrap items-center gap-2">
+                  <Button
+                    variant="primary"
+                    size="md"
+                    disabled={!broadcastText.trim()}
+                    loading={broadcasting}
+                    onclick={sendBroadcast}
+                  >
+                    Send to all agents <span aria-hidden="true">›</span>
+                  </Button>
+                  <Button size="md" onclick={() => (broadcastOpen = false)}>Cancel</Button>
+                  {#if broadcastResult}
+                    <span class="text-sm text-faint" role="status">{broadcastResult}</span>
+                  {/if}
+                </div>
               </div>
             {/if}
           </div>

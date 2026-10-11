@@ -135,4 +135,25 @@ describe("ProjectDetail", () => {
       agentKind: undefined,
     });
   });
+
+  it("broadcasts one message to the project's agents and shows the delivered/deferred split", async () => {
+    const spy = vi
+      .spyOn(store, "broadcast")
+      .mockResolvedValue({
+        delivered: ["a"],
+        queued: ["b"],
+        message: "delivered to 1, deferred for 1 (sent when idle)",
+      });
+    store.projects = [fakeProject()];
+    render(ProjectDetail);
+
+    await fireEvent.click(screen.getByText("Broadcast").closest("button")!);
+    const box = screen.getByLabelText("Broadcast message");
+    await fireEvent.input(box, { target: { value: "  rebase on main  " } });
+    await fireEvent.click(screen.getByRole("button", { name: /Send to all agents/ }));
+
+    expect(spy).toHaveBeenCalledWith("acme", "rebase on main");
+    expect(await screen.findByText("delivered to 1, deferred for 1 (sent when idle)")).toBeInTheDocument();
+    expect((box as HTMLTextAreaElement).value).toBe("");
+  });
 });
