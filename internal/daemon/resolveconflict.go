@@ -76,7 +76,7 @@ func (d *Daemon) handleResolveConflict(ctx context.Context, sessionID string) (p
 	switch {
 	case errors.Is(err, errNotResting):
 		return protocol.ResolveConflictData{}, fmt.Errorf(
-			"session %s is not resting at its prompt — lola will not type into a mid-turn agent; try again when it is idle", sessionID)
+			"session %s needs an idle agent at its prompt, an empty composer, and detached terminals before lola can send; finish any draft and close or detach its live terminals", sessionID)
 	case errors.Is(err, errLeftPrompt):
 		return protocol.ResolveConflictData{}, fmt.Errorf("session %s left its prompt before the request could be sent", sessionID)
 	case err != nil:
@@ -100,7 +100,7 @@ var (
 // typeAtRestingPrompt is the shared send path for lola-authored instructions
 // that a human or the merge queue asks for right now (resolveConflict, the
 // queue's sync request): the wide idle gate PLUS live pane proof, an atomic
-// consume of that gate, then exactly one send. stamp runs inside the consume,
+// empty detached composer, atomic consume, then exactly one send. stamp runs inside the consume,
 // under the store lock, so the caller's one-shot guard lands atomically with
 // it. Nothing is ever typed unless the consume won.
 //
@@ -108,9 +108,14 @@ var (
 // failed send AFTER the gate was consumed — not rolled back, like every other
 // send path, so a broken pane is not re-prompted every cycle.
 func (d *Daemon) typeAtRestingPrompt(ctx context.Context, s session.Session, msg string, stamp func(cur *session.Session)) error {
-	if !handoffDeliverable(s) || !d.handoffPromptProof(ctx, s) {
+	if !handoffDeliverable(s) {
 		return errNotResting
 	}
+	unlock, ready := d.lockAutomationPrompt(ctx, s)
+	if !ready {
+		return errNotResting
+	}
+	defer unlock()
 
 	// Consume the gate atomically, exactly as reactSendAgent does: the copy above
 	// is microseconds old, and a hook that resumed the agent meanwhile must cancel
@@ -142,9 +147,8 @@ func (d *Daemon) typeAtRestingPrompt(ctx context.Context, s session.Session, msg
 		tmuxName = paneTarget(s)
 	}
 
-	// typeToAgent holds the per-session send gate, so a checkpoint restore in
-	// flight can never have this request typed into the worktree it is replacing.
-	if err := d.typeToAgent(ctx, s.ID, tmuxName, msg, reactExecTimeout); err != nil {
+	// The per-session send gate is already held from proof through submit.
+	if err := d.typeToAgentLocked(ctx, tmuxName, msg, reactExecTimeout); err != nil {
 		return err
 	}
 	if err := d.sessions.Save(); err != nil {

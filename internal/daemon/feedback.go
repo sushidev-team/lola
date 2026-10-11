@@ -172,9 +172,11 @@ func (d *Daemon) deliverFeedback(ctx context.Context, id string) bool {
 	if !ok || s.PendingFeedback == "" || s.TmuxName == "" || !handoffDeliverable(s) {
 		return false
 	}
-	if !d.paneWaitingNow(ctx, s) {
+	unlock, ready := d.lockAutomationPrompt(ctx, s)
+	if !ready {
 		return false
 	}
+	defer unlock()
 
 	// Consume the gate and the queue atomically: a hook that resumed the agent
 	// between the pane read and here must cancel the send, not lose the race.
@@ -202,7 +204,7 @@ func (d *Daemon) deliverFeedback(ctx context.Context, id string) bool {
 		return false
 	}
 
-	if err := d.typeToAgent(ctx, id, tmuxName, feedbackMessage(text), reactExecTimeout); err != nil {
+	if err := d.typeToAgentLocked(ctx, tmuxName, feedbackMessage(text), reactExecTimeout); err != nil {
 		// Unlike a review hand-off (which other sinks also received), this text
 		// exists nowhere else: put it back in front of anything queued since.
 		d.sessions.Update(id, func(cur *session.Session) bool {

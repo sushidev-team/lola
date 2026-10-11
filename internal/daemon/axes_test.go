@@ -304,14 +304,13 @@ func TestReactSendVerifiesAdoptedGate(t *testing.T) {
 }
 
 // A hook event re-verifies the carried gate (it is live proof from inside the
-// pane), so the cycle after a stop hook sends without any pane capture.
+// pane), but automatic delivery still needs a fresh empty-composer proof.
 func TestHookEventReverifiesAdoptedGate(t *testing.T) {
 	d := newTestDaemon(t, reactTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})
 	seams := &fakeReactSeams{failing: "LOGS"}
 	seams.install(d)
 	d.paneTail = func(ctx context.Context, tmuxName string, lines int) (string, error) {
-		t.Fatal("a hook-verified gate must not need a pane capture")
-		return "", nil
+		return paneWaiting, nil
 	}
 
 	s := reactSess("FE-1", "ci_failed", openPR(9, "MERGEABLE", "", "fail"))

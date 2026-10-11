@@ -58,6 +58,31 @@ func TestDirPrecedence(t *testing.T) {
 	}
 }
 
+func TestHasAttachedClient(t *testing.T) {
+	for _, tc := range []struct {
+		out           string
+		attached, bad bool
+	}{
+		{"0", false, false}, {"1", true, false}, {"2", true, false},
+		{"", false, true}, {"unknown", false, true}, {"-1", false, true},
+	} {
+		t.Run(tc.out, func(t *testing.T) {
+			bin, args := fakeTmux(t, tc.out, "", 0)
+			got, err := (&Client{Bin: bin}).HasAttachedClient(context.Background(), "main")
+			if got != tc.attached || (err != nil) != tc.bad {
+				t.Fatalf("HasAttachedClient = %v, %v", got, err)
+			}
+			if got := loggedArgs(t, args); got != "-L lola display-message -p -t =main: #{session_attached}" {
+				t.Fatalf("unexpected target/query: %s", got)
+			}
+		})
+	}
+	bin, _ := fakeTmux(t, "", "no session", 1)
+	if _, err := (&Client{Bin: bin}).HasAttachedClient(context.Background(), "gone"); err == nil {
+		t.Fatal("a failed query must not be treated as detached")
+	}
+}
+
 // TestRunPinsCwd verifies every tmux invocation executes from Client.Dir, so
 // the long-lived tmux server can never inherit (and outlive) a deleted cwd.
 func TestRunPinsCwd(t *testing.T) {

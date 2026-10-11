@@ -211,6 +211,21 @@ func (c *Client) Has(ctx context.Context, name string) bool {
 	return err == nil
 }
 
+// HasAttachedClient treats every attached terminal as owned by a human, even
+// if no keys have arrived recently. A pause in typing does not release a draft.
+// Unlike an observer snapshot this is queried immediately before delivery.
+func (c *Client) HasAttachedClient(ctx context.Context, name string) (bool, error) {
+	out, _, err := c.run(ctx, "display-message", "-p", "-t", paneTarget(name), "#{session_attached}")
+	if err != nil {
+		return false, err
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(out))
+	if err != nil || n < 0 {
+		return false, fmt.Errorf("tmux: invalid attached-client count %q", out)
+	}
+	return n != 0, nil
+}
+
 // DefaultServerSessions lists sessions on the user's DEFAULT tmux server (NO
 // "-L" flag) whose names start with prefix. It is a package function, not a
 // *Client method, precisely so it never inherits the SocketName "lola" default

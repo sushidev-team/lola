@@ -157,8 +157,10 @@ type Daemon struct {
 	// the engine types into a live agent (asserts AtPrompt at the call site);
 	// failingChecks / reviewComments fetch the size-bounded reaction content the
 	// engine hands the agent.
-	notifier       notify.Notifier
-	sendKeys       func(ctx context.Context, tmuxName, text string) error
+	notifier notify.Notifier
+	sendKeys func(ctx context.Context, tmuxName, text string) error
+	// Fresh ownership check for automatic delivery; never use observer cache.
+	promptAttached func(ctx context.Context, tmuxName string) (bool, error)
 	failingChecks  func(ctx context.Context, repo string, pr int) (string, error)
 	reviewComments func(ctx context.Context, repo string, pr int) (string, error)
 
@@ -202,9 +204,9 @@ type Daemon struct {
 	commitDiff  func(ctx context.Context, dir, from, to string) (gitdiff.Result, error)
 	ckptMu      sync.Mutex
 	ckptLocks   map[string]*sync.Mutex
-	// sendGates is the per-session SEND GATE (typeToAgent): every send-keys
-	// into an agent holds it shared, a checkpoint restore holds it exclusively,
-	// so nothing can start the agent while its files are being replaced.
+	// sendGates serializes daemon sends and checkpoint restores per session.
+	// Automatic sends hold it from fresh composer proof through submit, so a
+	// proof cannot age while waiting behind another send or a restore.
 	sendGates map[string]*sync.RWMutex
 
 	// changedFiles lists the paths a worktree changed against its merge-base
@@ -494,6 +496,9 @@ func newDaemon(cfg *config.Config, lin linear.API, logger *log.Logger, home stri
 	d.authedLogin = scmc.AuthedLogin
 	d.sendKeys = func(ctx context.Context, tmuxName, text string) error {
 		return d.tmuxClient().SendKeys(ctx, tmuxName, text)
+	}
+	d.promptAttached = func(ctx context.Context, tmuxName string) (bool, error) {
+		return d.tmuxClient().HasAttachedClient(ctx, tmuxName)
 	}
 	// Brain context-gathering seams (P5.25). brain / brainSummarize stay nil
 	// here: the brain is built by Run/handleReload from [brain] and left off in

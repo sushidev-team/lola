@@ -102,8 +102,13 @@ func (d *Daemon) sendGate(id string) *sync.RWMutex {
 // delayed, never timed out and lost.
 func (d *Daemon) typeToAgent(ctx context.Context, id, target, text string, timeout time.Duration) error {
 	g := d.sendGate(id)
-	g.RLock()
-	defer g.RUnlock()
+	g.Lock()
+	defer g.Unlock()
+	return d.typeToAgentLocked(ctx, target, text, timeout)
+}
+
+// typeToAgentLocked requires sendGate held through proof, claim and delivery.
+func (d *Daemon) typeToAgentLocked(ctx context.Context, target, text string, timeout time.Duration) error {
 	sctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	return d.sendKeys(sctx, target, text)

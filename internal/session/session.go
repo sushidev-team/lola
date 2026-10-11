@@ -400,6 +400,10 @@ type Session struct {
 	// provider behind it and must survive one being reconfigured.
 	PendingFeedback string `json:"pending_feedback,omitempty"`
 
+	// AutomationDeferredReason explains why lola left the input untouched.
+	// Cleared on the next successful prompt proof; also deduplicates notices.
+	AutomationDeferredReason string `json:"automation_deferred_reason,omitempty"`
+
 	// ContextKey names the session's SHARED CONTEXT FOLDER,
 	// ~/.lola/context/<project>/<key>/, linked into the worktree as
 	// .lola/context (runtime.ContextKey). Recorded rather than re-derived because

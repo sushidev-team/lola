@@ -642,6 +642,21 @@ Any unset field takes its default, so you can override just one thing (e.g.
 and leave the rest alone. Explicit `false`/`0`/`""` are honored, not treated as
 "unset".
 
+Automatic prompts wait while **any terminal client is attached** to the session
+or its composer contains a draft. Close or detach the session's live terminals
+to release it to automation; an idle timeout never clears or submits your text.
+Lola checks for a visibly empty, idle composer before sending and leaves queued
+reactions, review findings, and feedback pending when it cannot prove that.
+Unknown layouts and visible suggestions also defer rather than guessing. A
+deferral is explained in the daemon log and through the configured notifications,
+once per reason. Deferred CI prompts do not spend a retry. Merge-queue sync
+requests use the same checks; a manual Resolve conflicts request reports that
+the prompt is unavailable instead of queuing a surprise send.
+
+These are terminal checks, not an atomic editor API: an external client attaching
+after the final check can still race delivery. Lola serializes its own sends and
+checkpoint restores, and checks attachment again after reading the composer.
+
 ### `[notify]` (optional)
 
 Best-effort desktop + Slack notifications, routed by priority (P3.20). Optional;

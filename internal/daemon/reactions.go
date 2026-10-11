@@ -662,7 +662,7 @@ func (d *Daemon) ensurePromptVerified(ctx context.Context, s session.Session) bo
 	}
 }
 
-// reactSendAgent is the ONLY path that types into a live agent. It enforces the
+// reactSendAgent is the reaction engine's path into a live agent. It enforces the
 // send-keys safety gate:
 //
 //   - Already reacted to this state-entry (LastReactedStatus == key) → no-op.
@@ -670,8 +670,9 @@ func (d *Daemon) ensurePromptVerified(ctx context.Context, s session.Session) bo
 //     across a restart and cannot be verified against the live pane
 //     (ensurePromptVerified) → the reaction is DEFERRED: PendingReaction is
 //     recorded and a later cycle retries. Nothing is typed.
-//   - Agent verifiably idle at its prompt → the (optional) detail is fetched,
-//     the message rendered, then AtPrompt is CONSUMED atomically together with
+//   - After fetching details, require a detached terminal and a fresh, visibly
+//     empty composer (lockAutomationPrompt). A draft or unknown layout defers.
+//   - Agent verifiably idle at its prompt → AtPrompt is CONSUMED atomically with
 //     stamping LastReactedStatus (and, for ci_failed, bumping CIRetries) in one
 //     Store.Update. Only if that atomic consume wins is the text actually sent —
 //     so a hook that flipped AtPrompt false in the meantime cancels the send.
@@ -682,20 +683,22 @@ func (d *Daemon) reactSendAgent(ctx context.Context, s session.Session, key, tem
 	if s.LastReactedStatus == key {
 		return // one-shot: already sent for this entry into the state
 	}
-
-	if !s.AtPrompt || !d.ensurePromptVerified(ctx, s) {
-		// Defer: the agent is mid-turn (or its carried gate is unverifiable).
-		// Record the pending reaction (idempotently) so it is visible; the
-		// LastReactedStatus guard is what actually makes the next AtPrompt
-		// cycle retry.
+	deferReaction := func() {
+		changed := false
 		d.sessions.Update(s.ID, func(cur *session.Session) bool {
-			if cur.PendingReaction == key {
+			if cur.PendingReaction == key || cur.LastReactedStatus == key || cur.Delivery != s.Delivery {
 				return false
 			}
 			cur.PendingReaction = key
+			changed = true
 			return true
 		})
-		d.logf("", "react: %s PR is %s but the agent is mid-turn — deferring %s reaction", s.ID, s.Delivery, key)
+		if changed {
+			d.reactSave()
+		}
+	}
+	if !s.AtPrompt || !d.ensurePromptVerified(ctx, s) {
+		deferReaction()
 		return
 	}
 
@@ -715,6 +718,15 @@ func (d *Daemon) reactSendAgent(ctx context.Context, s session.Session, key, tem
 		// because nothing here proves a thread is open right now.
 		msg += prThreadNote(s)
 	}
+	// A Stop hook proves idleness at the time it fired, not that the editor is
+	// empty now. Check AFTER fetching details: a human can start a draft during
+	// the gh request. A deferred send consumes neither the gate nor a CI retry.
+	unlock, ready := d.lockAutomationPrompt(ctx, s)
+	if !ready {
+		deferReaction()
+		return
+	}
+	defer unlock()
 
 	// Atomically re-check AtPrompt under the store lock and consume it. This is
 	// the true gate: the passed copy's AtPrompt may be stale by microseconds.
@@ -724,12 +736,13 @@ func (d *Daemon) reactSendAgent(ctx context.Context, s session.Session, key, tem
 		attempt  int
 	)
 	updated, _ := d.sessions.Update(s.ID, func(cur *session.Session) bool {
-		if !cur.AtPrompt || cur.LastReactedStatus == key {
+		if !cur.AtPrompt || cur.LastReactedStatus == key || cur.Delivery != s.Delivery {
 			return false // a hook resumed the agent, or another writer reacted
 		}
 		cur.AtPrompt = false
 		cur.LastReactedStatus = key
 		cur.PendingReaction = ""
+		cur.SetAgentState(state.AgentWorking, "", time.Now())
 		if key == "ci_failed" {
 			cur.CIRetries++
 		}
@@ -746,7 +759,7 @@ func (d *Daemon) reactSendAgent(ctx context.Context, s session.Session, key, tem
 	// AtPrompt is already consumed; the send now happens exactly once. A tmux
 	// failure is logged but not rolled back — the guard stays set so we do not
 	// spam the agent, and a genuine later transition re-reacts.
-	if err := d.typeToAgent(ctx, s.ID, tmuxName, msg, reactExecTimeout); err != nil {
+	if err := d.typeToAgentLocked(ctx, tmuxName, msg, reactExecTimeout); err != nil {
 		d.logf("", "react: send-keys (%s) to %s failed: %v", key, s.ID, err)
 		return
 	}

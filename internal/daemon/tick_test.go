@@ -70,6 +70,7 @@ func newTestDaemon(t *testing.T, cfg *config.Config, fake *linear.Fake, nat Nati
 	d := newDaemon(cfg, fake, log.New(io.Discard, "", 0), home)
 	d.native = nat
 	d.runtimeHealth = func(string) error { return nil }
+	d.promptAttached = func(context.Context, string) (bool, error) { return false, nil }
 	return d
 }
 

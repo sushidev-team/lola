@@ -839,12 +839,12 @@ func handoffDeliverable(s session.Session) bool {
 		s.AgentState == state.AgentIdle
 }
 
-// handoffPromptProof is the evidence step behind handoffDeliverable: EVERY
-// qualifying session must show a live pane classified "waiting" before anything
-// is typed, whatever opened its gate.
+// handoffPromptProof is the live activity proof used for a human's answer.
+// Automatic messages use lockAutomationPrompt, which additionally requires
+// detached terminals and an empty composer, whatever opened the idle gate.
 //
 // It deliberately does NOT take the ensurePromptVerified short-circuit the
-// reaction engine uses. A hook verdict is evidence about the moment the hook
+// adoption verification uses. A hook verdict is evidence about the moment the hook
 // fired, not about now, and the gap between the two is exactly where this went
 // wrong: claude-code ends a turn (Stop hook → AtPrompt + AtPromptVerified) and
 // THEN puts up a modal setup dialog. The short-circuit answered "verified" from
@@ -897,7 +897,11 @@ func (d *Daemon) sendHandoffToAgent(ctx context.Context, s session.Session, p re
 	if s.TmuxName == "" {
 		return false
 	}
-	if gated := !handoffDeliverable(s); gated || !d.handoffPromptProof(ctx, s) {
+	unlock, ready := d.lockAutomationPrompt(ctx, s)
+	if gated := !handoffDeliverable(s); gated || !ready {
+		if ready {
+			unlock()
+		}
 		// Mid-turn, waiting on a permission decision, an adoption-carried gate
 		// that cannot be verified against the live pane (see ensurePromptVerified),
 		// or a pane-derived idle whose pane does not actually show a prompt (see
@@ -916,6 +920,7 @@ func (d *Daemon) sendHandoffToAgent(ctx context.Context, s session.Session, p re
 		d.logf("", "review: %s (%s) %s — deferring the hand-off", s.ID, p.Kind, why)
 		return false
 	}
+	defer unlock()
 
 	msg := stash
 	if p.Handoff == handoffFull {
@@ -967,7 +972,7 @@ func (d *Daemon) sendHandoffToAgent(ctx context.Context, s session.Session, p re
 		return false
 	}
 
-	if err := d.typeToAgent(ctx, s.ID, tmuxName, msg, reactExecTimeout); err != nil {
+	if err := d.typeToAgentLocked(ctx, tmuxName, msg, reactExecTimeout); err != nil {
 		// Gate already consumed; do not roll back (that would re-fire and spam).
 		d.logf("", "review: %s (%s) send-keys of hand-off failed: %v", s.ID, p.Kind, err)
 		return false
