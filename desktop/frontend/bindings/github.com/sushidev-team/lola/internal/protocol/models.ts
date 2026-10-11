@@ -955,7 +955,9 @@ export interface SessionInfo {
      */
     "age": string;
 
-    /** Raw session age origin for live client formatting. */
+    /**
+     * raw session age origin for live client formatting
+     */
     "firstSeen"?: string;
 
     /**
