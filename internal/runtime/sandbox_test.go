@@ -43,8 +43,9 @@ func TestSandboxedLaunchRunsTheAgentInDocker(t *testing.T) {
 		"--security-opt no-new-privileges",
 		"-w " + shQuote(dir) + " -v " + shQuote(dir+":"+dir),
 		// git stores: rw, with config + hooks overlaid read-only.
-		`lola_gcd_0=$(git -C ` + shQuote(dir) + ` rev-parse --path-format=absolute --git-common-dir`,
-		`lola_gcd_1=$(git -C ` + shQuote(filepath.Join(dir, ".lola", "repos", "api")) + ` rev-parse`,
+		// …asked of the main checkouts, which the agent cannot rewrite
+		`lola_gcd_0=$(git -C ` + shQuote(f.repo) + ` rev-parse --path-format=absolute --git-common-dir`,
+		`lola_gcd_1=$(git -C /src/api rev-parse`,
 		`${lola_gcd_0:+"$lola_gcd_0/config:$lola_gcd_0/config:ro"}`,
 		`${lola_gcd_0:+"$lola_gcd_0/hooks:$lola_gcd_0/hooks:ro"}`,
 		`${lola_gcd_1:+"$lola_gcd_1:$lola_gcd_1"}`,
@@ -145,5 +146,34 @@ func TestSpawnRecordsTheSandboxAndKillRemovesTheContainer(t *testing.T) {
 	}
 	if len(removed) != 0 {
 		t.Fatalf("host kill removed containers: %v", removed)
+	}
+}
+
+func TestSandboxMountsOnlyTheSessionsOwnContextFolder(t *testing.T) {
+	f := sandboxFixture(t)
+	id := "lola-nori-eng-42"
+	dir := filepath.Join(f.root, "nori", id)
+	if err := os.MkdirAll(filepath.Join(dir, ".lola"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	ctxDir := f.n.setupContext(dir, "nori", "eng-42")
+	if ctxDir == "" {
+		t.Fatal("context not set up")
+	}
+	target := ContextDir(f.n.Home, "nori", "eng-42")
+	if line := f.n.sandboxLine(&f.p, id, agent.Claude, "x"); !strings.Contains(line, "-v "+shQuote(target+":"+target)) {
+		t.Fatalf("context folder not mounted:\n%s", line)
+	}
+	// An agent re-points the link at somewhere it should not reach.
+	link := filepath.Join(dir, ".lola", "context")
+	home := t.TempDir()
+	if err := os.Remove(link); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(home, link); err != nil {
+		t.Fatal(err)
+	}
+	if line := f.n.sandboxLine(&f.p, id, agent.Claude, "x"); strings.Contains(line, home) {
+		t.Fatalf("a re-pointed context link got mounted:\n%s", line)
 	}
 }

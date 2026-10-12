@@ -133,18 +133,21 @@ func (n *Native) sandboxLine(p *config.Project, id string, kind agent.Kind, inne
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s rm -f %s >/dev/null 2>&1; ", docker, shQuote(id))
 
-	// The git stores: the primary worktree's, then each linked repo's (whose
-	// worktree may be missing — a project gained a linked repo after this
-	// session spawned — so those are optional).
-	repoDirs := []string{dir}
+	// The git stores: the primary repository's, then each linked repo's
+	// (optional — a linked checkout that is not a repository just adds
+	// nothing). Asked of the MAIN checkouts, never of the worktree: the
+	// worktree's `.git` pointer is a file the agent can rewrite, and following
+	// it would let a tampered pointer pick which repository gets mounted
+	// read-write on the next launch.
+	repoDirs := []string{p.Path}
 	for _, l := range p.LinkedRepos {
-		repoDirs = append(repoDirs, LinkedWorktreeDir(dir, l.Name))
+		repoDirs = append(repoDirs, l.Path)
 	}
 	for i, rd := range repoDirs {
 		v := "lola_gcd_" + strconv.Itoa(i)
 		fmt.Fprintf(&b, `%s=$(git -C %s rev-parse --path-format=absolute --git-common-dir 2>/dev/null)`, v, shQuote(rd))
 		if i == 0 {
-			fmt.Fprintf(&b, ` && test -d "$%s" || { echo 'lola: cannot resolve the git directory of this worktree' >&2; exit 1; }`, v)
+			fmt.Fprintf(&b, ` && test -d "$%s" || { echo 'lola: cannot resolve the git directory of this project' >&2; exit 1; }`, v)
 		}
 		b.WriteString("; ")
 	}
@@ -172,6 +175,9 @@ func (n *Native) sandboxLine(p *config.Project, id string, kind agent.Kind, inne
 	if transcripts != "" {
 		fmt.Fprintf(&b, " -v %s", shQuote(transcripts+":"+transcripts))
 	}
+	if ctxDir := n.sandboxContextDir(p, dir); ctxDir != "" {
+		fmt.Fprintf(&b, " -v %s", shQuote(ctxDir+":"+ctxDir))
+	}
 	if lb, host := n.Cfg.Sandbox.LolaBin, n.lolaBin(); lb != "" && filepath.IsAbs(host) {
 		fmt.Fprintf(&b, " -v %s", shQuote(lb+":"+host+":ro"))
 	}
@@ -195,6 +201,32 @@ func (n *Native) sandboxLine(p *config.Project, id string, kind agent.Kind, inne
 	// ITS arguments. The image contributes a filesystem, not a launcher.
 	fmt.Fprintf(&b, " --entrypoint sh %s -c %s", shQuote(image), shQuote(sandboxPrelude(dir, kind, transcripts)+inner))
 	return b.String()
+}
+
+// sandboxContextDir is the shared context folder to mount for the session at
+// dir: the target of its .lola/context link (setupContext), so the notes the
+// briefing points at exist inside the container too. The link lives in the
+// worktree the AGENT can write, so its target is trusted only when it is a
+// folder of this project under ~/.lola/context — an agent that re-pointed the
+// link at $HOME must not get $HOME mounted on its next launch.
+func (n *Native) sandboxContextDir(p *config.Project, dir string) string {
+	if n.Home == "" {
+		return ""
+	}
+	target, err := os.Readlink(filepath.Join(dir, lolaDir, contextLink))
+	if err != nil || !filepath.IsAbs(target) {
+		return ""
+	}
+	target = filepath.Clean(target)
+	root := filepath.Join(n.Home, "context", p.Name) + string(filepath.Separator)
+	rest, ok := strings.CutPrefix(target, root)
+	if !ok || rest == "" || strings.Contains(rest, string(filepath.Separator)) || validContextSegment(rest) != nil {
+		return ""
+	}
+	if fi, err := os.Lstat(target); err != nil || !fi.IsDir() {
+		return ""
+	}
+	return target
 }
 
 // sandboxPrelude prepares the agent's private home INSIDE the container,

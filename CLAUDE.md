@@ -1210,7 +1210,11 @@ each of which owns exactly one external tool or concern behind an **exec seam**
     after it, claude's transcript slug dir, the Linux lola (ro) and symlink
     targets (ro). A writable `config`/`hooks` would let the agent plant
     `core.hooksPath` or a hook that the HOST runs on the next commit in the
-    main checkout — never drop those overlays. `TestSandboxContainsTheAgent`
+    main checkout — never drop those overlays. Every mount source comes from
+    something the agent cannot write: git stores are resolved from the MAIN
+    checkouts (not the worktree's rewritable `.git` pointer), and the context
+    folder is mounted only when `.lola/context` still points inside
+    `~/.lola/context/<project>/`. `TestSandboxContainsTheAgent`
     (opt-in, `LOLA_SANDBOX_IT=1`) proves the escapes fail against a real engine.
   - Hooks cannot use the unix socket (a host unix socket does not survive a
     bind mount into Docker Desktop's / OrbStack's VM — measured, ECONNREFUSED),
