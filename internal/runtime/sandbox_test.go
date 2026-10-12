@@ -224,6 +224,9 @@ func TestSandboxedSpawnPinsItsGitLayoutBeforeTheAgentRuns(t *testing.T) {
 	if line := f.n.sandboxLine(&f.p, s.ID, agent.Claude, "x"); !strings.Contains(line, "-v "+shQuote(cw+":"+cw+":ro")) {
 		t.Fatalf("config.worktree not overlaid read-only:\n%s", line)
 	}
+	if ptr := filepath.Join(dir, ".git"); !strings.Contains(f.n.sandboxLine(&f.p, s.ID, agent.Claude, "x"), "-v "+shQuote(ptr+":"+ptr+":ro")) {
+		t.Fatal(".git pointer not overlaid read-only")
+	}
 	if err := f.n.Kill(context.Background(), s, true, false); err != nil {
 		t.Fatalf("Kill: %v", err)
 	}

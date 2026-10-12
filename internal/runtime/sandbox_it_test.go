@@ -101,7 +101,8 @@ func TestSandboxContainsTheAgent(t *testing.T) {
 		"echo x > " + escapes["git hooks"] + " 2>/dev/null",
 		// Re-point .git at a git dir of the agent's own whose config runs a
 		// command — on whichever machine next runs git here.
-		"git init -q --bare .evil && printf '[core]\\n\\tbare = false\\n\\tfsmonitor = \"touch " + hijacked + "; false\"\\n' > .evil/config && printf 'gitdir: %s\\n' \"$PWD/.evil\" > .git",
+		"git init -q --bare .evil; printf '[core]\\n\\tbare = false\\n\\tfsmonitor = \"touch " + hijacked + "; false\"\\n' > .evil/config && printf 'gitdir: %s\\n' \"$PWD/.evil\" > .git",
+		"grep -q evil .git || echo pointer-kept >> " + r,
 		"echo done >> " + r,
 	}, "; ")
 	line := "exec sh -c " + shQuote(f.n.sandboxLine(&f.p, id, agent.Kind("none"), script))
@@ -129,8 +130,10 @@ func TestSandboxContainsTheAgent(t *testing.T) {
 	}
 	// The host's next git call on the worktree (a checkpoint, a diff, a dirty
 	// check) must not follow the rewritten pointer.
-	if raw, _ := os.ReadFile(filepath.Join(dir, ".git")); !strings.Contains(string(raw), ".evil") {
-		t.Fatalf("the in-container rewrite of .git did not happen: %q", raw)
+	// The pointer is read-only in the container, so the rewrite fails; to test
+	// the host-side pin on its own, do the rewrite here as if it had landed.
+	if err := os.WriteFile(filepath.Join(dir, ".git"), []byte("gitdir: "+filepath.Join(dir, ".evil")+"\n"), 0o644); err != nil {
+		t.Fatal(err)
 	}
 	_, _, _ = f.n.WT.WorkSummary(ctx, dir, "main") // the worktree manager's host git
 	cmd := exec.Command("git", "-C", dir, "status", "--porcelain")
@@ -140,6 +143,9 @@ func TestSandboxContainsTheAgent(t *testing.T) {
 	}
 	if _, err := os.Stat(hijacked); err == nil {
 		t.Error("host git ran a config the sandboxed agent planted")
+	}
+	if !strings.Contains(got, "pointer-kept") {
+		t.Error("the agent rewrote its worktree's .git pointer")
 	}
 	for what, p := range escapes {
 		if _, err := os.Stat(p); err == nil {
