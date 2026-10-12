@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.2.17](https://github.com/sushidev-team/lola/compare/v0.2.16...v0.2.17) (2026-10-12)
+
+
+### Features
+
+* **desktop:** polish diff viewer and align file navigation order ([311f163](https://github.com/sushidev-team/lola/commit/311f16360c7be078aff5a9d7f7d5128a85cd987d))
+* **desktop:** synchronize diff scrolling and file navigation ([6295f97](https://github.com/sushidev-team/lola/commit/6295f970160685a12ff6951928a7c866c29d491f))
+
+
+### Bug Fixes
+
+* **desktop:** refine session attention indicator ([ff08ee1](https://github.com/sushidev-team/lola/commit/ff08ee1ab08407849a1083c34ae16d04c8b3b088))
+* **runtime:** grant Claude access to session context folders ([82046d7](https://github.com/sushidev-team/lola/commit/82046d79faa3d731c5972300929a6d9dae5e3689))
+
 ## [0.2.16](https://github.com/sushidev-team/lola/compare/v0.2.15...v0.2.16) (2026-10-11)
 
 
