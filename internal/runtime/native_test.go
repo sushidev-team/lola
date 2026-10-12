@@ -433,7 +433,7 @@ func TestSpawnPerAgentLaunchAndArtifacts(t *testing.T) {
 			if !strings.Contains(tmuxCalls, c.execFrag) {
 				t.Errorf("launch line missing %q:\n%s", c.execFrag, tmuxCalls)
 			}
-			if !strings.Contains(tmuxCalls, f.n.launchCommand(id, c.kind, false)) {
+			if !strings.Contains(tmuxCalls, f.n.launchCommand("", id, c.kind, false)) {
 				t.Errorf("tmux launch line does not match launchCommand:\n%s", tmuxCalls)
 			}
 
@@ -1172,7 +1172,7 @@ func TestExcludeLolaDirResolvesWorktreePointer(t *testing.T) {
 
 func TestLaunchCommandQuoting(t *testing.T) {
 	n := &Native{} // ClaudeBin empty -> "claude" from PATH
-	got := n.launchCommand("lola-nori-eng-42", agent.Claude, false)
+	got := n.launchCommand("", "lola-nori-eng-42", agent.Claude, false)
 	// The POSIX line is wrapped in `sh -c '...'` so the user's login shell
 	// (which may be fish/csh/tcsh, not a POSIX sh) only has to exec `sh`; the
 	// inner single quotes around the prompt are escaped as '\''.
@@ -1189,7 +1189,7 @@ func TestLaunchCommandQuoting(t *testing.T) {
 	}
 
 	n.ClaudeBin = "/odd path/claude's bin"
-	got = n.launchCommand("lola-nori-eng-42", agent.Claude, false)
+	got = n.launchCommand("", "lola-nori-eng-42", agent.Claude, false)
 	if !strings.Contains(got, `/odd path/claude`) {
 		t.Errorf("launchCommand must include the binary path:\n%s", got)
 	}
@@ -1228,7 +1228,7 @@ func TestLaunchCommandPerAgent(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "git"), []byte(gitScript), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command("sh", "-c", n.launchCommand(id, agent.Codex, false))
+	cmd := exec.Command("sh", "-c", n.launchCommand("", id, agent.Codex, false))
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"))
 	out, err := cmd.Output()
@@ -1243,7 +1243,7 @@ func TestLaunchCommandPerAgent(t *testing.T) {
 	}
 
 	// Reviving a prior conversation gets the same per-worktree grant.
-	cmd = exec.Command("sh", "-c", n.launchCommand(id, agent.Codex, true))
+	cmd = exec.Command("sh", "-c", n.launchCommand("", id, agent.Codex, true))
 	cmd.Dir, cmd.Env = dir, append(os.Environ(), "PATH="+dir+":"+os.Getenv("PATH"))
 	out, err = cmd.Output()
 	if err != nil {
@@ -1260,20 +1260,20 @@ func TestLaunchCommandPerAgent(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "git"), []byte("#!/bin/sh\nexit 1\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	failedCmd := exec.Command("sh", "-c", n.launchCommand(id, agent.Codex, true))
+	failedCmd := exec.Command("sh", "-c", n.launchCommand("", id, agent.Codex, true))
 	failedCmd.Dir, failedCmd.Env = cmd.Dir, cmd.Env
 	if out, err := failedCmd.Output(); err == nil || len(out) != 0 {
 		t.Fatalf("failed git lookup launched codex: output=%q err=%v", out, err)
 	}
 
 	wantOpenCode := "exec sh -c 'set -a; . ./.lola/env; set +a; exec opencode --prompt " + esc + " --auto'"
-	if got := n.launchCommand(id, agent.OpenCode, false); got != wantOpenCode {
+	if got := n.launchCommand("", id, agent.OpenCode, false); got != wantOpenCode {
 		t.Errorf("opencode launchCommand:\n%s\nwant:\n%s", got, wantOpenCode)
 	}
 
 	// Neither non-claude line may leak the ClaudeBin override.
 	for _, k := range []agent.Kind{agent.Codex, agent.OpenCode} {
-		if strings.Contains(n.launchCommand(id, k, false), "should/not/be/used") {
+		if strings.Contains(n.launchCommand("", id, k, false), "should/not/be/used") {
 			t.Errorf("%s launch must not use ClaudeBin", k)
 		}
 	}
@@ -1306,7 +1306,7 @@ func TestLaunchCommandRunsUnderNonPosixLoginShells(t *testing.T) {
 	}
 
 	n := &Native{}
-	line := n.launchCommand("lola-x-eng-1", agent.Claude, false)
+	line := n.launchCommand("", "lola-x-eng-1", agent.Claude, false)
 
 	for _, shell := range []string{"/bin/sh", "/bin/bash", "/bin/zsh", "/bin/csh", "/bin/tcsh"} {
 		if _, err := os.Stat(shell); err != nil {

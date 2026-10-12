@@ -280,6 +280,12 @@ func (d *Daemon) observeNative(ctx context.Context) {
 			}
 		}
 
+		// Linked repositories' PRs (one per linked repo with a GitHub repo),
+		// same log-and-continue discipline as the primary: a failed fetch keeps
+		// the last known facts. Display + the merged-cleanup hold only — the
+		// delivery axis stays the primary PR's.
+		linkedPRs := d.observeLinkedPRs(ctx, s)
+
 		// Live-pane activity corroboration (working-vs-waiting BULLETPROOF):
 		// capture the pane ONCE this cycle for EVERY alive session. Claude Code
 		// hooks do not reliably fire when the agent asks a plain-text question and
@@ -381,6 +387,8 @@ func (d *Daemon) observeNative(ctx context.Context) {
 				}
 			}
 
+			linkedChanged := applyLinkedPRs(cur, linkedPRs, now)
+
 			// 2. AGENT axis — liveness + hooks (already merged into cur) + pane
 			// + tmux's own activity stamp.
 			agentChanged := false
@@ -404,7 +412,7 @@ func (d *Daemon) observeNative(ctx context.Context) {
 				}
 			}
 
-			if !alive && !agentChanged && !deliveryChanged {
+			if !alive && !agentChanged && !deliveryChanged && !linkedChanged {
 				// Already-settled terminal record: discard so LastSeen freezes and
 				// the store's retention prune eventually drops it — UNLESS we just
 				// backfilled its title, which must be committed (Update discards the

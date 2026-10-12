@@ -320,6 +320,10 @@ each of which owns exactly one external tool or concern behind an **exec seam**
 - `bestof.go` — best-of-N: `cmd=bestOf` (start), `cmd=bestOfCompare`
   (read-only), `cmd=bestOfPick`, plus `spawnIssue`, the one spawn path dispatch
   uses for both a single issue and a group. See the invariant below.
+- `hookbridge.go` — the SANDBOX hook bridge: a token-authenticated loopback
+  TCP listener for containerized agents' hooks. See the sandbox invariant.
+- `linkedprs.go` — linked-repository PR observation (`[[project.linked_repo]]`)
+  and its wire shape; the merged-cleanup hold lives in `reactions.go`.
 - `reconcile.go` — ~5m pass reverting orphaned issues (labeled-sent but no
   counted session and no open PR after `orphanTimeout`).
 - `writeback.go` — P4 Linear state transitions + comments.
@@ -1195,6 +1199,70 @@ each of which owns exactly one external tool or concern behind an **exec seam**
     `origin/<base>` lookup), lays the checkpoint's tree over it as uncommitted
     work, and inherits the parent's `ContextKey`. It is a manual-kind session:
     no `Issue`, so it never counts against the issue in dispatch/reconcile.
+- **A sandboxed agent's isolation is the MOUNT LIST, and the pane is unchanged.**
+  `[[project]].sandbox = "docker"` (`internal/runtime/sandbox.go`) wraps the
+  agent's ordinary POSIX launch line in `docker run -it` inside the same tmux
+  pane in `launchLine`, so spawn, revive, switch-agent and fork are all
+  covered and every pane reader is untouched. The project is passed BY NAME:
+  a session ID does not identify its project (`lola-web-eng-42` is project
+  `web` + ENG-42 and project `web-eng` + 42), and a wrong guess launched a
+  sandboxed agent on the host.
+  Rules that hold it together:
+  - The mounts ARE the sandbox: the worktree, each repo's git common dir
+    (needed to commit) with its `config` and `hooks` re-mounted READ-ONLY
+    after it, claude's transcript slug dir, the Linux lola (ro) and symlink
+    targets (ro). A writable `config`/`hooks` would let the agent plant
+    `core.hooksPath` or a hook that the HOST runs on the next commit in the
+    main checkout — never drop those overlays. Every mount source comes from
+    something the agent cannot write: git stores are resolved from the MAIN
+    checkouts (not the worktree's rewritable `.git` pointer), and the context
+    folder is mounted only when `.lola/context` still points inside
+    `~/.lola/context/<project>/`.
+  - **HOST git never follows a sandboxed worktree's own metadata.** The agent
+    can rewrite the `.git` pointer and the admin dir (inside the rw store), and
+    plain `git -C <worktree>` on the host would then honour the agent's config
+    — `core.fsmonitor`, an attacker-NAMED `filter.*.clean` — i.e. run its
+    commands on the host through lola's own checkpoints, diffs and dirty
+    checks. So `internal/gitguard` PINS each sandboxed worktree's admin dir +
+    store when the runtime creates it (before post_create, the baseline or the
+    agent), records it on `Session.GitPin`/`LinkedRepo.GitPin`, and every host
+    git exec (`checkpoint`, `gitdiff`, `worktree`, `reviewagent`) goes through
+    `gitguard.Apply` → `GIT_DIR`/`GIT_COMMON_DIR`/`GIT_WORK_TREE`. The admin
+    dir's `config.worktree` is overlaid read-only in the container; a pinned
+    `worktree remove` passes `--force` after its own pinned dirty check (git's
+    internal re-check would follow the admin `commondir`). A sandboxed record
+    WITHOUT a pin is `gitguard.Deny`'d by the daemon's `syncGitPins` — host
+    git on it fails, teardown keeps it. A new host git call on a session
+    worktree must go through `gitguard.Apply`. `TestSandboxContainsTheAgent`
+    (opt-in, `LOLA_SANDBOX_IT=1`) proves the escapes fail against a real engine.
+  - Hooks cannot use the unix socket (a host unix socket does not survive a
+    bind mount into Docker Desktop's / OrbStack's VM — measured, ECONNREFUSED),
+    so `lola hook`/`lola report` dial `LOLA_HOOK_ADDR` when set. The bridge
+    (`internal/daemon/hookbridge.go`) admits ONLY `hookEvent`/`agentReport`, and
+    only with `hook.TokenFor(secret, req.Session)` — an HMAC under
+    `~/.lola/state/hook-secret`, so it is stateless across restarts and a token
+    speaks for exactly one session. Never widen the allowlist: loopback TCP is
+    reachable by every local process, unlike the 0600 socket.
+  - The container outlives its pane (`-it` gets no signal from a killed CLI),
+    so `runtime.Kill` runs `docker rm -f <id>` whenever the session RECORDED a
+    sandbox or its project has one, and every launch line starts with the same
+    `rm -f` so a revive never collides with a straggler.
+  - A sandboxed project's health gate is the docker CLI (`sandboxedBin`), not
+    the agent binary — the agent lives in the image.
+- **Linked repositories nest INSIDE the primary worktree, and teardown removes
+  them FIRST.** `[[project.linked_repo]]` (`internal/runtime/linked.go`)
+  checks each repo out at `<worktree>/.lola/repos/<name>` on the session's
+  branch — inside the excluded `.lola/` (invisible to the primary's git) and
+  inside the sandbox mount. Removing the primary deletes that tree with no
+  dirty check of the nested ones, so `Kill` runs `removeLinked` (dirty-safe,
+  per repo) before anything else and a refusal keeps EVERYTHING — as does a
+  failed linked rollback during spawn, and anything left under `.lola/repos`
+  that the record does not account for (`unaccountedLinked`; adoption
+  rebuilds the records from disk with `discoverLinked`). `SlotTaken` checks
+  every linked repo's branch too. The primary PR alone drives the delivery axis; linked PRs are
+  observed beside it (`Session.Linked[i].PR`) for display and to HOLD the
+  merged cleanup until a SUCCESSFUL lookup since the merge shows none open
+  (`Session.LinkedPRsSettled(since)` — a failed lookup is not "no PR").
 - **The shared context folder lives OUTSIDE the worktree.**
   `~/.lola/context/<project>/<key>/` is symlinked in as `.lola/context`, so
   `git worktree remove` deletes the link and never the notes. The key is

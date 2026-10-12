@@ -304,6 +304,10 @@ runtime layer, not on config load.
 | `branch_prefix` | string | Prefix prepended to a session's derived branch name (e.g. `"feat/"` yields `feat/eng-42`). Empty inherits `[defaults].branch_prefix`, then `"lola/"`. |
 | `post_create` | string array | Commands run inside a fresh worktree before the agent starts (e.g. `composer install`). Any failure blocks the session with a clear status — never a half-started agent. Omit to inherit `[defaults].post_create`. |
 | `dev_commands` | string array | Long-running dev processes for this repository, e.g. `["composer dev", "npm run dev"]`. They run only in the project's **active** session — one session at a time, each command in its own terminal tab — see [The active session](#the-active-session). Deliberately **not** inheritable from `[defaults]`: a dev command belongs to one repository. |
+| `sandbox` | `"none"` \| `"docker"` | Run this project's coding agents inside a container that can write only their worktree. Empty = `none` (on the host). See [The container sandbox](#the-container-sandbox). Not inheritable. |
+| `sandbox_image` | string | Image a sandboxed project runs, overriding `[sandbox].image`. Must carry `sh`, `git` and the coding agent on `PATH`. |
+| `sandbox_ports` | string array | Container ports published on `127.0.0.1`, as `"3000"` or `"<host>:<container>"`, so a dev server the agent starts in the container is reachable from the host. |
+| `[[project.linked_repo]]` | table array | Further repositories one issue may span (`name`, `path`, `repo`, `default_branch`). Each session gets a worktree of each on its branch and its PR is tracked beside the primary one. See [Linked repositories](#linked-repositories). Not inheritable. |
 | `daily_budget_tokens` | int | This project's daily limit in **weighted** tokens (see [`[budget]`](#budget-optional)). Once today's usage reaches it the project dispatches nothing new until tomorrow; running sessions are untouched. `0`/absent = no project limit. Not inheritable from `[defaults]`. |
 | `symlinks` | string array | Files symlinked from the main checkout into each worktree, e.g. `[".env"]`. Beware: a shared `.env` usually means every worktree talks to the same database. Omit to inherit `[defaults].symlinks`. |
 | `env` | table of strings | Extra environment variables exported into each session (`[project.env]`); the agent pane, shell tabs and the `post_create` commands all see them. Values may reference the session — see [Per-session env values](#per-session-env-values). Omit to inherit `[defaults].env`. |
@@ -513,6 +517,96 @@ REDIS_QUEUE = "{{{.Session}}}"   # → {lola-nori-app-nor-366}
 Prefer `{{.Session}}` wherever the value has to be unique for every session:
 `{{.Issue}}` renders empty when there is no issue. Only values are rendered —
 names are validated shell identifiers and are never templated.
+
+#### The container sandbox
+
+`sandbox = "docker"` runs the project's coding agent inside a container, so an
+agent that goes rogue can wreck its worktree and nothing else. The agent's pane
+is still an ordinary lola tmux pane — it runs `docker run -it …` instead of the
+agent — so the terminal views, pane classification, answers and send-keys all
+work unchanged.
+
+```toml
+[sandbox]
+image    = "ghcr.io/acme/agent-node:22"   # sh + git + the coding agent on PATH
+lola_bin = "/Users/me/src/lola/dist/lola-linux-arm64"   # make build-linux
+pass_env = ["CLAUDE_CODE_OAUTH_TOKEN", "GH_TOKEN"]
+
+[[project]]
+name          = "web"
+sandbox       = "docker"
+sandbox_ports = ["5173"]          # published on 127.0.0.1:5173
+```
+
+What the container can reach:
+
+| Access | What |
+| --- | --- |
+| read-write | the session worktree (linked-repo worktrees live inside it), the repositories' git object/ref stores (a commit writes there), and claude's transcript directory for this worktree (lola's usage, claim audit and revive read it) |
+| read-only | each git store's `config` and `hooks` (a writable one would let the agent plant a hook the **host** runs on the next commit), the Linux lola binary, the targets of `symlinks` |
+| nothing | everything else — `$HOME`, `~/.lola`, the project's main checkout |
+
+Things to know:
+
+- **Credentials.** The container cannot read the macOS keychain, so the agent
+  authenticates from environment variables listed in `[sandbox].pass_env`
+  (copied from the daemon's environment into the session's 0600 env file at
+  spawn — names only in config). claude: `CLAUDE_CODE_OAUTH_TOKEN` (from
+  `claude setup-token`) or `ANTHROPIC_API_KEY`; `git push` / `gh`: `GH_TOKEN`.
+- **Hooks.** A host unix socket cannot be mounted into Docker Desktop's or
+  OrbStack's VM, so a sandboxed agent's hooks reach the daemon over the **hook
+  bridge**: `127.0.0.1:[sandbox].hook_port` (default 7718), reached from the
+  container as `host.docker.internal`, open only while some project is
+  sandboxed, accepting only hook events and `lola report`, each carrying a
+  per-session token. The container runs `[sandbox].lola_bin` — a Linux build
+  (`make build-linux`) — mounted at the host lola's path.
+- **claude's state** lives in `.lola/claude` inside the worktree (seeded past
+  the first-run dialogs); codex's in `.lola/codex`. The subscription-limit
+  readout and codex/opencode token usage are not recorded for sandboxed
+  sessions.
+- **Dev servers.** `dev_commands` still run on the host (they are the human's
+  view of the branch); `sandbox_ports` is for servers the agent starts inside
+  the container.
+- **lola's own git** on a sandboxed worktree (checkpoints, diffs, dirty
+  checks) never follows the worktree's `.git` pointer, which the agent can
+  rewrite: the layout is pinned when lola creates the worktree and every host
+  git call uses it.
+- **Teardown** removes the container (`docker rm -f <session>`) along with the
+  pane. Containers carry the label `dev.sushi.lola.session=<session>`.
+- macOS with Docker Desktop or OrbStack is what this is built and tested
+  against. On a plain Linux engine the bridge's loopback port is not reachable
+  from the default bridge network.
+
+#### Linked repositories
+
+One issue can span several repositories — a frontend and its API, say. List the
+others on the project:
+
+```toml
+[[project]]
+name = "web"
+path = "/src/web"
+repo = "acme/web"
+
+[[project.linked_repo]]
+name           = "api"            # directory name + label
+path           = "/src/api"       # its main checkout
+repo           = "acme/api"       # where its PR is looked up
+default_branch = "develop"        # optional; defaults to the project's
+```
+
+Each session then gets one worktree **per repository**, all on the session's
+branch, all in one session directory: the primary worktree, with each linked
+one at `.lola/repos/<name>` inside it (git-excluded, and inside the sandbox when
+there is one). The agent's briefing lists them and asks for one PR per
+repository it changed, cross-linked in their descriptions.
+
+The primary repository's PR still drives everything per-PR — status, CI and
+review reactions, write-back. Each linked PR is observed beside it and shown in
+both UIs, and the merged cleanup **waits** until a successful lookup after the
+merge shows no linked PR still open (a failed `gh` call is not "no PR").
+Teardown removes the linked worktrees first and refuses (keeping everything)
+when one holds uncommitted work.
 
 ### `[[project]]` polling fields (optional; a project polls when `team_id` is set)
 
@@ -1238,6 +1332,19 @@ a slot is one agent, not one agent's `cargo build`. Same hold contract as
 
 A value the OS will not report holds **nothing** — a wrong "busy" would mean a
 machine that silently never dispatches.
+
+### `[sandbox]` (optional)
+
+The machine side of the [container sandbox](#the-container-sandbox); a project
+opts in with `sandbox = "docker"`.
+
+| Key | Type | Description |
+| --- | --- | --- |
+| `docker` | string | The docker CLI. Default `docker` from `PATH` (OrbStack, Colima and podman's docker shim work too). |
+| `image` | string | Default image for sandboxed projects (`[[project]].sandbox_image` overrides). Needs `sh`, `git` and the coding agent on `PATH`; its own entrypoint is bypassed. |
+| `lola_bin` | string | Absolute path to a **Linux** lola build (`make build-linux` → `dist/lola-linux-<arch>`). Required by any sandboxed project: it is what the agent's hooks run inside the container. |
+| `hook_port` | int | Loopback port of the hook bridge. Default `7718`. |
+| `pass_env` | string array | Names of host environment variables copied into each sandboxed session's env (credentials). Values never live in the config. |
 
 ### `[ui]` (optional)
 

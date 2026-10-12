@@ -97,7 +97,7 @@ func (d *Daemon) maybeFallback(ctx context.Context, s session.Session) {
 	if ok && health != nil {
 		// The target binary must resolve before anything is promised or torn
 		// down — a missing codex must never cost the running claude pane.
-		if err := health(next.Binary()); err != nil {
+		if err := health(d.launchBin(s.Project, next.Binary())); err != nil {
 			d.logf("", "fallback: %s next fallback %s is unavailable: %v", s.ID, next, err)
 			ok = false
 		}
@@ -236,7 +236,7 @@ func (d *Daemon) handleSwitchAgent(ctx context.Context, a protocol.SwitchAgentAr
 	health := d.runtimeHealth
 	d.mu.Unlock()
 	if health != nil {
-		if err := health(kind.Binary()); err != nil {
+		if err := health(d.launchBin(s.Project, kind.Binary())); err != nil {
 			return protocol.SwitchAgentData{}, fmt.Errorf("runtime not ready: %w", err)
 		}
 	}

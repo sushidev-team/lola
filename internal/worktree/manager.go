@@ -22,6 +22,7 @@ import (
 	"strings"
 
 	"github.com/sushidev-team/lola/internal/config"
+	"github.com/sushidev-team/lola/internal/gitguard"
 )
 
 // ErrDirty is wrapped into Remove's error when the worktree has uncommitted
@@ -56,6 +57,9 @@ func (m *Manager) git(ctx context.Context, args ...string) (stdout, stderr strin
 		}
 	}
 	cmd := exec.CommandContext(ctx, bin, args...)
+	// `-C <worktree>` on a SANDBOXED worktree must not follow the .git pointer
+	// the agent can rewrite (internal/gitguard).
+	gitguard.Apply(cmd)
 	var out, errb bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &errb
@@ -116,6 +120,38 @@ func (m *Manager) CreateAt(ctx context.Context, p config.Project, sessionID, bra
 		return "", err
 	}
 	return m.createAt(ctx, p, sessionID, branch, func() string { return commit })
+}
+
+// CreateLinked adds a LINKED-REPOSITORY worktree for a session: a worktree of
+// the repository at repoPath, at dir (inside the session's primary worktree,
+// see runtime.LinkedWorktreeDir), on a new branch cut from origin/<base>
+// (falling back to the local <base>). dir must lie inside Root — the same
+// guard Remove applies, so a linked worktree can always be torn down through
+// it — and must not exist yet: a leftover there is somebody's work.
+func (m *Manager) CreateLinked(ctx context.Context, repoPath, dir, branch, base string) error {
+	if m.Root == "" {
+		return errors.New("worktree: Root not set")
+	}
+	if repoPath == "" || branch == "" || base == "" {
+		return errors.New("worktree: linked repo path, branch and base are required")
+	}
+	if err := m.guardRemovable(config.Project{Path: repoPath}, dir); err != nil {
+		return err
+	}
+	if _, err := os.Lstat(dir); err == nil {
+		return fmt.Errorf("worktree: linked worktree %s already exists", dir)
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
+		return err
+	}
+	start := base
+	if _, _, err := m.git(ctx, "-C", repoPath, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/"+base); err == nil {
+		start = "origin/" + base
+	}
+	_, _, err := m.git(ctx, "-C", repoPath, "worktree", "add", "-b", branch, dir, start)
+	return err
 }
 
 func (m *Manager) validCreate(p config.Project, sessionID, branch string) error {
@@ -375,7 +411,11 @@ func (m *Manager) Remove(ctx context.Context, p config.Project, dir, branch stri
 	}
 
 	args := []string{"-C", p.Path, "worktree", "remove"}
-	if force {
+	// A PINNED (sandboxed) worktree was dirty-checked above through its pin.
+	// `worktree remove` would repeat that check in a child that finds the
+	// repository through the admin dir's `commondir` — a file the agent could
+	// rewrite — so the already-made decision is passed as --force instead.
+	if force || gitguard.Pinned(dir) {
 		args = append(args, "--force")
 	}
 	args = append(args, dir)

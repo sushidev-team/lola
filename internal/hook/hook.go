@@ -48,8 +48,7 @@ func Post(event string, p protocol.HookPayload) error {
 	}
 
 	deadline := time.Now().Add(postTimeout)
-	d := net.Dialer{Deadline: deadline}
-	conn, err := d.Dial("unix", filepath.Join(home, "lola.sock"))
+	conn, token, err := dialDaemon(home, deadline)
 	if err != nil {
 		return fmt.Errorf("dial lola daemon: %w", err)
 	}
@@ -57,10 +56,11 @@ func Post(event string, p protocol.HookPayload) error {
 	_ = conn.SetDeadline(deadline)
 
 	req := protocol.Request{
-		Cmd:     "hookEvent",
-		Session: session,
-		Event:   event,
-		Detail:  p.Reason, // the legacy short-reason field, kept for log lines
+		Cmd:       "hookEvent",
+		Session:   session,
+		Event:     event,
+		Detail:    p.Reason, // the legacy short-reason field, kept for log lines
+		HookToken: token,
 	}
 	if p != (protocol.HookPayload{}) {
 		req.Hook = &p
@@ -76,6 +76,22 @@ func Post(event string, p protocol.HookPayload) error {
 	// daemon closed without replying) are ignored: the event was written.
 	_, _ = bufio.NewReader(conn).ReadString('\n')
 	return nil
+}
+
+// dialDaemon connects to the daemon for a hook/report. On the host that is the
+// 0600 unix socket under home. Inside a SANDBOX container the socket cannot be
+// reached (a host unix socket does not survive a bind mount into Docker
+// Desktop's / OrbStack's VM), so the launcher exports LOLA_HOOK_ADDR (the
+// daemon's loopback hook bridge as seen from the container) and LOLA_HOOK_TOKEN
+// (this session's token) instead; the token rides on every request.
+func dialDaemon(home string, deadline time.Time) (net.Conn, string, error) {
+	d := net.Dialer{Deadline: deadline}
+	if addr := os.Getenv("LOLA_HOOK_ADDR"); addr != "" {
+		conn, err := d.Dial("tcp", addr)
+		return conn, os.Getenv("LOLA_HOOK_TOKEN"), err
+	}
+	conn, err := d.Dial("unix", filepath.Join(home, "lola.sock"))
+	return conn, "", err
 }
 
 // ErrNoDaemon wraps every failure to REACH the daemon from Report (no session
@@ -102,15 +118,15 @@ func Report(argv []string) error {
 	if err != nil {
 		return err
 	}
-	raw, err := json.Marshal(protocol.Request{Cmd: "agentReport", Session: session, Args: args})
-	if err != nil {
-		return err
-	}
 	deadline := time.Now().Add(postTimeout)
-	d := net.Dialer{Deadline: deadline}
-	conn, err := d.Dial("unix", filepath.Join(home, "lola.sock"))
+	conn, token, err := dialDaemon(home, deadline)
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrNoDaemon, err)
+	}
+	raw, err := json.Marshal(protocol.Request{Cmd: "agentReport", Session: session, Args: args, HookToken: token})
+	if err != nil {
+		conn.Close()
+		return err
 	}
 	defer conn.Close()
 	_ = conn.SetDeadline(deadline)

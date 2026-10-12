@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/sushidev-team/lola/internal/board"
+	"github.com/sushidev-team/lola/internal/gitguard"
 	"github.com/sushidev-team/lola/internal/scm"
 	"github.com/sushidev-team/lola/internal/state"
 )
@@ -420,6 +421,24 @@ type Session struct {
 	// folder existed; runtime.ContextKey then falls back to the derivation.
 	ContextKey string `json:"context_key,omitempty"`
 
+	// Sandbox records how the agent was isolated at spawn: "" (on the host) or
+	// "docker" (in a container named after the session — internal/runtime's
+	// sandbox.go). Recorded rather than re-read from config because teardown
+	// must remove the container even after the project stopped being sandboxed.
+	Sandbox string `json:"sandbox,omitempty"`
+
+	// Linked are the session's LINKED-REPOSITORY worktrees
+	// ([[project.linked_repo]]): one per further repository the issue spans,
+	// each on the session's branch, each with its own PR. The primary repo's PR
+	// stays in PR and owns the delivery axis; these are tracked beside it.
+	Linked []LinkedRepo `json:"linked,omitempty"`
+
+	// GitPin is a SANDBOXED worktree's trusted git layout, captured before the
+	// agent first ran (internal/gitguard): host-side git on the worktree uses
+	// it instead of the `.git` pointer the agent can rewrite. nil for a host
+	// session.
+	GitPin *gitguard.Pin `json:"git_pin,omitempty"`
+
 	// PostedGitHubPRs maps a provider kind -> the PR number the github transport
 	// has SETTLED (a successful post OR a permanent gh failure). Per-PR settle
 	// guard so the github sink no-ops for a kind/PR it has already settled and a
@@ -735,6 +754,44 @@ func (s Session) OwnsBranch() bool {
 		return s.Kind != KindPR
 	}
 	return !s.Manual
+}
+
+// LinkedRepo is one linked-repository worktree of a session. Name/Repo come
+// from the project's [[project.linked_repo]] at spawn; Worktree and Branch are
+// what the runtime created; PR is the observer's latest gh facts for Branch in
+// Repo (nil = no PR yet, or no Repo to ask), with PRObservedAt its freshness.
+type LinkedRepo struct {
+	Name         string    `json:"name"`
+	Repo         string    `json:"repo,omitempty"`
+	Path         string    `json:"path,omitempty"` // the linked repository's main checkout
+	Worktree     string    `json:"worktree"`
+	Branch       string    `json:"branch"`
+	PR           *scm.PR   `json:"pr,omitempty"`
+	PRObservedAt time.Time `json:"pr_observed_at,omitzero"`
+	// GitPin is this linked worktree's trusted layout (see Session.GitPin).
+	GitPin *gitguard.Pin `json:"git_pin,omitempty"`
+}
+
+// LinkedPRsSettled reports whether every linked repository is KNOWN to have
+// no open PR as of since (the moment the primary PR merged) — the condition
+// for tearing the session down. "Known" is the point: a linked repo with a
+// GitHub slug counts only once a lookup SUCCEEDED at or after since, because
+// a failed lookup leaves the last facts standing and a nil PR from before the
+// merge says nothing about a PR opened after it. A repo with no slug cannot
+// be asked and does not hold the cleanup (its dirty check still does).
+func (s Session) LinkedPRsSettled(since time.Time) bool {
+	for _, l := range s.Linked {
+		if l.Repo == "" {
+			continue
+		}
+		if l.PRObservedAt.IsZero() || l.PRObservedAt.Before(since) {
+			return false
+		}
+		if l.PR != nil && l.PR.State == "OPEN" {
+			return false
+		}
+	}
+	return true
 }
 
 // Store is a mutex-guarded in-memory session map keyed by ID, persisted as

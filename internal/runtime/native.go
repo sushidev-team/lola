@@ -36,6 +36,7 @@ import (
 	"github.com/sushidev-team/lola/internal/agent"
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/devtab"
+	"github.com/sushidev-team/lola/internal/gitguard"
 	"github.com/sushidev-team/lola/internal/hook"
 	"github.com/sushidev-team/lola/internal/linear"
 	"github.com/sushidev-team/lola/internal/lolaenv"
@@ -163,6 +164,14 @@ type Native struct {
 	// teardown. nil disables both (ForkAgent then refuses) — tests that never
 	// fork leave it unset so no git runs outside the WT seam.
 	Checkpoints Checkpointer
+	// HookToken mints the sandbox hook-bridge token for a session ID
+	// (hook.TokenFor under the daemon's secret). It is written into a
+	// SANDBOXED session's 0600 env file only; nil = no token, and the bridge
+	// then rejects that session's hooks.
+	HookToken func(session string) string
+	// RemoveContainer removes a sandboxed session's container (`docker rm -f`)
+	// on teardown. nil = exec the configured docker CLI. A test seam.
+	RemoveContainer func(ctx context.Context, name string) error
 }
 
 // SessionID returns the BASE native session identifier for an issue:
@@ -261,7 +270,10 @@ func (n *Native) SlotTaken(ctx context.Context, p config.Project, id, branch str
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		return false, err
 	}
-	return n.WT.BranchExists(ctx, p, branch)
+	if taken, err := n.WT.BranchExists(ctx, p, branch); err != nil || taken {
+		return taken, err
+	}
+	return n.linkedBranchTaken(ctx, p, branch)
 }
 
 // resolveKind picks the agent kind for a launch: an explicit per-spawn
@@ -342,12 +354,19 @@ func (n *Native) SpawnWith(ctx context.Context, p config.Project, issue linear.I
 	if err != nil {
 		return session.Session{}, fmt.Errorf("runtime: spawn %s: %w", id, err)
 	}
+	// A sandboxed worktree's git layout is pinned NOW, while lola alone has
+	// touched it — before post_create, the checkpoint baseline or the agent
+	// (internal/gitguard).
+	pin, pinErr := n.pinSandbox(p.Name, dir)
 	n.pruneCheckpoints(ctx, dir, id) // a fresh session starts with no history
 	// Render [[project]].env against this session BEFORE anything reads it —
 	// Prepare hands it to post_create, envFile writes it into the pane.
 	p = expandProjectEnv(p, EnvVars{Session: id, Issue: issue.Identifier, Branch: branch, Project: p.Name, Worktree: dir})
 	fail := func(step string, cause error) (session.Session, error) {
 		return session.Session{}, n.rollback(ctx, p, id, dir, branch, step, cause)
+	}
+	if pinErr != nil {
+		return fail("pin sandbox git layout", pinErr)
 	}
 
 	if err := n.WT.Prepare(ctx, p, dir); err != nil {
@@ -368,9 +387,24 @@ func (n *Native) SpawnWith(ctx context.Context, p config.Project, issue linear.I
 	if err := os.MkdirAll(filepath.Join(dir, lolaDir), 0o700); err != nil {
 		return fail("create "+lolaDir, err)
 	}
+	// Linked repositories go in AFTER .lola/ is excluded (they live under it)
+	// and, once created, every later failure must take them down first. If
+	// that fails the PRIMARY is kept too: removing it would delete the nested
+	// checkouts with no dirty check of their own.
+	linked, linkErr := n.createLinked(ctx, p, dir, branch)
+	primaryFail := fail
+	fail = func(step string, cause error) (session.Session, error) {
+		if rbErr := n.removeLinked(ctx, p.Name, linked, true, false); rbErr != nil {
+			return session.Session{}, fmt.Errorf("runtime: spawn %s: %s: %w (linked worktree rollback failed: %v; worktree kept at %s)", id, step, cause, rbErr, dir)
+		}
+		return primaryFail(step, cause)
+	}
+	if linkErr != nil {
+		return fail("create linked worktrees", linkErr)
+	}
 	ctxKey := contextKeyFor(issue.Identifier, id)
 	ctxDir := n.setupContext(dir, p.Name, ctxKey)
-	brief := promptMD(p, issue, branch)
+	brief := withLinkedBriefing(promptMD(p, issue, branch), p, linked)
 	if bestOf {
 		brief = withBestOfBriefing(brief, o.Attempt, o.Of)
 	}
@@ -398,8 +432,15 @@ func (n *Native) SpawnWith(ctx context.Context, p config.Project, issue linear.I
 		model = o.Model
 	}
 	n.recordBaseline(ctx, dir, id)
-	if err := n.Tmux.NewSession(ctx, id, dir, n.launchLine(id, kind, defaultLaunchPrompt(id), model, false)); err != nil {
-		return session.Session{}, n.rollbackTmux(ctx, p, id, dir, branch, "start tmux session", err)
+	if err := n.Tmux.NewSession(ctx, id, dir, n.launchLine(p.Name, id, kind, defaultLaunchPrompt(id), model, false)); err != nil {
+		// tmux may have created the session although the call failed: down it
+		// goes first, then the same linked-first rollback as every other step.
+		if n.Tmux.Has(ctx, id) {
+			if killErr := n.Tmux.KillSession(ctx, id); killErr != nil {
+				return session.Session{}, fmt.Errorf("runtime: spawn %s: start tmux session: %w (rollback failed: %v; tmux session and worktree %s kept)", id, err, killErr, dir)
+			}
+		}
+		return fail("start tmux session", err)
 	}
 
 	// Brand the agent pane's status bar (LOLA · issue · detach hint) and bind the
@@ -428,6 +469,9 @@ func (n *Native) SpawnWith(ctx context.Context, p config.Project, issue linear.I
 		BestOf:     groupIf(bestOf, o.Group),
 		Attempt:    intIf(bestOf, o.Attempt),
 		Attempts:   intIf(bestOf, o.Of),
+		Sandbox:    n.SandboxFor(p.Name),
+		Linked:     linked,
+		GitPin:     pin,
 	}, state.AgentStarting), nil
 }
 
@@ -605,7 +649,7 @@ func (n *Native) OpenManual(ctx context.Context, p config.Project, sessionID, br
 // failure it rolls the worktree back (force=false, so a dirty checkout is kept
 // for inspection) — deleting the branch only when ownsBranch — and returns the
 // wrapped error.
-func (n *Native) finishAgentLaunch(ctx context.Context, p config.Project, id, dir, branch string, kind agent.Kind, ownsBranch bool, ctxKey, prompt string) error {
+func (n *Native) finishAgentLaunch(ctx context.Context, p config.Project, id, dir, branch string, kind agent.Kind, ownsBranch bool, ctxKey, prompt string) (*gitguard.Pin, error) {
 	p = expandProjectEnv(p, EnvVars{Session: id, Branch: branch, Project: p.Name, Worktree: dir})
 	rb := func(step string, cause error) error {
 		delBranch := ""
@@ -617,42 +661,47 @@ func (n *Native) finishAgentLaunch(ctx context.Context, p config.Project, id, di
 		}
 		return fmt.Errorf("runtime: launch %s: %s: %w (worktree rolled back)", id, step, cause)
 	}
+	// Pinned before anything runs in the worktree (internal/gitguard).
+	pin, err := n.pinSandbox(p.Name, dir)
+	if err != nil {
+		return nil, rb("pin sandbox git layout", err)
+	}
 	if err := n.WT.Prepare(ctx, p, dir); err != nil {
-		return rb("prepare worktree", err)
+		return nil, rb("prepare worktree", err)
 	}
 	if err := excludeLolaDir(dir); err != nil {
-		return rb("git info/exclude", err)
+		return nil, rb("git info/exclude", err)
 	}
 	if kind == agent.OpenCode {
 		if err := excludeGitPattern(dir, openCodeDir+"/"); err != nil {
-			return rb("git info/exclude "+openCodeDir, err)
+			return nil, rb("git info/exclude "+openCodeDir, err)
 		}
 	}
 	if err := os.MkdirAll(filepath.Join(dir, lolaDir), 0o700); err != nil {
-		return rb("create "+lolaDir, err)
+		return nil, rb("create "+lolaDir, err)
 	}
 	n.pruneCheckpoints(ctx, dir, id) // a fresh session starts with no history
 	ctxDir := n.setupContext(dir, p.Name, ctxKey)
 	if err := os.WriteFile(filepath.Join(dir, lolaDir, "prompt.md"), n.withReportBriefing(withContextBriefing([]byte(prompt), ctxDir)), 0o600); err != nil {
-		return rb("write prompt.md", err)
+		return nil, rb("write prompt.md", err)
 	}
 	if err := n.writeAgentArtifacts(dir, kind, ctxDir); err != nil {
-		return rb("write agent artifacts", err)
+		return nil, rb("write agent artifacts", err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, lolaDir, "env"), n.envFile(p, id, dir, kind), 0o600); err != nil {
-		return rb("write env", err)
+		return nil, rb("write env", err)
 	}
 	n.recordBaseline(ctx, dir, id)
-	if err := n.Tmux.NewSession(ctx, id, dir, n.launchCommand(id, kind, false)); err != nil {
+	if err := n.Tmux.NewSession(ctx, id, dir, n.launchCommand(p.Name, id, kind, false)); err != nil {
 		if n.Tmux.Has(ctx, id) {
 			_ = n.Tmux.KillSession(ctx, id)
 		}
-		return rb("start tmux session", err)
+		return nil, rb("start tmux session", err)
 	}
 	if err := n.Tmux.ConfigureSession(ctx, id, n.Cfg.SessionChrome(branch)); err != nil && n.Logf != nil {
 		n.Logf("session %s: status-bar styling failed (cosmetic, session is up): %v", id, err)
 	}
-	return nil
+	return pin, nil
 }
 
 // OpenPRAgent opens a PR's branch as a TRACKING worktree and launches the coding
@@ -669,7 +718,8 @@ func (n *Native) OpenPRAgent(ctx context.Context, p config.Project, sessionID, b
 		return session.Session{}, fmt.Errorf("runtime: open pr agent %s: %w", sessionID, err)
 	}
 	kind := n.resolveKind(p.Name, agentOverride)
-	if err := n.finishAgentLaunch(ctx, p, sessionID, dir, branch, kind, false /* pr: upstream branch, not owned */, sessionID, prompt); err != nil {
+	pin, err := n.finishAgentLaunch(ctx, p, sessionID, dir, branch, kind, false /* pr: upstream branch, not owned */, sessionID, prompt)
+	if err != nil {
 		return session.Session{}, err
 	}
 	return withAgentState(session.Session{
@@ -684,6 +734,8 @@ func (n *Native) OpenPRAgent(ctx context.Context, p config.Project, sessionID, b
 		TmuxName:   sessionID,
 		Agent:      string(kind),
 		ContextKey: sessionID,
+		Sandbox:    n.SandboxFor(p.Name),
+		GitPin:     pin,
 	}, state.AgentStarting), nil
 }
 
@@ -699,7 +751,8 @@ func (n *Native) OpenManualAgent(ctx context.Context, p config.Project, sessionI
 		return session.Session{}, fmt.Errorf("runtime: open manual agent %s: %w", sessionID, err)
 	}
 	kind := n.resolveKind(p.Name, agentOverride)
-	if err := n.finishAgentLaunch(ctx, p, sessionID, dir, branch, kind, true /* manual: lola-owned branch */, sessionID, prompt); err != nil {
+	pin, err := n.finishAgentLaunch(ctx, p, sessionID, dir, branch, kind, true /* manual: lola-owned branch */, sessionID, prompt)
+	if err != nil {
 		return session.Session{}, err
 	}
 	return withAgentState(session.Session{
@@ -714,6 +767,8 @@ func (n *Native) OpenManualAgent(ctx context.Context, p config.Project, sessionI
 		TmuxName:   sessionID,
 		Agent:      string(kind),
 		ContextKey: sessionID,
+		Sandbox:    n.SandboxFor(p.Name),
+		GitPin:     pin,
 	}, state.AgentStarting), nil
 }
 
@@ -781,8 +836,8 @@ func manualEnvFile(p config.Project) []byte {
 // --continue to pick up its prior conversation instead of the fresh positional
 // prompt. Spawn always passes false; only Revive passes true, and only after
 // confirming there is a transcript to continue.
-func (n *Native) launchCommand(id string, kind agent.Kind, resume bool) string {
-	return n.launchLine(id, kind, defaultLaunchPrompt(id), "", resume)
+func (n *Native) launchCommand(project, id string, kind agent.Kind, resume bool) string {
+	return n.launchLine(project, id, kind, defaultLaunchPrompt(id), "", resume)
 }
 
 // defaultLaunchPrompt is the fresh-spawn first-turn prompt: point the agent at
@@ -794,14 +849,19 @@ func defaultLaunchPrompt(id string) string {
 // launchCommandPrompt is launchCommand with the first-turn prompt supplied by
 // the caller — a takeover spawn (SwitchAgent) points the new agent at
 // .lola/handoff.md first, then .lola/prompt.md.
-func (n *Native) launchCommandPrompt(id string, kind agent.Kind, prompt string, resume bool) string {
-	return n.launchLine(id, kind, prompt, "", resume)
+func (n *Native) launchCommandPrompt(project, id string, kind agent.Kind, prompt string, resume bool) string {
+	return n.launchLine(project, id, kind, prompt, "", resume)
 }
 
 // launchLine is the one builder behind every agent launch: launchCommandPrompt
 // plus an optional worker MODEL override (agent.LaunchModelArgs; "" = the
 // agent's default), which a best-of attempt carries and a revive repeats.
-func (n *Native) launchLine(id string, kind agent.Kind, prompt, model string, resume bool) string {
+//
+// project is the session's project NAME, passed explicitly: recovering it
+// from the session ID is ambiguous ("lola-web-eng-42" is both project "web",
+// issue ENG-42 and project "web-eng", issue 42), and guessing wrong here would
+// launch a sandboxed project's agent on the host.
+func (n *Native) launchLine(project, id string, kind agent.Kind, prompt, model string, resume bool) string {
 	bin := kind.Binary()
 	if kind == agent.Claude && n.ClaudeBin != "" {
 		bin = n.ClaudeBin
@@ -832,6 +892,12 @@ func (n *Native) launchLine(id string, kind agent.Kind, prompt, model string, re
 	}
 	for _, arg := range args {
 		posix += " " + shQuote(arg)
+	}
+	// A sandboxed project's agent runs the SAME line inside a container; the
+	// pane runs docker instead (sandbox.go). Every launch path — spawn,
+	// revive, switch-agent, fork — comes through here.
+	if p := n.sandboxProject(project); p != nil {
+		posix = n.sandboxLine(p, id, kind, posix)
 	}
 	return "exec sh -c " + shQuote(posix)
 }
@@ -986,10 +1052,14 @@ func reviveCodexHome(ctx context.Context, dir, home string) (string, error) {
 func (n *Native) envFile(p config.Project, id, dir string, kind agent.Kind) []byte {
 	var b strings.Builder
 	fmt.Fprintf(&b, "LOLA_SESSION=%s\n", shQuote(id))
-	if kind == agent.Codex {
+	sandboxed := n.sandboxProject(p.Name) != nil
+	if kind == agent.Codex && !sandboxed { // a container cannot see the user's ~/.codex
 		if home := userCodexHome(); home != "" {
 			fmt.Fprintf(&b, "CODEX_HOME=%s\n", shQuote(home))
 		}
+	}
+	if sandboxed {
+		b.WriteString(n.sandboxEnv(p, id, dir, kind))
 	}
 	if n.LinearKey != nil {
 		if key := n.LinearKey(); key != "" {
@@ -1170,6 +1240,7 @@ func (n *Native) Adopt(ctx context.Context) ([]session.Session, error) {
 				Issue:     issueFromSessionID(id, p.Name),
 				Repo:      p.Repo,
 				TmuxName:  id,
+				Linked:    discoverLinked(p, dir),
 			}, a))
 		}
 	}
@@ -1274,6 +1345,15 @@ func (n *Native) Kill(ctx context.Context, s session.Session, removeWorktree, fo
 	if name != s.ID {
 		n.killAuxSessions(ctx, name)
 	}
+	// A sandboxed agent's container does not stop with its pane: the pane ran
+	// the docker CLI, and a TTY container ignores its client going away.
+	// Best-effort like the aux sweep — the container is --rm and named after
+	// the session, so the next launch's `docker rm -f` clears a straggler.
+	if s.Sandbox != "" || n.sandboxProject(s.Project) != nil {
+		if err := n.removeContainer(ctx, s.ID); err != nil && n.Logf != nil {
+			n.Logf("session %s: removing its sandbox container failed: %v", s.ID, err)
+		}
+	}
 	if !removeWorktree {
 		return nil
 	}
@@ -1291,6 +1371,19 @@ func (n *Native) Kill(ctx context.Context, s session.Session, removeWorktree, fo
 		branch = ""
 	}
 	dir := filepath.Join(n.WT.Root, p.Name, s.ID)
+	// Linked worktrees first: they live INSIDE dir, and only their own dirty
+	// check protects their uncommitted work. Any refusal stops the teardown
+	// here, so the primary worktree (and everything under it) is kept too.
+	if err := n.removeLinked(ctx, p.Name, s.Linked, s.OwnsBranch(), force); err != nil {
+		return fmt.Errorf("runtime: kill %s: %w", s.ID, err)
+	}
+	// Anything still under .lola/repos is a checkout this record does not
+	// account for (a record rebuilt by adoption, a project whose linked repos
+	// changed): nothing has dirty-checked it, so the primary — which would
+	// take it along — is kept. --force accepts the loss.
+	if left := unaccountedLinked(dir); len(left) > 0 && !force {
+		return fmt.Errorf("runtime: kill %s: worktree %s holds linked checkouts this session does not record (%s): %w", s.ID, dir, strings.Join(left, ", "), worktree.ErrDirty)
+	}
 	if _, err := os.Stat(dir); errors.Is(err, fs.ErrNotExist) {
 		// Directory already gone: there is no checkout left to dirty-check or to
 		// hand to `git worktree remove`, but the branch it was checked out on may
@@ -1308,6 +1401,7 @@ func (n *Native) Kill(ctx context.Context, s session.Session, removeWorktree, fo
 	if err := n.WT.Remove(ctx, *p, dir, branch, force); err != nil {
 		return fmt.Errorf("runtime: kill %s: %w", s.ID, err)
 	}
+	gitguard.Clear(dir)
 	// The checkpoints go with the worktree they snapshot. A DIRTY worktree that
 	// Remove kept returned above, and keeps them: the work is still there to
 	// roll back. The shared context folder is deliberately NOT removed — it
@@ -1404,7 +1498,11 @@ func (n *Native) Revive(ctx context.Context, s session.Session) (session.Session
 	}
 	resume := (kind == agent.Claude && claudeHasTranscript(dir)) ||
 		(kind == agent.OpenCode && opencodeHasSession(ctx, dir))
-	if kind == agent.Codex {
+	if kind == agent.Codex && n.sandboxProject(s.Project) != nil {
+		// The container's CODEX_HOME lives in the worktree (sandboxEnv); the
+		// env file already says so and must not be pointed at the host's.
+		resume = codexHasSession(ctx, filepath.Join(dir, sandboxCodexDir), dir)
+	} else if kind == agent.Codex {
 		home := userCodexHome()
 		if p := n.Cfg.ProjectByName(s.Project); p != nil && p.Env["CODEX_HOME"] != "" {
 			home = p.Env["CODEX_HOME"]
@@ -1415,7 +1513,7 @@ func (n *Native) Revive(ctx context.Context, s session.Session) (session.Session
 		}
 		resume = codexHasSession(ctx, home, dir)
 	}
-	if err := n.Tmux.NewSession(ctx, id, dir, n.launchLine(id, kind, defaultLaunchPrompt(id), s.Model, resume)); err != nil {
+	if err := n.Tmux.NewSession(ctx, id, dir, n.launchLine(s.Project, id, kind, defaultLaunchPrompt(id), s.Model, resume)); err != nil {
 		return session.Session{}, fmt.Errorf("runtime: revive %s: %w", id, err)
 	}
 	// Best-effort chrome, exactly as Spawn: a styling hiccup never loses the
