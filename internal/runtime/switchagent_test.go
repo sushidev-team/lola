@@ -114,6 +114,19 @@ func TestSwitchAgentToOpenCode(t *testing.T) {
 	}
 }
 
+func TestSwitchAgentToClaudeGrantsContextAccess(t *testing.T) {
+	f := newFixture(t, "", "")
+	ctx := context.Background()
+	s, err := f.n.Spawn(ctx, f.p, issueENG42(), "codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.n.SwitchAgent(ctx, s, agent.Claude, "switched by the operator", ""); err != nil {
+		t.Fatal(err)
+	}
+	assertContextPermission(t, s.Worktree, ContextDir(f.n.Home, s.Project, ContextKey(s)))
+}
+
 // Fail-closed guards: no worktree → no switch; switching to the running kind
 // is a no-op error.
 func TestSwitchAgentRefusals(t *testing.T) {

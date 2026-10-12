@@ -187,7 +187,7 @@ func TestSpawnHappyPathFullSequence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("settings.json: %v", err)
 	}
-	if wantS := string(hook.SettingsJSON("/usr/local/bin/lola")); string(settings) != wantS {
+	if wantS := string(hook.SettingsJSON("/usr/local/bin/lola", resolvedTestPath(t, ContextDir(f.n.Home, "nori", "eng-42")))); string(settings) != wantS {
 		t.Errorf("settings.json = %s\nwant %s", settings, wantS)
 	}
 
@@ -444,7 +444,7 @@ func TestSpawnPerAgentLaunchAndArtifacts(t *testing.T) {
 			plugin := filepath.Join(dir, ".opencode", "plugins", "lola-hook.js")
 			switch c.kind {
 			case agent.Claude:
-				if got := readFile(t, settings); got != string(hook.SettingsJSON(f.n.LolaBin)) {
+				if got := readFile(t, settings); got != string(hook.SettingsJSON(f.n.LolaBin, resolvedTestPath(t, ContextDir(f.n.Home, "nori", "eng-42")))) {
 					t.Errorf("settings.json = %s, want hook wiring", got)
 				}
 				assertAbsent(t, codexCfg)

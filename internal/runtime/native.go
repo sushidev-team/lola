@@ -381,7 +381,7 @@ func (n *Native) SpawnWith(ctx context.Context, p config.Project, issue linear.I
 	// or opencode's .opencode/plugins/lola-hook.js. All land under .lola/ or the
 	// just-excluded .opencode/, so they share the other .lola files' rollback
 	// disposition (a clean worktree is removed wholesale, a dirty one is kept).
-	if err := n.writeAgentArtifacts(dir, kind); err != nil {
+	if err := n.writeAgentArtifacts(dir, kind, ctxDir); err != nil {
 		return fail("write agent artifacts", err)
 	}
 	// The env file carries the Linear API key, project env, and (for codex) the
@@ -636,7 +636,7 @@ func (n *Native) finishAgentLaunch(ctx context.Context, p config.Project, id, di
 	if err := os.WriteFile(filepath.Join(dir, lolaDir, "prompt.md"), n.withReportBriefing(withContextBriefing([]byte(prompt), ctxDir)), 0o600); err != nil {
 		return rb("write prompt.md", err)
 	}
-	if err := n.writeAgentArtifacts(dir, kind); err != nil {
+	if err := n.writeAgentArtifacts(dir, kind, ctxDir); err != nil {
 		return rb("write agent artifacts", err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, lolaDir, "env"), n.envFile(p, id, dir, kind), 0o600); err != nil {
@@ -850,14 +850,29 @@ func (n *Native) launchLine(id string, kind agent.Kind, prompt, model string, re
 // The caller has already created <dir>/.lola (0700) and, for opencode, excluded
 // .opencode/ from git. Files are 0600; directories 0700 — same discipline as
 // the other .lola artifacts.
-func (n *Native) writeAgentArtifacts(dir string, kind agent.Kind) error {
+func (n *Native) writeAgentArtifacts(dir string, kind agent.Kind, ctxDir string) error {
 	switch kind {
 	case agent.Codex:
 		return nil // notify is overridden on argv; never rewrite the user's config
 	case agent.OpenCode:
 		return os.WriteFile(openCodePluginPath(dir), agent.OpenCodePluginJS(n.lolaBin()), 0o600)
 	default: // Claude
-		return os.WriteFile(filepath.Join(dir, lolaDir, "settings.json"), hook.SettingsJSON(n.lolaBin()), 0o600)
+		var additionalDirs []string
+		if ctxDir != "" {
+			// Claude checks symlink destinations against its workspace scope.
+			// Grant only this task's notes, never the whole lola home. Resolve
+			// parent symlinks as well (e.g. /var -> /private/var on macOS).
+			realDir, err := filepath.EvalSymlinks(ctxDir)
+			if err != nil {
+				return err
+			}
+			realDir, err = filepath.Abs(realDir)
+			if err != nil {
+				return err
+			}
+			additionalDirs = append(additionalDirs, realDir)
+		}
+		return os.WriteFile(filepath.Join(dir, lolaDir, "settings.json"), hook.SettingsJSON(n.lolaBin(), additionalDirs...), 0o600)
 	}
 }
 
@@ -1361,8 +1376,8 @@ func (n *Native) Alive(ctx context.Context, s session.Session) bool {
 
 // Revive re-creates the tmux agent session for a session whose pane died but
 // whose worktree survives (dead sessions keep their worktree for inspection).
-// It reuses the existing worktree and its .lola artifacts (prompt, settings,
-// env) and relaunches the agent in
+// It reuses the existing worktree, prompt and env, refreshes Claude's managed
+// settings and context link, and relaunches the agent in
 // place: when the agent is Claude and it wrote a transcript before dying, or
 // opencode/Codex and it saved a session, the pane comes back in resume mode and
 // resumes the prior conversation (launchCommand resume=true); otherwise it
@@ -1381,6 +1396,12 @@ func (n *Native) Revive(ctx context.Context, s session.Session) (session.Session
 		return session.Session{}, fmt.Errorf("runtime: revive %s: worktree %s is gone — let the issue re-dispatch instead", id, dir)
 	}
 	kind := agent.Parse(s.Agent)
+	if kind == agent.Claude {
+		ctxDir := n.setupContext(dir, s.Project, ContextKey(s))
+		if err := n.writeAgentArtifacts(dir, kind, ctxDir); err != nil {
+			return session.Session{}, fmt.Errorf("runtime: revive %s: write agent artifacts: %w", id, err)
+		}
+	}
 	resume := (kind == agent.Claude && claudeHasTranscript(dir)) ||
 		(kind == agent.OpenCode && opencodeHasSession(ctx, dir))
 	if kind == agent.Codex {

@@ -2,13 +2,16 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/sushidev-team/lola/internal/agent"
 	"github.com/sushidev-team/lola/internal/checkpoint"
+	"github.com/sushidev-team/lola/internal/hook"
 	"github.com/sushidev-team/lola/internal/session"
 )
 
@@ -64,6 +67,7 @@ func TestSpawnSharesContextFolderAcrossRespawns(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := filepath.Join(f.n.Home, "context", "nori", "eng-42")
+	assertContextPermission(t, first.Worktree, want)
 	link := filepath.Join(first.Worktree, ".lola", "context")
 	if got, err := os.Readlink(link); err != nil || got != want {
 		t.Fatalf("link = %q, %v; want -> %s", got, err, want)
@@ -157,6 +161,7 @@ func TestForkAgentLaysCheckpointAndInheritsContext(t *testing.T) {
 	if l, err := os.Readlink(filepath.Join(got.Worktree, ".lola", "context")); err != nil || !strings.HasSuffix(l, filepath.Join("context", "nori", "eng-42")) {
 		t.Errorf("fork does not share the parent's context folder: %q %v", l, err)
 	}
+	assertContextPermission(t, got.Worktree, ContextDir(f.n.Home, "nori", "eng-42"))
 	if p := readFile(t, filepath.Join(got.Worktree, ".lola", "prompt.md")); !strings.HasPrefix(p, "# Fork\n") {
 		t.Errorf("prompt.md = %q", p)
 	}
@@ -193,5 +198,73 @@ func TestSpawnRecordsBaselineForCodex(t *testing.T) {
 	}
 	if got.Agent != "codex" || len(ck.recorded) != 1 || ck.recorded[0] != got.ID+" "+BaselineLabel {
 		t.Errorf("agent %q, recorded = %v", got.Agent, ck.recorded)
+	}
+}
+
+func resolvedTestPath(t *testing.T, path string) string {
+	t.Helper()
+	real, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	real, err = filepath.Abs(real)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return real
+}
+
+func assertContextPermission(t *testing.T, dir, want string) {
+	t.Helper()
+	var settings struct {
+		Permissions map[string]json.RawMessage `json:"permissions"`
+	}
+	if err := json.Unmarshal([]byte(readFile(t, filepath.Join(dir, lolaDir, "settings.json"))), &settings); err != nil {
+		t.Fatal(err)
+	}
+	var dirs []string
+	if err := json.Unmarshal(settings.Permissions["additionalDirectories"], &dirs); err != nil {
+		t.Fatal(err)
+	}
+	if len(dirs) != 1 || dirs[0] != resolvedTestPath(t, want) {
+		t.Fatalf("additionalDirectories = %v; want only %s", dirs, want)
+	}
+	if len(settings.Permissions) != 1 {
+		t.Fatalf("context access must not change other permissions: %v", settings.Permissions)
+	}
+}
+
+func TestReviveRefreshesClaudeContextPermission(t *testing.T) {
+	f := newFixture(t, "", "")
+	t.Setenv("HOME", t.TempDir())
+	s, err := f.n.Spawn(context.Background(), f.p, issueENG42(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Simulate settings from before context access was granted.
+	settings := filepath.Join(s.Worktree, lolaDir, "settings.json")
+	if err := os.WriteFile(settings, hook.SettingsJSON(f.n.LolaBin), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// A fork's explicit key must win over its issue/session identity on revive.
+	s.ContextKey = "parent-task"
+	if _, err := f.n.Revive(context.Background(), s); err != nil {
+		t.Fatal(err)
+	}
+	assertContextPermission(t, s.Worktree, ContextDir(f.n.Home, s.Project, s.ContextKey))
+	assertMode(t, settings, 0o600)
+}
+
+func TestClaudeArtifactsWithoutContextDoNotGrantDirectories(t *testing.T) {
+	f := newFixture(t, "", "")
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, lolaDir), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.n.writeAgentArtifacts(dir, agent.Claude, ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFile(t, filepath.Join(dir, lolaDir, "settings.json")); got != string(hook.SettingsJSON(f.n.LolaBin)) {
+		t.Fatalf("unexpected settings without context: %s", got)
 	}
 }

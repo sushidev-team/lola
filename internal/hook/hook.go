@@ -160,6 +160,11 @@ type settingsFile struct {
 	} `json:"hooks"`
 	SkillOverrides map[string]string `json:"skillOverrides,omitempty"`
 	StatusLine     *statusLineSpec   `json:"statusLine,omitempty"`
+	Permissions    *permissionsSpec  `json:"permissions,omitempty"`
+}
+
+type permissionsSpec struct {
+	AdditionalDirectories []string `json:"additionalDirectories"`
 }
 
 type statusLineSpec struct {
@@ -216,7 +221,10 @@ var modalSkills = map[string]string{
 // dialogs an unattended worker can never answer. `--settings` lands in Claude
 // Code's flagSettings source, which is always merged, so the overrides apply
 // without touching the user's own settings.
-func SettingsJSON(lolaBin string) []byte {
+// additionalDirs extends the workspace to session-owned folders outside the
+// worktree (notably the shared context symlink's destination). Normal tool
+// permission rules still apply; this does not change the permission mode.
+func SettingsJSON(lolaBin string, additionalDirs ...string) []byte {
 	bin := shQuote(lolaBin)
 	entry := func(event string, async bool) []matcherEntry {
 		return []matcherEntry{{
@@ -240,6 +248,9 @@ func SettingsJSON(lolaBin string) []byte {
 	s.Hooks.UserPromptSubmit = entry("user_prompt", false)
 	s.SkillOverrides = modalSkills
 	s.StatusLine = &statusLineSpec{Type: "command", Command: bin + " " + statusLineSelf}
+	if len(additionalDirs) > 0 {
+		s.Permissions = &permissionsSpec{AdditionalDirectories: additionalDirs}
+	}
 
 	out, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {

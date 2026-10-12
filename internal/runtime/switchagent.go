@@ -93,7 +93,8 @@ func (n *Native) SwitchAgent(ctx context.Context, s session.Session, kind agent.
 			return session.Session{}, fmt.Errorf("runtime: switch agent %s: git info/exclude %s: %w", id, openCodeDir, err)
 		}
 	}
-	if err := n.writeAgentArtifacts(dir, kind); err != nil {
+	ctxDir := n.setupContext(dir, s.Project, ContextKey(s))
+	if err := n.writeAgentArtifacts(dir, kind, ctxDir); err != nil {
 		return session.Session{}, fmt.Errorf("runtime: switch agent %s: write agent artifacts: %w", id, err)
 	}
 	// Expand the per-session env placeholders exactly as Spawn does — a switch
