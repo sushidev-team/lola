@@ -6,6 +6,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/sushidev-team/lola/internal/protocol"
 	"github.com/sushidev-team/lola/internal/scm"
 	"github.com/sushidev-team/lola/internal/session"
 )
@@ -67,4 +68,20 @@ func applyLinkedPRs(cur *session.Session, facts []linkedPRFact, now time.Time) b
 	}
 	cur.Linked = next
 	return changed
+}
+
+// linkedPRInfo flattens a session's linked repositories for the wire.
+func linkedPRInfo(linked []session.LinkedRepo) []protocol.LinkedPR {
+	if len(linked) == 0 {
+		return nil
+	}
+	out := make([]protocol.LinkedPR, 0, len(linked))
+	for _, l := range linked {
+		li := protocol.LinkedPR{Name: l.Name, Repo: l.Repo, Branch: l.Branch}
+		if l.PR != nil {
+			li.Number, li.URL, li.State, li.Checks, li.Draft = l.PR.Number, l.PR.URL, l.PR.State, l.PR.ChecksState, l.PR.IsDraft
+		}
+		out = append(out, li)
+	}
+	return out
 }

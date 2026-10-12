@@ -1247,3 +1247,13 @@ func TestSessionsFreePortNeedsAClash(t *testing.T) {
 		t.Errorf("flash = %q, want a hint that there is nothing to free", m.sessions.flash)
 	}
 }
+
+func TestLinkedPRLines(t *testing.T) {
+	got := linkedPRLines(protocol.SessionInfo{LinkedPRs: []protocol.LinkedPR{
+		{Name: "api", Repo: "acme/api", Number: 12, State: "OPEN", Checks: "pass"},
+		{Name: "docs", Branch: "lola/x"},
+	}})
+	if len(got) != 2 || !strings.Contains(got[0], "api (acme/api) #12 open · ci pass") || !strings.Contains(got[1], "docs") || !strings.Contains(got[1], "no PR yet") {
+		t.Fatalf("lines = %q", got)
+	}
+}
