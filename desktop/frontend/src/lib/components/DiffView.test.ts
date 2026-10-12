@@ -91,6 +91,7 @@ describe("DiffView", () => {
     const child = screen.getByRole("button", { name: "foo" });
     await fireEvent.click(child);
     expect(child).toHaveAttribute("aria-expanded", "false");
+    expect(child).toHaveClass("contains-active");
     expect(screen.queryByRole("button", { name: "internal/foo/foo.go, Modified" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "internal/bar.go, Modified" })).toBeInTheDocument();
     await fireEvent.click(parent);
@@ -100,6 +101,58 @@ describe("DiffView", () => {
     expect(screen.getByRole("button", { name: "foo" })).toHaveAttribute("aria-expanded", "false");
     await fireEvent.click(screen.getByRole("button", { name: "foo" }));
     expect(screen.getByRole("button", { name: "internal/foo/foo.go, Modified" })).toBeInTheDocument();
+  });
+
+  it("links scrolling and clicking to the current file without moving keyboard focus", async () => {
+    Diff.mockResolvedValue({ ...DATA, files: [DATA.files[0], { ...DATA.files[0], path: "tests/foo.test.ts" }] });
+    const { container } = render(DiffView, { sessionId: "s1" });
+    await screen.findByText("origin/main");
+    const pane = screen.getByRole("region", { name: "File diffs" });
+    Object.defineProperties(pane, { clientHeight: { value: 300 }, scrollHeight: { value: 2000 } });
+    pane.getBoundingClientRect = () => ({ top: 50 }) as DOMRect;
+    const sections = Array.from(container.querySelectorAll<HTMLElement>("section[data-file]"));
+    sections.forEach((section, i) => {
+      section.getBoundingClientRect = () => ({ top: 50 + i * 1000 - pane.scrollTop }) as DOMRect;
+    });
+    pane.scrollTo = vi.fn((options?: ScrollToOptions | number, y?: number) => {
+      pane.scrollTop = typeof options === "number" ? y ?? 0 : options?.top ?? 0;
+    });
+    pane.focus();
+    pane.scrollTop = 1100;
+    await fireEvent.scroll(pane);
+    const second = screen.getByRole("button", { name: "tests/foo.test.ts, Modified" });
+    await waitFor(() => expect(second).toHaveAttribute("aria-current", "location"));
+    expect(sections[1]).toHaveClass("is-current");
+    expect(pane).toHaveFocus();
+
+    await fireEvent.click(screen.getByRole("button", { name: "tests" }));
+    expect(screen.getByRole("button", { name: "tests" })).toHaveClass("contains-active");
+    const first = screen.getByRole("button", { name: "internal/foo/foo.go, Modified" });
+    await fireEvent.click(first);
+    expect(pane.scrollTo).toHaveBeenCalledWith({ top: 0, behavior: "instant" });
+    expect(first).toHaveAttribute("aria-current", "location");
+    expect(sections[0]).toHaveClass("is-current");
+    expect(screen.getByRole("button", { name: "tests" })).not.toHaveClass("contains-active");
+  });
+
+  it("keeps reading and button keys local while allowing Escape to reach the app", async () => {
+    render(DiffView, { sessionId: "s1" });
+    await screen.findByText("origin/main");
+    const globalKey = vi.fn();
+    document.addEventListener("keydown", globalKey);
+    try {
+      const pane = screen.getByRole("region", { name: "File diffs" });
+      const arrow = new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true, cancelable: true });
+      pane.dispatchEvent(arrow);
+      expect(arrow.defaultPrevented).toBe(false); // native scrolling still runs
+      const file = screen.getByRole("button", { name: "internal/foo/foo.go, Modified" });
+      await fireEvent.keyDown(file, { key: "Enter" });
+      expect(globalKey).not.toHaveBeenCalled();
+      await fireEvent.keyDown(pane, { key: "Escape" });
+      expect(globalKey).toHaveBeenCalledTimes(1);
+    } finally {
+      document.removeEventListener("keydown", globalKey);
+    }
   });
 
   // The acceptance path: select a line, write a comment, send — the daemon gets

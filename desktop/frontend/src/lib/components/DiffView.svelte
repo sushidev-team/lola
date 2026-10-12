@@ -18,6 +18,7 @@
   import { store } from "$lib/store.svelte";
   import { feedback } from "$lib/feedback.svelte";
   import { confirm } from "$lib/confirm.svelte";
+  import { observeDiffNavigation } from "$lib/diffnavigation";
   import {
     parsePatch,
     splitRows,
@@ -134,11 +135,54 @@
   // --- file tree navigation ---------------------------------------------------
 
   let scroller = $state<HTMLDivElement | null>(null);
+  let navigator = $state<HTMLElement | null>(null);
   let activeFile = $state("");
+  let navigation: ReturnType<typeof observeDiffNavigation> | undefined;
+
+  $effect(() => {
+    orderedFiles; // Reconnect after refresh, including replaced section nodes.
+    if (!scroller) return;
+    const observer = observeDiffNavigation(scroller, (path) => { activeFile = path; });
+    navigation = observer;
+    return () => {
+      observer.destroy();
+      if (navigation === observer) navigation = undefined;
+    };
+  });
+
+  // Preserve intentional folds. If the current file is hidden, its nearest
+  // visible collapsed ancestor carries the location indicator instead.
+  const activeNavKey = $derived(visibleTree.find((node) => node.path
+    ? node.path === activeFile
+    : collapsed.has(node.key) && activeFile.startsWith(`${node.key.slice(4)}/`))?.key);
+
+  $effect(() => {
+    const key = activeNavKey;
+    const nav = navigator;
+    if (!key || !nav) return;
+    const row = Array.from(nav.querySelectorAll<HTMLElement>("[data-nav-key]"))
+      .find((element) => element.dataset.navKey === key);
+    if (!row || nav.clientHeight === 0) return;
+    const bounds = nav.getBoundingClientRect();
+    const top = bounds.top + (nav.querySelector<HTMLElement>(".nav-heading")?.offsetHeight ?? 0);
+    const item = row.getBoundingClientRect();
+    const delta = item.top < top ? item.top - top : item.bottom > bounds.bottom ? item.bottom - bounds.bottom : 0;
+    // Minimal reveal, only when the current location changes; never focus a
+    // control or mirror the diff's scroll distance onto the independent tree.
+    if (delta) nav.scrollTo({ top: nav.scrollTop + delta, behavior: "instant" });
+  });
+
   function jump(path: string) {
-    activeFile = path;
-    const el = scroller?.querySelector<HTMLElement>(`[data-file="${CSS.escape(path)}"]`);
-    el?.scrollIntoView({ block: "start" });
+    navigation?.jump(path);
+  }
+
+  function navigationKey(event: KeyboardEvent) {
+    if (event.metaKey || event.ctrlKey || event.altKey) return;
+    // Keep native scrolling and button activation, but do not let these keys
+    // also move the cockpit's session selection or toggle its fullscreen pane.
+    if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "PageUp", "PageDown", "Home", "End", " ", "Enter"].includes(event.key)) {
+      event.stopPropagation();
+    }
   }
 
   // --- selection + composer ---------------------------------------------------
@@ -318,7 +362,8 @@
     <div class="flex items-center justify-center text-faint">no changes against {data.base}</div>
   {:else}
     <div class="diff-body grid min-h-0">
-      <nav class="diff-nav min-h-0 overflow-auto border-r border-edge/60 text-sm" aria-label="changed files">
+      <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+      <nav bind:this={navigator} onkeydown={navigationKey} class="diff-nav min-h-0 overflow-auto border-r border-edge/60 text-sm" aria-label="changed files">
         <div class="nav-heading sticky top-0 z-10 flex items-center justify-between px-3 py-3">
           <span class="font-medium text-ink">Changed files</span>
           <span class="num text-faint">{files.length}</span>
@@ -330,6 +375,7 @@
             {@const f = fileByPath.get(n.path)}
             <button
               type="button"
+              data-nav-key={n.key}
               class="file-row nav-row {activeFile === n.path ? 'is-active' : ''}"
               style="--depth: {n.depth}"
               title={`${n.path}${f ? ` · ${statusLabel(f)} · +${f.additions} −${f.deletions}` : ''}`}
@@ -342,8 +388,8 @@
               {#if f}<span class="file-status font-mono {statusColor(f)}" aria-hidden="true">{statusGlyph(f)}</span>{/if}
             </button>
           {:else}
-            <button type="button" class="folder-row nav-row" class:root-folder={n.depth === 0} style="--depth: {n.depth}"
-              aria-expanded={!collapsed.has(n.key)} onclick={() => toggleFolder(n.key)} title={n.key.slice(4)}>
+            <button type="button" data-nav-key={n.key} class="folder-row nav-row" class:root-folder={n.depth === 0} class:contains-active={activeNavKey === n.key} style="--depth: {n.depth}"
+              aria-expanded={!collapsed.has(n.key)} onclick={() => toggleFolder(n.key)} title={activeNavKey === n.key ? `${n.key.slice(4)} — contains current file` : n.key.slice(4)}>
               <svg class="folder-chevron size-3" class:closed={collapsed.has(n.key)} viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m4 6 4 4 4-4" /></svg>
               <svg class="size-3.5 text-warn" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linejoin="round" aria-hidden="true"><path d="M1.5 4a1 1 0 0 1 1-1h3l1.5 1.5h6.5a1 1 0 0 1 1 1v7a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1Z" /></svg>
               <span class="truncate">{n.name}</span>
@@ -353,10 +399,12 @@
         </div>
       </nav>
 
-      <div bind:this={scroller} class="diff-scroller min-h-0 min-w-0 overflow-auto font-mono text-sm leading-5">
+      <!-- A focusable scroll region lets keyboard users read without tabbing through every gutter. -->
+      <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
+      <div bind:this={scroller} onkeydown={navigationKey} tabindex="0" role="region" aria-label="File diffs" class="diff-scroller min-h-0 min-w-0 overflow-auto font-mono text-sm leading-5">
         {#each orderedFiles as f (f.path)}
           {@const rows = parsed.get(f.path) ?? []}
-          <section data-file={f.path} class="diff-file">
+          <section data-file={f.path} class="diff-file" class:is-current={activeFile === f.path}>
             <header
               class="file-heading sticky top-0 z-10 grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 border-b border-edge/60 px-4 py-3 font-sans"
             >
@@ -509,6 +557,7 @@
     color: var(--color-accent-ink);
     box-shadow: inset 1px 0 var(--color-accent);
   }
+  .folder-row.contains-active { background: var(--color-accent-fill); color: var(--color-accent-ink); }
   .file-status { text-align: center; font-weight: 500; }
   .folder-row {
     grid-template-columns: 12px 14px minmax(0, 1fr);
@@ -523,6 +572,8 @@
   .diff-file { background: var(--color-panel); border-bottom: 1px solid var(--color-edge); }
   .diff-file + .diff-file { margin-top: 1rem; border-top: 1px solid var(--color-edge); }
   .file-heading { background: var(--color-panel); }
+  .is-current > .file-heading { border-bottom-color: var(--color-accent); }
+  .diff-scroller:focus-visible { outline-offset: -2px; }
   .diff-row { min-height: 22px; line-height: 22px; }
   .line-gutter { color: var(--color-faint); background: color-mix(in srgb, var(--color-canvas) 35%, transparent); }
   .line-marker { color: var(--color-faint); }
