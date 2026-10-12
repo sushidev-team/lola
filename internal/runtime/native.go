@@ -163,6 +163,14 @@ type Native struct {
 	// teardown. nil disables both (ForkAgent then refuses) — tests that never
 	// fork leave it unset so no git runs outside the WT seam.
 	Checkpoints Checkpointer
+	// HookToken mints the sandbox hook-bridge token for a session ID
+	// (hook.TokenFor under the daemon's secret). It is written into a
+	// SANDBOXED session's 0600 env file only; nil = no token, and the bridge
+	// then rejects that session's hooks.
+	HookToken func(session string) string
+	// RemoveContainer removes a sandboxed session's container (`docker rm -f`)
+	// on teardown. nil = exec the configured docker CLI. A test seam.
+	RemoveContainer func(ctx context.Context, name string) error
 }
 
 // SessionID returns the BASE native session identifier for an issue:
@@ -261,7 +269,10 @@ func (n *Native) SlotTaken(ctx context.Context, p config.Project, id, branch str
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		return false, err
 	}
-	return n.WT.BranchExists(ctx, p, branch)
+	if taken, err := n.WT.BranchExists(ctx, p, branch); err != nil || taken {
+		return taken, err
+	}
+	return n.linkedBranchTaken(ctx, p, branch)
 }
 
 // resolveKind picks the agent kind for a launch: an explicit per-spawn
@@ -368,9 +379,25 @@ func (n *Native) SpawnWith(ctx context.Context, p config.Project, issue linear.I
 	if err := os.MkdirAll(filepath.Join(dir, lolaDir), 0o700); err != nil {
 		return fail("create "+lolaDir, err)
 	}
+	// Linked repositories go in AFTER .lola/ is excluded (they live under it)
+	// and, once created, every later failure must take them down first — the
+	// primary rollback would otherwise delete their directories unchecked.
+	linked, err := n.createLinked(ctx, p, dir, branch)
+	if err != nil {
+		return fail("create linked worktrees", err)
+	}
+	if len(linked) > 0 {
+		primaryFail := fail
+		fail = func(step string, cause error) (session.Session, error) {
+			if rbErr := n.removeLinked(ctx, p.Name, linked, true, false); rbErr != nil {
+				cause = fmt.Errorf("%w (linked worktrees kept: %v)", cause, rbErr)
+			}
+			return primaryFail(step, cause)
+		}
+	}
 	ctxKey := contextKeyFor(issue.Identifier, id)
 	ctxDir := n.setupContext(dir, p.Name, ctxKey)
-	brief := promptMD(p, issue, branch)
+	brief := withLinkedBriefing(promptMD(p, issue, branch), p, linked)
 	if bestOf {
 		brief = withBestOfBriefing(brief, o.Attempt, o.Of)
 	}
@@ -399,6 +426,9 @@ func (n *Native) SpawnWith(ctx context.Context, p config.Project, issue linear.I
 	}
 	n.recordBaseline(ctx, dir, id)
 	if err := n.Tmux.NewSession(ctx, id, dir, n.launchLine(id, kind, defaultLaunchPrompt(id), model, false)); err != nil {
+		if rbErr := n.removeLinked(ctx, p.Name, linked, true, false); rbErr != nil {
+			err = fmt.Errorf("%w (linked worktrees kept: %v)", err, rbErr)
+		}
 		return session.Session{}, n.rollbackTmux(ctx, p, id, dir, branch, "start tmux session", err)
 	}
 
@@ -428,6 +458,8 @@ func (n *Native) SpawnWith(ctx context.Context, p config.Project, issue linear.I
 		BestOf:     groupIf(bestOf, o.Group),
 		Attempt:    intIf(bestOf, o.Attempt),
 		Attempts:   intIf(bestOf, o.Of),
+		Sandbox:    n.SandboxFor(p.Name),
+		Linked:     linked,
 	}, state.AgentStarting), nil
 }
 
@@ -684,6 +716,7 @@ func (n *Native) OpenPRAgent(ctx context.Context, p config.Project, sessionID, b
 		TmuxName:   sessionID,
 		Agent:      string(kind),
 		ContextKey: sessionID,
+		Sandbox:    n.SandboxFor(p.Name),
 	}, state.AgentStarting), nil
 }
 
@@ -714,6 +747,7 @@ func (n *Native) OpenManualAgent(ctx context.Context, p config.Project, sessionI
 		TmuxName:   sessionID,
 		Agent:      string(kind),
 		ContextKey: sessionID,
+		Sandbox:    n.SandboxFor(p.Name),
 	}, state.AgentStarting), nil
 }
 
@@ -832,6 +866,12 @@ func (n *Native) launchLine(id string, kind agent.Kind, prompt, model string, re
 	}
 	for _, arg := range args {
 		posix += " " + shQuote(arg)
+	}
+	// A sandboxed project's agent runs the SAME line inside a container; the
+	// pane runs docker instead (sandbox.go). Keyed off the session ID, so every
+	// launch path — spawn, revive, switch-agent, fork — is covered.
+	if p := n.sandboxProject(id); p != nil {
+		posix = n.sandboxLine(p, id, kind, posix)
 	}
 	return "exec sh -c " + shQuote(posix)
 }
@@ -986,10 +1026,14 @@ func reviveCodexHome(ctx context.Context, dir, home string) (string, error) {
 func (n *Native) envFile(p config.Project, id, dir string, kind agent.Kind) []byte {
 	var b strings.Builder
 	fmt.Fprintf(&b, "LOLA_SESSION=%s\n", shQuote(id))
-	if kind == agent.Codex {
+	sandboxed := n.sandboxProject(id) != nil
+	if kind == agent.Codex && !sandboxed { // a container cannot see the user's ~/.codex
 		if home := userCodexHome(); home != "" {
 			fmt.Fprintf(&b, "CODEX_HOME=%s\n", shQuote(home))
 		}
+	}
+	if sandboxed {
+		b.WriteString(n.sandboxEnv(p, id, dir, kind))
 	}
 	if n.LinearKey != nil {
 		if key := n.LinearKey(); key != "" {
@@ -1274,6 +1318,15 @@ func (n *Native) Kill(ctx context.Context, s session.Session, removeWorktree, fo
 	if name != s.ID {
 		n.killAuxSessions(ctx, name)
 	}
+	// A sandboxed agent's container does not stop with its pane: the pane ran
+	// the docker CLI, and a TTY container ignores its client going away.
+	// Best-effort like the aux sweep — the container is --rm and named after
+	// the session, so the next launch's `docker rm -f` clears a straggler.
+	if s.Sandbox != "" || n.sandboxProject(s.ID) != nil {
+		if err := n.removeContainer(ctx, s.ID); err != nil && n.Logf != nil {
+			n.Logf("session %s: removing its sandbox container failed: %v", s.ID, err)
+		}
+	}
 	if !removeWorktree {
 		return nil
 	}
@@ -1291,6 +1344,12 @@ func (n *Native) Kill(ctx context.Context, s session.Session, removeWorktree, fo
 		branch = ""
 	}
 	dir := filepath.Join(n.WT.Root, p.Name, s.ID)
+	// Linked worktrees first: they live INSIDE dir, and only their own dirty
+	// check protects their uncommitted work. Any refusal stops the teardown
+	// here, so the primary worktree (and everything under it) is kept too.
+	if err := n.removeLinked(ctx, p.Name, s.Linked, s.OwnsBranch(), force); err != nil {
+		return fmt.Errorf("runtime: kill %s: %w", s.ID, err)
+	}
 	if _, err := os.Stat(dir); errors.Is(err, fs.ErrNotExist) {
 		// Directory already gone: there is no checkout left to dirty-check or to
 		// hand to `git worktree remove`, but the branch it was checked out on may
@@ -1404,7 +1463,11 @@ func (n *Native) Revive(ctx context.Context, s session.Session) (session.Session
 	}
 	resume := (kind == agent.Claude && claudeHasTranscript(dir)) ||
 		(kind == agent.OpenCode && opencodeHasSession(ctx, dir))
-	if kind == agent.Codex {
+	if kind == agent.Codex && n.sandboxProject(id) != nil {
+		// The container's CODEX_HOME lives in the worktree (sandboxEnv); the
+		// env file already says so and must not be pointed at the host's.
+		resume = codexHasSession(ctx, filepath.Join(dir, sandboxCodexDir), dir)
+	} else if kind == agent.Codex {
 		home := userCodexHome()
 		if p := n.Cfg.ProjectByName(s.Project); p != nil && p.Env["CODEX_HOME"] != "" {
 			home = p.Env["CODEX_HOME"]
