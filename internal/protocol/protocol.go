@@ -202,6 +202,12 @@ type Request struct {
 	Event   string       `json:"event,omitempty"`   // normalized: stop|notification|session_end|tool_use|user_prompt
 	Detail  string       `json:"detail,omitempty"`  // optional: notification_type / stop_reason / end_reason
 	Hook    *HookPayload `json:"hook,omitempty"`    // structured payload fields; nil from pre-payload hook binaries
+	// HookToken authenticates a hookEvent/agentReport arriving over the
+	// SANDBOX hook bridge (a loopback TCP listener, internal/daemon/hookbridge.go)
+	// instead of the 0600 unix socket: it is the per-session token the
+	// containerized agent was handed in its env file, and it names exactly one
+	// session. Ignored on the unix socket, whose file mode is the auth.
+	HookToken string `json:"hookToken,omitempty"`
 
 	// Force is set only for cmd=kill: remove the worktree even when it has
 	// uncommitted changes. Deliberate CLI-only friction (`lola kill <id>

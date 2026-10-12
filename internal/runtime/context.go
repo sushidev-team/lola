@@ -236,6 +236,7 @@ func (n *Native) ForkAgent(ctx context.Context, p config.Project, f ForkSpec) (s
 		TmuxName:   f.SessionID,
 		Agent:      string(kind),
 		ContextKey: key,
+		Sandbox:    n.SandboxFor(p.Name),
 	}, state.AgentStarting), nil
 }
 

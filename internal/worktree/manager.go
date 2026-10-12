@@ -120,6 +120,38 @@ func (m *Manager) CreateAt(ctx context.Context, p config.Project, sessionID, bra
 	return m.createAt(ctx, p, sessionID, branch, func() string { return commit })
 }
 
+// CreateLinked adds a LINKED-REPOSITORY worktree for a session: a worktree of
+// the repository at repoPath, at dir (inside the session's primary worktree,
+// see runtime.LinkedWorktreeDir), on a new branch cut from origin/<base>
+// (falling back to the local <base>). dir must lie inside Root — the same
+// guard Remove applies, so a linked worktree can always be torn down through
+// it — and must not exist yet: a leftover there is somebody's work.
+func (m *Manager) CreateLinked(ctx context.Context, repoPath, dir, branch, base string) error {
+	if m.Root == "" {
+		return errors.New("worktree: Root not set")
+	}
+	if repoPath == "" || branch == "" || base == "" {
+		return errors.New("worktree: linked repo path, branch and base are required")
+	}
+	if err := m.guardRemovable(config.Project{Path: repoPath}, dir); err != nil {
+		return err
+	}
+	if _, err := os.Lstat(dir); err == nil {
+		return fmt.Errorf("worktree: linked worktree %s already exists", dir)
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
+		return err
+	}
+	start := base
+	if _, _, err := m.git(ctx, "-C", repoPath, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/"+base); err == nil {
+		start = "origin/" + base
+	}
+	_, _, err := m.git(ctx, "-C", repoPath, "worktree", "add", "-b", branch, dir, start)
+	return err
+}
+
 func (m *Manager) validCreate(p config.Project, sessionID, branch string) error {
 	if m.Root == "" {
 		return errors.New("worktree: Root not set")
