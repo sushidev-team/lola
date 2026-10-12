@@ -9,6 +9,7 @@ import (
 
 	"github.com/sushidev-team/lola/internal/agent"
 	"github.com/sushidev-team/lola/internal/config"
+	"github.com/sushidev-team/lola/internal/gitguard"
 	"github.com/sushidev-team/lola/internal/session"
 	"github.com/sushidev-team/lola/internal/usage"
 )
@@ -29,7 +30,7 @@ func TestSandboxedLaunchRunsTheAgentInDocker(t *testing.T) {
 	f := sandboxFixture(t)
 	id := "lola-nori-eng-42"
 	dir := filepath.Join(f.root, "nori", id)
-	if full := f.n.launchLine(id, agent.Claude, defaultLaunchPrompt(id), "", false); !strings.Contains(full, "docker") {
+	if full := f.n.launchLine("nori", id, agent.Claude, defaultLaunchPrompt(id), "", false); !strings.Contains(full, "docker") {
 		t.Fatalf("sandboxed launch does not run docker:\n%s", full)
 	}
 	inner := "set -a; . ./.lola/env; set +a; exec claude"
@@ -68,7 +69,7 @@ func TestSandboxedLaunchRunsTheAgentInDocker(t *testing.T) {
 	// A project that is not sandboxed launches exactly as before.
 	f.p.Sandbox = ""
 	f.n.Cfg.Projects[0] = f.p
-	if plain := f.n.launchLine(id, agent.Claude, defaultLaunchPrompt(id), "", false); strings.Contains(plain, "docker") {
+	if plain := f.n.launchLine("nori", id, agent.Claude, defaultLaunchPrompt(id), "", false); strings.Contains(plain, "docker") {
 		t.Errorf("host launch mentions docker:\n%s", plain)
 	}
 }
@@ -175,5 +176,58 @@ func TestSandboxMountsOnlyTheSessionsOwnContextFolder(t *testing.T) {
 	}
 	if line := f.n.sandboxLine(&f.p, id, agent.Claude, "x"); strings.Contains(line, home) {
 		t.Fatalf("a re-pointed context link got mounted:\n%s", line)
+	}
+}
+
+// A sandboxed "web" and a host "web-eng" share the ID prefix of web's ENG-42
+// session ("lola-web-eng-42"). The project is passed explicitly, so web's
+// session runs in docker whatever the ID looks like.
+func TestSandboxDoesNotHingeOnTheSessionIDPrefix(t *testing.T) {
+	f := sandboxFixture(t)
+	web := f.p
+	web.Name = "web"
+	hostProj := config.Project{Name: "web-eng", Path: t.TempDir(), DefaultBranch: "main"}
+	f.n.Cfg.Projects = []config.Project{web, hostProj}
+	id := SessionID("web", "ENG-42")
+	if n := f.n.projectForSessionName(id); n != "web-eng" {
+		t.Fatalf("precondition: the ID prefix is ambiguous (got %q)", n)
+	}
+	if line := f.n.launchLine("web", id, agent.Claude, "go", "", false); !strings.Contains(line, "docker") {
+		t.Fatalf("sandboxed project launched on the host:\n%s", line)
+	}
+	if env := string(f.n.envFile(web, id, "/w", agent.Claude)); !strings.Contains(env, "LOLA_HOOK_ADDR") {
+		t.Fatalf("sandboxed project got a host env:\n%s", env)
+	}
+	if line := f.n.launchLine("web-eng", id, agent.Claude, "go", "", false); strings.Contains(line, "docker") {
+		t.Fatalf("host project launched in docker:\n%s", line)
+	}
+}
+
+func TestSandboxedSpawnPinsItsGitLayoutBeforeTheAgentRuns(t *testing.T) {
+	f := sandboxFixture(t)
+	f.p.LinkedRepos = nil
+	f.n.Cfg.Projects[0] = f.p
+	s, err := f.n.Spawn(context.Background(), f.p, issueENG42(), "")
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	gitDir := filepath.Join(f.commonDir, "worktrees", "wt")
+	if s.GitPin == nil || s.GitPin.GitDir != gitDir || s.GitPin.CommonDir != f.commonDir {
+		t.Fatalf("GitPin = %+v, want %s / %s", s.GitPin, gitDir, f.commonDir)
+	}
+	dir := filepath.Join(f.root, "nori", s.ID)
+	if at, _, ok := gitguard.Lookup(dir); !ok || at != dir {
+		t.Fatalf("worktree not registered with gitguard")
+	}
+	// The admin dir's config.worktree is overlaid read-only in the container.
+	cw := filepath.Join(gitDir, "config.worktree")
+	if line := f.n.sandboxLine(&f.p, s.ID, agent.Claude, "x"); !strings.Contains(line, "-v "+shQuote(cw+":"+cw+":ro")) {
+		t.Fatalf("config.worktree not overlaid read-only:\n%s", line)
+	}
+	if err := f.n.Kill(context.Background(), s, true, false); err != nil {
+		t.Fatalf("Kill: %v", err)
+	}
+	if gitguard.Pinned(dir) {
+		t.Fatal("pin outlived the worktree")
 	}
 }

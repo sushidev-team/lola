@@ -36,6 +36,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/sushidev-team/lola/internal/gitguard"
 )
 
 // RefPrefix is the ref namespace every checkpoint lives under.
@@ -414,6 +416,7 @@ func runGit(ctx context.Context, bin, dir string, env []string, args ...string) 
 	if len(env) > 0 {
 		cmd.Env = append(os.Environ(), env...)
 	}
+	gitguard.Apply(cmd) // a sandboxed worktree's git metadata is the agent's to rewrite
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()

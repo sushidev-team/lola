@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/sushidev-team/lola/internal/config"
+	"github.com/sushidev-team/lola/internal/gitguard"
 	"github.com/sushidev-team/lola/internal/hook"
 	"github.com/sushidev-team/lola/internal/linear"
 	"github.com/sushidev-team/lola/internal/protocol"
@@ -199,9 +200,17 @@ func TestMergedCleanupWaitsForOpenLinkedPRs(t *testing.T) {
 	pr.State = "MERGED"
 	s := reactSess("FE-1", "merged", pr)
 	s.SetDelivery(state.DeliveryMerged, time.Now())
-	s.Linked = []session.LinkedRepo{{Name: "api", Repo: "acme/api", Branch: s.Branch, PR: &scm.PR{Number: 9, State: "OPEN"}}}
+	after := s.DeliverySince.Add(time.Second)
+	// Never successfully looked up (gh failing): unknown is not "no PR".
+	s.Linked = []session.LinkedRepo{{Name: "api", Repo: "acme/api", Branch: s.Branch}}
 	d.sessions.Upsert(s)
+	d.react(context.Background(), s)
+	if calls := nat.killCalls(); len(calls) != 0 {
+		t.Fatalf("cleanup ran with the linked PR never observed: %+v", calls)
+	}
 
+	s.Linked[0].PR, s.Linked[0].PRObservedAt = &scm.PR{Number: 9, State: "OPEN"}, after
+	d.sessions.Upsert(s)
 	d.react(context.Background(), s)
 	if calls := nat.killCalls(); len(calls) != 0 {
 		t.Fatalf("cleanup ran while a linked PR is open: %+v", calls)
@@ -212,5 +221,54 @@ func TestMergedCleanupWaitsForOpenLinkedPRs(t *testing.T) {
 	d.react(context.Background(), s)
 	if calls := nat.killCalls(); len(calls) != 1 {
 		t.Fatalf("cleanup did not run once every linked PR settled: %+v", calls)
+	}
+}
+
+// A sandboxed session's agent lives in the image: revive gates on the docker
+// CLI, like spawn, switch and fork.
+func TestReviveGatesASandboxedSessionOnDocker(t *testing.T) {
+	cfg := nativeTestConfig(nativePoll("p1"))
+	cfg.Projects[0].Sandbox = config.SandboxDocker
+	d := newTestDaemon(t, cfg, &linear.Fake{}, &fakeNative{})
+	var asked []string
+	d.runtimeHealth = func(bin string) error { asked = append(asked, bin); return nil }
+	s := nativeSess("FE-1", "dead")
+	s.Agent = "codex"
+	d.sessions.Upsert(s)
+	if _, err := d.handleRevive(context.Background(), s.ID); err != nil {
+		t.Fatalf("handleRevive: %v", err)
+	}
+	if len(asked) != 1 || asked[0] != "docker" {
+		t.Fatalf("revive health asked for %v, want [docker]", asked)
+	}
+}
+
+// After a restart every sandboxed worktree is pinned again from its record;
+// one whose record lost the pin is DENIED host git rather than trusted.
+func TestSyncGitPinsPinsOrDeniesSandboxedWorktrees(t *testing.T) {
+	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})
+	pinned := nativeSess("FE-1", "working")
+	pinned.Sandbox = config.SandboxDocker
+	pinned.Worktree = "/wt/p1/" + pinned.ID
+	pinned.GitPin = &gitguard.Pin{GitDir: "/r/.git/worktrees/x", CommonDir: "/r/.git"}
+	pinned.Linked = []session.LinkedRepo{{Name: "api", Worktree: pinned.Worktree + "/.lola/repos/api"}}
+	host := nativeSess("FE-2", "working")
+	host.Worktree = "/wt/p1/" + host.ID
+	d.sessions.Upsert(pinned)
+	d.sessions.Upsert(host)
+	defer func() {
+		gitguard.Clear(pinned.Worktree)
+		gitguard.Clear(pinned.Linked[0].Worktree)
+	}()
+
+	d.syncGitPins()
+	if _, p, ok := gitguard.Lookup(pinned.Worktree); !ok || p != *pinned.GitPin {
+		t.Fatalf("pinned worktree = %+v %v", p, ok)
+	}
+	if at, p, ok := gitguard.Lookup(pinned.Linked[0].Worktree); !ok || at != pinned.Linked[0].Worktree || p.Valid() {
+		t.Fatalf("pin-less linked worktree not denied: %q %+v %v", at, p, ok)
+	}
+	if gitguard.Pinned(host.Worktree) {
+		t.Fatal("a host session was pinned")
 	}
 }

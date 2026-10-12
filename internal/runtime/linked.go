@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/sushidev-team/lola/internal/config"
+	"github.com/sushidev-team/lola/internal/gitguard"
 	"github.com/sushidev-team/lola/internal/session"
 )
 
@@ -53,21 +54,59 @@ func (n *Native) linkedBranchTaken(ctx context.Context, p config.Project, branch
 }
 
 // createLinked checks every linked repository of p out into the session
-// worktree dir on branch. All or nothing: on a failure the ones already
-// created are removed again (dirty-safe) and the error names the repository.
+// worktree dir on branch. On a failure it returns the ones it DID create
+// alongside the error: rolling them back is the caller's, because only the
+// caller can decide to keep the primary worktree when that rollback refuses.
+// A sandboxed project's linked worktrees are pinned like the primary one.
 func (n *Native) createLinked(ctx context.Context, p config.Project, dir, branch string) ([]session.LinkedRepo, error) {
 	var out []session.LinkedRepo
 	for _, l := range p.LinkedRepos {
 		wt := LinkedWorktreeDir(dir, l.Name)
 		if err := n.WT.CreateLinked(ctx, l.Path, wt, branch, l.BaseBranch(p)); err != nil {
-			if rbErr := n.removeLinked(ctx, p.Name, out, true, false); rbErr != nil {
-				return nil, fmt.Errorf("linked repo %s: %w (rollback: %v)", l.Name, err, rbErr)
-			}
-			return nil, fmt.Errorf("linked repo %s: %w", l.Name, err)
+			return out, fmt.Errorf("linked repo %s: %w", l.Name, err)
 		}
-		out = append(out, session.LinkedRepo{Name: l.Name, Repo: l.Repo, Path: l.Path, Worktree: wt, Branch: branch})
+		rec := session.LinkedRepo{Name: l.Name, Repo: l.Repo, Path: l.Path, Worktree: wt, Branch: branch}
+		out = append(out, rec)
+		pin, err := n.pinSandbox(p.Name, wt)
+		if err != nil {
+			return out, fmt.Errorf("linked repo %s: pin sandbox git layout: %w", l.Name, err)
+		}
+		out[len(out)-1].GitPin = pin
 	}
 	return out, nil
+}
+
+// discoverLinked rebuilds a session's linked-worktree records from disk for
+// adoption, when the store lost them: every .lola/repos/<name> that names one
+// of the project's linked repos. Branch is left empty (it is not observable
+// here), so a teardown of such a record keeps the branch; GitPin is nil, so a
+// sandboxed one's host git is DENIED until a human looks (the daemon's pin
+// sync). Unknown entries are not recorded — Kill's unaccountedLinked guard
+// then keeps the whole worktree.
+func discoverLinked(p config.Project, dir string) []session.LinkedRepo {
+	var out []session.LinkedRepo
+	for _, l := range p.LinkedRepos {
+		wt := LinkedWorktreeDir(dir, l.Name)
+		if fi, err := os.Stat(wt); err == nil && fi.IsDir() {
+			out = append(out, session.LinkedRepo{Name: l.Name, Repo: l.Repo, Path: l.Path, Worktree: wt})
+		}
+	}
+	return out
+}
+
+// unaccountedLinked lists what is left under dir/.lola/repos — called after
+// the recorded linked worktrees were removed, so every entry is one no dirty
+// check has seen.
+func unaccountedLinked(dir string) []string {
+	entries, err := os.ReadDir(filepath.Join(dir, lolaDir, "repos"))
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, e := range entries {
+		out = append(out, e.Name())
+	}
+	return out
 }
 
 // removeLinked tears a session's linked worktrees down, each through the
@@ -94,7 +133,9 @@ func (n *Native) removeLinked(ctx context.Context, project string, linked []sess
 		}
 		if err := n.WT.Remove(ctx, lp, l.Worktree, branch, force); err != nil {
 			errs = append(errs, fmt.Errorf("linked repo %s: %w", l.Name, err))
+			continue
 		}
+		gitguard.Clear(l.Worktree)
 	}
 	return errors.Join(errs...)
 }

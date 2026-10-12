@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/sushidev-team/lola/internal/config"
+	"github.com/sushidev-team/lola/internal/gitguard"
 )
 
 // ErrDirty is wrapped into Remove's error when the worktree has uncommitted
@@ -58,6 +59,9 @@ func (m *Manager) git(ctx context.Context, args ...string) (stdout, stderr strin
 		}
 	}
 	cmd := exec.CommandContext(ctx, bin, args...)
+	// `-C <worktree>` on a SANDBOXED worktree must not follow the .git pointer
+	// the agent can rewrite (internal/gitguard).
+	gitguard.Apply(cmd)
 	var out, errb bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &errb
@@ -514,7 +518,11 @@ func (m *Manager) Remove(ctx context.Context, p config.Project, dir, branch stri
 	}
 
 	args := []string{"-C", p.Path, "worktree", "remove"}
-	if force {
+	// A PINNED (sandboxed) worktree was dirty-checked above through its pin.
+	// `worktree remove` would repeat that check in a child that finds the
+	// repository through the admin dir's `commondir` — a file the agent could
+	// rewrite — so the already-made decision is passed as --force instead.
+	if force || gitguard.Pinned(dir) {
 		args = append(args, "--force")
 	}
 	args = append(args, dir)

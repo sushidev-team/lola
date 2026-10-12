@@ -12,6 +12,7 @@ import (
 
 	"github.com/sushidev-team/lola/internal/agent"
 	"github.com/sushidev-team/lola/internal/config"
+	"github.com/sushidev-team/lola/internal/gitguard"
 	"github.com/sushidev-team/lola/internal/tmux"
 	"github.com/sushidev-team/lola/internal/worktree"
 )
@@ -66,6 +67,10 @@ func TestSandboxContainsTheAgent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := f.n.pinSandbox(f.p.Name, dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { gitguard.Clear(dir) })
 	if err := excludeLolaDir(dir); err != nil {
 		t.Fatal(err)
 	}
@@ -85,6 +90,7 @@ func TestSandboxContainsTheAgent(t *testing.T) {
 		}
 	})
 	r := filepath.Join(dir, ".lola", "result")
+	hijacked := filepath.Join(t.TempDir(), "host-ran-agent-config")
 	script := strings.Join([]string{
 		"git config --global --add safe.directory '*'",
 		"echo hi > inside.txt && git add inside.txt && git -c user.name=t -c user.email=t@x commit -qm inside && echo commit-ok >> " + r,
@@ -93,6 +99,9 @@ func TestSandboxContainsTheAgent(t *testing.T) {
 		"echo x > " + escapes["main checkout"] + " 2>/dev/null",
 		"echo x > " + escapes["home dir"] + " 2>/dev/null",
 		"echo x > " + escapes["git hooks"] + " 2>/dev/null",
+		// Re-point .git at a git dir of the agent's own whose config runs a
+		// command — on whichever machine next runs git here.
+		"git init -q --bare .evil && printf '[core]\\n\\tbare = false\\n\\tfsmonitor = \"touch " + hijacked + "; false\"\\n' > .evil/config && printf 'gitdir: %s\\n' \"$PWD/.evil\" > .git",
 		"echo done >> " + r,
 	}, "; ")
 	line := "exec sh -c " + shQuote(f.n.sandboxLine(&f.p, id, agent.Kind("none"), script))
@@ -117,6 +126,20 @@ func TestSandboxContainsTheAgent(t *testing.T) {
 	hooksPath, _ := exec.Command("git", "-C", f.web, "config", "--get", "core.hooksPath").Output()
 	if strings.Contains(got, "config-written") || len(hooksPath) != 0 {
 		t.Errorf("agent rewrote the repository's git config")
+	}
+	// The host's next git call on the worktree (a checkpoint, a diff, a dirty
+	// check) must not follow the rewritten pointer.
+	if raw, _ := os.ReadFile(filepath.Join(dir, ".git")); !strings.Contains(string(raw), ".evil") {
+		t.Fatalf("the in-container rewrite of .git did not happen: %q", raw)
+	}
+	_, _, _ = f.n.WT.WorkSummary(ctx, dir, "main") // the worktree manager's host git
+	cmd := exec.Command("git", "-C", dir, "status", "--porcelain")
+	gitguard.Apply(cmd)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("pinned host git failed: %v\n%s", err, out)
+	}
+	if _, err := os.Stat(hijacked); err == nil {
+		t.Error("host git ran a config the sandboxed agent planted")
 	}
 	for what, p := range escapes {
 		if _, err := os.Stat(p); err == nil {

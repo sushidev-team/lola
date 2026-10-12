@@ -1244,8 +1244,11 @@ each of which owns exactly one external tool or concern behind an **exec seam**
 - **A sandboxed agent's isolation is the MOUNT LIST, and the pane is unchanged.**
   `[[project]].sandbox = "docker"` (`internal/runtime/sandbox.go`) wraps the
   agent's ordinary POSIX launch line in `docker run -it` inside the same tmux
-  pane, keyed off the session ID in `launchLine`, so spawn, revive,
-  switch-agent and fork are all covered and every pane reader is untouched.
+  pane in `launchLine`, so spawn, revive, switch-agent and fork are all
+  covered and every pane reader is untouched. The project is passed BY NAME:
+  a session ID does not identify its project (`lola-web-eng-42` is project
+  `web` + ENG-42 and project `web-eng` + 42), and a wrong guess launched a
+  sandboxed agent on the host.
   Rules that hold it together:
   - The mounts ARE the sandbox: the worktree, each repo's git common dir
     (needed to commit) with its `config` and `hooks` re-mounted READ-ONLY
@@ -1256,7 +1259,23 @@ each of which owns exactly one external tool or concern behind an **exec seam**
     something the agent cannot write: git stores are resolved from the MAIN
     checkouts (not the worktree's rewritable `.git` pointer), and the context
     folder is mounted only when `.lola/context` still points inside
-    `~/.lola/context/<project>/`. `TestSandboxContainsTheAgent`
+    `~/.lola/context/<project>/`.
+  - **HOST git never follows a sandboxed worktree's own metadata.** The agent
+    can rewrite the `.git` pointer and the admin dir (inside the rw store), and
+    plain `git -C <worktree>` on the host would then honour the agent's config
+    — `core.fsmonitor`, an attacker-NAMED `filter.*.clean` — i.e. run its
+    commands on the host through lola's own checkpoints, diffs and dirty
+    checks. So `internal/gitguard` PINS each sandboxed worktree's admin dir +
+    store when the runtime creates it (before post_create, the baseline or the
+    agent), records it on `Session.GitPin`/`LinkedRepo.GitPin`, and every host
+    git exec (`checkpoint`, `gitdiff`, `worktree`, `reviewagent`) goes through
+    `gitguard.Apply` → `GIT_DIR`/`GIT_COMMON_DIR`/`GIT_WORK_TREE`. The admin
+    dir's `config.worktree` is overlaid read-only in the container; a pinned
+    `worktree remove` passes `--force` after its own pinned dirty check (git's
+    internal re-check would follow the admin `commondir`). A sandboxed record
+    WITHOUT a pin is `gitguard.Deny`'d by the daemon's `syncGitPins` — host
+    git on it fails, teardown keeps it. A new host git call on a session
+    worktree must go through `gitguard.Apply`. `TestSandboxContainsTheAgent`
     (opt-in, `LOLA_SANDBOX_IT=1`) proves the escapes fail against a real engine.
   - Hooks cannot use the unix socket (a host unix socket does not survive a
     bind mount into Docker Desktop's / OrbStack's VM — measured, ECONNREFUSED),
@@ -1278,11 +1297,14 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   branch — inside the excluded `.lola/` (invisible to the primary's git) and
   inside the sandbox mount. Removing the primary deletes that tree with no
   dirty check of the nested ones, so `Kill` runs `removeLinked` (dirty-safe,
-  per repo) before anything else and a refusal keeps EVERYTHING. Spawn is
-  all-or-nothing across repos, and `SlotTaken` checks every linked repo's
-  branch too. The primary PR alone drives the delivery axis; linked PRs are
+  per repo) before anything else and a refusal keeps EVERYTHING — as does a
+  failed linked rollback during spawn, and anything left under `.lola/repos`
+  that the record does not account for (`unaccountedLinked`; adoption
+  rebuilds the records from disk with `discoverLinked`). `SlotTaken` checks
+  every linked repo's branch too. The primary PR alone drives the delivery axis; linked PRs are
   observed beside it (`Session.Linked[i].PR`) for display and to HOLD the
-  merged cleanup while one is still open (`Session.LinkedPRsSettled`).
+  merged cleanup until a SUCCESSFUL lookup since the merge shows none open
+  (`Session.LinkedPRsSettled(since)` — a failed lookup is not "no PR").
 - **The shared context folder lives OUTSIDE the worktree.**
   `~/.lola/context/<project>/<key>/` is symlinked in as `.lola/context`, so
   `git worktree remove` deletes the link and never the notes. The key is

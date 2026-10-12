@@ -62,6 +62,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/sushidev-team/lola/internal/agent"
+	"github.com/sushidev-team/lola/internal/gitguard"
 )
 
 const (
@@ -279,6 +280,7 @@ var runGitDiff = func(ctx context.Context, dir, base string) (string, error) {
 
 	cmd := exec.CommandContext(cctx, "git", "diff", base+"...HEAD")
 	cmd.Dir = dir // the diff is taken IN the worktree
+	gitguard.Apply(cmd)
 	stdout := &cappedBuffer{cap: maxDiffCaptureBytes}
 	stderr := &tailBuffer{cap: maxStderrBytes}
 	cmd.Stdout = stdout
