@@ -433,10 +433,10 @@ type Daemon struct {
 	// used to tell an operator to go read the log for an address it could not
 	// bind, which was a guess and was wrong the one time it mattered: the actual
 	// cause was a missing bearer key. It is cleared whenever a listener starts.
-	remoteMu     sync.Mutex
+	remoteMu sync.Mutex
 	// bridge is the sandbox HOOK BRIDGE listener + secret (hookbridge.go): a
 	// loopback TCP port open only while some project is sandboxed.
-	bridge hookBridge
+	bridge       hookBridge
 	remote       *remote.Server
 	remoteErr    string
 	panes        *panebus.Registry
