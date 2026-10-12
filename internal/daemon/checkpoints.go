@@ -358,7 +358,7 @@ func (d *Daemon) handleForkCheckpoint(ctx context.Context, a protocol.Checkpoint
 	if nat == nil {
 		return protocol.OpenData{}, errors.New("native runtime unavailable")
 	}
-	if err := health(agent.Parse(kind).Binary()); err != nil {
+	if err := health(d.launchBin(p.Name, agent.Parse(kind).Binary())); err != nil {
 		return protocol.OpenData{}, fmt.Errorf("runtime not ready: %w", err)
 	}
 

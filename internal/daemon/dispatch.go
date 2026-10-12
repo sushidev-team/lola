@@ -267,7 +267,7 @@ func (d *Daemon) tick(ctx context.Context, name string, dryRun bool) (protocol.P
 	// The coding-agent binary this project spawns (per-project override →
 	// [defaults].agent → "claude"): the health gate must confirm THAT binary
 	// is on PATH, not always "claude". Resolved under the config lock.
-	agentBin := agent.Parse(d.cfg.AgentForProject(p.Name)).Binary()
+	agentBin := sandboxedBin(d.cfg, p.Name, agent.Parse(d.cfg.AgentForProject(p.Name)).Binary())
 	// Best-of trigger (bestof.go): an issue carrying [best_of].label spawns the
 	// configured mix instead of one agent. Resolved once per tick.
 	bestOfCfg := d.cfg.BestOf
@@ -496,7 +496,7 @@ func (d *Daemon) tick(ctx context.Context, name string, dryRun bool) (protocol.P
 		// Every agent of the mix must pass the same health gate the tick ran
 		// for the project's own agent — before anything is mutated.
 		if len(mix) > 0 {
-			if err := d.bestOfHealth(mix); err != nil {
+			if err := d.bestOfHealth(project.Name, mix); err != nil {
 				d.logf(name, "best-of: %s skipped, runtime unavailable: %v", is.Identifier, err)
 				m.Action, m.Reason = "skipped", "best-of runtime unavailable"
 				res.Matches = append(res.Matches, m)

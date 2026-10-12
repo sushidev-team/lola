@@ -105,6 +105,7 @@ func (d *Daemon) handleOpenManual(ctx context.Context, a protocol.OpenManualArgs
 		// configured default's.
 		agentBin = agent.Parse(strings.TrimSpace(a.AgentKind)).Binary()
 	}
+	agentBin = sandboxedBin(d.cfg, project, agentBin)
 	d.mu.Unlock()
 	if p == nil {
 		return protocol.OpenData{}, fmt.Errorf("unknown project %q", project)
@@ -175,7 +176,7 @@ func (d *Daemon) handleOpenPr(ctx context.Context, a protocol.OpenPrArgs) (proto
 	p := d.cfg.ProjectByName(project)
 	health := d.runtimeHealth
 	home := d.home
-	agentBin := agent.Parse(d.cfg.AgentForProject(project)).Binary()
+	agentBin := sandboxedBin(d.cfg, project, agent.Parse(d.cfg.AgentForProject(project)).Binary())
 	d.mu.Unlock()
 	if p == nil {
 		return protocol.OpenData{}, fmt.Errorf("unknown project %q", project)
