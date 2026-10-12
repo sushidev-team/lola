@@ -167,7 +167,7 @@ describe("SessionsTable column alignment", () => {
 });
 
 // The agent axis is an icon in the leading column, and attention shows where it
-// belongs: an orange glyph + "Needs you" chip when the agent waits on a human, a
+// belongs: an orange glyph when the agent waits on a human, a
 // red lifecycle chip when the delivered work regressed. Every state the
 // attention predicate covers must still be visibly marked.
 describe("SessionsTable agent glyph and attention", () => {
@@ -200,8 +200,10 @@ describe("SessionsTable agent glyph and attention", () => {
     store.sessions = [fakeSession({ agentState: "waiting_input", inputReason: "permission_prompt", delivery: "none" })];
     const { container } = render(SessionsTable);
     expect(glyph(container).querySelector(".bg-orange")).not.toBeNull();
-    expect(status(container).textContent).toContain("Needs you");
-    expect(status(container).textContent).toContain("permission prompt");
+    expect(glyph(container).querySelector("[title]")).toHaveAttribute("title", "needs you · permission prompt");
+    expect(glyph(container).textContent).toContain("needs you · permission prompt");
+    expect(status(container).textContent).not.toContain("Needs you");
+    expect(status(container).textContent).not.toContain("permission prompt");
   });
 
   it("marks a red build in red even though the agent is happily working", () => {

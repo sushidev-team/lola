@@ -60,7 +60,7 @@
   {:else if d === "idle"}
     <span class="h-[40%] w-[40%] rounded-full bg-ink/45" aria-hidden="true"></span>
   {:else if d === "needs_you"}
-    <span class="flex h-[88%] w-[88%] items-center justify-center rounded-full bg-orange text-canvas" aria-hidden="true">
+    <span class="flex h-3/4 w-3/4 items-center justify-center rounded-full bg-orange text-canvas" aria-hidden="true">
       <svg viewBox="0 0 16 16" class="h-[70%] w-[70%]" fill="currentColor">
         <rect x="6.9" y="3" width="2.2" height="6.5" rx="1.1" />
         <circle cx="8" cy="12.2" r="1.3" />

@@ -4,7 +4,6 @@
   import { nav } from "$lib/nav.svelte";
   import { sessionMenu } from "$lib/sessionmenu.svelte";
   import { triaged } from "$lib/filters";
-  import { displayFor, inputReasonLabel } from "$lib/theme";
   import AgentActivity from "./AgentActivity.svelte";
   import AgentGlyph from "./AgentGlyph.svelte";
   import StageChip from "./StageChip.svelte";
@@ -47,8 +46,7 @@
   // you" instead of "× ci failed" + "escalated"). The PR number comes FIRST in a
   // fixed-width slot, grey and monospaced like any identifier, so every chip
   // starts at the same x. Before a PR exists, the agent's own plan chip stands in
-  // (chipRelevant): the plan is the progress until a PR supersedes it. An agent
-  // waiting on you adds a "Needs you" chip naming what it is asking.
+  // (chipRelevant): the plan is the progress until a PR supersedes it.
 
   // Activity gets its own column once there is genuinely room for it, and rides
   // under the title below that — so a wide window keeps single-line rows. This
@@ -82,7 +80,7 @@
            uppercasing as one token — never spell those out at a call site. py-2
            lands the head at the same 30px as a body row. -->
       <tr class="label text-left text-faint">
-        <th class="w-4 py-2 pl-2"></th>
+        <th class="w-8 px-2 py-2"></th>
         <th class="py-2 pr-2">Issue</th>
         {#if !dense}<th class="py-2 pr-2">Title</th>{/if}
         {#if !dense && wide}<th class="py-2 pr-2">Activity</th>{/if}
@@ -95,8 +93,6 @@
     <tbody>
       {#each rows as s (s.id)}
         {@const sel = nav.selectedId === s.id}
-        {@const needsYou = !!s.agentState && displayFor(s.agentState) === "needs_you"}
-        {@const reason = needsYou ? inputReasonLabel(s.inputReason) : ""}
         <!-- The separator is on the CELLS, not the row. The table is
              `border-separate`, and in the separated-borders model the UA must
              ignore border properties on rows — the `border-b` that used to sit
@@ -114,13 +110,15 @@
             sessionMenu.open(s.id, e);
           }}
         >
-          <td class="py-1.5 pl-2 text-center align-middle">
-            <AgentGlyph
-              agentState={s.agentState}
-              inputReason={s.inputReason}
-              status={s.status}
-              interpreted={s.interpretedState}
-            />
+          <td class="px-2 py-1.5 align-middle">
+            <div class="flex items-center justify-center">
+              <AgentGlyph
+                agentState={s.agentState}
+                inputReason={s.inputReason}
+                status={s.status}
+                interpreted={s.interpretedState}
+              />
+            </div>
           </td>
           <!-- The row's ONE 500: the issue key is what the row is about. -->
           <td class="py-1.5 pr-2 align-middle font-medium whitespace-nowrap" class:text-accent-ink={sel}
@@ -210,13 +208,6 @@
               {/if}
               <ClaimFlag session={s} />
               <CrossSessionChips session={s} />
-              {#if needsYou}
-                <span
-                  class="inline-flex items-center gap-1.5 rounded-full bg-orange/12 px-2 py-[1px] text-sm font-medium whitespace-nowrap text-orange"
-                  title="the agent is waiting on you"
-                  >Needs you{#if reason}<span class="font-normal opacity-80">· {reason}</span>{/if}</span
-                >
-              {/if}
             </span>
           </td>
           {#if anyCost}
