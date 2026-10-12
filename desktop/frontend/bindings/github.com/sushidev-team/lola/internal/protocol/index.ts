@@ -29,6 +29,7 @@ export type {
     FeedbackData,
     GroupInfo,
     KillData,
+    LinkedPR,
     LoadInfo,
     Match,
     MergeQueueInfo,

@@ -734,6 +734,8 @@ func (d *Daemon) sessionsData() protocol.SessionsData {
 			si.Checks = s.PR.ChecksState
 			si.Review = s.PR.ReviewDecision
 		}
+		si.Sandbox = s.Sandbox
+		si.LinkedPRs = linkedPRInfo(s.Linked)
 		// [statusagent] display overlay, pre-gated here (the ONE consumer of
 		// the overlay fields): clients render what arrives or nothing.
 		if istate, headline, waitingOn, at := displayOverlay(s, minConfidence, now); headline != "" || istate != "" {

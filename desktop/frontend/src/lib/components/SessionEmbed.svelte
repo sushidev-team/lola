@@ -261,6 +261,17 @@
           {(session.agent || "claude").toLowerCase()}
         </span>
       {/if}
+      <!-- [[project]].sandbox: the agent runs in a container that sees only its
+           worktree. Worth one chip — it changes what the agent could have
+           touched, which is the first question about anything it did. -->
+      {#if session.sandbox}
+        <span
+          class="inline-flex items-center whitespace-nowrap rounded bg-pill-grey px-1.5 py-[1px] text-sm text-pill-grey-fg"
+          title="sandboxed: the agent runs in a {session.sandbox} container that can write only its worktree"
+        >
+          {session.sandbox}
+        </span>
+      {/if}
       <!-- Token usage (internal/usage): every claude run in this worktree — the
            worker, its subagents, the review passes. Absent when lola cannot read
            the agent's logs. -->
@@ -314,6 +325,15 @@
         {#if session.prNumber > 0}
           <Button size="xs" onclick={() => store.openURL(session.prUrl)}>Open PR <span aria-hidden="true">↗</span></Button>
         {/if}
+        <!-- Linked repositories ([[project.linked_repo]]): one PR per further
+             repo the issue spans, opened beside the primary one. -->
+        {#each session.linkedPrs ?? [] as l (l.name)}
+          {#if l.number && l.url}
+            <Button size="xs" title={`${l.repo || l.name} #${l.number} (${(l.state || "").toLowerCase()})`} onclick={() => store.openURL(l.url!)}>
+              {l.name} PR <span aria-hidden="true">↗</span>
+            </Button>
+          {/if}
+        {/each}
         <Button size="xs" onclick={() => store.review(session.id)}>Review</Button>
         {#if canRevive}
           <Button variant="accent" size="xs" onclick={() => store.revive(session.id)}>Revive</Button>

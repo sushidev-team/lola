@@ -1397,6 +1397,12 @@ func (m *rootModel) sessionDetail() string {
 		b.WriteString(statusOrange.Render("⚠ PR facts stale — gh has been failing") + "\n")
 	}
 	fmt.Fprintf(&b, "review:   %s\n", dash(sel.Review))
+	for _, line := range linkedPRLines(*sel) {
+		b.WriteString(line + "\n")
+	}
+	if sel.Sandbox != "" {
+		fmt.Fprintf(&b, "sandbox:  %s\n", faintText.Render(sel.Sandbox+" — the agent runs in a container"))
+	}
 	if sel.Reacting != "" {
 		fmt.Fprintf(&b, "reacting: %s\n", reactingStyle(sel.Reacting).Render(sel.Reacting))
 	}
@@ -1608,4 +1614,30 @@ func portsDetailLine(sel protocol.SessionInfo) string {
 		parts[i] = strconv.Itoa(p)
 	}
 	return fmt.Sprintf("ports:    %s", strings.Join(parts, " · "))
+}
+
+// linkedPRLines renders a session's linked-repository PRs
+// ([[project.linked_repo]]), one line each: the repo's name, then its PR
+// number + state + checks, or a faint "no PR yet".
+func linkedPRLines(s protocol.SessionInfo) []string {
+	var out []string
+	for _, l := range s.LinkedPRs {
+		label := l.Name
+		if l.Repo != "" {
+			label += " (" + l.Repo + ")"
+		}
+		if l.Number == 0 {
+			out = append(out, fmt.Sprintf("linked:   %s %s", label, faintText.Render("no PR yet")))
+			continue
+		}
+		state := strings.ToLower(l.State)
+		if l.Draft && l.State == "OPEN" {
+			state = "draft"
+		}
+		if l.Checks != "" && l.Checks != "none" {
+			state += " · ci " + l.Checks
+		}
+		out = append(out, fmt.Sprintf("linked:   %s #%d %s", label, l.Number, state))
+	}
+	return out
 }

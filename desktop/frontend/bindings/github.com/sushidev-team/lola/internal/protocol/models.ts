@@ -471,6 +471,30 @@ export interface KillData {
 }
 
 /**
+ * LinkedPR is one linked repository of a session and its PR, if any.
+ * Number 0 means no PR observed yet (the agent has not opened one there, or
+ * the repo has no GitHub slug to ask).
+ */
+export interface LinkedPR {
+    "name": string;
+    "repo"?: string;
+    "branch": string;
+    "number"?: number;
+    "url"?: string;
+
+    /**
+     * OPEN|CLOSED|MERGED
+     */
+    "state"?: string;
+
+    /**
+     * pass|fail|pending|none
+     */
+    "checks"?: string;
+    "draft"?: boolean;
+}
+
+/**
  * LoadInfo is a machine-load sample; -1 marks a value the OS did not report.
  * Busy is the hold reason ("" when dispatch is not held by load).
  */
@@ -959,6 +983,16 @@ export interface SessionInfo {
      * raw session age origin for live client formatting
      */
     "firstSeen"?: string;
+
+    /**
+     * Sandbox is "docker" when the agent runs in a container
+     * ([[project]].sandbox), "" on the host. LinkedPRs are the session's
+     * linked-repository PRs ([[project.linked_repo]]), one per linked repo,
+     * in config order; the primary PR stays in PRURL/PRNumber. Both absent on
+     * an older daemon.
+     */
+    "sandbox"?: string;
+    "linkedPrs"?: LinkedPR[] | null;
 
     /**
      * The two state axes underneath Status (see internal/state), with raw

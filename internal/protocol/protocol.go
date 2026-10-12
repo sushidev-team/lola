@@ -412,6 +412,20 @@ type Event struct {
 	At time.Time `json:"at,omitzero"`
 }
 
+// LinkedPR is one linked repository of a session and its PR, if any.
+// Number 0 means no PR observed yet (the agent has not opened one there, or
+// the repo has no GitHub slug to ask).
+type LinkedPR struct {
+	Name   string `json:"name"`
+	Repo   string `json:"repo,omitempty"`
+	Branch string `json:"branch"`
+	Number int    `json:"number,omitempty"`
+	URL    string `json:"url,omitempty"`
+	State  string `json:"state,omitempty"`  // OPEN|CLOSED|MERGED
+	Checks string `json:"checks,omitempty"` // pass|fail|pending|none
+	Draft  bool   `json:"draft,omitempty"`
+}
+
 // SessionInfo is one observed session, flattened to render-ready strings and
 // ints so the TUI never needs scm/session imports or re-derivation.
 type SessionInfo struct {
@@ -432,6 +446,14 @@ type SessionInfo struct {
 	Age      string `json:"age"`      // concise age since first observed, e.g. "2h" or "Oct 4"
 
 	FirstSeen time.Time `json:"firstSeen,omitzero"` // raw session age origin for live client formatting
+
+	// Sandbox is "docker" when the agent runs in a container
+	// ([[project]].sandbox), "" on the host. LinkedPRs are the session's
+	// linked-repository PRs ([[project.linked_repo]]), one per linked repo,
+	// in config order; the primary PR stays in PRURL/PRNumber. Both absent on
+	// an older daemon.
+	Sandbox   string     `json:"sandbox,omitempty"`
+	LinkedPRs []LinkedPR `json:"linkedPrs,omitempty"`
 
 	// The two state axes underneath Status (see internal/state), with raw
 	// freshness timestamps so a client can render a live "ago" between
