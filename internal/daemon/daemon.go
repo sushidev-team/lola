@@ -426,6 +426,9 @@ type Daemon struct {
 	// bind, which was a guess and was wrong the one time it mattered: the actual
 	// cause was a missing bearer key. It is cleared whenever a listener starts.
 	remoteMu     sync.Mutex
+	// bridge is the sandbox HOOK BRIDGE listener + secret (hookbridge.go): a
+	// loopback TCP port open only while some project is sandboxed.
+	bridge hookBridge
 	remote       *remote.Server
 	remoteErr    string
 	panes        *panebus.Registry
@@ -610,7 +613,7 @@ func Run(ctx context.Context) error {
 		lolaBin = stable
 	}
 	d.lolaBin = lolaBin
-	d.native = newNativeRuntime(cfg, home, lolaBin, d.linearKey, d.nativeLogf)
+	d.native = newNativeRuntime(cfg, home, lolaBin, d.linearKey, d.nativeLogf, d.hookToken)
 	// One `tmux ls` per observe cycle answers liveness for EVERY session (and
 	// carries #{session_activity}, the zero-cost output-freshness stamp) —
 	// replacing N per-session `has-session` execs. Wired HERE (production
@@ -749,6 +752,10 @@ func Run(ctx context.Context) error {
 	// without a phone attached.
 	d.startRemote(ctx)
 
+	// The sandbox hook bridge (hookbridge.go): open only while a project is
+	// sandboxed, and a bind failure is logged rather than fatal, like [remote].
+	d.syncHookBridge(ctx)
+
 	go d.serve(ctx, ln)
 
 	logger.Printf("daemon started (socket %s)", sock)
@@ -769,6 +776,7 @@ func Run(ctx context.Context) error {
 	// still streaming when the drain starts hangs shutdown until the phone
 	// happens to disconnect.
 	d.stopRemote()
+	d.stopHookBridge()
 	// Before the worker drain: a forward holds accepted connections open for as
 	// long as a browser keeps them, which is exactly the unbounded wait the
 	// drain below is not built for.
@@ -1041,7 +1049,8 @@ func (d *Daemon) tmuxClient() *tmux.Client {
 // re-read per spawn, so a rotated key is picked up next spawn; it returns ""
 // when no key is available so spawning is never blocked on it. logf carries
 // best-effort styling advisories (status-bar chrome) into the daemon log.
-func newNativeRuntime(cfg *config.Config, home, lolaBin string, linearKey func() string, logf func(string, ...any)) *runtime.Native {
+// hookToken mints a sandboxed session's hook-bridge token (hookbridge.go).
+func newNativeRuntime(cfg *config.Config, home, lolaBin string, linearKey func() string, logf func(string, ...any), hookToken func(string) string) *runtime.Native {
 	return &runtime.Native{
 		Cfg:     cfg,
 		WT:      &worktree.Manager{Root: filepath.Join(home, "worktrees")},
@@ -1054,6 +1063,7 @@ func newNativeRuntime(cfg *config.Config, home, lolaBin string, linearKey func()
 		LinearKey:   linearKey,
 		Logf:        logf,
 		Checkpoints: checkpoint.Git{},
+		HookToken:   hookToken,
 	}
 }
 
@@ -1126,6 +1136,14 @@ func (d *Daemon) adoptNativeSessions(ctx context.Context) {
 				}
 				if s.Agent == "" {
 					s.Agent = prev.Agent // the scan cannot see which coding agent runs inside
+				}
+				// Nor whether it runs in a container, or which linked worktrees
+				// (and PRs) it has — teardown needs both.
+				if s.Sandbox == "" {
+					s.Sandbox = prev.Sandbox
+				}
+				if len(s.Linked) == 0 {
+					s.Linked = prev.Linked
 				}
 				// Carry forward the P4 write-back one-shot guards so a restart never
 				// re-comments a transition already narrated to Linear.

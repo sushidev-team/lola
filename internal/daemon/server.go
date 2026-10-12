@@ -856,6 +856,7 @@ func (d *Daemon) handleReload(ctx context.Context) error {
 	// nil (that provider off). Under d.mu, like the brain.
 	d.setReviewProvidersLocked(nc)
 	if d.realNative && (!reflect.DeepEqual(old.Projects, nc.Projects) ||
+		!reflect.DeepEqual(old.Sandbox, nc.Sandbox) ||
 		old.TmuxSocketName() != nc.TmuxSocketName()) {
 		// The native runtime captures both its config reference (for the project
 		// registry) AND its tmux socket at construction, so recreate it whenever
@@ -864,7 +865,7 @@ func (d *Daemon) handleReload(ctx context.Context) error {
 		// server as d.tmuxClient's live send-keys/capture; without it a
 		// socket-only reload would leave the observer reading the OLD server while
 		// keys go to the NEW one.
-		d.native = newNativeRuntime(nc, d.home, d.lolaBin, d.linearKey, d.nativeLogf)
+		d.native = newNativeRuntime(nc, d.home, d.lolaBin, d.linearKey, d.nativeLogf, d.hookToken)
 	}
 	// [remote] is compared exactly (config.RemoteConfig is comparable) so an
 	// unrelated reload never touches a live listener. Applied AFTER the unlock:
@@ -877,6 +878,9 @@ func (d *Daemon) handleReload(ctx context.Context) error {
 
 	if remoteChanged {
 		d.reloadRemote()
+	}
+	if bctx := d.shutdownCtx; bctx != nil {
+		d.syncHookBridge(bctx)
 	}
 	d.syncWorkers(ctx)
 	d.logf("", "config reloaded")

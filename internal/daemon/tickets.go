@@ -240,6 +240,7 @@ func (d *Daemon) handleOpenTicket(ctx context.Context, a protocol.OpenTicketArgs
 		// default's.
 		agentBin = agent.Parse(strings.TrimSpace(a.AgentKind)).Binary()
 	}
+	agentBin = sandboxedBin(d.cfg, project, agentBin)
 	d.mu.Unlock()
 	if pp == nil {
 		return protocol.OpenData{}, fmt.Errorf("unknown project %q", project)

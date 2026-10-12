@@ -112,7 +112,13 @@ func (d *Daemon) react(ctx context.Context, s session.Session) {
 		// forever, logging the same line and telling nobody — one real store
 		// carried 1953 identical retries for a single session across 16 hours.
 		// See reactMerged / cleanupRetryDue / noteCleanupFailure.
-		if rc.Merged.Auto {
+		//
+		// A LINKED repository's PR still open holds the cleanup: its worktree
+		// lives inside this session's, and the agent may still be asked to
+		// address review there. The observer refreshes the linked PRs every
+		// cycle, so the cleanup fires on the first cycle after the last one
+		// merges or closes.
+		if rc.Merged.Auto && s.LinkedPRsSettled() {
 			d.reactMerged(ctx, s, notifier)
 		}
 
