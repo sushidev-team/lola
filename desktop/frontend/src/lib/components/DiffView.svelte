@@ -62,6 +62,7 @@
       const d = await DaemonService.Diff(id);
       if (my !== seq) return;
       data = d;
+      if (!d.files?.some((f) => f.path === activeFile)) activeFile = orderedFiles[0]?.path ?? "";
       error = "";
     } catch (err) {
       if (my !== seq) return;
@@ -76,6 +77,8 @@
     data = null;
     error = "";
     sel = null;
+    activeFile = "";
+    collapsed = new Set();
     // Untracked: load() runs synchronously up to its first await, and anything
     // it reads there would become a dependency of THIS effect.
     untrack(() => void load());
@@ -84,6 +87,26 @@
   const files = $derived<DiffFile[]>(data?.files ?? []);
   const parsed = $derived(new Map(files.map((f) => [f.path, parsePatch(f.patch)])));
   const tree = $derived(flattenTree(buildTree(files.map((f) => f.path))));
+  const fileByPath = $derived(new Map(files.map((f) => [f.path, f])));
+  // Both panes follow the same directory-first traversal. Use the full tree:
+  // folding a navigation folder must not hide or reorder the diff itself.
+  const orderedFiles = $derived(tree.filter((node) => node.path).map((node) => fileByPath.get(node.path)!));
+  let collapsed = $state(new Set<string>());
+  const visibleTree = $derived.by(() => {
+    let hiddenBelow = Infinity;
+    return tree.filter((node) => {
+      if (node.depth > hiddenBelow) return false;
+      hiddenBelow = !node.path && collapsed.has(node.key) ? node.depth : Infinity;
+      return true;
+    });
+  });
+
+  function toggleFolder(key: string) {
+    const next = new Set(collapsed);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
+    collapsed = next;
+  }
   const totals = $derived(
     files.reduce((t, f) => ({ add: t.add + f.additions, del: t.del + f.deletions }), { add: 0, del: 0 }),
   );
@@ -181,12 +204,8 @@
   };
 
   function rowBg(r: Row | null, selected: boolean): string {
-    if (selected) return "bg-accent/20";
-    if (!r) return "bg-canvas/60";
-    if (r.kind === "add") return "bg-good/10";
-    if (r.kind === "del") return "bg-bad/10";
-    if (r.kind === "hunk" || r.kind === "meta") return "bg-sel/50 text-faint";
-    return "";
+    const kind = !r ? "diff-empty" : `diff-${r.kind}`;
+    return `${kind}${selected ? " diff-selected" : ""}`;
   }
 
   function marker(r: Row): string {
@@ -198,9 +217,24 @@
     return f.status === "added" ? "A" : f.status === "deleted" ? "D" : f.status === "renamed" ? "R" : "M";
   }
 
+  function statusLabel(f: DiffFile): string {
+    return f.untracked ? "Untracked" : f.status === "added" ? "Added" : f.status === "deleted" ? "Deleted" : f.status === "renamed" ? "Renamed" : "Modified";
+  }
+
+  function statusColor(f: DiffFile): string {
+    return f.untracked || f.status === "added" ? "text-good" : f.status === "deleted" ? "text-bad" : f.status === "renamed" ? "text-magenta" : "text-info";
+  }
+
   const count = $derived(feedback.count(sessionId));
   const note = $derived(feedback.noteFor(sessionId));
 </script>
+
+{#snippet fileIcon()}
+  <svg class="size-3.5 shrink-0" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <path d="M9.5 1.75H4a1 1 0 0 0-1 1v10.5a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1v-8.5Z" />
+    <path d="M9 1.75v4h4M5.5 8.5h5M5.5 11h3" />
+  </svg>
+{/snippet}
 
 {#snippet code(r: Row, path: string)}
   {@const lang = langOf(path)}
@@ -248,24 +282,32 @@
   {/if}
 {/snippet}
 
-<div class="grid h-full min-h-0 grid-rows-[auto_1fr_auto] bg-panel" data-testid="diff-view">
+<div class="diff-view grid h-full min-h-0 grid-rows-[auto_1fr_auto] bg-panel" data-testid="diff-view">
   <!-- Toolbar: what the diff is against, its size, and the view toggles. -->
-  <div class="grid grid-cols-[1fr_auto] items-center gap-3 border-b border-edge/60 px-3 py-1.5">
+  <div class="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 border-b border-edge/60 px-4 py-2.5">
     <div class="min-w-0 truncate text-sm text-faint">
       {#if data}
-        against <span class="font-mono text-ink">{data.base}</span>
-        <span class="font-mono">({data.mergeBase.slice(0, 8)})</span> ·
-        {files.length} file{files.length === 1 ? "" : "s"} ·
-        <span class="text-good">+{totals.add}</span> <span class="text-bad">−{totals.del}</span>
+        <span class="mr-2 font-medium text-ink">Changes</span>
+        against <span class="font-mono text-accent-ink">{data.base}</span>
+        <span class="ml-1 font-mono">{data.mergeBase.slice(0, 8)}</span>
+        <span class="ml-3 num text-good">+{totals.add}</span> <span class="num text-bad">−{totals.del}</span>
         {#if data.truncated}<span class="text-warn"> · truncated — too large to show in full</span>{/if}
       {:else if loading}
         loading diff…
       {/if}
     </div>
     <div class="flex items-center gap-1">
-      <Button size="xs" selected={mode === "unified"} onclick={() => setMode("unified")}>Unified</Button>
-      <Button size="xs" selected={mode === "split"} onclick={() => setMode("split")}>Split</Button>
-      <Button size="xs" {loading} title="re-read the worktree" onclick={load}>Refresh</Button>
+      <div class="flex gap-0.5 rounded-md border border-edge/60 bg-canvas p-0.5" role="group" aria-label="Diff layout">
+        <Button size="xs" selected={mode === "unified"} onclick={() => setMode("unified")}>Unified</Button>
+        <Button size="xs" selected={mode === "split"} onclick={() => setMode("split")}>Split</Button>
+      </div>
+      <Button size="xs" icon {loading} aria-label="Refresh" title="Refresh diff" onclick={load}>
+        {#if !loading}
+          <svg class="size-3.5" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M13 6a5.25 5.25 0 1 0 .15 3.5M13 2.5V6H9.5" />
+          </svg>
+        {/if}
+      </Button>
     </div>
   </div>
 
@@ -275,41 +317,57 @@
   {:else if data && files.length === 0}
     <div class="flex items-center justify-center text-faint">no changes against {data.base}</div>
   {:else}
-    <div class="grid min-h-0 grid-cols-[minmax(10rem,16rem)_1fr]">
-      <nav class="min-h-0 overflow-auto border-r border-edge/60 py-1 text-sm" aria-label="changed files">
-        {#each tree as n (n.key)}
+    <div class="diff-body grid min-h-0">
+      <nav class="diff-nav min-h-0 overflow-auto border-r border-edge/60 text-sm" aria-label="changed files">
+        <div class="nav-heading sticky top-0 z-10 flex items-center justify-between px-3 py-3">
+          <span class="font-medium text-ink">Changed files</span>
+          <span class="num text-faint">{files.length}</span>
+        </div>
+        <div class="px-1.5 pb-3">
+        <!-- Navigation rows own their full-width layout, like the app's other nav rows. -->
+        {#each visibleTree as n (n.key)}
           {#if n.path}
-            {@const f = files.find((x) => x.path === n.path)}
+            {@const f = fileByPath.get(n.path)}
             <button
               type="button"
-              class="grid w-full grid-cols-[1fr_auto] gap-2 py-0.5 pr-2 text-left hover:bg-sel/60 {activeFile === n.path
-                ? 'bg-sel text-ink'
-                : 'text-faint'}"
-              style="padding-left: {0.5 + n.depth * 0.75}rem"
-              title={n.path}
+              class="file-row nav-row {activeFile === n.path ? 'is-active' : ''}"
+              style="--depth: {n.depth}"
+              title={`${n.path}${f ? ` · ${statusLabel(f)} · +${f.additions} −${f.deletions}` : ''}`}
+              aria-current={activeFile === n.path ? "location" : undefined}
+              aria-label={`${n.path}${f ? `, ${statusLabel(f)}` : ''}`}
               onclick={() => jump(n.path)}
             >
+              <span class={f ? statusColor(f) : "text-faint"}>{@render fileIcon()}</span>
               <span class="truncate">{n.name}</span>
-              <span class="font-mono text-faint">{f ? statusGlyph(f) : ""}</span>
+              {#if f}<span class="file-status font-mono {statusColor(f)}" aria-hidden="true">{statusGlyph(f)}</span>{/if}
             </button>
           {:else}
-            <div class="truncate py-0.5 text-faint/80" style="padding-left: {0.5 + n.depth * 0.75}rem">{n.name}/</div>
+            <button type="button" class="folder-row nav-row" class:root-folder={n.depth === 0} style="--depth: {n.depth}"
+              aria-expanded={!collapsed.has(n.key)} onclick={() => toggleFolder(n.key)} title={n.key.slice(4)}>
+              <svg class="folder-chevron size-3" class:closed={collapsed.has(n.key)} viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m4 6 4 4 4-4" /></svg>
+              <svg class="size-3.5 text-warn" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linejoin="round" aria-hidden="true"><path d="M1.5 4a1 1 0 0 1 1-1h3l1.5 1.5h6.5a1 1 0 0 1 1 1v7a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1Z" /></svg>
+              <span class="truncate">{n.name}</span>
+            </button>
           {/if}
         {/each}
+        </div>
       </nav>
 
-      <div bind:this={scroller} class="min-h-0 overflow-auto font-mono text-[12px] leading-5">
-        {#each files as f (f.path)}
+      <div bind:this={scroller} class="diff-scroller min-h-0 min-w-0 overflow-auto font-mono text-sm leading-5">
+        {#each orderedFiles as f (f.path)}
           {@const rows = parsed.get(f.path) ?? []}
-          <section data-file={f.path} class="border-b border-edge/60">
+          <section data-file={f.path} class="diff-file">
             <header
-              class="sticky top-0 z-10 grid grid-cols-[1fr_auto] gap-3 border-b border-edge/60 bg-panel px-3 py-1.5 font-sans"
+              class="file-heading sticky top-0 z-10 grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 border-b border-edge/60 px-4 py-3 font-sans"
             >
-              <span class="truncate text-ink">
-                {#if f.oldPath}<span class="text-faint">{f.oldPath} → </span>{/if}{f.path}
+              <span class="flex min-w-0 items-center gap-2.5" title={f.oldPath ? `${f.oldPath} → ${f.path}` : f.path}>
+                <span class={statusColor(f)}>{@render fileIcon()}</span>
+                <span class="truncate text-ink">
+                {#if f.oldPath}<span class="text-faint">{f.oldPath} → </span>{/if}<span class="text-faint">{f.path.slice(0, f.path.lastIndexOf("/") + 1)}</span><span class="font-medium">{f.path.slice(f.path.lastIndexOf("/") + 1)}</span>
                 {#if f.untracked}<span class="text-sm text-faint"> · untracked</span>{/if}
+                </span>
               </span>
-              <span class="text-sm"
+              <span class="flex items-center gap-3 text-sm num"
                 ><span class="text-good">+{f.additions}</span> <span class="text-bad">−{f.deletions}</span></span
               >
             </header>
@@ -322,17 +380,17 @@
                 {@const a = anchorOf(r)}
                 {@const selected = inSelection(sel, f.path, r)}
                 <!-- The row is the click target; a11y via the gutter button. -->
-                <div class="grid grid-cols-[3rem_3rem_1rem_1fr] {rowBg(r, selected)}">
+                <div class="diff-row grid grid-cols-[3rem_3rem_1.5rem_minmax(0,1fr)] {rowBg(r, selected)}">
                   {#if a}
                     <button
                       type="button"
-                      class="col-span-2 grid grid-cols-2 pr-1 text-right text-faint/80 select-none hover:text-accent-ink"
+                      class="line-gutter col-span-2 grid grid-cols-2 pr-2 text-right select-none hover:text-accent-ink"
                       title="comment on this line (shift-click to select a range)"
                       onclick={(e) => pick(f.path, r, e)}
                     >
                       <span>{r.oldLine || ""}</span><span>{r.newLine || ""}</span>
                     </button>
-                    <span class="text-faint select-none">{marker(r)}</span>
+                    <span class="line-marker text-center select-none">{marker(r)}</span>
                     <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
                     <div class="cursor-pointer pr-3" onclick={(e) => pick(f.path, r, e)}>{@render code(r, f.path)}</div>
                   {:else}
@@ -349,7 +407,7 @@
                   <div class="grid grid-cols-2">
                     {#each [sr.left, sr.right] as r, side (side)}
                       <div
-                        class="grid grid-cols-[3rem_1rem_1fr] border-edge/40 {side === 0 ? 'border-r' : ''} {rowBg(
+                        class="diff-row grid grid-cols-[3rem_1.5rem_minmax(0,1fr)] border-edge/40 {side === 0 ? 'border-r' : ''} {rowBg(
                           r,
                           !!r && inSelection(sel, f.path, r),
                         )}"
@@ -357,11 +415,11 @@
                         {#if r}
                           <button
                             type="button"
-                            class="pr-1 text-right text-faint/80 select-none hover:text-accent-ink"
+                            class="line-gutter pr-2 text-right select-none hover:text-accent-ink"
                             title="comment on this line (shift-click to select a range)"
                             onclick={(e) => pick(f.path, r, e)}>{side === 0 ? r.oldLine : r.newLine}</button
                           >
-                          <span class="text-faint select-none">{marker(r)}</span>
+                          <span class="line-marker text-center select-none">{marker(r)}</span>
                           <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
                           <div class="cursor-pointer pr-2" onclick={(e) => pick(f.path, r, e)}>
                             {@render code(r, f.path)}
@@ -384,7 +442,7 @@
   {/if}
 
   <!-- The send bar: a free note and the batch's one action. -->
-  <div class="grid grid-cols-[1fr_auto] items-end gap-2 border-t border-edge/60 px-3 py-2">
+  <div class="grid grid-cols-[minmax(0,1fr)_auto] items-end gap-3 border-t border-edge/60 bg-canvas/40 px-4 py-3">
     <textarea
       value={note}
       rows="1"
@@ -424,3 +482,67 @@
     </div>
   </div>
 </div>
+
+<style>
+  .diff-body { grid-template-columns: clamp(13rem, 24%, 21rem) minmax(0, 1fr); }
+  .diff-nav, .nav-heading { background: var(--color-canvas); }
+  .nav-heading { border-bottom: 1px solid color-mix(in srgb, var(--color-edge) 45%, transparent); }
+  .nav-row {
+    display: grid;
+    align-items: center;
+    gap: 0.5rem;
+    width: 100%;
+    min-height: 28px;
+    padding-right: 0.5rem;
+    border-radius: 4px;
+    text-align: left;
+  }
+  .nav-row:hover { background: color-mix(in srgb, var(--color-sel) 65%, transparent); }
+  .nav-row:focus-visible { outline-offset: -2px; }
+  .file-row {
+    grid-template-columns: 14px minmax(0, 1fr) 18px;
+    padding-left: calc(1.5rem + var(--depth) * 0.75rem);
+    color: var(--color-ink);
+  }
+  .file-row.is-active {
+    background: var(--color-accent-fill);
+    color: var(--color-accent-ink);
+    box-shadow: inset 1px 0 var(--color-accent);
+  }
+  .file-status { text-align: center; font-weight: 500; }
+  .folder-row {
+    grid-template-columns: 12px 14px minmax(0, 1fr);
+    padding-left: calc(0.25rem + var(--depth) * 0.75rem);
+    color: var(--color-ink);
+    font-weight: 500;
+  }
+  .root-folder { margin-top: 0.75rem; }
+  .folder-chevron { color: var(--color-faint); }
+  .folder-chevron.closed { transform: rotate(-90deg); }
+  .diff-scroller { background: var(--color-canvas); }
+  .diff-file { background: var(--color-panel); border-bottom: 1px solid var(--color-edge); }
+  .diff-file + .diff-file { margin-top: 1rem; border-top: 1px solid var(--color-edge); }
+  .file-heading { background: var(--color-panel); }
+  .diff-row { min-height: 22px; line-height: 22px; }
+  .line-gutter { color: var(--color-faint); background: color-mix(in srgb, var(--color-canvas) 35%, transparent); }
+  .line-marker { color: var(--color-faint); }
+  .diff-add { background: color-mix(in srgb, var(--color-good) 9%, var(--color-panel)); }
+  .diff-del { background: color-mix(in srgb, var(--color-bad) 9%, var(--color-panel)); }
+  .diff-add .line-gutter, .diff-add .line-marker { color: var(--color-good); background: color-mix(in srgb, var(--color-good) 8%, transparent); }
+  .diff-del .line-gutter, .diff-del .line-marker { color: var(--color-bad); background: color-mix(in srgb, var(--color-bad) 8%, transparent); }
+  .diff-hunk, .diff-meta {
+    padding-top: 0.375rem;
+    padding-bottom: 0.375rem;
+    color: var(--color-info);
+    background: color-mix(in srgb, var(--color-info) 6%, var(--color-panel));
+    border-block: 1px solid color-mix(in srgb, var(--color-info) 12%, transparent);
+  }
+  .diff-empty { background: var(--color-canvas); }
+  .diff-selected { background: var(--color-accent-fill); }
+  .diff-row:hover .line-gutter { color: var(--color-accent-ink); }
+  @media (max-width: 800px) {
+    .diff-body { grid-template-columns: 12rem minmax(0, 1fr); }
+    .file-row { padding-left: calc(1rem + var(--depth) * 0.5rem); }
+    .folder-row { padding-left: calc(0.25rem + var(--depth) * 0.5rem); }
+  }
+</style>

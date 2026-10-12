@@ -49,6 +49,59 @@ describe("DiffView", () => {
     expect(screen.getByRole("navigation", { name: "changed files" })).toHaveTextContent("foo.go");
   });
 
+  it("renders both diff layouts in sidebar order, independent of folder folding", async () => {
+    // Git's path order puts FrontChat.tsx before its sibling directories.
+    const paths = [
+      "resources/js/components/FrontChat.tsx",
+      "resources/js/components/__tests__/FrontChat.test.tsx",
+      "resources/js/components/layout/__tests__/support-button.test.tsx",
+      "resources/js/components/layout/support-button.tsx",
+    ];
+    const expected = [paths[1], paths[2], paths[3], paths[0]];
+    Diff.mockResolvedValue({ ...DATA, files: paths.map((path) => ({ ...DATA.files[0], path })) });
+    const { container } = render(DiffView, { sessionId: "s1" });
+    await screen.findByText("origin/main");
+    const nav = screen.getByRole("navigation", { name: "changed files" });
+    const sidebarPaths = Array.from(nav.querySelectorAll("button[aria-label]"))
+      .map((button) => button.getAttribute("aria-label")?.replace(/, Modified$/, ""));
+    const diffPaths = () => Array.from(container.querySelectorAll("section[data-file]"))
+      .map((section) => section.getAttribute("data-file"));
+    expect(sidebarPaths).toEqual(expected);
+    expect(diffPaths()).toEqual(sidebarPaths);
+    expect(screen.getByRole("button", { name: `${expected[0]}, Modified` })).toHaveAttribute("aria-current", "location");
+
+    await fireEvent.click(screen.getByRole("button", { name: "Split" }));
+    expect(diffPaths()).toEqual(expected);
+    await fireEvent.click(screen.getByRole("button", { name: "layout" }));
+    expect(screen.queryByRole("button", { name: `${paths[3]}, Modified` })).not.toBeInTheDocument();
+    expect(diffPaths()).toEqual(expected);
+    await fireEvent.click(screen.getByRole("button", { name: "Unified" }));
+    expect(diffPaths()).toEqual(expected);
+  });
+
+  it("collapses a directory without hiding its siblings, and preserves nested folds", async () => {
+    Diff.mockResolvedValue({ ...DATA, files: [
+      DATA.files[0],
+      { ...DATA.files[0], path: "internal/bar.go" },
+      { ...DATA.files[0], path: "tests/foo.test.ts" },
+    ] });
+    render(DiffView, { sessionId: "s1" });
+    await screen.findByText("origin/main");
+    const parent = screen.getByRole("button", { name: "internal" });
+    const child = screen.getByRole("button", { name: "foo" });
+    await fireEvent.click(child);
+    expect(child).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("button", { name: "internal/foo/foo.go, Modified" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "internal/bar.go, Modified" })).toBeInTheDocument();
+    await fireEvent.click(parent);
+    expect(screen.queryByRole("button", { name: "internal/bar.go, Modified" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "tests/foo.test.ts, Modified" })).toBeInTheDocument();
+    await fireEvent.click(parent);
+    expect(screen.getByRole("button", { name: "foo" })).toHaveAttribute("aria-expanded", "false");
+    await fireEvent.click(screen.getByRole("button", { name: "foo" }));
+    expect(screen.getByRole("button", { name: "internal/foo/foo.go, Modified" })).toBeInTheDocument();
+  });
+
   // The acceptance path: select a line, write a comment, send — the daemon gets
   // path:line context and the quoted code.
   it("sends a line comment with its path and line", async () => {
