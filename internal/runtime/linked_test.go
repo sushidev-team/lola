@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/scm"
@@ -175,18 +176,81 @@ func TestSpawnRollsBackWhenALinkedRepoFails(t *testing.T) {
 }
 
 func TestLinkedPRsSettled(t *testing.T) {
-	s := session.Session{Linked: []session.LinkedRepo{{Name: "api"}}}
-	if !s.LinkedPRsSettled() {
-		t.Fatal("no PR yet must not hold teardown")
+	merged := time.Now()
+	s := session.Session{Linked: []session.LinkedRepo{{Name: "api", Repo: "acme/api"}}}
+	if s.LinkedPRsSettled(merged) {
+		t.Fatal("a never-observed linked repo must hold teardown (its lookup may only have failed)")
+	}
+	s.Linked[0].PRObservedAt = merged.Add(-time.Minute)
+	if s.LinkedPRsSettled(merged) {
+		t.Fatal("an empty answer from BEFORE the merge must hold teardown")
+	}
+	s.Linked[0].PRObservedAt = merged.Add(time.Second)
+	if !s.LinkedPRsSettled(merged) {
+		t.Fatal("a successful post-merge lookup finding no PR must not hold teardown")
 	}
 	s.Linked[0].PR = openPR()
-	if s.LinkedPRsSettled() {
+	if s.LinkedPRsSettled(merged) {
 		t.Fatal("an open linked PR must hold teardown")
 	}
 	s.Linked[0].PR.State = "MERGED"
-	if !s.LinkedPRsSettled() {
+	if !s.LinkedPRsSettled(merged) {
 		t.Fatal("a merged linked PR must not hold teardown")
+	}
+	if !(session.Session{Linked: []session.LinkedRepo{{Name: "norepo"}}}).LinkedPRsSettled(merged) {
+		t.Fatal("a linked repo with no GitHub slug cannot be asked and must not hold teardown")
 	}
 }
 
 func openPR() *scm.PR { return &scm.PR{Number: 7, State: "OPEN"} }
+
+// A linked checkout made dirty during spawn (here by the repo's own
+// post-checkout hook) refuses its rollback; the primary worktree, which holds
+// it, must then be kept too instead of being removed with it.
+func TestFailedLinkedRollbackKeepsThePrimary(t *testing.T) {
+	f := newLinkedFixture(t)
+	hook := filepath.Join(f.api, ".git", "hooks", "post-checkout")
+	if err := os.WriteFile(hook, []byte("#!/bin/sh\necho wip > wip.txt\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f.p.LinkedRepos = append(f.p.LinkedRepos, config.LinkedRepo{Name: "broken", Path: t.TempDir()})
+	f.n.Cfg.Projects[0] = f.p
+	_, err := f.n.Spawn(context.Background(), f.p, issueENG42(), "")
+	if err == nil || !strings.Contains(err.Error(), "worktree kept") {
+		t.Fatalf("Spawn = %v, want a kept worktree", err)
+	}
+	dir := filepath.Join(f.root, "web", "lola-web-eng-42")
+	if _, err := os.Stat(filepath.Join(dir, ".lola", "repos", "api", "wip.txt")); err != nil {
+		t.Fatalf("the dirty linked checkout was deleted with the primary: %v", err)
+	}
+}
+
+// A record that does not list a linked checkout still on disk (rebuilt after
+// the store lost it) must not tear the primary down over it.
+func TestKillKeepsUnaccountedLinkedCheckouts(t *testing.T) {
+	f := newLinkedFixture(t)
+	ctx := context.Background()
+	s, err := f.n.Spawn(ctx, f.p, issueENG42(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lost := s
+	lost.Linked = nil
+	if err := f.n.Kill(ctx, lost, true, false); !errors.Is(err, worktree.ErrDirty) {
+		t.Fatalf("Kill = %v, want ErrDirty", err)
+	}
+	dir := filepath.Join(f.root, "web", s.ID)
+	if _, err := os.Stat(filepath.Join(dir, ".lola", "repos", "api")); err != nil {
+		t.Fatalf("unaccounted linked checkout removed: %v", err)
+	}
+	// Adoption rebuilds the linked record from disk, which makes it removable
+	// through the normal dirty-checked path again.
+	got := discoverLinked(f.p, dir)
+	if len(got) != 1 || got[0].Name != "api" || got[0].Path != f.api || got[0].Worktree != filepath.Join(dir, ".lola", "repos", "api") {
+		t.Fatalf("discoverLinked = %+v", got)
+	}
+	lost.Linked = got
+	if err := f.n.Kill(ctx, lost, true, false); err != nil {
+		t.Fatalf("Kill with the rediscovered record: %v", err)
+	}
+}

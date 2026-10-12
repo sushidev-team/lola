@@ -1142,8 +1142,14 @@ func (d *Daemon) adoptNativeSessions(ctx context.Context) {
 				if s.Sandbox == "" {
 					s.Sandbox = prev.Sandbox
 				}
-				if len(s.Linked) == 0 {
+				// The persisted linked records win (they carry branch, pin and PR
+				// facts); the scan's disk-rebuilt ones are only the store-loss
+				// backstop.
+				if len(prev.Linked) > 0 {
 					s.Linked = prev.Linked
+				}
+				if s.GitPin == nil {
+					s.GitPin = prev.GitPin
 				}
 				// Carry forward the P4 write-back one-shot guards so a restart never
 				// re-comments a transition already narrated to Linear.
@@ -1264,6 +1270,10 @@ func (d *Daemon) adoptNativeSessions(ctx context.Context) {
 	if err := d.sessions.Save(); err != nil {
 		d.logf("", "adopt: persist sessions: %v", err)
 	}
+	// Re-register every sandboxed worktree's trusted git layout (or deny host
+	// git on one that lost it) before anything — checkpoint, diff, overlap —
+	// runs host git on it again (internal/gitguard).
+	d.syncGitPins()
 }
 
 // defaultServerSessions is the seam over tmux.DefaultServerSessions so the

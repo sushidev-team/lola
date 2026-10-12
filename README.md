@@ -567,6 +567,10 @@ Things to know:
 - **Dev servers.** `dev_commands` still run on the host (they are the human's
   view of the branch); `sandbox_ports` is for servers the agent starts inside
   the container.
+- **lola's own git** on a sandboxed worktree (checkpoints, diffs, dirty
+  checks) never follows the worktree's `.git` pointer, which the agent can
+  rewrite: the layout is pinned when lola creates the worktree and every host
+  git call uses it.
 - **Teardown** removes the container (`docker rm -f <session>`) along with the
   pane. Containers carry the label `dev.sushi.lola.session=<session>`.
 - macOS with Docker Desktop or OrbStack is what this is built and tested
@@ -599,7 +603,8 @@ repository it changed, cross-linked in their descriptions.
 
 The primary repository's PR still drives everything per-PR — status, CI and
 review reactions, write-back. Each linked PR is observed beside it and shown in
-both UIs, and the merged cleanup **waits** while any linked PR is still open.
+both UIs, and the merged cleanup **waits** until a successful lookup after the
+merge shows no linked PR still open (a failed `gh` call is not "no PR").
 Teardown removes the linked worktrees first and refuses (keeping everything)
 when one holds uncommitted work.
 

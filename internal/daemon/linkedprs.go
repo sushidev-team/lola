@@ -2,10 +2,12 @@ package daemon
 
 import (
 	"context"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"time"
 
+	"github.com/sushidev-team/lola/internal/gitguard"
 	"github.com/sushidev-team/lola/internal/protocol"
 	"github.com/sushidev-team/lola/internal/scm"
 	"github.com/sushidev-team/lola/internal/session"
@@ -84,4 +86,44 @@ func linkedPRInfo(linked []session.LinkedRepo) []protocol.LinkedPR {
 		out = append(out, li)
 	}
 	return out
+}
+
+// syncGitPins registers the trusted git layout of every SANDBOXED worktree in
+// the store with internal/gitguard, so host git on it never follows metadata
+// the agent can rewrite. A sandboxed worktree whose record carries no pin (a
+// record rebuilt by adoption after the store lost it) is DENIED instead:
+// checkpoints, diffs and dirty checks on it then fail, and teardown keeps it,
+// rather than running git against a layout nobody vouched for.
+func (d *Daemon) syncGitPins() {
+	d.mu.Lock()
+	cfg := d.cfg
+	home := d.home
+	d.mu.Unlock()
+	pin := func(wt string, p *gitguard.Pin) {
+		if wt == "" {
+			return
+		}
+		if p != nil && p.Valid() {
+			gitguard.Set(wt, *p)
+		} else {
+			gitguard.Deny(wt)
+		}
+	}
+	for _, s := range d.sessions.Snapshot() {
+		sandboxed := s.Sandbox != ""
+		if p := cfg.ProjectByName(s.Project); p != nil && p.Sandboxed() {
+			sandboxed = true
+		}
+		if !sandboxed {
+			continue
+		}
+		wt := s.Worktree
+		if wt == "" {
+			wt = filepath.Join(home, "worktrees", s.Project, s.ID)
+		}
+		pin(wt, s.GitPin)
+		for _, l := range s.Linked {
+			pin(l.Worktree, l.GitPin)
+		}
+	}
 }

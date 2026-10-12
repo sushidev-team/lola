@@ -13,6 +13,7 @@ import (
 
 	"github.com/sushidev-team/lola/internal/agent"
 	"github.com/sushidev-team/lola/internal/config"
+	"github.com/sushidev-team/lola/internal/gitguard"
 	"github.com/sushidev-team/lola/internal/usage"
 )
 
@@ -62,17 +63,56 @@ const sandboxClaudeDir = lolaDir + "/claude"
 // ~/.codex is not mounted).
 const sandboxCodexDir = lolaDir + "/codex"
 
-// sandboxProject returns the project of session id when its agents run in a
-// container, else nil.
-func (n *Native) sandboxProject(id string) *config.Project {
-	if n.Cfg == nil {
+// sandboxProject returns the named project when its agents run in a
+// container, else nil. Always by NAME: a session ID does not identify its
+// project unambiguously (see launchLine).
+func (n *Native) sandboxProject(project string) *config.Project {
+	if n.Cfg == nil || project == "" {
 		return nil
 	}
-	p := n.Cfg.ProjectByName(n.projectForSessionName(id))
+	p := n.Cfg.ProjectByName(project)
 	if p == nil || !p.Sandboxed() {
 		return nil
 	}
 	return p
+}
+
+// pinSandbox captures and registers the trusted git layout of a worktree just
+// created for a sandboxed project (internal/gitguard), returning it for the
+// session record. It must run before anything else executes in the
+// worktree. nil, nil for a host project.
+func (n *Native) pinSandbox(project, dir string) (*gitguard.Pin, error) {
+	if n.sandboxProject(project) == nil {
+		return nil, nil
+	}
+	pin, err := gitguard.Capture(dir)
+	if err != nil {
+		return nil, err
+	}
+	gitguard.Set(dir, pin)
+	return &pin, nil
+}
+
+// pinnedOverlays are the read-only mounts that keep a pinned worktree's
+// admin-dir config out of the agent's reach: host git reads
+// <admin>/config.worktree whenever the repository enables worktree config, and
+// the admin dir lies inside the read-write git store. The file is created
+// empty when missing (git ignores it unless the extension is on), because a
+// bind mount needs a source.
+func pinnedOverlays(worktrees []string) []string {
+	var out []string
+	for _, wt := range worktrees {
+		at, pin, ok := gitguard.Lookup(wt)
+		if !ok || at != filepath.Clean(wt) || !pin.Valid() {
+			continue
+		}
+		cw := filepath.Join(pin.GitDir, "config.worktree")
+		if f, err := os.OpenFile(cw, os.O_CREATE|os.O_WRONLY, 0o644); err == nil {
+			f.Close()
+			out = append(out, cw)
+		}
+	}
+	return out
 }
 
 // SandboxFor is the sandbox kind a NEW session of project would record ("" =
@@ -171,6 +211,13 @@ func (n *Native) sandboxLine(p *config.Project, id string, kind agent.Kind, inne
 		fmt.Fprintf(&b, ` ${lola_gcd_%d:+-v} ${lola_gcd_%d:+"%s:%s"}`, i, i, v, v)
 		fmt.Fprintf(&b, ` ${lola_gcd_%d:+-v} ${lola_gcd_%d:+"%s/config:%s/config:ro"}`, i, i, v, v)
 		fmt.Fprintf(&b, ` ${lola_gcd_%d:+-v} ${lola_gcd_%d:+"%s/hooks:%s/hooks:ro"}`, i, i, v, v)
+	}
+	worktrees := []string{dir}
+	for _, l := range p.LinkedRepos {
+		worktrees = append(worktrees, LinkedWorktreeDir(dir, l.Name))
+	}
+	for _, cw := range pinnedOverlays(worktrees) {
+		fmt.Fprintf(&b, " -v %s", shQuote(cw+":"+cw+":ro"))
 	}
 	if transcripts != "" {
 		fmt.Fprintf(&b, " -v %s", shQuote(transcripts+":"+transcripts))
