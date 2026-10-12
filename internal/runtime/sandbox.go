@@ -219,6 +219,16 @@ func (n *Native) sandboxLine(p *config.Project, id string, kind agent.Kind, inne
 	for _, cw := range pinnedOverlays(worktrees) {
 		fmt.Fprintf(&b, " -v %s", shQuote(cw+":"+cw+":ro"))
 	}
+	// Defense in depth beside the host-side pin (internal/gitguard): each
+	// worktree's `.git` pointer is read-only too, so the agent's own git keeps
+	// using the real repository. Only existing files — a bind mount of a
+	// missing source would create it.
+	for _, wt := range worktrees {
+		ptr := filepath.Join(wt, ".git")
+		if fi, err := os.Lstat(ptr); err == nil && fi.Mode().IsRegular() {
+			fmt.Fprintf(&b, " -v %s", shQuote(ptr+":"+ptr+":ro"))
+		}
+	}
 	if transcripts != "" {
 		fmt.Fprintf(&b, " -v %s", shQuote(transcripts+":"+transcripts))
 	}
