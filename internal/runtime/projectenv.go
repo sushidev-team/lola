@@ -125,29 +125,44 @@ const dbNameMax = 63
 // DBName derives the session's stable database name: the session ID
 // lowercased, every character outside [a-z0-9] folded to "_" — so it is a
 // valid unquoted identifier in PostgreSQL, MySQL and SQLite alike — and capped
-// at 63 bytes. An over-long ID keeps a recognizable prefix plus a short hash of
-// the whole ID, so two long IDs sharing a prefix never collide. Deterministic:
-// the same session always gets the same name, which is what lets pre_remove
-// drop exactly what post_create created, even across a daemon restart.
+// at 63 bytes. Deterministic: the same session always gets the same name,
+// which is what lets pre_remove drop exactly what post_create created, even
+// across a daemon restart.
+//
+// It must also be INJECTIVE, or one session's pre_remove drops another's
+// database. Folding is lossless only for IDs made of [a-z0-9-] (each "-"
+// becomes "_" and nothing else can), which is every Linear-spawned ID. A
+// manual session ID keeps "_" and other characters, so "feat-x" and "feat_x"
+// fold to the same text; any ID outside that alphabet — and any name that had
+// to be truncated — therefore carries a short hash of the WHOLE original ID.
 func DBName(session string) string {
 	if session == "" {
 		return ""
 	}
 	var b strings.Builder
-	for _, r := range strings.ToLower(session) {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+	lossy := false
+	for _, r := range session {
+		switch {
+		case (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9'):
 			b.WriteRune(r)
-		} else {
+		case r == '-':
 			b.WriteByte('_')
+		default:
+			lossy = true
+			if r >= 'A' && r <= 'Z' {
+				b.WriteRune(r + ('a' - 'A'))
+			} else {
+				b.WriteByte('_')
+			}
 		}
 	}
 	name := b.String()
 	if name[0] >= '0' && name[0] <= '9' {
 		name = "lola_" + name
 	}
-	if len(name) > dbNameMax {
+	if lossy || len(name) > dbNameMax {
 		sum := sha1.Sum([]byte(session))
-		name = name[:dbNameMax-9] + "_" + hex.EncodeToString(sum[:])[:8]
+		name = name[:min(len(name), dbNameMax-9)] + "_" + hex.EncodeToString(sum[:])[:8]
 	}
 	return name
 }

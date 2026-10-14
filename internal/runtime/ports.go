@@ -29,10 +29,21 @@ const preRemoveTimeout = 20 * time.Second
 func (n *Native) sessionProject(p config.Project, v EnvVars) config.Project {
 	if lo, hi, cnt, ok := p.PortLease(); ok && n.Ports != nil {
 		l, err := n.Ports.Acquire(v.Session, p.Name, lo, hi, cnt)
-		if err != nil {
-			n.logf("session %s: no port lease (dev stack will not start in parallel): %v", v.Session, err)
-		} else {
+		switch {
+		case err == nil:
 			v.Ports = l.Ports
+		default:
+			// A failed REallocation (the range or count changed under a live
+			// session and the new shape does not fit) leaves the old lease in
+			// the registry. Keep exporting it: the env must describe what the
+			// registry says this session holds, or dev.go would start a stack
+			// whose $LOLA_PORT is empty while the lease check passes.
+			if cur, ok := n.Ports.Get(v.Session); ok {
+				v.Ports = cur.Ports
+				n.logf("session %s: could not re-lease ports (%v); keeping its current lease %v", v.Session, err, cur.Ports)
+			} else {
+				n.logf("session %s: no port lease (dev stack will not start in parallel): %v", v.Session, err)
+			}
 		}
 	}
 	return withSessionEnv(p, v)

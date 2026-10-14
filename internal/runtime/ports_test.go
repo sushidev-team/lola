@@ -29,8 +29,17 @@ func TestDBNameIsAStableIdentifier(t *testing.T) {
 	if got := DBName("42-x"); got != "lola_42_x" {
 		t.Errorf("leading digit: %q", got)
 	}
+	// Manual session IDs keep "_" and other characters: folding them must not
+	// make two sessions share (and one pre_remove drop) a database.
+	a, b := DBName("lola-nori-feat-x"), DBName("lola-nori-feat_x")
+	if a == b || DBName("lola-nori-Feat-x") == a {
+		t.Errorf("distinct sessions collide: %q / %q / %q", a, b, DBName("lola-nori-Feat-x"))
+	}
+	if !strings.HasPrefix(b, "lola_nori_feat_x_") || len(b) > dbNameMax {
+		t.Errorf("lossy name = %q, want the readable prefix plus a hash", b)
+	}
 	long := "lola-" + strings.Repeat("a", 80)
-	a, b := DBName(long), DBName(long+"b")
+	a, b = DBName(long), DBName(long+"b")
 	if len(a) != dbNameMax || len(b) != dbNameMax || a == b {
 		t.Errorf("long names must cap at %d and stay distinct: %q / %q", dbNameMax, a, b)
 	}
@@ -180,5 +189,25 @@ func TestKillSkipsPreRemoveForADirtyWorktree(t *testing.T) {
 	}
 	if _, ok := f.n.Ports.Get(s.ID); !ok {
 		t.Error("a kept worktree keeps its lease")
+	}
+}
+
+// A failed re-lease (range changed under a live session) must keep exporting
+// the lease the registry still holds, so env and registry agree.
+func TestSessionProjectKeepsTheCurrentLeaseWhenReleasingFails(t *testing.T) {
+	n := &Native{Ports: leaseRegistry(t)}
+	if _, err := n.Ports.Acquire("s-a", "nori", 4100, 4199, 1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := n.Ports.Acquire("s-b", "nori", 5000, 5000, 1); err != nil {
+		t.Fatal(err)
+	}
+	p := config.Project{Name: "nori", PortRange: "5000-5000"} // exhausted by s-b
+	env := n.sessionProject(p, EnvVars{Session: "s-a"}).Env
+	if env["LOLA_PORT"] != "4100" {
+		t.Errorf("LOLA_PORT = %q, want the still-held 4100", env["LOLA_PORT"])
+	}
+	if l, _ := n.Ports.Get("s-a"); l.Port() != 4100 {
+		t.Errorf("registry lease = %v", l.Ports)
 	}
 }
