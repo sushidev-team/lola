@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -140,6 +141,27 @@ type Project struct {
 	// command is per repository, and an inherited one would start the wrong
 	// stack in every project that forgot to override it.
 	DevCommands []string `toml:"dev_commands,omitempty"`
+	// PortRange is the inclusive "lo-hi" range (e.g. "4100-4999") each session
+	// of this project leases its OWN block of PortsPerSession ports from
+	// (internal/portlease), exported into the worktree as LOLA_PORT /
+	// LOLA_PORT_1..N. Setting it also switches dev_commands to MULTI-ACTIVE:
+	// several sessions may run their dev stacks at once, because each binds the
+	// ports it was handed instead of the one every worktree wants. Empty keeps
+	// the single-active move (see internal/daemon/dev.go). Not a [defaults] key
+	// for the same reason dev_commands is not: it only means something to a
+	// repository whose dev commands actually read $LOLA_PORT.
+	PortRange string `toml:"port_range,omitempty"`
+	// PortsPerSession is the size of each session's block; 0 means 1 when
+	// PortRange is set (PortLease).
+	PortsPerSession int `toml:"ports_per_session,omitempty"`
+	// PreRemove is the teardown hook, the mirror of PostCreate: shell commands
+	// run in the worktree (with the same env, LOLA_DB_NAME and the port lease
+	// included) right before lola removes it — on merged-cleanup and `lola
+	// kill` — so whatever post_create set up outside the checkout (a database,
+	// a docker volume) goes with it. Bounded and best-effort: a failure is
+	// logged and never keeps a worktree alive. Not inheritable: an inherited
+	// teardown would drop resources in every project that forgot to override it.
+	PreRemove []string `toml:"pre_remove,omitempty"`
 
 	// DailyBudgetTokens caps this project's usage per local day, in WEIGHTED
 	// tokens (see [budget] and usage.Totals.Weighted). Once today's usage
@@ -200,6 +222,52 @@ type Project struct {
 	// resolved value. Never serialized — Load derives it from key absence and
 	// Save re-derives the file shape from it. See ProjectInherits.
 	Inherits ProjectInherits `toml:"-"`
+}
+
+// MaxPortsPerSession caps ports_per_session: a block is consecutive ports,
+// and a stack needing more than this is better served by a bigger range.
+const MaxPortsPerSession = 20
+
+// PortLease returns the project's port allocation request — the inclusive
+// range and the block size — and whether it configures one at all. A malformed
+// port_range reports false (Validate names it), so a broken value allocates
+// nothing rather than something unexpected.
+func (p *Project) PortLease() (lo, hi, n int, ok bool) {
+	lo, hi, err := ParsePortRange(p.PortRange)
+	if err != nil || p.PortRange == "" {
+		return 0, 0, 0, false
+	}
+	n = p.PortsPerSession
+	if n <= 0 {
+		n = 1
+	}
+	if n > MaxPortsPerSession || hi-lo+1 < n {
+		return 0, 0, 0, false
+	}
+	return lo, hi, n, true
+}
+
+// ParsePortRange parses "lo-hi" (spaces allowed around the dash). Both ends
+// must lie in 1024..65535 — a privileged port is never something a dev server
+// should be handed — and lo must not exceed hi. "" parses as (0, 0, nil).
+func ParsePortRange(s string) (lo, hi int, err error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0, 0, nil
+	}
+	a, b, found := strings.Cut(s, "-")
+	if !found {
+		return 0, 0, fmt.Errorf(`port_range must be "lo-hi" (e.g. "4100-4999"), got %q`, s)
+	}
+	lo, err1 := strconv.Atoi(strings.TrimSpace(a))
+	hi, err2 := strconv.Atoi(strings.TrimSpace(b))
+	if err1 != nil || err2 != nil {
+		return 0, 0, fmt.Errorf(`port_range must be "lo-hi" (e.g. "4100-4999"), got %q`, s)
+	}
+	if lo < 1024 || hi > 65535 || lo > hi {
+		return 0, 0, fmt.Errorf("port_range %q must lie within 1024-65535 with lo <= hi", s)
+	}
+	return lo, hi, nil
 }
 
 // Polls reports whether this project is configured to poll Linear: it needs a
@@ -423,6 +491,9 @@ type fileProject struct {
 	// DevCommands is a PLAIN slice, not a pointer: it is not inheritable, so
 	// absent and empty mean the same thing (no dev tabs for this project).
 	DevCommands       []string `toml:"dev_commands,omitempty"`
+	PortRange         string   `toml:"port_range,omitempty"`
+	PortsPerSession   int      `toml:"ports_per_session,omitempty"`
+	PreRemove         []string `toml:"pre_remove,omitempty"`
 	DailyBudgetTokens int64    `toml:"daily_budget_tokens,omitempty"`
 
 	Enabled        bool      `toml:"enabled,omitempty"`
@@ -583,6 +654,9 @@ func projectFromFile(fp fileProject) Project {
 		Symlinks:          symlinks,
 		Env:               env,
 		DevCommands:       fp.DevCommands,
+		PortRange:         fp.PortRange,
+		PortsPerSession:   fp.PortsPerSession,
+		PreRemove:         fp.PreRemove,
 		DailyBudgetTokens: fp.DailyBudgetTokens,
 		Enabled:           fp.Enabled,
 		TeamID:            fp.TeamID,
@@ -647,6 +721,9 @@ func projectToFile(p Project) fileProject {
 		Symlinks:          ptr(p.Symlinks, set(o.Symlinks)),
 		Env:               ptr(p.Env, set(o.Env)),
 		DevCommands:       p.DevCommands,
+		PortRange:         p.PortRange,
+		PortsPerSession:   p.PortsPerSession,
+		PreRemove:         p.PreRemove,
 		DailyBudgetTokens: p.DailyBudgetTokens,
 		Enabled:           p.Enabled,
 		TeamID:            p.TeamID,

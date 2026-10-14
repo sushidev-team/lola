@@ -219,6 +219,11 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   cannot know what port `dev_commands` bind, so a stray dev server is found by
   where it runs, not by its port (see the ACTIVE-session invariant). Fails open:
   no lsof, or output it cannot parse, reports nothing rather than a guess.
+- `internal/portlease` — the per-session PORT LEASE registry (stdlib leaf,
+  `~/.lola/state/ports.json`): a project with `port_range` gets each session
+  its own aligned block of `ports_per_session` ports, skipping ports leased by
+  any session (ranges may overlap across projects) or already listened on. See
+  the ACTIVE-session invariant for what it changes.
 - `internal/portclash` — pure text, the mirror image of `internal/devurl`: did a
   DEAD dev tab die because its port was taken, and which port was it? Every
   server words that failure differently (`bind: address already in use`,
@@ -825,6 +830,14 @@ each of which owns exactly one external tool or concern behind an **exec seam**
     was already gone otherwise left its branch behind forever.
   - A DIRTY worktree keeps both the checkout and its branch. That is the whole
     gate: uncommitted work is the one thing teardown never discards.
+  - `[[project]].pre_remove` runs between the tmux teardown and the worktree
+    removal (`runPreRemove` → `worktree.Teardown`), only when the worktree is
+    clean (or forced) — a kept worktree keeps what it uses, its database above
+    all — and the dirty check is spent only when a hook is configured. It is
+    bounded (`preRemoveTimeout`, whole hook; each command in its own process
+    group, killed at the deadline) and BEST-EFFORT: failures are logged, the
+    next command still runs, and nothing it does can fail the teardown, or the
+    caller would retry the whole cleanup forever.
 - **The ACTIVE session is DERIVED from tmux, never remembered.** Only one session
   per project may run `[[project]].dev_commands` (they bind ports), so `cmd=dev`
   is a MOVE: `internal/daemon/dev.go` kills the previous holder's `<id>-dev-N`
@@ -922,6 +935,32 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   - `dev_commands` is deliberately NOT a `[defaults]` key (see the inheritance
     invariant): a dev command belongs to one repository, and an inherited one
     would start the wrong stack in every project that forgot to override it.
+    Neither are `port_range` / `ports_per_session` / `pre_remove`, for the same
+    reason.
+  - **`port_range` turns the move into MULTI-ACTIVE.** Each session leases its
+    own block (`internal/portlease`) at launch — `runtime.sessionProject`, on
+    every launch path — and the lease reaches the worktree as `LOLA_PORT` /
+    `LOLA_PORT_1..N` by riding `p.Env` (`withSessionEnv`), so post_create, the
+    `.lola/env` every pane sources, the dev tabs and `pre_remove` all see it
+    with no second plumbing path. `LOLA_SESSION_SLUG` and `LOLA_DB_NAME`
+    (`runtime.DBName`, deterministic per session id) are added for every
+    session. lola's values WIN over a same-named `[project.env]` key. Rules:
+    - The REGISTRY is the source of truth, keyed by session id; the wire
+      (`SessionInfo.ports`) reads it. `Acquire` is idempotent per id, so revive
+      and agent switch keep the ports their stack was configured with.
+    - Leasing is BEST-EFFORT at spawn (an exhausted range logs, the agent still
+      starts) and FAIL-CLOSED at activation: `handleDev` refuses a multi-active
+      start for a session without a lease, because its stack would read an
+      empty `$LOLA_PORT` and fight the others over a default port.
+    - Multi-active activation takes over NOTHING and sweeps only the session's
+      own worktree (`sweepPortSquatters`'s `only`) — the other sessions' dev
+      servers are legitimate there.
+    - Release happens on a successful worktree removal (and a dir already
+      gone) in `runtime.Kill`, and in every spawn rollback. A session that
+      leaves the store any other way (dirty worktree kept on merge, project
+      gone from config) is caught by `pruneLeases` in reconcile, with an
+      `orphanTimeout` grace because a spawn leases before its session is
+      upserted.
 - **A review PASS runs in its own tmux session, and the pane is a DISPLAY.** With
   `visible = true` (the per-provider default) a pass runs as the hidden
   `lola review-run` inside `<sessionID>-review` on lola's tmux server, beside the

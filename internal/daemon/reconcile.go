@@ -78,6 +78,7 @@ func (d *Daemon) reconcile(ctx context.Context) {
 			d.logf("", "reconcile: cleared stale in-flight claim on %s", e.Identifier)
 		}
 	}
+	d.pruneLeases()
 
 	api, err := d.ensureLinear()
 	if err != nil {
@@ -325,4 +326,29 @@ func (d *Daemon) ghOpenPR(ctx context.Context, repo, branch string) (bool, error
 		return false, fmt.Errorf("gh pr list --repo %s --head %s: bad output: %w", repo, branch, err)
 	}
 	return len(prs) > 0 && strings.EqualFold(prs[0].State, "open"), nil
+}
+
+// pruneLeases releases the port leases of sessions that are no longer in the
+// store. The runtime releases a lease when it removes a worktree, but a session
+// can leave the store without that — a dirty worktree kept on merge, a kill of
+// a session whose project left config — and its ports would otherwise be
+// leased forever. A session gone from the store has no dev tabs left to bind
+// them. The orphanTimeout grace covers a spawn in flight, which leases its
+// ports before its session is upserted.
+func (d *Daemon) pruneLeases() {
+	if d.ports == nil {
+		return
+	}
+	live := map[string]bool{}
+	for _, s := range d.sessions.Snapshot() {
+		live[s.ID] = true
+	}
+	dropped, err := d.ports.Prune(func(id string) bool { return live[id] }, orphanTimeout)
+	if err != nil {
+		d.logf("", "reconcile: prune port leases: %v", err)
+		return
+	}
+	if len(dropped) > 0 {
+		d.logf("", "reconcile: released the port leases of %s (session gone)", strings.Join(dropped, ", "))
+	}
 }

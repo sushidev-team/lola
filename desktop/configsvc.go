@@ -576,7 +576,14 @@ type ProjectFormDTO struct {
 	// session is ACTIVE (one per project — see internal/daemon/dev.go). Not an
 	// inheritable key: a dev command belongs to one repository.
 	DevCommands []string `json:"devCommands"`
-	Env         []string `json:"env"` // "KEY=value" lines
+	// PortRange ("4100-4999") and PortsPerSession lease each session its own
+	// port block (LOLA_PORT / LOLA_PORT_1..N) and make dev_commands
+	// multi-active; PreRemove is the teardown hook run before a worktree is
+	// removed. Per project, like DevCommands.
+	PortRange       string   `json:"portRange"`
+	PortsPerSession int      `json:"portsPerSession"`
+	PreRemove       []string `json:"preRemove"`
+	Env             []string `json:"env"` // "KEY=value" lines
 
 	// Linear polling filter.
 	Enabled        bool     `json:"enabled"`
@@ -645,17 +652,20 @@ func (s *ConfigService) GetProject(name string) (ProjectFormDTO, error) {
 
 func projectDTO(p *config.Project) ProjectFormDTO {
 	return ProjectFormDTO{
-		Name:          p.Name,
-		Label:         p.Label,
-		Path:          p.Path,
-		Repo:          p.Repo,
-		DefaultBranch: p.DefaultBranch,
-		BranchPrefix:  p.BranchPrefix,
-		Agent:         p.Agent,
-		Symlinks:      p.Symlinks,
-		PostCreate:    p.PostCreate,
-		DevCommands:   p.DevCommands,
-		Env:           envToLines(p.Env),
+		Name:            p.Name,
+		Label:           p.Label,
+		Path:            p.Path,
+		Repo:            p.Repo,
+		DefaultBranch:   p.DefaultBranch,
+		BranchPrefix:    p.BranchPrefix,
+		Agent:           p.Agent,
+		Symlinks:        p.Symlinks,
+		PostCreate:      p.PostCreate,
+		DevCommands:     p.DevCommands,
+		PortRange:       p.PortRange,
+		PortsPerSession: p.PortsPerSession,
+		PreRemove:       p.PreRemove,
+		Env:             envToLines(p.Env),
 
 		Enabled:        p.Enabled,
 		TeamID:         p.TeamID,
@@ -738,6 +748,9 @@ func (s *ConfigService) SaveProject(dto ProjectFormDTO) error {
 	p.Symlinks = nonEmpty(dto.Symlinks)
 	p.PostCreate = nonEmpty(dto.PostCreate)
 	p.DevCommands = nonEmpty(dto.DevCommands)
+	p.PortRange = strings.TrimSpace(dto.PortRange)
+	p.PortsPerSession = dto.PortsPerSession
+	p.PreRemove = nonEmpty(dto.PreRemove)
 	p.Env = env
 
 	p.Enabled = dto.Enabled

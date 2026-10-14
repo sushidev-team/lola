@@ -241,6 +241,16 @@ export interface ProjectFormDTO {
     "devCommands": string[] | null;
 
     /**
+     * PortRange ("4100-4999") and PortsPerSession lease each session its own
+     * port block (LOLA_PORT / LOLA_PORT_1..N) and make dev_commands
+     * multi-active; PreRemove is the teardown hook run before a worktree is
+     * removed. Per project, like DevCommands.
+     */
+    "portRange": string;
+    "portsPerSession": number;
+    "preRemove": string[] | null;
+
+    /**
      * "KEY=value" lines
      */
     "env": string[] | null;

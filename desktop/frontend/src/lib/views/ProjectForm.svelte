@@ -395,6 +395,9 @@
       symlinks: cleanLines(f.symlinks),
       postCreate: cleanLines(f.postCreate),
       devCommands: cleanLines(f.devCommands),
+      portRange: (f.portRange ?? "").trim(),
+      portsPerSession: f.portRange?.trim() ? Math.max(0, Math.trunc(Number(f.portsPerSession) || 0)) : 0,
+      preRemove: cleanLines(f.preRemove),
       env: cleanLines(f.env),
       stateIds: cleanLines(f.stateIds),
       matchLabels: cleanLines(f.matchLabels),
@@ -759,6 +762,13 @@
             "one command per line — run after the worktree is created",
             "postCreate",
           )}
+          {@render areaRow(
+            "Pre-remove",
+            d.preRemove,
+            (v) => { d.preRemove = v; },
+            'dropdb --if-exists "$LOLA_DB_NAME"',
+            "one command per line — run in the worktree before lola removes it (merge cleanup, kill); bounded, failures are only logged",
+          )}
           {@render areaRow("Env", d.env, (v) => { d.env = v; }, "KEY=value\nAPI_URL=http://localhost", "one KEY=value per line", "env")}
         {/snippet}
         {@render section("Worktree preparation", preparation)}
@@ -768,8 +778,30 @@
             d.devCommands,
             (v) => { d.devCommands = v; },
             "composer dev\nnpm run dev",
-            "one long-running command per line — only the ACTIVE session runs them (one per project), each in its own terminal tab",
+            d.portRange
+              ? "one long-running command per line, each in its own terminal tab — every session can run them at once, on its own $LOLA_PORT"
+              : "one long-running command per line — only the ACTIVE session runs them (one per project), each in its own terminal tab",
           )}
+          {@render textRow(
+            "Port range",
+            d.portRange,
+            (v) => { d.portRange = v; },
+            "4100-4999",
+            null,
+            false,
+            "each session leases its own block as LOLA_PORT / LOLA_PORT_1..N, so dev commands can run in several sessions at once; empty = one active session",
+          )}
+          {#if d.portRange}
+            <div class={rowCls}>
+              <span class={labelCls}>Ports per session</span>
+              <span>
+                <input type="number" min="1" max="20" step="1" class="{inputCls} num" aria-label="Ports per session"
+                  placeholder="1" value={d.portsPerSession || ""}
+                  oninput={(e) => { d.portsPerSession = Number(e.currentTarget.value) || 0; }} />
+                <span class={hintCls}>LOLA_PORT_1..N — empty = 1</span>
+              </span>
+            </div>
+          {/if}
         {/snippet}
         {@render section("Local testing", testing)}
       </div>

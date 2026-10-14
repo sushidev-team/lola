@@ -19,6 +19,11 @@ package daemon
 // (observer.go's reconcileDevTabs). Nothing here persists intent — tmux is the
 // single source of truth for who is active, so a closed tab, a crash and a
 // daemon restart all agree without a reconciliation pass.
+//
+// A project with a port_range is MULTI-ACTIVE instead: every session leases its
+// own port block (internal/portlease, exported as LOLA_PORT / LOLA_PORT_1..N),
+// so there is nothing to collide over and activation is a plain start — no
+// take-over, and the stray-server sweep narrowed to the session's own worktree.
 
 import (
 	"context"
@@ -95,13 +100,32 @@ func (d *Daemon) handleDev(ctx context.Context, sessionID string, on bool) (prot
 		return protocol.DevData{}, fmt.Errorf("session %s has no worktree at %s", s.ID, dir)
 	}
 
+	// MULTI-ACTIVE (the project leases ports): every session binds its own
+	// block, so activation is a START, not a move — no other session loses its
+	// tabs and the sweep stays inside this session's worktree. A session with no
+	// lease (spawned before port_range was set, or the range ran out) is
+	// refused: its dev stack would read an empty $LOLA_PORT and fight the
+	// running ones over whatever default the command falls back to.
+	_, _, _, parallel := p.PortLease()
+	only := ""
+	if parallel {
+		if _, ok := d.ports.Get(s.ID); !ok {
+			return protocol.DevData{}, fmt.Errorf("session %s holds no port lease from %s's port_range (spawned before it was set, or the range is exhausted) — its dev stack would collide with the others; respawn the session or widen the range", s.ID, p.DisplayName())
+		}
+		only = s.ID
+	}
+
 	// Everything that could hold a port goes down BEFORE the first NewSession,
 	// in widening order: this session's own tabs (a re-activation), the tabs of
 	// whichever session held them, and finally whatever is still listening from
-	// inside the project's worktrees without a pane to own it.
+	// inside the project's worktrees without a pane to own it. Multi-active
+	// stops at this session's own worktree.
 	d.stopDevTabs(ctx, tm, s.ID)
-	stopped := d.takeOverProject(ctx, tm, s)
-	freed := d.sweepPortSquatters(ctx, tm, p.Name, home)
+	stopped := ""
+	if !parallel {
+		stopped = d.takeOverProject(ctx, tm, s)
+	}
+	freed := d.sweepPortSquatters(ctx, tm, p.Name, home, only)
 
 	started := 0
 	var errs []error
@@ -210,7 +234,11 @@ var shellTabRe = regexp.MustCompile(`-shell-\d+$`)
 //   - It FAILS CLOSED. No lsof, a `ps` that will not answer, a tmux that cannot
 //     list its panes: nothing is killed. Every one of those costs the protect
 //     set, and a sweep without the protect set could kill an agent mid-turn.
-func (d *Daemon) sweepPortSquatters(ctx context.Context, tm devTmux, projectName, home string) []string {
+//
+// only, when set, narrows the sweep to ONE session's worktree: in multi-active
+// mode the other sessions' dev servers are legitimately running and must be
+// left alone.
+func (d *Daemon) sweepPortSquatters(ctx context.Context, tm devTmux, projectName, home, only string) []string {
 	d.mu.Lock()
 	listeners := d.portListeners
 	d.mu.Unlock()
@@ -227,8 +255,12 @@ func (d *Daemon) sweepPortSquatters(ctx context.Context, tm devTmux, projectName
 		return nil
 	}
 	var candidates []portproc.Listener
+	scope := root
+	if only != "" {
+		scope = filepath.Join(root, only)
+	}
 	for _, l := range found {
-		if underDir(root, l.Dir) {
+		if underDir(scope, l.Dir) {
 			candidates = append(candidates, l)
 		}
 	}

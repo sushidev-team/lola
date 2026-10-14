@@ -480,6 +480,14 @@ type SessionInfo struct {
 	DevURLs     []string      `json:"devUrls,omitempty"`
 	DevForwards []DevForward  `json:"devForwards,omitempty"`
 	DevClash    *DevClashInfo `json:"devClash,omitempty"`
+	// Ports is this session's leased port block (LOLA_PORT first, then the rest
+	// of LOLA_PORT_1..N) when its project configures a port_range; empty
+	// otherwise. DevParallel is true when that project runs dev_commands
+	// MULTI-ACTIVE — activating this session starts its stack beside the others
+	// instead of moving the project's one stack over — so a client can word the
+	// toggle accordingly.
+	Ports       []int `json:"ports,omitempty"`
+	DevParallel bool  `json:"devParallel,omitempty"`
 
 	// Overlaps names the OTHER live sessions of the same project whose changes
 	// touch the same files as this one — computed each observe cycle from local

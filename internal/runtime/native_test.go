@@ -1498,7 +1498,7 @@ func TestOpenHappyPath(t *testing.T) {
 	if !strings.Contains(string(env), "DATABASE_URL=") {
 		t.Errorf(".lola/env missing project env:\n%s", env)
 	}
-	if strings.Contains(string(env), "LINEAR_API_KEY") || strings.Contains(string(env), "LOLA_SESSION") {
+	if strings.Contains(string(env), "LINEAR_API_KEY") || strings.Contains(string(env), "LOLA_SESSION=") {
 		t.Errorf(".lola/env must not export secrets/session for a manual shell:\n%s", env)
 	}
 }

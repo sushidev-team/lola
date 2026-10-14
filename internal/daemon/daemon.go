@@ -31,6 +31,7 @@ import (
 	"github.com/sushidev-team/lola/internal/mdns"
 	"github.com/sushidev-team/lola/internal/notify"
 	"github.com/sushidev-team/lola/internal/panebus"
+	"github.com/sushidev-team/lola/internal/portlease"
 	"github.com/sushidev-team/lola/internal/portproc"
 	"github.com/sushidev-team/lola/internal/quota"
 	"github.com/sushidev-team/lola/internal/remote"
@@ -265,6 +266,13 @@ type Daemon struct {
 	// is the pre-sweep behavior.
 	portListeners func(ctx context.Context) ([]portproc.Listener, error)
 
+	// ports is the per-session port-lease registry (internal/portlease,
+	// ~/.lola/state/ports.json). The native runtime leases and releases through
+	// it; the daemon reads it for the wire, gates a multi-active dev start on
+	// it (dev.go), and prunes the leases of sessions that left the store
+	// without a teardown (reconcile). Never nil after newDaemon.
+	ports *portlease.Registry
+
 	// devURLTries bounds the pane reads spent hunting for a dev tab's local
 	// address, per session (dev.go). In memory only: it is a cost guard, not
 	// state — a daemon restart re-reading a pane once costs nothing, and a
@@ -475,6 +483,11 @@ func newDaemon(cfg *config.Config, lin linear.API, logger *log.Logger, home stri
 		hookWarned: map[string]bool{},
 		ckptLocks:  map[string]*sync.Mutex{},
 	}
+	ports, perr := portlease.Open(filepath.Join(home, "state", "ports.json"))
+	if perr != nil {
+		logger.Printf("port leases: %v (starting with none)", perr)
+	}
+	d.ports = ports
 	d.spend = newSpendState(home, func(f string, a ...any) { d.logf("", f, a...) })
 	// Feed the activity ring from every status transition the store commits
 	// (the spawn birth is recorded separately at the dispatch site).
@@ -610,7 +623,7 @@ func Run(ctx context.Context) error {
 		lolaBin = stable
 	}
 	d.lolaBin = lolaBin
-	d.native = newNativeRuntime(cfg, home, lolaBin, d.linearKey, d.nativeLogf)
+	d.native = newNativeRuntime(cfg, home, lolaBin, d.linearKey, d.nativeLogf, d.ports)
 	// One `tmux ls` per observe cycle answers liveness for EVERY session (and
 	// carries #{session_activity}, the zero-cost output-freshness stamp) —
 	// replacing N per-session `has-session` execs. Wired HERE (production
@@ -1041,7 +1054,7 @@ func (d *Daemon) tmuxClient() *tmux.Client {
 // re-read per spawn, so a rotated key is picked up next spawn; it returns ""
 // when no key is available so spawning is never blocked on it. logf carries
 // best-effort styling advisories (status-bar chrome) into the daemon log.
-func newNativeRuntime(cfg *config.Config, home, lolaBin string, linearKey func() string, logf func(string, ...any)) *runtime.Native {
+func newNativeRuntime(cfg *config.Config, home, lolaBin string, linearKey func() string, logf func(string, ...any), ports *portlease.Registry) *runtime.Native {
 	return &runtime.Native{
 		Cfg:     cfg,
 		WT:      &worktree.Manager{Root: filepath.Join(home, "worktrees")},
@@ -1054,6 +1067,7 @@ func newNativeRuntime(cfg *config.Config, home, lolaBin string, linearKey func()
 		LinearKey:   linearKey,
 		Logf:        logf,
 		Checkpoints: checkpoint.Git{},
+		Ports:       ports,
 	}
 }
 

@@ -39,6 +39,7 @@ import (
 	"github.com/sushidev-team/lola/internal/hook"
 	"github.com/sushidev-team/lola/internal/linear"
 	"github.com/sushidev-team/lola/internal/lolaenv"
+	"github.com/sushidev-team/lola/internal/portlease"
 	"github.com/sushidev-team/lola/internal/session"
 	"github.com/sushidev-team/lola/internal/state"
 	"github.com/sushidev-team/lola/internal/tmux"
@@ -163,6 +164,11 @@ type Native struct {
 	// teardown. nil disables both (ForkAgent then refuses) — tests that never
 	// fork leave it unset so no git runs outside the WT seam.
 	Checkpoints Checkpointer
+	// Ports is the per-session port-lease registry (internal/portlease): a
+	// project with a port_range gets its block leased at launch (sessionProject)
+	// and released when its worktree is removed. nil disables leasing — the
+	// sessions then simply carry no LOLA_PORT.
+	Ports *portlease.Registry
 }
 
 // SessionID returns the BASE native session identifier for an issue:
@@ -345,7 +351,7 @@ func (n *Native) SpawnWith(ctx context.Context, p config.Project, issue linear.I
 	n.pruneCheckpoints(ctx, dir, id) // a fresh session starts with no history
 	// Render [[project]].env against this session BEFORE anything reads it —
 	// Prepare hands it to post_create, envFile writes it into the pane.
-	p = expandProjectEnv(p, EnvVars{Session: id, Issue: issue.Identifier, Branch: branch, Project: p.Name, Worktree: dir})
+	p = n.sessionProject(p, EnvVars{Session: id, Issue: issue.Identifier, Branch: branch, Project: p.Name, Worktree: dir})
 	fail := func(step string, cause error) (session.Session, error) {
 		return session.Session{}, n.rollback(ctx, p, id, dir, branch, step, cause)
 	}
@@ -483,10 +489,11 @@ func (n *Native) Open(ctx context.Context, p config.Project, sessionID, fetchRef
 	if err != nil {
 		return session.Session{}, fmt.Errorf("runtime: open %s: %w", sessionID, err)
 	}
-	p = expandProjectEnv(p, EnvVars{Session: sessionID, Branch: branch, Project: p.Name, Worktree: dir})
+	p = n.sessionProject(p, EnvVars{Session: sessionID, Branch: branch, Project: p.Name, Worktree: dir})
 	fail := func(step string, cause error) (session.Session, error) {
 		// The worktree is DETACHED — there is no lola-owned branch to delete, so
 		// pass "" (Remove's deleteBranch no-ops) and never risk the upstream branch.
+		n.releasePorts(sessionID)
 		if rmErr := n.WT.Remove(ctx, p, dir, "", false); rmErr != nil {
 			return session.Session{}, fmt.Errorf("runtime: open %s: %s: %w (rollback failed: %v; worktree kept at %s)", sessionID, step, cause, rmErr, dir)
 		}
@@ -550,9 +557,10 @@ func (n *Native) OpenManual(ctx context.Context, p config.Project, sessionID, br
 	if err != nil {
 		return session.Session{}, fmt.Errorf("runtime: open manual %s: %w", sessionID, err)
 	}
-	p = expandProjectEnv(p, EnvVars{Session: sessionID, Branch: branch, Project: p.Name, Worktree: dir})
+	p = n.sessionProject(p, EnvVars{Session: sessionID, Branch: branch, Project: p.Name, Worktree: dir})
 	fail := func(step string, cause error) (session.Session, error) {
 		// lola OWNS this new branch — pass it so a rollback removes it too.
+		n.releasePorts(sessionID)
 		if rmErr := n.WT.Remove(ctx, p, dir, branch, false); rmErr != nil {
 			return session.Session{}, fmt.Errorf("runtime: open manual %s: %s: %w (rollback failed: %v; worktree kept at %s)", sessionID, step, cause, rmErr, dir)
 		}
@@ -606,12 +614,13 @@ func (n *Native) OpenManual(ctx context.Context, p config.Project, sessionID, br
 // for inspection) — deleting the branch only when ownsBranch — and returns the
 // wrapped error.
 func (n *Native) finishAgentLaunch(ctx context.Context, p config.Project, id, dir, branch string, kind agent.Kind, ownsBranch bool, ctxKey, prompt string) error {
-	p = expandProjectEnv(p, EnvVars{Session: id, Branch: branch, Project: p.Name, Worktree: dir})
+	p = n.sessionProject(p, EnvVars{Session: id, Branch: branch, Project: p.Name, Worktree: dir})
 	rb := func(step string, cause error) error {
 		delBranch := ""
 		if ownsBranch {
 			delBranch = branch
 		}
+		n.releasePorts(id)
 		if rmErr := n.WT.Remove(ctx, p, dir, delBranch, false); rmErr != nil {
 			return fmt.Errorf("runtime: launch %s: %s: %w (rollback failed: %v; worktree kept at %s)", id, step, cause, rmErr, dir)
 		}
@@ -1069,6 +1078,7 @@ func (n *Native) withReportBriefing(prompt []byte) []byte {
 // inspection. The returned error always wraps cause and states what, if
 // anything, was left behind.
 func (n *Native) rollback(ctx context.Context, p config.Project, id, dir, branch, step string, cause error) error {
+	n.releasePorts(id) // nothing runs in this worktree any more
 	if rmErr := n.WT.Remove(ctx, p, dir, branch, false); rmErr != nil {
 		return fmt.Errorf("runtime: spawn %s: %s: %w (rollback failed: %v; worktree kept at %s)", id, step, cause, rmErr, dir)
 	}
@@ -1292,6 +1302,7 @@ func (n *Native) Kill(ctx context.Context, s session.Session, removeWorktree, fo
 	}
 	dir := filepath.Join(n.WT.Root, p.Name, s.ID)
 	if _, err := os.Stat(dir); errors.Is(err, fs.ErrNotExist) {
+		n.releasePorts(s.ID)
 		// Directory already gone: there is no checkout left to dirty-check or to
 		// hand to `git worktree remove`, but the branch it was checked out on may
 		// still exist. Prune the stale worktree registration and delete the branch
@@ -1305,9 +1316,21 @@ func (n *Native) Kill(ctx context.Context, s session.Session, removeWorktree, fo
 		n.pruneCheckpoints(ctx, p.Path, s.ID)
 		return nil
 	}
+	// pre_remove runs only for a worktree that is about to GO: a dirty one is
+	// kept (Remove refuses it below), and whatever post_create set up for it —
+	// its database above all — is part of the work being kept. An unanswerable
+	// dirty check skips the hook too; Remove then decides on its own.
+	if len(p.PreRemove) > 0 {
+		if force {
+			n.runPreRemove(ctx, *p, s, dir)
+		} else if dirty, derr := n.WT.Dirty(ctx, dir); derr == nil && !dirty {
+			n.runPreRemove(ctx, *p, s, dir)
+		}
+	}
 	if err := n.WT.Remove(ctx, *p, dir, branch, force); err != nil {
 		return fmt.Errorf("runtime: kill %s: %w", s.ID, err)
 	}
+	n.releasePorts(s.ID)
 	// The checkpoints go with the worktree they snapshot. A DIRTY worktree that
 	// Remove kept returned above, and keeps them: the work is still there to
 	// roll back. The shared context folder is deliberately NOT removed — it

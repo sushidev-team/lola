@@ -640,6 +640,26 @@ dev_commands = [
   "npm run dev",
   # "cd desktop && wails3 dev",
 ]
+# PARALLEL dev stacks: lease each session its OWN block of ports from this
+# inclusive range (1024-65535). The block is exported into the worktree as
+# LOLA_PORT (the first port) and LOLA_PORT_1..N, so post_create, the agent,
+# shell tabs and dev_commands all see it. Setting a range also makes
+# dev_commands MULTI-ACTIVE: switching a session active no longer stops the
+# others, because each binds its own ports — so only set it once the dev
+# commands actually read them (e.g. `php artisan serve --port=$LOLA_PORT`, or
+# APP_PORT = "{{.Port}}" in [project.env]). Leases live in
+# ~/.lola/state/ports.json, survive a daemon restart, and are released when the
+# session's worktree is removed. Omit for the single-active move above.
+# port_range = "4100-4999"
+# ports_per_session = 2      # LOLA_PORT_1..2; omitted = 1
+# Teardown hook, the mirror of post_create: commands run in the worktree (same
+# env, LOLA_DB_NAME and the port lease included) right before lola removes it —
+# on merged-cleanup and `lola kill`. Skipped when the worktree is dirty (it is
+# kept, and so is what it uses). Bounded (20s for the whole hook) and
+# best-effort: a failure is logged and never keeps the worktree alive. Make
+# each command idempotent; a cleanup that failed for another reason re-runs it.
+# Per project, like dev_commands — there is no [defaults].pre_remove.
+# pre_remove = ['dropdb --if-exists "$LOLA_DB_NAME"']
 # Daily limit on THIS project's weighted tokens (see [budget]); 0 = none.
 # daily_budget_tokens = 50_000_000
 # Files symlinked from the main checkout into each worktree.
@@ -701,6 +721,13 @@ on_sent_set_label = "label_sent0000-1111-2222-3333-444455556666"
 #   {{.Branch}}    branch checked out in the worktree
 #   {{.Project}}   this project's name
 #   {{.Worktree}}  absolute worktree path
+#   {{.Slug}}      same as {{.Session}}, for hostnames ("{{.Slug}}.test")
+#   {{.DBName}}    a stable database name for the session (lola_nori_app_nor_366)
+#   {{.Port}}      the first leased port; {{.Port1}}..{{.PortN}} each one
+#                  (EMPTY without a port_range)
+#
+# Every session also gets LOLA_SESSION_SLUG and LOLA_DB_NAME, plus LOLA_PORT and
+# LOLA_PORT_1..N with a port lease. lola's values win over a same-named key here.
 #
 # This matters when symlinks = [".env"]: every worktree then shares the backing
 # services that .env names, so two dev stacks consume each other's queue jobs —
@@ -711,6 +738,8 @@ on_sent_set_label = "label_sent0000-1111-2222-3333-444455556666"
 [project.env]
 # APP_ENV = "local"
 # REDIS_QUEUE = "{{{.Session}}}"   # → {lola-nori-app-nor-366}
+# DB_DATABASE = "{{.DBName}}"       # pair with post_create = ['createdb "$LOLA_DB_NAME"']
+# APP_PORT = "{{.Port}}"            # needs port_range
 
 # ---------------------------------------------------------------------------
 # Poll 4: Linear WRITE-BACK with state-based dedup (P4). Instead of flipping

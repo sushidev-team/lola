@@ -16,6 +16,7 @@ import (
 	"github.com/sushidev-team/lola/internal/agent"
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/notify"
+	"github.com/sushidev-team/lola/internal/portlease"
 	"github.com/sushidev-team/lola/internal/protocol"
 	"github.com/sushidev-team/lola/internal/session"
 	"github.com/sushidev-team/lola/internal/state"
@@ -659,7 +660,11 @@ func (d *Daemon) sessionsData() protocol.SessionsData {
 	// applies at all (and what each "<id>-dev-N" tab runs) without a second
 	// round trip into config.
 	devCommands := map[string][]string{}
+	devParallel := map[string]bool{}
 	for _, p := range d.cfg.Projects {
+		if _, _, _, ok := p.PortLease(); ok {
+			devParallel[p.Name] = true
+		}
 		if len(p.DevCommands) > 0 {
 			devCommands[p.Name] = slices.Clone(p.DevCommands)
 		}
@@ -698,6 +703,8 @@ func (d *Daemon) sessionsData() protocol.SessionsData {
 
 			DevActive:   s.DevActive,
 			DevCommands: devCommands[s.Project],
+			DevParallel: devParallel[s.Project],
+			Ports:       leasedPorts(d.ports, s.ID),
 			DevURLs:     s.DevURLs,
 			DevForwards: devForwardInfos(s.DevForwards),
 
@@ -864,7 +871,7 @@ func (d *Daemon) handleReload(ctx context.Context) error {
 		// server as d.tmuxClient's live send-keys/capture; without it a
 		// socket-only reload would leave the observer reading the OLD server while
 		// keys go to the NEW one.
-		d.native = newNativeRuntime(nc, d.home, d.lolaBin, d.linearKey, d.nativeLogf)
+		d.native = newNativeRuntime(nc, d.home, d.lolaBin, d.linearKey, d.nativeLogf, d.ports)
 	}
 	// [remote] is compared exactly (config.RemoteConfig is comparable) so an
 	// unrelated reload never touches a live listener. Applied AFTER the unlock:
@@ -948,4 +955,12 @@ func (d *Daemon) handlePollOnce(ctx context.Context, name string, dryRun bool) (
 	mu.Lock()
 	defer mu.Unlock()
 	return d.tick(context.WithoutCancel(ctx), name, dryRun)
+}
+
+// leasedPorts is the session's port lease for the wire, nil without one.
+func leasedPorts(r *portlease.Registry, id string) []int {
+	if l, ok := r.Get(id); ok {
+		return slices.Clone(l.Ports)
+	}
+	return nil
 }

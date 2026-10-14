@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -1305,6 +1306,9 @@ func (m *rootModel) sessionDetail() string {
 		if sel.Worktree != "" {
 			b.WriteString(faintText.Render("worktree: "+sel.Worktree) + "\n")
 		}
+		if line := portsDetailLine(*sel); line != "" {
+			b.WriteString(line + "\n")
+		}
 		if line := usageDetailLine(*sel); line != "" {
 			b.WriteString(faintText.Render(line) + "\n")
 		}
@@ -1590,4 +1594,18 @@ func lastLines(text string, n int) []string {
 		lines = lines[len(lines)-n:]
 	}
 	return lines
+}
+
+// portsDetailLine names the session's leased port block (LOLA_PORT first) —
+// what its dev stack binds when the project leases ports, so a human can open
+// the right one without reading it out of .lola/env. "" without a lease.
+func portsDetailLine(sel protocol.SessionInfo) string {
+	if len(sel.Ports) == 0 {
+		return ""
+	}
+	parts := make([]string, len(sel.Ports))
+	for i, p := range sel.Ports {
+		parts[i] = strconv.Itoa(p)
+	}
+	return fmt.Sprintf("ports:    %s", strings.Join(parts, " · "))
 }

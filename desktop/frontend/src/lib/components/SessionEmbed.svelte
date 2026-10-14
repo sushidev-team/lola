@@ -2,6 +2,7 @@
   import { untrack } from "svelte";
   import { flip } from "svelte/animate";
   import { store } from "$lib/store.svelte";
+  import { devToggleTitle } from "$lib/devtoggle";
   import { nav } from "$lib/nav.svelte";
   import { terms, AGENT, DIFF, CHECKPOINTS, isViewTab } from "$lib/terms.svelte";
   import { sidePanel } from "$lib/sidepanel.svelte";
@@ -303,9 +304,7 @@
             size="xs"
             selected={session.devActive}
             loading={store.devPending[session.id]}
-            title={session.devActive
-              ? `stop ${session.devCommands.join(", ")}`
-              : `run ${session.devCommands.join(", ")} here (stops them in any other session of this project)`}
+            title={devToggleTitle(session)}
             onclick={() => store.dev(session.id, !session.devActive)}
           >
             {#if !store.devPending[session.id]}<span aria-hidden="true">{session.devActive ? "●" : "○"}</span>{/if}

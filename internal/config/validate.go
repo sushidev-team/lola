@@ -184,6 +184,23 @@ func (c *Config) Validate() error {
 				errs = append(errs, fmt.Errorf("%s: dev_commands[%d] must be a single line", id, j))
 			}
 		}
+		for j, cmd := range pr.PreRemove {
+			if strings.TrimSpace(cmd) == "" {
+				errs = append(errs, fmt.Errorf("%s: pre_remove[%d] is empty", id, j))
+			}
+		}
+		if lo, hi, err := ParsePortRange(pr.PortRange); err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", id, err))
+		} else {
+			switch n := pr.PortsPerSession; {
+			case n < 0 || n > MaxPortsPerSession:
+				errs = append(errs, fmt.Errorf("%s: ports_per_session must be 0..%d, got %d", id, MaxPortsPerSession, n))
+			case n > 0 && pr.PortRange == "":
+				errs = append(errs, fmt.Errorf("%s: ports_per_session needs a port_range to allocate from", id))
+			case pr.PortRange != "" && hi-lo+1 < max(n, 1):
+				errs = append(errs, fmt.Errorf("%s: port_range %q holds fewer than ports_per_session (%d) ports", id, pr.PortRange, n))
+			}
+		}
 	}
 
 	// Polling-config checks run only for a project that actually polls (TeamID

@@ -5,6 +5,7 @@
   // Cockpit.svelte — and closes itself if the session vanished mid-open.
   import { sessionMenu } from "$lib/sessionmenu.svelte";
   import { store, type SessionInfo } from "$lib/store.svelte";
+  import { devToggleTitle } from "$lib/devtoggle";
   import { nav } from "$lib/nav.svelte";
   import { terms, DIFF } from "$lib/terms.svelte";
   import { sidePanel, CHECKPOINTS_TAB } from "$lib/sidepanel.svelte";
@@ -114,9 +115,7 @@
       <MenuItem
         icon={session.devActive ? "●" : "○"}
         variant={session.devActive ? "accent" : "default"}
-        title={session.devActive
-          ? `stop ${session.devCommands.join(", ")}`
-          : `run ${session.devCommands.join(", ")} here (stops them in any other session of this project)`}
+        title={devToggleTitle(session)}
         onclick={() => run((s) => store.dev(s.id, !s.devActive))}
       >
         {session.devActive ? "Active — stop dev" : "Make active"}
