@@ -837,7 +837,10 @@ each of which owns exactly one external tool or concern behind an **exec seam**
     bounded (`preRemoveTimeout`, whole hook; each command in its own process
     group, killed at the deadline) and BEST-EFFORT: failures are logged, the
     next command still runs, and nothing it does can fail the teardown, or the
-    caller would retry the whole cleanup forever.
+    caller would retry the whole cleanup forever. Once the hook ran on a
+    worktree verified clean, the removal is FORCED (the agent is down, so
+    anything dirty is the hook's own output), and each command's process group
+    is killed after it returns, so a backgrounded job cannot outlive it.
 - **The ACTIVE session is DERIVED from tmux, never remembered.** Only one session
   per project may run `[[project]].dev_commands` (they bind ports), so `cmd=dev`
   is a MOVE: `internal/daemon/dev.go` kills the previous holder's `<id>-dev-N`

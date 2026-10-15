@@ -1320,14 +1320,21 @@ func (n *Native) Kill(ctx context.Context, s session.Session, removeWorktree, fo
 	// kept (Remove refuses it below), and whatever post_create set up for it —
 	// its database above all — is part of the work being kept. An unanswerable
 	// dirty check skips the hook too; Remove then decides on its own.
+	//
+	// Once the hook has run on a worktree verified CLEAN, removal is forced: the
+	// agent and every tab are already down, so anything dirty now is the hook's
+	// own output (a dump, a log). Refusing it there would keep a worktree whose
+	// database the hook just dropped — a half-cleaned session retried forever.
+	removeForce := force
 	if len(p.PreRemove) > 0 {
 		if force {
 			n.runPreRemove(ctx, *p, s, dir)
 		} else if dirty, derr := n.WT.Dirty(ctx, dir); derr == nil && !dirty {
 			n.runPreRemove(ctx, *p, s, dir)
+			removeForce = true
 		}
 	}
-	if err := n.WT.Remove(ctx, *p, dir, branch, force); err != nil {
+	if err := n.WT.Remove(ctx, *p, dir, branch, removeForce); err != nil {
 		return fmt.Errorf("runtime: kill %s: %w", s.ID, err)
 	}
 	n.releasePorts(s.ID)

@@ -211,3 +211,27 @@ func TestSessionProjectKeepsTheCurrentLeaseWhenReleasingFails(t *testing.T) {
 		t.Errorf("registry lease = %v", l.Ports)
 	}
 }
+
+// A hook that writes into a worktree verified clean (a dump, a log) must not
+// make Remove refuse it AFTER the hook already dropped what the worktree used.
+func TestKillForcesRemovalWhenTheHookDirtiedACleanWorktree(t *testing.T) {
+	f := newFixture(t, `*"status --porcelain"*)
+  [ -e "$2/hook.dump" ] && echo "?? hook.dump"
+  exit 0
+  ;;`, "")
+	f.n.Ports = leaseRegistry(t)
+	p := f.p
+	p.PreRemove = []string{"touch hook.dump"}
+	f.n.Cfg = &config.Config{Projects: []config.Project{p}}
+
+	s := killFixtureSession()
+	if err := os.MkdirAll(filepath.Join(f.root, "nori", s.ID), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.n.Kill(context.Background(), s, true, false); err != nil {
+		t.Fatalf("Kill: %v", err)
+	}
+	if !strings.Contains(loggedArgs(t, f.gitLog), "worktree remove --force") {
+		t.Errorf("the hook's own output must not keep the worktree:\n%s", loggedArgs(t, f.gitLog))
+	}
+}

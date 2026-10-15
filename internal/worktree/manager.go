@@ -368,7 +368,10 @@ const teardownWaitDelay = 2 * time.Second
 //
 // ctx bounds the WHOLE hook. Each command runs in its own process group, and
 // the deadline kills that group rather than just `sh`, so a hung `docker
-// compose down` cannot outlive the teardown it was part of. Once ctx is done
+// compose down` cannot outlive the teardown it was part of. The group is also
+// killed once the command returns, so a job it backgrounded does not keep using
+// the worktree. A process that leaves the group on purpose (setsid, a daemon
+// that double-forks) is outside lola's reach, as it is for post_create. Once ctx is done
 // the remaining commands are reported as skipped, not run.
 func (m *Manager) Teardown(ctx context.Context, p config.Project, dir string) []error {
 	env := os.Environ()
@@ -390,9 +393,16 @@ func (m *Manager) Teardown(ctx context.Context, p config.Project, dir string) []
 			return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 		}
 		cmd.WaitDelay = teardownWaitDelay
-		var errb bytes.Buffer
-		cmd.Stderr = &errb
-		if err := cmd.Run(); err != nil {
+		errb := &tailBuffer{max: teardownStderrMax}
+		cmd.Stderr = errb
+		err := cmd.Run()
+		if cmd.Process != nil {
+			// Whatever the command left running in its group (`cmd &`) goes down
+			// with it: Run returning (or WaitDelay closing the pipes) is not proof
+			// that nothing still uses the worktree about to be removed.
+			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		}
+		if err != nil {
 			if msg := strings.TrimSpace(errb.String()); msg != "" {
 				errs = append(errs, fmt.Errorf("pre_remove %q: %w: %s", command, err, lastLine(msg)))
 			} else {
@@ -402,6 +412,32 @@ func (m *Manager) Teardown(ctx context.Context, p config.Project, dir string) []
 	}
 	return errs
 }
+
+// teardownStderrMax caps the stderr a pre_remove command keeps while it runs.
+// Only the last line is ever logged, so the TAIL is what is retained.
+const teardownStderrMax = 4 << 10
+
+// tailBuffer is an io.Writer that keeps only the last max bytes written, so a
+// hook streaming stderr until its deadline cannot grow the daemon's memory.
+type tailBuffer struct {
+	max int
+	buf []byte
+}
+
+func (t *tailBuffer) Write(p []byte) (int, error) {
+	n := len(p)
+	if len(p) >= t.max {
+		t.buf = append(t.buf[:0], p[len(p)-t.max:]...)
+		return n, nil
+	}
+	if over := len(t.buf) + len(p) - t.max; over > 0 {
+		t.buf = append(t.buf[:0], t.buf[over:]...)
+	}
+	t.buf = append(t.buf, p...)
+	return n, nil
+}
+
+func (t *tailBuffer) String() string { return string(t.buf) }
 
 // lastLine is the final line of a command's stderr — where a CLI puts the
 // error that ended it — so a chatty hook does not flood the daemon log.
