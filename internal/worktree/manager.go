@@ -20,6 +20,8 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/sushidev-team/lola/internal/config"
 )
@@ -339,6 +341,111 @@ func (m *Manager) Prepare(ctx context.Context, p config.Project, dir string) err
 		}
 	}
 	return nil
+}
+
+// Dirty reports whether dir has uncommitted changes (`git status
+// --porcelain` non-empty) — the same test Remove applies before it refuses
+// with ErrDirty. An error means git could not tell.
+func (m *Manager) Dirty(ctx context.Context, dir string) (bool, error) {
+	out, _, err := m.git(ctx, "-C", dir, "status", "--porcelain")
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(out) != "", nil
+}
+
+// teardownWaitDelay is how long Teardown waits for a hook's output pipes after
+// its process group was killed: a grandchild that escaped the group must not
+// hold Wait open past the deadline.
+const teardownWaitDelay = 2 * time.Second
+
+// Teardown runs the project's pre_remove commands in dir — the mirror of
+// Prepare's post_create: sequential `sh -c`, cwd dir, p.Env layered over the
+// daemon environment. Unlike Prepare it does NOT stop at the first failure: a
+// teardown hook is a list of independent cleanups (drop the database, remove a
+// docker volume), and one that fails must not skip the next. Every failure is
+// returned, in order, for the caller to log; none is fatal.
+//
+// ctx bounds the WHOLE hook. Each command runs in its own process group, and
+// the deadline kills that group rather than just `sh`, so a hung `docker
+// compose down` cannot outlive the teardown it was part of. The group is also
+// killed once the command returns, so a job it backgrounded does not keep using
+// the worktree. A process that leaves the group on purpose (setsid, a daemon
+// that double-forks) is outside lola's reach, as it is for post_create. Once ctx is done
+// the remaining commands are reported as skipped, not run.
+func (m *Manager) Teardown(ctx context.Context, p config.Project, dir string) []error {
+	env := os.Environ()
+	for _, k := range slices.Sorted(maps.Keys(p.Env)) { // deterministic order
+		env = append(env, k+"="+p.Env[k])
+	}
+	var errs []error
+	for _, command := range p.PreRemove {
+		if ctx.Err() != nil {
+			errs = append(errs, fmt.Errorf("pre_remove %q: skipped: %w", command, ctx.Err()))
+			continue
+		}
+		cmd := exec.CommandContext(ctx, "sh", "-c", command)
+		cmd.Dir = dir
+		cmd.Env = env
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		cmd.Cancel = func() error {
+			// Negative pid = the whole group: sh and everything it started.
+			return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		}
+		cmd.WaitDelay = teardownWaitDelay
+		errb := &tailBuffer{max: teardownStderrMax}
+		cmd.Stderr = errb
+		err := cmd.Run()
+		if cmd.Process != nil {
+			// Whatever the command left running in its group (`cmd &`) goes down
+			// with it: Run returning (or WaitDelay closing the pipes) is not proof
+			// that nothing still uses the worktree about to be removed.
+			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		}
+		if err != nil {
+			if msg := strings.TrimSpace(errb.String()); msg != "" {
+				errs = append(errs, fmt.Errorf("pre_remove %q: %w: %s", command, err, lastLine(msg)))
+			} else {
+				errs = append(errs, fmt.Errorf("pre_remove %q: %w", command, err))
+			}
+		}
+	}
+	return errs
+}
+
+// teardownStderrMax caps the stderr a pre_remove command keeps while it runs.
+// Only the last line is ever logged, so the TAIL is what is retained.
+const teardownStderrMax = 4 << 10
+
+// tailBuffer is an io.Writer that keeps only the last max bytes written, so a
+// hook streaming stderr until its deadline cannot grow the daemon's memory.
+type tailBuffer struct {
+	max int
+	buf []byte
+}
+
+func (t *tailBuffer) Write(p []byte) (int, error) {
+	n := len(p)
+	if len(p) >= t.max {
+		t.buf = append(t.buf[:0], p[len(p)-t.max:]...)
+		return n, nil
+	}
+	if over := len(t.buf) + len(p) - t.max; over > 0 {
+		t.buf = append(t.buf[:0], t.buf[over:]...)
+	}
+	t.buf = append(t.buf, p...)
+	return n, nil
+}
+
+func (t *tailBuffer) String() string { return string(t.buf) }
+
+// lastLine is the final line of a command's stderr — where a CLI puts the
+// error that ended it — so a chatty hook does not flood the daemon log.
+func lastLine(s string) string {
+	if i := strings.LastIndexByte(s, '\n'); i >= 0 {
+		return s[i+1:]
+	}
+	return s
 }
 
 // Remove deletes the session's worktree and branch. Unless force is set it

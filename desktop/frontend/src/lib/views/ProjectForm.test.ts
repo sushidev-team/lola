@@ -327,6 +327,22 @@ describe("ProjectForm", () => {
     expect(arg.devCommands).toEqual(["composer dev", "npm run dev"]);
   });
 
+  it("edits the port lease and the pre_remove hook", async () => {
+    render(ProjectForm);
+    await fireEvent.click(await screen.findByRole("tab", { name: "Worktree setup" }));
+    // Ports per session only means something once there is a range to lease from.
+    expect(screen.queryByLabelText("Ports per session")).not.toBeInTheDocument();
+    await fireEvent.input(await screen.findByLabelText("Port range"), { target: { value: " 4100-4199 " } });
+    await fireEvent.input(await screen.findByLabelText("Ports per session"), { target: { value: "2" } });
+    await fireEvent.input(screen.getByLabelText("Pre-remove"), { target: { value: 'dropdb "$LOLA_DB_NAME"\n' } });
+    await fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+    await waitFor(() => expect(saveProject).toHaveBeenCalledTimes(1));
+    const arg = saveProject.mock.calls.at(-1)![0];
+    expect(arg.portRange).toBe("4100-4199");
+    expect(arg.portsPerSession).toBe(2);
+    expect(arg.preRemove).toEqual(['dropdb "$LOLA_DB_NAME"']);
+  });
+
   it("promotes an inherited field to an override when it is edited", async () => {
     render(ProjectForm);
     await fireEvent.click(await screen.findByRole("tab", { name: "Worktree setup" }));

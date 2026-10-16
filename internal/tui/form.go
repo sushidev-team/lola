@@ -44,6 +44,9 @@ const (
 	fSymlinks
 	fPostCreate
 	fDevCommands
+	fPortRange
+	fPortsPerSession
+	fPreRemove
 	fEnv
 	// Filter tab: which Linear issues this project picks up.
 	fEnabled
@@ -101,12 +104,12 @@ var formTabs = []struct {
 }
 
 // listFields are edited as one entry per line (an open sub-editor), not inline.
-var listFields = map[fieldID]bool{fSymlinks: true, fPostCreate: true, fDevCommands: true, fEnv: true}
+var listFields = map[fieldID]bool{fSymlinks: true, fPostCreate: true, fDevCommands: true, fPreRemove: true, fEnv: true}
 
 // textFields are edited inline, character by character.
 var textFields = map[fieldID]bool{
 	fLabel: true, fName: true, fPath: true, fRepo: true, fDefaultBranch: true,
-	fBranchPrefix: true, fCap: true,
+	fBranchPrefix: true, fCap: true, fPortRange: true, fPortsPerSession: true,
 }
 
 // inheritable maps a field to its config.ProjectInherits bit, for the fields
@@ -143,11 +146,13 @@ type formModel struct {
 	origName string
 	poll     config.Project // working copy of the project being edited
 	capBuf   string         // text buffer for concurrency_cap
+	portsBuf string         // text buffer for ports_per_session
 
 	// Line buffers for the list fields; folded back into poll on save.
 	symlinks    []string
 	postCreate  []string
 	devCommands []string // long-running dev processes; only the ACTIVE session runs them
+	preRemove   []string // teardown hook, run before a worktree is removed
 	env         []string // "KEY=value" per line
 
 	teams   []linear.Team // available before a team is picked
@@ -254,6 +259,8 @@ func (f *formModel) lineBuf(fd fieldID) *[]string {
 		return &f.postCreate
 	case fDevCommands:
 		return &f.devCommands
+	case fPreRemove:
+		return &f.preRemove
 	case fEnv:
 		return &f.env
 	}
@@ -335,6 +342,9 @@ func newFormModel(cfg *config.Config, existing *config.Project) (*formModel, tea
 		if existing.ConcurrencyCap > 0 {
 			f.capBuf = strconv.Itoa(existing.ConcurrencyCap)
 		}
+		if existing.PortsPerSession > 0 {
+			f.portsBuf = strconv.Itoa(existing.PortsPerSession)
+		}
 		// A project that has never polled carries empty enums, which Validate
 		// rejects. Seed the same defaults a fresh config gets so opening the
 		// form on a non-polling project yields a saveable state.
@@ -370,6 +380,7 @@ func newFormModel(cfg *config.Config, existing *config.Project) (*formModel, tea
 	// server command belongs to one repository, so a new project starts empty
 	// rather than inheriting someone else's stack.
 	f.devCommands = slices.Clone(f.poll.DevCommands)
+	f.preRemove = slices.Clone(f.poll.PreRemove)
 	f.env = envLines(f.poll.Env)
 	if f.isNew {
 		f.symlinks = slices.Clone(cfg.Defaults.Symlinks)
@@ -455,7 +466,7 @@ func (f *formModel) applyInspection(v pathInspectedMsg) {
 // snapshot serializes everything a human can edit in this form. Maps print in
 // sorted key order under %v, so the result is stable across identical states.
 func (f *formModel) snapshot() string {
-	return fmt.Sprintf("%+v|%s|%v|%v|%v|%v", f.poll, f.capBuf, f.symlinks, f.postCreate, f.devCommands, f.env)
+	return fmt.Sprintf("%+v|%s|%s|%v|%v|%v|%v|%v", f.poll, f.capBuf, f.portsBuf, f.symlinks, f.postCreate, f.devCommands, f.preRemove, f.env)
 }
 
 // rebase declares the CURRENT state to be the unmodified one. Called on open and
@@ -490,7 +501,7 @@ func (f *formModel) fields() []fieldID {
 	var fs []fieldID
 	switch f.tab {
 	case tabRepo:
-		fs = []fieldID{fLabel, fName, fPath, fRepo, fDefaultBranch, fBranchPrefix, fAgent, fSymlinks, fPostCreate, fDevCommands, fEnv}
+		fs = []fieldID{fLabel, fName, fPath, fRepo, fDefaultBranch, fBranchPrefix, fAgent, fSymlinks, fPostCreate, fPreRemove, fDevCommands, fPortRange, fPortsPerSession, fEnv}
 	case tabFilter:
 		fs = []fieldID{fEnabled, fTeam}
 		if f.poll.TeamID != "" {
@@ -675,7 +686,7 @@ func (f *formModel) key(k tea.KeyPressMsg) (tea.Cmd, formEvent) {
 			*buf = string(rs[:len(rs)-1])
 		}
 	case k.Text != "": // printable runes, incl. space and paste (bubbletea v2)
-		if cur == fCap {
+		if cur == fCap || cur == fPortsPerSession {
 			for _, r := range k.Text {
 				if r >= '0' && r <= '9' {
 					*buf += string(r)
@@ -747,7 +758,7 @@ func (f *formModel) paste(s string) {
 	if buf == nil {
 		return
 	}
-	if cur == fCap {
+	if cur == fCap || cur == fPortsPerSession {
 		*buf += pasteDigits(s)
 		return
 	}
@@ -796,6 +807,10 @@ func (f *formModel) textBuf(fd fieldID) *string {
 		return &f.poll.BranchPrefix
 	case fCap:
 		return &f.capBuf
+	case fPortRange:
+		return &f.poll.PortRange
+	case fPortsPerSession:
+		return &f.portsBuf
 	}
 	return nil
 }
@@ -1229,6 +1244,9 @@ func applyProject(dst *config.Project, src config.Project) {
 	dst.Symlinks = src.Symlinks
 	dst.PostCreate = src.PostCreate
 	dst.DevCommands = src.DevCommands
+	dst.PortRange = src.PortRange
+	dst.PortsPerSession = src.PortsPerSession
+	dst.PreRemove = src.PreRemove
 	dst.Env = src.Env
 	dst.Inherits = src.Inherits
 
@@ -1333,6 +1351,17 @@ func (f *formModel) save() (tea.Cmd, formEvent) {
 	p.Symlinks = trimDropEmpty(f.symlinks)
 	p.PostCreate = trimDropEmpty(f.postCreate)
 	p.DevCommands = trimDropEmpty(f.devCommands)
+	p.PreRemove = trimDropEmpty(f.preRemove)
+	p.PortRange = strings.TrimSpace(p.PortRange) // shape checked by nc.Validate below
+	p.PortsPerSession = 0
+	if f.portsBuf != "" {
+		n, err := strconv.Atoi(f.portsBuf)
+		if err != nil || n <= 0 {
+			f.addErr(tabRepo, "ports_per_session must be a positive integer")
+		} else {
+			p.PortsPerSession = n
+		}
+	}
 	p.Env = parseEnvLines(f.env)
 	p.ConcurrencyCap = 0
 	if f.capBuf != "" {
@@ -1611,7 +1640,13 @@ func fieldHelp(fd fieldID) string {
 	case fPostCreate:
 		return "One command per line, run in a fresh worktree before the agent (e.g. composer install)."
 	case fDevCommands:
-		return "One long-running dev command per line (e.g. composer dev). Only the ACTIVE session runs them — one session per project, each command in its own tab."
+		return "One long-running dev command per line (e.g. composer dev), each in its own tab. Without a port range only ONE session per project runs them; with one, every session can, on its own $LOLA_PORT."
+	case fPortRange:
+		return "Ports to lease from, e.g. 4100-4999. Each session gets its own block as LOLA_PORT / LOLA_PORT_1..N, and dev commands may then run in several sessions at once. Empty = single-active."
+	case fPortsPerSession:
+		return "Ports in each session's block (LOLA_PORT_1..N). Empty = 1."
+	case fPreRemove:
+		return "One command per line, run in the worktree before lola removes it (merge cleanup, kill) — e.g. drop the $LOLA_DB_NAME database. Bounded; failures are logged, never fatal."
 	case fEnv:
 		return "One KEY=value per line, exported into the session and post-create commands."
 	case fEnabled:
@@ -1688,6 +1723,12 @@ func (f *formModel) label(fd fieldID) string {
 		return "Post-create"
 	case fDevCommands:
 		return "Dev commands"
+	case fPortRange:
+		return "Port range"
+	case fPortsPerSession:
+		return "Ports per session"
+	case fPreRemove:
+		return "Pre-remove"
 	case fEnv:
 		return "Env (KEY=value)"
 	case fEnabled:
@@ -1810,7 +1851,17 @@ func (f *formModel) display(fd fieldID) string {
 			return faintText.Render("(inherits " + f.cfg.AgentForProject(f.origName) + ")")
 		}
 		return f.poll.Agent
-	case fSymlinks, fPostCreate, fDevCommands, fEnv:
+	case fPortRange:
+		if f.poll.PortRange == "" {
+			return faintText.Render("(none — one active dev session per project)")
+		}
+		return f.poll.PortRange
+	case fPortsPerSession:
+		if f.portsBuf == "" {
+			return faintText.Render("(default: 1)")
+		}
+		return f.portsBuf
+	case fSymlinks, fPostCreate, fDevCommands, fPreRemove, fEnv:
 		if buf := f.lineBuf(fd); buf != nil {
 			n := len(trimDropEmpty(*buf))
 			if n == 0 {

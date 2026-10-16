@@ -119,7 +119,7 @@ func TestDevSweepNeverKillsWhatALiveTmuxPaneOwns(t *testing.T) {
 		Dir: filepath.Join(d.home, "worktrees", "app", "lola-app-eng-1"),
 	})
 
-	if freed := d.sweepPortSquatters(context.Background(), tm, "app", d.home); len(freed) != 0 {
+	if freed := d.sweepPortSquatters(context.Background(), tm, "app", d.home, ""); len(freed) != 0 {
 		t.Errorf("swept %v, want nothing — a live pane owns that group", freed)
 	}
 	if !stillAlive(gone) {
@@ -138,7 +138,7 @@ func TestDevSweepIgnoresListenersOutsideTheProjectsWorktrees(t *testing.T) {
 		filepath.Join(d.home, "worktrees"),            // the root itself
 	} {
 		listeners(d, portproc.Listener{PID: stray, Command: "php", Port: 8000, Dir: dir})
-		if freed := d.sweepPortSquatters(context.Background(), tm, "app", d.home); len(freed) != 0 {
+		if freed := d.sweepPortSquatters(context.Background(), tm, "app", d.home, ""); len(freed) != 0 {
 			t.Errorf("swept %v for a listener in %s, want nothing", freed, dir)
 		}
 	}
@@ -158,7 +158,7 @@ func TestDevSweepKillsNothingWithoutAProtectSet(t *testing.T) {
 		Dir: filepath.Join(d.home, "worktrees", "app", "lola-app-eng-1"),
 	})
 
-	if freed := d.sweepPortSquatters(context.Background(), tm, "app", d.home); len(freed) != 0 {
+	if freed := d.sweepPortSquatters(context.Background(), tm, "app", d.home, ""); len(freed) != 0 {
 		t.Errorf("swept %v, want nothing — the pane list failed", freed)
 	}
 	if !stillAlive(gone) {
@@ -170,7 +170,7 @@ func TestDevSweepKillsNothingWithoutAProtectSet(t *testing.T) {
 func TestDevSweepIsSkippedWithoutTheLsofSeam(t *testing.T) {
 	d, tm := devDaemon(t, []string{"composer dev"}, devSession("lola-app-eng-1"))
 	d.portListeners = nil
-	if freed := d.sweepPortSquatters(context.Background(), tm, "app", d.home); freed != nil {
+	if freed := d.sweepPortSquatters(context.Background(), tm, "app", d.home, ""); freed != nil {
 		t.Errorf("swept %v, want nothing", freed)
 	}
 	if _, err := d.handleDev(context.Background(), "lola-app-eng-1", true); err != nil {
@@ -197,7 +197,7 @@ func TestDevSweepSparesWhatAShellTabPaneLeads(t *testing.T) {
 		Dir: filepath.Join(d.home, "worktrees", "app", "lola-app-eng-1"),
 	})
 
-	if freed := d.sweepPortSquatters(context.Background(), tm, "app", d.home); len(freed) != 0 {
+	if freed := d.sweepPortSquatters(context.Background(), tm, "app", d.home, ""); len(freed) != 0 {
 		t.Errorf("swept %v, want nothing — a user shell tab owns that group", freed)
 	}
 	if !stillAlive(gone) {
@@ -218,7 +218,7 @@ func TestDevSweepStillReclaimsWhatAnAgentPaneLeads(t *testing.T) {
 		Dir: filepath.Join(d.home, "worktrees", "app", "lola-app-eng-1"),
 	})
 
-	freed := d.sweepPortSquatters(context.Background(), tm, "app", d.home)
+	freed := d.sweepPortSquatters(context.Background(), tm, "app", d.home, "")
 	if len(freed) == 0 {
 		t.Error("swept nothing, want the agent-started server reclaimed")
 	}

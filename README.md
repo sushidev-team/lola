@@ -303,7 +303,10 @@ runtime layer, not on config load.
 | `default_branch` | string | Branch new session worktrees start from, and the base the agent is told to open its PR against. Defaults to the checkout's own default branch when a folder is picked (see [Adding a project](#adding-a-project-pick-the-folder-the-rest-fills-itself)), else `main`. Both forms offer the checkout's branches once `path` is set (local plus remote-tracking, the repository's own default first) while staying free text, so a path that is not a checkout is never a dead end. |
 | `branch_prefix` | string | Prefix prepended to a session's derived branch name (e.g. `"feat/"` yields `feat/eng-42`). Empty inherits `[defaults].branch_prefix`, then `"lola/"`. |
 | `post_create` | string array | Commands run inside a fresh worktree before the agent starts (e.g. `composer install`). Any failure blocks the session with a clear status — never a half-started agent. Omit to inherit `[defaults].post_create`. |
-| `dev_commands` | string array | Long-running dev processes for this repository, e.g. `["composer dev", "npm run dev"]`. They run only in the project's **active** session — one session at a time, each command in its own terminal tab — see [The active session](#the-active-session). Deliberately **not** inheritable from `[defaults]`: a dev command belongs to one repository. |
+| `dev_commands` | string array | Long-running dev processes for this repository, e.g. `["composer dev", "npm run dev"]`. They run only in the project's **active** session — one session at a time, each command in its own terminal tab — see [The active session](#the-active-session) — unless the project sets `port_range`, which lets every session run them at once. Deliberately **not** inheritable from `[defaults]`: a dev command belongs to one repository. |
+| `port_range` | string | Inclusive `"lo-hi"` range (within 1024–65535, e.g. `"4100-4999"`) each session leases its **own** block of ports from, exported as `LOLA_PORT` / `LOLA_PORT_1..N`. Setting it makes `dev_commands` **multi-active** — see [Parallel dev stacks](#parallel-dev-stacks). Not inheritable. |
+| `ports_per_session` | integer | Size of each session's block (1–20). Omitted = 1. Needs `port_range`. |
+| `pre_remove` | string array | Teardown hook, the mirror of `post_create`: commands run in the worktree right before lola removes it (merged-cleanup and `lola kill`), with the same env including `LOLA_DB_NAME` and the port lease. Skipped for a dirty (kept) worktree; bounded to 20s in total; a failure is logged, never fatal. Not inheritable. |
 | `daily_budget_tokens` | int | This project's daily limit in **weighted** tokens (see [`[budget]`](#budget-optional)). Once today's usage reaches it the project dispatches nothing new until tomorrow; running sessions are untouched. `0`/absent = no project limit. Not inheritable from `[defaults]`. |
 | `symlinks` | string array | Files symlinked from the main checkout into each worktree, e.g. `[".env"]`. Beware: a shared `.env` usually means every worktree talks to the same database. Omit to inherit `[defaults].symlinks`. |
 | `env` | table of strings | Extra environment variables exported into each session (`[project.env]`); the agent pane, shell tabs and the `post_create` commands all see them. Values may reference the session — see [Per-session env values](#per-session-env-values). Omit to inherit `[defaults].env`. |
@@ -446,6 +449,9 @@ Switch a session **Active** — the button in the desktop app's session header,
 - starts each command in its own tmux tab beside the agent pane, rooted in that
   session's worktree with its `env` exported, labelled with the command it runs.
 
+A project that sets `port_range` skips the move entirely: each session runs on
+its own leased ports — see [Parallel dev stacks](#parallel-dev-stacks).
+
 Each entry is a **shell line**, interpreted by `sh` in the worktree **root** —
 `cd desktop && wails3 dev`, `PORT=3001 npm run dev` and pipes all work.
 
@@ -480,6 +486,53 @@ refused rather than aimed at whatever holds the port by then. A process
 belonging to a live lola session is never killed this way. Afterwards the dev
 tabs start again on their own.
 
+#### Parallel dev stacks
+
+The active-session move exists because every worktree wants the same port. A
+project can instead hand each session **its own** ports, and then any number of
+sessions run their dev stacks side by side:
+
+```toml
+[[project]]
+name = "nori-app"
+dev_commands = ["php artisan serve --port=$LOLA_PORT", "npm run dev -- --port $LOLA_PORT_2"]
+port_range = "4100-4999"
+ports_per_session = 2
+post_create = ['createdb "$LOLA_DB_NAME"', "php artisan migrate"]
+pre_remove = ['dropdb --if-exists "$LOLA_DB_NAME"']
+
+[project.env]
+DB_DATABASE = "{{.DBName}}"
+APP_URL = "http://127.0.0.1:{{.Port}}"
+```
+
+- **The lease.** At spawn each session gets the lowest free aligned block of
+  `ports_per_session` ports in `port_range` — skipping ports another session
+  holds (any project) or that something already listens on. It is recorded in
+  `~/.lola/state/ports.json` by session id, so a daemon restart, a revive or an
+  agent switch keep the same ports, and it is released when the session's
+  worktree is removed. A session whose range ran out still spawns, without
+  `LOLA_PORT`.
+- **The variables.** Every session gets `LOLA_SESSION_SLUG` (its id) and
+  `LOLA_DB_NAME` (a stable, identifier-safe database name derived from it);
+  with a lease also `LOLA_PORT` (the first port) and `LOLA_PORT_1..N`. They
+  travel with `[project.env]` — `post_create`, the agent pane, shell tabs, dev
+  tabs and `pre_remove` all see them — and win over a same-named key there.
+- **Multi-active.** With a `port_range`, switching a session **Active** starts
+  its dev tabs without stopping anyone else's, and the stray-server sweep stays
+  inside that session's own worktree. A session holding no lease (spawned
+  before the range was set, or the range was exhausted) is refused rather than
+  allowed to fight the others over a default port — respawn it or widen the
+  range. The session's ports show in the TUI detail (`ports:`) and the app's
+  dev-toggle tooltip; the dev URL chip and port-clash banner work per session
+  as before.
+- **Teardown.** `pre_remove` runs after the session's tmux tabs are down and
+  before the worktree goes, so it can drop the database `post_create` made. It
+  is skipped when the worktree is dirty (lola keeps it, and what it uses),
+  bounded to 20 seconds in total (each command's whole process group is killed
+  at the deadline), and best-effort: every failure is logged and teardown
+  carries on. Keep its commands idempotent.
+
 #### Per-session env values
 
 `[project.env]` values are written to a 0600 `<worktree>/.lola/env`, which every
@@ -498,6 +551,9 @@ reaction and write-back templates use:
 | `{{.Branch}}` | branch checked out in the worktree |
 | `{{.Project}}` | this project's name |
 | `{{.Worktree}}` | absolute worktree path |
+| `{{.Slug}}` | same as `{{.Session}}` — reads better in a hostname (`{{.Slug}}.test`) |
+| `{{.DBName}}` | the session's stable database name, `LOLA_DB_NAME` (`lola_nori_app_nor_366`) |
+| `{{.Port}}`, `{{.Port1}}`..`{{.PortN}}` | the leased ports (see [Parallel dev stacks](#parallel-dev-stacks)); **empty** without a `port_range` |
 
 This earns its keep next to `symlinks = [".env"]`. A shared `.env` means every
 worktree also shares the services it names — the same Redis queue, the same

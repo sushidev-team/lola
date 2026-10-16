@@ -99,7 +99,7 @@ func (n *Native) SwitchAgent(ctx context.Context, s session.Session, kind agent.
 	}
 	// Expand the per-session env placeholders exactly as Spawn does — a switch
 	// must not leave literal {{.Session}}/{{.Issue}} values in .lola/env.
-	p = expandProjectEnv(p, EnvVars{Session: id, Issue: s.Issue, Branch: s.Branch, Project: p.Name, Worktree: dir})
+	p = n.sessionProject(p, EnvVars{Session: id, Issue: s.Issue, Branch: s.Branch, Project: p.Name, Worktree: dir})
 	if err := os.WriteFile(filepath.Join(dir, lolaDir, "env"), n.envFile(p, id, dir, kind), 0o600); err != nil {
 		return session.Session{}, fmt.Errorf("runtime: switch agent %s: write env: %w", id, err)
 	}
