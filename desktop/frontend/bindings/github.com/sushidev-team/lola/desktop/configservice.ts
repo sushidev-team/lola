@@ -121,6 +121,14 @@ export function InspectPath(path: string): $CancellablePromise<$models.PathInfoD
 }
 
 /**
+ * LinearAgentSecrets resolves each credential only to learn WHETHER it works.
+ * The token's keychain item is the one `lola linear-agent login` writes.
+ */
+export function LinearAgentSecrets(): $CancellablePromise<$models.LinearAgentSecretsDTO> {
+    return $Call.ByID(2906857752);
+}
+
+/**
  * LinearKeyStatus reports the key's origin and health for the settings screen.
  * 
  * This exists because the key was settable ONLY in the first-run wizard: neither
@@ -258,6 +266,16 @@ export function SaveSettings(dto: $models.SettingsDTO): $CancellablePromise<void
  */
 export function SetGroupCollapsed(name: string, collapsed: boolean): $CancellablePromise<void> {
     return $Call.ByID(356289697, name, collapsed);
+}
+
+/**
+ * SetLinearAgentSecret stores the OAuth client secret (kind "client") or the
+ * webhook signing secret (kind "webhook") in the Keychain under the service the
+ * config names (its default when none). Write-only, like SetLinearKey: it is
+ * not a form field, so no unrelated save ever carries a secret.
+ */
+export function SetLinearAgentSecret(kind: string, value: string): $CancellablePromise<void> {
+    return $Call.ByID(4248201065, kind, value);
 }
 
 /**

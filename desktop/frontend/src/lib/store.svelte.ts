@@ -369,6 +369,21 @@ class Store {
     return this.act(() => DaemonService.Answer(session, text), "answer sent");
   }
   /**
+   * The plan-approval gate's verdict. Resolves true when the daemon recorded it,
+   * so the caller can clear its comment box only on success.
+   */
+  async decidePlan(session: string, approve: boolean, comment = ""): Promise<boolean> {
+    try {
+      await DaemonService.DecidePlan(session, approve, comment);
+      this.setFlash(approve ? "plan approved" : "changes requested", "good");
+      void this.refresh();
+      return true;
+    } catch (err) {
+      this.setFlash(String(err), "bad");
+      return false;
+    }
+  }
+  /**
    * Kill a session. A dirty worktree is refused unless force is set — and that
    * refusal is NOT a dead end: the agent is already terminated by then and the
    * worktree is all that survives, so the honest answer is a second question

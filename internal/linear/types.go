@@ -45,6 +45,11 @@ type Issue struct {
 	Assignee   string
 	LabelIDs   []string
 	LabelNames []string // parallel to LabelIDs, display only
+	// TeamID / ProjectID are filled only by the agent-session query: they route
+	// a delegated issue to the [[project]] whose team (and Linear project
+	// filter) it belongs to. The poll query never reads them.
+	TeamID    string
+	ProjectID string
 	// BlockedBy lists the issues Linear records as BLOCKING this one (the
 	// inverse side of a "blocks" relation), each with its current state type.
 	// OpenChildren counts sub-issues not yet completed or canceled. Dispatch
