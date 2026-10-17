@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.2.18](https://github.com/sushidev-team/lola/compare/v0.2.17...v0.2.18) (2026-10-16)
+
+
+### Features
+
+* per-session port leases, parallel dev stacks and a pre_remove hook ([d55524a](https://github.com/sushidev-team/lola/commit/d55524a20e5b3d43cb35dd57112597584a5d1233))
+
+
+### Bug Fixes
+
+* **runtime:** keep LOLA_DB_NAME injective and keep the held lease on a failed re-lease ([6e8db0c](https://github.com/sushidev-team/lola/commit/6e8db0c1b0a3f24ea44fa5e3396e3b21396c725c))
+* **worktree:** keep pre_remove from wedging or outliving teardown ([f9edd93](https://github.com/sushidev-team/lola/commit/f9edd9347e32a4c3c8eb2e4bb56272401cad3bc8))
+
 ## [0.2.17](https://github.com/sushidev-team/lola/compare/v0.2.16...v0.2.17) (2026-10-12)
 
 
