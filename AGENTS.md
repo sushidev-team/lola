@@ -719,11 +719,11 @@ each of which owns exactly one external tool or concern behind an **exec seam**
     `scanDevURLs` reads the dev tabs' scrollback once the tabs are up, ranks
     what it finds with `internal/devurl`, and puts it on `Session.DevURLs` →
     `SessionInfo.devUrls` → a clickable chip in the app / a `serves:` line in the
-    TUI. Three rules keep it cheap and honest: it reads a pane only while
-    nothing is known or right after the tab set changed (the address does not
-    move on its own), it spends at most `devURLAttempts` reads per tab set so a
-    `--watch` tab that never prints one stops costing a 2000-line capture every
-    cycle, and `markDev` CLEARS the addresses on any change — a link to a server
+    TUI. Discovery continues after the first address: a sidecar can print its
+    URL before the app finishes trying occupied ports. It spends at most
+    `devURLAttempts` reads per tab set (also refining cached URLs after a daemon
+    restart), so discovery never costs a 2000-line capture every cycle forever.
+    `markDev` CLEARS the addresses on any change — a link to a server
     that is gone is worse than no link. The app opens it through the daemon
     (`cmd=openURL`, http(s)-only), never `window.open`: the address came out of
     terminal text.
@@ -732,8 +732,9 @@ each of which owns exactly one external tool or concern behind an **exec seam**
     moment where the observer's 30s cadence is far too slow, since a human is
     watching that tab come up — so activation starts `startDevURLWatch`: a
     background poll of its OWN tabs (short `devURLWatchLines` tail, every
-    `devURLWatchEvery`, bounded by `devURLWatchWindow`) that stops at the first
-    address. It re-reads the session record every pass and gives up the moment
+    `devURLWatchEvery`, bounded by `devURLWatchWindow`) that keeps refining the
+    addresses throughout startup, even if the observer found one first.
+    It re-reads the session record every pass and gives up the moment
     the tabs stop, change count or are taken over — the toggle is a MOVE, so a
     watch outlives its own tabs — and it runs on the SHUTDOWN-CANCELLABLE
     context, not a shielded one, because an aborted read costs only a link the

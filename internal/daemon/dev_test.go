@@ -367,11 +367,42 @@ func TestReconcileDevTabsPicksUpTheLocalURLFromThePane(t *testing.T) {
 		t.Fatalf("DevURLs = %v, want the app server first", s.DevURLs)
 	}
 
-	// A second cycle costs NOTHING: the address does not move on its own, and a
-	// 2000-line capture per session per 30s would.
+	// Keep refining during the bounded discovery period, then stop reading.
+	for range devURLAttempts + 5 {
+		d.reconcileDevTabs(context.Background(), alive)
+	}
+	if reads != devURLAttempts {
+		t.Errorf("read the pane %d times, want %d", reads, devURLAttempts)
+	}
+}
+
+// Docker can replay a sidecar's old listening URL before Laravel finishes
+// trying occupied ports. Even a cached URL from a previous daemon must be
+// refined once the app advertises the port it actually bound.
+func TestReconcileDevTabsRefinesAnEarlySidecarURL(t *testing.T) {
+	d, _ := devDaemon(t, []string{"composer dev"}, devSession("lola-app-eng-1"))
+	d.markDev("lola-app-eng-1", true, 1)
+	d.setDevURLs("lola-app-eng-1", []string{"http://127.0.0.1:6001"})
+	d.deadPanes = func(context.Context) (map[string]bool, error) { return map[string]bool{}, nil }
+	pane := "[sockudo] HTTP server listening on http://0.0.0.0:6001\n" +
+		"[vite] Local: http://localhost:5174/\n" +
+		"[vite] APP_URL: http://127.0.0.1:8000\n"
+	d.paneTail = func(context.Context, string, int) (string, error) { return pane, nil }
+	alive := map[string]bool{"lola-app-eng-1-dev-1": true}
 	d.reconcileDevTabs(context.Background(), alive)
-	if reads != 1 {
-		t.Errorf("read the pane %d times, want 1 while the tabs are unchanged", reads)
+	pane += "[server] Failed to listen on 127.0.0.1:8001 (reason: Address already in use)\n" +
+		"[server] INFO Server running on [http://127.0.0.1:8002].\n"
+	d.reconcileDevTabs(context.Background(), alive)
+	s, _ := d.sessions.Get("lola-app-eng-1")
+	if len(s.DevURLs) == 0 || s.DevURLs[0] != "http://127.0.0.1:8002" {
+		t.Fatalf("DevURLs = %v, want the app's actual port first", s.DevURLs)
+	}
+	// Scrolling the announcement out of the tail must not erase the result.
+	pane = "[queue] Processing jobs..."
+	d.reconcileDevTabs(context.Background(), alive)
+	s, _ = d.sessions.Get("lola-app-eng-1")
+	if len(s.DevURLs) == 0 || s.DevURLs[0] != "http://127.0.0.1:8002" {
+		t.Fatalf("DevURLs = %v after the announcement scrolled away", s.DevURLs)
 	}
 }
 
@@ -420,6 +451,8 @@ func TestReconcileDevTabsStopsHuntingForAnAddressThatNeverComes(t *testing.T) {
 func TestDevURLWatchFindsTheAddressWithoutTheObserver(t *testing.T) {
 	d, _ := devDaemon(t, []string{"composer dev"}, devSession("lola-app-eng-1"))
 	d.markDev("lola-app-eng-1", true, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	reads := 0
 	d.paneTail = func(_ context.Context, name string, lines int) (string, error) {
 		reads++
@@ -432,17 +465,44 @@ func TestDevURLWatchFindsTheAddressWithoutTheObserver(t *testing.T) {
 		if reads < 2 {
 			return "  INFO  Booting...", nil // still starting, as it always is
 		}
+		cancel()
 		return "  INFO  Server running on [http://127.0.0.1:8001].", nil
 	}
 
-	d.watchDevURLs(context.Background(), "lola-app-eng-1", 1)
+	d.watchDevURLs(ctx, "lola-app-eng-1", 1)
 
 	s, _ := d.sessions.Get("lola-app-eng-1")
 	if len(s.DevURLs) == 0 || s.DevURLs[0] != "http://127.0.0.1:8001" {
 		t.Fatalf("DevURLs = %v, want the address the second read printed", s.DevURLs)
 	}
 	if reads != 2 {
-		t.Errorf("read the pane %d times, want it to stop at the first address", reads)
+		t.Errorf("read the pane %d times, want 2 before cancellation", reads)
+	}
+}
+
+func TestDevURLWatchRefinesURLsAfterObserverFindsSidecar(t *testing.T) {
+	d, _ := devDaemon(t, []string{"composer dev"}, devSession("lola-app-eng-1"))
+	d.markDev("lola-app-eng-1", true, 1)
+	d.setDevURLs("lola-app-eng-1", []string{"http://127.0.0.1:6001"})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	reads := 0
+	d.paneTail = func(context.Context, string, int) (string, error) {
+		reads++
+		pane := "[sockudo] HTTP server listening on http://0.0.0.0:6001\n[vite] Local: http://localhost:5174/\n"
+		if reads == 2 {
+			pane += "[server] INFO Server running on [http://127.0.0.1:8002]."
+			cancel()
+		}
+		return pane, nil
+	}
+	d.watchDevURLs(ctx, "lola-app-eng-1", 1)
+	s, _ := d.sessions.Get("lola-app-eng-1")
+	if len(s.DevURLs) == 0 || s.DevURLs[0] != "http://127.0.0.1:8002" {
+		t.Fatalf("DevURLs = %v, want the late app address first", s.DevURLs)
+	}
+	if reads != 2 {
+		t.Fatalf("read the pane %d times, want to continue after the first address", reads)
 	}
 }
 

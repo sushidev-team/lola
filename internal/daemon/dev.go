@@ -502,10 +502,9 @@ func (d *Daemon) reconcileDevTabs(ctx context.Context, aliveNames map[string]boo
 // answers almost never.
 const devURLScanLines = 2000
 
-// devURLAttempts bounds how many cycles are spent looking for an address in a
-// pane that has none. A `tailwindcss --watch` tab never prints one, and without
-// a cap it would cost a 2000-line capture every 30s forever. Reset whenever the
-// tab set changes, so a restart gets a fresh budget.
+// devURLAttempts bounds how many cycles discover and refine addresses. Without
+// a cap each dev tab would cost a 2000-line capture every 30s forever. Reset
+// whenever the tab set changes, so a restart gets a fresh budget.
 const devURLAttempts = 20
 
 // scanDevURLs keeps a session's DevURLs in step with its dev tabs, and reports
@@ -513,9 +512,9 @@ const devURLAttempts = 20
 //
 // The addresses are DERIVED, exactly like DevActive: they are dropped the moment
 // the tabs stop, because a link to a server that is gone is worse than no link.
-// Beyond that it is deliberately lazy — a pane is only read while there is
-// nothing known yet, or right after the tab set changed (a start, a restart, a
-// crash) — since the address does not move on its own.
+// Discovery stays bounded, but finding an address does not finish it: a
+// sidecar or bundler can advertise itself before the app finishes starting.
+// The remaining attempts also refine addresses carried across daemon restarts.
 func (d *Daemon) scanDevURLs(ctx context.Context, s session.Session, live int, liveTabs []string) bool {
 	if live == 0 {
 		d.forgetDevURLTries(s.ID)
@@ -524,8 +523,6 @@ func (d *Daemon) scanDevURLs(ctx context.Context, s session.Session, live int, l
 	restarted := s.DevTabs != live
 	if restarted {
 		d.forgetDevURLTries(s.ID)
-	} else if len(s.DevURLs) > 0 {
-		return false // known, and nothing about the tabs has changed
 	}
 	if d.paneTail == nil || !d.spendDevURLTry(s.ID) {
 		return false
@@ -603,8 +600,9 @@ func (d *Daemon) startDevURLWatch(sessionID string, tabs int) {
 	}()
 }
 
-// watchDevURLs polls a freshly activated session's dev tabs until they print an
-// address, the tabs change under it, or the window runs out.
+// watchDevURLs polls a freshly activated session's dev tabs until the tabs
+// change under it or the window runs out. The first address may belong to a
+// sidecar; keep looking for the app even after the observer finds an address.
 //
 // It re-reads the session record every pass rather than trusting the tabs it was
 // started with: the toggle is a MOVE, so the session can lose its tabs to
@@ -626,8 +624,6 @@ func (d *Daemon) watchDevURLs(ctx context.Context, sessionID string, tabs int) {
 		switch {
 		case !ok, !s.DevActive, s.DevTabs != tabs:
 			return // stopped, taken over, or restarted — not this watch's tabs
-		case len(s.DevURLs) > 0:
-			return // the observer got there first
 		}
 		names := make([]string, 0, tabs)
 		for i := 1; i <= tabs; i++ {
@@ -640,7 +636,6 @@ func (d *Daemon) watchDevURLs(ctx context.Context, sessionID string, tabs int) {
 					d.logf("", "dev: persist %s's addresses: %v", sessionID, err)
 				}
 			}
-			return
 		}
 		if time.Now().After(deadline) {
 			// Not an error: plenty of dev commands never print an address
