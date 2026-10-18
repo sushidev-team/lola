@@ -1291,6 +1291,10 @@ each of which owns exactly one external tool or concern behind an **exec seam**
     `rm -f` so a revive never collides with a straggler.
   - A sandboxed project's health gate is the docker CLI (`sandboxedBin`), not
     the agent binary — the agent lives in the image.
+  - `pre_remove` is SKIPPED for a sandboxed session (`Kill`): it is a host
+    shell in a worktree the agent could write, so `artisan`/npm scripts there
+    may be the agent's code. Any new host-side command run inside a sandboxed
+    worktree after the agent started is the same escape.
 - **Linked repositories nest INSIDE the primary worktree, and teardown removes
   them FIRST.** `[[project.linked_repo]]` (`internal/runtime/linked.go`)
   checks each repo out at `<worktree>/.lola/repos/<name>` on the session's

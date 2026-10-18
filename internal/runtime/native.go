@@ -1418,8 +1418,15 @@ func (n *Native) Kill(ctx context.Context, s session.Session, removeWorktree, fo
 	// agent and every tab are already down, so anything dirty now is the hook's
 	// own output (a dump, a log). Refusing it there would keep a worktree whose
 	// database the hook just dropped — a half-cleaned session retried forever.
+	//
+	// A SANDBOXED session skips it: the hook is a HOST shell in a worktree the
+	// agent could write, so whatever it runs (artisan, npm scripts, a Makefile)
+	// may be the agent's code — a sandbox escape on every merged cleanup.
 	removeForce := force
-	if len(p.PreRemove) > 0 {
+	sandboxed := s.Sandbox != "" || n.sandboxProject(s.Project) != nil
+	if len(p.PreRemove) > 0 && sandboxed {
+		n.logf("session %s: pre_remove skipped: sandboxed worktree (host commands there would run agent-writable code)", s.ID)
+	} else if len(p.PreRemove) > 0 {
 		if force {
 			n.runPreRemove(ctx, *p, s, dir)
 		} else if dirty, derr := n.WT.Dirty(ctx, dir); derr == nil && !dirty {
