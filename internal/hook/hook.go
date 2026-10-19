@@ -172,17 +172,20 @@ func request(cmd string, args any, out any) error {
 		}
 		req.Args = raw
 	}
-	raw, err := json.Marshal(req)
-	if err != nil {
-		return err
-	}
 	deadline := time.Now().Add(postTimeout)
-	d := net.Dialer{Deadline: deadline}
-	conn, err := d.Dial("unix", filepath.Join(home, "lola.sock"))
+	// dialDaemon, not the bare socket: a SANDBOXED session reaches the daemon
+	// only through the hook bridge, and without it the plan gate would fail
+	// open in every container.
+	conn, token, err := dialDaemon(home, deadline)
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrNoDaemon, err)
 	}
 	defer conn.Close()
+	req.HookToken = token
+	raw, err := json.Marshal(req)
+	if err != nil {
+		return err
+	}
 	_ = conn.SetDeadline(deadline)
 	if _, err := conn.Write(append(raw, '\n')); err != nil {
 		return fmt.Errorf("%w: %v", ErrNoDaemon, err)

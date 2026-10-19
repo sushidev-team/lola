@@ -29,8 +29,11 @@ import (
 // Loopback TCP is reachable by every local process, unlike the 0600 socket, so
 // the bridge is deliberately NARROW, and each rail is load-bearing:
 //
-//   - Two commands only: hookEvent and agentReport — exactly what `lola hook`
-//     and `lola report` send. Everything else (kill, answer, config…) is
+//   - Four commands only: hookEvent and agentReport — exactly what `lola hook`
+//     and `lola report` send — plus planGate and planSubmit, the plan gate's
+//     PreToolUse check and `lola plan-gate submit` (without them the gate
+//     would fail open in every container). All four act only on the session
+//     the token names. Everything else (kill, answer, planDecide, config…) is
 //     refused before it reaches handle.
 //   - Every request carries hook.TokenFor(secret, req.Session); a token names
 //     ONE session, so a container can speak only for itself, and a process
@@ -44,7 +47,7 @@ import (
 const hookBridgeConnTimeout = 10 * time.Second
 
 // hookBridgeCmds are the only commands the bridge forwards.
-var hookBridgeCmds = map[string]bool{"hookEvent": true, "agentReport": true}
+var hookBridgeCmds = map[string]bool{"hookEvent": true, "agentReport": true, "planGate": true, "planSubmit": true}
 
 // hookBridge is the bridge listener state, guarded by its own mutex (never
 // held together with d.mu).
@@ -142,7 +145,7 @@ func (d *Daemon) serveHookBridge(ctx context.Context, ln net.Listener) {
 }
 
 // handleBridgeConn is handleConn with the bridge's rails: a connection
-// deadline, the two-command allowlist and the per-session token.
+// deadline, the command allowlist and the per-session token.
 func (d *Daemon) handleBridgeConn(ctx context.Context, conn net.Conn) {
 	defer conn.Close()
 	_ = conn.SetDeadline(time.Now().Add(hookBridgeConnTimeout))

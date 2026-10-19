@@ -1292,11 +1292,15 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   - Hooks cannot use the unix socket (a host unix socket does not survive a
     bind mount into Docker Desktop's / OrbStack's VM — measured, ECONNREFUSED),
     so `lola hook`/`lola report` dial `LOLA_HOOK_ADDR` when set. The bridge
-    (`internal/daemon/hookbridge.go`) admits ONLY `hookEvent`/`agentReport`, and
-    only with `hook.TokenFor(secret, req.Session)` — an HMAC under
-    `~/.lola/state/hook-secret`, so it is stateless across restarts and a token
-    speaks for exactly one session. Never widen the allowlist: loopback TCP is
-    reachable by every local process, unlike the 0600 socket.
+    (`internal/daemon/hookbridge.go`) admits ONLY `hookEvent`/`agentReport`
+    plus the plan gate's two in-pane commands `planGate` (read-only) /
+    `planSubmit` (own gate planning → submitted) — without those the gate fails
+    open in every container — and only with `hook.TokenFor(secret,
+    req.Session)` — an HMAC under `~/.lola/state/hook-secret`, so it is
+    stateless across restarts and a token speaks for exactly one session. Never
+    widen the allowlist beyond commands that act only on the token's own
+    session from inside its pane (never `planDecide`, `answer`, `kill`…):
+    loopback TCP is reachable by every local process, unlike the 0600 socket.
   - The container outlives its pane (`-it` gets no signal from a killed CLI),
     so `runtime.Kill` runs `docker rm -f <id>` whenever the session RECORDED a
     sandbox or its project has one, and every launch line starts with the same
@@ -1499,7 +1503,9 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   `PreToolUse` hook on `Edit|Write|MultiEdit|NotebookEdit` → `lola hook
   pre_tool_use` → `cmd=planGate`, which denies while `Blocks()`. It is wired into
   EVERY claude session (an ungated one answers "allowed" in one round trip) and
-  fails OPEN on an unreachable daemon, like every hook. Bash writes and
+  fails OPEN on an unreachable daemon, like every hook. A sandboxed session
+  reaches it through the hook bridge, and stack sessions (`runtime/stack.go`)
+  are gated and briefed like single-repo ones. Bash writes and
   codex/opencode are covered by the briefing only — documented, not hidden.
   Verdicts reach the agent as queued notices (never typed mid-turn); approving
   from `planning` waives the gate. Both project forms expose it as an
