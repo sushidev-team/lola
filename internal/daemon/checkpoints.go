@@ -48,6 +48,7 @@ import (
 type checkpointStore interface {
 	Record(ctx context.Context, dir, session, label string) (checkpoint.Checkpoint, bool, error)
 	List(ctx context.Context, dir, session string) ([]checkpoint.Checkpoint, error)
+	Description(ctx context.Context, dir string, cp, prev checkpoint.Checkpoint) string
 	Get(ctx context.Context, dir, session string, seq int) (cp, prev checkpoint.Checkpoint, err error)
 	Restore(ctx context.Context, dir, session string, seq int) (checkpoint.Checkpoint, error)
 }
@@ -236,9 +237,19 @@ func (d *Daemon) handleCheckpoints(ctx context.Context, id string) (protocol.Che
 		Checkpoints: make([]protocol.CheckpointInfo, 0, len(list)),
 		Restorable:  !midTurn(s),
 	}
-	for _, c := range list {
+	for i, c := range list {
+		label := c.Label
+		if strings.HasPrefix(label, ckptLabelTurn) {
+			var prev checkpoint.Checkpoint
+			if i > 0 {
+				prev = list[i-1]
+			}
+			if description := d.checkpoints.Description(cctx, s.Worktree, c, prev); description != "" {
+				label += " · " + description
+			}
+		}
 		out.Checkpoints = append(out.Checkpoints, protocol.CheckpointInfo{
-			Seq: c.Seq, SHA: c.SHA, Head: c.Head, Label: c.Label, Created: c.Created,
+			Seq: c.Seq, SHA: c.SHA, Head: c.Head, Label: label, Created: c.Created,
 		})
 	}
 	return out, nil

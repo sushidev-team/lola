@@ -60,6 +60,10 @@ func (f *fakeCheckpoints) List(context.Context, string, string) ([]checkpoint.Ch
 	return append([]checkpoint.Checkpoint(nil), f.list...), nil
 }
 
+func (f *fakeCheckpoints) Description(context.Context, string, checkpoint.Checkpoint, checkpoint.Checkpoint) string {
+	return "Update checkpoint labels"
+}
+
 func (f *fakeCheckpoints) Get(_ context.Context, _, _ string, seq int) (cp, prev checkpoint.Checkpoint, err error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -168,6 +172,29 @@ func TestRecordSkipsShellsAndMissingWorktrees(t *testing.T) {
 	d.recordCheckpoint(context.Background(), gone.ID, "stop")
 	if len(ck.list) != 0 {
 		t.Errorf("recorded %d checkpoints for a shell / a missing worktree", len(ck.list))
+	}
+}
+
+func TestCheckpointListDescribesTurnsWithoutChangingStoredLabels(t *testing.T) {
+	d := newTestDaemon(t, conflictConfig(), &linear.Fake{}, &fakeNative{})
+	ck := &fakeCheckpoints{list: []checkpoint.Checkpoint{
+		{Seq: 1, Label: "start"},
+		{Seq: 2, Label: "turn 1"},
+		{Seq: 3, Label: "before restore to #1"},
+	}}
+	d.checkpoints = ck
+	s := ckptSess(t, d, "CK-labels", state.AgentIdle)
+	data, err := d.handleCheckpoints(context.Background(), s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, want := range []string{"start", "turn 1 · Update checkpoint labels", "before restore to #1"} {
+		if got := data.Checkpoints[i].Label; got != want {
+			t.Errorf("label %d = %q, want %q", i, got, want)
+		}
+	}
+	if ck.list[1].Label != "turn 1" {
+		t.Fatal("display description changed the stored label")
 	}
 }
 

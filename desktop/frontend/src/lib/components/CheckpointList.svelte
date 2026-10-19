@@ -65,8 +65,8 @@
         <button
           type="button"
           aria-pressed={sel}
-          title="show what this turn changed"
-          class="grid w-full grid-cols-[auto_1fr_auto] items-start gap-x-2.5 rounded-md px-2 py-1.5 text-left transition-colors {sel
+          title={c.label}
+          class="grid w-full grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-x-2.5 rounded-md px-2 py-1.5 text-left transition-colors {sel
             ? 'bg-sel'
             : 'hover:bg-sel/50'}"
           onclick={() => open(c)}
@@ -81,7 +81,7 @@
             ></span>
           </span>
           <span class="min-w-0">
-            <span class="block truncate {sel ? 'font-medium text-ink' : isMarker(c) ? 'text-faint' : 'text-ink/85'}"
+            <span class="block break-words {sel ? 'font-medium text-ink' : isMarker(c) ? 'text-faint' : 'text-ink/85'}"
               >{c.label}</span
             >
             <span class="num block text-sm text-faint">#{c.seq} · <span class="font-mono">{c.sha.slice(0, 7)}</span></span>

@@ -77,6 +77,20 @@ describe("checkpoints sidebar + diff pane", () => {
     await waitFor(() => expect(CheckpointDiff).toHaveBeenLastCalledWith("s1", 1));
   });
 
+  it("shows a turn description beside its count and opens the same checkpoint", async () => {
+    const label = "turn 1 · Fix checkpoint descriptions";
+    Checkpoints.mockResolvedValue({
+      ...LIST,
+      checkpoints: [LIST.checkpoints[0], { ...LIST.checkpoints[1], label }],
+    });
+    await renderBoth();
+    const row = await screen.findByRole("button", { name: /turn 1 · Fix checkpoint descriptions/ });
+    expect(row).toHaveAttribute("title", label);
+    await fireEvent.click(row);
+    expect(terms.activeTab("s1")).toBe(CHECKPOINTS);
+    await waitFor(() => expect(CheckpointDiff).toHaveBeenLastCalledWith("s1", 2));
+  });
+
   it("restores only after the confirmation, naming the checkpoint", async () => {
     await renderBoth();
     await screen.findByText("new");

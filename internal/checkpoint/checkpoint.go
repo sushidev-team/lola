@@ -268,6 +268,38 @@ func (g Git) Get(ctx context.Context, dir, session string, seq int) (cp, prev Ch
 	return Checkpoint{}, Checkpoint{}, fmt.Errorf("%w #%d", ErrNotFound, seq)
 }
 
+// Description derives display text from the recorded snapshots, never the live
+// worktree. It also works for checkpoints recorded before descriptions existed.
+// A new commit's subject is the most useful summary; uncommitted turns fall back
+// to the paths they changed. Failure leaves the original label usable.
+func (g Git) Description(ctx context.Context, dir string, cp, prev Checkpoint) string {
+	if prev.Head != "" && prev.Head != cp.Head {
+		subject, err := g.exec(ctx, dir, nil, "log", "-1", "--format=%s", prev.Head+".."+cp.Head, "--")
+		if err == nil && subject != "" {
+			return cleanLabel(subject)
+		}
+	}
+	base := prev.SHA
+	if base == "" {
+		base = cp.Head
+	}
+	paths, err := g.exec(ctx, dir, nil, "diff", "--name-only", "-z", "--no-renames", base, cp.SHA, "--")
+	if err != nil {
+		return ""
+	}
+	if paths == "" {
+		return "No file changes"
+	}
+	names := strings.Split(strings.TrimSuffix(paths, "\x00"), "\x00")
+	description := "Changes in " + names[0]
+	if len(names) == 2 {
+		description += " and 1 other file"
+	} else if len(names) > 2 {
+		description += fmt.Sprintf(" and %d other files", len(names)-1)
+	}
+	return cleanLabel(description)
+}
+
 // Restore makes the worktree at dir match session's checkpoint seq. It first
 // records the CURRENT state (labelled "before restore to #<seq>") so the restore
 // is itself undoable, and returns that safety checkpoint.

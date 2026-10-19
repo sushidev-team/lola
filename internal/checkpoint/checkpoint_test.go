@@ -69,6 +69,48 @@ func read(t *testing.T, dir, name string) string {
 	return string(b)
 }
 
+func TestDescriptionUsesRecordedTurnChanges(t *testing.T) {
+	dir, git := repo(t)
+	g := Git{}
+	ctx := context.Background()
+	record := func(label string) Checkpoint {
+		t.Helper()
+		cp, _, err := g.Record(ctx, dir, "s1", label)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return cp
+	}
+	start := record("start")
+	write(t, dir, "a.txt", "updated\n")
+	first := record("turn 1")
+	write(t, dir, "unrelated.txt", "later work\n")
+	if got := g.Description(ctx, dir, first, start); got != "Changes in a.txt" {
+		t.Fatalf("uncommitted turn = %q", got)
+	}
+	git("add", "a.txt")
+	git("commit", "-q", "-m", "Fix checkpoint descriptions")
+	second := record("turn 2")
+	if got := g.Description(ctx, dir, second, first); got != "Fix checkpoint descriptions" {
+		t.Fatalf("committed turn = %q", got)
+	}
+	write(t, dir, "a.txt", "another change\n")
+	write(t, dir, "b.txt", "another change\n")
+	third := record("turn 3")
+	if got := g.Description(ctx, dir, third, second); got != "Changes in a.txt and 1 other file" {
+		t.Fatalf("next turn reused an older commit subject: %q", got)
+	}
+	if got := g.Description(ctx, dir, first, Checkpoint{}); got != "Changes in a.txt" {
+		t.Fatalf("oldest retained turn = %q", got)
+	}
+	if got := g.Description(ctx, dir, start, Checkpoint{}); got != "No file changes" {
+		t.Fatalf("unchanged files = %q", got)
+	}
+	if got := g.Description(ctx, dir, Checkpoint{SHA: "missing", Head: "missing"}, Checkpoint{}); got != "" {
+		t.Fatalf("unavailable snapshot = %q", got)
+	}
+}
+
 // TestSnapshotSeesARacyEdit pins the racy-git case behind a flaky checkpoint:
 // a same-size edit whose stat matches the index entry, made in the same second
 // the index was written. git re-hashes such an entry only because the index's
