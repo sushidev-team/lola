@@ -171,6 +171,29 @@ type Project struct {
 	// silently apply to every project.
 	DailyBudgetTokens int64 `toml:"daily_budget_tokens,omitempty"`
 
+	// Sandbox runs this project's coding agents inside a container instead of
+	// on the host: "" / "none" (the default) or "docker". SandboxImage
+	// overrides [sandbox].image and SandboxPorts publishes container ports on
+	// 127.0.0.1 ("3000" or "<host>:<container>"). See sandbox.go. Not
+	// [defaults]-inheritable: the image must carry THIS project's toolchain.
+	Sandbox      string   `toml:"sandbox,omitempty"`
+	SandboxImage string   `toml:"sandbox_image,omitempty"`
+	SandboxPorts []string `toml:"sandbox_ports,omitempty"`
+	// Kind is "" for an ordinary repository project or "stack" for a STACK:
+	// a project with no checkout of its own that owns the Linear side (filter,
+	// write-back, agent, sandbox, budget) for several member repositories. See
+	// stack.go.
+	Kind string `toml:"kind,omitempty"`
+	// Stack makes this project a MEMBER ("app") of the named stack: it is no
+	// longer polled itself, and a session of the stack checks it out when the
+	// issue's labels select it (Labels).
+	Stack string `toml:"stack,omitempty"`
+	// Labels decide which of the stack's issues need this member: one of them
+	// on the issue selects it. Each entry is a Linear label UUID, its name, or
+	// "group/name" for a label inside a label group, all case-insensitive.
+	// Empty = every issue of the stack gets this member. Only read for a member.
+	Labels []string `toml:"labels,omitempty"`
+
 	// --- Linear polling (optional) -----------------------------------------
 	// The project polls Linear only when TeamID is set; Enabled toggles it
 	// on/off (pause). TeamID also binds the on-demand ticket picker, so a
@@ -272,7 +295,10 @@ func ParsePortRange(s string) (lo, hi int, err error) {
 
 // Polls reports whether this project is configured to poll Linear: it needs a
 // team to filter by. Enabled is the separate on/off toggle checked at dispatch.
-func (p *Project) Polls() bool { return p.TeamID != "" }
+//
+// A stack member never polls: its stack owns the Linear side, so a team_id it
+// kept from before it joined (hidden, restored when it leaves) is ignored.
+func (p *Project) Polls() bool { return p.TeamID != "" && p.Stack == "" }
 
 // Defaults is the [defaults] table. PollInterval is a plain time.Duration in
 // memory; on disk it is a string like "60s" (see fileDefaults/Duration).
@@ -348,6 +374,7 @@ type Config struct {
 	Remote      RemoteConfig      `toml:"remote"`
 	Budget      BudgetConfig      `toml:"budget"`
 	Load        LoadConfig        `toml:"load"`
+	Sandbox     SandboxConfig     `toml:"sandbox"`
 
 	// ReviewProviders is the NEW canonical global review CATALOG (resolved from
 	// [[review.provider]]). Empty when the file uses the legacy [review]/
@@ -462,6 +489,7 @@ type fileConfig struct {
 	Remote      *fileRemoteConfig      `toml:"remote,omitempty"`
 	Budget      *BudgetConfig          `toml:"budget,omitempty"`
 	Load        *LoadConfig            `toml:"load,omitempty"`
+	Sandbox     *SandboxConfig         `toml:"sandbox,omitempty"`
 }
 
 // fileProject mirrors Project on disk. Its polling fields are inline; the
@@ -495,6 +523,13 @@ type fileProject struct {
 	PortsPerSession   int      `toml:"ports_per_session,omitempty"`
 	PreRemove         []string `toml:"pre_remove,omitempty"`
 	DailyBudgetTokens int64    `toml:"daily_budget_tokens,omitempty"`
+	// Sandbox and stack keys are PLAIN too: not inheritable.
+	Sandbox      string   `toml:"sandbox,omitempty"`
+	SandboxImage string   `toml:"sandbox_image,omitempty"`
+	SandboxPorts []string `toml:"sandbox_ports,omitempty"`
+	Kind         string   `toml:"kind,omitempty"`
+	Stack        string   `toml:"stack,omitempty"`
+	Labels       []string `toml:"labels,omitempty"`
 
 	Enabled        bool      `toml:"enabled,omitempty"`
 	TeamID         string    `toml:"team_id,omitempty"`
@@ -658,6 +693,12 @@ func projectFromFile(fp fileProject) Project {
 		PortsPerSession:   fp.PortsPerSession,
 		PreRemove:         fp.PreRemove,
 		DailyBudgetTokens: fp.DailyBudgetTokens,
+		Sandbox:           fp.Sandbox,
+		SandboxImage:      fp.SandboxImage,
+		SandboxPorts:      fp.SandboxPorts,
+		Kind:              fp.Kind,
+		Stack:             fp.Stack,
+		Labels:            fp.Labels,
 		Enabled:           fp.Enabled,
 		TeamID:            fp.TeamID,
 		ProjectID:         fp.ProjectID,
@@ -725,6 +766,12 @@ func projectToFile(p Project) fileProject {
 		PortsPerSession:   p.PortsPerSession,
 		PreRemove:         p.PreRemove,
 		DailyBudgetTokens: p.DailyBudgetTokens,
+		Sandbox:           p.Sandbox,
+		SandboxImage:      p.SandboxImage,
+		SandboxPorts:      p.SandboxPorts,
+		Kind:              p.Kind,
+		Stack:             p.Stack,
+		Labels:            p.Labels,
 		Enabled:           p.Enabled,
 		TeamID:            p.TeamID,
 		ProjectID:         p.ProjectID,
@@ -857,6 +904,7 @@ func (fc *fileConfig) config() *Config {
 		Remote:          resolveRemote(fc.Remote),
 		Budget:          tableOf(fc.Budget),
 		Load:            tableOf(fc.Load),
+		Sandbox:         tableOf(fc.Sandbox),
 	}
 }
 
@@ -913,6 +961,7 @@ func (c *Config) file() *fileConfig {
 		Remote:      remoteFile(c.Remote),
 		Budget:      nonZero(c.Budget),
 		Load:        nonZero(c.Load),
+		Sandbox:     sandboxTable(c.Sandbox),
 	}
 }
 

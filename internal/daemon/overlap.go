@@ -86,6 +86,10 @@ func (d *Daemon) reconcileOverlaps(ctx context.Context) {
 		}
 		files := make([]map[string]bool, len(group))
 		for i, s := range group {
+			if s.Stack {
+				files[i] = d.stackChangedFiles(ctx, s)
+				continue
+			}
 			files[i] = d.sessionChangedFiles(ctx, s, baseByProject[project])
 		}
 		for i := range group {

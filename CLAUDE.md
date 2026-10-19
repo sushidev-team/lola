@@ -325,6 +325,13 @@ each of which owns exactly one external tool or concern behind an **exec seam**
 - `bestof.go` — best-of-N: `cmd=bestOf` (start), `cmd=bestOfCompare`
   (read-only), `cmd=bestOfPick`, plus `spawnIssue`, the one spawn path dispatch
   uses for both a single issue and a group. See the invariant below.
+- `hookbridge.go` — the SANDBOX hook bridge: a token-authenticated loopback
+  TCP listener for containerized agents' hooks. See the sandbox invariant.
+- `apps.go` — STACK sessions' per-app PR observation (`observeApps` /
+  `applyApps` → `Session.Reaggregate`), their wire shape, the per-app dev plan
+  (`devPlan`) and `withLanes`; `stackgit.go` — the local-git views of a stack
+  session (diff, overlap files, all-or-nothing checkpoints). See the stack
+  invariant below.
 - `reconcile.go` — ~5m pass reverting orphaned issues (labeled-sent but no
   counted session and no open PR after `orphanTimeout`).
 - `writeback.go` — P4 Linear state transitions + comments.
@@ -1237,6 +1244,110 @@ each of which owns exactly one external tool or concern behind an **exec seam**
     `origin/<base>` lookup), lays the checkpoint's tree over it as uncommitted
     work, and inherits the parent's `ContextKey`. It is a manual-kind session:
     no `Issue`, so it never counts against the issue in dispatch/reconcile.
+- **A sandboxed agent's isolation is the MOUNT LIST, and the pane is unchanged.**
+  `[[project]].sandbox = "docker"` (`internal/runtime/sandbox.go`) wraps the
+  agent's ordinary POSIX launch line in `docker run -it` inside the same tmux
+  pane in `launchLine`, so spawn, revive, switch-agent and fork are all
+  covered and every pane reader is untouched. The project is passed BY NAME:
+  a session ID does not identify its project (`lola-web-eng-42` is project
+  `web` + ENG-42 and project `web-eng` + 42), and a wrong guess launched a
+  sandboxed agent on the host.
+  Rules that hold it together:
+  - The mounts ARE the sandbox: the worktree, each repo's git common dir
+    (needed to commit) with its `config` and `hooks` re-mounted READ-ONLY
+    after it, claude's transcript slug dir, the Linux lola (ro) and symlink
+    targets (ro). A writable `config`/`hooks` would let the agent plant
+    `core.hooksPath` or a hook that the HOST runs on the next commit in the
+    main checkout — never drop those overlays. Every mount source comes from
+    something the agent cannot write: git stores are resolved from the MAIN
+    checkouts (not the worktree's rewritable `.git` pointer), and the context
+    folder is mounted only when `.lola/context` still points inside
+    `~/.lola/context/<project>/`.
+  - **HOST git never follows a sandboxed worktree's own metadata.** The agent
+    can rewrite the `.git` pointer and the admin dir (inside the rw store), and
+    plain `git -C <worktree>` on the host would then honour the agent's config
+    — `core.fsmonitor`, an attacker-NAMED `filter.*.clean` — i.e. run its
+    commands on the host through lola's own checkpoints, diffs and dirty
+    checks. So `internal/gitguard` PINS each sandboxed worktree's admin dir +
+    store when the runtime creates it (before post_create, the baseline or the
+    agent), records it on `Session.GitPin`/`App.GitPin`, and every host
+    git exec (`checkpoint`, `gitdiff`, `worktree`, `reviewagent`) goes through
+    `gitguard.Apply` → `GIT_DIR`/`GIT_COMMON_DIR`/`GIT_WORK_TREE`. The admin
+    dir's `config.worktree` is overlaid read-only in the container; a pinned
+    `worktree remove` passes `--force` after its own pinned dirty check (git's
+    internal re-check would follow the admin `commondir`). A sandboxed record
+    WITHOUT a pin is `gitguard.Deny`'d by the daemon's `syncGitPins` — host
+    git on it fails, teardown keeps it. A new host git call on a session
+    worktree must go through `gitguard.Apply`. `TestSandboxContainsTheAgent`
+    (opt-in, `LOLA_SANDBOX_IT=1`) proves the escapes fail against a real engine.
+  - Hooks cannot use the unix socket (a host unix socket does not survive a
+    bind mount into Docker Desktop's / OrbStack's VM — measured, ECONNREFUSED),
+    so `lola hook`/`lola report` dial `LOLA_HOOK_ADDR` when set. The bridge
+    (`internal/daemon/hookbridge.go`) admits ONLY `hookEvent`/`agentReport`, and
+    only with `hook.TokenFor(secret, req.Session)` — an HMAC under
+    `~/.lola/state/hook-secret`, so it is stateless across restarts and a token
+    speaks for exactly one session. Never widen the allowlist: loopback TCP is
+    reachable by every local process, unlike the 0600 socket.
+  - The container outlives its pane (`-it` gets no signal from a killed CLI),
+    so `runtime.Kill` runs `docker rm -f <id>` whenever the session RECORDED a
+    sandbox or its project has one, and every launch line starts with the same
+    `rm -f` so a revive never collides with a straggler.
+  - A sandboxed project's health gate is the docker CLI (`sandboxedBin`), not
+    the agent binary — the agent lives in the image.
+  - `pre_remove` is SKIPPED for a sandboxed session (`Kill`): it is a host
+    shell in a worktree the agent could write, so `artisan`/npm scripts there
+    may be the agent's code. Any new host-side command run inside a sandboxed
+    worktree after the agent started is the same escape.
+- **A STACK session is ONE agent in a FOLDER, and every PR concern runs per
+  APP on a LANE.** A `[[project]]` with `kind = "stack"` has no checkout; its
+  members (`stack = "<name>"`, `labels`) are ordinary projects
+  (internal/config/stack.go). A session is `~/.lola/worktrees/<stack>/<id>/`
+  — not a repository — with one worktree per selected app at
+  `<folder>/<member name>/` (internal/runtime/stack.go). Rules:
+  - WHICH apps is decided once, at spawn (`config.SelectApps`: UUID, name or
+    `group/name` from `Issue.LabelGroups`; no labels = always); dispatch skips
+    an issue that selects none, without a seen entry. Afterwards the folders
+    on disk are the truth: the sandbox mounts `stackPresent`, adoption
+    rebuilds `Apps` with `discoverApps`, and the persisted record wins the
+    adoption merge.
+  - Each app is set up as its OWN project (its symlinks, post_create, env,
+    `.lola/env`, pre_remove) with its own port lease, keyed by its lane ID
+    (`EnvVars.App` → `LeaseKey`; `pruneLeases` maps it back with
+    `session.BaseID`) and its own slug/DB name `<id>-<app>`.
+  - The PR-scoped state (PR, delivery, reaction guards, every per-PR review
+    map, merge-queue guard) lives on each `session.App`. Code that acts on a PR
+    reads it through a LANE VIEW: lane ID `<id>~<app>`, which `Store.Get`
+    resolves to a view whose PR fields are the app's and `Store.Update` folds
+    back — the app's fields into the app, everything else (the idle gate, the
+    agent axis, pending feedback) into the ONE session, because there is one
+    agent and one prompt. That is why reactions, review passes and hand-offs,
+    conflict resolution and the merge queue needed no per-site changes beyond
+    iterating `Lanes()`. Never write a lane field on the session record
+    itself, and never consume a lane gate without the session's `sendGate`
+    (`sendGate`/`ckptLock` map lane IDs to their session).
+  - The session's OWN PR fields are a derived AGGREGATE (`Reaggregate`,
+    `state.AggregateDelivery`): the most urgent app's delivery, that app's PR
+    and repo (`FocusApp`). Write-back, the slot count, the list row and the
+    merged cleanup read it; nothing that acts on a PR may. An app with no PR
+    and no changes (`App.Touched`, observer local git) is not counted, so an
+    untouched app never holds the session open — and one with changes but no
+    PR keeps it from reading merged.
+  - Anything typed to the agent about one app starts with `laneHeader` (which
+    checkout, which PR) — the agent sees several of each.
+  - Teardown (`removeStack`): every app dirty-safe first (pre_remove per app,
+    skipped when sandboxed), an app with NO PR whose branch has commits
+    (`worktree.Ahead`) is kept like a dirty one, any refusal keeps the whole
+    folder, and the folder goes last only if nothing but lola's own files is
+    left in it. The merged cleanup waits for `AppsSettled` (a SUCCESSFUL
+    lookup since the merge per app — a failed lookup is not "no PR").
+  - Local-git views (diff viewer, overlap, checkpoints) run per app and
+    present ONE tree with paths `<app>/<path>` — the agent's own view from its
+    working directory, so diff-feedback anchors need no translation.
+    Checkpoints use `RecordAlways` in every app so #N is the same moment
+    everywhere; a restore checks every app holds #N under the same label and
+    rolls the restored ones back if a later one fails.
+  - Not offered for stacks: best-of (dispatch drops the mix), fork, and every
+    checkout-only launch (`needsCheckout`).
 - **The shared context folder lives OUTSIDE the worktree.**
   `~/.lola/context/<project>/<key>/` is symlinked in as `.lola/context`, so
   `git worktree remove` deletes the link and never the notes. The key is

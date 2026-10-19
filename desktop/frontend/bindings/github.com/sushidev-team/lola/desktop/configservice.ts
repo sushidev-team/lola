@@ -80,6 +80,16 @@ export function ConnectCode(): $CancellablePromise<$models.ConnectCodeDTO> {
 }
 
 /**
+ * CreateStack adds an empty STACK from a free-text label and returns its id.
+ * Unlike AddGroup the id is NOT de-duplicated with a suffix: a stack is a
+ * project, its id prefixes session ids and names its worktree folder, so a
+ * clash is refused and the human picks another name.
+ */
+export function CreateStack(label: string): $CancellablePromise<string> {
+    return $Call.ByID(1612967477, label);
+}
+
+/**
  * GetProject returns the named project's full form state. An empty name is a
  * new project: it starts inheriting everything it can, so a first project picks
  * up whatever shared setup [defaults] already carries.
@@ -290,6 +300,18 @@ export function SetLinearKey(key: string): $CancellablePromise<string> {
  */
 export function SetProjectLayout(dto: $models.ProjectLayoutDTO): $CancellablePromise<void> {
     return $Call.ByID(2494129060, dto);
+}
+
+/**
+ * SetProjectStack moves a project into a stack (stack = "" takes it out). It
+ * touches ONLY Project.Stack: the member's own Linear filter, agent and
+ * write-back keys stay in the file, ignored while it is a member, so leaving
+ * the stack gives them back. Refused: an unknown project or stack, a target
+ * that is not a stack, and a project that is itself a stack (stacks do not
+ * nest).
+ */
+export function SetProjectStack(project: string, stack: string): $CancellablePromise<void> {
+    return $Call.ByID(2341952554, project, stack);
 }
 
 /**

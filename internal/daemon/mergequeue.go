@@ -116,7 +116,9 @@ func (d *Daemon) runMergeQueue(ctx context.Context) {
 		notifier = notify.New(notify.NotifyConfig{})
 	}
 
-	snap := d.sessions.Snapshot()
+	// A stack session queues per app: each lane is its own PR in its own
+	// repository, with its own guard.
+	snap := withLanes(d.sessions.Snapshot())
 	type posture struct {
 		pos  int
 		step string
@@ -136,7 +138,11 @@ func (d *Daemon) runMergeQueue(ctx context.Context) {
 			if repo == "" {
 				continue
 			}
-			byRepo[repo] = append(byRepo[repo], queueEntry{s: s, repo: repo, base: p.base})
+			base := p.base
+			if s.Lane != "" {
+				base = d.laneBase(s)
+			}
+			byRepo[repo] = append(byRepo[repo], queueEntry{s: s, repo: repo, base: base})
 		}
 		for _, entries := range byRepo {
 			sort.SliceStable(entries, func(i, j int) bool { return entries[i].s.PR.Number < entries[j].s.PR.Number })

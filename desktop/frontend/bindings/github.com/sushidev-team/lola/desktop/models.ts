@@ -256,6 +256,19 @@ export interface ProjectFormDTO {
     "env": string[] | null;
 
     /**
+     * Kind is "stack" for a STACK (no checkout of its own: it owns the Linear
+     * side of its members), "" for a repository. Stack names the stack this
+     * project is a MEMBER of ("" = none) and is read-only here: membership is
+     * changed by dragging in the sidebar (SetProjectStack), for the same reason
+     * the group is — a stale form must not move a project nobody dragged.
+     * Labels are a member's issue labels (UUID, name or "group/name"; empty =
+     * every issue); nil from an older client leaves them untouched.
+     */
+    "kind": string;
+    "stack": string;
+    "labels": string[] | null;
+
+    /**
      * Linear polling filter.
      */
     "enabled": boolean;

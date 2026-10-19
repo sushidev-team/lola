@@ -146,7 +146,7 @@ func (c *Config) Validate() error {
 		}
 		projectNames[pr.Name] = true
 
-		if pr.Path == "" {
+		if pr.Path == "" && !pr.IsStack() {
 			errs = append(errs, fmt.Errorf("%s: path is required", id))
 		}
 		if pr.Repo != "" && !repoRe.MatchString(pr.Repo) {
@@ -294,6 +294,8 @@ func (c *Config) Validate() error {
 	errs = append(errs, c.validateProjectReview()...)
 	errs = append(errs, c.validateUI()...)
 	errs = append(errs, c.validateLimits()...)
+	errs = append(errs, c.validateSandbox()...)
+	errs = append(errs, c.validateStacks()...)
 	errs = append(errs, c.validateRemote()...)
 
 	return errors.Join(errs...)

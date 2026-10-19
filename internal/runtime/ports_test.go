@@ -235,3 +235,27 @@ func TestKillForcesRemovalWhenTheHookDirtiedACleanWorktree(t *testing.T) {
 		t.Errorf("the hook's own output must not keep the worktree:\n%s", loggedArgs(t, f.gitLog))
 	}
 }
+
+// pre_remove is a host shell in a worktree a sandboxed agent could write, so a
+// sandboxed session's teardown must never run it.
+func TestKillSkipsPreRemoveForASandboxedSession(t *testing.T) {
+	f := newFixture(t, "", "")
+	out := filepath.Join(t.TempDir(), "hook.out")
+	p := f.p
+	p.PreRemove = []string{"touch " + out}
+	p.Sandbox = config.SandboxDocker
+	f.n.Cfg = &config.Config{Projects: []config.Project{p}}
+	f.n.RemoveContainer = func(context.Context, string) error { return nil }
+
+	s := killFixtureSession()
+	s.Sandbox = config.SandboxDocker
+	if err := os.MkdirAll(filepath.Join(f.root, "nori", s.ID), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.n.Kill(context.Background(), s, true, false); err != nil {
+		t.Fatalf("Kill: %v", err)
+	}
+	if _, err := os.Stat(out); err == nil {
+		t.Error("pre_remove ran on the host for a sandboxed session")
+	}
+}

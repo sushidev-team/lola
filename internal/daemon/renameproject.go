@@ -96,7 +96,9 @@ func (d *Daemon) handleRenameProject(ctx context.Context, raw json.RawMessage) (
 	// authority (the same snapshot Budget counts), not a client's stale view.
 	var blockers []string
 	for _, s := range d.sessions.Snapshot() {
-		if s.Project == from {
+		// A stack member's name is also a folder inside every session of its
+		// stack: such a session blocks the rename like one of its own.
+		if s.Project == from || (s.Stack && s.AppIndex(from) >= 0) {
 			blockers = append(blockers, s.ID)
 		}
 	}
@@ -124,6 +126,12 @@ func (d *Daemon) handleRenameProject(ctx context.Context, raw json.RawMessage) (
 
 	// --- past every refusal: start writing -------------------------------
 	nc.Projects[idx].Name = to
+	// A stack's members name it: they follow the rename.
+	for i := range nc.Projects {
+		if nc.Projects[i].Stack == from {
+			nc.Projects[i].Stack = to
+		}
+	}
 	if err := nc.Validate(); err != nil {
 		return protocol.RenameProjectData{}, fmt.Errorf("renameProject: config invalid after rename: %w", err)
 	}

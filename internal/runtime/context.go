@@ -193,6 +193,9 @@ type ForkSpec struct {
 // it as uncommitted work (exactly as the parent had them), then the usual agent
 // launch. The parent is not touched. Session Kind=manual: lola owns the branch.
 func (n *Native) ForkAgent(ctx context.Context, p config.Project, f ForkSpec) (session.Session, error) {
+	if err := needsCheckout(p, "ForkAgent"); err != nil {
+		return session.Session{}, err
+	}
 	if f.SessionID == "" || f.Branch == "" || f.Head == "" || f.Tree == "" {
 		return session.Session{}, errors.New("runtime: fork: session id, branch and checkpoint required")
 	}
@@ -217,7 +220,8 @@ func (n *Native) ForkAgent(ctx context.Context, p config.Project, f ForkSpec) (s
 	// The fork's worktree is dirty by construction (it carries the checkpoint's
 	// uncommitted work), so a failed launch keeps it for inspection rather than
 	// discarding the copy — finishAgentLaunch's rollback is force=false.
-	if err := n.finishAgentLaunch(ctx, p, f.SessionID, dir, f.Branch, kind, true, key, f.Prompt); err != nil {
+	pin, err := n.finishAgentLaunch(ctx, p, f.SessionID, dir, f.Branch, kind, true, key, f.Prompt)
+	if err != nil {
 		return session.Session{}, err
 	}
 	title := f.Title
@@ -236,6 +240,8 @@ func (n *Native) ForkAgent(ctx context.Context, p config.Project, f ForkSpec) (s
 		TmuxName:   f.SessionID,
 		Agent:      string(kind),
 		ContextKey: key,
+		Sandbox:    n.SandboxFor(p.Name),
+		GitPin:     pin,
 	}, state.AgentStarting), nil
 }
 

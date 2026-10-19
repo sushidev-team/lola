@@ -236,6 +236,7 @@ func prBadge(si protocol.SessionInfo) string {
 	if si.PRNumber > 0 {
 		out = fmt.Sprintf("#%d", si.PRNumber)
 	}
+	out = focusAppPrefix(si) + out
 	_, d := axesOf(si)
 	if g := deliveryGlyph(d); g != "" {
 		out += " " + g
@@ -265,7 +266,7 @@ func prDetailBlock(si protocol.SessionInfo) string {
 	if si.PRNumber > 0 {
 		num = fmt.Sprintf("#%d", si.PRNumber)
 	}
-	seg := []string{"PR: " + num}
+	seg := []string{"PR: " + focusAppPrefix(si) + num}
 	if si.Checks != "" {
 		seg = append(seg, "checks: "+si.Checks)
 	}
@@ -1397,6 +1398,12 @@ func (m *rootModel) sessionDetail() string {
 		b.WriteString(statusOrange.Render("⚠ PR facts stale — gh has been failing") + "\n")
 	}
 	fmt.Fprintf(&b, "review:   %s\n", dash(sel.Review))
+	for _, line := range appLines(*sel) {
+		b.WriteString(line + "\n")
+	}
+	if sel.Sandbox != "" {
+		fmt.Fprintf(&b, "sandbox:  %s\n", faintText.Render(sel.Sandbox+" — the agent runs in a container"))
+	}
 	if sel.Reacting != "" {
 		fmt.Fprintf(&b, "reacting: %s\n", reactingStyle(sel.Reacting).Render(sel.Reacting))
 	}
@@ -1608,4 +1615,73 @@ func portsDetailLine(sel protocol.SessionInfo) string {
 		parts[i] = strconv.Itoa(p)
 	}
 	return fmt.Sprintf("ports:    %s", strings.Join(parts, " · "))
+}
+
+// appLines renders a stack session's apps — one line per member repository it
+// checked out: the app's name (and label), then its own PR chip, "changes, no
+// PR" for local work not yet pushed into a PR, or a faint "—" for an app the
+// agent has not touched; its port lease trails when it has one.
+func appLines(s protocol.SessionInfo) []string {
+	if !s.Stack {
+		return nil
+	}
+	var out []string
+	for _, a := range s.Apps {
+		name := a.Name
+		if a.Label != "" && a.Label != a.Name {
+			name += " (" + a.Label + ")"
+		}
+		var pr string
+		switch {
+		case a.Number > 0 || a.URL != "":
+			pr = appPRBadge(a)
+		case a.Touched:
+			pr = warnText.Render("changes, no PR")
+		default:
+			pr = faintText.Render("—")
+		}
+		line := fmt.Sprintf("app:      %s  %s", name, pr)
+		if len(a.Ports) > 0 {
+			parts := make([]string, len(a.Ports))
+			for i, p := range a.Ports {
+				parts[i] = strconv.Itoa(p)
+			}
+			line += faintText.Render("  ports " + strings.Join(parts, " · "))
+		}
+		out = append(out, line)
+	}
+	return out
+}
+
+// appPRBadge is prBadge for one app of a stack session: the same glyphs, read
+// off the app's own PR facts and delivery axis.
+func appPRBadge(a protocol.SessionApp) string {
+	out := "PR"
+	if a.Number > 0 {
+		out = fmt.Sprintf("#%d", a.Number)
+	}
+	d := state.DeliveryState(a.Delivery)
+	if g := deliveryGlyph(d); g != "" {
+		out += " " + g
+	}
+	if d == state.DeliveryMerged || d == state.DeliveryClosed {
+		return out
+	}
+	if g := checksGlyph(a.Checks); g != "" {
+		out += " " + g
+	}
+	if r := reviewGlyph(a.Review); r != "" {
+		out += " " + r
+	}
+	return out
+}
+
+// focusAppPrefix names the app a stack session's own PR facts describe
+// (FocusApp, the one whose PR needs attention most), as "web ", so the row's
+// PR chip says WHICH of several PRs it is. "" for a single-repo session.
+func focusAppPrefix(si protocol.SessionInfo) string {
+	if !si.Stack || si.FocusApp == "" {
+		return ""
+	}
+	return si.FocusApp + " "
 }

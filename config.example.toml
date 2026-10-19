@@ -487,6 +487,20 @@ endpoint = "https://api.linear.app/graphql"
 # min_free_memory_percent = 10    # free memory as the OS reports it; 0 = off
 
 # ---------------------------------------------------------------------------
+# [sandbox] — OPTIONAL container sandbox. A project opts in with
+# sandbox = "docker"; its agent then runs in a container that can write only
+# its worktree (+ the git object store a commit needs). Hooks reach the daemon
+# over a token-authenticated loopback port (hook_port), so the container runs a
+# LINUX lola: build one with `make build-linux`.
+# ---------------------------------------------------------------------------
+# [sandbox]
+# docker   = "docker"                                     # the docker CLI
+# image    = "ghcr.io/acme/agent-node:22"                 # sh + git + the agent on PATH
+# lola_bin = "/Users/me/src/lola/dist/lola-linux-arm64"   # required when sandboxing
+# hook_port = 7718
+# pass_env = ["CLAUDE_CODE_OAUTH_TOKEN", "GH_TOKEN"]      # names only; values from the daemon env
+
+# ---------------------------------------------------------------------------
 # [ui] — OPTIONAL appearance. Presentation only: nothing the daemon does reads
 # this, so omitting the whole section is zero behavior change. The theme sets
 # lola-desktop's app chrome, its terminal colors and the ANSI palette used to
@@ -662,6 +676,11 @@ dev_commands = [
 # pre_remove = ['dropdb --if-exists "$LOLA_DB_NAME"']
 # Daily limit on THIS project's weighted tokens (see [budget]); 0 = none.
 # daily_budget_tokens = 50_000_000
+# Run this project's agents in a container that can write only their worktree
+# (see [sandbox]). "none" (default) | "docker".
+# sandbox = "docker"
+# sandbox_image = "ghcr.io/acme/agent-php:8.4"   # overrides [sandbox].image
+# sandbox_ports = ["8000", "5173:5173"]          # published on 127.0.0.1
 # Files symlinked from the main checkout into each worktree.
 # CAVEAT: symlinking .env means every worktree talks to the SAME database
 # (and caches, queues, ...) as the main checkout — concurrent sessions can
@@ -740,6 +759,29 @@ on_sent_set_label = "label_sent0000-1111-2222-3333-444455556666"
 # REDIS_QUEUE = "{{{.Session}}}"   # → {lola-nori-app-nor-366}
 # DB_DATABASE = "{{.DBName}}"       # pair with post_create = ['createdb "$LOLA_DB_NAME"']
 # APP_PORT = "{{.Port}}"            # needs port_range
+
+# STACKS: several repositories that ship together, one Linear issue stream.
+# A stack is a project with kind = "stack" and no path; it owns the Linear
+# filter, write-back, agent, sandbox and budget. Its members are ordinary
+# projects with stack = "<name>" and the labels that select them. A session of
+# the stack is a folder with one worktree per selected app; the agent starts
+# in it. See README "Stacks".
+#
+# [[project]]
+# name = "nori"
+# kind = "stack"
+# team_id = "…"
+# match_labels = ["<apps/app>", "<apps/website>"]
+# match_mode = "any"
+#
+# [[project]]
+# name = "nori-website"
+# stack = "nori"
+# labels = ["apps/website"]       # UUID, name or "group/name"; omit = every issue
+# path = "/Users/me/src/nori-website"
+# repo = "sushidev-team/nori-website"
+# default_branch = "develop"
+# dev_commands = ["npm run dev"]
 
 # ---------------------------------------------------------------------------
 # Poll 4: Linear WRITE-BACK with state-based dedup (P4). Instead of flipping

@@ -36,6 +36,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/sushidev-team/lola/internal/gitguard"
 )
 
 // RefPrefix is the ref namespace every checkpoint lives under.
@@ -177,6 +179,20 @@ func (g Git) Snapshot(ctx context.Context, dir string) (tree, head string, err e
 // HEAD) nothing is written and that checkpoint is returned with recorded=false:
 // a turn that only talked costs no ref.
 func (g Git) Record(ctx context.Context, dir, session, label string) (cp Checkpoint, recorded bool, err error) {
+	return g.record(ctx, dir, session, label, false)
+}
+
+// RecordAlways is Record without the unchanged-state skip: it writes a new
+// checkpoint every call. A STACK session records one per app per turn with
+// it, so every app's checkpoint #N is the same moment and one number names a
+// restore point across all of them — an app the turn did not touch still
+// gets its (identical) snapshot.
+func (g Git) RecordAlways(ctx context.Context, dir, session, label string) (Checkpoint, error) {
+	cp, _, err := g.record(ctx, dir, session, label, true)
+	return cp, err
+}
+
+func (g Git) record(ctx context.Context, dir, session, label string, always bool) (cp Checkpoint, recorded bool, err error) {
 	if err := validSession(session); err != nil {
 		return Checkpoint{}, false, err
 	}
@@ -191,7 +207,7 @@ func (g Git) Record(ctx context.Context, dir, session, label string) (cp Checkpo
 	seq := 1
 	if n := len(list); n > 0 {
 		last := list[n-1]
-		if last.Tree == tree && last.Head == head {
+		if !always && last.Tree == tree && last.Head == head {
 			return last, false, nil
 		}
 		seq = last.Seq + 1
@@ -446,6 +462,7 @@ func runGit(ctx context.Context, bin, dir string, env []string, args ...string) 
 	if len(env) > 0 {
 		cmd.Env = append(os.Environ(), env...)
 	}
+	gitguard.Apply(cmd) // a sandboxed worktree's git metadata is the agent's to rewrite
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()

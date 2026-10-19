@@ -669,6 +669,7 @@ func (d *Daemon) sessionsData() protocol.SessionsData {
 			devCommands[p.Name] = slices.Clone(p.DevCommands)
 		}
 	}
+	cfg := d.cfg
 	d.mu.Unlock()
 	out := protocol.SessionsData{Sessions: make([]protocol.SessionInfo, 0, len(snap))}
 	for _, s := range snap {
@@ -733,6 +734,21 @@ func (d *Daemon) sessionsData() protocol.SessionsData {
 			si.PRNumber = s.PR.Number
 			si.Checks = s.PR.ChecksState
 			si.Review = s.PR.ReviewDecision
+		}
+		si.Sandbox = s.Sandbox
+		if s.Stack {
+			si.Stack = true
+			si.Apps = d.appsInfo(cfg, s)
+			si.FocusApp = s.FocusApp()
+			// The CI retry streak is per app; the row shows the focus app's.
+			if i := s.AppIndex(si.FocusApp); i >= 0 {
+				a := s.Apps[i]
+				si.CIRetries, si.Escalated = a.CIRetries, a.Escalated
+				si.Reacting = reactingLabel(s.Delivery, a.CIRetries, a.Escalated, ciBudget)
+			}
+			// The dev toggle runs each app's own dev_commands (apps.go devPlan).
+			plan, parallel, _ := devPlan(cfg, s, si.Worktree)
+			si.DevCommands, si.DevParallel = devLabels(plan), parallel
 		}
 		// [statusagent] display overlay, pre-gated here (the ONE consumer of
 		// the overlay fields): clients render what arrives or nothing.
@@ -863,6 +879,7 @@ func (d *Daemon) handleReload(ctx context.Context) error {
 	// nil (that provider off). Under d.mu, like the brain.
 	d.setReviewProvidersLocked(nc)
 	if d.realNative && (!reflect.DeepEqual(old.Projects, nc.Projects) ||
+		!reflect.DeepEqual(old.Sandbox, nc.Sandbox) ||
 		old.TmuxSocketName() != nc.TmuxSocketName()) {
 		// The native runtime captures both its config reference (for the project
 		// registry) AND its tmux socket at construction, so recreate it whenever
@@ -871,7 +888,7 @@ func (d *Daemon) handleReload(ctx context.Context) error {
 		// server as d.tmuxClient's live send-keys/capture; without it a
 		// socket-only reload would leave the observer reading the OLD server while
 		// keys go to the NEW one.
-		d.native = newNativeRuntime(nc, d.home, d.lolaBin, d.linearKey, d.nativeLogf, d.ports)
+		d.native = newNativeRuntime(nc, d.home, d.lolaBin, d.linearKey, d.nativeLogf, d.ports, d.hookToken)
 	}
 	// [remote] is compared exactly (config.RemoteConfig is comparable) so an
 	// unrelated reload never touches a live listener. Applied AFTER the unlock:
@@ -884,6 +901,9 @@ func (d *Daemon) handleReload(ctx context.Context) error {
 
 	if remoteChanged {
 		d.reloadRemote()
+	}
+	if bctx := d.shutdownCtx; bctx != nil {
+		d.syncHookBridge(bctx)
 	}
 	d.syncWorkers(ctx)
 	d.logf("", "config reloaded")

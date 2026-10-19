@@ -9,12 +9,47 @@
 // the TUI renders too) plus each `[[group]]`'s own `position`, since an EMPTY
 // folder has no member to derive a place from.
 //
+// A STACK is a project row like any other (it can sit in a folder, move, be
+// reordered), but its MEMBERS are not rows of their own: they are drawn nested
+// under the stack whatever their own `group` says, in `[[project]]` order. Unlike
+// a folder that membership is NOT arrangement — it changes what the daemon
+// checks out — so it is never written through the layout: joining or leaving a
+// stack is its own confirmed call (SetProjectStack), and the layout only ever
+// carries a member's place in the `[[project]]` array, right after its stack.
+//
 // This module is deliberately free of Svelte, the store and the bindings:
 // dragging is the part hardest to verify by hand (WKWebView vs Chrome, see
 // LiveTerminal's history), so every decision worth testing is made here, where a
 // test needs no DOM.
 
-export type LayoutProject = { name: string; group?: string };
+export type LayoutProject = { name: string; group?: string; kind?: string; stack?: string };
+
+/** A stack project (`[[project]].kind = "stack"`). */
+export function isStack(p: LayoutProject): boolean {
+  return p.kind === "stack";
+}
+
+/**
+ * Each stack's members, in `[[project]]` order. A member naming a stack the
+ * list does not contain is NOT a member here: it is drawn as an ordinary
+ * project, never hidden under a row nothing draws (the same rule as a dangling
+ * group).
+ */
+export function stackMembers<P extends LayoutProject>(projects: P[]): Map<string, P[]> {
+  const out = new Map<string, P[]>();
+  for (const p of projects) if (isStack(p)) out.set(p.name, []);
+  for (const p of projects) {
+    if (!isStack(p) && p.stack && out.has(p.stack)) out.get(p.stack)!.push(p);
+  }
+  return out;
+}
+
+/** The stack `name` is drawn under, or "" for a project that is a row itself. */
+export function memberOf(projects: LayoutProject[], name: string): string {
+  const p = projects.find((x) => x.name === name);
+  if (!p || isStack(p) || !p.stack) return "";
+  return projects.some((x) => x.name === p.stack && isStack(x)) ? p.stack : "";
+}
 export type LayoutGroup = { name: string; label?: string; position?: number; collapsed?: boolean };
 
 /** One top-level row: a loose project, or a folder with its members. */
@@ -33,8 +68,11 @@ export type Row<P extends LayoutProject = LayoutProject> =
 export function buildRows<P extends LayoutProject>(projects: P[], groups: LayoutGroup[]): Row<P>[] {
   const known = new Set(groups.map((g) => g.name));
   const members = new Map<string, P[]>(groups.map((g) => [g.name, [] as P[]]));
+  const stacks = stackMembers(projects);
   const rows: Row<P>[] = [];
   for (const p of projects) {
+    // A stack member is drawn under its stack, not as a row of its own.
+    if (!isStack(p) && p.stack && stacks.has(p.stack)) continue;
     // A group the daemon does not list is treated as no group at all. Config
     // repairs a dangling reference on load, so this only covers the window
     // between a folder's removal and the next push — during which the project
@@ -68,13 +106,23 @@ export type Layout = {
  * top-level row in turn, a folder contributing its members — so the
  * `[[project]]` array order and what the sidebar shows can never disagree, and
  * every folder records the index it was actually drawn at.
+ *
+ * `members` (stackMembers of the same projects) puts each stack's members right
+ * after their stack, each keeping its OWN group: a member's group is ignored
+ * while it is one, and leaving the stack must hand back the one it had.
+ * Without it the layout would not be a whole permutation and the backend would
+ * refuse it.
  */
-export function toLayout(rows: Row[]): Layout {
+export function toLayout(rows: Row[], members: Map<string, LayoutProject[]> = new Map()): Layout {
   const groups: Layout["groups"] = [];
   const projects: Layout["projects"] = [];
+  const push = (p: LayoutProject, group: string) => {
+    projects.push({ name: p.name, group });
+    for (const m of members.get(p.name) ?? []) projects.push({ name: m.name, group: m.group ?? "" });
+  };
   rows.forEach((row, i) => {
     if (row.kind === "project") {
-      projects.push({ name: row.project.name, group: "" });
+      push(row.project, "");
       return;
     }
     groups.push({
@@ -83,7 +131,7 @@ export function toLayout(rows: Row[]): Layout {
       position: i,
       collapsed: !!row.group.collapsed,
     });
-    for (const p of row.projects) projects.push({ name: p.name, group: row.group.name });
+    for (const p of row.projects) push(p, row.group.name);
   });
   return { groups, projects };
 }
@@ -96,6 +144,49 @@ export type ProjectTarget =
   | { kind: "group"; group: string; index: number }
   /** ONTO a folder's row: file it there, at the end. */
   | { kind: "into"; group: string };
+
+/**
+ * Everything a drop can mean beyond a layout move: ONTO a stack's row (join it),
+ * or back onto the stack a member already sits in (nothing changes).
+ */
+export type DropTarget = ProjectTarget | { kind: "stack"; stack: string } | { kind: "stay" };
+
+/** What a drop does to stack membership. null = a plain layout move (or nothing). */
+export type StackChange = { kind: "join"; stack: string } | { kind: "leave"; stack: string } | null;
+
+/**
+ * Decide whether dropping `name` at `to` joins or leaves a stack. Joining needs
+ * a project that is neither a stack (stacks do not nest) nor already in that
+ * stack; a member dropped anywhere outside its own stack leaves it.
+ */
+export function stackChange(projects: LayoutProject[], name: string, to: DropTarget): StackChange {
+  const p = projects.find((x) => x.name === name);
+  if (!p) return null;
+  const current = memberOf(projects, name);
+  if (to.kind === "stack") {
+    if (isStack(p) || current === to.stack) return null;
+    if (!projects.some((x) => x.name === to.stack && isStack(x))) return null;
+    return { kind: "join", stack: to.stack };
+  }
+  if (to.kind === "stay" || !current) return null;
+  return { kind: "leave", stack: current };
+}
+
+/**
+ * The layout that places a member that just LEFT its stack at `to`. `to` was
+ * measured against the list on screen, which never contained the member as a
+ * row — and that is exactly the list left once the freed project is lifted
+ * back out — so the gap needs no liftedIndex correction.
+ */
+export function leaveStackLayout<P extends LayoutProject>(
+  projects: P[],
+  groups: LayoutGroup[],
+  name: string,
+  to: ProjectTarget,
+): Layout {
+  const freed = projects.map((p) => (p.name === name ? { ...p, stack: "" } : p));
+  return toLayout(moveProject(buildRows(freed, groups), name, to), stackMembers(freed));
+}
 
 /**
  * Move a project, returning NEW rows. Indices count positions AFTER the project
@@ -190,7 +281,8 @@ export function dropIndex(rows: { top: number; height: number }[], y: number): n
  *
  * The edge bands are what keep a folder from swallowing every drop meant for
  * the row above or below it — with a plain midpoint split there would be no way
- * to place a project BETWEEN two folders.
+ * to place a project BETWEEN two folders. A stack's row uses the same bands:
+ * its middle joins the stack, its edges are ordinary gaps.
  */
 export function groupRowZone(rect: { top: number; height: number }, y: number): "before" | "into" | "after" {
   const edge = rect.height * 0.3;

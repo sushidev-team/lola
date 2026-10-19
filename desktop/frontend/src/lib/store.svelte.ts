@@ -360,6 +360,25 @@ class Store {
   setGroupCollapsed(name: string, collapsed: boolean) {
     return this.quiet(() => ConfigService.SetGroupCollapsed(name, collapsed));
   }
+  /** Creates an empty stack; resolves to its id (undefined on failure). */
+  createStack(label: string) {
+    return this.act(() => ConfigService.CreateStack(label), "stack created");
+  }
+  /**
+   * Moves a project into a stack ("" = out of it). Unlike a folder this is NOT
+   * display-only — a member stops polling and is checked out for the stack's
+   * issues — so callers confirm first.
+   */
+  setProjectStack(project: string, stack: string) {
+    // Resolves true on success: the binding itself resolves to nothing.
+    return this.act(
+      async () => {
+        await ConfigService.SetProjectStack(project, stack);
+        return true;
+      },
+      stack ? "added to stack" : "removed from stack",
+    );
+  }
   /** Applies a whole arrangement (group order + every project's group and place). */
   setProjectLayout(layout: ProjectLayoutDTO) {
     return this.quiet(() => ConfigService.SetProjectLayout(layout));

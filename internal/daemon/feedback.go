@@ -71,6 +71,11 @@ func (d *Daemon) handleDiff(ctx context.Context, sessionID string) (protocol.Dif
 	if d.worktreeDiff == nil {
 		return protocol.DiffData{}, errors.New("diff unavailable")
 	}
+	if s.Stack {
+		cctx, cancel := context.WithTimeout(ctx, diffTimeout)
+		defer cancel()
+		return d.stackDiff(cctx, s)
+	}
 	base := config.DefaultBranchName
 	d.mu.Lock()
 	if p := d.cfg.ProjectByName(s.Project); p != nil && p.DefaultBranch != "" {

@@ -91,14 +91,14 @@ func (d *Daemon) bestOfMixForIssue(cfg config.BestOfConfig, mix []bestof.Attempt
 // bestOfHealth health-gates every distinct agent of a mix, the multi-agent
 // form of the single-binary gate every dispatch runs. The first failure names
 // the agent.
-func (d *Daemon) bestOfHealth(mix []bestof.Attempt) error {
+func (d *Daemon) bestOfHealth(project string, mix []bestof.Attempt) error {
 	seen := map[string]bool{}
 	for _, a := range mix {
 		if seen[a.Agent] {
 			continue
 		}
 		seen[a.Agent] = true
-		if err := d.runtimeHealth(agent.Parse(a.Agent).Binary()); err != nil {
+		if err := d.runtimeHealth(d.launchBin(project, agent.Parse(a.Agent).Binary())); err != nil {
 			return fmt.Errorf("%s: %w", a.Agent, err)
 		}
 	}
@@ -201,10 +201,6 @@ func (d *Daemon) handleBestOf(ctx context.Context, a protocol.BestOfArgs) (proto
 	if nat == nil {
 		return protocol.BestOfData{}, errors.New("native runtime unavailable")
 	}
-	if err := d.bestOfHealth(mix); err != nil {
-		return protocol.BestOfData{}, fmt.Errorf("runtime not ready: %w", err)
-	}
-
 	api, err := d.ensureLinear()
 	if err != nil {
 		return protocol.BestOfData{}, err
@@ -218,6 +214,11 @@ func (d *Daemon) handleBestOf(ctx context.Context, a protocol.BestOfArgs) (proto
 	proj, err := d.planProject(a.Project, detail.TeamID)
 	if err != nil {
 		return protocol.BestOfData{}, err
+	}
+	// After the project is known: a sandboxed project's agents live in its
+	// image, so its gate is the docker CLI rather than each agent's binary.
+	if err := d.bestOfHealth(proj.Name, mix); err != nil {
+		return protocol.BestOfData{}, fmt.Errorf("runtime not ready: %w", err)
 	}
 	if msg := d.dispatchHold(ctx, proj.Name, time.Now()); msg != "" {
 		return protocol.BestOfData{}, errors.New("dispatch held: " + msg)

@@ -5,10 +5,17 @@ export GOCACHE := $(CURDIR)/.gocache
 # which sandboxed shells cannot write to.
 export GOFLAGS := -mod=mod -buildvcs=false
 
-.PHONY: build test vet fmt fmtcheck tidy check clean daemon daemon-dev mobile-dev mobile-lan mobile-info mobile-sim mobile-device desktop-dev
+.PHONY: build build-linux test vet fmt fmtcheck tidy check clean daemon daemon-dev mobile-dev mobile-lan mobile-info mobile-sim mobile-device desktop-dev
 
 build:
 	go build -o lola .
+
+# build-linux cross-compiles the lola that a SANDBOXED agent's hooks run inside
+# its container ([sandbox].lola_bin). The container's architecture follows the
+# host's (arm64 on Apple silicon); override with GOARCH=amd64.
+LINUX_ARCH ?= $(shell go env GOARCH)
+build-linux:
+	CGO_ENABLED=0 GOOS=linux GOARCH=$(LINUX_ARCH) go build -o dist/lola-linux-$(LINUX_ARCH) .
 
 test:
 	go test ./...

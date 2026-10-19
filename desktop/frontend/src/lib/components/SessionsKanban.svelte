@@ -5,6 +5,8 @@
   import { triaged, triageOf } from "$lib/filters";
   import { KANBAN_COLUMNS, attention, displayFor, displayLabel, displayText } from "$lib/theme";
   import PrBadge from "./PrBadge.svelte";
+  import StackAppsChip from "./StackAppsChip.svelte";
+  import { focusLabel } from "$lib/stackapps";
   import BoardChip from "./BoardChip.svelte";
   import ClaimFlag from "./ClaimFlag.svelte";
   import { chipRelevant } from "$lib/board";
@@ -99,7 +101,8 @@
                    not parseable — the parser closes the outer one and the card
                    stops being clickable. -->
               <div class="mt-0.5 flex items-center gap-2">
-                <PrBadge session={s} delivery={s.delivery} status={s.status} />
+                <PrBadge session={s} delivery={s.delivery} status={s.status} app={focusLabel(s)} />
+                <StackAppsChip session={s} />
                 <!-- The agent's self-reported progress, until a PR supersedes it
                      (chipRelevant). BoardChip renders no <button> (the card
                      already is one). -->

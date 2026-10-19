@@ -44,7 +44,11 @@ type Issue struct {
 	Estimate   float64
 	Assignee   string
 	LabelIDs   []string
-	LabelNames []string // parallel to LabelIDs, display only
+	LabelNames []string // parallel to LabelIDs
+	// LabelGroups is parallel to LabelIDs: the label group a label sits in
+	// ("apps" for apps/website), "" for an ungrouped label. Read by the
+	// stack app selection ([[project]].labels on a stack member).
+	LabelGroups []string
 	// BlockedBy lists the issues Linear records as BLOCKING this one (the
 	// inverse side of a "blocks" relation), each with its current state type.
 	// OpenChildren counts sub-issues not yet completed or canceled. Dispatch
