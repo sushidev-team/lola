@@ -107,11 +107,52 @@ func (s SandboxConfig) EffectiveHookPort() int {
 //   - Repo is its GitHub owner/name, which is what lets lola find the PR.
 //   - DefaultBranch is the branch the session's branch is cut from and the PR
 //     targets ("" = the project's default_branch).
+//   - Labels decide WHICH issues need it: the repo is checked out only for an
+//     issue carrying at least one of them, so an issue labelled for one app
+//     gets that app's worktree and nothing else. Each entry is a Linear label
+//     UUID, its name, or "group/name" for a label inside a label group, all
+//     case-insensitive. Empty = every issue of the project gets it.
 type LinkedRepo struct {
-	Name          string `toml:"name"`
-	Path          string `toml:"path"`
-	Repo          string `toml:"repo,omitempty"`
-	DefaultBranch string `toml:"default_branch,omitempty"`
+	Name          string   `toml:"name"`
+	Path          string   `toml:"path"`
+	Repo          string   `toml:"repo,omitempty"`
+	DefaultBranch string   `toml:"default_branch,omitempty"`
+	Labels        []string `toml:"labels,omitempty"`
+}
+
+// WantedFor reports whether an issue whose labels are given (ids, names and
+// group names, parallel slices; a missing group is "") needs this repo
+// checked out. No Labels = always.
+func (l LinkedRepo) WantedFor(ids, names, groups []string) bool {
+	if len(l.Labels) == 0 {
+		return true
+	}
+	for _, want := range l.Labels {
+		want = strings.TrimSpace(want)
+		for i, id := range ids {
+			if want == id {
+				return true
+			}
+			name := at(names, i)
+			if name == "" {
+				continue
+			}
+			if strings.EqualFold(want, name) {
+				return true
+			}
+			if g := at(groups, i); g != "" && strings.EqualFold(want, g+"/"+name) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func at(s []string, i int) string {
+	if i < len(s) {
+		return s[i]
+	}
+	return ""
 }
 
 // BaseBranch is the branch a linked worktree is cut from: its own
@@ -246,6 +287,12 @@ func validateLinkedRepos(id string, p *Project) []error {
 		}
 		if l.Repo != "" && !repoRe.MatchString(l.Repo) {
 			errs = append(errs, fmt.Errorf("%s: repo must be owner/name, got %q", lid, l.Repo))
+		}
+		for _, lb := range l.Labels {
+			if strings.TrimSpace(lb) == "" {
+				errs = append(errs, fmt.Errorf("%s: labels must not contain an empty entry", lid))
+				break
+			}
 		}
 	}
 	return errs

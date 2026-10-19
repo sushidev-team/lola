@@ -19,6 +19,7 @@
   import Select from "$lib/components/Select.svelte";
   import { ConfigService, DaemonService, LinearService } from "@bindings/desktop";
   import { slug, slugTyping, displayName } from "$lib/slug";
+  import { blankLinkedRepo, labelIdsFor } from "$lib/linkedrepos";
   import type {
     ProjectFormDTO,
     InheritsDTO,
@@ -34,6 +35,7 @@
   const TABS = [
     { id: "repo", label: "General" },
     { id: "worktree", label: "Worktree setup" },
+    { id: "repos", label: "Repositories" },
     { id: "filter", label: "Issue pickup" },
     { id: "writeback", label: "Linear updates" },
   ];
@@ -160,6 +162,55 @@
     } finally {
       picking = false;
     }
+  }
+
+  // Linked repositories (the Repositories tab). A row's folder is its first
+  // decision too: picking one fills the id, GitHub repo and base branch the
+  // same fill-only way the project's own folder does.
+  let pickingRepo = $state(-1);
+  async function inspectRepo(i: number, path: string, snap = false) {
+    const p = path.trim();
+    if (!p) return;
+    let info: PathInfoDTO;
+    try {
+      info = await ConfigService.InspectPath(p);
+    } catch {
+      return;
+    }
+    const r = f?.linkedRepos?.[i];
+    if (!f || !r || r.path.trim() !== p) return; // the row changed meanwhile
+    if (snap && info.path) r.path = info.path;
+    if (!r.name.trim() && info.suggestedId) r.name = info.suggestedId;
+    if (!r.repo.trim() && info.repo) r.repo = info.repo;
+    // Empty = the project's default branch, so only a DIFFERENT one is written.
+    if (!r.defaultBranch.trim() && info.defaultBranch && info.defaultBranch !== f.defaultBranch.trim()) {
+      r.defaultBranch = info.defaultBranch;
+    }
+  }
+  async function pickRepoFolder(i: number) {
+    const r = f?.linkedRepos?.[i];
+    if (!r || pickingRepo >= 0) return;
+    pickingRepo = i;
+    try {
+      const chosen = await ConfigService.PickFolder(r.path.trim() || f!.path.trim());
+      if (chosen) {
+        r.path = chosen;
+        await inspectRepo(i, chosen, true);
+      }
+    } catch (e) {
+      store.setFlash(String(e), "bad");
+    } finally {
+      pickingRepo = -1;
+    }
+  }
+  async function addRepo() {
+    if (!f) return;
+    f.linkedRepos = [...(f.linkedRepos ?? []), blankLinkedRepo()];
+    await pickRepoFolder(f.linkedRepos.length - 1);
+  }
+  function removeRepo(i: number) {
+    if (!f) return;
+    f.linkedRepos = (f.linkedRepos ?? []).filter((_, j) => j !== i);
   }
 
   // Linear metadata drives the cascading pickers. When it can't load (no key,
@@ -291,7 +342,12 @@
       const d = await ConfigService.GetProject(nav.overlayProject);
       // label is normalized like inherits: a DTO from an older backend must not
       // leave it undefined and make every .trim() on it throw.
-      f = { ...d, label: d.label ?? "", inherits: inheritsOf(d.inherits) };
+      f = {
+        ...d,
+        label: d.label ?? "",
+        inherits: inheritsOf(d.inherits),
+        linkedRepos: (d.linkedRepos ?? []).map((r) => ({ ...r, labels: [...(r.labels ?? [])] })),
+      };
       // The baseline the dirty check compares against — the normalized DTO, not
       // the raw one, and before any user edit.
       loaded = $state.snapshot(f) as ProjectFormDTO;
@@ -399,6 +455,13 @@
       portsPerSession: f.portRange?.trim() ? Math.max(0, Math.trunc(Number(f.portsPerSession) || 0)) : 0,
       preRemove: cleanLines(f.preRemove),
       env: cleanLines(f.env),
+      linkedRepos: (f.linkedRepos ?? []).map((r) => ({
+        name: r.name.trim(),
+        path: r.path.trim(),
+        repo: r.repo.trim(),
+        defaultBranch: r.defaultBranch.trim(),
+        labels: cleanLines(r.labels),
+      })),
       stateIds: cleanLines(f.stateIds),
       matchLabels: cleanLines(f.matchLabels),
       concurrencyCap: Number(f.concurrencyCap) || 0,
@@ -804,6 +867,80 @@
           {/if}
         {/snippet}
         {@render section("Local testing", testing)}
+      </div>
+    {:else if tab === "repos"}
+      <div class="space-y-4">
+        <p class="text-faint">
+          Further repositories an issue of this project can span — e.g. each app of a product. Give a repository the
+          labels that mean “this issue touches it”: a session checks it out only for an issue carrying one of them,
+          beside this project's own checkout, on the same branch, with one pull request per repository.
+          A repository without labels is checked out for every issue.
+        </p>
+        {#if d.linkedRepos?.length && !d.matchLabels?.length}
+          <p class="rounded border border-edge px-3 py-2 text-sm text-faint">
+            Issue pickup decides which issues reach this project at all. To pick up an issue labelled only for one of
+            these repositories, add the same labels under Issue pickup → Match labels, matching any.
+          </p>
+        {/if}
+        {#each d.linkedRepos ?? [] as r, i (i)}
+          {@const rid = `${formId}-repo-${i}`}
+          <section aria-label={`Repository ${r.name || i + 1}`} class="space-y-3 rounded border border-edge p-3">
+            <div class="flex items-center justify-between gap-2">
+              <h3 class="min-w-0 truncate text-ink">{r.name || "New repository"}</h3>
+              <Button size="xs" variant="danger" aria-label={`Remove repository ${r.name || i + 1}`}
+                onclick={() => removeRepo(i)}>Remove</Button>
+            </div>
+            <div class={rowCls}>
+              {@render cap("Folder", null)}
+              <span class="flex items-center gap-2">
+                <input class="{inputCls} min-w-0 flex-1 font-mono" aria-label={`Folder of repository ${i + 1}`}
+                  placeholder="/Users/you/code/nori/website" spellcheck="false" value={r.path}
+                  oninput={(e) => { r.path = e.currentTarget.value; }}
+                  onblur={() => void inspectRepo(i, r.path)} />
+                <Button size="sm" variant="secondary" onclick={() => pickRepoFolder(i)} disabled={pickingRepo >= 0}>
+                  {pickingRepo === i ? "Choosing…" : "Choose folder…"}
+                </Button>
+              </span>
+            </div>
+            <div class={rowCls}>
+              {@render cap("Name", null, "the checkout's directory, .lola/repos/<name>, and the label beside its PR", `${rid}-name`)}
+              <input id={`${rid}-name`} class="{inputCls} font-mono" aria-label={`Name of repository ${i + 1}`}
+                placeholder="website" spellcheck="false" value={r.name}
+                oninput={(e) => { r.name = slugTyping(e.currentTarget.value); }} />
+            </div>
+            <div class={rowCls}>
+              {@render cap("Repo", null, "GitHub owner/name — lets lola track this repository's PR", `${rid}-repo`)}
+              <input id={`${rid}-repo`} class="{inputCls} font-mono" aria-label={`GitHub repo of repository ${i + 1}`}
+                placeholder="owner/name" spellcheck="false" value={r.repo}
+                oninput={(e) => { r.repo = e.currentTarget.value; }} />
+            </div>
+            <div class={rowCls}>
+              {@render cap("Base branch", null, "empty = this project's default branch", `${rid}-branch`)}
+              <input id={`${rid}-branch`} class="{inputCls} font-mono" aria-label={`Base branch of repository ${i + 1}`}
+                placeholder={d.defaultBranch || "main"} spellcheck="false" value={r.defaultBranch}
+                oninput={(e) => { r.defaultBranch = e.currentTarget.value; }} />
+            </div>
+            <div class={rowTopCls}>
+              {@render cap("Included for", null, "issues carrying ANY of these labels get this repository; none ticked = every issue")}
+              {#if meta?.labels}
+                {@const opts = meta.labels}
+                <span>
+                  <CheckboxOptions label={`Labels of repository ${i + 1}`} options={opts}
+                    selected={labelIdsFor(r.labels, opts)} onChange={(v) => { r.labels = v; }} />
+                  <span class={hintCls}>{r.labels?.length ? `${r.labels.length} label${r.labels.length === 1 ? "" : "s"} — only those issues` : "No label ticked — every issue gets it."}</span>
+                </span>
+              {:else}
+                <span>
+                  <textarea class="{inputCls} block resize-y font-mono" rows="2" spellcheck="false"
+                    aria-label={`Labels of repository ${i + 1}`} placeholder={"apps/website\none label name or UUID per line"}
+                    value={linesToText(r.labels)} oninput={(e) => { r.labels = splitLines(e.currentTarget.value); }}></textarea>
+                  <span class={hintCls}>{d.teamId ? (metaLoading ? "Loading Linear labels…" : "Linear labels unavailable — type names, group/name or UUIDs.") : "Pick a team under Issue pickup to choose from its labels."}</span>
+                </span>
+              {/if}
+            </div>
+          </section>
+        {/each}
+        <Button size="sm" variant="secondary" onclick={addRepo} disabled={pickingRepo >= 0}>Add repository…</Button>
       </div>
     {:else if tab === "filter"}
       <div class="space-y-5">

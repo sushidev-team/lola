@@ -11,6 +11,7 @@ import (
 
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/gitguard"
+	"github.com/sushidev-team/lola/internal/linear"
 	"github.com/sushidev-team/lola/internal/session"
 )
 
@@ -27,6 +28,11 @@ import (
 //   - Teardown must remove them FIRST and dirty-safe: removing the primary
 //     worktree deletes the directory tree, and uncommitted work in a linked
 //     checkout would go with it (git only dirty-checks the primary).
+//
+// WHICH linked repos a session gets is decided once, at spawn, from the
+// issue's labels (linkedFor / LinkedRepo.Labels). After that the checkouts on
+// disk are the truth: the sandbox mounts only those (linkedPresent), and
+// teardown removes what the record holds.
 
 // LinkedWorktreeDir is where linked repository name lives inside the session
 // worktree dir.
@@ -53,14 +59,41 @@ func (n *Native) linkedBranchTaken(ctx context.Context, p config.Project, branch
 	return false, nil
 }
 
-// createLinked checks every linked repository of p out into the session
-// worktree dir on branch. On a failure it returns the ones it DID create
+// linkedFor is the subset of p's linked repos an issue needs: each repo whose
+// labels the issue carries, plus every repo with no labels (always included).
+func linkedFor(p config.Project, issue linear.Issue) []config.LinkedRepo {
+	var out []config.LinkedRepo
+	for _, l := range p.LinkedRepos {
+		if l.WantedFor(issue.LabelIDs, issue.LabelNames, issue.LabelGroups) {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
+// linkedPresent is the subset of p's linked repos actually checked out in the
+// session worktree dir — what a sandbox launch mounts. Read from disk because
+// every launch (spawn, revive, switch-agent) must agree with the spawn's
+// selection, and the record is not at hand on all of those paths. A directory
+// the agent creates there names only a repo the project already configures.
+func linkedPresent(p config.Project, dir string) []config.LinkedRepo {
+	var out []config.LinkedRepo
+	for _, l := range p.LinkedRepos {
+		if fi, err := os.Stat(LinkedWorktreeDir(dir, l.Name)); err == nil && fi.IsDir() {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
+// createLinked checks the given linked repositories of p (linkedFor) out into
+// the session worktree dir on branch. On a failure it returns the ones it DID create
 // alongside the error: rolling them back is the caller's, because only the
 // caller can decide to keep the primary worktree when that rollback refuses.
 // A sandboxed project's linked worktrees are pinned like the primary one.
-func (n *Native) createLinked(ctx context.Context, p config.Project, dir, branch string) ([]session.LinkedRepo, error) {
+func (n *Native) createLinked(ctx context.Context, p config.Project, repos []config.LinkedRepo, dir, branch string) ([]session.LinkedRepo, error) {
 	var out []session.LinkedRepo
-	for _, l := range p.LinkedRepos {
+	for _, l := range repos {
 		wt := LinkedWorktreeDir(dir, l.Name)
 		if err := n.WT.CreateLinked(ctx, l.Path, wt, branch, l.BaseBranch(p)); err != nil {
 			return out, fmt.Errorf("linked repo %s: %w", l.Name, err)
@@ -143,26 +176,43 @@ func (n *Native) removeLinked(ctx context.Context, project string, linked []sess
 // withLinkedBriefing appends the linked-repositories section to a prompt.md
 // body: where each checkout is, that it is already on the session's branch,
 // and that each one with a change needs its own PR — cross-linked, so a
-// reviewer of one finds the others.
+// reviewer of one finds the others. The project's other linked repos (not
+// selected for this issue) are named too, so an agent that finds it needs one
+// says so instead of editing a checkout it does not have.
 func withLinkedBriefing(prompt []byte, p config.Project, linked []session.LinkedRepo) []byte {
-	if len(linked) == 0 {
+	have := map[string]bool{}
+	for _, l := range linked {
+		have[l.Name] = true
+	}
+	var skipped []string
+	for _, l := range p.LinkedRepos {
+		if !have[l.Name] {
+			skipped = append(skipped, "`"+l.Name+"`")
+		}
+	}
+	if len(linked) == 0 && len(skipped) == 0 {
 		return prompt
 	}
 	var b strings.Builder
 	b.Write(prompt)
 	b.WriteString("\n## Linked repositories\n\n")
-	b.WriteString("This issue may span more than one repository. Besides this worktree, each repository below is checked out for you on the SAME branch:\n\n")
-	bases := map[string]string{}
-	for _, l := range p.LinkedRepos {
-		bases[l.Name] = l.BaseBranch(p)
-	}
-	for _, l := range linked {
-		repo := l.Repo
-		if repo == "" {
-			repo = "(no GitHub repo configured)"
+	if len(linked) > 0 {
+		b.WriteString("This issue may span more than one repository. Besides this worktree, each repository below is checked out for you on the SAME branch:\n\n")
+		bases := map[string]string{}
+		for _, l := range p.LinkedRepos {
+			bases[l.Name] = l.BaseBranch(p)
 		}
-		fmt.Fprintf(&b, "- `%s/repos/%s` — %s, branch `%s`, base `%s`\n", lolaDir, l.Name, repo, l.Branch, bases[l.Name])
+		for _, l := range linked {
+			repo := l.Repo
+			if repo == "" {
+				repo = "(no GitHub repo configured)"
+			}
+			fmt.Fprintf(&b, "- `%s/repos/%s` — %s, branch `%s`, base `%s`\n", lolaDir, l.Name, repo, l.Branch, bases[l.Name])
+		}
+		b.WriteString("\nMake each change in the repository it belongs to. For every repository you changed, commit there, push the branch and open a pull request against its base branch. Link the pull requests to each other in their descriptions (\"Part of …, see also <other PR URL>\"). Leave a repository you did not need untouched — no empty pull requests.\n")
 	}
-	b.WriteString("\nMake each change in the repository it belongs to. For every repository you changed, commit there, push the branch and open a pull request against its base branch. Link the pull requests to each other in their descriptions (\"Part of …, see also <other PR URL>\"). Leave a repository you did not need untouched — no empty pull requests.\n")
+	if len(skipped) > 0 {
+		fmt.Fprintf(&b, "\nThis project also has %s, NOT checked out for this issue (its labels did not select them). If the issue needs one of them, do not clone or edit it elsewhere: report it with `lola report blocked \"needs <name>\"` and explain in a note.\n", strings.Join(skipped, ", "))
+	}
 	return []byte(b.String())
 }

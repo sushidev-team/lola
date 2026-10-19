@@ -144,3 +144,25 @@ func TestSandboxPortPair(t *testing.T) {
 		}
 	}
 }
+
+func TestLinkedRepoWantedFor(t *testing.T) {
+	ids, names, groups := []string{"u-1", "u-2"}, []string{"Website", "bug"}, []string{"apps", ""}
+	for _, c := range []struct {
+		labels []string
+		want   bool
+	}{
+		{nil, true},                      // no labels: always
+		{[]string{"u-1"}, true},          // UUID
+		{[]string{"website"}, true},      // name, case-insensitive
+		{[]string{"Apps/Website"}, true}, // group/name
+		{[]string{" bug "}, true},        // trimmed
+		{[]string{"apps"}, false},        // a group alone is not a label
+		{[]string{"other/website"}, false},
+		{[]string{"api", "u-9"}, false},
+	} {
+		l := LinkedRepo{Labels: c.labels}
+		if got := l.WantedFor(ids, names, groups); got != c.want {
+			t.Errorf("labels %q: WantedFor = %v, want %v", c.labels, got, c.want)
+		}
+	}
+}

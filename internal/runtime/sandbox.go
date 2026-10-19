@@ -179,8 +179,11 @@ func (n *Native) sandboxLine(p *config.Project, id string, kind agent.Kind, inne
 	// worktree's `.git` pointer is a file the agent can rewrite, and following
 	// it would let a tampered pointer pick which repository gets mounted
 	// read-write on the next launch.
+	// Only the linked repos this session checked out (the spawn's label
+	// selection): a store the session has no worktree of is not the agent's.
+	present := linkedPresent(*p, dir)
 	repoDirs := []string{p.Path}
-	for _, l := range p.LinkedRepos {
+	for _, l := range present {
 		repoDirs = append(repoDirs, l.Path)
 	}
 	for i, rd := range repoDirs {
@@ -213,7 +216,7 @@ func (n *Native) sandboxLine(p *config.Project, id string, kind agent.Kind, inne
 		fmt.Fprintf(&b, ` ${lola_gcd_%d:+-v} ${lola_gcd_%d:+"%s/hooks:%s/hooks:ro"}`, i, i, v, v)
 	}
 	worktrees := []string{dir}
-	for _, l := range p.LinkedRepos {
+	for _, l := range present {
 		worktrees = append(worktrees, LinkedWorktreeDir(dir, l.Name))
 	}
 	for _, cw := range pinnedOverlays(worktrees) {

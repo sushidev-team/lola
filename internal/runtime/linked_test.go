@@ -254,3 +254,48 @@ func TestKillKeepsUnaccountedLinkedCheckouts(t *testing.T) {
 		t.Fatalf("Kill with the rediscovered record: %v", err)
 	}
 }
+
+// The issue's labels pick the linked repos: a labelled repo is checked out
+// only for an issue carrying one of its labels, an unlabelled one always, and
+// the agent is told which of the project's repos it did NOT get.
+func TestSpawnChecksOutOnlyTheLinkedReposTheIssueSelects(t *testing.T) {
+	f := newLinkedFixture(t)
+	docs := initRepo(t)
+	f.p.LinkedRepos = []config.LinkedRepo{
+		{Name: "api", Path: f.api, Repo: "acme/api", Labels: []string{"apps/api"}},
+		{Name: "site", Path: initRepo(t), Repo: "acme/site", Labels: []string{"lbl-site"}},
+		{Name: "docs", Path: docs, Repo: "acme/docs"}, // no labels: always
+	}
+	f.n.Cfg.Projects[0] = f.p
+	is := issueENG42()
+	// "api" by group/name, "site" not at all.
+	is.LabelIDs, is.LabelNames, is.LabelGroups = []string{"lbl-api", "lbl-bug"}, []string{"API", "bug"}, []string{"Apps", ""}
+
+	s, err := f.n.Spawn(context.Background(), f.p, is, "")
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	var got []string
+	for _, l := range s.Linked {
+		got = append(got, l.Name)
+	}
+	if strings.Join(got, ",") != "api,docs" {
+		t.Fatalf("linked = %v, want api,docs", got)
+	}
+	dir := filepath.Join(f.root, "web", s.ID)
+	if _, err := os.Stat(LinkedWorktreeDir(dir, "site")); !os.IsNotExist(err) {
+		t.Fatalf("unselected repo checked out: %v", err)
+	}
+	if out := realGit(t, f.p.LinkedRepos[1].Path, "branch", "--list", "lola/eng-42"); out != "" {
+		t.Errorf("unselected repo got the session branch: %q", out)
+	}
+	prompt, _ := os.ReadFile(filepath.Join(dir, ".lola", "prompt.md"))
+	for _, must := range []string{"`.lola/repos/api`", "`.lola/repos/docs`", "This project also has `site`, NOT checked out"} {
+		if !strings.Contains(string(prompt), must) {
+			t.Errorf("prompt.md missing %q:\n%s", must, prompt)
+		}
+	}
+	if err := f.n.Kill(context.Background(), s, true, false); err != nil {
+		t.Fatalf("Kill: %v", err)
+	}
+}

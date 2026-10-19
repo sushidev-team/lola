@@ -74,7 +74,7 @@ func TestSandboxContainsTheAgent(t *testing.T) {
 	if err := excludeLolaDir(dir); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.n.createLinked(ctx, f.p, dir, "lola/eng-42"); err != nil {
+	if _, err := f.n.createLinked(ctx, f.p, f.p.LinkedRepos, dir, "lola/eng-42"); err != nil {
 		t.Fatal(err)
 	}
 	home, _ := os.UserHomeDir()

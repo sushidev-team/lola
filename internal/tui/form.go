@@ -48,6 +48,7 @@ const (
 	fPortsPerSession
 	fPreRemove
 	fEnv
+	fLinkedRepos
 	// Filter tab: which Linear issues this project picks up.
 	fEnabled
 	fTeam
@@ -104,7 +105,7 @@ var formTabs = []struct {
 }
 
 // listFields are edited as one entry per line (an open sub-editor), not inline.
-var listFields = map[fieldID]bool{fSymlinks: true, fPostCreate: true, fDevCommands: true, fPreRemove: true, fEnv: true}
+var listFields = map[fieldID]bool{fSymlinks: true, fPostCreate: true, fDevCommands: true, fPreRemove: true, fEnv: true, fLinkedRepos: true}
 
 // textFields are edited inline, character by character.
 var textFields = map[fieldID]bool{
@@ -154,6 +155,7 @@ type formModel struct {
 	devCommands []string // long-running dev processes; only the ACTIVE session runs them
 	preRemove   []string // teardown hook, run before a worktree is removed
 	env         []string // "KEY=value" per line
+	linkedRepos []string // [[project.linked_repo]], "name | path | repo | labels | base" per line
 
 	teams   []linear.Team // available before a team is picked
 	meta    *teamMeta
@@ -263,6 +265,8 @@ func (f *formModel) lineBuf(fd fieldID) *[]string {
 		return &f.preRemove
 	case fEnv:
 		return &f.env
+	case fLinkedRepos:
+		return &f.linkedRepos
 	}
 	return nil
 }
@@ -382,6 +386,7 @@ func newFormModel(cfg *config.Config, existing *config.Project) (*formModel, tea
 	f.devCommands = slices.Clone(f.poll.DevCommands)
 	f.preRemove = slices.Clone(f.poll.PreRemove)
 	f.env = envLines(f.poll.Env)
+	f.linkedRepos = linkedLines(f.poll.LinkedRepos)
 	if f.isNew {
 		f.symlinks = slices.Clone(cfg.Defaults.Symlinks)
 		f.postCreate = slices.Clone(cfg.Defaults.PostCreate)
@@ -466,7 +471,7 @@ func (f *formModel) applyInspection(v pathInspectedMsg) {
 // snapshot serializes everything a human can edit in this form. Maps print in
 // sorted key order under %v, so the result is stable across identical states.
 func (f *formModel) snapshot() string {
-	return fmt.Sprintf("%+v|%s|%s|%v|%v|%v|%v|%v", f.poll, f.capBuf, f.portsBuf, f.symlinks, f.postCreate, f.devCommands, f.preRemove, f.env)
+	return fmt.Sprintf("%+v|%s|%s|%v|%v|%v|%v|%v|%v", f.poll, f.capBuf, f.portsBuf, f.symlinks, f.postCreate, f.devCommands, f.preRemove, f.env, f.linkedRepos)
 }
 
 // rebase declares the CURRENT state to be the unmodified one. Called on open and
@@ -501,7 +506,7 @@ func (f *formModel) fields() []fieldID {
 	var fs []fieldID
 	switch f.tab {
 	case tabRepo:
-		fs = []fieldID{fLabel, fName, fPath, fRepo, fDefaultBranch, fBranchPrefix, fAgent, fSymlinks, fPostCreate, fPreRemove, fDevCommands, fPortRange, fPortsPerSession, fEnv}
+		fs = []fieldID{fLabel, fName, fPath, fRepo, fDefaultBranch, fBranchPrefix, fAgent, fSymlinks, fPostCreate, fPreRemove, fDevCommands, fPortRange, fPortsPerSession, fEnv, fLinkedRepos}
 	case tabFilter:
 		fs = []fieldID{fEnabled, fTeam}
 		if f.poll.TeamID != "" {
@@ -1248,6 +1253,7 @@ func applyProject(dst *config.Project, src config.Project) {
 	dst.PortsPerSession = src.PortsPerSession
 	dst.PreRemove = src.PreRemove
 	dst.Env = src.Env
+	dst.LinkedRepos = src.LinkedRepos
 	dst.Inherits = src.Inherits
 
 	dst.Enabled = src.Enabled
@@ -1352,6 +1358,11 @@ func (f *formModel) save() (tea.Cmd, formEvent) {
 	p.PostCreate = trimDropEmpty(f.postCreate)
 	p.DevCommands = trimDropEmpty(f.devCommands)
 	p.PreRemove = trimDropEmpty(f.preRemove)
+	if repos, err := parseLinkedLines(f.linkedRepos); err != nil {
+		f.addErr(tabRepo, err.Error())
+	} else {
+		p.LinkedRepos = repos
+	}
 	p.PortRange = strings.TrimSpace(p.PortRange) // shape checked by nc.Validate below
 	p.PortsPerSession = 0
 	if f.portsBuf != "" {
@@ -1649,6 +1660,8 @@ func fieldHelp(fd fieldID) string {
 		return "One command per line, run in the worktree before lola removes it (merge cleanup, kill) — e.g. drop the $LOLA_DB_NAME database. Bounded; failures are logged, never fatal."
 	case fEnv:
 		return "One KEY=value per line, exported into the session and post-create commands."
+	case fLinkedRepos:
+		return "Further repositories an issue can span, one per line: name | path | owner/repo | label, label | base branch. A session checks a repo out only for an issue carrying one of its labels (none = every issue)."
 	case fEnabled:
 		return "enter toggles · off pauses pickup for this project without discarding its filter."
 	case fTeam:
@@ -1731,6 +1744,8 @@ func (f *formModel) label(fd fieldID) string {
 		return "Pre-remove"
 	case fEnv:
 		return "Env (KEY=value)"
+	case fLinkedRepos:
+		return "Linked repos"
 	case fEnabled:
 		return "Polling enabled"
 	case fTeam:
@@ -1861,7 +1876,7 @@ func (f *formModel) display(fd fieldID) string {
 			return faintText.Render("(default: 1)")
 		}
 		return f.portsBuf
-	case fSymlinks, fPostCreate, fDevCommands, fPreRemove, fEnv:
+	case fSymlinks, fPostCreate, fDevCommands, fPreRemove, fEnv, fLinkedRepos:
 		if buf := f.lineBuf(fd); buf != nil {
 			n := len(trimDropEmpty(*buf))
 			if n == 0 {

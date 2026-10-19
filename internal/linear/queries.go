@@ -165,7 +165,7 @@ func (c *Client) MatchingIssues(ctx context.Context, p config.Project, activeCyc
 		issues(filter:$filter, first:100, after:$after){
 			nodes{ id identifier title branchName priority createdAt updatedAt estimate
 				state{ name type } assignee{ displayName name }
-				labels{ nodes{ id name } }
+				labels{ nodes{ id name parent{ name } } }
 				inverseRelations(first:50){ nodes{ type issue{ id identifier state{ type } } } }
 				children(first:50){ nodes{ state{ type } } } }
 			pageInfo{ hasNextPage endCursor } } }`
@@ -190,7 +190,12 @@ func (c *Client) MatchingIssues(ctx context.Context, p config.Project, activeCyc
 					Estimate   *float64
 					State      *struct{ Name, Type string }
 					Assignee   *struct{ DisplayName, Name string }
-					Labels     struct{ Nodes []struct{ ID, Name string } }
+					Labels     struct {
+						Nodes []struct {
+							ID, Name string
+							Parent   *struct{ Name string }
+						}
+					}
 					// inverseRelations are the relations naming THIS issue as
 					// the related one: type "blocks" means .Issue blocks it.
 					InverseRelations struct {
@@ -240,6 +245,11 @@ func (c *Client) MatchingIssues(ctx context.Context, p config.Project, activeCyc
 			for _, l := range n.Labels.Nodes {
 				iss.LabelIDs = append(iss.LabelIDs, l.ID)
 				iss.LabelNames = append(iss.LabelNames, l.Name)
+				group := ""
+				if l.Parent != nil {
+					group = l.Parent.Name
+				}
+				iss.LabelGroups = append(iss.LabelGroups, group)
 			}
 			for _, r := range n.InverseRelations.Nodes {
 				if r.Type != "blocks" || r.Issue == nil {

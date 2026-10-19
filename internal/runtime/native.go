@@ -397,7 +397,7 @@ func (n *Native) SpawnWith(ctx context.Context, p config.Project, issue linear.I
 	// and, once created, every later failure must take them down first. If
 	// that fails the PRIMARY is kept too: removing it would delete the nested
 	// checkouts with no dirty check of their own.
-	linked, linkErr := n.createLinked(ctx, p, dir, branch)
+	linked, linkErr := n.createLinked(ctx, p, linkedFor(p, issue), dir, branch)
 	primaryFail := fail
 	fail = func(step string, cause error) (session.Session, error) {
 		if rbErr := n.removeLinked(ctx, p.Name, linked, true, false); rbErr != nil {

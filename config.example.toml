@@ -769,6 +769,8 @@ on_sent_set_label = "label_sent0000-1111-2222-3333-444455556666"
 # path = "/Users/me/src/nori-api" # its main checkout (absolute)
 # repo = "sushidev-team/nori-api" # owner/name — where its PR is looked up
 # default_branch = "main"         # optional; defaults to the project's
+# labels = ["apps/api"]           # only issues carrying one of these get it
+#                                 # (UUID, name or "group/name"; omit = every issue)
 
 # ---------------------------------------------------------------------------
 # Poll 4: Linear WRITE-BACK with state-based dedup (P4). Instead of flipping

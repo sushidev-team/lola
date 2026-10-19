@@ -28,6 +28,7 @@ export type {
     LinearOption,
     LinearTeam,
     LinearTeamMeta,
+    LinkedRepoDTO,
     PathInfoDTO,
     ProjectFormDTO,
     ProjectLayoutDTO,

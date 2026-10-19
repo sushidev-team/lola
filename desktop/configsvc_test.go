@@ -897,3 +897,39 @@ func TestConnectCodeNeedsADaemon(t *testing.T) {
 		t.Fatal("expected a failure with no daemon")
 	}
 }
+
+// The Repositories tab round-trips [[project.linked_repo]]: rows are trimmed,
+// blank ones dropped, labels kept — and a DTO without the field (an older
+// client) leaves the configured repos alone instead of wiping them.
+func TestSaveProjectLinkedRepos(t *testing.T) {
+	writeTestConfig(t, minimalConfig)
+	s := &ConfigService{}
+
+	dto, _ := s.GetProject("")
+	if dto.LinkedRepos == nil || len(dto.LinkedRepos) != 0 {
+		t.Fatalf("new project linkedRepos = %#v, want []", dto.LinkedRepos)
+	}
+	site := t.TempDir()
+	dto.Name, dto.Path = "nori", t.TempDir()
+	dto.CycleMode, dto.AssigneeMode = "none", "anyone"
+	dto.LinkedRepos = []LinkedRepoDTO{
+		{Name: " website ", Path: site, Repo: "acme/site", Labels: []string{"lbl-1", " "}},
+		{}, // "Add repository" never filled in
+	}
+	if err := s.SaveProject(dto); err != nil {
+		t.Fatalf("SaveProject: %v", err)
+	}
+	got, _ := s.GetProject("nori")
+	want := []LinkedRepoDTO{{Name: "website", Path: site, Repo: "acme/site", Labels: []string{"lbl-1"}}}
+	if !reflect.DeepEqual(got.LinkedRepos, want) {
+		t.Fatalf("linkedRepos = %#v, want %#v", got.LinkedRepos, want)
+	}
+
+	got.LinkedRepos = nil
+	if err := s.SaveProject(got); err != nil {
+		t.Fatalf("SaveProject: %v", err)
+	}
+	if again, _ := s.GetProject("nori"); len(again.LinkedRepos) != 1 {
+		t.Fatalf("a DTO without linkedRepos wiped them: %#v", again.LinkedRepos)
+	}
+}

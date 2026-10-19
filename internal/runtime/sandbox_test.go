@@ -19,7 +19,7 @@ func sandboxFixture(t *testing.T) *fixture {
 	f := newFixture(t, "", "")
 	f.p.Sandbox = config.SandboxDocker
 	f.p.SandboxPorts = []string{"3000", "8080:80"}
-	f.p.LinkedRepos = []config.LinkedRepo{{Name: "api", Path: "/src/api"}}
+	f.p.LinkedRepos = []config.LinkedRepo{{Name: "api", Path: "/src/api"}, {Name: "web", Path: "/src/web", Labels: []string{"apps/web"}}}
 	f.n.Cfg.Projects[0] = f.p
 	f.n.Cfg.Sandbox = config.SandboxConfig{Image: "acme/agent:1", LolaBin: "/opt/lola-linux", PassEnv: []string{"LOLA_TEST_PASS", "LOLA_TEST_UNSET"}}
 	f.n.HookToken = func(id string) string { return "tok-" + id }
@@ -33,8 +33,16 @@ func TestSandboxedLaunchRunsTheAgentInDocker(t *testing.T) {
 	if full := f.n.launchLine("nori", id, agent.Claude, defaultLaunchPrompt(id), "", false); !strings.Contains(full, "docker") {
 		t.Fatalf("sandboxed launch does not run docker:\n%s", full)
 	}
+	// Only "api" was checked out for this session (the spawn's label
+	// selection left "web" out): only its store may be mounted.
+	if err := os.MkdirAll(LinkedWorktreeDir(dir, "api"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	inner := "set -a; . ./.lola/env; set +a; exec claude"
 	line := f.n.sandboxLine(&f.p, id, agent.Claude, inner)
+	if strings.Contains(line, "/src/web") || strings.Contains(line, "lola_gcd_2") {
+		t.Errorf("a linked repo the session did not check out is mounted:\n%s", line)
+	}
 
 	for _, must := range []string{
 		"docker rm -f " + id + " >/dev/null 2>&1; ",

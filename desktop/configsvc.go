@@ -584,6 +584,11 @@ type ProjectFormDTO struct {
 	PortsPerSession int      `json:"portsPerSession"`
 	PreRemove       []string `json:"preRemove"`
 	Env             []string `json:"env"` // "KEY=value" lines
+	// LinkedRepos are the [[project.linked_repo]] tables: further repositories
+	// one issue may span. Each is checked out for an issue only when the issue
+	// carries one of its Labels (none = every issue). The whole list is
+	// replaced on save.
+	LinkedRepos []LinkedRepoDTO `json:"linkedRepos"`
 
 	// Linear polling filter.
 	Enabled        bool     `json:"enabled"`
@@ -613,6 +618,50 @@ type ProjectFormDTO struct {
 
 	Inherits InheritsDTO `json:"inherits"`
 	IsNew    bool        `json:"isNew"`
+}
+
+// LinkedRepoDTO is one [[project.linked_repo]] in the project form. Labels are
+// Linear label UUIDs (the picker's values) or, from a hand-edited config,
+// names / "group/name" — the form keeps whatever it does not recognize.
+type LinkedRepoDTO struct {
+	Name          string   `json:"name"`
+	Path          string   `json:"path"`
+	Repo          string   `json:"repo"`
+	DefaultBranch string   `json:"defaultBranch"`
+	Labels        []string `json:"labels"`
+}
+
+func linkedReposDTO(in []config.LinkedRepo) []LinkedRepoDTO {
+	out := make([]LinkedRepoDTO, 0, len(in)) // [] rather than null for the frontend
+	for _, l := range in {
+		labels := l.Labels
+		if labels == nil {
+			labels = []string{}
+		}
+		out = append(out, LinkedRepoDTO{Name: l.Name, Path: l.Path, Repo: l.Repo, DefaultBranch: l.DefaultBranch, Labels: labels})
+	}
+	return out
+}
+
+// linkedReposFrom trims the form's rows and drops the blank ones (an "Add
+// repository" never filled in); anything half-filled is kept for Validate to
+// name, rather than being silently dropped.
+func linkedReposFrom(in []LinkedRepoDTO) []config.LinkedRepo {
+	var out []config.LinkedRepo
+	for _, l := range in {
+		r := config.LinkedRepo{
+			Name:          strings.TrimSpace(l.Name),
+			Path:          strings.TrimSpace(l.Path),
+			Repo:          strings.TrimSpace(l.Repo),
+			DefaultBranch: strings.TrimSpace(l.DefaultBranch),
+			Labels:        nonEmpty(l.Labels),
+		}
+		if r.Name == "" && r.Path == "" && r.Repo == "" {
+			continue
+		}
+		out = append(out, r)
+	}
+	return out
 }
 
 // GetProject returns the named project's full form state. An empty name is a
@@ -666,6 +715,7 @@ func projectDTO(p *config.Project) ProjectFormDTO {
 		PortsPerSession: p.PortsPerSession,
 		PreRemove:       p.PreRemove,
 		Env:             envToLines(p.Env),
+		LinkedRepos:     linkedReposDTO(p.LinkedRepos),
 
 		Enabled:        p.Enabled,
 		TeamID:         p.TeamID,
@@ -752,6 +802,9 @@ func (s *ConfigService) SaveProject(dto ProjectFormDTO) error {
 	p.PortsPerSession = dto.PortsPerSession
 	p.PreRemove = nonEmpty(dto.PreRemove)
 	p.Env = env
+	if dto.LinkedRepos != nil { // absent (an older client) = untouched, never wiped
+		p.LinkedRepos = linkedReposFrom(dto.LinkedRepos)
+	}
 
 	p.Enabled = dto.Enabled
 	p.TeamID = dto.TeamID

@@ -635,27 +635,58 @@ Things to know:
 
 #### Linked repositories
 
-One issue can span several repositories — a frontend and its API, say. List the
-others on the project:
+One issue can span several repositories — the apps of one product, say. List
+the others on the project and give each the **labels** that mean "this issue
+touches it":
 
 ```toml
 [[project]]
-name = "web"
-path = "/src/web"
-repo = "acme/web"
+name = "nori"
+path = "/src/nori-app"            # the primary repository
+repo = "acme/nori-app"
+match_labels = ["<apps/app>", "<apps/website>", "<apps/api>"]  # pick up all three
+match_mode   = "any"
 
 [[project.linked_repo]]
-name           = "api"            # directory name + label
-path           = "/src/api"       # its main checkout
-repo           = "acme/api"       # where its PR is looked up
+name   = "website"                # directory name + label beside its PR
+path   = "/src/nori-website"      # its main checkout
+repo   = "acme/nori-website"      # where its PR is looked up
+labels = ["apps/website"]         # only issues carrying this label get it
+
+[[project.linked_repo]]
+name           = "api"
+path           = "/src/nori-api"
+repo           = "acme/nori-api"
+labels         = ["apps/api"]
 default_branch = "develop"        # optional; defaults to the project's
 ```
 
-Each session then gets one worktree **per repository**, all on the session's
+**Labels pick the repositories.** At spawn, a linked repo is checked out only
+when the issue carries at least one of its `labels` — an issue labelled
+`apps/website` gets the website and nothing else, one labelled `apps/website`
+*and* `apps/api` gets both. A label is written as its Linear UUID, its name, or
+`group/name` for a label inside a label group (case-insensitive); the app's
+**Repositories** tab offers the team's labels as checkboxes. A linked repo
+**without** labels is checked out for every issue. The primary repository is
+always checked out — it is the session's directory and its PR drives the
+session — so make it the repository most issues touch. Remember that
+`match_labels` still decides which issues reach the project at all: list every
+repository's label there with `match_mode = "any"`.
+
+Each session gets one worktree per selected repository, all on the session's
 branch, all in one session directory: the primary worktree, with each linked
 one at `.lola/repos/<name>` inside it (git-excluded, and inside the sandbox when
-there is one). The agent's briefing lists them and asks for one PR per
-repository it changed, cross-linked in their descriptions.
+there is one — only the selected repositories are mounted). The agent's
+briefing lists them, names the project's repositories it did NOT get (so it
+reports `lola report blocked` instead of working around a missing one), and
+asks for one PR per repository it changed, cross-linked in their descriptions.
+The selection is made once, at spawn: relabelling a running issue does not add
+or remove checkouts.
+
+Both config forms edit the list — the app's project form has a
+**Repositories** tab (pick a folder; name, GitHub repo and base branch fill in),
+the TUI's General tab a **Linked repos** field with one
+`name | path | owner/repo | label, label | base branch` line per repository.
 
 The primary repository's PR still drives everything per-PR — status, CI and
 review reactions, write-back. Each linked PR is observed beside it and shown in

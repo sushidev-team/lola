@@ -1299,7 +1299,11 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   them FIRST.** `[[project.linked_repo]]` (`internal/runtime/linked.go`)
   checks each repo out at `<worktree>/.lola/repos/<name>` on the session's
   branch — inside the excluded `.lola/` (invisible to the primary's git) and
-  inside the sandbox mount. Removing the primary deletes that tree with no
+  inside the sandbox mount. WHICH repos a session gets is decided once, at
+  spawn, by the issue's labels (`LinkedRepo.Labels` → `WantedFor`, matched by
+  UUID, name or `group/name` from `Issue.LabelGroups`; none = always), and
+  from then on the checkouts on disk are the truth — the sandbox mounts only
+  `linkedPresent`. Removing the primary deletes that tree with no
   dirty check of the nested ones, so `Kill` runs `removeLinked` (dirty-safe,
   per repo) before anything else and a refusal keeps EVERYTHING — as does a
   failed linked rollback during spawn, and anything left under `.lola/repos`

@@ -186,6 +186,19 @@ export interface LinearTeamMeta {
 }
 
 /**
+ * LinkedRepoDTO is one [[project.linked_repo]] in the project form. Labels are
+ * Linear label UUIDs (the picker's values) or, from a hand-edited config,
+ * names / "group/name" — the form keeps whatever it does not recognize.
+ */
+export interface LinkedRepoDTO {
+    "name": string;
+    "path": string;
+    "repo": string;
+    "defaultBranch": string;
+    "labels": string[] | null;
+}
+
+/**
  * PathInfoDTO is everything the project form derives from one picked folder.
  * Path is the checkout ROOT when there is one (picking a subdirectory still
  * configures the repository), else the directory as given.
@@ -254,6 +267,14 @@ export interface ProjectFormDTO {
      * "KEY=value" lines
      */
     "env": string[] | null;
+
+    /**
+     * LinkedRepos are the [[project.linked_repo]] tables: further repositories
+     * one issue may span. Each is checked out for an issue only when the issue
+     * carries one of its Labels (none = every issue). The whole list is
+     * replaced on save.
+     */
+    "linkedRepos": LinkedRepoDTO[] | null;
 
     /**
      * Linear polling filter.
