@@ -1,13 +1,12 @@
 package daemon
 
 // Tests for SUSHI-628's daemon half: the sandbox hook bridge (hookbridge.go)
-// and linked-repository PR tracking (linkedprs.go + the merged-cleanup hold).
+// and the sandbox gates. Stack sessions are in stack_test.go.
 
 import (
 	"bufio"
 	"context"
 	"encoding/json"
-	"errors"
 	"io"
 	"log"
 	"net"
@@ -21,7 +20,6 @@ import (
 	"github.com/sushidev-team/lola/internal/hook"
 	"github.com/sushidev-team/lola/internal/linear"
 	"github.com/sushidev-team/lola/internal/protocol"
-	"github.com/sushidev-team/lola/internal/scm"
 	"github.com/sushidev-team/lola/internal/session"
 	"github.com/sushidev-team/lola/internal/state"
 )
@@ -152,78 +150,6 @@ func TestSandboxedProjectGatesOnTheDockerCLI(t *testing.T) {
 	}
 }
 
-func TestObserveLinkedPRsKeepsLastFactsOnFailure(t *testing.T) {
-	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})
-	pr := &scm.PR{Number: 9, State: "OPEN", URL: "https://github.com/acme/api/pull/9"}
-	d.prForBranch = func(_ context.Context, repo, branch string) (*scm.PR, error) {
-		switch repo {
-		case "acme/api":
-			return pr, nil
-		case "acme/docs":
-			return nil, errors.New("gh: 502")
-		}
-		t.Fatalf("unexpected repo %s", repo)
-		return nil, nil
-	}
-	s := nativeSess("FE-1", "working")
-	s.Linked = []session.LinkedRepo{
-		{Name: "api", Repo: "acme/api", Branch: s.Branch},
-		{Name: "docs", Repo: "acme/docs", Branch: s.Branch, PR: &scm.PR{Number: 3, State: "OPEN"}},
-		{Name: "norepo", Branch: s.Branch}, // nothing to ask
-	}
-	facts := d.observeLinkedPRs(context.Background(), s)
-	if len(facts) != 1 || facts[0].name != "api" {
-		t.Fatalf("facts = %+v", facts)
-	}
-	snapshot := s.Linked
-	cur := s
-	if !applyLinkedPRs(&cur, facts, time.Now()) {
-		t.Fatal("a new linked PR must count as a change")
-	}
-	if cur.Linked[0].PR != pr || cur.Linked[1].PR.Number != 3 {
-		t.Fatalf("linked after apply = %+v", cur.Linked)
-	}
-	if snapshot[0].PR != nil {
-		t.Fatal("apply mutated a shared snapshot in place")
-	}
-	if applyLinkedPRs(&cur, facts, time.Now()) {
-		t.Fatal("unchanged facts reported as a change")
-	}
-}
-
-func TestMergedCleanupWaitsForOpenLinkedPRs(t *testing.T) {
-	nat := &fakeNative{}
-	d := newTestDaemon(t, reactTestConfig(nativePoll("p1")), &linear.Fake{}, nat)
-	(&fakeReactSeams{}).install(d)
-
-	pr := openPR(7, "MERGEABLE", "APPROVED", "pass")
-	pr.State = "MERGED"
-	s := reactSess("FE-1", "merged", pr)
-	s.SetDelivery(state.DeliveryMerged, time.Now())
-	after := s.DeliverySince.Add(time.Second)
-	// Never successfully looked up (gh failing): unknown is not "no PR".
-	s.Linked = []session.LinkedRepo{{Name: "api", Repo: "acme/api", Branch: s.Branch}}
-	d.sessions.Upsert(s)
-	d.react(context.Background(), s)
-	if calls := nat.killCalls(); len(calls) != 0 {
-		t.Fatalf("cleanup ran with the linked PR never observed: %+v", calls)
-	}
-
-	s.Linked[0].PR, s.Linked[0].PRObservedAt = &scm.PR{Number: 9, State: "OPEN"}, after
-	d.sessions.Upsert(s)
-	d.react(context.Background(), s)
-	if calls := nat.killCalls(); len(calls) != 0 {
-		t.Fatalf("cleanup ran while a linked PR is open: %+v", calls)
-	}
-
-	s.Linked[0].PR = &scm.PR{Number: 9, State: "MERGED"}
-	d.sessions.Upsert(s)
-	d.react(context.Background(), s)
-	if calls := nat.killCalls(); len(calls) != 1 {
-		t.Fatalf("cleanup did not run once every linked PR settled: %+v", calls)
-	}
-}
-
 // A sandboxed session's agent lives in the image: revive gates on the docker
 // CLI, like spawn, switch and fork.
 func TestReviveGatesASandboxedSessionOnDocker(t *testing.T) {
@@ -251,22 +177,38 @@ func TestSyncGitPinsPinsOrDeniesSandboxedWorktrees(t *testing.T) {
 	pinned.Sandbox = config.SandboxDocker
 	pinned.Worktree = "/wt/p1/" + pinned.ID
 	pinned.GitPin = &gitguard.Pin{GitDir: "/r/.git/worktrees/x", CommonDir: "/r/.git"}
-	pinned.Linked = []session.LinkedRepo{{Name: "api", Worktree: pinned.Worktree + "/.lola/repos/api"}}
+	stack := nativeSess("FE-3", "working")
+	stack.Sandbox = config.SandboxDocker
+	stack.Stack = true
+	stack.Worktree = "/wt/p1/" + stack.ID
+	stack.Apps = []session.App{
+		{Name: "api", Worktree: stack.Worktree + "/api", GitPin: &gitguard.Pin{GitDir: "/a/.git/worktrees/y", CommonDir: "/a/.git"}},
+		{Name: "web", Worktree: stack.Worktree + "/web"}, // rebuilt by adoption: no pin
+	}
 	host := nativeSess("FE-2", "working")
 	host.Worktree = "/wt/p1/" + host.ID
 	d.sessions.Upsert(pinned)
+	d.sessions.Upsert(stack)
 	d.sessions.Upsert(host)
 	defer func() {
 		gitguard.Clear(pinned.Worktree)
-		gitguard.Clear(pinned.Linked[0].Worktree)
+		for _, a := range stack.Apps {
+			gitguard.Clear(a.Worktree)
+		}
 	}()
 
 	d.syncGitPins()
 	if _, p, ok := gitguard.Lookup(pinned.Worktree); !ok || p != *pinned.GitPin {
 		t.Fatalf("pinned worktree = %+v %v", p, ok)
 	}
-	if at, p, ok := gitguard.Lookup(pinned.Linked[0].Worktree); !ok || at != pinned.Linked[0].Worktree || p.Valid() {
-		t.Fatalf("pin-less linked worktree not denied: %q %+v %v", at, p, ok)
+	if _, p, ok := gitguard.Lookup(stack.Apps[0].Worktree); !ok || p != *stack.Apps[0].GitPin {
+		t.Fatalf("stack app = %+v %v", p, ok)
+	}
+	if at, p, ok := gitguard.Lookup(stack.Apps[1].Worktree); !ok || at != stack.Apps[1].Worktree || p.Valid() {
+		t.Fatalf("pin-less stack app not denied: %q %+v %v", at, p, ok)
+	}
+	if gitguard.Pinned(stack.Worktree) {
+		t.Fatal("a stack session's folder is not a repository and must not be pinned")
 	}
 	if gitguard.Pinned(host.Worktree) {
 		t.Fatal("a host session was pinned")

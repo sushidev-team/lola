@@ -69,6 +69,7 @@ func (d *Daemon) handleDev(ctx context.Context, sessionID string, on bool) (prot
 	}
 
 	d.mu.Lock()
+	cfg := d.cfg
 	p := d.cfg.ProjectByName(s.Project)
 	home := d.home
 	d.mu.Unlock()
@@ -92,12 +93,18 @@ func (d *Daemon) handleDev(ctx context.Context, sessionID string, on bool) (prot
 	if p == nil {
 		return protocol.DevData{}, fmt.Errorf("project %q is no longer in config", s.Project)
 	}
-	if len(p.DevCommands) == 0 {
-		return protocol.DevData{}, fmt.Errorf("project %q configures no dev_commands", p.DisplayName())
-	}
 	dir := devWorktreeDir(s, p.Name, home)
 	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
 		return protocol.DevData{}, fmt.Errorf("session %s has no worktree at %s", s.ID, dir)
+	}
+	// A stack session runs each app's own dev_commands in that app's worktree
+	// (apps.go devPlan); everything below treats them as one set of tabs.
+	plan, parallel, leases := devPlan(cfg, s, dir)
+	if len(plan) == 0 {
+		if s.Stack {
+			return protocol.DevData{}, fmt.Errorf("no app of session %s configures dev_commands", s.ID)
+		}
+		return protocol.DevData{}, fmt.Errorf("project %q configures no dev_commands", p.DisplayName())
 	}
 
 	// MULTI-ACTIVE (the project leases ports): every session binds its own
@@ -106,11 +113,12 @@ func (d *Daemon) handleDev(ctx context.Context, sessionID string, on bool) (prot
 	// lease (spawned before port_range was set, or the range ran out) is
 	// refused: its dev stack would read an empty $LOLA_PORT and fight the
 	// running ones over whatever default the command falls back to.
-	_, _, _, parallel := p.PortLease()
 	only := ""
 	if parallel {
-		if _, ok := d.ports.Get(s.ID); !ok {
-			return protocol.DevData{}, fmt.Errorf("session %s holds no port lease from %s's port_range (spawned before it was set, or the range is exhausted) — its dev stack would collide with the others; respawn the session or widen the range", s.ID, p.DisplayName())
+		for _, key := range leases {
+			if _, ok := d.ports.Get(key); !ok {
+				return protocol.DevData{}, fmt.Errorf("session %s holds no port lease from %s's port_range (spawned before it was set, or the range is exhausted) — its dev stack would collide with the others; respawn the session or widen the range", key, p.DisplayName())
+			}
 		}
 		only = s.ID
 	}
@@ -129,7 +137,8 @@ func (d *Daemon) handleDev(ctx context.Context, sessionID string, on bool) (prot
 
 	started := 0
 	var errs []error
-	for i, cmd := range p.DevCommands {
+	for i, dc := range plan {
+		cmd := dc.cmd
 		name := devtab.Name(s.ID, i+1)
 		// One tab per command: a re-activation REPLACES the previous pane
 		// (including a dead one still showing the last crash) rather than
@@ -138,7 +147,7 @@ func (d *Daemon) handleDev(ctx context.Context, sessionID string, on bool) (prot
 		if tm.Has(ectx, name) {
 			_ = tm.KillSessionTree(ectx, name)
 		}
-		err := tm.NewSession(ectx, name, dir, lolaenv.CommandLine(cmd))
+		err := tm.NewSession(ectx, name, dc.dir, lolaenv.CommandLine(cmd))
 		if err == nil {
 			// Best-effort: without it the tab simply vanishes when the command
 			// exits, which still reads as inactive — just without the output
@@ -173,7 +182,7 @@ func (d *Daemon) handleDev(ctx context.Context, sessionID string, on bool) (prot
 		d.logf("", "dev: %s: %v", s.ID, errors.Join(errs...))
 	}
 	d.logf("", "dev: %s", msg)
-	return protocol.DevData{Active: true, Commands: p.DevCommands, Stopped: stopped, Message: msg}, nil
+	return protocol.DevData{Active: true, Commands: devLabels(plan), Stopped: stopped, Message: msg}, nil
 }
 
 // takeOverProject stops the dev tabs of every OTHER session of s's project and
@@ -489,7 +498,7 @@ func (d *Daemon) reconcileDevTabs(ctx context.Context, aliveNames map[string]boo
 		if cfg != nil {
 			project = cfg.ProjectByName(s.Project)
 		}
-		if project != nil && d.scanDevClash(ctx, s.ID, deadTabs, project.Name, home, project.DevCommands) {
+		if project != nil && d.scanDevClash(ctx, s.ID, deadTabs, project.Name, home, devLabels(devPlanOf(cfg, s, home))) {
 			changed = true
 		}
 	}

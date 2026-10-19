@@ -412,18 +412,27 @@ type Event struct {
 	At time.Time `json:"at,omitzero"`
 }
 
-// LinkedPR is one linked repository of a session and its PR, if any.
+// SessionApp is one repository (app) of a STACK session: its worktree inside
+// the session folder, its PR if any, and the delivery axis of that PR alone.
 // Number 0 means no PR observed yet (the agent has not opened one there, or
 // the repo has no GitHub slug to ask).
-type LinkedPR struct {
-	Name   string `json:"name"`
-	Repo   string `json:"repo,omitempty"`
-	Branch string `json:"branch"`
-	Number int    `json:"number,omitempty"`
-	URL    string `json:"url,omitempty"`
-	State  string `json:"state,omitempty"`  // OPEN|CLOSED|MERGED
-	Checks string `json:"checks,omitempty"` // pass|fail|pending|none
-	Draft  bool   `json:"draft,omitempty"`
+type SessionApp struct {
+	Name     string `json:"name"`            // the member project's name (= its folder in the session)
+	Label    string `json:"label,omitempty"` // the member project's display name
+	Repo     string `json:"repo,omitempty"`
+	Branch   string `json:"branch"`
+	Worktree string `json:"worktree,omitempty"`
+	Number   int    `json:"number,omitempty"`
+	URL      string `json:"url,omitempty"`
+	State    string `json:"state,omitempty"`  // OPEN|CLOSED|MERGED
+	Checks   string `json:"checks,omitempty"` // pass|fail|pending|none
+	Review   string `json:"review,omitempty"` // APPROVED|CHANGES_REQUESTED|REVIEW_REQUIRED
+	Draft    bool   `json:"draft,omitempty"`
+	Delivery string `json:"delivery,omitempty"` // this app's delivery axis (state vocabulary)
+	// Touched reports local changes against the base with no PR yet.
+	Touched bool `json:"touched,omitempty"`
+	// Ports is this app's own port lease (its [[project]].port_range).
+	Ports []int `json:"ports,omitempty"`
 }
 
 // SessionInfo is one observed session, flattened to render-ready strings and
@@ -448,12 +457,16 @@ type SessionInfo struct {
 	FirstSeen time.Time `json:"firstSeen,omitzero"` // raw session age origin for live client formatting
 
 	// Sandbox is "docker" when the agent runs in a container
-	// ([[project]].sandbox), "" on the host. LinkedPRs are the session's
-	// linked-repository PRs ([[project.linked_repo]]), one per linked repo,
-	// in config order; the primary PR stays in PRURL/PRNumber. Both absent on
-	// an older daemon.
-	Sandbox   string     `json:"sandbox,omitempty"`
-	LinkedPRs []LinkedPR `json:"linkedPrs,omitempty"`
+	// ([[project]].sandbox), "" on the host. Absent on an older daemon.
+	Sandbox string `json:"sandbox,omitempty"`
+	// Stack marks a STACK session: Worktree is its folder, Apps its
+	// repositories in the stack's member order, and the PR fields above
+	// (PRURL, PRNumber, Checks, Review, Delivery) describe FocusApp — the app
+	// whose PR needs attention most, so the row's one badge is never greener
+	// than its worst PR.
+	Stack    bool         `json:"stack,omitempty"`
+	Apps     []SessionApp `json:"apps,omitempty"`
+	FocusApp string       `json:"focusApp,omitempty"`
 
 	// The two state axes underneath Status (see internal/state), with raw
 	// freshness timestamps so a client can render a live "ago" between
@@ -669,6 +682,14 @@ type ProjectInfo struct {
 	Path          string `json:"path"`
 	Repo          string `json:"repo"`
 	DefaultBranch string `json:"defaultBranch"`
+	// Kind is "stack" for a STACK (no checkout of its own; it owns the Linear
+	// side of its member projects), "" for a repository. Stack names the stack
+	// a member belongs to ("" = not a member), and Labels are the issue
+	// labels that select it. A member is drawn under its stack; its Group is
+	// ignored while it is one.
+	Kind   string   `json:"kind,omitempty"`
+	Stack  string   `json:"stack,omitempty"`
+	Labels []string `json:"labels,omitempty"`
 
 	// Per-PROJECT agent health (not the default agent): AgentBin is the resolved
 	// coding-agent binary for this project (its override → [defaults].agent →

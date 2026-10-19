@@ -237,6 +237,7 @@ func (m *rootModel) helpModal() string {
 		row("p", "projects list"),
 		row("P / e", "edit project"),
 		row("n / a", "new project"),
+		row("t", "new stack (multi-repo)"),
 		row("s", "project's sessions"),
 		row("space", "toggle polling"),
 		row("b", "broadcast to its agents"),
@@ -404,7 +405,7 @@ func (m *rootModel) detailTitle() string {
 	// existed — the exact collapse the split removes.
 	extra += " · " + displayLabel(displayOf(*sel))
 	if sel.PRNumber > 0 {
-		extra += fmt.Sprintf(" · #%d", sel.PRNumber)
+		extra += fmt.Sprintf(" · %s#%d", focusAppPrefix(*sel), sel.PRNumber)
 		if sel.Checks != "" {
 			extra += " " + sel.Checks
 		}
@@ -669,7 +670,7 @@ func (m *rootModel) projectRailBody(w, h int) []string {
 		return []string{faintText.Render("no projects — press n to add one")}
 	}
 	rows := make([]string, 0, len(m.cfg.Projects))
-	for i, p := range m.cfg.Projects {
+	for i, p := range m.railProjectPtrs() {
 		polls := p.Polls()
 		enabled, last, errd := p.Enabled, "", false
 		if polls {
@@ -685,6 +686,10 @@ func (m *rootModel) projectRailBody(w, h int) []string {
 		}
 		var dot string
 		switch {
+		case p.InStack():
+			// A member never polls on its own — its stack's row carries the
+			// poll status, so the member row stays quiet rather than "not polling".
+			dot = " "
 		case !polls:
 			dot = faintText.Render("·")
 		case errd:
@@ -702,7 +707,7 @@ func (m *rootModel) projectRailBody(w, h int) []string {
 		if polls && !enabled {
 			name = faintText.Render(name)
 		}
-		left := marker + dot + " " + name
+		left := marker + dot + " " + stackMarker(m.cfg, p) + name
 		// Right-align the last-run age within the width.
 		gap := w - lipgloss.Width(left) - lipgloss.Width(last)
 		if gap < 1 {
@@ -959,7 +964,7 @@ func (m *rootModel) keybar(w int) string {
 	// '?' away.
 	var keys []string
 	if m.focus == focusPolls {
-		keys = []string{"↑↓ move", "enter open", "space toggle", "n new", "x stop", "X remove", "tab → sessions"}
+		keys = []string{"↑↓ move", "enter open", "space toggle", "n new", "t stack", "x stop", "X remove", "tab → sessions"}
 	} else {
 		keys = []string{"↑↓ move", "enter focus", "tab → projects", "/ filter", "x kill"}
 		if sel := s.selected(); sel != nil {

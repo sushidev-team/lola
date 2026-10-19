@@ -760,17 +760,28 @@ on_sent_set_label = "label_sent0000-1111-2222-3333-444455556666"
 # DB_DATABASE = "{{.DBName}}"       # pair with post_create = ['createdb "$LOLA_DB_NAME"']
 # APP_PORT = "{{.Port}}"            # needs port_range
 
-# Linked repositories: further repos one issue may span. Each session gets a
-# worktree of each, on the session's branch, at .lola/repos/<name> inside its
-# own worktree; the agent opens one PR per repo it changed and lola tracks them
-# beside the primary PR (the merged cleanup waits for open linked PRs).
-# [[project.linked_repo]]
-# name = "api"                   # [a-z0-9._-]; directory name + label
-# path = "/Users/me/src/nori-api" # its main checkout (absolute)
-# repo = "sushidev-team/nori-api" # owner/name — where its PR is looked up
-# default_branch = "main"         # optional; defaults to the project's
-# labels = ["apps/api"]           # only issues carrying one of these get it
-#                                 # (UUID, name or "group/name"; omit = every issue)
+# STACKS: several repositories that ship together, one Linear issue stream.
+# A stack is a project with kind = "stack" and no path; it owns the Linear
+# filter, write-back, agent, sandbox and budget. Its members are ordinary
+# projects with stack = "<name>" and the labels that select them. A session of
+# the stack is a folder with one worktree per selected app; the agent starts
+# in it. See README "Stacks".
+#
+# [[project]]
+# name = "nori"
+# kind = "stack"
+# team_id = "…"
+# match_labels = ["<apps/app>", "<apps/website>"]
+# match_mode = "any"
+#
+# [[project]]
+# name = "nori-website"
+# stack = "nori"
+# labels = ["apps/website"]       # UUID, name or "group/name"; omit = every issue
+# path = "/Users/me/src/nori-website"
+# repo = "sushidev-team/nori-website"
+# default_branch = "develop"
+# dev_commands = ["npm run dev"]
 
 # ---------------------------------------------------------------------------
 # Poll 4: Linear WRITE-BACK with state-based dedup (P4). Instead of flipping

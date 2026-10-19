@@ -26,8 +26,8 @@ import (
 //
 // What the container can reach is the whole point, so it is spelled out:
 //
-//	read-write  the session's worktree (linked-repo worktrees live INSIDE it,
-//	            at .lola/repos/<name>), the repositories' git object/ref stores
+//	read-write  the session's worktree (a stack session's FOLDER, with its app
+//	            worktrees inside it), the repositories' git object/ref stores
 //	            (a commit writes there — without them the agent cannot commit),
 //	            and claude's transcript directory for this worktree (lola's
 //	            usage, claim audit and revive read it on the host)
@@ -173,23 +173,17 @@ func (n *Native) sandboxLine(p *config.Project, id string, kind agent.Kind, inne
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s rm -f %s >/dev/null 2>&1; ", docker, shQuote(id))
 
-	// The git stores: the primary repository's, then each linked repo's
-	// (optional — a linked checkout that is not a repository just adds
-	// nothing). Asked of the MAIN checkouts, never of the worktree: the
-	// worktree's `.git` pointer is a file the agent can rewrite, and following
-	// it would let a tampered pointer pick which repository gets mounted
-	// read-write on the next launch.
-	// Only the linked repos this session checked out (the spawn's label
-	// selection): a store the session has no worktree of is not the agent's.
-	present := linkedPresent(*p, dir)
-	repoDirs := []string{p.Path}
-	for _, l := range present {
-		repoDirs = append(repoDirs, l.Path)
-	}
-	for i, rd := range repoDirs {
+	// The git stores: the project's repository, or for a stack each app the
+	// session checked out (the spawn's label selection — a store the session
+	// has no worktree of is not the agent's). Asked of the MAIN checkouts,
+	// never of a worktree: the worktree's `.git` pointer is a file the agent
+	// can rewrite, and following it would let a tampered pointer pick which
+	// repository gets mounted read-write on the next launch.
+	repos, required := n.sessionRepos(p, dir)
+	for i, r := range repos {
 		v := "lola_gcd_" + strconv.Itoa(i)
-		fmt.Fprintf(&b, `%s=$(git -C %s rev-parse --path-format=absolute --git-common-dir 2>/dev/null)`, v, shQuote(rd))
-		if i == 0 {
+		fmt.Fprintf(&b, `%s=$(git -C %s rev-parse --path-format=absolute --git-common-dir 2>/dev/null)`, v, shQuote(r.path))
+		if i == 0 && required {
 			fmt.Fprintf(&b, ` && test -d "$%s" || { echo 'lola: cannot resolve the git directory of this project' >&2; exit 1; }`, v)
 		}
 		b.WriteString("; ")
@@ -206,7 +200,7 @@ func (n *Native) sandboxLine(p *config.Project, id string, kind agent.Kind, inne
 	fmt.Fprintf(&b, "exec %s run --rm -it --init --name %s --label %s", docker, shQuote(id), shQuote(sandboxLabel+"="+id))
 	fmt.Fprintf(&b, " --add-host %s --security-opt no-new-privileges", shQuote(sandboxHost+":host-gateway"))
 	fmt.Fprintf(&b, " -w %s -v %s", shQuote(dir), shQuote(dir+":"+dir))
-	for i := range repoDirs {
+	for i := range repos {
 		v := "$lola_gcd_" + strconv.Itoa(i)
 		// ${v:+…} so an unresolvable OPTIONAL store adds nothing rather than an
 		// empty -v. The rw store first; the read-only overlays after it, so they
@@ -215,9 +209,9 @@ func (n *Native) sandboxLine(p *config.Project, id string, kind agent.Kind, inne
 		fmt.Fprintf(&b, ` ${lola_gcd_%d:+-v} ${lola_gcd_%d:+"%s/config:%s/config:ro"}`, i, i, v, v)
 		fmt.Fprintf(&b, ` ${lola_gcd_%d:+-v} ${lola_gcd_%d:+"%s/hooks:%s/hooks:ro"}`, i, i, v, v)
 	}
-	worktrees := []string{dir}
-	for _, l := range present {
-		worktrees = append(worktrees, LinkedWorktreeDir(dir, l.Name))
+	var worktrees []string
+	for _, r := range repos {
+		worktrees = append(worktrees, r.worktree)
 	}
 	for _, cw := range pinnedOverlays(worktrees) {
 		fmt.Fprintf(&b, " -v %s", shQuote(cw+":"+cw+":ro"))
@@ -241,13 +235,15 @@ func (n *Native) sandboxLine(p *config.Project, id string, kind agent.Kind, inne
 	if lb, host := n.Cfg.Sandbox.LolaBin, n.lolaBin(); lb != "" && filepath.IsAbs(host) {
 		fmt.Fprintf(&b, " -v %s", shQuote(lb+":"+host+":ro"))
 	}
-	for _, rel := range p.Symlinks {
-		if !filepath.IsLocal(rel) {
-			continue
-		}
-		target := filepath.Join(p.Path, rel)
-		if _, err := os.Stat(target); err == nil {
-			fmt.Fprintf(&b, " -v %s", shQuote(target+":"+target+":ro"))
+	for _, r := range repos {
+		for _, rel := range r.symlinks {
+			if !filepath.IsLocal(rel) {
+				continue
+			}
+			target := filepath.Join(r.path, rel)
+			if _, err := os.Stat(target); err == nil {
+				fmt.Fprintf(&b, " -v %s", shQuote(target+":"+target+":ro"))
+			}
 		}
 	}
 	for _, spec := range p.SandboxPorts {

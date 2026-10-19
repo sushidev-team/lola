@@ -427,11 +427,16 @@ type Session struct {
 	// must remove the container even after the project stopped being sandboxed.
 	Sandbox string `json:"sandbox,omitempty"`
 
-	// Linked are the session's LINKED-REPOSITORY worktrees
-	// ([[project.linked_repo]]): one per further repository the issue spans,
-	// each on the session's branch, each with its own PR. The primary repo's PR
-	// stays in PR and owns the delivery axis; these are tracked beside it.
-	Linked []LinkedRepo `json:"linked,omitempty"`
+	// Stack marks a session of a STACK project (config kind = "stack"): its
+	// Worktree is a plain FOLDER, not a checkout, and its repositories are
+	// Apps — one worktree and one PR lane each. See stack.go.
+	Stack bool `json:"stack,omitempty"`
+	// Apps are a stack session's repositories, in the stack's member order.
+	Apps []App `json:"apps,omitempty"`
+	// Lane names the app a LANE VIEW is about ("" on a real record). It is
+	// never persisted: Store.Get/Update hand a view out for a lane ID
+	// (LaneID) and fold its writes back into the record.
+	Lane string `json:"-"`
 
 	// GitPin is a SANDBOXED worktree's trusted git layout, captured before the
 	// agent first ran (internal/gitguard): host-side git on the worktree uses
@@ -756,44 +761,6 @@ func (s Session) OwnsBranch() bool {
 	return !s.Manual
 }
 
-// LinkedRepo is one linked-repository worktree of a session. Name/Repo come
-// from the project's [[project.linked_repo]] at spawn; Worktree and Branch are
-// what the runtime created; PR is the observer's latest gh facts for Branch in
-// Repo (nil = no PR yet, or no Repo to ask), with PRObservedAt its freshness.
-type LinkedRepo struct {
-	Name         string    `json:"name"`
-	Repo         string    `json:"repo,omitempty"`
-	Path         string    `json:"path,omitempty"` // the linked repository's main checkout
-	Worktree     string    `json:"worktree"`
-	Branch       string    `json:"branch"`
-	PR           *scm.PR   `json:"pr,omitempty"`
-	PRObservedAt time.Time `json:"pr_observed_at,omitzero"`
-	// GitPin is this linked worktree's trusted layout (see Session.GitPin).
-	GitPin *gitguard.Pin `json:"git_pin,omitempty"`
-}
-
-// LinkedPRsSettled reports whether every linked repository is KNOWN to have
-// no open PR as of since (the moment the primary PR merged) — the condition
-// for tearing the session down. "Known" is the point: a linked repo with a
-// GitHub slug counts only once a lookup SUCCEEDED at or after since, because
-// a failed lookup leaves the last facts standing and a nil PR from before the
-// merge says nothing about a PR opened after it. A repo with no slug cannot
-// be asked and does not hold the cleanup (its dirty check still does).
-func (s Session) LinkedPRsSettled(since time.Time) bool {
-	for _, l := range s.Linked {
-		if l.Repo == "" {
-			continue
-		}
-		if l.PRObservedAt.IsZero() || l.PRObservedAt.Before(since) {
-			return false
-		}
-		if l.PR != nil && l.PR.State == "OPEN" {
-			return false
-		}
-	}
-	return true
-}
-
 // Store is a mutex-guarded in-memory session map keyed by ID, persisted as
 // JSON at <dir>/sessions.json. Loading is best-effort: a missing or corrupt
 // file yields an empty store, never a fatal error — the poller repopulates
@@ -905,6 +872,13 @@ func (s *Store) snapshotLocked() []Session {
 func (s *Store) Get(id string) (Session, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if base, app := SplitLaneID(id); app != "" {
+		sess, ok := s.sessions[base]
+		if !ok {
+			return Session{}, false
+		}
+		return sess.LaneView(app) // a lane ID is a view of its session (stack.go)
+	}
 	sess, ok := s.sessions[id]
 	if !ok {
 		return Session{}, false
@@ -920,6 +894,18 @@ func (s *Store) Get(id string) (Session, bool) {
 // is preserved (stamped now for new entries without one); LastSeen is always
 // stamped now.
 func (s *Store) Upsert(sess Session) {
+	if base, app := SplitLaneID(sess.ID); app != "" {
+		// A lane view written back whole: fold it into its session.
+		sess.Lane = app
+		s.Update(base, func(cur *Session) bool {
+			if cur.AppIndex(app) < 0 {
+				return false
+			}
+			cur.putLane(sess, time.Now())
+			return true
+		})
+		return
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := time.Now()
@@ -951,6 +937,9 @@ func (s *Store) Upsert(sess Session) {
 // Get→mutate→Upsert: the unlocked variant races concurrent writers and a
 // stale snapshot would silently erase their transitions.
 func (s *Store) Update(id string, fn func(sess *Session) bool) (Session, bool) {
+	if base, app := SplitLaneID(id); app != "" {
+		return s.updateLane(base, app, fn)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	sess, ok := s.sessions[id]
@@ -986,6 +975,30 @@ func (s *Store) Update(id string, fn func(sess *Session) bool) (Session, bool) {
 	return sess, true
 }
 
+// updateLane is Update for a lane ID (stack.go): fn mutates the lane VIEW,
+// which is then folded back into the session — the app's PR lane and the
+// session's shared fields — in the same critical section, and the returned
+// session is the new view.
+func (s *Store) updateLane(base, app string, fn func(sess *Session) bool) (Session, bool) {
+	var view Session
+	found := false
+	_, ok := s.Update(base, func(cur *Session) bool {
+		v, ok := cur.LaneView(app)
+		if !ok {
+			return false
+		}
+		found = true
+		if !fn(&v) {
+			view = v
+			return false
+		}
+		cur.putLane(v, time.Now())
+		view, _ = cur.LaneView(app)
+		return true
+	})
+	return view, ok && found
+}
+
 // Apply is Update that also handles the not-yet-present case atomically: fn
 // receives a copy of the current record (zero Session when absent) plus
 // whether it existed, and returns whether to commit. It exists for the
@@ -999,6 +1012,10 @@ func (s *Store) Update(id string, fn func(sess *Session) bool) (Session, bool) {
 func (s *Store) Apply(id string, fn func(sess *Session, exists bool) bool) (Session, bool) {
 	if id == "" {
 		return Session{}, false
+	}
+	if base, app := SplitLaneID(id); app != "" {
+		// A lane exists only inside its session: never inserted on its own.
+		return s.updateLane(base, app, func(sess *Session) bool { return fn(sess, true) })
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1035,6 +1052,9 @@ func (s *Store) Apply(id string, fn func(sess *Session, exists bool) bool) (Sess
 // reports whether it existed. Used by an explicit kill once the session's
 // worktree has been removed; callers Save afterwards to persist the drop.
 func (s *Store) Delete(id string) bool {
+	if _, app := SplitLaneID(id); app != "" {
+		return false // a lane goes with its session
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, ok := s.sessions[id]; !ok {

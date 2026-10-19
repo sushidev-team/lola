@@ -1151,16 +1151,17 @@ func (d *Daemon) adoptNativeSessions(ctx context.Context) {
 				if s.Agent == "" {
 					s.Agent = prev.Agent // the scan cannot see which coding agent runs inside
 				}
-				// Nor whether it runs in a container, or which linked worktrees
-				// (and PRs) it has — teardown needs both.
+				// Nor whether it runs in a container, or — for a stack — which
+				// apps (worktrees, branches, PR lanes) it has; teardown needs both.
 				if s.Sandbox == "" {
 					s.Sandbox = prev.Sandbox
 				}
-				// The persisted linked records win (they carry branch, pin and PR
-				// facts); the scan's disk-rebuilt ones are only the store-loss
-				// backstop.
-				if len(prev.Linked) > 0 {
-					s.Linked = prev.Linked
+				// The persisted app records win (they carry branch, pin, PR facts
+				// and every per-PR guard); the scan's disk-rebuilt ones are only
+				// the store-loss backstop.
+				s.Stack = s.Stack || prev.Stack
+				if len(prev.Apps) > 0 {
+					s.Apps = prev.Apps
 				}
 				if s.GitPin == nil {
 					s.GitPin = prev.GitPin

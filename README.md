@@ -298,7 +298,7 @@ runtime layer, not on config load.
 | `name` | string | Unique project **id** (required), and a path segment: it names the worktree directory (`worktrees/<name>/`) and the seen file (`state/<name>.seen`), prefixes every session/tmux name (`lola-<name>-eng-42`), and is what `lola status`, `enable`/`disable`/`poll`/`logs` key by. Keep it slug-shaped (lowercase letters, digits, `.` `_` `-`) — the forms slugify what you type. Changing it is a **rename**, not an edit; see [Renaming a project](#renaming-a-project). |
 | `label` | string | Free-text display name shown in the TUI and desktop (e.g. `"Nori App"`). Optional — empty falls back to `name`. Purely cosmetic: nothing keys by it, so you can change it at any time, including while sessions are running. |
 | `group` | string | The `[[group]]` folder this project is filed under in the app's project panel, by that group's `name`. Optional — empty puts it at the top level. Display only, and set by dragging the row rather than on this form; see [Groups and ordering](#groups-and-ordering). A value naming no configured group is repaired to empty on load with a notice, never rejected. |
-| `path` | string | Absolute path to the main checkout (required). A leading `~` is expanded on load. Session worktrees live under `~/.lola/worktrees/`, never inside the checkout. |
+| `path` | string | Absolute path to the main checkout (required, except for a [stack](#stacks-one-issue-several-repositories)). A leading `~` is expanded on load. Session worktrees live under `~/.lola/worktrees/`, never inside the checkout. |
 | `repo` | string | GitHub repository as `owner/name`. Used for PR/CI observation of the sessions spawned for this project: the reconciler and observer pass it to `gh pr list --repo` so the open-PR check works regardless of the daemon's working directory. When empty, that check is unavailable and orphaned issues are **never** auto-reverted (fail-closed). Both forms **auto-detect** this from the checkout once `path` is set — see [Adding a project](#adding-a-project-pick-the-folder-the-rest-fills-itself). |
 | `default_branch` | string | Branch new session worktrees start from, and the base the agent is told to open its PR against. Defaults to the checkout's own default branch when a folder is picked (see [Adding a project](#adding-a-project-pick-the-folder-the-rest-fills-itself)), else `main`. Both forms offer the checkout's branches once `path` is set (local plus remote-tracking, the repository's own default first) while staying free text, so a path that is not a checkout is never a dead end. |
 | `branch_prefix` | string | Prefix prepended to a session's derived branch name (e.g. `"feat/"` yields `feat/eng-42`). Empty inherits `[defaults].branch_prefix`, then `"lola/"`. |
@@ -310,7 +310,9 @@ runtime layer, not on config load.
 | `sandbox` | `"none"` \| `"docker"` | Run this project's coding agents inside a container that can write only their worktree. Empty = `none` (on the host). See [The container sandbox](#the-container-sandbox). Not inheritable. |
 | `sandbox_image` | string | Image a sandboxed project runs, overriding `[sandbox].image`. Must carry `sh`, `git` and the coding agent on `PATH`. |
 | `sandbox_ports` | string array | Container ports published on `127.0.0.1`, as `"3000"` or `"<host>:<container>"`, so a dev server the agent starts in the container is reachable from the host. |
-| `[[project.linked_repo]]` | table array | Further repositories one issue may span (`name`, `path`, `repo`, `default_branch`). Each session gets a worktree of each on its branch and its PR is tracked beside the primary one. See [Linked repositories](#linked-repositories). Not inheritable. |
+| `kind` | `""` \| `"stack"` | `"stack"` makes this project a **stack**: no checkout of its own, it owns the Linear side (filter, write-back, agent, sandbox, budget) for its member projects. See [Stacks](#stacks-one-issue-several-repositories). |
+| `stack` | string | Makes this project a **member** (an *app*) of the named stack. It is no longer polled itself; its own Linear, agent and write-back keys are kept but ignored while it is a member. |
+| `labels` | string array | Member only: the issue labels that select this app — a session of the stack checks it out only for an issue carrying one of them (label UUID, name, or `group/name`; case-insensitive). Empty = every issue. |
 | `daily_budget_tokens` | int | This project's daily limit in **weighted** tokens (see [`[budget]`](#budget-optional)). Once today's usage reaches it the project dispatches nothing new until tomorrow; running sessions are untouched. `0`/absent = no project limit. Not inheritable from `[defaults]`. |
 | `symlinks` | string array | Files symlinked from the main checkout into each worktree, e.g. `[".env"]`. Beware: a shared `.env` usually means every worktree talks to the same database. Omit to inherit `[defaults].symlinks`. |
 | `env` | table of strings | Extra environment variables exported into each session (`[project.env]`); the agent pane, shell tabs and the `post_create` commands all see them. Values may reference the session — see [Per-session env values](#per-session-env-values). Omit to inherit `[defaults].env`. |
@@ -598,7 +600,7 @@ What the container can reach:
 
 | Access | What |
 | --- | --- |
-| read-write | the session worktree (linked-repo worktrees live inside it), the repositories' git object/ref stores (a commit writes there), and claude's transcript directory for this worktree (lola's usage, claim audit and revive read it) |
+| read-write | the session worktree (for a stack session: its folder, with every app worktree inside it), the repositories' git object/ref stores (a commit writes there), and claude's transcript directory for this worktree (lola's usage, claim audit and revive read it) |
 | read-only | each git store's `config` and `hooks` (a writable one would let the agent plant a hook the **host** runs on the next commit), the Linux lola binary, the targets of `symlinks` |
 | nothing | everything else — `$HOME`, `~/.lola`, the project's main checkout |
 
@@ -633,67 +635,91 @@ Things to know:
   against. On a plain Linux engine the bridge's loopback port is not reachable
   from the default bridge network.
 
-#### Linked repositories
+#### Stacks (one issue, several repositories)
 
-One issue can span several repositories — the apps of one product, say. List
-the others on the project and give each the **labels** that mean "this issue
-touches it":
+Some products are several repositories that ship together — an app, its
+website, its API — and one Linear issue may need any of them. A **stack** is a
+project with no checkout of its own that owns the Linear side for them; its
+**members** ("apps") are ordinary projects with their own settings:
 
 ```toml
-[[project]]
+[[project]]                        # the stack: Linear filter, agent, write-back
 name = "nori"
-path = "/src/nori-app"            # the primary repository
-repo = "acme/nori-app"
-match_labels = ["<apps/app>", "<apps/website>", "<apps/api>"]  # pick up all three
+kind = "stack"
+team_id = "…"
+match_labels = ["<apps/app>", "<apps/website>"]  # pick up every app's issues
 match_mode   = "any"
 
-[[project.linked_repo]]
-name   = "website"                # directory name + label beside its PR
-path   = "/src/nori-website"      # its main checkout
-repo   = "acme/nori-website"      # where its PR is looked up
-labels = ["apps/website"]         # only issues carrying this label get it
+[[project]]                        # an app: an ordinary repository
+name   = "nori-app"
+stack  = "nori"
+labels = ["apps/app"]              # issues that need this repository
+path   = "/src/nori-app"
+repo   = "acme/nori-app"
+default_branch = "main"
+dev_commands   = ["composer dev"]
+port_range     = "4100-4199"
 
-[[project.linked_repo]]
-name           = "api"
-path           = "/src/nori-api"
-repo           = "acme/nori-api"
-labels         = ["apps/api"]
-default_branch = "develop"        # optional; defaults to the project's
+[[project]]
+name   = "nori-website"
+stack  = "nori"
+labels = ["apps/website"]
+path   = "/src/nori-website"
+repo   = "acme/nori-website"
+default_branch = "develop"
+dev_commands   = ["npm run dev"]
 ```
 
-**Labels pick the repositories.** At spawn, a linked repo is checked out only
-when the issue carries at least one of its `labels` — an issue labelled
-`apps/website` gets the website and nothing else, one labelled `apps/website`
-*and* `apps/api` gets both. A label is written as its Linear UUID, its name, or
-`group/name` for a label inside a label group (case-insensitive); the app's
-**Repositories** tab offers the team's labels as checkboxes. A linked repo
-**without** labels is checked out for every issue. The primary repository is
-always checked out — it is the session's directory and its PR drives the
-session — so make it the repository most issues touch. Remember that
-`match_labels` still decides which issues reach the project at all: list every
-repository's label there with `match_mode = "any"`.
+**There is no main repository.** A session of a stack is a folder,
+`~/.lola/worktrees/<stack>/<session>/`, holding one worktree per app the
+issue's labels select (`<folder>/nori-app/`, `<folder>/nori-website/`), all on
+the session's branch. The agent — and every new shell tab — starts in that
+folder, so it reaches every app with one `cd`. An issue labelled
+`apps/website` gets the website and nothing else; one labelled with both gets
+both. An app without `labels` is checked out for every issue; an issue that
+selects no app is skipped with a reason (relabel it and it dispatches). The
+selection is made once, at spawn.
 
-Each session gets one worktree per selected repository, all on the session's
-branch, all in one session directory: the primary worktree, with each linked
-one at `.lola/repos/<name>` inside it (git-excluded, and inside the sandbox when
-there is one — only the selected repositories are mounted). The agent's
-briefing lists them, names the project's repositories it did NOT get (so it
-reports `lola report blocked` instead of working around a missing one), and
-asks for one PR per repository it changed, cross-linked in their descriptions.
-The selection is made once, at spawn: relabelling a running issue does not add
-or remove checkouts.
+**What belongs where.** The stack holds everything a session has only once:
+the Linear filter and dedup, write-back, concurrency, the agent and its
+fallback chain, the branch prefix, the budget, the sandbox, review overrides,
+`pr_requires_checks`. Each app holds everything about its repository: path,
+repo, base branch, symlinks, `post_create`, env, `dev_commands`, `port_range`,
+`pre_remove`. A member keeps its own copies of the stack's keys in the
+file, ignored while it is a member — taking it out of the stack restores them.
+Both config forms hide the keys that do not apply.
 
-Both config forms edit the list — the app's project form has a
-**Repositories** tab (pick a folder; name, GitHub repo and base branch fill in),
-the TUI's General tab a **Linked repos** field with one
-`name | path | owner/repo | label, label | base branch` line per repository.
+**Each app runs as its own project.** Its `post_create` runs in its worktree
+with its own env, its own port lease (`LOLA_PORT…`) and its own
+`LOLA_SESSION_SLUG` / `LOLA_DB_NAME` (`<session>-<app>`), and its
+`.lola/env` is what its dev tabs source. The session's dev toggle starts
+every app's `dev_commands`, each in its app's worktree, one tab each.
 
-The primary repository's PR still drives everything per-PR — status, CI and
-review reactions, write-back. Each linked PR is observed beside it and shown in
-both UIs, and the merged cleanup **waits** until a successful lookup after the
-merge shows no linked PR still open (a failed `gh` call is not "no PR").
-Teardown removes the linked worktrees first and refuses (keeping everything)
-when one holds uncommitted work.
+**One PR per app, handled per app.** The agent's briefing lists the
+checkouts, names the stack's apps it did NOT get (it reports
+`lola report blocked "needs <name>"` instead of cloning one), and asks for one
+PR per repository it changed, cross-linked. lola then treats every app's PR
+separately: its own CI/conflict/review **reactions** (the message names the
+checkout and the PR), its own **review pass** posted on that PR, its own
+merge-queue place. The session's status shows the app that needs attention
+most — a failing website PR is never hidden by a green app — and the list row
+names that app beside its PR. Linear write-back moves the issue when the first
+PR opens and when the last one merges. The diff viewer and the checkpoints
+cover every app (paths read `nori-website/src/…`); a restore is all or
+nothing.
+
+**Teardown** waits until every app's PR has merged or closed (confirmed by a
+successful lookup), removes each app dirty-safe — an app with uncommitted
+work, or with commits on a branch that has no PR, keeps the whole folder — and
+then the folder, unless the agent left files in it outside the apps.
+
+**In the app**, add a stack from the project panel's `+` menu (**New stack**),
+then drag a project onto it to make it a member (and out again to take it
+back); the project's context menu does the same without the mouse. A member's
+form has an **Included for** label picker.
+
+Not available for stack sessions: best-of-N attempts, forking a checkpoint,
+and opening a branch or PR on the stack itself (open it on a member project).
 
 ### `[[project]]` polling fields (optional; a project polls when `team_id` is set)
 

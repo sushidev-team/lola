@@ -193,6 +193,9 @@ type ForkSpec struct {
 // it as uncommitted work (exactly as the parent had them), then the usual agent
 // launch. The parent is not touched. Session Kind=manual: lola owns the branch.
 func (n *Native) ForkAgent(ctx context.Context, p config.Project, f ForkSpec) (session.Session, error) {
+	if err := needsCheckout(p, "ForkAgent"); err != nil {
+		return session.Session{}, err
+	}
 	if f.SessionID == "" || f.Branch == "" || f.Head == "" || f.Tree == "" {
 		return session.Session{}, errors.New("runtime: fork: session id, branch and checkpoint required")
 	}

@@ -186,19 +186,6 @@ export interface LinearTeamMeta {
 }
 
 /**
- * LinkedRepoDTO is one [[project.linked_repo]] in the project form. Labels are
- * Linear label UUIDs (the picker's values) or, from a hand-edited config,
- * names / "group/name" — the form keeps whatever it does not recognize.
- */
-export interface LinkedRepoDTO {
-    "name": string;
-    "path": string;
-    "repo": string;
-    "defaultBranch": string;
-    "labels": string[] | null;
-}
-
-/**
  * PathInfoDTO is everything the project form derives from one picked folder.
  * Path is the checkout ROOT when there is one (picking a subdirectory still
  * configures the repository), else the directory as given.
@@ -269,12 +256,17 @@ export interface ProjectFormDTO {
     "env": string[] | null;
 
     /**
-     * LinkedRepos are the [[project.linked_repo]] tables: further repositories
-     * one issue may span. Each is checked out for an issue only when the issue
-     * carries one of its Labels (none = every issue). The whole list is
-     * replaced on save.
+     * Kind is "stack" for a STACK (no checkout of its own: it owns the Linear
+     * side of its members), "" for a repository. Stack names the stack this
+     * project is a MEMBER of ("" = none) and is read-only here: membership is
+     * changed by dragging in the sidebar (SetProjectStack), for the same reason
+     * the group is — a stale form must not move a project nobody dragged.
+     * Labels are a member's issue labels (UUID, name or "group/name"; empty =
+     * every issue); nil from an older client leaves them untouched.
      */
-    "linkedRepos": LinkedRepoDTO[] | null;
+    "kind": string;
+    "stack": string;
+    "labels": string[] | null;
 
     /**
      * Linear polling filter.

@@ -20,6 +20,7 @@
     session,
     status = "",
     delivery = "",
+    app = "",
     onOpen = undefined,
   }: {
     session: Pick<SessionInfo, "prNumber" | "prUrl" | "checks" | "review">;
@@ -27,6 +28,12 @@
     status?: string;
     /** The delivery axis. When set, the chip states it in words. */
     delivery?: string;
+    /**
+     * A STACK session's focus app ("web" in "web #9"): the session spans several
+     * repositories and this PR is one of them, so the number alone would not
+     * say whose it is. "" for a plain session.
+     */
+    app?: string;
     /**
      * Makes the PR NUMBER a control that opens the pull request. Opt-in per call
      * site, and the reason is HTML rather than taste: a kanban card and a phone
@@ -65,6 +72,7 @@
   <!-- `num`: the PR number sits in a table column and must not reflow its
        neighbours when a wider one arrives on the next observer push. -->
   <span class="num inline-flex items-center gap-1 align-middle whitespace-nowrap text-sm">
+    {#if app}<span class="text-faint">{app}</span>{/if}
     {#if openable}
       <!-- The PR number was rendered on four surfaces and was a control on none
            of them: opening a PR needed the detail panel, the context menu, or

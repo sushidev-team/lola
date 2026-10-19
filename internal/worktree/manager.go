@@ -19,6 +19,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -124,24 +125,24 @@ func (m *Manager) CreateAt(ctx context.Context, p config.Project, sessionID, bra
 	return m.createAt(ctx, p, sessionID, branch, func() string { return commit })
 }
 
-// CreateLinked adds a LINKED-REPOSITORY worktree for a session: a worktree of
-// the repository at repoPath, at dir (inside the session's primary worktree,
-// see runtime.LinkedWorktreeDir), on a new branch cut from origin/<base>
-// (falling back to the local <base>). dir must lie inside Root — the same
-// guard Remove applies, so a linked worktree can always be torn down through
-// it — and must not exist yet: a leftover there is somebody's work.
-func (m *Manager) CreateLinked(ctx context.Context, repoPath, dir, branch, base string) error {
+// CreateApp adds a STACK APP's worktree for a session: a worktree of the
+// repository at repoPath, at dir (inside the stack session's folder, see
+// runtime.StackAppDir), on a new branch cut from origin/<base> (falling back
+// to the local <base>). dir must lie inside Root — the same guard Remove
+// applies, so an app worktree can always be torn down through it — and must
+// not exist yet: a leftover there is somebody's work.
+func (m *Manager) CreateApp(ctx context.Context, repoPath, dir, branch, base string) error {
 	if m.Root == "" {
 		return errors.New("worktree: Root not set")
 	}
 	if repoPath == "" || branch == "" || base == "" {
-		return errors.New("worktree: linked repo path, branch and base are required")
+		return errors.New("worktree: app repo path, branch and base are required")
 	}
 	if err := m.guardRemovable(config.Project{Path: repoPath}, dir); err != nil {
 		return err
 	}
 	if _, err := os.Lstat(dir); err == nil {
-		return fmt.Errorf("worktree: linked worktree %s already exists", dir)
+		return fmt.Errorf("worktree: app worktree %s already exists", dir)
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
@@ -622,6 +623,41 @@ func (m *Manager) BranchExists(ctx context.Context, p config.Project, branch str
 		return false, nil
 	}
 	return false, err
+}
+
+// RemoveDir deletes a STACK session folder (internal/runtime/stack.go) once
+// its app worktrees are gone. It is not a worktree, so git has nothing to say
+// about it; the guard is the same as for one — strictly inside Root, never
+// the root itself.
+func (m *Manager) RemoveDir(dir string) error {
+	if err := m.guardRemovable(config.Project{}, dir); err != nil {
+		return err
+	}
+	return os.RemoveAll(dir)
+}
+
+// Ahead counts the commits on branch that its base does not have
+// (origin/<base> when that remote ref exists, else <base>) in the repository at
+// repoPath. A stack session's teardown asks it for an app that has no PR: a
+// branch carrying commits nobody pushed into a PR is work, and deleting it
+// would lose that work although the worktree itself is clean.
+func (m *Manager) Ahead(ctx context.Context, repoPath, base, branch string) (int, error) {
+	if repoPath == "" || base == "" || branch == "" {
+		return 0, errors.New("worktree: ahead: repo, base and branch required")
+	}
+	start := base
+	if _, _, err := m.git(ctx, "-C", repoPath, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/"+base); err == nil {
+		start = "origin/" + base
+	}
+	out, _, err := m.git(ctx, "-C", repoPath, "rev-list", "--count", start+".."+"refs/heads/"+branch)
+	if err != nil {
+		return 0, err
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(out))
+	if err != nil {
+		return 0, fmt.Errorf("worktree: ahead: %q is not a count", strings.TrimSpace(out))
+	}
+	return n, nil
 }
 
 // List returns the session worktree directories under Root/<p.Name> that git

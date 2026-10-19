@@ -16,6 +16,8 @@
   import Button from "./Button.svelte";
   import MenuItem from "./MenuItem.svelte";
   import DevClashBanner from "./DevClashBanner.svelte";
+  import PrBadge from "./PrBadge.svelte";
+  import { appLabel, appState, appPr } from "$lib/stackapps";
   import SidePanel from "./SidePanel.svelte";
 
   // `focused` = the expanded full-cockpit view ("minimize" toggle); otherwise the
@@ -322,18 +324,11 @@
             Active
           </Button>
         {/if}
-        {#if session.prNumber > 0}
+        <!-- A stack session's PRs are in the app strip below, one per app;
+             a single "Open PR" here would open only one of them. -->
+        {#if session.prNumber > 0 && !session.stack}
           <Button size="xs" onclick={() => store.openURL(session.prUrl)}>Open PR <span aria-hidden="true">↗</span></Button>
         {/if}
-        <!-- Linked repositories ([[project.linked_repo]]): one PR per further
-             repo the issue spans, opened beside the primary one. -->
-        {#each session.linkedPrs ?? [] as l (l.name)}
-          {#if l.number && l.url}
-            <Button size="xs" title={`${l.repo || l.name} #${l.number} (${(l.state || "").toLowerCase()})`} onclick={() => store.openURL(l.url!)}>
-              {l.name} PR <span aria-hidden="true">↗</span>
-            </Button>
-          {/if}
-        {/each}
         <Button size="xs" onclick={() => store.review(session.id)}>Review</Button>
         {#if canRevive}
           <Button variant="accent" size="xs" onclick={() => store.revive(session.id)}>Revive</Button>
@@ -428,6 +423,37 @@
          to is exactly where the answer is NOT (the command clears the screen on
          its way out). Absent whenever the tabs are healthy. -->
     <DevClashBanner {session} />
+
+    <!-- A STACK session spans several repositories: one compact chip per app,
+         in the stack's member order — its PR (the number opens it), or whether
+         it has changes yet, and its own port lease. A strip rather than rows:
+         nothing here expands, and the terminal keeps its height. -->
+    {#if session.stack && session.apps?.length}
+      <ul class="relative z-10 flex flex-wrap items-center gap-1.5 border-b border-edge/60 px-3 py-1.5" aria-label="Apps">
+        {#each session.apps as a (a.name)}
+          {@const st = appState(a)}
+          <li
+            class="inline-flex items-center gap-1.5 rounded border px-1.5 py-[1px] text-sm whitespace-nowrap"
+            class:border-accent={a.name === session.focusApp}
+            class:border-edge={a.name !== session.focusApp}
+            title={a.repo || a.name}
+          >
+            <span class="text-ink">{appLabel(a)}</span>
+            <span class="text-faint" aria-hidden="true">·</span>
+            {#if st === "pr"}
+              <PrBadge session={appPr(a)} delivery={a.delivery ?? ""} onOpen={() => store.openURL(a.url ?? "")} />
+            {:else if st === "changes"}
+              <span class="text-warn">changes, no PR</span>
+            {:else}
+              <span class="text-faint">untouched</span>
+            {/if}
+            {#if a.ports?.length}
+              <span class="num text-faint" title="port lease">:{a.ports.join(", :")}</span>
+            {/if}
+          </li>
+        {/each}
+      </ul>
+    {/if}
 
     <!-- Terminal tabs. Shown when a shell is open or the panel is focused/big:
          the agent tab, one tab per shell (drag to sort, "×" on hover to close),

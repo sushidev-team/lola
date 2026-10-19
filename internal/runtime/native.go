@@ -105,11 +105,13 @@ func IsAuxSession(name string) bool {
 }
 
 // reviewPaneParent returns the session a review pane belongs to.
+// A stack session runs one review pane PER APP, named after the app's lane
+// ("<sessionID>~<app>-review"), so the parent is the part before the lane.
 func reviewPaneParent(name string) (string, bool) {
 	if !reviewPaneRe.MatchString(name) {
 		return "", false
 	}
-	return strings.TrimSuffix(name, "-review"), true
+	return session.BaseID(strings.TrimSuffix(name, "-review")), true
 }
 
 // lolaDir is the runtime scratch directory inside each worktree, holding
@@ -276,10 +278,10 @@ func (n *Native) SlotTaken(ctx context.Context, p config.Project, id, branch str
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		return false, err
 	}
-	if taken, err := n.WT.BranchExists(ctx, p, branch); err != nil || taken {
-		return taken, err
+	if p.IsStack() {
+		return n.stackBranchTaken(ctx, p, branch)
 	}
-	return n.linkedBranchTaken(ctx, p, branch)
+	return n.WT.BranchExists(ctx, p, branch)
 }
 
 // resolveKind picks the agent kind for a launch: an explicit per-spawn
@@ -333,6 +335,9 @@ func (n *Native) SpawnWith(ctx context.Context, p config.Project, issue linear.I
 	agentOverride := o.Agent
 	if issue.Identifier == "" {
 		return session.Session{}, errors.New("runtime: spawn: issue has no identifier")
+	}
+	if p.IsStack() {
+		return n.spawnStack(ctx, p, issue, o)
 	}
 	// Resolve which coding agent drives this session's pane: the per-spawn
 	// override (the ticket picker's choice) when it names a valid kind, else
@@ -393,24 +398,9 @@ func (n *Native) SpawnWith(ctx context.Context, p config.Project, issue linear.I
 	if err := os.MkdirAll(filepath.Join(dir, lolaDir), 0o700); err != nil {
 		return fail("create "+lolaDir, err)
 	}
-	// Linked repositories go in AFTER .lola/ is excluded (they live under it)
-	// and, once created, every later failure must take them down first. If
-	// that fails the PRIMARY is kept too: removing it would delete the nested
-	// checkouts with no dirty check of their own.
-	linked, linkErr := n.createLinked(ctx, p, linkedFor(p, issue), dir, branch)
-	primaryFail := fail
-	fail = func(step string, cause error) (session.Session, error) {
-		if rbErr := n.removeLinked(ctx, p.Name, linked, true, false); rbErr != nil {
-			return session.Session{}, fmt.Errorf("runtime: spawn %s: %s: %w (linked worktree rollback failed: %v; worktree kept at %s)", id, step, cause, rbErr, dir)
-		}
-		return primaryFail(step, cause)
-	}
-	if linkErr != nil {
-		return fail("create linked worktrees", linkErr)
-	}
 	ctxKey := contextKeyFor(issue.Identifier, id)
 	ctxDir := n.setupContext(dir, p.Name, ctxKey)
-	brief := withLinkedBriefing(promptMD(p, issue, branch), p, linked)
+	brief := promptMD(p, issue, branch)
 	if bestOf {
 		brief = withBestOfBriefing(brief, o.Attempt, o.Of)
 	}
@@ -440,7 +430,7 @@ func (n *Native) SpawnWith(ctx context.Context, p config.Project, issue linear.I
 	n.recordBaseline(ctx, dir, id)
 	if err := n.Tmux.NewSession(ctx, id, dir, n.launchLine(p.Name, id, kind, defaultLaunchPrompt(id), model, false)); err != nil {
 		// tmux may have created the session although the call failed: down it
-		// goes first, then the same linked-first rollback as every other step.
+		// goes first, then the same rollback as every other step.
 		if n.Tmux.Has(ctx, id) {
 			if killErr := n.Tmux.KillSession(ctx, id); killErr != nil {
 				return session.Session{}, fmt.Errorf("runtime: spawn %s: start tmux session: %w (rollback failed: %v; tmux session and worktree %s kept)", id, err, killErr, dir)
@@ -476,7 +466,6 @@ func (n *Native) SpawnWith(ctx context.Context, p config.Project, issue linear.I
 		Attempt:    intIf(bestOf, o.Attempt),
 		Attempts:   intIf(bestOf, o.Of),
 		Sandbox:    n.SandboxFor(p.Name),
-		Linked:     linked,
 		GitPin:     pin,
 	}, state.AgentStarting), nil
 }
@@ -526,6 +515,9 @@ func withBestOfBriefing(prompt []byte, attempt, of int) []byte {
 // step failure the worktree is rolled back best-effort (force=false, so a dirty
 // checkout is kept for inspection) and the error says what was left behind.
 func (n *Native) Open(ctx context.Context, p config.Project, sessionID, fetchRef, branch string) (session.Session, error) {
+	if err := needsCheckout(p, "Open"); err != nil {
+		return session.Session{}, err
+	}
 	if sessionID == "" || fetchRef == "" {
 		return session.Session{}, errors.New("runtime: open: session id and ref required")
 	}
@@ -594,6 +586,9 @@ func (n *Native) Open(ctx context.Context, p config.Project, sessionID, fetchRef
 // key) → tmux shell. On any step failure the worktree AND its new branch are
 // rolled back best-effort (force=false keeps a dirty checkout for inspection).
 func (n *Native) OpenManual(ctx context.Context, p config.Project, sessionID, branch, base string) (session.Session, error) {
+	if err := needsCheckout(p, "OpenManual"); err != nil {
+		return session.Session{}, err
+	}
 	if sessionID == "" || branch == "" {
 		return session.Session{}, errors.New("runtime: open manual: session id and branch required")
 	}
@@ -719,6 +714,9 @@ func (n *Native) finishAgentLaunch(ctx context.Context, p config.Project, id, di
 // calling this). Session Kind=pr: the branch is upstream and NEVER deleted on
 // teardown. prompt seeds .lola/prompt.md (the caller passes a PR briefing).
 func (n *Native) OpenPRAgent(ctx context.Context, p config.Project, sessionID, branch, prompt, agentOverride string) (session.Session, error) {
+	if err := needsCheckout(p, "OpenPRAgent"); err != nil {
+		return session.Session{}, err
+	}
 	if sessionID == "" || branch == "" {
 		return session.Session{}, errors.New("runtime: open pr agent: session id and branch required")
 	}
@@ -752,6 +750,9 @@ func (n *Native) OpenPRAgent(ctx context.Context, p config.Project, sessionID, b
 // it — the manual-worktree "with agent" variant. Session Kind=manual: lola owns
 // the branch and deletes it on teardown. prompt seeds .lola/prompt.md.
 func (n *Native) OpenManualAgent(ctx context.Context, p config.Project, sessionID, branch, base, prompt, agentOverride string) (session.Session, error) {
+	if err := needsCheckout(p, "OpenManualAgent"); err != nil {
+		return session.Session{}, err
+	}
 	if sessionID == "" || branch == "" {
 		return session.Session{}, errors.New("runtime: open manual agent: session id and branch required")
 	}
@@ -1220,6 +1221,18 @@ func (n *Native) Adopt(ctx context.Context) ([]session.Session, error) {
 	out := []session.Session{}
 	paired := map[string]bool{}
 	for _, p := range n.Cfg.Projects {
+		if p.IsStack() {
+			for _, s := range n.adoptStack(p, live) {
+				if live[s.ID] {
+					paired[s.ID] = true
+				}
+				out = append(out, s)
+			}
+			continue
+		}
+		if p.InStack() {
+			continue // a member's worktrees live inside its stack's sessions
+		}
 		dirs, err := n.WT.List(ctx, p)
 		if err != nil {
 			return nil, fmt.Errorf("runtime: adopt: project %s: %w", p.Name, err)
@@ -1250,7 +1263,6 @@ func (n *Native) Adopt(ctx context.Context) ([]session.Session, error) {
 				Issue:     issueFromSessionID(id, p.Name),
 				Repo:      p.Repo,
 				TmuxName:  id,
-				Linked:    discoverLinked(p, dir),
 			}, a))
 		}
 	}
@@ -1367,6 +1379,9 @@ func (n *Native) Kill(ctx context.Context, s session.Session, removeWorktree, fo
 	if !removeWorktree {
 		return nil
 	}
+	if s.Stack {
+		return n.killStack(ctx, s, force)
+	}
 	p := n.Cfg.ProjectByName(s.Project)
 	if p == nil {
 		return fmt.Errorf("runtime: kill %s: unknown project %q, cannot remove worktree", s.ID, s.Project)
@@ -1381,19 +1396,6 @@ func (n *Native) Kill(ctx context.Context, s session.Session, removeWorktree, fo
 		branch = ""
 	}
 	dir := filepath.Join(n.WT.Root, p.Name, s.ID)
-	// Linked worktrees first: they live INSIDE dir, and only their own dirty
-	// check protects their uncommitted work. Any refusal stops the teardown
-	// here, so the primary worktree (and everything under it) is kept too.
-	if err := n.removeLinked(ctx, p.Name, s.Linked, s.OwnsBranch(), force); err != nil {
-		return fmt.Errorf("runtime: kill %s: %w", s.ID, err)
-	}
-	// Anything still under .lola/repos is a checkout this record does not
-	// account for (a record rebuilt by adoption, a project whose linked repos
-	// changed): nothing has dirty-checked it, so the primary — which would
-	// take it along — is kept. --force accepts the loss.
-	if left := unaccountedLinked(dir); len(left) > 0 && !force {
-		return fmt.Errorf("runtime: kill %s: worktree %s holds linked checkouts this session does not record (%s): %w", s.ID, dir, strings.Join(left, ", "), worktree.ErrDirty)
-	}
 	if _, err := os.Stat(dir); errors.Is(err, fs.ErrNotExist) {
 		n.releasePorts(s.ID)
 		// Directory already gone: there is no checkout left to dirty-check or to
@@ -1488,7 +1490,8 @@ func (n *Native) killAuxSessions(ctx context.Context, parent string) {
 // remainder ("0-shell-1") ends in a shell-tab suffix and would otherwise make
 // one session's teardown kill an unrelated live session's tab. Keep it in step
 // with internal/devtab (dev tabs) and reviewPaneSuffix.
-var auxSuffixRe = regexp.MustCompile(`^(?:-shell-\d+|-review|-dev-\d+)$`)
+// A stack app's review pane carries its lane first ("~<app>-review").
+var auxSuffixRe = regexp.MustCompile(`^(?:-shell-\d+|-review|-dev-\d+|~[A-Za-z0-9][A-Za-z0-9._-]*-review)$`)
 
 // isAuxOf reports whether name is an auxiliary session of parent.
 func isAuxOf(parent, name string) bool {

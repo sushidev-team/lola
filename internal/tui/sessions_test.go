@@ -1248,12 +1248,36 @@ func TestSessionsFreePortNeedsAClash(t *testing.T) {
 	}
 }
 
-func TestLinkedPRLines(t *testing.T) {
-	got := linkedPRLines(protocol.SessionInfo{LinkedPRs: []protocol.LinkedPR{
-		{Name: "api", Repo: "acme/api", Number: 12, State: "OPEN", Checks: "pass"},
-		{Name: "docs", Branch: "lola/x"},
-	}})
-	if len(got) != 2 || !strings.Contains(got[0], "api (acme/api) #12 open · ci pass") || !strings.Contains(got[1], "docs") || !strings.Contains(got[1], "no PR yet") {
+func TestAppLines(t *testing.T) {
+	si := protocol.SessionInfo{Stack: true, FocusApp: "web", PRNumber: 9, Apps: []protocol.SessionApp{
+		{Name: "web", Label: "Website", Number: 9, State: "OPEN", Checks: "pass", Delivery: "ci_pending", Ports: []int{4100, 4101}},
+		{Name: "api", Touched: true},
+		{Name: "docs"},
+	}}
+	got := appLines(si)
+	if len(got) != 3 {
 		t.Fatalf("lines = %q", got)
+	}
+	plain := make([]string, len(got))
+	for i, l := range got {
+		plain[i] = stripANSI(l)
+	}
+	if !strings.Contains(plain[0], "web (Website)  #9 ✓") || !strings.Contains(plain[0], "ports 4100 · 4101") {
+		t.Errorf("web line = %q", plain[0])
+	}
+	if !strings.Contains(plain[1], "api  changes, no PR") {
+		t.Errorf("api line = %q", plain[1])
+	}
+	if !strings.Contains(plain[2], "docs  —") {
+		t.Errorf("docs line = %q", plain[2])
+	}
+	if b := stripANSI(prBadge(si)); !strings.HasPrefix(b, "web #9") {
+		t.Errorf("prBadge = %q, want the focus app named first", b)
+	}
+	if appLines(protocol.SessionInfo{Apps: si.Apps}) != nil {
+		t.Error("a non-stack session must render no app lines")
+	}
+	if b := stripANSI(prBadge(protocol.SessionInfo{PRNumber: 3, FocusApp: "web"})); !strings.HasPrefix(b, "#3") {
+		t.Errorf("non-stack prBadge = %q", b)
 	}
 }

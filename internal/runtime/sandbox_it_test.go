@@ -39,7 +39,8 @@ func TestSandboxContainsTheAgent(t *testing.T) {
 	if image == "" {
 		image = "alpine/git:latest"
 	}
-	f := newLinkedFixture(t)
+	f := newStackFixture(t)
+	web := config.Project{Name: "web", Path: f.web, Repo: "acme/web", DefaultBranch: "main"}
 	// The engine VM shares the user's directories, which the per-test temp
 	// dirs (under /var/folders) are part of; resolve the symlinked prefix so
 	// the host and container agree on every path.
@@ -50,13 +51,12 @@ func TestSandboxContainsTheAgent(t *testing.T) {
 		}
 		return r
 	}
-	f.web, f.api, f.root = real(f.web), real(f.api), real(f.root)
-	f.p.Path, f.p.LinkedRepos[0].Path = f.web, f.api
-	f.p.Sandbox = config.SandboxDocker
-	f.p.Symlinks = nil
+	f.web, f.root = real(f.web), real(f.root)
+	web.Path = f.web
+	web.Sandbox = config.SandboxDocker
 	f.n.WT = &worktree.Manager{Root: f.root}
-	f.n.Cfg.Projects[0] = f.p
-	f.n.Cfg.Sandbox = config.SandboxConfig{Image: image}
+	f.n.Cfg = &config.Config{Projects: []config.Project{web}, Sandbox: config.SandboxConfig{Image: image}}
+	f.p = web
 	sock := fmt.Sprintf("lola-it-%d", os.Getpid())
 	f.n.Tmux = &tmux.Client{SocketName: sock}
 	t.Cleanup(func() { _ = exec.Command("tmux", "-L", sock, "kill-server").Run() })
@@ -72,9 +72,6 @@ func TestSandboxContainsTheAgent(t *testing.T) {
 	}
 	t.Cleanup(func() { gitguard.Clear(dir) })
 	if err := excludeLolaDir(dir); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := f.n.createLinked(ctx, f.p, f.p.LinkedRepos, dir, "lola/eng-42"); err != nil {
 		t.Fatal(err)
 	}
 	home, _ := os.UserHomeDir()
@@ -94,7 +91,6 @@ func TestSandboxContainsTheAgent(t *testing.T) {
 	script := strings.Join([]string{
 		"git config --global --add safe.directory '*'",
 		"echo hi > inside.txt && git add inside.txt && git -c user.name=t -c user.email=t@x commit -qm inside && echo commit-ok >> " + r,
-		"(cd .lola/repos/api && echo hi > api.txt && git add api.txt && git -c user.name=t -c user.email=t@x commit -qm api) && echo linked-ok >> " + r,
 		"git config core.hooksPath /tmp 2>/dev/null && echo config-written >> " + r,
 		"echo x > " + escapes["main checkout"] + " 2>/dev/null",
 		"echo x > " + escapes["home dir"] + " 2>/dev/null",
@@ -120,9 +116,6 @@ func TestSandboxContainsTheAgent(t *testing.T) {
 	}
 	if !strings.Contains(got, "commit-ok") || realGit(t, f.web, "log", "-1", "--format=%s", "lola/eng-42") != "inside" {
 		t.Errorf("agent could not commit in its worktree (result %q)", got)
-	}
-	if !strings.Contains(got, "linked-ok") || realGit(t, f.api, "log", "-1", "--format=%s", "lola/eng-42") != "api" {
-		t.Errorf("agent could not commit in its linked worktree (result %q)", got)
 	}
 	hooksPath, _ := exec.Command("git", "-C", f.web, "config", "--get", "core.hooksPath").Output()
 	if strings.Contains(got, "config-written") || len(hooksPath) != 0 {

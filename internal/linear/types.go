@@ -47,7 +47,7 @@ type Issue struct {
 	LabelNames []string // parallel to LabelIDs
 	// LabelGroups is parallel to LabelIDs: the label group a label sits in
 	// ("apps" for apps/website), "" for an ungrouped label. Read by the
-	// linked-repo selection ([[project.linked_repo]].labels).
+	// stack app selection ([[project]].labels on a stack member).
 	LabelGroups []string
 	// BlockedBy lists the issues Linear records as BLOCKING this one (the
 	// inverse side of a "blocks" relation), each with its current state type.

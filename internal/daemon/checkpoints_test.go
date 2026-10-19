@@ -54,6 +54,15 @@ func (f *fakeCheckpoints) Record(_ context.Context, _, _, label string) (checkpo
 	return cp, true, nil
 }
 
+func (f *fakeCheckpoints) RecordAlways(_ context.Context, _, _, label string) (checkpoint.Checkpoint, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	cp := checkpoint.Checkpoint{Seq: len(f.list) + 1, SHA: fmt.Sprintf("sha%d", len(f.list)+1), Tree: fmt.Sprintf("tree%d", f.state),
+		Head: "head", Label: label, Created: time.Now()}
+	f.list = append(f.list, cp)
+	return cp, nil
+}
+
 func (f *fakeCheckpoints) List(context.Context, string, string) ([]checkpoint.Checkpoint, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

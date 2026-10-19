@@ -47,6 +47,7 @@ import (
 // checkpointStore is the daemon's seam over internal/checkpoint.
 type checkpointStore interface {
 	Record(ctx context.Context, dir, session, label string) (checkpoint.Checkpoint, bool, error)
+	RecordAlways(ctx context.Context, dir, session, label string) (checkpoint.Checkpoint, error)
 	List(ctx context.Context, dir, session string) ([]checkpoint.Checkpoint, error)
 	Get(ctx context.Context, dir, session string, seq int) (cp, prev checkpoint.Checkpoint, err error)
 	Restore(ctx context.Context, dir, session string, seq int) (checkpoint.Checkpoint, error)
@@ -68,6 +69,7 @@ const (
 )
 
 func (d *Daemon) ckptLock(id string) *sync.Mutex {
+	id = session.BaseID(id) // a stack's lanes share their session's worktrees
 	d.ckptMu.Lock()
 	defer d.ckptMu.Unlock()
 	if d.ckptLocks == nil {
@@ -81,8 +83,10 @@ func (d *Daemon) ckptLock(id string) *sync.Mutex {
 	return mu
 }
 
-// sendGate is session id's send gate (see Daemon.sendGates).
+// sendGate is session id's send gate (see Daemon.sendGates). A stack app's
+// lane ID resolves to its session's gate: the lanes share one agent pane.
 func (d *Daemon) sendGate(id string) *sync.RWMutex {
+	id = session.BaseID(id)
 	d.ckptMu.Lock()
 	defer d.ckptMu.Unlock()
 	if d.sendGates == nil {
@@ -148,6 +152,10 @@ func (d *Daemon) recordCheckpoint(ctx context.Context, id, event string) {
 
 	cctx, cancel := context.WithTimeout(ctx, checkpointTimeout)
 	defer cancel()
+	if s.Stack {
+		d.stackRecordCheckpoint(cctx, s, event)
+		return
+	}
 	list, err := d.checkpoints.List(cctx, s.Worktree, id)
 	if err != nil {
 		d.logf("", "checkpoint: %s: %v", id, err)
@@ -227,7 +235,17 @@ func (d *Daemon) handleCheckpoints(ctx context.Context, id string) (protocol.Che
 	}
 	cctx, cancel := context.WithTimeout(ctx, diffTimeout)
 	defer cancel()
-	list, err := d.checkpoints.List(cctx, s.Worktree, s.ID)
+	timeline := s.Worktree
+	if s.Stack {
+		// Every app records the same numbered checkpoints; the first one is
+		// the timeline (stackgit.go).
+		apps := presentApps(s)
+		if len(apps) == 0 {
+			return protocol.CheckpointsData{Session: s.ID}, nil
+		}
+		timeline = apps[0].Worktree
+	}
+	list, err := d.checkpoints.List(cctx, timeline, s.ID)
 	if err != nil {
 		return protocol.CheckpointsData{}, err
 	}
@@ -257,6 +275,9 @@ func (d *Daemon) handleCheckpointDiff(ctx context.Context, a protocol.Checkpoint
 	}
 	cctx, cancel := context.WithTimeout(ctx, diffTimeout)
 	defer cancel()
+	if s.Stack {
+		return d.stackCheckpointDiff(cctx, s, a.Seq)
+	}
 	cp, prev, err := d.checkpoints.Get(cctx, s.Worktree, s.ID, a.Seq)
 	if err != nil {
 		return protocol.DiffData{}, err
@@ -308,8 +329,14 @@ func (d *Daemon) handleRestoreCheckpoint(ctx context.Context, a protocol.Checkpo
 		return protocol.RestoreCheckpointData{}, fmt.Errorf(
 			"%s's agent is not visibly resting at its prompt — wait for it to finish (or stop it) before restoring", s.ID)
 	}
-	safety, err := d.checkpoints.Restore(cctx, s.Worktree, s.ID, a.Seq)
-	if err != nil {
+	var safety checkpoint.Checkpoint
+	if s.Stack {
+		seq, err := d.stackRestore(cctx, cur, a.Seq)
+		if err != nil {
+			return protocol.RestoreCheckpointData{}, err
+		}
+		safety.Seq = seq
+	} else if safety, err = d.checkpoints.Restore(cctx, s.Worktree, s.ID, a.Seq); err != nil {
 		return protocol.RestoreCheckpointData{}, err
 	}
 	d.logf("", "checkpoint: %s restored to #%d (previous state kept as #%d)", s.ID, a.Seq, safety.Seq)
@@ -329,6 +356,11 @@ func (d *Daemon) handleForkCheckpoint(ctx context.Context, a protocol.Checkpoint
 	s, err := d.checkpointSession(a.Session)
 	if err != nil {
 		return protocol.OpenData{}, err
+	}
+	if s.Stack {
+		// A fork is a new worktree on a new branch of ONE repository; a stack
+		// session would need a new folder of every app. Restore instead.
+		return protocol.OpenData{}, fmt.Errorf("%s is a stack session: forking is not supported — restore the checkpoint instead", s.ID)
 	}
 	cctx, cancel := context.WithTimeout(ctx, diffTimeout)
 	cp, _, err := d.checkpoints.Get(cctx, s.Worktree, s.ID, a.Seq)

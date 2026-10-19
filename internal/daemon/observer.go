@@ -269,7 +269,10 @@ func (d *Daemon) observeNative(ctx context.Context) {
 		// facts unless this cycle produced an authoritative answer.
 		var pr *scm.PR
 		prKnown := false
-		if s.Branch != "" && repo != "" {
+		// A STACK session has no PR of its own: each app has one (below), and
+		// the session's PR fields are their aggregate (apps.go).
+		prFetchAttempted := !s.Stack && s.Branch != "" && repo != ""
+		if prFetchAttempted {
 			cctx, cancel := context.WithTimeout(ctx, observeExecTimeout)
 			p, err := d.prForBranch(cctx, repo, s.Branch)
 			cancel()
@@ -280,11 +283,12 @@ func (d *Daemon) observeNative(ctx context.Context) {
 			}
 		}
 
-		// Linked repositories' PRs (one per linked repo with a GitHub repo),
-		// same log-and-continue discipline as the primary: a failed fetch keeps
-		// the last known facts. Display + the merged-cleanup hold only — the
-		// delivery axis stays the primary PR's.
-		linkedPRs := d.observeLinkedPRs(ctx, s)
+		// A stack session's apps: one PR (and one delivery axis) each, same
+		// log-and-continue discipline — a failed fetch keeps the last facts.
+		var appFacts []appFact
+		if s.Stack {
+			appFacts = d.observeApps(ctx, s)
+		}
 
 		// Live-pane activity corroboration (working-vs-waiting BULLETPROOF):
 		// capture the pane ONCE this cycle for EVERY alive session. Claude Code
@@ -359,7 +363,6 @@ func (d *Daemon) observeNative(ctx context.Context) {
 		// re-reads the CURRENT record under the store lock, so a concurrent
 		// hook transition flows into the merge and is preserved.
 		now := time.Now()
-		prFetchAttempted := s.Branch != "" && repo != ""
 		becameDead, applied, titleBackfilled := false, false, false
 		updated, known := d.sessions.Update(s.ID, func(cur *session.Session) bool {
 			prevAgent := cur.AgentState
@@ -367,7 +370,7 @@ func (d *Daemon) observeNative(ctx context.Context) {
 				cur.Title = backfillTitle
 				titleBackfilled = true
 			}
-			if cur.Repo == "" {
+			if cur.Repo == "" && !cur.Stack {
 				cur.Repo = repo
 			}
 
@@ -387,7 +390,7 @@ func (d *Daemon) observeNative(ctx context.Context) {
 				}
 			}
 
-			linkedChanged := applyLinkedPRs(cur, linkedPRs, now)
+			appsChanged := cur.Stack && applyApps(cur, appFacts, now)
 
 			// 2. AGENT axis — liveness + hooks (already merged into cur) + pane
 			// + tmux's own activity stamp.
@@ -412,7 +415,7 @@ func (d *Daemon) observeNative(ctx context.Context) {
 				}
 			}
 
-			if !alive && !agentChanged && !deliveryChanged && !linkedChanged {
+			if !alive && !agentChanged && !deliveryChanged && !appsChanged {
 				// Already-settled terminal record: discard so LastSeen freezes and
 				// the store's retention prune eventually drops it — UNLESS we just
 				// backfilled its title, which must be committed (Update discards the

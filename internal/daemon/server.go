@@ -669,6 +669,7 @@ func (d *Daemon) sessionsData() protocol.SessionsData {
 			devCommands[p.Name] = slices.Clone(p.DevCommands)
 		}
 	}
+	cfg := d.cfg
 	d.mu.Unlock()
 	out := protocol.SessionsData{Sessions: make([]protocol.SessionInfo, 0, len(snap))}
 	for _, s := range snap {
@@ -735,7 +736,20 @@ func (d *Daemon) sessionsData() protocol.SessionsData {
 			si.Review = s.PR.ReviewDecision
 		}
 		si.Sandbox = s.Sandbox
-		si.LinkedPRs = linkedPRInfo(s.Linked)
+		if s.Stack {
+			si.Stack = true
+			si.Apps = d.appsInfo(cfg, s)
+			si.FocusApp = s.FocusApp()
+			// The CI retry streak is per app; the row shows the focus app's.
+			if i := s.AppIndex(si.FocusApp); i >= 0 {
+				a := s.Apps[i]
+				si.CIRetries, si.Escalated = a.CIRetries, a.Escalated
+				si.Reacting = reactingLabel(s.Delivery, a.CIRetries, a.Escalated, ciBudget)
+			}
+			// The dev toggle runs each app's own dev_commands (apps.go devPlan).
+			plan, parallel, _ := devPlan(cfg, s, si.Worktree)
+			si.DevCommands, si.DevParallel = devLabels(plan), parallel
+		}
 		// [statusagent] display overlay, pre-gated here (the ONE consumer of
 		// the overlay fields): clients render what arrives or nothing.
 		if istate, headline, waitingOn, at := displayOverlay(s, minConfidence, now); headline != "" || istate != "" {

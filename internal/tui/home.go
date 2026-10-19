@@ -112,17 +112,22 @@ func (h *homeModel) infoByName() map[string]protocol.ProjectInfo {
 	return out
 }
 
-// rows returns the projects to display, filtered by the live filter text.
+// rows returns the projects to display, filtered by the live filter text. A
+// stack's members follow it directly (stackOrder).
 func (h *homeModel) rows(cfg *config.Config) []config.Project {
 	if cfg == nil {
 		return nil
 	}
+	ordered := make([]config.Project, 0, len(cfg.Projects))
+	for _, i := range stackOrder(cfg.Projects) {
+		ordered = append(ordered, cfg.Projects[i])
+	}
 	if h.filter == "" {
-		return cfg.Projects
+		return ordered
 	}
 	q := strings.ToLower(h.filter)
 	out := make([]config.Project, 0, len(cfg.Projects))
-	for _, p := range cfg.Projects {
+	for _, p := range ordered {
 		// Match the id as well as the label: the list shows labels, but the id is
 		// what appears in session names and paths, so a human searching for what
 		// they saw in a terminal should still find the project.
@@ -254,6 +259,12 @@ func (m *rootModel) updateHome(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// screen used to accept only 'a', so the same action needed two different
 		// keys depending on which project list you were looking at.
 		h.adding, h.addInput = true, ""
+	case "t":
+		// New stack — same key as on the cockpit rail. A stack has no checkout,
+		// so it skips the name prompt and opens the form on its label.
+		f, cmd := newStackForm(m.cfg)
+		m.form = f
+		return m, cmd
 	case "x":
 		// Stop polling — same meaning as 'x' on the cockpit rail.
 		if p := h.selectedProject(m.cfg); p != nil {

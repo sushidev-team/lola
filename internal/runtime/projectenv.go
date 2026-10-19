@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/sushidev-team/lola/internal/config"
+	"github.com/sushidev-team/lola/internal/session"
 )
 
 // EnvVars are the per-session identifiers a [[project]].env value may reference.
@@ -22,6 +23,30 @@ type EnvVars struct {
 	// Ports is the session's leased port block (internal/portlease); empty
 	// when the project configures no port_range or the range is exhausted.
 	Ports []int
+	// App names the stack app (member project) the env is rendered for, ""
+	// for an ordinary session. Each app of a stack session gets its OWN slug,
+	// database name and port lease (appSlug, LeaseKey): two apps of one
+	// session are two stacks that must not share a database or a port.
+	App string
+}
+
+// slug is the per-worktree identity {{.Slug}}, {{.DBName}},
+// LOLA_SESSION_SLUG and LOLA_DB_NAME derive from: the session ID, plus the
+// app for a stack app.
+func (v EnvVars) slug() string {
+	if v.App == "" || v.Session == "" {
+		return v.Session
+	}
+	return v.Session + "-" + v.App
+}
+
+// LeaseKey is the port-lease registry key of the session (or stack app) v
+// renders for: the session ID, or its lane ID for an app.
+func (v EnvVars) LeaseKey() string {
+	if v.App == "" {
+		return v.Session
+	}
+	return session.LaneID(v.Session, v.App)
 }
 
 // expandProjectEnv returns p with its Env values rendered against v.
@@ -53,8 +78,8 @@ func expandProjectEnv(p config.Project, v EnvVars) config.Project {
 
 	pairs := []string{
 		"{{.Session}}", v.Session,
-		"{{.Slug}}", v.Session,
-		"{{.DBName}}", DBName(v.Session),
+		"{{.Slug}}", v.slug(),
+		"{{.DBName}}", DBName(v.slug()),
 		"{{.Issue}}", v.Issue,
 		"{{.Branch}}", v.Branch,
 		"{{.Project}}", v.Project,
@@ -105,8 +130,8 @@ func withSessionEnv(p config.Project, v EnvVars) config.Project {
 	out := make(map[string]string, len(p.Env)+2+len(v.Ports))
 	maps.Copy(out, p.Env)
 	if v.Session != "" {
-		out["LOLA_SESSION_SLUG"] = v.Session
-		out["LOLA_DB_NAME"] = DBName(v.Session)
+		out["LOLA_SESSION_SLUG"] = v.slug()
+		out["LOLA_DB_NAME"] = DBName(v.slug())
 	}
 	if len(v.Ports) > 0 {
 		out["LOLA_PORT"] = strconv.Itoa(v.Ports[0])

@@ -19,7 +19,6 @@ func sandboxFixture(t *testing.T) *fixture {
 	f := newFixture(t, "", "")
 	f.p.Sandbox = config.SandboxDocker
 	f.p.SandboxPorts = []string{"3000", "8080:80"}
-	f.p.LinkedRepos = []config.LinkedRepo{{Name: "api", Path: "/src/api"}, {Name: "web", Path: "/src/web", Labels: []string{"apps/web"}}}
 	f.n.Cfg.Projects[0] = f.p
 	f.n.Cfg.Sandbox = config.SandboxConfig{Image: "acme/agent:1", LolaBin: "/opt/lola-linux", PassEnv: []string{"LOLA_TEST_PASS", "LOLA_TEST_UNSET"}}
 	f.n.HookToken = func(id string) string { return "tok-" + id }
@@ -33,16 +32,8 @@ func TestSandboxedLaunchRunsTheAgentInDocker(t *testing.T) {
 	if full := f.n.launchLine("nori", id, agent.Claude, defaultLaunchPrompt(id), "", false); !strings.Contains(full, "docker") {
 		t.Fatalf("sandboxed launch does not run docker:\n%s", full)
 	}
-	// Only "api" was checked out for this session (the spawn's label
-	// selection left "web" out): only its store may be mounted.
-	if err := os.MkdirAll(LinkedWorktreeDir(dir, "api"), 0o755); err != nil {
-		t.Fatal(err)
-	}
 	inner := "set -a; . ./.lola/env; set +a; exec claude"
 	line := f.n.sandboxLine(&f.p, id, agent.Claude, inner)
-	if strings.Contains(line, "/src/web") || strings.Contains(line, "lola_gcd_2") {
-		t.Errorf("a linked repo the session did not check out is mounted:\n%s", line)
-	}
 
 	for _, must := range []string{
 		"docker rm -f " + id + " >/dev/null 2>&1; ",
@@ -54,10 +45,10 @@ func TestSandboxedLaunchRunsTheAgentInDocker(t *testing.T) {
 		// git stores: rw, with config + hooks overlaid read-only.
 		// …asked of the main checkouts, which the agent cannot rewrite
 		`lola_gcd_0=$(git -C ` + shQuote(f.repo) + ` rev-parse --path-format=absolute --git-common-dir`,
-		`lola_gcd_1=$(git -C /src/api rev-parse`,
+		` && test -d "$lola_gcd_0" || { echo 'lola: cannot resolve the git directory of this project'`,
 		`${lola_gcd_0:+"$lola_gcd_0/config:$lola_gcd_0/config:ro"}`,
 		`${lola_gcd_0:+"$lola_gcd_0/hooks:$lola_gcd_0/hooks:ro"}`,
-		`${lola_gcd_1:+"$lola_gcd_1:$lola_gcd_1"}`,
+		`${lola_gcd_0:+"$lola_gcd_0:$lola_gcd_0"}`,
 		// the Linux lola, read-only, at the host lola's path
 		"-v /opt/lola-linux:/usr/local/bin/lola:ro",
 		"-p 127.0.0.1:3000:3000", "-p 127.0.0.1:8080:80",
@@ -122,8 +113,6 @@ func TestSandboxedEnvFileCarriesTheBridgeAndCredentials(t *testing.T) {
 
 func TestSpawnRecordsTheSandboxAndKillRemovesTheContainer(t *testing.T) {
 	f := sandboxFixture(t)
-	f.p.LinkedRepos = nil
-	f.n.Cfg.Projects[0] = f.p
 	var removed []string
 	f.n.RemoveContainer = func(_ context.Context, name string) error {
 		removed = append(removed, name)
@@ -213,8 +202,6 @@ func TestSandboxDoesNotHingeOnTheSessionIDPrefix(t *testing.T) {
 
 func TestSandboxedSpawnPinsItsGitLayoutBeforeTheAgentRuns(t *testing.T) {
 	f := sandboxFixture(t)
-	f.p.LinkedRepos = nil
-	f.n.Cfg.Projects[0] = f.p
 	s, err := f.n.Spawn(context.Background(), f.p, issueENG42(), "")
 	if err != nil {
 		t.Fatalf("Spawn: %v", err)
@@ -240,5 +227,40 @@ func TestSandboxedSpawnPinsItsGitLayoutBeforeTheAgentRuns(t *testing.T) {
 	}
 	if gitguard.Pinned(dir) {
 		t.Fatal("pin outlived the worktree")
+	}
+}
+
+// A sandboxed STACK session mounts its folder and the git store of each app it
+// actually checked out — never an app the spawn's label selection left out —
+// and has no checkout of its own whose store must resolve.
+func TestSandboxedStackMountsOnlyItsCheckedOutApps(t *testing.T) {
+	f := newFixture(t, "", "")
+	stack := config.Project{Name: "nori", Kind: config.ProjectKindStack, Sandbox: config.SandboxDocker}
+	api := config.Project{Name: "nori-api", Stack: "nori", Path: "/src/api", Symlinks: []string{".env"}}
+	web := config.Project{Name: "nori-web", Stack: "nori", Path: "/src/web", Labels: []string{"apps/web"}}
+	f.n.Cfg = &config.Config{
+		Projects: []config.Project{stack, api, web},
+		Sandbox:  config.SandboxConfig{Image: "acme/agent:1", LolaBin: "/opt/lola-linux"},
+	}
+	id := "lola-nori-eng-42"
+	dir := filepath.Join(f.root, "nori", id)
+	if err := os.MkdirAll(StackAppDir(dir, "nori-api"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	line := f.n.sandboxLine(&stack, id, agent.Claude, "exec claude")
+	for _, must := range []string{
+		"-w " + shQuote(dir) + " -v " + shQuote(dir+":"+dir),
+		`lola_gcd_0=$(git -C /src/api rev-parse --path-format=absolute --git-common-dir 2>/dev/null); `,
+		`${lola_gcd_0:+"$lola_gcd_0/hooks:$lola_gcd_0/hooks:ro"}`,
+	} {
+		if !strings.Contains(line, must) {
+			t.Errorf("stack launch line missing %q:\n%s", must, line)
+		}
+	}
+	if strings.Contains(line, "/src/web") || strings.Contains(line, "lola_gcd_1") {
+		t.Errorf("an app the session did not check out is mounted:\n%s", line)
+	}
+	if strings.Contains(line, "cannot resolve the git directory") {
+		t.Errorf("a stack has no checkout of its own to require:\n%s", line)
 	}
 }

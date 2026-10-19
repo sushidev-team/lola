@@ -471,30 +471,6 @@ export interface KillData {
 }
 
 /**
- * LinkedPR is one linked repository of a session and its PR, if any.
- * Number 0 means no PR observed yet (the agent has not opened one there, or
- * the repo has no GitHub slug to ask).
- */
-export interface LinkedPR {
-    "name": string;
-    "repo"?: string;
-    "branch": string;
-    "number"?: number;
-    "url"?: string;
-
-    /**
-     * OPEN|CLOSED|MERGED
-     */
-    "state"?: string;
-
-    /**
-     * pass|fail|pending|none
-     */
-    "checks"?: string;
-    "draft"?: boolean;
-}
-
-/**
  * LoadInfo is a machine-load sample; -1 marks a value the OS did not report.
  * Busy is the hold reason ("" when dispatch is not held by load).
  */
@@ -725,6 +701,17 @@ export interface ProjectInfo {
     "defaultBranch": string;
 
     /**
+     * Kind is "stack" for a STACK (no checkout of its own; it owns the Linear
+     * side of its member projects), "" for a repository. Stack names the stack
+     * a member belongs to ("" = not a member), and Labels are the issue
+     * labels that select it. A member is drawn under its stack; its Group is
+     * ignored while it is one.
+     */
+    "kind"?: string;
+    "stack"?: string;
+    "labels"?: string[] | null;
+
+    /**
      * Per-PROJECT agent health (not the default agent): AgentBin is the resolved
      * coding-agent binary for this project (its override → [defaults].agent →
      * claude), AgentOK whether it plus tmux+git all resolve on PATH, AgentErr the
@@ -911,6 +898,60 @@ export interface ReviveData {
 }
 
 /**
+ * SessionApp is one repository (app) of a STACK session: its worktree inside
+ * the session folder, its PR if any, and the delivery axis of that PR alone.
+ * Number 0 means no PR observed yet (the agent has not opened one there, or
+ * the repo has no GitHub slug to ask).
+ */
+export interface SessionApp {
+    /**
+     * the member project's name (= its folder in the session)
+     */
+    "name": string;
+
+    /**
+     * the member project's display name
+     */
+    "label"?: string;
+    "repo"?: string;
+    "branch": string;
+    "worktree"?: string;
+    "number"?: number;
+    "url"?: string;
+
+    /**
+     * OPEN|CLOSED|MERGED
+     */
+    "state"?: string;
+
+    /**
+     * pass|fail|pending|none
+     */
+    "checks"?: string;
+
+    /**
+     * APPROVED|CHANGES_REQUESTED|REVIEW_REQUIRED
+     */
+    "review"?: string;
+    "draft"?: boolean;
+
+    /**
+     * this app's delivery axis (state vocabulary)
+     */
+    "delivery"?: string;
+
+    /**
+     * Touched reports local changes against the base with no PR yet.
+     */
+    "touched"?: boolean;
+
+    /**
+     * Ports is this app's own port lease (its [[project]].port_range).
+     */
+    "ports"?: number[] | null;
+}
+
+/**
  * SessionInfo is one observed session, flattened to render-ready strings and
  * ints so the TUI never needs scm/session imports or re-derivation.
  */
@@ -986,13 +1027,20 @@ export interface SessionInfo {
 
     /**
      * Sandbox is "docker" when the agent runs in a container
-     * ([[project]].sandbox), "" on the host. LinkedPRs are the session's
-     * linked-repository PRs ([[project.linked_repo]]), one per linked repo,
-     * in config order; the primary PR stays in PRURL/PRNumber. Both absent on
-     * an older daemon.
+     * ([[project]].sandbox), "" on the host. Absent on an older daemon.
      */
     "sandbox"?: string;
-    "linkedPrs"?: LinkedPR[] | null;
+
+    /**
+     * Stack marks a STACK session: Worktree is its folder, Apps its
+     * repositories in the stack's member order, and the PR fields above
+     * (PRURL, PRNumber, Checks, Review, Delivery) describe FocusApp — the app
+     * whose PR needs attention most, so the row's one badge is never greener
+     * than its worst PR.
+     */
+    "stack"?: boolean;
+    "apps"?: SessionApp[] | null;
+    "focusApp"?: string;
 
     /**
      * The two state axes underneath Status (see internal/state), with raw

@@ -13,6 +13,7 @@ import (
 
 	"github.com/sushidev-team/lola/internal/agent"
 	"github.com/sushidev-team/lola/internal/bestof"
+	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/linear"
 	"github.com/sushidev-team/lola/internal/protocol"
 	"github.com/sushidev-team/lola/internal/session"
@@ -268,6 +269,8 @@ func (d *Daemon) tick(ctx context.Context, name string, dryRun bool) (protocol.P
 	// [defaults].agent → "claude"): the health gate must confirm THAT binary
 	// is on PATH, not always "claude". Resolved under the config lock.
 	agentBin := sandboxedBin(d.cfg, p.Name, agent.Parse(d.cfg.AgentForProject(p.Name)).Binary())
+	// A stack's members, for the per-issue app selection below.
+	cfgStack := d.cfg.StackMembers(p.Name)
 	// Best-of trigger (bestof.go): an issue carrying [best_of].label spawns the
 	// configured mix instead of one agent. Resolved once per tick.
 	bestOfCfg := d.cfg.BestOf
@@ -449,6 +452,13 @@ func (d *Daemon) tick(ctx context.Context, name string, dryRun bool) (protocol.P
 			skip(is, reason)
 			continue
 		}
+		// A stack spawns only the apps an issue's labels select; an issue that
+		// selects none has nothing to check out. Skipped WITHOUT a seen entry,
+		// like every candidate skip, so relabelling it dispatches it.
+		if project.IsStack() && len(config.SelectApps(cfgStack, is.LabelIDs, is.LabelNames, is.LabelGroups)) == 0 {
+			skip(is, "no app of the stack matches its labels")
+			continue
+		}
 		candidates = append(candidates, is)
 	}
 
@@ -483,6 +493,11 @@ func (d *Daemon) tick(ctx context.Context, name string, dryRun bool) (protocol.P
 		// fit: a partial group would compare fewer attempts than configured
 		// while still burning the cap.
 		mix := d.bestOfMixForIssue(bestOfCfg, bestOfMix, bestOfErr, name, is)
+		if len(mix) > 0 && project.IsStack() {
+			// N attempts of a stack would be N folders of every app; not offered.
+			d.logf(name, "best-of: %s is in stack %s, which spawns one agent per issue", is.Identifier, project.Name)
+			mix = nil
+		}
 		cost := max(len(mix), 1)
 		if spawned+cost > budget {
 			capped++

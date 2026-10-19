@@ -1,7 +1,6 @@
 package config
 
 import (
-	"errors"
 	"fmt"
 	"path/filepath"
 	"regexp"
@@ -9,20 +8,12 @@ import (
 	"strings"
 )
 
-// Two per-project ISOLATION/SCOPE features live here, because both change what
-// a session's agent can reach on disk:
-//
-//   - The container SANDBOX ([[project]].sandbox = "docker" + the global
-//     [sandbox] table): the agent runs inside a container that sees only its
-//     worktree, so a rogue command cannot touch the rest of the machine.
-//   - LINKED REPOSITORIES ([[project.linked_repo]]): one issue spans several
-//     repositories (frontend + backend), each checked out on the session's
-//     branch beside the primary worktree, each with its own PR.
-//
-// Neither is a [defaults]-inheritable key. A sandbox is a property of the code
-// being run (its image must carry that stack's toolchain), and an inherited
-// linked repository would check a second repo out into every project that
-// forgot to override it — the same reasoning that keeps dev_commands out.
+// The container SANDBOX ([[project]].sandbox = "docker" + the global [sandbox]
+// table): the agent runs inside a container that sees only its worktree, so a
+// rogue command cannot touch the rest of the machine. Not a [defaults]-
+// inheritable key: a sandbox is a property of the code being run (its image
+// must carry that project's toolchain). For a STACK (stack.go) the stack's own
+// sandbox keys decide; a member's are ignored.
 
 // SandboxNone and SandboxDocker are the values [[project]].sandbox accepts.
 // Empty means none: every pre-sandbox config keeps running on the host.
@@ -96,74 +87,6 @@ func (s SandboxConfig) EffectiveHookPort() int {
 	return s.HookPort
 }
 
-// LinkedRepo is one [[project.linked_repo]]: an additional repository a
-// session of this project works in beside the primary checkout. Each session
-// gets a worktree of it on the session's own branch (at
-// <worktree>/.lola/repos/<name>), and the PR the agent opens there is tracked
-// on the session next to the primary one.
-//
-//   - Name is the directory segment and the label shown beside its PR.
-//   - Path is the repository's local checkout (the worktree is cut from it).
-//   - Repo is its GitHub owner/name, which is what lets lola find the PR.
-//   - DefaultBranch is the branch the session's branch is cut from and the PR
-//     targets ("" = the project's default_branch).
-//   - Labels decide WHICH issues need it: the repo is checked out only for an
-//     issue carrying at least one of them, so an issue labelled for one app
-//     gets that app's worktree and nothing else. Each entry is a Linear label
-//     UUID, its name, or "group/name" for a label inside a label group, all
-//     case-insensitive. Empty = every issue of the project gets it.
-type LinkedRepo struct {
-	Name          string   `toml:"name"`
-	Path          string   `toml:"path"`
-	Repo          string   `toml:"repo,omitempty"`
-	DefaultBranch string   `toml:"default_branch,omitempty"`
-	Labels        []string `toml:"labels,omitempty"`
-}
-
-// WantedFor reports whether an issue whose labels are given (ids, names and
-// group names, parallel slices; a missing group is "") needs this repo
-// checked out. No Labels = always.
-func (l LinkedRepo) WantedFor(ids, names, groups []string) bool {
-	if len(l.Labels) == 0 {
-		return true
-	}
-	for _, want := range l.Labels {
-		want = strings.TrimSpace(want)
-		for i, id := range ids {
-			if want == id {
-				return true
-			}
-			name := at(names, i)
-			if name == "" {
-				continue
-			}
-			if strings.EqualFold(want, name) {
-				return true
-			}
-			if g := at(groups, i); g != "" && strings.EqualFold(want, g+"/"+name) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func at(s []string, i int) string {
-	if i < len(s) {
-		return s[i]
-	}
-	return ""
-}
-
-// BaseBranch is the branch a linked worktree is cut from: its own
-// default_branch, else the owning project's.
-func (l LinkedRepo) BaseBranch(p Project) string {
-	if l.DefaultBranch != "" {
-		return l.DefaultBranch
-	}
-	return p.DefaultBranch
-}
-
 // Sandboxed reports whether the project's agents run in a container.
 func (p *Project) Sandboxed() bool { return p.Sandbox == SandboxDocker }
 
@@ -217,8 +140,7 @@ func SandboxPortPair(spec string) (host, container int, ok bool) {
 	return h, c, true
 }
 
-// validateSandbox checks the [sandbox] table and every project's sandbox and
-// linked-repo keys. Offline and static like the rest of Validate: whether the
+// validateSandbox checks the [sandbox] table and every project's sandbox keys. Offline and static like the rest of Validate: whether the
 // image exists or the docker daemon answers is a runtime question (the health
 // gate's), not a config one.
 func (c *Config) validateSandbox() []error {
@@ -261,53 +183,6 @@ func (c *Config) validateSandbox() []error {
 				errs = append(errs, fmt.Errorf("%s: sandbox_ports entry %q must be \"<port>\" or \"<host>:<container>\" (1..65535)", id, spec))
 			}
 		}
-		errs = append(errs, validateLinkedRepos(id, p)...)
 	}
 	return errs
-}
-
-func validateLinkedRepos(id string, p *Project) []error {
-	var errs []error
-	seen := map[string]bool{}
-	for j, l := range p.LinkedRepos {
-		lid := fmt.Sprintf("%s: linked_repo[%d]", id, j)
-		if err := linkedNameErr(l.Name); err != nil {
-			errs = append(errs, fmt.Errorf("%s: name %w", lid, err))
-		} else if seen[l.Name] {
-			errs = append(errs, fmt.Errorf("%s: duplicate name %q", lid, l.Name))
-		}
-		seen[l.Name] = true
-		switch {
-		case l.Path == "":
-			errs = append(errs, fmt.Errorf("%s: path is required", lid))
-		case !filepath.IsAbs(l.Path):
-			errs = append(errs, fmt.Errorf("%s: path must be absolute, got %q", lid, l.Path))
-		case p.Path != "" && filepath.Clean(l.Path) == filepath.Clean(p.Path):
-			errs = append(errs, fmt.Errorf("%s: path is the project's own checkout", lid))
-		}
-		if l.Repo != "" && !repoRe.MatchString(l.Repo) {
-			errs = append(errs, fmt.Errorf("%s: repo must be owner/name, got %q", lid, l.Repo))
-		}
-		for _, lb := range l.Labels {
-			if strings.TrimSpace(lb) == "" {
-				errs = append(errs, fmt.Errorf("%s: labels must not contain an empty entry", lid))
-				break
-			}
-		}
-	}
-	return errs
-}
-
-// linkedNameRe keeps a linked repo's name one safe path segment: it becomes
-// <worktree>/.lola/repos/<name>.
-var linkedNameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
-
-func linkedNameErr(name string) error {
-	if name == "" {
-		return errors.New("is required")
-	}
-	if !linkedNameRe.MatchString(name) || name == "." || name == ".." {
-		return fmt.Errorf("%q must be lowercase [a-z0-9._-], starting with a letter or digit", name)
-	}
-	return nil
 }

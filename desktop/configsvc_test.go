@@ -898,38 +898,140 @@ func TestConnectCodeNeedsADaemon(t *testing.T) {
 	}
 }
 
-// The Repositories tab round-trips [[project.linked_repo]]: rows are trimmed,
-// blank ones dropped, labels kept — and a DTO without the field (an older
-// client) leaves the configured repos alone instead of wiping them.
-func TestSaveProjectLinkedRepos(t *testing.T) {
-	writeTestConfig(t, minimalConfig)
-	s := &ConfigService{}
+// --- stacks ------------------------------------------------------------------
 
-	dto, _ := s.GetProject("")
-	if dto.LinkedRepos == nil || len(dto.LinkedRepos) != 0 {
-		t.Fatalf("new project linkedRepos = %#v, want []", dto.LinkedRepos)
+// A stack is created empty from a label, as a kind=stack project with no
+// checkout; a second stack the same id would produce is refused, not suffixed,
+// because the id names its worktree folder and prefixes its session ids.
+func TestCreateStack(t *testing.T) {
+	path := writeTestConfig(t, twoProjectConfig)
+	s := &ConfigService{}
+	name, err := s.CreateStack("Nori App")
+	if err != nil {
+		t.Fatalf("CreateStack: %v", err)
 	}
-	site := t.TempDir()
-	dto.Name, dto.Path = "nori", t.TempDir()
-	dto.CycleMode, dto.AssigneeMode = "none", "anyone"
-	dto.LinkedRepos = []LinkedRepoDTO{
-		{Name: " website ", Path: site, Repo: "acme/site", Labels: []string{"lbl-1", " "}},
-		{}, // "Add repository" never filled in
+	if name != "nori-app" {
+		t.Fatalf("id = %q", name)
 	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := cfg.ProjectByName("nori-app")
+	if st == nil || !st.IsStack() || st.Path != "" || st.Label != "Nori App" {
+		t.Fatalf("stack = %+v", st)
+	}
+	if _, err := s.CreateStack("nori app"); err == nil {
+		t.Fatal("a duplicate stack id was accepted")
+	}
+	if _, err := s.CreateStack("okane"); err == nil {
+		t.Fatal("a stack shadowing a project id was accepted")
+	}
+	if _, err := s.CreateStack("  "); err == nil {
+		t.Fatal("an empty stack name was accepted")
+	}
+}
+
+// SetProjectStack moves membership only, and refuses everything that would
+// make the config invalid or nest stacks.
+func TestSetProjectStack(t *testing.T) {
+	path := writeTestConfig(t, twoProjectConfig)
+	s := &ConfigService{}
+	if _, err := s.CreateStack("nori"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateStack("other"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetProjectStack("okane", "nori"); err != nil {
+		t.Fatalf("SetProjectStack: %v", err)
+	}
+	cfg, _ := config.Load(path)
+	if got := cfg.ProjectByName("okane"); got.Stack != "nori" || got.Path != "/tmp/okane" {
+		t.Fatalf("member = %+v", got)
+	}
+	for _, tc := range []struct{ project, stack string }{
+		{"okane", "lola"}, // not a stack
+		{"okane", "nope"}, // unknown stack
+		{"nope", "nori"},  // unknown project
+		{"other", "nori"}, // stacks do not nest
+		{"nori", "nori"},  // nor contain themselves
+	} {
+		if err := s.SetProjectStack(tc.project, tc.stack); err == nil {
+			t.Errorf("SetProjectStack(%q, %q) accepted", tc.project, tc.stack)
+		}
+	}
+	if err := s.SetProjectStack("okane", ""); err != nil {
+		t.Fatalf("leave: %v", err)
+	}
+	cfg, _ = config.Load(path)
+	if got := cfg.ProjectByName("okane"); got.Stack != "" {
+		t.Fatalf("still a member: %+v", got)
+	}
+}
+
+// Removing a stack frees its members instead of leaving them pointing at a
+// stack that is gone (which would fail validation and block the save).
+func TestRemoveStackFreesMembers(t *testing.T) {
+	path := writeTestConfig(t, twoProjectConfig)
+	s := &ConfigService{}
+	if _, err := s.CreateStack("nori"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetProjectStack("okane", "nori"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RemoveProject("nori"); err != nil {
+		t.Fatalf("RemoveProject: %v", err)
+	}
+	cfg, _ := config.Load(path)
+	if cfg.ProjectByName("nori") != nil || cfg.ProjectByName("okane").Stack != "" {
+		t.Fatalf("projects = %+v", cfg.Projects)
+	}
+}
+
+// The form round-trips kind/stack/labels: labels are trimmed, the stack is
+// read-only, and a DTO without labels (an older client) leaves them alone.
+func TestSaveProjectStackFields(t *testing.T) {
+	writeTestConfig(t, twoProjectConfig)
+	s := &ConfigService{}
+	if _, err := s.CreateStack("nori"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetProjectStack("okane", "nori"); err != nil {
+		t.Fatal(err)
+	}
+	dto, err := s.GetProject("okane")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dto.Stack != "nori" || dto.Kind != "" || dto.Labels == nil || len(dto.Labels) != 0 {
+		t.Fatalf("member dto = %+v", dto)
+	}
+	dto.Labels = []string{"apps/web", " "}
+	dto.Stack = "" // the form cannot move membership
 	if err := s.SaveProject(dto); err != nil {
 		t.Fatalf("SaveProject: %v", err)
 	}
-	got, _ := s.GetProject("nori")
-	want := []LinkedRepoDTO{{Name: "website", Path: site, Repo: "acme/site", Labels: []string{"lbl-1"}}}
-	if !reflect.DeepEqual(got.LinkedRepos, want) {
-		t.Fatalf("linkedRepos = %#v, want %#v", got.LinkedRepos, want)
+	got, _ := s.GetProject("okane")
+	if got.Stack != "nori" || !reflect.DeepEqual(got.Labels, []string{"apps/web"}) {
+		t.Fatalf("after save = stack %q labels %#v", got.Stack, got.Labels)
 	}
-
-	got.LinkedRepos = nil
+	got.Labels = nil
 	if err := s.SaveProject(got); err != nil {
-		t.Fatalf("SaveProject: %v", err)
+		t.Fatal(err)
 	}
-	if again, _ := s.GetProject("nori"); len(again.LinkedRepos) != 1 {
-		t.Fatalf("a DTO without linkedRepos wiped them: %#v", again.LinkedRepos)
+	if again, _ := s.GetProject("okane"); len(again.Labels) != 1 {
+		t.Fatalf("a DTO without labels wiped them: %#v", again.Labels)
+	}
+	st, _ := s.GetProject("nori")
+	if st.Kind != config.ProjectKindStack {
+		t.Fatalf("stack kind = %q", st.Kind)
+	}
+	if err := s.SaveProject(st); err != nil {
+		t.Fatalf("saving the stack's own form: %v", err)
+	}
+	if again, _ := s.GetProject("nori"); again.Kind != config.ProjectKindStack {
+		t.Fatal("saving a stack's form dropped its kind")
 	}
 }

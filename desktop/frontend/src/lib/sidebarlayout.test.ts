@@ -7,10 +7,14 @@ import {
   dropIndex,
   groupRowZone,
   liftedIndex,
+  stackMembers,
+  memberOf,
+  stackChange,
+  leaveStackLayout,
   type Row,
 } from "./sidebarlayout";
 
-type P = { name: string; group?: string };
+type P = { name: string; group?: string; kind?: string; stack?: string };
 
 const groups = [
   { name: "clients", label: "Clients", position: 1 },
@@ -212,5 +216,69 @@ describe("groupRowZone", () => {
     // and nothing could be placed BETWEEN two folders.
     expect(groupRowZone(rect, 101)).toBe("before");
     expect(groupRowZone(rect, 127)).toBe("after");
+  });
+});
+
+describe("stacks", () => {
+  // nori is a stack inside the "clients" folder; web and api are its members,
+  // api with a folder of its own that is ignored while it is a member.
+  const sp: P[] = [
+    { name: "lola" },
+    { name: "web", stack: "nori" },
+    { name: "nori", kind: "stack", group: "clients" },
+    { name: "api", stack: "nori", group: "internal" },
+    { name: "loose", stack: "gone" }, // names a stack that does not exist
+  ];
+
+  it("draws members under their stack, not as rows, whatever their group", () => {
+    expect(shape(buildRows(sp, groups))).toEqual(["lola", "clients[nori]", "loose", "internal[]"]);
+    expect([...stackMembers(sp).entries()].map(([k, v]) => [k, v.map((p) => p.name)])).toEqual([["nori", ["web", "api"]]]);
+  });
+
+  it("knows which stack a project is drawn under", () => {
+    expect(memberOf(sp, "web")).toBe("nori");
+    expect(memberOf(sp, "nori")).toBe("");
+    expect(memberOf(sp, "loose")).toBe(""); // a dangling stack draws it loose
+  });
+
+  it("lays members out right after their stack, each keeping its own group", () => {
+    const l = toLayout(buildRows(sp, groups), stackMembers(sp));
+    expect(l.projects).toEqual([
+      { name: "lola", group: "" },
+      { name: "nori", group: "clients" },
+      { name: "web", group: "" },
+      { name: "api", group: "internal" },
+      { name: "loose", group: "" },
+    ]);
+  });
+
+  it("round-trips with members", () => {
+    const rows = moveProject(buildRows(sp, groups), "nori", { kind: "top", index: 0 });
+    const l = toLayout(rows, stackMembers(sp));
+    const back = l.projects.map((x) => ({ ...sp.find((p) => p.name === x.name)!, group: x.group || undefined }));
+    expect(shape(buildRows(back, l.groups))).toEqual(shape(rows));
+    expect(l.projects.map((x) => x.name)).toEqual(["nori", "web", "api", "lola", "loose"]);
+  });
+
+  it("joins a stack only for a plain project dropped onto another stack", () => {
+    expect(stackChange(sp, "lola", { kind: "stack", stack: "nori" })).toEqual({ kind: "join", stack: "nori" });
+    expect(stackChange(sp, "web", { kind: "stack", stack: "nori" })).toBeNull(); // already in it
+    expect(stackChange(sp, "nori", { kind: "stack", stack: "nori" })).toBeNull(); // stacks do not nest
+    expect(stackChange(sp, "lola", { kind: "stack", stack: "lola" })).toBeNull(); // not a stack
+    expect(stackChange(sp, "lola", { kind: "top", index: 0 })).toBeNull(); // plain move
+  });
+
+  it("leaves a stack when a member is dropped anywhere outside it", () => {
+    expect(stackChange(sp, "web", { kind: "top", index: 0 })).toEqual({ kind: "leave", stack: "nori" });
+    expect(stackChange(sp, "web", { kind: "into", group: "internal" })).toEqual({ kind: "leave", stack: "nori" });
+    expect(stackChange(sp, "web", { kind: "stay" })).toBeNull();
+  });
+
+  it("places a freed member where it was dropped", () => {
+    const l = leaveStackLayout(sp, groups, "web", { kind: "top", index: 0 });
+    expect(l.projects.map((x) => x.name)).toEqual(["web", "lola", "nori", "api", "loose"]);
+    expect(l.projects[0].group).toBe("");
+    const into = leaveStackLayout(sp, groups, "api", { kind: "into", group: "internal" });
+    expect(into.projects.find((x) => x.name === "api")!.group).toBe("internal");
   });
 });

@@ -817,6 +817,13 @@ func (m *rootModel) listKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		f, cmd := newFormModel(m.cfg, nil)
 		m.form = f
 		return m, cmd
+	case "t":
+		// New stack: one issue stream over several repositories. No folder
+		// picker — a stack has no checkout; repositories join it from their
+		// own forms. Same key on the projects screen.
+		f, cmd := newStackForm(m.cfg)
+		m.form = f
+		return m, cmd
 	case "x":
 		// 'x' stops the project polling; it is a no-op on a project that never polls.
 		if p := m.selectedRailProject(); p != nil && p.Polls() {
@@ -857,11 +864,11 @@ func (m *rootModel) listKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 // railProjectPtrs returns live pointers (into cfg.Projects) to ALL projects in
-// config order. The cockpit's left rail is a project switcher, so it lists every
+// config order, a stack's members pulled up under it (stackOrder). The cockpit's left rail is a project switcher, so it lists every
 // project — polling or not — and callers may mutate the returned project.
 func (m *rootModel) railProjectPtrs() []*config.Project {
 	out := make([]*config.Project, 0, len(m.cfg.Projects))
-	for i := range m.cfg.Projects {
+	for _, i := range stackOrder(m.cfg.Projects) {
 		out = append(out, &m.cfg.Projects[i])
 	}
 	return out

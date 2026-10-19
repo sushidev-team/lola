@@ -5,7 +5,9 @@ import { tick } from "svelte";
 // The bindings are the process boundary. Stubbing them keeps this about what
 // the sidebar OFFERS and what it asks the backend to persist — the arrangement
 // maths itself is pinned in sidebarlayout.test.ts, without a DOM.
-const { AddGroup, RemoveGroup, RenameGroup, SetGroupCollapsed, SetProjectLayout } = vi.hoisted(() => ({
+const { AddGroup, RemoveGroup, RenameGroup, SetGroupCollapsed, SetProjectLayout, CreateStack, SetProjectStack } = vi.hoisted(() => ({
+  CreateStack: vi.fn(),
+  SetProjectStack: vi.fn(),
   AddGroup: vi.fn(),
   RemoveGroup: vi.fn(),
   RenameGroup: vi.fn(),
@@ -27,6 +29,8 @@ vi.mock("@bindings/desktop", () => ({
     RenameGroup: (...a: unknown[]) => RenameGroup(...a),
     SetGroupCollapsed: (...a: unknown[]) => SetGroupCollapsed(...a),
     SetProjectLayout: (...a: unknown[]) => SetProjectLayout(...a),
+    CreateStack: (...a: unknown[]) => CreateStack(...a),
+    SetProjectStack: (...a: unknown[]) => SetProjectStack(...a),
   },
   TermService: {},
 }));
@@ -70,6 +74,8 @@ describe("SidebarProjects", () => {
     RenameGroup.mockResolvedValue(undefined);
     SetGroupCollapsed.mockResolvedValue(undefined);
     SetProjectLayout.mockResolvedValue(undefined);
+    CreateStack.mockResolvedValue("nori");
+    SetProjectStack.mockResolvedValue(undefined);
     store.projects = [fakeProject(), fakeProject({ name: "okane", group: "clients" })];
     store.groups = [{ name: "clients", label: "Clients", position: 1 }];
     store.status = null;
@@ -370,5 +376,98 @@ describe("SidebarProjects", () => {
     store.groups = [{ name: "clients", label: "Clients", position: 0 }];
     render(SidebarProjects);
     expect(screen.queryByRole("button", { name: "No projects — add one" })).not.toBeInTheDocument();
+  });
+
+  // --- stacks -------------------------------------------------------------------
+
+  const stackProjects = () => [
+    fakeProject(),
+    fakeProject({ name: "nori", kind: "stack", path: "" }),
+    fakeProject({ name: "web", stack: "nori", group: "clients" }),
+  ];
+
+  it("creates a stack from the + menu and opens its form", async () => {
+    render(SidebarProjects);
+    await fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    await fireEvent.click(screen.getByRole("menuitem", { name: "New stack" }));
+    await fireEvent.input(screen.getByRole("textbox"), { target: { value: "Nori" } });
+    await fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    await tick();
+    await tick();
+    expect(CreateStack).toHaveBeenCalledWith("Nori");
+    expect(nav.overlay).toBe("project");
+  });
+
+  it("nests a stack's members under it, whatever their folder", () => {
+    store.projects = stackProjects();
+    const { container } = render(SidebarProjects);
+    const tops = Array.from(container.querySelectorAll("[data-toprow]"));
+    // web names the "clients" folder but is drawn under nori, so the folder is empty.
+    expect(screen.getByRole("button", { name: "Clients 0" })).toBeInTheDocument();
+    const nori = tops.find((t) => t.querySelector("[data-stack-head='nori']"))!;
+    expect(nori.querySelector("[data-stack-members='nori']")!.textContent).toContain("web");
+  });
+
+  it("asks before adding a project to the stack its row is dropped on", async () => {
+    store.projects = stackProjects();
+    store.groups = [];
+    const { container } = render(SidebarProjects);
+    Array.from(container.querySelectorAll("[data-toprow]")).forEach((el, i) => stubRect(el, i * ROW_H * 2, ROW_H));
+    stubRect(container.querySelector("[data-stack-head='nori']")!, 2 * ROW_H, ROW_H);
+
+    pointer(screen.getByRole("button", { name: "lola" }), "pointerdown", { button: 0, clientX: 0, clientY: 4 });
+    pointer(window, "pointermove", { clientX: 0, clientY: 2 * ROW_H + ROW_H / 2 });
+    pointer(window, "pointerup");
+    await tick();
+
+    expect(SetProjectLayout).not.toHaveBeenCalled();
+    expect(SetProjectStack).not.toHaveBeenCalled();
+    expect(confirm.request?.body).toBe("Add lola to stack nori?");
+    expect(confirm.request?.detail).toMatch(/kept but ignored/);
+    confirm.accept();
+    expect(SetProjectStack).toHaveBeenCalledWith("lola", "nori");
+  });
+
+  it("asks before taking a member out when it is dropped outside its stack", async () => {
+    store.projects = stackProjects();
+    store.groups = [];
+    const { container } = render(SidebarProjects);
+    Array.from(container.querySelectorAll("[data-toprow]")).forEach((el, i) => stubRect(el, 100 + i * ROW_H, ROW_H));
+    stubRect(container.querySelector("[data-stack-head='nori']")!, 100 + ROW_H, ROW_H);
+
+    pointer(screen.getByRole("button", { name: "web" }), "pointerdown", { button: 0, clientX: 0, clientY: 150 });
+    pointer(window, "pointermove", { clientX: 0, clientY: 0 }); // above everything: top gap 0
+    pointer(window, "pointerup");
+    await tick();
+
+    expect(confirm.request?.body).toBe("Remove web from stack nori?");
+    confirm.accept();
+    expect(SetProjectStack).toHaveBeenCalledWith("web", "");
+    // Then placed where it was dropped (the top level).
+    await vi.waitFor(() => expect(SetProjectLayout).toHaveBeenCalled());
+    expect(SetProjectLayout).toHaveBeenCalledWith({
+      groups: [],
+      projects: [
+        { name: "web", group: "" },
+        { name: "lola", group: "" },
+        { name: "nori", group: "" },
+      ],
+    });
+  });
+
+  it("offers stack membership on a project row's context menu", async () => {
+    store.projects = stackProjects();
+    render(SidebarProjects);
+    await fireEvent.contextMenu(screen.getByRole("button", { name: "lola" }));
+    await fireEvent.click(screen.getByRole("menuitem", { name: "Add to stack…" }));
+    await fireEvent.click(screen.getByRole("menuitem", { name: "nori" }));
+    expect(confirm.request?.body).toBe("Add lola to stack nori?");
+
+    confirm.cancel();
+    await fireEvent.contextMenu(screen.getByRole("button", { name: "web" }));
+    await fireEvent.click(screen.getByRole("menuitem", { name: "Remove from stack" }));
+    expect(confirm.request?.body).toBe("Remove web from stack nori?");
+    confirm.accept();
+    expect(SetProjectStack).toHaveBeenCalledWith("web", "");
   });
 });

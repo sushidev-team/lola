@@ -24,15 +24,9 @@ repo = "acme/web"
 default_branch = "main"
 sandbox = "docker"
 sandbox_ports = ["3000", "8080:80"]
-
-[[project.linked_repo]]
-name = "api"
-path = "/src/api"
-repo = "acme/api"
-default_branch = "develop"
 `
 
-func TestSandboxAndLinkedReposRoundTrip(t *testing.T) {
+func TestSandboxRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
 	if err := os.WriteFile(path, []byte(sandboxBody), 0o600); err != nil {
 		t.Fatal(err)
@@ -47,13 +41,6 @@ func TestSandboxAndLinkedReposRoundTrip(t *testing.T) {
 	p := c.ProjectByName("web")
 	if !p.Sandboxed() || c.SandboxImageFor(p) != "ghcr.io/acme/agent:1" || !c.AnySandboxed() {
 		t.Fatalf("sandbox not resolved: %+v / %+v", p, c.Sandbox)
-	}
-	want := []LinkedRepo{{Name: "api", Path: "/src/api", Repo: "acme/api", DefaultBranch: "develop"}}
-	if !reflect.DeepEqual(p.LinkedRepos, want) {
-		t.Fatalf("linked = %+v", p.LinkedRepos)
-	}
-	if got := p.LinkedRepos[0].BaseBranch(*p); got != "develop" {
-		t.Fatalf("base = %q", got)
 	}
 	if err := c.Save(path); err != nil {
 		t.Fatal(err)
@@ -75,7 +62,7 @@ func TestEmptySandboxTableIsNotWritten(t *testing.T) {
 		t.Fatal(err)
 	}
 	raw, _ := os.ReadFile(path)
-	if strings.Contains(string(raw), "[sandbox]") || strings.Contains(string(raw), "linked_repo") {
+	if strings.Contains(string(raw), "[sandbox]") {
 		t.Fatalf("zero sandbox config written:\n%s", raw)
 	}
 	if c.Sandbox.DockerBin() != "docker" || c.Sandbox.EffectiveHookPort() != DefaultSandboxHookPort {
@@ -105,16 +92,6 @@ func TestSandboxValidation(t *testing.T) {
 		{"bad pass_env", func(c *Config) { c.Sandbox.PassEnv = []string{"A;rm"} }, "pass_env"},
 		{"hook port", func(c *Config) { c.Sandbox.HookPort = -1 }, "hook_port"},
 		{"image without sandbox", func(c *Config) { c.Projects[0].Sandbox = ""; c.Projects[0].SandboxImage = "x" }, "need sandbox"},
-		{"linked no name", func(c *Config) { c.Projects[0].LinkedRepos = []LinkedRepo{{Path: "/src/api"}} }, "name is required"},
-		{"linked bad name", func(c *Config) { c.Projects[0].LinkedRepos = []LinkedRepo{{Name: "../x", Path: "/src/api"}} }, "must be lowercase"},
-		{"linked dup", func(c *Config) {
-			c.Projects[0].LinkedRepos = []LinkedRepo{{Name: "api", Path: "/a"}, {Name: "api", Path: "/b"}}
-		}, "duplicate name"},
-		{"linked relative", func(c *Config) { c.Projects[0].LinkedRepos = []LinkedRepo{{Name: "api", Path: "api"}} }, "must be absolute"},
-		{"linked self", func(c *Config) { c.Projects[0].LinkedRepos = []LinkedRepo{{Name: "api", Path: "/src/web/"}} }, "project's own checkout"},
-		{"linked repo slug", func(c *Config) {
-			c.Projects[0].LinkedRepos = []LinkedRepo{{Name: "api", Path: "/a", Repo: "https://github.com/a/b"}}
-		}, "owner/name"},
 	}
 	if err := base().Validate(); err != nil {
 		t.Fatalf("base config invalid: %v", err)
@@ -141,28 +118,6 @@ func TestSandboxPortPair(t *testing.T) {
 	for _, bad := range []string{"", "x", "1:2:3", "0", "65536", "127.0.0.1:80"} {
 		if _, _, ok := SandboxPortPair(bad); ok {
 			t.Errorf("%q accepted", bad)
-		}
-	}
-}
-
-func TestLinkedRepoWantedFor(t *testing.T) {
-	ids, names, groups := []string{"u-1", "u-2"}, []string{"Website", "bug"}, []string{"apps", ""}
-	for _, c := range []struct {
-		labels []string
-		want   bool
-	}{
-		{nil, true},                      // no labels: always
-		{[]string{"u-1"}, true},          // UUID
-		{[]string{"website"}, true},      // name, case-insensitive
-		{[]string{"Apps/Website"}, true}, // group/name
-		{[]string{" bug "}, true},        // trimmed
-		{[]string{"apps"}, false},        // a group alone is not a label
-		{[]string{"other/website"}, false},
-		{[]string{"api", "u-9"}, false},
-	} {
-		l := LinkedRepo{Labels: c.labels}
-		if got := l.WantedFor(ids, names, groups); got != c.want {
-			t.Errorf("labels %q: WantedFor = %v, want %v", c.labels, got, c.want)
 		}
 	}
 }

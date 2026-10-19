@@ -52,6 +52,17 @@ func (d *Daemon) handleResolveConflict(ctx context.Context, sessionID string) (p
 	if !ok {
 		return protocol.ResolveConflictData{}, fmt.Errorf("unknown session %s", sessionID)
 	}
+	// A stack session's conflict is one of its apps': resolve the first app
+	// that has one (the aggregate shows exactly that app's state). A client
+	// may also name the lane itself.
+	if s.Stack && s.Lane == "" {
+		for _, lane := range s.Lanes() {
+			if lane.Delivery == state.DeliveryMergeConflict {
+				s = lane
+				break
+			}
+		}
+	}
 	if s.Delivery != state.DeliveryMergeConflict {
 		return protocol.ResolveConflictData{}, fmt.Errorf("session %s has no merge conflict (delivery %q)", sessionID, s.Delivery)
 	}
@@ -65,6 +76,9 @@ func (d *Daemon) handleResolveConflict(ctx context.Context, sessionID string) (p
 	base := p.DefaultBranch
 	if base == "" {
 		base = config.DefaultBranchName
+	}
+	if s.Lane != "" {
+		base = d.laneBase(s)
 	}
 
 	err := d.typeAtRestingPrompt(ctx, s, resolveConflictMessage(s, base), func(cur *session.Session) {
@@ -108,6 +122,7 @@ var (
 // failed send AFTER the gate was consumed — not rolled back, like every other
 // send path, so a broken pane is not re-prompted every cycle.
 func (d *Daemon) typeAtRestingPrompt(ctx context.Context, s session.Session, msg string, stamp func(cur *session.Session)) error {
+	msg = laneHeader(s) + msg // a stack app's request names its checkout first
 	if !handoffDeliverable(s) {
 		return errNotResting
 	}

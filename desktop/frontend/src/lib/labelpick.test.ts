@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { labelIdsFor } from "./linkedrepos";
+import { labelIdsFor } from "./labelpick";
 
 const opts = [
   { id: "u-web", label: "apps / website" },

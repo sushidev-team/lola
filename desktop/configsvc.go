@@ -584,11 +584,16 @@ type ProjectFormDTO struct {
 	PortsPerSession int      `json:"portsPerSession"`
 	PreRemove       []string `json:"preRemove"`
 	Env             []string `json:"env"` // "KEY=value" lines
-	// LinkedRepos are the [[project.linked_repo]] tables: further repositories
-	// one issue may span. Each is checked out for an issue only when the issue
-	// carries one of its Labels (none = every issue). The whole list is
-	// replaced on save.
-	LinkedRepos []LinkedRepoDTO `json:"linkedRepos"`
+	// Kind is "stack" for a STACK (no checkout of its own: it owns the Linear
+	// side of its members), "" for a repository. Stack names the stack this
+	// project is a MEMBER of ("" = none) and is read-only here: membership is
+	// changed by dragging in the sidebar (SetProjectStack), for the same reason
+	// the group is — a stale form must not move a project nobody dragged.
+	// Labels are a member's issue labels (UUID, name or "group/name"; empty =
+	// every issue); nil from an older client leaves them untouched.
+	Kind   string   `json:"kind"`
+	Stack  string   `json:"stack"`
+	Labels []string `json:"labels"`
 
 	// Linear polling filter.
 	Enabled        bool     `json:"enabled"`
@@ -618,50 +623,6 @@ type ProjectFormDTO struct {
 
 	Inherits InheritsDTO `json:"inherits"`
 	IsNew    bool        `json:"isNew"`
-}
-
-// LinkedRepoDTO is one [[project.linked_repo]] in the project form. Labels are
-// Linear label UUIDs (the picker's values) or, from a hand-edited config,
-// names / "group/name" — the form keeps whatever it does not recognize.
-type LinkedRepoDTO struct {
-	Name          string   `json:"name"`
-	Path          string   `json:"path"`
-	Repo          string   `json:"repo"`
-	DefaultBranch string   `json:"defaultBranch"`
-	Labels        []string `json:"labels"`
-}
-
-func linkedReposDTO(in []config.LinkedRepo) []LinkedRepoDTO {
-	out := make([]LinkedRepoDTO, 0, len(in)) // [] rather than null for the frontend
-	for _, l := range in {
-		labels := l.Labels
-		if labels == nil {
-			labels = []string{}
-		}
-		out = append(out, LinkedRepoDTO{Name: l.Name, Path: l.Path, Repo: l.Repo, DefaultBranch: l.DefaultBranch, Labels: labels})
-	}
-	return out
-}
-
-// linkedReposFrom trims the form's rows and drops the blank ones (an "Add
-// repository" never filled in); anything half-filled is kept for Validate to
-// name, rather than being silently dropped.
-func linkedReposFrom(in []LinkedRepoDTO) []config.LinkedRepo {
-	var out []config.LinkedRepo
-	for _, l := range in {
-		r := config.LinkedRepo{
-			Name:          strings.TrimSpace(l.Name),
-			Path:          strings.TrimSpace(l.Path),
-			Repo:          strings.TrimSpace(l.Repo),
-			DefaultBranch: strings.TrimSpace(l.DefaultBranch),
-			Labels:        nonEmpty(l.Labels),
-		}
-		if r.Name == "" && r.Path == "" && r.Repo == "" {
-			continue
-		}
-		out = append(out, r)
-	}
-	return out
 }
 
 // GetProject returns the named project's full form state. An empty name is a
@@ -699,6 +660,14 @@ func (s *ConfigService) GetProject(name string) (ProjectFormDTO, error) {
 	return projectDTO(p), nil
 }
 
+// labelsDTO marshals a nil label list as [] rather than null for the frontend.
+func labelsDTO(in []string) []string {
+	if in == nil {
+		return []string{}
+	}
+	return in
+}
+
 func projectDTO(p *config.Project) ProjectFormDTO {
 	return ProjectFormDTO{
 		Name:            p.Name,
@@ -715,7 +684,9 @@ func projectDTO(p *config.Project) ProjectFormDTO {
 		PortsPerSession: p.PortsPerSession,
 		PreRemove:       p.PreRemove,
 		Env:             envToLines(p.Env),
-		LinkedRepos:     linkedReposDTO(p.LinkedRepos),
+		Kind:            p.Kind,
+		Stack:           p.Stack,
+		Labels:          labelsDTO(p.Labels),
 
 		Enabled:        p.Enabled,
 		TeamID:         p.TeamID,
@@ -802,8 +773,13 @@ func (s *ConfigService) SaveProject(dto ProjectFormDTO) error {
 	p.PortsPerSession = dto.PortsPerSession
 	p.PreRemove = nonEmpty(dto.PreRemove)
 	p.Env = env
-	if dto.LinkedRepos != nil { // absent (an older client) = untouched, never wiped
-		p.LinkedRepos = linkedReposFrom(dto.LinkedRepos)
+	if dto.IsNew {
+		// Only a new project takes its kind from the form: turning an existing
+		// repository into a stack (or back) is not an edit the form offers.
+		p.Kind = strings.TrimSpace(dto.Kind)
+	}
+	if dto.Labels != nil { // absent (an older client) = untouched, never wiped
+		p.Labels = nonEmpty(dto.Labels)
 	}
 
 	p.Enabled = dto.Enabled
@@ -933,6 +909,84 @@ func (s *ConfigService) RemoveProject(name string) error {
 		}
 	}
 	cfg.Projects = out
+	// Removing a STACK sets its members free rather than leaving them naming a
+	// stack that is gone (which Validate rejects): they get their own Linear
+	// and agent settings back, exactly as when dragged out one by one.
+	for i := range cfg.Projects {
+		if cfg.Projects[i].Stack == name {
+			cfg.Projects[i].Stack = ""
+		}
+	}
+	return saveConfig(cfg, path)
+}
+
+// CreateStack adds an empty STACK from a free-text label and returns its id.
+// Unlike AddGroup the id is NOT de-duplicated with a suffix: a stack is a
+// project, its id prefixes session ids and names its worktree folder, so a
+// clash is refused and the human picks another name.
+func (s *ConfigService) CreateStack(label string) (string, error) {
+	cfg, path, err := loadConfig()
+	if err != nil {
+		return "", err
+	}
+	label = strings.TrimSpace(label)
+	name := config.Slug(label)
+	if name == "" {
+		return "", errors.New("stack name is required")
+	}
+	if cfg.ProjectByName(name) != nil {
+		return "", errors.New("a project named " + name + " already exists")
+	}
+	p := config.Project{Name: name, Kind: config.ProjectKindStack, CycleMode: "none", AssigneeMode: "anyone"}
+	if label != name {
+		p.Label = label
+	}
+	// Inherit every [defaults] key a fresh project would (see GetProject):
+	// the new stack picks up the shared Linear setup.
+	p.Inherits = config.ProjectInherits{
+		Symlinks: true, PostCreate: true, Env: true,
+		MatchLabels: true, MatchMode: true, OnSentSetLabel: true,
+		BlockedLabelID: true, DedupMode: true, PrioritySort: true,
+	}
+	cfg.Projects = append(cfg.Projects, p)
+	if err := saveConfig(cfg, path); err != nil {
+		return "", err
+	}
+	return name, nil
+}
+
+// SetProjectStack moves a project into a stack (stack = "" takes it out). It
+// touches ONLY Project.Stack: the member's own Linear filter, agent and
+// write-back keys stay in the file, ignored while it is a member, so leaving
+// the stack gives them back. Refused: an unknown project or stack, a target
+// that is not a stack, and a project that is itself a stack (stacks do not
+// nest).
+func (s *ConfigService) SetProjectStack(project, stack string) error {
+	cfg, path, err := loadConfig()
+	if err != nil {
+		return err
+	}
+	p := cfg.ProjectByName(project)
+	if p == nil {
+		return errors.New("no such project: " + project)
+	}
+	stack = strings.TrimSpace(stack)
+	if stack != "" {
+		if p.IsStack() {
+			return errors.New(project + " is a stack — stacks do not nest")
+		}
+		st := cfg.ProjectByName(stack)
+		if st == nil {
+			return errors.New("no such stack: " + stack)
+		}
+		if !st.IsStack() {
+			return errors.New(stack + " is not a stack")
+		}
+	}
+	if p.Stack == stack {
+		return nil // no write for a no-op move
+	}
+	p.Stack = stack
 	return saveConfig(cfg, path)
 }
 

@@ -161,7 +161,7 @@ func (m *rootModel) detailStripBox(w, h int) []string {
 			}
 			pr := ""
 			if s.PRNumber > 0 {
-				pr = fmt.Sprintf("#%d", s.PRNumber)
+				pr = fmt.Sprintf("%s#%d", focusAppPrefix(s), s.PRNumber)
 			}
 			// The primary axis word, never the raw rolled-up identifier: this list
 			// used to print "changes_requested" straight into the panel.
