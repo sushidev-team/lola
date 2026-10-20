@@ -1,6 +1,12 @@
 import "@testing-library/jest-dom/vitest";
 import { afterAll } from "vitest";
 
+// Node's experimental storage globals can mask jsdom's browser storage.
+// Use this test window's isolated storage, without requiring a Node CLI flag.
+const testWindow = (globalThis as unknown as { jsdom: { window: Window } }).jsdom.window;
+Object.defineProperty(globalThis, "localStorage", { configurable: true, value: testWindow.localStorage });
+Object.defineProperty(globalThis, "sessionStorage", { configurable: true, value: testWindow.sessionStorage });
+
 // @wailsio/runtime's drag.js starts a `window.setInterval` AT IMPORT TIME that
 // polls up to 100 times for the Wails environment (dist/drag.js). In jsdom that
 // environment never arrives, so the interval is still pending when the test file
