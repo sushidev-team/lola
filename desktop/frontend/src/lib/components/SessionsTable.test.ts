@@ -324,3 +324,42 @@ describe("SessionsTable lifecycle chip", () => {
     expect(progressCell(container).textContent?.trim()).toBe("");
   });
 });
+
+// A STACK session's one badge is its focus app's PR, so it is named, and the
+// other apps with news ride a "+N" whose hover card lists every app.
+describe("SessionsTable stack session", () => {
+  beforeEach(() => {
+    cleanup();
+    store.connected = true;
+    store.alive = true;
+  });
+
+  it("prefixes the PR with the focus app and counts the other apps", async () => {
+    vi.useFakeTimers();
+    store.sessions = [
+      fakeSession({
+        stack: true,
+        focusApp: "web",
+        prNumber: 9,
+        prUrl: "https://github.com/acme/web/pull/9",
+        delivery: "ci_failed",
+        apps: [
+          { name: "web", branch: "b", number: 9, url: "https://github.com/acme/web/pull/9", delivery: "ci_failed" },
+          { name: "api", label: "API", branch: "b", touched: true },
+          { name: "docs", branch: "b" },
+        ],
+      }),
+    ];
+    render(SessionsTable);
+    expect(screen.getByText("web")).toBeInTheDocument();
+    const more = screen.getByLabelText("1 more app");
+    await fireEvent.pointerEnter(more.parentElement!);
+    await vi.advanceTimersByTimeAsync(300);
+    const card = screen.getByRole("tooltip");
+    expect(card).toHaveTextContent("API");
+    expect(card).toHaveTextContent("changes, no PR yet");
+    expect(card).toHaveTextContent("docs");
+    expect(card).toHaveTextContent("untouched");
+    vi.useRealTimers();
+  });
+});

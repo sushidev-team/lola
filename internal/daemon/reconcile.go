@@ -158,6 +158,7 @@ func (d *Daemon) reconcilePoll(ctx context.Context, api linear.API, p config.Pro
 	// the poll's own `repo`, else its [[project]]'s repo (PollRepo).
 	d.mu.Lock()
 	pollRepo := d.cfg.PollRepo(&p)
+	members := d.cfg.StackMembers(p.Name)
 	d.mu.Unlock()
 
 	// Find issues currently carrying set_label: a minimal poll copy keeping
@@ -220,6 +221,13 @@ func (d *Daemon) reconcilePoll(ctx context.Context, api linear.API, p config.Pro
 			if natSess == nil {
 				natSess = &s
 			}
+			if s.Stack {
+				// A stack session delivered when ANY of its apps holds an open PR.
+				for _, a := range s.Apps {
+					targets = append(targets, prTarget{a.Branch, a.Repo})
+				}
+				continue
+			}
 			t := prTarget{is.BranchName, pollRepo}
 			if s.Branch != "" {
 				t.branch = s.Branch
@@ -228,6 +236,12 @@ func (d *Daemon) reconcilePoll(ctx context.Context, api linear.API, p config.Pro
 				t.repo = s.Repo
 			}
 			targets = append(targets, t)
+		}
+		if len(targets) == 0 && p.IsStack() {
+			// No record: the issue's branch in every member repository.
+			for _, m := range members {
+				targets = append(targets, prTarget{is.BranchName, m.Repo})
+			}
 		}
 		if len(targets) == 0 {
 			targets = []prTarget{{is.BranchName, pollRepo}}
@@ -343,7 +357,9 @@ func (d *Daemon) pruneLeases() {
 	for _, s := range d.sessions.Snapshot() {
 		live[s.ID] = true
 	}
-	dropped, err := d.ports.Prune(func(id string) bool { return live[id] }, orphanTimeout)
+	// A stack app's lease is keyed by its lane ID (runtime.EnvVars.LeaseKey)
+	// and lives as long as its session.
+	dropped, err := d.ports.Prune(func(id string) bool { return live[session.BaseID(id)] }, orphanTimeout)
 	if err != nil {
 		d.logf("", "reconcile: prune port leases: %v", err)
 		return

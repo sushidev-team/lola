@@ -635,6 +635,14 @@ func (d *Daemon) runReviewChain(ctx context.Context, s session.Session, p review
 		base = config.DefaultBranchName
 	}
 	dir := filepath.Join(home, "worktrees", proj.Name, s.ID)
+	if s.Stack {
+		// A stack app's lane reviews THAT app: its worktree against its base.
+		// The session itself has no checkout to review.
+		if s.Lane == "" || s.Worktree == "" {
+			return reviewResult{Skipped: "a stack session is reviewed per app"}
+		}
+		dir, base = s.Worktree, d.laneBase(s)
+	}
 
 	// Stamp the one-shot chain guard BEFORE the (long) exec (a no-op when the PR
 	// already matches or the session has no PR yet).
@@ -956,6 +964,9 @@ func (d *Daemon) sendHandoffToAgent(ctx context.Context, s session.Session, p re
 	if p.Handoff == handoffFull {
 		msg = labelsFor(p).agentPreamble + stash
 	}
+	// A stack app's review: say which checkout and PR it is about, FIRST, as
+	// lola's own text (the findings follow it).
+	msg = laneHeader(s) + msg
 	// When the same findings are also sitting on the PR as resolvable threads,
 	// say so and how to close them (lola's own text, appended AFTER the untrusted
 	// findings so nothing in them can rewrite the instruction). It is derived at
@@ -1056,9 +1067,25 @@ func (d *Daemon) flushReviewHandoffs(ctx context.Context, id string) {
 	if d.deliverFeedback(ctx, id) || d.deliverBroadcast(ctx, id) {
 		return
 	}
+	// A stack session's hand-offs are stashed per app lane; still ONE
+	// delivery per pass, since every lane types into the same prompt.
+	if s, ok := d.sessions.Get(id); ok && s.Stack && s.Lane == "" {
+		for _, a := range s.Apps {
+			if d.flushHandoffsOf(ctx, session.LaneID(id, a.Name)) {
+				return
+			}
+		}
+		return
+	}
+	d.flushHandoffsOf(ctx, id)
+}
+
+// flushHandoffsOf delivers at most one pending provider hand-off of the
+// session (or stack lane) id, reporting whether it typed.
+func (d *Daemon) flushHandoffsOf(ctx context.Context, id string) bool {
 	s, ok := d.sessions.Get(id)
 	if !ok || len(s.PendingHandoffs) == 0 || !handoffDeliverable(s) {
-		return
+		return false
 	}
 	for kStr := range s.PendingHandoffs {
 		p, ok := d.providerByKind(provKind(kStr))
@@ -1066,9 +1093,21 @@ func (d *Daemon) flushReviewHandoffs(ctx context.Context, id string) {
 			continue // kind no longer configured; leave the stash for a future config
 		}
 		if d.flushPendingHandoff(ctx, id, p) {
-			return
+			return true
 		}
 	}
+	return false
+}
+
+// laneBase is the base branch of a stack lane's app: what its worktree was
+// cut from and its PR targets.
+func (d *Daemon) laneBase(s session.Session) string {
+	if cur, ok := d.sessions.Get(session.BaseID(s.ID)); ok {
+		if i := cur.AppIndex(s.Lane); i >= 0 {
+			return appBase(cur.Apps[i])
+		}
+	}
+	return config.DefaultBranchName
 }
 
 // flushPendingHandoff re-reads the record and delivers the deferred hand-off for

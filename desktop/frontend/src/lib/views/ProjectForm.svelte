@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, onDestroy, type Snippet } from "svelte";
+  import { onMount, onDestroy, tick, type Snippet } from "svelte";
   import { linesToText, splitLines, cleanLines } from "$lib/lines";
   import { store } from "$lib/store.svelte";
   import { nav } from "$lib/nav.svelte";
@@ -19,6 +19,7 @@
   import Select from "$lib/components/Select.svelte";
   import { ConfigService, DaemonService, LinearService } from "@bindings/desktop";
   import { slug, slugTyping, displayName } from "$lib/slug";
+  import { labelIdsFor } from "$lib/labelpick";
   import type {
     ProjectFormDTO,
     InheritsDTO,
@@ -31,12 +32,27 @@
 
   // A project IS the poll unit, so this one overlay covers the whole
   // [[project]] table: repo setup, the Linear filter, labels and write-back.
-  const TABS = [
+  //
+  // A STACK and a stack MEMBER split that table between them (see
+  // internal/config/stack.go): the stack owns the issue side (filter, agent,
+  // branch prefix, write-back) and has no checkout; a member owns its
+  // repository. Each sees only its own half — a member's copies of the
+  // stack-owned keys stay in the DTO untouched (hidden, never cleared), so
+  // leaving the stack gives them back.
+  const ALL_TABS = [
     { id: "repo", label: "General" },
     { id: "worktree", label: "Worktree setup" },
+    { id: "members", label: "Members" },
+    { id: "stack", label: "Stack" },
     { id: "filter", label: "Issue pickup" },
     { id: "writeback", label: "Linear updates" },
   ];
+  type Role = "project" | "stack" | "member";
+  const TABS_FOR: Record<Role, string[]> = {
+    project: ["repo", "worktree", "filter", "writeback"],
+    stack: ["repo", "members", "filter", "writeback"],
+    member: ["repo", "worktree", "stack"],
+  };
 
   // The [defaults]-inheritable keys, mirroring config.ProjectInherits. A set bit
   // means the value shown is [defaults]', not this project's.
@@ -67,7 +83,36 @@
   // close. Held here and shown inline instead; cleared on the next attempt.
   let saveErr = $state("");
   let confirmRemove = $state(false);
-  let tab = $state(nav.overlayTab === "labels" ? "filter" : TABS.some((t) => t.id === nav.overlayTab) ? nav.overlayTab : "repo");
+  let tab = $state(nav.overlayTab === "labels" ? "filter" : ALL_TABS.some((t) => t.id === nav.overlayTab) ? nav.overlayTab : "repo");
+  const role = $derived<Role>(f?.kind === "stack" ? "stack" : f?.stack ? "member" : "project");
+  const TABS = $derived(ALL_TABS.filter((t) => TABS_FOR[role].includes(t.id)));
+  // A tab the role does not have (a deep link to "filter" on a member, say)
+  // falls back to General rather than rendering nothing.
+  const shownTab = $derived(TABS.some((t) => t.id === tab) ? tab : "repo");
+
+  // A member's Linear side is its stack's: the label picker lists the STACK's
+  // team labels, and the form links there. Loaded once on open.
+  let stackForm = $state<ProjectFormDTO | null>(null);
+  /** The team whose metadata the pickers show: the stack's, for a member. */
+  const metaTeam = $derived(role === "member" ? (stackForm?.teamId ?? "") : (f?.teamId ?? ""));
+  // A stack's members, live from the store (membership is changed in the
+  // sidebar, not here).
+  const stackMembersList = $derived(f && role === "stack" ? store.projects.filter((p) => p.stack === origName) : []);
+  /**
+   * Members whose labels the stack's own pickup would never let through: an
+   * issue reaches a stack only via its Match labels, so a member label missing
+   * there (or a match-ALL mode) means "checked out for X" can never fire for an
+   * issue labelled only X.
+   */
+  const unpickedMembers = $derived.by(() => {
+    if (!f || role !== "stack" || !f.matchLabels?.length) return [];
+    const opts = meta?.labels ?? [];
+    const match = new Set(labelIdsFor(f.matchLabels, opts));
+    return stackMembersList.filter((m) => {
+      const ls = labelIdsFor(m.labels ?? [], opts);
+      return ls.length > 0 && (f!.matchMode === "all" || ls.some((l) => !match.has(l)));
+    });
+  });
 
   // The DTO exactly as it was loaded, so a close can tell real edits from an
   // untouched form and only prompt to discard when something changed. Snapshotted
@@ -173,7 +218,13 @@
 
 
   const title = $derived(
-    f ? (f.isNew ? "add project" : `project: ${displayName(f)}`) : nav.overlayProject === "" ? "add project" : `project: ${nav.overlayProject}`,
+    f
+      ? f.isNew
+        ? "add project"
+        : `${role === "stack" ? "stack" : "project"}: ${displayName(f)}`
+      : nav.overlayProject === ""
+        ? "add project"
+        : `project: ${nav.overlayProject}`,
   );
   // Saving needs a usable ID, not merely non-empty text: an all-non-ASCII label
   // slugs to "" and there is no id to write.
@@ -278,9 +329,9 @@
     if (!teamId) return;
     try {
       const result = await LinearService.TeamMeta(teamId, false);
-      if (request === metaRequest && f?.teamId === teamId) meta = result;
+      if (request === metaRequest && metaTeam === teamId) meta = result;
     } catch (e) {
-      if (request === metaRequest && f?.teamId === teamId) metaErr = String(e);
+      if (request === metaRequest && metaTeam === teamId) metaErr = String(e);
     } finally {
       if (request === metaRequest) metaLoading = false;
     }
@@ -291,7 +342,14 @@
       const d = await ConfigService.GetProject(nav.overlayProject);
       // label is normalized like inherits: a DTO from an older backend must not
       // leave it undefined and make every .trim() on it throw.
-      f = { ...d, label: d.label ?? "", inherits: inheritsOf(d.inherits) };
+      f = {
+        ...d,
+        label: d.label ?? "",
+        inherits: inheritsOf(d.inherits),
+        kind: d.kind ?? "",
+        stack: d.stack ?? "",
+        labels: [...(d.labels ?? [])],
+      };
       // The baseline the dirty check compares against — the normalized DTO, not
       // the raw one, and before any user edit.
       loaded = $state.snapshot(f) as ProjectFormDTO;
@@ -303,7 +361,7 @@
       // The seeded "main" is a placeholder, not a choice — the checkout's own
       // default branch replaces it. An existing project's branch is a decision.
       branchAuto = d.isNew;
-      if (d.isNew) {
+      if (d.isNew && d.kind !== "stack") {
         // Adding a project STARTS at the folder: nothing else on this tab can be
         // derived without it. Cancelling the chooser leaves an empty form, so
         // nothing is forced.
@@ -323,9 +381,39 @@
     } catch {
       // Non-fatal: reverting a key still works, it just keeps the shown value.
     }
-    void loadTeams();
-    if (f.teamId) void loadMeta(f.teamId);
+    if (f.stack) {
+      try {
+        stackForm = await ConfigService.GetProject(f.stack);
+      } catch {
+        // A stack that cannot be read leaves the picker on its text fallback.
+      }
+    } else {
+      void loadTeams();
+    }
+    if (metaTeam) void loadMeta(metaTeam);
   });
+
+  /**
+   * Open the stack's own form in place of this one. Closed and reopened (not
+   * just re-pointed) so it mounts fresh, and through the dirty guard so edits
+   * here are not dropped silently.
+   */
+  async function openStack() {
+    const stack = f?.stack;
+    if (!stack) return;
+    const go = async () => {
+      nav.closeOverlay();
+      await tick();
+      nav.openOverlay("project", stack);
+    };
+    if (!dirty) return void go();
+    confirm.ask({
+      title: "Discard changes?",
+      body: `Discard your unsaved changes to ${f ? displayName(f) : "this project"}?`,
+      confirmLabel: "Discard",
+      onConfirm: () => void go(),
+    });
+  }
 
   /**
    * Team-scoped UUIDs from the old team match nothing, so switching teams
@@ -399,6 +487,7 @@
       portsPerSession: f.portRange?.trim() ? Math.max(0, Math.trunc(Number(f.portsPerSession) || 0)) : 0,
       preRemove: cleanLines(f.preRemove),
       env: cleanLines(f.env),
+      labels: cleanLines(f.labels),
       stateIds: cleanLines(f.stateIds),
       matchLabels: cleanLines(f.matchLabels),
       concurrencyCap: Number(f.concurrencyCap) || 0,
@@ -628,6 +717,26 @@
   </div>
 {/snippet}
 
+<!-- A member's pointer to where its Linear side lives. -->
+{#snippet stackNote()}
+  <div class="flex items-center gap-3 rounded border border-edge px-3 py-2 text-sm text-faint">
+    <span class="min-w-0 flex-1">
+      Part of stack <span class="text-ink">{stackForm ? displayName(stackForm) : f?.stack}</span>: its Linear filter,
+      agent, branch prefix and write-back settings come from the stack. This project's own are kept, unused, until it
+      leaves the stack.
+    </span>
+    <Button size="sm" variant="secondary" onclick={openStack}>Open stack settings</Button>
+  </div>
+{/snippet}
+
+{#snippet pickupHint()}
+  <p role="note" class="rounded border border-warn/40 bg-warn/10 px-3 py-2 text-sm text-warn">
+    {unpickedMembers.map((m) => displayName(m)).join(", ")}
+    {unpickedMembers.length === 1 ? "has" : "have"} labels this stack's pickup does not match. An issue reaches the stack
+    only through Issue pickup → Match labels: add those labels there and match any label.
+  </p>
+{/snippet}
+
 <Modal {title} onClose={requestClose} width="660px">
   {#if loadErr}
     <div class="rounded border border-bad/40 bg-bad/10 px-3 py-2 text-sm text-bad">{loadErr}</div>
@@ -635,11 +744,12 @@
     <div class="px-3 py-8 text-center text-sm text-faint">loading project…</div>
   {:else}
     {@const d = f}
-    <Tabs tabs={TABS} active={tab} onSelect={(id) => (tab = id)} />
+    <Tabs tabs={TABS} active={shownTab} onSelect={(id) => (tab = id)} />
 
-    {#if tab === "repo"}
+    {#if shownTab === "repo"}
       <div class="space-y-5">
         {#snippet repository()}
+          {#if role !== "stack"}
           <!-- The folder is the FIRST decision and everything below is derived
                from it, so the chooser sits on the row rather than in a menu. The
                field stays typable: a path you already know is never a dead end. -->
@@ -670,6 +780,7 @@
               </span>
             </span>
           </div>
+          {/if}
           {@render textRow(
             "Label",
             d.label,
@@ -684,6 +795,7 @@
             false,
             "shown everywhere in the app; rename it any time",
           )}
+          {#if role !== "stack"}
           {@render textRow(
             "Repo",
             d.repo,
@@ -710,11 +822,30 @@
               </span>
             </span>
           </div>
+          {/if}
+          {#if role !== "member"}
           <AgentModelFields provider={d.agent} providerLabel="Agent" defaultProvider={defaults?.agent ?? "claude"}
             rowClass={rowCls} labelClass={labelCls} onProviderChange={(value) => { d.agent = value; }} />
-
+          {/if}
+          {#if role === "stack"}
+            <!-- A stack session is ONE branch name across every member's
+                 worktree, so the prefix is the stack's. -->
+            <div class={rowCls}>
+              <span class={labelCls}>Branch prefix</span>
+              <PresetInput label="Branch prefix" value={d.branchPrefix} options={BRANCH_PREFIXES}
+                onChange={(v) => { d.branchPrefix = v; }} placeholder="lola/" />
+            </div>
+          {/if}
         {/snippet}
-        {@render section("Repository and agent", repository)}
+        {@render section(role === "stack" ? "Stack and agent" : role === "member" ? "Repository" : "Repository and agent", repository)}
+        {#if role === "stack"}
+          <p class="text-sm text-faint">
+            A stack has no checkout of its own: each session gets one worktree per member repository, side by side in
+            one folder, and the agent works across them.
+          </p>
+        {:else if role === "member"}
+          {@render stackNote()}
+        {/if}
         <details class="pt-1">
           <summary class="cursor-pointer text-faint">Advanced identity</summary>
           <div class="mt-3">
@@ -737,14 +868,16 @@
           </div>
         </details>
       </div>
-    {:else if tab === "worktree"}
+    {:else if shownTab === "worktree"}
       <div class="space-y-5">
         {#snippet preparation()}
+          {#if role === "project"}
           <div class={rowCls}>
             <span class={labelCls}>Branch prefix</span>
             <PresetInput label="Branch prefix" value={d.branchPrefix} options={BRANCH_PREFIXES}
               onChange={(v) => { d.branchPrefix = v; }} placeholder="lola/" />
           </div>
+          {/if}
 
           {@render areaRow(
             "Symlinks",
@@ -805,7 +938,62 @@
         {/snippet}
         {@render section("Local testing", testing)}
       </div>
-    {:else if tab === "filter"}
+    {:else if shownTab === "members"}
+      <div class="space-y-4">
+        <p class="text-faint">
+          The repositories this stack's sessions span. Add one by dragging its project onto this stack in the sidebar
+          (or “Add to stack…” on its row's context menu); drag it out to remove it. Each member decides under its own
+          Stack tab which issues it is checked out for.
+        </p>
+        {#if unpickedMembers.length}
+          {@render pickupHint()}
+        {/if}
+        {#if stackMembersList.length === 0}
+          <p class="rounded border border-dashed border-edge px-3 py-4 text-center text-sm text-faint">No members yet.</p>
+        {:else}
+          <ul class="divide-y divide-edge rounded border border-edge" aria-label="Members">
+            {#each stackMembersList as m (m.name)}
+              {@const opts = meta?.labels ?? []}
+              <li class="flex items-baseline gap-3 px-3 py-2">
+                <span class="min-w-0 truncate text-ink">{displayName(m)}</span>
+                <span class="ml-auto min-w-0 truncate text-sm text-faint">
+                  {#if m.labels?.length}
+                    {labelIdsFor(m.labels, opts).map((id) => opts.find((o) => o.id === id)?.label ?? id).join(", ")}
+                  {:else}
+                    every issue
+                  {/if}
+                </span>
+              </li>
+            {/each}
+          </ul>
+        {/if}
+      </div>
+    {:else if shownTab === "stack"}
+      <div class="space-y-5">
+        {@render stackNote()}
+        {#snippet included()}
+          <div class={rowTopCls}>
+            {@render cap("Included for", null, "Checked out only for issues carrying one of these labels. Empty = every issue.")}
+            {#if meta?.labels}
+              {@const opts = meta.labels}
+              <span>
+                <CheckboxOptions label="Included for" options={opts}
+                  selected={labelIdsFor(d.labels, opts)} onChange={(v) => { d.labels = v; }} />
+                <span class={hintCls}>Checked out only for issues carrying one of these labels. Empty = every issue.</span>
+              </span>
+            {:else}
+              <span>
+                <textarea class="{inputCls} block resize-y font-mono" rows="2" spellcheck="false"
+                  aria-label="Included for" placeholder={"apps/website\none label name or UUID per line"}
+                  value={linesToText(d.labels)} oninput={(e) => { d.labels = splitLines(e.currentTarget.value); }}></textarea>
+                <span class={hintCls}>{metaTeam ? (metaLoading ? "Loading Linear labels…" : "Linear labels unavailable — type names, group/name or UUIDs.") : "The stack has no team yet — type label names, group/name or UUIDs."} Empty = every issue.</span>
+              </span>
+            {/if}
+          </div>
+        {/snippet}
+        {@render section("Issues", included)}
+      </div>
+    {:else if shownTab === "filter"}
       <div class="space-y-5">
         {#if teamsErr}
           <div role="alert" class="rounded border border-warn/40 bg-warn/10 px-3 py-2 text-sm text-warn">
@@ -933,10 +1121,11 @@
           )}
           {/if}
           <HelpText label="team labels" summary="Labels follow the team." detail="Changing the team clears this project’s label overrides. Inherited workspace labels stay unchanged." />
+          {#if unpickedMembers.length}{@render pickupHint()}{/if}
         {/snippet}
         {@render section("Labels and repeat pickup", labels)}
       </div>
-    {:else if tab === "writeback"}
+    {:else if shownTab === "writeback"}
       <p class="copy mb-4 text-sm text-faint">Optional updates. Empty leaves states unchanged.</p>
       <div class="space-y-5">
         {#snippet spawned()}
@@ -978,7 +1167,7 @@
     <div class="flex items-center gap-2">
       {#if f && !f.isNew}
         {#if confirmRemove}
-          <Button variant="danger-solid" size="md" onclick={remove}>Remove project</Button>
+          <Button variant="danger-solid" size="md" onclick={remove}>{role === "stack" ? "Remove stack" : "Remove project"}</Button>
           <Button size="md" onclick={() => (confirmRemove = false)}>Cancel</Button>
         {:else}
           <Button variant="danger" size="md" onclick={() => (confirmRemove = true)}>Remove</Button>

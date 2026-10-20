@@ -69,7 +69,13 @@ func (m *rootModel) projectsPanel(w, panelH int) []string {
 	header := []string{"PROJECT", "PATH", "POLL", "LIVE", "ATTENTION", "LAST"}
 	cells := make([][]string, 0, len(rows))
 	for _, p := range rows {
-		cells = append(cells, homeRowCells(p, info[p.Name], h.data != nil, cfgPolls[p.Name], cfgEnabled[p.Name]))
+		c := homeRowCells(p, info[p.Name], h.data != nil, cfgPolls[p.Name], cfgEnabled[p.Name])
+		c[0] = stackMarker(m.cfg, &p) + c[0]
+		if p.InStack() {
+			// The stack's row carries the poll status for all of its members.
+			c[2] = faintText.Render("via stack")
+		}
+		cells = append(cells, c)
 	}
 
 	body := make([]string, 0, panelH)
@@ -108,7 +114,9 @@ func (m *rootModel) projectsPanel(w, panelH int) []string {
 // pollCount/enabled come from config so poll posture reads correctly either way.
 func homeRowCells(p config.Project, info protocol.ProjectInfo, haveData bool, pollCount, enabled int) []string {
 	path := p.Path
-	if path == "" {
+	if p.IsStack() {
+		path = faintText.Render("(stack)")
+	} else if path == "" {
 		path = faintText.Render("(no path)")
 	} else {
 		path = compactPath(path)
@@ -200,7 +208,7 @@ func (m *rootModel) homeKeybar(w int) string {
 	}
 	// 'x' stops polling and 'X' removes, matching the cockpit rail — the two used
 	// to be the same key with different meanings on the two project lists.
-	keys := []string{"↑↓ move", "enter open", "s sessions", "n add", "e edit", "space poll", "b broadcast", "x stop", "X remove", "/ filter", "esc back"}
+	keys := []string{"↑↓ move", "enter open", "s sessions", "n add", "t new stack", "e edit", "space poll", "b broadcast", "x stop", "X remove", "/ filter", "esc back"}
 	keys = append(keys, "S settings")
 	if m.manageDaemon() && m.home.data == nil {
 		keys = append(keys, "^r start daemon") // urgent while the daemon is down

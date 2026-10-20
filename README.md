@@ -298,7 +298,7 @@ runtime layer, not on config load.
 | `name` | string | Unique project **id** (required), and a path segment: it names the worktree directory (`worktrees/<name>/`) and the seen file (`state/<name>.seen`), prefixes every session/tmux name (`lola-<name>-eng-42`), and is what `lola status`, `enable`/`disable`/`poll`/`logs` key by. Keep it slug-shaped (lowercase letters, digits, `.` `_` `-`) — the forms slugify what you type. Changing it is a **rename**, not an edit; see [Renaming a project](#renaming-a-project). |
 | `label` | string | Free-text display name shown in the TUI and desktop (e.g. `"Nori App"`). Optional — empty falls back to `name`. Purely cosmetic: nothing keys by it, so you can change it at any time, including while sessions are running. |
 | `group` | string | The `[[group]]` folder this project is filed under in the app's project panel, by that group's `name`. Optional — empty puts it at the top level. Display only, and set by dragging the row rather than on this form; see [Groups and ordering](#groups-and-ordering). A value naming no configured group is repaired to empty on load with a notice, never rejected. |
-| `path` | string | Absolute path to the main checkout (required). A leading `~` is expanded on load. Session worktrees live under `~/.lola/worktrees/`, never inside the checkout. |
+| `path` | string | Absolute path to the main checkout (required, except for a [stack](#stacks-one-issue-several-repositories)). A leading `~` is expanded on load. Session worktrees live under `~/.lola/worktrees/`, never inside the checkout. |
 | `repo` | string | GitHub repository as `owner/name`. Used for PR/CI observation of the sessions spawned for this project: the reconciler and observer pass it to `gh pr list --repo` so the open-PR check works regardless of the daemon's working directory. When empty, that check is unavailable and orphaned issues are **never** auto-reverted (fail-closed). Both forms **auto-detect** this from the checkout once `path` is set — see [Adding a project](#adding-a-project-pick-the-folder-the-rest-fills-itself). |
 | `default_branch` | string | Branch new session worktrees start from, and the base the agent is told to open its PR against. Defaults to the checkout's own default branch when a folder is picked (see [Adding a project](#adding-a-project-pick-the-folder-the-rest-fills-itself)), else `main`. Both forms offer the checkout's branches once `path` is set (local plus remote-tracking, the repository's own default first) while staying free text, so a path that is not a checkout is never a dead end. |
 | `branch_prefix` | string | Prefix prepended to a session's derived branch name (e.g. `"feat/"` yields `feat/eng-42`). Empty inherits `[defaults].branch_prefix`, then `"lola/"`. |
@@ -306,7 +306,13 @@ runtime layer, not on config load.
 | `dev_commands` | string array | Long-running dev processes for this repository, e.g. `["composer dev", "npm run dev"]`. They run only in the project's **active** session — one session at a time, each command in its own terminal tab — see [The active session](#the-active-session) — unless the project sets `port_range`, which lets every session run them at once. Deliberately **not** inheritable from `[defaults]`: a dev command belongs to one repository. |
 | `port_range` | string | Inclusive `"lo-hi"` range (within 1024–65535, e.g. `"4100-4999"`) each session leases its **own** block of ports from, exported as `LOLA_PORT` / `LOLA_PORT_1..N`. Setting it makes `dev_commands` **multi-active** — see [Parallel dev stacks](#parallel-dev-stacks). Not inheritable. |
 | `ports_per_session` | integer | Size of each session's block (1–20). Omitted = 1. Needs `port_range`. |
-| `pre_remove` | string array | Teardown hook, the mirror of `post_create`: commands run in the worktree right before lola removes it (merged-cleanup and `lola kill`), with the same env including `LOLA_DB_NAME` and the port lease. Skipped for a dirty (kept) worktree; bounded to 20s in total; a failure is logged, never fatal. Not inheritable. |
+| `pre_remove` | string array | Teardown hook, the mirror of `post_create`: commands run in the worktree right before lola removes it (merged-cleanup and `lola kill`), with the same env including `LOLA_DB_NAME` and the port lease. Skipped for a dirty (kept) worktree; bounded to 20s in total; a failure is logged, never fatal. Skipped for a [sandboxed](#the-container-sandbox) project: it would run on the host in a worktree the agent could write. Not inheritable. |
+| `sandbox` | `"none"` \| `"docker"` | Run this project's coding agents inside a container that can write only their worktree. Empty = `none` (on the host). See [The container sandbox](#the-container-sandbox). Not inheritable. |
+| `sandbox_image` | string | Image a sandboxed project runs, overriding `[sandbox].image`. Must carry `sh`, `git` and the coding agent on `PATH`. |
+| `sandbox_ports` | string array | Container ports published on `127.0.0.1`, as `"3000"` or `"<host>:<container>"`, so a dev server the agent starts in the container is reachable from the host. |
+| `kind` | `""` \| `"stack"` | `"stack"` makes this project a **stack**: no checkout of its own, it owns the Linear side (filter, write-back, agent, sandbox, budget) for its member projects. See [Stacks](#stacks-one-issue-several-repositories). |
+| `stack` | string | Makes this project a **member** (an *app*) of the named stack. It is no longer polled itself; its own Linear, agent and write-back keys are kept but ignored while it is a member. |
+| `labels` | string array | Member only: the issue labels that select this app — a session of the stack checks it out only for an issue carrying one of them (label UUID, name, or `group/name`; case-insensitive). Empty = every issue. |
 | `daily_budget_tokens` | int | This project's daily limit in **weighted** tokens (see [`[budget]`](#budget-optional)). Once today's usage reaches it the project dispatches nothing new until tomorrow; running sessions are untouched. `0`/absent = no project limit. Not inheritable from `[defaults]`. |
 | `symlinks` | string array | Files symlinked from the main checkout into each worktree, e.g. `[".env"]`. Beware: a shared `.env` usually means every worktree talks to the same database. Omit to inherit `[defaults].symlinks`. |
 | `env` | table of strings | Extra environment variables exported into each session (`[project.env]`); the agent pane, shell tabs and the `post_create` commands all see them. Values may reference the session — see [Per-session env values](#per-session-env-values). Omit to inherit `[defaults].env`. |
@@ -569,6 +575,151 @@ REDIS_QUEUE = "{{{.Session}}}"   # → {lola-nori-app-nor-366}
 Prefer `{{.Session}}` wherever the value has to be unique for every session:
 `{{.Issue}}` renders empty when there is no issue. Only values are rendered —
 names are validated shell identifiers and are never templated.
+
+#### The container sandbox
+
+`sandbox = "docker"` runs the project's coding agent inside a container, so an
+agent that goes rogue can wreck its worktree and nothing else. The agent's pane
+is still an ordinary lola tmux pane — it runs `docker run -it …` instead of the
+agent — so the terminal views, pane classification, answers and send-keys all
+work unchanged.
+
+```toml
+[sandbox]
+image    = "ghcr.io/acme/agent-node:22"   # sh + git + the coding agent on PATH
+lola_bin = "/Users/me/src/lola/dist/lola-linux-arm64"   # make build-linux
+pass_env = ["CLAUDE_CODE_OAUTH_TOKEN", "GH_TOKEN"]
+
+[[project]]
+name          = "web"
+sandbox       = "docker"
+sandbox_ports = ["5173"]          # published on 127.0.0.1:5173
+```
+
+What the container can reach:
+
+| Access | What |
+| --- | --- |
+| read-write | the session worktree (for a stack session: its folder, with every app worktree inside it), the repositories' git object/ref stores (a commit writes there), and claude's transcript directory for this worktree (lola's usage, claim audit and revive read it) |
+| read-only | each git store's `config` and `hooks` (a writable one would let the agent plant a hook the **host** runs on the next commit), the Linux lola binary, the targets of `symlinks` |
+| nothing | everything else — `$HOME`, `~/.lola`, the project's main checkout |
+
+Things to know:
+
+- **Credentials.** The container cannot read the macOS keychain, so the agent
+  authenticates from environment variables listed in `[sandbox].pass_env`
+  (copied from the daemon's environment into the session's 0600 env file at
+  spawn — names only in config). claude: `CLAUDE_CODE_OAUTH_TOKEN` (from
+  `claude setup-token`) or `ANTHROPIC_API_KEY`; `git push` / `gh`: `GH_TOKEN`.
+- **Hooks.** A host unix socket cannot be mounted into Docker Desktop's or
+  OrbStack's VM, so a sandboxed agent's hooks reach the daemon over the **hook
+  bridge**: `127.0.0.1:[sandbox].hook_port` (default 7718), reached from the
+  container as `host.docker.internal`, open only while some project is
+  sandboxed, accepting only hook events and `lola report`, each carrying a
+  per-session token. The container runs `[sandbox].lola_bin` — a Linux build
+  (`make build-linux`) — mounted at the host lola's path.
+- **claude's state** lives in `.lola/claude` inside the worktree (seeded past
+  the first-run dialogs); codex's in `.lola/codex`. The subscription-limit
+  readout and codex/opencode token usage are not recorded for sandboxed
+  sessions.
+- **Dev servers.** `dev_commands` still run on the host (they are the human's
+  view of the branch); `sandbox_ports` is for servers the agent starts inside
+  the container.
+- **lola's own git** on a sandboxed worktree (checkpoints, diffs, dirty
+  checks) never follows the worktree's `.git` pointer, which the agent can
+  rewrite: the layout is pinned when lola creates the worktree and every host
+  git call uses it.
+- **Teardown** removes the container (`docker rm -f <session>`) along with the
+  pane. Containers carry the label `dev.sushi.lola.session=<session>`.
+- macOS with Docker Desktop or OrbStack is what this is built and tested
+  against. On a plain Linux engine the bridge's loopback port is not reachable
+  from the default bridge network.
+
+#### Stacks (one issue, several repositories)
+
+Some products are several repositories that ship together — an app, its
+website, its API — and one Linear issue may need any of them. A **stack** is a
+project with no checkout of its own that owns the Linear side for them; its
+**members** ("apps") are ordinary projects with their own settings:
+
+```toml
+[[project]]                        # the stack: Linear filter, agent, write-back
+name = "nori"
+kind = "stack"
+team_id = "…"
+match_labels = ["<apps/app>", "<apps/website>"]  # pick up every app's issues
+match_mode   = "any"
+
+[[project]]                        # an app: an ordinary repository
+name   = "nori-app"
+stack  = "nori"
+labels = ["apps/app"]              # issues that need this repository
+path   = "/src/nori-app"
+repo   = "acme/nori-app"
+default_branch = "main"
+dev_commands   = ["composer dev"]
+port_range     = "4100-4199"
+
+[[project]]
+name   = "nori-website"
+stack  = "nori"
+labels = ["apps/website"]
+path   = "/src/nori-website"
+repo   = "acme/nori-website"
+default_branch = "develop"
+dev_commands   = ["npm run dev"]
+```
+
+**There is no main repository.** A session of a stack is a folder,
+`~/.lola/worktrees/<stack>/<session>/`, holding one worktree per app the
+issue's labels select (`<folder>/nori-app/`, `<folder>/nori-website/`), all on
+the session's branch. The agent — and every new shell tab — starts in that
+folder, so it reaches every app with one `cd`. An issue labelled
+`apps/website` gets the website and nothing else; one labelled with both gets
+both. An app without `labels` is checked out for every issue; an issue that
+selects no app is skipped with a reason (relabel it and it dispatches). The
+selection is made once, at spawn.
+
+**What belongs where.** The stack holds everything a session has only once:
+the Linear filter and dedup, write-back, concurrency, the agent and its
+fallback chain, the branch prefix, the budget, the sandbox, review overrides,
+`pr_requires_checks`. Each app holds everything about its repository: path,
+repo, base branch, symlinks, `post_create`, env, `dev_commands`, `port_range`,
+`pre_remove`. A member keeps its own copies of the stack's keys in the
+file, ignored while it is a member — taking it out of the stack restores them.
+Both config forms hide the keys that do not apply.
+
+**Each app runs as its own project.** Its `post_create` runs in its worktree
+with its own env, its own port lease (`LOLA_PORT…`) and its own
+`LOLA_SESSION_SLUG` / `LOLA_DB_NAME` (`<session>-<app>`), and its
+`.lola/env` is what its dev tabs source. The session's dev toggle starts
+every app's `dev_commands`, each in its app's worktree, one tab each.
+
+**One PR per app, handled per app.** The agent's briefing lists the
+checkouts, names the stack's apps it did NOT get (it reports
+`lola report blocked "needs <name>"` instead of cloning one), and asks for one
+PR per repository it changed, cross-linked. lola then treats every app's PR
+separately: its own CI/conflict/review **reactions** (the message names the
+checkout and the PR), its own **review pass** posted on that PR, its own
+merge-queue place. The session's status shows the app that needs attention
+most — a failing website PR is never hidden by a green app — and the list row
+names that app beside its PR. Linear write-back moves the issue when the first
+PR opens and when the last one merges. The diff viewer and the checkpoints
+cover every app (paths read `nori-website/src/…`); a restore is all or
+nothing.
+
+**Teardown** waits until every app's PR has merged or closed (confirmed by a
+successful lookup), removes each app dirty-safe — an app with uncommitted
+work, or with commits on a branch that has no PR, keeps the whole folder — and
+then the folder, unless the agent left files in it outside the apps.
+
+**In the app**, add a stack from the project panel's `+` menu (**New stack**),
+then drag a project onto it to make it a member (and out again to take it
+back); the project's context menu does the same without the mouse. A member's
+form has an **Included for** label picker.
+
+Not available for stack sessions: best-of-N attempts, forking a checkpoint,
+and opening a branch or PR on the stack itself (open it on a member project).
 
 ### `[[project]]` polling fields (optional; a project polls when `team_id` is set)
 
@@ -1305,6 +1456,19 @@ a slot is one agent, not one agent's `cargo build`. Same hold contract as
 
 A value the OS will not report holds **nothing** — a wrong "busy" would mean a
 machine that silently never dispatches.
+
+### `[sandbox]` (optional)
+
+The machine side of the [container sandbox](#the-container-sandbox); a project
+opts in with `sandbox = "docker"`.
+
+| Key | Type | Description |
+| --- | --- | --- |
+| `docker` | string | The docker CLI. Default `docker` from `PATH` (OrbStack, Colima and podman's docker shim work too). |
+| `image` | string | Default image for sandboxed projects (`[[project]].sandbox_image` overrides). Needs `sh`, `git` and the coding agent on `PATH`; its own entrypoint is bypassed. |
+| `lola_bin` | string | Absolute path to a **Linux** lola build (`make build-linux` → `dist/lola-linux-<arch>`). Required by any sandboxed project: it is what the agent's hooks run inside the container. |
+| `hook_port` | int | Loopback port of the hook bridge. Default `7718`. |
+| `pass_env` | string array | Names of host environment variables copied into each sandboxed session's env (credentials). Values never live in the config. |
 
 ### `[ui]` (optional)
 

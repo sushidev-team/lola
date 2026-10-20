@@ -106,7 +106,7 @@ func (d *Daemon) reviewPass(ctx context.Context, s session.Session, p reviewProv
 // reviewed. gated is false when the provider posts no status or the PR cannot
 // be addressed.
 func (d *Daemon) beginReviewGate(ctx context.Context, s session.Session, p reviewProvider) (repo, sha string, gated bool) {
-	if !p.Status || d.setCommitStatus == nil || s.PR == nil || s.PR.Number <= 0 || s.PR.HeadSHA == "" {
+	if !p.Status || d.setCommitStatus == nil || (s.Stack && s.Lane == "") || s.PR == nil || s.PR.Number <= 0 || s.PR.HeadSHA == "" {
 		return "", "", false
 	}
 	repo = d.repoForSession(s)

@@ -46,6 +46,7 @@ vi.mock("@wailsio/runtime", () => ({
 
 import ProjectForm from "./ProjectForm.svelte";
 import { nav } from "$lib/nav.svelte";
+import { store } from "$lib/store.svelte";
 import { confirm } from "$lib/confirm.svelte";
 
 // A project that overrides post-create/env/blocked-label but inherits
@@ -187,6 +188,9 @@ describe("ProjectForm", () => {
     for (const t of ["General", "Worktree setup", "Issue pickup", "Linear updates"]) {
       expect(screen.getByRole("tab", { name: t })).toBeInTheDocument();
     }
+    // The stack-only tabs are not offered to a plain project.
+    expect(screen.queryByRole("tab", { name: "Members" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "Stack" })).not.toBeInTheDocument();
   });
 
   it("saves explicit defaults for agent and concurrency", async () => {
@@ -341,6 +345,66 @@ describe("ProjectForm", () => {
     expect(arg.portRange).toBe("4100-4199");
     expect(arg.portsPerSession).toBe(2);
     expect(arg.preRemove).toEqual(['dropdb "$LOLA_DB_NAME"']);
+  });
+
+  it("shows a STACK without any repository field, and its members", async () => {
+    getProject.mockResolvedValue({ ...sampleDto(), name: "nori", kind: "stack", stack: "", labels: [], path: "", repo: "", matchMode: "any", matchLabels: ["lab-default"] });
+    store.projects = [
+      { name: "web", stack: "nori", labels: ["bug"] },
+      { name: "api", stack: "nori", labels: [] },
+      { name: "other" },
+    ] as unknown as typeof store.projects;
+    render(ProjectForm);
+    expect(await screen.findByText("stack: nori")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Path")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Repo")).not.toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "Worktree setup" })).not.toBeInTheDocument();
+    // The stack owns the branch name every member's worktree shares.
+    expect(screen.getByLabelText("Custom Branch prefix")).toHaveValue("acme/");
+    await fireEvent.click(screen.getByRole("tab", { name: "Members" }));
+    const list = screen.getByRole("list", { name: "Members" });
+    expect(within(list).getByText("web")).toBeInTheDocument();
+    expect(within(list).getByText("every issue")).toBeInTheDocument();
+    expect(within(list).queryByText("other")).not.toBeInTheDocument();
+    expect(screen.getByText(/dragging its project onto this stack/)).toBeInTheDocument();
+    // web's "bug" is not in the stack's Match labels: an issue labelled only
+    // bug would never reach the stack, so the form says so.
+    await waitFor(() => expect(screen.getByRole("note")).toHaveTextContent(/web has labels this stack's pickup does not match/));
+    await fireEvent.click(screen.getByRole("tab", { name: "Linear updates" }));
+    expect(screen.getByLabelText("PR requires checks")).toBeInTheDocument();
+    store.projects = [];
+  });
+
+  it("shows a MEMBER only its repository half and saves its labels", async () => {
+    getProject.mockImplementation(async (name: string) =>
+      name === "nori"
+        ? { ...sampleDto(), name: "nori", label: "Nori", kind: "stack", stack: "", labels: [], teamId: "team-uuid-2" }
+        : { ...sampleDto(), kind: "", stack: "nori", labels: ["Bug"] },
+    );
+    render(ProjectForm);
+    expect(await screen.findByLabelText("Path")).toHaveValue("/Users/me/code/acme");
+    // Stack-owned: hidden, never cleared.
+    expect(screen.queryByLabelText("Agent")).not.toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "Issue pickup" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "Linear updates" })).not.toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("tab", { name: "Worktree setup" }));
+    expect(screen.queryByLabelText("Custom Branch prefix")).not.toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("tab", { name: "Stack" }));
+    expect(screen.getByText(/come from the stack/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Open stack settings" })).toBeInTheDocument();
+    // pr_requires_checks only gates the Linear write-back, which is the stack's.
+    expect(screen.queryByLabelText("PR requires checks")).not.toBeInTheDocument();
+    // The picker lists the STACK's team labels; a hand-written name shows ticked.
+    await waitFor(() => expect(teamMetaFn).toHaveBeenCalledWith("team-uuid-2", false));
+    const group = await screen.findByRole("group", { name: "Included for" });
+    expect(within(group).getByText("bug").closest("label")!.querySelector("input")!).toBeChecked();
+    await fireEvent.click(within(group).getByText("agent"));
+    await fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+    await waitFor(() => expect(saveProject).toHaveBeenCalledTimes(1));
+    const arg = saveProject.mock.calls[0][0];
+    expect(arg.labels).toEqual(["lab-1", "lab-default"]);
+    // The member's own copies of the stack-owned keys ride along untouched.
+    expect(arg).toMatchObject({ teamId: "team-uuid-1", agent: "claude", branchPrefix: "acme/", stack: "nori" });
   });
 
   it("promotes an inherited field to an override when it is edited", async () => {

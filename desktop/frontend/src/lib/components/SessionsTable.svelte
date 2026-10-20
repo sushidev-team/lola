@@ -14,6 +14,8 @@
   import SessionsEmpty from "./SessionsEmpty.svelte";
   import { chipRelevant } from "$lib/board";
   import UsageMark from "./UsageMark.svelte";
+  import StackAppsChip from "./StackAppsChip.svelte";
+  import { focusLabel } from "$lib/stackapps";
 
   let { dense = false }: { dense?: boolean } = $props();
 
@@ -180,8 +182,11 @@
               <!-- Fixed width (room for "#9999"), present on every row, so the
                    chips beside it line up down the column. The number opens the
                    PR: a <td> is not inside a button, so it may be a control. -->
-              <span class="num inline-block w-[3.25rem] text-sm text-faint">
+              <!-- A STACK session's number is one app's PR: prefixed with that
+                   app's name, which may outgrow the fixed width (min-, not w-). -->
+              <span class="num inline-block min-w-[3.25rem] text-sm text-faint">
                 {#if s.prNumber > 0}
+                  {#if focusLabel(s)}<span>{focusLabel(s)}</span>{" "}{/if}
                   {#if s.prUrl}
                     <Button
                       variant="bare"
@@ -206,6 +211,7 @@
               {:else if chipRelevant(s.board, s.prNumber)}
                 <BoardChip session={s} />
               {/if}
+              <StackAppsChip session={s} />
               <ClaimFlag session={s} />
               <CrossSessionChips session={s} />
             </span>

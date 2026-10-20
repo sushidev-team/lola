@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/sushidev-team/lola/internal/agent"
@@ -66,13 +67,16 @@ func (d *Daemon) projectsData(_ context.Context) protocol.ProjectsData {
 			Path:           m.p.Path,
 			Repo:           m.p.Repo,
 			DefaultBranch:  m.p.DefaultBranch,
+			Kind:           m.p.Kind,
+			Stack:          m.p.Stack,
+			Labels:         slices.Clone(m.p.Labels),
 			Agent:          m.agentKind,
 			AgentBin:       m.agentBin,
 			RepoConfigured: m.p.Repo != "",
 			PollCount:      len(m.polls),
 			PollsEnabled:   m.enabled,
 			Polls:          m.polls,
-			PathOK:         projectPathOK(m.p.Path),
+			PathOK:         m.p.IsStack() || projectPathOK(m.p.Path),
 		}
 		if health != nil {
 			if err := health(m.agentBin); err != nil {

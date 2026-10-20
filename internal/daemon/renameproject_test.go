@@ -213,3 +213,27 @@ func TestSeenRenameMissingSourceIsFine(t *testing.T) {
 		t.Errorf("rename of a pollless project = %v, want nil", err)
 	}
 }
+
+// A stack's members name it, so renaming the stack moves them along; a member
+// is a folder inside every session of its stack, so such a session blocks
+// renaming the member.
+func TestRenameProjectKeepsStackMembership(t *testing.T) {
+	d := newRenameDaemon(t, []config.Project{
+		{Name: "nori", Kind: config.ProjectKindStack},
+		{Name: "nori-web", Stack: "nori", Path: "/src/web"},
+	})
+	if _, err := d.handleRenameProject(context.Background(), renameArgs(t, "nori", "nori2")); err != nil {
+		t.Fatalf("rename stack: %v", err)
+	}
+	if m := d.cfg.ProjectByName("nori-web"); m == nil || m.Stack != "nori2" {
+		t.Fatalf("member after stack rename = %+v", m)
+	}
+
+	s := nativeSess("FE-1", "working")
+	s.Project, s.Stack = "nori2", true
+	s.Apps = []session.App{{Name: "nori-web"}}
+	d.sessions.Upsert(s)
+	if _, err := d.handleRenameProject(context.Background(), renameArgs(t, "nori-web", "web")); err == nil || !strings.Contains(err.Error(), "still has") {
+		t.Fatalf("renaming a member a live stack session holds = %v, want a refusal", err)
+	}
+}

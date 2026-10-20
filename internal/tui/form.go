@@ -48,6 +48,12 @@ const (
 	fPortsPerSession
 	fPreRemove
 	fEnv
+	// Stack membership (internal/config/stack.go): which stack a repository
+	// belongs to, which issues need it checked out, and — on a stack — its
+	// members, read-only.
+	fStack
+	fAppLabels
+	fMembers
 	// Filter tab: which Linear issues this project picks up.
 	fEnabled
 	fTeam
@@ -104,7 +110,7 @@ var formTabs = []struct {
 }
 
 // listFields are edited as one entry per line (an open sub-editor), not inline.
-var listFields = map[fieldID]bool{fSymlinks: true, fPostCreate: true, fDevCommands: true, fPreRemove: true, fEnv: true}
+var listFields = map[fieldID]bool{fSymlinks: true, fPostCreate: true, fDevCommands: true, fPreRemove: true, fEnv: true, fAppLabels: true}
 
 // textFields are edited inline, character by character.
 var textFields = map[fieldID]bool{
@@ -154,6 +160,7 @@ type formModel struct {
 	devCommands []string // long-running dev processes; only the ACTIVE session runs them
 	preRemove   []string // teardown hook, run before a worktree is removed
 	env         []string // "KEY=value" per line
+	appLabels   []string // a stack member's labels: which issues need it checked out
 
 	teams   []linear.Team // available before a team is picked
 	meta    *teamMeta
@@ -263,6 +270,8 @@ func (f *formModel) lineBuf(fd fieldID) *[]string {
 		return &f.preRemove
 	case fEnv:
 		return &f.env
+	case fAppLabels:
+		return &f.appLabels
 	}
 	return nil
 }
@@ -331,6 +340,19 @@ func plural(n int) string {
 }
 
 func newFormModel(cfg *config.Config, existing *config.Project) (*formModel, tea.Cmd) {
+	return newFormModelKind(cfg, existing, "")
+}
+
+// newStackForm opens the form on a NEW stack. A stack has no checkout, so
+// unlike a new project it skips the folder browser and starts on the label.
+func newStackForm(cfg *config.Config) (*formModel, tea.Cmd) {
+	return newFormModelKind(cfg, nil, config.ProjectKindStack)
+}
+
+// newFormModelKind is newFormModel with the kind of a NEW entry ("" for a
+// repository project, config.ProjectKindStack for a stack); an existing
+// project carries its own kind.
+func newFormModelKind(cfg *config.Config, existing *config.Project, kind string) (*formModel, tea.Cmd) {
 	f := &formModel{cfg: cfg, isNew: existing == nil}
 	if existing != nil {
 		f.origName = existing.Name
@@ -339,6 +361,7 @@ func newFormModel(cfg *config.Config, existing *config.Project) (*formModel, tea
 		f.poll.MatchLabels = slices.Clone(existing.MatchLabels)
 		f.poll.PrioritySort = slices.Clone(existing.PrioritySort)
 		f.poll.Review = slices.Clone(existing.Review)
+		f.poll.Labels = slices.Clone(existing.Labels)
 		if existing.ConcurrencyCap > 0 {
 			f.capBuf = strconv.Itoa(existing.ConcurrencyCap)
 		}
@@ -347,8 +370,10 @@ func newFormModel(cfg *config.Config, existing *config.Project) (*formModel, tea
 		}
 		// A project that has never polled carries empty enums, which Validate
 		// rejects. Seed the same defaults a fresh config gets so opening the
-		// form on a non-polling project yields a saveable state.
-		if !existing.Polls() {
+		// form on a non-polling project yields a saveable state. A stack MEMBER
+		// is skipped: it never polls, and its stack-owned keys are kept verbatim
+		// (ignored while it is a member) rather than filled with seeds.
+		if !existing.Polls() && !existing.InStack() {
 			seedPollDefaults(&f.poll)
 			if f.capBuf == "" {
 				f.capBuf = "1"
@@ -372,6 +397,11 @@ func newFormModel(cfg *config.Config, existing *config.Project) (*formModel, tea
 		// The seeded "main" is a placeholder, not a choice: the checkout's own
 		// default branch replaces it as soon as one is picked.
 		f.branchAuto = true
+		if kind == config.ProjectKindStack {
+			// No checkout, so no base branch to seed and nothing for an
+			// inspection to fill.
+			f.poll.Kind, f.poll.DefaultBranch, f.branchAuto = kind, "", false
+		}
 	}
 	// Inherited fields show the [defaults] value; overridden ones the project's.
 	f.symlinks = slices.Clone(f.poll.Symlinks)
@@ -382,6 +412,7 @@ func newFormModel(cfg *config.Config, existing *config.Project) (*formModel, tea
 	f.devCommands = slices.Clone(f.poll.DevCommands)
 	f.preRemove = slices.Clone(f.poll.PreRemove)
 	f.env = envLines(f.poll.Env)
+	f.appLabels = slices.Clone(f.poll.Labels)
 	if f.isNew {
 		f.symlinks = slices.Clone(cfg.Defaults.Symlinks)
 		f.postCreate = slices.Clone(cfg.Defaults.PostCreate)
@@ -408,7 +439,7 @@ func newFormModel(cfg *config.Config, existing *config.Project) (*formModel, tea
 	// one thing nothing else can be derived without, and everything on this tab
 	// (label, id, repo, default branch) falls out of it. esc backs out to an
 	// empty form, so nothing is forced.
-	if f.isNew {
+	if f.isNew && !f.poll.IsStack() {
 		var open tea.Cmd
 		f.dirs, open = newDirPicker(dirPickerStart(cfg, ""))
 		cmd = tea.Batch(cmd, open)
@@ -466,7 +497,7 @@ func (f *formModel) applyInspection(v pathInspectedMsg) {
 // snapshot serializes everything a human can edit in this form. Maps print in
 // sorted key order under %v, so the result is stable across identical states.
 func (f *formModel) snapshot() string {
-	return fmt.Sprintf("%+v|%s|%s|%v|%v|%v|%v|%v", f.poll, f.capBuf, f.portsBuf, f.symlinks, f.postCreate, f.devCommands, f.preRemove, f.env)
+	return fmt.Sprintf("%+v|%s|%s|%v|%v|%v|%v|%v|%v", f.poll, f.capBuf, f.portsBuf, f.symlinks, f.postCreate, f.devCommands, f.preRemove, f.env, f.appLabels)
 }
 
 // rebase declares the CURRENT state to be the unmodified one. Called on open and
@@ -501,7 +532,22 @@ func (f *formModel) fields() []fieldID {
 	var fs []fieldID
 	switch f.tab {
 	case tabRepo:
-		fs = []fieldID{fLabel, fName, fPath, fRepo, fDefaultBranch, fBranchPrefix, fAgent, fSymlinks, fPostCreate, fPreRemove, fDevCommands, fPortRange, fPortsPerSession, fEnv}
+		switch {
+		case f.poll.IsStack():
+			// A stack has no checkout: every repository field belongs to its
+			// members, listed read-only.
+			fs = []fieldID{fLabel, fName, fBranchPrefix, fAgent, fMembers}
+		case f.poll.InStack():
+			// A member owns its repository only; the agent and branch prefix
+			// are the stack's (and kept, hidden, for leaving it).
+			fs = []fieldID{fLabel, fName, fStack, fAppLabels, fPath, fRepo, fDefaultBranch, fSymlinks, fPostCreate, fPreRemove, fDevCommands, fPortRange, fPortsPerSession, fEnv}
+		default:
+			fs = []fieldID{fLabel, fName}
+			if f.hasStacks() {
+				fs = append(fs, fStack)
+			}
+			fs = append(fs, fPath, fRepo, fDefaultBranch, fBranchPrefix, fAgent, fSymlinks, fPostCreate, fPreRemove, fDevCommands, fPortRange, fPortsPerSession, fEnv)
+		}
 	case tabFilter:
 		fs = []fieldID{fEnabled, fTeam}
 		if f.poll.TeamID != "" {
@@ -539,6 +585,24 @@ func (f *formModel) fields() []fieldID {
 		fs = []fieldID{fReview}
 	}
 	return append(fs, fSave)
+}
+
+// hasStacks reports whether the config holds any stack to join.
+func (f *formModel) hasStacks() bool {
+	return slices.ContainsFunc(f.cfg.Projects, func(p config.Project) bool { return p.IsStack() })
+}
+
+// visibleTabs lists the tabs this entry shows. A stack MEMBER shows only its
+// repository: the Linear filter, labels, write-back and review are the stack's.
+func (f *formModel) visibleTabs() []formTab {
+	if f.poll.InStack() {
+		return []formTab{tabRepo}
+	}
+	out := make([]formTab, len(formTabs))
+	for i, t := range formTabs {
+		out[i] = t.tab
+	}
+	return out
 }
 
 // needsTeam reports whether the active tab is empty for want of a team, so the
@@ -785,8 +849,10 @@ func (f *formModel) leftField(fd fieldID) tea.Cmd {
 // switchTab moves to the next/previous tab, resetting the cursor so it can
 // never point past the new tab's shorter field list.
 func (f *formModel) switchTab(delta int) {
-	n := len(formTabs)
-	f.tab = formTab((int(f.tab) + delta%n + n) % n)
+	tabs := f.visibleTabs()
+	n := len(tabs)
+	i := max(slices.Index(tabs, f.tab), 0)
+	f.tab = tabs[(i+delta%n+n)%n]
 	f.cursor, f.editing = 0, false
 }
 
@@ -900,6 +966,9 @@ func (f *formModel) interact(cur fieldID) (tea.Cmd, formEvent) {
 		return nil, formNone
 	case cur == fAgent:
 		f.cycleAgent()
+		return nil, formNone
+	case cur == fMembers:
+		// Read-only: a member joins a stack from its OWN form.
 		return nil, formNone
 	case boolFields[cur]:
 		f.toggleBool(cur)
@@ -1084,6 +1153,15 @@ func (f *formModel) openPicker(cur fieldID) tea.Cmd {
 			opts = append(opts, pickOpt{l.ID, labelDisplay(l)})
 		}
 		selected = []string{f.poll.BlockedLabelID}
+	case fStack:
+		title = "Stack (optional)"
+		opts = append(opts, pickOpt{"", "(none — a project of its own)"})
+		for _, p := range f.cfg.Projects {
+			if p.IsStack() {
+				opts = append(opts, pickOpt{p.Name, p.DisplayName()})
+			}
+		}
+		selected = []string{f.poll.Stack}
 	case fReview:
 		multi, title = true, "Review providers"
 		for _, k := range f.cfg.ReviewCatalogKinds() {
@@ -1215,6 +1293,13 @@ func (f *formModel) applyPick(p *picker) tea.Cmd {
 		f.poll.OnMergedStateID = id
 	case fBlockedLabel:
 		f.poll.BlockedLabelID = id
+	case fStack:
+		f.poll.Stack = id
+		// Joining or leaving a stack changes which tabs exist; stay on one
+		// that still does. The cursor stays on the Stack field.
+		if !slices.Contains(f.visibleTabs(), f.tab) {
+			f.tab = tabRepo
+		}
 	}
 	return nil
 }
@@ -1237,6 +1322,9 @@ func applyProject(dst *config.Project, src config.Project) {
 	// it saves like any other field. A Name change is a rename, handled before
 	// this by the daemon, so dst.Name is already correct and stays untouched.
 	dst.Label = src.Label
+	dst.Kind = src.Kind
+	dst.Stack = src.Stack
+	dst.Labels = src.Labels
 	dst.Path = src.Path
 	dst.DefaultBranch = src.DefaultBranch
 	dst.BranchPrefix = src.BranchPrefix
@@ -1352,6 +1440,16 @@ func (f *formModel) save() (tea.Cmd, formEvent) {
 	p.PostCreate = trimDropEmpty(f.postCreate)
 	p.DevCommands = trimDropEmpty(f.devCommands)
 	p.PreRemove = trimDropEmpty(f.preRemove)
+	// Labels only mean anything on a member (Validate rejects them elsewhere),
+	// so leaving a stack drops them with it.
+	p.Labels = nil
+	if p.InStack() {
+		p.Labels = trimDropEmpty(f.appLabels)
+	} else {
+		// A member opened without seeded poll enums that now leaves its stack
+		// polls on its own again; fill what Validate requires (fill-only).
+		seedPollDefaults(&p)
+	}
 	p.PortRange = strings.TrimSpace(p.PortRange) // shape checked by nc.Validate below
 	p.PortsPerSession = 0
 	if f.portsBuf != "" {
@@ -1382,7 +1480,7 @@ func (f *formModel) save() (tea.Cmd, formEvent) {
 	if target == "" {
 		f.addErr(tabRepo, "id is required — a label like \"Nori App\" becomes the id \"nori-app\"")
 	}
-	if p.Path == "" {
+	if p.Path == "" && !p.IsStack() {
 		f.addErr(tabRepo, "path is required — the local repository this project's worktrees fork from")
 	}
 
@@ -1489,6 +1587,9 @@ func (m *rootModel) openProjectForm() (tea.Model, tea.Cmd) {
 func (f *formModel) tabStrip() string {
 	var parts []string
 	for _, t := range formTabs {
+		if !slices.Contains(f.visibleTabs(), t.tab) {
+			continue
+		}
 		label := " " + t.title + " "
 		// A "!" suffix, not colour alone: save can fail on a field that lives on a
 		// tab the user is not looking at, and without this the error list named a
@@ -1513,10 +1614,16 @@ func (f *formModel) view(height int) string {
 		return f.picker.view(height)
 	}
 	title := "New project"
+	if f.poll.IsStack() {
+		title = "New stack"
+	}
 	if !f.isNew {
 		// Title the form by what the human calls the project, keeping origName —
 		// the identity the save targets — visible when it differs.
 		title = "Project: " + f.poll.DisplayName()
+		if f.poll.IsStack() {
+			title = "Stack: " + f.poll.DisplayName()
+		}
 		if f.poll.DisplayName() != f.origName {
 			title += " (" + f.origName + ")"
 		}
@@ -1528,6 +1635,9 @@ func (f *formModel) view(height int) string {
 	fields := f.fields()
 	if f.cursor >= len(fields) {
 		f.cursor = len(fields) - 1
+	}
+	if f.poll.InStack() {
+		b.WriteString("  " + faintText.Render("Linear, agent and write-back settings come from stack "+f.stackLabel()) + "\n\n")
 	}
 	if f.needsTeam() {
 		b.WriteString("  " + faintText.Render("pick a Linear team on the Filter tab first — labels and states are team-scoped") + "\n\n")
@@ -1649,6 +1759,12 @@ func fieldHelp(fd fieldID) string {
 		return "One command per line, run in the worktree before lola removes it (merge cleanup, kill) — e.g. drop the $LOLA_DB_NAME database. Bounded; failures are logged, never fatal."
 	case fEnv:
 		return "One KEY=value per line, exported into the session and post-create commands."
+	case fStack:
+		return "The stack this repository belongs to. A member is checked out beside the stack's other apps in one session; the stack owns the Linear filter, agent and write-back."
+	case fAppLabels:
+		return "Members are checked out only for issues carrying one of these labels; empty = every issue. One per line: a label name, \"group/name\" or UUID."
+	case fMembers:
+		return "The repositories this stack checks out (with the labels that select each). A project joins a stack from its own form."
 	case fEnabled:
 		return "enter toggles · off pauses pickup for this project without discarding its filter."
 	case fTeam:
@@ -1731,6 +1847,12 @@ func (f *formModel) label(fd fieldID) string {
 		return "Pre-remove"
 	case fEnv:
 		return "Env (KEY=value)"
+	case fStack:
+		return "Stack"
+	case fAppLabels:
+		return "Included for"
+	case fMembers:
+		return "Members"
 	case fEnabled:
 		return "Polling enabled"
 	case fTeam:
@@ -1861,6 +1983,18 @@ func (f *formModel) display(fd fieldID) string {
 			return faintText.Render("(default: 1)")
 		}
 		return f.portsBuf
+	case fStack:
+		if f.poll.Stack == "" {
+			return faintText.Render("(none — enter to join a stack)")
+		}
+		return f.stackLabel()
+	case fAppLabels:
+		if ls := trimDropEmpty(f.appLabels); len(ls) > 0 {
+			return strings.Join(ls, ", ")
+		}
+		return faintText.Render("(every issue — enter to restrict)")
+	case fMembers:
+		return f.membersDisplay()
 	case fSymlinks, fPostCreate, fDevCommands, fPreRemove, fEnv:
 		if buf := f.lineBuf(fd); buf != nil {
 			n := len(trimDropEmpty(*buf))
@@ -2109,4 +2243,35 @@ func (p *picker) view(height int) string {
 	}
 	b.WriteString("\n" + faintText.Render(help) + "\n")
 	return b.String()
+}
+
+// stackLabel is the display name of the stack this member belongs to, or its
+// raw name when the config holds no such stack (Validate names that error).
+func (f *formModel) stackLabel() string {
+	if st := f.cfg.StackFor(&f.poll); st != nil {
+		return st.DisplayName()
+	}
+	return f.poll.Stack
+}
+
+// membersDisplay lists a stack's members as "web (apps/web) · api (every
+// issue)", in member order. A new stack has none yet.
+func (f *formModel) membersDisplay() string {
+	name := f.origName
+	if name == "" {
+		name = f.poll.Name
+	}
+	ms := f.cfg.StackMembers(name)
+	if len(ms) == 0 {
+		return faintText.Render("(none yet — set Stack on a project's form to add it)")
+	}
+	parts := make([]string, len(ms))
+	for i, m := range ms {
+		sel := "every issue"
+		if len(m.Labels) > 0 {
+			sel = strings.Join(m.Labels, ", ")
+		}
+		parts[i] = m.DisplayName() + faintText.Render(" ("+sel+")")
+	}
+	return strings.Join(parts, faintText.Render(" · "))
 }

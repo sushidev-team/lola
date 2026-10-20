@@ -465,6 +465,14 @@ func projectResults(cfg *config.Config) []Result {
 		p := cfg.Projects[i]
 		name := projectCheckName(p.Name)
 		switch {
+		case p.IsStack():
+			// A stack has no checkout; its members are checked as projects.
+			n := len(cfg.StackMembers(p.Name))
+			r := Result{Name: name, OK: n > 0, Detail: fmt.Sprintf("stack of %d member project(s)", n)}
+			if n == 0 {
+				r.Detail = "stack has no member projects (set stack = \"" + p.Name + "\" on them)"
+			}
+			out = append(out, r)
 		case p.Path == "":
 			out = append(out, Result{Name: name, OK: false, Detail: "no path configured"})
 		default:

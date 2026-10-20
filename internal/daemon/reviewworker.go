@@ -60,6 +60,14 @@ func reviewFailKey(id string, k provKind, pr int) string {
 // runReviewProviders: every independently-applying WATCH provider polls inline
 // (one bounded gh call), every PASS provider is queued for the worker.
 func (d *Daemon) queueReviewProviders(ctx context.Context, s session.Session) {
+	if s.Stack && s.Lane == "" {
+		// One review per app PR: each lane carries its own PR and per-PR guards,
+		// and its job ID is the lane ID the store resolves back to the view.
+		for _, lane := range s.Lanes() {
+			d.queueReviewProviders(ctx, lane)
+		}
+		return
+	}
 	for _, p := range d.appliesIndependently() {
 		if p.Shape == shapeWatch {
 			d.runProviderWatch(ctx, s, p)

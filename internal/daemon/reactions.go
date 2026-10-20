@@ -96,6 +96,34 @@ func (d *Daemon) react(ctx context.Context, s session.Session) {
 		notifier = notify.New(notify.NotifyConfig{})
 	}
 
+	// A STACK session reacts per app (session/stack.go): each PR lane gets the
+	// ordinary engine below with its own guards, and the session itself only
+	// the stack-wide close-out — merged means EVERY app the issue touched is.
+	if s.Stack && s.Lane == "" {
+		switch {
+		case s.Delivery == state.DeliveryMerged:
+			// An app's PR still open — or not yet confirmed closed by a
+			// successful lookup since the merge — holds the cleanup: its
+			// worktree lives in this session's folder, and the agent may still
+			// be asked to address review there. The observer refreshes every
+			// app's PR each cycle, so the cleanup fires on the first cycle after
+			// the last one merges or closes.
+			if rc.Merged.Auto && s.AppsSettled(s.DeliverySince) {
+				d.reactMerged(ctx, s, notifier)
+			}
+		default:
+			for _, lane := range s.Lanes() {
+				d.react(ctx, lane)
+			}
+		}
+		return
+	}
+	if s.Lane != "" && s.Delivery == state.DeliveryMerged {
+		// One app shipped; the session lives on until all of them have.
+		d.resetReactionGuards(s)
+		return
+	}
+
 	switch {
 	case s.Delivery == state.DeliveryMerged:
 		// Loop close: clean up the worktree and free the slot. Gated by the
@@ -889,13 +917,34 @@ func renderReaction(template string, s session.Session, detail string) string {
 	prRef := ""
 	if s.PR != nil {
 		prRef = fmt.Sprintf("#%d", s.PR.Number)
+		if s.Lane != "" && s.Repo != "" {
+			prRef = s.Repo + prRef // a stack's PRs live in different repositories
+		}
 	}
 	msg := strings.NewReplacer(
 		"{{.Detail}}", detail,
 		"{{.Issue}}", s.Issue,
 		"{{.PR}}", prRef,
 	).Replace(template)
-	return sanitizeAgentText(msg)
+	return sanitizeAgentText(laneHeader(s) + msg)
+}
+
+// laneHeader is lola's own first line on anything typed to a stack session's
+// agent about ONE app's PR: which checkout and which pull request it is about.
+// The agent sees several of each; without it a "CI failed" could be fixed in
+// the wrong repository. "" for an ordinary session.
+func laneHeader(s session.Session) string {
+	if s.Lane == "" {
+		return ""
+	}
+	pr := ""
+	if s.PR != nil {
+		pr = fmt.Sprintf(", pull request #%d", s.PR.Number)
+		if s.Repo != "" {
+			pr = fmt.Sprintf(", pull request %s#%d", s.Repo, s.PR.Number)
+		}
+	}
+	return fmt.Sprintf("[About the `%s/` checkout%s — work in that directory.]\n", s.Lane, pr)
 }
 
 // ansiEscapeRe matches the ANSI escape sequences (CSI and OSC) that CI logs and
@@ -958,10 +1007,14 @@ func reactNotifyText(key string, s session.Session, attempt int) (title, body st
 // issueLabel is a human-friendly session identifier for notifications: the
 // Linear issue identifier when known, else the session ID.
 func issueLabel(s session.Session) string {
+	label := s.ID
 	if s.Issue != "" {
-		return s.Issue
+		label = s.Issue
 	}
-	return s.ID
+	if s.Lane != "" {
+		label += " (" + s.Lane + ")"
+	}
+	return label
 }
 
 // prURL returns the session's PR URL, or "" when it has no PR.

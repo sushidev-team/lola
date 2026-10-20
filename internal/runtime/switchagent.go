@@ -69,6 +69,9 @@ func (n *Native) SwitchAgent(ctx context.Context, s session.Session, kind agent.
 	// guaranteed untouched, and the write must succeed before anything is
 	// torn down.
 	logOut, statusOut, diffStat := n.WT.WorkSummary(ctx, dir, base)
+	if s.Stack {
+		logOut, statusOut, diffStat = n.stackWorkSummary(ctx, s)
+	}
 	handoff := renderHandoff(s, kind, reason, logOut, statusOut, diffStat, paneTail)
 	if err := os.WriteFile(filepath.Join(dir, lolaDir, "handoff.md"), []byte(handoff), 0o600); err != nil {
 		return session.Session{}, fmt.Errorf("runtime: switch agent %s: write handoff: %w", id, err)
@@ -88,7 +91,7 @@ func (n *Native) SwitchAgent(ctx context.Context, s session.Session, kind agent.
 	// Re-write the per-kind callback artifacts and env for the NEW kind. The
 	// .lola/ exclude from the original spawn still holds; opencode's plugin
 	// dir needs its own (excludeGitPattern is idempotent).
-	if kind == agent.OpenCode {
+	if kind == agent.OpenCode && !s.Stack { // a stack folder is not a repository
 		if err := excludeGitPattern(dir, openCodeDir+"/"); err != nil {
 			return session.Session{}, fmt.Errorf("runtime: switch agent %s: git info/exclude %s: %w", id, openCodeDir, err)
 		}
@@ -104,7 +107,7 @@ func (n *Native) SwitchAgent(ctx context.Context, s session.Session, kind agent.
 		return session.Session{}, fmt.Errorf("runtime: switch agent %s: write env: %w", id, err)
 	}
 
-	if err := n.Tmux.NewSession(ctx, id, dir, n.launchCommandPrompt(id, kind, handoffLaunchPrompt(id, old), false)); err != nil {
+	if err := n.Tmux.NewSession(ctx, id, dir, n.launchCommandPrompt(s.Project, id, kind, handoffLaunchPrompt(id, old), false)); err != nil {
 		// A partially created session must not linger as a zombie pane (same
 		// cleanup as finishAgentLaunch) — but the worktree is NEVER rolled
 		// back here: it is the kept hand-off surface, and the aux tabs still

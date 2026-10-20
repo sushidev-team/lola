@@ -31,6 +31,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/sushidev-team/lola/internal/gitguard"
 )
 
 // Caps. The result travels over the daemon socket as one JSON line and is
@@ -278,6 +280,7 @@ func Between(ctx context.Context, dir, from, to string) (Result, error) {
 
 func runGit(ctx context.Context, bin, dir string, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, bin, append([]string{"-C", dir}, args...)...)
+	gitguard.Apply(cmd) // a sandboxed worktree's git metadata is the agent's to rewrite
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()

@@ -52,6 +52,7 @@ export type {
     RestoreCheckpointData,
     ReviewData,
     ReviveData,
+    SessionApp,
     SessionInfo,
     SessionOverlap,
     SessionsData,
