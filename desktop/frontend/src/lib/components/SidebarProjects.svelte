@@ -50,13 +50,12 @@
   const members = $derived(stackMembers(store.projects));
   const stacks = $derived(store.projects.filter(isStack));
 
-  // A stack wears a diamond instead of the dot — same colours, same meaning —
-  // so it reads as "the poll unit of several repositories" rather than as a
-  // folder (which carries a chevron and polls nothing).
+  // Stacks use a drawn layers icon below, sharing the repository dots' poll
+  // colours. Folders carry a disclosure chevron and poll nothing.
   function pollDot(p: ProjectInfo): { glyph: string; cls: string; faint: boolean } {
-    const [on, off] = isStack(p) ? ["◆", "◇"] : ["●", "○"];
+    const [on, off] = ["●", "○"];
     const ps = (store.status?.polls ?? []).find((x) => x.name === p.name);
-    if (!ps) return { glyph: isStack(p) ? off : "·", cls: "text-faint", faint: true };
+    if (!ps) return { glyph: "·", cls: "text-faint", faint: true };
     if (ps.lastError) return { glyph: on, cls: "text-bad", faint: false };
     if (ps.enabled) return { glyph: on, cls: "text-good", faint: false };
     return { glyph: off, cls: "text-faint", faint: true };
@@ -521,6 +520,25 @@
       if (index >= 0) nudgeProject(e, p.name, group, index);
     }}
   >
+    {#snippet icon()}
+      {#if isStack(p)}
+        <svg
+          viewBox="0 0 16 16"
+          class="size-3.5"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.5"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <path d="m8 1.75 6.5 3.25L8 8.25 1.5 5 8 1.75Z" />
+          <path d="m1.5 8 6.5 3.25L14.5 8M1.5 11l6.5 3.25L14.5 11" />
+        </svg>
+      {:else}
+        {d.glyph}
+      {/if}
+    {/snippet}
     {#snippet badges()}
       <!-- Bare glyph counts on purpose: the triage row named "Needs You"
            counts needs_input ONLY, while ProjectInfo.needsYou is the

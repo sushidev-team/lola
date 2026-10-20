@@ -18,6 +18,7 @@
     count,
     glyph = "",
     glyphCls = "",
+    icon,
     active = false,
     dim = false,
     title,
@@ -32,6 +33,8 @@
     /** ≤1-char leading glyph. The slot is always reserved so labels line up. */
     glyph?: string;
     glyphCls?: string;
+    /** Drawn icon in the same leading column, replacing the text glyph. */
+    icon?: Snippet;
     active?: boolean;
     /** Quieten the label (a project whose polls are off), never the whole row. */
     dim?: boolean;
@@ -67,7 +70,9 @@
     {onclick}
     {onkeydown}
   >
-    <span class="w-3.5 shrink-0 text-center text-sm {glyphCls}" aria-hidden="true">{glyph}</span>
+    <span class="flex w-3.5 shrink-0 items-center justify-center text-sm {glyphCls}" aria-hidden="true">
+      {#if icon}{@render icon()}{:else}{glyph}{/if}
+    </span>
     <span class="truncate" class:font-medium={active} class:text-faint={dim && !active}>{label}</span>
     {#if count !== undefined}
       <span class="num ml-auto shrink-0 text-sm text-faint">{count}</span>
