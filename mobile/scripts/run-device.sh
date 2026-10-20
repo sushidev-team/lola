@@ -16,8 +16,9 @@
 #
 # Usage:
 #   ./scripts/run-device.sh                 build, install and launch
-#   ./scripts/run-device.sh --list          show attached devices and exit
-#   LOLA_DEVICE=<udid> ./scripts/run-device.sh
+#   ./scripts/run-device.sh --list          show known devices and exit
+#   ./scripts/run-device.sh --wireless      use a paired Wi-Fi phone
+#   LOLA_DEVICE=<name-or-udid> ./scripts/run-device.sh
 #
 # The first run needs three things Xcode owns and this script cannot do for you;
 # it checks for each and says exactly what to do rather than failing in
@@ -41,44 +42,39 @@ PROJ=ios/App/App.xcodeproj
 die() { printf 'run-device: %s\n' "$1" >&2; exit 1; }
 
 command -v xcrun >/dev/null 2>&1 || die "Xcode command line tools not found."
+command -v node >/dev/null 2>&1 || die "Node.js not found."
+
+wireless=0
+list=0
+for arg in "$@"; do
+	case "$arg" in
+		--wireless) wireless=1 ;;
+		--list) list=1 ;;
+		*) die "unknown option: $arg (use --list or --wireless)" ;;
+	esac
+done
 
 # --- pick a device ---------------------------------------------------------
 #
-# devicectl is the current tool; the older `instruments -s devices` is gone.
-# Only CONNECTED and paired devices are offered: an unavailable one produces a
-# build that succeeds and an install that fails minutes later.
-devices=$(xcrun devicectl list devices 2>/dev/null) || die "could not list devices"
+# Wi-Fi phones can be paired/available before their development tunnel connects.
+# Use JSON: current Xcode also lists simulators and annotates table identifiers.
+out=$(mktemp -d)
+trap 'rm -rf "$out"' EXIT
+xcrun devicectl list devices --timeout 20 --json-output "$out/devices.json" > "$out/devices.txt" \
+	|| die "could not list devices"
 
-if [ "${1:-}" = "--list" ]; then
-	printf '%s\n' "$devices"
+if [ "$list" = "1" ]; then
+	cat "$out/devices.txt"
 	exit 0
 fi
 
-if [ -n "${LOLA_DEVICE:-}" ]; then
-	udid=$LOLA_DEVICE
-	name=$(printf '%s\n' "$devices" | awk -F'[[:space:]][[:space:]]+' -v u="$udid" '$3 == u { print $1; exit }')
-else
-	# devicectl prints a fixed-width table whose columns are separated by runs of
-	# two or more spaces: Name, Hostname, Identifier, State, Model. Split on the
-	# GUTTERS rather than on whitespace — several columns contain single spaces
-	# of their own ("Apple Bobsch", "iPhone 13 Pro (iPhone14,2)"), so counting
-	# fields finds the wrong column and silently reports no device.
-	#
-	# A paired Watch appears here too and cannot run this app, so it is excluded
-	# by model rather than by name: the name is whatever its owner chose.
-	row=$(printf '%s\n' "$devices" \
-		| awk -F'[[:space:]][[:space:]]+' '$4 == "connected" && $5 !~ /^Watch/ { print; exit }')
-	[ -n "$row" ] || die "no connected iPhone.
-
-Connect it by cable, unlock it, and tap Trust if asked. Then, once per phone:
-  Settings > Privacy & Security > Developer Mode > on (the phone restarts)
-
-Run './scripts/run-device.sh --list' to see what Xcode can currently see."
-	udid=$(printf '%s\n' "$row" | awk -F'[[:space:]][[:space:]]+' '{print $3}')
-	name=$(printf '%s\n' "$row" | awk -F'[[:space:]][[:space:]]+' '{print $1}')
-fi
-
-[ -n "$udid" ] || die "could not determine a device identifier; try LOLA_DEVICE=<udid>"
+selection=$(node scripts/select-device.mjs "$out/devices.json" "${LOLA_DEVICE:-}" "$wireless") \
+	|| die "Pair the phone in Xcode > Window > Devices and Simulators first.
+Unlock it, enable Developer Mode, and keep the Mac and phone on the same Wi-Fi.
+Enable Connect via network if Xcode offers it, then unplug the cable for --wireless.
+Run './scripts/run-device.sh --list' to see known devices."
+udid=$(printf '%s\n' "$selection" | sed -n '1p')
+name=$(printf '%s\n' "$selection" | sed -n '2p')
 
 # --- signing ---------------------------------------------------------------
 #
@@ -142,9 +138,6 @@ fi
 npx cap sync ios
 
 # --- build, install, launch ------------------------------------------------
-out=$(mktemp -d)
-trap 'rm -rf "$out"' EXIT
-
 xcodebuild \
 	-project "$PROJ" \
 	-scheme App \

@@ -11,13 +11,16 @@
     "preview": "vite preview",
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "test": "vitest run",
+    "test:device": "node --test scripts/select-device.test.mjs",
     "test:watch": "vitest",
     "sync": "npm run build:plugin && npm run build && cap sync ios",
     "ios": "npm run sync && cap open ios",
     "build:plugin": "npm --prefix plugins/lola-transport run build",
     "daemon": "../contrib/lola-mobile-dev.sh",
     "daemon:info": "../contrib/lola-mobile-dev.sh --info",
-    "sim": "./scripts/run-sim.sh"
+    "sim": "./scripts/run-sim.sh",
+    "device": "./scripts/run-device.sh",
+    "wireless": "./scripts/run-device.sh --wireless"
   },
   "dependencies": {
     "@capacitor/browser": "^8.0.0",

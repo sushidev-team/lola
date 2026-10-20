@@ -5,7 +5,7 @@ export GOCACHE := $(CURDIR)/.gocache
 # which sandboxed shells cannot write to.
 export GOFLAGS := -mod=mod -buildvcs=false
 
-.PHONY: build test vet fmt fmtcheck tidy check clean daemon daemon-dev mobile-dev mobile-lan mobile-info mobile-sim mobile-device desktop-dev
+.PHONY: build test vet fmt fmtcheck tidy check clean daemon daemon-dev mobile-dev mobile-lan mobile-info mobile-sim mobile-device mobile-wireless desktop-dev
 
 build:
 	go build -o lola .
@@ -107,6 +107,11 @@ mobile-sim:
 # Needs a signing team once — the script says how. See mobile/README.md Â§7.
 mobile-device:
 	cd mobile && ./scripts/run-device.sh
+
+# Build/install/launch over Wi-Fi after pairing the phone with Xcode once.
+# Select a phone by name or UDID with LOLA_DEVICE=Speedy.
+mobile-wireless:
+	cd mobile && ./scripts/run-device.sh --wireless
 
 # The desktop app's dev loop. `wails3 task build` only refreshes the loose
 # bin/Lola, so `open bin/Lola.app` after one launches the OLD bundled binary and

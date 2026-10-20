@@ -308,6 +308,29 @@ Trust**.
 
 ### Day-to-day loop after that
 
+From the repository root, build, install and launch on a paired Wi-Fi phone:
+
+```sh
+make mobile-wireless LOLA_DEVICE=Speedy
+make mobile-device LOLA_DEVICE=Speedy   # accepts USB or Wi-Fi
+```
+
+Pair the phone with Xcode once via USB, enable Developer Mode, and enable
+**Connect via network** in **Window → Devices and Simulators** if shown.
+Keep the phone unlocked and both devices on the same Wi-Fi, then unplug USB.
+The wireless target selects only paired physical iPhones/iPads reported over
+the local network. It accepts an available phone even before Xcode opens its
+development tunnel; simulators and watches are excluded. `LOLA_DEVICE` accepts
+a device name, UDID or CoreDevice identifier; with multiple eligible devices,
+the launcher asks you to select one.
+
+Inside `mobile/`, use `npm run wireless` or `npm run device`.
+`./scripts/run-device.sh --list` shows Xcode's known devices.
+Signing still comes from `LOLA_TEAM` or the ignored `mobile/ios/team.local`.
+These commands bundle the web assets, then install and launch through Xcode's
+device services. For the phone's connection to the daemon, use `make daemon-dev`
+in a separate terminal (see section 4); allow Lola's Local Network permission.
+
 ```sh
 cd mobile
 npm run sync      # then press Run in Xcode
