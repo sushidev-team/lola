@@ -451,6 +451,9 @@
         // The github transport posts anchored, resolvable threads by default;
         // it degrades to one flat comment by itself when nothing can be anchored.
         githubInline: true,
+        // Opt-in: a required lola/review status blocks merges until a review
+        // has passed the PR's current head.
+        githubStatus: false,
         notify: true,
         sendToAgent: true,
         // A pass runs in a watchable "<session>-review" tmux session by default;
@@ -1399,6 +1402,14 @@
                       <label class="ml-6 flex cursor-pointer items-center gap-2 text-sm text-faint">
                         <Checkbox disabled={d.reviewLegacy} bind:checked={p.githubInline} />
                         <span>Inline PR threads</span>
+                      </label>
+                    {/if}
+                    {#if !isWatch(p.provider)}
+                      <label class="flex cursor-pointer items-center gap-2 text-sm"
+                        title={`Posts lola/review/${p.provider} on the PR head and re-reviews each new head; require it in a ruleset to block merges on blocking findings.`}>
+                        <Checkbox disabled={d.reviewLegacy} checked={p.githubStatus ?? false}
+                          onchange={(e) => (p.githubStatus = (e.currentTarget as HTMLInputElement).checked)} />
+                        <span>Commit status gate</span>
                       </label>
                     {/if}
                   </div>

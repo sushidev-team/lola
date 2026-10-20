@@ -180,6 +180,8 @@ func (d *Daemon) advanceQueueHead(ctx context.Context, e queueEntry, method stri
 		return mqBlocked
 	case pr.Mergeable != "MERGEABLE":
 		return mqWaiting // UNKNOWN: GitHub is still computing it after a push
+	case !d.reviewGatesOpen(s):
+		return mqWaiting // a status-posting review has not passed this head (reviewgate.go)
 	}
 
 	if g := s.MergeQueueGuard; g != nil && g.HeadSHA == pr.HeadSHA {
@@ -241,6 +243,7 @@ func (d *Daemon) queueMerge(ctx context.Context, e queueEntry, method string, al
 		d.logf("", "mergequeue: %s (#%d) pre-merge re-read failed, not merging: %v", s.ID, judged.Number, err)
 		return mqBlocked
 	}
+	d.applyRequiredChecks(ctx, e.repo, fresh)
 	checksOK := fresh.ChecksState == "pass" || (allowNoChecks && fresh.ChecksState == "none")
 	if fresh.Number != judged.Number || fresh.State != "OPEN" || fresh.IsDraft ||
 		fresh.HeadSHA != judged.HeadSHA || fresh.BaseRef != e.base ||

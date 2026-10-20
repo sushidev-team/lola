@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"os/exec"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -121,6 +122,14 @@ type checkRow struct {
 // failing check exists; a genuinely check-less PR surfaces gh's "no checks
 // reported" as an error, which is acceptable for that never-hit path.)
 func (c *Client) FailingChecks(ctx context.Context, repo string, pr int) (string, error) {
+	return c.FailingChecksAmong(ctx, repo, pr, nil)
+}
+
+// FailingChecksAmong is FailingChecks narrowed the way ChecksStateAmong
+// narrows the verdict: only the required checks (when the list is non-empty),
+// never lola's own statuses. The agent is asked to fix what blocks the merge,
+// not a shadow-mode job the branch does not require.
+func (c *Client) FailingChecksAmong(ctx context.Context, repo string, pr int, required []string) (string, error) {
 	stdout, stderr, err := c.run(ctx, "pr", "checks", strconv.Itoa(pr),
 		"--repo", repo, "--json", "name,state,bucket,link,workflow")
 	var rows []checkRow
@@ -134,6 +143,9 @@ func (c *Client) FailingChecks(ctx context.Context, repo string, pr int) (string
 
 	var failing []checkRow
 	for _, r := range rows {
+		if IsLolaContext(r.Name) || (len(required) > 0 && !slices.Contains(required, r.Name)) {
+			continue
+		}
 		if r.Bucket == "fail" || isFailingCheckState(r.State) {
 			failing = append(failing, r)
 		}

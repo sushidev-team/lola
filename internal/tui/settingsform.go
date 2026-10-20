@@ -506,6 +506,9 @@ func reviewProviderFields(seed func(kind string) config.ReviewProvider) []setFie
 			add(setField{key: pvKey(kind, "inline"), label: "Inline PR threads",
 				help: "github transport: post one anchored, resolvable review thread per finding instead of a single comment, and ask the worker to resolve each one it fixes. Off = one flat comment.",
 				kind: sfBool, b: p.GitHubInline})
+			add(setField{key: pvKey(kind, "status"), label: "Commit status gate",
+				help: "Post lola/review/" + kind + " on the PR head (pending → success / failure on blocking findings / error) and re-review each new head once the agent settles. Require it in a ruleset to block merges.",
+				kind: sfBool, b: p.GitHubStatus})
 			add(setField{key: pvKey(kind, "fallback"), label: "Fallback",
 				help: "Ordered pass kinds tried when this provider can't answer (unavailable / over-quota). enter picks.",
 				kind: sfList, choices: fallbackOpts(kind), lines: p.FallbackStrings()})
@@ -1701,6 +1704,7 @@ func (f *settingsForm) buildReviewProviders() ([]config.ReviewProvider, error) {
 		p.TimeoutSeconds = timeout
 		p.Visible = f.field(pvKey(kind, "visible")).b
 		p.GitHubInline = f.field(pvKey(kind, "inline")).b
+		p.GitHubStatus = f.field(pvKey(kind, "status")).b
 		p.SetFallbackKinds(trimDropEmpty(f.field(pvKey(kind, "fallback")).lines))
 		out = append(out, p)
 	}

@@ -789,6 +789,8 @@ describe("SettingsForm", () => {
     expect(card.queryByLabelText("Model")).not.toBeInTheDocument();
     await fireEvent.click(card.getByRole("checkbox", { name: "Disabled" }));
     expect(card.getByLabelText("Custom Model")).toHaveValue("private/model");
+    // A DTO without githubStatus (an older daemon build) renders it off.
+    expect(card.getByRole("checkbox", { name: "Commit status gate" })).not.toBeChecked();
     const advanced = card.getByRole("button", { name: "Advanced settings" });
     expect(advanced).toHaveAttribute("aria-expanded", "false");
     const advancedPanel = document.getElementById(advanced.getAttribute("aria-controls")!)!;
@@ -801,6 +803,22 @@ describe("SettingsForm", () => {
     await fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(SaveSettings).toHaveBeenCalled());
     expect(SaveSettings.mock.calls.at(-1)?.[0].reviewProviders).toEqual([provider]);
+  });
+
+  it("saves the commit status gate toggle", async () => {
+    const provider = {
+      provider: "codex-session", enabled: true, onPrOpen: true, model: "", timeoutSeconds: 900,
+      transports: ["lola", "github"], githubInline: true, githubStatus: false,
+      notify: true, sendToAgent: true, visible: true, fallback: [],
+    };
+    GetSettings.mockResolvedValue({ ...fakeDto, reviewProviders: [provider] });
+    render(SettingsForm);
+    await fireEvent.click(await screen.findByRole("tab", { name: "Review" }));
+    const card = within(await screen.findByRole("region", { name: "Codex review" }));
+    await fireEvent.click(card.getByRole("checkbox", { name: "Commit status gate" }));
+    await fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(SaveSettings).toHaveBeenCalled());
+    expect(SaveSettings.mock.calls.at(-1)?.[0].reviewProviders[0].githubStatus).toBe(true);
   });
 
   // The github transport is the only sink with two shapes, so the choice between

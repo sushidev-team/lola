@@ -1291,6 +1291,44 @@ each of which owns exactly one external tool or concern behind an **exec seam**
     cleanup retry after the first attempt is by definition a dead session.
   - `reactingLabel` (the REACTING column) reads the same axis, or it goes blank
     for exactly the sessions that most need explaining.
+- **CI is judged by the REQUIRED checks, and lola's own statuses are never
+  CI.** (`internal/daemon/requiredchecks.go`, `scm.ChecksStateAmong`.) `scm.PR`
+  carries the per-check breakdown (`Checks`) beside the rolled-up
+  `ChecksState`, and the observer and the merge queue's pre-merge re-read
+  re-judge it against the base branch's ACTIVE RULESETS (`RequiredChecks`,
+  cached per repo/branch). A red job the branch does not require must not read
+  as `ci_failed` — that prompts the worker to "fix" a shadow-mode suite and
+  holds the write-back and the queue. Rules: every unknown (no seam, a gh
+  error, no ruleset, facts persisted before `Checks`) keeps the stricter
+  all-checks verdict; a required check that has not reported is PENDING (it is
+  GitHub's "Expected"); classic branch protection is not read (admin-only);
+  the ci_failed prompt is narrowed the same way (`FailingChecksAmong`). Any
+  context under `scm.LolaStatusPrefix` is excluded from every CI verdict.
+- **A review becomes a REQUIRABLE check through a commit status, not a
+  review.** (`internal/daemon/reviewgate.go`, `github_status`.) lola posts as
+  the operator's gh login, and GitHub refuses REQUEST_CHANGES on that login's
+  own PR, so a lola review can never block a merge by itself.
+  `lola/review/<kind>` on the PR head can: pending while the pass runs, then
+  success / failure (blocker, major, or an unparseable severity) / error (did
+  not run, or gave up after its retries; a retry keeps pending). Rules:
+  - A status belongs to ONE commit, so a new head has none (a required check
+    reads "Expected") and is re-reviewed once the agent is no longer
+    working/starting (`headReviewDue`) — this is what makes a resolved review
+    thread a claim rather than the gate. The round needs the github sink's
+    settle guard released, exactly as the forced review does.
+  - Rounds are capped per PR (`reviewGateRounds`); past it the new head gets ONE
+    `error` naming `lola review`, never a carried-over success. A forced review
+    is not capped.
+  - The texts are lola's own; findings never reach a status description, and
+    `SetCommitStatus` refuses any context outside `lola/`.
+  - Before and after a gated pass, verify the checkout is clean and its HEAD
+    matches the observed PR head. A mismatch retries within the existing attempt
+    budget and never publishes a success for code the pass did not review.
+  - The merge queue cannot see the gate through `ChecksState` (lola statuses
+    are excluded there on purpose, or a failing review would become a
+    ci_failed prompt), so it reads `reviewGatesOpen` instead.
+  - `ReviewGates` is control-loop state, unlike the display-only
+    `ReviewTallies`.
 - **Fire once per transition.** Reactions and write-backs use persisted
   one-shot guards (`LastReactedStatus`, `WB*Done`, review's per-PR guard) so
   they don't re-fire on every 30s observer cycle.

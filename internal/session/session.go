@@ -456,6 +456,24 @@ type Session struct {
 	// last ANSWERED pass, for the PR it reviewed. DISPLAY-ONLY: the best-of
 	// compare view reads it, nothing in the control loop does.
 	ReviewTallies map[string]ReviewTally `json:"review_tallies,omitempty"`
+
+	// ReviewGates maps a review provider kind -> the state of its commit-status
+	// gate (`github_status`) for the current PR. Unlike ReviewTallies it IS
+	// read by the control loop: it decides when a new head is re-reviewed and
+	// whether the merge queue may land the PR.
+	ReviewGates map[string]ReviewGate `json:"review_gates,omitempty"`
+}
+
+// ReviewGate is one kind's review gate on one PR. Head is the commit the latest
+// round reviewed (a retry of the same head is not a new round); State and
+// Posted are the last commit status lola posted and the commit it went on.
+type ReviewGate struct {
+	PR     int       `json:"pr"`
+	Head   string    `json:"head,omitempty"`
+	Rounds int       `json:"rounds,omitempty"`
+	State  string    `json:"state,omitempty"` // pending | success | failure | error
+	Posted string    `json:"posted,omitempty"`
+	At     time.Time `json:"at"`
 }
 
 // ReviewTally is one review pass's findings counted by severity

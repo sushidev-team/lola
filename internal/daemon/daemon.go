@@ -144,6 +144,20 @@ type Daemon struct {
 	// scm.Client. Overridable in tests.
 	prForBranch func(ctx context.Context, repo, branch string) (*scm.PR, error)
 
+	// requiredChecks returns the status-check names the active rulesets require
+	// on a branch (requiredchecks.go); nil in tests = judge every check.
+	// failingChecksAmong is the matching narrowed CI summary for the ci_failed
+	// prompt; nil falls back to failingChecks.
+	requiredChecks     func(ctx context.Context, repo, branch string) ([]string, error)
+	failingChecksAmong func(ctx context.Context, repo string, pr int, required []string) (string, error)
+	required           requiredCache
+
+	// setCommitStatus posts a lola/… commit status (the review gate,
+	// reviewgate.go); nil in tests that never gate.
+	setCommitStatus func(ctx context.Context, repo, sha, state, statusContext, description, targetURL string) error
+	// verifyReviewHead checks the local checkout before and after a gated pass.
+	verifyReviewHead func(ctx context.Context, dir, sha string) error
+
 	// listOpenPRs returns every open PR in repo for the cmd=prs picker; the seam
 	// over scm.Client.ListOpenPRs. Overridable in tests. A gh failure is an
 	// error (never conflated with "no open PRs").
@@ -509,6 +523,10 @@ func newDaemon(cfg *config.Config, lin linear.API, logger *log.Logger, home stri
 	d.listOpenPRs = scmc.ListOpenPRs
 	d.prsCache = newPRCache()
 	d.failingChecks = scmc.FailingChecks
+	d.requiredChecks = scmc.RequiredChecks
+	d.failingChecksAmong = scmc.FailingChecksAmong
+	d.setCommitStatus = scmc.SetCommitStatus
+	d.verifyReviewHead = (&worktree.Manager{}).VerifyReviewHead
 	d.reviewComments = scmc.ReviewComments
 	// Flexible-review raw seams (the exec CLIENTS are built later by
 	// setReviewProvidersLocked from the catalog / legacy synthesis). The watch

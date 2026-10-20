@@ -183,6 +183,7 @@ type ReviewProviderDTO struct {
 	Author         string   `json:"author"`         // watch family
 	Transports     []string `json:"transports"`     // lola (always) | github | linear
 	GitHubInline   bool     `json:"githubInline"`   // github: anchored, resolvable threads instead of one comment
+	GitHubStatus   bool     `json:"githubStatus"`   // pass shapes: lola/review/<kind> commit status on the PR head
 	Notify         bool     `json:"notify"`
 	SendToAgent    bool     `json:"sendToAgent"`
 	Visible        bool     `json:"visible"`  // pass shapes: run in a watchable "<session>-review" tmux session
@@ -293,6 +294,7 @@ func reviewProvidersDTO(cfg *config.Config) []ReviewProviderDTO {
 			Author:         p.Author,
 			Transports:     p.Transports.Strings(),
 			GitHubInline:   p.GitHubInline,
+			GitHubStatus:   p.GitHubStatus,
 			Notify:         p.Notify,
 			SendToAgent:    p.SendToAgent,
 			Visible:        p.Visible,
@@ -320,6 +322,7 @@ func providersFromDTO(dtos []ReviewProviderDTO) []config.ReviewProvider {
 		p.Model = d.Model
 		p.Author = d.Author
 		p.GitHubInline = d.GitHubInline
+		p.GitHubStatus = d.GitHubStatus
 		p.Notify = d.Notify
 		p.SendToAgent = d.SendToAgent
 		p.Visible = d.Visible

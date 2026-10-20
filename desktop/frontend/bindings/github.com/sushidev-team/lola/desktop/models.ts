@@ -413,6 +413,11 @@ export interface ReviewProviderDTO {
      * github: anchored, resolvable threads instead of one comment
      */
     "githubInline": boolean;
+
+    /**
+     * pass shapes: lola/review/<kind> commit status on the PR head
+     */
+    "githubStatus": boolean;
     "notify": boolean;
     "sendToAgent": boolean;
 

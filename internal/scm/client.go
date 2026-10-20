@@ -49,6 +49,11 @@ type PR struct {
 	// it judged (`--match-head-commit`), and only into the default branch.
 	HeadSHA string `json:"head_sha,omitempty"`
 	BaseRef string `json:"base_ref,omitempty"`
+	// Checks is the per-check breakdown ChecksState was rolled up from, kept so
+	// the daemon can re-judge the PR against the base branch's REQUIRED checks
+	// (ApplyRequired). nil for facts that predate the field: ApplyRequired then
+	// leaves ChecksState as it was.
+	Checks []Check `json:"checks,omitempty"`
 }
 
 // Client shells out to the gh CLI. GhBin is the binary to invoke; empty means
@@ -83,6 +88,8 @@ type prRow struct {
 // rollupEntry accepts both statusCheckRollup shapes: StatusContext carries
 // `state`; CheckRun carries `status` (+ `conclusion` once COMPLETED).
 type rollupEntry struct {
+	Name       string `json:"name"`       // CheckRun
+	Context    string `json:"context"`    // StatusContext
 	State      string `json:"state"`      // StatusContext
 	Status     string `json:"status"`     // CheckRun lifecycle
 	Conclusion string `json:"conclusion"` // CheckRun result (when COMPLETED)
@@ -128,6 +135,7 @@ func (c *Client) PRForBranch(ctx context.Context, repo, branch string) (*PR, err
 		ChecksState:    checksState(r.StatusCheckRollup),
 		HeadSHA:        r.HeadRefOid,
 		BaseRef:        r.BaseRefName,
+		Checks:         rollupChecks(r.StatusCheckRollup),
 	}, nil
 }
 
@@ -226,13 +234,26 @@ func repoOwner(repo string) string {
 // The failure bucket extends the spec's FAILURE/ERROR with gh's other
 // terminal-bad conclusions (TIMED_OUT, CANCELLED, ACTION_REQUIRED,
 // STARTUP_FAILURE) so a timed-out check never reads as "pass".
+//
+// lola's OWN commit statuses (IsLolaContext) are left out: they are the
+// review's verdict, not CI, and counting them would turn a review's findings
+// into a ci_failed reaction that asks the worker to "fix CI".
 func checksState(rollup []rollupEntry) string {
+	return ChecksStateAmong(rollupChecks(rollup), nil)
+}
+
+// rollupChecks flattens the rollup into named, bucketed checks.
+func rollupChecks(rollup []rollupEntry) []Check {
 	if len(rollup) == 0 {
-		return "none"
+		return []Check{} // observed empty, distinct from legacy facts without a breakdown
 	}
-	pending := false
+	out := make([]Check, 0, len(rollup))
 	for _, e := range rollup {
+		name := e.Name
 		s := e.State // StatusContext
+		if e.Context != "" {
+			name = e.Context
+		}
 		if s == "" { // CheckRun: in-flight status until COMPLETED, then conclusion
 			if e.Status != "" && e.Status != "COMPLETED" {
 				s = e.Status
@@ -240,16 +261,7 @@ func checksState(rollup []rollupEntry) string {
 				s = e.Conclusion
 			}
 		}
-		if isFailingCheckState(s) {
-			return "fail" // fail outranks pending: report the break immediately
-		}
-		switch strings.ToUpper(s) {
-		case "PENDING", "QUEUED", "IN_PROGRESS", "WAITING", "REQUESTED", "EXPECTED", "STALE":
-			pending = true
-		}
+		out = append(out, Check{Name: name, Bucket: checkBucket(s)})
 	}
-	if pending {
-		return "pending"
-	}
-	return "pass"
+	return out
 }

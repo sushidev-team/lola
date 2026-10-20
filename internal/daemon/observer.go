@@ -276,6 +276,7 @@ func (d *Daemon) observeNative(ctx context.Context) {
 			if err != nil {
 				d.logf("", "observe: PR check for native %s (branch %s in %s) failed: %v", s.ID, s.Branch, repo, err)
 			} else {
+				d.applyRequiredChecks(ctx, repo, p)
 				pr, prKnown = p, true
 			}
 		}

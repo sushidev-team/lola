@@ -845,9 +845,16 @@ func (d *Daemon) fetchFailingChecks(ctx context.Context, s session.Session) stri
 	if s.PR == nil || s.Repo == "" {
 		return ""
 	}
+	required := d.requiredChecksFor(ctx, s.Repo, s.PR.BaseRef)
 	cctx, cancel := context.WithTimeout(ctx, reactExecTimeout)
 	defer cancel()
-	detail, err := d.failingChecks(cctx, s.Repo, s.PR.Number)
+	var detail string
+	var err error
+	if len(required) > 0 && d.failingChecksAmong != nil {
+		detail, err = d.failingChecksAmong(cctx, s.Repo, s.PR.Number, required)
+	} else {
+		detail, err = d.failingChecks(cctx, s.Repo, s.PR.Number)
+	}
 	if err != nil {
 		d.logf("", "react: fetch failing checks for %s failed: %v", s.ID, err)
 		return ""

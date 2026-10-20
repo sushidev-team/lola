@@ -669,6 +669,16 @@ The gate uses the same `statusCheckRollup` signal as the rest of lola, so a
 CodeRabbit run counts toward it only if CodeRabbit registers a check (it usually
 does); a review-without-a-check does not hold the transition.
 
+**Only REQUIRED checks count once the branch has a ruleset.** lola reads the
+base branch's active rulesets (`gh api repos/<repo>/rules/branches/<base>`,
+cached 10 minutes) and judges CI by the required checks alone, so a job the
+repository runs but does not require — a shadow-mode suite, a non-blocking
+audit — never reads as failed CI (no `ci_failed` prompt, no held write-back or
+merge queue). A required check that has not reported yet counts as pending.
+Without a ruleset, or when the lookup fails, every check counts, as before.
+Classic branch protection is not consulted (reading it needs admin). lola's own
+`lola/…` commit statuses are never CI.
+
 ### `[reactions]` (optional)
 
 How lola reacts when a live session's derived PR/CI status changes (the P3
@@ -902,6 +912,7 @@ provider per kind** is allowed (guards key by kind).
 | `author` | string | watch family | Login **substring** matched (case-insensitively) against each comment author. Defaults to `"coderabbitai"` for `coderabbit-watch`; **required** for `bot-watch`. |
 | `transports` | []string | all | Multiselect over `{lola, github, linear}`; see below. Default `["lola"]`; `lola` is always forced present. |
 | `github_inline` | bool | pass shapes with the `github` transport | Post the findings as a pull-request **review** with one anchored, **resolvable** thread per finding instead of a single flat comment. Default `true`; it degrades to the flat comment on its own whenever the anchors or the API say no. |
+| `github_status` | bool | pass shapes | Post the pass's verdict as the commit status `lola/review/<kind>` on the PR head — `pending` while it runs, `success` (clean or minor-only), `failure` (any blocker/major finding, or one whose severity cannot be parsed), `error` (it could not run) — and re-review every new head once the agent has settled, up to 3 rounds per PR (then `error`; `lola review <session>` forces the next). The checkout must be clean and match the PR head before and after the pass. Require the context in a ruleset to make the review block merges. lola's own statuses never count as CI. Default `false`. |
 | `notify` | bool | all | `lola` transport: surface findings to a human (desktop/Slack). Default `true`. |
 | `send_to_agent` | bool | all | `lola` transport: hand findings to the worker via the send-keys gate. Default `true`. |
 | `visible` | bool | pass shapes | Run the pass in its own tmux session `<session>-review` so you can watch it and read its output afterwards. Default `true`. |

@@ -21,6 +21,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/sushidev-team/lola/internal/session"
@@ -80,8 +81,11 @@ func (d *Daemon) queueReviewPass(s session.Session, p reviewProvider) {
 	if s.Source != "native" || !isReviewablePROpen(s.PR) {
 		return
 	}
-	if s.ReviewedPRs[string(p.Kind)] == s.PR.Number {
-		return // already reviewed this PR for this kind
+	if p.Status && !agentSettled(s) {
+		return
+	}
+	if s.ReviewedPRs[string(p.Kind)] == s.PR.Number && !headReviewDue(s, p) {
+		return // already reviewed this PR (and, for a gated kind, this head)
 	}
 	key := reviewKey(s.ID, p.Kind)
 	d.reviewMu.Lock()
@@ -164,16 +168,19 @@ func (d *Daemon) runQueuedReview(ctx context.Context, job reviewJob) {
 // reviewMaxAttempts per PR, and a later cycle retries. A real answer (findings
 // or clean) and a graceful stop (auth / nonzero exit — operator problems that a
 // retry cannot fix) leave the guard stamped.
-func (d *Daemon) noteReviewOutcome(s session.Session, p reviewProvider, res reviewResult, pr int) {
+//
+// It reports whether the pass will be retried, so the review gate can keep its
+// status pending instead of posting an error.
+func (d *Daemon) noteReviewOutcome(s session.Session, p reviewProvider, res reviewResult, pr int) bool {
 	if pr <= 0 {
-		return
+		return false
 	}
 	key := reviewFailKey(s.ID, p.Kind, pr)
 	if !canRetryReview(res) {
 		d.reviewMu.Lock()
 		delete(d.reviewFails, key)
 		d.reviewMu.Unlock()
-		return
+		return false
 	}
 
 	d.reviewMu.Lock()
@@ -187,11 +194,12 @@ func (d *Daemon) noteReviewOutcome(s session.Session, p reviewProvider, res revi
 	if attempts >= reviewMaxAttempts {
 		d.logf("", "review: %s (%s) could not answer PR #%d after %d attempts — giving up on this PR",
 			s.ID, p.Kind, pr, attempts)
-		return
+		return false
 	}
 	d.unstampReviewed(s.ID, p.Kind, pr)
 	d.logf("", "review: %s (%s) will retry PR #%d on a later cycle (attempt %d of %d)",
 		s.ID, p.Kind, pr, attempts, reviewMaxAttempts)
+	return true
 }
 
 // canRetryReview reports whether a chain outcome is worth another attempt: the
@@ -199,6 +207,9 @@ func (d *Daemon) noteReviewOutcome(s session.Session, p reviewProvider, res revi
 // at all). A successful run — including a CLEAN one — and a graceful stop are
 // both final.
 func canRetryReview(res reviewResult) bool {
+	if errors.Is(res.Err, errReviewHeadChanged) {
+		return true
+	}
 	if res.Ran {
 		return false
 	}

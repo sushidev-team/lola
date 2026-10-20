@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -47,8 +48,8 @@ const prListFixture = `[
     "mergeable": "MERGEABLE",
     "reviewDecision": "APPROVED",
     "statusCheckRollup": [
-      {"__typename": "CheckRun", "status": "COMPLETED", "conclusion": "SUCCESS"},
-      {"__typename": "StatusContext", "state": "SUCCESS"}
+      {"__typename": "CheckRun", "name": "test", "status": "COMPLETED", "conclusion": "SUCCESS"},
+      {"__typename": "StatusContext", "context": "ci/lint", "state": "SUCCESS"}
     ],
     "headRefOid": "0123456789abcdef0123456789abcdef01234567",
     "baseRefName": "main"
@@ -81,8 +82,9 @@ func TestPRForBranchArgsAndParse(t *testing.T) {
 		ChecksState:    "pass",
 		HeadSHA:        "0123456789abcdef0123456789abcdef01234567",
 		BaseRef:        "main",
+		Checks:         []Check{{Name: "test", Bucket: "pass"}, {Name: "ci/lint", Bucket: "pass"}},
 	}
-	if *pr != exp {
+	if !reflect.DeepEqual(*pr, exp) {
 		t.Errorf("PR = %+v, want %+v", *pr, exp)
 	}
 }

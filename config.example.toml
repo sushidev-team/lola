@@ -319,6 +319,7 @@ endpoint = "https://api.linear.app/graphql"
 # timeout_seconds = 300                                     # hard cap per pass (pass shapes); must be >= 0
 # transports      = ["lola", "github"]                      # {lola (always forced present), github, linear}
 # github_inline   = true                                    # github: anchored resolvable threads (default) vs one flat comment
+# github_status   = false                                   # post lola/review/<kind> on the PR head + re-review each new head; require it in a ruleset to block merges
 # visible         = true                                    # run the pass in a watchable "<session>-review" tmux session; default true
 # notify          = true                                    # lola transport: notify a human; default true
 # send_to_agent   = true                                    # lola transport: hand findings to the worker; default true

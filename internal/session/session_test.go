@@ -3,6 +3,7 @@ package session
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -58,7 +59,7 @@ func TestRoundTrip(t *testing.T) {
 		if (g.PR == nil) != (w.PR == nil) {
 			t.Fatalf("session %d PR presence: got %v, want %v", i, g.PR, w.PR)
 		}
-		if w.PR != nil && *g.PR != *w.PR {
+		if w.PR != nil && !reflect.DeepEqual(*g.PR, *w.PR) {
 			t.Errorf("session %d PR: got %+v, want %+v", i, *g.PR, *w.PR)
 		}
 	}

@@ -160,7 +160,7 @@ func (d *Daemon) handleReviewProvider(ctx context.Context, sessionID, kind strin
 			s = cur
 		}
 	}
-	res := d.runReviewChain(ctx, s, p)
+	res := d.reviewPass(ctx, s, p, false)
 	switch {
 	case res.Skipped != "":
 		return protocol.ReviewData{

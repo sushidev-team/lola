@@ -354,6 +354,26 @@ func (m *Manager) Dirty(ctx context.Context, dir string) (bool, error) {
 	return strings.TrimSpace(out) != "", nil
 }
 
+// VerifyReviewHead refuses to certify a checkout that differs from the PR head.
+// Reviewers can read local files as well as the diff, so uncommitted work matters.
+func (m *Manager) VerifyReviewHead(ctx context.Context, dir, sha string) error {
+	out, _, err := m.git(ctx, "-C", dir, "rev-parse", "--verify", "HEAD")
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(out) != sha {
+		return errors.New("worktree HEAD differs from the PR head")
+	}
+	dirty, err := m.Dirty(ctx, dir)
+	if err != nil {
+		return err
+	}
+	if dirty {
+		return ErrDirty
+	}
+	return nil
+}
+
 // teardownWaitDelay is how long Teardown waits for a hook's output pipes after
 // its process group was killed: a grandchild that escaped the group must not
 // hold Wait open past the deadline.
