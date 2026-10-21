@@ -91,3 +91,65 @@ func TestGoalsReadFailureDisablesControlsAndTextIsSafe(t *testing.T) {
 		t.Fatal("terminal control leaked")
 	}
 }
+
+func TestGoalsReviewedPublicationAndUncertainResponse(t *testing.T) {
+	m := goalsRoot(t)
+	g := m.goals.current()
+	g.State = "draft"
+	g.Actions = nil
+	g.MilestoneName = "Invitations"
+	m.Update(keyMsg("enter"))
+	m.Update(keyMsg("u"))
+	if m.goals.confirm == nil || m.goals.confirm.Action != "publish" || m.goals.confirm.Revision != 7 {
+		t.Fatal("publication review not pinned")
+	}
+	view := strings.Join(m.goalsLines(), "\n")
+	if !strings.Contains(view, "does not authorize execution") || !strings.Contains(view, "Invitations") {
+		t.Fatal("publication consequences missing", view)
+	}
+	old := requestFn
+	defer func() { requestFn = old }()
+	calls := 0
+	requestFn = func(req protocol.Request) (*protocol.Response, error) {
+		calls++
+		var a map[string]any
+		if err := json.Unmarshal(req.Args, &a); err != nil {
+			t.Fatal(err)
+		}
+		if req.Cmd != "goalPublishReviewed" || len(a) != 2 || a["id"] != "g" || a["revision"] != float64(7) {
+			t.Fatalf("wrong publication command %s: %s", req.Cmd, req.Args)
+		}
+		return &protocol.Response{Error: "lost response; reload"}, nil
+	}
+	_, cmd := m.Update(keyMsg("enter"))
+	if cmd == nil {
+		t.Fatal("no publication request")
+	}
+	m.Update(cmd())
+	if _, again := m.Update(keyMsg("enter")); again != nil || calls != 1 {
+		t.Fatal("uncertain publication retried")
+	}
+	if m.goals.confirm == nil || m.goals.err == "" {
+		t.Fatal("uncertain publication hidden")
+	}
+}
+
+func TestGoalsPublicationUnavailableAfterAuthorization(t *testing.T) {
+	for _, state := range []string{"running", "planned", "accepted", "canceled"} {
+		m := goalsRoot(t)
+		m.goals.current().State = state
+		m.Update(keyMsg("enter"))
+		m.Update(keyMsg("u"))
+		if m.goals.confirm != nil {
+			t.Fatal("publication offered in state", state)
+		}
+	}
+	m := goalsRoot(t)
+	m.goals.current().State = "draft"
+	m.goals.current().Authorized = true
+	m.Update(keyMsg("enter"))
+	m.Update(keyMsg("u"))
+	if m.goals.confirm != nil {
+		t.Fatal("publication offered after authorization")
+	}
+}

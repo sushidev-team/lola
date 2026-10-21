@@ -155,3 +155,39 @@ was not installed and the daemon was not restarted for this increment.
 This is a narrow extension of the existing TUI system. No PRODUCT.md, DESIGN.md
 or design sidecar was created, no new visual system rules were introduced, and
 previously recorded unrelated drift remains unchanged.
+
+## TUI goal planning and publication preview
+
+The sixteen `planner-tui-{wide,compact}-{brief,editing,request,review,tasks,uncertain,saved,publication}.png`
+captures show the actual Go TUI at 120 × 40 and 80 × 24 terminal cells.
+`goalplanner_capture_test.go` renders offline fixtures to ANSI; xterm supplies
+only the screenshot transport. All sixteen captures were opened and validated
+during the implementation pass. This documentation pass sampled the wide brief,
+compact active editor and compact publication confirmation, alongside
+`goalplanner.go`, `goals.go`, `app.go` and their tests.
+
+The extension reuses the incumbent palette, keyboard navigation, settings field
+renderer and line editor. Compact views wrap and scroll content while retaining
+contextual controls. The workflow distinguishes a bounded paid proposal request,
+read-only recovery by durable request ID, acknowledgment and exact-revision
+acceptance as a local goal, and a separate reviewed Linear publication action.
+Uncertain results require refreshing the saved record before another acceptance;
+refreshing does not repeat the model call. Publication names its resource effects
+and reviewed revision. This increment adds no TUI execution authorization flow;
+authorization remains available through the desktop and CLI.
+
+The scoped reviewer initially found that root Ctrl+C handling bypassed unsent
+draft protection and that multiline editing showed incorrect keyboard hints.
+Both were fixed, active-editor captures were added, and
+`TestGoalPlannerCtrlCProtectsUnsentBriefAndLineEditing` exercises the root Update
+path. The final reviewer verdict was ship, with no outstanding material fixes.
+The implementation handoff reports all TUI tests passing uncached with capture
+fixtures enabled, followed by `make check` passing build, vet and the full Go
+suite; unchanged package results were cached. No web detector applies to this Go
+TUI surface.
+
+These fixtures and checks do not establish live planning, billing, publication
+or autonomous execution. No live daemon, paid model call, Linear write or binary
+installation was used for this increment. This narrow extension preserves the
+existing visual system: no PRODUCT.md, DESIGN.md or sidecar was created, and
+previously recorded unrelated drift remains unchanged.

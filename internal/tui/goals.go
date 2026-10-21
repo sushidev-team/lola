@@ -16,6 +16,7 @@ import (
 )
 
 type goalsModel struct {
+	planner               *goalPlannerModel
 	project               string
 	gen                   int
 	rows                  []goal.Overview
@@ -66,7 +67,7 @@ func fetchGoalsCmd(project string, gen int) tea.Cmd {
 }
 func (m *rootModel) refreshGoals() tea.Cmd {
 	v := &m.goals
-	if v.loading || v.busy || v.confirm != nil {
+	if v.loading || v.busy || v.confirm != nil || v.planner != nil {
 		return nil
 	}
 	v.gen++
@@ -124,7 +125,15 @@ func (m *rootModel) handleGoalControlMsg(msg goalControlMsg) tea.Cmd {
 func controlGoalCmd(project string, gen int, req goal.ControlRequest) tea.Cmd {
 	return func() tea.Msg {
 		args, _ := json.Marshal(req)
-		resp, err := requestFn(protocol.Request{Cmd: "goalControl", Args: args})
+		command := "goalControl"
+		if req.Action == "publish" {
+			command = "goalPublishReviewed"
+			args, _ = json.Marshal(struct {
+				ID       string `json:"id"`
+				Revision uint64 `json:"revision"`
+			}{req.ID, req.Revision})
+		}
+		resp, err := requestFn(protocol.Request{Cmd: command, Args: args})
 		if err == nil && !resp.OK {
 			err = errors.New(resp.Error)
 		}
@@ -141,6 +150,9 @@ func (m *rootModel) updateGoals(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	v := &m.goals
+	if v.planner != nil {
+		return m.updateGoalPlanner(k)
+	}
 	if v.busy {
 		return m, nil
 	}
@@ -160,18 +172,22 @@ func (m *rootModel) updateGoals(msg tea.Msg) (tea.Model, tea.Cmd) {
 			v.busy = true
 			return m, controlGoalCmd(v.project, v.gen, req)
 		case "backspace":
-			if v.reason != "" {
+			if v.confirm.Action != "publish" && v.reason != "" {
 				_, n := utf8.DecodeLastRuneInString(v.reason)
 				v.reason = v.reason[:len(v.reason)-n]
 			}
 		default:
-			if len(v.reason)+len(k.Text) <= 2000 {
+			if v.confirm.Action != "publish" && len(v.reason)+len(k.Text) <= 2000 {
 				v.reason += k.Text
 			}
 		}
 		return m, nil
 	}
 	switch k.String() {
+	case "n":
+		return m, m.openGoalPlanner(false)
+	case "b":
+		return m, m.openGoalPlanner(true)
 	case "esc", "left":
 		if v.detail {
 			v.detail = false
@@ -234,8 +250,8 @@ func (m *rootModel) updateGoals(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, fetchSessionsCmd
 		}
 	}
-	action := map[string]string{"p": "pause", "r": "resume", "x": "stop-workers", "c": "cancel"}[k.String()]
-	if action != "" && !v.loading && v.err == "" && slices.Contains(g.Actions, action) {
+	action := map[string]string{"p": "pause", "r": "resume", "x": "stop-workers", "c": "cancel", "u": "publish"}[k.String()]
+	if action != "" && !v.loading && v.err == "" && (slices.Contains(g.Actions, action) || (action == "publish" && goalCanPublish(g))) {
 		v.confirm = &goal.ControlRequest{ID: g.ID, Revision: g.Revision, Action: action}
 		v.reason = ""
 	}
@@ -253,6 +269,9 @@ func goalText(s string) string {
 	}, stripANSI(s))
 }
 func (m *rootModel) goalsLines() []string {
+	if m.goals.planner != nil {
+		return m.goalPlannerLines()
+	}
 	v := &m.goals
 	w, h := m.width, m.height
 	if w <= 0 {
@@ -267,18 +286,27 @@ func (m *rootModel) goalsLines() []string {
 		body = append(body, "Loading goals…")
 	}
 	if v.loaded && len(v.rows) == 0 {
-		body = append(body, "No goals in this project yet.", "Create a reviewed goal with lola goal; it will appear here.")
+		body = append(body, "No goals in this project yet.", "Press n to plan a goal, or b to inspect saved proposals.")
 	}
 	g := v.current()
 	if v.confirm != nil {
 		body = append(body, "Review action: "+v.confirm.Action, fmt.Sprintf("Goal %s · reviewed revision %d", v.confirm.ID, v.confirm.Revision))
 		descriptions := map[string]string{
+			"publish":      "Create or reconcile the goal parent issue, task issues, dependencies and optional milestone in the configured Linear project. This does not authorize execution.",
 			"pause":        "Hold dispatch, verification and integration. Running workers continue.",
 			"resume":       "Recheck Linear and policy, then resume within accepted budgets.",
 			"stop-workers": "Stop current workers; keep files and evidence. Resume to dispatch again.",
 			"cancel":       "End this goal and stop workers. Keep all work. Cannot be resumed.",
 		}
-		body = append(body, descriptions[v.confirm.Action], "", "Reason (optional): "+goalText(v.reason))
+		body = append(body, descriptions[v.confirm.Action])
+		if v.confirm.Action == "publish" && g != nil {
+			body = append(body, fmt.Sprintf("%d tasks. Existing confirmed resources are retained on retry.", len(g.Tasks)))
+			if g.MilestoneName != "" {
+				body = append(body, "New milestone: "+goalText(g.MilestoneName))
+			}
+		} else {
+			body = append(body, "", "Reason (optional): "+goalText(v.reason))
+		}
 	} else if !v.detail {
 		body = append(body, "Work stays on goal branches. Final PRs require your merge.", "")
 		for _, r := range v.rows {
@@ -385,7 +413,7 @@ func (m *rootModel) goalsLines() []string {
 		out = append(out, "")
 	}
 	out = append(out, previewLine(badText.Render(goalText(v.err)), w))
-	footer := "↑↓ select · enter inspect · f refresh · esc project"
+	footer := "↑↓ select · enter inspect · n plan · b proposals · f refresh · esc project"
 	controls := ""
 	if v.detail {
 		footer = "↑↓ scroll · tab task · s session · o Linear · f refresh · esc back"
@@ -395,6 +423,9 @@ func (m *rootModel) goalsLines() []string {
 			for _, a := range g.Actions {
 				actions = append(actions, labels[a])
 			}
+			if goalCanPublish(g) {
+				actions = append(actions, "u publish to Linear")
+			}
 			controls = strings.Join(actions, " · ")
 		}
 		if v.err != "" {
@@ -403,6 +434,9 @@ func (m *rootModel) goalsLines() []string {
 	}
 	if v.confirm != nil {
 		footer = "enter apply · esc close action · type optional reason"
+		if v.confirm.Action == "publish" {
+			footer = "enter publish to Linear · esc close action"
+		}
 		controls = ""
 	}
 	if v.busy {
@@ -411,4 +445,8 @@ func (m *rootModel) goalsLines() []string {
 	}
 	out = append(out, previewLine(faintText.Render(footer), w), previewLine(faintText.Render(controls), w))
 	return fitHeight(out, h)
+}
+
+func goalCanPublish(g *goal.Overview) bool {
+	return g != nil && !g.Authorized && (g.State == "draft" || g.State == "provisioning")
 }

@@ -323,6 +323,9 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case goalsMsg:
 		m.handleGoalsMsg(v)
 		return m, nil
+	case goalPlannerMsg:
+		m.handleGoalPlannerMsg(v)
+		return m, nil
 	case goalControlMsg:
 		return m, m.handleGoalControlMsg(v)
 	case projectsMsg:
@@ -455,11 +458,11 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyPressMsg:
 		// ctrl+c quits — EXCEPT while the embed is focused, where it is forwarded
 		// to the terminal (interrupt) via the embed-key routing below, and EXCEPT
-		// while a config form is open. This gate runs ahead of the form routing, so
+		// while a config or goal-planning form is open. This gate runs ahead of the form routing, so
 		// without the check a reflexive ctrl+c mid-edit hard-quit the whole TUI and
 		// took every unsaved edit with it — the one keystroke the discard prompt
 		// could not protect against.
-		if v.String() == "ctrl+c" && !m.embedFocused && m.form == nil && m.settings == nil {
+		if v.String() == "ctrl+c" && !m.embedFocused && m.form == nil && m.settings == nil && (m.view != viewGoals || m.goals.planner == nil) {
 			m.closeAllTerms()
 			return m, tea.Quit
 		}

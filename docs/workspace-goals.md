@@ -67,9 +67,33 @@ or uncertain response cannot silently resubmit against newer work; reload curren
 settings first. Token/dollar telemetry may be delayed or missing, so those limits
 are not exact billing caps. Merge decisions remain human-only.
 
-Custom committed context selection, direct task-graph authoring, existing-issue
-adoption and several recovery actions remain available through the CLI below.
-TUI authoring and authorization forms remain in progress.
+Direct task-graph authoring, existing-issue adoption and several recovery actions
+remain available through the CLI below. TUI execution authorization remains in
+progress; goal planning and publication are available as described next.
+
+### Plan and publish in the TUI
+
+Open project details, press **g** for Goals, then **n** to write a goal brief.
+Arrow keys or Tab move between fields. Enter opens multiline fields; Escape
+returns to field navigation. Specify the outcome, observable acceptance criteria
+and exclusions, plus finite planning limits. You can also select a new milestone
+name or an existing milestone UUID and supply committed files as `member:path`,
+one per line. **Request proposal** shows the task/time limits before making one
+paid model call. Leaving an unsent edited brief prompts before discarding it.
+
+Use **b** from Goals to inspect saved proposals, including requests left running
+or with uncertain responses. **f** refreshes a retained result without requesting
+another model call. Scroll through the task scope, dependencies, coverage, open
+questions and committed sources; **v** toggles the full retained record. Space
+acknowledges the review, and **a** accepts that exact revision as a local goal.
+An uncertain acceptance disables another attempt until you refresh and review
+again. **g** then opens the local goal.
+
+For a draft or partially published goal, **u** opens a separate publication
+review with the goal revision, task count and optional milestone. Enter creates
+or reconciles its Linear resources; Escape closes the action. An uncertain
+publication requires closing and refreshing before another reviewed attempt.
+Neither proposal acceptance nor publication grants execution permission.
 
 ### Ask the coordinator for a task proposal
 
@@ -1035,20 +1059,21 @@ In the TUI, open project details and press **g** for Goals. Select a goal with
 arrow keys and press Enter to inspect it. Arrow keys then scroll, Tab selects a
 task, **s** opens its latest attempt's session, and **o** opens the goal in Linear.
 The available control shortcuts are shown below the view: **p** pauses, **r**
-resumes, **x** stops workers and **c** cancels. Enter applies the reviewed action;
+resumes, **x** stops workers and **c** cancels. **u** reviews publication for an
+unauthorized draft. Enter applies the reviewed action;
 Escape closes it. **f** refreshes. Long criteria wrap within the terminal width.
 
 Both clients read the same cached overview and submit the same revision-checked
-commands. The desktop also supports coordinator proposals, local plan acceptance,
-Linear publication and explicit execution authorization as described above.
+commands. Both support coordinator proposals, local plan acceptance and Linear
+publication; explicit execution authorization is available in the desktop and CLI.
 Direct task-graph editing, verification/replan retries, shared delivery evidence
 and knowledge curation remain CLI-first; their forms are still in progress.
 
 ## Remaining work
 
 The full implementation plan remains active: broader task/policy revision
-reconciliation and steering, TUI authoring/authorization, knowledge forms, remaining UI
-parity, and
+reconciliation and steering, TUI execution authorization, knowledge forms, remaining
+UI parity, and
 improvement metrics. Measured container CPU/memory and dollar costs remain
 unavailable; the usage report distinguishes them from resource ceilings. See
 [the plan](../PLAN-self-improving-workspace.md).
@@ -1177,8 +1202,9 @@ independent verification must still pass.
 ## Quick look at this checkpoint
 
 The project/stack **Execution** settings and goal inspection/steering views are
-available. The desktop includes goal planning, Linear publication and execution
-authorization forms; direct task-graph editing and TUI authoring remain CLI-first.
+available. Both desktop and TUI include goal planning and Linear publication.
+Execution authorization forms are available in the desktop; the TUI form is still
+in progress. Direct task-graph editing remains CLI-first.
 The checked-in plan lists the remaining work; this is a development checkpoint.
 
 Build the branch binary with `make build`. Run `./lola goal --help`, `./lola learn

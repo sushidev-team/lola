@@ -5,8 +5,10 @@ Status: implementation resumed at the user’s request on
 Approximate scope estimate: 75% implemented, not a measured completion metric.
 
 Current verification: `make check` passed (build, vet and full Go suite) after
-TUI specialist configuration; the full TUI suite passed uncached. Normal and compact
-terminal fixture captures passed a scoped independent UI review. Earlier verified
+TUI goal planning and reviewed publication; the full TUI suite passed uncached.
+Normal and compact terminal captures use offline fixtures. Scoped independent UI
+review passed for specialist settings and goal planning/publication; the latter
+included fixes for draft protection and multiline keyboard hints. Earlier verified
 learning promotion and goal fix-contract checks passed. Focused promotion,
 curation and contract race checks passed. Temporary Git fixtures cover unmerged
 code, observed goal delivery, proof withdrawal, code drift, scope and migration.
@@ -27,12 +29,13 @@ Available for inspection: project/stack Execution settings; goal overview,
 tasks, limits, delivery and steering controls in desktop/TUI; CLI goal planning,
 authorization and recovery; knowledge capture/curation/export and improvement
 proposals; specialist reviews
-and finding decisions. Specialist configuration is available in desktop and TUI. Desktop goal planning, local plan acceptance, Linear
-publication and explicit execution authorization are now available.
+and finding decisions. Specialist configuration, goal planning, local plan
+acceptance and reviewed Linear publication are available in desktop and TUI.
+Explicit execution authorization is available in desktop and CLI.
 
 Remaining before full-plan completion:
 
-- TUI goal authoring/authorization, direct task-graph editing, knowledge forms,
+- TUI execution authorization, direct task-graph editing, knowledge forms,
   remaining desktop/TUI action parity.
 - Broader task/policy revision reconciliation and Linear steering beyond the
   implemented brief clarifications and bounded task replanning.
@@ -106,6 +109,13 @@ configuration validates and saves. Multiline rubrics survive unrelated settings
 edits. Compact terminals retain the active tab, focused field and wrapped errors.
 Offline normal/compact fixture captures exercise the actual modal renderer; they
 do not establish live specialist execution.
+
+TUI goal authoring addition: Goals now offers a brief form, saved proposals,
+scrollable task/coverage/scope/source review and acknowledgment before accepting
+the exact proposal revision. Requests retain their identity before dispatch;
+uncertain replies require read-only recovery, never another automatic paid call.
+Local goals can be published through a separate revision-bound review. These
+actions do not authorize execution. TUI execution-policy authoring remains open.
 
 Implemented foundations: durable goal reservations and recoverable Linear
 publication; ordinary-dispatch exclusion; scoped knowledge capture, curation,
