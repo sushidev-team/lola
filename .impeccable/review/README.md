@@ -121,3 +121,37 @@ test.
 This ordinary extension preserves the incumbent system. No PRODUCT.md, DESIGN.md
 or sidecar was created, and previously recorded unrelated drift was not repaired
 or promoted into system rules.
+
+## TUI specialist settings preview
+
+The ten `specialists-tui-{wide,compact}-{empty,picker,profile,error,remove}.png`
+captures show the actual Go settings modal at 120 × 40 and 80 × 24 terminal
+cells. The optional `settingsprofiles_capture_test.go` fixture produces ANSI
+output from the modal and keyboard paths; xterm renders that output for capture.
+Each image is labeled as an offline fixture with no live daemon. The remove
+state shows the focused draft-removal action, not a saved deletion. Initial blank
+captures caused by render timing were replaced before the scoped review.
+
+The documentation check inspected `settingsprofiles.go`, its `settingsform.go`
+integration and fixture tests, and sampled the wide profile and compact error
+captures. The implementation preserves the incumbent keyboard settings modal,
+palette, flat fields and indented subsections. Separate Specialists and Providers
+headings distinguish focused review profiles from their execution integrations.
+The compact form scrolls its fields while retaining contextual help, wrapped
+validation errors and save/cancel navigation. New profiles start disabled; provider
+availability remains explicit. Add, edit and remove operate on the settings
+draft, with whole-form validation and atomic save/cancel behavior.
+
+The scoped reviewer inspected all ten valid captures and recommended shipping
+without fixes. A web detector was not run: this is a Go TUI, with xterm used only
+to render the captured terminal output. The implementation handoff reports that
+all TUI tests and `make check` passed (build, vet and the full Go suite; many
+unchanged package results were cached). Tests cover profile round trips,
+add/remove/cancel, rejected saves, project and rubric editing, asynchronous label
+loading, compact navigation/errors, save failure and legacy migration. This
+evidence does not establish a live pilot or live specialist execution; the binary
+was not installed and the daemon was not restarted for this increment.
+
+This is a narrow extension of the existing TUI system. No PRODUCT.md, DESIGN.md
+or design sidecar was created, no new visual system rules were introduced, and
+previously recorded unrelated drift remains unchanged.

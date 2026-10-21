@@ -508,7 +508,7 @@ func TestSettingsFormOnlyDigitsInIntField(t *testing.T) {
 
 // The three review provider KINDS share ONE tab as distinct, indented
 // subsections — so they read as one integration but are never mistaken for each
-// other. No top-level section header: the tab title already says Review, and
+// other. A Providers section distinguishes the catalog from specialist profiles;
 // each subsection names its own provider kind.
 func TestSettingsFormDistinguishesReviewProviders(t *testing.T) {
 	m := newTestRoot(t)
@@ -521,8 +521,12 @@ func TestSettingsFormDistinguishesReviewProviders(t *testing.T) {
 		if fld.tab != stCodeRabbit {
 			t.Errorf("every provider belongs on the Review tab, got %v for %q", fld.tab, fld.key)
 		}
-		if fld.section != "" {
-			t.Errorf("the tab title replaces the section header, got %q for %q", fld.section, fld.key)
+		wantSection := ""
+		if fld == cli {
+			wantSection = "Providers"
+		}
+		if fld.section != wantSection {
+			t.Errorf("provider section = %q, want %q", fld.section, wantSection)
 		}
 		if !fld.indent {
 			t.Errorf("every provider subsection must be indented, got %q not indented", fld.key)

@@ -5,7 +5,9 @@ Status: implementation resumed at the user’s request on
 Approximate scope estimate: 75% implemented, not a measured completion metric.
 
 Current verification: `make check` passed (build, vet and full Go suite) after
-verified learning promotion and goal fix-contract verification. Focused promotion,
+TUI specialist configuration; the full TUI suite passed uncached. Normal and compact
+terminal fixture captures passed a scoped independent UI review. Earlier verified
+learning promotion and goal fix-contract checks passed. Focused promotion,
 curation and contract race checks passed. Temporary Git fixtures cover unmerged
 code, observed goal delivery, proof withdrawal, code drift, scope and migration.
 Frontend `npm run check` passed after refreshing the knowledge bindings.
@@ -25,13 +27,13 @@ Available for inspection: project/stack Execution settings; goal overview,
 tasks, limits, delivery and steering controls in desktop/TUI; CLI goal planning,
 authorization and recovery; knowledge capture/curation/export and improvement
 proposals; specialist reviews
-and finding decisions. Desktop goal planning, local plan acceptance, Linear
+and finding decisions. Specialist configuration is available in desktop and TUI. Desktop goal planning, local plan acceptance, Linear
 publication and explicit execution authorization are now available.
 
 Remaining before full-plan completion:
 
 - TUI goal authoring/authorization, direct task-graph editing, knowledge forms,
-  TUI specialist editing and remaining desktop/TUI action parity.
+  remaining desktop/TUI action parity.
 - Broader task/policy revision reconciliation and Linear steering beyond the
   implemented brief clarifications and bounded task replanning.
 - Broader verification of worker-authored discoveries beyond the implemented
@@ -96,6 +98,14 @@ omits it. Replays cannot undo curation. Explicit human acceptance can replace
 the automatic proof while retaining its history. Worker assertions, conflicts
 and mandatory rules remain outside this automatic path. Knowledge format version
 2 protects the new provenance from older writers; the guide documents rollback.
+
+TUI specialist settings addition: Settings → Review now creates and removes
+profiles and edits their provider, triggers, rubric, project/path scope, evidence
+and limits. New profiles start disabled; changes remain a draft until the whole
+configuration validates and saves. Multiline rubrics survive unrelated settings
+edits. Compact terminals retain the active tab, focused field and wrapped errors.
+Offline normal/compact fixture captures exercise the actual modal renderer; they
+do not establish live specialist execution.
 
 Implemented foundations: durable goal reservations and recoverable Linear
 publication; ordinary-dispatch exclusion; scoped knowledge capture, curation,

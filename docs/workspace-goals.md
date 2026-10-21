@@ -598,6 +598,16 @@ for UI/UX, Integration and Performance remains enforced. Settings Save validates
 the complete configuration; removing an enabled specialist's provider is rejected
 without writing a partial configuration. CLI/config access remains available.
 
+In the TUI, press **S** from the cockpit, then Tab to **Review**. **Add
+specialist** opens the specialty chooser. Arrow keys select fields; Enter or
+Space changes toggles and enum choices. Enter opens project selection or the
+line editor for rubric, paths and extra evidence; Escape returns to field
+navigation. **Ctrl-s** validates and saves the whole settings draft. Removing
+a specialist changes only the draft until Save; Escape offers to discard unsaved
+changes. Enable the chosen agent under **Providers** before enabling its profile.
+Existing legacy review settings must use the displayed **m** migration action
+before editing. Profiles and providers remain distinct sections of the same tab.
+
 Profiles select an existing agent-family provider and supply a versioned rubric.
 Several profiles can use the same provider independently:
 
@@ -1037,7 +1047,7 @@ and knowledge curation remain CLI-first; their forms are still in progress.
 ## Remaining work
 
 The full implementation plan remains active: broader task/policy revision
-reconciliation and steering, TUI authoring/authorization, knowledge forms, TUI profile editing and remaining UI
+reconciliation and steering, TUI authoring/authorization, knowledge forms, remaining UI
 parity, and
 improvement metrics. Measured container CPU/memory and dollar costs remain
 unavailable; the usage report distinguishes them from resource ceilings. See

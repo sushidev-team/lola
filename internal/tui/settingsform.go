@@ -31,9 +31,11 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/sushidev-team/lola/internal/agent"
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/linear"
+	"github.com/sushidev-team/lola/internal/reviewprofile"
 	"github.com/sushidev-team/lola/internal/secrets"
 )
 
@@ -60,6 +62,7 @@ const (
 	// inside tmux, so a plain-text key would sit in the pane's scrollback, which
 	// lola itself captures for the attention parser.
 	sfSecret
+	sfAction // explicit action, activated with enter
 )
 
 // settingsTab groups the fields into the config tables they write. [defaults]
@@ -127,15 +130,16 @@ type setField struct {
 }
 
 type settingsForm struct {
-	cfgPath string
-	cfg     *config.Config
-	fields  []setField
-	tab     settingsTab
-	cursor  int  // index into the ACTIVE tab's fields (see visible)
-	scroll  int  // first visible field-region line (cursor-following viewport)
-	editing bool // a list/env field is OPEN for line editing
-	lineCur int  // which line, while editing
-	err     string
+	viewportWidth int // modal content width; zero retains the full test render
+	cfgPath       string
+	cfg           *config.Config
+	fields        []setField
+	tab           settingsTab
+	cursor        int  // index into the ACTIVE tab's fields (see visible)
+	scroll        int  // first visible field-region line (cursor-following viewport)
+	editing       bool // a list/env field is OPEN for line editing
+	lineCur       int  // which line, while editing
+	err           string
 
 	// Unsaved-changes guard, same contract as the project form: baseline is the
 	// state the form opened in, re-taken after an async label load so a fill-in
@@ -170,7 +174,9 @@ type settingsForm struct {
 	// state the Review tab is READ-ONLY (editing would produce a mixed config,
 	// which is a hard validation error) and offers a one-key migration into the
 	// editable provider catalog. Cleared once migrated.
-	reviewLegacy bool
+	reviewLegacy   bool
+	specialistKeys []int
+	nextSpecialist int
 
 	// savedNote is a one-line message a successful save wants shown INSTEAD of
 	// the generic "settings saved" — today only the Linear key's outcome, which
@@ -334,6 +340,7 @@ func newSettingsForm(cfgPath string, cfg *config.Config) *settingsForm {
 			// A legacy-only config shows these READ-ONLY with a migrate action.
 		},
 	}
+	f.initSpecialists()
 	f.fields = append(f.fields, reviewProviderFields(rp)...)
 	// Warm the label NAMES from the on-disk cache for rendering. This is a local
 	// file read, never a Linear call, and deliberately does not touch wsLabels:
@@ -513,6 +520,10 @@ func reviewProviderFields(seed func(kind string) config.ReviewProvider) []setFie
 				help: "Ordered pass kinds tried when this provider can't answer (unavailable / over-quota). enter picks.",
 				kind: sfList, choices: fallbackOpts(kind), lines: p.FallbackStrings()})
 		}
+	}
+	if len(out) > 0 {
+		out[0].section = "Providers"
+		out[0].sectionNote = "agents and review integrations"
 	}
 	return out
 }
@@ -794,10 +805,14 @@ func (f *settingsForm) update(msg tea.Msg) (tea.Cmd, settingsFormEvent) {
 // method so the key path stays readable; extend it alongside any new tea.Cmd.
 func (f *settingsForm) updateNonKey(msg tea.Msg) (tea.Cmd, settingsFormEvent) {
 	if v, ok := msg.(workspaceLabelsMsg); ok {
+		wasDirty := f.dirty()
 		f.applyWorkspaceLabels(v)
 		// An arriving label set is not a human edit — re-baseline so it can't arm
-		// the discard prompt on a form nobody typed into.
-		f.rebase()
+		// the discard prompt on a form nobody typed into. Preserve prior edits,
+		// including specialists added while the request was in flight.
+		if !wasDirty {
+			f.rebase()
+		}
 	}
 	return nil, settingsFormNone
 }
@@ -874,6 +889,8 @@ func (f *settingsForm) key(k tea.KeyPressMsg) (tea.Cmd, settingsFormEvent) {
 			return nil, settingsFormNone
 		}
 		switch fld.kind {
+		case sfAction:
+			f.specialistAction(fld.key)
 		case sfBool:
 			f.toggleBool(fld)
 		case sfEnum:
@@ -1364,6 +1381,10 @@ func (f *settingsForm) pickerKey(k tea.KeyPressMsg) (tea.Cmd, settingsFormEvent)
 // applyPick writes the chosen label ID(s) back into the field's own storage —
 // lines for a multi-select, text for a single — so save() needs no special case.
 func (f *settingsForm) applyPick(p *setPicker) {
+	if p.key == specialistAddKey && len(p.opts) > 0 {
+		f.addSpecialist(p.opts[p.cursor].id)
+		return
+	}
 	fld := f.field(p.key)
 	if fld == nil || len(p.opts) == 0 {
 		return
@@ -1392,6 +1413,8 @@ func (f *settingsForm) pickerView(bodyBudget int) string {
 	p := f.picker
 	hint := "↑/↓ move · enter select · ctrl-r refresh · esc cancel"
 	switch {
+	case p.key == specialistAddKey:
+		hint = "↑/↓ move · enter add · esc cancel"
 	case p.ordered:
 		// No refresh: the options are lola's own constants, not fetched.
 		hint = "↑/↓ move · space add/remove · enter confirm · esc cancel — the NUMBER is the tie-break order"
@@ -1521,9 +1544,14 @@ func (f *settingsForm) save() settingsFormEvent {
 	}
 	// The provider catalog (skipped entirely while the Review tab is read-only —
 	// the legacy tables stay as they are pending an explicit migrate).
+	var profiles []reviewprofile.Profile
 	var provs []config.ReviewProvider
 	if !f.reviewLegacy {
 		var perr error
+		if profiles, perr = f.buildSpecialists(); perr != nil {
+			f.err = perr.Error()
+			return settingsFormNone
+		}
 		if provs, perr = f.buildReviewProviders(); perr != nil {
 			return settingsFormNone // f.err already set
 		}
@@ -1537,6 +1565,7 @@ func (f *settingsForm) save() settingsFormEvent {
 	oldD, oldN, oldB, oldR, oldC := c.Defaults, c.Notify, c.Brain, c.Review, c.CodeRabbit
 	oldUI := c.UI
 	oldP := c.ReviewProviders
+	oldProfiles := c.ReviewProfiles
 	oldSA := c.StatusAgent
 	oldRem := c.Remote
 	oldLin := c.Linear
@@ -1598,12 +1627,14 @@ func (f *settingsForm) save() settingsFormEvent {
 	// here with legacy already cleared, so assigning the built catalog is safe.
 	if !f.reviewLegacy {
 		c.ReviewProviders = provs
+		c.ReviewProfiles = profiles
 	}
 
 	rollback := func() {
 		c.Defaults, c.Notify, c.Brain, c.Review, c.CodeRabbit = oldD, oldN, oldB, oldR, oldC
 		c.UI = oldUI
 		c.ReviewProviders = oldP
+		c.ReviewProfiles = oldProfiles
 		c.StatusAgent = oldSA
 		c.Remote = oldRem
 		c.Linear = oldLin
@@ -1746,7 +1777,15 @@ func (f *settingsForm) tabStrip() string {
 		}
 		parts = append(parts, faintText.Render(t.title))
 	}
-	return "  " + strings.Join(parts, faintText.Render(" · "))
+	strip := "  " + strings.Join(parts, faintText.Render(" · "))
+	if f.viewportWidth > 0 && lipgloss.Width(strip) > f.viewportWidth {
+		for _, t := range settingsTabs {
+			if t.tab == f.tab {
+				return "  ‹ " + boxTitleHi.Render(t.title) + " ›  " + faintText.Render("tab / shift-tab to switch")
+			}
+		}
+	}
+	return strip
 }
 
 // fieldRegion renders the ACTIVE tab's section/subsection headers and field
@@ -1767,7 +1806,11 @@ func (f *settingsForm) fieldRegion() (lines []string, fieldLine []int) {
 		}
 		if fld.subsection != "" {
 			// Indented sub-header grouping fields under a shared section.
-			lines = append(lines, "  "+faintText.Render("▸ "+fld.subsection))
+			heading := fld.subsection
+			if strings.HasPrefix(fld.key, "specialist.") && strings.HasSuffix(fld.key, ".id") {
+				heading = fld.text
+			}
+			lines = append(lines, "  "+faintText.Render("▸ "+heading))
 		}
 		onField := vi == f.cursor
 		open := onField && f.editing
@@ -1818,12 +1861,22 @@ func (f *settingsForm) fieldRegion() (lines []string, fieldLine []int) {
 				if fld.wsPick && !typing {
 					shown = f.labelText(e)
 				}
+				if !typing {
+					for _, choice := range fld.choices {
+						if choice.id == e {
+							shown = choice.label
+							break
+						}
+					}
+				}
 				lines = append(lines, indent+"      "+bullet+shown+caret)
 			}
 			continue
 		}
 		var val string
 		switch fld.kind {
+		case sfAction:
+			val = faintText.Render("[enter]")
 		case sfBool:
 			val = boolGlyph(fld.b)
 		case sfEnum:
@@ -1889,7 +1942,7 @@ func (f *settingsForm) footerLines() []string {
 	if f.reviewReadOnly() {
 		out = append(out, "", warnText.Render("! legacy [review]/[coderabbit] tables — read-only. Press m to migrate to the editable provider catalog."))
 	}
-	hint := "tab/⇧tab section · ↑/↓ field · space toggle · ctrl-s save · esc cancel"
+	hint := "tab section · ↑/↓ field · space toggle · ctrl-s save · esc cancel"
 	switch {
 	case f.confirmDiscard:
 		// Replaces the key hint entirely: while the prompt is up, answering it is
@@ -1899,6 +1952,8 @@ func (f *settingsForm) footerLines() []string {
 		return out
 	case f.reviewReadOnly():
 		hint = "m migrate to providers · tab/⇧tab section · ↑/↓ field · ctrl-s save · esc cancel"
+	case f.cur().kind == sfAction:
+		hint = "enter select · ↑/↓ field · ctrl-s save · esc cancel"
 	case f.editing:
 		hint = "editing " + f.cur().label + " — ↑/↓ line · enter new line · esc done"
 	case f.cur().wsPick:
@@ -1968,6 +2023,13 @@ func (f *settingsForm) scrolledView(bodyBudget int) string {
 	}
 	region, fieldLine := f.fieldRegion()
 	footer := f.footerLines()
+	if f.viewportWidth > 0 {
+		var wrapped []string
+		for _, line := range footer {
+			wrapped = append(wrapped, strings.Split(lipgloss.NewStyle().Width(f.viewportWidth).Render(line), "\n")...)
+		}
+		footer = wrapped
+	}
 	avail := bodyBudget - len(footer) - 2 // -2 for the tab strip + its blank
 	if avail < 1 {
 		avail = 1
@@ -2030,6 +2092,7 @@ func (m *rootModel) settingsFormModal() string {
 	}
 	// box shows h-2 body rows; the title lifts into the border and the leading
 	// blank costs one row, so the scroller gets mh-2-2 rows for content+footer.
+	m.settings.viewportWidth = mw - 4
 	lines := strings.Split(strings.TrimRight(m.settings.scrolledView(mh-3), "\n"), "\n")
 	title := "settings"
 	if len(lines) > 0 {
