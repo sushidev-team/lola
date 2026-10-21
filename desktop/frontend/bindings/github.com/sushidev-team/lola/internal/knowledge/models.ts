@@ -16,6 +16,7 @@ export interface CodeReference {
 }
 
 export interface Lesson {
+    "review_proof"?: ReviewProof | null;
     "code"?: CodeReference[] | null;
     "review_reason"?: string;
     "id": string;
@@ -58,6 +59,19 @@ export interface PreventionIdea {
 export interface Reference {
     "id": string;
     "version": number;
+}
+
+/**
+ * ReviewProof links a derived lesson to an immutable source version and the
+ * human-verified finding's independent review receipt. Workers cannot author it.
+ */
+export interface ReviewProof {
+    "replaced_by_human"?: boolean;
+    "source": Reference;
+    "finding_id": string;
+    "finding_revision": number;
+    "verification_key": string;
+    "fix_commit": string;
 }
 
 export interface Scope {

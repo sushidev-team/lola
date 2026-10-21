@@ -43,6 +43,7 @@ func (d *Daemon) safeReconcile(ctx context.Context) {
 		}
 	}()
 	if d.knowledge != nil {
+		d.promoteReviewKnowledge(ctx, "")
 		d.maintainKnowledge(ctx, d.knowledge.List())
 	}
 	d.reconcile(ctx)

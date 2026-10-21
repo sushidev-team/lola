@@ -99,13 +99,15 @@ func (d *Daemon) handleKnowledge(ctx context.Context, req protocol.Request) prot
 		if a.Scope.Project == "" {
 			return protocol.Response{Error: "project required"}
 		}
+		promotions := d.promoteReviewKnowledge(ctx, a.Scope.Project)
 		var scoped []knowledge.Lesson
 		for _, l := range d.knowledge.List() {
 			if l.Scope.Project == a.Scope.Project {
 				scoped = append(scoped, l)
 			}
 		}
-		_, data = d.maintainKnowledge(ctx, scoped)
+		_, reports := d.maintainKnowledge(ctx, scoped)
+		data = append(promotions, reports...)
 	case "knowledgeCapture", "knowledgeCorrect":
 		d.mu.Lock()
 		p := d.cfg.ProjectByName(a.Scope.Project)

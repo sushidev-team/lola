@@ -122,10 +122,45 @@ func validFindingEvidence(text string) bool {
 func verifyFindingFix(f FindingReport, r Record, head string) error {
 	if r.Key == f.ReviewKey || r.State != "pass" || !r.Result.Complete || len(r.Result.Evidence) == 0 || len(r.Result.Findings) != 0 ||
 		r.Profile != f.Profile || r.Provider != f.Provider || r.Version != f.RubricVersion || r.Inputs.Repo != f.Inputs.Repo ||
-		r.Inputs.Contract != f.Inputs.Contract || r.Inputs.Head != head {
+		!sameFindingContract(f.Inputs, r.Inputs) || r.Inputs.Head != head {
 		return fmt.Errorf("verification requires a clean independent review of the recorded fix commit, same repository, profile, provider, rubric and contract")
 	}
 	return nil
+}
+
+// Goal reviews append the exact repository combination to the task contract.
+// That combination must change when a fix is integrated; it remains bound into
+// each review's key, but it is not a different acceptance requirement. Only
+// daemon-owned reviews of the same goal/task may compare this contract prefix.
+func sameFindingContract(a, b Inputs) bool {
+	if a.Contract == b.Contract {
+		return true
+	}
+	if a.Owner == nil || b.Owner == nil || a.Owner.Goal == "" || a.Owner.Task == "" || a.Owner.Goal != b.Owner.Goal || a.Owner.Task != b.Owner.Task || a.Owner.Project != b.Owner.Project || a.ContextID == "" || b.ContextID == "" {
+		return false
+	}
+	contract := func(in Inputs) (string, bool) {
+		const marker = "\nVerified repository combination: "
+		at := strings.LastIndex(in.Contract, marker)
+		if at <= 0 {
+			return "", false
+		}
+		var combination map[string]string
+		if json.Unmarshal([]byte(in.Contract[at+len(marker):]), &combination) != nil || len(combination) == 0 {
+			return "", false
+		}
+		hasHead := false
+		for member, head := range combination {
+			if member == "" || !fixCommit.MatchString(head) {
+				return "", false
+			}
+			hasHead = hasHead || head == in.Head
+		}
+		return in.Contract[:at], hasHead
+	}
+	left, validLeft := contract(a)
+	right, validRight := contract(b)
+	return validLeft && validRight && left == right
 }
 
 // Decide is operator curation. A fixed claim names an exact new commit. Verified

@@ -11,6 +11,7 @@ export type {
     Lesson,
     PreventionIdea,
     Reference,
+    ReviewProof,
     Scope,
     Source
 } from "./models.js";

@@ -41,6 +41,34 @@ func (r CodeReader) Read(ctx context.Context, dir, branch, file string) (CodeIde
 	if !objectID.MatchString(out.Commit) {
 		return CodeIdentity{}, errors.New("invalid commit identity")
 	}
+	return r.readCommit(ctx, dir, out.Commit, file)
+}
+
+// ReadCommit compares verifier-owned evidence at an exact commit. No symbolic
+// revisions, fetches, source execution or working-tree content are admitted.
+func (r CodeReader) ReadCommit(ctx context.Context, dir, commit, file string) (CodeIdentity, error) {
+	if dir == "" || !objectID.MatchString(commit) || file == "" || path.IsAbs(file) || path.Clean(file) != file || file == ".." || strings.HasPrefix(file, "../") || strings.ContainsAny(file, "\\\x00\r\n\t") {
+		return CodeIdentity{}, errors.New("invalid exact-code reference")
+	}
+	run := r.Run
+	if run == nil {
+		run = readCodeGit
+	}
+	body, err := run(ctx, dir, "rev-parse", "--verify", commit+"^{commit}")
+	if err != nil || strings.TrimSpace(string(body)) != commit {
+		return CodeIdentity{}, errors.New("verification commit is unavailable")
+	}
+	return r.readCommit(ctx, dir, commit, file)
+}
+
+func (r CodeReader) readCommit(ctx context.Context, dir, commit, file string) (CodeIdentity, error) {
+	out := CodeIdentity{Commit: commit}
+	run := r.Run
+	if run == nil {
+		run = readCodeGit
+	}
+	var body []byte
+	var err error
 	if file == "." {
 		body, err = run(ctx, dir, "rev-parse", "--verify", out.Commit+"^{tree}")
 		if err != nil || !objectID.MatchString(strings.TrimSpace(string(body))) {

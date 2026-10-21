@@ -89,11 +89,19 @@ func (d *Daemon) maintainKnowledge(ctx context.Context, lessons []knowledge.Less
 	var reports []knowledge.Maintenance
 	for _, l := range lessons {
 		r := knowledge.Maintenance{ID: l.ID, Version: l.Version, State: "current"}
+		proofCurrent, proofAvailable := true, true
+		if l.Status == knowledge.Active && l.ReviewProof != nil {
+			proofCurrent, proofAvailable = d.reviewProofCurrent(l)
+		}
 		switch {
 		case l.Status != knowledge.Active:
 			r.State = "inactive"
 		case !l.ExpiresAt.IsZero() && !time.Now().Before(l.ExpiresAt):
 			r.State, r.Reason = "expired", "lesson expired"
+		case !proofAvailable:
+			r.State, r.Reason = "unavailable", "review verification is unavailable"
+		case !proofCurrent:
+			r.State, r.Reason = "changed", "review verification changed"
 		case len(l.Code) == 0:
 			r.State = "untracked"
 		default:
@@ -137,6 +145,26 @@ func (d *Daemon) maintainKnowledge(ctx context.Context, lessons []knowledge.Less
 	}
 	kept := valid[:0]
 	for _, l := range valid {
+		// Git reads may outlive a finding decision. Recheck the source proof as
+		// well as this lesson's version before returning guidance.
+		if proofCurrent, proofAvailable := d.reviewProofCurrent(l); !proofCurrent || !proofAvailable {
+			state, reason := "unavailable", "review verification is unavailable"
+			if proofAvailable {
+				state, reason = "changed", "review verification changed"
+				if err := d.knowledge.ReviewCode(l.ID, l.Version, reason); err != nil {
+					state = "unavailable"
+				}
+			}
+			for i := range reports {
+				if reports[i].ID == l.ID {
+					reports[i].State, reports[i].Reason = state, reason
+					if state == "changed" {
+						reports[i].Version++
+					}
+				}
+			}
+			continue
+		}
 		if now := current[l.ID]; now.Version == l.Version && now.Status == knowledge.Active {
 			kept = append(kept, l)
 		}

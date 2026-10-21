@@ -49,6 +49,7 @@ type Source struct {
 }
 
 type Lesson struct {
+	ReviewProof  *ReviewProof    `json:"review_proof,omitempty"`
 	Code         []CodeReference `json:"code,omitempty"`
 	ReviewReason string          `json:"review_reason,omitempty"`
 	ID           string          `json:"id"`

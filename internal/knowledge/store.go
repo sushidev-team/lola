@@ -39,7 +39,7 @@ func Open(path string) (*Store, error) {
 	if err := json.Unmarshal(b, &loaded); err != nil {
 		return nil, err
 	}
-	if loaded.Version != 1 || loaded.Lessons == nil || loaded.Deliveries == nil || loaded.History == nil {
+	if (loaded.Version != 1 && loaded.Version != 2) || loaded.Lessons == nil || loaded.Deliveries == nil || loaded.History == nil {
 		return nil, fmt.Errorf("invalid knowledge snapshot")
 	}
 	for id, l := range loaded.Lessons {
@@ -51,6 +51,12 @@ func Open(path string) (*Store, error) {
 		}
 		if err := validateCode(l.Code); err != nil {
 			return nil, err
+		}
+		if err := validateReviewProof(l.ReviewProof); err != nil {
+			return nil, err
+		}
+		if l.ReviewProof != nil && (l.Scope.GoalID != "" || len(l.Code) == 0 || l.Source.Kind != "verification") {
+			return nil, fmt.Errorf("invalid promoted review lesson")
 		}
 		switch l.Status {
 		case Candidate, Active, Disputed, Superseded:
@@ -76,6 +82,8 @@ func (s *Store) copy() snapshot {
 }
 
 func (s *Store) commit(next snapshot) error {
+	// Older writers must refuse this format rather than erase verifier provenance.
+	next.Version = 2
 	b, err := json.MarshalIndent(next, "", "  ")
 	if err != nil {
 		return err
@@ -227,6 +235,9 @@ func (s *Store) AcceptWithCode(id string, version int, evidence string, supersed
 	next.History[id] = append(next.History[id], l)
 	if code != nil {
 		l.Code = slices.Clone(code)
+	}
+	if l.ReviewProof != nil {
+		l.ReviewProof.ReplacedByHuman = true
 	}
 	l.ReviewReason = ""
 	l.Status, l.Version, l.VerifiedAt, l.Verification, l.ExpiresAt = Active, l.Version+1, time.Now().UTC(), evidence, expires

@@ -115,6 +115,9 @@ func (d *Daemon) handleProfile(ctx context.Context, req protocol.Request) protoc
 				}
 			}
 		}
+		if report.State == "verified" {
+			d.queueReviewPromotion(report.Inputs.Owner)
+		}
 		return dataResponse(report)
 	}
 	var a profileArgs
@@ -301,12 +304,7 @@ func (d *Daemon) captureProfileFindings(s session.Session, r reviewprofile.Recor
 		return
 	}
 	for i, f := range r.Result.Findings {
-		topic := "Review: " + f.Requirement
-		if len(topic) > 160 {
-			topic = topic[:160]
-		}
-		proposal := knowledge.Proposal{Topic: topic, Summary: f.Requirement + ": " + f.Fix,
-			Rationale: f.Reproduction, Evidence: []string{f.Evidence, "review " + r.Profile + " at " + r.Inputs.Head}, Tags: []string{r.Profile}}
+		proposal := reviewLessonProposal(f, r.Profile, r.Inputs.Head)
 		_, err := d.knowledge.Capture(knowledge.Scope{Project: s.Project, GoalID: s.GoalID}, proposal,
 			knowledge.Source{Kind: "review", ID: fmt.Sprintf("%s:%d", r.Key, i), Session: s.ID, Commit: r.Inputs.Head}, false)
 		if err != nil {

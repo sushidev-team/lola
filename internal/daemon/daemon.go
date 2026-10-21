@@ -144,7 +144,8 @@ type Daemon struct {
 	goalMu           sync.Mutex // serializes goal provisioning, separate from poll and session locks
 
 	// knowledgeCodeRead replaces local committed-metadata reads in tests.
-	knowledgeCodeRead func(context.Context, string, string, string) (gitrepo.CodeIdentity, error)
+	knowledgeCodeRead  func(context.Context, string, string, string) (gitrepo.CodeIdentity, error)
+	knowledgeProofRead func(context.Context, string, string, string) (gitrepo.CodeIdentity, error)
 
 	// events is the in-memory activity feed (recent notable status
 	// transitions) served to the TUI. Fed via sessions.OnTransition + the

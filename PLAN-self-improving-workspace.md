@@ -5,17 +5,12 @@ Status: implementation resumed at the user’s request on
 Approximate scope estimate: 75% implemented, not a measured completion metric.
 
 Current verification: `make check` passed (build, vet and full Go suite) after
-the reviewer-provenance additions, using the permissions required by local
-socket/process test fixtures. Focused provenance/migration race tests passed;
-adapter tests prove changed invocations cannot launch. The preceding checkpoint
-also passed dispute/handoff race tests covering task/session ownership, stack
-lanes, legacy records, bounded feedback, unsafe files, lost Stop callbacks,
-human resolution and explicit resume. Frontend `npm run check` passed at the earlier checkpoint
-after refreshing the knowledge bindings; this increment changes no frontend code.
-Full frontend `npm test` and
-`npm run build` passed for the preceding desktop additions. Focused
-bridge, read-only proposal/options and revision-bound publication tests passed.
-The earlier checkpoint also passed focused finding-lifecycle and daemon race tests.
+verified learning promotion and goal fix-contract verification. Focused promotion,
+curation and contract race checks passed. Temporary Git fixtures cover unmerged
+code, observed goal delivery, proof withdrawal, code drift, scope and migration.
+Frontend `npm run check` passed after refreshing the knowledge bindings.
+Earlier checkpoints passed provenance/dispute/handoff race checks and the desktop
+frontend test/build suite, including revision-bound goal authoring and publication.
 Desktop/narrow fixture screenshots and scoped UI review are retained under
 `.impeccable/review/`. No live end-to-end pilot has been run.
 
@@ -39,9 +34,10 @@ Remaining before full-plan completion:
   TUI specialist editing and remaining desktop/TUI action parity.
 - Broader task/policy revision reconciliation and Linear steering beyond the
   implemented brief clarifications and bounded task replanning.
-- Evidence-backed promotion beyond current curation. Freshness/expiry maintenance
-  and reviewable test/lint/skill proposals are implemented; code references
-  currently require explicit operator attachment.
+- Broader verification of worker-authored discoveries beyond the implemented
+  verified-review promotion path. Verified specialist lessons can acquire code
+  references automatically; other lessons still need operator acceptance and
+  explicit references. Freshness/expiry and test/lint/skill proposals are implemented.
 - Richer specialist calibration and comparable-budget outcome measurement.
   Requested models and exact prompts are preserved; actual provider-resolved model
   identities remain unknown. Worker disputes are attributed separately
@@ -89,6 +85,17 @@ store reads version 1 and writes version 2, preventing old binaries from droppin
 new provenance. Rollback behavior and model-resolution limits are documented in
 the implementation guide. This supplies comparison evidence, not measured
 improvement or proof of which model a provider actually served.
+
+Verified learning promotion addition: verified findings can now derive scoped
+project guidance after independent fix-review evidence matches committed code on
+the configured default branch. Goal findings additionally require observed full
+delivery. Promotion preserves the source candidate, exact finding/review links
+and automatic code references. Retrieval rechecks both proof and code; disputes,
+invalidated verification and code drift retract guidance, while missing evidence
+omits it. Replays cannot undo curation. Explicit human acceptance can replace
+the automatic proof while retaining its history. Worker assertions, conflicts
+and mandatory rules remain outside this automatic path. Knowledge format version
+2 protects the new provenance from older writers; the guide documents rollback.
 
 Implemented foundations: durable goal reservations and recoverable Linear
 publication; ordinary-dispatch exclusion; scoped knowledge capture, curation,

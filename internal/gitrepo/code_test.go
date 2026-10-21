@@ -66,6 +66,9 @@ func TestCodeIdentityUsesCommittedPathAndMode(t *testing.T) {
 	if changed.Digest == first.Digest {
 		t.Fatal("content change missed")
 	}
+	if old, err := (CodeReader{}).ReadCommit(context.Background(), dir, first.Commit, "src/a.txt"); err != nil || old != first {
+		t.Fatal("exact verification read followed the moving branch", err)
+	}
 	git("update-index", "--chmod=+x", "src/a.txt")
 	git("commit", "-m", "mode")
 	if read("src/a.txt").Digest == changed.Digest {

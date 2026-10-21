@@ -465,7 +465,51 @@ missing repository, or timeout omits affected lessons for that request without
 persisting a false change; a later successful check can make them available again.
 Lessons accepted without references (including existing human corrections) remain
 usable and are reported as `untracked`. Attach references explicitly when their
-validity depends on code. There is no automatic promotion of candidates or rules.
+validity depends on code. Verified specialist lessons can acquire references
+automatically through the promotion path below; mandatory rules remain proposals.
+
+### Promotion from verified review findings
+
+Marking a specialist finding `verified` requests a bounded promotion check.
+The five-minute maintenance pass and `learn maintain --project ...` retry it
+after target code or goal delivery becomes available. Promotion requires the
+original uncurated review candidate, a human-verified finding, its independent
+clean fix review with recorded invocation provenance, and matching committed
+code on the configured local default branch. A worker's self-report, an accepted
+finding without fix verification, or a clean review without that finding history
+does not suffice.
+
+Lola compares the reviewed paths at the exact fix commit with the configured
+target's paths, using metadata only. It records automatic code references and
+scopes the derived guidance to those paths (with member prefixes for stacks).
+If no path manifest exists, the complete repository tree must match and remains
+watched. More than 20 paths, missing/deleted code, unavailable commits and ambiguous
+repository routing retain the candidate for human curation. No fetch, checkout,
+merge or agent execution occurs during promotion. Matching code establishes
+applicability of the recorded evidence; it does not prove a universal rule.
+
+Goal findings remain scoped candidates until Lola has observed complete goal
+delivery as `accepted`, and the configured local target contains the matching
+code. A ready goal or published draft PR cannot produce project guidance. The
+derived project lesson preserves a `review_proof` linking the original candidate
+version, finding revision, verification key and fix commit. The original goal
+candidate and its history remain unchanged. `learn maintain` reports `promoted`
+with the new `lesson_id`, or `waiting` with the missing evidence.
+
+Before retrieval or export, Lola rechecks both the code references and the review
+proof. A disputed finding, invalidated verification or changed source candidate
+returns the derived lesson to candidate status. Unavailable proof omits it for
+that request. Retries never reactivate a lesson that was disputed or demoted.
+An explicit `learn accept` can replace automatic verification with fresh human
+evidence; `review_proof.replaced_by_human` retains the historical link, and code
+freshness checks continue. Conflicts and mandatory-policy proposals always require
+human handling.
+
+Knowledge snapshots now write format version 2 while retaining version 1 read
+support. Existing lessons, delivered versions and improvement decisions are
+preserved. Older binaries refuse version 2 instead of discarding proof metadata;
+restore a compatible binary to resume knowledge features after rollback. Do not
+lower the file version or overwrite newer knowledge with an older snapshot.
 
 Retrieval excludes candidates, disputes, superseded entries, expired lessons,
 and unrelated projects/paths/goals. Launch briefings contain at most 8 KiB of
@@ -1026,6 +1070,13 @@ repository, profile, provider, rubric version and acceptance contract. Its recei
 is retained even if a later review is invalidated. These annotations never change
 the original verdict or bypass required review/integration gates. A blocking
 dispute remains a human decision; dismissal alone does not grant a merge.
+
+For reviews owned by the same goal and task, the appended repository combination
+may change between the finding and its verified fix. Lola compares the unchanged
+acceptance requirements separately from that valid commit manifest; both complete
+contracts and combinations remain part of their respective review identities.
+Different requirements, task/goal ownership, or malformed manifests cannot use
+this comparison.
 
 Calibration reports state counts and unresolved blocking disputes, separated by
 profile/provider/rubric/repository. Unassessed claims stay `reported`. These are

@@ -22,10 +22,11 @@ type CodeReference struct {
 	Digest string `json:"digest"`
 }
 type Maintenance struct {
-	ID      string `json:"id"`
-	Version int    `json:"version"`
-	State   string `json:"state"` // current, changed, expired, unavailable, untracked, inactive
-	Reason  string `json:"reason,omitempty"`
+	LessonID string `json:"lesson_id,omitempty"` // derived guidance created by promotion
+	ID       string `json:"id"`
+	Version  int    `json:"version"`
+	State    string `json:"state"` // current, changed, expired, unavailable, untracked, inactive, promoted, waiting
+	Reason   string `json:"reason,omitempty"`
 }
 
 var codeCommit = regexp.MustCompile(`^(?:[a-f0-9]{40}|[a-f0-9]{64})$`)
@@ -59,7 +60,7 @@ func validateCode(refs []CodeReference) error {
 // changed lesson from active guidance. Repeat maintenance is a no-op; a stale
 // read cannot demote a newly accepted version.
 func (s *Store) ReviewCode(id string, version int, reason string) error {
-	if reason != "referenced code changed" && reason != "lesson expired" {
+	if reason != "referenced code changed" && reason != "lesson expired" && reason != "review verification changed" {
 		return fmt.Errorf("unknown maintenance reason")
 	}
 	s.mu.Lock()
