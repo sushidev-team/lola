@@ -80,6 +80,9 @@ func (d *Daemon) controlGoal(ctx context.Context, a goal.ControlRequest) (goal.G
 		return g, errors.New("goal changed; reload before steering")
 	}
 	if a.Action == "resume" || a.Action == "retry-verification" || a.Action == "retry-replan" {
+		if err := d.goalDisputeHold(g); err != nil {
+			return g, err
+		}
 		if err := d.validateGoalPolicy(g, g.Execution.Policy); err != nil {
 			return g, err
 		}

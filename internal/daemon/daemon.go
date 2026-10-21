@@ -136,6 +136,7 @@ type Daemon struct {
 	knowledge        *knowledge.Store
 	knowledgeErr     error
 	learningCaptures reportLimiter
+	disputeCaptures  reportLimiter
 	profileReviews   *reviewprofile.Store
 	profileErr       error
 	profileRun       profileRun

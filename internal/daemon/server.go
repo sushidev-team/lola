@@ -595,6 +595,7 @@ func (d *Daemon) handleHookEvent(req protocol.Request) protocol.Response {
 	if req.Event == "stop" {
 		d.flushHandoffsOnStop(req.Session)
 		d.captureLearningsAsync(req.Session)
+		d.captureProfileDisputesAsync(req.Session)
 	}
 	// Turn checkpoints (checkpoints.go): the state every turn ENDED in, plus a
 	// baseline the first time a turn STARTS so turn 1 can be undone too. Async —

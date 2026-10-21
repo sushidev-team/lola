@@ -166,6 +166,9 @@ func (d *Daemon) verifyGoalRefresh(ctx context.Context, id, operation string) er
 	}
 	defer release()
 	current, _ := d.goals.Get(id)
+	if err := d.goalDisputeHold(current); err != nil {
+		return err
+	}
 	receipt, err := m.AdvanceManifest(ctx, id, operation, r.Base, candidates, v, g.Execution.PolicyDigest, checks, g.Execution.Policy.Profiles)
 	if err != nil {
 		return err

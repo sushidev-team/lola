@@ -5,10 +5,13 @@ Status: implementation resumed at the user’s request on
 Approximate scope estimate: 75% implemented, not a measured completion metric.
 
 Current verification: `make check` passed (build, vet and full Go suite) after
-the improvement-proposal, source-history, and goal-worker knowledge additions,
-using the permissions
-required by local socket/process test fixtures. Frontend `npm run check` passed
-after refreshing the knowledge bindings. Full frontend `npm test` and
+the worker-dispute and specialist-handoff additions, using the permissions
+required by local socket/process test fixtures. Focused dispute/handoff race
+tests passed. Coverage includes task/session ownership, stack lanes, legacy
+records, bounded feedback, unsafe files, lost Stop callbacks, human resolution
+and explicit resume. Frontend `npm run check` passed at the preceding checkpoint
+after refreshing the knowledge bindings; this increment changes no frontend code.
+Full frontend `npm test` and
 `npm run build` passed for the preceding desktop additions. Focused
 bridge, read-only proposal/options and revision-bound publication tests passed.
 The earlier checkpoint also passed focused finding-lifecycle and daemon race tests.
@@ -38,9 +41,9 @@ Remaining before full-plan completion:
 - Evidence-backed promotion beyond current curation. Freshness/expiry maintenance
   and reviewable test/lint/skill proposals are implemented; code references
   currently require explicit operator attachment.
-- Worker-originated specialist disputes and richer calibration, including model
-  and prompt provenance and comparable-budget outcome measurement. The current
-  finding report counts explicit operator decisions; it is not an accuracy score.
+- Richer specialist calibration, including model/prompt provenance and
+  comparable-budget outcome measurement. Worker disputes are attributed separately
+  from operator decisions; the current counts are not an accuracy score.
 - A bounded live pilot, representative comparisons, and a requirement-by-requirement
   completion audit, including optional parent human acceptance and cross-repository
   delivery guidance.
@@ -66,6 +69,13 @@ not increase the occurrence count, and operator captures are counted once.
 Neither recurrence nor triage activates a lesson, starts work, or installs a rule.
 Goal workers now receive the same bounded, recorded knowledge briefing as ordinary
 workers; launch recovery preserves the original supplied snapshot.
+
+Worker dispute addition: specialty feedback now supplies finding IDs/revisions
+through independent guarded handoffs or goal repair prompts. Bounded worker report
+files can dispute only daemon-owned session/task findings, with recorded task
+ancestry for repairs and no authority to dismiss or verify. Blocking disputes hold
+delivery and goal progress for human resolution; one worker dispute per finding
+prevents automatic debate loops. Independent verdicts and evidence remain intact.
 
 Implemented foundations: durable goal reservations and recoverable Linear
 publication; ordinary-dispatch exclusion; scoped knowledge capture, curation,

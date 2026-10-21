@@ -62,12 +62,15 @@ func (d *Daemon) queueProfileReviews(s session.Session) {
 	profiles := slices.Clone(d.cfg.ReviewProfiles)
 	d.mu.Unlock()
 	records := d.profileReviews.List()
+	for _, r := range records {
+		d.queueSpecialistHandoff(s, r)
+	}
 	for _, p := range profiles {
 		if !p.Enabled || !p.OnPROpen || (len(p.Projects) > 0 && !slices.Contains(p.Projects, s.Project)) {
 			continue
 		}
 		seen := slices.ContainsFunc(records, func(r reviewprofile.Record) bool {
-			return r.State != "stale" && r.Profile == p.ID && r.Inputs.Repo == d.repoForSession(s) && r.Inputs.Head == s.PR.HeadSHA && r.Inputs.Base == s.PR.BaseSHA && r.Key == p.Key(r.Inputs)
+			return r.State != "stale" && (r.Inputs.Owner == nil || r.Inputs.Owner.Session == s.ID) && r.Profile == p.ID && r.Inputs.Repo == d.repoForSession(s) && r.Inputs.Head == s.PR.HeadSHA && r.Inputs.Base == s.PR.BaseSHA && r.Key == p.Key(r.Inputs)
 		})
 		if !seen {
 			_ = d.enqueueProfile(profileArgs{Session: s.ID, Profile: p.ID})
@@ -99,9 +102,18 @@ func (d *Daemon) handleProfile(ctx context.Context, req protocol.Request) protoc
 		if err := json.Unmarshal(req.Args, &decision); err != nil {
 			return protocol.Response{Error: err.Error()}
 		}
+		d.goalMu.Lock()
+		defer d.goalMu.Unlock()
 		report, err := d.profileReviews.Decide(decision)
 		if err != nil {
 			return protocol.Response{Error: err.Error()}
+		}
+		if report.Inputs.Owner != nil && report.Inputs.Owner.Goal != "" && reviewprofile.BlockingDispute(report) && d.goals != nil {
+			if g, ok := d.goals.Get(report.Inputs.Owner.Goal); ok {
+				if err := d.holdGoalDispute(g, report.ID); err != nil {
+					return protocol.Response{Error: err.Error()}
+				}
+			}
 		}
 		return dataResponse(report)
 	}
@@ -168,7 +180,7 @@ func (d *Daemon) runProfile(ctx context.Context, a profileArgs) (reviewprofile.R
 	if dir == "" {
 		dir = filepath.Join(d.home, "worktrees", s.Project, s.ID)
 	}
-	in := reviewprofile.Inputs{Repo: d.repoForSession(s), Head: s.PR.HeadSHA, Base: s.PR.BaseSHA, Contract: a.Contract}
+	in := reviewprofile.Inputs{Owner: &reviewprofile.ReviewOwner{Project: s.Project, Session: s.ID}, Repo: d.repoForSession(s), Head: s.PR.HeadSHA, Base: s.PR.BaseSHA, Contract: a.Contract}
 	checkCtx, cancel := context.WithTimeout(ctx, observeExecTimeout)
 	in.Paths, err = d.profilePaths(checkCtx, dir, in.Head, in.Base)
 	cancel()
@@ -236,6 +248,7 @@ func (d *Daemon) runProfile(ctx context.Context, a profileArgs) (reviewprofile.R
 		}
 		if state == "pass" || state == "findings" {
 			d.captureProfileFindings(s, r)
+			d.queueSpecialistHandoff(s, r)
 		}
 		return r, nil // incomplete/error is a durable result, not an apparent clean run
 	}
@@ -324,6 +337,9 @@ func (d *Daemon) profileInputsCurrent(ctx context.Context, s session.Session, in
 // Required profile gates are local acceptance facts. Missing stores, unknown
 // base commits, incomplete reviews and a changed rubric all fail closed.
 func (d *Daemon) profileGatesOpen(s session.Session) bool {
+	if d.sessionDisputeHold(s) {
+		return false
+	}
 	d.mu.Lock()
 	profiles := slices.Clone(d.cfg.ReviewProfiles)
 	d.mu.Unlock()
@@ -336,7 +352,7 @@ func (d *Daemon) profileGatesOpen(s session.Session) bool {
 		}
 		passed := false
 		for _, r := range d.profileReviews.List() {
-			if r.Profile != p.ID || r.Inputs.Repo != d.repoForSession(s) || r.Inputs.Head != s.PR.HeadSHA || r.Inputs.Base != s.PR.BaseSHA || r.Key != p.Key(r.Inputs) {
+			if (r.Inputs.Owner != nil && (r.Inputs.Owner.Project != s.Project || r.Inputs.Owner.Session != s.ID)) || r.Profile != p.ID || r.Inputs.Repo != d.repoForSession(s) || r.Inputs.Head != s.PR.HeadSHA || r.Inputs.Base != s.PR.BaseSHA || r.Key != p.Key(r.Inputs) {
 				continue
 			}
 			// Path-scoped profiles need an inspected path manifest even when the
@@ -386,7 +402,7 @@ func (d *Daemon) profileContractsCurrent(ctx context.Context, s session.Session)
 			return false
 		}
 		for _, r := range d.profileReviews.List() {
-			if r.Profile != p.ID || r.State != "pass" || r.Inputs.Repo != d.repoForSession(s) || r.Inputs.Head != s.PR.HeadSHA || r.Inputs.Base != s.PR.BaseSHA || r.Key != p.Key(r.Inputs) {
+			if (r.Inputs.Owner != nil && (r.Inputs.Owner.Project != s.Project || r.Inputs.Owner.Session != s.ID)) || r.Profile != p.ID || r.State != "pass" || r.Inputs.Repo != d.repoForSession(s) || r.Inputs.Head != s.PR.HeadSHA || r.Inputs.Base != s.PR.BaseSHA || r.Key != p.Key(r.Inputs) {
 				continue
 			}
 			cctx, cancel := context.WithTimeout(ctx, observeExecTimeout)

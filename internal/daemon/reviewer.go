@@ -1088,6 +1088,12 @@ func (d *Daemon) flushHandoffsOf(ctx context.Context, id string) bool {
 		return false
 	}
 	for kStr := range s.PendingHandoffs {
+		if strings.HasPrefix(kStr, specialistHandoffPrefix) {
+			if d.flushSpecialistHandoff(ctx, s, kStr) {
+				return true
+			}
+			continue
+		}
 		p, ok := d.providerByKind(provKind(kStr))
 		if !ok {
 			continue // kind no longer configured; leave the stash for a future config

@@ -61,6 +61,18 @@ func (d *Daemon) runGoal(ctx context.Context, id string) error {
 	if !ok || g.Execution == nil {
 		return nil
 	}
+	d.captureGoalDisputes(g)
+	g, _ = d.goals.Get(id)
+	if err := d.goalDisputeHold(g); err != nil {
+		if g.State != "blocked" && g.State != "paused" && g.State != "canceled" && g.State != "accepted" {
+			_ = d.holdGoal(id, err, true)
+			g, _ = d.goals.Get(id)
+		}
+		if err := d.reconcileGoalAttempts(ctx, g); err != nil {
+			return err
+		}
+		return nil
+	}
 	now := time.Now().UTC()
 	var usageErr error
 	g, usageErr = d.enforceGoalUsage(id, now)

@@ -67,6 +67,9 @@ func (d *Daemon) verifyGoalFinal(ctx context.Context, id, operation string) erro
 	if current.State != "verifying" || current.Execution == nil || current.Execution.Final == nil || current.Execution.Final.ID != operation || !maps.Equal(current.Execution.Manifest, f.Manifest) || !maps.Equal(current.Execution.Targets, f.Targets) {
 		return errors.New("goal changed or paused during final verification")
 	}
+	if err := d.goalDisputeHold(current); err != nil {
+		return err
+	}
 	path, err := m.RecordFinal(ctx, candidates, v, g.Execution.PolicyDigest, checks, g.Execution.Policy.Profiles)
 	if err != nil {
 		return err

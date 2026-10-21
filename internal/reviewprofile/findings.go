@@ -41,12 +41,13 @@ type FindingDecision struct {
 }
 
 type FindingEvent struct {
-	Revision     uint64    `json:"revision"`
-	State        string    `json:"state"`
-	Evidence     string    `json:"evidence"`
-	FixHead      string    `json:"fix_head,omitempty"`
-	Verification *Record   `json:"verification,omitempty"`
-	At           time.Time `json:"at"`
+	Worker       *DisputeActor `json:"worker,omitempty"`
+	Revision     uint64        `json:"revision"`
+	State        string        `json:"state"`
+	Evidence     string        `json:"evidence"`
+	FixHead      string        `json:"fix_head,omitempty"`
+	Verification *Record       `json:"verification,omitempty"`
+	At           time.Time     `json:"at"`
 }
 
 func findingIdentity(key string, attempt, index int, f Finding) string {
@@ -131,6 +132,10 @@ func verifyFindingFix(f FindingReport, r Record, head string) error {
 // additionally requires a completed matching independent review, snapshotted in
 // the event. Neither one modifies the original result or opens its delivery gate.
 func (s *Store) Decide(a FindingDecision) (FindingReport, error) {
+	return s.decide(a, nil)
+}
+
+func (s *Store) decide(a FindingDecision, worker *DisputeActor) (FindingReport, error) {
 	if a.Revision == 0 || !validFindingEvidence(a.Evidence) {
 		return FindingReport{}, fmt.Errorf("reviewed revision and bounded, non-secret decision evidence required")
 	}
@@ -141,14 +146,29 @@ func (s *Store) Decide(a FindingDecision) (FindingReport, error) {
 	if !ok {
 		return f, fmt.Errorf("unknown specialist finding")
 	}
+	if worker != nil {
+		if a.State != "disputed" || !workerOwnsFinding(*worker, f.Inputs.Owner) {
+			return f, fmt.Errorf("worker does not own this specialist finding")
+		}
+	}
 	// Lost-response retries are safe only for the identical historical decision.
 	for _, event := range f.Events {
 		key := ""
 		if event.Verification != nil {
 			key = event.Verification.Key
 		}
-		if event.Revision-1 == a.Revision && event.State == a.State && event.Evidence == a.Evidence && event.FixHead == a.FixHead && key == a.VerificationKey {
+		if event.Revision-1 == a.Revision && event.State == a.State && event.Evidence == a.Evidence && event.FixHead == a.FixHead && key == a.VerificationKey && sameDisputeActor(event.Worker, worker) {
 			return f, nil
+		}
+	}
+	if worker != nil {
+		for _, event := range f.Events {
+			if event.Worker != nil {
+				return f, fmt.Errorf("worker dispute already recorded; a human must resolve this finding")
+			}
+		}
+		if f.State != "reported" && f.State != "accepted" && f.State != "fixed" {
+			return f, fmt.Errorf("worker cannot reopen a resolved or disputed finding")
 		}
 	}
 	if f.Revision != a.Revision {
@@ -163,7 +183,7 @@ func (s *Store) Decide(a FindingDecision) (FindingReport, error) {
 	if a.State != "fixed" && a.State != "verified" && a.FixHead != "" || a.State != "verified" && a.VerificationKey != "" {
 		return f, fmt.Errorf("fix and verification references do not apply to this decision")
 	}
-	event := FindingEvent{Revision: f.Revision + 1, State: a.State, Evidence: a.Evidence, FixHead: a.FixHead, At: time.Now().UTC()}
+	event := FindingEvent{Worker: worker, Revision: f.Revision + 1, State: a.State, Evidence: a.Evidence, FixHead: a.FixHead, At: time.Now().UTC()}
 	if a.State == "fixed" {
 		if !fixCommit.MatchString(a.FixHead) || a.FixHead == f.Inputs.Head {
 			return f, fmt.Errorf("fixed requires an exact new fix commit")
@@ -198,7 +218,14 @@ func validateFindingReport(f FindingReport) error {
 	}
 	state := "reported"
 	var previous FindingEvent
+	workerDisputes := 0
 	for i, event := range f.Events {
+		if event.Worker != nil {
+			workerDisputes++
+			if workerDisputes > 1 || (state != "reported" && state != "accepted" && state != "fixed") || event.State != "disputed" || !workerOwnsFinding(*event.Worker, f.Inputs.Owner) {
+				return fmt.Errorf("invalid worker dispute attribution")
+			}
+		}
 		if event.Revision != uint64(i)+2 || !validFindingTransition(state, event.State) || !validFindingEvidence(event.Evidence) || event.At.IsZero() || event.At.Before(f.ReportedAt) || (i > 0 && event.At.Before(previous.At)) {
 			return fmt.Errorf("invalid specialist finding decision history")
 		}
@@ -228,9 +255,10 @@ func validateFindingReport(f FindingReport) error {
 }
 
 // CalibrationGroup keeps versions and repositories apart. Counts describe
-// explicit operator assessments, not an objective accuracy score or evidence
+// recorded assessments and worker disputes, not an objective accuracy score or evidence
 // that adding reviewers improves results. Unassessed findings remain visible.
 type CalibrationGroup struct {
+	WorkerDisputes   int    `json:"worker_disputes"` // findings with an attributed worker dispute, including later-resolved ones
 	Profile          string `json:"profile"`
 	Provider         string `json:"provider"`
 	RubricVersion    string `json:"rubric_version"`
@@ -253,6 +281,12 @@ func (s *Store) Calibration() []CalibrationGroup {
 		g := groups[key]
 		g.Profile, g.Provider, g.RubricVersion, g.Repo = f.Profile, f.Provider, f.RubricVersion, f.Inputs.Repo
 		g.Findings++
+		for _, event := range f.Events {
+			if event.Worker != nil {
+				g.WorkerDisputes++
+				break
+			}
+		}
 		switch f.State {
 		case "reported":
 			g.Reported++

@@ -82,6 +82,10 @@ func (d *Daemon) publishVerifiedGoal(ctx context.Context, id string) (goalpublis
 			d.goalMu.Unlock()
 			return nil, errors.New("publication stopped by goal steering or changed authority")
 		}
+		if err := d.goalDisputeHold(current); err != nil {
+			d.goalMu.Unlock()
+			return nil, err
+		}
 		if err := d.validateGoalPolicy(current, current.Execution.Policy); err != nil {
 			d.goalMu.Unlock()
 			return nil, err

@@ -20,6 +20,9 @@ func (d *Daemon) repairGoal(ctx context.Context, id, operation, feedback string)
 	if !ok || g.Execution == nil || g.State != "running" || g.Execution.PendingIntegration != operation {
 		return errors.New("goal no longer authorizes repair")
 	}
+	if err := d.goalDisputeHold(g); err != nil {
+		return err
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}

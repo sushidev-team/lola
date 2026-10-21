@@ -126,15 +126,16 @@ type Artifact struct {
 }
 
 type Inputs struct {
-	ContextID       string     `json:"context_id,omitempty"` // durable goal verification operation, when applicable
-	ContractIssueID string     `json:"contract_issue_id,omitempty"`
-	Repo            string     `json:"repo"`
-	Head            string     `json:"head"`
-	Base            string     `json:"base"`
-	Contract        string     `json:"contract"`
-	Paths           []string   `json:"paths"`
-	Artifacts       []Artifact `json:"artifacts"`
-	Knowledge       string     `json:"knowledge,omitempty"`
+	Owner           *ReviewOwner `json:"owner,omitempty"`      // daemon-established worker/goal scope; nil legacy records allow operator curation only
+	ContextID       string       `json:"context_id,omitempty"` // durable goal verification operation, when applicable
+	ContractIssueID string       `json:"contract_issue_id,omitempty"`
+	Repo            string       `json:"repo"`
+	Head            string       `json:"head"`
+	Base            string       `json:"base"`
+	Contract        string       `json:"contract"`
+	Paths           []string     `json:"paths"`
+	Artifacts       []Artifact   `json:"artifacts"`
+	Knowledge       string       `json:"knowledge,omitempty"`
 }
 
 func (p Profile) Key(in Inputs) string {

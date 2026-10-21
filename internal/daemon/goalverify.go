@@ -162,6 +162,9 @@ func (d *Daemon) verifyGoalIntegration(ctx context.Context, id, operation string
 	if current.State != "running" || current.Execution == nil || current.Execution.PendingIntegration != operation {
 		return errors.New("goal paused or changed before integration")
 	}
+	if err := d.goalDisputeHold(current); err != nil {
+		return err
+	}
 	receipt, err := m.AdvanceManifest(ctx, g.ID, operation, i.Base, candidates, v, g.Execution.PolicyDigest, checkIDs, g.Execution.Policy.Profiles)
 	if err != nil {
 		return err
@@ -231,8 +234,7 @@ func (d *Daemon) verifyGoalCandidates(ctx context.Context, g goal.Goal, scope go
 			}
 			if r.State != "pass" && r.State != "not_applicable" {
 				if r.State == "findings" && scope.Subject != "final" && !scope.NoRepair {
-					feedback, _ := json.Marshal(r.Result)
-					return v, checkIDs, &goalRepairError{Feedback: "Independent specialist " + profileID + " found unresolved requirements. Reproduce the findings and fix the task; record concrete evidence if you dispute them.\n" + string(feedback)}
+					return v, checkIDs, &goalRepairError{Feedback: d.specialistFeedback(r, true)}
 				}
 				return v, checkIDs, fmt.Errorf("specialist %s: %s: %s", profileID, r.State, r.Error)
 			}
@@ -288,7 +290,7 @@ func (d *Daemon) reviewGoalProfile(ctx context.Context, g goal.Goal, scope goalR
 			repo = member.Repo
 		}
 	}
-	in := reviewprofile.Inputs{ContextID: scope.Operation, Repo: repo, Head: c.Commit, Base: c.Base, Contract: contract, Paths: c.Paths, Artifacts: artifacts}
+	in := reviewprofile.Inputs{Owner: &reviewprofile.ReviewOwner{Project: g.Project, Session: scope.Session, Goal: g.ID, Task: scope.Subject}, ContextID: scope.Operation, Repo: repo, Head: c.Commit, Base: c.Base, Contract: contract, Paths: c.Paths, Artifacts: artifacts}
 	if d.knowledge != nil {
 		in.Knowledge = d.selectKnowledge(ctx, knowledge.Query{Project: g.Project, GoalID: g.ID, Paths: c.Paths, Text: contract, MaxBytes: 4000}).Markdown()
 	}

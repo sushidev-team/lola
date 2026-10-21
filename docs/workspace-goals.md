@@ -1015,7 +1015,8 @@ lola profile calibration
 A reported finding can be accepted, disputed or dismissed. Accepted findings
 can become fixed or disputed; a disputed finding needs an explicit accepted or
 dismissed decision. A fixed finding can become verified or disputed. Verified
-and dismissed claims can be disputed again if new evidence contradicts them.
+and dismissed claims can be disputed again by an operator if new evidence
+contradicts them.
 Every decision requires bounded evidence. Identical retries retain one event;
 a different decision against an old revision is rejected.
 
@@ -1028,9 +1029,57 @@ dispute remains a human decision; dismissal alone does not grant a merge.
 
 Calibration reports state counts and unresolved blocking disputes, separated by
 profile/provider/rubric/repository. Unassessed claims stay `reported`. These are
-operator assessments, not measured reviewer accuracy or a claim of causal
-improvement. Model/prompt-level comparisons, worker-submitted disputes and a live
-pilot remain unfinished.
+recorded assessment states, not measured reviewer accuracy or a claim of causal
+improvement. `worker_disputes` separately counts findings that received an
+attributed worker dispute, including those later resolved by a human.
+Model/prompt-level comparisons and a live pilot remain unfinished.
+
+### Worker disputes
+
+Specialist findings sent to ordinary workers now include their immutable finding
+IDs and current revisions. Delivery respects the provider's **Send to agent**
+setting and the existing ownership, empty-composer, idle and sanitization gates.
+Each specialist attempt has its own durable delivery guard, including specialists
+sharing one provider. Stale-head feedback is discarded. Goal repair prompts carry
+the same finding references. Large feedback previews are explicitly marked as
+truncated while retaining every finding ID; full records remain in Lola.
+
+A worker can submit a bounded JSON array in `.lola/review-disputes.json` inside its
+repository, or `review-disputes.json` at the top level of a goal workspace:
+
+```json
+[
+  {
+    "id": "FINDING_ID",
+    "revision": 1,
+    "evidence": "The reported concurrent-write reproduction bypasses the public transaction wrapper; the concurrent API test demonstrates the counterexample."
+  }
+]
+```
+
+Use the exact revision received. At turn end Lola reads at most 20 entries and
+64 KiB, rejects symlinks, special files and unknown fields, and establishes the
+worker identity itself. Stack lanes use their own repository report files. The
+goal controller also collects reports before advancing work, covering a missing
+Stop callback. A goal worker must belong to a current reserved/running/submitted/
+verifying attempt. Its finding must belong to the same goal and task, or a
+recorded ancestor task that was decomposed into its replacement. Ordinary workers
+can dispute only findings owned by their own session. Legacy records without
+owner metadata require operator curation or a fresh review.
+
+The event records worker/session/task attribution separately from human decisions.
+Workers can only dispute: they cannot dismiss, verify, or reopen a human-resolved
+finding. Each finding accepts at most one worker dispute; identical retries are
+idempotent, including a retry after a human has resolved it. Further disagreement
+requires human curation rather than another automatic debate.
+
+An unresolved major/blocker dispute holds ordinary delivery gates. For a goal it
+also records a visible blocked reason, cancels ongoing verification, and requests
+worker shutdown while preserving their files. It prevents dispatch, repair,
+integration, finalization, publication and resume. Resolve the finding with
+`lola profile decide ... --state accepted|dismissed --evidence ...`, then explicitly
+resume the goal. Resolution never changes the original review verdict: required
+independent verification must still pass.
 
 ## Quick look at this checkpoint
 
