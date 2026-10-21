@@ -254,8 +254,8 @@ func (d *Daemon) verifyGoalCandidates(ctx context.Context, g goal.Goal, scope go
 	}
 	for _, r := range records {
 		p, _, err := d.profileFor(r.Profile)
-		if err != nil || p.Key(r.Inputs) != r.Key {
-			return v, checkIDs, errors.New("specialist rubric changed before integration")
+		if err != nil || p.Key(r.Inputs) != r.Key || !d.profileInvocationCurrent(p, r.Inputs, true) {
+			return v, checkIDs, errors.New("specialist rubric, model or prompt changed before integration")
 		}
 		if err := d.goalReviewEvidence(g, r, m); err != nil {
 			return v, checkIDs, err
@@ -278,7 +278,7 @@ func (d *Daemon) reviewGoalProfile(ctx context.Context, g goal.Goal, scope goalR
 	if d.profileReviews == nil {
 		return reviewprofile.Record{}, errors.New("specialist review store unavailable")
 	}
-	p, _, err := d.profileFor(id)
+	p, provider, err := d.profileFor(id)
 	if err != nil {
 		return reviewprofile.Record{}, err
 	}
@@ -290,7 +290,7 @@ func (d *Daemon) reviewGoalProfile(ctx context.Context, g goal.Goal, scope goalR
 			repo = member.Repo
 		}
 	}
-	in := reviewprofile.Inputs{Owner: &reviewprofile.ReviewOwner{Project: g.Project, Session: scope.Session, Goal: g.ID, Task: scope.Subject}, ContextID: scope.Operation, Repo: repo, Head: c.Commit, Base: c.Base, Contract: contract, Paths: c.Paths, Artifacts: artifacts}
+	in := reviewprofile.Inputs{Invocation: profileInvocation(p, provider, true), Owner: &reviewprofile.ReviewOwner{Project: g.Project, Session: scope.Session, Goal: g.ID, Task: scope.Subject}, ContextID: scope.Operation, Repo: repo, Head: c.Commit, Base: c.Base, Contract: contract, Paths: c.Paths, Artifacts: artifacts}
 	if d.knowledge != nil {
 		in.Knowledge = d.selectKnowledge(ctx, knowledge.Query{Project: g.Project, GoalID: g.ID, Paths: c.Paths, Text: contract, MaxBytes: 4000}).Markdown()
 	}

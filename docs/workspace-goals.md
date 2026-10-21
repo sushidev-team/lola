@@ -1032,7 +1032,39 @@ profile/provider/rubric/repository. Unassessed claims stay `reported`. These are
 recorded assessment states, not measured reviewer accuracy or a claim of causal
 improvement. `worker_disputes` separately counts findings that received an
 attributed worker dispute, including those later resolved by a human.
-Model/prompt-level comparisons and a live pilot remain unfinished.
+Comparable-budget outcome comparisons and a live pilot remain unfinished.
+
+### Review provenance and compatibility
+
+Every new review records `inputs.invocation`: the agent, requested model, execution
+environment, exact instruction text and its SHA-256. The record already retains
+the task contract, repository head/base, artifacts and supplied lesson text.
+The provenance participates in the review key. Changing the model, rubric or
+prompt requires fresh evidence; a previous result cannot silently satisfy the
+new configuration's gates or deliver stale feedback. Both host and container
+adapters check the reservation before launching. Goal recovery retains existing
+budget reservations and requires explicit verification recovery when the old run
+no longer matches.
+
+`lola profile calibration` separates requested models, prompt hashes and execution
+environments in addition to profile/provider/rubric/repository. `model_selection`
+is `explicit`, `agent_default`, or `unknown`; `provenance` is `recorded` or
+`legacy_unknown`. A requested model is **not** proof of the exact model served:
+provider aliases and agent defaults can change, and resolved model identities are
+currently unobserved. These counts alone cannot establish comparable-budget
+accuracy or causal improvement. Inspect full review records for source evidence.
+
+The specialist store upgrades version 1 to version 2 atomically on open/save,
+preserving reviews, findings and decision history. Legacy records keep unknown
+provenance and remain inspectable; they do not acquire an invented model/prompt
+or satisfy a new review gate. Ordinary configured reviews can run afresh. Existing
+goal evidence that lacks provenance holds for explicit verification recovery.
+
+Older binaries that support only store version 1 refuse version 2 instead of
+rewriting it and dropping provenance. Rolling back such a binary leaves specialist
+review unavailable until a compatible binary is restored. Keep the version 2 file;
+do not manually lower its version or restore a stale snapshot over newer findings.
+Configuration and ordinary provider records use their existing formats.
 
 ### Worker disputes
 

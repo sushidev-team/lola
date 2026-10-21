@@ -213,6 +213,9 @@ func (s *Store) decide(a FindingDecision, worker *DisputeActor) (FindingReport, 
 }
 
 func validateFindingReport(f FindingReport) error {
+	if err := f.Inputs.Invocation.Validate(); err != nil {
+		return err
+	}
 	if f.ID != findingIdentity(f.ReviewKey, f.Attempt, f.Index, f.Finding) || f.Attempt < 1 || f.Index < 0 || f.Profile == "" || f.ReportedAt.IsZero() || f.Revision != uint64(len(f.Events))+1 || len(f.Events) > 64 {
 		return fmt.Errorf("invalid specialist finding identity or history")
 	}
@@ -241,6 +244,9 @@ func validateFindingReport(f FindingReport) error {
 			if err := verifyFindingFix(f, *event.Verification, event.FixHead); err != nil {
 				return err
 			}
+			if err := event.Verification.Inputs.Invocation.Validate(); err != nil {
+				return err
+			}
 		default:
 			if event.FixHead != "" || event.Verification != nil {
 				return fmt.Errorf("unexpected finding verification")
@@ -258,6 +264,12 @@ func validateFindingReport(f FindingReport) error {
 // recorded assessments and worker disputes, not an objective accuracy score or evidence
 // that adding reviewers improves results. Unassessed findings remain visible.
 type CalibrationGroup struct {
+	Provenance       string `json:"provenance"` // recorded or legacy_unknown
+	Agent            string `json:"agent,omitempty"`
+	RequestedModel   string `json:"requested_model,omitempty"`
+	ModelSelection   string `json:"model_selection"` // explicit, agent_default, or unknown
+	PromptSHA256     string `json:"prompt_sha256,omitempty"`
+	Environment      string `json:"environment,omitempty"`
 	WorkerDisputes   int    `json:"worker_disputes"` // findings with an attributed worker dispute, including later-resolved ones
 	Profile          string `json:"profile"`
 	Provider         string `json:"provider"`
@@ -276,10 +288,19 @@ type CalibrationGroup struct {
 func (s *Store) Calibration() []CalibrationGroup {
 	groups := map[string]CalibrationGroup{}
 	for _, f := range s.Findings() {
-		keyBytes, _ := json.Marshal([]string{f.Profile, f.Provider, f.RubricVersion, f.Inputs.Repo})
+		provenance, agent, model, selection, prompt, environment := "legacy_unknown", "", "", "unknown", "", ""
+		if v := f.Inputs.Invocation; v != nil {
+			provenance, agent, model, prompt, environment = "recorded", v.Agent, v.RequestedModel, v.PromptSHA256, v.Environment
+			selection = "agent_default"
+			if model != "" {
+				selection = "explicit"
+			}
+		}
+		keyBytes, _ := json.Marshal([]string{f.Profile, f.Provider, f.RubricVersion, f.Inputs.Repo, provenance, agent, model, prompt, environment})
 		key := string(keyBytes)
 		g := groups[key]
 		g.Profile, g.Provider, g.RubricVersion, g.Repo = f.Profile, f.Provider, f.RubricVersion, f.Inputs.Repo
+		g.Provenance, g.Agent, g.RequestedModel, g.ModelSelection, g.PromptSHA256, g.Environment = provenance, agent, model, selection, prompt, environment
 		g.Findings++
 		for _, event := range f.Events {
 			if event.Worker != nil {

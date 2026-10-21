@@ -65,7 +65,7 @@ func (d *Daemon) queueSpecialistHandoff(s session.Session, r reviewprofile.Recor
 		return
 	}
 	p, provider, err := d.profileFor(r.Profile)
-	if err != nil || p.Key(r.Inputs) != r.Key || !provider.SendToAgent {
+	if err != nil || p.Key(r.Inputs) != r.Key || !d.profileInvocationCurrent(p, r.Inputs, false) || !provider.SendToAgent {
 		return
 	}
 	key := specialistHandoffKey(r)
@@ -124,7 +124,7 @@ func (d *Daemon) flushSpecialistHandoff(ctx context.Context, s session.Session, 
 		return false
 	}
 	profile, provider, err := d.profileFor(r.Profile)
-	if err != nil || !provider.SendToAgent || profile.Key(r.Inputs) != r.Key {
+	if err != nil || !provider.SendToAgent || profile.Key(r.Inputs) != r.Key || !d.profileInvocationCurrent(profile, r.Inputs, false) {
 		return false
 	}
 	if d.verifyReviewHead == nil {

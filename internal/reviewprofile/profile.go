@@ -126,6 +126,7 @@ type Artifact struct {
 }
 
 type Inputs struct {
+	Invocation      *Invocation  `json:"invocation,omitempty"`
 	Owner           *ReviewOwner `json:"owner,omitempty"`      // daemon-established worker/goal scope; nil legacy records allow operator curation only
 	ContextID       string       `json:"context_id,omitempty"` // durable goal verification operation, when applicable
 	ContractIssueID string       `json:"contract_issue_id,omitempty"`
@@ -148,6 +149,9 @@ func (p Profile) Key(in Inputs) string {
 }
 
 func (p Profile) CheckInputs(in Inputs) error {
+	if err := in.Invocation.Validate(); err != nil {
+		return err
+	}
 	if in.Repo == "" || in.Head == "" || in.Base == "" || strings.TrimSpace(in.Contract) == "" {
 		return fmt.Errorf("profile requires repository, exact head/base, and an acceptance contract")
 	}

@@ -150,8 +150,8 @@ func (d *Daemon) readyGoalEvidence(ctx context.Context, g goal.Goal, m *goalwork
 				return v, err
 			}
 			p, _, err := d.profileFor(r.Profile)
-			if err != nil || p.Key(r.Inputs) != key {
-				return v, errors.New("final specialist rubric changed")
+			if err != nil || p.Key(r.Inputs) != key || !d.profileInvocationCurrent(p, r.Inputs, true) {
+				return v, errors.New("final specialist rubric, model or prompt changed")
 			}
 		}
 	}

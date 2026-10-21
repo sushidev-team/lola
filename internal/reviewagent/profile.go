@@ -14,6 +14,9 @@ import (
 // limits, and error classification. Its explicit JSON completion contract is
 // separate from the historical plain-review empty-on-clean contract.
 func (c *Client) ReviewProfile(ctx context.Context, dir string, p reviewprofile.Profile, in reviewprofile.Inputs) (reviewprofile.Result, error) {
+	if err := in.CheckInvocation(reviewprofile.NewInvocation(string(c.kind()), c.Model, "host-read-only", p.Instruction())); err != nil {
+		return reviewprofile.Result{}, err
+	}
 	stdin, err := ProfileInput(ctx, dir, p, in)
 	if err != nil {
 		return reviewprofile.Result{}, err
@@ -45,7 +48,11 @@ func ProfileInput(ctx context.Context, dir string, p reviewprofile.Profile, in r
 	if len(diff) > maxDiffBytes || strings.Contains(diff, "[truncated") {
 		return nil, fmt.Errorf("specialist diff exceeds review capacity")
 	}
-	data, err := json.Marshal(in)
+	// Provenance stays in the durable record; the instruction is already supplied
+	// through the agent adapter and must not consume the input budget twice.
+	manifest := in
+	manifest.Invocation = nil
+	data, err := json.Marshal(manifest)
 	if err != nil {
 		return nil, err
 	}

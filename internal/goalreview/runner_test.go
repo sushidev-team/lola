@@ -21,6 +21,31 @@ import (
 
 const testImage = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
+func TestGoalReviewRefusesChangedInvocationBeforeExecution(t *testing.T) {
+	r, c, p, in := fixture(t)
+	in.Invocation = reviewprofile.NewInvocation(r.Agent, "model-a", "container-read-only", Instruction(p))
+	call := r.Run
+	calls := 0
+	r.Run = func(ctx context.Context, bin string, args []string, input []byte, env []string) ([]byte, error) {
+		calls++
+		if args[0] == "run" && (!strings.Contains(strings.Join(args, " "), "model-a") || strings.Contains(string(input), `"invocation"`)) {
+			t.Fatal("container invocation did not match its reserved model or duplicated the prompt")
+		}
+		return call(ctx, bin, args, input, env)
+	}
+	if _, err := r.Review(context.Background(), "review1", c, p, in); err == nil || calls != 0 {
+		t.Fatal("mismatched invocation reached container execution")
+	}
+	r.Model = "model-a"
+	result, err := r.Review(context.Background(), "review1", c, p, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = r.Evidence(c.Goal, "review1", p.Key(in), result); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func fixture(t *testing.T) (Runner, goalwork.Candidate, reviewprofile.Profile, reviewprofile.Inputs) {
 	t.Helper()
 	source := t.TempDir()

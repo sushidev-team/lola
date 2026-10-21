@@ -38,10 +38,13 @@ func Open(path string) (*Store, error) {
 	if err := json.Unmarshal(b, &data); err != nil {
 		return nil, err
 	}
-	if data.Version != 1 || data.Records == nil {
+	if (data.Version != 1 && data.Version != 2) || data.Records == nil {
 		return nil, fmt.Errorf("invalid specialist review store")
 	}
 	for key, r := range data.Records {
+		if err := r.Inputs.Invocation.Validate(); err != nil {
+			return nil, err
+		}
 		if key != r.Key || r.Profile == "" || r.Attempt < 1 {
 			return nil, fmt.Errorf("invalid specialist review record")
 		}
@@ -92,7 +95,9 @@ func (s *Store) save(next map[string]Record) error {
 }
 
 func (s *Store) saveWithFindings(next map[string]Record, findings map[string]FindingReport) error {
-	b, err := json.MarshalIndent(disk{Version: 1, Records: next, Findings: findings}, "", "  ")
+	// Version 2 prevents older writers from silently dropping invocation evidence.
+	// Version 1 remains readable; migration retains every review and finding.
+	b, err := json.MarshalIndent(disk{Version: 2, Records: next, Findings: findings}, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -151,6 +156,9 @@ func (s *Store) Get(key string) (Record, bool) {
 }
 
 func (s *Store) Begin(p Profile, in Inputs, retry bool) (Record, error) {
+	if err := in.Invocation.Validate(); err != nil {
+		return Record{}, err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	key := p.Key(in)
@@ -168,11 +176,17 @@ func (s *Store) Begin(p Profile, in Inputs, retry bool) (Record, error) {
 }
 
 func (s *Store) Finish(r Record) error {
+	if err := r.Inputs.Invocation.Validate(); err != nil {
+		return err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	old, exists := s.records[r.Key]
 	if !exists || old.State != "running" || old.Attempt != r.Attempt {
 		return fmt.Errorf("specialist attempt superseded")
+	}
+	if (old.Inputs.Invocation == nil && r.Inputs.Invocation != nil) || (old.Inputs.Invocation != nil && !old.Inputs.Invocation.Matches(r.Inputs.Invocation)) {
+		return fmt.Errorf("specialist invocation differs from its reservation")
 	}
 	switch r.State {
 	case "pass", "findings", "incomplete", "error", "not_applicable":

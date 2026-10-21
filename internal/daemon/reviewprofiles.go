@@ -70,7 +70,7 @@ func (d *Daemon) queueProfileReviews(s session.Session) {
 			continue
 		}
 		seen := slices.ContainsFunc(records, func(r reviewprofile.Record) bool {
-			return r.State != "stale" && (r.Inputs.Owner == nil || r.Inputs.Owner.Session == s.ID) && r.Profile == p.ID && r.Inputs.Repo == d.repoForSession(s) && r.Inputs.Head == s.PR.HeadSHA && r.Inputs.Base == s.PR.BaseSHA && r.Key == p.Key(r.Inputs)
+			return r.State != "stale" && (r.Inputs.Owner == nil || r.Inputs.Owner.Session == s.ID) && r.Profile == p.ID && r.Inputs.Repo == d.repoForSession(s) && r.Inputs.Head == s.PR.HeadSHA && r.Inputs.Base == s.PR.BaseSHA && r.Key == p.Key(r.Inputs) && d.profileInvocationCurrent(p, r.Inputs, false)
 		})
 		if !seen {
 			_ = d.enqueueProfile(profileArgs{Session: s.ID, Profile: p.ID})
@@ -180,7 +180,7 @@ func (d *Daemon) runProfile(ctx context.Context, a profileArgs) (reviewprofile.R
 	if dir == "" {
 		dir = filepath.Join(d.home, "worktrees", s.Project, s.ID)
 	}
-	in := reviewprofile.Inputs{Owner: &reviewprofile.ReviewOwner{Project: s.Project, Session: s.ID}, Repo: d.repoForSession(s), Head: s.PR.HeadSHA, Base: s.PR.BaseSHA, Contract: a.Contract}
+	in := reviewprofile.Inputs{Invocation: profileInvocation(p, provider, false), Owner: &reviewprofile.ReviewOwner{Project: s.Project, Session: s.ID}, Repo: d.repoForSession(s), Head: s.PR.HeadSHA, Base: s.PR.BaseSHA, Contract: a.Contract}
 	checkCtx, cancel := context.WithTimeout(ctx, observeExecTimeout)
 	in.Paths, err = d.profilePaths(checkCtx, dir, in.Head, in.Base)
 	cancel()
@@ -284,7 +284,7 @@ func (d *Daemon) runProfile(ctx context.Context, a profileArgs) (reviewprofile.R
 		return finish("error", err)
 	}
 	current, _, err := d.profileFor(p.ID)
-	if err != nil || current.Key(in) != p.Key(in) {
+	if err != nil || current.Key(in) != p.Key(in) || !d.profileInvocationCurrent(p, in, false) {
 		return finish("error", errors.New("profile changed during review"))
 	}
 	state := "pass"
@@ -352,7 +352,7 @@ func (d *Daemon) profileGatesOpen(s session.Session) bool {
 		}
 		passed := false
 		for _, r := range d.profileReviews.List() {
-			if (r.Inputs.Owner != nil && (r.Inputs.Owner.Project != s.Project || r.Inputs.Owner.Session != s.ID)) || r.Profile != p.ID || r.Inputs.Repo != d.repoForSession(s) || r.Inputs.Head != s.PR.HeadSHA || r.Inputs.Base != s.PR.BaseSHA || r.Key != p.Key(r.Inputs) {
+			if (r.Inputs.Owner != nil && (r.Inputs.Owner.Project != s.Project || r.Inputs.Owner.Session != s.ID)) || r.Profile != p.ID || r.Inputs.Repo != d.repoForSession(s) || r.Inputs.Head != s.PR.HeadSHA || r.Inputs.Base != s.PR.BaseSHA || r.Key != p.Key(r.Inputs) || !d.profileInvocationCurrent(p, r.Inputs, false) {
 				continue
 			}
 			// Path-scoped profiles need an inspected path manifest even when the
@@ -402,7 +402,7 @@ func (d *Daemon) profileContractsCurrent(ctx context.Context, s session.Session)
 			return false
 		}
 		for _, r := range d.profileReviews.List() {
-			if (r.Inputs.Owner != nil && (r.Inputs.Owner.Project != s.Project || r.Inputs.Owner.Session != s.ID)) || r.Profile != p.ID || r.State != "pass" || r.Inputs.Repo != d.repoForSession(s) || r.Inputs.Head != s.PR.HeadSHA || r.Inputs.Base != s.PR.BaseSHA || r.Key != p.Key(r.Inputs) {
+			if (r.Inputs.Owner != nil && (r.Inputs.Owner.Project != s.Project || r.Inputs.Owner.Session != s.ID)) || r.Profile != p.ID || r.State != "pass" || r.Inputs.Repo != d.repoForSession(s) || r.Inputs.Head != s.PR.HeadSHA || r.Inputs.Base != s.PR.BaseSHA || r.Key != p.Key(r.Inputs) || !d.profileInvocationCurrent(p, r.Inputs, false) {
 				continue
 			}
 			cctx, cancel := context.WithTimeout(ctx, observeExecTimeout)

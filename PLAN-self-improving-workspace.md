@@ -5,11 +5,12 @@ Status: implementation resumed at the user’s request on
 Approximate scope estimate: 75% implemented, not a measured completion metric.
 
 Current verification: `make check` passed (build, vet and full Go suite) after
-the worker-dispute and specialist-handoff additions, using the permissions
-required by local socket/process test fixtures. Focused dispute/handoff race
-tests passed. Coverage includes task/session ownership, stack lanes, legacy
-records, bounded feedback, unsafe files, lost Stop callbacks, human resolution
-and explicit resume. Frontend `npm run check` passed at the preceding checkpoint
+the reviewer-provenance additions, using the permissions required by local
+socket/process test fixtures. Focused provenance/migration race tests passed;
+adapter tests prove changed invocations cannot launch. The preceding checkpoint
+also passed dispute/handoff race tests covering task/session ownership, stack
+lanes, legacy records, bounded feedback, unsafe files, lost Stop callbacks,
+human resolution and explicit resume. Frontend `npm run check` passed at the earlier checkpoint
 after refreshing the knowledge bindings; this increment changes no frontend code.
 Full frontend `npm test` and
 `npm run build` passed for the preceding desktop additions. Focused
@@ -41,8 +42,9 @@ Remaining before full-plan completion:
 - Evidence-backed promotion beyond current curation. Freshness/expiry maintenance
   and reviewable test/lint/skill proposals are implemented; code references
   currently require explicit operator attachment.
-- Richer specialist calibration, including model/prompt provenance and
-  comparable-budget outcome measurement. Worker disputes are attributed separately
+- Richer specialist calibration and comparable-budget outcome measurement.
+  Requested models and exact prompts are preserved; actual provider-resolved model
+  identities remain unknown. Worker disputes are attributed separately
   from operator decisions; the current counts are not an accuracy score.
 - A bounded live pilot, representative comparisons, and a requirement-by-requirement
   completion audit, including optional parent human acceptance and cross-repository
@@ -76,6 +78,17 @@ files can dispute only daemon-owned session/task findings, with recorded task
 ancestry for repairs and no authority to dismiss or verify. Blocking disputes hold
 delivery and goal progress for human resolution; one worker dispute per finding
 prevents automatic debate loops. Independent verdicts and evidence remain intact.
+
+Reviewer provenance addition: each new review preserves its requested model,
+agent, exact instruction and SHA-256, and host/container execution environment.
+Those facts participate in review identity and calibration grouping; model/prompt
+changes invalidate cached gates and pending feedback. Adapters refuse a changed
+invocation before launching. Legacy reviews retain their original history as
+unknown provenance and require a fresh review for current gates. The specialist
+store reads version 1 and writes version 2, preventing old binaries from dropping
+new provenance. Rollback behavior and model-resolution limits are documented in
+the implementation guide. This supplies comparison evidence, not measured
+improvement or proof of which model a provider actually served.
 
 Implemented foundations: durable goal reservations and recoverable Linear
 publication; ordinary-dispatch exclusion; scoped knowledge capture, curation,
