@@ -114,6 +114,34 @@ func (s *Store) Get(id string) (Record, bool) {
 	return clone(r), ok
 }
 
+// Summary leaves bounded source snapshots out of the proposal picker. Execution
+// replans belong to their owning goal and must not appear as new goal proposals.
+type Summary struct {
+	ID        string    `json:"id"`
+	Project   string    `json:"project"`
+	Title     string    `json:"title"`
+	State     string    `json:"state"`
+	StartedAt time.Time `json:"started_at"`
+}
+
+func (s *Store) List(project string) []Summary {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := []Summary{}
+	for _, r := range s.data.Records {
+		if r.Input.Repair == nil && (project == "" || r.Input.Request.Project == project) {
+			out = append(out, Summary{r.ID, r.Input.Request.Project, r.Input.Request.Title, r.State, r.StartedAt})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].StartedAt.Equal(out[j].StartedAt) {
+			return out[i].ID < out[j].ID
+		}
+		return out[i].StartedAt.After(out[j].StartedAt)
+	})
+	return out
+}
+
 // Reserve returns fresh=false on an identical retry, regardless of its outcome.
 // The caller must never invoke a model unless fresh=true and err=nil.
 func (s *Store) Reserve(in Input, kind, image string) (r Record, fresh bool, err error) {

@@ -210,3 +210,39 @@ func fixtureAgentEvents(args []string, body []byte) []byte {
 	}
 	return out
 }
+
+func TestProposalPickerScopesAndOmitsExecutionReplans(t *testing.T) {
+	s, _ := Open(filepath.Join(t.TempDir(), "plans.json"))
+	in := inputFixture(t)
+	first, _, err := s.Reserve(in, "codex", "image")
+	if err != nil {
+		t.Fatal(err)
+	}
+	in.Request.ID = goal.NewID()
+	in.Request.Project = "other"
+	second, _, err := s.Reserve(in, "codex", "image")
+	if err != nil {
+		t.Fatal(err)
+	}
+	in.Request.ID = goal.NewID()
+	in.Request.Project = "p"
+	in.Repair = &RepairContext{GoalID: first.GoalID}
+	if _, _, err = s.Reserve(in, "codex", "image"); err != nil {
+		t.Fatal(err)
+	}
+	got := s.List("p")
+	if len(got) != 1 || got[0].ID != first.ID {
+		t.Fatalf("scope or execution replan leaked: %+v", got)
+	}
+	got[0].Title = "mutated"
+	if s.List("p")[0].Title == "mutated" {
+		t.Fatal("picker aliases store")
+	}
+	all := s.List("")
+	if len(all) != 2 || all[0].ID != second.ID {
+		t.Fatalf("not newest first: %+v", all)
+	}
+	if len(s.List("missing")) != 0 {
+		t.Fatal("invented project match")
+	}
+}

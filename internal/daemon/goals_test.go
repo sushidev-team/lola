@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -262,5 +263,35 @@ func TestGoalManualTicketCannotBypassMarker(t *testing.T) {
 	}
 	if d.inflight.Has("unknown") {
 		t.Fatal("held issue was claimed")
+	}
+}
+
+func TestGoalPublishReviewed(t *testing.T) {
+	d, f, draft := goalFixture(t)
+	g, err := d.createGoal(context.Background(), draft)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A stale publication request must not even write a sync error onto the goal.
+	before, _ := d.goals.Get(g.ID)
+	if _, err = d.publishGoalAtRevision(context.Background(), g.ID, g.Revision+1); err == nil {
+		t.Fatal("accepted stale publication")
+	}
+	after, _ := d.goals.Get(g.ID)
+	if len(f.Created) != 0 || len(f.Milestones) != 0 || after.Revision != before.Revision || after.SyncError != "" {
+		t.Fatal("stale request mutated state")
+	}
+	args, _ := json.Marshal(map[string]any{"id": g.ID, "revision": 0})
+	if response := d.handle(context.Background(), protocol.Request{Cmd: "goalPublishReviewed", Args: args}); response.Error == "" {
+		t.Fatal("accepted absent review revision")
+	}
+	args, _ = json.Marshal(map[string]any{"id": g.ID, "revision": g.Revision})
+	response := d.handle(context.Background(), protocol.Request{Cmd: "goalPublishReviewed", Args: args})
+	if response.Error != "" {
+		t.Fatal(response.Error)
+	}
+	after, _ = d.goals.Get(g.ID)
+	if len(f.Created) != 3 || len(f.Milestones) != 1 || after.State != "planned" || after.Execution != nil {
+		t.Fatal("publication exceeded reviewed scope")
 	}
 }

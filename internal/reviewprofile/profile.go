@@ -42,6 +42,23 @@ var rubrics = map[string]string{
 	"performance": "Evaluate measured regressions and the validity of benchmarks against the explicit performance objective. Do not infer speed from code appearance. Missing measurements make the review incomplete.",
 }
 
+// Specialty describes the supported rubrics for configuration clients.
+type Specialty struct {
+	Kind      string   `json:"kind"`
+	Label     string   `json:"label"`
+	Rubric    string   `json:"rubric"`
+	Artifacts []string `json:"artifacts"`
+}
+
+func Specialties() []Specialty {
+	out := []Specialty{}
+	for _, item := range []struct{ kind, label string }{{"backend", "Backend"}, {"uiux", "UI/UX"}, {"security", "Security"}, {"integration", "Integration"}, {"performance", "Performance"}} {
+		p := Profile{Kind: item.kind}
+		out = append(out, Specialty{Kind: item.kind, Label: item.label, Rubric: rubrics[item.kind], Artifacts: p.RequiredArtifacts()})
+	}
+	return out
+}
+
 func (p Profile) Validate() error {
 	if !identifier.MatchString(p.ID) || rubrics[p.Kind] == "" || p.Provider == "" || p.Version == "" || len(p.Version) > 80 || len(p.Rubric) > 12000 {
 		return fmt.Errorf("profile requires a stable id, known specialty, provider, and bounded rubric version")

@@ -775,6 +775,65 @@ describe("SettingsForm", () => {
     expect(await screen.findByLabelText("Priority sort")).toBeInTheDocument();
   });
 
+  it("adds independent specialists on the same provider and saves their scopes", async () => {
+    const provider = { provider: "codex-session", enabled: true, model: "", transports: ["lola"], onPrOpen: false, sendToAgent: false, notify: false, githubInline: false, visible: false };
+    GetSettings.mockResolvedValue({ ...fakeDto, reviewProviders: [provider], reviewProfiles: [], reviewSpecialties: [
+      { kind: "backend", label: "Backend", rubric: "Check persistence and concurrency.", artifacts: [] },
+      { kind: "uiux", label: "UI/UX", rubric: "Check interaction and accessibility.", artifacts: ["screenshot", "interaction"] },
+    ] });
+    render(SettingsForm);
+    await fireEvent.click(await screen.findByRole("tab", { name: "Review" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Backend" })).toBeEnabled());
+    await fireEvent.click(screen.getByRole("button", { name: "Backend" }));
+    const backend = within(screen.getByRole("group", { name: "backend settings" }));
+    expect(backend.getByLabelText("Provider")).toHaveValue("codex-session");
+    expect(backend.getByLabelText("Enabled")).not.toBeChecked();
+    await fireEvent.click(backend.getByLabelText("Enabled"));
+    await fireEvent.click(backend.getByLabelText("On PR open"));
+    await fireEvent.click(backend.getByRole("button", { name: /Rubric and scope/ }));
+    await fireEvent.input(backend.getByLabelText("Path prefixes"), { target: { value: "internal\nbackend" } });
+    await fireEvent.click(screen.getByRole("button", { name: "UI/UX" }));
+    const ui = within(screen.getByRole("group", { name: "uiux settings" }));
+    expect(ui.getByLabelText("Provider")).toHaveValue("codex-session");
+    expect(ui.getByText(/Required evidence: screenshot, interaction/)).toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+    await waitFor(() => expect(SaveSettings).toHaveBeenCalled());
+    expect(SaveSettings.mock.calls.at(-1)?.[0].reviewProfiles).toEqual([
+      expect.objectContaining({ id: "backend", provider: "codex-session", enabled: true, on_pr_open: true, paths: ["internal", "backend"] }),
+      expect.objectContaining({ id: "uiux", provider: "codex-session", enabled: false }),
+    ]);
+  });
+
+  it("preserves existing specialist fields and shows failed saves", async () => {
+    const specialist = { id: "api-review", kind: "backend", provider: "codex-session", version: "custom-2", enabled: true, required: true, on_pr_open: false, projects: ["nori"], paths: ["src/api"], artifacts: ["contract-test"], rubric: "Check tenant isolation", timeout_seconds: 400, max_rounds: 2 };
+    GetSettings.mockResolvedValue({ ...fakeDto, reviewProviders: [], reviewProfiles: [specialist], reviewSpecialties: [{ kind: "backend", label: "Backend", rubric: "Check contracts", artifacts: [] }] });
+    SaveSettings.mockRejectedValueOnce(new Error("specialist requires an enabled agent provider"));
+    render(SettingsForm);
+    await fireEvent.click(await screen.findByRole("tab", { name: "Review" }));
+    await fireEvent.click(screen.getByText("Backend", { selector: "summary span.font-medium" }));
+    const group = within(screen.getByRole("group", { name: "api-review settings" }));
+    expect(group.getByLabelText("Enabled")).toBeEnabled();
+    expect(group.getByText(/provider is unavailable or disabled/)).toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+    expect(await screen.findByText("Error: specialist requires an enabled agent provider")).toBeInTheDocument();
+    expect(SaveSettings.mock.calls.at(-1)?.[0].reviewProfiles).toEqual([specialist]);
+    await fireEvent.click(group.getByLabelText("Enabled"));
+    expect(group.getByLabelText("Enabled")).toBeDisabled();
+  });
+
+  it("removes the last specialist explicitly without removing its provider", async () => {
+    GetSettings.mockResolvedValue({ ...fakeDto, reviewProviders: [{ provider: "codex-session", enabled: true, onPrOpen: false, sendToAgent: false, notify: false, githubInline: false, visible: false }], reviewProfiles: [{ id: "backend", kind: "backend", provider: "codex-session", version: "1", enabled: false, required: false, on_pr_open: false }], reviewSpecialties: [{ kind: "backend", label: "Backend", artifacts: [] }] });
+    render(SettingsForm);
+    await fireEvent.click(await screen.findByRole("tab", { name: "Review" }));
+    await fireEvent.click(screen.getByText("Backend", { selector: "summary span.font-medium" }));
+    await fireEvent.click(screen.getByRole("button", { name: "Remove specialist backend" }));
+    expect(screen.getByText(/No specialists configured/)).toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+    await waitFor(() => expect(SaveSettings).toHaveBeenCalled());
+    expect(SaveSettings.mock.calls.at(-1)?.[0].reviewProfiles).toEqual([]);
+    expect(SaveSettings.mock.calls.at(-1)?.[0].reviewProviders).toHaveLength(1);
+  });
+
   it("collapses disabled review cards without losing their configuration", async () => {
     const provider = {
       provider: "claude-session", enabled: false, onPrOpen: false,

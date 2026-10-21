@@ -16,6 +16,7 @@ import (
 	"github.com/sushidev-team/lola/internal/gitrepo"
 	"github.com/sushidev-team/lola/internal/linear"
 	"github.com/sushidev-team/lola/internal/protocol"
+	"github.com/sushidev-team/lola/internal/reviewprofile"
 	"github.com/sushidev-team/lola/internal/secrets"
 )
 
@@ -154,6 +155,9 @@ type SettingsDTO struct {
 	// UI shows the providers read-only and offers MigrateReview.
 	ReviewProviders []ReviewProviderDTO `json:"reviewProviders"`
 	ReviewLegacy    bool                `json:"reviewLegacy"`
+	// Nil from an older client preserves profiles; an explicit empty array clears them.
+	ReviewProfiles    []reviewprofile.Profile   `json:"reviewProfiles"`
+	ReviewSpecialties []reviewprofile.Specialty `json:"reviewSpecialties"`
 
 	// Project defaults: the [defaults] counterpart of each inheritable
 	// [[project]] key. A project that does not override the key uses these.
@@ -393,8 +397,10 @@ func (s *ConfigService) GetSettings() (SettingsDTO, error) {
 		RemoteAdvertise:   cfg.Remote.Advertise,
 		RemoteDevForward:  cfg.Remote.DevForward,
 
-		ReviewProviders: reviewProvidersDTO(cfg),
-		ReviewLegacy:    legacyReviewOnly(cfg),
+		ReviewProviders:   reviewProvidersDTO(cfg),
+		ReviewLegacy:      legacyReviewOnly(cfg),
+		ReviewProfiles:    append([]reviewprofile.Profile{}, cfg.ReviewProfiles...),
+		ReviewSpecialties: reviewprofile.Specialties(),
 
 		BranchPrefix:   cfg.Defaults.BranchPrefix,
 		Symlinks:       cfg.Defaults.Symlinks,
@@ -453,6 +459,23 @@ func (s *ConfigService) SaveSettings(dto SettingsDTO) error {
 	// array replaces the catalog and the legacy tables stay empty.
 	if !legacyReviewOnly(cfg) {
 		cfg.ReviewProviders = providersFromDTO(dto.ReviewProviders)
+	}
+	if dto.ReviewProfiles != nil {
+		cfg.ReviewProfiles = append([]reviewprofile.Profile{}, dto.ReviewProfiles...)
+		for i := range cfg.ReviewProfiles {
+			p := &cfg.ReviewProfiles[i]
+			p.ID, p.Provider, p.Version = strings.TrimSpace(p.ID), strings.TrimSpace(p.Provider), strings.TrimSpace(p.Version)
+			clean := func(lines []string) []string {
+				out := []string{}
+				for _, line := range lines {
+					if value := strings.TrimSpace(line); value != "" {
+						out = append(out, value)
+					}
+				}
+				return out
+			}
+			p.Projects, p.Paths, p.Artifacts = clean(p.Projects), clean(p.Paths), clean(p.Artifacts)
+		}
 	}
 
 	env, err := linesToEnv(dto.Env)

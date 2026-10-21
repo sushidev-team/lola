@@ -12,6 +12,7 @@
   import PresetInput from "$lib/components/PresetInput.svelte";
   import { POLL_INTERVALS, BRANCH_PREFIXES, BASE_FLAGS } from "$lib/settingPresets";
   import Select from "$lib/components/Select.svelte";
+  import ReviewProfiles from "$lib/components/ReviewProfiles.svelte";
   import QRCode from "$lib/components/QRCode.svelte";
   import { store } from "$lib/store.svelte";
   import { nav } from "$lib/nav.svelte";
@@ -1309,6 +1310,11 @@
         </section>
       {:else if tab === "review"}
         <div class="space-y-5">
+          <ReviewProfiles bind:profiles={d.reviewProfiles} specialties={d.reviewSpecialties ?? []} providers={d.reviewProviders ?? []} kinds={reviewKinds} />
+          <div class="border-t border-edge pt-4">
+            <h3 class="text-base font-medium text-ink">Review providers</h3>
+            <p class="mt-1 text-sm text-faint">Configure the agents and tools that run reviews. Provider passes and specialist passes have separate triggers.</p>
+          </div>
           {#if d.reviewLegacy}
             <div class="rounded border border-warn/40 bg-warn/10 px-3 py-2 text-ink">
               <p>

@@ -25,6 +25,9 @@ import { Call as $Call, CancellablePromise as $CancellablePromise } from "@wails
 import * as goal$0 from "../internal/goal/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
+import * as goalplan$0 from "../internal/goalplan/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
 import * as protocol$0 from "../internal/protocol/models.js";
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
@@ -160,6 +163,10 @@ export function ForkCheckpoint(session: string, seq: number, agentKind: string):
     return $Call.ByID(460527567, session, seq, agentKind);
 }
 
+export function GoalAcceptPlan(id: string, revision: number): $CancellablePromise<string> {
+    return $Call.ByID(125344137, id, revision);
+}
+
 /**
  * GoalControl preserves the revision the human actually reviewed. In particular
  * a stale request is never retried automatically against the latest revision.
@@ -174,6 +181,42 @@ export function GoalControl(id: string, revision: number, action: string, reason
  */
 export function GoalOverview(project: string): $CancellablePromise<goal$0.Overview[] | null> {
     return $Call.ByID(2084464305, project);
+}
+
+export function GoalProposal(id: string): $CancellablePromise<goalplan$0.Record> {
+    return $Call.ByID(4228074536, id);
+}
+
+export function GoalProposals(project: string): $CancellablePromise<goalplan$0.Summary[] | null> {
+    return $Call.ByID(338768705, project);
+}
+
+/**
+ * GoalPropose makes one explicit bounded call. The caller retains the request ID
+ * before sending, and recovers uncertain responses through GoalProposal.
+ */
+export function GoalPropose(request: goalplan$0.Request): $CancellablePromise<goalplan$0.Record> {
+    return $Call.ByID(580498952, request);
+}
+
+/**
+ * GoalPublish projects the reviewed goal into its existing Linear project only.
+ * An uncertain response is not retried here; the UI must reload and review again.
+ */
+export function GoalPublish(id: string, revision: number): $CancellablePromise<void> {
+    return $Call.ByID(1518333769, id, revision);
+}
+
+export function GoalStart(authorization: goal$0.Authorization): $CancellablePromise<void> {
+    return $Call.ByID(3214288106, authorization);
+}
+
+/**
+ * GoalStartOptions suggests finite limits and configured repositories without
+ * starting an agent or issuing any remote write.
+ */
+export function GoalStartOptions(id: string): $CancellablePromise<goal$0.StartOptions> {
+    return $Call.ByID(4032076004, id);
 }
 
 /**

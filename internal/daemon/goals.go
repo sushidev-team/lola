@@ -75,6 +75,34 @@ func (d *Daemon) handleGoals(ctx context.Context, req protocol.Request) protocol
 	if req.Cmd == "goals" {
 		return dataResponse(d.goals.List())
 	}
+	if req.Cmd == "goalPublishReviewed" {
+		var a struct {
+			ID       string `json:"id"`
+			Revision uint64 `json:"revision"`
+		}
+		if err := json.Unmarshal(req.Args, &a); err != nil {
+			return protocol.Response{Error: err.Error()}
+		}
+		if a.Revision == 0 {
+			return protocol.Response{Error: "review the current goal revision before publishing"}
+		}
+		g, err := d.publishGoalAtRevision(ctx, a.ID, a.Revision)
+		if err != nil {
+			return protocol.Response{Error: err.Error()}
+		}
+		return dataResponse(g)
+	}
+	if req.Cmd == "goalStartOptions" {
+		var a protocol.GoalArgs
+		if err := json.Unmarshal(req.Args, &a); err != nil {
+			return protocol.Response{Error: err.Error()}
+		}
+		out, err := d.goalStartOptions(a.ID)
+		if err != nil {
+			return protocol.Response{Error: err.Error()}
+		}
+		return dataResponse(out)
+	}
 	if req.Cmd == "goalStart" {
 		var a goal.Authorization
 		if err := json.Unmarshal(req.Args, &a); err != nil {
@@ -287,11 +315,20 @@ func (d *Daemon) goalPlacement(ctx context.Context, api linear.API, project stri
 }
 
 func (d *Daemon) publishGoal(ctx context.Context, id string) (out goal.Goal, retErr error) {
+	return d.publishGoalAtRevision(ctx, id, 0)
+}
+
+// The desktop pins the reviewed revision before any Linear effect. The existing
+// CLI recovery command deliberately retains its explicit current-state behavior.
+func (d *Daemon) publishGoalAtRevision(ctx context.Context, id string, revision uint64) (out goal.Goal, retErr error) {
 	d.goalMu.Lock()
 	defer d.goalMu.Unlock()
 	g, ok := d.goals.Get(id)
 	if !ok {
 		return out, fmt.Errorf("unknown goal %s", id)
+	}
+	if revision != 0 && revision != g.Revision {
+		return g, errors.New("goal changed; review its current revision before publishing")
 	}
 	if g.Execution != nil {
 		return g, errors.New("an authorized goal uses execution reconciliation; republishing cannot replace its contract")

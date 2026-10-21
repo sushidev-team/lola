@@ -38,6 +38,15 @@ func (d *Daemon) handleGoalPlan(ctx context.Context, req protocol.Request) proto
 		}
 		return dataResponse(r)
 	}
+	if req.Cmd == "goalProposals" {
+		var a struct {
+			Project string `json:"project"`
+		}
+		if err := json.Unmarshal(req.Args, &a); err != nil {
+			return protocol.Response{Error: err.Error()}
+		}
+		return dataResponse(d.goalPlans.List(a.Project))
+	}
 	var a goalPlanArgs
 	if err := json.Unmarshal(req.Args, &a); err != nil {
 		return protocol.Response{Error: err.Error()}

@@ -1,13 +1,14 @@
 # Self-improving workspaces and autonomous goals in Lola
 
-Status: implementation paused at the user’s request on
+Status: implementation resumed at the user’s request on
 `feat/self-improving-workspaces` (2026-10-21). The full plan is not complete.
 Approximate scope estimate: 75% implemented, not a measured completion metric.
 
-Checkpoint verification: `make check` passed (format, build, vet and full Go
-suite); focused finding-lifecycle and daemon race tests passed. Frontend
-`npm run check`, full `npm test`, and `npm run build` passed for the current UI;
-the final copy adjustment also passed the focused ProjectForm suite and build.
+Current verification: `make check` passed (build, vet and full Go suite) after
+the desktop specialist, planning, publication and authorization additions.
+Frontend `npm run check`, full `npm test`, and `npm run build` passed. Focused
+bridge, read-only proposal/options and revision-bound publication tests passed.
+The earlier checkpoint also passed focused finding-lifecycle and daemon race tests.
 Desktop/narrow fixture screenshots and scoped UI review are retained under
 `.impeccable/review/`. No live end-to-end pilot has been run.
 
@@ -21,11 +22,13 @@ daemon replacement has been performed. UI screenshots use clearly labeled fixtur
 Available for inspection: project/stack Execution settings; goal overview,
 tasks, limits, delivery and steering controls in desktop/TUI; CLI goal planning,
 authorization and recovery; knowledge capture/curation/export; specialist reviews
-and finding decisions. Goal authoring and authorization remain CLI-first.
+and finding decisions. Desktop goal planning, local plan acceptance, Linear
+publication and explicit execution authorization are now available.
 
 Remaining before full-plan completion:
 
-- Goal creation/authorization forms and remaining desktop/TUI action parity.
+- TUI goal authoring/authorization, direct task-graph editing, knowledge forms,
+  TUI specialist editing and remaining desktop/TUI action parity.
 - Broader task/policy revision reconciliation and Linear steering beyond the
   implemented brief clarifications and bounded task replanning.
 - Learning maintenance, referenced-code revalidation, recurring-error proposals
@@ -128,8 +131,25 @@ count grouped by profile, provider, rubric and repository. A verified fix requir
 a clean independent review of its exact commit and contract. Decisions never
 rewrite review verdicts or open integration/merge gates; retries retain earlier
 findings and verification receipts.
+Desktop Review settings now expose Backend, UI/UX, Security, Integration and
+Performance specialist presets, independent provider selection, ordinary PR
+triggers, required gates, rubric/scope/evidence and finite limits. New profiles
+start disabled, older clients preserve profiles, and invalid provider removal
+cannot partially save. Go and frontend suites, type checks and builds passed;
+desktop/narrow fixture inspection and independent UI review passed (`ship`).
+Desktop goal planning now accepts outcome/criteria/non-goals and explicit bounded
+coordinator requests, lists durable saved proposals, exposes task and source
+reviews, and accepts a local goal at the reviewed revision. Unknown responses use
+read-only recovery and never repeat a paid call automatically. Publication now
+has a desktop review action with a lock-protected revision check before any Linear
+effect. Execution authorization loads configured repositories, preserves required
+specialists, requires explicit acceptance checks and evidence, captures finite
+limits and optional draft-PR/replanning permissions, and reviews the exact policy
+before starting. It exposes the retained goal/task contract and rejects uncertain
+resubmissions until the user reloads current state. No live writes or workers were
+started during fixture verification.
 The full plan is not complete. Broader task/policy revision reconciliation,
-authoring/learning/profile forms, remaining UI parity
+TUI authoring/authorization, learning forms, TUI profile editing, remaining UI parity
 and evaluation remain. See
 [current commands](docs/workspace-goals.md).
 Research and repository inspection: 2026-10-21.

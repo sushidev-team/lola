@@ -256,3 +256,32 @@ func TestGoalProposalOneCallAndInterruptedRecovery(t *testing.T) {
 		t.Fatal("restart reran a reserved call", err)
 	}
 }
+
+func TestGoalProposalsReadOnly(t *testing.T) {
+	d, f, request, calls := goalPlanFixture(t)
+	ctx := context.Background()
+	r, err := d.proposeGoal(ctx, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, project := range []string{"p1", "other"} {
+		args, _ := json.Marshal(map[string]string{"project": project})
+		response := d.handle(ctx, protocol.Request{Cmd: "goalProposals", Args: args})
+		if response.Error != "" {
+			t.Fatal(response.Error)
+		}
+		var got []goalplan.Summary
+		if err := json.Unmarshal(response.Data, &got); err != nil {
+			t.Fatal(err)
+		}
+		if project == "p1" && (len(got) != 1 || got[0].ID != r.ID) {
+			t.Fatalf("missing saved proposal: %+v", got)
+		}
+		if project == "other" && len(got) != 0 {
+			t.Fatal("cross-project proposal")
+		}
+	}
+	if *calls != 1 || len(d.goals.List()) != 0 || len(f.Created) != 0 {
+		t.Fatal("picker triggered work")
+	}
+}

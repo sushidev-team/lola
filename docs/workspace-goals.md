@@ -30,6 +30,47 @@ This setting makes goals available; it never starts or authorizes one. Each goal
 still needs its reviewed task plan, finite execution policy and explicit `goal
 start` authorization. Existing sessions retain the workspace they started in.
 
+### Plan, publish and authorize in the desktop
+
+Open a project's **Goals** section and select **Plan a goal**. Enter a title,
+desired outcome, acceptance criteria (one per line) and optional non-goals.
+Planning limits, a model override and an optional new milestone name are under
+**Planning limits and Linear milestone**. **Request task proposal** makes one
+bounded paid call. It does not publish issues or start coding workers.
+
+Review the proposed tasks, repository ownership, dependency order, criterion
+coverage and open questions. **Sources and planning record** exposes the retained
+committed files and full evidence record. Acknowledge the review and choose
+**Accept as local goal**. Acceptance rechecks source commits and routing against
+the exact proposal revision. Saved proposals remain available in the picker;
+**Refresh result** only reads a retained result and never repeats a paid call.
+
+For a local draft, **Publish to Linear** first displays the consequences, task
+count, optional milestone and reviewed revision. Confirm to create or reconcile
+the parent issue, tasks and dependencies in the existing Linear project. A stale
+revision is rejected before local or remote changes. After an uncertain result,
+close the action and refresh before explicitly reviewing another attempt.
+
+For a fully published goal, **Set execution limits** loads the current goal brief,
+configured repositories and applicable specialists. Supply at least one acceptance
+check, its installed SHA-256-pinned container image, command, timeout and optional
+evidence files. Evidence paths include the repository ID from the combined root.
+Required specialists cannot be deselected; additional specialists can be selected.
+Choose finite task, attempt, review, call, runtime and observed-usage limits.
+Draft PR publication, task replanning and target refreshes start disabled.
+
+**Review authorization** captures the complete proposed execution policy. Review
+it and acknowledge the paid calls before **Authorize and start**. Execution may
+begin once the daemon durably accepts that request. The daemon rechecks the exact
+goal revision, routing, required profiles and current Linear bindings. A stale
+or uncertain response cannot silently resubmit against newer work; reload current
+settings first. Token/dollar telemetry may be delayed or missing, so those limits
+are not exact billing caps. Merge decisions remain human-only.
+
+Custom committed context selection, direct task-graph authoring, existing-issue
+adoption and several recovery actions remain available through the CLI below.
+TUI authoring and authorization forms remain in progress.
+
 ### Ask the coordinator for a task proposal
 
 Enable `goal_mode = true` and `sandbox = "docker"` on the project or owning
@@ -409,6 +450,21 @@ index and focused lesson files for ordinary code review; it does not edit an
 existing repository documentation file.
 
 ## Specialist profiles
+
+Desktop **Settings → Review → Specialist reviewers** now offers Backend, UI/UX,
+Security, Integration and Performance presets. Add a specialist, choose an enabled
+agent provider, and enable it before saving. Several specialists can share one
+provider while keeping independent review results. New specialists start disabled.
+The provider controls the model for ordinary sessions; an autonomous goal retains
+the profiles and models in its accepted execution policy.
+
+**On PR open** enables an ordinary-session specialist pass. **Required for
+delivery** holds Lola's merge queue until current evidence passes. **Rubric and
+scope** edits additional instructions, rubric version, project/stack IDs, path
+prefixes, evidence kinds and bounded timeout/attempt limits. Required evidence
+for UI/UX, Integration and Performance remains enforced. Settings Save validates
+the complete configuration; removing an enabled specialist's provider is rejected
+without writing a partial configuration. CLI/config access remains available.
 
 Profiles select an existing agent-family provider and supply a versioned rubric.
 Several profiles can use the same provider independently:
@@ -841,14 +897,15 @@ resumes, **x** stops workers and **c** cancels. Enter applies the reviewed actio
 Escape closes it. **f** refreshes. Long criteria wrap within the terminal width.
 
 Both clients read the same cached overview and submit the same revision-checked
-commands. Creation, planning, authorization policies, verification/replan retries,
-shared delivery evidence, knowledge curation and profile configuration remain
-available through the CLI; their app forms are still being implemented.
+commands. The desktop also supports coordinator proposals, local plan acceptance,
+Linear publication and explicit execution authorization as described above.
+Direct task-graph editing, verification/replan retries, shared delivery evidence
+and knowledge curation remain CLI-first; their forms are still in progress.
 
 ## Remaining work
 
 The full implementation plan remains active: broader task/policy revision
-reconciliation and steering, authoring/knowledge/profile forms and remaining UI
+reconciliation and steering, TUI authoring/authorization, knowledge forms, TUI profile editing and remaining UI
 parity, and
 improvement metrics. Measured container CPU/memory and dollar costs remain
 unavailable; the usage report distinguishes them from resource ceilings. See
@@ -890,7 +947,8 @@ pilot remain unfinished.
 ## Quick look at this checkpoint
 
 The project/stack **Execution** settings and goal inspection/steering views are
-available. Goal creation and execution authorization are currently CLI-first.
+available. The desktop includes goal planning, Linear publication and execution
+authorization forms; direct task-graph editing and TUI authoring remain CLI-first.
 The checked-in plan lists the remaining work; this is a development checkpoint.
 
 Build the branch binary with `make build`. Run `./lola goal --help`, `./lola learn

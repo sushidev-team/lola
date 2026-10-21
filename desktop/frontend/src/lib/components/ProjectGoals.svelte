@@ -6,6 +6,8 @@
   import { nav } from "$lib/nav.svelte";
   import Button from "./Button.svelte";
   import Select from "./Select.svelte";
+  import GoalAuthorization from "./GoalAuthorization.svelte";
+  import GoalPlanner from "./GoalPlanner.svelte";
 
   let { project }: { project: string } = $props();
   let expanded = $state(false);
@@ -18,13 +20,15 @@
   let pending = $state<{ goal: Overview; action: string } | null>(null);
   let reason = $state("");
   let reasonField = $state<HTMLTextAreaElement>();
+  let actionArea = $state<HTMLDivElement>();
   let controlsArea = $state<HTMLDivElement>();
   let toggle = $state<HTMLButtonElement>();
   const selections = new Map<string, string>();
   let generation = 0;
   const current = $derived(goals.find((g) => g.id === selected));
-  const labels: Record<string, string> = { pause: "Pause", resume: "Resume", "stop-workers": "Stop workers", cancel: "Cancel goal" };
+  const labels: Record<string, string> = { pause: "Pause", resume: "Resume", "stop-workers": "Stop workers", cancel: "Cancel goal", publish: "Publish to Linear" };
   const consequences: Record<string, string> = {
+    publish: "Create or reconcile the goal parent issue, task issues, dependencies and optional milestone in the configured Linear project. This does not authorize execution.",
     pause: "Hold new tasks, verification and integration. Running workers continue until stopped separately.",
     resume: "Resume within the accepted scope and remaining budgets. Lola rechecks Linear and execution policy first.",
     "stop-workers": "Stop the current workers and keep their files and evidence. Resume is required to dispatch again.",
@@ -73,7 +77,7 @@
     reason = "";
     error = "";
     await tick();
-    reasonField?.focus();
+    (reasonField || actionArea)?.focus();
   }
   async function closeAction() {
     pending = null;
@@ -88,7 +92,8 @@
     const scope = project;
     busy = true;
     try {
-      await DaemonService.GoalControl(reviewed.goal.id, reviewed.goal.revision, reviewed.action, reason.trim());
+      if (reviewed.action === "publish") await DaemonService.GoalPublish(reviewed.goal.id, reviewed.goal.revision);
+      else await DaemonService.GoalControl(reviewed.goal.id, reviewed.goal.revision, reviewed.action, reason.trim());
       if (scope === project) { pending = null; reason = ""; }
     } catch (e) {
       if (scope === project) error = `Action was not confirmed: ${String(e)}. Close this action and refresh before trying again.`;
@@ -119,8 +124,9 @@
       {#if error}<p role="alert" class="selectable text-sm text-bad">{error}</p>{/if}
       {#if !loaded && loading}<p role="status" class="text-sm text-faint">Loading goals…</p>{/if}
       {#if loaded && goals.length === 0}
-        <p class="text-sm text-faint">No goals in this project yet. Create a reviewed goal with <code class="text-ink">lola goal</code>; it will appear here.</p>
+        <p class="text-sm text-faint">No goals in this project yet. Plan a goal below or create one with <code class="text-ink">lola goal</code>.</p>
       {/if}
+      {#key project}<GoalPlanner {project} onaccepted={(id) => { selections.set(project, id); selected = id; void refresh(); }} />{/key}
       {#if goals.length > 0}
         <label class="flex flex-col gap-1 text-sm text-faint">Goal
           <Select class="min-w-0" bind:value={selected} onchange={(e) => selections.set(project, e.currentTarget.value)} disabled={busy || !!pending}>
@@ -194,21 +200,26 @@
             {/each}
           </div>
         {/if}
+        {#if !current.authorized && current.state === "planned"}
+          {#key current.id}<GoalAuthorization goalID={current.id} onstarted={() => void refresh()} />{/key}
+        {/if}
         {#if pending}
-          <div class="border-t border-edge pt-3">
+          <div bind:this={actionArea} tabindex="-1" role="group" aria-label="Review goal action" class="border-t border-edge pt-3">
             <h4 class="font-medium text-ink">{labels[pending.action]} — {pending.goal.title}</h4>
             <p class="mt-1 text-sm text-faint">{consequences[pending.action]}</p>
             <p class="mt-1 text-sm text-faint">Applies to reviewed revision {pending.goal.revision}.</p>
+            {#if pending.action === "publish"}<p class="mt-1 text-sm text-faint">{pending.goal.tasks?.length ?? 0} tasks{pending.goal.milestoneName ? ` · Milestone: ${pending.goal.milestoneName}` : " · No new milestone"}. Existing confirmed resources are retained on retry.</p>{:else}
             <label class="mt-2 flex flex-col gap-1 text-sm text-faint">Reason (optional)
               <textarea bind:this={reasonField} class="min-h-16 rounded border border-edge bg-canvas px-2 py-1.5 text-ink" bind:value={reason} maxlength="2000" disabled={busy}></textarea>
-            </label>
+            </label>{/if}
             <div class="mt-2 flex flex-wrap gap-2">
               <Button variant={pending.action === "cancel" ? "danger-solid" : "primary"} disabled={busy || !!error} onclick={submit}>{busy ? "Applying…" : labels[pending.action]}</Button>
               <Button disabled={busy} onclick={closeAction}>Close action</Button>
             </div>
           </div>
-        {:else if current.actions?.length}
+        {:else if current.actions?.length || (!current.authorized && ["draft", "provisioning"].includes(current.state))}
           <div bind:this={controlsArea} tabindex="-1" role="group" aria-label="Goal controls" class="flex flex-wrap gap-2 border-t border-edge pt-3">
+            {#if !current.authorized && ["draft", "provisioning"].includes(current.state)}<Button variant="secondary" disabled={loading || !!error || busy} onclick={() => reviewAction(current, "publish")}>Publish to Linear</Button>{/if}
             {#each current.actions as action}<Button variant={action === "cancel" ? "danger" : "secondary"} disabled={loading || !!error || busy} onclick={() => reviewAction(current, action)}>{labels[action]}</Button>{/each}
           </div>
         {/if}

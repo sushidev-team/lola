@@ -70,13 +70,13 @@ func (d *Daemon) handleConn(ctx context.Context, conn net.Conn) {
 
 func (d *Daemon) handle(ctx context.Context, req protocol.Request) protocol.Response {
 	switch req.Cmd {
-	case "goalPropose", "goalProposal", "goalAcceptPlan":
+	case "goalPropose", "goalProposal", "goalProposals", "goalAcceptPlan":
 		return d.handleGoalPlan(ctx, req)
 	case "reviewProfiles", "profileResults", "profileReview", "profileFindings", "profileDecideFinding", "profileCalibration":
 		return d.handleProfile(ctx, req)
 	case "knowledgeList", "knowledgeLookup", "knowledgeExport", "knowledgeCapture", "knowledgeCorrect", "knowledgeAccept", "knowledgeDispute":
 		return d.handleKnowledge(req)
-	case "goalDismissProgress", "goalSyncBrief", "goalAcceptBrief", "goalOverview", "goals", "goalCreate", "goalShow", "goalUsage", "goalPublish", "goalStart", "goalControl", "goalDeliveryEvidence":
+	case "goalDismissProgress", "goalSyncBrief", "goalAcceptBrief", "goalOverview", "goals", "goalCreate", "goalShow", "goalUsage", "goalPublish", "goalPublishReviewed", "goalStartOptions", "goalStart", "goalControl", "goalDeliveryEvidence":
 		return d.handleGoals(ctx, req)
 	case "stop":
 		d.logf("", "stop requested via socket")

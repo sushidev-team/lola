@@ -3,9 +3,13 @@
 
 export type {
     AttemptView,
+    Authorization,
     Binding,
     MemberView,
     Overview,
+    Replacement,
+    StartOptions,
+    StartProfile,
     TaskView,
     UsageCoverage
 } from "./models.js";
