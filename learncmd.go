@@ -22,6 +22,13 @@ func learnCmd() *cobra.Command {
 		RunE: func(c *cobra.Command, _ []string) error {
 			return requestGoal(c, "knowledgeList", map[string]any{"scope": knowledge.Scope{Project: project}})
 		}})
+	cmd.AddCommand(&cobra.Command{Use: "maintain", Short: "Recheck watched code and expiry; return stale lessons to candidates", Args: cobra.NoArgs,
+		RunE: func(c *cobra.Command, _ []string) error {
+			if project == "" {
+				return fmt.Errorf("--project required")
+			}
+			return requestGoal(c, "knowledgeMaintain", map[string]any{"scope": knowledge.Scope{Project: project}})
+		}})
 	var paths []string
 	var query, goalID string
 	lookup := &cobra.Command{Use: "lookup", Short: "Retrieve bounded active lessons for this scope", Args: cobra.NoArgs,
@@ -67,7 +74,7 @@ func learnCmd() *cobra.Command {
 	} {
 		var version int
 		var evidence, expires string
-		var supersedes []string
+		var supersedes, watch []string
 		edit := &cobra.Command{Use: action.name + " <lesson-id>", Short: action.help, Args: cobra.ExactArgs(1),
 			RunE: func(c *cobra.Command, args []string) error {
 				if os.Getenv("LOLA_SESSION") != "" {
@@ -77,6 +84,13 @@ func learnCmd() *cobra.Command {
 					return fmt.Errorf("--version and --evidence required")
 				}
 				data := map[string]any{"id": args[0], "version": version, "evidence": evidence, "supersedes": supersedes}
+				if len(watch) > 0 {
+					targets, err := learningCodeTargets(watch)
+					if err != nil {
+						return err
+					}
+					data["code_targets"] = targets
+				}
 				if expires != "" {
 					stamp, err := time.Parse(time.RFC3339, expires)
 					if err != nil {
@@ -89,6 +103,7 @@ func learnCmd() *cobra.Command {
 		edit.Flags().IntVar(&version, "version", 0, "lesson version reviewed")
 		edit.Flags().StringVar(&evidence, "evidence", "", "verification evidence or dispute reason")
 		if action.name == "accept" {
+			edit.Flags().StringArrayVar(&watch, "watch", nil, "committed code to revalidate, member:path (repeatable; . watches the whole repository)")
 			edit.Flags().StringSliceVar(&supersedes, "supersedes", nil, "conflicting lesson IDs explicitly replaced")
 			edit.Flags().StringVar(&expires, "expires", "", "RFC3339 expiry for environment-specific guidance")
 		}
@@ -150,4 +165,16 @@ func writeLearningExport(dir string, files map[string]string) error {
 		}
 	}
 	return nil
+}
+
+func learningCodeTargets(values []string) ([]knowledge.CodeTarget, error) {
+	var targets []knowledge.CodeTarget
+	for _, value := range values {
+		member, path, ok := strings.Cut(value, ":")
+		if !ok {
+			return nil, fmt.Errorf("--watch needs member:path")
+		}
+		targets = append(targets, knowledge.CodeTarget{Member: member, Path: path})
+	}
+	return targets, knowledge.ValidateTargets(targets)
 }

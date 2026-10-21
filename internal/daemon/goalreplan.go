@@ -226,7 +226,7 @@ func (d *Daemon) goalRepairInput(ctx context.Context, g goal.Goal, r goal.Replan
 		in.Labels = append(in.Labels, item)
 	}
 	if d.knowledge != nil {
-		in.Knowledge = knowledge.Select(d.knowledge.List(), knowledge.Query{Project: g.Project, GoalID: g.ID, Text: parent.Description, MaxBytes: 8000}, time.Now())
+		in.Knowledge = d.selectKnowledge(ctx, knowledge.Query{Project: g.Project, GoalID: g.ID, Text: parent.Description, MaxBytes: 8000})
 	}
 	_, err = in.Bytes()
 	return in, err

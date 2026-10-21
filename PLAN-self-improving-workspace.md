@@ -5,8 +5,10 @@ Status: implementation resumed at the user’s request on
 Approximate scope estimate: 75% implemented, not a measured completion metric.
 
 Current verification: `make check` passed (build, vet and full Go suite) after
-the desktop specialist, planning, publication and authorization additions.
-Frontend `npm run check`, full `npm test`, and `npm run build` passed. Focused
+the learning code-reference and maintenance additions, using the permissions
+required by local socket/process test fixtures. Frontend `npm run check` passed
+after refreshing the knowledge bindings. Full frontend `npm test` and
+`npm run build` passed for the preceding desktop additions. Focused
 bridge, read-only proposal/options and revision-bound publication tests passed.
 The earlier checkpoint also passed focused finding-lifecycle and daemon race tests.
 Desktop/narrow fixture screenshots and scoped UI review are retained under
@@ -31,8 +33,9 @@ Remaining before full-plan completion:
   TUI specialist editing and remaining desktop/TUI action parity.
 - Broader task/policy revision reconciliation and Linear steering beyond the
   implemented brief clarifications and bounded task replanning.
-- Learning maintenance, referenced-code revalidation, recurring-error proposals
-  for tests/lint/skills, and evidence-backed promotion beyond current curation.
+- Recurring-error proposals for tests/lint/skills and evidence-backed promotion
+  beyond current curation. Referenced-code freshness and expiry maintenance are
+  implemented; references currently require explicit operator attachment.
 - Worker-originated specialist disputes and richer calibration, including model
   and prompt provenance and comparable-budget outcome measurement. The current
   finding report counts explicit operator decisions; it is not an accuracy score.
@@ -43,6 +46,15 @@ Remaining before full-plan completion:
 Quick-look setup and exact current commands are in
 [the implementation guide](docs/workspace-goals.md#quick-look-at-this-checkpoint).
 Resume from this list; green checks at this checkpoint do not complete the plan.
+
+Learning maintenance addition: acceptance can attach committed file/directory
+references with `learn accept --watch member:path`. Every guidance consumer checks
+watched code before use; changed code returns lessons to candidates, unreadable
+code is omitted for that request, and immutable delivery history is retained.
+The existing five-minute maintenance pass and `learn maintain --project ...`
+also handle expiry. Git reads share a bounded deadline and perform no fetch or
+working-tree edits. Unwatched historical lessons remain explicitly untracked.
+This implements freshness revalidation, not automatic correctness verification.
 
 Implemented foundations: durable goal reservations and recoverable Linear
 publication; ordinary-dispatch exclusion; scoped knowledge capture, curation,

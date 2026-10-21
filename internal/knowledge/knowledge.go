@@ -48,9 +48,11 @@ type Source struct {
 }
 
 type Lesson struct {
-	ID      string `json:"id"`
-	Version int    `json:"version"`
-	Scope   Scope  `json:"scope"`
+	Code         []CodeReference `json:"code,omitempty"`
+	ReviewReason string          `json:"review_reason,omitempty"`
+	ID           string          `json:"id"`
+	Version      int             `json:"version"`
+	Scope        Scope           `json:"scope"`
 	Proposal
 	Source       Source    `json:"source"`
 	Status       Status    `json:"status"`

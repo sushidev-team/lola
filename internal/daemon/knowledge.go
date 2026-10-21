@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,17 +17,18 @@ import (
 )
 
 type knowledgeArgs struct {
-	Scope      knowledge.Scope    `json:"scope"`
-	Proposal   knowledge.Proposal `json:"proposal"`
-	Query      knowledge.Query    `json:"query"`
-	ID         string             `json:"id"`
-	Version    int                `json:"version"`
-	Evidence   string             `json:"evidence"`
-	Supersedes []string           `json:"supersedes"`
-	Expires    time.Time          `json:"expires,omitempty"`
+	Scope       knowledge.Scope        `json:"scope"`
+	Proposal    knowledge.Proposal     `json:"proposal"`
+	Query       knowledge.Query        `json:"query"`
+	ID          string                 `json:"id"`
+	Version     int                    `json:"version"`
+	Evidence    string                 `json:"evidence"`
+	Supersedes  []string               `json:"supersedes"`
+	CodeTargets []knowledge.CodeTarget `json:"code_targets,omitempty"`
+	Expires     time.Time              `json:"expires,omitempty"`
 }
 
-func (d *Daemon) handleKnowledge(req protocol.Request) protocol.Response {
+func (d *Daemon) handleKnowledge(ctx context.Context, req protocol.Request) protocol.Response {
 	if d.knowledge == nil {
 		return protocol.Response{Error: fmt.Sprintf("knowledge unavailable: %v", d.knowledgeErr)}
 	}
@@ -46,12 +48,30 @@ func (d *Daemon) handleKnowledge(req protocol.Request) protocol.Response {
 		}
 		data = lessons
 	case "knowledgeLookup":
-		data = knowledge.Select(d.knowledge.List(), a.Query, time.Now())
+		data = d.selectKnowledge(ctx, a.Query)
 	case "knowledgeExport":
 		if a.Scope.Project == "" {
 			return protocol.Response{Error: "project required"}
 		}
-		data = knowledge.Export(d.knowledge.List(), a.Scope.Project, time.Now())
+		var scoped []knowledge.Lesson
+		for _, l := range d.knowledge.List() {
+			if l.Scope.Project == a.Scope.Project && l.Scope.GoalID == "" {
+				scoped = append(scoped, l)
+			}
+		}
+		valid, _ := d.maintainKnowledge(ctx, scoped)
+		data = knowledge.Export(valid, a.Scope.Project, time.Now())
+	case "knowledgeMaintain":
+		if a.Scope.Project == "" {
+			return protocol.Response{Error: "project required"}
+		}
+		var scoped []knowledge.Lesson
+		for _, l := range d.knowledge.List() {
+			if l.Scope.Project == a.Scope.Project {
+				scoped = append(scoped, l)
+			}
+		}
+		_, data = d.maintainKnowledge(ctx, scoped)
 	case "knowledgeCapture", "knowledgeCorrect":
 		d.mu.Lock()
 		p := d.cfg.ProjectByName(a.Scope.Project)
@@ -75,7 +95,7 @@ func (d *Daemon) handleKnowledge(req protocol.Request) protocol.Response {
 		}
 		data, err = d.knowledge.Capture(a.Scope, a.Proposal, knowledge.Source{Kind: kind, ID: goal.NewID()}, correct)
 	case "knowledgeAccept":
-		data, err = d.knowledge.Accept(a.ID, a.Version, a.Evidence, a.Supersedes, a.Expires)
+		data, err = d.acceptKnowledge(ctx, a)
 	case "knowledgeDispute":
 		err = d.knowledge.Dispute(a.ID, a.Version, a.Evidence)
 	default:
@@ -95,7 +115,7 @@ func (d *Daemon) knowledgeBrief(project, sessionID string, prompt []byte) []byte
 	if s, ok := d.sessions.Get(sessionID); ok && s.GoalManaged() {
 		q.GoalID = s.GoalID
 	}
-	bundle := knowledge.Select(d.knowledge.List(), q, time.Now())
+	bundle := d.selectKnowledge(context.Background(), q)
 	if err := d.knowledge.RecordDelivery(sessionID, bundle.References); err != nil {
 		d.logf(project, "knowledge snapshot omitted: %v", err)
 		return prompt // do not inject unrecorded versions

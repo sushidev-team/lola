@@ -214,7 +214,7 @@ func (d *Daemon) runProfile(ctx context.Context, a profileArgs) (reviewprofile.R
 		return reviewprofile.Record{}, errors.New("acceptance contract exceeds 16 KiB")
 	}
 	if d.knowledge != nil {
-		in.Knowledge = knowledge.Select(d.knowledge.List(), knowledge.Query{Project: s.Project, Paths: in.Paths, Text: in.Contract, MaxBytes: 4000}, time.Now()).Markdown()
+		in.Knowledge = d.selectKnowledge(ctx, knowledge.Query{Project: s.Project, Paths: in.Paths, Text: in.Contract, MaxBytes: 4000}).Markdown()
 	}
 	if previous, exists := d.profileReviews.Get(p.Key(in)); exists && !a.Retry && previous.State != "stale" {
 		return previous, nil

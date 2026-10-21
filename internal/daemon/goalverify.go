@@ -290,7 +290,7 @@ func (d *Daemon) reviewGoalProfile(ctx context.Context, g goal.Goal, scope goalR
 	}
 	in := reviewprofile.Inputs{ContextID: scope.Operation, Repo: repo, Head: c.Commit, Base: c.Base, Contract: contract, Paths: c.Paths, Artifacts: artifacts}
 	if d.knowledge != nil {
-		in.Knowledge = knowledge.Select(d.knowledge.List(), knowledge.Query{Project: g.Project, GoalID: g.ID, Paths: c.Paths, Text: contract, MaxBytes: 4000}, time.Now()).Markdown()
+		in.Knowledge = d.selectKnowledge(ctx, knowledge.Query{Project: g.Project, GoalID: g.ID, Paths: c.Paths, Text: contract, MaxBytes: 4000}).Markdown()
 	}
 	runID := verificationID(scope.Operation, id, c.Member)
 	if old, ok := d.profileReviews.Get(p.Key(in)); ok {

@@ -6,7 +6,18 @@ export interface Bundle {
     "references": Reference[] | null;
 }
 
+export interface CodeReference {
+    "member": string;
+    "path": string;
+    "source": string;
+    "branch": string;
+    "commit": string;
+    "digest": string;
+}
+
 export interface Lesson {
+    "code"?: CodeReference[] | null;
+    "review_reason"?: string;
     "id": string;
     "version": number;
     "scope": Scope;

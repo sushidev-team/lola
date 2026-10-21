@@ -430,7 +430,9 @@ For a human correction, wrap that entry in a file containing `scope` and
 lola learn correct correction.json
 lola learn list --project lola
 lola learn lookup --project lola --path internal/daemon/dispatch.go
-lola learn accept LESSON_ID --version 1 --evidence "Reproduced in test XYZ"
+lola learn accept LESSON_ID --version 1 --evidence "Reproduced in test XYZ" \
+  --watch lola:internal/daemon
+lola learn maintain --project lola
 lola learn dispute LESSON_ID --version 2 --evidence "This no longer applies after migration XYZ"
 lola learn export --project lola --output ./learning-proposal
 ```
@@ -440,6 +442,30 @@ existing guidance. Technical discoveries need acceptance evidence. Resolving a
 conflict requires naming the replaced IDs with `--supersedes`. Policy changes
 remain proposals. Environment-specific lessons can receive an RFC3339
 `--expires` timestamp on acceptance.
+
+Acceptance can attach repeatable `--watch member:path` references. The member is
+its configured project ID (a member of the owning stack for stack lessons); the
+path is a committed file or directory, with `.` covering the whole repository.
+Lola records the current local default branch, commit and path fingerprint. This
+records freshness of operator-reviewed evidence, not proof that the lesson is
+correct. It does not fetch remotes or inspect uncommitted working-tree edits.
+
+Before a watched lesson enters a briefing, coordinator prompt, specialist review,
+lookup or export, Lola checks those references again. Unrelated commits preserve
+file-scoped guidance. Changed/deleted code, or a changed configured checkout or
+branch, returns the lesson to candidate status while preserving its previous
+verification and every delivered version. Reacceptance requires fresh operator
+evidence and reacquires existing references even if `--watch` is omitted.
+
+The existing five-minute maintenance pass also checks references and returns
+expired lessons to candidates. `learn maintain` requests the same check for one
+project and reports `current`, `changed`, `expired`, `unavailable`, `untracked`, or
+`inactive`. Each batch has a five-second Git-read deadline. An unreadable branch,
+missing repository, or timeout omits affected lessons for that request without
+persisting a false change; a later successful check can make them available again.
+Lessons accepted without references (including existing human corrections) remain
+usable and are reported as `untracked`. Attach references explicitly when their
+validity depends on code. There is no automatic promotion of candidates or rules.
 
 Retrieval excludes candidates, disputes, superseded entries, expired lessons,
 and unrelated projects/paths/goals. Launch briefings contain at most 8 KiB of

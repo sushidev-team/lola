@@ -135,7 +135,7 @@ func (d *Daemon) goalPlanInput(ctx context.Context, r goalplan.Request) (goalpla
 	}
 	sort.Slice(in.Labels, func(i, j int) bool { return in.Labels[i].ID < in.Labels[j].ID })
 	if d.knowledge != nil {
-		in.Knowledge = knowledge.Select(d.knowledge.List(), knowledge.Query{Project: r.Project, Text: r.Outcome, MaxBytes: 8000}, time.Now())
+		in.Knowledge = d.selectKnowledge(ctx, knowledge.Query{Project: r.Project, Text: r.Outcome, MaxBytes: 8000})
 	}
 	_, err = in.Bytes()
 	return in, sandbox, image, kind, err

@@ -42,6 +42,9 @@ func (d *Daemon) safeReconcile(ctx context.Context) {
 			d.logf("", "reconcile panic (daemon keeps running): %v", r)
 		}
 	}()
+	if d.knowledge != nil {
+		d.maintainKnowledge(ctx, d.knowledge.List())
+	}
 	d.reconcile(ctx)
 }
 

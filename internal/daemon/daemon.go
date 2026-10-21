@@ -27,6 +27,7 @@ import (
 	"github.com/sushidev-team/lola/internal/agent"
 	"github.com/sushidev-team/lola/internal/brain"
 	"github.com/sushidev-team/lola/internal/config"
+	"github.com/sushidev-team/lola/internal/gitrepo"
 	"github.com/sushidev-team/lola/internal/goal"
 	"github.com/sushidev-team/lola/internal/goalplan"
 	"github.com/sushidev-team/lola/internal/goalreview"
@@ -140,6 +141,9 @@ type Daemon struct {
 	profileRun       profileRun
 	profilePaths     func(context.Context, string, string, string) ([]string, error)
 	goalMu           sync.Mutex // serializes goal provisioning, separate from poll and session locks
+
+	// knowledgeCodeRead replaces local committed-metadata reads in tests.
+	knowledgeCodeRead func(context.Context, string, string, string) (gitrepo.CodeIdentity, error)
 
 	// events is the in-memory activity feed (recent notable status
 	// transitions) served to the TUI. Fed via sessions.OnTransition + the

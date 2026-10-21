@@ -48,6 +48,9 @@ func Open(path string) (*Store, error) {
 		if err := Validate(l.Scope, l.Proposal, l.Source); err != nil {
 			return nil, err
 		}
+		if err := validateCode(l.Code); err != nil {
+			return nil, err
+		}
 		switch l.Status {
 		case Candidate, Active, Disputed, Superseded:
 		default:
@@ -168,6 +171,15 @@ func (s *Store) Capture(scope Scope, p Proposal, source Source, correction bool)
 // for a worker's self-report. Conflicts must be resolved explicitly and policy
 // proposals can only be exported for normal code review, never activated here.
 func (s *Store) Accept(id string, version int, evidence string, supersedes []string, expires time.Time) (Lesson, error) {
+	return s.AcceptWithCode(id, version, evidence, supersedes, expires, nil)
+}
+
+// AcceptWithCode binds explicit human verification to daemon-observed code.
+func (s *Store) AcceptWithCode(id string, version int, evidence string, supersedes []string, expires time.Time, code []CodeReference) (Lesson, error) {
+	if err := validateCode(code); err != nil {
+		return Lesson{}, err
+	}
+
 	if len(evidence) < 8 || len(evidence) > 4000 || credential.MatchString(evidence) {
 		return Lesson{}, fmt.Errorf("acceptance requires bounded, non-secret verification evidence")
 	}
@@ -180,6 +192,9 @@ func (s *Store) Accept(id string, version int, evidence string, supersedes []str
 	}
 	if l.Policy || l.Status == Superseded {
 		return Lesson{}, fmt.Errorf("policy proposals and superseded lessons cannot be activated")
+	}
+	if len(l.Code) > 0 && l.ReviewReason != "" && len(code) == 0 {
+		return Lesson{}, fmt.Errorf("fresh code references required before reactivating this lesson")
 	}
 	// Recompute conflicts: another candidate may have become active since this
 	// one was captured. Its old conflict list is not an authorization to replace it.
@@ -202,6 +217,10 @@ func (s *Store) Accept(id string, version int, evidence string, supersedes []str
 		next.Lessons[conflict] = other
 	}
 	next.History[id] = append(next.History[id], l)
+	if code != nil {
+		l.Code = slices.Clone(code)
+	}
+	l.ReviewReason = ""
 	l.Status, l.Version, l.VerifiedAt, l.Verification, l.ExpiresAt = Active, l.Version+1, time.Now().UTC(), evidence, expires
 	l.Conflicts = nil
 	next.Lessons[id] = l
