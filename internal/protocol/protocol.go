@@ -438,21 +438,24 @@ type SessionApp struct {
 // SessionInfo is one observed session, flattened to render-ready strings and
 // ints so the TUI never needs scm/session imports or re-derivation.
 type SessionInfo struct {
-	ID       string `json:"id"`
-	Project  string `json:"project"`
-	Issue    string `json:"issue"`  // Linear identifier, e.g. ENG-123
-	Title    string `json:"title"`  // Linear issue title, "" when unknown (older/adopted records)
-	Branch   string `json:"branch"` // "" when unknown
-	Agent    string `json:"agent"`  // coding-agent kind driving the pane: claude|codex|opencode ("" = legacy claude)
-	Status   string `json:"status"` // the rolled-up status (state.Rollup vocabulary)
-	PRURL    string `json:"prUrl"`
-	PRNumber int    `json:"prNumber"` // 0 when no PR observed
-	Checks   string `json:"checks"`   // pass|fail|pending|none, "" when no PR
-	Review   string `json:"review"`   // APPROVED|CHANGES_REQUESTED|REVIEW_REQUIRED, "" otherwise
-	TmuxName string `json:"tmuxName"` // "" when no tmux session correlates
-	Source   string `json:"source"`   // always "native"; kept for wire compat with pre-P3 clients
-	Worktree string `json:"worktree"` // native runtime: the session's git worktree dir; "" otherwise
-	Age      string `json:"age"`      // concise age since first observed, e.g. "2h" or "Oct 4"
+	GoalID    string `json:"goalId,omitempty"`
+	TaskID    string `json:"taskId,omitempty"`
+	AttemptID string `json:"attemptId,omitempty"`
+	ID        string `json:"id"`
+	Project   string `json:"project"`
+	Issue     string `json:"issue"`  // Linear identifier, e.g. ENG-123
+	Title     string `json:"title"`  // Linear issue title, "" when unknown (older/adopted records)
+	Branch    string `json:"branch"` // "" when unknown
+	Agent     string `json:"agent"`  // coding-agent kind driving the pane: claude|codex|opencode ("" = legacy claude)
+	Status    string `json:"status"` // the rolled-up status (state.Rollup vocabulary)
+	PRURL     string `json:"prUrl"`
+	PRNumber  int    `json:"prNumber"` // 0 when no PR observed
+	Checks    string `json:"checks"`   // pass|fail|pending|none, "" when no PR
+	Review    string `json:"review"`   // APPROVED|CHANGES_REQUESTED|REVIEW_REQUIRED, "" otherwise
+	TmuxName  string `json:"tmuxName"` // "" when no tmux session correlates
+	Source    string `json:"source"`   // always "native"; kept for wire compat with pre-P3 clients
+	Worktree  string `json:"worktree"` // native runtime: the session's git worktree dir; "" otherwise
+	Age       string `json:"age"`      // concise age since first observed, e.g. "2h" or "Oct 4"
 
 	FirstSeen time.Time `json:"firstSeen,omitzero"` // raw session age origin for live client formatting
 
@@ -1462,4 +1465,9 @@ type PairBeginData struct {
 	// RENDERED STATE rather than an error so a client shows the reason in place
 	// of the code instead of a failed call with nothing to act on.
 	Problem string `json:"problem,omitempty"`
+}
+
+// GoalArgs addresses a durable goal; publishing never authorizes execution.
+type GoalArgs struct {
+	ID string `json:"id"`
 }

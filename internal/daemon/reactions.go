@@ -77,6 +77,9 @@ const reactExecTimeout = 30 * time.Second
 // under the store lock so a concurrent hook write (a Stop that set AtPrompt, a
 // tool_use that cleared it) is never clobbered.
 func (d *Daemon) react(ctx context.Context, s session.Session) {
+	if s.GoalManaged() {
+		return
+	}
 	// Only native sessions with a tmux target are actionable. Everything else —
 	// an adopted shell, a record with no pane — falls through to
 	// resetReactionGuards below, which never sends anything.

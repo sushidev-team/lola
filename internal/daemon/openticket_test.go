@@ -20,7 +20,7 @@ import (
 // name, and the label flip fired — so a running poll can't double-dispatch it.
 func TestOpenTicketPollingDedupsLikeTick(t *testing.T) {
 	is := testIssue("FE-9", 1, "2024-01-01T00:00:00Z")
-	fake := &linear.Fake{LabelIDsByIssue: map[string][]string{is.ID: {"lbl-trigger"}}}
+	fake := &linear.Fake{Details: []linear.IssueDetail{{ID: is.ID, Identifier: is.Identifier, Title: is.Title}}, LabelIDsByIssue: map[string][]string{is.ID: {"lbl-trigger"}}}
 	nat := &fakeNative{}
 	d := newTestDaemon(t, testConfig(labelPoll("p1")), fake, nat)
 
@@ -55,7 +55,7 @@ func TestOpenTicketPollingDedupsLikeTick(t *testing.T) {
 func TestOpenTicketRefusesWhenInFlight(t *testing.T) {
 	is := testIssue("FE-9", 1, "2024-01-01T00:00:00Z")
 	nat := &fakeNative{}
-	d := newTestDaemon(t, testConfig(labelPoll("p1")), &linear.Fake{}, nat)
+	d := newTestDaemon(t, testConfig(labelPoll("p1")), &linear.Fake{Details: []linear.IssueDetail{{ID: is.ID, Identifier: is.Identifier}}}, nat)
 	d.inflight.Add(is.ID, is.Identifier) // as a concurrent tick would
 
 	if _, err := d.handleOpenTicket(context.Background(), protocol.OpenTicketArgs{Project: "p1", Identifier: is.Identifier, UUID: is.ID}); err == nil {
@@ -73,7 +73,7 @@ func TestOpenTicketRefusesWhenInFlight(t *testing.T) {
 func TestOpenTicketRefusedWhileDraining(t *testing.T) {
 	is := testIssue("FE-9", 1, "2024-01-01T00:00:00Z")
 	nat := &fakeNative{}
-	d := newTestDaemon(t, testConfig(labelPoll("p1")), &linear.Fake{}, nat)
+	d := newTestDaemon(t, testConfig(labelPoll("p1")), &linear.Fake{Details: []linear.IssueDetail{{ID: is.ID, Identifier: is.Identifier}}}, nat)
 	d.drainConnWork() // begin draining (no in-flight work → returns at once)
 
 	if _, err := d.handleOpenTicket(context.Background(), protocol.OpenTicketArgs{Project: "p1", Identifier: is.Identifier, UUID: is.ID}); err == nil {
@@ -98,7 +98,7 @@ func TestOpenTicketNonPollingProject(t *testing.T) {
 		Defaults: config.Defaults{ConcurrencyCap: 10, GlobalCap: 10},
 		Projects: []config.Project{{Name: "manual", Path: "/tmp/manual", Repo: "acme/m", DefaultBranch: "main"}},
 	}
-	d := newTestDaemon(t, cfg, &linear.Fake{}, nat)
+	d := newTestDaemon(t, cfg, &linear.Fake{Details: []linear.IssueDetail{{ID: "uuid-x1", Identifier: "X-1"}}}, nat)
 
 	data, err := d.handleOpenTicket(context.Background(), protocol.OpenTicketArgs{Project: "manual", Identifier: "X-1", UUID: "uuid-x1"})
 	if err != nil {
@@ -120,7 +120,7 @@ func TestOpenTicketNonPollingProject(t *testing.T) {
 func TestOpenTicketSpawnFailureRollsBack(t *testing.T) {
 	is := testIssue("FE-9", 1, "2024-01-01T00:00:00Z")
 	nat := &fakeNative{spawnErr: errors.New("boom")}
-	d := newTestDaemon(t, testConfig(seenPoll("p1")), &linear.Fake{}, nat)
+	d := newTestDaemon(t, testConfig(seenPoll("p1")), &linear.Fake{Details: []linear.IssueDetail{{ID: is.ID, Identifier: is.Identifier}}}, nat)
 
 	if _, err := d.handleOpenTicket(context.Background(), protocol.OpenTicketArgs{Project: "p1", Identifier: is.Identifier, UUID: is.ID}); err == nil {
 		t.Fatal("spawn failure must surface")

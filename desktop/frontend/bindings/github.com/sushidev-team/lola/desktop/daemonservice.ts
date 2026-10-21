@@ -22,6 +22,9 @@ import { Call as $Call, CancellablePromise as $CancellablePromise } from "@wails
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
+import * as goal$0 from "../internal/goal/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
 import * as protocol$0 from "../internal/protocol/models.js";
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
@@ -155,6 +158,22 @@ export function Enable(poll: string): $CancellablePromise<void> {
  */
 export function ForkCheckpoint(session: string, seq: number, agentKind: string): $CancellablePromise<protocol$0.OpenData> {
     return $Call.ByID(460527567, session, seq, agentKind);
+}
+
+/**
+ * GoalControl preserves the revision the human actually reviewed. In particular
+ * a stale request is never retried automatically against the latest revision.
+ */
+export function GoalControl(id: string, revision: number, action: string, reason: string): $CancellablePromise<void> {
+    return $Call.ByID(1341233383, id, revision, action, reason);
+}
+
+/**
+ * GoalOverview reads only durable local records. The project selector is an
+ * identity, never a display label. Empty selects every configured project.
+ */
+export function GoalOverview(project: string): $CancellablePromise<goal$0.Overview[] | null> {
+    return $Call.ByID(2084464305, project);
 }
 
 /**

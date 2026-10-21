@@ -415,6 +415,10 @@ func (d *Daemon) tick(ctx context.Context, name string, dryRun bool) (protocol.P
 	merged := mergedIssues(d.sessions.Snapshot())
 	var candidates []linear.Issue
 	for _, is := range issues {
+		if reason := d.goalHold(is.ID, is.Description, is.IssueRelations); reason != "" {
+			skip(is, reason)
+			continue
+		}
 		if d.inflight.Has(is.ID) {
 			skip(is, "in-flight")
 			continue
@@ -535,7 +539,11 @@ func (d *Daemon) tick(ctx context.Context, name string, dryRun bool) (protocol.P
 		// if that state write fails). In-flight covers the transient spawn window;
 		// across a crash/restart in that window a state-mode issue is instead
 		// shielded by the live-native-session guard in the candidate loop above.
-		d.inflight.Add(is.ID, is.Identifier)
+		if err := d.claimOrdinaryIssue(is.ID, is.Identifier, is.Description, is.IssueRelations); err != nil {
+			m.Action, m.Reason = "skipped", err.Error()
+			res.Matches = append(res.Matches, m)
+			continue
+		}
 		if p.DedupMode != "state" {
 			seen[is.ID] = now
 			if err := d.seen.save(name, seen); err != nil {

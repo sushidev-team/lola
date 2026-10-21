@@ -141,7 +141,7 @@ func (d *Daemon) recordCheckpointAsync(id, event string) {
 // recordCheckpoint is the synchronous body of recordCheckpointAsync.
 func (d *Daemon) recordCheckpoint(ctx context.Context, id, event string) {
 	s, ok := d.sessions.Get(id)
-	if !ok || s.Worktree == "" || s.IsAgentless() {
+	if !ok || s.Worktree == "" || s.IsAgentless() || s.GoalManaged() {
 		return
 	}
 	if _, err := os.Stat(s.Worktree); err != nil {
@@ -196,6 +196,9 @@ func (d *Daemon) checkpointSession(id string) (session.Session, error) {
 	s, ok := d.sessions.Get(id)
 	if !ok {
 		return session.Session{}, fmt.Errorf("unknown session %s", id)
+	}
+	if s.GoalManaged() {
+		return session.Session{}, errors.New("goal workers use preserved attempts and verified integration receipts")
 	}
 	if s.Worktree == "" {
 		return session.Session{}, fmt.Errorf("session %s has no worktree", id)

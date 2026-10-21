@@ -129,9 +129,12 @@ const openCodeDir = ".opencode"
 // Native spawns and manages Lola's own runner sessions (runtime = "native"):
 // one git worktree + one tmux session running Claude Code per Linear issue.
 type Native struct {
-	Cfg  *config.Config
-	WT   *worktree.Manager
-	Tmux *tmux.Client
+	// KnowledgeBrief supplies a bounded, recorded knowledge snapshot at launch.
+	// Nil preserves launches without a knowledge store.
+	KnowledgeBrief func(project, sessionID string, prompt []byte) []byte
+	Cfg            *config.Config
+	WT             *worktree.Manager
+	Tmux           *tmux.Client
 	// LolaBin is the absolute path to the lola binary; the generated Claude
 	// Code settings wire lifecycle hooks to `<LolaBin> hook <event>`.
 	LolaBin string
@@ -404,7 +407,7 @@ func (n *Native) SpawnWith(ctx context.Context, p config.Project, issue linear.I
 	if bestOf {
 		brief = withBestOfBriefing(brief, o.Attempt, o.Of)
 	}
-	if err := os.WriteFile(filepath.Join(dir, lolaDir, "prompt.md"), n.withReportBriefing(withContextBriefing(brief, ctxDir)), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, lolaDir, "prompt.md"), n.withReportBriefing(n.withKnowledge(p.Name, id, withContextBriefing(brief, ctxDir))), 0o600); err != nil {
 		return fail("write prompt.md", err)
 	}
 	// Per-agent lifecycle-callback artifact(s): claude's .lola/settings.json,
@@ -686,7 +689,7 @@ func (n *Native) finishAgentLaunch(ctx context.Context, p config.Project, id, di
 	}
 	n.pruneCheckpoints(ctx, dir, id) // a fresh session starts with no history
 	ctxDir := n.setupContext(dir, p.Name, ctxKey)
-	if err := os.WriteFile(filepath.Join(dir, lolaDir, "prompt.md"), n.withReportBriefing(withContextBriefing([]byte(prompt), ctxDir)), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, lolaDir, "prompt.md"), n.withReportBriefing(n.withKnowledge(p.Name, id, withContextBriefing([]byte(prompt), ctxDir))), 0o600); err != nil {
 		return nil, rb("write prompt.md", err)
 	}
 	if err := n.writeAgentArtifacts(dir, kind, ctxDir); err != nil {
@@ -1189,6 +1192,9 @@ func (n *Native) Adopt(ctx context.Context) ([]session.Session, error) {
 	}
 	live := map[string]bool{}
 	for _, ts := range tmuxSessions {
+		if session.IsGoalSessionID(ts.Name) {
+			continue
+		} // goal journal owns adoption
 		if strings.HasPrefix(ts.Name, sessionPrefix) {
 			live[ts.Name] = true
 		}
@@ -1347,6 +1353,9 @@ func (n *Native) Adopt(ctx context.Context) ([]session.Session, error) {
 // operator removed it, or an earlier cleanup got half-way) otherwise left its
 // local branch behind forever.
 func (n *Native) Kill(ctx context.Context, s session.Session, removeWorktree, force bool) error {
+	if s.GoalManaged() {
+		return n.StopGoal(ctx, s)
+	}
 	name := s.TmuxName
 	if name == "" {
 		name = s.ID
@@ -1524,6 +1533,9 @@ func (n *Native) Alive(ctx context.Context, s session.Session) bool {
 // dispatch guards so the revived session is not duplicated. Revive itself only
 // needs the worktree to still be there.
 func (n *Native) Revive(ctx context.Context, s session.Session) (session.Session, error) {
+	if s.GoalManaged() {
+		return s, errors.New("goal workers resume through a newly reserved attempt")
+	}
 	id := s.ID
 	dir := filepath.Join(n.WT.Root, s.Project, id)
 	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
@@ -1789,4 +1801,11 @@ func shQuote(s string) string {
 		return s
 	}
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+func (n *Native) withKnowledge(project, id string, prompt []byte) []byte {
+	if n.KnowledgeBrief == nil {
+		return prompt
+	}
+	return n.KnowledgeBrief(project, id, prompt)
 }

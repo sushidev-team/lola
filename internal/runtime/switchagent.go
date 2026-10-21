@@ -40,6 +40,9 @@ func handoffLaunchPrompt(id string, from agent.Kind) string {
 // the kill leaves the worktree intact and the session reads dead — the
 // existing revive path covers it.
 func (n *Native) SwitchAgent(ctx context.Context, s session.Session, kind agent.Kind, reason, paneTail string) (session.Session, error) {
+	if s.GoalManaged() {
+		return s, fmt.Errorf("goal workers switch agents through a newly reserved attempt")
+	}
 	id := s.TmuxName
 	if id == "" {
 		id = s.ID

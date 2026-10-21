@@ -113,7 +113,7 @@ func TestReloadRebuildsNativeOnSocketChange(t *testing.T) {
 	d := newEnableTestDaemon(t, labelPoll("p1"))
 	// Stand in a real native runtime on the default "lola" socket and mark it
 	// owned so the realNative-gated rebuild path is exercised.
-	d.native = newNativeRuntime(d.cfg, d.home, d.lolaBin, d.linearKey, d.nativeLogf, d.ports, d.hookToken)
+	d.native = newNativeRuntime(d.cfg, d.home, d.lolaBin, d.linearKey, d.nativeLogf, d.ports, d.hookToken, d.knowledgeBrief)
 	d.realNative = true
 	if got := d.native.(*runtime.Native).Tmux.SocketName; got != config.DefaultTmuxSocketName {
 		t.Fatalf("precondition: native socket = %q, want %q", got, config.DefaultTmuxSocketName)

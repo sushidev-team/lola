@@ -1,6 +1,10 @@
 package config
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/sushidev-team/lola/internal/reviewprofile"
+)
 
 // The [review] table configures the P9 "QA buddy": an EVENT-TRIGGERED CodeRabbit
 // review pass, NOT a persistent second agent. When enabled, lola execs the
@@ -108,7 +112,8 @@ type fileReviewConfig struct {
 	// A catalog-only file leaves every scalar pointer above nil, which is what
 	// hasLegacyReviewScalars keys off so resolveReview does not materialize a
 	// spurious legacy [review] block. See internal/config/reviewprovider.go.
-	Provider []fileReviewProvider `toml:"provider,omitempty"`
+	Provider []fileReviewProvider    `toml:"provider,omitempty"`
+	Profile  []reviewprofile.Profile `toml:"profile,omitempty"`
 }
 
 // hasLegacyReviewScalars reports whether any legacy [review] scalar key is

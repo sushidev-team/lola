@@ -29,6 +29,7 @@ export type {
     LinearTeam,
     LinearTeamMeta,
     PathInfoDTO,
+    ProjectExecutionDTO,
     ProjectFormDTO,
     ProjectLayoutDTO,
     ProjectPlacementDTO,

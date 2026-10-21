@@ -88,6 +88,9 @@ func (d *Daemon) handlePlan(ctx context.Context, a protocol.PlanArgs) (protocol.
 	if err != nil {
 		return protocol.PlanData{}, d.linearErr(fmt.Sprintf("read %s", issue), err)
 	}
+	if reason := d.goalHold(parent.ID, parent.Description, parent.IssueRelations); reason != "" {
+		return protocol.PlanData{}, errors.New(reason)
+	}
 	if parent.Children > 0 {
 		return protocol.PlanData{}, fmt.Errorf("%s already has %d sub-issue(s); it is decomposed", parent.Identifier, parent.Children)
 	}
@@ -124,6 +127,9 @@ func (d *Daemon) handlePlanApply(ctx context.Context, a protocol.PlanApplyArgs) 
 	}
 	// The guard against a double apply: a second run would create a second set
 	// of sub-issues, and both would dispatch.
+	if reason := d.goalHold(parent.ID, parent.Description, parent.IssueRelations); reason != "" {
+		return protocol.PlanApplyData{}, errors.New(reason)
+	}
 	if parent.Children > 0 {
 		return protocol.PlanApplyData{}, fmt.Errorf("%s already has %d sub-issue(s); not creating another set", parent.Identifier, parent.Children)
 	}
@@ -149,6 +155,10 @@ func (d *Daemon) handlePlanApply(ctx context.Context, a protocol.PlanApplyArgs) 
 		}
 	}
 	tmpl := subIssuePlacement(p, parent, activeCycle, viewerID)
+	if err := d.claimOrdinaryIssue(parent.ID, parent.Identifier, parent.Description, parent.IssueRelations); err != nil {
+		return protocol.PlanApplyData{}, err
+	}
+	defer d.inflight.Remove(parent.ID)
 
 	res := protocol.PlanApplyData{Parent: parent.Identifier, Project: p.Name}
 	ids := make([]string, 0, len(steps))

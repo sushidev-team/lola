@@ -211,6 +211,9 @@ func (d *Daemon) handleBestOf(ctx context.Context, a protocol.BestOfArgs) (proto
 	if err != nil {
 		return protocol.BestOfData{}, d.linearErr("read "+ident, err)
 	}
+	if reason := d.goalHold(detail.ID, detail.Description, detail.IssueRelations); reason != "" {
+		return protocol.BestOfData{}, errors.New(reason)
+	}
 	proj, err := d.planProject(a.Project, detail.TeamID)
 	if err != nil {
 		return protocol.BestOfData{}, err
@@ -256,8 +259,8 @@ func (d *Daemon) handleBestOf(ctx context.Context, a protocol.BestOfArgs) (proto
 		mu.Lock()
 		defer mu.Unlock()
 	}
-	if !d.inflight.Claim(detail.ID, detail.Identifier) {
-		return protocol.BestOfData{}, fmt.Errorf("%s is already being worked on — check sessions", detail.Identifier)
+	if err := d.claimOrdinaryIssue(detail.ID, detail.Identifier, detail.Description, detail.IssueRelations); err != nil {
+		return protocol.BestOfData{}, err
 	}
 	if err := slotCheck(); err != nil {
 		d.inflight.Remove(detail.ID)

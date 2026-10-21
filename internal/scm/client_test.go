@@ -65,7 +65,7 @@ func TestPRForBranchArgsAndParse(t *testing.T) {
 		t.Fatalf("PRForBranch: %v", err)
 	}
 	want := "pr list --repo acme/nori --head lola/NORI-12-1 --state all --limit 1 " +
-		"--json number,url,state,isDraft,mergeable,reviewDecision,statusCheckRollup,headRefOid,baseRefName"
+		"--json number,url,state,isDraft,mergeable,reviewDecision,statusCheckRollup,headRefOid,baseRefName,baseRefOid"
 	if args := loggedArgs(t, argsLog); args != want {
 		t.Errorf("invoked %q, want %q", args, want)
 	}

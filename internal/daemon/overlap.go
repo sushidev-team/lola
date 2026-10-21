@@ -43,7 +43,7 @@ const overlapMaxFiles = 20
 // work is either on the default branch already (and so in every other
 // session's merge-base soon) or abandoned — flagging it would be noise.
 func overlapCandidate(s session.Session) bool {
-	if s.Source != "native" || s.Worktree == "" {
+	if s.GoalManaged() || s.Source != "native" || s.Worktree == "" {
 		return false
 	}
 	switch s.Delivery {

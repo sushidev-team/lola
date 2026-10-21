@@ -42,6 +42,9 @@ func (d *Daemon) handleRevive(ctx context.Context, sessionID string) (protocol.R
 	if !ok {
 		return protocol.ReviveData{}, fmt.Errorf("unknown session %s", sessionID)
 	}
+	if s.GoalManaged() {
+		return protocol.ReviveData{}, errors.New("goal workers resume through goal controls")
+	}
 
 	d.mu.Lock()
 	nat := d.native
@@ -64,6 +67,11 @@ func (d *Daemon) handleRevive(ctx context.Context, sessionID string) (protocol.R
 		return protocol.ReviveData{}, fmt.Errorf("runtime unavailable: %w", err)
 	}
 
+	d.goalMu.Lock()
+	defer d.goalMu.Unlock()
+	if reason := d.goalHold(s.IssueUUID, ""); reason != "" {
+		return protocol.ReviveData{}, errors.New(reason)
+	}
 	revived, err := nat.Revive(ctx, s)
 	if err != nil {
 		return protocol.ReviveData{}, err

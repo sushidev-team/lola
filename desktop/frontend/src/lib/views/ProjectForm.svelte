@@ -41,6 +41,7 @@
   // leaving the stack gives them back.
   const ALL_TABS = [
     { id: "repo", label: "General" },
+    { id: "execution", label: "Execution" },
     { id: "worktree", label: "Worktree setup" },
     { id: "members", label: "Members" },
     { id: "stack", label: "Stack" },
@@ -49,8 +50,8 @@
   ];
   type Role = "project" | "stack" | "member";
   const TABS_FOR: Record<Role, string[]> = {
-    project: ["repo", "worktree", "filter", "writeback"],
-    stack: ["repo", "members", "filter", "writeback"],
+    project: ["repo", "execution", "worktree", "filter", "writeback"],
+    stack: ["repo", "execution", "members", "filter", "writeback"],
     member: ["repo", "worktree", "stack"],
   };
 
@@ -345,6 +346,7 @@
       f = {
         ...d,
         label: d.label ?? "",
+        execution: d.execution ? { ...d.execution } : null,
         inherits: inheritsOf(d.inherits),
         kind: d.kind ?? "",
         stack: d.stack ?? "",
@@ -868,6 +870,48 @@
           </div>
         </details>
       </div>
+    {:else if shownTab === "execution"}
+      {#if d.execution}
+        {@const execution = d.execution}
+        <div class="space-y-5">
+          {#snippet isolation()}
+            <div class={rowCls}>
+              {@render cap("Run agents in", null)}
+              <Select aria-label="Run agents in" value={execution.sandbox === "docker" ? "docker" : "none"}
+                onchange={(event) => { execution.sandbox = event.currentTarget.value; }}>
+                <option value="none">Host workspace</option>
+                <option value="docker">Docker workspace</option>
+              </Select>
+            </div>
+            <p class="text-sm text-faint">Applies to new agent sessions for this {role === "stack" ? "stack" : "project"}. Existing sessions keep their workspace.</p>
+            {#if execution.sandbox === "docker" || execution.image}
+              {@render textRow("Container image", execution.image, (value) => { execution.image = value; }, "Use the configured default image")}
+              <p class="text-sm text-faint">Use an installed image with the project toolchain and coding agent. Leave blank to use the image in Lola’s sandbox configuration. Clear this override when switching to Host workspace.</p>
+            {/if}
+            <p class="text-sm text-faint">Docker setup also requires a Linux Lola binary configured in <code>[sandbox].lola_bin</code>. See <code>README.md</code>, “The container sandbox”, for setup.</p>
+          {/snippet}
+          {@render section("Workspace isolation", isolation)}
+          {#snippet goals()}
+            <label class="flex items-center gap-2 text-ink">
+              <Checkbox checked={execution.goalMode}
+                disabled={!execution.goalMode && (execution.sandbox !== "docker" || !d.teamId || !d.projectId)}
+                onchange={(event) => { execution.goalMode = event.currentTarget.checked; }} />
+              Make autonomous goals available
+            </label>
+            <p class="text-sm text-faint">Each goal still needs a reviewed plan, limits and execution authorization. Work stays in isolated goal workspaces; delivery uses draft pull requests for human merge.</p>
+            {#if execution.sandbox !== "docker"}
+              <p class="text-sm text-warn">Choose Docker workspace above to enable goal mode{execution.goalMode ? ", or turn goal mode off before saving" : ""}.</p>
+            {/if}
+            {#if !d.teamId || !d.projectId}
+              <p class="text-sm text-faint">Choose an existing Linear team and project to track goals.</p>
+              <Button size="sm" onclick={() => { tab = "filter"; }}>Choose Linear project</Button>
+            {/if}
+          {/snippet}
+          {@render section("Autonomous goals", goals)}
+        </div>
+      {:else}
+        <p class="text-sm text-faint">Update the daemon to edit execution settings here.</p>
+      {/if}
     {:else if shownTab === "worktree"}
       <div class="space-y-5">
         {#snippet preparation()}

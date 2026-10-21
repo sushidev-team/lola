@@ -27,6 +27,10 @@ import (
 	"github.com/sushidev-team/lola/internal/agent"
 	"github.com/sushidev-team/lola/internal/brain"
 	"github.com/sushidev-team/lola/internal/config"
+	"github.com/sushidev-team/lola/internal/goal"
+	"github.com/sushidev-team/lola/internal/goalplan"
+	"github.com/sushidev-team/lola/internal/goalreview"
+	"github.com/sushidev-team/lola/internal/knowledge"
 	"github.com/sushidev-team/lola/internal/linear"
 	"github.com/sushidev-team/lola/internal/mdns"
 	"github.com/sushidev-team/lola/internal/notify"
@@ -35,6 +39,7 @@ import (
 	"github.com/sushidev-team/lola/internal/portproc"
 	"github.com/sushidev-team/lola/internal/quota"
 	"github.com/sushidev-team/lola/internal/remote"
+	"github.com/sushidev-team/lola/internal/reviewprofile"
 	"github.com/sushidev-team/lola/internal/runtime"
 	"github.com/sushidev-team/lola/internal/scm"
 	"github.com/sushidev-team/lola/internal/secrets"
@@ -42,6 +47,7 @@ import (
 	"github.com/sushidev-team/lola/internal/state"
 	"github.com/sushidev-team/lola/internal/statusagent"
 	"github.com/sushidev-team/lola/internal/tmux"
+	"github.com/sushidev-team/lola/internal/usage"
 	"github.com/sushidev-team/lola/internal/worktree"
 )
 
@@ -109,7 +115,31 @@ type Daemon struct {
 	status   *statusTracker
 
 	// Session observability (PLAN P1): the observer loop's snapshot store.
-	sessions *session.Store
+	sessions         *session.Store
+	goals            *goal.Store
+	goalsErr         error
+	goalPlans        *goalplan.Store
+	goalPlansErr     error
+	goalPlanMu       sync.Mutex // one bounded coordinator proposal at a time
+	goalPlanRun      goalplan.RunFunc
+	goalSpawn        func(context.Context, goal.Goal, string) (session.Session, error) // test override; production uses Native.SpawnGoal
+	goalProgressMu   sync.Mutex                                                        // serializes the progress outbox independently of execution
+	goalRunMu        sync.Mutex
+	goalJobsMu       sync.Mutex
+	goalJobs         map[string]context.CancelFunc
+	goalVerify       func(context.Context, string, string) error
+	goalReviewRun    goalreview.RunFunc
+	goalUsageScan    func(context.Context, string, string, time.Time) usage.Observation
+	goalCheckRun     func(context.Context, string, []string) (string, error)
+	goalPublishRun   func(context.Context, string, string, []string, []byte) ([]byte, error)
+	knowledge        *knowledge.Store
+	knowledgeErr     error
+	learningCaptures reportLimiter
+	profileReviews   *reviewprofile.Store
+	profileErr       error
+	profileRun       profileRun
+	profilePaths     func(context.Context, string, string, string) ([]string, error)
+	goalMu           sync.Mutex // serializes goal provisioning, separate from poll and session locks
 
 	// events is the in-memory activity feed (recent notable status
 	// transitions) served to the TUI. Fed via sessions.OnTransition + the
@@ -500,6 +530,23 @@ func newDaemon(cfg *config.Config, lin linear.API, logger *log.Logger, home stri
 		hookWarned: map[string]bool{},
 		ckptLocks:  map[string]*sync.Mutex{},
 	}
+	d.goals, d.goalsErr = goal.Open(filepath.Join(home, "state", "goals.json"))
+	if d.goalsErr != nil {
+		logger.Printf("goal store: %v (issue dispatch held)", d.goalsErr)
+	}
+	d.goalPlans, d.goalPlansErr = goalplan.Open(filepath.Join(home, "state", "goal-plans.json"))
+	if d.goalPlansErr != nil {
+		logger.Printf("goal proposals: %v (new proposals held)", d.goalPlansErr)
+	}
+	d.knowledge, d.knowledgeErr = knowledge.Open(filepath.Join(home, "state", "knowledge.json"))
+	if d.knowledgeErr != nil {
+		logger.Printf("knowledge: %v (lessons omitted)", d.knowledgeErr)
+	}
+	d.profileReviews, d.profileErr = reviewprofile.Open(filepath.Join(home, "state", "profile-reviews.json"))
+	if d.profileErr != nil {
+		logger.Printf("specialist reviews: %v (required reviews held)", d.profileErr)
+	}
+	d.profilePaths = (&worktree.Manager{}).ProfilePaths
 	ports, perr := portlease.Open(filepath.Join(home, "state", "ports.json"))
 	if perr != nil {
 		logger.Printf("port leases: %v (starting with none)", perr)
@@ -644,7 +691,7 @@ func Run(ctx context.Context) error {
 		lolaBin = stable
 	}
 	d.lolaBin = lolaBin
-	d.native = newNativeRuntime(cfg, home, lolaBin, d.linearKey, d.nativeLogf, d.ports, d.hookToken)
+	d.native = newNativeRuntime(cfg, home, lolaBin, d.linearKey, d.nativeLogf, d.ports, d.hookToken, d.knowledgeBrief)
 	// One `tmux ls` per observe cycle answers liveness for EVERY session (and
 	// carries #{session_activity}, the zero-cost output-freshness stamp) —
 	// replacing N per-session `has-session` execs. Wired HERE (production
@@ -786,6 +833,8 @@ func Run(ctx context.Context) error {
 	// The sandbox hook bridge (hookbridge.go): open only while a project is
 	// sandboxed, and a bind failure is logged rather than fatal, like [remote].
 	d.syncHookBridge(ctx)
+	d.wg.Add(1)
+	go d.goalLoop(ctx)
 
 	go d.serve(ctx, ln)
 
@@ -1081,7 +1130,7 @@ func (d *Daemon) tmuxClient() *tmux.Client {
 // when no key is available so spawning is never blocked on it. logf carries
 // best-effort styling advisories (status-bar chrome) into the daemon log.
 // hookToken mints a sandboxed session's hook-bridge token (hookbridge.go).
-func newNativeRuntime(cfg *config.Config, home, lolaBin string, linearKey func() string, logf func(string, ...any), ports *portlease.Registry, hookToken func(string) string) *runtime.Native {
+func newNativeRuntime(cfg *config.Config, home, lolaBin string, linearKey func() string, logf func(string, ...any), ports *portlease.Registry, hookToken func(string) string, knowledgeBrief func(string, string, []byte) []byte) *runtime.Native {
 	return &runtime.Native{
 		Cfg:     cfg,
 		WT:      &worktree.Manager{Root: filepath.Join(home, "worktrees")},
@@ -1090,12 +1139,13 @@ func newNativeRuntime(cfg *config.Config, home, lolaBin string, linearKey func()
 		ResolveLolaBin: func() string {
 			return runtime.ResolveLolaBin(lolaBin, filepath.Join(home, "worktrees"), exec.LookPath, nil)
 		},
-		Home:        home,
-		LinearKey:   linearKey,
-		Logf:        logf,
-		Checkpoints: checkpoint.Git{},
-		Ports:       ports,
-		HookToken:   hookToken,
+		Home:           home,
+		LinearKey:      linearKey,
+		Logf:           logf,
+		Checkpoints:    checkpoint.Git{},
+		Ports:          ports,
+		HookToken:      hookToken,
+		KnowledgeBrief: knowledgeBrief,
 	}
 }
 

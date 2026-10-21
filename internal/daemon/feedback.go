@@ -65,6 +65,9 @@ func (d *Daemon) handleDiff(ctx context.Context, sessionID string) (protocol.Dif
 	if !ok {
 		return protocol.DiffData{}, fmt.Errorf("unknown session %s", sessionID)
 	}
+	if s.GoalManaged() {
+		return protocol.DiffData{}, errors.New("goal diffs are available from staged integration candidates, not mutable worker metadata")
+	}
 	if s.Worktree == "" {
 		return protocol.DiffData{}, fmt.Errorf("session %s has no worktree", sessionID)
 	}

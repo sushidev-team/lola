@@ -200,6 +200,12 @@ export interface PathInfoDTO {
     "suggestedId": string;
 }
 
+export interface ProjectExecutionDTO {
+    "goalMode": boolean;
+    "sandbox": string;
+    "image": string;
+}
+
 /**
  * ProjectFormDTO is the whole of one [[project]] — repository setup, Linear
  * polling filter and write-back — because a project IS the poll unit. The
@@ -207,6 +213,12 @@ export interface PathInfoDTO {
  * which of them came from [defaults] rather than the project itself.
  */
 export interface ProjectFormDTO {
+    /**
+     * Nil from an older client preserves execution settings. Stack members
+     * cannot edit these owning-stack settings through their repository form.
+     */
+    "execution"?: ProjectExecutionDTO | null;
+
     /**
      * Repository / worktree setup. Name is the project's ID — a path segment and
      * the prefix of every session/tmux name — while Label is the free-text

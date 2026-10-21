@@ -956,6 +956,9 @@ export interface SessionApp {
  * ints so the TUI never needs scm/session imports or re-derivation.
  */
 export interface SessionInfo {
+    "goalId"?: string;
+    "taskId"?: string;
+    "attemptId"?: string;
     "id": string;
     "project": string;
 

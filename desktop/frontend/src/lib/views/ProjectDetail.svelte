@@ -4,6 +4,7 @@
   import StatusPill from "$lib/components/StatusPill.svelte";
   import LivePulse from "$lib/components/LivePulse.svelte";
   import Button from "$lib/components/Button.svelte";
+  import ProjectGoals from "$lib/components/ProjectGoals.svelte";
   import Select from "$lib/components/Select.svelte";
 
   const project = $derived<ProjectInfo | undefined>(store.projectByName(nav.project));
@@ -189,6 +190,8 @@
           </div>
         {/if}
       </div>
+
+      <ProjectGoals project={nav.project} />
 
       <!-- Actions -->
       <div class="flex flex-col gap-1.5">

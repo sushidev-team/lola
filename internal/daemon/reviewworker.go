@@ -43,8 +43,9 @@ const (
 
 // reviewJob is one queued pass: run provider Kind for session ID.
 type reviewJob struct {
-	ID   string
-	Kind provKind
+	Profile *profileArgs
+	ID      string
+	Kind    provKind
 }
 
 // reviewKey identifies a session/kind pair for the busy set.
@@ -75,6 +76,7 @@ func (d *Daemon) queueReviewProviders(ctx context.Context, s session.Session) {
 		}
 		d.queueReviewPass(s, p)
 	}
+	d.queueProfileReviews(s)
 }
 
 // queueReviewPass enqueues one pass provider for session s when it is due. It
@@ -86,7 +88,7 @@ func (d *Daemon) queueReviewPass(s session.Session, p reviewProvider) {
 	if !p.Enabled || !p.OnPROpen {
 		return
 	}
-	if s.Source != "native" || !isReviewablePROpen(s.PR) {
+	if s.GoalManaged() || s.Source != "native" || !isReviewablePROpen(s.PR) {
 		return
 	}
 	if p.Status && !agentSettled(s) {
@@ -148,7 +150,11 @@ func (d *Daemon) reviewLoop(ctx context.Context) {
 // may have been stamped by the manual command). Panic-guarded so one bad pass
 // can never take the worker down with it.
 func (d *Daemon) runQueuedReview(ctx context.Context, job reviewJob) {
-	defer d.clearReviewBusy(reviewKey(job.ID, job.Kind))
+	key := reviewKey(job.ID, job.Kind)
+	if job.Profile != nil {
+		key = profileBusyKey(job.ID, job.Profile.Profile)
+	}
+	defer d.clearReviewBusy(key)
 	defer func() {
 		if r := recover(); r != nil {
 			d.logf("", "review: pass for %s (%s) panicked: %v", job.ID, job.Kind, r)
@@ -156,6 +162,12 @@ func (d *Daemon) runQueuedReview(ctx context.Context, job reviewJob) {
 	}()
 	s, ok := d.sessions.Get(job.ID)
 	if !ok {
+		return
+	}
+	if job.Profile != nil {
+		if _, err := d.runProfile(ctx, *job.Profile); err != nil {
+			d.logf("", "specialist %s for %s: %v", job.Profile.Profile, job.ID, err)
+		}
 		return
 	}
 	p, ok := d.providerByKind(job.Kind)

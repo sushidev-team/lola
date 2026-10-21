@@ -134,7 +134,7 @@ func (n *Native) spawnStack(ctx context.Context, p config.Project, issue linear.
 	ctxKey := contextKeyFor(issue.Identifier, id)
 	ctxDir := n.setupContext(dir, p.Name, ctxKey)
 	brief := withStackBriefing(promptMD(p, issue, branch), n.Cfg.StackMembers(p.Name), created)
-	if err := os.WriteFile(filepath.Join(dir, lolaDir, "prompt.md"), n.withReportBriefing(withContextBriefing(brief, ctxDir)), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, lolaDir, "prompt.md"), n.withReportBriefing(n.withKnowledge(p.Name, id, withContextBriefing(brief, ctxDir))), 0o600); err != nil {
 		return fail("write prompt.md", err)
 	}
 	if err := n.writeAgentArtifacts(dir, kind, ctxDir); err != nil {

@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/sushidev-team/lola/internal/config"
+	"github.com/sushidev-team/lola/internal/goal"
+	"github.com/sushidev-team/lola/internal/goalplan"
 	"github.com/sushidev-team/lola/internal/notify"
 	"github.com/sushidev-team/lola/internal/protocol"
 	"github.com/sushidev-team/lola/internal/quota"
@@ -159,6 +161,7 @@ func (d *Daemon) safeUsagePass(ctx context.Context) {
 			d.logf("", "usage pass panic (daemon keeps running): %v", r)
 		}
 	}()
+	d.goalUsagePass(ctx, time.Now())
 	d.usagePass(ctx, time.Now())
 }
 
@@ -178,8 +181,19 @@ func (d *Daemon) usagePass(ctx context.Context, now time.Time) {
 	}
 	d.scanOpencode(ctx, now)
 
+	var goalSnapshot []goal.Goal
+	if d.goals != nil {
+		goalSnapshot = d.goals.List()
+	}
+	var planSnapshot []goalplan.UsageRecord
+	if d.goalPlans != nil {
+		planSnapshot = d.goalPlans.UsageRecords()
+	}
 	sp.mu.Lock()
-	changed := false
+	changed := recordGoalPlanUsage(sp.ledger, planSnapshot)
+	if recordGoalUsage(sp.ledger, goalSnapshot) {
+		changed = true
+	}
 	keep := map[string]bool{}
 	infos := make(map[string]protocol.UsageInfo, len(snap))
 	record := func(source string, e usage.Entry, days map[string]usage.Totals) {
@@ -209,6 +223,18 @@ func (d *Daemon) usagePass(ctx context.Context, now time.Time) {
 	lives := map[string]live{}
 	burnFrom := now.Add(-usage.BurnWindow).Truncate(usage.SlotDuration)
 	for _, s := range snap {
+		if s.GoalManaged() {
+			for _, g := range goalSnapshot {
+				if g.ID != s.GoalID || g.Execution == nil {
+					continue
+				}
+				run := g.Execution.Runs[s.AttemptID]
+				if run.Usage != nil && len(run.Usage.Days) > 0 {
+					lives[s.ID] = live{agent: run.Usage.Agent, days: run.Usage.Days}
+				}
+			}
+			continue // Private logs have one separately attributed goal-run source.
+		}
 		dir := usageDir(sp.root, d.home, s)
 		days := scan(dir, s.ID)
 		recent := sp.scanner.Recent(dir, burnFrom)
@@ -370,6 +396,9 @@ func history(l *usage.Ledger, snap []session.Session) map[string]agentHistory {
 	liveIDs := make(map[string]bool, len(snap))
 	for _, s := range snap {
 		liveIDs[s.ID] = true
+		if s.GoalManaged() {
+			liveIDs["goal:"+s.GoalID+":"+s.AttemptID] = true
+		}
 	}
 	out := map[string]agentHistory{}
 	for src, e := range l.BySource() {

@@ -61,6 +61,7 @@ function sampleDto() {
     defaultBranch: "main",
     branchPrefix: "acme/",
     agent: "claude",
+    execution: { goalMode: false, sandbox: "", image: "" },
     symlinks: ["inherited-link"],
     postCreate: ["npm ci"],
     env: ["KEY=own"],
@@ -191,6 +192,56 @@ describe("ProjectForm", () => {
     // The stack-only tabs are not offered to a plain project.
     expect(screen.queryByRole("tab", { name: "Members" })).not.toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "Stack" })).not.toBeInTheDocument();
+  });
+
+  it("requires Docker before enabling goals and saves availability separately", async () => {
+    render(ProjectForm);
+    await fireEvent.click(await screen.findByRole("tab", { name: "Execution" }));
+    const toggle = screen.getByRole("checkbox", { name: "Make autonomous goals available" });
+    expect(toggle).toBeDisabled();
+    await fireEvent.change(screen.getByLabelText("Run agents in"), { target: { value: "docker" } });
+    expect(toggle).toBeEnabled();
+    await fireEvent.click(toggle);
+    await fireEvent.input(screen.getByLabelText("Container image"), { target: { value: "toolchain:stable" } });
+    expect(screen.getByText(/Each goal still needs a reviewed plan/)).toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+    await waitFor(() => expect(saveProject).toHaveBeenCalledTimes(1));
+    expect(saveProject.mock.calls[0][0].execution).toEqual({ goalMode: true, sandbox: "docker", image: "toolchain:stable" });
+  });
+
+  it("guides a project without Linear placement to Issue pickup", async () => {
+    getProject.mockResolvedValue({ ...sampleDto(), projectId: "", execution: { goalMode: false, sandbox: "docker", image: "" } });
+    render(ProjectForm);
+    await fireEvent.click(await screen.findByRole("tab", { name: "Execution" }));
+    expect(screen.getByRole("checkbox", { name: "Make autonomous goals available" })).toBeDisabled();
+    await fireEvent.click(screen.getByRole("button", { name: "Choose Linear project" }));
+    expect(screen.getByRole("tab", { name: "Issue pickup" })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("retains rejected settings and allows goal mode to be turned off", async () => {
+    getProject.mockResolvedValue({ ...sampleDto(), execution: { goalMode: true, sandbox: "docker", image: "toolchain:stable" } });
+    saveProject.mockRejectedValue(new Error("goal_mode requires sandbox = docker"));
+    render(ProjectForm);
+    await fireEvent.click(await screen.findByRole("tab", { name: "Execution" }));
+    await fireEvent.change(screen.getByLabelText("Run agents in"), { target: { value: "none" } });
+    await fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+    expect(await screen.findByText(/goal_mode requires sandbox = docker/)).toBeInTheDocument();
+    const toggle = screen.getByRole("checkbox", { name: "Make autonomous goals available" });
+    expect(toggle).toBeChecked();
+    expect(toggle).toBeEnabled();
+    expect(screen.getByLabelText("Run agents in")).toHaveValue("none");
+    await fireEvent.click(toggle);
+    expect(toggle).not.toBeChecked();
+  });
+
+  it("hides execution settings on stack members", async () => {
+    getProject.mockResolvedValue({ ...sampleDto(), stack: "nori", labels: [] });
+    render(ProjectForm);
+    await screen.findByLabelText("Path");
+    expect(screen.queryByRole("tab", { name: "Execution" })).not.toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+    await waitFor(() => expect(saveProject).toHaveBeenCalledTimes(1));
+    expect(saveProject.mock.calls[0][0].execution).toEqual(sampleDto().execution);
   });
 
   it("saves explicit defaults for agent and concurrency", async () => {

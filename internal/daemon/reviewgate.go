@@ -210,6 +210,9 @@ func (d *Daemon) postReviewStatus(ctx context.Context, s session.Session, p revi
 // passed THIS head of s's PR. The merge queue reads it because lola's own
 // statuses are deliberately absent from the CI verdict.
 func (d *Daemon) reviewGatesOpen(s session.Session) bool {
+	if !d.profileGatesOpen(s) {
+		return false
+	}
 	if s.PR == nil {
 		return false
 	}

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
+	"github.com/sushidev-team/lola/internal/reviewprofile"
 )
 
 const (
@@ -179,6 +180,8 @@ type Project struct {
 	Sandbox      string   `toml:"sandbox,omitempty"`
 	SandboxImage string   `toml:"sandbox_image,omitempty"`
 	SandboxPorts []string `toml:"sandbox_ports,omitempty"`
+	// GoalMode is explicit per project/stack availability, never execution authorization.
+	GoalMode bool `toml:"goal_mode,omitempty"`
 	// Kind is "" for an ordinary repository project or "stack" for a STACK:
 	// a project with no checkout of its own that owns the Linear side (filter,
 	// write-back, agent, sandbox, budget) for several member repositories. See
@@ -381,7 +384,8 @@ type Config struct {
 	// [coderabbit] tables instead — the two are mutually exclusive. Serialized
 	// on Save via reviewMirror(); the runtime provider set (catalog or legacy
 	// synthesis) is EffectiveReviewProviders(). See reviewprovider.go.
-	ReviewProviders []ReviewProvider `toml:"-"`
+	ReviewProviders []ReviewProvider        `toml:"-"`
+	ReviewProfiles  []reviewprofile.Profile `toml:"-"`
 
 	// notices are NON-FATAL repairs Load made to the file: things that were
 	// already inert but would otherwise be rejected, so a config nobody could
@@ -527,9 +531,11 @@ type fileProject struct {
 	Sandbox      string   `toml:"sandbox,omitempty"`
 	SandboxImage string   `toml:"sandbox_image,omitempty"`
 	SandboxPorts []string `toml:"sandbox_ports,omitempty"`
-	Kind         string   `toml:"kind,omitempty"`
-	Stack        string   `toml:"stack,omitempty"`
-	Labels       []string `toml:"labels,omitempty"`
+	// GoalMode is explicit per project/stack availability, never execution authorization.
+	GoalMode bool     `toml:"goal_mode,omitempty"`
+	Kind     string   `toml:"kind,omitempty"`
+	Stack    string   `toml:"stack,omitempty"`
+	Labels   []string `toml:"labels,omitempty"`
 
 	Enabled        bool      `toml:"enabled,omitempty"`
 	TeamID         string    `toml:"team_id,omitempty"`
@@ -696,6 +702,7 @@ func projectFromFile(fp fileProject) Project {
 		Sandbox:           fp.Sandbox,
 		SandboxImage:      fp.SandboxImage,
 		SandboxPorts:      fp.SandboxPorts,
+		GoalMode:          fp.GoalMode,
 		Kind:              fp.Kind,
 		Stack:             fp.Stack,
 		Labels:            fp.Labels,
@@ -769,6 +776,7 @@ func projectToFile(p Project) fileProject {
 		Sandbox:           p.Sandbox,
 		SandboxImage:      p.SandboxImage,
 		SandboxPorts:      p.SandboxPorts,
+		GoalMode:          p.GoalMode,
 		Kind:              p.Kind,
 		Stack:             p.Stack,
 		Labels:            p.Labels,
@@ -898,6 +906,7 @@ func (fc *fileConfig) config() *Config {
 		StatusAgent:     resolveStatusAgent(fc.StatusAgent),
 		Review:          resolveReview(fc.Review),
 		ReviewProviders: resolveReviewProviders(reviewProviderEntries(fc.Review)),
+		ReviewProfiles:  reviewProfileEntries(fc.Review),
 		CodeRabbit:      resolveCodeRabbit(fc.CodeRabbit),
 		Tmux:            resolveTmux(fc.Tmux),
 		UI:              resolveUI(fc.UI),
@@ -974,13 +983,14 @@ func (c *Config) file() *fileConfig {
 func (c *Config) reviewMirror() *fileReviewConfig {
 	scal := reviewFile(c.Review)                    // nil when c.Review == zero
 	provs := reviewProvidersFile(c.ReviewProviders) // nil when the catalog is empty
-	if scal == nil && provs == nil {
+	if scal == nil && provs == nil && len(c.ReviewProfiles) == 0 {
 		return nil // omit the whole [review] table
 	}
 	if scal == nil {
 		scal = &fileReviewConfig{} // catalog-only: nil scalars
 	}
 	scal.Provider = provs
+	scal.Profile = c.ReviewProfiles
 	return scal
 }
 

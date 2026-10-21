@@ -253,7 +253,26 @@ func (d *Daemon) handleOpenTicket(ctx context.Context, a protocol.OpenTicketArgs
 	}
 
 	name := proj.Name
-	is := linear.Issue{ID: uuid, Identifier: identifier, Title: a.Title, BranchName: strings.TrimSpace(a.Branch)}
+	if reason := d.goalHold(uuid, ""); reason != "" {
+		return protocol.OpenData{}, errors.New(reason)
+	}
+	api, err := d.ensureLinear()
+	if err != nil {
+		return protocol.OpenData{}, err
+	}
+	readCtx, readCancel := context.WithTimeout(ctx, ticketsExecTimeout)
+	detail, readErr := api.IssueDetail(readCtx, uuid)
+	readCancel()
+	if readErr != nil {
+		return protocol.OpenData{}, fmt.Errorf("verify ticket ownership: %w", readErr)
+	}
+	if detail.ID != uuid || detail.Identifier != identifier {
+		return protocol.OpenData{}, errors.New("ticket identity changed; refresh the picker")
+	}
+	if reason := d.goalHold(uuid, detail.Description, detail.IssueRelations); reason != "" {
+		return protocol.OpenData{}, errors.New(reason)
+	}
+	is := linear.Issue{ID: uuid, Identifier: identifier, Title: detail.Title, Description: detail.Description, BranchName: strings.TrimSpace(a.Branch), LabelIDs: detail.LabelIDs}
 
 	// Shield the dedup-mutating spawn from shutdown cancellation exactly like a
 	// tick (dispatch runs on context.WithoutCancel via safeTick/handlePollOnce):
@@ -279,8 +298,8 @@ func (d *Daemon) handleOpenTicket(ctx context.Context, a protocol.OpenTicketArgs
 	}
 
 	// (1) Atomic in-flight claim.
-	if !d.inflight.Claim(uuid, identifier) {
-		return protocol.OpenData{}, fmt.Errorf("%s is already being worked on — check sessions", identifier)
+	if err := d.claimOrdinaryIssue(uuid, identifier, detail.Description, detail.IssueRelations); err != nil {
+		return protocol.OpenData{}, err
 	}
 
 	// (2) Persist seen BEFORE the spawn for a polling project (crash guard),

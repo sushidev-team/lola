@@ -27,13 +27,15 @@ type User struct {
 	Active          bool
 }
 type Issue struct {
-	ID         string // UUID -> used for issueUpdate
-	Identifier string // e.g. FE-231 -> used for `ao spawn`
-	Title      string
-	BranchName string
-	Priority   float64
-	CreatedAt  string
-	UpdatedAt  string
+	IssueRelations
+	ID          string // UUID -> used for issueUpdate
+	Identifier  string // e.g. FE-231 -> used for `ao spawn`
+	Title       string
+	Description string // includes recovery markers for goal dispatch exclusion
+	BranchName  string
+	Priority    float64
+	CreatedAt   string
+	UpdatedAt   string
 	// Workflow state as Linear reports it: StateName is the team's own label
 	// ("In Progress", "Ready for QA"), StateType the stable enum behind it
 	// (triage|backlog|unstarted|started|completed|canceled). Dispatch filters on
@@ -79,10 +81,12 @@ func StateFinished(stateType string) bool {
 // IssueDetail is one issue read in full for the planning pass: its text (the
 // planner's input) and the placement fields its sub-issues inherit.
 type IssueDetail struct {
-	ID, Identifier, Title, Description string
-	TeamID, ProjectID, CycleID         string
-	StateID, AssigneeID                string
-	LabelIDs                           []string
+	IssueRelations
+	ID, Identifier, Title, Description           string
+	TeamID, ProjectID, CycleID                   string
+	StateID, AssigneeID                          string
+	ParentID, MilestoneID, StateType, ArchivedAt string
+	LabelIDs                                     []string
 	// Children counts ALL existing sub-issues, finished or not: applying a plan
 	// to an issue that already has some would duplicate the decomposition.
 	Children int
@@ -91,6 +95,7 @@ type IssueDetail struct {
 // IssueCreate is the input for CreateIssue. Empty fields are omitted, so
 // Linear applies the team's defaults (e.g. the initial workflow state).
 type IssueCreate struct {
+	ID, MilestoneID                                           string // optional stable UUID and existing project milestone
 	TeamID, ProjectID, CycleID, StateID, AssigneeID, ParentID string
 	Title, Description                                        string
 	LabelIDs                                                  []string

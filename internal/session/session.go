@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -39,6 +40,9 @@ const (
 	// Linear issue (the manual-worktree flow): lola owns the branch and deletes
 	// it on teardown, but it never touches Linear.
 	KindManual Kind = "manual"
+	// KindGoal is owned by the goal controller. Ordinary PR reactions,
+	// write-back, default-branch merging and worktree cleanup must skip it.
+	KindGoal Kind = "goal"
 )
 
 // DevForward is one dev server republished on the local network: the address a
@@ -52,10 +56,13 @@ type DevForward struct {
 
 // Session is one observed agent session, regardless of who spawned it.
 type Session struct {
-	ID      string `json:"id"`
-	Source  string `json:"source"`          // "ao" | "native"
-	Agent   string `json:"agent,omitempty"` // coding-agent kind: claude|codex|opencode; "" = legacy claude
-	Project string `json:"project"`
+	ID        string `json:"id"`
+	Source    string `json:"source"`          // "ao" | "native"
+	Agent     string `json:"agent,omitempty"` // coding-agent kind: claude|codex|opencode; "" = legacy claude
+	Project   string `json:"project"`
+	GoalID    string `json:"goal_id,omitempty"`
+	TaskID    string `json:"task_id,omitempty"`
+	AttemptID string `json:"attempt_id,omitempty"`
 	// Manual marks a session opened by hand via `lola open` (a branch/PR checked
 	// out in a throwaway DETACHED worktree with a plain shell — no coding agent,
 	// no Linear issue) rather than dispatched from a Linear match. It is the
@@ -745,7 +752,27 @@ func (s Session) EffectiveKind() Kind {
 // pollForSession would otherwise resolve) can never fire an API call against an
 // empty issue UUID.
 func (s Session) LinearBound() bool {
-	return s.EffectiveKind() == KindLinear && s.IssueUUID != ""
+	return !s.GoalManaged() && s.EffectiveKind() == KindLinear && s.IssueUUID != ""
+}
+
+// GoalManaged fails closed even if a recovery record lost one discriminator.
+func (s Session) GoalManaged() bool {
+	return s.Kind == KindGoal || s.GoalID != "" || IsGoalSessionID(s.ID)
+}
+
+// IsGoalSessionID recognizes the reserved digest shape, not just the prefix:
+// an ordinary project named "goal" still owns normal lola-goal-TEAM-123 IDs.
+func IsGoalSessionID(id string) bool {
+	tail, ok := strings.CutPrefix(id, "lola-goal-")
+	if !ok || len(tail) != 32 {
+		return false
+	}
+	for _, c := range tail {
+		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 // IsAgentless reports whether the session has NO coding agent (a plain shell).
@@ -773,6 +800,9 @@ func (s Session) HasAgent() bool { return !s.IsAgentless() }
 // pre-Kind rule — a non-Manual session owns its branch — which is exactly the
 // prior teardown behavior.
 func (s Session) OwnsBranch() bool {
+	if s.GoalManaged() {
+		return false
+	}
 	if s.Kind != "" {
 		return s.Kind != KindPR
 	}

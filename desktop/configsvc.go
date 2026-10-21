@@ -551,11 +551,21 @@ type InheritsDTO struct {
 	PrioritySort   bool `json:"prioritySort"`
 }
 
+type ProjectExecutionDTO struct {
+	GoalMode bool   `json:"goalMode"`
+	Sandbox  string `json:"sandbox"`
+	Image    string `json:"image"`
+}
+
 // ProjectFormDTO is the whole of one [[project]] — repository setup, Linear
 // polling filter and write-back — because a project IS the poll unit. The
 // values are the RESOLVED ones (see config.ResolveInheritance); Inherits says
 // which of them came from [defaults] rather than the project itself.
 type ProjectFormDTO struct {
+	// Nil from an older client preserves execution settings. Stack members
+	// cannot edit these owning-stack settings through their repository form.
+	Execution *ProjectExecutionDTO `json:"execution,omitempty"`
+
 	// Repository / worktree setup. Name is the project's ID — a path segment and
 	// the prefix of every session/tmux name — while Label is the free-text
 	// display string ("" falls back to Name). Changing Label here is an ordinary
@@ -673,6 +683,7 @@ func labelsDTO(in []string) []string {
 
 func projectDTO(p *config.Project) ProjectFormDTO {
 	return ProjectFormDTO{
+		Execution:       &ProjectExecutionDTO{GoalMode: p.GoalMode, Sandbox: p.Sandbox, Image: p.SandboxImage},
 		Name:            p.Name,
 		Label:           p.Label,
 		Path:            p.Path,
@@ -785,6 +796,11 @@ func (s *ConfigService) SaveProject(dto ProjectFormDTO) error {
 		p.Labels = nonEmpty(dto.Labels)
 	}
 
+	if dto.Execution != nil && !p.InStack() {
+		p.GoalMode = dto.Execution.GoalMode
+		p.Sandbox = strings.TrimSpace(dto.Execution.Sandbox)
+		p.SandboxImage = strings.TrimSpace(dto.Execution.Image)
+	}
 	p.Enabled = dto.Enabled
 	p.TeamID = dto.TeamID
 	p.ProjectID = dto.ProjectID

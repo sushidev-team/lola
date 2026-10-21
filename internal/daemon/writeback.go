@@ -167,6 +167,11 @@ func (d *Daemon) setWBGuard(id string, g wbGuard) {
 // re-dispatched forever. The guard is set optimistically even on comment failure
 // (a retry could double-comment; the dedup already blocks re-dispatch).
 func (d *Daemon) writeBackSpawn(ctx context.Context, api linear.API, p config.Project, is linear.Issue, sess session.Session) {
+	d.goalMu.Lock()
+	defer d.goalMu.Unlock()
+	if d.goalHold(is.ID, is.Description, is.IssueRelations) != "" {
+		return
+	}
 	if p.OnSpawnStateID == "" && !p.CommentOnSpawn {
 		return // nothing configured for spawn
 	}
@@ -279,6 +284,11 @@ func (d *Daemon) writeBack(ctx context.Context, s session.Session) {
 // comment posted yet); once the state move is done the guard is stamped even if
 // the comment fails, so the comment never double-fires.
 func (d *Daemon) writeBackState(ctx context.Context, api linear.API, s session.Session, stateID string, comment bool, tmpl, detail, label string, g wbGuard) {
+	d.goalMu.Lock()
+	defer d.goalMu.Unlock()
+	if d.goalHold(s.IssueUUID, "") != "" {
+		return
+	}
 	if !s.LinearBound() {
 		return // defense-in-depth: never call the Linear API with an empty issue UUID
 	}
@@ -338,6 +348,11 @@ func (d *Daemon) writeBackEscalation(ctx context.Context, s session.Session) {
 // cycle, no comment yet); once past it the guard is stamped even on comment
 // failure. Callers pass their already-resolved client.
 func (d *Daemon) writeBackBlocked(ctx context.Context, api linear.API, p config.Project, s session.Session, reason string) {
+	d.goalMu.Lock()
+	defer d.goalMu.Unlock()
+	if d.goalHold(s.IssueUUID, "") != "" {
+		return
+	}
 	if s.WBBlockedDone {
 		return
 	}

@@ -1877,6 +1877,15 @@ dispatches right away, and each later step waits (`blocked-by <ID>` in
 `lola poll <project> --once --dry-run`) until its blockers are done or their PRs are
 merged.
 
+## Workspace learning and goals
+
+The feature-branch implementation adds `lola goal`, `lola learn`, and
+`lola profile` for durable Linear goal plans, scoped learning, and independently
+tracked specialist reviews. Autonomous execution is still in development.
+`lola goal propose` can build a reviewed task graph from an outcome and committed
+repository context; accepting it creates a local goal without starting workers.
+See [usage and implementation status](docs/workspace-goals.md).
+
 ## Best-of-N: several attempts, one winner
 
 Some issues are worth solving more than once. Best-of-N runs one issue as

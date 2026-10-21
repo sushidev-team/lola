@@ -25,7 +25,8 @@ type Call struct {
 // an injected error is returned on every call until the entry is removed.
 // Every invocation is appended to Calls in order, including failed ones.
 type Fake struct {
-	mu sync.Mutex
+	GoalComments []GoalComment
+	mu           sync.Mutex
 
 	// Fixtures, one per getter.
 	ViewerUser        User
@@ -66,9 +67,11 @@ type Fake struct {
 	// Relations record successful CreateIssue inputs (the Nth gets UUID
 	// "created-uuid-N", identifier "NEW-N") and CreateBlocksRelation pairs
 	// (blocker, blocked), in order.
-	Details   []IssueDetail
-	Created   []IssueCreate
-	Relations [][2]string
+	Details       []IssueDetail
+	Created       []IssueCreate
+	Relations     [][2]string
+	Milestones    []GoalMilestone
+	GoalRelations []GoalRelation
 
 	// Errs injects an error per method name.
 	Errs map[string]error
@@ -202,6 +205,9 @@ func (f *Fake) MatchingIssues(ctx context.Context, p config.Project, activeCycle
 	err := f.record("MatchingIssues", p, activeCycleID, viewerID)
 	fn := f.IssuesFunc
 	static := slices.Clone(f.Issues)
+	for i := range static {
+		static[i].IssueRelations = f.relatedIssuesLocked(static[i].ID, static[i].IssueRelations)
+	}
 	f.mu.Unlock()
 
 	if err != nil {
@@ -280,6 +286,7 @@ func (f *Fake) IssueDetail(ctx context.Context, idOrIdentifier string) (IssueDet
 	for _, d := range f.Details {
 		if d.ID == idOrIdentifier || d.Identifier == idOrIdentifier {
 			d.LabelIDs = slices.Clone(d.LabelIDs)
+			d.IssueRelations = f.relatedIssuesLocked(d.ID, d.IssueRelations)
 			return d, nil
 		}
 	}
@@ -293,9 +300,22 @@ func (f *Fake) CreateIssue(ctx context.Context, in IssueCreate) (string, string,
 	if err := f.record("CreateIssue", in); err != nil {
 		return "", "", err
 	}
+	if in.ID != "" {
+		for _, d := range f.Details {
+			if d.ID == in.ID {
+				return "", "", fmt.Errorf("duplicate issue ID")
+			}
+		}
+	}
 	f.Created = append(f.Created, in)
 	n := len(f.Created)
-	return fmt.Sprintf("created-uuid-%d", n), fmt.Sprintf("NEW-%d", n), nil
+	id, identifier := in.ID, fmt.Sprintf("NEW-%d", n)
+	if id == "" {
+		id = fmt.Sprintf("created-uuid-%d", n)
+	} else {
+		f.Details = append(f.Details, IssueDetail{ID: id, Identifier: identifier, Title: in.Title, Description: in.Description, TeamID: in.TeamID, ProjectID: in.ProjectID, ParentID: in.ParentID, MilestoneID: in.MilestoneID, LabelIDs: slices.Clone(in.LabelIDs)})
+	}
+	return id, identifier, nil
 }
 
 func (f *Fake) CreateBlocksRelation(ctx context.Context, blockerUUID, blockedUUID string) error {

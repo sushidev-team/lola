@@ -70,6 +70,14 @@ func (d *Daemon) handleConn(ctx context.Context, conn net.Conn) {
 
 func (d *Daemon) handle(ctx context.Context, req protocol.Request) protocol.Response {
 	switch req.Cmd {
+	case "goalPropose", "goalProposal", "goalAcceptPlan":
+		return d.handleGoalPlan(ctx, req)
+	case "reviewProfiles", "profileResults", "profileReview", "profileFindings", "profileDecideFinding", "profileCalibration":
+		return d.handleProfile(ctx, req)
+	case "knowledgeList", "knowledgeLookup", "knowledgeExport", "knowledgeCapture", "knowledgeCorrect", "knowledgeAccept", "knowledgeDispute":
+		return d.handleKnowledge(req)
+	case "goalDismissProgress", "goalSyncBrief", "goalAcceptBrief", "goalOverview", "goals", "goalCreate", "goalShow", "goalUsage", "goalPublish", "goalStart", "goalControl", "goalDeliveryEvidence":
+		return d.handleGoals(ctx, req)
 	case "stop":
 		d.logf("", "stop requested via socket")
 		return protocol.Response{OK: true}
@@ -586,6 +594,7 @@ func (d *Daemon) handleHookEvent(req protocol.Request) protocol.Response {
 	}
 	if req.Event == "stop" {
 		d.flushHandoffsOnStop(req.Session)
+		d.captureLearningsAsync(req.Session)
 	}
 	// Turn checkpoints (checkpoints.go): the state every turn ENDED in, plus a
 	// baseline the first time a turn STARTS so turn 1 can be undone too. Async —
@@ -610,6 +619,9 @@ func (d *Daemon) handleHookEvent(req protocol.Request) protocol.Response {
 // for an in-flight hand-off rather than SIGKILLing it mid-send; a daemon already
 // draining simply skips (the stash survives for the next cycle).
 func (d *Daemon) flushHandoffsOnStop(id string) {
+	if s, ok := d.sessions.Get(id); ok && s.GoalManaged() {
+		return
+	}
 	if id == "" || !d.beginConnWork() {
 		return
 	}
@@ -674,6 +686,7 @@ func (d *Daemon) sessionsData() protocol.SessionsData {
 	out := protocol.SessionsData{Sessions: make([]protocol.SessionInfo, 0, len(snap))}
 	for _, s := range snap {
 		si := protocol.SessionInfo{
+			GoalID: s.GoalID, TaskID: s.TaskID, AttemptID: s.AttemptID,
 			ID:        s.ID,
 			Project:   s.Project,
 			Issue:     s.Issue,
@@ -888,7 +901,7 @@ func (d *Daemon) handleReload(ctx context.Context) error {
 		// server as d.tmuxClient's live send-keys/capture; without it a
 		// socket-only reload would leave the observer reading the OLD server while
 		// keys go to the NEW one.
-		d.native = newNativeRuntime(nc, d.home, d.lolaBin, d.linearKey, d.nativeLogf, d.ports, d.hookToken)
+		d.native = newNativeRuntime(nc, d.home, d.lolaBin, d.linearKey, d.nativeLogf, d.ports, d.hookToken, d.knowledgeBrief)
 	}
 	// [remote] is compared exactly (config.RemoteConfig is comparable) so an
 	// unrelated reload never touches a live listener. Applied AFTER the unlock:

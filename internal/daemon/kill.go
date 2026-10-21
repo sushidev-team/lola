@@ -55,6 +55,16 @@ func (d *Daemon) handleKill(ctx context.Context, sessionID string, force bool) (
 
 	ctx, cancel := context.WithTimeout(ctx, killExecTimeout)
 	defer cancel()
+	if s.GoalManaged() {
+		if err := nat.Kill(ctx, s, false, false); err != nil {
+			return protocol.KillData{}, err
+		}
+		d.sessions.Update(s.ID, func(cur *session.Session) bool { cur.SetAgentState(state.AgentExited, "", time.Now()); return true })
+		if err := d.sessions.Save(); err != nil {
+			return protocol.KillData{}, err
+		}
+		return protocol.KillData{Removed: false, Worktree: s.Worktree, Message: "Goal worker stopped; its attempt and files are preserved"}, nil
+	}
 
 	// The session's review pane (reviewvisible.go) deliberately outlives its
 	// pass so the findings stay readable — but not its session: kill it here so

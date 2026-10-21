@@ -49,6 +49,7 @@ type PR struct {
 	// it judged (`--match-head-commit`), and only into the default branch.
 	HeadSHA string `json:"head_sha,omitempty"`
 	BaseRef string `json:"base_ref,omitempty"`
+	BaseSHA string `json:"base_sha,omitempty"` // base commit observed with the PR; specialist evidence pins both sides
 	// Checks is the per-check breakdown ChecksState was rolled up from, kept so
 	// the daemon can re-judge the PR against the base branch's REQUIRED checks
 	// (ApplyRequired). nil for facts that predate the field: ApplyRequired then
@@ -83,6 +84,7 @@ type prRow struct {
 	StatusCheckRollup []rollupEntry `json:"statusCheckRollup"`
 	HeadRefOid        string        `json:"headRefOid"`
 	BaseRefName       string        `json:"baseRefName"`
+	BaseRefOid        string        `json:"baseRefOid"`
 }
 
 // rollupEntry accepts both statusCheckRollup shapes: StatusContext carries
@@ -107,7 +109,7 @@ func (c *Client) PRForBranch(ctx context.Context, repo, branch string) (*PR, err
 	}
 	out, err := exec.CommandContext(ctx, bin, "pr", "list",
 		"--repo", repo, "--head", branch, "--state", "all", "--limit", "1",
-		"--json", "number,url,state,isDraft,mergeable,reviewDecision,statusCheckRollup,headRefOid,baseRefName",
+		"--json", "number,url,state,isDraft,mergeable,reviewDecision,statusCheckRollup,headRefOid,baseRefName,baseRefOid",
 	).Output()
 	if err != nil {
 		var ee *exec.ExitError
@@ -135,6 +137,7 @@ func (c *Client) PRForBranch(ctx context.Context, repo, branch string) (*PR, err
 		ChecksState:    checksState(r.StatusCheckRollup),
 		HeadSHA:        r.HeadRefOid,
 		BaseRef:        r.BaseRefName,
+		BaseSHA:        r.BaseRefOid,
 		Checks:         rollupChecks(r.StatusCheckRollup),
 	}, nil
 }

@@ -235,6 +235,12 @@ func (d *Daemon) observeNative(ctx context.Context) {
 			continue
 		}
 		alive, tmuxActivity := sessionAlive(s)
+		if s.GoalManaged() {
+			if d.observeGoalAgent(ctx, s, alive, tmuxActivity) {
+				touched = true
+			}
+			continue // goal controller alone owns verification, delivery and retries
+		}
 		// An agent-less shell (`lola open`, the manual-shell flow) has no coding
 		// agent: its status is pure tmux liveness and it must NEVER reach the
 		// reaction / write-back / review / coderabbit engines below (which would

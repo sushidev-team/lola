@@ -41,6 +41,7 @@ const (
 	viewDetail
 	viewPRPicker
 	viewTicketPicker
+	viewGoals
 )
 
 type rootModel struct {
@@ -52,6 +53,7 @@ type rootModel struct {
 	home     homeModel
 	detail   detailModel
 	prpick   prPickerModel
+	goals    goalsModel
 	ticket   ticketPickerModel
 	list     listModel
 	sessions sessionsModel
@@ -131,6 +133,11 @@ func (m *rootModel) routePaste(content string) (tea.Model, tea.Cmd) {
 		m.settings.paste(content)
 	case m.doctorLoading || m.doctorReport != nil:
 		// read-only overlay
+	case m.view == viewGoals && m.goals.confirm != nil && !m.goals.busy:
+		text := pasteInline(content)
+		if len(m.goals.reason)+len(text) <= 2000 {
+			m.goals.reason += text
+		}
 	case m.view == viewDetail && m.detail.wtMode:
 		m.detail.wtBranch += pasteInline(content)
 	case m.view == viewHome && m.home.adding:
@@ -313,6 +320,11 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.list.status, m.list.statusErr = v.data, ""
 		}
 		return m, nil
+	case goalsMsg:
+		m.handleGoalsMsg(v)
+		return m, nil
+	case goalControlMsg:
+		return m, m.handleGoalControlMsg(v)
 	case projectsMsg:
 		m.handleProjectsMsg(v)
 		return m, nil
@@ -330,6 +342,9 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, statusTick()
 		}
 		cmds := []tea.Cmd{fetchStatusCmd, statusTick()}
+		if m.view == viewGoals {
+			cmds = append(cmds, m.refreshGoals())
+		}
 		// Refresh the project decoration every tick unless a home prompt
 		// (filter/add/broadcast) is mid-edit (a reflow would fight the input).
 		if !m.home.filtering && !m.home.adding && !m.home.broadcasting {
@@ -583,6 +598,9 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.view == viewHome {
 		return m.updateHome(msg)
 	}
+	if m.view == viewGoals {
+		return m.updateGoals(msg)
+	}
 	if m.view == viewDetail {
 		return m.updateDetail(msg)
 	}
@@ -718,6 +736,9 @@ func (m *rootModel) viewString() string {
 	if m.view == viewHome {
 		return m.homeView()
 	}
+	if m.view == viewGoals {
+		return strings.Join(m.goalsLines(), "\n")
+	}
 	if m.view == viewDetail {
 		return m.detailView()
 	}
@@ -737,6 +758,8 @@ func (m *rootModel) backdropLines() []string {
 	switch m.view {
 	case viewHome:
 		return m.homeLines()
+	case viewGoals:
+		return m.goalsLines()
 	case viewDetail:
 		return m.detailLines()
 	case viewPRPicker:

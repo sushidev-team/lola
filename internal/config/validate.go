@@ -291,10 +291,12 @@ func (c *Config) Validate() error {
 	errs = append(errs, c.validateStatusAgent()...)
 	errs = append(errs, c.validateReview()...)
 	errs = append(errs, c.validateReviewProviders()...)
+	errs = append(errs, c.validateReviewProfiles()...)
 	errs = append(errs, c.validateProjectReview()...)
 	errs = append(errs, c.validateUI()...)
 	errs = append(errs, c.validateLimits()...)
 	errs = append(errs, c.validateSandbox()...)
+	errs = append(errs, c.validateGoalMode()...)
 	errs = append(errs, c.validateStacks()...)
 	errs = append(errs, c.validateRemote()...)
 
