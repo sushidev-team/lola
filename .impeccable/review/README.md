@@ -191,3 +191,43 @@ or autonomous execution. No live daemon, paid model call, Linear write or binary
 installation was used for this increment. This narrow extension preserves the
 existing visual system: no PRODUCT.md, DESIGN.md or sidecar was created, and
 previously recorded unrelated drift remains unchanged.
+
+## TUI execution authorization preview
+
+The sixteen `authorization-tui-{wide,compact}-{empty,editing,profiles,limits,error,review,review-end,uncertain}.png`
+captures show the actual Go TUI at 120 × 40 and 80 × 24 terminal cells.
+`goalauthorization_capture_test.go` renders offline fixtures to ANSI; xterm is
+only the screenshot transport. The builder and fresh reviewer opened all sixteen
+captures. This documentation pass sampled the wide empty form, compact command
+editor, compact end of review and compact uncertain result, and inspected
+`goalauthorization.go`, its `app.go`/`goals.go` integration and tests.
+
+This increment adds execution authorization to the TUI after the planning and
+publication increment documented above. It preserves the incumbent palette,
+keyboard navigation, flat settings fields, indented sections and line editor.
+Compact views wrap and scroll content while keeping contextual controls visible.
+Read-only options supply repository identities, specialist availability and
+suggested limits. The form edits path restrictions, operator-supplied acceptance
+checks with commands, pinned image digests, timeouts and captured evidence,
+specialist selections, and execution limits. The review
+shows a snapshot of the policy and goal revision before explicit acknowledgment
+of scope, checks, limits and paid agent calls. Token and spend limits are labeled
+as delayed observations rather than exact billing caps.
+
+Source and test inspection confirms that `goalStart` submits the reviewed
+revision and frozen policy, guards pending requests and stale replies, and
+protects the draft through Ctrl+C and discard handling. An uncertain start reply
+blocks repeat authorization until the user closes the screen and refreshes Goals.
+Tests also cover validation, check/evidence editing, mandatory specialists,
+returning from review, and compact viewport contents.
+
+The fresh reviewer recommended shipping without material fixes. The
+implementation handoff reports the full TUI suite passing uncached after label
+and heading corrections, followed by final `make check` passing build, vet and
+the full Go suite. No web detector applies to this Go TUI surface.
+
+These offline fixtures and checks do not establish live authorization, billing
+or autonomous execution. No live daemon, paid model call, Linear write,
+execution or binary installation was used for this increment. This ordinary
+extension adds no visual system rules: no PRODUCT.md, DESIGN.md or sidecar was
+created, and previously recorded unrelated drift remains unchanged.

@@ -17,6 +17,7 @@ import (
 
 type goalsModel struct {
 	planner               *goalPlannerModel
+	authorization         *goalAuthorizationModel
 	project               string
 	gen                   int
 	rows                  []goal.Overview
@@ -67,7 +68,7 @@ func fetchGoalsCmd(project string, gen int) tea.Cmd {
 }
 func (m *rootModel) refreshGoals() tea.Cmd {
 	v := &m.goals
-	if v.loading || v.busy || v.confirm != nil || v.planner != nil {
+	if v.loading || v.busy || v.confirm != nil || v.planner != nil || v.authorization != nil {
 		return nil
 	}
 	v.gen++
@@ -152,6 +153,9 @@ func (m *rootModel) updateGoals(msg tea.Msg) (tea.Model, tea.Cmd) {
 	v := &m.goals
 	if v.planner != nil {
 		return m.updateGoalPlanner(k)
+	}
+	if v.authorization != nil {
+		return m.updateGoalAuthorization(k)
 	}
 	if v.busy {
 		return m, nil
@@ -250,6 +254,9 @@ func (m *rootModel) updateGoals(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, fetchSessionsCmd
 		}
 	}
+	if k.String() == "a" && !v.loading && v.err == "" && goalCanAuthorize(g) {
+		return m, m.openGoalAuthorization()
+	}
 	action := map[string]string{"p": "pause", "r": "resume", "x": "stop-workers", "c": "cancel", "u": "publish"}[k.String()]
 	if action != "" && !v.loading && v.err == "" && (slices.Contains(g.Actions, action) || (action == "publish" && goalCanPublish(g))) {
 		v.confirm = &goal.ControlRequest{ID: g.ID, Revision: g.Revision, Action: action}
@@ -269,6 +276,9 @@ func goalText(s string) string {
 	}, stripANSI(s))
 }
 func (m *rootModel) goalsLines() []string {
+	if m.goals.authorization != nil {
+		return m.goalAuthorizationLines()
+	}
 	if m.goals.planner != nil {
 		return m.goalPlannerLines()
 	}
@@ -422,6 +432,9 @@ func (m *rootModel) goalsLines() []string {
 			var actions []string
 			for _, a := range g.Actions {
 				actions = append(actions, labels[a])
+			}
+			if goalCanAuthorize(g) {
+				actions = append(actions, "a set execution limits")
 			}
 			if goalCanPublish(g) {
 				actions = append(actions, "u publish to Linear")

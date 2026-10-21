@@ -5,10 +5,12 @@ Status: implementation resumed at the user’s request on
 Approximate scope estimate: 75% implemented, not a measured completion metric.
 
 Current verification: `make check` passed (build, vet and full Go suite) after
-TUI goal planning and reviewed publication; the full TUI suite passed uncached.
+TUI goal planning, reviewed publication and execution authorization, including
+the latest authorization layout corrections. The full TUI suite passed uncached.
 Normal and compact terminal captures use offline fixtures. Scoped independent UI
 review passed for specialist settings and goal planning/publication; the latter
-included fixes for draft protection and multiline keyboard hints. Earlier verified
+included fixes for draft protection and multiline keyboard hints. The TUI
+authorization review also passed without material fixes. Earlier verified
 learning promotion and goal fix-contract checks passed. Focused promotion,
 curation and contract race checks passed. Temporary Git fixtures cover unmerged
 code, observed goal delivery, proof withdrawal, code drift, scope and migration.
@@ -31,11 +33,11 @@ authorization and recovery; knowledge capture/curation/export and improvement
 proposals; specialist reviews
 and finding decisions. Specialist configuration, goal planning, local plan
 acceptance and reviewed Linear publication are available in desktop and TUI.
-Explicit execution authorization is available in desktop and CLI.
+Explicit execution authorization is available in desktop, TUI and CLI.
 
 Remaining before full-plan completion:
 
-- TUI execution authorization, direct task-graph editing, knowledge forms,
+- Direct task-graph editing, knowledge forms,
   remaining desktop/TUI action parity.
 - Broader task/policy revision reconciliation and Linear steering beyond the
   implemented brief clarifications and bounded task replanning.
@@ -115,7 +117,15 @@ scrollable task/coverage/scope/source review and acknowledgment before accepting
 the exact proposal revision. Requests retain their identity before dispatch;
 uncertain replies require read-only recovery, never another automatic paid call.
 Local goals can be published through a separate revision-bound review. These
-actions do not authorize execution. TUI execution-policy authoring remains open.
+actions do not authorize execution.
+
+TUI execution authorization addition: a published goal can load read-only
+settings, edit repository paths, checks/evidence, specialist selections and finite
+limits, then inspect a frozen policy before explicitly authorizing it. Required
+specialists cannot be removed. The exact goal revision and policy are submitted;
+uncertain responses disable repetition and require a fresh overview. Draft edits
+have discard protection. Offline captures and tests cover the terminal workflow;
+no real goal was authorized or started during this increment.
 
 Implemented foundations: durable goal reservations and recoverable Linear
 publication; ordinary-dispatch exclusion; scoped knowledge capture, curation,

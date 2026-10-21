@@ -323,6 +323,8 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case goalsMsg:
 		m.handleGoalsMsg(v)
 		return m, nil
+	case goalAuthorizationMsg:
+		return m, m.handleGoalAuthorizationMsg(v)
 	case goalPlannerMsg:
 		m.handleGoalPlannerMsg(v)
 		return m, nil
@@ -462,7 +464,7 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// without the check a reflexive ctrl+c mid-edit hard-quit the whole TUI and
 		// took every unsaved edit with it — the one keystroke the discard prompt
 		// could not protect against.
-		if v.String() == "ctrl+c" && !m.embedFocused && m.form == nil && m.settings == nil && (m.view != viewGoals || m.goals.planner == nil) {
+		if v.String() == "ctrl+c" && !m.embedFocused && m.form == nil && m.settings == nil && (m.view != viewGoals || (m.goals.planner == nil && m.goals.authorization == nil)) {
 			m.closeAllTerms()
 			return m, tea.Quit
 		}

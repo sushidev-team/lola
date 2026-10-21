@@ -68,10 +68,10 @@ settings first. Token/dollar telemetry may be delayed or missing, so those limit
 are not exact billing caps. Merge decisions remain human-only.
 
 Direct task-graph authoring, existing-issue adoption and several recovery actions
-remain available through the CLI below. TUI execution authorization remains in
-progress; goal planning and publication are available as described next.
+remain available through the CLI below. The TUI supports the same planning,
+publication and explicit execution authorization steps described next.
 
-### Plan and publish in the TUI
+### Plan, publish and authorize in the TUI
 
 Open project details, press **g** for Goals, then **n** to write a goal brief.
 Arrow keys or Tab move between fields. Enter opens multiline fields; Escape
@@ -94,6 +94,25 @@ review with the goal revision, task count and optional milestone. Enter creates
 or reconciles its Linear resources; Escape closes the action. An uncertain
 publication requires closing and refreshing before another reviewed attempt.
 Neither proposal acceptance nor publication grants execution permission.
+
+For a published, synchronized goal, **a** opens **Set execution limits**. The
+initial request only reads current settings. Edit repository path prefixes, add
+acceptance checks with commands, installed image digests and timeouts, and add
+captured evidence when needed. Enter cycles a check's repository; blank means the
+combined repository root. Evidence paths include the repository ID. Required
+specialists stay selected; optional specialists can be toggled. Set finite task,
+call, runtime and observed-usage limits, plus any draft-PR/replanning permissions.
+
+**Review authorization** validates the policy and freezes it for inspection.
+Scroll through the goal criteria, repositories, checks, evidence, specialists and
+budgets; **v** shows the full policy. Space acknowledges paid agent calls, and
+**a** authorizes and starts that exact reviewed revision. Escape returns to the
+editable limits and clears acknowledgment. Leaving edited limits prompts before
+discarding them. While submission is pending, repeated keys cannot resubmit or
+leave the screen. If the response is uncertain, Escape closes and refreshes
+Goals before another action; the daemon may already have accepted execution.
+Token and spend limits use delayed observations, not exact billing caps. Final
+merges remain manual.
 
 ### Ask the coordinator for a task proposal
 
@@ -1060,20 +1079,20 @@ arrow keys and press Enter to inspect it. Arrow keys then scroll, Tab selects a
 task, **s** opens its latest attempt's session, and **o** opens the goal in Linear.
 The available control shortcuts are shown below the view: **p** pauses, **r**
 resumes, **x** stops workers and **c** cancels. **u** reviews publication for an
-unauthorized draft. Enter applies the reviewed action;
+unauthorized draft. **a** sets execution limits for a published, synchronized
+goal. Enter applies the reviewed control or publication action;
 Escape closes it. **f** refreshes. Long criteria wrap within the terminal width.
 
 Both clients read the same cached overview and submit the same revision-checked
 commands. Both support coordinator proposals, local plan acceptance and Linear
-publication; explicit execution authorization is available in the desktop and CLI.
+publication and explicit execution authorization; the CLI supports these too.
 Direct task-graph editing, verification/replan retries, shared delivery evidence
 and knowledge curation remain CLI-first; their forms are still in progress.
 
 ## Remaining work
 
 The full implementation plan remains active: broader task/policy revision
-reconciliation and steering, TUI execution authorization, knowledge forms, remaining
-UI parity, and
+reconciliation and steering, knowledge forms, remaining UI parity, and
 improvement metrics. Measured container CPU/memory and dollar costs remain
 unavailable; the usage report distinguishes them from resource ceilings. See
 [the plan](../PLAN-self-improving-workspace.md).
@@ -1203,8 +1222,8 @@ independent verification must still pass.
 
 The project/stack **Execution** settings and goal inspection/steering views are
 available. Both desktop and TUI include goal planning and Linear publication.
-Execution authorization forms are available in the desktop; the TUI form is still
-in progress. Direct task-graph editing remains CLI-first.
+Execution authorization forms are available in both clients. Direct task-graph
+editing remains CLI-first.
 The checked-in plan lists the remaining work; this is a development checkpoint.
 
 Build the branch binary with `make build`. Run `./lola goal --help`, `./lola learn
