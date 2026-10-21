@@ -123,7 +123,7 @@ func (n *Native) SpawnGoal(ctx context.Context, g goal.Goal, attemptID string) (
 	if err := os.MkdirAll(filepath.Join(control, lolaDir), 0700); err != nil {
 		return session.Session{}, err
 	}
-	if err := os.WriteFile(filepath.Join(control, lolaDir, "prompt.md"), goalBrief(g, task, a, workspaces), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(control, lolaDir, "prompt.md"), n.withKnowledge(g.Project, a.SessionID, goalBrief(g, task, a, workspaces)), 0600); err != nil {
 		return session.Session{}, err
 	}
 	// The existing callback generators are reused with a container-local Linux

@@ -74,7 +74,7 @@ func (d *Daemon) handle(ctx context.Context, req protocol.Request) protocol.Resp
 		return d.handleGoalPlan(ctx, req)
 	case "reviewProfiles", "profileResults", "profileReview", "profileFindings", "profileDecideFinding", "profileCalibration":
 		return d.handleProfile(ctx, req)
-	case "knowledgeList", "knowledgeLookup", "knowledgeExport", "knowledgeCapture", "knowledgeCorrect", "knowledgeAccept", "knowledgeDispute", "knowledgeMaintain":
+	case "knowledgeVersion", "knowledgeList", "knowledgeLookup", "knowledgeExport", "knowledgeCapture", "knowledgeCorrect", "knowledgeAccept", "knowledgeDispute", "knowledgeMaintain", "knowledgeImprovementHistory", "knowledgeImprovements", "knowledgeImprovement", "knowledgeDecideImprovement", "knowledgeExportImprovement":
 		return d.handleKnowledge(ctx, req)
 	case "goalDismissProgress", "goalSyncBrief", "goalAcceptBrief", "goalOverview", "goals", "goalCreate", "goalShow", "goalUsage", "goalPublish", "goalPublishReviewed", "goalStartOptions", "goalStart", "goalControl", "goalDeliveryEvidence":
 		return d.handleGoals(ctx, req)

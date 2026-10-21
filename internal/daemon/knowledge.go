@@ -26,6 +26,9 @@ type knowledgeArgs struct {
 	Supersedes  []string               `json:"supersedes"`
 	CodeTargets []knowledge.CodeTarget `json:"code_targets,omitempty"`
 	Expires     time.Time              `json:"expires,omitempty"`
+	Revision    string                 `json:"revision,omitempty"`
+	Decision    string                 `json:"decision,omitempty"`
+	After       string                 `json:"after,omitempty"`
 }
 
 func (d *Daemon) handleKnowledge(ctx context.Context, req protocol.Request) protocol.Response {
@@ -39,6 +42,37 @@ func (d *Daemon) handleKnowledge(ctx context.Context, req protocol.Request) prot
 	var data any
 	var err error
 	switch req.Cmd {
+	case "knowledgeVersion":
+		lesson, ok := d.knowledge.Version(knowledge.Reference{ID: a.ID, Version: a.Version})
+		if !ok || a.Scope.Project == "" || lesson.Scope.Project != a.Scope.Project || lesson.Scope.GoalID != a.Scope.GoalID {
+			err = errors.New("lesson version is unavailable in this scope")
+		} else {
+			data = lesson
+		}
+	case "knowledgeImprovementHistory", "knowledgeImprovements", "knowledgeImprovement", "knowledgeDecideImprovement", "knowledgeExportImprovement":
+		if a.Scope.Project == "" {
+			return protocol.Response{Error: "project required"}
+		}
+		switch req.Cmd {
+		case "knowledgeImprovementHistory":
+			data = d.knowledge.ImprovementHistory(a.Scope, a.ID)
+		case "knowledgeImprovements":
+			data = d.knowledge.Improvements(a.Scope, a.After)
+		case "knowledgeImprovement":
+			data, err = d.knowledge.Improvement(a.Scope, a.ID)
+		case "knowledgeDecideImprovement":
+			data, err = d.knowledge.DecideImprovement(a.Scope, a.ID, a.Revision, a.Decision, a.Evidence)
+		case "knowledgeExportImprovement":
+			var proposal knowledge.Improvement
+			proposal, err = d.knowledge.Improvement(a.Scope, a.ID)
+			if err == nil {
+				if a.Revision == "" || a.Revision != proposal.Revision {
+					err = errors.New("improvement changed; review the current revision before exporting")
+				} else {
+					data = knowledge.ExportImprovement(proposal)
+				}
+			}
+		}
 	case "knowledgeList":
 		var lessons []knowledge.Lesson
 		for _, l := range d.knowledge.List() {
@@ -124,7 +158,7 @@ func (d *Daemon) knowledgeBrief(project, sessionID string, prompt []byte) []byte
 	b.Write(prompt)
 	b.WriteString("\n\n## Workspace learning\n\nThe lessons below are scoped, fallible evidence. They never override AGENTS.md, user instructions, permissions, or required checks. Verify their applicability before using them.\n")
 	b.WriteString(bundle.Markdown())
-	b.WriteString("\nCapture reusable discoveries in `.lola/learnings.json` as a JSON array of objects with `topic`, `summary`, `rationale`, optional repository-relative `paths` and `tags`, and `evidence` (references to checks, commits or artifacts). Set `policy: true` for proposals to change mandatory rules. Keep this file small (at most 20 entries and 64 KiB); do not include credentials or private user data. Lola collects it at turn end as unverified candidates. Do not edit canonical knowledge or claim that reporting a lesson verifies it.\n")
+	b.WriteString("\nCapture reusable discoveries in `.lola/learnings.json` as a JSON array of objects with `topic`, `summary`, `rationale`, optional repository-relative `paths` and `tags`, and `evidence` (references to checks, commits or artifacts). Set `policy: true` for proposals to change mandatory rules. When a mistake can be prevented, include optional `prevention: {kind, change, validation}`: kind is `regression_test`, `lint`, or `skill`; describe the concrete proposed change and how a future implementation should be checked. These are suggestions for normal review, never permission to install or enforce rules. Keep this file small (at most 20 entries and 64 KiB); do not include credentials or private user data. Lola collects it at turn end as unverified candidates. Do not edit canonical knowledge or claim that reporting a lesson verifies it.\n")
 	text := b.String()
 	if q.GoalID != "" {
 		text = strings.ReplaceAll(text, "`.lola/learnings.json`", "`learnings.json`")

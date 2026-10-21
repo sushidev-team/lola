@@ -9,6 +9,7 @@ export type {
     Bundle,
     CodeReference,
     Lesson,
+    PreventionIdea,
     Reference,
     Scope,
     Source

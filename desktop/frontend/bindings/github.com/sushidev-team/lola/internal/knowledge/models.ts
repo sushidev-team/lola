@@ -21,6 +21,7 @@ export interface Lesson {
     "id": string;
     "version": number;
     "scope": Scope;
+    "prevention"?: PreventionIdea | null;
     "topic": string;
     "summary": string;
     "rationale": string;
@@ -39,6 +40,19 @@ export interface Lesson {
     "verified_at"?: string;
     "expires_at"?: string;
     "verification"?: string;
+}
+
+/**
+ * PreventionIdea is untrusted implementation advice, never an executable rule.
+ * Validation describes how a future implementation must prove its usefulness.
+ */
+export interface PreventionIdea {
+    /**
+     * regression_test, lint, skill
+     */
+    "kind": string;
+    "change": string;
+    "validation": string;
 }
 
 export interface Reference {

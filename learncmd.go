@@ -132,6 +132,7 @@ func learnCmd() *cobra.Command {
 		}}
 	export.Flags().StringVar(&output, "output", "", "new output directory; existing directories are refused")
 	cmd.AddCommand(export)
+	addImprovementCommands(cmd, &project)
 	return cmd
 }
 

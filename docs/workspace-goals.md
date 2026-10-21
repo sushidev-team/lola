@@ -475,6 +475,68 @@ paths are known. Export creates a new directory containing a `LEARNINGS.md`
 index and focused lesson files for ordinary code review; it does not edit an
 existing repository documentation file.
 
+## Improvement proposals
+
+Lola derives improvement proposals automatically from saved lesson records. Two
+reporting sessions with the same topic, summary and path scope produce a proposed
+regression-test task. Whitespace differences are normalized; paraphrases and
+contradictory summaries are not merged. Worker/reviewer reports from the same
+session count once, and repeated operator/correction captures count as one source.
+These are occurrence counts, not independent verification or an accuracy score.
+Project-wide and individual goal scopes remain separate.
+
+A worker or operator can suggest a concrete prevention while capturing a lesson:
+
+```json
+"prevention": {
+  "kind": "regression_test",
+  "change": "Add a disk-full regression test proving failed persistence does not release a dispatch reservation.",
+  "validation": "Show the test failing on the old behavior and passing after the fix, then run required checks."
+}
+```
+
+Put this optional object alongside `topic`, `summary`, and `evidence` in an entry
+of `.lola/learnings.json` (or `learnings.json` for a goal worker). `kind` can also
+be `lint` or `skill`. The change and validation descriptions are bounded, untrusted
+suggestions. An explicit idea can appear after one report; `policy: true` entries
+appear as policy proposals and never become active rules. Differing proposed
+approaches remain visible for review. Expired, disputed, superseded, and
+maintenance-invalidated source lessons are excluded.
+
+```sh
+lola learn improvements --project lola
+lola learn improvement PROPOSAL_ID --project lola
+lola learn improvement-history PROPOSAL_ID --project lola
+lola learn lesson LESSON_ID --project lola --version 1
+lola learn export-improvement PROPOSAL_ID --project lola \
+  --revision SOURCE_REVISION --output ./improvement-proposal
+lola learn decide-improvement PROPOSAL_ID --project lola \
+  --revision SOURCE_REVISION --decision tracked --evidence "Tracked in ENG-42"
+```
+
+Use `--goal GOAL_ID` on these commands for a proposal belonging to one experiment.
+Listings return up to 50 proposals and `next_after` for the next `--after` page.
+Previews show at most 20 source references and five suggested approaches, with
+explicit omitted counts. Inspect exact source versions using `learn lesson` to
+see their evidence, including historical versions after curation.
+
+Export creates `IMPROVEMENT.md` and `proposal.json` in a new directory. The brief
+names the reported problem, scope, source versions, proposed changes, and required
+verification. Assign it through the ordinary issue/branch workflow or an explicitly
+authorized goal; reproduce the problem, run required checks, and review the change
+before merging. Export does not create a Linear issue, start a worker, install a
+skill/linter, change AGENTS.md, or modify acceptance gates.
+
+Triage supports `tracked`, `dismissed`, and `reopened`, with a required reason or
+normal task reference. It changes only the proposal annotation. Export and triage
+require the exact source revision reviewed; new reports or changed source versions
+make old decisions stale while retaining their history. Retrying the same latest
+decision is idempotent. New evidence makes the proposal pending again. Unchanged
+proposals and their decisions survive daemon restarts through the canonical lesson
+records and saved decision history. `improvement-history` retains the complete
+source-version receipt for each decision, even after disputes or expiry remove
+the current proposal from the listing.
+
 ## Specialist profiles
 
 Desktop **Settings → Review → Specialist reviewers** now offers Backend, UI/UX,

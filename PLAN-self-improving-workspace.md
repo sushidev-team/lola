@@ -5,7 +5,8 @@ Status: implementation resumed at the user’s request on
 Approximate scope estimate: 75% implemented, not a measured completion metric.
 
 Current verification: `make check` passed (build, vet and full Go suite) after
-the learning code-reference and maintenance additions, using the permissions
+the improvement-proposal, source-history, and goal-worker knowledge additions,
+using the permissions
 required by local socket/process test fixtures. Frontend `npm run check` passed
 after refreshing the knowledge bindings. Full frontend `npm test` and
 `npm run build` passed for the preceding desktop additions. Focused
@@ -23,7 +24,8 @@ daemon replacement has been performed. UI screenshots use clearly labeled fixtur
 
 Available for inspection: project/stack Execution settings; goal overview,
 tasks, limits, delivery and steering controls in desktop/TUI; CLI goal planning,
-authorization and recovery; knowledge capture/curation/export; specialist reviews
+authorization and recovery; knowledge capture/curation/export and improvement
+proposals; specialist reviews
 and finding decisions. Desktop goal planning, local plan acceptance, Linear
 publication and explicit execution authorization are now available.
 
@@ -33,9 +35,9 @@ Remaining before full-plan completion:
   TUI specialist editing and remaining desktop/TUI action parity.
 - Broader task/policy revision reconciliation and Linear steering beyond the
   implemented brief clarifications and bounded task replanning.
-- Recurring-error proposals for tests/lint/skills and evidence-backed promotion
-  beyond current curation. Referenced-code freshness and expiry maintenance are
-  implemented; references currently require explicit operator attachment.
+- Evidence-backed promotion beyond current curation. Freshness/expiry maintenance
+  and reviewable test/lint/skill proposals are implemented; code references
+  currently require explicit operator attachment.
 - Worker-originated specialist disputes and richer calibration, including model
   and prompt provenance and comparable-budget outcome measurement. The current
   finding report counts explicit operator decisions; it is not an accuracy score.
@@ -55,6 +57,15 @@ The existing five-minute maintenance pass and `learn maintain --project ...`
 also handle expiry. Git reads share a bounded deadline and perform no fetch or
 working-tree edits. Unwatched historical lessons remain explicitly untracked.
 This implements freshness revalidation, not automatic correctness verification.
+
+Improvement proposals addition: recurring scoped reports and explicit prevention
+ideas now yield inspectable test/lint/skill task briefs; mandatory-policy requests
+remain separate proposals. CLI triage is revision-bound and preserves history;
+export writes reviewable artifacts only. Repeated reports within one session do
+not increase the occurrence count, and operator captures are counted once.
+Neither recurrence nor triage activates a lesson, starts work, or installs a rule.
+Goal workers now receive the same bounded, recorded knowledge briefing as ordinary
+workers; launch recovery preserves the original supplied snapshot.
 
 Implemented foundations: durable goal reservations and recoverable Linear
 publication; ordinary-dispatch exclusion; scoped knowledge capture, curation,

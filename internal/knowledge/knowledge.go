@@ -31,13 +31,14 @@ type Scope struct {
 }
 
 type Proposal struct {
-	Topic     string   `json:"topic"`
-	Summary   string   `json:"summary"`
-	Rationale string   `json:"rationale"`
-	Paths     []string `json:"paths,omitempty"`
-	Tags      []string `json:"tags,omitempty"`
-	Evidence  []string `json:"evidence"`
-	Policy    bool     `json:"policy,omitempty"` // mandatory policy changes stay proposals
+	Prevention *PreventionIdea `json:"prevention,omitempty"`
+	Topic      string          `json:"topic"`
+	Summary    string          `json:"summary"`
+	Rationale  string          `json:"rationale"`
+	Paths      []string        `json:"paths,omitempty"`
+	Tags       []string        `json:"tags,omitempty"`
+	Evidence   []string        `json:"evidence"`
+	Policy     bool            `json:"policy,omitempty"` // mandatory policy changes stay proposals
 }
 
 type Source struct {
@@ -86,6 +87,9 @@ type Bundle struct {
 var credential = regexp.MustCompile(`(?i)(-----BEGIN [A-Z ]*PRIVATE KEY-----|(?:gh[pousr]_|github_pat_|sk-(?:ant-|proj-)?|lin_api_)[A-Za-z0-9_\-]{12,}|(?:api[_-]?key|password|secret|access[_-]?token)\s*[:=]\s*["']?[A-Za-z0-9_\-+/=]{8,})`)
 
 func Validate(scope Scope, p Proposal, source Source) error {
+	if err := validatePrevention(p.Prevention); err != nil {
+		return err
+	}
 	if scope.Project == "" || source.ID == "" || source.Kind == "" {
 		return fmt.Errorf("lesson requires a project and attributable source")
 	}

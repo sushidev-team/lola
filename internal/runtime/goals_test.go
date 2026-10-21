@@ -227,3 +227,31 @@ func TestGoalReadOnlyMemberIsMountedReadOnlyAndBriefed(t *testing.T) {
 		t.Fatal("ownership omitted from worker brief")
 	}
 }
+
+func TestGoalLaunchReceivesRecordedKnowledgeOnce(t *testing.T) {
+	n, g, _ := goalFixture(t)
+	calls := 0
+	n.KnowledgeBrief = func(project, id string, prompt []byte) []byte {
+		calls++
+		if project != g.Project || id != g.Execution.Attempts["attempt1"].SessionID {
+			t.Fatal("wrong learning scope")
+		}
+		return append(prompt, []byte("\nScoped learning fixture\n")...)
+	}
+	s, err := n.SpawnGoal(context.Background(), g, "attempt1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	promptPath := filepath.Join(filepath.Dir(s.Worktree), "control", lolaDir, "prompt.md")
+	before, err := os.ReadFile(promptPath)
+	if err != nil || !strings.Contains(string(before), "Scoped learning fixture") {
+		t.Fatal("goal worker missed knowledge", err)
+	}
+	if _, err = n.SpawnGoal(context.Background(), g, "attempt1"); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.ReadFile(promptPath)
+	if err != nil || string(before) != string(after) || calls != 1 {
+		t.Fatal("recovery replaced supplied knowledge", err)
+	}
+}

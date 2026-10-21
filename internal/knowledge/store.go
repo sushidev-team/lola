@@ -13,10 +13,11 @@ import (
 )
 
 type snapshot struct {
-	History    map[string][]Lesson    `json:"history"`
-	Version    int                    `json:"version"`
-	Lessons    map[string]Lesson      `json:"lessons"`
-	Deliveries map[string][]Reference `json:"deliveries"`
+	ImprovementDecisions map[string][]ImprovementDecision `json:"improvement_decisions,omitempty"`
+	History              map[string][]Lesson              `json:"history"`
+	Version              int                              `json:"version"`
+	Lessons              map[string]Lesson                `json:"lessons"`
+	Deliveries           map[string][]Reference           `json:"deliveries"`
 }
 
 type Store struct {
@@ -59,6 +60,9 @@ func Open(path string) (*Store, error) {
 		if l.Status == Active && (l.Verification == "" || l.VerifiedAt.IsZero() || l.Policy) {
 			return nil, fmt.Errorf("active lesson has no valid verification")
 		}
+	}
+	if err := validateImprovementDecisions(loaded.ImprovementDecisions); err != nil {
+		return nil, err
 	}
 	s.data = loaded
 	return s, nil
@@ -136,6 +140,10 @@ func (s *Store) Capture(scope Scope, p Proposal, source Source, correction bool)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	p.Paths, p.Tags, p.Evidence = slices.Clone(p.Paths), slices.Clone(p.Tags), slices.Clone(p.Evidence)
+	if p.Prevention != nil {
+		idea := *p.Prevention
+		p.Prevention = &idea
+	}
 	id := identity(scope, p, source)
 	if l, ok := s.copy().Lessons[id]; ok {
 		return l, nil
