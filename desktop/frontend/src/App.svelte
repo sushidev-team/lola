@@ -37,7 +37,7 @@
 
   onMount(() => {
     store.start();
-    // Load the version + run the interval-gated startup auto-check so the
+    // Load the version + start launch and periodic update checks so the
     // sidebar's utility row can surface a badge when a release is out.
     void updates.init();
     // The macOS status-bar menu cannot open an overlay itself — it is nav state
@@ -47,6 +47,7 @@
     // The Session menu's items + their ⌘ accelerators (see installAppMenu). They
     // name an action; the target is the selection, which only the frontend knows.
     Events.On("app:session-action", (e: { data: string }) => sessionAction(e.data));
+    return () => updates.stop();
   });
 
   // Apply a Session-menu action to the current selection. AppKit delivers a menu

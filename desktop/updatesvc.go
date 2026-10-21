@@ -149,7 +149,7 @@ func (s *UpdateService) CheckForUpdates(force bool) (UpdateInfoDTO, error) {
 	}, nil
 }
 
-// ShouldAutoCheck reports whether the startup auto-check is due (respects the
+// ShouldAutoCheck reports whether a periodic auto-check is due (respects the
 // AutoCheck toggle and the interval).
 func (s *UpdateService) ShouldAutoCheck() bool {
 	return s.loadPrefs().ShouldAutoCheck(time.Now())
