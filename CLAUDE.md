@@ -179,6 +179,11 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   vocabulary `<agent>[@<model>][:<count>]` (`ParseMix`, 2..`MaxAttempts`) shared
   by `[best_of].agents`, `lola bestof start --agents` and `cmd=bestOf`, and
   `Suggest`, the display-only ranking behind the compare view's ★.
+- `internal/linear`'s AGENT half (`agent.go`, `oauth.go`) — the Agent Session
+  API (`AgentAPI`: sessions, prompt activities, activity/plan/external-URL
+  writes) on an OAuth APP-ACTOR token (`NewBearer`), plus the `actor=app`
+  authorization-code flow `lola linear-agent login` drives. A separate
+  interface from `API` on purpose: it is a different principal.
 - `internal/statusagent` — the OPT-IN status interpreter: one bounded
   `claude -p` per interpretation (default `--model sonnet`) judging what an
   agent is ACTUALLY doing from pane/events/PR context. Output is parsed,
@@ -332,6 +337,10 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   (`devPlan`) and `withLanes`; `stackgit.go` — the local-git views of a stack
   session (diff, overlap files, all-or-nothing checkpoints). See the stack
   invariant below.
+- `linearagent.go` / `linearwebhook.go` — the native Linear agent loop
+  (`[linear_agent]`) and its optional webhook doorbell. See the invariant below.
+- `plangate.go` — the `require_plan` gate (`planSubmit` / `planDecide` /
+  `planGate`) and the queued-notice flush (`flushAgentNotices`).
 - `reconcile.go` — ~5m pass reverting orphaned issues (labeled-sent but no
   counted session and no open PR after `orphanTimeout`).
 - `writeback.go` — P4 Linear state transitions + comments.
@@ -1283,11 +1292,15 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   - Hooks cannot use the unix socket (a host unix socket does not survive a
     bind mount into Docker Desktop's / OrbStack's VM — measured, ECONNREFUSED),
     so `lola hook`/`lola report` dial `LOLA_HOOK_ADDR` when set. The bridge
-    (`internal/daemon/hookbridge.go`) admits ONLY `hookEvent`/`agentReport`, and
-    only with `hook.TokenFor(secret, req.Session)` — an HMAC under
-    `~/.lola/state/hook-secret`, so it is stateless across restarts and a token
-    speaks for exactly one session. Never widen the allowlist: loopback TCP is
-    reachable by every local process, unlike the 0600 socket.
+    (`internal/daemon/hookbridge.go`) admits ONLY `hookEvent`/`agentReport`
+    plus the plan gate's two in-pane commands `planGate` (read-only) /
+    `planSubmit` (own gate planning → submitted) — without those the gate fails
+    open in every container — and only with `hook.TokenFor(secret,
+    req.Session)` — an HMAC under `~/.lola/state/hook-secret`, so it is
+    stateless across restarts and a token speaks for exactly one session. Never
+    widen the allowlist beyond commands that act only on the token's own
+    session from inside its pane (never `planDecide`, `answer`, `kill`…):
+    loopback TCP is reachable by every local process, unlike the 0600 socket.
   - The container outlives its pane (`-it` gets no signal from a killed CLI),
     so `runtime.Kill` runs `docker rm -f <id>` whenever the session RECORDED a
     sandbox or its project has one, and every launch line starts with the same
@@ -1490,6 +1503,58 @@ each of which owns exactly one external tool or concern behind an **exec seam**
     text, not commands. A claim whose deciding run fell out of the bounded
     ledger abstains rather than reading as "nothing ran". A subagent's runs
     live in its own transcript and are not seen.
+- **The native Linear agent is a TRIGGER plus a MIRROR, and Linear's data is
+  never control.** `[linear_agent]` (`internal/daemon/linearagent.go`) polls the
+  Agent Session API as the app actor. Rules that hold it together:
+  - A new (`pending`) Agent Session dispatches through `handleOpenTicket`, so it
+    inherits the claim → seen → spawn → write-back ordering and can never
+    double-spawn against a tick; an issue already running BINDS instead
+    (`Session.AgentSessionID`). The ledger (`state/linear-agent.json`) records a
+    session BEFORE its spawn (the seen-before-spawn crash guard) and remembers
+    queued (capped / runtime-down) and rejected (no project for the team) ones,
+    so neither is re-posted every cycle. Linear's own status does the rest: once
+    lola emits an activity a session is no longer `pending`.
+  - Routing is by the issue's TEAM: a `[[project]]` whose `project_id` matches
+    wins over a team-wide one; no match is an error activity, never a guess.
+  - The mirror emits one activity per CHANGE, watermarked in the persisted
+    `Session.AgentMirror`. It reads `Session.Board` — that is a DISPLAY sink
+    (a human reading Linear), consistent with the board invariant below; nothing
+    from the mirror flows back into the control loop.
+  - A human's reply (a `prompt` activity) is the plan verdict while a plan is
+    pending, otherwise it is QUEUED (`PendingNotices`) and typed only through
+    `flushAgentNotices` — the hand-off gate + live pane proof, one per resting
+    prompt. lola's own activities are filtered by the app user's id. A `stop`
+    signal is acknowledged, never acted on: teardown stays a lola decision.
+  - The webhook (`linearwebhook.go`) is a DOORBELL: a delivery whose HMAC and
+    timestamp verify only wakes the poll; its payload is never parsed for
+    routing. No resolvable secret refuses every delivery.
+  - Secrets: client secret, OAuth tokens and webhook secret resolve from the
+    Keychain by service name (`secrets.Resolve`); tokens are refreshed on expiry
+    or 401 and the rotated pair is written back. `linear.OAuthClient` errors name
+    only the HTTP status and a whitelisted OAuth error word, never a body.
+- **The plan gate is CONTROL state, enforced by a hook that fails open.**
+  Not to be confused with `lola plan` / `plan.go` (issue decomposition): the
+  gate's CLI is `lola plan-gate submit|approve|reject`. `Session.PlanGate` (planning → submitted → approved) is set by the runtime at
+  spawn (`[[project]].require_plan`, inheritable — a bool in the `Inherits`
+  bitmap with a `*bool` file mirror) and moved ONLY by `plangate.go`; the agent's
+  board never moves it. claude's per-session settings carry a synchronous
+  `PreToolUse` hook on `Edit|Write|MultiEdit|NotebookEdit` → `lola hook
+  pre_tool_use` → `cmd=planGate`, which denies while `Blocks()`. It is wired into
+  EVERY claude session (an ungated one answers "allowed" in one round trip) and
+  fails OPEN on an unreachable daemon, like every hook. A sandboxed session
+  reaches it through the hook bridge, and stack sessions (`runtime/stack.go`)
+  are gated and briefed like single-repo ones. Bash writes and
+  codex/opencode are covered by the briefing only — documented, not hidden.
+  Verdicts reach the agent as queued notices (never typed mid-turn); approving
+  from `planning` waives the gate. Both project forms expose it as an
+  inheritable toggle (the first BOOLEAN inheritable key: toggling it while
+  inherited promotes it, like typing into an inherited text field), and the
+  app's `SaveProject` now carries over the `Inherits` bits its form does not
+  surface (`review`, `agent_fallback`) instead of zeroing them. The settings
+  screens edit `[linear_agent]` through `LinearAgentConfig.Normalized` (an
+  untouched table stays absent; secret SOURCES are preserved) and store the
+  agent's secrets write-only, like the Linear key. `planSubmit` / `planGate` are on remote's
+  denied floor (in-pane origin, like `agentReport`); `planDecide` is audited.
 - **Untrusted output stays out of the control loop.** `brain` summaries and
   `review` findings are derived from attacker-influenceable context (PR diffs,
   CI logs, pane text). They may go to a human (notify + Linear comment) but the

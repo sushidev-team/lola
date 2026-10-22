@@ -83,6 +83,34 @@ func TestHookBridgeAdmitsOnlyTokenedHooksForTheirOwnSession(t *testing.T) {
 	}
 }
 
+// The plan gate reaches a sandboxed agent too: its PreToolUse check and its
+// submit pass the bridge for the token's own session, while a human's verdict
+// (planDecide) never does.
+func TestHookBridgeCarriesThePlanGate(t *testing.T) {
+	d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, &fakeNative{})
+	s := nativeSess("FE-1", "working")
+	s.PlanGate = session.PlanPlanning
+	d.sessions.Upsert(s)
+	tok := d.hookToken(s.ID)
+
+	resp := bridgeRoundTrip(t, d, protocol.Request{Cmd: "planGate", Session: s.ID, HookToken: tok})
+	var gate protocol.PlanGateData
+	if !resp.OK || json.Unmarshal(resp.Data, &gate) != nil || !gate.Blocked {
+		t.Fatalf("planGate over the bridge = %+v / %+v, want a denial", resp, gate)
+	}
+	args, _ := json.Marshal(protocol.PlanSubmitArgs{Plan: "## Approach\nx"})
+	if resp := bridgeRoundTrip(t, d, protocol.Request{Cmd: "planSubmit", Session: s.ID, Args: args, HookToken: tok}); !resp.OK {
+		t.Fatalf("planSubmit over the bridge refused: %s", resp.Error)
+	}
+	if cur, _ := d.sessions.Get(s.ID); cur.PlanGate != session.PlanSubmitted {
+		t.Fatalf("PlanGate = %q, want submitted", cur.PlanGate)
+	}
+	verdict, _ := json.Marshal(protocol.PlanDecideArgs{Approve: true})
+	if resp := bridgeRoundTrip(t, d, protocol.Request{Cmd: "planDecide", Session: s.ID, Args: verdict, HookToken: tok}); resp.OK {
+		t.Fatal("planDecide admitted on the bridge: an agent must not approve its own plan")
+	}
+}
+
 func TestHookBridgeOpensOnlyWhileAProjectIsSandboxed(t *testing.T) {
 	cfg := nativeTestConfig(nativePoll("p1"))
 	d := newTestDaemon(t, cfg, &linear.Fake{}, &fakeNative{})

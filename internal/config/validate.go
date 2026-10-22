@@ -297,6 +297,7 @@ func (c *Config) Validate() error {
 	errs = append(errs, c.validateSandbox()...)
 	errs = append(errs, c.validateStacks()...)
 	errs = append(errs, c.validateRemote()...)
+	errs = append(errs, c.validateLinearAgent()...)
 
 	return errors.Join(errs...)
 }
