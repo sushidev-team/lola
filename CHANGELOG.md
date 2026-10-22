@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.20](https://github.com/sushidev-team/lola/compare/v0.2.19...v0.2.20) (2026-10-22)
+
+
+### Bug Fixes
+
+* **desktop:** check for updates on startup and periodically ([9b42b57](https://github.com/sushidev-team/lola/commit/9b42b57baf1eadd09fd0a61432ced2e0d69214b3))
+
 ## [0.2.19](https://github.com/sushidev-team/lola/compare/v0.2.18...v0.2.19) (2026-10-20)
 
 
