@@ -247,3 +247,15 @@ review, integration and final draft PR delivery still lack live evidence.
 Bounded check memory is now part of the accepted policy, container arguments,
 per-run accounting and desktop/TUI authorization forms. Legacy defaults/digests
 remain intact. See [pilot records](evaluation/nori-dialog-pilot/README.md).
+
+### Handoff-device preflight — 2026-10-22
+
+The rebuilt sandbox inputs match the earlier manifest. With freshly built
+host/Linux ARM64 Lola binaries, the exact corrected-heap acceptance command
+passed on a disposable historical recovery candidate in the same offline 2 GiB
+boundary: 11 unit tests, 3 Storybook tests, build and four browser cases in
+95.386 seconds. The real Docker isolation/timeout-cleanup test also passed.
+[Retained evidence](evaluation/nori-dialog-pilot/handoff-preflight/) establishes
+environment readiness, not a live submission, specialist review or integration.
+No new goal or paid call started; the additional approved allowance is unchanged.
+Local Linear and Claude authentication must be configured before execution.

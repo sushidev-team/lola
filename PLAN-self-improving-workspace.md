@@ -1079,3 +1079,19 @@ Remaining: complete one adequately timed end-to-end pilot after exact-boundary
 preflight, then run representative comparisons. The pilot also identifies a
 follow-up UX need: renew a run through an explicit new authorization under the
 same goal/Linear parent, preserving earlier runs and budgets as immutable history.
+
+### Handoff-device preflight — 2026-10-22
+
+The sandbox was reconstructed on the handoff device with matching dependency
+and harness input hashes and freshly built host/Linux ARM64 Lola binaries.
+The complete corrected-heap acceptance command passed in 95.386 seconds under
+the exact offline 2 GiB boundary on a disposable historical recovery candidate:
+11 unit tests, 3 Storybook tests, build and four browser cases. Lola's real
+container boundary/timeout-cleanup test also passed. See
+[retained environment evidence](docs/evaluation/nori-dialog-pilot/handoff-preflight/).
+
+No new goal, model call or live execution has started. Secure local Linear and
+Claude authentication is missing; the already-approved additional 20-minute run,
+eight-minute worker attempt and three calls remain available under the unchanged
+aggregate token/spend ceilings. This completes the new-device environment
+preflight, not the live-pilot or representative-comparison requirements.

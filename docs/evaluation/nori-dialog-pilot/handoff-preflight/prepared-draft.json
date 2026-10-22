@@ -1,0 +1,43 @@
+{
+  "project": "nori-app",
+  "title": "Dialog layout pilot cross-device continuation",
+  "outcome": "Improve the shared dialog presentation in Nori App using its existing design system. Inspect DESIGN.md, PRODUCT.md and resources/css/tokens.css in the worker. Read-only baseline inspection found bg-black/80 and shadow-lg in the shared Dialog; existing tokens are --overlay-scrim (36% steel ink light, 60% black dark) and --shadow-dialog. Keep the change bounded to the shared dialog and its stories/tests, with invoice SaveViewDialog changed only if layout needs it. Use the existing apps/app label adeae6ca-42c6-4809-9024-ba86070cf861; do not apply agent-ready or change existing release milestones. This continuation allows 20 additional minutes, an eight-minute worker attempt and three model calls, with one worker at a time and no automatic main merge. Reserve one worker and the task and final specialist reviews; there is no coordinator call. Remaining aggregate ceilings are 775369 observed tokens and $2.1938334 estimated spend after 1224631 observed tokens, five calls and $0.8061666 previously. The prepared image provides offline project dependencies through sh /opt/pilot/setup-deps.sh when run from the repository directory. Do not commit generated dependency links, build output or pilot evidence. Acceptance runs the pinned /opt/pilot/check.sh with PILOT_ASSERT_STYLE=1 independently of worker claims. Continuation of NOR-493, which stopped at its original token cap. Preserve that history. This run uses only the additional authorization recorded in HANDOFF-workspace-goals.md and retains all old receipts. It also follows NOR-498 / NOR-499, whose worker passed the full suite but reached its three-minute attempt deadline before submission. Follow-up to NOR-495: its independent Node build exhausted the default heap. A separate diagnostic passed with NODE_OPTIONS=--max-old-space-size=1792 inside the same 2 GiB boundary. Use that environment for acceptance; retain prior failed receipts.",
+  "acceptance": [
+    "Rendered light and dark dialogs use the existing --overlay-scrim and --shadow-dialog tokens and fit the current visual style.",
+    "Desktop and 390px-wide captures show at least 1rem viewport gutters; tall content scrolls vertically and its close button remains visible.",
+    "Keyboard focus starts inside the dialog, Tab stays inside it, Escape dismisses it and restores trigger focus.",
+    "Existing dialog and invoice Save view tests, dialog Storybook tests and the frontend build pass; invoice saving/filter payload behavior is preserved."
+  ],
+  "non_goals": [
+    "Changing backend behavior, global design tokens or unrelated feature dialogs.",
+    "Changing issue pickup settings, initiatives, existing release milestones, or automatically merging into main."
+  ],
+  "milestone_id": "5c096266-9d6d-4cec-a0b3-8f34d14d236d",
+  "tasks": [
+    {
+      "title": "Align shared Dialog overlay, shadow and viewport fit with design tokens",
+      "description": "Align the shared Dialog overlay and shadow with existing --overlay-scrim and --shadow-dialog tokens. Read DESIGN.md, PRODUCT.md and resources/css/tokens.css first. Preserve current viewport gutters, vertical scrolling, close-button visibility, Radix keyboard/focus behavior, and invoice SaveViewDialog payload behavior. Change only approved files; SaveViewDialog needs no change unless layout demands it. Update directly affected assertions and stories where useful. The existing unit, Storybook and browser checks already pass on the baseline except the intentional style-token check. Run sh /opt/pilot/setup-deps.sh from the repository directory, then NODE_OPTIONS=--max-old-space-size=1792 PILOT_ASSERT_STYLE=1 sh /opt/pilot/check.sh. This pinned helper runs the scoped dialog and invoice tests, dialog Storybook tests, frontend build, and four real-browser theme/viewport cases including synthetic overflow. It records captures and checks; do not duplicate unrelated full-repository testing. Keep generated dependencies, build outputs and pilot-evidence uncommitted. Report actual outcomes, not assumed success. No backend or global-token edits. Earlier attempt stopped at its configured token cap after the pinned helper passed. Treat that result as background only; execute and submit your own scoped change. Wait for background commands using their actual task handles, not pgrep against the shell command text. Keep the change minimal.",
+      "acceptance": [
+        "Rendered light and dark dialogs use the existing --overlay-scrim and --shadow-dialog tokens and fit the current visual style.",
+        "Desktop and 390px-wide captures show at least 1rem viewport gutters; tall content scrolls vertically and its close button remains visible.",
+        "Keyboard focus starts inside the dialog, Tab stays inside it, Escape dismisses it and restores trigger focus.",
+        "Existing dialog and invoice Save view tests, dialog Storybook tests and the frontend build pass; invoice saving/filter payload behavior is preserved."
+      ],
+      "apps": [
+        "nori-app"
+      ],
+      "paths": {
+        "nori-app": [
+          "resources/js/components/ui/dialog.tsx",
+          "resources/js/components/ui/dialog.stories.tsx",
+          "resources/js/components/ui/__tests__/dialog.test.tsx",
+          "resources/js/components/Invoices/SaveViewDialog.tsx",
+          "resources/js/components/Invoices/__tests__/save-view-dialog.test.tsx"
+        ]
+      },
+      "label_ids": [
+        "adeae6ca-42c6-4809-9024-ba86070cf861"
+      ]
+    }
+  ]
+}

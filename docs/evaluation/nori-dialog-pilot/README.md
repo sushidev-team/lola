@@ -5,6 +5,10 @@ launch, submission, independent check rejection, restart and bounded stopping.
 **The pilot has not completed specialist review, integration or PR delivery.**
 The user authorized 30 minutes and eight model calls in aggregate, with one
 worker at a time; the continuation retained those time/call ceilings.
+The latest approval adds 20 minutes, an eight-minute worker attempt and up to
+three further calls, retaining the 2M-token / $3 aggregate ceilings. See the
+[current handoff](../../../HANDOFF-workspace-goals.md) for the authoritative
+remaining allowance and device setup.
 
 ## Scope and baseline
 
@@ -219,3 +223,30 @@ assertion; six desktop authorization tests passed; Svelte check reported zero
 errors/warnings; the production frontend build passed. The normal installed
 binary was not replaced. The isolated pilot daemon was stopped after its workers
 were confirmed stopped.
+
+## Handoff-device preflight
+
+The feature branch was fetched on the new device and matched `3aecea4`. Local
+Nori and its remote main both remain at `f94d30d7c8f08178c14297d67756a014d3ff089c`;
+all package, selected vendor and harness input hashes match. The rebuilt ARM64
+image is `sha256:5a75b7519c908829a8151115e5f2a32c73de18e30150b5cfaa79fd47bea8d674`.
+Lola host/Linux binaries were built and the missing tmux runtime was installed.
+
+The exact command `NODE_OPTIONS=--max-old-space-size=1792 PILOT_ASSERT_STYLE=1 sh /opt/pilot/check.sh`
+passed against a disposable archive with the historical recovery patch under
+the network-disabled, read-only-root, 2 CPU, 2 GiB, 256-process boundary with
+512 MiB scratch. It passed 11 unit tests, 3 Storybook tests, the build and all
+four real-browser cases, taking 95.386 seconds. Existing font-resolution and
+chunk-size build warnings remain. The actual Docker boundary and timeout-cleanup
+test passed separately. [Logs, captures and measurements](handoff-preflight/)
+are bound by [hashes](handoff-preflight/sha256.json).
+
+These are environment preflight results for the historical candidate, not a new
+worker submission, specialist verdict or integration proof. No new goal or
+Linear issues were created, no daemon was started and no model calls were spent.
+The three approved calls, 775,369 observed-token allowance, $2.1938334 estimated
+spend allowance and additional 20-minute execution window remain available.
+Execution awaits secure local Linear and Claude authentication. Prepared draft
+and authorization files are retained here; the authorization deliberately keeps
+its placeholder goal ID/revision and cannot start a run as-is. Original Nori
+source and ordinary daemon state remain unchanged.

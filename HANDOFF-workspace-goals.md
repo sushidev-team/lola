@@ -2,7 +2,7 @@
 
 Updated 2026-10-22. Continue on `feat/self-improving-workspaces` in
 `sushidev-team/lola`. Implementation checkpoints are `772dafc` and `468bd03`;
-this handoff is committed immediately after them. **The full plan is not complete.**
+this handoff was initially committed immediately after them. **The full plan is not complete.**
 
 ## Latest user instruction and authorization
 
@@ -11,8 +11,9 @@ They then approved another **20 minutes, an eight-minute worker attempt, and up
 to three model calls**, retaining the existing aggregate **2M-token / $3** ceilings.
 Before that new run started, they asked to stop here, push everything and hand off
 to another device. No model call or new pilot execution occurred after this latest
-approval; only read-only preparation occurred. Continue from this authorization
-without asking for the same permission again. Do not start work on both devices.
+approval on the old device; only read-only preparation occurred there. Continue
+from this authorization without asking for the same permission again. Do not
+start work on both devices.
 
 Previously observed usage across all pilot attempts: **1,224,631 tokens**, including
 cache, **five model calls**, **$0.8061666 estimated spend**. Remaining allowance:
@@ -21,6 +22,36 @@ billing meter. Reserve one worker and both required specialist/final review call
 do not add a coordinator call merely to recreate the already-reviewed one-task plan.
 If these limits prevent delivery, retain the actual result; never silently increase
 them, bypass reviews or merge into main.
+
+## Handoff-device preflight — 2026-10-22
+
+The user requested continuation on this device. Origin was fetched and matched
+`3aecea4`; the existing feature checkout was clean. Both the local Nori checkout
+at `/Volumes/Git/sushi/internal/nori/nori-app` and remote main remain at
+`f94d30d7c8f08178c14297d67756a014d3ff089c`. Every committed image input hash
+matches the previous setup. Host and Linux ARM64 Lola binaries were built, the
+missing tmux dependency was installed, and the image was rebuilt as
+`sha256:5a75b7519c908829a8151115e5f2a32c73de18e30150b5cfaa79fd47bea8d674`.
+
+The exact complete acceptance command passed on a disposable copy of the
+historical recovery candidate under the same offline 2 GiB boundary: 11 unit
+tests, 3 Storybook tests, the build and four browser theme/viewport cases. Total
+elapsed time was 95.386 seconds. Lola's real Docker boundary/timeout-cleanup test
+also passed. [Retained preflight evidence](docs/evaluation/nori-dialog-pilot/handoff-preflight/)
+is environment validation, **not** a new worker submission or goal-verification receipt.
+
+The isolated configuration and draft are prepared at `/tmp/lola-nori-dialog-pilot`.
+No new daemon, goal, Linear issue, worker, review or PR has been started. The
+additional 20-minute clock and all three model calls remain unused. GitHub
+authentication works, but this device has no `lola-linear` keychain item and
+`claude auth status --json` reports signed out. Secure local setup was requested:
+add the existing Linear key as keychain service `lola-linear` and run
+`claude auth login`. Do not put credentials in chat or Git. Recheck authentication
+before starting; continue under the authorization above without asking again.
+
+The previous device's `github-pr` skill is absent from this checkout and the
+local Codex/Claude/agent skill directories. Its location needs resolving before
+PR creation; the concrete handoff PR requirements remain recorded below.
 
 ## Start here
 
