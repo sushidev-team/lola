@@ -105,6 +105,30 @@ func TestValidationUsageRejectsForeignAndUnsafeReceipts(t *testing.T) {
 	}
 }
 
+func TestValidationUsageReportsAuthorizedMemoryPerRun(t *testing.T) {
+	r, s, write := usageFixture(t)
+	write("large", "pass", true, time.Second)
+	dir, _ := r.Workspaces.ValidationDirectory("g", "large")
+	path := filepath.Join(dir, "check.json")
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var receipt Receipt
+	if err := json.Unmarshal(b, &receipt); err != nil {
+		t.Fatal(err)
+	}
+	s.MemoryMiB = 4096
+	receipt.Spec = s
+	if err := saveReceipt(path, receipt); err != nil {
+		t.Fatal(err)
+	}
+	got := r.Usage(context.Background(), "g", "policy", []UsageRef{{ID: "large", Operation: "op", Spec: s}})
+	if got.MemoryLimitBytes != 4<<30 || len(got.Runs) != 1 || got.Runs[0].MemoryLimitBytes != 4<<30 {
+		t.Fatalf("incorrect resource ceiling: %+v", got)
+	}
+}
+
 func TestValidationUsageReadBudget(t *testing.T) {
 	r, _, write := usageFixture(t)
 	write("valid", "pass", true, time.Second)

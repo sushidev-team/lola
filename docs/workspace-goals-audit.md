@@ -233,3 +233,17 @@ timestamp. Focused regressions and the final `make check` pass after all three f
 (`/tmp/lola-nori-dialog-pilot/lola-check-final-fixes.log`). [Pilot evidence](evaluation/nori-dialog-pilot/README.md)
 retains the exact limits, output, usage and restart observations. A larger token
 allowance requires a fresh run; the existing authorization is retained unchanged.
+
+
+### Continuation findings — 2026-10-22
+
+The approved continuation additionally proves worker submission, independent
+check execution/rejection, and stop-workers preventing further dispatch. Its
+independent unit/story/browser checks passed; Node heap exhaustion failed the
+build. A separate same-boundary diagnostic passed with a 1792 MiB heap. The final
+recovery worker passed every check but timed out before submission. Specialist
+review, integration and final draft PR delivery still lack live evidence.
+
+Bounded check memory is now part of the accepted policy, container arguments,
+per-run accounting and desktop/TUI authorization forms. Legacy defaults/digests
+remain intact. See [pilot records](evaluation/nori-dialog-pilot/README.md).

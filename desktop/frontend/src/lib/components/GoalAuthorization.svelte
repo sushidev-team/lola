@@ -135,6 +135,7 @@
                   <label class="block text-sm text-faint">Check command<textarea class={field} rows="2" required maxlength="16000" bind:value={check.command}></textarea></label>
                   <label class="block text-sm text-faint">Check image digest<input class={field} required bind:value={check.image} placeholder="sha256:…" /></label>
                   <label class="block text-sm text-faint">Check timeout (seconds)<input class={field} type="number" min="1" max="3600" required bind:value={check.timeout_seconds} /></label>
+				  <label class="block text-sm text-faint">Memory (MiB; blank uses 2048)<input class={field} type="number" min="256" max="8192" placeholder="2048" bind:value={check.memory_mib} /></label>
                   <Disclosure label="Captured evidence">
                     <p class="mt-2 text-sm text-faint">Evidence paths are relative to the combined repository root and include the repository ID. Specialist reviewers require their evidence kinds to be present.</p>
                     {#each check.artifacts ?? [] as artifact, n (artifact)}
@@ -183,7 +184,7 @@
           <p class="text-sm text-faint">Workers may begin after this authorization is accepted. Scope, checks and budgets below are the complete policy you are approving.</p>
           <ul class="list-disc space-y-1 pl-5 text-sm text-faint">{#each reviewed.policy.members as member}<li class="selectable break-words">{member.repo || member.id} → {member.target}; allowed paths: {member.paths?.length ? member.paths.join(", ") : "entire repository, restricted by each task’s scope"}</li>{/each}</ul>
           {#if reviewed.policy.rollout}<GoalRollout rollout={reviewed.policy.rollout} members={reviewed.policy.members ?? []} />{/if}
-          {#each reviewed.policy.checks as check}<div class="space-y-1 text-sm"><h5 class="font-medium text-ink">{check.id} · {check.member || "combined root"} · {check.timeout_seconds}s</h5><pre class="selectable whitespace-pre-wrap break-all text-faint">{check.command}</pre><p class="selectable break-all text-faint">{check.image}</p>{#each check.artifacts ?? [] as artifact}<p class="selectable break-words text-faint">{artifact.id}: {artifact.kind} from {artifact.path}</p>{/each}</div>{/each}
+          {#each reviewed.policy.checks as check}<div class="space-y-1 text-sm"><h5 class="font-medium text-ink">{check.id} · {check.member || "combined root"} · {check.timeout_seconds}s · {check.memory_mib || 2048} MiB</h5><pre class="selectable whitespace-pre-wrap break-all text-faint">{check.command}</pre><p class="selectable break-all text-faint">{check.image}</p>{#each check.artifacts ?? [] as artifact}<p class="selectable break-words text-faint">{artifact.id}: {artifact.kind} from {artifact.path}</p>{/each}</div>{/each}
           <p class="text-sm text-faint">Required reviews: {reviewed.policy.profiles?.join(", ") || "None selected"}</p>
           <dl class="grid grid-cols-[minmax(0,1fr)_auto] gap-x-4 gap-y-1 text-sm">{#each limitFields as f}<dt class="text-faint">{f.label}</dt><dd class="num text-ink">{reviewed.policy.limits[f.key]}</dd>{/each}</dl>
           <p class="text-sm text-ink">Draft PR publication: {reviewed.policy.publish_pr ? "allowed after verification" : "disabled"}. Task replanning: {reviewed.policy.replan ? "allowed within these limits" : "disabled"}.</p>

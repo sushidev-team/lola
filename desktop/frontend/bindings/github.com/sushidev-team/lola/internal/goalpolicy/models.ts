@@ -25,6 +25,11 @@ export interface Check {
     "member"?: string;
     "image": string;
     "timeout_seconds": number;
+
+    /**
+     * zero preserves the original 2 GiB limit
+     */
+    "memory_mib"?: number;
     "artifacts"?: ArtifactSpec[] | null;
 }
 

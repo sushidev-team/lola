@@ -219,6 +219,7 @@ func (p *goalAuthorizationModel) addCheck(c goalpolicy.Check) {
 		{key: key("command"), label: "Command", kind: sfList, lines: strings.Split(c.Command, "\n"), help: "Exact verification command. Runs in a disposable container without network access."},
 		{key: key("image"), label: "Image digest", kind: sfText, text: c.Image, help: "Already installed image pinned by sha256 digest; mutable tags are refused."},
 		{key: key("timeout"), label: "Timeout (seconds)", kind: sfInt, text: strconv.Itoa(c.TimeoutSeconds), help: "1–3600 seconds."},
+		{key: key("memory"), label: "Memory (MiB)", kind: sfInt, text: strconv.Itoa(c.MemoryMiB), help: "0 uses 2048 MiB. Explicit limits: 256–8192 MiB."},
 		{key: key("add_evidence"), label: "Add captured evidence", kind: sfAction, help: "Evidence needs an ID, kind and path from the combined repository root."},
 		{key: key("remove"), label: "Remove check", kind: sfAction, help: "Remove this check and its evidence from the unsaved policy."},
 	}
@@ -270,7 +271,11 @@ func (p *goalAuthorizationModel) authorization() (goal.Authorization, error) {
 		if err != nil {
 			return a, errors.New("Check timeout must be a whole number from 1 to 3600")
 		}
-		c := goalpolicy.Check{ID: field("id").text, Member: field("member").text, Command: strings.Join(field("command").lines, "\n"), Image: field("image").text, TimeoutSeconds: timeout}
+		memory, err := strconv.Atoi(field("memory").text)
+		if err != nil {
+			return a, errors.New("Check memory must be a whole number of MiB")
+		}
+		c := goalpolicy.Check{ID: field("id").text, Member: field("member").text, Command: strings.Join(field("command").lines, "\n"), Image: field("image").text, TimeoutSeconds: timeout, MemoryMiB: memory}
 		for _, n := range p.artifacts[serial] {
 			prefix := fmt.Sprintf("evidence.%d.", n)
 			c.Artifacts = append(c.Artifacts, goalpolicy.ArtifactSpec{ID: field(prefix + "id").text, Kind: field(prefix + "kind").text, Path: field(prefix + "path").text})
@@ -525,7 +530,7 @@ func (p *goalAuthorizationModel) reviewLines() []string {
 		if member == "" {
 			member = "combined repository root"
 		}
-		out = append(out, "", fmt.Sprintf("Check %s · %s · %ds", c.ID, member, c.TimeoutSeconds))
+		out = append(out, "", fmt.Sprintf("Check %s · %s · %ds · %d MiB", c.ID, member, c.TimeoutSeconds, c.MemoryLimitBytes()>>20))
 		out = append(out, strings.Split(c.Command, "\n")...)
 		out = append(out, c.Image)
 		for _, a := range c.Artifacts {

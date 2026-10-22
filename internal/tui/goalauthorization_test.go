@@ -35,7 +35,7 @@ func authorizationRoot(t *testing.T) (*rootModel, *goalAuthorizationModel) {
 	return m, p
 }
 func authorizationFill(p *goalAuthorizationModel) {
-	p.addCheck(goalpolicy.Check{ID: "acceptance", Member: "api", Command: "./verify invitations\nprintf 'done\\n'", Image: "sha256:" + strings.Repeat("a", 64), TimeoutSeconds: 300, Artifacts: []goalpolicy.ArtifactSpec{{ID: "flow", Kind: "interaction", Path: "app/evidence/flow.json"}}})
+	p.addCheck(goalpolicy.Check{ID: "acceptance", Member: "api", Command: "./verify invitations\nprintf 'done\\n'", Image: "sha256:" + strings.Repeat("a", 64), TimeoutSeconds: 300, MemoryMiB: 4096, Artifacts: []goalpolicy.ArtifactSpec{{ID: "flow", Kind: "interaction", Path: "app/evidence/flow.json"}}})
 	p.editor.field("member.0").lines = []string{"src", "tests"}
 	p.editor.field("spend_usd").text = "12.50"
 	p.editor.field("publish_pr").b = true
@@ -92,6 +92,9 @@ func TestGoalAuthorizationReadOnlyOptionsAndFrozenStart(t *testing.T) {
 		t.Fatal("start without acknowledgment")
 	}
 	expected := *p.reviewed
+	if expected.Policy.Checks[0].MemoryMiB != 4096 {
+		t.Fatal("review dropped the accepted check memory limit")
+	}
 	p.editor.field("tokens").text = "1"
 	p.options.Authorization.Policy.Members[0].Target = "edited"
 	m.Update(keyMsg("space"))

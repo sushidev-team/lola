@@ -1,0 +1,100 @@
+{
+  "id": "95b9671e-e5ba-40c1-86f0-4481f7fc59b0",
+  "revision": 12,
+  "policy": {
+    "members": [
+      {
+        "id": "nori-app",
+        "project": "nori-app",
+        "source": "/Volumes/Git/sushi/internal/nori/nori-app",
+        "repo": "sushidev-team/nori-app",
+        "target": "main",
+        "paths": [
+          "resources/js/components/ui/dialog.tsx",
+          "resources/js/components/ui/dialog.stories.tsx",
+          "resources/js/components/ui/__tests__/dialog.test.tsx",
+          "resources/js/components/Invoices/SaveViewDialog.tsx",
+          "resources/js/components/Invoices/__tests__/save-view-dialog.test.tsx"
+        ]
+      }
+    ],
+    "checks": [
+      {
+        "id": "dialog-acceptance",
+        "member": "nori-app",
+        "command": "PILOT_ASSERT_STYLE=1 sh /opt/pilot/check.sh",
+        "image": "sha256:d3f85088fc383f8114b9ed1e57ba8916a0c92d75fba8c914d3a7085da0d7d6c8",
+        "timeout_seconds": 900,
+        "artifacts": [
+          {
+            "id": "light-desktop",
+            "kind": "screenshot",
+            "path": "nori-app/pilot-evidence/light-desktop.png"
+          },
+          {
+            "id": "light-desktop-overflow",
+            "kind": "screenshot",
+            "path": "nori-app/pilot-evidence/light-desktop-overflow.png"
+          },
+          {
+            "id": "light-narrow",
+            "kind": "screenshot",
+            "path": "nori-app/pilot-evidence/light-narrow.png"
+          },
+          {
+            "id": "light-narrow-overflow",
+            "kind": "screenshot",
+            "path": "nori-app/pilot-evidence/light-narrow-overflow.png"
+          },
+          {
+            "id": "dark-desktop",
+            "kind": "screenshot",
+            "path": "nori-app/pilot-evidence/dark-desktop.png"
+          },
+          {
+            "id": "dark-desktop-overflow",
+            "kind": "screenshot",
+            "path": "nori-app/pilot-evidence/dark-desktop-overflow.png"
+          },
+          {
+            "id": "dark-narrow",
+            "kind": "screenshot",
+            "path": "nori-app/pilot-evidence/dark-narrow.png"
+          },
+          {
+            "id": "dark-narrow-overflow",
+            "kind": "screenshot",
+            "path": "nori-app/pilot-evidence/dark-narrow-overflow.png"
+          },
+          {
+            "id": "interaction",
+            "kind": "interaction",
+            "path": "nori-app/pilot-evidence/interaction.json"
+          },
+          {
+            "id": "commands",
+            "kind": "test",
+            "path": "nori-app/pilot-evidence/commands.json"
+          }
+        ]
+      }
+    ],
+    "profiles": [
+      "nori-dialog-uiux"
+    ],
+    "limits": {
+      "concurrency": 1,
+      "max_tasks": 1,
+      "attempts_per_task": 2,
+      "review_rounds": 1,
+      "agent_runs": 6,
+      "runtime_minutes": 16,
+      "attempt_minutes": 8,
+      "tokens": 1715000,
+      "spend_usd": 2.6848218
+    },
+    "publish_pr": true,
+    "require_human_acceptance": true,
+    "replan": false
+  }
+}

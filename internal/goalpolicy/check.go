@@ -20,7 +20,16 @@ type Check struct {
 	Member         string         `json:"member,omitempty" toml:"member,omitempty"` // empty = stack root
 	Image          string         `json:"image" toml:"image"`
 	TimeoutSeconds int            `json:"timeout_seconds" toml:"timeout_seconds"`
+	MemoryMiB      int            `json:"memory_mib,omitempty" toml:"memory_mib,omitempty"` // zero preserves the original 2 GiB limit
 	Artifacts      []ArtifactSpec `json:"artifacts,omitempty" toml:"artifacts,omitempty"`
+}
+
+// MemoryLimitBytes resolves the accepted limit without changing legacy policy digests.
+func (s Check) MemoryLimitBytes() int64 {
+	if s.MemoryMiB == 0 {
+		return 2 << 30
+	}
+	return int64(s.MemoryMiB) << 20
 }
 
 type ArtifactSpec struct {
@@ -41,6 +50,9 @@ func (s Check) Validate() error {
 	}
 	if s.TimeoutSeconds < 1 || s.TimeoutSeconds > 3600 {
 		return errors.New("check timeout must be 1–3600 seconds")
+	}
+	if s.MemoryMiB != 0 && (s.MemoryMiB < 256 || s.MemoryMiB > 8192) {
+		return errors.New("check memory_mib must be 256–8192, or zero for the 2048 MiB default")
 	}
 	if len(s.Artifacts) > 20 {
 		return errors.New("at most 20 artifacts per check")

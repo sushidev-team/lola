@@ -240,7 +240,7 @@ func TestContainerBoundaryAndPolicyValidation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, pair := range [][2]string{{"--network", "none"}, {"--cap-drop", "ALL"}, {"--pull", "never"}, {"--security-opt", "no-new-privileges"}, {"--memory", "2g"}} {
+	for _, pair := range [][2]string{{"--network", "none"}, {"--cap-drop", "ALL"}, {"--pull", "never"}, {"--security-opt", "no-new-privileges"}, {"--memory", "2048m"}} {
 		i := slices.Index(args, pair[0])
 		if i < 0 || args[i+1] != pair[1] {
 			t.Fatalf("missing isolation flag: %v", pair)
@@ -269,5 +269,27 @@ func TestContainerBoundaryAndPolicyValidation(t *testing.T) {
 		if x.Validate() == nil {
 			t.Fatal("unsafe policy accepted")
 		}
+	}
+}
+
+func TestContainerUsesAuthorizedMemoryAndRejectsChangedReceipt(t *testing.T) {
+	r, spec, manifest := setup(t)
+	spec.Artifacts = nil
+	spec.MemoryMiB = 4096
+	r.Run = func(_ context.Context, _ string, args []string) (string, error) {
+		if args[0] == "run" {
+			i := slices.Index(args, "--memory")
+			if i < 0 || args[i+1] != "4096m" {
+				t.Fatalf("authorized memory not passed to Docker: %v", args)
+			}
+		}
+		return "", nil
+	}
+	if _, err := r.Execute(context.Background(), "goal1", "op1", "check1", "policy1", spec, manifest); err != nil {
+		t.Fatal(err)
+	}
+	spec.MemoryMiB = 2048
+	if _, err := r.Execute(context.Background(), "goal1", "op1", "check1", "policy1", spec, manifest); err == nil {
+		t.Fatal("reused evidence under different resource authorization")
 	}
 }

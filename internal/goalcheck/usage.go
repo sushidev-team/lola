@@ -29,16 +29,17 @@ type UsageRef struct {
 	Spec          Spec
 }
 type RunUsage struct {
-	ID             string    `json:"id"`
-	Operation      string    `json:"operation"`
-	Check          string    `json:"check"`
-	Member         string    `json:"member,omitempty"`
-	State          string    `json:"state"`
-	Stopped        bool      `json:"stopped"`
-	StartedAt      time.Time `json:"started_at"`
-	FinishedAt     time.Time `json:"finished_at,omitempty"`
-	ElapsedMillis  *int64    `json:"elapsed_millis"` // null when interrupted or still running
-	TimeoutSeconds int       `json:"timeout_seconds"`
+	ID               string    `json:"id"`
+	Operation        string    `json:"operation"`
+	Check            string    `json:"check"`
+	Member           string    `json:"member,omitempty"`
+	State            string    `json:"state"`
+	Stopped          bool      `json:"stopped"`
+	StartedAt        time.Time `json:"started_at"`
+	FinishedAt       time.Time `json:"finished_at,omitempty"`
+	ElapsedMillis    *int64    `json:"elapsed_millis"` // null when interrupted or still running
+	TimeoutSeconds   int       `json:"timeout_seconds"`
+	MemoryLimitBytes int64     `json:"memory_limit_bytes"`
 }
 type UsageReport struct {
 	Expected          int        `json:"expected_checks"`
@@ -75,6 +76,11 @@ func (r *Runner) Usage(ctx context.Context, goal, policy string, refs []UsageRef
 	})
 	refs = slices.CompactFunc(refs, func(a, b UsageRef) bool { return a.ID == b.ID })
 	out.Expected = len(refs)
+	for _, ref := range refs {
+		if ref.Spec.Validate() == nil {
+			out.MemoryLimitBytes = max(out.MemoryLimitBytes, ref.Spec.MemoryLimitBytes())
+		}
+	}
 	if r.Workspaces == nil {
 		out.Partial = out.Expected > 0
 		return out
@@ -107,6 +113,7 @@ func (r *Runner) Usage(ctx context.Context, goal, policy string, refs []UsageRef
 			continue
 		}
 		v := RunUsage{ID: ref.ID, Operation: ref.Operation, Check: ref.Spec.ID, Member: ref.Spec.Member, State: receipt.State, Stopped: receipt.Stopped, StartedAt: receipt.StartedAt, FinishedAt: receipt.FinishedAt, TimeoutSeconds: ref.Spec.TimeoutSeconds}
+		v.MemoryLimitBytes = ref.Spec.MemoryLimitBytes()
 		// Recovery's finish timestamp can include a whole daemon outage. Do not
 		// pretend that interval was measured container runtime. A backwards clock or
 		// a duration beyond the command+cleanup bound is similarly inconclusive.

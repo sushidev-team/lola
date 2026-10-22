@@ -1,9 +1,10 @@
-# Nori dialog pilot: prepared baseline
+# Nori dialog pilot: baseline and live attempts
 
-Prepared on 2026-10-22 (Vienna). **No autonomous model run or live Linear
-publication has started.** This is setup and acceptance evidence, not an outcome
-comparison or proof of self-improvement. The user's execution ceiling remains
-30 minutes, with an initial limit of 8 total agent calls and one worker at a time.
+Updated on 2026-10-22 (Vienna). Live attempts have exercised publication, worker
+launch, submission, independent check rejection, restart and bounded stopping.
+**The pilot has not completed specialist review, integration or PR delivery.**
+The user authorized 30 minutes and eight model calls in aggregate, with one
+worker at a time; the continuation retained those time/call ceilings.
 
 ## Scope and baseline
 
@@ -163,3 +164,58 @@ All three Lola fixes pass focused regressions and the final `make check`. The
 [retained check log](lola-check-final-fixes.log) records the full run. The normal
 installed daemon remains untouched. This checkpoint retains the implementation
 and verification evidence on the feature branch; the live pilot is incomplete.
+
+
+## Authorized continuation and verification recovery
+
+The user approved up to 20 additional minutes and six further model calls,
+with aggregate ceilings of 2M observed tokens and $3 estimated spend. The earlier
+run remained immutable. NOR-495 / NOR-497 reused the existing pilot milestone.
+The committed trust fix allowed a prompt-free launch. The worker submitted
+`71969919f32e6f9e84575b63557fdaa8b7fb3ebd`; Lola independently checked candidate
+`66fa02bb78d85f71c15dda5f2689cc6339aa7df8` in a disposable, network-disabled
+2 GiB container. Unit, Storybook and browser checks passed, but the build exited
+134 at Node's default ~1 GiB heap limit. Lola rejected integration. The automatic
+second worker was stopped to avoid spending budget on a check-environment problem.
+[Continuation records](continuation/) retain the failure and candidate patch,
+bound by [hashes](continuation-sha256.json).
+
+Separate diagnostics kept the same 2 GiB isolation boundary: a 1536 MiB Node
+heap still failed, while `NODE_OPTIONS=--max-old-space-size=1792` passed the build.
+These diagnostics do not replace the failed independent receipt. A final recovery
+(NOR-498 / NOR-499), within the remaining allowance, used that setting. Its worker
+passed unit, Storybook, build and browser checks but reached its three-minute
+attempt deadline before submission. That operator-selected attempt limit was too
+short; it was not a code-check failure. [Recovery output](recovery/) and
+[hashes](recovery-sha256.json) retain the result. No specialist review, goal
+integration, draft PR or main-branch change occurred.
+
+Observed aggregate usage is 1,224,631 tokens, including cache, five model calls
+and approximately $0.806 estimated spend. Agent telemetry is partial; these are
+observations, not a billing guarantee. The original Nori checkout remains clean
+at `f94d30d7c8f08178c14297d67756a014d3ff089c`.
+
+[Before/candidate screenshots](https://chatgpt.com/space/page_1288680f36c4819197328af1051006a8)
+show the independently captured continuation candidate; the Page is private until
+shared. They are Storybook evidence, not a successful delivery claim.
+
+Lola now supports an explicit acceptance-check `memory_mib` authorization
+(256–8192, default 2048), exposed in desktop/TUI and recorded in usage. Existing
+policy hashes and limits are preserved. This implementation was not installed
+into the running pilot, which used the existing 2 GiB limit throughout.
+
+Before another autonomous attempt, preflight the complete acceptance command
+under its exact container boundary and reserve enough time for worker submission,
+independent checks and both review stages. Repeated new goals clutter the same
+milestone: a future reviewed run-renewal operation should retain a stable goal and
+Linear parent while appending a new immutable execution authorization. Do not
+silently extend old budgets or overwrite failed receipts. Representative matched-
+budget comparisons also remain unfinished.
+
+
+Validation of the memory-limit implementation: `make check` passed (build, vet,
+all Go tests); the focused TUI authorization suite passed after the final
+assertion; six desktop authorization tests passed; Svelte check reported zero
+errors/warnings; the production frontend build passed. The normal installed
+binary was not replaced. The isolated pilot daemon was stopped after its workers
+were confirmed stopped.

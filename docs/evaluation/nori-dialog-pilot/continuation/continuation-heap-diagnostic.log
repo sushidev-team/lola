@@ -1,0 +1,61 @@
+
+> build
+> tsc && vite build
+
+vite v7.3.6 building client environment for production...
+transforming...
+Found 1 warning while optimizing generated CSS:
+
+│   }
+│   .w-\[var\(\.\.\.\)\] {
+│     width: var(...);
+┆                ^-- Unexpected token Delim('.')
+┆
+│   }
+│   .w-auto {
+
+
+/fonts/inter-latin-400-normal.woff2 referenced in /fonts/inter-latin-400-normal.woff2 didn't resolve at build time, it will remain unchanged to be resolved at runtime
+
+/fonts/inter-latin-ext-400-normal.woff2 referenced in /fonts/inter-latin-ext-400-normal.woff2 didn't resolve at build time, it will remain unchanged to be resolved at runtime
+
+/fonts/inter-latin-500-normal.woff2 referenced in /fonts/inter-latin-500-normal.woff2 didn't resolve at build time, it will remain unchanged to be resolved at runtime
+
+/fonts/inter-latin-ext-500-normal.woff2 referenced in /fonts/inter-latin-ext-500-normal.woff2 didn't resolve at build time, it will remain unchanged to be resolved at runtime
+
+/fonts/inter-latin-600-normal.woff2 referenced in /fonts/inter-latin-600-normal.woff2 didn't resolve at build time, it will remain unchanged to be resolved at runtime
+
+/fonts/inter-latin-ext-600-normal.woff2 referenced in /fonts/inter-latin-ext-600-normal.woff2 didn't resolve at build time, it will remain unchanged to be resolved at runtime
+
+/fonts/inter-latin-700-normal.woff2 referenced in /fonts/inter-latin-700-normal.woff2 didn't resolve at build time, it will remain unchanged to be resolved at runtime
+
+/fonts/inter-latin-ext-700-normal.woff2 referenced in /fonts/inter-latin-ext-700-normal.woff2 didn't resolve at build time, it will remain unchanged to be resolved at runtime
+
+/fonts/geist-mono-latin-500-normal.woff2 referenced in /fonts/geist-mono-latin-500-normal.woff2 didn't resolve at build time, it will remain unchanged to be resolved at runtime
+
+/fonts/geist-mono-latin-ext-500-normal.woff2 referenced in /fonts/geist-mono-latin-ext-500-normal.woff2 didn't resolve at build time, it will remain unchanged to be resolved at runtime
+
+/fonts/geist-mono-latin-600-normal.woff2 referenced in /fonts/geist-mono-latin-600-normal.woff2 didn't resolve at build time, it will remain unchanged to be resolved at runtime
+
+/fonts/geist-mono-latin-ext-600-normal.woff2 referenced in /fonts/geist-mono-latin-ext-600-normal.woff2 didn't resolve at build time, it will remain unchanged to be resolved at runtime
+✓ 7422 modules transformed.
+rendering chunks...
+computing gzip size...
+
+<--- Last few GCs --->
+
+[29:0xffffac2a0000]    32646 ms: Mark-Compact (reduce) 1431.6 (1465.8) -> 1427.4 (1460.3) MB, pooled: 0 MB, 73.93 / 0.13 ms  (+ 915.5 ms in 313 steps since start of marking, biggest step 71.3 ms, walltime since start of marking 1008 ms) (average mu = 0.27
+FATAL ERROR: Ineffective mark-compacts near heap limit Allocation failed - JavaScript heap out of memory
+----- Native stack trace -----
+
+ 1: 0x90e9bc  [node]
+ 2: 0x75ab88 node::OOMErrorHandler(char const*, v8::OOMDetails const&) [node]
+ 3: 0xc1ee4c  [node]
+ 4: 0xc1ef24  [node]
+ 5: 0xe9b30c  [node]
+ 6: 0xe9b33c  [node]
+ 7: 0xe9b694  [node]
+ 8: 0xeaae44  [node]
+ 9: 0xeaeaa4  [node]
+10: 0x18a50f4  [node]
+Aborted

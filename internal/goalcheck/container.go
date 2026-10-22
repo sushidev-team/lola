@@ -31,7 +31,7 @@ func containerArgs(w goalwork.ValidationWorkspace, operation string, spec Spec) 
 	args := []string{"run", "--rm", "--init", "--name", containerName(w.Goal, w.ID),
 		"--label", "dev.sushi.lola.goal=" + w.Goal, "--label", "dev.sushi.lola.check=" + w.ID,
 		"--pull", "never", "--network", "none", "--read-only", "--cap-drop", "ALL",
-		"--security-opt", "no-new-privileges", "--pids-limit", fmt.Sprint(PIDLimit), "--memory", fmt.Sprintf("%dg", MemoryLimitBytes>>30), "--cpus", fmt.Sprint(CPULimit),
+		"--security-opt", "no-new-privileges", "--pids-limit", fmt.Sprint(PIDLimit), "--memory", fmt.Sprintf("%dm", spec.MemoryLimitBytes()>>20), "--cpus", fmt.Sprint(CPULimit),
 		"--tmpfs", fmt.Sprintf("/tmp:rw,nosuid,size=%d", ScratchLimitBytes), "--mount", strings.TrimSuffix(b.String(), "\n"),
 		"--workdir", path.Join("/workspace", spec.Member), "--env", "HOME=/tmp/home",
 		"--env", "LOLA_GOAL=" + w.Goal, "--env", "LOLA_CHECK=" + spec.ID, "--env", "LOLA_INTEGRATION=" + operation,

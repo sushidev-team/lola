@@ -1,0 +1,20 @@
+
+> test:unit
+> vitest run --project unit resources/js/components/ui/__tests__/dialog.test.tsx resources/js/components/Invoices/__tests__/save-view-dialog.test.tsx
+
+│ ┌────────────────────────────────────────────────────────────────────────────┐
+│ │  Info: Found a setup file with "setProjectAnnotations".                    │
+│ │  Skipping automatic provisioning of preview annotations to avoid           │
+│ │  conflicts. Since Storybook 10.3, "@storybook/addon-vitest" applies these  │
+│ │   automatically.                                                           │
+│ │  You can safely remove the "setProjectAnnotations" call from your setup    │
+│ │  file, or remove the file entirely if you don't have custom code there.    │
+│ └────────────────────────────────────────────────────────────────────────────┘
+
+ RUN  v4.1.11 /tmp/lola-nori-dialog-pilot/home/goals/33eef852-20b7-40bf-8614-61342cd94327/attempts/4eff0361-fe71-4268-88ae-7b46e11fc99c/79e2424c-6479-410d-8bfb-4fdc84b601f8/nori-app/tree
+
+
+ Test Files  2 passed (2)
+      Tests  11 passed (11)
+   Start at  00:59:08
+   Duration  3.35s (transform 403ms, setup 128ms, import 1.75s, tests 880ms, environment 2.84s)

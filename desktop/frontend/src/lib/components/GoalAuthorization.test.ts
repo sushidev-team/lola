@@ -89,6 +89,7 @@ describe("GoalAuthorization",()=>{
   await check();
   await fireEvent.input(screen.getByLabelText("Allowed path prefixes for api"),{target:{value:" src/invitations \n\n tests "}});
   await fireEvent.input(screen.getByLabelText("Observed token limit"),{target:{value:"80000"}});
+  await fireEvent.input(screen.getByLabelText("Memory (MiB; blank uses 2048)"),{target:{value:"4096"}});
   await fireEvent.click(screen.getByRole("button",{name:"Review authorization"}));
   expect(api.GoalStart).not.toHaveBeenCalled();
   expect(screen.getByRole("group",{name:"Review execution authorization"})).toHaveFocus();
@@ -98,7 +99,7 @@ describe("GoalAuthorization",()=>{
   await fireEvent.click(screen.getByRole("button",{name:"Authorize and start"}));
   await waitFor(()=>expect(started).toHaveBeenCalledTimes(1));
   expect(api.GoalStart).toHaveBeenCalledTimes(1);
-  expect(api.GoalStart.mock.calls[0][0]).toMatchObject({id:"g",revision:8,policy:{publish_pr:false,replan:false,profiles:["backend"],limits:{tokens:80000},members:[{id:"api",paths:["src/invitations","tests"]}],checks:[{command:"npm test",member:"api",image:`sha256:${"a".repeat(64)}`} ]}});
+  expect(api.GoalStart.mock.calls[0][0]).toMatchObject({id:"g",revision:8,policy:{publish_pr:false,replan:false,profiles:["backend"],limits:{tokens:80000},members:[{id:"api",paths:["src/invitations","tests"]}],checks:[{command:"npm test",member:"api",memory_mib:4096,image:`sha256:${"a".repeat(64)}`} ]}});
  });
  it("holds an uncertain authorization until current settings are explicitly reloaded",async()=>{
   api.GoalStart.mockRejectedValue(new Error("socket timeout"));

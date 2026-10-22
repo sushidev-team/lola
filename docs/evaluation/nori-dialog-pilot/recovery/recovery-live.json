@@ -1,0 +1,272 @@
+{
+  "acceptance": [
+    "Rendered light and dark dialogs use the existing --overlay-scrim and --shadow-dialog tokens and fit the current visual style.",
+    "Desktop and 390px-wide captures show at least 1rem viewport gutters; tall content scrolls vertically and its close button remains visible.",
+    "Keyboard focus starts inside the dialog, Tab stays inside it, Escape dismisses it and restores trigger focus.",
+    "Existing dialog and invoice Save view tests, dialog Storybook tests and the frontend build pass; invoice saving/filter payload behavior is preserved."
+  ],
+  "created_at": "2026-10-22T00:56:28.145472Z",
+  "execution": {
+    "attempts": {
+      "79e2424c-6479-410d-8bfb-4fdc84b601f8": {
+        "base": {
+          "nori-app": "f94d30d7c8f08178c14297d67756a014d3ff089c"
+        },
+        "deadline": "2026-10-22T01:01:10.928782Z",
+        "error": "worker stopped before submitting verified output",
+        "finished_at": "2026-10-22T01:01:11.318133Z",
+        "id": "79e2424c-6479-410d-8bfb-4fdc84b601f8",
+        "members": [
+          "nori-app"
+        ],
+        "reserved_at": "2026-10-22T00:58:10.928782Z",
+        "scopes": {
+          "nori-app": {
+            "paths": [
+              "resources/js/components/ui/dialog.tsx",
+              "resources/js/components/ui/dialog.stories.tsx",
+              "resources/js/components/ui/__tests__/dialog.test.tsx",
+              "resources/js/components/Invoices/SaveViewDialog.tsx",
+              "resources/js/components/Invoices/__tests__/save-view-dialog.test.tsx"
+            ]
+          }
+        },
+        "session_id": "lola-goal-f53f87eeec5c81bf3fbf9f70bc4cea56",
+        "state": "stopped",
+        "task_id": "4eff0361-fe71-4268-88ae-7b46e11fc99c"
+      }
+    },
+    "deadline": "2026-10-22T01:04:00.992376Z",
+    "initialized": true,
+    "integrations": {},
+    "manifest": {
+      "nori-app": "f94d30d7c8f08178c14297d67756a014d3ff089c"
+    },
+    "observed_spend_usd": 0.1913528,
+    "observed_tokens": 374822,
+    "policy": {
+      "checks": [
+        {
+          "artifacts": [
+            {
+              "id": "light-desktop",
+              "kind": "screenshot",
+              "path": "nori-app/pilot-evidence/light-desktop.png"
+            },
+            {
+              "id": "light-desktop-overflow",
+              "kind": "screenshot",
+              "path": "nori-app/pilot-evidence/light-desktop-overflow.png"
+            },
+            {
+              "id": "light-narrow",
+              "kind": "screenshot",
+              "path": "nori-app/pilot-evidence/light-narrow.png"
+            },
+            {
+              "id": "light-narrow-overflow",
+              "kind": "screenshot",
+              "path": "nori-app/pilot-evidence/light-narrow-overflow.png"
+            },
+            {
+              "id": "dark-desktop",
+              "kind": "screenshot",
+              "path": "nori-app/pilot-evidence/dark-desktop.png"
+            },
+            {
+              "id": "dark-desktop-overflow",
+              "kind": "screenshot",
+              "path": "nori-app/pilot-evidence/dark-desktop-overflow.png"
+            },
+            {
+              "id": "dark-narrow",
+              "kind": "screenshot",
+              "path": "nori-app/pilot-evidence/dark-narrow.png"
+            },
+            {
+              "id": "dark-narrow-overflow",
+              "kind": "screenshot",
+              "path": "nori-app/pilot-evidence/dark-narrow-overflow.png"
+            },
+            {
+              "id": "interaction",
+              "kind": "interaction",
+              "path": "nori-app/pilot-evidence/interaction.json"
+            },
+            {
+              "id": "commands",
+              "kind": "test",
+              "path": "nori-app/pilot-evidence/commands.json"
+            }
+          ],
+          "command": "NODE_OPTIONS=--max-old-space-size=1792 PILOT_ASSERT_STYLE=1 sh /opt/pilot/check.sh",
+          "id": "dialog-acceptance",
+          "image": "sha256:d3f85088fc383f8114b9ed1e57ba8916a0c92d75fba8c914d3a7085da0d7d6c8",
+          "member": "nori-app",
+          "timeout_seconds": 900
+        }
+      ],
+      "limits": {
+        "agent_runs": 4,
+        "attempt_minutes": 3,
+        "attempts_per_task": 1,
+        "concurrency": 1,
+        "max_tasks": 1,
+        "review_rounds": 1,
+        "runtime_minutes": 6,
+        "spend_usd": 2.3851861999999997,
+        "tokens": 1150191
+      },
+      "members": [
+        {
+          "id": "nori-app",
+          "paths": [
+            "resources/js/components/ui/dialog.tsx",
+            "resources/js/components/ui/dialog.stories.tsx",
+            "resources/js/components/ui/__tests__/dialog.test.tsx",
+            "resources/js/components/Invoices/SaveViewDialog.tsx",
+            "resources/js/components/Invoices/__tests__/save-view-dialog.test.tsx"
+          ],
+          "project": "nori-app",
+          "repo": "sushidev-team/nori-app",
+          "source": "/Volumes/Git/sushi/internal/nori/nori-app",
+          "target": "main"
+        }
+      ],
+      "profiles": [
+        "nori-dialog-uiux"
+      ],
+      "publish_pr": true,
+      "require_human_acceptance": true
+    },
+    "policy_digest": "5022d2467121789d90a8c476b3c87b99f65db8ae9051e0b9c474fee894dee46b",
+    "reason": "worker stopped before submitting verified output",
+    "runs": {
+      "79e2424c-6479-410d-8bfb-4fdc84b601f8": {
+        "estimated": true,
+        "finished_at": "2026-10-22T01:01:11.318133Z",
+        "id": "79e2424c-6479-410d-8bfb-4fdc84b601f8",
+        "kind": "worker",
+        "reserved_at": "2026-10-22T00:58:10.928782Z",
+        "spend_usd": 0.1913528,
+        "subject": "4eff0361-fe71-4268-88ae-7b46e11fc99c",
+        "tokens": 374822,
+        "usage": {
+          "agent": "claude",
+          "at": "2026-10-22T03:01:26.027316+02:00",
+          "cost_status": "estimate",
+          "days": {
+            "2026-10-22": {
+              "cache_read": 350154,
+              "cache_write": 20869,
+              "cost_usd": 0.1913528,
+              "input": 18,
+              "output": 3781,
+              "slots": 2
+            }
+          },
+          "reason": "Agent-reported usage; logs may be delayed, incomplete or modified",
+          "status": "partial"
+        }
+      }
+    },
+    "started_at": "2026-10-22T00:58:00.992376Z",
+    "stop_workers_at": "0001-01-01T00:00:00Z",
+    "tasks": {
+      "4eff0361-fe71-4268-88ae-7b46e11fc99c": {
+        "attempt_ids": [
+          "79e2424c-6479-410d-8bfb-4fdc84b601f8"
+        ],
+        "state": "blocked"
+      }
+    },
+    "usage_updated_at": "2026-10-22T03:01:26.027316+02:00"
+  },
+  "id": "33eef852-20b7-40bf-8614-61342cd94327",
+  "linear_project_id": "9a5df54f-9fb1-4628-9dff-f9fc7d84b795",
+  "milestone": {
+    "confirmed": true,
+    "id": "5c096266-9d6d-4cec-a0b3-8f34d14d236d"
+  },
+  "non_goals": [
+    "Changing backend behavior, global design tokens or unrelated feature dialogs.",
+    "Changing issue pickup settings, initiatives, existing release milestones, or automatically merging into main."
+  ],
+  "outcome": "Improve the shared dialog presentation in Nori App using its existing design system. Inspect DESIGN.md, PRODUCT.md and resources/css/tokens.css in the worker. Read-only baseline inspection found bg-black/80 and shadow-lg in the shared Dialog; existing tokens are --overlay-scrim (36% steel ink light, 60% black dark) and --shadow-dialog. Keep the change bounded to the shared dialog and its stories/tests, with invoice SaveViewDialog changed only if layout needs it. Use the existing apps/app label adeae6ca-42c6-4809-9024-ba86070cf861; do not apply agent-ready or change existing release milestones. The pilot allows at most 30 minutes including planning, 8 total agent calls, one worker at a time, and no automatic main merge. The prepared image provides offline project dependencies through sh /opt/pilot/setup-deps.sh when run from the repository directory. Do not commit generated dependency links, build output or pilot evidence. Acceptance runs the pinned /opt/pilot/check.sh with PILOT_ASSERT_STYLE=1 independently of worker claims. Continuation of NOR-493, which stopped at its original token cap. Preserve that history. This run uses only the remaining aggregate 30-minute and eight-call allowance. Follow-up to NOR-495: its independent Node build exhausted the default heap. A separate diagnostic passed with NODE_OPTIONS=--max-old-space-size=1792 inside the same 2 GiB boundary. Use that environment for acceptance; retain prior failed receipts.",
+  "parent": {
+    "confirmed": true,
+    "id": "01ee977f-1927-4fbc-81c4-311b8454e085",
+    "identifier": "NOR-498"
+  },
+  "progress_error": "Progress could not be confirmed in Linear; retained update needs reconciliation.",
+  "progress_updates": [
+    {
+      "attempted_at": "2026-10-22T00:58:16.554502Z",
+      "confirmed_at": "2026-10-22T00:58:16.554502Z",
+      "created_at": "2026-10-22T00:58:16.554502Z",
+      "dismissed_at": "0001-01-01T00:00:00Z",
+      "id": "89453f6e-7077-46ce-b7f3-9275dae4399d",
+      "sent_at": "2026-10-22T00:58:16.554502Z",
+      "summary": "Execution: **running**.\n\nThis goal requires separate human acceptance after all final PR deliveries are observed merged.\n\nTasks: 0 of 1 current tasks integrated; 0 superseded; 0 blocked. Integration is verified goal-branch work, not target-branch delivery.\n\nAccepted brief revisions: 0. Task-plan revisions: 0.\n\nWhole-goal verification: **not yet established** for the current brief.\n\nDelivery: no target-branch merge has been recorded.\n"
+    },
+    {
+      "attempted_at": "2026-10-22T01:01:11.339343Z",
+      "confirmed_at": "0001-01-01T00:00:00Z",
+      "created_at": "2026-10-22T01:01:11.339343Z",
+      "dismissed_at": "0001-01-01T00:00:00Z",
+      "id": "27807105-5569-4450-8602-327c0f866178",
+      "sent_at": "2026-10-22T01:01:11.339343Z",
+      "summary": "Execution: **blocked**.\n\nThis goal requires separate human acceptance after all final PR deliveries are observed merged.\n\nTasks: 0 of 1 current tasks integrated; 0 superseded; 1 blocked. Integration is verified goal-branch work, not target-branch delivery.\n\nBlocker: execution is held. Inspect the retained evidence and reason in Lola.\n\nAccepted brief revisions: 0. Task-plan revisions: 0.\n\nWhole-goal verification: **not yet established** for the current brief.\n\nDelivery: no target-branch merge has been recorded.\n"
+    }
+  ],
+  "project": "nori-app",
+  "revision": 26,
+  "state": "blocked",
+  "tasks": [
+    {
+      "acceptance": [
+        "Rendered light and dark dialogs use the existing --overlay-scrim and --shadow-dialog tokens and fit the current visual style.",
+        "Desktop and 390px-wide captures show at least 1rem viewport gutters; tall content scrolls vertically and its close button remains visible.",
+        "Keyboard focus starts inside the dialog, Tab stays inside it, Escape dismisses it and restores trigger focus.",
+        "Existing dialog and invoice Save view tests, dialog Storybook tests and the frontend build pass; invoice saving/filter payload behavior is preserved."
+      ],
+      "apps": [
+        "nori-app"
+      ],
+      "description": "Align the shared Dialog overlay and shadow with existing --overlay-scrim and --shadow-dialog tokens. Read DESIGN.md, PRODUCT.md and resources/css/tokens.css first. Preserve current viewport gutters, vertical scrolling, close-button visibility, Radix keyboard/focus behavior, and invoice SaveViewDialog payload behavior. Change only approved files; SaveViewDialog needs no change unless layout demands it. Update directly affected assertions and stories where useful. The existing unit, Storybook and browser checks already pass on the baseline except the intentional style-token check. Run sh /opt/pilot/setup-deps.sh from the repository directory, then NODE_OPTIONS=--max-old-space-size=1792 PILOT_ASSERT_STYLE=1 sh /opt/pilot/check.sh. This pinned helper runs the scoped dialog and invoice tests, dialog Storybook tests, frontend build, and four real-browser theme/viewport cases including synthetic overflow. It records captures and checks; do not duplicate unrelated full-repository testing. Keep generated dependencies, build outputs and pilot-evidence uncommitted. Report actual outcomes, not assumed success. No backend or global-token edits. Earlier attempt stopped at its configured token cap after the pinned helper passed. Treat that result as background only; execute and submit your own scoped change. Wait for background commands using their actual task handles, not pgrep against the shell command text. Keep the change minimal.",
+      "id": "4eff0361-fe71-4268-88ae-7b46e11fc99c",
+      "issue": {
+        "confirmed": true,
+        "id": "f01fbdd3-a938-4b59-9e6d-e5a8f129794e",
+        "identifier": "NOR-499"
+      },
+      "label_ids": [
+        "adeae6ca-42c6-4809-9024-ba86070cf861"
+      ],
+      "paths": {
+        "nori-app": [
+          "resources/js/components/ui/dialog.tsx",
+          "resources/js/components/ui/dialog.stories.tsx",
+          "resources/js/components/ui/__tests__/dialog.test.tsx",
+          "resources/js/components/Invoices/SaveViewDialog.tsx",
+          "resources/js/components/Invoices/__tests__/save-view-dialog.test.tsx"
+        ]
+      },
+      "title": "Align shared Dialog overlay, shadow and viewport fit with design tokens"
+    }
+  ],
+  "team_id": "ace69aca-dd39-4c63-91dc-36bbf48b62c7",
+  "title": "Dialog layout pilot verification recovery",
+  "updated_at": "2026-10-22T01:01:26.042432Z",
+  "workflow": [
+    {
+      "confirmed_at": "2026-10-22T00:58:27.051986Z",
+      "from": "7dc1f5dc-b5d1-43b5-ad6a-72c2de85e382",
+      "reserved_at": "2026-10-22T00:58:17.44028Z",
+      "sent_at": "2026-10-22T00:58:17.44028Z",
+      "stage": "started",
+      "task_id": "4eff0361-fe71-4268-88ae-7b46e11fc99c",
+      "to": "9c45fbca-2609-4631-8980-9db38b5c6d3d"
+    }
+  ]
+}

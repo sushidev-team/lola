@@ -11,6 +11,32 @@ func validPolicy() Policy {
 	return Policy{Members: []Member{{ID: "api", Project: "api", Source: "/private/api", Repo: "owner/api", Target: "main"}}, Checks: []Check{{ID: "tests", Command: "make test", Image: "sha256:" + strings.Repeat("a", 64), TimeoutSeconds: 60}}, Limits: Limits{Concurrency: 2, MaxTasks: 10, AttemptsPerTask: 2, ReviewRounds: 2, AgentRuns: 20, RuntimeMinutes: 60, AttemptMinutes: 15, Tokens: 100000}}
 }
 
+func TestCheckMemoryIsBoundedAndBoundToPolicy(t *testing.T) {
+	p := validPolicy()
+	legacy, _ := p.Digest()
+	b, _ := json.Marshal(p)
+	if strings.Contains(string(b), "memory_mib") || p.Checks[0].MemoryLimitBytes() != 2<<30 {
+		t.Fatal("default changed legacy authorization")
+	}
+	for _, memory := range []int{-1, 1, 255, 8193} {
+		p.Checks[0].MemoryMiB = memory
+		if p.Validate() == nil {
+			t.Fatalf("accepted invalid memory limit %d", memory)
+		}
+	}
+	for _, memory := range []int{256, 4096, 8192} {
+		p.Checks[0].MemoryMiB = memory
+		digest, err := p.Digest()
+		if err != nil || digest == legacy || p.Checks[0].MemoryLimitBytes() != int64(memory)<<20 {
+			t.Fatalf("memory authorization not enforced: %d %v", memory, err)
+		}
+	}
+	p.Checks[0].MemoryMiB = 0
+	if digest, _ := p.Digest(); digest != legacy {
+		t.Fatal("legacy digest changed")
+	}
+}
+
 func TestPolicyRequiresFiniteLimitsAndExplicitScope(t *testing.T) {
 	p := validPolicy()
 	digest, err := p.Digest()

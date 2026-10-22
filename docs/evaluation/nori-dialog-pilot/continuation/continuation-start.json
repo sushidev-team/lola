@@ -1,0 +1,8 @@
+{
+  "started_at": "2026-10-22T00:44:36.508536+00:00",
+  "maximum_seconds": 1200,
+  "maximum_agent_calls": 6,
+  "token_allowance": 1715000,
+  "spend_allowance_usd": 2.6848218,
+  "previous_goal": "d2d2db8a-3f28-43c6-ae11-0eb272a09b9f"
+}

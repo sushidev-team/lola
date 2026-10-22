@@ -1058,3 +1058,24 @@ proposed to the user, retaining the aggregate time/call limits. Exact authorizat
 limitations are retained in [pilot evidence](docs/evaluation/nori-dialog-pilot/README.md).
 No final pilot-success or comparison-improvement claim is made yet. The normal
 installed daemon is unchanged; all feature execution uses the isolated pilot home.
+
+
+### Continuation checkpoint — 2026-10-22
+
+The approved continuation reached worker submission and an independent verification
+failure: unit/story/browser checks passed, but the pinned 2 GiB verifier exhausted
+Node's default heap during the build. A 1792 MiB heap passed a separate build
+under the same boundary. A final recovery worker passed all checks but its
+three-minute attempt deadline stopped it before submission. Five aggregate model
+calls, 1,224,631 observed tokens and ~$0.806 estimated spend were recorded; no
+integration, specialist pass or PR occurred. See the retained
+[pilot evidence](docs/evaluation/nori-dialog-pilot/README.md).
+
+Acceptance checks now support bounded, policy-bound memory limits in desktop,
+TUI, Docker execution and usage reporting. Existing authorizations preserve their
+2 GiB limit and digest. The normal installed daemon remains unchanged.
+
+Remaining: complete one adequately timed end-to-end pilot after exact-boundary
+preflight, then run representative comparisons. The pilot also identifies a
+follow-up UX need: renew a run through an explicit new authorization under the
+same goal/Linear parent, preserving earlier runs and budgets as immutable history.

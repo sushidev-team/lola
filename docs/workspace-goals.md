@@ -1333,7 +1333,12 @@ running or stopping containers. Repeated requests cannot charge a check twice.
 
 The report shows completed wall-clock milliseconds (including container launch
 and cleanup), accepted command timeouts, and the runner's resource ceilings:
-2 CPUs, 2 GiB memory, 512 MiB scratch space and 256 processes. Those ceilings are
+2 CPUs, 512 MiB scratch space and 256 processes. Check memory defaults to 2 GiB;
+an explicit `memory_mib` in the reviewed check policy permits 256–8192 MiB.
+It is available in the desktop and TUI authorization forms and bound into the
+policy digest and check receipt. Existing policies retain their original digest
+and 2 GiB limit. Each run reports its accepted memory ceiling; the report-level
+ceiling is the maximum of the default and authorized check limits. Those ceilings are
 not measured CPU/memory consumption. Dollar cost is unavailable. Interrupted or
 still-running durations stay null; a daemon outage is never counted as measured
 check runtime. A missing receipt means not started **or** missing, not known zero.
