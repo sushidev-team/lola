@@ -1,0 +1,31 @@
+{
+  "id": "nori-dialog-lessons-review-pilot",
+  "pairs": [
+    {
+      "id": "shared-dialog-repeat-1",
+      "task": "Align the shared dialog scrim and elevation with existing Nori tokens, preserving responsive layout and keyboard behavior.",
+      "acceptance": [
+        "Rendered light and dark dialogs use the existing --overlay-scrim and --shadow-dialog tokens and fit the current visual style.",
+        "Desktop and 390px-wide captures show at least 1rem viewport gutters; tall content scrolls vertically and its close button remains visible.",
+        "Keyboard focus starts inside the dialog, Tab stays inside it, Escape dismisses it and restores trigger focus.",
+        "Existing dialog and invoice Save view tests, dialog Storybook tests and the frontend build pass; invoice saving/filter payload behavior is preserved."
+      ],
+      "repositories": [
+        {
+          "name": "sushidev-team/nori-app",
+          "base": "97fc399c591d82cfcf54859fa0c0191311cb16b9"
+        }
+      ],
+      "limits": {
+        "agent_calls": 8,
+        "runtime_seconds": 1800,
+        "tokens": 250000,
+        "spend_usd": 0
+      },
+      "intervention": "Treatment adds selected, exact-version Nori design lessons and the nori-dialog-uiux specialist; baseline omits both. Both retain the same task, source, independent acceptance checks and total budget. Alternate execution order across later repetitions; no run has started."
+    }
+  ],
+  "question": "On the same bounded Nori dialog task and budget, do selected design lessons and a UI/UX specialist reduce corrections or human intervention without hiding failed work?",
+  "runs": [],
+  "version": 1
+}

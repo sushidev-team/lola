@@ -37,6 +37,18 @@ func goalCmd() *cobra.Command {
 	cmd.AddCommand(&cobra.Command{Use: "proposal <proposal-id>", Short: "Inspect a durable coordinator proposal and its source evidence", Args: cobra.ExactArgs(1), RunE: func(c *cobra.Command, args []string) error {
 		return requestGoal(c, "goalProposal", protocol.GoalArgs{ID: args[0]})
 	}})
+	cmd.AddCommand(&cobra.Command{Use: "edit-plan <edit.json>", Short: "Revise a reviewed task proposal without a model call or Linear writes", Args: cobra.ExactArgs(1), RunE: func(c *cobra.Command, args []string) error {
+		b, err := os.ReadFile(args[0])
+		if err != nil {
+			return err
+		}
+		a, err := goalplan.DecodeEdit(b)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(c.ErrOrStderr(), "Edit ID: %s (inspect with lola goal proposal %s before retrying)\n", a.EditID, a.ID)
+		return requestGoal(c, "goalEditPlan", a)
+	}})
 	var progressRevision uint64
 	var progressReason, progressUpdate string
 	dismiss := &cobra.Command{Use: "dismiss-progress <goal-id>", Short: "Retain an uncertain Linear update in history and allow later progress updates", Args: cobra.ExactArgs(1), RunE: func(c *cobra.Command, args []string) error {
@@ -89,12 +101,12 @@ func goalCmd() *cobra.Command {
 		if err := json.Unmarshal(b, &a); err != nil {
 			return err
 		}
-		if err := a.Policy.Validate(); err != nil {
+		if err := a.Policy.ValidateAuthorization(); err != nil {
 			return err
 		}
-		return requestGoal(c, "goalStart", a)
+		return requestGoal(c, protocol.GoalStartV2, a)
 	}})
-	for _, action := range []string{"pause", "resume", "stop-workers", "cancel", "retry-verification", "retry-replan"} {
+	for _, action := range []string{"pause", "resume", "stop-workers", "cancel", "retry-verification", "retry-replan", "accept-delivery"} {
 		var revision uint64
 		var reason string
 		control := &cobra.Command{Use: action + " <goal-id>", Short: action + " goal execution while preserving its work", Args: cobra.ExactArgs(1), RunE: func(c *cobra.Command, args []string) error {
@@ -103,6 +115,10 @@ func goalCmd() *cobra.Command {
 		control.Flags().Uint64Var(&revision, "revision", 0, "Current goal revision from goal show (required)")
 		_ = control.MarkFlagRequired("revision")
 		control.Flags().StringVar(&reason, "reason", "", "Reason recorded in the goal history")
+		if action == "accept-delivery" {
+			control.Short = "Record human acceptance of the exact verified and merged goal delivery"
+			_ = control.MarkFlagRequired("reason")
+		}
 		cmd.AddCommand(control)
 	}
 	cmd.AddCommand(&cobra.Command{Use: "list", Short: "List durable goals", Args: cobra.NoArgs,

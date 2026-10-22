@@ -34,15 +34,20 @@ type Limits struct {
 }
 
 type Policy struct {
-	Members   []Member `json:"members"`
-	Checks    []Check  `json:"checks"`
-	Profiles  []string `json:"profiles"`
-	Limits    Limits   `json:"limits"`
-	PublishPR bool     `json:"publish_pr"`       // goal branches and draft PRs only; never merge
-	Replan    bool     `json:"replan,omitempty"` // bounded coordinator decomposition after conclusive failure
+	Members                []Member `json:"members"`
+	Checks                 []Check  `json:"checks"`
+	Profiles               []string `json:"profiles"`
+	Limits                 Limits   `json:"limits"`
+	PublishPR              bool     `json:"publish_pr"`                         // goal branches and draft PRs only; never merge
+	Replan                 bool     `json:"replan,omitempty"`                   // bounded coordinator decomposition after conclusive failure
+	RequireHumanAcceptance bool     `json:"require_human_acceptance,omitempty"` // separate decision after observed final PR delivery
+	Rollout                *Rollout `json:"rollout,omitempty"`                  // human-reviewed compatibility and manual merge order
 }
 
 func (p Policy) Validate() error {
+	if p.RequireHumanAcceptance && !p.PublishPR {
+		return errors.New("human delivery acceptance requires final PR publication")
+	}
 	if len(p.Members) < 1 || len(p.Members) > 50 || len(p.Checks) < 1 || len(p.Checks) > 50 {
 		return errors.New("goal policy requires 1–50 members and acceptance checks")
 	}
@@ -67,6 +72,9 @@ func (p Policy) Validate() error {
 		if err := ValidatePaths(m.Paths); err != nil {
 			return err
 		}
+	}
+	if err := p.validateRollout(members); err != nil {
+		return err
 	}
 	checks := map[string]bool{}
 	for _, c := range p.Checks {

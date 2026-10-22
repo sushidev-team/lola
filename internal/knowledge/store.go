@@ -156,6 +156,15 @@ func (s *Store) Capture(scope Scope, p Proposal, source Source, correction bool)
 	if l, ok := s.copy().Lessons[id]; ok {
 		return l, nil
 	}
+	// Operator source IDs are request identities, unlike a worker session that
+	// can report many discoveries. Changing a retained request fails closed.
+	if source.Kind == "operator" || source.Kind == "correction" {
+		for _, existing := range s.data.Lessons {
+			if existing.Source.ID == source.ID && (existing.Source.Kind == "operator" || existing.Source.Kind == "correction") {
+				return Lesson{}, fmt.Errorf("capture identity already belongs to another submission; inspect the saved lesson")
+			}
+		}
+	}
 	if len(s.data.Lessons) >= 10000 {
 		return Lesson{}, fmt.Errorf("knowledge capacity reached; curate existing lessons before adding more")
 	}

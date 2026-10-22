@@ -103,10 +103,13 @@ func (d *Daemon) handleGoals(ctx context.Context, req protocol.Request) protocol
 		}
 		return dataResponse(out)
 	}
-	if req.Cmd == "goalStart" {
+	if req.Cmd == "goalStart" || req.Cmd == protocol.GoalStartV2 {
 		var a goal.Authorization
 		if err := json.Unmarshal(req.Args, &a); err != nil {
 			return protocol.Response{Error: err.Error()}
+		}
+		if req.Cmd == "goalStart" && (a.Policy.Rollout != nil || a.Policy.RequireHumanAcceptance) {
+			return protocol.Response{Error: "reviewed rollout and human acceptance require an updated client using goalStartV2"}
 		}
 		g, err := d.authorizeGoal(ctx, a)
 		if err != nil {
@@ -184,13 +187,16 @@ func (d *Daemon) handleGoals(ctx context.Context, req protocol.Request) protocol
 	if err := json.Unmarshal(req.Args, &a); err != nil {
 		return protocol.Response{Error: err.Error()}
 	}
-	if req.Cmd == "goalShow" || req.Cmd == "goalUsage" {
+	if req.Cmd == "goalShow" || req.Cmd == "goalUsage" || req.Cmd == "goalRecovery" {
 		g, ok := d.goals.Get(a.ID)
 		if !ok {
 			return protocol.Response{Error: "unknown goal " + a.ID}
 		}
 		if req.Cmd == "goalUsage" {
 			return dataResponse(d.goalUsageReport(ctx, g))
+		}
+		if req.Cmd == "goalRecovery" {
+			return dataResponse(g.Recovery(time.Now().UTC()))
 		}
 		return dataResponse(g)
 	}

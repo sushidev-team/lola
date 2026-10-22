@@ -1,9 +1,9 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/svelte";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/svelte";
 import ProjectGoals from "./ProjectGoals.svelte";
 import type { Overview } from "@bindings/internal/goal";
 
-const api = vi.hoisted(() => ({ GoalOverview: vi.fn(), GoalControl: vi.fn(), GoalPublish: vi.fn() }));
+const api = vi.hoisted(() => ({ GoalOverview: vi.fn(), GoalControl: vi.fn(), GoalPublish: vi.fn(), GoalRecovery: vi.fn() }));
 vi.mock("@bindings/desktop", () => ({ DaemonService: api }));
 vi.mock("$lib/store.svelte", () => ({ store: { openURL: vi.fn() } }));
 function sample(id = "g", revision = 7) {
@@ -13,6 +13,52 @@ beforeEach(() => { api.GoalOverview.mockReset().mockResolvedValue([sample()]); a
 afterEach(cleanup);
 async function open() { await fireEvent.click(screen.getByRole("button",{name:/Goals/})); await screen.findByRole("heading",{name:"Team invitations"}); }
 describe("ProjectGoals", () => {
+  it("holds project selection and steering while a recovery snapshot is open",async()=>{
+    api.GoalRecovery.mockResolvedValue({goal:sample(),brief:{title:"Team invitations",outcome:"Invite a colleague",acceptance:["Recipient can accept"]},actions:[],progressError:"",deliveryEvidenceUrl:""});
+    render(ProjectGoals,{project:"nori"});await open();
+    await fireEvent.click(screen.getByRole("button",{name:"Recovery and Linear"}));await screen.findByRole("group",{name:"Recovery snapshot"});
+    expect(screen.getByLabelText("Goal")).toBeDisabled();expect(screen.getByRole("button",{name:"Refresh"})).toBeDisabled();expect(screen.getByRole("button",{name:/Goals.*Hide/})).toBeDisabled();
+    expect(screen.queryByRole("button",{name:"Pause"})).not.toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("button",{name:"Close recovery"}));await waitFor(()=>expect(api.GoalOverview).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole("button",{name:"Pause"})).toBeEnabled();expect(api.GoalControl).not.toHaveBeenCalled();
+  });
+  it("shows the accepted rollout order and distinguishes a legacy contract", async()=>{
+    const g: Overview={...sample(),members:[{id:"api",repo:"team/api",target:"main",commit:"a".repeat(40),prUrl:"",prNumber:0,deliveryState:""},{id:"web",repo:"team/web",target:"main",commit:"b".repeat(40),prUrl:"",prNumber:0,deliveryState:""}],rollout:{compatibility:["Keep previous clients working."],merge_order:["web","api"]}};
+    api.GoalOverview.mockResolvedValue([g]); render(ProjectGoals,{project:"nori"}); await open();
+    expect(screen.getByText("Keep previous clients working.")).toBeInTheDocument();
+    const order=within(screen.getByRole("list",{name:"Human merge order"})).getAllByRole("listitem");
+    expect(order[0]).toHaveTextContent("web");expect(order[1]).toHaveTextContent("api");
+    expect(api.GoalControl).not.toHaveBeenCalled();
+    cleanup(); delete g.rollout; render(ProjectGoals,{project:"nori"}); await open();
+    expect(screen.getByText(/Repository listing order is not a merge recommendation/)).toBeInTheDocument();
+    expect(screen.queryByRole("list",{name:"Human merge order"})).not.toBeInTheDocument();
+  });
+  it("requires acceptance evidence for the frozen delivered revision and recovers an uncertain result read-only", async () => {
+    const delivered={...sample(),state:"ready",requireHumanAcceptance:true,delivered:true,verified:true,actions:["accept-delivery"],members:[{id:"api",repo:"example/api",target:"main",commit:"a".repeat(40),prUrl:"https://github.com/example/api/pull/7",prNumber:7,deliveryState:"merged"}]};
+    api.GoalOverview.mockResolvedValue([delivered]);
+    api.GoalControl.mockRejectedValue(new Error("response lost"));
+    render(ProjectGoals,{project:"nori"}); await open();
+    expect(screen.getByText("Awaiting human acceptance")).toBeInTheDocument();
+    await fireEvent.click(screen.getByRole("button",{name:"Accept delivered goal"}));
+    const evidence=screen.getByLabelText("Acceptance evidence (required)");
+    expect(evidence).toHaveFocus();
+    expect(screen.getByRole("button",{name:"Accept delivered goal"})).toBeDisabled();
+    await fireEvent.input(evidence,{target:{value:"   "}});
+    expect(screen.getByRole("button",{name:"Accept delivered goal"})).toBeDisabled();
+    await fireEvent.input(evidence,{target:{value:"Tested recipient access in the delivered app"}});
+    await fireEvent.click(screen.getByRole("button",{name:"Accept delivered goal"}));
+    await screen.findByRole("alert");
+    expect(api.GoalControl).toHaveBeenCalledExactlyOnceWith("g",7,"accept-delivery","Tested recipient access in the delivered app");
+    expect(evidence).toBeDisabled();
+    expect(screen.getByRole("button",{name:"Accept delivered goal"})).toBeDisabled();
+    expect(screen.getByRole("button",{name:"Refresh"})).toBeDisabled();
+    api.GoalOverview.mockResolvedValue([{...delivered,state:"accepted",revision:8,actions:[],humanAcceptance:{revision:7,evidence:"Tested recipient access in the delivered app",acceptedAt:"2026-10-21T14:00:00Z"}}]);
+    await fireEvent.click(screen.getByRole("button",{name:"Close action"}));
+    await screen.findByText("Human acceptance recorded");
+    expect(screen.getByText(/Reviewed revision 7/)).toBeInTheDocument();
+    expect(screen.queryByRole("button",{name:"Accept delivered goal"})).not.toBeInTheDocument();
+    expect(api.GoalControl).toHaveBeenCalledTimes(1);
+  });
   it("loads only when opened and explains missing usage", async () => {
     render(ProjectGoals,{project:"nori"});
     expect(api.GoalOverview).not.toHaveBeenCalled();

@@ -174,6 +174,7 @@ func (d *Daemon) goalRepairInput(ctx context.Context, g goal.Goal, r goal.Replan
 	}
 	apps := slices.Sorted(maps.Keys(scopes))
 	in.Repair = &goalplan.RepairContext{GoalID: g.ID, TaskID: parent.ID, AttemptID: r.AttemptID, PolicyDigest: g.Execution.PolicyDigest, Manifest: maps.Clone(r.Base), GoalOutcome: g.Outcome, GoalAcceptance: slices.Clone(g.Acceptance), Original: goalplan.TaskContext{Contract: g.TaskContract(parent), Apps: apps, LabelIDs: slices.Clone(parent.LabelIDs), Paths: parent.Paths}, Failure: g.Execution.Attempts[r.AttemptID].Error}
+	in.Repair.Original.Contract += g.Execution.Policy.RolloutContract()
 	// Resolve inherited policy restrictions too: an omitted task map must
 	// not tell the coordinator that an accepted narrow member is unrestricted.
 	in.Repair.Original.Paths = map[string][]string{}

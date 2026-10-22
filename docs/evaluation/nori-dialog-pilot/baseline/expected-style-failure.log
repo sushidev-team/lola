@@ -1,0 +1,1 @@
+{"result":"fail","cases":0,"evidence":"/workspace/pilot-style-baseline","errors":["AssertionError [ERR_ASSERTION]: Scrim must match existing theme token\n+ actual - expected\n\n+ 'oklab(0 0 0 / 0.8)'\n- 'rgba(10, 13, 23, 0.36)'\n\n    at /opt/pilot/capture.cjs:79:16"]}

@@ -6,10 +6,21 @@ export {
 } from "./models.js";
 
 export type {
+    Acceptance,
     Bundle,
+    CaptureRequest,
     CodeReference,
+    CodeTarget,
+    Improvement,
+    ImprovementCatalog,
+    ImprovementDecision,
+    ImprovementRecord,
+    ImprovementSource,
+    ImprovementSources,
+    ImprovementTriage,
     Lesson,
     PreventionIdea,
+    Proposal,
     Reference,
     ReviewProof,
     Scope,

@@ -235,13 +235,20 @@ func TestGoalPauseCancelsBlockedPublicationBeforeWaitingForEffectLock(t *testing
 
 func TestGoalPRDescriptionBoundsLargeContractsWithoutDroppingRepositoryLinks(t *testing.T) {
 	g := goal.Goal{ID: "12345678-1234-1234-1234-123456789abc", Outcome: strings.Repeat("界", 5000), Execution: &goal.Execution{Manifest: map[string]string{}}}
-	v := goalwork.Verification{}
+	v := goalwork.Verification{Targets: map[string]string{}}
+	g.Execution.DeliveryEvidenceURL = "https://example.com/" + strings.Repeat("a", 2000)
+	g.Execution.Policy.Rollout = &goalpolicy.Rollout{}
+	for i := 0; i < 20; i++ {
+		g.Execution.Policy.Rollout.Compatibility = append(g.Execution.Policy.Rollout.Compatibility, fmt.Sprintf("%02d", i)+strings.Repeat("x", 498))
+	}
 	for i := 0; i < 50; i++ {
 		id := fmt.Sprintf("member-%02d-%s", i, strings.Repeat("m", 110))
+		g.Execution.Policy.Rollout.MergeOrder = append(g.Execution.Policy.Rollout.MergeOrder, id)
 		g.Tasks = append(g.Tasks, goal.Task{TaskDraft: goal.TaskDraft{Title: strings.Repeat("界", 80), Acceptance: []string{strings.Repeat("界", 600), strings.Repeat("界", 600), strings.Repeat("界", 600), "full remaining criterion"}}})
 		g.Execution.Policy.Members = append(g.Execution.Policy.Members, goalpolicy.Member{ID: id, Repo: "owner/" + strings.Repeat("r", 240), Target: strings.Repeat("branch/", 100)})
 		g.Execution.Policy.Checks = append(g.Execution.Policy.Checks, goalpolicy.Check{ID: strings.Repeat("c", 120)})
 		g.Execution.Manifest[id] = strings.Repeat("a", 64)
+		v.Targets[id] = strings.Repeat("b", 64)
 		v.Reviews = append(v.Reviews, goalwork.Check{ID: strings.Repeat("p", 64)})
 	}
 	body := goalPRBody(g, v)
@@ -255,5 +262,14 @@ func TestGoalPRDescriptionBoundsLargeContractsWithoutDroppingRepositoryLinks(t *
 	}
 	if !strings.Contains(body, "complete acceptance contract") {
 		t.Fatal("abbreviated checklist presented as exhaustive")
+	}
+	for _, requirement := range g.Execution.Policy.Rollout.Compatibility {
+		if !strings.Contains(body, requirement) {
+			t.Fatal("large description truncated reviewed compatibility")
+		}
+	}
+	g.Execution.Policy.Rollout = nil
+	if legacy := goalPRBody(g, v); len(legacy) > 60000 || !strings.Contains(legacy, "not a merge recommendation") {
+		t.Fatal("legacy stack description exceeded bounds or invented a merge order")
 	}
 }

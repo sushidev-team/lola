@@ -34,6 +34,24 @@ func TestPolicyRequiresFiniteLimitsAndExplicitScope(t *testing.T) {
 	}
 }
 
+func TestHumanAcceptancePreservesLegacyEncodingAndRequiresDelivery(t *testing.T) {
+	p := validPolicy()
+	b, _ := json.Marshal(p)
+	before, _ := p.Digest()
+	if strings.Contains(string(b), "require_human_acceptance") {
+		t.Fatal("default changed legacy policy encoding")
+	}
+	p.RequireHumanAcceptance = true
+	if p.Validate() == nil {
+		t.Fatal("acceptance allowed without PR delivery")
+	}
+	p.PublishPR = true
+	after, err := p.Digest()
+	if err != nil || after == before {
+		t.Fatal("new requirement not part of authorization digest", err)
+	}
+}
+
 func TestTargetRefreshAuthorizationPreservesLegacyPolicyDigests(t *testing.T) {
 	p := validPolicy()
 	before, _ := p.Digest()

@@ -42,23 +42,25 @@ const (
 	viewPRPicker
 	viewTicketPicker
 	viewGoals
+	viewKnowledge
 )
 
 type rootModel struct {
-	cfgPath  string
-	cfg      *config.Config
-	view     int // viewCockpit | viewHome | viewDetail — the active top-level screen
-	tab      int // legacy tab index; superseded by the unified cockpit (focus)
-	focus    int // cockpit: which panel owns navigation/action keys (focusSessions/focusPolls)
-	home     homeModel
-	detail   detailModel
-	prpick   prPickerModel
-	goals    goalsModel
-	ticket   ticketPickerModel
-	list     listModel
-	sessions sessionsModel
-	form     *formModel
-	settings *settingsForm // global settings editor modal ('S'); nil otherwise
+	cfgPath   string
+	cfg       *config.Config
+	view      int // viewCockpit | viewHome | viewDetail — the active top-level screen
+	tab       int // legacy tab index; superseded by the unified cockpit (focus)
+	focus     int // cockpit: which panel owns navigation/action keys (focusSessions/focusPolls)
+	home      homeModel
+	detail    detailModel
+	prpick    prPickerModel
+	knowledge knowledgeModel
+	goals     goalsModel
+	ticket    ticketPickerModel
+	list      listModel
+	sessions  sessionsModel
+	form      *formModel
+	settings  *settingsForm // global settings editor modal ('S'); nil otherwise
 
 	// Per-session shell tabs, DISCOVERED from the tmux server ("<id>-shell-N"
 	// sessions) so they stay in sync with the desktop app, which attaches to the
@@ -133,10 +135,42 @@ func (m *rootModel) routePaste(content string) (tea.Model, tea.Cmd) {
 		m.settings.paste(content)
 	case m.doctorLoading || m.doctorReport != nil:
 		// read-only overlay
-	case m.view == viewGoals && m.goals.confirm != nil && !m.goals.busy:
+	case m.view == viewKnowledge && m.knowledge.improvements != nil:
+		p := m.knowledge.improvements
+		if !p.busy && !p.uncertain && !p.discard && p.reviewed == nil && p.editor != nil {
+			p.editor.paste(content)
+		}
+	case m.view == viewKnowledge:
+		p := &m.knowledge
+		if !p.busy && !p.uncertain && !p.discard && p.capture == nil && p.decision == nil {
+			if p.editor != nil {
+				p.editor.paste(content)
+			} else if p.filtering {
+				p.filter += pasteInline(content)
+				p.selected = 0
+				p.scroll = 0
+			}
+		}
+	case m.view == viewGoals && m.goals.recovery != nil:
+		p := m.goals.recovery
+		if !p.busy && !p.uncertain && !p.discard && !p.inspect && p.reviewed == nil && p.editor != nil {
+			p.editor.paste(content)
+		}
+	case m.view == viewGoals && m.goals.authorization != nil:
+		p := m.goals.authorization
+		if !p.busy && !p.uncertain && !p.discard && p.reviewed == nil && p.editor != nil {
+			p.editor.paste(content)
+		}
+	case m.view == viewGoals && m.goals.planner != nil:
+		p := m.goals.planner
+		if !p.busy && !p.uncertain && !p.discard && p.editor != nil && (p.mode == "brief" || p.mode == "graphtask" || p.mode == "graphnotes") && (p.graph == nil || p.graph.discard == "") {
+			p.editor.paste(content)
+		}
+	case m.view == viewGoals && m.goals.confirm != nil && !m.goals.busy && m.goals.err == "" && m.goals.confirm.Action != "publish":
 		text := pasteInline(content)
 		if len(m.goals.reason)+len(text) <= 2000 {
 			m.goals.reason += text
+			m.goals.scroll = 1 << 20
 		}
 	case m.view == viewDetail && m.detail.wtMode:
 		m.detail.wtBranch += pasteInline(content)
@@ -320,9 +354,15 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.list.status, m.list.statusErr = v.data, ""
 		}
 		return m, nil
+	case knowledgeMsg:
+		return m, m.handleKnowledgeMsg(v)
+	case improvementMsg:
+		return m, m.handleImprovementMsg(v)
 	case goalsMsg:
 		m.handleGoalsMsg(v)
 		return m, nil
+	case goalRecoveryMsg:
+		return m, m.handleGoalRecoveryMsg(v)
 	case goalAuthorizationMsg:
 		return m, m.handleGoalAuthorizationMsg(v)
 	case goalPlannerMsg:
@@ -464,7 +504,7 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// without the check a reflexive ctrl+c mid-edit hard-quit the whole TUI and
 		// took every unsaved edit with it — the one keystroke the discard prompt
 		// could not protect against.
-		if v.String() == "ctrl+c" && !m.embedFocused && m.form == nil && m.settings == nil && (m.view != viewGoals || (m.goals.planner == nil && m.goals.authorization == nil)) {
+		if v.String() == "ctrl+c" && !m.embedFocused && m.form == nil && m.settings == nil && m.view != viewKnowledge && (m.view != viewGoals || (m.goals.planner == nil && m.goals.authorization == nil && m.goals.recovery == nil)) {
 			m.closeAllTerms()
 			return m, tea.Quit
 		}
@@ -602,6 +642,9 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// view; overlays above still take precedence (handled before this point).
 	if m.view == viewHome {
 		return m.updateHome(msg)
+	}
+	if m.view == viewKnowledge {
+		return m.updateKnowledge(msg)
 	}
 	if m.view == viewGoals {
 		return m.updateGoals(msg)
@@ -741,6 +784,9 @@ func (m *rootModel) viewString() string {
 	if m.view == viewHome {
 		return m.homeView()
 	}
+	if m.view == viewKnowledge {
+		return strings.Join(m.knowledgeLines(), "\n")
+	}
 	if m.view == viewGoals {
 		return strings.Join(m.goalsLines(), "\n")
 	}
@@ -763,6 +809,8 @@ func (m *rootModel) backdropLines() []string {
 	switch m.view {
 	case viewHome:
 		return m.homeLines()
+	case viewKnowledge:
+		return m.knowledgeLines()
 	case viewGoals:
 		return m.goalsLines()
 	case viewDetail:

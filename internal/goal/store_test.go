@@ -67,7 +67,7 @@ func TestStoreFailedWriteDoesNotPublishMemory(t *testing.T) {
 }
 
 func TestStoreFailsClosed(t *testing.T) {
-	for _, body := range []string{`{`, `null`, `{"version":2,"goals":{}}`, `{"version":1,"goals":{"g":{"id":"g"}}}`} {
+	for _, body := range []string{`{`, `null`, `{"version":4,"goals":{}}`, `{"version":1,"goals":{"g":{"id":"g"}}}`} {
 		path := filepath.Join(t.TempDir(), "goals.json")
 		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 			t.Fatal(err)

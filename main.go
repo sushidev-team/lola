@@ -72,6 +72,7 @@ func main() {
 		goalCmd(),
 		learnCmd(),
 		profileCmd(),
+		comparisonCmd(),
 		bestofCmd(),
 		switchAgentCmd(),
 		checkpointCmd(),

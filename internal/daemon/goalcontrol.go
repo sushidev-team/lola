@@ -76,10 +76,13 @@ func (d *Daemon) controlGoal(ctx context.Context, a goal.ControlRequest) (goal.G
 	if g.Execution == nil {
 		return g, errors.New("goal has not been authorized")
 	}
+	if accepted := g.Execution.HumanAcceptance; a.Action == "accept-delivery" && accepted != nil && g.State == "accepted" && accepted.Revision == a.Revision && accepted.Evidence == a.Reason {
+		return g, nil // exact retry after a lost reply; preserve the original decision
+	}
 	if a.Revision == 0 || g.Revision != a.Revision {
 		return g, errors.New("goal changed; reload before steering")
 	}
-	if a.Action == "resume" || a.Action == "retry-verification" || a.Action == "retry-replan" {
+	if a.Action == "resume" || a.Action == "retry-verification" || a.Action == "retry-replan" || a.Action == "accept-delivery" {
 		if err := d.goalDisputeHold(g); err != nil {
 			return g, err
 		}
@@ -90,6 +93,14 @@ func (d *Daemon) controlGoal(ctx context.Context, a goal.ControlRequest) (goal.G
 			return g, err
 		}
 		g.SyncError = ""
+	}
+	if a.Action == "accept-delivery" {
+		if !g.Delivered() {
+			return g, errors.New("all final PR deliveries must be observed merged before acceptance")
+		}
+		if _, err := d.readyGoalEvidence(ctx, g, &goalwork.Manager{Root: filepath.Join(d.home, "goals")}); err != nil {
+			return g, err
+		}
 	}
 	if a.Action == "retry-replan" {
 		d.goalJobsMu.Lock()

@@ -16,19 +16,21 @@ import (
 )
 
 type Record struct {
-	Usage      *usage.Observation `json:"usage,omitempty"`
-	ID         string             `json:"id"`
-	GoalID     string             `json:"goal_id"` // reserved before the model call; acceptance is retry-safe
-	Revision   uint64             `json:"revision"`
-	State      string             `json:"state"` // running, proposed, failed, interrupted, accepted
-	Agent      string             `json:"agent"`
-	Image      string             `json:"image"`
-	Input      Input              `json:"input"`
-	InputSHA   string             `json:"input_sha256"`
-	Output     *Output            `json:"output,omitempty"`
-	Error      string             `json:"error,omitempty"`
-	StartedAt  time.Time          `json:"started_at"`
-	FinishedAt time.Time          `json:"finished_at,omitempty"`
+	ModelOutput *Output            `json:"model_output,omitempty"` // preserved original when an operator edits the graph
+	Edits       []Edit             `json:"edits,omitempty"`
+	Usage       *usage.Observation `json:"usage,omitempty"`
+	ID          string             `json:"id"`
+	GoalID      string             `json:"goal_id"` // reserved before the model call; acceptance is retry-safe
+	Revision    uint64             `json:"revision"`
+	State       string             `json:"state"` // running, proposed, failed, interrupted, accepted
+	Agent       string             `json:"agent"`
+	Image       string             `json:"image"`
+	Input       Input              `json:"input"`
+	InputSHA    string             `json:"input_sha256"`
+	Output      *Output            `json:"output,omitempty"`
+	Error       string             `json:"error,omitempty"`
+	StartedAt   time.Time          `json:"started_at"`
+	FinishedAt  time.Time          `json:"finished_at,omitempty"`
 }
 type disk struct {
 	Version int               `json:"version"`
@@ -53,7 +55,7 @@ func Open(path string) (*Store, error) {
 	if err = json.Unmarshal(b, &s.data); err != nil {
 		return nil, err
 	}
-	if s.data.Version != 1 || s.data.Records == nil {
+	if (s.data.Version != 1 && s.data.Version != 2) || s.data.Records == nil {
 		return nil, errors.New("unsupported goal proposal store")
 	}
 	recovered := false
@@ -91,6 +93,9 @@ func Open(path string) (*Store, error) {
 		case "failed", "interrupted":
 		default:
 			return nil, errors.New("unknown proposal state")
+		}
+		if err := validateEdits(r, s.data.Version); err != nil {
+			return nil, err
 		}
 		s.data.Records[id] = r
 	}
@@ -210,7 +215,11 @@ func (s *Store) Accept(id string, revision uint64) (Record, error) {
 	return clone(r), err
 }
 func (s *Store) commit(r Record) error {
-	next := disk{Version: 1, Records: make(map[string]Record, len(s.data.Records)+1)}
+	version := s.data.Version
+	if len(r.Edits) > 0 {
+		version = 2
+	}
+	next := disk{Version: version, Records: make(map[string]Record, len(s.data.Records)+1)}
 	for id, v := range s.data.Records {
 		next.Records[id] = v
 	}

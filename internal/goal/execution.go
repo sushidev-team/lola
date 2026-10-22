@@ -62,6 +62,7 @@ type Execution struct {
 	Final               *FinalVerification      `json:"final,omitempty"`
 	FinalHistory        []FinalVerification     `json:"final_history,omitempty"`
 	Delivery            *Delivery               `json:"delivery,omitempty"`
+	HumanAcceptance     *HumanAcceptance        `json:"human_acceptance,omitempty"`
 	DeliveryEvidenceURL string                  `json:"delivery_evidence_url,omitempty"`
 	ObservedTokens      int64                   `json:"observed_tokens"`
 	ObservedSpendUSD    float64                 `json:"observed_spend_usd"`
@@ -135,6 +136,9 @@ func (g *Goal) beginExecution(policy goalpolicy.Policy, manifest map[string]stri
 	if g.State != "planned" || g.Execution != nil || (g.SyncError != "" || g.PendingBrief != "") || !g.Parent.Confirmed || (g.Milestone.ID != "" && !g.Milestone.Confirmed) {
 		return errors.New("only a fully published, synchronized goal can be authorized")
 	}
+	if err := policy.ValidateAuthorization(); err != nil {
+		return err
+	}
 	digest, err := policy.Digest()
 	if err != nil {
 		return err
@@ -164,6 +168,9 @@ func (g *Goal) beginExecution(policy goalpolicy.Policy, manifest map[string]stri
 	}
 	if now.IsZero() {
 		return errors.New("authorization time required")
+	}
+	if policy.Rollout != nil {
+		policy.Rollout = &goalpolicy.Rollout{Compatibility: slices.Clone(policy.Rollout.Compatibility), MergeOrder: slices.Clone(policy.Rollout.MergeOrder)}
 	}
 	g.Execution = &Execution{Initialized: !preparing, Policy: policy, PolicyDigest: digest, StartedAt: now, Deadline: now.Add(time.Duration(policy.Limits.RuntimeMinutes) * time.Minute), Manifest: maps.Clone(manifest), Tasks: tasks, Attempts: map[string]Attempt{}, Runs: map[string]AgentRun{}, Integrations: map[string]Integration{}}
 	g.State = "running"

@@ -28,6 +28,9 @@ import * as goal$0 from "../internal/goal/models.js";
 import * as goalplan$0 from "../internal/goalplan/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
+import * as knowledge$0 from "../internal/knowledge/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
 import * as protocol$0 from "../internal/protocol/models.js";
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
@@ -163,6 +166,10 @@ export function ForkCheckpoint(session: string, seq: number, agentKind: string):
     return $Call.ByID(460527567, session, seq, agentKind);
 }
 
+export function GoalAcceptBrief(request: goal$0.BriefAcceptance): $CancellablePromise<void> {
+    return $Call.ByID(2467228378, request);
+}
+
 export function GoalAcceptPlan(id: string, revision: number): $CancellablePromise<string> {
     return $Call.ByID(125344137, id, revision);
 }
@@ -173,6 +180,22 @@ export function GoalAcceptPlan(id: string, revision: number): $CancellablePromis
  */
 export function GoalControl(id: string, revision: number, action: string, reason: string): $CancellablePromise<void> {
     return $Call.ByID(1341233383, id, revision, action, reason);
+}
+
+export function GoalDeliveryEvidence(request: goal$0.DeliveryEvidenceRequest): $CancellablePromise<void> {
+    return $Call.ByID(1668219419, request);
+}
+
+export function GoalDismissProgress(request: goal$0.ProgressResolution): $CancellablePromise<void> {
+    return $Call.ByID(2163683961, request);
+}
+
+/**
+ * GoalEditPlan preserves an operator's reviewed graph and edit identity. It
+ * neither reruns the coordinator nor publishes or authorizes the goal.
+ */
+export function GoalEditPlan(request: goalplan$0.EditRequest): $CancellablePromise<goalplan$0.Record> {
+    return $Call.ByID(3919045989, request);
 }
 
 /**
@@ -207,6 +230,13 @@ export function GoalPublish(id: string, revision: number): $CancellablePromise<v
     return $Call.ByID(1518333769, id, revision);
 }
 
+/**
+ * GoalRecovery reads a local snapshot. It never launches work or contacts Linear.
+ */
+export function GoalRecovery(id: string): $CancellablePromise<goal$0.RecoveryView> {
+    return $Call.ByID(663866829, id);
+}
+
 export function GoalStart(authorization: goal$0.Authorization): $CancellablePromise<void> {
     return $Call.ByID(3214288106, authorization);
 }
@@ -217,6 +247,14 @@ export function GoalStart(authorization: goal$0.Authorization): $CancellableProm
  */
 export function GoalStartOptions(id: string): $CancellablePromise<goal$0.StartOptions> {
     return $Call.ByID(4032076004, id);
+}
+
+/**
+ * GoalSyncBrief reads Linear and retains the observed brief in local history.
+ * A successful refresh is not acceptance of that brief or authority to resume.
+ */
+export function GoalSyncBrief(id: string): $CancellablePromise<void> {
+    return $Call.ByID(3318247019, id);
 }
 
 /**
@@ -233,6 +271,63 @@ export function InstallCLI(): $CancellablePromise<$models.CLIInstallDTO> {
  */
 export function Kill(session: string, force: boolean): $CancellablePromise<protocol$0.KillData> {
     return $Call.ByID(699745421, session, force);
+}
+
+export function KnowledgeAccept(request: knowledge$0.Acceptance): $CancellablePromise<knowledge$0.Lesson> {
+    return $Call.ByID(1606437259, request);
+}
+
+export function KnowledgeCapture(request: knowledge$0.CaptureRequest, correction: boolean): $CancellablePromise<knowledge$0.Lesson> {
+    return $Call.ByID(3509220303, request, correction);
+}
+
+export function KnowledgeDecideImprovement(request: knowledge$0.ImprovementTriage): $CancellablePromise<knowledge$0.Improvement> {
+    return $Call.ByID(4294648845, request);
+}
+
+export function KnowledgeDispute(scope: knowledge$0.Scope, id: string, version: number, reason: string): $CancellablePromise<void> {
+    return $Call.ByID(1045593053, scope, id, version, reason);
+}
+
+/**
+ * Export produces reviewable file content; it never writes a repository file.
+ */
+export function KnowledgeExport(project: string): $CancellablePromise<{ [_ in string]?: string } | null> {
+    return $Call.ByID(759284245, project);
+}
+
+/**
+ * Export previews files for normal task review; it never installs policy or writes a checkout.
+ */
+export function KnowledgeExportImprovement(scope: knowledge$0.Scope, id: string, revision: string): $CancellablePromise<{ [_ in string]?: string } | null> {
+    return $Call.ByID(2694144031, scope, id, revision);
+}
+
+export function KnowledgeImprovement(scope: knowledge$0.Scope, id: string): $CancellablePromise<knowledge$0.Improvement> {
+    return $Call.ByID(3529074277, scope, id);
+}
+
+/**
+ * Improvement reads are local and on demand; no maintenance or external calls.
+ */
+export function KnowledgeImprovementCatalog(scope: knowledge$0.Scope, after: string): $CancellablePromise<knowledge$0.ImprovementCatalog> {
+    return $Call.ByID(2266833560, scope, after);
+}
+
+export function KnowledgeImprovementDecisions(scope: knowledge$0.Scope, id: string): $CancellablePromise<knowledge$0.ImprovementDecision[] | null> {
+    return $Call.ByID(2216650032, scope, id);
+}
+
+export function KnowledgeImprovementSources(scope: knowledge$0.Scope, id: string, revision: string, after: string): $CancellablePromise<knowledge$0.ImprovementSources> {
+    return $Call.ByID(2202348977, scope, id, revision, after);
+}
+
+export function KnowledgeList(project: string): $CancellablePromise<knowledge$0.Lesson[] | null> {
+    return $Call.ByID(2558447951, project);
+}
+
+export function KnowledgeVersion(scope: knowledge$0.Scope, id: string, version: number): $CancellablePromise<knowledge$0.Lesson> {
+    return $Call.ByID(3526205193, scope, id, version);
 }
 
 /**

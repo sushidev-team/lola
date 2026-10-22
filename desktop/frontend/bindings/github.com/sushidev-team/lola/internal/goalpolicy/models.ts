@@ -77,4 +77,25 @@ export interface Policy {
      * bounded coordinator decomposition after conclusive failure
      */
     "replan"?: boolean;
+
+    /**
+     * separate decision after observed final PR delivery
+     */
+    "require_human_acceptance"?: boolean;
+
+    /**
+     * human-reviewed compatibility and manual merge order
+     */
+    "rollout"?: Rollout | null;
+}
+
+/**
+ * Rollout is part of the immutable execution authorization. It describes the
+ * compatibility required between manual merges, not permission to merge or
+ * deploy. Include unchanged members in MergeOrder so the contract stays complete
+ * when a later task or target refresh changes which members need PRs.
+ */
+export interface Rollout {
+    "compatibility": string[] | null;
+    "merge_order": string[] | null;
 }

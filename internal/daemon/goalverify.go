@@ -283,7 +283,7 @@ func (d *Daemon) reviewGoalProfile(ctx context.Context, g goal.Goal, scope goalR
 		return reviewprofile.Record{}, err
 	}
 	combination, _ := json.Marshal(heads)
-	contract := scope.Contract + "\nVerified repository combination: " + string(combination)
+	contract := scope.Contract + g.Execution.Policy.RolloutContract() + "\nVerified repository combination: " + string(combination)
 	repo := c.Member
 	for _, member := range g.Execution.Policy.Members {
 		if member.ID == c.Member && member.Repo != "" {

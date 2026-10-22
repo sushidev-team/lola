@@ -14,6 +14,7 @@ import (
 
 	"github.com/sushidev-team/lola/internal/goal"
 	"github.com/sushidev-team/lola/internal/goalcheck"
+	"github.com/sushidev-team/lola/internal/goalpolicy"
 	"github.com/sushidev-team/lola/internal/goalpublish"
 	"github.com/sushidev-team/lola/internal/goalwork"
 )
@@ -246,32 +247,59 @@ func (d *Daemon) setGoalDeliveryEvidence(a goal.DeliveryEvidenceRequest) (goal.G
 
 func goalPRBody(g goal.Goal, v goalwork.Verification) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "## TL;DR\n\n%s\n\nGoal: %s. This draft contains a verified goal revision for human review and merge.\n\n## Changes\n\n", prExcerpt(g.Outcome, 4000), prExcerpt(g.Parent.Identifier, 64))
-	for _, t := range g.Tasks[:min(len(g.Tasks), 20)] {
+	// Reserve space for the complete rollout and every repository/target link.
+	// Summaries may be abbreviated; the reviewed delivery contract must not be.
+	items, manualTasks, criteria, outcomeBytes := 20, 10, 3, 4000
+	if len(g.Execution.Policy.Members) > 10 {
+		items, manualTasks, criteria, outcomeBytes = 5, 3, 2, 1000
+	}
+	fmt.Fprintf(&b, "## TL;DR\n\n%s\n\nGoal: %s. This draft contains a verified goal revision for human review and merge.\n\n## Changes\n\n", prExcerpt(g.Outcome, outcomeBytes), prExcerpt(g.Parent.Identifier, 64))
+	for _, t := range g.Tasks[:min(len(g.Tasks), items)] {
 		fmt.Fprintf(&b, "- %s (%s)\n", prExcerpt(t.Title, 160), prExcerpt(t.Issue.Identifier, 64))
 	}
-	if len(g.Tasks) > 20 {
-		fmt.Fprintf(&b, "- %d further tasks are recorded in the goal brief.\n", len(g.Tasks)-20)
+	if len(g.Tasks) > items {
+		fmt.Fprintf(&b, "- %d further tasks are recorded in the goal brief.\n", len(g.Tasks)-items)
 	}
 	b.WriteString("\n## Risk assessment\n\n- Automated checks establish only the declared acceptance coverage; domain correctness and rollout need human review.\n- Review cross-repository compatibility before merging. No automatic merge or deployment is authorized.\n- Use normal repository rollback procedures if delivery regresses behavior.\n\n## Test plan\n\n### Automated\n\n")
-	for _, c := range g.Execution.Policy.Checks[:min(len(g.Execution.Policy.Checks), 20)] {
+	for _, c := range g.Execution.Policy.Checks[:min(len(g.Execution.Policy.Checks), items)] {
 		fmt.Fprintf(&b, "- Acceptance check `%s` passed on the final repository combination. Exact commands and image digests are retained in Lola's verification receipt.\n", c.ID)
 	}
-	for _, r := range v.Reviews[:min(len(v.Reviews), 20)] {
+	for _, r := range v.Reviews[:min(len(v.Reviews), items)] {
 		fmt.Fprintf(&b, "- Specialist `%s`: accepted final evidence (including explicit applicability checks).\n", r.ID)
 	}
 	b.WriteString("\n### Manual checks\n\n")
 	b.WriteString("This checklist summarizes the goal. Review the complete acceptance contract and all check results in Lola before merging.\n\n")
-	for _, t := range g.Tasks[:min(len(g.Tasks), 10)] {
+	for _, t := range g.Tasks[:min(len(g.Tasks), manualTasks)] {
 		fmt.Fprintf(&b, "#### %s\n\n", prExcerpt(t.Title, 160))
-		for _, criterion := range t.Acceptance[:min(len(t.Acceptance), 3)] {
+		for _, criterion := range t.Acceptance[:min(len(t.Acceptance), criteria)] {
 			fmt.Fprintf(&b, "- [ ] %s\n", prExcerpt(criterion, 200))
 		}
 		b.WriteString("\n")
 	}
-	b.WriteString("## Repository combination\n\nReview and coordinate all changed repositories before merging. The configured order below is the proposed human merge order; confirm compatibility for your rollout.\n\n")
-	for _, m := range g.Execution.Policy.Members {
-		fmt.Fprintf(&b, "- [%s](https://github.com/%s/pulls?q=%s): `%s`, targeting `%s`.\n", m.ID, m.Repo, url.QueryEscape("is:pr head:goal/"+g.ID), g.Execution.Manifest[m.ID], prExcerpt(m.Target, 80))
+	if rollout := g.Execution.Policy.Rollout; rollout != nil {
+		b.WriteString("## Reviewed compatibility requirements\n\nThese exact requirements were accepted with the execution policy. Preserve them through intermediate repository combinations; the human merge order follows below.\n\n")
+		for _, requirement := range rollout.Compatibility {
+			// Indented text keeps literal Markdown and HTML from becoming PR markup.
+			fmt.Fprintf(&b, "    %s\n\n", requirement)
+		}
+	}
+	b.WriteString("\n## Repository combination\n\n")
+	members := g.Execution.Policy.Members
+	if rollout := g.Execution.Policy.Rollout; rollout != nil {
+		b.WriteString("The numbered list follows the human merge order accepted with this goal's policy. Verify intermediate compatibility before each merge; skip unchanged members. No automatic merge or deployment is authorized.\n\n")
+		members = make([]goalpolicy.Member, 0, len(rollout.MergeOrder))
+		for _, id := range rollout.MergeOrder {
+			for _, m := range g.Execution.Policy.Members {
+				if m.ID == id {
+					members = append(members, m)
+				}
+			}
+		}
+	} else {
+		b.WriteString("No reviewed rollout contract was recorded with this authorization. Repository listing order is not a merge recommendation. Confirm compatibility and coordinate any required merge order before merging.\n\n")
+	}
+	for i, m := range members {
+		fmt.Fprintf(&b, "%d. [%s](https://github.com/%s/pulls?q=%s): `%s`, targeting `%s`.\n", i+1, m.ID, m.Repo, url.QueryEscape("is:pr head:goal/"+g.ID), g.Execution.Manifest[m.ID], prExcerpt(m.Target, 80))
 		if v.Targets[m.ID] != "" {
 			fmt.Fprintf(&b, "  Verified with target commit `%s`.\n", v.Targets[m.ID])
 		}

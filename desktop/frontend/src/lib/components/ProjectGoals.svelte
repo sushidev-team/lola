@@ -1,4 +1,5 @@
 <script lang="ts">
+  import GoalRollout from "./GoalRollout.svelte";
   import { tick, untrack } from "svelte";
   import { DaemonService } from "@bindings/desktop";
   import type { Overview } from "@bindings/internal/goal";
@@ -8,6 +9,7 @@
   import Select from "./Select.svelte";
   import GoalAuthorization from "./GoalAuthorization.svelte";
   import GoalPlanner from "./GoalPlanner.svelte";
+  import GoalRecovery from "./GoalRecovery.svelte";
 
   let { project }: { project: string } = $props();
   let expanded = $state(false);
@@ -17,6 +19,7 @@
   let loaded = $state(false);
   let error = $state("");
   let busy = $state(false);
+  let recoveryOpen = $state(false);
   let pending = $state<{ goal: Overview; action: string } | null>(null);
   let reason = $state("");
   let reasonField = $state<HTMLTextAreaElement>();
@@ -26,8 +29,9 @@
   const selections = new Map<string, string>();
   let generation = 0;
   const current = $derived(goals.find((g) => g.id === selected));
-  const labels: Record<string, string> = { pause: "Pause", resume: "Resume", "stop-workers": "Stop workers", cancel: "Cancel goal", publish: "Publish to Linear" };
+  const labels: Record<string, string> = { pause: "Pause", resume: "Resume", "stop-workers": "Stop workers", cancel: "Cancel goal", publish: "Publish to Linear", "accept-delivery": "Accept delivered goal" };
   const consequences: Record<string, string> = {
+    "accept-delivery": "Record your acceptance of this verified, merged goal revision. Review its criteria and delivered commits above, then describe what you checked. This does not merge or deploy code.",
     publish: "Create or reconcile the goal parent issue, task issues, dependencies and optional milestone in the configured Linear project. This does not authorize execution.",
     pause: "Hold new tasks, verification and integration. Running workers continue until stopped separately.",
     resume: "Resume within the accepted scope and remaining budgets. Lola rechecks Linear and execution policy first.",
@@ -36,7 +40,7 @@
   };
 
   async function refresh(scope = project) {
-    if (loading || busy || pending) return;
+    if (loading || busy || pending || recoveryOpen) return;
     const gen = ++generation;
     loading = true;
     try {
@@ -66,6 +70,7 @@
     loading = false;
     error = "";
     pending = null;
+    recoveryOpen = false;
     if (!open) return;
     untrack(() => void refresh(scope));
     const timer = window.setInterval(() => void refresh(scope), 5000);
@@ -88,7 +93,7 @@
   }
   async function submit() {
     const reviewed = pending;
-    if (!reviewed || busy) return;
+    if (!reviewed || busy || error || (reviewed.action === "accept-delivery" && !reason.trim())) return;
     const scope = project;
     busy = true;
     try {
@@ -111,7 +116,7 @@
 </script>
 
 <section class="rounded-[10px] border border-edge" aria-label="Project goals">
-  <button bind:this={toggle} class="flex w-full items-center justify-between gap-3 rounded-[10px] px-3 py-2 text-left hover:bg-sel/50" aria-expanded={expanded} onclick={() => (expanded = !expanded)}>
+  <button bind:this={toggle} disabled={recoveryOpen} class="flex w-full items-center justify-between gap-3 rounded-[10px] px-3 py-2 text-left enabled:hover:bg-sel/50 disabled:cursor-not-allowed" aria-expanded={expanded} onclick={() => (expanded = !expanded)}>
     <span><span class="block font-medium text-ink">Goals</span><span class="block text-sm text-faint">Autonomous work, verified progress and controls</span></span>
     <span class="text-sm text-faint">{expanded ? "Hide" : "Show"}</span>
   </button>
@@ -119,17 +124,17 @@
     <div class="flex flex-col gap-3 border-t border-edge p-3">
       <div class="flex items-center justify-between gap-2">
         <p class="text-sm text-faint">Work stays on isolated goal branches. You merge the final PRs.</p>
-        <Button size="sm" disabled={loading || busy || !!pending} onclick={() => void refresh()}>Refresh</Button>
+        <Button size="sm" disabled={loading || busy || !!pending || recoveryOpen} onclick={() => void refresh()}>Refresh</Button>
       </div>
       {#if error}<p role="alert" class="selectable text-sm text-bad">{error}</p>{/if}
       {#if !loaded && loading}<p role="status" class="text-sm text-faint">Loading goals…</p>{/if}
       {#if loaded && goals.length === 0}
         <p class="text-sm text-faint">No goals in this project yet. Plan a goal below or create one with <code class="text-ink">lola goal</code>.</p>
       {/if}
-      {#key project}<GoalPlanner {project} onaccepted={(id) => { selections.set(project, id); selected = id; void refresh(); }} />{/key}
+      {#if !recoveryOpen}{#key project}<GoalPlanner {project} onaccepted={(id) => { selections.set(project, id); selected = id; void refresh(); }} />{/key}{/if}
       {#if goals.length > 0}
         <label class="flex flex-col gap-1 text-sm text-faint">Goal
-          <Select class="min-w-0" bind:value={selected} onchange={(e) => selections.set(project, e.currentTarget.value)} disabled={busy || !!pending}>
+          <Select class="min-w-0" bind:value={selected} onchange={(e) => selections.set(project, e.currentTarget.value)} disabled={busy || !!pending || recoveryOpen}>
             {#each goals as g (g.id)}<option value={g.id}>{g.title} · {g.state}</option>{/each}
           </Select>
         </label>
@@ -141,7 +146,7 @@
         </div>
         <p class="selectable max-w-prose whitespace-pre-wrap break-words text-sm text-ink">{current.outcome}</p>
         {#if current.syncError}<p role="status" class="selectable text-sm text-warn">Linear needs reconciliation: {current.syncError}</p>{/if}
-        {#if current.reason}<p class="selectable whitespace-pre-wrap break-words text-sm text-warn">{current.reason}</p>{/if}
+        {#if current.reason && !current.humanAcceptance}<p class="selectable whitespace-pre-wrap break-words text-sm text-warn">{current.reason}</p>{/if}
         <div class="flex flex-wrap items-center gap-2 text-sm">
           {#if current.parent.confirmed}
             <Button size="sm" variant="secondary" onclick={() => store.openURL(`https://linear.app/issue/${current.parent.id}`)}>Open {current.parent.identifier || "goal"} in Linear</Button>
@@ -200,8 +205,25 @@
             {/each}
           </div>
         {/if}
-        {#if !current.authorized && current.state === "planned"}
+        {#if !recoveryOpen && !current.authorized && current.state === "planned"}
           {#key current.id}<GoalAuthorization goalID={current.id} onstarted={() => void refresh()} />{/key}
+        {/if}
+        {#if current.rollout}
+          <div class="border-t border-edge pt-3"><GoalRollout rollout={current.rollout} members={current.members ?? []} /></div>
+        {:else if current.authorized && (current.members?.length ?? 0)>1}
+          <p class="border-t border-edge pt-3 text-sm text-faint">No reviewed rollout contract was recorded for this goal. Repository listing order is not a merge recommendation.</p>
+        {/if}
+        {#if current.requireHumanAcceptance}
+          <div class="space-y-1 border-t border-edge pt-3" aria-label="Human acceptance">
+            {#if current.humanAcceptance}
+              <h4 class="font-medium text-ink">Human acceptance recorded</h4>
+              <p class="text-sm text-faint">Reviewed revision {current.humanAcceptance.revision} · {current.humanAcceptance.acceptedAt}</p>
+              <p class="selectable whitespace-pre-wrap break-words text-sm text-ink">{current.humanAcceptance.evidence}</p>
+            {:else}
+              <h4 class="font-medium text-ink">{current.delivered ? "Awaiting human acceptance" : "Human acceptance required"}</h4>
+              <p class="text-sm text-faint">{current.delivered ? "All final deliveries are observed merged. Inspect the delivered outcome before accepting this goal." : "A separate decision will complete this goal after all final PRs are observed merged."}</p>
+            {/if}
+          </div>
         {/if}
         {#if pending}
           <div bind:this={actionArea} tabindex="-1" role="group" aria-label="Review goal action" class="border-t border-edge pt-3">
@@ -209,20 +231,21 @@
             <p class="mt-1 text-sm text-faint">{consequences[pending.action]}</p>
             <p class="mt-1 text-sm text-faint">Applies to reviewed revision {pending.goal.revision}.</p>
             {#if pending.action === "publish"}<p class="mt-1 text-sm text-faint">{pending.goal.tasks?.length ?? 0} tasks{pending.goal.milestoneName ? ` · Milestone: ${pending.goal.milestoneName}` : " · No new milestone"}. Existing confirmed resources are retained on retry.</p>{:else}
-            <label class="mt-2 flex flex-col gap-1 text-sm text-faint">Reason (optional)
-              <textarea bind:this={reasonField} class="min-h-16 rounded border border-edge bg-canvas px-2 py-1.5 text-ink" bind:value={reason} maxlength="2000" disabled={busy}></textarea>
+            <label class="mt-2 flex flex-col gap-1 text-sm text-faint">{pending.action === "accept-delivery" ? "Acceptance evidence (required)" : "Reason (optional)"}
+              <textarea bind:this={reasonField} class="min-h-16 rounded border border-edge bg-canvas px-2 py-1.5 text-ink" bind:value={reason} maxlength="2000" required={pending.action === "accept-delivery"} disabled={busy || !!error}></textarea>
             </label>{/if}
             <div class="mt-2 flex flex-wrap gap-2">
-              <Button variant={pending.action === "cancel" ? "danger-solid" : "primary"} disabled={busy || !!error} onclick={submit}>{busy ? "Applying…" : labels[pending.action]}</Button>
+              <Button variant={pending.action === "cancel" ? "danger-solid" : "primary"} disabled={busy || !!error || (pending.action === "accept-delivery" && !reason.trim())} onclick={submit}>{busy ? "Applying…" : labels[pending.action]}</Button>
               <Button disabled={busy} onclick={closeAction}>Close action</Button>
             </div>
           </div>
-        {:else if current.actions?.length || (!current.authorized && ["draft", "provisioning"].includes(current.state))}
+        {:else if !recoveryOpen && (current.actions?.length || (!current.authorized && ["draft", "provisioning"].includes(current.state)))}
           <div bind:this={controlsArea} tabindex="-1" role="group" aria-label="Goal controls" class="flex flex-wrap gap-2 border-t border-edge pt-3">
             {#if !current.authorized && ["draft", "provisioning"].includes(current.state)}<Button variant="secondary" disabled={loading || !!error || busy} onclick={() => reviewAction(current, "publish")}>Publish to Linear</Button>{/if}
             {#each current.actions as action}<Button variant={action === "cancel" ? "danger" : "secondary"} disabled={loading || !!error || busy} onclick={() => reviewAction(current, action)}>{labels[action]}</Button>{/each}
           </div>
         {/if}
+        {#if !pending}{#key current.id}<GoalRecovery goalID={current.id} {project} disabled={loading || !!error || busy} onopen={() => recoveryOpen=true} onclose={() => { recoveryOpen=false; void refresh(); }} />{/key}{/if}
       {/if}
     </div>
   {/if}

@@ -1,14 +1,15 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/svelte";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/svelte";
 import GoalAuthorization from "./GoalAuthorization.svelte";
 import type { StartOptions } from "@bindings/internal/goal";
 const api=vi.hoisted(()=>({GoalStartOptions:vi.fn(),GoalStart:vi.fn()}));
+const originalScrollIntoView=Element.prototype.scrollIntoView;
 vi.mock("@bindings/desktop",()=>({DaemonService:api}));
 function options(): StartOptions {
  return {goal:{id:"g",revision:8,title:"Invitations"} as StartOptions["goal"],authorization:{id:"g",revision:8,policy:{members:[{id:"api",project:"api",source:"/repos/api",repo:"team/api",target:"main"}],checks:[],profiles:["backend"],publish_pr:false,replan:false,limits:{concurrency:1,max_tasks:2,attempts_per_task:2,review_rounds:2,agent_runs:30,runtime_minutes:120,attempt_minutes:30,tokens:500000,spend_usd:0,target_refreshes:0}}},profiles:[{id:"backend",kind:"backend",required:true,artifacts:[]},{id:"uiux",kind:"uiux",required:false,artifacts:["screenshot","runtime"]}]};
 }
-beforeEach(()=>{api.GoalStartOptions.mockReset().mockImplementation(async()=>options());api.GoalStart.mockReset().mockResolvedValue(undefined);});
-afterEach(cleanup);
+beforeEach(()=>{Element.prototype.scrollIntoView=vi.fn();api.GoalStartOptions.mockReset().mockImplementation(async()=>options());api.GoalStart.mockReset().mockResolvedValue(undefined);});
+afterEach(()=>{cleanup();Element.prototype.scrollIntoView=originalScrollIntoView;});
 async function open(){await fireEvent.click(screen.getByRole("button",{name:"Set execution limits"}));await screen.findByText(/revision 8/);}
 async function check(){
  await fireEvent.click(screen.getByRole("button",{name:"Add check"}));
@@ -16,6 +17,68 @@ async function check(){
  await fireEvent.input(screen.getByLabelText("Check image digest"),{target:{value:`sha256:${"a".repeat(64)}`}});
 }
 describe("GoalAuthorization",()=>{
+ it("requires a complete stack rollout, freezes its order, and preserves it after an uncertain start",async()=>{
+  const stack=options();
+  stack.authorization.policy.members!.push({id:"web",project:"web",source:"/repos/web",repo:"team/web",target:"main"});
+  api.GoalStartOptions.mockResolvedValue(stack);
+  api.GoalStart.mockRejectedValue(new Error("response lost"));
+  render(GoalAuthorization,{goalID:"g",onstarted:vi.fn()}); await open(); await check();
+  await fireEvent.click(screen.getByRole("checkbox",{name:/Allow verified goal branches/}));
+  await fireEvent.click(screen.getByRole("button",{name:"Review authorization"}));
+  await screen.findByText(/Add 1–20 compatibility requirements/);
+  expect(screen.getByRole("alert")).toHaveFocus();
+  expect(screen.getByRole("alert").scrollIntoView).toHaveBeenCalledWith({block:"nearest"});
+  await fireEvent.input(screen.getByLabelText("Compatibility requirements"),{target:{value:" Keep the old client supported.\n\n Keep new features disabled until the API is deployed. "}});
+  await fireEvent.input(screen.getByLabelText("Human merge order"),{target:{value:"api\napi"}});
+  await fireEvent.click(screen.getByRole("button",{name:"Review authorization"}));
+  await screen.findByText(/Human merge order must include each repository/);
+  expect(screen.getByRole("alert")).toHaveFocus();
+  expect(api.GoalStart).not.toHaveBeenCalled();
+  await fireEvent.input(screen.getByLabelText("Human merge order"),{target:{value:" web \n api "}});
+  await fireEvent.click(screen.getByRole("button",{name:"Review authorization"}));
+  const items=within(screen.getByRole("list",{name:"Human merge order"})).getAllByRole("listitem");
+  expect(items[0]).toHaveTextContent("web · team/web"); expect(items[1]).toHaveTextContent("api · team/api");
+  stack.authorization.revision=999;
+  await fireEvent.click(screen.getByRole("checkbox",{name:/I authorize/}));
+  await fireEvent.click(screen.getByRole("button",{name:"Authorize and start"}));
+  await screen.findByRole("alert");
+  expect(screen.getByRole("alert")).toHaveFocus();
+  expect(api.GoalStart).toHaveBeenCalledTimes(1);
+  expect(api.GoalStart.mock.calls[0][0]).toMatchObject({revision:8,policy:{rollout:{compatibility:["Keep the old client supported.","Keep new features disabled until the API is deployed."],merge_order:["web","api"]}}});
+  expect(screen.getByRole("button",{name:"Authorize and start"})).toBeDisabled();
+  expect(screen.getByRole("button",{name:"Back to limits"})).toBeDisabled();
+  expect(screen.getByText("Keep the old client supported.")).toBeInTheDocument();
+ });
+ it("keeps unpublished drafts separate from the frozen authorization and validates UTF-8 bounds",async()=>{
+  render(GoalAuthorization,{goalID:"g",onstarted:vi.fn()}); await open(); await check();
+  const publish=screen.getByRole("checkbox",{name:/Allow verified goal branches/});
+  await fireEvent.click(publish);
+  await fireEvent.input(screen.getByLabelText("Compatibility requirements"),{target:{value:"界".repeat(167)}});
+  await fireEvent.input(screen.getByLabelText("Human merge order"),{target:{value:"api"}});
+  await fireEvent.click(screen.getByRole("button",{name:"Review authorization"}));
+  expect(await screen.findByRole("alert")).toHaveTextContent(/at most 500 bytes/);
+  await fireEvent.click(publish);
+  await fireEvent.click(screen.getByRole("button",{name:"Review authorization"}));
+  expect(screen.queryByRole("region",{name:"Reviewed rollout contract"})).not.toBeInTheDocument();
+  await fireEvent.click(screen.getByRole("button",{name:"Back to limits"}));
+  await fireEvent.click(screen.getByRole("checkbox",{name:/Allow verified goal branches/}));
+  expect(screen.getByLabelText("Compatibility requirements")).toHaveValue("界".repeat(167));
+ });
+ it("reviews separate human acceptance only with PR delivery and sends the frozen choice",async()=>{
+  render(GoalAuthorization,{goalID:"g",onstarted:vi.fn()}); await open(); await check();
+  await fireEvent.click(screen.getByRole("checkbox",{name:/Require a separate human acceptance/}));
+  await fireEvent.click(screen.getByRole("button",{name:"Review authorization"}));
+  await screen.findByText(/Human acceptance requires final PR delivery/);
+  expect(screen.queryByRole("button",{name:"Authorize and start"})).not.toBeInTheDocument();
+  await fireEvent.click(screen.getByRole("checkbox",{name:/Allow verified goal branches/}));
+  await fireEvent.click(screen.getByRole("button",{name:"Review authorization"}));
+  expect(screen.getByText(/Human acceptance: a separate decision is required/)).toBeInTheDocument();
+  expect(api.GoalStart).not.toHaveBeenCalled();
+  await fireEvent.click(screen.getByRole("checkbox",{name:/I authorize/}));
+  await fireEvent.click(screen.getByRole("button",{name:"Authorize and start"}));
+  await waitFor(()=>expect(api.GoalStart).toHaveBeenCalledTimes(1));
+  expect(api.GoalStart.mock.calls[0][0]).toMatchObject({id:"g",revision:8,policy:{publish_pr:true,require_human_acceptance:true}});
+ });
  it("requires a check and a separate review before sending exact scope and revision",async()=>{
   const started=vi.fn();render(GoalAuthorization,{goalID:"g",onstarted:started});
   expect(api.GoalStartOptions).not.toHaveBeenCalled();await open();

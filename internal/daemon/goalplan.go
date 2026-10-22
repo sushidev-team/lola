@@ -38,6 +38,17 @@ func (d *Daemon) handleGoalPlan(ctx context.Context, req protocol.Request) proto
 		}
 		return dataResponse(r)
 	}
+	if req.Cmd == "goalEditPlan" {
+		a, err := goalplan.DecodeEdit(req.Args)
+		if err != nil {
+			return protocol.Response{Error: err.Error()}
+		}
+		r, err := d.editGoalPlan(ctx, a)
+		if err != nil {
+			return protocol.Response{Error: err.Error()}
+		}
+		return dataResponse(r)
+	}
 	if req.Cmd == "goalProposals" {
 		var a struct {
 			Project string `json:"project"`
@@ -243,4 +254,41 @@ func (d *Daemon) acceptGoalPlan(ctx context.Context, a goalPlanArgs) (goal.Goal,
 	}
 	_, err = d.goalPlans.Accept(r.ID, r.Revision)
 	return g, err
+}
+
+// Shares acceptance's goal lock so a crash after local goal creation cannot
+// leave a still-proposed record editable while that goal already owns its plan.
+func (d *Daemon) editGoalPlan(ctx context.Context, a goalplan.EditRequest) (goalplan.Record, error) {
+	d.goalMu.Lock()
+	defer d.goalMu.Unlock()
+	r, ok := d.goalPlans.Get(a.ID)
+	if !ok || r.Input.Request.Project != a.Project {
+		return goalplan.Record{}, errors.New("proposal unavailable in this project")
+	}
+	if r.HasEdit(a.EditID) {
+		return d.goalPlans.Edit(a)
+	}
+	if _, exists := d.goals.Get(r.GoalID); exists {
+		return goalplan.Record{}, errors.New("proposal already created a goal; its graph cannot be edited here")
+	}
+	if err := a.Validate(); err != nil {
+		return goalplan.Record{}, err
+	}
+	if r.State != "proposed" || r.Revision != a.Revision || r.Input.Repair != nil {
+		return goalplan.Record{}, errors.New("review an unaccepted initial proposal's current revision before editing")
+	}
+	body, _ := json.Marshal(a.Output)
+	if _, err := goalplan.Parse(body, r.Input); err != nil {
+		return goalplan.Record{}, err
+	}
+	cctx, cancel := d.planCtx(ctx, planApplyTimeout)
+	defer cancel()
+	api, err := d.goalAPI()
+	if err != nil {
+		return goalplan.Record{}, err
+	}
+	if _, err = d.goalPlacement(cctx, api, a.Project, a.Output.Draft(r.Input.Request).Tasks); err != nil {
+		return goalplan.Record{}, err
+	}
+	return d.goalPlans.Edit(a)
 }

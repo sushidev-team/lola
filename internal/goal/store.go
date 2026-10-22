@@ -48,11 +48,17 @@ func Open(path string) (*Store, error) {
 }
 
 func validateSnapshot(data snapshot) error {
-	if data.Version != 1 || data.Goals == nil {
+	if (data.Version != 1 && data.Version != 2 && data.Version != 3) || data.Goals == nil {
 		return fmt.Errorf("goal store: unsupported or incomplete snapshot")
 	}
 	ids := map[string]bool{}
 	for id, g := range data.Goals {
+		if data.Version < 3 && needsRolloutFormat(g) {
+			return errors.New("goal store: reviewed rollout requires version 3")
+		}
+		if data.Version == 1 && needsAcceptanceFormat(g) {
+			return errors.New("goal store: human acceptance requires version 2")
+		}
 		if id != g.ID || g.ID == "" || g.Parent.ID == "" || g.Project == "" || len(g.Tasks) == 0 {
 			return fmt.Errorf("goal store: invalid goal %q", id)
 		}
@@ -173,6 +179,14 @@ func (s *Store) Save(g Goal) (Goal, error) {
 		return Goal{}, fmt.Errorf("accepted planning provenance cannot be replaced or removed")
 	}
 	if exists && old.Execution != nil {
+		if old.Execution.HumanAcceptance != nil && !reflect.DeepEqual(old.Execution.HumanAcceptance, g.Execution.HumanAcceptance) {
+			return Goal{}, errors.New("human acceptance receipt must be retained unchanged")
+		}
+		if a := g.Execution.HumanAcceptance; old.Execution.HumanAcceptance == nil && a != nil {
+			if a.Revision != old.Revision || old.State != "ready" || !old.Delivered() || a.Operation != old.Execution.Final.ID || a.Receipt != old.Execution.Final.Receipt || !reflect.DeepEqual(a.Manifest, old.Execution.Manifest) {
+				return Goal{}, errors.New("human acceptance must refer to the existing reviewed delivery")
+			}
+		}
 		if err := preserveUsage(old.Execution, g.Execution); err != nil {
 			return Goal{}, err
 		}
@@ -188,10 +202,19 @@ func (s *Store) Save(g Goal) (Goal, error) {
 			}
 		}
 	}
+	if (!exists || old.Execution == nil) && g.Execution != nil && g.Execution.HumanAcceptance != nil {
+		return Goal{}, errors.New("human acceptance requires an existing delivered goal")
+	}
 	g = copyGoal(g)
 	g.Revision++
 	g.UpdatedAt = time.Now().UTC()
-	next := snapshot{Version: 1, Goals: make(map[string]Goal, len(s.data.Goals)+1)}
+	next := snapshot{Version: s.data.Version, Goals: make(map[string]Goal, len(s.data.Goals)+1)}
+	if needsAcceptanceFormat(g) && next.Version < 2 {
+		next.Version = 2
+	}
+	if needsRolloutFormat(g) {
+		next.Version = 3
+	}
 	for id, value := range s.data.Goals {
 		next.Goals[id] = value
 	}
@@ -208,6 +231,14 @@ func (s *Store) Save(g Goal) (Goal, error) {
 	}
 	s.data = next
 	return copyGoal(g), nil
+}
+
+func needsAcceptanceFormat(g Goal) bool {
+	return g.Execution != nil && (g.Execution.Policy.RequireHumanAcceptance || g.Execution.HumanAcceptance != nil)
+}
+
+func needsRolloutFormat(g Goal) bool {
+	return g.Execution != nil && g.Execution.Policy.Rollout != nil
 }
 
 func atomicWrite(path string, body []byte) error {

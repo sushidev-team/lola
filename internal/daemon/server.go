@@ -70,13 +70,15 @@ func (d *Daemon) handleConn(ctx context.Context, conn net.Conn) {
 
 func (d *Daemon) handle(ctx context.Context, req protocol.Request) protocol.Response {
 	switch req.Cmd {
-	case "goalPropose", "goalProposal", "goalProposals", "goalAcceptPlan":
+	case "comparisonTemplate", "comparisonPrepare", "comparisonReport":
+		return d.handleComparison(req)
+	case "goalPropose", "goalProposal", "goalProposals", "goalAcceptPlan", "goalEditPlan":
 		return d.handleGoalPlan(ctx, req)
 	case "reviewProfiles", "profileResults", "profileReview", "profileFindings", "profileDecideFinding", "profileCalibration":
 		return d.handleProfile(ctx, req)
-	case "knowledgeVersion", "knowledgeList", "knowledgeLookup", "knowledgeExport", "knowledgeCapture", "knowledgeCorrect", "knowledgeAccept", "knowledgeDispute", "knowledgeMaintain", "knowledgeImprovementHistory", "knowledgeImprovements", "knowledgeImprovement", "knowledgeDecideImprovement", "knowledgeExportImprovement":
+	case "knowledgeVersion", "knowledgeList", "knowledgeLookup", "knowledgeExport", "knowledgeCapture", "knowledgeCorrect", "knowledgeAccept", "knowledgeDispute", "knowledgeMaintain", "knowledgeImprovementCatalog", "knowledgeImprovementSources", "knowledgeImprovementDecisions", "knowledgeImprovementHistory", "knowledgeImprovements", "knowledgeImprovement", "knowledgeDecideImprovement", "knowledgeExportImprovement":
 		return d.handleKnowledge(ctx, req)
-	case "goalDismissProgress", "goalSyncBrief", "goalAcceptBrief", "goalOverview", "goals", "goalCreate", "goalShow", "goalUsage", "goalPublish", "goalPublishReviewed", "goalStartOptions", "goalStart", "goalControl", "goalDeliveryEvidence":
+	case "goalRecovery", "goalDismissProgress", "goalSyncBrief", "goalAcceptBrief", "goalOverview", "goals", "goalCreate", "goalShow", "goalUsage", "goalPublish", "goalPublishReviewed", "goalStartOptions", "goalStart", protocol.GoalStartV2, "goalControl", "goalDeliveryEvidence":
 		return d.handleGoals(ctx, req)
 	case "stop":
 		d.logf("", "stop requested via socket")

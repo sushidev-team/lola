@@ -80,6 +80,9 @@ func (d *Daemon) runGoal(ctx context.Context, id string) error {
 		return usageErr
 	}
 	if g.State == "ready" {
+		if g.Delivered() {
+			return nil // awaiting an optional human decision; never republish merged work
+		}
 		if g.Execution.Policy.PublishPR && (g.Execution.Delivery == nil || time.Since(g.Execution.Delivery.CheckedAt) >= 30*time.Second) {
 			return d.queueGoalPublication(ctx, g)
 		}
@@ -390,6 +393,9 @@ func (d *Daemon) reconcileGoalAttempts(ctx context.Context, g goal.Goal) error {
 			a.Error = "worker stopped before submitting verified output"
 		}
 		a.FinishedAt = time.Now().UTC()
+		run := current.Execution.Runs[id]
+		run.FinishedAt = a.FinishedAt
+		current.Execution.Runs[id] = run
 		current.Execution.Attempts[id] = a
 		if !hasSubmission {
 			progress := current.Execution.Tasks[a.TaskID]

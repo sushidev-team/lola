@@ -68,6 +68,10 @@ func TestGoalUsageStopsActiveWorkAndPreservesFiles(t *testing.T) {
 	if current.Execution.Attempts[attempt].State != "stopped" || !strings.Contains(current.Execution.Reason, "usage budget") {
 		t.Fatal("worker did not stop with durable budget reason")
 	}
+	finished := current.Execution.Runs[attempt].FinishedAt
+	if finished.IsZero() || !finished.Equal(current.Execution.Attempts[attempt].FinishedAt) {
+		t.Fatal("confirmed worker stop left its usage run open")
+	}
 	if _, err := d.controlGoal(ctx, goal.ControlRequest{ID: g.ID, Revision: current.Revision, Action: "resume"}); err == nil {
 		t.Fatal("resume bypassed exhausted budget")
 	}

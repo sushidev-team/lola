@@ -2,7 +2,7 @@
 
 Implementation is in progress. The commands below are available on the feature
 branch. Bounded execution and inspection controls are implemented; the full
-plan, remaining authoring forms and evaluation are still in progress. Publishing
+plan and live evaluation are still in progress. Publishing
 a goal creates its Linear representation without starting workers.
 
 ## Goals in existing Linear projects
@@ -67,9 +67,113 @@ or uncertain response cannot silently resubmit against newer work; reload curren
 settings first. Token/dollar telemetry may be delayed or missing, so those limits
 are not exact billing caps. Merge decisions remain human-only.
 
-Direct task-graph authoring, existing-issue adoption and several recovery actions
-remain available through the CLI below. The TUI supports the same planning,
-publication and explicit execution authorization steps described next.
+Task-graph authoring and recovery are available in desktop, TUI and CLI.
+Existing-issue adoption remains available through the CLI below. The TUI supports
+the same planning, publication and explicit execution authorization steps described next.
+
+### Revise a proposed task graph
+
+Before accepting a coordinator proposal as a local goal, use
+`lola goal edit-plan edit.json` to revise its task graph without paying for another
+model call. First inspect `lola goal proposal PROPOSAL_ID`. The edit file contains
+that proposal's `id`, `revision`, `project` (from `input.request.project`), a fresh
+UUID `edit_id`, a reason of at least eight characters, and the full revised
+`output` object. Keep the edit file unchanged when recovering an uncertain reply.
+
+```json
+{
+  "id": "PROPOSAL_UUID",
+  "project": "nori",
+  "revision": 2,
+  "edit_id": "NEW_EDIT_UUID",
+  "reason": "Separate the API change from its acceptance regression",
+  "output": {
+    "tasks": [
+      {
+        "title": "Implement invitations",
+        "description": "Reuse the existing invitation flow",
+        "acceptance": ["Recipient acceptance integration test passes"],
+        "apps": ["nori-api"],
+        "label_ids": ["EXISTING_LABEL_UUID"],
+        "paths": {"nori-api": ["src/invitations", "tests/invitations"]},
+        "covers": [1],
+        "blocked_by": []
+      }
+    ],
+    "unknowns": []
+  }
+}
+```
+
+Replace the example identities, paths and criteria with those in the reviewed
+proposal. Add, remove, split or reorder tasks by replacing the full task array.
+`blocked_by` uses earlier 1-based task numbers, and `covers` indexes the original
+user acceptance criteria; every criterion must still be covered. Each task
+requires explicit repository/path ownership and a writable deliverable. Existing
+label routing must select exactly its declared repositories. The daemon checks
+current Linear project/label availability with reads only. Invalid graphs and
+stale revisions are rejected without changing the saved proposal.
+
+The returned record has a new revision. Review it again before `accept-plan`.
+The original brief, snapshots, model identity, original `model_output` and numeric
+usage remain retained. `edits` records each operator request, reason, resulting
+revision and timestamp. Replaying an identical `edit_id` returns the current
+record, including subsequent edits or acceptance, without rewinding history;
+reusing it for changed content is rejected. Up to 50 edits are retained per
+proposal. Accepted goals and execution repair proposals cannot be changed through
+this command, including after an interrupted acceptance acknowledgment. This
+command does not create Linear issues, start workers or change execution policy.
+In the desktop, open **Plan a goal**, select a saved proposal, and choose
+**Edit task proposal**. Expand each task to change its title, description,
+acceptance criteria, goal coverage, dependencies, repositories, writable paths
+and Linear labels. **Add task**, **Remove task**, **Move earlier** and **Move
+later** update the graph. Moves preserve dependency references; removing a task
+is blocked while another task depends on it. Remove or replace those dependency
+references explicitly first. Every goal criterion must remain covered, and each
+task needs a writable deliverable. Repository selections and labels must agree
+with the stack routing shown in the form.
+
+Add a reason and choose **Review revision** to inspect the complete replacement
+and compare it with the saved proposal. Acknowledge the review before **Save
+proposal revision**. The edit ID and exact source revision are retained before
+the save. Navigation within the planner is locked while editing; cancellation
+asks before discarding unsaved work. After an uncertain save, **Refresh saved
+proposal** reads the current record without resending the change. If no edit was
+saved, start again from that current revision. Saving clears any previous goal
+acceptance acknowledgment. Review and accept the new revision separately.
+
+**Sources and planning record** includes the revision history and original model
+proposal. In the TUI, inspect a saved proposal and press **e** to edit its tasks. Use
+**Up/Down** to select a task, **Enter** to edit its fields, **n** to add a task,
+**x** to request removal, and **u/d** to move it earlier/later. Removal requires
+confirmation and refuses referenced prerequisites. Moves remap dependency
+numbers and refuse an order that puts a prerequisite after its dependent.
+
+Task forms use **Up/Down/Tab** between fields, **Space/Enter** for coverage,
+dependency, repository and label toggles, and **Enter** to edit multiline fields.
+The focused field's help identifies its goal criterion, earlier task or routing
+label. Empty paths on an included repository mean read-only context. Choose
+**Keep task changes** to return to the draft graph. **m** opens questions and the
+revision reason; choose **Keep notes** after editing. These actions change only
+the in-memory draft. **Escape** and **Ctrl+C** protect unsaved edits with a discard
+confirmation; Escape inside a line editor first returns to the form.
+
+Press **r** to validate and review the complete revision. **Space** acknowledges
+that review, then **s** saves the exact revision and edit ID shown. **v** shows
+the exact edit request. A pending save blocks repeat submission; an uncertain
+result keeps the reviewed content and requires **f** to read the saved proposal.
+After saving or recovery, accepting the current proposal requires a fresh review
+and acknowledgment. The planning record includes revision history; **v** on the
+saved proposal exposes the original model output and complete provenance.
+
+Proposal storage remains format 1 until the first operator edit, which atomically
+writes format 2 with the original output and edit history. This version reads
+both formats; opening an unedited format-1 store does not rewrite it. Older
+binaries reject format 2 instead of silently discarding its audit history. For a
+binary rollback, keep the format-2 `state/goal-plans.json` intact and restore a
+compatible binary to resume proposal features. Do not lower the version number or
+restore an older snapshot over newer decisions. Existing goal records and their
+execution history use their existing storage independently.
 
 ### Plan, publish and authorize in the TUI
 
@@ -435,6 +539,49 @@ and delivery.
 
 ## Workspace learning
 
+In the desktop app, open a project and expand **Workspace learning**. Search or
+filter lessons, select one to inspect its scope, source, evidence and full
+provenance, or choose **Record a lesson**. Discoveries remain candidates by
+default. The explicit-correction checkbox is a separate operator decision;
+mandatory policy proposals remain proposals even when entered as corrections.
+Optional path prefixes, goal scope, tags and prevention proposals travel with the
+lesson.
+
+**Review acceptance** shows the exact lesson version and asks for verification
+evidence. You can watch committed `member:path` references, retain or deliberately
+change an existing expiry, and explicitly select conflicting lessons to replace.
+**Dispute lesson** records evidence and excludes that lesson from future guidance.
+Each mutation has a separate review and acknowledgment step. A stale version or
+scope is rejected. A pending request cannot be submitted twice; an uncertain
+reply requires **Close and refresh lessons** before another decision.
+
+New desktop captures allocate an identity before submission. The daemon retains
+it with the lesson: replaying identical content returns its current curated
+version, while reusing the identity for changed content, scope or correction
+authority is rejected. Older CLI capture requests without an identity remain
+supported. Navigating to another project discards replies from the prior view.
+
+**Preview LEARNINGS.md export** rechecks accepted project lessons and returns
+reviewable file contents. It writes no repository files. Copy the reviewed
+content into a branch and use normal code review.
+
+In the TUI, open project details and press **K** for **Workspace learning**.
+Arrow keys select a lesson; Enter inspects it, **v** shows full provenance, and
+**/** searches topic, summary, status, tags and paths. **n** records a lesson.
+From an inspected lesson, **a** opens acceptance and **d** opens a dispute.
+Tab or arrow keys select fields; Enter edits multiline text, toggles a choice or
+runs the selected action. Bracketed paste works in text fields. Escape finishes
+multiline editing and protects unsaved decisions with a discard prompt.
+
+Choose **Review decision**, inspect the exact scope/version and evidence, press
+Space to acknowledge, then **a** to confirm. Existing expiry is retained in
+RFC3339 form, with a timezone; clear it explicitly to remove it. Conflicting
+lessons require explicit replacement choices. Pending operations suppress repeat
+keys; uncertain replies offer Escape to close and refresh, without resubmitting.
+**e** previews the export in the terminal, with no repository writes. The desktop
+and TUI use the same daemon commands and curation guards. Desktop improvement
+controls and their TUI equivalents are described below.
+
 Every newly launched agent receives instructions to capture reusable discoveries
 in `.lola/learnings.json`. At turn end Lola reads at most 64 KiB and 20 entries,
 records the session source, and stores them as candidates. This works through
@@ -789,7 +936,8 @@ An authorization JSON file contains the goal's `id`, current `revision` from
 `goal show`, and an explicit `policy`. Its policy has `members` (each member's
 ID, configured project, absolute source checkout, GitHub repository, target
 branch and optional allowed path prefixes), `checks`, required `profiles`,
-`publish_pr`, optional `replan`, and finite `limits`:
+`publish_pr`, optional `replan` and `require_human_acceptance`, a reviewed `rollout`
+when publishing a stack, and finite `limits`:
 
 ```json
 {
@@ -829,6 +977,82 @@ switching, host dev commands, checkpoints and mutable-worktree diffs cannot
 bypass the goal controller. Final `goal/...` branches are excluded from automatic
 merging, including when opened manually as ordinary sessions.
 
+### Reviewed compatibility and human merge order
+
+New execution authorizations with multiple repository members and
+`publish_pr: true` require a `policy.rollout` object. Review and include it in
+`authorization.json` before `lola goal start`; the CLI submits it with the same
+goal revision, checks and limits. For example, for member IDs `api` and `web`:
+
+```json
+{
+  "compatibility": [
+    "The new API must continue accepting requests from the previous web client.",
+    "Keep the new web feature disabled until the API deployment is verified."
+  ],
+  "merge_order": ["api", "web"]
+}
+```
+
+Requirements must describe the actual goal; Lola does not infer compatibility
+from repository order. Provide 1–20 nonblank, single-line requirements, each at
+most 500 bytes. Include every authorized member ID exactly once in the order,
+including members that might remain unchanged. Unchanged members need no PR and
+are skipped during human delivery. A single-repository published goal may also
+carry a rollout contract. A goal with publication disabled does not need one.
+
+The requirements and order are part of the immutable policy digest. Workers,
+repair planning and specialist reviewers receive the accepted contract. Final
+verification and publication retain that identity; changing or removing the
+contract cannot reuse its evidence. Final PR descriptions show every requirement
+and list repositories in the accepted order, with verified commits and targets.
+Large descriptions abbreviate task/check summaries to preserve the complete
+rollout and all repository links. Neither the order nor the prose schedules a
+merge or authorizes deployment. The human must verify intermediate compatibility
+and rollout conditions before merging. Checks and specialist findings establish
+only their declared coverage, not automatic proof of arbitrary prose.
+
+Desktop and TUI execution authorization include **Compatibility requirements**
+(**Compatibility** in the TUI) and **Human merge order**. Enter one requirement
+and one repository ID per line; every member must appear exactly once in the
+order. Publication for a stack requires both fields. For one repository they
+are optional, but a supplied contract must be complete. Turning publication
+off excludes the contract from authorization while retaining the form draft.
+
+Review freezes the requirements, order and goal revision together. An uncertain
+start response retains that review and prevents repeated submission until the
+goal is refreshed. Goal details retain the accepted contract and distinguish
+older goals that have no recorded contract. A repository listing is never an
+inferred merge recommendation. The TUI supports multiline paste into these
+fields; review, busy and uncertain states do not accept draft changes.
+
+Saving the first rollout-bearing execution upgrades `state/goals.json` to
+version 3 atomically. Reading old version 1 or 2 stores does not rewrite them;
+unrelated goals, usage, receipts and old policy digests are retained. A failed
+save leaves both disk and in-memory state unchanged. Subsequent writes retain
+version 3. Older binaries reject this format rather than silently dropping the
+contract. Roll back by restoring a compatible binary while preserving the store;
+do not remove rollout fields or lower the version number. Restoring an earlier
+snapshot after external effects could lose ownership or duplicate work.
+
+Current CLI, desktop and TUI clients use the `goalStartV2` socket command when
+authorizing execution. An older daemon rejects it instead of silently ignoring
+new rollout or human-acceptance fields. Update and restart the daemon if it
+reports that command as unknown; clients never retry through the legacy command.
+The current daemon still accepts older, unextended policies through `goalStart`,
+subject to the new stack-publication requirement.
+
+Previously authorized stacks without this field remain readable and executable
+under their original policy. Their newly generated descriptions explicitly state that
+no reviewed rollout contract was recorded and that listing order is not a merge
+recommendation. An active policy cannot be silently amended; use a new reviewed
+authorization for work requiring a new rollout contract.
+
+Already reserved publications keep their original title and description, even
+after a binary upgrade changes the template. Recovery still requires the exact
+same policy, manifest, targets and operation identity; it never rewrites an
+existing PR or verification comment just to apply new wording.
+
 `retry-verification` is available on paused or blocked goals, within the accepted
 review-round limit. It stops interrupted validation containers and reserves a
 new operation identity without deleting failed evidence. An integration that
@@ -836,10 +1060,68 @@ already recorded a ref-update intent must recover using that original operation;
 it cannot be abandoned by retry. Pause cancels verification and prevents ref
 updates. Stop-workers is separate and preserves submitted verification work.
 
-Reported goal token/spend aggregation and UI controls
-still need wiring before the autonomous pilot. Token/spend fields
-currently express accepted limits; complete attribution and stopping on observed
-usage are not yet available. Run counts and runtime/attempt deadlines are enforced.
+Observed goal token/spend aggregation is wired into the usage loop and displayed
+in the goal overview. Reaching an observed limit persists a hold and worker-stop
+request and cancels active verification. Reports can be delayed or incomplete;
+this is not an exact billing cap. Run counts and runtime/attempt deadlines also
+bound work. See [Goal usage and limits](#goal-usage-and-limits) for attribution,
+recovery and unavailable telemetry.
+
+### Separate human acceptance after delivery
+
+For a new goal, set `"require_human_acceptance": true` alongside
+`"publish_pr": true` in the execution authorization's `policy`. The option is
+part of the immutable authorization. Existing goals and goals that omit it keep
+their prior behavior: observed complete final delivery marks the goal accepted.
+
+With the option enabled, all final PRs must first be observed merged at the
+verified heads and targets. Child tasks can then reflect delivered work, while
+the goal remains `ready` and its Linear progress summary identifies the pending
+human decision. Lola does not republish merged work while waiting.
+
+Inspect the delivered app, goal contract and retained evidence, then record the
+decision against the revision you reviewed:
+
+```sh
+lola goal show GOAL_ID
+lola goal accept-delivery GOAL_ID --revision CURRENT_REVISION \
+  --reason 'Verified invitation acceptance with a fresh recipient in the delivered app'
+```
+
+The daemon rechecks Linear bindings, execution policy, disputes and independent
+final verification before accepting. An open or partial delivery, stale revision,
+paused goal or invalidated proof is refused. The reason is required and retained
+with the reviewed revision, final operation/receipt, policy digest, commit
+manifest and decision time. It does not authorize merging or deployment.
+
+An exact retry after a lost reply returns the original decision; changing its
+reason or reviewed revision cannot rewrite that decision. `goal show` exposes
+the receipt under `execution.human_acceptance`.
+
+In the desktop execution authorization form, enable **Require a separate human
+acceptance decision** and review that choice alongside PR publication. In the
+TUI authorization form, enable **Require acceptance**; the help and final review
+identify it as a separate human decision after final delivery. Both clients
+reject this combination when PR publication is disabled.
+
+Once delivery is observed, the goal view shows **Awaiting human acceptance**.
+Choose **Accept delivered goal** in the desktop, or **h** in the TUI, then review
+the criteria and delivered commits and enter acceptance evidence. Empty evidence
+cannot be submitted. The TUI review supports arrow/Page keys and Home/End to
+inspect long contracts; typing or pasting follows the evidence text. Confirming
+submits the reviewed goal revision. An uncertain response freezes the action:
+close it to refresh the goal before another decision. The saved acceptance shows
+its original reviewed revision, time and evidence; accepted goals offer no
+further execution controls.
+
+The first saved authorization using this option atomically upgrades
+`state/goals.json` from version 1 to version 2. Reading or writing goals without
+the option keeps version 1 until that upgrade. Existing goals, usage, reservations
+and journals are retained; failed writes do not publish the migration or decision.
+After upgrading, all later writes retain version 2. Older binaries supporting
+only version 1 refuse this store, so they cannot silently drop the acceptance
+requirement. Roll back by restoring a compatible binary while keeping the current
+store; do not lower its version or overwrite newer records with an old snapshot.
 
 ### Bounded autonomous replanning
 
@@ -957,8 +1239,10 @@ Generated descriptions contain the goal and tasks, declared verification
 results, risk notes, manual checks and the final repository combination. Raw
 check commands and logs stay local because they may contain private configuration.
 Descriptions are reserved with the publication intent and never overwrite human
-PR edits. For a stack, reviewers must confirm the proposed repository order and
-compatibility before merging.
+PR edits. For new published stacks, descriptions retain the reviewed compatibility
+requirements and human merge order from the authorization. Legacy authorizations
+without a rollout contract explicitly leave that decision unrecorded; configuration
+order is not presented as a merge recommendation.
 
 If the accepted checks capture screenshots, share them as an artifact and attach
 its HTTPS URL before publication:
@@ -1075,7 +1359,8 @@ A changed revision or uncertain result is shown as an error and is never retried
 automatically. Close the action and refresh before reviewing it again.
 
 In the TUI, open project details and press **g** for Goals. Select a goal with
-arrow keys and press Enter to inspect it. Arrow keys then scroll, Tab selects a
+arrow keys and press Enter to inspect it. Arrow keys and Page Up/Down scroll;
+Home/End jump to the beginning/end. Tab selects a
 task, **s** opens its latest attempt's session, and **o** opens the goal in Linear.
 The available control shortcuts are shown below the view: **p** pauses, **r**
 resumes, **x** stops workers and **c** cancels. **u** reviews publication for an
@@ -1086,16 +1371,89 @@ Escape closes it. **f** refreshes. Long criteria wrap within the terminal width.
 Both clients read the same cached overview and submit the same revision-checked
 commands. Both support coordinator proposals, local plan acceptance and Linear
 publication and explicit execution authorization; the CLI supports these too.
-Direct task-graph editing, verification/replan retries, shared delivery evidence
-and knowledge curation remain CLI-first; their forms are still in progress.
+Task-graph editing is available in both clients with a reviewed revision save.
+Verification/replan retries and shared delivery evidence are available in both
+clients and the CLI. Knowledge capture, provenance, curation and export preview are
+available in both desktop and TUI.
+
+The recovery API now provides a separate on-demand local snapshot via
+`goalRecovery`: current brief, pending Linear source, latest accepted brief
+comparison, latest progress update/error, shared evidence URL, and eligible
+recovery choices. It performs no remote read or mutation and omits local
+verification receipt paths and execution policy. Its choices are local hints;
+actual actions still recheck jobs, budgets, Linear and publication journals.
+In the desktop Goals panel, select **Recovery and Linear** to inspect this snapshot.
+Ordinary goal controls and selection are held while it is open. Choose an available
+action, inspect its consequences and provide any required reason, then review the
+frozen revision before confirming. Brief reconciliation shows the exact Linear
+source, retained task acceptance and current/proposed contracts. Dismissing a
+progress update retains the update and reason without claiming it was delivered.
+The shared HTTPS evidence URL is a reference; attaching it does not upload files
+or establish verification. Verification and replanning retries may use paid calls
+within the accepted budgets.
+
+An unconfirmed response keeps the reviewed request visible and disables repeat
+submission. **Reload local snapshot** reads the saved result before another
+decision; a failed reload keeps the lock. Closing an editable draft offers an
+explicit discard choice. The snapshot also shows the latest accepted brief
+comparison, latest progress resolution and shared evidence reference.
+
+In TUI goal details, **e** opens **Recovery and Linear**. Arrow keys and Page
+Up/Down scroll the local snapshot; Tab or Left/Right selects an available action.
+Enter opens its fields. Use **Ctrl+V** from the form to inspect source context,
+then Escape to return. List fields support multiline paste and Enter for a new
+line; Escape finishes field editing. Select **Review recovery decision**, inspect
+the frozen request, then press **a** to confirm. Escape from review returns to
+editing. After an unconfirmed reply, **f** reloads the local snapshot without
+repeating the action. A failed reload keeps confirmation locked. Unsaved drafts
+require explicit discard on exit. All six operations remain available in the CLI.
+
+The improvement inspection API supports a paginated catalog that includes
+withdrawn proposals with retained decisions. Source references are paged against
+an exact current or decision-retained revision, so the preview's 20-source cap
+does not hide evidence from inspection. Decision summaries omit the large source
+receipts; those references remain available through the source pages and the
+original CLI history command. Exact lesson versions are read separately within
+the same project and goal scope.
+
+In desktop **Workspace learning → Improvement proposals**, leave Goal scope
+blank for project-wide proposals or enter an exact goal ID and load that scope.
+Choose a proposal to inspect its current brief and retained decision history.
+**Inspect all sources** pages through every exact lesson reference; open one to
+read its recorded version, evidence and full provenance. Recorded status is
+historical and does not establish current eligibility. A withdrawn proposal
+retains history and its saved source references but cannot be triaged or exported.
+
+Choose **Track**, **Dismiss** or **Reopen**, enter decision evidence, review the
+frozen revision and confirm separately. After an unconfirmed response, use
+**Reload saved proposal**; confirmation remains locked until readback succeeds.
+**Preview improvement export** exposes copyable content without writing files or
+installing rules. Implementation still follows an ordinary task branch and code
+review.
+
+In the TUI, open **Workspace learning** from project details with **K**, then
+press **i** for improvements. **g** changes the exact goal scope; leave it blank
+for project-wide proposals. Arrow keys select a proposal and Enter inspects it.
+**n** loads the next catalog or source page. In proposal details, **s** opens
+sources, **h** opens decision history and **e** previews the export. Enter on a
+history decision inspects its retained source revision; Enter on a source opens
+that recorded lesson version. **v** toggles full provenance. Page Up/Down and
+Home/End scroll long evidence without changing selection.
+
+Use **t** to track, **d** to dismiss or **r** to reopen. Enter edits multiline
+evidence; Escape ends editing. Select **Review decision**, inspect the frozen
+scope/revision/evidence, then **a** confirms. Escape from review returns to the
+retained draft; leaving a changed form requires an explicit discard choice.
+After an uncertain response, **f** reads the saved proposal and history without
+repeating the write. A failed reload leaves confirmation locked. Withdrawn
+proposals retain history inspection but expose no triage/export controls.
 
 ## Remaining work
 
-The full implementation plan remains active: broader task/policy revision
-reconciliation and steering, knowledge forms, remaining UI parity, and
-improvement metrics. Measured container CPU/memory and dollar costs remain
-unavailable; the usage report distinguishes them from resource ceilings. See
-[the plan](../PLAN-self-improving-workspace.md).
+The [completion audit](workspace-goals-audit.md#finish-checklist) lists the exact
+remaining validation work: a bounded live pilot and representative outcome comparisons. Measured container
+CPU/memory and dollar costs remain unavailable; the usage report distinguishes
+them from resource ceilings. See [the plan](../PLAN-self-improving-workspace.md).
 
 ## Finding decisions and calibration
 
@@ -1137,7 +1495,24 @@ profile/provider/rubric/repository. Unassessed claims stay `reported`. These are
 recorded assessment states, not measured reviewer accuracy or a claim of causal
 improvement. `worker_disputes` separately counts findings that received an
 attributed worker dispute, including those later resolved by a human.
-Comparable-budget outcome comparisons and a live pilot remain unfinished.
+The reproducible [comparison record workflow](comparison-records.md) is implemented.
+Representative live comparisons and a live pilot remain unfinished.
+
+### Comparable-run reporting
+
+Use `lola compare template` to create a plan, `lola compare prepare plan.json`
+to prepare baseline/treatment run drafts, and `lola compare report records.json`
+(or `--markdown`) to report filled observations. These commands are read-only
+with respect to Lola and external services; retain the printed JSON records and
+reports alongside their cited evidence. They do not start agents.
+
+The versioned records bind task, starting repositories, criteria and limits;
+retain model/prompt/rubric/lesson versions; and distinguish observed, reported,
+estimated and unavailable measurements. Reports retain all planned pairs,
+exclude unmatched or unverified-budget pairs from aggregates, show missing
+metrics explicitly and include failed-run cost in cost per accepted task.
+See [recording rules and commands](comparison-records.md). A passing reporting
+test is not evidence of better live outcomes.
 
 ### Review provenance and compatibility
 
@@ -1222,8 +1597,8 @@ independent verification must still pass.
 
 The project/stack **Execution** settings and goal inspection/steering views are
 available. Both desktop and TUI include goal planning and Linear publication.
-Execution authorization forms are available in both clients. Direct task-graph
-editing remains CLI-first.
+Execution authorization forms are available in both clients. Task-graph editing
+is available in desktop, TUI and CLI with a separate revision review before save.
 The checked-in plan lists the remaining work; this is a development checkpoint.
 
 Build the branch binary with `make build`. Run `./lola goal --help`, `./lola learn

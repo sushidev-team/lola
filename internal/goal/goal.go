@@ -181,34 +181,34 @@ func New(d Draft, teamID, linearProjectID string) (Goal, error) {
 
 func (g Goal) ParentDescription() string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s\n\n%s\n\n## Acceptance\n", Marker(g.ID, "parent"), g.Outcome)
+	fmt.Fprintf(&b, "%s\n\n%s\n\n## Acceptance\n\n", Marker(g.ID, "parent"), g.Outcome)
 	for _, s := range g.Acceptance {
-		fmt.Fprintf(&b, "- %s\n", s)
+		fmt.Fprintf(&b, "* %s\n", s)
 	}
 	if len(g.NonGoals) > 0 {
-		b.WriteString("\n## Non-goals\n")
+		b.WriteString("\n## Non-goals\n\n")
 		for _, s := range g.NonGoals {
-			fmt.Fprintf(&b, "- %s\n", s)
+			fmt.Fprintf(&b, "* %s\n", s)
 		}
 	}
 	for _, task := range g.Tasks {
 		if task.Adoption == nil {
 			continue
 		}
-		fmt.Fprintf(&b, "\n## Adopted task: %s\n\n[Existing issue](https://linear.app/issue/%s). Its existing parent and release milestone are preserved.\n\nAccepted criteria for this goal:\n", task.Title, task.Issue.ID)
+		fmt.Fprintf(&b, "\n## Adopted task: %s\n\n[Existing issue](https://linear.app/issue/%s). Its existing parent and release milestone are preserved.\n\nAccepted criteria for this goal:\n\n", task.Title, task.Issue.ID)
 		for _, criterion := range task.Acceptance {
-			fmt.Fprintf(&b, "- %s\n", criterion)
+			fmt.Fprintf(&b, "* %s\n", criterion)
 		}
 	}
 	b.WriteString("\nManaged by Lola. Publishing this plan does not authorize execution. Task completion is tracked by verified goal integration; final delivery requires human merge.\n")
-	return b.String()
+	return strings.TrimSuffix(b.String(), "\n")
 }
 
 func (g Goal) TaskDescription(t Task) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s\n\n%s\n\n## Acceptance\n", Marker(g.ID, t.ID), t.Description)
+	fmt.Fprintf(&b, "%s\n\n%s\n\n## Acceptance\n\n", Marker(g.ID, t.ID), t.Description)
 	for _, s := range t.Acceptance {
-		fmt.Fprintf(&b, "- %s\n", s)
+		fmt.Fprintf(&b, "* %s\n", s)
 	}
 	if t.DecomposedFrom != "" {
 		for _, parent := range g.Tasks {
@@ -219,7 +219,7 @@ func (g Goal) TaskDescription(t Task) string {
 		}
 	}
 	if len(t.Paths) > 0 {
-		b.WriteString("\n## Repository ownership\n")
+		b.WriteString("\n## Repository ownership\n\n")
 		var members []string
 		for member := range t.Paths {
 			members = append(members, member)
@@ -228,13 +228,17 @@ func (g Goal) TaskDescription(t Task) string {
 		for _, member := range members {
 			paths := t.Paths[member]
 			if len(paths) == 0 {
-				fmt.Fprintf(&b, "- %s: read-only context\n", member)
+				fmt.Fprintf(&b, "* %s: read-only context\n", member)
 			} else {
-				fmt.Fprintf(&b, "- %s: %s\n", member, strings.Join(paths, ", "))
+				quoted := make([]string, len(paths))
+				for i, path := range paths {
+					quoted[i] = markdownCode(path)
+				}
+				fmt.Fprintf(&b, "* %s: %s\n", member, strings.Join(quoted, ", "))
 			}
 		}
 	}
-	return b.String()
+	return strings.TrimSuffix(b.String(), "\n")
 }
 
 func validateTaskPaths(project string, t TaskDraft) error {
@@ -258,4 +262,16 @@ func validateTaskPaths(project string, t TaskDraft) error {
 		}
 	}
 	return nil
+}
+
+// Protect repository path punctuation from Linear Markdown normalization.
+func markdownCode(s string) string {
+	fence := "`"
+	for strings.Contains(s, fence) {
+		fence += "`"
+	}
+	if strings.HasPrefix(s, "`") || strings.HasSuffix(s, "`") || strings.HasPrefix(s, " ") || strings.HasSuffix(s, " ") {
+		return fence + " " + s + " " + fence
+	}
+	return fence + s + fence
 }

@@ -255,3 +255,43 @@ func TestGoalLaunchReceivesRecordedKnowledgeOnce(t *testing.T) {
 		t.Fatal("recovery replaced supplied knowledge", err)
 	}
 }
+
+func TestGoalClaudePreludeTrustsOnlyAuthorizedRootAndPreservesState(t *testing.T) {
+	cfg := t.TempDir()
+	root := filepath.Join(t.TempDir(), "goal's workspace")
+	run := func() {
+		t.Helper()
+		cmd := exec.Command("sh", "-c", goalClaudePrelude(root))
+		cmd.Env = append(os.Environ(), "CLAUDE_CONFIG_DIR="+cfg)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("prelude: %v %s", err, out)
+		}
+	}
+	run()
+	path := filepath.Join(cfg, ".claude.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var state struct {
+		Onboarded bool `json:"hasCompletedOnboarding"`
+		Projects  map[string]struct {
+			Trusted bool `json:"hasTrustDialogAccepted"`
+		} `json:"projects"`
+	}
+	if err := json.Unmarshal(data, &state); err != nil {
+		t.Fatal(err)
+	}
+	if !state.Onboarded || len(state.Projects) != 1 || !state.Projects[root].Trusted {
+		t.Fatalf("incorrect trust scope: %s", data)
+	}
+	preserved := []byte(`{"existing":"state"}`)
+	if err := os.WriteFile(path, preserved, 0600); err != nil {
+		t.Fatal(err)
+	}
+	run()
+	data, err = os.ReadFile(path)
+	if err != nil || string(data) != string(preserved) {
+		t.Fatalf("existing state overwritten: %s %v", data, err)
+	}
+}

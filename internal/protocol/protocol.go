@@ -9,6 +9,11 @@ import (
 	"time"
 )
 
+// GoalStartV2 explicitly requires support for reviewed rollout and separate
+// human acceptance policies. An older daemon must reject the command instead
+// of silently ignoring newly added JSON fields. Clients never fall back.
+const GoalStartV2 = "goalStartV2"
+
 // Request is one line of JSON sent by a client.
 //
 // Cmd "hookEvent" is the Claude Code → daemon callback path: `lola hook

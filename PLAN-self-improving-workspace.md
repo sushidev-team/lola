@@ -2,23 +2,150 @@
 
 Status: implementation resumed at the user’s request on
 `feat/self-improving-workspaces` (2026-10-21). The full plan is not complete.
-Approximate scope estimate: 75% implemented, not a measured completion metric.
+The earlier 75% estimate is superseded by the
+[requirement-by-requirement audit](docs/workspace-goals-audit.md). Core phases
+0–4 have automated evidence. Outcome recording/reporting is implemented; the
+live pilot and representative comparisons remain incomplete. Improvement controls are implemented and reviewed in desktop and TUI.
 
-Current verification: `make check` passed (build, vet and full Go suite) after
-TUI goal planning, reviewed publication and execution authorization, including
-the latest authorization layout corrections. The full TUI suite passed uncached.
-Normal and compact terminal captures use offline fixtures. Scoped independent UI
-review passed for specialist settings and goal planning/publication; the latter
-included fixes for draft protection and multiline keyboard hints. The TUI
-authorization review also passed without material fixes. Earlier verified
-learning promotion and goal fix-contract checks passed. Focused promotion,
-curation and contract race checks passed. Temporary Git fixtures cover unmerged
-code, observed goal delivery, proof withdrawal, code drift, scope and migration.
-Frontend `npm run check` passed after refreshing the knowledge bindings.
-Earlier checkpoints passed provenance/dispute/handoff race checks and the desktop
-frontend test/build suite, including revision-bound goal authoring and publication.
-Desktop/narrow fixture screenshots and scoped UI review are retained under
-`.impeccable/review/`. No live end-to-end pilot has been run.
+Stack rollout addition: new multi-repository publication authorizations require
+explicit compatibility requirements and a human merge order in `policy.rollout`.
+The policy digest binds both to workers, bounded repair planning, specialist
+reviews, verification and final linked PR descriptions. Goal store version 3
+preserves the contract and legacy data through atomic writes and restart; old
+authorizations keep their original digest and are labeled as lacking a reviewed
+rollout. Publication recovery preserves already reserved descriptions across
+template upgrades while rechecking all execution inputs. A versioned start
+command prevents older daemons silently ignoring the extended authorization.
+CLI, desktop and TUI accept the contract with the reviewed goal revision.
+Both clients retain drafts when publication is disabled, freeze the contract
+for authorization, hold uncertain requests without resubmitting, and show the
+accepted contract in goal details. Legacy goals explicitly lack a recorded
+merge recommendation. Multiline paste and long-detail navigation also work
+in the terminal authorization flow. Final `make check`
+passed after the versioned command change, alongside migration race checks,
+focused worker/reviewer/repair/CLI/publication tests and frontend type checking
+(zero errors or warnings). Tests cover preserved usage and legacy data, atomic
+upgrade failures, exact policy identity and restart without repeated PR writes.
+
+Desktop/TUI rollout verification is complete: the final frontend suite passes
+67 files / 804 tests, type checking reports zero errors or warnings, and the
+production build passes. Final `make check` passes with the refreshed desktop
+bundle. Tests cover invalid/duplicate/foreign member order, UTF-8 requirement
+bounds, retained unpublished drafts, frozen revisions, uncertain submissions,
+overview isolation and multiline terminal paste. The independent UI reviewer
+requested one error-visibility fix; its final verdict scored that fix resolved
+(`ship`). Twenty-eight offline captures retain desktop/narrow and wide/compact
+terminal evidence, including focused errors after bottom-of-form submission.
+
+Recovery controls are implemented in desktop, TUI and CLI. A dedicated on-demand `goalRecovery` snapshot
+now exposes the current brief, pending source, latest brief decision and progress
+update, shared evidence URL and locally eligible recovery actions. It omits private
+verification receipt paths and execution policy. Read/probe tests prove the source
+goal and paid-call reservations are unchanged; the daemon endpoint makes no Linear
+calls. Desktop bridge methods preserve reviewed revisions and source/update IDs
+without automatic retry. Focused domain/daemon/bridge tests, the recovery domain
+race check, frontend type checking and production build pass. Full `make check`
+also passes (`/tmp/lola-recovery-make-check.log`). The desktop forms now expose
+all six actions with separate review/confirmation, exact source/update identity,
+required reconciliation reasons, uncertain-response locks and local readback.
+They show accepted brief comparisons, progress resolutions and shared evidence.
+Ordinary controls and selection are held while recovery is open. The TUI now
+exposes the same six actions through **e** in goal details, with source inspection,
+multiline editing, frozen review, a distinct confirmation key and persistent
+recovery controls. Exact identities and paid retry semantics are unchanged.
+
+TUI recovery validation passed `TestGoalRecovery*`, offline capture tests and
+full `make check` (`/tmp/lola-tui-recovery-make-check.log`). Coverage includes
+all six exact command payloads, frozen nested data, stale/mismatched replies,
+unknown writes and failed local reloads, UTF-8 limits, multiline paste, draft
+discard and persistent recovery keys down to 40×12. The independent reviewer
+inspected twenty-two wide/compact captures and source, independently reran the
+focused tests, and returned `ship` with no material findings. Recovery parity is
+implemented; these fixture checks do not establish live interoperability.
+
+Desktop recovery validation passed the full frontend suite (69 files / 814 tests),
+zero-error/warning type checking, production build and final `make check`
+(`/tmp/lola-recovery-ui-make-check-final.log`). Tests cover frozen revisions and
+source/update identities, required reasons, uncertain replies and failed local
+reloads, evidence URL validation, both paid retry actions and overview isolation.
+The independent UI reviewer returned `ship` after inspecting all sixteen offline
+desktop/narrow captures and the component source. This verifies the desktop
+extension; TUI evidence is recorded separately, and live pilot interoperability
+remains unverified.
+
+Earlier verification: `make check` passed after the human acceptance desktop/TUI
+controls and domain overview changes. Focused acceptance behavior tests cover
+required evidence, frozen revisions, uncertain-response recovery and compact
+terminal scrolling. The independent UI reviewer returned `ship` with no material
+fixes across 24 desktop/narrow and wide/compact terminal captures. Earlier
+acceptance/CLI tests and domain/policy race checks also passed.
+Previously, `make check` passed again after the audit's launch-recovery
+regression (both post-launch persistence failures also passed in a focused
+uncached run). Earlier, `make check` passed (build, vet and full Go suite) after
+proposal-editing storage, CLI, desktop bridge and desktop/TUI graph-editor changes.
+The full TUI suite passed uncached with graph capture fixtures enabled. Ten new
+behavior/viewport tests cover frozen edits, correlated responses, uncertain
+recovery, graph remapping, scope/coverage, paste, discard and persistent controls.
+Focused edit/migration
+race checks also passed, including usage retention across later writes/recovery;
+generated frontend bindings type-check without errors or warnings. Earlier checks
+covered desktop and TUI knowledge curation, scoped mutations and durable capture
+identities. Final TUI tests passed uncached after label-spacing corrections; the
+final full build, vet and Go suite also passed.
+The earlier frontend suite passed (67 files, 801 tests), including 18 focused
+graph-editor/planner tests covering dependency remapping, reviewed identities,
+uncertain recovery and acceptance of the saved revision. Frontend type checks
+(0 errors/warnings) and production build passed. Earlier expiry preservation and
+navigation guards passed all nine focused learning-panel tests. The earlier TUI goal planning,
+publication and execution-authorization checks and offline captures also passed.
+Earlier promotion, curation and contract race checks passed. Temporary Git fixtures
+cover unmerged code, observed goal delivery, proof withdrawal, code drift, scope
+and migration. Desktop/narrow fixture screenshots and scoped independent UI
+reviews are retained under `.impeccable/review/`. The desktop learning review
+returned `ship` with no material fixes, as did the independent TUI learning
+review across eighteen wide/compact captures. The desktop task-graph editor also
+received `ship` with no material fixes after ten desktop/narrow captures of
+editing, repository scope, revision review, uncertain recovery and saved history.
+The TUI graph editor received `ship` with no material fixes across eighteen
+wide/compact captures of its task list, forms, review, recovery and history.
+No live end-to-end pilot has run.
+
+Improvement inspection foundations are implemented: a bounded catalog keeps
+withdrawn proposals with decisions discoverable, and paginated source references
+retain exact lesson versions beyond the 20-source preview. Decision history uses
+separate source pages, while the existing CLI full receipts remain unchanged.
+Typed desktop reads, triage and export methods preserve project/goal scope and
+reviewed revision without automatic retries. Source/history reads cannot authorize
+an obsolete proposal. Focused store/daemon/bridge tests, the store race check,
+frontend type checking and production build, and full `make check` pass
+(`/tmp/lola-improvementviews-make-check.log`). Desktop and TUI improvement forms are now implemented.
+
+Desktop Workspace learning now opens an improvement catalog with explicit
+project/goal scope, paginated exact source versions, retained decision history
+and withdrawn-proposal inspection. Track/dismiss/reopen decisions freeze the
+reviewed proposal and require separate confirmation. Unconfirmed responses lock
+the decision until local readback; failed readback keeps that lock. Export is a
+revision-bound read-only preview. The frontend suite passes 70 files / 825 tests,
+type checking reports zero errors/warnings, and the production build passes.
+The independent reviewer requested consistent selector state after readback and
+discard protection for reviewed unsaved decisions. Both were fixed; its verdict
+pass scored both resolved (`ship`). Eighteen offline desktop/narrow captures
+retain the evidence. Final `make check` passes against the refreshed frontend bundle
+(`/tmp/lola-improvements-ui-make-check-final.log`).
+
+TUI improvement controls now open with **i** from Workspace learning. They
+support exact project/goal scope, paginated catalog/source reads, historical
+lesson versions and decisions, withdrawn-proposal inspection, triage and export
+preview. Reviewed decisions freeze scope, source revision and evidence. Lost
+responses require readback; failed reads retain the lock. Source summaries use
+the incumbent learning view with full provenance available separately. Tests
+cover the three triage payloads, pagination, stale/foreign replies, historical
+versions, export failures, multiline paste, draft protection, long evidence and
+recovery keys down to 40×12. Focused tests and final `make check` pass
+(`/tmp/lola-tui-improvements-tests-final.log`,
+`/tmp/lola-tui-improvements-make-check-final.log`). Twenty-four wide/compact
+fixture captures were inspected by the independent reviewer, who returned
+`ship` with no material findings. No live pilot ran.
 
 ### Checkpoint and quick user testing
 
@@ -34,24 +161,33 @@ proposals; specialist reviews
 and finding decisions. Specialist configuration, goal planning, local plan
 acceptance and reviewed Linear publication are available in desktop and TUI.
 Explicit execution authorization is available in desktop, TUI and CLI.
+Desktop and TUI planners also support reviewed task-graph edits and revision history.
+Desktop and TUI Workspace learning now support candidate/correction capture, provenance,
+version-bound acceptance/dispute, watched code, expiry and read-only export preview.
 
-Remaining before full-plan completion:
+Remaining before full-plan completion is enumerated in the
+[audit finish checklist](docs/workspace-goals-audit.md#finish-checklist):
+representative outcome comparisons and a bounded live pilot. Generic
+worker discoveries can already be curated with explicit evidence; automatic
+verification of arbitrary discoveries is not an additional completion condition.
+Immutable active policy is an intentional authorization boundary, not unfinished
+coordinator permission to increase scope or budgets.
 
-- Direct task-graph editing, knowledge forms,
-  remaining desktop/TUI action parity.
-- Broader task/policy revision reconciliation and Linear steering beyond the
-  implemented brief clarifications and bounded task replanning.
-- Broader verification of worker-authored discoveries beyond the implemented
-  verified-review promotion path. Verified specialist lessons can acquire code
-  references automatically; other lessons still need operator acceptance and
-  explicit references. Freshness/expiry and test/lint/skill proposals are implemented.
-- Richer specialist calibration and comparable-budget outcome measurement.
-  Requested models and exact prompts are preserved; actual provider-resolved model
-  identities remain unknown. Worker disputes are attributed separately
-  from operator decisions; the current counts are not an accuracy score.
-- A bounded live pilot, representative comparisons, and a requirement-by-requirement
-  completion audit, including optional parent human acceptance and cross-repository
-  delivery guidance.
+The audit's launch-recovery regression is complete: actual runtime launch
+receipts with fake tmux survive injected post-launch session and goal snapshot
+failures. Reopened stores recover the same attempt and run with one launch,
+preserved worker output and no premature dependency release.
+
+Optional human delivery acceptance is now implemented in the domain, daemon,
+CLI, desktop and TUI. New execution policies can require a separate evidence-backed decision after
+observed complete final PR delivery. It retains the reviewed revision, policy,
+final proof and commit manifest; exact retries preserve the original decision.
+Child task delivery remains separate. The goal store upgrades atomically to
+version 2 only when this option is used, and older writers fail closed. Both
+clients review the authorization choice, show the pending decision and saved
+evidence, and require nonempty evidence before submitting the reviewed revision.
+Uncertain replies hold further submission until a read-only refresh. The TUI
+review scrolls long criteria and commits while preserving typed/pasted evidence.
 
 Quick-look setup and exact current commands are in
 [the implementation guide](docs/workspace-goals.md#quick-look-at-this-checkpoint).
@@ -231,9 +367,41 @@ limits and optional draft-PR/replanning permissions, and reviews the exact polic
 before starting. It exposes the retained goal/task contract and rejects uncertain
 resubmissions until the user reloads current state. No live writes or workers were
 started during fixture verification.
-The full plan is not complete. Broader task/policy revision reconciliation,
-TUI authoring/authorization, learning forms, TUI profile editing, remaining UI parity
-and evaluation remain. See
+Desktop knowledge curation now uses retained capture identities, exact
+lesson/version/scope decisions, explicit conflict replacement, committed code
+references and preserved expiry. Full provenance and export contents are
+inspectable; exports write no repository files. Uncertain mutations require a
+refresh before another decision. Worker claims still cannot activate lessons.
+TUI Workspace learning now provides the same capture/curation/export commands
+through a project-detail entry, keyboard forms and a separate reviewed decision.
+It preserves exact versions, capture identities, conflict choices, code references
+and expiry, protects drafts/paste, ignores old-project replies and blocks uncertain
+resubmissions. Offline wide and compact terminal fixtures cover inspection,
+editing, validation, review and recovery.
+Proposal editing addition: `goal edit-plan` now replaces a reviewed task graph
+without another coordinator call or Linear writes. Exact project/revision/edit
+identities protect concurrent decisions and retries. Original model output,
+source evidence and usage remain preserved beside bounded operator edit history.
+Current routing is checked, stale acceptance is rejected, and accepted goals or
+execution repair proposals cannot be edited through this path. Proposal storage
+reads formats 1/2 and upgrades atomically only on the first edit; older binaries
+reject format 2 instead of dropping history. The desktop planner now provides task-graph editing forms: title/description,
+acceptance criteria, coverage, dependencies, repositories, paths, labels and open
+questions, plus add/remove/reorder. Dependency references survive moves; moves
+across a prerequisite and deletion of referenced tasks are blocked. A frozen
+revision/edit identity and reason are reviewed before save. Pending and uncertain
+saves block resubmission; recovery reads the saved proposal. The accepted revision
+must be reviewed again. History and original model output are inspectable.
+The TUI now provides the same authoring path through a task list, per-task forms
+and notes/reason form. It validates the full graph before freezing a review,
+preserves dependency references, confirms removal/discard, and keeps pending or
+uncertain saves from being repeated. The exact edit request and saved original
+model output are inspectable. Multiline paste reaches planner forms; review and
+pending states reject it. Help and error text are bounded so compact terminals
+retain the current field and action controls.
+The full plan is not complete. Comparison recording/reporting is implemented;
+a bounded live pilot and representative comparisons remain.
+The audit above defines the accepted reconciliation boundaries. See
 [current commands](docs/workspace-goals.md).
 Research and repository inspection: 2026-10-21.
 
@@ -767,6 +935,20 @@ before human review, human intervention time, and cost per accepted task.
 Compare representative tasks with and without selected lessons/reviewers under
 comparable budgets. Preserve model, prompt, rubric, and lesson versions.
 
+Implementation: `lola compare template`, `prepare` and `report` provide a
+versioned portable JSON record and deterministic JSON/Markdown reports. Each
+predeclared task/repetition binds its brief, starting commits, acceptance and
+finite budgets; runs retain worker/reviewer model and prompt provenance, rubric
+versions and exact lesson versions/content digests. All required outcome metrics
+must be present, with explicit unavailable values when needed. Reports preserve
+missing/over-budget pairs, coverage and model/prompt confounders; failed work is
+included in cost per accepted task. These are recorded assessments, not an
+independent certification or causal claim. The workflow and metric definitions
+are in [comparison records](docs/comparison-records.md). Focused domain/daemon/CLI
+tests, a domain race check and full `make check` (build, vet and tests) pass
+(`/tmp/lola-comparison-make-check.log`).
+Representative comparisons have not yet run.
+
 More notes, agents, tasks, or review comments are not success metrics. More
 verified progress with less repeated correction is.
 
@@ -787,13 +969,92 @@ Recommended pilot decisions:
 - Make Linear visibility and recovery the first phase.
 - Keep execution facts and permission policy in Lola.
 
-Resolve before enabling execution, through configuration and a concrete pilot:
+Pilot brief supplied by the user (2026-10-21): improve dialog layouts so they
+fit the current visual style, with a maximum runtime of 30 minutes. The question
+named Nori; use Nori as the project assumption and confirm it against the current
+workspace before publication. The user did not choose an agent-call count, so the
+initial implementation choice is a ceiling of 8 total calls, including planning,
+workers and specialist reviews, with one worker at a time. Keep the pilot to a
+bounded representative dialog flow after inspecting the existing design and
+dialog inventory. Preserve behavior and keyboard/focus access, and retain
+before/after and narrow-layout evidence. Establish the exact task scope and
+available acceptance checks from that inspection before starting the 30-minute
+execution. The first live run and its remaining verification requirements are
+recorded below; the original brief alone grants no permission to bypass them.
 
-- Which existing team states represent active work and review?
-- Which GitHub/Linear automations currently change issue state on intermediate
-  PR events?
-- Which checks and artifacts establish acceptance for the pilot?
-- Which finite limits and authorized actions apply?
+Read-only pilot discovery: the local Lola configuration maps `nori-app`
+(`sushidev-team/nori-app`) and `nori-website` to the same existing Nori Linear
+project. Nori App contains PRODUCT.md, DESIGN.md, a shared
+`resources/js/components/ui/dialog.tsx`, dialog stories and dialog tests, as well
+as many feature dialogs. Inspect those shared primitives and representative
+stories first when bounding the pilot; no Nori source or runtime configuration
+has been changed by this discovery.
 
-No Linear objects, repository configuration, or runtime behavior were changed
-while researching or writing this proposal.
+Concrete pilot candidate from read-only source inspection (2026-10-22): align
+the shared dialog presentation with Nori's existing design tokens and validate
+it through `ui/dialog.stories.tsx` plus the invoice **Save view** dialog. The
+current shared overlay still uses `bg-black/80`, while DESIGN.md's
+Legible-Scrim Rule specifies `overlay/scrim` (36% steel ink in light mode, 60%
+black in dark mode). Shared content also uses legacy `shadow-lg` rather than the
+documented dialog elevation. These are observed source mismatches; the pilot
+must inspect the actual rendered themes before choosing changes.
+
+Keep implementation ownership to `resources/js/components/ui/dialog.tsx`, its
+story/test files, and, only if layout requires it, `Invoices/SaveViewDialog.tsx`
+and its existing test. Preserve Radix behavior, viewport gutters, `dvh` height
+limits, long-content scrolling, close-button visibility and caller overrides.
+Do not change saving/filter payloads, backend behavior, design tokens or other
+feature dialogs. Acceptance should include light/dark desktop and narrow
+before/after captures, tall-dialog scrolling, keyboard dismissal/focus return,
+and passing the existing dialog and save-view tests. Available repository
+commands include `npm run test:unit -- resources/js/components/ui/__tests__/dialog.test.tsx resources/js/components/Invoices/__tests__/save-view-dialog.test.tsx`,
+`npm run test:storybook -- resources/js/components/ui/dialog.stories.tsx`, and
+`npm run build`. The sandbox and baseline checks are now established in the
+follow-up evidence below. No Nori source file or external object was changed
+during preparation.
+
+Read-only live readiness check (2026-10-22): Linear confirms the existing Nori
+project (`9a5df54f-9fb1-4628-9dff-f9fc7d84b795`) and team
+(`ace69aca-dd39-4c63-91dc-36bbf48b62c7`). Team workflow states include In Progress
+(`9c45fbca-2609-4631-8980-9db38b5c6d3d`), In Review
+(`683c0e02-3037-40a1-a373-b7a53a88ab01`) and Done
+(`bd4bbeec-f062-4151-8f1c-e52569490ba7`). Existing milestones are First Public
+Release and Hypercare; no milestone or issue was created. Docker responds
+(version 29.8.2), but the local Lola config has no sandbox image/Linux binary or
+Nori goal-mode configuration. The current shell has no supported Claude/OpenAI
+model credential environment variable; container-compatible authentication still
+needs establishing. No secret values were read or printed. GitHub/Linear PR
+state automations remain unverified. These checks do not start the pilot clock.
+
+Follow-up preparation (2026-10-22): the Linux Lola build and a local digest-pinned
+Nori image are ready. The unchanged source at
+`97fc399c591d82cfcf54859fa0c0191311cb16b9` passes 10 dialog/invoice unit tests,
+3 dialog Storybook tests and the frontend build in an offline disposable
+workspace. Four light/dark desktop/narrow browser cases pass keyboard/focus,
+gutters, synthetic overflow and close-visibility checks with verified local
+fonts. The rendered baseline confirms the scrim/elevation mismatch, and the
+new style gate rejects it as expected. Lola's real Docker validation isolation
+and timeout-cleanup test passes against the final image. Exact inputs, logs,
+screenshots, setup findings and limitations are retained in
+[the pilot evidence](docs/evaluation/nori-dialog-pilot/README.md).
+
+The feature build's comparison commands were exercised through a separate live
+daemon socket with ordinary polling disabled; the unrun pair reports missing
+outcomes explicitly. The user then supplied the isolated model credential and
+the bounded pilot started on 2026-10-22 local time. Linear now has parent NOR-493,
+task NOR-494 and the new Dialog layout pilot milestone in existing Nori, with
+apps/app routing and no agent-ready label. Team PR automations were inspected;
+Lola performs local task integration and only publishes final draft PRs.
+
+The live run discovered and fixed generated Markdown normalization and a fresh
+Claude workspace trust prompt. Publication recovered using the same reserved
+IDs. An active-worker daemon restart recovered the same attempt and existing
+two model calls without launching a duplicate. Worker unit/story/build/browser
+checks passed, then the observed-token budget stopped the worker before
+submission (285k including cached input against the selected 250k ceiling).
+The output is preserved; independent verification, specialist review and final
+delivery remain unfinished. A fresh authorization with a cache-aware limit was
+proposed to the user, retaining the aggregate time/call limits. Exact authorization, times, recovery evidence and
+limitations are retained in [pilot evidence](docs/evaluation/nori-dialog-pilot/README.md).
+No final pilot-success or comparison-improvement claim is made yet. The normal
+installed daemon is unchanged; all feature execution uses the isolated pilot home.

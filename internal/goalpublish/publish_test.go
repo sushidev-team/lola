@@ -273,7 +273,7 @@ func TestPublicationRecoversLostExternalResponses(t *testing.T) {
 }
 
 func TestPublicationFailsClosedBeforeWrongOrUnverifiedWrites(t *testing.T) {
-	for _, mode := range []string{"default-branch", "foreign-head", "advanced-base", "paused", "unavailable", "changed-source", "policy-denied"} {
+	for _, mode := range []string{"default-branch", "foreign-head", "advanced-base", "paused", "unavailable", "changed-source", "policy-denied", "unverified-rollout"} {
 		t.Run(mode, func(t *testing.T) {
 			p, want, f := fixture(t)
 			switch mode {
@@ -289,6 +289,8 @@ func TestPublicationFailsClosedBeforeWrongOrUnverifiedWrites(t *testing.T) {
 				f.unavailable = true
 			case "policy-denied":
 				want.Policy.PublishPR = false
+			case "unverified-rollout":
+				want.Policy.Rollout = &goalpolicy.Rollout{Compatibility: []string{"Preserve the old API."}, MergeOrder: []string{"api"}}
 			case "changed-source":
 				if err := os.WriteFile(filepath.Join(p.Workspaces.Root, "g1", "candidates", "final", "api", "tree", "app.txt"), []byte("unverified"), 0600); err != nil {
 					t.Fatal(err)

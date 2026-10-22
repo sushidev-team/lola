@@ -19,6 +19,7 @@ import (
 // Settings persistence and its key dispatcher are deliberately not used here.
 type goalPlannerModel struct {
 	editor                                 *settingsForm
+	graph                                  *goalGraphEditor
 	mode                                   string // brief, saved, review
 	seq                                    int
 	busy, acknowledged, uncertain, discard bool
@@ -134,7 +135,7 @@ func (m *rootModel) handleGoalPlannerMsg(msg goalPlannerMsg) {
 		p.rows = rows
 		p.selected = min(p.selected, max(0, len(rows)-1))
 		p.err = ""
-	case "inspect", "propose":
+	case "inspect", "propose", "edit":
 		var r goalplan.Record
 		if err := json.Unmarshal(msg.data, &r); err != nil {
 			failure("Invalid proposal result")
@@ -148,6 +149,11 @@ func (m *rootModel) handleGoalPlannerMsg(msg goalPlannerMsg) {
 			failure("Proposal result is missing its task plan")
 			return
 		}
+		if msg.op == "edit" && (p.graph == nil || p.graph.review == nil || !r.HasEdit(p.graph.review.EditID)) {
+			failure("Saved proposal is missing the reviewed edit identity")
+			return
+		}
+		p.graph = nil
 		p.record = &r
 		p.requestID = r.ID
 		p.mode = "review"
@@ -202,6 +208,9 @@ func (p *goalPlannerModel) briefRequest(project string) (goalplan.Request, error
 
 func (m *rootModel) updateGoalPlanner(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	p := m.goals.planner
+	if p.graph != nil {
+		return m.updateGoalGraph(k)
+	}
 	close := func() (tea.Model, tea.Cmd) { m.goals.planner = nil; return m, m.refreshGoals() }
 	key := k.String()
 	if key == "ctrl+c" {
@@ -331,6 +340,10 @@ func (m *rootModel) updateGoalPlanner(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			p.scroll = 0
 			return m, m.goalPlannerRequest("inspect", "goalProposal", map[string]string{"id": p.requestID}, p.requestID)
 		}
+	case "e":
+		if p.mode == "review" && p.record != nil && p.record.State == "proposed" && p.record.Output != nil && len(p.record.Edits) < 50 && !p.uncertain {
+			p.openGraph()
+		}
 	case "v":
 		if p.mode == "review" && p.record != nil {
 			p.raw = !p.raw
@@ -386,7 +399,7 @@ func (p *goalPlannerModel) reviewLines() []string {
 	}
 	if r.Output != nil {
 		if len(r.Output.Unknowns) > 0 {
-			out = append(out, "", "Open questions from the coordinator")
+			out = append(out, "", "Open questions")
 			out = append(out, r.Output.Unknowns...)
 		}
 		for i, t := range r.Output.Tasks {
@@ -422,9 +435,15 @@ func (p *goalPlannerModel) reviewLines() []string {
 			out = append(out, "  "+file.Path)
 		}
 	}
+	if len(r.Edits) > 0 {
+		out = append(out, "", "Revision history (full original model output in v record)")
+		for _, edit := range r.Edits {
+			out = append(out, fmt.Sprintf("Revision %d · %s · %s", edit.Revision, edit.At.Format("2006-01-02 15:04"), edit.Request.Reason))
+		}
+	}
 	if r.State == "accepted" {
 		out = append(out, "", "Local goal created: "+r.GoalID, "Publication and execution authorization remain separate steps.")
-	} else {
+	} else if r.State == "proposed" {
 		out = append(out, "", "Accepting creates a local goal and rechecks commits and routing.", "It does not publish Linear issues or authorize execution.")
 	}
 	return out
@@ -440,11 +459,25 @@ func (m *rootModel) goalPlannerLines() []string {
 		}
 		return out
 	}
+	bounded := func(lines []string, limit int) []string {
+		lines = wrap(lines)
+		if len(lines) > limit {
+			lines = append(lines[:limit-1], "…")
+		}
+		return lines
+	}
 	out := []string{m.vitalsBar(w), boxTitleHi.Render("lola ▸ " + m.projLabel(m.goals.project) + " ▸ Plan a goal"), ""}
 	var body, footer []string
 	selectedEnd := 0
-	if p.mode == "brief" {
-		body = append(body, "Describe the outcome; review the coordinator's tasks before creating a goal.", "")
+	formMode := p.mode == "brief" || p.mode == "graphtask" || p.mode == "graphnotes"
+	if formMode {
+		if p.mode == "brief" {
+			body = append(body, "Describe the outcome; review the coordinator's tasks before creating a goal.", "")
+		} else if p.mode == "graphtask" {
+			body = append(body, fmt.Sprintf("Edit task %d · draft only", p.graph.selected+1), "Goal criteria stay fixed. Each task needs coverage and a writable deliverable.", "")
+		} else {
+			body = append(body, "Open questions and revision reason · draft only", "")
+		}
 		help := p.editor.cur().help
 		if p.editor.cur().key == "request" {
 			help = fmt.Sprintf("One paid model call: up to %s tasks / %ss. No issues or workers.", p.editor.field("max_tasks").text, p.editor.field("timeout").text)
@@ -452,8 +485,39 @@ func (m *rootModel) goalPlannerLines() []string {
 		if p.editor.editing {
 			footer = append(footer, "Editing "+p.editor.cur().label, "↑↓ line · enter new line · esc done")
 		} else {
-			footer = append(footer, help, "↑↓/tab field · enter edit/request · esc back")
+			footer = append(footer, bounded([]string{help}, 3)...)
+			footer = append(footer, "↑↓/tab field · enter edit/action · space toggle · esc back")
 		}
+	} else if p.mode == "graph" {
+		g := p.graph
+		body = append(body, "Edit task graph · unsaved draft", p.record.Input.Request.Title, "Goal criteria:")
+		for i, criterion := range p.record.Input.Request.Acceptance {
+			body = append(body, fmt.Sprintf("  %d. %s", i+1, criterion))
+		}
+		body = append(body, "")
+		for i, task := range g.output.Tasks {
+			mark := "  "
+			if i == g.selected {
+				mark = "> "
+			}
+			title := task.Title
+			if title == "" {
+				title = "Untitled task"
+			}
+			body = append(body, fmt.Sprintf("%s%d. %s", mark, i+1, title), fmt.Sprintf("    Covers %v · Depends on %v · %s", task.Covers, task.BlockedBy, strings.Join(task.Apps, ", ")))
+			if i == g.selected {
+				selectedEnd = len(wrap(body))
+			}
+		}
+		body = append(body, "", "Reason: "+g.reason, fmt.Sprintf("Open questions: %d (m to edit)", len(g.output.Unknowns)))
+		footer = append(footer, "↑↓ select · enter edit · n add · x remove · u/d move earlier/later", "m questions/reason · r review revision · esc discard draft")
+	} else if p.mode == "graphreview" {
+		body = p.graphReviewLines()
+		ack := "[ ]"
+		if p.acknowledged {
+			ack = "[x]"
+		}
+		footer = append(footer, ack+" I reviewed scope, dependencies, coverage and open questions.", "space acknowledge · s save proposal revision · esc edit graph", "↑↓/pgup/pgdown scroll · v exact edit request")
 	} else if p.mode == "saved" {
 		body = append(body, "Saved proposals", "Inspect a saved result without requesting another model call.", "")
 		if len(p.rows) == 0 && !p.busy && p.err == "" {
@@ -477,12 +541,23 @@ func (m *rootModel) goalPlannerLines() []string {
 			if p.acknowledged {
 				ack = "[x]"
 			}
-			footer = append(footer, ack+" I reviewed tasks, scope, coverage and open questions.", "space acknowledge · a accept as local goal")
+			footer = append(footer, ack+" I reviewed tasks, scope, coverage and open questions.", "space acknowledge · a accept as local goal · e edit tasks")
 		}
 		if p.record != nil && p.record.State == "accepted" {
 			footer = append(footer, "g open local goal; publication and execution are separate")
 		}
 		footer = append(footer, "↑↓/pgup/pgdown scroll · v record · f refresh result", "b saved · n new brief · esc goals")
+	}
+	if p.graph != nil {
+		if p.uncertain {
+			footer = []string{"Unconfirmed result: f refresh saved proposal · esc goals", "Refresh reads the saved revision; it never resends the edit.", "↑↓/pgup/pgdown scroll reviewed content"}
+		}
+		if p.graph.discard != "" {
+			footer = []string{"Unsaved changes — y discard · any other key keep editing"}
+		}
+		if p.graph.remove {
+			footer = []string{fmt.Sprintf("Remove task %d? y remove · any other key keep", p.graph.selected+1), "Removal is refused while another task depends on it."}
+		}
 	}
 	if p.busy {
 		footer = []string{"Waiting for this operation. Escape returns to Goals.", "Find this request again in Saved proposals; no automatic retry."}
@@ -491,11 +566,11 @@ func (m *rootModel) goalPlannerLines() []string {
 		footer = []string{"Unsaved brief — y discard · n keep editing"}
 	}
 	if p.err != "" {
-		footer = append([]string{"Error: " + p.err}, footer...)
+		footer = append(bounded([]string{"Error: " + p.err}, 3), footer...)
 	}
 	footer = wrap(footer)
 	avail := max(1, h-len(out)-len(footer)-1)
-	if p.mode == "brief" {
+	if formMode {
 		intro := wrap(body)
 		region, anchors := p.editor.fieldRegion()
 		// Wrap field values without losing the cursor's line anchor.
@@ -512,7 +587,7 @@ func (m *rootModel) goalPlannerLines() []string {
 		body = append(intro, p.editor.window(wrapped, translated, max(1, avail-len(intro)))...)
 	} else {
 		body = wrap(body)
-		if p.mode == "saved" {
+		if p.mode == "saved" || p.mode == "graph" {
 			p.scroll = max(0, selectedEnd-avail)
 		}
 		p.scroll = min(p.scroll, max(0, len(body)-avail))

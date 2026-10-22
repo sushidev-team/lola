@@ -183,6 +183,7 @@ func goalBrief(g goal.Goal, t goal.Task, a goal.Attempt, workspaces []goalwork.W
 	for _, criterion := range g.Acceptance {
 		fmt.Fprintf(&b, "- %s\n", criterion)
 	}
+	b.WriteString(g.Execution.Policy.RolloutContract())
 	if len(g.NonGoals) > 0 {
 		b.WriteString("\n## Outside this goal\n")
 		for _, item := range g.NonGoals {
@@ -319,7 +320,7 @@ func (n *Native) goalLaunchLine(p config.Project, a goal.Attempt, root, control 
 	}
 	inner := "set -a; . " + shQuote(filepath.Join(root, lolaDir, "env")) + "; set +a; mkdir -p " + shQuote(filepath.Join(root, ".agent", "claude")) + " " + shQuote(filepath.Join(root, ".agent", "codex")) + "; "
 	if kind == agent.Claude {
-		inner += "test -f \"$CLAUDE_CONFIG_DIR/.claude.json\" || printf '%s' '{\"hasCompletedOnboarding\":true}' > \"$CLAUDE_CONFIG_DIR/.claude.json\"; "
+		inner += goalClaudePrelude(root)
 	}
 	launchArgs := agent.LaunchArgs(kind, defaultLaunchPrompt(a.SessionID))
 	if kind == agent.Codex {
@@ -356,4 +357,14 @@ func (n *Native) StopGoal(ctx context.Context, s session.Session) error {
 		return n.Tmux.KillSessionTree(ctx, s.ID)
 	}
 	return nil
+}
+
+// The operator already authorized this private goal workspace. Seed the same
+// first-use trust decision as ordinary sandbox launches, scoped to this root.
+func goalClaudePrelude(root string) string {
+	state, _ := json.Marshal(map[string]any{
+		"hasCompletedOnboarding": true,
+		"projects":               map[string]any{root: map[string]any{"hasTrustDialogAccepted": true}},
+	})
+	return "test -f \"$CLAUDE_CONFIG_DIR/.claude.json\" || printf '%s' " + shQuote(string(state)) + " > \"$CLAUDE_CONFIG_DIR/.claude.json\"; "
 }

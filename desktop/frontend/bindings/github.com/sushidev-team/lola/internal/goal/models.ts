@@ -25,6 +25,58 @@ export interface Binding {
     "confirmed": boolean;
 }
 
+export interface BriefAcceptance {
+    "id": string;
+    "revision": number;
+    "source_id": string;
+    "contract": BriefContract;
+    "reason": string;
+}
+
+export interface BriefContract {
+    "title": string;
+    "outcome": string;
+    "acceptance": string[] | null;
+    "non_goals"?: string[] | null;
+}
+
+/**
+ * BriefDecisionView deliberately excludes archived verification receipt paths.
+ */
+export interface BriefDecisionView {
+    "sourceId": string;
+    "before": BriefContract;
+    "after": BriefContract;
+    "reason": string;
+    "acceptedAt": string;
+}
+
+/**
+ * BriefSource is an exact human-authored Linear snapshot, never executable policy.
+ */
+export interface BriefSource {
+    "id": string;
+    "title": string;
+    "description": string;
+    "observed_at": string;
+}
+
+export interface DeliveryEvidenceRequest {
+    "id": string;
+    "revision": number;
+    "url": string;
+}
+
+/**
+ * HumanAcceptanceView omits local proof paths; the delivered heads and targets
+ * remain available through Members in the same revision-bound overview.
+ */
+export interface HumanAcceptanceView {
+    "revision": number;
+    "evidence": string;
+    "acceptedAt": string;
+}
+
 export interface MemberView {
     "id": string;
     "repo": string;
@@ -69,6 +121,49 @@ export interface Overview {
     "spendLimitUSD": number;
     "runLimit": number;
     "coverage": UsageCoverage;
+    "requireHumanAcceptance"?: boolean;
+    "delivered"?: boolean;
+    "humanAcceptance"?: HumanAcceptanceView | null;
+    "rollout"?: goalpolicy$0.Rollout | null;
+}
+
+export interface ProgressResolution {
+    "id": string;
+    "revision": number;
+    "update_id": string;
+    "reason": string;
+}
+
+/**
+ * ProgressUpdate is a durable outbox item. Its identity and observed summary
+ * never change after reservation; failed sends retry the same remote UUID.
+ */
+export interface ProgressUpdate {
+    "dismissed_at"?: string;
+    "resolution"?: string;
+    "sent_at"?: string;
+    "id": string;
+    "summary": string;
+    "created_at": string;
+    "confirmed_at"?: string;
+    "attempted_at"?: string;
+}
+
+/**
+ * RecoveryView is an on-demand, read-only snapshot for reviewing recovery.
+ * It includes the latest decisions, not private execution paths or raw policy.
+ * Actions are local eligibility hints; the daemon rechecks live jobs, Linear,
+ * verification and publication journals before any change.
+ */
+export interface RecoveryView {
+    "goal": Overview;
+    "brief": BriefContract;
+    "pendingBrief"?: BriefSource | null;
+    "latestBrief"?: BriefDecisionView | null;
+    "latestProgress"?: ProgressUpdate | null;
+    "progressError": string;
+    "deliveryEvidenceUrl": string;
+    "actions": string[] | null;
 }
 
 export interface Replacement {

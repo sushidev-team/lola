@@ -4,6 +4,7 @@
   import StatusPill from "$lib/components/StatusPill.svelte";
   import LivePulse from "$lib/components/LivePulse.svelte";
   import Button from "$lib/components/Button.svelte";
+  import ProjectKnowledge from "$lib/components/ProjectKnowledge.svelte";
   import ProjectGoals from "$lib/components/ProjectGoals.svelte";
   import Select from "$lib/components/Select.svelte";
 
@@ -192,6 +193,7 @@
       </div>
 
       <ProjectGoals project={nav.project} />
+      <ProjectKnowledge project={nav.project} />
 
       <!-- Actions -->
       <div class="flex flex-col gap-1.5">

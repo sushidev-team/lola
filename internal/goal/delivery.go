@@ -2,6 +2,7 @@ package goal
 
 import (
 	"errors"
+	"maps"
 	"net/url"
 	"slices"
 	"strings"
@@ -58,10 +59,65 @@ func (g *Goal) ObserveDelivery(d Delivery) error {
 	if d.State == "merged" && !all {
 		return errors.New("merged delivery lacks complete target-branch observations")
 	}
-	if all && g.State == "ready" && d.State == "merged" {
+	if all && g.State == "ready" && d.State == "merged" && !e.Policy.RequireHumanAcceptance {
 		g.State = "accepted"
 	}
 	e.Delivery = &d
+	return nil
+}
+
+// HumanAcceptance records the operator's decision about an exact delivered
+// revision. It cannot replace verification or authorize a merge/deployment.
+type HumanAcceptance struct {
+	Revision     uint64            `json:"revision"`
+	Operation    string            `json:"operation"`
+	Receipt      string            `json:"receipt"`
+	PolicyDigest string            `json:"policy_digest"`
+	Manifest     map[string]string `json:"manifest"`
+	Evidence     string            `json:"evidence"`
+	AcceptedAt   time.Time         `json:"accepted_at"`
+}
+
+func (g Goal) Delivered() bool {
+	e := g.Execution
+	if e == nil || !e.Policy.PublishPR || e.Final == nil || e.Final.Receipt == "" || e.Delivery == nil || e.Delivery.State != "merged" || e.Delivery.CheckedAt.IsZero() {
+		return false
+	}
+	all, err := g.validateDelivery(*e.Delivery)
+	return err == nil && all
+}
+
+func (g *Goal) acceptDelivery(evidence string, now time.Time) error {
+	e := g.Execution
+	if e == nil || !e.Policy.RequireHumanAcceptance || g.State != "ready" || g.Revision == 0 || g.SyncError != "" || g.PendingBrief != "" || !g.Delivered() {
+		return errors.New("human acceptance requires a synchronized, verified goal with all final deliveries observed merged")
+	}
+	if strings.TrimSpace(evidence) == "" || len(evidence) > 2000 || strings.ContainsRune(evidence, '\x00') {
+		return errors.New("record acceptance evidence in the reason (1–2000 bytes)")
+	}
+	if now.Before(e.Delivery.CheckedAt) {
+		return errors.New("acceptance cannot precede delivery observation")
+	}
+	e.HumanAcceptance = &HumanAcceptance{Revision: g.Revision, Operation: e.Final.ID, Receipt: e.Final.Receipt, PolicyDigest: e.PolicyDigest, Manifest: maps.Clone(e.Manifest), Evidence: evidence, AcceptedAt: now}
+	g.State = "accepted"
+	return nil
+}
+
+func (g Goal) validateHumanAcceptance() error {
+	e := g.Execution
+	if e == nil {
+		return nil
+	}
+	a := e.HumanAcceptance
+	if a == nil {
+		if e.Policy.RequireHumanAcceptance && g.State == "accepted" {
+			return errors.New("goal requires a separate human delivery acceptance")
+		}
+		return nil
+	}
+	if !e.Policy.RequireHumanAcceptance || g.State != "accepted" || !g.Delivered() || a.Revision == 0 || a.Revision >= g.Revision || a.Operation != e.Final.ID || a.Receipt != e.Final.Receipt || a.PolicyDigest != e.PolicyDigest || !maps.Equal(a.Manifest, e.Manifest) || a.AcceptedAt.IsZero() || a.AcceptedAt.Before(e.Delivery.CheckedAt) || strings.TrimSpace(a.Evidence) == "" || len(a.Evidence) > 2000 || strings.ContainsRune(a.Evidence, '\x00') {
+		return errors.New("invalid human acceptance receipt or changed delivered evidence")
+	}
 	return nil
 }
 

@@ -1,0 +1,57 @@
+{
+  "goal_id": "d2d2db8a-3f28-43c6-ae11-0eb272a09b9f",
+  "proposal_id": "15cdf8d6-f42d-443e-9631-1bcd50445475",
+  "parent": "NOR-493",
+  "task": "NOR-494",
+  "milestone_id": "5c096266-9d6d-4cec-a0b3-8f34d14d236d",
+  "milestone": "Dialog layout pilot",
+  "base_commit": "f94d30d7c8f08178c14297d67756a014d3ff089c",
+  "baseline_commit": "97fc399c591d82cfcf54859fa0c0191311cb16b9",
+  "baseline_delta": [
+    ".release-please-manifest.json",
+    "CHANGELOG.md"
+  ],
+  "status": "blocked_at_observed_token_limit",
+  "linear_automation_observed": {
+    "draft_pr_open": "No action",
+    "pr_commit_open": "In Progress",
+    "review_requested_or_active": "In Review",
+    "ready_for_merge": "No action",
+    "pr_commit_merged": "Done",
+    "automatic_parent_close": false,
+    "automatic_subissue_close": false,
+    "branch_specific_rows_shown": false
+  },
+  "interventions": [
+    "Combined two-task model proposal into one implementation and verification task without another model call.",
+    "Publication stopped on Linear Markdown normalization; corrected generated Markdown and repaired only the newly created task path formatting. No duplicate issues.",
+    "Confirmed first-use Claude trust for the authorized private checkout; added a bounded startup fix for future launches.",
+    "Pilot stopped automatically at the operator-selected 250000 token cap, with cached tokens included. No accepted budget was rewritten."
+  ],
+  "agent_calls_observed": 2,
+  "tests_or_delivery_complete": false,
+  "observed_tokens": 285000,
+  "estimated_spend_usd": 0.3151782,
+  "worker_checks": {
+    "unit": 10,
+    "storybook": 3,
+    "build_exit": 0,
+    "browser_cases": 4,
+    "style_gate": "pass"
+  },
+  "independent_goal_verification": "not_started",
+  "specialist_review": "not_started",
+  "final_pr": "not_created",
+  "submission": "not_received",
+  "ended_at": "2026-10-22T00:01:09.669548Z",
+  "worker_models_observed": [
+    "claude-sonnet-5-5"
+  ],
+  "final_fix_binary_sha256": "eb310ed8cfdfa50177bb8eb8e4819f32f63aafc0b26abebc6e3e685919275df2",
+  "linear_observed_after_stop": {
+    "NOR-493": "Triage",
+    "NOR-494": "In Progress"
+  },
+  "lola_final_make_check": "pass",
+  "normal_daemon_changed": false
+}

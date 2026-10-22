@@ -85,7 +85,7 @@ func (p *Publisher) Publish(ctx context.Context, want Request) (Record, error) {
 	if !want.Policy.PublishPR {
 		return Record{}, errors.New("goal policy does not authorize publication")
 	}
-	if !strings.HasPrefix(want.Title, "feat(goal): ") || len(want.Title) > 280 || strings.ContainsAny(want.Title, "\r\n") || len(want.Body) > 60000 || want.Body == "" {
+	if !validDescription(want) {
 		return Record{}, errors.New("invalid bounded goal PR description")
 	}
 	branch, err := goalwork.GoalBranch(want.Goal)
@@ -114,9 +114,16 @@ func (p *Publisher) Publish(ctx context.Context, want Request) (Record, error) {
 		if err := json.Unmarshal(b, &record); err != nil {
 			return record, err
 		}
-		if record.Version != 1 || record.CreatedAt.IsZero() || !sameRequest(record.Request, want) || record.Members == nil || len(record.Members) != len(want.Policy.Members) {
+		// Presentation may change between binary versions. The persisted prose
+		// is authoritative once publication is reserved, including after a lost
+		// response. Reuse it only when ALL execution inputs still match; never
+		// rewrite an existing PR or revision comment to the new template.
+		reserved := want
+		reserved.Title, reserved.Body = record.Request.Title, record.Request.Body
+		if record.Version != 1 || record.CreatedAt.IsZero() || !validDescription(reserved) || !sameRequest(record.Request, reserved) || record.Members == nil || len(record.Members) != len(want.Policy.Members) {
 			return record, errors.New("publication identity reused with changed inputs")
 		}
+		want = reserved
 		loaded = true
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return record, err
@@ -344,6 +351,10 @@ func sameRequest(a, b Request) bool {
 	}
 	right, err := json.Marshal(b)
 	return err == nil && bytes.Equal(left, right)
+}
+
+func validDescription(r Request) bool {
+	return strings.HasPrefix(r.Title, "feat(goal): ") && len(r.Title) <= 280 && !strings.ContainsAny(r.Title, "\r\n") && len(r.Body) <= 60000 && r.Body != ""
 }
 
 func (p *Publisher) effect(ctx context.Context, fn func() error) error {

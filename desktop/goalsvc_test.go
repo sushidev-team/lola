@@ -99,7 +99,7 @@ func TestGoalStartBridge(t *testing.T) {
 			}
 			body, _ := json.Marshal(goal.StartOptions{Authorization: goal.Authorization{ID: "g", Revision: 12}})
 			return protocol.Response{OK: true, Data: body}
-		case "goalStart":
+		case protocol.GoalStartV2:
 			var a goal.Authorization
 			if err := json.Unmarshal(req.Args, &a); err != nil || a.ID != "g" || a.Revision != 12 || a.Policy.Limits.Tokens != 12345 || a.Policy.PublishPR {
 				t.Fatal("changed reviewed authorization")
@@ -129,5 +129,33 @@ func TestGoalStartBridge(t *testing.T) {
 	}
 	if len(f.requests()) != 3 {
 		t.Fatal("automatically repeated operation")
+	}
+}
+
+func TestGoalEditBridge(t *testing.T) {
+	a := goalplan.EditRequest{ID: "6cb0ae02-b741-4bb4-9b08-9e72007456cb", Project: "nori", Revision: 3, EditID: "586092ce-b9d7-4fd9-b019-1bf5f4ae774c", Reason: "Clarify the reviewed task graph"}
+	f := startFakeDaemon(t, func(req protocol.Request) protocol.Response {
+		var got goalplan.EditRequest
+		if err := json.Unmarshal(req.Args, &got); err != nil {
+			t.Fatal(err)
+		}
+		if req.Cmd != "goalEditPlan" || got.ID != a.ID || got.Project != a.Project || got.Revision != a.Revision || got.EditID != a.EditID || got.Reason != a.Reason {
+			t.Fatal("lost reviewed edit", got)
+		}
+		return protocol.Response{Error: "uncertain response"}
+	})
+	s := &DaemonService{}
+	if _, err := s.GoalEditPlan(a); err == nil {
+		t.Fatal("uncertain error lost")
+	}
+	if len(f.requests()) != 1 {
+		t.Fatal("automatic mutation retry")
+	}
+	a.EditID = ""
+	if _, err := s.GoalEditPlan(a); err == nil {
+		t.Fatal("missing identity accepted")
+	}
+	if len(f.requests()) != 1 {
+		t.Fatal("invalid request reached daemon")
 	}
 }

@@ -40,7 +40,7 @@ func (g Goal) WorkflowStage(taskID string) string {
 		return ""
 	}
 	if p.State == "integrated" {
-		if g.State == "accepted" {
+		if g.State == "accepted" || g.Delivered() {
 			return "delivered"
 		}
 		return "integrated"

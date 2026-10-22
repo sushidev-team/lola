@@ -195,6 +195,9 @@ func (g Goal) validateExecution() error {
 			return errors.New("delivery marked merged without all target observations")
 		}
 	}
+	if err := g.validateHumanAcceptance(); err != nil {
+		return err
+	}
 	if e.DeliveryEvidenceURL != "" {
 		if err := ValidateEvidenceURL(e.DeliveryEvidenceURL); err != nil {
 			return err

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
 	"strings"
 	"syscall"
 	"time"
@@ -16,7 +17,10 @@ import (
 	"github.com/sushidev-team/lola/internal/protocol"
 )
 
+var knowledgeCaptureID = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+
 type knowledgeArgs struct {
+	CaptureID   string                 `json:"capture_id,omitempty"`
 	Scope       knowledge.Scope        `json:"scope"`
 	Proposal    knowledge.Proposal     `json:"proposal"`
 	Query       knowledge.Query        `json:"query"`
@@ -39,6 +43,13 @@ func (d *Daemon) handleKnowledge(ctx context.Context, req protocol.Request) prot
 	if err := json.Unmarshal(req.Args, &a); err != nil {
 		return protocol.Response{Error: err.Error()}
 	}
+	// Older CLI requests omit scope; scoped clients must match it exactly.
+	if (req.Cmd == "knowledgeAccept" || req.Cmd == "knowledgeDispute") && a.Scope.Project != "" {
+		l, ok := d.knowledge.Version(knowledge.Reference{ID: a.ID, Version: a.Version})
+		if !ok || l.Scope.Project != a.Scope.Project || l.Scope.GoalID != a.Scope.GoalID {
+			return protocol.Response{Error: "lesson version is unavailable in this scope"}
+		}
+	}
 	var data any
 	var err error
 	switch req.Cmd {
@@ -49,11 +60,17 @@ func (d *Daemon) handleKnowledge(ctx context.Context, req protocol.Request) prot
 		} else {
 			data = lesson
 		}
-	case "knowledgeImprovementHistory", "knowledgeImprovements", "knowledgeImprovement", "knowledgeDecideImprovement", "knowledgeExportImprovement":
+	case "knowledgeImprovementCatalog", "knowledgeImprovementSources", "knowledgeImprovementDecisions", "knowledgeImprovementHistory", "knowledgeImprovements", "knowledgeImprovement", "knowledgeDecideImprovement", "knowledgeExportImprovement":
 		if a.Scope.Project == "" {
 			return protocol.Response{Error: "project required"}
 		}
 		switch req.Cmd {
+		case "knowledgeImprovementCatalog":
+			data = d.knowledge.ImprovementCatalog(a.Scope, a.After)
+		case "knowledgeImprovementSources":
+			data, err = d.knowledge.ImprovementSourcePage(a.Scope, a.ID, a.Revision, a.After)
+		case "knowledgeImprovementDecisions":
+			data = d.knowledge.ImprovementDecisionHistory(a.Scope, a.ID)
 		case "knowledgeImprovementHistory":
 			data = d.knowledge.ImprovementHistory(a.Scope, a.ID)
 		case "knowledgeImprovements":
@@ -129,7 +146,14 @@ func (d *Daemon) handleKnowledge(ctx context.Context, req protocol.Request) prot
 		if correct {
 			kind = "correction"
 		}
-		data, err = d.knowledge.Capture(a.Scope, a.Proposal, knowledge.Source{Kind: kind, ID: goal.NewID()}, correct)
+		id := a.CaptureID
+		if id != "" && !knowledgeCaptureID.MatchString(id) {
+			return protocol.Response{Error: "capture_id must be a UUID"}
+		}
+		if id == "" {
+			id = goal.NewID()
+		}
+		data, err = d.knowledge.Capture(a.Scope, a.Proposal, knowledge.Source{Kind: kind, ID: id}, correct)
 	case "knowledgeAccept":
 		data, err = d.acceptKnowledge(ctx, a)
 	case "knowledgeDispute":

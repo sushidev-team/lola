@@ -6,5 +6,6 @@ export type {
     Check,
     Limits,
     Member,
-    Policy
+    Policy,
+    Rollout
 } from "./models.js";

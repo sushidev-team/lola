@@ -74,6 +74,7 @@ func (m *rootModel) detailActions() []detailAction {
 		{key: "p", id: "pr", label: "Open a PR", desc: "pick an open pull request → shell", enabled: repoSet},
 		{key: "t", id: "ticket", label: "Start a ticket", desc: "pick a Linear issue → worktree + agent", enabled: hasTeam},
 		{key: "w", id: "worktree", label: "New worktree", desc: "new branch → shell", enabled: true},
+		{key: "K", id: "knowledge", label: "Workspace learning", desc: "lessons, corrections, provenance and export", enabled: true},
 		{key: "g", id: "goals", label: "Goals", desc: "briefs, progress, usage and execution controls", enabled: true},
 		{key: "s", id: "sessions", label: "Sessions", desc: "this project's live sessions", enabled: true},
 		{key: "e", id: "edit", label: "Configure project", desc: "repo · filter · labels · write-back", enabled: true},
@@ -230,6 +231,8 @@ func (m *rootModel) runDetailAction(a detailAction) (tea.Model, tea.Cmd) {
 	case "worktree":
 		d.wtMode, d.wtBranch, d.flash = true, "", ""
 		return m, nil
+	case "knowledge":
+		return m.enterKnowledge(d.project)
 	case "goals":
 		return m.enterGoals(d.project)
 	case "sessions":

@@ -16,6 +16,7 @@ import (
 )
 
 type goalsModel struct {
+	recovery              *goalRecoveryModel
 	planner               *goalPlannerModel
 	authorization         *goalAuthorizationModel
 	project               string
@@ -68,7 +69,7 @@ func fetchGoalsCmd(project string, gen int) tea.Cmd {
 }
 func (m *rootModel) refreshGoals() tea.Cmd {
 	v := &m.goals
-	if v.loading || v.busy || v.confirm != nil || v.planner != nil || v.authorization != nil {
+	if v.loading || v.busy || v.confirm != nil || v.planner != nil || v.authorization != nil || v.recovery != nil {
 		return nil
 	}
 	v.gen++
@@ -151,6 +152,9 @@ func (m *rootModel) updateGoals(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	v := &m.goals
+	if v.recovery != nil {
+		return m.updateGoalRecovery(k)
+	}
 	if v.planner != nil {
 		return m.updateGoalPlanner(k)
 	}
@@ -171,18 +175,35 @@ func (m *rootModel) updateGoals(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if v.err != "" {
 				return m, nil
 			}
+			if v.confirm.Action == "accept-delivery" && strings.TrimSpace(v.reason) == "" {
+				return m, nil
+			}
 			req := *v.confirm
 			req.Reason = v.reason
 			v.busy = true
 			return m, controlGoalCmd(v.project, v.gen, req)
 		case "backspace":
-			if v.confirm.Action != "publish" && v.reason != "" {
+			if v.err == "" && v.confirm.Action != "publish" && v.reason != "" {
 				_, n := utf8.DecodeLastRuneInString(v.reason)
 				v.reason = v.reason[:len(v.reason)-n]
+				v.scroll = 1 << 20
 			}
+		case "up":
+			v.scroll = max(0, v.scroll-1)
+		case "down":
+			v.scroll++
+		case "pgup":
+			v.scroll = max(0, v.scroll-max(1, m.height-8))
+		case "pgdown":
+			v.scroll += max(1, m.height-8)
+		case "home":
+			v.scroll = 0
+		case "end":
+			v.scroll = 1 << 20
 		default:
-			if v.confirm.Action != "publish" && len(v.reason)+len(k.Text) <= 2000 {
+			if v.err == "" && v.confirm.Action != "publish" && k.Text != "" && len(v.reason)+len(k.Text) <= 2000 {
 				v.reason += k.Text
+				v.scroll = 1 << 20
 			}
 		}
 		return m, nil
@@ -236,6 +257,20 @@ func (m *rootModel) updateGoals(msg tea.Msg) (tea.Model, tea.Cmd) {
 			v.scroll = 0
 		}
 		return m, nil
+	case "home", "end", "pgup", "pgdown":
+		if v.detail {
+			switch k.String() {
+			case "home":
+				v.scroll = 0
+			case "end":
+				v.scroll = 1 << 20
+			case "pgup":
+				v.scroll = max(0, v.scroll-max(1, m.height-8))
+			case "pgdown":
+				v.scroll += max(1, m.height-8)
+			}
+		}
+		return m, nil
 	}
 	g := v.current()
 	if g == nil || !v.detail {
@@ -254,13 +289,17 @@ func (m *rootModel) updateGoals(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, fetchSessionsCmd
 		}
 	}
+	if k.String() == "e" && !v.loading && v.err == "" {
+		return m, m.openGoalRecovery()
+	}
 	if k.String() == "a" && !v.loading && v.err == "" && goalCanAuthorize(g) {
 		return m, m.openGoalAuthorization()
 	}
-	action := map[string]string{"p": "pause", "r": "resume", "x": "stop-workers", "c": "cancel", "u": "publish"}[k.String()]
+	action := map[string]string{"p": "pause", "r": "resume", "x": "stop-workers", "c": "cancel", "u": "publish", "h": "accept-delivery"}[k.String()]
 	if action != "" && !v.loading && v.err == "" && (slices.Contains(g.Actions, action) || (action == "publish" && goalCanPublish(g))) {
 		v.confirm = &goal.ControlRequest{ID: g.ID, Revision: g.Revision, Action: action}
 		v.reason = ""
+		v.scroll = 0
 	}
 	return m, nil
 }
@@ -276,6 +315,9 @@ func goalText(s string) string {
 	}, stripANSI(s))
 }
 func (m *rootModel) goalsLines() []string {
+	if m.goals.recovery != nil {
+		return m.goalRecoveryLines()
+	}
 	if m.goals.authorization != nil {
 		return m.goalAuthorizationLines()
 	}
@@ -302,18 +344,31 @@ func (m *rootModel) goalsLines() []string {
 	if v.confirm != nil {
 		body = append(body, "Review action: "+v.confirm.Action, fmt.Sprintf("Goal %s · reviewed revision %d", v.confirm.ID, v.confirm.Revision))
 		descriptions := map[string]string{
-			"publish":      "Create or reconcile the goal parent issue, task issues, dependencies and optional milestone in the configured Linear project. This does not authorize execution.",
-			"pause":        "Hold dispatch, verification and integration. Running workers continue.",
-			"resume":       "Recheck Linear and policy, then resume within accepted budgets.",
-			"stop-workers": "Stop current workers; keep files and evidence. Resume to dispatch again.",
-			"cancel":       "End this goal and stop workers. Keep all work. Cannot be resumed.",
+			"accept-delivery": "Record acceptance of this verified, merged goal revision. Describe what you checked. This does not merge or deploy code.",
+			"publish":         "Create or reconcile the goal parent issue, task issues, dependencies and optional milestone in the configured Linear project. This does not authorize execution.",
+			"pause":           "Hold dispatch, verification and integration. Running workers continue.",
+			"resume":          "Recheck Linear and policy, then resume within accepted budgets.",
+			"stop-workers":    "Stop current workers; keep files and evidence. Resume to dispatch again.",
+			"cancel":          "End this goal and stop workers. Keep all work. Cannot be resumed.",
 		}
 		body = append(body, descriptions[v.confirm.Action])
+		if v.confirm.Action == "accept-delivery" && g != nil {
+			body = append(body, "", goalText(g.Title), "Goal acceptance criteria:")
+			for _, criterion := range g.Acceptance {
+				body = append(body, "  - "+goalText(criterion))
+			}
+			body = append(body, "Delivered revisions:")
+			for _, member := range g.Members {
+				body = append(body, fmt.Sprintf("  %s → %s · %s", goalText(member.Repo), goalText(member.Target), goalText(member.Commit)))
+			}
+		}
 		if v.confirm.Action == "publish" && g != nil {
 			body = append(body, fmt.Sprintf("%d tasks. Existing confirmed resources are retained on retry.", len(g.Tasks)))
 			if g.MilestoneName != "" {
 				body = append(body, "New milestone: "+goalText(g.MilestoneName))
 			}
+		} else if v.confirm.Action == "accept-delivery" {
+			body = append(body, "", "Acceptance evidence (required): "+goalText(v.reason))
 		} else {
 			body = append(body, "", "Reason (optional): "+goalText(v.reason))
 		}
@@ -331,13 +386,22 @@ func (m *rootModel) goalsLines() []string {
 		if g.SyncError != "" {
 			body = append(body, "Linear needs reconciliation: "+goalText(g.SyncError))
 		}
-		if g.Reason != "" {
+		if g.Reason != "" && g.HumanAcceptance == nil {
 			body = append(body, goalText(g.Reason))
 		}
 		if g.Stopping {
 			body = append(body, "Workers stopping or stopped; files retained")
 		}
 		body = append(body, fmt.Sprintf("Revision %d · Linear %s", g.Revision, g.Parent.Identifier))
+		if g.RequireHumanAcceptance {
+			if a := g.HumanAcceptance; a != nil {
+				body = append(body, fmt.Sprintf("Human acceptance recorded · reviewed revision %d · %s", a.Revision, goalText(a.AcceptedAt)), goalText(a.Evidence))
+			} else if g.Delivered {
+				body = append(body, "Awaiting human acceptance: final deliveries are observed merged.")
+			} else {
+				body = append(body, "Human acceptance is required after all final PRs are observed merged.")
+			}
+		}
 		if g.Authorized {
 			body = append(body, fmt.Sprintf("Observed usage: %d / %d tokens · %d / %d calls", g.Tokens, g.TokenLimit, g.Coverage.Runs, g.RunLimit),
 				fmt.Sprintf("$%.2f reported estimate · %d partial, %d missing, %d without dollar cost", g.SpendUSD, g.Coverage.Partial, g.Coverage.Missing, g.Coverage.CostUnavailable),
@@ -395,6 +459,10 @@ func (m *rootModel) goalsLines() []string {
 				}
 			}
 		}
+		body = append(body, goalRolloutLines(g.Rollout)...)
+		if g.Authorized && len(g.Members) > 1 && g.Rollout == nil {
+			body = append(body, "", "No reviewed rollout contract was recorded. Repository listing order is not a merge recommendation.")
+		}
 	}
 	// Wrap detail prose before scrolling, so long criteria remain readable at
 	// terminal widths without relying on the terminal's own line wrapping.
@@ -408,9 +476,10 @@ func (m *rootModel) goalsLines() []string {
 	}
 	height := max(1, h-5)
 	start := min(v.scroll, max(0, len(body)-height))
-	if !v.detail || v.confirm != nil {
+	if !v.detail && v.confirm == nil {
 		start = 0
 	}
+	v.scroll = start
 	// Follow a selected list row even when the goal list is taller than the screen.
 	if !v.detail && v.confirm == nil {
 		i := slices.IndexFunc(v.rows, func(r goal.Overview) bool { return r.ID == v.selected })
@@ -428,8 +497,8 @@ func (m *rootModel) goalsLines() []string {
 	if v.detail {
 		footer = "↑↓ scroll · tab task · s session · o Linear · f refresh · esc back"
 		if g != nil {
-			labels := map[string]string{"pause": "p pause", "resume": "r resume", "stop-workers": "x stop workers", "cancel": "c cancel"}
-			var actions []string
+			labels := map[string]string{"pause": "p pause", "resume": "r resume", "stop-workers": "x stop workers", "cancel": "c cancel", "accept-delivery": "h accept delivery"}
+			actions := []string{"e recovery and Linear"}
 			for _, a := range g.Actions {
 				actions = append(actions, labels[a])
 			}
@@ -446,11 +515,20 @@ func (m *rootModel) goalsLines() []string {
 		}
 	}
 	if v.confirm != nil {
+		controls = ""
 		footer = "enter apply · esc close action · type optional reason"
 		if v.confirm.Action == "publish" {
 			footer = "enter publish to Linear · esc close action"
+		} else if v.confirm.Action == "accept-delivery" {
+			footer = "enter accept · esc close · ↑↓ scroll · type evidence"
+			if strings.TrimSpace(v.reason) == "" {
+				controls = "Acceptance evidence is required before confirming."
+			}
 		}
-		controls = ""
+		if v.err != "" {
+			footer = "esc close and refresh · ↑↓ inspect · submission disabled"
+			controls = ""
+		}
 	}
 	if v.busy {
 		footer = "Applying reviewed action…"

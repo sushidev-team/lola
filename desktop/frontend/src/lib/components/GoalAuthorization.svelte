@@ -7,6 +7,8 @@
   import Checkbox from "./Checkbox.svelte";
   import Select from "./Select.svelte";
   import Disclosure from "./Disclosure.svelte";
+  import GoalRollout from "./GoalRollout.svelte";
+  import { reviewedRollout } from "../goalrollout";
 
   let { goalID, onstarted }: { goalID: string; onstarted: () => void } = $props();
   let open = $state(false);
@@ -17,6 +19,9 @@
   let acknowledged = $state(false);
   let failed = $state(false);
   let reviewArea = $state<HTMLDivElement>();
+  let errorArea = $state<HTMLParagraphElement>();
+  let compatibility = $state("");
+  let mergeOrder = $state("");
   let active = true;
   onDestroy(() => { active = false; });
   const field = "mt-1 w-full min-w-0 rounded border border-edge bg-canvas px-2 py-1.5 text-ink outline-none focus:border-accent";
@@ -33,11 +38,21 @@
     {key:"spend_usd",label:"Observed spend limit (USD, 0 disables)",min:0,max:1000000,step:0.01},
   ];
 
+  async function showError(message: string) {
+    error = message;
+    await tick();
+    errorArea?.focus();
+    errorArea?.scrollIntoView({ block: "nearest" });
+  }
   async function load() {
     if (busy) return;
     open = true; busy = true; error = ""; reviewed = null; acknowledged = false; options = null;
-    try { options = await DaemonService.GoalStartOptions(goalID); failed = false; }
-    catch (e) { error = `Could not prepare authorization: ${String(e)}. Reload settings after resolving the issue.`; }
+    try {
+      options = await DaemonService.GoalStartOptions(goalID); failed = false;
+      compatibility = options.authorization.policy.rollout?.compatibility?.join("\n") ?? "";
+      mergeOrder = options.authorization.policy.rollout?.merge_order?.join("\n") ?? "";
+    }
+    catch (e) { await showError(`Could not prepare authorization: ${String(e)}. Reload settings after resolving the issue.`); }
     finally { busy = false; }
   }
   function addCheck() {
@@ -54,7 +69,16 @@
   }
   async function review() {
     if (!options || busy || !options.authorization.policy.checks?.length) return;
+    if (options.authorization.policy.require_human_acceptance && !options.authorization.policy.publish_pr) {
+      await showError("Human acceptance requires final PR delivery. Enable draft PR publication or turn off separate human acceptance.");
+      return;
+    }
+    let rollout;
+    try { rollout = reviewedRollout(options.authorization.policy, compatibility, mergeOrder); }
+    catch (e) { await showError(e instanceof Error ? e.message : String(e)); return; }
     reviewed = structuredClone($state.snapshot(options.authorization));
+    if (rollout) reviewed.policy.rollout = rollout;
+    else delete reviewed.policy.rollout;
     for (const member of reviewed.policy.members ?? []) member.paths = (member.paths ?? []).map(p => p.trim()).filter(Boolean);
     acknowledged = false; failed = false; error = "";
     await tick(); reviewArea?.focus();
@@ -63,7 +87,7 @@
     if (!reviewed || !acknowledged || busy || failed) return;
     busy = true;
     try { await DaemonService.GoalStart($state.snapshot(reviewed)); if (active) onstarted(); open = false; }
-    catch (e) { failed = true; error = `Authorization was not confirmed: ${String(e)}. Reload settings to inspect current state before another action. The daemon may already have accepted this request.`; }
+    catch (e) { failed = true; await showError(`Authorization was not confirmed: ${String(e)}. Reload settings to inspect current state before another action. The daemon may already have accepted this request.`); }
     finally { busy = false; }
   }
 </script>
@@ -74,7 +98,7 @@
     <section aria-label="Goal execution authorization" class="space-y-3">
       <div class="flex flex-wrap items-baseline justify-between gap-2"><h4 class="font-medium text-ink">Authorize autonomous execution</h4><Button disabled={busy} onclick={() => { open = false; }}>Close authorization</Button></div>
       {#if busy}<p role="status" class="text-sm text-faint">{reviewed ? "Submitting the reviewed authorization…" : "Loading current goal settings…"}</p>{/if}
-      {#if error}<p role="alert" class="selectable whitespace-pre-wrap break-words text-sm text-bad">{error}</p>{/if}
+      {#if error}<p bind:this={errorArea} tabindex="-1" role="alert" class="selectable whitespace-pre-wrap break-words text-sm text-bad">{error}</p>{/if}
       {#if !options || failed}<Button disabled={busy} onclick={() => void load()}>Reload settings</Button>{/if}
       {#if options}
         <p class="selectable whitespace-pre-wrap break-words text-sm text-ink">{options.goal.outcome}</p>
@@ -138,6 +162,17 @@
               <p class="text-sm text-faint">Agent calls include planning, workers and reviews. Token and spend limits use delayed observations; missing usage is unknown. They are not exact billing caps. Task, call and runtime limits still apply.</p>
             </div>
             <label class="flex items-start gap-2 text-sm text-ink"><Checkbox bind:checked={options.authorization.policy.publish_pr} />Allow verified goal branches and draft PRs to be published. Merging stays manual.</label>
+            {#if options.authorization.policy.publish_pr}
+              <div class="space-y-2 border-t border-edge pt-3">
+                <h5 class="font-medium text-ink">Rollout contract</h5>
+                <p class="text-sm text-faint">{(options.authorization.policy.members?.length ?? 0)>1 ? "Required for this stack." : "Optional for one repository; leave both fields blank to omit."} Describe what must remain compatible while people merge and deploy the changes.</p>
+                <label class="block text-sm text-faint">Compatibility requirements<textarea class={field} rows="3" bind:value={compatibility} aria-describedby="rollout-compatibility-help"></textarea></label>
+                <p id="rollout-compatibility-help" class="text-sm text-faint">One requirement per line, up to 20. Each may contain at most 500 bytes. Include compatibility with earlier clients, data or services where relevant.</p>
+                <label class="block text-sm text-faint">Human merge order<textarea class={field} rows="3" bind:value={mergeOrder} aria-describedby="rollout-order-help"></textarea></label>
+                <p id="rollout-order-help" class="selectable break-words text-sm text-faint">One repository ID per line, first to last; include each exactly once: {options.authorization.policy.members?.map(m=>m.id).join(", ")}. Unchanged repositories need no PR.</p>
+              </div>
+            {/if}
+            <label class="flex items-start gap-2 text-sm text-ink"><Checkbox checked={options.authorization.policy.require_human_acceptance ?? false} onchange={(e) => { if(options) options.authorization.policy.require_human_acceptance=e.currentTarget.checked; }} />Require a separate human acceptance decision after all final PRs are merged.</label>
             <label class="flex items-start gap-2 text-sm text-ink"><Checkbox checked={options.authorization.policy.replan ?? false} onchange={(e) => { if(options) options.authorization.policy.replan=e.currentTarget.checked; }} />Allow bounded task replanning after conclusive verification failures.</label>
             <Button type="submit" variant="primary" disabled={!options.authorization.policy.checks?.length}>Review authorization</Button>
           </fieldset>
@@ -147,10 +182,12 @@
           <p class="text-sm text-ink">Start {options.goal.title} at reviewed revision {reviewed.revision}.</p>
           <p class="text-sm text-faint">Workers may begin after this authorization is accepted. Scope, checks and budgets below are the complete policy you are approving.</p>
           <ul class="list-disc space-y-1 pl-5 text-sm text-faint">{#each reviewed.policy.members as member}<li class="selectable break-words">{member.repo || member.id} → {member.target}; allowed paths: {member.paths?.length ? member.paths.join(", ") : "entire repository, restricted by each task’s scope"}</li>{/each}</ul>
+          {#if reviewed.policy.rollout}<GoalRollout rollout={reviewed.policy.rollout} members={reviewed.policy.members ?? []} />{/if}
           {#each reviewed.policy.checks as check}<div class="space-y-1 text-sm"><h5 class="font-medium text-ink">{check.id} · {check.member || "combined root"} · {check.timeout_seconds}s</h5><pre class="selectable whitespace-pre-wrap break-all text-faint">{check.command}</pre><p class="selectable break-all text-faint">{check.image}</p>{#each check.artifacts ?? [] as artifact}<p class="selectable break-words text-faint">{artifact.id}: {artifact.kind} from {artifact.path}</p>{/each}</div>{/each}
           <p class="text-sm text-faint">Required reviews: {reviewed.policy.profiles?.join(", ") || "None selected"}</p>
           <dl class="grid grid-cols-[minmax(0,1fr)_auto] gap-x-4 gap-y-1 text-sm">{#each limitFields as f}<dt class="text-faint">{f.label}</dt><dd class="num text-ink">{reviewed.policy.limits[f.key]}</dd>{/each}</dl>
           <p class="text-sm text-ink">Draft PR publication: {reviewed.policy.publish_pr ? "allowed after verification" : "disabled"}. Task replanning: {reviewed.policy.replan ? "allowed within these limits" : "disabled"}.</p>
+          <p class="text-sm text-ink">Human acceptance: {reviewed.policy.require_human_acceptance ? "a separate decision is required after all final PRs are merged" : "the goal completes when final delivery is observed"}.</p>
           <label class="flex items-start gap-2 text-sm text-ink"><Checkbox bind:checked={acknowledged} disabled={busy || failed} />I authorize this scope, checks and limits, including paid agent calls.</label>
           <div class="flex flex-wrap gap-2"><Button variant="primary" disabled={!acknowledged || busy || failed} onclick={() => void start()}>Authorize and start</Button><Button disabled={busy || failed} onclick={() => { reviewed=null; acknowledged=false; }}>Back to limits</Button></div>
         </div>

@@ -3,12 +3,13 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/sv
 import GoalPlanner from "./GoalPlanner.svelte";
 import type { Record as Proposal } from "@bindings/internal/goalplan";
 
-const api = vi.hoisted(() => ({ GoalProposals: vi.fn(), GoalProposal: vi.fn(), GoalPropose: vi.fn(), GoalAcceptPlan: vi.fn() }));
+const api = vi.hoisted(() => ({ GoalProposals: vi.fn(), GoalProposal: vi.fn(), GoalPropose: vi.fn(), GoalAcceptPlan: vi.fn(), GoalEditPlan: vi.fn() }));
 vi.mock("@bindings/desktop", () => ({ DaemonService: api }));
 function sample(): Proposal {
  return { id:"proposal-id", goal_id:"goal-id", revision:7, state:"proposed", agent:"codex", image:"image", input_sha256:"digest", started_at:"2026-10-21T12:00:00Z", input:{ request:{id:"proposal-id",project:"nori",title:"Invitations",outcome:"Invite a colleague",acceptance:["Recipient accepts"],non_goals:["Billing"],max_tasks:10,timeout_seconds:180},team_id:"team",linear_project_id:"linear-project",stack:false,members:[],labels:[],knowledge:{lessons:[],references:[]}},output:{tasks:[{title:"Invitation API",description:"Implement invitation endpoints",acceptance:["Acceptance test passes"],apps:["api"],paths:{api:["src/invitations"]},covers:[1]}],unknowns:["Which mail provider is configured?"]} };
 }
 beforeEach(() => {
+ api.GoalEditPlan.mockReset().mockResolvedValue({...sample(),revision:8});
  api.GoalProposals.mockReset().mockResolvedValue([]);
  api.GoalProposal.mockReset().mockResolvedValue(sample());
  api.GoalPropose.mockReset().mockResolvedValue(sample());
@@ -40,6 +41,30 @@ describe("GoalPlanner",()=>{
   await screen.findByText(/Local goal created/);
   expect(api.GoalAcceptPlan).toHaveBeenCalledExactlyOnceWith("proposal-id",7);
   expect(accepted).toHaveBeenCalledExactlyOnceWith("goal-id");
+ });
+ it("locks proposal navigation during editing and accepts only the saved revision after a fresh review",async()=>{
+  const p=sample(); p.input.members=[{id:"api",repo:"org/api",snapshot:{}} as never];
+  api.GoalPropose.mockResolvedValue(p);
+  render(GoalPlanner,{project:"nori",onaccepted:vi.fn()}); await open(); await fill();
+  await fireEvent.click(screen.getByRole("button",{name:"Request task proposal"}));
+  await screen.findByRole("button",{name:"Edit task proposal"});
+  await fireEvent.click(screen.getByRole("checkbox"));
+  await fireEvent.click(screen.getByRole("button",{name:"Edit task proposal"}));
+  expect(screen.getByRole("button",{name:"Refresh result"})).toBeDisabled();
+  expect(screen.getByRole("button",{name:"New proposal brief"})).toBeDisabled();
+  expect(screen.getByRole("button",{name:"Hide goal planner"})).toBeDisabled();
+  expect(screen.getByLabelText("Saved proposals")).toBeDisabled();
+  expect(screen.queryByRole("button",{name:"Accept as local goal"})).not.toBeInTheDocument();
+  await fireEvent.input(screen.getByLabelText("Task 1 title"),{target:{value:"Invitation service"}});
+  await fireEvent.input(screen.getByLabelText("Reason for this revision"),{target:{value:"Clarify service scope"}});
+  await fireEvent.click(screen.getByRole("button",{name:"Review revision"}));
+  await fireEvent.click(screen.getByRole("checkbox",{name:/I reviewed this revision/}));
+  await fireEvent.click(screen.getByRole("button",{name:"Save proposal revision"}));
+  await screen.findByText(/revision 8/);
+  expect(screen.getByRole("button",{name:"Accept as local goal"})).toBeDisabled();
+  await fireEvent.click(screen.getByRole("checkbox"));
+  await fireEvent.click(screen.getByRole("button",{name:"Accept as local goal"}));
+  await waitFor(()=>expect(api.GoalAcceptPlan).toHaveBeenCalledExactlyOnceWith("proposal-id",8));
  });
  it("recovers an uncertain call by reading its retained identity without replaying it",async()=>{
   api.GoalPropose.mockRejectedValue(new Error("socket timeout"));

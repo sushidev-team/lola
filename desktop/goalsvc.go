@@ -83,5 +83,20 @@ func (s *DaemonService) GoalStart(authorization goal.Authorization) error {
 	if err != nil {
 		return err
 	}
-	return call(protocol.Request{Cmd: "goalStart", Args: args}, longTimeout, nil)
+	return call(protocol.Request{Cmd: protocol.GoalStartV2, Args: args}, longTimeout, nil)
+}
+
+// GoalEditPlan preserves an operator's reviewed graph and edit identity. It
+// neither reruns the coordinator nor publishes or authorizes the goal.
+func (s *DaemonService) GoalEditPlan(request goalplan.EditRequest) (goalplan.Record, error) {
+	var out goalplan.Record
+	if err := request.Validate(); err != nil {
+		return out, err
+	}
+	args, err := json.Marshal(request)
+	if err != nil {
+		return out, err
+	}
+	err = call(protocol.Request{Cmd: "goalEditPlan", Args: args}, longTimeout, &out)
+	return out, err
 }

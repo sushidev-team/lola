@@ -39,6 +39,8 @@ func authorizationFill(p *goalAuthorizationModel) {
 	p.editor.field("member.0").lines = []string{"src", "tests"}
 	p.editor.field("spend_usd").text = "12.50"
 	p.editor.field("publish_pr").b = true
+	p.editor.field("compatibility").lines = []string{"Keep the previous app compatible with the new API."}
+	p.editor.field("merge_order").lines = []string{"api", "app"}
 	p.editor.field("replan").b = true
 }
 func authorizationReview(t *testing.T, m *rootModel, p *goalAuthorizationModel) {
@@ -67,7 +69,7 @@ func TestGoalAuthorizationReadOnlyOptionsAndFrozenStart(t *testing.T) {
 			}
 			return plannerResponse(t, authorizationOptions()), nil
 		}
-		if req.Cmd != "goalStart" {
+		if req.Cmd != protocol.GoalStartV2 {
 			t.Fatal(req.Cmd)
 		}
 		if err := json.Unmarshal(req.Args, &submitted); err != nil {
@@ -113,7 +115,7 @@ func TestGoalAuthorizationReadOnlyOptionsAndFrozenStart(t *testing.T) {
 	if !reflect.DeepEqual(submitted, expected) || submitted.Revision != 7 || submitted.Policy.Members[0].Target != "main" || submitted.Policy.Limits.Tokens != 500000 {
 		t.Fatalf("changed reviewed policy: %#v", submitted)
 	}
-	if !reflect.DeepEqual(calls, []string{"goalStartOptions", "goalStart"}) {
+	if !reflect.DeepEqual(calls, []string{"goalStartOptions", protocol.GoalStartV2}) {
 		t.Fatal(calls)
 	}
 }

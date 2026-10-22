@@ -1,0 +1,20 @@
+{
+  "stopped-worker/build.log": "b9b6669ee1d69e50451797c378af0d2669f168d014570cc03529d0514e85d32f",
+  "stopped-worker/capture.log": "7db0e0b18dd1b60b9d4839c4bde4cd7204145226aeb458bc3a2a3855ce1c0e17",
+  "stopped-worker/commands.json": "2203c6f4289062a66bb587872885e74531731eba58dd7da29d4664807a858cae",
+  "stopped-worker/dark-desktop-overflow.png": "70ada79fd4650ebbcc1c32ce0e54678a8e63b3c5c67ef8360ca4e74c1ad0e753",
+  "stopped-worker/dark-desktop.png": "9a562475a531ef56bad7d6e671828fc888886492188c18a1e560c7ca64ebd53e",
+  "stopped-worker/dark-narrow-overflow.png": "1cc05d1c7d0abd4da8694d954b41c4fc3fc5e45ce9b1ce87efba8e990d0d16ca",
+  "stopped-worker/dark-narrow.png": "cf3d2e85c279fcfef71c1d338061a1bc264ce5099766b07cc566e001e0b86b45",
+  "stopped-worker/dependencies.log": "47fd84fe7b6430837e17fc0236e1cab95cb7af9e0f3173b6cf4b2fcb9e86fa04",
+  "stopped-worker/dialog.patch": "d4657dab8140613963a6cac3d450bed024193fc4ee68e3355e6d767ea6fedd01",
+  "stopped-worker/interaction.json": "f2436e35b35dadc8d62b9b1477de864b108ceedaf8217e6f3639d7b6dab2975c",
+  "stopped-worker/light-desktop-overflow.png": "3d5027c477b4ab7a8bac83f8f89dafa1619c8be46a22eedea24dae33d8ce1cd0",
+  "stopped-worker/light-desktop.png": "35f681d05ef3ade74c6d8a48b491eb97ce799e2a05b11b7014e8b97e0bee4bb9",
+  "stopped-worker/light-narrow-overflow.png": "c037a17c374ee43b6bac7d8e77bf25023e636b643e3af1751df206b77eebc1df",
+  "stopped-worker/light-narrow.png": "0942c18c8eddf8ab19dee8f1e961fe806d3f5a8f19c64db79514da34063aec50",
+  "stopped-worker/postinstall.log": "47fd84fe7b6430837e17fc0236e1cab95cb7af9e0f3173b6cf4b2fcb9e86fa04",
+  "stopped-worker/story-tests.log": "3c53b6da2ef69455fb7a90307a4b5c16466b979c4a06be8ce6f346224dc9cc52",
+  "stopped-worker/storybook.log": "1d63eae0f2d0adcf08d36cd01062172397a7d66b1f14024e497b56ee08529b4c",
+  "stopped-worker/unit.log": "8fe553579b33804fb47d06c8982a9f8991378f3d5c00a116799841308a228fde"
+}

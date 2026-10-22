@@ -40,6 +40,15 @@ func (g Goal) ProgressSummary() string {
 		state = "unknown"
 	}
 	fmt.Fprintf(&b, "Execution: **%s**.\n\n", state)
+	if e.Policy.RequireHumanAcceptance {
+		if e.HumanAcceptance != nil {
+			b.WriteString("Human acceptance recorded for the verified, merged goal delivery.\n\n")
+		} else if g.Delivered() {
+			b.WriteString("Delivery is merged. A separate human acceptance decision is still required in Lola.\n\n")
+		} else {
+			b.WriteString("This goal requires separate human acceptance after all final PR deliveries are observed merged.\n\n")
+		}
+	}
 	integrated, superseded, blocked := 0, 0, 0
 	for _, t := range g.Tasks {
 		p := e.Tasks[t.ID]

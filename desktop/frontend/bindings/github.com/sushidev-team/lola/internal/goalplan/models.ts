@@ -14,6 +14,25 @@ import * as knowledge$0 from "../knowledge/models.js";
 // @ts-ignore: Unused imports
 import * as usage$0 from "../usage/models.js";
 
+export interface Edit {
+    "request": EditRequest;
+    "revision": number;
+    "at": string;
+}
+
+/**
+ * EditRequest changes only the task proposal. The original user brief, source
+ * snapshots, model output and paid usage remain immutable and attributable.
+ */
+export interface EditRequest {
+    "id": string;
+    "project": string;
+    "revision": number;
+    "edit_id": string;
+    "reason": string;
+    "output": Output;
+}
+
 export interface Input {
     "request": Request;
     "team_id": string;
@@ -46,6 +65,11 @@ export interface Output {
 export type ProposedTask = goal$0.Replacement;
 
 export interface Record {
+    /**
+     * preserved original when an operator edits the graph
+     */
+    "model_output"?: Output | null;
+    "edits"?: Edit[] | null;
     "usage"?: usage$0.Observation | null;
     "id": string;
 

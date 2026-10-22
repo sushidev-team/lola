@@ -18,6 +18,10 @@ func (g *Goal) Control(action, reason string, now time.Time) error {
 		return errors.New("control reason exceeds 2000 bytes")
 	}
 	switch action {
+	case "accept-delivery":
+		if err := g.acceptDelivery(reason, now); err != nil {
+			return err
+		}
 	case "pause":
 		if !slices.Contains([]string{"preparing", "running", "verifying", "ready", "blocked", "paused"}, g.State) {
 			return errors.New("goal cannot pause in its current state")

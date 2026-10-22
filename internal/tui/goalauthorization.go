@@ -174,8 +174,15 @@ func (p *goalAuthorizationModel) initEditor() {
 	}
 	f.fields = append(f.fields,
 		setField{key: "publish_pr", label: "Publish draft PRs", kind: sfBool, b: a.Policy.PublishPR, help: "Allow verified goal branches and draft PRs; final merge remains manual."},
+		setField{key: "compatibility", label: "Compatibility", kind: sfList, help: "Used when publishing: 1–20 requirements, one per line, at most 500 bytes each. Required for stacks; optional for one repository."},
+		setField{key: "merge_order", label: "Human merge order", kind: sfList, help: "Used when publishing: every repository ID exactly once, one per line, first to last. IDs: " + strings.Join(memberIDs(a.Policy), ", ")},
+		setField{key: "require_human_acceptance", label: "Require acceptance", kind: sfBool, b: a.Policy.RequireHumanAcceptance, help: "Require a separate human acceptance decision after all final PRs are merged. Requires draft PR publication."},
 		setField{key: "replan", label: "Allow task replanning", kind: sfBool, b: a.Policy.Replan, help: "Bounded decomposition after conclusive verification failures."},
 		setField{key: "review", label: "Review authorization", kind: sfAction, help: "Inspect the complete policy before authorizing paid agent calls and workers."})
+	if a.Policy.Rollout != nil {
+		f.field("compatibility").lines = slices.Clone(a.Policy.Rollout.Compatibility)
+		f.field("merge_order").lines = slices.Clone(a.Policy.Rollout.MergeOrder)
+	}
 	f.cursor = 0
 	f.scroll = 0
 	f.rebase()
@@ -302,8 +309,14 @@ func (p *goalAuthorizationModel) authorization() (goal.Authorization, error) {
 		return a, err
 	}
 	a.Policy.PublishPR = f.field("publish_pr").b
+	a.Policy.RequireHumanAcceptance = f.field("require_human_acceptance").b
 	a.Policy.Replan = f.field("replan").b
-	if err = a.Policy.Validate(); err != nil {
+	a.Policy.Rollout = nil
+	compatibility, order := trimDropEmpty(f.field("compatibility").lines), trimDropEmpty(f.field("merge_order").lines)
+	if a.Policy.PublishPR && (len(a.Policy.Members) > 1 || len(compatibility) > 0 || len(order) > 0) {
+		a.Policy.Rollout = &goalpolicy.Rollout{Compatibility: compatibility, MergeOrder: order}
+	}
+	if err = a.Policy.ValidateAuthorization(); err != nil {
 		return a, err
 	}
 	if a.Policy.Limits.MaxTasks < len(p.options.Goal.Tasks) {
@@ -392,7 +405,7 @@ func (m *rootModel) updateGoalAuthorization(k tea.KeyPressMsg) (tea.Model, tea.C
 			p.acknowledged = !p.acknowledged
 		case "a":
 			if p.acknowledged {
-				return m, m.goalAuthorizationRequest("start", "goalStart", *p.reviewed)
+				return m, m.goalAuthorizationRequest("start", protocol.GoalStartV2, *p.reviewed)
 			}
 		case "v":
 			p.raw = !p.raw
@@ -506,6 +519,7 @@ func (p *goalAuthorizationModel) reviewLines() []string {
 		}
 		out = append(out, member.ID+" · "+member.Repo+" → "+member.Target, member.Source, "Paths: "+paths)
 	}
+	out = append(out, goalRolloutLines(a.Policy.Rollout)...)
 	for _, c := range a.Policy.Checks {
 		member := c.Member
 		if member == "" {
@@ -534,6 +548,7 @@ func (p *goalAuthorizationModel) reviewLines() []string {
 		out = append(out, item.label+": "+value)
 	}
 	out = append(out, "Token and spend limits use delayed observations, not exact billing caps.", fmt.Sprintf("Publish verified goal branches and draft PRs: %t", a.Policy.PublishPR), fmt.Sprintf("Allow bounded task replanning: %t", a.Policy.Replan))
+	out = append(out, fmt.Sprintf("Require separate human acceptance after final delivery: %t", a.Policy.RequireHumanAcceptance))
 	return out
 }
 func (m *rootModel) goalAuthorizationLines() []string {
