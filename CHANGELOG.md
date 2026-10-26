@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.2.20](https://github.com/sushidev-team/lola/compare/v0.2.19...v0.2.20) (2026-10-26)
+
+
+### Features
+
+* authorize autonomous goals from the TUI ([db24354](https://github.com/sushidev-team/lola/commit/db24354b048a6df110d0a21457dc7c5c3de108bb))
+* checkpoint self-improving workspaces and autonomous goals ([c830152](https://github.com/sushidev-team/lola/commit/c83015259944d8d0aacbaa6cb5588bd462f96561))
+* complete workspace goal controls and retain pilot evidence ([772dafc](https://github.com/sushidev-team/lola/commit/772dafce248316e2795978ce9d6f0673a26dbf17))
+* configure specialist review profiles in the TUI ([2f524fe](https://github.com/sushidev-team/lola/commit/2f524fea6e9649fcb066b9a4d355f956011e1a87))
+* expose specialist reviews and goal authoring in desktop ([ed2770e](https://github.com/sushidev-team/lola/commit/ed2770e0ce17fa888bc969f27efbdb0bd13cb81e))
+* plan and publish reviewed goals from the TUI ([6c0135e](https://github.com/sushidev-team/lola/commit/6c0135ef3be2970fe48bdf124919ff980d1a47a1))
+* preserve specialist model and prompt provenance ([20f89dc](https://github.com/sushidev-team/lola/commit/20f89dc0e85c1a10a02273cda597499c3f8e1c6c))
+* promote verified review lessons against accepted code ([5261611](https://github.com/sushidev-team/lola/commit/5261611db100cd543ebc7636067898260edc3af4))
+* propose prevention work from recurring workspace lessons ([e777089](https://github.com/sushidev-team/lola/commit/e777089c8135f6bc95a7ce292e9e27950c1fdde3))
+* revalidate workspace lessons against committed code ([eef8d84](https://github.com/sushidev-team/lola/commit/eef8d84949d4aefd66311251535a6066f8d6cf04))
+* route specialist findings and record scoped worker disputes ([5532a74](https://github.com/sushidev-team/lola/commit/5532a740d75f063e42d7edd469aba1dd00552bdb))
+* simplify onboarding and prevent Keychain startup hangs ([0179dff](https://github.com/sushidev-team/lola/commit/0179dff21bfb5db3eb942b2e721a0ecca57dee22))
+
+
+### Bug Fixes
+
+* **desktop:** check for updates on startup and periodically ([9b42b57](https://github.com/sushidev-team/lola/commit/9b42b57baf1eadd09fd0a61432ced2e0d69214b3))
+* **goals:** authorize bounded acceptance-check memory ([468bd03](https://github.com/sushidev-team/lola/commit/468bd0310d670f3dca87bd03fa3f3596f48ff752))
+
 ## [0.2.19](https://github.com/sushidev-team/lola/compare/v0.2.18...v0.2.19) (2026-10-20)
 
 
