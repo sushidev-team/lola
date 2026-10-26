@@ -552,10 +552,8 @@ export interface SettingsDTO {
 
 export interface SetupDTO {
     "linearKey": string;
-    "projectName": string;
-    "projectPath": string;
-    "repo": string;
-    "defaultBranch": string;
+    "agent": string;
+    "theme": string;
     "concurrencyCap": number;
     "globalCap": number;
     "pollInterval": string;

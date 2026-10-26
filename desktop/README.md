@@ -42,9 +42,12 @@ can reuse `internal/protocol`, `internal/config`, `internal/doctor`, etc.
 
 ## Setup and settings
 
-First-run setup needs a Linear key and a repository folder. Project details are
-filled from the checkout; expand **Project details** to correct them. Agent
-limits and polling frequency use the existing defaults and are optional here.
+First-run setup requires only a Linear API key. General settings offer optional
+defaults for the coding agent, theme, agent limits and polling interval. Setup
+opens an empty workspace; use **Add project** when you are ready to choose a
+repository. The TUI follows the same flow: connect Linear, then press Enter to
+finish or use the arrow keys to edit general settings. Press **n** afterward to
+add a project.
 
 Model, polling, executable, branch-prefix and review base-flag fields offer
 presets plus a Custom option. Existing values outside the preset list remain

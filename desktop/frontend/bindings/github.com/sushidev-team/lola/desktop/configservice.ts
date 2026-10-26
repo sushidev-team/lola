@@ -328,8 +328,9 @@ export function SetTheme(name: string): $CancellablePromise<void> {
 
 /**
  * Setup writes the initial config.toml from the wizard: it stores the Linear key
- * in the Keychain (falling back to an env var by name if that fails), records one
- * project, and sets the caps/interval. The key itself is never written to config.
+ * in the Keychain (falling back to an env var by name if that fails) and saves
+ * general defaults. Projects are added separately; rerunning setup preserves
+ * existing projects and unrelated settings. The key never enters config.toml.
  */
 export function Setup(dto: $models.SetupDTO): $CancellablePromise<$models.SetupResultDTO> {
     return $Call.ByID(3057086516, dto);

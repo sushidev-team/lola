@@ -1228,10 +1228,8 @@ func (s *ConfigService) SetLinearKey(key string) (string, error) {
 
 type SetupDTO struct {
 	LinearKey      string `json:"linearKey"`
-	ProjectName    string `json:"projectName"`
-	ProjectPath    string `json:"projectPath"`
-	Repo           string `json:"repo"`
-	DefaultBranch  string `json:"defaultBranch"`
+	Agent          string `json:"agent"`
+	Theme          string `json:"theme"`
 	ConcurrencyCap int    `json:"concurrencyCap"`
 	GlobalCap      int    `json:"globalCap"`
 	PollInterval   string `json:"pollInterval"`
@@ -1244,68 +1242,48 @@ type SetupResultDTO struct {
 }
 
 // Setup writes the initial config.toml from the wizard: it stores the Linear key
-// in the Keychain (falling back to an env var by name if that fails), records one
-// project, and sets the caps/interval. The key itself is never written to config.
+// in the Keychain (falling back to an env var by name if that fails) and saves
+// general defaults. Projects are added separately; rerunning setup preserves
+// existing projects and unrelated settings. The key never enters config.toml.
 func (s *ConfigService) Setup(dto SetupDTO) (SetupResultDTO, error) {
-	if strings.TrimSpace(dto.ProjectName) == "" {
-		return SetupResultDTO{}, errors.New("project name is required")
+	key := strings.TrimSpace(dto.LinearKey)
+	if key == "" {
+		return SetupResultDTO{}, errors.New("Linear API key is required")
 	}
-	path, err := config.DefaultPath()
+	cfg, path, err := loadConfig()
 	if err != nil {
 		return SetupResultDTO{}, err
 	}
-
-	cfg := &config.Config{}
-	cfg.Linear.Endpoint = config.DefaultEndpoint
-
-	res := SetupResultDTO{}
-	if err := storeLinearKey(setupKeychainService, dto.LinearKey); err == nil {
-		cfg.Linear.APIKeyKeychain = setupKeychainService
-		res.KeychainStored = true
-		res.Message = "key stored in the macOS Keychain (service " + setupKeychainService + ")"
-	} else {
-		// Keychain unavailable (or non-darwin): fall back to an env var by name.
-		cfg.Linear.APIKeyEnv = setupEnvVar
-		res.EnvVar = setupEnvVar
-		res.Message = "couldn't use the Keychain — export the key as " + setupEnvVar + " before starting the daemon"
+	if dto.ConcurrencyCap < 0 || dto.GlobalCap < 0 {
+		return SetupResultDTO{}, errors.New("agent limits must be positive whole numbers")
 	}
-
 	cfg.Defaults.ConcurrencyCap = orDefault(dto.ConcurrencyCap, 2)
 	cfg.Defaults.GlobalCap = orDefault(dto.GlobalCap, 4)
-	interval := 60 * time.Second
-	if dto.PollInterval != "" {
-		if d, perr := time.ParseDuration(dto.PollInterval); perr == nil {
-			interval = d
+	cfg.Defaults.Agent = strings.TrimSpace(dto.Agent)
+	cfg.UI.Theme = strings.TrimSpace(dto.Theme)
+	interval := config.DefaultPollInterval
+	if value := strings.TrimSpace(dto.PollInterval); value != "" {
+		interval, err = time.ParseDuration(value)
+		if err != nil || interval < config.MinPollInterval {
+			return SetupResultDTO{}, errors.New("poll interval must be a duration of at least 30s")
 		}
 	}
 	cfg.Defaults.PollInterval = interval
-
-	branch := dto.DefaultBranch
-	if branch == "" {
-		branch = config.DefaultBranchName
-	}
-	// The id is SLUGGED here: it becomes a worktree directory, a state filename
-	// and a tmux session prefix, so a name typed as "Nori App" must not reach the
-	// file with a space in it. The typed form is kept as the display Label when
-	// it says more than the id does.
-	name := config.Slug(dto.ProjectName)
-	if name == "" {
-		return SetupResultDTO{}, errors.New("project name must contain a letter or digit")
-	}
-	label := strings.TrimSpace(dto.ProjectName)
-	if label == name {
-		label = ""
-	}
-	cfg.Projects = []config.Project{{
-		Name:          name,
-		Label:         label,
-		Path:          dto.ProjectPath,
-		Repo:          dto.Repo,
-		DefaultBranch: branch,
-	}}
-
 	if err := cfg.Validate(); err != nil {
-		return res, err
+		return SetupResultDTO{}, err
+	}
+
+	res := SetupResultDTO{}
+	if err := storeLinearKey(setupKeychainService, key); err == nil {
+		cfg.Linear.APIKeyKeychain = setupKeychainService
+		cfg.Linear.APIKeyEnv = ""
+		res.KeychainStored = true
+		res.Message = "key stored in the macOS Keychain (service " + setupKeychainService + ")"
+	} else {
+		cfg.Linear.APIKeyKeychain = ""
+		cfg.Linear.APIKeyEnv = setupEnvVar
+		res.EnvVar = setupEnvVar
+		res.Message = "couldn't use the Keychain — export the key as " + setupEnvVar + " before starting the daemon"
 	}
 	if err := cfg.Save(path); err != nil {
 		return res, err

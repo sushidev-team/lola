@@ -1,6 +1,6 @@
 // First-run setup wizard (P0/P6): a bubbletea flow that collects the Linear
-// API key (validated live and stored in the Keychain), one [[project]], and
-// the [defaults] caps/interval, then writes config.toml (0600) via
+// API key (validated live and stored in the Keychain) and optional workspace
+// defaults, then writes config.toml (0600) via
 // config.Save. The key value is NEVER logged, written to config.toml, or
 // placed in an error string — it goes to the Keychain (or, on failure, the
 // user is told to export an env var), and the on-screen field masks all but
@@ -10,16 +10,14 @@ package tui
 import (
 	"context"
 	"fmt"
-	"os/exec"
-	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
+	"github.com/sushidev-team/lola/internal/agent"
 	"github.com/sushidev-team/lola/internal/config"
-	"github.com/sushidev-team/lola/internal/gitrepo"
 	"github.com/sushidev-team/lola/internal/linear"
 	"github.com/sushidev-team/lola/internal/secrets"
 )
@@ -31,16 +29,11 @@ const (
 	setupEnvVar          = "LINEAR_API_KEY"
 )
 
-// setupRepoRe mirrors config's loose "owner/name" check so the repo step can
-// give early feedback; config.Validate re-checks it at write time.
-var setupRepoRe = regexp.MustCompile(`^[\w.-]+/[\w.-]+$`)
-
 // Wizard steps, in order. stepConfirm writes the config.
 const (
 	stepKey = iota
-	stepProjectPath
-	stepRepo
-	stepBranch
+	stepAgent
+	stepTheme
 	stepConcurrency
 	stepGlobalCap
 	stepInterval
@@ -57,9 +50,8 @@ type setupModel struct {
 	validating  bool
 	keyErr      string // last validation error (never contains the key)
 	keySource   string // "keychain" or "env" once the key is stored
-	projectPath string
-	repo        string
-	branch      string
+	agent       string
+	theme       string
 	concurrency string
 	globalCap   string
 	interval    string
@@ -69,22 +61,17 @@ type setupModel struct {
 	height   int
 	wrote    bool // a config was written (drives fall-through vs. quit)
 
-	// dirs is the folder browser, open over the wizard while the user picks the
-	// project's checkout — the same one the project form uses.
-	dirs *dirPicker
-
 	// Injectable seams so the wizard is hermetic in tests.
 	validateKey func(ctx context.Context, endpoint, key string) error
 	storeKey    func(service, key string) error
-	gitToplevel func() string
-	inspectPath func(path string) gitrepo.Info
 }
 
 func newSetupModel() *setupModel {
 	return &setupModel{
 		step:        stepKey,
 		endpoint:    config.DefaultEndpoint,
-		branch:      config.DefaultBranchName,
+		agent:       config.DefaultAgent,
+		theme:       config.DefaultUITheme,
 		concurrency: "2",
 		globalCap:   "4",
 		interval:    "60s",
@@ -93,18 +80,8 @@ func newSetupModel() *setupModel {
 			_, err := linear.New(endpoint, key).Viewer(ctx)
 			return err
 		},
-		storeKey:    secrets.StoreLinearAPIKey,
-		gitToplevel: gitToplevelCWD,
-		inspectPath: inspectCheckout,
+		storeKey: secrets.StoreLinearAPIKey,
 	}
-}
-
-// inspectCheckout reads a checkout's repo/branches/root, bounded so a path on a
-// stale network mount cannot hang the wizard.
-func inspectCheckout(path string) gitrepo.Info {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	return gitrepo.Inspect(ctx, path)
 }
 
 // Setup runs the wizard unconditionally (the `lola setup` command). It prints a
@@ -116,7 +93,7 @@ func Setup() error {
 		return err
 	}
 	if wrote {
-		fmt.Println("setup complete — run `lola` to add a poll")
+		fmt.Println("setup complete — run `lola` and press n to add a project")
 	}
 	return nil
 }
@@ -148,6 +125,7 @@ func (m *setupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Every wizard step is single-line; an API key copied out of a
 			// browser routinely carries a trailing newline.
 			*buf += pasteInline(v.Content)
+			m.fieldErr, m.keyErr = "", ""
 		}
 		return m, nil
 	case keyValidatedMsg:
@@ -163,23 +141,10 @@ func (m *setupModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.keySource = "keychain"
 		}
-		m.step = stepProjectPath
-		if m.projectPath == "" {
-			m.projectPath = m.gitToplevel()
-		}
-		if m.projectPath == "" {
-			// Nothing to prefill (the wizard was not started inside a checkout),
-			// so open the folder browser rather than presenting an empty field
-			// that has to be typed absolutely.
-			return m, m.openDirs()
-		}
-		m.adoptPath(m.projectPath)
-		return m, nil
-	case dirLoadedMsg:
-		if m.dirs != nil {
-			cmd, _ := m.dirs.update(v)
-			return m, cmd
-		}
+		// Only the key is required. Focus Finish; optional defaults remain
+		// editable with the arrow keys without walking every field first.
+		m.key = ""
+		m.step = stepConfirm
 		return m, nil
 	case tea.KeyPressMsg:
 		return m.handleKey(v)
@@ -195,31 +160,42 @@ func (m *setupModel) handleKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
-	// The folder browser owns every keystroke while it is up (it types to
-	// filter), and its esc closes IT rather than quitting the wizard.
-	if m.dirs != nil {
-		if k.String() == "ctrl+c" {
-			return m, tea.Quit
-		}
-		cmd, ev := m.dirs.update(k)
-		switch ev {
-		case dirPickerCancel:
-			m.dirs = nil
-		case dirPickerChosen:
-			chosen := m.dirs.chosen
-			m.dirs = nil
-			m.adoptPath(chosen)
-		}
-		return m, cmd
-	}
 	switch k.String() {
 	case "esc", "ctrl+c":
-		return m, tea.Quit // esc anywhere before the write quits without writing
+		return m, tea.Quit
 	case "enter":
 		return m.advance()
-	case "ctrl+f":
-		if m.step == stepProjectPath {
-			return m, m.openDirs()
+	case "up", "shift+tab":
+		if m.keySource != "" && m.step > stepAgent {
+			m.step--
+		}
+		return m, nil
+	case "down", "tab":
+		if m.keySource != "" && m.step < stepConfirm {
+			m.step++
+		}
+		return m, nil
+	case "left", "right", "space":
+		if m.step == stepAgent || m.step == stepTheme {
+			choices, value := config.UIThemes, &m.theme
+			if m.step == stepAgent {
+				choices = nil
+				for _, kind := range agent.Kinds {
+					choices = append(choices, string(kind))
+				}
+				value = &m.agent
+			}
+			direction := 1
+			if k.String() == "left" {
+				direction = -1
+			}
+			for i, choice := range choices {
+				if choice == *value {
+					*value = choices[(i+direction+len(choices))%len(choices)]
+					break
+				}
+			}
+			return m, nil
 		}
 	}
 	if buf := m.activeBuf(); buf != nil {
@@ -235,12 +211,6 @@ func (m *setupModel) activeBuf() *string {
 	switch m.step {
 	case stepKey:
 		return &m.key
-	case stepProjectPath:
-		return &m.projectPath
-	case stepRepo:
-		return &m.repo
-	case stepBranch:
-		return &m.branch
 	case stepConcurrency:
 		return &m.concurrency
 	case stepGlobalCap:
@@ -276,42 +246,30 @@ func (m *setupModel) advance() (tea.Model, tea.Cmd) {
 			m.keyErr = "enter your Linear API key"
 			return m, nil
 		}
+		m.key = strings.TrimSpace(m.key)
 		m.validating, m.keyErr = true, ""
 		return m, m.validateCmd()
-	case stepProjectPath:
-		if strings.TrimSpace(m.projectPath) == "" {
-			m.fieldErr = "project path is required"
-			return m, nil
-		}
-		m.adoptPath(m.projectPath)
-		m.step, m.fieldErr = stepRepo, ""
-	case stepRepo:
-		if r := strings.TrimSpace(m.repo); r != "" && !setupRepoRe.MatchString(r) {
-			m.fieldErr = `repo must be "owner/name" (e.g. sushidev-team/nori-app)`
-			return m, nil
-		}
-		m.step, m.fieldErr = stepBranch, ""
-	case stepBranch:
-		if strings.TrimSpace(m.branch) == "" {
-			m.branch = config.DefaultBranchName
-		}
-		m.step, m.fieldErr = stepConcurrency, ""
+	case stepAgent, stepTheme:
+		m.step++
 	case stepConcurrency:
-		if !positiveInt(m.concurrency) {
-			m.fieldErr = "concurrency_cap must be a positive integer"
+		if strings.TrimSpace(m.concurrency) != "" && !positiveInt(m.concurrency) {
+			m.fieldErr = "Agents per project must be a positive whole number."
 			return m, nil
 		}
 		m.step, m.fieldErr = stepGlobalCap, ""
 	case stepGlobalCap:
-		if !positiveInt(m.globalCap) {
-			m.fieldErr = "global_cap must be a positive integer"
+		if strings.TrimSpace(m.globalCap) != "" && !positiveInt(m.globalCap) {
+			m.fieldErr = "Total running agents must be a positive whole number."
 			return m, nil
 		}
 		m.step, m.fieldErr = stepInterval, ""
 	case stepInterval:
-		if _, err := time.ParseDuration(strings.TrimSpace(m.interval)); err != nil {
-			m.fieldErr = "poll_interval must be a duration (e.g. 60s)"
-			return m, nil
+		if value := strings.TrimSpace(m.interval); value != "" {
+			duration, err := time.ParseDuration(value)
+			if err != nil || duration < config.MinPollInterval {
+				m.fieldErr = "poll interval must be a duration of at least 30s"
+				return m, nil
+			}
 		}
 		m.step, m.fieldErr = stepConfirm, ""
 	case stepConfirm:
@@ -323,39 +281,6 @@ func (m *setupModel) advance() (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	}
 	return m, nil
-}
-
-// openDirs puts the folder browser over the wizard, seeded at whatever the path
-// field already holds.
-func (m *setupModel) openDirs() tea.Cmd {
-	var cmd tea.Cmd
-	m.dirs, cmd = newDirPicker(dirPickerStart(nil, m.projectPath))
-	return cmd
-}
-
-// adoptPath takes a checkout as the project's path and fills what it implies:
-// the repository root (so a subdirectory still configures the repo), the GitHub
-// remote and the branch worktrees fork from. Fill-only — a value already typed
-// is never replaced, and a directory that is not a checkout simply contributes
-// nothing.
-func (m *setupModel) adoptPath(path string) {
-	path = strings.TrimSpace(path)
-	if path == "" {
-		return
-	}
-	info := m.inspectPath(path)
-	if info.Root != "" {
-		path = info.Root
-	}
-	m.projectPath, m.fieldErr = path, ""
-	if m.repo == "" {
-		m.repo = info.Repo
-	}
-	// The seeded branch is a placeholder, not a choice: the checkout's own
-	// default replaces it, but anything the user typed stays.
-	if info.DefaultBranch != "" && (m.branch == "" || m.branch == config.DefaultBranchName) {
-		m.branch = info.DefaultBranch
-	}
 }
 
 func (m *setupModel) validateCmd() tea.Cmd {
@@ -375,15 +300,36 @@ func (m *setupModel) write() error {
 	if err != nil {
 		return err
 	}
-	interval, err := time.ParseDuration(strings.TrimSpace(m.interval))
+	if m.keySource != "keychain" && m.keySource != "env" {
+		return fmt.Errorf("validate your Linear API key first")
+	}
+	interval := config.DefaultPollInterval
+	if value := strings.TrimSpace(m.interval); value != "" {
+		interval, err = time.ParseDuration(value)
+		if err != nil || interval < config.MinPollInterval {
+			return fmt.Errorf("poll interval must be a duration of at least 30s")
+		}
+	}
+	conc, gcap := 2, 4
+	for _, field := range []struct {
+		text  string
+		value *int
+	}{{m.concurrency, &conc}, {m.globalCap, &gcap}} {
+		if value := strings.TrimSpace(field.text); value != "" {
+			n, err := strconv.Atoi(value)
+			if err != nil || n < 1 {
+				return fmt.Errorf("agent limits must be positive whole numbers")
+			}
+			*field.value = n
+		}
+	}
+	// Preserve existing repositories and unrelated settings on an explicit rerun.
+	cfg, err := config.Load(path)
 	if err != nil {
 		return err
 	}
-	conc, _ := strconv.Atoi(strings.TrimSpace(m.concurrency))
-	gcap, _ := strconv.Atoi(strings.TrimSpace(m.globalCap))
-
-	cfg := &config.Config{}
 	cfg.Linear.Endpoint = m.endpoint
+	cfg.Linear.APIKeyKeychain, cfg.Linear.APIKeyEnv = "", ""
 	if m.keySource == "keychain" {
 		cfg.Linear.APIKeyKeychain = setupKeychainService
 	} else {
@@ -392,45 +338,13 @@ func (m *setupModel) write() error {
 	cfg.Defaults.ConcurrencyCap = conc
 	cfg.Defaults.GlobalCap = gcap
 	cfg.Defaults.PollInterval = interval
-	name := m.projectName()
-	label := config.LabelFromPath(strings.TrimSpace(m.projectPath))
-	if config.Slug(label) == name {
-		// The label adds nothing the id does not already say; DisplayName's
-		// fallback covers it and the file stays free of a redundant key.
-		label = ""
-	}
-	cfg.Projects = []config.Project{{
-		Name:          name,
-		Label:         label,
-		Path:          strings.TrimSpace(m.projectPath),
-		Repo:          strings.TrimSpace(m.repo),
-		DefaultBranch: strings.TrimSpace(m.branch),
-	}}
+	cfg.Defaults.Agent = m.agent
+	cfg.UI.Theme = m.theme
 
 	if err := cfg.Validate(); err != nil {
 		return firstError(err)
 	}
 	return cfg.Save(path)
-}
-
-// projectName derives a [[project]] id from the repo (its "name" segment),
-// falling back to the path's base directory. It is SLUGGED: the id is a
-// directory name, a state filename and a tmux session prefix, so a folder called
-// "Nori App" must not become an id with a space in it.
-func (m *setupModel) projectName() string {
-	if r := strings.TrimSpace(m.repo); r != "" {
-		if i := strings.LastIndex(r, "/"); i >= 0 && i < len(r)-1 {
-			if s := config.Slug(r[i+1:]); s != "" {
-				return s
-			}
-		}
-	}
-	if p := strings.TrimSpace(m.projectPath); p != "" {
-		if s := config.Slug(filepath.Base(p)); s != "" {
-			return s
-		}
-	}
-	return "project"
 }
 
 // ---- view ----
@@ -442,106 +356,133 @@ func (m *setupModel) View() tea.View {
 }
 
 func (m *setupModel) viewString() string {
-	// The folder browser takes the whole screen while it is up: it is a list that
-	// scrolls, and rendering it beside the wizard's own rows would leave neither
-	// legible.
-	if m.dirs != nil {
-		return m.dirs.view(m.height)
+	w := m.width
+	if w <= 0 {
+		w = 80
 	}
-	var b strings.Builder
-	b.WriteString(titleStyle.Render("lola setup — first run") + "\n\n")
-
-	rows := []struct {
+	wrap := func(text string) []string { return strings.Split(lipgloss.NewStyle().Width(w).Render(text), "\n") }
+	var body []string
+	var rowStarts, rowEnds []int
+	focus := 0
+	for _, row := range []struct {
 		label string
 		step  int
 	}{
-		{"Linear API key", stepKey},
-		{"Project path", stepProjectPath},
-		{"GitHub repo", stepRepo},
-		{"Default branch", stepBranch},
-		{"Concurrency cap", stepConcurrency},
-		{"Global cap", stepGlobalCap},
-		{"Poll interval", stepInterval},
-	}
-	for _, r := range rows {
-		marker := "  "
-		if r.step == m.step {
-			marker = "› "
+		{"Linear API key", stepKey}, {"Default agent", stepAgent}, {"Theme", stepTheme},
+		{"Agents per project", stepConcurrency}, {"Total running agents", stepGlobalCap}, {"Poll interval", stepInterval},
+	} {
+		if row.step == stepAgent {
+			body = append(body, "", faintText.Render("General settings (optional)"))
 		}
-		line := marker + fmt.Sprintf("%-18s", r.label) + m.fieldView(r.step)
-		if r.step == m.step {
+		rowStarts = append(rowStarts, len(body))
+		marker := "  "
+		if row.step == m.step {
+			marker = "> "
+		}
+		line := marker + fmt.Sprintf("%-22s", row.label) + m.fieldView(row.step)
+		if w < 60 {
+			line = marker + row.label + "\n  " + m.fieldView(row.step)
+		}
+		if row.step == m.step {
 			line = selStyle.Render(line)
 		}
-		b.WriteString(line + "\n")
-	}
-
-	confirm := "  [ Write config & finish ]"
-	if m.step == stepConfirm {
-		confirm = selStyle.Render("› [ Write config & finish ]")
-	} else {
-		confirm = faintText.Render(confirm)
-	}
-	b.WriteString("\n" + confirm + "\n\n")
-
-	if m.validating {
-		b.WriteString(faintText.Render("validating key with Linear…") + "\n")
-	}
-	if m.keySource != "" && m.step > stepKey {
-		note := "key stored in macOS Keychain (service " + setupKeychainService + ")"
-		if m.keySource == "env" {
-			note = "keychain unavailable — export " + setupEnvVar + " with your key before running lola"
+		body = append(body, wrap(line)...)
+		rowEnds = append(rowEnds, len(body))
+		if row.step == m.step {
+			focus = len(body) - 1
 		}
-		b.WriteString(faintText.Render(note) + "\n")
+	}
+	finish := "  [ Start Lola ]"
+	if m.step == stepConfirm {
+		finish = selStyle.Render("> [ Start Lola ]")
+	}
+	body = append(body, "", finish)
+	rowStarts = append(rowStarts, len(body)-1)
+	rowEnds = append(rowEnds, len(body))
+	if m.step == stepConfirm {
+		focus = len(body) - 1
+	}
+
+	var footer []string
+	if m.validating {
+		footer = append(footer, wrap("Validating key with Linear…")...)
+	}
+	if m.keySource == "keychain" {
+		footer = append(footer, wrap(goodText.Render("Linear connected · key in Keychain"))...)
+	}
+	if m.keySource == "env" {
+		footer = append(footer, wrap(warnText.Render("Keychain unavailable — export "+setupEnvVar+" before running Lola."))...)
 	}
 	if m.keyErr != "" {
-		b.WriteString(badText.Render("✗ "+m.keyErr) + "\n")
+		footer = append(footer, wrap(badText.Render(m.keyErr))...)
 	}
 	if m.fieldErr != "" {
-		b.WriteString(badText.Render("✗ "+m.fieldErr) + "\n")
+		footer = append(footer, wrap(badText.Render(m.fieldErr))...)
 	}
-
-	hint := "enter next · esc cancel (no config written)"
-	if m.step == stepProjectPath {
-		hint = "enter next · ctrl-f browse for the folder · esc cancel (no config written)"
+	hint := "enter connect · esc cancel"
+	if m.keySource != "" {
+		hint = "↑/↓ field · ←/→ choice · enter next/start · esc cancel"
 	}
-	b.WriteString("\n" + faintText.Render(hint) + "\n")
-	return b.String()
+	footer = append(footer, wrap(faintText.Render(hint))...)
+	header := []string{titleStyle.Render("Lola setup"), ""}
+	if m.height > 0 {
+		available := max(1, m.height-len(header)-len(footer)-1)
+		start := max(0, focus-available+1)
+		// Keep field labels with their values when compact layouts scroll.
+		if start > 0 {
+			for _, row := range rowStarts {
+				if row >= start && row <= focus {
+					start = row
+					break
+				}
+			}
+		}
+		end := min(len(body), start+available)
+		limit := end
+		for _, row := range rowEnds {
+			if row > focus && row <= limit {
+				end = row
+			}
+		}
+		body = body[start:end]
+	}
+	lines := append(header, body...)
+	lines = append(lines, "")
+	return strings.Join(append(lines, footer...), "\n")
 }
 
 func (m *setupModel) fieldView(step int) string {
-	active := step == m.step
 	if step == stepKey {
+		if m.keySource != "" {
+			return "Connected"
+		}
 		if m.key == "" {
-			if active {
-				return faintText.Render("(paste your Linear API key)")
-			}
-			return faintText.Render("(pending)")
+			return "(paste your Linear API key)"
 		}
 		return maskKey(m.key)
 	}
-	var raw string
 	switch step {
-	case stepProjectPath:
-		raw = m.projectPath
-	case stepRepo:
-		raw = m.repo
-	case stepBranch:
-		raw = m.branch
+	case stepAgent:
+		return m.agent
+	case stepTheme:
+		return m.theme
 	case stepConcurrency:
-		raw = m.concurrency
+		if strings.TrimSpace(m.concurrency) == "" {
+			return "2 (default)"
+		}
+		return m.concurrency
 	case stepGlobalCap:
-		raw = m.globalCap
+		if strings.TrimSpace(m.globalCap) == "" {
+			return "4 (default)"
+		}
+		return m.globalCap
 	case stepInterval:
-		raw = m.interval
+		if strings.TrimSpace(m.interval) == "" {
+			return "60s (default)"
+		}
+		return m.interval
 	}
-	switch {
-	case raw != "":
-		return raw
-	case step > m.step:
-		return faintText.Render("(pending)")
-	default:
-		return faintText.Render("(type a value)")
-	}
+	return ""
 }
 
 // maskKey shows only the last 4 characters of the key; everything before them
@@ -566,17 +507,3 @@ func positiveInt(s string) bool {
 func firstError(err error) error {
 	return fmt.Errorf("%s", strings.SplitN(err.Error(), "\n", 2)[0])
 }
-
-// gitToplevelCWD returns the git worktree root of the current directory, or ""
-// when the CWD is not inside a repo.
-func gitToplevelCWD() string {
-	out, err := exec.Command("git", "-C", ".", "rev-parse", "--show-toplevel").Output()
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(out))
-}
-
-// The wizard's own remote parser is gone: internal/gitrepo owns that transform
-// now (and is stricter — it refuses to guess owner/name from a non-GitHub host),
-// reached through the inspectPath seam above.

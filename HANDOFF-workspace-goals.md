@@ -1,6 +1,6 @@
 # Cross-device handoff: self-improving workspaces and goals
 
-Updated 2026-10-22. Continue on `feat/self-improving-workspaces` in
+Updated 2026-10-25. Continue on `feat/self-improving-workspaces` in
 `sushidev-team/lola`. Implementation checkpoints are `772dafc` and `468bd03`;
 this handoff was initially committed immediately after them. **The full plan is not complete.**
 
@@ -54,6 +54,17 @@ local Codex/Claude/agent skill directories. Its location needs resolving before
 PR creation; the concrete handoff PR requirements remain recorded below.
 
 ## Start here
+
+Local setup update, 2026-10-25: the Mac app and TUI now require only the Linear
+key during first-run setup, with optional general defaults and projects added
+afterward. A live startup hang exposed
+`security` reading the dev terminal and stopping the app's process group; the
+Keychain helper now runs in a separate session with a 15-second deadline.
+The development app reloaded, setup completed, and a nonempty credential was
+confirmed readable from `lola-linear` without printing it. The normal config
+contains zero projects and its daemon is running. Do not ask for the Linear key
+again on this device. Claude authentication has not been rechecked. No new pilot
+goal, worker or model call ran; the additional pilot allowance above is unchanged.
 
 1. Fetch and check out `feat/self-improving-workspaces` from origin. In an existing
    checkout, inspect local changes first; do not reset, stash or overwrite them.
