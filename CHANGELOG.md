@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.2.19](https://github.com/sushidev-team/lola/compare/v0.2.18...v0.2.19) (2026-10-20)
+
+
+### Features
+
+* **checkpoints:** describe changes beside turn numbers ([a63dd65](https://github.com/sushidev-team/lola/commit/a63dd65fbdaf525dcb13770c13dfeaa746dfc7ad))
+* **daemon:** sandbox hook bridge + linked-repo PR tracking ([6062e45](https://github.com/sushidev-team/lola/commit/6062e45a96d17b014c013abee52e4f445404d956))
+* **mobile:** select paired devices for wireless launches ([b79ec24](https://github.com/sushidev-team/lola/commit/b79ec248b26468c40740867a91e3f57cea27c9e3))
+* optional docker sandbox + stacks (multi-repo projects) ([fd57685](https://github.com/sushidev-team/lola/commit/fd5768599629b3f14a65fe61bccd64a2ad11d206))
+* pick linked repos per issue by label ([610e93b](https://github.com/sushidev-team/lola/commit/610e93b0e722688ef25093609d9aa512ef28f2df))
+* **review:** publish guarded review statuses and honor required checks ([d260211](https://github.com/sushidev-team/lola/commit/d260211e3d6b556888b8798b3e9312e0e770b469))
+* **runtime:** docker sandbox launch + linked-repo worktrees ([d64549f](https://github.com/sushidev-team/lola/commit/d64549f926e3e461d1fd0dea39f7370016cdc9d5))
+* stacks — one issue, several repositories, no main repo ([0a9fd98](https://github.com/sushidev-team/lola/commit/0a9fd98f3cd9c61d3e17940fa380cd3ebf4a1db6))
+* **ui:** show sandbox + linked-repo PRs in TUI and app ([30e847f](https://github.com/sushidev-team/lola/commit/30e847f85d58ce42e023e2c412066aebe010c600))
+
+
+### Bug Fixes
+
+* **daemon:** refine dev URLs throughout startup ([cec11c5](https://github.com/sushidev-team/lola/commit/cec11c5e409aaa1096cfdd13fd0d7b772dccf02e))
+* **desktop:** draw a readable stack icon in the sidebar ([e566ec2](https://github.com/sushidev-team/lola/commit/e566ec2c41172a4204cbc8b972efe2cfdd7db968))
+* **runtime:** derive sandbox mounts only from paths the agent cannot write ([363de68](https://github.com/sushidev-team/lola/commit/363de68ed5637e81b36de8ff8f84bd213623ac6d))
+* **sandbox:** mount each worktree's .git pointer read-only in the container ([0b673b9](https://github.com/sushidev-team/lola/commit/0b673b975e79fe98dbbb5d68761fb95bb7db1463))
+* **sandbox:** pin host git, explicit project, safe linked rollback/teardown ([cd898c7](https://github.com/sushidev-team/lola/commit/cd898c7ffe1edff627bb119ede38340df6cd88d5))
+* **sandbox:** skip pre_remove for sandboxed sessions ([96e6522](https://github.com/sushidev-team/lola/commit/96e65226fd93dcd90b7d8f5fd947a92b8638e85d))
+
 ## [0.2.18](https://github.com/sushidev-team/lola/compare/v0.2.17...v0.2.18) (2026-10-16)
 
 
