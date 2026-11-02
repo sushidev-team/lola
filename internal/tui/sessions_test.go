@@ -385,7 +385,7 @@ func TestSessionsKillConfirmAndSend(t *testing.T) {
 		t.Fatal("x must open the kill confirmation")
 	}
 	v := m.viewString()
-	if !strings.Contains(v, "kill ENG-123?") || !strings.Contains(v, "(y/n)") {
+	if !strings.Contains(v, "kill ENG-123?") || !strings.Contains(v, "(y/s/n)") {
 		t.Errorf("view must prompt to confirm the kill (naming the issue):\n%s", v)
 	}
 	if strings.Contains(v, "force") || strings.Contains(v, "--force") {
@@ -409,6 +409,24 @@ func TestSessionsKillConfirmAndSend(t *testing.T) {
 	}
 	if !strings.Contains(m.viewString(), "--force") {
 		t.Errorf("the dirty-kept message must render in the view:\n%s", m.viewString())
+	}
+}
+
+// "s" at the confirm stops the agent but keeps the worktree: a command is
+// dispatched and the confirmation closes.
+func TestSessionsKillConfirmStopKeepsWorktree(t *testing.T) {
+	m := newTestRoot(t)
+	m.tab = tabSessions
+	m.sessions.data = cannedSessions()
+	m.sessions.cursor = 0
+
+	m.Update(keyMsg("x"))
+	_, cmd := m.Update(keyMsg("s"))
+	if m.sessions.confirmKill {
+		t.Error("s must close the kill confirmation")
+	}
+	if cmd == nil {
+		t.Fatal("s must dispatch a stop command")
 	}
 }
 

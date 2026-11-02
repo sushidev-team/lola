@@ -24,6 +24,9 @@
     {#snippet footer()}
       <div class="flex justify-end gap-2">
         <Button variant="secondary" size="md" onclick={() => confirm.cancel()}>Cancel</Button>
+        {#if req.alternative}
+          <Button variant="secondary" size="md" onclick={() => confirm.acceptAlternative()}>{req.alternative.label}</Button>
+        {/if}
         <Button variant="danger-solid" size="md" onclick={() => confirm.accept()}>{req.confirmLabel}</Button>
       </div>
     {/snippet}

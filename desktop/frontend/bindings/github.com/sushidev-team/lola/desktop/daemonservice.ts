@@ -267,10 +267,11 @@ export function InstallCLI(): $CancellablePromise<$models.CLIInstallDTO> {
 }
 
 /**
- * Kill tears a session down. A dirty worktree is kept unless force is set.
+ * Kill tears a session down. A dirty worktree is kept unless force is set;
+ * keepWorktree stops the agent only and leaves the worktree for a later revive.
  */
-export function Kill(session: string, force: boolean): $CancellablePromise<protocol$0.KillData> {
-    return $Call.ByID(699745421, session, force);
+export function Kill(session: string, force: boolean, keepWorktree: boolean): $CancellablePromise<protocol$0.KillData> {
+    return $Call.ByID(699745421, session, force, keepWorktree);
 }
 
 export function KnowledgeAccept(request: knowledge$0.Acceptance): $CancellablePromise<knowledge$0.Lesson> {

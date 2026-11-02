@@ -21,6 +21,11 @@ export type ConfirmRequest = {
   confirmLabel: string;
   /** Run on accept. Kept as a closure so the caller decides what "yes" means. */
   onConfirm: () => void;
+  /**
+   * Optional milder alternative drawn between Cancel and the confirming button
+   * (e.g. "Stop agent" beside "Kill"). Never reachable by Enter/Escape.
+   */
+  alternative?: { label: string; onConfirm: () => void };
 };
 
 class Confirm {
@@ -39,6 +44,13 @@ class Confirm {
     const r = this.request;
     this.request = null;
     r?.onConfirm();
+  }
+
+  /** Same clear-first order as accept, for the alternative action. */
+  acceptAlternative() {
+    const r = this.request;
+    this.request = null;
+    r?.alternative?.onConfirm();
   }
 }
 

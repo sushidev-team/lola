@@ -225,7 +225,7 @@ func (m *rootModel) helpModal() string {
 		row("a", "answer input"),
 		row("f", "diff · comment, send to agent"),
 		row("A", "switch agent"),
-		row("x", "kill session"),
+		row("x", "kill session (s at prompt: stop, keep worktree)"),
 		row("o", "open PR"),
 		row("c", "coderabbit now"),
 		row("R", "revive dead"),
@@ -883,7 +883,7 @@ func (m *rootModel) cockpitMessage() string {
 				}
 			}
 		}
-		return warnText.Render(fmt.Sprintf("kill %s? removes worktree, stops agent (y/n)", label))
+		return warnText.Render(fmt.Sprintf("kill %s? y stops agent + removes worktree · s stops agent, keeps worktree (y/s/n)", label))
 	case s.confirmFreePort:
 		return warnText.Render(fmt.Sprintf(
 			"kill the process holding :%d (pid %d) and restart the dev processes? (y/n)", s.freePort, s.freePID))
@@ -949,7 +949,7 @@ func (m *rootModel) keybar(w int) string {
 	case s.answering:
 		return previewLine(faintText.Render("enter send · esc cancel"), w)
 	case s.confirmKill:
-		return previewLine(warnText.Render("y")+faintText.Render(" kill · ")+warnText.Render("n")+faintText.Render(" cancel"), w)
+		return previewLine(warnText.Render("y")+faintText.Render(" kill · ")+warnText.Render("s")+faintText.Render(" stop, keep worktree · ")+warnText.Render("n")+faintText.Render(" cancel"), w)
 	case s.confirmFreePort:
 		return previewLine(warnText.Render("y")+faintText.Render(" free port · ")+warnText.Render("n")+faintText.Render(" cancel"), w)
 	case s.switching:

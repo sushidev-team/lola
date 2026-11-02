@@ -56,7 +56,14 @@ describe("destructive actions ask first", () => {
   it("accepting the confirmation kills the session", () => {
     store.askKill("sess-1");
     confirm.accept();
-    expect(Kill).toHaveBeenCalledWith("sess-1", false);
+    expect(Kill).toHaveBeenCalledWith("sess-1", false, false);
+  });
+
+  it("the alternative stops the agent but keeps the worktree", () => {
+    store.askKill("sess-1");
+    expect(confirm.request?.alternative?.label).toBe("Stop, keep worktree");
+    confirm.acceptAlternative();
+    expect(Kill).toHaveBeenCalledWith("sess-1", false, true);
   });
 
   it("cancelling the confirmation kills nothing", () => {
@@ -148,7 +155,7 @@ describe("dirty-worktree kill re-asks with force", () => {
     Kill.mockRejectedValueOnce(dirty());
     await store.kill("sess-1");
     confirm.accept();
-    expect(Kill).toHaveBeenLastCalledWith("sess-1", true);
+    expect(Kill).toHaveBeenLastCalledWith("sess-1", true, false);
   });
 
   it("declining leaves the worktree alone", async () => {
