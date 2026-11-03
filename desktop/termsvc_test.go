@@ -408,3 +408,40 @@ func TestWriteWaitsForAnInFlightScroll(t *testing.T) {
 		t.Errorf("the keystroke must leave copy mode AFTER the scroll entered it:\n%s", log)
 	}
 }
+
+// fakeStream is a live-looking ptyStream with no process behind it: an os.Pipe
+// stands in for the PTY so closeStream has a real file to close.
+func fakeStream(t *testing.T) (*ptyStream, *bool) {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = w.Close() })
+	cancelled := false
+	return &ptyStream{f: r, cancel: func() { cancelled = true }}, &cancelled
+}
+
+// TestDetachAllClosesEveryStream pins the reload-leak fix: streams left behind
+// by a previous page (nobody looking at them) all go, so no orphaned tmux
+// client keeps the daemon's "a human is at this terminal" gate shut.
+func TestDetachAllClosesEveryStream(t *testing.T) {
+	a, aCancelled := fakeStream(t)
+	b, bCancelled := fakeStream(t)
+	svc := &TermService{streams: map[string]*ptyStream{"lola-x-1": a, "lola-x-2": b}}
+
+	svc.DetachAll()
+
+	if len(svc.streams) != 0 {
+		t.Errorf("streams left: %v", svc.streams)
+	}
+	for name, s := range map[string]*ptyStream{"lola-x-1": a, "lola-x-2": b} {
+		if !s.closed || !s.detached {
+			t.Errorf("%s: closed=%v detached=%v, want both", name, s.closed, s.detached)
+		}
+	}
+	if !*aCancelled || !*bCancelled {
+		t.Error("every stream's tmux client must be cancelled")
+	}
+	svc.DetachAll() // idempotent on an empty registry
+}
