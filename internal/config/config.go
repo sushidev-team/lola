@@ -324,6 +324,12 @@ type Defaults struct {
 	// it false when an external supervisor (launchd KeepAlive) owns the daemon,
 	// so the TUI never fights it — see AutoManageDaemon.
 	ManageDaemon *bool `toml:"manage_daemon"`
+	// TrustWorktrees toggles pre-accepting Claude Code's "do you trust this
+	// folder?" dialog for every worktree lola creates, by writing the trust
+	// flag into Claude Code's own config just before launch and removing it on
+	// teardown (internal/claudetrust). A pointer so an unset value defaults to
+	// true — see TrustClaudeWorktrees.
+	TrustWorktrees *bool `toml:"trust_worktrees"`
 
 	// --- Project defaults --------------------------------------------------
 	// Every key below is the fallback for the same-named [[project]] field: a
@@ -815,6 +821,7 @@ type fileDefaults struct {
 	Agent          string   `toml:"agent"`
 	AgentFallback  []string `toml:"agent_fallback,omitempty"`
 	ManageDaemon   *bool    `toml:"manage_daemon"`
+	TrustWorktrees *bool    `toml:"trust_worktrees"`
 
 	// Project defaults. Plain values, not pointers: an absent key is a zero
 	// value, which already means "no default here" and falls through to the
@@ -882,6 +889,7 @@ func (fc *fileConfig) config() *Config {
 			Agent:          fc.Defaults.Agent,
 			AgentFallback:  fc.Defaults.AgentFallback,
 			ManageDaemon:   fc.Defaults.ManageDaemon,
+			TrustWorktrees: fc.Defaults.TrustWorktrees,
 			BranchPrefix:   fc.Defaults.BranchPrefix,
 			PostCreate:     fc.Defaults.PostCreate,
 			Symlinks:       fc.Defaults.Symlinks,
@@ -942,6 +950,7 @@ func (c *Config) file() *fileConfig {
 			Agent:          c.Defaults.Agent,
 			AgentFallback:  c.Defaults.AgentFallback,
 			ManageDaemon:   c.Defaults.ManageDaemon,
+			TrustWorktrees: c.Defaults.TrustWorktrees,
 			BranchPrefix:   c.Defaults.BranchPrefix,
 			PostCreate:     c.Defaults.PostCreate,
 			Symlinks:       c.Defaults.Symlinks,
@@ -1062,6 +1071,15 @@ func Load(path string) (*Config, error) {
 // daemon so the TUI never fights the supervisor.
 func (c *Config) AutoManageDaemon() bool {
 	return c.Defaults.ManageDaemon == nil || *c.Defaults.ManageDaemon
+}
+
+// TrustClaudeWorktrees reports whether lola pre-accepts Claude Code's
+// workspace-trust dialog for the worktrees it creates. Unset defaults to true:
+// lola made the folder from a repository the operator configured, so asking a
+// human to vouch for it on every spawn only parks the agent. Set
+// [defaults].trust_worktrees = false to get the dialog back.
+func (c *Config) TrustClaudeWorktrees() bool {
+	return c.Defaults.TrustWorktrees == nil || *c.Defaults.TrustWorktrees
 }
 
 func (c *Config) applyDefaults() {

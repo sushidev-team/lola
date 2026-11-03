@@ -110,6 +110,7 @@ func (n *Native) SwitchAgent(ctx context.Context, s session.Session, kind agent.
 		return session.Session{}, fmt.Errorf("runtime: switch agent %s: write env: %w", id, err)
 	}
 
+	n.trustAgentDir(s.Project, id, dir, kind)
 	if err := n.Tmux.NewSession(ctx, id, dir, n.launchCommandPrompt(s.Project, id, kind, handoffLaunchPrompt(id, old), false)); err != nil {
 		// A partially created session must not linger as a zombie pane (same
 		// cleanup as finishAgentLaunch) — but the worktree is NEVER rolled

@@ -41,6 +41,18 @@ global_cap = 4
 # the supervisor (it then hides its start/stop/restart keys). Do not run both.
 # manage_daemon = true
 #
+# Pre-accept Claude Code's "Is this a project you created or one you trust?"
+# dialog for every worktree lola creates. lola writes
+# projects[<worktree>].hasTrustDialogAccepted into ~/.claude.json (or
+# $CLAUDE_CONFIG_DIR/.claude.json) just before a claude agent launches, and
+# removes the entry when the worktree is torn down. Trusting ~/.lola/worktrees
+# once does NOT work: Claude Code stops looking for a trusted parent at the git
+# root, and every worktree is its own. Only folders under ~/.lola/worktrees are
+# touched; sandboxed projects are skipped (their claude has its own config).
+# A trusted folder loads its project-level .claude/ settings, hooks and MCP
+# servers without asking. Default true.
+# trust_worktrees = true
+#
 # --- Project defaults -------------------------------------------------------
 # Every key below is the fallback for the same-named [[project]] key. A project
 # that OMITS the key inherits this value; a project that sets it overrides it.

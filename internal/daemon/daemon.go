@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/sushidev-team/lola/internal/checkpoint"
+	"github.com/sushidev-team/lola/internal/claudetrust"
 	"github.com/sushidev-team/lola/internal/gitdiff"
 	"io"
 	"log"
@@ -1152,6 +1153,12 @@ func newNativeRuntime(cfg *config.Config, home, lolaBin string, linearKey func()
 		Ports:          ports,
 		HookToken:      hookToken,
 		KnowledgeBrief: knowledgeBrief,
+		TrustWorkspace: func(dir string) error {
+			return claudetrust.Trust(claudetrust.ConfigPath(), dir)
+		},
+		UntrustWorkspace: func(dir string) error {
+			return claudetrust.Untrust(claudetrust.ConfigPath(), dir)
+		},
 	}
 }
 

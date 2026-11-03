@@ -151,6 +151,7 @@ func (n *Native) spawnStack(ctx context.Context, p config.Project, issue linear.
 	for _, a := range created {
 		n.recordBaseline(ctx, a.Worktree, id)
 	}
+	n.trustAgentDir(p.Name, id, dir, kind)
 	if err := n.Tmux.NewSession(ctx, id, dir, n.launchLine(p.Name, id, kind, defaultLaunchPrompt(id), model, false)); err != nil {
 		if n.Tmux.Has(ctx, id) {
 			if killErr := n.Tmux.KillSession(ctx, id); killErr != nil {
@@ -372,6 +373,7 @@ func (n *Native) removeStackFolder(s session.Session, dir string, force bool) er
 		return err
 	}
 	n.releasePorts(s.ID)
+	n.untrustAgentDir(s.ID, dir)
 	return nil
 }
 
