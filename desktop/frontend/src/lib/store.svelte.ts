@@ -571,6 +571,13 @@ class Store {
       this.setFlash(String(err), "bad");
     }
   }
+  async openFolder(path: string) {
+    try {
+      await DaemonService.OpenFolder(path);
+    } catch (err) {
+      this.setFlash(String(err), "bad");
+    }
+  }
   reload() {
     return this.act(() => DaemonService.Reload(), "config reloaded");
   }

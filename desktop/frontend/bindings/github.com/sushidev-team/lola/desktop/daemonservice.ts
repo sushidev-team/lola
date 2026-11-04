@@ -339,6 +339,14 @@ export function Open(project: string, ref: string): $CancellablePromise<protocol
 }
 
 /**
+ * OpenFolder opens an existing directory in Finder on the desktop machine.
+ * This is local UI work, so it does not depend on the daemon's version.
+ */
+export function OpenFolder(path: string): $CancellablePromise<void> {
+    return $Call.ByID(1513891901, path);
+}
+
+/**
  * OpenManual starts an agent or shell in a worktree or borrowed directory.
  */
 export function OpenManual(a: protocol$0.OpenManualArgs): $CancellablePromise<protocol$0.OpenData> {

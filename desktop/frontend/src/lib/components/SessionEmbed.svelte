@@ -302,6 +302,15 @@
            line — and it stopped the terminal short of the window's edge, which is
            the one thing the region is for. -->
       <span class="ml-auto flex items-center gap-1.5">
+        {#if session.worktree}
+          <Button icon size="xs" aria-label="Open session folder in Finder" title={`Open in Finder · ${session.worktree}`} onclick={() => store.openFolder(session.worktree)}>
+            <svg class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M3 19V6a2 2 0 0 1 2-2h4l3 3h1" />
+              <path d="m3 19 3-8h16l-3 8H3Z" />
+              <path d="m16 8 5-5m-5 0h5v5" />
+            </svg>
+          </Button>
+        {/if}
         {#if session.devCommands?.length}
           <!-- The project's dev processes live in ONE session at a time, so this
                is a segmented-style toggle rather than an action: selected means
