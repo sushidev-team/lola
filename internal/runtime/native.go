@@ -1203,9 +1203,9 @@ func (n *Native) Adopt(ctx context.Context) ([]session.Session, error) {
 	}
 	live := map[string]bool{}
 	for _, ts := range tmuxSessions {
-		if session.IsGoalSessionID(ts.Name) {
+		if session.IsGoalSessionID(ts.Name) || strings.HasPrefix(ts.Name, "lola-local-") {
 			continue
-		} // goal journal owns adoption
+		} // goals and borrowed directories are adopted from their persisted records
 		if strings.HasPrefix(ts.Name, sessionPrefix) {
 			live[ts.Name] = true
 		}
@@ -1396,6 +1396,16 @@ func (n *Native) Kill(ctx context.Context, s session.Session, removeWorktree, fo
 			n.Logf("session %s: removing its sandbox container failed: %v", s.ID, err)
 		}
 	}
+	if s.Kind == session.KindLocal {
+		if removeWorktree {
+			dir, err := localArtifacts(s.ID)
+			if err != nil {
+				return err
+			}
+			return os.RemoveAll(dir)
+		}
+		return nil
+	}
 	if !removeWorktree {
 		return nil
 	}
@@ -1549,10 +1559,21 @@ func (n *Native) Revive(ctx context.Context, s session.Session) (session.Session
 	if s.GoalManaged() {
 		return s, errors.New("goal workers resume through a newly reserved attempt")
 	}
+	if s.Kind == session.KindLocal {
+		return n.reviveLocal(ctx, s)
+	}
 	id := s.ID
 	dir := filepath.Join(n.WT.Root, s.Project, id)
 	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
 		return session.Session{}, fmt.Errorf("runtime: revive %s: worktree %s is gone — let the issue re-dispatch instead", id, dir)
+	}
+	if s.IsAgentless() {
+		if err := n.Tmux.NewSession(ctx, id, dir, n.shellCommand()); err != nil {
+			return session.Session{}, err
+		}
+		s.SetAgentState(state.AgentShell, "", time.Now())
+		s.TmuxName = id
+		return s, nil
 	}
 	kind := agent.Parse(s.Agent)
 	if kind == agent.Claude {

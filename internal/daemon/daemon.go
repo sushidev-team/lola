@@ -62,6 +62,7 @@ type NativeAPI interface {
 	SpawnWith(ctx context.Context, p config.Project, issue linear.Issue, o runtime.SpawnOpts) (session.Session, error)
 	Open(ctx context.Context, p config.Project, sessionID, ref, branch string) (session.Session, error)
 	OpenManual(ctx context.Context, p config.Project, sessionID, branch, base string) (session.Session, error)
+	OpenDirectory(ctx context.Context, p config.Project, id, dir, location, kind string, useAgent bool) (session.Session, error)
 	OpenPRAgent(ctx context.Context, p config.Project, sessionID, branch, prompt, agentOverride string) (session.Session, error)
 	OpenManualAgent(ctx context.Context, p config.Project, sessionID, branch, base, prompt, agentOverride string) (session.Session, error)
 	SwitchAgent(ctx context.Context, s session.Session, kind agent.Kind, reason, paneTail string) (session.Session, error)
@@ -1181,6 +1182,22 @@ func (d *Daemon) adoptNativeSessions(ctx context.Context) {
 		d.logf("", "adopt: native session scan failed: %v", err)
 		return
 	}
+	// Local sessions have no owned worktree to scan. Their persisted paths win.
+	for _, local := range d.sessions.Snapshot() {
+		if local.Kind != session.KindLocal {
+			continue
+		}
+		if nat.Alive(ctx, local) {
+			if local.IsAgentless() {
+				local.SetAgentState(state.AgentShell, "", time.Now())
+			} else {
+				local.SetAgentState(state.AgentWorking, "", time.Now())
+			}
+		} else {
+			local.SetAgentState(state.AgentDead, "", time.Now())
+		}
+		found = append(found, local)
+	}
 	for _, scanned := range found {
 		s := scanned
 		// runtime.Adopt reports axis-bearing records; any other NativeAPI
@@ -1191,6 +1208,8 @@ func (d *Daemon) adoptNativeSessions(ctx context.Context) {
 		d.sessions.Apply(s.ID, func(cur *session.Session, exists bool) bool {
 			if exists {
 				prev := *cur
+				s.Name = prev.Name
+				s.Location = prev.Location
 				// The persisted record is authoritative for the launch discriminator
 				// (Kind/Agentless) — Adopt only re-derives it from the ID shape as a
 				// store-loss backstop. Carry it forward. An agent-less session

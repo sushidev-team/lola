@@ -233,3 +233,28 @@ Wails round-trip per keystroke would make the field feel dead). Go stays the
 authority — `SaveProject` re-slugs whatever arrives — so drift can only make the
 preview disagree, never write an unsafe name. `slug.test.ts` mirrors the Go test
 case for case; change both together.
+
+### Custom sessions and quick navigation
+
+Use **New session…** on a project, its sidebar actions menu, or **⌘N** to
+create a named agent or shell session. Choose **New worktree** to create a
+branch, or **Main checkout** to use the project's existing directory and
+current branch. **Open shell here** skips the form. Names can be changed from
+the session context menu or by clicking the terminal header's title; renaming
+does not change branch names, directories, or session IDs.
+
+**⌘K** searches projects (including repository and path), named sessions, and
+actions. Select a project to see its actions; **⌘Enter** creates a session and
+**⌘O** opens a shell there. **⌘⇧N** opens a temporary, project-free shell.
+Set its default directory in **Settings → General → Temporary shell directory**
+(`[defaults].temporary_directory`, empty means the user's home). Closing the
+app leaves running sessions available. Explicitly closing a main-checkout or
+temporary session stops its terminals and preserves the directory and files.
+Reopening a stopped agent in a shared checkout starts a new conversation,
+avoiding accidental resumption of another session in the same directory.
+
+Main-checkout sessions do not run worktree setup/cleanup hooks, automatic PR
+reactions, checkpoint restoration, or automatic agent switching. Run dev
+commands in their shell tabs. Sandboxed agents still require isolated worktrees.
+Activity is collapsed by default; expand it for a bounded feed, or choose
+**View all activity** for the larger view.

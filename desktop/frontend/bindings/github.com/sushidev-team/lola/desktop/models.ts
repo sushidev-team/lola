@@ -462,6 +462,7 @@ export interface ReviewProviderDTO {
 }
 
 export interface SettingsDTO {
+    "temporaryDirectory": string;
     "globalCap": number;
     "concurrencyCap": number;
 

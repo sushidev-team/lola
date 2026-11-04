@@ -110,10 +110,11 @@ func reloadRejectionHint(msg string) string {
 // --- settings ([defaults]/[notify]/[brain]/[review]/[coderabbit]) -----------
 
 type SettingsDTO struct {
-	GlobalCap      int    `json:"globalCap"`
-	ConcurrencyCap int    `json:"concurrencyCap"`
-	PollInterval   string `json:"pollInterval"` // duration string, e.g. "60s"
-	Agent          string `json:"agent"`        // claude|codex|opencode
+	TemporaryDirectory string `json:"temporaryDirectory"`
+	GlobalCap          int    `json:"globalCap"`
+	ConcurrencyCap     int    `json:"concurrencyCap"`
+	PollInterval       string `json:"pollInterval"` // duration string, e.g. "60s"
+	Agent              string `json:"agent"`        // claude|codex|opencode
 
 	NotifyDesktop   bool   `json:"notifyDesktop"`
 	SlackWebhookEnv string `json:"slackWebhookEnv"` // env var NAME, never the URL
@@ -365,6 +366,7 @@ func (s *ConfigService) GetSettings() (SettingsDTO, error) {
 		return SettingsDTO{}, err
 	}
 	return SettingsDTO{
+		TemporaryDirectory:       cfg.Defaults.TemporaryDirectory,
 		GlobalCap:                cfg.Defaults.GlobalCap,
 		ConcurrencyCap:           cfg.Defaults.ConcurrencyCap,
 		PollInterval:             cfg.Defaults.PollInterval.String(),
@@ -427,6 +429,7 @@ func (s *ConfigService) SaveSettings(dto SettingsDTO) error {
 		}
 		cfg.Defaults.PollInterval = d
 	}
+	cfg.Defaults.TemporaryDirectory = strings.TrimSpace(dto.TemporaryDirectory)
 	cfg.Defaults.GlobalCap = dto.GlobalCap
 	cfg.Defaults.ConcurrencyCap = dto.ConcurrencyCap
 	cfg.Defaults.Agent = dto.Agent

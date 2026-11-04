@@ -451,6 +451,7 @@ type SessionApp struct {
 // SessionInfo is one observed session, flattened to render-ready strings and
 // ints so the TUI never needs scm/session imports or re-derivation.
 type SessionInfo struct {
+	Location  string `json:"location,omitempty"`
 	GoalID    string `json:"goalId,omitempty"`
 	TaskID    string `json:"taskId,omitempty"`
 	AttemptID string `json:"attemptId,omitempty"`
@@ -776,11 +777,14 @@ type PrRow struct {
 // Agent set it launches the coding agent (seeded with Prompt); otherwise a plain
 // shell. The reply is the shared OpenData.
 type OpenManualArgs struct {
-	Project string `json:"project"`
-	Branch  string `json:"branch"`
-	Base    string `json:"base,omitempty"`
-	Agent   bool   `json:"agent,omitempty"`  // launch the coding agent instead of a shell
-	Prompt  string `json:"prompt,omitempty"` // seed prompt when Agent is set
+	Name     string `json:"name,omitempty"`
+	Location string `json:"location,omitempty"` // worktree (default), main, temporary
+	Path     string `json:"path,omitempty"`     // temporary shell directory
+	Project  string `json:"project"`
+	Branch   string `json:"branch"`
+	Base     string `json:"base,omitempty"`
+	Agent    bool   `json:"agent,omitempty"`  // launch the coding agent instead of a shell
+	Prompt   string `json:"prompt,omitempty"` // seed prompt when Agent is set
 	// AgentKind optionally overrides WHICH coding agent runs (claude|codex|
 	// opencode) instead of the project's configured default. "" = configured.
 	AgentKind string `json:"agentKind,omitempty"`

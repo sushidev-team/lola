@@ -16,7 +16,7 @@
   const session = $derived(req ? store.sessionById(req.id) : undefined);
   const canRevive = $derived(!!session && (session.status === "dead" || session.status === "session_ended"));
   const AGENT_KINDS = ["claude", "codex", "opencode"] as const;
-  const otherAgents = $derived(AGENT_KINDS.filter((k) => k !== (session?.agent || "claude")));
+  const otherAgents = $derived(session?.location ? [] : AGENT_KINDS.filter((k) => k !== (session?.agent || "claude")));
 
   let el = $state<HTMLDivElement | null>(null);
 
@@ -89,6 +89,7 @@
     <div class="label truncate px-2 pt-1 pb-1.5 text-faint">
       {session.issue || session.id.slice(0, 8)}
     </div>
+    <MenuItem onclick={() => run(s => nav.openOverlay("rename-session",s.id))}>Rename session…</MenuItem>
     <MenuItem
       icon="+"
       disabled={!session.worktree}
@@ -103,7 +104,7 @@
     >
     <MenuItem
       icon="↺"
-      disabled={!session.worktree}
+      disabled={!session.worktree || !!session.location}
       title={session.worktree ? "per-turn snapshots — restore a bad turn or fork from one" : "session has no worktree"}
       onclick={() => run((s) => openCheckpoints(s))}>Checkpoints</MenuItem
     >
@@ -153,7 +154,7 @@
       <MenuItem icon="⑂" trailing="↗" onclick={() => run((s) => store.openURL(s.prUrl))}>Open PR</MenuItem>
     {/if}
     {#if canRevive}
-      <MenuItem variant="accent" icon="↻" onclick={() => run((s) => store.revive(s.id))}>Revive</MenuItem>
+      <MenuItem variant="accent" icon="↻" onclick={() => run((s) => store.revive(s.id))} title={session.location ? "Reopen this directory; stopped agents start a new conversation" : "Resume the session"}>{session.location ? "Reopen session" : "Revive"}</MenuItem>
     {/if}
     {#if session.status !== "shell"}
       <div class="my-1 h-px bg-edge/60"></div>

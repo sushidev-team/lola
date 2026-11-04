@@ -339,7 +339,7 @@ export function Open(project: string, ref: string): $CancellablePromise<protocol
 }
 
 /**
- * OpenManual starts a new branch off a base as an agent or a plain shell.
+ * OpenManual starts an agent or shell in a worktree or borrowed directory.
  */
 export function OpenManual(a: protocol$0.OpenManualArgs): $CancellablePromise<protocol$0.OpenData> {
     return $Call.ByID(1277103427, a);
@@ -414,6 +414,13 @@ export function Reload(): $CancellablePromise<void> {
  */
 export function RenameProject($from: string, to: string): $CancellablePromise<protocol$0.RenameProjectData> {
     return $Call.ByID(3384477348, $from, to);
+}
+
+/**
+ * RenameSession changes a display name without changing the branch or session ID.
+ */
+export function RenameSession(id: string, name: string): $CancellablePromise<void> {
+    return $Call.ByID(3644473889, id, name);
 }
 
 /**

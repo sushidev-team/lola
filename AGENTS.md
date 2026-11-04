@@ -1172,6 +1172,22 @@ each of which owns exactly one external tool or concern behind an **exec seam**
     `m.form == nil && m.settings == nil`. Removing that gate silently restores
     "reflexive ctrl+c throws away the whole form".
 
+## Borrowed-directory sessions
+
+`session.KindLocal` covers main-checkout and project-free temporary sessions.
+`Worktree` is their working directory, **never an owned worktree**. They own no
+branch; runtime teardown must never prepare/remove that directory or run its
+worktree hooks. Callback/settings/environment files live in
+`$LOLA_HOME/local-sessions/<id>/`, separately for every session. Shell tabs use
+`lolaenv.SessionShellCommand` and their shell-only environment, not an agent's
+callback identity. Native's worktree scan skips `lola-local-*`; daemon adoption
+uses persisted records plus tmux liveness. Ordinary worktree reactions,
+checkpoints, dev sweeping and automatic agent switching exclude local sessions.
+`Session.Name` is display-only, independent of title, branch and identity;
+`DisplayTitle` is used at the wire boundary. Never rename paths or tmux targets
+when editing a name. Temporary sessions have no project and must remain usable
+without creating a configuration entry.
+
 ## Testing conventions
 
 - **NEVER drive a UI with synthetic OS input.** No CGEvent posting, no

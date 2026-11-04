@@ -262,7 +262,12 @@ func (s *DaemonService) Open(project, ref string) (protocol.OpenData, error) {
 	return d, err
 }
 
-// OpenManual starts a new branch off a base as an agent or a plain shell.
+// RenameSession changes a display name without changing the branch or session ID.
+func (s *DaemonService) RenameSession(id, name string) error {
+	return call(protocol.Request{Cmd: "renameSession", Session: id, Text: name}, shortTimeout, nil)
+}
+
+// OpenManual starts an agent or shell in a worktree or borrowed directory.
 func (s *DaemonService) OpenManual(a protocol.OpenManualArgs) (protocol.OpenData, error) {
 	args, _ := json.Marshal(a)
 	var d protocol.OpenData

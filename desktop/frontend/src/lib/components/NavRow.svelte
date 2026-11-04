@@ -15,6 +15,7 @@
   // The wrapper owns the background so hover/active still cover the actions.
   let {
     label,
+    labelContent,
     count,
     glyph = "",
     glyphCls = "",
@@ -28,6 +29,8 @@
     actions,
   }: {
     label: string;
+    /** Optional rich label. */
+    labelContent?: Snippet;
     /** Rendered even when 0 — a nav whose counts appear and vanish is jumpy. */
     count?: number;
     /** ≤1-char leading glyph. The slot is always reserved so labels line up. */
@@ -73,7 +76,7 @@
     <span class="flex w-3.5 shrink-0 items-center justify-center text-sm {glyphCls}" aria-hidden="true">
       {#if icon}{@render icon()}{:else}{glyph}{/if}
     </span>
-    <span class="truncate" class:font-medium={active} class:text-faint={dim && !active}>{label}</span>
+    <span class="truncate" class:font-medium={active} class:text-faint={dim && !active}>{#if labelContent}{@render labelContent()}{:else}{label}{/if}</span>
     {#if count !== undefined}
       <span class="num ml-auto shrink-0 text-sm text-faint">{count}</span>
     {/if}

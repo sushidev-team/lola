@@ -1,4 +1,7 @@
 <script lang="ts">
+  import { projectActions } from "$lib/projectActions";
+  import { matchesSearch, searchMatch } from "$lib/search";
+  import SearchHighlight from "./SearchHighlight.svelte";
   import { onDestroy } from "svelte";
   import { store, type ProjectInfo } from "$lib/store.svelte";
   import { nav } from "$lib/nav.svelte";
@@ -45,6 +48,9 @@
   // pending holds the arrangement a drop just applied, until the daemon's push
   // catches up. Without it the row snaps back to its old place for the frame
   // between the drop and the reload, which reads as "the drag didn't take".
+  let query = $state("");
+  let searchInput: HTMLInputElement;
+  const matches = $derived(store.projects.filter(p => matchesSearch(query, displayName(p), p.repo, p.path)));
   let pending = $state<Row<ProjectInfo>[] | null>(null);
   const rows = $derived(pending ?? buildRows(store.projects, store.groups));
   const members = $derived(stackMembers(store.projects));
@@ -159,7 +165,7 @@
 
   function openRowMenu(e: MouseEvent, name: string) {
     const p = store.projectByName(name);
-    if (!p || isStack(p)) return; // a stack joins nothing
+    if (!p) return;
     e.preventDefault();
     rowMenu = { x: Math.min(e.clientX, window.innerWidth - 200), y: e.clientY, name, picking: false };
   }
@@ -209,6 +215,7 @@
   let suppressClick = false;
 
   function startPress(e: PointerEvent, kind: DragKind, name: string) {
+    if (query.trim()) return;
     if (e.button !== 0) return;
     // The trailing controls (settings, hub, rename, remove) are not drag
     // handles; a press on one of them stays a plain click.
@@ -496,6 +503,7 @@
 
 {#snippet projectRow(p: ProjectInfo, group: string, index: number)}
   {@const d = pollDot(p)}
+  {@const match = searchMatch(query, displayName(p), p.repo, p.path)}
   {@const active = nav.scoped && nav.project === p.name}
   <!-- Mirrors nav.toggleProjectScope's own condition: a row is drawn active
        on the project hub too (scope outlives goDetail), and there the click
@@ -517,9 +525,10 @@
     onclick={() => openProject(p.name)}
     onkeydown={(e) => {
       // A member is placed by its stack, not by the arrangement keys.
-      if (index >= 0) nudgeProject(e, p.name, group, index);
+      if (!query.trim() && index >= 0) nudgeProject(e, p.name, group, index);
     }}
   >
+    {#snippet labelContent()}<SearchHighlight text={displayName(p)} indices={match?.[0]} />{/snippet}
     {#snippet icon()}
       {#if isStack(p)}
         <svg
@@ -558,6 +567,7 @@
     {#snippet actions()}
       <!-- data-drag-ignore: these are controls, not drag handles. -->
       <span class="flex items-center" data-drag-ignore>
+        <Button size="xs" icon aria-label="{displayName(p)} actions" onclick={(e) => openRowMenu(e, p.name)}>⋯</Button>
         <Button
           size="xs"
           icon
@@ -612,7 +622,34 @@
     >
   </div>
 
-  {#if store.projects.length === 0 && store.groups.length === 0}
+  <div class="px-2 py-2">
+    <div class="relative">
+      <input bind:this={searchInput} class="w-full rounded border border-edge bg-panel py-1.5 pr-8 pl-2 text-sm outline-none focus:border-accent" placeholder="Search projects…" aria-label="Search projects" bind:value={query} />
+      {#if query}
+        <Button icon size="xs" class="absolute top-1/2 right-1 -translate-y-1/2" aria-label="Clear project search" title="Clear search" onclick={() => { query = ""; searchInput.focus(); }}>
+          <svg class="size-3" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true"><path d="m4 4 8 8M12 4l-8 8" /></svg>
+        </Button>
+      {/if}
+    </div>
+  </div>
+  {#if query.trim()}
+    <ul class="grid gap-0.5" aria-label="Matching projects">
+      {#each matches as p (p.name)}
+        {@const match = searchMatch(query, displayName(p), p.repo, p.path)}
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <li oncontextmenu={(e) => openRowMenu(e,p.name)}>
+          {@render projectRow(p,"",-1)}
+          {#each [p.repo, p.path] as value, i}
+            {#if value && match?.[i + 1]?.length}
+              <div class="pb-1 pl-8 pr-2 text-sm text-faint break-all" title={value}>
+                <span>{i === 0 ? "Repo" : "Path"} · </span><SearchHighlight text={value} indices={match[i + 1]} />
+              </div>
+            {/if}
+          {/each}
+        </li>
+      {:else}<li class="px-2 py-3 text-sm text-faint">No matching projects</li>{/each}
+    </ul>
+  {:else if store.projects.length === 0 && store.groups.length === 0}
     <!-- A dashed drop-zone-ish placeholder, not a <Button>: it is an empty STATE
          that happens to be clickable, and its dashed border and 3-line height are
          not part of the button ladder. -->
@@ -622,9 +659,8 @@
     >
   {:else}
     {@const gap = drag?.kind === "group" ? groupTarget : target?.kind === "top" ? target.index : null}
-    <!-- Capped so a long project list can never squeeze Activity out of the
-         column; the list scrolls inside itself instead. -->
-    <div bind:this={listEl} class="max-h-[38vh] overflow-auto" class:select-none={!!drag}>
+    <!-- The sidebar owns scrolling; Activity has its own bounded footer. -->
+    <div bind:this={listEl} class="min-w-0" class:select-none={!!drag}>
       <ul>
         {#each rows as row, i (row.kind === "group" ? "g:" + row.group.name : "p:" + row.project.name)}
           {#if gap === i}{@render dropLine()}{/if}
@@ -734,11 +770,17 @@
        torn down. -->
   <div class="fixed inset-0 z-40" role="presentation" onclick={() => (rowMenu = null)}></div>
   <div
-    class="fixed z-50 min-w-[12rem] rounded-lg border border-edge bg-panel p-1 shadow-xl"
-    style="left:{rowMenu?.x ?? 0}px;top:{rowMenu?.y ?? 0}px"
+    class="fixed z-50 max-h-[80vh] min-w-[12rem] overflow-auto rounded-lg border border-edge bg-panel p-1 shadow-xl"
+    style="left:{rowMenu?.x ?? 0}px;top:{Math.max(4, Math.min(rowMenu?.y ?? 0, window.innerHeight - 420))}px"
     role="menu"
     aria-label="{nameOf(menuName)} actions"
   >
+    {#if !rowMenu?.picking && store.projectByName(menuName)}
+      {#each projectActions(store.projectByName(menuName)!) as action (action.id)}
+        <MenuItem disabled={!action.enabled} onclick={() => { rowMenu=null; action.run(); }}>{action.label}</MenuItem>
+      {/each}
+      <div class="my-1 border-t border-edge"></div>
+    {/if}
     {#if menuStack}
       <MenuItem
         icon="↖"
@@ -748,7 +790,7 @@
           askLeaveStack(name, stack);
         }}>Remove from stack</MenuItem
       >
-    {:else if !rowMenu?.picking}
+    {:else if !rowMenu?.picking && !isStack(store.projectByName(menuName)!)}
       <!-- A submenu in place: the stack list replaces the root items. -->
       <MenuItem
         icon="◆"

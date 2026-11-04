@@ -63,7 +63,11 @@ func (d *Daemon) handleRevive(ctx context.Context, sessionID string) (protocol.R
 	// Revive uses the session's persisted worker, which may differ from the
 	// project's current default. Reject unavailable/unsupported agents before
 	// launching or re-establishing any session and dispatch state.
-	if err := d.runtimeHealth(d.launchBin(s.Project, agent.Parse(s.Agent).Binary())); err != nil {
+	bin := d.launchBin(s.Project, agent.Parse(s.Agent).Binary())
+	if s.IsAgentless() {
+		bin = "tmux"
+	}
+	if err := d.runtimeHealth(bin); err != nil {
 		return protocol.ReviveData{}, fmt.Errorf("runtime unavailable: %w", err)
 	}
 

@@ -40,6 +40,8 @@ const (
 	// Linear issue (the manual-worktree flow): lola owns the branch and deletes
 	// it on teardown, but it never touches Linear.
 	KindManual Kind = "manual"
+	// KindLocal runs in a borrowed directory. Lola never owns or removes it.
+	KindLocal Kind = "local"
 	// KindGoal is owned by the goal controller. Ordinary PR reactions,
 	// write-back, default-branch merging and worktree cleanup must skip it.
 	KindGoal Kind = "goal"
@@ -56,6 +58,8 @@ type DevForward struct {
 
 // Session is one observed agent session, regardless of who spawned it.
 type Session struct {
+	Name      string `json:"name,omitempty"`
+	Location  string `json:"location,omitempty"` // main | temporary; empty for worktrees
 	ID        string `json:"id"`
 	Source    string `json:"source"`          // "ao" | "native"
 	Agent     string `json:"agent,omitempty"` // coding-agent kind: claude|codex|opencode; "" = legacy claude
@@ -796,7 +800,7 @@ func (s Session) HasAgent() bool { return !s.IsAgentless() }
 // Unlike LinearBound this must NOT depend on the issue UUID: a linear session
 // adopted after a store loss recovers its identifier from the ID shape but not
 // its UUID, yet it still owns the lola-created branch. So the only non-owning
-// case is an explicit pr kind; for a legacy record (Kind unset) fall back to the
+// cases are explicit pr and local kinds; for a legacy record (Kind unset) fall back to the
 // pre-Kind rule — a non-Manual session owns its branch — which is exactly the
 // prior teardown behavior.
 func (s Session) OwnsBranch() bool {
@@ -804,7 +808,7 @@ func (s Session) OwnsBranch() bool {
 		return false
 	}
 	if s.Kind != "" {
-		return s.Kind != KindPR
+		return s.Kind != KindPR && s.Kind != KindLocal
 	}
 	return !s.Manual
 }
@@ -1171,4 +1175,12 @@ func (s *Store) Save() error {
 	name := tmp.Name()
 	tmp = nil // written and closed; disarm the cleanup deferral
 	return os.Rename(name, s.path)
+}
+
+// DisplayTitle preserves a custom name independently of task and branch identity.
+func (s Session) DisplayTitle() string {
+	if s.Name != "" {
+		return s.Name
+	}
+	return s.Title
 }

@@ -28,7 +28,7 @@
       // terminal, where every bare key belongs to the agent.
       title: "Session actions",
       keys: [
-        ["s · ⌘T", "new worktree shell"],
+        ["s · ⌘T", "new shell tab"],
         ["D", "run dev here · one session per project"],
         ["f", "diff · comment on lines, send to the agent"],
         ["< / >", "prev / next terminal tab"],
@@ -42,6 +42,9 @@
     {
       title: "Global",
       keys: [
+        ["⌘K", "search projects, sessions, and actions"],
+        ["⌘N", "new session"],
+        ["⌘⇧N", "new temporary shell"],
         ["b", "show / hide sidebar"],
         // Not onKey bindings: they fire on the focused sidebar row itself, so
         // they are listed under what they move rather than as globals.

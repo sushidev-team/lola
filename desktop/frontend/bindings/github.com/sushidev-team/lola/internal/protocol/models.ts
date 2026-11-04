@@ -537,6 +537,17 @@ export interface OpenData {
  * shell. The reply is the shared OpenData.
  */
 export interface OpenManualArgs {
+    "name"?: string;
+
+    /**
+     * worktree (default), main, temporary
+     */
+    "location"?: string;
+
+    /**
+     * temporary shell directory
+     */
+    "path"?: string;
     "project": string;
     "branch": string;
     "base"?: string;
@@ -956,6 +967,7 @@ export interface SessionApp {
  * ints so the TUI never needs scm/session imports or re-derivation.
  */
 export interface SessionInfo {
+    "location"?: string;
     "goalId"?: string;
     "taskId"?: string;
     "attemptId"?: string;

@@ -256,8 +256,9 @@
            column holds the pulse and the headline, its own cells hold the
            project and the status), so repeating it here bought nothing and cost
            the width that made the header wrap. -->
-      <span class="selectable font-medium text-accent-ink">{session.issue || session.id.slice(0, 8)}</span>
-      <span class="selectable truncate text-ink">{session.title}</span>
+      {#if !session.location}<span class="selectable font-medium text-accent-ink">{session.issue || session.id.slice(0, 8)}</span>{/if}
+      <button class="selectable truncate text-left text-ink hover:underline" title="Rename session" onclick={() => nav.openOverlay("rename-session",session.id)}>{session.title || "Session"}</button>
+      {#if session.location}<span class="rounded bg-pill-grey px-1.5 py-0.5 text-sm text-pill-grey-fg" title={session.worktree}>{session.location === "main" ? "Main checkout" : "Temporary"}</span>{/if}
       {#if session.status !== "shell"}
         <span class="inline-flex items-center whitespace-nowrap rounded bg-pill-grey px-1.5 py-[1px] text-sm text-pill-grey-fg">
           {(session.agent || "claude").toLowerCase()}
@@ -331,7 +332,7 @@
         {/if}
         <Button size="xs" onclick={() => store.review(session.id)}>Review</Button>
         {#if canRevive}
-          <Button variant="accent" size="xs" onclick={() => store.revive(session.id)}>Revive</Button>
+          <Button variant="accent" size="xs" onclick={() => store.revive(session.id)} title={session.location ? "Reopen this directory; stopped agents start a new conversation" : "Resume the session"}>{session.location ? "Reopen" : "Revive"}</Button>
         {/if}
         <!-- Opens the shared confirm dialog (App.svelte) rather than an inline
              yes/no, so the 'x' shortcut and this button confirm the same way. -->

@@ -184,7 +184,7 @@ func (d *Daemon) handleShellCreate(ctx context.Context, sessionID string, cols, 
 	if cols < 1 || rows < 1 || cols > maxPaneDim || rows > maxPaneDim {
 		cols, rows = 0, 0
 	}
-	if err := cl.NewSessionSized(ctx, name, s.Worktree, lolaenv.ShellCommand, cols, rows); err != nil {
+	if err := cl.NewSessionSized(ctx, name, s.Worktree, lolaenv.SessionShellCommand(d.home, s.ID), cols, rows); err != nil {
 		return protocol.ShellCreateData{}, fmt.Errorf("new shell %s: %w", name, err)
 	}
 	d.logf("", "remote: created shell tab %s", name)

@@ -189,8 +189,13 @@ func (t *TermService) Shell(shell, worktree string) (string, error) {
 	// bare login shell would silently lack [[project]].env. No per-session
 	// set-option: the shell inherits the same server defaults (mouse, etc.) the
 	// agent panes use, so both tabs scroll identically.
+	home, err := config.Home()
+	if err != nil {
+		return "", err
+	}
+	command := lolaenv.SessionShellCommand(home, strings.Split(shell, shellMarker)[0])
 	if out, err := exec.CommandContext(ctx, bin, "-L", "lola", "new-session", "-d",
-		"-s", shell, "-c", worktree, lolaenv.ShellCommand).CombinedOutput(); err != nil {
+		"-s", shell, "-c", worktree, command).CombinedOutput(); err != nil {
 		return "", fmt.Errorf("new shell %s: %w: %s", shell, err, out)
 	}
 	if coldServer {

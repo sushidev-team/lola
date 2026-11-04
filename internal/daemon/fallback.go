@@ -61,7 +61,7 @@ func nextFallback(chain []string, current agent.Kind, tried []string) (agent.Kin
 // record each cycle. It also re-arms the one-shot guard when the session
 // leaves the quota-limited state (the limit reset, or a switch happened).
 func (d *Daemon) maybeFallback(ctx context.Context, s session.Session) {
-	if s.IsAgentless() || s.TmuxName == "" {
+	if s.Kind == session.KindLocal || s.IsAgentless() || s.TmuxName == "" {
 		return
 	}
 	if s.AgentState != state.AgentWaitingInput || s.InputReason != state.InputQuotaLimited {

@@ -21,6 +21,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/devtab"
 	"github.com/sushidev-team/lola/internal/lolaenv"
 	"github.com/sushidev-team/lola/internal/protocol"
@@ -402,7 +403,11 @@ func (m *rootModel) createShellSession(name, dir string) error {
 	c := m.cfg.TmuxClient("", "")
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	return c.NewSession(ctx, name, dir, lolaenv.ShellCommand)
+	home, err := config.Home()
+	if err != nil {
+		return err
+	}
+	return c.NewSession(ctx, name, dir, lolaenv.SessionShellCommand(home, strings.Split(name, "-shell-")[0]))
 }
 
 // killShellSession terminates one shell tmux session (best-effort, idempotent).
