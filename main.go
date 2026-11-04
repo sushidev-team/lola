@@ -166,14 +166,15 @@ func attachCmd() *cobra.Command {
 // changes) is kept and the command exits nonzero telling you to rerun with
 // --force; --force removes it anyway. The outcome message is printed by Send.
 func killCmd() *cobra.Command {
-	var force bool
+	var force, keep bool
 	cmd := &cobra.Command{
 		Use: "kill <session-id>", Short: "Kill a session; remove its clean worktree (--force removes a dirty one)", Args: cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, a []string) error {
-			return tui.Send(fmt.Sprintf(`{"cmd":"kill","session":%q,"force":%t}`, a[0], force))
+			return tui.Send(fmt.Sprintf(`{"cmd":"kill","session":%q,"force":%t,"keepWorktree":%t}`, a[0], force, keep))
 		},
 	}
 	cmd.Flags().BoolVar(&force, "force", false, "remove the worktree even with uncommitted changes")
+	cmd.Flags().BoolVar(&keep, "keep-worktree", false, "stop the agent and its tmux sessions but keep the worktree (revive later)")
 	return cmd
 }
 

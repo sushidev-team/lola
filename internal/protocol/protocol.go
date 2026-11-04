@@ -40,6 +40,9 @@ const GoalStartV2 = "goalStartV2"
 // anyway. The daemon always terminates the agent's tmux session first; a clean
 // worktree is then removed and the store entry dropped, while a dirty one is
 // kept unless Force is set (the reply is KillData / an error either way).
+// KeepWorktree stops the agent (and its aux tmux sessions) but leaves the
+// worktree, branch and store entry in place — the session reads dead and can be
+// revived later. It wins over Force.
 //
 // Cmd "revive" is the inverse of a death: Session names a session whose pane
 // died but whose worktree survives, and the daemon relaunches its agent in
@@ -218,6 +221,11 @@ type Request struct {
 	// uncommitted changes. Deliberate CLI-only friction (`lola kill <id>
 	// --force`); the TUI never sets it.
 	Force bool `json:"force,omitempty"`
+
+	// KeepWorktree is set only for cmd=kill: stop the agent and its tmux
+	// sessions but leave the worktree, branch and store entry untouched (the
+	// session reads dead and `lola revive` brings it back). Wins over Force.
+	KeepWorktree bool `json:"keepWorktree,omitempty"`
 
 	// Text is the human's answer for cmd=answer — typed verbatim into the
 	// session's pane (send-keys appends Enter).

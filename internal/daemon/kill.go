@@ -35,7 +35,7 @@ const killExecTimeout = 30 * time.Second
 // concurrent kill of the same session finds the tmux session and worktree
 // already gone and no-ops). Sessions carry no poll name, so there is no owning
 // tick mutex to reuse; the store atomicity is the serialization point.
-func (d *Daemon) handleKill(ctx context.Context, sessionID string, force bool) (protocol.KillData, error) {
+func (d *Daemon) handleKill(ctx context.Context, sessionID string, force, keepWorktree bool) (protocol.KillData, error) {
 	if sessionID == "" {
 		return protocol.KillData{}, errors.New("session id required")
 	}
@@ -70,6 +70,30 @@ func (d *Daemon) handleKill(ctx context.Context, sessionID string, force bool) (
 	// pass so the findings stay readable — but not its session: kill it here so
 	// a killed worker never leaves a stray tmux session behind.
 	d.killReviewPane(ctx, s.ID)
+
+	// Stop only: the agent and its aux tmux sessions go down, the worktree,
+	// branch, port lease and store entry stay. The record is flagged dead — the
+	// same shape a dirty-worktree refusal leaves — so it frees its concurrency
+	// slot and `revive` relaunches it in place. The in-flight claim stays (the
+	// session still owns its issue), but label mode still strips the sent label
+	// so reconcile does not read the stopped session as an orphan and respawn
+	// the issue into a second worktree.
+	if keepWorktree {
+		if err := nat.Kill(ctx, s, false, false); err != nil {
+			return protocol.KillData{}, err
+		}
+		d.sessions.Update(s.ID, func(cur *session.Session) bool {
+			cur.SetAgentState(state.AgentDead, "", time.Now())
+			return true
+		})
+		if err := d.sessions.Save(); err != nil {
+			d.logf("", "kill: persist sessions: %v", err)
+		}
+		d.clearLabelDispatch(ctx, s)
+		msg := fmt.Sprintf("session %s stopped; worktree kept at %s", s.ID, s.Worktree)
+		d.logf("", "kill: %s", msg)
+		return protocol.KillData{Removed: false, Worktree: s.Worktree, Message: msg}, nil
+	}
 
 	// Project gone from config: there is no safe worktree to target (the
 	// project's path/repo are unknown), so terminate the agent only, then drop

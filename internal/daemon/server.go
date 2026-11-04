@@ -193,7 +193,7 @@ func (d *Daemon) handle(ctx context.Context, req protocol.Request) protocol.Resp
 	case "agentReport":
 		return d.handleAgentReport(req)
 	case "kill":
-		data, err := d.handleKill(ctx, req.Session, req.Force)
+		data, err := d.handleKill(ctx, req.Session, req.Force, req.KeepWorktree)
 		if err != nil {
 			return protocol.Response{OK: false, Error: err.Error()}
 		}

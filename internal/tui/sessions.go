@@ -301,7 +301,7 @@ type sessionsModel struct {
 	filtering   bool
 	flash       string
 	flashGood   bool   // flash is a success (green) rather than a warning (yellow)
-	confirmKill bool   // "x" pressed: awaiting y/n to kill killTarget
+	confirmKill bool   // "x" pressed: awaiting y (kill) / s (stop, keep worktree) / n for killTarget
 	killTarget  string // session ID captured when "x" was pressed (pinned across refreshes)
 
 	// "F" pressed on a session whose dev tab died on a taken port: awaiting y/n
@@ -428,10 +428,11 @@ type killDoneMsg struct{ msg string }
 
 // killSelectedCmd sends a (non-force) kill for id and reports the outcome to
 // flash. Force is deliberately never offered here: removing a dirty worktree is
-// CLI-only friction (`lola kill <id> --force`).
-func killSelectedCmd(id string) tea.Cmd {
+// CLI-only friction (`lola kill <id> --force`). keepWorktree stops the agent and
+// its tmux sessions only, leaving the worktree for `R` (revive).
+func killSelectedCmd(id string, keepWorktree bool) tea.Cmd {
 	return func() tea.Msg {
-		resp, err := request(protocol.Request{Cmd: "kill", Session: id})
+		resp, err := request(protocol.Request{Cmd: "kill", Session: id, KeepWorktree: keepWorktree})
 		if err != nil {
 			return killDoneMsg{msg: err.Error()}
 		}
@@ -784,8 +785,8 @@ func (m *rootModel) updateSessions(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if s.switching {
 		return m.updateSwitchAgent(k)
 	}
-	// A pending kill confirmation owns the next keypress: y/Y kills, anything
-	// else cancels. Force is never offered here (CLI-only friction). The target
+	// A pending kill confirmation owns the next keypress: y/Y kills, s/S stops
+	// the agent but keeps the worktree, anything else cancels. Force is never offered here (CLI-only friction). The target
 	// is the ID captured when "x" was pressed — NOT s.selected() re-read now: a
 	// background refresh (the 5s tick) can reorder/prune the list and shift the
 	// cursor onto a different session between "x" and "y", which would otherwise
@@ -797,7 +798,13 @@ func (m *rootModel) updateSessions(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if target != "" && (k.String() == "y" || k.String() == "Y") {
 			// The kill removes the worktree, so every shell rooted there must go too.
 			m.closeSessionShells(target)
-			return m, killSelectedCmd(target)
+			return m, killSelectedCmd(target, false)
+		}
+		if target != "" && (k.String() == "s" || k.String() == "S") {
+			// The worktree stays, but the daemon takes its shell tmux sessions
+			// down with the agent, so the tabs are dead either way.
+			m.closeSessionShells(target)
+			return m, killSelectedCmd(target, true)
 		}
 		return m, nil
 	}

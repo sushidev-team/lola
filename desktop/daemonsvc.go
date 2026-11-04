@@ -87,10 +87,11 @@ func (s *DaemonService) Answer(session, text string) error {
 	return call(protocol.Request{Cmd: "answer", Session: session, Text: text}, shortTimeout, nil)
 }
 
-// Kill tears a session down. A dirty worktree is kept unless force is set.
-func (s *DaemonService) Kill(session string, force bool) (protocol.KillData, error) {
+// Kill tears a session down. A dirty worktree is kept unless force is set;
+// keepWorktree stops the agent only and leaves the worktree for a later revive.
+func (s *DaemonService) Kill(session string, force, keepWorktree bool) (protocol.KillData, error) {
 	var d protocol.KillData
-	err := call(protocol.Request{Cmd: "kill", Session: session, Force: force}, shortTimeout, &d)
+	err := call(protocol.Request{Cmd: "kill", Session: session, Force: force, KeepWorktree: keepWorktree}, shortTimeout, &d)
 	return d, err
 }
 

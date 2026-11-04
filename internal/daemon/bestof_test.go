@@ -398,7 +398,7 @@ func TestKillOneAttemptKeepsLabelForSibling(t *testing.T) {
 	nat := &fakeNative{}
 	d := newTestDaemon(t, testConfig(labelPoll("p1")), fake, nat)
 	g := seedGroup(d)
-	if _, err := d.handleKill(context.Background(), g[0].ID, false); err != nil {
+	if _, err := d.handleKill(context.Background(), g[0].ID, false, false); err != nil {
 		t.Fatalf("kill: %v", err)
 	}
 	if got := fake.LabelIDsByIssue["uuid-FE-5"]; !reflect.DeepEqual(got, []string{"lbl-sent"}) {

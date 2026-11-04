@@ -393,18 +393,19 @@ class Store {
    * worktree is all that survives, so the honest answer is a second question
    * (askForceKill), not a red flash telling a GUI user to rerun a CLI flag.
    */
-  async kill(session: string, force = false) {
+  async kill(session: string, force = false, keepWorktree = false) {
     // Reap the session's worktree shells too, so they don't linger as orphan tabs
-    // once the daemon removes the worktree (best-effort, fire-and-forget).
+    // once the daemon removes the worktree (best-effort, fire-and-forget). The
+    // daemon kills the shell tmux sessions on a stop as well.
     void TermService.CloseSessionShells(session).catch(() => {});
     try {
-      const r = await DaemonService.Kill(session, force);
-      this.setFlash(`killed ${session}`, "good");
+      const r = await DaemonService.Kill(session, force, keepWorktree);
+      this.setFlash(keepWorktree ? `stopped ${session}; worktree kept` : `killed ${session}`, "good");
       void this.refresh();
       return r;
     } catch (err) {
       const msg = String(err);
-      const dir = force ? null : dirtyWorktreeRefusal(msg);
+      const dir = force || keepWorktree ? null : dirtyWorktreeRefusal(msg);
       if (dir === null) {
         this.setFlash(msg, "bad");
         return undefined;
@@ -598,9 +599,11 @@ class Store {
     confirm.ask({
       title: "Kill session?",
       body: s?.title ? `Kill ${label} — ${s.title}?` : `Kill ${label}?`,
-      detail: "This stops its agent and removes the worktree. Unpushed work is lost.",
+      detail:
+        "Kill stops its agent and removes the worktree — unpushed work is lost. Stop keeps the worktree so the session can be revived.",
       confirmLabel: "Kill",
       onConfirm: () => void this.kill(id),
+      alternative: { label: "Stop, keep worktree", onConfirm: () => void this.kill(id, false, true) },
     });
   }
 
