@@ -5,6 +5,7 @@ import "./app.css";
 import { mount } from "svelte";
 import App from "./App.svelte";
 import { appearance } from "$lib/theme-runtime.svelte";
+import { termBoot } from "$lib/termboot";
 
 // Paint the theme before mounting. `init()` synchronously writes the tokens,
 // data-theme and color-scheme of the last flavor this app painted (cached in
@@ -19,6 +20,9 @@ import { appearance } from "$lib/theme-runtime.svelte";
 // localStorage cache is what removes the flash on every launch after the first;
 // see Appearance.init for why the bridge answer still wins.
 void appearance.init();
+
+// Release tmux clients a previous page load left attached (see termboot.ts).
+void termBoot();
 
 const app = mount(App, { target: document.getElementById("app")! });
 

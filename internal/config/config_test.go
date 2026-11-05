@@ -134,6 +134,7 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	orig.Defaults.PollInterval = 90 * time.Second
 	orig.Defaults.ConcurrencyCap = 3
 	orig.Defaults.GlobalCap = 5
+	orig.Defaults.TemporaryDirectory = "~/Downloads"
 	orig.Linear = LinearConfig{APIKeyKeychain: "lola-linear", APIKeyEnv: "LINEAR_API_KEY", Endpoint: DefaultEndpoint}
 	orig.Projects = []Project{validPoll()} // one polling project
 	// Resolved reaction/notify/tmux tables round-trip exactly; a load always

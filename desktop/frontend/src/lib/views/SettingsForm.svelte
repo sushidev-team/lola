@@ -821,6 +821,11 @@
       {#if tab === "defaults"}
         <section>
           {@render head("General")}
+          <label class={rowCls}>
+            <span class="text-faint">Temporary shell directory</span>
+            <span><input class={inputCls} placeholder="~" bind:value={d.temporaryDirectory} aria-label="Temporary shell directory" />
+            <span class={hintCls}>Default folder for project-free shells. Leave empty to use your home directory.</span></span>
+          </label>
           <div class="copy mb-4 text-sm text-faint"><HelpText label="session limits" summary="Workspace limit and project defaults." detail="Choose the coding agent and how many sessions can run at once. Projects can override their agent and limit." /></div>
           <div class="space-y-2">
             <label class={rowCls}>

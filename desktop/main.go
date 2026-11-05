@@ -329,6 +329,10 @@ func newSessionMenu(app *application.App, menu *application.Menu) {
 	ask := func(action string) func(*application.Context) {
 		return func(*application.Context) { app.Event.Emit(evtSessionAction, action) }
 	}
+	menu.Add("Search Projects and Sessions…").SetAccelerator("CmdOrCtrl+k").OnClick(ask("commands"))
+	menu.Add("New Session…").SetAccelerator("CmdOrCtrl+n").OnClick(ask("new-session"))
+	menu.Add("New Temporary Shell").SetAccelerator("CmdOrCtrl+Shift+n").OnClick(ask("temporary-shell"))
+	menu.AddSeparator()
 	menu.Add("Trigger Review").
 		SetTooltip("run the configured QA review provider on the selected session").
 		SetAccelerator("CmdOrCtrl+Shift+r").
@@ -336,7 +340,7 @@ func newSessionMenu(app *application.App, menu *application.Menu) {
 	menu.Add("Open PR in Browser").
 		SetAccelerator("CmdOrCtrl+Shift+o").
 		OnClick(ask(actionOpenPR))
-	menu.Add("New Worktree Shell").
+	menu.Add("New Shell Tab").
 		SetAccelerator("CmdOrCtrl+t").
 		OnClick(ask(actionNewShell))
 	menu.AddSeparator()

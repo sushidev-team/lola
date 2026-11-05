@@ -86,6 +86,12 @@ func (d *Daemon) handleOpen(ctx context.Context, project, ref string) (protocol.
 // cmd=kill for teardown. Unlike handleOpen the branch is lola-owned, so teardown
 // deletes it.
 func (d *Daemon) handleOpenManual(ctx context.Context, a protocol.OpenManualArgs) (protocol.OpenData, error) {
+	if a.Location != "" && a.Location != "worktree" {
+		return d.handleOpenDirectory(ctx, a)
+	}
+	if err := validateSessionName(a.Name); err != nil {
+		return protocol.OpenData{}, err
+	}
 	project := strings.TrimSpace(a.Project)
 	branch := strings.TrimSpace(a.Branch)
 	base := strings.TrimSpace(a.Base)
@@ -140,6 +146,7 @@ func (d *Daemon) handleOpenManual(ctx context.Context, a protocol.OpenManualArgs
 		return protocol.OpenData{}, err
 	}
 	sess.Repo = p.Repo
+	sess.Name = strings.TrimSpace(a.Name)
 	d.sessions.Upsert(sess)
 	d.recordSessionEvent("", sess)
 	if serr := d.sessions.Save(); serr != nil {

@@ -135,19 +135,28 @@
   {#if nav.view !== "cockpit"}
     <Button
       icon
+      size="xs"
       title="back to sessions (Esc)"
       aria-label="Back to sessions"
-      onclick={() => nav.goCockpit(nav.scoped ? nav.project : "")}>←</Button
+      onclick={() => nav.goCockpit(nav.scoped ? nav.project : "")}
     >
+      <svg class="size-3.5" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="m9.5 4-4 4 4 4" />
+      </svg>
+    </Button>
   {/if}
 
-  <nav class="flex min-w-0 items-baseline gap-1.5" aria-label="Breadcrumb">
+  <nav class="flex min-w-0 items-center gap-2 text-sm font-normal" aria-label="Breadcrumb">
     {#each crumbs as c, i (c.text + i)}
-      {#if i > 0}<span class="text-lg text-faint" aria-hidden="true">▸</span>{/if}
+      {#if i > 0}
+        <svg class="h-3 w-2 shrink-0 text-faint" viewBox="0 0 8 12" fill="none" stroke="currentColor" stroke-width="1" aria-hidden="true">
+          <path d="m5.5 2-3 8" />
+        </svg>
+      {/if}
       {#if c.onclick}
-        <button class="truncate text-lg text-faint hover:text-ink" onclick={c.onclick}>{c.text}</button>
+        <button class="min-w-0 truncate rounded py-1 text-faint hover:text-ink" onclick={c.onclick}>{c.text}</button>
       {:else}
-        <span class="truncate text-lg" class:text-faint={i < crumbs.length - 1}>{c.text}</span>
+        <span class="min-w-0 truncate" class:text-faint={i < crumbs.length - 1} aria-current={i === crumbs.length - 1 ? "page" : undefined}>{c.text}</span>
       {/if}
     {/each}
     {#if nav.view === "cockpit"}
@@ -156,6 +165,7 @@
   </nav>
 
   <span class="ml-auto flex shrink-0 items-center gap-2">
+    <Button size="xs" onclick={() => nav.openOverlay("commands")} title="Search projects, sessions, and actions (⌘K)">Search <span class="text-faint">⌘K</span></Button>
     {#if spend}
       <HoverCard class="num inline-flex items-center text-sm whitespace-nowrap outline-none {spendCls}">
         {#snippet card()}<SpendCard usage={spend} />{/snippet}

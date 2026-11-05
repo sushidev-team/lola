@@ -306,9 +306,10 @@ func (p *Project) Polls() bool { return p.TeamID != "" && p.Stack == "" }
 // Defaults is the [defaults] table. PollInterval is a plain time.Duration in
 // memory; on disk it is a string like "60s" (see fileDefaults/Duration).
 type Defaults struct {
-	PollInterval   time.Duration `toml:"-"`
-	ConcurrencyCap int           `toml:"concurrency_cap"`
-	GlobalCap      int           `toml:"global_cap"`
+	TemporaryDirectory string        `toml:"temporary_directory"`
+	PollInterval       time.Duration `toml:"-"`
+	ConcurrencyCap     int           `toml:"concurrency_cap"`
+	GlobalCap          int           `toml:"global_cap"`
 	// Agent is the global default coding-agent kind (claude|codex|opencode)
 	// for sessions whose project sets no override. Empty resolves to "claude"
 	// at read time (AgentForProject) — it is never force-written to disk.
@@ -324,6 +325,12 @@ type Defaults struct {
 	// it false when an external supervisor (launchd KeepAlive) owns the daemon,
 	// so the TUI never fights it — see AutoManageDaemon.
 	ManageDaemon *bool `toml:"manage_daemon"`
+	// TrustWorktrees toggles pre-accepting Claude Code's "do you trust this
+	// folder?" dialog for every worktree lola creates, by writing the trust
+	// flag into Claude Code's own config just before launch and removing it on
+	// teardown (internal/claudetrust). A pointer so an unset value defaults to
+	// true — see TrustClaudeWorktrees.
+	TrustWorktrees *bool `toml:"trust_worktrees"`
 
 	// --- Project defaults --------------------------------------------------
 	// Every key below is the fallback for the same-named [[project]] field: a
@@ -809,12 +816,14 @@ func projectToFile(p Project) fileProject {
 }
 
 type fileDefaults struct {
-	PollInterval   Duration `toml:"poll_interval"`
-	ConcurrencyCap int      `toml:"concurrency_cap"`
-	GlobalCap      int      `toml:"global_cap"`
-	Agent          string   `toml:"agent"`
-	AgentFallback  []string `toml:"agent_fallback,omitempty"`
-	ManageDaemon   *bool    `toml:"manage_daemon"`
+	TemporaryDirectory string   `toml:"temporary_directory,omitempty"`
+	PollInterval       Duration `toml:"poll_interval"`
+	ConcurrencyCap     int      `toml:"concurrency_cap"`
+	GlobalCap          int      `toml:"global_cap"`
+	Agent              string   `toml:"agent"`
+	AgentFallback      []string `toml:"agent_fallback,omitempty"`
+	ManageDaemon       *bool    `toml:"manage_daemon"`
+	TrustWorktrees     *bool    `toml:"trust_worktrees"`
 
 	// Project defaults. Plain values, not pointers: an absent key is a zero
 	// value, which already means "no default here" and falls through to the
@@ -876,23 +885,25 @@ func (fc *fileConfig) config() *Config {
 
 	return &Config{
 		Defaults: Defaults{
-			PollInterval:   time.Duration(fc.Defaults.PollInterval),
-			ConcurrencyCap: fc.Defaults.ConcurrencyCap,
-			GlobalCap:      fc.Defaults.GlobalCap,
-			Agent:          fc.Defaults.Agent,
-			AgentFallback:  fc.Defaults.AgentFallback,
-			ManageDaemon:   fc.Defaults.ManageDaemon,
-			BranchPrefix:   fc.Defaults.BranchPrefix,
-			PostCreate:     fc.Defaults.PostCreate,
-			Symlinks:       fc.Defaults.Symlinks,
-			Env:            fc.Defaults.Env,
-			MatchLabels:    fc.Defaults.MatchLabels,
-			MatchMode:      fc.Defaults.MatchMode,
-			OnSentSetLabel: fc.Defaults.OnSentSetLabel,
-			BlockedLabelID: fc.Defaults.BlockedLabelID,
-			DedupMode:      fc.Defaults.DedupMode,
-			PrioritySort:   fc.Defaults.PrioritySort,
-			Review:         fc.Defaults.Review,
+			PollInterval:       time.Duration(fc.Defaults.PollInterval),
+			ConcurrencyCap:     fc.Defaults.ConcurrencyCap,
+			GlobalCap:          fc.Defaults.GlobalCap,
+			Agent:              fc.Defaults.Agent,
+			AgentFallback:      fc.Defaults.AgentFallback,
+			TemporaryDirectory: fc.Defaults.TemporaryDirectory,
+			ManageDaemon:       fc.Defaults.ManageDaemon,
+			TrustWorktrees:     fc.Defaults.TrustWorktrees,
+			BranchPrefix:       fc.Defaults.BranchPrefix,
+			PostCreate:         fc.Defaults.PostCreate,
+			Symlinks:           fc.Defaults.Symlinks,
+			Env:                fc.Defaults.Env,
+			MatchLabels:        fc.Defaults.MatchLabels,
+			MatchMode:          fc.Defaults.MatchMode,
+			OnSentSetLabel:     fc.Defaults.OnSentSetLabel,
+			BlockedLabelID:     fc.Defaults.BlockedLabelID,
+			DedupMode:          fc.Defaults.DedupMode,
+			PrioritySort:       fc.Defaults.PrioritySort,
+			Review:             fc.Defaults.Review,
 		},
 		Linear:          fc.Linear,
 		Projects:        projects,
@@ -936,23 +947,25 @@ func (c *Config) file() *fileConfig {
 	}
 	return &fileConfig{
 		Defaults: fileDefaults{
-			PollInterval:   Duration(c.Defaults.PollInterval),
-			ConcurrencyCap: c.Defaults.ConcurrencyCap,
-			GlobalCap:      c.Defaults.GlobalCap,
-			Agent:          c.Defaults.Agent,
-			AgentFallback:  c.Defaults.AgentFallback,
-			ManageDaemon:   c.Defaults.ManageDaemon,
-			BranchPrefix:   c.Defaults.BranchPrefix,
-			PostCreate:     c.Defaults.PostCreate,
-			Symlinks:       c.Defaults.Symlinks,
-			Env:            c.Defaults.Env,
-			MatchLabels:    c.Defaults.MatchLabels,
-			MatchMode:      c.Defaults.MatchMode,
-			OnSentSetLabel: c.Defaults.OnSentSetLabel,
-			BlockedLabelID: c.Defaults.BlockedLabelID,
-			DedupMode:      c.Defaults.DedupMode,
-			PrioritySort:   c.Defaults.PrioritySort,
-			Review:         c.Defaults.Review,
+			PollInterval:       Duration(c.Defaults.PollInterval),
+			ConcurrencyCap:     c.Defaults.ConcurrencyCap,
+			GlobalCap:          c.Defaults.GlobalCap,
+			Agent:              c.Defaults.Agent,
+			AgentFallback:      c.Defaults.AgentFallback,
+			TemporaryDirectory: c.Defaults.TemporaryDirectory,
+			ManageDaemon:       c.Defaults.ManageDaemon,
+			TrustWorktrees:     c.Defaults.TrustWorktrees,
+			BranchPrefix:       c.Defaults.BranchPrefix,
+			PostCreate:         c.Defaults.PostCreate,
+			Symlinks:           c.Defaults.Symlinks,
+			Env:                c.Defaults.Env,
+			MatchLabels:        c.Defaults.MatchLabels,
+			MatchMode:          c.Defaults.MatchMode,
+			OnSentSetLabel:     c.Defaults.OnSentSetLabel,
+			BlockedLabelID:     c.Defaults.BlockedLabelID,
+			DedupMode:          c.Defaults.DedupMode,
+			PrioritySort:       c.Defaults.PrioritySort,
+			Review:             c.Defaults.Review,
 		},
 		Linear:      c.Linear,
 		Projects:    fps,
@@ -1062,6 +1075,15 @@ func Load(path string) (*Config, error) {
 // daemon so the TUI never fights the supervisor.
 func (c *Config) AutoManageDaemon() bool {
 	return c.Defaults.ManageDaemon == nil || *c.Defaults.ManageDaemon
+}
+
+// TrustClaudeWorktrees reports whether lola pre-accepts Claude Code's
+// workspace-trust dialog for the worktrees it creates. Unset defaults to true:
+// lola made the folder from a repository the operator configured, so asking a
+// human to vouch for it on every spawn only parks the agent. Set
+// [defaults].trust_worktrees = false to get the dialog back.
+func (c *Config) TrustClaudeWorktrees() bool {
+	return c.Defaults.TrustWorktrees == nil || *c.Defaults.TrustWorktrees
 }
 
 func (c *Config) applyDefaults() {

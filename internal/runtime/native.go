@@ -183,6 +183,13 @@ type Native struct {
 	// RemoveContainer removes a sandboxed session's container (`docker rm -f`)
 	// on teardown. nil = exec the configured docker CLI. A test seam.
 	RemoveContainer func(ctx context.Context, name string) error
+	// TrustWorkspace pre-accepts Claude Code's workspace-trust dialog for a
+	// worktree before a claude agent launches in it, and UntrustWorkspace drops
+	// that entry when the worktree is removed (internal/claudetrust; see
+	// trustAgentDir). nil disables each — tests leave them unset so no run
+	// ever touches the real ~/.claude.json.
+	TrustWorkspace   func(dir string) error
+	UntrustWorkspace func(dir string) error
 }
 
 // SessionID returns the BASE native session identifier for an issue:
@@ -431,6 +438,7 @@ func (n *Native) SpawnWith(ctx context.Context, p config.Project, issue linear.I
 		model = o.Model
 	}
 	n.recordBaseline(ctx, dir, id)
+	n.trustAgentDir(p.Name, id, dir, kind)
 	if err := n.Tmux.NewSession(ctx, id, dir, n.launchLine(p.Name, id, kind, defaultLaunchPrompt(id), model, false)); err != nil {
 		// tmux may have created the session although the call failed: down it
 		// goes first, then the same rollback as every other step.
@@ -666,6 +674,7 @@ func (n *Native) finishAgentLaunch(ctx context.Context, p config.Project, id, di
 		if rmErr := n.WT.Remove(ctx, p, dir, delBranch, false); rmErr != nil {
 			return fmt.Errorf("runtime: launch %s: %s: %w (rollback failed: %v; worktree kept at %s)", id, step, cause, rmErr, dir)
 		}
+		n.untrustAgentDir(id, dir)
 		return fmt.Errorf("runtime: launch %s: %s: %w (worktree rolled back)", id, step, cause)
 	}
 	// Pinned before anything runs in the worktree (internal/gitguard).
@@ -699,6 +708,7 @@ func (n *Native) finishAgentLaunch(ctx context.Context, p config.Project, id, di
 		return nil, rb("write env", err)
 	}
 	n.recordBaseline(ctx, dir, id)
+	n.trustAgentDir(p.Name, id, dir, kind)
 	if err := n.Tmux.NewSession(ctx, id, dir, n.launchCommand(p.Name, id, kind, false)); err != nil {
 		if n.Tmux.Has(ctx, id) {
 			_ = n.Tmux.KillSession(ctx, id)
@@ -1156,6 +1166,7 @@ func (n *Native) rollback(ctx context.Context, p config.Project, id, dir, branch
 	if rmErr := n.WT.Remove(ctx, p, dir, branch, false); rmErr != nil {
 		return fmt.Errorf("runtime: spawn %s: %s: %w (rollback failed: %v; worktree kept at %s)", id, step, cause, rmErr, dir)
 	}
+	n.untrustAgentDir(id, dir)
 	return fmt.Errorf("runtime: spawn %s: %s: %w (worktree rolled back)", id, step, cause)
 }
 
@@ -1192,9 +1203,9 @@ func (n *Native) Adopt(ctx context.Context) ([]session.Session, error) {
 	}
 	live := map[string]bool{}
 	for _, ts := range tmuxSessions {
-		if session.IsGoalSessionID(ts.Name) {
+		if session.IsGoalSessionID(ts.Name) || strings.HasPrefix(ts.Name, "lola-local-") {
 			continue
-		} // goal journal owns adoption
+		} // goals and borrowed directories are adopted from their persisted records
 		if strings.HasPrefix(ts.Name, sessionPrefix) {
 			live[ts.Name] = true
 		}
@@ -1385,6 +1396,12 @@ func (n *Native) Kill(ctx context.Context, s session.Session, removeWorktree, fo
 			n.Logf("session %s: removing its sandbox container failed: %v", s.ID, err)
 		}
 	}
+	if s.Kind == session.KindLocal {
+		if removeWorktree {
+			return RemoveLocalArtifacts(s.ID)
+		}
+		return nil
+	}
 	if !removeWorktree {
 		return nil
 	}
@@ -1407,6 +1424,7 @@ func (n *Native) Kill(ctx context.Context, s session.Session, removeWorktree, fo
 	dir := filepath.Join(n.WT.Root, p.Name, s.ID)
 	if _, err := os.Stat(dir); errors.Is(err, fs.ErrNotExist) {
 		n.releasePorts(s.ID)
+		n.untrustAgentDir(s.ID, dir)
 		// Directory already gone: there is no checkout left to dirty-check or to
 		// hand to `git worktree remove`, but the branch it was checked out on may
 		// still exist. Prune the stale worktree registration and delete the branch
@@ -1449,6 +1467,7 @@ func (n *Native) Kill(ctx context.Context, s session.Session, removeWorktree, fo
 		return fmt.Errorf("runtime: kill %s: %w", s.ID, err)
 	}
 	n.releasePorts(s.ID)
+	n.untrustAgentDir(s.ID, dir)
 	gitguard.Clear(dir)
 	// The checkpoints go with the worktree they snapshot. A DIRTY worktree that
 	// Remove kept returned above, and keeps them: the work is still there to
@@ -1536,10 +1555,21 @@ func (n *Native) Revive(ctx context.Context, s session.Session) (session.Session
 	if s.GoalManaged() {
 		return s, errors.New("goal workers resume through a newly reserved attempt")
 	}
+	if s.Kind == session.KindLocal {
+		return n.reviveLocal(ctx, s)
+	}
 	id := s.ID
 	dir := filepath.Join(n.WT.Root, s.Project, id)
 	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
 		return session.Session{}, fmt.Errorf("runtime: revive %s: worktree %s is gone — let the issue re-dispatch instead", id, dir)
+	}
+	if s.IsAgentless() {
+		if err := n.Tmux.NewSession(ctx, id, dir, n.shellCommand()); err != nil {
+			return session.Session{}, err
+		}
+		s.SetAgentState(state.AgentShell, "", time.Now())
+		s.TmuxName = id
+		return s, nil
 	}
 	kind := agent.Parse(s.Agent)
 	if kind == agent.Claude {
@@ -1565,6 +1595,7 @@ func (n *Native) Revive(ctx context.Context, s session.Session) (session.Session
 		}
 		resume = codexHasSession(ctx, home, dir)
 	}
+	n.trustAgentDir(s.Project, id, dir, kind)
 	if err := n.Tmux.NewSession(ctx, id, dir, n.launchLine(s.Project, id, kind, defaultLaunchPrompt(id), s.Model, resume)); err != nil {
 		return session.Session{}, fmt.Errorf("runtime: revive %s: %w", id, err)
 	}

@@ -95,6 +95,15 @@ func (d *Daemon) handleKill(ctx context.Context, sessionID string, force, keepWo
 		return protocol.KillData{Removed: false, Worktree: s.Worktree, Message: msg}, nil
 	}
 
+	// Borrowed directories never enter worktree teardown.
+	if s.Kind == session.KindLocal {
+		if err := nat.Kill(ctx, s, true, false); err != nil {
+			return protocol.KillData{}, err
+		}
+		d.dropSession(s)
+		return protocol.KillData{Removed: true, Message: "Session closed; directory and files preserved"}, nil
+	}
+
 	// Project gone from config: there is no safe worktree to target (the
 	// project's path/repo are unknown), so terminate the agent only, then drop
 	// the store entry and free the slot. removeWorktree=false keeps runtime.Kill

@@ -1,4 +1,10 @@
 <script lang="ts">
+  import NewSession from "$lib/components/NewSession.svelte";
+  import RenameSession from "$lib/components/RenameSession.svelte";
+  import CommandPalette from "$lib/components/CommandPalette.svelte";
+  import ActivityFeed from "$lib/components/ActivityFeed.svelte";
+  import Modal from "$lib/components/Modal.svelte";
+  import { openShell } from "$lib/projectActions";
   import { onMount } from "svelte";
   import { Events } from "@wailsio/runtime";
   import { store, scopedSessions, type SessionInfo } from "$lib/store.svelte";
@@ -57,6 +63,9 @@
   // open dialog.
   function sessionAction(action: string) {
     if (nav.overlay || confirm.request || sessionMenu.request) return;
+    if (action === "commands") { nav.openOverlay("commands"); return; }
+    if (action === "new-session") { nav.newSession(nav.project); return; }
+    if (action === "temporary-shell") { void openShell(); return; }
     const s = sel;
     if (!s) {
       store.setFlash("no session selected", "warn");
@@ -383,7 +392,15 @@
      message must cost the layout nothing. -->
 <Toast />
 
-{#if nav.overlay === "doctor"}
+{#if nav.overlay === "newsession"}
+  <NewSession />
+{:else if nav.overlay === "commands"}
+  <CommandPalette />
+{:else if nav.overlay === "rename-session"}
+  <RenameSession />
+{:else if nav.overlay === "activity"}
+  <Modal title="Activity" onClose={() => nav.closeOverlay()} width="680px"><ActivityFeed limit={200} /></Modal>
+{:else if nav.overlay === "doctor"}
   <DoctorOverlay />
 {:else if nav.overlay === "settings"}
   <SettingsForm />

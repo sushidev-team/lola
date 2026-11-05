@@ -18,6 +18,9 @@
   // ZERO rows deliberately leaves the detail terminal on the last session, the
   // same as scoping to an empty project. That is existing behaviour and stays.
   $effect(() => {
+    // Explicitly opening a terminal wins over a stale session snapshot. A new
+    // session can take another push to arrive; never substitute an older row.
+    if (nav.focusedTerm) return;
     const rows = triaged(scopedSessions(store.sessions, nav.scoped, nav.project), nav.triage);
     if (rows.length > 0 && !rows.some((r) => r.id === nav.selectedId)) {
       nav.select(rows[0].id);

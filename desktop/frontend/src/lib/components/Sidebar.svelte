@@ -7,7 +7,8 @@
   import SidebarProjects from "./SidebarProjects.svelte";
   import SidebarStatus from "./SidebarStatus.svelte";
   import SidebarVersion from "./SidebarVersion.svelte";
-  import ActivityFeed from "./ActivityFeed.svelte";
+  import SidebarActivity from "./SidebarActivity.svelte";
+  import TemporarySessions from "./TemporarySessions.svelte";
 
   // Sidebar makes ZERO store reads. It is pure layout; every child reads
   // $lib/store.svelte / $lib/nav.svelte itself. A container that computes rows
@@ -44,38 +45,9 @@
     >
   </div>
 
-  <!-- 2. The scrolling body: Triage, Projects, Activity. It is ONE `1fr` track
-       that scrolls internally, so the brand row and the status row above and
-       below it stay pinned — the reason this is not five tracks on the <aside>
-       itself. With five tracks, a full project list at the enforced 560px
-       MinHeight (desktop/main.go) squeezed Activity below its own heading and it
-       vanished entirely, heading included, with no scrollbar to recover it.
-       Activity's track carries a 7rem FLOOR so it can never collapse again: once
-       the three sections need more room than there is, this box overflows and
-       scrolls instead of silently eating the last one.
-
-       A GRID, not a flex column: the Activity wrapper below is itself a flex
-       container, and WebKit does not stretch a display:flex child inside a flex
-       column (it collapses to content width). Grid tracks stretch reliably. -->
-  <div
-    class="grid min-h-0 min-w-0 overflow-x-hidden overflow-y-auto"
-    style="grid-template-rows:auto auto minmax(7rem,1fr) auto"
-  >
-    <SidebarTriage />
-    <SidebarProjects />
-
-    <!-- Activity. flex + flex-1 (NOT a nested fr grid): the child is a plain
-         block, which is the pattern Panel.svelte already proves in WKWebView. A
-         second nested `fr` track is the collapse risk reflow.ts documents. -->
-    <div class="flex min-h-0 min-w-0 flex-col px-3 pt-3.5">
-      <h2 class="label px-2 pb-1 text-faint">Activity</h2>
-      <div class="min-h-0 flex-1 overflow-auto px-2"><ActivityFeed /></div>
-    </div>
-
-    <!-- The version closes the body rather than joining the utility row: it
-         reports, it does not act, and among that row's four controls it read as
-         a fifth. Its own `auto` track keeps it below Activity and above the
-         row's border, whatever Activity's height turns out to be. -->
+  <div class="grid min-h-0 min-w-0" style="grid-template-rows:minmax(0,1fr) auto auto">
+    <div class="min-h-0 overflow-auto"><SidebarTriage /><SidebarProjects /><TemporarySessions /></div>
+    <SidebarActivity />
     <SidebarVersion />
   </div>
 

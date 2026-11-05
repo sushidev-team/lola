@@ -7,6 +7,7 @@
   import { WebLinksAddon } from "@xterm/addon-web-links";
   import { TermService } from "@bindings/desktop";
   import { store } from "$lib/store.svelte";
+  import { termBoot } from "$lib/termboot";
   import { TERM_FONT, appearance, termFontLoaded, termFontReady } from "$lib/theme-runtime.svelte";
 
   // A live, interactive terminal attached to a session's tmux pane. WebGL is
@@ -305,7 +306,9 @@
       });
     }
 
-    attach = TermService.Attach(name, cols, rows).catch(() => {
+    // After the page's one-time orphan sweep (termboot.ts), never before it:
+    // the sweep would otherwise be able to detach this very terminal.
+    attach = termBoot().then(() => TermService.Attach(name, cols, rows)).catch(() => {
       term?.writeln("\x1b[31m[ could not attach to session ]\x1b[0m");
     });
 

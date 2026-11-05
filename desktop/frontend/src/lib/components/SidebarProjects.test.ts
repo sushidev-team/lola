@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, cleanup, fireEvent } from "@testing-library/svelte";
+import { render, screen, cleanup, fireEvent, within } from "@testing-library/svelte";
 import { tick } from "svelte";
 
 // The bindings are the process boundary. Stubbing them keeps this about what
@@ -107,7 +107,7 @@ describe("SidebarProjects", () => {
     render(SidebarProjects);
     await fireEvent.click(screen.getByRole("button", { name: "Add" }));
     await fireEvent.click(screen.getByRole("menuitem", { name: "New group" }));
-    const input = screen.getByRole("textbox");
+    const input = within(screen.getByRole("dialog")).getByRole("textbox");
     await fireEvent.input(input, { target: { value: "Clients" } });
     await fireEvent.click(screen.getByRole("button", { name: "Create" }));
     expect(AddGroup).toHaveBeenCalledWith("Clients");
@@ -155,7 +155,7 @@ describe("SidebarProjects", () => {
   it("renames a group through the same dialog, seeded with its label", async () => {
     render(SidebarProjects);
     await fireEvent.click(screen.getByRole("button", { name: "Rename Clients" }));
-    const input = screen.getByRole("textbox") as HTMLInputElement;
+    const input = within(screen.getByRole("dialog")).getByRole("textbox") as HTMLInputElement;
     expect(input.value).toBe("Clients");
     await fireEvent.input(input, { target: { value: "Client Work" } });
     await fireEvent.click(screen.getByRole("button", { name: "Rename" }));
@@ -390,7 +390,7 @@ describe("SidebarProjects", () => {
     render(SidebarProjects);
     await fireEvent.click(screen.getByRole("button", { name: "Add" }));
     await fireEvent.click(screen.getByRole("menuitem", { name: "New stack" }));
-    await fireEvent.input(screen.getByRole("textbox"), { target: { value: "Nori" } });
+    await fireEvent.input(within(screen.getByRole("dialog")).getByRole("textbox"), { target: { value: "Nori" } });
     await fireEvent.click(screen.getByRole("button", { name: "Create" }));
     await tick();
     await tick();
@@ -470,4 +470,24 @@ describe("SidebarProjects", () => {
     confirm.accept();
     expect(SetProjectStack).toHaveBeenCalledWith("web", "");
   });
+});
+
+it("searches project names, repositories and paths without changing layout", async () => {
+  cleanup(); store.groups=[];
+  store.projects = [fakeProject({name:"alpha", label:"Alpha Website",path:"/code/customer-a",repo:"acme/website" }), fakeProject({name:"beta",label:"Beta",path:"/code/customer-b"})];
+  render(SidebarProjects);
+  await fireEvent.input(screen.getByLabelText("Search projects"),{target:{value:"customer-a"}});
+  expect(screen.getByText("Alpha Website")).toBeInTheDocument();
+  expect(screen.queryByText("Beta")).not.toBeInTheDocument();
+  expect(screen.getByText("Path ·")).toBeInTheDocument();
+  expect(screen.getByText("customer-a")).toHaveClass("text-accent-ink");
+  await fireEvent.input(screen.getByLabelText("Search projects"),{target:{value:"aws"}});
+  const result = screen.getByRole("list", {name:"Matching projects"});
+  expect(result.textContent).toContain("Alpha Website");
+  expect(Array.from(result.querySelectorAll(".text-accent-ink"), el => el.textContent).join("")).toBe("AWs");
+  await fireEvent.click(screen.getByRole("button", {name:"Clear project search"}));
+  expect(screen.getByLabelText("Search projects")).toHaveValue("");
+  expect(screen.getByLabelText("Search projects")).toHaveFocus();
+  expect(screen.queryByRole("button", {name:"Clear project search"})).not.toBeInTheDocument();
+  expect(screen.getByText("Beta")).toBeInTheDocument();
 });

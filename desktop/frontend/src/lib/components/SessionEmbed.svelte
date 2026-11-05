@@ -42,6 +42,22 @@
   // reachable there without the "s" shortcut.
   const shells = $derived(session ? terms.shellsFor(session.id) : []);
   const activeTab = $derived(session ? terms.activeTab(session.id) : AGENT);
+  async function terminalExited(id: string, name: string, temporary: boolean, shellTab: boolean) {
+    if (shellTab) terms.shellExited(id, name);
+    if (!temporary) return;
+    const removed = await store.closeExitedTemporary(id);
+    if (removed) {
+      // The user may have moved elsewhere while the liveness check ran.
+      if (nav.focusedTerm === id || (!nav.focusedTerm && nav.selectedId === id)) {
+        nav.goCockpit(nav.scoped ? nav.project : "");
+        nav.select("");
+      }
+    } else {
+      await terms.refresh(id);
+      const remaining = terms.shellsFor(id);
+      if (!shellTab && remaining.length && terms.activeTab(id) === AGENT) terms.select(id, remaining[0]);
+    }
+  }
   // A view tab (diff, checkpoints) keeps the bar up too: it was reached by a key,
   // the menu or a sidebar row, and the way back to the agent must be on screen.
   const showTabs = $derived(!!session && (shells.length > 0 || focused || isViewTab(activeTab)));
@@ -256,8 +272,9 @@
            column holds the pulse and the headline, its own cells hold the
            project and the status), so repeating it here bought nothing and cost
            the width that made the header wrap. -->
-      <span class="selectable font-medium text-accent-ink">{session.issue || session.id.slice(0, 8)}</span>
-      <span class="selectable truncate text-ink">{session.title}</span>
+      {#if !session.location}<span class="selectable font-medium text-accent-ink">{session.issue || session.id.slice(0, 8)}</span>{/if}
+      <button class="selectable truncate text-left text-ink hover:underline" title="Rename session" onclick={() => nav.openOverlay("rename-session",session.id)}>{session.title || "Session"}</button>
+      {#if session.location}<span class="rounded bg-pill-grey px-1.5 py-0.5 text-sm text-pill-grey-fg" title={session.worktree}>{session.location === "main" ? "Main checkout" : "Temporary"}</span>{/if}
       {#if session.status !== "shell"}
         <span class="inline-flex items-center whitespace-nowrap rounded bg-pill-grey px-1.5 py-[1px] text-sm text-pill-grey-fg">
           {(session.agent || "claude").toLowerCase()}
@@ -301,6 +318,15 @@
            line — and it stopped the terminal short of the window's edge, which is
            the one thing the region is for. -->
       <span class="ml-auto flex items-center gap-1.5">
+        {#if session.worktree}
+          <Button icon size="xs" aria-label="Open session folder in Finder" title={`Open in Finder · ${session.worktree}`} onclick={() => store.openFolder(session.worktree)}>
+            <svg class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M3 19V6a2 2 0 0 1 2-2h4l3 3h1" />
+              <path d="m3 19 3-8h16l-3 8H3Z" />
+              <path d="m16 8 5-5m-5 0h5v5" />
+            </svg>
+          </Button>
+        {/if}
         {#if session.devCommands?.length}
           <!-- The project's dev processes live in ONE session at a time, so this
                is a segmented-style toggle rather than an action: selected means
@@ -331,7 +357,7 @@
         {/if}
         <Button size="xs" onclick={() => store.review(session.id)}>Review</Button>
         {#if canRevive}
-          <Button variant="accent" size="xs" onclick={() => store.revive(session.id)}>Revive</Button>
+          <Button variant="accent" size="xs" onclick={() => store.revive(session.id)} title={session.location ? "Reopen this directory; stopped agents start a new conversation" : "Resume the session"}>{session.location ? "Reopen" : "Revive"}</Button>
         {/if}
         <!-- Opens the shared confirm dialog (App.svelte) rather than an inline
              yes/no, so the 'x' shortcut and this button confirm the same way. -->
@@ -716,7 +742,7 @@
               webgl
               interactive
               autofocus={pickedTab || activeIsShell || focused}
-              onExit={activeIsShell ? () => terms.shellExited(session.id, activeName) : undefined}
+              onExit={activeIsShell || session.location === "temporary" ? () => terminalExited(session.id, activeName, session.location === "temporary", activeIsShell) : undefined}
               onEscapeFocus={focused ? () => nav.toggleFocusTerm(session.id) : undefined}
             />
           {/key}

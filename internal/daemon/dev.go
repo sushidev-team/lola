@@ -67,6 +67,9 @@ func (d *Daemon) handleDev(ctx context.Context, sessionID string, on bool) (prot
 	if !ok {
 		return protocol.DevData{}, fmt.Errorf("unknown session %s", sessionID)
 	}
+	if s.Kind == session.KindLocal {
+		return protocol.DevData{}, errors.New("run dev commands in a shell tab for a shared checkout")
+	}
 	if s.GoalManaged() {
 		return protocol.DevData{}, errors.New("goal previews must run in their isolated validation environment")
 	}

@@ -210,6 +210,18 @@ func (d *Daemon) handle(ctx context.Context, req protocol.Request) protocol.Resp
 			return protocol.Response{OK: false, Error: err.Error()}
 		}
 		return dataResponse(data)
+	case "closeExitedTemporary":
+		data, err := d.handleCloseExitedTemporary(ctx, req.Session)
+		if err != nil {
+			return protocol.Response{OK: false, Error: err.Error()}
+		}
+		return dataResponse(data)
+	case "renameSession":
+		err := d.handleRenameSession(req.Session, req.Text)
+		if err != nil {
+			return protocol.Response{OK: false, Error: err.Error()}
+		}
+		return protocol.Response{OK: true}
 	case "openManual":
 		var a protocol.OpenManualArgs
 		if err := json.Unmarshal(req.Args, &a); err != nil {
@@ -693,7 +705,8 @@ func (d *Daemon) sessionsData() protocol.SessionsData {
 			ID:        s.ID,
 			Project:   s.Project,
 			Issue:     s.Issue,
-			Title:     s.Title,
+			Title:     s.DisplayTitle(),
+			Location:  s.Location,
 			Branch:    s.Branch,
 			Agent:     agent.Parse(s.Agent).String(), // "" (legacy) reads as claude
 			Status:    s.Status,
@@ -727,6 +740,10 @@ func (d *Daemon) sessionsData() protocol.SessionsData {
 
 			FeedbackPending: s.PendingFeedback != "",
 			Usage:           d.sessionUsage(s.ID),
+		}
+
+		if s.Kind == session.KindLocal {
+			si.DevCommands = nil
 		}
 		if c := s.DevClash; c != nil {
 			si.DevClash = &protocol.DevClashInfo{

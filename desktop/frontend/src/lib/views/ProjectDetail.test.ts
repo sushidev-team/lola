@@ -44,9 +44,9 @@ describe("ProjectDetail", () => {
     expect(screen.getByText(/acme\/acme/)).toBeInTheDocument(); // repo in status line
     expect(screen.getByText("Open a PR")).toBeInTheDocument();
     expect(screen.getByText("Start a ticket")).toBeInTheDocument();
-    expect(screen.getByText("New worktree")).toBeInTheDocument();
+    expect(screen.getAllByText("New session…")[0]).toBeInTheDocument();
     expect(screen.getByText("Polls")).toBeInTheDocument();
-    expect(screen.getByText("no live sessions in this project")).toBeInTheDocument();
+    expect(screen.getByText("No sessions yet")).toBeInTheDocument();
   });
 
   it("dims Open a PR and shows the hint when no repo is configured", () => {
@@ -55,7 +55,7 @@ describe("ProjectDetail", () => {
 
     const btn = screen.getByText("Open a PR").closest("button");
     expect(btn).toBeDisabled();
-    expect(screen.getByText("set a GitHub repo to list PRs")).toBeInTheDocument();
+    expect(btn).toHaveAttribute("title", "set a GitHub repo to list PRs");
   });
 
   it("warns and keeps launch verbs navigable when the agent is unhealthy", () => {
@@ -65,7 +65,7 @@ describe("ProjectDetail", () => {
     expect(screen.getByText(/agent not ready: claude not on PATH/)).toBeInTheDocument();
     // Per spec these actions navigate to pickers, so they stay enabled.
     expect(screen.getByText("Start a ticket").closest("button")).not.toBeDisabled();
-    expect(screen.getByText("New worktree").closest("button")).not.toBeDisabled();
+    expect(screen.getAllByText("New session…")[0].closest("button")).not.toBeDisabled();
   });
 
   // "Polls" and "Edit project" are two doors into the same overlay now that a
@@ -91,49 +91,12 @@ describe("ProjectDetail", () => {
     expect(screen.getByText(/not found/)).toBeInTheDocument();
   });
 
-  it("offers agent selection in New worktree and carries agentKind", async () => {
-    const openManualSpy = vi.spyOn(store, "openManual").mockResolvedValue({} as never);
-    store.projects = [fakeProject({ agent: "codex" })];
+  it("opens the shared session creator scoped to the project", async () => {
+    store.projects = [fakeProject()];
     render(ProjectDetail);
-
-    await fireEvent.click(screen.getByText("New worktree").closest("button")!);
-    expect(screen.getByText("Project default (codex)")).toBeInTheDocument();
-
-    const input = screen.getByPlaceholderText("branch name…");
-    await fireEvent.input(input, { target: { value: "feat/my-branch" } });
-
-    const agentSelect = screen.getByLabelText("Coding agent");
-    await fireEvent.change(agentSelect, { target: { value: "opencode" } });
-
-    await fireEvent.click(screen.getByRole("button", { name: "Start" }));
-    expect(openManualSpy).toHaveBeenCalledWith({
-      project: "acme",
-      branch: "feat/my-branch",
-      agent: true,
-      agentKind: "opencode",
-    });
-  });
-
-  it("omits agent select in Shell mode", async () => {
-    const openManualSpy = vi.spyOn(store, "openManual").mockResolvedValue({} as never);
-    store.projects = [fakeProject({ agent: "claude" })];
-    render(ProjectDetail);
-
-    await fireEvent.click(screen.getByText("New worktree").closest("button")!);
-    await fireEvent.click(screen.getByRole("button", { name: "Shell" }));
-
-    expect(screen.queryByLabelText("Coding agent")).not.toBeInTheDocument();
-
-    const input = screen.getByPlaceholderText("branch name…");
-    await fireEvent.input(input, { target: { value: "feat/shell-branch" } });
-    await fireEvent.click(screen.getByRole("button", { name: "Start" }));
-
-    expect(openManualSpy).toHaveBeenCalledWith({
-      project: "acme",
-      branch: "feat/shell-branch",
-      agent: false,
-      agentKind: undefined,
-    });
+    await fireEvent.click(screen.getAllByText("New session…")[0]);
+    expect(nav.overlay).toBe("newsession");
+    expect(nav.overlayProject).toBe("acme");
   });
 
   it("broadcasts one message to the project's agents and shows the delivered/deferred split", async () => {
@@ -150,7 +113,7 @@ describe("ProjectDetail", () => {
     await fireEvent.click(screen.getByText("Broadcast").closest("button")!);
     const box = screen.getByLabelText("Broadcast message");
     await fireEvent.input(box, { target: { value: "  rebase on main  " } });
-    await fireEvent.click(screen.getByRole("button", { name: /Send to all agents/ }));
+    await fireEvent.click(screen.getByRole("button", { name: /Send to agents/ }));
 
     expect(spy).toHaveBeenCalledWith("acme", "rebase on main");
     expect(await screen.findByText("delivered to 1, deferred for 1 (sent when idle)")).toBeInTheDocument();

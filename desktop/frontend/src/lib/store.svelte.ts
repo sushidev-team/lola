@@ -510,7 +510,21 @@ class Store {
     );
   }
   openManual(a: OpenManualArgs) {
-    return this.act(() => DaemonService.OpenManual(a), `started ${a.branch}`);
+    return this.act(() => DaemonService.OpenManual(a), `started ${a.name || a.branch || "session"}`);
+  }
+  renameSession(id: string, name: string) {
+    return this.act(() => DaemonService.RenameSession(id, name).then(() => true), "Session renamed");
+  }
+  async closeExitedTemporary(id: string): Promise<boolean> {
+    try {
+      const result = await DaemonService.CloseExitedTemporary(id);
+      if (result.removed) this.sessions = this.sessions.filter(s => s.id !== id);
+      void this.refresh();
+      return result.removed;
+    } catch (err) {
+      this.setFlash(String(err), "bad");
+      return false;
+    }
   }
   openPr(a: OpenPrArgs) {
     return this.act(() => DaemonService.OpenPR(a), `opened PR #${a.number}`);
@@ -568,6 +582,13 @@ class Store {
       this.setFlash(String(err), "bad");
     }
   }
+  async openFolder(path: string) {
+    try {
+      await DaemonService.OpenFolder(path);
+    } catch (err) {
+      this.setFlash(String(err), "bad");
+    }
+  }
   reload() {
     return this.act(() => DaemonService.Reload(), "config reloaded");
   }
@@ -597,13 +618,13 @@ class Store {
     const s = this.sessionById(id);
     const label = s ? s.issue || s.id.slice(0, 8) : id;
     confirm.ask({
-      title: "Kill session?",
+      title: s?.location ? "Close session?" : "Kill session?",
       body: s?.title ? `Kill ${label} — ${s.title}?` : `Kill ${label}?`,
-      detail:
+      detail: s?.location ? "Close stops the session and its terminals. The directory and all files are preserved." :
         "Kill stops its agent and removes the worktree — unpushed work is lost. Stop keeps the worktree so the session can be revived.",
-      confirmLabel: "Kill",
+      confirmLabel: s?.location ? "Close session" : "Kill",
       onConfirm: () => void this.kill(id),
-      alternative: { label: "Stop, keep worktree", onConfirm: () => void this.kill(id, false, true) },
+      alternative: { label: s?.location ? "Stop, keep session" : "Stop, keep worktree", onConfirm: () => void this.kill(id, false, true) },
     });
   }
 

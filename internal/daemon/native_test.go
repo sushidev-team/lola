@@ -1239,3 +1239,7 @@ func TestTickFlipRecordsStrippedSubset(t *testing.T) {
 		t.Errorf("session RemovedLabels = %v, want %v", sess.RemovedLabels, want)
 	}
 }
+
+func (f *fakeNative) OpenDirectory(ctx context.Context, p config.Project, id, dir, location, kind string, useAgent bool) (session.Session, error) {
+	return session.Session{ID: id, Project: p.Name, Worktree: dir, Location: location, Agent: kind, Agentless: !useAgent, Kind: session.KindLocal, Source: "native", TmuxName: id}, nil
+}

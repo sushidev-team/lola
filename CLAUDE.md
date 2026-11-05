@@ -233,6 +233,16 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   kill button, so a number is the whole safe surface to carry out of untrusted
   pane text. Fails closed on a wording it does not know or a message that names
   no port.
+- `internal/claudetrust` — the ONE place lola writes Claude Code's own global
+  config (`~/.claude.json` / `$CLAUDE_CONFIG_DIR`): `projects[<worktree>].
+  hasTrustDialogAccepted`, set by `runtime.trustAgentDir` before every claude
+  launch and cleared by `untrustAgentDir` at teardown, so an agent never parks
+  on the workspace-trust dialog. It has to be PER WORKTREE because Claude Code
+  stops its trusted-parent walk at the git root. The file is shared with every
+  live claude process: only that key changes, the write is atomic, an
+  unparseable file is never rewritten, and every failure is advisory (the
+  dialog is the fallback). Off with `[defaults].trust_worktrees = false`;
+  sandboxed projects and folders outside `~/.lola/worktrees` are skipped.
 - `internal/gitrepo` — reads a checkout with LOCAL git only (no network, no
   `gh`): `Detect` resolves the GitHub `owner/name` from its remotes (upstream,
   then origin), `Branches` the fork-from candidates, and `Inspect` gathers root
