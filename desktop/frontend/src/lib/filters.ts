@@ -13,6 +13,9 @@
 import { KANBAN_COLUMNS, kanbanColumn, kanbanTitle } from "./theme";
 import type { SessionInfo } from "./store.svelte";
 
+/** The title of the column whose filter also takes an SSH session waiting on a human. */
+const NEEDS_YOU = KANBAN_COLUMNS.find((c) => c.key === "needs")?.title ?? "Needs You";
+
 export const TRIAGE_FILTERS: string[] = KANBAN_COLUMNS.map((c) => c.title);
 
 /**
@@ -36,9 +39,13 @@ export function triageOf(s: Pick<SessionInfo, "status" | "agentState" | "deliver
  * counts it is a filter that shows an empty screen over a non-zero number.
  */
 export function matchesTriageFor(
-  s: Pick<SessionInfo, "status" | "agentState" | "delivery">,
+  s: Pick<SessionInfo, "status" | "agentState" | "delivery"> & { ssh?: SessionInfo["ssh"] },
   triage: string,
 ): boolean {
+  // A go, a sign-in or an approval waiting on a human ORs into "Needs You" without
+  // moving the session's kanban column, which stays a function of the two axes.
+  // needsHuman is only ever set by daemon facts, never by anything an agent posted.
+  if (triage === NEEDS_YOU && s.ssh?.needsHuman) return true;
   return triage === "" || triageOf(s) === triage;
 }
 

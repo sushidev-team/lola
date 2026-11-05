@@ -11,8 +11,18 @@
   // for running). The caller decides it — motion means "happening now", which
   // only the agent axis plus a fresh report can say. app.css stills all of it
   // under prefers-reduced-motion; every state keeps a distinct static shape.
-  type Kind = "done" | "active" | "pending" | "pass" | "fail" | "running" | "blocked";
-  let { kind, live = false, size = 16 }: { kind: Kind; live?: boolean; size?: number } = $props();
+  //
+  // `refused` (a ring with a slash: it never ran) and `unknown` (a ? in a ring: the
+  // result was lost) are the SSH timeline's. `tone="warn"` is the same fail shape
+  // for a command that was cut off rather than one that answered badly. Every shape
+  // stays distinct with no colour and no motion.
+  type Kind = "done" | "active" | "pending" | "pass" | "fail" | "running" | "blocked" | "refused" | "unknown";
+  let {
+    kind,
+    live = false,
+    size = 16,
+    tone = "",
+  }: { kind: Kind; live?: boolean; size?: number; tone?: "" | "warn" } = $props();
 </script>
 
 <span
@@ -31,7 +41,7 @@
     </span>
   {:else if kind === "fail"}
     <span
-      class="flex h-full w-full items-center justify-center rounded-full bg-bad/20 text-bad"
+      class="flex h-full w-full items-center justify-center rounded-full {tone === 'warn' ? 'bg-warn/20 text-warn' : 'bg-bad/20 text-bad'}"
       in:scale={{ start: 0.4, duration: 260, easing: backOut }}
     >
       <svg viewBox="0 0 16 16" class="h-[56%] w-[56%]" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round">
@@ -57,6 +67,13 @@
       <circle cx="8" cy="8" r="6.5" stroke="currentColor" opacity="0.25" />
       <path d="M8 1.5a6.5 6.5 0 0 1 6.5 6.5" stroke="currentColor" stroke-linecap="round" />
     </svg>
+  {:else if kind === "refused"}
+    <svg viewBox="0 0 16 16" class="h-full w-full text-faint" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+      <circle cx="8" cy="8" r="6" />
+      <path d="M4 12 12 4" />
+    </svg>
+  {:else if kind === "unknown"}
+    <span class="flex h-full w-full items-center justify-center rounded-full border-[1.5px] border-warn font-sans text-[10px] leading-none text-warn">?</span>
   {:else}
     <span class="h-[75%] w-[75%] rounded-full border-[1.5px] border-edge"></span>
   {/if}

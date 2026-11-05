@@ -89,7 +89,7 @@ func (n *Native) OpenDirectory(ctx context.Context, p config.Project, id, dir, l
 	if useAgent {
 		s.Title = kind.Binary() + " · " + filepath.Base(dir)
 	}
-	return n.startLocal(ctx, s)
+	return n.startLocal(ctx, s, false)
 }
 
 // RemoveLocalArtifacts forgets only Lola's private launch files. It never
@@ -102,13 +102,15 @@ func RemoveLocalArtifacts(id string) error {
 	return os.RemoveAll(dir)
 }
 
-func (n *Native) startLocal(ctx context.Context, s session.Session) (session.Session, error) {
+func (n *Native) startLocal(ctx context.Context, s session.Session, resume bool) (session.Session, error) {
 	artifacts, err := localArtifacts(s.ID)
 	if err != nil {
 		return session.Session{}, err
 	}
 	posix := "set -a; . " + shQuote(filepath.Join(artifacts, "env")) + " || exit; set +a; exec "
-	if s.IsAgentless() {
+	if s.Location == LocationSSH && !s.IsAgentless() {
+		posix = n.sshPosix(ctx, s, artifacts, resume)
+	} else if s.IsAgentless() {
 		posix += `"${SHELL:-/bin/sh}" -l`
 	} else {
 		kind := agent.Parse(s.Agent)
@@ -121,8 +123,7 @@ func (n *Native) startLocal(ctx context.Context, s session.Session) (session.Ses
 			}
 		}
 		if kind == agent.Codex {
-			notify, _ := json.Marshal([]string{n.lolaBin(), "hook", "codex-notify"})
-			args = append([]string{"-c", "notify=" + string(notify)}, args...)
+			args = append(codexNotifyArgs(n.lolaBin()), args...)
 		}
 		bin := kind.Binary()
 		if kind == agent.Claude && n.ClaudeBin != "" {
@@ -148,6 +149,12 @@ func (n *Native) startLocal(ctx context.Context, s session.Session) (session.Ses
 	return s, nil
 }
 
+// codexNotifyArgs is the per-process lifecycle callback for a codex launch.
+func codexNotifyArgs(lolaBin string) []string {
+	notify, _ := json.Marshal([]string{lolaBin, "hook", "codex-notify"})
+	return []string{"-c", "notify=" + string(notify)}
+}
+
 func (n *Native) reviveLocal(ctx context.Context, s session.Session) (session.Session, error) {
 	if !s.IsAgentless() && n.sandboxProject(s.Project) != nil {
 		return session.Session{}, errors.New("sandboxed agents require an isolated worktree; create a new worktree session")
@@ -162,5 +169,5 @@ func (n *Native) reviveLocal(ctx context.Context, s session.Session) (session.Se
 	if _, err := os.Stat(filepath.Join(artifacts, "env")); err != nil {
 		return session.Session{}, errors.New("session launch settings are missing; create a new session")
 	}
-	return n.startLocal(ctx, s)
+	return n.startLocal(ctx, s, s.Location == LocationSSH)
 }

@@ -440,3 +440,138 @@ input[type="number"]::-webkit-inner-spin-button {
   line-height: 1.55;
   max-width: 62ch;
 }
+
+/* ---------------------------------------------------------------------------
+   The SSH workspace's three bits of motion, per docs/ssh-sessions-ux.md 1.3. A 150ms
+   fade on arrival, the connecting pulse on the header's state dot, and the split
+   easing when the wheel changes hands. The global prefers-reduced-motion rule above
+   stills all of them, and each state keeps a distinct static shape.
+
+   --ssh-split is registered so the browser can interpolate it. Where @property is
+   missing the split simply snaps, which is the same layout one frame sooner.
+---------------------------------------------------------------------------- */
+@property --ssh-split {
+  syntax: "<percentage>";
+  inherits: true;
+  initial-value: 52%;
+}
+.ssh-split {
+  transition: --ssh-split 200ms ease-out;
+}
+/* The stream column's rows. Brief and composer keep their own height, the dock takes
+   what is left up to its cap, and the stream keeps a sliver. minmax(0,auto) is what
+   lets the dock SHRINK: a plain auto row overflowed the column, painted over the
+   filter row and pushed the confirm button and the composer off screen. */
+.ssh-col {
+  grid-template-rows: auto minmax(72px, 1fr) minmax(0, auto) auto;
+}
+.ssh-dock {
+  max-height: 60cqh;
+}
+.ssh-col[data-carded] [data-legend],
+.ssh-col[data-carded] .ssh-brief-account {
+  display: none;
+}
+/* The list lens leaves this column a few hundred pixels. The Brief drops to its summary
+   and Now row, and a decision gets the stream's row as well: it is the one thing on
+   screen that cannot wait, and the stream returns the moment it is answered. */
+@container (max-height: 520px) {
+  [data-legend],
+  .ssh-brief-label,
+  .ssh-brief-more {
+    display: none;
+  }
+  .ssh-brief-summary {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+@container (max-height: 420px) {
+  .ssh-card-title {
+    order: -2;
+  }
+  .ssh-card-command {
+    order: -1;
+  }
+  .ssh-col[data-deciding] {
+    grid-template-rows: auto 0 minmax(0, auto) auto;
+  }
+  .ssh-dock {
+    max-height: none;
+  }
+}
+/* A block's start time is the first thing to go in a tight column. */
+@container (max-width: 640px) {
+  .ssh-block-time {
+    display: none;
+  }
+}
+.ssh-fade-in {
+  animation: ssh-fade-in 150ms ease-out;
+}
+@keyframes ssh-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+/* The daemon is down: the record stays readable and selectable, and only the controls
+   go quiet. Not `inert` or a disabled fieldset, which would take selection with them. */
+.ssh-offline :is(button, textarea, input) {
+  pointer-events: none;
+  opacity: 0.45;
+}
+.ssh-pulse {
+  animation: ssh-pulse 1.4s ease-in-out infinite;
+}
+@keyframes ssh-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+/* A tab strip scrolls without a scrollbar eating its height. */
+.dock-strip {
+  scrollbar-width: none;
+}
+.dock-strip::-webkit-scrollbar {
+  display: none;
+}
+/* With the scrollbar gone, a fade is what says there are more tabs that way. */
+.dock-strip[data-more="right"] {
+  -webkit-mask-image: linear-gradient(to left, transparent, #000 28px);
+  mask-image: linear-gradient(to left, transparent, #000 28px);
+}
+.dock-strip[data-more="left"] {
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 28px);
+  mask-image: linear-gradient(to right, transparent, #000 28px);
+}
+.dock-strip[data-more="both"] {
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 28px, #000 calc(100% - 28px), transparent);
+  mask-image: linear-gradient(to right, transparent, #000 28px, #000 calc(100% - 28px), transparent);
+}
+/* A timeline row pointing at its tab. */
+.dock-pulse {
+  background: var(--color-accent);
+  animation: dock-pulse 700ms ease-out both;
+}
+@keyframes dock-pulse {
+  from {
+    opacity: 0.4;
+  }
+  to {
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dock-pulse {
+    animation-duration: 1ms;
+  }
+}

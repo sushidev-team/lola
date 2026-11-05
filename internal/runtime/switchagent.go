@@ -136,6 +136,7 @@ func (n *Native) SwitchAgent(ctx context.Context, s session.Session, kind agent.
 	}
 
 	switched := s
+	n.syncSandboxRecord(ctx, &switched)
 	switched.Agent = string(kind)
 	// A model override names a model of the OLD agent; the new one runs on its
 	// own default (the launch above passed none).

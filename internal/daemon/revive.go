@@ -98,10 +98,16 @@ func (d *Daemon) handleRevive(ctx context.Context, sessionID string) (protocol.R
 		// A hook from the relaunched agent already moved the axis (it beat this
 		// write): keep the fresher axis, take only the relaunch bookkeeping.
 		cur.TmuxName = revived.TmuxName
+		cur.Sandbox = revived.Sandbox
 		return true
 	})
 	if err := d.sessions.Save(); err != nil {
 		d.logf("", "revive: persist sessions: %v", err)
+	}
+	// The agent moved between host and container, so ssh's production rule answers
+	// differently for it from now on.
+	if revived.Sandbox != s.Sandbox {
+		d.sshOnReload()
 	}
 
 	msg := fmt.Sprintf("session %s revived (%s)", sessionID, revived.TmuxName)

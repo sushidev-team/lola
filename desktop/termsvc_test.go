@@ -445,3 +445,36 @@ func TestDetachAllClosesEveryStream(t *testing.T) {
 	}
 	svc.DetachAll() // idempotent on an empty registry
 }
+
+// An ssh tab is mounted only inside the SSH workspace, so it must never join the
+// strip, even for a session whose own id ends in "-shell-1".
+func TestShellsLeavesOutSSHTabs(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "tmux")
+	script := "#!/bin/sh\nprintf 'lola-x\\nlola-x-shell-1\\nlola-x-ssh-1\\nlola-x-shell-ssh-2\\nlola-x-review\\n'\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	svc := &TermService{tmuxBin: bin, streams: map[string]*ptyStream{}}
+	got := strings.Join(svc.Shells("lola-x"), ",")
+	if got != "lola-x-shell-1,lola-x-review" {
+		t.Fatalf("Shells = %q", got)
+	}
+}
+
+// Closing an ssh tab is the daemon's job, because it also has to stop the master.
+// Killing the tab alone would leave an authenticated connection up behind a UI that
+// says it is gone.
+func TestCloseShellRefusesAnSSHTab(t *testing.T) {
+	bin, logPath := fakeTmux(t, true)
+	svc := &TermService{tmuxBin: bin, streams: map[string]*ptyStream{}}
+	if err := svc.CloseShell("lola-x-ssh-1"); err == nil {
+		t.Fatal("an ssh tab must not close through CloseShell")
+	}
+	if err := svc.CloseShell("lola-x-shell-ssh-1"); err == nil {
+		t.Fatal("the shell marker must not smuggle an ssh tab past the guard")
+	}
+	if strings.Contains(tmuxLog(t, logPath), "kill-session") {
+		t.Fatalf("killed a session: %s", tmuxLog(t, logPath))
+	}
+}

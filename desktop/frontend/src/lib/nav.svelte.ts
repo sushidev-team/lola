@@ -6,7 +6,7 @@
 export type View = "cockpit" | "home" | "detail" | "prpicker" | "ticketpicker";
 // There is no separate "poll" overlay any more: a project IS the poll unit, so
 // the project overlay covers repo setup, filter, labels and write-back in tabs.
-export type Overlay = null | "doctor" | "settings" | "project" | "setup" | "update" | "help" | "bestof" | "newsession" | "commands" | "rename-session" | "activity";
+export type Overlay = null | "doctor" | "settings" | "project" | "setup" | "update" | "help" | "bestof" | "newsession" | "commands" | "rename-session" | "activity" | "sshsession" | "sshconnect";
 export type Lens = "list" | "kanban" | "grid";
 
 /** Webview-local sidebar preference. Deliberately NOT in config.toml. */

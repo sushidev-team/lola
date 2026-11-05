@@ -1896,3 +1896,30 @@ func TestCodexResumeProbeHonorsCancellation(t *testing.T) {
 		t.Fatal("canceled probe must not enable resume")
 	}
 }
+
+// The record must say what the launch did. ssh's production rule reads it, so a
+// record still saying "docker" over an agent now on the host would pass that rule.
+func TestReviveRecordsTheSandboxItLaunchedWith(t *testing.T) {
+	f := newFixture(t, "", "")
+	t.Setenv("HOME", t.TempDir())
+	removed := []string{}
+	f.n.RemoveContainer = func(_ context.Context, id string) error {
+		removed = append(removed, id)
+		return nil
+	}
+	id := "lola-nori-eng-90"
+	if err := os.MkdirAll(filepath.Join(f.root, "nori", id, lolaDir), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	s := session.Session{ID: id, Source: "native", Project: "nori", Issue: "ENG-90", Agent: "claude", Sandbox: config.SandboxDocker}
+	got, err := f.n.Revive(context.Background(), s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Sandbox != "" {
+		t.Fatalf("the project has no sandbox, and the record says %q", got.Sandbox)
+	}
+	if len(removed) != 1 || removed[0] != id {
+		t.Fatalf("old container not removed: %v", removed)
+	}
+}

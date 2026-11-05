@@ -5,6 +5,9 @@
   import { triaged, triageOf } from "$lib/filters";
   import { KANBAN_COLUMNS, attention, displayFor, displayLabel, displayText } from "$lib/theme";
   import PrBadge from "./PrBadge.svelte";
+  import SSHChip from "./ssh/SSHChip.svelte";
+  import SSHActivity from "./ssh/SSHActivity.svelte";
+  import { sessionKey, sshNeedsHuman } from "$lib/ssh";
   import StackAppsChip from "./StackAppsChip.svelte";
   import { focusLabel } from "$lib/stackapps";
   import BoardChip from "./BoardChip.svelte";
@@ -81,11 +84,11 @@
                      regressions — red CI, requested changes, a conflict — with no
                      mark on any surface even though they were in the attention
                      set from the start. -->
-                {#if attention(s.agentState, s.delivery) && !sel}<span
-                    class={s.agentState === "waiting_input" ? "text-warn" : "text-bad"}>!</span
+                {#if (attention(s.agentState, s.delivery) || sshNeedsHuman(s)) && !sel}<span
+                    class={s.agentState === "waiting_input" || sshNeedsHuman(s) ? "text-warn" : "text-bad"}>!</span
                   >{/if}
                 <span class="num" class:text-accent-ink={sel} class:text-faint={!sel}
-                  >{s.issue || s.id.slice(0, 8)}</span
+                  >{sessionKey(s)}</span
                 >
                 <!-- The AGENT axis, in words. It was the two-letter status glyph
                      ("!x", "rv") ported from the TUI, where a column is precious;
@@ -97,12 +100,15 @@
                 >
               </div>
               {#if s.title}<div class="truncate text-ink">{s.title}</div>{/if}
+              {#if s.ssh?.runningCommand || s.ssh?.headline}<SSHActivity info={s.ssh} />{/if}
               <!-- No `onOpen`: this card IS a <button>, and a nested button is
                    not parseable — the parser closes the outer one and the card
                    stops being clickable. -->
               <div class="mt-0.5 flex items-center gap-2">
-                <PrBadge session={s} delivery={s.delivery} status={s.status} app={focusLabel(s)} />
+                <!-- A direct ssh session has no branch, so it can never have a PR. -->
+                {#if s.location !== "ssh"}<PrBadge session={s} delivery={s.delivery} status={s.status} app={focusLabel(s)} />{/if}
                 <StackAppsChip session={s} />
+                {#if s.ssh}<SSHChip sessionId={s.id} info={s.ssh} />{/if}
                 <!-- The agent's self-reported progress, until a PR supersedes it
                      (chipRelevant). BoardChip renders no <button> (the card
                      already is one). -->

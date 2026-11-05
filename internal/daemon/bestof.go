@@ -592,6 +592,7 @@ func (d *Daemon) discardAttempt(ctx context.Context, nat NativeAPI, s session.Se
 	kctx, cancel := context.WithTimeout(ctx, killExecTimeout)
 	defer cancel()
 	d.killReviewPane(kctx, s.ID)
+	d.sshCloseSession(kctx, s.ID)
 	err = nat.Kill(kctx, s, true, false)
 	if errors.Is(err, worktree.ErrDirty) {
 		d.sessions.Update(s.ID, func(cur *session.Session) bool {

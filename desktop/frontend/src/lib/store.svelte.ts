@@ -21,6 +21,7 @@ import type {
 import { legacySortRank, sortRank } from "./theme";
 import { displayName } from "./slug";
 import { confirm } from "./confirm.svelte";
+import { SSH_REMOTE_OUTLIVES } from "./ssh";
 
 type AgentKind = "claude" | "codex" | "opencode";
 
@@ -99,6 +100,10 @@ class Store {
   hasConfig = $state(true); // assume yes until checked, so no setup-screen flash
   configChecked = $state(false);
   sessions = $state<SessionInfo[]>([]);
+  // The SSH sessions as last pushed, kept while the daemon is down. An investigation
+  // must stay readable through a daemon restart, and its ssh terminal keeps working
+  // because that is tmux. Nothing but sessionById reads this, and only while down.
+  private retainedSSH: SessionInfo[] = [];
   activity = $state<ActivityEvent[]>([]);
   projects = $state<ProjectInfo[]>([]);
   // The [[group]] folders projects are filed under, in config order. They ride
@@ -170,6 +175,8 @@ class Store {
       this.alive = e.data;
       this.connected = true;
       if (!e.data) {
+        const withSSH = this.sessions.filter((s) => s.ssh);
+        if (withSSH.length) this.retainedSSH = withSSH;
         this.sessions = [];
         this.setActivity([]);
         // A down daemon isn't "out of date"; the offline state covers it, so drop
@@ -248,7 +255,9 @@ class Store {
   }
 
   sessionById(id: string): SessionInfo | undefined {
-    return this.sessions.find((s) => s.id === id);
+    const live = this.sessions.find((s) => s.id === id);
+    if (live || this.alive) return live;
+    return this.retainedSSH.find((s) => s.id === id);
   }
 
   setFlash(text: string, kind: "good" | "warn" | "bad" = "good") {
@@ -617,12 +626,18 @@ class Store {
   askKill(id: string) {
     const s = this.sessionById(id);
     const label = s ? s.issue || s.id.slice(0, 8) : id;
+    const direct = s?.location === "ssh";
+    // Tearing a session down closes its ssh connections too, and what they started
+    // may outlive them. Say so on the one dialog that does it.
+    const sshRan = s?.ssh?.connections?.some((c) => c.state !== "closed" && (c.commandsRun ?? 0) > 0);
+    const sshNote = sshRan ? ` ${SSH_REMOTE_OUTLIVES}` : "";
     confirm.ask({
-      title: s?.location ? "Close session?" : "Kill session?",
-      body: s?.title ? `Kill ${label} — ${s.title}?` : `Kill ${label}?`,
-      detail: s?.location ? "Close stops the session and its terminals. The directory and all files are preserved." :
-        "Kill stops its agent and removes the worktree — unpushed work is lost. Stop keeps the worktree so the session can be revived.",
-      confirmLabel: s?.location ? "Close session" : "Kill",
+      title: direct ? "End session?" : s?.location ? "Close session?" : "Kill session?",
+      body: direct ? `End ${s?.title || label}?` : s?.title ? `Kill ${label} — ${s.title}?` : `Kill ${label}?`,
+      detail: (direct ? "This closes its connections and its agent. The command record stays on disk for 14 days in ~/.lola/state/ssh/." :
+        s?.location ? "Close stops the session and its terminals. The directory and all files are preserved." :
+        "Kill stops its agent and removes the worktree — unpushed work is lost. Stop keeps the worktree so the session can be revived.") + sshNote,
+      confirmLabel: direct ? "End session" : s?.location ? "Close session" : "Kill",
       onConfirm: () => void this.kill(id),
       alternative: { label: s?.location ? "Stop, keep session" : "Stop, keep worktree", onConfirm: () => void this.kill(id, false, true) },
     });

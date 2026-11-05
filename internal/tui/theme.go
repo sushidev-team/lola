@@ -114,6 +114,7 @@ func rebuildStyles() {
 	rebuildSessionStyles()
 	rebuildCockpitStyles()
 	rebuildPanelStyles()
+	rebuildSSHStyles()
 }
 
 // bgSGR returns the raw truecolor "set background" escape for a #rrggbb string.

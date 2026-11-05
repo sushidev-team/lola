@@ -385,6 +385,9 @@ type Config struct {
 	Budget      BudgetConfig      `toml:"budget"`
 	Load        LoadConfig        `toml:"load"`
 	Sandbox     SandboxConfig     `toml:"sandbox"`
+	// SSHHosts is the [[ssh_host]] catalog: the only hosts an agent-assisted ssh
+	// session can reach (see ssh.go). Empty means the feature is off.
+	SSHHosts []SSHHost `toml:"ssh_host"`
 
 	// ReviewProviders is the NEW canonical global review CATALOG (resolved from
 	// [[review.provider]]). Empty when the file uses the legacy [review]/
@@ -501,6 +504,7 @@ type fileConfig struct {
 	Budget      *BudgetConfig          `toml:"budget,omitempty"`
 	Load        *LoadConfig            `toml:"load,omitempty"`
 	Sandbox     *SandboxConfig         `toml:"sandbox,omitempty"`
+	SSHHosts    []SSHHost              `toml:"ssh_host,omitempty"`
 }
 
 // fileProject mirrors Project on disk. Its polling fields are inline; the
@@ -925,6 +929,7 @@ func (fc *fileConfig) config() *Config {
 		Budget:          tableOf(fc.Budget),
 		Load:            tableOf(fc.Load),
 		Sandbox:         tableOf(fc.Sandbox),
+		SSHHosts:        fc.SSHHosts,
 	}
 }
 
@@ -984,6 +989,7 @@ func (c *Config) file() *fileConfig {
 		Budget:      nonZero(c.Budget),
 		Load:        nonZero(c.Load),
 		Sandbox:     sandboxTable(c.Sandbox),
+		SSHHosts:    c.SSHHosts,
 	}
 }
 

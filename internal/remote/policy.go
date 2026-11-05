@@ -64,6 +64,18 @@ var deniedCommands = map[string]bool{
 	"regenerateRemoteKey": true,
 }
 
+// Every ssh command is denied too. The human side (go, approve, take the wheel,
+// open) is the consent a shell on a production host rests on, and consent is not a
+// phone job for now. The agent side comes from an agent's own pane, for the same
+// reason as agentReport: a forged run or post would put words in its mouth.
+func init() {
+	for _, list := range [][]string{protocol.SSHAgentCommands, protocol.SSHHumanCommands} {
+		for _, cmd := range list {
+			deniedCommands[cmd] = true
+		}
+	}
+}
+
 // CommandDenied reports whether cmd is refused for every remote peer
 // unconditionally. The server calls it BEFORE the authorizer, so no
 // implementation of Authorizer can grant one of these, and an empty command is

@@ -14,6 +14,7 @@ import (
 	"github.com/sushidev-team/lola/internal/agent"
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/gitguard"
+	"github.com/sushidev-team/lola/internal/session"
 	"github.com/sushidev-team/lola/internal/usage"
 )
 
@@ -122,6 +123,21 @@ func (n *Native) SandboxFor(project string) string {
 		return config.SandboxDocker
 	}
 	return ""
+}
+
+// syncSandboxRecord makes a relaunched session's record say what launchLine just
+// did. launchLine reads the CURRENT project config, and the production rule for ssh
+// trusts this field: a record still saying "docker" over an agent now on the host
+// would let that agent past a production host. A container left behind by the
+// previous launch goes too, since the host path has no `docker rm -f` of its own.
+func (n *Native) syncSandboxRecord(ctx context.Context, s *session.Session) {
+	now := n.SandboxFor(s.Project)
+	if s.Sandbox != "" && now == "" {
+		if err := n.removeContainer(ctx, s.ID); err != nil && n.Logf != nil {
+			n.Logf("session %s: removing its old sandbox container failed: %v", s.ID, err)
+		}
+	}
+	s.Sandbox = now
 }
 
 // sandboxEnv is the env-file block a sandboxed agent additionally sources

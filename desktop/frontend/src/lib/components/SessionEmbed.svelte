@@ -4,7 +4,10 @@
   import { store } from "$lib/store.svelte";
   import { devToggleTitle } from "$lib/devtoggle";
   import { nav } from "$lib/nav.svelte";
-  import { terms, AGENT, DIFF, CHECKPOINTS, isViewTab } from "$lib/terms.svelte";
+  import { terms, AGENT, DIFF, CHECKPOINTS, SSH, isViewTab } from "$lib/terms.svelte";
+  import { connView, isEnded, sshTabs } from "$lib/ssh";
+  import { ssh } from "$lib/ssh.svelte";
+  import SSHWorkspace from "./ssh/SSHWorkspace.svelte";
   import { sidePanel } from "$lib/sidepanel.svelte";
   import { checkpoints } from "$lib/checkpoints.svelte";
   import { feedback } from "$lib/feedback.svelte";
@@ -41,7 +44,6 @@
   // so no chrome. Focus (the big/fullscreen view) always shows it, so a shell is
   // reachable there without the "s" shortcut.
   const shells = $derived(session ? terms.shellsFor(session.id) : []);
-  const activeTab = $derived(session ? terms.activeTab(session.id) : AGENT);
   async function terminalExited(id: string, name: string, temporary: boolean, shellTab: boolean) {
     if (shellTab) terms.shellExited(id, name);
     if (!temporary) return;
@@ -60,7 +62,20 @@
   }
   // A view tab (diff, checkpoints) keeps the bar up too: it was reached by a key,
   // the menu or a sidebar row, and the way back to the agent must be on screen.
-  const showTabs = $derived(!!session && (shells.length > 0 || focused || isViewTab(activeTab)));
+  // A connection keeps the bar up too: the workspace is reached from here, and it is
+  // where a request that just arrived is waiting. A direct SSH session has no
+  // checkout, so its strip has no Diff.
+  const sshConns = $derived(session?.ssh?.connections ?? []);
+  const sshStrip = $derived(sshTabs(sshConns));
+  const hasSSH = $derived(sshStrip.length > 0);
+  const sshOn = $derived(ssh.view(sessionId).active()?.id ?? "");
+  // The selection can outlive the tab: a daemon that reports no connections, or one
+  // that ended and was closed. Never show a view whose tab is not on the strip, because
+  // nothing there could close it or say why it is open.
+  const pickedActive = $derived(session ? terms.activeTab(session.id) : AGENT);
+  const activeTab = $derived(pickedActive === SSH && !hasSSH ? AGENT : pickedActive);
+  const directSSH = $derived(session?.location === "ssh");
+  const showTabs = $derived(!!session && (shells.length > 0 || focused || hasSSH || isViewTab(activeTab)));
 
   // The tmux name the LiveTerminal attaches to for the active tab. Keying the
   // terminal on this (below) swaps agent ⇄ shell by re-attaching — the same
@@ -241,7 +256,9 @@
     agentState;
     if (id && hasWorktree) untrack(() => void checkpoints.load(id));
   });
-  const showSide = $derived(!sidePanel.hidden);
+  // Hidden on the SSH tab: the Brief covers the agent's account there, and three
+  // columns of reading is one too many.
+  const showSide = $derived(!sidePanel.hidden && activeTab !== SSH);
 
   const canRevive = $derived(session && (session.status === "dead" || session.status === "session_ended"));
 </script>
@@ -274,7 +291,7 @@
            the width that made the header wrap. -->
       {#if !session.location}<span class="selectable font-medium text-accent-ink">{session.issue || session.id.slice(0, 8)}</span>{/if}
       <button class="selectable truncate text-left text-ink hover:underline" title="Rename session" onclick={() => nav.openOverlay("rename-session",session.id)}>{session.title || "Session"}</button>
-      {#if session.location}<span class="rounded bg-pill-grey px-1.5 py-0.5 text-sm text-pill-grey-fg" title={session.worktree}>{session.location === "main" ? "Main checkout" : "Temporary"}</span>{/if}
+      {#if session.location}<span class="rounded bg-pill-grey px-1.5 py-0.5 text-sm text-pill-grey-fg" title={session.worktree}>{session.location === "main" ? "Main checkout" : session.location === "ssh" ? "SSH" : "Temporary"}</span>{/if}
       {#if session.status !== "shell"}
         <span class="inline-flex items-center whitespace-nowrap rounded bg-pill-grey px-1.5 py-[1px] text-sm text-pill-grey-fg">
           {(session.agent || "claude").toLowerCase()}
@@ -318,6 +335,9 @@
            line — and it stopped the terminal short of the window's edge, which is
            the one thing the region is for. -->
       <span class="ml-auto flex items-center gap-1.5">
+        <!-- In the header rather than the tab strip: the strip is hidden until a
+             session has more than one tab, and this has to be findable before then. -->
+        <Button size="xs" aria-label="Open a new SSH tab" title="Open a new SSH tab on a host" onclick={() => ssh.connectHost(session.id)}>SSH</Button>
         {#if session.worktree}
           <Button icon size="xs" aria-label="Open session folder in Finder" title={`Open in Finder · ${session.worktree}`} onclick={() => store.openFolder(session.worktree)}>
             <svg class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -355,7 +375,7 @@
         {#if session.prNumber > 0 && !session.stack}
           <Button size="xs" onclick={() => store.openURL(session.prUrl)}>Open PR <span aria-hidden="true">↗</span></Button>
         {/if}
-        <Button size="xs" onclick={() => store.review(session.id)}>Review</Button>
+        {#if !directSSH}<Button size="xs" onclick={() => store.review(session.id)}>Review</Button>{/if}
         {#if canRevive}
           <Button variant="accent" size="xs" onclick={() => store.revive(session.id)} title={session.location ? "Reopen this directory; stopped agents start a new conversation" : "Resume the session"}>{session.location ? "Reopen" : "Revive"}</Button>
         {/if}
@@ -503,6 +523,42 @@
         class="relative z-10 flex items-stretch border-b border-edge/60 bg-[color-mix(in_srgb,var(--color-panel)_88%,var(--color-canvas))] select-none"
       >
         <div class="flex min-w-0 items-stretch">
+          <!-- SSH leads the strip: a request should be one glance away. One tab per connection,
+               named after its host. The count is what waits on you there. Selection does not
+               move when a request arrives, and focus is not taken. One chip holding two
+               buttons, for the reason the shell tabs give below. -->
+          {#each sshStrip as t (t.conn.id)}
+            {@const on = activeTab === SSH && sshOn === t.conn.id}
+            {@const st = connView(t.conn)}
+            <div
+              class="group flex h-8 max-w-60 min-w-0 shrink-0 items-center border-r border-edge/40 transition-colors {on
+                ? 'bg-sel font-medium text-ink hover:bg-[color-mix(in_srgb,var(--color-sel)_55%,var(--color-edge))]'
+                : 'text-faint hover:bg-sel/50 hover:text-ink'}"
+              data-ssh-tab={t.conn.id}
+            >
+              <button
+                type="button"
+                aria-pressed={on}
+                title="{t.label}: {st.word}"
+                class="flex h-full min-w-0 items-center gap-1.5 pr-1 pl-3"
+                onclick={() => {
+                  ssh.view(session.id).activeConn = t.conn.id;
+                  selectTab(session.id, SSH);
+                }}
+              >
+                <span class="inline-block h-1.5 w-1.5 shrink-0 rounded-full {st.hollow ? 'border' : ''} {st.dot}" aria-hidden="true"></span>
+                <span class="min-w-0 truncate">{t.label}</span>
+                {#if t.count > 0}<span class="num text-sm text-orange">{t.count}</span>{/if}
+              </button>
+              <button
+                type="button"
+                class="mr-1.5 grid size-5 shrink-0 place-items-center rounded text-faint opacity-0 transition-opacity group-hover:opacity-100 hover:text-ink focus-visible:opacity-100"
+                aria-label="Delete the {t.label} tab"
+                title="Close and delete this tab"
+                onclick={() => ssh.trashTab(session.id, t.conn)}><span aria-hidden="true">×</span></button
+              >
+            </div>
+          {/each}
           <!-- The agent tab is the same cell as a shell tab minus the × and its
                counterweight, so the strip is one row of boxes, not two shapes. -->
           <button
@@ -517,6 +573,7 @@
           </button>
           <!-- The diff tab: same cell, no ×. It is a view, not a tmux session.
                The count is the comments queued but not yet sent. -->
+          {#if !directSSH}
           <button
             type="button"
             aria-pressed={activeTab === DIFF}
@@ -528,6 +585,7 @@
           >
             Diff{#if draftCount > 0}<span class="ml-1.5 text-sm text-accent-ink">{draftCount}</span>{/if}
           </button>
+          {/if}
           {#each shells as sh, i (sh)}
             <!-- The tab is ONE chip containing two controls, so the wrapper — not
                  the label button — paints the background and the text colour, and
@@ -727,6 +785,12 @@
       {:else if activeTab === CHECKPOINTS}
         <div class="grid min-h-0">
           <CheckpointsView sessionId={session.id} />
+        </div>
+      {:else if activeTab === SSH}
+        <div class="grid min-h-0">
+          <!-- Keyed: a workspace's local state and its pending focus requests belong
+               to one session, and the selection moving must not carry them over. -->
+          {#key session.id}<SSHWorkspace sessionId={session.id} />{/key}
         </div>
       {:else}
       <div class="min-h-0 bg-panel p-4">

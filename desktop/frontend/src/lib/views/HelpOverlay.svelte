@@ -40,6 +40,29 @@
       ],
     },
     {
+      // The ⌘ chords work from inside a terminal. Approval has NO global key: it
+      // needs a card holding focus, plus 800ms of arming.
+      title: "SSH",
+      keys: [
+        ["⌘⇧H", "new SSH session"],
+        ["h", "open or leave the SSH tab"],
+        ["W · ⌘⇧L", "take the wheel, or hand it back"],
+        ["A · ⌘⇧A", "review the next approval"],
+        ["i · ⌘L", "talk to the agent"],
+        ["t", "move into the stream"],
+        ["F", "cycle the filter"],
+        ["/", "find in the timeline"],
+        ["⌘\\", "show or hide the terminal"],
+        ["⌥← / ⌥→", "move the focused widget tab"],
+        ["j / k · ↑ ↓", "stream: move between items"],
+        ["Enter / → / ←", "stream: expand, follow, collapse"],
+        ["s", "stream: stdout or stderr"],
+        ["a", "stream: ask about this block"],
+        ["X", "stream: stop the running block"],
+        ["Y / N", "focused card: confirm or deny"],
+      ],
+    },
+    {
       title: "Global",
       keys: [
         ["⌘K", "search projects, sessions, and actions"],

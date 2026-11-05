@@ -9,6 +9,7 @@
   import SidebarVersion from "./SidebarVersion.svelte";
   import SidebarActivity from "./SidebarActivity.svelte";
   import TemporarySessions from "./TemporarySessions.svelte";
+  import SSHSessions from "./ssh/SSHSessions.svelte";
 
   // Sidebar makes ZERO store reads. It is pure layout; every child reads
   // $lib/store.svelte / $lib/nav.svelte itself. A container that computes rows
@@ -46,7 +47,7 @@
   </div>
 
   <div class="grid min-h-0 min-w-0" style="grid-template-rows:minmax(0,1fr) auto auto">
-    <div class="min-h-0 overflow-auto"><SidebarTriage /><SidebarProjects /><TemporarySessions /></div>
+    <div class="min-h-0 overflow-auto"><SidebarTriage /><SidebarProjects /><SSHSessions /><TemporarySessions /></div>
     <SidebarActivity />
     <SidebarVersion />
   </div>

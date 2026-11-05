@@ -391,6 +391,7 @@ func (d *Daemon) reactMerged(ctx context.Context, s session.Session, notifier no
 		dir = filepath.Join(home, "worktrees", p.Name, s.ID)
 	}
 
+	d.sshCloseSession(cctx, s.ID)
 	err := nat.Kill(cctx, s, removeWorktree, false) // never force: dirty is kept
 	if errors.Is(err, worktree.ErrDirty) {
 		// Kill stops the tmux agent BEFORE touching the worktree (see

@@ -42,6 +42,7 @@ import (
 	"github.com/sushidev-team/lola/internal/lolaenv"
 	"github.com/sushidev-team/lola/internal/portlease"
 	"github.com/sushidev-team/lola/internal/session"
+	"github.com/sushidev-team/lola/internal/sshtab"
 	"github.com/sushidev-team/lola/internal/state"
 	"github.com/sushidev-team/lola/internal/tmux"
 	"github.com/sushidev-team/lola/internal/worktree"
@@ -96,12 +97,27 @@ var reviewPaneRe = regexp.MustCompile(`-review$`)
 func IsShellTabSession(name string) bool { return shellTabRe.MatchString(name) }
 
 // IsAuxSession reports whether a tmux session name is an AUXILIARY session of
-// some parent lola session — an embedded shell tab, a review pane or a dev tab
-// (internal/devtab) — rather than a session of its own. Adoption drops these
+// some parent lola session — an embedded shell tab, a review pane, a dev tab
+// (internal/devtab) or an ssh terminal (internal/sshtab) — rather than a session of its own. Adoption drops these
 // from its scan (a review pane only when its parent is live beside it, see
 // Adopt) and the daemon purges any record an older daemon persisted for one.
 func IsAuxSession(name string) bool {
-	return shellTabRe.MatchString(name) || reviewPaneRe.MatchString(name) || devtab.Is(name)
+	return shellTabRe.MatchString(name) || reviewPaneRe.MatchString(name) || devtab.Is(name) || sshtab.Is(name)
+}
+
+// isSSHTab decides whether a live tmux name is an ssh terminal rather than a session
+// that merely looks like one: issue SSH-42 becomes "lola-infra-ssh-42", and dropping
+// that would orphan a running agent. A name with its own record is a session. Anything
+// else is a tab only if the session it names is live beside it or on record.
+func (n *Native) isSSHTab(name string, live map[string]bool) bool {
+	parent, ok := sshtab.Parent(name)
+	if !ok {
+		return false
+	}
+	if n.SessionRecorded != nil && n.SessionRecorded(name) {
+		return false
+	}
+	return live[parent] || (n.SessionRecorded != nil && n.SessionRecorded(parent))
 }
 
 // reviewPaneParent returns the session a review pane belongs to.
@@ -129,6 +145,9 @@ const openCodeDir = ".opencode"
 // Native spawns and manages Lola's own runner sessions (runtime = "native"):
 // one git worktree + one tmux session running Claude Code per Linear issue.
 type Native struct {
+	// SessionRecorded reports whether the session store holds a record of this id.
+	// Adoption asks it about names shaped like an ssh tab. Nil means no record.
+	SessionRecorded func(id string) bool
 	// KnowledgeBrief supplies a bounded, recorded knowledge snapshot at launch.
 	// Nil preserves launches without a knowledge store.
 	KnowledgeBrief func(project, sessionID string, prompt []byte) []byte
@@ -1153,7 +1172,7 @@ func (n *Native) withReportBriefing(prompt []byte) []byte {
 	// behind a `check … pass`; saying so up front is what makes an honest agent
 	// run the suite in a shape whose exit status is its own.
 	b.WriteString("\nA `check … pass` is compared with the commands you actually ran: report one only after running that check, and run it unpiped (`go test ./...`, not `go test ./... | tail`) so its exit status is visible. A claim with no matching run is flagged to the humans.\n")
-	return []byte(b.String())
+	return n.withSSHBriefing([]byte(b.String()))
 }
 
 // rollback undoes a partially spawned session after step failed with cause:
@@ -1222,7 +1241,9 @@ func (n *Native) Adopt(ctx context.Context) ([]session.Session, error) {
 		// the agent) are auxiliary for the same reason, and they outlive their
 		// command (remain-on-exit keeps a crashed `npm run dev` readable), so an
 		// unpaired one is exactly what adoption would otherwise call an orphan.
-		if shellTabRe.MatchString(name) || devtab.Is(name) {
+		// An ssh terminal ("<sessionID>-ssh-N") too, and the human's terminal
+		// deliberately outlives a dead agent, so its parent need only be RECORDED.
+		if shellTabRe.MatchString(name) || devtab.Is(name) || n.isSSHTab(name, live) {
 			delete(live, name)
 			continue
 		}
@@ -1398,6 +1419,9 @@ func (n *Native) Kill(ctx context.Context, s session.Session, removeWorktree, fo
 	}
 	if s.Kind == session.KindLocal {
 		if removeWorktree {
+			if s.Location == LocationSSH {
+				n.untrustAgentDir(s.ID, s.Worktree)
+			}
 			return RemoveLocalArtifacts(s.ID)
 		}
 		return nil
@@ -1517,9 +1541,10 @@ func (n *Native) killAuxSessions(ctx context.Context, parent string) {
 // deliberately: "lola-fe-42" is a prefix of "lola-fe-420-shell-1", whose
 // remainder ("0-shell-1") ends in a shell-tab suffix and would otherwise make
 // one session's teardown kill an unrelated live session's tab. Keep it in step
-// with internal/devtab (dev tabs) and reviewPaneSuffix.
+// with internal/devtab (dev tabs), internal/sshtab (ssh terminals) and
+// reviewPaneSuffix.
 // A stack app's review pane carries its lane first ("~<app>-review").
-var auxSuffixRe = regexp.MustCompile(`^(?:-shell-\d+|-review|-dev-\d+|~[A-Za-z0-9][A-Za-z0-9._-]*-review)$`)
+var auxSuffixRe = regexp.MustCompile(`^(?:-shell-\d+|-review|-dev-\d+|-ssh-\d+|~[A-Za-z0-9][A-Za-z0-9._-]*-review)$`)
 
 // isAuxOf reports whether name is an auxiliary session of parent.
 func isAuxOf(parent, name string) bool {
@@ -1605,6 +1630,7 @@ func (n *Native) Revive(ctx context.Context, s session.Session) (session.Session
 		n.Logf("session %s: status-bar styling failed (cosmetic, session is up): %v", id, err)
 	}
 	revived := s
+	n.syncSandboxRecord(ctx, &revived)
 	// SetAgentState stamps LastActivityAt on the working entry, so the freshly
 	// relaunched pane gets the full anti-false-working grace window instead of
 	// inheriting the pre-death activity anchor (which was already stale and

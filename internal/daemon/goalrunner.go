@@ -379,6 +379,7 @@ func (d *Daemon) reconcileGoalAttempts(ctx context.Context, g goal.Goal) error {
 			continue
 		}
 		// Container death, submission and explicit stops all preserve its files.
+		d.sshCloseSession(ctx, s.ID)
 		if err := nat.Kill(ctx, s, false, false); err != nil {
 			return err
 		}

@@ -153,6 +153,7 @@ protocol-version mismatch.
 | `lola coderabbit <session>` | Back-compat alias that forces the **watch-shape** provider now (`coderabbit-watch`) — poll the session's open PR for CodeRabbit (GitHub-app) comments, ignoring the watermark, and route any found (notify / worker / Linear per config). Skipped (not an error) when the watch is disabled or the session has no open PR. |
 | `lola reload` | Re-read `config.toml`; the daemon diffs projects and starts/stops poll goroutines without disturbing unaffected ones |
 | `lola logs [name] [-f]` | Tail `~/.lola/daemon.log`, optionally filtered to one project (by name); `-f`/`--follow` to stream |
+| `lola ssh <verb>` | **Agent-assisted ssh.** A local agent debugs on a remote host with nothing installed there, a human watches a structured timeline, can ask the agent or run commands from one composer, and can take over at any moment. Commands typed in the terminal become timeline blocks too, private until shared, and `sudo` is labelled wherever it runs. The agent and the human share one working folder per connection. Set `terminal_capture = false` on a host for a plain login shell. Agents can structure answers and post small sandboxed widgets; `lola ssh guide answers` and `lola ssh guide widgets` are their references. Agent verbs, run inside a session: `hosts`, `request <host> --why W [--scope S]`, `run <host> --why W [--cwd D] [--timeout N] [--wait 9m] [--detach] -- cmd`, `wait <block>`, `output <block>`, `post <kind> ...`. Human verbs: `open <host> [--agent K] [--name N] [--brief B] [--drive]` starts an agent-assisted session, `connect <session> <host> [--drive]` connects an existing one without waiting for its agent to ask, `ls`, `go`, `deny`, `approve <conn> <block> [--grant MIN]`, `reject`, `take`, `handback [--note N] [--transcript]`, `stop`, `close`, `terminal`. `run` exits with the remote exit code, or 240 denied, 241 the human has the wheel, 242 not connected, 243 still waiting, 244 timed out, 245 stopped, 246 refused, 247 result unknown, 248 lola unreachable. Hosts are `[[ssh_host]]` in the config; a production host approves every command and refuses an unsandboxed agent unless it sets `allow_unsandboxed`. **Lola does not filter commands: the remote user's permissions are the real limit, everything the agent reads goes to its model provider, and for an unsandboxed agent the approval gate stops accidents and well-behaved agents, not a determined one.** See `docs/ssh-sessions.md`. |
 | `lola report <verb> [args]` | **Run by the coding agent, inside its session**, to publish its own progress: `todo set\|add\|start\|done\|undo\|remove\|clear`, `phase <planning\|investigating\|implementing\|testing\|reviewing\|polishing\|done>`, `progress <0-100\|done/total> [label]`, `blocked <reason>` / `unblocked`, `note <text>`, `check <name> <pass\|fail\|running> [summary]`, `clear`. Every agent's `.lola/prompt.md` teaches it. Shown as the session view's **Report** sidebar, a **Plan** column in the list, a chip on board cards and a `plan:` block in the TUI. Display-only: it is the agent's claim about itself and never drives status, slots, reactions or send-keys. A `check <test\|lint\|build…> pass` claim is **audited**: for claude sessions lola reads the agent's own transcript for a matching command run before the claim (and its exit status), and compares it with the PR's CI — a claim the evidence does not back shows as **Unverified claim** (app) / `⚠ unverified` (TUI). The audit is display-only too. A rejected report exits 1 with the usage error; an unreachable daemon exits 0, so a report never fails the agent's command. `lola report --help` lists every verb. |
 
 `lola hook <event>` also exists but is **internal and hidden**: the generated
@@ -183,6 +184,9 @@ environment variable — tests rely on this):
 | `context/<project>/<key>/` | Shared context folder, linked into every session as `.lola/context` (key = the lowercased issue, or the session ID for manual/PR sessions). Survives teardown on purpose; delete it by hand when an issue is done. |
 | `plans/<issue>.json` | `lola plan` proposals awaiting review / `--apply` |
 | `cache/linear-<team>.json` | Cached Linear metadata for the TUI forms |
+| `state/ssh/<session>/` | Record of an ssh session: connections, blocks, elements and sanitized output (0700 directory, 0600 files). Kept 14 days after the session ends. |
+| `ssh/<connection>` | ssh control socket, in a verified 0700 directory (`/tmp/lola-ssh-<uid>/` when `LOLA_HOME` makes the path too long for `sun_path`). |
+| `local-sessions/<id>/work/` | A direct ssh session's scratch folder, the agent's working directory. Removed when the session ends. |
 
 ## Configuration reference
 
@@ -1494,6 +1498,34 @@ the default — a typo you cannot see is worse than a startup error. A config
 that never sets `[ui]` never grows the table on save, so the default stays a
 default instead of being frozen into your file.
 
+### `[[ssh_host]]` (optional)
+
+The hosts an [agent-assisted ssh session](#agent-assisted-ssh) can reach. No table
+means the feature is off. lola holds no address and no key: `alias` is resolved by
+your own `~/.ssh/config`, and you answer host keys, passphrases and MFA yourself in a
+real terminal. It is not `[remote]`, which means phone pairing.
+
+| Key | Type | Description |
+| --- | --- | --- |
+| `alias` | string | Required. What ssh connects to. |
+| `name` | string | The id agents and the CLI use. Default: `alias`. |
+| `label` | string | Free display text. |
+| `user` | string | A restricted remote user. Default: whatever your ssh config says. **This is the real limit on what a command can do.** |
+| `tier` | string | `production` \| `staging` \| `dev`. Empty or unknown reads as `production`. |
+| `allow_unsandboxed` | bool | Accept an unsandboxed agent on a production host. Default `false`. |
+| `sandbox` | string | How the agent of a direct session runs: `docker`, `none`, or empty for the default (docker on production when `[sandbox].image` and `lola_bin` are set, and on the host below production). |
+| `agent` | string | The coding agent of a direct session. Default: `[defaults].agent`. |
+| `default_cwd` | string | Remote directory for a command that names none. Default: the login directory. |
+| `grant_max_minutes` | int | The longest time-limited grant. `0` uses the tier's default (staging 30, dev 120), `-1` means no grants. Must not be positive on production. |
+| `command_timeout_seconds` | int | When a command names none. Default `120`. |
+| `max_command_timeout_seconds` | int | The most a command may ask for. Default `900`. |
+| `output_cap_kb` | int | Kept per stream of one command. Past it the head and the last 64 KB are kept. Default `1024`. |
+| `control_persist_seconds` | int | How long an idle connection lingers after its last client. Default `900`. |
+| `connect_wait_seconds` | int | Time allowed for passphrase and MFA. Default `300`. |
+| `approval_timeout_seconds` | int | A command nobody answers expires, unrun. Default `1800`. |
+
+Both settings screens edit this table (app: Settings → SSH hosts, TUI: `S` → SSH hosts).
+
 ### `[remote]` (optional)
 
 **The phone listener, and it is off by default for what it grants rather than
@@ -1877,6 +1909,74 @@ From then on the ordinary ticks do the work: a step with no blockers
 dispatches right away, and each later step waits (`blocked-by <ID>` in
 `lola poll <project> --once --dry-run`) until its blockers are done or their PRs are
 merged.
+
+## Agent-assisted SSH
+
+A coding agent debugs a remote host with nothing installed there. You watch a
+structured timeline, can dig from any claim to the exact command and raw output, and
+can take the wheel at any moment. The contract is
+[`docs/ssh-sessions.md`](docs/ssh-sessions.md) and the experience
+[`docs/ssh-sessions-ux.md`](docs/ssh-sessions-ux.md).
+
+**How it works.** The agent stays local and holds nothing. The daemon runs real `ssh`
+as a ControlMaster in a `<id>-ssh-N` tmux tab. You authenticate through cards in the timeline, or in that terminal. Each
+agent command then runs over an exec channel on that master, not by typing into a
+shell, so it has a real exit code and separate stdout and stderr. Every command
+becomes a block on the timeline.
+
+**Two ways in.** From a running session, the agent runs `lola ssh request <host> --why
+…`. The session then shows as needing you, and nothing connects before your go. Or you
+start an agent-assisted session yourself: `H` in the TUI, ⌘⇧H in the app, or `lola ssh
+open <host>`. Starting it is the go for connecting, and command approval still applies.
+It needs no project or checkout. You talk to the agent there, and the terminal beside
+the timeline is yours.
+
+**Approval.** A production host approves every command, one at a time. Hosts below
+production may also take a time-limited grant while you approve. An approval shows the
+exact command, the reason, the host, the user and the tier. A denial can carry a reason
+back to the agent. A command nobody answers expires, unrun.
+
+**The wheel.** Each connection is either the agent's or yours. Taking it (`W` in the
+TUI, `W` or ⌘⇧L in the app, `lola ssh take`) makes `lola ssh run` return a clear "human
+has control" result at once, refuses what was waiting, and ends any grant. A command
+already running stays visible and stoppable. Commands you run in the terminal are not
+recorded. Handing back can include a transcript of your terminal: you read and edit it
+first, and it is sent only if you choose to. Stopping a command or closing a connection
+ends the local ssh, and **the remote process may keep running**.
+
+**What agents can publish.** `lola ssh post <kind> …` adds a card to the timeline:
+`summary`, `narration`, `hypothesis`, `finding`, `plan`, `metric`, `evidence`,
+`recommendation`, `proposal`, `question`. Every agent's briefing teaches them, the same
+for claude, codex and opencode. They are the agent's **claims**: display-only, sanitized,
+rate-limited, and rendered as text. Command, exit code, timing and output are **facts**
+the daemon recorded, and the UIs draw the two differently. An evidence link is verified
+only as "this block exists with these facts", not as "the claim is true". A proposal
+never runs by itself.
+
+### What this does and does not protect
+
+Say these plainly to whoever turns this on:
+
+- **Lola does not filter commands.** There is no read-only mode to trust, because
+  parsing a shell command on the client is not a boundary. The remote user's permissions
+  are the real limit, so point `user` at a restricted account.
+- **Everything the agent reads goes to its model provider,** output included. The
+  approval moment says so too.
+- **For an unsandboxed agent, the approval gate stops accidents and well-behaved agents,
+  not a determined one.** It runs as you, so it can reach the daemon's socket and your ssh
+  keys. That is why a production host refuses an unsandboxed agent unless the host sets
+  `allow_unsandboxed = true`.
+- **For a sandboxed agent the gate is real.** Its container mounts no ssh keys, and the
+  hook bridge admits only the agent verbs: never approval, takeover or open. A direct
+  session runs sandboxed on production when `[sandbox]` is configured, with only its
+  scratch folder writable. Otherwise it is refused with a message naming both ways out.
+- **Remote output is untrusted.** Control characters are stripped, a handback transcript
+  is framed to the agent as untrusted, and a URL opens only through the daemon's
+  http(s)-only `openURL`.
+- **A paired phone sees no ssh details.** Every ssh command is refused over `[remote]`,
+  the `-ssh-N` tab cannot be attached from a phone, and the session list it receives
+  leaves out the ssh glance, so the exact command waiting for approval and the agent's
+  latest summary stay on the machine.
 
 ## Workspace learning and goals
 

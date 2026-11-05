@@ -17,7 +17,8 @@ import (
 // operator turned it off ([defaults].trust_worktrees = false), the session is
 // SANDBOXED (its claude reads the container's own config, never the host's),
 // or dir is not inside lola's worktree root — lola only vouches for folders it
-// made. Best-effort: a failure logs and the launch goes ahead; the cost is the
+// made, which also covers a direct ssh session's scratch folder (isSSHScratch).
+// Best-effort: a failure logs and the launch goes ahead; the cost is the
 // dialog the user would have seen anyway.
 func (n *Native) trustAgentDir(project, id, dir string, kind agent.Kind) {
 	if n.TrustWorkspace == nil || kind != agent.Claude {
@@ -26,7 +27,7 @@ func (n *Native) trustAgentDir(project, id, dir string, kind agent.Kind) {
 	if n.Cfg != nil && !n.Cfg.TrustClaudeWorktrees() {
 		return
 	}
-	if n.sandboxProject(project) != nil || !n.underWorktreeRoot(dir) {
+	if n.sandboxProject(project) != nil || (!n.underWorktreeRoot(dir) && !n.isSSHScratch(dir)) {
 		return
 	}
 	if err := n.TrustWorkspace(dir); err != nil {
@@ -40,7 +41,7 @@ func (n *Native) trustAgentDir(project, id, dir string, kind agent.Kind) {
 // written before either changed must still be cleaned up — and is a cheap
 // no-op (one read, no write) when there is nothing to remove.
 func (n *Native) untrustAgentDir(id, dir string) {
-	if n.UntrustWorkspace == nil || !n.underWorktreeRoot(dir) {
+	if n.UntrustWorkspace == nil || (!n.underWorktreeRoot(dir) && !n.isSSHScratch(dir)) {
 		return
 	}
 	if err := n.UntrustWorkspace(dir); err != nil {

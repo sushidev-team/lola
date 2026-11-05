@@ -192,6 +192,11 @@ type queuedText struct {
 	field func(*session.Session) *string
 	wrap  func(string) string
 	done  string
+	// took and sent are optional, for a queue with a second delivery path. took
+	// runs right after the text left the field and before the send, and sent reports
+	// how the send went, after a failure has already put the text back.
+	took func(id, text string)
+	sent func(id, text string, ok bool)
 }
 
 // deliverQueued types one queue into the session's pane when the agent is
@@ -235,6 +240,9 @@ func (d *Daemon) deliverQueued(ctx context.Context, id string, q queuedText) boo
 	if text == "" {
 		return false
 	}
+	if q.took != nil {
+		q.took(id, text)
+	}
 
 	if err := d.typeToAgentLocked(ctx, tmuxName, q.wrap(text), reactExecTimeout); err != nil {
 		// Unlike a review hand-off (which other sinks also received), this text
@@ -250,7 +258,13 @@ func (d *Daemon) deliverQueued(ctx context.Context, id string, q queuedText) boo
 		})
 		_ = d.sessions.Save()
 		d.logf("", "%s: %s send-keys failed (re-queued): %v", q.name, id, err)
+		if q.sent != nil {
+			q.sent(id, text, false)
+		}
 		return false
+	}
+	if q.sent != nil {
+		q.sent(id, text, true)
 	}
 	if err := d.sessions.Save(); err != nil {
 		d.logf("", "%s: persist sessions: %v", q.name, err)

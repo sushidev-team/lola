@@ -1,5 +1,9 @@
 <script lang="ts">
   import NewSession from "$lib/components/NewSession.svelte";
+  import NewSSHSession from "$lib/components/ssh/NewSSHSession.svelte";
+  import ConnectSSHHost from "$lib/components/ssh/ConnectSSHHost.svelte";
+  import { ssh } from "$lib/ssh.svelte";
+  import { sshNeedsHuman, urgentConn } from "$lib/ssh";
   import RenameSession from "$lib/components/RenameSession.svelte";
   import CommandPalette from "$lib/components/CommandPalette.svelte";
   import ActivityFeed from "$lib/components/ActivityFeed.svelte";
@@ -10,7 +14,7 @@
   import { store, scopedSessions, type SessionInfo } from "$lib/store.svelte";
   import { updates } from "$lib/update.svelte";
   import { nav } from "$lib/nav.svelte";
-  import { terms } from "$lib/terms.svelte";
+  import { terms, SSH } from "$lib/terms.svelte";
   import { triaged } from "$lib/filters";
   import { isChord } from "$lib/keys";
   import { displayFor } from "$lib/theme";
@@ -66,6 +70,7 @@
     if (action === "commands") { nav.openOverlay("commands"); return; }
     if (action === "new-session") { nav.newSession(nav.project); return; }
     if (action === "temporary-shell") { void openShell(); return; }
+    if (action.startsWith("ssh-")) { ssh.menuAction(action, sel); return; }
     const s = sel;
     if (!s) {
       store.setFlash("no session selected", "warn");
@@ -140,6 +145,12 @@
         nav.select(r.id);
         return;
       }
+      // A command or a connection waiting on you is a prompt to answer too, and a
+      // jump lands on the workspace with the card in view.
+      if (sshNeedsHuman(r)) {
+        ssh.open(r.id, { conn: urgentConn(r.ssh?.connections)?.id });
+        return;
+      }
     }
   }
 
@@ -183,7 +194,7 @@
       case "f":
         // The diff tab ("files changed"): toggles between it and the agent. Lives
         // in the detail embed, so the grid lens has nothing to show it in.
-        if (sel && nav.lens !== "grid") terms.toggleDiff(sel.id);
+        if (sel && nav.lens !== "grid" && sel.location !== "ssh") terms.toggleDiff(sel.id);
         return true;
       // '<' / '>' switch terminal tabs. Both the shifted glyph and the unshifted
       // ',' / '.' on the same key are bound, so it works with or without Shift and
@@ -207,7 +218,7 @@
         // not coderabbit specifically — same as the menu's "Trigger Review" and
         // ⌘⇧R. Forcing the coderabbit-watch pass is still reachable from the
         // session context menu, which is where a provider-specific action belongs.
-        if (sel) store.review(sel.id);
+        if (sel && sel.location !== "ssh") store.review(sel.id);
         return true;
       case "D":
         // Run the project's dev_commands in the selected session (or stop them).
@@ -289,6 +300,22 @@
     const active = document.activeElement as HTMLElement | null;
     if ((e.key === "Enter" || e.key === " ") && active && (active.tagName === "BUTTON" || active.tagName === "A")) {
       return;
+    }
+
+    // The workspace's bare keys hold in the fullscreen view too, where it mostly
+    // lives. Bailing on typing() above is what keeps them off a live terminal, and
+    // none of them can approve anything: that takes a focused card.
+    if (nav.view === "cockpit") {
+      const target = store.sessionById(nav.focusedTerm || nav.selectedId);
+      if (ssh.bareKey(e.key, target)) {
+        e.preventDefault();
+        return;
+      }
+      if (e.key === "Escape" && nav.focusedTerm && target && terms.activeTab(target.id) === SSH) {
+        nav.toggleFocusTerm(target.id);
+        e.preventDefault();
+        return;
+      }
     }
 
     // A focused live terminal owns the keyboard (handled inside the view).
@@ -394,6 +421,10 @@
 
 {#if nav.overlay === "newsession"}
   <NewSession />
+{:else if nav.overlay === "sshsession"}
+  <NewSSHSession />
+{:else if nav.overlay === "sshconnect"}
+  <ConnectSSHHost />
 {:else if nav.overlay === "commands"}
   <CommandPalette />
 {:else if nav.overlay === "rename-session"}

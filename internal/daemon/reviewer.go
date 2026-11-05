@@ -1064,7 +1064,7 @@ func (d *Daemon) deferHandoff(id string, k provKind, stash string) {
 // will still be there next cycle. A queued project broadcast (broadcast.go) is
 // the same kind of human message and comes right after it.
 func (d *Daemon) flushReviewHandoffs(ctx context.Context, id string) {
-	if d.deliverFeedback(ctx, id) || d.deliverBroadcast(ctx, id) {
+	if d.deliverFeedback(ctx, id) || d.deliverBroadcast(ctx, id) || d.deliverSSHQueue(ctx, id) {
 		return
 	}
 	// A stack session's hand-offs are stashed per app lane; still ONE

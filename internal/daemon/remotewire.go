@@ -10,6 +10,7 @@ import (
 
 	"github.com/sushidev-team/lola/internal/mdns"
 	"github.com/sushidev-team/lola/internal/panebus"
+	"github.com/sushidev-team/lola/internal/protocol"
 	"github.com/sushidev-team/lola/internal/remote"
 )
 
@@ -176,7 +177,7 @@ func (d *Daemon) startRemote(ctx context.Context) {
 		// bind rail to open. See config.RemoteConfig.InsecureLAN.
 		InsecureLAN: rc.InsecureLAN,
 		Dir:         d.home,
-		Handle:      d.handle,
+		Handle:      d.handleRemote,
 		Panes:       remotePanes{reg: reg, logf: d.remoteLogf},
 		Logf:        d.remoteLogf,
 	})
@@ -522,4 +523,20 @@ func toRemoteScreen(sc *panebus.Screen) *remote.PaneScreen {
 		CursorVisible: sc.CursorVisible,
 		AltScreen:     sc.AltScreen,
 	}
+}
+
+// handleRemote is the daemon's request handler as a paired device sees it. A
+// session's ssh glance carries the exact command waiting for approval and the
+// agent's latest summary, and every ssh command is denied remotely, so a phone
+// could read those details without being able to act on them. It gets the session
+// list without them.
+func (d *Daemon) handleRemote(ctx context.Context, req protocol.Request) protocol.Response {
+	if req.Cmd != "sessions" {
+		return d.handle(ctx, req)
+	}
+	data := d.sessionsData()
+	for i := range data.Sessions {
+		data.Sessions[i].SSH = nil
+	}
+	return dataResponse(data)
 }

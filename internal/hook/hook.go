@@ -94,6 +94,53 @@ func dialDaemon(home string, deadline time.Time) (net.Conn, string, error) {
 	return conn, "", err
 }
 
+// SendAgent sends one agent-side command for the session named by $LOLA_SESSION
+// and returns the daemon's reply. It shares dialDaemon, so a sandboxed `lola ssh`
+// crosses the hook bridge with its token. Unlike a hook or a report the caller
+// cares about the answer, so the deadline is longer. A failure to reach the daemon
+// wraps ErrNoDaemon.
+func SendAgent(cmd string, args any) (*protocol.Response, error) {
+	session := os.Getenv("LOLA_SESSION")
+	if session == "" {
+		return nil, fmt.Errorf("%w: not a lola session ($LOLA_SESSION unset)", ErrNoDaemon)
+	}
+	home, err := config.Home()
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrNoDaemon, err)
+	}
+	rawArgs, err := json.Marshal(args)
+	if err != nil {
+		return nil, err
+	}
+	deadline := time.Now().Add(agentSendTimeout)
+	conn, token, err := dialDaemon(home, deadline)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrNoDaemon, err)
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(deadline)
+	raw, err := json.Marshal(protocol.Request{Cmd: cmd, Session: session, Args: rawArgs, HookToken: token})
+	if err != nil {
+		return nil, err
+	}
+	if _, err := conn.Write(append(raw, '\n')); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrNoDaemon, err)
+	}
+	line, err := bufio.NewReader(conn).ReadBytes('\n')
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrNoDaemon, err)
+	}
+	var resp protocol.Response
+	if err := json.Unmarshal(line, &resp); err != nil {
+		return nil, fmt.Errorf("%w: bad reply: %v", ErrNoDaemon, err)
+	}
+	return &resp, nil
+}
+
+// agentSendTimeout bounds one agent-side command, inside the bridge's own 10s
+// connection deadline.
+const agentSendTimeout = 8 * time.Second
+
 // ErrNoDaemon wraps every failure to REACH the daemon from Report (no session
 // env, no socket, a timeout) as opposed to the daemon answering "no". The CLI
 // treats the two differently: an unreachable daemon must not fail an agent's

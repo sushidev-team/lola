@@ -254,6 +254,9 @@ func (m *rootModel) updateHome(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.form = f
 			return m, cmd
 		}
+	case "H":
+		// A new ssh session names a host, not a project, so it starts from here too.
+		return m, m.openSSHPicker("")
 	case "n":
 		// Alias of 'a'. The cockpit rail creates a project with 'n' and this
 		// screen used to accept only 'a', so the same action needed two different

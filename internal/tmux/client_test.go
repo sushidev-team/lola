@@ -1238,3 +1238,97 @@ func TestNewSessionSendsNoSizeByDefault(t *testing.T) {
 		t.Fatalf("an unsized session carried a size:\n%s", got)
 	}
 }
+
+// A secret must reach tmux on stdin and never in an argv, where ps can read it.
+func TestPasteSecretKeepsItOutOfArgv(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "tmux")
+	script := "#!/bin/sh\necho \"$@\" >> " + dir + "/argv\nfor a; do [ \"$a\" = load-buffer ] && cat >> " + dir + "/stdin; done\nexit 0\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	c := &Client{Bin: bin, SocketName: "x", Dir: dir}
+	const secret = "hunter2-argv-check"
+	if err := c.PasteSecret(context.Background(), "tab", secret); err != nil {
+		t.Fatal(err)
+	}
+	argv, _ := os.ReadFile(filepath.Join(dir, "argv"))
+	in, _ := os.ReadFile(filepath.Join(dir, "stdin"))
+	if strings.Contains(string(argv), secret) {
+		t.Fatalf("in argv: %s", argv)
+	}
+	if string(in) != secret {
+		t.Fatalf("stdin = %q", in)
+	}
+	for _, want := range []string{"load-buffer", "paste-buffer -d", "send-keys -t =tab: Enter"} {
+		if !strings.Contains(string(argv), want) {
+			t.Errorf("missing %q in %s", want, argv)
+		}
+	}
+}
+
+func TestPasteSecretAgainstRealTmux(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux not installed")
+	}
+	sock := fmt.Sprintf("lola-secrettest-%d", os.Getpid())
+	dir := t.TempDir()
+	c := &Client{Bin: "tmux", SocketName: sock, Dir: dir}
+	t.Cleanup(func() { _ = exec.Command("tmux", "-L", sock, "kill-server").Run() })
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	got := filepath.Join(dir, "got")
+	cmd := `stty -echo; printf 'Password: '; IFS= read -r x; stty echo; printf '%s' "$x" > ` + got + `; echo; echo done; sleep 60`
+	if err := c.NewSession(ctx, "tab", dir, cmd); err != nil {
+		t.Fatal(err)
+	}
+	var in PaneInput
+	for i := 0; i < 50 && !strings.Contains(in.Text, "Password:"); i++ {
+		time.Sleep(100 * time.Millisecond)
+		var err error
+		if in, err = c.PaneInput(ctx, "tab"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !in.Open || !strings.HasSuffix(in.Text, "Password:") {
+		t.Fatalf("PaneInput = %+v", in)
+	}
+	const secret = `p@ss w0rd"'$HOME;~é`
+	// A pane scrolled back must still get it: keys there are copy-mode commands.
+	if _, _, err := c.run(ctx, "copy-mode", "-t", paneTarget("tab")); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.PasteSecret(ctx, "tab", secret); err != nil {
+		t.Fatal(err)
+	}
+	var raw []byte
+	for i := 0; i < 50; i++ {
+		time.Sleep(100 * time.Millisecond)
+		if raw, _ = os.ReadFile(got); len(raw) > 0 {
+			break
+		}
+	}
+	if string(raw) != secret {
+		t.Fatalf("the program read %q", raw)
+	}
+	if out, _, _ := c.run(ctx, "list-buffers"); strings.TrimSpace(out) != "" {
+		t.Fatalf("a buffer outlived the paste: %q", out)
+	}
+	if text, _, _ := c.run(ctx, "capture-pane", "-p", "-t", paneTarget("tab")); strings.Contains(text, secret) {
+		t.Fatalf("the pane shows it: %q", text)
+	}
+	in, err := c.PaneInput(ctx, "tab")
+	if err != nil || in.Open {
+		t.Fatalf("after the answer the cursor rests at a line start: %+v %v", in, err)
+	}
+	// A paste that fails must not leave the buffer behind.
+	if err := c.PasteSecret(ctx, "no-such-tab", secret); err == nil {
+		t.Fatal("pasted into nothing")
+	} else if strings.Contains(err.Error(), secret) {
+		t.Fatalf("the error carries it: %v", err)
+	}
+	if out, _, _ := c.run(ctx, "list-buffers"); strings.TrimSpace(out) != "" {
+		t.Fatalf("a failed paste left a buffer: %q", out)
+	}
+}

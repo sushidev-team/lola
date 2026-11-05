@@ -18,6 +18,7 @@ import (
 	"github.com/sushidev-team/lola/internal/notify"
 	"github.com/sushidev-team/lola/internal/portlease"
 	"github.com/sushidev-team/lola/internal/protocol"
+	"github.com/sushidev-team/lola/internal/runtime"
 	"github.com/sushidev-team/lola/internal/session"
 	"github.com/sushidev-team/lola/internal/state"
 	"github.com/sushidev-team/lola/internal/timefmt"
@@ -192,6 +193,12 @@ func (d *Daemon) handle(ctx context.Context, req protocol.Request) protocol.Resp
 		return d.handleHookEvent(req)
 	case "agentReport":
 		return d.handleAgentReport(req)
+	case protocol.CmdSSHAgentHosts, protocol.CmdSSHAgentRequest, protocol.CmdSSHAgentRun, protocol.CmdSSHAgentPoll, protocol.CmdSSHAgentCancel, protocol.CmdSSHAgentPost,
+		protocol.CmdSSHHosts, protocol.CmdSSHOpen, protocol.CmdSSHConnect, protocol.CmdSSHHumanRun, protocol.CmdSSHShareBlock, protocol.CmdSSHTerminalCd, protocol.CmdSSHGo, protocol.CmdSSHDeny, protocol.CmdSSHApprove, protocol.CmdSSHRevokeGrant,
+		protocol.CmdSSHTakeWheel, protocol.CmdSSHHandbackPreview, protocol.CmdSSHHandback, protocol.CmdSSHStop, protocol.CmdSSHClose, protocol.CmdSSHTrash,
+		protocol.CmdSSHTerminal, protocol.CmdSSHTimeline, protocol.CmdSSHOutput, protocol.CmdSSHSay, protocol.CmdSSHAnswer, protocol.CmdSSHProposal,
+		protocol.CmdSSHRecall, protocol.CmdSSHResolve, protocol.CmdSSHWidgetStatus, protocol.CmdSSHPromptAnswer:
+		return d.handleSSH(ctx, req)
 	case "kill":
 		data, err := d.handleKill(ctx, req.Session, req.Force, req.KeepWorktree)
 		if err != nil {
@@ -761,6 +768,9 @@ func (d *Daemon) sessionsData() protocol.SessionsData {
 			// <home>/worktrees/<project>/<id> (see newNativeRuntime); the
 			// store record carries no path, so derive it for the TUI.
 			si.Worktree = filepath.Join(d.home, "worktrees", s.Project, s.ID)
+			if s.Location == runtime.LocationSSH {
+				si.Worktree = s.Worktree // a direct ssh session's scratch folder
+			}
 		}
 		if s.PR != nil {
 			si.PRURL = s.PR.URL
@@ -769,6 +779,7 @@ func (d *Daemon) sessionsData() protocol.SessionsData {
 			si.Review = s.PR.ReviewDecision
 		}
 		si.Sandbox = s.Sandbox
+		si.SSH = d.sshGlance(s.ID)
 		if s.Stack {
 			si.Stack = true
 			si.Apps = d.appsInfo(cfg, s)
@@ -921,7 +932,9 @@ func (d *Daemon) handleReload(ctx context.Context) error {
 		// server as d.tmuxClient's live send-keys/capture; without it a
 		// socket-only reload would leave the observer reading the OLD server while
 		// keys go to the NEW one.
-		d.native = newNativeRuntime(nc, d.home, d.lolaBin, d.linearKey, d.nativeLogf, d.ports, d.hookToken, d.knowledgeBrief)
+		nat := newNativeRuntime(nc, d.home, d.lolaBin, d.linearKey, d.nativeLogf, d.ports, d.hookToken, d.knowledgeBrief)
+		nat.SessionRecorded = d.sessionRecorded
+		d.native = nat
 	}
 	// [remote] is compared exactly (config.RemoteConfig is comparable) so an
 	// unrelated reload never touches a live listener. Applied AFTER the unlock:
@@ -931,6 +944,7 @@ func (d *Daemon) handleReload(ctx context.Context) error {
 	// why a change is a full rebind rather than an in-place mutation.
 	remoteChanged := old.Remote != nc.Remote
 	d.mu.Unlock()
+	d.sshOnReload()
 
 	if remoteChanged {
 		d.reloadRemote()

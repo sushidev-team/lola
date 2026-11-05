@@ -102,6 +102,7 @@ describe("SessionMenu", () => {
     // span beside an aria-hidden glyph, so getByText would hand back the span
     // and `toBeEnabled` would assert on the wrong node.
     expect(screen.getByRole("menuitem", { name: "Add shell" })).toBeEnabled();
+    expect(screen.getByRole("menuitem", { name: "Connect to host…" })).toBeEnabled();
     expect(screen.getByRole("menuitem", { name: "Trigger review" })).toBeInTheDocument();
     expect(screen.getByRole("menuitem", { name: "CodeRabbit" })).toBeInTheDocument();
     // No PR observed and not dead: the conditional items stay hidden.

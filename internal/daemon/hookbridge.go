@@ -29,9 +29,10 @@ import (
 // Loopback TCP is reachable by every local process, unlike the 0600 socket, so
 // the bridge is deliberately NARROW, and each rail is load-bearing:
 //
-//   - Two commands only: hookEvent and agentReport — exactly what `lola hook`
-//     and `lola report` send. Everything else (kill, answer, config…) is
-//     refused before it reaches handle.
+//   - A closed list: hookEvent and agentReport — exactly what `lola hook` and
+//     `lola report` send — plus the agent side of `lola ssh`. Everything else
+//     (kill, answer, config, any human ssh command) is refused before it reaches
+//     handle.
 //   - Every request carries hook.TokenFor(secret, req.Session); a token names
 //     ONE session, so a container can speak only for itself, and a process
 //     without a token cannot speak at all. The secret is a 0600 file under
@@ -44,7 +45,18 @@ import (
 const hookBridgeConnTimeout = 10 * time.Second
 
 // hookBridgeCmds are the only commands the bridge forwards.
+//
+// It also admits exactly protocol.SSHAgentCommands (added in init): `lola ssh
+// request|run|post` from a sandboxed agent. Never a human ssh command: approving,
+// taking the wheel and opening a connection are what the sandbox exists to keep
+// out of an agent's reach.
 var hookBridgeCmds = map[string]bool{"hookEvent": true, "agentReport": true}
+
+func init() {
+	for _, cmd := range protocol.SSHAgentCommands {
+		hookBridgeCmds[cmd] = true
+	}
+}
 
 // hookBridge is the bridge listener state, guarded by its own mutex (never
 // held together with d.mu).
@@ -93,7 +105,7 @@ func (d *Daemon) hookToken(session string) string {
 // until the port frees up and the next reload retries.
 func (d *Daemon) syncHookBridge(ctx context.Context) {
 	d.mu.Lock()
-	want := d.cfg.AnySandboxed()
+	want := d.cfg.AnySandboxed() || d.cfg.AnySSHSandboxed()
 	port := d.cfg.Sandbox.EffectiveHookPort()
 	d.mu.Unlock()
 
@@ -142,7 +154,7 @@ func (d *Daemon) serveHookBridge(ctx context.Context, ln net.Listener) {
 }
 
 // handleBridgeConn is handleConn with the bridge's rails: a connection
-// deadline, the two-command allowlist and the per-session token.
+// deadline, the command allowlist and the per-session token.
 func (d *Daemon) handleBridgeConn(ctx context.Context, conn net.Conn) {
 	defer conn.Close()
 	_ = conn.SetDeadline(time.Now().Add(hookBridgeConnTimeout))

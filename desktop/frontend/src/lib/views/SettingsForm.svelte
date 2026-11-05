@@ -13,6 +13,7 @@
   import { POLL_INTERVALS, BRANCH_PREFIXES, BASE_FLAGS } from "$lib/settingPresets";
   import Select from "$lib/components/Select.svelte";
   import ReviewProfiles from "$lib/components/ReviewProfiles.svelte";
+  import SSHHostSettings from "$lib/components/ssh/SSHHostSettings.svelte";
   import QRCode from "$lib/components/QRCode.svelte";
   import { store } from "$lib/store.svelte";
   import { nav } from "$lib/nav.svelte";
@@ -45,7 +46,10 @@
   // on every close path (see previewTheme / revertTheme), so a theme-only preview
   // is not "unsaved changes" to guard.
   let loaded = $state<SettingsDTO | null>(null);
-  const dirty = $derived.by(() => (dto && loaded ? !deepEqual($state.snapshot(dto), $state.snapshot(loaded)) : false));
+  // The SSH host form saves on its own, with its own button, so it reports its own
+  // unsaved edits: a close must not silently drop them either.
+  let sshHostDirty = $state(false);
+  const dirty = $derived.by(() => sshHostDirty || (dto && loaded ? !deepEqual($state.snapshot(dto), $state.snapshot(loaded)) : false));
 
   /** Reset the dirty baseline to the current DTO — after load and after a migrate. */
   function markPristine() {
@@ -58,6 +62,7 @@
     { id: "appearance", label: "Appearance", group: "Workspace" },
     { id: "linear", label: "Linear", group: "Connections" },
     { id: "notify", label: "Notifications", group: "Connections" },
+    { id: "sshhosts", label: "SSH hosts", group: "Connections" },
     { id: "remote", label: "Phone access", group: "Connections" },
     { id: "review", label: "Review", group: "Automation" },
     { id: "brain", label: "Summaries", group: "Automation" },
@@ -1117,6 +1122,8 @@
             {/if}
           </div>
         </section>
+      {:else if tab === "sshhosts"}
+        <SSHHostSettings onDirty={(v) => (sshHostDirty = v)} />
       {:else if tab === "remote"}
         <section>
           {@render head("Phone access")}

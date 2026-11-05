@@ -148,6 +148,9 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   derived rollup `Status` (written ONLY by the `SetAgentState`/`SetDelivery`
   mutators), PR state, the persisted one-shot guards for reactions (P3) and
   write-back (P4), and the display-only `[statusagent]` overlay fields.
+- `internal/sshterm` — pure text (stdlib): the shell bootstrap and its marker `Parser`, the
+  exec channel's `Tracked`/`CwdFilter` for the shared folder, the `Elevated` label, and
+  `DetectPrompt`, which reads a resting line as a question for a person.
 - `internal/reviewagent` — the AGENT-family review pass: ONE bounded, READ-ONLY
   headless review by claude | codex | opencode (`Client.Agent` picks; the argv per
   agent lives in `internal/agent.ReviewArgs`). Wears `internal/review.Client`'s
@@ -243,6 +246,17 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   unparseable file is never rewritten, and every failure is advisory (the
   dialog is the fallback). Off with `[defaults].trust_worktrees = false`;
   sandboxed projects and folders outside `~/.lola/worktrees` are skipped.
+- `internal/sshconn` — the one place lola builds an ssh argv and runs ssh: the master,
+  the exec channel, `-O check|exit`, `-G`, one safely quoted remote command, and the
+  control socket's path (short, in a verified 0700 directory). Never reads remote
+  output or the human's authentication.
+- `internal/sshstore` — the record of an ssh session under `~/.lola/state/ssh/<id>/`:
+  connections, wheels, grants, blocks, elements, events, the queue of text waiting for
+  the agent, and sanitized capped output. Outside the session snapshot on purpose.
+- `internal/sshelement` — the closed vocabulary of what an agent publishes with `lola
+  ssh post`, plus the sanitizers and `ValidateCommand`. Everything in it is a CLAIM.
+- `internal/sshtab` — the `<id>-ssh-N` naming convention, a stdlib leaf for the same
+  reason `internal/devtab` is. The phone's pane resolver deliberately does not know it.
 - `internal/gitrepo` — reads a checkout with LOCAL git only (no network, no
   `gh`): `Detect` resolves the GitHub `owner/name` from its remotes (upstream,
   then origin), `Branches` the fork-from candidates, and `Inspect` gathers root
@@ -800,7 +814,7 @@ each of which owns exactly one external tool or concern behind an **exec seam**
     That is deliberate:
     `history-limit` is read when a PANE is created (so it must precede
     new-session and can never be applied retroactively), and every lola session —
-    agent, `-shell-N`, `-dev-N`, `-review` — has to agree, or scrolling works in
+    agent, `-shell-N`, `-dev-N`, `-ssh-N`, `-review` — has to agree, or scrolling works in
     one tab and not the next. Isolation still holds: it is lola's own `-L` server.
     Every session-CREATING caller must build its client through
     `config.TmuxClient`, or its next spawn resets the server to the default
@@ -815,9 +829,11 @@ each of which owns exactly one external tool or concern behind an **exec seam**
 - **Teardown is THREE things, and each has its own fail-closed rule.**
   `runtime.Kill` (the merged-cleanup path and `lola kill`) takes down: (1) the
   agent's tmux session AND its auxiliary sessions — `<id>-shell-N` tabs, the
-  `<id>-review` pane and the `<id>-dev-N` dev tabs are SEPARATE tmux sessions, so
-  killing only the agent left them running against a worktree about to be deleted
-  (and, for a dev tab, a port still bound); (2) the worktree, dirty-
+  `<id>-review` pane, the `<id>-dev-N` dev tabs and the `<id>-ssh-N` tabs are SEPARATE
+  tmux sessions, so killing only the agent left them running against a worktree about
+  to be deleted (and, for a dev tab, a port still bound; for an ssh tab, a master, which
+  is why every `runtime.Kill` caller runs `sshCloseSession` first: `ssh -O exit` must come
+  before the tab goes, and remote processes may survive it); (2) the worktree, dirty-
   safe (`ErrDirty` unless forced); (3) the local branch, but only when
   `Session.OwnsBranch()` (a `pr` session's Branch is UPSTREAM — deleting it
   destroys someone else's ref). Rules that hold it together:
@@ -839,7 +855,7 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   - The aux sweep is BEST-EFFORT: a tmux that cannot answer logs and continues,
     because these are display surfaces and the caller retries the whole cleanup
     on error — a stuck shell tab must never block a worktree removal forever.
-  - Matching is `parent + ^(-shell-\d+|-review|-dev-\d+)$`, anchored at BOTH ends:
+  - Matching is `parent + ^(-shell-\d+|-review|-dev-\d+|-ssh-\d+)$`, anchored at BOTH ends:
     `lola-fe-42` is a prefix of `lola-fe-420-shell-1`, and a loose suffix test
     made one session's teardown kill a live sibling's tab.
   - A missing worktree directory no longer ends teardown early — it deletes the
@@ -1358,6 +1374,144 @@ each of which owns exactly one external tool or concern behind an **exec seam**
     rolls the restored ones back if a later one fails.
   - Not offered for stacks: best-of (dispatch drops the mix), fork, and every
     checkout-only launch (`needsCheckout`).
+- **An SSH session is one view, and a command a human runs is private until shared.**
+  The timeline and terminal share one column (`SSHWorkspace`), reached through ⋯ or ⌘\\,
+  because side-by-side panes
+  read as if the agent worked in the terminal, when its commands run over exec channels.
+  The composer is one field: ↩ asks the agent and ⌘↩ runs on the host. Double ⌘ in the
+  focused field swaps them on every tier (the operator's choice), so the field must keep
+  looking different while swapped, with the tier's colour: that look is the only guard
+  against a sentence executing. Unswapped, plain ↩ must never run anything. `cmd=sshHumanRun` records a block with
+  `Private` set, and the agent cannot poll or cite it, and is not nudged about it, until
+  `cmd=sshShareBlock`. Both are human commands, so the hook bridge and phones cannot reach
+  them. See `docs/ssh-sessions.md`.
+- **An SSH tab is one connection, and deleting it deletes the record.** Connecting always adds a
+  connection, even to an open host, except that it answers an agent's waiting request. Each tab
+  has its own timeline, folder, terminal and draft (`SessionView.tabItems`, `draft`). An item with
+  no connection shows in every tab. Rules to keep:
+  - **A new tab reuses a running master** (`sshSharedMaster`), so a master can have several tabs.
+    `-O exit` and removing the socket belong to the last tab using it (`State.SharesMaster`), and
+    an idle master closes only when all its tabs are idle. The socket path may name a connection
+    that no longer exists.
+  - **`cmd=sshTrash` removes for good:** the connection, its items, its stored output and its
+    queued text (`Store.Trash`). The last tab takes the items no connection owned. Clients drop
+    the rest when a timeline reply stops listing the connection, because a delta cannot say what
+    went. The agent gets one line saying so.
+  - **The agent never names a tab.** `ConnForHost` prefers the tab the human last spoke from
+    (`State.TalkConn`), then the newest not closed, and a post with no host goes to that tab too.
+  - A denied request has no tab, because it never became a connection.
+- **An SSH connection has one shell for the human and one folder for everyone.**
+  `internal/sshterm` starts the terminal with bash hooks (carried on a file descriptor,
+  nothing written to the host), `internal/daemon/sshtap.go` reads the pane through tmux
+  `pipe-pane` and a FIFO, and each command line becomes a private block. A Run command goes
+  into that shell only when it is tracked and at a prompt, and over an exec channel
+  otherwise. Rules to keep:
+  - The markers are DISPLAY material. A program on the host could learn the nonce, so an
+    event may make a private block and a validated folder, never a decision.
+  - The agent shares the FOLDER only. Its commands stay on exec channels, so it never
+    holds a human's `export` or `sudo`. Do not route agent commands into the shell.
+  - `Elevated` is a label for a human, never a safety check.
+  - The FIFO is opened blocking on purpose: Go cannot poll one on darwin, and a
+    non-blocking read fails at once and silently ends capture. Stopping wakes it with a
+    byte.
+  - lola closes an idle master itself (`sshIdleExpired`), because its own `-O check`
+    resets ssh's ControlPersist timer: measured against a real sshd, a monitored master
+    otherwise never closes. ControlPersist remains the backstop.
+- **A shell's question comes to the timeline, and its answer is the one secret on any lola
+  path.** (`internal/daemon/sshprompt.go`, `SSHPromptCard.svelte`, "Questions a shell asks" in
+  `docs/ssh-sessions.md`.) The terminal no longer opens for sign-in, and the header has no
+  Timeline | Terminal switch: it is ⋯ or ⌘\\, with "← Timeline" on the terminal's own strip.
+  Rules to keep:
+  - **The question is untrusted and decides nothing.** A remote program can print "Password:",
+    so a card shows the exact line and who asks, carries no lock or logo, and must never read
+    as lola's own sign-in. A yes/no never takes focus, or a stray Enter would answer it. No
+    state, slot or block may follow from a detection.
+  - **The pending prompt is memory only** (`sshPrompts`, filled onto the human's connection
+    copies). It must not reach `state.json`, so never set `Prompt` on a stored `Conn`.
+  - **The answer never touches an argv, a log, the store, a draft or a reply.** It reaches the
+    pane through `tmux.PasteSecret` (stdin to `load-buffer`, then `paste-buffer -d`). Do not
+    route it through `SendText`: `send-keys -l` is readable in `ps`. Do not lower the Wails log
+    level: debug logs a bound call's arguments.
+  - **A stale card must not type.** The id is claimed first, the stage must still be live, and
+    the pane must show the same line at that moment. Every unknown refuses.
+  - `cmd=sshPromptAnswer` is human-only and has no cli verb. The tests pin the bridge and
+    `internal/remote`.
+  - **The tap discards the first line after an answer, and that is the whole of the echo
+    defence.** A fake prompt with echo on still puts the text in the pane, which is why
+    `AnswerEchoTab` withholds that tab's handback transcript: it is the one path from a pane to
+    the agent. Say this limit plainly rather than implying more.
+  - Sign-in reads the pane on every host, `terminal_capture = false` included, and only in
+    `connecting`/`authenticating`. Command detection uses the tap only.
+  - A missed wording degrades to "Waiting for input?" and a terminal button. Keep that path,
+    because `DetectPrompt` deliberately knows only the common wordings.
+- **A widget is untrusted code in the app, and its isolation is the sandbox attribute plus
+  a CSP.** `SSHWidget.svelte` must keep `sandbox="allow-scripts"` alone: `allow-same-origin`
+  would hand agent code the app's Wails bindings. `lola.ask`/`lola.run` only fill the
+  composer and must never send or run, because a script can fake a click, and they never move
+  focus or fill at all while a prompt card is open or an input holds focus, because a data
+  update lets an agent time them against someone typing a password. The per-session click
+  before any widget runs is not politeness: a frame shares the UI thread, so a loop freezes the
+  window. See `docs/ssh-sessions.md`, and on a Wails upgrade re-check two things:
+  - The native `external` handler: a widget can reach it, because `window.webkit` is read-only
+    in a real WKWebView and cannot be hidden.
+  - `desktop/runtimeguard.go`. The transport takes a bodyless request's call from the query
+    string and checks no method, origin or header, so a frame navigating to
+    `wails://localhost/wails/runtime?...` runs any bound method, `SSHService.Approve` included.
+    The guard wants a POST with `x-wails-client-id` and no `Origin: null`. A sandboxed `fetch`
+    arrives as a POST with that header and NO preflight, measured, so the Origin check is not
+    decoration. `TestRuntimeGuardWasReviewedForThisWails` fails on any upgrade until someone
+    has read the new transport.
+- **A widget can navigate, the CSP does not follow, and nothing lola controls stops the
+  request.** WebKit fires no load event for a navigation that never finishes or answers 204, and
+  a new document has no policy. So never claim "no network" in the UI. What holds instead: the
+  SDK makes a `MessageChannel` before the agent's code runs and hands the parent one port in a
+  `boot` message, and that port is the ONLY channel. A port belongs to its document, so a
+  navigated page gets no data and cannot fill the composer however it arrived, and it cannot
+  answer the ping (`WIDGET_PING_MS`), which closes the frame. Never post data with
+  `contentWindow.postMessage`: `targetOrigin` cannot name an opaque document. The one thing left
+  open is a page that stays alive and leaks its own data in a request that returns 204. Blocking
+  that needs a native rule on the web view (a `WKContentRuleList` looks like the way, untested).
+- **A widget must never fail silently, and WKWebView is not the browser you tested in.** The
+  SDK runs ahead of the agent's code, so one throw there kills every widget, in the app only:
+  an unguarded redefine of the read-only `window.webkit` did exactly that. Keep the hide in its
+  own `try` and script. The frame is a `data:` document on purpose: WebKit mutes an uncaught
+  error in a sandboxed `srcdoc` frame to "Script error." with no line, so going back to `srcdoc`
+  silently makes every report useless. The SDK's head stays free of line breaks, so a reported
+  line is a line of the agent's file. A page's error text is untrusted: `cmd=sshWidgetStatus`
+  puts it, capped and quoted, into one inbox line for the agent, and nowhere else. The panel
+  shows lola's own words for the kind (`WIDGET_FAULTS`), never the text, and the store keeps a
+  fingerprint only. The command is human-side, so it never crosses the bridge or reaches a phone.
+  `WidgetAdvice` is advice, never a control. Guide examples are ```` ```html name ```` fences so
+  they can be run, and `TestWidgetGuideExamplesDrawNoAdvice` keeps them clean of warnings.
+- **A widget's frame never moves in the DOM, so panels hold no frames.** WebKit reloads an iframe
+  that moves, which loses the page's state and trips the guard that closes a widget for
+  navigating. `components/ssh/dock/DockArea.svelte` therefore keeps every frame in one layer, in
+  an each block only appended to and filtered (`docklayout.liveFrames`), and lays them over the
+  panels by position. Never wrap that each in anything that can remount it, and never let its
+  order change. The rest of the dock:
+  - `lib/docklayout.ts` is the whole layout, with no DOM: a tree of splits and tab groups in
+    which the timeline is a leaf. Every operation returns a normalized tree, and the same object
+    when nothing changed. A random-sequence test pins that no tab is lost or duplicated.
+  - A preview is the result of applying the move, not a guess, so it is exact. A move that would
+    not `fits` comes back from `hitTest` with `refused`, so a drop cannot squeeze the timeline
+    and the ghost can say "No room" instead of nothing happening.
+  - `resizeSplit` pushes through: once the panel beside a line is at its minimum, the next one
+    along gives way. A first split leaves two panels at their minimums, so a line that could
+    only trade with its neighbor would be dead with a wide timeline right there.
+  - Frames lose pointer events from the PRESS of a tab or sash, since a flick can be over a frame
+    by its first move. A tab captures the pointer only once it is a drag, or the click goes to
+    the wrapper instead of its button.
+  - Background tabs stay alive at their real size (`visibility`, not `display`), and start on
+    first show. `SSHWidget`'s `active` holds data, pauses frames and refuses `lola.ask`.
+  - The gate stays in memory, now in the panel. A new run must leave the layout up and no frame
+    running: that is the way out of a page that blocks the thread. In harness WebKit a reload
+    asked for during the spin hangs, so do not promise more than a restart.
+  - `syncDock` drops stale tabs only after a real answer from the timeline, or a daemon that is
+    down would empty the dock. It adds new ones behind the tab on show, with a dot, so an agent
+    posting a page cannot flip the one a human is reading.
+  - Switching sessions unmounts the workspace, so a page reloads and loses what it held in
+    memory. Pages keep their state in lola data. The guide says so.
+  - A window too small for the layout gets a drawer, and the tree is left alone for when it grows.
 - **The shared context folder lives OUTSIDE the worktree.**
   `~/.lola/context/<project>/<key>/` is symlinked in as `.lola/context`, so
   `git worktree remove` deletes the link and never the notes. The key is
@@ -1500,6 +1654,68 @@ each of which owns exactly one external tool or concern behind an **exec seam**
     text, not commands. A claim whose deciding run fell out of the bounded
     ledger abstains rather than reading as "nothing ran". A subagent's runs
     live in its own transcript and are not seen.
+- **Agent-assisted ssh: the agent holds nothing, and a command is an exec channel, never
+  keystrokes.** (`docs/ssh-sessions.md` is the contract, `internal/daemon/ssh*.go` the
+  implementation.) The daemon owns a real ssh master in a `<id>-ssh-N` tmux tab where
+  the human authenticated, and each command runs on it with its own process group,
+  timeout and output cap. Rules that hold it together:
+  - **`ssh -O check` exiting 0 is the only proof of a connection.** "Authenticating" is
+    a label from elapsed time and nothing read from the pane moves a state. The tab's pane
+    is read for two things only: the handback preview, which a human opened and edits
+    before anything is sent, and the text of a question for a prompt card, during sign-in.
+    A dropped connection never reconnects itself: only
+    `sshGo` enters `connecting`, and it is on the human side.
+  - **`ProxyCommand=false` is what makes a command fail closed.** Without it, a missing
+    socket makes ssh try a fresh connection, and with keys in an agent BatchMode would
+    not stop that: a connection nobody gave the go for. Do not remove it from
+    `sshconn.CommandArgs` or `ReopenArgs`.
+  - **The split in `protocol/ssh.go` is the trust boundary.** `hookBridgeCmds` gains
+    exactly `SSHAgentCommands`, and `internal/remote` denies both lists; tests iterate
+    them. For a sandboxed agent that is real. An unsandboxed agent runs as the user and
+    can reach the socket and the keys, so for it the gate stops accidents and
+    well-behaved agents, not a determined one. Never present it as more, which is why
+    production refuses such an agent unless the host sets `allow_unsandboxed`.
+  - **`config.SSHHost.SSHAdmit` and `config.SSHDirectSandbox` are the production rule,**
+    one function each, read on what the session RECORDED at spawn. A direct session has
+    no checkout and CAN be sandboxed: `Native.sandboxScratchLine` mounts its scratch
+    folder read-write and nothing else writable. The rule is read at every decision,
+    `sshApprove` included: a tier raised to production refuses an unsandboxed agent's
+    waiting commands on reload, and an approve racing that reload refuses too. A human
+    running a proposal is exempt, because that is the human acting.
+  - **Facts and claims never mix.** Command, cwd, exit code, timing and output are facts
+    the daemon recorded. `why`, `scope` and every element are claims: display-only,
+    sanitized, rate-limited, and they reach no state machine, grant or `NeedsHuman`.
+    Only evidence links are verified, and only as "this block exists with these facts".
+    A proposal runs only through `sshProposal` from a human, pinned to the revision
+    they read, and no client-side "read-only" parsing exists anywhere: the remote user's
+    permissions are the real limit.
+  - **Wheel and connection are re-checked at dequeue.** A block approved while the world
+    changed is refused, not run. Taking the wheel refuses what waits, ends any grant
+    (handing back never restores one) and leaves in-flight commands running and
+    stoppable. A local stop may leave the remote process running, and every stop and
+    close says so.
+  - **The store's queue is the source of truth for text to the agent;**
+    `Session.PendingSSH` is its join. Two paths deliver, the next `sshAgent*` reply and
+    the resting prompt through `deliverQueued`, and "delivered" never means "read". Text
+    framed for the agent is lola's words around the untrusted part.
+  - **A master is not in any pane's process tree,** so `sshCloseConn` runs `-O exit`
+    before killing the tab, every `runtime.Kill` caller calls `sshCloseSession` first,
+    and the daemon's graceful stop deliberately closes no master, so a restart loses
+    nothing. A command running at that moment reads `lost`, with no invented exit code.
+  - **Both UIs read the same record, and a daemon sentence is matched only where it is
+    pinned.** `SSHService` and `internal/tui/ssh*.go` compile against `protocol/ssh.go`,
+    so a field cannot drift, but two strings can. "changed since" is the revision
+    refusal and "not waiting for approval" is a block already decided. Those two map to
+    friendlier copy, and only those: every other refusal is shown in the daemon's own
+    words, because calling a dropped connection "it changed, read it again" sends a
+    human looking for nothing. Reword them in `sshhuman.go` and you change both UIs.
+  - **The connection is on the wire, the tab is not discovered.** `<id>-ssh-N` is refused
+    by `TermService.CloseShell`, omitted from `Shells` and from the phone's `panes`, and
+    mounted in the app only by `SSHTerminalPane`, because one tmux session with two xterm
+    clients fights over its size. The name comes from `SSHConnInfo.Tab`. While the daemon
+    is down the app keeps the last pushed sessions that have ssh (`store.retainedSSH`,
+    read only by `sessionById`), so the stream stays readable, the controls go quiet and
+    the terminal, which is tmux, still works.
 - **Untrusted output stays out of the control loop.** `brain` summaries and
   `review` findings are derived from attacker-influenceable context (PR diffs,
   CI logs, pane text). They may go to a human (notify + Linear comment) but the
@@ -1679,7 +1895,8 @@ module) precisely so it can reuse `internal/protocol`, `internal/config`,
 `internal/doctor`, `internal/linear`, `internal/secrets` — Go's `internal/` rule
 forbids that from a sibling module. It is a **client of the same daemon socket**
 the TUI uses; it never embeds the daemon, and it drives `tmux -L lola` directly
-for terminal streaming. Six bound Wails services: `DaemonService` (every
+for terminal streaming. Seven bound Wails services: `SSHService` (the HUMAN side of
+agent-assisted ssh, one socket round-trip per method, no `sshAgent*`), `DaemonService` (every
 protocol command + daemon start/stop/restart), `TermService` (capture-pane
 snapshots for the grid + a live `tmux attach` PTY for the focused terminal),
 `ConfigService` (read/write config.toml + first-run setup), `DoctorService`,

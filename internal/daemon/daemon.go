@@ -46,6 +46,7 @@ import (
 	"github.com/sushidev-team/lola/internal/scm"
 	"github.com/sushidev-team/lola/internal/secrets"
 	"github.com/sushidev-team/lola/internal/session"
+	"github.com/sushidev-team/lola/internal/sshtab"
 	"github.com/sushidev-team/lola/internal/state"
 	"github.com/sushidev-team/lola/internal/statusagent"
 	"github.com/sushidev-team/lola/internal/tmux"
@@ -164,6 +165,8 @@ type Daemon struct {
 
 	// reports rate-limits `lola report` per session (see report.go).
 	reports reportLimiter
+	// ssh is agent-assisted ssh's state and seams (ssh.go). Never nil.
+	ssh *sshState
 
 	// refs caches each poll's stale-filter-reference verdict (filterrefs.go).
 	refs refCache
@@ -213,6 +216,8 @@ type Daemon struct {
 	// engine hands the agent.
 	notifier notify.Notifier
 	sendKeys func(ctx context.Context, tmuxName, text string) error
+	// sendEscape interrupts an agent's turn, for a human's Stop only.
+	sendEscape func(ctx context.Context, tmuxName string) error
 	// Fresh ownership check for automatic delivery; never use observer cache.
 	promptAttached func(ctx context.Context, tmuxName string) (bool, error)
 	failingChecks  func(ctx context.Context, repo string, pr int) (string, error)
@@ -533,6 +538,7 @@ func newDaemon(cfg *config.Config, lin linear.API, logger *log.Logger, home stri
 		seen:     newSeenStore(filepath.Join(home, "state")),
 		status:   newStatusTracker(),
 		sessions: session.NewStore(filepath.Join(home, "state")),
+		ssh:      newSSHState(),
 		events:   newEventLog(eventLogCap),
 
 		hookWarned: map[string]bool{},
@@ -598,6 +604,9 @@ func newDaemon(cfg *config.Config, lin linear.API, logger *log.Logger, home stri
 	d.authedLogin = scmc.AuthedLogin
 	d.sendKeys = func(ctx context.Context, tmuxName, text string) error {
 		return d.tmuxClient().SendKeys(ctx, tmuxName, text)
+	}
+	d.sendEscape = func(ctx context.Context, tmuxName string) error {
+		return d.tmuxClient().SendEscape(ctx, tmuxName)
 	}
 	d.promptAttached = func(ctx context.Context, tmuxName string) (bool, error) {
 		return d.tmuxClient().HasAttachedClient(ctx, tmuxName)
@@ -699,7 +708,9 @@ func Run(ctx context.Context) error {
 		lolaBin = stable
 	}
 	d.lolaBin = lolaBin
-	d.native = newNativeRuntime(cfg, home, lolaBin, d.linearKey, d.nativeLogf, d.ports, d.hookToken, d.knowledgeBrief)
+	nat := newNativeRuntime(cfg, home, lolaBin, d.linearKey, d.nativeLogf, d.ports, d.hookToken, d.knowledgeBrief)
+	nat.SessionRecorded = d.sessionRecorded
+	d.native = nat
 	// One `tmux ls` per observe cycle answers liveness for EVERY session (and
 	// carries #{session_activity}, the zero-cost output-freshness stamp) —
 	// replacing N per-session `has-session` execs. Wired HERE (production
@@ -841,6 +852,9 @@ func Run(ctx context.Context) error {
 	// The sandbox hook bridge (hookbridge.go): open only while a project is
 	// sandboxed, and a bind failure is logged rather than fatal, like [remote].
 	d.syncHookBridge(ctx)
+	// Agent-assisted ssh (ssh.go): read what a previous daemon left and start the
+	// monitors. Masters survive a restart by design, running commands do not.
+	d.startSSH(ctx)
 	d.wg.Add(1)
 	go d.goalLoop(ctx)
 
@@ -865,6 +879,7 @@ func Run(ctx context.Context) error {
 	// happens to disconnect.
 	d.stopRemote()
 	d.stopHookBridge()
+	d.stopSSH()
 	// Before the worker drain: a forward holds accepted connections open for as
 	// long as a browser keeps them, which is exactly the unbounded wait the
 	// drain below is not built for.
@@ -1163,6 +1178,38 @@ func newNativeRuntime(cfg *config.Config, home, lolaBin string, linearKey func()
 	}
 }
 
+// purgeAuxRecords removes phantom session records for auxiliary tabs, and reports how
+// many it removed. Store records only: the tmux sessions are live terminal tabs.
+func (d *Daemon) purgeAuxRecords() int {
+	purged := 0
+	for _, s := range d.sessions.Snapshot() {
+		// Not an ssh shape: no older daemon minted those phantoms, and a real session
+		// can have the shape (issue SSH-42 is "lola-infra-ssh-42").
+		if s.Source == "native" && runtime.IsAuxSession(s.ID) && !sshtab.Is(s.ID) {
+			d.sessions.Delete(s.ID)
+			purged++
+			continue
+		}
+		// A daemon older than ssh sessions reads a live <id>-ssh-N tab as an orphaned
+		// session of its own. Only a record in exactly that shape goes: orphaned, on
+		// the tab of a session still on record. A real session named like a tab has no
+		// such parent, and the tmux session is left alone either way.
+		if parent, ok := sshtab.Parent(s.ID); ok && s.Source == "native" && s.AgentState == state.AgentOrphaned {
+			if _, recorded := d.sessions.Get(parent); recorded {
+				d.sessions.Delete(s.ID)
+				purged++
+			}
+		}
+	}
+	return purged
+}
+
+// sessionRecorded is runtime.Native.SessionRecorded.
+func (d *Daemon) sessionRecorded(id string) bool {
+	_, ok := d.sessions.Get(id)
+	return ok
+}
+
 // adoptNativeSessions is the restart-recovery scan (PLAN P2.15): every finding
 // from runtime.Adopt is upserted into the session store — live pairs as
 // "working", worktrees without a pane as "dead", panes without a worktree as
@@ -1253,9 +1300,10 @@ func (d *Daemon) adoptNativeSessions(ctx context.Context) {
 				}
 				// Nor whether it runs in a container, or — for a stack — which
 				// apps (worktrees, branches, PR lanes) it has; teardown needs both.
-				if s.Sandbox == "" {
-					s.Sandbox = prev.Sandbox
-				}
+				// The record, not the config the scan read: a survivor launched on the
+				// host stays on the host when its project gains a sandbox, and ssh's
+				// production rule reads this field.
+				s.Sandbox = prev.Sandbox
 				// The persisted app records win (they carry branch, pin, PR facts
 				// and every per-PR guard); the scan's disk-rebuilt ones are only
 				// the store-loss backstop.
@@ -1332,6 +1380,7 @@ func (d *Daemon) adoptNativeSessions(ctx context.Context) {
 				s.PendingHandoffs = prev.PendingHandoffs
 				s.PendingFeedback = prev.PendingFeedback
 				s.PendingBroadcast = prev.PendingBroadcast
+				s.PendingSSH = prev.PendingSSH
 				if s.ContextKey == "" {
 					s.ContextKey = prev.ContextKey
 				}
@@ -1368,13 +1417,7 @@ func (d *Daemon) adoptNativeSessions(ctx context.Context) {
 	// forever: its pane is alive, so the observer keeps re-stamping LastSeen
 	// and the retention prune never fires. Store-record removal only — the
 	// tmux session itself is a live terminal tab and is left alone.
-	purged := 0
-	for _, s := range d.sessions.Snapshot() {
-		if s.Source == "native" && runtime.IsAuxSession(s.ID) {
-			d.sessions.Delete(s.ID)
-			purged++
-		}
-	}
+	purged := d.purgeAuxRecords()
 	if purged > 0 {
 		d.logf("", "adopt: purged %d phantom shell-tab record(s)", purged)
 	}

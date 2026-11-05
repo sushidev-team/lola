@@ -23,10 +23,16 @@ export const DIFF = "diff";
  * no button in the tab strip — the sidebar's Checkpoints list opens it. */
 export const CHECKPOINTS = "checkpoints";
 
-/** A view tab (DIFF, CHECKPOINTS) is not a terminal: never discovered from
+/** The SSH workspace's key: the timeline you read and talk in, beside the terminal
+ * you drive in. A view sentinel like DIFF. A "<id>-ssh-N" tmux session never
+ * becomes a strip tab: it is mounted only inside the workspace, because one tmux
+ * session with two xterm clients would fight over its size. */
+export const SSH = "ssh";
+
+/** A view tab (DIFF, CHECKPOINTS, SSH) is not a terminal: never discovered from
  * tmux, never closed, never in the tab-cycling ring. */
 export function isViewTab(tab: string): boolean {
-  return tab === DIFF || tab === CHECKPOINTS;
+  return tab === DIFF || tab === CHECKPOINTS || tab === SSH;
 }
 
 /** Suffix of a session's REVIEW pane ("<id>-review"). The daemon opens it for a
@@ -186,7 +192,8 @@ class Terms {
 
   /** The tab session `id` shows: AGENT, a view tab, or a shell name — never a stale/closed one. */
   activeTab(id: string): string {
-    const a = this.active.get(id) ?? AGENT;
+    // A direct SSH session exists for its workspace, so that is where it opens.
+    const a = this.active.get(id) ?? (store.sessionById(id)?.location === "ssh" ? SSH : AGENT);
     return a !== AGENT && !isViewTab(a) && !this.shellsFor(id).includes(a) ? AGENT : a;
   }
 

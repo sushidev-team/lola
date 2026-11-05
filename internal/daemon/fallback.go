@@ -190,6 +190,7 @@ func (d *Daemon) doSwitchAgent(ctx context.Context, s session.Session, kind agen
 
 	d.sessions.Update(s.ID, func(cur *session.Session) bool {
 		cur.Agent = switched.Agent
+		cur.Sandbox = switched.Sandbox
 		cur.AtPrompt = false
 		cur.AtPromptVerified = false
 		cur.SetAgentState(state.AgentStarting, "", time.Now())
@@ -200,6 +201,11 @@ func (d *Daemon) doSwitchAgent(ctx context.Context, s session.Session, kind agen
 		return true
 	})
 	d.reactSave()
+	// The agent may have moved between host and container: ssh's production rule
+	// answers differently for it from now on.
+	if switched.Sandbox != s.Sandbox {
+		d.sshOnReload()
+	}
 	return nil
 }
 

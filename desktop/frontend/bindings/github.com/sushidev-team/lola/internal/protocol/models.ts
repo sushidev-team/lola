@@ -909,6 +909,874 @@ export interface ReviveData {
 }
 
 /**
+ * SSHAnswerArgs is a human answering a question element. Revision is the revision
+ * the human saw. A mismatch is refused, because the agent can reword an open
+ * question through --ref and an answer must not land on words nobody read.
+ */
+export interface SSHAnswerArgs {
+    "session": string;
+    "element": string;
+    "revision": number;
+    "text": string;
+}
+
+/**
+ * SSHApprovalInfo records why a block was allowed or refused. Facts.
+ */
+export interface SSHApprovalInfo {
+    /**
+     * per_command | grant | human
+     */
+    "mode"?: string;
+
+    /**
+     * false: denied or still undecided
+     */
+    "granted": boolean;
+    "at"?: string;
+    "grantId"?: string;
+
+    /**
+     * the human's deny reason
+     */
+    "reason"?: string;
+}
+
+/**
+ * SSHApproveArgs is a human's decision on a pending block. GrantMinutes > 0 on an
+ * approve also opens a time-limited grant, refused on a host whose
+ * GrantMaxMinutes is 0 and clamped to it otherwise.
+ */
+export interface SSHApproveArgs {
+    "conn": string;
+    "block": string;
+
+    /**
+     * approve | deny
+     */
+    "decision": string;
+    "reason"?: string;
+    "grantMinutes"?: number;
+}
+
+/**
+ * SSHBlock is one command. Output is NOT here: fetch it with cmd=sshOutput.
+ */
+export interface SSHBlock {
+    /**
+     * unique within the session, e.g. "b12"
+     */
+    "id": string;
+    "conn": string;
+    "session": string;
+    "host": string;
+    "tier": string;
+
+    /**
+     * the connection's resolved user
+     */
+    "user"?: string;
+
+    /**
+     * FACT: exact, and refused if undisplayable
+     */
+    "command": string;
+
+    /**
+     * Cwd is the EFFECTIVE directory, a FACT: --cwd, else the host's default_cwd.
+     * Empty means the remote login directory, and a UI says so.
+     */
+    "cwd"?: string;
+
+    /**
+     * CLAIM
+     */
+    "why"?: string;
+
+    /**
+     * agent | human
+     */
+    "actor": string;
+    "status": string;
+    "approval": SSHApprovalInfo;
+
+    /**
+     * StatusDetail is lola's own sentence, for example why a block was refused.
+     */
+    "statusDetail"?: string;
+
+    /**
+     * RefusalCode is an SSHRefuse* code when Status is refused.
+     */
+    "refusalCode"?: string;
+
+    /**
+     * nil until it exits, and when lost
+     */
+    "exitCode"?: number | null;
+    "timeoutSeconds"?: number;
+
+    /**
+     * ApprovalExpiresAt is when a pending block expires unrun. Zero once decided.
+     */
+    "approvalExpiresAt"?: string;
+    "createdAt"?: string;
+    "startedAt"?: string;
+    "endedAt"?: string;
+    "durationMs"?: number;
+
+    /**
+     * Stored output sizes, and how much was discarded past output_cap_kb.
+     */
+    "stdoutBytes"?: number;
+    "stderrBytes"?: number;
+    "droppedBytes"?: number;
+
+    /**
+     * Preview is the last lines of the stream that tells the story (stderr when the
+     * block failed and has any, else stdout), at most SSHMaxPreviewBytes of
+     * sanitized text, so a collapsed row needs no output fetch. Untrusted output,
+     * shown as text. Sizes and Preview refresh at most once a second while running.
+     */
+    "preview"?: string;
+
+    /**
+     * stdout | stderr
+     */
+    "previewStream"?: string;
+
+    /**
+     * the output carried NUL bytes
+     */
+    "binary"?: boolean;
+
+    /**
+     * retention removed the stored output
+     */
+    "outputPruned"?: boolean;
+
+    /**
+     * ProposalElement is the element this block came from, when a human ran one.
+     */
+    "proposalElement"?: string;
+
+    /**
+     * Origin says where a human's command came from: "terminal" is the long-running
+     * shell, empty is an exec channel. A terminal block has stdout and stderr merged and
+     * cannot be stopped from here.
+     */
+    "origin"?: string;
+
+    /**
+     * Elevated labels a command that visibly raises its rights (sudo, su, doas). It is
+     * for a human to read and never a safety check.
+     */
+    "elevated"?: boolean;
+
+    /**
+     * Private is a command a human typed: the agent can neither read nor cite it until
+     * the human shares it. What someone looks at while debugging is not automatically
+     * sent to a model provider.
+     */
+    "private"?: boolean;
+}
+
+/**
+ * SSHCloseData is the reply to cmd=sshClose. Warnings always name what may
+ * survive, starting with SSHRemoteOutlives when anything ran.
+ */
+export interface SSHCloseData {
+    "conn": SSHConnInfo;
+    "warnings"?: string[] | null;
+}
+
+/**
+ * SSHConnInfo is one connection.
+ */
+export interface SSHConnInfo {
+    /**
+     * Cwd is where the next command starts, shared by the agent and the human. TermCwd
+     * is where the human's shell is, known only while TermTracked. TermAtPrompt says
+     * that shell is at a prompt, so a command can be sent into it. TermElevated is the
+     * command that opened a root shell still running there.
+     */
+    "cwd"?: string;
+    "termCwd"?: string;
+    "termTracked"?: boolean;
+    "termAtPrompt"?: boolean;
+    "termElevated"?: string;
+    "id": string;
+    "session": string;
+    "host": string;
+    "label"?: string;
+    "alias": string;
+    "tier": string;
+
+    /**
+     * User is the configured restricted user, "" when the ssh config decides.
+     */
+    "user"?: string;
+
+    /**
+     * ResolvedUser and ResolvedHostname come from `ssh -G <alias>`: what the
+     * local ssh config says this alias means. "" when unknown. Shown at approval.
+     */
+    "resolvedUser"?: string;
+    "resolvedHostname"?: string;
+
+    /**
+     * request | direct
+     */
+    "entry": string;
+    "sandboxed"?: boolean;
+    "state": string;
+
+    /**
+     * lola's own sentence on the state
+     */
+    "stateDetail"?: string;
+    "wheel": string;
+    "wheelSince"?: string;
+
+    /**
+     * Tab is the tmux session of the live terminal ("<session>-ssh-N"), and
+     * TabAlive whether its pane process runs. A dead tab with State connected
+     * means the human left the shell and the master stays up: offer sshTerminal.
+     */
+    "tab"?: string;
+    "tabAlive"?: boolean;
+
+    /**
+     * CLAIM: the agent's reason for asking
+     */
+    "why"?: string;
+
+    /**
+     * CLAIM: what the agent says it will do
+     */
+    "scope"?: string;
+    "requestedAt"?: string;
+    "connectedAt"?: string;
+    "closedAt"?: string;
+
+    /**
+     * ConnectDeadline is when a connection still coming up gives up, so a human in
+     * the middle of MFA can see the time left. Zero outside connecting/authenticating.
+     */
+    "connectDeadline"?: string;
+
+    /**
+     * IdleLingerSeconds is control_persist_seconds: how long the master stays up
+     * with no clients once the human has left the shell.
+     */
+    "idleLingerSeconds"?: number;
+    "grant"?: SSHGrantInfo | null;
+
+    /**
+     * GrantMaxMinutes is the longest grant a human may open here, 0 for none. It
+     * is on the connection so an approval card needs no second fetch.
+     */
+    "grantMaxMinutes"?: number;
+    "pendingApprovals"?: number;
+    "runningBlocks"?: number;
+
+    /**
+     * CommandsRun counts blocks that started, so closing can say what may survive.
+     */
+    "commandsRun"?: number;
+
+    /**
+     * Prompt is a question the human's shell tab is waiting on, and TermOpenLine says a
+     * running command's output stopped mid-line without one lola recognized. Both are
+     * filled from the daemon's memory on the human's reads. They are never written to the
+     * store, and no agent-side reply carries a connection.
+     */
+    "prompt"?: SSHPromptInfo | null;
+    "termOpenLine"?: boolean;
+
+    /**
+     * AgentRan says the agent has run a command on this connection, so a job of its may
+     * still be on the host, able to ask a question on the human's terminal.
+     */
+    "agentRan"?: boolean;
+}
+
+/**
+ * SSHConnectArgs is a human connecting an existing session to a host. The click is
+ * the go, so it needs no agent request. Wheel is agent (default) or human.
+ */
+export interface SSHConnectArgs {
+    "session": string;
+    "host": string;
+    "wheel"?: string;
+}
+
+/**
+ * SSHConnectData is the reply to cmd=sshConnect.
+ */
+export interface SSHConnectData {
+    "conn": SSHConnInfo;
+
+    /**
+     * SSHDataWarning, plus any unsandboxed note
+     */
+    "warning"?: string;
+}
+
+/**
+ * SSHElement is one agent-published card. A CLAIM, apart from Evidence's facts
+ * and Outcome. Every string was sanitized daemon-side: render as text only, and
+ * send any URL in it through cmd=openURL.
+ */
+export interface SSHElement {
+    "id": string;
+    "ref"?: string;
+    "kind": string;
+    "conn"?: string;
+    "title"?: string;
+    "body"?: string;
+    "state"?: string;
+    "severity"?: string;
+    "steps"?: SSHElementStep[] | null;
+    "metrics"?: SSHElementMetric[] | null;
+    "evidence"?: SSHElementEvidence[] | null;
+    "command"?: string;
+    "cwd"?: string;
+    "choices"?: string[] | null;
+    "html"?: string;
+    "data"?: string;
+    "height"?: number;
+    "outcome"?: SSHElementOutcome | null;
+    "revision": number;
+    "createdAt"?: string;
+    "updatedAt"?: string;
+}
+
+/**
+ * SSHElementEvidence links to a block. Verified means the daemon found this block
+ * in this session and these are its recorded facts. It does NOT mean the agent's
+ * claim is true. Status and ExitCode were copied at post time: a UI should prefer
+ * the live block when it has it.
+ */
+export interface SSHElementEvidence {
+    "block": string;
+    "verified": boolean;
+    "status"?: string;
+    "exitCode"?: number | null;
+}
+
+/**
+ * SSHElementMetric is one key-value.
+ */
+export interface SSHElementMetric {
+    "name": string;
+    "value": string;
+    "unit"?: string;
+}
+
+/**
+ * SSHElementOutcome is a HUMAN's answer or decision.
+ */
+export interface SSHElementOutcome {
+    "text"?: string;
+    "block"?: string;
+    "at"?: string;
+}
+
+/**
+ * SSHElementStep is one plan step.
+ */
+export interface SSHElementStep {
+    "text": string;
+    "state": string;
+}
+
+/**
+ * SSHGrantInfo is a live time-limited grant on a connection.
+ */
+export interface SSHGrantInfo {
+    "id": string;
+    "createdAt"?: string;
+    "expiresAt"?: string;
+}
+
+/**
+ * SSHHandbackArgs returns the wheel. Note is what the human wants to say.
+ * Transcript is sent ONLY when non-empty, and it is the text the human saw in the
+ * preview and may have edited, never a fresh capture. Both go through sanitize +
+ * the typeToAgent gate, framed to the agent as untrusted content.
+ */
+export interface SSHHandbackArgs {
+    "conn": string;
+    "note"?: string;
+    "transcript"?: string;
+}
+
+/**
+ * SSHHandbackData is the reply. Delivered is false when the text is queued for
+ * the agent's next resting prompt.
+ */
+export interface SSHHandbackData {
+    "conn": SSHConnInfo;
+    "delivered": boolean;
+}
+
+/**
+ * SSHHandbackPreviewData is what a handback could send: the pane's text since the
+ * wheel was taken, sanitized and capped. It is shown to the human for reading and
+ * editing, because they may have to take a secret back out of it.
+ */
+export interface SSHHandbackPreviewData {
+    "transcript": string;
+    "truncated"?: boolean;
+}
+
+/**
+ * SSHHostInfo is one [[ssh_host]] resolved for display. The Direct* fields answer
+ * "what would starting an agent-assisted session here do".
+ */
+export interface SSHHostInfo {
+    "name": string;
+    "label"?: string;
+    "alias": string;
+    "user"?: string;
+    "tier": string;
+    "allowUnsandboxed"?: boolean;
+
+    /**
+     * 0: per-command approval only
+     */
+    "grantMaxMinutes": number;
+
+    /**
+     * DirectSandbox is how the agent of a direct session would run: docker or none.
+     */
+    "directSandbox"?: string;
+
+    /**
+     * DirectAgent is the coding agent a direct session would run by default.
+     */
+    "directAgent"?: string;
+
+    /**
+     * DirectRefused is why a direct session cannot start, "" when it can. It also
+     * names a host that failed validation.
+     */
+    "directRefused"?: string;
+}
+
+/**
+ * SSHHostsData is the reply to cmd=sshHosts.
+ */
+export interface SSHHostsData {
+    "hosts": SSHHostInfo[] | null;
+}
+
+/**
+ * SSHHumanMessage is something the human said to the agent, or a handback's text.
+ * Text is the human's own words, without lola's framing. Delivered means lola put
+ * them in front of the agent, not that it read them. Recalled means it never will.
+ */
+export interface SSHHumanMessage {
+    /**
+     * say | answer | handback
+     */
+    "origin"?: string;
+    "conn"?: string;
+    "text": string;
+
+    /**
+     * handback only: exactly what was sent
+     */
+    "transcript"?: string;
+    "delivered": boolean;
+    "deliveredAt"?: string;
+
+    /**
+     * reply | prompt
+     */
+    "via"?: string;
+    "recalled"?: boolean;
+}
+
+/**
+ * SSHHumanRunArgs is a human running a command on a connection from the timeline.
+ */
+export interface SSHHumanRunArgs {
+    "session": string;
+    "conn": string;
+    "command": string;
+    "cwd"?: string;
+}
+
+/**
+ * SSHOpenArgs is the request for cmd=sshOpen: a human starts an agent-assisted
+ * session on a host. Starting it IS the go for connecting; command approval still
+ * applies. AgentKind "" uses the host's agent, then [defaults].agent.
+ * 
+ * Brief is the human's opening words, sent as the agent's first instruction. With
+ * none the agent is told to wait for the human, so a session never starts doing
+ * something nobody asked for. Wheel "human" starts with the human driving, for
+ * someone who wants to look around before asking; "" means agent.
+ */
+export interface SSHOpenArgs {
+    "host": string;
+    "agentKind"?: string;
+    "name"?: string;
+    "brief"?: string;
+    "wheel"?: string;
+}
+
+/**
+ * SSHOpenData is the reply to cmd=sshOpen.
+ */
+export interface SSHOpenData {
+    "session": string;
+    "conn": SSHConnInfo;
+
+    /**
+     * docker, or "" for unsandboxed
+     */
+    "sandbox"?: string;
+
+    /**
+     * SSHDataWarning, plus any unsandboxed note
+     */
+    "warning"?: string;
+}
+
+/**
+ * SSHOutputArgs fetches stored output lazily. Limit 0 uses SSHMaxPollBytes.
+ */
+export interface SSHOutputArgs {
+    "session": string;
+    "block": string;
+
+    /**
+     * stdout | stderr
+     */
+    "stream": string;
+    "offset"?: number;
+    "limit"?: number;
+}
+
+/**
+ * SSHOutputData is the reply. Data is sanitized text, safe to render as text.
+ * 
+ * Past the output cap the head is kept and the middle is dropped, so TotalBytes
+ * is what is stored and DroppedBytes what was discarded. Tail holds the stream's
+ * last bytes when anything was dropped, so the end of a long log is never lost.
+ */
+export interface SSHOutputData {
+    "data": string;
+    "offset": number;
+    "nextOffset": number;
+    "totalBytes": number;
+    "eof": boolean;
+    "droppedBytes"?: number;
+    "tail"?: string;
+    "pruned"?: boolean;
+}
+
+/**
+ * SSHPromptAnswerArgs answers the prompt named by Prompt. Secret is on the wire to the
+ * daemon and goes no further than the pane: it is never logged, stored or returned.
+ */
+export interface SSHPromptAnswerArgs {
+    "conn": string;
+    "prompt": string;
+
+    /**
+     * send | yes | no | cancel
+     */
+    "action": string;
+    "secret"?: string;
+}
+
+/**
+ * SSHPromptAnswerData is the reply. It never carries the answer.
+ */
+export interface SSHPromptAnswerData {
+    /**
+     * sent | cancelled
+     */
+    "status": string;
+}
+
+/**
+ * SSHPromptInfo is what a prompt card shows. Line and Context are text a program printed.
+ * A remote program can fake them, so a card shows them as they are and says who asks.
+ */
+export interface SSHPromptInfo {
+    "id": string;
+    "stage": string;
+    "kind": string;
+    "line": string;
+    "context"?: string[] | null;
+
+    /**
+     * Block and Command name the running command, in the command stage.
+     */
+    "block"?: string;
+    "command"?: string;
+
+    /**
+     * Attempt counts the answers this same question already got and asked again for.
+     */
+    "attempt"?: number;
+    "since"?: string;
+}
+
+/**
+ * SSHProposalArgs is a human acting on a proposal element. Run makes a block with
+ * actor human and approval mode human, running the element's command exactly.
+ * 
+ * Revision is the revision the human saw, and it is REQUIRED for run. The agent can
+ * rewrite an undecided proposal's command through --ref, so without this pin the
+ * command that runs need not be the one on screen when the human clicked. A
+ * mismatch is an error and runs nothing.
+ */
+export interface SSHProposalArgs {
+    "session": string;
+    "element": string;
+    "revision": number;
+
+    /**
+     * run | decline
+     */
+    "action": string;
+    "reason"?: string;
+}
+
+/**
+ * SSHProposalData is the reply. Block is set when Action was run.
+ */
+export interface SSHProposalData {
+    "element": SSHElement;
+    "block"?: SSHBlock | null;
+}
+
+/**
+ * SSHRecallData is the reply. Recalled is false when delivery won the race: the
+ * agent already has the words, and a UI must say so rather than imply otherwise.
+ */
+export interface SSHRecallData {
+    "recalled": boolean;
+}
+
+/**
+ * SSHResolveData is the reply. Error is lola's own sentence when ssh could not
+ * answer; every other field is then empty.
+ */
+export interface SSHResolveData {
+    "user"?: string;
+    "hostname"?: string;
+    "port"?: string;
+    "proxyJump"?: string;
+    "error"?: string;
+}
+
+/**
+ * SSHSayData is the reply to cmd=sshSay and cmd=sshAnswer. Item is the timeline
+ * item the words became, so the sender can recall them while they are queued.
+ */
+export interface SSHSayData {
+    "item"?: string;
+    "delivered": boolean;
+
+    /**
+     * AgentGone says the session's agent is not running, so the words stay queued
+     * until it comes back. A UI must say so rather than imply they are on the way.
+     */
+    "agentGone"?: boolean;
+}
+
+/**
+ * SSHSessionInfo is the glance form that rides on SessionInfo.SSH. It is built
+ * from memory with no exec, like the rest of cmd=sessions.
+ */
+export interface SSHSessionInfo {
+    "connections": SSHConnInfo[] | null;
+
+    /**
+     * NeedsHuman is true only for daemon FACTS: a connection waiting for a go, one
+     * waiting on authentication, a command waiting for approval. Never set by
+     * anything an agent posted. It does not touch the agent or delivery axes; the
+     * clients OR it into their attention view.
+     */
+    "needsHuman"?: boolean;
+
+    /**
+     * NeedsHumanWhy is lola's own sentence for the most urgent of those. Most
+     * urgent first: authentication (a clock is running), approval, go.
+     */
+    "needsHumanWhy"?: string;
+
+    /**
+     * NextApproval is the oldest block waiting for approval, whole, so a row can
+     * show the exact command on hover without fetching a timeline.
+     */
+    "nextApproval"?: SSHBlock | null;
+
+    /**
+     * RunningCommand is the command of the newest running block, clipped to 120
+     * runes for a row. A FACT, from memory like the rest of this struct.
+     */
+    "runningCommand"?: string;
+
+    /**
+     * OpenItems counts open questions and undecided proposals. Display-only: it is
+     * agent-controlled, so it never raises NeedsHuman.
+     */
+    "openItems"?: number;
+
+    /**
+     * Headline is the agent's latest summary. A CLAIM, shown as one.
+     */
+    "headline"?: string;
+
+    /**
+     * LastSeq is the session timeline's latest change: a client refetches the
+     * timeline only when this moves.
+     */
+    "lastSeq": number;
+}
+
+/**
+ * SSHShareBlockArgs lets the agent read a command the human ran.
+ */
+export interface SSHShareBlockArgs {
+    "session": string;
+    "block": string;
+}
+
+/**
+ * SSHStopData is the reply. Warning is SSHRemoteOutlives when a process had
+ * actually started.
+ */
+export interface SSHStopData {
+    "block": SSHBlock;
+    "warning"?: string;
+}
+
+/**
+ * SSHSystemEvent is a fact the daemon recorded about a connection.
+ */
+export interface SSHSystemEvent {
+    "kind": string;
+
+    /**
+     * lola's own sentence
+     */
+    "text": string;
+
+    /**
+     * a human's reason, as given
+     */
+    "note"?: string;
+    "conn"?: string;
+
+    /**
+     * handed_back only: a transcript was shared
+     */
+    "hasTranscript"?: boolean;
+}
+
+/**
+ * SSHTakeWheelArgs is a human taking control. It takes effect at once. Commands
+ * awaiting approval are refused. In-flight commands keep running unless
+ * StopInFlight, and stay visible and stoppable.
+ */
+export interface SSHTakeWheelArgs {
+    "conn": string;
+    "stopInFlight"?: boolean;
+
+    /**
+     * Interrupt also stops the agent's current turn, as Esc in its pane would.
+     */
+    "interrupt"?: boolean;
+}
+
+/**
+ * SSHTakeWheelData is the reply.
+ */
+export interface SSHTakeWheelData {
+    "conn": SSHConnInfo;
+    "inFlight"?: SSHBlock[] | null;
+    "warning"?: string;
+}
+
+/**
+ * SSHTimelineArgs fetches a session's timeline. After 0 is the whole of it, Conn
+ * narrows to one connection, and Limit 0 means 500.
+ */
+export interface SSHTimelineArgs {
+    "session": string;
+    "conn"?: string;
+    "after"?: number;
+    "limit"?: number;
+}
+
+/**
+ * SSHTimelineData is the reply. Connections is always current and complete, so a
+ * client never has to derive connection state from the items.
+ */
+export interface SSHTimelineData {
+    "session": string;
+    "connections": SSHConnInfo[] | null;
+    "items": SSHTimelineItem[] | null;
+    "lastSeq": number;
+
+    /**
+     * Limit was hit: fetch again from LastSeq
+     */
+    "more"?: boolean;
+}
+
+/**
+ * SSHTimelineItem is one row. Exactly one of Block, Element, System and Human is
+ * set, as Kind says. ID is stable across changes.
+ * 
+ * Order is fixed at creation and is the sort key. Seq moves on EVERY change, so a
+ * client fetching After=<last seq> gets everything that changed, and upserts by
+ * ID: a block going from pending to running to exit 1 stays one row.
+ */
+export interface SSHTimelineItem {
+    "id": string;
+    "kind": string;
+    "order": number;
+    "seq": number;
+    "at"?: string;
+    "block"?: SSHBlock | null;
+    "element"?: SSHElement | null;
+    "system"?: SSHSystemEvent | null;
+    "human"?: SSHHumanMessage | null;
+}
+
+/**
+ * SSHWidgetStatusArgs is the app saying a running widget failed. Message is the page's own
+ * text, and the page is agent code that may be repeating remote output. So it is untrusted,
+ * and it goes into one framed line for the agent and nowhere else. Revision is the revision
+ * on screen: a report on a page that has since been replaced is dropped.
+ */
+export interface SSHWidgetStatusArgs {
+    "session": string;
+    "element": string;
+    "revision": number;
+    "kind": string;
+    "message"?: string;
+    "line"?: number;
+}
+
+/**
+ * SSHWidgetStatusData says whether the agent has been told about this revision, now or by an
+ * earlier report.
+ */
+export interface SSHWidgetStatusData {
+    "told"?: boolean;
+}
+
+/**
  * SessionApp is one repository (app) of a STACK session: its worktree inside
  * the session folder, its PR if any, and the delivery axis of that PR alone.
  * Number 0 means no PR observed yet (the agent has not opened one there, or
@@ -1257,6 +2125,12 @@ export interface SessionInfo {
      * (cmd=bestOf), nil for an ordinary session.
      */
     "bestOf"?: BestOfInfo | null;
+
+    /**
+     * SSH is the session's agent-assisted ssh state (ssh.go), nil when it has
+     * never touched a host.
+     */
+    "ssh"?: SSHSessionInfo | null;
 }
 
 /**

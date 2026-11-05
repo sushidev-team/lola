@@ -589,6 +589,9 @@ type SessionInfo struct {
 	// BestOf is set while this session is one attempt of a best-of-N group
 	// (cmd=bestOf), nil for an ordinary session.
 	BestOf *BestOfInfo `json:"bestOf,omitempty"`
+	// SSH is the session's agent-assisted ssh state (ssh.go), nil when it has
+	// never touched a host.
+	SSH *SSHSessionInfo `json:"ssh,omitempty"`
 }
 
 // BestOfInfo places a session in its best-of-N group. Winner is set on the

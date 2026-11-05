@@ -934,6 +934,10 @@ func (m *rootModel) updateSessions(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// The diff overlay: read what the session changed and send line comments
 		// to its agent (diffview.go). Same key as the app's Diff tab.
 		return m.openDiff()
+	case "H":
+		// The SSH workspace of the selection, or the host picker when it has no
+		// connection. Shifted because bare "h" moves the cockpit's selection.
+		return m.openSSH()
 	case "a":
 		return m.startAnswer()
 	case "A":
@@ -1399,6 +1403,10 @@ func (m *rootModel) sessionDetail() string {
 	// detailBody clips each line to the panel; 100 is the same soft cap the
 	// other prose lines here use.
 	for _, line := range boardLines(*sel, 100) {
+		b.WriteString(line + "\n")
+	}
+	// The ssh block, beside the agent's report: a third axis that replaces neither.
+	for _, line := range sshDetailLines(*sel, 90) {
 		b.WriteString(line + "\n")
 	}
 	if sel.PRStale {

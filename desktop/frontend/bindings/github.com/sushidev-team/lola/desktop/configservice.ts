@@ -33,6 +33,10 @@ import { Call as $Call, CancellablePromise as $CancellablePromise } from "@wails
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
+import * as protocol$0 from "../internal/protocol/models.js";
+
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
 import * as $models from "./models.js";
 
 /**
@@ -226,6 +230,15 @@ export function RemoveProject(name: string): $CancellablePromise<void> {
 }
 
 /**
+ * RemoveSSHHost removes a host from the catalog. The daemon closes its live
+ * connections on the reload this triggers. An unknown name is not an error: the
+ * outcome the human asked for already holds.
+ */
+export function RemoveSSHHost(name: string): $CancellablePromise<void> {
+    return $Call.ByID(4085403889, name);
+}
+
+/**
  * RenameGroup changes a group's DISPLAY label only. The id stays put on purpose:
  * it is what every [[project]].group references, and rewriting it would have to
  * rewrite those in the same breath for no gain — unlike a project id, a group id
@@ -234,6 +247,13 @@ export function RemoveProject(name: string): $CancellablePromise<void> {
  */
 export function RenameGroup(name: string, label: string): $CancellablePromise<void> {
     return $Call.ByID(2414476480, name, label);
+}
+
+/**
+ * ResolveSSHHost previews the same overrides as the connection, without a daemon.
+ */
+export function ResolveSSHHost(d: $models.SSHHostDTO): $CancellablePromise<protocol$0.SSHResolveData> {
+    return $Call.ByID(2227280739, d);
 }
 
 /**
@@ -252,8 +272,40 @@ export function ReviewProviderKinds(): $CancellablePromise<string[] | null> {
     return $Call.ByID(3055606205);
 }
 
+/**
+ * SSHConfigAliases reads the local SSH catalog without a running daemon.
+ */
+export function SSHConfigAliases(): $CancellablePromise<string[] | null> {
+    return $Call.ByID(1624682467);
+}
+
+/**
+ * SSHHostForms lists the catalog exactly as written, in file order. It reads the
+ * file rather than the daemon, because settings must work with no daemon running.
+ */
+export function SSHHostForms(): $CancellablePromise<$models.SSHHostDTO[] | null> {
+    return $Call.ByID(138930116);
+}
+
+/**
+ * SSHHostPreview says what a host's settings resolve to, saved or not. It decides
+ * with the config's own SSHDirectSandbox, so it cannot drift from the daemon.
+ */
+export function SSHHostPreview(d: $models.SSHHostDTO): $CancellablePromise<$models.SSHHostPreviewDTO> {
+    return $Call.ByID(3347456271, d);
+}
+
 export function SaveProject(dto: $models.ProjectFormDTO): $CancellablePromise<void> {
     return $Call.ByID(3368157871, dto);
+}
+
+/**
+ * SaveSSHHost writes one host. original names the entry being edited, "" for a new
+ * one. Static validation runs in saveConfig, so a bad value comes back as the
+ * config's own sentence and nothing is written.
+ */
+export function SaveSSHHost(original: string, d: $models.SSHHostDTO): $CancellablePromise<void> {
+    return $Call.ByID(2187929006, original, d);
 }
 
 export function SaveSettings(dto: $models.SettingsDTO): $CancellablePromise<void> {

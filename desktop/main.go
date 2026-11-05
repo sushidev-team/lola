@@ -119,13 +119,15 @@ func main() {
 		Services: []application.Service{
 			application.NewService(daemon),
 			application.NewService(term),
+			application.NewService(&SSHService{}),
 			application.NewService(&ConfigService{}),
 			application.NewService(&DoctorService{}),
 			application.NewService(NewLinearService()),
 			application.NewService(updater),
 		},
 		Assets: application.AssetOptions{
-			Handler: application.AssetFileServerFS(assets),
+			Handler:    application.AssetFileServerFS(assets),
+			Middleware: runtimeCallGuard,
 		},
 		Mac: application.MacOptions{
 			ApplicationShouldTerminateAfterLastWindowClosed: true,
@@ -344,6 +346,27 @@ func newSessionMenu(app *application.App, menu *application.Menu) {
 		SetAccelerator("CmdOrCtrl+t").
 		OnClick(ask(actionNewShell))
 	menu.AddSeparator()
+	// Agent-assisted ssh. These live here because they must work from inside a
+	// focused terminal, where a bare key belongs to the shell, and AppKit delivers
+	// a menu accelerator before the web view sees it. Nothing here approves
+	// anything: an approval needs a focused card and its arming delay, so a
+	// keyboard held by a terminal can never answer one (docs/ssh-sessions-ux.md).
+	menu.Add("New SSH Session…").
+		SetAccelerator("CmdOrCtrl+Shift+h").
+		OnClick(ask(actionSSHNew))
+	menu.Add("Take or Return the Wheel").
+		SetAccelerator("CmdOrCtrl+Shift+l").
+		OnClick(ask(actionSSHWheel))
+	menu.Add("Review Next Approval").
+		SetAccelerator("CmdOrCtrl+Shift+a").
+		OnClick(ask(actionSSHApproval))
+	menu.Add("Talk to Agent").
+		SetAccelerator("CmdOrCtrl+l").
+		OnClick(ask(actionSSHTalk))
+	menu.Add("Show or Hide Terminal").
+		SetAccelerator("CmdOrCtrl+\\").
+		OnClick(ask(actionSSHTerminal))
+	menu.AddSeparator()
 	menu.Add("Kill Session…").
 		SetAccelerator("CmdOrCtrl+Shift+k").
 		OnClick(ask(actionKill))
@@ -473,6 +496,12 @@ const (
 	actionOpenPR   = "open-pr"
 	actionNewShell = "new-shell"
 	actionKill     = "kill"
+
+	actionSSHNew      = "ssh-new"
+	actionSSHWheel    = "ssh-wheel"
+	actionSSHApproval = "ssh-approval"
+	actionSSHTalk     = "ssh-talk"
+	actionSSHTerminal = "ssh-terminal"
 )
 
 // PushErrDTO is the payload of evtPushErr: which push-loop command failed and

@@ -58,9 +58,13 @@ func displayOf(si protocol.SessionInfo) state.Display {
 // question about the agent axis alone. The broader "this needs a human" —
 // including a red build on a happily working agent — is needsHuman, and the
 // delivery half of it is visible on the PR chip's own red glyphs.
+//
+// SSH.NeedsHuman ORs in: a command waiting for approval is exactly "this session
+// is asking me something", and the daemon only ever sets it from its own facts,
+// so nothing an agent posts can raise it.
 func waitingOnHuman(si protocol.SessionInfo) bool {
 	a, _ := axesOf(si)
-	return a == state.AgentWaitingInput
+	return a == state.AgentWaitingInput || (si.SSH != nil && si.SSH.NeedsHuman)
 }
 
 // answerable mirrors the daemon's answer gate (internal/daemon/answer.go's
@@ -103,7 +107,7 @@ func answerable(si protocol.SessionInfo) bool {
 // at once, which is precisely what the collapsed word could not express.
 func needsHuman(si protocol.SessionInfo) bool {
 	a, d := axesOf(si)
-	return state.Attention(a, d)
+	return state.Attention(a, d) || (si.SSH != nil && si.SSH.NeedsHuman)
 }
 
 // AttentionCount is how many sessions currently need a human, for the header

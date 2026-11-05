@@ -16,6 +16,9 @@
   import UsageMark from "./UsageMark.svelte";
   import StackAppsChip from "./StackAppsChip.svelte";
   import { focusLabel } from "$lib/stackapps";
+  import SSHChip from "./ssh/SSHChip.svelte";
+  import { sessionKey } from "$lib/ssh";
+  import SSHActivity from "./ssh/SSHActivity.svelte";
 
   let { dense = false }: { dense?: boolean } = $props();
 
@@ -124,7 +127,7 @@
           </td>
           <!-- The row's ONE 500: the issue key is what the row is about. -->
           <td class="py-1.5 pr-2 align-middle font-medium whitespace-nowrap" class:text-accent-ink={sel}
-            >{s.issue || s.id.slice(0, 8)}{#if s.bestOf}<span
+            >{sessionKey(s)}{#if s.bestOf}<span
                 class="num ml-1 text-sm font-normal {s.bestOf.winner ? 'text-good' : 'text-warn'}"
                 title={s.bestOf.winner
                   ? "the kept best-of attempt"
@@ -161,11 +164,15 @@
                    scanner needs to see the literal. -->
               <div class="flex flex-col justify-center {wide ? '' : 'min-h-[34px]'}">
                 <div class="truncate text-ink">{s.title}</div>
-                {#if !wide}<AgentActivity session={s} pulse={false} />{/if}
+                {#if !wide}
+                  {#if s.ssh?.runningCommand || s.ssh?.headline}<SSHActivity info={s.ssh} />{:else}<AgentActivity session={s} pulse={false} />{/if}
+                {/if}
               </div>
             </td>
             {#if wide}
-              <td class="max-w-[24rem] py-1.5 pr-2 align-middle"><AgentActivity session={s} pulse={false} /></td>
+              <td class="max-w-[24rem] py-1.5 pr-2 align-middle">
+                {#if s.ssh?.runningCommand || s.ssh?.headline}<SSHActivity info={s.ssh} />{:else}<AgentActivity session={s} pulse={false} />{/if}
+              </td>
             {/if}
           {/if}
           <!-- The dot marks the session running this project's dev_commands.
@@ -183,8 +190,9 @@
                    chips beside it line up down the column. The number opens the
                    PR: a <td> is not inside a button, so it may be a control. -->
               <!-- A STACK session's number is one app's PR: prefixed with that
-                   app's name, which may outgrow the fixed width (min-, not w-). -->
-              <span class="num inline-block min-w-[3.25rem] text-sm text-faint">
+                   app's name, which may outgrow the fixed width (min-, not w-).
+                   A direct ssh session can have no PR, so its chip takes the column start. -->
+              {#if s.location !== "ssh"}<span class="num inline-block min-w-[3.25rem] text-sm text-faint">
                 {#if s.prNumber > 0}
                   {#if focusLabel(s)}<span>{focusLabel(s)}</span>{" "}{/if}
                   {#if s.prUrl}
@@ -200,7 +208,7 @@
                     >
                   {:else}#{s.prNumber}{/if}
                 {/if}
-              </span>
+              </span>{/if}
               {#if s.prNumber > 0}
                 <StageChip
                   delivery={s.delivery}
@@ -212,6 +220,7 @@
                 <BoardChip session={s} />
               {/if}
               <StackAppsChip session={s} />
+              {#if s.ssh}<SSHChip sessionId={s.id} info={s.ssh} />{/if}
               <ClaimFlag session={s} />
               <CrossSessionChips session={s} />
             </span>

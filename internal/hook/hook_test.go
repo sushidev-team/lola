@@ -286,3 +286,46 @@ func TestPostSurvivesSilentDaemon(t *testing.T) {
 		t.Errorf("Post took %v, want return at the ~%v deadline", d, postTimeout)
 	}
 }
+
+// A sandboxed `lola ssh` crosses the bridge with its token, and a failure to reach
+// the daemon is told apart from the daemon's own answer.
+func TestSendAgentCarriesSessionAndToken(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	t.Setenv("LOLA_HOME", t.TempDir())
+	t.Setenv("LOLA_SESSION", "s1")
+	t.Setenv("LOLA_HOOK_ADDR", ln.Addr().String())
+	t.Setenv("LOLA_HOOK_TOKEN", "tok")
+	got := make(chan protocol.Request, 1)
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		line, _ := bufio.NewReader(c).ReadBytes('\n')
+		var r protocol.Request
+		_ = json.Unmarshal(line, &r)
+		got <- r
+		_, _ = c.Write([]byte(`{"ok":true,"data":{"id":"e1"}}` + "\n"))
+	}()
+	resp, err := SendAgent("sshAgentPost", protocol.SSHAgentPostArgs{Argv: []string{"narration", "x"}})
+	if err != nil || !resp.OK {
+		t.Fatalf("%+v %v", resp, err)
+	}
+	r := <-got
+	if r.Cmd != "sshAgentPost" || r.Session != "s1" || r.HookToken != "tok" {
+		t.Fatalf("%+v", r)
+	}
+	ln.Close()
+	if _, err := SendAgent("sshAgentPost", protocol.SSHAgentPostArgs{}); !errors.Is(err, ErrNoDaemon) {
+		t.Fatalf("%v", err)
+	}
+	t.Setenv("LOLA_SESSION", "")
+	if _, err := SendAgent("sshAgentPost", protocol.SSHAgentPostArgs{}); !errors.Is(err, ErrNoDaemon) {
+		t.Fatalf("%v", err)
+	}
+}

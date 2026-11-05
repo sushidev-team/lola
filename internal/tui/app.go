@@ -103,6 +103,10 @@ type rootModel struct {
 	// send line comments to its agent (diffview.go).
 	diff diffModel
 
+	// ssh is the full-screen agent-assisted SSH workspace ("H"), and the host
+	// picker that starts a direct session (ssh*.go).
+	ssh sshModel
+
 	// daemonOp is the in-flight lifecycle transition ("starting"/"stopping"/
 	// "restarting"), shown in the message line while a ^r/^x/auto-start op runs;
 	// cleared when its daemonOpMsg arrives. Only set in self-managed mode.
@@ -125,6 +129,8 @@ func (m *rootModel) routePaste(content string) (tea.Model, tea.Cmd) {
 		return m.handleEmbedPaste(content)
 	}
 	switch {
+	case m.ssh.open || m.ssh.picker != nil:
+		m.routeSSHPaste(content)
 	case m.diff.open:
 		if m.diff.input != diffInputNone {
 			m.diff.inputBuf += pasteJoined(content)
@@ -416,6 +422,9 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				cmd = tea.Batch(cmd, c)
 			}
 		}
+		if c := m.finishSSHOpen(); c != nil { // a direct session just appeared in the list
+			cmd = tea.Batch(cmd, c)
+		}
 		return m, cmd
 	case paneMsg:
 		m.handlePaneMsg(v)
@@ -433,6 +442,15 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case feedbackDoneMsg:
 		return m, m.handleFeedbackDone(v)
+	case sshTickMsg:
+		return m, m.handleSSHTick(v)
+	case sshTimelineMsg:
+		return m, m.handleSSHTimeline(v)
+	case sshDoneMsg:
+		return m, m.handleSSHDone(v)
+	case sshOutputMsg:
+		m.ssh.handleOutput(v)
+		return m, nil
 	case broadcastDoneMsg:
 		return m, m.handleBroadcastDone(v)
 	case answerDoneMsg:
@@ -504,7 +522,7 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// without the check a reflexive ctrl+c mid-edit hard-quit the whole TUI and
 		// took every unsaved edit with it — the one keystroke the discard prompt
 		// could not protect against.
-		if v.String() == "ctrl+c" && !m.embedFocused && m.form == nil && m.settings == nil && m.view != viewKnowledge && (m.view != viewGoals || (m.goals.planner == nil && m.goals.authorization == nil && m.goals.recovery == nil)) {
+		if v.String() == "ctrl+c" && !m.embedFocused && m.form == nil && m.settings == nil && m.ssh.handback == nil && m.view != viewKnowledge && (m.view != viewGoals || (m.goals.planner == nil && m.goals.authorization == nil && m.goals.recovery == nil)) {
 			m.closeAllTerms()
 			return m, tea.Quit
 		}
@@ -579,6 +597,18 @@ func (m *rootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, nil
+	}
+
+	// The SSH workspace and its host picker own the keyboard while open. The help
+	// overlay above still wins, so "?" works in here too.
+	if m.ssh.picker != nil {
+		if k, ok := msg.(tea.KeyPressMsg); ok {
+			return m.sshPickerKey(k)
+		}
+	} else if m.ssh.open {
+		if k, ok := msg.(tea.KeyPressMsg); ok {
+			return m.updateSSH(k)
+		}
 	}
 
 	// The global settings editor owns all input while open. It takes the whole
@@ -767,7 +797,13 @@ func (m *rootModel) viewString() string {
 		return m.diffView()
 	}
 	if m.showHelp {
+		if m.ssh.open {
+			return strings.Join(m.sshHelpLines(), "\n")
+		}
 		return m.helpModal()
+	}
+	if (m.ssh.open && !m.embedFocused) || m.ssh.picker != nil {
+		return m.sshView()
 	}
 	if m.doctorLoading || m.doctorReport != nil {
 		return m.doctorModal()

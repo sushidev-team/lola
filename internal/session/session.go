@@ -424,6 +424,13 @@ type Session struct {
 	// came from.
 	PendingBroadcast string `json:"pending_broadcast,omitempty"`
 
+	// PendingSSH is what a human said about an ssh session (internal/sshstore
+	// holds the source of truth, item by item) and lola's own one-line nudges, not
+	// delivered yet. It is rewritten from the store whenever a piece is added,
+	// recalled, or delivered through a command's reply. Same sanitize + idle gate +
+	// pane proof as PendingFeedback.
+	PendingSSH string `json:"pending_ssh,omitempty"`
+
 	// ContextKey names the session's SHARED CONTEXT FOLDER,
 	// ~/.lola/context/<project>/<key>/, linked into the worktree as
 	// .lola/context (runtime.ContextKey). Recorded rather than re-derived because

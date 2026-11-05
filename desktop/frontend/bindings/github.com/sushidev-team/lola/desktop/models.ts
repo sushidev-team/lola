@@ -461,6 +461,78 @@ export interface ReviewProviderDTO {
     "fallback": string[] | null;
 }
 
+/**
+ * SSHHostDTO is one [[ssh_host]] as the settings form edits it: the file's values,
+ * zero meaning "the default", exactly as config.SSHHost holds them. It carries no
+ * key contents: entries reference an SSH alias or hostname and optional key path.
+ */
+export interface SSHHostDTO {
+    "name": string;
+    "alias": string;
+    "label": string;
+    "user": string;
+    "port": number;
+    "identityFile": string;
+    "tier": string;
+    "allowUnsandboxed": boolean;
+    "sandbox": string;
+    "agent": string;
+    "defaultCwd": string;
+    "grantMaxMinutes": number;
+    "commandTimeoutSeconds": number;
+    "maxCommandTimeoutSeconds": number;
+    "outputCapKb": number;
+    "controlPersistSeconds": number;
+    "connectWaitSeconds": number;
+    "approvalTimeoutSeconds": number;
+}
+
+/**
+ * SSHHostPreviewDTO is what a host's settings resolve to right now, read from
+ * config the same way the daemon reads it, so the form never restates the rule.
+ */
+export interface SSHHostPreviewDTO {
+    /**
+     * ID is the catalog id this form would save under.
+     */
+    "id": string;
+
+    /**
+     * Tier has the fail-closed default applied.
+     */
+    "tier": string;
+
+    /**
+     * DirectSandbox is docker or none, "" when a direct session is refused.
+     */
+    "directSandbox": string;
+
+    /**
+     * DirectLine is lola's sentence on where a direct session's agent runs and why.
+     */
+    "directLine": string;
+
+    /**
+     * DirectRefused is why a direct session cannot start, "" when it can.
+     */
+    "directRefused": string;
+
+    /**
+     * GrantMaxMinutes is the longest grant, 0 for none.
+     */
+    "grantMaxMinutes": number;
+
+    /**
+     * The effective defaults a Limits field shows as its placeholder.
+     */
+    "commandTimeoutSeconds": number;
+    "maxCommandTimeoutSeconds": number;
+    "outputCapKb": number;
+    "controlPersistSeconds": number;
+    "connectWaitSeconds": number;
+    "approvalTimeoutSeconds": number;
+}
+
 export interface SettingsDTO {
     "temporaryDirectory": string;
     "globalCap": number;

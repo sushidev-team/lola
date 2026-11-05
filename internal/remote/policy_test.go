@@ -34,6 +34,18 @@ func TestCommandDeniedIsAClosedList(t *testing.T) {
 	}
 }
 
+// TestEverySSHCommandIsDenied iterates both lists, so a new command cannot be
+// forgotten.
+func TestEverySSHCommandIsDenied(t *testing.T) {
+	for _, list := range [][]string{protocol.SSHAgentCommands, protocol.SSHHumanCommands} {
+		for _, cmd := range list {
+			if !CommandDenied(cmd) {
+				t.Errorf("CommandDenied(%q) = false; every ssh command is refused remotely", cmd)
+			}
+		}
+	}
+}
+
 // TestKillIsReachableButNeverForced states the split the denial list rests on:
 // the COMMAND is allowed and the FIELD is not, because a dirty worktree is the
 // one gate teardown has.

@@ -164,7 +164,9 @@ func (d *Daemon) syncGitPins() {
 		}
 	}
 	for _, s := range d.sessions.Snapshot() {
-		sandboxed := s.Sandbox != ""
+		// A pin outlives the sandbox: an agent had write access to that metadata, so
+		// host git must keep ignoring it after a relaunch on the host.
+		sandboxed := s.Sandbox != "" || s.GitPin != nil
 		if p := cfg.ProjectByName(s.Project); p != nil && p.Sandboxed() {
 			sandboxed = true
 		}

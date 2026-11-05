@@ -83,10 +83,17 @@ func main() {
 		setupCmd(),
 		hookCmd(),
 		reportCmd(),
+		sshCmd(),
 		reviewRunCmd(),
 	)
 
 	if err := root.Execute(); err != nil {
+		// lola ssh's exit codes are its contract with the agent, and it has already
+		// said why on stderr.
+		var ex sshExitError
+		if errors.As(err, &ex) {
+			os.Exit(ex.code)
+		}
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
 	}

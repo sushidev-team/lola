@@ -3,6 +3,7 @@
   import { nav } from "$lib/nav.svelte";
   import { store } from "$lib/store.svelte";
   import { projectActions, openSession, openShell } from "$lib/projectActions";
+  import { ssh } from "$lib/ssh.svelte";
   import { matchesSearch, searchMatch } from "$lib/search";
   import SearchHighlight from "./SearchHighlight.svelte";
   import Modal from "./Modal.svelte";
@@ -11,10 +12,14 @@
   let index = $state(0);
   let input: HTMLInputElement;
   type Result = { id: string; label: string; detail: string; project?: string; run: () => void };
+  const current = $derived(store.sessionById(nav.selectedId));
   const results = $derived.by<Result[]>(() => {
     const commands: Result[] = [
       { id: "new", label: "New session…", detail: "Action", run: () => nav.newSession(nav.project) },
       { id: "temporary", label: "New temporary shell", detail: "Action · default directory", run: () => { void openShell(); } },
+      { id: "ssh", label: "New SSH session…", detail: "Action · an agent and a terminal on a host", run: () => ssh.newSession() },
+      ...(current && current.location !== "ssh" ? [{ id: "ssh-connect", label: "Connect this session to a host…", detail: `Action · ${current.title || current.id.slice(0, 8)}`, run: () => ssh.connectHost(current.id) }] : []),
+      ...ssh.hosts.map((h) => ({ id: `ssh:${h.name}`, label: `SSH to ${h.label || h.name}`, detail: `Action · ${h.tier}`, run: () => ssh.newSession(h.name) })),
       { id: "activity", label: "View all activity", detail: "Action", run: () => nav.openOverlay("activity") },
       { id: "settings", label: "Settings", detail: "Action", run: () => nav.openOverlay("settings") },
     ];
@@ -26,7 +31,7 @@
   const selected = $derived(results[Math.min(index, Math.max(0, results.length - 1))]);
   const project = $derived(selected?.project ? store.projectByName(selected.project) : undefined);
   const actions = $derived(project ? projectActions(project) : []);
-  onMount(() => { void tick().then(() => input?.focus()); });
+  onMount(() => { void tick().then(() => input?.focus()); void ssh.loadHosts(); });
   function run(action: () => void) { nav.closeOverlay(); action(); }
   function key(e: KeyboardEvent) {
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {

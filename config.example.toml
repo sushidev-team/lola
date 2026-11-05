@@ -893,3 +893,57 @@ on_sent_set_label = "label_sent0000-1111-2222-3333-444455556666"
 # position = 1
 # # collapsed persists the folder's disclosure state in the app.
 # collapsed = false
+
+# -----------------------------------------------------------------------------
+# [[ssh_host]] — hosts an agent-assisted ssh session may reach (optional).
+#
+# A coding agent debugs a remote host with nothing installed there: the agent
+# stays local, the daemon owns the connection, and every command is a recorded
+# block a human can read, approve, stop or take over. No table = feature off.
+# See docs/ssh-sessions.md.
+#
+# `alias` is an SSH config alias or hostname. Optional `port` and `identity_file`
+# override SSH settings; key contents stay with SSH. Host keys, passphrases
+# and MFA are answered by you in the terminal tab; the
+# agent never sees them.
+#
+# Lola does NOT filter commands. The restricted `user` is the real limit on what
+# a command can do, so use one. Everything the agent reads goes to its model
+# provider. For an UNSANDBOXED agent the approval gate stops accidents and
+# well-behaved agents, not a determined one, because it runs as you. That is why
+# production refuses unsandboxed agents by default.
+#
+# [[ssh_host]]
+# # alias: required. What ssh connects to.
+# alias = "prod-web-1"
+# # name: the id agents and the CLI use (default: alias). label: free display text.
+# name = "prod-web"
+# label = "Production web 1"
+# # user: an optional restricted remote user (default: whatever ssh config says).
+# user = "lola-ro"
+# # tier: production | staging | dev. Empty or unknown reads as production.
+# #   production  every command is approved one at a time, no grants, and an
+# #               unsandboxed agent is refused unless allow_unsandboxed = true.
+# #   staging/dev a human may also open a time-limited grant while approving.
+# tier = "production"
+# # allow_unsandboxed: accept an unsandboxed agent on a production host.
+# allow_unsandboxed = false
+# # sandbox: how the agent of a DIRECT session (`lola ssh open`) runs: docker, none,
+# # or empty for the default. Empty means docker on production when [sandbox].image
+# # and lola_bin are set, and on the host below production. The container mounts
+# # only the session's scratch folder: no repository and no $HOME.
+# sandbox = ""
+# # agent: the coding agent of a direct session (default: [defaults].agent).
+# agent = "claude"
+# # default_cwd: remote directory for a command that names none (default: login dir).
+# default_cwd = "/var/www/app"
+# # grant_max_minutes: the longest grant. 0 = the tier's default (staging 30, dev
+# # 120), -1 = no grants. Must not be positive on production.
+# grant_max_minutes = 0
+# # Limits. 0 or absent means the value shown.
+# command_timeout_seconds = 120
+# max_command_timeout_seconds = 900
+# output_cap_kb = 1024            # stored per stream; the tail is always kept
+# control_persist_seconds = 900   # how long an idle master lingers after its last client
+# connect_wait_seconds = 300      # time allowed for passphrase and MFA
+# approval_timeout_seconds = 1800 # a command nobody answers expires, unrun

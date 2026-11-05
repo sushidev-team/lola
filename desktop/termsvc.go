@@ -20,6 +20,7 @@ import (
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/devtab"
 	"github.com/sushidev-team/lola/internal/lolaenv"
+	"github.com/sushidev-team/lola/internal/sshtab"
 	"github.com/sushidev-team/lola/internal/tmux"
 )
 
@@ -259,6 +260,12 @@ func (t *TermService) Shells(sessionID string) []string {
 	var names, devs []string
 	var reviewPane string
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		// An ssh tab is mounted ONLY inside the SSH workspace, and never joins the
+		// strip: one tmux session with two xterm clients would fight over its size.
+		// Checked first, because a session id may itself end in "-shell-1".
+		if sshtab.Is(line) {
+			continue
+		}
 		if strings.HasPrefix(line, prefix) {
 			names = append(names, line)
 			continue
@@ -317,6 +324,12 @@ func (t *TermService) CloseShell(shell string) error {
 	}
 	if !strings.Contains(shell, shellMarker) && !strings.HasSuffix(shell, reviewMarker) && !devtab.Is(shell) {
 		return fmt.Errorf("not a shell session name: %q", shell)
+	}
+	// An ssh tab is the daemon's: closing a connection also has to stop its master
+	// with ssh -O exit, and killing the tab alone would leave an authenticated
+	// connection up behind a UI that says it is gone.
+	if sshtab.Is(shell) {
+		return fmt.Errorf("an ssh tab closes with its connection: %q", shell)
 	}
 	_ = t.Detach(shell)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)

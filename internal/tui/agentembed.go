@@ -25,6 +25,7 @@ import (
 	"github.com/sushidev-team/lola/internal/devtab"
 	"github.com/sushidev-team/lola/internal/lolaenv"
 	"github.com/sushidev-team/lola/internal/protocol"
+	"github.com/sushidev-team/lola/internal/sshtab"
 	"github.com/sushidev-team/lola/internal/state"
 	"github.com/sushidev-team/lola/internal/vtterm"
 )
@@ -164,6 +165,8 @@ func (m *rootModel) syncAgentPreview() tea.Cmd {
 			title = "review" // the visible review pass's pane, not a worktree shell
 		case devtab.Index(sel.ID, target) > 0:
 			title = "dev · " + devTabLabel(sel, target)
+		case sshIsTab(sel.ID, target):
+			title = "ssh"
 		}
 	}
 	m.agentTerm = &termView{term: t, sessionID: sel.ID, tmuxName: target, kind: kind, title: title, w: cw, h: ch}
@@ -298,6 +301,12 @@ func (m *rootModel) closeActiveShell() (tea.Model, tea.Cmd) {
 		return m, nil // on the agent tab — nothing to close
 	}
 	name := names[tab-1]
+	if sshIsTab(sel.ID, name) {
+		// This tab IS the connection's terminal, and closing a connection names
+		// what may survive. A tab-strip key is the wrong place to do that by accident.
+		m.sessions.flash, m.sessions.flashGood = "this is the ssh terminal: H, then C closes the connection", false
+		return m, nil
+	}
 	if m.agentTerm != nil && m.agentTerm.tmuxName == name {
 		m.closeAgent() // drop our attach before killing the session
 	}
@@ -330,7 +339,7 @@ func (m *rootModel) refreshShells(id string) {
 	}
 	prefix := id + "-shell-"
 	review := id + "-review" // the visible review pass's pane, if one is open
-	var names, devs []string
+	var names, devs, sshTabs []string
 	reviewPane := ""
 	for _, s := range sessions {
 		if strings.HasPrefix(s.Name, prefix) {
@@ -341,6 +350,10 @@ func (m *rootModel) refreshShells(id string) {
 			devs = append(devs, s.Name)
 			continue
 		}
+		if sshtab.Index(id, s.Name) > 0 {
+			sshTabs = append(sshTabs, s.Name)
+			continue
+		}
 		if s.Name == review {
 			reviewPane = s.Name
 		}
@@ -349,7 +362,8 @@ func (m *rootModel) refreshShells(id string) {
 	sort.Slice(devs, func(i, j int) bool { return devtab.Index(id, devs[i]) < devtab.Index(id, devs[j]) })
 	// Dev tabs sort FIRST (right after the agent): they are the project's, not
 	// this session's, so their position stays put while shells come and go.
-	names = append(devs, names...)
+	sort.Slice(sshTabs, func(i, j int) bool { return sshtab.Index(id, sshTabs[i]) < sshtab.Index(id, sshTabs[j]) })
+	names = append(append(devs, sshTabs...), names...)
 	// The review pane sorts LAST so a review starting or ending never renumbers
 	// the shell tabs beside it. nextShellName's max-index scan ignores both it
 	// and the dev tabs (neither carries a "-shell-N" suffix), so neither can
@@ -426,6 +440,11 @@ func (m *rootModel) closeSessionShells(id string) {
 	}
 	m.refreshShells(id)
 	for _, name := range m.shellNames[id] {
+		// An ssh tab is the daemon's to close: it runs ssh -O exit first, so a human
+		// in the shell sees the connection close rather than a tab vanish.
+		if sshIsTab(id, name) {
+			continue
+		}
 		m.killShellSession(name)
 	}
 	delete(m.shellNames, id)

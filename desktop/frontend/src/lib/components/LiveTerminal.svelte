@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, onDestroy } from "svelte";
+  import { onMount, onDestroy, untrack } from "svelte";
   import { Events } from "@wailsio/runtime";
   import { Terminal } from "@xterm/xterm";
   import { FitAddon } from "@xterm/addon-fit";
@@ -43,6 +43,7 @@
     onExit,
     autofocus = false,
     onEscapeFocus,
+    focusRequest = 0,
   }: {
     name: string;
     webgl?: boolean;
@@ -50,7 +51,17 @@
     onExit?: () => void;
     autofocus?: boolean;
     onEscapeFocus?: () => void;
+    /**
+     * Bump to move the keyboard into this terminal after it mounted: the SSH
+     * workspace does it on go and on taking the wheel. A bump during the font wait
+     * is honoured when boot() finishes, because `term` does not exist yet.
+     */
+    focusRequest?: number;
   } = $props();
+  const mountedRequest = untrack(() => focusRequest);
+  $effect(() => {
+    if (focusRequest !== mountedRequest) term?.focus();
+  });
 
   let host: HTMLDivElement;
   let term: Terminal | undefined;
@@ -290,7 +301,7 @@
       term.onResize(({ cols, rows }) => TermService.Resize(name, cols, rows));
       // Grab the keyboard now so a shell tab / fullscreen embed is typeable
       // without a click — the reported "I start typing and it goes nowhere".
-      if (autofocus) term.focus();
+      if (autofocus || focusRequest !== mountedRequest) term.focus();
     }
 
     off = Events.On(`pty:${name}`, (e: { data: string }) => {

@@ -10,6 +10,8 @@
   import { terms, DIFF } from "$lib/terms.svelte";
   import { sidePanel, CHECKPOINTS_TAB } from "$lib/sidepanel.svelte";
   import { bestOf } from "$lib/bestof.svelte";
+  import { ssh } from "$lib/ssh.svelte";
+  import { isEnded, urgentConn } from "$lib/ssh";
   import MenuItem from "./MenuItem.svelte";
 
   const req = $derived(sessionMenu.request);
@@ -17,6 +19,9 @@
   const canRevive = $derived(!!session && (session.status === "dead" || session.status === "session_ended"));
   const AGENT_KINDS = ["claude", "codex", "opencode"] as const;
   const otherAgents = $derived(session?.location ? [] : AGENT_KINDS.filter((k) => k !== (session?.agent || "claude")));
+
+  const sshConn = $derived(urgentConn(session?.ssh?.connections));
+  const sshLive = $derived(!!sshConn && !isEnded(sshConn));
 
   let el = $state<HTMLDivElement | null>(null);
 
@@ -90,12 +95,27 @@
       {session.issue || session.id.slice(0, 8)}
     </div>
     <MenuItem onclick={() => run(s => nav.openOverlay("rename-session",s.id))}>Rename session…</MenuItem>
+    {#if session.location !== "ssh"}
+      <MenuItem icon="⌁" onclick={() => run((s) => ssh.connectHost(s.id))}>Connect to host…</MenuItem>
+    {/if}
+    {#if sshConn}
+      <MenuItem icon="⌁" onclick={() => run((s) => ssh.open(s.id, { conn: sshConn?.id }))}>Open SSH view</MenuItem>
+      {#if sshLive}
+        <MenuItem onclick={() => run((s) => ssh.wheelKey(s))}>{sshConn.wheel === "human" ? "Hand back…" : "Take the wheel"}</MenuItem>
+        <MenuItem onclick={() => run((s) => { if (sshConn) ssh.askClose(s.id, sshConn); })}>Close connection…</MenuItem>
+      {/if}
+      {#if session.location === "ssh"}
+        <MenuItem onclick={() => run(() => ssh.newSession(sshConn?.host ?? ""))}>New SSH session on this host</MenuItem>
+      {/if}
+      <div class="my-1 h-px bg-edge/60"></div>
+    {/if}
     <MenuItem
       icon="+"
       disabled={!session.worktree}
       title={session.worktree ? "open a shell in the worktree" : "session has no worktree"}
       onclick={() => run((s) => addShell(s))}>Add shell</MenuItem
     >
+    {#if session.location !== "ssh"}
     <MenuItem
       icon="±"
       disabled={!session.worktree}
@@ -108,6 +128,7 @@
       title={session.worktree ? "per-turn snapshots — restore a bad turn or fork from one" : "session has no worktree"}
       onclick={() => run((s) => openCheckpoints(s))}>Checkpoints</MenuItem
     >
+    {/if}
     {#if session.devCommands?.length}
       <!-- The project's dev processes run in ONE session at a time, so this is a
            toggle, not an "open": switching it on here takes them off whoever had
@@ -146,10 +167,12 @@
         Compare attempts ({session.bestOf.attempt}/{session.bestOf.of})
       </MenuItem>
     {/if}
-    <MenuItem icon="◈" title="force a QA review pass now" onclick={() => run((s) => store.review(s.id))}>
-      Trigger review
-    </MenuItem>
-    <MenuItem icon="◇" onclick={() => run((s) => store.coderabbit(s.id))}>CodeRabbit</MenuItem>
+    {#if session.location !== "ssh"}
+      <MenuItem icon="◈" title="force a QA review pass now" onclick={() => run((s) => store.review(s.id))}>
+        Trigger review
+      </MenuItem>
+      <MenuItem icon="◇" onclick={() => run((s) => store.coderabbit(s.id))}>CodeRabbit</MenuItem>
+    {/if}
     {#if session.prNumber > 0}
       <MenuItem icon="⑂" trailing="↗" onclick={() => run((s) => store.openURL(s.prUrl))}>Open PR</MenuItem>
     {/if}

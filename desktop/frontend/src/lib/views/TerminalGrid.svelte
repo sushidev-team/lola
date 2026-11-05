@@ -11,6 +11,7 @@
   import SessionsEmpty from "$lib/components/SessionsEmpty.svelte";
   import StatusPill from "$lib/components/StatusPill.svelte";
   import PrBadge from "$lib/components/PrBadge.svelte";
+  import SSHChip from "$lib/components/ssh/SSHChip.svelte";
   import StackAppsChip from "$lib/components/StackAppsChip.svelte";
   import { focusLabel } from "$lib/stackapps";
   import LivePulse from "$lib/components/LivePulse.svelte";
@@ -191,6 +192,7 @@
               <PrBadge session={s} delivery={s.delivery} app={focusLabel(s)} onOpen={() => store.openURL(s.prUrl)} />
             {/if}
             <StackAppsChip session={s} />
+            {#if s.ssh}<SSHChip sessionId={s.id} info={s.ssh} />{/if}
             <span class="text-sm text-faint opacity-0 transition-opacity group-hover:opacity-100" aria-hidden="true"
               >⛶</span
             >

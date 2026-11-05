@@ -35,6 +35,7 @@ import (
 	"github.com/sushidev-team/lola/internal/agent"
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/linear"
+	"github.com/sushidev-team/lola/internal/protocol"
 	"github.com/sushidev-team/lola/internal/reviewprofile"
 	"github.com/sushidev-team/lola/internal/secrets"
 )
@@ -79,6 +80,7 @@ const (
 	stBrain
 	stStatusAgent
 	stCodeRabbit
+	stSSH
 	stRemote
 	stAppearance
 )
@@ -94,6 +96,7 @@ var settingsTabs = []struct {
 	{stBrain, "Brain"},
 	{stStatusAgent, "Interpreter"},
 	{stCodeRabbit, "Review"},
+	{stSSH, "SSH hosts"},
 	{stRemote, "Remote"},
 	{stAppearance, "Appearance"},
 }
@@ -177,6 +180,12 @@ type settingsForm struct {
 	reviewLegacy   bool
 	specialistKeys []int
 	nextSpecialist int
+
+	// The SSH hosts tab, generated per host (sshsettings.go). sshRemoving is the
+	// host whose Remove row is waiting on its Y, -1 when none is.
+	sshKeys     []int
+	nextSSHHost int
+	sshRemoving int
 
 	// savedNote is a one-line message a successful save wants shown INSTEAD of
 	// the generic "settings saved" — today only the Linear key's outcome, which
@@ -342,6 +351,8 @@ func newSettingsForm(cfgPath string, cfg *config.Config) *settingsForm {
 	}
 	f.initSpecialists()
 	f.fields = append(f.fields, reviewProviderFields(rp)...)
+	f.sshRemoving = -1
+	f.initSSHHosts()
 	// Warm the label NAMES from the on-disk cache for rendering. This is a local
 	// file read, never a Linear call, and deliberately does not touch wsLabels:
 	// the picker stays lazy (see openLabelPicker).
@@ -804,6 +815,10 @@ func (f *settingsForm) update(msg tea.Msg) (tea.Cmd, settingsFormEvent) {
 // updateNonKey handles the async results the form asks for. Left as its own
 // method so the key path stays readable; extend it alongside any new tea.Cmd.
 func (f *settingsForm) updateNonKey(msg tea.Msg) (tea.Cmd, settingsFormEvent) {
+	if v, ok := msg.(sshResolvedMsg); ok {
+		f.sshApplyResolved(v)
+		return nil, settingsFormNone
+	}
 	if v, ok := msg.(workspaceLabelsMsg); ok {
 		wasDirty := f.dirty()
 		f.applyWorkspaceLabels(v)
@@ -828,6 +843,14 @@ func (f *settingsForm) key(k tea.KeyPressMsg) (tea.Cmd, settingsFormEvent) {
 		return nil, settingsFormNone
 	}
 	f.err = ""
+	if f.sshRemoving >= 0 {
+		serial := f.sshRemoving
+		f.sshRemoving = -1
+		if k.String() == "Y" {
+			f.removeSSHHost(serial)
+		}
+		return nil, settingsFormNone
+	}
 	if f.picker != nil {
 		return f.pickerKey(k)
 	}
@@ -890,6 +913,9 @@ func (f *settingsForm) key(k tea.KeyPressMsg) (tea.Cmd, settingsFormEvent) {
 		}
 		switch fld.kind {
 		case sfAction:
+			if fld.tab == stSSH {
+				return f.sshAction(fld.key), settingsFormNone
+			}
 			f.specialistAction(fld.key)
 		case sfBool:
 			f.toggleBool(fld)
@@ -1557,6 +1583,11 @@ func (f *settingsForm) save() settingsFormEvent {
 		}
 	}
 
+	sshHosts, sshErr := f.buildSSHHosts()
+	if sshErr != nil {
+		f.err = sshErr.Error()
+		return settingsFormNone
+	}
 	c := f.cfg
 	// Snapshot the tables we touch so a failed Validate can be rolled back cleanly.
 	// The slice/map members of Defaults (post_create, symlinks, env, …) are always
@@ -1569,6 +1600,7 @@ func (f *settingsForm) save() settingsFormEvent {
 	oldSA := c.StatusAgent
 	oldRem := c.Remote
 	oldLin := c.Linear
+	oldSSH := c.SSHHosts
 
 	// The Linear key, if one was typed. This writes the KEYCHAIN before the
 	// config is validated, which is deliberate and safe in that order: a stored
@@ -1630,11 +1662,13 @@ func (f *settingsForm) save() settingsFormEvent {
 		c.ReviewProfiles = profiles
 	}
 
+	c.SSHHosts = sshHosts
 	rollback := func() {
 		c.Defaults, c.Notify, c.Brain, c.Review, c.CodeRabbit = oldD, oldN, oldB, oldR, oldC
 		c.UI = oldUI
 		c.ReviewProviders = oldP
 		c.ReviewProfiles = oldProfiles
+		c.SSHHosts = oldSSH
 		c.StatusAgent = oldSA
 		c.Remote = oldRem
 		c.Linear = oldLin
@@ -1914,6 +1948,13 @@ func (f *settingsForm) fieldRegion() (lines []string, fieldLine []int) {
 // key hint. Always shown below the (scrolling) field region.
 func (f *settingsForm) footerLines() []string {
 	var out []string
+	f.sshRefreshHelp()
+	if f.sshRemoving >= 0 {
+		h := f.sshHostFromFields(f.sshRemoving)
+		out = append(out, "", warnText.Render(fmt.Sprintf("Remove %s? Its live connections close, and agents can no longer ask for it.", h.DisplayName())),
+			faintText.Render(protocol.SSHRemoteOutlives), "", warnText.Render("Y")+faintText.Render(" remove from this draft · any other key keeps it"))
+		return out
+	}
 	if help := f.cur().help; help != "" {
 		out = append(out, "", faintText.Render(help))
 	}

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/sushidev-team/lola/internal/protocol"
+	"github.com/sushidev-team/lola/internal/runtime"
 	"github.com/sushidev-team/lola/internal/session"
 	"github.com/sushidev-team/lola/internal/state"
 	"github.com/sushidev-team/lola/internal/worktree"
@@ -55,6 +56,9 @@ func (d *Daemon) handleKill(ctx context.Context, sessionID string, force, keepWo
 
 	ctx, cancel := context.WithTimeout(ctx, killExecTimeout)
 	defer cancel()
+	// Its ssh connections close first: the master is not in any pane's process
+	// tree, so nothing below would reach it.
+	d.sshCloseSession(ctx, s.ID)
 	if s.GoalManaged() {
 		if err := nat.Kill(ctx, s, false, false); err != nil {
 			return protocol.KillData{}, err
@@ -101,6 +105,10 @@ func (d *Daemon) handleKill(ctx context.Context, sessionID string, force, keepWo
 			return protocol.KillData{}, err
 		}
 		d.dropSession(s)
+		if s.Location == runtime.LocationSSH {
+			// A direct ssh session's folder is lola's own scratch space, so it is gone.
+			return protocol.KillData{Removed: true, Message: "Session ended and its connections closed. The command record stays in ~/.lola/state/ssh/ for 14 days."}, nil
+		}
 		return protocol.KillData{Removed: true, Message: "Session closed; directory and files preserved"}, nil
 	}
 

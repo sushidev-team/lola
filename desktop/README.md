@@ -20,6 +20,8 @@ desktop/
 ├── client.go          # daemon socket round-trip (internal/protocol)
 ├── daemonsvc.go       # DaemonService — every daemon command, + daemon lifecycle
 ├── termsvc.go         # TermService — tmux snapshots (grid) + live PTY attach (focus)
+├── sshsvc.go          # SSHService — a human's side of agent-assisted ssh (docs/ssh-sessions.md)
+├── sshhosts.go        # ConfigService — the [[ssh_host]] catalog for Settings › SSH hosts
 ├── configsvc.go       # ConfigService — read/write config.toml (settings/project/poll)
 ├── doctorsvc.go       # DoctorService — internal/doctor health checks
 ├── *_test.go          # Go backend tests (fake-socket daemon, config helpers)

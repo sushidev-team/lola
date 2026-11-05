@@ -5,6 +5,7 @@ import * as ConfigService from "./configservice.js";
 import * as DaemonService from "./daemonservice.js";
 import * as DoctorService from "./doctorservice.js";
 import * as LinearService from "./linearservice.js";
+import * as SSHService from "./sshservice.js";
 import * as TermService from "./termservice.js";
 import * as UpdateService from "./updateservice.js";
 export {
@@ -12,6 +13,7 @@ export {
     DaemonService,
     DoctorService,
     LinearService,
+    SSHService,
     TermService,
     UpdateService
 };
@@ -37,6 +39,8 @@ export type {
     ReleaseEntryDTO,
     ReviewKindDTO,
     ReviewProviderDTO,
+    SSHHostDTO,
+    SSHHostPreviewDTO,
     SettingsDTO,
     SetupDTO,
     SetupResultDTO,
