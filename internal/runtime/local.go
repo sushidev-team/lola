@@ -92,6 +92,16 @@ func (n *Native) OpenDirectory(ctx context.Context, p config.Project, id, dir, l
 	return n.startLocal(ctx, s)
 }
 
+// RemoveLocalArtifacts forgets only Lola's private launch files. It never
+// signals a process or touches the borrowed working directory.
+func RemoveLocalArtifacts(id string) error {
+	dir, err := localArtifacts(id)
+	if err != nil {
+		return err
+	}
+	return os.RemoveAll(dir)
+}
+
 func (n *Native) startLocal(ctx context.Context, s session.Session) (session.Session, error) {
 	artifacts, err := localArtifacts(s.ID)
 	if err != nil {

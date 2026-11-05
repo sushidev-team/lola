@@ -4,6 +4,7 @@
   import { nav } from "$lib/nav.svelte";
   import { store } from "$lib/store.svelte";
   import { openSession } from "$lib/projectActions";
+  import { ConfigService } from "@bindings/desktop";
   import Modal from "./Modal.svelte";
   import Button from "./Button.svelte";
   import Select from "./Select.svelte";
@@ -18,14 +19,27 @@
   let path = $state("");
   let agentKind = $state("");
   let busy = $state(false);
+  let picking = $state(false);
   let error = $state("");
   const selected = $derived(store.projectByName(project));
   const temporary = $derived(location === "temporary");
   const field = "w-full rounded border border-edge bg-canvas px-2 py-1.5 text-ink outline-none focus:border-accent";
-  function close() { if (!busy) nav.closeOverlay(); }
+  function close() { if (!busy && !picking) nav.closeOverlay(); }
+  async function pickFolder() {
+    if (busy || picking) return;
+    picking = true; error = "";
+    try {
+      const chosen = await ConfigService.PickFolder(path.trim());
+      if (chosen) path = chosen;
+    } catch (err) {
+      error = String(err);
+    } finally {
+      picking = false;
+    }
+  }
   onMount(() => { overlayClose.register(close); void tick().then(() => nameInput?.focus()); return () => overlayClose.unregister(close); });
   async function create() {
-    if (busy || (!temporary && !selected) || (location === "worktree" && !branch.trim())) return;
+    if (busy || picking || (!temporary && !selected) || (location === "worktree" && !branch.trim())) return;
     busy = true; error = "";
     const r = await store.openManual({ project: temporary ? "" : project, name: name.trim(), location,
       branch: location === "worktree" ? branch.trim() : "", base: location === "worktree" ? base.trim() : undefined,
@@ -37,7 +51,7 @@
   }
 </script>
 
-<Modal title="New session" onClose={close} width="520px">
+<Modal title={temporary ? "New temporary session" : "New session"} titleHelp={temporary ? "A shell without project setup. It stays available when you leave the view or close the app." : ""} onClose={close} width="520px">
   <form class="grid gap-4" onsubmit={(e) => { e.preventDefault(); void create(); }}>
     <label class="grid gap-1.5 text-sm">Name
       <input bind:this={nameInput} class={field} bind:value={name} maxlength="100" placeholder="e.g. Investigate checkout (optional)" disabled={busy} />
@@ -78,13 +92,18 @@
         <div class="text-sm text-faint"><p class="break-all font-mono">{selected?.path}</p><p class="mt-1">Uses the current branch and shares files with other sessions in this checkout.</p></div>
       {/if}
     {:else}
-      <label class="grid gap-1.5 text-sm">Directory<input class={field} bind:value={path} placeholder="Use the default from Settings" disabled={busy} /></label>
-      <p class="text-sm text-faint">A shell without project setup. It stays available when you leave the view or close the app.</p>
+      <div class="grid gap-1.5 text-sm">
+        <label for="temporary-session-directory">Directory</label>
+        <div class="flex items-center gap-2">
+          <input id="temporary-session-directory" class={field} bind:value={path} placeholder="Optional — uses default from Settings" disabled={busy || picking} />
+          <Button variant="secondary" onclick={pickFolder} disabled={busy || picking}>{picking ? "Choosing…" : "Choose folder…"}</Button>
+        </div>
+      </div>
     {/if}
     {#if error}<p class="text-sm text-bad" role="alert">{error}</p>{/if}
     <div class="flex justify-end gap-2 border-t border-edge pt-3">
-      <Button onclick={close} disabled={busy}>Cancel</Button>
-      <Button variant="primary" type="submit" loading={busy} disabled={busy || (location === "worktree" && !branch.trim())}>Create session</Button>
+      <Button onclick={close} disabled={busy || picking}>Cancel</Button>
+      <Button variant="primary" type="submit" loading={busy} disabled={busy || picking || (location === "worktree" && !branch.trim())}>Create session</Button>
     </div>
   </form>
 </Modal>

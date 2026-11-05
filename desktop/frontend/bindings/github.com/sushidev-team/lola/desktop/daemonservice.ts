@@ -111,6 +111,13 @@ export function Checkpoints(session: string): $CancellablePromise<protocol$0.Che
 }
 
 /**
+ * CloseExitedTemporary retires a temporary shell only once all its panes are gone.
+ */
+export function CloseExitedTemporary(id: string): $CancellablePromise<protocol$0.KillData> {
+    return $Call.ByID(873119733, id);
+}
+
+/**
  * CodeRabbit forces the PR-comment watch for one session now (the coderabbit-watch alias).
  */
 export function CodeRabbit(session: string): $CancellablePromise<protocol$0.CodeRabbitData> {

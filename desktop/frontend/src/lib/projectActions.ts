@@ -13,6 +13,10 @@ export function openSession(id: string, project = "") {
 }
 
 export async function openShell(project = "") {
+  if (!project) {
+    nav.newSession("", "temporary", false);
+    return;
+  }
   const result = await store.openManual({ project, branch: "", agent: false, location: project ? "main" : "temporary" });
   if (result?.sessionId) openSession(result.sessionId, project);
 }

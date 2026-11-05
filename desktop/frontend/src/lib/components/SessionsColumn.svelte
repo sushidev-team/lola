@@ -89,7 +89,7 @@
         class:border-accent={focused}
         class:border-edge={!focused}
       >
-        <SessionEmbed sessionId={nav.selectedId} {focused} />
+        <SessionEmbed sessionId={nav.focusedTerm || nav.selectedId} {focused} />
       </div>
     </div>
   {/if}

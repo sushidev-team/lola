@@ -42,6 +42,22 @@
   // reachable there without the "s" shortcut.
   const shells = $derived(session ? terms.shellsFor(session.id) : []);
   const activeTab = $derived(session ? terms.activeTab(session.id) : AGENT);
+  async function terminalExited(id: string, name: string, temporary: boolean, shellTab: boolean) {
+    if (shellTab) terms.shellExited(id, name);
+    if (!temporary) return;
+    const removed = await store.closeExitedTemporary(id);
+    if (removed) {
+      // The user may have moved elsewhere while the liveness check ran.
+      if (nav.focusedTerm === id || (!nav.focusedTerm && nav.selectedId === id)) {
+        nav.goCockpit(nav.scoped ? nav.project : "");
+        nav.select("");
+      }
+    } else {
+      await terms.refresh(id);
+      const remaining = terms.shellsFor(id);
+      if (!shellTab && remaining.length && terms.activeTab(id) === AGENT) terms.select(id, remaining[0]);
+    }
+  }
   // A view tab (diff, checkpoints) keeps the bar up too: it was reached by a key,
   // the menu or a sidebar row, and the way back to the agent must be on screen.
   const showTabs = $derived(!!session && (shells.length > 0 || focused || isViewTab(activeTab)));
@@ -726,7 +742,7 @@
               webgl
               interactive
               autofocus={pickedTab || activeIsShell || focused}
-              onExit={activeIsShell ? () => terms.shellExited(session.id, activeName) : undefined}
+              onExit={activeIsShell || session.location === "temporary" ? () => terminalExited(session.id, activeName, session.location === "temporary", activeIsShell) : undefined}
               onEscapeFocus={focused ? () => nav.toggleFocusTerm(session.id) : undefined}
             />
           {/key}

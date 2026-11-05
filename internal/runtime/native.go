@@ -1398,11 +1398,7 @@ func (n *Native) Kill(ctx context.Context, s session.Session, removeWorktree, fo
 	}
 	if s.Kind == session.KindLocal {
 		if removeWorktree {
-			dir, err := localArtifacts(s.ID)
-			if err != nil {
-				return err
-			}
-			return os.RemoveAll(dir)
+			return RemoveLocalArtifacts(s.ID)
 		}
 		return nil
 	}

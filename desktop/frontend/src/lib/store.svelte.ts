@@ -515,6 +515,17 @@ class Store {
   renameSession(id: string, name: string) {
     return this.act(() => DaemonService.RenameSession(id, name).then(() => true), "Session renamed");
   }
+  async closeExitedTemporary(id: string): Promise<boolean> {
+    try {
+      const result = await DaemonService.CloseExitedTemporary(id);
+      if (result.removed) this.sessions = this.sessions.filter(s => s.id !== id);
+      void this.refresh();
+      return result.removed;
+    } catch (err) {
+      this.setFlash(String(err), "bad");
+      return false;
+    }
+  }
   openPr(a: OpenPrArgs) {
     return this.act(() => DaemonService.OpenPR(a), `opened PR #${a.number}`);
   }

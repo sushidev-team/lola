@@ -3,6 +3,7 @@ import { render, screen, cleanup, fireEvent } from "@testing-library/svelte";
 import NewSession from "./NewSession.svelte";
 import { store, type ProjectInfo } from "$lib/store.svelte";
 import { nav } from "$lib/nav.svelte";
+import { ConfigService } from "@bindings/desktop";
 
 beforeEach(() => {
   cleanup(); vi.restoreAllMocks();
@@ -37,7 +38,32 @@ it("creates a project-free shell in the requested directory", async () => {
   nav.newSession();
   const open = vi.spyOn(store,"openManual").mockResolvedValue(undefined);
   render(NewSession);
+  await fireEvent.input(screen.getByLabelText("Name"), {target:{value:"Scratch shell"}});
   await fireEvent.input(screen.getByLabelText("Directory"), {target:{value:"~/Downloads"}});
   await fireEvent.click(screen.getByRole("button",{name:"Create session"}));
-  expect(open).toHaveBeenCalledWith(expect.objectContaining({project:"",location:"temporary",agent:false,path:"~/Downloads"}));
+  expect(open).toHaveBeenCalledWith(expect.objectContaining({project:"",location:"temporary",name:"Scratch shell",agent:false,path:"~/Downloads"}));
+});
+
+it("uses the native directory picker and keeps the path when cancelled", async () => {
+  nav.newSession();
+  const pick = vi.spyOn(ConfigService,"PickFolder").mockResolvedValueOnce("/code/Scratch folder").mockResolvedValueOnce("");
+  const open = vi.spyOn(store,"openManual").mockResolvedValue(undefined);
+  render(NewSession);
+  await fireEvent.click(screen.getByRole("button",{name:"Choose folder…"}));
+  expect(pick).toHaveBeenCalledWith("");
+  expect(screen.getByLabelText("Directory")).toHaveValue("/code/Scratch folder");
+  await fireEvent.click(screen.getByRole("button",{name:"Choose folder…"}));
+  expect(pick).toHaveBeenLastCalledWith("/code/Scratch folder");
+  expect(screen.getByLabelText("Directory")).toHaveValue("/code/Scratch folder");
+  await fireEvent.click(screen.getByRole("button",{name:"Create session"}));
+  expect(open).toHaveBeenCalledWith(expect.objectContaining({path:"/code/Scratch folder"}));
+});
+
+it("keeps temporary-session guidance in the title info popover", async () => {
+  nav.newSession();
+  render(NewSession);
+  expect(screen.getByLabelText("Directory")).toHaveAttribute("placeholder", "Optional — uses default from Settings");
+  expect(screen.queryByText(/A shell without project setup/)).not.toBeInTheDocument();
+  await fireEvent.click(screen.getByRole("button", {name:"More about New temporary session"}));
+  expect(screen.getByRole("note", {name:"New temporary session"})).toHaveTextContent("A shell without project setup.");
 });

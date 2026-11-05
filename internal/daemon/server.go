@@ -210,6 +210,12 @@ func (d *Daemon) handle(ctx context.Context, req protocol.Request) protocol.Resp
 			return protocol.Response{OK: false, Error: err.Error()}
 		}
 		return dataResponse(data)
+	case "closeExitedTemporary":
+		data, err := d.handleCloseExitedTemporary(ctx, req.Session)
+		if err != nil {
+			return protocol.Response{OK: false, Error: err.Error()}
+		}
+		return dataResponse(data)
 	case "renameSession":
 		err := d.handleRenameSession(req.Session, req.Text)
 		if err != nil {

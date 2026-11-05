@@ -15,6 +15,7 @@ import (
 	"github.com/sushidev-team/lola/internal/agent"
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/protocol"
+	"github.com/sushidev-team/lola/internal/runtime"
 	"github.com/sushidev-team/lola/internal/session"
 )
 
@@ -23,6 +24,47 @@ func validateSessionName(name string) error {
 		return errors.New("session name must be at most 100 characters without control characters")
 	}
 	return nil
+}
+
+// A PTY EOF can mean a detached client, not an exited shell. Retire only an
+// ephemeral shell whose primary and auxiliary tmux sessions are ALL gone.
+func (d *Daemon) handleCloseExitedTemporary(ctx context.Context, id string) (protocol.KillData, error) {
+	s, ok := d.sessions.Get(id)
+	if !ok {
+		return protocol.KillData{Removed: true}, nil
+	}
+	if s.Kind != session.KindLocal || s.Location != "temporary" || !s.IsAgentless() {
+		return protocol.KillData{}, errors.New("session is not a temporary shell")
+	}
+	d.mu.Lock()
+	nat, list := d.native, d.listTmuxSessions
+	d.mu.Unlock()
+	if nat == nil || list == nil {
+		return protocol.KillData{}, errors.New("cannot verify temporary shell liveness")
+	}
+	cctx, cancel := context.WithTimeout(ctx, observeExecTimeout)
+	defer cancel()
+	live, err := list(cctx)
+	if err != nil {
+		return protocol.KillData{}, err
+	}
+	parent := paneTarget(s)
+	for _, pane := range live {
+		if pane.Name == parent || strings.HasPrefix(pane.Name, parent+"-") {
+			return protocol.KillData{Removed: false}, nil
+		}
+	}
+	d.sessions.Delete(id)
+	if err := d.sessions.Save(); err != nil {
+		d.sessions.Upsert(s)
+		return protocol.KillData{}, err
+	}
+	// Never call Kill from a PTY-exit notification: even if another tab appeared
+	// after the listing, there is no process termination on this path.
+	if err := runtime.RemoveLocalArtifacts(s.ID); err != nil {
+		d.logf("", "temporary session %s: remove launch artifacts: %v", id, err)
+	}
+	return protocol.KillData{Removed: true}, nil
 }
 
 func (d *Daemon) handleRenameSession(id, name string) error {

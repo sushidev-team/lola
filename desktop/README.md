@@ -245,11 +245,15 @@ does not change branch names, directories, or session IDs.
 
 **⌘K** searches projects (including repository and path), named sessions, and
 actions. Select a project to see its actions; **⌘Enter** creates a session and
-**⌘O** opens a shell there. **⌘⇧N** opens a temporary, project-free shell.
+**⌘O** opens a shell there. **⌘⇧N**, the temporary-sessions **+**, and the
+command palette open a dialog for a temporary, project-free shell: give it a
+name and optionally type a directory or use **Choose folder…**.
 Set its default directory in **Settings → General → Temporary shell directory**
 (`[defaults].temporary_directory`, empty means the user's home). Closing the
 app leaves running sessions available. Explicitly closing a main-checkout or
 temporary session stops its terminals and preserves the directory and files.
+Typing `exit` in the last shell of a temporary session closes that session and
+leaves fullscreen. Other running shell tabs are kept open.
 Reopening a stopped agent in a shared checkout starts a new conversation,
 avoiding accidental resumption of another session in the same directory.
 
