@@ -13,6 +13,7 @@
   // No `isolate` or `z-0` around the terminal: wrapping the canvas in its own stacking context made
   // WKWebView paint the wrapper's opaque background over it. The dock's `isolate` is inside
   // Workspace, and TerminalCell is its sibling, outside it.
+  import type { Rect } from "$lib/docklayout";
   import { tick, untrack } from "svelte";
   import { store } from "$lib/store.svelte";
   import { nav } from "$lib/nav.svelte";
@@ -30,6 +31,7 @@
   import ViewStrip from "./session/ViewStrip.svelte";
   import SessionFooter from "./session/SessionFooter.svelte";
   import SessionBar from "./session/SessionBar.svelte";
+  import { widthOf } from "./session/measure";
 
   let { sessionId = "" }: { sessionId?: string } = $props();
   const session = $derived(sessionId ? store.sessionById(sessionId) : undefined);
@@ -47,6 +49,16 @@
   const onHostShell = $derived(activeTab === SSH && view.narrow === "terminal");
   const onConversation = $derived(activeTab === SSH && view.narrow !== "terminal");
   const onChanges = $derived(isChangesTab(activeTab));
+  let width = $state(0);
+  let body = $state<HTMLElement | null>(null);
+  let mainBox = $state<Rect | null>(null);
+  function measureMain(rect: Rect, host: HTMLElement) {
+    if (!body) return;
+    const h = host.getBoundingClientRect(), b = body.getBoundingClientRect();
+    mainBox = { ...rect, x: h.left - b.left + rect.x, y: h.top - b.top + rect.y };
+  }
+  const rightChanges = $derived(width >= 1180 && offered);
+  const mainStyle = $derived(offered && mainBox ? `position:absolute;left:${mainBox.x}px;top:${mainBox.y}px;width:${mainBox.w}px;height:${mainBox.h}px` : 'grid-area:1/1');
 
   const strip = $derived(!!session && stripShown(session, stripCells(session, shells).machines.length));
 
@@ -56,7 +68,7 @@
   const agentPane = $derived(session?.tmuxName ?? "");
   const terminalName = $derived(!session || isViewTab(activeTab) || !onScreen ? "" : activeTab === AGENT ? agentPane : activeTab);
   const activeIsShell = $derived(activeTab !== AGENT && !isViewTab(activeTab));
-  const covered = $derived(activeTab !== SSH);
+  const covered = $derived(activeTab !== SSH && !(onChanges && rightChanges));
   const noPane = $derived(!!session && activeTab === AGENT && !agentPane);
 
   async function terminalExited(sid: string, name: string, temporary: boolean, shellTab: boolean) {
@@ -183,7 +195,7 @@
   };
 </script>
 
-<div class="grid h-full min-h-0 min-w-0 grid-cols-[minmax(0,1fr)] grid-rows-[auto_auto_auto_minmax(0,1fr)_auto] bg-canvas" data-session-view>
+<div class="grid h-full min-h-0 min-w-0 grid-cols-[minmax(0,1fr)] grid-rows-[auto_auto_auto_minmax(0,1fr)_auto] bg-canvas" {@attach widthOf(w => width = w)} data-session-view>
   <!-- Each wrapper always renders, or auto-placement would shift the body out of its row. -->
   <div class="min-w-0">
     {#if session && !open}
@@ -191,35 +203,40 @@
     {/if}
   </div>
   <div class="min-w-0">
-    {#if session && strip}<ViewStrip {session} />{/if}
+    {#if !offered && session && strip}<ViewStrip {session} changesInSide={rightChanges} />{/if}
   </div>
   <div class="min-w-0">
     <!-- Why a dev tab died, when the reason is a port someone else holds. Absent while healthy. -->
-    {#if session && !onConversation}<DevClashBanner {session} />{/if}
+    {#if !offered && session && !onConversation}<DevClashBanner {session} />{/if}
   </div>
 
-  <div class="grid min-h-0 min-w-0 grid-rows-[minmax(0,1fr)] grid-cols-[minmax(0,1fr)]">
+  <div bind:this={body} class="relative grid min-h-0 min-w-0 grid-rows-[minmax(0,1fr)] grid-cols-[minmax(0,1fr)]">
       <!-- The conversation stays mounted behind a terminal or Changes, so a widget does not reload
            on the way there and back. Hidden with visibility: it keeps its measured size. -->
-      <div class="min-h-0 min-w-0 {offered ? '' : 'hidden'} {covered ? 'invisible' : ''}" style="grid-area:1/1" inert={covered}>
-        <Workspace sessionId={offered ? id : ""} {covered} />
+      <div class="min-h-0 min-w-0 {offered ? '' : 'hidden'} {onChanges && !rightChanges ? 'invisible' : ''}" style="grid-area:1/1" inert={onChanges && !rightChanges}>
+        <Workspace sessionId={offered ? id : ""} {covered} changesInSide={rightChanges} onmain={measureMain}>
+          {#snippet header()}
+            {#if session && strip}<ViewStrip {session} changesInSide={rightChanges} />{/if}
+            {#if session && !onConversation}<DevClashBanner {session} />{/if}
+          {/snippet}
+        </Workspace>
       </div>
 
       <TerminalCell
         name={terminalName}
         autofocus={open}
-        style="grid-area:1/1"
+        style={mainStyle}
         focusRequest={id ? terms.terminalFocusAsks(id) : 0}
         onExit={session && (activeIsShell || session.location === "temporary") ? () => terminalExited(id, terminalName, session.location === "temporary", activeIsShell) : undefined}
         onLeave={leave}
       />
 
-      {#if onChanges && session}
-        <div class="grid min-h-0 min-w-0 bg-panel" style="grid-area:1/1"><ChangesView sessionId={session.id} /></div>
+      {#if onChanges && session && !rightChanges}
+        <div class="grid min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)] bg-panel" style="grid-area:1/1"><div>{#if offered && strip}<ViewStrip {session} />{/if}</div><ChangesView sessionId={session.id} /></div>
       {/if}
 
       {#if noPane}
-        <div class="grid min-h-0 place-items-center bg-panel text-faint" style="grid-area:1/1">
+        <div class="grid min-h-0 place-items-center bg-panel text-faint" style={mainStyle}>
           <div class="grid justify-items-center gap-2 text-center">
             <p>This session has no terminal. Its agent is gone.</p>
             {#if session?.status === "dead" || session?.status === "session_ended"}

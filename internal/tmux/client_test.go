@@ -255,8 +255,12 @@ func TestSendKeysLiteralThenEnter(t *testing.T) {
 	bin, argsLog := fakeTmux(t, "", "", 0)
 	c := &Client{Bin: bin}
 
+	started := time.Now()
 	if err := c.SendKeys(context.Background(), "main", "fix the CI failure"); err != nil {
 		t.Fatalf("SendKeys: %v", err)
+	}
+	if time.Since(started) < submitSettleDelay {
+		t.Error("single-line text must settle before Enter too")
 	}
 	// send-keys also takes a target-PANE, so "=main:" (not "=main"). The
 	// copy-mode cancel comes first: a pane a human scrolled back reads keys as

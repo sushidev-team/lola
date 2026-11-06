@@ -31,6 +31,16 @@ var errNoPaneSeam = errors.New("no way to read the pane")
 // nil unlock. What is left is one race, and tmux offers nothing atomic to close it:
 // keystrokes in an attached terminal between this proof and the send can merge with it.
 func (d *Daemon) lockHumanPrompt(ctx context.Context, s session.Session) (unlock func(), why string) {
+	return d.lockHumanComposer(ctx, s, false)
+}
+
+// A message submitted by the human may reach the agent during a turn. The agent
+// owns when it acts on it; lola still proves that the input is an empty composer.
+func (d *Daemon) lockHumanMessage(ctx context.Context, s session.Session) (unlock func(), why string) {
+	return d.lockHumanComposer(ctx, s, true)
+}
+
+func (d *Daemon) lockHumanComposer(ctx context.Context, s session.Session, midTurn bool) (unlock func(), why string) {
 	g := d.sendGate(s.ID)
 	g.Lock()
 	cur, ok := d.sessions.Get(s.ID)
@@ -38,11 +48,11 @@ func (d *Daemon) lockHumanPrompt(ctx context.Context, s session.Session) (unlock
 		g.Unlock()
 		return nil, humanWhyGone
 	}
-	if why := recordRefusal(cur); why != "" {
+	if why := recordRefusal(cur); why != "" && !(midTurn && humanMessageSendable(cur)) {
 		g.Unlock()
 		return nil, why
 	}
-	if why := d.humanProof(ctx, cur); why != "" {
+	if why := d.humanComposerProof(ctx, cur, midTurn); why != "" {
 		g.Unlock()
 		return nil, why
 	}
@@ -53,6 +63,19 @@ func (d *Daemon) lockHumanPrompt(ctx context.Context, s session.Session) (unlock
 // pane proof still has to pass, so a starting agent is not typed at on trust.
 func humanSendable(s session.Session) bool {
 	return handoffDeliverable(s) || s.AgentState == state.AgentStarting
+}
+
+func humanMessageSendable(s session.Session) bool {
+	if s.IsAgentless() || s.GoalManaged() {
+		return false
+	}
+	switch s.AgentState {
+	case state.AgentWorking, state.AgentStarting, state.AgentIdle:
+		return true
+	case state.AgentWaitingInput:
+		return s.InputReason == state.InputIdleNotify
+	}
+	return false
 }
 
 // recordRefusal is what the record alone rules out. A dead agent comes first because a
@@ -74,8 +97,8 @@ func recordRefusal(s session.Session) string {
 	return humanWhyPrompt
 }
 
-// humanProof reads the pane and names what is in the way of typing, or "" when nothing is.
-func (d *Daemon) humanProof(ctx context.Context, s session.Session) string {
+// humanComposerProof names what prevents safely typing into the input.
+func (d *Daemon) humanComposerProof(ctx context.Context, s session.Session, midTurn bool) string {
 	k := agent.Parse(s.Agent)
 	p, err := d.readComposer(ctx, s)
 	if err != nil {
@@ -84,7 +107,11 @@ func (d *Daemon) humanProof(ctx context.Context, s session.Session) string {
 	switch p.activity {
 	case attention.ActivityWaiting:
 	case attention.ActivityWorking:
-		return humanWhyWorking
+		// Mid-turn sends require the cursor proof, never just a stale prompt in scrollback.
+		if !midTurn || !p.cursorKnown {
+			return humanWhyWorking
+		}
+		p.empty = attention.MessageComposerEmptyAt(p.visible, p.cursor, k)
 	case attention.ActivityBlocked:
 		return humanWhyModal
 	case attention.ActivityQuotaLimited:

@@ -458,3 +458,39 @@ func TestMergeQueueKeepsAutomationLock(t *testing.T) {
 		t.Fatal("the queue did not resume")
 	}
 }
+
+func TestHumanMessageDuringTurnKeepsComposerSafeguards(t *testing.T) {
+	for name, tc := range map[string]struct {
+		pane   string
+		cursor attention.Cursor
+		want   bool
+	}{
+		"working empty":    {gateWork, atComposer, true},
+		"working draft":    {strings.Replace(gateWork, "❯\u00a0", "❯\u00a0my draft", 1), atComposer, false},
+		"permission":       {gateDialog, cursorOff, false},
+		"screen":           {gateModal, cursorOff, false},
+		"hidden cursor":    {gateWork, cursorOff, false},
+		"cursor elsewhere": {gateWork, attention.Cursor{X: 2, Y: 0, Visible: true}, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			d, _, g, s := gateDaemon(t)
+			d.sessions.Update(s.ID, func(cur *session.Session) bool {
+				cur.AtPrompt = false
+				cur.SetAgentState(state.AgentWorking, "", time.Now())
+				return true
+			})
+			g.pane, g.cursor = tc.pane, tc.cursor
+			unlock, why := d.lockHumanMessage(context.Background(), s)
+			if unlock != nil {
+				unlock()
+			}
+			if (unlock != nil) != tc.want {
+				t.Fatalf("locked %v, reason %q", unlock != nil, why)
+			}
+			if unlock, ok := d.lockAutomationPrompt(context.Background(), s); ok {
+				unlock()
+				t.Fatal("automation bypassed the idle gate")
+			}
+		})
+	}
+}

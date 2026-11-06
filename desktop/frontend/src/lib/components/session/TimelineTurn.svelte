@@ -13,6 +13,10 @@
   import RailMark from "./RailMark.svelte";
   import StoryRow from "./StoryRow.svelte";
   import CatchUp from "./CatchUp.svelte";
+  import ActivityLog from "./ActivityLog.svelte";
+  import { flip } from "svelte/animate";
+  import { slide } from "svelte/transition";
+  import { cubicOut } from "svelte/easing";
 
 
   let {
@@ -74,8 +78,19 @@
   });
 
   const mounted = $derived(near || pinned);
+  // Keyed parts ease into their new positions when a completed call joins a stack.
+  // No motion on the initial mount, off-screen history, or under reduced motion.
+  function motionDuration(node: HTMLElement) {
+    return near && !!node.animate && !window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 260 : 0;
+  }
+  function regroup(node: HTMLElement) {
+    return slide(node, { duration: motionDuration(node), easing: cubicOut });
+  }
+  function reposition(node: HTMLElement, rects: { from: DOMRect; to: DOMRect }) {
+    return flip(node, rects, { duration: motionDuration(node), easing: cubicOut });
+  }
   const answerId = $derived(answerRowId(turn, live));
-  const parts = $derived(turnParts(turn.rows, answerId ? 0 : 1, !live && !latest));
+  const parts = $derived(turnParts(turn.rows, 0, !live));
   // buildStory ends a turn at every message, so a person's row can only ever open one. Their words
   // leave the agent's column and sit on their own side, and everything else stays in order.
   const person = $derived.by(() => {
@@ -86,6 +101,8 @@
     const last = parts[parts.length - 1];
     return last?.kind === "row" && last.row.kind === "receipt" ? last.row : undefined;
   });
+  // Join only adjacent answer + receipt; intervening events keep their chronology.
+  const joinedReceipt = $derived(!!receipt && !!answerId && turn.rows.at(-2)?.id === answerId);
   const agentParts = $derived(parts.filter((p) => !(p.kind === "row" && (p.row === person || p.row === receipt))));
   const opener = $derived(agentParts[0]?.kind === "row" && (agentParts[0].row.kind === "origin" || (agentParts[0].row.kind === "moment" && agentParts[0].row.item.system?.kind === "handoff")) ? agentParts[0].row : undefined);
   const files = $derived(receipt ? turnFiles(turn.rows) : undefined);
@@ -105,6 +122,7 @@
     if (!cursor) return;
     for (const p of parts) {
       for (const row of p.kind === "work" ? p.rows : [p.row]) {
+        if (p.kind === "work" && (row.id === cursor || row.ids.includes(cursor))) f.expanded.add(p.id);
         if (row.kind === "run" && row.items.some(item => item.id === cursor)) f.expanded.add(row.id);
       }
     }
@@ -115,9 +133,9 @@
     <div
       data-row={row.id}
       data-kind={row.kind}
-      class="-mx-2 scroll-mt-2 rounded-sm px-2 {fresh?.(row.id) ? 'ssh-fade-in' : ''} {cursor === row.id ? 'bg-sel/30' : ''}"
+      class="-mx-2 scroll-mt-2 rounded-sm px-2 {row.id === answerId ? 'cv-result' : ''} {fresh?.(row.id) ? 'ssh-fade-in' : ''} {cursor === row.id ? 'bg-sel/30' : ''}"
     >
-      <StoryRow {sessionId} {row} {chars} {showHost} {nested} role={row.id === answerId && (turn.receipt || person || latest) ? "answer" : "narration"} {latest} files={row.kind === "receipt" ? files : undefined} />
+      <StoryRow active={live && row.id === turn.rows.at(-1)?.id} {sessionId} {row} {chars} {showHost} {nested} role={row.id === answerId ? "answer" : "narration"} {latest} files={row.kind === "receipt" ? files : undefined} />
     </div>
 {/snippet}
 
@@ -164,7 +182,7 @@
     {#if person && person.id === catchUpRow}<div class="py-4"><CatchUp words={catchUpWords} /></div>{/if}
     <!-- Person first in the DOM, so reading order stays chronological. Which side and which column is
          app.css's: one DOM for the wide layout, the short one and the single column. -->
-    <div class="cv-turn relative">
+    <div class="cv-turn relative" class:cv-result-with-footer={joinedReceipt}>
       {#if person}
         <RailMark kind={railKind(person, answerId, view.filter)} />
         <div class="cv-person">
@@ -178,12 +196,15 @@
           <span class="sr-only" data-agent-speaker>{agentName(session?.agent)} response</span>
         {/if}
         {#each agentParts as part, i (part.kind === "row" ? part.row.id : part.id)}
+          <div class="cv-turn-part" animate:reposition transition:regroup>
           {#if part.kind === "row" && part.row === opener}
             <!-- System origin precedes the agent identity. -->
           {:else if part.kind === "row"}
             {@render rowView(part.row, false, i === 0 ? 0 : part.row.gap)}
           {:else}
-            <div class="cv-work-flat" style="margin-top:{i === 0 ? 0 : part.rows[0].gap}px" data-work={part.id}>
+            <div class="cv-work-flat" style="margin-top:{i === 0 ? 0 : part.rows[0].gap}px">
+              {#if !f.expanded.has(part.id) && part.rows.some(row => row.id === catchUpRow)}<div class="py-4"><CatchUp words={catchUpWords} /></div>{/if}
+              <ActivityLog {sessionId} id={part.id} rows={part.rows} failed={part.failed}>
               {#each workSteps(part.rows) as step (step[0].id)}
                 <section class="cv-work-step" aria-label="Work log entry">
                   {#each step as row (row.id)}
@@ -191,11 +212,13 @@
                   {/each}
                 </section>
               {/each}
+              </ActivityLog>
             </div>
           {/if}
+          </div>
         {/each}
       </div>
-      {#if receipt}<div class="cv-turn-end">{@render rowView(receipt)}</div>{/if}
+      {#if receipt}<div class="cv-turn-end" class:cv-result-footer={joinedReceipt}>{@render rowView(receipt, false, joinedReceipt ? 0 : receipt.gap)}</div>{/if}
     </div>
   {/if}
 </div>

@@ -141,6 +141,26 @@ describe("Timeline voices", () => {
 });
 
 describe("Timeline expansion", () => {
+  it("keeps the latest completed command visible until the next action arrives", async () => {
+    const calls = [tool("a", "run", "first", {}, 1), tool("b", "run", "second", {}, 2), tool("c", "run", "third", {}, 3), tool("d", "run", "fourth", { status: "running" }, 4)];
+    setup([], calls, { agentState: "working" });
+    const { container } = render(Timeline, { sessionId: SID });
+    await settle();
+    expect(container.querySelector('[data-run] .cv-stack-count')?.textContent).toBe("3");
+    expect(container.querySelector('[data-row="d"] [data-status="running"]')).not.toBeNull();
+    feed.view(SID).items = [...calls.slice(0, 3), tool("d", "run", "fourth", { status: "ok" }, 4)] as never;
+    await settle();
+    expect(container.querySelector('[data-run] .cv-stack-count')?.textContent).toBe("3");
+    expect(container.querySelector('[data-row="d"] [data-status="ok"]')).not.toBeNull();
+    feed.view(SID).items = [...feed.view(SID).items, tool("e", "run", "fifth", { status: "running" }, 5)] as never;
+    await settle();
+    expect(container.querySelectorAll('[data-run]')).toHaveLength(1);
+    expect(container.querySelector('[data-run] .cv-stack-count')?.textContent).toBe("4");
+    expect(container.querySelector('[data-row="e"] [data-status="running"]')).not.toBeNull();
+    await fireEvent.click(container.querySelector('[data-run] .cv-call-group-toggle')!);
+    expect(container.querySelectorAll('[data-run] [data-tool]')).toHaveLength(4);
+  });
+
   it("expansion survives refetch", async () => {
     const t = tool("t1", "run", "go test", { hasOutput: true }, 1);
     setup([], [t]);
@@ -164,7 +184,7 @@ describe("Timeline expansion", () => {
     const { container } = render(Timeline, { sessionId: SID });
     await settle();
     expect(container.querySelector("[data-run=read]")?.textContent).toContain("2 file reads");
-    expect(container.querySelector("[data-run=read]")?.textContent).toContain("a.go");
+    expect(container.querySelector("[data-run=read]")?.textContent).toContain("b.go");
     expect(container.querySelector('[data-row="t1"]')).toBeNull();
     expect(container.querySelector('[data-row="t2"]')).toBeNull();
     await fireEvent.click(container.querySelector("[data-run=read] .cv-call-group-toggle") as HTMLElement);
@@ -174,12 +194,48 @@ describe("Timeline expansion", () => {
 });
 
 describe("Timeline rail", () => {
-  it("a settled turn shows commentary and calls without an outer work disclosure", async () => {
+  it("reduces forty progress beats to one visual stack while keeping the answer readable", async () => {
+    const entries = Array.from({ length: 40 }, (_, i) => [
+      text(`note-${i}`, `Checking item ${i}`, i * 2 + 2),
+      tool(`call-${i}`, "run", `check-${i}`, {}, i * 2 + 3),
+    ]).flat();
+    setup([human("ask", "Check everything", 1)], [...entries, text("answer", "All checks completed.", 90)]);
+    const { container } = render(Timeline, { sessionId: SID });
+    await settle();
+    const stack = container.querySelector("[data-work-fold]")!;
+    expect(container.querySelectorAll("[data-work-fold]")).toHaveLength(1);
+    expect(stack.textContent).toContain("40 commands");
+    expect(container.querySelectorAll('[data-role="narration"]')).toHaveLength(0);
+    expect(container.querySelector('.cv-result')?.textContent).toContain("All checks completed.");
+    await fireEvent.click(stack);
+    expect(container.querySelectorAll('[data-role="narration"]')).toHaveLength(40);
+    await fireEvent.click(stack);
+    expect(container.querySelector('[data-row="note-0"]')).toBeNull();
+  });
+
+  it("a jump opens both the activity stack and the command group containing its target", async () => {
+    const view = setup([], [text("note", "Inspecting files", 1), tool("t1", "read", "a.go", {}, 2), tool("t2", "read", "b.go", {}, 3), text("answer", "Done", 4)]);
+    const { container } = render(Timeline, { sessionId: SID });
+    await settle();
+    expect(container.querySelector('[data-row="t2"]')).toBeNull();
+    view.jump = { block: "item:t2", n: 1 };
+    await settle();
+    await settle();
+    expect(container.querySelector('[data-work-fold]')?.getAttribute("aria-expanded")).toBe("true");
+    expect(container.querySelector('[data-run] button')?.getAttribute("aria-expanded")).toBe("true");
+    expect(container.querySelector('[data-row="t2"]')).not.toBeNull();
+  });
+
+  it("a settled turn keeps the answer visible and reveals its activity on demand", async () => {
     const long = "word ".repeat(70);
     setup([human("h1", "ask", 1), system("s1", "checkpoint", "Done", 9, { seq: 1 })], [text("x1", "looking", 2), tool("t1", "read", "a.go", {}, 3), text("x2", long, 4)]);
     const { container } = render(Timeline, { sessionId: SID });
     await settle();
-    expect(container.querySelector("[data-work-fold]")).toBeNull();
+    const activity = container.querySelector("[data-work-fold]")!;
+    expect(activity.getAttribute("aria-expanded")).toBe("false");
+    expect(container.querySelector('[data-row="x1"]')).toBeNull();
+    expect(container.querySelector('[data-row="x2"]')).not.toBeNull();
+    await fireEvent.click(activity);
     expect(container.querySelector('[data-row="x1"]')).not.toBeNull();
     const beat = container.querySelector('[data-row="x1"] [data-voice=agent]');
     const answer = container.querySelector('[data-row="x2"] [data-voice=agent]');
@@ -203,7 +259,10 @@ describe("Timeline rail", () => {
     const fv = feed.view(SID);
     fv.items = [...fv.items, tool("t1", "read", "a.go", {}, 3) as never, text("x2", "later", 4) as never];
     await settle();
-    expect(container.querySelector("[data-work-fold]")).toBeNull();
+    const activity = container.querySelector("[data-work-fold]")!;
+    expect(activity.getAttribute("aria-expanded")).toBe("false");
+    expect(container.querySelector('[data-row="x1"]')).toBeNull();
+    await fireEvent.click(activity);
     expect(container.querySelector('[data-row="x1"]')).not.toBeNull();
     const after = container.querySelector('[data-row="x1"] [data-voice=agent]')?.className ?? "";
     expect(after).toContain("text-prose");
@@ -393,12 +452,16 @@ describe("Timeline rail", () => {
     expect(fold.textContent).not.toContain("\`");
   });
 
-  it("shows styled calls and groups directly without an outer work disclosure", async () => {
+  it("reveals animated command stacks inside the activity summary", async () => {
     setup([], [tool("t1", "edit", "src/a.go", { added: 3, removed: 1 }, 1), tool("t2", "read", "b.go", { hasOutput: true, durationMs: 5 }, 2), tool("t3", "read", "c.go", { hasOutput: false }, 3), text("x1", "done", 4)]);
     const { container } = render(Timeline, { sessionId: SID });
     await settle();
-    expect(container.querySelector("[data-work-fold]")).toBeNull();
-    expect(container.querySelector('[data-tool="edit"] .font-mono')).not.toBeNull();
+    const activity = container.querySelector("[data-work-fold]")!;
+    expect(activity.textContent).toContain("1 edit");
+    expect(activity.textContent).toContain("2 reads");
+    expect(container.querySelector('[data-tool="edit"]')).toBeNull();
+    await fireEvent.click(activity);
+    expect(container.querySelector('[data-change-run] .font-mono')).not.toBeNull();
     expect(container.querySelector('[data-run="read"]')).not.toBeNull();
     expect(container.querySelector('[data-row="t2"]')).toBeNull();
     await fireEvent.click(container.querySelector('[data-run="read"] .cv-call-group-toggle')!);
@@ -426,9 +489,20 @@ describe("Timeline rail", () => {
     await settle();
     const you = container.querySelector("[data-voice=you]") as HTMLElement;
     expect(you.textContent).not.toContain(".lola/images");
-    expect(you.textContent).toContain("look at (1) please");
+    expect(you.textContent).toContain("look at 1 please");
+    expect(you.querySelector('.cv-image-reference')?.getAttribute('aria-label')).toBe('Image 1');
+    expect(you).toHaveClass('cv-message-with-images');
     expect(you.querySelector('[data-you-image="1"] img')?.getAttribute("src")).toContain("data:image");
     expect(findInStory(buildStory({ feed: [], items: v.items }), "images/a.png")).toHaveLength(1);
+    const tile = you.querySelector('[data-you-image="1"]') as HTMLButtonElement;
+    tile.focus();
+    await fireEvent.click(tile);
+    const dialog = await screen.findByRole('dialog', { name: 'Image 1 · 1' });
+    expect(dialog.closest('[data-conversation]')).toBeNull();
+    await waitFor(() => expect(dialog.querySelector('.gallery-picture img')).toHaveAttribute('src', 'data:image/png;base64,original'));
+    await fireEvent.keyDown(dialog, { key: 'Escape' });
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(document.activeElement).toBe(tile);
   });
 
   it("a sent image with no thumbnail draws a glyph and no word", async () => {
@@ -502,6 +576,26 @@ describe("Timeline rail", () => {
 });
 
 describe("Timeline scrolling", () => {
+  it("opening a response section brings its heading to the top and stops following the tail", async () => {
+    setup([human("h1", "ask", 1), system("end", "checkpoint", "Done", 4)], [text("a1", "Done.\n\n## Checks\n\nAll passed.", 3)]);
+    const { container } = render(Timeline, { sessionId: SID });
+    await settle();
+    const scroller = log();
+    geometry(scroller, { scrollHeight: 2000, clientHeight: 400, scrollTop: 1600 });
+    const summary = container.querySelector<HTMLDetailsElement>('details.cv-answer-section')!.querySelector('summary')!;
+    vi.spyOn(scroller, 'getBoundingClientRect').mockReturnValue({ top: 100 } as DOMRect);
+    vi.spyOn(summary, 'getBoundingClientRect').mockReturnValue({ top: 320 } as DOMRect);
+    await fireEvent.click(summary);
+    await settle();
+    expect(scroller.scrollTop).toBe(1776);
+    expect(summary.parentElement).toHaveAttribute('open');
+    // Closing is local; it must not scroll back to this header.
+    scroller.scrollTop = 1200;
+    await fireEvent.click(summary);
+    await settle();
+    expect(scroller.scrollTop).toBe(1200);
+  });
+
   it("scrolling up stops following", async () => {
     const v = setup([human("h1", "one")]);
     render(Timeline, { sessionId: SID });
@@ -768,3 +862,36 @@ describe("Timeline's own states", () => {
   });
 });
 
+
+describe('current activity and send receipts', () => {
+  it('opens a highlighted edit and compacts it after the next action', async () => {
+    const edit = tool('edit-now', 'edit', 'src/Board.tsx', { hasOutput: true, preview: '@@ -1 +1 @@\n-const old = true;\n+const next = false;' }, 1);
+    setup([], [edit], { agentState: 'working' });
+    svc.FeedOutput.mockResolvedValue({ text: "@@ -1 +1 @@\n-const old = true;\n+const next = false;" });
+    const { container } = render(Timeline, { sessionId: SID });
+    await waitFor(() => expect(container.querySelector('[data-change-preview] [data-syntax="kw"]')).not.toBeNull());
+    expect(container.querySelector('[data-diff="add"]')).not.toBeNull();
+    feed.view(SID).items = [edit, tool('commit-now', 'run', 'cd /repo; git commit -m "fix board"', {}, 2)] as never;
+    await settle();
+    expect(container.querySelector('[data-change-preview]')).toBeNull();
+    expect(container.textContent).toContain('Committed');
+    expect(container.textContent).toContain('fix board');
+  });
+
+  it('shows a local sending receipt and replaces it with the daemon item without duplication', async () => {
+    const v = setup([]);
+    v.sending = { text: 'check the board', conn: '' };
+    const { container } = render(Timeline, { sessionId: SID });
+    await settle();
+    expect(container.querySelector('[data-sending-message]')).toHaveTextContent('check the board');
+    expect(screen.getByText('Sending…')).toBeInTheDocument();
+    v.sending = null;
+    v.outgoing = [{ text: 'check the board', conn: '', item: 'h1', delivered: true }];
+    await settle();
+    expect(screen.getByText('Sent')).toBeInTheDocument();
+    v.items = [human('h1', 'check the board')] as never;
+    await settle();
+    expect(container.querySelector('[data-sending-message]')).toBeNull();
+    expect(screen.getAllByText('check the board')).toHaveLength(1);
+  });
+});

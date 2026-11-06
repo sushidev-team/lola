@@ -1,6 +1,10 @@
 import "@testing-library/jest-dom/vitest";
 import { afterAll } from "vitest";
 
+// Svelte's keyed layout animation checks for ongoing Web Animations before
+// fixing an outgoing row's position. jsdom has no animations to enumerate.
+if (!Element.prototype.getAnimations) Element.prototype.getAnimations = () => [];
+
 // Node's experimental storage globals can mask jsdom's browser storage.
 // Use this test window's isolated storage, without requiring a Node CLI flag.
 const testWindow = (globalThis as unknown as { jsdom: { window: Window } }).jsdom.window;

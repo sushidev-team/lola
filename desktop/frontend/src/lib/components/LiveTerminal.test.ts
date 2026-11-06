@@ -13,6 +13,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render } from "@testing-library/svelte";
 import { tick } from "svelte";
 import LiveTerminal from "./LiveTerminal.svelte";
+import TerminalCell from "./session/TerminalCell.svelte";
 import { TERM_FONT } from "$lib/theme-runtime.svelte";
 
 const gate = vi.hoisted(() => {
@@ -392,5 +393,14 @@ describe("LiveTerminal font ordering", () => {
     await settle();
     expect(spies.open).not.toHaveBeenCalled();
     expect(spies.attach).not.toHaveBeenCalled();
+  });
+
+  it("detaches the original session when switching from Terminal to Conversation", async () => {
+    const { rerender } = render(TerminalCell, { name: "queued-session", autofocus: false });
+    gate.state.ready.settle(true);
+    await vi.waitFor(() => expect(spies.attach).toHaveBeenCalledWith("queued-session", 80, 24));
+    await rerender({ name: "" });
+    await vi.waitFor(() => expect(spies.detach).toHaveBeenCalledWith("queued-session"));
+    expect(spies.detach).not.toHaveBeenCalledWith("");
   });
 });

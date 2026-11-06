@@ -19,7 +19,7 @@
   const board = $derived(session?.board);
   const brief = $derived(deriveBrief(inScope(view.items, view.scope), sshClock.now));
   const hasBrief = $derived(hasReport(false, brief));
-  const shown = $derived(hasChip(board) || hasBrief);
+  const shown = $derived(hasChip(board) || hasBrief || !!onside);
   const blocked = $derived(board?.blocked ?? "");
   const theories = $derived(
     [

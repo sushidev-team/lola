@@ -29,3 +29,12 @@ describe("conversation syntax", () => {
     expect(syntaxTokens(text)).toEqual([{ kind: "plain", text }]);
   });
 });
+
+it('highlights JSX tags and attributes while preserving the source', () => {
+  const text = '  <Button size="sm" disabled={disabled || !!b.locked_at}>';
+  const tokens = syntaxTokens(text, 'text', 'Board.tsx');
+  expect(tokens).toContainEqual({ kind: 'cmd', text: '<Button' });
+  expect(tokens).toContainEqual({ kind: 'flag', text: 'size' });
+  expect(tokens).toContainEqual({ kind: 'str', text: '"sm"' });
+  expect(tokens.map(token => token.text).join('')).toBe(text);
+});

@@ -123,3 +123,19 @@ func TestDisplayPasteSeparatesWhatWasSeparate(t *testing.T) {
 		t.Errorf("Normalize changed: %q", Normalize("look at this"+wrap("a", "body")))
 	}
 }
+
+func TestRunSummarySkipsSemicolonSetup(t *testing.T) {
+	command := `cd "/repo name"; SP=src/Board.tsx; rg -n Button "$SP"`
+	tool := toolSummaryOf(t, "Bash", map[string]any{"command": command})
+	if tool.Summary != `rg -n Button "$SP"` || tool.Detail != command {
+		t.Fatalf("summary %q, detail %q", tool.Summary, tool.Detail)
+	}
+}
+
+func TestStructuredPatchTextPreservesRecordedChange(t *testing.T) {
+	raw := json.RawMessage(`{"structuredPatch":[{"oldStart":12,"oldLines":1,"newStart":12,"newLines":1,"lines":["-const x = 1;","+const x = 2;"]}]}`)
+	want := "@@ -12,1 +12,1 @@\n-const x = 1;\n+const x = 2;\n"
+	if got := structuredPatchText(raw); got != want {
+		t.Fatalf("patch %q", got)
+	}
+}

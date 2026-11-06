@@ -45,7 +45,7 @@
       "durationMs": 200,
       "added": 2,
       "removed": 1,
-      "preview": "ok",
+      "preview": "@@ -1,0 +0,0 @@\n keep\n-old\n+new1\n+new2",
       "hasOutput": true
     }
   },

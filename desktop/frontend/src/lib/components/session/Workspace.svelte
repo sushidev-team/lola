@@ -12,11 +12,13 @@
   // FitAddon would otherwise tell tmux the pane is two columns wide and reflow the human's shell.
   // Its session is never in `Shells`, and it is mounted only here: one tmux session with two
   // xterm clients would fight over its size.
-  import { untrack } from "svelte";
+  import type { Rect } from "$lib/docklayout";
+  import { untrack, type Snippet } from "svelte";
   import { store } from "$lib/store.svelte";
   import { ssh } from "$lib/ssh.svelte";
   import { talk } from "$lib/talk.svelte";
   import { deriveSide, sideHasContent } from "$lib/sessionside";
+  import { changesOffered } from "$lib/sessionview";
   import { inScope } from "$lib/turns";
   import { bandTier, dockCards, isEnded, tierBandClass } from "$lib/ssh";
   import SSHTerminalPane from "../ssh/SSHTerminalPane.svelte";
@@ -24,9 +26,10 @@
   import HostBar from "../ssh/HostBar.svelte";
   import TimelineSlot from "./TimelineSlot.svelte";
   import ActionZone from "./ActionZone.svelte";
-  import SessionSide from "./SessionSide.svelte";
+  import { OVERVIEW_PANEL } from "$lib/sessionpanels";
+  import { terms, isChangesTab } from "$lib/terms.svelte";
 
-  let { sessionId = "", covered = false }: { sessionId?: string; covered?: boolean } = $props();
+  let { sessionId = "", covered = false, changesInSide = false, onmain, header }: { sessionId?: string; covered?: boolean; changesInSide?: boolean; header?: Snippet; onmain?: (rect: Rect, host: HTMLElement) => void } = $props();
 
   const view = $derived(ssh.view(sessionId));
   const session = $derived(sessionId ? store.sessionById(sessionId) : undefined);
@@ -126,23 +129,25 @@
   // The agent's account: a sidebar once it has used one and the column has room. Below that, and
   // when hidden, it stays one line over the story. Measured, never a guess: the band under the list
   // and the open session are the same width, so they make the same choice.
-  const SIDE_MIN_WIDTH = 1040;
+  const SIDE_MIN_WIDTH = 1180;
   let rootWidth = $state(0);
   const attachWidth = (el: HTMLElement) => {
     if (typeof ResizeObserver === "undefined") return;
+    rootWidth = el.clientWidth;
     const ro = new ResizeObserver(() => (rootWidth = el.clientWidth));
     ro.observe(el);
     return () => ro.disconnect();
   };
-  const sideHas = $derived(sideHasContent(deriveSide(inScope(view.items, view.scope), session?.board), session?.board));
-  const sideFits = $derived(rootWidth >= SIDE_MIN_WIDTH && !showTerminal && sideHas);
-  const side = $derived(sideFits && !view.sideHidden);
+  const sideHas = $derived(!!session && (changesOffered(session) || sideHasContent(deriveSide(inScope(view.items, view.scope), session.board), session.board)));
+  const sideFits = $derived(rootWidth >= SIDE_MIN_WIDTH && sideHas);
+  const sideDiff = $derived(changesInSide && isChangesTab(terms.activeTab(sessionId)));
+  const side = $derived(sideFits && (!view.dockHidden || sideDiff));
   // The menu's Report asks for the account. With a sidebar there is no overlay to open.
   $effect(() => {
     if (view.reportOpen && sideFits) {
       untrack(() => {
         view.reportOpen = false;
-        view.sideHidden = false;
+        view.openWidget(OVERVIEW_PANEL);
       });
     }
   });
@@ -160,20 +165,21 @@
 
 {#if sessionId}
   {#key sessionId}
-    <div class="grid h-full min-h-0 w-full grid-cols-[minmax(0,1fr)] grid-rows-[auto_auto_minmax(0,1fr)] bg-canvas" data-ssh-workspace {@attach attachWidth}>
-      <div class="{shown.length > 0 ? 'h-0.5' : 'h-0'} {band}" aria-hidden="true" data-tier-band></div>
-      <div>
-        {#if shown.length > 0}<HostBar {sessionId} />{/if}
-      </div>
-      <div class="grid min-h-0 min-w-0 grid-rows-[minmax(0,1fr)]" style="grid-template-columns:minmax(0,1fr){side ? ' 300px' : ''}">
-      <DockArea {sessionId} {covered}>
+    <div class="grid h-full min-h-0 w-full grid-cols-[minmax(0,1fr)] grid-rows-[minmax(0,1fr)] bg-canvas" data-ssh-workspace {@attach attachWidth}>
+      <DockArea {sessionId} covered={covered && !changesInSide} details={sideFits} {onmain}>
+        {#snippet mainHeader()}
+          {@render header?.()}
+          <div class="{shown.length > 0 ? 'h-0.5' : 'h-0'} {band}" aria-hidden="true" data-tier-band></div>
+          {#if shown.length > 0}<HostBar {sessionId} />{/if}
+        {/snippet}
+
         {#if !showTerminal}
           <!-- A size container, so the dock's cap is a share of THIS column. The rows live on an
                inner grid, because a container query cannot restyle its own container. -->
           <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-          <div class="relative min-h-0 min-w-0 bg-canvas [container-type:size] {store.alive ? '' : 'ssh-offline'}" onclick={clickStory} data-conversation>
+          <div class="relative min-h-0 min-w-0 bg-canvas [container-type:size] {store.alive ? '' : 'ssh-offline'}" class:invisible={covered} inert={covered} onclick={clickStory} data-conversation>
             <div class="ssh-col absolute inset-0 grid" data-carded={cards.length > 0 ? "" : undefined} data-deciding={deciding ? "" : undefined}>
-              <TimelineSlot {sessionId} {covered} {side} onside={sideFits ? () => (view.sideHidden = false) : undefined} />
+              <TimelineSlot {sessionId} {covered} {side} onside={sideFits ? () => view.openWidget(OVERVIEW_PANEL) : undefined} />
               <ActionZone {sessionId} {covered} />
             </div>
           </div>
@@ -191,8 +197,6 @@
           </div>
         {/if}
       </DockArea>
-      {#if side}<SessionSide {sessionId} />{/if}
-      </div>
     </div>
   {/key}
 {/if}

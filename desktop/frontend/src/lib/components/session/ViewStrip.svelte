@@ -19,23 +19,26 @@
   import { flip } from "svelte/animate";
   import { store, type SessionInfo } from "$lib/store.svelte";
   import { ssh } from "$lib/ssh.svelte";
-  import { terms } from "$lib/terms.svelte";
+  import { OVERVIEW_PANEL, CHANGES_PANEL, sessionPanelTitle, widgetTabLabel } from "$lib/sessionpanels";
+  import { groupOf } from "$lib/docklayout";
+  import { terms, isChangesTab } from "$lib/terms.svelte";
   import { feedback } from "$lib/feedback.svelte";
   import { changes } from "$lib/changes.svelte";
   import { sshNeedsHuman } from "$lib/ssh";
-  import { isAgentless, stripCells, type StripCell } from "$lib/sessionview";
+  import { isAgentless, changesOffered, stripCells, type StripCell } from "$lib/sessionview";
   import { widthOf } from "./measure";
   import Button from "../Button.svelte";
   import MenuItem from "../MenuItem.svelte";
 
-  let { session }: { session: SessionInfo } = $props();
+  let { session, changesInSide = false }: { session: SessionInfo; changesInSide?: boolean } = $props();
 
   const id = $derived(session.id);
   const view = $derived(ssh.view(id));
   const shells = $derived(terms.shellsFor(id));
   const cells = $derived(stripCells(session, shells));
-  const current = $derived(ssh.currentCell(session));
-  const all = $derived([...cells.views, ...cells.machines]);
+  const current = $derived(changesInSide && ssh.currentCell(session) === 'changes' ? 'conversation' : ssh.currentCell(session));
+  const views = $derived(cells.views.filter(c => !changesInSide || c.kind !== 'changes'));
+  const all = $derived([...views, ...cells.machines]);
   // In the order terms sorts them, which is what a drag's index means.
   const terminals = $derived(cells.machines.filter((c): c is Extract<StripCell, { name: string }> => c.kind !== "host"));
   const draftCount = $derived(feedback.count(id));
@@ -165,6 +168,37 @@
 
   // --- + and ⋯ N ------------------------------------------------------------------
 
+  const availablePanels = $derived([
+    ...[OVERVIEW_PANEL, ...(changesOffered(session) ? [CHANGES_PANEL] : [])].map(id => ({ id, title: sessionPanelTitle(id), label: sessionPanelTitle(id) })),
+    ...view.items.flatMap(i => i.element?.kind === 'widget' ? [{ id: i.element.id, title: i.element.title || 'Widget', label: widgetTabLabel(i.element.title || '') }] : []),
+  ]);
+  function togglePanel(panel: string) {
+    if (groupOf(view.dock, panel) && !view.dockHidden) {
+      if (panel === CHANGES_PANEL && isChangesTab(terms.activeTab(id))) terms.toggleDiff(id);
+      view.closeWidget(panel);
+    } else view.openWidget(panel);
+    panelAt = null;
+    panelButton?.focus();
+  }
+  let panelMenu = $state<HTMLDivElement | null>(null);
+  $effect(() => { if (panelAt && panelMenu) panelMenu.querySelector<HTMLButtonElement>('button')?.focus(); });
+  function panelKey(event: KeyboardEvent) {
+    event.stopPropagation();
+    const items = [...(panelMenu?.querySelectorAll<HTMLButtonElement>('button:not(:disabled)') ?? [])];
+    if (!items.length || !['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    const at = items.indexOf(document.activeElement as HTMLButtonElement);
+    const next = event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1 : (at + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
+    items[next].focus();
+  }
+  let panelButton = $state<HTMLButtonElement | null>(null);
+  let panelAt = $state<{ x: number; y: number } | null>(null);
+  $effect(() => {
+    if (!panelAt) return;
+    const escape = (e: KeyboardEvent) => { if (e.key === "Escape") { e.preventDefault(); e.stopImmediatePropagation(); panelAt = null; panelButton?.focus(); } };
+    window.addEventListener("keydown", escape, true);
+    return () => window.removeEventListener("keydown", escape, true);
+  });
   let addAt = $state<{ x: number; y: number } | null>(null);
   let foldAt = $state<{ x: number; y: number } | null>(null);
   function under(e: MouseEvent) {
@@ -196,7 +230,7 @@
 <div class="relative z-10 grid h-8 min-w-0 grid-cols-[auto_minmax(0,max-content)_auto_minmax(0,1fr)_auto] items-stretch gap-x-6 border-b border-edge/60 bg-canvas px-3 select-none" {@attach widthOf((w) => (width = w))} data-view-strip>
   <div role="tablist" aria-label="Session views" class="contents">
     <div class="flex items-stretch gap-4">
-      {#each cells.views as c (c.key)}
+      {#each views as c (c.key)}
         {@const on = current === c.key}
         <button
           bind:this={refs[c.key]}
@@ -248,7 +282,7 @@
             {@const on = current === sh}
             <div
               bind:this={tabEls[i]}
-              animate:flip={{ duration: flipMs }}
+              animate:flip={{ duration: dragging >= 0 ? flipMs : 0 }}
               role="group"
               class="group relative flex h-8 shrink-0 items-center gap-0.5 {on ? 'text-ink' : 'text-faint hover:text-ink'}"
               class:opacity-60={dragging === i}
@@ -294,7 +328,10 @@
   </div>
   <div aria-hidden="true"></div>
   <div class="flex items-center gap-2">
-    {#if widgets > 0}
+    {#if changesInSide}<button bind:this={panelButton} type="button" class="grid size-7 place-items-center rounded-sm text-faint hover:bg-sel hover:text-ink focus-visible:outline-2 focus-visible:outline-accent" aria-label="Panels" title="Show or hide panels" aria-haspopup="menu" aria-expanded={!!panelAt} onclick={(e) => { const r = e.currentTarget.getBoundingClientRect(); panelAt = panelAt ? null : { x: Math.max(4, r.right - 224), y: r.bottom + 4 }; }}>
+      <svg class="size-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true"><path d="M3 4h10M3 8h10M3 12h10" /></svg>
+    </button>{/if}
+    {#if widgets > 0 && !changesInSide}
       <Button size="xs" class="num" title="Show or hide widgets (w)" data-dock-opener aria-label="Widgets {widgets}" onclick={() => ssh.dockKey(session)}>
         Widgets {widgets}{#if widgetDot}<span class="text-magenta" aria-label="A new widget">•</span>{/if}
       </Button>
@@ -369,4 +406,14 @@
       </MenuItem>
     </div>
   {/if}
+{/if}
+
+{#if panelAt}
+  <div class="fixed inset-0 z-40" role="presentation" onclick={() => panelAt = null}></div>
+  <div class="fixed z-50 w-56 rounded-md border border-edge bg-panel p-1 shadow-xl" style="left:{panelAt.x}px;top:{panelAt.y}px" role="menu" aria-label="Panels" bind:this={panelMenu} tabindex="-1" onkeydown={panelKey}>
+    {#each availablePanels as panel (panel.id)}
+      {@const shown = !!groupOf(view.dock, panel.id) && !view.dockHidden}
+      <MenuItem role="menuitemcheckbox" aria-label={panel.title} aria-checked={shown} icon={shown ? '✓' : ''} title={panel.title} onclick={() => togglePanel(panel.id)}>{panel.label}</MenuItem>
+    {/each}
+  </div>
 {/if}

@@ -135,6 +135,7 @@ export type FooterInput = {
   /** The field is over the size limit, so nothing can send. */
   over?: boolean;
   canStop: boolean;
+  canSend?: boolean;
   held?: number;
   /** "14:00", "" when lola does not know. */
   resets?: string;
@@ -210,6 +211,7 @@ export function footerFor(i: FooterInput): Footer {
       break;
     case "working":
       text = "Working";
+      word = i.canSend === false ? "Queue" : "Send";
       clock = true;
       if (i.canStop) left = ["stop"];
       break;

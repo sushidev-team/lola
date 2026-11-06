@@ -17,7 +17,7 @@ A few values below are stated as they were designed. The ways the build differs,
 5. **Nothing moves by itself.** Roster order is stable. An agent post never changes the layout. A card never takes focus by appearing. Nothing reorders by recency.
 6. **Nothing hides behind a bare count.** A collapsed run still names files and commands. A failure, a running tool and anything waiting never collapse.
 7. **The terminal is a peer.** One always-visible tab, one chord (`⌘\`), a sticky preference, automatic for sessions where the pane is the point.
-8. **↩ never kills anything.** While the agent works, ↩ queues on lola's side and stays recallable. Stopping is a named, separate act with a stated scope.
+8. **↩ never interrupts.** Human messages go immediately to a proven empty composer, including during a turn; the agent decides when to act on them. A draft, permission dialog, unsupported input, or screen keeps them queued. Automation and slash commands retain their idle gates. Stopping is a named, separate act with a stated scope.
 9. **Honest over smooth.** No fake streaming, no "read", no "no network", no green tick on anything the agent wrote. Degradation is visible.
 10. **Fun comes from competence.** Reopening a long session as a readable story, the ⌘J rhythm, the receipt at the end of a turn, a widget one click away. No confetti, no mascot, no sound.
 
@@ -103,7 +103,7 @@ The timeline and centered footer use one chronological column at every size; see
 │        also cover the rollback                                               Edit  ×           │ 28 each, unboxed
 │       ╭──────────────────────────────────────────────────────────────────────────────╮         │
 │       │ and check the index name                                                     │         │
-│       │ ◐ Working 3m 12s  ■ Stop ⌘.                    Stop & send       Queue ↩     │         │
+│       │ ◐ Working 3m 12s  ■ Stop ⌘.                    Stop & send       Send ↩     │         │
 │       ╰──────────────────────────────────────────────────────────────────────────────╯         │
 ```
 
@@ -175,7 +175,7 @@ No field exists on this card, ever.
 │       ┃ Deny…                                            Run once on prod-api     ┃            │ unchanged
 │       ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛            │
 │       │ Talk to Claude…                                                              │         │
-│       │ ◐ Working 1m  ■ Stop ⌘.        Pick a host above to run         Queue ↩      │         │ All + 2 live:
+│       │ ◐ Working 1m  ■ Stop ⌘.        Pick a host above to run         Send ↩      │         │ All + 2 live:
 ```
 
 Scope selected, or exactly one live host: secondary reads `Run on prod-api ⌘↩`. Run mode changes the whole field, and the ring and ground take the tier, never the accent: production `border-bad bg-bad/5`, staging `border-warn bg-warn/5`, dev `border-ink/40 bg-canvas`, plus mono, `$`, a 3px tier rail and a footer rule in the tier's colour (the rule is always there and transparent in Ask, so holding ⌘ moves nothing), `deploy@prod-api:/srv` on the left of the footer, `Ask ↩` as secondary, `Run on prod-api ⌘↩` as primary. Dev tier rail is neutral `bg-ink/40`, not accent.
@@ -189,7 +189,7 @@ Scope selected, or exactly one live host: secondary reads `Run on prod-api ⌘�
 │        └───────────────────────────────────────────────────┘ │  (sandboxed frame, frame layer)    │
 │        OOM killer ended the api at 03:12                     │                                    │
 │       ╭──────────────────────────────────────────────────╮   │                                    │
-│       │ ◐ Working 1m  ■ Stop ⌘.                 Queue ↩  │   │                                    │
+│       │ ◐ Working 1m  ■ Stop ⌘.                 Send ↩  │   │                                    │
 ```
 
 `Open` is the per-session consent click and the open, in one gesture. The strip's `Widgets 2 •` toggles the dock (`w`). A post creates a card and a dot. It never creates a panel. Below `MIN_MAIN` the dock is the existing drawer.
@@ -350,11 +350,15 @@ Conversation ◉  Terminal  Changes +84 −12 • 3    $ prod-api  zsh  review  
 
 ### 2.5 Timeline
 
+The newest tool action keeps its output open until the next action arrives. Completed file operations and git actions use explicit verbs (Edited, Deleted, Moved, Committed, Pushed); checkout setup stays in the tooltip. Source excerpts and recorded edit patches are highlighted. Compiler diagnostics wrap separately from code, with file locations, error severity, aligned gutters, and distinct test results.
+
+Send clears the draft immediately and shows a local `Sending…` receipt and spinner until the daemon responds. Accepted messages remain visible until the timeline catches up. A failed send restores the draft without dropping newly typed text. Image attachment reserves its token and a loading tile before preparation starts; the tile becomes its thumbnail in place. Send waits for preparation, and removing a tile prevents a late response from restoring it.
+
 One rail with the agent beside it and the person across from it. This table is the first version's: its marks, the rule against them and its sides are replaced by "The timeline layout" and "The Conversation's layouts" below, which win where they differ. Voice still comes from container and type.
 
 | Row | Look (exact) | Source | Voice |
 |---|---|---|---|
-| Your message | `w-fit max-w-full rounded-md bg-sel/35 px-3 py-2 text-prose`, text `text-ink-2`, no name. It hugs its text and keeps the left edge: full ink on a column-wide fill read first in every state and looked like a dead input. Folds past 12 lines behind `Show all`. Status word below only while unsettled: `Sending`, `Returned to Claude's prompt · Terminal`, `Recalled` | Store human item only, never the feed | Fact: lola recorded the send |
+| Your message | `w-fit max-w-full rounded-md bg-sel/35 px-3 py-2 text-prose`, text `text-ink-2`, no name. It hugs its text and keeps the left edge: full ink on a column-wide fill read first in every state and looked like a dead input. Folds past 12 lines behind `Show all`. Status word below only while unsettled: `Sending`, `Returned to Claude's prompt · Terminal`, `Recalled` | Local pending receipt, then store human item; never the feed | Pending until lola acknowledges the send |
 | Typed in terminal | Same size, no fill, 12 faint label `In terminal` above, folds past 12 lines behind `Show all` | Feed user record that matched no send | Claim |
 | Task, system or teammate turn start | 12 faint, one line: `Background task finished`, `Message from accept-job · its summary`. Another agent's markup and JSON never reach the row | Feed origin | Claim |
 | Agent prose | `text-prose text-ink max-w-[72ch]`, `SSHRich`. No box, no name | Feed text | Claim |
@@ -431,8 +435,8 @@ Primary is `variant="primary" size="sm"`, `min-width:88px`, always the same plac
 | Situation | Left (state) | Secondary | Primary |
 |---|---|---|---|
 | Resting, proof holds | `○ Resting` | | `Send ↩` |
-| Working, empty field | `◐ Working 3m 12s  ■ Stop ⌘.` | | `Queue ↩` disabled |
-| Working, text | same | `Stop & send` | `Queue ↩` |
+| Working, empty field | `◐ Working 3m 12s  ■ Stop ⌘.` | | `Send ↩` disabled |
+| Working, text | same | `Stop & send` | `Send ↩` |
 | Tray card waiting | `◉ Waiting on the card`, orange on the glyph only, so the card stays the only orange sentence | | `Queue ↩`, `secondary` |
 | Modal | `◉ A screen is open in the terminal`, words in `text-ink-2`. The card's `Open terminal ⌘\` is the window's primary and the way there | | `Queue ↩`, `secondary` |
 | Pane holds a draft | `○ Claude's own prompt has text` + `Terminal ⌘\` | | `Queue ↩` |
@@ -1095,7 +1099,7 @@ Each is answerable by looking at a screenshot. **B** blocks a change. Blur and g
 | Story and Facts timeline modes, `F` on plain sessions | Run collapsing does the job. Revisit if `long-turn` review disagrees |
 | ⌘1-9, ⌘[ history, hold ⌘ slot numbers, ⌘0, Start and stay, Dock badge | Spend chords on the loop. ⌘0 collides. Renumbering breaks spatial memory |
 | "Ready" tier in ⌘J, per-file viewed marks | Floods the loop. Blob-hash marks are their own feature |
-| `lib/ssh.ts` split, dock tab namespaces, `lola.ssh.dock` rename, component renames beyond rewritten files, wire renames | Cosmetic. Risk through parity tests, trust lists and three clients. The dock holds only widgets, so ids need no namespace |
+| `lib/ssh.ts` split, dock tab namespaces, `lola.ssh.dock` rename, component renames beyond rewritten files, wire renames | Cosmetic. Risk through parity tests, trust lists and three clients. Built-in Overview and Changes tabs use reserved `@lola/` ids in the same dock tree; agent widgets keep their own ids |
 | Local Run blocks | A block is a promise from an exec channel. ⌘T gives a real shell |
 | `!` as a feature, LLM catch-up, merge button, conversation rewind, phone or TUI parity, onboarding tour, density settings | Unsafe, or noise, or a separate project |
 | `Generation` stamps on blocks | A divider handles the visible problem. See risk 9 |
@@ -1247,9 +1251,9 @@ The owner asked for this after using the first build. It replaces the read-only 
 - `SessionsColumn` keeps one `SessionEmbed`, for the open session or else the selected row, and its wrapper is a CSS state. Enter changes the height and nothing remounts. The list row is `fit-content(45vh)` and the session takes the rest, at least 280px.
 - The band draws its own title row, because the top bar names the list, and its button expands. It takes the keyboard only from a click: no autofocus on the composer or terminal while unopened, so `j` and `k` keep walking the list. `Esc` leaves the composer.
 - The selection reaches the view after 120 ms, so holding `j` mounts nothing per row. A session that opens on its terminal attaches while it is selected, which defers automated sends to it for that long. This is the cost of one view, and a session on its Conversation has none.
-- **The sidebar** (`S/SessionSide`, `lib/sessionside.ts`) is the agent's account beside the story: summary, board, plan, findings, theories, numbers, notes and widgets. It appears once the agent has used one and the view is at least 1040px wide, and it can be hidden. Otherwise the story line and Report stand in.
+- **The sidebar** (`S/SessionSide`, `lib/sessionside.ts`) is the agent's account beside the story: summary, board, plan, findings, theories, numbers, notes and widgets. It is the Overview tab in the session dock. At 1180px and up, Overview and Changes start together in one right column; posted widgets join as individual tabs, behind the active tab. Widget titles should be short (one to three words); long labels truncate with the full title in a tooltip. The divider resizes the conversation or terminal; tabs can be dragged to split and join panels using the existing dock tree, and arrangements persist per session. The three-line Panels menu lists built-in panels and each widget, with checkmarks to show or hide them. Hidden widgets stay hidden on updates. Below that, the compact drawer, story line and Report stand in.
 - **A turn's answer stands alone.** `turnParts` folds tools before the agent's last word into dig lines naming what they touched, and narration stays up between them (see "The timeline layout"). Plates, cards, widgets, elements, messages and moments never fold. What is still running after its last word stays open.
-- **A long paste or an image is an attachment** (`lib/composerpaste.ts`, `desktop/talkimage.go`). A tile above the field shows it, a thumbnail or a size with its number on the corner, and the field holds `(1)`. Removing either removes both. The real text, or the path of the image's copy in `.lola/images`, takes the reference's place when the message goes. `Ctrl+V`, or pasting an image or an image file's path, attaches one, and `osascript` only reads the clipboard. The same text pasted again straight away shows it plainly. A command never holds a reference, because a person must read what runs on a host. The limit is 128 KB and 8 KB for an agent with no paste. A paste that size into a real Claude Code is not measured. A tile with no thumbnail draws a glyph rather than a word, and its title says what it is. The story reads an image's path back as `(1)` beside a small tile (`youAttachments`), for display only: the record keeps the path and find reads it. Only a path under `.lola/images` is read this way. The thumbnail is memory only (`view.sentThumbs`), so after a restart the tile is the glyph. Reading the file back would need a binding into a folder an agent can write, and that is a decision of its own.
+- **A long paste or an image is an attachment** (`lib/composerpaste.ts`, `desktop/talkimage.go`). A tile above the field shows it, a thumbnail or a size with its number on the corner, and the field holds `(1)`. Removing either removes both. The real text, or the path of the image's copy in `.lola/images`, takes the reference's place when the message goes. `Ctrl+V`, or pasting an image or an image file's path, attaches one, and `osascript` only reads the clipboard. The same text pasted again straight away shows it plainly. A command never holds a reference, because a person must read what runs on a host. The limit is 128 KB and 8 KB for an agent with no paste. A paste that size into a real Claude Code is not measured. A tile with no thumbnail draws a glyph rather than a word, and its title says what it is. The story reads an image's path back as `(1)` beside a small tile (`youAttachments`), for display only: the record keeps the path and find reads it. Only a path under `.lola/images` is read this way. The thumbnail is memory only (`view.sentThumbs`), so after a restart the tile is the glyph. Clicking a numbered tile opens a gallery for that message, starting at that image. The gallery reads the original through a size-limited, raster-only binding rooted in the session image folder; unavailable originals retain a cached thumbnail if present. Arrow keys and numbered thumbnails navigate; Escape closes and restores focus. Clicking the image toggles fit/full size.
 - **Dev addresses rank across tabs** (`devurl.Merge`). Every address is a chip, and the same local port under two names is one.
 
 ## The timeline layout
@@ -1282,24 +1286,37 @@ two-line rows, leaving the remaining height to the session view.
 
 The latest layout supersedes the earlier two-lane and six-beat descriptions above.
 Timeline and composer share a 1040px maximum column; prose is limited to about 70ch.
-Both speakers align left: human requests are compact blue notes, agent responses
-use an open reading surface, and Lola instructions use purple notices. Speaker
-headers explicitly say “Agent response.” Body text is 13px with a 21px line height.
-Completed turns fold routine progress into Work details. Supporting response sections
-form an accordion: one opens at a time, with its contents inside the same surface.
-Opening and closing animate briefly, honoring reduced motion. The sticky context
-strip names the source and offers Back to message; full text remains in its tooltip.
-Code and commands receive syntax coloring; logs remain neutral and hashes stay whole.
+Human requests align right in blue notes; agent answers use teal summary bands without
+repeating an agent-name heading. Lola instructions stay purple. Body text is 13px
+with a 21px line height; an answer's opening gets the larger reading tier.
 
-Hierarchy refinement: foldable responses now share one enclosure for their visible
-opening and supporting accordion sections. Short colon-ended labels become the
-section title directly; no generated summaries or additional model calls are used.
-Work history is a ghost control. Expanded history groups each progress note with
-its following tool rows, with aligned action/status/duration columns. Requests use
-blue notes, automation uses purple notices, and receipts remain quiet metadata.
-The composer is a flat footer with a single focus line instead of a rounded box.
+Completed activity folds into a compact stack of colored icons and counts (commands, edits,
+reads, other calls and progress updates). The current update, running calls and
+unanswered failures stay visible. Expanding reveals chronological commentary and
+the existing animated tool stacks; individual calls still expand independently.
+Search and evidence jumps open both levels. Supporting answer sections are inline
+text disclosures; one opens at a time. Activity stays unboxed. Finished answers have
+one enclosed surface: summary band, aligned body details and, when adjacent, the
+turn receipt as its footer. An intervening event keeps the receipt separate.
+No generated summaries or additional model calls are used.
 
-The current trial removes the outer work-history disclosure entirely. Commentary,
-individual calls and stacked call groups appear directly in the turn. Group members
-still expand independently. Tool-row styling is scoped to the conversation itself,
-so a group outside a work section uses the same styling as one within it.
+Automatic regrouping slides departed rows away and eases keyed neighbors into
+place. A stack acknowledges a new member with a brief settling motion and a rolling
+count. All motion honors reduced motion. Collapsed command stacks show only their
+latest call; the complete record stays inside the stack and its tooltip.
+
+The composer is a rounded blue-tinted input with a complete focus border and a
+bright send action. Command mode retains its separate destination and risk colors.
+Receipts remain quiet metadata. The sticky context strip offers Back to message;
+full text remains in its tooltip. Code and commands receive syntax coloring; logs
+remain neutral and hashes stay whole.
+
+
+Consecutive file changes appear as one inline Changes entry (a new burst starts after
+another tool or a gap longer than 30 seconds). Its file list follows incoming edits;
+selecting a file pins that selection. The latest burst opens automatically and folds
+when the agent moves on, while a manually opened entry stays open. Recorded patches
+remain separate when a file is edited repeatedly; their line counts are activity totals,
+not a synthetic net diff. Source reads show ten highlighted lines with full output on
+request. Queued messages offer Send now with immediate loading feedback; a refused
+attempt keeps the messages and displays the daemon's reason.

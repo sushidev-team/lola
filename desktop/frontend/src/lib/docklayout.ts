@@ -49,10 +49,10 @@ export const SASH = 1;
 /** Below this the timeline is not usable, and the dock gives way rather than squeeze it. */
 export const MIN_MAIN: Size = { w: 420, h: 260 };
 export const MIN_GROUP: Size = { w: 180, h: 140 };
-/** The gap around a panel's card, its border, and the height of its tab strip. */
-export const PANEL_PAD = 4;
-export const PANEL_BORDER = 1;
-export const TAB_STRIP_H = 30;
+/** Panels fill their split edge to edge; only the tab strip takes space from the content. */
+export const PANEL_PAD = 0;
+export const PANEL_BORDER = 0;
+export const TAB_STRIP_H = 32;
 /** Levels of nested split. A tree deeper than this is a layout nobody can read. */
 export const MAX_DEPTH = 4;
 /** How much of a leaf, from each side, counts as that side when dropping. */

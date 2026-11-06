@@ -50,9 +50,9 @@ describe("grouping tool calls", () => {
     expect((rows[2] as ToolRowData).status).toBe("running");
   });
 
-  it("edits get a row per file up to three, then group", () => {
+  it("consecutive edits share one stable file explorer", () => {
     const three = collapseWork([tool("edit", "a.go"), tool("edit", "b.go"), tool("edit", "a.go"), tool("edit", "c.go")], true);
-    expect(three).toHaveLength(3);
+    expect(three).toHaveLength(1);
     const four = collapseWork([tool("edit", "a.go", { added: 2, removed: 1 }), tool("edit", "b.go", { added: 3 }), tool("edit", "c.go"), tool("edit", "d.go")], true);
     expect(four).toHaveLength(1);
     expect((four[0] as RunRowData).added).toBe(5);
@@ -69,12 +69,24 @@ describe("grouping tool calls", () => {
     expect(rows.map((r) => r.kind)).toEqual(["tool", "run"]);
   });
 
-  it("more than 8 rows collapse by category", () => {
+  it("keeps separated edit bursts in chronological order even in long stretches", () => {
     const mixed = [];
     for (let i = 0; i < 5; i++) mixed.push(tool("read", `r${i}.go`), tool("edit", `e${i}.go`), tool("run", `cmd${i}`));
-    const rows = collapseWork(mixed, true) as RunRowData[];
-    expect(rows.map((r) => r.category).sort()).toEqual(["edit", "read", "run"]);
-    expect(rows.every((r) => r.kind === "run" && r.names.length === 5)).toBe(true);
+    const rows = collapseWork(mixed, true);
+    expect(rows).toHaveLength(15);
+    expect(rows.flatMap(row => row.ids)).toEqual(mixed.map(item => item.id));
+    expect(rows.filter(row => row.kind === 'run' && row.category === 'edit')).toHaveLength(5);
+  });
+
+  it("keeps an edit group's identity as files arrive and splits after a pause", () => {
+    const first = tool('edit', 'a.ts');
+    const second = { ...tool('edit', 'b.ts', { status: 'running' }), at: new Date(Date.parse(first.at) + 2000).toISOString() };
+    const late = { ...tool('edit', 'c.ts'), at: new Date(Date.parse(second.at) + 31000).toISOString() };
+    const one = collapseWork([first], true, true, first.id);
+    const two = collapseWork([first, second], true, true, second.id);
+    expect(two).toHaveLength(1);
+    expect(two[0].id).toBe(one[0].id);
+    expect(collapseWork([first, second, late], true)).toHaveLength(2);
   });
 
   it("a long stretch names its failures first and counts them, and an unresolved call keeps its row", () => {
@@ -251,7 +263,7 @@ describe("turns", () => {
     const gap = (kind: string, nth = 0) => rows.filter((r) => r.kind === kind)[nth].gap;
     expect(rows[0].kind).toBe("you");
     expect(gap("tool", 0)).toBe(12);
-    expect(gap("tool", 1)).toBe(0);
+    expect(gap("run", 0)).toBe(0);
     expect(gap("prose", 0)).toBe(6);
     expect(gap("prose", 1)).toBe(28);
     expect(gap("receipt")).toBe(10);
@@ -380,6 +392,12 @@ describe("turnParts", () => {
   it("can fold all preceding narration while leaving the answer and trailing failure visible", () => {
     const parts = turnParts([you("y"), prose("p1"), tool("t1"), prose("p2"), prose("answer"), tool("failed", "Ran", "run", "error")], 0);
     expect(parts.map((p) => p.kind === "row" ? p.row.id : p.rows.map((r) => r.id))).toEqual(["y", ["p1", "t1", "p2"], "answer", "failed"]);
+  });
+
+  it("never hides a running call or an unanswered failure when folding a settled turn", () => {
+    const parts = turnParts([prose("before"), tool("running", "Ran", "run", "running"), prose("answer"), tool("t1"), tool("failed", "Ran", "run", "error"), tool("missing", "Ran", "run", "no_result")], 0, true);
+    const visible = parts.flatMap(p => p.kind === "row" ? [p.row.id] : []);
+    expect(visible).toEqual(expect.arrayContaining(["running", "answer", "failed", "missing"]));
   });
 
   it("a plate breaks the cap's fold too, and prose with nothing to name stays up", () => {

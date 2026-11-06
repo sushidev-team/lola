@@ -87,6 +87,51 @@ func attached(path string) ImageAttachment {
 	return ImageAttachment{Path: path, Thumb: imageThumb(path)}
 }
 
+// ReadAttachmentImage reads an original attachment for the message gallery. The read stays
+// inside this session's image folder, even if a worker has replaced a file with a symlink.
+func (s *TalkService) ReadAttachmentImage(worktree, path string) (string, error) {
+	home, err := config.Home()
+	if err != nil {
+		return "", err
+	}
+	wt := filepath.Clean(worktree)
+	base, err := filepath.Abs(home)
+	if err != nil {
+		return "", err
+	}
+	dir := filepath.Join(wt, ".lola", "images")
+	if !filepath.IsAbs(worktree) || !strings.HasPrefix(wt, base+string(filepath.Separator)) || filepath.Dir(filepath.Clean(path)) != dir {
+		return "", errors.New("this is not an attachment in this session")
+	}
+	resolved, err := filepath.EvalSymlinks(dir)
+	if err != nil || resolved != dir {
+		return "", errors.New("this session's image folder is unavailable")
+	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return "", err
+	}
+	defer root.Close()
+	f, err := root.Open(filepath.Base(path))
+	if err != nil {
+		return "", errors.New("this image is no longer available")
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil || !info.Mode().IsRegular() || info.Size() > maxImageBytes {
+		return "", errors.New("could not read this image")
+	}
+	data, err := io.ReadAll(io.LimitReader(f, maxImageBytes+1))
+	if err != nil || len(data) > maxImageBytes {
+		return "", errors.New("could not read this image")
+	}
+	mime := http.DetectContentType(data)
+	if mime != "image/png" && mime != "image/jpeg" && mime != "image/gif" && mime != "image/webp" {
+		return "", errors.New("this attachment is not an image")
+	}
+	return "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(data), nil
+}
+
 // imagesDir finds or makes a session's image folder. worktree comes from the client, so it must lie
 // under lola's home, and no step of the way may be a link.
 func imagesDir(worktree string) (string, error) {

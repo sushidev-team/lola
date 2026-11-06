@@ -20,7 +20,6 @@
   const plan = $derived(side.plan?.element);
   const steps = $derived(plan?.steps ?? []);
   const done = $derived(steps.filter((s) => s.state === "done").length);
-
   function jumpTo(id: string) {
     view.cursor = id;
     view.jump = { block: `item:${id}`, n: (view.jump?.n ?? 0) + 1 };
@@ -38,17 +37,21 @@
   </div>
 {/snippet}
 
-<aside class="grid min-h-0 content-start gap-5 overflow-y-auto border-l border-edge/60 px-4 pt-2 pb-4 text-sm" aria-label="Agent's account" data-session-side>
-  <div class="flex h-6 items-center justify-between">
-    <span class="text-sm text-faint">Agent's account</span>
-    <Button size="xs" icon title="Hide this sidebar" aria-label="Hide this sidebar" onclick={() => (view.sideHidden = true)}>»</Button>
-  </div>
+<aside class="cv-session-side grid min-h-0 content-start gap-5 overflow-y-auto px-4 pt-2 pb-4 text-sm" aria-label="Session overview" data-session-side>
+
 
   {#if side.brief.summary}
     <p class="selectable copy text-prose text-ink {side.brief.summary.stale ? 'opacity-60' : ''}" data-side-summary>{side.brief.summary.title}</p>
   {/if}
 
   {#if session && boardHasContent(board)}<BoardPanel {session} embedded />{/if}
+
+  {#if !boardHasContent(board) && !plan}
+    <section data-side-progress-empty>
+      {@render heading("Task progress")}
+      <p class="text-faint">No plan reported yet.</p>
+    </section>
+  {/if}
 
   {#if plan}
     <section data-side-plan>

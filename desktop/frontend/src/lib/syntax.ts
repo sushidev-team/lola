@@ -11,11 +11,23 @@ export function syntaxTokens(text: string, language = "", path = ""): SyntaxToke
   const ext = aliases[language.toLowerCase()] ?? language.toLowerCase();
   const lang = path ? langOf(path) : langOf(`code.${ext || "js"}`);
   const shell = ["sh", "bash", "zsh"].includes(ext);
+  const markup = /\.(?:tsx|jsx|svelte|vue)$/i.test(path) || ["tsx", "jsx", "svelte", "vue"].includes(ext);
   const out: SyntaxToken[] = [];
   const lines = text.split("\n");
   lines.forEach((line, index) => {
     if (index) out.push({ kind: "plain", text: "\n" });
     for (const token of tokenize(line, lang)) {
+      if (markup && token.kind === "plain") {
+        let end = 0;
+        for (const match of token.text.matchAll(/<\/?[A-Za-z][\w.:-]*|\b[A-Za-z][\w:-]*(?=\s*=)/g)) {
+          const at = match.index!;
+          if (at > end) out.push({ kind: "plain", text: token.text.slice(end, at) });
+          out.push({ kind: match[0].startsWith("<") ? "cmd" : "flag", text: match[0] });
+          end = at + match[0].length;
+        }
+        if (end < token.text.length) out.push({ kind: "plain", text: token.text.slice(end) });
+        continue;
+      }
       if (!shell || token.kind !== "plain") { out.push(token); continue; }
       const re = /\$\{[^}]*\}|\$[A-Za-z_][\w]*|--?[A-Za-z][\w-]*|(?:\.?\.?\/|~\/)[^\s;|&]+|\b[A-Za-z][\w-]*\b/g;
       let end = 0;

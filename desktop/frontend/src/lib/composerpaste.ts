@@ -17,6 +17,9 @@ export type Attachment = {
   value: string;
   /** A small data URL. An image with none draws a plain tile. */
   thumb?: string;
+  /** The token exists immediately, before the native image copy finishes. */
+  loading?: boolean;
+  error?: string;
 };
 export type Pastes = Map<number, Attachment>;
 

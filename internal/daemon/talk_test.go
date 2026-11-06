@@ -220,32 +220,26 @@ func TestAgentSayUnframed(t *testing.T) {
 	}
 }
 
-func TestAgentSayQueuesWhenWorking(t *testing.T) {
+func TestAgentSayDeliversWhileWorking(t *testing.T) {
 	d, f := talkFakeDaemon(t)
 	talkSession(d, "s1", state.AgentWorking)
 	f.show(talkWorking)
 	out := say(t, d, "s1", "also check the logout path")
-	if out.Delivered || len(f.sent()) != 0 {
-		t.Fatalf("typed into a working pane: %+v %v", out, f.sent())
+	if !out.Delivered || out.Why != "" {
+		t.Fatalf("message should reach the working agent: %+v", out)
 	}
-	if !strings.Contains(out.Why, "working") {
-		t.Fatalf("the reply should say why it waits: %q", out.Why)
+	if got := f.sent(); len(got) != 1 || got[0] != "also check the logout path" {
+		t.Fatalf("typed %q", got)
+	}
+	if f.escCount() != 0 {
+		t.Fatal("Send interrupted the agent")
 	}
 	s, _ := d.sessions.Get("s1")
-	if s.PendingSSH != "also check the logout path" {
-		t.Fatalf("PendingSSH = %q", s.PendingSSH)
+	if s.PendingSSH != "" || s.AgentState != state.AgentWorking {
+		t.Fatalf("state after send: %+v", s)
 	}
-
-	// The ordinary flush takes it once the agent rests.
-	d.sessions.Update("s1", func(cur *session.Session) bool {
-		cur.SetAgentState(state.AgentIdle, "", time.Now())
-		cur.AtPrompt = true
-		return true
-	})
-	f.show(talkResting)
-	d.flushReviewHandoffs(context.Background(), "s1")
-	if got := f.sent(); len(got) != 1 || got[0] != "also check the logout path" {
-		t.Fatalf("flush typed %q", got)
+	if h := talkHuman(t, d, "s1", out.Item); !h.Delivered || h.Via != protocol.SSHViaPrompt {
+		t.Fatalf("delivery receipt: %+v", h)
 	}
 }
 
@@ -283,7 +277,7 @@ func TestAgentSayRefusesGoalAndAgentless(t *testing.T) {
 func TestSlashDeliveredAlone(t *testing.T) {
 	d, f := talkFakeDaemon(t)
 	talkSession(d, "s1", state.AgentWorking)
-	f.show(talkWorking)
+	f.show(talkDraft)
 	say(t, d, "s1", "first")
 	say(t, d, "s1", "second")
 	say(t, d, "s1", "/compact")
@@ -335,7 +329,7 @@ func TestHumanTextNormalizes(t *testing.T) {
 func TestInboxFramesHumanText(t *testing.T) {
 	d, f := talkFakeDaemon(t)
 	talkSession(d, "s1", state.AgentWorking)
-	f.show(talkWorking)
+	f.show(talkDraft) // An occupied composer still queues human messages.
 	say(t, d, "s1", "look here")
 	inbox := d.sshInbox("s1")
 	if len(inbox) != 1 || inbox[0] != "[lola] The human says:\nlook here" {
@@ -372,7 +366,7 @@ func TestInboxSkipsCommandAndHeld(t *testing.T) {
 func TestQueuedPositionClaimDeliversOnlyWhatWasTyped(t *testing.T) {
 	d, f := talkFakeDaemon(t)
 	talkSession(d, "s1", state.AgentWorking)
-	f.show(talkWorking)
+	f.show(talkDraft) // An occupied composer still queues human messages.
 	yes := say(t, d, "s1", "yes")
 	say(t, d, "s1", "/compact")
 	please := say(t, d, "s1", "yes please")
@@ -398,7 +392,7 @@ func TestQueuedPositionClaimDeliversOnlyWhatWasTyped(t *testing.T) {
 func TestQueuedHumanKeepsAttachedCheck(t *testing.T) {
 	d, f := talkFakeDaemon(t)
 	talkSession(d, "s1", state.AgentWorking)
-	f.show(talkWorking)
+	f.show(talkDraft) // An occupied composer still queues human messages.
 	say(t, d, "s1", "for later")
 
 	d.sessions.Update("s1", func(cur *session.Session) bool {
@@ -549,8 +543,9 @@ func TestStopAndSendPaneNeverRestsStaysQueued(t *testing.T) {
 func TestHeldQueueReleasedByUserPromptAndSSHSay(t *testing.T) {
 	d, f := talkFakeDaemon(t)
 	talkSession(d, "s1", state.AgentWorking)
-	f.show(talkWorking)
+	f.show(talkDraft) // An occupied composer still queues human messages.
 	say(t, d, "s1", "queued")
+	f.show(talkWorking)
 	stop, err := d.handleAgentStop(context.Background(), protocol.AgentStopArgs{Session: "s1"})
 	if err != nil || !stop.Stopped || stop.Held != 1 {
 		t.Fatalf("stop: %+v %v", stop, err)
@@ -594,8 +589,9 @@ func talkWaitConn(t *testing.T, d *Daemon) {
 func TestQueueReleaseAttemptsHeadBatch(t *testing.T) {
 	d, f := talkFakeDaemon(t)
 	talkSession(d, "s1", state.AgentWorking)
-	f.show(talkWorking)
+	f.show(talkDraft) // An occupied composer still queues human messages.
 	say(t, d, "s1", "held words")
+	f.show(talkWorking)
 	if _, err := d.handleAgentStop(context.Background(), protocol.AgentStopArgs{Session: "s1"}); err != nil {
 		t.Fatal(err)
 	}
@@ -647,8 +643,9 @@ func TestAgentStopDebounce(t *testing.T) {
 func TestAgentStopHoldsQueueAndAutomation(t *testing.T) {
 	d, f := talkFakeDaemon(t)
 	talkSession(d, "s1", state.AgentWorking)
-	f.show(talkWorking)
+	f.show(talkDraft) // An occupied composer still queues human messages.
 	say(t, d, "s1", "queued")
+	f.show(talkWorking)
 	if _, err := d.handleAgentStop(context.Background(), protocol.AgentStopArgs{Session: "s1"}); err != nil {
 		t.Fatal(err)
 	}

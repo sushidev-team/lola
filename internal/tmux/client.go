@@ -331,12 +331,10 @@ func (c *Client) CaptureFrom(ctx context.Context, name string, back int) (string
 	return out, err
 }
 
-// submitSettleDelay is the pause between typing a MULTI-LINE payload and the
-// separate submit Enter. A large multi-line message (relayed CodeRabbit / review
-// findings, a multi-line reaction template) can still be settling in the agent's
-// TUI when a back-to-back Enter arrives, so the Enter is swallowed and the text
-// sits in the input UNSENT. A short window lets the paste finish rendering before
-// the submit. Single-line sends skip it (they submit reliably and stay snappy).
+// submitSettleDelay separates typed text from its submit Enter. Even a single-line
+// message can still be settling in the agent's TUI: a queued image path plus prose
+// was left in Claude's input while tmux reported success. Do not let Enter join the
+// same input burst. This applies to typed sends of every size, not only newlines.
 const submitSettleDelay = 600 * time.Millisecond
 
 // pasteOver is the largest payload SendKeys still types. An agent's input reads in 1 KB
@@ -380,7 +378,7 @@ func (c *Client) sendKeys(ctx context.Context, name, text string, pasteAbove int
 	// reaction or a review hand-off typed into a scrolled-back pane is silently
 	// mangled. It is a no-op on a pane that has no mode.
 	_ = c.LeaveCopyMode(ctx, name)
-	delay := time.Duration(0)
+	delay := submitSettleDelay
 	if len(text) > pasteAbove {
 		if err := c.pasteText(ctx, name, text); err != nil {
 			return err
@@ -389,9 +387,6 @@ func (c *Client) sendKeys(ctx context.Context, name, text string, pasteAbove int
 	} else {
 		if _, _, err := c.run(ctx, "send-keys", "-t", paneTarget(name), "-l", "--", literalArg(text)); err != nil {
 			return err
-		}
-		if strings.Contains(text, "\n") {
-			delay = submitSettleDelay
 		}
 	}
 	if delay > 0 {

@@ -13,7 +13,7 @@
   import { feed } from "$lib/feed.svelte";
   import { formatMs, mmss } from "$lib/ssh";
   import { toMillis } from "$lib/time";
-  import { buildStory, clipMiddle, flatRows, liveVerb, toolStatusWords, workSegments, type ToolRowData } from "$lib/turns";
+  import { buildStory, clipMiddle, flatRows, liveVerb, pastVerb, toolStatusWords, workSegments, type ToolRowData } from "$lib/turns";
   import { changesOffered } from "$lib/sessionview";
   import StoryRow from "./StoryRow.svelte";
   import Button from "../Button.svelte";
@@ -23,24 +23,26 @@
   import DigLine from "./DigLine.svelte";
 
   let {
+    active = false,
     sessionId,
     row,
     chars = 72,
     readonly = false,
     nested = false,
-  }: { sessionId: string; row: ToolRowData; chars?: number; readonly?: boolean; nested?: boolean } = $props();
+  }: { active?: boolean; sessionId: string; row: ToolRowData; chars?: number; readonly?: boolean; nested?: boolean } = $props();
 
   const f = $derived(feed.view(sessionId));
   const tool = $derived(row.tool);
   const running = $derived(row.status === "running");
   const elapsed = $derived(running ? mmss(sshClock.now - toMillis(row.item.at as unknown as string)) : "");
-  const verb = $derived(running ? liveVerb(row.verb) : row.verb);
+  const verb = $derived(running ? liveVerb(row.verb) : row.status === "ok" ? pastVerb(row.verb) : row.verb);
   const words = $derived(toolStatusWords(tool, row.status, elapsed, tool.durationMs ? formatMs(tool.durationMs) : "", verb !== row.verb));
   const isEdit = $derived(tool.category === "edit" && row.status === "ok");
   const session = $derived(store.sessionById(sessionId));
   const toChanges = $derived(!readonly && isEdit && !!session && changesOffered(session));
-  const canOpen = $derived(!readonly && !isEdit && (!!tool.hasOutput || !!tool.preview || !!tool.subagent));
-  const open = $derived(canOpen && f.expanded.has(row.id));
+  const canOpen = $derived(!readonly && (!!tool.hasOutput || !!tool.preview || !!tool.subagent));
+  let dismissed = $state(false);
+  const open = $derived(canOpen && (f.expanded.has(row.id) || (active && !dismissed)));
   const output = $derived(f.outputs.get(row.id));
   const thread = $derived(tool.subagent ? f.threads.get(tool.subagent) : undefined);
   const threadRows = $derived(thread ? flatRows(buildStory({ feed: thread.items, items: [], alive: row.status === "running" })) : []);
@@ -49,14 +51,14 @@
 
   function press() {
     // A link, so a second press stays there, and it lands on the file the row is about.
-    if (toChanges && session) {
+    if (!canOpen && toChanges && session) {
       changes.want(sessionId, row.target ?? "");
       ssh.openChanges(session);
       return;
     }
     if (!canOpen) return;
-    if (f.expanded.has(row.id)) f.expanded.delete(row.id);
-    else f.expanded.add(row.id);
+    if (open) { dismissed = true; f.expanded.delete(row.id); }
+    else { dismissed = false; f.expanded.add(row.id); }
   }
 
   // Lazily, and only once: this reads the transcript back.
@@ -102,11 +104,11 @@
     {/if}
   {:else if nested}
     {#if canOpen || toChanges}
-      <button type="button" class="group -mx-2 grid h-5 w-[calc(100%+16px)] grid-cols-[44px_minmax(0,1fr)_auto_16px] items-baseline gap-x-2 rounded-sm px-2 text-left text-sm leading-5 enabled:hover:bg-sel/30 focus-visible:-outline-offset-1" use:tooltip={{ text: tool.detail || row.target, language: tool.category === "run" ? "sh" : "text" }} aria-expanded={canOpen ? open : undefined} onclick={press}>
+      <button type="button" class="group -mx-2 grid h-5 w-[calc(100%+16px)] grid-cols-[76px_minmax(0,1fr)_auto_16px] items-baseline gap-x-2 rounded-sm px-2 text-left text-sm leading-5 enabled:hover:bg-sel/30 focus-visible:-outline-offset-1" use:tooltip={{ text: tool.detail || row.target, language: tool.category === "run" ? "sh" : "text" }} aria-expanded={canOpen ? open : undefined} onclick={press}>
         {@render cells()}
       </button>
     {:else}
-      <div class="grid h-5 grid-cols-[44px_minmax(0,1fr)_auto_16px] items-baseline gap-x-2 text-sm leading-5" use:tooltip={{ text: tool.detail || row.target, language: tool.category === "run" ? "sh" : "text" }}>{@render cells()}</div>
+      <div class="grid h-5 grid-cols-[76px_minmax(0,1fr)_auto_16px] items-baseline gap-x-2 text-sm leading-5" use:tooltip={{ text: tool.detail || row.target, language: tool.category === "run" ? "sh" : "text" }}>{@render cells()}</div>
     {/if}
   {:else}
     <DigLine
@@ -128,6 +130,7 @@
 
   {#if open}
     <div class="min-w-0 max-w-full pb-2 pl-4" data-tool-expansion>
+      {#if toChanges && session}<Button size="xs" onclick={() => { changes.want(sessionId, row.target); if (session) ssh.openChanges(session); }}>View changes</Button>{/if}
       {#if tool.subagent}
         {#if thread?.loading}
           <p class="text-sm text-faint">Reading what this agent did</p>
@@ -144,7 +147,7 @@
         {:else if output?.failed}
           <p class="text-sm text-faint">Could not read this output. The terminal may still show it.</p>
         {:else}
-          <ToolOutput text={output?.text || tool.preview} command={`${row.target} ${tool.detail || ""}`} sourcePath={tool.category === "read" ? row.target : ""} />
+          <ToolOutput text={output?.text || tool.preview} command={tool.detail || row.target} sourcePath={tool.category === "read" || tool.category === "edit" ? row.target : ""} />
           {#if output?.truncated}
             <p class="flex items-center gap-2 text-sm text-faint">
               This is the first part.
@@ -153,7 +156,7 @@
           {/if}
         {/if}
       {:else if tool.preview}
-        <ToolOutput text={tool.preview} command={`${row.target} ${tool.detail || ""}`} sourcePath={tool.category === "read" ? row.target : ""} />
+        <ToolOutput text={tool.preview} command={tool.detail || row.target} sourcePath={tool.category === "read" || tool.category === "edit" ? row.target : ""} />
       {/if}
     </div>
   {/if}

@@ -107,7 +107,7 @@ func TestARespawnedSessionDoesNotInheritTheQueue(t *testing.T) {
 	s := talkSession(d, "lola-p1-42", state.AgentWorking)
 	s.TranscriptSegments = []string{"11111111-1111-1111-1111-111111111111.jsonl"}
 	d.sessions.Upsert(s)
-	f.show(talkWorking)
+	f.show(talkDraft) // An occupied composer still queues human messages.
 	old := say(t, d, s.ID, "also drop the users table")
 	d.dropSession(s)
 	d.drainTimeline()
@@ -325,7 +325,7 @@ func TestAHumansQueuedWordsLeaveNoHandoffRow(t *testing.T) {
 func TestLolasOwnSendDoesNotReleaseAHeldQueue(t *testing.T) {
 	d, f := talkFakeDaemon(t)
 	talkSession(d, "s1", state.AgentWorking)
-	f.show(talkWorking)
+	f.show(talkDraft) // An occupied composer still queues human messages.
 	say(t, d, "s1", "held one")
 	d.sessions.Update("s1", func(cur *session.Session) bool {
 		cur.QueueHeld = true

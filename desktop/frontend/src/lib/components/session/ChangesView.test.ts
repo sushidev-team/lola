@@ -227,3 +227,42 @@ describe("ChangesView", () => {
     expect(svc.Diff).toHaveBeenCalledTimes(1);
   });
 });
+
+it('reopens a closed dock tab from the Panels menu', async () => {
+  const { ssh } = await import('$lib/ssh.svelte');
+  const { CHANGES_PANEL } = await import('$lib/sessionpanels');
+  const { groupOf } = await import('$lib/docklayout');
+  const view = ssh.view(SID);
+  view.closeWidget(CHANGES_PANEL);
+  render(ViewStrip, { session: store.sessionById(SID)!, changesInSide: true });
+  await fireEvent.click(screen.getByRole('button', { name: 'Panels' }));
+  await fireEvent.click(screen.getByRole('menuitemcheckbox', { name: 'Changes' }));
+  expect(groupOf(view.dock, CHANGES_PANEL)?.active).toBe(CHANGES_PANEL);
+  expect(view.dockClosed.has(CHANGES_PANEL)).toBe(false);
+  expect(screen.queryByRole('menu', { name: 'Panels' })).toBeNull();
+});
+
+it('lists individual widgets in the icon menu and toggles their tabs without running them', async () => {
+  const { ssh } = await import('$lib/ssh.svelte');
+  const { groupOf } = await import('$lib/docklayout');
+  const view = ssh.view(SID);
+  view.items = [{ id: 'chart', kind: 'element', element: { id: 'chart', kind: 'widget', title: 'Coverage', html: '<b>Chart</b>' } }] as never;
+  view.sessionPanels = true;
+  view.ensureSessionPanels(true);
+  render(ViewStrip, { session: store.sessionById(SID)!, changesInSide: true });
+  const control = screen.getByRole('button', { name: 'Panels' });
+  expect(control.querySelector('svg')).not.toBeNull();
+  await fireEvent.click(control);
+  expect(screen.queryByRole('menuitemcheckbox', { name: 'Widgets' })).toBeNull();
+  expect(screen.getByRole('menuitemcheckbox', { name: 'Coverage' })).toHaveAttribute('aria-checked', 'true');
+  await fireEvent.click(screen.getByRole('menuitemcheckbox', { name: 'Coverage' }));
+  expect(groupOf(view.dock, 'chart')).toBeUndefined();
+  view.syncDock();
+  expect(groupOf(view.dock, 'chart')).toBeUndefined();
+  await fireEvent.click(control);
+  expect(screen.getByRole('menuitemcheckbox', { name: 'Coverage' })).toHaveAttribute('aria-checked', 'false');
+  await fireEvent.click(screen.getByRole('menuitemcheckbox', { name: 'Coverage' }));
+  expect(groupOf(view.dock, 'chart')?.active).toBe('chart');
+  expect(view.widgetsAllowed).toBe(false);
+  expect(document.activeElement).toBe(control);
+});

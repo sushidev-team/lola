@@ -360,8 +360,11 @@ func (s *codexSource) item(f *codexFile, it *codexItem, at time.Time, off, lengt
 		if it.ExitCode != nil && *it.ExitCode != 0 {
 			status = "error"
 		}
-		tool := &protocol.AgentFeedTool{Name: "Bash", Category: "run", Summary: sshelement.Line(firstLine(cmd), maxSummaryRunes),
+		tool := &protocol.AgentFeedTool{Name: "Bash", Category: "run", Summary: sshelement.Line(runSummary(&toolInput{Command: cmd}), maxSummaryRunes),
 			Status: status, DurationMs: it.DurationMs, Preview: preview(it.AggregatedOutput), HasOutput: strings.TrimSpace(it.AggregatedOutput) != ""}
+		if full := sshelement.Line(firstLine(cmd), 4096); full != tool.Summary {
+			tool.Detail = full
+		}
 		if tool.HasOutput {
 			s.refs[it.ID] = codexRef{file: f, offset: off, length: length}
 		}

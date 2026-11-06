@@ -5,7 +5,7 @@ import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/sv
 const svc = vi.hoisted(() => ({ Timeline: vi.fn(), WidgetStatus: vi.fn() }));
 vi.mock("@bindings/desktop", () => ({
   SSHService: svc,
-  DaemonService: { Alive: vi.fn().mockResolvedValue(false) },
+  DaemonService: { Alive: vi.fn().mockResolvedValue(false), Checkpoints: vi.fn().mockResolvedValue({ checkpoints: [] }), Diff: vi.fn().mockResolvedValue({ session: "s", base: "main", mergeBase: "abc", files: [{ path: "a.ts", status: "modified", additions: 1, deletions: 1, patch: "@@ -1 +1 @@\n-old\n+new\n" }] }) },
   ConfigService: { SSHHostForms: vi.fn().mockResolvedValue([]) },
   TermService: {},
 }));
@@ -13,6 +13,8 @@ vi.mock("@bindings/desktop", () => ({
 import { ssh } from "$lib/ssh.svelte";
 import { PANEL_PAD, addTab, allTabs, groupOf, groups, moveTab, type Split } from "$lib/docklayout";
 import DockArea from "./DockArea.svelte";
+import { OVERVIEW_PANEL, CHANGES_PANEL } from "$lib/sessionpanels";
+import { terms, AGENT, SSH, DIFF } from "$lib/terms.svelte";
 import { store } from "$lib/store.svelte";
 import WidgetCard from "../../session/WidgetCard.svelte";
 
@@ -321,7 +323,6 @@ describe("dragging a tab", () => {
     await moveTo(1395, 400);
     const preview = document.querySelector("[data-dock-preview]") as HTMLElement;
     expect(preview).not.toBeNull();
-    expect(preview.className).toContain("rounded-lg");
     expect(parseInt(preview.style.top)).toBe(PANEL_PAD);
     expect(parseInt(ghost().style.left)).toBeLessThanOrEqual(window.innerWidth - 176);
     expect(document.querySelector('[data-dock-tab="b"]')!.className).toContain("opacity-50");
@@ -437,4 +438,93 @@ describe("covering and hiding", () => {
     expect(allTabs(v.dock)).toEqual(["w1"]);
     v.dockClosed.clear();
   });
+});
+
+
+describe('movable session panels', () => {
+  it('starts with one right group, resizes it and splits Changes into another panel', async () => {
+    const v = seed();
+    store.sessions = [{ id: SID, worktree: '/w', tmuxName: SID, agentState: 'idle' }] as never;
+    render(DockArea, { sessionId: SID, children, details: true });
+    await waitFor(() => expect(allTabs(v.dock)).toEqual([OVERVIEW_PANEL, CHANGES_PANEL]));
+    expect(groups(v.dock)).toHaveLength(1);
+    const main = document.querySelector('[data-dock-main]') as HTMLElement;
+    const before = parseFloat(main.style.width);
+    await fireEvent.keyDown(screen.getByRole('separator', { name: 'Resize panels' }), { key: 'ArrowLeft' });
+    expect(parseFloat(main.style.width)).toBeLessThan(before);
+    terms.select(SID, AGENT);
+    await fireEvent.click(screen.getByRole('tab', { name: 'Changes' }));
+    expect(await screen.findByRole('combobox', { name: 'Changed file' })).toHaveTextContent('a.ts');
+    expect(terms.activeTab(SID)).toBe(AGENT); // inspecting the diff leaves the terminal selected
+    const changesTab = screen.getByRole('tab', { name: 'Changes' });
+    await fireEvent.keyDown(changesTab, { key: 'F10', shiftKey: true });
+    await fireEvent.click(screen.getByRole('menuitem', { name: /Split right/ }));
+    expect(groups(v.dock)).toHaveLength(2);
+    expect(groupOf(v.dock, OVERVIEW_PANEL)?.id).not.toBe(groupOf(v.dock, CHANGES_PANEL)?.id);
+  });
+
+  it('keeps a widget iframe alive when switching to Overview and back', async () => {
+    const v = seed('chart');
+    v.widgetsAllowed = true;
+    store.sessions = [{ id: SID, worktree: '/w' }] as never;
+    render(DockArea, { sessionId: SID, children, details: true });
+    await waitFor(() => expect(frames()).toHaveLength(1));
+    const frame = frames()[0];
+    await fireEvent.click(screen.getByRole('tab', { name: 'Overview' }));
+    expect(frames()[0]).toBe(frame);
+    expect((frame.closest('[data-dock-frame]') as HTMLElement).style.visibility).toBe('hidden');
+    await fireEvent.click(screen.getByRole('tab', { name: 'chart' }));
+    expect(frames()[0]).toBe(frame);
+    expect((frame.closest('[data-dock-frame]') as HTMLElement).style.visibility).toBe('visible');
+  });
+});
+
+
+it('does not pulse or reopen Changes on session polling, but permits an explicit reopen', async () => {
+  const v = seed();
+  store.sessions = [{ id: SID, worktree: '/w', tmuxName: SID, agentState: 'idle' }] as never;
+  terms.select(SID, SSH);
+  terms.select(SID, DIFF);
+  render(DockArea, { sessionId: SID, children, details: true });
+  await waitFor(() => expect(groupOf(v.dock, CHANGES_PANEL)?.active).toBe(CHANGES_PANEL));
+  const pulse = v.dockPulse;
+  const animation = document.querySelector('[data-dock-pulse]');
+  for (let i = 0; i < 3; i++) {
+    store.sessions = store.sessions.map(s => ({ ...s }));
+    await tick();
+  }
+  expect(v.dockPulse).toBe(pulse);
+  expect(document.querySelector('[data-dock-pulse]')).toBe(animation);
+  await fireEvent.click(screen.getByRole('button', { name: 'Close Changes' }));
+  expect(terms.activeTab(SID)).toBe(SSH);
+  for (let i = 0; i < 3; i++) {
+    store.sessions = store.sessions.map(s => ({ ...s }));
+    v.items = [...v.items];
+    await tick();
+  }
+  expect(screen.queryByRole('tab', { name: 'Changes' })).toBeNull();
+  expect(v.dockClosed.has(CHANGES_PANEL)).toBe(true);
+  terms.select(SID, DIFF);
+  await waitFor(() => expect(screen.getByRole('tab', { name: 'Changes' })).toHaveAttribute('aria-selected', 'true'));
+  expect(v.dockClosed.has(CHANGES_PANEL)).toBe(false);
+});
+
+it('retires the generic Widgets tab and adds named widgets without changing the active panel', async () => {
+  const v = seed();
+  v.setDock(addTab(v.dock, '@lola/widgets'));
+  store.sessions = [{ id: SID, worktree: '/w', tmuxName: SID, agentState: 'idle' }] as never;
+  render(DockArea, { sessionId: SID, children, details: true });
+  await waitFor(() => expect(allTabs(v.dock)).toEqual([OVERVIEW_PANEL, CHANGES_PANEL]));
+  expect(screen.queryByRole('tab', { name: 'Widgets' })).toBeNull();
+  const title = 'Deployment readiness and test coverage overview';
+  v.items = [item('readiness', title)] as never;
+  const tab = await screen.findByRole('tab', { name: title });
+  expect(tab.textContent!.length).toBeLessThanOrEqual(28);
+  expect(tab).toHaveAttribute('title', title);
+  expect(screen.getByRole('tab', { name: 'Overview' })).toHaveAttribute('aria-selected', 'true');
+  expect(frames()).toHaveLength(0);
+  await fireEvent.click(screen.getByRole('button', { name: `Close ${title}` }));
+  v.items = [item('readiness', 'Readiness')] as never;
+  await tick();
+  expect(groupOf(v.dock, 'readiness')).toBeUndefined();
 });

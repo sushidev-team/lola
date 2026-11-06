@@ -296,10 +296,10 @@ describe("geometry", () => {
     expect(nodes[MAIN_ID].w + nodes[(n as Split).children[1] && groupOf(n, "a")!.id].w + SASH).toBe(300);
     expect(layout(n, { w: 0, h: 0 }).nodes[MAIN_ID].w).toBeGreaterThanOrEqual(0);
   });
-  it("puts a page inside its panel's card, below the strip", () => {
+  it("fills a panel edge to edge below its tab strip", () => {
     const s = panelSlot({ x: 100, y: 50, w: 400, h: 300 });
-    expect(s).toEqual({ x: 105, y: 85, w: 390, h: 260 });
-    expect(panelSlot({ x: 0, y: 0, w: 2, h: 2 }).w).toBe(0);
+    expect(s).toEqual({ x: 100, y: 82, w: 400, h: 268 });
+    expect(panelSlot({ x: 0, y: 0, w: 2, h: 2 }).h).toBe(0);
   });
 });
 

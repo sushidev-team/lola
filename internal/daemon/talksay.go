@@ -409,7 +409,7 @@ func (d *Daemon) handleAgentSay(ctx context.Context, a protocol.AgentSayArgs) (p
 		// may be the next thing it hears.
 		keepHold = func() bool { return !sshItemDelivered(store, item) }
 	}
-	out := d.talkAttempt(ctx, id, store, keepHold)
+	out := d.talkAttempt(ctx, id, store, keepHold, !a.StopFirst)
 	out.Item = item
 	out.Delivered = sshItemDelivered(store, item)
 	if out.Delivered {
@@ -433,7 +433,7 @@ func (d *Daemon) handleAgentQueueRelease(ctx context.Context, a protocol.AgentQu
 			head = st.Queue[0].Item
 		}
 	})
-	out := d.talkAttempt(ctx, id, store, nil)
+	out := d.talkAttempt(ctx, id, store, nil, true)
 	out.Item = head
 	out.AgentGone = !alive
 	if head != "" {
@@ -450,7 +450,7 @@ func (d *Daemon) handleAgentQueueRelease(ctx context.Context, a protocol.AgentQu
 // between the release and the lock. What does not go now stays queued for the ordinary
 // flush, attached check included. keepHold, when set, answers at that point whether the hold
 // stays, for a stop that has only just been pressed.
-func (d *Daemon) talkAttempt(ctx context.Context, id string, store *sshstore.Store, keepHold func() bool) protocol.AgentSayData {
+func (d *Daemon) talkAttempt(ctx context.Context, id string, store *sshstore.Store, keepHold func() bool, midTurn bool) protocol.AgentSayData {
 	d.sessions.Update(id, func(cur *session.Session) bool {
 		if !cur.QueueHeld {
 			return false
@@ -471,9 +471,18 @@ func (d *Daemon) talkAttempt(ctx context.Context, id string, store *sshstore.Sto
 	var why string
 	refused := false
 	if agent.Caps(agent.Parse(s.Agent)).Send {
+		lock, admit := d.humanLock, humanSendable
+		// Slash commands belong at rest. Ordinary messages use the agent's own
+		// mid-turn input handling; automated review/CI queues retain their idle gate.
+		if midTurn && !isSlash(strings.TrimSpace(s.PendingSSH)) {
+			lock = d.lockHumanMessage
+			admit = func(cur session.Session) bool {
+				return humanMessageSendable(cur) && !isSlash(strings.TrimSpace(cur.PendingSSH))
+			}
+		}
 		d.deliverSSH(ctx, id, store, queuedText{
-			lock:  d.humanLock,
-			admit: humanSendable,
+			lock:  lock,
+			admit: admit,
 			refused: func(w string) {
 				why, refused = w, true
 			},

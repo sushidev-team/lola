@@ -54,7 +54,7 @@ var (
 	teammateIDRe  = regexp.MustCompile(`\bteammate_id="([^"]*)"`)
 	teammateSumRe = regexp.MustCompile(`\bsummary="([^"]*)"`)
 	imageTokenRe  = regexp.MustCompile(`\[Image #\d+\]`)
-	leadingCdRe   = regexp.MustCompile(`^cd\s+(?:"[^"\n]*"|'[^'\n]*'|[^\s&;|]+)\s*&&\s*`)
+	leadingCdRe   = regexp.MustCompile(`^cd\s+(?:"[^"\n]*"|'[^'\n]*'|[^\s&;|]+)\s*(?:&&|;)\s*`)
 	heredocOpenRe = regexp.MustCompile(`<<-?\s*['"]?[A-Za-z_][A-Za-z0-9_]*['"]?\s*$`)
 	// toolUseIDRe reads an oversized result line's head. The unescaped quotes cannot
 	// occur inside a JSON string, so tool output cannot forge it.
@@ -674,8 +674,12 @@ type toolInput struct {
 // runSummary says what a command actually does in one line. A leading `cd <dir> &&` pushed the
 // real command out of the clip, and a first line that only opens a here-doc or a quote names
 // nothing, so it reads as the tool's own description or says that more follows.
+var leadingAssignRe = regexp.MustCompile(`^(?:[A-Za-z_]\w*=(?:"[^"\n]*"|'[^'\n]*'|[^\s;&|]+)\s*(?:;|&&)?\s*)+`)
+
 func runSummary(in *toolInput) string {
-	line := firstLine(leadingCdRe.ReplaceAllString(strings.TrimSpace(in.Command), ""))
+	command := leadingCdRe.ReplaceAllString(strings.TrimSpace(in.Command), "")
+	command = leadingAssignRe.ReplaceAllString(command, "")
+	line := firstLine(command)
 	if line == "" {
 		line = firstLine(in.Command)
 	}
@@ -769,7 +773,7 @@ func (s *claudeSource) toolUse(seg *claudeSegment, id string, at time.Time, b *c
 	}
 	// The row's tooltip names the whole line when the summary shortened or replaced it.
 	if tool.Category == "run" {
-		if full := sshelement.Line(firstLine(in.Command), maxSummaryRunes); full != tool.Summary {
+		if full := sshelement.Line(firstLine(in.Command), 4096); full != tool.Summary {
 			tool.Detail = full
 		}
 	}
@@ -791,7 +795,11 @@ type resultDetails struct {
 	AgentID         string `json:"agentId"`
 	Interrupted     bool   `json:"interrupted"`
 	StructuredPatch []struct {
-		Lines []string `json:"lines"`
+		Lines    []string `json:"lines"`
+		OldStart int      `json:"oldStart"`
+		OldLines int      `json:"oldLines"`
+		NewStart int      `json:"newStart"`
+		NewLines int      `json:"newLines"`
 	} `json:"structuredPatch"`
 }
 
@@ -829,6 +837,10 @@ func (s *claudeSource) result(seg *claudeSegment, r *claudeRecord, b *claudeBloc
 		}
 		if agentIDRe.MatchString(d.AgentID) {
 			tool.Subagent = d.AgentID
+		}
+		if patch := structuredPatchText(r.ToolUseResult); patch != "" {
+			tool.Preview = preview(patch)
+			tool.HasOutput = true
 		}
 		for _, h := range d.StructuredPatch {
 			for _, l := range h.Lines {
@@ -911,6 +923,23 @@ func resultText(raw json.RawMessage) string {
 	return strings.Join(parts, "\n")
 }
 
+// structuredPatchText shows the edit recorded by the tool, not the file as it is now.
+func structuredPatchText(raw json.RawMessage) string {
+	var d resultDetails
+	if json.Unmarshal(raw, &d) != nil || len(d.StructuredPatch) == 0 {
+		return ""
+	}
+	var out strings.Builder
+	for _, h := range d.StructuredPatch {
+		fmt.Fprintf(&out, "@@ -%d,%d +%d,%d @@\n", h.OldStart, h.OldLines, h.NewStart, h.NewLines)
+		for _, line := range h.Lines {
+			out.WriteString(line)
+			out.WriteByte('\n')
+		}
+	}
+	return out.String()
+}
+
 // Output implements Source.
 func (s *claudeSource) Output(ctx context.Context, id string) (string, bool, error) {
 	if rest, ok := strings.CutPrefix(id, "agent-"); ok && s.parent == "" {
@@ -943,6 +972,9 @@ func (s *claudeSource) Output(ctx context.Context, id string) (string, bool, err
 	}
 	for _, b := range blocks {
 		if b.Type == "tool_result" && b.ToolUseID == ref.useID {
+			if patch := structuredPatchText(r.ToolUseResult); patch != "" {
+				return cleanOutput(patch)
+			}
 			return cleanOutput(resultText(b.Content))
 		}
 	}

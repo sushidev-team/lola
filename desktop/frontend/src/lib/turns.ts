@@ -13,6 +13,7 @@ import { clockTime, evidenceTargets, itemConn, itemMatches, matchesFilter, type 
 import { youAttachments } from "./composerpaste";
 import { answerShaped } from "./answerblocks";
 import { toMillis } from "./time";
+import { activityTool } from "./toolActivity";
 
 /** Legacy transcripts have no send receipt. Recognize only Lola's complete recipe
  * signature (including clipped starts), never generic review prose. Display only. */
@@ -150,6 +151,7 @@ function lastSegment(name: string): string {
 }
 
 export function toolVerb(t: Pick<AgentFeedTool, "name" | "category">): string {
+  if (["Delete", "Create", "Touch", "Move", "Copy", "Commit", "Push", "Pull", "Merge", "Rebase", "Checkout", "Switch", "Stage"].includes(t.name)) return t.name;
   switch (t.category) {
     case "read":
       if (/grep|search/i.test(t.name)) return "Search";
@@ -208,7 +210,7 @@ export function fitNames(names: readonly string[], chars: number, clip: (text: s
 }
 
 function toolRow(item: AgentFeedItem, alive: boolean): ToolRowData {
-  const tool = item.tool as AgentFeedTool;
+  const tool = activityTool(item.tool as AgentFeedTool);
   const status = resolveStatus(tool.status, alive);
   return {
     kind: "tool",
@@ -258,24 +260,7 @@ function isLoud(r: ToolRowData): boolean {
 function groupQuiet(category: string, members: ToolRowData[]): (ToolRowData | RunRowData)[] {
   if (!members.length) return [];
   if (category === "read") return members.length > 1 ? [runRow(category, members)] : members;
-  if (category === "edit") {
-    // One row per file up to three. Editing a file twice is still one file.
-    const files = new Set(members.map((m) => m.target));
-    return files.size > 3 ? [runRow(category, members)] : foldSameFile(members);
-  }
   return members.length >= 3 ? [runRow(category === "other" ? "other" : "run", members)] : members;
-}
-
-function foldSameFile(members: ToolRowData[]): (ToolRowData | RunRowData)[] {
-  const out: (ToolRowData | RunRowData)[] = [];
-  const seen = new Map<string, ToolRowData[]>();
-  for (const m of members) {
-    const list = seen.get(m.target);
-    if (list) list.push(m);
-    else seen.set(m.target, [m]);
-  }
-  for (const list of seen.values()) out.push(list.length > 1 ? runRow("edit", list) : list[0]);
-  return out;
 }
 
 /**
@@ -288,15 +273,33 @@ function foldSameFile(members: ToolRowData[]): (ToolRowData | RunRowData)[] {
  * the stretch the agent is still in, where a failure may be what happens next, so there the last
  * failure also keeps its row and its preview. Anything still unresolved always has a row.
  */
-export function collapseWork(tools: readonly AgentFeedItem[], alive: boolean, tail = false): (ToolRowData | RunRowData)[] {
+export function collapseWork(tools: readonly AgentFeedItem[], alive: boolean, tail = false, current = ""): (ToolRowData | RunRowData)[] {
   const rows = tools.filter((i) => i.tool && !isLolaCall(i.tool)).map((i) => toolRow(i, alive));
+  const out: (ToolRowData | RunRowData)[] = [];
+  let chunk: ToolRowData[] = [];
+  const flush = () => {
+    if (!chunk.length) return;
+    out.push(...(chunk[0].tool.category === "edit" ? [runRow("edit", chunk)] : collapseOtherWork(chunk, tail, current)));
+    chunk = [];
+  };
+  for (const row of rows) {
+    const previous = chunk.at(-1);
+    if (previous && ((previous.tool.category === "edit") !== (row.tool.category === "edit") ||
+      row.tool.category === "edit" && row.at - previous.at > 30_000)) flush();
+    chunk.push(row);
+  }
+  flush();
+  return out;
+}
+
+function collapseOtherWork(rows: ToolRowData[], tail: boolean, current: string): (ToolRowData | RunRowData)[] {
   if (rows.length > MAX_STRETCH_ROWS) {
     const lastFailed = tail ? rows.findLastIndex((r) => r.status === "error") : -1;
     const byCategory = new Map<string, ToolRowData[]>();
     const own: ToolRowData[] = [];
     rows.forEach((r, i) => {
       const unresolved = isLoud(r) && r.status !== "error";
-      if (unresolved || r.tool.category === "agent" || i === lastFailed) {
+      if (r.id === current || unresolved || r.tool.category === "agent" || i === lastFailed) {
         own.push(r);
         return;
       }
@@ -324,7 +327,7 @@ export function collapseWork(tools: readonly AgentFeedItem[], alive: boolean, ta
     run = [];
   };
   for (const r of rows) {
-    if (isLoud(r) || r.tool.category === "agent") {
+    if (r.id === current || isLoud(r) || r.tool.category === "agent") {
       flush();
       out.push(r);
       continue;
@@ -474,7 +477,7 @@ export function buildStory(input: StoryInput): Story {
 
   const flushTools = (tail = false) => {
     if (!tools.length) return;
-    for (const r of collapseWork(tools, alive, tail)) pushRow(r);
+    for (const r of collapseWork(tools, alive, tail, alive && input.feed.at(-1)?.tool ? input.feed.at(-1)!.id : "")) pushRow(r);
     tools = [];
   };
 
@@ -731,7 +734,9 @@ function lastName(path: string): string {
 /** Up to this many names per verb on a dig line, then a count of the rest. */
 const SEGMENT_NAMES = 3;
 
-const PAST_VERB: Record<string, string> = { Edit: "Edited", Write: "Wrote", Search: "Searched", List: "Listed" };
+const PAST_VERB: Record<string, string> = { Edit: "Edited", Write: "Wrote", Search: "Searched", List: "Listed", Delete: "Deleted", Create: "Created", Touch: "Touched", Move: "Moved", Copy: "Copied", Commit: "Committed", Push: "Pushed", Pull: "Pulled", Merge: "Merged", Rebase: "Rebased", Checkout: "Checked out", Switch: "Switched", Stage: "Staged" };
+
+export function pastVerb(verb: string): string { return PAST_VERB[verb] ?? verb; }
 
 /** One verb on a dig line and what it touched. A bare count is the row this design avoids. */
 export type WorkSegment = { verb: string; names: string[]; rest: number; stat: string };
@@ -833,7 +838,10 @@ export function turnParts(rows: readonly StoryRow[], keepBeats = KEEP_BEATS, set
     run = [];
   };
   rows.forEach((row, i) => {
-    const folds = ((i < last || settled) && (row.kind === "tool" || row.kind === "run")) || (i < last && row.kind === "prose" && i < standsFrom);
+    // An active call or unanswered failure must remain visible even in a completed turn.
+    const needsAttention = row.kind === "tool" && (row.status === "running" || (i >= last && !row.settled && LOUD.has(row.status))) ||
+      row.kind === "run" && (row.items.some(item => item.status === "running") || row.failed > 0 && i >= last && !row.settled);
+    const folds = !needsAttention && (((i < last || settled) && (row.kind === "tool" || row.kind === "run")) || (i < last && row.kind === "prose" && i < standsFrom));
     if (folds) {
       run.push(row);
       return;
@@ -998,7 +1006,7 @@ export function diffStat(added: number | undefined, removed: number | undefined)
   return [added ? `+${added}` : "", removed ? `−${removed}` : ""].filter(Boolean).join(" ");
 }
 
-const LIVE_VERB: Record<string, string> = { Ran: "Running", Read: "Reading", Edit: "Editing", Write: "Writing" };
+const LIVE_VERB: Record<string, string> = { Ran: "Running", Read: "Reading", Edit: "Editing", Write: "Writing", Delete: "Deleting", Create: "Creating", Touch: "Touching", Move: "Moving", Copy: "Copying", Commit: "Committing", Push: "Pushing", Pull: "Pulling", Merge: "Merging", Rebase: "Rebasing", Stage: "Staging" };
 
 /** A call in progress says so in its verb. One too long for the 56px column keeps its word. */
 export function liveVerb(verb: string): string {

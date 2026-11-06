@@ -2,7 +2,7 @@
 // the store's push events and each view's focus requests. Every test here started as a reproduction
 // of something that went wrong for a person, with the daemon's answers arriving when they really do.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, cleanup, fireEvent } from "@testing-library/svelte";
+import { waitFor, screen, render, cleanup, fireEvent } from "@testing-library/svelte";
 import { flushSync, tick } from "svelte";
 
 const h = vi.hoisted(() => ({
@@ -504,7 +504,8 @@ describe("the composer's draft", () => {
     await fireEvent.input(f, { target: { value: "first" } });
     await fireEvent.keyDown(f, { key: "Enter" });
     await settle();
-    await fireEvent.input(f, { target: { value: "first second" } });
+    expect(f.value).toBe("");
+    await fireEvent.input(f, { target: { value: "second" } });
     done({ item: "x", delivered: true });
     await settle();
     expect(ssh.view(A).agentDraft).toBe("second");
@@ -789,4 +790,30 @@ describe("keys that belong to what is on show", () => {
     await settle();
     expect(terms.activeTab(A)).not.toBe(DIFF);
   });
+});
+
+it('keeps docked panels beside the terminal and resizes its main area', async () => {
+  const width = vi.spyOn(Element.prototype, 'clientWidth', 'get').mockReturnValue(1400);
+  const height = vi.spyOn(Element.prototype, 'clientHeight', 'get').mockReturnValue(800);
+  try {
+    await mount([plain(A)]);
+    await open(A);
+    await waitFor(() => expect(screen.getByRole('tab', { name: 'Overview' })).toBeInTheDocument());
+    terms.select(A, AGENT);
+    await settle();
+    expect(terminalName()).toBe(A);
+    expect(screen.getByRole('tab', { name: 'Conversation' }).closest('[data-dock-main]')).not.toBeNull();
+    const terminal = document.querySelector('[data-terminal-cell]') as HTMLElement;
+    const before = parseFloat(terminal.style.width);
+    expect(before).toBeGreaterThan(420);
+    expect(before).toBeLessThan(1400);
+    expect(screen.getByRole('tab', { name: 'Overview' }).closest('[inert]')).toBeNull();
+    await fireEvent.keyDown(screen.getByRole('separator', { name: 'Resize panels' }), { key: 'ArrowLeft' });
+    await settle();
+    expect(parseFloat(terminal.style.width)).toBeLessThan(before);
+    expect(terminalName()).toBe(A);
+  } finally {
+    cleanup();
+    width.mockRestore(); height.mockRestore();
+  }
 });

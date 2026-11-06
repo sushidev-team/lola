@@ -399,7 +399,13 @@ class Terms {
     if (!id) return;
     try {
       const names = (await TermService.Shells(id)) ?? [];
-      this.shells.set(id, names);
+      // Polls often return a fresh array with exactly the same tabs. Preserve
+      // identity and established order, so refreshes cannot replay tab layout.
+      const previous = this.shells.get(id) ?? [];
+      const present = new Set(names);
+      const known = new Set(previous);
+      const stable = [...previous.filter(n => present.has(n)), ...names.filter(n => !known.has(n))];
+      if (stable.length !== previous.length || stable.some((n, i) => n !== previous[i])) this.shells.set(id, stable);
       this.dropNames(id, names);
       const a = this.active.get(id);
       if (a && a !== AGENT && !isViewTab(a) && !names.includes(a)) this.active.set(id, names.at(-1) ?? this.home(id));

@@ -72,6 +72,23 @@ func ComposerEmptyAt(visible string, c Cursor, k agent.Kind) bool {
 	if !c.Visible || c.X != composerCaretX || Classify(visible, k) != ActivityWaiting {
 		return false
 	}
+	return composerFrameEmptyAt(visible, c)
+}
+
+// MessageComposerEmptyAt admits a working agent's input for an explicit human
+// message. Automation continues to use ComposerEmptyAt and requires idle.
+func MessageComposerEmptyAt(visible string, c Cursor, k agent.Kind) bool {
+	if !agent.Caps(k).Cursor || !c.Visible || c.X != composerCaretX {
+		return false
+	}
+	switch Classify(visible, k) {
+	case ActivityWaiting, ActivityWorking:
+		return composerFrameEmptyAt(visible, c)
+	}
+	return false
+}
+
+func composerFrameEmptyAt(visible string, c Cursor) bool {
 	raw := strings.Split(visible, "\n")
 	if c.Y < 1 || c.Y+1 >= len(raw) {
 		return false

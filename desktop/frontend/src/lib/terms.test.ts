@@ -238,3 +238,19 @@ describe("where a session opens", () => {
     expect(terms.lastTerminal(id)).toBe(AGENT);
   });
 });
+
+it('keeps discovery order and identity across unchanged polls', async () => {
+  const { TermService } = await import('@bindings/desktop');
+  const id = newId();
+  const a = `${id}-dev-1`, b = `${id}-dev-2`, c = `${id}-shell-1`;
+  vi.mocked(TermService.Shells).mockResolvedValueOnce([a, b]);
+  await terms.refresh(id);
+  const cache = (terms as unknown as { shells: Map<string, string[]> }).shells;
+  const first = cache.get(id);
+  vi.mocked(TermService.Shells).mockResolvedValueOnce([b, a]);
+  await terms.refresh(id);
+  expect(cache.get(id)).toBe(first);
+  vi.mocked(TermService.Shells).mockResolvedValueOnce([c, b]);
+  await terms.refresh(id);
+  expect(terms.shellsFor(id)).toEqual([b, c]);
+});

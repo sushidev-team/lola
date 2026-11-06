@@ -20,11 +20,13 @@
     agent,
     gate,
     titleOf,
+    tabLabel,
     faulted,
     unseen,
     dragging = "",
     pulse = null,
     drawer = false,
+    systemActive = false,
     onselect,
     onclose,
     onallow,
@@ -42,11 +44,13 @@
     /** Whether the one-click gate is drawn here. One copy is enough, as one click allows all. */
     gate: boolean;
     titleOf: (tab: string) => string;
+    tabLabel?: (tab: string) => string;
     faulted: (tab: string) => boolean;
     unseen: (tab: string) => boolean;
     dragging?: string;
     pulse?: { tab: string; n: number } | null;
     drawer?: boolean;
+    systemActive?: boolean;
     onselect: (tab: string) => void;
     onclose: (tab: string) => void;
     onallow: () => void;
@@ -136,14 +140,14 @@
   style="left:{rect.x}px;top:{rect.y}px;width:{rect.w}px;height:{rect.h}px;padding:{PANEL_PAD}px"
   data-dock-group={id}
 >
-  <div class="grid min-h-0 min-w-0 overflow-hidden rounded-lg border border-magenta/30 bg-panel {drawer ? 'shadow-xl' : ''}" style="grid-template-rows:{TAB_STRIP_H}px minmax(0,1fr)">
-    <div class="@container grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-stretch border-b border-edge/60 text-sm" title={label}>
-      <div bind:this={strip} role="tablist" aria-label="Widgets" class="dock-strip relative flex min-w-0 overflow-x-auto" data-more={more || undefined} onwheel={wheel} onscroll={measure}>
+  <div class="grid min-h-0 min-w-0 overflow-hidden bg-panel {drawer ? 'shadow-xl' : ''}" style="grid-template-rows:{TAB_STRIP_H}px minmax(0,1fr)">
+    <div class="@container grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-stretch border-b border-edge/60 bg-canvas text-sm" title={systemActive ? "Drag tabs to split or join panels. Drag dividers to resize." : label}>
+      <div bind:this={strip} role="tablist" aria-label="Session panels" class="dock-strip relative flex min-w-0 overflow-x-auto" data-more={more || undefined} onwheel={wheel} onscroll={measure}>
         {#each tabs as tab, i (tab)}
           {@const on = tab === active}
           <div
             role="presentation"
-            class="group relative flex max-w-44 min-w-16 shrink-0 touch-none items-center border-b-2 pl-2.5 select-none {on ? 'border-magenta text-ink' : 'border-transparent text-faint hover:text-ink'} {dragging === tab ? 'opacity-50' : ''}"
+            class="group relative flex max-w-44 min-w-16 shrink-0 touch-none items-center border-b-2 pl-2.5 select-none {on ? 'border-accent text-ink' : 'border-transparent text-faint hover:text-ink'} {dragging === tab ? 'opacity-50' : ''}"
             data-dock-tab={tab}
             onpointerdown={(e) => ondragstart?.(e, tab)}
             oncontextmenu={(e) => {
@@ -154,7 +158,7 @@
             {#if pulse?.tab === tab}{#key pulse.n}<span class="dock-pulse pointer-events-none absolute inset-0" aria-hidden="true" data-dock-pulse></span>{/key}{/if}
             {#if faulted(tab)}<span class="mr-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-warn" aria-label="Failed"></span>
             {:else if unseen(tab)}<span class="mr-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-magenta" aria-label="New" data-dock-unseen></span>{/if}
-            <button type="button" role="tab" aria-selected={on} tabindex={on ? 0 : -1} class="min-w-0 flex-1 cursor-default truncate py-1 text-left outline-none focus-visible:underline" title={titleOf(tab)} onclick={() => onselect(tab)} onkeydown={(e) => onkey(e, tab, i)}>{titleOf(tab)}</button>
+            <button type="button" role="tab" aria-selected={on} tabindex={on ? 0 : -1} class="min-w-0 flex-1 cursor-default truncate py-1 text-left outline-none focus-visible:underline" title={titleOf(tab)} aria-label={titleOf(tab)} onclick={() => onselect(tab)} onkeydown={(e) => onkey(e, tab, i)}>{tabLabel?.(tab) ?? titleOf(tab)}</button>
             <span class="flex w-6 shrink-0 justify-center" onpointerdown={(e) => e.stopPropagation()} role="presentation">
               <Button variant="bare" size="xs" icon class="h-5! w-5! {on ? '' : 'opacity-0'} transition-[opacity,color] group-hover:opacity-100 hover:text-bad focus-visible:opacity-100" aria-label="Close {titleOf(tab)}" title="Close" onclick={() => onclose(tab)}>×</Button>
             </span>
@@ -165,14 +169,14 @@
         {#if more}<Button size="xs" icon class="h-5! w-5!" aria-label="List {tabs.length} tabs" aria-haspopup="menu" title="All tabs" onclick={(e) => { const r = e.currentTarget.getBoundingClientRect(); onlist(tabs, r.right, r.bottom + 4, e.detail === 0); }}>⌄</Button>{/if}
         <!-- Only where there is room for it. The magenta chrome and the tooltip still say who
              wrote this, and the page cannot draw over either. -->
-        <span class="hidden whitespace-nowrap text-magenta @min-[360px]:inline">by {agent}</span>
+        {#if !systemActive}<span class="hidden whitespace-nowrap text-magenta @min-[360px]:inline">by {agent}</span>{/if}
         {#if onhide}<Button size="xs" icon class="h-5! w-5!" aria-label="Hide widgets" title="Hide" onclick={onhide}>›</Button>{/if}
       </div>
     </div>
     <div class="grid min-h-0 min-w-0 place-items-center p-3">
       {#if gate}
         <div class="grid max-w-64 justify-items-center gap-2 text-center text-sm text-faint" data-widget-gate>
-          <p title={label}>Written by {agent}. Sandboxed, no file access.</p>
+          <p title={systemActive ? "Drag tabs to split or join panels. Drag dividers to resize." : label}>Written by {agent}. Sandboxed, no file access.</p>
           <Button size="xs" variant="secondary" onclick={onallow}>Show widgets</Button>
         </div>
       {/if}

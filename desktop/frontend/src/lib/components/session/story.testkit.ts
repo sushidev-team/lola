@@ -9,12 +9,13 @@ const svc = vi.hoisted(() => ({
   Feed: vi.fn(),
   FeedOutput: vi.fn(),
   State: vi.fn(),
+  ReadAttachmentImage: vi.fn().mockResolvedValue("data:image/png;base64,original"),
   CaptureMany: vi.fn(),
 }));
 
 vi.mock("@bindings/desktop", () => ({
   SSHService: { Timeline: svc.Timeline, Output: svc.Output, Stop: svc.Stop, WidgetStatus: vi.fn() },
-  TalkService: { Feed: svc.Feed, FeedOutput: svc.FeedOutput, State: svc.State },
+  TalkService: { ReadAttachmentImage: svc.ReadAttachmentImage, Feed: svc.Feed, FeedOutput: svc.FeedOutput, State: svc.State },
   DaemonService: { Alive: vi.fn().mockResolvedValue(true), RestoreCheckpoint: vi.fn(), ForkCheckpoint: vi.fn() },
   ConfigService: {},
   TermService: { Shells: vi.fn().mockResolvedValue([]), CaptureMany: svc.CaptureMany },

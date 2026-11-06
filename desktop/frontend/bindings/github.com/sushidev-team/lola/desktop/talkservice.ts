@@ -80,6 +80,14 @@ export function QueueRelease(a: protocol$0.AgentQueueReleaseArgs): $CancellableP
 }
 
 /**
+ * ReadAttachmentImage reads an original attachment for the message gallery. The read stays
+ * inside this session's image folder, even if a worker has replaced a file with a symlink.
+ */
+export function ReadAttachmentImage(worktree: string, path: string): $CancellablePromise<string> {
+    return $Call.ByID(1169090519, worktree, path);
+}
+
+/**
  * Say speaks to the agent: delivered now if it is provably resting, queued otherwise.
  */
 export function Say(a: protocol$0.AgentSayArgs): $CancellablePromise<protocol$0.AgentSayData> {

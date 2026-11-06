@@ -20,7 +20,7 @@ describe("the footer table, one test per row", () => {
     expect([r.glyph, r.text, r.clock]).toEqual(["◐", "Working", true]);
     expect(r.left).toEqual(["stop"]);
     expect(r.secondary).toEqual([]);
-    expect(words(r.primary)).toBe("Queue ↩");
+    expect(words(r.primary)).toBe("Send ↩");
     expect(r.primary.disabled).toBe(true);
   });
 
@@ -28,7 +28,7 @@ describe("the footer table, one test per row", () => {
     const r = f({ state: "working", hasText: true });
     expect(r.left).toEqual(["stop"]);
     expect(r.secondary.map(words)).toEqual(["Stop & send"]);
-    expect(words(r.primary)).toBe("Queue ↩");
+    expect(words(r.primary)).toBe("Send ↩");
     expect(r.primary.disabled).toBe(false);
   });
 
@@ -84,7 +84,7 @@ describe("the footer table, one test per row", () => {
     expect(r.text).toBe("Working");
     expect(r.hint).toBe("Pick a host above to run");
     expect(r.secondary).toEqual([]);
-    expect(words(r.primary)).toBe("Queue ↩");
+    expect(words(r.primary)).toBe("Send ↩");
   });
 
   it("run", () => {
@@ -148,7 +148,7 @@ describe("the footer table, one test per row", () => {
     const r = f({ state: "working", canStop: false, hasText: true });
     expect(r.left).toEqual([]);
     expect(r.secondary).toEqual([]);
-    expect(words(r.primary)).toBe("Queue ↩");
+    expect(words(r.primary)).toBe("Send ↩");
   });
 
   it("over the limit, nothing sends", () => {

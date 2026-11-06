@@ -13,6 +13,11 @@
   // z order inside this element's own stacking context: main and panels, then frames at 10,
   // sashes at 20, the drag preview at 30.
   import { tick, untrack, type Snippet } from "svelte";
+  import SessionSide from '../../session/SessionSide.svelte';
+  import ChangesView from '../../session/ChangesView.svelte';
+  import { OVERVIEW_PANEL, CHANGES_PANEL, isSessionPanel, sessionPanelTitle, widgetTabLabel } from '$lib/sessionpanels';
+  import { terms, SSH, DIFF, isChangesTab } from '$lib/terms.svelte';
+  import { changesOffered } from '$lib/sessionview';
   import { store } from "$lib/store.svelte";
   import { confirm } from "$lib/confirm.svelte";
   import { ssh } from "$lib/ssh.svelte";
@@ -55,10 +60,9 @@
   // behind it, so a page keeps its state, but `visibility:hidden` on an ancestor does not hide a
   // frame: the shown frame's wrapper sets `visible`, and a child's `visible` wins, so the page
   // would paint over the terminal and take its clicks. Covered frames say hidden for themselves.
-  let { sessionId, children, covered = false }: { sessionId: string; children: Snippet; covered?: boolean } = $props();
+  let { sessionId, children, covered = false, details = false, onmain, mainHeader }: { sessionId: string; children: Snippet; covered?: boolean; details?: boolean; mainHeader?: Snippet; onmain?: (rect: Rect, host: HTMLElement) => void } = $props();
 
   const DRAWER_W = 440;
-  const DOCK_BOTTOM_INSET = 8;
   const DRAG_START_PX = 4;
   const STRIP_SCROLL_BAND = 24;
   const STRIP_SCROLL_STEP = 16;
@@ -66,6 +70,23 @@
   const GHOST_H = 28;
 
   const view = $derived(ssh.view(sessionId));
+  const session = $derived(store.sessionById(sessionId));
+  const diffable = $derived(!!session && changesOffered(session));
+  $effect(() => {
+    const enabled = details;
+    const hasDiff = diffable;
+    untrack(() => {
+      view.sessionPanels = enabled;
+      if (enabled) view.ensureSessionPanels(hasDiff);
+    });
+  });
+  // activeTab also reads the polled session snapshot. Only a changed route should open a
+  // panel; replaying this on each snapshot pulses the tab and resurrects closed panels.
+  const routedTab = $derived(terms.activeTab(sessionId));
+  $effect(() => {
+    const tab = routedTab;
+    if (details && isChangesTab(tab)) untrack(() => view.openWidget(CHANGES_PANEL));
+  });
   const agent = $derived(agentName(store.sessionById(sessionId)?.agent));
 
   let host = $state<HTMLDivElement | null>(null);
@@ -98,7 +119,7 @@
   // stays as it is, and comes back when the window grows.
   // A human hiding the dock takes this same path with the drawer shut: the frames stay in the
   // each below, hidden, and the main slot gets the full width. See SessionView.dockHidden.
-  const compact = $derived(measured && tabs.length > 0 && (view.dockHidden || !fits(root, bounds)));
+  const compact = $derived(measured && tabs.length > 0 && (covered || view.dockHidden || !fits(root, bounds)));
   $effect(() => {
     const c = compact;
     untrack(() => {
@@ -107,24 +128,29 @@
     });
   });
   const geo = $derived(measured && !compact ? layout(root, bounds) : null);
+  let headerEl = $state<HTMLElement | null>(null);
+  let headerHeight = $state(0);
+  $effect(() => {
+    const el = headerEl;
+    if (!el) return;
+    const measure = () => { headerHeight = el.offsetHeight; };
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  });
+  $effect(() => {
+    const rect = geo?.nodes[MAIN_ID] ?? { x: 0, y: 0, w: bounds.w, h: bounds.h };
+    if (host) onmain?.({ ...rect, y: rect.y + headerHeight, h: Math.max(0, rect.h - headerHeight) }, host);
+  });
   const drawerRect = $derived<Rect>({ x: Math.max(0, bounds.w - DRAWER_W), y: 0, w: Math.min(bounds.w, DRAWER_W), h: bounds.h });
   const drawerTab = $derived(tabs.includes(view.dockDrawerTab) ? view.dockDrawerTab : (activeTabs(root)[0] ?? ""));
-  const drawerOpen = $derived(compact && view.dockDrawer && !view.dockHidden);
+  const drawerOpen = $derived(compact && view.dockDrawer && !view.dockHidden && !covered);
   const showing = $derived(compact ? (drawerOpen ? [drawerTab] : []) : activeTabs(root));
 
-  // A panel that reaches the bottom stops where the composer does, so the two share a baseline.
-  // The conversation's column ends 12px up, and a panel's own padding gives only 4 of those.
-  function groundRect(r: Rect): Rect {
-    return r.y + r.h >= bounds.h - 0.5 ? { ...r, h: Math.max(0, r.h - DOCK_BOTTOM_INSET) } : r;
-  }
   function rectStyle(r: Rect): string {
     return `left:${r.x}px;top:${r.y}px;width:${r.w}px;height:${r.h}px`;
-  }
-
-  // A panel's card sits inside its rect, so a preview of the rect would read bigger than the
-  // card that appears.
-  function cardRect(r: Rect): Rect {
-    return { x: r.x + PANEL_PAD, y: r.y + PANEL_PAD, w: Math.max(0, r.w - 2 * PANEL_PAD), h: Math.max(0, r.h - 2 * PANEL_PAD) };
   }
 
   // --- the drawer ---------------------------------------------------------------
@@ -134,7 +160,7 @@
   $effect(() => {
     if (!drawerOpen) return;
     const esc = (e: KeyboardEvent) => {
-      if (e.key !== "Escape" || menu || confirm.request || (e.target as Element | null)?.closest?.("[data-terminal-pane],[data-terminal-cell]")) return;
+      if (e.key !== "Escape" || menu || confirm.request || (e.target as Element | null)?.closest?.("[data-terminal-pane],[data-terminal-cell],[role=dialog]")) return;
       e.preventDefault();
       e.stopImmediatePropagation();
       view.dockDrawer = false;
@@ -169,8 +195,8 @@
   const shownAt = new Map<string, number>();
   let clock = 0;
   $effect(() => {
-    const on = showing;
-    const all = tabs;
+    const on = showing.filter(t => !isSessionPanel(t));
+    const all = tabs.filter(t => !isSessionPanel(t));
     if (!view.widgetsAllowed) {
       live = [];
       return;
@@ -183,8 +209,14 @@
     if (compact) return panelSlot(drawerRect);
     const g = groupOf(root, tab);
     const r = g && geo?.nodes[g.id];
-    return r ? panelSlot(groundRect(r)) : { x: 0, y: 0, w: 0, h: 0 };
+    return r ? panelSlot(r) : { x: 0, y: 0, w: 0, h: 0 };
   }
+
+  let visited = $state<string[]>([]);
+  $effect(() => {
+    const on = showing.filter(isSessionPanel);
+    visited = [...new Set([...untrack(() => visited), ...on])].filter(t => tabs.includes(t));
+  });
 
   // --- tab drag ----------------------------------------------------------------
 
@@ -293,10 +325,12 @@
 
   function select(tab: string) {
     if (justDragged) return;
+    if (details && isChangesTab(terms.activeTab(sessionId)) && tab !== CHANGES_PANEL) terms.select(sessionId, SSH);
     view.dockDrawerTab = tab;
     view.setDock(selectTab(view.dock, tab));
   }
-  const titleOf = (tab: string) => widgets.get(tab)?.title ?? "Widget";
+  const titleOf = (tab: string) => isSessionPanel(tab) ? sessionPanelTitle(tab) : widgets.get(tab)?.title ?? "Widget";
+  const tabLabel = (tab: string) => isSessionPanel(tab) ? titleOf(tab) : widgetTabLabel(titleOf(tab));
   const faulted = (tab: string) => view.widgetFaults.has(tab);
   const unseen = (tab: string) => view.dockUnseen.has(tab);
   $effect(() => {
@@ -309,6 +343,7 @@
     const a = document.activeElement;
     const ours = !a || a === document.body || !!a.closest("[data-dock-group],[data-dock-menu]");
     const group = groupOf(view.dock, tab)?.id;
+    if (tab === CHANGES_PANEL && isChangesTab(terms.activeTab(sessionId))) terms.toggleDiff(sessionId);
     view.closeWidget(tab);
     if (!ours) return;
     void tick().then(() => {
@@ -391,20 +426,23 @@
 <div bind:this={host} class="relative isolate min-h-0 min-w-0 overflow-hidden bg-canvas {busy ? 'select-none' : ''}" data-dock data-dock-compact={compact ? "" : undefined}>
   <!-- The timeline. One node for the life of the workspace, or the terminal parked inside it
        would remount. A size change is all it ever sees. -->
-  <div class="absolute isolate grid grid-cols-[minmax(0,1fr)] grid-rows-[minmax(0,1fr)] overflow-hidden" style={geo ? rectStyle(geo.nodes[MAIN_ID]) : "inset:0"} data-dock-main>
-    {@render children()}
+  <div class="absolute isolate grid grid-cols-[minmax(0,1fr)] grid-rows-[auto_minmax(0,1fr)] overflow-hidden" style={geo ? rectStyle(geo.nodes[MAIN_ID]) : "inset:0"} data-dock-main>
+    <div bind:this={headerEl} class="min-w-0">{@render mainHeader?.()}</div>
+    <div class="grid min-h-0 min-w-0 grid-rows-[minmax(0,1fr)]">{@render children()}</div>
   </div>
 
   {#if geo}
     {#each panels as g, i (g.id)}
       <DockPanel
         id={g.id}
-        rect={groundRect(geo.nodes[g.id])}
+        rect={geo.nodes[g.id]}
         tabs={g.tabs}
         active={g.active}
         {agent}
-        gate={!view.widgetsAllowed && i === 0}
+        gate={!view.widgetsAllowed && panels.find(p => !isSessionPanel(p.active))?.id === g.id}
+        systemActive={isSessionPanel(g.active)}
         {titleOf}
+        {tabLabel}
         {faulted}
         {unseen}
         dragging={drag?.tab ?? ""}
@@ -425,8 +463,10 @@
       {tabs}
       active={drawerTab}
       {agent}
-      gate={!view.widgetsAllowed}
+      gate={!view.widgetsAllowed && !isSessionPanel(drawerTab)}
+      systemActive={isSessionPanel(drawerTab)}
       {titleOf}
+      {tabLabel}
       {faulted}
       {unseen}
       pulse={view.dockPulse}
@@ -440,6 +480,16 @@
     />
   {/if}
 
+  <!-- Built-in tools share the same movable panels as widgets, without their execution gate. -->
+  {#each visited as id (id)}
+    {@const on = showing.includes(id) && !covered}
+    <div class="absolute z-10 grid min-h-0 min-w-0 grid-rows-[minmax(0,1fr)] overflow-hidden bg-panel" style="{rectStyle(frameRect(id))};visibility:{on ? 'visible' : 'hidden'};pointer-events:{on && !busy ? 'auto' : 'none'}" inert={!on} data-session-panel={id}>
+      {#if id === OVERVIEW_PANEL}<SessionSide {sessionId} />
+      {:else if id === CHANGES_PANEL}<ChangesView {sessionId} compact />
+      {/if}
+    </div>
+  {/each}
+
   <!-- See the note at the top. Never wrap this each in anything that can remount it, and never
        let its order change. Hidden with visibility, so a background page keeps its real size
        and a chart that measures itself is not drawn at zero. -->
@@ -449,7 +499,7 @@
       {@const on = showing.includes(id)}
       {#if element}
         <div
-          class="absolute overflow-hidden rounded-b-[7px] {on && !busy && !covered ? 'pointer-events-auto' : ''}"
+          class="absolute overflow-hidden {on && !busy && !covered ? 'pointer-events-auto' : ''}"
           style="{rectStyle(frameRect(id))};visibility:{on && !covered ? 'visible' : 'hidden'}"
           data-dock-frame={id}
         >
@@ -486,7 +536,7 @@
   {#if drag}
     <div class="absolute inset-0 z-30 cursor-grabbing" data-dock-dragging>
       {#if drag.hit && !drag.hit.refused}
-        <div class="pointer-events-none absolute rounded-lg border border-accent/50 bg-accent/15 transition-[left,top,width,height] duration-100" style={rectStyle(cardRect(drag.hit.preview))} data-dock-preview></div>
+        <div class="pointer-events-none absolute border border-accent/50 bg-accent/15 transition-[left,top,width,height] duration-100" style={rectStyle(drag.hit.preview)} data-dock-preview></div>
       {/if}
       {#if drag.mark}
         <div class="pointer-events-none absolute bg-accent" style={rectStyle(drag.mark)} data-dock-mark></div>
@@ -513,7 +563,7 @@
         <MenuItem disabled={!below} title={below ? undefined : "No room"} onclick={() => moveTo(below)}>Split down</MenuItem>
         {#if nextPanel}<MenuItem onclick={() => moveTo(nextPanel)}>Next panel</MenuItem>{/if}
       {/if}
-      {#if view.widgetsAllowed}<MenuItem onclick={reloadFromMenu}>Reload</MenuItem>{/if}
+      {#if view.widgetsAllowed && !isSessionPanel(menu.tab)}<MenuItem onclick={reloadFromMenu}>Reload</MenuItem>{/if}
       <MenuItem onclick={closeFromMenu}>Close</MenuItem>
     {/if}
   </div>

@@ -404,7 +404,7 @@ describe("the composer", () => {
     render(Composer, { sessionId: SID });
     await fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter" });
     await waitFor(() => expect(svc.Say).toHaveBeenCalled());
-    expect(v.agentDraft).toBe("precious");
+    await waitFor(() => expect(v.agentDraft).toBe("precious"));
   });
   it("shows what is still running while you drive, and no explanation", () => {
     seed([{ id: "i", kind: "block", order: 1, seq: 1, block: block({ status: "running", command: "journalctl -fu api", exitCode: undefined }) }], [conn({ wheel: "human" })]);
@@ -433,6 +433,7 @@ describe("one composer, two destinations", () => {
     await waitFor(() => expect(svc.Say).toHaveBeenCalledWith(SID, expect.any(String), "look at the logs"));
     expect(svc.RunCommand).not.toHaveBeenCalled();
     await waitFor(() => expect(v.agentDraft).toBe(""));
+    await waitFor(() => expect(document.querySelector("[data-footer-primary]")).not.toHaveAttribute("aria-busy"));
     v.agentDraft = "uptime";
     await tick();
     await fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter", metaKey: true });

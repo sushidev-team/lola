@@ -1,9 +1,9 @@
 package daemon
 
 // Text waiting for the agent. A human talks to an agent that is usually mid-turn,
-// and a pane mid-turn must never be typed into, so two paths deliver and whichever
-// comes first wins: the next agent-side reply (Inbox, printed by the CLI), or the
-// resting prompt (deliverQueued, with its idle gate and pane proof).
+// and an explicit send can use the agent's mid-turn composer after a cursor proof.
+// Messages that cannot go immediately wait for the next agent-side reply (Inbox,
+// printed by the CLI), or the resting prompt's automatic delivery gate.
 //
 // The store's queue is the source of truth, and Session.PendingSSH is the join of
 // what is waiting, rewritten whenever that changes. "Delivered" means lola put the

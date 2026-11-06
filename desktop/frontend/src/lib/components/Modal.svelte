@@ -11,6 +11,8 @@
     bodyClass = "overflow-auto p-4",
     children,
     footer,
+    onkey,
+    portal = false,
   }: {
     title: string;
     titleHelp?: string;
@@ -19,8 +21,14 @@
     bodyClass?: string;
     children: Snippet;
     footer?: Snippet;
+    onkey?: (event: KeyboardEvent) => void;
+    portal?: boolean;
   } = $props();
 
+  function placeOverlay(node: HTMLElement) {
+    if (portal) document.body.appendChild(node);
+    return { destroy() { if (portal) node.remove(); } };
+  }
   let dialog: HTMLDivElement;
   // Remember what was focused before the dialog opened so focus can return
   // there when it closes — the standard modal contract for keyboard users.
@@ -58,6 +66,8 @@
   // while it is open. Backdrop close stays on the outer element below; Escape is
   // App.svelte's (see the note above the markup).
   function onKeydown(e: KeyboardEvent) {
+    onkey?.(e);
+    if (e.defaultPrevented) return;
     if (e.key !== "Tab") return;
     const els = focusables();
     if (els.length === 0) {
@@ -84,6 +94,7 @@
      then, on the second pass, cancelling it. Backdrop click still closes. -->
 <!-- svelte-ignore a11y_click_events_have_key_events -->
 <div
+  use:placeOverlay
   class="fixed inset-0 z-40 flex items-center justify-center bg-black/45 backdrop-blur-[2px]"
   onclick={(e) => e.target === e.currentTarget && onClose()}
   role="presentation"

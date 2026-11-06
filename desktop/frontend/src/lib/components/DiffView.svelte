@@ -46,9 +46,10 @@
   let {
     sessionId,
     turn = 0,
+    compact = false,
     rail,
     turnBar,
-  }: { sessionId: string; turn?: number; rail?: Snippet; turnBar?: Snippet } = $props();
+  }: { sessionId: string; turn?: number; compact?: boolean; rail?: Snippet; turnBar?: Snippet } = $props();
   const session = $derived(store.sessionById(sessionId));
 
   // --- data ------------------------------------------------------------------
@@ -356,9 +357,9 @@
   {/if}
 {/snippet}
 
-<div class="diff-view grid h-full min-h-0 grid-rows-[auto_1fr_auto] bg-panel" data-testid="diff-view">
+<div class="diff-view grid h-full min-h-0 grid-rows-[auto_1fr_auto] bg-panel" class:diff-compact={compact} data-testid="diff-view">
   <!-- Toolbar: what the diff is against, its size, and the view toggles. -->
-  <div class="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 border-b border-edge/60 px-4 py-2.5">
+  <div class="diff-toolbar grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 border-b border-edge/60 px-4 py-2.5">
     <div class="min-w-0 truncate text-sm text-faint">
       {#if data}
         {#if turn}<span class="num mr-2 font-medium text-ink">#{turn}</span>{/if}
@@ -372,7 +373,7 @@
       {/if}
     </div>
     <div class="flex min-w-0 items-center gap-1 text-sm">
-      {#if turn}{@render turnBar?.()}{/if}
+      {#if turn && !compact}{@render turnBar?.()}{/if}
       <div class="flex shrink-0 gap-0.5 rounded-md border border-edge/60 bg-canvas p-0.5" role="group" aria-label="Diff layout">
         <Button size="xs" selected={mode === "unified"} class={mode === "unified" ? "bg-sel! text-ink!" : ""} onclick={() => setMode("unified")}>Unified</Button>
         <Button size="xs" selected={mode === "split"} class={mode === "split" ? "bg-sel! text-ink!" : ""} onclick={() => setMode("split")}>Split</Button>
@@ -385,6 +386,12 @@
         {/if}
       </Button>
     </div>
+    {#if turn && compact}<div class="col-span-2 flex items-center gap-2">{@render turnBar?.()}</div>{/if}
+    {#if compact && files.length}
+      <select class="diff-file-picker col-span-2 min-w-0 w-full rounded border border-edge bg-canvas px-2 py-1 text-sm text-ink" aria-label="Changed file" value={activeFile} onchange={(event) => jump(event.currentTarget.value)}>
+        {#each orderedFiles as file (file.path)}<option value={file.path}>{file.path} (+{file.additions} −{file.deletions})</option>{/each}
+      </select>
+    {/if}
   </div>
 
   <!-- Body: the left column (turns, then the file tree) | file diffs. The column stays when a
@@ -559,6 +566,15 @@
 </div>
 
 <style>
+  .diff-view { container: session-diff / inline-size; }
+  .diff-compact .diff-body { grid-template-columns: minmax(0, 1fr); }
+  .diff-compact .diff-nav { display: none; }
+  .diff-compact .diff-toolbar { padding: 8px; gap: 8px; }
+  @container session-diff (min-width: 720px) {
+    .diff-compact .diff-body { grid-template-columns: clamp(11rem, 26%, 16rem) minmax(0, 1fr); }
+    .diff-compact .diff-nav { display: grid; }
+    .diff-compact .diff-toolbar > select { display: none; }
+  }
   .diff-body { grid-template-columns: clamp(13rem, 24%, 21rem) minmax(0, 1fr); }
   .diff-nav, .nav-heading { background: var(--color-canvas); }
   .nav-row {

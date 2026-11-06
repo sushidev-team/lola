@@ -10,9 +10,10 @@
   // exists, because there is nowhere for a command to go. All of it is read from the field's own
   // key events, so these keys mean nothing unless the field has focus.
   //
-  // ↩ never interrupts. A pane mid-turn is never typed into, so a message waits on lola's side and
-  // can still be taken back. Stopping is a separate act with a stated scope, and it refuses clicks
-  // for a moment after any send, because a send can change what is under the cursor.
+  // ↩ never interrupts. A human message goes to the agent's empty composer immediately;
+  // the agent decides when to act on it. A blocked composer keeps the message queued.
+  // Stopping is a separate act and refuses clicks briefly after any send, because a send
+  // can change what is under the cursor.
   //
   // Which row of the footer applies is decided in composer.ts, and what a line starting with `/`
   // or `!` means in slash.ts. This file only draws the answer and carries it out.
@@ -138,7 +139,7 @@
   function placeCaret(at: number) {
     void tick().then(() => field?.setSelectionRange(at, at));
   }
-  // Puts a reference where the caret is now: an image takes a moment, and the field may have moved on.
+  // Reserve the reference at the caret immediately, before any asynchronous preparation.
   function attach(item: Attachment, clip: string) {
     const el = field;
     if (!el) return;
@@ -151,6 +152,7 @@
     setText(next);
     placeCaret(from + made.length);
     lastPaste = clip ? { text: clip, n, field: next } : null;
+    return n;
   }
   // Removing the tile removes its reference, and the other way round, so neither can be left alone.
   function removeAttachment(n: number) {
@@ -159,26 +161,35 @@
     if (t) setText(text.slice(0, t.from) + text.slice(t.to));
     field?.focus();
   }
-  async function attachClipboardImage() {
+  async function prepareImage(load: () => Promise<{ path: string; thumb: string }>, clip = "") {
+    const targetView = view;
+    const targetDest = dest;
+    const pending: Attachment = { kind: "image", value: "", loading: true };
+    const n = attach(pending, clip);
+    if (n === undefined) return;
+    const stillAttached = () => {
+      const draft = targetDest === AGENT_DEST ? targetView.agentDraft : targetView.commandDraft(targetDest);
+      return targetView.pastes.get(n) === pending && tokensIn(draft, targetView.pastes).some(token => token.n === n);
+    };
     try {
-      const got = await TalkService.AttachClipboardImage(session?.worktree ?? "");
-      attach({ kind: "image", value: got.path, thumb: got.thumb }, "");
+      const got = await load();
+      // Removed, replaced or switched to a different draft: never move the caret or reinsert it.
+      if (!stillAttached()) return;
+      targetView.pastes.set(n, { kind: "image", value: got.path, thumb: got.thumb });
     } catch (err) {
-      view.setFlash(err instanceof Error ? err.message : String(err), "text-warn");
+      if (!stillAttached()) return;
+      const error = err instanceof Error ? err.message : String(err);
+      targetView.pastes.set(n, { kind: "image", value: clip, error });
+      targetView.setFlash(`Could not attach image: ${error}. Remove it and paste again to retry.`, "text-warn");
     }
   }
-  async function attachImageFile(clip: string) {
-    try {
-      const got = await TalkService.AttachImageFile(session?.worktree ?? "", clip.trim());
-      attach({ kind: "image", value: got.path, thumb: got.thumb }, clip);
-    } catch {
-      // Not something that could be attached, so it is the text they pasted.
-      const el = field;
-      if (!el) return;
-      const from = el.selectionStart ?? el.value.length;
-      setText(el.value.slice(0, from) + clip + el.value.slice(el.selectionEnd ?? from));
-      placeCaret(from + clip.length);
-    }
+  function attachClipboardImage() {
+    const worktree = session?.worktree ?? "";
+    return prepareImage(() => TalkService.AttachClipboardImage(worktree));
+  }
+  function attachImageFile(clip: string) {
+    const worktree = session?.worktree ?? "";
+    return prepareImage(() => TalkService.AttachImageFile(worktree, clip.trim()), clip);
   }
   function onPaste(e: ClipboardEvent) {
     const clip = e.clipboardData?.getData("text/plain") ?? "";
@@ -227,6 +238,9 @@
   const showCounter = $derived(bytes >= SSH_MAX_SAY_BYTES * COUNTER_AT);
   const over = $derived(bytes > SSH_MAX_SAY_BYTES);
   const hasText = $derived(!!text.trim());
+  const attachmentsPreparing = $derived(pasted.some(t => view.pastes.get(t.n)?.loading));
+  const attachmentFailed = $derived(pasted.some(t => !!view.pastes.get(t.n)?.error));
+  const attachmentsBlocked = $derived(attachmentsPreparing || attachmentFailed);
 
   const cards = $derived(
     trayCards({
@@ -260,6 +274,7 @@
       hasText,
       over,
       canStop,
+      canSend: !!talkData?.caps?.send,
       held: queued.length,
       resets: quotaWindow?.resetsAt ? clockTime(quotaWindow.resetsAt) : "",
       running,
@@ -353,7 +368,7 @@
     const raw = text;
     const from = dest;
     const value = whole.replace(/\s+$/, "");
-    if (!value.trim() || busy || over) return;
+    if (!value.trim() || busy || view.sending || over || attachmentsBlocked) return;
     note = "";
     // Stop & send asks the same question. A screen command typed mid-turn is still a screen command.
     const next = slashEnter(value, session?.agent, pickedRow, warned);
@@ -373,19 +388,28 @@
     }
     busy = true;
     lastSend = Date.now();
+    const sendingView = view;
+    const attachments = tokensIn(raw, sendingView.pastes);
+    // Clear immediately; a slower daemon must not make Send look unresponsive.
+    if (from === AGENT_DEST) sendingView.agentDraft = "";
+    else sendingView.setCommandDraft(from, "");
+    for (const t of attachments) {
+      const item = sendingView.pastes.get(t.n);
+      if (item?.kind === "image" && item.thumb) sendingView.sentThumbs.set(item.value, item.thumb);
+    }
     if (await ssh.speak(sessionId, value, stopFirst)) {
-      view.pushHistory(AGENT_DEST, value);
-      // The story reads these back by path, in memory only. See youAttachments.
-      for (const t of pasted) {
-        const item = view.pastes.get(t.n);
-        if (item?.kind === "image" && item.thumb) view.sentThumbs.set(item.value, item.thumb);
-      }
+      sendingView.pushHistory(AGENT_DEST, value);
       if (from === AGENT_DEST) {
-        view.agentDraft = unsent(view.agentDraft, raw);
-        for (const t of tokensIn(raw, view.pastes)) if (!view.agentDraft.includes(raw.slice(t.from, t.to))) view.pastes.delete(t.n);
-      } else view.setCommandDraft(from, unsent(view.commandDraft(from), raw));
+        for (const t of attachments) if (!sendingView.agentDraft.includes(raw.slice(t.from, t.to))) sendingView.pastes.delete(t.n);
+      }
       walked = -1;
       warned = "";
+    } else {
+      // Preserve anything typed during the request, alongside the unsent message.
+      const draft = from === AGENT_DEST ? sendingView.agentDraft : sendingView.commandDraft(from);
+      const restored = draft ? `${raw}\n${draft}` : raw;
+      if (from === AGENT_DEST) sendingView.agentDraft = restored;
+      else sendingView.setCommandDraft(from, restored);
     }
     busy = false;
   }
@@ -639,7 +663,7 @@
   {/if}
 
   <div
-    class="relative overflow-hidden rounded-xl border transition-colors {running ? runBox : 'border-edge bg-panel focus-within:border-ink/35'}"
+    class="cv-composer relative overflow-hidden border transition-colors {running ? runBox : 'border-edge bg-panel'}"
     data-composer={running ? "run" : "ask"}
     data-filled={view.widgetFill ? "" : undefined}
   >
@@ -661,8 +685,16 @@
         {#each pasted as t (t.n)}
           {@const item = view.pastes.get(t.n)}
           {#if item}
-            <li class="group relative size-12" data-attachment={item.kind}>
-              {#if item.kind === "image" && item.thumb}
+            <li class="group relative size-12" data-attachment={item.kind} aria-busy={item.loading ? true : undefined}>
+              {#if item.loading}
+                <span class="grid size-12 place-items-center rounded-md border border-dashed border-edge bg-canvas text-faint" role="status" aria-label="Preparing image {t.n}">
+                  <span class="size-5 rounded-full border-2 border-current border-t-transparent motion-safe:animate-spin" aria-hidden="true"></span>
+                </span>
+              {:else if item.error}
+                <span class="grid size-12 place-items-center rounded-md border border-warn bg-canvas text-warn" role="img" aria-label="Image {t.n} failed to attach" title={item.error}>
+                  <svg class="size-5" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M10 3 2 17h16L10 3ZM10 7v5M10 14v1" /></svg>
+                </span>
+              {:else if item.kind === "image" && item.thumb}
                 <img src={item.thumb} alt="Attachment {t.n}" class="size-12 rounded-md border border-edge object-cover" />
               {:else}
                 {@const said = item.kind === "image" ? "Image" : textSize(item.value)}
@@ -683,7 +715,7 @@
         {/each}
       </ul>
     {/if}
-    <div class="flex items-start px-4 pt-3" data-composer-field>
+    <div class="cv-composer-field flex items-start" data-composer-field>
       {#if running}<span class="text-prose pr-1.5 font-mono text-ink-2" aria-hidden="true">$</span>{/if}
       <div class="grid min-w-0 flex-1 grid-cols-[minmax(0,1fr)]">
         {#if segments.length}
@@ -718,6 +750,7 @@
     {#if rows.length}<SlashList {rows} selected={Math.min(picked, rows.length - 1)} onpick={(name) => { setText(name); picked = 0; field?.focus(); }} />{/if}
 
     {#if view.flash}<p class="px-3 pt-1 text-sm {view.flashCls}" role="status">{view.flash}</p>
+    {:else if attachmentsPreparing}<p class="px-3 pt-1 text-sm text-faint" role="status">Preparing image… You can keep typing.</p>
     {:else if note}<p class="px-3 pt-1 text-sm text-faint" role="status" data-composer-note>{note}</p>
     {:else if unknownNote}<p class="px-3 pt-1 text-sm text-warn" role="status" data-composer-note>{unknownNote}</p>
     {:else if bangNote}<p class="px-3 pt-1 text-sm text-faint" data-composer-note>{bangNote}</p>{/if}
@@ -727,7 +760,7 @@
 
     <!-- Three groups at most, and each keeps its place, so Stop and the primary never move. The rule
          is always there and only coloured in Run, so holding ⌘ cannot move the box. -->
-    <div class="mt-1 grid min-h-7 grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-2 border-t pt-1 pr-2 pb-2 pl-3 {running ? runRule : 'border-transparent'}" data-composer-actions data-footer-state={footer.state}>
+    <div class="cv-composer-actions grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-2 border-t {running ? runRule : 'border-transparent'}" data-composer-actions data-footer-state={footer.state}>
       <div class="flex min-w-0 items-center gap-1.5 text-sm" data-footer-left>
         {#if footer.glyph}<span class="w-3.5 shrink-0 {footer.glyphCls} {footer.pulse ? 'ssh-pulse motion-reduce:animate-none' : ''}" aria-hidden="true" data-footer-glyph>{footer.glyph}</span>{/if}
         <span class="selectable min-w-0 truncate {footer.textCls} {footer.mono ? 'font-mono' : ''}" data-run-prompt={footer.mono ? "" : undefined} data-footer-text title={composerNow === "unproven" ? talkData?.caps?.why : undefined}>{footer.text}{#if clock}{" "}<span class="num inline-block min-w-[6ch]">{clock}</span>{/if}</span>
@@ -747,15 +780,19 @@
         {/each}
       </div>
       <div class="flex items-center gap-1">
-        {#if footer.hint && composerNow !== "card" && composerNow !== "modal"}<span class="truncate text-sm text-faint" data-footer-hint>{footer.hint}</span>{/if}
+        {#if footer.hint && composerNow !== "card" && composerNow !== "modal"}<span class="truncate text-sm text-faint" data-footer-hint>{footer.hint}</span>
+        {:else if !running && composerNow === "resting"}<span class="cv-compose-hint" data-footer-hint><kbd>⇧ ↵</kbd> new line</span>{/if}
         {#each footer.secondary as b (b.act)}
-          <Button variant="secondary" size="sm" disabled={b.disabled || (busy && b.act !== "revive")} title={b.act === "run" ? (canRun ? route.note : `Not connected, so nothing can run on ${hostName(conn)}.`) : undefined} onclick={() => onPrimary(b)} data-footer-secondary={b.act}>
+          <Button variant="secondary" size="sm" disabled={b.disabled || (busy && b.act !== "revive") || (attachmentsBlocked && ["send", "queue", "stopSend"].includes(b.act))} title={b.act === "run" ? (canRun ? route.note : `Not connected, so nothing can run on ${hostName(conn)}.`) : undefined} onclick={() => onPrimary(b)} data-footer-secondary={b.act}>
             {@render keys(b)}
           </Button>
         {/each}
       </div>
-      <Button variant={footer.primary.variant} size="sm" class="min-w-[88px] justify-center!" disabled={footer.primary.disabled || (busy && footer.primary.act !== "revive")} title={footer.primary.act === "run" ? route.note : undefined} onclick={() => onPrimary(footer.primary)} data-footer-primary={footer.primary.act}>
-        {@render keys(footer.primary)}
+      <Button variant={footer.primary.variant} size="md" class="cv-composer-send justify-center!" loading={busy || !!view.sending} disabled={footer.primary.disabled || (busy && footer.primary.act !== "revive") || (attachmentsBlocked && ["send", "queue", "stopSend"].includes(footer.primary.act))} title={footer.primary.act === "run" ? route.note : `${footer.primary.label} ${footer.primary.keys ?? ''}`} onclick={() => onPrimary(footer.primary)} data-footer-primary={footer.primary.act}>
+        {#if footer.primary.act === 'send' || footer.primary.act === 'queue'}
+          <span class="sr-only">{footer.primary.label}</span>
+          <svg viewBox="0 0 20 20" class="size-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 15V5m-5 5 5-5 5 5" /></svg>
+        {:else}{@render keys(footer.primary)}{/if}
       </Button>
     </div>
   </div>

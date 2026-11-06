@@ -464,11 +464,15 @@ each of which owns exactly one external tool or concern behind an **exec seam**
 - **Fail CLOSED on unknowns.** The reconcile orphan-revert skips whenever the
   open-PR check can't answer (no repo, gh error) — better a stuck label than
   lost work.
-- **Send-keys safety (reactions/review).** Typing into a live agent mid-turn
-  corrupts it. Every path that types goes through the `AtPrompt` idle gate
-  (consumed atomically via `Store.Update`); a non-idle session has its reaction
-  **deferred**, never forced. Payloads are sanitized (control chars stripped)
-  and are **never** run as a command. A gate carried across a daemon restart is
+- **Send-keys safety (reactions/review).** Automated messages wait for the
+  `AtPrompt` idle gate (consumed atomically via `Store.Update`); a non-idle
+  session has its reaction
+  **deferred**, never forced. Explicit human messages from the conversation
+  use `lockHumanMessage`: a supported agent may be working, but a fresh cursor
+  proof must still show an empty composer. Dialogs, drafts and unknown screens
+  stay blocked. Slash commands and Stop & send keep the resting-prompt gate.
+  Payloads are sanitized (control chars stripped) and are **never** run as a
+  command. A gate carried across a daemon restart is
   UNVERIFIED (`AtPromptVerified=false` from adoption) and must pass
   `ensurePromptVerified` (live hook or a waiting pane) before the first send —
   ambiguity fails closed (defer). The **review hand-off** uses a deliberately

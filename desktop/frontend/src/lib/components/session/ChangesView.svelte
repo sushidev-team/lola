@@ -5,7 +5,7 @@
   //
   // Restore and Fork sit on a selected turn, in DiffView's toolbar, and only there.
   import { checkpoints } from "$lib/checkpoints.svelte";
-  import { terms, CHECKPOINTS } from "$lib/terms.svelte";
+  import { terms, CHECKPOINTS, DIFF } from "$lib/terms.svelte";
   import { store } from "$lib/store.svelte";
   import { nav } from "$lib/nav.svelte";
   import { untrack } from "svelte";
@@ -13,11 +13,13 @@
   import TurnRail from "./TurnRail.svelte";
   import Button from "../Button.svelte";
 
-  let { sessionId }: { sessionId: string } = $props();
+  let { sessionId, compact = false }: { sessionId: string; compact?: boolean } = $props();
 
   const tab = $derived(terms.activeTab(sessionId));
   const st = $derived(checkpoints.of(sessionId));
-  const turn = $derived(tab === CHECKPOINTS ? st.selected : 0);
+  let selectedTurn = $state<number | null>(null);
+  $effect(() => { if (tab === CHECKPOINTS) selectedTurn = st.selected; else if (tab === DIFF) selectedTurn = 0; });
+  const turn = $derived(compact && selectedTurn !== null ? selectedTurn : tab === CHECKPOINTS ? st.selected : 0);
   const current = $derived(st.list.find((c) => c.seq === turn));
 
   // A turn ending is what records a checkpoint, and it shows up as the agent axis moving. A
@@ -31,14 +33,15 @@
   });
 </script>
 
-<div class="grid h-full min-h-0 min-w-0 grid-cols-[minmax(0,1fr)] grid-rows-[minmax(0,1fr)]" data-testid="changes-view">
-  <DiffView {sessionId} turn={current?.seq ?? 0}>
+<div class="grid h-full min-h-0 min-w-0 grid-cols-[minmax(0,1fr)] grid-rows-[auto_minmax(0,1fr)]" data-testid="changes-view">
+  <div>{#if compact && checkpointed && st.list.length}<select class="m-2 max-w-[calc(100%-16px)] rounded border border-edge bg-canvas px-2 py-1 text-sm text-ink" aria-label="Compare changes" value={turn} onchange={(event) => selectedTurn = Number(event.currentTarget.value)}><option value={0}>All changes vs base</option>{#each [...st.list].reverse() as checkpoint (checkpoint.seq)}<option value={checkpoint.seq}>#{checkpoint.seq} · {checkpoint.label}</option>{/each}</select>{/if}</div>
+  <DiffView {sessionId} {compact} turn={current?.seq ?? 0}>
     {#snippet rail()}
-      {#if checkpointed}<TurnRail {sessionId} turn={current?.seq ?? 0} />{/if}
+      {#if checkpointed && !compact}<TurnRail {sessionId} turn={current?.seq ?? 0} />{/if}
     {/snippet}
     {#snippet turnBar()}
       {#if current}
-        <span class="min-w-0 truncate text-faint" data-restore-note>Files only. The conversation and git history do not move.</span>
+        <span class="min-w-0 truncate text-faint" class:sr-only={compact} data-restore-note>Files only. The conversation and git history do not move.</span>
         <Button size="xs" disabled={!st.restorable || st.busy} title={st.restorable ? "Put the worktree's files back to this turn. Undoable." : "The agent is mid-turn. Wait for it to finish before restoring."} onclick={() => checkpoints.askRestore(sessionId, current)}>Restore…</Button>
         <Button size="xs" disabled={st.busy} title="Start a new agent session from this turn, on its own branch" onclick={() => checkpoints.askFork(sessionId, current, (id) => nav.openSession(id))}>Fork…</Button>
       {/if}

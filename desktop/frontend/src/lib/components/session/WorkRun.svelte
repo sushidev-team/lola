@@ -3,7 +3,7 @@
   import type { RunRowData } from "$lib/turns";
   import { formatMs } from "$lib/ssh";
   import { tooltip } from "$lib/tooltip";
-  import { slide } from "svelte/transition";
+  import { slide, fly } from "svelte/transition";
   import { cubicOut } from "svelte/easing";
   import Chevron from "../Chevron.svelte";
   import SyntaxText from "../SyntaxText.svelte";
@@ -15,10 +15,22 @@
   const f = $derived(feed.view(sessionId));
   const open = $derived(!readonly && f.expanded.has(row.id));
   const label = $derived(row.category === 'run' ? 'commands' : row.category === 'read' ? 'file reads' : row.category === 'edit' ? 'edits' : 'tool calls');
-  const previews = $derived(row.items.slice(0, 3).map(item => item.target));
-  const hint = $derived(`${row.items.length} separate ${label}\n${previews.join('\n')}${row.items.length > 3 ? '\n…' : ''}`);
+  const previews = $derived(row.items.slice(-1).map(item => item.target));
+  const hint = $derived(`${row.items.length} separate ${label}\n${row.items.slice(0, 3).map(item => item.target).join('\n')}${row.items.length > 3 ? '\n…' : ''}`);
   const id = $props.id();
   let animated = $state(false);
+  let head = $state<HTMLElement | null>(null);
+  let previousCount: number | undefined;
+  $effect(() => {
+    const count = row.items.length;
+    if (previousCount !== undefined && count > previousCount && head && motionEnabled(head)) {
+      // A quiet, one-shot settling motion acknowledges the new member without looping.
+      head.animate([{ transform: 'translateY(0)' }, { transform: 'translateY(3px)', offset: 0.35 }, { transform: 'translateY(0)' }], {
+        duration: 320, easing: 'cubic-bezier(0.16, 1, 0.3, 1)',
+      });
+    }
+    previousCount = count;
+  });
   function toggle() { animated = true; if (open) f.expanded.delete(row.id); else f.expanded.add(row.id); }
   function motionEnabled(node: HTMLElement) {
     return !!node.animate && !window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
@@ -33,20 +45,21 @@
       css: (t: number, u: number) => `opacity: ${t * t}; transform: translateY(${-6 * u}px);`,
     };
   }
+  function countIn(node: HTMLElement) { return fly(node, { y: 6, duration: motionEnabled(node) ? 220 : 0, easing: cubicOut }); }
+  function countOut(node: HTMLElement) { return fly(node, { y: -6, duration: motionEnabled(node) ? 160 : 0, easing: cubicOut }); }
 
 </script>
 
 <div data-run={row.category} class="cv-call-group" class:cv-call-group-open={open} class:cv-call-group-animated={animated}>
-  <div class="cv-call-group-head">
+  <div class="cv-call-group-head" bind:this={head}>
     <button class="cv-call-group-toggle" type="button" disabled={readonly} aria-expanded={open} aria-controls={id} onclick={toggle} use:tooltip={{ text: hint, language: row.category === "run" ? "sh" : "text" }}>
       <Chevron {open} />
-      <span class="cv-call-group-label">{row.items.length} {label}</span>
+      <span class="cv-call-group-label"><span class="cv-stack-count">{#key row.items.length}<span in:countIn out:countOut>{row.items.length}</span>{/key}</span> {label}</span>
       <span class="cv-call-group-preview">
         {#each previews as preview, i}
           {#if i}<span class="cv-call-group-separator" aria-hidden="true">·</span>{/if}
           <span class="cv-call-preview font-mono"><SyntaxText text={preview} language={row.category === 'run' ? 'sh' : 'text'} /></span>
         {/each}
-        {#if row.items.length > 3}<span class="shrink-0 text-faint">+{row.items.length - 3}</span>{/if}
       </span>
       <span class="cv-call-group-meta">{#if row.failed}<span>{row.failed} failed</span>{/if}{#if row.durationMs}<span>{formatMs(row.durationMs)}</span>{/if}</span>
     </button>

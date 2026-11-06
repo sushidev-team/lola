@@ -19,14 +19,18 @@
   import { disclosureMotion } from "$lib/disclosureMotion";
   import SSHRich from "../ssh/SSHRich.svelte";
   import ToolRow from "./ToolRow.svelte";
+  import ChangeRun from "./ChangeRun.svelte";
   import WorkRun from "./WorkRun.svelte";
   import Receipt from "./Receipt.svelte";
   import SystemMessage from "./SystemMessage.svelte";
   import Moment from "./Moment.svelte";
   import WidgetCard from "./WidgetCard.svelte";
+  import MessageGallery from "./MessageGallery.svelte";
+  let gallery = $state<number | null>(null);
   import AttachGlyph from "./AttachGlyph.svelte";
 
   let {
+    active = false,
     sessionId,
     row,
     chars = 72,
@@ -37,6 +41,7 @@
     latest = false,
     files,
   }: {
+    active?: boolean;
     sessionId: string;
     row: StoryRow;
     chars?: number;
@@ -64,7 +69,7 @@
        beside the clamp: the clamp needs its own display, and block could win it. -->
   {@const long = clampsRow(text, lines)}
   {@const open = !long || readonly || f.expanded.has(`more-${id}`)}
-  <span class="copy selectable break-words whitespace-pre-wrap {cls} {open ? 'block' : lines === 6 ? 'line-clamp-6' : 'line-clamp-12'}">{#if parts}{#each parts as p, i (i)}{#if p.n}<span class="num text-sm text-faint">({p.n})</span>{:else}{p.text}{/if}{/each}{:else}{text}{/if}</span>
+  <span class="copy selectable break-words whitespace-pre-wrap {cls} {open ? 'block' : lines === 6 ? 'line-clamp-6' : 'line-clamp-12'}">{#if parts}{#each parts as p, i (i)}{#if p.n}<span class="cv-image-reference num" aria-label="Image {p.n}">{p.n}</span>{:else}{p.text}{/if}{/each}{:else}{text}{/if}</span>
   {#if long && !readonly}
     <Button size="xs" class="mt-0.5 -ml-1.5" aria-expanded={open} onclick={() => (open ? f.expanded.delete(`more-${id}`) : f.expanded.add(`more-${id}`))}>
       <Chevron {open} /> {open ? "Show less" : "Show all"}
@@ -73,9 +78,13 @@
 {/snippet}
 
 {#if row.kind === "tool"}
-  <ToolRow {sessionId} {row} {chars} {readonly} nested />
+  <ToolRow {active} {sessionId} {row} {chars} {readonly} nested />
 {:else if row.kind === "run"}
-  <WorkRun {sessionId} {row} {chars} {readonly} {nested} />
+  {#if row.category === "edit"}
+    <ChangeRun {sessionId} {row} {active} {readonly} />
+  {:else}
+    <WorkRun {sessionId} {row} {chars} {readonly} {nested} />
+  {/if}
 {:else if row.kind === "prose"}
   <span class="sr-only">{agent} says</span>
   <!-- Colour and rail mark change at the stop, and the geometry does not. An answer's body reads a
@@ -98,29 +107,32 @@
   {@const h = row.item.human}
   {#if h}
     {@const sent = youAttachments(h.text)}
+    {#if gallery !== null}<MessageGallery images={sent.images} initial={gallery} worktree={session?.worktree ?? ""} thumbs={view.sentThumbs} onclose={() => gallery = null} />{/if}
     <span class="sr-only">You said</span>
-    <div class="cv-user-message text-prose" data-voice="you">
+    <div class="cv-user-message text-prose" class:cv-message-with-images={sent.images.length > 0} data-voice="you">
       {#if sent.images.length}
-        <div class="flex flex-wrap gap-2 pb-2" data-you-images>
-          {#each sent.images as im (im.n)}
+        <div class="cv-message-images" style:height="{60 + (sent.images.length - 1) * 22}px" data-you-images>
+          {#each sent.images as im, imageIndex (im.n)}
             {@const thumb = view.sentThumbs.get(im.path)}
-            <div class="relative h-8 w-11" title={im.path} data-you-image={im.n}>
+            <button type="button" class="cv-message-image" style:top="{imageIndex * 22}px" style:left="{(imageIndex % 3) * 5}px" title="Image {im.n}" aria-label="Preview image {im.n}" data-you-image={im.n} onclick={() => gallery = imageIndex}>
               {#if thumb}
-                <img src={thumb} alt="Image {im.n}" class="h-8 w-11 rounded-sm border border-edge object-cover" />
+                <img src={thumb} alt="Image {im.n}" />
               {:else}
-                <span class="grid h-8 w-11 place-items-center rounded-sm border border-edge text-faint"><AttachGlyph kind="image" class="size-5" /></span>
+                <span class="cv-message-image-placeholder"><AttachGlyph kind="image" class="size-5" /></span>
               {/if}
-              <span class="num absolute -top-1.5 -right-1.5 grid size-4 place-items-center rounded-full bg-ink-2 text-[11px] text-canvas" aria-hidden="true">{im.n}</span>
-            </div>
+              <span class="cv-message-image-number num" aria-hidden="true">{im.n}</span>
+            </button>
           {/each}
         </div>
       {/if}
+      <div class="cv-message-body">
       {@render clamped(row.id, sent.text, h.recalled ? "text-faint line-through" : "text-ink", 12, sent.parts)}
       {#if h.transcript}
         <Disclosure label={transcriptLabel(view.items, row.item)} class="-ml-1.5">
           <pre class="selectable mt-1 ml-1.5 max-h-60 overflow-auto rounded-sm bg-canvas px-2 py-1.5 font-mono text-sm whitespace-pre-wrap text-ink">{h.transcript}</pre>
         </Disclosure>
       {/if}
+      </div>
     </div>
     {#if h.recalled}
       <p class="mt-1 text-sm text-faint">Recalled</p>

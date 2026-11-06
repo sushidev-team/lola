@@ -469,3 +469,118 @@ describe("attachments in the field", () => {
     expect(tile.textContent).not.toContain("Image");
   });
 });
+
+describe('send feedback', () => {
+  it('clears the field and shows loading immediately, preserving a new draft', async () => {
+    const id = freshSession({ agentState: 'working' });
+    let resolve!: (value: unknown) => void;
+    talkSvc.Say.mockImplementationOnce(() => new Promise(r => { resolve = r; }));
+    shown(id);
+    await setTalk(id, { composer: 'working' });
+    await type('Please check the logout path');
+    await fireEvent.keyDown(field(), { key: 'Enter' });
+    expect(field().value).toBe('');
+    expect(ssh.view(id).sending?.text).toBe('Please check the logout path');
+    expect(document.querySelector('[data-footer-primary]')).toHaveAttribute('aria-busy', 'true');
+    await type('And the settings screen');
+    await fireEvent.keyDown(field(), { key: 'Enter' });
+    expect(talkSvc.Say).toHaveBeenCalledTimes(1);
+    resolve({ item: 'sent-1', delivered: true });
+    await waitFor(() => expect(document.querySelector('[data-footer-primary]')).not.toHaveAttribute('aria-busy'));
+    expect(field().value).toBe('And the settings screen');
+    expect(ssh.view(id).outgoing).toEqual([{ text: 'Please check the logout path', conn: '', item: 'sent-1', delivered: true }]);
+  });
+
+  it('restores a failed message alongside anything typed while it was sending', async () => {
+    const id = freshSession();
+    let reject!: (error: Error) => void;
+    talkSvc.Say.mockImplementationOnce(() => new Promise((_r, fail) => { reject = fail; }));
+    shown(id);
+    await setTalk(id);
+    await type('original message');
+    await fireEvent.keyDown(field(), { key: 'Enter' });
+    await type('new thought');
+    reject(new Error('connection lost'));
+    await waitFor(() => expect(field().value).toBe('original message\nnew thought'));
+    expect(ssh.view(id).sending).toBeNull();
+    expect(ssh.view(id).outgoing).toHaveLength(0);
+    expect(screen.getByRole('status')).toHaveTextContent('connection lost');
+  });
+});
+
+describe('image preparation feedback', () => {
+  const pasteImage = () => fireEvent.paste(field(), { clipboardData: { getData: () => '' } });
+
+  it('reserves the image immediately, allows typing, and blocks Send until it is ready', async () => {
+    const id = freshSession();
+    let resolve!: (value: unknown) => void;
+    talkSvc.AttachClipboardImage.mockImplementationOnce(() => new Promise(r => { resolve = r; }));
+    shown(id);
+    await setTalk(id);
+    await type('Look here: ');
+    field().setSelectionRange(11, 11);
+    await pasteImage();
+    expect(screen.getByRole('status', { name: 'Preparing image 1' })).toBeInTheDocument();
+    expect(field().value).toBe(`Look here: ${attachmentToken(1)}`);
+    expect(document.querySelector('[data-attachment="image"]')).toHaveAttribute('aria-busy', 'true');
+    await type(`Look here: ${attachmentToken(1)} please fix this`);
+    await fireEvent.keyDown(field(), { key: 'Enter' });
+    expect(talkSvc.Say).not.toHaveBeenCalled();
+    resolve({ path: '/repo/.lola/images/one.png', thumb: 'data:image/png;base64,thumb' });
+    await waitFor(() => expect(screen.getByAltText('Attachment 1')).toBeInTheDocument());
+    expect(field().value).toBe(`Look here: ${attachmentToken(1)} please fix this`);
+    await fireEvent.keyDown(field(), { key: 'Enter' });
+    await waitFor(() => expect(talkSvc.Say).toHaveBeenCalledWith(expect.objectContaining({ text: 'Look here: /repo/.lola/images/one.png please fix this' })));
+  });
+
+  it('does not resurrect a removed image or overwrite a newer attachment with the same number', async () => {
+    const id = freshSession();
+    let old!: (value: unknown) => void;
+    let next!: (value: unknown) => void;
+    talkSvc.AttachClipboardImage.mockImplementationOnce(() => new Promise(r => { old = r; }));
+    talkSvc.AttachClipboardImage.mockImplementationOnce(() => new Promise(r => { next = r; }));
+    shown(id);
+    await pasteImage();
+    await fireEvent.click(screen.getByRole('button', { name: 'Remove attachment 1' }));
+    await pasteImage();
+    old({ path: '/old.png', thumb: 'old' });
+    await tick();
+    expect(ssh.view(id).pastes.get(1)?.loading).toBe(true);
+    next({ path: '/new.png', thumb: 'new' });
+    await waitFor(() => expect(ssh.view(id).pastes.get(1)?.value).toBe('/new.png'));
+    expect(field().value).toBe(attachmentToken(1));
+  });
+
+  it('shows file preparation immediately and leaves the draft intact on failure', async () => {
+    const id = freshSession();
+    let reject!: (error: Error) => void;
+    talkSvc.AttachImageFile.mockImplementationOnce(() => new Promise((_r, fail) => { reject = fail; }));
+    shown(id);
+    await setTalk(id);
+    await fireEvent.paste(field(), { clipboardData: { getData: () => '/tmp/screenshot.png' } });
+    expect(screen.getByRole('status', { name: 'Preparing image 1' })).toBeInTheDocument();
+    await type(`Please inspect ${attachmentToken(1)}`);
+    reject(new Error('file unavailable'));
+    await waitFor(() => expect(screen.getByRole('img', { name: 'Image 1 failed to attach' })).toBeInTheDocument());
+    expect(field().value).toBe(`Please inspect ${attachmentToken(1)}`);
+    expect(document.querySelector('[data-footer-primary]')).toBeDisabled();
+    await fireEvent.click(screen.getByRole('button', { name: 'Remove attachment 1' }));
+    expect(field().value).toBe('Please inspect ');
+    expect(document.querySelector('[data-footer-primary]')).toBeEnabled();
+  });
+
+  it('finishes in the original session without touching a newly selected composer', async () => {
+    const id = freshSession();
+    let resolve!: (value: unknown) => void;
+    talkSvc.AttachClipboardImage.mockImplementationOnce(() => new Promise(r => { resolve = r; }));
+    const ui = shown(id);
+    await pasteImage();
+    const second = freshSession();
+    await ui.rerender({ sessionId: second });
+    await type('another session');
+    resolve({ path: '/first-session.png', thumb: 'first' });
+    await waitFor(() => expect(ssh.view(id).pastes.get(1)?.value).toBe('/first-session.png'));
+    expect(field().value).toBe('another session');
+    expect(ssh.view(second).pastes.size).toBe(0);
+  });
+});

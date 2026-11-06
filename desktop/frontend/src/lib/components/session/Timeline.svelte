@@ -148,6 +148,33 @@
   const headLabel = $derived(headSource?.kind === "origin" && headSource.source === "lola" ? "Lola instruction" : headSource?.kind === "moment" ? "Session event" : headSource?.kind === "origin" ? "Background context" : "Your request");
   const headAsk = $derived(headTurn ? turnAsk(story.turns.find((t) => t.id === headTurn) ?? { rows: [] }) : "");
   let anchor: { row: Element; top: number } | null = null;
+  // Keep a disclosure's heading in view throughout its opening animation. A
+  // wheel, pointer or key gesture hands scrolling straight back to the reader.
+  let opening: HTMLElement | null = null;
+  function releaseOpening() { opening = null; }
+  function scrollOpening() {
+    if (!opening?.isConnected || !scroller) return;
+    const top = scroller.getBoundingClientRect().top + 44;
+    scroller.scrollTop += opening.getBoundingClientRect().top - top;
+    lastTop = scroller.scrollTop;
+    notAtTail = !atBottom();
+    anchor = { row: opening, top };
+  }
+  function captureExpansion(event: MouseEvent) {
+    releaseOpening();
+    const target = event.target;
+    if (!(target instanceof Element) || target.closest('a')) return;
+    const control = target.closest<HTMLElement>('button[aria-expanded], summary');
+    if (!control || control.matches(':disabled')) return;
+    const expands = control.matches('summary')
+      ? !(control.parentElement as HTMLDetailsElement).open
+      : control.getAttribute('aria-expanded') === 'false';
+    if (!expands) return;
+    opening = control;
+    stuck = false;
+    anchor = null;
+    void tick().then(scrollOpening);
+  }
   // New rows fade once. A row seen before never replays it, whether it remounts or refetches.
   const knownRows = new Set<string>();
   let firstPaint = true;
@@ -157,6 +184,7 @@
     return !el || el.scrollHeight - el.scrollTop - el.clientHeight <= STICK_PX;
   }
   function toBottom() {
+    releaseOpening();
     if (scroller) {
       scroller.scrollTop = scroller.scrollHeight;
       lastTop = scroller.scrollTop;
@@ -171,7 +199,7 @@
     if (!el) return;
     if (el.scrollTop < lastTop - 1 && !atBottom()) stuck = false;
     if (atBottom()) {
-      if (!selecting) stuck = true;
+      if (!selecting && !opening) stuck = true;
       newCount = 0;
       back = null;
     }
@@ -229,6 +257,7 @@
   }
   // The same gesture that scrolls up lets go, before the scroll event can arrive.
   function onWheel(e: WheelEvent) {
+    releaseOpening();
     if (e.deltaY < 0) stuck = false;
   }
   $effect(() => {
@@ -242,11 +271,20 @@
       if (scroller?.clientWidth) chars = Math.max(24, Math.floor((Math.min(el.clientWidth - 48, AGENT_COLUMN_PX) - ROW_CHROME_PX) / PX_PER_CHAR));
       // The dock sits outside the scroller, and has to give up the same width to keep the rail straight.
       if (scroller) scroller.closest<HTMLElement>("[data-conversation]")?.style.setProperty("--cv-sb", `${scroller.offsetWidth - scroller.clientWidth}px`);
-      if (stuck && !selecting) toBottom();
+      if (opening) scrollOpening();
+      else if (stuck && !selecting) toBottom();
       else holdAnchor();
     });
     ro.observe(el);
     return () => ro.disconnect();
+  });
+  $effect(() => {
+    if (!view.sending) return;
+    untrack(() => {
+      stuck = true;
+      releaseOpening();
+      void tick().then(toBottom);
+    });
   });
   // Rows arrived. Follow if the reader is at the tail, otherwise count them for the pill.
   $effect(() => {
@@ -481,11 +519,14 @@
       }
       case "Enter":
       case "ArrowRight":
-        if (t.tagName === "BUTTON" || t.tagName === "A") return;
+        if (t.tagName === "BUTTON" || t.tagName === "A" || t.tagName === "SUMMARY") return;
         if (cur?.kind === "platefold") view.openedFolds.add(cur.id);
         else if (blk) view.openBlock(blk.id);
         else if (cur?.kind === "tool" || cur?.kind === "run") f.expanded.add(cur.id);
         else return;
+        opening = scroller?.querySelector<HTMLElement>(rowSelector(cur!.id)) ?? null;
+        stuck = false;
+        void tick().then(scrollOpening);
         break;
       case "ArrowLeft":
         if (blk) view.expanded.delete(blk.id);
@@ -613,6 +654,9 @@
     tabindex="0"
     onscroll={onScroll}
     onwheel={onWheel}
+    onpointerdowncapture={releaseOpening}
+    onkeydowncapture={releaseOpening}
+    onclickcapture={captureExpansion}
     onkeydown={onKey}
     onclick={clickStory}
     class="grid min-h-0 grid-cols-[minmax(0,1fr)] grid-rows-[minmax(0,1fr)_auto] overflow-y-scroll outline-none"
@@ -695,7 +739,20 @@
         />
       {/each}
 
-      {#if story.rowCount === 0 && emptyLine()}
+      {#each [...view.outgoing, ...(view.sending ? [view.sending] : [])].filter(sent => (!view.scope || !sent.conn || view.scope === sent.conn) && !view.items.some(item => item.id === sent.item)) as sent}
+        <div class="cv-turn relative mt-8" data-sending-message>
+          <div class="cv-person">
+            <div class="cv-speaker"><strong>You</strong></div>
+            <div class="cv-user-message text-prose"><span class="selectable whitespace-pre-wrap break-words">{sent.text}</span></div>
+            <p class="mt-1 flex items-center gap-2 text-sm text-faint" role="status">
+              {#if !sent.item}<span class="size-3 rounded-full border border-current border-t-transparent motion-safe:animate-spin" aria-hidden="true"></span>Sending…
+              {:else}{'delivered' in sent && sent.delivered ? 'Sent' : 'Queued'}{/if}
+            </p>
+          </div>
+        </div>
+      {/each}
+
+      {#if story.rowCount === 0 && !view.sending && !view.outgoing.length && emptyLine()}
         <p class="text-faint">{emptyLine()}</p>
       {/if}
       {#if reading && store.alive}

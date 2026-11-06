@@ -41,6 +41,7 @@ import {
   type SSHTimelineItem,
 } from "./ssh";
 
+import { OVERVIEW_PANEL, CHANGES_PANEL, SESSION_PANELS } from "./sessionpanels";
 import { addTab, allTabs, closeTab, deserialize, emptyLayout, groupOf, groups, retainTabs, selectTab, serialize, type DockNode } from "./docklayout";
 
 export const PREDATES_RE = /unknown cmd/i;
@@ -119,6 +120,10 @@ export type HandbackState = {
 
 class SessionView {
   items = $state<SSHTimelineItem[]>([]);
+  /** Local receipt while Send awaits the daemon; never claims agent delivery. */
+  sending = $state<{ text: string; conn: string; item?: string } | null>(null);
+  /** Acknowledged sends stay visible until the timeline catches up, even after a failed poll. */
+  outgoing = $state<{ text: string; conn: string; item: string; delivered: boolean }[]>([]);
   connections = $state<SSHConnInfo[]>([]);
   loaded = $state(false);
   /** How many timeline reads have come back, answered or not. */
@@ -199,6 +204,7 @@ class SessionView {
   reportOpen = $state(false);
   /** Someone hid the sidebar. It stays hidden for this session until they ask for it back. */
   sideHidden = $state(false);
+  sessionPanels = $state(false);
   /** What the agent draft's references stand for. See composerpaste.ts. Reactive: its tiles read it. */
   pastes = new SvelteMap<number, Attachment>();
   pasteSeq = 0;
@@ -311,19 +317,21 @@ class SessionView {
   }
 
   /**
-   * Brings the dock in line with the timeline. A post never makes a panel: with none open, a
-   * widget nobody has seen gets a dot and a card in the story, and opening is the human's act.
+   * Brings the dock in line with the timeline. In the session workspace, new widgets join
+   * as background tabs. In the older compact view, a post with no open panel gets a dot
+   * and a story card until the person opens it. Neither path grants widget execution.
    * With panels open, a new one joins behind the tab on show, because an agent posting a page
    * must not flip the one the human is reading. One that no longer exists goes, but only after
    * a real answer, or a daemon that is down would empty the dock.
    */
   syncDock() {
-    const known = new Set(this.items.flatMap((i) => (i.element?.kind === "widget" ? [i.element.id] : [])));
+    const known = new Set([...SESSION_PANELS, ...this.items.flatMap((i) => (i.element?.kind === "widget" ? [i.element.id] : []))]);
     let next = this.dock;
     const seen = this.widgetsSeen;
     for (const id of known) {
+      if (SESSION_PANELS.includes(id)) continue;
       if (this.dockClosed.has(id) || groupOf(next, id)) continue;
-      if (groups(next).length) {
+      if (this.sessionPanels || groups(next).length) {
         this.dockUnseen.add(id);
         next = addTab(next, id, undefined, false);
       } else if (seen && !seen.has(id)) {
@@ -339,6 +347,18 @@ class SessionView {
       for (const id of [...this.dockUnseen]) if (!known.has(id)) this.dockUnseen.delete(id);
     }
     if (next !== this.dock) this.setDock(next);
+  }
+
+  /** Seed one right column. Existing splits and closed tabs remain the person's choice. */
+  ensureSessionPanels(diffable: boolean) {
+    // Retire the old widget-directory tab from saved layouts without touching widget tabs.
+    let next = closeTab(this.dock, "@lola/widgets");
+    this.dockClosed.delete("@lola/widgets");
+    for (const id of [OVERVIEW_PANEL, ...(diffable ? [CHANGES_PANEL] : [])]) {
+      if (!groupOf(next, id) && !this.dockClosed.has(id)) next = addTab(next, id, undefined, false);
+    }
+    if (next !== this.dock) this.setDock(next);
+    this.syncDock();
   }
 
   /** Every widget the timeline knows of, in the order they were posted. */
@@ -375,6 +395,7 @@ class SessionView {
 
   /** The timeline row. It brings a closed widget back or points at an open one, and takes no focus. */
   openWidget(id: string) {
+    this.sideHidden = false;
     this.dockHidden = false;
     this.dockClosed.delete(id);
     this.dockUnseen.delete(id);
@@ -437,6 +458,7 @@ class SessionView {
       while (more) {
         const r = await SSHService.Timeline({ session: this.id, after: this.lastSeq });
         this.items = mergeItems(this.items, r.items);
+        this.outgoing = this.outgoing.filter(sent => !this.items.some(item => item.id === sent.item));
         if (r.connections) {
           this.connections = r.connections;
           // A delta only says what changed, so what a trashed tab owned is dropped here.
@@ -1086,19 +1108,25 @@ class SSHStore {
       v.setFlash("The daemon is down. Nothing was sent.", "text-bad");
       return false;
     }
+    if (v.sending) return false;
     const conn = v.scope;
+    v.sending = { text, conn };
     try {
       const r = await talk.say({ session, text, conn: conn || undefined, stopFirst: stopFirst || undefined });
       if (conn && v.connections.find((c) => c.id === conn)?.wheel === "human") v.patchConn(conn, { wheel: "agent" });
       v.queueWhy = r.delivered ? "" : (r.why ?? "");
+      if (r.item) v.outgoing.push({ text, conn, item: r.item, delivered: !!r.delivered });
+      v.sending = null;
       void v.fetch();
       void talk.refresh(session);
       return true;
     } catch (err) {
-      if (isTalkUnsupported(err)) return this.say(session, text);
+      if (isTalkUnsupported(err)) return await this.say(session, text);
       v.setFlash(String(err), "text-bad");
       void v.fetch();
       return false;
+    } finally {
+      v.sending = null;
     }
   }
 
@@ -1264,6 +1292,12 @@ class SSHStore {
   /** `w` and the strip's Widgets. From another view it goes to the conversation, dock showing. */
   dockKey(s: SessionInfo) {
     const v = this.view(s.id);
+    if (v.sessionPanels) {
+      this.open(s.id);
+      const widget = v.knownWidgets.find(id => !v.dockClosed.has(id)) ?? v.knownWidgets[0];
+      if (widget) v.openWidget(widget);
+      return;
+    }
     if (terms.activeTab(s.id) !== SSH) {
       this.open(s.id);
       if (v.dockHidden || !allTabs(v.dock).length) v.toggleDock();

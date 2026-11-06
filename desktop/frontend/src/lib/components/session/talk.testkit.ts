@@ -3,6 +3,8 @@
 import { vi } from "vitest";
 
 const talkSvc = vi.hoisted(() => ({
+  AttachClipboardImage: vi.fn(),
+  AttachImageFile: vi.fn(),
   State: vi.fn(),
   Say: vi.fn(),
   Stop: vi.fn(),

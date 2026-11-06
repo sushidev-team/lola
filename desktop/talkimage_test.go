@@ -106,3 +106,31 @@ func TestAttachClipboardImage(t *testing.T) {
 		t.Errorf("a copied file: %v", err)
 	}
 }
+
+func TestReadAttachmentImage(t *testing.T) {
+	wt := imageWorktree(t)
+	dir, err := imagesDir(wt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "a.png")
+	if err := os.WriteFile(path, pngHead, 0600); err != nil {
+		t.Fatal(err)
+	}
+	svc := &TalkService{}
+	got, err := svc.ReadAttachmentImage(wt, path)
+	if err != nil || !strings.HasPrefix(got, "data:image/png;base64,") {
+		t.Fatalf("%q %v", got, err)
+	}
+	outside := filepath.Join(t.TempDir(), "outside.png")
+	_ = os.WriteFile(outside, pngHead, 0600)
+	link := filepath.Join(dir, "link.png")
+	_ = os.Symlink(outside, link)
+	text := filepath.Join(dir, "text.png")
+	_ = os.WriteFile(text, []byte("private text"), 0600)
+	for _, p := range []string{outside, link, text, filepath.Join(dir, "missing.png")} {
+		if _, err := svc.ReadAttachmentImage(wt, p); err == nil {
+			t.Errorf("accepted %s", p)
+		}
+	}
+}
