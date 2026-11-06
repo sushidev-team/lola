@@ -1,0 +1,8 @@
+{"type":"user","message":{"content":"Run it"},"uuid":"u-1","timestamp":"2026-11-06T10:00:00Z"}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t-1","name":"Bash","input":{"command":"sleep 100"}}]},"uuid":"a-1","timestamp":"2026-11-06T10:00:01Z"}
+{"type":"user","message":{"content":[{"tool_use_id":"t-1","type":"tool_result","content":"The user doesn't want to proceed with this tool use.","is_error":true}]},"uuid":"u-2","timestamp":"2026-11-06T10:00:02Z"}
+{"type":"user","message":{"content":[{"type":"text","text":"[Request interrupted by user for tool use]"}]},"uuid":"u-3","timestamp":"2026-11-06T10:00:02Z"}
+{"type":"user","message":{"content":"Try again"},"uuid":"u-4","timestamp":"2026-11-06T10:00:03Z"}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Partial ans"}]},"uuid":"a-2","timestamp":"2026-11-06T10:00:04Z"}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t-2","name":"Read","input":{"file_path":"a.go"}}]},"uuid":"a-3","timestamp":"2026-11-06T10:00:04Z"}
+{"type":"user","message":{"content":"[Request interrupted by user]"},"uuid":"u-5","timestamp":"2026-11-06T10:00:05Z"}

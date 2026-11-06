@@ -323,6 +323,9 @@ func (s *sshModel) upsert(in []protocol.SSHTimelineItem) int {
 	// A tab trashed elsewhere: a delta only says what changed, so what it owned goes here.
 	s.items = slices.DeleteFunc(s.items, func(it protocol.SSHTimelineItem) bool { return s.trashed(it) })
 	for _, it := range in {
+		if sshHiddenInTUI(it) {
+			continue
+		}
 		if i := slices.IndexFunc(s.items, func(o protocol.SSHTimelineItem) bool { return o.ID == it.ID }); i >= 0 {
 			s.items[i] = it
 			continue
@@ -332,6 +335,22 @@ func (s *sshModel) upsert(in []protocol.SSHTimelineItem) int {
 	}
 	slices.SortStableFunc(s.items, func(a, b protocol.SSHTimelineItem) int { return int(a.Order - b.Order) })
 	return added
+}
+
+// sshHiddenInTUI drops the conversation's system events. The pager prints every system
+// event it holds, and it is a view of the connection: a receipt or a PR row on every turn
+// would bury the commands it exists to show. The app's conversation view reads them.
+func sshHiddenInTUI(it protocol.SSHTimelineItem) bool {
+	if it.System == nil {
+		return false
+	}
+	switch it.System.Kind {
+	case protocol.SSHEventSessionStarted, protocol.SSHEventSessionEnded, protocol.SSHEventAgentExited,
+		protocol.SSHEventStopped, protocol.SSHEventCheckpoint, protocol.SSHEventPR, protocol.SSHEventCI,
+		protocol.SSHEventReview, protocol.SSHEventHandoff:
+		return true
+	}
+	return false
 }
 
 func (s *sshModel) trashed(it protocol.SSHTimelineItem) bool {

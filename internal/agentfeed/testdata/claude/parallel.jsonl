@@ -1,0 +1,7 @@
+{"type":"user","message":{"role":"user","content":"Read both"},"uuid":"u-1","timestamp":"2026-11-06T10:00:00Z"}
+{"type":"assistant","message":{"id":"m1","content":[{"type":"tool_use","id":"t-a","name":"Read","input":{"file_path":"a.go"}}]},"uuid":"a-1","timestamp":"2026-11-06T10:00:01Z"}
+{"type":"assistant","message":{"id":"m1","content":[{"type":"tool_use","id":"t-b","name":"Grep","input":{"pattern":"needle"}}]},"uuid":"a-2","timestamp":"2026-11-06T10:00:01Z"}
+{"type":"assistant","message":{"id":"m1","content":[{"type":"tool_use","id":"t-c","name":"mcp__x__lookup","input":{"query":"q"}}]},"uuid":"a-3","timestamp":"2026-11-06T10:00:02Z"}
+{"type":"user","message":{"content":[{"tool_use_id":"t-b","type":"tool_result","content":[{"type":"text","text":"found"},{"type":"image","source":{"data":"BASE64BASE64"}}]}]},"uuid":"u-2","timestamp":"2026-11-06T10:00:03Z"}
+{"type":"user","message":{"content":[{"tool_use_id":"t-a","type":"tool_result","content":""}]},"uuid":"u-3","timestamp":"2026-11-06T10:00:04Z"}
+{"type":"user","message":{"content":[{"tool_use_id":"t-never-asked","type":"tool_result","content":"an answer to nothing"}]},"uuid":"u-4","timestamp":"2026-11-06T10:00:05Z"}

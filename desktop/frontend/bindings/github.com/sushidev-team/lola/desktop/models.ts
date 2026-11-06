@@ -125,6 +125,15 @@ export interface GroupDTO {
 }
 
 /**
+ * ImageAttachment is an image a person attached: the path the agent is given, and a thumbnail as a
+ * data URL for the composer's tile, "" when one could not be made.
+ */
+export interface ImageAttachment {
+    "path": string;
+    "thumb": string;
+}
+
+/**
  * InheritsDTO mirrors config.ProjectInherits: true means the project leaves the
  * key to [defaults], so the form shows the resolved value as a ghost and the
  * key is not written into the project's own table.

@@ -11,9 +11,10 @@ vi.mock("@bindings/desktop", () => ({
 }));
 
 import { ssh } from "$lib/ssh.svelte";
-import { PANEL_PAD, allTabs, groupOf, groups, moveTab, type Split } from "$lib/docklayout";
+import { PANEL_PAD, addTab, allTabs, groupOf, groups, moveTab, type Split } from "$lib/docklayout";
 import DockArea from "./DockArea.svelte";
-import SSHWidgetRow from "../SSHWidgetRow.svelte";
+import { store } from "$lib/store.svelte";
+import WidgetCard from "../../session/WidgetCard.svelte";
 
 let n = 0;
 let SID = "";
@@ -42,6 +43,8 @@ function seed(...ids: string[]) {
   const v = ssh.view(SID);
   v.items = ids.map((i) => item(i)) as never;
   v.loaded = true;
+  // A post never makes a panel, so a test about panels opens them, in the order they were posted.
+  for (const i of ids) v.setDock(addTab(v.dock, i, undefined, false));
   return v;
 }
 const show = () => render(DockArea, { sessionId: SID, children });
@@ -74,12 +77,13 @@ describe("the dock", () => {
     expect(document.querySelector("[data-widget-gate]")).toBeNull();
   });
   it("does not take the focus when a widget arrives", async () => {
-    const v = seed();
+    const v = seed("w0");
     const input = document.body.appendChild(document.createElement("textarea"));
     input.focus();
     v.widgetsAllowed = true;
     show();
-    v.items = [item("w1")] as never;
+    v.items = [item("w0"), item("w1")] as never;
+    await waitFor(() => expect(allTabs(v.dock)).toEqual(["w0", "w1"]));
     await waitFor(() => expect(frames().length).toBe(1));
     expect(document.activeElement).toBe(input);
     input.remove();
@@ -124,9 +128,9 @@ describe("the dock", () => {
     v.items = [{ ...item("w1"), element: { ...item("w1").element, data: "{}", revision: 2 } }] as never;
     await tick();
     expect(allTabs(v.dock)).toEqual([]);
-    render(SSHWidgetRow, { sessionId: SID, element: item("w1").element as never });
-    expect(document.querySelector('[data-widget-dot="off"]')).not.toBeNull();
-    await fireEvent.click(screen.getByRole("button", { name: "Show" }));
+    store.sessions = [{ id: SID, agent: "claude" }] as never;
+    render(WidgetCard, { sessionId: SID, element: item("w1").element as never });
+    await fireEvent.click(screen.getByRole("button", { name: "Open" }));
     expect(allTabs(v.dock)).toEqual(["w1"]);
     expect(v.dockClosed.has("w1")).toBe(false);
   });
@@ -134,9 +138,9 @@ describe("the dock", () => {
     const v = seed("a", "b");
     show();
     await waitFor(() => expect(allTabs(v.dock)).toEqual(["a", "b"]));
-    render(SSHWidgetRow, { sessionId: SID, element: item("b").element as never });
-    expect(screen.queryByRole("button", { name: "Show" })).toBeNull();
-    await fireEvent.click(document.querySelector('[data-widget-row="b"] button')!);
+    store.sessions = [{ id: SID, agent: "claude" }] as never;
+    render(WidgetCard, { sessionId: SID, element: item("b").element as never });
+    await fireEvent.click(screen.getByRole("button", { name: "Open" }));
     expect(groupOf(v.dock, "b")!.active).toBe("b");
     await waitFor(() => expect(document.querySelector('[data-dock-tab="b"] [data-dock-pulse]')).not.toBeNull());
   });
@@ -380,3 +384,57 @@ function seedTabs(v: { openWidget: (id: string) => void; dock: any }) {
   v.openWidget("gone");
   return v.dock;
 }
+
+describe("covering and hiding", () => {
+  async function allowed(...ids: string[]) {
+    const v = seed(...ids);
+    v.widgetsAllowed = true;
+    return v;
+  }
+  const frameBox = (id: string) => document.querySelector(`[data-dock-frame="${id}"]`) as HTMLElement;
+
+  it("a covered dock shows no frame and keeps the same iframe node", async () => {
+    await allowed("w1");
+    const { rerender } = render(DockArea, { sessionId: SID, children, covered: false });
+    await waitFor(() => expect(frames().length).toBe(1));
+    const node = frames()[0];
+    expect(frameBox("w1").style.visibility).toBe("visible");
+    await rerender({ sessionId: SID, children, covered: true });
+    await tick();
+    expect(frames()[0]).toBe(node);
+    expect(frameBox("w1").style.visibility).toBe("hidden");
+    expect(frameBox("w1").className).not.toContain("pointer-events-auto");
+    await rerender({ sessionId: SID, children, covered: false });
+    await tick();
+    expect(frames()[0]).toBe(node);
+    expect(frameBox("w1").style.visibility).toBe("visible");
+  });
+  it("hiding the dock keeps the frames", async () => {
+    const v = await allowed("w1");
+    show();
+    await waitFor(() => expect(frames().length).toBe(1));
+    const node = frames()[0];
+    v.toggleDock();
+    await tick();
+    expect(v.dockHidden).toBe(true);
+    expect(frames()[0]).toBe(node);
+    expect(allTabs(v.dock)).toEqual(["w1"]);
+    expect(frameBox("w1").style.visibility).toBe("hidden");
+    expect((document.querySelector("[data-dock-main]") as HTMLElement).style.inset || "0").toBeTruthy();
+    expect(document.querySelector("[data-dock-group]")).toBeNull();
+    v.toggleDock();
+    await tick();
+    expect(v.dockHidden).toBe(false);
+    expect(frames()[0]).toBe(node);
+    expect(frameBox("w1").style.visibility).toBe("visible");
+  });
+  it("toggling with no tabs brings back every widget not closed", async () => {
+    const v = seed("w1", "w2");
+    v.closeWidget("w1");
+    v.closeWidget("w2");
+    v.dockClosed.delete("w1");
+    v.toggleDock();
+    expect(allTabs(v.dock)).toEqual(["w1"]);
+    v.dockClosed.clear();
+  });
+});

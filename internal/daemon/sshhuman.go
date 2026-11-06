@@ -15,10 +15,10 @@ import (
 
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/protocol"
+	"github.com/sushidev-team/lola/internal/session"
 	"github.com/sushidev-team/lola/internal/sshconn"
 	"github.com/sushidev-team/lola/internal/sshelement"
 	"github.com/sushidev-team/lola/internal/sshstore"
-	"github.com/sushidev-team/lola/internal/state"
 )
 
 // handleSSHHosts reads config only. It answers "what would starting a session here
@@ -512,23 +512,29 @@ func (d *Daemon) handleSSHTakeWheel(ctx context.Context, a protocol.SSHTakeWheel
 	return out, nil
 }
 
-// sshInterruptAgent stops the agent's current turn because a human pressed Stop. Only a
-// WORKING agent gets the key: at a resting prompt or a question Esc would mean something
-// else. It holds the send gate, so it cannot land inside a message being typed. Failing
-// is not an error, because the wheel has already stopped its commands.
+// sshInterruptAgent stops the agent's current turn because a human pressed Stop. It is the
+// same Esc as the conversation's Stop, with its pane proof and its debounce, so the two never
+// add up to a second Esc on a resting composer. It holds the send gate, so it cannot land
+// inside a message being typed. Failing is not an error, because the wheel has already stopped
+// its commands.
+//
+// It starts the stop hold on automation, since a person just interrupted this agent and is
+// driving, and it does not hold their queue: taking the wheel is not saying "keep my words".
 func (d *Daemon) sshInterruptAgent(ctx context.Context, id string) {
 	s, ok := d.sessions.Get(id)
-	if !ok || s.AgentState != state.AgentWorking || s.TmuxName == "" || d.sendEscape == nil {
+	if !ok || s.TmuxName == "" {
 		return
 	}
 	g := d.sendGate(id)
 	g.Lock()
 	defer g.Unlock()
-	cctx, cancel := context.WithTimeout(ctx, sshTabExec)
-	defer cancel()
-	if err := d.sendEscape(cctx, s.TmuxName); err != nil {
-		d.logf("", "ssh: %s: interrupt: %v", id, err)
+	if sent, _, _ := d.escIfWorking(ctx, id, s); !sent {
+		return
 	}
+	d.sessions.Update(id, func(cur *session.Session) bool {
+		cur.StopHoldUntil = time.Now().Add(stopHold)
+		return true
+	})
 }
 
 // sshSetWheelMark records where the human's driving starts in the tab's history. A
@@ -719,7 +725,8 @@ func (d *Daemon) handleSSHClose(ctx context.Context, a protocol.SSHConnArgs) (pr
 	return protocol.SSHCloseData{Conn: sshConnInfo(store, a.Conn), Warnings: warnings}, nil
 }
 
-// handleSSHTrash is the ×: the connection closes and its tab's record goes for good, stored
+// handleSSHTrash is the ×: the connection closes and its tab's commands go for good, while a
+// human's words stay (Store.Trash), stored
 // output included. A shared master stays up for the tabs still on it. The agent is told,
 // because a block it remembers now answers "unknown".
 func (d *Daemon) handleSSHTrash(ctx context.Context, a protocol.SSHConnArgs) (protocol.SSHCloseData, error) {
@@ -749,7 +756,7 @@ func (d *Daemon) handleSSHTrash(ctx context.Context, a protocol.SSHConnArgs) (pr
 	}
 	d.logf("", "ssh: %s trashed (%s)", a.Conn, session)
 	if s, ok := d.sessions.Get(session); ok && sshAgentAlive(s) {
-		d.sshEnqueueLola(store, session, "[lola] The human closed a tab on "+host+" and deleted its record. Commands and output from that tab are gone, so do not cite them.")
+		d.sshEnqueueLola(store, session, "[lola] The human closed a tab on "+host+" and removed that host's record. Its commands and their output are gone, so do not cite them. What the human said to you stays.")
 		d.deliverSSHQueue(ctx, session)
 	} else {
 		d.sshSyncPending(session, store)
@@ -881,32 +888,11 @@ func (d *Daemon) handleSSHSay(ctx context.Context, a protocol.SSHSayArgs) (proto
 	if text == "" {
 		return protocol.SSHSayData{}, errors.New("nothing to say")
 	}
-	var driving []string
-	onHost, tabID := "", ""
 	// Talking to the agent is what hands control back, in the tab that was typed in. Done
 	// first, so the agent reads the message as something it can act on. Never with a
-	// transcript: that stays an explicit choice in the handback panel.
-	_ = store.Update(func(st *sshstore.State) error {
-		tab := st.Conn(a.Conn)
-		live := st.LiveConns()
-		for _, c := range live {
-			if c.Wheel == protocol.SSHWheelHuman && (tab == nil || c.ID == tab.ID) {
-				driving = append(driving, c.ID)
-			}
-		}
-		if tab != nil {
-			tabID, st.TalkConn = tab.ID, tab.ID
-			if len(live) > 1 {
-				onHost = sshDisplay(tab)
-			}
-		}
-		return nil
-	})
-	for _, conn := range driving {
-		if _, err := d.handleSSHHandback(ctx, protocol.SSHHandbackArgs{Conn: conn}); err != nil {
-			d.logf("", "ssh: %s: hand back %s: %v", a.Session, conn, err)
-		}
-	}
+	// transcript: that stays an explicit choice in the handback panel. With no tab named it
+	// hands back nothing: one message must not return every wheel.
+	tabID, onHost := d.sshSpeakFrom(ctx, store, a.Session, a.Conn)
 	says := "[lola] The human says:\n"
 	if onHost != "" {
 		says = "[lola] The human says, in their tab on " + onHost + ":\n"
@@ -916,6 +902,7 @@ func (d *Daemon) handleSSHSay(ctx context.Context, a protocol.SSHSayArgs) (proto
 	if err != nil {
 		return protocol.SSHSayData{}, err
 	}
+	d.sshReleaseHeld(a.Session, store) // the TUI has no "Send them": speaking is how it lets go
 	d.deliverSSHQueue(ctx, a.Session)
 	return protocol.SSHSayData{Item: item, Delivered: sshItemDelivered(store, item), AgentGone: !alive}, nil
 }
@@ -956,7 +943,7 @@ func (d *Daemon) handleSSHAnswer(ctx context.Context, a protocol.SSHAnswerArgs) 
 	if err != nil {
 		return protocol.SSHSayData{}, err
 	}
-	d.sshSyncPending(a.Session, store)
+	d.sshReleaseHeld(a.Session, store)
 	d.deliverSSHQueue(ctx, a.Session)
 	return protocol.SSHSayData{Item: item, Delivered: sshItemDelivered(store, item), AgentGone: !alive}, nil
 }

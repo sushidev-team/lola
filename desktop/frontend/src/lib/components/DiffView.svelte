@@ -3,6 +3,11 @@
   // read line by line, with comments a human queues on lines and sends back to
   // the coding agent as one message.
   //
+  // With `turn` set it shows what that turn changed instead, against the checkpoint before it, in
+  // the same layout. Read-only: a line number in one turn's diff means nothing to the agent later,
+  // so a comment is only ever anchored on the diff against the base. `rail` and `turnBar` are
+  // ChangesView's: what sits above the file list, and the actions on a selected turn.
+  //
   // Selecting: click a line to select it, shift-click another on the same side of
   // the same file to select the range; a composer opens under the selection.
   // Queued comments sit under the last line they cover. "Send to agent" ships
@@ -12,12 +17,14 @@
   //
   // Layout is CSS grid, not flex, throughout: the production WKWebView does not
   // stretch a flex child inside a flex column (see CLAUDE.md, "WebKit ≠ Chrome").
-  import { untrack } from "svelte";
+  import { untrack, type Snippet } from "svelte";
   import { DaemonService } from "@bindings/desktop";
   import type { DiffData, DiffFile } from "@bindings/internal/protocol";
   import { store } from "$lib/store.svelte";
   import { feedback } from "$lib/feedback.svelte";
   import { confirm } from "$lib/confirm.svelte";
+  import { changes } from "$lib/changes.svelte";
+  import { agentName } from "$lib/ssh";
   import { observeDiffNavigation } from "$lib/diffnavigation";
   import {
     parsePatch,
@@ -36,7 +43,12 @@
   } from "$lib/diff";
   import Button from "./Button.svelte";
 
-  let { sessionId }: { sessionId: string } = $props();
+  let {
+    sessionId,
+    turn = 0,
+    rail,
+    turnBar,
+  }: { sessionId: string; turn?: number; rail?: Snippet; turnBar?: Snippet } = $props();
   const session = $derived(store.sessionById(sessionId));
 
   // --- data ------------------------------------------------------------------
@@ -60,9 +72,11 @@
     const my = ++seq;
     loading = true;
     try {
-      const d = await DaemonService.Diff(id);
+      const wanted = turn;
+      const d = wanted ? await DaemonService.CheckpointDiff(id, wanted) : await DaemonService.Diff(id);
       if (my !== seq) return;
       data = d;
+      if (!wanted) changes.note(id, d);
       if (!d.files?.some((f) => f.path === activeFile)) activeFile = orderedFiles[0]?.path ?? "";
       error = "";
     } catch (err) {
@@ -75,6 +89,7 @@
 
   $effect(() => {
     id; // reload on selection change
+    turn; // and on another turn
     data = null;
     error = "";
     sel = null;
@@ -137,7 +152,7 @@
   let scroller = $state<HTMLDivElement | null>(null);
   let navigator = $state<HTMLElement | null>(null);
   let activeFile = $state("");
-  let navigation: ReturnType<typeof observeDiffNavigation> | undefined;
+  let navigation = $state.raw<ReturnType<typeof observeDiffNavigation> | undefined>();
 
   $effect(() => {
     orderedFiles; // Reconnect after refresh, including replaced section nodes.
@@ -176,6 +191,19 @@
     navigation?.jump(path);
   }
 
+  // An edit row asked for a file. A row may name it from the worktree's root or as an absolute path,
+  // so the end of the path decides. Waits for the diff and its observer, and asks only once.
+  $effect(() => {
+    const want = changes.wantedFile(id);
+    const nav = navigation;
+    if (!want || !data || !nav) return;
+    untrack(() => {
+      const hit = files.find((f) => f.path === want || want.endsWith(`/${f.path}`));
+      if (hit) nav.jump(hit.path);
+      changes.taken(id);
+    });
+  });
+
   function navigationKey(event: KeyboardEvent) {
     if (event.metaKey || event.ctrlKey || event.altKey) return;
     // Keep native scrolling and button activation, but do not let these keys
@@ -192,7 +220,7 @@
 
   function pick(path: string, r: Row, e: MouseEvent) {
     const a = anchorOf(r);
-    if (!a) return;
+    if (!a || turn) return;
     sel = e.shiftKey ? extendSelection(sel, path, a.side, a.line) : { path, side: a.side, start: a.line, end: a.line };
   }
 
@@ -266,11 +294,13 @@
   }
 
   function statusColor(f: DiffFile): string {
-    return f.untracked || f.status === "added" ? "text-good" : f.status === "deleted" ? "text-bad" : f.status === "renamed" ? "text-magenta" : "text-info";
+    return f.untracked || f.status === "added" ? "text-good" : f.status === "deleted" ? "text-bad" : "text-faint";
   }
 
   const count = $derived(feedback.count(sessionId));
   const note = $derived(feedback.noteFor(sessionId));
+  // In this view "add a comment" is the click on a line, which means nothing on a turn.
+  const lineTitle = $derived(turn ? undefined : "comment on this line (shift-click to select a range)");
 </script>
 
 {#snippet fileIcon()}
@@ -331,19 +361,21 @@
   <div class="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 border-b border-edge/60 px-4 py-2.5">
     <div class="min-w-0 truncate text-sm text-faint">
       {#if data}
-        <span class="mr-2 font-medium text-ink">Changes</span>
-        against <span class="font-mono text-accent-ink">{data.base}</span>
-        <span class="ml-1 font-mono">{data.mergeBase.slice(0, 8)}</span>
-        <span class="ml-3 num text-good">+{totals.add}</span> <span class="num text-bad">−{totals.del}</span>
+        {#if turn}<span class="num mr-2 font-medium text-ink">#{turn}</span>{/if}
+        against <span class="font-mono text-ink-2">{data.base}</span>
+        {#if !turn}<span class="ml-1 font-mono">{data.mergeBase.slice(0, 8)}</span>{/if}
+        <!-- Everything against the base already says its size on the rail and the strip. -->
+        {#if turn || !rail}<span class="ml-3 num text-good">+{totals.add}</span> <span class="num text-bad">−{totals.del}</span>{/if}
         {#if data.truncated}<span class="text-warn"> · truncated — too large to show in full</span>{/if}
       {:else if loading}
         loading diff…
       {/if}
     </div>
-    <div class="flex items-center gap-1">
-      <div class="flex gap-0.5 rounded-md border border-edge/60 bg-canvas p-0.5" role="group" aria-label="Diff layout">
-        <Button size="xs" selected={mode === "unified"} onclick={() => setMode("unified")}>Unified</Button>
-        <Button size="xs" selected={mode === "split"} onclick={() => setMode("split")}>Split</Button>
+    <div class="flex min-w-0 items-center gap-1 text-sm">
+      {#if turn}{@render turnBar?.()}{/if}
+      <div class="flex shrink-0 gap-0.5 rounded-md border border-edge/60 bg-canvas p-0.5" role="group" aria-label="Diff layout">
+        <Button size="xs" selected={mode === "unified"} class={mode === "unified" ? "bg-sel! text-ink!" : ""} onclick={() => setMode("unified")}>Unified</Button>
+        <Button size="xs" selected={mode === "split"} class={mode === "split" ? "bg-sel! text-ink!" : ""} onclick={() => setMode("split")}>Split</Button>
       </div>
       <Button size="xs" icon {loading} aria-label="Refresh" title="Refresh diff" onclick={load}>
         {#if !loading}
@@ -355,17 +387,15 @@
     </div>
   </div>
 
-  <!-- Body: file tree | file diffs -->
-  {#if error}
-    <div class="p-4 text-bad">{error}</div>
-  {:else if data && files.length === 0}
-    <div class="flex items-center justify-center text-faint">no changes against {data.base}</div>
-  {:else}
-    <div class="diff-body grid min-h-0">
+  <!-- Body: the left column (turns, then the file tree) | file diffs. The column stays when a
+       turn changed nothing, or there would be no way to pick another. -->
+  <div class="diff-body grid min-h-0 grid-rows-[minmax(0,1fr)]">
+    <div class="diff-nav grid min-h-0 min-w-0 border-r border-edge/60 {rail ? 'grid-rows-[minmax(0,auto)_minmax(0,1fr)]' : 'grid-rows-[minmax(0,1fr)]'}">
+      {#if rail}<div class="grid max-h-[50vh] min-h-0">{@render rail()}</div>{/if}
       <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-      <nav bind:this={navigator} onkeydown={navigationKey} class="diff-nav min-h-0 overflow-auto border-r border-edge/60 text-sm" aria-label="changed files">
-        <div class="nav-heading sticky top-0 z-10 flex items-center justify-between px-3 py-3">
-          <span class="font-medium text-ink">Changed files</span>
+      <nav bind:this={navigator} onkeydown={navigationKey} class="min-h-0 overflow-auto text-sm" aria-label="changed files">
+        <div class="nav-heading sticky top-0 z-10 flex h-6 items-center justify-between px-3.5">
+          <span class="label text-faint">Files</span>
           <span class="num text-faint">{files.length}</span>
         </div>
         <div class="px-1.5 pb-3">
@@ -391,14 +421,20 @@
             <button type="button" data-nav-key={n.key} class="folder-row nav-row" class:root-folder={n.depth === 0} class:contains-active={activeNavKey === n.key} style="--depth: {n.depth}"
               aria-expanded={!collapsed.has(n.key)} onclick={() => toggleFolder(n.key)} title={activeNavKey === n.key ? `${n.key.slice(4)} — contains current file` : n.key.slice(4)}>
               <svg class="folder-chevron size-3" class:closed={collapsed.has(n.key)} viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m4 6 4 4 4-4" /></svg>
-              <svg class="size-3.5 text-warn" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linejoin="round" aria-hidden="true"><path d="M1.5 4a1 1 0 0 1 1-1h3l1.5 1.5h6.5a1 1 0 0 1 1 1v7a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1Z" /></svg>
+              <svg class="size-3.5 text-faint" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linejoin="round" aria-hidden="true"><path d="M1.5 4a1 1 0 0 1 1-1h3l1.5 1.5h6.5a1 1 0 0 1 1 1v7a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1Z" /></svg>
               <span class="truncate">{n.name}</span>
             </button>
           {/if}
         {/each}
         </div>
       </nav>
+    </div>
 
+    {#if error}
+      <div class="p-4 text-bad">{error}</div>
+    {:else if data && files.length === 0}
+      <div class="grid place-items-center text-faint">{turn ? "This turn changed no files." : `No changes against ${data.base}.`}</div>
+    {:else}
       <!-- A focusable scroll region lets keyboard users read without tabbing through every gutter. -->
       <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
       <div bind:this={scroller} onkeydown={navigationKey} tabindex="0" role="region" aria-label="File diffs" class="diff-scroller min-h-0 min-w-0 overflow-auto font-mono text-sm leading-5">
@@ -416,7 +452,7 @@
                 </span>
               </span>
               <span class="flex items-center gap-3 text-sm num"
-                ><span class="text-good">+{f.additions}</span> <span class="text-bad">−{f.deletions}</span></span
+                >{#if f.additions}<span class="text-good">+{f.additions}</span>{/if} {#if f.deletions}<span class="text-bad">−{f.deletions}</span>{/if}</span
               >
             </header>
             {#if f.binary}
@@ -432,8 +468,8 @@
                   {#if a}
                     <button
                       type="button"
-                      class="line-gutter col-span-2 grid grid-cols-2 pr-2 text-right select-none hover:text-accent-ink"
-                      title="comment on this line (shift-click to select a range)"
+                      class="line-gutter col-span-2 grid grid-cols-2 pr-2 text-right select-none hover:text-ink"
+                      title={lineTitle}
                       onclick={(e) => pick(f.path, r, e)}
                     >
                       <span>{r.oldLine || ""}</span><span>{r.newLine || ""}</span>
@@ -463,8 +499,8 @@
                         {#if r}
                           <button
                             type="button"
-                            class="line-gutter pr-2 text-right select-none hover:text-accent-ink"
-                            title="comment on this line (shift-click to select a range)"
+                            class="line-gutter pr-2 text-right select-none hover:text-ink"
+                            title={lineTitle}
                             onclick={(e) => pick(f.path, r, e)}>{side === 0 ? r.oldLine : r.newLine}</button
                           >
                           <span class="line-marker text-center select-none">{marker(r)}</span>
@@ -486,55 +522,45 @@
           </section>
         {/each}
       </div>
+    {/if}
+  </div>
+
+  <!-- A free note beside the line comments. Sending is the footer strip's: it says how many are
+       drafted, and it is where every view keeps what you can do now. A turn takes no comments. -->
+  {#if !turn}
+    <div class="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 border-t border-edge/60 px-4 py-1.5">
+      <textarea
+        value={note}
+        rows="1"
+        placeholder={`General note for ${agentName(session?.agent)} (optional)`}
+        oninput={(e) => feedback.setNote(sessionId, e.currentTarget.value)}
+        class="max-h-32 min-h-7 w-full resize-y rounded-md border border-edge/60 bg-canvas px-2 py-0.5 text-ink focus:border-accent focus-visible:outline-none!"
+      ></textarea>
+      <div class="flex items-center gap-2">
+        {#if session?.feedbackPending}
+          <span class="text-sm text-faint" title="The agent is mid-turn. lola sends it once its pane is waiting.">Earlier feedback queued</span>
+        {/if}
+        {#if count > 0}
+          <Button
+            size="xs"
+            variant="danger"
+            onclick={() =>
+              confirm.ask({
+                title: "Discard feedback?",
+                body: `Discard ${count} unsent comment${count === 1 ? "" : "s"} for this session?`,
+                confirmLabel: "Discard",
+                onConfirm: () => feedback.clear(sessionId),
+              })}>Discard…</Button
+          >
+        {/if}
+      </div>
     </div>
   {/if}
-
-  <!-- The send bar: a free note and the batch's one action. -->
-  <div class="grid grid-cols-[minmax(0,1fr)_auto] items-end gap-3 border-t border-edge/60 bg-canvas/40 px-4 py-3">
-    <textarea
-      value={note}
-      rows="1"
-      placeholder="General note for the agent (optional)"
-      oninput={(e) => feedback.setNote(sessionId, e.currentTarget.value)}
-      class="max-h-32 min-h-8 w-full resize-y rounded-md border border-edge bg-canvas px-2 py-1 text-ink focus:border-accent focus-visible:outline-none!"
-    ></textarea>
-    <div class="flex items-center gap-2">
-      {#if session?.feedbackPending}
-        <span class="text-sm text-warn" title="the agent is mid-turn; lola sends it once its pane is waiting"
-          >earlier feedback queued</span
-        >
-      {/if}
-      {#if count > 0}
-        <Button
-          size="sm"
-          variant="danger"
-          onclick={() =>
-            confirm.ask({
-              title: "Discard feedback?",
-              body: `Discard ${count} unsent comment${count === 1 ? "" : "s"} for this session?`,
-              confirmLabel: "Discard",
-              onConfirm: () => feedback.clear(sessionId),
-            })}>Discard…</Button
-        >
-      {/if}
-      <Button
-        size="sm"
-        variant="primary"
-        disabled={count === 0}
-        loading={feedback.isSending(sessionId)}
-        title="deliver every queued comment as one message — typed only when the agent is waiting at its prompt"
-        onclick={() => feedback.send(sessionId)}
-      >
-        Send to agent{count > 0 ? ` (${count})` : ""}
-      </Button>
-    </div>
-  </div>
 </div>
 
 <style>
   .diff-body { grid-template-columns: clamp(13rem, 24%, 21rem) minmax(0, 1fr); }
   .diff-nav, .nav-heading { background: var(--color-canvas); }
-  .nav-heading { border-bottom: 1px solid color-mix(in srgb, var(--color-edge) 45%, transparent); }
   .nav-row {
     display: grid;
     align-items: center;
@@ -552,12 +578,12 @@
     padding-left: calc(1.5rem + var(--depth) * 0.75rem);
     color: var(--color-ink);
   }
+  /* Where the scroll is, not what is selected: the turn rail's row above owns the full band. */
   .file-row.is-active {
-    background: var(--color-accent-fill);
-    color: var(--color-accent-ink);
-    box-shadow: inset 1px 0 var(--color-accent);
+    background: color-mix(in srgb, var(--color-sel) 40%, transparent);
+    color: var(--color-ink);
   }
-  .folder-row.contains-active { background: var(--color-accent-fill); color: var(--color-accent-ink); }
+  .folder-row.contains-active { background: color-mix(in srgb, var(--color-sel) 50%, transparent); }
   .file-status { text-align: center; font-weight: 500; }
   .folder-row {
     grid-template-columns: 12px 14px minmax(0, 1fr);
@@ -572,7 +598,6 @@
   .diff-file { background: var(--color-panel); border-bottom: 1px solid var(--color-edge); }
   .diff-file + .diff-file { margin-top: 1rem; border-top: 1px solid var(--color-edge); }
   .file-heading { background: var(--color-panel); }
-  .is-current > .file-heading { border-bottom-color: var(--color-accent); }
   .diff-scroller:focus-visible { outline-offset: -2px; }
   .diff-row { min-height: 22px; line-height: 22px; }
   .line-gutter { color: var(--color-faint); background: color-mix(in srgb, var(--color-canvas) 35%, transparent); }
@@ -584,13 +609,12 @@
   .diff-hunk, .diff-meta {
     padding-top: 0.375rem;
     padding-bottom: 0.375rem;
-    color: var(--color-info);
-    background: color-mix(in srgb, var(--color-info) 6%, var(--color-panel));
-    border-block: 1px solid color-mix(in srgb, var(--color-info) 12%, transparent);
+    color: var(--color-faint);
+    background: color-mix(in srgb, var(--color-sel) 45%, var(--color-panel));
   }
   .diff-empty { background: var(--color-canvas); }
   .diff-selected { background: var(--color-accent-fill); }
-  .diff-row:hover .line-gutter { color: var(--color-accent-ink); }
+  .diff-row:hover .line-gutter { color: var(--color-ink); }
   @media (max-width: 800px) {
     .diff-body { grid-template-columns: 12rem minmax(0, 1fr); }
     .file-row { padding-left: calc(1rem + var(--depth) * 0.5rem); }

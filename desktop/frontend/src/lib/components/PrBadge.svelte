@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { deliveryGlyph, deliveryLabel, deliveryText } from "$lib/theme";
+  import { deliveryChipWord, deliveryGlyph, deliveryText } from "$lib/theme";
   import Button from "./Button.svelte";
   import type { SessionInfo } from "$lib/store.svelte";
 
@@ -44,7 +44,7 @@
     onOpen?: (() => void) | undefined;
   } = $props();
 
-  const chip = $derived(deliveryLabel(delivery));
+  const chip = $derived(deliveryChipWord(delivery));
 
   // Guarded on the URL as well as the handler: the daemon ships prUrl alongside
   // prNumber, but a record restored from an older snapshot can carry the number

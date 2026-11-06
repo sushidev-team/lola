@@ -1,10 +1,12 @@
 <script lang="ts">
   // One panel's card: the tab strip and, while no widget may run yet, the gate. The strip IS
-  // the chrome that labels the page below as the agent's, in the widget frame's own colours.
+  // the chrome that labels the page below as the agent's: a magenta hairline, an underline on
+  // the tab on show and `by <agent>`. Magenta is a label here, never the most saturated thing on
+  // screen, so the strip has no tint of its own.
   // The page itself is not in here: it lives in DockArea's frame layer and is laid over this
   // card, because this component comes and goes as the layout changes and a frame must not.
   //
-  // Tabs are hand-rolled for the same reason as the terminal tab chip in SessionEmbed: one chip
+  // Tabs are hand-rolled for the same reason as the machine tab chips in ViewStrip: one chip
   // holds two buttons, the label and the ×, so the wrapper paints it and the × runs bare.
   import { tick } from "svelte";
   import { PANEL_PAD, TAB_STRIP_H, type Rect } from "$lib/docklayout";
@@ -135,7 +137,7 @@
   data-dock-group={id}
 >
   <div class="grid min-h-0 min-w-0 overflow-hidden rounded-lg border border-magenta/30 bg-panel {drawer ? 'shadow-xl' : ''}" style="grid-template-rows:{TAB_STRIP_H}px minmax(0,1fr)">
-    <div class="@container grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-stretch border-b border-magenta/20 bg-magenta/8 text-sm" title={label}>
+    <div class="@container grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-stretch border-b border-edge/60 text-sm" title={label}>
       <div bind:this={strip} role="tablist" aria-label="Widgets" class="dock-strip relative flex min-w-0 overflow-x-auto" data-more={more || undefined} onwheel={wheel} onscroll={measure}>
         {#each tabs as tab, i (tab)}
           {@const on = tab === active}
@@ -163,7 +165,7 @@
         {#if more}<Button size="xs" icon class="h-5! w-5!" aria-label="List {tabs.length} tabs" aria-haspopup="menu" title="All tabs" onclick={(e) => { const r = e.currentTarget.getBoundingClientRect(); onlist(tabs, r.right, r.bottom + 4, e.detail === 0); }}>⌄</Button>{/if}
         <!-- Only where there is room for it. The magenta chrome and the tooltip still say who
              wrote this, and the page cannot draw over either. -->
-        <span class="hidden whitespace-nowrap text-faint @min-[360px]:inline">by {agent}</span>
+        <span class="hidden whitespace-nowrap text-magenta @min-[360px]:inline">by {agent}</span>
         {#if onhide}<Button size="xs" icon class="h-5! w-5!" aria-label="Hide widgets" title="Hide" onclick={onhide}>›</Button>{/if}
       </div>
     </div>

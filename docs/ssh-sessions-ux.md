@@ -1,11 +1,12 @@
 # Agent-assisted SSH: experience and visual spec
 
-> **Superseded in part.** The split workspace below is gone. The timeline and terminal now
-> share one column, switched in the header (Timeline | Terminal). The terminal comes up
-> by itself for sign-in and steps aside once signed in. The composer has two modes, Ask
-> and Run; see "One view, and commands a human runs" in `ssh-sessions.md`. Taking the
-> wheel switches the composer to Run and stays on the timeline. The SSH tab has an × that
-> closes a live connection after a confirmation, and hides the tab once all have ended.
+> **Superseded in part.** The session view is now `docs/unified-session.md`, and where the two
+> differ that one is right. A session has one story for every host, with All as its default scope,
+> and a host is a scope rather than a tab. The story and a host's terminal share one column, reached
+> by the strip or ⌘\\, and the header has no switch. Sign-in happens on a card in the tray. The
+> composer has two modes, Ask and Run; see "One story, and commands a human runs" in
+> `ssh-sessions.md`. Taking the wheel stays on the story. Removing a host is in the host bar's `⋯`,
+> and it keeps your messages.
 
 
 The engineering contract is `docs/ssh-sessions.md`. This file says what the human

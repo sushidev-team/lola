@@ -1,0 +1,37 @@
+[
+  {
+    "id": "agent-abc123/c-1:0",
+    "kind": "user",
+    "order": 0,
+    "turn": "agent-abc123/c-1:0",
+    "parent": "abc123",
+    "text": "long prompt text",
+    "at": "2026-11-06T10:00:02Z"
+  },
+  {
+    "id": "agent-abc123/c-2:0",
+    "kind": "tool",
+    "order": 1,
+    "turn": "agent-abc123/c-1:0",
+    "parent": "abc123",
+    "at": "2026-11-06T10:00:03Z",
+    "tool": {
+      "name": "Grep",
+      "category": "read",
+      "summary": "login",
+      "status": "ok",
+      "durationMs": 1000,
+      "preview": "login.go:3",
+      "hasOutput": true
+    }
+  },
+  {
+    "id": "agent-abc123/c-4:0",
+    "kind": "text",
+    "order": 2,
+    "turn": "agent-abc123/c-1:0",
+    "parent": "abc123",
+    "text": "Found in login.go",
+    "at": "2026-11-06T10:00:05Z"
+  }
+]

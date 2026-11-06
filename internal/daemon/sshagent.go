@@ -468,7 +468,7 @@ func (d *Daemon) handleSSHAgentPost(id string, a protocol.SSHAgentPostArgs) (pro
 		}); err != nil {
 			return err
 		}
-		conn := sshPostConn(st, p.Host)
+		conn := sshPostConn(st, p.Host, p.Element.Evidence)
 		var e sshelement.Element
 		prevEl := st.ElementByRef(string(p.Element.Kind), p.Element.Ref)
 		if prevEl == nil && p.Element.Kind == sshelement.KindWidget {
@@ -511,20 +511,20 @@ func (d *Daemon) handleSSHAgentPost(id string, a protocol.SSHAgentPostArgs) (pro
 	return out, nil
 }
 
-// sshPostConn attaches a post to a connection: the named host's, else the tab the human
-// last spoke from, else the session's only live one, else none, which shows it in every tab.
-func sshPostConn(st *sshstore.State, host string) string {
+// sshPostConn attaches a post to a connection: the named host's, else the one its evidence
+// ran on. With neither it belongs to the whole session, because narration must not die with
+// a tab. TalkConn still routes ConnForHost, which is about commands and not about posts.
+func sshPostConn(st *sshstore.State, host string, evidence []sshelement.Evidence) string {
 	if host != "" {
 		if c := st.ConnForHost(host); c != nil {
 			return c.ID
 		}
 		return ""
 	}
-	if c := st.Conn(st.TalkConn); c != nil && !c.Terminal() {
-		return c.ID
-	}
-	if live := st.LiveConns(); len(live) == 1 {
-		return live[0].ID
+	for _, e := range evidence {
+		if b := st.Block(e.Block); b != nil && b.Conn != "" {
+			return b.Conn
+		}
 	}
 	return ""
 }

@@ -607,6 +607,10 @@ func (d *Daemon) discardAttempt(ctx context.Context, nat NativeAPI, s session.Se
 	if err != nil {
 		return false, err
 	}
+	// Not through dropSession: a loser's teardown must not free the in-flight claim or clear
+	// the label, because the winner still works the issue. Its story stays readable all the
+	// same, which is how someone compares what it did.
+	d.recordEndedAs(s, "Not picked")
 	d.sessions.Delete(s.ID)
 	if serr := d.sessions.Save(); serr != nil {
 		d.logf("", "bestOfPick: persist sessions: %v", serr)

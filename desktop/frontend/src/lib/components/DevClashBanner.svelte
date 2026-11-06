@@ -14,14 +14,18 @@
   //
   // The action asks first (store.askFreePort → the shared confirm dialog): this
   // is the one control in the app that kills a process lola did not start.
-  let { session }: { session: SessionInfo } = $props();
+  //
+  // In the conversation it sits last in the tray and `tray` is set. Every other view mounts it under
+  // the strip, and only those, so a clash is said once. Neutral in both places, because no colour
+  // has "a dev port is taken" as its job.
+  let { session, tray = false }: { session: SessionInfo; tray?: boolean } = $props();
 
   const clash = $derived(session.devClash);
 </script>
 
 {#if clash}
-  <div class="flex shrink-0 items-center gap-3 border-b border-warn/40 bg-warn/10 px-3 py-2 text-ink" role="alert">
-    <span class="shrink-0 text-warn" aria-hidden="true">⚠</span>
+  <div class="flex shrink-0 items-center gap-3 border-edge bg-panel px-3 py-2 text-ink {tray ? 'rounded-[10px] border' : 'border-b'}" role="alert" data-card={tray ? "dev-clash" : undefined}>
+    <span class="shrink-0 text-faint" aria-hidden="true">⚠</span>
     <span class="min-w-0 flex-1">
       {#if clash.command}<span class="font-mono text-sm">{clash.command}</span> stopped —{:else}A dev process stopped
         —{/if}

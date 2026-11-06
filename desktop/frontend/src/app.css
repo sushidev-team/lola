@@ -55,7 +55,7 @@
    The type scale at the BOTTOM of the block is the same idea applied to size.
    The app used to carry ~180 hand-placed size classes drawn from 10px, 11px,
    12px and 13px with near-uniform weight, which is a lot of decisions and no
-   hierarchy. There are now FIVE sizes, each with exactly one job, and the
+   hierarchy. There are now SIX sizes, each with exactly one job, and the
    default one is set on `body` so most elements carry no size class at all:
 
      text-xs   12px  UPPERCASE micro-labels ONLY, and only via `label` below —
@@ -74,6 +74,8 @@
                      read", and 12px/400 is where it stops being that.
      text-base 13px  THE DEFAULT, inherited from `body`. Row text, labels,
                      inputs, buttons, list items — anything a user reads.
+     text-prose 14px reading: agent prose, your messages, a card's question and
+                     the composer field. A longer line-height, and nothing else.
      text-lg   15px  section titles: the one level that must out-rank the
                      content directly under it.
      text-xl   18px  view titles and hero empty states. The ceiling.
@@ -93,6 +95,7 @@
   --color-accent-fill-hover: #293a45; /* same tint, deeper backdrop — see catppuccin.ts */
   --color-on-accent: #11111b; /* text ON the accent fill — measured, was `canvas` */
   --color-ink: #cdd6f4; /* default foreground — `text` */
+  --color-ink-2: #a6adc8; /* middle ink tier — `subtext0`, walked to AA */
   --color-faint: #7f849c; /* muted secondary text / labels — `overlay1` */
   --color-placeholder: #7f849c; /* input placeholders — faint raised to AA on canvas */
   --color-sel: #313244; /* selected-row band — `surface0` */
@@ -133,10 +136,10 @@
   --radius-panel: 10px;
 
   /* -------------------------------------------------------------------------
-     Type scale. FIVE sizes, no more. `--text-*: initial` clears Tailwind's stock
+     Type scale. SIX sizes, no more. `--text-*: initial` clears Tailwind's stock
      scale first, so `text-2xl`/`text-3xl`/… no longer generate any CSS — a stray
      one is inert (the element simply inherits 13px) instead of silently
-     reintroducing a sixth size. Sizes are px, not rem: this is a fixed-DPI
+     reintroducing a seventh size. Sizes are px, not rem: this is a fixed-DPI
      desktop chrome and the page-zoom controller (desktop/main.go's
      zoomController) scales the whole webview, not the root font-size.
 
@@ -163,6 +166,10 @@
   /* THE DEFAULT. Set on `body`, so most elements carry no size class at all. */
   --text-base: 13px;
   --text-base--line-height: 18px;
+
+  /* Reading: agent prose, your messages, a card's question, the composer field. */
+  --text-prose: 14px;
+  --text-prose--line-height: 22px;
 
   /* Section titles — the one level that must out-rank its own content. */
   --text-lg: 15px;
@@ -442,22 +449,11 @@ input[type="number"]::-webkit-inner-spin-button {
 }
 
 /* ---------------------------------------------------------------------------
-   The SSH workspace's three bits of motion, per docs/ssh-sessions-ux.md 1.3. A 150ms
-   fade on arrival, the connecting pulse on the header's state dot, and the split
-   easing when the wheel changes hands. The global prefers-reduced-motion rule above
-   stills all of them, and each state keeps a distinct static shape.
-
-   --ssh-split is registered so the browser can interpolate it. Where @property is
-   missing the split simply snaps, which is the same layout one frame sooner.
+   The SSH workspace's two bits of motion, per docs/ssh-sessions-ux.md 1.3. A 150ms
+   fade on arrival and the connecting pulse on the header's state dot. The global
+   prefers-reduced-motion rule above stills both, and each state keeps a distinct
+   static shape.
 ---------------------------------------------------------------------------- */
-@property --ssh-split {
-  syntax: "<percentage>";
-  inherits: true;
-  initial-value: 52%;
-}
-.ssh-split {
-  transition: --ssh-split 200ms ease-out;
-}
 /* The stream column's rows. Brief and composer keep their own height, the dock takes
    what is left up to its cap, and the stream keeps a sliver. minmax(0,auto) is what
    lets the dock SHRINK: a plain auto row overflowed the column, painted over the
@@ -468,7 +464,6 @@ input[type="number"]::-webkit-inner-spin-button {
 .ssh-dock {
   max-height: 60cqh;
 }
-.ssh-col[data-carded] [data-legend],
 .ssh-col[data-carded] .ssh-brief-account {
   display: none;
 }
@@ -476,7 +471,10 @@ input[type="number"]::-webkit-inner-spin-button {
    and Now row, and a decision gets the stream's row as well: it is the one thing on
    screen that cannot wait, and the stream returns the moment it is answered. */
 @container (max-height: 520px) {
-  [data-legend],
+  /* The story line gives its row to the story on a short column. */
+  [data-story-line] {
+    display: none;
+  }
   .ssh-brief-label,
   .ssh-brief-more {
     display: none;
@@ -494,18 +492,129 @@ input[type="number"]::-webkit-inner-spin-button {
   .ssh-card-command {
     order: -1;
   }
-  .ssh-col[data-deciding] {
-    grid-template-rows: auto 0 minmax(0, auto) auto;
-  }
   .ssh-dock {
     max-height: none;
   }
 }
-/* A block's start time is the first thing to go in a tight column. */
-@container (max-width: 640px) {
-  .ssh-block-time {
-    display: none;
+/* A decision takes the story's row only where card and story share a column. */
+@container (max-height: 420px) {
+  .ssh-col[data-deciding] {
+    grid-template-rows: auto 0 minmax(0, auto) auto;
   }
+}
+
+/* Conversation: one chronological timeline with a centered, persistent composer.
+   Reading measure is independent of the pane width; tables and tool output can use
+   the wider lane. Keep this geometry identical in short and tall windows. */
+[data-conversation] {
+  --text-prose: 14px;
+  --text-prose--line-height: 22px;
+  --text-sm: 12px;
+  --text-sm--line-height: 17px;
+  --text-lg: 15px;
+  --text-lg--line-height: 22px;
+}
+.cv-band {
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+  margin-inline: auto;
+  padding-inline: clamp(32px, 3cqw, 56px);
+}
+.cv-sb { padding-right: var(--cv-sb, 0px); }
+.cv-dock {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  max-width: 960px;
+}
+.cv-desk-row {
+  border-top: 1px solid var(--color-edge);
+  background: var(--color-canvas);
+}
+.cv-dock-rail, .cv-start { display: none; }
+.cv-turn { min-width: 0; }
+.cv-stream[data-rail]::before { left: 16px; }
+.cv-person {
+  margin-left: auto;
+  margin-bottom: 28px;
+  max-width: 80%;
+}
+.cv-agent {
+  min-width: 0;
+  max-width: 920px;
+}
+.cv-speaker {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  color: var(--color-ink-2);
+  font-size: var(--text-sm);
+  line-height: var(--text-sm--line-height);
+}
+.cv-speaker strong { color: var(--color-ink); font-weight: 600; }
+.cv-speaker time { color: var(--color-faint); font-variant-numeric: tabular-nums; }
+.cv-person .cv-speaker { justify-content: flex-end; margin-bottom: 8px; }
+.cv-receipt {
+  display: grid;
+  gap: 8px;
+  border-top: 1px solid var(--color-edge);
+  padding-top: 12px;
+  margin-top: 8px;
+}
+.cv-receipt-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; }
+.cv-receipt-summary > time { margin-left: auto; }
+.cv-receipt [data-receipt-files] { max-width: 560px; }
+.cv-fold {
+  display: grid;
+  grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+  column-gap: 24px;
+}
+.cv-fold-ask { text-align: right; }
+.cv-ledger dd > :first-child { margin-top: 0; }
+[data-voice="agent"] { overflow-wrap: anywhere; }
+[data-voice="agent"] [data-rich] > p,
+[data-voice="agent"] [data-rich-list] { max-width: 70ch; }
+[data-voice="agent"] [data-rich-heading] {
+  margin-top: 24px;
+  margin-bottom: 0;
+  font-size: 15px;
+  line-height: 22px;
+}
+[data-voice="agent"] [data-rich-table],
+[data-voice="agent"] [data-rich-ledger] { max-width: 100%; }
+[data-voice="agent"] [data-rich-table] th {
+  background: var(--color-panel);
+  color: var(--color-ink-2);
+  font-weight: 600;
+}
+[data-voice="agent"] [data-rich-table] :is(th, td) { padding: 8px 12px; }
+[data-voice="agent"] [data-rich-code] {
+  border: 1px solid var(--color-edge);
+  border-radius: 8px;
+  background: var(--color-panel);
+  padding: 16px;
+  line-height: 22px;
+}
+[data-voice="agent"] code {
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--color-sel) 45%, transparent);
+  padding: 1px 4px;
+}
+[data-composer] { box-shadow: 0 3px 12px rgb(0 0 0 / 8%); }
+[data-composer="ask"]:focus-within { border-color: var(--color-accent); }
+@container (max-width: 619.98px) {
+  .cv-band { padding-inline: 24px 16px; }
+  .cv-stream[data-rail]::before { left: 8px; }
+  .cv-person { max-width: 94%; margin-bottom: 24px; }
+  .cv-ledger { grid-template-columns: minmax(0, 1fr); }
+  .cv-ledger dt:not(:empty) { padding-bottom: 0; }
+  .cv-ledger dt:empty { display: none; }
+  .cv-ledger dd { padding-top: 4px; border-top: 0; }
+  .cv-fold { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+  .cv-fold-ask { order: -1; }
+  [data-composer-actions] { gap: 4px; }
+  [data-footer-hint] { display: none; }
 }
 .ssh-fade-in {
   animation: ssh-fade-in 150ms ease-out;

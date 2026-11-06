@@ -1,0 +1,78 @@
+[
+  {
+    "id": "i-1",
+    "kind": "user",
+    "order": 0,
+    "turn": "i-1",
+    "text": "Fix the build",
+    "at": "2026-11-06T10:00:02Z"
+  },
+  {
+    "id": "i-3",
+    "kind": "tool",
+    "order": 1,
+    "turn": "i-1",
+    "at": "2026-11-06T10:00:04Z",
+    "tool": {
+      "name": "Bash",
+      "category": "run",
+      "summary": "go build ./...",
+      "status": "ok",
+      "durationMs": 1500,
+      "preview": "ok",
+      "hasOutput": true
+    }
+  },
+  {
+    "id": "i-4",
+    "kind": "tool",
+    "order": 2,
+    "turn": "i-1",
+    "at": "2026-11-06T10:00:05Z",
+    "tool": {
+      "name": "Bash",
+      "category": "run",
+      "summary": "go test ./...",
+      "status": "error",
+      "preview": "FAIL",
+      "hasOutput": true
+    }
+  },
+  {
+    "id": "i-6",
+    "kind": "tool",
+    "order": 3,
+    "turn": "i-1",
+    "at": "2026-11-06T10:00:07Z",
+    "tool": {
+      "name": "Edit",
+      "category": "edit",
+      "summary": "a.go, b.go",
+      "status": "ok"
+    }
+  },
+  {
+    "id": "i-7",
+    "kind": "text",
+    "order": 4,
+    "turn": "i-1",
+    "text": "Done.",
+    "at": "2026-11-06T10:00:08Z"
+  },
+  {
+    "id": "aborted@rollout-a-interactive.jsonl@1947",
+    "kind": "notice",
+    "order": 5,
+    "turn": "i-1",
+    "text": "Interrupted",
+    "at": "2026-11-06T10:00:09Z"
+  },
+  {
+    "id": "compacted@rollout-a-interactive.jsonl@2060",
+    "kind": "divider",
+    "order": 6,
+    "turn": "i-1",
+    "text": "Compacted",
+    "at": "2026-11-06T10:00:10Z"
+  }
+]

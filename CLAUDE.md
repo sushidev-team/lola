@@ -186,9 +186,15 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   `claude -p` per interpretation (default `--model sonnet`) judging what an
   agent is ACTUALLY doing from pane/events/PR context. Output is parsed,
   whitelisted, clamped — and DISPLAY-ONLY (see the invariant below).
+- `internal/agentfeed` — the Conversation's reader (stdlib leaf + `protocol`): turns an agent's own
+  log into display items, pull-driven by `talkState` and `agentFeed`, with no goroutine and no
+  tailer. Allowlist parsing, a base-name-only path rule and visible health. Display-only: see the
+  invariant, and `TestControlLoopNeverImportsAgentfeed`.
 - `internal/agent` — the pluggable coding-agent leaf (stdlib + regexp only; must
   NOT import config/session/hook/runtime/attention): the `claude`|`codex`|
-  `opencode` kind enum, per-kind launch argv (`LaunchArgs`), the REVIEW argv
+  `opencode` kind enum, what lola has measured per kind (`Caps`: feed, send, stop,
+  cards, cursor, paste; only claude has them, so another agent's text queues and
+  its session opens on the terminal), per-kind launch argv (`LaunchArgs`), the REVIEW argv
   (`ReviewArgs`/`ReviewStreamArgs` — a very different, READ-ONLY posture from the
   unattended worker launch), the callback-config bodies (codex `config.toml`,
   opencode plugin JS), and `ParseCodexNotify`.
@@ -335,6 +341,11 @@ each of which owns exactly one external tool or concern behind an **exec seam**
   (unverified) AtPrompt gate.
 - `statusagentwire.go` — the `[statusagent]` interpreter's worker/triggers/
   cost controls and `displayOverlay`, the overlay's ONE consumer.
+- `talk.go`, `talksay.go`, `talkstate.go`, `talkgate.go`, `talkfeed.go`, `talknote.go`, `timeline.go`
+  — the Conversation's commands: `agentSay`, `agentStop`, `agentChoose`, `agentQueueRelease`,
+  `talkState`, `endedSessions`, the two locks, the feed reader's composition, and the one worker that
+  writes lola's own rows into a session's store. All human-side (`SSHHumanCommands`), so neither the
+  bridge nor a phone can reach them.
 - `dev.go` — the per-project ACTIVE session: `[[project]].dev_commands` running
   in `<id>-dev-N` tabs, plus the observer's `reconcileDevTabs` derivation. See
   the invariant below.
@@ -1374,32 +1385,131 @@ each of which owns exactly one external tool or concern behind an **exec seam**
     rolls the restored ones back if a later one fails.
   - Not offered for stacks: best-of (dispatch drops the mix), fork, and every
     checkout-only launch (`needsCheckout`).
-- **An SSH session is one view, and a command a human runs is private until shared.**
-  The timeline and terminal share one column (`SSHWorkspace`), reached through ⋯ or ⌘\\,
-  because side-by-side panes
-  read as if the agent worked in the terminal, when its commands run over exec channels.
+- **The Conversation is a display-only projection, and everything from an agent's log is a CLAIM,
+  its "you said" and its "ok" included.** `internal/agentfeed` is the one reader allowed to render a
+  transcript, a deliberate exception to `agentlog` and `claimaudit`, and it may read assistant text,
+  tool names and one-line summaries, and tool output on a human's request, sanitized. Nothing it
+  returns reaches an axis, Attention, a slot, a reaction, write-back, a gate or any agent: a test
+  forbids the import in the control loop. Agent liveness never derives from it. The merge happens in
+  the client from two commands, so no private block can reach an agent-readable path. It reads only
+  a base name matching a UUID directly under the session's slug directory, no-follow, never a path a
+  hook handed over: `hookEvent` is on the bridge. Only a store-recorded send wears the "you" fill; a
+  forged log line can at most read "In terminal" or as one line from a teammate. Only an exec-channel block wears a plate or an exit
+  code. `feedHealth` degradation is always visible, and `partial` comes from comparing hook counts
+  with feed counts, because "the file grows" only detects total failure.
+- **A plate means lola witnessed it, a card means you can act on it, and nothing else in the
+  timeline gets a box.** The person's fill is the one other enclosure, and parsed tables and callouts
+  get rules and side lines, never fills. The story draws one rail with neutral marks (`S/RailMark`),
+  which say what kind of row this is, never what state anything is in: they are static, hidden from a
+  reader, and the only colour is the tick of a failure nothing has answered yet. State glyphs
+  (`◉ ◐ ● ○ ✕ $`) belong to the roster, the bottom-left footer, the Glance, the session list and a goal
+  session's line, and never appear in a story row: the rail's foot (`S/RailFoot`) is that bottom-left
+  footer, below the story, and has no pulse. The strip's one `◉` says a card is waiting while another
+  view is on show. The delivery axis lives in the top bar and the agent axis at the bottom left, in
+  every view.
+- **The Conversation is one DOM in three layouts, and agent text is parsed for display only.**
+  `.cv-*` in `app.css` decides by container size: lanes (agent beside the rail, person on the right
+  sharing an edge with the composer), pane (short: story left, card and composer right) and stack
+  (under 1040px). No agent row is wider than its column, which is what lets the person's message stay
+  pinned for the whole turn; prose stops at 560px however wide the window is. `lib/answerblocks.ts`
+  builds styled elements as data, with no `{@html}`, and fails open: what it does not understand stays
+  a paragraph, and a test holds that no word is lost. Nothing it returns reaches an axis, a gate or an
+  agent. A person's message is never parsed, and a log tool row or a parsed status never wears green:
+  only a plate may. See "The Conversation's layouts" in `docs/unified-session.md`.
+- **A human's press and a machine's send take different locks, and neither skips the proof.**
+  `lockHumanPrompt` is for a send a person pressed this instant. `lockAutomationPrompt` is for
+  everything queued, a person's queued text included, because a flush can land while someone types in
+  an attached terminal, on a phone too. Both hold `sendGate` through proof and delivery, and both
+  demand `Classify == ActivityWaiting` and `ComposerEmptyAt`. Claude's empty proof reads the CURSOR,
+  not a footer allowlist, because a status line can print anything. `typeToAgentLocked` takes a
+  `typedNote`, so every path that types records what it typed and leaves a row: an agent must never
+  visibly respond to something nobody can see. On Claude Code a message over 800 bytes goes by
+  `load-buffer` + `paste-buffer -p`, because `send-keys -l` damages text over about 1 KB and fails
+  over 16 KB while reporting success. Only that agent's paste timing was measured, so any other
+  stays on `SendKeysTyped` at every size (`agent.Caps.Paste`, `sendFor`). Typed text always goes as
+  `send-keys -l --` with a trailing `;` escaped, or tmux reads a leading `-` as a flag and a final
+  `;` as its own command separator.
+- **A choice key is one key, with no Enter, pinned to a hash of the lines a human read.**
+  `agentChoose` re-reads the pane under the gate immediately before the press, because a stale digit
+  becomes a draft and because labels are identical across prompts: `Yes` for a test query and `Yes`
+  for `DROP DATABASE`. The card clears from a pane re-read, because a denied prompt fires no hook.
+  `/config`-type screens classify as waiting, so nothing a composer sends may rely on `Classify`
+  alone; that is how a spike once rewrote a real setting.
+- **Stop means stop, for a while.** `agentStop` requires a working pane on a fresh capture and
+  debounces, because two Escs at rest open Rewind. It holds the human queue until the human speaks
+  and all automation for 30 seconds, or the queue fires the moment the pane rests after someone said
+  stop. It reconciles the axis itself, because Esc fires no Stop hook. It is scoped to this turn: a
+  background shell survives and a running exec-channel block keeps running, and the UI says so. It
+  is not a steer. No path types into a working pane. `escIfWorking` is the one Esc. Taking the wheel
+  uses it too, with the automation hold and no hold on the queue, because taking the wheel is not
+  saying keep my words. Stop & send starts the hold with its Esc and keeps it when the message did
+  not go. If the Esc took a vim composer out of INSERT the message stays queued for a person, since
+  typed there it would run as vim commands.
+- **There is one session view, and opening a session only changes its height.** The band under the
+  list IS the `SessionEmbed` the open session uses, and its wrapper is a CSS state, never an `{#if}`.
+  Unopened it takes the keyboard only from a click, or `j` and `k` would type into whatever they walk
+  past. See "One view at two heights" in `docs/unified-session.md`.
+- **The terminal is attached only while it is on screen, and it is never out of reach.** One xterm
+  per tmux session. No hidden or read-only client: a sole read-only client makes every `send-keys`
+  fail and still resizes the agent. A selected session on its terminal is on screen, so it attaches
+  and defers automated sends; the selection settles first, so walking the list attaches nothing.
+  The view preference is sticky, and `defaultView` opens the terminal automatically for agentless,
+  orphaned and goal-managed sessions and, unless a host is connected, for an agent whose log lola
+  cannot read. It chooses only at open. A later degradation shows a
+  notice and never moves the layout.
+- **A session's story outlives the session.** `dropSession` records `State.Ended` (a best-of loser
+  goes through `recordEndedAs` instead, because its teardown must not free the claim), the roster
+  lists it for the store's 14-day retention, counted from `EndedAt`, and the read-only view
+  (`components/session/EndedView.svelte`) reads the store plus the transcript. `SessionEmbed` asks `endedSessions` again the moment an open session leaves the
+  list, or a merge would land on an empty column. A respawned id gets a `session_started` divider so
+  a new agent never appears under an old conversation, and the words still queued for the agent
+  that ended read as recalled rather than reaching the new one.
+- **Changes is one place with two entries, and a turn takes no comments.** `DIFF` is everything
+  against the base and `CHECKPOINTS` is one turn, both drawn by `components/session/ChangesView.svelte`
+  and both lighting the
+  strip's Changes cell, so neither is ever "the view to go back to". A line number in one turn's diff
+  means nothing to the agent later, so comments anchor on the base diff only. Restore moves files and
+  says so: the conversation and git history do not move. `Changes +84 −12` is `lib/changes.svelte.ts`,
+  one `cmd=diff` on arrival and each time the agent rests, for the session on screen, because no new
+  field may reach `SessionInfo` (phones get it by default).
+- **The first view of a Conversation says once that the terminal is still there.** `components/session/FirstOpen.svelte`, one
+  line, globally, `lola.session.intro`. It claims nothing while a terminal covers the conversation, so
+  a session that opens on its terminal does not use it up unseen.
+- **A session is one story, and a command a human runs is private until shared.** Every agent
+  session has one Conversation, and a connection is a scope inside it, never a view or a tab of
+  its own story. `view.scope` is the filter and the Run target, and it defaults to All, where the
+  story of every host and of the session interleave by time. The terminal is a peer reached by
+  the strip or ⌘\\, because side-by-side panes read as if the agent worked in the terminal, when
+  its commands run over exec channels.
   The composer is one field: ↩ asks the agent and ⌘↩ runs on the host. Double ⌘ in the
   focused field swaps them on every tier (the operator's choice), so the field must keep
   looking different while swapped, with the tier's colour: that look is the only guard
-  against a sentence executing. Unswapped, plain ↩ must never run anything. `cmd=sshHumanRun` records a block with
+  against a sentence executing. Unswapped, plain ↩ must never run anything. Under All with several
+  live hosts Run is refused, because choosing a production target must be a human act. With no
+  host at all, ⌘↩ keeps the draft and says why. `cmd=sshHumanRun` records a block with
   `Private` set, and the agent cannot poll or cite it, and is not nudged about it, until
   `cmd=sshShareBlock`. Both are human commands, so the hook bridge and phones cannot reach
-  them. See `docs/ssh-sessions.md`.
-- **An SSH tab is one connection, and deleting it deletes the record.** Connecting always adds a
-  connection, even to an open host, except that it answers an agent's waiting request. Each tab
-  has its own timeline, folder, terminal and draft (`SessionView.tabItems`, `draft`). An item with
-  no connection shows in every tab. Rules to keep:
-  - **A new tab reuses a running master** (`sshSharedMaster`), so a master can have several tabs.
-    `-O exit` and removing the socket belong to the last tab using it (`State.SharesMaster`), and
-    an idle master closes only when all its tabs are idle. The socket path may name a connection
-    that no longer exists.
-  - **`cmd=sshTrash` removes for good:** the connection, its items, its stored output and its
-    queued text (`Store.Trash`). The last tab takes the items no connection owned. Clients drop
-    the rest when a timeline reply stops listing the connection, because a delta cannot say what
-    went. The agent gets one line saying so.
-  - **The agent never names a tab.** `ConnForHost` prefers the tab the human last spoke from
-    (`State.TalkConn`), then the newest not closed, and a post with no host goes to that tab too.
-  - A denied request has no tab, because it never became a connection.
+  them. See `docs/ssh-sessions.md`, and `docs/unified-session.md` for the whole view.
+- **A host is one connection, and removing it removes its commands, not your words.** Connecting
+  always adds a connection, even to an open host, except that it answers an agent's waiting
+  request. Folder, terminal and command draft stay per connection (`view.commandDraft`), and the
+  agent's draft is the session's (`view.agentDraft`). Rules to keep:
+  - **Under All, a Say hands back nothing and leaves `TalkConn` alone.** Otherwise one chat message
+    would return every wheel. With a host in scope it hands back that host and sets `TalkConn`.
+  - **A new connection reuses a running master** (`sshSharedMaster`), so a master can have several
+    connections. `-O exit` and removing the socket belong to the last connection using it
+    (`State.SharesMaster`), and an idle master closes only when all its connections are idle. The
+    socket path may name a connection that no longer exists.
+  - **`cmd=sshTrash` removes the host's record for good:** the connection, its blocks and their
+    output, its connection-scoped elements and events, its handback items and its queued text
+    (`Store.Trash`). It KEEPS a human's `say` items, with the label dropped, and everything
+    session-wide, and the last connection no longer wipes the story. Clients drop the rest when a
+    timeline reply stops listing the connection, because a delta cannot say what went. The agent
+    gets one line saying so.
+  - **The agent never names a tab.** `ConnForHost` prefers the connection the human last spoke from
+    (`State.TalkConn`), then the newest not closed. A post with no `--host` and no evidence is
+    session-wide (`Conn == ""`), so narration does not die with a connection.
+  - A denied request has no connection, because it never became one.
 - **An SSH connection has one shell for the human and one folder for everyone.**
   `internal/sshterm` starts the terminal with bash hooks (carried on a file descriptor,
   nothing written to the host), `internal/daemon/sshtap.go` reads the pane through tmux
@@ -1419,9 +1529,8 @@ each of which owns exactly one external tool or concern behind an **exec seam**
     otherwise never closes. ControlPersist remains the backstop.
 - **A shell's question comes to the timeline, and its answer is the one secret on any lola
   path.** (`internal/daemon/sshprompt.go`, `SSHPromptCard.svelte`, "Questions a shell asks" in
-  `docs/ssh-sessions.md`.) The terminal no longer opens for sign-in, and the header has no
-  Timeline | Terminal switch: it is ⋯ or ⌘\\, with "← Timeline" on the terminal's own strip.
-  Rules to keep:
+  `docs/ssh-sessions.md`.) The terminal no longer opens for sign-in: the card sits in the tray, and
+  the terminal is the strip's or ⌘\\. Rules to keep:
   - **The question is untrusted and decides nothing.** A remote program can print "Password:",
     so a card shows the exact line and who asks, carries no lock or logo, and must never read
     as lola's own sign-in. A yes/no never takes focus, or a stray Enter would answer it. No
@@ -1713,9 +1822,9 @@ each of which owns exactly one external tool or concern behind an **exec seam**
     by `TermService.CloseShell`, omitted from `Shells` and from the phone's `panes`, and
     mounted in the app only by `SSHTerminalPane`, because one tmux session with two xterm
     clients fights over its size. The name comes from `SSHConnInfo.Tab`. While the daemon
-    is down the app keeps the last pushed sessions that have ssh (`store.retainedSSH`,
-    read only by `sessionById`), so the stream stays readable, the controls go quiet and
-    the terminal, which is tmux, still works.
+    is down the app keeps the last pushed sessions, and the phone only those that have ssh
+    (`store.retained`, `retainAll`, read by `sessionById` and `rosterSessions`), so the stream
+    stays readable, the controls go quiet and the terminal, which is tmux, still works.
 - **Untrusted output stays out of the control loop.** `brain` summaries and
   `review` findings are derived from attacker-influenceable context (PR diffs,
   CI logs, pane text). They may go to a human (notify + Linear comment) but the
@@ -1794,12 +1903,13 @@ each of which owns exactly one external tool or concern behind an **exec seam**
     and the winner is decided by Tailwind's order in the compiled sheet, not by
     the class attribute — the same trap applies to any width/border/gap override.
   - Five things stay hand-rolled ON PURPOSE, each commented where it lives: the
-    `role="tab"` strip (`Tabs.svelte`), the theme swatches (drawn in their own
+    `role="tab"` strips (`Tabs.svelte`, `ViewStrip.svelte`), the theme swatches (drawn in their own
     flavor's colours), the `[defaults]` inherit chip (caption-sized, not a
     control), the card-shaped rows (project actions, kanban cards, nav rows), and
-    the terminal tab chip (`SessionEmbed.svelte`) — one chip holding TWO buttons
-    (label + close ×), so the wrapper paints the background and both buttons run
-    `variant="bare"`; with the chip on the label, hovering the × dropped it.
+    the machine tab chips (`components/session/ViewStrip.svelte`, and the dock's
+    `DockPanel.svelte`) — one chip holding TWO buttons (label + close ×), so the wrapper
+    paints the background and the × runs `variant="bare"`; with the chip on the label,
+    hovering the × dropped it.
   - Labels are **Sentence case** — "Open PR", "Trigger review", "CodeRabbit". The
     app was all-lowercase, which read as prose rather than as controls. Tests
     assert these strings; `getByRole("menuitem", { name })`, not `getByText`,
@@ -1895,7 +2005,9 @@ module) precisely so it can reuse `internal/protocol`, `internal/config`,
 `internal/doctor`, `internal/linear`, `internal/secrets` — Go's `internal/` rule
 forbids that from a sibling module. It is a **client of the same daemon socket**
 the TUI uses; it never embeds the daemon, and it drives `tmux -L lola` directly
-for terminal streaming. Seven bound Wails services: `SSHService` (the HUMAN side of
+for terminal streaming. Eight bound Wails services: `TalkService` (the conversation: read the
+agent's log, speak, stop a turn, answer a prompt on a card; one socket round-trip per method, and
+only `lib/talk.svelte.ts` imports it, with `lib/feed.svelte.ts` reading through that), `SSHService` (the HUMAN side of
 agent-assisted ssh, one socket round-trip per method, no `sshAgent*`), `DaemonService` (every
 protocol command + daemon start/stop/restart), `TermService` (capture-pane
 snapshots for the grid + a live `tmux attach` PTY for the focused terminal),
@@ -2068,3 +2180,6 @@ distinct binary from the v2 `wails`. See `desktop/README.md`.
 - `config.example.toml` — complete commented config.
 - `agent-rules.md` — the build spec / rule list (with AO-bridge deltas).
 - `SPEC.md` / `PLAN.md` — original spec and phased roadmap (P0–P9).
+- `docs/unified-session.md` — the desktop app's session view: the design, its rubric and where
+  the build differs from it. Change it with the view.
+- `docs/ssh-sessions.md` — the engineering contract for hosts in a session.

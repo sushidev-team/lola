@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -17,6 +18,8 @@ import (
 	"github.com/sushidev-team/lola/internal/protocol"
 	"github.com/sushidev-team/lola/internal/runtime"
 	"github.com/sushidev-team/lola/internal/session"
+	"github.com/sushidev-team/lola/internal/sshelement"
+	"github.com/sushidev-team/lola/internal/sshstore"
 )
 
 func validateSessionName(name string) error {
@@ -77,6 +80,34 @@ func (d *Daemon) handleRenameSession(id, name string) error {
 	}
 	d.sessions.Update(id, func(s *session.Session) bool { s.Name = name; return true })
 	return d.sessions.Save()
+}
+
+// directoryPrompter is the runtime half of a prompt on a borrowed directory. It stays out of
+// NativeAPI for the same reason sshOpener does.
+type directoryPrompter interface {
+	OpenDirectoryPrompt(ctx context.Context, p config.Project, id, dir, location, kind string, useAgent bool, prompt string) (session.Session, error)
+	LocalFirstTurn(id, prompt string) string
+}
+
+// noteInitial writes a session's first row: the brief a human gave it. It is created
+// delivered, because it was, and so that no client offers to recall it. typed is the text
+// lola gave the agent as its first turn, when the log will carry a record of that.
+func (d *Daemon) noteInitial(id, prompt, typed string) {
+	text := strings.TrimSpace(humanText(prompt))
+	if text == "" {
+		return
+	}
+	if len(text) > protocol.SSHMaxSayBytes {
+		text = sshelement.Para(text, protocol.SSHMaxSayBytes) // a row, and the agent has the whole brief
+	}
+	now := time.Now()
+	ev := timelineEvent{Session: id, Human: &protocol.SSHHumanMessage{
+		Origin: protocol.SSHHumanInitial, Text: text, Delivered: true, DeliveredAt: now,
+	}}
+	if typed != "" {
+		ev.Sent = &sshstore.SentBatch{Hash: sentHash(typed), At: now}
+	}
+	d.emitSystem(ev)
 }
 
 // A borrowed directory never becomes a worktree owned by Lola. No checkout,
@@ -155,7 +186,22 @@ func (d *Daemon) handleOpenDirectory(ctx context.Context, a protocol.OpenManualA
 	id := "lola-local-" + hex.EncodeToString(suffix[:])
 	cctx, cancel := context.WithTimeout(ctx, nativeSpawnTimeout)
 	defer cancel()
-	s, err := nat.OpenDirectory(cctx, p, id, dir, a.Location, kind, a.Agent)
+	prompt := ""
+	if a.Agent {
+		prompt = strings.TrimSpace(humanText(a.Prompt))
+		if len(prompt) > protocol.SSHMaxSayBytes {
+			return protocol.OpenData{}, fmt.Errorf("this brief is %d bytes and the limit is %d, so the session was not started", len(prompt), protocol.SSHMaxSayBytes)
+		}
+	}
+	var s session.Session
+	typed := ""
+	if opener, ok := nat.(directoryPrompter); ok && prompt != "" {
+		s, err = opener.OpenDirectoryPrompt(cctx, p, id, dir, a.Location, kind, a.Agent, prompt)
+		typed = opener.LocalFirstTurn(id, prompt)
+	} else {
+		prompt = "" // a runtime that cannot pass it on: no row for words nobody was given
+		s, err = nat.OpenDirectory(cctx, p, id, dir, a.Location, kind, a.Agent)
+	}
 	if err != nil {
 		return protocol.OpenData{}, err
 	}
@@ -167,5 +213,6 @@ func (d *Daemon) handleOpenDirectory(ctx context.Context, a protocol.OpenManualA
 		return protocol.OpenData{}, fmt.Errorf("persist session: %w", err)
 	}
 	d.recordSessionEvent("", s)
+	d.noteInitial(id, prompt, typed)
 	return protocol.OpenData{SessionID: id, Worktree: dir, Message: "Session opened"}, nil
 }

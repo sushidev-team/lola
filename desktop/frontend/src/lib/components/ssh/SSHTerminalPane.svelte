@@ -9,7 +9,9 @@
   import Button from "../Button.svelte";
   import LiveTerminal from "../LiveTerminal.svelte";
 
-  let { sessionId, conn }: { sessionId: string; conn: SSHConnInfo } = $props();
+  // `chrome` false: the session's footer strip says how to leave, so this draws no bar of its own.
+  // The old workspace keeps its bar until it goes.
+  let { sessionId, conn, chrome = true }: { sessionId: string; conn: SSHConnInfo; chrome?: boolean } = $props();
 
   const view = $derived(ssh.view(sessionId));
   const session = $derived(store.sessionById(sessionId));
@@ -52,9 +54,13 @@
 </script>
 
 <div class="grid h-full min-h-0 grid-rows-[auto_auto_auto_minmax(0,1fr)] bg-panel" data-terminal-pane>
-  <div class="relative z-10 flex h-8 items-center gap-0.5 border-b border-edge/60 px-2">
-    <span class="mr-2"><Button size="xs" title="Back to the timeline (⌘\\)" onclick={() => ssh.showTimeline(sessionId)}><span aria-hidden="true">←</span> Timeline</Button></span>
-    <span class="min-w-0 truncate text-sm text-faint">{host}</span>
+  <div>
+    {#if chrome}
+      <div class="relative z-10 flex h-8 items-center gap-0.5 border-b border-edge/60 px-2">
+        <span class="mr-2"><Button size="xs" title="Back to the timeline (⌘\\)" onclick={() => ssh.showTimeline(sessionId)}><span aria-hidden="true">←</span> Timeline</Button></span>
+        <span class="min-w-0 truncate text-sm text-faint">{host}</span>
+      </div>
+    {/if}
   </div>
   <div>
     {#if hint}
@@ -86,7 +92,7 @@
           autofocus={wantFocus}
           {focusRequest}
           onExit={() => view.fetch()}
-          onEscapeFocus={() => view.streamFocus++}
+          onEscapeFocus={() => (chrome ? view.streamFocus++ : ssh.showTimeline(sessionId))}
         />
       {/key}
     {:else if requested}

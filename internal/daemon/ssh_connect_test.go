@@ -254,7 +254,7 @@ func TestRunningACommandTakesTheWheelAndAskingGivesItBack(t *testing.T) {
 	if run.Refusal == nil || run.Refusal.Code != protocol.SSHRefuseHumanControl {
 		t.Fatalf("the agent ran past a driving human: %+v", run)
 	}
-	if _, err := r.d.handleSSHSay(ctx, protocol.SSHSayArgs{Session: "s1", Text: "take over"}); err != nil {
+	if _, err := r.d.handleSSHSay(ctx, protocol.SSHSayArgs{Session: "s1", Conn: conn, Text: "take over"}); err != nil {
 		t.Fatal(err)
 	}
 	if got := r.conn(t, "s1", conn).Wheel; got != protocol.SSHWheelAgent {
@@ -266,6 +266,8 @@ func TestStopInterruptsOnlyAWorkingAgent(t *testing.T) {
 	r := newSSHRig(t, hostDev)
 	s := r.session("s1", "")
 	conn := r.connected(t, "s1", "dev-box")
+	f := wireTalkFake(t, r.d)
+	f.show(talkWorking)
 	var sent []string
 	r.d.sendEscape = func(_ context.Context, name string) error {
 		sent = append(sent, name)
@@ -280,6 +282,7 @@ func TestStopInterruptsOnlyAWorkingAgent(t *testing.T) {
 	cur, _ := r.d.sessions.Get("s1")
 	cur.SetAgentState(state.AgentIdle, "", time.Now())
 	r.d.sessions.Upsert(cur)
+	f.show(talkResting) // the pane is the proof now, not the record
 	if _, err := r.d.handleSSHTakeWheel(context.Background(), protocol.SSHTakeWheelArgs{Conn: conn, Interrupt: true}); err != nil {
 		t.Fatal(err)
 	}

@@ -6,7 +6,6 @@ import {
   canGrant,
   chipFact,
   chipFor,
-  clampSplit,
   composerLine,
   connView,
   connectsLine,
@@ -444,14 +443,6 @@ describe("voices", () => {
   });
   it("draws plan steps with no green", () => {
     for (const s of ["pending", "active", "done", "skipped", "failed"]) expect(JSON.stringify(stepView(s))).not.toContain("good");
-  });
-});
-
-describe("the split", () => {
-  it("keeps both columns above their minimums", () => {
-    expect(clampSplit(5, 1000)).toBeCloseTo(42);
-    expect(clampSplit(95, 1000)).toBeCloseTo(64);
-    expect(clampSplit(52, 1000)).toBe(52);
   });
 });
 

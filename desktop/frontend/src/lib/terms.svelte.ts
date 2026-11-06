@@ -9,6 +9,7 @@
 import { SvelteMap } from "svelte/reactivity";
 import { TermService } from "@bindings/desktop";
 import { store } from "./store.svelte";
+import { conversationOffered, defaultView, feedKnownFrom, type SessionViewKind } from "./sessionview";
 
 /** The agent pane's tab key (a sentinel; every other tab is a shell tmux name). */
 export const AGENT = "agent";
@@ -18,21 +19,30 @@ export const AGENT = "agent";
  * it is not a tmux session, so it is never discovered and never closed. */
 export const DIFF = "diff";
 
-/** The checkpoint diff's key: what the turn behind the checkpoint selected in
- * the sidebar changed (CheckpointsView). A view sentinel like DIFF, but it has
- * no button in the tab strip — the sidebar's Checkpoints list opens it. */
+/** One turn of Changes: what the turn behind the selected checkpoint changed. A
+ * view sentinel like DIFF, and the strip's Changes cell lights for both. The turn
+ * rail switches between the two, so neither one is ever "the previous view". */
 export const CHECKPOINTS = "checkpoints";
 
-/** The SSH workspace's key: the timeline you read and talk in, beside the terminal
- * you drive in. A view sentinel like DIFF. A "<id>-ssh-N" tmux session never
- * becomes a strip tab: it is mounted only inside the workspace, because one tmux
- * session with two xterm clients would fight over its size. */
+/** The conversation's key: the story you read and the composer you talk in. A view
+ * sentinel like DIFF, and still spelled SSH because old stored `lola.tabs` values
+ * hold that word. A "<id>-ssh-N" tmux session never becomes a tab of its own: it is
+ * mounted only inside the conversation's workspace, because one tmux session with
+ * two xterm clients would fight over its size. */
 export const SSH = "ssh";
+
+/** The same sentinel by the name the UI uses. */
+export const CONVERSATION = SSH;
 
 /** A view tab (DIFF, CHECKPOINTS, SSH) is not a terminal: never discovered from
  * tmux, never closed, never in the tab-cycling ring. */
 export function isViewTab(tab: string): boolean {
   return tab === DIFF || tab === CHECKPOINTS || tab === SSH;
+}
+
+/** Either half of Changes: everything against the base, or one turn. */
+export function isChangesTab(tab: string): boolean {
+  return tab === DIFF || tab === CHECKPOINTS;
 }
 
 /** Suffix of a session's REVIEW pane ("<id>-review"). The daemon opens it for a
@@ -86,11 +96,96 @@ function readNames(): NameMap {
   }
 }
 
+/** The view a human last picked, per session. localStorage: the daemon never reads it. */
+const TABS_KEY = "lola.tabs";
+const TABS_KEEP = 200;
+/** The global preference. Conversation decides nothing, so only Terminal is ever stored. */
+const GLOBAL_VIEW_KEY = "lola.session.view";
+/** The agents whose log this client last found unreadable, so the next open knows before it paints. */
+const FEED_BAD_KEY = "lola.feed.bad";
+/** Set once the one line about the terminal has been shown. Global: it is said once, ever. */
+const INTRO_KEY = "lola.session.intro";
+
+function readTabs(): Record<string, string> {
+  try {
+    const raw: unknown = JSON.parse(localStorage.getItem(TABS_KEY) ?? "{}");
+    return raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, string>) : {};
+  } catch {
+    return {};
+  }
+}
+
+function readFeedBad(): Record<string, boolean> {
+  try {
+    const raw: unknown = JSON.parse(localStorage.getItem(FEED_BAD_KEY) ?? "{}");
+    return raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, boolean>) : {};
+  } catch {
+    return {};
+  }
+}
+
+function readGlobalView(): SessionViewKind {
+  try {
+    return localStorage.getItem(GLOBAL_VIEW_KEY) === "terminal" ? "terminal" : "conversation";
+  } catch {
+    return "conversation";
+  }
+}
+
 class Terms {
   private shells = new SvelteMap<string, string[]>(); // session id -> discovered shell tmux names
   private active = new SvelteMap<string, string>(); // session id -> AGENT | shell tmux name
   private order = new SvelteMap<string, string[]>(); // session id -> hand-sorted tab order (see shellsFor)
   private names = new SvelteMap<string, Record<string, string>>(Object.entries(readNames())); // -> hand-given labels
+  private sticky = readTabs(); // session id -> the tab a human last picked, across relaunches
+  private lastTerm = new SvelteMap<string, string>(); // session id -> the terminal last on show
+  private previous = new SvelteMap<string, string>(); // session id -> what Changes returns to
+  private focusAsks = new SvelteMap<string, number>(); // session id -> requests for the keyboard
+  /** Open sessions in: the preference behind `defaultView`. */
+  globalView = $state<SessionViewKind>(readGlobalView());
+
+  setGlobalView(v: SessionViewKind) {
+    this.globalView = v;
+    try {
+      localStorage.setItem(GLOBAL_VIEW_KEY, v);
+    } catch {
+      /* the preference just does not persist */
+    }
+  }
+
+  private introSession = "";
+  private introDismissed = false;
+  /**
+   * The first-open line. The first conversation to ask claims it and keeps it for as long as it
+   * stays mounted; nothing else ever gets it. A storage that throws means it shows once per run.
+   */
+  claimIntro(id: string): boolean {
+    if (this.introDismissed) return false;
+    if (this.introSession) return this.introSession === id;
+    try {
+      if (localStorage.getItem(INTRO_KEY)) return false;
+      localStorage.setItem(INTRO_KEY, "seen");
+    } catch {
+      /* said once for this run */
+    }
+    this.introSession = id;
+    return true;
+  }
+  /** Answered, so a remount of the same conversation does not bring the line back. */
+  dismissIntro() {
+    this.introDismissed = true;
+  }
+
+  /** Where this session would open, given what is known about it right now. */
+  private resolve(id: string, feedKnown?: boolean): string {
+    const saved = this.sticky[id];
+    const kind: SessionViewKind | null = saved === SSH ? "conversation" : saved && !isViewTab(saved) ? "terminal" : null;
+    const s = store.sessionById(id);
+    const known = feedKnown ?? (s && readFeedBad()[s.agent || "claude"] ? false : undefined);
+    const view = s ? defaultView(s, kind, this.globalView, known) : (kind ?? "terminal");
+    if (view === "conversation") return SSH;
+    return saved && !isViewTab(saved) ? saved : AGENT;
+  }
 
   /** Shell tmux names open for session `id`, in the order its tabs are shown.
    *
@@ -192,32 +287,109 @@ class Terms {
 
   /** The tab session `id` shows: AGENT, a view tab, or a shell name — never a stale/closed one. */
   activeTab(id: string): string {
-    // A direct SSH session exists for its workspace, so that is where it opens.
-    const a = this.active.get(id) ?? (store.sessionById(id)?.location === "ssh" ? SSH : AGENT);
+    const a = this.active.get(id) ?? this.resolve(id);
+    const s = store.sessionById(id);
+    // Its last connection can go while it is on show, and nothing could then say why it is open.
+    if (a === SSH && s && !conversationOffered(s)) return AGENT;
     return a !== AGENT && !isViewTab(a) && !this.shellsFor(id).includes(a) ? AGENT : a;
+  }
+
+  /**
+   * Pins where an open session landed. Health arrives after paint, so without this a session
+   * that learned its log is unreadable would flip under the person reading it. It never does:
+   * the notice says so, and the NEXT open lands on the terminal (noteFeedHealth, leave).
+   */
+  arrive(id: string, feedKnown?: boolean) {
+    if (!this.active.has(id)) this.active.set(id, this.resolve(id, feedKnown));
+  }
+
+  /** The pin only guards an open session. What nobody chose is decided afresh next time. */
+  leave(id: string) {
+    const a = this.active.get(id);
+    if (!(id in this.sticky) && (a === SSH || a === AGENT)) this.active.delete(id);
+  }
+
+  /**
+   * What a client last learned about an agent's log. Per agent, because a new version of one
+   * breaks every session of it, and kept across a relaunch, or a log that nothing can read would
+   * open on an empty conversation every time. A good answer clears it, which is how this ends.
+   */
+  noteFeedHealth(agent: string | undefined, health: string | undefined) {
+    const known = feedKnownFrom(health);
+    if (known === undefined) return;
+    const key = agent || "claude";
+    const bad = readFeedBad();
+    if (!known === !!bad[key]) return;
+    if (known) delete bad[key];
+    else bad[key] = true;
+    try {
+      localStorage.setItem(FEED_BAD_KEY, JSON.stringify(bad));
+    } catch {
+      /* said again on the next open */
+    }
+  }
+
+  /** The tab a human last picked for this session, if it opens on the terminal by choice. */
+  stickyTerminal(id: string): boolean {
+    const saved = this.sticky[id];
+    return !!saved && saved !== SSH && !isViewTab(saved);
   }
 
   /** Switch tabs. Ignores a shell name that isn't open. */
   select(id: string, tab: string) {
-    if (tab !== AGENT && !isViewTab(tab) && !this.shellsFor(id).includes(tab)) return;
+    // Whatever opened Changes, leaving it goes back to where this came from.
+    if (isChangesTab(tab) && !isChangesTab(this.activeTab(id))) this.previous.set(id, this.activeTab(id));
+    if (!this.show(id, tab)) return;
+    // Most recent last, so what falls off is what nobody has opened in a while.
+    if (isChangesTab(tab)) return;
+    delete this.sticky[id];
+    this.sticky[id] = tab;
+    for (const old of Object.keys(this.sticky).slice(0, -TABS_KEEP)) delete this.sticky[old];
+    try {
+      localStorage.setItem(TABS_KEY, JSON.stringify(this.sticky));
+    } catch {
+      /* the choice still holds for this run */
+    }
+  }
+
+  /** Puts a tab on show without calling it the human's preference: a jump landing there. */
+  show(id: string, tab: string): boolean {
+    if (tab !== AGENT && !isViewTab(tab) && !this.shellsFor(id).includes(tab)) return false;
     this.active.set(id, tab);
+    if (!isViewTab(tab)) this.lastTerm.set(id, tab);
+    return true;
   }
 
-  /** Toggle the diff tab: open it, or go back to the agent when it is showing. */
+  /** The terminal last used in this session, by default the agent's. */
+  lastTerminal(id: string): string {
+    const t = this.lastTerm.get(id) ?? AGENT;
+    return t === AGENT || this.shellsFor(id).includes(t) ? t : AGENT;
+  }
+
+  /** Asks for the keyboard to go to this session's terminal. Consumed by its cell. */
+  focusTerminal(id: string) {
+    this.focusAsks.set(id, (this.focusAsks.get(id) ?? 0) + 1);
+  }
+  terminalFocusAsks(id: string): number {
+    return this.focusAsks.get(id) ?? 0;
+  }
+
+  /** Where a session lives when a terminal it was on goes. An attached terminal defers queued sends. */
+  private home(id: string): string {
+    const s = store.sessionById(id);
+    return s && conversationOffered(s) ? SSH : AGENT;
+  }
+
+  /** Toggle Changes: open it, or go back to the view it was opened from. */
   toggleDiff(id: string) {
-    this.active.set(id, this.activeTab(id) === DIFF ? AGENT : DIFF);
-  }
-
-  /** Cycle the active tab across [agent, …shells], wrapping. dir +1 next, -1 prev.
-   * The diff tab is not in the ring — it is a view, not a terminal, and is
-   * reached by its own tab, "f" and the session menu; cycling off it starts at
-   * the agent. */
-  cycleTab(id: string, dir: number) {
-    const tabs = [AGENT, ...this.shellsFor(id)];
-    if (tabs.length <= 1) return; // only the agent — nothing to switch to
-    const cur = Math.max(0, tabs.indexOf(this.activeTab(id)));
-    const span = tabs.length;
-    this.active.set(id, tabs[((cur + dir) % span + span) % span]);
+    const cur = this.activeTab(id);
+    if (isChangesTab(cur)) {
+      // What it came from may have closed since, and there has to be a way out by keyboard.
+      if (!this.show(id, this.previous.get(id) ?? this.resolve(id)) && !this.show(id, this.resolve(id))) this.show(id, this.home(id));
+      return;
+    }
+    this.previous.set(id, cur);
+    this.active.set(id, DIFF);
   }
 
   // refresh re-reads the tmux server for this session's shells so tabs reflect
@@ -230,7 +402,7 @@ class Terms {
       this.shells.set(id, names);
       this.dropNames(id, names);
       const a = this.active.get(id);
-      if (a && a !== AGENT && !isViewTab(a) && !names.includes(a)) this.active.set(id, names.at(-1) ?? AGENT);
+      if (a && a !== AGENT && !isViewTab(a) && !names.includes(a)) this.active.set(id, names.at(-1) ?? this.home(id));
     } catch {
       /* keep last-known */
     }
@@ -261,7 +433,7 @@ class Terms {
     try {
       await TermService.Shell(name, worktree);
       this.shells.set(id, [...this.shellsFor(id), name]);
-      this.active.set(id, name);
+      this.show(id, name);
       void this.refresh(id);
     } catch (err) {
       store.setFlash(String(err), "bad");
@@ -301,11 +473,19 @@ class Terms {
   }
 
   // forget removes a shell from the list and, if it was the active tab, falls back
-  // to the last remaining shell (or the agent), so a close never lands on a dead tab.
+  // to the last remaining shell or the session's home, so a close never lands on a dead tab.
   private forget(id: string, name: string) {
     const rest = this.shellsFor(id).filter((s) => s !== name);
     if (rest.length === this.shellsFor(id).length) return; // not ours / already gone
-    if (this.activeTab(id) === name) this.active.set(id, rest.at(-1) ?? AGENT);
+    if (this.activeTab(id) === name) this.active.set(id, rest.at(-1) ?? this.home(id));
+    if (this.sticky[id] === name) {
+      delete this.sticky[id];
+      try {
+        localStorage.setItem(TABS_KEY, JSON.stringify(this.sticky));
+      } catch {
+        /* the choice just outlives the shell until the next write */
+      }
+    }
     this.shells.set(id, rest);
     this.dropNames(id, rest);
   }

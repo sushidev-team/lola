@@ -888,6 +888,23 @@ func defaultLaunchPrompt(id string) string {
 	return "You are lola session " + id + ". Read " + lolaDir + "/prompt.md in the current directory first; it contains your task briefing."
 }
 
+// IsLaunchPrompt reports whether text is lola's own first turn for this session, fresh
+// or a takeover from any agent. The conversation view hides such a record, because it
+// would otherwise open every story with a line nobody typed. It is an exact match on the
+// session's own id, so a forged one can only hide itself.
+func IsLaunchPrompt(id, text string) bool {
+	text = strings.TrimSpace(text)
+	if text == defaultLaunchPrompt(id) || strings.HasPrefix(text, localLaunchLead(id)) {
+		return true
+	}
+	for _, from := range agent.Kinds {
+		if text == handoffLaunchPrompt(id, from) {
+			return true
+		}
+	}
+	return false
+}
+
 // launchCommandPrompt is launchCommand with the first-turn prompt supplied by
 // the caller — a takeover spawn (SwitchAgent) points the new agent at
 // .lola/handoff.md first, then .lola/prompt.md.
@@ -1172,7 +1189,7 @@ func (n *Native) withReportBriefing(prompt []byte) []byte {
 	// behind a `check … pass`; saying so up front is what makes an honest agent
 	// run the suite in a shape whose exit status is its own.
 	b.WriteString("\nA `check … pass` is compared with the commands you actually ran: report one only after running that check, and run it unpiped (`go test ./...`, not `go test ./... | tail`) so its exit status is visible. A claim with no matching run is flagged to the humans.\n")
-	return n.withSSHBriefing([]byte(b.String()))
+	return n.withSSHBriefing(n.withTalkBriefing([]byte(b.String())))
 }
 
 // rollback undoes a partially spawned session after step failed with cause:

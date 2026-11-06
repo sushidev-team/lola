@@ -5,6 +5,7 @@
   import HelpText from "$lib/components/HelpText.svelte";
   import Disclosure from "$lib/components/Disclosure.svelte";
   import Button from "$lib/components/Button.svelte";
+  import Chevron from "$lib/components/Chevron.svelte";
   import CheckboxOptions from "$lib/components/CheckboxOptions.svelte";
   import { PICKUP_FIELDS, LABEL_MATCHING, REPEAT_PICKUP, ENTRY_FORMAT } from "$lib/settingsFields";
   import Checkbox from "$lib/components/Checkbox.svelte";
@@ -25,6 +26,7 @@
   import type { SettingsDTO, LinearOption, LinearKeyStatusDTO, ConnectCodeDTO } from "@bindings/desktop/models";
   import { linesToText, splitLines, cleanLines } from "$lib/lines";
   import { appearance, FLAVORS, THEME_IDS, type ThemeId } from "$lib/theme-runtime.svelte";
+  import { terms } from "$lib/terms.svelte";
 
   // The bindings hand back a class instance, which $state does NOT deep-proxy —
   // copy it into a plain object so the segmented controls and pickers below
@@ -853,7 +855,7 @@
               onProviderChange={(value) => { d.agent = value; }} />
             <div class="border-t border-edge pt-3">
               <Button aria-expanded={pollingOpen} aria-controls={`${formId}-polling-frequency`} onclick={() => { pollingOpen = !pollingOpen; }}>
-                <span aria-hidden="true">{pollingOpen ? "▾" : "▸"}</span>Polling frequency
+                <Chevron open={pollingOpen} />Polling frequency
               </Button>
               <div id={`${formId}-polling-frequency`} class="mt-3" hidden={!pollingOpen}>
                 <div class={rowCls}>
@@ -1284,6 +1286,16 @@
       {:else if tab === "appearance"}
         <section>
           {@render head("Appearance")}
+          <!-- Applies at once and never joins the form's save: it is this viewer's own preference,
+               in localStorage, and config.toml and the daemon never read it. A session you picked
+               a view for keeps it. -->
+          <div class="mb-5 grid gap-1.5" data-open-sessions-in>
+            <span class="text-sm text-faint">Open sessions in</span>
+            <div class="flex w-fit gap-0.5 rounded-md border border-edge/60 bg-canvas p-0.5" role="group" aria-label="Open sessions in">
+              <Button size="xs" selected={terms.globalView === "conversation"} onclick={() => terms.setGlobalView("conversation")}>Conversation</Button>
+              <Button size="xs" selected={terms.globalView === "terminal"} onclick={() => terms.setGlobalView("terminal")}>Terminal</Button>
+            </div>
+          </div>
           <div class="copy mb-3 text-sm text-faint"><HelpText label="theme preview" summary="Preview a theme." detail="Preview a theme for the app and terminals. Save to keep it, or cancel to restore your current theme." /></div>
           <!-- Grid, not flex: WKWebView does not stretch a flex child inside a
                flex column, so a flex layout that fills correctly in Chrome

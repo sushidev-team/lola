@@ -91,7 +91,7 @@
 <Modal title="Connect to host" onClose={close} width="560px">
   {#if predates}
     <div class="grid justify-items-start gap-2 py-2">
-      <p class="copy text-ink">This daemon predates SSH sessions. Restart it to use them.</p>
+      <p class="copy text-ink">This daemon predates host connections. Restart it to use them.</p>
       <Button variant="secondary" size="sm" onclick={() => ssh.restartDaemon()}>Restart daemon</Button>
     </div>
   {:else if ssh.hostsError}

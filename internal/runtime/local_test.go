@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -87,5 +88,55 @@ func TestLocalRejectsInvalidDirectoryBeforeLaunch(t *testing.T) {
 	}
 	if log := loggedArgs(t, f.tmuxLog); log != "" {
 		t.Fatal(log)
+	}
+}
+
+// A pasted brief full of apostrophes costs 13 bytes each on the tmux command line. Past about
+// 16 KB tmux refuses the command and the session never opens.
+func TestLocalLongBriefStaysOffTheTmuxCommandLine(t *testing.T) {
+	f := newFixture(t, "", "*\"has-session\"*) exit 1 ;;")
+	out := filepath.Join(t.TempDir(), "argv")
+	stub := filepath.Join(t.TempDir(), "claude")
+	if err := os.WriteFile(stub, []byte("#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\"; done > "+out+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	f.n.ClaudeBin = stub
+	id := "lola-local-brief"
+	art, err := localArtifacts(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(art, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(art, "env"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	brief := strings.Repeat("it's ", 1400)
+	s := session.Session{ID: id, Agent: "claude", Kind: session.KindLocal, Worktree: f.repo}
+	if _, err := f.n.startLocal(context.Background(), s, false, brief); err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(loggedArgs(t, f.tmuxLog), "\n") {
+		if strings.Contains(line, "new-session") && len(line) > 4096 {
+			t.Fatalf("new-session is %d bytes", len(line))
+		}
+	}
+	script := filepath.Join(art, "launch")
+	if fi, err := os.Stat(script); err != nil || fi.Mode().Perm() != 0o600 {
+		t.Fatalf("launch file: %v %v", fi, err)
+	}
+	if b, err := exec.Command("sh", script).CombinedOutput(); err != nil {
+		t.Fatalf("run it: %v: %s", err, b)
+	}
+	got, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(got), brief) {
+		t.Errorf("the brief did not reach the agent whole (%d bytes)", len(got))
+	}
+	if _, err := os.Stat(script); !os.IsNotExist(err) {
+		t.Errorf("the launch file holding the brief was left behind: %v", err)
 	}
 }

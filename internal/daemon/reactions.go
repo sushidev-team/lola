@@ -36,7 +36,6 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
@@ -791,7 +790,7 @@ func (d *Daemon) reactSendAgent(ctx context.Context, s session.Session, key, tem
 	// AtPrompt is already consumed; the send now happens exactly once. A tmux
 	// failure is logged but not rolled back — the guard stays set so we do not
 	// spam the agent, and a genuine later transition re-reacts.
-	if err := d.typeToAgentLocked(ctx, tmuxName, msg, reactExecTimeout); err != nil {
+	if err := d.typeToAgentLocked(ctx, noteFor(s, reactionLabel(key, s)), tmuxName, msg, reactExecTimeout); err != nil {
 		d.logf("", "react: send-keys (%s) to %s failed: %v", key, s.ID, err)
 		return
 	}
@@ -949,45 +948,6 @@ func laneHeader(s session.Session) string {
 		}
 	}
 	return fmt.Sprintf("[About the `%s/` checkout%s — work in that directory.]\n", s.Lane, pr)
-}
-
-// ansiEscapeRe matches the ANSI escape sequences (CSI and OSC) that CI logs and
-// terminal captures routinely emit, so they can be stripped whole rather than
-// left as visible garbage once the lone ESC byte is removed.
-var ansiEscapeRe = regexp.MustCompile("\x1b\\[[0-9;?:<>=]*[ -/]*[@-~]|\x1b\\][^\x07\x1b]*(?:\x07|\x1b\\\\)")
-
-// sanitizeAgentText makes text safe to hand to tmux send-keys for typing into a
-// live agent's pane. The transport (tmux.Client.SendKeys) types the payload
-// with `send-keys -l` and then submits with a SEPARATE Enter (\r); any \r
-// already inside the payload is an INDISTINGUISHABLE submit, so an embedded
-// carriage return — routine in `gh run view --log-failed` output (npm/pytest/
-// cargo/webpack progress bars) and injectable via attacker-authored PR/review
-// bodies — would submit a partial prompt and defeat the AtPrompt send-keys gate
-// mid-transport. So:
-//
-//   - ANSI escape sequences are stripped whole.
-//   - CR (\r) is dropped: it is the submit vector. A CRLF collapses to a clean
-//     LF; a bare CR (progress bars) vanishes.
-//   - Other C0 controls (and DEL / C1) are dropped so nothing else can steer
-//     the pane's line editor.
-//   - LF (\n) and TAB (\t) are PRESERVED: reaction templates are intentionally
-//     multi-line (see config.DefaultCIFailedMessage) and the agent pane inserts
-//     LF literally — only CR/Enter submits.
-func sanitizeAgentText(s string) string {
-	s = ansiEscapeRe.ReplaceAllString(s, "")
-	var b strings.Builder
-	b.Grow(len(s))
-	for _, r := range s {
-		switch {
-		case r == '\n' || r == '\t':
-			b.WriteRune(r)
-		case r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f):
-			// CR, other C0 controls, DEL, and C1 controls: drop.
-		default:
-			b.WriteRune(r)
-		}
-	}
-	return b.String()
 }
 
 // reactNotifyText builds the operator notification for a send reaction.

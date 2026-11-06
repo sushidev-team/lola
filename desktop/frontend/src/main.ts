@@ -6,6 +6,11 @@ import { mount } from "svelte";
 import App from "./App.svelte";
 import { appearance } from "$lib/theme-runtime.svelte";
 import { termBoot } from "$lib/termboot";
+import { store } from "$lib/store.svelte";
+
+// A story stays readable while the daemon restarts. Off by default because the phone shares
+// the store and keeps its own behaviour.
+store.retainAll = true;
 
 // Paint the theme before mounting. `init()` synchronously writes the tokens,
 // data-theme and color-scheme of the last flavor this app painted (cached in

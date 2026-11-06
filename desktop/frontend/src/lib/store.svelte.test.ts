@@ -299,3 +299,21 @@ describe("agent launch and switch actions", () => {
     expect(store.flash?.text).toBe("switched sess-1 to codex");
   });
 });
+
+describe("retention while the daemon is down", () => {
+  it("is off by default for the phone, and the roster reads what was kept only while down", () => {
+    const s = store as unknown as { retained: unknown[]; retainAll: boolean };
+    const plain = { id: "p" };
+    const withSSH = { id: "s", ssh: { connections: [] } };
+    expect(s.retainAll).toBe(false);
+    store.alive = false;
+    store.sessions = [];
+    s.retained = [plain, withSSH];
+    expect(store.rosterSessions.map((x) => x.id)).toEqual(["p", "s"]);
+    expect(store.sessionById("p")?.id).toBe("p");
+    store.alive = true;
+    expect(store.rosterSessions).toEqual([]);
+    expect(store.sessionById("p")).toBeUndefined();
+    s.retained = [];
+  });
+});

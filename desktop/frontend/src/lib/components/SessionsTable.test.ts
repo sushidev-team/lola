@@ -185,21 +185,21 @@ describe("SessionsTable agent glyph and attention", () => {
   const glyph = (c: HTMLElement) => c.querySelector("tbody tr:first-child td:first-child") as HTMLElement;
   const status = (c: HTMLElement) => c.querySelectorAll("tbody tr:first-child td")[4] as HTMLElement;
 
-  it("animates only a working agent", () => {
+  it("draws the roster's glyphs, so one session wears one vocabulary", () => {
     store.sessions = [fakeSession({ agentState: "working" })];
     const { container } = render(SessionsTable);
-    expect(glyph(container).querySelector(".spin")).not.toBeNull();
+    expect(glyph(container).querySelector("[data-state-glyph]")).toHaveAttribute("data-state-glyph", "◐");
     cleanup();
     store.sessions = [fakeSession({ agentState: "idle" })];
     const r = render(SessionsTable);
-    expect(glyph(r.container).querySelector(".spin")).toBeNull();
+    expect(glyph(r.container).querySelector("[data-state-glyph]")).not.toHaveAttribute("data-state-glyph", "◐");
     expect(glyph(r.container).textContent).toContain("idle");
   });
 
   it("names a blocked agent and what it is asking", () => {
     store.sessions = [fakeSession({ agentState: "waiting_input", inputReason: "permission_prompt", delivery: "none" })];
     const { container } = render(SessionsTable);
-    expect(glyph(container).querySelector(".bg-orange")).not.toBeNull();
+    expect(glyph(container).querySelector("[data-state-glyph]")).toHaveAttribute("data-state-glyph", "◉");
     expect(glyph(container).querySelector("[title]")).toHaveAttribute("title", "needs you · permission prompt");
     expect(glyph(container).textContent).toContain("needs you · permission prompt");
     expect(status(container).textContent).not.toContain("Needs you");

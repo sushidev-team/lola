@@ -100,10 +100,17 @@ class Store {
   hasConfig = $state(true); // assume yes until checked, so no setup-screen flash
   configChecked = $state(false);
   sessions = $state<SessionInfo[]>([]);
-  // The SSH sessions as last pushed, kept while the daemon is down. An investigation
-  // must stay readable through a daemon restart, and its ssh terminal keeps working
-  // because that is tmux. Nothing but sessionById reads this, and only while down.
-  private retainedSSH: SessionInfo[] = [];
+  // The sessions as last pushed, kept while the daemon is down. A restart is a daily event,
+  // a story must stay readable through one, and a terminal keeps working because that is
+  // tmux. Without retainAll only the ssh sessions are kept, which is what the phone expects;
+  // the desktop's main.ts turns it on. sessionById and rosterSessions read this, only while
+  // the daemon is down.
+  retainAll = false;
+  private retained: SessionInfo[] = [];
+  // Set from the daemon going down until its first list after coming back. `daemon:alive` and
+  // `daemon:sessions` are separate events with a flush between them, and an open session must not
+  // read as gone across that gap: its terminal would detach and its widgets reload.
+  private awaitingList = $state(false);
   activity = $state<ActivityEvent[]>([]);
   projects = $state<ProjectInfo[]>([]);
   // The [[group]] folders projects are filed under, in config order. They ride
@@ -175,8 +182,9 @@ class Store {
       this.alive = e.data;
       this.connected = true;
       if (!e.data) {
-        const withSSH = this.sessions.filter((s) => s.ssh);
-        if (withSSH.length) this.retainedSSH = withSSH;
+        const keep = this.retainAll ? this.sessions : this.sessions.filter((s) => s.ssh);
+        if (keep.length) this.retained = keep;
+        this.awaitingList = true;
         this.sessions = [];
         this.setActivity([]);
         // A down daemon isn't "out of date"; the offline state covers it, so drop
@@ -194,6 +202,7 @@ class Store {
       this.pushErrors = next;
     });
     Events.On("daemon:sessions", (e) => {
+      this.awaitingList = false;
       this.sessions = e.data?.sessions ?? [];
       this.connected = true;
       this.setActivity(e.data?.events ?? []);
@@ -256,8 +265,14 @@ class Store {
 
   sessionById(id: string): SessionInfo | undefined {
     const live = this.sessions.find((s) => s.id === id);
-    if (live || this.alive) return live;
-    return this.retainedSSH.find((s) => s.id === id);
+    if (live || (this.alive && !this.awaitingList)) return live;
+    return this.retained.find((s) => s.id === id);
+  }
+
+  /** What the sidebar lists: the live sessions, or the last ones known while the daemon is down. */
+  get rosterSessions(): SessionInfo[] {
+    if ((this.alive && !this.awaitingList) || this.sessions.length) return this.sessions;
+    return this.retained;
   }
 
   setFlash(text: string, kind: "good" | "warn" | "bad" = "good") {
@@ -295,6 +310,7 @@ class Store {
       DaemonService.Status(),
     ]);
     if (sd.status === "fulfilled") {
+      this.awaitingList = false;
       this.sessions = sd.value.sessions ?? [];
       this.setActivity(sd.value.events ?? []); // separate flush — see setActivity
     }

@@ -101,7 +101,7 @@
     <header class="flex items-center border-b border-edge/70 px-4 py-2.5">
       <!-- text-lg carries its own 600 + tracking: a dialog title is the one
            level that must out-rank everything inside the dialog. -->
-      <h2 class="text-lg text-accent-ink">{title}</h2>
+      <h2 class="text-lg text-ink">{title}</h2>
       {#if titleHelp}<span class="ml-2 inline-flex"><HelpText label={title} detail={titleHelp} /></span>{/if}
       <Button icon class="ml-auto" onclick={onClose} aria-label="close">✕</Button>
     </header>

@@ -70,6 +70,8 @@ func TestSSHVocabularyParity(t *testing.T) {
 			protocol.SSHEventRequested, protocol.SSHEventGo, protocol.SSHEventDenied, protocol.SSHEventConnected,
 			protocol.SSHEventDisconnected, protocol.SSHEventFailed, protocol.SSHEventWheelTaken, protocol.SSHEventHandedBack,
 			protocol.SSHEventGrantCreated, protocol.SSHEventGrantEnded, protocol.SSHEventClosed,
+			protocol.SSHEventSessionStarted, protocol.SSHEventSessionEnded, protocol.SSHEventAgentExited, protocol.SSHEventStopped,
+			protocol.SSHEventCheckpoint, protocol.SSHEventPR, protocol.SSHEventCI, protocol.SSHEventReview, protocol.SSHEventHandoff,
 		}},
 	} {
 		pinList(t, c.name, tsStringArray(t, src, c.name), c.want)

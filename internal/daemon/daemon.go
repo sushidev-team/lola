@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/sushidev-team/lola/internal/agent"
+	"github.com/sushidev-team/lola/internal/attention"
 	"github.com/sushidev-team/lola/internal/brain"
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/gitrepo"
@@ -216,8 +217,40 @@ type Daemon struct {
 	// engine hands the agent.
 	notifier notify.Notifier
 	sendKeys func(ctx context.Context, tmuxName, text string) error
+	// sendKeysTyped is sendKeys without its paste, for an agent whose paste has not been
+	// measured (agent.Caps). nil means sendKeys for every agent.
+	sendKeysTyped func(ctx context.Context, tmuxName, text string) error
 	// sendEscape interrupts an agent's turn, for a human's Stop only.
 	sendEscape func(ctx context.Context, tmuxName string) error
+	// sendKey presses one key with no Enter, for a human's choice on a card. Never
+	// reach for it from an automatic path: see agentChoose.
+	sendKey func(ctx context.Context, tmuxName, key string) error
+	// paneCursor and paneVisible are the two reads the cursor proof needs. Read the
+	// visible pane BEFORE the cursor. A nil seam (a test that injects only paneTail)
+	// makes the automation gate fall back to attention.EmptyComposer.
+	paneCursor  func(ctx context.Context, tmuxName string) (attention.Cursor, error)
+	paneVisible func(ctx context.Context, tmuxName string) (string, error)
+	// humanLock takes the send gate for a send a person pressed this instant. It
+	// defaults to lockHumanPrompt, and exists so the talk commands can be tested
+	// without the gate behind them.
+	humanLock func(ctx context.Context, s session.Session) (unlock func(), why string)
+	// readPrompt reads a question out of a visible pane. Defaults to attention.ReadPrompt.
+	readPrompt func(visible string, c attention.Cursor, k agent.Kind) (attention.Prompt, bool)
+	// feedAdvance moves a session's transcript scanner by at most budget bytes and
+	// answers its newest feed sequence and health. Defaults to advanceFeed.
+	feedAdvance func(ctx context.Context, s session.Session, budget int64) (feedSeq int64, health string)
+	// hookCounts tallies lifecycle hooks per session since the feed scanner started,
+	// in memory only. Comparing them with what the log yielded is how a feed that
+	// silently lost its shape reads as partial.
+	hookCountsMu sync.Mutex
+	hookCounts   map[string]*hookTally
+	// timeline carries system events to the one timeline worker. A caller only ever
+	// enqueues (emitSystem), which is what makes it safe inside a store callback.
+	timeline     chan timelineEvent
+	timelineStop chan struct{}
+	timelineDone chan struct{}
+	// talk is the conversation's memory-only state (talksay.go). Nothing in it persists.
+	talk talkMem
 	// Fresh ownership check for automatic delivery; never use observer cache.
 	promptAttached func(ctx context.Context, tmuxName string) (bool, error)
 	failingChecks  func(ctx context.Context, repo string, pr int) (string, error)
@@ -605,9 +638,27 @@ func newDaemon(cfg *config.Config, lin linear.API, logger *log.Logger, home stri
 	d.sendKeys = func(ctx context.Context, tmuxName, text string) error {
 		return d.tmuxClient().SendKeys(ctx, tmuxName, text)
 	}
+	d.sendKeysTyped = func(ctx context.Context, tmuxName, text string) error {
+		return d.tmuxClient().SendKeysTyped(ctx, tmuxName, text)
+	}
 	d.sendEscape = func(ctx context.Context, tmuxName string) error {
 		return d.tmuxClient().SendEscape(ctx, tmuxName)
 	}
+	d.sendKey = func(ctx context.Context, tmuxName, key string) error {
+		return d.tmuxClient().SendKey(ctx, tmuxName, key)
+	}
+	d.paneCursor = func(ctx context.Context, tmuxName string) (attention.Cursor, error) {
+		c, err := d.tmuxClient().PaneCursor(ctx, tmuxName)
+		return attention.Cursor(c), err
+	}
+	d.paneVisible = func(ctx context.Context, tmuxName string) (string, error) {
+		return d.tmuxClient().CaptureVisible(ctx, tmuxName)
+	}
+	d.humanLock = d.lockHumanPrompt
+	d.readPrompt = attention.ReadPrompt
+	d.feedAdvance = d.advanceFeed
+	d.hookCounts = map[string]*hookTally{}
+	d.timeline = make(chan timelineEvent, timelineBuffer)
 	d.promptAttached = func(ctx context.Context, tmuxName string) (bool, error) {
 		return d.tmuxClient().HasAttachedClient(ctx, tmuxName)
 	}
@@ -855,6 +906,7 @@ func Run(ctx context.Context) error {
 	// Agent-assisted ssh (ssh.go): read what a previous daemon left and start the
 	// monitors. Masters survive a restart by design, running commands do not.
 	d.startSSH(ctx)
+	d.startTimeline()
 	d.wg.Add(1)
 	go d.goalLoop(ctx)
 
@@ -880,6 +932,7 @@ func Run(ctx context.Context) error {
 	d.stopRemote()
 	d.stopHookBridge()
 	d.stopSSH()
+	defer d.stopTimeline() // last, so what the shutdown itself emits is still written
 	// Before the worker drain: a forward holds accepted connections open for as
 	// long as a browser keeps them, which is exactly the unbounded wait the
 	// drain below is not built for.
@@ -1355,6 +1408,9 @@ func (d *Daemon) adoptNativeSessions(ctx context.Context) {
 					s.LastNotification = prev.LastNotification
 				}
 				s.TranscriptPath = prev.TranscriptPath
+				s.TranscriptSegments = prev.TranscriptSegments
+				s.StopHoldUntil = prev.StopHoldUntil
+				s.QueueHeld = prev.QueueHeld
 				s.LastReactedStatus = prev.LastReactedStatus
 				s.CIRetries = prev.CIRetries
 				s.Escalated = prev.Escalated

@@ -32,12 +32,17 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
+	"regexp"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/sushidev-team/lola/internal/agent"
 	"github.com/sushidev-team/lola/internal/checkpoint"
+	"github.com/sushidev-team/lola/internal/gitguard"
 	"github.com/sushidev-team/lola/internal/protocol"
 	"github.com/sushidev-team/lola/internal/runtime"
 	"github.com/sushidev-team/lola/internal/session"
@@ -105,18 +110,52 @@ func (d *Daemon) sendGate(id string) *sync.RWMutex {
 // waits out a restore of that session's worktree (sendGate), then sends with
 // its own timeout — taken AFTER the wait, so a send queued behind a restore is
 // delayed, never timed out and lost.
-func (d *Daemon) typeToAgent(ctx context.Context, id, target, text string, timeout time.Duration) error {
+func (d *Daemon) typeToAgent(ctx context.Context, n typedNote, id, target, text string, timeout time.Duration) error {
 	g := d.sendGate(id)
 	g.Lock()
 	defer g.Unlock()
-	return d.typeToAgentLocked(ctx, target, text, timeout)
+	return d.typeToAgentLocked(ctx, n, target, text, timeout)
 }
 
-// typeToAgentLocked requires sendGate held through proof, claim and delivery.
-func (d *Daemon) typeToAgentLocked(ctx context.Context, target, text string, timeout time.Duration) error {
+// typeToAgentLocked requires sendGate held through proof, claim and delivery. The
+// note is required so the compiler enforces the rule that every path that types
+// records what it typed: an agent must never visibly respond to something nobody
+// can see. See typedNote.
+func (d *Daemon) typeToAgentLocked(ctx context.Context, n typedNote, target, text string, timeout time.Duration) error {
+	d.talk.waitAfterEsc(n.Session) // right after an Esc the first character is eaten
 	sctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	return d.sendKeys(sctx, target, text)
+	d.talk.markOwnPrompt(n.Session, time.Now())
+	if err := d.sendFor(n.Session)(sctx, target, text); err != nil {
+		d.talk.unmarkOwnPrompt(n.Session)
+		return err
+	}
+	d.clearDeferred(n.Session)
+	d.noteTyped(n, text)
+	return nil
+}
+
+// sendFor picks the transport for a session's agent. Only the kind whose paste timing was
+// measured gets the paste. A test that wires one seam gets that seam.
+func (d *Daemon) sendFor(id string) func(ctx context.Context, target, text string) error {
+	if d.sendKeysTyped == nil {
+		return d.sendKeys
+	}
+	if s, ok := d.sessions.Get(id); !ok || agent.Caps(agent.Parse(s.Agent)).Paste {
+		return d.sendKeys
+	}
+	return d.sendKeysTyped
+}
+
+// clearDeferred drops the note that a send is waiting: one just went.
+func (d *Daemon) clearDeferred(id string) {
+	d.sessions.Update(id, func(cur *session.Session) bool {
+		if cur.AutomationDeferredReason == "" {
+			return false
+		}
+		cur.AutomationDeferredReason = ""
+		return true
+	})
 }
 
 // recordCheckpointAsync records a checkpoint for a hook event without holding
@@ -127,6 +166,7 @@ func (d *Daemon) recordCheckpointAsync(id, event string) {
 	if id == "" || d.checkpoints == nil || !d.beginConnWork() {
 		return
 	}
+	at := time.Now()
 	go func() {
 		defer d.connWg.Done()
 		defer func() {
@@ -134,14 +174,32 @@ func (d *Daemon) recordCheckpointAsync(id, event string) {
 				d.logf("", "checkpoint: record panicked for %s: %v", id, r)
 			}
 		}()
-		d.recordCheckpoint(context.Background(), id, event)
+		d.recordCheckpointAt(context.Background(), id, event, at)
 	}()
 }
 
-// recordCheckpoint is the synchronous body of recordCheckpointAsync.
+// recordCheckpoint is the synchronous body of recordCheckpointAsync, stamped now.
 func (d *Daemon) recordCheckpoint(ctx context.Context, id, event string) {
+	d.recordCheckpointAt(ctx, id, event, time.Now())
+}
+
+// recordCheckpointAt takes at, the moment the hook arrived, for the receipt's place in the
+// story. The snapshot and the diff can outlast the send a Stop hook flushes, and a receipt
+// stamped when it was written would sort after the next message and close the wrong turn.
+func (d *Daemon) recordCheckpointAt(ctx context.Context, id, event string, at time.Time) {
 	s, ok := d.sessions.Get(id)
-	if !ok || s.Worktree == "" || s.IsAgentless() || s.GoalManaged() || s.Kind == session.KindLocal {
+	if !ok || s.IsAgentless() || s.GoalManaged() {
+		return
+	}
+	// A turn's end leaves a receipt whatever becomes of its checkpoint: with one it names
+	// the number and the size, without one it is only the time. A human's Stop has its own
+	// row, so it leaves none.
+	receipt := protocol.SSHSystemEvent{Kind: protocol.SSHEventCheckpoint, Text: "Done"}
+	if event == "stop" && !d.talk.takeSkipReceipt(id) {
+		receipt.DurationMs = d.talk.turnSpan(id, at).Milliseconds()
+		defer func() { d.emitSystem(timelineEvent{Session: id, At: at, Event: receipt}) }()
+	}
+	if s.Worktree == "" || s.Kind == session.KindLocal {
 		return
 	}
 	if _, err := os.Stat(s.Worktree); err != nil {
@@ -155,6 +213,9 @@ func (d *Daemon) recordCheckpoint(ctx context.Context, id, event string) {
 	defer cancel()
 	if s.Stack {
 		d.stackRecordCheckpoint(cctx, s, event)
+		if event == "stop" {
+			d.stackReceipt(cctx, s, &receipt)
+		}
 		return
 	}
 	list, err := d.checkpoints.List(cctx, s.Worktree, id)
@@ -183,7 +244,77 @@ func (d *Daemon) recordCheckpoint(ctx context.Context, id, event string) {
 	}
 	if recorded {
 		d.logf("", "checkpoint: %s #%d (%s)", id, cp.Seq, cp.Label)
+		if event == "stop" {
+			receipt.Seq = cp.Seq
+			from := cp.Head
+			if len(list) > 0 {
+				from = newestCheckpoint(list).SHA
+			}
+			addStat(cctx, s.Worktree, from, cp.SHA, &receipt)
+		}
 	}
+}
+
+// stackReceipt sums a turn's changes over a stack's apps. Each records the same turn under
+// the same number, so the number comes from any of them.
+func (d *Daemon) stackReceipt(ctx context.Context, s session.Session, r *protocol.SSHSystemEvent) {
+	for _, a := range presentApps(s) {
+		list, err := d.checkpoints.List(ctx, a.Worktree, s.ID)
+		if err != nil || len(list) == 0 {
+			continue
+		}
+		cp := newestCheckpoint(list)
+		r.Seq = cp.Seq
+		rest := slices.DeleteFunc(slices.Clone(list), func(c checkpoint.Checkpoint) bool { return c.Seq == cp.Seq })
+		from := cp.Head
+		if len(rest) > 0 {
+			from = newestCheckpoint(rest).SHA
+		}
+		addStat(ctx, a.Worktree, from, cp.SHA, r)
+	}
+}
+
+func newestCheckpoint(list []checkpoint.Checkpoint) checkpoint.Checkpoint {
+	return slices.MaxFunc(list, func(a, b checkpoint.Checkpoint) int { return a.Seq - b.Seq })
+}
+
+// addStat adds one diff to a receipt. A diff that cannot be read leaves the numbers alone,
+// so a receipt says less rather than something wrong.
+func addStat(ctx context.Context, dir, from, to string, r *protocol.SSHSystemEvent) {
+	files, added, removed, err := gitShortStat(ctx, dir, from, to)
+	if err != nil {
+		return
+	}
+	r.Files += files
+	r.Added += added
+	r.Removed += removed
+}
+
+var (
+	statFilesRe   = regexp.MustCompile(`(\d+) files? changed`)
+	statAddedRe   = regexp.MustCompile(`(\d+) insertions?\(`)
+	statRemovedRe = regexp.MustCompile(`(\d+) deletions?\(`)
+)
+
+// gitShortStat is one local diff between two snapshots. It goes through gitguard.Apply like
+// every host git on a session worktree, because a sandboxed agent can rewrite that
+// worktree's git metadata, and plain git would honour what it wrote.
+func gitShortStat(ctx context.Context, dir, from, to string) (files, added, removed int, err error) {
+	cmd := exec.CommandContext(ctx, "git", "-C", dir, "diff", "--shortstat", "--no-ext-diff", "--no-textconv", from, to, "--")
+	cmd.Dir = dir
+	gitguard.Apply(cmd)
+	out, err := cmd.Output()
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	num := func(re *regexp.Regexp) int {
+		if m := re.FindSubmatch(out); m != nil {
+			n, _ := strconv.Atoi(string(m[1]))
+			return n
+		}
+		return 0
+	}
+	return num(statFilesRe), num(statAddedRe), num(statRemovedRe), nil
 }
 
 // checkpointSession resolves a request's session to one whose worktree is on

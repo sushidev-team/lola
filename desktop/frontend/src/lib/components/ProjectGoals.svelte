@@ -111,7 +111,7 @@
       }
     }
   }
-  function openSession(id: string) { nav.select(id); nav.goCockpit(project); }
+  function openSession(id: string) { nav.goCockpit(project); nav.openSession(id); }
   const number = (n: number) => n.toLocaleString();
 </script>
 

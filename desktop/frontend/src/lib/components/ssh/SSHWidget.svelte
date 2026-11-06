@@ -242,12 +242,19 @@
     }
     const a = document.activeElement;
     const typing = a instanceof HTMLInputElement || a instanceof HTMLTextAreaElement || (a instanceof HTMLElement && a.isContentEditable);
-    if (typing || view.draft.trim()) {
+    if (typing || view.agentDraft.trim()) {
       view.setFlash("Widget text not added: message box is in use.", "text-warn");
       return;
     }
-    view.draft = text;
-    view.setFlash("Filled in by the widget. Nothing is sent yet.", "text-faint");
+    // A page must not be able to arm a command. A leading space defuses the ! that runs a shell,
+    // which was measured. Nobody has measured that for a slash command, and a send trims it
+    // anyway, so that one is refused rather than trusted.
+    if (text.startsWith("/")) {
+      view.setFlash("Widget text not added: it starts with a slash command.", "text-warn");
+      return;
+    }
+    view.fillFromWidget(element.title || "a widget", text.startsWith("!") ? ` ${text}` : text);
+    view.runDefault = false;
   }
 
   function onLoad() {

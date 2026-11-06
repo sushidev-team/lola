@@ -609,7 +609,7 @@ describe("toTokens", () => {
     // clears 3:1, so it stays the raw overlay1; latte's overlay2 gets nudged.
     const l = FLAVORS["catppuccin-latte"];
     expect(l.faintKey).toBe("overlay2");
-    expect(toTokens(l)["--color-faint"]).toBe(muted(l.overlay2, l.mantle, panelBg(l), l.surface0));
+    expect(toTokens(l)["--color-faint"]).toBe(muted(readable(l.overlay2, l.mantle, l.base), l.mantle, panelBg(l), l.surface0));
 
     const m = FLAVORS["catppuccin-mocha"];
     expect(m.faintKey).toBe("overlay1");
@@ -630,7 +630,7 @@ describe("app.css compiled defaults", () => {
     const css: string = readFileSync(process.cwd() + "/src/app.css", "utf8");
     const block = css.slice(css.indexOf("@theme {"), css.indexOf("--font-sans"));
     const found: Record<string, string> = {};
-    for (const m of block.matchAll(/(--color-[a-z-]+):\s*(#[0-9a-f]{6})/g)) found[m[1]] = m[2];
+    for (const m of block.matchAll(/(--color-[a-z0-9-]+):\s*(#[0-9a-f]{6})/g)) found[m[1]] = m[2];
     expect(found).toEqual(toTokens(FLAVORS["catppuccin-mocha"]));
   });
 });

@@ -262,7 +262,7 @@ func TestSendKeysLiteralThenEnter(t *testing.T) {
 	// copy-mode cancel comes first: a pane a human scrolled back reads keys as
 	// copy-mode COMMANDS, so the payload would never reach the agent.
 	want := "-L lola copy-mode -q -t =main:\n" +
-		"-L lola send-keys -t =main: -l fix the CI failure\n-L lola send-keys -t =main: Enter"
+		"-L lola send-keys -t =main: -l -- fix the CI failure\n-L lola send-keys -t =main: Enter"
 	if args := loggedArgs(t, argsLog); args != want {
 		t.Errorf("invoked:\n%s\nwant literal text then Enter:\n%s", args, want)
 	}
@@ -285,7 +285,7 @@ func TestSendKeysProceedsWhenCopyModeCancelFails(t *testing.T) {
 	if err := (&Client{Bin: bin}).SendKeys(context.Background(), "main", "hello"); err != nil {
 		t.Fatalf("SendKeys: %v", err)
 	}
-	if args := loggedArgs(t, argsLog); !strings.Contains(args, "send-keys -t =main: -l hello") {
+	if args := loggedArgs(t, argsLog); !strings.Contains(args, "send-keys -t =main: -l -- hello") {
 		t.Errorf("payload not sent after a failed copy-mode cancel:\n%s", args)
 	}
 }
@@ -1330,5 +1330,66 @@ func TestPasteSecretAgainstRealTmux(t *testing.T) {
 	}
 	if out, _, _ := c.run(ctx, "list-buffers"); strings.TrimSpace(out) != "" {
 		t.Fatalf("a failed paste left a buffer: %q", out)
+	}
+}
+
+// CaptureVisible must read the screen and nothing above it, or the rows would not line
+// up with the cursor's Y.
+func TestCaptureVisibleHasNoScrollback(t *testing.T) {
+	bin, argsLog := fakeTmux(t, "on screen", "", 0)
+	got, err := (&Client{Bin: bin}).CaptureVisible(context.Background(), "main")
+	if err != nil || !strings.Contains(got, "on screen") {
+		t.Fatalf("CaptureVisible = %q, %v", got, err)
+	}
+	if args := loggedArgs(t, argsLog); args != "-L lola capture-pane -p -e -t =main:" {
+		t.Errorf("invoked %q", args)
+	}
+}
+
+func TestPaneCursorReadsTheCursor(t *testing.T) {
+	for _, tc := range []struct {
+		out  string
+		want Cursor
+		bad  bool
+	}{
+		{out: "2 17 1", want: Cursor{X: 2, Y: 17, Visible: true}},
+		{out: "0 3 0", want: Cursor{X: 0, Y: 3, Visible: false}},
+		{out: "", bad: true},
+		{out: "2 17", bad: true},
+		{out: "a 17 1", bad: true},
+		{out: "2 17 maybe", bad: true}, // never read an unknown flag as hidden or shown
+	} {
+		bin, argsLog := fakeTmux(t, tc.out, "", 0)
+		got, err := (&Client{Bin: bin}).PaneCursor(context.Background(), "main")
+		if (err != nil) != tc.bad || got != tc.want {
+			t.Errorf("%q: PaneCursor = %+v, %v", tc.out, got, err)
+		}
+		if args := loggedArgs(t, argsLog); args != "-L lola display-message -p -t =main: #{cursor_x} #{cursor_y} #{cursor_flag}" {
+			t.Errorf("invoked %q", args)
+		}
+	}
+	bin, _ := fakeTmux(t, "", "no session", 1)
+	if _, err := (&Client{Bin: bin}).PaneCursor(context.Background(), "gone"); err == nil {
+		t.Error("a failed query must be an error, never a zero cursor")
+	}
+}
+
+func TestSendKeyPressesOneLetterOrDigit(t *testing.T) {
+	bin, argsLog := fakeTmux(t, "", "", 0)
+	if err := (&Client{Bin: bin}).SendKey(context.Background(), "main", "1"); err != nil {
+		t.Fatalf("SendKey: %v", err)
+	}
+	want := "-L lola copy-mode -q -t =main:\n-L lola send-keys -t =main: -l 1"
+	if args := loggedArgs(t, argsLog); args != want {
+		t.Errorf("invoked:\n%s\nwant no Enter and copy mode left first:\n%s", args, want)
+	}
+	for _, key := range []string{"", "12", ";", "-", "\r", "\x1b", " "} {
+		bin, argsLog := fakeTmux(t, "", "", 0)
+		if err := (&Client{Bin: bin}).SendKey(context.Background(), "main", key); err == nil {
+			t.Errorf("SendKey(%q) was accepted", key)
+		}
+		if raw, _ := os.ReadFile(argsLog); len(raw) != 0 {
+			t.Errorf("SendKey(%q) reached tmux: %s", key, raw)
+		}
 	}
 }

@@ -38,7 +38,15 @@ const (
 	RetainAfterGone = 14 * 24 * time.Hour
 	// MaxQueueBytes bounds the text waiting for the agent, so a human who keeps
 	// talking to an agent that never reads cannot grow a state file without limit.
-	MaxQueueBytes = 64 << 10
+	MaxQueueBytes = 256 << 10
+	// MaxHuman bounds a human's messages in one story. Prune takes the oldest delivered
+	// or recalled first, and never one still waiting in the queue.
+	MaxHuman = 2000
+	// MaxSent bounds the record of what lola typed. An echo is matched within minutes of its
+	// send, but a restart, an eviction or paging older history matches the whole log against
+	// this again, so it has to reach back about as far as a long session's sends. A log record
+	// older than this is hidden rather than guessed at.
+	MaxSent = 256
 )
 
 // Conn is one connection as stored: the wire form, plus what only the daemon
@@ -88,6 +96,30 @@ type QueueEntry struct {
 	Item    string `json:"item,omitempty"`
 	Text    string `json:"text"`
 	Claimed bool   `json:"claimed,omitempty"`
+	// Human marks an agentSay: Text is the human's words with no frame, because at the
+	// prompt they go in exactly as written. The inbox hand-out wraps them instead.
+	Human bool `json:"human,omitempty"`
+	// Command marks a slash command. It is always delivered alone and only at the
+	// prompt: joined to other text it would become arguments, and in an agent's tool
+	// output it would mean nothing.
+	Command bool `json:"command,omitempty"`
+}
+
+// SentBatch remembers one thing lola typed, so the conversation view can tell lola's own
+// send from a line someone typed in the terminal. Hash is over the normalized typed text.
+type SentBatch struct {
+	Hash  string    `json:"hash"`
+	Items []string  `json:"items,omitempty"`
+	At    time.Time `json:"at"`
+}
+
+// EndedInfo is what is left of a session once its record has gone: enough for the roster to
+// list it and for its conversation to find the transcript. Segments and Slug are the only
+// way back to that file, and neither is a path anything else handed over.
+type EndedInfo struct {
+	protocol.EndedSession
+	Segments []string `json:"segments,omitempty"`
+	Slug     string   `json:"slug,omitempty"` // the transcript directory's name
 }
 
 // State is everything a session's store holds. Exported for the JSON file and for
@@ -118,6 +150,11 @@ type State struct {
 
 	// OutputBytes counts stored output, for the per-session cap.
 	OutputBytes int64 `json:"outputBytes,omitempty"`
+
+	// Sent is what lola typed lately, oldest first and capped at MaxSent.
+	Sent []SentBatch `json:"sent,omitempty"`
+	// Ended is set when the session's record goes, and cleared when the id starts again.
+	Ended *EndedInfo `json:"ended,omitempty"`
 }
 
 // WidgetReport holds a fingerprint and never the page's words, which go to the agent and
@@ -329,16 +366,21 @@ func (st *State) MasterFor(self, alias, user string, port int, identity string) 
 	return nil
 }
 
-// Trash removes a connection and everything recorded under it, stored output included,
-// for good. The caller closes the connection first. The last connection takes what no
-// connection owned with it, or a session with no tabs would keep a timeline nothing shows.
+// Trash removes a connection and what was recorded under it: its blocks with their stored
+// output, its elements and events, and its handbacks. The caller closes the connection
+// first. A human's words stay, with the connection's label dropped, and so does everything
+// session-wide, because closing a host must not erase a conversation. That holds for the
+// last connection too.
 func (s *Store) Trash(st *State, conn string) {
 	st.Conns = slices.DeleteFunc(st.Conns, func(c *Conn) bool { return c.ID == conn })
-	last := len(st.Conns) == 0
 	gone := map[string]bool{}
 	st.Items = slices.DeleteFunc(st.Items, func(it *protocol.SSHTimelineItem) bool {
-		ic := itemConn(it)
-		if ic != conn && !(last && ic == "") {
+		if itemConn(it) != conn {
+			return false
+		}
+		if it.Kind == protocol.SSHItemHuman && it.Human != nil && it.Human.Origin != protocol.SSHHumanHandback {
+			it.Human.Conn = ""
+			st.Touch(it)
 			return false
 		}
 		gone[it.ID] = true
@@ -472,33 +514,94 @@ func (st *State) QueueBytes() int {
 
 // Enqueue adds text for the agent. item is "" for a nudge.
 func (st *State) Enqueue(item, text string) {
-	st.NextQueue++
-	st.Queue = append(st.Queue, QueueEntry{ID: st.NextQueue, Item: item, Text: text})
+	st.EnqueueEntry(QueueEntry{Item: item, Text: text})
 }
 
-// PendingText is the join of what is waiting and not already being sent. The
-// session record's PendingSSH is exactly this.
-func (st *State) PendingText() string {
+// EnqueueEntry adds an entry for the agent and gives it its id.
+func (st *State) EnqueueEntry(q QueueEntry) {
+	st.NextQueue++
+	q.ID = st.NextQueue
+	st.Queue = append(st.Queue, q)
+}
+
+// batchSep is what joins the entries of one batch.
+const batchSep = "\n\n"
+
+// NextBatch is the head of the queue, which is what one delivery at the prompt types: the
+// leading entries that are not commands, joined by a blank line, or one command alone. What
+// is behind it waits for the next rest, because a joined /compact would become arguments.
+func (st *State) NextBatch() (text string, ids []int) {
 	var parts []string
 	for _, q := range st.Queue {
-		if !q.Claimed {
-			parts = append(parts, q.Text)
+		if q.Claimed {
+			continue
 		}
+		if q.Command {
+			if len(parts) == 0 {
+				return q.Text, []int{q.ID}
+			}
+			break
+		}
+		parts = append(parts, q.Text)
+		ids = append(ids, q.ID)
 	}
-	return strings.Join(parts, "\n\n")
+	return strings.Join(parts, batchSep), ids
 }
 
-// Deliver removes the queue entries deliver selects and marks their items
-// delivered. Returns their text in order.
-func (st *State) Deliver(via string, at time.Time, deliver func(QueueEntry) bool) []string {
-	var out []string
+// PendingText is the next delivery at the prompt, and what is already being sent is not
+// part of it. The session record's PendingSSH is exactly this.
+func (st *State) PendingText() string {
+	text, _ := st.NextBatch()
+	return text
+}
+
+// ClaimBatch marks the entries that were typed as text, and answers their items. It claims
+// by POSITION: it walks the unclaimed head until the join equals text. A substring match
+// would be wrong, because with no frames around them "yes" is inside "yes please", and an
+// entry never typed would be marked delivered and lost. Text that is not the head claims
+// nothing, so the entries stay queued.
+func (st *State) ClaimBatch(text string) []string {
+	var picked []int
+	joined := ""
+	for i := range st.Queue {
+		q := &st.Queue[i]
+		if q.Claimed {
+			continue
+		}
+		next := q.Text
+		if len(picked) > 0 {
+			next = joined + batchSep + q.Text
+		}
+		if next != text && !strings.HasPrefix(text, next+batchSep) {
+			return nil
+		}
+		joined = next
+		picked = append(picked, i)
+		if joined == text {
+			var items []string
+			for _, at := range picked {
+				st.Queue[at].Claimed = true
+				if it := st.Queue[at].Item; it != "" {
+					items = append(items, it)
+				}
+			}
+			return items
+		}
+	}
+	return nil
+}
+
+// Deliver removes the queue entries deliver selects and marks their items delivered.
+// Returns the entries in order, so a caller can frame each by what it is.
+func (st *State) Deliver(via string, at time.Time, deliver func(QueueEntry) bool) []QueueEntry {
+	var out []QueueEntry
 	kept := st.Queue[:0:0]
 	for _, q := range st.Queue {
 		if !deliver(q) {
 			kept = append(kept, q)
 			continue
 		}
-		out = append(out, q.Text)
+		out = append(out, q)
 		if it := st.Item(q.Item); it != nil && it.Human != nil {
 			it.Human.Delivered = true
 			it.Human.DeliveredAt = at
@@ -510,9 +613,37 @@ func (st *State) Deliver(via string, at time.Time, deliver func(QueueEntry) bool
 	return out
 }
 
+// NoteSent records one thing lola typed, keeping the newest MaxSent.
+func (st *State) NoteSent(b SentBatch) {
+	st.Sent = append(st.Sent, b)
+	if over := len(st.Sent) - MaxSent; over > 0 {
+		st.Sent = slices.Delete(st.Sent, 0, over)
+	}
+}
+
+// ReadEnded reads a store's Ended record without opening the store, so listing ended
+// sessions does not bring every old store into memory. A store that cannot be read has
+// nothing to list.
+func ReadEnded(home, session string) *EndedInfo {
+	if !ValidSession(session) {
+		return nil
+	}
+	raw, err := os.ReadFile(statePath(filepath.Join(Root(home), session)))
+	if err != nil {
+		return nil
+	}
+	var st struct {
+		Ended *EndedInfo `json:"ended"`
+	}
+	if json.Unmarshal(raw, &st) != nil {
+		return nil
+	}
+	return st.Ended
+}
+
 // Prune applies the retention caps. Call it inside Update, after adding items.
 func (s *Store) Prune(st *State) {
-	var blocks, elements, events int
+	var blocks, elements, events, humans int
 	for _, it := range st.Items {
 		switch it.Kind {
 		case protocol.SSHItemBlock:
@@ -521,7 +652,27 @@ func (s *Store) Prune(st *State) {
 			elements++
 		case protocol.SSHItemSystem:
 			events++
+		case protocol.SSHItemHuman:
+			humans++
 		}
+	}
+	// A message still waiting is the one copy of those words, so it never goes. One that
+	// has been delivered or recalled is only the record of them.
+	if humans > MaxHuman {
+		queued := map[string]bool{}
+		for _, q := range st.Queue {
+			queued[q.Item] = true
+		}
+		st.Items = slices.DeleteFunc(st.Items, func(it *protocol.SSHTimelineItem) bool {
+			if humans <= MaxHuman || it.Kind != protocol.SSHItemHuman || it.Human == nil || queued[it.ID] {
+				return false
+			}
+			if !it.Human.Delivered && !it.Human.Recalled {
+				return false
+			}
+			humans--
+			return true
+		})
 	}
 	if blocks > MaxBlocks {
 		st.Items = slices.DeleteFunc(st.Items, func(it *protocol.SSHTimelineItem) bool {

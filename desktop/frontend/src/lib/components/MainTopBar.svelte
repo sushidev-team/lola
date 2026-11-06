@@ -7,6 +7,9 @@
   import QuotaBars from "./QuotaBars.svelte";
   import HoverCard from "./HoverCard.svelte";
   import SpendCard from "./SpendCard.svelte";
+  import SessionBar from "./session/SessionBar.svelte";
+  import { waitingQueue } from "$lib/queue";
+  import { ssh } from "$lib/ssh.svelte";
 
   // The main column's 44px context header. It replaces the old full-width vitals
   // bar: it starts at the SIDEBAR's right edge, not the window's, so together
@@ -19,6 +22,12 @@
   type Crumb = { text: string; onclick?: () => void };
 
   const projectName = $derived(store.displayNameFor(nav.project));
+
+  // A session fills <main>, and this bar becomes its bar.
+  const inSession = $derived(!!nav.focusedTerm && nav.view === "cockpit");
+  // The sidebar carries the Waiting line. Hidden, it needs a way to say the same thing, or a
+  // session waiting on you is invisible from inside another one.
+  const waiting = $derived(nav.sidebarOpen ? 0 : waitingQueue(store.rosterSessions).length);
 
   const crumbs = $derived.by<Crumb[]>(() => {
     switch (nav.view) {
@@ -123,13 +132,23 @@
 {/snippet}
 
 <header
-  class="drag flex h-11 items-center gap-2 border-b border-edge bg-canvas pr-3 {nav.sidebarOpen
+  class="drag flex h-11 min-w-0 items-center gap-2 bg-canvas pr-3 {inSession ? '' : 'border-b border-edge'} {nav.sidebarOpen
     ? 'pl-3'
     : 'pl-[82px]'}"
 >
   {#if !nav.sidebarOpen}
     <!-- Placed AFTER the traffic-light padding, never inside it. -->
     <Button icon title="show sidebar (b)" aria-label="Show sidebar" onclick={() => nav.toggleSidebar()}>»</Button>
+  {/if}
+
+  {#if waiting > 0}
+    <Button size="xs" class="num shrink-0 text-orange!" title="{waiting} waiting on you (⌘J)" aria-label="{waiting} waiting on you" onclick={() => ssh.nextWaiting()} data-waiting-badge>
+      <span aria-hidden="true">◉</span>{waiting}
+    </Button>
+  {/if}
+
+  {#if inSession}
+    <SessionBar sessionId={nav.focusedTerm} />
   {/if}
 
   {#if nav.view !== "cockpit"}
@@ -146,6 +165,7 @@
     </Button>
   {/if}
 
+  {#if !inSession}
   <nav class="flex min-w-0 items-center gap-2 text-sm font-normal" aria-label="Breadcrumb">
     {#each crumbs as c, i (c.text + i)}
       {#if i > 0}
@@ -163,8 +183,10 @@
       <span class="num shrink-0 text-sm text-faint">{count}</span>
     {/if}
   </nav>
+  {/if}
 
   <span class="ml-auto flex shrink-0 items-center gap-2">
+    {#if !inSession}
     <Button size="xs" onclick={() => nav.openOverlay("commands")} title="Search projects, sessions, and actions (⌘K)">Search <span class="text-faint">⌘K</span></Button>
     {#if spend}
       <HoverCard class="num inline-flex items-center text-sm whitespace-nowrap outline-none {spendCls}">
@@ -177,6 +199,7 @@
           {headerLabel(spend)}
         {/if}{#if spend.load?.busy}<span class="ml-1.5">· load busy</span>{/if}
       </HoverCard>
+    {/if}
     {/if}
     <!-- Daemon alarm, ONLY while the sidebar is collapsed. <SidebarStatus> is the
          permanent home for liveness, but it lives inside the collapsible <aside>,
@@ -198,7 +221,7 @@
         <span>{store.alive ? "Degraded" : "Daemon down"}</span>
       </Button>
     {/if}
-    {#if nav.view === "cockpit"}
+    {#if nav.view === "cockpit" && !inSession}
       <!-- Square buttons in a hairline rail: a segmented control of icons, so the
            three cells must be the same shape whatever is drawn in them. `icon` at
            `xs` gives that (24px) — the old `size="xs"` text buttons were pills
@@ -219,7 +242,7 @@
           </Button>
         {/each}
       </span>
-    {:else if nav.view === "home"}
+    {:else if nav.view === "home" && !inSession}
       <Button variant="secondary" title="add a project" onclick={() => nav.openOverlay("project", "")}>
         <span aria-hidden="true">+</span> Add project
       </Button>

@@ -7,9 +7,9 @@
   // and a nested button is not parseable. Approval does not happen here: the card's
   // rules need the whole dock.
   import { ssh, sshClock } from "$lib/ssh.svelte";
-  import { chipFor, hostName, tierShort, tierTagClass, type SSHSessionInfo } from "$lib/ssh";
-  import HoverCard from "../HoverCard.svelte";
+  import { chipFor, hostName, type SSHSessionInfo } from "$lib/ssh";
   import SSHTierTag from "./SSHTierTag.svelte";
+  import HoverCard from "../HoverCard.svelte";
 
   let { sessionId, info }: { sessionId: string; info: SSHSessionInfo | null | undefined } = $props();
 
@@ -38,7 +38,7 @@
           <p class="text-faint">Click to review</p>
         </div>
       {/snippet}
-      <span class="label rounded border px-1 {tierTagClass(chip.conn.tier)}">{tierShort(chip.conn.tier)}</span>
+      <SSHTierTag tier={chip.conn.tier} short />
       <!-- The host clips first: the state word is what a glance came for. -->
       <span class="min-w-0 truncate text-ink">{hostName(chip.conn)}</span>
       <span class="text-faint" aria-hidden="true">·</span>

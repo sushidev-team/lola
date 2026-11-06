@@ -2,6 +2,7 @@
   // The connection's own moments, each with a way forward: signing in, a drop, a
   // failure. Reconnecting is a go, so it carries the data warning too. An agent can
   // never get here: only a human's press reconnects.
+  import type { Snippet } from "svelte";
   import { ssh, sshClock } from "$lib/ssh.svelte";
   import {
     SSH_DATA_WARNING,
@@ -20,11 +21,12 @@
     conn,
     kind,
     running = 0,
-  }: { sessionId: string; conn: SSHConnInfo; kind: "auth" | "reconnect" | "failed"; running?: number } = $props();
+    pager = undefined,
+  }: { sessionId: string; conn: SSHConnInfo; kind: "auth" | "reconnect" | "failed"; running?: number; pager?: Snippet } = $props();
 
   const host = $derived(hostName(conn));
   const idle = $derived(isIdleDrop(conn));
-  const left = $derived(conn.connectDeadline && ssh.view(sessionId).active()?.id !== conn.id ? toMillis(conn.connectDeadline) - sshClock.now : NaN);
+  const left = $derived(conn.connectDeadline ? toMillis(conn.connectDeadline) - sshClock.now : NaN);
   const linger = $derived(spokenSeconds(conn.idleLingerSeconds ?? 900));
   const detail = $derived(conn.stateDetail ?? "");
   const timedOut = $derived(/finish|within|ran out|timed|cancelled/i.test(detail));
@@ -34,20 +36,22 @@
 {#if kind === "auth"}
   <!-- Nothing recognized as a question, or not yet. It sits where the question's card will, so
        nothing jumps when one is recognized, and it can only point at the terminal. -->
-  <section data-card="auth" class="ssh-fade-in flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md border border-edge/60 bg-panel px-3 py-2 text-sm">
+  <section data-card="auth" class="ssh-fade-in flex flex-wrap items-center gap-x-2 gap-y-1 rounded-[10px] border border-orange bg-panel px-3 py-2 text-sm">
     <span class="text-ink">Signing in to {host}.</span>
     <span class="text-faint">Waiting for input?</span>
-    <Button size="xs" class="h-5!" onclick={() => ssh.showTerminal(sessionId)}>Open terminal</Button>
+    <Button size="xs" class="h-5!" onclick={() => ssh.showHostTerminal(sessionId, conn.id)}>Open terminal</Button>
     {#if !Number.isNaN(left)}<span class="num ml-auto text-faint">Gives up in {mmss(left)}</span>{/if}
+    {#if pager}<span class="ml-auto">{@render pager()}</span>{/if}
   </section>
 {:else if kind === "reconnect"}
-  <section data-card="reconnect" class="ssh-fade-in grid gap-2 rounded-md border {idle ? 'border-edge/60' : 'border-warn/35'} bg-panel p-3">
+  <section data-card="reconnect" class="ssh-fade-in grid gap-2 rounded-[10px] border {idle ? 'border-edge' : 'border-orange'} bg-panel p-3">
+    {#if pager}<div class="justify-self-end">{@render pager()}</div>{/if}
     {#if idle}
       <p class="copy text-ink">The connection closed after {linger} with nothing using it.</p>
     {:else}
       <p class="copy">
-        <span class="font-medium text-warn">Connection to {host} dropped.</span>
-        {#if running === 1}<span class="text-ink/85"> 1 command was running. Its result is unknown, and it may still be running on the host.</span>{:else if running > 1}<span class="text-ink/85"> {plural(running, "command")} were running. Their results are unknown, and they may still be running on the host.</span>{/if}
+        <span class="font-medium text-orange">Connection to {host} dropped.</span>
+        {#if running === 1}<span class="text-ink-2"> 1 command was running. Its result is unknown, and it may still be running on the host.</span>{:else if running > 1}<span class="text-ink-2"> {plural(running, "command")} were running. Their results are unknown, and they may still be running on the host.</span>{/if}
       </p>
     {/if}
     <div class="grid gap-0.5 text-sm text-faint">
@@ -60,7 +64,8 @@
     </div>
   </section>
 {:else}
-  <section data-card="failed" class="ssh-fade-in grid gap-2 rounded-md border border-bad/35 bg-panel p-3">
+  <section data-card="failed" class="ssh-fade-in grid gap-2 rounded-[10px] border border-bad/35 bg-panel p-3">
+    {#if pager}<div class="justify-self-end">{@render pager()}</div>{/if}
     <p class="copy">
       {#if noSsh}
         <span class="font-medium text-bad">ssh was not found on this Mac. Lola needs it to connect.</span>
@@ -68,7 +73,7 @@
         <span class="font-medium text-bad">{detail}</span>
       {:else}
         <span class="font-medium text-bad">Could not connect to {host}.</span>
-        <span class="text-ink/85"> ssh's message is in the terminal.</span>
+        <span class="text-ink-2"> ssh's message is in the terminal.</span>
       {/if}
     </p>
     <div class="flex items-center gap-2">

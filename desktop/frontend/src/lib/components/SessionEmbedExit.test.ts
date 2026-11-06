@@ -26,7 +26,7 @@ beforeEach(async () => {
 });
 
 it("retires an exited temporary session and leaves fullscreen", async () => {
-  render(SessionEmbed,{sessionId:"temp",focused:true});
+  render(SessionEmbed,{sessionId:"temp"});
   await fireEvent.click(screen.getByRole("button",{name:"Exit temp"}));
   await waitFor(() => expect(nav.focusedTerm).toBe(""));
   expect(close).toHaveBeenCalledWith("temp");
@@ -35,7 +35,7 @@ it("retires an exited temporary session and leaves fullscreen", async () => {
 
 it("keeps a still-running session after an attach client exits", async () => {
   close.mockResolvedValue({removed:false});
-  render(SessionEmbed,{sessionId:"temp",focused:true});
+  render(SessionEmbed,{sessionId:"temp"});
   await fireEvent.click(screen.getByRole("button",{name:"Exit temp"}));
   await waitFor(() => expect(close).toHaveBeenCalled());
   expect(nav.focusedTerm).toBe("temp");
@@ -45,7 +45,7 @@ it("keeps a still-running session after an attach client exits", async () => {
 it("switches to a remaining shell tab instead of closing it", async () => {
   close.mockResolvedValue({removed:false});
   shells.mockResolvedValue(["temp-shell-1"]);
-  render(SessionEmbed,{sessionId:"temp",focused:true});
+  render(SessionEmbed,{sessionId:"temp"});
   await fireEvent.click(screen.getByRole("button",{name:"Exit temp"}));
   await waitFor(() => expect(terms.activeTab("temp")).toBe("temp-shell-1"));
   expect(nav.focusedTerm).toBe("temp");
@@ -54,7 +54,7 @@ it("switches to a remaining shell tab instead of closing it", async () => {
 it("does not navigate away from a different session opened during cleanup", async () => {
   let finish!: (result: {removed:boolean}) => void;
   close.mockImplementation(() => new Promise(resolve => {finish=resolve;}));
-  render(SessionEmbed,{sessionId:"temp",focused:true});
+  render(SessionEmbed,{sessionId:"temp"});
   await fireEvent.click(screen.getByRole("button",{name:"Exit temp"}));
   openSession("other");
   finish({removed:true});

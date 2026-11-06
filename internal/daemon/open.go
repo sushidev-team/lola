@@ -149,6 +149,9 @@ func (d *Daemon) handleOpenManual(ctx context.Context, a protocol.OpenManualArgs
 	sess.Name = strings.TrimSpace(a.Name)
 	d.sessions.Upsert(sess)
 	d.recordSessionEvent("", sess)
+	if a.Agent {
+		d.noteInitial(id, a.Prompt, "")
+	}
 	if serr := d.sessions.Save(); serr != nil {
 		d.logf("", "openManual: persist sessions after manual worktree %s: %v", branch, serr)
 	}

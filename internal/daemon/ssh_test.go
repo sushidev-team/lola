@@ -148,6 +148,7 @@ func (r *sshRig) wire(d *Daemon) {
 	d.native = &fakeNative{}
 	d.runtimeHealth = func(string) error { return nil }
 	d.promptAttached = func(context.Context, string) (bool, error) { return false, nil }
+	d.paneCursor, d.paneVisible = nil, nil // no proof here may reach the real tmux
 	d.ssh.client = sshconn.Client{Bin: filepath.Join(r.dir, "ssh")}
 	d.ssh.tmuxFn = func() sshTmux { return r.tm }
 	d.ssh.lookPath = func(s string) (string, error) { return s, nil }

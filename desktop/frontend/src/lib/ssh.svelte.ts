@@ -1,20 +1,25 @@
 // The SSH workspace's client state: the timeline a session has fetched, plus the
-// view choices that must survive leaving the tab (filter, split, drafts). Keyed by
+// view choices that must survive leaving the tab (filter, drafts). Keyed by
 // session id, so coming back to a session is instant and two sessions never share
 // a draft. Every daemon call goes through here; components read and call.
 //
 // Nothing here decides policy. The daemon re-checks every action, and a refusal
 // comes back as an error that is shown in lola's own sentence.
 
+import type { Attachment } from "./composerpaste";
 import { SvelteMap, SvelteSet, createSubscriber } from "svelte/reactivity";
 import { SSHService } from "@bindings/desktop";
 import { store, type SessionInfo } from "./store.svelte";
 import { nav } from "./nav.svelte";
 import { confirm } from "./confirm.svelte";
-import { terms, AGENT, SSH } from "./terms.svelte";
+import { terms, AGENT, CHECKPOINTS, DIFF, SSH, isChangesTab, isViewTab } from "./terms.svelte";
+import { changesOffered, conversationOffered, stripCells, type StripCell } from "./sessionview";
+import { landingFor, nextWaiting } from "./queue";
+import { checkpoints } from "./checkpoints.svelte";
+import { AGENT_DEST } from "./composer";
+import { isTalkUnsupported, talk } from "./talk.svelte";
 import {
   FILTERS,
-  SPLIT_DEFAULT,
   SSH_REMOTE_OUTLIVES,
   agentName,
   hostName,
@@ -59,19 +64,8 @@ export const sshClock = {
   },
 };
 
-/** Webview-local, per session, best-effort: a split is not worth a config key. */
-const SPLIT_KEY = "lola.ssh.split";
-
-function readSplits(): Record<string, number> {
-  try {
-    const raw = JSON.parse(localStorage.getItem(SPLIT_KEY) ?? "{}");
-    return raw && typeof raw === "object" ? raw : {};
-  } catch {
-    return {};
-  }
-}
-
-/** Same reasoning. The dock's arrangement, per session, kept for the most recent few. */
+/** Webview-local, per session, best-effort: a dock layout is not worth a config key. The
+ *  arrangement is kept for the most recent few sessions. */
 const DOCK_KEY = "lola.ssh.dock";
 const DOCK_KEEP = 50;
 type SavedDock = { root: unknown; closed: string[] };
@@ -85,7 +79,31 @@ function readDocks(): Record<string, SavedDock> {
   }
 }
 
-export type TerminalMode = "split" | "hidden" | "max";
+/**
+ * A draft to the agent outlives the app, because writing it was work. Webview-local and capped,
+ * like the dock. A command's draft is never kept: an old command waiting in a field is a thing
+ * nobody should come back to.
+ */
+const DRAFTS_KEY = "lola.drafts";
+const DRAFTS_KEEP = 50;
+const DRAFT_MAX_BYTES = 8192;
+
+function readDrafts(): Record<string, string> {
+  try {
+    const raw = JSON.parse(localStorage.getItem(DRAFTS_KEY) ?? "{}");
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+    return Object.fromEntries(Object.entries(raw).filter(([, v]) => typeof v === "string")) as Record<string, string>;
+  } catch {
+    return {};
+  }
+}
+
+function capDraft(text: string): string {
+  const bytes = new TextEncoder().encode(text);
+  if (bytes.length <= DRAFT_MAX_BYTES) return text;
+  // A cut may land inside a character, and the decoder drops what is left of it.
+  return new TextDecoder().decode(bytes.subarray(0, DRAFT_MAX_BYTES)).replace(/\uFFFD$/, "");
+}
 
 export type HandbackState = {
   conn: string;
@@ -103,6 +121,8 @@ class SessionView {
   items = $state<SSHTimelineItem[]>([]);
   connections = $state<SSHConnInfo[]>([]);
   loaded = $state(false);
+  /** How many timeline reads have come back, answered or not. */
+  fetches = $state(0);
   error = $state("");
   predates = $state(false);
   lastSeq = 0;
@@ -112,18 +132,80 @@ class SessionView {
   filter = $state<Filter>("everything");
   /** Connection the header, terminal and dock apply to. */
   activeConn = $state("");
+  /**
+   * The host the story is filtered to and a Run goes to, "" for All. All is the default: an
+   * agent's conversation is one story, and a host is a filter on it, never a place you go.
+   */
+  scope = $state("");
+  /**
+   * Which host's shell the strip's `$` cell put on show, "" when the last terminal used was
+   * not a host's. Separate from scope: looking at a staging shell leaves the story on All.
+   * New code reads these two and never active(), which answers neither question.
+   */
+  shellConn = $state("");
+  /**
+   * The human hid the dock. The tree stays as it is, because a tab taken out of it would drop
+   * its frame and reload the page, so this feeds DockArea's compact path with the drawer shut.
+   */
+  dockHidden = $state(false);
+  /** A jump already chose where the keyboard goes, so arriving must not send it to the composer. */
+  holdArrival = $state(false);
   briefCollapsed = $state(false);
-  /** Per tab: a command half typed for one host must never be sitting in another's field. */
-  private drafts = new SvelteMap<string, string>();
-  get draft(): string {
-    return this.drafts.get(this.active()?.id ?? "") ?? "";
+  /** The `✎` on a roster row. Reads every destination's draft, because a row has no scope. */
+  get hasDraft(): boolean {
+    if (this.agentDraftText.trim()) return true;
+    for (const text of this.commandDrafts.values()) if (text.trim()) return true;
+    return false;
   }
-  set draft(text: string) {
-    this.drafts.set(this.active()?.id ?? "", text);
+  /** What is written to the agent. One per session, whatever the scope, and it is kept. */
+  private agentDraftText = $state("");
+  /** Per host: a command half typed for one host must never be sitting in another's field. */
+  private commandDrafts = new SvelteMap<string, string>();
+  /**
+   * The page that put this text in the field. Text a widget wrote is not persisted, or a restart
+   * would bring it back with nothing saying where it came from.
+   */
+  widgetFill = $state<{ name: string } | null>(null);
+  get agentDraft(): string {
+    return this.agentDraftText;
   }
-  history = $state<string[]>([]);
+  set agentDraft(text: string) {
+    this.agentDraftText = text;
+    if (!text) this.widgetFill = null;
+    this.saveDraft?.(this.widgetFill ? "" : text);
+  }
+  commandDraft(conn: string): string {
+    return this.commandDrafts.get(conn) ?? "";
+  }
+  setCommandDraft(conn: string, text: string) {
+    this.commandDrafts.set(conn, text);
+  }
+  /** A widget's text, marked as such in the field. It fills and nothing else: see SSHWidget. */
+  fillFromWidget(name: string, text: string) {
+    this.widgetFill = { name };
+    this.agentDraft = text;
+  }
+  /** Per destination, so ↑ can never recall a staging command into production. Memory only. */
+  private histories = new SvelteMap<string, string[]>();
+  historyFor(dest: string): string[] {
+    return this.histories.get(dest) ?? [];
+  }
+  pushHistory(dest: string, text: string) {
+    this.histories.set(dest, [...this.historyFor(dest).filter((h) => h !== text), text].slice(-100));
+  }
   /** Double ⌘ in the composer: ↩ runs on the host, and ⌘↩ asks. */
   runDefault = $state(false);
+  /** The story line's Report overlay. Here because the session menu opens it from any view. */
+  reportOpen = $state(false);
+  /** Someone hid the sidebar. It stays hidden for this session until they ask for it back. */
+  sideHidden = $state(false);
+  /** What the agent draft's references stand for. See composerpaste.ts. Reactive: its tiles read it. */
+  pastes = new SvelteMap<number, Attachment>();
+  pasteSeq = 0;
+  /** The card the tray's ‹ › last stood on. "" follows the oldest. */
+  trayCard = $state("");
+  /** The daemon's sentence for why the last message queued, shown until the queue moves. */
+  queueWhy = $state("");
   /** The human let this session's widgets run. In memory on purpose: see SSHWidget. */
   widgetsAllowed = $state(false);
   /** Panels and tabs of this session's widgets. Raw, because every change replaces the tree. */
@@ -163,6 +245,8 @@ class SessionView {
     this.expanded.add(id);
   }
   openedFolds = new SvelteSet<string>();
+  /** The thumbnails of images sent from here, by path. Memory only: a restart draws a plain tile. */
+  sentThumbs = new SvelteMap<string, string>();
   /**
    * Focus requests are counters, and `seen` is how far each has been honoured. Both
    * live here rather than in the component, so a request made before the workspace
@@ -189,29 +273,31 @@ class SessionView {
   /** The stream of each expanded block, so a refetch never flips a tab. */
   streams = new SvelteMap<string, "stdout" | "stderr">();
 
-  split = $state(SPLIT_DEFAULT);
-  terminal = $state<TerminalMode>("split");
-  /** "Stream" or "Terminal" under 980px. */
+  /** Which of the two this session is showing: a plain view switch, at any width. */
   narrow = $state<"stream" | "terminal">("stream");
   handback = $state<HandbackState | null>(null);
   dismissedHints = new SvelteSet<string>();
 
-  constructor(split: number | undefined, dock?: SavedDock) {
-    if (split) this.split = split;
+  constructor(dock?: SavedDock, draft = "") {
     if (dock) {
       this.dock = deserialize(dock.root);
       if (Array.isArray(dock.closed)) for (const id of dock.closed) if (typeof id === "string") this.dockClosed.add(id);
     }
+    this.agentDraftText = draft;
   }
 
   private saveDock?: (d: SavedDock) => void;
+  private saveDraft?: (text: string) => void;
+  /** The widgets this view has already seen, so only a new post earns a dot. */
+  private widgetsSeen: Set<string> | null = null;
   /** A timeline answered at least once since it was last empty, so absence means something. */
   private fetchedOk = false;
 
   private id = "";
-  bind(id: string, saveDock?: (d: SavedDock) => void) {
+  bind(id: string, saveDock?: (d: SavedDock) => void, saveDraft?: (text: string) => void) {
     this.id = id;
     this.saveDock = saveDock;
+    this.saveDraft = saveDraft;
   }
 
   /** Replaces the layout. A sash saves once at the end of its drag, not on every pixel. */
@@ -225,27 +311,71 @@ class SessionView {
   }
 
   /**
-   * Brings the dock in line with the timeline: a widget not seen before opens, and one that no
-   * longer exists goes. Only after a real answer, or a daemon that is down would empty the dock.
+   * Brings the dock in line with the timeline. A post never makes a panel: with none open, a
+   * widget nobody has seen gets a dot and a card in the story, and opening is the human's act.
+   * With panels open, a new one joins behind the tab on show, because an agent posting a page
+   * must not flip the one the human is reading. One that no longer exists goes, but only after
+   * a real answer, or a daemon that is down would empty the dock.
    */
   syncDock() {
     const known = new Set(this.items.flatMap((i) => (i.element?.kind === "widget" ? [i.element.id] : [])));
     let next = this.dock;
+    const seen = this.widgetsSeen;
     for (const id of known) {
       if (this.dockClosed.has(id) || groupOf(next, id)) continue;
-      // An agent posting a page must not flip the one the human is reading.
-      if (groups(next).length) this.dockUnseen.add(id);
-      next = addTab(next, id, undefined, false);
+      if (groups(next).length) {
+        this.dockUnseen.add(id);
+        next = addTab(next, id, undefined, false);
+      } else if (seen && !seen.has(id)) {
+        this.dockUnseen.add(id);
+      }
     }
+    // The first look at a session sets the baseline: a story being read for the first time has
+    // nothing new in it, and its widgets already show as cards.
+    if (seen || this.fetchedOk) this.widgetsSeen = known;
     if (this.fetchedOk) {
       next = retainTabs(next, known);
       for (const id of [...this.dockClosed]) if (!known.has(id)) this.dockClosed.delete(id);
+      for (const id of [...this.dockUnseen]) if (!known.has(id)) this.dockUnseen.delete(id);
     }
     if (next !== this.dock) this.setDock(next);
   }
 
+  /** Every widget the timeline knows of, in the order they were posted. */
+  get knownWidgets(): string[] {
+    return this.items.flatMap((i) => (i.element?.kind === "widget" ? [i.element.id] : []));
+  }
+
+  /**
+   * `w` and the strip's Widgets. Hiding never takes a tab out of the tree, or the frames would
+   * reload. With no tabs at all it brings back every widget the human has not closed. In a
+   * window too small for the layout the dock is a drawer, so that is what opens and shuts.
+   */
+  toggleDock() {
+    if (!allTabs(this.dock).length) {
+      let next = this.dock;
+      for (const id of this.knownWidgets) if (!this.dockClosed.has(id)) next = addTab(next, id, undefined, false);
+      this.dockHidden = false;
+      this.dockUnseen.clear();
+      if (next !== this.dock) this.setDock(next);
+      return;
+    }
+    if (this.dockHidden) {
+      this.dockHidden = false;
+      // If the layout fits again, DockArea clears this at once. If not, the drawer is the dock.
+      this.dockDrawer = true;
+      return;
+    }
+    if (this.dockCompact) {
+      this.dockDrawer = !this.dockDrawer;
+      return;
+    }
+    this.dockHidden = true;
+  }
+
   /** The timeline row. It brings a closed widget back or points at an open one, and takes no focus. */
   openWidget(id: string) {
+    this.dockHidden = false;
     this.dockClosed.delete(id);
     this.dockUnseen.delete(id);
     this.setDock(selectTab(addTab(this.dock, id), id));
@@ -326,6 +456,7 @@ class SessionView {
     } finally {
       this.loaded = true;
       this.inflight = false;
+      this.fetches++;
       if (this.again) {
         this.again = false;
         void this.fetch();
@@ -357,8 +488,8 @@ class SSHStore {
   // it inside $derived, where writing to reactive state throws state_unsafe_mutation.
   // Nothing subscribes to the map itself: each SessionView holds its own $state.
   private views = new Map<string, SessionView>();
-  private splits = readSplits();
   private docks = readDocks();
+  private drafts = readDrafts();
 
   hosts = $state<SSHHostInfo[]>([]);
   hostsLoaded = $state(false);
@@ -369,20 +500,15 @@ class SSHStore {
   view(id: string): SessionView {
     let v = this.views.get(id);
     if (!v) {
-      v = new SessionView(this.splits[id], this.docks[id]);
-      v.bind(id, (d) => this.saveDock(id, d));
+      v = new SessionView(this.docks[id], this.drafts[id] ?? "");
+      v.bind(
+        id,
+        (d) => this.saveDock(id, d),
+        (text) => this.saveDraft(id, text),
+      );
       this.views.set(id, v);
     }
     return v;
-  }
-
-  saveSplit(id: string, pct: number) {
-    this.splits[id] = pct;
-    try {
-      localStorage.setItem(SPLIT_KEY, JSON.stringify(this.splits));
-    } catch {
-      /* storage unavailable: the ratio still holds for this run */
-    }
   }
 
   private saveDock(id: string, d: SavedDock) {
@@ -394,6 +520,17 @@ class SSHStore {
       localStorage.setItem(DOCK_KEY, JSON.stringify(this.docks));
     } catch {
       /* storage unavailable: the layout still holds for this run */
+    }
+  }
+
+  private saveDraft(id: string, text: string) {
+    delete this.drafts[id];
+    if (text) this.drafts[id] = capDraft(text);
+    for (const old of Object.keys(this.drafts).slice(0, -DRAFTS_KEEP)) delete this.drafts[old];
+    try {
+      localStorage.setItem(DRAFTS_KEY, JSON.stringify(this.drafts));
+    } catch {
+      /* storage unavailable: the draft still holds for this run */
     }
   }
 
@@ -426,19 +563,9 @@ class SSHStore {
 
   // --- navigation -----------------------------------------------------------
 
-  /** The ×: closes the connection and deletes the tab's record for good, after one question. */
-  trashTab(session: string, c: SSHConnInfo) {
-    const host = hostName(c);
-    const running = c.runningBlocks ?? 0;
-    confirm.ask({
-      title: `Delete the ${host} tab?`,
-      body: isEnded(c) ? "Its timeline and output are deleted for good." : "The connection closes, and its timeline and output are deleted for good.",
-      detail: isEnded(c) ? undefined : running > 0 ? `${plural(running, "command")} ${running === 1 ? "is" : "are"} still running. ${SSH_REMOTE_OUTLIVES}` : (c.commandsRun ?? 0) > 0 ? SSH_REMOTE_OUTLIVES : undefined,
-      confirmLabel: "Delete tab",
-      onConfirm: () => {
-        void this.trash(session, c.id);
-      },
-    });
+  /** The host bar's own question has been answered. The record goes for good. */
+  confirmTrash(session: string, c: SSHConnInfo) {
+    void this.trash(session, c.id);
   }
 
   private async trash(session: string, conn: string) {
@@ -451,30 +578,224 @@ class SSHStore {
     const at = tabs.findIndex((t) => t.conn.id === conn);
     const rest = tabs.filter((t) => t.conn.id !== conn);
     if (v.activeConn === conn) v.activeConn = rest[Math.min(Math.max(at, 0), rest.length - 1)]?.conn.id ?? "";
+    if (v.scope === conn) v.scope = "";
+    if (v.shellConn === conn) {
+      v.shellConn = "";
+      v.narrow = "stream";
+    }
     v.connections = v.connections.filter((c) => c.id !== conn);
     v.items = v.items.filter((i) => itemConn(i) !== conn);
-    if (!rest.length && terms.activeTab(session) === SSH) terms.select(session, AGENT);
+    const s = store.sessionById(session);
+    if (!rest.length && terms.activeTab(session) === SSH && s && !conversationOffered(s)) terms.show(session, AGENT);
     await store.refresh();
   }
 
-  /** Selects a session and opens its SSH tab. The grid lens hosts no embed, so it is left first. */
+  /** Opens a session on its conversation. It never toggles, so a chip on the open one is safe. */
   open(id: string, opts: { conn?: string; dock?: boolean } = {}) {
-    if (nav.lens === "grid") nav.setLens("list");
-    nav.select(id);
+    nav.openSession(id);
     terms.select(id, SSH);
     const v = this.view(id);
+    v.narrow = "stream";
     if (opts.conn) v.activeConn = opts.conn;
-    if (opts.dock) v.dockFocus++;
+    if (opts.dock) {
+      v.holdArrival = true;
+      v.dockFocus++;
+    }
   }
 
-  /** `h`: open the tab, or leave it for the agent's. */
-  toggleTab(s: SessionInfo) {
-    if (terms.activeTab(s.id) === SSH) terms.select(s.id, AGENT);
-    else {
-      // Back to the tab you left, unless it is gone.
-      const v = this.view(s.id);
-      const here = s.ssh?.connections?.some((c) => c.id === v.activeConn && c.state !== "denied");
-      this.open(s.id, { conn: here ? v.activeConn : urgentConn(s.ssh?.connections)?.id });
+  // --- the session's views ---------------------------------------------------
+
+  /** Which cell of the strip this session is on, for `<` `>` and the strip's own underline. */
+  currentCell(s: SessionInfo): string {
+    const tab = terms.activeTab(s.id);
+    if (tab === DIFF || tab === CHECKPOINTS) return "changes";
+    if (tab === AGENT) return "terminal";
+    if (tab !== SSH) return tab;
+    const v = this.view(s.id);
+    if (v.narrow !== "terminal") return "conversation";
+    const live = v.connections.length ? v.connections : (s.ssh?.connections ?? []);
+    const conn = live.find((c) => c.id === v.shellConn && !isEnded(c)) ?? v.active();
+    return conn ? `host:${conn.id}` : "conversation";
+  }
+
+  /** A click on a strip cell, or `<` `>` arriving on one. A host's cell leaves the scope alone. */
+  selectCell(id: string, cell: StripCell) {
+    const v = this.view(id);
+    switch (cell.kind) {
+      case "conversation":
+        v.narrow = "stream";
+        terms.select(id, SSH);
+        v.composerFocus++;
+        break;
+      case "host":
+        v.shellConn = cell.conn.id;
+        v.activeConn = cell.conn.id;
+        v.narrow = "terminal";
+        terms.select(id, SSH);
+        v.terminalFocus++;
+        break;
+      case "terminal":
+        v.shellConn = "";
+        terms.select(id, AGENT);
+        break;
+      case "changes":
+        terms.select(id, DIFF);
+        break;
+      default:
+        v.shellConn = "";
+        terms.select(id, cell.name);
+    }
+  }
+
+  /** `<` and `>`: every cell of the strip, in visual order, wrapping. */
+  ringStrip(s: SessionInfo, dir: 1 | -1) {
+    const { views, machines } = stripCells(s, terms.shellsFor(s.id));
+    const cells = [...views, ...machines];
+    if (cells.length < 2) return;
+    const at = cells.findIndex((c) => c.key === this.currentCell(s));
+    this.selectCell(s.id, cells[(Math.max(at, 0) + dir + cells.length) % cells.length]);
+  }
+
+  /**
+   * The menu's `Report`: back to the conversation with the overlay open, because a terminal and
+   * Changes have no story line and a terminal-first person would otherwise lose the report.
+   */
+  showReport(s: SessionInfo) {
+    nav.openSession(s.id);
+    const v = this.view(s.id);
+    v.narrow = "stream";
+    terms.select(s.id, SSH);
+    v.holdArrival = true;
+    v.reportOpen = true;
+  }
+
+  /** On a terminal of any kind, including a host's. */
+  onTerminal(s: SessionInfo): boolean {
+    const tab = terms.activeTab(s.id);
+    return tab === SSH ? this.view(s.id).narrow === "terminal" : !isViewTab(tab);
+  }
+
+  /**
+   * ⌘\ and `h`. From anywhere that is not a terminal: the shell of the host in scope, else the
+   * last terminal used here, by default the agent's. From a terminal, back to the conversation,
+   * or to Overview when this session has none. From Overview it opens the session on one.
+   */
+  toggleTerminalView(s: SessionInfo) {
+    const open = nav.focusedTerm === s.id;
+    nav.openSession(s.id);
+    const v = this.view(s.id);
+    const tab = terms.activeTab(s.id);
+    // Changes names the conversation on its footer's ⌘\, so that is where the chord goes.
+    const onChanges = (tab === DIFF || tab === CHECKPOINTS) && conversationOffered(s);
+    if (open && (this.onTerminal(s) || onChanges)) {
+      this.leaveTerminal(s);
+      return;
+    }
+    const conns = v.connections.length ? v.connections : (s.ssh?.connections ?? []);
+    const live = (id: string) => conns.find((c) => c.id === id && !isEnded(c));
+    const host = live(v.scope) ?? live(v.shellConn);
+    if (host) {
+      this.selectCell(s.id, { key: `host:${host.id}`, kind: "host", conn: host, label: hostName(host) });
+      return;
+    }
+    v.shellConn = "";
+    terms.select(s.id, terms.lastTerminal(s.id));
+    terms.focusTerminal(s.id);
+  }
+
+  /** Ctrl-Q and ⌘\ from a terminal. Where the terminal was reached from is not the question. */
+  leaveTerminal(s: SessionInfo) {
+    if (!conversationOffered(s)) {
+      nav.closeSession();
+      return;
+    }
+    const v = this.view(s.id);
+    v.narrow = "stream";
+    terms.select(s.id, SSH);
+    v.composerFocus++;
+  }
+
+  /** ⌘L and `i`. From a terminal this goes to the conversation. With none, its terminal is the prompt. */
+  focusComposer(s: SessionInfo) {
+    nav.openSession(s.id);
+    if (!conversationOffered(s)) {
+      terms.focusTerminal(s.id);
+      return;
+    }
+    const v = this.view(s.id);
+    v.narrow = "stream";
+    terms.select(s.id, SSH);
+    v.holdArrival = true;
+    v.composerFocus++;
+  }
+
+  /** ⌘⇧D and `f`. Opens the session if it has to, and refuses only what has no Changes. */
+  toggleChanges(s: SessionInfo) {
+    if (!this.mayShowChanges(s)) return;
+    const open = nav.focusedTerm === s.id;
+    nav.openSession(s.id);
+    // From Overview the promise is to open it. Left on Changes, a toggle would close what the key
+    // came here to open.
+    if (open) terms.toggleDiff(s.id);
+    else if (!isChangesTab(terms.activeTab(s.id))) terms.select(s.id, DIFF);
+  }
+
+  /**
+   * Lands on Changes from a link rather than toggling it: on one turn when `seq` names it, on the
+   * newest when it is -1, else on everything against the base. A second click on a receipt must
+   * not close what it opened.
+   */
+  openChanges(s: SessionInfo, seq?: number) {
+    if (!this.mayShowChanges(s)) return;
+    nav.openSession(s.id);
+    if (seq && seq > 0) checkpoints.select(s.id, seq);
+    terms.select(s.id, seq ? CHECKPOINTS : DIFF);
+  }
+
+  private mayShowChanges(s: SessionInfo): boolean {
+    if (changesOffered(s)) return true;
+    store.setFlash(s.goalId ? "A goal runs this session, so it has no Changes." : "This session has no checkout to compare.", "warn");
+    return false;
+  }
+
+  /**
+   * ⌘J, and `n` `N` inside a session: the next one waiting on a person, and the keyboard goes
+   * where it can answer. See landingFor.
+   */
+  nextWaiting(dir: 1 | -1 = 1) {
+    const list = store.rosterSessions;
+    const item = nextWaiting(list, nav.focusedTerm || nav.selectedId, dir);
+    if (!item) {
+      store.setFlash("Nothing is waiting on you.", "good");
+      return;
+    }
+    const s = list.find((x) => x.id === item.id);
+    if (!s) return;
+    nav.openSession(s.id);
+    terms.arrive(s.id);
+    // Wherever this session actually is, which already weighs a person's choice, the global
+    // preference and what the agent can do. An agent with no cards goes to its terminal whatever
+    // was chosen, because nothing else can answer it, and landingFor keeps an ssh approval here.
+    const cardless = talk.state(s.id)?.caps?.cards === false || (!!s.agent && s.agent !== "claude");
+    const opensOnTerminal = cardless || !isViewTab(terms.activeTab(s.id));
+    const v = this.view(s.id);
+    switch (landingFor(s, item, opensOnTerminal)) {
+      case "terminal":
+        if (terms.activeTab(s.id) === SSH || isViewTab(terms.activeTab(s.id))) terms.show(s.id, terms.lastTerminal(s.id));
+        terms.focusTerminal(s.id);
+        break;
+      case "card":
+        v.narrow = "stream";
+        terms.show(s.id, SSH);
+        v.holdArrival = true;
+        v.dockFocus++;
+        break;
+      case "moment":
+        v.narrow = "stream";
+        terms.show(s.id, SSH);
+        v.holdArrival = true;
+        v.streamFocus++;
+        break;
     }
   }
 
@@ -485,7 +806,6 @@ class SSHStore {
       store.setFlash("Nothing is waiting for an approval.", "good");
       return false;
     }
-    if (nav.focusedTerm && nav.focusedTerm !== target.session) nav.toggleFocusTerm(nav.focusedTerm);
     this.open(target.session, { conn: target.conn, dock: true });
     return true;
   }
@@ -755,12 +1075,49 @@ class SSHStore {
     return !!r;
   }
 
-  async recall(session: string, item: string) {
+  /**
+   * The composer's way to the agent. The host in scope goes along, and under All none does, so
+   * one chat message cannot hand back every wheel. A daemon older than the conversation commands
+   * still talks through the old path, which is all it knows. Answers whether the daemon took it.
+   */
+  async speak(session: string, text: string, stopFirst = false): Promise<boolean> {
+    const v = this.view(session);
+    if (!store.alive) {
+      v.setFlash("The daemon is down. Nothing was sent.", "text-bad");
+      return false;
+    }
+    const conn = v.scope;
+    try {
+      const r = await talk.say({ session, text, conn: conn || undefined, stopFirst: stopFirst || undefined });
+      if (conn && v.connections.find((c) => c.id === conn)?.wheel === "human") v.patchConn(conn, { wheel: "agent" });
+      v.queueWhy = r.delivered ? "" : (r.why ?? "");
+      void v.fetch();
+      void talk.refresh(session);
+      return true;
+    } catch (err) {
+      if (isTalkUnsupported(err)) return this.say(session, text);
+      v.setFlash(String(err), "text-bad");
+      void v.fetch();
+      return false;
+    }
+  }
+
+  /** Answers whether the message came back. Too late means the agent has it, and it says so. */
+  async recall(session: string, item: string): Promise<boolean> {
     const r = await this.run(session, () => SSHService.Recall(session, item));
     if (r && !r.recalled) {
       const v = this.view(session);
       v.setFlash(`Too late: ${agentName(store.sessionById(session)?.agent)} already has this.`, "text-warn");
     }
+    return !!r?.recalled;
+  }
+
+  /** "Send them": the human is speaking again, so whatever a Stop held goes now if it can. */
+  async sendHeld(session: string) {
+    const v = this.view(session);
+    const r = await this.run(session, () => talk.queueRelease(session));
+    if (r) v.queueWhy = r.delivered ? "" : (r.why ?? "");
+    void talk.refresh(session);
   }
 
   /**
@@ -809,7 +1166,8 @@ class SSHStore {
   /** "Ask about this": from digging to talking without retyping an id. */
   askAbout(session: string, blockId: string) {
     const v = this.view(session);
-    v.draft = `About ${blockId}: ${v.draft}`;
+    v.agentDraft = `About ${blockId}: ${v.agentDraft}`;
+    v.runDefault = false;
     v.composerFocus++;
   }
 
@@ -827,26 +1185,36 @@ class SSHStore {
     terms.select(session, AGENT);
   }
 
+  /** The agent's own terminal, from a card or a footer that is about the agent, whatever the scope. */
+  showAgentTerminal(session: string) {
+    const v = this.view(session);
+    v.shellConn = "";
+    terms.select(session, AGENT);
+    terms.focusTerminal(session);
+  }
+
   /** For what truly needs a TTY. Nothing opens it by itself except running such a program. */
   showTerminal(session: string) {
     const v = this.view(session);
+    // The keyboard goes to the host in front of a person. A shell looked at earlier may be another
+    // one, and typing into it would land on the wrong machine.
+    if (v.shellConn && v.activeConn && v.shellConn !== v.activeConn) v.shellConn = v.activeConn;
     v.narrow = "terminal";
     v.terminalFocus++;
+  }
+
+  /** A particular host's shell, from a card about it. Under All the card's host may not be the active one. */
+  showHostTerminal(session: string, conn: string) {
+    const v = this.view(session);
+    v.shellConn = conn;
+    v.activeConn = conn;
+    this.showTerminal(session);
   }
 
   showTimeline(session: string) {
     const v = this.view(session);
     v.narrow = "stream";
     v.composerFocus++;
-  }
-
-  toggleTerminal(session: string) {
-    const v = this.view(session);
-    if (v.narrow === "terminal") this.showTimeline(session);
-    else {
-      v.narrow = "terminal";
-      v.terminalFocus++;
-    }
   }
 
   /** Run a command the human typed. Its output opens, since seeing it is why they ran it. */
@@ -856,7 +1224,7 @@ class SSHStore {
     if (!r) return false;
     if (r.id) v.openBlock(r.id);
     else v.expectShellBlock = true;
-    v.history = [...v.history.filter((h) => h !== text), text].slice(-100);
+    v.pushHistory(conn, text);
     return true;
   }
 
@@ -871,41 +1239,45 @@ class SSHStore {
     await this.run(session, () => SSHService.ShareBlock({ session, block }));
   }
 
-  /** Bare keys at the selection level. Returns whether the key was the workspace's. */
+  /**
+   * The bare keys that act on a session from either depth. `i t F /` are the session's own, in
+   * App's sessionKey, because in Overview they would bump a focus counter for a composer that
+   * is not mounted, and the request would fire on the next open.
+   */
   bareKey(key: string, s: SessionInfo | undefined): boolean {
     if (key === "A") {
       this.reviewNext();
       return true;
     }
     if (!s) return false;
-    const hasConn = (s.ssh?.connections?.length ?? 0) > 0;
-    if (key === "h" && hasConn) {
-      this.toggleTab(s);
+    if (key === "h") {
+      this.toggleTerminalView(s);
       return true;
     }
-    if (key === "W" && hasConn) {
+    if (key === "W" && (s.ssh?.connections?.length ?? 0) > 0) {
       this.wheelKey(s);
       return true;
     }
-    if (terms.activeTab(s.id) !== SSH || !hasConn) return false;
-    const v = this.view(s.id);
-    switch (key) {
-      case "i":
-        v.composerFocus++;
-        return true;
-      case "t":
-        v.streamFocus++;
-        return true;
-      case "F": {
-        const i = FILTERS.findIndex((f) => f.id === v.filter);
-        v.filter = FILTERS[(i + 1) % FILTERS.length].id;
-        return true;
-      }
-      case "/":
-        v.findFocus++;
-        return true;
-    }
     return false;
+  }
+
+  /** `w` and the strip's Widgets. From another view it goes to the conversation, dock showing. */
+  dockKey(s: SessionInfo) {
+    const v = this.view(s.id);
+    if (terms.activeTab(s.id) !== SSH) {
+      this.open(s.id);
+      if (v.dockHidden || !allTabs(v.dock).length) v.toggleDock();
+      return;
+    }
+    v.toggleDock();
+  }
+
+  /** `F`: the next filter, with a host only. */
+  cycleFilter(s: SessionInfo) {
+    if (!(s.ssh?.connections?.length ?? 0)) return;
+    const v = this.view(s.id);
+    const i = FILTERS.findIndex((f) => f.id === v.filter);
+    v.filter = FILTERS[(i + 1) % FILTERS.length].id;
   }
 
   /** A Session-menu chord. They work from inside a terminal, so no bare-key gate applies. */
@@ -918,18 +1290,20 @@ class SSHStore {
       this.reviewNext();
       return;
     }
-    if (!s || !(s.ssh?.connections?.length ?? 0)) {
-      store.setFlash("This session has no SSH connection.", "warn");
+    if (!s) {
+      store.setFlash("no session selected", "warn");
       return;
     }
-    if (action === "ssh-wheel") {
-      this.wheelKey(s);
+    // These two are every session's, connection or not.
+    if (action === "ssh-talk") {
+      this.focusComposer(s);
       return;
     }
-    this.open(s.id);
-    const v = this.view(s.id);
-    if (action === "ssh-talk") v.composerFocus++;
-    else if (action === "ssh-terminal") this.toggleTerminal(s.id);
+    if (action === "ssh-terminal") {
+      this.toggleTerminalView(s);
+      return;
+    }
+    if (action === "ssh-wheel") this.wheelKey(s);
   }
 
 }

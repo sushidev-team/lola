@@ -21,11 +21,13 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/sushidev-team/lola/internal/proctree"
 )
@@ -329,8 +331,6 @@ func (c *Client) CaptureFrom(ctx context.Context, name string, back int) (string
 	return out, err
 }
 
-// SendKeys types text into the session literally (-l: no key-name
-// interpretation) and then presses Enter.
 // submitSettleDelay is the pause between typing a MULTI-LINE payload and the
 // separate submit Enter. A large multi-line message (relayed CodeRabbit / review
 // findings, a multi-line reaction template) can still be settling in the agent's
@@ -339,24 +339,159 @@ func (c *Client) CaptureFrom(ctx context.Context, name string, back int) (string
 // the submit. Single-line sends skip it (they submit reliably and stay snappy).
 const submitSettleDelay = 600 * time.Millisecond
 
+// pasteOver is the largest payload SendKeys still types. An agent's input reads in 1 KB
+// chunks and takes a longer burst for a paste, piece by piece. Measured on Claude Code
+// 2.1.318: send-keys up to 800 bytes arrives exact, 1.1 KB gains a line break at byte
+// 1022, multi-line text between 1 and 2.5 KB was damaged on every try and sometimes lost
+// its first kilobyte, and past 16,338 bytes tmux refuses the command.
+const pasteOver = 800
+
+// pasteSettleDelay is the pause between a paste and its Enter. Measured with send-sized
+// payloads up to 119 KB, each arriving exact and as one record.
+const pasteSettleDelay = 300 * time.Millisecond
+
+// literalArg keeps tmux's command line from reading the end of a payload. An argument ending
+// in ; is tmux's command separator and loses it, and tmux reads the two bytes \; there as a
+// plain ;. The leading half of the same problem, a payload starting with -, is what the --
+// before it is for.
+func literalArg(text string) string {
+	if strings.HasSuffix(text, ";") {
+		return text[:len(text)-1] + `\;`
+	}
+	return text
+}
+
+// SendKeys delivers text to the session and then presses Enter. Up to pasteOver bytes it
+// types them literally (-l, no key-name interpretation), and above that it pastes them.
 func (c *Client) SendKeys(ctx context.Context, name, text string) error {
+	return c.sendKeys(ctx, name, text, pasteOver)
+}
+
+// SendKeysTyped is SendKeys with no paste at any size, for an agent whose paste timing has
+// not been measured. Past tmux's own limit on a command (see pasteOver) it fails.
+func (c *Client) SendKeysTyped(ctx context.Context, name, text string) error {
+	return c.sendKeys(ctx, name, text, math.MaxInt)
+}
+
+func (c *Client) sendKeys(ctx context.Context, name, text string, pasteAbove int) error {
 	// Leave copy mode first. A human scrolling the pane back (the app's wheel, or
 	// tmux's own wheel binding with [tmux].mouse on) puts it in copy mode, where
 	// keys are read as copy-mode COMMANDS instead of reaching the agent — so a
 	// reaction or a review hand-off typed into a scrolled-back pane is silently
 	// mangled. It is a no-op on a pane that has no mode.
 	_ = c.LeaveCopyMode(ctx, name)
-	if _, _, err := c.run(ctx, "send-keys", "-t", paneTarget(name), "-l", text); err != nil {
-		return err
+	delay := time.Duration(0)
+	if len(text) > pasteAbove {
+		if err := c.pasteText(ctx, name, text); err != nil {
+			return err
+		}
+		delay = pasteSettleDelay
+	} else {
+		if _, _, err := c.run(ctx, "send-keys", "-t", paneTarget(name), "-l", "--", literalArg(text)); err != nil {
+			return err
+		}
+		if strings.Contains(text, "\n") {
+			delay = submitSettleDelay
+		}
 	}
-	if strings.Contains(text, "\n") {
+	if delay > 0 {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(submitSettleDelay):
+		case <-time.After(delay):
 		}
 	}
 	_, _, err := c.run(ctx, "send-keys", "-t", paneTarget(name), "Enter")
+	return err
+}
+
+// pasteText puts text into a pane as one bracketed paste, off argv, through a buffer of
+// its own. The buffer is deleted when the paste fails, because it holds the whole message
+// and nothing else would ever remove it.
+//
+// tmux turns every LF into a CR when it pastes, and -p does not change that: measured, a
+// pane in bracketed-paste mode receives ESC[200~one\rtwo ESC[201~ and a pane outside it
+// receives one\rtwo with no brackets at all. Inside the brackets a CR is only text, which
+// is the shape measured exact on Claude Code. Outside them it is Enter, the same submit
+// sanitizeAgentText removes from every payload, so each line would go off on its own. So
+// -r keeps LF for any pane that does not say it is bracketing, including a tmux too old to
+// know the flag.
+func (c *Client) pasteText(ctx context.Context, name, text string) error {
+	var r [8]byte
+	if _, err := rand.Read(r[:]); err != nil {
+		return err
+	}
+	buf := "lola-send-" + hex.EncodeToString(r[:])
+	drop := func() {
+		// A context that already ended must not keep the delete from running.
+		dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+		defer cancel()
+		_, _, _ = c.run(dctx, "delete-buffer", "-b", buf)
+	}
+	if err := c.runStdin(ctx, text, "load-buffer", "-b", buf, "-"); err != nil {
+		drop()
+		return err
+	}
+	args := []string{"paste-buffer", "-p", "-d", "-b", buf, "-t", paneTarget(name)}
+	flag, _, err := c.run(ctx, "display-message", "-p", "-t", paneTarget(name), "#{bracket_paste_flag}")
+	if err != nil || strings.TrimSpace(flag) != "1" {
+		args = []string{"paste-buffer", "-p", "-r", "-d", "-b", buf, "-t", paneTarget(name)}
+	}
+	if _, _, err := c.run(ctx, args...); err != nil {
+		drop()
+		return err
+	}
+	return nil
+}
+
+// CaptureVisible reads exactly what the pane shows now, with its SGR intact and no
+// scrollback, so rows line up with PaneCursor's Y. Read it BEFORE the cursor: a proof
+// that the cursor sits in the composer must not rest on a screen older than itself.
+func (c *Client) CaptureVisible(ctx context.Context, name string) (string, error) {
+	out, _, err := c.run(ctx, "capture-pane", "-p", "-e", "-t", paneTarget(name))
+	if err != nil {
+		return "", err
+	}
+	return out, nil
+}
+
+// Cursor is where a pane's cursor is, in cells from the visible top left, and whether
+// the program is showing it. internal/attention has its own copy of this shape, so
+// neither package needs the other.
+type Cursor struct {
+	X, Y    int
+	Visible bool
+}
+
+// PaneCursor reads a session's active pane. An answer it cannot read is an error,
+// never a zero cursor: the caller is deciding whether it may type.
+func (c *Client) PaneCursor(ctx context.Context, name string) (Cursor, error) {
+	out, _, err := c.run(ctx, "display-message", "-p", "-t", paneTarget(name), "#{cursor_x} #{cursor_y} #{cursor_flag}")
+	if err != nil {
+		return Cursor{}, err
+	}
+	f := strings.Fields(out)
+	if len(f) != 3 {
+		return Cursor{}, fmt.Errorf("tmux: unreadable cursor %q", strings.TrimSpace(out))
+	}
+	x, errX := strconv.Atoi(f[0])
+	y, errY := strconv.Atoi(f[1])
+	if errX != nil || errY != nil || (f[2] != "0" && f[2] != "1") {
+		return Cursor{}, fmt.Errorf("tmux: unreadable cursor %q", strings.TrimSpace(out))
+	}
+	return Cursor{X: x, Y: y, Visible: f[2] == "1"}, nil
+}
+
+// SendKey presses one key with no Enter: the answer to a choice a pane is showing. It
+// leaves copy mode first, because a digit sent to a scrolled-back pane is a copy-mode
+// command. Only a letter or a digit is accepted, since that is all a choice key ever is
+// and tmux itself reads others, a ";" for one, as part of its command line.
+func (c *Client) SendKey(ctx context.Context, name, key string) error {
+	if r := []rune(key); len(r) != 1 || !unicode.IsLetter(r[0]) && !unicode.IsDigit(r[0]) {
+		return fmt.Errorf("tmux: %q is not a single choice key", key)
+	}
+	_ = c.LeaveCopyMode(ctx, name)
+	_, _, err := c.run(ctx, "send-keys", "-t", paneTarget(name), "-l", key)
 	return err
 }
 
@@ -374,7 +509,7 @@ func (c *Client) SendText(ctx context.Context, name, text string, enter bool) er
 	if _, _, err := c.run(ctx, "send-keys", "-t", paneTarget(name), "C-u"); err != nil {
 		return err
 	}
-	if _, _, err := c.run(ctx, "send-keys", "-t", paneTarget(name), "-l", text); err != nil {
+	if _, _, err := c.run(ctx, "send-keys", "-t", paneTarget(name), "-l", "--", literalArg(text)); err != nil {
 		return err
 	}
 	if !enter {

@@ -3,18 +3,20 @@
   import NewSSHSession from "$lib/components/ssh/NewSSHSession.svelte";
   import ConnectSSHHost from "$lib/components/ssh/ConnectSSHHost.svelte";
   import { ssh } from "$lib/ssh.svelte";
-  import { sshNeedsHuman, urgentConn } from "$lib/ssh";
+  import { talk } from "$lib/talk.svelte";
+  import { sshNeedsHuman } from "$lib/ssh";
+  import { changesOffered, conversationOffered } from "$lib/sessionview";
   import RenameSession from "$lib/components/RenameSession.svelte";
   import CommandPalette from "$lib/components/CommandPalette.svelte";
   import ActivityFeed from "$lib/components/ActivityFeed.svelte";
   import Modal from "$lib/components/Modal.svelte";
-  import { openShell } from "$lib/projectActions";
+  import { openShell, newSessionHere } from "$lib/projectActions";
   import { onMount } from "svelte";
   import { Events } from "@wailsio/runtime";
   import { store, scopedSessions, type SessionInfo } from "$lib/store.svelte";
   import { updates } from "$lib/update.svelte";
   import { nav } from "$lib/nav.svelte";
-  import { terms, SSH } from "$lib/terms.svelte";
+  import { terms, AGENT, DIFF, CHECKPOINTS } from "$lib/terms.svelte";
   import { triaged } from "$lib/filters";
   import { isChord } from "$lib/keys";
   import { displayFor } from "$lib/theme";
@@ -41,9 +43,10 @@
   import { overlayClose } from "$lib/overlayClose";
   import Setup from "$lib/views/Setup.svelte";
 
-  // The currently-selected cockpit session — the target of every session action
-  // the global key handler fires.
-  const sel = $derived(store.sessionById(nav.selectedId));
+  // The target of every session action: the session you are looking at, and the selection only
+  // when none is open. The selection can differ from the open session (ssh.open, a fork), and ⌘.
+  // must never stop a session you are not looking at.
+  const sel = $derived(store.sessionById(nav.focusedTerm || nav.selectedId));
 
   onMount(() => {
     store.start();
@@ -68,9 +71,10 @@
   function sessionAction(action: string) {
     if (nav.overlay || confirm.request || sessionMenu.request) return;
     if (action === "commands") { nav.openOverlay("commands"); return; }
-    if (action === "new-session") { nav.newSession(nav.project); return; }
+    if (action === "new-session") { newSessionHere(); return; }
     if (action === "temporary-shell") { void openShell(); return; }
     if (action.startsWith("ssh-")) { ssh.menuAction(action, sel); return; }
+    if (action === "next") { ssh.nextWaiting(1); return; }
     const s = sel;
     if (!s) {
       store.setFlash("no session selected", "warn");
@@ -85,10 +89,23 @@
         else store.setFlash("session has no PR yet", "warn");
         break;
       case "new-shell":
-        // The shell tab lives in the detail embed, which the grid lens doesn't
-        // render — leave the grid first, same move as SessionMenu's + add shell.
-        if (nav.lens === "grid") nav.setLens("list");
+        // A tab only exists inside the session, so this opens it first.
+        nav.openSession(s.id);
         terms.newShell(s.id, s.worktree);
+        break;
+      case "stop":
+        // Never a session nobody can see. Home and the project views cover the selection, and a
+        // stray chord there must not end someone's turn.
+        if (nav.view !== "cockpit") {
+          store.setFlash("Open a session to stop it.", "warn");
+          break;
+        }
+        // No connection needed, and the daemon re-reads the pane behind it. Its refusal is a
+        // sentence worth showing.
+        talk.stop(s.id).catch((err) => store.setFlash(String(err), "warn"));
+        break;
+      case "changes":
+        ssh.toggleChanges(s);
         break;
       case "kill":
         store.askKill(s.id); // ask first — shared confirm dialog
@@ -125,14 +142,12 @@
     nav.select(rows[i].id);
   }
 
-  // Jump to the next/prev session parked on a human, wrapping.
+  // Next or previous row parked on a human, wrapping. It selects and stays in Overview, which is
+  // what makes `n` a way to walk the list: ⌘J is the one that opens.
   //
-  // The AGENT axis only, deliberately narrower than `attention`: this shortcut
-  // means "take me to the thing that is blocked waiting for me to type", and a
-  // red CI is not that — it is work to schedule, not a prompt to answer.
-  // Broadening it would make ⇧-tabbing through the queue land on rows with
-  // nothing to answer. `displayFor` rather than a raw compare so a future agent
-  // state that maps to needs_you is included for free.
+  // The AGENT axis only, deliberately narrower than `attention`: a red CI is work to schedule, not
+  // a prompt to answer. `displayFor` rather than a raw compare so a future agent state that maps
+  // to needs_you is included for free.
   function jumpNeedsInput(dir: number) {
     const rows = cockpitRows();
     const len = rows.length;
@@ -141,14 +156,8 @@
     if (start < 0) start = 0;
     for (let n = 1; n <= len; n++) {
       const r = rows[(((start + dir * n) % len) + len) % len];
-      if (displayFor(r.agentState) === "needs_you") {
+      if (displayFor(r.agentState) === "needs_you" || sshNeedsHuman(r)) {
         nav.select(r.id);
-        return;
-      }
-      // A command or a connection waiting on you is a prompt to answer too, and a
-      // jump lands on the workspace with the card in view.
-      if (sshNeedsHuman(r)) {
-        ssh.open(r.id, { conn: urgentConn(r.ssh?.connections)?.id });
         return;
       }
     }
@@ -174,7 +183,7 @@
         if (rows.length) nav.select(rows[rows.length - 1].id);
         return true;
       case "Enter":
-        if (sel) nav.toggleFocusTerm(sel.id);
+        if (sel) nav.openSession(sel.id);
         return true;
       case "V":
         nav.cycleLens();
@@ -186,26 +195,16 @@
         jumpNeedsInput(-1);
         return true;
       case "s":
-        // Open a worktree shell for the selection — the desktop equivalent of the
-        // TUI's "s". Repeatable: each press adds another shell tab. No-op in the
-        // grid lens, which has no embed.
-        if (sel && nav.lens !== "grid") terms.newShell(sel.id, sel.worktree);
+        // A new shell for the selection, each press another. The Glance has no tabs, so it opens
+        // the session to show it.
+        if (sel) {
+          nav.openSession(sel.id);
+          terms.newShell(sel.id, sel.worktree);
+        }
         return true;
       case "f":
-        // The diff tab ("files changed"): toggles between it and the agent. Lives
-        // in the detail embed, so the grid lens has nothing to show it in.
-        if (sel && nav.lens !== "grid" && sel.location !== "ssh") terms.toggleDiff(sel.id);
-        return true;
-      // '<' / '>' switch terminal tabs. Both the shifted glyph and the unshifted
-      // ',' / '.' on the same key are bound, so it works with or without Shift and
-      // on layouts (German) where '[' / ']' need Option and never arrive.
-      case "<":
-      case ",":
-        if (sel && nav.lens !== "grid") terms.cycleTab(sel.id, -1);
-        return true;
-      case ">":
-      case ".":
-        if (sel && nav.lens !== "grid") terms.cycleTab(sel.id, +1);
+        // The session's Changes. Opens the session, for the same reason.
+        if (sel) ssh.toggleChanges(sel);
         return true;
       case "x":
         if (sel) store.askKill(sel.id); // ask first — shared confirm dialog
@@ -237,6 +236,91 @@
         return true;
     }
     return false;
+  }
+
+  // Which view of the open session the keyboard is looking at.
+  const SESSION_RING: Record<string, 1 | -1> = { "<": -1, ",": -1, ">": 1, ".": 1 };
+
+  // The open session's bare keys. `x s c D R o P p d S V Enter` are Overview's: they are dead here
+  // on purpose, so a lost focus cannot fire one mid-sentence. Their paths in a session are chords
+  // and ⋯. `[ ] u j k g G` belong to the timeline, which takes them while it has focus.
+  function sessionKey(e: KeyboardEvent): boolean {
+    const s = sel;
+    if (e.key === "?") {
+      nav.openOverlay("help");
+      return true;
+    }
+    if (e.key === "b") {
+      nav.toggleSidebar();
+      return true;
+    }
+    if (e.key === "Escape") return escapeLadder(s);
+    if (!s) return false;
+    if (ssh.bareKey(e.key, s)) return true;
+    const v = ssh.view(s.id);
+    const conversation = conversationOffered(s);
+    switch (e.key) {
+      case "n":
+        ssh.nextWaiting(1);
+        return true;
+      case "N":
+        ssh.nextWaiting(-1);
+        return true;
+      case "f":
+        if (changesOffered(s)) terms.toggleDiff(s.id);
+        return true;
+      case "F":
+        ssh.cycleFilter(s);
+        return true;
+      case "i":
+        ssh.focusComposer(s);
+        return true;
+      case "t":
+        if (conversation) {
+          ssh.open(s.id);
+          v.holdArrival = true;
+          v.streamFocus++;
+        }
+        return true;
+      case "/":
+        if (conversation) {
+          ssh.open(s.id);
+          v.holdArrival = true;
+          v.findFocus++;
+        }
+        return true;
+      case "w":
+        if (conversation && v.knownWidgets.length) ssh.dockKey(s);
+        return true;
+    }
+    const ring = SESSION_RING[e.key];
+    if (ring) {
+      ssh.ringStrip(s, ring);
+      return true;
+    }
+    return false;
+  }
+
+  // One step per press, and Esc never reaches the agent from here: a terminal holding the keyboard
+  // owns Esc before this runs, and Ctrl-Q is its way out. Changes and an unfocused terminal step
+  // back a view. The conversation steps back to Overview once nothing in it holds focus: the
+  // composer and the timeline each give up focus first, on their own press.
+  function escapeLadder(s: SessionInfo | undefined): boolean {
+    if (!s) {
+      nav.closeSession();
+      return true;
+    }
+    const tab = terms.activeTab(s.id);
+    if (tab === DIFF || tab === CHECKPOINTS) {
+      terms.toggleDiff(s.id);
+      return true;
+    }
+    if (ssh.onTerminal(s) && conversationOffered(s)) {
+      ssh.leaveTerminal(s);
+      return true;
+    }
+    nav.closeSession();
+    return true;
   }
 
   function onKey(e: KeyboardEvent) {
@@ -292,7 +376,15 @@
       return;
     }
 
-    if (typing(e.target)) return;
+    if (typing(e.target)) {
+      // The one Esc a field gives up here: the composer's. It keeps its draft. Everything else
+      // that types keeps its Esc, a terminal's textarea above all, since that key is the agent's.
+      if (e.key === "Escape" && (e.target as HTMLElement).closest?.("[data-action-zone]")) {
+        (e.target as HTMLElement).blur();
+        e.preventDefault();
+      }
+      return;
+    }
 
     // Let a focused button/link handle its own Enter/Space natively instead of
     // firing a cockpit action on top of the activation (e.g. a lens toggle that
@@ -302,24 +394,21 @@
       return;
     }
 
-    // The workspace's bare keys hold in the fullscreen view too, where it mostly
-    // lives. Bailing on typing() above is what keeps them off a live terminal, and
-    // none of them can approve anything: that takes a focused card.
-    if (nav.view === "cockpit") {
-      const target = store.sessionById(nav.focusedTerm || nav.selectedId);
-      if (ssh.bareKey(e.key, target)) {
-        e.preventDefault();
-        return;
-      }
-      if (e.key === "Escape" && nav.focusedTerm && target && terms.activeTab(target.id) === SSH) {
-        nav.toggleFocusTerm(target.id);
-        e.preventDefault();
-        return;
-      }
+    // Two depths, two key maps. Inside a session `typing()` above is the only guard, so a terminal
+    // holding the keyboard keeps every key and this never sees them. Falling through to the globals
+    // and cockpitKey instead would make `j` move the list behind the session, Enter close it, and
+    // `x` ask to kill.
+    if (nav.focusedTerm && nav.view === "cockpit") {
+      if (sessionKey(e)) e.preventDefault();
+      return;
     }
 
-    // A focused live terminal owns the keyboard (handled inside the view).
-    if (nav.focusedTerm) return;
+    // `A` and `h` and `W` open a session from Overview. The session's own keys, `i t F /`, are not
+    // here: they would bump focus counters for a composer that is not mounted.
+    if (nav.view === "cockpit" && ssh.bareKey(e.key, sel)) {
+      e.preventDefault();
+      return;
+    }
 
     // '?' opens the keybinding reference from any view.
     if (e.key === "?") {

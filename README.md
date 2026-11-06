@@ -153,6 +153,7 @@ protocol-version mismatch.
 | `lola coderabbit <session>` | Back-compat alias that forces the **watch-shape** provider now (`coderabbit-watch`) — poll the session's open PR for CodeRabbit (GitHub-app) comments, ignoring the watermark, and route any found (notify / worker / Linear per config). Skipped (not an error) when the watch is disabled or the session has no open PR. |
 | `lola reload` | Re-read `config.toml`; the daemon diffs projects and starts/stops poll goroutines without disturbing unaffected ones |
 | `lola logs [name] [-f]` | Tail `~/.lola/daemon.log`, optionally filtered to one project (by name); `-f`/`--follow` to stream |
+| `lola post <kind> …` | Agent-facing: publish an item to the session's conversation (`narration`, `widget`, …). Same command as `lola ssh post`, which stays valid. |
 | `lola ssh <verb>` | **Agent-assisted ssh.** A local agent debugs on a remote host with nothing installed there, a human watches a structured timeline, can ask the agent or run commands from one composer, and can take over at any moment. Commands typed in the terminal become timeline blocks too, private until shared, and `sudo` is labelled wherever it runs. The agent and the human share one working folder per connection. Set `terminal_capture = false` on a host for a plain login shell. Agents can structure answers and post small sandboxed widgets; `lola ssh guide answers` and `lola ssh guide widgets` are their references. Agent verbs, run inside a session: `hosts`, `request <host> --why W [--scope S]`, `run <host> --why W [--cwd D] [--timeout N] [--wait 9m] [--detach] -- cmd`, `wait <block>`, `output <block>`, `post <kind> ...`. Human verbs: `open <host> [--agent K] [--name N] [--brief B] [--drive]` starts an agent-assisted session, `connect <session> <host> [--drive]` connects an existing one without waiting for its agent to ask, `ls`, `go`, `deny`, `approve <conn> <block> [--grant MIN]`, `reject`, `take`, `handback [--note N] [--transcript]`, `stop`, `close`, `terminal`. `run` exits with the remote exit code, or 240 denied, 241 the human has the wheel, 242 not connected, 243 still waiting, 244 timed out, 245 stopped, 246 refused, 247 result unknown, 248 lola unreachable. Hosts are `[[ssh_host]]` in the config; a production host approves every command and refuses an unsandboxed agent unless it sets `allow_unsandboxed`. **Lola does not filter commands: the remote user's permissions are the real limit, everything the agent reads goes to its model provider, and for an unsandboxed agent the approval gate stops accidents and well-behaved agents, not a determined one.** See `docs/ssh-sessions.md`. |
 | `lola report <verb> [args]` | **Run by the coding agent, inside its session**, to publish its own progress: `todo set\|add\|start\|done\|undo\|remove\|clear`, `phase <planning\|investigating\|implementing\|testing\|reviewing\|polishing\|done>`, `progress <0-100\|done/total> [label]`, `blocked <reason>` / `unblocked`, `note <text>`, `check <name> <pass\|fail\|running> [summary]`, `clear`. Every agent's `.lola/prompt.md` teaches it. Shown as the session view's **Report** sidebar, a **Plan** column in the list, a chip on board cards and a `plan:` block in the TUI. Display-only: it is the agent's claim about itself and never drives status, slots, reactions or send-keys. A `check <test\|lint\|build…> pass` claim is **audited**: for claude sessions lola reads the agent's own transcript for a matching command run before the claim (and its exit status), and compares it with the PR's CI — a claim the evidence does not back shows as **Unverified claim** (app) / `⚠ unverified` (TUI). The audit is display-only too. A rejected report exits 1 with the usage error; an unreachable daemon exits 0, so a report never fails the agent's command. `lola report --help` lists every verb. |
 
@@ -1664,6 +1665,32 @@ picker (`a` in the TUI) and in the manual-worktree form.
 installed; the Go test suite covers the launch-arg and callback-wiring plumbing
 but does not run the real CLIs.
 
+## The session view (desktop app)
+
+A session opens on its **Conversation**: what the agent said and did, read from its own
+log, and one place to answer it. The agent is still the ordinary coding agent in its
+terminal, unchanged, and **Terminal** is one tab or ⌘\\ away. Everything from the log is
+the agent's claim. Only what lola itself witnessed (a message you sent, a command on a
+host, a turn's receipt) wears a box or an exit code.
+
+- **↩ never kills anything.** While the agent works, ↩ queues your message on lola's side,
+  where ↑ or `Edit` takes it back, and it goes when the agent rests. `Stop ⌘.` ends this
+  turn and holds what is queued until you speak again; `Stop & send` is the named way to do
+  both. There is no true mid-turn steer, because nothing types into a working agent.
+- **Questions come to you.** A permission prompt or a question shows as a card with the
+  agent's exact words, one key to answer, and the terminal beside it. A screen that only
+  takes keys says so and offers the terminal. `⌘J` goes to the next session waiting on you,
+  across all of them.
+- **Where it opens.** `Open sessions in` under Appearance and in the session's `⋯` picks
+  Conversation or Terminal for all sessions, and a session remembers the view you left it
+  on. An agent whose log lola cannot read yet (codex and opencode today, or a Claude Code
+  version whose format changed) opens on its terminal and says why.
+- **When it ends.** A merged session moves to `Ended` in the sidebar and stays readable for
+  14 days. A session with a goal is run by the goal, and its conversation is read-only.
+- **The phone and the TUI are unchanged and stay terminal-first.**
+
+The full design is [`docs/unified-session.md`](docs/unified-session.md).
+
 ## Attaching to a session
 
 Each agent runs inside a **tmux session** — a git worktree with Claude Code
@@ -1690,10 +1717,11 @@ the project's `default_branch`, so commits `main` gained since the fork never
 show up as if the agent reverted them — and uncommitted and untracked work is
 included, because most of an agent's work is not committed yet.
 
-- **App** — a **Diff** tab beside the terminal tabs: a file tree, unified or
-  split hunks, light syntax colouring. Click a line number (shift-click for a
-  range) to write a comment; comments queue under their line and survive an app
-  restart. **Send to agent** ships the batch.
+- **App** — the session's **Changes** view (`f` or ⌘⇧D): everything against the
+  base, each turn, a file tree, unified or split hunks, light syntax colouring.
+  Click a line number (shift-click for a range) to write a comment; comments
+  queue under their line and survive an app restart. **Send to Claude** in the
+  footer ships the batch.
 - **TUI** — a full-screen overlay: `j`/`k` move, `[`/`]` jump files, `c`
   comments on the line under the cursor, `n` adds a free note, `u` drops the last
   comment, `s` sends, `r` re-reads the worktree.
@@ -1718,13 +1746,14 @@ nothing, and a `start` baseline is recorded just before a new session's first
 agent launch, so even turn 1 can be undone (claude, codex and opencode alike). Each session keeps its newest 100; the refs are deleted when the
 session is torn down with its worktree.
 
-In the app they are a tab of the session sidebar, beside the agent's report
-(**Info** toggles the sidebar; **Checkpoints** in the session menu opens that
-tab). The list runs newest first; pick one to read what that turn changed (the
-previous checkpoint against it) in the main pane — **Close** or the **Agent**
-tab goes back to the terminal. Then:
+In the app they are the **Turns** column of the session's **Changes** view
+(**Checkpoints** in the session menu lands there, and a turn's receipt in the
+conversation links to it). The list runs newest first; pick one to read what that
+turn changed (the previous checkpoint against it). **All vs base** goes back to
+the whole diff, and ⌘⇧D or Esc to where you came from. Then:
 
-- **Restore…** puts the worktree's FILES back to that checkpoint. HEAD and the
+- **Restore…** moves files only: the conversation and git history do not move.
+  It puts the worktree's FILES back to that checkpoint. HEAD and the
   branch stay put — commits made since stay in history and show up as
   uncommitted edits that undo them. The current state is saved as a new
   checkpoint first, so a restore is itself one click to undo. Refused while the
@@ -1928,8 +1957,8 @@ becomes a block on the timeline.
 …`. The session then shows as needing you, and nothing connects before your go. Or you
 start an agent-assisted session yourself: `H` in the TUI, ⌘⇧H in the app, or `lola ssh
 open <host>`. Starting it is the go for connecting, and command approval still applies.
-It needs no project or checkout. You talk to the agent there, and the terminal beside
-the timeline is yours.
+It needs no project or checkout. You talk to the agent there, and the terminal one tab
+over is yours.
 
 **Approval.** A production host approves every command, one at a time. Hosts below
 production may also take a time-limited grant while you approve. An approval shows the
@@ -1944,7 +1973,7 @@ recorded. Handing back can include a transcript of your terminal: you read and e
 first, and it is sent only if you choose to. Stopping a command or closing a connection
 ends the local ssh, and **the remote process may keep running**.
 
-**What agents can publish.** `lola ssh post <kind> …` adds a card to the timeline:
+**What agents can publish.** `lola post <kind> …` (or its old name, `lola ssh post`) adds an item to the conversation:
 `summary`, `narration`, `hypothesis`, `finding`, `plan`, `metric`, `evidence`,
 `recommendation`, `proposal`, `question`. Every agent's briefing teaches them, the same
 for claude, codex and opencode. They are the agent's **claims**: display-only, sanitized,

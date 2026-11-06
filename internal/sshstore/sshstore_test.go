@@ -251,7 +251,7 @@ func TestQueueDeliverAndClaim(t *testing.T) {
 			t.Fatalf("claimed still pending: %q", st.PendingText())
 		}
 		got := st.Deliver(protocol.SSHViaReply, time.Now(), func(q QueueEntry) bool { return !q.Claimed })
-		if len(got) != 1 || got[0] != "[lola] nudge" {
+		if len(got) != 1 || got[0].Text != "[lola] nudge" {
 			t.Fatalf("delivered %v", got)
 		}
 		got = st.Deliver(protocol.SSHViaPrompt, time.Now(), func(q QueueEntry) bool { return q.Claimed })
@@ -314,8 +314,9 @@ func TestTrashRemovesOneTabsRecord(t *testing.T) {
 		st.AddBlock(protocol.SSHBlock{ID: "b1", Conn: "a", StdoutBytes: 5}, time.Now())
 		st.AddBlock(protocol.SSHBlock{ID: "b2", Conn: "b", StdoutBytes: 7}, time.Now())
 		st.AddEvent(protocol.SSHSystemEvent{Text: "everywhere"}, time.Now())
-		h := st.AddHuman(protocol.SSHHumanMessage{Conn: "a", Text: "hi"}, time.Now())
-		st.Enqueue(h.ID, "hi")
+		st.AddEvent(protocol.SSHSystemEvent{Text: "on a", Conn: "a"}, time.Now())
+		back := st.AddHuman(protocol.SSHHumanMessage{Origin: protocol.SSHHumanHandback, Conn: "a", Text: "over to you"}, time.Now())
+		st.Enqueue(back.ID, "[lola] handback")
 		st.Enqueue("", "nudge")
 		st.OutputBytes, st.TalkConn = 12, "a"
 		return nil
@@ -334,21 +335,13 @@ func TestTrashRemovesOneTabsRecord(t *testing.T) {
 			t.Fatal("wrong block went")
 		}
 		if len(st.Items) != 2 {
-			t.Fatalf("the session-wide event should stay while a tab does, got %d items", len(st.Items))
+			t.Fatalf("the tab's event and handback should go and the session-wide event stay, got %d items", len(st.Items))
 		}
 		if len(st.Queue) != 1 || st.Queue[0].Text != "nudge" {
 			t.Fatalf("queue: %+v", st.Queue)
 		}
 		if st.OutputBytes != 7 || st.TalkConn != "" {
 			t.Fatalf("bytes %d talk %q", st.OutputBytes, st.TalkConn)
-		}
-	})
-	if err := s.Update(func(st *State) error { s.Trash(st, "b"); return nil }); err != nil {
-		t.Fatal(err)
-	}
-	s.View(func(st *State) {
-		if len(st.Items) != 0 {
-			t.Fatalf("the last tab takes everything, got %d items", len(st.Items))
 		}
 	})
 }

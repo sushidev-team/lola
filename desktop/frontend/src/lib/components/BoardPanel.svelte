@@ -1,17 +1,17 @@
 <script lang="ts">
   import type { SessionInfo } from "$lib/store.svelte";
-  import { boardStale, phaseChip, phaseDot, progressText, checkKind, CHECK_WORD, EVIDENCE_TAG } from "$lib/board";
+  import { boardStale, phaseDot, progressText, checkKind, CHECK_WORD, EVIDENCE_TAG } from "$lib/board";
   import BoardMarker from "./BoardMarker.svelte";
   import TimeAgo from "./TimeAgo.svelte";
 
-  // The session sidebar's Report tab (SidePanel): the agent's whole
+  // The sidebar's board and the story line's Report overlay (StoryLine): the agent's whole
   // self-report — phase, progress, blocker, plan, checks, note — beside its live
   // terminal. The tab is always there; before the first report it says so.
   //
   // Everything here is the agent's own CLAIM ("Agent report" says so in the
   // header), and it fades once stale. The facts — the status pill and the PR
   // badge — stay on the row this session was selected from.
-  let { session }: { session: SessionInfo } = $props();
+  let { session, embedded = false }: { session: SessionInfo; embedded?: boolean } = $props();
 
   const b = $derived(session.board);
   const stale = $derived(boardStale(b));
@@ -36,14 +36,14 @@
 {/snippet}
 
 {#if b}
-  <!-- The sidebar's Report tab; SidePanel owns the column, its width and scroll. -->
+  <!-- The story line's Report overlay; StoryLine owns its width and scroll. -->
   <section class="flex flex-col" aria-label="Agent report">
-    <div class="flex items-center gap-2 border-b border-edge/60 px-3 py-2">
-      <span class="label text-faint">Agent report</span>
+    <div class="flex items-center gap-2 {embedded ? 'pb-3' : 'border-b border-edge/60 px-3 py-2'}">
+      {#if !embedded}<span class="label text-faint">Agent report</span>{/if}
       {#if b.phase}
-        <!-- A dot of the phase's own colour inside the chip, so the stage reads
+        <!-- A dot of the phase's own colour beside the word, so the stage reads
              at a glance before the word does. -->
-        <span class="inline-flex items-center gap-1.5 rounded-full px-2 py-[1px] text-sm {phaseChip(b.phase)}">
+        <span class="inline-flex items-center gap-1.5 text-sm text-ink-2">
           <span class="h-1.5 w-1.5 rounded-full {phaseDot(b.phase)}" class:breathe-dot={live} aria-hidden="true"></span>
           {b.phase}
         </span>
@@ -55,12 +55,12 @@
       />
     </div>
 
-    <div class="flex flex-col gap-5 px-3 py-3.5 transition-opacity duration-500" class:opacity-60={stale}>
+    <div class="flex flex-col gap-5 transition-opacity duration-500 {embedded ? '' : 'px-3 py-3.5'}" class:opacity-60={stale}>
       {#if b.blocked}
         <!-- Orange is the app's "you are needed" colour (the needs-you pill). It
              is still the agent's claim, so it is worded as one — and it says how
              long, which is the part that tells a human how much it matters. -->
-        <div class="flex gap-2.5 rounded-lg border border-orange/40 bg-orange/10 px-2.5 py-2.5" role="status">
+        <div class="flex gap-2.5" role="status">
           <BoardMarker kind="blocked" />
           <div class="min-w-0">
             <div class="flex items-baseline gap-1.5">
@@ -77,7 +77,7 @@
              below that the evidence does not back (no matching command in the
              transcript, a failing last run, failing CI). Warn-yellow, not the
              blocker's orange: it is a doubt to check, not a request to act. -->
-        <div class="flex flex-col gap-1 rounded-lg border border-warn/40 bg-warn/10 px-2.5 py-2.5" role="status">
+        <div class="flex flex-col gap-1" role="status">
           <span class="font-medium text-warn">Claim not backed by evidence</span>
           {#each b.mismatches as m, i (i)}
             <div class="selectable text-sm break-words text-ink">{m}</div>
@@ -136,7 +136,7 @@
                     ? 'text-faint line-through decoration-edge'
                     : t.state === 'active'
                       ? 'font-medium text-ink'
-                      : 'text-ink/75'}">{t.text}</span
+                      : 'text-ink-2'}">{t.text}</span
                 >
                 <span class="sr-only">({t.state})</span>
               </li>

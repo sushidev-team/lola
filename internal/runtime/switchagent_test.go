@@ -202,3 +202,31 @@ func TestSwitchAgentExpandsProjectEnv(t *testing.T) {
 		t.Errorf(".lola/env must not contain literal {{.Session}} placeholder:\n%s", env)
 	}
 }
+
+// The launch prompt must be recognized in every form lola types it, and only for this
+// session: another session's prompt in this log is not ours to hide.
+func TestIsLaunchPrompt(t *testing.T) {
+	const id = "lola-web-eng-42"
+	for _, text := range []string{
+		defaultLaunchPrompt(id),
+		" " + defaultLaunchPrompt(id) + "\n",
+		handoffLaunchPrompt(id, agent.Claude),
+		handoffLaunchPrompt(id, agent.Codex),
+		handoffLaunchPrompt(id, agent.OpenCode),
+	} {
+		if !IsLaunchPrompt(id, text) {
+			t.Errorf("not recognized: %q", text)
+		}
+	}
+	for _, text := range []string{
+		"",
+		"fix the bug",
+		defaultLaunchPrompt("lola-web-eng-43"),
+		handoffLaunchPrompt("lola-web-eng-43", agent.Codex),
+		defaultLaunchPrompt(id) + " and also delete everything",
+	} {
+		if IsLaunchPrompt(id, text) {
+			t.Errorf("wrongly recognized: %q", text)
+		}
+	}
+}

@@ -5,7 +5,7 @@
   import { sessionMenu } from "$lib/sessionmenu.svelte";
   import { triaged } from "$lib/filters";
   import { statusLabel } from "$lib/theme";
-  import { terms, AGENT } from "$lib/terms.svelte";
+  import { terms, AGENT, isViewTab } from "$lib/terms.svelte";
   import { TermService } from "@bindings/desktop";
   import SnapshotTile from "$lib/components/SnapshotTile.svelte";
   import SessionsEmpty from "$lib/components/SessionsEmpty.svelte";
@@ -24,23 +24,20 @@
   // The tmux-backed sessions we can actually render terminals for.
   const tiles = $derived(rows.filter((s) => s.tmuxName));
 
-  // Which pane a tile previews: the session's ACTIVE tab, exactly as the detail
-  // panel resolves it (SessionEmbed does the same three lines). That is also why
-  // the tab state lives in $lib/terms and not here — switching a tile to "Shell 2"
-  // is the same fact as switching the detail panel to it, so opening the terminal
-  // lands on the pane you were watching, and the choice survives the lens switch,
-  // the selection moving away and back, and the tile being re-rendered.
+  // Which pane a tile previews: the session's active tab when that is a terminal, and the
+  // agent's pane otherwise. A tile always reads a terminal. A view like the conversation or
+  // Changes has no pane, and its sentinel sent to CaptureMany would blank the tile. The tab
+  // state lives in $lib/terms and not here, because switching a tile to "Shell 2" is the same
+  // fact as switching the session to it, so opening lands on the pane you were watching.
   function paneName(s: { id: string; tmuxName: string }): string {
     const tab = terms.activeTab(s.id);
-    return tab === AGENT ? s.tmuxName : tab;
+    return tab === AGENT || isViewTab(tab) ? s.tmuxName : tab;
   }
 
-  // Opening a tile focuses the session's live terminal. `toggleFocusTerm` is what
-  // leaves the grid for the list lens (only that lens mounts a terminal) AND what
-  // records the way back, so minimizing returns to the grid — see nav.returnLens.
+  // Opening a tile opens the session. `openSession` is what leaves the grid for the list lens
+  // AND what records the way back, so going back returns to the grid: see nav.returnLens.
   function openTile(id: string) {
-    nav.select(id);
-    nav.toggleFocusTerm(id);
+    nav.openSession(id);
   }
 
   // Snapshot cache: tmux pane name → last capture-pane text.
@@ -147,7 +144,7 @@
         class="group relative flex min-h-0 cursor-pointer flex-col overflow-hidden border-r border-b border-edge/40 bg-panel"
         role="button"
         tabindex="0"
-        title="open the live terminal"
+        title="open this session"
         onclick={() => openTile(s.id)}
         oncontextmenu={(e) => {
           nav.select(s.id);
@@ -217,8 +214,8 @@
           >
             <button
               type="button"
-              aria-pressed={tab === AGENT}
-              class="h-6 shrink-0 border-r border-edge/40 px-2.5 text-sm transition-colors {tab === AGENT
+              aria-pressed={tab === AGENT || isViewTab(tab)}
+              class="h-6 shrink-0 border-r border-edge/40 px-2.5 text-sm transition-colors {tab === AGENT || isViewTab(tab)
                 ? 'bg-sel font-medium text-ink'
                 : 'text-faint hover:bg-sel/50 hover:text-ink'}"
               onclick={(e) => {

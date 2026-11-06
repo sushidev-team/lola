@@ -863,31 +863,40 @@ that a waiting request counts as answered. A dropped connection reconnects from 
 agent gets lola's own notice through the send gate the first time a host opens, naming the host
 and telling it to carry on with its task.
 
-## Tabs (`cmd=sshConnect`, `cmd=sshTrash`)
+## Hosts (`cmd=sshConnect`, `cmd=sshTrash`)
 
-Each connection has one tab, named after its host. A second tab on a host gets a number.
+A session has one story. A connection is a scope inside it, shown on the host bar and named after
+its host, and a second connection to a host gets a number. Scope defaults to All, where the items
+of every host and of the session interleave by time. Scope is a filter plus the Run target.
+Folder, terminal and command draft stay per connection.
 
-- **New tab.** The `SSH` button always adds a connection, even to a host that is open. The one
-  exception is an agent's request waiting for its go, which already has a tab.
-- **Login.** A tab to a destination with a running master joins it, so nobody signs in again. It
-  has its own shell, folder and timeline. Only a host with the same alias, user, port and identity
-  file counts, and `-O check` has the last word.
-- **The master.** A tab closing leaves the master up for the others, and the last one closes it.
-  An idle master closes only when all its tabs are idle.
-- **The agent.** It names a host, never a tab. Its command goes to the tab the human last spoke
-  from if that tab is on this host, otherwise to the newest connection that is not closed. A post
-  with no host goes to the tab last spoken from. A message says which host it came from when more
-  than one connection is live.
-- **The ×.** It asks once. Then the connection closes and its timeline, stored output and queued
-  text are deleted, with no copy kept. The agent is told. A remote process may outlive the close,
-  as with every close. `lola ssh trash <conn>` does the same. The TUI has no key for it yet: it
-  keeps `close`, and drops a tab deleted elsewhere.
+- **New connection.** `+` → Connect to host always adds a connection, even to a host that is open.
+  The one exception is an agent's request waiting for its go, which already has a connection.
+- **Login.** A connection to a destination with a running master joins it, so nobody signs in again.
+  It has its own shell and folder. Only a host with the same alias, user, port and identity file
+  counts, and `-O check` has the last word.
+- **The master.** A connection closing leaves the master up for the others, and the last one closes
+  it. An idle master closes only when all its connections are idle.
+- **The agent.** It names a host, never a connection. Its command goes to the connection the human
+  last spoke from if that one is on this host, otherwise to the newest that is not closed. A post
+  with no `--host` and no evidence is session-wide, so narration does not die with a connection. A
+  message says which host it came from when more than one connection is live.
+- **Under All.** A message with no host in scope hands back nothing and leaves `TalkConn` alone, or
+  one chat message would return every wheel. The composer says "You're driving prod-api" with
+  `Hand back`. With a host in scope it behaves as today for that host.
+- **Removing a host.** It is in the host bar's `⋯`, behind one confirmation: "Removes this host, its
+  commands and their output. Your messages stay." The connection closes and its blocks, stored
+  output, connection-scoped elements and events, handback items and queued text are deleted, with no
+  copy kept. A human's own messages stay with their label dropped, everything session-wide stays,
+  and removing the last connection no longer wipes the story. The agent is told. A remote process
+  may outlive the close, as with every close. `lola ssh trash <conn>` does the same. The TUI has no
+  key for it yet: it keeps `close`, and drops a connection deleted elsewhere.
 
-## One view, and commands a human runs (`cmd=sshHumanRun`, `cmd=sshShareBlock`)
+## One story, and commands a human runs (`cmd=sshHumanRun`, `cmd=sshShareBlock`)
 
-The timeline and the terminal share one column. The terminal is reached through ⋯ (Open
-terminal) or ⌘\\, has "← Timeline" on its own strip, and opens by itself only for an
-interactive program run from the composer. The composer is one field: ↩ asks the agent, ⌘↩ runs on the host, and holding ⌘ shows the run
+The story and a host's terminal share one column. The terminal is reached through the strip's `$`
+cell or ⌘\\, and opens by itself only for an interactive program run from the composer. The whole
+view is in `docs/unified-session.md`. The composer is one field: ↩ asks the agent, ⌘↩ runs on the host, and holding ⌘ shows the run
 prompt first. A Run command goes
 over the same exec channel as an agent's and becomes a block with actor `human`, so it
 is recorded where a terminal command is not. Typing it is the approval, and the wheel
@@ -1074,7 +1083,8 @@ agent reads remote output anyone can write to. The rails, in order of what they 
   with 204 never navigates and stays open. So a widget can leak the data it was given, and the UI
   says "sandboxed", never "no network". Blocking this needs a native rule on the web view.
 - A frame shares the UI thread, so an endless loop freezes the window. That is why one click
-  per session is required before any widget runs, held in memory so a new run starts clean.
+  per session is required before any widget runs, the card's `Open` or the panel's own button, held
+  in memory so a new run starts clean.
 - `lola.ask` and `lola.run` only fill an empty composer, cleaned and rate limited. The human
   still presses the key, because a widget's click cannot be told from a script's. For the same
   reason a fill never moves focus, and it is refused while a prompt card is open or an input holds
@@ -1113,8 +1123,11 @@ below it. Everything built on it follows from these rules:
   is back and no frame runs until the click. That is the way out of a page that blocks the
   thread, with a caveat: measured in harness WebKit, a reload asked for while the page spins
   does not get through, and only a new run of the app does. Not measured in the packaged app.
-- A new widget opens a tab and never takes focus. One the human closed stays closed through
-  later updates, and its row reopens it.
+- A post leaves a card in the story and a dot on the strip's `Widgets N`. It never opens a panel,
+  so an agent cannot change the layout under someone. The card's `Open` is the per-session consent
+  and the open in one gesture, and nothing runs before it. With panels already open, a new widget
+  joins them behind the tab on show and never takes focus. One the human closed stays closed through
+  later updates, and its card reopens it.
 - The layout is per session in the webview's `localStorage` (`lola.ssh.dock`, latest 50). Tabs
   whose widget is gone are dropped, but only after the timeline has really answered, so a daemon
   that is down cannot empty the dock.

@@ -84,6 +84,7 @@ func main() {
 		hookCmd(),
 		reportCmd(),
 		sshCmd(),
+		sshPostVerb(), // lola post: the same verb, because every agent is told about it
 		reviewRunCmd(),
 	)
 

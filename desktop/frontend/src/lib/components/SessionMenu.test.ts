@@ -2,14 +2,15 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, screen, cleanup, fireEvent } from "@testing-library/svelte";
 import SessionMenu from "./SessionMenu.svelte";
 import SessionsTable from "./SessionsTable.svelte";
-import SessionEmbed from "./SessionEmbed.svelte";
+import SessionBar from "./session/SessionBar.svelte";
 import { store, type SessionInfo } from "$lib/store.svelte";
 import type { ProjectInfo } from "@bindings/internal/protocol";
 import { nav } from "$lib/nav.svelte";
 import { sessionMenu } from "$lib/sessionmenu.svelte";
 import { confirm } from "$lib/confirm.svelte";
-import { sidePanel, REPORT, CHECKPOINTS_TAB } from "$lib/sidepanel.svelte";
-import { terms, AGENT } from "$lib/terms.svelte";
+import { terms, AGENT, CHECKPOINTS, SSH } from "$lib/terms.svelte";
+import { ssh } from "$lib/ssh.svelte";
+import { flushSync } from "svelte";
 
 vi.mock("@xterm/xterm", () => ({
   Terminal: class {
@@ -117,16 +118,66 @@ describe("SessionMenu", () => {
     expect(screen.getByRole("menuitem", { name: "Add shell" })).toBeDisabled();
   });
 
-  it("opens checkpoints in the sidebar, not as a terminal-strip tab", async () => {
-    sidePanel.select(REPORT);
-    if (!sidePanel.hidden) sidePanel.toggle();
+  // From Overview an action on the selection would change a Glance nobody can act in, and the turns
+  // now live in Changes.
+  it("Checkpoints opens the session on Changes, on its turns", async () => {
+    nav.focusedTerm = "";
     sessionMenu.request = { id: "acme-eng-1", x: 10, y: 10 };
     render(SessionMenu);
     await fireEvent.click(screen.getByRole("menuitem", { name: "Checkpoints" }));
-    expect(nav.selectedId).toBe("acme-eng-1");
-    expect(sidePanel.tab).toBe(CHECKPOINTS_TAB);
-    expect(sidePanel.hidden).toBe(false);
-    expect(terms.activeTab("acme-eng-1")).toBe(AGENT);
+    expect(nav.focusedTerm).toBe("acme-eng-1");
+    expect(terms.activeTab("acme-eng-1")).toBe(CHECKPOINTS);
+    nav.focusedTerm = "";
+  });
+
+  it("offers Report only with one to open, and lands on the conversation with it open", async () => {
+    render(SessionMenu);
+    sessionMenu.request = { id: "acme-eng-1", x: 10, y: 10 };
+    flushSync();
+    expect(screen.queryByRole("menuitem", { name: "Report" })).toBeNull();
+    sessionMenu.close();
+    store.sessions = [{ ...store.sessions[0], board: { phase: "testing", updatedAt: "2026-01-01T00:00:00Z" } }] as never;
+    sessionMenu.request = { id: "acme-eng-1", x: 10, y: 10 };
+    flushSync();
+    terms.select("acme-eng-1", AGENT);
+    await fireEvent.click(screen.getByRole("menuitem", { name: "Report" }));
+    expect(terms.activeTab("acme-eng-1")).toBe(SSH);
+    expect(ssh.view("acme-eng-1").reportOpen).toBe(true);
+    ssh.view("acme-eng-1").reportOpen = false;
+    nav.focusedTerm = "";
+  });
+
+  it("the open session's ⋯ sets where sessions open, and a row's right-click does not", async () => {
+    nav.focusedTerm = "";
+    sessionMenu.request = { id: "acme-eng-1", x: 10, y: 10 };
+    const r = render(SessionMenu);
+    expect(screen.queryByText("Open sessions in")).toBeNull();
+    r.unmount();
+    nav.focusedTerm = "acme-eng-1";
+    sessionMenu.request = { id: "acme-eng-1", x: 10, y: 10 };
+    render(SessionMenu);
+    await fireEvent.click(screen.getByRole("menuitem", { name: "Terminal" }));
+    expect(terms.globalView).toBe("terminal");
+    terms.setGlobalView("conversation");
+    nav.focusedTerm = "";
+  });
+
+  it("Open in Finder opens the session's folder", async () => {
+    sessionMenu.request = { id: "acme-eng-1", x: 10, y: 10 };
+    const open = vi.spyOn(store, "openFolder").mockResolvedValue();
+    render(SessionMenu);
+    await fireEvent.click(screen.getByRole("menuitem", { name: "Open in Finder" }));
+    expect(open).toHaveBeenCalledWith("/tmp/wt/acme-eng-1");
+    open.mockRestore();
+  });
+
+  it("Review diff opens the session rather than a Glance nobody can act in", async () => {
+    nav.focusedTerm = "";
+    sessionMenu.request = { id: "acme-eng-1", x: 10, y: 10 };
+    render(SessionMenu);
+    await fireEvent.click(screen.getByRole("menuitem", { name: "Review diff" }));
+    expect(nav.focusedTerm).toBe("acme-eng-1");
+    nav.focusedTerm = "";
   });
 
   it("shows open PR and revive only when the session state warrants them", () => {
@@ -248,7 +299,8 @@ describe("session surfaces open the menu", () => {
   });
 });
 
-describe("SessionEmbed header", () => {
+// The filled agent chip left the header, and the agent's name went to the title's hover card.
+describe("SessionBar hover card", () => {
   beforeEach(() => {
     cleanup();
     store.sessions = [];
@@ -260,22 +312,28 @@ describe("SessionEmbed header", () => {
     nav.selectedId = "";
   });
 
-  it("renders the agent kind chip for a session with agent: 'codex'", () => {
+  async function hover() {
+    render(SessionBar, { props: { sessionId: "acme-eng-1" } });
+    await fireEvent.pointerEnter(document.querySelector("[data-session-bar] [tabindex='0']")!);
+  }
+
+  it("names the agent for a session with agent: 'codex', with no chip at rest", async () => {
     store.sessions = [fakeSession({ id: "acme-eng-1", agent: "codex" })];
-    render(SessionEmbed, { props: { sessionId: "acme-eng-1" } });
-    expect(screen.getByText("codex")).toBeInTheDocument();
+    await hover();
+    expect(await screen.findByText("Codex")).toBeInTheDocument();
   });
 
-  it("renders claude for an older session with empty agent", () => {
+  it("reads as Claude for an older session with empty agent", async () => {
     store.sessions = [fakeSession({ id: "acme-eng-1", agent: "" })];
-    render(SessionEmbed, { props: { sessionId: "acme-eng-1" } });
-    expect(screen.getByText("claude")).toBeInTheDocument();
+    await hover();
+    expect(await screen.findByText("Claude")).toBeInTheDocument();
   });
 
-  it("omits the agent kind chip for a shell session", () => {
+  it("names no agent for a shell session", async () => {
     store.sessions = [fakeSession({ id: "acme-eng-1", status: "shell", agent: "codex" })];
-    render(SessionEmbed, { props: { sessionId: "acme-eng-1" } });
-    expect(screen.queryByText("codex")).not.toBeInTheDocument();
-    expect(screen.queryByText("claude")).not.toBeInTheDocument();
+    await hover();
+    await screen.findByText("Worktree");
+    expect(screen.queryByText("Codex")).not.toBeInTheDocument();
+    expect(screen.queryByText("Claude")).not.toBeInTheDocument();
   });
 });

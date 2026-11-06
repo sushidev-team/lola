@@ -131,6 +131,7 @@ vi.mock("$lib/nav.svelte", () => ({ nav: { closeOverlay, overlayTab: "" } }));
 import SettingsForm from "./SettingsForm.svelte";
 import { nav } from "$lib/nav.svelte"; // the mock above — used to drive overlayTab
 import { confirm } from "$lib/confirm.svelte"; // the real singleton — the guard uses it
+import { terms } from "$lib/terms.svelte";
 // The real appearance store, not a mock: the preview's whole job is to repaint
 // the document, and asserting on `data-theme` proves it actually happened
 // rather than that a spy was called.
@@ -1087,6 +1088,16 @@ describe("SettingsForm", () => {
       );
       expect(localStorage.getItem("lola.theme")).toBe(DEFAULT_THEME_ID);
       expect(closeOverlay).not.toHaveBeenCalled();
+    });
+
+    it("sets where sessions open at once, and leaves it out of the form's save", async () => {
+      await openAppearance();
+      const group = screen.getByRole("group", { name: "Open sessions in" });
+      await fireEvent.click(within(group).getByRole("button", { name: "Terminal" }));
+      expect(terms.globalView).toBe("terminal");
+      expect(localStorage.getItem("lola.session.view")).toBe("terminal");
+      await fireEvent.click(within(group).getByRole("button", { name: "Conversation" }));
+      expect(terms.globalView).toBe("conversation");
     });
 
     it("writes no theme at all when the appearance tab was never touched", async () => {

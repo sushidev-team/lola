@@ -1,8 +1,6 @@
-// A session's turn checkpoints (SUSHI-624), shared by the two places that show
-// them: the sidebar's Checkpoints tab (the list and its actions) and the main
-// pane's checkpoint diff (what the selected turn changed). One copy per session,
-// so selecting a row in the sidebar is what the diff pane reads, and a restore
-// started from either side reloads both.
+// A session's turn checkpoints (SUSHI-624), shared by Changes' turn rail and its
+// diff, and by a receipt's Restore and Fork. One copy per session, so selecting a
+// row is what the diff reads, and a restore from anywhere reloads both.
 import { SvelteMap } from "svelte/reactivity";
 import { DaemonService } from "@bindings/desktop";
 import type { CheckpointInfo } from "@bindings/internal/protocol";
@@ -58,12 +56,12 @@ class Checkpoints {
     this.patch(id, { selected: seq });
   }
 
-  askRestore(id: string, c: CheckpointInfo) {
+  askRestore(id: string, c: Pick<CheckpointInfo, "seq" | "label">) {
     confirm.ask({
       title: `Restore checkpoint #${c.seq}?`,
-      body: `Put ${id}'s files back to checkpoint #${c.seq} (${c.label}).`,
+      body: `Files only. The conversation and git history do not move. This puts ${id}'s files back to checkpoint #${c.seq} (${c.label}).`,
       detail:
-        "Every change since is undone in the worktree — including later commits, which stay in history and show up as uncommitted edits. The current state is saved as a new checkpoint first, so you can restore it again. Tell the agent afterwards: it still remembers the discarded changes.",
+        "Every change since is undone in the worktree, including later commits, which stay in history and show up as uncommitted edits. The current state is saved as a new checkpoint first, so you can restore it again. Tell the agent afterwards: it still remembers the discarded changes.",
       confirmLabel: "Restore",
       onConfirm: async () => {
         this.patch(id, { busy: true });
@@ -75,7 +73,7 @@ class Checkpoints {
   }
 
   /** Asks, then forks; `onForked` gets the new session's id. */
-  askFork(id: string, c: CheckpointInfo, onForked: (sessionId: string) => void) {
+  askFork(id: string, c: Pick<CheckpointInfo, "seq" | "label">, onForked: (sessionId: string) => void) {
     confirm.ask({
       title: `Fork from checkpoint #${c.seq}?`,
       body: `Start a new agent session from ${id} as it was at checkpoint #${c.seq} (${c.label}).`,

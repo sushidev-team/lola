@@ -112,7 +112,7 @@ func (n *Native) OpenSSH(ctx context.Context, sp SSHOpenSpec) (result session.Se
 	if sandboxed {
 		s.Sandbox = config.SandboxDocker
 	}
-	return n.startLocal(ctx, s, false)
+	return n.startLocal(ctx, s, false, "")
 }
 
 // sshEnv is a direct session's env file. No Linear key: nothing here needs one.
@@ -245,7 +245,7 @@ func (n *Native) sshPrompt(sp SSHOpenSpec) []byte {
 	} else {
 		fmt.Fprintf(&b, "## Before you start\n\nThe human has not asked for anything yet. Do not run commands on your own initiative. Post one narration saying you are ready (`%s ssh post narration \"Ready. What should I look at?\"`), then wait for them.\n", n.lolaCmd())
 	}
-	return n.withSSHBriefing([]byte(b.String()))
+	return n.withSSHBriefing(n.withTalkBriefing([]byte(b.String())))
 }
 
 func (n *Native) lolaCmd() string {
@@ -253,6 +253,31 @@ func (n *Native) lolaCmd() string {
 		return shQuote(lb)
 	}
 	return "lola"
+}
+
+// talkBriefing is the always-on section: every agent is told how to speak in the
+// conversation view and how to show a live thing, because an agent that has never heard of
+// widgets never posts one. It is read on every launch, so it stays short.
+func (n *Native) talkBriefing() string {
+	bin := n.lolaCmd()
+	return "## Talking and widgets\n\n" +
+		"The human reads your text and your tool calls in lola's conversation view, so answer normally and do not repeat yourself in a post.\n" +
+		"`" + bin + " post narration \"...\"` adds a short note to their timeline and to the sidebar beside it, for when you want to say something in the middle of a long stretch of work.\n" +
+		"The sidebar is your standing account, so a glance tells them where you are. Your `report` plan and checks appear there, and so do `" + bin + " post summary \"...\" --ref status` (one line on where things stand, updated by reusing the ref), `" + bin + " post finding \"...\" --severity high`, `" + bin + " post hypothesis \"...\"` and `" + bin + " post metric --kv tests=142 --kv failed=0 --ref numbers`. Use them when they carry something the human would otherwise have to dig out of your text.\n" +
+		"`" + bin + " post widget \"Title\" --ref x --file page.html` shows them a small sandboxed page. Widgets are how you show a live thing or anything text cannot show well.\n" +
+		"`" + bin + " ssh guide widget-template` is a page to start from.\n"
+}
+
+// withTalkBriefing appends the talk section to a prompt.md body.
+func (n *Native) withTalkBriefing(prompt []byte) []byte {
+	var b strings.Builder
+	b.Write(prompt)
+	if len(prompt) > 0 && prompt[len(prompt)-1] != '\n' {
+		b.WriteByte('\n')
+	}
+	b.WriteString("\n")
+	b.WriteString(n.talkBriefing())
+	return []byte(b.String())
 }
 
 // withSSHBriefing appends the agent-assisted ssh section to a prompt.md body. It is

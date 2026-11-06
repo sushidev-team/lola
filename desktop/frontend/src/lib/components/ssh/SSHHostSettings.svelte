@@ -12,6 +12,7 @@
   import { deepEqual } from "$lib/deepEqual";
   import { SSH_REMOTE_OUTLIVES, tierOf } from "$lib/ssh";
   import Button from "../Button.svelte";
+  import Chevron from "../Chevron.svelte";
   import Checkbox from "../Checkbox.svelte";
   import Disclosure from "../Disclosure.svelte";
   import Select from "../Select.svelte";
@@ -264,7 +265,7 @@
           <span class="text-sm whitespace-nowrap text-faint">
             {#if p?.directRefused}Direct: cannot start{:else if p?.directSandbox === "docker"}Direct: container{:else}Direct: this Mac{/if}
           </span>
-          <span class="text-faint" aria-hidden="true">▸</span>
+          <span class="text-faint"><Chevron /></span>
         </button>
       {/each}
     </div>

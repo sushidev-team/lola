@@ -16,7 +16,7 @@ vi.mock("@bindings/desktop", () => ({
 import TerminalGrid from "./TerminalGrid.svelte";
 import { store, type SessionInfo } from "$lib/store.svelte";
 import { nav } from "$lib/nav.svelte";
-import { terms, AGENT } from "$lib/terms.svelte";
+import { terms, AGENT, DIFF } from "$lib/terms.svelte";
 
 function fakeSession(over: Partial<SessionInfo> = {}): SessionInfo {
   return {
@@ -109,7 +109,7 @@ describe("TerminalGrid tab strip", () => {
     const shell = await screen.findByRole("button", { name: "Shell 1" });
     expect(screen.getByRole("button", { name: "Agent" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Review" })).toBeInTheDocument();
-    expect(terms.activeTab("acme-eng-1")).toBe(AGENT);
+    expect(terms.activeTab("acme-eng-1")).not.toBe("acme-eng-1-shell-1");
 
     await fireEvent.click(shell);
     // The tab store is what the detail panel reads too, so the preview and the
@@ -122,6 +122,21 @@ describe("TerminalGrid tab strip", () => {
 
 // The grid is the lens you sit and WATCH a build from, and it was the one lens
 // that never told you a PR existed — let alone that its CI had gone red.
+// A view has no pane. Its sentinel sent to CaptureMany blanked the tile, and with the conversation
+// as a session's view that would have been every tile.
+describe("TerminalGrid tiles", () => {
+  it("read the agent's pane while the session shows a view", async () => {
+    const { TermService } = await import("@bindings/desktop");
+    shells.mockResolvedValue([]);
+    store.sessions = [fakeSession()];
+    terms.select("acme-eng-1", DIFF);
+    render(TerminalGrid);
+    await waitFor(() => expect(TermService.CaptureMany).toHaveBeenCalled());
+    expect(TermService.CaptureMany).toHaveBeenLastCalledWith(["acme-eng-1"], 60);
+    terms.select("acme-eng-1", AGENT);
+  });
+});
+
 describe("TerminalGrid PR chip", () => {
   beforeEach(() => {
     cleanup();
@@ -142,7 +157,7 @@ describe("TerminalGrid PR chip", () => {
     ];
     render(TerminalGrid);
     expect(screen.getByText("#42")).toBeInTheDocument();
-    expect(screen.getByText(/ci failed/)).toBeInTheDocument();
+    expect(screen.getByText(/CI failed/)).toBeInTheDocument();
   });
 
   it("shows nothing where there is no PR", () => {

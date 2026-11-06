@@ -1,8 +1,9 @@
 <script lang="ts">
-  // Where a claim touches something recorded: a tiny plate inside the agent's bare
-  // text. It shows the block's facts and never says "verified", because the block
-  // being real does not make the claim true. It reads the live block when it can,
-  // else the facts the daemon copied into the evidence at post time.
+  // Where a claim touches something recorded: one quiet line under the claim. It names the command
+  // rather than a block id nobody has seen, and shows its facts. It never says "verified", because
+  // the block being real does not make the claim true. No box, since a claim is not a plate and a
+  // third boxed kind would blur what a box means. It reads the live block when it can, else the
+  // facts the daemon copied into the evidence at post time.
   import { ssh } from "$lib/ssh.svelte";
   import { agentName, blockElapsedMs, formatMs } from "$lib/ssh";
   import { store } from "$lib/store.svelte";
@@ -36,8 +37,8 @@
   <Button
     variant="bare"
     size="xs"
-    class="h-auto! rounded! border border-edge/60 bg-panel px-1.5! align-baseline font-mono! enabled:hover:border-accent"
-    title="Lola recorded this command. That does not mean {agent}'s reading of it is correct."
+    class="h-auto! min-w-0 shrink! gap-[1ch]! px-0! align-baseline font-mono! text-faint! enabled:hover:text-ink!"
+    title="{live?.command ? `${live.command}\n` : ''}Lola recorded this command. That does not mean {agent}'s reading of it is correct."
     onmouseenter={() => (view.hoverBlock = block)}
     onmouseleave={() => (view.hoverBlock = "")}
     onclick={(e: MouseEvent) => {
@@ -45,13 +46,13 @@
       ssh.digTo(sessionId, block);
     }}
   >
-    <span class="num text-faint">{block}</span>
+    <span class="max-w-[48ch] min-w-0 truncate" data-evidence-command>{live?.command ?? block}</span>
     {#if open}
-      <span class="text-info">{shownStatus === "running" ? "running" : "waiting"}</span>
+      <span class="shrink-0 text-info">{shownStatus === "running" ? "running" : "waiting"}</span>
     {:else if typeof shownExit === "number"}
-      <span class="num {bad ? 'text-bad' : 'text-faint'}">exit {shownExit}{tail}</span>
+      <span class="num shrink-0 {bad ? 'text-bad' : ''}">exit {shownExit}{tail}</span>
     {:else}
-      <span class="text-faint">{(shownStatus || "").replace("_", " ")}</span>
+      <span class="shrink-0">{(shownStatus || "").replace("_", " ")}</span>
     {/if}
   </Button>
 {/if}

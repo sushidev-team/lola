@@ -8,8 +8,14 @@
   import SidebarStatus from "./SidebarStatus.svelte";
   import SidebarVersion from "./SidebarVersion.svelte";
   import SidebarActivity from "./SidebarActivity.svelte";
-  import TemporarySessions from "./TemporarySessions.svelte";
-  import SSHSessions from "./ssh/SSHSessions.svelte";
+  import SidebarRoster from "./SidebarRoster.svelte";
+  import SidebarWaiting from "./SidebarWaiting.svelte";
+  import Tabs from "./Tabs.svelte";
+
+  const TABS = [
+    { id: "sessions", label: "Sessions" },
+    { id: "projects", label: "Projects" },
+  ];
 
   // Sidebar makes ZERO store reads. It is pure layout; every child reads
   // $lib/store.svelte / $lib/nav.svelte itself. A container that computes rows
@@ -46,9 +52,18 @@
     >
   </div>
 
-  <div class="grid min-h-0 min-w-0" style="grid-template-rows:minmax(0,1fr) auto auto">
-    <div class="min-h-0 overflow-auto"><SidebarTriage /><SidebarProjects /><SSHSessions /><TemporarySessions /></div>
-    <SidebarActivity />
+  <!-- Both tabs stay mounted and the other one is hidden, so switching keeps each one's scroll
+       and its folders. Projects is the old body, unmoved: folders and drag are untouched. -->
+  <div class="grid min-h-0 min-w-0" style="grid-template-rows:auto minmax(0,1fr) auto auto">
+    <Tabs tabs={TABS} active={nav.sidebarTab} quiet onSelect={(t) => nav.setSidebarTab(t === "projects" ? "projects" : "sessions")} />
+    <div class="grid min-h-0 min-w-0 {nav.sidebarTab === 'sessions' ? '' : 'hidden'}" style="grid-template-rows:minmax(0,1fr) auto">
+      <div class="min-h-0 overflow-auto"><SidebarRoster /></div>
+      <SidebarWaiting />
+    </div>
+    <div class="grid min-h-0 min-w-0 {nav.sidebarTab === 'projects' ? '' : 'hidden'}" style="grid-template-rows:minmax(0,1fr) auto">
+      <div class="min-h-0 overflow-auto"><SidebarTriage /><SidebarProjects /></div>
+      <SidebarActivity />
+    </div>
     <SidebarVersion />
   </div>
 

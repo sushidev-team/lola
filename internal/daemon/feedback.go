@@ -181,6 +181,7 @@ func (d *Daemon) deliverFeedback(ctx context.Context, id string) bool {
 		field: func(s *session.Session) *string { return &s.PendingFeedback },
 		wrap:  feedbackMessage,
 		done:  "delivered the human's diff review to the agent",
+		label: feedbackLabel,
 	})
 }
 
@@ -195,8 +196,20 @@ type queuedText struct {
 	// took and sent are optional, for a queue with a second delivery path. took
 	// runs right after the text left the field and before the send, and sent reports
 	// how the send went, after a failure has already put the text back.
-	took func(id, text string)
+	// took answers the store items the text belongs to, for the record of the send.
+	took func(id, text string) []string
 	sent func(id, text string, ok bool)
+	// label is lola's sentence for the row this send leaves in the session's
+	// timeline, from the text that left the field. nil means "": the queue holds a
+	// human's own words, and their own row already shows them.
+	label func(s session.Session, text string) string
+	// lock and admit are for a send a person pressed this instant. nil means today's
+	// behaviour: lockAutomationPrompt and handoffDeliverable.
+	lock  func(ctx context.Context, s session.Session) (unlock func(), why string)
+	admit func(s session.Session) bool
+	// refused hears why a send with its own lock did not go. Empty means the session
+	// was not even a candidate.
+	refused func(why string)
 }
 
 // deliverQueued types one queue into the session's pane when the agent is
@@ -204,13 +217,33 @@ type queuedText struct {
 // queue untouched for a later attempt; a failed send re-queues the text, since
 // it exists nowhere else.
 func (d *Daemon) deliverQueued(ctx context.Context, id string, q queuedText) bool {
+	admit := q.admit
+	if admit == nil {
+		admit = handoffDeliverable
+	}
 	s, ok := d.sessions.Get(id)
-	if !ok || *q.field(&s) == "" || s.TmuxName == "" || !handoffDeliverable(s) {
+	if !ok || *q.field(&s) == "" || s.TmuxName == "" || !admit(s) {
+		if q.refused != nil {
+			q.refused("")
+		}
 		return false
 	}
-	unlock, ready := d.lockAutomationPrompt(ctx, s)
-	if !ready {
-		return false
+	var unlock func()
+	if q.lock != nil {
+		u, why := q.lock(ctx, s)
+		if u == nil {
+			if q.refused != nil {
+				q.refused(why)
+			}
+			return false
+		}
+		unlock = u
+	} else {
+		u, ready := d.lockAutomationPrompt(ctx, s)
+		if !ready {
+			return false
+		}
+		unlock = u
 	}
 	defer unlock()
 
@@ -219,10 +252,11 @@ func (d *Daemon) deliverQueued(ctx context.Context, id string, q queuedText) boo
 	var (
 		text     string
 		tmuxName string
+		note     typedNote
 	)
 	d.sessions.Update(id, func(cur *session.Session) bool {
 		f := q.field(cur)
-		if !handoffDeliverable(*cur) || *f == "" {
+		if !admit(*cur) || *f == "" {
 			return false
 		}
 		text, *f = *f, ""
@@ -235,16 +269,20 @@ func (d *Daemon) deliverQueued(ctx context.Context, id string, q queuedText) boo
 		// the gate; the next lifecycle hook corrects it to the real state.
 		cur.SetAgentState(state.AgentWorking, "", time.Now())
 		tmuxName = cur.TmuxName
+		note = noteFor(*cur, "")
+		if q.label != nil {
+			note.Label = q.label(*cur, text)
+		}
 		return true
 	})
 	if text == "" {
 		return false
 	}
 	if q.took != nil {
-		q.took(id, text)
+		note.Items = q.took(id, text)
 	}
 
-	if err := d.typeToAgentLocked(ctx, tmuxName, q.wrap(text), reactExecTimeout); err != nil {
+	if err := d.typeToAgentLocked(ctx, note, tmuxName, q.wrap(text), reactExecTimeout); err != nil {
 		// Unlike a review hand-off (which other sinks also received), this text
 		// exists nowhere else: put it back in front of anything queued since.
 		d.sessions.Update(id, func(cur *session.Session) bool {

@@ -247,6 +247,16 @@ func (d *Daemon) observeNative(ctx context.Context) {
 		// send-keys into the human's interactive shell). Refresh it in isolation
 		// and skip the whole agent path.
 		if s.IsAgentless() {
+			// A temporary shell whose pane is gone has nothing left to come back to. The
+			// Glance mounts no terminal, so this cannot hang off a terminal's exit.
+			if !alive && s.Kind == session.KindLocal && s.Location == "temporary" {
+				if res, err := d.handleCloseExitedTemporary(ctx, s.ID); err != nil {
+					d.logf("", "observe: close exited temporary %s: %v", s.ID, err)
+				} else if res.Removed {
+					touched = true
+					continue
+				}
+			}
 			if d.observeManualShell(s, alive) {
 				touched = true
 			}
@@ -371,8 +381,11 @@ func (d *Daemon) observeNative(ctx context.Context) {
 		// hook transition flows into the merge and is preserved.
 		now := time.Now()
 		becameDead, applied, titleBackfilled := false, false, false
+		var prevAgentAtUpdate state.AgentState
+		var prevDelivery state.DeliveryState
 		updated, known := d.sessions.Update(s.ID, func(cur *session.Session) bool {
 			prevAgent := cur.AgentState
+			prevAgentAtUpdate, prevDelivery = cur.AgentState, cur.Delivery
 			if backfillTitle != "" && cur.Title == "" {
 				cur.Title = backfillTitle
 				titleBackfilled = true
@@ -445,6 +458,15 @@ func (d *Daemon) observeNative(ctx context.Context) {
 		})
 		if becameDead {
 			d.logf("", "observe: native session %s pane is gone without a merged PR → dead", s.ID)
+			if prevAgentAtUpdate != state.AgentExited {
+				d.noteAgentExited(updated)
+			}
+		}
+		if known && prevDelivery != updated.Delivery {
+			d.noteDelivery(updated, prevDelivery)
+		}
+		if known {
+			d.noteCI(updated)
 		}
 		if applied || titleBackfilled {
 			touched = true

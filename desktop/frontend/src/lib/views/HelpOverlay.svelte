@@ -11,27 +11,45 @@
 
   const groups: { title: string; keys: [string, string][] }[] = [
     {
-      title: "Navigate",
+      title: "Overview",
       keys: [
         ["j / k · ↑ ↓", "move selection"],
         ["g / G", "first / last"],
-        ["Enter", "open live terminal"],
-        ["Esc", "back / clear filter / unscope"],
-        ["Ctrl-Q", "leave a focused terminal"],
+        ["Enter", "open session"],
+        ["Esc", "clear filter / unscope"],
         ["V", "cycle lens · list / board / terminals"],
-        ["n / N", "next / prev needs-input"],
+        ["n / N", "next / prev row waiting on you"],
       ],
     },
     {
-      // The ⌘ chords are the macOS Session menu's accelerators (installAppMenu),
-      // not bindings in onKey — which is why they also work from inside a focused
-      // terminal, where every bare key belongs to the agent.
+      title: "In a session",
+      keys: [
+        ["Esc", "back one step, then to Overview"],
+        ["Ctrl-Q", "leave a terminal that has the keyboard"],
+        ["n / N", "next / prev session waiting on you"],
+        ["t", "move into the timeline"],
+        ["j / k · g / G", "timeline: move between rows"],
+        ["[ / ]", "timeline: previous or next turn"],
+        ["u", "timeline: first thing you have not seen"],
+        ["/", "find in the timeline"],
+        ["w", "show or hide widgets"],
+        ["F", "cycle the filter, with a host"],
+        ["< / >", "prev / next cell of the strip"],
+      ],
+    },
+    {
+      // The ⌘ chords are the macOS Session menu's accelerators (installAppMenu), not bindings in
+      // onKey, which is why they also work from inside a focused terminal, where every bare key
+      // belongs to the agent. They act on the open session, else the selection.
       title: "Session actions",
       keys: [
+        ["⌘J", "next waiting, wherever it is"],
+        ["⌘.", "stop this turn"],
+        ["h · ⌘\\", "terminal, and back"],
+        ["i · ⌘L", "composer. From a terminal, back to the conversation"],
+        ["f · ⌘⇧D", "Changes, and back"],
         ["s · ⌘T", "new shell tab"],
         ["D", "run dev here · one session per project"],
-        ["f", "diff · comment on lines, send to the agent"],
-        ["< / >", "prev / next terminal tab"],
         ["x · ⌘⇧K", "kill session"],
         ["o · ⌘⇧O", "open PR in browser"],
         ["c · ⌘⇧R", "review · configured provider"],
@@ -42,23 +60,17 @@
     {
       // The ⌘ chords work from inside a terminal. Approval has NO global key: it
       // needs a card holding focus, plus 800ms of arming.
-      title: "SSH",
+      title: "With a host",
       keys: [
-        ["⌘⇧H", "new SSH session"],
-        ["h", "open or leave the SSH tab"],
+        ["⌘⇧H", "new session on a host"],
         ["W · ⌘⇧L", "take the wheel, or hand it back"],
         ["A · ⌘⇧A", "review the next approval"],
-        ["i · ⌘L", "talk to the agent"],
-        ["t", "move into the stream"],
-        ["F", "cycle the filter"],
-        ["/", "find in the timeline"],
-        ["⌘\\", "show or hide the terminal"],
         ["⌥← / ⌥→", "move the focused widget tab"],
-        ["j / k · ↑ ↓", "stream: move between items"],
-        ["Enter / → / ←", "stream: expand, follow, collapse"],
-        ["s", "stream: stdout or stderr"],
-        ["a", "stream: ask about this block"],
-        ["X", "stream: stop the running block"],
+        ["j / k · ↑ ↓", "timeline: move between items"],
+        ["Enter / → / ←", "timeline: expand, follow, collapse"],
+        ["s", "timeline: stdout or stderr"],
+        ["a", "timeline: ask about this block"],
+        ["X", "timeline: stop the running block"],
         ["Y / N", "focused card: confirm or deny"],
       ],
     },
@@ -103,10 +115,10 @@
   </div>
 
   <p class="copy mt-6 border-t border-edge/60 pt-4 text-sm text-faint">
-    A double-click (or <span class="text-ink">Enter</span>) opens a session's live terminal fullscreen. Inside it every key
+    A double-click (or <span class="text-ink">Enter</span>) opens a session. Inside a terminal every key
     — <span class="text-ink">Esc</span> included — goes to the agent, so
     <span class="text-ink">Ctrl-Q</span> is the way back out.
-    <span class="text-ink">?</span> reveals this list from anywhere. The
+    <span class="text-ink">?</span> reveals this list from anywhere a field does not have the keyboard. The
     <span class="text-ink">⌘</span> chords live in the <span class="text-ink">Session</span> menu and work even while a
     terminal has the keyboard.
   </p>

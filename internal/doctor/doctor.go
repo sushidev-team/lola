@@ -146,6 +146,9 @@ func Check(ctx context.Context, cfg *config.Config) Report {
 	if res, ok := statusAgentResult(); ok {
 		add(res)
 	}
+	if res, ok := conversationLogResult(); ok {
+		add(res)
+	}
 
 	if cfg == nil {
 		add(Result{

@@ -215,11 +215,12 @@ type matcherEntry struct {
 
 type settingsFile struct {
 	Hooks struct {
-		Stop             []matcherEntry `json:"Stop"`
-		Notification     []matcherEntry `json:"Notification"`
-		SessionEnd       []matcherEntry `json:"SessionEnd"`
-		PostToolUse      []matcherEntry `json:"PostToolUse"`
-		UserPromptSubmit []matcherEntry `json:"UserPromptSubmit"`
+		Stop              []matcherEntry `json:"Stop"`
+		Notification      []matcherEntry `json:"Notification"`
+		SessionEnd        []matcherEntry `json:"SessionEnd"`
+		PostToolUse       []matcherEntry `json:"PostToolUse"`
+		UserPromptSubmit  []matcherEntry `json:"UserPromptSubmit"`
+		PermissionRequest []matcherEntry `json:"PermissionRequest"`
 	} `json:"hooks"`
 	SkillOverrides map[string]string `json:"skillOverrides,omitempty"`
 	StatusLine     *statusLineSpec   `json:"statusLine,omitempty"`
@@ -271,6 +272,9 @@ var modalSkills = map[string]string{
 //	                                                which fires no PostToolUse for
 //	                                                a text-only reply — is never
 //	                                                seen as idle mid-turn)
+//	PermissionRequest → <lolaBin> hook permission_request (async: it only asks the
+//	                                                daemon to read the pane soon, and
+//	                                                can land after the answer)
 //
 // Each hook has an explicit 10s timeout. Hook commands run with the pane's
 // environment, so the exported LOLA_SESSION is visible to `lola hook`.
@@ -309,6 +313,7 @@ func SettingsJSON(lolaBin string, additionalDirs ...string) []byte {
 	// Synchronous (not async): AtPrompt must be reliably cleared at turn start,
 	// before the agent produces any output the reaction engine might race.
 	s.Hooks.UserPromptSubmit = entry("user_prompt", false)
+	s.Hooks.PermissionRequest = entry("permission_request", true)
 	s.SkillOverrides = modalSkills
 	s.StatusLine = &statusLineSpec{Type: "command", Command: bin + " " + statusLineSelf}
 	if len(additionalDirs) > 0 {

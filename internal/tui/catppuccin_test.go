@@ -282,7 +282,7 @@ func TestFaintFloorAndKey(t *testing.T) {
 	if latte.faintKey != "overlay2" {
 		t.Errorf("latte.faintKey = %q, want overlay2", latte.faintKey)
 	}
-	if got := toTokens(latte)["--color-faint"]; got != muted(latte.overlay2, latte.mantle, panelBg(latte), latte.surface0) {
+	if got := toTokens(latte)["--color-faint"]; got != muted(readable(latte.overlay2, latte.mantle, latte.base), latte.mantle, panelBg(latte), latte.surface0) {
 		t.Errorf("latte faint = %q", got)
 	}
 	// Mocha & macchiato already clear 3:1 raw, so faint is byte-identical there.

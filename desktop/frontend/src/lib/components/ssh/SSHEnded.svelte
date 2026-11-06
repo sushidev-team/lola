@@ -1,6 +1,7 @@
 <script lang="ts">
-  // This tab's connection has ended. Its record stays until the tab is deleted, and this
-  // bar says what can still happen next, in place of the composer.
+  // A direct session whose every host has ended has nobody left to talk to, so this says what can
+  // still happen next, in place of the composer. Anywhere else the agent is still there and the
+  // composer stays: a new connection is on the host bar.
   import { store } from "$lib/store.svelte";
   import { ssh } from "$lib/ssh.svelte";
   import { terms, AGENT } from "$lib/terms.svelte";
@@ -16,7 +17,7 @@
   const ran = $derived((conn?.commandsRun ?? 0) > 0);
 </script>
 
-<div class="grid gap-2 border-t border-edge/60 px-3 py-2.5" data-ended>
+<div class="grid gap-2 rounded-[10px] border border-edge bg-panel p-3" data-ended>
   <div class="grid gap-0.5">
     <p class="text-ink">Connection closed. The record stays until you delete this tab.</p>
     {#if ran}<p class="text-sm text-faint">{SSH_ENDED_OUTLIVES}</p>{/if}

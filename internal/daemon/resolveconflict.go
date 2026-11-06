@@ -40,7 +40,7 @@ import (
 //     whole content of the instruction — guessing "main" for a project that
 //     merges into "develop" would send the agent at the wrong branch.
 //   - The agent must be provably resting at its prompt right now
-//     (handoffDeliverable + handoffPromptProof), or nothing is typed at all.
+//     (handoffDeliverable + the human gate's pane proof), or nothing is typed at all.
 //     Unlike the reaction engine this does NOT defer: the caller is a human
 //     watching a button, so an honest "not now" beats a send that happens
 //     minutes later with no further sign of it.
@@ -81,16 +81,24 @@ func (d *Daemon) handleResolveConflict(ctx context.Context, sessionID string) (p
 		base = d.laneBase(s)
 	}
 
+	// A human's click, so the human gate: no attached check, because the button is often
+	// pressed with that session's terminal open in the same window. The merge queue
+	// shares typeAtRestingPrompt and keeps the automation gate.
+	refused := ""
+	lock := func(ctx context.Context, cur session.Session) (func(), bool) {
+		unlock, why := d.humanLock(ctx, cur)
+		refused = why
+		return unlock, unlock != nil
+	}
 	err := d.typeAtRestingPrompt(ctx, s, resolveConflictMessage(s, base), func(cur *session.Session) {
 		// Stamp the automatic reaction's one-shot guard: this IS the reaction for
 		// this entry into merge_conflict, just triggered by hand.
 		cur.LastReactedStatus = "merge_conflict"
 		cur.PendingReaction = ""
-	})
+	}, lock, noteFor(s, resolveConflictLabel(s)))
 	switch {
 	case errors.Is(err, errNotResting):
-		return protocol.ResolveConflictData{}, fmt.Errorf(
-			"session %s needs an idle agent at its prompt, an empty composer, and detached terminals before lola can send; finish any draft and close or detach its live terminals", sessionID)
+		return protocol.ResolveConflictData{}, fmt.Errorf("session %s %s", sessionID, resolveRefusal(refused))
 	case errors.Is(err, errLeftPrompt):
 		return protocol.ResolveConflictData{}, fmt.Errorf("session %s left its prompt before the request could be sent", sessionID)
 	case err != nil:
@@ -102,6 +110,22 @@ func (d *Daemon) handleResolveConflict(ctx context.Context, sessionID string) (p
 		Branch:  base,
 		Message: fmt.Sprintf("asked the agent to merge %s and resolve the conflicts", base),
 	}, nil
+}
+
+// resolveRefusal finishes the sentence "session X ..." for a refused click. The empty case
+// is the record's own gate, which refuses before the lock is ever asked.
+func resolveRefusal(why string) string {
+	switch why {
+	case humanWhyDraft:
+		return "has text in its own prompt; finish it in the terminal first"
+	case humanWhyModal:
+		return "has a screen open in its terminal; close it first"
+	case humanWhyPrompt:
+		return "is waiting on a question in its terminal; answer it first"
+	case humanWhyGone:
+		return "has no running agent to ask"
+	}
+	return "needs an idle agent at its prompt; try again when it has finished its turn"
 }
 
 var (
@@ -118,15 +142,18 @@ var (
 // under the store lock, so the caller's one-shot guard lands atomically with
 // it. Nothing is ever typed unless the consume won.
 //
+// Each caller names its own lock and note, because they differ in who is asking: a
+// human's click and the merge queue must not share a gate once the human one exists.
+//
 // errNotResting / errLeftPrompt mean nothing was typed. Any other error is a
 // failed send AFTER the gate was consumed — not rolled back, like every other
 // send path, so a broken pane is not re-prompted every cycle.
-func (d *Daemon) typeAtRestingPrompt(ctx context.Context, s session.Session, msg string, stamp func(cur *session.Session)) error {
+func (d *Daemon) typeAtRestingPrompt(ctx context.Context, s session.Session, msg string, stamp func(cur *session.Session), lock func(context.Context, session.Session) (func(), bool), note typedNote) error {
 	msg = laneHeader(s) + msg // a stack app's request names its checkout first
 	if !handoffDeliverable(s) {
 		return errNotResting
 	}
-	unlock, ready := d.lockAutomationPrompt(ctx, s)
+	unlock, ready := lock(ctx, s)
 	if !ready {
 		return errNotResting
 	}
@@ -163,7 +190,7 @@ func (d *Daemon) typeAtRestingPrompt(ctx context.Context, s session.Session, msg
 	}
 
 	// The per-session send gate is already held from proof through submit.
-	if err := d.typeToAgentLocked(ctx, tmuxName, msg, reactExecTimeout); err != nil {
+	if err := d.typeToAgentLocked(ctx, note, tmuxName, msg, reactExecTimeout); err != nil {
 		return err
 	}
 	if err := d.sessions.Save(); err != nil {

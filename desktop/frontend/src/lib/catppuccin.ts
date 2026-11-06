@@ -549,6 +549,12 @@ export const ACCENT_FILL = 0.2;
  *             the only pill that skipped onFill, and the only foreground in the
  *             app no flavor could reach at all).
  *
+ * ink-2       → the middle ink tier: tool targets, queue rows, footer state words.
+ *             An alpha of ink cannot do this job. `text-ink-2` lands under
+ *             `faint` on latte (3.34 against 3.90 on canvas) and under AA on sel
+ *             in frappé and macchiato, so the tier inverted where it was weakest.
+ *             `subtext0` walked to AA on all three surfaces cannot do either.
+ *
  * placeholder → input placeholder text: `faint` walked up to AA against canvas,
  *             the fill those inputs paint. It exists because the sites used to
  *             ask for `faint` at 50% alpha, and an alpha of an already-muted
@@ -602,7 +608,10 @@ export function toTokens(f: Flavor): Record<string, string> {
   // faint is de-emphasized text, so it takes MUTED (3:1), not readable's AA:
   // mocha and macchiato clear it raw and come back verbatim, frappé and latte
   // get the smallest nudge that lifts their selected-row 2.80/2.56 to 3:1.
-  const faint = muted(f[f.faintKey], ...bare);
+  // Latte alone also walks to AA on canvas and panel first. A dark ground lets
+  // 3:1 grey text read as quiet, but on latte's near-white it reads as washed
+  // out, and footers and ages sit on those two surfaces.
+  const faint = muted(f.dark ? f[f.faintKey] : readable(f[f.faintKey], f.mantle, f.base), ...bare);
   const fill = mix(accent, f.mantle, ACCENT_FILL);
   const fillHover = mix(accent, backdrop(f), ACCENT_FILL);
   const work = mix(f.blue, f.mantle, PILL_TINT);
@@ -618,6 +627,7 @@ export function toTokens(f: Flavor): Record<string, string> {
     "--color-accent-fill-hover": fillHover,
     "--color-on-accent": onFill(f, accent),
     "--color-ink": f.text,
+    "--color-ink-2": readable(f.subtext0, ...bare),
     "--color-faint": faint,
     "--color-placeholder": readable(faint, f.mantle),
     "--color-sel": f.surface0,

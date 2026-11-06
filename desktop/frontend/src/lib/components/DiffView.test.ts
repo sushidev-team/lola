@@ -2,10 +2,12 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/svelte";
 
 const Diff = vi.fn();
+const CheckpointDiff = vi.fn();
 const SendFeedback = vi.fn();
 vi.mock("@bindings/desktop", () => ({
   DaemonService: {
     Diff: (...a: unknown[]) => Diff(...a),
+    CheckpointDiff: (...a: unknown[]) => CheckpointDiff(...a),
     SendFeedback: (...a: unknown[]) => SendFeedback(...a),
     Alive: vi.fn().mockResolvedValue(false),
     Sessions: vi.fn(),
@@ -169,7 +171,8 @@ describe("DiffView", () => {
     expect(feedback.count("s1")).toBe(1);
     expect(screen.getByText("Why 2?")).toBeInTheDocument();
 
-    await fireEvent.click(screen.getByRole("button", { name: /Send to agent \(1\)/ }));
+    // Sending is the footer strip's button: see ChangesView.test.ts.
+    await feedback.send("s1");
     await waitFor(() => expect(SendFeedback).toHaveBeenCalled());
     expect(SendFeedback.mock.calls[0][0]).toEqual({
       session: "s1",
@@ -195,7 +198,7 @@ describe("DiffView", () => {
     feedback.add("s1", { path: "a.go", side: "new", line: 1, endLine: 1, quote: "", body: "x" });
     render(DiffView, { sessionId: "s1" });
     await screen.findByText("origin/main");
-    await fireEvent.click(screen.getByRole("button", { name: /Send to agent/ }));
+    await feedback.send("s1");
     await waitFor(() => expect(SendFeedback).toHaveBeenCalled());
     expect(feedback.count("s1")).toBe(1);
   });
@@ -228,9 +231,15 @@ describe("DiffView", () => {
     expect(screen.queryByText("origin/stale")).not.toBeInTheDocument();
   });
 
-  it("has nothing to send until something is written", async () => {
-    render(DiffView, { sessionId: "s1" });
+  it("takes no comment on a turn, because a line number in one turn means nothing later", async () => {
+    Diff.mockClear();
+    CheckpointDiff.mockResolvedValue(DATA);
+    render(DiffView, { sessionId: "s1", turn: 3 });
+    await waitFor(() => expect(CheckpointDiff).toHaveBeenCalledWith("s1", 3));
+    expect(Diff).not.toHaveBeenCalled();
     await screen.findByText("origin/main");
-    expect(screen.getByRole("button", { name: /Send to agent/ })).toBeDisabled();
+    await fireEvent.click(document.querySelectorAll(".line-gutter")[2]);
+    expect(screen.queryByPlaceholderText("What should the agent change here?")).toBeNull();
+    expect(screen.queryByPlaceholderText(/General note/)).toBeNull();
   });
 });

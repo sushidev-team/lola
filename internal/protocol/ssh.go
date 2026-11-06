@@ -76,6 +76,8 @@ var SSHHumanCommands = []string{
 	CmdSSHTakeWheel, CmdSSHHandbackPreview, CmdSSHHandback, CmdSSHStop, CmdSSHClose, CmdSSHTrash,
 	CmdSSHTerminal, CmdSSHTimeline, CmdSSHOutput, CmdSSHSay, CmdSSHAnswer, CmdSSHProposal,
 	CmdSSHRecall, CmdSSHResolve, CmdSSHWidgetStatus, CmdSSHPromptAnswer,
+	CmdAgentFeed, CmdAgentFeedOutput, CmdTalkState, CmdAgentSay, CmdAgentStop,
+	CmdAgentChoose, CmdAgentQueueRelease, CmdEndedSessions,
 }
 
 // Tiers. An empty or unknown tier reads as production: a host nobody classified
@@ -175,6 +177,8 @@ const (
 	SSHHumanSay      = "say"      // typed in the composer
 	SSHHumanAnswered = "answer"   // answered a question element
 	SSHHumanHandback = "handback" // said while handing the wheel back
+	SSHHumanInitial  = "initial"  // the brief the session started with
+	SSHHumanChoice   = "choice"   // a key a human pressed on a card: "You chose: 1 Yes"
 )
 
 // Delivery paths of a human message. Both are lola putting text in front of the
@@ -197,6 +201,20 @@ const (
 	SSHEventGrantCreated = "grant_created"
 	SSHEventGrantEnded   = "grant_ended"
 	SSHEventClosed       = "closed"
+)
+
+// System events about the session rather than a connection. All Text is lola's own
+// sentence, and Conn is always "".
+const (
+	SSHEventSessionStarted = "session_started"
+	SSHEventSessionEnded   = "session_ended"
+	SSHEventAgentExited    = "agent_exited"
+	SSHEventStopped        = "stopped"
+	SSHEventCheckpoint     = "checkpoint" // a turn's receipt
+	SSHEventPR             = "pr"         // opened, merged, closed
+	SSHEventCI             = "ci"         // a required check turned red or green
+	SSHEventReview         = "review"     // a tally only, never findings
+	SSHEventHandoff        = "handoff"    // lola typed something. Says which and why.
 )
 
 // Refusal codes for a command that never ran. Stable: the CLI maps them to exit
@@ -762,8 +780,10 @@ type SSHHandbackPreviewData struct {
 // agent's pane, so it must be small.
 const SSHMaxHandbackBytes = 8 * 1024
 
-// SSHMaxSayBytes caps one thing a human says to the agent, for the same reason.
-const SSHMaxSayBytes = 8 * 1024
+// SSHMaxSayBytes caps one thing a human says to the agent. It goes by paste, not keystrokes, so a
+// long log fits. The bound is the socket: one request line is at most 1 MiB, and JSON may double a
+// text full of quotes and line breaks.
+const SSHMaxSayBytes = 128 * 1024
 
 // SSHHandbackArgs returns the wheel. Note is what the human wants to say.
 // Transcript is sent ONLY when non-empty, and it is the text the human saw in the
@@ -995,13 +1015,18 @@ type SSHSystemEvent struct {
 	Note          string `json:"note,omitempty"` // a human's reason, as given
 	Conn          string `json:"conn,omitempty"`
 	HasTranscript bool   `json:"hasTranscript,omitempty"` // handed_back only: a transcript was shared
+	Seq           int    `json:"seq,omitempty"`           // checkpoint
+	Added         int    `json:"added,omitempty"`         // checkpoint
+	Removed       int    `json:"removed,omitempty"`       // checkpoint
+	Files         int    `json:"files,omitempty"`         // checkpoint
+	DurationMs    int64  `json:"durationMs,omitempty"`    // turn time, Stop to Stop
 }
 
 // SSHHumanMessage is something the human said to the agent, or a handback's text.
 // Text is the human's own words, without lola's framing. Delivered means lola put
 // them in front of the agent, not that it read them. Recalled means it never will.
 type SSHHumanMessage struct {
-	Origin      string    `json:"origin,omitempty"` // say | answer | handback
+	Origin      string    `json:"origin,omitempty"` // say | answer | handback | initial | choice
 	Conn        string    `json:"conn,omitempty"`
 	Text        string    `json:"text"`
 	Transcript  string    `json:"transcript,omitempty"` // handback only: exactly what was sent
@@ -1009,6 +1034,7 @@ type SSHHumanMessage struct {
 	DeliveredAt time.Time `json:"deliveredAt,omitzero"`
 	Via         string    `json:"via,omitempty"` // reply | prompt
 	Recalled    bool      `json:"recalled,omitempty"`
+	Returned    bool      `json:"returned,omitempty"` // Esc put it back in the agent's prompt as a draft
 }
 
 // SSHTimelineItem is one row. Exactly one of Block, Element, System and Human is

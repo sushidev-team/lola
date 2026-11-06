@@ -35,6 +35,32 @@ describe("nav help overlay", () => {
   });
 });
 
+describe("nav.openSession", () => {
+  it("openSession on the open session keeps it open", () => {
+    nav.openSession("s1");
+    nav.openSession("s1");
+    expect(nav.focusedTerm).toBe("s1");
+    expect(nav.selectedId).toBe("s1");
+  });
+  it("openSession leaves the grid and owes a return", () => {
+    nav.setLens("grid");
+    nav.openSession("s1");
+    expect(nav.lens).toBe("list");
+    expect(nav.returnLens).toBe("grid");
+    nav.closeSession();
+    expect(nav.focusedTerm).toBe("");
+    expect(nav.lens).toBe("grid");
+  });
+  it("leaves the project scope alone and returns to the cockpit", () => {
+    nav.goCockpit("web");
+    nav.goDetail("web");
+    nav.openSession("s1");
+    expect(nav.view).toBe("cockpit");
+    expect(nav.scoped).toBe(true);
+    expect(nav.project).toBe("web");
+  });
+});
+
 describe("nav.toggleFocusTerm", () => {
   it("toggles a session's fullscreen terminal on and off", () => {
     nav.toggleFocusTerm("s1");

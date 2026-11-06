@@ -6,6 +6,7 @@ import * as DaemonService from "./daemonservice.js";
 import * as DoctorService from "./doctorservice.js";
 import * as LinearService from "./linearservice.js";
 import * as SSHService from "./sshservice.js";
+import * as TalkService from "./talkservice.js";
 import * as TermService from "./termservice.js";
 import * as UpdateService from "./updateservice.js";
 export {
@@ -14,6 +15,7 @@ export {
     DoctorService,
     LinearService,
     SSHService,
+    TalkService,
     TermService,
     UpdateService
 };
@@ -25,6 +27,7 @@ export type {
     DoctorReportDTO,
     DoctorResultDTO,
     GroupDTO,
+    ImageAttachment,
     InheritsDTO,
     LinearKeyStatusDTO,
     LinearOption,

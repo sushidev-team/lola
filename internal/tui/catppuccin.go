@@ -337,7 +337,13 @@ func toTokens(f flavor) map[string]string {
 	bare := []string{f.mantle, surface, f.surface0}
 	accent := visible(f.sky, bare...)
 	bad := readable(f.red, bare...)
-	faint := muted(f.faint(), bare...)
+	// Latte alone also walks to AA on canvas and panel, because 3:1 grey on its
+	// near-white reads as washed out rather than as quiet. Same as the app.
+	faintBase := f.faint()
+	if !f.dark {
+		faintBase = readable(faintBase, f.mantle, f.base)
+	}
+	faint := muted(faintBase, bare...)
 	fill := mix(accent, f.mantle, accentFill)
 	fillHover := mix(accent, backdrop(f), accentFill)
 	work := mix(f.blue, f.mantle, pillTintMix)
@@ -355,6 +361,7 @@ func toTokens(f flavor) map[string]string {
 		"--color-accent-fill-hover": fillHover,
 		"--color-on-accent":         onFill(f, accent),
 		"--color-ink":               f.text,
+		"--color-ink-2":             readable(f.subtext0, bare...),
 		"--color-faint":             faint,
 		"--color-placeholder":       readable(faint, f.mantle),
 		"--color-sel":               f.surface0,

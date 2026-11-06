@@ -8,22 +8,21 @@
   //
   // The answer is a secret. It lives in this component's `value` and nowhere else: not the
   // draft, not the view, not the history. The field clears on send, before the reply.
-  import { onMount } from "svelte";
+  import { onMount, type Snippet } from "svelte";
   import { ssh, sshClock } from "$lib/ssh.svelte";
   import { store } from "$lib/store.svelte";
   import { agentName, hostName, mmss, type SSHConnInfo, type SSHPromptInfo } from "$lib/ssh";
   import { toMillis } from "$lib/time";
   import Button from "../Button.svelte";
 
-  let { sessionId, conn, prompt }: { sessionId: string; conn: SSHConnInfo; prompt: SSHPromptInfo } = $props();
+  let { sessionId, conn, prompt, pager = undefined }: { sessionId: string; conn: SSHConnInfo; prompt: SSHPromptInfo; pager?: Snippet } = $props();
 
   const view = $derived(ssh.view(sessionId));
   const host = $derived(hostName(conn));
   const signIn = $derived(prompt.stage === "signin");
   const confirm = $derived(prompt.kind === "confirm");
   const busy = $derived(view.promptBusy === prompt.id);
-  // The header counts down for the connection on screen.
-  const left = $derived(signIn && conn.connectDeadline && view.active()?.id !== conn.id ? toMillis(conn.connectDeadline) - sshClock.now : NaN);
+  const left = $derived(signIn && conn.connectDeadline ? toMillis(conn.connectDeadline) - sshClock.now : NaN);
   const retry = $derived(!confirm && (prompt.attempt ?? 0) > 0);
   // The agent shares the host user with this shell, so a job it left running can write to the
   // terminal and read the answer. lola cannot tell, and the command named above may be the
@@ -67,14 +66,14 @@
   data-card="prompt"
   data-prompt-kind={prompt.kind}
   data-prompt-stage={prompt.stage}
-  class="ssh-fade-in grid grid-cols-[minmax(0,1fr)] gap-1.5 rounded-md border border-orange/40 bg-panel px-3 py-2"
+  class="ssh-fade-in grid grid-cols-[minmax(0,1fr)] gap-1.5 rounded-[10px] border border-orange bg-panel px-3 py-2"
 >
   <div class="flex min-w-0 items-baseline gap-2 text-sm text-faint">
     <span class="min-w-0 truncate">
       {#if signIn}Signing in to <span class="text-ink">{host}</span>{:else}<span class="text-ink">{host}</span> asks{#if prompt.command}<span class="font-mono">{" · "}{prompt.command}</span>{/if}{/if}
     </span>
     {#if !Number.isNaN(left)}<span class="num whitespace-nowrap">Gives up in {mmss(left)}</span>{/if}
-    <span class="ml-auto"><Button size="xs" class="h-5!" onclick={() => ssh.showTerminal(sessionId)}>Open terminal</Button></span>
+    <span class="ml-auto flex items-center gap-1">{#if pager}{@render pager()}{/if}<Button size="xs" class="h-5!" onclick={() => ssh.showHostTerminal(sessionId, conn.id)}>Open terminal</Button></span>
   </div>
 
   {#each prompt.context ?? [] as line, i (i)}

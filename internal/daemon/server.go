@@ -10,6 +10,7 @@ import (
 	"net"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"slices"
 	"time"
 
@@ -199,6 +200,9 @@ func (d *Daemon) handle(ctx context.Context, req protocol.Request) protocol.Resp
 		protocol.CmdSSHTerminal, protocol.CmdSSHTimeline, protocol.CmdSSHOutput, protocol.CmdSSHSay, protocol.CmdSSHAnswer, protocol.CmdSSHProposal,
 		protocol.CmdSSHRecall, protocol.CmdSSHResolve, protocol.CmdSSHWidgetStatus, protocol.CmdSSHPromptAnswer:
 		return d.handleSSH(ctx, req)
+	case protocol.CmdAgentFeed, protocol.CmdAgentFeedOutput, protocol.CmdTalkState, protocol.CmdAgentSay, protocol.CmdAgentStop,
+		protocol.CmdAgentChoose, protocol.CmdAgentQueueRelease, protocol.CmdEndedSessions:
+		return d.handleTalk(ctx, req)
 	case "kill":
 		data, err := d.handleKill(ctx, req.Session, req.Force, req.KeepWorktree)
 		if err != nil {
@@ -488,8 +492,17 @@ func (d *Daemon) handleHookEvent(req protocol.Request) protocol.Response {
 		unknownEvent  bool
 		statusChanged bool
 		newStatus     string
+		released      bool // a human prompt ended a Stop's hold on the queue
+		exited        bool // this hook is what told us the agent exited
+		// parkedOnPermission is a notification hook that just parked this session.
+		parkedOnPermission bool
+		// ownPrompt says this user_prompt is for something lola typed.
+		ownPrompt bool
 	)
 	now := time.Now()
+	if req.Event == "user_prompt" {
+		ownPrompt = d.talk.takeOwnPrompt(req.Session, now)
+	}
 	// The structured payload is optional: a pre-payload `lola hook` binary in a
 	// long-lived pane sends none, and every consumer below treats the zero
 	// value as "unknown". Message/Prompt are rendered agent/user text —
@@ -507,6 +520,7 @@ func (d *Daemon) handleHookEvent(req protocol.Request) protocol.Response {
 		if payload.TranscriptPath != "" {
 			sess.TranscriptPath = payload.TranscriptPath
 		}
+		appendSegment(sess, payload.AgentSessionID)
 		switch req.Event {
 		case "stop":
 			sess.SetAgentState(state.AgentIdle, "", now)
@@ -550,6 +564,7 @@ func (d *Daemon) handleHookEvent(req protocol.Request) protocol.Response {
 				sess.InputReason = reason
 				sess.AtPrompt = false // blocked on a human's approval: never send-keys
 				sess.AtPromptVerified = true
+				parkedOnPermission = reason == state.InputPermission
 			}
 			// Recorded for DISPLAY in both branches, and only AFTER the axis
 			// move: SetAgentState clears LastNotification whenever it leaves
@@ -557,7 +572,11 @@ func (d *Daemon) handleHookEvent(req protocol.Request) protocol.Response {
 			if payload.Message != "" {
 				sess.LastNotification = payload.Message
 			}
+		case "permission_request":
+			// No axis write: this hook is async and can land after the answer. The
+			// bounded pane read below decides, from the pane itself.
 		case "session_end":
+			exited = sess.AgentState != state.AgentExited && sess.AgentState != state.AgentDead
 			sess.SetAgentState(state.AgentExited, "", now)
 			sess.AtPrompt = false
 			sess.AtPromptVerified = true
@@ -590,6 +609,12 @@ func (d *Daemon) handleHookEvent(req protocol.Request) protocol.Response {
 			case state.AgentIdle, state.AgentWaitingInput, state.AgentStarting:
 				sess.SetAgentState(state.AgentWorking, state.SourceHook, now)
 			}
+			// Only a person's prompt is them speaking again. This hook fires for what lola
+			// typed too, and a CI reaction must not release words they held back.
+			if sess.QueueHeld && !ownPrompt {
+				sess.QueueHeld = false
+				released = true
+			}
 		default:
 			unknownEvent = true
 			return false
@@ -613,6 +638,31 @@ func (d *Daemon) handleHookEvent(req protocol.Request) protocol.Response {
 			d.logf("", "hookEvent: persist sessions: %v", err)
 		}
 	}
+	d.bumpHook(req.Session, req.Event)
+	switch req.Event {
+	case "user_prompt":
+		d.talk.noteTurnStart(req.Session, now)
+		if released {
+			// The human typed in the terminal, which is speaking again.
+			if store, err := d.sshStore(req.Session, false); err == nil && store != nil {
+				d.sshSyncPending(req.Session, store)
+			}
+		}
+	case "permission_request":
+		d.talkReadAsync(req.Session)
+	case "notification":
+		// This hook can land seconds after the dialog, answered or not, and it just parked the
+		// session. The pane decides whether that still stands.
+		if parkedOnPermission {
+			d.talkReadAsync(req.Session)
+		}
+	case "session_end":
+		if exited {
+			if s, ok := d.sessions.Get(req.Session); ok {
+				d.noteAgentExited(s)
+			}
+		}
+	}
 	if req.Event == "stop" {
 		d.flushHandoffsOnStop(req.Session)
 		d.captureLearningsAsync(req.Session)
@@ -625,6 +675,25 @@ func (d *Daemon) handleHookEvent(req protocol.Request) protocol.Response {
 		d.recordCheckpointAsync(req.Session, req.Event)
 	}
 	return ok
+}
+
+// segmentRe is a transcript's base name. Nothing else is ever kept: internal/agentfeed never
+// opens a path a hook handed over, and hookEvent is on the sandbox bridge.
+var segmentRe = regexp.MustCompile(`^[0-9a-f-]{36}\.jsonl$`)
+
+// maxSegments is the cap on Session.TranscriptSegments.
+const maxSegments = 32
+
+// appendSegment notes the transcript file this hook's conversation id names, once.
+func appendSegment(sess *session.Session, agentSession string) {
+	name := agentSession + ".jsonl"
+	if !segmentRe.MatchString(name) || slices.Contains(sess.TranscriptSegments, name) {
+		return
+	}
+	sess.TranscriptSegments = append(sess.TranscriptSegments, name)
+	if over := len(sess.TranscriptSegments) - maxSegments; over > 0 {
+		sess.TranscriptSegments = slices.Delete(sess.TranscriptSegments, 0, over)
+	}
 }
 
 // flushHandoffsOnStop delivers a deferred review hand-off the moment the worker

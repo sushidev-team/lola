@@ -120,6 +120,7 @@ func main() {
 			application.NewService(daemon),
 			application.NewService(term),
 			application.NewService(&SSHService{}),
+			application.NewService(&TalkService{}),
 			application.NewService(&ConfigService{}),
 			application.NewService(&DoctorService{}),
 			application.NewService(NewLinearService()),
@@ -346,6 +347,18 @@ func newSessionMenu(app *application.App, menu *application.Menu) {
 		SetAccelerator("CmdOrCtrl+t").
 		OnClick(ask(actionNewShell))
 	menu.AddSeparator()
+	// The session loop. Like the ssh chords below these must work from inside a focused
+	// terminal, which is why they are menu accelerators and not frontend keys.
+	menu.Add("Next Waiting").
+		SetAccelerator("CmdOrCtrl+j").
+		OnClick(ask(actionNext))
+	menu.Add("Stop This Turn").
+		SetAccelerator("CmdOrCtrl+.").
+		OnClick(ask(actionStop))
+	menu.Add("Show or Hide Changes").
+		SetAccelerator("CmdOrCtrl+Shift+d").
+		OnClick(ask(actionChanges))
+	menu.AddSeparator()
 	// Agent-assisted ssh. These live here because they must work from inside a
 	// focused terminal, where a bare key belongs to the shell, and AppKit delivers
 	// a menu accelerator before the web view sees it. Nothing here approves
@@ -496,6 +509,9 @@ const (
 	actionOpenPR   = "open-pr"
 	actionNewShell = "new-shell"
 	actionKill     = "kill"
+	actionNext     = "next"
+	actionStop     = "stop"
+	actionChanges  = "changes"
 
 	actionSSHNew      = "ssh-new"
 	actionSSHWheel    = "ssh-wheel"

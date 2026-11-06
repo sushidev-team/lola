@@ -175,6 +175,18 @@ type Session struct {
 	// hooks (Claude Code hands the JSONL path on every event).
 	TranscriptPath string `json:"transcript_path,omitempty"`
 
+	// TranscriptSegments are the base names of the transcript files this session's
+	// agent has written, oldest first and capped at 32. A resume or /clear starts a
+	// new file, and the conversation view reads across them. Only a base name is kept:
+	// internal/agentfeed never opens a path a hook handed over.
+	TranscriptSegments []string `json:"transcript_segments,omitempty"`
+	// StopHoldUntil holds every automated send after a human's Stop, so a CI reaction
+	// or a queued message cannot type the moment the pane rests.
+	StopHoldUntil time.Time `json:"stop_hold_until,omitzero"`
+	// QueueHeld keeps the human's queued text back after a Stop, until the human
+	// speaks again.
+	QueueHeld bool `json:"queue_held,omitempty"`
+
 	// AgentsTried records the coding-agent kinds this session has already run
 	// BEFORE the current one (oldest first) — the fallback loop guard: the
 	// chain never hands the session back to a kind that already ran (and, for

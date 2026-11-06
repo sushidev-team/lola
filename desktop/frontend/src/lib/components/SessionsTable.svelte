@@ -2,6 +2,7 @@
   import TimeAgo from "$lib/components/TimeAgo.svelte";
   import { store, scopedSessions } from "$lib/store.svelte";
   import { nav } from "$lib/nav.svelte";
+  import { stateGlyph } from "$lib/sessionview";
   import { sessionMenu } from "$lib/sessionmenu.svelte";
   import { triaged } from "$lib/filters";
   import AgentActivity from "./AgentActivity.svelte";
@@ -39,9 +40,8 @@
   //
   //   [glyph] ISSUE  Title / activity  Project  [#PR  Stage chip]  Age
   //
-  // The AGENT axis is an icon in the leading column (AgentGlyph): only a
-  // working agent moves, every other state is a distinct static shape, and the
-  // word lives in its tooltip. That column used to hold the selection caret and
+  // The AGENT axis is an icon in the leading column (AgentGlyph), in the same
+  // vocabulary as the roster, and the word lives in its tooltip. That column used to hold the selection caret and
   // an attention "!", but the selected row already has its band, and attention
   // now shows where it belongs — an orange glyph when the agent waits on you, a
   // red chip when the delivery regressed.
@@ -118,6 +118,7 @@
           <td class="px-2 py-1.5 align-middle">
             <div class="flex items-center justify-center">
               <AgentGlyph
+                glyph={stateGlyph(s, nav.seenAt(s.id))}
                 agentState={s.agentState}
                 inputReason={s.inputReason}
                 status={s.status}

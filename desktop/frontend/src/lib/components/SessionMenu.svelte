@@ -8,10 +8,11 @@
   import { devToggleTitle } from "$lib/devtoggle";
   import { nav } from "$lib/nav.svelte";
   import { terms, DIFF } from "$lib/terms.svelte";
-  import { sidePanel, CHECKPOINTS_TAB } from "$lib/sidepanel.svelte";
   import { bestOf } from "$lib/bestof.svelte";
   import { ssh } from "$lib/ssh.svelte";
-  import { isEnded, urgentConn } from "$lib/ssh";
+  import { deriveBrief, isEnded, urgentConn } from "$lib/ssh";
+  import { hasChip } from "$lib/board";
+  import { conversationOffered, hasReport } from "$lib/sessionview";
   import MenuItem from "./MenuItem.svelte";
 
   const req = $derived(sessionMenu.request);
@@ -45,29 +46,26 @@
     if (s) action(s);
   }
 
-  // Opens a worktree shell tab for the session. The shell tab lives in the
-  // detail SessionEmbed, which the grid lens doesn't render — leave the grid
-  // first (same move as opening a tile), then select so the new tab is visible.
+  // Everything here opens the session first: the Glance has no tabs, no composer and no panel, so
+  // acting on the selection would change something nobody can see.
   function addShell(s: SessionInfo) {
-    if (nav.lens === "grid") nav.setLens("list");
-    nav.select(s.id);
+    nav.openSession(s.id);
     terms.newShell(s.id, s.worktree);
   }
 
-  // Same move as addShell: the diff tab and the sidebar live in the detail embed,
-  // which the grid lens does not render.
   function openView(s: SessionInfo, tab: string) {
-    if (nav.lens === "grid") nav.setLens("list");
-    nav.select(s.id);
+    nav.openSession(s.id);
     terms.select(s.id, tab);
   }
 
-  // Checkpoints are a tab of the sidebar, not of the terminal strip.
-  function openCheckpoints(s: SessionInfo) {
-    if (nav.lens === "grid") nav.setLens("list");
-    nav.select(s.id);
-    sidePanel.show(CHECKPOINTS_TAB);
-  }
+  // Report lives on the story line, which only a conversation has. Offered only when there is one
+  // to open, or the click would land on nothing.
+  const reportable = $derived.by(() => {
+    if (!session || !conversationOffered(session)) return false;
+    return hasReport(hasChip(session.board), deriveBrief(ssh.view(session.id).items, Date.now()));
+  });
+  // The ⋯ of the open session, which is also where the preference behind opening one lives.
+  const openHere = $derived(!!session && nav.focusedTerm === session.id);
 </script>
 
 {#if req && session}
@@ -96,10 +94,10 @@
     </div>
     <MenuItem onclick={() => run(s => nav.openOverlay("rename-session",s.id))}>Rename session…</MenuItem>
     {#if session.location !== "ssh"}
-      <MenuItem icon="⌁" onclick={() => run((s) => ssh.connectHost(s.id))}>Connect to host…</MenuItem>
+      <MenuItem icon="⌁" onclick={() => run((s) => { nav.openSession(s.id); ssh.connectHost(s.id); })}>Connect to host…</MenuItem>
     {/if}
     {#if sshConn}
-      <MenuItem icon="⌁" onclick={() => run((s) => ssh.open(s.id, { conn: sshConn?.id }))}>Open SSH view</MenuItem>
+      <MenuItem icon="⌁" onclick={() => run((s) => ssh.open(s.id, { conn: sshConn?.id }))}>Open {sshConn.host}</MenuItem>
       {#if sshLive}
         <MenuItem onclick={() => run((s) => ssh.wheelKey(s))}>{sshConn.wheel === "human" ? "Hand back…" : "Take the wheel"}</MenuItem>
         <MenuItem onclick={() => run((s) => { if (sshConn) ssh.askClose(s.id, sshConn); })}>Close connection…</MenuItem>
@@ -115,19 +113,30 @@
       title={session.worktree ? "open a shell in the worktree" : "session has no worktree"}
       onclick={() => run((s) => addShell(s))}>Add shell</MenuItem
     >
+    {#if session.devActive}
+      {#each session.devUrls ?? [] as url (url)}
+        <MenuItem icon="↗" title="Open {url}" onclick={() => run(() => store.openURL(url))}>{url}</MenuItem>
+      {/each}
+    {/if}
     {#if session.location !== "ssh"}
     <MenuItem
       icon="±"
       disabled={!session.worktree}
       title={session.worktree ? "review the changes and send line comments to the agent" : "session has no worktree"}
-      onclick={() => run((s) => openView(s, DIFF))}>Review diff</MenuItem
+      onclick={() => run((s) => ssh.openChanges(s))}>Review diff</MenuItem
     >
     <MenuItem
       icon="↺"
       disabled={!session.worktree || !!session.location}
       title={session.worktree ? "per-turn snapshots — restore a bad turn or fork from one" : "session has no worktree"}
-      onclick={() => run((s) => openCheckpoints(s))}>Checkpoints</MenuItem
+      onclick={() => run((s) => ssh.openChanges(s, -1))}>Checkpoints</MenuItem
     >
+    {/if}
+    {#if session.worktree}
+      <MenuItem title={session.worktree} onclick={() => run((s) => store.openFolder(s.worktree))}>Open in Finder</MenuItem>
+    {/if}
+    {#if reportable}
+      <MenuItem title="The agent's own account of where it is. Its claim, not lola's." onclick={() => run((s) => ssh.showReport(s))}>Report</MenuItem>
     {/if}
     {#if session.devCommands?.length}
       <!-- The project's dev processes run in ONE session at a time, so this is a
@@ -186,6 +195,12 @@
           Switch to {kind}
         </MenuItem>
       {/each}
+    {/if}
+    {#if openHere}
+      <div class="my-1 h-px bg-edge/60"></div>
+      <div class="label px-2 pt-1 pb-1 text-faint">Open sessions in</div>
+      <MenuItem icon={terms.globalView === "conversation" ? "✓" : ""} aria-current={terms.globalView === "conversation" ? "true" : undefined} onclick={() => run(() => terms.setGlobalView("conversation"))}>Conversation</MenuItem>
+      <MenuItem icon={terms.globalView === "terminal" ? "✓" : ""} aria-current={terms.globalView === "terminal" ? "true" : undefined} onclick={() => run(() => terms.setGlobalView("terminal"))}>Terminal</MenuItem>
     {/if}
     <div class="my-1 h-px bg-edge/60"></div>
     <!-- Routes through the shared confirm dialog, same as the 'x' shortcut. -->

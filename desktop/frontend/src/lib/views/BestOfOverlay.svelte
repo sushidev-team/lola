@@ -11,7 +11,7 @@
   import { onDestroy } from "svelte";
   import { bestOf } from "$lib/bestof.svelte";
   import { store } from "$lib/store.svelte";
-  import { ALL_DISPLAYS, displayLabel, displayPill, deliveryLabel, deliveryText, type Display } from "$lib/theme";
+  import { ALL_DISPLAYS, displayLabel, displayPill, deliveryChipWord, deliveryText, type Display } from "$lib/theme";
   import Modal from "$lib/components/Modal.svelte";
   import Button from "$lib/components/Button.svelte";
 
@@ -103,7 +103,7 @@
                   onclick={() => store.openURL(a.prUrl ?? "")}>#{a.prNumber}</Button
                 >
                 {#if a.draft}<span class="text-faint">draft</span>{/if}
-                <span class={deliveryText(a.delivery)}>{deliveryLabel(a.delivery)}</span>
+                <span class={deliveryText(a.delivery)}>{deliveryChipWord(a.delivery)}</span>
               {:else}
                 <span class="text-faint">—</span>
               {/if}

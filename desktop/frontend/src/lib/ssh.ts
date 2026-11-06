@@ -41,6 +41,7 @@ export const SSH_BLOCK_STATUSES: string[] = [
 ];
 export const SSH_EVENT_KINDS: string[] = [
   "requested", "go", "denied", "connected", "disconnected", "failed", "wheel_taken", "handed_back", "grant_created", "grant_ended", "closed",
+  "session_started", "session_ended", "agent_exited", "stopped", "checkpoint", "pr", "ci", "review", "handoff",
 ];
 
 export const SSH_DATA_WARNING = "Everything the agent reads here is sent to its model provider.";
@@ -53,7 +54,7 @@ export const SSH_DROVE_NOTE = "Anything inside a nested shell, or a shell lola c
 export const SSH_ENDED_OUTLIVES = "The remote process may keep running if any were still going.";
 export const SSH_TRANSCRIPT_WARNING = "This text goes to the agent and its model provider. Remove anything you would not paste there.";
 
-export const SSH_MAX_SAY_BYTES = 8192;
+export const SSH_MAX_SAY_BYTES = 131072;
 export const SSH_MAX_HANDBACK_BYTES = 8192;
 export const SSH_MAX_POLL_BYTES = 262144;
 
@@ -121,6 +122,21 @@ export function tierTagClass(tier: string | undefined): string {
 /** The 2px band across the workspace and every card. "" means no band: dev has none. */
 export function tierBandClass(tier: string | undefined): string {
   return { production: "bg-bad/70", staging: "bg-warn/50", dev: "" }[tierOf(tier)];
+}
+
+/**
+ * The tier the band above the host bar shows: the host in scope, or under All the highest tier
+ * with a connection that is up or coming up. A host that has only asked is not live yet.
+ */
+export function bandTier(conns: readonly Pick<SSHConnInfo, "id" | "tier" | "state">[], scope: string): string | undefined {
+  const picked = conns.find((c) => c.id === scope);
+  if (picked) return picked.tier;
+  const live = conns.filter((c) => !isEnded(c) && c.state !== "requested");
+  for (const tier of ["production", "staging", "dev"] as const) {
+    const hit = live.find((c) => tierOf(c.tier) === tier);
+    if (hit) return hit.tier;
+  }
+  return "dev";
 }
 
 // --- numbers ----------------------------------------------------------------
@@ -1086,22 +1102,6 @@ export function connectsLine(c: Pick<SSHConnInfo, "alias" | "user" | "resolvedUs
   return { text: "Lola could not read this from your ssh config.", known: false };
 }
 
-// --- the split (section 3.1) ------------------------------------------------
-
-export const SPLIT_DEFAULT = 52;
-export const SPLIT_DRIVING = 38; // the stream's share while the terminal holds 62%
-export const NARROW_WIDTH = 980;
-const STREAM_MIN = 420;
-const TERMINAL_MIN = 360;
-
-/** The stream's share of the main pane, kept clear of both columns' minimums. */
-export function clampSplit(pct: number, width: number): number {
-  if (!width || width < NARROW_WIDTH) return Math.min(100, Math.max(0, pct));
-  const lo = (STREAM_MIN / width) * 100;
-  const hi = 100 - (TERMINAL_MIN / width) * 100;
-  return Math.min(hi, Math.max(lo, pct));
-}
-
 // --- the new-session flow (section 13) --------------------------------------
 
 export type HostRow = {
@@ -1211,13 +1211,26 @@ export function nextApprovalTarget(sessions: { id: string; ssh?: SSHSessionInfo 
 
 export type CalloutTone = "ok" | "note" | "warn" | "bad";
 
+/** One row of a conversation's label column. Only answerblocks.ts makes these. */
+export type LedgerRow = {
+  label: string;
+  text: string;
+  tone: "" | "warn" | "bad";
+  /** The label is too long for the column, so it sits above its text. */
+  stacked: boolean;
+  status?: "ok" | "warn" | "bad";
+  subs?: string[];
+};
+
 export type RichBlock =
   | { kind: "lead"; text: string }
   | { kind: "p"; text: string }
   | { kind: "heading"; text: string }
-  | { kind: "ul" | "ol"; items: string[] }
-  | { kind: "code"; text: string }
-  | { kind: "callout"; tone: CalloutTone; text: string }
+  | { kind: "ul" | "ol"; items: string[]; /** An item's indented children, by the item's index. */ subs?: Record<number, string[]> }
+  | { kind: "code"; text: string; /** What followed the opening fence. */ lang?: string }
+  | { kind: "callout"; tone: CalloutTone; text: string; /** The word it opened with, in a conversation. */ word?: string }
+  | { kind: "ledger"; rows: LedgerRow[] }
+  | { kind: "question"; text: string }
   | { kind: "table"; head: string[]; rows: string[][] }
   | { kind: "fold"; title: string; blocks: RichBlock[] };
 
@@ -1268,7 +1281,7 @@ function splitBlob(text: string): RichBlock[] | undefined {
   ];
 }
 
-function parseRich(lines: string[]): RichBlock[] {
+export function parseRich(lines: string[]): RichBlock[] {
   const out: RichBlock[] = [];
   let para: string[] = [];
   const flush = () => {
@@ -1277,11 +1290,12 @@ function parseRich(lines: string[]): RichBlock[] {
   };
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    if (/^\s*```/.test(line)) {
+    const fence = /^\s*```\s*(.*)$/.exec(line);
+    if (fence) {
       flush();
       const code: string[] = [];
-      for (i++; i < lines.length && !/^\s*```/.test(lines[i]); i++) code.push(lines[i]);
-      out.push({ kind: "code", text: code.join("\n") });
+      for (i++; i < lines.length && !/^\s*```\s*$/.test(lines[i]); i++) code.push(lines[i]);
+      out.push(fence[1] ? { kind: "code", text: code.join("\n"), lang: fence[1] } : { kind: "code", text: code.join("\n") });
       continue;
     }
     const fold = /^\s*\+\+\+\s*(.*)$/.exec(line);
@@ -1321,11 +1335,17 @@ function parseRich(lines: string[]): RichBlock[] {
       flush();
       out.push({ kind: "heading", text: heading[1] });
     } else if (bullet || numbered) {
+      // An indented item belongs to the item above it, whichever kind of list that is, or a nested
+      // bullet would end a numbered list and restart its count.
+      const hadPara = para.length > 0;
       flush();
       const kind = bullet ? "ul" : "ol";
       const last = out[out.length - 1];
       const item = (bullet ?? numbered)![1];
-      if (last?.kind === kind) last.items.push(item);
+      if (!hadPara && /^\s{2,}/.test(line) && (last?.kind === "ul" || last?.kind === "ol")) {
+        const at = last.items.length - 1;
+        last.subs = { ...last.subs, [at]: [...(last.subs?.[at] ?? []), item] };
+      } else if (last?.kind === kind) last.items.push(item);
       else out.push({ kind, items: [item] });
     } else if (!line.trim()) {
       flush();
@@ -1343,17 +1363,44 @@ export function itemStatus(item: string): { tone?: "ok" | "warn" | "bad"; text: 
   return m ? { tone: m[1].toLowerCase() as "ok" | "warn" | "bad", text: m[2] } : { text: item };
 }
 
-export type InlineSpan = { kind: "text" | "code" | "bold"; text: string };
+export type InlineSpan =
+  | { kind: "text" | "code" | "pr"; text: string }
+  | { kind: "bold" | "em"; text: string; /** Present only when the text holds markup of its own. */ spans?: InlineSpan[] }
+  | { kind: "link"; text: string; href: string };
 
-/** `code` and **bold** inside a line. Anything unmatched stays literal text. */
+// Each alternative of the bold's body starts on a different character, so a line with an unclosed
+// `**` and many code spans cannot backtrack its way into a freeze.
+const INLINE = new RegExp(
+  [
+    /`([^`\n]+)`/.source,
+    /\*\*((?:`[^`\n]+`|`(?![^`\n]*`)|[^*`\n]|\*(?!\*))+?)\*\*/.source,
+    /(?<![*\w])\*(?![\s*])([^*`\n]+?)(?<![\s*])\*(?![*\w])/.source,
+    /\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/.source,
+    /(?<![\w/#])(?<![Ii]mage )(?<!Bild )#\d{1,6}(?![\w-])/.source,
+  ].join("|"),
+  "g",
+);
+
+function nested(kind: "bold" | "em", text: string): InlineSpan {
+  const spans = inlineSpans(text);
+  return spans.length === 1 && spans[0].kind === "text" ? { kind, text } : { kind, text, spans };
+}
+
+/**
+ * `code`, **bold**, *em*, [links](http...) and #123 inside a line. Bold and em recurse, so code inside
+ * bold is code. Anything unmatched stays literal text, and a link that is not http(s) is not a link.
+ */
 export function inlineSpans(text: string): InlineSpan[] {
   const out: InlineSpan[] = [];
-  const re = /`([^`\n]+)`|\*\*([^*\n]+)\*\*/g;
+  const re = new RegExp(INLINE);
   let at = 0;
   for (let m = re.exec(text); m; m = re.exec(text)) {
     if (m.index > at) out.push({ kind: "text", text: text.slice(at, m.index) });
     if (m[1] !== undefined) out.push({ kind: "code", text: m[1] });
-    else out.push({ kind: "bold", text: m[2] });
+    else if (m[2] !== undefined) out.push(nested("bold", m[2]));
+    else if (m[3] !== undefined) out.push(nested("em", m[3]));
+    else if (m[4] !== undefined) out.push({ kind: "link", text: m[4], href: m[5] });
+    else out.push({ kind: "pr", text: m[0] });
     at = m.index + m[0].length;
   }
   if (at < text.length) out.push({ kind: "text", text: text.slice(at) });
@@ -1388,11 +1435,6 @@ export function runRoute(c: SSHConnInfo | undefined, agent: string): { inShell: 
 export function runPrompt(c: SSHConnInfo | undefined): string {
   if (!c) return "";
   return `${identity(c)}:${c.cwd || "~"}`;
-}
-
-/** Plain ↩ may not run on production: the wrong mode must not execute a sentence. */
-export function runNeedsChord(tier: string | undefined): boolean {
-  return tierOf(tier) === "production";
 }
 
 // --- widgets -----------------------------------------------------------------

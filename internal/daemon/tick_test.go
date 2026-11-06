@@ -71,6 +71,10 @@ func newTestDaemon(t *testing.T, cfg *config.Config, fake *linear.Fake, nat Nati
 	d.native = nat
 	d.runtimeHealth = func(string) error { return nil }
 	d.promptAttached = func(context.Context, string) (bool, error) { return false, nil }
+	// newDaemon wires these to the real tmux. Left in place, every proof in a test that
+	// injects only paneTail would ask the machine's own lola server about its pane.
+	d.paneCursor, d.paneVisible = nil, nil
+	d.sendKeysTyped = nil // the same reason: a test's sendKeys is the one way to type
 	return d
 }
 

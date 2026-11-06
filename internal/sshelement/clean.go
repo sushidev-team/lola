@@ -61,6 +61,22 @@ func Para(s string, n int) string {
 	return clipRunes(strings.TrimSpace(b.String()), n)
 }
 
+// Verbatim makes multi-line text safe to carry without reshaping it: sequences and unsafe
+// runes go and CR becomes a newline, while indentation, blank lines and tabs stay as written.
+// It is for what a person wrote, whose shape can matter. Text from anywhere else takes Para,
+// which also bounds it and collapses what an attacker could stretch.
+func Verbatim(s string) string {
+	s = stripSequences(s)
+	s = strings.ReplaceAll(s, "\r\n", "\n")
+	s = strings.ReplaceAll(s, "\r", "\n")
+	return strings.Map(func(r rune) rune {
+		if r != '\n' && r != '\t' && unsafeRune(r) {
+			return -1
+		}
+		return r
+	}, s)
+}
+
 // stripSequences removes ANSI escape sequences whole and maps invalid UTF-8 to
 // U+FFFD, with the same state machine the output path uses.
 func stripSequences(s string) string {

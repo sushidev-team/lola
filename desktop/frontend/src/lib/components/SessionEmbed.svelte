@@ -1,821 +1,250 @@
 <script lang="ts">
-  import { untrack } from "svelte";
-  import { flip } from "svelte/animate";
-  import { store } from "$lib/store.svelte";
-  import { devToggleTitle } from "$lib/devtoggle";
-  import { nav } from "$lib/nav.svelte";
-  import { terms, AGENT, DIFF, CHECKPOINTS, SSH, isViewTab } from "$lib/terms.svelte";
-  import { connView, isEnded, sshTabs } from "$lib/ssh";
-  import { ssh } from "$lib/ssh.svelte";
-  import SSHWorkspace from "./ssh/SSHWorkspace.svelte";
-  import { sidePanel } from "$lib/sidepanel.svelte";
-  import { checkpoints } from "$lib/checkpoints.svelte";
-  import { feedback } from "$lib/feedback.svelte";
-  import { devUrlLabel, MAX_URL_CHIPS } from "$lib/devurl";
-  import UsageMark from "./UsageMark.svelte";
-  import LiveTerminal from "./LiveTerminal.svelte";
-  import DiffView from "./DiffView.svelte";
-  import CheckpointsView from "./CheckpointsView.svelte";
-  import Button from "./Button.svelte";
-  import MenuItem from "./MenuItem.svelte";
-  import DevClashBanner from "./DevClashBanner.svelte";
-  import PrBadge from "./PrBadge.svelte";
-  import { appLabel, appState, appPr } from "$lib/stackapps";
-  import SidePanel from "./SidePanel.svelte";
-
-  // `focused` = the expanded full-cockpit view ("minimize" toggle); otherwise the
-  // compact detail panel. The two used to differ in terminal font size as well —
-  // they no longer do, because the size is half of a matched metric set (see
-  // TERM_FONT). Focus changes how much room the terminal gets, not how big its
-  // type is, which is also how Ghostty behaves.
+  // The open session, under the top bar: the strip, then one grid cell that holds whichever view is
+  // on show, then the footer strip. Always mounted, with `sessionId` possibly empty, because this
+  // component's template must never flip a branch with a terminal inside it. Enter and Esc change
+  // sessionId every time, so TerminalCell and Workspace are always rendered and each holds its own
+  // {#if}{#key} (see both, and CockpitLayout.svelte for what the freeze was).
   //
-  // Takes the session ID (a plain nav value) and resolves the session from the
-  // store HERE rather than receiving the resolved object as a prop: the Cockpit
-  // view container does not re-render on the async daemon push in the production
-  // WKWebView, so a `store.sessionById(...)` computed up there stays frozen at
-  // undefined ("select a session" forever). A leaf component's own read reacts.
-  // See WKWEBVIEW_REACTIVITY in Cockpit.svelte.
-  let { sessionId, focused = false }: { sessionId: string; focused?: boolean } = $props();
-  const session = $derived(sessionId ? store.sessionById(sessionId) : undefined);
+  // Takes the session ID (a plain nav value) and resolves the session from the store HERE rather
+  // than receiving the resolved object as a prop: the Cockpit view container does not re-render on
+  // the async daemon push in the production WKWebView. A leaf component's own read reacts. See
+  // WKWEBVIEW_REACTIVITY in Cockpit.svelte.
+  //
+  // No `isolate` or `z-0` around the terminal: wrapping the canvas in its own stacking context made
+  // WKWebView paint the wrapper's opaque background over it. The dock's `isolate` is inside
+  // Workspace, and TerminalCell is its sibling, outside it.
+  import { tick, untrack } from "svelte";
+  import { store } from "$lib/store.svelte";
+  import { nav } from "$lib/nav.svelte";
+  import { terms, AGENT, SSH, isChangesTab, isViewTab } from "$lib/terms.svelte";
+  import { ssh } from "$lib/ssh.svelte";
+  import { talk } from "$lib/talk.svelte";
+  import { changes } from "$lib/changes.svelte";
+  import { changesOffered, conversationOffered, feedKnownFrom, stripCells, stripShown } from "$lib/sessionview";
+  import ChangesView from "./session/ChangesView.svelte";
+  import EndedView from "./session/EndedView.svelte";
+  import DevClashBanner from "./DevClashBanner.svelte";
+  import Button from "./Button.svelte";
+  import TerminalCell from "./session/TerminalCell.svelte";
+  import Workspace from "./session/Workspace.svelte";
+  import ViewStrip from "./session/ViewStrip.svelte";
+  import SessionFooter from "./session/SessionFooter.svelte";
+  import SessionBar from "./session/SessionBar.svelte";
 
-  // Terminal tabs. Every session shows its agent pane; any number of shell tabs
-  // can be opened (each a real tmux session in the worktree — see $lib/terms). The
-  // bar hides when there are no shells AND the panel is compact: nothing to switch,
-  // so no chrome. Focus (the big/fullscreen view) always shows it, so a shell is
-  // reachable there without the "s" shortcut.
-  const shells = $derived(session ? terms.shellsFor(session.id) : []);
-  async function terminalExited(id: string, name: string, temporary: boolean, shellTab: boolean) {
-    if (shellTab) terms.shellExited(id, name);
+  let { sessionId = "" }: { sessionId?: string } = $props();
+  const session = $derived(sessionId ? store.sessionById(sessionId) : undefined);
+  // Open fills <main>, and otherwise this is the band under the list: the same view, shorter. The
+  // two differ in three things. The band draws its own title row, since the top bar names the list;
+  // the row's button expands where the open one goes back; and the band takes the keyboard only
+  // when someone clicks into it, or j and k would type into whichever session they walk past.
+  const open = $derived(!!sessionId && nav.focusedTerm === sessionId);
+  const id = $derived(session?.id ?? "");
+
+  const shells = $derived(id ? terms.shellsFor(id) : []);
+  const activeTab = $derived(id ? terms.activeTab(id) : AGENT);
+  const view = $derived(ssh.view(id));
+  const offered = $derived(!!session && conversationOffered(session));
+  const onHostShell = $derived(activeTab === SSH && view.narrow === "terminal");
+  const onConversation = $derived(activeTab === SSH && view.narrow !== "terminal");
+  const onChanges = $derived(isChangesTab(activeTab));
+
+  const strip = $derived(!!session && stripShown(session, stripCells(session, shells).machines.length));
+
+  // Attached only while on screen. Home and the project views are an opaque overlay on a mounted
+  // cockpit, and a terminal left attached under one would defer every automated send.
+  const onScreen = $derived(nav.view === "cockpit");
+  const agentPane = $derived(session?.tmuxName ?? "");
+  const terminalName = $derived(!session || isViewTab(activeTab) || !onScreen ? "" : activeTab === AGENT ? agentPane : activeTab);
+  const activeIsShell = $derived(activeTab !== AGENT && !isViewTab(activeTab));
+  const covered = $derived(activeTab !== SSH);
+  const noPane = $derived(!!session && activeTab === AGENT && !agentPane);
+
+  async function terminalExited(sid: string, name: string, temporary: boolean, shellTab: boolean) {
+    if (shellTab) terms.shellExited(sid, name);
     if (!temporary) return;
-    const removed = await store.closeExitedTemporary(id);
+    const removed = await store.closeExitedTemporary(sid);
     if (removed) {
       // The user may have moved elsewhere while the liveness check ran.
-      if (nav.focusedTerm === id || (!nav.focusedTerm && nav.selectedId === id)) {
+      if (nav.focusedTerm === sid || (!nav.focusedTerm && nav.selectedId === sid)) {
         nav.goCockpit(nav.scoped ? nav.project : "");
         nav.select("");
       }
     } else {
-      await terms.refresh(id);
-      const remaining = terms.shellsFor(id);
-      if (!shellTab && remaining.length && terms.activeTab(id) === AGENT) terms.select(id, remaining[0]);
+      await terms.refresh(sid);
+      const remaining = terms.shellsFor(sid);
+      if (!shellTab && remaining.length && terms.activeTab(sid) === AGENT) terms.select(sid, remaining[0]);
     }
   }
-  // A view tab (diff, checkpoints) keeps the bar up too: it was reached by a key,
-  // the menu or a sidebar row, and the way back to the agent must be on screen.
-  // A connection keeps the bar up too: the workspace is reached from here, and it is
-  // where a request that just arrived is waiting. A direct SSH session has no
-  // checkout, so its strip has no Diff.
-  const sshConns = $derived(session?.ssh?.connections ?? []);
-  const sshStrip = $derived(sshTabs(sshConns));
-  const hasSSH = $derived(sshStrip.length > 0);
-  const sshOn = $derived(ssh.view(sessionId).active()?.id ?? "");
-  // The selection can outlive the tab: a daemon that reports no connections, or one
-  // that ended and was closed. Never show a view whose tab is not on the strip, because
-  // nothing there could close it or say why it is open.
-  const pickedActive = $derived(session ? terms.activeTab(session.id) : AGENT);
-  const activeTab = $derived(pickedActive === SSH && !hasSSH ? AGENT : pickedActive);
-  const directSSH = $derived(session?.location === "ssh");
-  const showTabs = $derived(!!session && (shells.length > 0 || focused || hasSSH || isViewTab(activeTab)));
 
-  // The tmux name the LiveTerminal attaches to for the active tab. Keying the
-  // terminal on this (below) swaps agent ⇄ shell by re-attaching — the same
-  // proven remount the selection change already does, never a live DOM toggle. A
-  // shell tab IS its tmux name; the agent tab resolves to the session's pane.
-  const activeName = $derived(
-    !session || isViewTab(activeTab) ? "" : activeTab === AGENT ? session.tmuxName : activeTab,
-  );
-  const activeIsShell = $derived(activeTab !== AGENT && !isViewTab(activeTab));
-  const draftCount = $derived(session ? feedback.count(session.id) : 0);
-
-  // Picking a tab BY HAND focuses the terminal it selects, so typing lands in the
-  // agent's input immediately — clicking "agent" while a shell tab was open used
-  // to leave the pane unfocused, and the keystrokes went to the global handler
-  // instead (an innocent "s" opened another shell).
-  //
-  // It cannot simply be `autofocus` unconditionally: <LiveTerminal> is keyed on
-  // activeName, so it ALSO remounts when the selection moves, and focusing there
-  // would trap j/k inside the terminal the moment the list scrolled. So the intent
-  // is recorded on click and consumed by the next mount. Reset whenever the
-  // session changes, so a stale click can never focus a terminal the user arrived
-  // at with the keyboard.
-  let pickedTab = $state(false);
-  function selectTab(id: string, tab: string) {
-    pickedTab = true;
-    terms.select(id, tab);
-  }
+  // Pinned once per open: an answer about the log that arrives after paint must not flip a view
+  // someone is reading. See terms.arrive.
   $effect(() => {
-    sessionId; // re-run on selection change
-    pickedTab = false;
+    const sid = id;
+    if (!sid) return;
+    untrack(() => terms.arrive(sid, feedKnownFrom(talk.state(sid)?.health)));
   });
 
-  // Drag-to-sort for the shell tabs. Pointer events, not HTML5 drag-and-drop:
-  // the draggable thing is a <button>, which WebKit refuses to start a native
-  // drag from without a `-webkit-user-drag` override, and the native drag image
-  // paints badly over the WebGL terminal canvas in the production WKWebView.
-  //
-  // The pointer is captured only AFTER it has travelled past `dragSlop`, so an
-  // ordinary click still reaches the label button — a captured pointerup
-  // retargets the following click to the capturing element, which would swallow
-  // the tab selection. Same reason the drop is applied live during the move:
-  // there is no drag image to place, only the row reordering under the cursor.
-  const dragSlop = 5; // px before a press becomes a drag rather than a click
-  const flipMs = 140; // tab travel time; also how long a swap is locked (see below)
-  let tabEls = $state<(HTMLElement | undefined)[]>([]);
-  let dragging = $state(-1); // index being dragged, -1 = none (drives the ghost)
-  let dragFrom = -1;
-  let dragX = 0;
-  let swapLock = false;
-
-  // The tab whose half the pointer is left of — i.e. where the dragged chip
-  // would land. Falls through to the last tab when the pointer is past them all.
-  function tabIndexAt(x: number, count: number): number {
-    for (let i = 0; i < count; i++) {
-      const r = tabEls[i]?.getBoundingClientRect();
-      if (r && x < r.left + r.width / 2) return i;
-    }
-    return count - 1;
-  }
-
-  function dragStart(i: number, e: PointerEvent) {
-    if (e.button !== 0 || tabMenu) return; // left button only, and never behind an open popover
-    dragFrom = i;
-    dragX = e.clientX;
-  }
-
-  function dragMove(id: string, e: PointerEvent) {
-    if (dragFrom < 0) return;
-    if (dragging < 0) {
-      if (Math.abs(e.clientX - dragX) < dragSlop) return;
-      dragging = dragFrom;
-      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-    }
-    // A swap is locked for the length of the FLIP animation. The tabs travel to
-    // their new slots on a transform, so `getBoundingClientRect` reports where
-    // they are MID-FLIGHT — re-reading it immediately puts the pointer back over
-    // the neighbour's old half and swaps the pair straight back, forever. Waiting
-    // out the animation reads the settled layout instead.
-    if (swapLock) return;
-    const to = tabIndexAt(e.clientX, shells.length);
-    if (to === dragFrom) return;
-    terms.moveTab(id, dragFrom, to);
-    dragFrom = to;
-    dragging = to;
-    swapLock = true;
-    setTimeout(() => (swapLock = false), flipMs);
-  }
-
-  function dragEnd(e: PointerEvent) {
-    const el = e.currentTarget as HTMLElement;
-    if (el.hasPointerCapture?.(e.pointerId)) el.releasePointerCapture(e.pointerId);
-    dragFrom = -1;
-    dragging = -1;
-    swapLock = false;
-  }
-
-  // The tab's right-click menu (rename / close). Local state rather than a
-  // request pushed into sessionmenu.svelte.ts, because that store exists to give
-  // MANY session surfaces the same items — this menu acts on a tab, which only
-  // exists here. It borrows the same shape: a backdrop that swallows the next
-  // click, and a clamp so a tab near the window edge doesn't open off-screen.
-  // The popover has two faces: the menu (rename / close) and the rename FORM.
-  // Renaming used to happen in the tab itself, and a tab is the wrong size for a
-  // text field — the chip is sized to a two-word label, so the name being typed
-  // scrolled out of its own box. Reusing the popover gives the field real room
-  // without introducing a modal for a two-word edit.
-  type TabMenu = { tab: string; x: number; y: number; mode: "menu" | "rename" };
-  let tabMenu = $state<TabMenu | null>(null);
-  let menuEl = $state<HTMLElement | null>(null);
-  let renameEl = $state<HTMLInputElement | null>(null);
-  let renameText = $state("");
-
-  // Clamp into the viewport once the popover has a measurable size, so a tab near
-  // the window edge doesn't open off-screen. Re-runs when the mode flips, because
-  // the rename form is the wider of the two faces.
+  // Pinned for this open only. Leaving unpins what nobody chose, so the next open lands by what is
+  // known by then, and a log that could not be read is the terminal's.
   $effect(() => {
-    const m = tabMenu;
-    const node = menuEl;
-    if (!m || !node) return;
-    const { width, height } = node.getBoundingClientRect();
-    node.style.left = `${Math.max(4, Math.min(m.x, window.innerWidth - width - 4))}px`;
-    node.style.top = `${Math.max(4, Math.min(m.y, window.innerHeight - height - 4))}px`;
+    const sid = id;
+    if (sid) return () => untrack(() => terms.leave(sid));
+  });
+  const feedHealth = $derived(id ? talk.state(id)?.health : undefined);
+  $effect(() => {
+    const health = feedHealth;
+    const agent = session?.agent;
+    untrack(() => terms.noteFeedHealth(agent, health));
   });
 
-  // Focus + select on open, so typing replaces the current name and Enter alone
-  // confirms it. `select()` rather than a bare focus: the field is pre-filled
-  // precisely so clearing it is possible, and a caret at the end hides that.
+  // What the footer's Stop and the strip read. Two views of a session share one poll.
   $effect(() => {
-    if (tabMenu?.mode === "rename") renameEl?.select();
+    if (id) return talk.poll(id);
   });
 
-  function openTabMenu(tab: string, e: MouseEvent) {
-    e.preventDefault(); // suppress WebKit's own menu
-    e.stopPropagation(); // ...and the session menu the surface behind would open
-    tabMenu = { tab, x: e.clientX, y: e.clientY, mode: "menu" };
-  }
-
-  // The rename form is pre-filled with the label the tab currently shows, which
-  // is what makes emptying the field the way back to the default "Shell N"
-  // (terms.rename reads blank as "forget this name").
-  //
-  // The global shortcut handler already ignores keystrokes aimed at an <input>
-  // (App.svelte's `typing`), so an "s" typed into a tab name cannot open a shell.
-  function startRename(id: string, tab: string, at?: MouseEvent) {
-    renameText = terms.labelFor(id, tab);
-    tabMenu = { tab, x: at ? at.clientX : (tabMenu?.x ?? 0), y: at ? at.clientY : (tabMenu?.y ?? 0), mode: "rename" };
-  }
-
-  function commitRename(id: string) {
-    const tab = tabMenu?.tab;
-    tabMenu = null;
-    if (tab) terms.rename(id, tab, renameText);
-  }
-
-  // Discover this session's shell tabs from the tmux server on selection, then
-  // poll so a shell opened in the TUI (or another window) appears here within a
-  // few seconds — the two surfaces attach to the same tmux sessions.
+  // Discover this session's terminals from the tmux server, then poll, so one opened in the TUI
+  // appears here within a few seconds. The two surfaces attach to the same tmux sessions.
   $effect(() => {
-    const id = session?.id;
-    if (!id) return;
-    terms.refresh(id);
-    const poll = setInterval(() => terms.refresh(id), 4000);
+    const sid = id;
+    if (!sid) return;
+    terms.refresh(sid);
+    const poll = setInterval(() => terms.refresh(sid), 4000);
     return () => clearInterval(poll);
   });
 
-  // The sidebar (SidePanel): the agent's report and the turn checkpoints, each a
-  // tab of it. It is ALWAYS available — gating it on content made the toggle
-  // vanish exactly when something was wrong (a session whose hooks cannot reach
-  // the daemon reports nothing and records no checkpoints) — and the icon
-  // toggle beside Focus hides it for every session at once ($lib/sidepanel).
-  const sessionKey = $derived(session?.id ?? "");
-  const hasWorktree = $derived(!!session?.worktree);
-  // A turn ending is what records a checkpoint, and it shows up as the agent
-  // axis moving — reload the list on that, not on every daemon push.
-  const agentState = $derived(session?.agentState ?? "");
+  // Being here is what seeing a finished turn means, so the roster's ● goes when it arrives.
+  const stateSince = $derived(session?.agentStateSince);
   $effect(() => {
-    const id = sessionKey;
-    agentState;
-    if (id && hasWorktree) untrack(() => void checkpoints.load(id));
+    const sid = id;
+    stateSince;
+    if (sid) untrack(() => nav.markSeen(sid));
   });
-  // Hidden on the SSH tab: the Brief covers the agent's account there, and three
-  // columns of reading is one too many.
-  const showSide = $derived(!sidePanel.hidden && activeTab !== SSH);
 
-  const canRevive = $derived(session && (session.status === "dead" || session.status === "session_ended"));
+  // The strip's `Changes +84 −12`, once on arrival and once each time the agent comes to rest. On
+  // Changes itself the diff that is already loading reports the same figure.
+  const agentState = $derived(session?.agentState ?? "");
+  const diffable = $derived(!!session && changesOffered(session));
+  $effect(() => {
+    const sid = id;
+    agentState;
+    if (sid && diffable && !onChanges && store.alive) untrack(() => void changes.load(sid));
+  });
+
+  // A session that left the list while open: merged and cleaned up, usually. Its record was
+  // written before it left, so asking now is what lands on its story and not on an empty column.
+  const missing = $derived(!!sessionId && !session);
+  const endedRecord = $derived(missing ? talk.ended(sessionId) : undefined);
+  $effect(() => {
+    if (missing) untrack(() => void talk.loadEnded());
+  });
+  // An id the store has never listed has not arrived yet, usually: a new session is opened before
+  // the refresh that lists it lands. "No longer running" would be false for that round trip, so it
+  // takes having been seen, or a wait long enough that it is not on its way.
+  const ARRIVAL_MS = 3000;
+  let seenHere = $state("");
+  let waitedFor = $state("");
+  $effect(() => {
+    if (session) seenHere = session.id;
+  });
+  $effect(() => {
+    const sid = sessionId;
+    if (!missing || !sid) return;
+    const t = setTimeout(() => (waitedFor = sid), ARRIVAL_MS);
+    return () => clearTimeout(t);
+  });
+  const gone = $derived(missing && (seenHere === sessionId || waitedFor === sessionId || !store.alive));
+
+  // Focus on arrival: the composer in the conversation. A terminal takes the keyboard by mounting,
+  // and Overview takes nothing. A jump that already chose a card says so through holdArrival.
+  $effect(() => {
+    const sid = id;
+    const here = onConversation;
+    if (!sid || !here || !open) return;
+    untrack(() => {
+      const v = ssh.view(sid);
+      if (v.holdArrival) v.holdArrival = false;
+      else v.composerFocus++;
+    });
+  });
+  // Enter on a band showing its terminal: nothing mounts, so the keyboard has to be asked for.
+  $effect(() => {
+    if (open && terminalName) untrack(() => terms.focusTerminal(id));
+  });
+  // A request made on a session already on its conversation has no arrival to hold back. Left
+  // set, it would swallow the next real one, and a person's first words would fire bare keys. So
+  // it lasts for the flush it was made in, which is when an arrival it did belong to has run.
+  $effect(() => {
+    const v = view;
+    if (v.holdArrival) void tick().then(() => (v.holdArrival = false));
+  });
+
+  const leave = () => {
+    if (session) ssh.leaveTerminal(session);
+  };
 </script>
 
-{#if !session}
-  <!-- The glyph is decoration and must read as decoration: at the same text-xl as
-       the sentence under it, it parsed as a typo in the first line rather than an
-       icon above it. Scaled up and quietened with a colour (`edge`), not opacity —
-       faint at 40% lands near 1.3:1 on the light flavor. -->
-  <div class="flex h-full flex-col items-center justify-center gap-1 text-faint">
-    <div class="hero-glyph text-edge" aria-hidden="true">⌘</div>
-    <div class="mt-2 text-xl">select a session</div>
-    <div class="text-sm">its live agent terminal shows here</div>
-  </div>
-{:else}
-  <!-- z-10 header keeps the chrome above the WebGL terminal canvas. The terminal
-       wrapper stays in normal flow (NO `isolate` on the root, NO `z-0` on the
-       wrapper): wrapping the canvas in its own `isolate`+`z-0` stacking context made
-       WKWebView paint the wrapper's opaque `bg-panel` over it — a blank terminal. -->
-  <div class="flex h-full min-h-0 flex-col">
-    <!-- header — z-10 keeps the minimize/focus button above the canvas layer. -->
-    <div class="relative z-10 flex flex-wrap items-center gap-2 border-b border-edge/60 px-3 py-2">
-      <!-- Identity, then the ONE thing this row can say that the list above
-           cannot, then the actions. Everything that used to sit between them —
-           project name, live pulse, status pill, the interpreter's headline, the
-           current tool, the PR-stale warning, the branch — is already carried by
-           the row this session is selected FROM (SessionsTable's AgentActivity
-           column holds the pulse and the headline, its own cells hold the
-           project and the status), so repeating it here bought nothing and cost
-           the width that made the header wrap. -->
-      {#if !session.location}<span class="selectable font-medium text-accent-ink">{session.issue || session.id.slice(0, 8)}</span>{/if}
-      <button class="selectable truncate text-left text-ink hover:underline" title="Rename session" onclick={() => nav.openOverlay("rename-session",session.id)}>{session.title || "Session"}</button>
-      {#if session.location}<span class="rounded bg-pill-grey px-1.5 py-0.5 text-sm text-pill-grey-fg" title={session.worktree}>{session.location === "main" ? "Main checkout" : session.location === "ssh" ? "SSH" : "Temporary"}</span>{/if}
-      {#if session.status !== "shell"}
-        <span class="inline-flex items-center whitespace-nowrap rounded bg-pill-grey px-1.5 py-[1px] text-sm text-pill-grey-fg">
-          {(session.agent || "claude").toLowerCase()}
-        </span>
-      {/if}
-      <!-- [[project]].sandbox: the agent runs in a container that sees only its
-           worktree. Worth one chip — it changes what the agent could have
-           touched, which is the first question about anything it did. -->
-      {#if session.sandbox}
-        <span
-          class="inline-flex items-center whitespace-nowrap rounded bg-pill-grey px-1.5 py-[1px] text-sm text-pill-grey-fg"
-          title="sandboxed: the agent runs in a {session.sandbox} container that can write only its worktree"
-        >
-          {session.sandbox}
-        </span>
-      {/if}
-      <!-- Token usage (internal/usage): every claude run in this worktree — the
-           worker, its subagents, the review passes. Absent when lola cannot read
-           the agent's logs. -->
-      {#if session.usage}
-        <UsageMark usage={session.usage} class="text-sm text-faint" />
-      {/if}
-      <!-- The dev server's own address, scraped from its pane by the daemon
-           (internal/devurl). It is here rather than in the terminal because the
-           port MOVES — 8000 taken means 8001 — so the one place it is written is
-           a line that scrolled away minutes ago, and finding it again is the
-           manual step this removes. Opening goes through the daemon, which
-           refuses anything that is not http(s): the address came out of terminal
-           text, which is untrusted. -->
-      {#if session.devActive && session.devUrls?.length}
-        {#each session.devUrls.slice(0, MAX_URL_CHIPS) as url (url)}
-          <Button size="xs" class="font-mono!" title={`open ${url}`} onclick={() => store.openURL(url)}>
-            <span aria-hidden="true">↗</span>
-            {devUrlLabel(url)}
-          </Button>
-        {/each}
-      {/if}
-      <!-- The session's actions live HERE, not in a band under the terminal. That
-           band cost a horizontal rule and a row of height at the bottom of the
-           window to hold four buttons that belong to the session named on this
-           line — and it stopped the terminal short of the window's edge, which is
-           the one thing the region is for. -->
-      <span class="ml-auto flex items-center gap-1.5">
-        <!-- In the header rather than the tab strip: the strip is hidden until a
-             session has more than one tab, and this has to be findable before then. -->
-        <Button size="xs" aria-label="Open a new SSH tab" title="Open a new SSH tab on a host" onclick={() => ssh.connectHost(session.id)}>SSH</Button>
-        {#if session.worktree}
-          <Button icon size="xs" aria-label="Open session folder in Finder" title={`Open in Finder · ${session.worktree}`} onclick={() => store.openFolder(session.worktree)}>
-            <svg class="size-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <path d="M3 19V6a2 2 0 0 1 2-2h4l3 3h1" />
-              <path d="m3 19 3-8h16l-3 8H3Z" />
-              <path d="m16 8 5-5m-5 0h5v5" />
-            </svg>
-          </Button>
-        {/if}
-        {#if session.devCommands?.length}
-          <!-- The project's dev processes live in ONE session at a time, so this
-               is a segmented-style toggle rather than an action: selected means
-               THIS session is running them, and switching it on takes them off
-               whichever session had them.
-
-               It is also the slowest control on this row — the daemon stops the
-               other session's tabs and reclaims any port still held in the
-               project's worktrees before it answers — so it spends the wait as a
-               spinner in place of its state dot. Without one the click reads as
-               a no-op for a second or more, and the honest fix is to show the
-               work, not to answer before it is done. -->
-          <Button
-            size="xs"
-            selected={session.devActive}
-            loading={store.devPending[session.id]}
-            title={devToggleTitle(session)}
-            onclick={() => store.dev(session.id, !session.devActive)}
-          >
-            {#if !store.devPending[session.id]}<span aria-hidden="true">{session.devActive ? "●" : "○"}</span>{/if}
-            Active
-          </Button>
-        {/if}
-        <!-- A stack session's PRs are in the app strip below, one per app;
-             a single "Open PR" here would open only one of them. -->
-        {#if session.prNumber > 0 && !session.stack}
-          <Button size="xs" onclick={() => store.openURL(session.prUrl)}>Open PR <span aria-hidden="true">↗</span></Button>
-        {/if}
-        {#if !directSSH}<Button size="xs" onclick={() => store.review(session.id)}>Review</Button>{/if}
-        {#if canRevive}
-          <Button variant="accent" size="xs" onclick={() => store.revive(session.id)} title={session.location ? "Reopen this directory; stopped agents start a new conversation" : "Resume the session"}>{session.location ? "Reopen" : "Revive"}</Button>
-        {/if}
-        <!-- Opens the shared confirm dialog (App.svelte) rather than an inline
-             yes/no, so the 'x' shortcut and this button confirm the same way. -->
-        <!-- Icon-only, and the ONE control on this row that is: a skull needs no
-             label to read as "ends the session", and the glyph keeps the most
-             destructive button from wearing the same width as Review beside it.
-             `title` + `aria-label` carry the name the text no longer does.
-
-             DRAWN, not typed. The character U+2620 is text-default but no UI font
-             on macOS carries it, so WebKit falls back to Apple Color Emoji and
-             paints its own multi-colour art at 12px — an unreadable speck that no
-             font size fixed, because the problem was the fallback rather than the
-             scale. An inline path is the app's own icon language (see the sidebar
-             chevron), inherits `currentColor` so the danger red arrives on hover,
-             and renders identically in Chrome and WKWebView.
-
-             The eyes and nose are SUBPATHS of the one path with `fill-rule
-             ="evenodd"`, i.e. true cutouts — filling them with the panel colour
-             would show that colour instead of the `bg-bad/15` chip the moment the
-             button is hovered. -->
-        <Button
-          variant="danger"
-          size="xs"
-          icon
-          title="kill session"
-          aria-label="Kill session"
-          onclick={() => store.askKill(session.id)}
-        >
-          <svg viewBox="0 0 24 24" class="h-4.5 w-4.5 shrink-0" fill="currentColor" fill-rule="evenodd" aria-hidden="true">
-            <path
-              d="M12 2c-4.8 0-8.5 3.4-8.5 7.9 0 2.5 1 4.2 2.3 5.3.4.3.5.6.5 1v1.3A2.5 2.5 0 0 0 8.8 21H9v-2.1h1.8V21h2.4v-2.1H15V21h.2a2.5 2.5 0 0 0 2.5-2.5v-1.3c0-.4.1-.7.5-1 1.3-1.1 2.3-2.8 2.3-5.3C20.5 5.4 16.8 2 12 2Zm-3.1 6.2a2.7 2.7 0 1 1 0 5.4 2.7 2.7 0 0 1 0-5.4Zm6.2 0a2.7 2.7 0 1 1 0 5.4 2.7 2.7 0 0 1 0-5.4ZM12 13.6l1.3 2.5h-2.6L12 13.6Z"
-            />
-          </svg>
-        </Button>
-        <!-- A rule, not a gap: everything left of it ACTS on the session (text
-             buttons), everything right of it only changes the LAYOUT (an icon
-             pair) — and the one that ends a session must not sit a stone's throw
-             from the one that merely makes it bigger. -->
-        <span class="mx-0.5 h-4 w-px shrink-0 bg-edge/60" aria-hidden="true"></span>
-        <!-- Focus/Minimize: icon-only like the sidebar toggle beside it, and DRAWN
-             rather than typed (⛶/⤢ fall back to an emoji font in WebKit — see the
-             skull above). `selected` while fullscreen. -->
-        <Button
-          size="xs"
-          icon
-          selected={focused}
-          title={focused ? "exit fullscreen (Ctrl-Q)" : "expand to fullscreen"}
-          aria-label={focused ? "Minimize" : "Focus"}
-          aria-pressed={focused}
-          onclick={() => nav.toggleFocusTerm(session.id)}
-        >
-          <svg viewBox="0 0 24 24" class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            {#if focused}
-              <path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5" />
-            {:else}
-              <path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" />
-            {/if}
-          </svg>
-        </Button>
-        <!-- Shows/hides the sidebar (report + checkpoints) — always offered, and
-             LAST because it controls the column at this edge. A drawn icon (a
-             window with its right pane marked), `selected` while open; an orange
-             dot carries "the agent says it is blocked" while the panel is shut. -->
-        <Button
-          size="xs"
-          icon
-          selected={!sidePanel.hidden}
-          title={sidePanel.hidden ? "show the agent's report and the turn checkpoints" : "hide the sidebar"}
-          aria-label="Toggle sidebar"
-          aria-pressed={!sidePanel.hidden}
-          onclick={() => sidePanel.toggle()}
-          class="relative"
-        >
-          <svg viewBox="0 0 24 24" class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true">
-            <rect x="3" y="4.5" width="18" height="15" rx="2.5" />
-            <path d="M15 4.5v15" />
-            <path d="M17.5 8.5h1M17.5 11.5h1" stroke-linecap="round" />
-          </svg>
-          {#if session.board?.blocked && sidePanel.hidden}
-            <span class="absolute right-0.5 top-0.5 h-1.5 w-1.5 rounded-full bg-orange" aria-hidden="true"></span>
-          {/if}
-        </Button>
-      </span>
-    </div>
-
-    <!-- Why a dev tab died, when the reason is a port someone else holds. It sits
-         directly under the header — above the tabs — because the tab it is about
-         is usually the one being looked at, and because the terminal it belongs
-         to is exactly where the answer is NOT (the command clears the screen on
-         its way out). Absent whenever the tabs are healthy. -->
-    <DevClashBanner {session} />
-
-    <!-- A STACK session spans several repositories: one compact chip per app,
-         in the stack's member order — its PR (the number opens it), or whether
-         it has changes yet, and its own port lease. A strip rather than rows:
-         nothing here expands, and the terminal keeps its height. -->
-    {#if session.stack && session.apps?.length}
-      <ul class="relative z-10 flex flex-wrap items-center gap-1.5 border-b border-edge/60 px-3 py-1.5" aria-label="Apps">
-        {#each session.apps as a (a.name)}
-          {@const st = appState(a)}
-          <li
-            class="inline-flex items-center gap-1.5 rounded border px-1.5 py-[1px] text-sm whitespace-nowrap"
-            class:border-accent={a.name === session.focusApp}
-            class:border-edge={a.name !== session.focusApp}
-            title={a.repo || a.name}
-          >
-            <span class="text-ink">{appLabel(a)}</span>
-            <span class="text-faint" aria-hidden="true">·</span>
-            {#if st === "pr"}
-              <PrBadge session={appPr(a)} delivery={a.delivery ?? ""} onOpen={() => store.openURL(a.url ?? "")} />
-            {:else if st === "changes"}
-              <span class="text-warn">changes, no PR</span>
-            {:else}
-              <span class="text-faint">untouched</span>
-            {/if}
-            {#if a.ports?.length}
-              <span class="num text-faint" title="port lease">:{a.ports.join(", :")}</span>
-            {/if}
-          </li>
-        {/each}
-      </ul>
+<div class="grid h-full min-h-0 min-w-0 grid-cols-[minmax(0,1fr)] grid-rows-[auto_auto_auto_minmax(0,1fr)_auto] bg-canvas" data-session-view>
+  <!-- Each wrapper always renders, or auto-placement would shift the body out of its row. -->
+  <div class="min-w-0">
+    {#if session && !open}
+      <div class="flex h-11 min-w-0 items-center px-3" data-band-bar><SessionBar sessionId={session.id} band /></div>
     {/if}
+  </div>
+  <div class="min-w-0">
+    {#if session && strip}<ViewStrip {session} />{/if}
+  </div>
+  <div class="min-w-0">
+    <!-- Why a dev tab died, when the reason is a port someone else holds. Absent while healthy. -->
+    {#if session && !onConversation}<DevClashBanner {session} />{/if}
+  </div>
 
-    <!-- Terminal tabs. Shown when a shell is open or the panel is focused/big:
-         the agent tab, one tab per shell (drag to sort, "×" on hover to close),
-         and a "+ Shell" parked in the right corner — an *add* control, not one of
-         the tabs, so it sits opposite them rather than trailing the row. Collapses
-         in the compact, agent-only case so the plain detail panel stays chrome-free. -->
-    {#if showTabs}
-      <!-- Boxed tabs on a recessed strip. The active one is FILLED (`sel`, the
-           same band the selected table row wears) rather than merely painted in
-           the pane's colour: matching the pane made it the quietest cell in the
-           strip, which is the wrong way round for the one tab you are looking at.
-           Every cell keeps a hover a step above its own rest state — an inactive
-           tab lights to half a `sel` band, the active one warms toward `edge` —
-           so approaching a tab always says something, including the tab you are
-           already on. -->
-      <!-- The strip is RECESSED half a step below the pane it sits on, which is
-           what lets the active tab — painted in the pane's own `base` — read as
-           lifted out of it. On a band that is uniformly `base` the active tab had
-           nothing to be lighter than. -->
-      <div
-        class="relative z-10 flex items-stretch border-b border-edge/60 bg-[color-mix(in_srgb,var(--color-panel)_88%,var(--color-canvas))] select-none"
-      >
-        <div class="flex min-w-0 items-stretch">
-          <!-- SSH leads the strip: a request should be one glance away. One tab per connection,
-               named after its host. The count is what waits on you there. Selection does not
-               move when a request arrives, and focus is not taken. One chip holding two
-               buttons, for the reason the shell tabs give below. -->
-          {#each sshStrip as t (t.conn.id)}
-            {@const on = activeTab === SSH && sshOn === t.conn.id}
-            {@const st = connView(t.conn)}
-            <div
-              class="group flex h-8 max-w-60 min-w-0 shrink-0 items-center border-r border-edge/40 transition-colors {on
-                ? 'bg-sel font-medium text-ink hover:bg-[color-mix(in_srgb,var(--color-sel)_55%,var(--color-edge))]'
-                : 'text-faint hover:bg-sel/50 hover:text-ink'}"
-              data-ssh-tab={t.conn.id}
-            >
-              <button
-                type="button"
-                aria-pressed={on}
-                title="{t.label}: {st.word}"
-                class="flex h-full min-w-0 items-center gap-1.5 pr-1 pl-3"
-                onclick={() => {
-                  ssh.view(session.id).activeConn = t.conn.id;
-                  selectTab(session.id, SSH);
-                }}
-              >
-                <span class="inline-block h-1.5 w-1.5 shrink-0 rounded-full {st.hollow ? 'border' : ''} {st.dot}" aria-hidden="true"></span>
-                <span class="min-w-0 truncate">{t.label}</span>
-                {#if t.count > 0}<span class="num text-sm text-orange">{t.count}</span>{/if}
-              </button>
-              <button
-                type="button"
-                class="mr-1.5 grid size-5 shrink-0 place-items-center rounded text-faint opacity-0 transition-opacity group-hover:opacity-100 hover:text-ink focus-visible:opacity-100"
-                aria-label="Delete the {t.label} tab"
-                title="Close and delete this tab"
-                onclick={() => ssh.trashTab(session.id, t.conn)}><span aria-hidden="true">×</span></button
-              >
-            </div>
-          {/each}
-          <!-- The agent tab is the same cell as a shell tab minus the × and its
-               counterweight, so the strip is one row of boxes, not two shapes. -->
-          <button
-            type="button"
-            aria-pressed={activeTab === AGENT}
-            class="h-8 shrink-0 border-r border-edge/40 px-3.5 transition-colors {activeTab === AGENT
-              ? 'bg-sel font-medium text-ink hover:bg-[color-mix(in_srgb,var(--color-sel)_55%,var(--color-edge))]'
-              : 'text-faint hover:bg-sel/50 hover:text-ink'}"
-            onclick={() => selectTab(session.id, AGENT)}
-          >
-            Agent
-          </button>
-          <!-- The diff tab: same cell, no ×. It is a view, not a tmux session.
-               The count is the comments queued but not yet sent. -->
-          {#if !directSSH}
-          <button
-            type="button"
-            aria-pressed={activeTab === DIFF}
-            title="the session's changes — comment on lines and send them to the agent (f)"
-            class="h-8 shrink-0 border-r border-edge/40 px-3.5 transition-colors {activeTab === DIFF
-              ? 'bg-sel font-medium text-ink hover:bg-[color-mix(in_srgb,var(--color-sel)_55%,var(--color-edge))]'
-              : 'text-faint hover:bg-sel/50 hover:text-ink'}"
-            onclick={() => selectTab(session.id, DIFF)}
-          >
-            Diff{#if draftCount > 0}<span class="ml-1.5 text-sm text-accent-ink">{draftCount}</span>{/if}
-          </button>
-          {/if}
-          {#each shells as sh, i (sh)}
-            <!-- The tab is ONE chip containing two controls, so the wrapper — not
-                 the label button — paints the background and the text colour, and
-                 both buttons inside it run `variant="bare"` (no chip, inherits
-                 colour). That is the fifth deliberate exception to "every action
-                 is a <Button>", and it exists because the × is INSIDE the tab:
-                 with the chip on the label, moving the cursor onto the × left the
-                 label unhovered and the tab visibly went dark under the pointer.
-                 One painter also keeps the old hazard away — a wrapper background
-                 plus the button's own would be two same-name utilities racing on
-                 Tailwind's source order rather than on the class attribute.
-                 Selected and hover are written as whole literal strings for the
-                 same reason `hover:` can't just be added next to `bg-accent-fill`:
-                 the pseudo-class wins on specificity, so a selected tab would
-                 lose its accent chip the moment the cursor arrived.
-                 The × keeps its slot in the flow whether or not it is visible,
-                 and an empty slot of the same width balances it on the left: the
-                 label then sits centred in the chip instead of shoved off it, and
-                 nothing reflows when the × fades in under the cursor.
-                 role="group" is what the pointer handlers need to satisfy
-                 a11y_no_static_element_interactions, and it is also true: the
-                 wrapper only carries the drag, and both controls inside it are
-                 real buttons that stay reachable from the keyboard. -->
-            <!-- animate:flip is what makes a drag legible: without it a tab
-                 teleports into its new slot and the only feedback is that the
-                 row is suddenly different. The each block is keyed on the tmux
-                 name, which is what lets Svelte match a moved tab to its old
-                 position and travel it there. -->
-            <div
-              bind:this={tabEls[i]}
-              animate:flip={{ duration: flipMs }}
-              role="group"
-              class="group flex h-8 shrink-0 items-center gap-1 border-r border-edge/40 px-1.5 transition-colors {activeTab ===
-              sh
-                ? 'bg-sel font-medium text-ink hover:bg-[color-mix(in_srgb,var(--color-sel)_55%,var(--color-edge))]'
-                : 'text-faint hover:bg-sel/50 hover:text-ink'}"
-              class:opacity-60={dragging === i}
-              style="touch-action: none"
-              onpointerdown={(e) => dragStart(i, e)}
-              onpointermove={(e) => dragMove(session.id, e)}
-              onpointerup={dragEnd}
-              onpointercancel={dragEnd}
-              oncontextmenu={(e) => openTabMenu(sh, e)}
-            >
-              <!-- The × slot's counterweight. Purely optical, hence aria-hidden. -->
-              <span class="h-5 w-5 shrink-0" aria-hidden="true"></span>
-              <!-- aria-pressed by hand: the chip that normally carries it moved
-                   to the wrapper, but the label is still the control toggled. -->
-              <Button
-                variant="bare"
-                size="xs"
-                class="cursor-grab px-0.5!"
-                aria-pressed={activeTab === sh}
-                ondblclick={(e) => startRename(session.id, sh, e)}
-                onclick={() => selectTab(session.id, sh)}
-              >
-                {terms.labelFor(session.id, sh)}
-              </Button>
-              <!-- Colour is the whole affordance here: no chip of its own (it is
-                   already sitting on one), just the glyph fading in with the tab
-                   and going red under the cursor. -->
-              <Button
-                variant="bare"
-                size="xs"
-                icon
-                class="h-5! w-5! opacity-0 transition-[opacity,color] group-hover:opacity-100 hover:text-bad focus-visible:opacity-100"
-                title={terms.isReviewTab(sh)
-                  ? "close the review pane"
-                  : terms.isDevTab(sh)
-                    ? "stop this session's dev processes"
-                    : "close shell"}
-                aria-label={terms.isReviewTab(sh) ? "close review" : terms.isDevTab(sh) ? "stop dev" : "close shell"}
-                onclick={() => terms.closeShell(session.id, sh)}>×</Button
-              >
-            </div>
-          {/each}
-        </div>
-        <!-- Still a Button, not a tab cell: it opens a shell, it never *is* one,
-             and the boxed cells to its left are what the distinction rides on. -->
-        <span class="ml-auto flex shrink-0 items-center pr-3 pl-2">
-          <Button
-            size="xs"
-            class="px-2.5!"
-            title="open a shell in the worktree"
-            onclick={() => terms.newShell(session.id, session.worktree)}
-          >
-            <span aria-hidden="true">+</span> Shell
-          </Button>
-        </span>
+  <div class="grid min-h-0 min-w-0 grid-rows-[minmax(0,1fr)] grid-cols-[minmax(0,1fr)]">
+      <!-- The conversation stays mounted behind a terminal or Changes, so a widget does not reload
+           on the way there and back. Hidden with visibility: it keeps its measured size. -->
+      <div class="min-h-0 min-w-0 {offered ? '' : 'hidden'} {covered ? 'invisible' : ''}" style="grid-area:1/1" inert={covered}>
+        <Workspace sessionId={offered ? id : ""} {covered} />
       </div>
 
-      {#if tabMenu}
-        <!-- Backdrop: any click (or another right-click) outside dismisses the
-             menu without reaching the surface underneath — the terminal below
-             would otherwise take the click and steal the keyboard. -->
-        <div
-          class="fixed inset-0 z-40"
-          role="presentation"
-          onclick={() => (tabMenu = null)}
-          oncontextmenu={(e) => {
-            e.preventDefault();
-            tabMenu = null;
-          }}
-        ></div>
-        {#if tabMenu.mode === "rename"}
-          <!-- The rename face. A form, so Enter submits without a keydown of our
-               own; Escape closes it. Cancel/Save rather than commit-on-blur —
-               the field is pre-filled, and a stray click elsewhere silently
-               renaming the tab is worse than one extra click to confirm. -->
-          <form
-            bind:this={menuEl}
-            class="fixed z-50 w-64 rounded-lg border border-edge bg-panel p-3 shadow-xl"
-            style="left:{tabMenu.x}px;top:{tabMenu.y}px"
-            onsubmit={(e) => {
-              e.preventDefault();
-              commitRename(session.id);
-            }}
-          >
-            <label class="label mb-1.5 block text-faint" for="tab-rename">Tab name</label>
-            <!-- The accent border IS the focus signal here, so the global
-                 :focus-visible ring is suppressed: the field is focused the moment
-                 the popover opens, and a 2px halo around a 256px panel read as an
-                 alarm rather than as focus. It needs the trailing `!` — app.css's
-                 `:focus-visible` rule is unlayered, and an unlayered rule beats any
-                 Tailwind utility on layer order, however specific the utility. -->
-            <input
-              id="tab-rename"
-              bind:this={renameEl}
-              bind:value={renameText}
-              maxlength="40"
-              spellcheck="false"
-              onkeydown={(e) => {
-                if (e.key !== "Escape") return;
-                e.preventDefault();
-                e.stopPropagation(); // "abandon the edit", never "leave fullscreen"
-                tabMenu = null;
-              }}
-              class="h-8 w-full rounded-md border border-edge bg-canvas px-2.5 text-ink focus:border-accent focus-visible:outline-none!"
-            />
-            <div class="mt-1.5 text-sm text-faint">Empty resets it to the default name.</div>
-            <div class="mt-3 flex justify-end gap-2">
-              <Button size="xs" onclick={() => (tabMenu = null)}>Cancel</Button>
-              <Button variant="primary" size="xs" type="submit">Save</Button>
-            </div>
-          </form>
-        {:else}
-          <div
-            bind:this={menuEl}
-            class="fixed z-50 min-w-[10rem] rounded-lg border border-edge bg-panel p-1 shadow-xl"
-            style="left:{tabMenu.x}px;top:{tabMenu.y}px"
-            role="menu"
-          >
-            <div class="label truncate px-2 pt-1 pb-1.5 text-faint">{terms.labelFor(session.id, tabMenu.tab)}</div>
-            <MenuItem icon="✎" onclick={() => startRename(session.id, tabMenu?.tab ?? "")}>Rename…</MenuItem>
-            <div class="my-1 h-px bg-edge/60"></div>
-            <MenuItem
-              variant="danger"
-              icon="×"
-              onclick={() => {
-                const tab = tabMenu?.tab;
-                tabMenu = null;
-                if (tab) terms.closeShell(session.id, tab);
-              }}
-            >
-              {terms.isReviewTab(tabMenu.tab) ? "Close review" : "Close shell"}
-            </MenuItem>
+      <TerminalCell
+        name={terminalName}
+        autofocus={open}
+        style="grid-area:1/1"
+        focusRequest={id ? terms.terminalFocusAsks(id) : 0}
+        onExit={session && (activeIsShell || session.location === "temporary") ? () => terminalExited(id, terminalName, session.location === "temporary", activeIsShell) : undefined}
+        onLeave={leave}
+      />
+
+      {#if onChanges && session}
+        <div class="grid min-h-0 min-w-0 bg-panel" style="grid-area:1/1"><ChangesView sessionId={session.id} /></div>
+      {/if}
+
+      {#if noPane}
+        <div class="grid min-h-0 place-items-center bg-panel text-faint" style="grid-area:1/1">
+          <div class="grid justify-items-center gap-2 text-center">
+            <p>This session has no terminal. Its agent is gone.</p>
+            {#if session?.status === "dead" || session?.status === "session_ended"}
+              <Button variant="secondary" size="sm" onclick={() => session && store.revive(session.id)}>{session.location ? "Reopen" : "Revive"}</Button>
+            {/if}
           </div>
-        {/if}
+        </div>
       {/if}
-    {/if}
 
-    <!-- Live terminal (agent pane or worktree shell). p-4 = 16px, matching
-         Ghostty's window-padding-x/y; p-2 gave it half the breathing room and
-         contributed to the cramped read. bg-panel is the flavor's `base` — the
-         exact colour LiveTerminal paints as its terminal background — so the
-         padding gutter is seamless with the terminal and the OSC-11 background an
-         agent reads is genuinely the colour surrounding it. There is no fontSize
-         prop any more: the old `focused ? 14 : 12` broke the cell arithmetic
-         (see TERM_FONT). -->
-    <!-- The terminal and, when the agent has reported, its sidebar. A GRID, not
-         a flex row: WKWebView does not reliably stretch a flex child of this
-         flex column (see CLAUDE.md), and grid cells always fill. minmax(0,1fr)
-         lets the terminal shrink below its content width instead of pushing the
-         sidebar off the window. No stacking context is introduced here — an
-         `isolate`/`z-0` around the WebGL canvas blanks it in WKWebView. -->
-    <div
-      class="grid min-h-0 w-full flex-1 grid-rows-[minmax(0,1fr)] {showSide
-        ? 'grid-cols-[minmax(0,1fr)_auto]'
-        : 'grid-cols-[minmax(0,1fr)]'}"
-    >
-      {#if activeTab === DIFF}
-        <!-- The diff fills the same grid cell the terminal would (grid, not a
-             flex child — see the WKWebView note above). -->
-        <div class="grid min-h-0">
-          <DiffView sessionId={session.id} />
-        </div>
-      {:else if activeTab === CHECKPOINTS}
-        <div class="grid min-h-0">
-          <CheckpointsView sessionId={session.id} />
-        </div>
-      {:else if activeTab === SSH}
-        <div class="grid min-h-0">
-          <!-- Keyed: a workspace's local state and its pending focus requests belong
-               to one session, and the selection moving must not carry them over. -->
-          {#key session.id}<SSHWorkspace sessionId={session.id} />{/key}
-        </div>
-      {:else}
-      <div class="min-h-0 bg-panel p-4">
-        {#if activeName}
-          <!-- Keyed on the active tab's tmux name, which already carries the session
-               identity: switching agent ⇄ shell (or moving the selection) re-attaches
-               by remounting. Keyed on the NAME, not a focus flag — with one cell size
-               for every terminal, focus changes nothing here, and rebuilding on it
-               would drop the scrollback every time the panel expanded. -->
-          {#key activeName}
-            <LiveTerminal
-              name={activeName}
-              webgl
-              interactive
-              autofocus={pickedTab || activeIsShell || focused}
-              onExit={activeIsShell || session.location === "temporary" ? () => terminalExited(session.id, activeName, session.location === "temporary", activeIsShell) : undefined}
-              onEscapeFocus={focused ? () => nav.toggleFocusTerm(session.id) : undefined}
-            />
-          {/key}
-        {:else}
-          <div class="flex h-full items-center justify-center text-faint">no tmux session (dead)</div>
-        {/if}
-      </div>
+      {#if !sessionId}
+        <div class="grid min-h-0 place-items-center text-sm text-faint" style="grid-area:1/1">Select a session. Enter gives it the whole window.</div>
       {/if}
-      {#if showSide}<SidePanel {session} />{/if}
-    </div>
+
+      {#if endedRecord}
+        <EndedView sessionId={endedRecord.id} style="grid-area:1/1" />
+      {:else if gone}
+        <!-- A session that went while open and left no record: a shell, usually. The top bar's ← and
+             Esc still lead out. -->
+        <div class="grid min-h-0 place-items-center text-faint" style="grid-area:1/1">
+          <p>{store.alive ? "This session is no longer running." : "The daemon is down, and this session was not in its last record."}</p>
+        </div>
+      {/if}
   </div>
-{/if}
+
+  <div class="min-w-0">
+    {#if session && (!onConversation || onHostShell)}<SessionFooter sessionId={session.id} />{/if}
+  </div>
+</div>

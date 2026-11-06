@@ -100,7 +100,7 @@
     </div>
   {:else if ssh.hostsLoaded && rows.length === 0}
     <div class="grid justify-items-start gap-2 py-2">
-      <p class="copy"><span class="font-medium text-ink">No hosts yet.</span> <span class="text-ink/85">Add one in Settings, using an alias from your ssh config. Lola holds no address and no key.</span></p>
+      <p class="copy"><span class="font-medium text-ink">No hosts yet.</span> <span class="text-ink-2">Add one in Settings, using an alias from your ssh config. Lola holds no address and no key.</span></p>
       <Button variant="secondary" size="sm" onclick={() => nav.openOverlay("settings", "", "sshhosts")}>Open SSH host settings</Button>
     </div>
   {:else}

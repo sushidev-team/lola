@@ -50,13 +50,13 @@
 
 {#if h}
   <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-  <section class="ssh-fade-in grid gap-2 border-t border-edge/60 px-3 py-2.5" aria-label="Hand back to {agent}" onkeydown={onKey}>
+  <section class="ssh-fade-in grid gap-2 rounded-[10px] border border-edge bg-panel p-3" aria-label="Hand back to {agent}" onkeydown={onKey}>
     <h3 class="label text-faint">Hand back to {agent}</h3>
     <textarea
       bind:this={noteEl}
       bind:value={h.note}
       rows="2"
-      class="w-full resize-none rounded border border-edge bg-panel px-2 py-1.5 text-ink outline-none placeholder:text-placeholder focus:border-accent focus-visible:outline-none!"
+      class="w-full resize-none rounded border border-edge bg-canvas px-2 py-1.5 text-ink outline-none placeholder:text-placeholder focus:border-accent focus-visible:outline-none!"
       placeholder="Say what you did or what to do next (optional)"
       aria-label="Say what you did or what to do next"
     ></textarea>

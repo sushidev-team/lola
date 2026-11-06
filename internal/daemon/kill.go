@@ -160,6 +160,7 @@ func (d *Daemon) handleKill(ctx context.Context, sessionID string, force, keepWo
 // in-flight claim (keyed by issue UUID) so a still-matching issue can
 // re-dispatch, then persists the store.
 func (d *Daemon) dropSession(s session.Session) {
+	d.recordEnded(s) // first, so a client that sees the row go can already read it
 	d.sessions.Delete(s.ID)
 	if s.IssueUUID != "" {
 		d.inflight.Remove(s.IssueUUID)

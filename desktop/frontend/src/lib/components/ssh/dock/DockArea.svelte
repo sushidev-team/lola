@@ -51,9 +51,14 @@
   import DockPanel from "./DockPanel.svelte";
   import DockSash from "./DockSash.svelte";
 
-  let { sessionId, children }: { sessionId: string; children: Snippet } = $props();
+  // `covered`: a terminal or Changes is on show in the same cell. The conversation stays mounted
+  // behind it, so a page keeps its state, but `visibility:hidden` on an ancestor does not hide a
+  // frame: the shown frame's wrapper sets `visible`, and a child's `visible` wins, so the page
+  // would paint over the terminal and take its clicks. Covered frames say hidden for themselves.
+  let { sessionId, children, covered = false }: { sessionId: string; children: Snippet; covered?: boolean } = $props();
 
   const DRAWER_W = 440;
+  const DOCK_BOTTOM_INSET = 8;
   const DRAG_START_PX = 4;
   const STRIP_SCROLL_BAND = 24;
   const STRIP_SCROLL_STEP = 16;
@@ -91,20 +96,27 @@
   const measured = $derived(bounds.w > 0 && bounds.h > 0);
   // The timeline is the work, so a window too small for the layout never squeezes it. The tree
   // stays as it is, and comes back when the window grows.
-  const compact = $derived(measured && tabs.length > 0 && !fits(root, bounds));
+  // A human hiding the dock takes this same path with the drawer shut: the frames stay in the
+  // each below, hidden, and the main slot gets the full width. See SessionView.dockHidden.
+  const compact = $derived(measured && tabs.length > 0 && (view.dockHidden || !fits(root, bounds)));
   $effect(() => {
     const c = compact;
     untrack(() => {
-      view.dockCompact = c;
+      view.dockCompact = c && !view.dockHidden;
       if (!c) view.dockDrawer = false;
     });
   });
   const geo = $derived(measured && !compact ? layout(root, bounds) : null);
   const drawerRect = $derived<Rect>({ x: Math.max(0, bounds.w - DRAWER_W), y: 0, w: Math.min(bounds.w, DRAWER_W), h: bounds.h });
   const drawerTab = $derived(tabs.includes(view.dockDrawerTab) ? view.dockDrawerTab : (activeTabs(root)[0] ?? ""));
-  const drawerOpen = $derived(compact && view.dockDrawer);
+  const drawerOpen = $derived(compact && view.dockDrawer && !view.dockHidden);
   const showing = $derived(compact ? (drawerOpen ? [drawerTab] : []) : activeTabs(root));
 
+  // A panel that reaches the bottom stops where the composer does, so the two share a baseline.
+  // The conversation's column ends 12px up, and a panel's own padding gives only 4 of those.
+  function groundRect(r: Rect): Rect {
+    return r.y + r.h >= bounds.h - 0.5 ? { ...r, h: Math.max(0, r.h - DOCK_BOTTOM_INSET) } : r;
+  }
   function rectStyle(r: Rect): string {
     return `left:${r.x}px;top:${r.y}px;width:${r.w}px;height:${r.h}px`;
   }
@@ -122,7 +134,7 @@
   $effect(() => {
     if (!drawerOpen) return;
     const esc = (e: KeyboardEvent) => {
-      if (e.key !== "Escape" || menu || confirm.request || (e.target as Element | null)?.closest?.("[data-terminal-pane]")) return;
+      if (e.key !== "Escape" || menu || confirm.request || (e.target as Element | null)?.closest?.("[data-terminal-pane],[data-terminal-cell]")) return;
       e.preventDefault();
       e.stopImmediatePropagation();
       view.dockDrawer = false;
@@ -144,7 +156,7 @@
       if (on && !was) {
         void tick().then(() => focusTab(drawerTab));
       } else if (!on && was && (!document.activeElement || document.activeElement === document.body)) {
-        const opener = host?.closest("[data-ssh-workspace]")?.querySelector<HTMLElement>("[data-dock-opener]");
+        const opener = host?.closest("[data-session-view]")?.querySelector<HTMLElement>("[data-dock-opener]");
         if (opener) opener.focus();
         else view.composerFocus++;
       }
@@ -171,7 +183,7 @@
     if (compact) return panelSlot(drawerRect);
     const g = groupOf(root, tab);
     const r = g && geo?.nodes[g.id];
-    return r ? panelSlot(r) : { x: 0, y: 0, w: 0, h: 0 };
+    return r ? panelSlot(groundRect(r)) : { x: 0, y: 0, w: 0, h: 0 };
   }
 
   // --- tab drag ----------------------------------------------------------------
@@ -387,7 +399,7 @@
     {#each panels as g, i (g.id)}
       <DockPanel
         id={g.id}
-        rect={geo.nodes[g.id]}
+        rect={groundRect(geo.nodes[g.id])}
         tabs={g.tabs}
         active={g.active}
         {agent}
@@ -437,11 +449,11 @@
       {@const on = showing.includes(id)}
       {#if element}
         <div
-          class="absolute overflow-hidden rounded-b-[7px] {on && !busy ? 'pointer-events-auto' : ''}"
-          style="{rectStyle(frameRect(id))};visibility:{on ? 'visible' : 'hidden'}"
+          class="absolute overflow-hidden rounded-b-[7px] {on && !busy && !covered ? 'pointer-events-auto' : ''}"
+          style="{rectStyle(frameRect(id))};visibility:{on && !covered ? 'visible' : 'hidden'}"
           data-dock-frame={id}
         >
-          <SSHWidget {sessionId} {element} {agent} active={on} />
+          <SSHWidget {sessionId} {element} {agent} active={on && !covered} />
         </div>
       {/if}
     {/each}

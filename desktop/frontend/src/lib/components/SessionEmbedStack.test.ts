@@ -15,15 +15,16 @@ vi.mock("@bindings/desktop", () => ({
   TermService: { Shells: vi.fn(async () => []) },
 }));
 
-const { default: SessionEmbed } = await import("./SessionEmbed.svelte");
+const { default: SessionBar } = await import("./session/SessionBar.svelte");
 const { store } = await import("$lib/store.svelte");
-const { terms, DIFF } = await import("$lib/terms.svelte");
 
-// SUSHI-628: a sandboxed session says so, and a STACK session shows one chip
+// SUSHI-628: a sandboxed session says so, and a STACK session shows one row
 // per app — its PR (clickable), or whether it has changes yet — instead of a
-// single "Open PR" that would reach only one repository.
-describe("SessionEmbed sandbox + stack apps", () => {
-  it("shows the sandbox chip and one chip per app", async () => {
+// single "Open PR" that would reach only one repository. Both moved out of the
+// band when the header went: the sandbox to the title's hover card, the apps to
+// the delivery chip's popover.
+describe("SessionBar sandbox + stack apps", () => {
+  it("names the sandbox on hover and lists one row per app in the chip's popover", async () => {
     store.sessions = [
       {
         id: "s1",
@@ -42,11 +43,15 @@ describe("SessionEmbed sandbox + stack apps", () => {
         ],
       } as never,
     ];
-    // The diff tab, not the live terminal: xterm cannot draw in jsdom.
-    terms.select("s1", DIFF);
-    render(SessionEmbed, { sessionId: "s1", focused: true });
-    expect(screen.getByText("docker")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /Open PR/ })).toBeNull();
+    render(SessionBar, { sessionId: "s1" });
+    // No filled chip for it any more, only the card.
+    expect(screen.queryByText("docker")).toBeNull();
+    await fireEvent.pointerEnter(document.querySelector("[data-session-bar] [tabindex='0']")!);
+    expect(await screen.findByText("docker")).toBeInTheDocument();
+    await fireEvent.pointerLeave(document.querySelector("[data-session-bar] [tabindex='0']")!);
+
+    await fireEvent.click(screen.getByRole("button", { name: "Delivery" }));
+    expect(screen.queryByRole("menuitem", { name: /Open PR/ })).toBeNull();
     const strip = screen.getByRole("list", { name: "Apps" });
     const items = within(strip).getAllByRole("listitem");
     expect(items.map((li) => li.textContent?.replace(/\s+/g, " ").trim())).toEqual([

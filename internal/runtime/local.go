@@ -31,7 +31,13 @@ func localArtifacts(id string) (string, error) {
 // OpenDirectory attaches a session to a borrowed directory. All Lola artifacts
 // live in a per-session directory outside it; even failed launches never alter
 // the checkout or run its worktree setup/cleanup hooks.
-func (n *Native) OpenDirectory(ctx context.Context, p config.Project, id, dir, location, kindName string, useAgent bool) (result session.Session, launchErr error) {
+func (n *Native) OpenDirectory(ctx context.Context, p config.Project, id, dir, location, kindName string, useAgent bool) (session.Session, error) {
+	return n.OpenDirectoryPrompt(ctx, p, id, dir, location, kindName, useAgent, "")
+}
+
+// OpenDirectoryPrompt is OpenDirectory with the human's opening words, which go to the
+// agent as its first turn. See LocalFirstTurn for exactly what is typed.
+func (n *Native) OpenDirectoryPrompt(ctx context.Context, p config.Project, id, dir, location, kindName string, useAgent bool, prompt string) (result session.Session, launchErr error) {
 	if !strings.HasPrefix(id, "lola-local-") || filepath.Base(id) != id {
 		return session.Session{}, errors.New("invalid local session id")
 	}
@@ -89,7 +95,26 @@ func (n *Native) OpenDirectory(ctx context.Context, p config.Project, id, dir, l
 	if useAgent {
 		s.Title = kind.Binary() + " · " + filepath.Base(dir)
 	}
-	return n.startLocal(ctx, s, false)
+	return n.startLocal(ctx, s, false, prompt)
+}
+
+// localLaunchLead opens every first turn of an agent in a borrowed directory. It is the
+// session's own id, so IsLaunchPrompt hiding what starts with it can only hide that
+// session's own forgery.
+func localLaunchLead(id string) string {
+	return "You are Lola session " + id + ". You are in the project's main checkout, shared with other sessions."
+}
+
+// LocalFirstTurn is exactly what an agent in a borrowed directory is given as its first
+// turn. There is no prompt.md here, because nothing of lola's may be written to a borrowed
+// checkout, so the briefing travels with it. The daemon hashes this text to recognize the
+// log's record of it.
+func (n *Native) LocalFirstTurn(id, prompt string) string {
+	text := localLaunchLead(id) + "\n\n" + n.talkBriefing() + "\n"
+	if prompt == "" {
+		return text + "Wait for the user's task."
+	}
+	return text + "The user's task:\n\n" + prompt
 }
 
 // RemoveLocalArtifacts forgets only Lola's private launch files. It never
@@ -102,7 +127,9 @@ func RemoveLocalArtifacts(id string) error {
 	return os.RemoveAll(dir)
 }
 
-func (n *Native) startLocal(ctx context.Context, s session.Session, resume bool) (session.Session, error) {
+// startLocal launches a local session. prompt is the human's opening words on the very
+// first launch, and "" on a revive, because a reopened agent must not redo a task.
+func (n *Native) startLocal(ctx context.Context, s session.Session, resume bool, prompt string) (session.Session, error) {
 	artifacts, err := localArtifacts(s.ID)
 	if err != nil {
 		return session.Session{}, err
@@ -116,7 +143,7 @@ func (n *Native) startLocal(ctx context.Context, s session.Session, resume bool)
 		kind := agent.Parse(s.Agent)
 		// No cwd-based --continue: two agents can share this directory, so that
 		// would resume an unrelated conversation. Reopen starts a fresh agent.
-		args := agent.LaunchArgs(kind, "You are Lola session "+s.ID+". You are in the project's main checkout, shared with other sessions. Wait for the user's task.")
+		args := agent.LaunchArgs(kind, n.LocalFirstTurn(s.ID, prompt))
 		for i, arg := range args {
 			if arg == ".lola/settings.json" {
 				args[i] = filepath.Join(artifacts, "settings.json")
@@ -134,7 +161,11 @@ func (n *Native) startLocal(ctx context.Context, s session.Session, resume bool)
 			posix += " " + shQuote(arg)
 		}
 	}
-	if err := n.Tmux.NewSession(ctx, s.ID, s.Worktree, "exec sh -c "+shQuote(posix)); err != nil {
+	line, err := localLaunchLine(artifacts, posix)
+	if err != nil {
+		return session.Session{}, err
+	}
+	if err := n.Tmux.NewSession(ctx, s.ID, s.Worktree, line); err != nil {
 		if n.Tmux.Has(ctx, s.ID) {
 			_ = n.Tmux.KillSession(ctx, s.ID)
 		}
@@ -147,6 +178,20 @@ func (n *Native) startLocal(ctx context.Context, s session.Session, resume bool)
 	}
 	s.SetAgentState(a, "", time.Now())
 	return s, nil
+}
+
+// localLaunchLine puts a launch on tmux's command line. tmux refuses a command past about 16 KB
+// and the first turn carries a person's brief, quoted twice at up to 13 bytes an apostrophe, so
+// a pasted 7 KB of SQL can reach that. The line therefore goes in a private file the shell
+// removes as it starts, which leaves tmux a short command. The brief still reaches the agent as
+// its argument, because a file for the agent to read would make it ask permission to leave the
+// borrowed directory on its very first turn.
+func localLaunchLine(artifacts, posix string) (string, error) {
+	path := filepath.Join(artifacts, "launch")
+	if err := os.WriteFile(path, []byte("rm -f "+shQuote(path)+"\n"+posix+"\n"), 0o600); err != nil {
+		return "", err
+	}
+	return "exec sh " + shQuote(path), nil
 }
 
 // codexNotifyArgs is the per-process lifecycle callback for a codex launch.
@@ -169,5 +214,5 @@ func (n *Native) reviveLocal(ctx context.Context, s session.Session) (session.Se
 	if _, err := os.Stat(filepath.Join(artifacts, "env")); err != nil {
 		return session.Session{}, errors.New("session launch settings are missing; create a new session")
 	}
-	return n.startLocal(ctx, s, s.Location == LocationSSH)
+	return n.startLocal(ctx, s, s.Location == LocationSSH, "")
 }

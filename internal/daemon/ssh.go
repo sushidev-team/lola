@@ -473,6 +473,11 @@ func (d *Daemon) sshResume() {
 		if !e.IsDir() || !sshstore.ValidSession(e.Name()) {
 			continue
 		}
+		// An ended story is read-only and is opened when someone opens it. Keeping every one
+		// in memory would have the sweep walk them all, every two seconds, for good.
+		if _, live := d.sessions.Get(e.Name()); !live && sshstore.ReadEnded(d.home, e.Name()) != nil {
+			continue
+		}
 		store, err := d.sshStore(e.Name(), false)
 		if err != nil || store == nil {
 			if err != nil {
@@ -488,8 +493,34 @@ func (d *Daemon) sshResumeStore(store *sshstore.Store) {
 	now := d.ssh.now()
 	var unrun []string
 	session := ""
-	err := store.Update(func(st *sshstore.State) error {
+	// A store with nothing to resume is not written: a write moves the file's time, which is
+	// what ages a store with no end recorded, and a daemon restarted weekly would keep every
+	// one of them forever.
+	work := false
+	store.View(func(st *sshstore.State) {
 		session = st.Session
+		for _, it := range st.Items {
+			work = work || (it.Kind == protocol.SSHItemBlock && (it.Block.Status == protocol.SSHBlockQueued || it.Block.Status == protocol.SSHBlockRunning))
+		}
+		for _, q := range st.Queue {
+			work = work || q.Claimed
+		}
+	})
+	if !work {
+		d.sshResumeConns(store)
+		return
+	}
+	unclaimed := false
+	err := store.Update(func(st *sshstore.State) error {
+		// A crash between the claim and the send's end. Nothing marks such an entry again, so
+		// it would read Queued forever, never go, and refuse a recall as too late. It may have
+		// reached the pane, and sending it twice is better than losing the one copy.
+		for i := range st.Queue {
+			if st.Queue[i].Claimed {
+				st.Queue[i].Claimed = false
+				unclaimed = true
+			}
+		}
 		for _, it := range st.Items {
 			if it.Kind != protocol.SSHItemBlock {
 				continue
@@ -521,6 +552,14 @@ func (d *Daemon) sshResumeStore(store *sshstore.Store) {
 	for _, id := range unrun {
 		d.sshEnqueueLola(store, session, "[lola] Your command "+id+" did not run: lola restarted first.")
 	}
+	if unclaimed {
+		d.sshSyncPending(session, store)
+	}
+	d.sshResumeConns(store)
+}
+
+// sshResumeConns gives each connection that survived a restart its one check.
+func (d *Daemon) sshResumeConns(store *sshstore.Store) {
 	var conns []sshstore.Conn
 	store.View(func(st *sshstore.State) {
 		for _, c := range st.Conns {
@@ -682,8 +721,13 @@ func (d *Daemon) sshPruneStores(now time.Time) {
 		if _, ok := d.sessions.Get(e.Name()); ok {
 			continue
 		}
-		fi, err := os.Stat(filepath.Join(root, e.Name(), "state.json"))
-		if err != nil || now.Sub(fi.ModTime()) < sshstore.RetainAfterGone {
+		// A session's end is the clock. The file's time is only for a store with no end on
+		// record, because anything that opens or writes the store moves it.
+		if ended := sshstore.ReadEnded(d.home, e.Name()); ended != nil {
+			if now.Sub(ended.EndedAt) < sshstore.RetainAfterGone {
+				continue
+			}
+		} else if fi, err := os.Stat(filepath.Join(root, e.Name(), "state.json")); err != nil || now.Sub(fi.ModTime()) < sshstore.RetainAfterGone {
 			continue
 		}
 		if err := os.RemoveAll(filepath.Join(root, e.Name())); err != nil {

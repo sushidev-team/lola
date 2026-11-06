@@ -11,6 +11,30 @@ export type Lens = "list" | "kanban" | "grid";
 
 /** Webview-local sidebar preference. Deliberately NOT in config.toml. */
 const SIDEBAR_KEY = "lola.sidebar";
+/** Which of the sidebar's two tabs is on show. */
+const SIDEBAR_TAB_KEY = "lola.sidebar.tab";
+/** When each session was last on screen, so a finished turn can read as not yet seen. */
+const SEEN_KEY = "lola.seen";
+const SEEN_KEEP = 200;
+
+export type SidebarTab = "sessions" | "projects";
+
+function readSidebarTab(): SidebarTab {
+  try {
+    return localStorage.getItem(SIDEBAR_TAB_KEY) === "projects" ? "projects" : "sessions";
+  } catch {
+    return "sessions";
+  }
+}
+
+function readSeen(): Record<string, number> {
+  try {
+    const raw: unknown = JSON.parse(localStorage.getItem(SEEN_KEY) ?? "{}");
+    return raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, number>) : {};
+  } catch {
+    return {};
+  }
+}
 
 function readSidebar(): boolean {
   try {
@@ -61,6 +85,8 @@ class Nav {
    * throwing over.
    */
   sidebarOpen = $state(readSidebar());
+  /** The sidebar's tab. Projects is today's body, unchanged. */
+  sidebarTab = $state<SidebarTab>(readSidebarTab());
   /**
    * Active triage filter — "" = all. One of $lib/filters' TRIAGE_FILTERS, i.e. a
    * KANBAN_COLUMNS title, so the sidebar filter and the kanban lens partition
@@ -74,6 +100,32 @@ class Nav {
       localStorage.setItem(SIDEBAR_KEY, this.sidebarOpen ? "1" : "0");
     } catch {
       /* private mode / disabled storage — the preference just doesn't persist */
+    }
+  }
+  setSidebarTab(t: SidebarTab) {
+    this.sidebarTab = t;
+    try {
+      localStorage.setItem(SIDEBAR_TAB_KEY, t);
+    } catch {
+      /* the choice just doesn't persist */
+    }
+  }
+  private seen = $state<Record<string, number>>(readSeen());
+  /** When the human last had this session open, 0 for never. */
+  seenAt(id: string): number {
+    return this.seen[id] ?? 0;
+  }
+  /** Most recent last, so what gets dropped is what nobody has opened in a while. */
+  markSeen(id: string, at = Date.now()) {
+    const next = { ...this.seen };
+    delete next[id];
+    next[id] = at;
+    for (const old of Object.keys(next).slice(0, -SEEN_KEEP)) delete next[old];
+    this.seen = next;
+    try {
+      localStorage.setItem(SEEN_KEY, JSON.stringify(next));
+    } catch {
+      /* a mark that does not survive a relaunch costs one dot */
     }
   }
   setTriage(t: string) {
@@ -177,6 +229,26 @@ class Nav {
       this.lens = "list";
     }
     this.focusedTerm = id;
+  }
+
+  /**
+   * Open a session. Idempotent, so a roster click on the session already open keeps it open,
+   * and it leaves the project scope alone, so opening one never re-filters the list behind it.
+   * Everything that used to change the compact embed comes through here, because the Glance
+   * has no tabs, no composer and no tray to act on.
+   */
+  openSession(id: string) {
+    this.selectedId = id;
+    if (this.lens === "grid") {
+      this.returnLens = "grid";
+      this.lens = "list";
+    }
+    this.focusedTerm = id;
+    this.view = "cockpit";
+  }
+  /** Back to Overview, on the row that was open, and to the lens it came from. */
+  closeSession() {
+    if (this.focusedTerm) this.toggleFocusTerm(this.focusedTerm);
   }
 
   /** Clear the focused terminal AND any lens it owed a return to. */

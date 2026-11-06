@@ -1,7 +1,10 @@
 <script lang="ts">
   // Everything an agent publishes: bare text, in its voice. Kinds differ by a quiet
-  // lead word and by small structure, never by a box. Nothing here may draw a plate
-  // or a solid marker, and a green tick is a daemon's word, so nothing here is green.
+  // lead word and by small structure, never by a box and never by a marker. Nothing here
+  // may draw a plate, and a green tick is a daemon's word, so nothing here is green.
+  //
+  // `record` is the story's copy of a question or a proposal: what was asked and how it ended,
+  // with its controls in the tray. Without it the element is the tray's own, controls and all.
   //
   // Every string in an element is a CLAIM the daemon has only sanitized. It renders
   // as text nodes through SSHText. An evidence plate is the one recorded thing in
@@ -13,20 +16,20 @@
     agentName,
     hostName,
     hypothesisView,
-    severityView,
     stepView,
     type SSHElement,
     isAnswer,
   } from "$lib/ssh";
   import { agoPhrase } from "$lib/time";
   import Button from "../Button.svelte";
+  import Chevron from "../Chevron.svelte";
   import SSHText from "./SSHText.svelte";
   import SSHRich from "./SSHRich.svelte";
-  import SSHWidgetRow from "./SSHWidgetRow.svelte";
+  import WidgetCard from "../session/WidgetCard.svelte";
   import SSHEvidence from "./SSHEvidence.svelte";
   import SSHApproval from "./SSHApproval.svelte";
 
-  let { sessionId, element }: { sessionId: string; element: SSHElement } = $props();
+  let { sessionId, element, record = false }: { sessionId: string; element: SSHElement; record?: boolean } = $props();
 
   const session = $derived(store.sessionById(sessionId));
   const agent = $derived(agentName(session?.agent));
@@ -76,6 +79,16 @@
     checking = false;
     void tick().then(() => rootEl?.querySelector<HTMLElement>("[data-proposal-run]")?.focus());
   }
+  // Severity is a word. Critical and high take the failure colour; nothing here is ever orange,
+  // which means a person can act now.
+  const SEVERITY: Record<string, { word: string; cls: string }> = {
+    critical: { word: "Critical", cls: "text-bad" },
+    high: { word: "High", cls: "text-bad" },
+    medium: { word: "Medium", cls: "text-ink" },
+    low: { word: "Low", cls: "text-ink" },
+  };
+  const findingRail: Record<string, string> = { critical: "border-bad", high: "border-bad", medium: "border-warn", low: "border-edge" };
+  const severity = (s: string | undefined) => SEVERITY[s ?? ""] ?? { word: "Note", cls: "text-ink" };
   const movedText = $derived(`${agent} changed this proposal. Read it again.`);
   async function runProposal() {
     checking = false;
@@ -120,17 +133,17 @@
 
 {#snippet bodyOf()}
   {#if showBody}
-    <div class="copy mt-1 text-ink/85"><SSHText {sessionId} text={element.body} /></div>
+    <div class="copy mt-1 text-ink-2"><SSHText {sessionId} text={element.body} /></div>
   {:else if hasBody}
     <Button size="xs" class="mt-0.5 -ml-1.5" aria-expanded={more} onclick={() => (more = true)}>
-      <span aria-hidden="true">▸</span> More
+      <Chevron /> More
     </Button>
   {/if}
 {/snippet}
 
 {#snippet plates()}
   {#if element.evidence?.length}
-    <div class="mt-1 flex flex-wrap items-center gap-1">
+    <div class="mt-0.5 grid min-w-0 justify-items-start text-sm">
       {#each element.evidence as ev (ev.block)}
         <SSHEvidence {sessionId} block={ev.block} verified={ev.verified} status={ev.status ?? ""} exitCode={ev.exitCode} />
       {/each}
@@ -142,25 +155,20 @@
 <div bind:this={rootEl} data-claim={element.kind} class="selectable min-w-0">
   {#if !known}
     <div class="text-ink"><SSHText {sessionId} text={element.title} /></div>
-    {#if element.body}<div class="copy mt-1 text-ink/85"><SSHText {sessionId} text={element.body} /></div>{/if}
+    {#if element.body}<div class="copy mt-1 text-ink-2"><SSHText {sessionId} text={element.body} /></div>{/if}
   {:else if element.kind === "summary"}
     <div class="text-ink"><SSHRich {sessionId} text={element.title} />{@render updated()}</div>
     {@render bodyOf()}
     {@render plates()}
   {:else if element.kind === "widget"}
-    <SSHWidgetRow {sessionId} {element} />
+    <WidgetCard {sessionId} {element} />
   {:else if element.kind === "narration"}
-    <!-- A status line stays quiet. An answer, the thing someone was waiting to read, does not. -->
+    <!-- Prose, the top ink, whatever it says: a dimmer status line let your own message outrank it. -->
     {@const answer = isAnswer(element.title) || !!element.body}
-    {#if answer}
-      <div class="w-fit max-w-[80%] rounded-lg rounded-bl-sm border border-magenta/30 bg-magenta/8 px-3 py-2.5 text-ink" data-answer>
-        <div class="mb-1 text-sm font-medium text-magenta">{agent}</div>
-        <SSHRich {sessionId} text={element.title} />{@render updated()}
-        {#if element.body}<div class="mt-1.5"><SSHRich {sessionId} text={element.body} /></div>{/if}
-      </div>
-    {:else}
-      <div class="text-ink/75"><SSHRich {sessionId} text={element.title} />{@render updated()}</div>
-    {/if}
+    <div class="max-w-[72ch] text-prose text-ink" data-answer={answer ? "" : undefined}>
+      <SSHRich {sessionId} text={element.title} />{@render updated()}
+      {#if element.body}<div class="mt-2"><SSHRich {sessionId} text={element.body} /></div>{/if}
+    </div>
     {@render plates()}
   {:else if element.kind === "hypothesis"}
     {@const h = hypothesisView(element.state)}
@@ -168,25 +176,30 @@
       {@render lead("Theory")}<span class={h.titleCls}><SSHText {sessionId} text={element.title} /></span>
       <span class="ml-1.5 text-sm whitespace-nowrap {h.wordCls}">{h.word}</span>{@render updated()}
     </div>
-    {@render bodyOf()}
     {@render plates()}
+    {@render bodyOf()}
   {:else if element.kind === "finding"}
-    {@const v = severityView(element.severity)}
-    <div class="copy">
-      {@render lead(v.word, v.text)}<span class="text-ink"><SSHText {sessionId} text={element.title} /></span>{@render updated()}
-    </div>
-    {@render bodyOf()}
+    {@const v = severity(element.severity)}
+    {#if record}
+      <div class="max-w-[560px] border-l-2 pl-3.5 {findingRail[element.severity ?? ''] ?? 'border-edge'}" data-finding>
+        <div class="text-sm font-medium {v.cls}">{v.word}</div>
+        <div class="text-prose font-semibold text-ink"><SSHText {sessionId} text={element.title} />{@render updated()}</div>
+      </div>
+    {:else}
+      <div class="copy max-w-[640px] text-base">
+        {@render lead(v.word, `font-medium ${v.cls}`)}<span class="text-ink"><SSHText {sessionId} text={element.title} /></span>{@render updated()}
+      </div>
+    {/if}
     {@render plates()}
+    {@render bodyOf()}
   {:else if element.kind === "plan"}
     <div class="copy">{@render lead("Plan")}<span class="text-ink"><SSHText {sessionId} text={element.title} /></span>{@render updated()}</div>
-    <ol class="mt-1.5 grid gap-1">
+    <ol class="mt-1 grid gap-1">
       {#each element.steps ?? [] as step, i (i)}
-        {@const s = stepView(step.state)}
-        <li class="grid grid-cols-[14px_minmax(0,1fr)] items-baseline gap-1.5">
-          <span class="translate-y-px justify-self-center">
-            <span class="inline-block h-2 w-2 rounded-full border {s.ring}" aria-hidden="true"></span>
-          </span>
-          <span class="{s.text} copy"><SSHText {sessionId} text={step.text} />{s.suffix}</span>
+        {@const st = stepView(step.state)}
+        <li class="grid grid-cols-[16px_minmax(0,1fr)] items-baseline gap-x-2">
+          <span class="num text-right text-sm text-faint" aria-hidden="true">{i + 1}</span>
+          <span class="{st.text} copy"><SSHText {sessionId} text={step.text} />{st.suffix}</span>
         </li>
       {/each}
     </ol>
@@ -218,12 +231,12 @@
     <div class="copy">
       {@render lead("Proposed")}<span class="text-ink"><SSHText {sessionId} text={element.title} /></span>{@render updated()}
     </div>
-    <!-- Dashed: not on the record yet. Solid plates are the record. -->
+    <!-- Not on the record yet, so it has no plate. In the tray it is dashed, because you can act on it. -->
     <div
       data-proposal-command
-      class="mt-1.5 rounded border border-dashed border-edge px-2.5 py-1.5 font-mono text-sm whitespace-pre-wrap break-all {element.state === 'declined'
+      class="mt-1 font-mono text-sm break-all whitespace-pre-wrap {record ? '' : 'rounded border border-dashed border-edge px-2.5 py-1.5'} {element.state === 'declined'
         ? 'text-faint line-through decoration-edge'
-        : 'text-ink'}"
+        : record ? 'text-ink-2' : 'text-ink'}"
     >
       <span class="mr-[1ch] text-faint" aria-hidden="true">$</span>{element.command}{#if element.cwd}<div class="text-faint no-underline">in {element.cwd}</div>{/if}
     </div>
@@ -238,9 +251,9 @@
     {:else if element.state === "declined"}
       <div class="mt-1.5 text-sm text-faint">You declined this</div>
       {#if element.outcome?.text}
-        <div class="mt-1 rounded-md bg-sel/50 px-2.5 py-1.5">
-          <span class="text-sm text-accent-ink">You</span>
-          <span class="copy ml-1.5 text-ink">{element.outcome.text}</span>
+        <div class="mt-1 rounded-md bg-sel/50 px-3 py-2 text-prose">
+          <span class="sr-only">You said</span>
+          <span class="copy text-ink">{element.outcome.text}</span>
         </div>
       {/if}
     {:else if checking && conn}
@@ -276,9 +289,9 @@
           <Button variant="danger" size="xs" onclick={decline}>Decline</Button>
         </div>
       </div>
-    {:else if !decided}
+    {:else if !decided && !record}
       <div class="mt-1.5 flex flex-wrap items-center gap-1.5">
-        <Button variant="secondary" size="xs" disabled={!conn} data-proposal-run onclick={startCheck}>Run on {host}…</Button>
+        {#if conn}<Button variant="secondary" size="xs" data-proposal-run onclick={startCheck}>Run on {host}…</Button>{/if}
         <Button variant="danger" size="xs" onclick={() => (declining = true)}>Decline…</Button>
         <Button size="xs" onclick={() => copy(element.command ?? "")}>Copy</Button>
       </div>
@@ -288,11 +301,11 @@
     {@render bodyOf()}
     {@render plates()}
     {#if element.state === "answered"}
-      <div class="mt-1.5 rounded-md bg-sel/50 px-2.5 py-1.5">
-        <span class="text-sm text-accent-ink">You</span>
-        <span class="copy ml-1.5 text-ink">{element.outcome?.text}</span>
+      <div class="mt-1 rounded-md bg-sel/50 px-3 py-2 text-prose">
+        <span class="sr-only">You said</span>
+        <span class="copy text-ink">{element.outcome?.text}</span>
       </div>
-    {:else}
+    {:else if !record}
       {#if questionMoved}<p class="mt-1.5 text-sm text-warn" role="alert">{agent} changed this question. Read it again.</p>{/if}
       <div class="mt-1.5 flex flex-wrap items-center gap-1.5">
         {#each element.choices ?? [] as c (c)}

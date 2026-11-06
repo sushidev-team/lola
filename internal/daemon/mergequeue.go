@@ -227,7 +227,7 @@ func (d *Daemon) queueSync(ctx context.Context, s session.Session, base string, 
 	sha := s.PR.HeadSHA
 	err := d.typeAtRestingPrompt(ctx, s, mergeQueueSyncMessage(s, base, behind), func(cur *session.Session) {
 		cur.MergeQueueGuard = &session.MergeQueueGuard{Action: mqActSync, HeadSHA: sha, At: time.Now()}
-	})
+	}, d.lockAutomationPrompt, noteFor(s, mergeQueueSyncLabel(s)))
 	switch {
 	case err == nil:
 		d.logf("", "mergequeue: %s (#%d) is %d behind %s — asked the agent to merge it in", s.ID, s.PR.Number, behind, base)

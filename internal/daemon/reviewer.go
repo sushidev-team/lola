@@ -674,6 +674,7 @@ func (d *Daemon) runReviewChain(ctx context.Context, s session.Session, p review
 				d.logf("", "review: %s primary %s could not answer; fallback %s reviewed PR #%d", s.ID, p.Kind, k, prNum)
 			}
 			d.recordReviewTally(s.ID, string(p.Kind), prNum, findings)
+			d.noteReviewTally(s, p, prNum, findings)
 			d.routeFindings(ctx, s, p, findings)
 			return reviewResult{Ran: true, Findings: strings.TrimSpace(findings)}
 		}
@@ -1013,7 +1014,7 @@ func (d *Daemon) sendHandoffToAgent(ctx context.Context, s session.Session, p re
 		return false
 	}
 
-	if err := d.typeToAgentLocked(ctx, tmuxName, msg, reactExecTimeout); err != nil {
+	if err := d.typeToAgentLocked(ctx, noteFor(s, reviewHandoffLabel(p, s)), tmuxName, msg, reactExecTimeout); err != nil {
 		// Gate already consumed; do not roll back (that would re-fire and spam).
 		d.logf("", "review: %s (%s) send-keys of hand-off failed: %v", s.ID, p.Kind, err)
 		return false

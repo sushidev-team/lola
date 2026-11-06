@@ -1,0 +1,93 @@
+[
+  {
+    "id": "u-1:0",
+    "kind": "user",
+    "order": 0,
+    "turn": "u-1:0",
+    "text": "Fix the login bug",
+    "at": "2026-11-06T10:00:00Z"
+  },
+  {
+    "id": "a-1:0",
+    "kind": "text",
+    "order": 1,
+    "turn": "u-1:0",
+    "text": "Looking at the handler.",
+    "at": "2026-11-06T10:00:02Z"
+  },
+  {
+    "id": "a-2:0",
+    "kind": "tool",
+    "order": 2,
+    "turn": "u-1:0",
+    "at": "2026-11-06T10:00:03Z",
+    "tool": {
+      "name": "Read",
+      "category": "read",
+      "summary": "auth/login.go",
+      "status": "ok",
+      "durationMs": 1500,
+      "preview": "package auth\nfunc Login() {}",
+      "hasOutput": true
+    }
+  },
+  {
+    "id": "a-3:0",
+    "kind": "tool",
+    "order": 3,
+    "turn": "u-1:0",
+    "at": "2026-11-06T10:00:05Z",
+    "tool": {
+      "name": "Edit",
+      "category": "edit",
+      "summary": "auth/login.go",
+      "status": "ok",
+      "durationMs": 200,
+      "added": 2,
+      "removed": 1,
+      "preview": "ok",
+      "hasOutput": true
+    }
+  },
+  {
+    "id": "a-4:0",
+    "kind": "tool",
+    "order": 4,
+    "turn": "u-1:0",
+    "at": "2026-11-06T10:00:06Z",
+    "tool": {
+      "name": "Write",
+      "category": "edit",
+      "summary": "new.go",
+      "status": "ok",
+      "durationMs": 100,
+      "added": 3,
+      "preview": "File created",
+      "hasOutput": true
+    }
+  },
+  {
+    "id": "a-5:0",
+    "kind": "tool",
+    "order": 5,
+    "turn": "u-1:0",
+    "at": "2026-11-06T10:00:07Z",
+    "tool": {
+      "name": "Bash",
+      "category": "run",
+      "summary": "go test ./auth",
+      "status": "error",
+      "durationMs": 2000,
+      "preview": "--- FAIL: TestLogin\nred",
+      "hasOutput": true
+    }
+  },
+  {
+    "id": "a-6:0",
+    "kind": "text",
+    "order": 6,
+    "turn": "u-1:0",
+    "text": "The test still fails.",
+    "at": "2026-11-06T10:00:10Z"
+  }
+]
