@@ -639,6 +639,8 @@ export function toTokens(f: Flavor): Record<string, string> {
     "--color-info": readable(f.blue, ...bare),
     "--color-orange": readable(f.peach, ...bare),
     "--color-magenta": readable(f.mauve, ...bare),
+    // Agent commentary has its own identity, separate from Lola and status.
+    "--color-commentary": readable(f.teal, ...bare),
 
     "--color-pill-urgent": f.peach,
     "--color-pill-urgent-fg": onFill(f, f.peach),

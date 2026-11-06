@@ -16,10 +16,12 @@
   import Disclosure from "../Disclosure.svelte";
   import SSHBlock from "../ssh/SSHBlock.svelte";
   import SSHElement from "../ssh/SSHElement.svelte";
+  import { disclosureMotion } from "$lib/disclosureMotion";
   import SSHRich from "../ssh/SSHRich.svelte";
   import ToolRow from "./ToolRow.svelte";
   import WorkRun from "./WorkRun.svelte";
   import Receipt from "./Receipt.svelte";
+  import SystemMessage from "./SystemMessage.svelte";
   import Moment from "./Moment.svelte";
   import WidgetCard from "./WidgetCard.svelte";
   import AttachGlyph from "./AttachGlyph.svelte";
@@ -71,14 +73,21 @@
 {/snippet}
 
 {#if row.kind === "tool"}
-  <ToolRow {sessionId} {row} {chars} {readonly} {nested} />
+  <ToolRow {sessionId} {row} {chars} {readonly} nested />
 {:else if row.kind === "run"}
   <WorkRun {sessionId} {row} {chars} {readonly} {nested} />
 {:else if row.kind === "prose"}
   <span class="sr-only">{agent} says</span>
   <!-- Colour and rail mark change at the stop, and the geometry does not. An answer's body reads a
        step below its lead, and a beat short enough to be one line carries its role's colour alone. -->
-  <div class="selectable {role === 'narration' || answerShaped(row.text) ? 'text-ink-2' : 'text-ink'} text-prose" data-voice="agent" data-role={role}><SSHRich {sessionId} text={row.text} quiet={role === "narration"} conversation /></div>
+  {#if role === "narration"}
+    <aside class="cv-progress-note" aria-label="Agent commentary">
+      <svg class="cv-note-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 3.5h12v9H9l-4 3v-3H4zM7 7h6M7 9.5h4" /></svg>
+      <div class="min-w-0 selectable text-prose text-ink-2" data-voice="agent" data-role="narration"><SSHRich {sessionId} text={row.text} quiet conversation /></div>
+    </aside>
+  {:else}
+  <div class="selectable {answerShaped(row.text) ? 'text-ink-2' : 'text-ink'} text-prose" data-voice="agent" data-role={role}><SSHRich {sessionId} text={row.text} conversation compact={role === "answer"} reveal={view.cursor === row.id} /></div>
+  {/if}
   {#if row.truncated}
     <p class="mt-1 flex items-center gap-2 text-sm text-faint">
       This message is longer than lola keeps.
@@ -90,7 +99,7 @@
   {#if h}
     {@const sent = youAttachments(h.text)}
     <span class="sr-only">You said</span>
-    <div class="ml-auto w-fit max-w-full rounded-[14px] rounded-tr-[4px] border border-edge/60 bg-sel/50 px-4 py-3 text-prose text-ink" data-voice="you">
+    <div class="cv-user-message text-prose" data-voice="you">
       {#if sent.images.length}
         <div class="flex flex-wrap gap-2 pb-2" data-you-images>
           {#each sent.images as im (im.n)}
@@ -114,28 +123,35 @@
       {/if}
     </div>
     {#if h.recalled}
-      <p class="mt-1 text-right text-sm text-faint">Recalled</p>
+      <p class="mt-1 text-sm text-faint">Recalled</p>
     {:else if h.returned}
-      <p class="mt-1 flex items-center justify-end gap-2 text-sm text-faint">
+      <p class="mt-1 flex items-center justify-start gap-2 text-sm text-faint">
         Returned to {agent}'s prompt
         <Button size="xs" onclick={() => ssh.showAgentPane(sessionId)}>Terminal</Button>
       </p>
     {/if}
     {#if noFeed && maybeAnsweredInPane(view.items, row.item, session?.agentState, sshClock.now)}
-      <div class="mt-1 flex justify-end"><Moment text="{agent} may have answered in its own terminal."><Button size="xs" onclick={() => ssh.showAgentPane(sessionId)}>Show</Button></Moment></div>
+      <div class="mt-1 flex justify-start"><Moment text="{agent} may have answered in its own terminal."><Button size="xs" onclick={() => ssh.showAgentPane(sessionId)}>Show</Button></Moment></div>
     {/if}
   {/if}
 {:else if row.kind === "terminal"}
   <!-- On the person's side, because a person typed it, but only the log says so: its label stays and
        it gets a side line where a message on lola's record gets a fill. -->
-  <div class="ml-auto w-fit max-w-full border-r-2 border-edge pr-3">
-    <div class="mb-0.5 text-sm text-faint">In terminal</div>
+  <div class="cv-user-message">
+    <span class="sr-only">In terminal</span>
     <div class="text-prose" data-voice="terminal">{@render clamped(row.id, row.text, "text-ink-2", 6)}</div>
   </div>
 {:else if row.kind === "origin"}
-  <p class="selectable text-sm text-faint" data-voice="origin">{row.text}</p>
+  {#if row.source === "lola"}
+    <SystemMessage text={row.text} label={row.label} legacy reveal={view.cursor === row.id} />
+  {:else}
+    <details class="cv-background-event" use:disclosureMotion open={view.cursor === row.id}>
+      <summary><Chevron class="cv-disclosure-chevron" /><span>Background event</span><span class="cv-event-preview">{row.text.replace(/^Background task finished · /, "")}</span></summary>
+      <div class="selectable">{row.text}</div>
+    </details>
+  {/if}
 {:else if row.kind === "notice"}
-  <p class="selectable text-sm break-words whitespace-pre-wrap text-faint" data-voice="notice">{row.text}</p>
+  <p class="selectable text-sm break-words whitespace-pre-wrap text-faint" data-voice="notice" title={row.text}>{row.text}</p>
 {:else if row.kind === "plate"}
   {#if row.item.block}
     <span class="sr-only">Lola recorded</span>
@@ -160,7 +176,11 @@
 {:else if row.kind === "widget"}
   {#if row.item.element}<WidgetCard {sessionId} element={row.item.element as SSHElementData} />{/if}
 {:else if row.kind === "moment"}
-  <Moment text={row.text} />
+  {#if row.item.system?.kind === "handoff" && row.text.startsWith("lola ")}
+    <SystemMessage text={row.text} label={row.text.replace(/^lola /, "")} reveal={view.cursor === row.id} />
+  {:else}
+    <Moment text={row.text} />
+  {/if}
   {#if row.item.system?.kind === "handed_back"}
     <p class="mt-0.5 text-sm text-faint">{droveFor(view.items, row.item)}</p>
   {/if}

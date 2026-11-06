@@ -9,6 +9,7 @@
   import { nav } from "$lib/nav.svelte";
   import { changesOffered } from "$lib/sessionview";
   import { diffStat, type TurnFiles } from "$lib/turns";
+  import { tooltip } from "$lib/tooltip";
   import Button from "../Button.svelte";
 
   let {
@@ -28,15 +29,17 @@
   // The receipt knows the turn only by its number, so that is what the question names.
   const turn = $derived({ seq, label: `turn ${seq}` });
   // What changed is the part of this line worth a second look. The word order is receiptWords'.
-  const said = $derived.by(() => {
-    const m = /\+\d+ −\d+/.exec(words);
-    return m ? { before: words.slice(0, m.index), diff: m[0], after: words.slice(m.index + m[0].length) } : { before: words, diff: "", after: "" };
-  });
+  const pieces = $derived(words.split(" · "));
+  const status = $derived(pieces[0]);
+  const metadata = $derived(pieces.slice(1));
 </script>
 
 <div class="cv-receipt" data-receipt={stopped ? "stopped" : "done"}>
   <div class="cv-receipt-summary group min-h-6 text-sm text-faint">
-    <span class="num" {title}>{said.before}{#if said.diff}<span class="text-ink-2">{said.diff}</span>{/if}{said.after}</span>
+    <span class="cv-completion" use:tooltip={title}>
+      <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">{#if stopped}<path d="M5 4v8M11 4v8" />{:else}<path d="m3 8 3 3 7-7" />{/if}</svg>{status}
+    </span>
+    <span class="cv-receipt-meta num">{#each metadata as item}<span>{item}</span>{/each}</span>
     {#if canDiff}
       <span class="flex items-center gap-1 transition-opacity duration-100 {latest ? '' : 'opacity-0 group-hover:opacity-100 focus-within:opacity-100'}" data-receipt-actions>
         {#if session}<Button size="xs" onclick={() => ssh.openChanges(session, seq)}>View changes</Button>{/if}

@@ -1,3 +1,4 @@
+import { tick } from "svelte";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, screen, cleanup, fireEvent } from "@testing-library/svelte";
 import SessionsTable from "./SessionsTable.svelte";
@@ -361,5 +362,45 @@ describe("SessionsTable stack session", () => {
     expect(card).toHaveTextContent("docs");
     expect(card).toHaveTextContent("untouched");
     vi.useRealTimers();
+  });
+});
+
+
+describe("session list height", () => {
+  it("caps the scroll area at ten measured rows, preserving all sessions", async () => {
+    cleanup();
+    store.connected = true;
+    store.alive = true;
+    nav.scoped = false;
+    nav.project = "";
+    nav.triage = "";
+    store.sessions = Array.from({ length: 14 }, (_, i) => fakeSession({ id: `row-${i}`, issue: `ENG-${i}` }));
+    const callbacks: (() => void)[] = [];
+    vi.stubGlobal("ResizeObserver", class {
+      constructor(cb: () => void) { callbacks.push(cb); }
+      observe() {} disconnect() {} unobserve() {}
+    });
+    const host = document.createElement("div");
+    host.setAttribute("data-session-list", "");
+    document.body.append(host);
+    try {
+      render(SessionsTable, { target: host });
+      await tick();
+      const table = host.querySelector("table")!;
+      Object.defineProperty(table.tHead, "offsetHeight", { value: 30, configurable: true });
+      for (const row of table.tBodies[0].rows) Object.defineProperty(row, "offsetHeight", { value: 32, configurable: true });
+      expect(table.tBodies[0].rows).toHaveLength(14);
+      expect(callbacks.length).toBeGreaterThan(0);
+      callbacks.forEach((cb) => cb());
+      expect(host.style.maxHeight).toBe("350px");
+      expect(table.tBodies[0].rows).toHaveLength(14);
+      for (const row of table.tBodies[0].rows) Object.defineProperty(row, "offsetHeight", { value: 48, configurable: true });
+      callbacks.forEach((cb) => cb());
+      expect(host.style.maxHeight).toBe("510px");
+    } finally {
+      cleanup();
+      host.remove();
+      vi.unstubAllGlobals();
+    }
   });
 });

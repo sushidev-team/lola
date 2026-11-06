@@ -6,6 +6,7 @@
   //
   // Hand-rolled buttons on purpose, like the other card-shaped rows: the row IS the control, and
   // a Button's padding and hover chip would break the 24px rhythm these rows sit on.
+  import { tooltip } from "$lib/tooltip";
   import { changes } from "$lib/changes.svelte";
   import { store } from "$lib/store.svelte";
   import { ssh, sshClock } from "$lib/ssh.svelte";
@@ -17,6 +18,8 @@
   import StoryRow from "./StoryRow.svelte";
   import Button from "../Button.svelte";
   import Chevron from "../Chevron.svelte";
+  import SyntaxText from "../SyntaxText.svelte";
+  import ToolOutput from "./ToolOutput.svelte";
   import DigLine from "./DigLine.svelte";
 
   let {
@@ -66,7 +69,7 @@
 
 {#snippet cells()}
   <span class="text-faint">{verb}</span>
-  <span class="min-w-0 truncate font-mono text-ink-2">{target}</span>
+  <span class="min-w-0 truncate font-mono text-ink-2"><SyntaxText text={target} language={tool.category === "run" ? "sh" : "text"} /></span>
   <span class="num flex items-baseline gap-2 whitespace-nowrap text-faint">
     {#if words.word}<span class={words.bad ? (row.settled ? "text-ink-2" : "text-bad") : ""}>{words.word}</span>{/if}
     {#if words.tail}<span>{words.tail}</span>{/if}
@@ -79,7 +82,7 @@
        These colours settle when it finishes. Nothing loops: the footer glyph is the one pulse. -->
   <span class="flex min-w-0 items-baseline gap-2">
     <span class="shrink-0 text-base text-ink">{verb}</span>
-    <span class="min-w-0 truncate font-mono text-sm text-ink">{target}</span>
+    <span class="min-w-0 truncate font-mono text-sm text-ink"><SyntaxText text={target} language={tool.category === "run" ? "sh" : "text"} /></span>
   </span>
   <span class="num flex items-baseline gap-2 text-sm whitespace-nowrap text-info">
     {#if words.word}<span>{words.word}</span>{/if}
@@ -91,19 +94,19 @@
 <div data-tool={tool.category} data-status={row.status}>
   {#if running}
     {#if canOpen}
-      <button type="button" class="group -mx-2 grid h-6 w-[calc(100%+16px)] grid-cols-[minmax(0,1fr)_auto_16px] items-center gap-x-2 rounded-sm px-2 text-left enabled:hover:bg-sel/30 focus-visible:-outline-offset-1" title={tool.detail || row.target} aria-expanded={open} onclick={press}>
+      <button type="button" class="group -mx-2 grid h-6 w-[calc(100%+16px)] grid-cols-[minmax(0,1fr)_auto_16px] items-center gap-x-2 rounded-sm px-2 text-left enabled:hover:bg-sel/30 focus-visible:-outline-offset-1" use:tooltip={{ text: tool.detail || row.target, language: tool.category === "run" ? "sh" : "text" }} aria-expanded={open} onclick={press}>
         {@render live()}
       </button>
     {:else}
-      <div class="grid h-6 grid-cols-[minmax(0,1fr)_auto_16px] items-center gap-x-2" title={tool.detail || row.target}>{@render live()}</div>
+      <div class="grid h-6 grid-cols-[minmax(0,1fr)_auto_16px] items-center gap-x-2" use:tooltip={{ text: tool.detail || row.target, language: tool.category === "run" ? "sh" : "text" }}>{@render live()}</div>
     {/if}
   {:else if nested}
     {#if canOpen || toChanges}
-      <button type="button" class="group -mx-2 grid h-5 w-[calc(100%+16px)] grid-cols-[44px_minmax(0,1fr)_auto_16px] items-baseline gap-x-2 rounded-sm px-2 text-left text-sm leading-5 enabled:hover:bg-sel/30 focus-visible:-outline-offset-1" title={tool.detail || row.target} aria-expanded={canOpen ? open : undefined} onclick={press}>
+      <button type="button" class="group -mx-2 grid h-5 w-[calc(100%+16px)] grid-cols-[44px_minmax(0,1fr)_auto_16px] items-baseline gap-x-2 rounded-sm px-2 text-left text-sm leading-5 enabled:hover:bg-sel/30 focus-visible:-outline-offset-1" use:tooltip={{ text: tool.detail || row.target, language: tool.category === "run" ? "sh" : "text" }} aria-expanded={canOpen ? open : undefined} onclick={press}>
         {@render cells()}
       </button>
     {:else}
-      <div class="grid h-5 grid-cols-[44px_minmax(0,1fr)_auto_16px] items-baseline gap-x-2 text-sm leading-5" title={tool.detail || row.target}>{@render cells()}</div>
+      <div class="grid h-5 grid-cols-[44px_minmax(0,1fr)_auto_16px] items-baseline gap-x-2 text-sm leading-5" use:tooltip={{ text: tool.detail || row.target, language: tool.category === "run" ? "sh" : "text" }}>{@render cells()}</div>
     {/if}
   {:else}
     <DigLine
@@ -120,11 +123,11 @@
   {/if}
 
   {#if tool.preview && row.previewOpen && !row.settled && !open}
-    <p class="selectable line-clamp-3 pb-1 pl-4 font-mono text-sm break-words whitespace-pre-wrap text-ink-2" data-preview>{tool.preview}</p>
+    <p class="selectable line-clamp-3 pb-1 pl-4 font-mono text-sm break-words whitespace-pre-wrap text-ink-2" data-preview><SyntaxText text={tool.preview} language="text" /></p>
   {/if}
 
   {#if open}
-    <div class="pb-1 pl-4">
+    <div class="min-w-0 max-w-full pb-2 pl-4" data-tool-expansion>
       {#if tool.subagent}
         {#if thread?.loading}
           <p class="text-sm text-faint">Reading what this agent did</p>
@@ -141,7 +144,7 @@
         {:else if output?.failed}
           <p class="text-sm text-faint">Could not read this output. The terminal may still show it.</p>
         {:else}
-          <pre class="selectable max-h-60 overflow-auto rounded-sm font-mono text-sm break-words whitespace-pre-wrap text-ink-2" data-tool-output>{output?.text || tool.preview}</pre>
+          <ToolOutput text={output?.text || tool.preview} command={`${row.target} ${tool.detail || ""}`} sourcePath={tool.category === "read" ? row.target : ""} />
           {#if output?.truncated}
             <p class="flex items-center gap-2 text-sm text-faint">
               This is the first part.
@@ -150,7 +153,7 @@
           {/if}
         {/if}
       {:else if tool.preview}
-        <pre class="selectable font-mono text-sm break-words whitespace-pre-wrap text-ink-2">{tool.preview}</pre>
+        <ToolOutput text={tool.preview} command={`${row.target} ${tool.detail || ""}`} sourcePath={tool.category === "read" ? row.target : ""} />
       {/if}
     </div>
   {/if}

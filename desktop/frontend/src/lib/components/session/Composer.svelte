@@ -683,7 +683,7 @@
         {/each}
       </ul>
     {/if}
-    <div class="flex items-start px-4 pt-3">
+    <div class="flex items-start px-4 pt-3" data-composer-field>
       {#if running}<span class="text-prose pr-1.5 font-mono text-ink-2" aria-hidden="true">$</span>{/if}
       <div class="grid min-w-0 flex-1 grid-cols-[minmax(0,1fr)]">
         {#if segments.length}

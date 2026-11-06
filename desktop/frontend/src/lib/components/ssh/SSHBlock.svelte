@@ -17,6 +17,7 @@
     type SSHBlock,
     type Filter,
   } from "$lib/ssh";
+  import SyntaxText from "../SyntaxText.svelte";
   import Button from "../Button.svelte";
   import Chevron from "../Chevron.svelte";
   import SSHOutput from "./SSHOutput.svelte";
@@ -86,7 +87,7 @@
         onclick={toggle}
       >
         <span class="grid grid-cols-[minmax(0,1fr)_auto_16px] items-baseline gap-x-2">
-          <span class="block min-w-0 truncate" data-command-line>{@render whose()}{@render hostMark()}{@render prompt()}<span class="text-ink">{block.command}</span></span>
+          <span class="block min-w-0 truncate" data-command-line>{@render whose()}{@render hostMark()}{@render prompt()}<span class="text-ink"><SyntaxText text={block.command} language="sh" /></span></span>
           <span class="num flex items-baseline gap-2 whitespace-nowrap">
             {#if block.elevated}{@render sudo()}{/if}
             <span data-result>{@render result()}</span>
@@ -111,7 +112,7 @@
       <div class="grid gap-2 px-3 py-2">
         <SSHOutput {sessionId} {block} onHead={toggle}>
           {#snippet head()}
-            <div class="selectable font-medium break-all whitespace-pre-wrap text-ink" data-command-line>{@render whose()}{@render hostMark()}{@render prompt()}{block.command}</div>
+            <div class="selectable font-medium break-all whitespace-pre-wrap text-ink" data-command-line>{@render whose()}{@render hostMark()}{@render prompt()}<SyntaxText text={block.command} language="sh" /></div>
             <!-- Silent when all is well. Only what changes how you read the output shows. -->
             {#if block.elevated || block.status !== "succeeded"}
               <div class="num mt-0.5 flex flex-wrap items-center gap-x-2">

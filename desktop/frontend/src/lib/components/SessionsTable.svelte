@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tick } from "svelte";
   import TimeAgo from "$lib/components/TimeAgo.svelte";
   import { store, scopedSessions } from "$lib/store.svelte";
   import { nav } from "$lib/nav.svelte";
@@ -32,6 +33,27 @@
   // SessionsKanban, TerminalGrid, App's cockpitRows) — otherwise arrow-key
   // movement walks a different list than the one the table renders.
   const rows = $derived(triaged(scopedSessions(store.sessions, nav.scoped, nav.project), nav.triage));
+  let table = $state<HTMLTableElement | null>(null);
+  $effect(() => {
+    const node = table;
+    const count = rows.length;
+    if (!node || typeof ResizeObserver === "undefined") return;
+    const host = node.closest<HTMLElement>("[data-session-list]");
+    if (!host) return;
+    const measure = () => {
+      const first = node.tBodies[0]?.rows[0];
+      const last = node.tBodies[0]?.rows[Math.min(count, 10) - 1];
+      if (!first || !last) { host.style.maxHeight = ""; return; }
+      // Sum row heights rather than viewport positions: the sticky header and scrolling
+      // must not change the cap. Works for both one-line and two-line rows.
+      const height = (node.tHead?.offsetHeight ?? 0) + Array.from(node.tBodies[0].rows).slice(0, 10).reduce((n, row) => n + row.offsetHeight, 0);
+      if (height > 0) host.style.maxHeight = `${height}px`;
+    };
+    const observer = new ResizeObserver(measure);
+    observer.observe(node);
+    void tick().then(measure);
+    return () => { observer.disconnect(); host.style.maxHeight = ""; };
+  });
   // The Tokens column appears only once some listed session has a figure, so a
   // fleet running only codex/opencode keeps its columns.
   const anyCost = $derived(rows.some((s) => !!s.usage));
@@ -77,7 +99,7 @@
 <!-- px-1 lands the first cell's own pl-2 on the app's 12px inset now that the
      table sits on the canvas instead of inside a padded panel. -->
 <div class="min-w-0 px-1">
-  <table class="w-full border-separate border-spacing-0">
+  <table bind:this={table} class="w-full border-separate border-spacing-0">
     <!-- The sticky head must match what it sticks over: canvas, not the panel
          tint the surrounding card used to paint. -->
     <thead class="sticky top-0 bg-canvas/90 backdrop-blur">

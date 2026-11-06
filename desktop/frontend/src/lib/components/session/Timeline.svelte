@@ -144,6 +144,8 @@
   let chars = $state(72);
   // The turn whose ask has scrolled off while its rows still fill the window.
   let headTurn = $state("");
+  const headSource = $derived(story.turns.find(t => t.id === headTurn)?.rows.find(r => r.kind === "origin" || r.kind === "you" || r.kind === "terminal" || r.kind === "moment"));
+  const headLabel = $derived(headSource?.kind === "origin" && headSource.source === "lola" ? "Lola instruction" : headSource?.kind === "moment" ? "Session event" : headSource?.kind === "origin" ? "Background context" : "Your request");
   const headAsk = $derived(headTurn ? turnAsk(story.turns.find((t) => t.id === headTurn) ?? { rows: [] }) : "");
   let anchor: { row: Element; top: number } | null = null;
   // New rows fade once. A row seen before never replays it, whether it remounts or refetches.
@@ -233,6 +235,10 @@
     const el = content;
     if (!el || typeof ResizeObserver === "undefined") return;
     const ro = new ResizeObserver(() => {
+      const lastTurn = Array.from(el.querySelectorAll<HTMLElement>("[data-turn]")).at(-1);
+      const end = lastTurn?.querySelector<HTMLElement>(".cv-turn-end");
+      const stop = end ? Math.max(16, el.getBoundingClientRect().bottom - end.getBoundingClientRect().top + 8) : 24;
+      el.style.setProperty("--cv-rail-end", `${stop}px`);
       if (scroller?.clientWidth) chars = Math.max(24, Math.floor((Math.min(el.clientWidth - 48, AGENT_COLUMN_PX) - ROW_CHROME_PX) / PX_PER_CHAR));
       // The dock sits outside the scroller, and has to give up the same width to keep the rail straight.
       if (scroller) scroller.closest<HTMLElement>("[data-conversation]")?.style.setProperty("--cv-sb", `${scroller.offsetWidth - scroller.clientWidth}px`);
@@ -355,6 +361,7 @@
     if (!reveal(id)) return;
     if (back == null) back = scroller?.scrollTop ?? null;
     stuck = false;
+    view.cursor = id; // Open work groups and answer sections before locating the target.
     await tick();
     const el = scroller?.querySelector(rowSelector(id));
     // A block lands at the top, because the first thing a dig shows is the exact command.
@@ -703,8 +710,8 @@
   {#if headAsk && !finding}
     <!-- The question a long answer has scrolled away from. It comes and goes only with the scroll. The
          row is the control, as in ToolRow. -->
-    <button type="button" class="absolute inset-x-0 top-0 z-10 h-7 border-b border-edge/40 bg-canvas text-left hover:bg-sel/30" title="Back to this message" onclick={toHead} data-turn-head>
-      <span class="cv-band block truncate text-sm leading-7 text-ink-2">{headAsk}</span>
+    <button type="button" class="cv-context absolute inset-x-0 top-0 z-10 text-left" title={headAsk} onclick={toHead} data-turn-head>
+      <span class="cv-band cv-context-inner"><span class="cv-context-source">{headLabel}</span><span class="min-w-0 truncate">{headSource?.kind === "origin" && headSource.label ? headSource.label : headAsk}</span><span class="cv-context-action">Back to message <Chevron /></span></span>
     </button>
   {/if}
 

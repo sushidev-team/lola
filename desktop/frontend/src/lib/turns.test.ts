@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildStory, catchUp, clampsRow, collapseWork, diffStat, foldLabel, liveVerb, findInStory, fitNames, flatRows, isFolded, isLolaCall, lastLifeIndex, locate, OPEN_TURNS, resolveStatus, shortName, toolStatusWords, type RunRowData, type ToolRowData, turnParts, turnAsk, turnFiles, workSegments, answerRowId, railKind } from "./turns";
+import { activitySummary, buildStory, catchUp, clampsRow, collapseWork, diffStat, foldLabel, liveVerb, findInStory, fitNames, flatRows, isFolded, isLolaCall, lastLifeIndex, locate, OPEN_TURNS, resolveStatus, shortName, toolStatusWords, type RunRowData, type ToolRowData, turnParts, turnAsk, turnFiles, workSegments, answerRowId, railKind } from "./turns";
 import { answerShaped } from "./answerblocks";
 
 const T0 = 1_700_000_000_000;
@@ -377,6 +377,11 @@ describe("turnParts", () => {
     const standing = parts.flatMap((p) => (p.kind === "row" && p.row.kind === "prose" ? [p.row.id] : []));
     expect(standing).toEqual(["p3", "p4", "p5", "p6", "p7", "p8", "answer"]);
   });
+  it("can fold all preceding narration while leaving the answer and trailing failure visible", () => {
+    const parts = turnParts([you("y"), prose("p1"), tool("t1"), prose("p2"), prose("answer"), tool("failed", "Ran", "run", "error")], 0);
+    expect(parts.map((p) => p.kind === "row" ? p.row.id : p.rows.map((r) => r.id))).toEqual(["y", ["p1", "t1", "p2"], "answer", "failed"]);
+  });
+
   it("a plate breaks the cap's fold too, and prose with nothing to name stays up", () => {
     const plate = { id: "b", gap: 0, kind: "plate", item: {} } as never;
     const rows = [prose("p1"), plate, prose("p2"), prose("p3"), tool("t3"), prose("last")];
@@ -462,5 +467,22 @@ describe("turnFiles", () => {
     const run = { id: "r", gap: 0, kind: "run", verb: "Edit", category: "edit", names: ["x"], items: [edit("x.go")], added: 1, removed: 0, durationMs: 0, failed: 0 } as never;
     expect(turnFiles([run, edit("read.go", 0, 0, "read")]).files.map((f) => f.name)).toEqual(["x.go"]);
     expect(turnFiles([edit("read.go", 0, 0, "read")])).toEqual({ files: [], more: 0 });
+  });
+});
+
+describe("activity summaries", () => {
+  it("counts file identities and commands without inventing intent", () => {
+    const rows = collapseWork([tool("read", "a.go"), tool("read", "a.go"), tool("read", "b.go"), tool("run", "git status"), tool("run", "npm test")], true);
+    expect(activitySummary(rows).label).toBe("Ran 2 commands · Read 2 files");
+  });
+  it("does not wrap a single historical call in another disclosure", () => {
+    const rows = collapseWork([tool("run", "gh api graphql")], false);
+    const parts = turnParts(rows, 0, true);
+    expect(parts).toHaveLength(1);
+    expect(parts[0].kind).toBe("row");
+  });
+  it("does not wrap an existing call group in another disclosure", () => {
+    const rows = collapseWork([tool("read", "a.go"), tool("read", "b.go")], false);
+    expect(turnParts(rows, 0, true)[0].kind).toBe("row");
   });
 });

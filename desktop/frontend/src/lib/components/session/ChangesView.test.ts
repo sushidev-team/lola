@@ -211,10 +211,10 @@ describe("ChangesView", () => {
     const row = { kind: "tool", id: "t1", ids: ["t1"], at: 0, gap: 0, verb: "Edit", target: "/w/base.go", status: "ok", tool: { name: "Edit", category: "edit", summary: "/w/base.go", status: "ok" }, item: { id: "t1", kind: "tool" } };
     terms.select(SID, SSH);
     render(ToolRow, { sessionId: SID, row: row as never });
-    await fireEvent.click(screen.getByTitle("/w/base.go"));
+    await fireEvent.click(screen.getByRole("button", { name: /Edited base.go/ }));
     expect(terms.activeTab(SID)).toBe(DIFF);
     expect(changes.wantedFile(SID)).toBe("/w/base.go");
-    await fireEvent.click(screen.getByTitle("/w/base.go"));
+    await fireEvent.click(screen.getByRole("button", { name: /Edited base.go/ }));
     expect(terms.activeTab(SID)).toBe(DIFF);
     terms.select(SID, SSH);
     changes.taken(SID);

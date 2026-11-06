@@ -6,14 +6,14 @@
   import { agentName } from "$lib/ssh";
   import { feed } from "$lib/feed.svelte";
   import { ssh } from "$lib/ssh.svelte";
-  import { answerRowId, foldLabel, railKind, turnAsk, turnFiles, turnParts, workLabel, workSegments, type StoryRow as StoryRowData, type Turn } from "$lib/turns";
+  import { answerRowId, foldLabel, railKind, turnAsk, turnFiles, turnParts, workLabel, type StoryRow as StoryRowData, type Turn } from "$lib/turns";
   import { answerBlocks, plainInline } from "$lib/answerblocks";
   import { clockTime } from "$lib/ssh";
   import Chevron from "../Chevron.svelte";
-  import DigLine from "./DigLine.svelte";
   import RailMark from "./RailMark.svelte";
   import StoryRow from "./StoryRow.svelte";
   import CatchUp from "./CatchUp.svelte";
+
 
   let {
     sessionId,
@@ -74,8 +74,8 @@
   });
 
   const mounted = $derived(near || pinned);
-  const parts = $derived(turnParts(turn.rows));
   const answerId = $derived(answerRowId(turn, live));
+  const parts = $derived(turnParts(turn.rows, answerId ? 0 : 1, !live && !latest));
   // buildStory ends a turn at every message, so a person's row can only ever open one. Their words
   // leave the agent's column and sit on their own side, and everything else stays in order.
   const person = $derived.by(() => {
@@ -87,14 +87,26 @@
     return last?.kind === "row" && last.row.kind === "receipt" ? last.row : undefined;
   });
   const agentParts = $derived(parts.filter((p) => !(p.kind === "row" && (p.row === person || p.row === receipt))));
+  const opener = $derived(agentParts[0]?.kind === "row" && (agentParts[0].row.kind === "origin" || (agentParts[0].row.kind === "moment" && agentParts[0].row.item.system?.kind === "handoff")) ? agentParts[0].row : undefined);
   const files = $derived(receipt ? turnFiles(turn.rows) : undefined);
   const personClock = $derived(person && !Number.isNaN(person.at) ? clockTime(new Date(person.at).toISOString()) : "");
+  // Keep chronology while grouping each progress note with the work that follows it.
+  function workSteps(rows: StoryRowData[]) {
+    const groups: StoryRowData[][] = [];
+    for (const row of rows) {
+      if (!groups.length || row.kind === "prose") groups.push([]);
+      groups[groups.length - 1].push(row);
+    }
+    return groups;
+  }
   const leads = (row: StoryRowData) => row.kind === "prose" && answerBlocks(row.text)[0]?.kind === "lead";
   // A cursor or a jump landing inside a fold opens it for good, or the row it names is not there.
   $effect(() => {
     if (!cursor) return;
     for (const p of parts) {
-      if (p.kind === "work" && p.rows.some((r) => r.id === cursor || (r.kind === "run" && r.items.some((m) => m.id === cursor)))) f.expanded.add(p.id);
+      for (const row of p.kind === "work" ? p.rows : [p.row]) {
+        if (row.kind === "run" && row.items.some(item => item.id === cursor)) f.expanded.add(row.id);
+      }
     }
   });
 </script>
@@ -105,7 +117,7 @@
       data-kind={row.kind}
       class="-mx-2 scroll-mt-2 rounded-sm px-2 {fresh?.(row.id) ? 'ssh-fade-in' : ''} {cursor === row.id ? 'bg-sel/30' : ''}"
     >
-      <StoryRow {sessionId} {row} {chars} {showHost} {nested} role={row.id === answerId ? "answer" : "narration"} {latest} files={row.kind === "receipt" ? files : undefined} />
+      <StoryRow {sessionId} {row} {chars} {showHost} {nested} role={row.id === answerId && (turn.receipt || person || latest) ? "answer" : "narration"} {latest} files={row.kind === "receipt" ? files : undefined} />
     </div>
 {/snippet}
 
@@ -156,38 +168,29 @@
       {#if person}
         <RailMark kind={railKind(person, answerId, view.filter)} />
         <div class="cv-person">
-          <div class="cv-speaker"><strong>{person.kind === "terminal" ? "You · terminal" : "You"}</strong>{#if personClock}<time>{personClock}</time>{/if}</div>
+          <div class="cv-speaker"><strong>You</strong>{#if person.kind === "terminal"}<span class="cv-source-badge">Terminal</span>{/if}{#if personClock}<time>{personClock}</time>{/if}</div>
           {@render rowBody(person)}
         </div>
       {/if}
       <div class="cv-agent">
-        {#if agentParts.length}
-          <div class="cv-speaker" data-agent-speaker><svg class="size-4 text-faint" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m8 8-4 4 4 4m8-8 4 4-4 4m-3-10-2 20" /></svg><strong>{agentName(session?.agent)}</strong></div>
+        {#if opener}<div class="mb-4">{@render rowView(opener, false, 0)}</div>{/if}
+        {#if agentParts.length > (opener ? 1 : 0)}
+          <span class="sr-only" data-agent-speaker>{agentName(session?.agent)} response</span>
         {/if}
         {#each agentParts as part, i (part.kind === "row" ? part.row.id : part.id)}
-          {#if part.kind === "row"}
+          {#if part.kind === "row" && part.row === opener}
+            <!-- System origin precedes the agent identity. -->
+          {:else if part.kind === "row"}
             {@render rowView(part.row, false, i === 0 ? 0 : part.row.gap)}
           {:else}
-            {@const open = f.expanded.has(part.id)}
-            <div class="relative" style="margin-top:{i === 0 ? 0 : part.rows[0].gap}px" data-work={part.id}>
-              <RailMark kind="tick" />
-              <DigLine
-                segments={workSegments(part.rows)}
-                control
-                chevron
-                {open}
-                word={part.failed > 0 ? `${part.failed} failed` : ""}
-                title={part.label}
-                onclick={() => (open ? f.expanded.delete(part.id) : f.expanded.add(part.id))}
-                data-work-fold=""
-              />
-              {#if open}
-                <div class="mt-0.5 pl-4">
-                  {#each part.rows as row, j (row.id)}
-                    {@render rowView(j === 0 ? { ...row, gap: 0 } : row, true)}
+            <div class="cv-work-flat" style="margin-top:{i === 0 ? 0 : part.rows[0].gap}px" data-work={part.id}>
+              {#each workSteps(part.rows) as step (step[0].id)}
+                <section class="cv-work-step" aria-label="Work log entry">
+                  {#each step as row (row.id)}
+                    {@render rowView(row, true, 0)}
                   {/each}
-                </div>
-              {/if}
+                </section>
+              {/each}
             </div>
           {/if}
         {/each}

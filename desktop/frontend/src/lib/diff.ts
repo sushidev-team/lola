@@ -299,6 +299,14 @@ export function tokenize(text: string, lang: Lang | null): Token[] {
     if (/\d/.test(ch) && !/[\w$]/.test(prev)) {
       const m = NUM_RE.exec(rest);
       if (m) {
+        // Hashes, identifiers and unit-bearing values are whole tokens, not a
+        // number followed by an unrelated suffix (e.g. 120eced or 4.1s).
+        if (/[A-Za-z_]/.test(rest[m[0].length] ?? "")) {
+          const word = /^[\w.]+/.exec(rest)?.[0] ?? m[0];
+          plain += word;
+          i += word.length;
+          continue;
+        }
         push("num", m[0]);
         i += m[0].length;
         continue;

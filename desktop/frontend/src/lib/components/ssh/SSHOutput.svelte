@@ -1,4 +1,5 @@
 <script lang="ts">
+  import SyntaxText from "../SyntaxText.svelte";
   import type { Snippet } from "svelte";
   // Raw output, the bottom of the dig. Streams stay separate on purpose: lola has no
   // record of how the two interleaved, and a false ordering would be worse than two
@@ -201,7 +202,7 @@
       >{:else if p.mark}<mark
         data-current={p.current ? "" : undefined}
         class="rounded-[2px] {p.current ? 'bg-accent text-on-accent' : 'bg-accent-fill text-accent-ink'}">{p.text}</mark
-      >{:else}{p.text}{/if}{/each}{/snippet}
+      >{:else}<SyntaxText text={p.text} language="text" />{/if}{/each}{/snippet}
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div class="grid min-h-0 gap-1.5 {full ? 'h-full grid-rows-[auto_auto_auto_minmax(0,1fr)]' : ''}" onkeydown={onKey} data-output>

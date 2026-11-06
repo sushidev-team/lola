@@ -46,7 +46,8 @@
      reflowGridRows dance is the layout fix documented in $lib/reflow.
 
      The list row is `fit-content(45vh)`, NOT a fraction: it sizes to the table and
-     scrolls past 45vh, so the session takes every pixel left down to the bottom edge. -->
+     scrolls past 45vh. SessionsTable also caps its host at ten measured rows,
+     so the session takes every pixel left down to the bottom edge. -->
 <div
   class="grid min-h-0 min-w-0"
   style="grid-template-rows:{nav.lens === 'grid' ? 'minmax(0,1fr)' : 'fit-content(45vh) minmax(280px,1fr)'}"
@@ -60,7 +61,7 @@
        Never accented either: it used to carry an accent border + ring while the
        keyboard was driving it, which read as an error state on a surface the user
        looks at constantly. The lens switcher and the selected row say that. -->
-  <div class="min-h-0 min-w-0 overflow-auto">
+  <div class="min-h-0 min-w-0 overflow-auto" data-session-list>
     {#if nav.lens === "list"}
       <SessionsTable />
     {:else if nav.lens === "kanban"}

@@ -1,0 +1,30 @@
+import { afterEach, expect, it, vi } from 'vitest';
+import { tooltip } from './tooltip';
+afterEach(() => { vi.useRealTimers(); document.body.replaceChildren(); });
+it('keeps long command previews intact and renders syntax as safe text', () => {
+  vi.useFakeTimers();
+  const node = document.createElement('button'); document.body.append(node);
+  const text = `git show --stat ${'a'.repeat(900)} <img src=x>`;
+  const action = tooltip(node, { text, language: 'sh' });
+  node.dispatchEvent(new MouseEvent('mouseenter')); vi.advanceTimersByTime(301);
+  const tip = document.querySelector<HTMLElement>('[role=tooltip]')!;
+  expect(tip.textContent).toBe(text);
+  expect(tip.querySelector('img')).toBeNull();
+  expect(tip.querySelector('.text-accent-ink')?.textContent).toBe('git');
+  action.destroy();
+});
+it('allows entering and scrolling the tooltip, and dismisses on Escape', () => {
+  vi.useFakeTimers();
+  const node = document.createElement('button'); document.body.append(node);
+  const action = tooltip(node, 'Long preview');
+  node.dispatchEvent(new MouseEvent('mouseenter')); vi.advanceTimersByTime(301);
+  const tip = document.querySelector<HTMLElement>('[role=tooltip]')!;
+  node.dispatchEvent(new MouseEvent('mouseleave')); vi.advanceTimersByTime(80);
+  tip.dispatchEvent(new MouseEvent('mouseenter')); vi.advanceTimersByTime(200);
+  tip.dispatchEvent(new Event('scroll'));
+  expect(tip.isConnected).toBe(true);
+  window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+  expect(tip.isConnected).toBe(false);
+  expect(node.hasAttribute('aria-describedby')).toBe(false);
+  action.destroy();
+});

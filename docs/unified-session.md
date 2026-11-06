@@ -1197,8 +1197,7 @@ These came out of reviewing the built view. Each has a test, and each is here be
 
 ## The Conversation's layouts
 
-The conversation uses one chronological layout at every height: user messages align right,
-agent output aligns left, and the composer occupies a centered footer below the entire timeline.
+The conversation uses one chronological layout at every height: both user messages and agent output align left, and the composer occupies a centered footer below the entire timeline.
 The timeline fills the available pane; the composer has a 960px cap. Paragraphs stop at 70ch,
 while tables and tool output can use the wider lane. Narrow containers reduce padding and
 stack ledger labels. Short containers preserve the footer and scroll the history.
@@ -1210,7 +1209,12 @@ sans is used for reading; monospace is reserved for code and measured values.
 
 - Person first in the DOM and above the reply, with a speaker label and timestamp.
 - Only recorded user messages receive a bubble; transcript-only messages retain their terminal label.
-- Agent identity introduces each expanded turn. Work details remain expandable.
+- Agent identity introduces each expanded turn. Completed turns collapse preceding narration
+  and tools into a compact Work details disclosure, with failure counts kept visible.
+- Responses have a restrained panel. Supporting sections collapse by heading; headings naming
+  risks, failures, questions, confirmation or next steps start open. Headingless long responses
+  show the opening and keep the remainder under Full response. No source text is deleted.
+- Search and jumps open containing work groups and response sections before scrolling.
 - Completion summaries wrap their actions; file names align left beneath them.
 - State and controls remain visible in the composer at every width. Long drafts scroll
   after 160px or 30% of the conversation height, whichever is smaller.
@@ -1261,3 +1265,41 @@ The owner asked for a timeline: styled output with smaller text between it for w
 - **The running head is only for the column.** The strip naming the ask shows below 1040px. Above it, the pinned message and the sticky lead do its job.
 
 Two places differ from the spec this came from. A background task or a hand-off also counts as what opened a turn, because real sessions have many turns no person started, and they read as a blank head and a fold with no start otherwise. A run of folded turns is 4px apart rather than 32px, because at 32px real data showed twelve older turns on a screen and read as twelve separate events.
+
+
+### Automation and list density
+
+Lola handoff events use a purple labeled disclosure, separate from human messages.
+Older review follow-ups lacking a send receipt are recognized only by the combined
+list/reply/resolve recipe signature and labeled “recognized template.” This is
+presentation-only; no automation or permission gate trusts that classification.
+
+The overview sessions list scrolls after ten measured body rows plus its sticky
+header, still subject to the existing 45vh ceiling. Measurement adapts to the taller
+two-line rows, leaving the remaining height to the session view.
+
+### Current conversation presentation
+
+The latest layout supersedes the earlier two-lane and six-beat descriptions above.
+Timeline and composer share a 1040px maximum column; prose is limited to about 70ch.
+Both speakers align left: human requests are compact blue notes, agent responses
+use an open reading surface, and Lola instructions use purple notices. Speaker
+headers explicitly say “Agent response.” Body text is 13px with a 21px line height.
+Completed turns fold routine progress into Work details. Supporting response sections
+form an accordion: one opens at a time, with its contents inside the same surface.
+Opening and closing animate briefly, honoring reduced motion. The sticky context
+strip names the source and offers Back to message; full text remains in its tooltip.
+Code and commands receive syntax coloring; logs remain neutral and hashes stay whole.
+
+Hierarchy refinement: foldable responses now share one enclosure for their visible
+opening and supporting accordion sections. Short colon-ended labels become the
+section title directly; no generated summaries or additional model calls are used.
+Work history is a ghost control. Expanded history groups each progress note with
+its following tool rows, with aligned action/status/duration columns. Requests use
+blue notes, automation uses purple notices, and receipts remain quiet metadata.
+The composer is a flat footer with a single focus line instead of a rounded box.
+
+The current trial removes the outer work-history disclosure entirely. Commentary,
+individual calls and stacked call groups appear directly in the turn. Group members
+still expand independently. Tool-row styling is scoped to the conversation itself,
+so a group outside a work section uses the same styling as one within it.

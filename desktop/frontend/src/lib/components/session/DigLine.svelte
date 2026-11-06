@@ -5,6 +5,7 @@
   //
   // The row is the control, as the design's other card-shaped rows are, because a Button's padding and
   // hover chip would break this line's rhythm. It opens at once, and the caller keeps what is open.
+  import { tooltip } from "$lib/tooltip";
   import type { WorkSegment } from "$lib/turns";
   import Chevron from "../Chevron.svelte";
 
@@ -53,14 +54,14 @@
     type="button"
     class="group -mx-2 grid min-h-[22px] w-[calc(100%+16px)] grid-cols-[minmax(0,1fr)_auto] items-center gap-x-2 rounded-sm px-2 text-left text-sm text-faint hover:bg-sel/30 focus-visible:-outline-offset-1"
     aria-expanded={chevron ? open : undefined}
-    {title}
+    use:tooltip={title || ""}
     {onclick}
     {...rest}
   >
     {@render cells()}
   </button>
 {:else}
-  <div class="grid min-h-[22px] grid-cols-[minmax(0,1fr)_auto] items-center gap-x-2 text-sm text-faint" {title} {...rest}>
+  <div class="grid min-h-[22px] grid-cols-[minmax(0,1fr)_auto] items-center gap-x-2 text-sm text-faint" use:tooltip={title || ""} {...rest}>
     {@render cells()}
   </div>
 {/if}

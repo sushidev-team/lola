@@ -61,7 +61,7 @@ describe("Timeline voices", () => {
     const fills = container.querySelectorAll("[data-voice=you]");
     expect(fills).toHaveLength(1);
     expect(fills[0].textContent).toContain("from the store");
-    expect(fills[0].className).toContain("bg-sel/50");
+    expect(fills[0].className).toContain("cv-user-message");
     expect(screen.getByText("In terminal")).toBeInTheDocument();
     expect(container.querySelector("[data-voice=terminal]")?.className).not.toContain("bg-sel");
     expect(container.querySelector("[data-voice=agent]")?.className).not.toContain("bg-");
@@ -163,18 +163,24 @@ describe("Timeline expansion", () => {
     setup([], [tool("t1", "read", "a.go", { hasOutput: false }, 1), tool("t2", "read", "b.go", { hasOutput: false }, 2)]);
     const { container } = render(Timeline, { sessionId: SID });
     await settle();
-    expect(container.querySelector("[data-run=read]")?.textContent).toContain("a.go, b.go");
-    await fireEvent.click(container.querySelector("[data-run=read] button") as HTMLElement);
+    expect(container.querySelector("[data-run=read]")?.textContent).toContain("2 file reads");
+    expect(container.querySelector("[data-run=read]")?.textContent).toContain("a.go");
+    expect(container.querySelector('[data-row="t1"]')).toBeNull();
+    expect(container.querySelector('[data-row="t2"]')).toBeNull();
+    await fireEvent.click(container.querySelector("[data-run=read] .cv-call-group-toggle") as HTMLElement);
     expect(container.querySelector('[data-row="t2"]')).not.toBeNull();
+    expect(container.querySelectorAll('[data-row="t1"]')).toHaveLength(1);
   });
 });
 
 describe("Timeline rail", () => {
-  it("a settled turn's last word is the answer, and earlier beats are narration, at sizes set by their text", async () => {
+  it("a settled turn shows commentary and calls without an outer work disclosure", async () => {
     const long = "word ".repeat(70);
     setup([human("h1", "ask", 1), system("s1", "checkpoint", "Done", 9, { seq: 1 })], [text("x1", "looking", 2), tool("t1", "read", "a.go", {}, 3), text("x2", long, 4)]);
     const { container } = render(Timeline, { sessionId: SID });
     await settle();
+    expect(container.querySelector("[data-work-fold]")).toBeNull();
+    expect(container.querySelector('[data-row="x1"]')).not.toBeNull();
     const beat = container.querySelector('[data-row="x1"] [data-voice=agent]');
     const answer = container.querySelector('[data-row="x2"] [data-voice=agent]');
     expect(beat?.getAttribute("data-role")).toBe("narration");
@@ -187,7 +193,7 @@ describe("Timeline rail", () => {
     expect(container.querySelector('[data-rail-mark="receipt"]')).not.toBeNull();
   });
 
-  it("a word keeps its size when a later one arrives, and only its role changes", async () => {
+  it("an earlier answer becomes expandable narration when a later answer arrives", async () => {
     setup([human("h1", "ask", 1), system("s1", "checkpoint", "Done", 9, { seq: 1 })], [text("x1", "short beat", 2)]);
     const { container } = render(Timeline, { sessionId: SID });
     await settle();
@@ -197,9 +203,86 @@ describe("Timeline rail", () => {
     const fv = feed.view(SID);
     fv.items = [...fv.items, tool("t1", "read", "a.go", {}, 3) as never, text("x2", "later", 4) as never];
     await settle();
+    expect(container.querySelector("[data-work-fold]")).toBeNull();
+    expect(container.querySelector('[data-row="x1"]')).not.toBeNull();
     const after = container.querySelector('[data-row="x1"] [data-voice=agent]')?.className ?? "";
     expect(after).toContain("text-prose");
     expect(after).toContain("text-ink-2");
+  });
+
+  it("keeps supporting answer sections collapsed and opens them for a search target", async () => {
+    const v = setup([], [text("answer", "Updated the layout.\n\n**Implementation details**\nHidden supporting detail.\n\n**Next steps**\nReview the change.", 1)]);
+    const { container } = render(Timeline, { sessionId: SID });
+    await settle();
+    const sections = container.querySelectorAll("details");
+    expect(sections).toHaveLength(2);
+    expect(sections[0].open).toBe(false);
+    expect(sections[1].open).toBe(true);
+    v.jump = { block: "item:answer", n: 1 };
+    await settle();
+    await settle();
+    expect(sections[0].open).toBe(true);
+  });
+
+  it("opens only one supporting section at a time, and lets it close again", async () => {
+    setup([], [text("answer", "Done.\n\n**Changes**\nChanged files.\n\n**Checks**\nPassed checks.", 1)]);
+    const { container } = render(Timeline, { sessionId: SID });
+    await settle();
+    const sections = container.querySelectorAll<HTMLDetailsElement>(".cv-answer-section");
+    await fireEvent.click(sections[0].querySelector("summary")!);
+    expect(sections[0].open).toBe(true);
+    await fireEvent.click(sections[1].querySelector("summary")!);
+    expect(sections[0].open).toBe(false);
+    expect(sections[1].open).toBe(true);
+    await fireEvent.click(sections[1].querySelector("summary")!);
+    expect(sections[1].open).toBe(false);
+  });
+
+  it("keeps a terse reply and its named details in one response surface", async () => {
+    setup([], [text("answer", "Fixed.\n\nCause and change:\n\nThe preview now waits for its styles.\n\nValidation passed.", 1)]);
+    const { container } = render(Timeline, { sessionId: SID });
+    await settle();
+    const response = container.querySelector(".cv-response")!;
+    const detail = response.querySelector("details")!;
+    expect(response.querySelector("[data-rich-lead]")?.textContent).toBe("Fixed.");
+    expect(detail.querySelector("summary")?.textContent).toContain("Cause and change:");
+    expect(detail.open).toBe(false);
+    await fireEvent.click(detail.querySelector("summary")!);
+    expect(detail.open).toBe(true);
+    expect(detail.textContent).toContain("The preview now waits for its styles.");
+  });
+
+  it("folds the remainder of a long unstructured response without dropping its text", async () => {
+    setup([], [text("answer", "The update is ready.\n\nOpening context.\n\nMore implementation detail.\n\nFinal supporting detail.", 1)]);
+    const { container } = render(Timeline, { sessionId: SID });
+    await settle();
+    const detail = container.querySelector("details") as HTMLDetailsElement;
+    expect(detail.open).toBe(false);
+    expect(detail.querySelector("summary")?.textContent).toContain("Full response");
+    expect(detail.textContent).toContain("Final supporting detail.");
+    expect(container.querySelector('[data-role="answer"]')?.textContent).toContain("The update is ready.");
+  });
+
+  it("labels legacy Lola review recipes as automation, never as a human terminal message", async () => {
+    const recipe = "List the open threads:\ngh api graphql -f query='query'\nReply to one (databaseId from above):\ngh api repos/a/b/pulls/comments/<databaseId>/replies\nResolve one (id from above):\nresolveReviewThread";
+    setup([], [user("injected", recipe, 1, { origin: "terminal" }), text("answer", "No open threads.", 2)]);
+    const { container } = render(Timeline, { sessionId: SID });
+    await settle();
+    const instruction = container.querySelector("[data-lola-instruction]") as HTMLDetailsElement;
+    expect(instruction.open).toBe(false);
+    expect(instruction.querySelector("summary")?.textContent).toContain("Lola");
+    expect(instruction.textContent).toContain("recognized template");
+    expect(instruction.textContent).toContain(recipe);
+    expect(container.querySelector(".cv-person")).toBeNull();
+    expect(container.querySelector('[data-voice="terminal"]')).toBeNull();
+  });
+
+  it("does not relabel a human discussing review threads as Lola", async () => {
+    setup([], [user("human", "Please list the open threads and explain resolveReviewThread", 1, { origin: "terminal" })]);
+    const { container } = render(Timeline, { sessionId: SID });
+    await settle();
+    expect(container.querySelector('[data-voice="terminal"]')).not.toBeNull();
+    expect(container.querySelector("[data-lola-instruction]")).toBeNull();
   });
 
   it("the rail is one line for the whole story, even a turn of one row", async () => {
@@ -310,18 +393,16 @@ describe("Timeline rail", () => {
     expect(fold.textContent).not.toContain("\`");
   });
 
-  it("a resting tool is a dig line: no mono, it names what it touched, and opening brings the mono", async () => {
+  it("shows styled calls and groups directly without an outer work disclosure", async () => {
     setup([], [tool("t1", "edit", "src/a.go", { added: 3, removed: 1 }, 1), tool("t2", "read", "b.go", { hasOutput: true, durationMs: 5 }, 2), tool("t3", "read", "c.go", { hasOutput: false }, 3), text("x1", "done", 4)]);
     const { container } = render(Timeline, { sessionId: SID });
     await settle();
-    const line = container.querySelector("[data-work-fold]") as HTMLElement;
-    expect(line.textContent).toContain("Edited");
-    expect(line.textContent).toContain("a.go");
-    expect(line.textContent).toContain("+3 −1");
-    expect(line.innerHTML).not.toContain("font-mono");
-    expect(log().querySelector("[data-tool], [data-run]")).toBeNull();
-    await fireEvent.click(line);
-    expect(container.querySelector("[data-run=read] .font-mono, [data-tool] .font-mono")).not.toBeNull();
+    expect(container.querySelector("[data-work-fold]")).toBeNull();
+    expect(container.querySelector('[data-tool="edit"] .font-mono')).not.toBeNull();
+    expect(container.querySelector('[data-run="read"]')).not.toBeNull();
+    expect(container.querySelector('[data-row="t2"]')).toBeNull();
+    await fireEvent.click(container.querySelector('[data-run="read"] .cv-call-group-toggle')!);
+    expect(container.querySelector('[data-row="t2"] [data-tool="read"]')).not.toBeNull();
   });
 
   it("a settled failure keeps its word without the colour, and one at the tail takes it with a red tick", async () => {

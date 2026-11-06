@@ -14,6 +14,15 @@ import { youAttachments } from "./composerpaste";
 import { answerShaped } from "./answerblocks";
 import { toMillis } from "./time";
 
+/** Legacy transcripts have no send receipt. Recognize only Lola's complete recipe
+ * signature (including clipped starts), never generic review prose. Display only. */
+export function isLolaReviewInstruction(text: string): boolean {
+  return text.includes("List the open threads:\ngh api graphql -f query='") &&
+    text.includes("Reply to one (databaseId from above):") &&
+    text.includes("Resolve one (id from above):") &&
+    text.includes("resolveReviewThread") && text.includes("<databaseId>/replies");
+}
+
 export type ToolStatus = "running" | "ok" | "error" | "interrupted" | "no_result" | string;
 
 type RowBase = {
@@ -65,7 +74,7 @@ export type StoryRow =
   | PlateFoldRow
   | (RowBase & { kind: "you"; item: SSHTimelineItem })
   | (RowBase & { kind: "terminal"; text: string; truncated: boolean })
-  | (RowBase & { kind: "origin"; text: string })
+  | (RowBase & { kind: "origin"; text: string; source?: "lola"; label?: string })
   | (RowBase & { kind: "prose"; text: string; truncated: boolean })
   | (RowBase & { kind: "notice"; text: string })
   | (RowBase & { kind: "plate"; item: SSHTimelineItem })
@@ -537,7 +546,8 @@ export function buildStory(input: StoryInput): Story {
           // An echo is lola's own send, already shown as a store row. It also starts nothing.
           if (f.echo) break;
           endTurn();
-          if (f.origin === "task") pushRow({ kind: "origin", id: f.id, ids: [f.id], at, gap: 0, text: f.text ? `Background task finished · ${firstLine(f.text)}` : "Background task finished" });
+          if (isLolaReviewInstruction(f.text ?? "")) pushRow({ kind: "origin", id: f.id, ids: [f.id], at, gap: 0, text: f.text ?? "", source: "lola", label: "Review follow-up" });
+          else if (f.origin === "task") pushRow({ kind: "origin", id: f.id, ids: [f.id], at, gap: 0, text: f.text ? `Background task finished · ${firstLine(f.text)}` : "Background task finished" });
           else if (f.origin === "system" || f.origin === "teammate") pushRow({ kind: "origin", id: f.id, ids: [f.id], at, gap: 0, text: f.text ?? "" });
           else pushRow({ kind: "terminal", id: f.id, ids: [f.id], at, gap: 0, text: f.text ?? "", truncated: !!f.truncated });
           break;
@@ -753,6 +763,30 @@ export function workLabel(rows: readonly StoryRow[]): string {
     .join(" · ");
 }
 
+/** A factual activity label, plus the agent's own latest commentary as context. */
+export function activitySummary(rows: readonly StoryRow[]): { label: string; context: string } {
+  const tools = rows.flatMap(row => row.kind === "run" ? row.items : row.kind === "tool" ? [row] : []);
+  const edits = new Set<string>();
+  const reads = new Set<string>();
+  let commands = 0;
+  let other = 0;
+  for (const tool of tools) {
+    if (tool.tool.category === "edit") edits.add(tool.target || tool.id);
+    else if (tool.tool.category === "read") reads.add(tool.target || tool.id);
+    else if (tool.tool.category === "run") commands++;
+    else other++;
+  }
+  const labels = [
+    edits.size ? `Edited ${edits.size} ${edits.size === 1 ? "file" : "files"}` : "",
+    commands ? `Ran ${commands} ${commands === 1 ? "command" : "commands"}` : "",
+    reads.size ? `Read ${reads.size} ${reads.size === 1 ? "file" : "files"}` : "",
+    other ? `${other} other ${other === 1 ? "call" : "calls"}` : "",
+  ].filter(Boolean);
+  const notes = rows.filter(row => row.kind === "prose");
+  const context = notes.length ? firstLine(notes[notes.length - 1].text) : "";
+  return { label: labels.join(" · ") || `${notes.length} progress ${notes.length === 1 ? "update" : "updates"}`, context };
+}
+
 /** The same stretch as a dig line draws it: past tense, in the same order, up to three names a verb. */
 export function workSegments(rows: readonly StoryRow[]): WorkSegment[] {
   return byVerb(rows).map(([verb, e]) => ({
@@ -773,7 +807,7 @@ export function workSegments(rows: readonly StoryRow[]): WorkSegment[] {
  * Only the last `keepBeats` narration beats stay up. Older ones fold with their work, and this is
  * the only way prose folds. Prose with no work beside it stays, since a fold would name nothing.
  */
-export function turnParts(rows: readonly StoryRow[], keepBeats = KEEP_BEATS): TurnPart[] {
+export function turnParts(rows: readonly StoryRow[], keepBeats = KEEP_BEATS, settled = false): TurnPart[] {
   const beats: number[] = [];
   rows.forEach((r, i) => {
     if (r.kind === "prose") beats.push(i);
@@ -781,12 +815,12 @@ export function turnParts(rows: readonly StoryRow[], keepBeats = KEEP_BEATS): Tu
   const last = beats.length ? beats[beats.length - 1] : -1;
   // The first narration beat still standing: everything before it may fold with its words.
   const narration = beats.slice(0, -1);
-  const standsFrom = narration.length > keepBeats ? narration[narration.length - keepBeats] : -1;
+  const standsFrom = keepBeats === 0 ? last : narration.length > keepBeats ? narration[narration.length - keepBeats] : -1;
   const parts: TurnPart[] = [];
   let run: StoryRow[] = [];
   const flush = () => {
     const work = run.filter((r) => r.kind === "tool" || r.kind === "run");
-    if (run.length >= 2 && work.length > 0) {
+    if (run.length >= 2 && (work.length > 0 || keepBeats === 0)) {
       let failed = 0;
       for (const r of work) {
         if (r.kind === "run") failed += r.failed;
@@ -799,7 +833,7 @@ export function turnParts(rows: readonly StoryRow[], keepBeats = KEEP_BEATS): Tu
     run = [];
   };
   rows.forEach((row, i) => {
-    const folds = i < last && (row.kind === "tool" || row.kind === "run" || (row.kind === "prose" && i < standsFrom));
+    const folds = ((i < last || settled) && (row.kind === "tool" || row.kind === "run")) || (i < last && row.kind === "prose" && i < standsFrom);
     if (folds) {
       run.push(row);
       return;
